@@ -22,7 +22,7 @@ def fase(ctx: Ctx) -> None:
     # dependencias.  El cambio se hace SIEMPRE en el modulo del que cuelgan los
     # demas (m0), que es el unico sitio desde donde se puede observar si la
     # invalidacion se propaga o se corta.
-    cabecera_fase("2c", "Topologia de dependencias",
+    cabecera_fase("dependencias", "La forma de las dependencias",
                   "La misma cantidad de codigo con otra FORMA: ancha, en "
                   "cadena y en diamante.  El cambio se hace siempre en el "
                   "modulo del que cuelgan los demas, que es el unico sitio "

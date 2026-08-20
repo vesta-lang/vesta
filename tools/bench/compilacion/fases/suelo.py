@@ -18,7 +18,7 @@ def fase(ctx: Ctx) -> None:
     entorno_base = ctx.entorno_base
     suelo, resultados = ctx.suelo, ctx.resultados
     # --- 1. Suelo de cada herramienta: compilar un fichero que no declara nada.
-    cabecera_fase("1", "Suelo del compilador",
+    cabecera_fase("arranque", "Arrancar el compilador y no hacer nada",
                   "Compila un fichero vacio en cada lenguaje: arrancar el "
                   "proceso y no hacer nada.  Se descuenta despues de todo lo "
                   "demas.")

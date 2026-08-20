@@ -20,7 +20,7 @@ def fase(ctx: Ctx) -> None:
     suelo, resultados = ctx.suelo, ctx.resultados
     # --- 2e. Familia x REGIMEN.  Un numero por familia dice cuanto cuesta;
     # el desglose dice DONDE se va y que parte se puede evitar tras un cambio.
-    cabecera_fase("2e", "Familia por regimen",
+    cabecera_fase("familias-regimen", "Cada familia, por regimen",
                   "La misma familia construida de cero, sin cambios, tras "
                   "tocar un cuerpo y tras tocar una interfaz.  La distancia "
                   "entre cuerpo e interfaz es lo que la frontera de modulo "

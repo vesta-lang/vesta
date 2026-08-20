@@ -26,7 +26,7 @@ def fase(ctx: Ctx) -> None:
     #   por modulos -- a tamano TOTAL constante, repartirlo en mas ficheros mide
     #                  el coste FIJO por modulo: lo que paga un proyecto muy
     #                  dividido solo por estarlo.
-    cabecera_fase("2bis", "Escalado",
+    cabecera_fase("escalado", "Escalado",
                   "El coste contra el tamano del programa, y contra el "
                   "numero de modulos a tamano total constante.  Un solo "
                   "punto no distingue lineal de superlineal; esta fase "

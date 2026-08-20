@@ -21,7 +21,7 @@ def fase(ctx: Ctx) -> None:
     # --- 2b. El MISMO programa repartido en varios ficheros.
     # Se compara contra la fila de un solo fichero del mismo tamano: mismo
     # trabajo, otra forma de presentarselo al compilador.
-    cabecera_fase("2b", "Un proyecto, no un fichero",
+    cabecera_fase("proyecto", "Un proyecto de varios modulos",
                   "El mismo codigo repartido en varios modulos, y que cuesta "
                   "reconstruirlo segun QUE cambie: nada, un comentario, un "
                   "cuerpo, una interfaz.  La escalera entre esas filas es la "

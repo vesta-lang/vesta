@@ -16,22 +16,35 @@ from . import (completa, crecimiento, escalado, familias, proyecto,
                realimentacion, regimen, rendimiento, suelo, topologia)
 
 FASES = [
-    Fase("1", "Suelo del compilador", suelo.fase),
-    Fase("2", "Compilacion completa, por tamano", completa.fase),
-    Fase("2b", "Un proyecto, no un fichero", proyecto.fase),
-    # Cuestan de largo lo que mas: varios tamanos, cada uno medido dos veces.
-    # Va POR DEFECTO pese a costar: es la unica que responde como escala, y
-    # esa es la pregunta que no se puede contestar con un solo tamano.  Dejarla
-    # fuera hacia que una tanda normal no la enseñara y pareciera que no existe.
-    Fase("crecimiento", "Crecimiento contra el tamano del codigo",
-         crecimiento.fase),
+    # El orden NO es alfabetico ni historico: va de lo mas simple a lo mas
+    # compuesto, porque cada fase se apoya en entender la anterior.  Los
+    # nombres dicen QUE mide cada una; antes eran `2`, `2b`, `2bis`, `2c`...,
+    # que solo tenian sentido para quien hubiera leido el codigo en el orden en
+    # que se escribio.
+    Fase("arranque", "Arrancar el compilador y no hacer nada", suelo.fase),
+    Fase("fichero", "Un fichero, por tamano", completa.fase),
     Fase("caudal", "Lineas por segundo", rendimiento.fase),
-    Fase("2bis", "Escalado (tamano y numero de modulos)", escalado.fase),
-    Fase("2c", "Topologia de dependencias", topologia.fase),
-    Fase("2d", "Familias de codigo", familias.fase),
-    Fase("2e", "Familia por regimen", regimen.fase),
-    Fase("3", "Realimentacion", realimentacion.fase),
+    Fase("crecimiento", "Como crece con el tamano del codigo",
+         crecimiento.fase),
+    Fase("escalado", "Escalado por tamano y por numero de modulos",
+         escalado.fase),
+    Fase("proyecto", "Un proyecto de varios modulos, y que cuesta rehacerlo",
+         proyecto.fase),
+    Fase("dependencias", "La forma de las dependencias", topologia.fase),
+    Fase("familias", "Que codigo se compila, no cuanto", familias.fase),
+    Fase("familias-regimen", "Cada familia, por regimen", regimen.fase),
+    Fase("diagnostico", "Cuanto tarda en decirte si el codigo esta bien",
+         realimentacion.fase),
 ]
+
+# Los nombres viejos siguen valiendo.  Renombrar no puede romper un guion que
+# ya existe ni una nota con el comando apuntado, y el coste de mantenerlo es
+# esta tabla.
+ALIAS = {
+    "1": "arranque", "2": "fichero", "2b": "proyecto", "2bis": "escalado",
+    "2c": "dependencias", "2d": "familias", "2e": "familias-regimen",
+    "3": "diagnostico",
+}
 
 # Por nombre, para `--fase`.
 POR_ID = {f.id: f for f in FASES}
@@ -52,7 +65,7 @@ def seleccionar(pedidas: str) -> list:
     fuera = []
     elegidas = []
     for nombre in [p.strip() for p in pedidas.split(",") if p.strip()]:
-        f = POR_ID.get(nombre)
+        f = POR_ID.get(ALIAS.get(nombre, nombre))
         if f is None:
             fuera.append(nombre)
         else:

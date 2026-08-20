@@ -2,13 +2,21 @@
 """El mismo programa entero, en frio y en caliente, por tamano.  La medida base."""
 from __future__ import annotations
 
-from ..comun import C, Spinner, una_medida
+from ..comun import C, Spinner, color_de, una_medida
 from ..contexto import Ctx
 from ..generadores import GENERADORES, funciones_para_lineas
 from ..informe import barra, cabecera_fase, imprimir_ganancia, imprimir_tabla
 from ..medida import (medir_caliente, medir_frio, repeticiones,
                      verificar_en_paralelo)
+from ..memoria import formatear_bytes, tamano_arbol
 from ..ordenes import entorno_cache, orden_compilar
+
+
+def _artefacto(salida) -> int:
+    """Bytes del artefacto, se llame como se llame en cada herramienta."""
+    return max(tamano_arbol(c) for c in
+               (salida, salida.with_suffix(".exe"),
+                salida.with_suffix(".velb"), salida.parent / "clases"))
 
 
 def fase(ctx: Ctx) -> None:
@@ -19,7 +27,7 @@ def fase(ctx: Ctx) -> None:
     entorno_base = ctx.entorno_base
     suelo, resultados = ctx.suelo, ctx.resultados
     # --- 2. Compilacion completa, caliente y en frio, por tamano.
-    cabecera_fase("2", "Compilacion completa, por tamano",
+    cabecera_fase("fichero", "Un fichero, por tamano",
                   "El mismo programa en un solo fichero, en varios tamanos, "
                   "con las caches calientes y en frio.  Es la medida base: "
                   "cuanto cuesta compilar N lineas.")
@@ -65,7 +73,7 @@ def fase(ctx: Ctx) -> None:
             if not ok:
                 print(f"  {C.RED}[no compila]{C.RESET} {etiqueta}: {motivo}")
                 resultados["casos"].append({
-                    "lang": ln, "funciones": n, "lineas": lineas,
+                    "lang": ln, "fase": "2", "funciones": n, "lineas": lineas,
                     "error": motivo,
                 })
                 continue
@@ -99,7 +107,33 @@ def fase(ctx: Ctx) -> None:
                 # y deja de comparar nada.
                 "lang": ln, "fase": "2", "objetivo": n, "lineas": lineas,
                 "caliente": s_cal, "frio": s_frio,
+                # Lo que SALE y lo que queda en disco.  Se compila igualmente,
+                # asi que mirarlo es gratis, y son dos costes reales que el
+                # tiempo no dice: un binario cuatro veces mayor cuesta enlace,
+                # distribucion y cache de instrucciones; y una cache que ahorra
+                # mucho y ocupa gigas es una decision, no una ventaja -- hasta
+                # ahora se publicaba solo la mitad buena de esa historia.
+                "artefacto_bytes": _artefacto(salida),
+                "cache_bytes": max(0, tamano_arbol(d) - _artefacto(salida)),
             })
+
+    if resultados["casos"]:
+        print()
+        print(f"{C.BOLD}Lo que SALE y lo que queda en disco{C.RESET}")
+        print(f"{C.DIM}  El artefacto se distribuye; la cache es lo que hay "
+              f"que guardar para que la proxima vez sea rapida.  Los dos son "
+              f"costes reales que el tiempo no dice.{C.RESET}")
+        cabd = (f"{'lenguaje / caso':<26}{'artefacto':>14}{'cache':>14}")
+        print(f"{C.BOLD}{cabd}{C.RESET}")
+        print("-" * len(cabd))
+        for c in resultados["casos"]:
+            if c.get("fase") != "2" or not c.get("artefacto_bytes"):
+                continue
+            et = "%s  %dk lineas" % (c["lang"], round(c["lineas"] / 1000))
+            print(f"  {color_de(c['lang'])}{et:<24}{C.RESET}"
+                  f"{formatear_bytes(c['artefacto_bytes']):>14}"
+                  f"{formatear_bytes(c.get('cache_bytes') or 0):>14}")
+        print("-" * len(cabd))
 
     imprimir_tabla("Compilacion completa, con las caches CALIENTES (ms)",
                    filas_cal, suelo,

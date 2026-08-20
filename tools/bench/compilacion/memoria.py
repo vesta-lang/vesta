@@ -161,3 +161,41 @@ def formatear(kib: Optional[int]) -> str:
     if kib < 1024 * 1024:
         return "%.0f MiB" % (kib / 1024.0)
     return "%.2f GiB" % (kib / (1024.0 * 1024.0))
+
+
+def tamano_arbol(d: Path) -> int:
+    """Bytes que ocupa @p d con todo lo que hay dentro.
+
+    Sirve para dos cosas que el banco contaba a medias: lo que ocupa el
+    artefacto producido y lo que ocupa la cache que lo acelera.  Una cache que
+    ahorra dieciocho veces y ocupa dos gigas es una decision, no una ventaja, y
+    hasta ahora solo se publicaba la mitad buena.
+    """
+    if not d.exists():
+        return 0
+    if d.is_file():
+        try:
+            return d.stat().st_size
+        except OSError:
+            return 0
+    total = 0
+    for hijo in d.rglob("*"):
+        try:
+            if hijo.is_file():
+                total += hijo.stat().st_size
+        except OSError:
+            pass   # desaparecio mientras se recorria: no vale la pena morir
+    return total
+
+
+def formatear_bytes(n: int) -> str:
+    """Bytes en la unidad que se lea de un vistazo, o un guion si no hay."""
+    if not n:
+        return "-"
+    if n < 1024:
+        return "%d B" % n
+    if n < 1024 * 1024:
+        return "%.0f KiB" % (n / 1024.0)
+    if n < 1024 * 1024 * 1024:
+        return "%.1f MiB" % (n / (1024.0 * 1024.0))
+    return "%.2f GiB" % (n / (1024.0 * 1024.0 * 1024.0))

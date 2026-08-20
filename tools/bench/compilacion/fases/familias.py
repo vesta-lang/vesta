@@ -19,7 +19,7 @@ def fase(ctx: Ctx) -> None:
     suelo, resultados = ctx.suelo, ctx.resultados
     # --- 2d. QUE codigo, no cuanto.  Cada familia pega en una parte distinta
     # del compilador, y son justo las que el generador anodino no toca.
-    cabecera_fase("2d", "Familias de codigo",
+    cabecera_fase("familias", "Que codigo se compila, no cuanto",
                   "QUE codigo, no cuanto: genericos, comptime, anidamiento y "
                   "tipos.  Cada una pega en una parte distinta del "
                   "compilador, y son justo las que el generador anodino de "

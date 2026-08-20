@@ -44,7 +44,7 @@ Ejemplos:
 
     python tools/bench/compile_bench.py                    # las de por defecto
     python tools/bench/compile_bench.py --listar-fases
-    python tools/bench/compile_bench.py --fase 2c          # solo esa
+    python tools/bench/compile_bench.py --fase dependencias # solo esa
     python tools/bench/compile_bench.py --fase crecimiento --lineas 1500,6000,24000
     python tools/bench/compile_bench.py --fase todas
 """
@@ -131,11 +131,12 @@ def main() -> int:
         print(f"{C.BOLD}Fases del banco de compilacion{C.RESET}")
         for f in FASES:
             marca = "  " if f.por_defecto else f"{C.DIM}*{C.RESET} "
-            print(f"  {marca}{C.BOLD}{f.id:<14}{C.RESET}{f.titulo}")
-        print(f"\n{C.DIM}  * = no va por defecto (cuesta mucho tiempo); "
-              f"pidela por su nombre.\n"
-              f"  Ejemplo: --fase 2c   |   --fase 1,crecimiento   |   "
-              f"--fase todas{C.RESET}")
+            print(f"  {marca}{C.BOLD}{f.id:<18}{C.RESET}{f.titulo}")
+        print(f"\n{C.DIM}  Todas corren por defecto.  Para una sola:\n"
+              f"    --fase dependencias   |   --fase arranque,caudal   |   "
+              f"--fase todas\n"
+              f"  Los nombres viejos (1, 2, 2b, 2c...) siguen valiendo: "
+              f"renombrar no puede romper un guion que ya existe.{C.RESET}")
         return 0
 
     raiz = find_project_root(Path(__file__).resolve())

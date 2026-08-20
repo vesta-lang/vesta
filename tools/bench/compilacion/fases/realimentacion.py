@@ -18,7 +18,7 @@ def fase(ctx: Ctx) -> None:
     entorno_base = ctx.entorno_base
     suelo, resultados = ctx.suelo, ctx.resultados
     # --- 3. Realimentacion: cuanto tarda en salir el diagnostico.
-    cabecera_fase("3", "Realimentacion",
+    cabecera_fase("diagnostico", "Cuanto tarda en decirte si el codigo esta bien",
                   "Solo analizar y diagnosticar, sin generar codigo ni "
                   "enlazar: lo que tarda en decirte si tu codigo esta bien, "
                   "que es lo que se espera mientras se edita.")
