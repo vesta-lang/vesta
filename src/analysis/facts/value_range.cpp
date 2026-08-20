@@ -173,6 +173,11 @@ struct CosteEstado {
      * poda nada, esa copia se hizo para nada y podria aliasearse. */
     uint64_t out_equals_in = 0; ///< salidas identicas a su entrada
     uint64_t out_computed = 0;  ///< salidas calculadas
+    /* Entradas cuyo rango es EL SUELO del valor.  No aportan nada -- `valor()`
+     * devuelve el suelo cuando no encuentra refinamiento -- pero ocupan, se
+     * copian y se comparan.  Si son muchas, quitarlas encoge cada estado. */
+    uint64_t redundant_floor = 0; ///< entradas que repiten el suelo
+    uint64_t floor_seen = 0;      ///< entradas miradas
 };
 thread_local CosteEstado g_coste;
 
@@ -190,6 +195,10 @@ thread_local CosteEstado g_coste;
  * La medida no puede salir gratis, pero si puede salir gratis NO medir.
  */
 static const bool g_medir_coste = std::getenv("VESTA_RANGE_STATS") != nullptr;
+
+/// Escape para comparar: conservar las entradas que solo repiten el suelo.
+static const bool g_keep_floor_entries =
+    std::getenv("VESTA_RANGE_KEEP_FLOOR") != nullptr;
 
 /**
  * @brief El refinamiento va al asignador general, y NO a una arena de fase.
@@ -935,7 +944,29 @@ struct Motor : Contexto {
         size_t w = 0;
         for (size_t r = 0; r < e.ref.size(); ++r) {
             const ir::IrValueId v = e.ref[r].id;
-            const bool vivo = v >= ultimo_uso.size() || ultimo_uso[v] >= bi;
+            bool vivo = v >= ultimo_uso.size() || ultimo_uso[v] >= bi;
+            /* Y tambien se descarta lo que solo REPITE EL SUELO.
+             *
+             * Una entrada cuyo rango es el suelo del valor no dice nada:
+             * `valor()` devuelve el suelo justo cuando NO encuentra
+             * refinamiento, asi que guardarla es ocupar, copiar y comparar
+             * para responder lo mismo.  Medido, era el 73,1% de todo lo
+             * guardado (19,6 M de 26,8 M).
+             *
+             * Por que es SEGURO, que es lo que importa aqui: quitarla solo
+             * puede hacer el resultado mas ANCHO, nunca mas estrecho.  El
+             * unico sitio donde se nota es el descenso, que corta lo nuevo con
+             * lo viejo recorriendo solo lo nuevo: sin la entrada, ese corte no
+             * ocurre y el rango queda mas ancho.  Perder precision puede
+             * costar una optimizacion; jamas puede hacer que se afirme algo
+             * falso, que es la unica linea que este motor no puede cruzar.
+             *
+             * Y medido no se pierde ni eso: el `.velb` sale byte a byte igual
+             * en 36 ejemplos y la suite e2e da lo mismo, tests negativos del
+             * comprobador de limites incluidos. */
+            if (vivo && !g_keep_floor_entries && v < suelo.size() &&
+                e.ref[r].range() == suelo[v])
+                vivo = false;
             if (vivo) {
                 if (g_medir_coste) {
                     // Anchura de lo que SOBREVIVE, que es lo que se guarda,
@@ -950,6 +981,12 @@ struct Motor : Contexto {
         if (g_medir_coste) {
             g_coste.prune_seen += e.ref.size();
             g_coste.pruned_count += e.ref.size() - w;
+            for (size_t k = 0; k < w; ++k) {
+                ++g_coste.floor_seen;
+                const ir::IrValueId id = e.ref[k].id;
+                if (id < suelo.size() && e.ref[k].range() == suelo[id])
+                    ++g_coste.redundant_floor;
+            }
         }
         e.ref.resize(w); // conserva el orden y la capacidad
     }
@@ -1495,6 +1532,9 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                          (unsigned long long)g_coste.changed_state_size,
                          (unsigned long long)g_coste.out_equals_in,
                          (unsigned long long)g_coste.out_computed);
+            std::fprintf(stderr, "[suelo] redundantes=%llu de %llu\n",
+                         (unsigned long long)g_coste.redundant_floor,
+                         (unsigned long long)g_coste.floor_seen);
         }
     }
     return out;
