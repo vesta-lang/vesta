@@ -125,7 +125,11 @@ def main() -> int:
                         "que CAMBIAN de veredicto, que es lo que interesa al "
                         "tocar el compilador.")
     p.add_argument("--corpus", default="examples_codes_vx")
-    p.add_argument("--timeout", type=float, default=120.0)
+    p.add_argument("--timeout", type=float, default=10.0,
+                   help="limite por compilacion.  10 s: ningun ejemplo del "
+                        "corpus tarda tanto, asi que pasarse ES el sintoma -- "
+                        "y un limite generoso solo hace que un cuelgue tarde "
+                        "en verse.")
     p.add_argument("-j", "--jobs", type=int, default=0,
                    help="compilaciones en paralelo (default: nucleos - 2).  "
                         "Se puede porque aqui no se cronometra nada: se "
