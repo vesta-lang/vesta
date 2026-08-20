@@ -490,9 +490,65 @@ struct RangeStats {
  *
  * Es lo que permite preguntar por un PUNTO y no solo por una definicion.
  */
+/**
+ * @brief Una entrada del refinamiento: que valor, y que se sabe de el.
+ *
+ * Los campos del rango van APLANADOS aqui en vez de guardar un `ValueRange`
+ * dentro de un `std::pair`.  Motivo, medido: el par ocupa 32 bytes de los
+ * cuales OCHO son relleno -- el `u32` del identificador deja cuatro por la
+ * alineacion del rango, y el rango deja otros cuatro al final --.  Aplanados
+ * caben en 24.
+ *
+ * Y es la estructura mas movida del compilador: copiar, fusionar y comparar
+ * estos vectores eran 3,5 s de 16,6 s.  Un 25% menos de bytes es un 25% menos
+ * de memoria pedida y de memoria movida en todo eso.
+ *
+ * El precio es no poder devolver un `const ValueRange *` al interior, asi que
+ * @c range() lo entrega por valor.  Son 24 bytes de POD: sale mucho mas barato
+ * que el relleno que se ahorra.
+ */
+struct RangeEntry {
+    ir::IrValueId id = 0;              ///< el valor refinado
+    RangeKind kind = RangeKind::Top;   ///< los tres campos de ValueRange,
+    RangeType t{};                     ///< aplanados para que no haya relleno
+    uint8_t _pad = 0;
+    uint64_t lo_c = 0;
+    uint64_t hi_c = 0;
+
+    /// El rango, reconstruido.  Por valor: aqui no hay ningun `ValueRange`.
+    ValueRange range() const {
+        ValueRange r;
+        r.kind = kind;
+        r.t = t;
+        r.lo_c = lo_c;
+        r.hi_c = hi_c;
+        return r;
+    }
+    /// Guarda @p r en los campos aplanados.
+    void set_range(const ValueRange &r) {
+        kind = r.kind;
+        t = r.t;
+        lo_c = r.lo_c;
+        hi_c = r.hi_c;
+    }
+    static RangeEntry make(ir::IrValueId v, const ValueRange &r) {
+        RangeEntry e;
+        e.id = v;
+        e.set_range(r);
+        return e;
+    }
+    /// Compara SOLO el rango (el identificador se compara aparte).
+    bool same_range(const RangeEntry &o) const {
+        return kind == o.kind && t.bits == o.t.bits &&
+               t.sin_signo == o.t.sin_signo && lo_c == o.lo_c && hi_c == o.hi_c;
+    }
+};
+static_assert(sizeof(RangeEntry) == 24,
+              "si esto crece, se pierde justo lo que se venia a ganar");
+
 struct RangeBlockState {
     bool alcanzable = false;
-    std::vector<std::pair<ir::IrValueId, ValueRange>> refinamientos;
+    std::vector<RangeEntry> refinamientos;
 };
 
 // Los resumenes se declaran aparte (range_summary.h incluye a este, no al

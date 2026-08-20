@@ -184,7 +184,7 @@ static const bool g_medir_coste = std::getenv("VESTA_RANGE_STATS") != nullptr;
  */
 struct Estado {
     bool alcanzable = false;
-    std::vector<std::pair<ir::IrValueId, ValueRange>> ref;
+    std::vector<RangeEntry> ref;
 
     Estado() = default;
     /// Copiar un estado es el otro coste de la representacion dispersa: hay que
@@ -211,24 +211,28 @@ struct Estado {
         ref.swap(o.ref);
     }
 
-    const ValueRange *buscar(ir::IrValueId v) const {
+    /// La ENTRADA, no el rango: aplanada ya no hay ningun `ValueRange` dentro
+    /// al que apuntar.  Quien quiera el rango pide @c range().
+    const RangeEntry *buscar(ir::IrValueId v) const {
         if (g_medir_coste) ++g_coste.busquedas;
         auto it =
             std::lower_bound(ref.begin(), ref.end(), v,
-                             [](const std::pair<ir::IrValueId, ValueRange> &p,
-                                ir::IrValueId x) { return p.first < x; });
-        return (it == ref.end() || it->first != v) ? nullptr : &it->second;
+                             [](const RangeEntry &p, ir::IrValueId x) {
+                                 return p.id < x;
+                             });
+        return (it == ref.end() || it->id != v) ? nullptr : &*it;
     }
     void poner(ir::IrValueId v, const ValueRange &r) {
         auto it =
             std::lower_bound(ref.begin(), ref.end(), v,
-                             [](const std::pair<ir::IrValueId, ValueRange> &p,
-                                ir::IrValueId x) { return p.first < x; });
-        if (it != ref.end() && it->first == v) {
-            it->second = r;
+                             [](const RangeEntry &p, ir::IrValueId x) {
+                                 return p.id < x;
+                             });
+        if (it != ref.end() && it->id == v) {
+            it->set_range(r);
             if (g_medir_coste) ++g_coste.reescrituras;
         } else {
-            ref.insert(it, {v, r}); // desplaza todo lo que va detras
+            ref.insert(it, RangeEntry::make(v, r)); // desplaza lo de detras
             if (g_medir_coste) ++g_coste.inserciones;
         }
     }
@@ -241,8 +245,7 @@ struct Estado {
         if (!alcanzable) return true; // dos inalcanzables son el mismo estado
         if (ref.size() != o.ref.size()) return false;
         for (size_t i = 0; i < ref.size(); ++i)
-            if (ref[i].first != o.ref[i].first ||
-                ref[i].second != o.ref[i].second)
+            if (ref[i].id != o.ref[i].id || !ref[i].same_range(o.ref[i]))
                 return false;
         return true;
     }
@@ -351,7 +354,7 @@ struct Contexto {
     ValueRange valor(const Estado &e, ir::IrValueId v) const {
         if (v == ir::IR_NO_VALUE || v >= suelo.size()) return ValueRange::top();
         if (!e.alcanzable) return ValueRange::bottom(suelo[v].t);
-        if (const ValueRange *r = e.buscar(v)) return *r;
+        if (const RangeEntry *r = e.buscar(v)) return r->range();
         return suelo[v];
     }
 
@@ -596,16 +599,16 @@ struct Motor : Contexto {
          * funcion era el mayor coste propio del motor.  El resultado es el
          * MISMO: mismos elementos, mismo orden. */
         size_t j = 0;
-        for (const auto &p : a.ref) {
-            while (j < b.ref.size() && b.ref[j].first < p.first)
+        for (const RangeEntry &p : a.ref) {
+            while (j < b.ref.size() && b.ref[j].id < p.id)
                 ++j;
-            const bool hay = (j < b.ref.size() && b.ref[j].first == p.first);
+            const bool hay = (j < b.ref.size() && b.ref[j].id == p.id);
             if (g_medir_coste)
                 ++g_coste.busquedas; // comparable con la version vieja
             const ValueRange u =
-                p.second.unir(hay ? b.ref[j].second : suelo[p.first]);
+                p.range().unir(hay ? b.ref[j].range() : suelo[p.id]);
             if (!u.es_top()) {
-                out.ref.push_back({p.first, u});
+                out.ref.push_back(RangeEntry::make(p.id, u));
                 if (g_medir_coste) ++g_coste.unidos;
             }
         }
@@ -626,16 +629,16 @@ struct Motor : Contexto {
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
         size_t j = 0;
-        for (const auto &p : nuevo.ref) {
-            while (j < viejo.ref.size() && viejo.ref[j].first < p.first)
+        for (const RangeEntry &p : nuevo.ref) {
+            while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
             const bool hay =
-                (j < viejo.ref.size() && viejo.ref[j].first == p.first);
+                (j < viejo.ref.size() && viejo.ref[j].id == p.id);
             if (g_medir_coste) ++g_coste.busquedas;
-            const ValueRange base = hay ? viejo.ref[j].second : suelo[p.first];
-            const ValueRange w = base.ensanchar(p.second);
+            const ValueRange base = hay ? viejo.ref[j].range() : suelo[p.id];
+            const ValueRange w = base.ensanchar(p.range());
             if (!w.es_top()) {
-                out.ref.push_back({p.first, w});
+                out.ref.push_back(RangeEntry::make(p.id, w));
                 if (g_medir_coste) ++g_coste.unidos;
             }
         }
@@ -665,19 +668,19 @@ struct Motor : Contexto {
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
         // Fusion lineal (ver unir_estados): ambos ordenados por identificador.
         size_t j = 0;
-        for (const auto &p : nuevo.ref) {
-            while (j < viejo.ref.size() && viejo.ref[j].first < p.first)
+        for (const RangeEntry &p : nuevo.ref) {
+            while (j < viejo.ref.size() && viejo.ref[j].id < p.id)
                 ++j;
             const bool hay =
-                (j < viejo.ref.size() && viejo.ref[j].first == p.first);
+                (j < viejo.ref.size() && viejo.ref[j].id == p.id);
             if (g_medir_coste) ++g_coste.busquedas;
-            ValueRange r = p.second;
+            ValueRange r = p.range();
             if (hay) {
-                const ValueRange c = r.cortar(viejo.ref[j].second);
+                const ValueRange c = r.cortar(viejo.ref[j].range());
                 if (!c.es_bottom()) r = c;
             }
             if (!r.es_top()) {
-                out.ref.push_back({p.first, r});
+                out.ref.push_back(RangeEntry::make(p.id, r));
                 if (g_medir_coste) ++g_coste.unidos;
             }
         }
@@ -886,7 +889,7 @@ struct Motor : Contexto {
         if (ultimo_uso.empty() || e.ref.empty()) return;
         size_t w = 0;
         for (size_t r = 0; r < e.ref.size(); ++r) {
-            const ir::IrValueId v = e.ref[r].first;
+            const ir::IrValueId v = e.ref[r].id;
             const bool vivo = v >= ultimo_uso.size() || ultimo_uso[v] >= bi;
             if (vivo) {
                 if (w != r) e.ref[w] = e.ref[r];
@@ -902,8 +905,8 @@ struct Motor : Contexto {
         const Estado &out = out_scratch_;
         if (g_medir_coste && !ultimo_uso.empty()) {
             g_coste.elems_vivos_total += out.ref.size();
-            for (const auto &p : out.ref)
-                if (p.first < ultimo_uso.size() && ultimo_uso[p.first] < bi)
+            for (const RangeEntry &p : out.ref)
+                if (p.id < ultimo_uso.size() && ultimo_uso[p.id] < bi)
                     ++g_coste.elems_muertos;
         }
         for (uint32_t ai : salientes[bi]) {
@@ -1313,9 +1316,9 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                 h = mezcla_rango(h, r);
             for (const RangeBlockState &e : out.entrada) {
                 h = util::fnv_mix(h, e.alcanzable ? 1u : 0u);
-                for (const auto &p : e.refinamientos) {
-                    h = util::fnv_mix(h, p.first);
-                    h = mezcla_rango(h, p.second);
+                for (const RangeEntry &p : e.refinamientos) {
+                    h = util::fnv_mix(h, p.id);
+                    h = mezcla_rango(h, p.range());
                 }
             }
             /* Y la otra mitad de la pregunta: si sale igual porque la ENTRADA
