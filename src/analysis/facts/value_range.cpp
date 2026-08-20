@@ -30,6 +30,8 @@
 #include "util/fnv.h"
 #include "util/reloj.h"
 
+#include <cstring> // memcmp: comparar dos estados de una vez
+
 #include <atomic>
 
 #include <algorithm>
@@ -251,10 +253,18 @@ struct Estado {
         if (alcanzable != o.alcanzable) return false;
         if (!alcanzable) return true; // dos inalcanzables son el mismo estado
         if (ref.size() != o.ref.size()) return false;
-        for (size_t i = 0; i < ref.size(); ++i)
-            if (ref[i].id != o.ref[i].id || !ref[i].same_range(o.ref[i]))
-                return false;
-        return true;
+        /* De una vez y no campo a campo.  Comparar estados es lo que decide
+         * cada vuelta del punto fijo, y campo a campo eran cinco comparaciones
+         * y una rama por entrada (0,549 s de 12,5 s solo en `same_range`).
+         *
+         * Se puede porque la entrada es un POD de 24 bytes SIN un solo hueco
+         * implicito -- lo fijan las aserciones de `value_range.h` -- y su unico
+         * byte de relleno explicito nace a cero y nadie lo escribe.  Sin esas
+         * dos condiciones esto compararia basura y dos estados iguales podrian
+         * salir distintos: por eso las aserciones y no un comentario. */
+        return ref.empty() ||
+               std::memcmp(ref.data(), o.ref.data(),
+                           ref.size() * sizeof(RangeEntry)) == 0;
     }
 };
 

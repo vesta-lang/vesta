@@ -56,6 +56,7 @@
 
 #include "analysis/facts/ir_facts.h"
 
+#include <cstddef> // offsetof: las aserciones que fijan el layout de RangeEntry
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -545,6 +546,18 @@ struct RangeEntry {
 };
 static_assert(sizeof(RangeEntry) == 24,
               "si esto crece, se pierde justo lo que se venia a ganar");
+/* Y NO puede haber ni un hueco implicito, porque de eso depende poder comparar
+ * dos estados enteros con un solo `memcmp` en vez de campo a campo.  Un hueco
+ * llevaria bytes sin inicializar y dos estados iguales podrian salir
+ * distintos.  Si alguien reordena o anade un campo, esto rompe la compilacion
+ * en vez de romper las comparaciones en silencio. */
+static_assert(offsetof(RangeEntry, id) == 0, "layout fijado: ver el memcmp");
+static_assert(offsetof(RangeEntry, kind) == 4, "layout fijado: ver el memcmp");
+static_assert(offsetof(RangeEntry, t) == 5, "layout fijado: ver el memcmp");
+static_assert(offsetof(RangeEntry, _pad) == 7, "layout fijado: ver el memcmp");
+static_assert(offsetof(RangeEntry, lo_c) == 8, "layout fijado: ver el memcmp");
+static_assert(offsetof(RangeEntry, hi_c) == 16, "layout fijado: ver el memcmp");
+static_assert(sizeof(RangeType) == 2, "layout fijado: ver el memcmp");
 
 struct RangeBlockState {
     bool alcanzable = false;
