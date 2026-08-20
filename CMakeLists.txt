@@ -712,7 +712,13 @@ if(VESTA_BUILD_PREPROCESSOR)
 endif()
 
 if (WIN32)
-    target_link_libraries(vmcore PRIVATE vesta_openssl ws2_32 synchronization)
+    # ntdll: `util::read_whole_file` abre por NtOpenFile en vez de CreateFileA,
+    # que se ahorra la traduccion de la ruta en cada apertura (ver
+    # include/util/file_read.h).  Se ENLAZA en vez de resolverse con
+    # GetProcAddress para que un simbolo ausente falle al cargar el proceso y no
+    # a mitad de una compilacion.
+    target_link_libraries(vmcore PRIVATE vesta_openssl ws2_32 synchronization
+            ntdll)
 else ()
     target_link_libraries(vmcore PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 endif ()
