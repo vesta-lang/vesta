@@ -149,6 +149,13 @@ struct CosteEstado {
         0; ///< elementos anadidos al fusionar (reservas del vector)
     uint64_t elems_muertos = 0; ///< refinamientos de valores que ya no se usan
     uint64_t elems_vivos_total = 0; ///< total mirado, para el ratio
+    /* Cuantas entradas guardadas caben en extremos de 32 bits.  Es lo que
+     * decide si la entrada puede bajar de 24 a 16 bytes: los extremos se
+     * guardan EN CRUDO y se leen segun el tipo, asi que un valor estrecho no
+     * necesita los 64 bits.  Sin este dato, cambiar la representacion es
+     * apostar. */
+    uint64_t anchura_estrecha = 0; ///< entradas con tipo de 32 bits o menos
+    uint64_t anchura_total = 0;    ///< entradas miradas
 };
 thread_local CosteEstado g_coste;
 
@@ -892,6 +899,12 @@ struct Motor : Contexto {
             const ir::IrValueId v = e.ref[r].id;
             const bool vivo = v >= ultimo_uso.size() || ultimo_uso[v] >= bi;
             if (vivo) {
+                if (g_medir_coste) {
+                    // Anchura de lo que SOBREVIVE, que es lo que se guarda,
+                    // se copia y se compara.
+                    ++g_coste.anchura_total;
+                    if (e.ref[r].t.bits <= 32) ++g_coste.anchura_estrecha;
+                }
                 if (w != r) e.ref[w] = e.ref[r];
                 ++w;
             }
@@ -1372,6 +1385,9 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                 out.stats.cambios, out.stats.ensanches, out.stats.estrechados,
                 (unsigned long long)g_coste.elems_muertos,
                 (unsigned long long)g_coste.elems_vivos_total);
+            std::fprintf(stderr, "[anchura] estrechas=%llu de %llu\n",
+                         (unsigned long long)g_coste.anchura_estrecha,
+                         (unsigned long long)g_coste.anchura_total);
         }
     }
     return out;
