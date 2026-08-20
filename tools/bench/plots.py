@@ -27,6 +27,7 @@ LANG_COLORS = {
     "cpp":          "#9467bd",  # violeta
     "python":       "#17becf",  # cyan
     "java":         "#d62728",  # rojo
+    "nim":          "#e6b800",  # amarillo Nim
     "go":           "#007d9c",  # teal Go (distinto del cyan de python)
     "rust":         "#CE422B",  # naranja de marca Rust (distinto del gris fallback)
 }
@@ -42,6 +43,7 @@ LANG_LABELS = {
     "cpp":          "C++ (g++ -O3)",
     "python":       "Python",
     "java":         "Java",
+    "nim":          "Nim (-d:release)",
     "go":           "Go (gc)",
     "rust":         "Rust (rustc -O)",
 }
@@ -1166,6 +1168,120 @@ def plot_compilacion(datos: dict, out_dir: Path) -> dict:
         plt.savefig(p, dpi=110, bbox_inches="tight")
         plt.close(fig)
         hechas["c1_escalado"] = True
+
+    # --- (a2) crecimiento: tiempo contra lineas, en frio Y en caliente -----
+    #
+    # Va en escala doblemente logaritmica a proposito.  Si el tiempo sigue
+    # t = a * n^k, en log-log es una RECTA cuya pendiente es k, asi que la
+    # forma de la curva se lee directamente: paralela a la diagonal = lineal,
+    # mas inclinada = superlineal.  En escala normal todas se ven "curvas
+    # hacia arriba" y no se distingue una de otra.
+    crec: dict = {}
+    for c in casos:
+        if c.get("fase") != "crecimiento":
+            continue
+        n = c.get("lineas") or 0
+        if n <= 0:
+            continue
+        d = crec.setdefault(c["lang"], {"frio": [], "caliente": []})
+        if c.get("neto_frio"):
+            d["frio"].append((n, c["neto_frio"]))
+        if c.get("neto_caliente"):
+            d["caliente"].append((n, c["neto_caliente"]))
+    if crec:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for ln, d in crec.items():
+            col = LANG_COLORS.get(ln, "#888")
+            for regimen, estilo in (("frio", "o-"), ("caliente", "s--")):
+                pares = sorted(d[regimen])
+                if len(pares) < 2:
+                    continue
+                ax.plot([p[0] for p in pares], [p[1] for p in pares], estilo,
+                        linewidth=2, color=col, alpha=1.0 if regimen == "frio"
+                        else 0.55,
+                        label="%s (%s)" % (LANG_LABELS.get(ln, ln), regimen))
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("lineas del programa (log)")
+        ax.set_ylabel("ms sin el arranque (log)")
+        ax.set_title("Como crece el tiempo de compilar con el codigo\n"
+                     "(en log-log la pendiente ES el exponente: paralela a la "
+                     "diagonal = lineal)")
+        ax.grid(alpha=0.3, which="both")
+        ax.legend(fontsize=8, ncol=2)
+        plt.tight_layout()
+        p = out_dir / "c1b_crecimiento.png"
+        plt.savefig(p, dpi=110, bbox_inches="tight")
+        plt.close(fig)
+        hechas["c1b_crecimiento"] = True
+
+        # --- (a3) el exponente de cada uno, en barras.  Es el resumen de la
+        # curva de arriba: una sola cifra por lenguaje y regimen, con la linea
+        # del 1.0 marcada porque es la frontera entre "escala" y "no escala".
+        resumen = datos.get("crecimiento") or []
+        if resumen:
+            fig, ax = plt.subplots(figsize=(max(8, 1.3 * len(resumen)), 5))
+            nombres = [r["lang"] for r in resumen]
+            xs = list(range(len(nombres)))
+            ancho = 0.38
+            ax.bar([x - ancho / 2 for x in xs],
+                   [r.get("k_frio") or 0 for r in resumen], ancho,
+                   label="en frio",
+                   color=[LANG_COLORS.get(n, "#888") for n in nombres])
+            ax.bar([x + ancho / 2 for x in xs],
+                   [r.get("k_caliente") or 0 for r in resumen], ancho,
+                   label="en caliente", alpha=0.55,
+                   color=[LANG_COLORS.get(n, "#888") for n in nombres])
+            ax.axhline(1.0, color="#444", linestyle=":", linewidth=1.5)
+            ax.text(len(nombres) - 0.5, 1.02, "lineal", fontsize=8,
+                    color="#444", ha="right")
+            ax.set_xticks(xs)
+            ax.set_xticklabels([LANG_LABELS.get(n, n) for n in nombres],
+                               rotation=20, ha="right")
+            ax.set_ylabel("exponente k de t = a * n^k")
+            ax.set_title("Como escala cada compilador\n"
+                         "(1.0 = el doble de codigo, el doble de tiempo; "
+                         "2.0 = cuatro veces)")
+            ax.grid(alpha=0.3, axis="y")
+            ax.legend(fontsize=9)
+            plt.tight_layout()
+            p = out_dir / "c1c_exponente.png"
+            plt.savefig(p, dpi=110, bbox_inches="tight")
+            plt.close(fig)
+            hechas["c1c_exponente"] = True
+
+        # --- (a4) lo que aporta la cache, contra el tamano.  Interesa porque
+        # no es constante: hay herramientas cuyo ahorro se diluye al crecer el
+        # programa, y eso no se ve en ninguna de las dos curvas por separado.
+        fig, ax = plt.subplots(figsize=(10, 5))
+        alguna = False
+        for ln, d in crec.items():
+            frio = dict(d["frio"])
+            cal = dict(d["caliente"])
+            comunes = sorted(set(frio) & set(cal))
+            if len(comunes) < 2:
+                continue
+            alguna = True
+            ax.plot(comunes, [frio[n] / cal[n] for n in comunes], "o-",
+                    linewidth=2, color=LANG_COLORS.get(ln, "#888"),
+                    label=LANG_LABELS.get(ln, ln))
+        if alguna:
+            ax.axhline(1.0, color="#444", linestyle=":", linewidth=1.5)
+            ax.text(0.99, 1.02, "la cache no aporta nada", fontsize=8,
+                    color="#444", ha="right", transform=ax.get_yaxis_transform())
+            ax.set_xscale("log")
+            ax.set_xlabel("lineas del programa (log)")
+            ax.set_ylabel("veces mas rapido con la cache caliente")
+            ax.set_title("Cuanto aporta la cache, y si aguanta al crecer\n"
+                         "(un fichero suelto no tiene nada que reutilizar: "
+                         "ahi el valor 1.0 es lo esperado)")
+            ax.grid(alpha=0.3, which="both")
+            ax.legend(fontsize=9)
+            plt.tight_layout()
+            p = out_dir / "c1d_ahorro_cache.png"
+            plt.savefig(p, dpi=110, bbox_inches="tight")
+            hechas["c1d_ahorro_cache"] = True
+        plt.close(fig)
 
     # --- (b) que se evita segun que cambie ---------------------------------
     orden_reg = ["de cero", "sin cambios", "1 comentario", "1 cuerpo",
