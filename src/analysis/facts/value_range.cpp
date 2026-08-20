@@ -200,6 +200,25 @@ static const bool g_medir_coste = std::getenv("VESTA_RANGE_STATS") != nullptr;
 static const bool g_keep_floor_entries =
     std::getenv("VESTA_RANGE_KEEP_FLOOR") != nullptr;
 
+/* Los dos de abajo se leen UNA vez, aqui, y no donde se usan.
+ *
+ * Preguntar por una variable de entorno recorre su bloque entero, asi que
+ * hacerlo dentro de una funcion que corre miles de veces cuesta mas que lo que
+ * decide.  Ya paso en este proyecto: un `getenv` en el camino caliente llego a
+ * ser el 45% de su propio pase.  Aqui estaban en la funcion de cache -- una
+ * lectura por CADA peticion de rangos -- y en el volcado de estadisticas, que
+ * corre en cada analisis de funcion. */
+
+/// Nivel 1 de las estadisticas: ademas del resumen, el detalle por analisis.
+static const bool g_stats_verbose = [] {
+    const char *v = std::getenv("VESTA_RANGE_STATS");
+    return v != nullptr && v[0] == '1';
+}();
+
+/// Saltarse la cache de rangos (para comparar con y sin).
+static const bool g_no_range_cache =
+    std::getenv("VESTA_NO_RANGE_CACHE") != nullptr;
+
 /**
  * @brief El refinamiento va al asignador general, y NO a una arena de fase.
  *
@@ -1361,7 +1380,7 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
     const uint64_t t = util::reloj::ahora();
     RangeFacts r = calcular_rangos_impl(fn, facts, op, sum);
     g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
-    if ((++g_n_motor % 100) == 0 && std::getenv("VESTA_RANGE_STATS"))
+    if (g_medir_coste && (++g_n_motor % 100) == 0)
         std::fprintf(stderr, "[motor-rangos] %lld analisis | %lld ms\n",
                      g_n_motor.load(), g_ns_motor.load() / 1000000);
     return r;
@@ -1451,8 +1470,8 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
     out.stats.uniones = g_coste.uniones;
     out.stats.unidos = g_coste.unidos;
 
-    if (const char *v = std::getenv("VESTA_RANGE_STATS")) {
-        if (v[0] == '1') {
+    if (g_medir_coste) {
+        if (g_stats_verbose) {
             /* Rehacer un analisis no es lo mismo que hacer trabajo: si el
              * resultado sale IGUAL que la vez anterior, la vuelta entera sobro
              * y lo que hay que arreglar es la invalidacion, no la estructura.
@@ -1566,7 +1585,7 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
     static std::mutex mx_cache;
     static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
 
-    if (std::getenv("VESTA_NO_RANGE_CACHE") != nullptr)
+    if (g_no_range_cache)
         return std::make_shared<const RangeFacts>(
             calcular_rangos(fn, facts, op, sum));
 
