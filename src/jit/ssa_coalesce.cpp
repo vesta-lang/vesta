@@ -87,17 +87,44 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             fn_use(in.func_ptr);
     };
 
-    /* ---- 2) gen/kill por bloque (bitsets planos char) ---- */
-    auto idx = [NV](uint32_t b, uint32_t v) { return size_t(b) * NV + v; };
-    std::vector<char> gen(size_t(NB) * NV, 0), kill(size_t(NB) * NV, 0);
-    /* phi_defs[b] y, por arista, los args: precomputar para el dataflow. */
+    /* ---- 2) gen/kill por bloque (bitsets de 64 bits) ----
+     *
+     * Un BIT por valor, no un byte.  Son CUATRO tablas de NB*NV, y el punto
+     * fijo las recorre enteras en cada vuelta: en una funcion grande eso son
+     * decenas de megabytes moviendose una y otra vez, y este era el mayor coste
+     * propio del compilador (1,692 s de 19,4 s).
+     *
+     * Con palabras de 64 bits se pide ocho veces menos memoria y, sobre todo,
+     * las tres operaciones del bucle interno -- unir con los sucesores,
+     * comparar con lo anterior, y gen U (out - kill) -- pasan a resolver 64
+     * valores por instruccion en vez de uno, y sin ninguna rama. */
+    const size_t W = (size_t(NV) + 63) / 64;
+    auto row = [W](std::vector<uint64_t> &t, uint32_t b) {
+        return t.data() + size_t(b) * W;
+    };
+    auto crow = [W](const std::vector<uint64_t> &t, uint32_t b) {
+        return t.data() + size_t(b) * W;
+    };
+    auto get_bit = [](const uint64_t *r, uint32_t v) {
+        return (r[v >> 6] >> (v & 63)) & 1ull;
+    };
+    auto set_bit = [](uint64_t *r, uint32_t v) {
+        r[v >> 6] |= 1ull << (v & 63);
+    };
+    auto clr_bit = [](uint64_t *r, uint32_t v) {
+        r[v >> 6] &= ~(1ull << (v & 63));
+    };
+
+    std::vector<uint64_t> gen(size_t(NB) * W, 0), kill(size_t(NB) * W, 0);
     for (uint32_t b = 0; b < NB; ++b) {
+        uint64_t *g = row(gen, b);
+        uint64_t *k = row(kill, b);
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
             each_use(in, [&](ir::IrValueId u) {
-                if (u < NV && !kill[idx(b, u)]) gen[idx(b, u)] = 1;
+                if (u < NV && !get_bit(k, u)) set_bit(g, u);
             });
             if (in.dst != ir::IR_NO_VALUE && in.dst < NV)
-                kill[idx(b, in.dst)] = 1; // incluye phi dst
+                set_bit(k, in.dst); // incluye phi dst
         }
     }
 
@@ -105,13 +132,13 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
      * live_out[b] = U_succ [ (live_in[succ] - phi_defs[succ]) U
      *                        {args de phis de succ que vienen de b} ]
      * live_in[b]  = gen[b] U (live_out[b] - kill[b]). */
-    std::vector<char> live_in(size_t(NB) * NV, 0), live_out(size_t(NB) * NV, 0);
+    std::vector<uint64_t> live_in(size_t(NB) * W, 0), live_out(size_t(NB) * W, 0);
     bool changed = true;
     /* Fuera de los dos bucles: se reutiliza y se limpia, en vez de pedir y
      * devolver memoria por cada bloque de cada vuelta.  El contenido se
      * construye desde cero igual que antes -- se limpia al entrar --, asi que
      * lo unico que desaparece es el ir y venir al asignador. */
-    std::vector<char> nout(NV, 0);
+    std::vector<uint64_t> nout(W, 0);
     while (changed) {
         changed = false;
         for (uint32_t bi = NB; bi-- > 0;) {
@@ -122,31 +149,36 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
                 if (s >= NB) continue;
                 const ir::IrBlock &sb = fn.blocks[s];
                 /* live_in[s] menos los phi-defs de s */
-                for (uint32_t v = 0; v < NV; ++v)
-                    if (live_in[idx(s, v)]) nout[v] = 1;
+                const uint64_t *lis = crow(live_in, s);
+                for (size_t w = 0; w < W; ++w) nout[w] |= lis[w];
                 for (const ir::IrInstr &in : sb.instrs) {
                     if (in.op != ir::IrOp::PHI) continue;
-                    if (in.dst < NV) nout[in.dst] = 0; // quitar phi-def
+                    if (in.dst < NV)
+                        clr_bit(nout.data(), in.dst); // quitar phi-def
                 }
                 /* mas los args de phis de s que vienen de bi */
                 for (const ir::IrInstr &in : sb.instrs) {
                     if (in.op != ir::IrOp::PHI) continue;
                     for (const ir::IrPhiArg &a : in.phi_args)
-                        if (a.block == bi && a.value < NV) nout[a.value] = 1;
+                        if (a.block == bi && a.value < NV)
+                            set_bit(nout.data(), a.value);
                 }
             }
-            for (uint32_t v = 0; v < NV; ++v) {
-                if (nout[v] != live_out[idx(bi, v)]) {
-                    live_out[idx(bi, v)] = nout[v];
+            uint64_t *lo = row(live_out, bi);
+            for (size_t w = 0; w < W; ++w) {
+                if (nout[w] != lo[w]) {
+                    lo[w] = nout[w];
                     changed = true;
                 }
             }
             /* new_in = gen U (out - kill) */
-            for (uint32_t v = 0; v < NV; ++v) {
-                char ni = gen[idx(bi, v)] ||
-                          (live_out[idx(bi, v)] && !kill[idx(bi, v)]);
-                if (ni != live_in[idx(bi, v)]) {
-                    live_in[idx(bi, v)] = ni;
+            const uint64_t *g = crow(gen, bi);
+            const uint64_t *k = crow(kill, bi);
+            uint64_t *li = row(live_in, bi);
+            for (size_t w = 0; w < W; ++w) {
+                const uint64_t ni = g[w] | (lo[w] & ~k[w]);
+                if (ni != li[w]) {
+                    li[w] = ni;
                     changed = true;
                 }
             }
@@ -199,9 +231,11 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             }
         }
         /* Rango de cada valor relevante en este bloque. */
+        const uint64_t *li_b = crow(live_in, b);
+        const uint64_t *lo_b = crow(live_out, b);
         for (uint32_t v = 0; v < NV; ++v) {
-            const bool in_ = live_in[idx(b, v)] != 0;
-            const bool out_ = live_out[idx(b, v)] != 0;
+            const bool in_ = get_bit(li_b, v) != 0;
+            const bool out_ = get_bit(lo_b, v) != 0;
             const bool appears = (b_first[v] != UINT32_MAX);
             if (!in_ && !out_ && !appears) continue;
             const uint32_t start =
@@ -308,12 +342,21 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             for (uint32_t v : vivos)
                 liveset[v] = 0;
             vivos.clear();
-            for (uint32_t v = 0; v < NV; ++v)
-                if (live_out[idx(b, v)]) {
+            /* Solo los bits ENCENDIDOS: los conjuntos vivos son dispersos, asi
+             * que preguntar por los NV valores era recorrer sobre todo ceros.
+             * Con `ctz` se salta directamente al siguiente vivo. */
+            const uint64_t *lo_b = crow(live_out, b);
+            for (size_t w = 0; w < W; ++w) {
+                uint64_t bits = lo_b[w];
+                while (bits) {
+                    const uint32_t v = static_cast<uint32_t>(w * 64) +
+                                       static_cast<uint32_t>(__builtin_ctzll(bits));
+                    bits &= bits - 1;
                     liveset[v] = 1;
                     donde[v] = static_cast<uint32_t>(vivos.size());
                     vivos.push_back(v);
                 }
+            }
             const auto &ins = fn.blocks[b].instrs;
             for (size_t j = ins.size(); j-- > 0;) {
                 const ir::IrInstr &in = ins[j];
@@ -438,8 +481,17 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
             /* Si el bloque tiene un call, los valores LIVE-IN cruzan ese call
              * (viven desde antes del bloque, atraviesan el call). */
             if (seen_call) {
-                for (uint32_t v = 0; v < NV; ++v)
-                    if (live_in[idx(b, v)]) vcross[v] = 1;
+                const uint64_t *li_b = crow(live_in, b);
+                for (size_t w = 0; w < W; ++w) {
+                    uint64_t bits = li_b[w];
+                    while (bits) {
+                        const uint32_t v =
+                            static_cast<uint32_t>(w * 64) +
+                            static_cast<uint32_t>(__builtin_ctzll(bits));
+                        bits &= bits - 1;
+                        vcross[v] = 1;
+                    }
+                }
             }
         }
     }
