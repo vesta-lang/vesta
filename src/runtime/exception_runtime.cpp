@@ -4,6 +4,8 @@
  */
 
 #include "runtime/exception_runtime.h"
+
+#include "util/thread_slot.h" // ranura por hilo propia (sin la TLS emulada)
 #include "runtime/decode_instruction.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/scheduler.h"
@@ -2120,12 +2122,26 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
 // mismo OS thread tiene UN ProcessVM activo a la vez.  Si en el
 // futuro se anade preemption con context-switch dentro del run_loop,
 // habria que actualizar el TLS antes de cambiar de proceso.
-#if defined(__GNUC__) || defined(__clang__)
-static __thread ProcessVM *t_executing_proc = nullptr;
-#elif defined(_MSC_VER)
-static __declspec(thread) ProcessVM *t_executing_proc = nullptr;
+/* Se guarda en una ranura NUESTRA (`util::ThreadSlot`) y no en un `__thread`.
+ *
+ * Motivo, medido: en MinGW `__thread` es TLS EMULADA y cada acceso es una
+ * llamada a `__emutls_get_address`, que por dentro hace `TlsGetValue` mas
+ * guardar y restaurar el ultimo error.  Perfilando la ejecucion de un banco de
+ * despacho, esa maquinaria salia al 9,5% del tiempo, y sus dos usuarios eran
+ * `vrt_callitf` y esto, que se toca en CADA entrada al JIT.  Un acceso pasa de
+ * 10,83 ns a 0,65.
+ *
+ * Y ademas se deja de hacer el trabajo dos veces: antes esto convivia con un
+ * slot dedicado de `TlsAlloc` -- el que lee el thunk -- y habia que escribir en
+ * los dos y mantenerlos sincronizados.  Ahora hay UNO. */
+#if defined(_WIN32)
+static util::ThreadSlot g_proc_slot;
 #else
-static thread_local ProcessVM *t_executing_proc = nullptr;
+/* Fuera de Windows NO se toca: `__thread` ahi ES TLS de verdad -- una lectura
+ * directa, sin llamada -- y ademas es segura dentro de un manejador de senal,
+ * cosa que pasar por la API de claves no garantiza.  El problema es de MinGW,
+ * asi que el arreglo se queda en MinGW. */
+static __thread ProcessVM *t_executing_proc = nullptr;
 #endif
 
 #if defined(_WIN32)
@@ -2140,34 +2156,29 @@ static thread_local ProcessVM *t_executing_proc = nullptr;
  * Win64 (verificable en wikipedia.org/wiki/Win32_Thread_Information_Block).
  * Slots >= 64 estan en TlsExpansionSlots accesibles via
  * @c gs:[0x1780] + indirect; el thunk los rechaza y cae al call. */
-static DWORD g_proc_tls_index = TLS_OUT_OF_INDEXES;
-static std::once_flag g_proc_tls_once;
-
-static void init_proc_tls_index_once() {
-    std::call_once(g_proc_tls_once, []() { g_proc_tls_index = TlsAlloc(); });
-}
-
 unsigned long jit_proc_tls_index() noexcept {
-    init_proc_tls_index_once();
-    return static_cast<unsigned long>(g_proc_tls_index);
+    g_proc_slot.ensure();
+    return static_cast<unsigned long>(g_proc_slot.slot_index());
 }
 #endif
 
 void set_current_executing_process(ProcessVM *proc) noexcept {
-    t_executing_proc = proc;
 #if defined(_WIN32)
-    /* Mantener el slot TLS dedicado sincronizado con el thread_local
-     * C++.  El thunk lee el slot directo via gs:[]; sin este sync,
-     * el thunk leeria stale data. */
-    init_proc_tls_index_once();
-    if (g_proc_tls_index != TLS_OUT_OF_INDEXES) {
-        TlsSetValue(g_proc_tls_index, proc);
-    }
+    /* Una sola escritura.  El thunk lee ESTA misma ranura por su cuenta, asi
+     * que ya no hay dos sitios que mantener sincronizados. */
+    g_proc_slot.ensure();
+    g_proc_slot.set(proc);
+#else
+    t_executing_proc = proc;
 #endif
 }
 
 ProcessVM *get_current_executing_process() noexcept {
+#if defined(_WIN32)
+    return static_cast<ProcessVM *>(g_proc_slot.get());
+#else
     return t_executing_proc;
+#endif
 }
 
 } // namespace runtime
@@ -2207,7 +2218,10 @@ static void *g_av_veh_handle = nullptr;
  * VEH pueda apuntar.
  */
 static void __attribute__((noinline)) av_recovery_stub() {
-    ProcessVM *proc = t_executing_proc;
+    /* Leer la ranura propia y no un `__thread`: dentro de un manejador de
+     * excepciones importa que esto no pueda bloquearse ni pedir memoria, y la
+     * TLS emulada de MinGW hace las dos cosas en el primer acceso. */
+    ProcessVM *proc = runtime::get_current_executing_process();
     if (proc != nullptr && proc->av_recovery_active) {
         std::longjmp(proc->av_recovery_jmpbuf, 1);
     }
@@ -2266,7 +2280,7 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
     } else {
         kind_local = 4;
     }
-    ProcessVM *proc = t_executing_proc;
+    ProcessVM *proc = runtime::get_current_executing_process();
     if (proc == nullptr || !proc->av_recovery_active) {
         // No hay bytecode corriendo o el scheduler no ha armado el
         // setjmp: la VM crashea como antes (comportamiento legado).
