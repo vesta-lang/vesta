@@ -390,6 +390,8 @@ struct Motor : Contexto {
     mutable Estado union_scratch_;  ///< destino de cada fusion de predecesores
     mutable Estado out_scratch_;    ///< salida del bloque en curso
     mutable Estado arista_scratch_; ///< lo que viaja por la arista en curso
+    mutable Estado ancho_scratch_;  ///< destino del ensanchamiento en curso
+    mutable Estado estrecho_scratch_; ///< destino del estrechamiento en curso
     mutable Estado in_scratch_;     ///< entrada recien calculada de un bloque
     std::vector<std::vector<uint32_t>> entrantes, salientes;
     std::vector<uint32_t>
@@ -611,9 +613,14 @@ struct Motor : Contexto {
 
     /// Ensanchamiento del ascenso: por valor, soltando solo el extremo que
     /// crece.
-    Estado ensanchar_estado(const Estado &viejo, const Estado &nuevo) const {
-        if (!viejo.alcanzable || !nuevo.alcanzable) return nuevo;
-        Estado out;
+    /// Sobre un destino REUTILIZADO; ver el motivo en @c estrechar_en.
+    void ensanchar_en(const Estado &viejo, const Estado &nuevo,
+                      Estado &out) const {
+        if (!viejo.alcanzable || !nuevo.alcanzable) {
+            if (&out != &nuevo) out = nuevo;
+            return;
+        }
+        out.ref.clear();
         if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
@@ -632,7 +639,6 @@ struct Motor : Contexto {
                 if (g_medir_coste) ++g_coste.unidos;
             }
         }
-        return out;
     }
 
     /**
@@ -643,9 +649,17 @@ struct Motor : Contexto {
      * puede mejorar), y ante eso se conserva lo recien calculado en vez de
      * afirmar que ahi no se llega.
      */
-    Estado estrechar_estado(const Estado &viejo, const Estado &nuevo) const {
-        if (!nuevo.alcanzable || !viejo.alcanzable) return nuevo;
-        Estado out;
+    /* Sobre un destino REUTILIZADO, igual que @c unir_en y por el mismo
+     * motivo: construir un `Estado` nuevo por llamada pedia memoria en cada
+     * paso del descenso, que recorre TODOS los bloques.  El destino se limpia
+     * al entrar, asi que conserva su capacidad de la vuelta anterior. */
+    void estrechar_en(const Estado &viejo, const Estado &nuevo,
+                      Estado &out) const {
+        if (!nuevo.alcanzable || !viejo.alcanzable) {
+            if (&out != &nuevo) out = nuevo;
+            return;
+        }
+        out.ref.clear();
         if (g_medir_coste) ++g_coste.uniones;
         out.alcanzable = true;
         out.ref.reserve(nuevo.ref.size()); // cota superior; ver unir_estados
@@ -667,7 +681,6 @@ struct Motor : Contexto {
                 if (g_medir_coste) ++g_coste.unidos;
             }
         }
-        return out;
     }
 
     // --- guardas ------------------------------------------------------------
@@ -953,7 +966,8 @@ struct Motor : Contexto {
             calcular_in(bi, in_scratch_);
             Estado &nuevo_in = in_scratch_;
             if (cierra_ciclo(bi) && vueltas_ciclo[bi] >= op.retardo_ensanche) {
-                nuevo_in = ensanchar_estado(in_bloque[bi], nuevo_in);
+                ensanchar_en(in_bloque[bi], nuevo_in, ancho_scratch_);
+                nuevo_in.swap(ancho_scratch_);
                 stats.ensanches++;
             }
             if (!(nuevo_in == in_bloque[bi])) {
@@ -990,10 +1004,19 @@ struct Motor : Contexto {
             const ir::IrBlockId bi = cola.front();
             cola.pop_front();
 
-            const Estado nuevo_in =
-                estrechar_estado(in_bloque[bi], calcular_in(bi));
-            if (!(nuevo_in == in_bloque[bi])) {
-                in_bloque[bi] = nuevo_in;
+            /* Mismo trato que el ascenso, que aqui faltaba: bufer reutilizado
+             * en vez de un `Estado` nuevo por paso, e INTERCAMBIAR en vez de
+             * copiar.  El descenso mete TODOS los bloques en la cola, asi que
+             * se ejecuta mucho, y copiar el estado -- que en las funciones que
+             * importan trae cien o mas entradas -- era la operacion mas cara
+             * de compilar: `operator=` del vector, 1,8 s de 19,4 s.
+             *
+             * Al intercambiar, el bufer que se sustituye no se tira: se queda
+             * con la capacidad y sirve para el paso siguiente. */
+            calcular_in(bi, in_scratch_);
+            estrechar_en(in_bloque[bi], in_scratch_, estrecho_scratch_);
+            if (!(estrecho_scratch_ == in_bloque[bi])) {
+                in_bloque[bi].swap(estrecho_scratch_);
                 stats.estrechados++;
             }
             if (!in_bloque[bi].alcanzable) continue;
