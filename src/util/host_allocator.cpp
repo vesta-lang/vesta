@@ -33,8 +33,32 @@ namespace {
 //  Parametros
 // =========================================================================
 
-/// Mayor reserva que sirve el asignador; por encima va al sistema.
-constexpr size_t kMaxSmall = 1024;
+/**
+ * @brief Mayor reserva que sirve el asignador; por encima va al sistema.
+ *
+ * Subido de 1 KiB a 2 KiB con la cuenta delante.  Con el tope en 1 KiB, 420.219
+ * reservas se iban al sistema y costaban 0,476 s entre `malloc` y `free` --
+ * **1,13 us por par** --, mientras las 43,9 millones que serviamos nosotros
+ * iban a 5,5 ns.  Cada reserva grande costaba unas doscientas veces lo que una
+ * pequena.
+ *
+ * POR QUE 2 KiB Y NO MAS.  Subir el tope tiene un precio en memoria, porque
+ * este asignador NO devuelve nada al sistema mientras que el `malloc` del
+ * sistema si suele devolver los bloques grandes.  Medida la curva entera:
+ *
+ *     tope    tiempo    pico de memoria
+ *     1 KiB   ref.      779 MB
+ *     2 KiB   -3,2%     788 MB   (+1,1%)
+ *     4 KiB   -4,7%     836 MB   (+7,3%)
+ *     8 KiB   empate    837 MB   (+7,4%)
+ *
+ * 2 KiB da casi toda la ganancia por la septima parte del coste.  Y de 8 KiB
+ * hacia arriba ya no hay ganancia ninguna, que es lo esperable: pasada la
+ * pagina de 4 KiB lo que se pide son paginas completas, y trocearlas en clases
+ * dentro de un trozo solo anade desperdicio -- el sistema ya sabe entregar
+ * paginas.
+ */
+constexpr size_t kMaxSmall = 2048;
 
 /// Alineacion que garantiza `operator new` para cualquier tipo.
 constexpr size_t kAlign = 16;
@@ -47,9 +71,13 @@ constexpr size_t kAlign = 16;
  * ya es mucho, mientras que arriba las reservas son raras y el desperdicio
  * relativo es menor.  El mayor desperdicio interno queda en el 14%.
  */
-constexpr uint32_t kSizes[] = {16,  32,  48,  64,  80,  96,  112, 128,
-                               160, 192, 224, 256, 320, 384, 448, 512,
-                               640, 768, 896, 1024};
+constexpr uint32_t kSizes[] = {
+    16,   32,   48,   64,   80,   96,   112,  128,  160,  192,  224,  256,
+    320,  384,  448,  512,  640,  768,  896,  1024,
+    // De 1 KiB a 2 KiB el paso se abre un poco: son el 0,5% de las reservas,
+    // asi que el desperdicio por redondeo pesa poco.  El mayor queda en un
+    // 15% (1.537 bytes van a una clase de 1.792).
+    1152, 1280, 1408, 1536, 1792, 2048};
 constexpr uint32_t kClasses = sizeof(kSizes) / sizeof(kSizes[0]);
 
 /// Trozo que se pide a la region cada vez que una clase se queda sin bloques.
@@ -66,8 +94,8 @@ constexpr uint32_t kMaxThreads = 64;
 constexpr uint32_t kChunkMagic = 0x56455354u; // 'VEST'
 
 /// Topes del reparto de tamanos (solo con VESTA_HOST_ALLOC_STATS=1).
-constexpr size_t kBucketLimit[] = {64,   128,  256,   512,
-                                   1024, 4096, 65536, ~size_t(0)};
+constexpr size_t kBucketLimit[] = {64,   256,  1024,  2048,
+                                   4096, 8192, 16384, ~size_t(0)};
 constexpr uint32_t kSizeBuckets = sizeof(kBucketLimit) / sizeof(kBucketLimit[0]);
 
 // =========================================================================
@@ -391,7 +419,7 @@ StatsDump::~StatsDump() {
                  (unsigned long long)s.large_allocs,
                  (unsigned long long)s.chunks);
     static const char *kNames[kSizeBuckets] = {
-        "<=64", "<=128", "<=256", "<=512", "<=1K", "<=4K", "<=64K", ">64K"};
+        "<=64", "<=256", "<=1K", "<=2K", "<=4K", "<=8K", "<=16K", ">16K"};
     uint64_t total = 0;
     for (uint32_t b = 0; b < kSizeBuckets; ++b) total += s.size_hist[b];
     if (total == 0) return;
