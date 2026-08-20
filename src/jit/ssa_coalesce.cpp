@@ -289,26 +289,55 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
      * (def en la entrada, en paralelo) NO interfieren entre si ni con sus args
      * (each_use excluye los phi args) -> se preservan como candidatos a
      * coalescer.  Gated con VESTA_SSA_COALESCE (el flag maestro). */
-    std::vector<std::unordered_set<uint32_t>> adj(NV);
+    /* Listas contiguas, no conjuntos hash.  Eran NV conjuntos, cada uno con sus
+     * propios nodos y sus propias peticiones de memoria, y lo unico que se hace
+     * con ellos despues es recorrerlos.  Un vector hace eso mejor y sin pedir
+     * un nodo por arista.
+     *
+     * Y se llevan APARTE los valores vivos en cada punto, en vez de barrer los
+     * NV de la funcion en cada definicion buscando cuales lo estan.  Eso era
+     * instrucciones por valores; ahora es instrucciones por vivos, que es lo
+     * que de verdad hay que mirar.  Las aristas que salen son exactamente las
+     * mismas. */
+    std::vector<std::vector<uint32_t>> adj(NV);
     {
         std::vector<char> liveset(NV, 0);
+        std::vector<uint32_t> vivos;        // los que estan vivos, sin repetir
+        std::vector<uint32_t> donde(NV, 0); // posicion de cada uno en `vivos`
         for (uint32_t b = 0; b < NB; ++b) {
+            for (uint32_t v : vivos)
+                liveset[v] = 0;
+            vivos.clear();
             for (uint32_t v = 0; v < NV; ++v)
-                liveset[v] = live_out[idx(b, v)];
+                if (live_out[idx(b, v)]) {
+                    liveset[v] = 1;
+                    donde[v] = static_cast<uint32_t>(vivos.size());
+                    vivos.push_back(v);
+                }
             const auto &ins = fn.blocks[b].instrs;
             for (size_t j = ins.size(); j-- > 0;) {
                 const ir::IrInstr &in = ins[j];
                 if (in.dst != ir::IR_NO_VALUE && in.dst < NV) {
                     const uint32_t d = in.dst;
-                    for (uint32_t a = 0; a < NV; ++a)
-                        if (liveset[a] && a != d) {
-                            adj[d].insert(a);
-                            adj[a].insert(d);
+                    for (uint32_t a : vivos)
+                        if (a != d) {
+                            adj[d].push_back(a);
+                            adj[a].push_back(d);
                         }
-                    liveset[d] = 0; // el def mata d hacia atras
+                    if (liveset[d]) { // el def mata d hacia atras
+                        liveset[d] = 0;
+                        const uint32_t p = donde[d];
+                        const uint32_t ult = vivos.back();
+                        vivos[p] = ult;
+                        donde[ult] = p;
+                        vivos.pop_back();
+                    }
                 }
                 each_use(in, [&](ir::IrValueId u) {
-                    if (u < NV) liveset[u] = 1; // uso -> vivo antes del def
+                    if (u >= NV || liveset[u]) return;
+                    liveset[u] = 1; // uso -> vivo antes del def
+                    donde[u] = static_cast<uint32_t>(vivos.size());
+                    vivos.push_back(u);
                 });
             }
         }
