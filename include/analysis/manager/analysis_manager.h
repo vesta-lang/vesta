@@ -148,6 +148,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -302,6 +303,15 @@ class AnalysisManager {
     const T &get_or_compute_v(const std::string &unit, uint64_t version,
                               Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
+        /* El cerrojo protege las TABLAS, y solo eso.  La fabrica corre FUERA
+         * -- ver abajo --: calcular un analisis es lo caro, y hacerlo con el
+         * cerrojo puesto serializaria exactamente lo que se quiere repartir.
+         *
+         * Que dos hilos calculen a la vez el mismo analisis es posible y no es
+         * un fallo: se guarda el ultimo y el otro conserva el suyo vivo por el
+         * respaldo.  Se paga trabajo repetido en un caso raro a cambio de no
+         * pagar serializacion en el caso normal. */
+        std::unique_lock<std::mutex> lk(m_);
         if (!stack().empty()) rev_deps_[k].insert(stack().back());
         auto it = results_.find(k);
         if (it != results_.end()) {
@@ -321,7 +331,9 @@ class AnalysisManager {
             ++nuevos_;
         }
         stack().push_back(k);
+        lk.unlock(); // la fabrica, sin el cerrojo puesto
         T value = factory();
+        lk.lock();
         stack().pop_back();
         auto model = std::make_shared<AnalysisResultModel<T>>(std::move(value));
         model->version = version;
@@ -336,13 +348,20 @@ class AnalysisManager {
     const T &get_or_compute(const std::string &unit, Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
         // Dependencia: el computo en curso (tope de la pila) depende de k.
+        std::unique_lock<std::mutex> lk(m_);
         if (!stack().empty()) rev_deps_[k].insert(stack().back());
         auto it = results_.find(k);
         if (it != results_.end())
             return static_cast<AnalysisResultModel<T> *>(it->second.get())
                 ->result;
         stack().push_back(k);
+        /* Soltar el cerrojo ANTES de la fabrica es obligatorio, no una mejora:
+         * la fabrica pide otros `get_or_compute` -- eso es lo que crea las
+         * dependencias -- y volver a entrar con el cerrojo puesto se
+         * autobloquea sobre un mutex no reentrante.  Aqui faltaba, y colgaba. */
+        lk.unlock();
         T value = factory(); // puede pedir otros get_or_compute -> mas deps
+        lk.lock();
         stack().pop_back();
         auto model = std::make_shared<AnalysisResultModel<T>>(std::move(value));
         T &ref = model->result;
@@ -354,12 +373,14 @@ class AnalysisManager {
 
     /// ¿Hay resultado cacheado de @c A para @p unit?
     template <class A> bool cached(const std::string &unit) const {
+        std::lock_guard<std::mutex> lk(m_);
         return results_.count(Key{analysis_id<A>(), unit}) != 0;
     }
 
     /// Invalida el resultado @c A de @p unit y, transitivamente, todo lo que
     /// dependia de el (ambos ejes).
     template <class A> void invalidate(const std::string &unit) {
+        std::lock_guard<std::mutex> lk(m_);
         invalidate_key(Key{analysis_id<A>(), unit});
     }
 
@@ -375,6 +396,7 @@ class AnalysisManager {
          * se nota (0,06 s en el perfil), pero el coste crece con el producto de
          * unidades por invalidaciones: es de orden equivocado, y eso se
          * descubre tarde y caro cuando alguien compila un modulo grande. */
+        std::lock_guard<std::mutex> lk(m_);
         auto u = keys_by_unit_.find(unit);
         if (u == keys_by_unit_.end()) return;
         std::vector<Key> dead;
@@ -402,6 +424,7 @@ class AnalysisManager {
 
     /// Borra TODO (reconstruccion completa).
     void clear() {
+        std::lock_guard<std::mutex> lk(m_);
         results_.clear();
         rev_deps_.clear();
         keys_by_unit_.clear();
@@ -429,6 +452,9 @@ class AnalysisManager {
   private:
     long long aciertos_ = 0, caducados_ = 0, nuevos_ = 0;
 
+    /// OJO: NO bloquea.  Se la llama desde dentro del cerrojo -- tanto desde
+    /// `get_or_compute_v` cuando encuentra un resultado caduco como desde los
+    /// `invalidate` publicos --, y volver a pedirlo aqui se autobloquearia.
     void invalidate_key(const Key &k) {
         auto it = results_.find(k);
         if (it == results_.end()) return;
@@ -441,6 +467,14 @@ class AnalysisManager {
         for (const Key &dep : deps)
             invalidate_key(dep); // cascada
     }
+
+    /// Protege las tablas de abajo.  NO se tiene puesto mientras corre una
+    /// fabrica: ver `get_or_compute_v`.
+    ///
+    /// `mutable` porque hay consultas de solo lectura declaradas `const` que
+    /// tambien tienen que tomarlo: mirar una tabla mientras otro hilo la muta
+    /// no es seguro aunque no se escriba nada.
+    mutable std::mutex m_;
 
     /// Que claves tiene cada unidad.  Existe para que invalidar una unidad no
     /// obligue a recorrer el gestor entero: sin esto, invalidar es O(todo) y se
