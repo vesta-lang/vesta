@@ -13305,6 +13305,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
             }
             APLICA_PRESERVA_EFECTOS(ir_pass_dce(fn, &decls_nativas, &asm_of(fn),
                                                 &cache_efectos[fn.name]));
+            /* Punto seguro: terminado con esta funcion, ya no se va a usar
+             * ninguna referencia que diera el gestor.  Sin soltarlas, el
+             * respaldo que las mantiene vivas frente a una invalidacion ajena
+             * creceria hasta el final del proceso. */
+            am.release_retained();
 
             if (level >= OptLevel::O2) {
                 // O2: plegado de constantes + bloques inalcanzables + TCO.

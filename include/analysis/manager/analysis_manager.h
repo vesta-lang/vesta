@@ -302,11 +302,16 @@ class AnalysisManager {
     const T &get_or_compute_v(const std::string &unit, uint64_t version,
                               Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
-        if (!stack_.empty()) rev_deps_[k].insert(stack_.back());
+        if (!stack().empty()) rev_deps_[k].insert(stack().back());
         auto it = results_.find(k);
         if (it != results_.end()) {
             if (it->second->version == version) {
                 ++aciertos_;
+                // Respaldar antes de entregar: si otro hilo invalida esta
+                // unidad -- o una de la que depende --, el mapa suelta su
+                // referencia pero el objeto sigue vivo mientras el llamante lo
+                // use.  Sin esto, la referencia devuelta puede colgar.
+                retained().push_back(it->second);
                 return static_cast<AnalysisResultModel<T> *>(it->second.get())
                     ->result;
             }
@@ -315,12 +320,13 @@ class AnalysisManager {
         } else {
             ++nuevos_;
         }
-        stack_.push_back(k);
+        stack().push_back(k);
         T value = factory();
-        stack_.pop_back();
-        auto model = std::make_unique<AnalysisResultModel<T>>(std::move(value));
+        stack().pop_back();
+        auto model = std::make_shared<AnalysisResultModel<T>>(std::move(value));
         model->version = version;
         T &ref = model->result;
+        retained().push_back(model); // ver el caso de acierto
         results_[k] = std::move(model);
         index_add(k);
         return ref;
@@ -330,16 +336,17 @@ class AnalysisManager {
     const T &get_or_compute(const std::string &unit, Factory &&factory) {
         const Key k{analysis_id<A>(), unit};
         // Dependencia: el computo en curso (tope de la pila) depende de k.
-        if (!stack_.empty()) rev_deps_[k].insert(stack_.back());
+        if (!stack().empty()) rev_deps_[k].insert(stack().back());
         auto it = results_.find(k);
         if (it != results_.end())
             return static_cast<AnalysisResultModel<T> *>(it->second.get())
                 ->result;
-        stack_.push_back(k);
+        stack().push_back(k);
         T value = factory(); // puede pedir otros get_or_compute -> mas deps
-        stack_.pop_back();
-        auto model = std::make_unique<AnalysisResultModel<T>>(std::move(value));
+        stack().pop_back();
+        auto model = std::make_shared<AnalysisResultModel<T>>(std::move(value));
         T &ref = model->result;
+        retained().push_back(model); // ver el caso de acierto
         results_[k] = std::move(model);
         index_add(k);
         return ref;
@@ -380,12 +387,25 @@ class AnalysisManager {
             invalidate_key(k);
     }
 
+    /**
+     * @brief Suelta lo que este hilo tenia cogido.
+     *
+     * Hay que llamarlo en un punto SEGURO: cuando el llamante ha terminado con
+     * la unidad y ya no va a usar ninguna referencia que el gestor le diera.
+     * En el bucle de pases, al cerrar cada funcion.
+     *
+     * Sin esto el respaldo crece sin fin -- cada resultado entregado quedaria
+     * vivo hasta el final del proceso --, y con esto la memoria vuelve al
+     * comportamiento de antes: solo sobrevive lo que el mapa siga guardando.
+     */
+    void release_retained() { retained().clear(); }
+
     /// Borra TODO (reconstruccion completa).
     void clear() {
         results_.clear();
         rev_deps_.clear();
         keys_by_unit_.clear();
-        stack_.clear();
+        stack().clear();
     }
 
     size_t size() const { return results_.size(); }
@@ -451,11 +471,38 @@ class AnalysisManager {
         if (v.empty()) keys_by_unit_.erase(u);
     }
 
-    std::unordered_map<Key, std::unique_ptr<AnalysisResultConcept>, KeyHash>
+    /* `shared_ptr` y no `unique_ptr`, y no es un detalle: el gestor entrega
+     * REFERENCIAS a lo que guarda, y la invalidacion cascadea por dependencias
+     * que CRUZAN funciones -- calcular points-to de `f` pide rangos de `g`, asi
+     * que invalidar `g` puede borrar entradas de `f`.  Con varios hilos, uno
+     * puede borrar justo lo que otro esta leyendo.
+     *
+     * Con `shared_ptr`, borrar del mapa solo suelta LA referencia del mapa: el
+     * objeto sigue vivo mientras alguien lo tenga cogido (ver `retained_`).  Es
+     * el mismo remedio que ya usa `rangos_de` en el motor de rangos. */
+    std::unordered_map<Key, std::shared_ptr<AnalysisResultConcept>, KeyHash>
         results_;
+
+    /* Lo que ESTE hilo tiene cogido.  Cada referencia entregada se respalda
+     * aqui para que una cascada de otro hilo no pueda destruirla debajo.  Se
+     * suelta en un punto seguro -- cuando el llamante termina con la unidad --
+     * via `release_retained()`. */
+    static std::vector<std::shared_ptr<AnalysisResultConcept>> &retained() {
+        // Estatico LOCAL de funcion, no miembro `static inline thread_local`:
+        // con MinGW, este ultimo duplica la funcion de inicializacion del TLS
+        // en cada unidad de traduccion y el enlace falla.
+        static thread_local std::vector<std::shared_ptr<AnalysisResultConcept>> v;
+        return v;
+    }
     std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>
         rev_deps_;
-    std::vector<Key> stack_; // computos en curso (para registrar dependencias)
+    /* Por hilo: una pila de computos en curso describe lo que ESTE hilo esta
+     * calculando.  Compartida, dos hilos registrarian sus dependencias contra
+     * el computo del otro. */
+    static std::vector<Key> &stack() {
+        static thread_local std::vector<Key> v; // ver retained()
+        return v;
+    }
 };
 
 } // namespace analysis
