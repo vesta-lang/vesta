@@ -8,6 +8,7 @@ entonces se mediria la carga de la maquina.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import time
@@ -116,8 +117,47 @@ def _calentar(cmd, env, cwd, timeout) -> int:
     return len(traza)
 
 
-def medir_caliente(cmd, env, cwd, repes, timeout) -> dict:
-    """Serie con las caches CALIENTES: se calienta y luego se mide."""
+def fases_internas(cmd, env, cwd, timeout) -> dict:
+    """El reparto por fases que el propio compilador publica.
+
+    El tiempo total dice CUANTO tarda; esto dice EN QUE.  Sin ello, un banco
+    que compara lenguajes solo puede senalar que vamos peor en algun tamano,
+    no donde se va ese tiempo -- y "hacemos trabajo de mas en codigo sencillo"
+    no se arregla sin saber en que fase.
+
+    En una pasada APARTE, por el mismo motivo que la memoria: capturar la
+    salida cuesta, y lo que se publica como tiempo tiene que ser el del
+    compilador, no el del que lo mira.  Una basta: el reparto no depende del
+    estado de la maquina.
+
+    Solo Vesta lo emite; para el resto de lenguajes no hay equivalente y se
+    devuelve vacio en vez de inventar uno.
+    """
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(cwd),
+                           env=env, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+    for linea in (r.stdout or "").splitlines():
+        if not linea.startswith("__VESTA_TIMES_FRONTEND__"):
+            continue
+        try:
+            d = json.loads(linea.split(" ", 1)[1])
+        except (ValueError, IndexError):
+            return {}
+        # Solo el reparto por fases.  El detalle por pase tambien viene, pero
+        # son decenas de entradas por medida y ahogarian el JSON; para eso esta
+        # la salida del compilador a pelo.
+        return {k: v for k, v in d.items() if k.endswith("_us")}
+    return {}
+
+
+def medir_caliente(cmd, env, cwd, repes, timeout, lang: str = "") -> dict:
+    """Serie con las caches CALIENTES: se calienta y luego se mide.
+
+    @p lang solo sirve para saber si pedir el reparto por fases; es opcional
+    para no obligar a tocar a quien no lo necesita.
+    """
     _calentar(cmd, env, cwd, timeout)
     muestras = [una_medida(cmd, env, timeout, cwd) for _ in range(repes)]
     muestras = [m for m in muestras if m >= 0]
@@ -130,6 +170,8 @@ def medir_caliente(cmd, env, cwd, repes, timeout) -> dict:
     # que lo mira.  Una pasada basta porque el pico apenas varia entre corridas
     # -- lo que se reserva depende del programa, no del estado de la maquina.
     s["mem_kib"] = pico_memoria(cmd, env, cwd, timeout)
+    if lang.startswith("vesta"):
+        s["fases_us"] = fases_internas(cmd, env, cwd, timeout)
     return s
 
 
@@ -155,6 +197,9 @@ def medir_frio(cmd, env, cwd, repes, timeout, lang, dir_cache) -> dict:
     # caso que decide si una compilacion cabe en la maquina.
     enfriar(lang, cwd, dir_cache)
     s["mem_kib"] = pico_memoria(cmd, env, cwd, timeout)
+    if lang.startswith("vesta"):
+        enfriar(lang, cwd, dir_cache)
+        s["fases_us"] = fases_internas(cmd, env, cwd, timeout)
     return s
 
 

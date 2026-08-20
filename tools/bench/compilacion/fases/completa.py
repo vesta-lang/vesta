@@ -86,7 +86,7 @@ def fase(ctx: Ctx) -> None:
             spin.etiqueta(f"midiendo  {barra(hechos, len(preparados))}  "
                           f"{C.BOLD}{etiqueta}{C.RESET} {C.DIM}caliente"
                           f"{C.RESET}")
-            s_cal = medir_caliente(cmd, env, d, reps, args.timeout)
+            s_cal = medir_caliente(cmd, env, d, reps, args.timeout, ln)
             filas_cal.append((ln, etiqueta, s_cal))
 
             spin.etiqueta(f"midiendo  {barra(hechos, len(preparados))}  "

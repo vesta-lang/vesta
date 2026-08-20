@@ -33,7 +33,7 @@ def fase(ctx: Ctx) -> None:
             if not cmd:
                 continue
             env = entorno_cache(ln, dir_cache, entorno_base)
-            s = medir_caliente(cmd, env, d, args.repes, args.timeout)
+            s = medir_caliente(cmd, env, d, args.repes, args.timeout, ln)
             if s:
                 suelo[ln] = s
             # El suelo EN FRIO es otro numero, y hace falta.  Restar el

@@ -155,7 +155,7 @@ def fase(ctx: Ctx) -> None:
                                  f"{ln} {lineas} lineas: {motivo}")
                     break
                 repes = max(3, args.repes // 2)
-                s_cal = medir_caliente(cmd, env, d, repes, args.timeout)
+                s_cal = medir_caliente(cmd, env, d, repes, args.timeout, ln)
                 s_frio = medir_frio(cmd, env, d, repes, args.timeout, ln,
                                     ctx.dir_cache)
                 if not s_cal or not s_frio:
