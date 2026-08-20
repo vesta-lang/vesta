@@ -12815,13 +12815,13 @@ struct AcumuladorPases {
 };
 
 /// Todos los acumuladores vivos, uno por hilo que haya corrido algun pase.
-struct RegistroPases {
+struct PassTimeRegistry {
     std::mutex m;
     std::vector<std::unique_ptr<AcumuladorPases>> todos;
 };
 
-RegistroPases &registro_pases() {
-    static RegistroPases r;
+PassTimeRegistry &pass_time_registry() {
+    static PassTimeRegistry r;
     return r;
 }
 
@@ -12831,7 +12831,7 @@ AcumuladorPases &acumulador_pases() {
     thread_local AcumuladorPases *mio = [] {
         auto nuevo = std::make_unique<AcumuladorPases>();
         AcumuladorPases *crudo = nuevo.get();
-        RegistroPases &r = registro_pases();
+        PassTimeRegistry &r = pass_time_registry();
         std::lock_guard<std::mutex> lk(r.m);
         r.todos.push_back(std::move(nuevo));
         return crudo;
@@ -12840,9 +12840,9 @@ AcumuladorPases &acumulador_pases() {
 }
 
 /// Suma de todos los hilos, para quien pregunte por el total.
-AcumuladorPases fusionar_pases() {
+AcumuladorPases merge_pass_times() {
     AcumuladorPases total;
-    RegistroPases &r = registro_pases();
+    PassTimeRegistry &r = pass_time_registry();
     std::lock_guard<std::mutex> lk(r.m);
     for (const auto &a : r.todos) {
         for (const auto &kv : a->t) {
@@ -12971,7 +12971,7 @@ long long &visitas_a_funcion() {
 }
 
 std::vector<TiempoPase> tiempos_de_pases() {
-    const AcumuladorPases a = fusionar_pases();
+    const AcumuladorPases a = merge_pass_times();
     std::vector<TiempoPase> v;
     v.reserve(a.t.size());
     for (const auto &kv : a.t)
@@ -12989,7 +12989,7 @@ std::vector<TiempoPase> tiempos_de_pases() {
 }
 
 std::vector<TiempoPaseFuncion> tiempos_por_funcion() {
-    const AcumuladorPases a = fusionar_pases();
+    const AcumuladorPases a = merge_pass_times();
     std::vector<TiempoPaseFuncion> v;
     v.reserve(a.por_fn.size());
     /* Los nombres de pase se devuelven como punteros estables: viven en esta
@@ -13017,7 +13017,7 @@ std::vector<TiempoPaseFuncion> tiempos_por_funcion() {
 void reiniciar_tiempos_de_pases() {
     // Se vacian TODOS, no solo el del hilo que llama: quien reinicia quiere
     // empezar de cero, no dejar dentro lo que acumularon los demas.
-    RegistroPases &r = registro_pases();
+    PassTimeRegistry &r = pass_time_registry();
     std::lock_guard<std::mutex> lk(r.m);
     for (const auto &a : r.todos) {
         a->t.clear();

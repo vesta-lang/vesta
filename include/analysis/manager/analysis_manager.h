@@ -322,6 +322,7 @@ class AnalysisManager {
         model->version = version;
         T &ref = model->result;
         results_[k] = std::move(model);
+        index_add(k);
         return ref;
     }
 
@@ -340,6 +341,7 @@ class AnalysisManager {
         auto model = std::make_unique<AnalysisResultModel<T>>(std::move(value));
         T &ref = model->result;
         results_[k] = std::move(model);
+        index_add(k);
         return ref;
     }
 
@@ -358,10 +360,22 @@ class AnalysisManager {
     /// (mecanismo PreservedAnalyses tras un pase).  Cascada por dependencias.
     void invalidate(const std::string &unit,
                     const PreservedAnalyses &preserved) {
+        /* Por el indice, no barriendo `results_` entero.
+         *
+         * Antes esto recorria TODAS las entradas del gestor para quedarse con
+         * las de UNA unidad, y lo llama cualquier pase que cambie algo -- o
+         * sea, muchas veces por vuelta del punto fijo.  Con el corpus de hoy no
+         * se nota (0,06 s en el perfil), pero el coste crece con el producto de
+         * unidades por invalidaciones: es de orden equivocado, y eso se
+         * descubre tarde y caro cuando alguien compila un modulo grande. */
+        auto u = keys_by_unit_.find(unit);
+        if (u == keys_by_unit_.end()) return;
         std::vector<Key> dead;
-        for (const auto &kv : results_)
-            if (kv.first.unit == unit && !kv.second->survives(preserved))
-                dead.push_back(kv.first);
+        for (const Key &k : u->second) {
+            auto it = results_.find(k);
+            if (it != results_.end() && !it->second->survives(preserved))
+                dead.push_back(k);
+        }
         for (const Key &k : dead)
             invalidate_key(k);
     }
@@ -370,6 +384,7 @@ class AnalysisManager {
     void clear() {
         results_.clear();
         rev_deps_.clear();
+        keys_by_unit_.clear();
         stack_.clear();
     }
 
@@ -398,12 +413,42 @@ class AnalysisManager {
         auto it = results_.find(k);
         if (it == results_.end()) return;
         results_.erase(it);
+        index_remove(k);
         auto d = rev_deps_.find(k);
         if (d == rev_deps_.end()) return;
         std::vector<Key> deps(d->second.begin(), d->second.end());
         rev_deps_.erase(d);
         for (const Key &dep : deps)
             invalidate_key(dep); // cascada
+    }
+
+    /// Que claves tiene cada unidad.  Existe para que invalidar una unidad no
+    /// obligue a recorrer el gestor entero: sin esto, invalidar es O(todo) y se
+    /// hace muchas veces por vuelta del punto fijo.
+    std::unordered_map<std::string, std::vector<Key>> keys_by_unit_;
+
+    /// Apunta @p k en el indice de su unidad, si no estaba.
+    void index_add(const Key &k) {
+        auto &v = keys_by_unit_[k.unit];
+        for (const Key &x : v)
+            if (x.id == k.id) return;
+        v.push_back(k);
+    }
+
+    /// Quita @p k del indice.  La lista de una unidad son unas pocas entradas
+    /// -- un analisis por tipo --, asi que buscar linealmente es mas rapido
+    /// que cualquier estructura con indireccion.
+    void index_remove(const Key &k) {
+        auto u = keys_by_unit_.find(k.unit);
+        if (u == keys_by_unit_.end()) return;
+        auto &v = u->second;
+        for (size_t i = 0; i < v.size(); ++i)
+            if (v[i].id == k.id) {
+                v[i] = v.back();
+                v.pop_back();
+                break;
+            }
+        if (v.empty()) keys_by_unit_.erase(u);
     }
 
     std::unordered_map<Key, std::unique_ptr<AnalysisResultConcept>, KeyHash>
