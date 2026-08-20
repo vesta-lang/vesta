@@ -167,6 +167,21 @@ thread_local CosteEstado g_coste;
  */
 static const bool g_medir_coste = std::getenv("VESTA_RANGE_STATS") != nullptr;
 
+/**
+ * @brief El refinamiento va al asignador general, y NO a una arena de fase.
+ *
+ * Se probo lo segundo y se midio: la vida util encaja -- nada de esto escapa
+ * del analisis de una funcion --, pero el PATRON de reserva no.  Una arena
+ * solo sabe soltarlo todo al final, y un `std::vector` que crece reserva un
+ * bufer nuevo y ABANDONA el viejo; con mas de un millon de inserciones, esos
+ * restos se acumulan hasta que la funcion termina.  Resultado medido: el pico
+ * de memoria pasaba de 2.414 MB a 5.455 MB (+126%) a cambio de un ~4%.
+ *
+ * Y no hacia falta: estos vectores son diminutos (mediana 0 entradas,
+ * percentil 90 igual a 9), o sea un millon de reservas PEQUENAS, que es
+ * justo lo que sirve bien el asignador por clases de `util/host_allocator.h`
+ * -- donde al crecer el bufer viejo SI se devuelve y se reaprovecha.
+ */
 struct Estado {
     bool alcanzable = false;
     std::vector<std::pair<ir::IrValueId, ValueRange>> ref;
