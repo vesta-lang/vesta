@@ -144,6 +144,19 @@ Calibracion_ calibracion_del_cronometro() {
 }
 
 std::vector<Tramo> tramos_medidos() {
+    /* La calibracion se pide ANTES del cerrojo, nunca dentro.
+     *
+     * Medirla recorre la ruta REAL -- acumular_tramo_ns() -> mio() -- y, si
+     * este hilo todavia no se habia dado de alta, mio() pide ESTE MISMO
+     * cerrojo.  Un std::mutex no es reentrante, asi que el hilo se bloqueaba
+     * contra si mismo y el proceso se quedaba colgado al ir a informar.
+     *
+     * Solo se veia al repartir el trabajo entre hilos, y por eso costo dar con
+     * ello: en secuencial el hilo principal ya habia anotado tramos y estaba
+     * dado de alta, asi que mio() ni llegaba a pedir el cerrojo.  Al repartir,
+     * quien anota son los workers y el principal llega virgen al informe. */
+    const long long coste = calibracion().coste_ns;
+
     std::lock_guard<std::mutex> lk(registro_mutex());
     std::unordered_map<const char *, std::pair<long long, long long>> total;
     for (const Acumulador *a : registro())
@@ -152,7 +165,6 @@ std::vector<Tramo> tramos_medidos() {
             e.first += kv.second.first;
             e.second += kv.second.second;
         }
-    const long long coste = calibracion().coste_ns;
     std::vector<Tramo> v;
     v.reserve(total.size());
     for (const auto &kv : total) {
