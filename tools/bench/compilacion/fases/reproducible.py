@@ -59,24 +59,72 @@ def _comparar(a, b):
     return (distintos == 0, distintos, primero)
 
 
+def _compilar_en(ctx, ln, nombre, texto, d, guardar_en):
+    """Compila @p texto en @p d y copia el artefacto a @p guardar_en.
+
+    Se copia porque despues hay que comparar artefactos de compilaciones que
+    han usado el MISMO directorio: si se dejaran donde salen, la segunda
+    pisaria a la primera y se compararia un fichero consigo mismo.
+
+    @return "" si fue bien, o el motivo del fallo.
+    """
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / nombre).write_text(texto, encoding="utf-8")
+    cmd = orden_compilar(ln, d / nombre, d / "out", ctx.vm)
+    if not cmd:
+        return "sin orden de compilacion"
+    env = entorno_cache(ln, ctx.dir_cache, ctx.entorno_base)
+    ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
+                                   ctx.args.timeout)
+    if not ok:
+        return motivo
+    a = _artefacto(d / "out")
+    if a is None:
+        return "no encuentro el artefacto"
+    shutil.copyfile(a, guardar_en)
+    return ""
+
+
+def _veredicto(a, b) -> tuple:
+    """(texto SIN color, color, iguales, bytes_distintos).
+
+    El texto va sin color y el color aparte porque las columnas se alinean por
+    el ancho de la CADENA, y los codigos de escape ocupan caracteres que no se
+    ven: colorear antes de rellenar descuadra la tabla tanto como caracteres
+    invisibles tenga cada celda.
+    """
+    iguales, distintos, primero = _comparar(a, b)
+    if iguales:
+        return ("identico", C.GREEN, True, 0)
+    pista = ("sello o ruta" if distintos <= 64 else "el codigo cambia")
+    return ("difiere en %d B (desde %d): %s" % (distintos, primero, pista),
+            C.RED, False, distintos)
+
+
 def fase(ctx: Ctx) -> None:
-    """Compila dos veces cada fuente y compara los bytes del resultado."""
+    """Comprueba las DOS propiedades por separado."""
     args = ctx.args
     # Un solo tamano basta: esto no es una curva, es un si o un no.  Se coge el
-    # mayor de los pedidos, que es donde mas oportunidades hay de que algo no
-    # determinista se cuele.
+    # mayor de los pedidos, que es donde mas oportunidades hay de que algo se
+    # cuele.
     objetivo = max([int(x) for x in args.tamanos.split(",") if x.strip()]
                    or [1500])
     cabecera_fase(
         "reproducible", "Compilar dos veces da lo mismo?",
-        "Se compila el MISMO fuente dos veces, en directorios distintos, y se "
-        "comparan los bytes.  Un compilador que no es reproducible rompe el "
-        "cacheado por contenido y la verificacion de binarios, y lo hace en "
-        "silencio: el programa funciona igual.")
+        "Dos propiedades DISTINTAS, y por eso se comprueban aparte: si dos "
+        "compilaciones desde el mismo sitio dan lo mismo (determinismo), y si "
+        "dan lo mismo desde sitios distintos (independencia de la ruta).  La "
+        "primera sostiene el cacheado por contenido; la segunda, que dos "
+        "maquinas compartan artefactos y que un binario publicado se pueda "
+        "verificar.")
 
-    cab = f"{'lenguaje':<14}{'artefacto':>14}{'resultado':>34}"
+    cab = (f"{'lenguaje':<12}{'artefacto':>12}   {'misma ruta':<40}"
+           f"{'otra ruta':<40}")
     print(f"{C.BOLD}{cab}{C.RESET}")
-    print("-" * len(cab))
+    print(f"{C.DIM}  {'':<10}{'':>12}   {'(determinismo)':<40}"
+          f"{'(independencia de la ruta)':<40}{C.RESET}")
+    print("-" * 100)
     filas: list = []
     for i, ln in enumerate(ctx.langs):
         entrada = GENERADORES.get(ln)
@@ -84,55 +132,44 @@ def fase(ctx: Ctx) -> None:
             continue
         nombre, gen = entrada
         texto = gen(funciones_para_lineas(gen, objetivo))
+        guardados = ctx.base_tmp / "repro_art"
+        guardados.mkdir(parents=True, exist_ok=True)
+        fallo = ""
         with Spinner("", color=C.DIM) as spin:
             spin.etiqueta(f"reproducible  {barra(i, len(ctx.langs))}  "
                           f"{C.BOLD}{ln}{C.RESET}")
-            arts = []
-            fallo = None
-            for vuelta in (1, 2):
-                d = ctx.base_tmp / ("repro_%s_%d" % (ln, vuelta))
-                shutil.rmtree(d, ignore_errors=True)
-                d.mkdir(parents=True, exist_ok=True)
-                (d / nombre).write_text(texto, encoding="utf-8")
-                cmd = orden_compilar(ln, d / nombre, d / "out", ctx.vm)
-                if not cmd:
-                    fallo = "sin orden de compilacion"
+            # Dos veces desde la MISMA ruta, y una tercera desde otra.  La
+            # tercera es la unica que cambia de sitio, asi que lo que aparezca
+            # solo en ella es dependencia de la ruta y nada mas.
+            a1 = guardados / (ln + ".1")
+            a2 = guardados / (ln + ".2")
+            a3 = guardados / (ln + ".3")
+            misma = ctx.base_tmp / ("repro_%s_A" % ln)
+            otra = ctx.base_tmp / ("repro_otra_%s_B" % ln)
+            for d, dest in ((misma, a1), (misma, a2), (otra, a3)):
+                fallo = _compilar_en(ctx, ln, nombre, texto, d, dest)
+                if fallo:
                     break
-                env = entorno_cache(ln, ctx.dir_cache, ctx.entorno_base)
-                ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
-                                               args.timeout)
-                if not ok:
-                    fallo = motivo
-                    break
-                a = _artefacto(d / "out")
-                if a is None:
-                    fallo = "no encuentro el artefacto"
-                    break
-                arts.append(a)
-        if fallo or len(arts) != 2:
-            filas.append((ln, "-", f"{C.YELLOW}no se pudo comprobar{C.RESET}: "
-                                   f"{fallo or 'faltan artefactos'}"))
+        if fallo:
+            filas.append((ln, "-", ("no se pudo comprobar: " + fallo,
+                                    C.YELLOW), ("", "")))
             continue
-        iguales, distintos, primero = _comparar(arts[0], arts[1])
-        tam = formatear_bytes(arts[0].stat().st_size)
-        if iguales:
-            veredicto = f"{C.GREEN}identico{C.RESET}"
-        else:
-            # Pocos bytes suele ser un sello o una ruta; muchos, que el codigo
-            # generado depende de algo que cambia entre corridas.
-            pista = ("sello o ruta embebida" if distintos <= 64
-                     else "el codigo generado cambia")
-            veredicto = (f"{C.RED}difiere{C.RESET} en {distintos} bytes "
-                         f"(desde {primero}): {pista}")
-        filas.append((ln, tam, veredicto))
+        t_det, c_det, det_ok, det_n = _veredicto(a1, a2)
+        t_ruta, c_ruta, ruta_ok, ruta_n = _veredicto(a1, a3)
+        filas.append((ln, formatear_bytes(a1.stat().st_size),
+                      (t_det, c_det), (t_ruta, c_ruta)))
         ctx.resultados["casos"].append({
             "lang": ln, "fase": "reproducible", "lineas": texto.count("\n"),
-            "reproducible": iguales, "bytes_distintos": distintos,
-            "primer_desvio": primero})
-    for ln, tam, v in filas:
-        print(f"  {color_de(ln)}{ln:<12}{C.RESET}{tam:>14}   {v}")
-    print("-" * len(cab))
-    print(f"{C.DIM}  Se compila en directorios DISTINTOS a proposito: encima "
-          f"del anterior, el compilador puede reutilizar lo que ya hizo y "
-          f"entonces se estaria comprobando que un fichero es igual a si "
-          f"mismo.{C.RESET}")
+            "determinista": det_ok, "bytes_no_deterministas": det_n,
+            "independiente_de_ruta": ruta_ok, "bytes_por_la_ruta": ruta_n})
+    for ln, tam, (t1, c1), (t2, c2) in filas:
+        print(f"  {color_de(ln)}{ln:<10}{C.RESET}{tam:>12}   "
+              f"{c1}{t1:<40}{C.RESET}{c2}{t2:<40}{C.RESET}")
+    print("-" * 100)
+    print(f"{C.DIM}  Las dos comprobaciones NO son la misma, y mezclarlas "
+          f"acusa de un defecto que no existe: un artefacto que embebe la ruta "
+          f"del fuente -- para el depurador -- difiere al compilar desde otro "
+          f"sitio siendo perfectamente determinista.\n"
+          f"  Quien falle solo en la segunda columna lo arregla mapeando "
+          f"prefijos de ruta, como `--remap-path-prefix` de rustc o "
+          f"`-ffile-prefix-map` de gcc.{C.RESET}")
