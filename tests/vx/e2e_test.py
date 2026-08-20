@@ -1065,7 +1065,8 @@ def _(ctx):
     y el tailcall de wrapper se elimina por DCE (correcto: el resultado es el
     mismo).  La funcionalidad se valida por el R0 = 42 de abajo (en modo normal).
     """
-    ctx.compile_vx(ctx.src("19_tco_basico.vx"), "tco", env={"VESTA_NO_CTPE": "1"})
+    ctx.compile_vx(ctx.src("19_tco_basico.vx"), "tco",
+                   extra=["--vx-emit-only"], env={"VESTA_NO_CTPE": "1"})
     n = grep_c(read_text(ctx.path("tco.vel")), "tailcall")
     if n < 1:
         ctx.fail("TCO no se aplico (esperado >= 1 tailcall en .vel)")
@@ -1216,7 +1217,8 @@ def _(ctx):
 @case("orb")
 def _(ctx):
     """36. Optional<T> y Result<V,E> como BUILTINS (sin clases en bytecode)."""
-    ctx.compile_vx(ctx.src("33_optional_result_builtin.vx"), "orb")
+    ctx.compile_vx(ctx.src("33_optional_result_builtin.vx"), "orb",
+                   extra=["--vx-emit-only"])
     vel = read_text(ctx.path("orb.vel"))
     if grep_q(vel, r"^Optional_|^Result_|^__new_Optional|^__new_Result"):
         ctx.fail("el bytecode contiene clases Optional_*/Result_* "
@@ -1264,7 +1266,8 @@ def _(ctx):
 @case("sync")
 def _(ctx):
     """39. synchronized basico: el .vel debe emitir gchandle+monenter+monexit."""
-    ctx.compile_vx(ctx.src("35_synchronized_basico.vx"), "sync")
+    ctx.compile_vx(ctx.src("35_synchronized_basico.vx"), "sync",
+                   extra=["--vx-emit-only"])
     ctx.ok("compilacion 35_synchronized_basico.vx -> .velb")
     vel = read_text(ctx.path("sync.vel"))
     if "gchandle " not in vel:
@@ -1345,7 +1348,8 @@ def _(ctx):
 @case("asy")
 def _(ctx):
     """47. @Async sugar: wrapper + helper __async_compute + await."""
-    ctx.compile_vx(ctx.src("41_async_basico.vx"), "asy")
+    ctx.compile_vx(ctx.src("41_async_basico.vx"), "asy",
+                   extra=["--vx-emit-only"])
     ctx.ok("compilacion 41_async_basico.vx -> .velb")
     if "__async_compute" not in read_text(ctx.path("asy.vel")):
         ctx.fail("@Async: el .vel no contiene el helper '__async_compute'")
@@ -1360,7 +1364,8 @@ def _(ctx):
 @case("prop")
 def _(ctx):
     """48. Propiedades (getter + setter) y @Inline -> R0 = 30."""
-    ctx.compile_vx(ctx.src("42_propiedades_basico.vx"), "prop")
+    ctx.compile_vx(ctx.src("42_propiedades_basico.vx"), "prop",
+                   extra=["--vx-emit-only"])
     ctx.ok("compilacion 42_propiedades_basico.vx -> .velb")
     vel = read_text(ctx.path("prop.vel"))
     if "Caja__get_valor:" not in vel:
@@ -1394,7 +1399,8 @@ def _(ctx):
 @case("place")
 def _(ctx):
     """50. spawn placement (Auto / Here / Pinned) -> 1000 con 1 y 4 scheds."""
-    ctx.compile_vx(ctx.src("45_spawn_placement.vx"), "place")
+    ctx.compile_vx(ctx.src("45_spawn_placement.vx"), "place",
+                   extra=["--vx-emit-only"])
     ctx.ok("compilacion 45_spawn_placement.vx -> .velb")
     vel = read_text(ctx.path("place.vel"))
     if not grep_q(vel, r"^    spawn r"):
@@ -1435,7 +1441,8 @@ def _(ctx):
 @case("rs")
 def _(ctx):
     """52. rspawn frontend: bytecode + helper con return interception."""
-    ctx.compile_vx(ctx.src("47_rspawn_basico.vx"), "rs")
+    ctx.compile_vx(ctx.src("47_rspawn_basico.vx"), "rs",
+                   extra=["--vx-emit-only"])
     ctx.ok("compilacion 47_rspawn_basico.vx -> .velb")
     vel = read_text(ctx.path("rs.vel"))
     if "rspawn r" not in vel:
@@ -1481,7 +1488,8 @@ def _(ctx):
     # -- 53: path inexistente -> load failure -> R0 = 0.
     if os.path.exists(plugin_global):
         os.remove(plugin_global)
-    ctx.compile_vx(ctx.src("49_loadmodule_caller.vx"), "lm")
+    ctx.compile_vx(ctx.src("49_loadmodule_caller.vx"), "lm",
+                   extra=["--vx-emit-only"])
     ctx.ok("compilacion 49_loadmodule_caller.vx -> .velb")
     if "loadmod r" not in read_text(ctx.path("lm.vel")):
         ctx.fail("loadmodule: el .vel no contiene la instruccion 'loadmod r'")

@@ -812,7 +812,8 @@ int main(int argc, char *argv[]) {
             "vx", "Alias de --vesta (compilar archivo .vx a .velb)",
             cxxopts::value<std::string>())(
             "vx-emit-only",
-            "Solo emitir el .vel intermedio del .vx; no compilar a .velb")(
+            "Escribir ademas el .vel intermedio del .vx (por defecto se queda "
+            "en memoria); el .velb se genera igual")(
             "vx-emit-ir",
             "Emitir el SSA IR del .vx (pre y post optimizacion) en "
             "<output>.ir; util para debug del frontend")(
@@ -4704,24 +4705,38 @@ int main(int argc, char *argv[]) {
             return EXIT_SUCCESS;
         }
 
-        // 5 Escribir el .vel intermedio.
-        std::string vel_path = out_prefix.empty() ? (copts.module_name + ".vel")
-                                                  : (out_prefix + ".vel");
-        {
+        /* 5. El `.vel` intermedio: se queda EN MEMORIA salvo que se pida.
+         *
+         * Antes se volcaba a disco SIEMPRE y la linea de abajo lo volvia a
+         * leer: un viaje de ida y vuelta por el disco con un texto que
+         * acabamos de producir.  Medido sobre 24k lineas, esa E/S eran 0,271 s
+         * de 7,75 -- el 3,5% de compilar -- y ademas dejaba un fichero de
+         * 331.696 lineas que nadie habia pedido.
+         *
+         * El camino de la cache de macros ya se habia pasado a memoria; este
+         * se habia quedado atras.
+         *
+         * El nombre se conserva aunque no se abra nada: los diagnosticos del
+         * ensamblador lo citan. */
+        const std::string vel_path = out_prefix.empty()
+                                         ? (copts.module_name + ".vel")
+                                         : (out_prefix + ".vel");
+        std::string vel_texto;
+        // Con --vx-debug va `// @file <vx_path>` delante, para que el lexer
+        // del .vel-to-.velb se lo pase al linker (Context::debug_source_file).
+        if (copts.emit_debug) vel_texto = "// @file " + vx_path + "\n";
+        vel_texto += cr.vel_text;
+
+        if (emit_only) {
             std::ofstream ofs(vel_path);
             if (!ofs.is_open()) {
                 std::cerr << "[vx] No se puede escribir: " << vel_path << "\n";
                 return EXIT_FAILURE;
             }
-            // Si --vx-debug esta activo, prepend `// @file <vx_path>`
-            // al .vel para que el lexer del .vel-to-.velb pase la info
-            // al linker (Context::debug_source_file).
-            if (copts.emit_debug) {
-                ofs << "// @file " << vx_path << "\n";
-            }
-            ofs << cr.vel_text;
+            ofs << vel_texto;
+            ofs.close();
+            vesta::scout() << "[vx] .vel generado: " << vel_path << "\n";
         }
-        vesta::scout() << "[vx] .vel generado: " << vel_path << "\n";
 
         /* Reparto del coste del frontend.  La construccion ya decia lo que
          * tardaban ensamblar y enlazar, pero de la mitad delantera -- la que
@@ -4831,13 +4846,16 @@ int main(int argc, char *argv[]) {
             std::cout << "\n__VESTA_TIMES_FRONTEND__ " << jf.dump() << "\n";
         }
 
-        if (emit_only) return EXIT_SUCCESS;
-
-        // Compilar .vel -> .velb saltando VPP
-        // Opcion W: pasar el IR pre-serializado al linker via run_worker
-        // para que se embeba en la seccion @c @ir del .velb v3.
-        int rc = asm_multi_process::run_worker(
-            vel_path, out_prefix,
+        /* Y a `.velb` DESDE MEMORIA, sin releer nada.
+         *
+         * `--vx-emit-only` ya NO corta aqui: pedir el `.vel` no deberia
+         * obligar a compilar dos veces para tener tambien el `.velb`.  La
+         * bandera pasa a significar "ademas, escribeme el .vel", no "y para".
+         *
+         * Opcion W: el IR pre-serializado va al linker para que se embeba en
+         * la seccion @c @ir del `.velb` v3. */
+        int rc = asm_multi_process::run_worker_from_source(
+            std::move(vel_texto), vel_path, out_prefix,
             /*skip_preprocessor=*/true,
             /*keep_labels=*/(result.count("keep-labels") > 0),
             /*ir_section_bytes=*/&cr.ir_section_bytes,
