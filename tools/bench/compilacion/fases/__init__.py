@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from ..contexto import Fase
 from . import (completa, crecimiento, escalado, familias, proyecto,
-               realimentacion, regimen, rendimiento, suelo, topologia)
+               realimentacion, regimen, rendimiento, reproducible, suelo,
+               topologia)
 
 FASES = [
     # El orden NO es alfabetico ni historico: va de lo mas simple a lo mas
@@ -35,6 +36,8 @@ FASES = [
     Fase("familias-regimen", "Cada familia, por regimen", regimen.fase),
     Fase("diagnostico", "Cuanto tarda en decirte si el codigo esta bien",
          realimentacion.fase),
+    Fase("reproducible", "Compilar dos veces da lo mismo?",
+         reproducible.fase),
 ]
 
 # Los nombres viejos siguen valiendo.  Renombrar no puede romper un guion que
