@@ -156,8 +156,23 @@ struct CosteEstado {
      * guardan EN CRUDO y se leen segun el tipo, asi que un valor estrecho no
      * necesita los 64 bits.  Sin este dato, cambiar la representacion es
      * apostar. */
-    uint64_t anchura_estrecha = 0; ///< entradas con tipo de 32 bits o menos
-    uint64_t anchura_total = 0;    ///< entradas miradas
+    uint64_t narrow_width_count = 0; ///< entradas con tipo de 32 bits o menos
+    uint64_t width_seen = 0;    ///< entradas miradas
+    /* Cuanto tira la poda.  Decide si compensa FUSIONAR la copia con ella en
+     * `calcular_out`: hoy se copia el estado entero y despues se descarta lo
+     * muerto, asi que lo que la poda tira se copio para nada. */
+    uint64_t pruned_count = 0;      ///< entradas descartadas por muertas
+    uint64_t prune_seen = 0; ///< entradas que entraron en la poda
+    /* CUANTO cambia una visita que cambia.  Si el delta es minusculo frente al
+     * tamano del estado, rehacer la fusion y la copia enteras para propagarlo
+     * es trabajo de mas, y la salida seria incremental en vez de recalcular. */
+    uint64_t changed_entries = 0;    ///< entradas que de verdad difieren
+    uint64_t changed_state_size = 0; ///< tamano del estado en esas visitas
+    /* Cuantas salidas de bloque acaban SIENDO la entrada.  `calcular_out`
+     * copia el estado entero antes de transformarlo; si el bloque no refina ni
+     * poda nada, esa copia se hizo para nada y podria aliasearse. */
+    uint64_t out_equals_in = 0; ///< salidas identicas a su entrada
+    uint64_t out_computed = 0;  ///< salidas calculadas
 };
 thread_local CosteEstado g_coste;
 
@@ -410,8 +425,21 @@ struct Motor : Contexto {
     mutable Estado union_scratch_;  ///< destino de cada fusion de predecesores
     mutable Estado out_scratch_;    ///< salida del bloque en curso
     mutable Estado arista_scratch_; ///< lo que viaja por la arista en curso
-    mutable Estado ancho_scratch_;  ///< destino del ensanchamiento en curso
-    mutable Estado estrecho_scratch_; ///< destino del estrechamiento en curso
+    /**
+     * @brief Que bloques estan YA esperando en la cola.
+     *
+     * Sin esto, a un bloque con tres predecesores que cambian se le encola tres
+     * veces y se procesa tres veces, cuando la primera ya fusiono el estado
+     * ACTUAL de todas sus aristas: las otras dos rehacen la fusion, la copia y
+     * la comparacion para no cambiar nada.  Medido, el 34,9% de las visitas
+     * eran esteriles.
+     *
+     * Encolarlo una sola vez no cambia el resultado: se procese cuando se
+     * procese, lee las aristas tal como estan en ese momento.
+     */
+    std::vector<char> queued_;
+    mutable Estado widen_scratch_;  ///< destino del ensanchamiento en curso
+    mutable Estado narrow_scratch_; ///< destino del estrechamiento en curso
     mutable Estado in_scratch_;     ///< entrada recien calculada de un bloque
     std::vector<std::vector<uint32_t>> entrantes, salientes;
     std::vector<uint32_t>
@@ -633,8 +661,8 @@ struct Motor : Contexto {
 
     /// Ensanchamiento del ascenso: por valor, soltando solo el extremo que
     /// crece.
-    /// Sobre un destino REUTILIZADO; ver el motivo en @c estrechar_en.
-    void ensanchar_en(const Estado &viejo, const Estado &nuevo,
+    /// Sobre un destino REUTILIZADO; ver el motivo en @c narrow_into.
+    void widen_into(const Estado &viejo, const Estado &nuevo,
                       Estado &out) const {
         if (!viejo.alcanzable || !nuevo.alcanzable) {
             if (&out != &nuevo) out = nuevo;
@@ -673,7 +701,7 @@ struct Motor : Contexto {
      * motivo: construir un `Estado` nuevo por llamada pedia memoria en cada
      * paso del descenso, que recorre TODOS los bloques.  El destino se limpia
      * al entrar, asi que conserva su capacidad de la vuelta anterior. */
-    void estrechar_en(const Estado &viejo, const Estado &nuevo,
+    void narrow_into(const Estado &viejo, const Estado &nuevo,
                       Estado &out) const {
         if (!nuevo.alcanzable || !viejo.alcanzable) {
             if (&out != &nuevo) out = nuevo;
@@ -912,20 +940,43 @@ struct Motor : Contexto {
                 if (g_medir_coste) {
                     // Anchura de lo que SOBREVIVE, que es lo que se guarda,
                     // se copia y se compara.
-                    ++g_coste.anchura_total;
-                    if (e.ref[r].t.bits <= 32) ++g_coste.anchura_estrecha;
+                    ++g_coste.width_seen;
+                    if (e.ref[r].t.bits <= 32) ++g_coste.narrow_width_count;
                 }
                 if (w != r) e.ref[w] = e.ref[r];
                 ++w;
             }
         }
+        if (g_medir_coste) {
+            g_coste.prune_seen += e.ref.size();
+            g_coste.pruned_count += e.ref.size() - w;
+        }
         e.ref.resize(w); // conserva el orden y la capacidad
+    }
+
+    /// Encola @p b si no estaba ya esperando.  Ver @c queued_.
+    void enqueue(ir::IrBlockId b, std::deque<ir::IrBlockId> &cola) {
+        if (b >= queued_.size() || queued_[b]) return;
+        queued_[b] = 1;
+        cola.push_back(b);
+    }
+
+    /// Saca el siguiente y lo desmarca.
+    ir::IrBlockId dequeue(std::deque<ir::IrBlockId> &cola) {
+        const ir::IrBlockId b = cola.front();
+        cola.pop_front();
+        if (b < queued_.size()) queued_[b] = 0;
+        return b;
     }
 
     /// Recalcula las aristas de salida y encola los destinos que cambiaron.
     void propagar(ir::IrBlockId bi, std::deque<ir::IrBlockId> &cola) {
         calcular_out(bi, in_bloque[bi], out_scratch_);
         const Estado &out = out_scratch_;
+        if (g_medir_coste) {
+            ++g_coste.out_computed;
+            if (out == in_bloque[bi]) ++g_coste.out_equals_in;
+        }
         if (g_medir_coste && !ultimo_uso.empty()) {
             g_coste.elems_vivos_total += out.ref.size();
             for (const RangeEntry &p : out.ref)
@@ -945,7 +996,7 @@ struct Motor : Contexto {
             if (!refina) {
                 if (!(out == out_arista[ai])) {
                     out_arista[ai] = out;
-                    cola.push_back(aristas[ai].hasta);
+                    enqueue(aristas[ai].hasta, cola);
                 }
                 continue;
             }
@@ -961,7 +1012,7 @@ struct Motor : Contexto {
                 estrechar_por_caso(se, aristas[ai]);
             if (!(se == out_arista[ai])) {
                 out_arista[ai].swap(se);
-                cola.push_back(aristas[ai].hasta);
+                enqueue(aristas[ai].hasta, cola);
             }
         }
     }
@@ -981,22 +1032,47 @@ struct Motor : Contexto {
     bool resolver_ascenso(int presupuesto) {
         calcular_ultimo_uso();
         std::deque<ir::IrBlockId> cola;
-        cola.push_back(0);
+        queued_.assign(fn.blocks.size(), 0);
+        enqueue(0, cola);
         int pasos = 0;
         while (!cola.empty()) {
             if (++pasos > presupuesto) return false;
             stats.pasos++;
-            const ir::IrBlockId bi = cola.front();
-            cola.pop_front();
+            const ir::IrBlockId bi = dequeue(cola);
 
             calcular_in(bi, in_scratch_);
             Estado &nuevo_in = in_scratch_;
             if (cierra_ciclo(bi) && vueltas_ciclo[bi] >= op.retardo_ensanche) {
-                ensanchar_en(in_bloque[bi], nuevo_in, ancho_scratch_);
-                nuevo_in.swap(ancho_scratch_);
+                widen_into(in_bloque[bi], nuevo_in, widen_scratch_);
+                nuevo_in.swap(widen_scratch_);
                 stats.ensanches++;
             }
             if (!(nuevo_in == in_bloque[bi])) {
+                if (g_medir_coste) {
+                    /* Recorrido en paralelo de los dos, que estan ordenados
+                     * por identificador: cuenta las entradas que solo estan en
+                     * uno mas las que estan en ambos con distinto rango. */
+                    const auto &na = nuevo_in.ref;
+                    const auto &vi = in_bloque[bi].ref;
+                    size_t i = 0, j = 0, d = 0;
+                    while (i < na.size() && j < vi.size()) {
+                        if (na[i].id < vi[j].id) {
+                            ++d;
+                            ++i;
+                        } else if (vi[j].id < na[i].id) {
+                            ++d;
+                            ++j;
+                        } else {
+                            if (!na[i].same_range(vi[j])) ++d;
+                            ++i;
+                            ++j;
+                        }
+                    }
+                    d += (na.size() - i) + (vi.size() - j);
+                    g_coste.changed_entries += d;
+                    g_coste.changed_state_size +=
+                        vi.size() > na.size() ? vi.size() : na.size();
+                }
                 // Intercambiar, no mover: el bufer se queda con la capacidad
                 // del estado que sustituye y sirve para la siguiente vuelta.
                 in_bloque[bi].swap(nuevo_in);
@@ -1021,6 +1097,7 @@ struct Motor : Contexto {
      */
     bool resolver_descenso(int presupuesto) {
         std::deque<ir::IrBlockId> cola;
+        queued_.assign(fn.blocks.size(), 0);
         for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
             cola.push_back(bi);
         int pasos = 0;
@@ -1040,9 +1117,9 @@ struct Motor : Contexto {
              * Al intercambiar, el bufer que se sustituye no se tira: se queda
              * con la capacidad y sirve para el paso siguiente. */
             calcular_in(bi, in_scratch_);
-            estrechar_en(in_bloque[bi], in_scratch_, estrecho_scratch_);
-            if (!(estrecho_scratch_ == in_bloque[bi])) {
-                in_bloque[bi].swap(estrecho_scratch_);
+            narrow_into(in_bloque[bi], in_scratch_, narrow_scratch_);
+            if (!(narrow_scratch_ == in_bloque[bi])) {
+                in_bloque[bi].swap(narrow_scratch_);
                 stats.estrechados++;
             }
             if (!in_bloque[bi].alcanzable) continue;
@@ -1404,9 +1481,20 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                 out.stats.cambios, out.stats.ensanches, out.stats.estrechados,
                 (unsigned long long)g_coste.elems_muertos,
                 (unsigned long long)g_coste.elems_vivos_total);
-            std::fprintf(stderr, "[anchura] estrechas=%llu de %llu\n",
-                         (unsigned long long)g_coste.anchura_estrecha,
-                         (unsigned long long)g_coste.anchura_total);
+            std::fprintf(stderr,
+                         "[anchura] estrechas=%llu de %llu | pruned_count=%llu de "
+                         "%llu\n",
+                         (unsigned long long)g_coste.narrow_width_count,
+                         (unsigned long long)g_coste.width_seen,
+                         (unsigned long long)g_coste.pruned_count,
+                         (unsigned long long)g_coste.prune_seen);
+            std::fprintf(stderr,
+                         "[delta] difieren=%llu de %llu | salida=entrada %llu "
+                         "de %llu\n",
+                         (unsigned long long)g_coste.changed_entries,
+                         (unsigned long long)g_coste.changed_state_size,
+                         (unsigned long long)g_coste.out_equals_in,
+                         (unsigned long long)g_coste.out_computed);
         }
     }
     return out;
