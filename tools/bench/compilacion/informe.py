@@ -41,10 +41,72 @@ def _razon(s: dict, base: dict) -> str:
     if a <= 0 or b <= 0:
         return f"{'-':>10}"
     r = a / b
-    # Por debajo de 1 tarda MENOS que la base: se marca en verde para que no
-    # haya que mirar dos veces si `x0.24` es bueno o malo.
-    col = C.GREEN if r < 0.995 else (C.RED if r > 2.0 else "")
-    return f"{col}{('x%.3f' % r) if r < 100 else ('x%.0f' % r):>10}{C.RESET}"
+    return f"{_color_razon(r)}{_texto_razon(r):>10}{C.RESET}"
+
+
+def _color_razon(r: float) -> str:
+    """Escala de cuatro colores para la razon contra la base.
+
+    Con solo dos -- verde o rojo -- todo lo que pasaba de 2x se veia igual, y
+    `x2.3` acababa pintado como `x28`.  Justo donde mas interesa distinguir:
+    tardar el doble es discutible, tardar veinte veces es otra categoria.
+
+        verde     tarda MENOS que la base
+        amarillo  hasta el doble
+        naranja   hasta cinco veces
+        rojo      mas de cinco veces
+    """
+    if r < 0.995:
+        return C.GREEN
+    if r <= 2.0:
+        return C.YELLOW
+    if r <= 5.0:
+        return C.ORANGE
+    return C.RED
+
+
+def _texto_razon(r: float) -> str:
+    """La razon con los decimales que aporten algo y no mas.
+
+    Tres decimales sirven para leer `x0.240`, pero en `x28.955` sobran: el
+    tercero es ruido de medida y solo alarga la columna.
+    """
+    if r < 10.0:
+        return "x%.3f" % r
+    if r < 100.0:
+        return "x%.1f" % r
+    return "x%.0f" % r
+
+def _en_bloques(filas: list) -> list:
+    """Parte las filas en los GRUPOS que de verdad son.
+
+    Varias fases recorren dos bucles -- por tamano y por lenguaje -- y vuelcan
+    todo a una sola tabla.  Lo que sale son dos tablas pegadas: `c` aparece dos
+    veces con la misma etiqueta, una por tamano.  Verlo ya es confuso; lo grave
+    es que la comparacion contra la base empareja por etiqueta, asi que las
+    filas de un grupo se dividian entre la referencia del OTRO y las razones
+    publicadas no significaban nada.
+
+    Aqui no se pide a cada fase que ponga etiquetas distintas -- eso hay que
+    acordarse de hacerlo cada vez que se anade una, y no se hizo en varias --,
+    sino que se DETECTA: los grupos salen en orden, asi que en cuanto un caso
+    se repite es que empezo el siguiente.  Cada bloque calcula despues su
+    propia base.
+    """
+    bloques: list = []
+    actual: list = []
+    vistos: set = set()
+    for lang, etiqueta, s in filas:
+        clave = (lang, _clave_de_caso(lang, etiqueta))
+        if clave in vistos:
+            bloques.append(actual)
+            actual, vistos = [], set()
+        vistos.add(clave)
+        actual.append((lang, etiqueta, s))
+    if actual:
+        bloques.append(actual)
+    return bloques
+
 
 def _color_ruido(mad_pct: float) -> str:
     if mad_pct < 2.0:
@@ -105,11 +167,7 @@ def imprimir_tabla(titulo: str, filas: list[tuple], suelo: dict,
     # tabla.  Las fases con etiquetas compuestas (familia + variante + caso)
     # la rompian entera.
     ancho_et = max(24, max((len(e) for _, e, _ in filas), default=24))
-    # La fila de la base para cada caso, con la que se compara el resto.
-    base_de = {}
-    for lang, etiqueta, s in filas:
-        if lang == BASE and s:
-            base_de[_clave_de_caso(lang, etiqueta)] = s
+    bloques = _en_bloques(filas)
     cab = (f"{'lenguaje / caso':<{ancho_et + 2}}{'tiempo':>11}{'+-':>9}"
            f"{'ruido':>8}{'mas rapido':>12}{'mas lento':>12}"
            f"{'sin arranque':>14}{'memoria':>11}{'vs ' + BASE:>10}")
@@ -118,25 +176,33 @@ def imprimir_tabla(titulo: str, filas: list[tuple], suelo: dict,
           f"{'(ms)':>12}{'(ms)':>14}{'(pico)':>11}{'(veces)':>10}"
           f"{C.RESET}")
     print("-" * len(cab))
-    for lang, etiqueta, s in filas:
-        col = color_de(lang)
-        if not s:
-            print(f"  {col}{etiqueta:<{ancho_et}}{C.RESET}"
-                  f"{C.GREY}{'sin dato':>11}{C.RESET}")
-            continue
-        piso = (suelo.get(lang) or {}).get("p50")
-        if piso is None:
-            neto = f"{'-':>14}"
-        elif s["p50"] - piso <= 0:
-            neto = f"{C.DIM}{'~0':>14}{C.RESET}"
-        else:
-            neto = f"{s['p50'] - piso:>14.0f}"
-        razon = _razon(s, base_de.get(_clave_de_caso(lang, etiqueta)))
-        print(f"  {col}{etiqueta:<{ancho_et}}{C.RESET}{s['p50']:>11.0f}"
-              f"{s['mad']:>9.1f}"
-              f"{_color_ruido(s['mad_pct'])}{s['mad_pct']:>7.1f}%{C.RESET}"
-              f"{s['min']:>12.0f}{s['max']:>12.0f}{neto}"
-              f"{formatear_mem(s.get('mem_kib')):>11}{razon}")
+    for i, bloque in enumerate(bloques):
+        if i:
+            # Se ve que empieza otro grupo.  Sin la raya parecia una tabla
+            # sola, y ahi es donde se colaba el error: quien la leia comparaba
+            # entre si filas que no eran comparables.
+            print(f"{C.DIM}{'- ' * (len(cab) // 2)}{C.RESET}")
+        base_de = {_clave_de_caso(l, e): s
+                   for l, e, s in bloque if l == BASE and s}
+        for lang, etiqueta, s in bloque:
+            col = color_de(lang)
+            if not s:
+                print(f"  {col}{etiqueta:<{ancho_et}}{C.RESET}"
+                      f"{C.GREY}{'sin dato':>11}{C.RESET}")
+                continue
+            piso = (suelo.get(lang) or {}).get("p50")
+            if piso is None:
+                neto = f"{'-':>14}"
+            elif s["p50"] - piso <= 0:
+                neto = f"{C.DIM}{'~0':>14}{C.RESET}"
+            else:
+                neto = f"{s['p50'] - piso:>14.0f}"
+            razon = _razon(s, base_de.get(_clave_de_caso(lang, etiqueta)))
+            print(f"  {col}{etiqueta:<{ancho_et}}{C.RESET}{s['p50']:>11.0f}"
+                  f"{s['mad']:>9.1f}"
+                  f"{_color_ruido(s['mad_pct'])}{s['mad_pct']:>7.1f}%{C.RESET}"
+                  f"{s['min']:>12.0f}{s['max']:>12.0f}{neto}"
+                  f"{formatear_mem(s.get('mem_kib')):>11}{razon}")
     print("-" * len(cab))
     print(f"{C.DIM}  tiempo = valor tipico (mediana de las medidas).  "
           f"+- = cuanto se desvia una medida corriente.  "

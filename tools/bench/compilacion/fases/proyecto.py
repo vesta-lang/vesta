@@ -39,7 +39,14 @@ def fase(ctx: Ctx) -> None:
             if not cmd:
                 continue
             env = entorno_cache(ln, dir_cache, entorno_base)
-            etiqueta = "%s  %d ficheros" % (ln, len(ficheros))
+            # El TAMANO va en la etiqueta.  Sin el, dos tamanos distintos daban
+            # filas identicas -- `c  21 ficheros` dos veces -- y lo que parecia
+            # una tabla eran dos pegadas.  Peor que feo: la comparacion contra
+            # la base empareja por etiqueta, asi que las filas de un tamano se
+            # dividian entre la referencia del OTRO, y las razones publicadas
+            # no significaban nada.
+            etiqueta = "%s  %d ficheros, %dk lineas" % (
+                ln, len(ficheros), max(1, round(n / 1000)))
             prep_multi.append(((ln, n), ln, cmd, env, d, d / "out",
                                etiqueta, ficheros))
     with Spinner("verificando los proyectos multi-fichero", color=C.DIM):
