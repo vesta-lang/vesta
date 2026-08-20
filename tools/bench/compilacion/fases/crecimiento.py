@@ -150,10 +150,19 @@ def fase(ctx: Ctx) -> None:
                 piso_cal = (ctx.suelo.get(ln) or {}).get("p50") or 0.0
                 piso_frio = ((ctx.suelo_frio.get(ln) or {}).get("p50")
                              or piso_cal)
-                n_frio = max(0.001, s_frio["p50"] - piso_frio)
-                n_cal = max(0.001, s_cal["p50"] - piso_cal)
-                curvas[ln]["frio"].append((lineas, n_frio))
-                curvas[ln]["caliente"].append((lineas, n_cal))
+                b_frio = s_frio["p50"] - piso_frio
+                b_cal = s_cal["p50"] - piso_cal
+                n_frio, n_cal = max(0.001, b_frio), max(0.001, b_cal)
+                # Si la medida no se separa del suelo, NO es un cero: es que no
+                # se pudo distinguir de arrancar el compilador.  Recortarla a
+                # 0,001 y seguir calculando con ella daba disparates -- un
+                # `ahorro` de 6159x y un exponente de 8,21 -- que parecen datos.
+                # Se marca, no se publica, y sobre todo no entra en el ajuste.
+                util_frio, util_cal = b_frio > 0.5, b_cal > 0.5
+                if util_frio:
+                    curvas[ln]["frio"].append((lineas, n_frio))
+                if util_cal:
+                    curvas[ln]["caliente"].append((lineas, n_cal))
                 # La memoria NO se le resta el suelo: no es un coste de
                 # arranque que se acumule, es un pico -- lo que el proceso
                 # llego a tener a la vez --, y restarle el del fichero vacio
@@ -162,16 +171,19 @@ def fase(ctx: Ctx) -> None:
                     curvas[ln]["mem_frio"].append((lineas, s_frio["mem_kib"]))
                 if s_cal.get("mem_kib"):
                     curvas[ln]["mem_cal"].append((lineas, s_cal["mem_kib"]))
-                ahorro = n_frio / n_cal if n_cal > 0 else 0.0
+                ahorro = (n_frio / n_cal) if (util_frio and util_cal) else None
                 if ln == BASE:
                     base_frio[objetivo] = n_frio
                 b = base_frio.get(objetivo)
-                vs = (("x%.3f" % (n_frio / b)) if b else "-")
+                vs = ("x%.3f" % (n_frio / b)) if (b and util_frio) else "-"
+                t_ahorro = ("%.2fx" % ahorro) if ahorro else "~0"
+                t_kf = (("%.1f" % (1000.0 * n_frio / max(1, lineas)))
+                        if util_frio else "~0")
+                t_kc = (("%.1f" % (1000.0 * n_cal / max(1, lineas)))
+                        if util_cal else "~0")
                 print(f"  {color_de(ln)}{ln:<10}{C.RESET}{lineas:>9}"
                       f"{s_frio['p50']:>10.0f}{s_cal['p50']:>10.0f}"
-                      f"{ahorro:>8.2f}x"
-                      f"{1000.0 * n_frio / max(1, lineas):>12.1f}"
-                      f"{1000.0 * n_cal / max(1, lineas):>11.1f}"
+                      f"{t_ahorro:>9}{t_kf:>12}{t_kc:>11}"
                       f"{formatear_mem(s_frio.get('mem_kib')):>11}"
                       f"{formatear_mem(s_cal.get('mem_kib')):>11}"
                       f"{vs:>11}")
@@ -192,7 +204,8 @@ def fase(ctx: Ctx) -> None:
     print()
     print(f"{C.BOLD}Como crece cada uno (exponente de t = a * n^k){C.RESET}")
     cab2 = (f"{'lenguaje':<12}{'k en frio':>12}{'k caliente':>12}"
-            f"{'k memoria':>12}{'lectura (en frio)':>22}")
+            f"{'k mem frio':>12}{'k mem cal':>12}"
+            f"{'lectura (en frio)':>22}")
     print(f"{C.BOLD}{cab2}{C.RESET}")
     print("-" * len(cab2))
     resumen = []
@@ -204,20 +217,25 @@ def fase(ctx: Ctx) -> None:
         # justo el caso que impide compilar un proyecto grande aunque haya
         # paciencia de sobra.
         k_mem = exponente(c["mem_frio"])
+        k_mem_cal = exponente(c["mem_cal"])
         if k_frio is None and k_cal is None:
             continue
         f_txt = f"{k_frio:>12.2f}" if k_frio is not None else f"{'-':>12}"
         c_txt = f"{k_cal:>12.2f}" if k_cal is not None else f"{'-':>12}"
         m_txt = f"{k_mem:>12.2f}" if k_mem is not None else f"{'-':>12}"
-        print(f"  {color_de(ln)}{ln:<10}{C.RESET}{f_txt}{c_txt}{m_txt}"
+        mc_txt = f"{k_mem_cal:>12.2f}" if k_mem_cal is not None else f"{'-':>12}"
+        print(f"  {color_de(ln)}{ln:<10}{C.RESET}{f_txt}{c_txt}{m_txt}{mc_txt}"
               f"{lectura(k_frio):>22}")
         resumen.append({"lang": ln, "k_frio": k_frio, "k_caliente": k_cal,
-                        "k_memoria": k_mem})
+                        "k_memoria": k_mem, "k_memoria_caliente": k_mem_cal})
     print("-" * len(cab2))
     print(f"{C.DIM}  k ~ 1 lineal (el doble de codigo, el doble de tiempo); "
           f"k ~ 2 cuadratico (el doble de codigo, cuatro veces el tiempo).\n"
-          f"  k memoria = lo mismo para el PICO de memoria en frio: un k de "
+          f"  k mem = lo mismo para el PICO de memoria, en frio y en "
+          f"caliente: un k de "
           f"1 quiere decir que el doble de codigo pide el doble de memoria.\n"
-          f"  Hacen falta al menos dos tamanos para ajustar una recta; con uno "
-          f"solo sale `-`.{C.RESET}")
+          f"  Hacen falta al menos dos tamanos para ajustar una recta; con "
+          f"uno solo sale `-`.  Un `~0` es una medida que NO se separo del "
+          f"arranque del compilador: no cuenta, ni en la tabla ni en el "
+          f"ajuste.{C.RESET}")
     ctx.resultados["crecimiento"] = resumen

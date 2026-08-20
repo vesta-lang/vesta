@@ -5,9 +5,9 @@ Anadir una fase es escribir su modulo con una funcion `fase(ctx)` y ponerla en
 esta lista.  No hay que tocar nada mas: `--fase` la reconoce sola y
 `--listar-fases` la enseña.
 
-`por_defecto=False` es para las que cuestan mucho tiempo.  No se quedan fuera
-por ser menos utiles, sino para que una tanda normal no dure una eternidad;
-quien las quiera las pide por su nombre.
+TODAS corren por defecto.  El campo `por_defecto` se queda por si alguna vez
+hace falta dejar una fuera, pero mientras no lo sea, una tanda normal mide todo
+lo que el banco sabe medir: una fase que no corre es una fase que se pudre.
 """
 from __future__ import annotations
 
@@ -20,10 +20,12 @@ FASES = [
     Fase("2", "Compilacion completa, por tamano", completa.fase),
     Fase("2b", "Un proyecto, no un fichero", proyecto.fase),
     # Cuestan de largo lo que mas: varios tamanos, cada uno medido dos veces.
+    # Va POR DEFECTO pese a costar: es la unica que responde como escala, y
+    # esa es la pregunta que no se puede contestar con un solo tamano.  Dejarla
+    # fuera hacia que una tanda normal no la enseñara y pareciera que no existe.
     Fase("crecimiento", "Crecimiento contra el tamano del codigo",
-         crecimiento.fase, por_defecto=False),
-    Fase("2bis", "Escalado (tamano y numero de modulos)", escalado.fase,
-         por_defecto=False),
+         crecimiento.fase),
+    Fase("2bis", "Escalado (tamano y numero de modulos)", escalado.fase),
     Fase("2c", "Topologia de dependencias", topologia.fase),
     Fase("2d", "Familias de codigo", familias.fase),
     Fase("2e", "Familia por regimen", regimen.fase),
