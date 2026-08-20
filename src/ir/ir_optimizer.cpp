@@ -12917,7 +12917,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
 #define APLICA(llamada)                                                        \
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
-        any = any || cambio__;                                                 \
+        if (cambio__) any.store(true, std::memory_order_relaxed);                                                 \
         sucia = sucia || cambio__;                                             \
         efectos_sucios = efectos_sucios || cambio__;                           \
         if (cambio__) ++fn.version;                                            \
@@ -12939,7 +12939,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
 #define APLICA_PRESERVA_EFECTOS(llamada)                                       \
     do {                                                                       \
         const bool cambio__ = PASE(llamada);                                   \
-        any = any || cambio__;                                                 \
+        if (cambio__) any.store(true, std::memory_order_relaxed);                                                 \
         sucia = sucia || cambio__;                                             \
         if (cambio__) ++fn.version;                                            \
     } while (0)
@@ -12949,7 +12949,7 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
 #define APLICA_N(llamada)                                                      \
     do {                                                                       \
         const bool cambio__ = (PASE(llamada) > 0);                             \
-        any = any || cambio__;                                                 \
+        if (cambio__) any.store(true, std::memory_order_relaxed);                                                 \
         sucia = sucia || cambio__;                                             \
         efectos_sucios = efectos_sucios || cambio__;                           \
         if (cambio__) ++fn.version;                                            \
@@ -13248,8 +13248,29 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     };
 
     // Iterar hasta punto fijo o maximo 8 pasadas
+    /* Las tres tablas se llenan ANTES del bucle.
+     *
+     * Hasta ahora se insertaba dentro, al tocar cada funcion, lo que es
+     * correcto en fila de uno pero imposible de repartir: insertar en un
+     * `unordered_map` puede rehacerlo entero, y otro hilo leyendo a la vez ve
+     * basura.  Pre-llenadas, cada hilo solo ESCRIBE su propia entrada y ninguna
+     * insercion ocurre durante el bucle, que es lo que lo hace seguro sin
+     * ningun cerrojo.
+     *
+     * `true` de arranque porque la primera vez no hay nada calculado, que es lo
+     * mismo que hacia el `emplace(fn.name, true)` de dentro. */
+    for (auto &fn : mod.functions) {
+        if (fn.is_native) continue;
+        sucias.emplace(fn.name, true);
+        efectos_sucios_de.emplace(fn.name, true);
+        cache_efectos[fn.name];
+    }
+
     for (int pass = 0; pass < 8; ++pass) {
-        bool any = false;
+        // Atomico: lo escriben todos los hilos y solo se pone a true, nunca a
+        // false, asi que basta un `store` relajado -- lo que importa es que se
+        // vea al cerrar la vuelta, y ahi hay una barrera de por medio.
+        std::atomic<bool> any{false};
 
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue; // no optimizar stubs nativos
@@ -13481,7 +13502,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
          * cuadra con lo que mide es peor que no tenerlo. */
         vueltas_punto_fijo() += 1;
         visitas_a_funcion() += static_cast<long long>(mod.functions.size());
-        if (!any) break; // punto fijo alcanzado
+        if (!any.load(std::memory_order_relaxed)) break; // punto fijo
     }
 
     /* Stack-first (2a pasada): re-correr la promocion malloc->stack TRAS el
