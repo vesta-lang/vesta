@@ -96,6 +96,11 @@ def fase(ctx: Ctx) -> None:
           f"{'(veces)':>9}{'(ms)':>12}{'(ms)':>11}{'(pico)':>11}"
           f"{'(pico)':>11}{'(en frio)':>11}{C.RESET}")
     print("-" * len(cab))
+    # Las filas se guardan y se pintan al SALIR del indicador de progreso.
+    # Imprimir dentro dejaba la linea a medias del indicador delante de cada
+    # fila -- `/ crecimiento [###----] 3/27  vesta ...` pegado a los numeros --
+    # y la tabla se volvia ilegible justo en la fase mas larga.
+    filas: list = []
     # La base se mide primero para que el resto pueda compararse con ella en la
     # misma pasada: publicar la razon al final, en otra tabla, obliga a buscar
     # la fila correspondiente a mano.
@@ -131,8 +136,8 @@ def fase(ctx: Ctx) -> None:
                 ok, motivo = compila_de_verdad(ln, cmd, env, d, d / "out",
                                                args.timeout)
                 if not ok:
-                    print(f"  {C.RED}[no compila]{C.RESET} {ln} "
-                          f"{lineas} lineas: {motivo}")
+                    filas.append(f"  {C.RED}[no compila]{C.RESET} "
+                                 f"{ln} {lineas} lineas: {motivo}")
                     break
                 repes = max(3, args.repes // 2)
                 s_cal = medir_caliente(cmd, env, d, repes, args.timeout)
@@ -181,7 +186,7 @@ def fase(ctx: Ctx) -> None:
                         if util_frio else "~0")
                 t_kc = (("%.1f" % (1000.0 * n_cal / max(1, lineas)))
                         if util_cal else "~0")
-                print(f"  {color_de(ln)}{ln:<10}{C.RESET}{lineas:>9}"
+                filas.append(f"  {color_de(ln)}{ln:<10}{C.RESET}{lineas:>9}"
                       f"{s_frio['p50']:>10.0f}{s_cal['p50']:>10.0f}"
                       f"{t_ahorro:>9}{t_kf:>12}{t_kc:>11}"
                       f"{formatear_mem(s_frio.get('mem_kib')):>11}"
@@ -193,6 +198,8 @@ def fase(ctx: Ctx) -> None:
                     "neto_frio": n_frio, "neto_caliente": n_cal,
                     "mem_frio_kib": s_frio.get("mem_kib"),
                     "mem_cal_kib": s_cal.get("mem_kib")})
+    for f in filas:
+        print(f)
     print("-" * len(cab))
     print(f"{C.DIM}  ahorro = cuantas veces mas rapido va con la cache "
           f"caliente.  /kloc = tiempo por cada mil lineas, ya sin el arranque: "
