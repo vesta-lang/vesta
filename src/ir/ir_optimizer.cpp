@@ -12792,11 +12792,21 @@ struct EntradaFn {
     long long instrs = 0;
 };
 
+/**
+ * @brief Lo que un hilo acumula sobre los pases.  SIN cerrojo, a proposito.
+ *
+ * Antes habia una sola tabla con un mutex, tomado "una vez por pase, no por
+ * instruccion" -- que suena barato hasta que se cuentan: 72.016 tomas en un
+ * modulo de 24k lineas.  Mientras todo era secuencial daba igual; en cuanto se
+ * reparte el bucle de pases entre hilos, ese cerrojo pasa a ser el cuello y
+ * serializa justo lo que se queria repartir.
+ *
+ * Ahora cada hilo acumula en el SUYO y se fusionan al leer.  El cerrojo solo se
+ * toma al dar de alta un acumulador (una vez por hilo) y al pedir el total,
+ * nunca al acumular.  Es la instrumentacion la que se aparta del camino, no al
+ * reves.
+ */
 struct AcumuladorPases {
-    /* Con cerrojo porque los modulos se compilan EN PARALELO: sin el, dos
-     * hilos insertando en la misma tabla la corrompen.  Cuesta nada al lado de
-     * un pase -- se toma una vez por pase, no por instruccion. */
-    std::mutex m;
     std::unordered_map<const char *, std::pair<long long, long long>> t;
     /* Y el mismo reparto abierto por funcion.  Clave compuesta en texto: se
      * construye una vez por llamada a pase (miles, no millones) y ahorra tener
@@ -12804,9 +12814,50 @@ struct AcumuladorPases {
     std::unordered_map<std::string, EntradaFn> por_fn;
 };
 
+/// Todos los acumuladores vivos, uno por hilo que haya corrido algun pase.
+struct RegistroPases {
+    std::mutex m;
+    std::vector<std::unique_ptr<AcumuladorPases>> todos;
+};
+
+RegistroPases &registro_pases() {
+    static RegistroPases r;
+    return r;
+}
+
+/// El acumulador de ESTE hilo.  Se da de alta la primera vez y ya no vuelve a
+/// tocar el cerrojo.
 AcumuladorPases &acumulador_pases() {
-    static AcumuladorPases a;
-    return a;
+    thread_local AcumuladorPases *mio = [] {
+        auto nuevo = std::make_unique<AcumuladorPases>();
+        AcumuladorPases *crudo = nuevo.get();
+        RegistroPases &r = registro_pases();
+        std::lock_guard<std::mutex> lk(r.m);
+        r.todos.push_back(std::move(nuevo));
+        return crudo;
+    }();
+    return *mio;
+}
+
+/// Suma de todos los hilos, para quien pregunte por el total.
+AcumuladorPases fusionar_pases() {
+    AcumuladorPases total;
+    RegistroPases &r = registro_pases();
+    std::lock_guard<std::mutex> lk(r.m);
+    for (const auto &a : r.todos) {
+        for (const auto &kv : a->t) {
+            auto &d = total.t[kv.first];
+            d.first += kv.second.first;
+            d.second += kv.second.second;
+        }
+        for (const auto &kv : a->por_fn) {
+            EntradaFn &d = total.por_fn[kv.first];
+            d.us += kv.second.us;
+            d.veces += kv.second.veces;
+            d.instrs += kv.second.instrs;
+        }
+    }
+    return total;
 }
 
 /**
@@ -12833,8 +12884,8 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
     for (const auto &b : fn.blocks)
         instrs += static_cast<long long>(b.instrs.size());
 
+    // Sin cerrojo: cada hilo acumula en el suyo (ver AcumuladorPases).
     AcumuladorPases &a = acumulador_pases();
-    std::lock_guard<std::mutex> lk(a.m);
     auto &e = a.t[nombre];
     e.first += us;
     e.second += 1;
@@ -12920,8 +12971,7 @@ long long &visitas_a_funcion() {
 }
 
 std::vector<TiempoPase> tiempos_de_pases() {
-    AcumuladorPases &a = acumulador_pases();
-    std::lock_guard<std::mutex> lk(a.m);
+    const AcumuladorPases a = fusionar_pases();
     std::vector<TiempoPase> v;
     v.reserve(a.t.size());
     for (const auto &kv : a.t)
@@ -12939,8 +12989,7 @@ std::vector<TiempoPase> tiempos_de_pases() {
 }
 
 std::vector<TiempoPaseFuncion> tiempos_por_funcion() {
-    AcumuladorPases &a = acumulador_pases();
-    std::lock_guard<std::mutex> lk(a.m);
+    const AcumuladorPases a = fusionar_pases();
     std::vector<TiempoPaseFuncion> v;
     v.reserve(a.por_fn.size());
     /* Los nombres de pase se devuelven como punteros estables: viven en esta
@@ -12966,10 +13015,14 @@ std::vector<TiempoPaseFuncion> tiempos_por_funcion() {
 }
 
 void reiniciar_tiempos_de_pases() {
-    AcumuladorPases &a = acumulador_pases();
-    std::lock_guard<std::mutex> lk(a.m);
-    a.t.clear();
-    a.por_fn.clear();
+    // Se vacian TODOS, no solo el del hilo que llama: quien reinicia quiere
+    // empezar de cero, no dejar dentro lo que acumularon los demas.
+    RegistroPases &r = registro_pases();
+    std::lock_guard<std::mutex> lk(r.m);
+    for (const auto &a : r.todos) {
+        a->t.clear();
+        a->por_fn.clear();
+    }
 }
 
 namespace {
