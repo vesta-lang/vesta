@@ -3054,10 +3054,35 @@ CompileResult compile_vx_project(
         // root encadena llamadas a las del dep via injeccion de CALLs en
         // su propia __module_init (mas abajo).
         const std::string dep_mod_init = "__module_init_" + work[i].module_name;
+        /* Se renombran TODAS las `__module_init*` del dep, no solo la
+         * principal.  Desde que se parte en tandas, cada modulo trae ademas
+         * sus `__module_init_partN`, y esos nombres son los MISMOS en todos
+         * los modulos: sin esto, dos deps aportan `__module_init_part0` y el
+         * merge se queda con una.
+         *
+         * Y renombrar obliga a reescribir las llamadas, porque a diferencia de
+         * la principal -- que el cargador invoca por `init_pc` y nadie nombra
+         * -- las tandas SI se llaman por nombre desde ella. */
+        std::unordered_map<std::string, std::string> init_renames;
         for (auto &fn : dep_ir.functions) {
-            if (fn.name == "__module_init") {
-                fn.name = dep_mod_init;
-            }
+            if (fn.name.rfind("__module_init", 0) != 0) continue;
+            const std::string renamed = (fn.name == "__module_init")
+                                            ? dep_mod_init
+                                            : fn.name + "_" +
+                                                  work[i].module_name;
+            init_renames.emplace(fn.name, renamed);
+            fn.name = renamed;
+        }
+        if (!init_renames.empty()) {
+            for (auto &fn : dep_ir.functions)
+                for (auto &blk : fn.blocks)
+                    for (auto &in : blk.instrs) {
+                        if (in.op != ir::IrOp::CALL &&
+                            in.op != ir::IrOp::TAILCALL)
+                            continue;
+                        auto it = init_renames.find(in.func_name);
+                        if (it != init_renames.end()) in.func_name = it->second;
+                    }
         }
         const uint64_t sd_offset =
             static_cast<uint64_t>(merged.static_data.size());

@@ -32790,6 +32790,228 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
     }
 }
 
+namespace {
+
+/**
+ * @brief Instrucciones por tanda al partir `__module_init`.
+ *
+ * Ajustable con `VESTA_MODULE_INIT_CHUNK` para poder comparar; se lee una vez
+ * porque consultar el entorno recorre su bloque entero.
+ */
+size_t module_init_chunk_budget() {
+    static const size_t n = [] {
+        if (const char *e = std::getenv("VESTA_MODULE_INIT_CHUNK")) {
+            const long v = std::atol(e);
+            if (v > 0) return static_cast<size_t>(v);
+        }
+        return static_cast<size_t>(2000);
+    }();
+    return n;
+}
+
+/// Por debajo de esto no se parte: una llamada por tanda no se paga por
+/// ahorrar tan poco.
+constexpr size_t kModuleInitSplitMin = 4000;
+
+/**
+ * @brief Parte @p init en tandas y la deja llamandolas en orden.
+ *
+ * POR QUE.  `__module_init` es, con diferencia, la funcion mas grande que
+ * genera el compilador: en un modulo de 750 funciones se lleva 24.020 de las
+ * 69.370 instrucciones del IR -- el 34,6% -- mientras que cada funcion de
+ * usuario ronda las 83.  Eso hace dos danos a la vez.  Reparte mal: el bucle
+ * de pases se reparte POR FUNCION, asi que un hilo se queda con esta y los
+ * demas esperan (medido: el 79% del tiempo dentro del reparto era espera).  Y
+ * cuesta de mas: el coste de compilar crece MAS que lineal con el tamano
+ * (medido, ~n^1,28 entre 750 y 3.000 funciones), asi que partirla no solo
+ * equilibra -- quita trabajo.
+ *
+ * POR QUE SE PUEDE.  Los bloques de `__module_init` son una CADENA lineal, uno
+ * por clase o advice, y NO se pasan valores entre si: lo que una clase necesita
+ * de otra viaja por estado GLOBAL -- el hueco estatico donde queda su
+ * `ClassInfo*` y el registro que `findclass` consulta por nombre.  Comprobado
+ * sobre el IR emitido: de 331 valores, el UNICO que cruza de bloque es el
+ * buffer de parametros (un `ALLOCA`), y ese se rematerializa fresco por tanda.
+ *
+ * Es conservador a proposito.  Cualquier forma que no encaje con eso -- un
+ * PHI, una rama, un valor que cruza y no es un `ALLOCA` -- deja la funcion como
+ * estaba: partir mal aqui no da un programa mas lento, da uno que registra mal
+ * sus clases.
+ *
+ * @param init `__module_init` recien generada; queda reescrita a llamadas.
+ * @param out  Modulo donde se anaden las tandas.
+ * @return true si se partio; false si se dejo intacta.
+ */
+bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
+    const size_t nblocks = init.blocks.size();
+    if (nblocks < 2) return false;
+
+    size_t total = 0;
+    for (const auto &b : init.blocks) total += b.instrs.size();
+    if (total < kModuleInitSplitMin) return false;
+
+    // --- 1. La cadena tiene que ser lineal y sin PHIs ---------------------
+    for (size_t i = 0; i < nblocks; ++i) {
+        const ir::IrBlock &b = init.blocks[i];
+        if (b.id != static_cast<ir::IrBlockId>(i)) return false;
+        if (b.instrs.empty()) return false;
+        for (size_t k = 0; k < b.instrs.size(); ++k) {
+            const ir::IrOp op = b.instrs[k].op;
+            if (op == ir::IrOp::PHI) return false;
+            // Un terminador a mitad de bloque significa que esto no es la
+            // cadena que creemos estar mirando.
+            if (k + 1 != b.instrs.size() &&
+                (op == ir::IrOp::BR || op == ir::IrOp::BR_COND ||
+                 op == ir::IrOp::RET))
+                return false;
+        }
+        const ir::IrInstr &last = b.instrs.back();
+        if (i + 1 < nblocks) {
+            if (last.op != ir::IrOp::BR) return false;
+            if (last.target_block != static_cast<ir::IrBlockId>(i + 1))
+                return false;
+        } else if (last.op != ir::IrOp::RET) {
+            return false;
+        }
+    }
+
+    // --- 2. Que valores cruzan de bloque ----------------------------------
+    const size_t nvals = init.values.size();
+    std::vector<size_t> def_block(nvals, SIZE_MAX);
+    std::vector<const ir::IrInstr *> def_instr(nvals, nullptr);
+    for (size_t i = 0; i < nblocks; ++i)
+        for (const ir::IrInstr &in : init.blocks[i].instrs)
+            if (in.dst != ir::IR_NO_VALUE &&
+                static_cast<size_t>(in.dst) < nvals) {
+                def_block[in.dst] = i;
+                def_instr[in.dst] = &in;
+            }
+
+    std::vector<ir::IrValueId> shared; // los que cruzan (en la practica, 1)
+    bool splittable = true;
+    auto note_use = [&](ir::IrValueId v, size_t blk) {
+        if (v == ir::IR_NO_VALUE) return;
+        if (static_cast<size_t>(v) >= nvals || def_block[v] == SIZE_MAX) {
+            splittable = false; // viene de fuera de la cadena: no se toca
+            return;
+        }
+        if (def_block[v] != blk &&
+            std::find(shared.begin(), shared.end(), v) == shared.end())
+            shared.push_back(v);
+    };
+    for (size_t i = 0; i < nblocks && splittable; ++i)
+        for (const ir::IrInstr &in : init.blocks[i].instrs) {
+            for (ir::IrValueId v : in.operands) note_use(v, i);
+            note_use(in.func_ptr, i);
+        }
+    if (!splittable) return false;
+
+    // Rematerializar solo se sabe hacer con un ALLOCA.
+    for (ir::IrValueId v : shared)
+        if (!def_instr[v] || def_instr[v]->op != ir::IrOp::ALLOCA) return false;
+
+    // --- 3. Cortes por presupuesto de instrucciones -----------------------
+    const size_t budget = module_init_chunk_budget();
+    std::vector<std::pair<size_t, size_t>> chunks; // [inicio, fin)
+    size_t start = 0, acc = 0;
+    for (size_t i = 0; i < nblocks; ++i) {
+        acc += init.blocks[i].instrs.size();
+        if (acc >= budget && i + 1 != nblocks) {
+            chunks.emplace_back(start, i + 1);
+            start = i + 1;
+            acc = 0;
+        }
+    }
+    chunks.emplace_back(start, nblocks);
+    if (chunks.size() < 2) return false;
+
+    // --- 4. Una funcion por tanda -----------------------------------------
+    const std::string base = init.name;
+    std::vector<std::string> names;
+    names.reserve(chunks.size());
+
+    for (size_t c = 0; c < chunks.size(); ++c) {
+        const size_t first = chunks[c].first, limit = chunks[c].second;
+        ir::IrFunction f;
+        f.name = base + "_part" + std::to_string(c);
+        f.ret_type = ir::IrType::VOID;
+
+        std::vector<ir::IrBlockId> newid(nblocks, 0);
+        for (size_t i = first; i < limit; ++i)
+            newid[i] = f.new_block(init.blocks[i].name);
+
+        // El buffer de parametros: uno FRESCO por tanda.
+        std::vector<ir::IrValueId> vmap(nvals, ir::IR_NO_VALUE);
+        for (ir::IrValueId v : shared) {
+            ir::IrInstr a = *def_instr[v];
+            const ir::IrValueId nv = f.new_value(init.values[v].type);
+            f.values[nv].is_host_ptr = init.values[v].is_host_ptr;
+            a.dst = nv;
+            vmap[v] = nv;
+            f.append(newid[first], std::move(a));
+        }
+
+        for (size_t i = first; i < limit; ++i)
+            for (const ir::IrInstr &in : init.blocks[i].instrs) {
+                // El ALLOCA compartido ya se emitio fresco arriba.
+                if (in.op == ir::IrOp::ALLOCA && in.dst != ir::IR_NO_VALUE &&
+                    std::find(shared.begin(), shared.end(), in.dst) !=
+                        shared.end())
+                    continue;
+                ir::IrInstr copy = in;
+                for (ir::IrValueId &v : copy.operands)
+                    if (v != ir::IR_NO_VALUE) v = vmap[v];
+                if (copy.func_ptr != ir::IR_NO_VALUE)
+                    copy.func_ptr = vmap[copy.func_ptr];
+                if (copy.op == ir::IrOp::BR) {
+                    if (i + 1 < limit) {
+                        copy.target_block = newid[i + 1];
+                    } else {
+                        // Fin de tanda: se vuelve, no se salta a la siguiente.
+                        const int ln = copy.source_line;
+                        copy = ir::IrInstr{};
+                        copy.op = ir::IrOp::RET;
+                        copy.type = ir::IrType::VOID;
+                        copy.source_line = ln;
+                    }
+                }
+                if (copy.dst != ir::IR_NO_VALUE) {
+                    const ir::IrValueId old = copy.dst;
+                    const ir::IrValueId nv = f.new_value(init.values[old].type);
+                    f.values[nv].is_host_ptr = init.values[old].is_host_ptr;
+                    vmap[old] = nv;
+                    copy.dst = nv;
+                }
+                f.append(newid[i], std::move(copy));
+            }
+
+        names.push_back(f.name);
+        out.add_function(std::move(f));
+    }
+
+    // --- 5. `__module_init` pasa a ser la lista de llamadas ---------------
+    init.blocks.clear();
+    init.values.clear();
+    const ir::IrBlockId entry = init.new_block("entry");
+    for (const std::string &n : names) {
+        ir::IrInstr call{};
+        call.op = ir::IrOp::CALL;
+        call.type = ir::IrType::VOID;
+        call.dst = ir::IR_NO_VALUE;
+        call.func_name = n;
+        call.source_line = 0;
+        init.append(entry, std::move(call));
+    }
+    ir::IrInstr ret{};
+    ret.op = ir::IrOp::RET;
+    ret.type = ir::IrType::VOID;
+    ret.source_line = 0;
+    init.append(entry, std::move(ret));
+    return true;
+}
+
+} // namespace
+
 void Lowering::generate_module_init_function(ir::IrModule &out) {
     // Si no hay clases NI runtime globals que inicializar, no
     // generamos __module_init.
@@ -33341,6 +33563,10 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
     fn.append(cur, std::move(ret)); // ultimo bloque encadenado
 
     propagate_is_gc_object_through_phis(fn);
+    /* Y se entrega partida en tandas: de una pieza es la funcion mas grande
+     * del modulo, reparte mal entre hilos y cuesta de mas.  Si la forma no
+     * encaja con lo que el troceador sabe garantizar, se queda entera. */
+    split_module_init_into_chunks(fn, out);
     out.add_function(std::move(fn));
 }
 

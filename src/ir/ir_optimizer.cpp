@@ -9402,7 +9402,12 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* __module_init: el Loader lo invoca via init_pc, no es un CALL
          * normal.  Inlinearlo en main duplica el defclass + deffield
          * + defmethod del bytecode. */
-        if (name == "__module_init") return true;
+        /* Por PREFIJO, no por igualdad: ademas de la propia hay dos familias
+         * mas -- las tandas en que se parte (`__module_init_partN`) y la de
+         * cada dependencia al fusionar modulos (`__module_init_<modulo>`).
+         * Inlinear las tandas las devolveria a una sola funcion gigante, que
+         * es justo lo que se parte para evitar. */
+        if (name.rfind("__module_init", 0) == 0) return true;
         /* Lambda helpers: invocados via function pointer en CALLCLOSURE.
          * Sus IR son single-block + RET pero el calling convention es
          * distinta (env_addr en r14, etc). */
@@ -10960,7 +10965,9 @@ static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
         return false; // @Naked: sin prologo/epilogo/ret, standalone
     if (!fn.section.empty()) return false;
     if (fn.blocks.empty()) return false;
-    if (fn.name == "__module_init") return false;
+    // Por prefijo: cubre tambien las tandas y las de las dependencias (ver
+    // @c is_blacklisted).
+    if (fn.name.rfind("__module_init", 0) == 0) return false;
     if (fn.name.rfind("__lambda", 0) == 0) return false;
     if (is_new_helper_name(fn.name, nullptr)) return false;
     /* Resolvedores de overlay: inlinarlos pierde la naturaleza host de la
