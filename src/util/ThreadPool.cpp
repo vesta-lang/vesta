@@ -46,7 +46,7 @@ void ThreadPool::shutdown() {
         stopping_.store(true); /* señal de parada a todos los workers */
     }
     /* despertar a todos los workers para que noten stopping_==true */
-    wake_flag_.store(1, std::memory_order_release);
+    wake_flag_.fetch_add(1, std::memory_order_release);
 
 #ifdef WIN32
     WakeByAddressAll(&wake_flag_); /* Windows: despertar todos */
@@ -71,7 +71,17 @@ void ThreadPool::worker_loop() {
 
         /* bucle de espera: bloquear hasta que haya tarea o se deba parar */
         while (true) {
-            int expected = 0;
+            /* El ticket se lee ANTES de mirar la cola, y el orden importa:
+             * quien encole a partir de aqui lo incrementara, asi que la espera
+             * de abajo vuelve sola porque el valor ya no coincidira.
+             *
+             * Antes se ponia la bandera a cero justo antes de dormir, y eso
+             * BORRABA un aviso ya emitido: encolar -> avisar -> el worker pone
+             * el cero -> se duerme para siempre con la tarea en la cola.  Un
+             * bloqueo con 0% de CPU, que aparecia al encolar varias tareas
+             * nada mas construir el pool -- justo cuando los workers estan
+             * pasando por esta ventana. */
+            int expected = wake_flag_.load(std::memory_order_acquire);
 
             /* comprobar cola SIN dormir, con mutex */
             {
@@ -81,9 +91,6 @@ void ThreadPool::worker_loop() {
                 if (stopping_.load())
                     return; /* pool parando: terminar el hilo */
             }
-
-            /* resetear flag antes de dormir para no perder señales */
-            wake_flag_.store(0, std::memory_order_relaxed);
 
 #ifdef WIN32
             WaitOnAddress(&wake_flag_, &expected, sizeof(int), INFINITE);

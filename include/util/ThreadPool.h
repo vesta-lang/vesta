@@ -174,7 +174,14 @@ class ThreadPool {
             tasks_.emplace(std::forward<F>(f));
         }
 
-        wake_flag_.store(1, std::memory_order_release); // senalizar nueva tarea
+        /* Contador que solo SUBE, no un 0/1.  Con una bandera, el worker
+         * tenia que ponerla a cero antes de dormirse -- y eso BORRABA un aviso
+         * que ya habia llegado: encolar, avisar, y que el worker pusiera el
+         * cero justo despues dejaba la tarea en la cola con todos los hilos
+         * dormidos.  Bloqueo con 0% de CPU.  Con un ticket, el worker espera
+         * contra el valor que leyo ANTES de mirar la cola: si alguien encola en
+         * medio, el valor ya no coincide y la espera vuelve sola. */
+        wake_flag_.fetch_add(1, std::memory_order_release);
 
 #ifdef WIN32
         WakeByAddressSingle(&wake_flag_); // despertar un worker (Windows)
@@ -184,8 +191,10 @@ class ThreadPool {
     }
 
   private:
-    std::atomic<int> wake_flag_{
-        0}; ///< Indicador de tarea disponible para futex/WaitOnAddress
+    /// Ticket de aviso: cada tarea encolada lo INCREMENTA y los workers
+    /// esperan contra el valor que leyeron.  No es un 0/1 a proposito -- ver
+    /// el comentario de enqueue().
+    std::atomic<int> wake_flag_{0};
 
     /**
      * @brief Bucle principal de cada hilo worker.
@@ -226,7 +235,7 @@ auto ThreadPool::submit(F &&f, Args &&...args)
         }); // envolver en lambda sin argumentos
     }
 
-    wake_flag_.store(1, std::memory_order_release); // notificar nueva tarea
+    wake_flag_.fetch_add(1, std::memory_order_release); // ver enqueue()
 
 #ifdef WIN32
     WakeByAddressSingle(&wake_flag_);
