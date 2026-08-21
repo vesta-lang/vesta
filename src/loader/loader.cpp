@@ -9,6 +9,7 @@
  * Valida el header, reserva memoria en el @c ArenaManager y crea el @c
  * ProcessVM con el PC inicializado segun @c init_pc del ejecutable.
  */
+#include "util/file_read.h"
 #include "loader/loader.h"
 #include <algorithm> // UCRT64: no transitivo
 
@@ -749,17 +750,23 @@ void Executable::BorrarAlineado::operator()(uint8_t *p) const noexcept {
 }
 
 runtime::ProcessVM *Loader::load_executable(runtime::VM &vm, std::string path) {
-    // Leer archivo completo
-    std::ifstream file(path, std::ios::binary);
-    if (!file.is_open()) {
+    /* El artefacto, de una vez y por la llamada del sistema.
+     *
+     * Antes se leia con `std::istreambuf_iterator`, que es la forma mas lenta
+     * de leer un fichero en C++: va byte a byte por el bufer del flujo y hace
+     * crecer el vector a base de reasignaciones.  Medido con VTune al ejecutar
+     * un artefacto de 2,8 MiB, eso ponia 25,8 ms en el `read` de msvcrt mas
+     * 14,9 en `memcpy` -- de unos 55 ms de CPU de toda la ejecucion.
+     *
+     * Aqui el tamano se sabe de antemano, se reserva una vez y se lee de una
+     * tacada.  Es lo mismo que ya se hace para leer los paquetes del almacen. */
+    std::vector<uint8_t> bytecode;
+    if (!util::read_whole_file(path, bytecode)) {
         throw std::runtime_error("No se pudo abrir el ejecutable: " + path);
     }
 
-    std::vector<uint8_t> bytecode((std::istreambuf_iterator<char>(file)),
-                                  std::istreambuf_iterator<char>());
-
     // Delegar en la version bytecode
-    runtime::ProcessVM *proc = load_executable(vm, bytecode);
+    runtime::ProcessVM *proc = load_executable(vm, std::move(bytecode));
     // Se recuerda de que fichero salio.  Antes se dejaba vacio para el
     // ejecutable principal -- solo lo rellenaban los modulos cargados sobre la
     // marcha -- y sin el, al fallar algo, no habia forma de saber que programa
@@ -776,7 +783,7 @@ Loader::load_executable(runtime::VM &vm,
         throw std::runtime_error("Loader::load_executable: Se intento cargar "
                                  "un ejecutable con raw_bytecode_file vacio");
     }
-    auto exe = parse_velb(raw_bytecode_file);
+    auto exe = parse_velb(std::move(raw_bytecode_file));
 
     GlobalPID pid = vm.spawn_process();
     runtime::ProcessVM *proccess = vm.get_process(pid);
