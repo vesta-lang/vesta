@@ -30,6 +30,7 @@
  *     acceso por indice (cache-friendly al validar muchas llamadas).
  */
 
+#include "util/env_flags.h"
 #include "vx/type_checker.h"
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
@@ -2101,8 +2102,9 @@ bool TypeChecker::run() {
      * abajo) tenga bytecode disponible al encontrar el primer call
      * site.  Cero impacto si la flag no esta o el archivo no existe
      * (la rama VM cae a AST eval). */
-    if (const char *pre = std::getenv("VESTA_MC_PREBUILT")) {
-        if (pre[0]) {
+    {
+        const std::string &pre = util::flag_text(util::FlagId::McPrebuilt);
+        if (!pre.empty()) {
             std::ifstream f(pre, std::ios::binary);
             if (f) {
                 std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
@@ -2111,8 +2113,7 @@ bool TypeChecker::run() {
                     const bool ok = comptime_runtime_.load_macros_from_bytes(
                         std::move(bytes));
                     if (ok) {
-                        const char *verbose = std::getenv("VESTA_MC_VERBOSE");
-                        if (verbose && verbose[0] == '1') {
+                        if (util::flag_on(util::FlagId::McVerbose)) {
                             std::cerr
                                 << "[mc-prebuilt] cargado: " << pre << " ("
                                 << comptime_runtime_.registered_macro_count()
@@ -2461,8 +2462,8 @@ bool TypeChecker::run() {
      * @c VESTA_MC_VMONLY=1 + @c VESTA_MC_PREBUILT=... efectivamente
      * desvio las invocaciones @Macro al VM. */
     if (macro_vmonly_hits_ > 0 || macro_vmonly_misses_ > 0) {
-        if (const char *v = std::getenv("VESTA_MC_VERBOSE")) {
-            if (v[0] == '1') {
+        if (util::flag_on(util::FlagId::McVerbose)) {
+            {
                 std::cerr << "[mc-vmonly] hits=" << macro_vmonly_hits_
                           << " misses=" << macro_vmonly_misses_
                           << "  memo_hits="

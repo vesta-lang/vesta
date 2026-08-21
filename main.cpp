@@ -10,6 +10,7 @@
  * Descargo: Autor no responsable por modificaciones.
  */
 
+#include "util/env_flags.h"
 #include <cstdlib>
 #include <iostream>
 #include <iomanip>
@@ -1380,8 +1381,8 @@ int main(int argc, char *argv[]) {
         std::string profile_path;
         if (result.count("profile")) {
             profile_path = result["profile"].as<std::string>();
-        } else if (const char *env = std::getenv("VESTA_PROFILE_DUMP")) {
-            profile_path = env;
+        } else {
+            profile_path = util::flag_text(util::FlagId::ProfileDump);
         }
         if (!profile_path.empty()) {
             runtime::profile::profile_init(profile_path);
@@ -1394,9 +1395,8 @@ int main(int argc, char *argv[]) {
      * Escape VESTA_NO_JIT_PGO =1.  El profiler ligero tiene coste ~1 ciclo por
      * branch, apto para always-on.  El pesado D.6 (--profile) es aparte. */
     {
-        const char *no_pgo = std::getenv("VESTA_NO_JIT_PGO");
         const bool jit_on = (jit::g_jit_threshold != UINT32_MAX);
-        if (jit_on && !(no_pgo && no_pgo[0] == '1')) {
+        if (jit_on && !util::flag_on(util::FlagId::NoJitPgo)) {
             runtime::profile::lite_profile_set_active(true);
             jit::g_jit_tier2_on = true; // guard barato del tier-2 en CALLVIRT
         }
@@ -2372,7 +2372,7 @@ int main(int argc, char *argv[]) {
             marca_an = ahora;
             return us;
         };
-        const bool medir_analisis = std::getenv("VESTA_TIMES") != nullptr;
+        const bool medir_analisis = util::flag_on(util::FlagId::Times);
         long us_compilar_coste = 0, us_modulo_final = 0;
         vx::CompileResult cr =
             como_proyecto ? vx::compile_vx_project(vx_path, copts)
@@ -3990,9 +3990,8 @@ int main(int argc, char *argv[]) {
         const std::string cache_path = cache_prefix + ".velb";
         const bool cache_hit = std::filesystem::exists(cache_path);
         const bool user_already_set_prebuilt =
-            (std::getenv("VESTA_MC_PREBUILT") != nullptr);
-        const bool verbose_mc = (std::getenv("VESTA_MC_VERBOSE") != nullptr &&
-                                 std::getenv("VESTA_MC_VERBOSE")[0] == '1');
+            !util::flag_text(util::FlagId::McPrebuilt).empty();
+        const bool verbose_mc = util::flag_on(util::FlagId::McVerbose);
 
         /* CACHE HIT path: setear env var ANTES del primer compile_vx_source.
          * Solo 1 invocacion de compile, con VM eval activo desde el inicio. */
@@ -4012,14 +4011,8 @@ int main(int argc, char *argv[]) {
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
         // link.  Desactivable via @c VX_NO_PROJECT_CACHE=1.
-        const bool project_cache_enabled = []() {
-            const char *v = std::getenv("VX_NO_PROJECT_CACHE");
-            return !(v && v[0] == '1');
-        }();
-        const bool project_cache_verbose = []() {
-            const char *v = std::getenv("VX_VERBOSE_PROJECT_CACHE");
-            return v && v[0] == '1';
-        }();
+        const bool project_cache_enabled = !util::flag_on(util::FlagId::NoProjectCache);
+        const bool project_cache_verbose = util::flag_on(util::FlagId::VerboseProjectCache);
         const bool has_imports = vx::vx_source_has_imports(vx_source);
 
         vx::ProjectCacheKey pck;
@@ -4028,15 +4021,13 @@ int main(int argc, char *argv[]) {
         pck.vx_base = 0; // no usado por compile_vx_project; queda 0
         pck.instrument_mode = copts.instrument_mode;
         pck.port_target = copts.port_target;
-        {
-            const char *pre = std::getenv("VESTA_MC_PREBUILT");
-            pck.comptime_prebuilt = (pre != nullptr && pre[0] != '\0');
-        }
+        pck.comptime_prebuilt =
+            !util::flag_text(util::FlagId::McPrebuilt).empty();
         /* De donde salen los modulos que no son del proyecto.  Es lo mismo que
          * lo de abajo: si algo que cambia lo compilado no esta en la clave, un
          * acierto sirve un fichero que no corresponde. */
         pck.stdlib_dir = vx::detect_stdlib_vx_dir();
-        if (const char *vp = std::getenv("VX_PATH")) pck.vx_path = vp;
+        pck.vx_path = util::flag_text(util::FlagId::VxPath);
         /* Que artefacto se pidio.  El cache guarda el fichero FINAL, asi que
          * pedir un binario nativo y pedir un `.velb` no pueden compartir
          * entrada -- ni dos binarios de arquitecturas distintas.  Todo lo que
@@ -4494,10 +4485,13 @@ int main(int argc, char *argv[]) {
              * archivos de proyectos abandonados se limpian solos. */
             {
                 uint64_t ttl_days = 30;
-                if (const char *e = std::getenv("VESTA_MC_CACHE_TTL_DAYS")) {
-                    char *end = nullptr;
-                    const unsigned long v = std::strtoul(e, &end, 10);
-                    if (end != e && v <= 3650) ttl_days = v; /* cap 10 anyos */
+                {
+                    /* Cap de 10 anyos: un valor absurdo no puede dejar
+                     * ficheros para siempre ni borrarlos manana. */
+                    const long v =
+                        util::flag_int(util::FlagId::McCacheTtlDays, -1);
+                    if (v >= 0 && v <= 3650)
+                        ttl_days = static_cast<uint64_t>(v);
                 }
                 if (ttl_days > 0) {
                     const auto now_tp =
@@ -5013,8 +5007,7 @@ int main(int argc, char *argv[]) {
          * funciona end-to-end.  Imprime stats y los nombres de macros
          * resueltos.  Cero impacto si el env var no esta seteado. */
         if (rc == EXIT_SUCCESS) {
-            const char *probe_env = std::getenv("VESTA_COMPTIME_PROBE");
-            if (probe_env && probe_env[0] == '1') {
+            if (util::flag_on(util::FlagId::ComptimeProbe)) {
                 const std::string velb_path = out_prefix + ".velb";
                 std::ifstream f(velb_path, std::ios::binary);
                 if (f) {

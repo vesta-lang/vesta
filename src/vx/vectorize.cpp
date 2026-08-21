@@ -31,6 +31,7 @@
  * bucle escalar normal.
  */
 
+#include "util/env_flags.h"
 #include "vx/lowering.h"
 
 #include "jit/vec_isa.h" // ancho del chunk vectorizado (SSE2/AVX2/AVX512)
@@ -363,7 +364,7 @@ bool Lowering::try_lower_memcpy_idiom(ast::WhileStmt *s) {
     // IMPLEMENTA memcpy -- seria una llamada a si mismo.
     if (current_fn_no_idiom_) return false;
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
     if (!s->cond || !s->body) return false;
 
     // cond = (idx < limit): idx ident, limit libre de efectos (1 evaluacion).
@@ -414,7 +415,7 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
     // IMPLEMENTA memcpy -- seria una llamada a si mismo.
     if (current_fn_no_idiom_) return false;
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
     if (!s->cond || !s->body || !s->init || !s->step) return false;
 
     // cond = (idx < limit).
@@ -477,7 +478,7 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
 
 bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
 
     // --- estructura: for/while  c[i] = a[i] OP b[i];  i++ ---
     VecLoop vl;
@@ -889,7 +890,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
 // ===========================================================================
 bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
 
     VecLoop vl;
     if (!mc_extract_vec_loop(s, vl)) return false;
@@ -1440,7 +1441,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
 // ===========================================================================
 bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
 
     VecLoop vl;
     if (!mc_extract_vec_loop(s, vl)) return false;
@@ -1891,7 +1892,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
 
 bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
 
     // --- estructura: for/while  b[i] = OP a[i];  i++ ---
     VecLoop vl;
@@ -2193,7 +2194,7 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
 
 bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     using namespace ast;
-    static const bool MC_DBG = std::getenv("VESTA_MC_IDIOM_DEBUG") != nullptr;
+    static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
 
     // --- estructura: for/while  acc = acc + a[i];  i++ ---
     VecLoop vl;

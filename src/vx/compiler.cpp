@@ -15,6 +15,7 @@
  * @brief Implementacion del facade del compilador Vesta.
  */
 
+#include "util/env_flags.h"
 #include "vx/compiler.h"
 #include "vx/source_text.h"  // un solo fin de linea para todo el pipeline
 #include "vx/c_header_gen.h" // Fase 4 interop C: vx --emit-header
@@ -321,7 +322,7 @@ CompileResult compile_vx_source(const std::string &source,
         const ComptimeUnit cu = collect_comptime_unit(*mod, source);
         res.comptime_unit_source = cu.unit_source;
         res.comptime_unit_hash = cu.content_hash;
-        if (std::getenv("VESTA_DUMP_COMPTIME_UNIT"))
+        if (util::flag_on(util::FlagId::DumpComptimeUnit))
             dump_comptime_unit(cu, std::cerr);
     }
 
@@ -1270,7 +1271,7 @@ CompileResult compile_vx_source(const std::string &source,
     // que conflictua. Tampoco cuando solo se pide el IR: el precomputo existe
     // para que el artefacto lleve el resultado ya calculado, y aqui no hay
     // artefacto.
-    if (!std::getenv("VESTA_NO_CTPE") && opts.opt_level >= 2 && !opts.ir_only &&
+    if (!util::flag_on(util::FlagId::NoCtpe) && opts.opt_level >= 2 && !opts.ir_only &&
         !res.ir_section_bytes.empty() && !res.has_lowerable_macros) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(irmod);
         std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
@@ -1356,7 +1357,7 @@ CompileResult compile_vx_source(const std::string &source,
          * bajados aqui, para eso existe el pre-pase force-lower), no hay que
          * arrastrar `import`, y no hay recursion -- esto corre DESPUES del type
          * check, no dentro. */
-        if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
+        if (util::flag_on(util::FlagId::PruebaIrComptime)) {
             const ir::IrModule &fuente =
                 emitir_desde_optimizado ? mod_para_seccion : irmod;
             ir::IrModule solo_ct = fuente; // cabecera: imports/globals/libs

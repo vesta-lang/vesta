@@ -13,6 +13,7 @@
  *   - Reserva anticipada de vectores (avoids realloc en hot paths).
  */
 
+#include "util/env_flags.h"
 #include "vx/module/module_resolver.h"
 
 #include "vx/lexer.h"
@@ -212,7 +213,7 @@ std::string detect_stdlib_vx_dir() {
     std::string sd;
     /* (1) La variable de entorno: lo mas inmediato, para un script o una
      * prueba suelta.  Manda sobre todo lo demas justamente por eso. */
-    if (const char *env = std::getenv("VX_STDLIB_DIR")) sd = env;
+    sd = util::flag_text(util::FlagId::StdlibDir);
     if (!sd.empty()) return sd;
     /* (2) El override del usuario: se dice UNA vez por maquina y vale para
      * todos sus proyectos sin tocar ninguno.  Es lo que necesita quien
@@ -453,14 +454,10 @@ void ModuleGraph::add_search_path(const std::string &dir) {
 }
 
 void ModuleGraph::add_vx_path_env() {
-#if defined(_WIN32)
-    // Windows: getenv puede devolver NULL si no esta seteado.
-    const char *raw = std::getenv("VX_PATH");
-#else
-    const char *raw = std::getenv("VX_PATH");
-#endif
-    if (raw == nullptr || *raw == 0) return;
-    std::string s(raw);
+    /* El registro ya devuelve cadena vacia cuando no esta puesta, en los dos
+     * sistemas: sobraba la rama condicional, que hacia lo mismo dos veces. */
+    const std::string s = util::flag_text(util::FlagId::VxPath);
+    if (s.empty()) return;
     // Tokenizar por VX_PATH_SEP_ENV.
     std::string cur;
     for (size_t i = 0; i <= s.size(); ++i) {
@@ -1237,7 +1234,7 @@ void ModuleGraph::build_namespace_index_() {
         }
     }
 
-    if (std::getenv("VESTA_TIMES") != nullptr) {
+    if (util::flag_on(util::FlagId::Times)) {
         const long us_total = static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - t_indice)

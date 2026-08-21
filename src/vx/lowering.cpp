@@ -15,6 +15,7 @@
  * @brief Implementacion del pase AST -> ir::IrModule de Vesta.
  */
 
+#include "util/env_flags.h"
 #include "vx/lowering.h"
 #include <algorithm>
 #include <chrono>
@@ -1075,7 +1076,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
      * fichero de un solo modulo -- 1,0 s de los 1,2 que costaba uno de 5.700
      * lineas -- y hasta ahora se publicaba como un solo numero, que no dice si
      * el trabajo esta en las funciones o en lo que se prepara antes. */
-    const bool medir_bajada = std::getenv("VESTA_TIMES") != nullptr;
+    const bool medir_bajada = util::flag_on(util::FlagId::Times);
     using RelojBajada = std::chrono::steady_clock;
     const auto marca_run = RelojBajada::now();
     long us_previo = 0, n_bajadas = 0;
@@ -6943,7 +6944,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     // HOST, lo reemplazamos por un MEMCPY (rep movsb / SIMD en JIT/AOT; bucle
     // host->host en el interprete).  Si no matchea, seguimos con el lowering
     // normal del while.
-    static const bool no_vec = std::getenv("VESTA_NO_VECTORIZE") != nullptr;
+    static const bool no_vec = util::flag_on(util::FlagId::NoVectorize);
     if (!no_vec) {
         if (try_lower_memcpy_idiom(s)) return;
         // Auto-vectorizacion aritmetica/unaria/reduccion sobre la forma
@@ -7385,7 +7386,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // VESTA_NO_VECTORIZE=1 desactiva TODA la auto-vectorizacion (loops
     // escalares)
     // -> linea base para benchmarks (escalar vs SSE2 vs AVX2).
-    static const bool no_vec = std::getenv("VESTA_NO_VECTORIZE") != nullptr;
+    static const bool no_vec = util::flag_on(util::FlagId::NoVectorize);
     if (!no_vec) {
         // Auto-vectorizacion: la forma canonica del memcpy
         // `for (T i = init; i < N; i++) dst[i] = src[i];` (ver vectorize.cpp).
@@ -14643,10 +14644,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
      * Esto ya se pago: un elevado que producia un IR de aspecto impecable hacia
      * que el programa devolviera otro numero, y solo se vio escribiendo el caso
      * a mano.  Que el IR tenga buena pinta no es que este bien. */
-    static const bool sin_elevado = [] {
-        const char *v = std::getenv("VESTA_ASM_NO_LIFT");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool sin_elevado = util::flag_on(util::FlagId::AsmNoLift);
     if (!sin_elevado && s->level == ast::AsmLevel::Analyzable) {
         std::unordered_map<std::string, ir::IrValueId> slot_of;
         for (const auto &b : fn_->asm_reg_bindings)
@@ -32800,10 +32798,8 @@ namespace {
  */
 size_t module_init_chunk_budget() {
     static const size_t n = [] {
-        if (const char *e = std::getenv("VESTA_MODULE_INIT_CHUNK")) {
-            const long v = std::atol(e);
-            if (v > 0) return static_cast<size_t>(v);
-        }
+        const long v = util::flag_int(util::FlagId::ModuleInitChunk, 0);
+        if (v > 0) return static_cast<size_t>(v);
         return static_cast<size_t>(2000);
     }();
     return n;

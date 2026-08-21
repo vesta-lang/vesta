@@ -119,6 +119,15 @@ long flag_int(FlagId id, long si_falta) {
 }
 
 const std::string &flag_text(FlagId id) {
+    if (kFlags[idx(id)].kind == FlagKind::TextLive) {
+        /* Se relee.  En un buffer POR HILO, no en la tabla: los modulos se
+         * compilan en paralelo y escribir la tabla compartida en una consulta
+         * seria una carrera. */
+        thread_local std::string vivo;
+        const char *raw = std::getenv(kFlags[idx(id)].name);
+        vivo = raw ? raw : "";
+        return vivo;
+    }
     const FlagValue &fv = table().v[idx(id)];
     return fv.present ? fv.text : empty_text();
 }

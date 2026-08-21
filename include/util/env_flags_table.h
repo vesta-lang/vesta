@@ -117,7 +117,7 @@ VESTA_ENV_FLAG(NakedDebug,        "VESTA_NAKED_DEBUG",        Report,  Asm, Bool
 /* -- Comptime y precomputo del arranque ----------------------------------- */
 VESTA_ENV_FLAG(NoCtpe,            "VESTA_NO_CTPE",            Emitted, Comptime, Bool, Any)
 VESTA_ENV_FLAG(NoFiltroComptime,  "VESTA_NO_FILTRO_COMPTIME", Emitted, Comptime, Bool, Any)
-VESTA_ENV_FLAG(McPrebuilt,        "VESTA_MC_PREBUILT",        Emitted, Comptime, Text, Any)
+VESTA_ENV_FLAG(McPrebuilt,        "VESTA_MC_PREBUILT",        Emitted, Comptime, TextLive, Any)
 VESTA_ENV_FLAG(McNoJit,           "VESTA_MC_NO_JIT",          Emitted, Comptime, Bool, Any)
 VESTA_ENV_FLAG(CtpeDebug,         "VESTA_CTPE_DEBUG",         Report,  Comptime, Bool, Any)
 VESTA_ENV_FLAG(CtpeMs,            "VESTA_CTPE_MS",            Report,  Comptime, Bool, Any)
@@ -139,7 +139,7 @@ VESTA_ENV_FLAG(SchedVerify,       "VESTA_SCHED_VERIFY",       Report,  Scheduler
 
 /* -- Asignacion de registros ---------------------------------------------- */
 VESTA_ENV_FLAG(AsignadorMaquina,  "VESTA_ASIGNADOR_MAQUINA",  Emitted, RegAlloc, Bool, Any)
-VESTA_ENV_FLAG(Belady,            "VESTA_BELADY",             Emitted, RegAlloc, Bool, Any)
+VESTA_ENV_FLAG(Belady,            "VESTA_BELADY",             Emitted, RegAlloc, BoolOn, Any)
 VESTA_ENV_FLAG(Splitting,         "VESTA_SPLITTING",          Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(Recovery,          "VESTA_RECOVERY",           Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(VregNoSplit,       "VESTA_VREG_NO_SPLIT",      Emitted, RegAlloc, Bool, Any)

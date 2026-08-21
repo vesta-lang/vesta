@@ -11,6 +11,7 @@
  *        Ver vreg_pipeline.h y doc/REGALLOC.md.
  */
 
+#include "util/env_flags.h"
 #include <thread>
 #include <functional>
 #include "jit/vreg_pipeline.h"
@@ -104,10 +105,7 @@ bool fn_can_use_wide512(const ir::IrFunction &fn, const BackendCaps &caps) {
 }
 
 bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
-    static const bool gate_force = [] {
-        const char *e = std::getenv("VESTA_NO_WIDE_HOME");
-        return e && e[0] && e[0] != '0';
-    }();
+    static const bool gate_force = util::flag_on(util::FlagId::NoWideHome);
     if (gate_force) return true;
     for (const auto &b : fn.blocks)
         for (const auto &in : b.instrs)
@@ -148,10 +146,7 @@ uint32_t g_measure_funcs = 0;
 std::mutex g_measure_mtx;
 
 bool measure_enabled() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_REMAT_MEASURE");
-        return e && e[0] && e[0] != '0';
-    }();
+    static const bool on = util::flag_on(util::FlagId::RematMeasure);
     return on;
 }
 
@@ -167,11 +162,7 @@ bool measure_enabled() {
 // greedy (instrumentar con la maquinaria de Facts por que derrama de mas, luego
 // reconsiderar la politica).
 bool belady_enabled() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_BELADY");
-        return !e ||
-               e[0] != '0'; // default ON (Belady); VESTA_BELADY=0 -> Lifetime.
-    }();
+    static const bool on = util::flag_on(util::FlagId::Belady);
     return on;
 }
 
@@ -180,10 +171,7 @@ bool belady_enabled() {
 // medir el diagnostico (spills / candidate / wasted_area) con y sin la pasada,
 // mismo binario.
 bool recovery_enabled() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_RECOVERY");
-        return !e || e[0] != '0';
-    }();
+    static const bool on = util::flag_on(util::FlagId::Recovery);
     return on;
 }
 
@@ -193,10 +181,7 @@ bool recovery_enabled() {
 // esta OFF el plan ni se calcula y el codigo emitido es identico al de antes
 // (coste cero).
 bool splitting_enabled() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_SPLITTING");
-        return e && e[0] && e[0] != '0'; // default OFF mientras se mide.
-    }();
+    static const bool on = util::flag_on(util::FlagId::Splitting);
     return on;
 }
 
@@ -391,7 +376,7 @@ codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs,
      * que el reescritor lo apane despues. */
     const codegen::rbank::ConstraintSet forma =
         recoger_restricciones_de_forma(mf);
-    if (!forma.items.empty() && std::getenv("VESTA_FORMA_DEBUG"))
+    if (!forma.items.empty() && util::flag_on(util::FlagId::FormaDebug))
         std::fprintf(stderr, "[forma] %s: %zu restricciones\n", mf.name.c_str(),
                      forma.items.size());
     jit::MachineNextUseFacts nu;
@@ -415,8 +400,9 @@ codegen::RegAlloc rbank_allocate_belady(const IntervalResult &ivs,
     }
     // DEBUG Pilar 2: dump de la asignacion si VESTA_VREG_DUMP es substring del
     // nombre de la funcion.  Muestra vregs totales, spills, y por vreg su Loc.
-    if (const char *want = std::getenv("VESTA_VREG_DUMP")) {
-        if (mf.name.find(want) != std::string::npos) {
+    {
+        const std::string &want = util::flag_text(util::FlagId::VregDump);
+        if (!want.empty() && mf.name.find(want) != std::string::npos) {
             uint32_t n_reg = 0, n_spill = 0, n_none = 0;
             for (uint32_t v = 0; v < nvregs && v < ra.assign.size(); ++v) {
                 switch (ra.assign[v].loc) {
@@ -465,10 +451,7 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
     // Default ON: reordena por camino critico + RECURSOS (latencia + puertos +
     // issue-width + throughput reciproco) del modelo de coste.  VESTA_SCHED=0
     // lo desactiva (A/B).
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_SCHED");
-        return !(v && v[0] == '0');
-    }();
+    static const bool on = util::flag_on(util::FlagId::Sched);
     if (!on) return;
     // Modelo de coste segun el modo: JIT auto-detecta la microarquitectura del
     // host (cpuid/MIDR) y usa los datos EXACTOS de la DB; AOT usa el generico
@@ -482,7 +465,7 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
     const int moved = sched::schedule_function(pf, *cm, isa);
     // Diagnostico opt-in (VESTA_SCHED_EFF=1): volcado del modelo de efectos por
     // instruccion (post-schedule) para cotejar 1:1 con Capstone.
-    static const bool dump_eff = std::getenv("VESTA_SCHED_EFF") != nullptr;
+    static const bool dump_eff = util::flag_on(util::FlagId::SchedEff);
     if (dump_eff) {
         auto rk = [](uint32_t k) -> std::string {
             if (k == UINT32_MAX) return "-";
@@ -516,7 +499,7 @@ void maybe_schedule(MFunction &pf, sched::EffIsa isa, sched::SchedMode mode) {
             }
     }
     // Diagnostico opt-in (VESTA_SCHED_STATS=1): cuanto reordena de verdad.
-    static const bool stats = std::getenv("VESTA_SCHED_STATS") != nullptr;
+    static const bool stats = util::flag_on(util::FlagId::SchedStats);
     if (stats) {
         long instrs = 0;
         for (const MBlock &b : pf.blocks)
@@ -671,10 +654,7 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     cc.commit(code, bytes.size());
 
     /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo vreg generado. */
-    static const bool dis = [] {
-        const char *v = std::getenv("VESTA_JIT_DISASM");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool dis = util::flag_on(util::FlagId::JitDisasm);
     if (dis) debug_dump_jit_code(fn.name + " [vreg]", code, bytes.size());
 
     /* 5. Registrar en el JitRegistry con los stackmaps reales (commit 6):
@@ -760,10 +740,7 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
     }
     cc.commit(code, bytes.size());
 
-    static const bool dis = [] {
-        const char *v = std::getenv("VESTA_JIT_DISASM");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool dis = util::flag_on(util::FlagId::JitDisasm);
     if (dis) debug_dump_jit_code(fn.name + " [vreg-cb]", code, bytes.size());
 
     const uint32_t scan_frame_size =
@@ -874,10 +851,7 @@ std::vector<uint8_t> vreg_compile_native_target(
     }
 
     /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo AOT generado. */
-    static const bool dis = [] {
-        const char *v = std::getenv("VESTA_JIT_DISASM");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool dis = util::flag_on(util::FlagId::JitDisasm);
     if (dis)
         debug_dump_jit_code(fn.name + " [aot-native]", bytes.data(),
                             bytes.size());
@@ -981,10 +955,7 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         return nullptr; // offset no resuelto
     }
 
-    static const bool dis = [] {
-        const char *v = std::getenv("VESTA_JIT_DISASM");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool dis = util::flag_on(util::FlagId::JitDisasm);
     if (dis) debug_dump_jit_code(fn.name + " [vreg-osr]", code, bytes.size());
 
     /* 8. Registrar el blob C2 en el JitRegistry (stackmaps de sus CALLs).

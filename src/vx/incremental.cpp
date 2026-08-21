@@ -3,6 +3,7 @@
  * @brief Implementacion del driver incremental granular + CAS (ver
  *        incremental.h).
  */
+#include "util/env_flags.h"
 #include "vx/incremental.h"
 
 #include <algorithm>
@@ -248,21 +249,20 @@ CasStore::CasStore(std::string root) : root_(std::move(root)) {
 
 CasStore CasStore::open_default() {
     // 1. Override explicito.
-    if (const char *env = std::getenv("VX_CAS_DIR"); env && *env)
-        return CasStore(std::string(env) + "/cas");
+    const std::string &cas = util::flag_text(util::FlagId::CasDir);
+    if (!cas.empty()) return CasStore(cas + "/cas");
     // 2. VX_HOME/cas.
-    if (const char *home = std::getenv("VX_HOME"); home && *home)
-        return CasStore(std::string(home) + "/cas");
+    const std::string &home = util::flag_text(util::FlagId::VxHome);
+    if (!home.empty()) return CasStore(home + "/cas");
     // 3. Convencion por plataforma.
 #if defined(_WIN32)
-    if (const char *appdata = std::getenv("APPDATA"); appdata && *appdata)
-        return CasStore(std::string(appdata) + "/Vesta/cas");
-    return CasStore("./.vesta/cas"); // ultimo recurso.
+    const std::string &appdata = util::flag_text(util::FlagId::SysAppData);
+    if (!appdata.empty()) return CasStore(appdata + "/Vesta/cas");
 #else
-    if (const char *h = std::getenv("HOME"); h && *h)
-        return CasStore(std::string(h) + "/.vesta/cas");
-    return CasStore("./.vesta/cas");
+    const std::string &h = util::flag_text(util::FlagId::SysHome);
+    if (!h.empty()) return CasStore(h + "/.vesta/cas");
 #endif
+    return CasStore("./.vesta/cas"); // ultimo recurso.
 }
 
 std::string CasStore::path_for_(MerkleKey k) const {

@@ -104,7 +104,21 @@ enum class FlagKind : uint8_t {
     BoolOn, ///< ENCENDIDO por defecto; solo "0" lo apaga.  Son caminos que ya
             ///< son el normal y conservan la salida a mano para comparar.
     Int,    ///< Numero entero.
-    Text,   ///< Cadena tal cual.
+    Text,   ///< Cadena tal cual, leida una vez al arrancar.
+    /**
+     * Cadena que se RELEE en cada consulta.
+     *
+     * Rompe la premisa de todo lo demas -- leer una vez -- y por eso se declara
+     * aparte en vez de dejarlo a que cada sitio se acuerde.  Existe porque el
+     * compilador usa alguna variable como CANAL entre sus propias fases: la
+     * escribe con `putenv` a mitad y la lee despues.  Con el valor cacheado del
+     * arranque, la segunda fase leia lo de antes de escribir -- y eso no da
+     * error, da 50 programas compilados de otra forma.
+     *
+     * Usar el entorno para hablar consigo mismo es el problema de fondo; esto
+     * solo lo hace visible mientras siga ahi.
+     */
+    TextLive,
 };
 
 /**

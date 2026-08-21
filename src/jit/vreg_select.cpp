@@ -22,6 +22,7 @@
  * caso comun de loops/if-else generados por el frontend NO las produce.
  */
 
+#include "util/env_flags.h"
 #include "jit/vreg_select.h"
 #include "jit/jit_branch_prof.h" // auto-PGO: contadores de branch por linea
 
@@ -91,10 +92,7 @@ std::string &vreg_ultimo_motivo() {
  *  funcion no es seleccionable por el path vreg. */
 static void vreg_dbg(const char *fn, const char *op) {
     vreg_ultimo_motivo() = (op != nullptr) ? op : "";
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_JIT_VREGS_DEBUG");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool on = util::flag_on(util::FlagId::VregsDebug);
     if (on)
         std::fprintf(stderr, "[vreg-sel] '%s' no soportada: op %s\n", fn, op);
 }
@@ -103,10 +101,7 @@ static void vreg_dbg(const char *fn, const char *op) {
  *  al CALL @c vrt_gc_deref en vez del inline (para medir el inline vs el
  *  runtime, o aislar un posible bug del codegen inline). */
 static bool jit_no_inline_deref() {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_JIT_NO_INLINE_DEREF");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::JitNoInlineDeref);
     return off;
 }
 
@@ -121,10 +116,7 @@ static bool vreg_bail(const char *fn, int linea) {
  *  CALL @c vrt_raw_alloc en vez de inline-ar el fast-path del slab (para
  *  medir el inline vs el runtime, o aislar un bug del codegen inline). */
 static bool jit_no_inline_alloc() {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_JIT_NO_INLINE_ALLOC");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::JitNoInlineAlloc);
     return off;
 }
 
@@ -135,10 +127,7 @@ static bool jit_no_inline_alloc() {
  *  regalloc_rewrite).  Se puede DESACTIVAR con VESTA_JIT_VREG_IDIV=0
  *  para volver al fallback de slots (A/B). */
 static bool jit_vreg_idiv() {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_JIT_VREG_IDIV");
-        return !(v && v[0] == '0'); // default ON; solo OFF si =0
-    }();
+    static const bool on = util::flag_on(util::FlagId::JitVregIdiv);
     return on;
 }
 
@@ -149,10 +138,7 @@ static bool jit_vreg_idiv() {
  *  overhead del helper runtime; fallback a vrt_callvirt en cualquier otro
  *  caso (null, abstracto, no compilado, con aspectos AOP). */
 static bool jit_no_inline_callvirt() {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_JIT_NO_INLINE_CALLVIRT");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::JitNoInlineCallvirt);
     return off;
 }
 
@@ -574,10 +560,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * usa @c fn (que apunta a la copia o al original). */
     ir::IrFunction fn_storage;
     const ir::IrFunction *fn_ptr = &fn_in;
-    static const bool no_split = [] {
-        const char *v = std::getenv("VESTA_VREG_NO_SPLIT");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool no_split = util::flag_on(util::FlagId::VregNoSplit);
     /* El split se aplica en AMBOS paths (AOT HOST_LEAF y JIT VM_ABI).  Un
      * `if(c){n=v}` con PHI en el merge es el bloqueante real: sin el split
      * estas funciones caian al selector de slots (legacy, con los bugs
@@ -985,10 +968,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * con VESTA_NO_SIB=1. */
     std::unordered_map<uint32_t, std::pair<uint32_t, int64_t>> fold_disp;
     {
-        static const bool sib_off = [] {
-            const char *v = std::getenv("VESTA_NO_SIB");
-            return v && v[0] != '\0' && v[0] != '0';
-        }();
+        static const bool sib_off = util::flag_on(util::FlagId::NoSib);
         const uint32_t NVAL = static_cast<uint32_t>(fn.values.size());
         /* La auto-vectorizacion (VEC_*) y MEMCPY usan valores sinteticos y
          * addressing complejo (offsets en el imm, punteros scratch) que el
@@ -1070,10 +1050,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             }
             for (const auto &c : cand)
                 if (!disqualified.count(c.first)) fold_disp.emplace(c);
-            static const bool sdbg = [] {
-                const char *v = std::getenv("VESTA_SIB_DBG");
-                return v && v[0] != '\0' && v[0] != '0';
-            }();
+            static const bool sdbg = util::flag_on(util::FlagId::SibDbg);
             if (sdbg)
                 std::fprintf(stderr, "[sib] %s: const=%zu cand=%zu fold=%zu\n",
                              fn.name.c_str(), const_val.size(), cand.size(),
@@ -4225,7 +4202,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * de `ASM_MICRO` ya se volcaban y esta no, asi que un bloque
                  * que viene por aqui no aparecia en ningun volcado -- y eso se
                  * leia como "no pasa por el JIT". */
-                if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr)
+                if (util::flag_on(util::FlagId::JitAsmDump))
                     std::fprintf(stderr,
                                  "[asm-jit inline] %s: auto=%d cuerpo=<%s>\n",
                                  fn.name.c_str(), (int)asm_has_auto,
@@ -4236,7 +4213,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         in.func_name,
                         mode32 ? vx::AsmArch::X86_32 : vx::AsmArch::X86_64);
                     if (!ar.ok || ar.bytes.empty()) {
-                        if (std::getenv("VESTA_JIT_VREGS_DEBUG"))
+                        if (util::flag_on(util::FlagId::VregsDebug))
                             std::fprintf(stderr,
                                          "[vreg-sel] asm que no ensambla (%s):"
                                          " <<%s>> error: %s\n",
@@ -4604,7 +4581,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * el volcado estaba en el camino contrario.  Un diagnostico que
                  * calla donde hace falta es peor que no tenerlo: manda a buscar
                  * a otro sitio. */
-                if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr) {
+                if (util::flag_on(util::FlagId::JitAsmDump)) {
                     std::fprintf(stderr, "[asm-jit fijo] %s: plantilla=<%s>\n",
                                  fn.name.c_str(), am.tmpl.c_str());
                     std::fprintf(stderr, "[asm-jit fijo] %s: final=<%s>\n",

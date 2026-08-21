@@ -15,6 +15,8 @@
  * el JIT subsystem (10-50 KB de VM reservada para code cache).
  */
 
+#include <algorithm>
+#include "util/env_flags.h"
 #include <thread>
 #include <functional>
 #include "jit/auto_jit.h"
@@ -145,31 +147,22 @@ bool g_jit_reclaim_active = false;
 namespace {
 std::once_flag g_env_init_flag;
 void init_threshold_from_env() {
-    const char *env = std::getenv("VESTA_JIT_THRESHOLD");
-    if (env && env[0] != '\0') {
-        char *end = nullptr;
-        const unsigned long v = std::strtoul(env, &end, 10);
-        if (end != env && v <= UINT32_MAX) {
+    {
+        /* Fuera de rango o no numerico -> se queda el umbral de siempre, que
+         * es lo que hacia antes al no poder convertirlo. */
+        const long v = util::flag_int(util::FlagId::JitThreshold, -1);
+        if (v >= 0 && v <= static_cast<long>(UINT32_MAX))
             g_jit_threshold = static_cast<uint32_t>(v);
-        }
     }
     /* Tambien leer VESTA_JIT_WARN_UNSUPPORTED para activar el
      * sistema de warnings de IR ops no soportadas. */
-    const char *warn = std::getenv("VESTA_JIT_WARN_UNSUPPORTED");
-    if (warn && warn[0] != '\0' && warn[0] != '0') {
+    if (util::flag_on(util::FlagId::JitWarnUnsupported))
         g_jit_warn_unsupported = true;
-    }
     /* VESTA_JIT_DISASM=1 -> dumpear los bytes generados + disasm. */
-    const char *dis = std::getenv("VESTA_JIT_DISASM");
-    if (dis && dis[0] != '\0' && dis[0] != '0') {
-        g_jit_disasm = true;
-    }
+    if (util::flag_on(util::FlagId::JitDisasm)) g_jit_disasm = true;
     /* VESTA_JIT_STATS=1 -> emit del MIPS counter per-block (opt-in
      * porque cuesta ~3ns/block; en hot loops el overhead es alto). */
-    const char *stats = std::getenv("VESTA_JIT_STATS");
-    if (stats && stats[0] != '\0' && stats[0] != '0') {
-        g_jit_emit_instr_counter = true;
-    }
+    if (util::flag_on(util::FlagId::JitStats)) g_jit_emit_instr_counter = true;
     /*  D.7: el path de REGISTROS VIRTUALES es el UNICO path del JIT.
      * El selector-slots legacy (src/jit/selector.cpp, backlog B-JIT-1) esta
      * JUBILADO: una op fuera del subset vreg cae al INTERPRETE (siempre
@@ -181,20 +174,14 @@ void init_threshold_from_env() {
     g_jit_use_vregs = true;
     /* C2 tier-up (opt-in).  VESTA_C2_THRESHOLD=N activa el tier-up con
      * umbral N; ausente o 0 = C2 apagado (default). */
-    const char *c2t = std::getenv("VESTA_C2_THRESHOLD");
-    if (c2t && c2t[0] != '\0') {
-        char *end = nullptr;
-        const unsigned long v = std::strtoul(c2t, &end, 10);
-        if (end != c2t && v <= UINT32_MAX) {
+    {
+        const long v = util::flag_int(util::FlagId::C2Threshold, -1);
+        if (v >= 0 && v <= static_cast<long>(UINT32_MAX))
             g_c2_threshold = static_cast<uint32_t>(v);
-        }
     }
-    const char *c2l = std::getenv("VESTA_C2_LOG");
-    if (c2l && c2l[0] != '\0' && c2l[0] != '0') g_c2_log = true;
-    const char *c2a = std::getenv("VESTA_C2_TIER_ALL");
-    if (c2a && c2a[0] != '\0' && c2a[0] != '0') g_c2_tier_all = true;
-    const char *c2v = std::getenv("VESTA_C2_VREG");
-    if (c2v && c2v[0] != '\0' && c2v[0] != '0') g_c2_vreg = true;
+    if (util::flag_on(util::FlagId::C2Log)) g_c2_log = true;
+    if (util::flag_on(util::FlagId::C2TierAll)) g_c2_tier_all = true;
+    if (util::flag_on(util::FlagId::C2Vreg)) g_c2_vreg = true;
     /* Activar la quiescencia de enter_jit SOLO si el C2 esta on.
      * Se setea aqui (init unica, antes de cualquier enter_jit) para
      * que los pares enter/exit esten siempre balanceados. */
@@ -221,10 +208,7 @@ std::unordered_map<uint64_t, uint64_t> g_osr_entry_map;
  *  -> el C2 es un recompile plano (== C1) para A/B del beneficio del
  *  inline agresivo.  Cacheado (1 getenv). */
 bool osr_opt_enabled() {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_OSR_OPT");
-        return !(v && v[0] == '0'); // default ON; solo "0" lo apaga
-    }();
+    static const bool on = util::flag_on(util::FlagId::OsrOpt);
     return on;
 }
 
@@ -244,10 +228,8 @@ bool g_tier2_recompiling = false;
  *  datos antes de re-optimizar), con un minimo razonable y override por env
  *  VESTA_JIT_TIER2_DELTA.  Asi escala con la config de hotness del run. */
 uint32_t jit_tier2_delta() {
-    static const uint32_t env_override = [] {
-        const char *v = std::getenv("VESTA_JIT_TIER2_DELTA");
-        return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
-    }();
+    static const uint32_t env_override = static_cast<uint32_t>(
+        std::max<long>(0, util::flag_int(util::FlagId::JitTier2Delta, 0)));
     if (env_override) return env_override;
     const uint32_t t = g_jit_threshold;
     if (t == UINT32_MAX) return UINT32_MAX; // JIT off
@@ -595,10 +577,7 @@ CodeCache *get_or_init_code_cache() noexcept {
  * Se apaga con VESTA_JIT_NO_ESPECIALIZAR=1 para comparar.
  */
 static bool jit_sin_especializar_reservas() {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_JIT_NO_ESPECIALIZAR");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::JitNoEspecializar);
     return off;
 }
 
@@ -610,10 +589,7 @@ static bool jit_sin_especializar_reservas() {
  * por que.
  */
 static bool jit_especializar_debug() {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_JIT_ESPECIALIZAR_DEBUG");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool on = util::flag_on(util::FlagId::JitEspecializarDebug);
     return on;
 }
 
@@ -1947,10 +1923,8 @@ CompileResult eager_compile_function(
      * pila + retorno float + params f64.  Lo que aun no cubre (call-fallback
      * sin TLS = Linux, params f32, SIMD >8B) BAILA a slots (abajo).
      * VESTA_VREG_CALLBACKS=0 fuerza slots para todos (A/B testing). */
-    static const bool g_vreg_callbacks = [] {
-        const char *v = std::getenv("VESTA_VREG_CALLBACKS");
-        return !(v && v[0] == '0'); /* default true; solo "0" lo desactiva */
-    }();
+    static const bool g_vreg_callbacks =
+        util::flag_on(util::FlagId::VregCallbacks);
     if (callback_entry && g_jit_use_vregs && g_vreg_callbacks) {
         VregCallbackOpts cbopts;
         cbopts.callback_entry = true;
@@ -2044,7 +2018,7 @@ void debug_dump_jit_code(const std::string &name, const uint8_t *code,
     }
     // VESTA_JIT_DISASM_REGS=1: detalle de acceso a registros (implicitos
     // incluidos) para verificar el modelo de efectos del scheduler.
-    const bool regs = std::getenv("VESTA_JIT_DISASM_REGS") != nullptr;
+    const bool regs = util::flag_on(util::FlagId::JitDisasmRegs);
     cs_option(handle, CS_OPT_DETAIL, regs ? CS_OPT_ON : CS_OPT_OFF);
     cs_insn *insn = nullptr;
     const size_t count = cs_disasm(handle, code, code_size,
@@ -2645,10 +2619,7 @@ uint64_t compile_native_callback(runtime::ProcessVM *vm,
 #if defined(_WIN32)
     /* VESTA_CB_FORCE_CALL=1: fuerza el fallback por call (para validar el stub
      * en Windows, donde normalmente hay TLS-direct). */
-    static const bool force_call = [] {
-        const char *v = std::getenv("VESTA_CB_FORCE_CALL");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool force_call = util::flag_on(util::FlagId::CbForceCall);
     if (!force_call) {
         const unsigned long idx = runtime::jit_proc_tls_index();
         if (idx != 0xFFFFFFFFu && idx < 64) {

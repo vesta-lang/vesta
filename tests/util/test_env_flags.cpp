@@ -218,6 +218,49 @@ static void test_encendidos_por_defecto() {
     set_env("VESTA_SCHED_ALIAS", nullptr);
 }
 
+/// Las que el compilador se ESCRIBE a si mismo se releen.
+///
+/// `VESTA_MC_PREBUILT` no es un mando: es un canal.  `main` la escribe con
+/// `putenv` a mitad de la compilacion para pasarle el artefacto comptime al
+/// type checker.  Con el valor cacheado del arranque, la segunda fase leia lo
+/// de antes de escribir -- y eso no dio error, dio 50 programas compilados de
+/// otra forma.  Este test fija que se relee SIN releer la tabla entera.
+static void test_valor_vivo_se_relee() {
+    CHECK(flag_info(FlagId::McPrebuilt).kind == FlagKind::TextLive,
+          "el canal comptime esta declarado como valor vivo");
+
+    set_env("VESTA_MC_PREBUILT", nullptr);
+    CHECK(flag_text(FlagId::McPrebuilt).empty(), "de partida, vacio");
+
+    /* Escribir SIN avisar al registro, que es justo lo que hace `main`. */
+#if defined(_WIN32)
+    _putenv("VESTA_MC_PREBUILT=F:/algo/macros.velb");
+#else
+    setenv("VESTA_MC_PREBUILT", "F:/algo/macros.velb", 1);
+#endif
+    CHECK(flag_text(FlagId::McPrebuilt) == "F:/algo/macros.velb",
+          "se ve el valor nuevo sin recargar la tabla");
+
+#if defined(_WIN32)
+    _putenv("VESTA_MC_PREBUILT=");
+#else
+    unsetenv("VESTA_MC_PREBUILT");
+#endif
+    CHECK(flag_text(FlagId::McPrebuilt).empty(), "y se ve cuando se borra");
+
+    /* Y el contrario, para que la comprobacion signifique algo: una cadena
+     * NORMAL se lee una vez, y escribirla por detras no la cambia. */
+    set_env("VX_CACHE_DIR", "F:/uno");
+#if defined(_WIN32)
+    _putenv("VX_CACHE_DIR=F:/otro");
+#else
+    setenv("VX_CACHE_DIR", "F:/otro", 1);
+#endif
+    CHECK(flag_text(FlagId::CacheDir) == "F:/uno",
+          "una cadena normal conserva lo que se leyo al arrancar");
+    set_env("VX_CACHE_DIR", nullptr);
+}
+
 /// Un solo criterio de "puesto" para todos los mandos.
 static void test_criterio_unico_de_puesto() {
     set_env("VESTA_NO_FUSE", "0");
@@ -266,6 +309,7 @@ int main() {
     test_mandos_distintos_huellas_distintas();
     test_el_valor_cuenta();
     test_encendidos_por_defecto();
+    test_valor_vivo_se_relee();
     test_criterio_unico_de_puesto();
     test_valores_tipados();
 
