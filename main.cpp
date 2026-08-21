@@ -4366,27 +4366,19 @@ int main(int argc, char *argv[]) {
              * no cueste construirlo otra vez.  Solo si salio bien: cachear un
              * fallo seria servirlo despues como si fuera el artefacto. */
             if (rc_aot == EXIT_SUCCESS && project_cache_enabled &&
-                has_imports && !wants_pipeline_artifacts) {
-                std::ifstream af(out_prefix, std::ios::binary | std::ios::ate);
-                if (af.is_open()) {
-                    const std::streamsize asz = af.tellg();
-                    af.seekg(0, std::ios::beg);
-                    std::vector<uint8_t> abytes(
-                        static_cast<size_t>(asz < 0 ? 0 : asz));
-                    if (asz > 0)
-                        af.read(reinterpret_cast<char *>(abytes.data()), asz);
-                    af.close();
-                    if (!abytes.empty()) {
-                        // Las mismas dependencias que en el camino de bytecode:
-                        // el fuente raiz y lo que el preprocesador leyo.
-                        std::vector<std::string> deps_extra_aot =
-                            vpp_included_files;
-                        deps_extra_aot.push_back(canonical_root);
-                        guardar_cache_de_proyecto(
-                            pc_path, opts_hash, diag_hash, donde, cr,
-                            copts.emit_debug, abytes, project_cache_verbose,
-                            deps_extra_aot);
-                    }
+                !wants_pipeline_artifacts) {
+                std::vector<uint8_t> abytes;
+                if (util::read_whole_file(out_prefix, abytes) &&
+                    !abytes.empty()) {
+                    // Las mismas dependencias que en el camino de bytecode:
+                    // el fuente raiz y lo que el preprocesador leyo.
+                    std::vector<std::string> deps_extra_aot =
+                        vpp_included_files;
+                    deps_extra_aot.push_back(canonical_root);
+                    guardar_cache_de_proyecto(
+                        pc_path, opts_hash, diag_hash, donde, cr,
+                        copts.emit_debug, abytes, project_cache_verbose,
+                        deps_extra_aot);
                 }
             }
             return rc_aot;
