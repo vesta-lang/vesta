@@ -4881,8 +4881,13 @@ int main(int argc, char *argv[]) {
                        << (++mostrados < 6 ? " |" : "");
                 }
                 lp << "   (" << pases.size() << " pases, " << total_pases
-                   << " us, " << ir::vueltas_punto_fijo() << " vueltas, "
-                   << ir::visitas_a_funcion() << " visitas; reloj "
+                   << " us, " << ir::vueltas_punto_fijo() << " vueltas, ";
+                /* Solo si paso: rendirse a medias es una averia, y una averia
+                 * que no ocurre no tiene por que ocupar sitio en la linea. */
+                if (ir::truncaciones_punto_fijo() > 0)
+                    lp << ir::truncaciones_punto_fijo()
+                       << " SIN CONVERGER (codigo peor), ";
+                lp << ir::visitas_a_funcion() << " visitas; reloj "
                    << cal.fuente << " de " << cal.resolucion_ns
                    << " ns, medir cuesta " << cal.coste_ns << " ns)\n";
             }

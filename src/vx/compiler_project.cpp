@@ -43,6 +43,7 @@
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "util/crono_tramo.h"
 #include "analysis/asa/aggregate_facts.h"
 #include "analysis/effects/bounds.h" // accesos fuera de region -> diagnostico
 #include "vx/diag/diag_format.h"
@@ -3632,7 +3633,10 @@ CompileResult compile_vx_project(
      * -- medido: de tres sacos escritos a mano, la escalarizacion se lleva dos
      * antes de que nadie los mire, asi que observar solo despues hace creer que
      * el programa no los tenia. */
-    analysis::asa::volcar_formas(merged, "pre-opt");
+    {
+        util::CronoTramo t_("fase-opt:asa-volcar-formas");
+        analysis::asa::volcar_formas(merged, "pre-opt");
+    }
 
     /* El codigo que de verdad se construye, para quien ademas del coste del
      * cuerpo escrito necesita ver eso.  Sale de la misma bajada, asi que no hay
@@ -3649,10 +3653,16 @@ CompileResult compile_vx_project(
     /* El asignador del lenguaje queda DENTRO del modulo (sin tocar las
      * reservas): asi el selector del JIT puede llamarlo y compartir mecanismo
      * con el binario nativo, que es lo que permite depurar aquel desde aqui. */
-    traer_asignador_del_lenguaje(merged, opts, root_path);
+    {
+        util::CronoTramo t_("fase-opt:asignador-del-lenguaje");
+        traer_asignador_del_lenguaje(merged, opts, root_path);
+    }
 
-    ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
-                    /*allow_inline=*/!opts.emit_ir_preopt);
+    {
+        util::CronoTramo t_("fase-opt:ir_optimize");
+        ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
+                        /*allow_inline=*/!opts.emit_ir_preopt);
+    }
 
     /* Sobre el codigo que DE VERDAD se va a emitir: lo que el analisis puede
      * demostrar fuera de su region no puede quedarse en `--analyze`, tiene que
@@ -3674,9 +3684,12 @@ CompileResult compile_vx_project(
             hay_main = true;
             break;
         }
-    vx_report_asm_preconditions(merged, res.diagnostics, root_path, hay_main,
-                                opts.emit_ir_preopt,
-                                opts.native_poo ? "aot" : "vm");
+    {
+        util::CronoTramo t_("fase-opt:asm-precondiciones");
+        vx_report_asm_preconditions(merged, res.diagnostics, root_path,
+                                    hay_main, opts.emit_ir_preopt,
+                                    opts.native_poo ? "aot" : "vm");
+    }
 
     if (opts.dump_ir) {
         std::ostringstream ir_oss;

@@ -12986,6 +12986,11 @@ long long &visitas_a_funcion() {
     return n;
 }
 
+long long &truncaciones_punto_fijo() {
+    static long long n = 0;
+    return n;
+}
+
 std::vector<TiempoPase> tiempos_de_pases() {
     const AcumuladorPases a = merge_pass_times();
     std::vector<TiempoPase> v;
@@ -13091,6 +13096,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * del inyectado, asi que para analizar se optimiza sin inline; el coste
      * interprocedural (TOTAL) lo compone el analizador via el callgraph. */
     if (level >= OptLevel::O1 && allow_inline) {
+        CronoTramo crono__("opt:inline-prologo (pared)");
         ir_pass_inline(mod);
         /* Tras inlinar las factorias, la closure se construye y se invoca
          * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
@@ -13299,7 +13305,21 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         cache_efectos[fn.name];
     }
 
-    for (int pass = 0; pass < 8; ++pass) {
+    /* Tope ANTI-CUELGUE, no un mando de cuanto optimizar.
+     *
+     * El bucle sale solo en cuanto ninguna funcion cambia, asi que lo normal es
+     * no acercarse: cada programa da las vueltas que pide.  Esto solo esta para
+     * que dos pases que se deshagan el trabajo mutuamente no dejen al
+     * compilador girando para siempre.
+     *
+     * Estuvo en 8, y ese numero SI decidia calidad: con el reparto por hilos
+     * los hechos interprocedurales tardan una vuelta mas en propagarse, 38 de
+     * los 440 ejemplos se quedaban cortos, y el binario salia hasta 21 KB mas
+     * grande -- callando, porque agotar el tope no se contaba.  Ahora se cuenta
+     * (@c truncaciones_punto_fijo): si esto se toca, el aviso es que hay dos
+     * pases peleandose, y la respuesta es mirarlos, no subir el numero. */
+    constexpr int kTopeAntiCuelgue = 64;
+    for (int pass = 0; pass < kTopeAntiCuelgue; ++pass) {
         // Atomico: lo escriben todos los hilos y solo se pone a true, nunca a
         // false, asi que basta un `store` relajado -- lo que importa es que se
         // vea al cerrar la vuelta, y ahi hay una barrera de por medio.
@@ -13310,6 +13330,17 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
          * y el gestor de analisis protege las suyas sin tener el cerrojo
          * puesto mientras calcula.  `VESTA_PARALELO=0` vuelve a fila de uno,
          * que es con lo que se comprueba que el `.velb` sale identico. */
+        {
+        /* El bucle en su propio ambito para que el cronometro mida SOLO el
+         * bucle: declarado suelto mediria hasta el final de la vuelta y se
+         * comeria el tramo cross-modulo que viene detras.
+         *
+         * (pared) en el nombre porque esto reparte entre hilos: lo que mide es
+         * reloj de pared de la region, mientras que los contadores por pase de
+         * mas abajo suman CPU de TODOS los hilos.  Restar unos de otros no
+         * significa nada, y confundirlos ya llevo a buscar 330 ms que no
+         * existian. */
+        CronoTramo crono_fn__("opt:bucle-por-funcion (pared)");
         for_each_function(mod, [&](IrFunction &fn) {
             if (fn.is_native) return; // no optimizar stubs nativos
 
@@ -13455,7 +13486,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 // O3: pasadas mas costosas (GVN, scheduling, etc.) -- TBD.
             }
         });
+        } // fin del ambito del cronometro del bucle
 
+        CronoTramo crono_cross__("opt:cross-modulo devirt+inline (pared)");
         /* Devirt + inline @ O2 al final de cada iteracion del fix-point.
          * Importante hacerlo despues de las per-function passes para que
          * la inline pass vea las callees OPTIMIZADAS (e.g. Counter.inc
@@ -13537,6 +13570,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         vueltas_punto_fijo() += 1;
         visitas_a_funcion() += static_cast<long long>(mod.functions.size());
         if (!any.load(std::memory_order_relaxed)) break; // punto fijo
+        /* Se agoto el tope y algo seguia cambiando: el optimizador se rinde a
+         * medias.  Queda anotado porque un binario peor sin ninguna senal es
+         * exactamente lo que costo descubrir esto. */
+        if (pass + 1 == kTopeAntiCuelgue) truncaciones_punto_fijo() += 1;
     }
 
     /* Stack-first (2a pasada): re-correr la promocion malloc->stack TRAS el

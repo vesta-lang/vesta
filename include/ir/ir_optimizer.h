@@ -143,10 +143,26 @@ struct TiempoPase {
     long long veces = 0; ///< llamadas (el punto fijo repite pasadas).
 };
 
-/// Vueltas del punto fijo, SUMADAS sobre todos los modulos (tope 8 por
-/// modulo).  Llegar al tope es un sintoma: o no converge, o dos pases se
-/// deshacen el trabajo mutuamente.
+/// Vueltas del punto fijo, SUMADAS sobre todos los modulos.  El bucle corta
+/// solo cuando ninguna funcion cambia, asi que este numero es lo que el codigo
+/// PIDIO, no una constante: hay programas que convergen en dos vueltas y otros
+/// que necesitan diez.
 long long &vueltas_punto_fijo();
+
+/**
+ * @brief Veces que el punto fijo se quedo SIN converger, agotando el tope.
+ *
+ * El tope existe para que un par de pases que se deshagan el trabajo no cuelgue
+ * al compilador; no es un mando para regular cuanto se optimiza.  Cuando se
+ * toca, el optimizador se rinde a medias y emite codigo peor -- y hasta que
+ * esto se conto, lo hacia EN SILENCIO: el compilador terminaba bien, el
+ * programa funcionaba, y nadie podia saber que le faltaban vueltas.  Lo
+ * descubrio una diferencia de 21 KB entre dos binarios que debian ser iguales.
+ *
+ * Distinto de cero significa que hay que mirarlo, no que haya que subir el
+ * tope.
+ */
+long long &truncaciones_punto_fijo();
 
 /// Visitas a una funcion (vueltas x funciones, sumado sobre los modulos).  Es
 /// el numero con el que TIENE que cuadrar la cuenta de llamadas de un pase que

@@ -63,24 +63,35 @@ unsigned compile_threads() {
     // Se lee UNA vez: consultar el entorno recorre su bloque entero, y esto se
     // pregunta en cada pase.
     static const unsigned n = [] {
-        /* OPT-IN, no opt-out.  El reparto funciona: el `.velb` sale identico
-         * al secuencial salvo la marca de tiempo de la cabecera, y el
-         * optimizador baja un 24%.
+        /* PUESTO, con `VESTA_PARALELO=0` para quitarlo.
          *
-         * El cuelgue que lo tenia bloqueado ya no esta, y no era lo que
-         * parecia: no habia estado compartido sin proteger en ningun pase,
-         * sino que se bloqueaba la propia INSTRUMENTACION.
-         * `util::tramos_medidos()` pedia la calibracion con el cerrojo del
-         * registro ya tomado, y medirla recorre la ruta real, que vuelve a
-         * pedir ese mismo cerrojo para dar de alta al hilo.  Solo se veia al
-         * repartir, porque en secuencial el hilo principal ya estaba dado de
-         * alta y no llegaba a pedirlo.  Ver el comentario de ese sitio.
+         * Nacio opt-in por un cuelgue, y el cuelgue no era lo que parecia: no
+         * habia estado compartido sin proteger en ningun pase, sino que se
+         * bloqueaba la propia INSTRUMENTACION.  `util::tramos_medidos()` pedia
+         * la calibracion con el cerrojo del registro ya tomado, y medirla
+         * recorre la ruta real, que vuelve a pedir ese mismo cerrojo para dar
+         * de alta al hilo.  Solo se veia al repartir, porque en secuencial el
+         * hilo principal ya estaba dado de alta y no llegaba a pedirlo.  Ver el
+         * comentario de ese sitio.
          *
-         * Sigue activandose a mano: un camino nuevo pasa a por defecto CUANDO
-         * pasa el corpus entero, no antes.  Al reves es como se entrega un
-         * compilador que se cuelga. */
+         * La condicion para encenderlo era pasar el corpus entero, y lo pasa:
+         * los 440 ejemplos dan un `.velb` identico BYTE A BYTE al secuencial, y
+         * los 41 comprobados en AOT tambien.
+         *
+         * Pero no lo pasaba solo: hubo que arreglar antes el tope del punto
+         * fijo del optimizador.  Repartido, los hechos interprocedurales tardan
+         * una vuelta mas en propagarse, y con el tope en 8 vueltas 38 de los
+         * 440 se quedaban sin converger y salian hasta 21 KB MAS GRANDES.  No
+         * era una carrera -- la salida era estable, solo peor -- y no se veia
+         * porque agotar el tope no se contaba.  Ver @c kTopeAntiCuelgue.
+         *
+         * Medido en un proyecto de 21 modulos: el bucle por funcion baja de
+         * ~443 ms a ~247 (1,8x) e `ir_optimize` de ~602 a ~417 (1,44x).
+         *
+         * Se deja la salida a mano porque comparar con el secuencial es como se
+         * comprueba que un pase nuevo no metio estado compartido. */
         const char *e = std::getenv("VESTA_PARALELO");
-        if (!e || e[0] == '0') return 1u;
+        if (e && e[0] == '0') return 1u;
         unsigned h = std::thread::hardware_concurrency();
         if (h <= 1) return 1u;
         // Uno menos que los nucleos: dejar la maquina sin margen hace que el
