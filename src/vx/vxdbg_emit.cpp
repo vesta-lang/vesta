@@ -627,24 +627,47 @@ bool emit_vxdbg_source(
 
     // Sin simbolos el grafo queda emitido, pero sin la forma de entrar en el
     // desde una direccion de ejecucion.
+    /* EL MAPA DEL MODULO: TODO lo que este modulo emitio, no solo lo que quedo
+     * ligado a un simbolo del artefacto.
+     *
+     * La diferencia no es un matiz.  El mapa del artefacto liga los simbolos
+     * EMITIDOS -- lo que tiene codigo --, mientras que la emision guarda ademas
+     * los tipos y sus miembros.  Con un `hola mundo` eso eran 5 nodos
+     * alcanzables de 29 guardados: el 80% del grafo no colgaba de ninguna raiz,
+     * asi que nadie podia llegar a el y una recogida se lo llevaba por delante.
+     *
+     * `res.ids` es justo esa lista -- los tipos emitidos por su clave -- y
+     * hasta ahora no la usaba nadie.  Guardandola como mapa del modulo, el
+     * grafo entero queda sostenido por su propio modulo, y su huella viaja al
+     * `.vxi` para que una compilacion que lo sirva desde cache lo cite sin
+     * re-emitir nada.
+     *
+     * Se aprovecha el almacen que esta emision ya tiene abierto: con seis mil
+     * modulos, abrir uno por modulo serian seis mil aperturas justo en el
+     * camino que se quiere barato. */
+    if (!res.ids.empty()) {
+        vxdbg::ArtifactMap module_map;
+        // Con `add` y no asignando la lista de golpe: el mapa se guarda
+        // ORDENADO por simbolo a proposito, para que quien lo lea pueda buscar
+        // sin construir nada, y saltarse eso al escribir dejaria un nodo que
+        // miente sobre su propia forma.
+        for (const auto &kv : res.ids)
+            module_map.add(kv.first, kv.second);
+        vxdbg::ContentHash mh;
+        if (vxdbg::store_node(store, module_map, mh)) stats.module_map = mh;
+    }
+
     if (!symbol_links.empty()) {
-        const vxdbg::ArtifactMap map =
-            link_symbols(symbol_links, res.ids, stats);
+        vxdbg::ArtifactMap map = link_symbols(symbol_links, res.ids, stats);
         stats.symbol_links = map.symbols;
+        /* El mapa del artefacto CITA al del modulo.  Sin esto solo sostiene lo
+         * que quedo ligado a un simbolo emitido, y todo lo demas que se guardo
+         * -- tipos, miembros -- se queda sin raiz: en un `hola mundo`, 5 nodos
+         * de 29.  Hace falta en los dos caminos, el de fichero suelto y el de
+         * proyecto, y este es el unico sitio comun a ambos. */
+        if (!stats.module_map.empty()) map.modules.push_back(stats.module_map);
         vxdbg::ContentHash h;
-        if (vxdbg::store_node(store, map, h)) {
-            stats.artifact_map = h;
-            /* El mismo nodo sirve de mapa DEL MODULO: es exactamente lo mismo,
-             * simbolo a entidad.  Su huella viaja al `.vxi`, y asi una
-             * compilacion que sirva este modulo desde cache lo cita en el mapa
-             * del artefacto sin re-emitir nada -- que es lo que hasta ahora
-             * dejaba el grafo de la stdlib sin nadie que lo sostuviera.
-             *
-             * Se aprovecha el almacen que esta emision ya tiene abierto: con
-             * seis mil modulos, abrir uno por modulo seria seis mil aperturas
-             * justo en el camino que se quiere barato. */
-            stats.module_map = h;
-        }
+        if (vxdbg::store_node(store, map, h)) stats.artifact_map = h;
     }
     // Los tramos de fuente: van en su propio nodo porque cambian con cualquier
     // reformateo mientras que los simbolos no, y compartir nodo obligaria a

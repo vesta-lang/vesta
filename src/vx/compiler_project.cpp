@@ -3872,17 +3872,19 @@ CompileResult compile_vx_project(
     if (!opts.ir_only) {
         vxdbg::ArtifactMap map;
         for (const auto &pm : work) {
-            if (!pm.vxdbg_symbols.empty()) {
-                // Se bajo en esta compilacion: sus simbolos estan aqui.
-                for (const auto &kv : pm.vxdbg_symbols)
-                    map.add(kv.first, kv.second);
-                continue;
-            }
-            /* Vino de su cache y no se bajo, asi que no tiene simbolos que
-             * aportar -- pero su `.vxi` trae la huella del mapa que dejo la
-             * compilacion que si lo bajo.  Citarla es lo que mantiene vivo su
-             * grafo: sin esto, el de la stdlib solo existia mientras siguiera
-             * por ahi el programa concreto que la compilo de cero. */
+            /* Dos cosas distintas, y las dos hacen falta.
+             *
+             * Los SIMBOLOS son para BUSCAR: dada una direccion que resolvio a
+             * un simbolo, dan su entidad.  Solo los tiene el modulo que se bajo
+             * en esta compilacion.
+             *
+             * El mapa del modulo es para SOSTENER: lleva todo lo que ese modulo
+             * emitio -- tipos y miembros incluidos, no solo lo que tiene codigo
+             * --, asi que citarlo es lo que impide que el grafo se quede sin
+             * raiz.  Lo traen los dos casos: el que se acaba de bajar y el que
+             * vino de su cache, porque la huella viaja en el `.vxi`. */
+            for (const auto &kv : pm.vxdbg_symbols)
+                map.add(kv.first, kv.second);
             const vxdbg::ContentHash mm{pm.vxi.vxdbg_map_lo,
                                         pm.vxi.vxdbg_map_hi};
             if (!mm.empty()) map.modules.push_back(mm);
