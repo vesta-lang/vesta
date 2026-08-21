@@ -17,11 +17,15 @@
 #include "util/serialize.h"
 
 #include <algorithm>
+
+#include <set>
 #include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <cerrno>
+#include <csignal>
 #include <unistd.h>
 #endif
 
@@ -56,6 +60,52 @@ bool leer_cuerpo(util::ByteReader &r, StoredNode &out) {
     return tam == 0 || r.raw(out.payload.data(), tam);
 }
 
+/**
+ * @brief Saca el identificador de proceso del nombre `p<pid>_<n>.vxpk`.
+ * @return 0 si el nombre no tiene esa forma.
+ */
+uint64_t pid_del_nombre(const std::string &ruta) {
+    const size_t barra = ruta.find_last_of("/\\");
+    const std::string hoja =
+        barra == std::string::npos ? ruta : ruta.substr(barra + 1);
+    if (hoja.size() < 2 || hoja[0] != 'p') return 0;
+    const size_t guion = hoja.find('_', 1);
+    if (guion == std::string::npos || guion == 1) return 0;
+    uint64_t pid = 0;
+    for (size_t i = 1; i < guion; ++i) {
+        if (hoja[i] < '0' || hoja[i] > '9') return 0;
+        pid = pid * 10 + static_cast<uint64_t>(hoja[i] - '0');
+    }
+    return pid;
+}
+
+/// Existe todavia ese proceso?
+bool proceso_vivo(uint64_t pid) {
+    if (pid == 0) return false;
+#ifdef _WIN32
+    /* SYNCHRONIZE es el permiso mas modesto que sirve para preguntar por su
+     * existencia; pedir mas podria fallar por permisos y hacernos creer que un
+     * proceso vivo no lo esta, que es el error caro. */
+    HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, static_cast<DWORD>(pid));
+    if (h == nullptr) {
+        // Si no se pudo abrir por algo que NO sea que no existe, se supone
+        // vivo: equivocarse hacia conservar no cuesta nada.
+        return GetLastError() != ERROR_INVALID_PARAMETER;
+    }
+    // Abrirlo no basta: un proceso terminado conserva su objeto mientras
+    // alguien lo tenga abierto, y responde al instante a la espera.
+    const bool vivo = WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+    CloseHandle(h);
+    return vivo;
+#else
+    // La senal 0 no se envia: solo comprueba que se PODRIA.  ESRCH es la unica
+    // respuesta que significa "no existe"; EPERM significa que existe y es de
+    // otro.
+    if (::kill(static_cast<pid_t>(pid), 0) == 0) return true;
+    return errno != ESRCH;
+#endif
+}
+
 /// Identificador del proceso, para que dos compilaciones a la vez no elijan el
 /// mismo nombre de paquete.
 uint64_t id_proceso() {
@@ -67,6 +117,14 @@ uint64_t id_proceso() {
 }
 
 } // namespace
+
+bool pack_writer_is_running(const std::string &pack_path) {
+    const uint64_t pid = pid_del_nombre(pack_path);
+    // Un nombre que no sigue la convencion no dice de quien es.  Como no se
+    // sabe, se conserva.
+    if (pid == 0) return true;
+    return proceso_vivo(pid);
+}
 
 PackNodeStore::PackNodeStore(std::string root,
                              std::unique_ptr<NodeStore> suelto, size_t tope)
@@ -119,14 +177,13 @@ bool PackNodeStore::put(const StoredNode &node) {
     return true;
 }
 
-bool PackNodeStore::volcar() {
-    std::map<ContentHash, StoredNode> lote;
-    {
-        std::lock_guard<std::mutex> g(mx_);
-        if (pendientes_.empty()) return true;
-        lote.swap(pendientes_);
-    }
-
+bool PackNodeStore::write_pack_(
+    const std::map<ContentHash, StoredNode> &lote, std::string &out_path,
+    std::vector<std::pair<ContentHash, Sitio>> &out_sites) {
+    /* El UNICO sitio donde se escribe el formato del paquete.  Lo usan el
+     * volcado normal y la compactacion: dos codigos que escriben el mismo
+     * formato acaban divergiendo, y aqui divergir significa que un paquete
+     * escrito por uno no lo sabe leer el otro. */
     util::ByteWriter w;
     w.u32(VXDBG_PACK_MAGIC);
     w.u32(VXDBG_PACK_VERSION);
@@ -162,15 +219,35 @@ bool PackNodeStore::volcar() {
 
     // Nombre propio de este proceso y volcado: dos compilaciones a la vez no
     // comparten fichero, asi que no hay nada que coordinar.
-    const std::string ruta = root_ + "/packs/p" + std::to_string(id_proceso()) +
-                             "_" + std::to_string(n_volcados_++) + ".vxpk";
-    if (!fs::write_file_atomic(ruta, w.bytes())) return false;
+    out_path = root_ + "/packs/p" + std::to_string(id_proceso()) + "_" +
+               std::to_string(n_volcados_++) + ".vxpk";
+    if (!fs::write_file_atomic(out_path, w.bytes())) return false;
+
+    out_sites.clear();
+    out_sites.reserve(sitios.size());
+    for (const auto &s : sitios)
+        out_sites.push_back(
+            {s.first, Sitio{out_path, s.second.first, s.second.second}});
+    return true;
+}
+
+bool PackNodeStore::volcar() {
+    std::map<ContentHash, StoredNode> lote;
+    {
+        std::lock_guard<std::mutex> g(mx_);
+        if (pendientes_.empty()) return true;
+        lote.swap(pendientes_);
+    }
+
+    std::string ruta;
+    std::vector<std::pair<ContentHash, Sitio>> sitios;
+    if (!write_pack_(lote, ruta, sitios)) return false;
 
     // Lo recien escrito pasa a poder leerse sin releer el fichero.
     {
         std::lock_guard<std::mutex> g(mx_);
         for (const auto &s : sitios)
-            indice_[s.first] = Sitio{ruta, s.second.first, s.second.second};
+            indice_[s.first] = s.second;
     }
     return true;
 }
@@ -290,7 +367,8 @@ PackNodeStore::preview_reclaim(const std::set<ContentHash> &vivas) const {
     return preview;
 }
 
-size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas) {
+size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas,
+                               const std::set<std::string> *tocables) {
     std::lock_guard<std::mutex> g(mx_);
     cargar_indices_();
 
@@ -307,6 +385,9 @@ size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas) {
     for (const auto &kv : total) {
         const std::string &ruta = kv.first;
         if (vivos[ruta] != 0) continue; // algo suyo se sigue usando: se queda
+        // Recien escrito: puede ser de una compilacion que aun no publico su
+        // raiz, y entonces parece muerto sin estarlo.
+        if (tocables && tocables->count(ruta) == 0) continue;
 
         /* Primero se renombra a un nombre muerto y despues se borra.  Si otro
          * proceso lo tiene abierto, termina su lectura tranquilamente sobre el
@@ -333,6 +414,158 @@ size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas) {
     return borrados;
 }
 
+PackNodeStore::CompactResult
+PackNodeStore::compact(const std::set<ContentHash> &vivas,
+                       size_t entries_per_pack,
+                       const std::set<std::string> *tocables) {
+    if (entries_per_pack == 0) entries_per_pack = 1;
+    std::lock_guard<std::mutex> g(mx_);
+    cargar_indices_();
+
+    CompactResult result;
+    namespace stdfs = std::filesystem;
+    std::error_code ec;
+
+    /* Las entradas vivas, agrupadas POR PAQUETE.  Es lo que permite leer cada
+     * paquete UNA vez: ir entrada por entrada llamando a `get` releeria el
+     * fichero entero por cada nodo -- 14.685 lecturas de los mismos 1.454
+     * ficheros. */
+    std::map<std::string, std::vector<std::pair<ContentHash, Sitio>>> por_paquete;
+    for (const auto &kv : indice_) {
+        if (vivas.count(kv.first) != 0)
+            por_paquete[kv.second.ruta].push_back(kv);
+        else
+            ++result.entries_dropped;
+    }
+
+    /* Todos los paquetes que hay AHORA, separando los que NO se pueden tocar:
+     * los recien escritos pueden ser de una compilacion en vuelo que todavia no
+     * ha publicado su raiz.  Esos se quedan tal cual -- ni se leen ni se
+     * reescriben ni se borran -- y ya los cogera la siguiente recogida. */
+    std::vector<std::string> viejos;
+    std::set<std::string> protegidos;
+    for (const auto &ent : stdfs::directory_iterator(root_ + "/packs", ec)) {
+        if (ec) break;
+        const std::string ruta = ent.path().string();
+        if (ruta.size() < 5 || ruta.compare(ruta.size() - 5, 5, ".vxpk") != 0)
+            continue;
+        if (tocables && tocables->count(ruta) == 0) {
+            protegidos.insert(ruta);
+            continue;
+        }
+        viejos.push_back(ruta);
+        const auto tam = ent.file_size(ec);
+        if (!ec) result.bytes_before += static_cast<uint64_t>(tam);
+        ec.clear();
+    }
+    ec.clear();
+    result.packs_before = viejos.size();
+    if (por_paquete.empty()) return result; // nada vivo que reescribir
+
+    const util::DirectoryReader lector(root_ + "/packs");
+    std::map<ContentHash, StoredNode> lote;
+    std::vector<std::string> nuevos;
+    /* El indice NUEVO se va construyendo aqui.  `write_pack_` ya dice donde
+     * quedo cada nodo, asi que tirarlo y releer los paquetes despues seria
+     * rehacer un trabajo que ya esta hecho. */
+    std::map<ContentHash, Sitio> indice_nuevo;
+
+    // Vuelca el lote acumulado y lo deja listo para el siguiente.
+    const auto volcar_lote = [&]() -> bool {
+        if (lote.empty()) return true;
+        std::string ruta;
+        std::vector<std::pair<ContentHash, Sitio>> sitios;
+        if (!write_pack_(lote, ruta, sitios)) return false;
+        nuevos.push_back(ruta);
+        for (auto &s : sitios)
+            indice_nuevo.emplace(s.first, std::move(s.second));
+        result.entries_kept += lote.size();
+        lote.clear();
+        return true;
+    };
+
+    std::set<std::string> ilegibles;
+    for (const auto &kv : por_paquete) {
+        // Intocable: lo suyo se queda donde esta.
+        if (protegidos.count(kv.first) != 0) continue;
+        std::vector<uint8_t> bytes;
+        const std::string hoja =
+            stdfs::path(kv.first).filename().string();
+        if (!(lector.ok() ? lector.read_file(hoja, bytes)
+                          : util::read_whole_file(kv.first, bytes))) {
+            /* No se deja leer.  Se salta en vez de abortar, porque un solo
+             * paquete estropeado no puede dejar el almacen sin compactar para
+             * siempre.  Pero se APUNTA, y no se borra despues: sus entradas
+             * vivas no se han copiado a ningun sitio, asi que borrarlo seria
+             * perderlas.  Si el fallo era pasajero -- otro proceso lo tenia
+             * abierto -- la siguiente recogida lo cogera bien. */
+            ilegibles.insert(kv.first);
+            continue;
+        }
+        for (const auto &entrada : kv.second) {
+            const Sitio &sitio = entrada.second;
+            if (sitio.offset + sitio.tam > bytes.size()) continue;
+            util::ByteReader r(bytes);
+            r.seek(static_cast<size_t>(sitio.offset));
+            StoredNode nodo;
+            if (!r.ok() || !leer_cuerpo(r, nodo)) continue;
+            nodo.header.hash = entrada.first;
+            lote.emplace(entrada.first, std::move(nodo));
+            if (lote.size() >= entries_per_pack && !volcar_lote()) {
+                result.ok = false;
+                return result;
+            }
+        }
+    }
+    if (!volcar_lote()) {
+        result.ok = false;
+        return result;
+    }
+    result.packs_after = nuevos.size();
+
+    /* Los nuevos ya estan publicados: a partir de aqui borrar los viejos solo
+     * quita copias de sobra.  Se renombra antes de borrar por lo mismo que en
+     * `reclamar`: en Windows no se puede borrar lo que otro tiene abierto, y un
+     * borrado a medias seria peor que ninguno. */
+    for (const auto &ruta : viejos) {
+        if (ilegibles.count(ruta) != 0) continue; // lo suyo no se copio
+        const std::string muerto = ruta + ".muerto";
+        stdfs::rename(ruta, muerto, ec);
+        if (ec) {
+            ec.clear();
+            continue;
+        }
+        stdfs::remove(muerto, ec);
+        ec.clear();
+        ++result.packs_removed;
+    }
+    for (const auto &ruta : nuevos) {
+        const auto tam = stdfs::file_size(ruta, ec);
+        if (!ec) result.bytes_after += static_cast<uint64_t>(tam);
+        ec.clear();
+    }
+
+    /* El indice se SUSTITUYE por el que se acaba de construir, no se tira: ya
+     * describe el disco exactamente, entrada por entrada.  Vaciarlo obligaria
+     * a releer los paquetes en la siguiente consulta para averiguar lo que
+     * aqui ya se sabia.
+     *
+     * Lo que se queda fuera es justo lo que debe: las entradas muertas, que ya
+     * no estan en ningun paquete. */
+    if (!ilegibles.empty() || !protegidos.empty()) {
+        /* Quedan paquetes que no se procesaron -- protegidos por recientes, o
+         * ilegibles --, asi que el indice nuevo no describe todo el disco: esos
+         * siguen ahi con entradas que no estan en el.  Se rehace leyendo, que
+         * es lo unico que da la foto completa. */
+        indice_.clear();
+        indices_leidos_ = false;
+    } else {
+        indice_.swap(indice_nuevo);
+        indices_leidos_ = true;
+    }
+    return result;
+}
+
 bool PackNodeStore::get(ContentHash hash, StoredNode &out) const {
     Sitio sitio;
     {
@@ -352,12 +585,17 @@ bool PackNodeStore::get(ContentHash hash, StoredNode &out) const {
         sitio = it->second;
     }
 
+    /* SOLO el cuerpo del nodo, no el paquete entero.  Leerlo entero funcionaba
+     * mientras los paquetes eran de 12 KiB, pero desde que se compactan un
+     * paquete son megabytes: traerselo por cada nodo son 2 MiB tirados cada
+     * vez, y recorrer el grafo entero pasaba a mover decenas de gigabytes.
+     * Aqui el tramo es una porcion minuscula de algo grande, que es
+     * exactamente cuando leer por tramos compensa. */
     std::vector<uint8_t> bytes;
-    if (!fs::read_file_bytes(sitio.ruta, bytes)) return false;
-    if (sitio.offset + sitio.tam > bytes.size()) return false;
+    if (!util::read_file_range(sitio.ruta, sitio.offset, sitio.tam, bytes))
+        return false;
     util::ByteReader r(bytes);
-    r.seek(static_cast<size_t>(sitio.offset));
-    if (!r.ok() || !leer_cuerpo(r, out)) return false;
+    if (!leer_cuerpo(r, out)) return false;
     out.header.hash = hash;
     return true;
 }

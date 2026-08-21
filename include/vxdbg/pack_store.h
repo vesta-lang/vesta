@@ -88,6 +88,41 @@ static constexpr uint32_t VXDBG_PACK_VERSION = 1;
  *
  * Se le pasa el almacen suelto al que delegar.  No lo sustituye: lo respalda.
  */
+/**
+ * @brief Sigue compilando el proceso que escribio este paquete?
+ *
+ * QUE PROBLEMA RESUELVE, porque no es una precaucion de mas y esta visto
+ * perder datos por no tenerla.  Un paquete se escribe ANTES de que se publique
+ * la raiz que lo mantiene vivo -- la raiz sale del artefacto final, que
+ * mientras tanto no existe --, asi que entre lo uno y lo otro sus nodos
+ * PARECEN muertos.  Con ocho compilaciones a la vez, la primera que termina
+ * recoge y se lleva por delante lo que las otras siete acaban de escribir.
+ *
+ * POR QUE POR PROCESO Y NO POR FECHA.  Una gracia por antiguedad seria una
+ * suposicion -- "ninguna compilacion tarda mas de X" -- y ademas ataria el
+ * almacen al reloj: una cache copiada de otra maquina o restaurada de una
+ * integracion continua traeria fechas que no dicen nada de ella, y se
+ * comportaria distinta por eso.  Todo este subsistema se identifica por
+ * CONTENIDO; meter el tiempo por la puerta de atras lo estropea.
+ *
+ * Esto en cambio es exacto y no supone nada: el nombre del paquete ya lleva el
+ * identificador de quien lo escribio -- `p<pid>_<n>.vxpk`, puesto asi por este
+ * mismo motivo de concurrencia --, y basta preguntar al sistema si ese proceso
+ * sigue ahi.  Si sigue, esta compilando.  Si no, termino: o publico su raiz o
+ * ya no lo hara nunca, y en los dos casos se puede decidir sobre sus nodos.
+ *
+ * En una cache traida de fuera ningun identificador correspondera a un
+ * compilador vivo, que es justo lo que se quiere: todo pasa a ser recogible.
+ *
+ * El identificador se puede reutilizar, y por eso el error solo puede caer del
+ * lado bueno: si toca a otro proceso vivo, se conserva un paquete que se podia
+ * haber borrado y la siguiente recogida lo pilla.
+ *
+ * @param pack_path Ruta del paquete.
+ * @return @c true si conviene no tocarlo.  Ante cualquier duda, @c true.
+ */
+bool pack_writer_is_running(const std::string &pack_path);
+
 class PackNodeStore : public NodeStore {
   public:
     /**
@@ -135,7 +170,14 @@ class PackNodeStore : public NodeStore {
      *       proposito: si algun dia quedan muchos paquetes medio vivos, ese
      *       sera el momento de compactar.
      */
-    size_t reclamar(const std::set<ContentHash> &vivas);
+    /**
+     * @param vivas Las entradas que siguen alcanzables.
+     * @param tocables Los UNICOS paquetes que se pueden borrar, o @c nullptr
+     *        para no poner limite.  Ver @ref compact para por que esto lo
+     *        decide quien llama y no esta clase.
+     */
+    size_t reclamar(const std::set<ContentHash> &vivas,
+                    const std::set<std::string> *tocables = nullptr);
 
     /// Que pasaria al reclamar, sin tocar el disco.
     struct ReclaimPreview {
@@ -159,6 +201,53 @@ class PackNodeStore : public NodeStore {
      */
     ReclaimPreview preview_reclaim(const std::set<ContentHash> &vivas) const;
 
+    /// Lo que hizo una compactacion.
+    struct CompactResult {
+        bool ok = true;
+        size_t packs_before = 0;
+        size_t packs_after = 0;      ///< los que escribio
+        size_t packs_removed = 0;    ///< los viejos que borro
+        size_t entries_kept = 0;     ///< entradas vivas reescritas
+        size_t entries_dropped = 0;  ///< las muertas que se quedaron fuera
+        uint64_t bytes_before = 0;
+        uint64_t bytes_after = 0;
+    };
+
+    /**
+     * @brief Reescribe las entradas vivas en pocos paquetes llenos.
+     *
+     * @ref reclamar solo borra un paquete cuando TODAS sus entradas murieron, y
+     * eso deja de bastar en cuanto los paquetes quedan medio vivos: uno con una
+     * sola entrada viva mantiene ocupadas las otras cincuenta, y sobre todo
+     * mantiene un fichero que hay que ABRIR en cada compilacion -- que es lo
+     * caro, ~20 us cada uno.  Medido en este arbol: 78.348 entradas indexadas
+     * con solo 14.685 vivas, y aun asi 1.226 paquetes irreclamables con un 78%
+     * de basura dentro.  Justo el caso que esta clase dejo apuntado como
+     * disparador para compactar.
+     *
+     * ORDEN, Y ES LO QUE LA HACE SEGURA ANTE UNA CAIDA: primero se escriben
+     * TODOS los paquetes nuevos, cada uno con su renombrado atomico, y solo
+     * despues se borran los viejos.  Si el proceso muere en medio quedan las
+     * dos copias, y eso no rompe nada porque la clave ES el contenido: al leer
+     * los indices gana el primero que aparece y los dos dicen lo mismo.  Al
+     * reves -- borrar antes de escribir -- se perderia el cache entero.
+     *
+     * @param vivas Las entradas que se conservan.  Igual que en @ref reclamar,
+     *        el criterio lo pone quien llama.
+     * @param entries_per_pack Cuantas entradas como mucho por paquete nuevo.
+     * @param tocables Los UNICOS paquetes que se pueden tocar, o @c nullptr
+     *        para no poner limite.  Lo decide quien llama porque el orden
+     *        importa y esta clase no lo puede garantizar sola: el conjunto de
+     *        paquetes tocables hay que fijarlo ANTES de leer las raices.  Un
+     *        proceso que muere DESPUES de esa lectura publico su raiz sin que
+     *        nadie la viera, y si se le tocara el paquete su raiz quedaria
+     *        apuntando al vacio.  Ver @ref pack_writer_is_running.
+     * @return El recuento de lo hecho.
+     */
+    CompactResult compact(const std::set<ContentHash> &vivas,
+                          size_t entries_per_pack = 8192,
+                          const std::set<std::string> *tocables = nullptr);
+
   private:
     /// Donde vive un nodo dentro de un paquete ya escrito.
     struct Sitio {
@@ -168,6 +257,21 @@ class PackNodeStore : public NodeStore {
     };
 
     void cargar_indices_() const; ///< lee los indices de los paquetes, una vez
+
+    /**
+     * @brief Escribe UN paquete con @p lote y lo publica.
+     *
+     * El unico sitio donde se escribe el formato: lo comparten el volcado
+     * normal y la compactacion.  No toca el indice ni el cerrojo; de eso se
+     * encarga quien llame.
+     *
+     * @param lote      Que nodos van dentro.
+     * @param out_path  Recibe la ruta del paquete escrito.
+     * @param out_sites Recibe donde quedo cada nodo.
+     */
+    bool write_pack_(const std::map<ContentHash, StoredNode> &lote,
+                     std::string &out_path,
+                     std::vector<std::pair<ContentHash, Sitio>> &out_sites);
 
     std::string root_;
     std::unique_ptr<NodeStore> suelto_;

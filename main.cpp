@@ -62,6 +62,7 @@
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "runtime/exception_runtime.h" // codigo de salida tras un fallo
 #include "vx/vxdbg_emit.h"             // publicar el grafo del artefacto
+#include "vxdbg/maintenance.h"         // recoger el almacen solo
 #include "vxdbg/store_cli.h"           // subcomando `vm vxdbg`
 #include "vx/type_checker.h"           // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
@@ -4884,6 +4885,19 @@ int main(int argc, char *argv[]) {
             vx::publish_vxdbg_artifact(out_prefix + ".velb",
                                        cr.vxdbg_artifact_map, cr.vxdbg_span_map,
                                        copts.vxdbg_dir);
+
+            /* Y AQUI, nunca antes: el almacen se recoge solo cuando le hace
+             * falta, pero los nodos que esta compilacion acaba de emitir no
+             * estan vivos hasta la publicacion de arriba.  Recoger en medio los
+             * daria por muertos y los borraria -- precisamente los del programa
+             * que se acaba de compilar.
+             *
+             * Cuando no toca recoger, esto solo cuenta los ficheros de un
+             * directorio; el recorrido, que es lo que cuesta, unicamente ocurre
+             * al pasarse del umbral (~1 de cada 500 compilaciones). */
+            vxdbg::maintain_store(copts.vxdbg_dir.empty()
+                                      ? vx::default_vxdbg_dir()
+                                      : copts.vxdbg_dir);
         }
 
         //  M5.B: persistir el .velb final al project cache si

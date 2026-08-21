@@ -141,6 +141,42 @@ bool open_and_read(POBJECT_ATTRIBUTES attrs, std::vector<uint8_t> &out) {
     return ok;
 }
 
+/// Lee @p count bytes desde @p offset de un fichero ya descrito.
+bool open_and_read_range(POBJECT_ATTRIBUTES attrs, uint64_t offset,
+                         size_t count, std::vector<uint8_t> &out) {
+    IO_STATUS_BLOCK io;
+    HANDLE handle = nullptr;
+    if (NtOpenFile(&handle, kFileReadData | SYNCHRONIZE, attrs, &io,
+                   FILE_SHARE_READ | FILE_SHARE_WRITE,
+                   kSynchronousIoNonAlert | kNonDirectoryFile) < 0 ||
+        handle == nullptr)
+        return false;
+
+    out.resize(count);
+    size_t done = 0;
+    bool ok = true;
+    while (done < count) {
+        const size_t left = count - done;
+        const ULONG chunk = left > 0x40000000u ? 0x40000000u
+                                               : static_cast<ULONG>(left);
+        LARGE_INTEGER pos;
+        pos.QuadPart = static_cast<LONGLONG>(offset + done);
+        if (NtReadFile(handle, nullptr, nullptr, nullptr, &io,
+                       out.data() + done, chunk, &pos, nullptr) < 0 ||
+            io.Information == 0) {
+            ok = false;
+            break;
+        }
+        done += io.Information;
+    }
+    NtClose(handle);
+    if (!ok || done != count) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
 /// Rellena un UNICODE_STRING que apunta a @p s.  No copia: @p s tiene que
 /// seguir viva mientras se use.
 void fill_name(UNICODE_STRING &name, const std::wstring &s) {
@@ -184,6 +220,40 @@ bool read_whole_file(const std::string &path, std::vector<uint8_t> &out) {
     // Que el camino corto falle no significa que el fichero no este: puede ser
     // una ruta que la traduccion no cubre.  Se reintenta por el largo.
     return read_via_win32(path, out);
+}
+
+bool read_file_range(const std::string &path, uint64_t offset, size_t count,
+                     std::vector<uint8_t> &out) {
+    out.clear();
+    if (count == 0) return true;
+    std::wstring nt_path;
+    if (to_nt_path(path, nt_path)) {
+        UNICODE_STRING name;
+        fill_name(name, nt_path);
+        OBJECT_ATTRIBUTES attrs;
+        InitializeObjectAttributes(&attrs, &name, OBJ_CASE_INSENSITIVE, nullptr,
+                                   nullptr);
+        if (open_and_read_range(&attrs, offset, count, out)) return true;
+    }
+
+    // Respaldo por el camino largo, igual que en read_whole_file.
+    HANDLE handle =
+        CreateFileA(path.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    out.resize(count);
+    OVERLAPPED ov;
+    ZeroMemory(&ov, sizeof(ov));
+    ov.Offset = static_cast<DWORD>(offset & 0xFFFFFFFFull);
+    ov.OffsetHigh = static_cast<DWORD>(offset >> 32);
+    DWORD got = 0;
+    const bool ok = ReadFile(handle, out.data(),
+                             static_cast<DWORD>(count), &got, &ov) != 0 &&
+                    got == count;
+    CloseHandle(handle);
+    if (!ok) out.clear();
+    return ok;
 }
 
 DirectoryReader::DirectoryReader(const std::string &dir_path)
@@ -285,6 +355,35 @@ bool read_whole_file(const std::string &path, std::vector<uint8_t> &out) {
     const int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) return false;
     return read_all_and_close(fd, out);
+}
+
+bool read_file_range(const std::string &path, uint64_t offset, size_t count,
+                     std::vector<uint8_t> &out) {
+    out.clear();
+    if (count == 0) return true;
+    const int fd = ::open(path.c_str(), O_RDONLY);
+    if (fd < 0) return false;
+
+    out.resize(count);
+    size_t done = 0;
+    while (done < count) {
+        // `pread` lee en una posicion sin mover el cursor ni pedir un `lseek`
+        // aparte, que es justo lo que hace falta aqui.
+        const ssize_t got = ::pread(fd, out.data() + done, count - done,
+                                    static_cast<off_t>(offset + done));
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (got == 0) break; // se acabo el fichero antes de lo pedido
+        done += static_cast<size_t>(got);
+    }
+    ::close(fd);
+    if (done != count) {
+        out.clear();
+        return false;
+    }
+    return true;
 }
 
 DirectoryReader::DirectoryReader(const std::string &dir_path) : fd_(-1) {

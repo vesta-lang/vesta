@@ -13,12 +13,15 @@
 #include "vxdbg/store_cli.h"
 
 #include "vx/vxdbg_emit.h"
+#include "vxdbg/maintenance.h"
 #include "vxdbg/pack_store.h"
 #include "vxdbg/reachable.h"
 
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <set>
+#include <vector>
 #include <string>
 
 namespace vxdbg {
@@ -86,9 +89,47 @@ const char *reason_text(ReachStatus st) {
 }
 
 void print_usage() {
-    std::printf("uso: vm vxdbg <orden> [carpeta]\n\n"
-                "  status   Que hay en el almacen y cuanto sobra.  No borra.\n\n"
-                "La carpeta por defecto es la del cache del proyecto.\n");
+    std::printf(
+        "uso: vm vxdbg <orden> [carpeta]\n\n"
+        "  status   Que hay en el almacen y cuanto sobra.  No borra.\n"
+        "  gc       Borra lo que ya no se usa y junta el resto.  SI borra.\n\n"
+        "La carpeta por defecto es la del cache del proyecto.\n");
+}
+
+int run_gc(const std::string &dir) {
+    /* La MISMA rutina que corre sola al compilar, forzada.  Dos codigos que
+     * recogen el almacen acabarian recogiendo cosas distintas, y el que se
+     * usa a diario -- el automatico -- seria justo el que nadie prueba a
+     * mano. */
+    const MaintenanceResult r = maintain_store(dir, 0, /*force=*/true);
+    switch (r.status) {
+    case MaintenanceStatus::NoStore:
+        std::printf("no hay almacen en %s\n", dir.c_str());
+        return 0;
+    case MaintenanceStatus::NoRoots:
+        std::printf("sin raices publicadas: no se toca nada.\n"
+                    "  Que no haya raices no quiere decir que no haya nada "
+                    "vivo; quiere decir que no se sabe.\n");
+        return 1;
+    case MaintenanceStatus::TraversalIncomplete:
+        std::printf("no se pudo saber que vive; no se toca nada.\n"
+                    "  `vm vxdbg status` dice que lo bloquea.\n");
+        return 1;
+    case MaintenanceStatus::WriteFailed:
+        std::printf("fallo al escribir los paquetes nuevos; los viejos se "
+                    "quedan como estaban.\n");
+        return 1;
+    case MaintenanceStatus::BelowThreshold:
+    case MaintenanceStatus::Ran:
+        break;
+    }
+    std::printf("paquetes borrados enteros: %zu\n", r.packs_removed);
+    std::printf("compactado: %zu paquetes -> %zu   (%.1f MiB -> %.1f MiB)\n",
+                r.packs_before, r.packs_after, r.bytes_before / 1048576.0,
+                r.bytes_after / 1048576.0);
+    std::printf("  entradas conservadas %zu, descartadas %zu\n", r.entries_kept,
+                r.entries_dropped);
+    return 0;
 }
 
 int run_status(const std::string &dir) {
@@ -165,6 +206,7 @@ int run(int argc, char **argv) {
     const std::string dir = argc >= 3 ? argv[2] : vx::default_vxdbg_dir();
 
     if (order == "status") return run_status(dir);
+    if (order == "gc") return run_gc(dir);
 
     std::printf("orden desconocida: %s\n\n", order.c_str());
     print_usage();

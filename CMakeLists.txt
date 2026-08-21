@@ -303,6 +303,7 @@ add_library(vxdbg_lib STATIC
     src/util/serialize.cpp
     src/vxdbg/store.cpp
     src/vxdbg/pack_store.cpp
+    src/vxdbg/maintenance.cpp
     src/vxdbg/reachable.cpp
     src/vxdbg/lowering_map.cpp
     src/vxdbg/backend_meta.cpp

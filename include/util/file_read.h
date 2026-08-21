@@ -63,6 +63,27 @@ namespace util {
 bool read_whole_file(const std::string &path, std::vector<uint8_t> &out);
 
 /**
+ * @brief Lee SOLO un tramo de un fichero.
+ *
+ * CUANDO USAR ESTO Y CUANDO NO, que es lo que se aprendio midiendo: para un
+ * fichero PEQUENO -- del tamano de unas pocas paginas -- leer un tramo NO
+ * compensa, y leer varios sale peor que traerse el fichero entero.  Compensa
+ * cuando el fichero es grande y el tramo pequeno: sacar 500 bytes de un
+ * paquete de 2 MiB leyendolo entero es tirar 2 MiB por cada nodo.
+ *
+ * Regla practica: si el tramo es la mayor parte del fichero, @ref
+ * read_whole_file; si es una porcion menor de algo grande, esto.
+ *
+ * @param path   Ruta.
+ * @param offset Desde donde.
+ * @param count  Cuantos bytes.
+ * @param out    Destino; vacio si no se pudieron leer los @p count.
+ * @return true solo si se leyo el tramo COMPLETO.
+ */
+bool read_file_range(const std::string &path, uint64_t offset, size_t count,
+                     std::vector<uint8_t> &out);
+
+/**
  * @brief Un directorio abierto UNA vez, para leer varios de sus ficheros.
  *
  * Cada fichero se abre dando solo su nombre de hoja y el descriptor del
