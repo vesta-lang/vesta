@@ -17,6 +17,7 @@
 #include "vxdbg/roots.h"
 #include "vxdbg/source_meta.h"
 
+#include <algorithm>
 #include <deque>
 #include <map>
 #include <utility>
@@ -142,7 +143,7 @@ size_t read_published_roots(const std::string &cache_dir,
 ReachReport compute_live_set(const NodeStore &store,
                              const std::vector<ContentHash> &roots,
                              std::set<ContentHash> &out_live,
-                             size_t max_dangling_samples) {
+                             bool track_dangling_sources) {
     ReachReport report;
     report.roots_read = roots.size();
     std::deque<ContentHash> pending;
@@ -159,8 +160,11 @@ ReachReport compute_live_set(const NodeStore &store,
      * casi nunca la mire nadie.  Con @p max_dangling_samples a cero la tabla se
      * queda vacia, no se toca en el bucle, y el recorrido cuesta exactamente lo
      * que costaba antes de que esto existiera. */
-    const bool anotar_procedencia = max_dangling_samples > 0;
+    const bool anotar_procedencia = track_dangling_sources;
     std::map<ContentHash, std::pair<ContentHash, NodeKind>> quien_cita;
+    /// Cuantas ausentes cita cada uno, para poder decir DONDE esta el problema
+    /// en vez de dar ejemplos sueltos.
+    std::map<ContentHash, std::pair<NodeKind, size_t>> citantes;
 
     std::vector<ContentHash> refs;
     while (!pending.empty()) {
@@ -174,22 +178,27 @@ ReachReport compute_live_set(const NodeStore &store,
              * entidad puede citar su funcion intermedia y esos nodos hoy no se
              * emiten.  Se cuenta para que se vea. */
             ++report.dangling_refs;
-            if (anotar_procedencia &&
-                report.dangling_samples.size() < max_dangling_samples) {
+            if (anotar_procedencia) {
                 auto it = quien_cita.find(current);
-                if (it != quien_cita.end())
-                    report.dangling_samples.push_back(
-                        {it->second.first, it->second.second, current});
-                else
-                    // Sin procedencia: era una raiz, y a esas no las cita nadie
-                    // del grafo -- vienen del apuntador, que esta fuera de el.
-                    report.dangling_samples.push_back(
-                        {ContentHash{}, NodeKind::Unknown, current});
+                if (it == quien_cita.end()) {
+                    /* Sin procedencia en el grafo: era una RAIZ.  Es otra
+                     * averia distinta -- un artefacto que ya no se puede
+                     * explicar, en vez de un nodo incompleto -- y por eso se
+                     * cuenta aparte. */
+                    ++report.dangling_from_roots;
+                } else {
+                    auto &e = citantes[it->second.first];
+                    e.first = it->second.second;
+                    ++e.second;
+                }
             }
             out_live.erase(current);
             continue;
         }
         ++report.nodes_reached;
+        // El desglose por genero solo si se esta mirando; en el camino de la
+        // compilacion esta rama no se toca.
+        if (anotar_procedencia) ++report.reached_by_kind[node.header.kind];
 
         refs.clear();
         const ReachStatus st = collect_references(node, refs);
@@ -212,6 +221,21 @@ ReachReport compute_live_set(const NodeStore &store,
                                        std::make_pair(current, node.header.kind));
             }
         }
+    }
+
+    if (anotar_procedencia) {
+        report.dangling_by_citer.reserve(citantes.size());
+        for (const auto &kv : citantes)
+            report.dangling_by_citer.push_back(
+                {kv.first, kv.second.first, kv.second.second});
+        // De mas a menos: quien mas cita ausentes es donde mirar primero.  A
+        // igualdad, por huella, para que dos corridas den el mismo orden.
+        std::sort(report.dangling_by_citer.begin(),
+                  report.dangling_by_citer.end(),
+                  [](const DanglingSource &a, const DanglingSource &b) {
+                      if (a.count != b.count) return a.count > b.count;
+                      return a.from < b.from;
+                  });
     }
     return report;
 }

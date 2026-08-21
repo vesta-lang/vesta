@@ -40,6 +40,7 @@
 #include "vxdbg/store.h"
 
 #include <cstddef>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -54,24 +55,19 @@ enum class ReachStatus {
 };
 
 /**
- * @brief Una referencia a un nodo que no esta, y QUIEN la hace.
+ * @brief Un nodo que cita a otros que no estan, y CUANTOS.
  *
- * El recorrido siempre supo las dos mitades y solo se quedaba con la cuenta.
- * Sin el que cita, un "1.033 referencias sin destino" no se puede investigar
- * mas que recompilando el binario con cambios temporales para mirar -- que es
- * exactamente como se descartaron tres hipotesis falsas antes de que esto
- * existiera.
+ * Se agrega por quien cita, no se guarda una muestra de referencias sueltas.
+ * La diferencia importa al mirarlo: veinticuatro ejemplos de un total de mil no
+ * dicen nada, mientras que "este mapa cita 93 que faltan" senala el sitio a la
+ * primera.  Y casi siempre son pocos citantes con muchas cada uno, que es
+ * justo el patron que una muestra al azar esconde.
  */
-struct DanglingRef {
-    ContentHash from;      ///< quien cita
+struct DanglingSource {
+    ContentHash from;                        ///< quien cita
     NodeKind from_kind = NodeKind::Unknown;
-    ContentHash missing;   ///< lo citado, que no esta
+    size_t count = 0;                        ///< cuantas ausentes cita
 };
-
-/// Cuantas referencias colgadas se guardan como muestra.  Se acotan porque son
-/// para MIRAR: con diez ya se ve el patron, y quedarselas todas convertiria un
-/// recorrido en un volcado.
-constexpr size_t kMaxDanglingSamples = 24;
 
 /// Lo que un recorrido encontro.  Son DATOS: quien lo pida decide que decir.
 struct ReachReport {
@@ -83,8 +79,20 @@ struct ReachReport {
     size_t roots_read = 0;    ///< apuntadores de raiz leidos
     size_t nodes_reached = 0; ///< nodos distintos alcanzados
     size_t dangling_refs = 0; ///< referencias a nodos que no estan
-    /// Unas cuantas de esas, con quien las hace.  Ver @ref kMaxDanglingSamples.
-    std::vector<DanglingRef> dangling_samples;
+
+    /* Lo que sigue solo se rellena si se pidio seguir la procedencia.  Separar
+     * las de las RAICES de las del grafo no es un detalle: una raiz colgada
+     * significa un artefacto que ya no se puede explicar, y una del grafo
+     * significa un nodo incompleto.  Son dos averias distintas y mezclarlas en
+     * un solo numero fue lo que impidio ver cual habia. */
+
+    /// Colgadas cuyo origen es un apuntador de raiz, no un nodo del grafo.
+    size_t dangling_from_roots = 0;
+    /// Los nodos que citan ausentes, de mas a menos.
+    std::vector<DanglingSource> dangling_by_citer;
+    /// Cuantos nodos alcanzados de cada genero.  Es lo que contesta "y esto que
+    /// contiene", que en un almacen de huellas no se puede saber mirandolo.
+    std::map<NodeKind, size_t> reached_by_kind;
 };
 
 /**
@@ -119,19 +127,19 @@ size_t read_published_roots(const std::string &cache_dir,
  * @param roots Por donde se entra.
  * @param out_live Recibe las huellas vivas.  Solo es de fiar si el estado
  *        devuelto es @c Ok; con cualquier otro NO debe usarse para reclamar.
- * @param max_dangling_samples Cuantas referencias colgadas guardar CON su
- *        procedencia.  Cero -- lo normal -- no guarda ninguna y no cuesta nada:
- *        este recorrido tambien corre durante la compilacion, dentro del
- *        mantenimiento del almacen, y apuntar quien cita a quien exige una
- *        tabla del tamano del grafo.  Cobrarsela a toda compilacion para que
- *        casi nunca la mire nadie seria justo lo que este proyecto evita.  Se
- *        pide solo desde las ordenes que estan para mirar.
+ * @param track_dangling_sources Si apuntar QUIEN cita a lo que no esta.
+ *        Apagado -- lo normal -- no cuesta nada: este recorrido tambien corre
+ *        durante la compilacion, dentro del mantenimiento del almacen, y
+ *        apuntar la procedencia exige una tabla del tamano del grafo.
+ *        Cobrarsela a toda compilacion para que casi nunca la mire nadie seria
+ *        justo lo que este proyecto evita.  Lo piden solo las ordenes que estan
+ *        para mirar.
  * @return El informe del recorrido.
  */
 ReachReport compute_live_set(const NodeStore &store,
                              const std::vector<ContentHash> &roots,
                              std::set<ContentHash> &out_live,
-                             size_t max_dangling_samples = 0);
+                             bool track_dangling_sources = false);
 
 } // namespace vxdbg
 
