@@ -90,10 +90,107 @@ const char *reason_text(ReachStatus st) {
 
 void print_usage() {
     std::printf(
-        "uso: vm vxdbg <orden> [carpeta]\n\n"
-        "  status   Que hay en el almacen y cuanto sobra.  No borra.\n"
-        "  gc       Borra lo que ya no se usa y junta el resto.  SI borra.\n\n"
+        "uso: vm vxdbg <orden> [argumento] [carpeta]\n\n"
+        "  status          Que hay en el almacen y cuanto sobra.  No borra.\n"
+        "  gc              Borra lo que ya no se usa y junta el resto.  SI "
+        "borra.\n"
+        "  node <huella>   Que es ese nodo y a quien cita.\n"
+        "  dangling        Referencias a nodos que no estan, CON quien las "
+        "hace.\n\n"
         "La carpeta por defecto es la del cache del proyecto.\n");
+}
+
+/// Nombre legible de un genero de nodo.  Solo los que se escriben hoy; del
+/// resto se da el numero, que es mejor que inventarle un nombre.
+const char *kind_name(NodeKind k) {
+    switch (k) {
+    case NodeKind::Entity: return "Entity";
+    case NodeKind::File: return "File";
+    case NodeKind::ArtifactMap: return "ArtifactMap";
+    case NodeKind::SpanMap: return "SpanMap";
+    default: return nullptr;
+    }
+}
+
+void print_kind(NodeKind k) {
+    const char *n = kind_name(k);
+    if (n != nullptr) std::printf("%s", n);
+    else std::printf("genero %u", static_cast<unsigned>(k));
+}
+
+int run_node(const std::string &dir, const std::string &hex) {
+    const ContentHash h = ContentHash::from_hex(hex);
+    if (h.empty()) {
+        std::printf("huella invalida: %s\n", hex.c_str());
+        return 2;
+    }
+    PackNodeStore store(dir,
+                        std::unique_ptr<NodeStore>(new FileNodeStore(dir)));
+    StoredNode node;
+    if (!store.get(h, node)) {
+        std::printf("%s: NO esta en el almacen\n", hex.c_str());
+        return 1;
+    }
+    std::printf("%s\n  genero    ", hex.c_str());
+    print_kind(node.header.kind);
+    std::printf("\n  esquema   v%u\n  bytes     %zu\n",
+                node.header.schema_version, node.payload.size());
+
+    /* Y a quien cita, con la MISMA rutina que usa el recorrido.  Si se listaran
+     * aparte, un dia una diria una cosa y la otra otra, y esta orden existe
+     * justo para poder creerse lo que dice el recorrido. */
+    std::vector<ContentHash> refs;
+    const ReachStatus st = collect_references(node, refs);
+    if (st != ReachStatus::Ok) {
+        std::printf("  cita      no se sabe: %s\n", reason_text(st));
+        return 1;
+    }
+    std::printf("  cita      %zu\n", refs.size());
+    for (const auto &r : refs) {
+        StoredNode dest;
+        const bool esta = store.get(r, dest);
+        std::printf("    %s  %s", r.to_hex().c_str(), esta ? "" : "[NO ESTA] ");
+        if (esta) print_kind(dest.header.kind);
+        std::printf("\n");
+    }
+    return 0;
+}
+
+int run_dangling(const std::string &dir) {
+    namespace stdfs = std::filesystem;
+    std::error_code ec;
+    if (!stdfs::exists(dir, ec)) {
+        std::printf("no hay almacen en %s\n", dir.c_str());
+        return 0;
+    }
+    PackNodeStore store(dir,
+                        std::unique_ptr<NodeStore>(new FileNodeStore(dir)));
+    std::vector<ContentHash> roots;
+    read_published_roots(dir, roots);
+    std::set<ContentHash> live;
+    // Aqui SI se pide la procedencia: esta orden existe para eso.  El
+    // mantenimiento que corre al compilar la pide a cero y no paga nada.
+    const ReachReport report =
+        compute_live_set(store, roots, live, kMaxDanglingSamples);
+
+    std::printf("referencias sin destino: %zu\n", report.dangling_refs);
+    if (report.dangling_refs == 0) return 0;
+    std::printf("muestra de %zu, con quien las hace:\n\n",
+                report.dangling_samples.size());
+    for (const auto &d : report.dangling_samples) {
+        std::printf("  falta %s\n", d.missing.to_hex().c_str());
+        if (d.from.empty()) {
+            // Sin procedencia: era una raiz, y a esas las cita el apuntador,
+            // que esta fuera del grafo a proposito.
+            std::printf("    la cita una RAIZ (un .ptr), no un nodo\n");
+        } else {
+            std::printf("    la cita %s (", d.from.to_hex().c_str());
+            print_kind(d.from_kind);
+            std::printf(")\n");
+        }
+    }
+    std::printf("\nPara ver quien cita:  vm vxdbg node <huella>\n");
+    return 0;
 }
 
 int run_gc(const std::string &dir) {
@@ -204,10 +301,22 @@ int run(int argc, char **argv) {
         return 2;
     }
     const std::string order = argv[1];
-    const std::string dir = argc >= 3 ? argv[2] : vx::default_vxdbg_dir();
 
+    // `node` lleva la huella como primer argumento, asi que su carpeta -- si se
+    // da -- es el segundo.  El resto la llevan en el primero.
+    if (order == "node") {
+        if (argc < 3) {
+            print_usage();
+            return 2;
+        }
+        const std::string dir = argc >= 4 ? argv[3] : vx::default_vxdbg_dir();
+        return run_node(dir, argv[2]);
+    }
+
+    const std::string dir = argc >= 3 ? argv[2] : vx::default_vxdbg_dir();
     if (order == "status") return run_status(dir);
     if (order == "gc") return run_gc(dir);
+    if (order == "dangling") return run_dangling(dir);
 
     std::printf("orden desconocida: %s\n\n", order.c_str());
     print_usage();

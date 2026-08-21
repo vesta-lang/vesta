@@ -18,6 +18,8 @@
 #include "vxdbg/source_meta.h"
 
 #include <deque>
+#include <map>
+#include <utility>
 #include <filesystem>
 
 namespace vxdbg {
@@ -139,7 +141,8 @@ size_t read_published_roots(const std::string &cache_dir,
 
 ReachReport compute_live_set(const NodeStore &store,
                              const std::vector<ContentHash> &roots,
-                             std::set<ContentHash> &out_live) {
+                             std::set<ContentHash> &out_live,
+                             size_t max_dangling_samples) {
     ReachReport report;
     report.roots_read = roots.size();
     std::deque<ContentHash> pending;
@@ -147,6 +150,17 @@ ReachReport compute_live_set(const NodeStore &store,
         if (r.empty()) continue;
         if (out_live.insert(r).second) pending.push_back(r);
     }
+
+    /* QUIEN cita a quien, y SOLO si alguien lo ha pedido.
+     *
+     * Este recorrido tambien corre durante la compilacion, dentro del
+     * mantenimiento del almacen, asi que apuntar la procedencia siempre seria
+     * cobrarle a toda compilacion una tabla de quince mil entradas para que
+     * casi nunca la mire nadie.  Con @p max_dangling_samples a cero la tabla se
+     * queda vacia, no se toca en el bucle, y el recorrido cuesta exactamente lo
+     * que costaba antes de que esto existiera. */
+    const bool anotar_procedencia = max_dangling_samples > 0;
+    std::map<ContentHash, std::pair<ContentHash, NodeKind>> quien_cita;
 
     std::vector<ContentHash> refs;
     while (!pending.empty()) {
@@ -160,6 +174,18 @@ ReachReport compute_live_set(const NodeStore &store,
              * entidad puede citar su funcion intermedia y esos nodos hoy no se
              * emiten.  Se cuenta para que se vea. */
             ++report.dangling_refs;
+            if (anotar_procedencia &&
+                report.dangling_samples.size() < max_dangling_samples) {
+                auto it = quien_cita.find(current);
+                if (it != quien_cita.end())
+                    report.dangling_samples.push_back(
+                        {it->second.first, it->second.second, current});
+                else
+                    // Sin procedencia: era una raiz, y a esas no las cita nadie
+                    // del grafo -- vienen del apuntador, que esta fuera de el.
+                    report.dangling_samples.push_back(
+                        {ContentHash{}, NodeKind::Unknown, current});
+            }
             out_live.erase(current);
             continue;
         }
@@ -178,7 +204,13 @@ ReachReport compute_live_set(const NodeStore &store,
         }
         for (const auto &r : refs) {
             if (r.empty()) continue;
-            if (out_live.insert(r).second) pending.push_back(r);
+            if (out_live.insert(r).second) {
+                pending.push_back(r);
+                // Solo en modo mirar; con el apagado esta rama no se toca.
+                if (anotar_procedencia)
+                    quien_cita.emplace(r,
+                                       std::make_pair(current, node.header.kind));
+            }
         }
     }
     return report;
