@@ -18,6 +18,7 @@
  * predecesor).
  */
 
+#include "util/env_flags.h"
 #include "jit/ssa_coalesce.h"
 
 #include "jit/interval.h" // LiveInterval (add_range, first_overlap_from)
@@ -501,10 +502,7 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
         return false;
     };
 
-    static const bool dbg = [] {
-        const char *v = std::getenv("VESTA_SSA_COAL_DBG");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool dbg = util::flag_on(util::FlagId::SsaCoalDbg);
 
     /* Operandos del def (no-phi) de cada valor -- para la regla del diamante.
      */
@@ -691,10 +689,7 @@ bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
      * el uso -> rango fragmentado -> corrupcion).  diff_harness: 388 OK / 0
      * VREG_HANG/DIVERGE/CRASH (solo el asm_stack_manip inherente
      * interp-vs-jit). */
-    static const bool off = [] {
-        const char *en = std::getenv("VESTA_NO_SSA_COALESCE");
-        return en && en[0] != '\0' && en[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::NoSsaCoalesce);
     if (off) return false;
     const std::vector<uint32_t> remap = ssa_phi_coalesce_remap(fn);
     if (remap.empty()) return false;

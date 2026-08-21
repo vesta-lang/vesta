@@ -14,6 +14,7 @@
  * luego los mire -- vive el criterio de que merece afirmarse.
  */
 
+#include "util/env_flags.h"
 #include "analysis/asa/productores.h"
 
 #include "ir/ssa_ir.h"
@@ -359,7 +360,7 @@ void producir_asm_flujo(Produccion &p) {
                  * cuadraron. */
                 if (cuerpo.find("__vxf_inject") != std::string::npos) continue;
                 const vx::AsmCfg cfg = vx::build_asm_cfg(isa, cuerpo);
-                if (std::getenv("VESTA_ASMFLUJO_DEBUG") != nullptr)
+                if (util::flag_on(util::FlagId::AsmFlujoDebug))
                     std::fprintf(stderr,
                                  "[asm-flujo] %s#%u: %zu bloques, %zu instr, "
                                  "cuerpo=<%.60s>\n",

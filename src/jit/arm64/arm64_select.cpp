@@ -15,6 +15,7 @@
  * @brief Implementacion del selector IR -> AArch64 (template slot-por-valor).
  */
 
+#include "util/env_flags.h"
 #include <cstdio>
 #include <cstdlib>
 #include "jit/arm64/arm64_select.h"
@@ -538,7 +539,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
             default:
                 // Op no soportada aun (float, memoria, dispatch dinamico):
                 // H.3+.
-                if (std::getenv("VESTA_ARM64_DUMP"))
+                if (util::flag_on(util::FlagId::Arm64Dump))
                     std::fprintf(stderr,
                                  "[arm64] op no soportada en '%s': %s\n",
                                  fn.name.c_str(), ir::ir_op_name(in.op));

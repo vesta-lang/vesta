@@ -11,6 +11,7 @@
  *        contratos derivados + lagunas de precision, por proyeccion del
  *        SemanticSummary (misma fuente que consume el compilador).
  */
+#include "util/env_flags.h"
 #include "analysis/asa/aggregate_facts.h"
 #include "analysis/effects/effects_report.h"
 
@@ -55,7 +56,7 @@ namespace effects {
  */
 static bool hay_color(std::ostream &os) {
     if (&os != &std::cout) return false;
-    if (std::getenv("NO_COLOR") != nullptr) return false;
+    if (util::flag_on(util::FlagId::NoColor)) return false;
 #if defined(_WIN32)
     return _isatty(_fileno(stdout)) != 0;
 #else
@@ -659,7 +660,7 @@ void print_effects_report(std::ostream &os, const ir::IrModule &mod,
                           Backend backend, const ir::IrModule *mod_previo) {
     /* Reparto del coste del informe.  Cada seccion mira el programa entero, asi
      * que "el analisis tarda" solo se puede atacar sabiendo cual de ellas. */
-    const bool medir = std::getenv("VESTA_TIMES") != nullptr;
+    const bool medir = util::flag_on(util::FlagId::Times);
     using RelojInf = std::chrono::steady_clock;
     auto marca = RelojInf::now();
     long us_resumen = 0, us_observar = 0, us_funciones = 0, us_formas = 0,

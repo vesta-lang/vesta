@@ -15,6 +15,7 @@
  * @brief Implementacion de los backends de codegen nativo (x86 y arm64).
  */
 
+#include "util/env_flags.h"
 #include "toolchain/native_backend.h"
 
 #include <capstone/capstone.h>
@@ -74,10 +75,7 @@ class Arm64Backend : public NativeBackend {
          * orquestador arch-neutral con Arm64Target; el template queda como
          * fallback para las funciones fuera del subset vreg. VESTA_ARM64_VREG=0
          * fuerza el template (escape-hatch de depuracion). */
-        static const bool use_vreg = [] {
-            const char *v = std::getenv("VESTA_ARM64_VREG");
-            return !(v && v[0] == '0');
-        }();
+        static const bool use_vreg = util::flag_on(util::FlagId::Arm64Vreg);
         if (use_vreg) {
             jit::Arm64Target target;
             std::vector<jit::NativeReloc> relocs;

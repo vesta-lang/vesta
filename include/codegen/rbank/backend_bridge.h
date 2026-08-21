@@ -39,6 +39,7 @@
 #ifndef VESTA_CODEGEN_RBANK_BACKEND_BRIDGE_H
 #define VESTA_CODEGEN_RBANK_BACKEND_BRIDGE_H
 
+#include "util/env_flags.h"
 #include <cstdio>
 #include <cstdlib>
 #include "codegen/rbank/abstract_problem.h"
@@ -81,10 +82,7 @@ inline ResourceClass resource_class_from_reg(jit::RegClass c) {
  * @return true si el modelo lleva los tramos (por defecto).
  */
 inline bool tramos_habilitados() noexcept {
-    static const bool si = [] {
-        const char *e = std::getenv("VESTA_TRAMOS");
-        return !(e && e[0] == '0');
-    }();
+    static const bool si = util::flag_on(util::FlagId::Tramos);
     return si;
 }
 
@@ -192,7 +190,7 @@ inline AbstractProblem intervals_to_problem(const jit::IntervalResult &ivs) {
          * requisitos incompatibles y quien reescribe lo dira. */
         if (iv.reg_required && av.req.residency == Residency::ANY)
             av.req.residency = Residency::REGISTER;
-        if (iv.reg_required && std::getenv("VESTA_RBANK_ASM_DEBUG")) {
+        if (iv.reg_required && util::flag_on(util::FlagId::RbankAsmDebug)) {
             std::fprintf(stderr,
                          "[rbank] operando asm vreg %u: rango [%u,%u], %zu "
                          "trozos, tramo0=[%u,%u), cruza-llamada=%d, "

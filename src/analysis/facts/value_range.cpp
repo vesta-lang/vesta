@@ -20,6 +20,7 @@
  * Esa division es la que permite creerse el resultado: si el dominio no miente,
  * lo unico que puede fallar aqui es el recorrido, y el recorrido es pequeno.
  */
+#include "util/env_flags.h"
 #include "analysis/facts/value_range.h"
 
 #include "analysis/facts/loop_facts.h"
@@ -194,11 +195,11 @@ thread_local CosteEstado g_coste;
  *
  * La medida no puede salir gratis, pero si puede salir gratis NO medir.
  */
-static const bool g_medir_coste = std::getenv("VESTA_RANGE_STATS") != nullptr;
+static const bool g_medir_coste = util::flag_on(util::FlagId::RangeStats);
 
 /// Escape para comparar: conservar las entradas que solo repiten el suelo.
 static const bool g_keep_floor_entries =
-    std::getenv("VESTA_RANGE_KEEP_FLOOR") != nullptr;
+    util::flag_on(util::FlagId::RangeKeepFloor);
 
 /* Los dos de abajo se leen UNA vez, aqui, y no donde se usan.
  *
@@ -210,14 +211,11 @@ static const bool g_keep_floor_entries =
  * corre en cada analisis de funcion. */
 
 /// Nivel 1 de las estadisticas: ademas del resumen, el detalle por analisis.
-static const bool g_stats_verbose = [] {
-    const char *v = std::getenv("VESTA_RANGE_STATS");
-    return v != nullptr && v[0] == '1';
-}();
+static const bool g_stats_verbose = util::flag_on(util::FlagId::RangeStats);
 
 /// Saltarse la cache de rangos (para comparar con y sin).
 static const bool g_no_range_cache =
-    std::getenv("VESTA_NO_RANGE_CACHE") != nullptr;
+    util::flag_on(util::FlagId::NoRangeCache);
 
 /**
  * @brief El refinamiento va al asignador general, y NO a una arena de fase.

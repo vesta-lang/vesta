@@ -26,6 +26,7 @@
  * split, coalescing, etc.
  */
 
+#include "util/env_flags.h"
 #include "jit/jit_regalloc.h"
 #include "ir/liveness.h"
 
@@ -430,16 +431,14 @@ JitRegalloc assign_regs(const ir::IrFunction &fn, std::vector<VidInfo> &info) {
 JitRegalloc compute_jit_regalloc(const ir::IrFunction &fn) {
     /* Fast path: regalloc desactivado via env var. */
     static const bool s_disabled = []() {
-        const char *e = std::getenv("VESTA_JIT_NO_REGALLOC");
-        return e && e[0] != '\0' && e[0] != '0';
+        return util::flag_on(util::FlagId::JitNoRegalloc);
     }();
     if (s_disabled) return JitRegalloc{};
 
     /* Debug via @c VESTA_JIT_REGALLOC_DEBUG=1: imprime asignaciones a
      * stderr.  Util para diagnosticar pinning de VIDs especificos. */
     static const bool s_debug = []() {
-        const char *e = std::getenv("VESTA_JIT_REGALLOC_DEBUG");
-        return e && e[0] != '\0' && e[0] != '0';
+        return util::flag_on(util::FlagId::JitRegallocDebug);
     }();
 
     auto info = collect_vid_info(fn);

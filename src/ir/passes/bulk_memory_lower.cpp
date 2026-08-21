@@ -10,6 +10,7 @@
  * @brief Implementacion del pase (ver el header para el porque de la division).
  */
 
+#include "util/env_flags.h"
 #include "ir/passes/bulk_memory_lower.h"
 
 #include "analysis/facts/bulk_memory.h"
@@ -30,8 +31,7 @@ bool ir_pass_bulk_memory_lower(IrFunction &fn) {
      * mismo programa con y sin la reduccion sin recompilar el compilador, que
      * es lo unico que distingue "esto lo rompio el pase" de "esto ya estaba
      * roto". */
-    if (const char *off = std::getenv("VESTA_NO_BULK_MEMORY"))
-        if (off[0] != '\0' && off[0] != '0') return false;
+    if (util::flag_on(util::FlagId::NoBulkMemory)) return false;
 
     const std::vector<analysis::BulkMemoryFact> hechos =
         analysis::detect_bulk_memory(fn);

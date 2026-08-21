@@ -11,6 +11,7 @@
  *        ( AS inc.6).  Ver inline_asm_trampoline.h.
  */
 
+#include "util/env_flags.h"
 #include "jit/inline_asm_trampoline.h"
 
 #include "jit/code_cache.h"
@@ -748,7 +749,7 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
     nasm += "ret\n";
 
     /* Diagnostico opt-in: volcar el NASM generado. */
-    if (std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+    if (util::flag_on(util::FlagId::AsmTrampDebug)) {
         std::fprintf(stderr,
                      "=== trampoline NASM ===\n%s=======================\n",
                      nasm.c_str());
@@ -761,7 +762,7 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
         if (err) *err = ar.ok ? "ensamblado vacio" : ar.error;
         return nullptr;
     }
-    if (std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+    if (util::flag_on(util::FlagId::AsmTrampDebug)) {
         std::fprintf(stderr, "=== bytes (%zu) ===\n", ar.bytes.size());
         for (size_t i = 0; i < ar.bytes.size(); ++i)
             std::fprintf(stderr, "%02x ", ar.bytes[i]);
@@ -781,7 +782,7 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
      * del ensamblador se puede recoger o llevarse el proceso segun como haya
      * quedado la pila -- ver `registrar_desenrollado`. */
     if (!registrar_desenrollado(code, ar.bytes.size(), cc) &&
-        std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+        util::flag_on(util::FlagId::AsmTrampDebug)) {
         std::fprintf(stderr, "[asm] trampoline sin info de desenrollado: un "
                              "fallo dentro del asm no sera recuperable\n");
     }

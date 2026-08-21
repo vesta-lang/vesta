@@ -14,6 +14,7 @@
  *        @c IrOp::ASM_MICRO.  Ver vx/asm/asm_lift_micro.h.
  */
 
+#include "util/env_flags.h"
 #include "vx/asm/asm_lift_reason.h"
 #include "vx/asm/asm_lift_micro.h"
 
@@ -102,10 +103,8 @@ uint8_t pack_eff(const instr_db::AsmInsnSem &sem) {
 bool elevar_ligados() {
     /* Ya es lo normal.  Se apaga a mano solo para comparar una version con la
      * otra cuando algo no cuadra; mientras se construia iba al reves. */
-    static const bool v = [] {
-        const char *e = std::getenv("VESTA_ASM_NO_LIFT_SSA");
-        return !(e != nullptr && e[0] != '\0' && e[0] != '0');
-    }();
+    /* El mando dice NO elevar; esto responde a "elevar", asi que va negado. */
+    static const bool v = !util::flag_on(util::FlagId::AsmNoLiftSsa);
     return v;
 }
 
@@ -145,8 +144,7 @@ void anotar_hueco_db(const std::string &insn, const char *motivo) {
         nuevo = huecos_db().emplace(insn, motivo).second;
     }
     if (!nuevo) return;
-    const char *v = std::getenv("VESTA_ASM_DB_GAPS");
-    if (v == nullptr || v[0] != '1') return;
+    if (!util::flag_on(util::FlagId::AsmDbGaps)) return;
     std::fprintf(stderr, "[asm-db] '%s': %s\n", insn.c_str(), motivo);
 }
 

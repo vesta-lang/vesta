@@ -122,11 +122,20 @@ const std::string &flag_text(FlagId id) {
     if (kFlags[idx(id)].kind == FlagKind::TextLive) {
         /* Se relee.  En un buffer POR HILO, no en la tabla: los modulos se
          * compilan en paralelo y escribir la tabla compartida en una consulta
-         * seria una carrera. */
-        thread_local std::string vivo;
+         * seria una carrera.
+         *
+         * Y un PUNTERO a nulo, no un `thread_local std::string`.  Este ultimo
+         * tiene inicializador dinamico, que genera una variable de GUARDA, y en
+         * MinGW esa guarda cuelga: el proceso se queda bloqueado antes incluso
+         * de entrar en `main`.  Paso aqui y ya habia pasado antes en el
+         * acumulador de tramos -- ver el comentario de `util/crono_tramo.cpp`,
+         * que cuenta el mismo caso.  Un puntero a `nullptr` es de
+         * inicializacion CONSTANTE: no hay guarda, y el alta se hace a mano. */
+        static thread_local std::string *vivo = nullptr;
+        if (vivo == nullptr) vivo = new std::string();
         const char *raw = std::getenv(kFlags[idx(id)].name);
-        vivo = raw ? raw : "";
-        return vivo;
+        vivo->assign(raw ? raw : "");
+        return *vivo;
     }
     const FlagValue &fv = table().v[idx(id)];
     return fv.present ? fv.text : empty_text();

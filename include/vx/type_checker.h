@@ -38,6 +38,7 @@
 #ifndef VX_TYPE_CHECKER_H
 #define VX_TYPE_CHECKER_H
 
+#include "util/env_flags.h"
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -2552,7 +2553,7 @@ class TypeChecker {
     }
 
     void register_imported_enum(const std::string &name, EnumLayout L) {
-        if (getenv("VX_DBG_REG")) {
+        if (util::flag_on(util::FlagId::DbgReg)) {
             fprintf(stderr, "[REG] %s is_valued=%d nvars=%d:", name.c_str(),
                     (int)L.is_valued, (int)L.variants.size());
             for (const auto &v : L.variants)

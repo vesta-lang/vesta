@@ -10,6 +10,7 @@
  * @brief Implementacion del peephole sobre MachineIR fisico (ver peephole.h).
  */
 
+#include "util/env_flags.h"
 #include "jit/peephole.h"
 
 #include <cstdlib>
@@ -20,19 +21,13 @@ namespace jit {
 namespace {
 
 bool peephole_disabled() noexcept {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_NO_PEEPHOLE");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::NoPeephole);
     return off;
 }
 
 /// Desactiva SOLO el idiom xor-zeroing (bisection), dejando el resto activo.
 bool xorzero_disabled() noexcept {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_NO_XORZERO");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::NoXorZero);
     return off;
 }
 
@@ -109,10 +104,7 @@ bool flags_dead_after(const MBlock &b, size_t i) noexcept {
 
 /// Desactiva SOLO la eliminacion de JMP-a-fallthrough (bisection).
 bool jmpfall_disabled() noexcept {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_NO_JMPFALL");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::NoJmpFall);
     return off;
 }
 

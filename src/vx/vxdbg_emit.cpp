@@ -26,6 +26,7 @@
  * dato.
  */
 
+#include "util/env_flags.h"
 #include "vx/vxdbg_emit.h"
 
 #include "vx/ast.h"
@@ -595,8 +596,10 @@ std::string default_vxdbg_dir() {
     // La misma valvula que el resto de caches del compilador: si el proyecto
     // los redirige a un sitio comun, este va con ellos y no se queda suelto en
     // la carpeta de trabajo.
-    if (const char *v = std::getenv("VX_CACHE_DIR"); v && v[0])
-        return std::string(v) + "/vxdbg";
+    {
+        const std::string &v = util::flag_text(util::FlagId::CacheDir);
+        if (!v.empty()) return v + "/vxdbg";
+    }
     return ".cache/vxdbg";
 }
 
@@ -619,7 +622,7 @@ bool emit_vxdbg_source(
      * `VESTA_NO_PACK=1` vuelve al comportamiento anterior, para comparar. */
     const std::string dir = out_dir.empty() ? default_vxdbg_dir() : out_dir;
     std::unique_ptr<vxdbg::NodeStore> propietario;
-    if (std::getenv("VESTA_NO_PACK") != nullptr) {
+    if (util::flag_on(util::FlagId::NoPack)) {
         propietario.reset(new vxdbg::FileNodeStore(dir));
     } else {
         propietario.reset(new vxdbg::PackNodeStore(

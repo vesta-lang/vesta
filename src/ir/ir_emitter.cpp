@@ -35,6 +35,7 @@
  *   almacenamiento despues de calcularlo. Se usan r14 y r13 como scratches.
  */
 
+#include "util/env_flags.h"
 #include "ir/ir_emitter.h"
 #include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
@@ -2869,7 +2870,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                     // apagarla no hay con que comparar, y sin comparacion
                     // cualquier cifra sobre su rendimiento seria inventada.
                     static const bool fusion_off =
-                        std::getenv("VESTA_NO_CMPJMP") != nullptr;
+                        util::flag_on(util::FlagId::NoCmpJmp);
                     const bool fusion_safe = !has_phi_false && !fusion_off;
                     const char *fused_mn = (is_fcmp_fused || !fusion_safe)
                                                ? nullptr
@@ -6521,7 +6522,7 @@ static inline bool zmm_consumer_op(IrOp op) {
 }
 
 static bool interp_zmm_disabled() {
-    static const bool disabled = std::getenv("VESTA_NO_ZMM") != nullptr;
+    static const bool disabled = util::flag_on(util::FlagId::NoZmm);
     return disabled;
 }
 
@@ -6757,10 +6758,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     LivenessResult liveness = compute_liveness(fn);
     std::vector<uint32_t> coal_remap;
     {
-        static const bool coal_off = [] {
-            const char *e = std::getenv("VESTA_NO_IR_COALESCE");
-            return e && e[0] != '\0' && e[0] != '0';
-        }();
+        static const bool coal_off = util::flag_on(util::FlagId::NoIrCoalesce);
         if (!coal_off && !fn.is_native) {
             coal_remap = jit::ssa_phi_coalesce_remap(fn);
             if (!coal_remap.empty()) {
@@ -7210,7 +7208,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
  * Se lee una sola vez.
  */
 static bool interp_fuse_disabled() {
-    static const bool disabled = std::getenv("VESTA_NO_FUSE") != nullptr;
+    static const bool disabled = util::flag_on(util::FlagId::NoFuse);
     return disabled;
 }
 
@@ -7320,7 +7318,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     if (!opts.ya_optimizado) {
         const auto t_opt = std::chrono::steady_clock::now();
         ir_optimize(mod, opts.opt_level);
-        if (std::getenv("VESTA_TIMES") != nullptr)
+        if (util::flag_on(util::FlagId::Times))
             std::cerr << "[emisor] optimizar (dentro del emisor) "
                       << std::chrono::duration_cast<std::chrono::microseconds>(
                              std::chrono::steady_clock::now() - t_opt)

@@ -28,6 +28,7 @@
 #ifndef FS_UTILS_H
 #define FS_UTILS_H
 
+#include "util/env_flags.h"
 #include <algorithm>
 #include <mutex>
 #include <cstdlib>
@@ -633,8 +634,8 @@ static std::string get_executable_name() {
  */
 static const std::string &temp_write_dir() {
     static const std::string dir = [] {
-        if (const char *v = std::getenv("VX_CACHE_DIR"); v != nullptr && v[0])
-            return std::string(v) + "/tmp";
+        const std::string &v = util::flag_text(util::FlagId::CacheDir);
+        if (!v.empty()) return v + "/tmp";
         return std::string(".cache/tmp");
     }();
     return dir;

@@ -12,6 +12,7 @@
  * Ver @c include/jit/jit_branch_prof.h para el diseno.
  */
 
+#include "util/env_flags.h"
 #include "jit/jit_branch_prof.h"
 
 #include <cstdlib>
@@ -28,10 +29,7 @@ bool jit_branch_prof_emit_enabled() {
     // Cacheado (1 getenv).  Por defecto ON cuando el auto-PGO no esta
     // desactivado; VESTA_NO_JIT_PGO=1 lo apaga (mismo escape que el resto del
     // auto-PGO).  El JIT solo emite los contadores si esto es true.
-    static const bool on = [] {
-        const char *no_pgo = std::getenv("VESTA_NO_JIT_PGO");
-        return !(no_pgo && no_pgo[0] == '1');
-    }();
+    static const bool on = util::flag_on(util::FlagId::NoJitPgo);
     return on;
 }
 

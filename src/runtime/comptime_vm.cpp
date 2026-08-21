@@ -18,6 +18,7 @@
  * .velb in-memory que contenga los `__macro_*` lowered).
  */
 
+#include "util/env_flags.h"
 #include "vx/comptime/comptime_vm.h"
 #include "vx/type_checker.h" // report_comptime_fatal
 
@@ -172,10 +173,9 @@ struct ComptimeVmImpl {
           vm(mgr, /*id_vm=*/0xC03171EULL, /*num_schedulers=*/1) {
         /*   : configurar GC interval desde env var.
          * Default = 64 (good tradeoff entre peak memory y overhead). */
-        if (const char *env = std::getenv("VESTA_MC_GC_INTERVAL")) {
-            char *end = nullptr;
-            const unsigned long v = std::strtoul(env, &end, 10);
-            if (end != env) gc_interval = v;
+        {
+            const long v = util::flag_int(util::FlagId::McGcInterval, -1);
+            if (v >= 0) gc_interval = static_cast<uint64_t>(v);
         }
     }
 };
@@ -403,10 +403,11 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
     //    invoke_simple_macro devuelve false -> no se pliega.  Configurable por
     //    VESTA_CTPE_MS (default = budget.millis, o 3000).
     uint32_t ms = budget.millis ? budget.millis : 3000;
-    if (const char *env = std::getenv("VESTA_CTPE_MS")) {
-        char *end = nullptr;
-        const unsigned long v = std::strtoul(env, &end, 10);
-        if (end != env) ms = static_cast<uint32_t>(v);
+    {
+        /* Si no es un numero, el registro devuelve el valor por defecto que se
+         * le pide, que es lo mismo que hacia antes al no poder convertirlo. */
+        const long v = util::flag_int(util::FlagId::CtpeMs, -1);
+        if (v >= 0) ms = static_cast<uint32_t>(v);
     }
     std::atomic<bool> done{false};
     runtime::ProcessVM *proc_ptr = impl_->proc;
@@ -684,8 +685,7 @@ bool ComptimeRuntime::invoke_string_macro(const std::string &macro_name,
     /*   : capturamos old_used pre-call solo si trace activo. */
     size_t old_used_before = 0;
     const bool gc_trace_active = []() {
-        const char *t = std::getenv("VESTA_MC_GC_TRACE");
-        return t && t[0] == '1';
+        return util::flag_on(util::FlagId::McGcTrace);
     }();
     if (gc_trace_active && impl_ && impl_->proc) {
         old_used_before = impl_->proc->gc_heap.old_used();
@@ -940,8 +940,7 @@ bool ComptimeRuntime::load_macros_from_bytes(
          * El coste del compile (~5-15ms por fn) se amortiza con el cache del
          * codigo comptime (compilado aparte, cacheado aparte): el comptime
          * casi nunca cambia y se reusa mucho, asi que se paga una vez. */
-        const char *mc_nojit_env = std::getenv("VESTA_MC_NO_JIT");
-        const bool mc_jit_on = !(mc_nojit_env && mc_nojit_env[0] == '1');
+        const bool mc_jit_on = !util::flag_on(util::FlagId::McNoJit);
         if (mc_jit_on) {
             const uint32_t saved_threshold = jit::g_jit_threshold;
             if (saved_threshold == UINT32_MAX) {
@@ -978,8 +977,7 @@ bool ComptimeRuntime::load_macros_from_bytes(
                         if (res.fn) {
                             impl_->jit_code_by_pc[entry_pc] =
                                 reinterpret_cast<void *>(res.fn);
-                        } else if (std::getenv("VESTA_COMPTIME_DEBUG") !=
-                                   nullptr) {
+                        } else if (util::flag_on(util::FlagId::ComptimeDebug)) {
                             /* El comptime corre por el JIT; interpretarlo es
                              * el camino LENTO, no el habitual.  Pero no es un
                              * fallo: ese codigo solo corre dentro del

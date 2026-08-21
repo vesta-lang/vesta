@@ -37,6 +37,15 @@
  * es una suposicion, lo sostiene
  * `tests/vx/incremental_identity_test.py`.
  *
+ * CUIDADO -- QUIEN NO PUEDE USAR ESTO.  Consultar el registro la primera vez
+ * construye la tabla de valores, y esa tabla guarda cadenas: PIDE MEMORIA.  Por
+ * eso no lo puede usar nada de lo que dependa una reserva -- el asignador de
+ * memoria del host, sin ir mas lejos.  Si lo hace, la peticion reentra mientras
+ * el estatico del registro se esta construyendo y el proceso se queda esperando
+ * su guarda para siempre: cuelga ANTES de entrar en `main`.  Ya paso; ver el
+ * comentario de @c allocator_active en `util/host_allocator.cpp`.  Esos sitios
+ * leen el entorno a mano, y sus mandos siguen declarados aqui igual.
+ *
  * Y CADA MANDO DICE A QUE PARTE AFECTA (@c FlagDomain), que es la granularidad
  * de la invalidacion: tocar algo del JIT no tiene por que tirar lo que se
  * guardo del optimizador.  Cuanto mas fino el dominio, menos hay que rehacer.

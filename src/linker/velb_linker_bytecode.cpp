@@ -21,6 +21,7 @@
  * y construccion del ejecutable final VELB (@c build_executable, @c
  * write_to_file).
  */
+#include "util/env_flags.h"
 #include "linker/velb_linker_bytecode.h"
 #include <algorithm> // UCRT64: no transitivo
 
@@ -42,8 +43,7 @@ namespace Assembly::Bytecode::Linker {
 static bool linker_profile_enabled() {
     static int cached = -1;
     if (cached < 0) {
-        const char *v = std::getenv("VESTA_LINKER_PROFILE");
-        cached = (v && v[0] == '1') ? 1 : 0;
+        cached = util::flag_on(util::FlagId::LinkerProfile) ? 1 : 0;
     }
     return cached == 1;
 }

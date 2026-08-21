@@ -10,6 +10,7 @@
  * @brief Implementacion del ensamblado diferido.  Ver jit/asm_deferred.h.
  */
 
+#include "util/env_flags.h"
 #include "jit/asm_deferred.h"
 
 #include "vx/asm/asm_backend.h"
@@ -118,7 +119,7 @@ AsmDeferredResult asm_deferred_assemble(const AsmBlob &b,
      * por operando se veian, pero lo que de verdad se ensambla no.  Y cuando el
      * mismo bloque da un resultado en el interprete y otro aqui, la diferencia
      * esta justo en estos dos textos. */
-    if (std::getenv("VESTA_JIT_ASM_DUMP") != nullptr) {
+    if (util::flag_on(util::FlagId::JitAsmDump)) {
         std::fprintf(stderr, "[asm-jit] plantilla: %s\n",
                      b.deferred_tmpl.c_str());
         std::fprintf(stderr, "[asm-jit] final:\n%s\n", nasm.c_str());

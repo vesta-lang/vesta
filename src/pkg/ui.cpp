@@ -2,6 +2,7 @@
  * @file ui.cpp
  * @brief Implementacion del helper de UI con color y progress bars.
  */
+#include "util/env_flags.h"
 #include "pkg/ui.h"
 
 #include <atomic>
@@ -68,8 +69,7 @@ void init() {
     }
 #else
     // Detectar NO_COLOR estandar de https://no-color.org/
-    const char *no_color = std::getenv("NO_COLOR");
-    if (no_color && *no_color) {
+    if (util::flag_on(util::FlagId::NoColor)) {
         g_color_enabled.store(false);
     } else {
         g_color_enabled.store(tty);

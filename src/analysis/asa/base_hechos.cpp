@@ -11,6 +11,7 @@
  * analysis/asa/base_hechos.h).
  */
 
+#include "util/env_flags.h"
 #include "analysis/asa/base_hechos.h"
 
 #include "analysis/asa/fact_store.h"
@@ -76,7 +77,7 @@ BaseDeHechos::BaseDeHechos() {
 
 BaseDeHechos::~BaseDeHechos() {
     static const bool loguear =
-        std::getenv("VESTA_ASA_HECHOS_DEBUG") != nullptr;
+        util::flag_on(util::FlagId::AsaHechosDebug);
     if (!loguear || consultas_ == 0) return;
     volcar_hechos(volcado(), stderr);
     std::fprintf(stderr,

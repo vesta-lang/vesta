@@ -21,6 +21,7 @@
  * producir los bytes que van al code-cache del JIT.
  */
 
+#include "util/env_flags.h"
 #include "jit/keystone_asm_backend.h"
 #include "vx/asm/asm_backend.h"
 
@@ -325,7 +326,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                 // extra: solo insn_offsets como antes.
                 const bool need_detail = !sym_state.syms.empty();
                 if (need_detail) cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
-                if (need_detail && std::getenv("VX_ASM_DEBUG"))
+                if (need_detail && util::flag_on(util::FlagId::VxAsmDebug))
                     for (auto &sp : sym_state.syms)
                         std::fprintf(stderr, "[asmdbg] sym '%s' -> %llx\n",
                                      sp.first.c_str(),
@@ -404,7 +405,7 @@ struct KeystoneAsmBackend final : vx::AsmBackend {
                             const uint64_t target =
                                 ia + x.encoding.disp_offset + op.mem.disp;
                             const std::string *s = sym_state.symbol_for(target);
-                            if (std::getenv("VX_ASM_DEBUG"))
+                            if (util::flag_on(util::FlagId::VxAsmDebug))
                                 std::fprintf(stderr,
                                              "[asmdbg] rip-mem ia=%llx il=%llx "
                                              "disp=%lld target=%llx match=%d "
@@ -480,8 +481,7 @@ void register_keystone_asm_backend() {
          * de lo correcto: avisar y seguir con los valores sin tocar.
          *
          * Con esto se comprueba que ahora para. */
-        const char *sin = std::getenv("VESTA_NO_ASM_BACKEND");
-        if (sin != nullptr && sin[0] == '1') return;
+        if (util::flag_on(util::FlagId::NoAsmBackend)) return;
         vx::g_asm_backend = &backend;
     });
 }

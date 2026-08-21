@@ -16,6 +16,7 @@
  *        encode produce AArch64 (Keystone) + relocs CALL26 (via Capstone).
  */
 
+#include "util/env_flags.h"
 #include "jit/arm64/arm64_target.h"
 
 #include "ir/ssa_ir.h"
@@ -462,7 +463,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
                 break;
             }
             default:
-                if (std::getenv("VESTA_ARM64_DUMP"))
+                if (util::flag_on(util::FlagId::Arm64Dump))
                     std::fprintf(stderr, "[arm64-vreg] op no soportado: %d\n",
                                  static_cast<int>(in.op));
                 return false; // op fuera del subset entero -> fallback.
@@ -486,7 +487,7 @@ bool Arm64Target::select(const ir::IrFunction &fn, MFunction &out) const {
         if (succs.size() >= 2)
             out.blocks[bi].succ_b = static_cast<MBlockId>(succs[1]);
     }
-    if (std::getenv("VESTA_ARM64_DUMP"))
+    if (util::flag_on(util::FlagId::Arm64Dump))
         std::fprintf(stderr, "[arm64-vreg] select OK %s\n", fn.name.c_str());
     return true;
 }
@@ -863,7 +864,7 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                 break;
             case MOp::RET: os << "    ret\n"; break;
             default:
-                if (std::getenv("VESTA_ARM64_DUMP"))
+                if (util::flag_on(util::FlagId::Arm64Dump))
                     std::fprintf(stderr, "[arm64-vreg] ENCODE MOp no sop: %d\n",
                                  static_cast<int>(mi.op));
                 return 0; // op no soportada por el encoder arm64
@@ -872,7 +873,7 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
     }
 
     // Ensamblar el texto AArch64 con Keystone.
-    if (std::getenv("VESTA_ARM64_DUMP"))
+    if (util::flag_on(util::FlagId::Arm64Dump))
         std::fprintf(stderr, "---- asm arm64 ----\n%s-------------------\n",
                      os.str().c_str());
     if (!vx::g_asm_backend) return 0;

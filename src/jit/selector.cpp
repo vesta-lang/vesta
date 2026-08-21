@@ -31,6 +31,7 @@
  * etiquetas estables.
  */
 
+#include "util/env_flags.h"
 #include "jit/selector.h"
 
 #include "jit/auto_jit.h"
@@ -1930,7 +1931,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                  * que solo usa imul de 2/3 operandos (ya en el encoder).
                  * Potencia-de-2 y |d|<2 / unsigned / i64 caen al IDIV. */
                 static const bool sr_off =
-                    (std::getenv("VESTA_NO_SR") != nullptr);
+                    (util::flag_on(util::FlagId::NoStrengthReduce));
                 if (!sr_off && ir_type_size_bytes(ins.type) == 4 &&
                     ir_type_is_signed_int(ins.type) &&
                     ins.operands[1] < ir_fn.values.size() &&

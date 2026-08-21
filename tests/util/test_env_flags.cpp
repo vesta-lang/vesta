@@ -103,6 +103,31 @@ static void test_eje_de_sistema() {
 #endif
 }
 
+/// Un informe ENCENDIDO por defecto imprime en cada ejecucion.
+///
+/// Y eso rompe todo lo que compara salidas.  Paso: `VESTA_PARALELO_STATS` se
+/// declaro encendido por error y el interprete empezo a escribir una linea de
+/// estadisticas de mas; dos casos e2e que comparan interprete contra AOT
+/// empezaron a divergir, y el binario era identico -- la comparacion byte a
+/// byte no lo veia porque no esta en el binario, esta en lo que escribe.
+///
+/// La unica excepcion es una comprobacion que solo habla cuando encuentra algo:
+/// esa puede estar puesta sin ensuciar nada.
+static void test_informe_no_esta_puesto_por_defecto() {
+    for (size_t i = 0; i < kFlagCount; ++i) {
+        const FlagInfo &fi = flag_info(static_cast<FlagId>(i));
+        if (fi.scope != FlagScope::Report) continue;
+        if (fi.kind != FlagKind::BoolOn) continue;
+        /* Lista de los que SI pueden: se nombran uno a uno para que anadir
+         * otro sea una decision y no un descuido. */
+        const bool permitido =
+            std::strcmp(fi.name, "VESTA_ASA_BOUNDS") == 0; // solo avisa si falla
+        CHECK(permitido,
+              "un informe encendido por defecto imprime siempre y rompe "
+              "cualquier comparacion de salidas");
+    }
+}
+
 /// Sin nada puesto, no hay huella.  Cero, no la semilla del hash.
 static void test_sin_mandos_no_hay_huella() {
     CHECK(emitted_fingerprint() == 0,
@@ -301,6 +326,7 @@ int main() {
 
     test_tabla_bien_formada();
     test_eje_de_sistema();
+    test_informe_no_esta_puesto_por_defecto();
     test_sin_mandos_no_hay_huella();
     test_mando_emitido_entra();
     test_mando_de_informe_no_entra();

@@ -7,6 +7,7 @@
  *  subset (mnemonicos + registros + direccionamiento x86) y lo baja al IR via
  * el core NEUTRO (@ref asm_lift_core.h: emisores, register-file, driver del
  * CFG). Ver asm_lift_x86.h. */
+#include "util/env_flags.h"
 #include "vx/asm/asm_lift_x86.h"
 
 #include <cstdio>
@@ -53,10 +54,7 @@ struct MemAddr {
  * @return Siempre @c false, para escribirlo como @c return lift_no(...).
  */
 inline bool lift_no(const std::string &que, int linea) {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_ASM_LIFT_DEBUG");
-        return v != nullptr && v[0] != 0 && v[0] != 0x30;
-    }();
+    static const bool on = util::flag_on(util::FlagId::AsmLiftDebug);
     if (on)
         std::fprintf(stderr, "[asm-lift] no se eleva %s (x86:%d)\n",
                      que.c_str(), linea);

@@ -13,6 +13,7 @@
  * `VOID` como macro y rompe cualquier cabecera con un `enum class` que use ese
  * nombre.  Aqui dentro no molesta.
  */
+#include "util/env_flags.h"
 #include "ir/parallel_for.h"
 
 #include "util/ThreadPool.h"
@@ -44,8 +45,7 @@ struct DispatchStats {
 
     /// Vuelca el resumen al terminar el proceso, si se pidio.
     ~DispatchStats() {
-        const char *v = std::getenv("VESTA_PARALELO_STATS");
-        if (!v || v[0] == '0') return;
+        if (!util::flag_on(util::FlagId::ParaleloStats)) return;
         std::fprintf(stderr,
                      "[reparto] paralelos=%zu en_fila=%zu funciones=%zu "
                      "total=%lld us espera=%lld us\n",
@@ -90,8 +90,7 @@ unsigned compile_threads() {
          *
          * Se deja la salida a mano porque comparar con el secuencial es como se
          * comprueba que un pase nuevo no metio estado compartido. */
-        const char *e = std::getenv("VESTA_PARALELO");
-        if (e && e[0] == '0') return 1u;
+        if (!util::flag_on(util::FlagId::Paralelo)) return 1u;
         unsigned h = std::thread::hardware_concurrency();
         if (h <= 1) return 1u;
         // Uno menos que los nucleos: dejar la maquina sin margen hace que el

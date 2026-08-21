@@ -15,6 +15,7 @@
  * concluye nada; anota lo que ve, por donde se le escapa el valor, y que no ha
  * podido seguir.
  */
+#include "util/env_flags.h"
 #include "analysis/asa/aggregate_facts.h"
 
 #include "analysis/memory/fn_targets.h"
@@ -857,7 +858,7 @@ comparar_estados(const ObservacionModulo &antes,
 }
 
 void volcar_formas(const ir::IrModule &mod, const char *momento) {
-    if (std::getenv("VESTA_ASA_FORMAS") == nullptr) return;
+    if (!util::flag_on(util::FlagId::AsaFormas)) return;
     /* Cada recorrido es un ESTADO distinto, aunque la etapa se llame igual: el
      * emisor se invoca varias veces por compilacion y entre una y otra el
      * modulo cambia.  Sin el contador, dos estados comparten nombre y el mismo

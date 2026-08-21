@@ -10,6 +10,7 @@
  * @brief Implementacion del pase de plegado CTPE (ver fold.h).
  */
 
+#include "util/env_flags.h"
 #include "ctpe/fold.h"
 
 #include "ctpe/evaluable.h"
@@ -110,7 +111,7 @@ void replace_body_with_const(ir::IrFunction &fn, uint64_t value, ir::IrType t) {
                 in.func_name.rfind("__module_init", 0) == 0)
                 module_inits.push_back(in.func_name);
 
-    if (std::getenv("VESTA_CTPE_DEBUG"))
+    if (util::flag_on(util::FlagId::CtpeDebug))
         std::fprintf(stderr,
                      "[ctpe] %s: plegado, %zu __module_init, %zu params\n",
                      fn.name.c_str(), module_inits.size(), fn.params.size());
@@ -182,7 +183,7 @@ int fold(ir::IrModule &mod, vx::ComptimeRuntime &rt, const FoldBudget &budget) {
         // salio del cache o de ejecutar.  Sin ella no hay forma de ver un
         // precomputo equivocado -- el valor se hornea y el sintoma aparece muy
         // lejos, en el resultado del programa ya compilado.
-        static const bool trace = std::getenv("VESTA_CTPE_DEBUG") != nullptr;
+        static const bool trace = util::flag_on(util::FlagId::CtpeDebug);
 
         uint64_t value = 0;
         auto cit = cache.find(cand.fn);

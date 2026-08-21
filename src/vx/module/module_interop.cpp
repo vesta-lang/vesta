@@ -19,6 +19,7 @@
  * El compiler.cpp (en M2.e) las invoca explicitamente.
  */
 
+#include "util/env_flags.h"
 #include "vx/module/module_interop.h"
 
 #include <algorithm>
@@ -1039,7 +1040,7 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.function_names()) {
         const std::string &fname = kv.first;
         const FunctionSig *sig = tc.function_sig_by_name(fname);
-        if (getenv("VX_DBG_VXI") && fname.find("invoke") != std::string::npos)
+        if (util::flag_on(util::FlagId::DbgVxi) && fname.find("invoke") != std::string::npos)
             fprintf(stderr,
                     "[vxi-fn] fname=%s sig=%p strip='%s' in_ns=%d "
                     "pub=%d\n",

@@ -11,6 +11,7 @@
  *        como ADD/LOAD/STORE/... normales.  Solo el residuo opaco (INLINE_ASM/
  *        ASM_MICRO) se analiza aparte, conservador y con tags.
  */
+#include "util/env_flags.h"
 #include <cctype>
 #include "analysis/effects/ir_effects.h"
 
@@ -185,10 +186,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      * DSE es el siguiente paso, y tiene su cuidado: un asm lee los valores de
      * sus variables ligadas aunque no toque memoria, asi que una escritura al
      * hueco de una de ellas NO esta muerta. */
-    static const bool loc_activa = [] {
-        const char *v = std::getenv("VESTA_ASM_LOC");
-        return !(v && v[0] == '0');
-    }();
+    static const bool loc_activa = util::flag_on(util::FlagId::AsmLoc);
     bool localizado =
         loc_activa && !e.accesos.empty() && !e.accesos_incompletos;
     /* Que dice el analisis del TEXTO de este bloque, en crudo.
@@ -199,7 +197,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
      * primer eslabon, buscar en los otros es adivinar, y adivinar aqui sale
      * caro: `readonly` sobre una funcion que escribe hace que su llamante se
      * quede con el valor viejo. */
-    if (std::getenv("VESTA_ASM_EFF_DEBUG") != nullptr) {
+    if (util::flag_on(util::FlagId::AsmEffDebug)) {
         std::fprintf(stderr,
                      "[asm-eff] %s: accesos=%zu incompletos=%d mem_r=%d "
                      "mem_w=%d localizado=%d\n",
@@ -246,7 +244,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
         const uint64_t t2 = util::reloj::ahora();
         ns_hechos += util::reloj::a_ns(t1 - t0);
         ns_rangos += util::reloj::a_ns(t2 - t1);
-        if ((++n_veces % 200) == 0 && std::getenv("VESTA_TIMES"))
+        if ((++n_veces % 200) == 0 && util::flag_on(util::FlagId::Times))
             std::fprintf(
                 stderr,
                 "[asm-efectos] %lld veces | def-use %lld ms | rangos %lld ms\n",

@@ -16,6 +16,7 @@
  * vectores planos.
  */
 
+#include "util/env_flags.h"
 #include "jit/interval.h"
 
 #include <algorithm>
@@ -530,7 +531,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
             if (in.op == MOp::ARG && in.dst.is_reg())
                 pending_arg_regs.push_back(in.dst.reg);
             if (in.op == MOp::INLINE_ASM_RAW &&
-                std::getenv("VESTA_RBANK_ASM_DEBUG")) {
+                util::flag_on(util::FlagId::RbankAsmDebug)) {
                 const uint32_t bi = static_cast<uint32_t>(in.src1.value);
                 std::fprintf(stderr,
                              "[rbank]   asm en pos %u: blob %u, "
@@ -562,7 +563,7 @@ IntervalResult build_intervals(const MFunction &mf, const TargetRegInfo &tri) {
                 || (in.op == MOp::INLINE_ASM_RAW &&
                     !asm_clobbers_conocidos(mf, in))) {
                 out.call_positions.push_back(2u * gi);
-                if (std::getenv("VESTA_RBANK_ASM_DEBUG")) {
+                if (util::flag_on(util::FlagId::RbankAsmDebug)) {
                     /* QUE op impone cada posicion: sin esto, "cruza-llamada=1"
                      * no dice si es una llamada de verdad o una pseudo-op que
                      * clobbea (divmod / memoria VM / atomica / asm). */

@@ -23,6 +23,7 @@
  *       para que consumidores sin cxxopts (el LSP) tambien puedan invocarlo.
  */
 
+#include "util/env_flags.h"
 #include "toolchain/aot_build.h"
 
 #include <algorithm>
@@ -1679,7 +1680,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // (aot_analyze lo rechaza -> nunca leak).  Corre tras promote.
     (void)ir::ir_pass_own_closure_envs(aot_mod);
 
-    if (std::getenv("VESTA_AOT_DUMP_IR")) {
+    if (util::flag_on(util::FlagId::AotDumpIr)) {
         std::cerr << "===== AOT native_poo IR =====\n";
         ir::ir_print(aot_mod, std::cerr);
         std::cerr << "=============================\n";

@@ -9,6 +9,7 @@
  * @file util/host_allocator.cpp
  * @brief Implementacion del asignador propio.  Los motivos, en la cabecera.
  */
+#include "util/env_flags.h"
 #include "util/host_allocator.h"
 
 #include "util/thread_slot.h"
@@ -193,9 +194,24 @@ bool allocator_active() noexcept {
      * dando vueltas.  Asi lo peor que pasa es que la primera reserva vaya al
      * sistema. */
     g_active_state.store(2, std::memory_order_release);
-    const char *e = std::getenv("VESTA_NO_HOST_SLAB");
-    const bool off = (e != nullptr && e[0] != '\0' && e[0] != '0');
-    g_measure = std::getenv("VESTA_HOST_ALLOC_STATS") != nullptr;
+    /* A PELO, y no por el registro de mandos (`util/env_flags.h`), aunque los
+     * dos esten declarados alli.
+     *
+     * El registro guarda el valor de los 167 mandos en cadenas, asi que
+     * consultarlo la primera vez PIDE MEMORIA -- y pedir memoria entra aqui.
+     * Con el estatico del registro a medio construir, esa reentrada se queda
+     * esperando su guarda para siempre: el proceso cuelga antes de llegar a
+     * `main`.  Costo encontrarlo.
+     *
+     * Es el mismo motivo que ya decia el comentario de arriba sobre `getenv`,
+     * llevado un paso mas: quien resuelve las reservas no puede apoyarse en
+     * nada que reserve. */
+    const char *no_slab = std::getenv("VESTA_NO_HOST_SLAB");
+    const bool off = no_slab != nullptr && no_slab[0] != '\0' &&
+                     !(no_slab[0] == '0' && no_slab[1] == '\0');
+    const char *stats = std::getenv("VESTA_HOST_ALLOC_STATS");
+    g_measure = stats != nullptr && stats[0] != '\0' &&
+                !(stats[0] == '0' && stats[1] == '\0');
     if (!off) {
         build_class_table();
         g_active_state.store(1, std::memory_order_release);

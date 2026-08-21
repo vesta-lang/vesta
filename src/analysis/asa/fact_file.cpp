@@ -11,6 +11,7 @@
  * analysis/asa/fact_file.h).
  */
 
+#include "util/env_flags.h"
 #include "analysis/asa/fact_file.h"
 
 #include "util/fnv.h"
@@ -129,8 +130,8 @@ CacheLevel cache_level() {
     /* Una vez por proceso: es una decision de configuracion, no cambia a mitad
      * de una compilacion, y consultarla es barato solo si no se relee. */
     static const CacheLevel n = [] {
-        const char *v = std::getenv("VESTA_ASA_CACHE");
-        if (v == nullptr || v[0] == '\0') return CacheLevel::ByCost;
+        const std::string &v = util::flag_text(util::FlagId::AsaCache);
+        if (v.empty()) return CacheLevel::ByCost;
         switch (v[0]) {
         case '0': return CacheLevel::Off;
         case '1': return CacheLevel::Minimum;

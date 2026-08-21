@@ -43,6 +43,7 @@
  *     suyo) y los procesos VM no comparten allocator entre threads.
  */
 
+#include "util/env_flags.h"
 #include "gc/raw_allocator.h"
 
 #include <cstring>
@@ -84,7 +85,7 @@ uint64_t RawAllocator::alloc(size_t size) {
     // para evitar @c getenv en el hot path (es 100-300 ns por
     // llamada, mayor que el coste de un alloc del slab).
     if (slab_env_cache_ == 0) {
-        slab_env_cache_ = (std::getenv("VESTA_NO_SLAB") != nullptr) ? 2u : 1u;
+        slab_env_cache_ = (util::flag_on(util::FlagId::NoSlab)) ? 2u : 1u;
     }
     const size_t class_idx =
         (slab_env_cache_ == 2u) ? SIZE_MAX : slab_class_for(size);

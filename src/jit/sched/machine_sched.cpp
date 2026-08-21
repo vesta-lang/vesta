@@ -26,6 +26,7 @@
  *     semantica correcta sin un points-to global, no un atajo.
  */
 
+#include "util/env_flags.h"
 #include "jit/sched/machine_sched.h"
 
 #include <algorithm>
@@ -393,7 +394,7 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
     // modo destapa cualquier DEPENDENCIA que FALTE en el modelo de efectos (si
     // el reorden agresivo rompe un test, hay un hazard sin modelar).  Sigue
     // respetando el DAG (solo nodos con indeg==0), asi que un fallo == hueco.
-    static const bool stress = std::getenv("VESTA_SCHED_STRESS") != nullptr;
+    static const bool stress = util::flag_on(util::FlagId::SchedStress);
     // Compara la prioridad de dos nodos (camino critico, luego ready, luego
     // id).
     auto better = [&](int i, int b) -> bool {
@@ -463,7 +464,7 @@ int schedule_region(std::vector<MInstr> &ins, int lo, int hi,
     // detecta EFECTOS que FALTEN (para eso: el modo STRESS + la suite e2e).
     // Env-gated (no #ifndef NDEBUG) para que sirva tambien en builds con
     // NDEBUG.
-    static const bool verify = std::getenv("VESTA_SCHED_VERIFY") != nullptr;
+    static const bool verify = util::flag_on(util::FlagId::SchedVerify);
     if (verify) {
         std::vector<int> vpos(n);
         for (int k = 0; k < n; ++k)
@@ -507,7 +508,7 @@ int schedule_function(MFunction &mf, const SchedCostModel &cm, EffIsa isa) {
      * del generador de bloques -- y arreglar el equivocado no mueve nada.  @c
      * sum_n2 es el predictor directo del coste: si un solo bloque lo domina, el
      * problema es (b). */
-    static const bool shape = std::getenv("VESTA_SCHED_SHAPE") != nullptr;
+    static const bool shape = util::flag_on(util::FlagId::SchedShape);
     if (shape) {
         size_t nb = 0, maxn = 0, sum = 0;
         unsigned long long sum_n2 = 0;

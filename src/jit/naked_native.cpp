@@ -12,6 +12,7 @@
  *        naked_native.h.
  */
 
+#include "util/env_flags.h"
 #include "jit/naked_native.h"
 
 #include "jit/code_cache.h"
@@ -358,7 +359,7 @@ extern "C" uint64_t vrt_naked_dispatch(uint64_t proc, uint64_t name_hash,
                                        uint64_t a4, uint64_t a5) {
     auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
     if (vm == nullptr) return 0;
-    static const bool debug = std::getenv("VESTA_NAKED_DEBUG") != nullptr;
+    static const bool debug = util::flag_on(util::FlagId::NakedDebug);
 
     // Localizar el nombre de la funcion @Naked por hash: escaneamos los IR de
     // los executables cargados buscando el que coincide (barato; solo cold
@@ -429,7 +430,7 @@ bool is_naked_native_addr(uint64_t addr) {
 extern "C" uint64_t vrt_naked_fnaddr(uint64_t proc, uint64_t name_hash) {
     auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
     if (vm == nullptr) return 0;
-    static const bool debug = std::getenv("VESTA_NAKED_DEBUG") != nullptr;
+    static const bool debug = util::flag_on(util::FlagId::NakedDebug);
     // Localizar el nombre por hash (igual que el dispatcher).
     std::string target_name;
     {
@@ -465,7 +466,7 @@ void register_naked_fnaddr_runner() {
 /* ===================================================================== */
 
 uint64_t compile_naked_native(runtime::ProcessVM *vm, const std::string &name) {
-    static const bool debug = std::getenv("VESTA_NAKED_DEBUG") != nullptr;
+    static const bool debug = util::flag_on(util::FlagId::NakedDebug);
     NakedState &st = state();
     std::lock_guard<std::mutex> lk(st.mtx);
     return compile_native_fn(vm, name, debug);

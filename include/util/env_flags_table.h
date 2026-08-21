@@ -141,7 +141,7 @@ VESTA_ENV_FLAG(SchedVerify,       "VESTA_SCHED_VERIFY",       Report,  Scheduler
 VESTA_ENV_FLAG(AsignadorMaquina,  "VESTA_ASIGNADOR_MAQUINA",  Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(Belady,            "VESTA_BELADY",             Emitted, RegAlloc, BoolOn, Any)
 VESTA_ENV_FLAG(Splitting,         "VESTA_SPLITTING",          Emitted, RegAlloc, Bool, Any)
-VESTA_ENV_FLAG(Recovery,          "VESTA_RECOVERY",           Emitted, RegAlloc, Bool, Any)
+VESTA_ENV_FLAG(Recovery,          "VESTA_RECOVERY",           Emitted, RegAlloc, BoolOn, Any)
 VESTA_ENV_FLAG(VregNoSplit,       "VESTA_VREG_NO_SPLIT",      Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(NoSsaCoalesce,     "VESTA_NO_SSA_COALESCE",    Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(Arm64Vreg,         "VESTA_ARM64_VREG",         Emitted, RegAlloc, BoolOn, Any)
@@ -211,12 +211,12 @@ VESTA_ENV_FLAG(HostAllocStats,    "VESTA_HOST_ALLOC_STATS",   Report,  Gc, Bool,
 
 /* -- Reparto por hilos.  Cambia el COMO, no el QUE ------------------------ */
 VESTA_ENV_FLAG(Paralelo,          "VESTA_PARALELO",           Speed,   Parallel, BoolOn, Any)
-VESTA_ENV_FLAG(ParaleloStats,     "VESTA_PARALELO_STATS",     Report,  Parallel, BoolOn, Any)
+VESTA_ENV_FLAG(ParaleloStats,     "VESTA_PARALELO_STATS",     Report,  Parallel, Bool, Any)
 VESTA_ENV_FLAG(ParallelCompile,   "VX_PARALLEL_COMPILE",      Speed,   Parallel, Int, Any)
 
 /* -- ASA: el conocimiento del programa ------------------------------------ */
 VESTA_ENV_FLAG(AsaBounds,         "VESTA_ASA_BOUNDS",         Report,  Asa, BoolOn, Any)
-VESTA_ENV_FLAG(AsaCache,          "VESTA_ASA_CACHE",          Speed,   Asa, Bool, Any)
+VESTA_ENV_FLAG(AsaCache,          "VESTA_ASA_CACHE",          Speed,   Asa, Text, Any)
 VESTA_ENV_FLAG(AsaFormas,         "VESTA_ASA_FORMAS",         Report,  Asa, Bool, Any)
 VESTA_ENV_FLAG(AsaHechosDebug,    "VESTA_ASA_HECHOS_DEBUG",   Report,  Asa, Bool, Any)
 VESTA_ENV_FLAG(BoundsDebug,       "VESTA_BOUNDS_DEBUG",       Report,  Asa, Bool, Any)
@@ -238,7 +238,7 @@ VESTA_ENV_FLAG(DbgReg,            "VX_DBG_REG",               Report,   Cache, B
 
 /* -- Medicion transversal ------------------------------------------------- */
 VESTA_ENV_FLAG(Times,             "VESTA_TIMES",              Report,  None, Bool, Any)
-VESTA_ENV_FLAG(Tramos,            "VESTA_TRAMOS",             Report,  None, BoolOn, Any)
+VESTA_ENV_FLAG(Tramos,            "VESTA_TRAMOS",             Emitted, RegAlloc, BoolOn, Any)
 VESTA_ENV_FLAG(DbgBpTrace,        "VESTA_DBG_BP_TRACE",       Report,  None, Bool, Any)
 VESTA_ENV_FLAG(NoColor,           "NO_COLOR",                 Report,  None, Bool, Any)
 

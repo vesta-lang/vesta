@@ -9,6 +9,7 @@
  * Valida el header, reserva memoria en el @c ArenaManager y crea el @c
  * ProcessVM con el PC inicializado segun @c init_pc del ejecutable.
  */
+#include "util/env_flags.h"
 #include "util/file_read.h"
 #include "loader/loader.h"
 #include <algorithm> // UCRT64: no transitivo
@@ -1132,7 +1133,7 @@ Loader::load_executable(runtime::VM &vm,
             static const char *const kPuntos[2] = {"__vx_alloc_entry",
                                                    "__vx_free_entry"};
             const size_t n_puntos =
-                std::getenv("VESTA_ASIGNADOR_MAQUINA") ? 0u : 2u;
+                util::flag_on(util::FlagId::AsignadorMaquina) ? 0u : 2u;
             for (size_t ip = 0; ip < n_puntos; ++ip) {
                 const char *punto = kPuntos[ip];
                 /* El nombre convenido es un ALIAS -- una etiqueta mas sobre la

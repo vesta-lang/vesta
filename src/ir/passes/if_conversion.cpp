@@ -24,6 +24,7 @@
  * externo ya ve una cadena limpia (bucle de punto fijo interno).
  */
 
+#include "util/env_flags.h"
 #include "ir/passes/if_conversion.h"
 #include "ir/passes/select_policy.h"
 #include "ir/ssa_ir.h"
@@ -351,10 +352,7 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
     // instrucciones especulables (proxy); loop-carried = el resultado
     // realimenta una recurrencia (cmov en el camino critico).  El escape
     // VESTA_IF_CONVERSION_ALL=1 fuerza convertir siempre (A/B testing).
-    static const bool force_all = [] {
-        const char *e = std::getenv("VESTA_IF_CONVERSION_ALL");
-        return e && e[0] != '\0' && e[0] != '0';
-    }();
+    static const bool force_all = util::flag_on(util::FlagId::IfConversionAll);
     if (!force_all) {
         const bool loop_carried =
             merge_phi_loop_carried(fn, *M, truePred, falsePred);
@@ -439,10 +437,7 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
 
 int ir_pass_if_conversion(IrFunction &fn) {
     // Escape de emergencia (diagnostico / bisecar regresiones).
-    static const bool disabled = [] {
-        const char *e = std::getenv("VESTA_NO_IF_CONVERSION");
-        return e && e[0] != '\0' && e[0] != '0';
-    }();
+    static const bool disabled = util::flag_on(util::FlagId::NoIfConversion);
     if (disabled) return 0;
 
     int total = 0;

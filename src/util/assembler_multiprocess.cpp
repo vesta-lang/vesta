@@ -20,6 +20,7 @@
  * @note Este header solo declara la interfaz; la implementacion esta en el
  * .cpp.
  */
+#include "util/env_flags.h"
 #include "util/assembler_multiprocess.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "profiler/timer.h"
@@ -187,8 +188,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 
     Timer t_linker;
     const bool prof_link = []() {
-        const char *v = std::getenv("VESTA_LINKER_PROFILE");
-        return v && v[0] == '1';
+        return util::flag_on(util::FlagId::LinkerProfile);
     }();
 
     Timer t_link_ctor;

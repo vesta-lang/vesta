@@ -30,6 +30,7 @@
  *     La abstraccion se hace con las macros SOCK_T y CLOSE_SOCK.
  */
 
+#include "util/env_flags.h"
 #include "debug/debugger.h"
 #include "debug/auth.h"
 #include "runtime/proceso_runtime.h"
@@ -699,8 +700,7 @@ Breakpoint *Debugger::find_breakpoint(uint64_t pc, uint64_t pid) {
     // Diagnostico temporal: si VESTA_DBG_BP_TRACE=1, log cada lookup.
     // Activable solo bajo demanda para no spammear el stderr en prod.
     static const bool trace = []() {
-        const char *e = std::getenv("VESTA_DBG_BP_TRACE");
-        return e && (*e == '1' || *e == 't' || *e == 'T');
+        return util::flag_on(util::FlagId::DbgBpTrace);
     }();
     if (trace) {
         std::fprintf(
@@ -932,8 +932,7 @@ void Debugger::on_before_exec(runtime::ProcessVM *proc) {
     uint64_t pid = proc->pid.local_pid; // PID local del proceso
     // Diagnostico temporal: si VESTA_DBG_BP_TRACE=1, log cada slow path.
     static const bool _bp_trace = []() {
-        const char *e = std::getenv("VESTA_DBG_BP_TRACE");
-        return e && (*e == '1' || *e == 't' || *e == 'T');
+        return util::flag_on(util::FlagId::DbgBpTrace);
     }();
     int _recheck_iter = 0;
 recheck:

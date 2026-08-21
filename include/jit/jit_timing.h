@@ -37,6 +37,7 @@
 #ifndef VESTA_JIT_JIT_TIMING_H
 #define VESTA_JIT_JIT_TIMING_H
 
+#include "util/env_flags.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -100,10 +101,7 @@ class JitTiming {
 
     /// ¿Guardar el desglose por funcion?  Opt-in via @c VESTA_JIT_TIME=1.
     static bool detail_enabled() {
-        static const bool on = [] {
-            const char *e = std::getenv("VESTA_JIT_TIME");
-            return e && e[0] && e[0] != '0';
-        }();
+        static const bool on = util::flag_on(util::FlagId::JitTime);
         return on;
     }
 

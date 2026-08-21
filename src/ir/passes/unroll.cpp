@@ -14,6 +14,7 @@
  * REMAINDER.  Factor automatico por metricas del cuerpo.  Usa LoopFacts.
  */
 
+#include "util/env_flags.h"
 #include "ir/passes/unroll.h"
 
 #include "analysis/facts/loop_facts.h"
@@ -37,10 +38,7 @@ namespace {
 
 // VESTA_NO_UNROLL=1 desactiva el pase (A/B testing).
 bool unroll_disabled() {
-    static const bool v = [] {
-        const char *e = std::getenv("VESTA_NO_UNROLL");
-        return e != nullptr && e[0] != '\0' && e[0] != '0';
-    }();
+    static const bool v = util::flag_on(util::FlagId::NoUnroll);
     return v;
 }
 
@@ -384,10 +382,7 @@ bool ir_pass_unroll(IrFunction &fn, int factor) {
     target.code_size = fn_size;
 
     static UnrollStats g_stats;
-    static const bool want_stats = [] {
-        const char *e = std::getenv("VESTA_UNROLL_STATS");
-        return e != nullptr && e[0] != '\0' && e[0] != '0';
-    }();
+    static const bool want_stats = util::flag_on(util::FlagId::UnrollStats);
 
     bool changed = false;
     for (const LoopInfo &li : eligible) {

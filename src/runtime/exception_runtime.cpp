@@ -3,6 +3,7 @@
  * @brief Implementacion del sistema FatalError
  */
 
+#include "util/env_flags.h"
 #include "runtime/exception_runtime.h"
 
 #include "util/thread_slot.h" // ranura por hilo propia (sin la TLS emulada)
@@ -64,8 +65,10 @@ namespace runtime {
  * coincidir lo unico que pasaria es que la traza sale mas escueta.
  */
 static std::string vxdbg_cache_dir() {
-    if (const char *v = std::getenv("VX_CACHE_DIR"); v && v[0])
-        return std::string(v) + "/vxdbg";
+    {
+        const std::string &v = util::flag_text(util::FlagId::CacheDir);
+        if (!v.empty()) return v + "/vxdbg";
+    }
     return ".cache/vxdbg";
 }
 

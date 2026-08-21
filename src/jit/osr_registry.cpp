@@ -15,6 +15,7 @@
  * contador y la captura es de quien tiene el marco de pila delante.
  */
 
+#include "util/env_flags.h"
 #include "jit/osr_registry.h"
 
 #include <cstdio>
@@ -54,10 +55,7 @@ uint64_t (*g_handler)(uint64_t) = nullptr;
  * @return true si esta activado.
  */
 bool detalle_activado() noexcept {
-    static const bool on = [] {
-        const char *v = std::getenv("VESTA_OSR_LOG");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool on = util::flag_on(util::FlagId::OsrLog);
     return on;
 }
 

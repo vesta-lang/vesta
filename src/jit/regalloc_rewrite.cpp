@@ -11,6 +11,7 @@
  *        Ver regalloc_rewrite.h y doc/REGALLOC.md.
  */
 
+#include "util/env_flags.h"
 #include "jit/asm_deferred.h"
 #include "jit/frame_addr.h"
 #include "jit/frame_emit.h"
@@ -42,10 +43,7 @@ namespace {
  *  (el codegen mas safety-critical: un fallo aqui corrompe el heap via
  *  el precise stack-scan de la GC). */
 bool jit_no_frameless() noexcept {
-    static const bool off = [] {
-        const char *v = std::getenv("VESTA_JIT_NO_FRAMELESS");
-        return v && v[0] != '\0' && v[0] != '0';
-    }();
+    static const bool off = util::flag_on(util::FlagId::JitNoFrameless);
     return off;
 }
 
@@ -2535,7 +2533,7 @@ MFunction rewrite_to_physical(const MFunction &vf,
             default: break; // sin ensamblador no hay nada que contar
             }
         }
-        if (std::getenv("VESTA_ASM_TRAMP_DEBUG")) {
+        if (util::flag_on(util::FlagId::AsmTrampDebug)) {
             std::fprintf(stderr,
                          "=== plantilla (%zu ops) ===\n%s\n"
                          "=== asm con registros puestos ===\n%s\n",

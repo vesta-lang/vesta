@@ -13,6 +13,7 @@
  *        (summary) en Fase 2.  Aqui devolvemos valores NEUTROS Complete para no
  *        alterar comportamiento (  cero regresion).
  */
+#include "util/env_flags.h"
 #include "analysis/effects/effect_analysis.h"
 
 #include "analysis/facts/value_range.h"
@@ -367,7 +368,7 @@ EffectAnalysis::build_summary(const std::vector<const ir::IrModule *> &mods) {
 
     /* Reparto del coste, por fases.  Se publica con VESTA_TIMES porque "el
      * analisis tarda" no se puede atacar sin saber cual de las cuatro es. */
-    const bool medir = std::getenv("VESTA_TIMES") != nullptr;
+    const bool medir = util::flag_on(util::FlagId::Times);
     using RelojFase = std::chrono::steady_clock;
     auto marca = RelojFase::now();
     long us_escape = 0, us_local = 0, us_punto_fijo = 0, us_nativas = 0;

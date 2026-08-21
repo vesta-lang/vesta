@@ -9,6 +9,7 @@
  * @file bounds.cpp
  * @brief Implementacion del comprobador de limites de region (ver bounds.h).
  */
+#include "util/env_flags.h"
 #include "analysis/effects/bounds.h"
 
 #include "analysis/effects/effect_analysis.h"
@@ -45,8 +46,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
     /* Interruptor de escape.  La comprobacion esta MEDIDA a cero falsos sobre
      * los 454 programas del corpus, pero un veredicto que rompe una compilacion
      * tiene que poder desactivarse sin tocar el compilador. */
-    if (const char *v = std::getenv("VESTA_ASA_BOUNDS"))
-        if (v[0] == '0') return out;
+    if (!util::flag_on(util::FlagId::AsaBounds)) return out;
 
     /* El motor lo trae quien ya lo tenia.  Construir uno propio significa
      * rehacer el escape y los resumenes del modulo entero -- que es justo lo
@@ -82,7 +82,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
     /* Reparto del coste.  Hizo falta: la sospecha era el def-use y no lo era,
      * ni el motor duplicado -- solo midiendo cada parte se llego a la que es.
      */
-    const bool medir = std::getenv("VESTA_TIMES") != nullptr;
+    const bool medir = util::flag_on(util::FlagId::Times);
     using RelojLim = std::chrono::steady_clock;
     auto marca = RelojLim::now();
     long us_resumenes = 0, us_rangos = 0, us_llamadas = 0;
@@ -285,7 +285,7 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
                                                   : ir::IR_NO_VALUE);
                 if (vptr == ir::IR_NO_VALUE) continue;
                 const PointsToEntry &pe = pt.at(vptr);
-                if (std::getenv("VESTA_BOUNDS_DEBUG"))
+                if (util::flag_on(util::FlagId::BoundsDebug))
                     std::fprintf(stderr,
                                  "[bounds] fn=%s linea=%u kind=%d exact=%d "
                                  "rango=%d [%lld,%lld]\n",
