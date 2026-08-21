@@ -211,6 +211,30 @@ target_include_directories(sqlite3 PUBLIC
         libs/SourceCode/sqlite
 )
 
+# miniz: deflate en un solo fichero, licencia MIT.
+#
+# POR QUE.  La seccion `@ir` del artefacto es el 76% de su tamano -- 5,75 MiB de
+# 7,56 en un proyecto de 6k lineas -- y comprime muchisimo por ser una
+# serializacion muy repetitiva.  Medido sobre esa seccion real: nivel 3 da 13,8x
+# en 22,9 ms y nivel 6 da 15,2x en 56,8; descomprimir, ~4 ms en los dos.
+#
+# POR QUE MINIZ Y NO OTRO.  Se probaron los compresores que YA trae el sistema
+# (`RtlCompressBuffer` de ntdll, que ya enlazamos, y la Compression API de
+# cabinet).  XPRESS_HUFF es mas rapido -- 10,7x en 4,9 ms -- pero es de Windows,
+# y un artefacto comprimido asi no lo abre nadie fuera.  Deflate lo entiende
+# cualquier herramienta, y eso vale mas que 3 ms en algo que se escribe una vez.
+#
+# Y frente a zlib: mismo formato y mismos numeros, pero UN fichero en vez de
+# quince.  Se compila como C: `miniz.c` declara un `const` de forma tentativa,
+# que C permite y C++ rechaza.
+add_library(miniz STATIC
+        libs/SourceCode/miniz/miniz.c
+)
+target_include_directories(miniz PUBLIC
+        libs/SourceCode/miniz
+)
+set_target_properties(miniz PROPERTIES LINKER_LANGUAGE C)
+
 # Preprocesador vpp (opcional — activado por defecto)
 option(VESTA_BUILD_PREPROCESSOR "Compilar el preprocesador vpp e integrarlo en el ensamblador" ON)
 if(VESTA_BUILD_PREPROCESSOR)
