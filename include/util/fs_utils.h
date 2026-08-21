@@ -30,6 +30,8 @@
 
 #include <algorithm>
 #include <mutex>
+#include <cstdlib>
+#include <unordered_map>
 #include <unordered_set>
 #include <atomic>
 #include <cstdint>
@@ -616,6 +618,57 @@ static std::string get_executable_name() {
  * @param bytes Contenido.
  * @return @c true si el destino quedo escrito.
  */
+/**
+ * @brief Donde van los temporales de las escrituras atomicas.
+ *
+ * En un directorio propio y NO al lado del destino.  El motivo no es el orden:
+ * es que un proceso que muere a mitad de una escritura no puede limpiar detras
+ * de si -- eso ES morir --, asi que el temporal se queda.  Al lado del destino
+ * eso ensucia el ARBOL DE FUENTES: aparecen `atomic.vxir.tmp.27756.4` junto a
+ * `atomic.vx`, salen en `git status` mezclados con lo del proyecto, y quien los
+ * vea no sabe si son basura o hacen falta.  En un directorio de cache, en
+ * cambio, ya se sabe que todo lo de dentro se puede borrar entero.
+ *
+ * Se resuelve UNA vez: no cambia durante la vida del proceso.
+ */
+static const std::string &temp_write_dir() {
+    static const std::string dir = [] {
+        if (const char *v = std::getenv("VX_CACHE_DIR"); v != nullptr && v[0])
+            return std::string(v) + "/tmp";
+        return std::string(".cache/tmp");
+    }();
+    return dir;
+}
+
+/**
+ * @brief Estan @p a y @p b en el mismo volumen?
+ *
+ * De esto depende que el renombrado siga siendo atomico.  Renombrar dentro de
+ * un volumen es una operacion del sistema de ficheros; entre volumenes no se
+ * puede, y quien lo intenta acaba copiando y borrando -- que es exactamente
+ * perder la atomicidad que motivaba todo esto, y ademas EN SILENCIO.
+ *
+ * Por eso no se supone: se pregunta.  Si la respuesta es que no, el temporal se
+ * queda al lado del destino y se acepta ensuciar ese directorio antes que
+ * arriesgar una escritura a medias.
+ */
+static bool same_volume(const std::string &a, const std::string &b) {
+    std::error_code e1, e2;
+#ifdef _WIN32
+    char va[MAX_PATH] = {0}, vb[MAX_PATH] = {0};
+    if (!GetVolumePathNameA(a.c_str(), va, MAX_PATH)) return false;
+    if (!GetVolumePathNameA(b.c_str(), vb, MAX_PATH)) return false;
+    return _stricmp(va, vb) == 0;
+#else
+    struct stat sa, sb;
+    if (::stat(a.c_str(), &sa) != 0) return false;
+    if (::stat(b.c_str(), &sb) != 0) return false;
+    (void)e1;
+    (void)e2;
+    return sa.st_dev == sb.st_dev;
+#endif
+}
+
 static bool write_file_atomic(const std::string &path,
                               const std::vector<uint8_t> &bytes) {
     static std::atomic<uint64_t> contador{0};
@@ -640,7 +693,42 @@ static bool write_file_atomic(const std::string &path,
         }
     };
     asegurar_dir(false);
-    std::string tmp = path + ".tmp.";
+
+    /* DONDE va el temporal.  En el directorio comun si esta en el mismo volumen
+     * que el destino; si no, al lado del destino como siempre.
+     *
+     * La comprobacion se hace UNA vez por directorio de destino y se recuerda,
+     * en la misma linea que el memo de arriba: preguntarlo en cada escritura
+     * seria otra llamada al sistema por fichero, y la respuesta no cambia. */
+    static std::mutex mx_vol;
+    static std::unordered_map<std::string, bool> vol_comun;
+    bool usar_comun = false;
+    {
+        std::lock_guard<std::mutex> g(mx_vol);
+        auto it = vol_comun.find(dir_padre);
+        if (it != vol_comun.end()) {
+            usar_comun = it->second;
+        } else {
+            std::error_code e3;
+            fs::create_directories(temp_write_dir(), e3);
+            // Si el directorio comun no se pudo crear, no hay nada que
+            // comparar: al lado del destino, que siempre funciona.
+            usar_comun = fs::exists(temp_write_dir(), e3) &&
+                         same_volume(temp_write_dir(), dir_padre);
+            vol_comun.emplace(dir_padre, usar_comun);
+        }
+    }
+
+    /* El nombre lleva el del destino aunque vaya a otro directorio: si un dia
+     * queda uno huerfano, se puede saber de que era.  Y lleva el identificador
+     * del proceso, que es lo que despues permite decir con certeza que sobra --
+     * si ese proceso ya no existe, nadie va a terminarlo. */
+    std::string tmp;
+    if (usar_comun)
+        tmp = temp_write_dir() + "/" + fs::path(path).filename().string() +
+              ".tmp.";
+    else
+        tmp = path + ".tmp.";
 #ifdef _WIN32
     tmp += std::to_string(static_cast<uint64_t>(GetCurrentProcessId()));
 #else
