@@ -215,6 +215,43 @@ bool project_cache_load_diags(const std::string &cache_path, uint32_t diag_hash,
                               std::vector<Diagnostic> &out,
                               const analysis::asa::Ambito &aqui);
 
+/**
+ * @brief Guarda con que se vuelve a publicar la raiz de diagnostico.
+ *
+ * POR QUE HACE FALTA.  El grafo de conocimiento se emite durante el lowering,
+ * asi que un artefacto servido desde este cache no emite NADA: se comprobo con
+ * el cache purgado (1 paquete, 1 raiz) y sin purgar (0 y 0).  El binario sale
+ * igual, pero nada en el almacen lo explica, asi que si falla no hay de donde
+ * sacar su traza.  Y no basta con recompilar para arreglarlo: la recompilacion
+ * vuelve a acertar en el cache y vuelve a no emitir nada.
+ *
+ * No se guarda el grafo, que ya esta en su almacen y es el mismo: solo las dos
+ * huellas por las que se pregunta.  Con ellas, servir desde el cache puede
+ * republicar la raiz y el binario cacheado vuelve a ser explicable.
+ *
+ * Va en un fichero al lado de la entrada, como los diagnosticos, para no tocar
+ * el formato de lo que ya hay en disco.
+ *
+ * @param cache_path Misma ruta que @ref project_cache_save.
+ * @param map_hex    Huella del mapa del artefacto, en hexadecimal.
+ * @param spans_hex  Huella de sus tramos; puede ir vacia.
+ * @return @c true si quedo escrito.
+ */
+bool project_cache_save_vxdbg(const std::string &cache_path,
+                              const std::string &map_hex,
+                              const std::string &spans_hex);
+
+/**
+ * @brief Recupera lo guardado por @ref project_cache_save_vxdbg.
+ * @param cache_path Mismo que al guardar.
+ * @param out_map_hex Recibe la huella del mapa.
+ * @param out_spans_hex Recibe la de los tramos.
+ * @return @c true si habia algo que recuperar.
+ */
+bool project_cache_load_vxdbg(const std::string &cache_path,
+                              std::string &out_map_hex,
+                              std::string &out_spans_hex);
+
 /// @brief FNV-1a 64 helper (publico para uso en @c compile_vx_project).
 uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept;
 

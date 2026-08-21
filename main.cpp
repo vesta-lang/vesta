@@ -324,6 +324,18 @@ static void guardar_cache_de_proyecto(
      * lleva formato y tipo de emision y los guardaria una vez por backend. */
     const bool diags_ok = vx::project_cache_save_diags(
         pc_path, diag_hash, cr.diagnostics.all(), donde);
+    /* Y con que volver a publicar la raiz de diagnostico, por el mismo motivo
+     * que los avisos: el grafo se emite durante el lowering, asi que un
+     * artefacto servido desde el cache no emite ninguno y nada explicaria ese
+     * binario.  Comprobado: con el cache purgado sale 1 paquete y 1 raiz; sin
+     * purgar, 0 y 0.  Y recompilar no lo arregla, porque vuelve a acertar.
+     *
+     * No se guarda el grafo -- ya esta en su almacen y es el mismo -- sino las
+     * dos huellas por las que se pregunta. */
+    if (!cr.vxdbg_artifact_map.empty()) {
+        vx::project_cache_save_vxdbg(pc_path, cr.vxdbg_artifact_map.to_hex(),
+                                     cr.vxdbg_span_map.to_hex());
+    }
     if (verboso) {
         std::cerr << "[vx-project-cache] "
                   << (guardado ? "saved" : "save_failed") << ": " << pc_path
@@ -4122,6 +4134,21 @@ int main(int argc, char *argv[]) {
                                                          guardados, donde)) {
                             for (const auto &d : guardados)
                                 vx::print_diagnostic(std::cerr, d);
+                        }
+                        /* Y la raiz de diagnostico, por el mismo motivo que los
+                         * avisos de arriba: sin esto el binario servido desde
+                         * el cache no tiene nada que lo explique, y recompilar
+                         * tampoco lo arregla porque vuelve a acertar aqui.  El
+                         * identificador se saca del fichero que se acaba de
+                         * escribir, que es de donde tiene que salir. */
+                        std::string map_hex, spans_hex;
+                        if (vx::project_cache_load_vxdbg(pc_path, map_hex,
+                                                         spans_hex)) {
+                            vx::publish_vxdbg_artifact(
+                                out_velb,
+                                vxdbg::ContentHash::from_hex(map_hex),
+                                vxdbg::ContentHash::from_hex(spans_hex),
+                                copts.vxdbg_dir);
                         }
                         if (project_cache_verbose) {
                             std::cerr << "[vx-project-cache] hit: " << pc_path

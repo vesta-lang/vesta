@@ -363,6 +363,42 @@ std::string ruta_diags_(const std::string &cache_path, uint32_t diag_hash) {
 
 } // namespace
 
+namespace {
+/// Donde vive la nota de diagnostico de una entrada del cache.
+std::string vxdbg_side_path(const std::string &cache_path) {
+    return cache_path + ".vxdbg";
+}
+} // namespace
+
+bool project_cache_save_vxdbg(const std::string &cache_path,
+                              const std::string &map_hex,
+                              const std::string &spans_hex) {
+    // Sin mapa no hay nada que republicar; los tramos si son opcionales.
+    if (map_hex.empty()) return false;
+    const std::string body = map_hex + "\n" + spans_hex + "\n";
+    return fs::write_file_atomic(
+        vxdbg_side_path(cache_path),
+        std::vector<uint8_t>(body.begin(), body.end()));
+}
+
+bool project_cache_load_vxdbg(const std::string &cache_path,
+                              std::string &out_map_hex,
+                              std::string &out_spans_hex) {
+    out_map_hex.clear();
+    out_spans_hex.clear();
+    std::vector<uint8_t> bytes;
+    if (!fs::read_file_bytes(vxdbg_side_path(cache_path), bytes)) return false;
+    const std::string body(bytes.begin(), bytes.end());
+    const size_t nl = body.find('\n');
+    if (nl == std::string::npos) return false;
+    out_map_hex = body.substr(0, nl);
+    const size_t nl2 = body.find('\n', nl + 1);
+    out_spans_hex = nl2 == std::string::npos
+                        ? body.substr(nl + 1)
+                        : body.substr(nl + 1, nl2 - nl - 1);
+    return !out_map_hex.empty();
+}
+
 bool project_cache_save_diags(const std::string &cache_path, uint32_t diag_hash,
                               const std::vector<Diagnostic> &diags,
                               const analysis::asa::Ambito &donde) {
