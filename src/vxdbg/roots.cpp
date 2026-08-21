@@ -78,7 +78,8 @@ std::string CacheRootRepository::path_for(BuildId build) const {
 }
 
 bool CacheRootRepository::publish(BuildId build, ContentHash map,
-                                  ContentHash spans) const {
+                                  ContentHash spans,
+                                  const std::string &artifact_path) const {
     if (build.empty() || map.empty()) return false;
     const std::string path = path_for(build);
     std::error_code ec;
@@ -89,8 +90,14 @@ bool CacheRootRepository::publish(BuildId build, ContentHash map,
     if (!f) return false;
     // Se escribe tambien de quien es: si el fichero acabara donde no toca, al
     // leerlo se nota en vez de servir el mapa de otro programa.
+    /* Cuarta linea, la ruta, y sin saltos dentro: se lee hasta el final del
+     * fichero, asi que una ruta con un salto de linea la partiria.  Ninguna
+     * ruta real los lleva, pero si llegara una asi es mejor quedarse sin pista
+     * que con una pista falsa. */
+    std::string pista = artifact_path;
+    if (pista.find('\n') != std::string::npos) pista.clear();
     const std::string body = map.to_hex() + "\n" + build.hash.to_hex() + "\n" +
-                             spans.to_hex() + "\n";
+                             spans.to_hex() + "\n" + pista + "\n";
     const bool ok = std::fwrite(body.data(), 1, body.size(), f) == body.size();
     std::fclose(f);
     return ok;

@@ -568,7 +568,9 @@ bool publish_vxdbg_artifact(const std::string &artifact_path,
     vxdbg::FileNodeStore store(dir);
     const vxdbg::CacheRootRepository repo(dir, store);
     const vxdbg::BuildId build{vxdbg::hash_bytes(bytes.data(), bytes.size())};
-    return repo.publish(build, map, spans);
+    // La ruta va como pista para saber luego si este apuntador quedo
+    // sobrescrito; la identidad sigue saliendo de los bytes de arriba.
+    return repo.publish(build, map, spans, artifact_path);
 }
 
 std::string default_vxdbg_dir() {

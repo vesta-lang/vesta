@@ -123,6 +123,7 @@ int run_gc(const std::string &dir) {
     case MaintenanceStatus::Ran:
         break;
     }
+    std::printf("raices retiradas (sobrescritas): %zu\n", r.roots_retired);
     std::printf("paquetes borrados enteros: %zu\n", r.packs_removed);
     std::printf("compactado: %zu paquetes -> %zu   (%.1f MiB -> %.1f MiB)\n",
                 r.packs_before, r.packs_after, r.bytes_before / 1048576.0,

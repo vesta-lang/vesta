@@ -12,6 +12,8 @@
 
 #include "vxdbg/maintenance.h"
 
+#include "util/file_read.h"
+#include "vxdbg/ids.h"
 #include "vxdbg/pack_store.h"
 #include "vxdbg/reachable.h"
 #include "vxdbg/store.h"
@@ -19,7 +21,9 @@
 
 #include <filesystem>
 
+#include <map>
 #include <memory>
+#include <string>
 #include <set>
 #include <vector>
 
@@ -48,6 +52,151 @@ PackCount count_packs(const std::string &dir) {
         if (!pack_writer_is_running(p)) count.collectable.insert(p);
     }
     return count;
+}
+
+/// Un apuntador de raiz, tal como esta en disco.
+struct RootPointer {
+    std::string path;     ///< del propio `.ptr`
+    ContentHash map;      ///< el mapa que ofrece
+    ContentHash build;    ///< de quien dice ser
+    std::string artifact; ///< donde se escribio; vacio = sin pista
+};
+
+/// Lee los apuntadores con su pista, sin resolver nada.
+std::vector<RootPointer> read_root_pointers(const std::string &dir) {
+    namespace stdfs = std::filesystem;
+    std::vector<RootPointer> out;
+    std::error_code ec;
+    const std::string roots_dir = dir + "/roots";
+    if (!stdfs::exists(roots_dir, ec)) return out;
+
+    const util::DirectoryReader reader(roots_dir);
+    for (const auto &e : stdfs::directory_iterator(roots_dir, ec)) {
+        if (ec) break;
+        const std::string p = e.path().string();
+        if (p.size() < 4 || p.compare(p.size() - 4, 4, ".ptr") != 0) continue;
+
+        std::vector<uint8_t> bytes;
+        const std::string leaf = e.path().filename().string();
+        if (!(reader.ok() ? reader.read_file(leaf, bytes)
+                          : util::read_whole_file(p, bytes)))
+            continue;
+        const std::string body(reinterpret_cast<const char *>(bytes.data()),
+                               bytes.size());
+        // Lineas: mapa, de quien es, tramos, y (opcional) donde se escribio.
+        const size_t n1 = body.find('\n');
+        if (n1 == std::string::npos) continue;
+        const size_t n2 = body.find('\n', n1 + 1);
+        if (n2 == std::string::npos) continue;
+        const size_t n3 = body.find('\n', n2 + 1);
+
+        RootPointer rp;
+        rp.path = p;
+        rp.map = ContentHash::from_hex(body.substr(0, n1));
+        rp.build = ContentHash::from_hex(body.substr(n1 + 1, n2 - n1 - 1));
+        if (n3 != std::string::npos) {
+            const size_t n4 = body.find('\n', n3 + 1);
+            rp.artifact = n4 == std::string::npos
+                              ? body.substr(n3 + 1)
+                              : body.substr(n3 + 1, n4 - n3 - 1);
+        }
+        out.push_back(std::move(rp));
+    }
+    return out;
+}
+
+/**
+ * @brief Retira los apuntadores que quedaron SOBRESCRITOS.
+ *
+ * La regla es un hecho comprobable, no una preferencia: para una ruta dada solo
+ * puede seguir vivo el apuntador cuyo identificador coincide con el fichero que
+ * hay ahi AHORA.  Compilar quinientas veces publica quinientos apuntadores, y
+ * el binario es uno: los otros 499 describen algo que ya no existe.
+ *
+ * Se comprueba rehaciendo la huella de los bytes -- el mismo calculo que hizo
+ * `publish` --, asi que la ruta solo dice donde mirar; lo que decide es el
+ * contenido.  Ni fechas ni orden de llegada.
+ *
+ * Lo que NO se toca:
+ *   - los que no traen pista (escritos antes de que existiera, o de otra
+ *     maquina): no se sabe, se conservan;
+ *   - los de una ruta que ya no existe: pudo moverse el binario, y `roots.h`
+ *     dice justo que la identidad no es el nombre.  Ante la duda, se queda.
+ *
+ * @return Cuantos se retiraron.
+ */
+size_t retire_superseded_roots(const std::string &dir) {
+    namespace stdfs = std::filesystem;
+    const std::vector<RootPointer> pointers = read_root_pointers(dir);
+
+    // Agrupados por ruta: el fichero de cada una se lee UNA vez.
+    std::map<std::string, std::vector<const RootPointer *>> por_ruta;
+    for (const auto &rp : pointers)
+        if (!rp.artifact.empty() && !rp.build.empty())
+            por_ruta[rp.artifact].push_back(&rp);
+
+    size_t retirados = 0;
+    std::error_code ec;
+    for (const auto &kv : por_ruta) {
+        // Un solo apuntador para esa ruta no puede haber sido sobrescrito por
+        // otro que conozcamos: no hay nada que decidir y nos ahorramos leerlo.
+        if (kv.second.size() < 2) continue;
+
+        std::vector<uint8_t> bytes;
+        if (!util::read_whole_file(kv.first, bytes) || bytes.empty())
+            continue; // ya no esta: pudo moverse, no se toca ninguno
+        const ContentHash actual = hash_bytes(bytes.data(), bytes.size());
+
+        /* Si el fichero de ahi no es NINGUNO de los que conocemos, no se
+         * retira nada.  Puede ser legitimo -- lo compilo otra herramienta, o lo
+         * sustituyeron a mano -- pero tambien puede ser que otro proceso lo
+         * este reescribiendo ahora mismo y hayamos leido un fichero a medias,
+         * cuya huella no coincide con nada.  Retirar entonces se llevaria por
+         * delante el apuntador bueno.  Solo se retira cuando el superviviente
+         * esta IDENTIFICADO. */
+        bool hay_superviviente = false;
+        for (const RootPointer *rp : kv.second)
+            if (rp->build == actual) hay_superviviente = true;
+        if (!hay_superviviente) continue;
+
+        for (const RootPointer *rp : kv.second) {
+            if (rp->build == actual) continue; // este es el del fichero de ahi
+            stdfs::remove(rp->path, ec);
+            if (!ec) ++retirados;
+            ec.clear();
+        }
+    }
+    return retirados;
+}
+
+/**
+ * @brief Retira los apuntadores que ya no llevan a ningun sitio.
+ *
+ * Un apuntador cuyo mapa no esta en el almacen no puede explicar nada: es una
+ * puerta a una habitacion que ya no existe.  Retirarlo no pierde nada, y aqui
+ * tampoco hay nada que elegir -- se comprueba, no se decide.
+ *
+ * Es lo unico que limpia el sedimento anterior a que los apuntadores llevaran
+ * la ruta: sin pista no se puede saber si quedaron sobrescritos, pero si se
+ * puede saber que ya no sirven.
+ *
+ * Se llama ANTES de recoger nada.  Al reves seria una carrera consigo mismo:
+ * la recogida deja apuntadores colgados en la misma pasada que los crea.
+ *
+ * @return Cuantos se retiraron.
+ */
+size_t retire_dangling_roots(const NodeStore &store, const std::string &dir) {
+    namespace stdfs = std::filesystem;
+    size_t retirados = 0;
+    std::error_code ec;
+    for (const auto &rp : read_root_pointers(dir)) {
+        // Sin mapa el apuntador esta corrupto; tampoco sirve.
+        if (!rp.map.empty() && store.contains(rp.map)) continue;
+        stdfs::remove(rp.path, ec);
+        if (!ec) ++retirados;
+        ec.clear();
+    }
+    return retirados;
 }
 
 } // namespace
@@ -92,8 +241,17 @@ MaintenanceResult maintain_store(const std::string &dir, size_t pack_threshold,
         return result;
     }
 
+    /* Antes de mirar que vive, quitar los apuntadores que ya no describen
+     * nada.  Va aqui y no despues por dos motivos: sus nodos dejan de estar
+     * vivos y se recogen en esta misma pasada, y ademas el recorrido tiene
+     * menos por donde entrar -- con 12.776 apuntadores eso era 0,84 s. */
+    result.roots_retired = retire_superseded_roots(dir);
+
     PackNodeStore store(dir,
                         std::unique_ptr<NodeStore>(new FileNodeStore(dir)));
+    // Y los que ya no llevan a ningun sitio.  Es lo unico que limpia lo
+    // anterior a que los apuntadores llevaran la ruta.
+    result.roots_retired += retire_dangling_roots(store, dir);
 
     std::vector<ContentHash> roots;
     read_published_roots(dir, roots);

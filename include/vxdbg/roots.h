@@ -221,12 +221,31 @@ class CacheRootRepository : public RootProvider {
      * necesidad: un almacen por contenido no tiene por donde empezar.  Va en su
      * propia carpeta para que nadie lo confunda con un nodo.
      *
+     * La RUTA del artefacto se guarda como PISTA, no como identidad -- la
+     * identidad sigue siendo el contenido, que es lo que sobrevive a que lo
+     * muevan.  Sirve para una sola cosa: saber que un apuntador quedo
+     * SOBRESCRITO.  Si en esa ruta hay ahora un fichero cuyo identificador es
+     * otro, este ya no describe nada, y eso se comprueba rehaciendo la huella
+     * de sus bytes; no se cree la ruta, solo se usa para saber donde mirar.
+     *
+     * Sin ella no habria forma de retirar apuntadores sin elegir a dedo o sin
+     * mirar el reloj: se acumula uno por compilacion y nada los quita.  Medido:
+     * 12.776 apuntadores ocupando 16 MB, mas que los propios paquetes, y de
+     * todos ellos apenas unos cientos pueden corresponder a un fichero que
+     * exista.
+     *
+     * Va en su propia linea al final para que lo escrito antes se siga leyendo
+     * igual: quien no la encuentre se queda sin la pista, no sin el apuntador.
+     *
      * @param build De que compilacion.
      * @param map Huella de su mapa.
+     * @param spans Huella de sus tramos, si los hay.
+     * @param artifact_path Donde se escribio.  Vacio = sin pista.
      * @return @c true si se escribio.
      */
     bool publish(BuildId build, ContentHash map,
-                 ContentHash spans = ContentHash{}) const;
+                 ContentHash spans = ContentHash{},
+                 const std::string &artifact_path = std::string()) const;
 
   private:
     /// @return Ruta del apuntador de una compilacion.

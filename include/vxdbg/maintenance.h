@@ -54,6 +54,7 @@ struct MaintenanceResult {
     size_t packs_before = 0;
     size_t packs_after = 0;
     size_t packs_removed = 0;  ///< borrados enteros, sin reescribir
+    size_t roots_retired = 0;  ///< apuntadores de raiz que ya no describian nada
     size_t entries_kept = 0;
     size_t entries_dropped = 0;
     uint64_t bytes_before = 0;
