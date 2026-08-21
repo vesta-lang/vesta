@@ -303,6 +303,7 @@ add_library(vxdbg_lib STATIC
     src/util/serialize.cpp
     src/vxdbg/store.cpp
     src/vxdbg/pack_store.cpp
+    src/vxdbg/reachable.cpp
     src/vxdbg/lowering_map.cpp
     src/vxdbg/backend_meta.cpp
     src/vxdbg/codec_source.cpp
@@ -547,7 +548,11 @@ target_link_libraries(vmcore PUBLIC vesta_vm_flags)
 #
 # Lo que si mueve la aguja aqui es no compilar dos veces lo mismo (ver arriba).
 
-add_executable(vm ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
+add_executable(vm ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp
+        # El subcomando `vm vxdbg` vive aqui y no en vxdbg_lib: usa
+        # default_vxdbg_dir(), que es de vx_lib, y vx_lib ya depende de
+        # vxdbg_lib.  Ponerlo alli invertiria las capas por una funcion.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/vxdbg/store_cli.cpp)
 # ARCHIVO COMPLETO, no el archivo a secas.
 #
 # De un archivo el enlazador solo saca los objetos cuyos simbolos alguien pidio,

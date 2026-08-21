@@ -137,6 +137,28 @@ class PackNodeStore : public NodeStore {
      */
     size_t reclamar(const std::set<ContentHash> &vivas);
 
+    /// Que pasaria al reclamar, sin tocar el disco.
+    struct ReclaimPreview {
+        size_t packs = 0;           ///< paquetes en el almacen
+        size_t entries = 0;         ///< entradas indexadas, en total
+        size_t live_entries = 0;    ///< de ellas, las que siguen vivas
+        size_t packs_to_delete = 0; ///< paquetes sin ninguna viva
+        uint64_t bytes_to_free = 0; ///< lo que ocupan esos paquetes
+    };
+
+    /**
+     * @brief Lo que @ref reclamar haria, sin hacerlo.
+     *
+     * Existe porque borrar el cache es de las pocas cosas de aqui que no se
+     * pueden deshacer, y porque el criterio de que raices siguen valiendo es
+     * una decision -- no un calculo --: quien la tome necesita ver los numeros
+     * antes, no despues.
+     *
+     * @param vivas Las entradas que se consideran vivas.
+     * @return El recuento.
+     */
+    ReclaimPreview preview_reclaim(const std::set<ContentHash> &vivas) const;
+
   private:
     /// Donde vive un nodo dentro de un paquete ya escrito.
     struct Sitio {

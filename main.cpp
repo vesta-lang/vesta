@@ -62,6 +62,7 @@
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "runtime/exception_runtime.h" // codigo de salida tras un fallo
 #include "vx/vxdbg_emit.h"             // publicar el grafo del artefacto
+#include "vxdbg/store_cli.h"           // subcomando `vm vxdbg`
 #include "vx/type_checker.h"           // register_comptime_virtual_fns
 #include "vx/diag/diag_format.h" // renderizado de diagnosticos (texto/JSON/SARIF)
 #include "vx/lexer.h"
@@ -692,6 +693,19 @@ int main(int argc, char *argv[]) {
         for (int i = 2; i < argc; ++i)
             sub.push_back(argv[i]);
         return pkg::cli::run(static_cast<int>(sub.size()), sub.data());
+    }
+
+    // ------------------------------------------------------------------
+    // Subcomando especial: @c vm vxdbg <orden> ...
+    // Igual que `pkg`: no modifica una compilacion, opera sobre el almacen
+    // de diagnostico y tiene sus propias ordenes.
+    // ------------------------------------------------------------------
+    if (argc >= 2 && std::string(argv[1]) == "vxdbg") {
+        std::vector<char *> sub;
+        sub.push_back(argv[0]);
+        for (int i = 2; i < argc; ++i)
+            sub.push_back(argv[i]);
+        return vxdbg::cli::run(static_cast<int>(sub.size()), sub.data());
     }
 
     /* registrar el hook auto-JIT en el runtime.

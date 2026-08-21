@@ -263,6 +263,33 @@ void PackNodeStore::cargar_indices_() const {
     }
 }
 
+PackNodeStore::ReclaimPreview
+PackNodeStore::preview_reclaim(const std::set<ContentHash> &vivas) const {
+    std::lock_guard<std::mutex> g(mx_);
+    cargar_indices_();
+
+    ReclaimPreview preview;
+    std::map<std::string, size_t> total, vivos;
+    for (const auto &kv : indice_) {
+        ++total[kv.second.ruta];
+        if (vivas.count(kv.first) != 0) ++vivos[kv.second.ruta];
+    }
+    preview.packs = total.size();
+    preview.entries = indice_.size();
+
+    namespace stdfs = std::filesystem;
+    std::error_code ec;
+    for (const auto &kv : total) {
+        preview.live_entries += vivos[kv.first];
+        if (vivos[kv.first] != 0) continue;
+        ++preview.packs_to_delete;
+        const auto tam = stdfs::file_size(kv.first, ec);
+        if (!ec) preview.bytes_to_free += static_cast<uint64_t>(tam);
+        ec.clear();
+    }
+    return preview;
+}
+
 size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas) {
     std::lock_guard<std::mutex> g(mx_);
     cargar_indices_();
