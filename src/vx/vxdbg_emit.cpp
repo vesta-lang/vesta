@@ -548,26 +548,44 @@ vxdbg::ArtifactMap link_symbols(
 
 bool publish_vxdbg_artifact(const std::string &artifact_path,
                             vxdbg::ContentHash map, vxdbg::ContentHash spans,
-                            const std::string &out_dir) {
+                            const std::string &out_dir,
+                            const std::vector<uint8_t> *artifact_bytes) {
     if (map.empty()) return false;
-    std::FILE *f = std::fopen(artifact_path.c_str(), "rb");
-    if (!f) return false;
-    // El identificador se calcula sobre el fichero entero.  Es lo mismo que
-    // hara quien lo ejecute para preguntar por el, asi que tiene que salir de
-    // los mismos bytes y de nada mas: ni la fecha, ni la ruta, ni quien lo
-    // compilo.
+
+    /* El identificador se calcula sobre el fichero entero.  Es lo mismo que
+     * hara quien lo ejecute para preguntar por el, asi que tiene que salir de
+     * los mismos bytes y de nada mas: ni la fecha, ni la ruta, ni quien lo
+     * compilo.
+     *
+     * Pero si quien llama YA los tiene, se usan los suyos.  Al servir desde el
+     * cache de proyecto los bytes vienen en memoria y el fichero se acaba de
+     * escribir con ellos: releerlo del disco es leer dos veces lo mismo, y
+     * medido costaba +87 ms en un proyecto de 6k lineas, mas que el acierto de
+     * cache entero. */
     std::string bytes;
-    char buf[64 * 1024];
-    size_t n;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
-        bytes.append(buf, n);
-    std::fclose(f);
-    if (bytes.empty()) return false;
+    if (artifact_bytes != nullptr) {
+        if (artifact_bytes->empty()) return false;
+    } else {
+        std::FILE *f = std::fopen(artifact_path.c_str(), "rb");
+        if (!f) return false;
+        char buf[64 * 1024];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0)
+            bytes.append(buf, n);
+        std::fclose(f);
+        if (bytes.empty()) return false;
+    }
+    const void *datos =
+        artifact_bytes != nullptr
+            ? static_cast<const void *>(artifact_bytes->data())
+            : static_cast<const void *>(bytes.data());
+    const size_t tam =
+        artifact_bytes != nullptr ? artifact_bytes->size() : bytes.size();
 
     const std::string dir = out_dir.empty() ? default_vxdbg_dir() : out_dir;
     vxdbg::FileNodeStore store(dir);
     const vxdbg::CacheRootRepository repo(dir, store);
-    const vxdbg::BuildId build{vxdbg::hash_bytes(bytes.data(), bytes.size())};
+    const vxdbg::BuildId build{vxdbg::hash_bytes(datos, tam)};
     // La ruta va como pista para saber luego si este apuntador quedo
     // sobrescrito; la identidad sigue saliendo de los bytes de arriba.
     return repo.publish(build, map, spans, artifact_path);

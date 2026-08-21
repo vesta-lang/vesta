@@ -63,6 +63,28 @@ namespace util {
 bool read_whole_file(const std::string &path, std::vector<uint8_t> &out);
 
 /**
+ * @brief Escribe @p bytes en @p path, creandolo o truncandolo.
+ *
+ * Por el mismo camino corto que @ref read_whole_file y por el mismo motivo:
+ * `std::ofstream` mete su propia capa de bufer, y cuando los bytes ya estan
+ * todos en memoria esa capa no aporta nada y se paga entera.  Medido con VTune
+ * en un acierto de cache de un proyecto de 6k lineas -- que escribe 7,9 MiB --
+ * el `write` de msvcrt se llevaba 38,7 ms de los ~80 de CPU del acierto.
+ *
+ * NO es atomico: escribe directamente sobre el destino.  Para lo que tiene que
+ * publicarse de una pieza esta @ref fs::write_file_atomic, que escribe a un
+ * temporal y renombra.  Aqui se ofrece el camino directo porque para el
+ * artefacto de SALIDA eso es lo que se hacia siempre, y hacerlo atomico
+ * significaba escribir 7,9 MiB y despues copiarlos otra vez cuando el
+ * renombrado no puede sustituir al destino.
+ *
+ * @param path  Destino.
+ * @param bytes Contenido.
+ * @return true solo si se escribio ENTERO.
+ */
+bool write_whole_file(const std::string &path, const std::vector<uint8_t> &bytes);
+
+/**
  * @brief Lee SOLO un tramo de un fichero.
  *
  * CUANDO USAR ESTO Y CUANDO NO, que es lo que se aprendio midiendo: para un

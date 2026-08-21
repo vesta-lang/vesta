@@ -62,6 +62,8 @@
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
 #include "runtime/exception_runtime.h" // codigo de salida tras un fallo
 #include "vx/vxdbg_emit.h"             // publicar el grafo del artefacto
+#include "util/file_read.h"            // escribir por el camino del sistema
+#include "util/file_read.h"            // escribir por el camino del sistema
 #include "vxdbg/maintenance.h"         // recoger el almacen solo
 #include "vxdbg/store_cli.h"           // subcomando `vm vxdbg`
 #include "vx/type_checker.h"           // register_comptime_virtual_fns
@@ -4117,11 +4119,21 @@ int main(int argc, char *argv[]) {
                 // extension); en la VM se le anade `.velb`.
                 const std::string out_velb =
                     aot_mode ? out_prefix : (out_prefix + ".velb");
-                std::ofstream f(out_velb, std::ios::binary);
-                if (f) {
-                    f.write(reinterpret_cast<const char *>(cached_velb.data()),
-                            static_cast<std::streamsize>(cached_velb.size()));
-                    if (f.good()) {
+                /* Con las llamadas del SISTEMA, no con `std::ofstream`.
+                 *
+                 * Este es el camino que mas se recorre -- un acierto de cache
+                 * es lo que se paga cien veces al dia -- y aqui se escribe el
+                 * artefacto entero: 7,9 MiB en un proyecto de 6k lineas.  Con
+                 * el flujo de la biblioteca estandar, VTune ponia 38,7 ms de
+                 * los ~80 de CPU del acierto en el `write` de msvcrt: los bytes
+                 * ya estan todos en memoria, asi que su capa de bufer no aporta
+                 * nada y se paga entera.
+                 *
+                 * `write_file_atomic` escribe con las llamadas nativas y ademas
+                 * publica con un renombrado, con lo que el artefacto de salida
+                 * nunca se ve a medias -- que antes si podia pasar. */
+                if (util::write_whole_file(out_velb, cached_velb)) {
+                    {
                         /* Los avisos que dio la compilacion que lleno este
                          * cache se vuelven a emitir.  Sin esto, compilar dos
                          * veces lo mismo da salidas distintas -- y la segunda,
@@ -4144,11 +4156,14 @@ int main(int argc, char *argv[]) {
                         std::string map_hex, spans_hex;
                         if (vx::project_cache_load_vxdbg(pc_path, map_hex,
                                                          spans_hex)) {
+                            // Con los bytes que ya tenemos: el fichero se acaba
+                            // de escribir con ellos, releerlo seria leer dos
+                            // veces lo mismo en el camino que mas se recorre.
                             vx::publish_vxdbg_artifact(
                                 out_velb,
                                 vxdbg::ContentHash::from_hex(map_hex),
                                 vxdbg::ContentHash::from_hex(spans_hex),
-                                copts.vxdbg_dir);
+                                copts.vxdbg_dir, &cached_velb);
                         }
                         if (project_cache_verbose) {
                             std::cerr << "[vx-project-cache] hit: " << pc_path

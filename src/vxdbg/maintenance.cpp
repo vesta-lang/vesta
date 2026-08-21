@@ -39,8 +39,16 @@ struct PackCount {
     std::set<std::string> collectable;
 };
 
-/// Cuenta los paquetes sin abrir ninguno.
-PackCount count_packs(const std::string &dir) {
+/**
+ * @brief Cuenta los paquetes sin abrir ninguno.
+ *
+ * @param con_procedencia Si averiguar ademas CUALES son de compilaciones ya
+ *        terminadas.  Eso cuesta una llamada al sistema por fichero -- hay que
+ *        preguntar si ese proceso sigue vivo -- y este recuento lo hace TODA
+ *        compilacion, asi que en el caso normal, que es no llegar al umbral, no
+ *        se pregunta por ninguno: basta con cuantos hay.
+ */
+PackCount count_packs(const std::string &dir, bool con_procedencia) {
     namespace stdfs = std::filesystem;
     std::error_code ec;
     PackCount count;
@@ -49,7 +57,8 @@ PackCount count_packs(const std::string &dir) {
         const std::string p = e.path().string();
         if (p.size() < 5 || p.compare(p.size() - 5, 5, ".vxpk") != 0) continue;
         ++count.total;
-        if (!pack_writer_is_running(p)) count.collectable.insert(p);
+        if (con_procedencia && !pack_writer_is_running(p))
+            count.collectable.insert(p);
     }
     return count;
 }
@@ -234,8 +243,19 @@ MaintenanceResult maintain_store(const std::string &dir, size_t pack_threshold,
      * paralela casi todos son de procesos vivos, y mirar el total llevaria a
      * recorrer el grafo entero en cada compilacion para acabar sin poder borrar
      * nada. */
-    const PackCount count = count_packs(dir);
-    result.packs_before = count.total;
+    /* Primero lo mas barato de todo: cuantos hay.  Si no se llega al umbral, se
+     * vuelve sin preguntar por ninguno -- y ese es el caso de casi todas las
+     * compilaciones, asi que es el que no puede costar nada. */
+    const PackCount solo_contar = count_packs(dir, /*con_procedencia=*/false);
+    result.packs_before = solo_contar.total;
+    if (!force && solo_contar.total < pack_threshold) {
+        result.status = MaintenanceStatus::BelowThreshold;
+        return result;
+    }
+
+    // Ahora si: cuales se pueden tocar.  Esto cuesta una llamada por fichero y
+    // solo se paga cuando de verdad puede haber algo que recoger.
+    const PackCount count = count_packs(dir, /*con_procedencia=*/true);
     if (!force && count.collectable.size() < pack_threshold) {
         result.status = MaintenanceStatus::BelowThreshold;
         return result;

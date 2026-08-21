@@ -44,6 +44,19 @@ NTSTATUS NTAPI NtReadFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
                           PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
                           PVOID Buffer, ULONG Length, PLARGE_INTEGER ByteOffset,
                           PULONG Key);
+/* Para escribir hace falta `NtCreateFile` y no `NtOpenFile`: el segundo abre lo
+ * que ya existe y no crea nada. */
+NTSTATUS NTAPI NtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
+                            POBJECT_ATTRIBUTES ObjectAttributes,
+                            PIO_STATUS_BLOCK IoStatusBlock,
+                            PLARGE_INTEGER AllocationSize, ULONG FileAttributes,
+                            ULONG ShareAccess, ULONG CreateDisposition,
+                            ULONG CreateOptions, PVOID EaBuffer,
+                            ULONG EaLength);
+NTSTATUS NTAPI NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
+                           PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
+                           PVOID Buffer, ULONG Length,
+                           PLARGE_INTEGER ByteOffset, PULONG Key);
 }
 
 namespace {
@@ -53,6 +66,9 @@ constexpr ULONG kSynchronousIoNonAlert = 0x0020;
 constexpr ULONG kNonDirectoryFile = 0x0040;
 constexpr ULONG kDirectoryFile = 0x0001;
 constexpr int kFileStandardInformation = 5;
+constexpr ULONG kFileWriteData = 0x0002;
+/// Crea el fichero, o lo trunca si ya estaba.
+constexpr ULONG kFileOverwriteIf = 0x00000005;
 
 /// Lo que devuelve NtQueryInformationFile para FileStandardInformation.
 struct StandardInformation {
@@ -256,6 +272,83 @@ bool read_file_range(const std::string &path, uint64_t offset, size_t count,
     return ok;
 }
 
+namespace {
+
+/// Vuelca @p bytes por un descriptor ya abierto, en tandas.
+bool write_all_to(HANDLE handle, const std::vector<uint8_t> &bytes) {
+    size_t done = 0;
+    while (done < bytes.size()) {
+        // El contador es de 32 bits: lo grande va en varias tandas en vez de
+        // truncarse en silencio.
+        const size_t left = bytes.size() - done;
+        const ULONG chunk =
+            left > 0x20000000ull ? 0x20000000u : static_cast<ULONG>(left);
+        IO_STATUS_BLOCK io;
+        LARGE_INTEGER pos;
+        pos.QuadPart = static_cast<LONGLONG>(done);
+        if (NtWriteFile(handle, nullptr, nullptr, nullptr, &io,
+                        const_cast<uint8_t *>(bytes.data()) + done, chunk, &pos,
+                        nullptr) < 0 ||
+            io.Information == 0)
+            return false;
+        done += io.Information;
+    }
+    return true;
+}
+
+} // namespace
+
+bool write_whole_file(const std::string &path,
+                      const std::vector<uint8_t> &bytes) {
+    std::wstring nt_path;
+    if (to_nt_path(path, nt_path)) {
+        UNICODE_STRING name;
+        fill_name(name, nt_path);
+        OBJECT_ATTRIBUTES attrs;
+        InitializeObjectAttributes(&attrs, &name, OBJ_CASE_INSENSITIVE, nullptr,
+                                   nullptr);
+        IO_STATUS_BLOCK io;
+        HANDLE handle = nullptr;
+        /* El tamano final se dice de ANTEMANO.  Sin eso el sistema va
+         * extendiendo el fichero segun llegan los bytes, y para los 7,9 MiB de
+         * un artefacto eso es trabajo repetido que se puede evitar diciendo
+         * desde el principio cuanto va a ocupar. */
+        LARGE_INTEGER tam;
+        tam.QuadPart = static_cast<LONGLONG>(bytes.size());
+        if (NtCreateFile(&handle, kFileWriteData | SYNCHRONIZE, &attrs, &io,
+                         &tam, FILE_ATTRIBUTE_NORMAL,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, kFileOverwriteIf,
+                         kSynchronousIoNonAlert | kNonDirectoryFile, nullptr,
+                         0) >= 0 &&
+            handle != nullptr) {
+            const bool ok = bytes.empty() || write_all_to(handle, bytes);
+            NtClose(handle);
+            if (ok) return true;
+        }
+    }
+
+    // Respaldo por el camino largo, igual que al leer: rutas que la traduccion
+    // no cubre.
+    HANDLE handle =
+        CreateFileA(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return false;
+    size_t done = 0;
+    bool ok = true;
+    while (ok && done < bytes.size()) {
+        const size_t left = bytes.size() - done;
+        const DWORD chunk =
+            left > 0x20000000ull ? 0x20000000u : static_cast<DWORD>(left);
+        DWORD written = 0;
+        ok = WriteFile(handle, bytes.data() + done, chunk, &written, nullptr) !=
+                 0 &&
+             written == chunk;
+        done += written;
+    }
+    CloseHandle(handle);
+    return ok && done == bytes.size();
+}
+
 DirectoryReader::DirectoryReader(const std::string &dir_path)
     : handle_(nullptr) {
     std::wstring nt_path;
@@ -384,6 +477,24 @@ bool read_file_range(const std::string &path, uint64_t offset, size_t count,
         return false;
     }
     return true;
+}
+
+bool write_whole_file(const std::string &path,
+                      const std::vector<uint8_t> &bytes) {
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return false;
+    size_t done = 0;
+    while (done < bytes.size()) {
+        const ssize_t n = ::write(fd, bytes.data() + done, bytes.size() - done);
+        if (n < 0) {
+            if (errno == EINTR) continue; // una senal no es un fallo
+            break;
+        }
+        if (n == 0) break;
+        done += static_cast<size_t>(n);
+    }
+    ::close(fd);
+    return done == bytes.size();
 }
 
 DirectoryReader::DirectoryReader(const std::string &dir_path) : fd_(-1) {

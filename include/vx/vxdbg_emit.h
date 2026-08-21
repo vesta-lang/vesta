@@ -115,10 +115,19 @@ std::string default_vxdbg_dir();
  * @param out_dir Carpeta del almacen; vacia = la de por defecto.
  * @return @c true si quedo publicado.
  */
-bool publish_vxdbg_artifact(const std::string &artifact_path,
-                            vxdbg::ContentHash map,
-                            vxdbg::ContentHash spans = vxdbg::ContentHash{},
-                            const std::string &out_dir = std::string());
+/**
+ * @param artifact_bytes Los bytes del artefacto, si quien llama ya los tiene.
+ *        El identificador sale de ellos, asi que darlos evita releer del disco
+ *        un fichero que se acaba de escribir.  No es un detalle: al servir
+ *        desde el cache de proyecto los bytes estan en memoria, y releerlos
+ *        costaba +87 ms en un proyecto de 6k lineas -- mas de lo que costaba
+ *        el acierto entero.  @c nullptr = leerlo del disco.
+ */
+bool publish_vxdbg_artifact(
+    const std::string &artifact_path, vxdbg::ContentHash map,
+    vxdbg::ContentHash spans = vxdbg::ContentHash{},
+    const std::string &out_dir = std::string(),
+    const std::vector<uint8_t> *artifact_bytes = nullptr);
 
 /**
  * @brief Vuelca la capa semantica del modulo al almacen de depuracion.
