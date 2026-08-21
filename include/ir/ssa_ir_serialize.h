@@ -108,9 +108,33 @@ static constexpr uint32_t IR_SECTION_MAGIC = 0x52494556U; /* 'V''E''I''R' */
  * @brief Version del formato @ir.  Bump cuando cambia el layout.
  */
 static constexpr uint16_t IR_SECTION_VERSION =
-    13; // v13: + clase declarada de cada ligadura de asm (AsmRegBinding::
-        // reg_class); comparte serialize_function con la cache, asi que su
-        // formato cambia a la vez
+    14; // v14: el cuerpo va COMPRIMIDO (deflate).  v13: + clase declarada de
+        // cada ligadura de asm (AsmRegBinding::reg_class); comparte
+        // serialize_function con la cache, asi que su formato cambia a la vez
+
+/**
+ * @brief Banderas del campo reservado de la cabecera de la seccion.
+ *
+ * El hueco estaba puesto desde el principio "para futuras flags" y el lector
+ * comprobaba que fuera cero; esta es la primera que se usa.
+ */
+static constexpr uint16_t kIrFlagDeflate = 0x0001; ///< el cuerpo va comprimido
+
+/**
+ * @brief Con que fuerza se comprime la seccion.
+ *
+ * Sale de medir sobre una seccion REAL de 5,75 MiB extraida de un artefacto:
+ *
+ *     nivel 1    5,94x    21,4 ms comprimir    6,3 ms descomprimir
+ *     nivel 3   13,80x    22,9 ms              4,1 ms
+ *     nivel 6   15,18x    56,8 ms              3,5 ms
+ *     nivel 9   15,73x   191,4 ms              4,3 ms
+ *
+ * El 3 gana por lo que NO cuesta: frente al 6, la diferencia de tamano son 40
+ * KiB sobre un artefacto de 7,5 MiB -- nada -- y tarda menos de la mitad.  El 1
+ * comprime la mitad por el mismo tiempo que el 3, asi que no tiene sitio.
+ */
+static constexpr int kIrCompressionLevel = 3;
 
 /**
  * @brief Emit del bytes de la seccion @c @ir lista para append a

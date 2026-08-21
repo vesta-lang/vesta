@@ -554,7 +554,7 @@ foreach (_lib vx_lib vxdbg_lib diag_lib)
     endforeach()
 endforeach()
 add_library(vmcore STATIC ${VM_CORE_SOURCES})
-target_link_libraries(vmcore PUBLIC vesta_vm_flags)
+target_link_libraries(vmcore PUBLIC vesta_vm_flags miniz)
 
 # NO hay cabeceras precompiladas, y es una decision MEDIDA, no un olvido.
 #
@@ -1852,7 +1852,7 @@ set(VESTA_RT_SOURCES
 add_library(vesta_rt STATIC ${VESTA_RT_SOURCES})
 target_include_directories(vesta_rt PUBLIC ${VM_INCLUDES})
 target_link_libraries(vesta_rt
-        PUBLIC sqlite3
+        PUBLIC sqlite3 miniz
 )
 if (WIN32)
     target_link_libraries(vesta_rt PUBLIC vesta_openssl ws2_32 synchronization)
