@@ -301,11 +301,23 @@ extern "C" void runtime_ensure_vx_callback_registered(void);
 static void guardar_cache_de_proyecto(
     const std::string &pc_path, uint32_t opts_hash, uint32_t diag_hash,
     const analysis::asa::Ambito &donde, const vx::CompileResult &cr,
-    bool con_lineas, const std::vector<uint8_t> &artefacto, bool verboso) {
-    if (cr.dep_paths.empty() || artefacto.empty()) return;
+    bool con_lineas, const std::vector<uint8_t> &artefacto, bool verboso,
+    const std::vector<std::string> &deps_extra) {
+    /* Las dependencias del compile MAS las que traiga quien llama: el fuente
+     * raiz cuando no hay imports -- un fichero suelto depende de si mismo -- y
+     * lo que el preprocesador haya incluido.  Se juntan aqui y no en cada sitio
+     * de llamada porque la lista tiene que ser LA MISMA que se valida despues,
+     * y tenerla construida en dos lados era garantizar que un dia difirieran. */
+    std::vector<std::string> rutas = cr.dep_paths;
+    for (const auto &p : deps_extra) {
+        if (p.empty()) continue;
+        if (std::find(rutas.begin(), rutas.end(), p) == rutas.end())
+            rutas.push_back(p);
+    }
+    if (rutas.empty() || artefacto.empty()) return;
     std::vector<vx::ProjectCacheDep> deps;
-    deps.reserve(cr.dep_paths.size());
-    for (const auto &p : cr.dep_paths) {
+    deps.reserve(rutas.size());
+    for (const auto &p : rutas) {
         std::ifstream df(p, std::ios::binary | std::ios::ate);
         if (!df.is_open()) continue;
         const std::streamsize dsz = df.tellg();
@@ -3410,6 +3422,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        /* Los ficheros que el preprocesador acabe leyendo.  Se declara aqui,
+         * fuera del bloque de VPP, porque quien los necesita es el guardado del
+         * cache mucho mas abajo: son dependencias como cualquier otra. */
+        std::vector<std::string> vpp_included_files;
+
         // 1 Leer el .vx (con un solo fin de linea, ver vx::leer_fuente).
         std::string vx_source;
         if (!vx::leer_fuente(vx_path, vx_source)) {
@@ -3451,6 +3468,12 @@ int main(int argc, char *argv[]) {
             pp.options().predefines.push_back("__VPP_MACOS__");
 #endif
             std::string processed = pp.process(vx_source, vx_path);
+            /* Lo que el preprocesador LEYO tambien es dependencia.  Un
+             * `#include` cuenta igual que un `import`: si cambia, lo compilado
+             * deja de valer.  Sin apuntarlo, el cache serviria el artefacto
+             * viejo -- que no da error, da un resultado que ya no corresponde
+             * al codigo, y eso se descubre tarde y mal. */
+            vpp_included_files = pp.included_files();
             if (pp.diagnostics().has_errors()) {
                 for (const auto &d : pp.diagnostics().diagnostics()) {
                     std::cerr << d.loc.file << ":" << d.loc.line << ": "
@@ -4105,7 +4128,7 @@ int main(int argc, char *argv[]) {
          * (127 ms contra los 14 del camino de la VM).  Ahora la clave lleva
          * arch, formato, tipo de emision, objetivo, nivel de runtime y el resto
          * de opciones que cambian lo emitido. */
-        if (project_cache_enabled && has_imports && !wants_pipeline_artifacts) {
+        if (project_cache_enabled && !wants_pipeline_artifacts) {
             uint32_t cached_opts_hash = 0;
             std::vector<vx::ProjectCacheDep> cached_deps;
             std::vector<uint8_t> cached_velb;
@@ -4353,10 +4376,17 @@ int main(int argc, char *argv[]) {
                     if (asz > 0)
                         af.read(reinterpret_cast<char *>(abytes.data()), asz);
                     af.close();
-                    if (!abytes.empty())
+                    if (!abytes.empty()) {
+                        // Las mismas dependencias que en el camino de bytecode:
+                        // el fuente raiz y lo que el preprocesador leyo.
+                        std::vector<std::string> deps_extra_aot =
+                            vpp_included_files;
+                        deps_extra_aot.push_back(canonical_root);
                         guardar_cache_de_proyecto(
                             pc_path, opts_hash, diag_hash, donde, cr,
-                            copts.emit_debug, abytes, project_cache_verbose);
+                            copts.emit_debug, abytes, project_cache_verbose,
+                            deps_extra_aot);
+                    }
                 }
             }
             return rc_aot;
@@ -4946,8 +4976,20 @@ int main(int argc, char *argv[]) {
         // (a) el compile usa imports (compile_vx_project tiene
         // dep_paths populated), (b) el link fue exitoso, y (c) el cache
         // esta enabled.
-        if (rc == EXIT_SUCCESS && project_cache_enabled && has_imports &&
-            !cr.dep_paths.empty()) {
+        /* Se guarda tambien SIN imports.  Antes se exigian, y por eso un
+         * fichero suelto no tenia cache: recompilarlo sin tocarlo costaba lo
+         * mismo que la primera vez.  Medido en el banco, frio 205 ms ->
+         * caliente 193, un 1,06x que no era la cache rindiendo poco sino la
+         * cache apagada.  Un fichero sin dependencias es MAS facil de cachear,
+         * no menos: su unica dependencia es el mismo. */
+        if (rc == EXIT_SUCCESS && project_cache_enabled) {
+            /* El fuente raiz entra SIEMPRE como dependencia -- un fichero
+             * suelto depende de si mismo y de nada mas --, y con el lo que el
+             * preprocesador haya leido.  Sin esto ultimo, tocar un `#include`
+             * no invalidaria nada. */
+            std::vector<std::string> deps_extra_cache = vpp_included_files;
+            deps_extra_cache.push_back(canonical_root);
+
             const std::string velb_path = out_prefix + ".velb";
             std::ifstream vf(velb_path, std::ios::binary | std::ios::ate);
             if (vf.is_open()) {
@@ -4962,7 +5004,8 @@ int main(int argc, char *argv[]) {
                 if (!velb_bytes.empty())
                     guardar_cache_de_proyecto(
                         pc_path, opts_hash, diag_hash, donde, cr,
-                        copts.emit_debug, velb_bytes, project_cache_verbose);
+                        copts.emit_debug, velb_bytes, project_cache_verbose,
+                        deps_extra_cache);
             }
         }
 
