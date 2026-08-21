@@ -1898,3 +1898,10 @@ endif()
 # Genera el instalador con:  cpack --config <build>/CPackConfig.cmake -G NSIS
 # ---------------------------------------------------------------------------
 include(VestaPackaging)
+# Los mandos del entorno: que la tabla este bien formada y que las huellas
+# reaccionen a lo que cambia el binario y a nada mas.  Las dos formas de fallar
+# son opuestas: de menos, la cache sirve un artefacto de otra configuracion; de
+# mas, pedir tiempos recompila el proyecto entero.
+add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
+target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
