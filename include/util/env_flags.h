@@ -89,11 +89,22 @@ enum class FlagDomain : uint8_t {
     Count_     ///< Cuantos hay.  No es un dominio.
 };
 
-/// @brief Como se interpreta el valor de la variable.
+/**
+ * @brief Como se interpreta el valor, incluido SU DEFECTO.
+ *
+ * El defecto va aqui y no en el sitio que lo lee, porque en el codigo habia las
+ * dos convenciones mezcladas -- unos mandos apagados salvo que los enciendas,
+ * otros encendidos salvo que pongas "0" -- y desde fuera no habia forma de
+ * saber cual era cual.  Quien lea la tabla tiene que poder decir que hace el
+ * compilador sin abrir catorce ficheros.
+ */
 enum class FlagKind : uint8_t {
-    Bool, ///< Presente y distinto de "0".
-    Int,  ///< Numero entero.
-    Text, ///< Cadena tal cual.
+    Bool,   ///< APAGADO por defecto; lo enciende cualquier valor que no sea
+            ///< "0" ni vacio.
+    BoolOn, ///< ENCENDIDO por defecto; solo "0" lo apaga.  Son caminos que ya
+            ///< son el normal y conservan la salida a mano para comparar.
+    Int,    ///< Numero entero.
+    Text,   ///< Cadena tal cual.
 };
 
 /**

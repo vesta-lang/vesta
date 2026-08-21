@@ -43,6 +43,8 @@
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "util/env_flags.h"
+#include <climits>
 #include "util/crono_tramo.h"
 #include "analysis/asa/aggregate_facts.h"
 #include "analysis/effects/bounds.h" // accesos fuera de region -> diagnostico
@@ -121,8 +123,7 @@ ir::OptLevel opt_level_from_int_(int n) noexcept {
 /// activa (escribe + lee de disco).  El usuario puede setear
 /// `VX_NO_CACHE=1` para forzar rebuild completo (util en CI / debug).
 bool vxi_cache_disabled_() noexcept {
-    const char *p = std::getenv("VX_NO_CACHE");
-    return p != nullptr && p[0] != 0 && p[0] != '0';
+    return util::flag_on(util::FlagId::NoCache);
 }
 
 /// Escribe @p bytes al fichero @p path (binary).  Devuelve true si OK.
@@ -246,8 +247,7 @@ uint64_t module_content_key_(uint64_t source_hash,
      * PROVISIONAL.  Sin distinguirlo, la pasada buena reutilizaba el modulo
      * provisional de la anterior y el arreglo no llegaba nunca. */
     {
-        const char *pre = std::getenv("VESTA_MC_PREBUILT");
-        mix((pre != nullptr && pre[0] != '\0') ? 1ull : 0ull);
+        mix(util::flag_text(util::FlagId::McPrebuilt).empty() ? 0ull : 1ull);
     }
     if (!tgt_suffix.empty())
         mix(vxi_fnv1a(tgt_suffix)); // @Target (PE/ELF/...).
@@ -317,11 +317,7 @@ static const std::string &global_cache_dir_() {
      * -- que ademas la pedian dos veces cada una --: en un proyecto grande eso
      * son miles de consultas al entorno para obtener siempre lo mismo.  El
      * entorno no cambia a mitad de una compilacion. */
-    static const std::string dir = [] {
-        const char *v = std::getenv("VX_CACHE_DIR");
-        return (v != nullptr && v[0] != '\0') ? std::string(v) : std::string();
-    }();
-    return dir;
+    return util::flag_text(util::FlagId::CacheDir);
 }
 
 /**
@@ -341,8 +337,9 @@ static uint64_t compiler_fingerprint_() {
         // observar desaparece justo al ir a mirarlo.  Con VX_CACHE_FINGERPRINT
         // la huella queda fija en el valor que se le pase, asi que se puede
         // instrumentar sin perder la cache que reproduce el fallo.
-        if (const char *fixed = std::getenv("VX_CACHE_FINGERPRINT")) {
-            if (fixed[0]) return vxi_fnv1a(std::string(fixed));
+        {
+            const std::string &fixed = util::flag_text(util::FlagId::CacheFingerprint);
+            if (!fixed.empty()) return vxi_fnv1a(fixed);
         }
         std::error_code ec;
         const std::string self = ::fs::get_executable_path();
@@ -1609,16 +1606,13 @@ CompileResult compile_vx_project(
     //     incrementales con cache hit.
     //   - Cache desactivable via env VX_NO_CACHE=1.
     const bool cache_enabled = !vxi_cache_disabled_();
-    const bool verbose_cache = std::getenv("VX_VERBOSE_CACHE") != nullptr;
+    const bool verbose_cache = util::flag_on(util::FlagId::VerboseCache);
     //  M.L21: progreso/feedback al usuario durante compile de
     // proyectos grandes.  Activado via @c VX_VERBOSE_COMPILE=1 .
     // Emit @c [i/N] compiling <name>... al iniciar cada modulo +
     // @c (hit/wrote) al cerrar.  Util para identificar cuellos de
     // botella en build incrementales.
-    const bool verbose_compile = []() {
-        const char *v = std::getenv("VX_VERBOSE_COMPILE");
-        return v && v[0] == '1';
-    }();
+    const bool verbose_compile = util::flag_on(util::FlagId::VerboseCompile);
     //  M.L20: computar niveles topologicos para reporting.  Modulos
     // del MISMO nivel son independientes (pueden paralelizarse).  Esto
     // detecta el potencial paralelismo del proyecto; la ejecucion
@@ -1779,7 +1773,7 @@ CompileResult compile_vx_project(
     // Comparte un solo CasStore entre threads (sus ops de fichero son atomicas
     // / read-only).
     std::unique_ptr<CasStore> cas;
-    if (cache_enabled && std::getenv("VX_CAS_DIR") != nullptr)
+    if (cache_enabled && util::flag_present(util::FlagId::CasDir))
         cas = std::make_unique<CasStore>(CasStore::open_default());
     // Config de build que afecta al IR pre-optimize (fold en la clave del CAS).
     // Layered: opt_level / aot_vec_width / os/arch de codegen NO entran (son
@@ -1874,9 +1868,8 @@ CompileResult compile_vx_project(
          * Se marca la pasada CON maquina y no la de sin ella, que es la unica
          * que existe cuando no hay codigo de compilacion de por medio: asi el
          * caso normal conserva sus artefactos de siempre. */
-        if (const char *pre = std::getenv("VESTA_MC_PREBUILT")) {
-            if (pre[0] != '\0') cache_tgt_suffix += ".mc";
-        }
+        if (!util::flag_text(util::FlagId::McPrebuilt).empty())
+            cache_tgt_suffix += ".mc";
 
         // ---- CAS global (content-addressed, cross-proyecto) ----
         // Clave de contenido del modulo (independiente de la ruta).  Se calcula
@@ -2160,7 +2153,7 @@ CompileResult compile_vx_project(
                                           0x9e3779b97f4a7c15ULL +
                                           (res.comptime_unit_hash << 6) +
                                           (res.comptime_unit_hash >> 2);
-                if (std::getenv("VESTA_DUMP_COMPTIME_UNIT")) {
+                if (util::flag_on(util::FlagId::DumpComptimeUnit)) {
                     std::cerr << "[comptime-unit] modulo " << pm.module_name
                               << "\n";
                     dump_comptime_unit(cu, std::cerr);
@@ -2170,7 +2163,8 @@ CompileResult compile_vx_project(
                  * con fuentes de juguete no lo consigue -- se intento con
                  * `namespace` y con la concatenacion de dos modulos, y los dos
                  * compilan bien. */
-                if (const char *d = std::getenv("VESTA_VOLCAR_UNIDAD")) {
+                if (!util::flag_text(util::FlagId::VolcarUnidad).empty()) {
+                    const std::string &d = util::flag_text(util::FlagId::VolcarUnidad);
                     std::error_code vec;
                     std::filesystem::create_directories(d, vec);
                     std::ofstream f(std::string(d) + "/" + pm.module_name +
@@ -2867,15 +2861,12 @@ CompileResult compile_vx_project(
     // solapan: el barrier garantiza que los deps esten finalizados antes
     // de que un consumer empiece.
     int parallel_threads = 0;
-    bool env_present = false;
-    if (const char *p = std::getenv("VX_PARALLEL_COMPILE")) {
-        env_present = true;
-        try {
-            parallel_threads = std::stoi(p);
-        } catch (...) {
-            parallel_threads = 0;
-        }
-        if (parallel_threads < 0) parallel_threads = 0;
+    const bool env_present = util::flag_present(util::FlagId::ParallelCompile);
+    if (env_present) {
+        /* Un valor que no sea un numero cuenta como 0, igual que antes: el
+         * registro ya devolvio 0 si no pudo leerlo, sin lanzar. */
+        const long n = util::flag_int(util::FlagId::ParallelCompile, 0);
+        parallel_threads = (n < 0 || n > INT_MAX) ? 0 : static_cast<int>(n);
     }
     //  M8 AUTO (2026-06-05): sin env var (o =0) el compile usa
     // hardware_concurrency() limitado a max 8 threads (cap para evitar
@@ -2984,10 +2975,7 @@ CompileResult compile_vx_project(
     // el merge perderia eso).  Plain imports (`import "x";` sin only)
     // jamas se shake-an (son referencia opaca, dificil de demostrar
     // unused).
-    const bool tree_shake = []() {
-        const char *v = std::getenv("VX_TREE_SHAKE");
-        return v && v[0] == '1';
-    }();
+    const bool tree_shake = util::flag_on(util::FlagId::TreeShake);
     std::unordered_set<size_t> shaken_indices;
     if (tree_shake && work.size() >= 2) {
         const auto &root_pm = work.back();
@@ -3746,7 +3734,7 @@ CompileResult compile_vx_project(
          * programa entero.  Sirve para separar en un fallo si la causa es el
          * filtro o cualquier otra cosa, sin recompilar el compilador. */
         if (!res.comptime_unit_names.empty() &&
-            !std::getenv("VESTA_NO_FILTRO_COMPTIME")) {
+            !util::flag_on(util::FlagId::NoFiltroComptime)) {
             std::unordered_set<std::string> del_conjunto(
                 res.comptime_unit_names.begin(), res.comptime_unit_names.end());
             /* Indice por nombre para no recorrer el modulo por cada callee. */
@@ -3850,7 +3838,7 @@ CompileResult compile_vx_project(
                      * vale, describe otras funciones. */
                     res.comptime_ir_section_bytes.clear();
                 }
-                if (std::getenv("VESTA_PRUEBA_IR_COMPTIME")) {
+                if (util::flag_on(util::FlagId::PruebaIrComptime)) {
                     /* QUE se queda fuera: es lo que hay que mirar cuando el
                      * artefacto filtrado se comporta distinto del entero. */
                     std::cerr << "[comptime-ir] fuera:";
@@ -3858,7 +3846,7 @@ CompileResult compile_vx_project(
                         if (!dentro.count(f.name)) std::cerr << " " << f.name;
                     std::cerr << "\n";
                 }
-                if (std::getenv("VESTA_PRUEBA_IR_COMPTIME"))
+                if (util::flag_on(util::FlagId::PruebaIrComptime))
                     std::cerr
                         << "[comptime-ir] programa " << merged.functions.size()
                         << " fns / " << eres.vel_text.size() << " B .vel"

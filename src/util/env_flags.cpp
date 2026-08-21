@@ -61,8 +61,9 @@ struct FlagTable {
             fv.present = true;
             fv.text = raw;
             /* UN solo criterio de "puesto", para todos.  Antes lo decidia cada
-             * sitio: unos miraban solo que existiera y otros que no fuera "0",
-             * asi que `X=0` encendia un mando y apagaba otro. */
+             * sitio: unos miraban solo que existiera, otros que no fuera "0" y
+             * otros que fuera exactamente "1" -- con lo que `X=2` encendia unos
+             * mandos y dejaba otros apagados. */
             fv.on = raw[0] != '\0' && !(raw[0] == '0' && raw[1] == '\0');
             char *fin = nullptr;
             const long n = std::strtol(raw, &fin, 10);
@@ -100,7 +101,15 @@ bool flag_applies_here(FlagOs os) {
 
 const FlagInfo &flag_info(FlagId id) { return kFlags[idx(id)]; }
 
-bool flag_on(FlagId id) { return table().v[idx(id)].on; }
+bool flag_on(FlagId id) {
+    const FlagValue &fv = table().v[idx(id)];
+    /* El defecto lo dice la TABLA, no el sitio que pregunta.  Un camino que ya
+     * es el normal conserva su salida a mano (`X=0`) para poder compararlo con
+     * el viejo, y eso no es lo mismo que un mando apagado que se enciende. */
+    if (kFlags[idx(id)].kind == FlagKind::BoolOn)
+        return !(fv.present && fv.text == "0");
+    return fv.on;
+}
 
 bool flag_present(FlagId id) { return table().v[idx(id)].present; }
 

@@ -191,6 +191,33 @@ static void test_el_valor_cuenta() {
     CHECK(a != b, "cambiar el valor de un mando cambia la huella");
 }
 
+/// Los mandos ENCENDIDOS por defecto lo estan sin que nadie los ponga, y solo
+/// "0" los apaga.  Es la otra convencion que habia en el codigo, y confundirla
+/// con la primera apagaria catorce caminos que hoy son el normal.
+static void test_encendidos_por_defecto() {
+    set_env("VESTA_SCHED_ALIAS", nullptr);
+    CHECK(flag_on(FlagId::SchedAlias),
+          "un BoolOn esta encendido sin ponerlo");
+    set_env("VESTA_SCHED_ALIAS", "0");
+    CHECK(!flag_on(FlagId::SchedAlias), "\"0\" lo apaga");
+    set_env("VESTA_SCHED_ALIAS", "1");
+    CHECK(flag_on(FlagId::SchedAlias), "cualquier otra cosa lo deja encendido");
+    set_env("VESTA_SCHED_ALIAS", nullptr);
+
+    /* Y el contrario, para que la comprobacion signifique algo: un Bool normal
+     * NO esta encendido si nadie lo pone. */
+    set_env("VESTA_NO_FUSE", nullptr);
+    CHECK(!flag_on(FlagId::NoFuse), "un Bool esta apagado si nadie lo pone");
+
+    /* Apagar uno encendido-por-defecto SI es una configuracion distinta, asi
+     * que tiene que notarse en la huella: es codigo distinto. */
+    const uint64_t sin_tocar = domain_fingerprint(FlagDomain::Alias);
+    set_env("VESTA_SCHED_ALIAS", "0");
+    CHECK(domain_fingerprint(FlagDomain::Alias) != sin_tocar,
+          "apagar un camino que era el normal cambia la huella");
+    set_env("VESTA_SCHED_ALIAS", nullptr);
+}
+
 /// Un solo criterio de "puesto" para todos los mandos.
 static void test_criterio_unico_de_puesto() {
     set_env("VESTA_NO_FUSE", "0");
@@ -238,6 +265,7 @@ int main() {
     test_dominios_no_se_contaminan();
     test_mandos_distintos_huellas_distintas();
     test_el_valor_cuenta();
+    test_encendidos_por_defecto();
     test_criterio_unico_de_puesto();
     test_valores_tipados();
 

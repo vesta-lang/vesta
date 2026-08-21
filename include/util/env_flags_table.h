@@ -37,7 +37,12 @@
  *                 tocar un mando del JIT no tiene por que tirar lo que se
  *                 guardo del optimizador.  Cuanto mas fino, menos hay que
  *                 rehacer.
- * @param tipo     @c Bool (presente y != "0"), @c Int o @c Text.
+ * @param tipo     @c Bool (APAGADO por defecto; lo enciende cualquier valor que
+ *                 no sea "0"), @c BoolOn (ENCENDIDO por defecto; solo "0" lo
+ *                 apaga), @c Int o @c Text.  El defecto va aqui y no en el
+ *                 sitio que lee: en el codigo habia las dos convenciones
+ *                 mezcladas y desde fuera no habia forma de saber cual era
+ *                 cual.
  * @param so       En que sistemas EXISTE.  Los nuestros son @c Any: los
  *                 definimos nosotros.  Los del sistema no lo son, y decirlo
  *                 importa -- `APPDATA`, `USERPROFILE`, `TEMP`, `PATHEXT` y
@@ -51,7 +56,7 @@ VESTA_ENV_FLAG(NoFuse,            "VESTA_NO_FUSE",            Emitted, Optimizer
 VESTA_ENV_FLAG(NoCmpJmp,          "VESTA_NO_CMPJMP",          Emitted, Optimizer, Bool, Any)
 VESTA_ENV_FLAG(NoCarryIdiom,      "VESTA_NO_CARRY_IDIOM",     Emitted, Optimizer, Bool, Any)
 VESTA_ENV_FLAG(NoIrCoalesce,      "VESTA_NO_IR_COALESCE",     Emitted, Optimizer, Bool, Any)
-VESTA_ENV_FLAG(DceEffects,        "VESTA_DCE_EFFECTS",        Emitted, Optimizer, Bool, Any)
+VESTA_ENV_FLAG(DceEffects,        "VESTA_DCE_EFFECTS",        Emitted, Optimizer, BoolOn, Any)
 VESTA_ENV_FLAG(NoStrengthReduce,  "VESTA_NO_SR",              Emitted, Optimizer, Bool, Any)
 VESTA_ENV_FLAG(NoMbInline,        "VESTA_NO_MB_INLINE",       Emitted, Optimizer, Bool, Any)
 VESTA_ENV_FLAG(NoSpecDevirt,      "VESTA_NO_SPEC_DEVIRT",     Emitted, Optimizer, Bool, Any)
@@ -64,11 +69,11 @@ VESTA_ENV_FLAG(RangeKeepFloor,    "VESTA_RANGE_KEEP_FLOOR",   Emitted, Range, Bo
 VESTA_ENV_FLAG(RangeStats,        "VESTA_RANGE_STATS",        Report,  Range, Bool, Any)
 
 /* -- Desambiguacion de memoria (alias / points-to) y sus consumidores ----- */
-VESTA_ENV_FLAG(DseUnified,        "VESTA_DSE_UNIFIED",        Emitted, Alias, Bool, Any)
+VESTA_ENV_FLAG(DseUnified,        "VESTA_DSE_UNIFIED",        Emitted, Alias, BoolOn, Any)
 VESTA_ENV_FLAG(DsePureCalls,      "VESTA_DSE_PURE_CALLS",     Emitted, Alias, Bool, Any)
 VESTA_ENV_FLAG(LoadCse,           "VESTA_LOAD_CSE",           Emitted, Alias, Bool, Any)
 VESTA_ENV_FLAG(LicmAlias,         "VESTA_LICM_ALIAS",         Emitted, Alias, Bool, Any)
-VESTA_ENV_FLAG(SchedAlias,        "VESTA_SCHED_ALIAS",        Emitted, Alias, Bool, Any)
+VESTA_ENV_FLAG(SchedAlias,        "VESTA_SCHED_ALIAS",        Emitted, Alias, BoolOn, Any)
 
 /* -- Escape analysis y promocion de reservas ------------------------------ */
 VESTA_ENV_FLAG(NoEscapeScalar,    "VESTA_NO_ESCAPE_SCALAR",   Emitted, Escape, Bool, Any)
@@ -96,8 +101,8 @@ VESTA_ENV_FLAG(IfConversionAll,   "VESTA_IF_CONVERSION_ALL",  Emitted, Branch, B
 VESTA_ENV_FLAG(BranchProfile,     "VESTA_BRANCH_PROFILE",     Emitted, Branch, Text, Any)
 
 /* -- Ensamblador en linea ------------------------------------------------- */
-VESTA_ENV_FLAG(AsmDse,            "VESTA_ASM_DSE",            Emitted, Asm, Bool, Any)
-VESTA_ENV_FLAG(AsmLoc,            "VESTA_ASM_LOC",            Emitted, Asm, Bool, Any)
+VESTA_ENV_FLAG(AsmDse,            "VESTA_ASM_DSE",            Emitted, Asm, BoolOn, Any)
+VESTA_ENV_FLAG(AsmLoc,            "VESTA_ASM_LOC",            Emitted, Asm, BoolOn, Any)
 VESTA_ENV_FLAG(AsmNoLift,         "VESTA_ASM_NO_LIFT",        Emitted, Asm, Bool, Any)
 VESTA_ENV_FLAG(AsmNoLiftSsa,      "VESTA_ASM_NO_LIFT_SSA",    Emitted, Asm, Bool, Any)
 VESTA_ENV_FLAG(NoAsmBackend,      "VESTA_NO_ASM_BACKEND",     Emitted, Asm, Bool, Any)
@@ -125,7 +130,7 @@ VESTA_ENV_FLAG(McIdiomDebug,      "VESTA_MC_IDIOM_DEBUG",     Report,  Comptime,
 VESTA_ENV_FLAG(McVerbose,         "VESTA_MC_VERBOSE",         Report,  Comptime, Bool, Any)
 
 /* -- Planificador de instrucciones ---------------------------------------- */
-VESTA_ENV_FLAG(Sched,             "VESTA_SCHED",              Emitted, Scheduler, Bool, Any)
+VESTA_ENV_FLAG(Sched,             "VESTA_SCHED",              Emitted, Scheduler, BoolOn, Any)
 VESTA_ENV_FLAG(SchedEff,          "VESTA_SCHED_EFF",          Emitted, Scheduler, Bool, Any)
 VESTA_ENV_FLAG(SchedShape,        "VESTA_SCHED_SHAPE",        Emitted, Scheduler, Bool, Any)
 VESTA_ENV_FLAG(SchedStress,       "VESTA_SCHED_STRESS",       Emitted, Scheduler, Bool, Any)
@@ -139,7 +144,7 @@ VESTA_ENV_FLAG(Splitting,         "VESTA_SPLITTING",          Emitted, RegAlloc,
 VESTA_ENV_FLAG(Recovery,          "VESTA_RECOVERY",           Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(VregNoSplit,       "VESTA_VREG_NO_SPLIT",      Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(NoSsaCoalesce,     "VESTA_NO_SSA_COALESCE",    Emitted, RegAlloc, Bool, Any)
-VESTA_ENV_FLAG(Arm64Vreg,         "VESTA_ARM64_VREG",         Emitted, RegAlloc, Bool, Any)
+VESTA_ENV_FLAG(Arm64Vreg,         "VESTA_ARM64_VREG",         Emitted, RegAlloc, BoolOn, Any)
 VESTA_ENV_FLAG(C2Vreg,            "VESTA_C2_VREG",            Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(RematMeasure,      "VESTA_REMAT_MEASURE",      Report,  RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(VregDump,          "VESTA_VREG_DUMP",          Report,  RegAlloc, Bool, Any)
@@ -155,7 +160,7 @@ VESTA_ENV_FLAG(NoJmpFall,         "VESTA_NO_JMPFALL",         Emitted, Codegen, 
 VESTA_ENV_FLAG(NoPack,            "VESTA_NO_PACK",            Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(NoWideHome,        "VESTA_NO_WIDE_HOME",       Emitted, Codegen, Bool, Any)
 VESTA_ENV_FLAG(CbForceCall,       "VESTA_CB_FORCE_CALL",      Emitted, Codegen, Bool, Any)
-VESTA_ENV_FLAG(VregCallbacks,     "VESTA_VREG_CALLBACKS",     Emitted, Codegen, Bool, Any)
+VESTA_ENV_FLAG(VregCallbacks,     "VESTA_VREG_CALLBACKS",     Emitted, Codegen, BoolOn, Any)
 VESTA_ENV_FLAG(SibDbg,            "VESTA_SIB_DBG",            Report,  Codegen, Bool, Any)
 VESTA_ENV_FLAG(Arm64Dump,         "VESTA_ARM64_DUMP",         Report,  Codegen, Bool, Any)
 VESTA_ENV_FLAG(AotDumpIr,         "VESTA_AOT_DUMP_IR",        Report,  Codegen, Bool, Any)
@@ -168,7 +173,7 @@ VESTA_ENV_FLAG(JitNoInlineDeref,  "VESTA_JIT_NO_INLINE_DEREF",   Emitted, Jit, B
 VESTA_ENV_FLAG(JitNoRegalloc,     "VESTA_JIT_NO_REGALLOC",       Emitted, Jit, Bool, Any)
 VESTA_ENV_FLAG(JitNoFrameless,    "VESTA_JIT_NO_FRAMELESS",      Emitted, Jit, Bool, Any)
 VESTA_ENV_FLAG(JitNoEspecializar, "VESTA_JIT_NO_ESPECIALIZAR",   Emitted, Jit, Bool, Any)
-VESTA_ENV_FLAG(JitVregIdiv,       "VESTA_JIT_VREG_IDIV",         Emitted, Jit, Bool, Any)
+VESTA_ENV_FLAG(JitVregIdiv,       "VESTA_JIT_VREG_IDIV",         Emitted, Jit, BoolOn, Any)
 VESTA_ENV_FLAG(NoJitPgo,          "VESTA_NO_JIT_PGO",            Emitted, Jit, Bool, Any)
 VESTA_ENV_FLAG(JitThreshold,      "VESTA_JIT_THRESHOLD",         Runtime, Jit, Int, Any)
 VESTA_ENV_FLAG(JitTier2Delta,     "VESTA_JIT_TIER2_DELTA",       Runtime, Jit, Int, Any)
@@ -176,7 +181,7 @@ VESTA_ENV_FLAG(C2Threshold,       "VESTA_C2_THRESHOLD",          Runtime, Jit, I
 VESTA_ENV_FLAG(C2TierAll,         "VESTA_C2_TIER_ALL",           Runtime, Jit, Bool, Any)
 VESTA_ENV_FLAG(OsrThreshold,      "VESTA_OSR_THRESHOLD",         Runtime, Jit, Int, Any)
 VESTA_ENV_FLAG(OsrCount,          "VESTA_OSR_COUNT",             Runtime, Jit, Int, Any)
-VESTA_ENV_FLAG(OsrOpt,            "VESTA_OSR_OPT",               Runtime, Jit, Bool, Any)
+VESTA_ENV_FLAG(OsrOpt,            "VESTA_OSR_OPT",               Runtime, Jit, BoolOn, Any)
 VESTA_ENV_FLAG(JitDisasm,         "VESTA_JIT_DISASM",            Report,  Jit, Bool, Any)
 VESTA_ENV_FLAG(JitDisasmRegs,     "VESTA_JIT_DISASM_REGS",       Report,  Jit, Bool, Any)
 VESTA_ENV_FLAG(JitAsmDump,        "VESTA_JIT_ASM_DUMP",          Report,  Jit, Bool, Any)
@@ -205,12 +210,12 @@ VESTA_ENV_FLAG(McGcTrace,         "VESTA_MC_GC_TRACE",        Report,  Gc, Bool,
 VESTA_ENV_FLAG(HostAllocStats,    "VESTA_HOST_ALLOC_STATS",   Report,  Gc, Bool, Any)
 
 /* -- Reparto por hilos.  Cambia el COMO, no el QUE ------------------------ */
-VESTA_ENV_FLAG(Paralelo,          "VESTA_PARALELO",           Speed,   Parallel, Bool, Any)
-VESTA_ENV_FLAG(ParaleloStats,     "VESTA_PARALELO_STATS",     Report,  Parallel, Bool, Any)
+VESTA_ENV_FLAG(Paralelo,          "VESTA_PARALELO",           Speed,   Parallel, BoolOn, Any)
+VESTA_ENV_FLAG(ParaleloStats,     "VESTA_PARALELO_STATS",     Report,  Parallel, BoolOn, Any)
 VESTA_ENV_FLAG(ParallelCompile,   "VX_PARALLEL_COMPILE",      Speed,   Parallel, Int, Any)
 
 /* -- ASA: el conocimiento del programa ------------------------------------ */
-VESTA_ENV_FLAG(AsaBounds,         "VESTA_ASA_BOUNDS",         Report,  Asa, Bool, Any)
+VESTA_ENV_FLAG(AsaBounds,         "VESTA_ASA_BOUNDS",         Report,  Asa, BoolOn, Any)
 VESTA_ENV_FLAG(AsaCache,          "VESTA_ASA_CACHE",          Speed,   Asa, Bool, Any)
 VESTA_ENV_FLAG(AsaFormas,         "VESTA_ASA_FORMAS",         Report,  Asa, Bool, Any)
 VESTA_ENV_FLAG(AsaHechosDebug,    "VESTA_ASA_HECHOS_DEBUG",   Report,  Asa, Bool, Any)
@@ -233,7 +238,7 @@ VESTA_ENV_FLAG(DbgReg,            "VX_DBG_REG",               Report,   Cache, B
 
 /* -- Medicion transversal ------------------------------------------------- */
 VESTA_ENV_FLAG(Times,             "VESTA_TIMES",              Report,  None, Bool, Any)
-VESTA_ENV_FLAG(Tramos,            "VESTA_TRAMOS",             Report,  None, Bool, Any)
+VESTA_ENV_FLAG(Tramos,            "VESTA_TRAMOS",             Report,  None, BoolOn, Any)
 VESTA_ENV_FLAG(DbgBpTrace,        "VESTA_DBG_BP_TRACE",       Report,  None, Bool, Any)
 VESTA_ENV_FLAG(NoColor,           "NO_COLOR",                 Report,  None, Bool, Any)
 

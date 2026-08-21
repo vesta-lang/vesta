@@ -50,15 +50,22 @@ LECTURAS = re.compile(
     r'|(?:env_flag_on|env_disables|env_on|flag_activo)\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"'
 )
 
-DECLARACION = re.compile(r'VESTA_ENV_FLAG\s*\(\s*\w+\s*,\s*"([^"]+)"')
+DECLARACION = re.compile(r'VESTA_ENV_FLAG\s*\(\s*(\w+)\s*,\s*"([^"]+)"')
+
+# Un mando ya migrado no se lee por su nombre sino por su identificador
+# (`FlagId::NoFuse`).  Sin mirar esto, cada sitio que se migra hace que el
+# mando aparezca como "declarado y no lo lee nadie", que es exactamente la
+# senal contraria a la verdad: se lee, y mejor que antes.
+USO_POR_ID = re.compile(r'FlagId::(\w+)')
 
 
-def declarados() -> set[str]:
+def declarados() -> dict[str, str]:
+    """nombre de la variable -> identificador con el que se consulta."""
     if not TABLA.is_file():
         print("no encuentro la tabla: %s" % TABLA)
         sys.exit(2)
     texto = TABLA.read_text(encoding="utf-8", errors="replace")
-    return set(DECLARACION.findall(texto))
+    return {nombre: ident for ident, nombre in DECLARACION.findall(texto)}
 
 
 def ficheros():
@@ -72,32 +79,49 @@ def ficheros():
                     yield f
 
 
-def leidos() -> dict[str, list[str]]:
-    """nombre del mando -> ficheros donde se lee (relativos a la raiz)."""
-    fuera: dict[str, list[str]] = {}
+def leidos(ident_de: dict[str, str]) -> tuple[dict[str, list[str]], set[str]]:
+    """Quien lee cada mando, y por que via.
+
+    @param ident_de nombre de la variable -> su identificador en la tabla.
+    @return (crudos, por_registro): los que se leen a pelo del entorno (con los
+            ficheros donde), y los nombres que ya se consultan por el registro.
+    """
+    por_ident = {ident: nombre for nombre, ident in ident_de.items()}
+    crudos: dict[str, list[str]] = {}
+    por_registro: set[str] = set()
     for f in ficheros():
         rel = f.relative_to(RAIZ).as_posix()
         try:
             texto = f.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        if "FlagId::" in texto:
+            for ident in USO_POR_ID.findall(texto):
+                nombre = por_ident.get(ident)
+                if nombre:
+                    por_registro.add(nombre)
         if "getenv" not in texto and "env_flag_on" not in texto \
                 and "env_disables" not in texto:
             continue
         for m in LECTURAS.finditer(texto):
             nombre = m.group(1) or m.group(2)
-            fuera.setdefault(nombre, [])
-            if rel not in fuera[nombre]:
-                fuera[nombre].append(rel)
-    return fuera
+            crudos.setdefault(nombre, [])
+            if rel not in crudos[nombre]:
+                crudos[nombre].append(rel)
+    return crudos, por_registro
 
 
 def main() -> int:
     tabla = declarados()
-    usados = leidos()
+    crudos, por_registro = leidos(tabla)
 
-    sin_declarar = {k: v for k, v in usados.items() if k not in tabla}
-    sin_usar = sorted(tabla - set(usados))
+    sin_declarar = {k: v for k, v in crudos.items() if k not in tabla}
+    usados = set(crudos) | por_registro
+    sin_usar = sorted(set(tabla) - usados)
+    # Los que todavia leen el entorno a pelo teniendo ya su entrada: no rompen
+    # nada (la tabla los cubre), pero cada uno se salta el criterio unico y la
+    # lectura de una sola vez.  Es la lista de trabajo de la migracion.
+    por_migrar = sorted(set(crudos) & set(tabla))
 
     if sin_declarar:
         print("MANDOS QUE SE LEEN Y NO ESTAN EN LA TABLA (%d):" % len(sin_declarar))
@@ -114,8 +138,10 @@ def main() -> int:
             len(sin_usar), " ".join(sin_usar)))
         print()
 
-    print("=== mandos: %d declarados, %d leidos, %d sin declarar ===" % (
-        len(tabla), len(usados), len(sin_declarar)))
+    print("=== mandos: %d declarados, %d leidos "
+          "(%d por el registro, %d aun a pelo), %d sin declarar ===" % (
+              len(tabla), len(usados), len(por_registro), len(por_migrar),
+              len(sin_declarar)))
     return 1 if sin_declarar else 0
 
 

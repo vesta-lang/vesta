@@ -14,6 +14,7 @@
 
 #include "ir/parallel_for.h"
 
+#include "util/env_flags.h"
 #include "util/crono_tramo.h"
 
 #include "util/reloj.h"
@@ -2553,20 +2554,6 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
     return sites;
 }
 
-/**
- * @brief true si la env var @p name esta activa (presente y != "0"/"").
- *
- * Consultar el entorno NO es gratis: recorre el bloque de variables del proceso
- * entero, asi que en un pase que corre por funcion se paga por funcion.  Quien
- * la llame desde un sitio que se repita debe guardar el resultado en un
- * `static const` local -- se lee una vez y despues no cuesta nada --, que es lo
- * que hacen todos los sitios de este fichero.  Son banderas de diagnostico: se
- * fijan al arrancar el proceso y no cambian durante una compilacion.
- */
-bool env_flag_on(const char *name) {
-    const char *v = std::getenv(name);
-    return v && v[0] != '\0' && v[0] != '0';
-}
 } // namespace
 
 /**
@@ -2578,7 +2565,7 @@ bool env_flag_on(const char *name) {
  * riesgo antes de habilitar la transformacion (scalar replacement).
  */
 bool ir_pass_escape_detect_gc(IrFunction &fn) {
-    static const bool dbg_det = env_flag_on("VESTA_ESCAPE_DEBUG");
+    static const bool dbg_det = util::flag_on(util::FlagId::EscapeDebug);
     if (!dbg_det) return false;
     auto sites = analyze_gc_escape(fn);
     if (sites.empty()) return false;
@@ -3394,7 +3381,7 @@ bool sr_mem2reg_object(
     };
     /* COST-MODEL (default-on): permitir VESTA_ESCAPE_MEM2REG_FORCE para
      * saltarlo y promover siempre (util para medir / casos JIT-only). */
-    static const bool force = env_flag_on("VESTA_ESCAPE_MEM2REG_FORCE");
+    static const bool force = util::flag_on(util::FlagId::EscapeMem2RegForce);
     for (uint32_t off : offsets) {
         std::vector<IrBlockId> worklist;
         std::unordered_set<IrBlockId> on_work, has_phi;
@@ -3710,7 +3697,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
     auto sites = analyze_gc_escape(fn);
     if (sites.empty()) return false;
 
-    static const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
+    static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
     auto diag = [&](const GcAllocSite &s, const std::string &why) {
         if (dbg)
             std::fprintf(
@@ -4034,7 +4021,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
          *     VESTA_ESCAPE_MEM2REG_FORCE=1 ignora el cost-model. */
         if (!single_block) {
             static const bool mem2reg_off =
-                env_flag_on("VESTA_NO_ESCAPE_MEM2REG");
+                util::flag_on(util::FlagId::NoEscapeMem2Reg);
             if (!mem2reg_off) {
                 std::string mr;
                 if (sr_mem2reg_object(fn, model, site.block_idx, site.ins_idx,
@@ -4258,7 +4245,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
 // =========================================================================
 bool ir_pass_sroa_stack_structs(IrFunction &fn) {
     if (fn.is_native || fn.values.empty()) return false;
-    static const bool sroa_off = env_flag_on("VESTA_NO_SROA_STACK");
+    static const bool sroa_off = util::flag_on(util::FlagId::NoSroaStack);
     if (sroa_off) return false;
 
     // GUARD SOUND: si la funcion tiene control de excepcion LOCAL
@@ -4275,7 +4262,7 @@ bool ir_pass_sroa_stack_structs(IrFunction &fn) {
                 in.op == IrOp::RETHROW)
                 return false;
 
-    static const bool dbg = env_flag_on("VESTA_ESCAPE_DEBUG");
+    static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
     bool changed = false;
 
     // Recolectar ALLOCAs candidatos (dst valido, no ya host_alloca -- esos van
@@ -7021,10 +7008,7 @@ bool ir_pass_elide_unwrap(IrFunction &fn) {
 // is_side_effecting (salida .velb BYTE-IDeNTICA en el corpus + e2e 724/0 en
 // interp/jit/aot).  VESTA_DCE_EFFECTS=0 revierte a la tabla is_side_effecting
 // (escape-hatch para diagnostico/comparacion).
-static bool g_dce_effects = [] {
-    const char *e = std::getenv("VESTA_DCE_EFFECTS");
-    return !(e && e[0] == '0'); // default ON; solo "0" lo desactiva
-}();
+static bool g_dce_effects = util::flag_on(util::FlagId::DceEffects);
 
 // Unificacion del modelo de memoria (Fase 3): cuando esta activo, el DSE
 // construye su resolucion de direcciones (addr_of/root_kind) desde el
@@ -7041,10 +7025,7 @@ static bool g_dce_effects = [] {
  * algo, porque hasta ahora ningun consumidor lo miraba.
  */
 static bool asm_dse_activo() {
-    static const bool on = [] {
-        const char *e = std::getenv("VESTA_ASM_DSE");
-        return !(e && e[0] == '0');
-    }();
+    static const bool on = util::flag_on(util::FlagId::AsmDse);
     return on;
 }
 
@@ -7053,10 +7034,7 @@ static bool asm_dse_activo() {
 // resolucion propia que tenia el DSE --, y la suite pasa 878/0 en los tres
 // modos.  Encenderlo no es una apuesta de rendimiento: es que deje de haber dos
 // resoluciones de direcciones distintas.  `VESTA_DSE_UNIFIED=0` vuelve atras.
-static bool g_dse_unified = [] {
-    const char *e = std::getenv("VESTA_DSE_UNIFIED");
-    return !(e && e[0] == '0');
-}();
+static bool g_dse_unified = util::flag_on(util::FlagId::DseUnified);
 
 // Fase 4 (valor INTERPROCEDURAL del modelo de efectos): cuando esta activo, una
 // CALL a un callee TOTALMENTE PURO (segun EffectAnalysis: sin mem, sin may_*,
@@ -7067,10 +7045,7 @@ static bool g_dse_unified = [] {
 // cambia el codigo generado en ninguno de los 29 programas del corpus: no hay
 // ninguna llamada totalmente pura que hoy este haciendo de barrera.  Cuando la
 // haya, el mecanismo ya esta.
-static bool g_dse_pure_calls = [] {
-    const char *e = std::getenv("VESTA_DSE_PURE_CALLS");
-    return e && e[0] == '1';
-}();
+static bool g_dse_pure_calls = util::flag_on(util::FlagId::DsePureCalls);
 
 // Scheduling alias-aware (consumidor del modelo de memoria UNICO): el DAG de
 // dependencias del list-scheduler modela las hazards de memoria por may_alias
@@ -7085,10 +7060,7 @@ static bool g_dse_pure_calls = [] {
 // consumidor del modelo de memoria con alcance real -- y sale mejor en 6 de 8
 // benches, ~2% en los dos largos, que son donde el arranque diluye menos.
 // Suite 878/0 en los tres modos.  `VESTA_SCHED_ALIAS=0` vuelve atras.
-static bool g_sched_alias = [] {
-    const char *e = std::getenv("VESTA_SCHED_ALIAS");
-    return !(e && e[0] == '0');
-}();
+static bool g_sched_alias = util::flag_on(util::FlagId::SchedAlias);
 
 // Load-to-load CSE (nuevo consumidor del alias): el DSE ya forwardea
 // store->load (last_store_val); con esto un LOAD que NO forwardea registra su
@@ -7100,10 +7072,7 @@ static bool g_sched_alias = [] {
 // corpus y no quita ni una instruccion ejecutada.  La condicion que exige --
 // misma direccion, sin ningun store en medio, y se invalida en CUALQUIER store
 // -- casi no se da.
-static bool g_load_cse = [] {
-    const char *e = std::getenv("VESTA_LOAD_CSE");
-    return e && e[0] == '1';
-}();
+static bool g_load_cse = util::flag_on(util::FlagId::LoadCse);
 
 // LICM alias-aware (consumidor del modelo de memoria UNICO): hoistear un LOAD
 // invariante aunque el loop tenga escrituras, si NINGUN store del loop puede
@@ -7112,10 +7081,7 @@ static bool g_load_cse = [] {
 // VESTA_LICM_ALIAS=1.  APAGADO: suite en verde con el, pero medido no cambia
 // el codigo en ninguno de los 29 programas -- los loads invariantes que quedan
 // dentro de un loop con escrituras no aparecen en el corpus.
-static bool g_licm_alias = [] {
-    const char *e = std::getenv("VESTA_LICM_ALIAS");
-    return e && e[0] == '1';
-}();
+static bool g_licm_alias = util::flag_on(util::FlagId::LicmAlias);
 
 /// Localizaciones que ALGUIEN de la funcion lee, o donde puede leer.
 ///
@@ -7283,7 +7249,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
             fx_env.rangos = fx_rangos.get();
             fx_env.rangos_de = &fn;
             ns_peticiones += util::reloj::a_ns(util::reloj::ahora() - t_r);
-            if ((++n_peticiones % 500) == 0 && std::getenv("VESTA_TIMES"))
+            if ((++n_peticiones % 500) == 0 && util::flag_on(util::FlagId::Times))
                 std::fprintf(stderr, "[dce-rangos] %lld peticiones | %lld ms\n",
                              n_peticiones.load(),
                              ns_peticiones.load() / 1000000);
@@ -9513,7 +9479,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * habilitar la eliminacion completa del alloc para los no-escapantes).
          * Gated por VESTA_NO_ESCAPE_SCALAR para A/B testing limpio (con el pase
          * OFF, el comportamiento de inline previo se mantiene). */
-        static const bool sr_on = !env_flag_on("VESTA_NO_ESCAPE_SCALAR");
+        static const bool sr_on = !util::flag_on(util::FlagId::NoEscapeScalar);
         if (sr_on && is_new_helper_name(fn.name, nullptr)) return false;
         /* Resolvedores de overlay `__ovl_resolve_<S>_<f>(self)`: devuelven la
          * DIRECCION (host) de un campo de una vista.  El marcado is_host_ptr
@@ -10743,7 +10709,7 @@ static void reorder_blocks_rpo(IrFunction &fn) {
     std::vector<IrBlockId> remap(N, IR_NO_BLOCK);
     for (size_t i = 0; i < order.size(); ++i)
         remap[order[i]] = static_cast<IrBlockId>(i);
-    static const bool rpo_dump = std::getenv("VESTA_RPO_DUMP") != nullptr;
+    static const bool rpo_dump = util::flag_on(util::FlagId::RpoDump);
     if (rpo_dump)
         std::fprintf(stderr, "[rpo] %s: N=%zu inalcanzables=%zu entry->%u\n",
                      fn.name.c_str(), N, unreachable,
@@ -11051,7 +11017,7 @@ bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
     // (creacion de objetos + dtor en loop rompia el save_live_regs del GC) +
     // ALLOCA/free/excepciones/reflexion, dejando solo metodos/funciones PUROS
     // (compute + field-access) que es donde el inline multi-bloque aporta.
-    static const bool mb_off = env_flag_on("VESTA_NO_MB_INLINE");
+    static const bool mb_off = util::flag_on(util::FlagId::NoMbInline);
     if (mb_off) return false;
     std::unordered_map<std::string, size_t> name_to_idx;
     for (size_t i = 0; i < mod.functions.size(); ++i)
@@ -12331,7 +12297,7 @@ bool ir_pass_carry_idiom(IrFunction &fn) {
      * en un modulo grande --, y consultar el entorno recorre el bloque entero
      * de variables en cada consulta.  Medido, era el 45% de lo que costaba
      * este pase, todo el gasto en preguntar si estaba apagado. */
-    static const bool apagado = std::getenv("VESTA_NO_CARRY_IDIOM") != nullptr;
+    static const bool apagado = util::flag_on(util::FlagId::NoCarryIdiom);
     if (apagado) return false;
     static const std::vector<Pattern> pats = {carry_idiom_pattern()};
     return ir_apply_patterns(fn, pats);
@@ -13053,25 +13019,12 @@ struct AsmBindingsAnalysis {
 };
 
 char AsmBindingsAnalysis::ID = 0;
-/**
- * @brief Lee una bandera de "no hagas esto" del entorno.
- *
- * Se usa SOLO para inicializar las de abajo, una vez por proceso.  Preguntar
- * por una variable de entorno recorre su bloque entero, y estas banderas
- * estaban dentro de `ir_optimize`, que corre muchisimas veces: en el perfil,
- * `getenv` salia a 0,078 s de 7,75 -- un 1% de compilar para decidir algo que
- * no cambia nunca.  Dos de ellas ademas estaban DENTRO del punto fijo.
- */
-bool env_disables(const char *name) {
-    const char *v = std::getenv(name);
-    return v != nullptr && v[0] != '\0' && v[0] != '0';
-}
 
 const bool g_no_promote_local_allocas =
-    env_disables("VESTA_NO_PROMOTE_LOCAL_ALLOCAS");
-const bool g_no_promote_raw_alloc = env_disables("VESTA_NO_PROMOTE_RAW_ALLOC");
-const bool g_no_spec_devirt = env_disables("VESTA_NO_SPEC_DEVIRT");
-const bool g_no_escape_scalar = env_disables("VESTA_NO_ESCAPE_SCALAR");
+    util::flag_on(util::FlagId::NoPromoteLocalAllocas);
+const bool g_no_promote_raw_alloc = util::flag_on(util::FlagId::NoPromoteRawAlloc);
+const bool g_no_spec_devirt = util::flag_on(util::FlagId::NoSpecDevirt);
+const bool g_no_escape_scalar = util::flag_on(util::FlagId::NoEscapeScalar);
 
 } // namespace
 
@@ -13706,7 +13659,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
 
     // --- CTPE (debug): validacion del analisis de evaluabilidad + candidatos.
     // ---
-    if (std::getenv("VESTA_CTPE_DEBUG")) {
+    if (util::flag_on(util::FlagId::CtpeDebug)) {
         ctpe::Evaluability ev = ctpe::compute_evaluability(mod);
         for (const auto &fn : mod.functions) {
             if (ev.is_evaluable(fn.name)) {
@@ -13733,7 +13686,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
     /* Cuanto se REUSA de verdad.  Es lo que dice si cachear analisis por
      * funcion puede servir de algo aqui: si casi todo sale CADUCADO, la funcion
      * cambia entre consultas y no hay reuso posible por mucho que se afine. */
-    if (std::getenv("VESTA_TIMES")) {
+    if (util::flag_on(util::FlagId::Times)) {
         const auto c = am.cuentas();
         const long long total = c.aciertos + c.caducados + c.nuevos;
         std::fprintf(stderr,
