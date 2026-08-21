@@ -643,7 +643,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // blob_pool_size u32 + blob_pool_alignment u8 + 7 pad en offsets 48..63).
     // v6: crece a 80 (gen_templates_offset u32 + gen_templates_count u32 +
     // 8 pad en offsets 64..79).
-    const size_t HEADER_BYTES = 88; // v11: +ext_off(80) +ext_count(84)
+    const size_t HEADER_BYTES = 104; // v17: +vxdbg_map (88, 96)
     const size_t GEN_ENTRY_BYTES =
         28; // name_off+name_len+kind+src_off+src_len+ns_off+ns_len (v9)
     const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
@@ -902,6 +902,10 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // fichero, 84 = numero de entradas).
     patch_u32(80, ext_start);
     patch_u32(84, static_cast<uint32_t>(mod.ext_methods.size()));
+    // v17 (88, 96): huella del mapa de diagnostico del modulo.  Cero = no
+    // aporta ninguno, que es lo que era cierto antes de que esto existiera.
+    patch_u64(88, mod.vxdbg_map_lo);
+    patch_u64(96, mod.vxdbg_map_hi);
 
     // Adjustar payload_off de cada entry: hasta ahora son relativos al
     // BLOQUE de payloads (empieza en 0).  Sumar payloads_start para que
@@ -976,7 +980,7 @@ uint64_t vxi_hash_de_simbolos(const VxiModule &m,
         const std::vector<uint8_t> bytes = vxi_emit(solo);
         /* Sin la cabecera: ahi vive el `abi_hash` de este modulo de un solo
          * simbolo, que es funcion de lo demas y no aporta. */
-        constexpr size_t kCabecera = 88;
+        constexpr size_t kCabecera = 104;
         if (bytes.size() > kCabecera)
             mezclar(bytes.data() + kCabecera, bytes.size() - kCabecera);
     }
@@ -1399,6 +1403,11 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     uint32_t ext_count_hdr = 0;  // NS.6-ext v11 (offset 84)
     read_u32(data, size, off, ext_offset_hdr);
     read_u32(data, size, off, ext_count_hdr);
+    // v17 (88, 96): huella del mapa de diagnostico del modulo.
+    uint64_t vxdbg_lo_hdr = 0;
+    uint64_t vxdbg_hi_hdr = 0;
+    read_u64(data, size, off, vxdbg_lo_hdr);
+    read_u64(data, size, off, vxdbg_hi_hdr);
 
     if (magic != VXI_MAGIC) {
         r.error_message = "magic invalido en .vxi";
@@ -1436,11 +1445,13 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.abi_hash = abi_hash;
     r.module_.source_hash = source_hash;
     r.module_.compiler_version_hash = cvh;
+    r.module_.vxdbg_map_lo = vxdbg_lo_hdr;
+    r.module_.vxdbg_map_hi = vxdbg_hi_hdr;
     r.module_.symbols.reserve(symbol_count);
 
-    // Symbol entries empiezan en offset 88 (tras el header v11).
+    // Symbol entries empiezan tras el header v17 (104 bytes).
     constexpr size_t SYMENTRY_BYTES = 20;
-    constexpr size_t HEADER_BYTES = 88;
+    constexpr size_t HEADER_BYTES = 104;
     constexpr size_t DEP_ENTRY_BYTES = 16;
     constexpr size_t GEN_ENTRY_BYTES = 28; // v9: +ns_off+ns_len
     // v4: blob_pool extraido a un std::vector para conservar la API

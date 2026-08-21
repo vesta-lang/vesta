@@ -38,6 +38,10 @@ ReachStatus references_of_artifact_map(const StoredNode &node,
     if (!decode(node, map)) return ReachStatus::Undecodable;
     for (const auto &sym : map.symbols)
         push_if_set(sym.second, out);
+    // Y los mapas de los modulos que contiene, que son otros ArtifactMap: por
+    // ahi se llega al grafo de un modulo que vino de su cache y no se re-emitio.
+    for (const auto &h : map.modules)
+        if (!h.empty()) out.push_back(h);
     return ReachStatus::Ok;
 }
 

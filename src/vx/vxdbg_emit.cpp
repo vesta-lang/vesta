@@ -632,7 +632,19 @@ bool emit_vxdbg_source(
             link_symbols(symbol_links, res.ids, stats);
         stats.symbol_links = map.symbols;
         vxdbg::ContentHash h;
-        if (vxdbg::store_node(store, map, h)) stats.artifact_map = h;
+        if (vxdbg::store_node(store, map, h)) {
+            stats.artifact_map = h;
+            /* El mismo nodo sirve de mapa DEL MODULO: es exactamente lo mismo,
+             * simbolo a entidad.  Su huella viaja al `.vxi`, y asi una
+             * compilacion que sirva este modulo desde cache lo cita en el mapa
+             * del artefacto sin re-emitir nada -- que es lo que hasta ahora
+             * dejaba el grafo de la stdlib sin nadie que lo sostuviera.
+             *
+             * Se aprovecha el almacen que esta emision ya tiene abierto: con
+             * seis mil modulos, abrir uno por modulo seria seis mil aperturas
+             * justo en el camino que se quiere barato. */
+            stats.module_map = h;
+        }
     }
     // Los tramos de fuente: van en su propio nodo porque cambian con cualquier
     // reformateo mientras que los simbolos no, y compartir nodo obligaria a

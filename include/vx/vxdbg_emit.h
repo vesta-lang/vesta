@@ -57,6 +57,18 @@ struct VxdbgEmitStats {
     /// raices.
     std::vector<std::pair<std::string, vxdbg::LanguageEntityId>> roots;
 
+    /**
+     * @brief Huella del mapa de ESTE modulo -- sus simbolos con su entidad.
+     *
+     * Se guarda como nodo aqui, aprovechando el almacen que la emision ya tiene
+     * abierto, y su huella acaba en el `.vxi` del modulo.  Con eso, una
+     * compilacion que sirva este modulo desde cache puede citarlo en el mapa
+     * del artefacto sin re-emitir el grafo ni abrir un solo fichero de mas.
+     *
+     * Vacia si el modulo no ligo ningun simbolo.
+     */
+    vxdbg::ContentHash module_map;
+
     /// Simbolos del artefacto que se pudieron ligar a una entidad.
     size_t linked = 0;
     /// Y los que no.  Un simbolo sin entidad no es un fallo por si mismo -- hay

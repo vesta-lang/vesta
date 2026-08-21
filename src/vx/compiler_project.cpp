@@ -2711,6 +2711,12 @@ CompileResult compile_vx_project(
             }
             pm.vxdbg_symbols = st.symbol_links;
             pm.vxdbg_spans = st.spans;
+            /* La huella del mapa de este modulo viaja en su `.vxi`.  Es lo que
+             * permite que, cuando el modulo se sirva desde cache y no se baje,
+             * siga aportando su grafo al artefacto: sin esto sus simbolos no
+             * llegaban al mapa y su grafo se quedaba sin sostener. */
+            pm.vxi.vxdbg_map_lo = st.module_map.lo;
+            pm.vxi.vxdbg_map_hi = st.module_map.hi;
         }
 
         // -ffp-contract=off (CLI, per-modulo): fuerza IEEE estricto (sin FMA)
@@ -3865,9 +3871,22 @@ CompileResult compile_vx_project(
     // el modulo raiz.  Sin artefacto no hay nada que mapear.
     if (!opts.ir_only) {
         vxdbg::ArtifactMap map;
-        for (const auto &pm : work)
-            for (const auto &kv : pm.vxdbg_symbols)
-                map.add(kv.first, kv.second);
+        for (const auto &pm : work) {
+            if (!pm.vxdbg_symbols.empty()) {
+                // Se bajo en esta compilacion: sus simbolos estan aqui.
+                for (const auto &kv : pm.vxdbg_symbols)
+                    map.add(kv.first, kv.second);
+                continue;
+            }
+            /* Vino de su cache y no se bajo, asi que no tiene simbolos que
+             * aportar -- pero su `.vxi` trae la huella del mapa que dejo la
+             * compilacion que si lo bajo.  Citarla es lo que mantiene vivo su
+             * grafo: sin esto, el de la stdlib solo existia mientras siguiera
+             * por ahi el programa concreto que la compilo de cero. */
+            const vxdbg::ContentHash mm{pm.vxi.vxdbg_map_lo,
+                                        pm.vxi.vxdbg_map_hi};
+            if (!mm.empty()) map.modules.push_back(mm);
+        }
         vxdbg::FileNodeStore store(opts.vxdbg_dir.empty() ? default_vxdbg_dir()
                                                           : opts.vxdbg_dir);
         vxdbg::ContentHash h;

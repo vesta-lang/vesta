@@ -90,11 +90,35 @@ using BuildId = NodeId<BuildTag>;
  * verdad; ponerlo ahora seria adivinar la forma de algo que todavia no hay.
  */
 struct ArtifactMap {
-    static constexpr uint32_t kSchemaVersion = 1;
+    /// v2: @ref modules.
+    static constexpr uint32_t kSchemaVersion = 2;
     DebugNodeHeader header{NodeKind::ArtifactMap, kSchemaVersion, {}};
 
     /// Ordenados por simbolo, para poder buscar sin construir nada al leer.
     std::vector<std::pair<std::string, LanguageEntityId>> symbols;
+
+    /**
+     * @brief Mapas de OTROS modulos que este artefacto contiene.
+     *
+     * POR QUE.  El grafo de un modulo se emite al bajarlo, y bajar se salta si
+     * el modulo viene de su cache.  Sin esto, sus simbolos no llegaban al mapa
+     * del artefacto y su grafo quedaba sin nadie que lo sostuviera: en un arbol
+     * de trabajo, `atomic.vx` o `vx_fiber.vx` aparecian con 1-2 referencias
+     * frente a las 14 de `main.vx`, y no porque se usaran menos.
+     *
+     * Un modulo guarda su propio mapa -- que es un @ref ArtifactMap igual que
+     * este, porque es exactamente lo mismo: simbolo a entidad -- y aqui se cita
+     * su huella.  Un modulo servido desde cache aporta esa huella sin volver a
+     * emitir nada: el grafo ya esta guardado y es el mismo, porque la clave es
+     * el contenido.
+     *
+     * Se citan en vez de copiarse por lo que cuesta lo contrario a escala: con
+     * seis mil modulos, copiar sus simbolos aqui haria un mapa enorme por cada
+     * ejecutable, y recorrerlo obligaria a abrirlos todos.  Citandolos, el
+     * artefacto sigue siendo UN nodo y quien recorre baja solo por donde
+     * necesita.
+     */
+    std::vector<ContentHash> modules;
 
     /**
      * @brief Busca la entidad de un simbolo.

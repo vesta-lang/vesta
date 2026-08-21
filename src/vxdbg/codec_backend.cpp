@@ -246,11 +246,27 @@ StoredNode encode(const ArtifactMap &n) {
         w.str(kv.first);
         w.id(kv.second);
     }
+    // v2: los mapas de los modulos que contiene, citados por su huella.
+    w.u32(static_cast<uint32_t>(n.modules.size()));
+    for (const auto &h : n.modules) {
+        w.u64(h.lo);
+        w.u64(h.hi);
+    }
     return make(n.header, w);
 }
 
 bool decode(const StoredNode &s, ArtifactMap &out) {
-    if (!expect<ArtifactMap>(s, NodeKind::ArtifactMap)) return false;
+    /* Aqui NO se usa `expect`, que exige la version exacta, sino el camino
+     * escrito a proposito que ese helper deja apuntado para cuando haya que
+     * leer las antiguas.  Los mapas v1 son legibles enteros -- v2 solo anade
+     * una lista al final -- y rechazarlos dejaria colgadas de golpe todas las
+     * raices ya publicadas, que son decenas de miles en un arbol con uso.  Lo
+     * que no se hace es adivinar: se aceptan las versiones que se sabe leer, y
+     * ninguna mas. */
+    if (s.header.kind != NodeKind::ArtifactMap) return false;
+    const uint32_t version = s.header.schema_version;
+    if (version != 1 && version != ArtifactMap::kSchemaVersion) return false;
+
     ByteReader r(s.payload);
     out.header = s.header;
     const uint32_t n = r.u32();
@@ -265,6 +281,20 @@ bool decode(const StoredNode &s, ArtifactMap &out) {
         // desordenado, la busqueda binaria no encontraria algun simbolo --
         // fallo de omision, nunca de dar el equivocado.
         out.symbols.emplace_back(std::move(sym), r.id<LanguageEntityTag>());
+    }
+    out.modules.clear();
+    // Un mapa v1 se acaba aqui: no tenia la lista, y eso significa que no cita
+    // ningun modulo -- que es justo lo que era cierto cuando se escribio.
+    if (version >= 2) {
+        const uint32_t m = r.u32();
+        if (!r.ok()) return false;
+        out.modules.reserve(m);
+        for (uint32_t i = 0; i < m; ++i) {
+            ContentHash h;
+            h.lo = r.u64();
+            h.hi = r.u64();
+            out.modules.push_back(h);
+        }
     }
     return r.ok();
 }

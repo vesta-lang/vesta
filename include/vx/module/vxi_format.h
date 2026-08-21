@@ -55,7 +55,14 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// v10: package_id en el header (NS.3, offsets 72/76 del pad v6).
 /// v11: ext_methods (NS.6-ext) -- header crece a 88 (ext_off 80 + ext_count
 /// 84).
-inline constexpr uint16_t VXI_FORMAT_VERSION = 16; // tipo base del enum
+/// v17: huella del mapa de diagnostico del modulo (cabecera 88 -> 104).  El
+/// grafo de un modulo se emite al bajarlo, y bajar se salta cuando el modulo
+/// viene de su cache; sin esto sus simbolos no llegaban al mapa del artefacto y
+/// su grafo se quedaba sin nadie que lo sostuviera.  Se guarda la HUELLA y no
+/// el mapa: el grafo ya esta en su almacen y es el mismo, porque la clave es el
+/// contenido.  Y va en la cabecera, que ya se lee entera, para no anadir ni una
+/// apertura por modulo -- con seis mil modulos eso serian seis mil.
+inline constexpr uint16_t VXI_FORMAT_VERSION = 17; // tipo base del enum
 
 /// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
 /// atomos `os:` de @Target.  Es el valor por defecto del objetivo cuando no hay
@@ -168,6 +175,15 @@ struct VxiHeader {
     /// era el objetivo del artefacto y cual el actual; un hash obligaria a un
     /// mensaje vago justo donde hace falta precision.
     uint32_t target_offset = 0;
+    /// v17 (88, 96): huella del mapa de diagnostico de ESTE modulo -- simbolo a
+    /// entidad --, guardado como nodo en el almacen de vxdbg.  Cero = el modulo
+    /// no aporta ninguno (no se emitio grafo, o el `.vxi` es anterior a v17).
+    ///
+    /// Quien sirva este modulo desde cache cita esta huella en el mapa del
+    /// artefacto y con eso el grafo del modulo vuelve a estar sostenido, sin
+    /// re-emitirlo y sin abrir nada mas: la cabecera ya se leyo.
+    uint64_t vxdbg_map_lo = 0;
+    uint64_t vxdbg_map_hi = 0;
 };
 
 /**
@@ -338,6 +354,10 @@ struct VxiModule {
     uint64_t abi_hash = 0;
     uint64_t source_hash = 0;
     uint64_t compiler_version_hash = 0; ///< M5.b L.27
+    /// v17: huella del mapa de diagnostico de este modulo (ver @ref
+    /// VxiHeader).  Cero = no aporta ninguno.
+    uint64_t vxdbg_map_lo = 0;
+    uint64_t vxdbg_map_hi = 0;
     std::vector<VxiSymbol> symbols;
     ///  M4.ext L.13: cache transitivo.  Cada DepRecord guarda el
     /// nombre del modulo dep + su abi_hash en el momento de compilar
