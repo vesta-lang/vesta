@@ -435,3 +435,25 @@ es = "'{0}' exige que su argumento {1} sea multiplo de {2} bytes -- se lo exige 
 [VXA041]
 en = "'{0}' requires argument {1} to be a multiple of {2} bytes ('{3}' demands it), and it cannot be proven here; align the data or use the variant without that requirement"
 es = "'{0}' exige que su argumento {1} sea multiplo de {2} bytes (se lo exige su '{3}'), y aqui no se puede demostrar; alinea el dato o usa la variante que no lo exige"
+
+# --- compilar codigo comptime a bytecode (VXA047-VXA050) ---
+#
+# El comptime se ejecuta SIEMPRE compilado.  Si no se pudo compilar, eso es un
+# fallo del compilador y se DICE: caer a otra via en silencio es como el
+# evaluador de AST se quedo dentro tantos anyos.
+
+[VXA047]
+en = "the comptime code of '{0}' produced no code when emitting"
+es = "el codigo comptime de '{0}' no produjo codigo al emitir"
+
+[VXA048]
+en = "the comptime code of '{0}' was rejected by the assembler"
+es = "el codigo comptime de '{0}' lo rechazo el ensamblador"
+
+[VXA049]
+en = "the bytecode of the comptime code of '{0}' could not be read"
+es = "el bytecode del codigo comptime de '{0}' no se pudo leer"
+
+[VXA050]
+en = "the comptime machine did not accept the bytecode of '{0}'"
+es = "la maquina de compilacion no acepto el bytecode de '{0}'"

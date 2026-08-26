@@ -37,6 +37,7 @@
 #include "vx/parser.h"
 #include <iostream>
 
+#include "vx/comptime/compile_service.h"
 #include "vx/comptime/comptime_artifact.h"
 #include "vx/comptime/comptime_collect.h"
 #include "vx/comptime/comptime_vm.h"
@@ -1277,46 +1278,21 @@ CompileResult compile_vx_source(const std::string &source,
         std::vector<ctpe::Candidate> cands = ctpe::find_candidates(irmod, ev);
         res.has_ctpe_candidates = !cands.empty();
         if (res.has_ctpe_candidates) {
-            // 1) Emit UNFOLDED -> temp .vel -> temp .velb (ensamblado).
-            ir::EmitResult e1 = ir::ir_emit_module(irmod, emit_opts);
-            if (e1.ok) {
-                std::error_code ec;
-                std::filesystem::create_directories(".cache/ctpe/tmp", ec);
-                std::string base =
-                    ".cache/ctpe/tmp/ctpe_" +
-                    std::to_string(std::hash<std::string>{}(e1.vel_text));
-                /* Ensamblar a un `.velb` con su seccion @ir (para que el
-                 * runtime pueda compilar main en JIT y ejecutarlo).
-                 *
-                 * Desde la fuente EN MEMORIA: el texto lo acaba de producir la
-                 * linea de arriba, asi que escribirlo a un fichero para que la
-                 * siguiente lo vuelva a leer era trabajo puro.  El nombre se
-                 * conserva para los diagnosticos, no para abrir nada. */
-                int rc = asm_multi_process::run_worker_from_source(
-                    e1.vel_text, base + ".vel", base,
-                    /*skip_preprocessor=*/true,
-                    /*keep_labels=*/false, &res.ir_section_bytes,
-                    /*emit_map=*/false);
-                if (rc == 0) {
-                    std::ifstream vf(base + ".velb", std::ios::binary);
-                    std::vector<uint8_t> velb(
-                        (std::istreambuf_iterator<char>(vf)),
-                        std::istreambuf_iterator<char>());
-                    if (!velb.empty()) {
-                        // 2) Cargar el runtime; el re-emit de abajo pliega.  El
-                        // handler de safepoint se activa AQUI (no en
-                        // try_invoke_ctpe) porque main se JIT-compila durante
-                        // load_macros_from_bytes -- antes de invocarlo.  Asi su
-                        // codigo lleva los polls del watchdog.  Reset tras el
-                        // emit.
-                        jit::jit_set_ctpe_safepoint(
-                            jit::jit_safepoint_handler_addr());
-                        ctpe_rt = std::make_unique<vx::ComptimeRuntime>();
-                        if (ctpe_rt->load_macros_from_bytes(std::move(velb)))
-                            emit_opts.ctpe_runtime = ctpe_rt.get();
-                    }
-                }
-            }
+            /* Emitir sin plegar, ensamblar y cargar.  Esa cadena la hace el
+             * SERVICIO (`vx/comptime/compile_service.h`), que es el mismo que
+             * usara la ejecucion comptime perezosa: escrita a mano aqui, se
+             * separaria de la otra copia sola.
+             *
+             * El handler de safepoint se activa ANTES de cargar, no en
+             * `try_invoke_ctpe`: `main` se JIT-compila DURANTE la carga --
+             * antes de invocarlo -- asi que su codigo tiene que llevar ya los
+             * polls del watchdog.  Se reinicia tras el emit. */
+            jit::jit_set_ctpe_safepoint(jit::jit_safepoint_handler_addr());
+            /* Con su seccion @ir, para que el runtime pueda compilar main en
+             * JIT y ejecutarlo. */
+            ctpe_rt = vx::compile_ir_and_load(irmod, emit_opts,
+                                              &res.ir_section_bytes, "ctpe");
+            if (ctpe_rt) emit_opts.ctpe_runtime = ctpe_rt.get();
         }
     }
 

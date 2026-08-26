@@ -198,6 +198,11 @@ add_library(vx_lib STATIC
     # El asm como dominio del ASA (productor de hechos): vive junto al informe
     # porque comparte la base de datos de instrucciones.
     ${CMAKE_SOURCE_DIR}/src/analyze/asa_asm.cpp
+    # "Compila este IR y damelo listo para ejecutar": la cadena emitir ->
+    # ensamblar -> cargar, en UN sitio.  Estaba escrita a mano en el precomputo
+    # del arranque y en el camino de las macros; y la necesita ademas la
+    # ejecucion comptime perezosa, que es lo que permite quitar el tree-walker.
+    comptime/compile_service.cpp
     comptime/comptime_introspect.cpp
     # Recolector del conjunto comptime (P1 fase 1: base del artefacto comptime
     # separado que compilara/ejecutara todo el comptime en la ComptimeVM).
