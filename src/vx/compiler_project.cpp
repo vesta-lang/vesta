@@ -4040,7 +4040,34 @@ CompileResult compile_vx_project(
     for (const auto &pm : work) {
         if (pm.tc && pm.tc->inject_diferido()) {
             res.has_lowerable_macros = true;
+            res.unresolved_inject = true;
             break;
+        }
+    }
+    /* Y ADEMAS, mirando lo que se va a emitir.
+     *
+     * Preguntarle a cada modulo si le quedo algo pendiente solo funciona con
+     * los que se acaban de compilar: los que se sirven del cache no traen type
+     * checker al que preguntar, asi que un cuerpo vacio heredado de una pasada
+     * anterior pasaba invisible -- que es justo el caso que hay que cazar.
+     *
+     * El IR fusionado si lo dice, venga de donde venga: el cuerpo lleva la
+     * marca que dejo quien no pudo expandirlo.  Cuesta un recorrido del modulo
+     * ya construido y no depende de cuantas pasadas haya habido. */
+    if (!res.unresolved_inject) {
+        for (const ir::IrFunction &fn : merged.functions) {
+            for (const ir::IrBlock &b : fn.blocks) {
+                for (const ir::IrInstr &in : b.instrs) {
+                    if (in.op != ir::IrOp::INLINE_ASM) continue;
+                    if (in.func_name.find("inject pendiente") ==
+                        std::string::npos)
+                        continue;
+                    res.unresolved_inject = true;
+                    break;
+                }
+                if (res.unresolved_inject) break;
+            }
+            if (res.unresolved_inject) break;
         }
     }
     res.ok = !res.diagnostics.has_errors();

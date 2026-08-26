@@ -468,3 +468,19 @@ es = "la maquina de compilacion no acepto el bytecode de '{0}'"
 [VXA051]
 en = "the comptime set of '{0}' could not be assembled, so its compile-time code has no bytecode to run: what depends on it is compiled with placeholder values"
 es = "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de compilacion no tiene bytecode que ejecutar: lo que dependa de el se compila con valores de relleno"
+
+# --- un inject() de un bloque asm se quedo sin resolver (VXA052) ---
+#
+# El cuerpo de un `asm` se genera ejecutando codigo en compilacion.  Si esa
+# ejecucion no llega a ocurrir, el bloque sale VACiO y hasta ahora se compilaba
+# igual, sin decir nada: el programa quedaba sin la copia, sin el relleno o sin
+# lo que el bloque hiciera, y el sintoma aparecia lejos -- un resultado que no
+# cuadra, o un `hlt` a mitad de una funcion de la biblioteca.
+#
+# Se comprueba sobre el ARTEFACTO QUE SE ENTREGA, no sobre una pasada concreta:
+# da igual cuantas veces se compile por dentro, lo que sale no puede llevar un
+# bloque sin cuerpo.
+
+[VXA052]
+en = "the body of an inline asm block in '{0}' was never generated: its inject(...) could not run at compile time, so the block would be emitted EMPTY"
+es = "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: su inject(...) no se pudo ejecutar en compilacion, asi que el bloque saldria VACiO"

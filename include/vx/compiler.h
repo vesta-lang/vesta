@@ -549,6 +549,20 @@ struct CompileResult {
     bool has_lowerable_macros = false;
 
     /**
+     * @brief Quedo un `inject(...)` de un bloque asm sin resolver.
+     *
+     * El cuerpo de ese bloque se genera EJECUTANDO codigo en compilacion; si
+     * esa ejecucion no llega a ocurrir, el bloque sale VACiO.  Hasta ahora eso
+     * se compilaba sin decir nada y el sintoma aparecia lejos del sitio: una
+     * copia que no copia, o un `hlt` a mitad de una funcion de la biblioteca.
+     *
+     * Se mira sobre el artefacto QUE SE ENTREGA, no sobre una pasada concreta:
+     * da igual cuantas veces se compile por dentro -- y el dia que se compile
+     * una sola, la comprobacion vale igual.
+     */
+    bool unresolved_inject = false;
+
+    /**
      * @brief Fuente del CONJUNTO COMPTIME de la compilacion: las decls que se
      *        ejecutan al compilar (`comptime` y `@Macro`), sus dependencias y
      *        los `import` que necesitan, concatenadas.

@@ -913,7 +913,10 @@ CompileResult compile_vx_source(const std::string &source,
      * asm salio VACIO.  No basta con mirar el IR -- si la unica llamada a la
      * funcion comptime estaba dentro del inject, al no expandirse no queda ni
      * rastro de ella y el gate de arriba no la ve. */
-    if (tc.inject_diferido()) res.has_lowerable_macros = true;
+    if (tc.inject_diferido()) {
+        res.has_lowerable_macros = true;
+        res.unresolved_inject = true;
+    }
 
     /* +: copiar las razones de skip del lowering a la
      * CompileResult para que main.cpp las imprima via VESTA_VERBOSE. */
