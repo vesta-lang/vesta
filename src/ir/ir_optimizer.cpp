@@ -9757,7 +9757,19 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
                                 callee.asm_clobber_lists[old_id]);
                         else
                             caller.asm_clobber_lists.emplace_back();
-                        ni.imm = (ni.imm & 0xFFull) |
+                        /* Se sustituye SOLO el campo del asm-id (bits 8..31).
+                         * Antes la mascara era `& 0xFF`, que ademas de quitar
+                         * el id viejo -- lo buscado -- borraba el bit 32, o
+                         * sea "la lista de clobbers es autoritativa".  Al
+                         * perderlo, el bloque pasaba a "no se sabe que
+                         * destruye" y el backend lo trataba como posicion de
+                         * llamada; entonces sus PROPIOS operandos salian
+                         * exigiendo un carril preservado, y en x86-64 ninguna
+                         * xmm/ymm lo es: cero carriles admisibles, ningun
+                         * registro asignado y el bloque emitido VACiO.  Se
+                         * veia como un `movdqa` que no escribia nada, y solo
+                         * despues de inlinar. */
+                        ni.imm = (ni.imm & ~(UINT64_C(0xFFFFFF) << 8)) |
                                  (static_cast<uint64_t>(new_id) << 8);
                         /* Los operandos que elige el compilador se nombran en
                          * el cuerpo por un marcador `$N`, y ese numero indexa

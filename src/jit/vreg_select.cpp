@@ -508,6 +508,66 @@ inline int canon_gp_to_mreg(const std::string &c, bool for_pin = false) {
     return -1;
 }
 
+/**
+ * @brief Llena de la ficha lo que un micro-asm destruye, y lo DA POR SABIDO.
+ *
+ * Los clobbers de una instruccion siempre se conocen: la ficha dice de cada
+ * operando si escribe y en que registro fisico, y los operandos que asigna el
+ * asignador viajan aparte en @c out_vregs.  Marcar la lista como autoritativa
+ * es lo que evita el trato conservador de "posicion de llamada"; sin ella, los
+ * PROPIOS operandos del bloque salian exigiendo un carril preservado, y en
+ * x86-64 ninguna xmm/ymm lo es -- cero carriles admisibles, ningun registro
+ * asignado y el bloque emitido VACiO (un `movdqa` que no escribia nada).
+ *
+ * Vive aqui, y no duplicada en cada sitio que arma un blob, porque los dos
+ * caminos -- el diferido con plantilla y el ya ensamblado -- destruyen lo
+ * mismo y por la misma razon.
+ *
+ * @param am Ficha del micro asm.
+ * @param blob Blob a rellenar (clobbers + memoria + banderas + autoritativa).
+ * @param salvar_rbx Sale a @c true si el bloque pisa @c rbx (el envoltorio del
+ *        JIT guarda ahi el proceso: hay que salvarlo alrededor).
+ * @param salvar_rbp Idem para @c rbp (el marco).
+ * @return @c false si el bloque reasigna @c rsp -- no se puede envolver,
+ *         porque salvarlo usaria @c rsp --; el llamador hace fallback.
+ */
+static bool asm_blob_marcar_clobbers(const ir::AsmMicro &am, AsmBlob &blob,
+                                     bool &salvar_rbx, bool &salvar_rbp) {
+    // Efectos de la DB: bit0 mem, bit3 barrera -> clobber de memoria; bit2
+    // escribe flags.
+    blob.clobbers_mem = (am.eff & 0x9) != 0;
+    blob.clobbers_flags = (am.eff & 0x4) != 0;
+    salvar_rbx = false;
+    salvar_rbp = false;
+    std::vector<std::pair<uint8_t, int>> cl;
+    vx::asm_micro_clobbers(am, cl);
+    for (const auto &c : cl) {
+        int mreg = -1;
+        if (c.first == vx::ASM_RC_GP && c.second >= 0 && c.second <= 15) {
+            /* rbx y rbp no son del programa: el envoltorio del JIT guarda ahi
+             * el proceso y el marco.  El camino opaco ya los salvaba alrededor
+             * del bloque y este no, asi que un `mov rbx, rsp` pisaba el
+             * puntero al proceso y a partir de ahi todo iba mal -- el mismo
+             * programa daba 42 sin elevar y basura elevado. */
+            if (c.second == (int)MReg::RBX) {
+                salvar_rbx = true;
+            } else if (c.second == (int)MReg::RBP) {
+                salvar_rbp = true;
+            } else if (c.second == (int)MReg::RSP) {
+                return false; // reasigna la pila: no envolvible
+            } else {
+                mreg = c.second;
+            }
+        } else if ((c.first == vx::ASM_RC_VEC || c.first == vx::ASM_RC_FP) &&
+                   c.second >= 0 && c.second <= 31) {
+            mreg = (int)MReg::XMM0 + c.second;
+        }
+        if (mreg >= 0) blob.clobbers.push_back((uint8_t)mreg);
+    }
+    blob.clobbers_conocidos = true;
+    return true;
+}
+
 } // namespace
 
 // Watchdog CTPE: direccion del handler de safepoint (0 = desactivado).  Es
@@ -530,6 +590,49 @@ static thread_local AbiResolver g_abi_resolver;
 
 void vreg_set_abi_resolver(AbiResolver resolver) noexcept {
     g_abi_resolver = std::move(resolver);
+}
+
+/**
+ * @brief Emite el bloque de asm, salvando alrededor los registros que el
+ *        envoltorio del JIT reserva y el bloque pisa.
+ *
+ * @c rbx guarda el proceso y @c rbp el marco: no son del programa, asi que
+ * @c canon_gp_to_mreg los rechaza como asignables, pero el asm SI los escribe
+ * (p.ej. @c cpuid escribe ebx).  Salvarlos alrededor es lo unico que hace
+ * seguro dejar pasar esos bloques.
+ *
+ * @param O Lista de instruccion maquina en construccion.
+ * @param bidx indice del blob ya internado.
+ * @param salvar_rbx Envolver con push/pop de @c rbx.
+ * @param salvar_rbp idem con @c rbp.
+ */
+static void asm_blob_emitir(std::vector<MInstr> &O, uint32_t bidx,
+                            bool salvar_rbx, bool salvar_rbp) {
+    if (salvar_rbx) {
+        MInstr p;
+        p.op = MOp::PUSH;
+        p.src1 = MOperand::make_reg(MReg::RBX, 8);
+        O.push_back(p);
+    }
+    if (salvar_rbp) {
+        MInstr p;
+        p.op = MOp::PUSH;
+        p.src1 = MOperand::make_reg(MReg::RBP, 8);
+        O.push_back(p);
+    }
+    O.push_back(MInstr::make_inline_asm_raw(bidx));
+    if (salvar_rbp) {
+        MInstr p;
+        p.op = MOp::POP;
+        p.dst = MOperand::make_reg(MReg::RBP, 8);
+        O.push_back(p);
+    }
+    if (salvar_rbx) {
+        MInstr p;
+        p.op = MOp::POP;
+        p.dst = MOperand::make_reg(MReg::RBX, 8);
+        O.push_back(p);
+    }
 }
 
 bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
@@ -667,6 +770,31 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         for (size_t i = 0; i < fn.values.size(); ++i)
             if (ir_type_is_float(fn.values[i].type))
                 out.vreg_class[i] = RegClass::FP;
+
+    /* De que banco es cada operando de un bloque asm, ANTES de seleccionar.
+     *
+     * La clase se decidia al llegar al propio `asm`, y la seleccion va en
+     * orden: lo de ANTES ya se habia elegido creyendo que el valor era entero.
+     * Un operando `xmm` sin inicializador entraba con una carga del banco
+     * general y salia con una escritura del ancho -- `mov rax,[slot]` contra
+     * `movsd [slot],xmm0` --, y esa carga se llevaba por delante el registro
+     * donde vivia otra cosa: el bloque acababa escribiendo dieciseis bytes en
+     * una direccion cualquiera y el fallo aparecia mucho despues, al liberar.
+     *
+     * Recorrer las fichas primero cuesta un paseo por la funcion y deja la
+     * clase decidida para TODAS las instrucciones, las de antes tambien. */
+    for (const ir::IrBlock &blk : fn.blocks)
+        for (const ir::IrInstr &ins : blk.instrs) {
+            if (ins.op != ir::IrOp::ASM_MICRO) continue;
+            if (ins.imm >= fn.asm_micros.size()) continue;
+            for (const ir::AsmMicroOperand &op : fn.asm_micros[ins.imm].operands) {
+                if (op.value == ir::IR_NO_VALUE) continue;
+                if (op.regclass != vx::ASM_RC_VEC && op.regclass != vx::ASM_RC_FP)
+                    continue;
+                if (op.value < out.vreg_class.size())
+                    out.vreg_class[op.value] = RegClass::FP;
+            }
+        }
 
     /*  D.7 commit 5f: marcar los vregs GC.  El pipeline hace el
      * check FINO (sin stackmaps todavia): rechaza la funcion solo si un
@@ -4550,17 +4678,36 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                          * bloque se quedaba sin poder emitirse. */
                         if (op.kind != ir::AsmOperandKind::IMM)
                             out.set_vreg_reg_required(d.vreg);
-                        // El asignador tiene que ver el uso y la definicion, o
-                        // el intervalo del valor no cubre el asm y le da su
-                        // registro a otro.
-                        if (op.reads()) blob.in_vregs.push_back(d.vreg);
+                        /* Un operando de MEMORIA siempre LEE su registro: lo
+                         * que se escribe es la memoria, pero para llegar a ella
+                         * hay que leer la direccion.  Contarlo solo cuando el
+                         * operando "lee" dejaba fuera el destino de un
+                         * `movdqa [d], v0`: el rango de vida de `d` no cubria
+                         * el bloque, el asignador reusaba su registro y el asm
+                         * escribia dieciseis bytes en una direccion cualquiera.
+                         * Se veia mucho despues, al liberar: el monton estaba
+                         * corrupto y reventaba dentro del propio free. */
+                        if (op.reads() || op.kind == ir::AsmOperandKind::MEM)
+                            blob.in_vregs.push_back(d.vreg);
                         if (op.writes() && op.kind != ir::AsmOperandKind::MEM)
                             blob.out_vregs.push_back(d.vreg);
                     }
-                    blob.clobbers_mem = (am.eff & 0x9) != 0;
-                    blob.clobbers_flags = (am.eff & 0x4) != 0;
+                    /* Lo que destruye se sabe igual que en el camino ya
+                     * ensamblado: la ficha lo dice.  Los operandos que elige
+                     * el asignador (@c fixed_phys < 0) quedan fuera de la
+                     * lista a proposito -- viajan en @c out_vregs --, asi que
+                     * lo que queda son los registros que la instruccion pisa
+                     * por convencion.  Con la lista completa y marcada, el
+                     * bloque deja de tratarse como posicion de llamada. */
+                    bool salvar_rbx = false, salvar_rbp = false;
+                    if (!asm_blob_marcar_clobbers(am, blob, salvar_rbx,
+                                                  salvar_rbp)) {
+                        vreg_dbg(fn.name.c_str(),
+                                 "asm_micro(reasigna la pila)");
+                        return false;
+                    }
                     const uint32_t bi = out.intern_asm_blob(std::move(blob));
-                    O.push_back(MInstr::make_inline_asm_raw(bi));
+                    asm_blob_emitir(O, bi, salvar_rbx, salvar_rbp);
                     break;
                 }
                 // sustituir $0,$1,... por el nombre del registro FiSICO
@@ -4595,80 +4742,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 }
                 AsmBlob blob;
                 blob.bytes = std::move(ar.bytes);
-                // Efectos de la DB: bit0 mem, bit3 barrera -> clobber de
-                // memoria; bit2 escribe flags.
-                blob.clobbers_mem = (am.eff & 0x9) != 0;
-                blob.clobbers_flags = (am.eff & 0x4) != 0;
-                /* Y los REGISTROS que destruye.
-                 *
-                 * La ficha dice de cada operando si se lee o se escribe, pero
-                 * eso no llegaba hasta aqui: el asm se emitia como bytes
-                 * sueltos y el asignador lo trataba como si no tocara ningun
-                 * registro. Un `movdqa xmm1, xmm0` destruye xmm1 -- si el
-                 * asignador tenia ahi un valor vivo, se pierde sin que nadie lo
-                 * note.  El campo estaba desde el principio; solo faltaba
-                 * llenarlo. */
                 bool salvar_rbx = false, salvar_rbp = false;
-                {
-                    std::vector<std::pair<uint8_t, int>> cl;
-                    vx::asm_micro_clobbers(am, cl);
-                    for (const auto &c : cl) {
-                        int mreg = -1;
-                        if (c.first == vx::ASM_RC_GP && c.second >= 0 &&
-                            c.second <= 15) {
-                            /* rbx y rbp no son del programa: el envoltorio del
-                             * JIT guarda ahi el proceso y el marco.  El camino
-                             * opaco ya los salvaba alrededor del bloque y este
-                             * no, asi que un `mov rbx, rsp` pisaba el puntero
-                             * al proceso y a partir de ahi todo iba mal -- el
-                             * mismo programa daba 42 sin elevar y basura
-                             * elevado. rsp no se puede envolver (salvarlo usa
-                             * rsp). */
-                            if (c.second == (int)MReg::RBX) {
-                                salvar_rbx = true;
-                            } else if (c.second == (int)MReg::RBP) {
-                                salvar_rbp = true;
-                            } else if (c.second == (int)MReg::RSP) {
-                                vreg_dbg(fn.name.c_str(),
-                                         "asm_micro(reasigna la pila)");
-                                return false;
-                            } else {
-                                mreg = c.second;
-                            }
-                        } else if ((c.first == vx::ASM_RC_VEC ||
-                                    c.first == vx::ASM_RC_FP) &&
-                                   c.second >= 0 && c.second <= 31) {
-                            mreg = (int)MReg::XMM0 + c.second;
-                        }
-                        if (mreg >= 0) blob.clobbers.push_back((uint8_t)mreg);
-                    }
+                if (!asm_blob_marcar_clobbers(am, blob, salvar_rbx,
+                                              salvar_rbp)) {
+                    vreg_dbg(fn.name.c_str(), "asm_micro(reasigna la pila)");
+                    return false;
                 }
                 const uint32_t bidx = out.intern_asm_blob(std::move(blob));
-                if (salvar_rbx) {
-                    MInstr p;
-                    p.op = MOp::PUSH;
-                    p.src1 = MOperand::make_reg(MReg::RBX, 8);
-                    O.push_back(p);
-                }
-                if (salvar_rbp) {
-                    MInstr p;
-                    p.op = MOp::PUSH;
-                    p.src1 = MOperand::make_reg(MReg::RBP, 8);
-                    O.push_back(p);
-                }
-                O.push_back(MInstr::make_inline_asm_raw(bidx));
-                if (salvar_rbp) {
-                    MInstr p;
-                    p.op = MOp::POP;
-                    p.dst = MOperand::make_reg(MReg::RBP, 8);
-                    O.push_back(p);
-                }
-                if (salvar_rbx) {
-                    MInstr p;
-                    p.op = MOp::POP;
-                    p.dst = MOperand::make_reg(MReg::RBX, 8);
-                    O.push_back(p);
-                }
+                asm_blob_emitir(O, bidx, salvar_rbx, salvar_rbp);
                 break;
             }
 
