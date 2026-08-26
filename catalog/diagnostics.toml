@@ -471,7 +471,8 @@ es = "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de c
 
 # --- un inject() de un bloque asm se quedo sin resolver (VXA052) ---
 #
-# El cuerpo de un `asm` se genera ejecutando codigo en compilacion.  Si esa
+# El cuerpo de un `asm` se genera ejecutando codigo en compilacion -- hoy, con
+# el macro `inject` de `std.comptime`, que NO es del lenguaje: se importa.  Si esa
 # ejecucion no llega a ocurrir, el bloque sale VACiO y hasta ahora se compilaba
 # igual, sin decir nada: el programa quedaba sin la copia, sin el relleno o sin
 # lo que el bloque hiciera, y el sintoma aparecia lejos -- un resultado que no
@@ -482,5 +483,5 @@ es = "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de c
 # bloque sin cuerpo.
 
 [VXA052]
-en = "the body of an inline asm block in '{0}' was never generated: its inject(...) could not run at compile time, so the block would be emitted EMPTY"
-es = "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: su inject(...) no se pudo ejecutar en compilacion, asi que el bloque saldria VACiO"
+en = "the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY"
+es = "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"

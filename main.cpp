@@ -367,8 +367,10 @@ static void guardar_cache_de_proyecto(
  * @brief Avisa si el artefacto que se va a entregar llevaria un bloque de
  *        ensamblador SIN CUERPO.
  *
- * El cuerpo de un `asm` puede generarse ejecutando codigo en compilacion
- * (`inject(...)`).  Si esa ejecucion no llega a ocurrir, el bloque sale VACiO y
+ * El cuerpo de un `asm` puede generarse ejecutando codigo en compilacion.  Hoy
+ * eso se escribe con el macro `inject` de `std.comptime`, que no es del
+ * lenguaje: se importa como cualquier otro simbolo.  Si esa ejecucion no llega
+ * a ocurrir, el bloque sale VACiO y
  * hasta ahora se compilaba igual, sin decir nada: el programa se quedaba sin la
  * copia, sin el relleno o sin lo que el bloque hiciera, y el sintoma aparecia
  * lejos del sitio -- un resultado que no cuadra, o un `hlt` a mitad de una
