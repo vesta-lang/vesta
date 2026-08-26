@@ -237,6 +237,30 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             // Bloque comptime a nivel modulo: su cuerpo tambien es comptime.
             collect_calls_stmt(static_cast<const ast::Stmt *>(d.get()),
                                seed_calls);
+        } else if (d->kind == ast::NodeKind::StructDecl ||
+                   d->kind == ast::NodeKind::ClassDecl) {
+            /* Lo comptime que vive DENTRO de un tipo.  Este recolector recoge
+             * declaraciones de nivel superior, y un metodo no lo es, asi que no
+             * se lleva -- pero se APUNTA: un conjunto vacio no puede significar
+             * a la vez "aqui no hay comptime" y "aqui hay comptime que no
+             * recojo".  Lo segundo deja el artefacto sin algo que hace falta, y
+             * no da error: falla mucho despues.
+             *
+             * Hoy no se nota porque el artefacto es el PROGRAMA ENTERO y el
+             * bytecode del metodo esta dentro por eso.  En cuanto el artefacto
+             * sea la particion, deja de estarlo. */
+            const auto &metodos =
+                d->kind == ast::NodeKind::StructDecl
+                    ? static_cast<const ast::StructDecl *>(d.get())->methods
+                    : static_cast<const ast::ClassDecl *>(d.get())->methods;
+            const std::string &tipo =
+                d->kind == ast::NodeKind::StructDecl
+                    ? static_cast<const ast::StructDecl *>(d.get())->name
+                    : static_cast<const ast::ClassDecl *>(d.get())->name;
+            for (const auto &m : metodos) {
+                if (!m || !m->is_comptime) continue;
+                u.not_collected.push_back(tipo + "." + m->name);
+            }
         }
     }
 
@@ -365,6 +389,16 @@ void dump_comptime_unit(const ComptimeUnit &u, std::ostream &os) {
     os << "\n  helper deps    (" << u.helper_deps.size() << "):";
     for (const auto &n : u.helper_deps)
         os << " " << n;
+    /* Lo que se VIO y no se llevo, SIEMPRE que lo haya: sin esta linea, un
+     * conjunto vacio se lee igual esten o no esten estas declaraciones, y son
+     * cosas opuestas. */
+    if (!u.not_collected.empty()) {
+        os << "\n  visto y NO recogido (" << u.not_collected.size()
+           << ", comptime dentro de un tipo -- hoy lo cubre el artefacto"
+              " monolitico):";
+        for (const auto &n : u.not_collected)
+            os << " " << n;
+    }
     os << "\n  content_hash   : 0x" << std::hex << u.content_hash << std::dec
        << "  (clave de cache del artefacto comptime)\n";
 }

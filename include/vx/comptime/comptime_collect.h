@@ -63,8 +63,27 @@ struct ComptimeUnit {
     /// vacio o el conjunto es @c empty().
     std::string unit_source;
 
-    /// @return true si el modulo no tiene nada comptime (el artefacto seria
-    /// vacio y P1 no aplica).
+    /**
+     * @brief Declaraciones comptime que el recolector VIO y NO se llevo.
+     *
+     * No saber algo es un resultado y se dice POR QUE.  Sin esto, un conjunto
+     * vacio se lee igual en los dos casos que hay -- "este modulo no tiene nada
+     * comptime" y "tiene comptime de una forma que no recojo" -- y son
+     * opuestos: el primero es correcto y el segundo deja al artefacto sin algo
+     * que hace falta.  Y no da error: da un artefacto incompleto, que falla
+     * mucho mas tarde y lejos de aqui.
+     *
+     * Hoy la unica forma conocida es el CONSTRUCTOR comptime de un struct
+     * (`comptime T(expr)`), que es un metodo de tipo y no una declaracion de
+     * nivel superior.  Que hoy funcione no contradice esto: funciona porque el
+     * artefacto es el PROGRAMA ENTERO y su bytecode esta dentro por eso.  En
+     * cuanto el artefacto sea la particion, deja de estarlo.
+     */
+    std::vector<std::string> not_collected;
+
+    /// @return true si el modulo no tiene nada comptime QUE ESTE RECOLECTOR
+    /// RECOJA.  Ojo: no es lo mismo que "no tiene comptime" -- para eso hay que
+    /// mirar ademas @c not_collected.
     bool empty() const {
         return comptime_fns.empty() && macros.empty() &&
                comptime_consts.empty();

@@ -323,6 +323,7 @@ CompileResult compile_vx_source(const std::string &source,
         const ComptimeUnit cu = collect_comptime_unit(*mod, source);
         res.comptime_unit_source = cu.unit_source;
         res.comptime_unit_hash = cu.content_hash;
+        res.comptime_unit_not_collected = cu.not_collected;
         if (util::flag_on(util::FlagId::DumpComptimeUnit))
             dump_comptime_unit(cu, std::cerr);
     }

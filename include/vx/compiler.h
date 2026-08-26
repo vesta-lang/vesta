@@ -569,6 +569,20 @@ struct CompileResult {
     /// pertenencia: sin el habria que adivinarlo del texto, y una busqueda de
     /// subcadena acierta por accidente.
     std::vector<std::string> comptime_unit_names;
+    /**
+     * @brief Declaraciones comptime que el recolector VIO y NO se llevo.
+     *
+     * Hoy son los metodos `comptime` de un tipo (el constructor
+     * `comptime T(expr)`, sobre todo): el recolector recoge declaraciones de
+     * nivel superior y un metodo no lo es.
+     *
+     * Se cuenta porque un conjunto vacio no puede significar a la vez "este
+     * modulo no tiene nada comptime" y "tiene comptime que no recojo".  Lo
+     * segundo dejaria el artefacto SEPARADO sin algo que hace falta, y no daria
+     * error: fallaria mucho despues.  Hoy no se nota porque el artefacto es el
+     * PROGRAMA ENTERO y ese bytecode esta dentro por eso.
+     */
+    std::vector<std::string> comptime_unit_not_collected;
     /// Texto `.vel` de SOLO el conjunto comptime, emitido filtrando el IR ya
     /// bajado y optimizado del modulo.  Es lo que hay que ensamblar para la
     /// ComptimeVM, en vez del programa entero: medido sobre

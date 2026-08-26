@@ -2146,6 +2146,12 @@ CompileResult compile_vx_project(
                     res.comptime_unit_names.insert(
                         res.comptime_unit_names.end(), lista->begin(),
                         lista->end());
+                /* Y lo que se vio y no se llevo, tambien cuando SI hay
+                 * conjunto: que el modulo tenga comptime de nivel superior no
+                 * quita que ademas tenga metodos comptime fuera del reparto. */
+                res.comptime_unit_not_collected.insert(
+                    res.comptime_unit_not_collected.end(),
+                    cu.not_collected.begin(), cu.not_collected.end());
                 /* Clave combinada: mezclar los hashes por modulo, no rehashear
                  * el texto -- asi el orden de los modulos no cambia la clave
                  * mientras el conjunto sea el mismo. */
@@ -2170,6 +2176,20 @@ CompileResult compile_vx_project(
                     std::ofstream f(std::string(d) + "/" + pm.module_name +
                                     ".unidad.vx");
                     if (f) f << cu.unit_source;
+                }
+            } else if (!cu.not_collected.empty()) {
+                /* Conjunto VACIO pero con comptime dentro de un tipo.  Sin esta
+                 * rama, este caso y "el modulo no tiene nada comptime" se leen
+                 * IGUAL desde fuera, y son opuestos: aqui el artefacto se
+                 * quedaria sin algo que hace falta.  No saber es un resultado y
+                 * se dice por que. */
+                res.comptime_unit_not_collected.insert(
+                    res.comptime_unit_not_collected.end(),
+                    cu.not_collected.begin(), cu.not_collected.end());
+                if (util::flag_on(util::FlagId::DumpComptimeUnit)) {
+                    std::cerr << "[comptime-unit] modulo " << pm.module_name
+                              << "\n";
+                    dump_comptime_unit(cu, std::cerr);
                 }
             }
         }
