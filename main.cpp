@@ -363,6 +363,45 @@ static void guardar_cache_de_proyecto(
     }
 }
 
+/**
+ * @brief Avisa si el artefacto que se va a entregar llevaria un bloque de
+ *        ensamblador SIN CUERPO.
+ *
+ * El cuerpo de un `asm` puede generarse ejecutando codigo en compilacion
+ * (`inject(...)`).  Si esa ejecucion no llega a ocurrir, el bloque sale VACiO y
+ * hasta ahora se compilaba igual, sin decir nada: el programa se quedaba sin la
+ * copia, sin el relleno o sin lo que el bloque hiciera, y el sintoma aparecia
+ * lejos del sitio -- un resultado que no cuadra, o un `hlt` a mitad de una
+ * funcion de la biblioteca.  Asi se perdio una tarde persiguiendo por que el
+ * mismo fuente daba un binario distinto en frio y en caliente.
+ *
+ * Se pregunta sobre el artefacto QUE SE ENTREGA, nunca sobre "en que pasada
+ * estamos": da igual cuantas veces se compile por dentro, y el dia que se
+ * compile una sola vez la comprobacion sigue valiendo sin tocarla.
+ *
+ * @param cr Resultado ya cerrado de la compilacion.
+ * @param vx_path Fuente, para citarlo en el aviso.
+ * @return @c true si habia alguno (el llamante decide si aborta).
+ */
+static bool warn_unresolved_inject(const vx::CompileResult &cr,
+                                   const std::string &vx_path) {
+    if (!cr.unresolved_inject) return false;
+    vx::Diagnostic d;
+    /* AVISO y no error: hoy lo dispara toda compilacion en frio que
+     * importe `std.memory`, porque sus modulos se compilan ANTES de que
+     * exista la maquina que genera sus cuerpos.  Convertirlo en error
+     * antes de arreglar eso seria dejar el corpus sin compilar.  Cuando
+     * el cuerpo este siempre disponible, esto pasa a ERROR: un bloque de
+     * ensamblador sin cuerpo no es un programa valido. */
+    d.level = vx::DiagLevel::WARN;
+    d.code = "VXA052";
+    d.args.push_back(vx_path);
+    d.loc.file = vx_path;
+    vx::print_diagnostic(std::cerr, d);
+    return true;
+}
+
+
 static bool recompilar_con_maquina_de_compilacion(
     vx::CompileResult &cr, const std::string &vx_path,
     const std::string &vx_source, const vx::CompileOptions &copts,
@@ -4547,6 +4586,7 @@ int main(int argc, char *argv[]) {
              *
              * El nombre se conserva porque los diagnosticos lo citan, no porque
              * se abra nada. */
+            warn_unresolved_inject(cr, vx_path);
             std::string vel_en_memoria;
             if (copts.emit_debug) vel_en_memoria = "// @file " + vx_path + "\n";
             vel_en_memoria += vel_artefacto;
@@ -4909,8 +4949,8 @@ int main(int argc, char *argv[]) {
                    << " us, " << ir::vueltas_punto_fijo() << " vueltas, ";
                 /* Solo si paso: rendirse a medias es una averia, y una averia
                  * que no ocurre no tiene por que ocupar sitio en la linea. */
-                if (ir::truncaciones_punto_fijo() > 0)
-                    lp << ir::truncaciones_punto_fijo()
+                if (ir::fixpoint_truncations() > 0)
+                    lp << ir::fixpoint_truncations()
                        << " SIN CONVERGER (codigo peor), ";
                 lp << ir::visitas_a_funcion() << " visitas; reloj "
                    << cal.fuente << " de " << cal.resolucion_ns

@@ -162,7 +162,7 @@ long long &vueltas_punto_fijo();
  * Distinto de cero significa que hay que mirarlo, no que haya que subir el
  * tope.
  */
-long long &truncaciones_punto_fijo();
+long long &fixpoint_truncations();
 
 /// Visitas a una funcion (vueltas x funciones, sumado sobre los modulos).  Es
 /// el numero con el que TIENE que cuadrar la cuenta de llamadas de un pase que

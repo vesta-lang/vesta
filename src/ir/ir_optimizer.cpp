@@ -12964,7 +12964,7 @@ long long &visitas_a_funcion() {
     return n;
 }
 
-long long &truncaciones_punto_fijo() {
+long long &fixpoint_truncations() {
     static long long n = 0;
     return n;
 }
@@ -13281,10 +13281,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
      * los hechos interprocedurales tardan una vuelta mas en propagarse, 38 de
      * los 440 ejemplos se quedaban cortos, y el binario salia hasta 21 KB mas
      * grande -- callando, porque agotar el tope no se contaba.  Ahora se cuenta
-     * (@c truncaciones_punto_fijo): si esto se toca, el aviso es que hay dos
+     * (@c fixpoint_truncations): si esto se toca, el aviso es que hay dos
      * pases peleandose, y la respuesta es mirarlos, no subir el numero. */
-    constexpr int kTopeAntiCuelgue = 64;
-    for (int pass = 0; pass < kTopeAntiCuelgue; ++pass) {
+    constexpr int kAntiHangCap = 64;
+    for (int pass = 0; pass < kAntiHangCap; ++pass) {
         // Atomico: lo escriben todos los hilos y solo se pone a true, nunca a
         // false, asi que basta un `store` relajado -- lo que importa es que se
         // vea al cerrar la vuelta, y ahi hay una barrera de por medio.
@@ -13538,7 +13538,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
         /* Se agoto el tope y algo seguia cambiando: el optimizador se rinde a
          * medias.  Queda anotado porque un binario peor sin ninguna senal es
          * exactamente lo que costo descubrir esto. */
-        if (pass + 1 == kTopeAntiCuelgue) truncaciones_punto_fijo() += 1;
+        if (pass + 1 == kAntiHangCap) fixpoint_truncations() += 1;
     }
 
     /* Stack-first (2a pasada): re-correr la promocion malloc->stack TRAS el

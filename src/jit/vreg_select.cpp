@@ -531,7 +531,7 @@ inline int canon_gp_to_mreg(const std::string &c, bool for_pin = false) {
  * @return @c false si el bloque reasigna @c rsp -- no se puede envolver,
  *         porque salvarlo usaria @c rsp --; el llamador hace fallback.
  */
-static bool asm_blob_marcar_clobbers(const ir::AsmMicro &am, AsmBlob &blob,
+static bool asm_blob_mark_clobbers(const ir::AsmMicro &am, AsmBlob &blob,
                                      bool &salvar_rbx, bool &salvar_rbp) {
     // Efectos de la DB: bit0 mem, bit3 barrera -> clobber de memoria; bit2
     // escribe flags.
@@ -606,7 +606,7 @@ void vreg_set_abi_resolver(AbiResolver resolver) noexcept {
  * @param salvar_rbx Envolver con push/pop de @c rbx.
  * @param salvar_rbp idem con @c rbp.
  */
-static void asm_blob_emitir(std::vector<MInstr> &O, uint32_t bidx,
+static void asm_blob_emit(std::vector<MInstr> &O, uint32_t bidx,
                             bool salvar_rbx, bool salvar_rbp) {
     if (salvar_rbx) {
         MInstr p;
@@ -4700,14 +4700,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * por convencion.  Con la lista completa y marcada, el
                      * bloque deja de tratarse como posicion de llamada. */
                     bool salvar_rbx = false, salvar_rbp = false;
-                    if (!asm_blob_marcar_clobbers(am, blob, salvar_rbx,
+                    if (!asm_blob_mark_clobbers(am, blob, salvar_rbx,
                                                   salvar_rbp)) {
                         vreg_dbg(fn.name.c_str(),
                                  "asm_micro(reasigna la pila)");
                         return false;
                     }
                     const uint32_t bi = out.intern_asm_blob(std::move(blob));
-                    asm_blob_emitir(O, bi, salvar_rbx, salvar_rbp);
+                    asm_blob_emit(O, bi, salvar_rbx, salvar_rbp);
                     break;
                 }
                 // sustituir $0,$1,... por el nombre del registro FiSICO
@@ -4743,13 +4743,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 AsmBlob blob;
                 blob.bytes = std::move(ar.bytes);
                 bool salvar_rbx = false, salvar_rbp = false;
-                if (!asm_blob_marcar_clobbers(am, blob, salvar_rbx,
+                if (!asm_blob_mark_clobbers(am, blob, salvar_rbx,
                                               salvar_rbp)) {
                     vreg_dbg(fn.name.c_str(), "asm_micro(reasigna la pila)");
                     return false;
                 }
                 const uint32_t bidx = out.intern_asm_blob(std::move(blob));
-                asm_blob_emitir(O, bidx, salvar_rbx, salvar_rbp);
+                asm_blob_emit(O, bidx, salvar_rbx, salvar_rbp);
                 break;
             }
 

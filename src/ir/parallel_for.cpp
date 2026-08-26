@@ -83,7 +83,7 @@ unsigned compile_threads() {
          * una vuelta mas en propagarse, y con el tope en 8 vueltas 38 de los
          * 440 se quedaban sin converger y salian hasta 21 KB MAS GRANDES.  No
          * era una carrera -- la salida era estable, solo peor -- y no se veia
-         * porque agotar el tope no se contaba.  Ver @c kTopeAntiCuelgue.
+         * porque agotar el tope no se contaba.  Ver @c kAntiHangCap.
          *
          * Medido en un proyecto de 21 modulos: el bucle por funcion baja de
          * ~443 ms a ~247 (1,8x) e `ir_optimize` de ~602 a ~417 (1,44x).
