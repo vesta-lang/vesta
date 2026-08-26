@@ -83,7 +83,34 @@ uint32_t inicio_real_de_decl(const std::string &src, uint32_t off) {
             prev == "protected" || prev == "static" || prev == "final" ||
             prev == "extern" || prev == "public comptime" ||
             prev == "private comptime";
-        if (!es_anotacion && !es_doc && !es_modificador) break;
+        /* Y la CONTINUACION: una declaracion partida en varias lineas.
+         *
+         * Para un `const`, `loc.offset` apunta al INICIALIZADOR, no al tipo, asi
+         * que con
+         *
+         *     const string VX_LITERAL_VACIO =
+         *         "literal entero sin digitos: ...";
+         *
+         * el retroceso arrancaba en la segunda linea y paraba, porque la
+         * primera no es anotacion ni documentacion ni solo-modificadores.  El
+         * texto extraido empezaba a mitad de la declaracion y NO COMPILABA:
+         * medido, 4 de las 6 unidades reales de `tipos_u128.vx` fallaban asi.
+         *
+         * Se reconoce por como TERMINA la linea anterior: si acaba en algo que
+         * deja una expresion a medias (`=`, `,`, `(`, ...), lo que sigue es la
+         * continuacion de esa misma declaracion.
+         *
+         * Cenido a esas formas A PROPOSITO.  La regla ancha -- "cualquier linea
+         * que no acabe en `;`, `{` o `}`" -- parece equivalente y NO lo es: se
+         * mete dentro del CUERPO de la funcion anterior y lo parte, y entonces
+         * lo extraido falla con "se esperaba '}' al cerrar bloque".  Probado. */
+        const char ultimo = prev.back();
+        const bool es_continuacion =
+            ultimo == '=' || ultimo == ',' || ultimo == '(' ||
+            ultimo == '[' || ultimo == '<' || ultimo == '+' ||
+            ultimo == '|' || ultimo == '&';
+        if (!es_anotacion && !es_doc && !es_modificador && !es_continuacion)
+            break;
         ini = ini_prev;
     }
     return ini;
@@ -312,7 +339,11 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             unit_names.insert(n);
 
         struct Span {
-            uint32_t off;
+            uint32_t off;   ///< primer byte de la decl.
+            /// Un byte DESPUES del ultimo, tal como lo dio el parser.  Cero si
+            /// no lo dio (decl sintetizada): entonces se usa el inicio de la
+            /// siguiente, que es lo que se hacia siempre.
+            uint32_t end;
             bool in_unit;   ///< pertenece al conjunto comptime (entra al hash).
             bool is_import; ///< es un `import` (viaja, pero NO entra al hash).
         };
@@ -344,9 +375,18 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             const bool es_import = d->kind == ast::NodeKind::ImportDecl;
             /* El principio REAL, no el que da el AST: si no, el recorte pierde
              * el `comptime`/`@Macro` de esta decl y se lo cuelga a la anterior
-             * (ver @ref inicio_real_de_decl). */
+             * (ver @ref inicio_real_de_decl).
+             *
+             * PENDIENTE, y es la forma correcta: este span lo sabe EXACTO el
+             * parser, que ya lo calcula para exportar plantillas genericas al
+             * `.vxi` (`Parser::collect_template_export_`).  Deducirlo del texto
+             * es un segundo criterio, peor, para algo ya decidido.  Cambiarlo
+             * exige emparejar bien los spans con `decls`, y no es inmediato:
+             * el parser inserta ademas las decls sintetizadas
+             * (`pending_before_decls_`, `pending_extra_decls_`), asi que el
+             * indice no vale como emparejamiento -- probado, y desalinea. */
             spans.push_back(
-                {inicio_real_de_decl(source, d->loc.offset), in, es_import});
+                {inicio_real_de_decl(source, d->loc.offset), 0, in, es_import});
         }
         std::sort(spans.begin(), spans.end(),
                   [](const Span &a, const Span &b) { return a.off < b.off; });
@@ -356,7 +396,15 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
         for (size_t i = 0; i < spans.size(); ++i) {
             if (!spans[i].in_unit && !spans[i].is_import) continue;
             uint32_t start = spans[i].off;
-            uint32_t end = (i + 1 < spans.size()) ? spans[i + 1].off : src_len;
+            /* El fin que dio el PARSER.  Solo si no lo hay se recurre al inicio
+             * de la siguiente decl -- que es una aproximacion: arrastra lo que
+             * haya en medio (lineas en blanco, comentarios sueltos) y, si el
+             * inicio de la siguiente se calculo mal, corta esta por donde no
+             * es.  Con el span del parser eso no puede pasar. */
+            uint32_t end = spans[i].end != 0
+                               ? spans[i].end
+                               : ((i + 1 < spans.size()) ? spans[i + 1].off
+                                                         : src_len);
             if (start > src_len) start = src_len;
             if (end > src_len) end = src_len;
             /* El TEXTO del conjunto, recogido en el MISMO recorrido que ya
