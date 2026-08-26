@@ -3802,8 +3802,25 @@ CompileResult compile_vx_project(
                 if (it == por_nombre.end()) continue;
                 for (const ir::IrBlock &b : it->second->blocks)
                     for (const ir::IrInstr &in : b.instrs) {
+                        /* Llamarla no es la unica forma de necesitarla:
+                         * TOMAR SU DIRECCION tambien.  `LABEL_ADDR` nombra una
+                         * funcion que se usa como VALOR -- un puntero a
+                         * funcion -- y esa funcion tiene que viajar igual.
+                         *
+                         * Sin esto se rompia de verdad, y con un fallo dificil:
+                         * `std.syscall.windows` tiene
+                         *
+                         *     invoke_syscall invoke_method = invoke;
+                         *     resolve_syscall resolve_method = resolve_ntdll_export;
+                         *
+                         * -- valores por defecto de campo --, asi que `invoke`
+                         * y `resolve_ntdll_export` se referencian por nombre y
+                         * NO se llaman.  El cierre no las veia, no viajaban al
+                         * artefacto, y al ejecutarlo la llamada saltaba a
+                         * `0x31`.  El destino se sabe: es un nombre. */
                         if (in.op != ir::IrOp::CALL &&
-                            in.op != ir::IrOp::TAILCALL)
+                            in.op != ir::IrOp::TAILCALL &&
+                            in.op != ir::IrOp::LABEL_ADDR)
                             continue;
                         if (in.func_name.empty()) continue; // indirecta
                         if (dentro.insert(in.func_name).second)
