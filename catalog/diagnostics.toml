@@ -457,3 +457,14 @@ es = "el bytecode del codigo comptime de '{0}' no se pudo leer"
 [VXA050]
 en = "the comptime machine did not accept the bytecode of '{0}'"
 es = "la maquina de compilacion no acepto el bytecode de '{0}'"
+
+# --- el artefacto comptime no se pudo construir (VXA051) ---
+#
+# Sin el, el codigo comptime que necesita la maquina de compilacion no tiene
+# bytecode que ejecutar: se queda diferido y el programa se compila con valores
+# de relleno.  Callarselo era el fallo: el sitio tenia un `if (ok) {...}` sin
+# `else`, asi que la compilacion seguia como si nada.
+
+[VXA051]
+en = "the comptime set of '{0}' could not be assembled, so its compile-time code has no bytecode to run: what depends on it is compiled with placeholder values"
+es = "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de compilacion no tiene bytecode que ejecutar: lo que dependa de el se compila con valores de relleno"

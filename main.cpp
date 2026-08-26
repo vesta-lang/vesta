@@ -4550,6 +4550,16 @@ int main(int argc, char *argv[]) {
             std::string vel_en_memoria;
             if (copts.emit_debug) vel_en_memoria = "// @file " + vx_path + "\n";
             vel_en_memoria += vel_artefacto;
+            /* El texto que se va a ensamblar, a un fichero, cuando se pide la
+             * prueba del conjunto.  Cuando NO ensambla hay que poder LEERLO:
+             * el ensamblador dice "Parse error" y una posicion suya, que no
+             * lleva a ningun fuente porque este texto no es de nadie. */
+            if (util::flag_on(util::FlagId::PruebaIrComptime)) {
+                const std::string p = cache_prefix + ".conjunto.vel";
+                std::ofstream f_ct(p, std::ios::binary);
+                if (f_ct) f_ct << vel_en_memoria;
+                std::cerr << "[comptime-ir] texto del conjunto: " << p << "\n";
+            }
             const std::string tmp_vel_path = cache_prefix + ".vel.tmp";
             const int tmp_rc = asm_multi_process::run_worker_from_source(
                 std::move(vel_en_memoria), tmp_vel_path, cache_prefix,
@@ -4595,6 +4605,27 @@ int main(int argc, char *argv[]) {
                         vx::print_diagnostic(std::cerr, d);
                     return EXIT_FAILURE;
                 }
+            } else {
+                /* Y SI NO se pudo ensamblar, se DICE.
+                 *
+                 * Aqui habia un `if (ok) { ... }` sin `else`: la compilacion
+                 * seguia como si nada, sin artefacto comptime y por tanto sin
+                 * bytecode que ejecutar, y lo que dependia de el se quedaba con
+                 * valores de relleno.  El ensamblador escupia su "Parse error"
+                 * suelto, sin decir de que era ni que implicaba, y el programa
+                 * salia distinto sin que nadie lo supiera.
+                 *
+                 * NO aborta: hoy hay modulos que caen aqui y siguen produciendo
+                 * un binario que funciona.  Convertirlo en error duro es una
+                 * decision aparte -- pero callarlo no era una opcion. */
+                vx::Diagnostic d;
+                d.level = vx::DiagLevel::WARN;
+                d.code = "VXA051";
+                d.args.push_back(copts.module_name.empty() ? vx_path
+                                                           : copts.module_name);
+                d.loc.file = vx_path;
+                vx::print_diagnostic(std::cerr, d);
+                std::remove(tmp_vel_path.c_str());
             }
         }
 

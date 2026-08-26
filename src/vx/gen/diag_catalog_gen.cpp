@@ -122,8 +122,9 @@ const CatEntry kEntries[] = {
     {"VXA048", {"the comptime code of '{0}' was rejected by the assembler", "el codigo comptime de '{0}' lo rechazo el ensamblador"}},
     {"VXA049", {"the bytecode of the comptime code of '{0}' could not be read", "el bytecode del codigo comptime de '{0}' no se pudo leer"}},
     {"VXA050", {"the comptime machine did not accept the bytecode of '{0}'", "la maquina de compilacion no acepto el bytecode de '{0}'"}},
+    {"VXA051", {"the comptime set of '{0}' could not be assembled, so its compile-time code has no bytecode to run: what depends on it is compiled with placeholder values", "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de compilacion no tiene bytecode que ejecutar: lo que dependa de el se compila con valores de relleno"}},
 };
-const int kEntryCount = 102;
+const int kEntryCount = 103;
 
 } // namespace
 

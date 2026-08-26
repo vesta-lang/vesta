@@ -3851,9 +3851,23 @@ CompileResult compile_vx_project(
                             break;
                         }
                     if (tiene_init)
-                        res.comptime_vel_text =
-                            "@InitPc(code.__module_init)\n" +
-                            res.comptime_vel_text;
+                        /* ENTRE COMILLAS y AL FINAL.  Las dos cosas, y las dos
+                         * costaron un fallo:
+                         *
+                         *  - sin comillas, el ensamblador se para en el `.` con
+                         *    "se esperaba un )".  Es la convencion del `.vel`
+                         *    para una etiqueta con punto (`@Absolute("code.X")`).
+                         *  - al PRINCIPIO, las anotaciones se procesan en orden
+                         *    y todavia no hay ninguna seccion definida, asi que
+                         *    la etiqueta no se puede resolver ("no se ha
+                         *    definido ninguna seccion ... code.__module_init").
+                         *
+                         * Nadie los habia visto porque el fallo se tragaba: el
+                         * sitio que ensambla el artefacto tenia un `if (ok)`
+                         * sin `else`, asi que la compilacion seguia sin
+                         * artefacto y sin decir nada. */
+                        res.comptime_vel_text +=
+                            "\n@InitPc(\"__module_init\")\n";
                     /* La seccion @ir del conjunto: la del programa entero no
                      * vale, describe otras funciones. */
                     res.comptime_ir_section_bytes.clear();
