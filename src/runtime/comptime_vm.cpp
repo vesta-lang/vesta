@@ -186,6 +186,16 @@ ComptimeRuntime::~ComptimeRuntime() = default;
 
 void ComptimeRuntime::register_macro(const std::string &macro_name,
                                      uint64_t entry_pc) {
+    /* Un marcador nunca pisa una direccion ya resuelta.  El lowering registra
+     * el nombre ANTES de que exista bytecode -- para que el chequeo de tipos
+     * sepa que el macro existe --, y si el artefacto ya se cargo y trajo la
+     * direccion real, ese registro tardio no tiene nada que aportar.  Sin esta
+     * guarda, al recompilar en caliente el marcador borraba la direccion buena
+     * y la invocacion saltaba al principio del modulo. */
+    if (entry_pc == kPcUnresolved) {
+        macro_entry_pc_.emplace(macro_name, kPcUnresolved);
+        return;
+    }
     macro_entry_pc_[macro_name] = entry_pc;
 }
 
@@ -229,6 +239,13 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
     auto it = macro_entry_pc_.find(macro_name);
     if (it == macro_entry_pc_.end()) return false;
     const uint64_t entry_pc = it->second;
+    /* Sin direccion no hay invocacion.  Antes ni se miraba: el marcador valia
+     * 0, que es una direccion legitima, asi que la VM saltaba al principio del
+     * modulo y ejecutaba la primera funcion que hubiera con los argumentos de
+     * esta en los registros.  Devolver `false` es el contrato de siempre para
+     * "todavia no se puede": el llamante lo reintenta cuando el artefacto este
+     * cargado. */
+    if (entry_pc == kPcUnresolved) return false;
 
     try {
         runtime::ProcessVM *proc = impl_->proc;

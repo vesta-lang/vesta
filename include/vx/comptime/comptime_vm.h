@@ -151,6 +151,20 @@ class ComptimeRuntime {
     bool try_invoke(const std::string &macro_name) noexcept;
 
     /**
+     * @brief Direccion imposible que marca "todavia sin resolver".
+     *
+     * El lowering registra cada macro ANTES de que exista bytecode, cuando su
+     * direccion aun no se sabe.  Ese marcador NO puede ser `0`: en el artefacto
+     * comptime la primera funcion vive justo en la direccion 0 -- un
+     * constructor `comptime T(expr)`, por ejemplo --, asi que `0` es una
+     * direccion legitima.  Confundir las dos cosas costo un fallo de los malos:
+     * al recompilar en caliente el marcador pisaba la direccion ya resuelta, la
+     * invocacion saltaba a 0 y ejecutaba el constructor con los argumentos de
+     * OTRO macro en los registros.
+     */
+    static constexpr uint64_t kPcUnresolved = UINT64_MAX;
+
+    /**
      * @brief Registra el entry PC de un @Macro lowered.  Llamado
      * por el linker cuando termina el lowering: para cada IrFunction
      * con @c is_macro_compiled=true, su direccion final en el

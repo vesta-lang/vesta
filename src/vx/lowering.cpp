@@ -3230,13 +3230,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fn.name = "__macro_" + fd->name;
         fn.is_macro_compiled = true;
         ++macro_lowered_count_;
-        /*  MC.2: registrar en el ComptimeRuntime para que el
-         * TypeChecker pueda intentar invocar via VM en futuras
-         * iteraciones de la compilacion.  En MC.2 el entry_pc es
-         * 0 (placeholder) -- MC.3 lo populara con la direccion
-         * real tras el linker resolve. */
+        /* Registrar el nombre en el ComptimeRuntime para que el chequeo de
+         * tipos sepa que el macro EXISTE y pueda intentar invocarlo mas
+         * adelante.  La direccion todavia no se sabe -- aqui no hay bytecode --
+         * asi que va el centinela: `0` no vale como marcador porque es una
+         * direccion legitima (la primera funcion del artefacto vive ahi). */
         const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
-            fn.name, /*entry_pc=*/0);
+            fn.name, ComptimeRuntime::kPcUnresolved);
     } else {
         fn.name = fd->name;
     }
@@ -30960,7 +30960,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             fn.name = "__macro_" + fn.name;
             fn.is_macro_compiled = true;
             const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
-                fn.name, 0);
+                fn.name, ComptimeRuntime::kPcUnresolved);
         }
         const bool prev_fn_is_macro = current_fn_is_macro_;
         current_fn_is_macro_ = is_comptime_ctor;
