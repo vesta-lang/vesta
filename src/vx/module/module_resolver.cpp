@@ -13,6 +13,7 @@
  *   - Reserva anticipada de vectores (avoids realloc en hot paths).
  */
 
+#include "vx/source_text.h"
 #include "util/env_flags.h"
 #include "vx/module/module_resolver.h"
 
@@ -292,17 +293,20 @@ void ModuleGraph::set_source_overlay(const std::string &path,
 }
 
 bool ModuleGraph::read_file_(const std::string &path, std::string &out) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) return false;
-    const std::streamsize sz = f.tellg();
-    if (sz < 0) return false;
-    f.seekg(0, std::ios::beg);
-    out.resize(static_cast<size_t>(sz));
-    if (sz > 0) {
-        f.read(out.data(), sz);
-        if (!f) return false;
-    }
-    return true;
+    /* Por el MISMO lector que todo lo demas, con los fines de linea ya
+     * normalizados.
+     *
+     * Aqui se leia el fichero en crudo, asi que en Windows el parser veia un
+     * texto con `` y sus offsets eran de ESE texto -- mientras que quien
+     * luego recortaba fuente por offset leia el normalizado.  Dos textos, uno
+     * mas corto que el otro, y las posiciones de uno aplicadas al otro: cada
+     * fin de linea anterior corria el corte un byte, asi que caia DENTRO de un
+     * token y cuanto mas avanzado el fichero, peor.  Se veia como un conjunto
+     * comptime extraido que no compilaba, con cadenas cortadas por la mitad.
+     *
+     * Normalizar en un solo sitio es ademas lo que hace que las posiciones que
+     * se citan en los diagnosticos no dependan del sistema donde se compile. */
+    return vx::leer_fuente(path, out);
 }
 
 bool ModuleGraph::file_exists_(const std::string &path) noexcept {
