@@ -258,3 +258,9 @@ VESTA_ENV_FLAG(SysTmp,            "TMP",                      System,  Paths, Te
 VESTA_ENV_FLAG(SysPath,           "PATH",                     System,  Paths, Text, Any)
 VESTA_ENV_FLAG(SysPathExt,        "PATHEXT",                  System,  Paths, Text, Windows)
 VESTA_ENV_FLAG(SysRoot,           "SystemRoot",               System,  Paths, Text, Windows)
+/* Fecha con la que sellar lo que se genera, en segundos desde 1970.  Es el
+ * mando ESTANDAR de los builds reproducibles, no uno nuestro: quien empaqueta
+ * lo pone y espera que el resultado no dependa del reloj.  Sin el, no se sella
+ * ninguna fecha -- el campo va a cero -- para que dos compilaciones del mismo
+ * fuente den el mismo fichero. */
+VESTA_ENV_FLAG(SourceDateEpoch,   "SOURCE_DATE_EPOCH",        System,  Paths, Text, Any)

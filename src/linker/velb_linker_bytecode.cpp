@@ -756,7 +756,20 @@ void Linker::build_header() {
 
     final_header.flags = 0;
 
-    final_header.timestamp = static_cast<uint64_t>(std::time(nullptr));
+    /* La fecha NO sale del reloj.  Sellar la hora de compilacion hacia que dos
+     * compilaciones del mismo fuente dieran ficheros distintos -- en ocho bytes
+     * de cabecera y en nada mas --, y eso rompe dos cosas: el build deja de ser
+     * reproducible, y cualquiera que compare dos `.velb` por su huella para
+     * saber si algo cambio esta comparando relojes.  Costo caro: se dio por
+     * cierto durante mucho tiempo que el compilador era no-determinista, y el
+     * unico byte que se movia era este.
+     *
+     * Con `SOURCE_DATE_EPOCH` -- el mando estandar de los builds reproducibles,
+     * que pone quien empaqueta -- se sella lo que diga; sin el, cero.  El campo
+     * se queda en la cabecera: el formato no cambia y volver a poner una fecha
+     * es una linea. */
+    final_header.timestamp = static_cast<uint64_t>(
+        util::flag_int(util::FlagId::SourceDateEpoch, 0));
     final_header.arch = 1; // debo definir las arch posibles
 
     final_header.count = static_cast<section_count>(final_sections.size());
