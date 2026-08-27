@@ -17991,6 +17991,50 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
     // mismo struct nombrado.  Lowering emite: para cada campo, LOAD
     // del field en cada lado, CMP_EQ, AND acumulado.  Resultado BOOL.
     // Solo == y != (los otros operadores no aplican).
+    /* Igualdad entre ENUMS: se comparan sus ETIQUETAS.
+     *
+     * Un enum comparte el kind con un struct, pero no esta en
+     * `struct_layouts`, asi que caia por debajo de la comparacion campo a
+     * campo y acababa en la generica -- que compara los PUNTEROS a sus
+     * bufers y por tanto es SIEMPRE falsa.  El sintoma es feo porque el
+     * `match` sobre el mismo valor SI acierta: `if (t == Tok.C)` daba falso
+     * mientras `match t { case C => ... }` entraba.
+     *
+     * La etiqueta son ocho bytes al principio del bufer, igual que lee el
+     * `match`. */
+    if ((e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq) &&
+        ltk == PrimitiveKind::STRUCT && rtk == PrimitiveKind::STRUCT &&
+        e->lhs && e->rhs &&
+        e->lhs->result_type.struct_name == e->rhs->result_type.struct_name &&
+        !e->lhs->result_type.struct_name.empty() &&
+        tc_.enum_layouts().count(e->lhs->result_type.struct_name) != 0) {
+        const ir::IrValueId lhs_addr = lower_expr(e->lhs.get());
+        const ir::IrValueId rhs_addr = lower_expr(e->rhs.get());
+        if (lhs_addr == ir::IR_NO_VALUE || rhs_addr == ir::IR_NO_VALUE)
+            return ir::IR_NO_VALUE;
+        auto leer_tag = [&](ir::IrValueId dir) {
+            ir::IrValueId t = fn_->new_value(ir::IrType::I64);
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = t;
+            ld.operands = {dir};
+            ld.source_line = e->loc.line;
+            emit(current_block_, std::move(ld));
+            return t;
+        };
+        const ir::IrValueId tl = leer_tag(lhs_addr);
+        const ir::IrValueId tr = leer_tag(rhs_addr);
+        const ir::IrValueId res = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr c{};
+        c.op = (e->op == ast::BinOp::Eq) ? ir::IrOp::CMP_EQ : ir::IrOp::CMP_NE;
+        c.type = ir::IrType::BOOL;
+        c.dst = res;
+        c.operands = {tl, tr};
+        c.source_line = e->loc.line;
+        emit(current_block_, std::move(c));
+        return res;
+    }
     if ((e->op == ast::BinOp::Eq || e->op == ast::BinOp::Neq) &&
         ltk == PrimitiveKind::STRUCT && rtk == PrimitiveKind::STRUCT &&
         e->lhs && e->rhs &&
