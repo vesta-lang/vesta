@@ -898,9 +898,10 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
              * descarta -- y un modulo que solo aporta tipos se quedaba en nada,
              * dejando sin declarar lo que otros usaban. */
             for (auto &b : pending_before_decls_) {
-                if (current_.loc.offset > decl_start_off)
-                    mod->decl_span[b.get()] = {decl_start_off,
-                                               current_.loc.offset};
+                if (current_.loc.offset > decl_start_off) {
+                    b->span_start = decl_start_off;
+                    b->span_end = current_.loc.offset;
+                }
                 mod->decls.push_back(std::move(b));
             }
             pending_before_decls_.clear();
@@ -913,16 +914,18 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             /* Solo si el tramo tiene sentido.  Al final del fichero, o tras
              * recuperarse de un error, el token actual puede quedar ANTES del
              * inicio; anotarlo daria un tramo de longitud negativa. */
-            if (current_.loc.offset > decl_start_off)
-                mod->decl_span[decl.get()] = {decl_start_off,
-                                              current_.loc.offset};
+            if (current_.loc.offset > decl_start_off) {
+                decl->span_start = decl_start_off;
+                decl->span_end = current_.loc.offset;
+            }
             mod->decls.push_back(std::move(decl));
             // Drenar los aliases extra de un typedef C-style multi-declarador.
             /// @copydoc pending_before_decls_ (mismo criterio)
             for (auto &e : pending_extra_decls_) {
-                if (current_.loc.offset > decl_start_off)
-                    mod->decl_span[e.get()] = {decl_start_off,
-                                               current_.loc.offset};
+                if (current_.loc.offset > decl_start_off) {
+                    e->span_start = decl_start_off;
+                    e->span_end = current_.loc.offset;
+                }
                 mod->decls.push_back(std::move(e));
             }
             pending_extra_decls_.clear();
@@ -4488,25 +4491,28 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
              * tambien aqui: la mitad de la stdlib vive dentro de un
              * `namespace`, y sin esto sus `typedef` se quedaban sin fuente. */
             for (auto &b : pending_before_decls_) {
-                if (tpl_export_mod_ && current_.loc.offset > inner_start)
-                    tpl_export_mod_->decl_span[b.get()] = {inner_start,
-                                                           current_.loc.offset};
+                if (current_.loc.offset > inner_start) {
+                    b->span_start = inner_start;
+                    b->span_end = current_.loc.offset;
+                }
                 ns->decls.push_back(std::move(b));
             }
             pending_before_decls_.clear();
             collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
             /* @copydoc ModuleNode::decl_end_offset -- tambien dentro de un
              * `namespace`, que es donde vive la mitad de la stdlib. */
-            if (tpl_export_mod_ && current_.loc.offset > inner_start)
-                    tpl_export_mod_->decl_span[inner.get()] = {
-                        inner_start, current_.loc.offset};
+            if (current_.loc.offset > inner_start) {
+                inner->span_start = inner_start;
+                inner->span_end = current_.loc.offset;
+            }
             ns->decls.push_back(std::move(inner));
             // Drenar aliases extra de un typedef C-style multi-declarador.
             /// @copydoc pending_before_decls_ (mismo criterio)
             for (auto &e : pending_extra_decls_) {
-                if (tpl_export_mod_ && current_.loc.offset > inner_start)
-                    tpl_export_mod_->decl_span[e.get()] = {inner_start,
-                                                           current_.loc.offset};
+                if (current_.loc.offset > inner_start) {
+                    e->span_start = inner_start;
+                    e->span_end = current_.loc.offset;
+                }
                 ns->decls.push_back(std::move(e));
             }
             pending_extra_decls_.clear();
@@ -4542,9 +4548,10 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         // NS.2: exportar plantillas/concepts namespaced cross-module.
         collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
         /// @copydoc ModuleNode::decl_end_offset
-        if (tpl_export_mod_ && current_.loc.offset > inner_start)
-                tpl_export_mod_->decl_span[inner.get()] = {
-                    inner_start, current_.loc.offset};
+        if (current_.loc.offset > inner_start) {
+            inner->span_start = inner_start;
+            inner->span_end = current_.loc.offset;
+        }
         ns->decls.push_back(std::move(inner));
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al final del namespace");

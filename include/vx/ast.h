@@ -261,6 +261,26 @@ struct Node {
     NodeKind kind = NodeKind::COUNT;
     SourceLoc loc;
 
+    /**
+     * @brief El tramo de TEXTO del que salio esta declaracion.
+     *
+     * @c loc apunta a un token de dentro y su @c length es la de ese token, no
+     * la de la declaracion; quien necesite su fuente completo -- extraer el
+     * conjunto comptime para compilarlo aparte, por ejemplo -- necesita los dos
+     * extremos.  Lo anota el parser, que los sabe sin adivinar: primer token
+     * (anotaciones incluidas) hasta el inicio del siguiente.  Cero = no se supo
+     * (decl sintetizada por el compilador, que no sale de ningun texto).
+     *
+     * Va EN EL NODO y no en un mapa aparte, y eso costo encontrarlo: con un
+     * mapa por modulo indexado por puntero, un decl que se MUDA de modulo --
+     * los `namespace` parciales reparten decls entre ficheros -- deja su tramo
+     * atras.  Se veia como un modulo de tipos que viajaba vacio y una cadena de
+     * alias que no resolvia, sin nada que apuntara al traslado.  En el nodo no
+     * hay identidad que perder.
+     */
+    uint32_t span_start = 0;
+    uint32_t span_end = 0;
+
     Node() = default;
     explicit Node(NodeKind k) : kind(k) {}
     virtual ~Node() = default;
@@ -2662,39 +2682,7 @@ struct GenericTemplateExport {
 struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
 
-    /**
-     * @struct DeclSpan
-     * @brief Donde empieza y donde acaba el TEXTO de una declaracion.
-     */
-    struct DeclSpan {
-        uint32_t start = 0; ///< primer byte, anotaciones incluidas.
-        uint32_t end = 0;   ///< un byte DESPUES del ultimo.
-    };
 
-    /**
-     * @brief El tramo de texto de cada declaracion, por nodo.
-     *
-     * El nodo por si solo no lo dice: @c loc apunta a un token de dentro y su
-     * @c length es la de ese token, no la de la declaracion.  Quien necesite el
-     * texto completo -- extraer el conjunto comptime para compilarlo aparte,
-     * por ejemplo -- lo deducia del fuente, y una heuristica sobre texto corta
-     * por donde no es: se comio el cuerpo de una funcion entera, y por el otro
-     * extremo hacia que dos declaraciones reclamaran el mismo trozo.
-     *
-     * Lo sabe el parser sin adivinar nada, asi que lo anota el parser.  El
-     * tramo empieza en el PRIMER TOKEN (anotaciones incluidas, comentarios no)
-     * y acaba en el ULTIMO CONSUMIDO.  Dejar fuera los comentarios es
-     * deliberado: son opcionales para compilar, y meterlos obliga a decidir a
-     * quien pertenecen los que hay entre dos declaraciones -- que es de donde
-     * salian los solapes.
-     *
-     * Va por PUNTERO al nodo y no por indice: el parser intercala
-     * declaraciones sintetizadas (agregados anonimos, alias de un typedef con
-     * varios declaradores), asi que un vector paralelo a @c decls se desalinea
-     * -- probado.  Un nodo ausente = no se supo, y quien lo consulte tiene que
-     * seguir teniendo un plan para eso.
-     */
-    std::unordered_map<const Node *, DeclSpan> decl_span;
     /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
     /// modulo (todas las funciones + metodos lo heredan).  Para contextos
     /// que no pueden tenerlas (kernel, freestanding, embedded).

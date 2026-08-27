@@ -444,14 +444,8 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             /* El tramo tal como lo anoto el parser.  Si no esta (decl
              * sintetizada, que no sale de ningun texto), se cae al respaldo de
              * siempre: deducirlo del fuente. */
-            uint32_t ini = 0, fin = 0;
-            {
-                const auto it = mod.decl_span.find(d);
-                if (it != mod.decl_span.end()) {
-                    ini = it->second.start;
-                    fin = it->second.end;
-                }
-            }
+            uint32_t ini = d->span_start;
+            uint32_t fin = d->span_end;
             /* Sin tramo anotado no hay texto que extraer.  Una decl que el
              * parser no anoto es SINTETIZADA -- no sale de ningun fuente --, y
              * deducirle un tramo del texto era justo lo que cortaba por medio
