@@ -2386,8 +2386,18 @@ CompileResult compile_vx_project(
                     const std::string &d = util::flag_text(util::FlagId::VolcarUnidad);
                     std::error_code vec;
                     std::filesystem::create_directories(d, vec);
-                    std::ofstream f(std::string(d) + "/" + pm.module_name +
-                                    ".unidad.vx");
+                    /* Con la HUELLA de su ruta en el nombre.  El nombre de
+                     * modulo es el ultimo segmento del path, y hay dos
+                     * `x86_64.vx` -- el de tipos y el de memoria --, asi que
+                     * uno pisaba al otro y el volcado enseñaba un modulo
+                     * distinto del que se estaba mirando. */
+                    std::ofstream f(
+                        std::string(d) + "/" + pm.module_name + "_" +
+                        std::to_string(static_cast<unsigned long long>(
+                            vxi_fnv1a(pm.canonical_path.data(),
+                                      pm.canonical_path.size())) %
+                                       100000ULL) +
+                        ".unidad.vx");
                     if (f) f << cu.unit_source;
                 }
             } else if (!cu.not_collected.empty()) {
