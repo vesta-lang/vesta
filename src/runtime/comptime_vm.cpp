@@ -113,19 +113,19 @@ struct ComptimeVmImpl {
     uint64_t initial_rsp = 0;
 
     /**
-     * @brief Cima del hueco donde viajan los argumentos AGREGADOS.
+     * @brief Los argumentos AGREGADOS de la llamada en curso.
      *
      * Un struct, un enum, un `Optional` o un `Result` no caben en un registro:
-     * se pasan por DIRECCION, y el llamado los lee con un acceso a memoria de
-     * la maquina (`mov [r]`), no del host.  O sea que sus bytes tienen que
-     * vivir en memoria de la VM.
+     * se pasan por DIRECCION.  Y la direccion es del HOST, no de la maquina:
+     * el codigo del conjunto los toca con accesos de host -- igual que el
+     * bufer de RETORNO, que es `out_bytes.data()` --, asi que darle una
+     * direccion de la maquina es darle un puntero que no sabe leer.
      *
-     * Se tallan justo por debajo de @c initial_rsp y el marco del macro
-     * arranca por debajo de ellos, asi que ni el macro los pisa ni ellos
-     * pisan al macro.  El puntero se devuelve a la cima al terminar cada
-     * llamada: los bufers valen para UNA, que es lo que dura el argumento.
+     * Viven aqui, y no en la pila del macro, porque asi es exactamente el
+     * mismo trato que el bufer de retorno, que ya funcionaba.  Se sueltan al
+     * terminar cada llamada: valen para UNA, que es lo que dura el argumento.
      */
-    uint64_t agg_scratch_top = 0;
+    std::vector<std::vector<uint8_t>> agg_args;
 
     /**
      * @brief VA donde Loader escribio los bytes HLT (0x00 0x03) que
@@ -255,7 +255,7 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
     struct DevolverHueco {
         ComptimeVmImpl *im;
         ~DevolverHueco() {
-            if (im) im->agg_scratch_top = 0;
+            if (im) im->agg_args.clear();
         }
     } devolver{impl_.get()};
     if (args.size() > 12) return false;       /* CALLVM max */
@@ -279,20 +279,13 @@ bool ComptimeRuntime::invoke_simple_macro(const std::string &macro_name,
          * stack puede tener data residual.  Restauramos al estado
          * inicial que setup load_executable, re-pusheando el
          * sentinel HLT como direccion de retorno final del macro. */
-        /* La pila del macro arranca POR DEBAJO de los argumentos agregados
-         * que se hayan tallado para esta llamada, no en la cima: si no, el
-         * primer `subsp` del macro caeria justo encima de ellos y leeria su
-         * propio marco creyendo que es el struct que le pasaron. */
-        const uint64_t cima = (impl_->agg_scratch_top != 0 &&
-                               impl_->agg_scratch_top < impl_->initial_rsp)
-                                  ? impl_->agg_scratch_top
-                                  : impl_->initial_rsp;
-        proc->registers.stack_pointer.qword(cima);
-        proc->registers.base_pointer.qword(cima);
-        proc->vm_mem.vm_to_host_memcpy(cima, &impl_->hlt_sentinel_va,
+        proc->registers.stack_pointer.qword(impl_->initial_rsp);
+        proc->registers.base_pointer.qword(impl_->initial_rsp);
+        proc->vm_mem.vm_to_host_memcpy(impl_->initial_rsp,
+                                       &impl_->hlt_sentinel_va,
                                        sizeof(impl_->hlt_sentinel_va));
-        proc->stack_high = cima;
-        proc->stack_low_water = cima;
+        proc->stack_high = impl_->initial_rsp;
+        proc->stack_low_water = impl_->initial_rsp;
 
         /* Set RIP + args (CALLVM convention). */
         proc->registers.rip.qword(entry_pc);
@@ -491,20 +484,13 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
     {
         runtime::ProcessVM *proc = impl_->proc;
         // Estado inicial de pila: lo consume el bajado de VM para sus ALLOCA.
-        /* La pila del macro arranca POR DEBAJO de los argumentos agregados
-         * que se hayan tallado para esta llamada, no en la cima: si no, el
-         * primer `subsp` del macro caeria justo encima de ellos y leeria su
-         * propio marco creyendo que es el struct que le pasaron. */
-        const uint64_t cima = (impl_->agg_scratch_top != 0 &&
-                               impl_->agg_scratch_top < impl_->initial_rsp)
-                                  ? impl_->agg_scratch_top
-                                  : impl_->initial_rsp;
-        proc->registers.stack_pointer.qword(cima);
-        proc->registers.base_pointer.qword(cima);
-        proc->vm_mem.vm_to_host_memcpy(cima, &impl_->hlt_sentinel_va,
+        proc->registers.stack_pointer.qword(impl_->initial_rsp);
+        proc->registers.base_pointer.qword(impl_->initial_rsp);
+        proc->vm_mem.vm_to_host_memcpy(impl_->initial_rsp,
+                                       &impl_->hlt_sentinel_va,
                                        sizeof(impl_->hlt_sentinel_va));
-        proc->stack_high = cima;
-        proc->stack_low_water = cima;
+        proc->stack_high = impl_->initial_rsp;
+        proc->stack_low_water = impl_->initial_rsp;
 
         proc->registers.rip.qword(pcit->second);
         for (size_t i = 0; i < args.size(); ++i)
@@ -625,25 +611,17 @@ bool ComptimeRuntime::marshal_string(const std::string &s,
 bool ComptimeRuntime::marshal_aggregate(const std::vector<uint8_t> &bytes,
                                         uint64_t &out_vm_addr) noexcept {
     out_vm_addr = 0;
-    if (!impl_ || !impl_->proc || bytes.empty()) return false;
-    if (impl_->initial_rsp == 0) return false;
-    /* La primera talla de la llamada arranca en la cima. */
-    if (impl_->agg_scratch_top == 0 ||
-        impl_->agg_scratch_top > impl_->initial_rsp)
-        impl_->agg_scratch_top = impl_->initial_rsp;
-    /* Alineado a 16: un agregado puede llevar dentro cualquier cosa, y
-     * colocarlo torcido convierte un acceso normal en un fallo. */
-    const uint64_t n = (static_cast<uint64_t>(bytes.size()) + 15u) & ~15ull;
-    /* Tope: esto es para un valor, no para un array.  Sin el, un tamano
-     * absurdo se comeria la pila del macro y el fallo saldria mucho despues y
-     * en otro sitio. */
-    if (n > 64u * 1024u) return false;
-    /* Y se deja sitio para que el macro tenga pila donde vivir. */
-    if (impl_->agg_scratch_top < n + 1024u) return false;
-    impl_->agg_scratch_top -= n;
-    impl_->proc->vm_mem.vm_to_host_memcpy(impl_->agg_scratch_top, bytes.data(),
-                                          bytes.size());
-    out_vm_addr = impl_->agg_scratch_top;
+    if (!impl_ || bytes.empty()) return false;
+    /* Tope: esto es para un valor, no para un array.  Sin el, un tamano absurdo
+     * se comeria la memoria y el fallo saldria mucho despues y en otro sitio. */
+    if (bytes.size() > 64u * 1024u) return false;
+    try {
+        impl_->agg_args.emplace_back(bytes);
+    } catch (...) {
+        return false;
+    }
+    out_vm_addr = static_cast<uint64_t>(
+        reinterpret_cast<uintptr_t>(impl_->agg_args.back().data()));
     return true;
 }
 
