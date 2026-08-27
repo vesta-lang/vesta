@@ -360,7 +360,16 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
     // Clave de cache del artefacto: FNV-1a 64 del texto fuente de las decls del
     // conjunto (spans [decl.offset, siguiente_decl.offset)).  Reproducible e
     // independiente del codigo no-comptime del modulo.
-    if (!source.empty() && !u.empty()) {
+    /* Basta con que haya fuente.  Antes se exigia ademas que el modulo tuviera
+     * codigo comptime (`!u.empty()`), y eso dejaba fuera a los que solo aportan
+     * TIPOS -- que no ejecutan nada al compilar, pero declaran lo que otros
+     * usan.  El de tipos de la arquitectura viajaba con veintidos bytes (solo
+     * su linea de `namespace`) y `std.types` no compilaba por un alias cuyo
+     * destino se habia quedado por el camino.
+     *
+     * Lo que no cumpla el criterio no entra igualmente: se decide decl a decl
+     * mas abajo.  Esta condicion solo decidia si SE MIRABA. */
+    if (!source.empty()) {
         std::unordered_set<std::string> unit_names;
         for (const auto &n : u.comptime_fns)
             unit_names.insert(n);
