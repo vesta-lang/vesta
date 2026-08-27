@@ -2136,6 +2136,22 @@ CompileResult compile_vx_project(
                  * repartirlo en artefactos por modulo no tendria de que morder,
                  * y ademas cada compilacion paga un suelo fijo (~8.5 ms) que se
                  * multiplicaria por el numero de artefactos. */
+                /* Con su `namespace` delante.  El conjunto de cada modulo
+                 * se concatena con los demas en UN solo texto, asi que sin el
+                 * todos caen en el mismo espacio de nombres y chocan entre si
+                 * (`nullptr`, `ANCHO`, `UMBRAL_*`...).  No sale de las decls
+                 * porque a estas alturas los namespaces ya estan APLANADOS: el
+                 * nombre lo tiene el aplanado, que es quien lo sabe. */
+                for (const auto &fns : inline_namespaces) {
+                    if (fns.name.empty()) continue;
+                    res.comptime_unit_source += "namespace ";
+                    res.comptime_unit_source += fns.name;
+                    res.comptime_unit_source += ";";
+                    /* El salto de linea, por su codigo: escribirlo escapado en
+                     * este fichero se lo comen las herramientas de edicion. */
+                    res.comptime_unit_source.push_back(static_cast<char>(10));
+                    break; // el del modulo; los anidados van dentro del texto.
+                }
                 res.comptime_unit_source += cu.unit_source;
                 /* Los NOMBRES, que son el criterio de pertenencia al emitir el
                  * artefacto.  Deducirlo del texto seria adivinar: una busqueda
@@ -4042,6 +4058,19 @@ CompileResult compile_vx_project(
      * su bloque asm salio vacio: hay que repetir.  Mirar solo el IR no basta,
      * porque una funcion comptime invocada UNICAMENTE desde un inject no deja
      * rastro en el IR cuando el inject no llega a expandirse. */
+    /* El conjunto ENTERO, ya concatenado, a un fichero.  Es lo que de verdad
+     * habria que compilar para tener la maquina de compilacion antes que los
+     * modulos, asi que es lo que hay que poder leer cuando no compila: los
+     * volcados por modulo no lo enseñan, porque el `namespace` de cada uno se
+     * añade AL JUNTARLOS. */
+    if (!util::flag_text(util::FlagId::VolcarUnidad).empty() &&
+        !res.comptime_unit_source.empty()) {
+        const std::string &d = util::flag_text(util::FlagId::VolcarUnidad);
+        std::error_code tec;
+        std::filesystem::create_directories(d, tec);
+        std::ofstream f(d + "/_conjunto.vx");
+        if (f) f << res.comptime_unit_source;
+    }
     for (const auto &pm : work) {
         if (pm.tc && pm.tc->inject_diferido()) {
             res.has_lowerable_macros = true;
