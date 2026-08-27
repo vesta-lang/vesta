@@ -1644,6 +1644,19 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
         r.value = static_cast<int64_t>(il->value);
         return r;
     }
+    /* Un caracter es su punto de codigo, igual que un entero: no habia caso
+     * para el, asi que `'a'` caia al final del switch y se declaraba "no
+     * comptime-evaluable".  Y el fallo no se quedaba en el literal -- se
+     * llevaba por delante cualquier funcion comptime que tomara un `char`,
+     * porque su ARGUMENTO no se podia evaluar: por eso el compilador Brainfuck
+     * (`bf_classify(src[i])`) daba codigo vacio, y por eso parecia que el
+     * problema era el `match` o el retorno enum, que es donde se veia. */
+    case ast::NodeKind::CharLitExpr: {
+        auto *cl = static_cast<const ast::CharLitExpr *>(expr);
+        r.ok = true;
+        r.value = static_cast<int64_t>(cl->codepoint);
+        return r;
+    }
     case ast::NodeKind::BoolLitExpr: {
         auto *bl = static_cast<const ast::BoolLitExpr *>(expr);
         r.ok = true;
