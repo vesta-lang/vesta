@@ -433,6 +433,27 @@ class ComptimeRuntime {
     bool marshal_string(const std::string &s, uint64_t &out_handle) noexcept;
 
     /**
+     * @brief Coloca un valor AGREGADO en memoria de la maquina y devuelve su
+     *        direccion, para poder pasarlo como argumento.
+     *
+     * Un struct, un enum, un @c Optional o un @c Result no caben en un
+     * registro: se pasan por DIRECCION, y el llamado los lee con un acceso a
+     * memoria de la MAQUINA (`mov [r]`), no del host -- a diferencia del bufer
+     * de RETORNO, que si es del host y se escribe con `movh`.  Por eso no vale
+     * pasar un puntero a memoria propia.
+     *
+     * Los bytes se tallan por debajo de la cima de la pila del macro, y su
+     * marco arranca por debajo de ellos.  Valen para UNA llamada: al terminar,
+     * el hueco se devuelve entero.
+     *
+     * @param bytes Contenido del agregado, ya con su disposicion final.
+     * @param out_vm_addr Receptor de la direccion en la maquina.
+     * @return @c true si cupo; @c false si la VM no esta lista o no hay sitio.
+     */
+    bool marshal_aggregate(const std::vector<uint8_t> &bytes,
+                           uint64_t &out_vm_addr) noexcept;
+
+    /**
      * @brief registra una "expectacion" capturada por
      * el TypeChecker al evaluar un @Macro via el AST evaluator.
      *

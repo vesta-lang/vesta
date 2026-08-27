@@ -1594,6 +1594,44 @@ comptime_call_fn(TypeChecker &tc, const ast::FunctionDecl *fn,
  * @param base  Desplazamiento del struct dentro de @c bytes.
  * @param out   Resultado a rellenar (@c is_struct queda a @c true).
  */
+/**
+ * @brief Vuelca un valor de struct a sus BYTES, con la disposicion real.
+ *
+ * Espejo de @ref fill_struct_fields_from_bytes.  Hace falta para pasar un
+ * agregado como ARGUMENTO: no cabe en un registro, asi que viaja por direccion
+ * y alguien tiene que escribir sus bytes.
+ *
+ * Un campo que no se sepa volcar se deja como este (a cero): es lo mismo que
+ * hace la lectura al reves, que omite los que no sabe leer.
+ *
+ * @param tc     Para resolver los layouts de los campos anidados.
+ * @param lay    Disposicion del struct.
+ * @param v      El valor, con sus campos por nombre.
+ * @param base   Desplazamiento donde empieza este struct dentro de @p bytes.
+ * @param bytes  Destino, ya dimensionado.
+ */
+void dump_struct_fields_to_bytes(const TypeChecker &tc, const StructLayout &lay,
+                                 const ComptimeValue &v, uint32_t base,
+                                 std::vector<uint8_t> &bytes) {
+    for (const auto &f : lay.fields) {
+        const uint32_t off = base + f.offset;
+        if (static_cast<size_t>(off) + f.size > bytes.size()) continue;
+        auto it = v.struct_fields.find(f.name);
+        if (it == v.struct_fields.end() || !it->second) continue;
+        const ComptimeValue &fv = *it->second;
+        if (f.type.kind == PrimitiveKind::STRUCT) {
+            const auto &slays = tc.struct_layouts();
+            auto its = slays.find(f.type.struct_name);
+            if (its == slays.end() || its->second.is_overlay) continue;
+            dump_struct_fields_to_bytes(tc, its->second, fv, off, bytes);
+            continue;
+        }
+        const uint64_t raw = static_cast<uint64_t>(fv.value);
+        const uint32_t n = f.size < 8u ? f.size : 8u;
+        std::memcpy(bytes.data() + off, &raw, n);
+    }
+}
+
 void fill_struct_fields_from_bytes(const TypeChecker &tc,
                                    const StructLayout &lay,
                                    const std::vector<uint8_t> &bytes,
@@ -2659,16 +2697,42 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     !forwarded_expr_arg && !imported_expr_capture) {
                     bool ret_is_str = false;
                     bool ret_is_struct = false;
+                    bool ret_is_enum = false;
+                    uint32_t ret_enum_bytes = 0;
                     const StructLayout *ret_slay = nullptr;
                     if (fn_it->second->return_type) {
                         const Type rt = tc.resolve_type_node(
                             fn_it->second->return_type.get());
                         ret_is_str = (rt.kind == PrimitiveKind::STRING);
+                        /* Un ENUM tambien se devuelve por BUFER, igual que un
+                         * struct -- comparten el kind y comparten convencion --,
+                         * y aqui se le trataba como si cupiera en un registro.
+                         *
+                         * Eso no era una simplificacion inofensiva: el llamado
+                         * esta compilado esperando el puntero al bufer, asi que
+                         * al no pasarselo tomaba como puntero lo que hubiera en
+                         * la ranura del primer argumento y escribia la etiqueta
+                         * AHi.  Se veia clavado en la direccion del fallo: `0x0`
+                         * sin parametros, `0x1` llamando con `1`, `0x2b`
+                         * llamando con `'+'` -- que no es una direccion, es una
+                         * letra.
+                         *
+                         * A diferencia de un struct no hay que reconstruir campo
+                         * a campo: el valor de un enum es su ETIQUETA, ocho
+                         * bytes al principio del bufer. */
+                        if (rt.kind == PrimitiveKind::STRUCT) {
+                            const auto &elays = tc.enum_layouts();
+                            auto ite = elays.find(rt.struct_name);
+                            if (ite != elays.end()) {
+                                ret_is_enum = true;
+                                ret_enum_bytes = ite->second.size_bytes;
+                            }
+                        }
                         /* Retorno struct por valor: se recupera por su buffer
                          * de retorno (SRET) y se reconstruye campo a campo.  Se
-                         * excluyen los enums (comparten el kind STRUCT) y los
-                         * overlay, cuyo valor es un puntero y no un buffer. */
-                        if (rt.kind == PrimitiveKind::STRUCT) {
+                         * excluyen los enums (que van por la rama de arriba) y
+                         * los overlay, cuyo valor es un puntero y no un buffer. */
+                        if (rt.kind == PrimitiveKind::STRUCT && !ret_is_enum) {
                             const auto &slays = tc.struct_layouts();
                             const auto &elays = tc.enum_layouts();
                             auto its = slays.find(rt.struct_name);
@@ -2688,7 +2752,9 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                      * en check_call.  Sin esto, un `comptime string f(expr c)`
                      * recibiria 0 en vez del texto y devolveria vacio. */
                     bool marshal_ok = true;
-                    for (const auto &a : args) {
+                    const auto &pars = fn_it->second->params;
+                    for (size_t ai = 0; ai < args.size(); ++ai) {
+                        const auto &a = args[ai];
                         if (a.is_str) {
                             uint64_t handle = 0;
                             if (!const_cast<TypeChecker &>(tc)
@@ -2698,9 +2764,57 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                                 break;
                             }
                             vm_args.push_back(handle);
-                        } else {
-                            vm_args.push_back(static_cast<uint64_t>(a.value));
+                            continue;
                         }
+                        /* Un AGREGADO no cabe en un registro: viaja por
+                         * direccion, y el llamado lo lee con un acceso a
+                         * memoria de la maquina.  Antes se empujaba `a.value`
+                         * tal cual -- para un struct, cero; para un enum, su
+                         * etiqueta -- y el llamado lo tomaba como puntero: de
+                         * ahi los fallos en la direccion 0x0 y 0x2b (que no es
+                         * una direccion, es la letra que se paso). */
+                        Type pt;
+                        bool pt_ok = false;
+                        if (ai < pars.size() && pars[ai] &&
+                            pars[ai]->type) {
+                            pt = tc.resolve_type_node(pars[ai]->type.get());
+                            pt_ok = true;
+                        }
+                        if (pt_ok && pt.kind == PrimitiveKind::STRUCT) {
+                            const auto &elays = tc.enum_layouts();
+                            const auto &slays = tc.struct_layouts();
+                            auto ite = elays.find(pt.struct_name);
+                            std::vector<uint8_t> buf;
+                            if (ite != elays.end()) {
+                                /* El valor de un enum es su ETIQUETA, ocho
+                                 * bytes al principio. */
+                                buf.assign(ite->second.size_bytes, 0);
+                                const uint64_t tag =
+                                    static_cast<uint64_t>(a.value);
+                                std::memcpy(buf.data(), &tag, 8);
+                            } else {
+                                auto its = slays.find(pt.struct_name);
+                                if (its == slays.end() ||
+                                    its->second.is_overlay || !a.is_struct) {
+                                    marshal_ok = false;
+                                    break;
+                                }
+                                buf.assign(its->second.size_bytes, 0);
+                                dump_struct_fields_to_bytes(
+                                    tc, its->second, value_from_result(a), 0,
+                                    buf);
+                            }
+                            uint64_t dir = 0;
+                            if (!const_cast<TypeChecker &>(tc)
+                                     .comptime_runtime()
+                                     .marshal_aggregate(buf, dir)) {
+                                marshal_ok = false;
+                                break;
+                            }
+                            vm_args.push_back(dir);
+                            continue;
+                        }
+                        vm_args.push_back(static_cast<uint64_t>(a.value));
                     }
                     ComptimeEvalResult vr;
                     vr.ok = true;
@@ -2753,6 +2867,31 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                             vr.str = std::move(out);
                         else
                             vr.deferred = true;
+                    } else if (ret_is_enum) {
+                        /* Mismo camino que un struct -- la funcion escribe en un
+                         * bufer de retorno --, pero el valor de un enum es su
+                         * ETIQUETA, y esa esta al principio del bufer.  No hay
+                         * campos que reconstruir. */
+                        std::vector<uint8_t> ebytes;
+                        bool inv = const_cast<TypeChecker &>(tc)
+                                       .comptime_runtime()
+                                       .invoke_struct_macro(macro_nm, vm_args,
+                                                            ret_enum_bytes,
+                                                            ebytes);
+                        if (!inv && macro_alt != macro_nm)
+                            inv = const_cast<TypeChecker &>(tc)
+                                      .comptime_runtime()
+                                      .invoke_struct_macro(macro_alt, vm_args,
+                                                           ret_enum_bytes,
+                                                           ebytes);
+                        if (inv && ebytes.size() >= 8) {
+                            uint64_t tag = 0;
+                            std::memcpy(&tag, ebytes.data(), 8);
+                            vr.value = static_cast<int64_t>(tag);
+                        } else {
+                            vr.value = 0;
+                            vr.deferred = true;
+                        }
                     } else if (ret_is_struct) {
                         /* La funcion escribe el struct en un buffer de retorno
                          * (SRET); recuperamos sus bytes y reconstruimos cada
