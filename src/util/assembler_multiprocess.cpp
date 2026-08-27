@@ -110,7 +110,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
         std::string processed = pp.process(code, file_name);
         if (pp.diagnostics().has_errors()) {
             for (const auto &d : pp.diagnostics().diagnostics()) {
-                std::cerr << d.loc.file << ":" << d.loc.line << ": "
+                std::cerr << d.loc.file() << ":" << d.loc.line << ": "
                           << (d.level == vpp::DiagLevel::ERR ? "error: "
                                                              : "warning: ")
                           << d.message << "\n";

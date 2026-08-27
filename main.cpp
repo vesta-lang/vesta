@@ -1786,7 +1786,7 @@ int main(int argc, char *argv[]) {
 
         // imprimir todos los diagnosticos
         for (const auto &d : pp.diagnostics().diagnostics()) {
-            std::cerr << d.loc.file << ":" << d.loc.line << ":" << d.loc.col
+            std::cerr << d.loc.file() << ":" << d.loc.line << ":" << d.loc.col
                       << ": "
                       << (d.level >= vpp::DiagLevel::ERR ? "error: "
                                                          : "warning: ")
@@ -3517,7 +3517,7 @@ int main(int argc, char *argv[]) {
             vpp_included_files = pp.included_files();
             if (pp.diagnostics().has_errors()) {
                 for (const auto &d : pp.diagnostics().diagnostics()) {
-                    std::cerr << d.loc.file << ":" << d.loc.line << ": "
+                    std::cerr << d.loc.file() << ":" << d.loc.line << ": "
                               << (d.level == vpp::DiagLevel::ERR ? "error: "
                                                                  : "warning: ")
                               << d.message << "\n";
