@@ -2663,24 +2663,38 @@ struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
 
     /**
-     * @brief Donde ACABA el texto de cada declaracion, por nodo.
+     * @struct DeclSpan
+     * @brief Donde empieza y donde acaba el TEXTO de una declaracion.
+     */
+    struct DeclSpan {
+        uint32_t start = 0; ///< primer byte, anotaciones incluidas.
+        uint32_t end = 0;   ///< un byte DESPUES del ultimo.
+    };
+
+    /**
+     * @brief El tramo de texto de cada declaracion, por nodo.
      *
-     * El nodo dice donde empieza (@c loc.offset) pero no donde termina:
-     * @c loc.length es la del token, no la de la declaracion.  Quien necesite
-     * el texto completo de una decl -- extraer el conjunto comptime para
-     * compilarlo aparte, por ejemplo -- tenia que deducir el final "hasta donde
-     * empieza la siguiente", y eso corta por donde no es: se comio el cuerpo de
-     * una funcion entera y el texto extraido no compilaba.
+     * El nodo por si solo no lo dice: @c loc apunta a un token de dentro y su
+     * @c length es la de ese token, no la de la declaracion.  Quien necesite el
+     * texto completo -- extraer el conjunto comptime para compilarlo aparte,
+     * por ejemplo -- lo deducia del fuente, y una heuristica sobre texto corta
+     * por donde no es: se comio el cuerpo de una funcion entera, y por el otro
+     * extremo hacia que dos declaraciones reclamaran el mismo trozo.
      *
-     * Va por PUNTERO al nodo y no por indice a proposito.  El parser intercala
+     * Lo sabe el parser sin adivinar nada, asi que lo anota el parser.  El
+     * tramo empieza en el PRIMER TOKEN (anotaciones incluidas, comentarios no)
+     * y acaba en el ULTIMO CONSUMIDO.  Dejar fuera los comentarios es
+     * deliberado: son opcionales para compilar, y meterlos obliga a decidir a
+     * quien pertenecen los que hay entre dos declaraciones -- que es de donde
+     * salian los solapes.
+     *
+     * Va por PUNTERO al nodo y no por indice: el parser intercala
      * declaraciones sintetizadas (agregados anonimos, alias de un typedef con
      * varios declaradores), asi que un vector paralelo a @c decls se desalinea
-     * -- probado.  El puntero identifica al nodo pase lo que pase con el orden.
-     *
-     * Lo llena el parser al terminar cada decl.  Un nodo ausente = no se supo,
-     * y quien lo consulte tiene que seguir teniendo un plan para eso.
+     * -- probado.  Un nodo ausente = no se supo, y quien lo consulte tiene que
+     * seguir teniendo un plan para eso.
      */
-    std::unordered_map<const Node *, uint32_t> decl_end_offset;
+    std::unordered_map<const Node *, DeclSpan> decl_span;
     /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
     /// modulo (todas las funciones + metodos lo heredan).  Para contextos
     /// que no pueden tenerlas (kernel, freestanding, embedded).

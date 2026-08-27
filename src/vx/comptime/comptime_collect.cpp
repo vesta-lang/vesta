@@ -387,17 +387,24 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
              * el parser inserta ademas las decls sintetizadas
              * (`pending_before_decls_`, `pending_extra_decls_`), asi que el
              * indice no vale como emparejamiento -- probado, y desalinea. */
-            /* El final, tal como lo anoto el parser al terminar la decl.  Si
-             * no esta (decl sintetizada), queda a cero y abajo se cae al
-             * respaldo de siempre. */
-            uint32_t fin = 0;
+            /* El tramo tal como lo anoto el parser.  Si no esta (decl
+             * sintetizada, que no sale de ningun texto), se cae al respaldo de
+             * siempre: deducirlo del fuente. */
+            uint32_t ini = 0, fin = 0;
             {
-                const auto it = mod.decl_end_offset.find(d.get());
-                if (it != mod.decl_end_offset.end()) fin = it->second;
+                const auto it = mod.decl_span.find(d.get());
+                if (it != mod.decl_span.end()) {
+                    ini = it->second.start;
+                    fin = it->second.end;
+                }
             }
-            spans.push_back(
-                {inicio_real_de_decl(source, d->loc.offset), fin, in,
-                 es_import});
+            /* Sin tramo anotado no hay texto que extraer.  Una decl que el
+             * parser no anoto es SINTETIZADA -- no sale de ningun fuente --, y
+             * deducirle un tramo del texto era justo lo que cortaba por medio
+             * de un token: se colaba la cola de la cadena de al lado y el
+             * conjunto extraido no compilaba. */
+            if (fin == 0) continue;
+            spans.push_back({ini, fin, in, es_import});
         }
         std::sort(spans.begin(), spans.end(),
                   [](const Span &a, const Span &b) { return a.off < b.off; });
@@ -418,6 +425,10 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                                                          : src_len);
             if (start > src_len) start = src_len;
             if (end > src_len) end = src_len;
+            /* Y nunca al reves: un `end` menor que `start` daria una longitud
+             * negativa, que al restar sin signo se convierte en un numero
+             * enorme -- y eso no es un texto mal recortado, es un crash. */
+            if (end < start) end = start;
             /* El TEXTO del conjunto, recogido en el MISMO recorrido que ya
              * calculaba el hash: los spans se computaban, se usaban para
              * hashear y se tiraban, y son justo lo que la fase siguiente

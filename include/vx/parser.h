@@ -563,12 +563,6 @@ class Parser {
     Lexer &lex_;
     Diagnostics &diags_;
     Token current_;
-    /// Un byte DESPUES del ultimo token CONSUMIDO.  Marca donde acaba de
-    /// verdad lo que se acaba de parsear: el offset del token siguiente no
-    /// vale, porque se lleva por delante los comentarios que documentan a la
-    /// declaracion de al lado -- y entonces dos declaraciones reclaman el mismo
-    /// texto.
-    uint32_t prev_token_end_ = 0;
     /// contador para nombres unicos de static_asserts top-level
     /// que se modelan como GlobalVarDecl dummy.  El type checker los
     /// procesa en la pasada de globales sin generar storage runtime.
