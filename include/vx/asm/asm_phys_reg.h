@@ -468,7 +468,21 @@ inline std::string asm_mem_operando(uint8_t isa, const std::string &base,
         std::string s = "[" + base;
         if (disp != 0) {
             s += (disp > 0 ? " + " : " - ");
-            s += std::to_string(disp > 0 ? disp : -disp);
+            /* En HEXADECIMAL y con prefijo, no en decimal.  El ensamblador se
+             * abre en modo NASM, y en ese modo Keystone lee un numero SIN
+             * prefijo como hexadecimal: un `[rdx + 32]` acababa siendo
+             * `[rdx + 0x32]`, o sea 50.  Con un `vmovdqu` eso escribe donde no
+             * toca -- `memcpy` de `std.memory` entregaba una copia a medias --
+             * y con un `vmovdqa`, que EXIGE alineacion, mata el proceso.
+             *
+             * Escribirlo con `0x` lo hace inequivoco lea quien lo lea y en la
+             * base que sea, que es lo que tiene que hacer un texto que se
+             * genera: no depender de como este configurado el que lo parsea. */
+            const uint64_t mag = static_cast<uint64_t>(disp > 0 ? disp : -disp);
+            char buf[24];
+            std::snprintf(buf, sizeof(buf), "0x%llX",
+                          (unsigned long long)mag);
+            s += buf;
         }
         return s + "]";
     }
