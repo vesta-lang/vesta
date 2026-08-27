@@ -1556,6 +1556,22 @@ CompileResult compile_vx_project(
             texto += cu.unit_source;
             if (!cu.empty()) hay_comptime = true;
             overlay_ct[w.canonical_path] = texto;
+            /* El texto que de VERDAD se compila para este modulo.  El volcado
+             * por conjunto se salta los modulos sin codigo comptime -- los que
+             * solo aportan tipos --, que son justo los que hacen falta mirar
+             * cuando una cadena de tipos no resuelve. */
+            if (!util::flag_text(util::FlagId::VolcarUnidad).empty()) {
+                const std::string &dd = util::flag_text(util::FlagId::VolcarUnidad);
+                std::error_code oec;
+                std::filesystem::create_directories(dd, oec);
+                std::ofstream fo(dd + "/overlay_" + w.module_name + "_" +
+                                 std::to_string(static_cast<unsigned long long>(
+                                     vxi_fnv1a(w.canonical_path.data(),
+                                               w.canonical_path.size())) %
+                                                100000ULL) +
+                                 ".vx");
+                if (fo) fo << texto;
+            }
         }
         if (hay_comptime) {
             /* Compilarlo SIN volver a adelantar nada: el conjunto se contiene a
