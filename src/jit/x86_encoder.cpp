@@ -94,6 +94,13 @@ size_t X86Encoder::encode(MFunction &fn, std::vector<uint8_t> &out) {
             if (fn.emit_line_map) {
                 fn.line_map.push_back({pre_rel, mi.source_pc, mi.ir_id});
             }
+            /* Donde acaba el prologo, en bytes.  Quien lo emitio conto sus
+             * instrucciones; cuanto ocupan solo se sabe aqui.  Lo necesita la
+             * descripcion del marco que se le da al sistema para poder
+             * desenrollar esta funcion (@c MFunction::UnwindDesc). */
+            if (fn.prologue_instrs != 0 &&
+                instr_count_ == fn.prologue_instrs + 1)
+                fn.prologue_bytes = pre_rel;
             if (!emit_instr(fn, mi, out)) {
                 /* fail-fast: opcode no soportado.  El INT3 hace que la
                  * ejecucion crasheee con SIGTRAP en lugar de seguir

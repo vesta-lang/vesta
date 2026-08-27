@@ -2617,7 +2617,24 @@ MFunction rewrite_to_physical(const MFunction &vf,
         pf.blocks[b].extra_succs = vf.blocks[b].extra_succs;
         std::vector<MInstr> outv;
         outv.reserve(vf.blocks[b].instrs.size() * 2 + 8);
-        if (b == 0) lw.emit_prologue(outv);
+        if (b == 0) {
+            lw.emit_prologue(outv);
+            /* Y se anota QUE marco quedo montado y CUANTAS instrucciones ocupa,
+             * para poder describirselo al sistema.  Sin esa descripcion, un
+             * fallo del procesador dentro de esta funcion no se puede recoger:
+             * ver @c MFunction::UnwindDesc. */
+            const FrameSpec fs = lw.frame_spec();
+            pf.prologue_instrs = static_cast<uint32_t>(outv.size());
+            pf.unwind.naked = fs.naked;
+            /* `fpo` salva RBP pero NO lo apunta a la pila: el marco se
+             * direcciona por RSP.  Para el desenrollador son dos cosas
+             * distintas y hay que decirlas por separado. */
+            pf.unwind.push_rbp = !fs.naked && (fs.fpo || !fs.no_frame);
+            pf.unwind.frame_ptr = !fs.naked && !fs.fpo && !fs.no_frame;
+            pf.unwind.push_rbx = !fs.naked && fs.bajo_vm;
+            pf.unwind.callee_saved = fs.callee_saved;
+            pf.unwind.spill_bytes = fs.naked ? 0u : fs.spill_bytes;
+        }
         /* HOST_LEAF: cargar los params desde los arg_regs (parallel-move).
          * Consume las MOV param-init lideres del bloque 0; el lowering
          * normal las salta (pero gi avanza para no desincronizar las

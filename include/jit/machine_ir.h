@@ -1726,6 +1726,46 @@ struct MFunction {
     std::vector<AsmBlob> asm_blobs;
 
     /**
+     * @brief El marco de esta funcion, para que el SISTEMA sepa desenrollarla.
+     *
+     * En Windows de 64 bits el desenrollado no sigue punteros de marco: va por
+     * TABLAS, y de un trozo de codigo que no esta en ninguna el sistema supone
+     * que es una hoja y que en la cima de la pila esta la direccion de retorno.
+     * El codigo que genera el JIT no esta en ninguna tabla, porque las tablas
+     * las trae el ejecutable.
+     *
+     * Mientras nadie tenga que desenrollar por encima de el da igual, pero la
+     * recuperacion de un fallo del procesador ES un desenrollado: al recogerlo
+     * con un salto largo el sistema se pone a caminar la pila, llega a un marco
+     * del JIT, no encuentra entrada, lo da por hoja, lee como direccion de
+     * retorno lo que hubiera ahi y se lleva el proceso por delante.  Resultado:
+     * el programa moria con 0xC0000005 y la salida de error VACiA en vez de
+     * contar el fallo con su codigo, su fichero:linea y su cadena de llamadas
+     * -- que es lo que hace en el interprete.  Como lo que se lee depende de lo
+     * que hubiera en la pila, el mismo programa moria o no segun el entorno.
+     *
+     * Es el MISMO fallo que ya se cerro para el trampolin de ensamblador en
+     * `inline_asm_trampoline.cpp`; alli el prologo es fijo y se describio a
+     * mano.  Aqui varia por funcion, asi que se describe con estos campos.
+     */
+    struct UnwindDesc {
+        bool naked = false;      ///< el cuerpo es dueno de la pila: sin marco.
+        bool push_rbp = false;   ///< el prologo empieza salvando RBP.
+        bool frame_ptr = false;  ///< ademas hace `mov rbp, rsp`.
+        bool push_rbx = false;   ///< salva RBX (lleva el ProcessVM*).
+        std::vector<uint8_t> callee_saved; ///< los demas, en orden de push.
+        uint32_t spill_bytes = 0;          ///< lo que reserva el `sub rsp`.
+    };
+    UnwindDesc unwind;
+    /// Cuantas instrucciones del principio forman el prologo.  Lo cuenta quien
+    /// lo emite; el codificador lo usa para saber donde acaba en BYTES.
+    uint32_t prologue_instrs = 0;
+    /// Donde acaba el prologo, en bytes desde el inicio de la funcion.  Lo
+    /// rellena el codificador, que es el unico que sabe cuanto ocupa cada
+    /// instruccion.
+    uint32_t prologue_bytes = 0;
+
+    /**
      * @brief Un bloque de inline-asm se quedo SIN BYTES al reescribir a
      *        registros fisicos, asi que esta funcion no se puede usar.
      *

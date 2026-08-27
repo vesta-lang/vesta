@@ -448,6 +448,17 @@ void Scheduler::run_loop() {
              * recupera igual que en el batch. setjmp==0: ejecucion normal; !=0:
              * se hizo longjmp (aborto) -> saltar la ejecucion y dejar el
              * proceso HALT. */
+            /* Y quien esta ejecutando, que el manejador del sistema lo necesita
+             * para saber a quien avisar.  La vuelta del bucle empieza poniendolo
+             * a nulo (mas arriba) y solo el lote del interprete lo volvia a
+             * poner; por aqui se armaba la recuperacion sin registrar el
+             * proceso, asi que el manejador se retiraba -- no tenia a quien
+             * avisar -- y un fallo dentro de `main` compilado mataba al proceso
+             * con 0xC0000005 y la salida de error VACiA.  El mismo fallo dentro
+             * del lote interpretado si salia contado, con su codigo, su
+             * fichero:linea y su cadena de llamadas: el mismo programa fallando
+             * de dos maneras segun como se ejecute. */
+            set_current_executing_process(instance);
             instance->pending_av_kind = 0xFFFFFFFFu;
             instance->av_recovery_active = true;
             bool atrapado_por_el_programa = false;

@@ -19,6 +19,7 @@
 #include "ir/ssa_ir.h"
 #include "jit/auto_jit.h"
 #include "jit/code_cache.h"
+#include "jit/win_unwind.h" // describirle el marco al sistema
 #include "jit/codegen_target.h"
 #include "jit/interval.h"
 #include "jit/jit_registry.h"
@@ -657,6 +658,10 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
         }
     }
     cc.commit(code, bytes.size());
+    /* Y como se desenrolla, para que un fallo del procesador dentro de esta
+     * funcion se pueda recoger y contar en vez de matar el proceso en
+     * silencio.  Ver @c jit/win_unwind.h.  Fuera de Windows no hace nada. */
+    register_jit_unwind(code, bytes.size(), pf, cc);
 
     /* Disasm opt-in (VESTA_JIT_DISASM=1) del codigo vreg generado. */
     static const bool dis = util::flag_on(util::FlagId::JitDisasm);
@@ -749,6 +754,10 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
         }
     }
     cc.commit(code, bytes.size());
+    /* Y como se desenrolla, para que un fallo del procesador dentro de esta
+     * funcion se pueda recoger y contar en vez de matar el proceso en
+     * silencio.  Ver @c jit/win_unwind.h.  Fuera de Windows no hace nada. */
+    register_jit_unwind(code, bytes.size(), pf, cc);
 
     static const bool dis = util::flag_on(util::FlagId::JitDisasm);
     if (dis) debug_dump_jit_code(fn.name + " [vreg-cb]", code, bytes.size());
@@ -959,6 +968,10 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
         }
     }
     cc.commit(code, bytes.size());
+    /* Y como se desenrolla, para que un fallo del procesador dentro de esta
+     * funcion se pueda recoger y contar en vez de matar el proceso en
+     * silencio.  Ver @c jit/win_unwind.h.  Fuera de Windows no hace nada. */
+    register_jit_unwind(code, bytes.size(), pf, cc);
 
     /* 7. Resolver la direccion absoluta del OSR-entry via el offset que el
      *    encoder dejo en label_offsets. */
