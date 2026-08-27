@@ -3015,6 +3015,24 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                     }
                 }
             }
+            /* Un enum SIN valor -- el corriente, `enum Tok { A, B, C }` -- vale
+             * su ETIQUETA, que es el orden en que se declaro.  Solo se trataban
+             * los enums con valor (`: u8`), asi que `Tok.C` no era
+             * comptime-evaluable y se llevaba por delante toda expresion que lo
+             * mencionara: una llamada comptime con un enum por argumento no se
+             * podia evaluar, y lo que dependiera de ella salia vacio. */
+            if (ite != elays.end() && !ite->second.is_valued) {
+                for (const auto &v : ite->second.variants) {
+                    if (v.name != fa->field_name) continue;
+                    /* Con carga util no basta la etiqueta: el valor son ademas
+                     * sus campos, y eso no cabe en un entero.  Se dice que no
+                     * en vez de devolver media verdad. */
+                    if (!v.field_types.empty()) return r;
+                    r.ok = true;
+                    r.value = static_cast<int64_t>(v.tag);
+                    return r;
+                }
+            }
         }
         ComptimeEvalResult obj = comptime_eval_expr(tc, fa->base.get());
         if (!obj.ok || !obj.is_struct) return r;
