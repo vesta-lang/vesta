@@ -2661,6 +2661,26 @@ struct GenericTemplateExport {
 
 struct ModuleNode : Node {
     std::vector<std::unique_ptr<Node>> decls; ///< FunctionDecl o GlobalVarDecl.
+
+    /**
+     * @brief Donde ACABA el texto de cada declaracion, por nodo.
+     *
+     * El nodo dice donde empieza (@c loc.offset) pero no donde termina:
+     * @c loc.length es la del token, no la de la declaracion.  Quien necesite
+     * el texto completo de una decl -- extraer el conjunto comptime para
+     * compilarlo aparte, por ejemplo -- tenia que deducir el final "hasta donde
+     * empieza la siguiente", y eso corta por donde no es: se comio el cuerpo de
+     * una funcion entera y el texto extraido no compilaba.
+     *
+     * Va por PUNTERO al nodo y no por indice a proposito.  El parser intercala
+     * declaraciones sintetizadas (agregados anonimos, alias de un typedef con
+     * varios declaradores), asi que un vector paralelo a @c decls se desalinea
+     * -- probado.  El puntero identifica al nodo pase lo que pase con el orden.
+     *
+     * Lo llena el parser al terminar cada decl.  Un nodo ausente = no se supo,
+     * y quien lo consulte tiene que seguir teniendo un plan para eso.
+     */
+    std::unordered_map<const Node *, uint32_t> decl_end_offset;
     /// @NoExceptions a nivel modulo: deshabilita excepciones en TODO el
     /// modulo (todas las funciones + metodos lo heredan).  Para contextos
     /// que no pueden tenerlas (kernel, freestanding, embedded).

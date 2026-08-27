@@ -2103,22 +2103,35 @@ bool TypeChecker::run() {
      * site.  Cero impacto si la flag no esta o el archivo no existe
      * (la rama VM cae a AST eval). */
     {
-        const std::string &pre = util::flag_text(util::FlagId::McPrebuilt);
-        if (!pre.empty()) {
-            std::ifstream f(pre, std::ios::binary);
-            if (f) {
-                std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
-                                           std::istreambuf_iterator<char>());
-                if (!bytes.empty()) {
-                    const bool ok = comptime_runtime_.load_macros_from_bytes(
-                        std::move(bytes));
-                    if (ok) {
-                        if (util::flag_on(util::FlagId::McVerbose)) {
-                            std::cerr
-                                << "[mc-prebuilt] cargado: " << pre << " ("
-                                << comptime_runtime_.registered_macro_count()
-                                << " macros registrados)\n";
-                        }
+        /* Primero, el que llega YA EN MEMORIA.  Se construye una vez, antes de
+         * compilar ningun modulo, y lo comparten todos: ni se relee el fichero
+         * por modulo ni hace falta que exista fichero.  La via por variable de
+         * entorno se conserva detras, que es como entra cuando quien orquesta
+         * es otro proceso. */
+        if (comptime_artifact_ != nullptr && !comptime_artifact_->empty()) {
+            std::vector<uint8_t> copia = *comptime_artifact_;
+            if (comptime_runtime_.load_macros_from_bytes(std::move(copia)) &&
+                util::flag_on(util::FlagId::McVerbose)) {
+                std::cerr << "[mc-prebuilt] en memoria ("
+                          << comptime_runtime_.registered_macro_count()
+                          << " macros registrados)\n";
+            }
+        } else {
+            const std::string &pre = util::flag_text(util::FlagId::McPrebuilt);
+            if (!pre.empty()) {
+                std::ifstream f(pre, std::ios::binary);
+                if (f) {
+                    std::vector<uint8_t> bytes(
+                        (std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+                    if (!bytes.empty() &&
+                        comptime_runtime_.load_macros_from_bytes(
+                            std::move(bytes)) &&
+                        util::flag_on(util::FlagId::McVerbose)) {
+                        std::cerr
+                            << "[mc-prebuilt] cargado: " << pre << " ("
+                            << comptime_runtime_.registered_macro_count()
+                            << " macros registrados)\n";
                     }
                 }
             }

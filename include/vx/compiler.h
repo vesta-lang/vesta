@@ -117,6 +117,33 @@ struct CompileOptions {
      */
     bool ir_only = false;
 
+    /**
+     * @brief Bytecode del conjunto comptime, ya compilado, para usarlo SIN
+     *        pasar por disco.
+     *
+     * El codigo que se ejecuta al compilar (los `@Macro`, las `comptime fn`)
+     * necesita bytecode que ejecutar.  Hasta ahora ese bytecode viajaba por una
+     * variable de entorno con la RUTA de un fichero, que cada modulo volvia a
+     * leer del disco.  Por aqui viaja el contenido, que es lo que de verdad
+     * hace falta: se construye una vez, antes de compilar ningun modulo, y
+     * todos lo ven ya cargado.
+     *
+     * Apunta a bytes que son del llamante y tienen que vivir mientras dure la
+     * compilacion.  @c nullptr = no hay, y se cae a la variable de entorno.
+     */
+    const std::vector<uint8_t> *comptime_artifact = nullptr;
+
+    /**
+     * @brief Esta compilacion ES la del conjunto comptime.
+     *
+     * Sirve para no morderse la cola: el conjunto comptime SE CONTIENE A Si
+     * MISMO -- `inject` es un `@Macro`, o sea que forma parte del conjunto --,
+     * asi que compilarlo vuelve a entrar por el mismo sitio y construye el
+     * artefacto DEL artefacto.  Se llego a observar con tres niveles, encogiendo
+     * en cada uno.  Con esto puesto no se recolecta ni se construye nada.
+     */
+    bool building_comptime_artifact = false;
+
     /// Cuando true, llena @c CompileResult::mermaid_ast con un diagrama
     /// Mermaid del AST Vesta post type-check.  Util para visualizar la
     /// estructura del codigo fuente: clases, herencia, anotaciones.

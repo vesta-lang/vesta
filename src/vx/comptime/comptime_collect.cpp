@@ -14,7 +14,9 @@
  * artefacto comptime separado sea auto-suficiente.
  */
 
+#include <cstdio>
 #include "vx/comptime/comptime_collect.h"
+#include "util/env_flags.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -385,8 +387,17 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
              * el parser inserta ademas las decls sintetizadas
              * (`pending_before_decls_`, `pending_extra_decls_`), asi que el
              * indice no vale como emparejamiento -- probado, y desalinea. */
+            /* El final, tal como lo anoto el parser al terminar la decl.  Si
+             * no esta (decl sintetizada), queda a cero y abajo se cae al
+             * respaldo de siempre. */
+            uint32_t fin = 0;
+            {
+                const auto it = mod.decl_end_offset.find(d.get());
+                if (it != mod.decl_end_offset.end()) fin = it->second;
+            }
             spans.push_back(
-                {inicio_real_de_decl(source, d->loc.offset), 0, in, es_import});
+                {inicio_real_de_decl(source, d->loc.offset), fin, in,
+                 es_import});
         }
         std::sort(spans.begin(), spans.end(),
                   [](const Span &a, const Span &b) { return a.off < b.off; });

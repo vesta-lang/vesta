@@ -2195,6 +2195,11 @@ CompileResult compile_vx_project(
         }
 
         pm.tc = std::make_unique<TypeChecker>(*pm.ast, pm.diags);
+        /* El conjunto comptime ya compilado, en memoria: TODOS los modulos lo
+         * ven desde su primer call site.  Es lo que evita que un modulo se
+         * compile antes de que exista la maquina que genera parte de su
+         * codigo -- y salga con cuerpos de `asm` vacios. */
+        pm.tc->set_comptime_artifact(opts.comptime_artifact);
 
         for (const auto &kv : target_skipped_proyecto) {
             for (const auto &spec : kv.second)

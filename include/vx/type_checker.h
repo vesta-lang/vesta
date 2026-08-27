@@ -685,6 +685,19 @@ class TypeChecker {
      * @param diags Sumidero de diagnosticos.
      */
     TypeChecker(ast::ModuleNode &mod, Diagnostics &diags);
+
+    /**
+     * @brief Bytecode del conjunto comptime, ya compilado y en memoria.
+     *
+     * Se pone ANTES de @c check().  Es la via preferente: sin esto se cae a la
+     * ruta que llega por variable de entorno, que obliga a releer el fichero en
+     * cada modulo.  Los bytes son del llamante.
+     *
+     * @param bytes Bytecode, o @c nullptr para no usar esta via.
+     */
+    void set_comptime_artifact(const std::vector<uint8_t> *bytes) noexcept {
+        comptime_artifact_ = bytes;
+    }
     ~TypeChecker(); // limpia g_active_typechecker thread_local
 
     /**
@@ -1815,6 +1828,9 @@ class TypeChecker {
     /// esta pasada como PROVISIONAL: el cuerpo del asm salio vacio y hay que
     /// repetir la compilacion con esa maquina ya cargada.
     bool inject_diferido_ = false;
+
+    /// @copydoc set_comptime_artifact
+    const std::vector<uint8_t> *comptime_artifact_ = nullptr;
 
   public:
     uint64_t next_gensym_id() noexcept { return gensym_counter_++; }

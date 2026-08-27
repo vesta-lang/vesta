@@ -593,6 +593,8 @@ void Parser::apply_pending_visibility(ast::Node *n) noexcept {
 
 Token Parser::consume() {
     Token t = std::move(current_);
+    /// @copydoc Parser::prev_token_end_
+    prev_token_end_ = t.loc.offset + t.loc.length;
     current_ = lex_.next();
     return t;
 }
@@ -895,6 +897,12 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
                 mod->decls.push_back(std::move(b));
             pending_before_decls_.clear();
             collect_template_export_(mod.get(), decl.get(), decl_start_off);
+            /* Donde ACABA esta decl.  Al volver de parsearla el token actual ya
+             * es el siguiente, asi que su offset marca el final -- arrastrando
+             * como mucho los espacios y comentarios de en medio, que no estorban
+             * a nadie.  Deducirlo despues, desde el texto, cortaba funciones por
+             * la mitad. */
+            mod->decl_end_offset[decl.get()] = prev_token_end_;
             mod->decls.push_back(std::move(decl));
             // Drenar los aliases extra de un typedef C-style multi-declarador.
             for (auto &e : pending_extra_decls_)
@@ -4462,6 +4470,11 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
                 ns->decls.push_back(std::move(b));
             pending_before_decls_.clear();
             collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
+            /* @copydoc ModuleNode::decl_end_offset -- tambien dentro de un
+             * `namespace`, que es donde vive la mitad de la stdlib. */
+            if (tpl_export_mod_)
+                tpl_export_mod_->decl_end_offset[inner.get()] =
+                    prev_token_end_;
             ns->decls.push_back(std::move(inner));
             // Drenar aliases extra de un typedef C-style multi-declarador.
             for (auto &e : pending_extra_decls_)
@@ -4498,6 +4511,9 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
         }
         // NS.2: exportar plantillas/concepts namespaced cross-module.
         collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
+        /// @copydoc ModuleNode::decl_end_offset
+        if (tpl_export_mod_)
+            tpl_export_mod_->decl_end_offset[inner.get()] = prev_token_end_;
         ns->decls.push_back(std::move(inner));
     }
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al final del namespace");

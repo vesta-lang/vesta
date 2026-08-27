@@ -320,7 +320,13 @@ CompileResult compile_vx_source(const std::string &source,
          * el artefacto DEL artefacto (observado: tres niveles, con el conjunto
          * encogiendo en cada uno).  Es la version practica de que el conjunto
          * comptime SE CONTIENE A SI MISMO: `inject` es un `@Macro`. */
-        const ComptimeUnit cu = collect_comptime_unit(*mod, source);
+        /* Si esta compilacion ES la del conjunto, no se recolecta: el
+         * conjunto se contiene a si mismo y saldria el artefacto DEL
+         * artefacto, encogiendo nivel a nivel. */
+        const ComptimeUnit cu =
+            opts.building_comptime_artifact
+                ? ComptimeUnit{}
+                : collect_comptime_unit(*mod, source);
         res.comptime_unit_source = cu.unit_source;
         res.comptime_unit_hash = cu.content_hash;
         res.comptime_unit_not_collected = cu.not_collected;
@@ -392,6 +398,10 @@ CompileResult compile_vx_source(const std::string &source,
 
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);
+    /* El conjunto comptime ya compilado, si quien orquesta lo trae: asi el
+     * codigo que se ejecuta al compilar tiene bytecode desde el primer call
+     * site, sin releer ningun fichero. */
+    tc.set_comptime_artifact(opts.comptime_artifact);
     // Registrar namespaces inline en el checker ANTES de run().
     for (const auto &ins : inline_namespaces) {
         const uint32_t ns_idx =
