@@ -2108,15 +2108,26 @@ bool TypeChecker::run() {
          * por modulo ni hace falta que exista fichero.  La via por variable de
          * entorno se conserva detras, que es como entra cuando quien orquesta
          * es otro proceso. */
+        bool en_memoria_sirvio = false;
         if (comptime_artifact_ != nullptr && !comptime_artifact_->empty()) {
             std::vector<uint8_t> copia = *comptime_artifact_;
-            if (comptime_runtime_.load_macros_from_bytes(std::move(copia)) &&
-                util::flag_on(util::FlagId::McVerbose)) {
-                std::cerr << "[mc-prebuilt] en memoria ("
-                          << comptime_runtime_.registered_macro_count()
-                          << " macros registrados)\n";
+            if (comptime_runtime_.load_macros_from_bytes(std::move(copia))) {
+                /* Solo cuenta si trae ALGO.  Un artefacto que carga pero no
+                 * registra ni un macro no sirve, y preferirlo tapaba al bueno
+                 * que llega por la otra via: el modulo se compilaba sin poder
+                 * ejecutar nada al compilar, y lo que dependia de eso salia con
+                 * valores de relleno. */
+                en_memoria_sirvio =
+                    comptime_runtime_.registered_macro_count() > 0;
+                if (en_memoria_sirvio &&
+                    util::flag_on(util::FlagId::McVerbose)) {
+                    std::cerr << "[mc-prebuilt] en memoria ("
+                              << comptime_runtime_.registered_macro_count()
+                              << " macros registrados)\n";
+                }
             }
-        } else {
+        }
+        if (!en_memoria_sirvio) {
             const std::string &pre = util::flag_text(util::FlagId::McPrebuilt);
             if (!pre.empty()) {
                 std::ifstream f(pre, std::ios::binary);
