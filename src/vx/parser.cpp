@@ -892,8 +892,17 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
             // parse_namespace_decl (decls dentro de un namespace).
             // Agregados anonimos sintetizados durante el parseo de este decl
             // van ANTES (el decl los referencia por nombre).
-            for (auto &b : pending_before_decls_)
+            /* Las sintetizadas comparten el tramo de la decl que las genero:
+             * salen del MISMO texto (un `typedef` con varios declaradores, un
+             * agregado anonimo).  Sin tramo, quien necesita su fuente las
+             * descarta -- y un modulo que solo aporta tipos se quedaba en nada,
+             * dejando sin declarar lo que otros usaban. */
+            for (auto &b : pending_before_decls_) {
+                if (current_.loc.offset > decl_start_off)
+                    mod->decl_span[b.get()] = {decl_start_off,
+                                               current_.loc.offset};
                 mod->decls.push_back(std::move(b));
+            }
             pending_before_decls_.clear();
             collect_template_export_(mod.get(), decl.get(), decl_start_off);
             /* Donde ACABA esta decl.  Al volver de parsearla el token actual ya
@@ -909,8 +918,13 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
                                               current_.loc.offset};
             mod->decls.push_back(std::move(decl));
             // Drenar los aliases extra de un typedef C-style multi-declarador.
-            for (auto &e : pending_extra_decls_)
+            /// @copydoc pending_before_decls_ (mismo criterio)
+            for (auto &e : pending_extra_decls_) {
+                if (current_.loc.offset > decl_start_off)
+                    mod->decl_span[e.get()] = {decl_start_off,
+                                               current_.loc.offset};
                 mod->decls.push_back(std::move(e));
+            }
             pending_extra_decls_.clear();
         } else if (last_decl_was_target_skip_) {
             // L.24: skip intencional via @Target no matcheado.
@@ -4470,8 +4484,15 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
                 continue;
             }
             // NS.2: exportar plantillas/concepts namespaced cross-module.
-            for (auto &b : pending_before_decls_)
+            /* Las sintetizadas, con el tramo de la decl que las genero.  Va
+             * tambien aqui: la mitad de la stdlib vive dentro de un
+             * `namespace`, y sin esto sus `typedef` se quedaban sin fuente. */
+            for (auto &b : pending_before_decls_) {
+                if (tpl_export_mod_ && current_.loc.offset > inner_start)
+                    tpl_export_mod_->decl_span[b.get()] = {inner_start,
+                                                           current_.loc.offset};
                 ns->decls.push_back(std::move(b));
+            }
             pending_before_decls_.clear();
             collect_template_export_(tpl_export_mod_, inner.get(), inner_start);
             /* @copydoc ModuleNode::decl_end_offset -- tambien dentro de un
@@ -4481,8 +4502,13 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
                         inner_start, current_.loc.offset};
             ns->decls.push_back(std::move(inner));
             // Drenar aliases extra de un typedef C-style multi-declarador.
-            for (auto &e : pending_extra_decls_)
+            /// @copydoc pending_before_decls_ (mismo criterio)
+            for (auto &e : pending_extra_decls_) {
+                if (tpl_export_mod_ && current_.loc.offset > inner_start)
+                    tpl_export_mod_->decl_span[e.get()] = {inner_start,
+                                                           current_.loc.offset};
                 ns->decls.push_back(std::move(e));
+            }
             pending_extra_decls_.clear();
         }
         return ns;
