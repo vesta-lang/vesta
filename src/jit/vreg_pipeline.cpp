@@ -615,6 +615,11 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
         mf, codegen::build_allocation_result(ra, &ivs, plan), tri, AbiKind::VM,
         &ivs);
 
+    /* Un bloque de inline-asm que se quedo SIN BYTES deja la funcion haciendo
+     * otra cosa, asi que se rechaza aqui y se queda para el interprete: mas
+     * lenta, pero correcta.  El motivo ya se conto al reescribir. */
+    if (pf.asm_sin_bytes) return nullptr;
+
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
     peephole_physical(pf);
@@ -720,6 +725,11 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
     MFunction pf = rewrite_to_physical(
         mf, codegen::build_allocation_result(ra, &ivs, plan), tri, AbiKind::VM,
         &ivs);
+
+    /* Un bloque de inline-asm que se quedo SIN BYTES deja la funcion haciendo
+     * otra cosa, asi que se rechaza aqui y se queda para el interprete: mas
+     * lenta, pero correcta.  El motivo ya se conto al reescribir. */
+    if (pf.asm_sin_bytes) return nullptr;
     peephole_physical(pf);
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
 
@@ -921,6 +931,11 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
     MFunction pf = rewrite_to_physical(
         mf, codegen::build_allocation_result(ra, &ivs, plan), tri, AbiKind::VM,
         &ivs, &osr);
+
+    /* Un bloque de inline-asm que se quedo SIN BYTES deja la funcion haciendo
+     * otra cosa, asi que se rechaza aqui y se queda para el interprete: mas
+     * lenta, pero correcta.  El motivo ya se conto al reescribir. */
+    if (pf.asm_sin_bytes) return nullptr;
     maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 

@@ -1725,6 +1725,23 @@ struct MFunction {
     /// MInstr @c INLINE_ASM_RAW (@c src1.value).
     std::vector<AsmBlob> asm_blobs;
 
+    /**
+     * @brief Un bloque de inline-asm se quedo SIN BYTES al reescribir a
+     *        registros fisicos, asi que esta funcion no se puede usar.
+     *
+     * El ensamblado diferido puede fallar (al operando no le toco registro, la
+     * ranura no se puede nombrar, no ensambla).  Antes eso se contaba por la
+     * salida de error y se seguia: el blob se quedaba vacio, el bloque no
+     * emitia NADA y la funcion compilaba "bien" haciendo otra cosa -- el
+     * `memcpy` de `std.memory` entregaba una copia a medias sin que nada lo
+     * dijera, y solo bajo JIT, que es la peor forma de fallar.
+     *
+     * Con la marca, quien compila devuelve "no se pudo" y la funcion se queda
+     * para el interprete, que la ejecuta bien.  Se pierde velocidad en esa
+     * funcion; no se pierde el resultado.
+     */
+    bool asm_sin_bytes = false;
+
     ///  AOT.3 Paso 2b: vreg ids de los parametros de la funcion, en
     /// orden de la convencion de llamada.  Solo lo usa el rewrite en ABI
     /// HOST_LEAF: los params llegan en los @c arg_regs del ABI host y se

@@ -2504,6 +2504,15 @@ MFunction rewrite_to_physical(const MFunction &vf,
              * es el sitio que sabe a quien se le habla.  Cuando el catalogo
              * multi-idioma llegue a esta capa, esto pasa a ser un codigo VXNNNN
              * con sus argumentos y el texto sale de ahi. */
+            /* Y ademas se MARCA, que contarlo no basta.  Hasta ahora esto
+             * imprimia y seguia, y la frase de arriba se quedaba en buena
+             * intencion: la funcion salia compilada con un bloque que no emite
+             * nada.  Se veia en `std.memory`, cuyas variantes SIMD entregaban
+             * una copia a medias -- y solo bajo JIT, porque el interprete usa
+             * la version de bucle. */
+            if (res.fallo != AsmDeferredFallo::NINGUNO &&
+                res.fallo != AsmDeferredFallo::SIN_ENSAMBLADOR)
+                pf.asm_sin_bytes = true;
             switch (res.fallo) {
             case AsmDeferredFallo::SIN_REGISTRO:
                 std::fprintf(stderr,
