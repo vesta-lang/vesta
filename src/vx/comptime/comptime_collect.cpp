@@ -405,6 +405,29 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                  * anadir un import que el codigo comptime no usa invalidaria el
                  * cache sin que nada comptime hubiera cambiado. */
                 in = false;
+            /* Los TIPOS del modulo viajan TODOS.
+             *
+             * El codigo que se ejecuta al compilar puede nombrar cualquiera --
+             * en una firma, en una variable local, en un `sizeof<T>` --, y sin
+             * su declaracion el texto extraido no compila ("el operando de '.'
+             * debe ser un struct o clase (tipo recibido: void)", "sizeof: tipo
+             * no reconocido").
+             *
+             * TODOS y no solo los referenciados, a proposito: seguir las
+             * referencias exige un recorrido de tipos aparte, y una declaracion
+             * de tipo no es codigo -- no se ejecuta, no llama a nada, y
+             * compilarla cuesta lo que ocupa.  Pagar de mas aqui sale mas
+             * barato que un cierre incompleto, que se manifiesta como un
+             * conjunto que no compila y deja al codigo de compilacion sin
+             * bytecode que ejecutar.
+             *
+             * Entran al hash: si un struct cambia, lo que el codigo comptime
+             * calcule con el puede cambiar tambien. */
+            if (d->kind == ast::NodeKind::StructDecl ||
+                d->kind == ast::NodeKind::ClassDecl ||
+                d->kind == ast::NodeKind::EnumDecl ||
+                d->kind == ast::NodeKind::TypeAliasDecl)
+                in = true;
             const bool es_import = d->kind == ast::NodeKind::ImportDecl;
             /* El principio REAL, no el que da el AST: si no, el recorte pierde
              * el `comptime`/`@Macro` de esta decl y se lo cuelga a la anterior

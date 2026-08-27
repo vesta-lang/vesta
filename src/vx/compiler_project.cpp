@@ -1552,6 +1552,7 @@ CompileResult compile_vx_project(
             o_ct.native_poo = false; // lo ejecuta la VM, no codigo nativo.
             CompileResult cr_ct =
                 compile_vx_source(texto_conjunto, "<conjunto-comptime>", o_ct);
+            if (util::flag_on(util::FlagId::McVerbose) && !cr_ct.ok) { int n=0; for (const auto &dg : cr_ct.diagnostics.all()) { if (dg.level != DiagLevel::ERR) continue; if (++n > 3) break; std::fprintf(stderr, "[conjunto] %u: %s%c", dg.loc.line, dg.message.c_str(), 10); } }
             if (cr_ct.ok && !cr_ct.vel_text.empty()) {
                 std::error_code cec;
                 const std::string dir =
