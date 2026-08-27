@@ -297,7 +297,8 @@ bool ModuleGraph::read_file_(const std::string &path, std::string &out) {
      * normalizados.
      *
      * Aqui se leia el fichero en crudo, asi que en Windows el parser veia un
-     * texto con `` y sus offsets eran de ESE texto -- mientras que quien
+     * texto con `
+` y sus offsets eran de ESE texto -- mientras que quien
      * luego recortaba fuente por offset leia el normalizado.  Dos textos, uno
      * mas corto que el otro, y las posiciones de uno aplicadas al otro: cada
      * fin de linea anterior corria el corte un byte, asi que caia DENTRO de un
@@ -1359,7 +1360,12 @@ void ModuleGraph::process_dependencies_(ResolvedModule &mod) {
 uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
     // Resolver el path absoluto del root.
     std::string canonical = normalize_path_(root_file, "");
-    if (!file_exists_(canonical)) {
+    /* Un fuente puesto por el llamante (overlay) NO esta en disco, y no tiene
+     * por que estarlo: es texto que se acaba de generar.  Preguntar solo al
+     * disco hacia imposible compilar uno como raiz -- que es justo lo que hace
+     * falta para compilar el conjunto comptime, generado en memoria, sin
+     * dejarlo en el arbol donde competiria con la stdlib por su namespace. */
+    if (!file_exists_(canonical) && source_overlay_.count(canonical) == 0) {
         SourceLoc l;
         l.file = root_file;
         diags_.error(l, "el fichero raiz no existe: '" + root_file + "'");

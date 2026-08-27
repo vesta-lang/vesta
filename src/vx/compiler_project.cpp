@@ -1521,38 +1521,61 @@ CompileResult compile_vx_project(
      * de pasar. */
     if (!opts.building_comptime_artifact &&
         util::flag_on(util::FlagId::ArtefactoTemprano)) {
-        std::string texto_conjunto;
+        /* Cada modulo se SUSTITUYE por su propio conjunto comptime, y se
+         * compila el mismo programa.
+         *
+         * Concatenar los conjuntos de todos en un solo texto no vale: al
+         * resolverse los `import`, los modulos reales entran tambien y todo
+         * queda por duplicado ("redefinicion de simbolo", "alias de tipo
+         * redefinido").  Sustituyendolos, el grafo de dependencias es el mismo,
+         * cada `import` resuelve a la version recortada y no hay duplicados --
+         * ni hace falta arrastrar los tipos de otros modulos, porque cada uno
+         * sigue trayendo los suyos.
+         *
+         * Se puede hacer aqui porque TODOS los modulos estan ya parseados: el
+         * resolvedor lo hace para construir el grafo, tambien los que luego se
+         * serviran del cache.  Extraer solo necesita el AST y el fuente. */
+        std::unordered_map<std::string, std::string> overlay_ct;
+        if (source_overlay) overlay_ct = *source_overlay;
+        bool hay_comptime = false;
         for (auto &w : work) {
             if (!w.ast) continue;
             const ComptimeUnit cu = collect_comptime_unit(*w.ast, w.source);
-            if (cu.empty()) continue;
-            /* Con su `namespace` delante: los conjuntos de todos los modulos
-             * van a un solo texto, y sin el chocarian entre si.  Se lee del
-             * AST, donde el `namespace X;` todavia es un nodo -- mas adelante
-             * el aplanado lo deshace. */
+            std::string texto;
+            /* El `namespace` delante: se lee del AST, donde el `namespace X;`
+             * todavia es un nodo -- el aplanado, mas adelante, lo deshace. */
             for (const auto &d : w.ast->decls) {
                 if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
-                const auto *nd = static_cast<const ast::NamespaceDecl *>(d.get());
+                const auto *nd =
+                    static_cast<const ast::NamespaceDecl *>(d.get());
                 if (nd->name.empty()) break;
-                texto_conjunto += "namespace ";
-                texto_conjunto += nd->name;
-                texto_conjunto += ";";
-                texto_conjunto.push_back(static_cast<char>(10));
+                texto += "namespace " + nd->name + ";";
+                texto.push_back(static_cast<char>(10));
                 break;
             }
-            texto_conjunto += cu.unit_source;
+            texto += cu.unit_source;
+            if (!cu.empty()) hay_comptime = true;
+            overlay_ct[w.canonical_path] = texto;
         }
-        if (!texto_conjunto.empty()) {
-            /* Compilarlo SIN volver a extraer conjunto: se contiene a si mismo
-             * -- `inject` es un `@Macro` -- y sin la marca construiria el
-             * artefacto DEL artefacto, nivel tras nivel. */
+        if (hay_comptime) {
+            /* Compilarlo SIN volver a adelantar nada: el conjunto se contiene a
+             * si mismo -- `inject` es un `@Macro` -- y sin la marca construiria
+             * el artefacto DEL artefacto, nivel tras nivel. */
             CompileOptions o_ct = opts;
             o_ct.building_comptime_artifact = true;
-            o_ct.module_name = "conjunto_comptime";
             o_ct.native_poo = false; // lo ejecuta la VM, no codigo nativo.
             CompileResult cr_ct =
-                compile_vx_source(texto_conjunto, "<conjunto-comptime>", o_ct);
-            if (util::flag_on(util::FlagId::McVerbose) && !cr_ct.ok) { int n=0; for (const auto &dg : cr_ct.diagnostics.all()) { if (dg.level != DiagLevel::ERR) continue; if (++n > 3) break; std::fprintf(stderr, "[conjunto] %u: %s%c", dg.loc.line, dg.message.c_str(), 10); } }
+                compile_vx_project(root_path, o_ct, &overlay_ct,
+                                   extra_search_paths);
+            if (util::flag_on(util::FlagId::McVerbose) && !cr_ct.ok) {
+                int n = 0;
+                for (const auto &dg : cr_ct.diagnostics.all()) {
+                    if (dg.level != DiagLevel::ERR) continue;
+                    if (++n > 3) break;
+                    std::fprintf(stderr, "[conjunto] %u: %s%c", dg.loc.line,
+                                 dg.message.c_str(), 10);
+                }
+            }
             if (cr_ct.ok && !cr_ct.vel_text.empty()) {
                 std::error_code cec;
                 const std::string dir =
@@ -1562,8 +1585,8 @@ CompileResult compile_vx_project(
                 const std::string pref =
                     dir + "/ct_" +
                     std::to_string(static_cast<unsigned long long>(
-                        vxi_fnv1a(texto_conjunto.data(),
-                                  texto_conjunto.size())));
+                        vxi_fnv1a(cr_ct.vel_text.data(),
+                                  cr_ct.vel_text.size())));
                 if (asm_multi_process::run_worker_from_source(
                         std::string(cr_ct.vel_text), pref + ".vel.tmp", pref,
                         /*skip_preprocessor=*/true, /*keep_labels=*/false,
@@ -1577,6 +1600,7 @@ CompileResult compile_vx_project(
             }
         }
     }
+
     // Colision de module_name (filename): dos modulos con el mismo ultimo
     // segmento (p.ej. std.syscall.linux.x86_64 y std.syscall.windows.x86_64,
     // ambos "x86_64") colapsan en by_name (emplace conserva el primero).  by_ns
