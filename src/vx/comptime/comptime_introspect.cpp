@@ -2632,9 +2632,31 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 /* Evaluar todos los args en compile-time. */
                 std::vector<ComptimeEvalResult> args;
                 args.reserve(ce->args.size());
+                bool algun_arg_diferido = false;
                 for (const auto &a : ce->args) {
                     args.push_back(comptime_eval_expr(tc, a.get()));
                     if (!args.back().ok) return r;
+                    if (args.back().deferred) algun_arg_diferido = true;
+                }
+                /* Un argumento DIFERIDO no es un valor: es un marcador de la
+                 * primera pasada, a la espera de que la segunda lo resuelva con
+                 * el bytecode ya cargado.  Llamar con el da un resultado que
+                 * parece bueno y no lo es -- calculado sobre un relleno -- y
+                 * como no se marcaba, la segunda pasada ya no lo rehacia.
+                 *
+                 * Se difiere la llamada entera.  Se ve, por ejemplo, en
+                 * `emitir(clasificar(c))`: si la de dentro esta diferida, la de
+                 * fuera trabajaba sobre la etiqueta cero y devolvia la variante
+                 * equivocada. */
+                if (algun_arg_diferido) {
+                    r.ok = true;
+                    r.deferred = true;
+                    if (fn_it->second->return_type) {
+                        const Type rtd = tc.resolve_type_node(
+                            fn_it->second->return_type.get());
+                        if (rtd.kind == PrimitiveKind::STRING) r.is_str = true;
+                    }
+                    return r;
                 }
                 /* F1/#2: comptime fn con inline asm -> NO es tree-walkeable;
                  * se ejecuta en el ComptimeVM (JIT + interp fallback).  En
