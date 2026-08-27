@@ -143,8 +143,15 @@ class Ctx:
             full_env.update({k: str(v) for k, v in env.items()})
         rc, log = self.run(args, cwd=cwd, env=full_env)
         if must_succeed and not os.path.exists(self.path(out + ".velb")):
-            self.fail("compilacion de %s no produjo .velb" % os.path.basename(src),
-                      log)
+            # Con el CoDIGO DE SALIDA.  Sin el, una compilacion que no deja
+            # binario es indistinguible de una que CASCA: se vieron fallos con
+            # el registro completamente vacio, que no eran errores de
+            # compilacion sino caidas del proceso, y el mensaje no lo decia.
+            # En Windows el codigo negativo ES el motivo (0xC0000005 = acceso
+            # invalido, 0xC00000FD = desbordamiento de pila).
+            extra_rc = " (rc=%d / 0x%08X)" % (rc, rc & 0xFFFFFFFF)
+            self.fail("compilacion de %s no produjo .velb%s"
+                      % (os.path.basename(src), extra_rc), log)
         return rc, log
 
     def run_velb(self, out, schedulers=None, stats=True, mode=None, cwd=None,
