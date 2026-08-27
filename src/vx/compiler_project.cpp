@@ -25,6 +25,18 @@
  *   - Sin checks de colision de nombres cross-module todavia (M5).
  */
 
+#include "util/file_read.h"
+
+/* El ensamblador, DECLARADO y no incluido.  Su cabecera arrastra `windows.h`,
+ * que define `VOID` como macro y hace que el `void` del enum de tipos de Vesta
+ * deje de compilar.  Se declara lo que se usa y punto. */
+namespace asm_multi_process {
+int run_worker_from_source(std::string code, const std::string &file_name,
+                           const std::string &output_prefix,
+                           bool skip_preprocessor, bool keep_labels,
+                           const std::vector<uint8_t> *ir_section_bytes,
+                           bool emit_map);
+} // namespace asm_multi_process
 #include "vx/comptime/comptime_collect.h"
 #include "vx/compiler.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
@@ -1476,6 +1488,94 @@ CompileResult compile_vx_project(
         work[i].source = read_source_(rm_mut->canonical_path);
         by_name.emplace(rm_mut->module_name, i);
     }
+
+    /* ------------------------------------------------------------------
+     * El conjunto comptime, compilado ANTES que ningun modulo.
+     *
+     * El codigo que se ejecuta al compilar -- los `@Macro`, las `comptime fn`
+     * -- necesita bytecode que ejecutar.  Hasta ahora ese bytecode se producia
+     * compilando el programa ENTERO y volviendo a compilarlo todo con el ya
+     * cargado; mientras tanto, los modulos que se compilaban antes de que
+     * existiera salian con lo que ese codigo debia generar SIN generar: cuerpos
+     * de `asm` vacios, sobre todo.
+     *
+     * Aqui se hace al reves y una sola vez: se extrae el conjunto -- solo las
+     * decls que se ejecutan al compilar, que son pocas: seis funciones de las
+     * treinta y cinco en `std.memory.x86_64` --, se compila, y el bucle de
+     * modulos arranca con el ya disponible.
+     *
+     * Se puede hacer AQUi porque en este punto TODOS los modulos estan
+     * parseados (el resolvedor lo hace para construir el grafo de
+     * dependencias), tambien los que luego se serviran del cache.  Extraer el
+     * conjunto solo necesita el AST y el fuente, y los dos estan.
+     * ------------------------------------------------------------------ */
+    std::vector<uint8_t> artefacto_comptime;
+    CompileOptions opts_modulos = opts;
+    /* De momento APAGADO por defecto (`VESTA_ARTEFACTO_TEMPRANO=1` lo activa).
+     * El conjunto extraido todavia no compila por si solo: se lleva las
+     * funciones comptime y sus dependencias de FUNCION, pero no las
+     * declaraciones de TIPO que ese codigo usa, asi que falla con "el operando
+     * de '.' debe ser un struct" y "sizeof: tipo no reconocido".  Hasta que el
+     * cierre arrastre los tipos, encenderlo solo gasta tiempo -- y compilar el
+     * conjunto EN PROCESO toca estado global, que se noto en un caso que dejo
+     * de pasar. */
+    if (!opts.building_comptime_artifact &&
+        util::flag_on(util::FlagId::ArtefactoTemprano)) {
+        std::string texto_conjunto;
+        for (auto &w : work) {
+            if (!w.ast) continue;
+            const ComptimeUnit cu = collect_comptime_unit(*w.ast, w.source);
+            if (cu.empty()) continue;
+            /* Con su `namespace` delante: los conjuntos de todos los modulos
+             * van a un solo texto, y sin el chocarian entre si.  Se lee del
+             * AST, donde el `namespace X;` todavia es un nodo -- mas adelante
+             * el aplanado lo deshace. */
+            for (const auto &d : w.ast->decls) {
+                if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+                const auto *nd = static_cast<const ast::NamespaceDecl *>(d.get());
+                if (nd->name.empty()) break;
+                texto_conjunto += "namespace ";
+                texto_conjunto += nd->name;
+                texto_conjunto += ";";
+                texto_conjunto.push_back(static_cast<char>(10));
+                break;
+            }
+            texto_conjunto += cu.unit_source;
+        }
+        if (!texto_conjunto.empty()) {
+            /* Compilarlo SIN volver a extraer conjunto: se contiene a si mismo
+             * -- `inject` es un `@Macro` -- y sin la marca construiria el
+             * artefacto DEL artefacto, nivel tras nivel. */
+            CompileOptions o_ct = opts;
+            o_ct.building_comptime_artifact = true;
+            o_ct.module_name = "conjunto_comptime";
+            o_ct.native_poo = false; // lo ejecuta la VM, no codigo nativo.
+            CompileResult cr_ct =
+                compile_vx_source(texto_conjunto, "<conjunto-comptime>", o_ct);
+            if (cr_ct.ok && !cr_ct.vel_text.empty()) {
+                std::error_code cec;
+                const std::string dir =
+                    (std::filesystem::temp_directory_path(cec) / "vx_ct")
+                        .string();
+                std::filesystem::create_directories(dir, cec);
+                const std::string pref =
+                    dir + "/ct_" +
+                    std::to_string(static_cast<unsigned long long>(
+                        vxi_fnv1a(texto_conjunto.data(),
+                                  texto_conjunto.size())));
+                if (asm_multi_process::run_worker_from_source(
+                        std::string(cr_ct.vel_text), pref + ".vel.tmp", pref,
+                        /*skip_preprocessor=*/true, /*keep_labels=*/false,
+                        &cr_ct.ir_section_bytes,
+                        /*emit_map=*/false) == EXIT_SUCCESS) {
+                    if (util::read_whole_file(pref + ".velb",
+                                              artefacto_comptime) &&
+                        !artefacto_comptime.empty())
+                        opts_modulos.comptime_artifact = &artefacto_comptime;
+                }
+            }
+        }
+    }
     // Colision de module_name (filename): dos modulos con el mismo ultimo
     // segmento (p.ej. std.syscall.linux.x86_64 y std.syscall.windows.x86_64,
     // ambos "x86_64") colapsan en by_name (emplace conserva el primero).  by_ns
@@ -2287,7 +2387,7 @@ CompileResult compile_vx_project(
          * ven desde su primer call site.  Es lo que evita que un modulo se
          * compile antes de que exista la maquina que genera parte de su
          * codigo -- y salga con cuerpos de `asm` vacios. */
-        pm.tc->set_comptime_artifact(opts.comptime_artifact);
+        pm.tc->set_comptime_artifact(opts_modulos.comptime_artifact);
 
         for (const auto &kv : target_skipped_proyecto) {
             for (const auto &spec : kv.second)

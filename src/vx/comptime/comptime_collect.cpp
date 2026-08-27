@@ -234,21 +234,52 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                                    const std::string &source) {
     ComptimeUnit u;
 
+    /* Las decls, incluidas las que estan DENTRO de un `namespace`.
+     *
+     * Un `namespace a.b;` mete todo lo que sigue dentro de un nodo, asi que
+     * mirando solo el nivel superior se ve UNA decl -- el propio namespace -- y
+     * el conjunto sale practicamente vacio.  En el flujo de siempre no se
+     * notaba porque para cuando se llegaba aqui los namespaces ya estaban
+     * aplanados; llamando ANTES (que es lo que permite tener el codigo de
+     * compilacion listo antes de compilar nada) no lo estan.
+     *
+     * Se recorre en el mismo ORDEN en que aparecen en el fuente, que es del
+     * que dependen los tramos de texto. */
+    std::vector<const ast::Node *> decls;
+    decls.reserve(mod.decls.size());
+    {
+        std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
+            recoger = [&](const std::vector<std::unique_ptr<ast::Node>> &lista) {
+                for (const auto &d : lista) {
+                    if (!d) continue;
+                    if (d->kind == ast::NodeKind::NamespaceDecl) {
+                        const auto *nd =
+                            static_cast<const ast::NamespaceDecl *>(d.get());
+                        decls.push_back(d.get()); // el propio `namespace`
+                        recoger(nd->decls);
+                        continue;
+                    }
+                    decls.push_back(d.get());
+                }
+            };
+        recoger(mod.decls);
+    }
+
     // Indice nombre -> FunctionDecl para resolver dependencias.
     std::unordered_map<std::string, const ast::FunctionDecl *> fn_by_name;
-    for (const auto &d : mod.decls) {
+    for (const auto *d : decls) {
         if (d && d->kind == ast::NodeKind::FunctionDecl) {
-            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+            const auto *fd = static_cast<const ast::FunctionDecl *>(d);
             fn_by_name.emplace(fd->name, fd);
         }
     }
 
     // Clasificar decls comptime top-level + sembrar el worklist de cuerpos.
     std::unordered_set<std::string> seed_calls; // llamadas del codigo comptime
-    for (const auto &d : mod.decls) {
+    for (const auto *d : decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::FunctionDecl) {
-            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+            const auto *fd = static_cast<const ast::FunctionDecl *>(d);
             if (fd->is_macro) {
                 u.macros.push_back(fd->name);
                 collect_calls_stmt(fd->body.get(), seed_calls);
@@ -257,14 +288,14 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                 collect_calls_stmt(fd->body.get(), seed_calls);
             }
         } else if (d->kind == ast::NodeKind::GlobalVarDecl) {
-            const auto *gv = static_cast<const ast::GlobalVarDecl *>(d.get());
+            const auto *gv = static_cast<const ast::GlobalVarDecl *>(d);
             if (gv->is_comptime || gv->is_const) {
                 u.comptime_consts.push_back(gv->name);
                 collect_calls_expr(gv->init.get(), seed_calls);
             }
         } else if (d->kind == ast::NodeKind::ComptimeBlockStmt) {
             // Bloque comptime a nivel modulo: su cuerpo tambien es comptime.
-            collect_calls_stmt(static_cast<const ast::Stmt *>(d.get()),
+            collect_calls_stmt(static_cast<const ast::Stmt *>(d),
                                seed_calls);
         } else if (d->kind == ast::NodeKind::StructDecl ||
                    d->kind == ast::NodeKind::ClassDecl) {
@@ -280,12 +311,12 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
              * sea la particion, deja de estarlo. */
             const auto &metodos =
                 d->kind == ast::NodeKind::StructDecl
-                    ? static_cast<const ast::StructDecl *>(d.get())->methods
-                    : static_cast<const ast::ClassDecl *>(d.get())->methods;
+                    ? static_cast<const ast::StructDecl *>(d)->methods
+                    : static_cast<const ast::ClassDecl *>(d)->methods;
             const std::string &tipo =
                 d->kind == ast::NodeKind::StructDecl
-                    ? static_cast<const ast::StructDecl *>(d.get())->name
-                    : static_cast<const ast::ClassDecl *>(d.get())->name;
+                    ? static_cast<const ast::StructDecl *>(d)->name
+                    : static_cast<const ast::ClassDecl *>(d)->name;
             for (const auto &m : metodos) {
                 if (!m || !m->is_comptime) continue;
                 u.not_collected.push_back(tipo + "." + m->name);
@@ -350,18 +381,18 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             bool is_import; ///< es un `import` (viaja, pero NO entra al hash).
         };
         std::vector<Span> spans;
-        spans.reserve(mod.decls.size());
-        for (const auto &d : mod.decls) {
+        spans.reserve(decls.size());
+        for (const auto *d : decls) {
             if (!d) continue;
             bool in = false;
             if (d->kind == ast::NodeKind::FunctionDecl)
                 in =
                     unit_names.count(
-                        static_cast<const ast::FunctionDecl *>(d.get())->name) >
+                        static_cast<const ast::FunctionDecl *>(d)->name) >
                     0;
             else if (d->kind == ast::NodeKind::GlobalVarDecl)
                 in = unit_names.count(
-                         static_cast<const ast::GlobalVarDecl *>(d.get())
+                         static_cast<const ast::GlobalVarDecl *>(d)
                              ->name) > 0;
             else if (d->kind == ast::NodeKind::ComptimeBlockStmt)
                 in = true; // el bloque comptime es parte del conjunto.
@@ -392,7 +423,7 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
              * siempre: deducirlo del fuente. */
             uint32_t ini = 0, fin = 0;
             {
-                const auto it = mod.decl_span.find(d.get());
+                const auto it = mod.decl_span.find(d);
                 if (it != mod.decl_span.end()) {
                     ini = it->second.start;
                     fin = it->second.end;

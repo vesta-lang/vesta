@@ -126,6 +126,7 @@ VESTA_ENV_FLAG(ComptimeProbe,     "VESTA_COMPTIME_PROBE",     Report,  Comptime,
 VESTA_ENV_FLAG(DumpComptimeUnit,  "VESTA_DUMP_COMPTIME_UNIT", Report,  Comptime, Bool, Any)
 VESTA_ENV_FLAG(VolcarUnidad,      "VESTA_VOLCAR_UNIDAD",      Report,  Comptime, Text, Any)
 VESTA_ENV_FLAG(PruebaIrComptime,  "VESTA_PRUEBA_IR_COMPTIME", Report,  Comptime, Bool, Any)
+VESTA_ENV_FLAG(ArtefactoTemprano,"VESTA_ARTEFACTO_TEMPRANO", Emitted, Comptime, Bool, Any)
 VESTA_ENV_FLAG(McIdiomDebug,      "VESTA_MC_IDIOM_DEBUG",     Report,  Comptime, Bool, Any)
 VESTA_ENV_FLAG(McVerbose,         "VESTA_MC_VERBOSE",         Report,  Comptime, Bool, Any)
 
