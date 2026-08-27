@@ -1538,9 +1538,29 @@ CompileResult compile_vx_project(
         std::unordered_map<std::string, std::string> overlay_ct;
         if (source_overlay) overlay_ct = *source_overlay;
         bool hay_comptime = false;
+        /* Primero, QUE llama el codigo comptime y no encuentra en su modulo.
+         *
+         * El cierre de cada modulo es local: solo ve sus decls.  Una funcion que
+         * el comptime de un modulo llama por un `import` no viaja en el conjunto
+         * del que la DEFINE, y al compilarlo todo junto el que la exporta ya no
+         * la tiene.  Se juntan las de todos y se pide el conjunto otra vez,
+         * diciendole a cada uno que ademas incluya las que le tocan. */
+        std::unordered_set<std::string> pedidas;
         for (auto &w : work) {
             if (!w.ast) continue;
-            const ComptimeUnit cu = collect_comptime_unit(*w.ast, w.source);
+            const ComptimeUnit prev = collect_comptime_unit(*w.ast, w.source);
+            pedidas.insert(prev.external_calls.begin(),
+                           prev.external_calls.end());
+        }
+        if (util::flag_on(util::FlagId::McVerbose)) {
+            std::fprintf(stderr, "[pedidas] %zu:", pedidas.size());
+            for (const auto &n : pedidas) std::fprintf(stderr, " %s", n.c_str());
+            std::fprintf(stderr, "%c", 10);
+        }
+        for (auto &w : work) {
+            if (!w.ast) continue;
+            const ComptimeUnit cu =
+                collect_comptime_unit(*w.ast, w.source, &pedidas);
             std::string texto;
             /* El `namespace` delante: se lee del AST, donde el `namespace X;`
              * todavia es un nodo -- el aplanado, mas adelante, lo deshace. */

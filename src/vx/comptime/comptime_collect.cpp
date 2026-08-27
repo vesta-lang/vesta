@@ -231,7 +231,9 @@ void collect_calls_stmt(const ast::Stmt *s,
 } // namespace
 
 ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
-                                   const std::string &source) {
+                                   const std::string &source,
+                                   const std::unordered_set<std::string>
+                                       *tambien) {
     ComptimeUnit u;
 
     /* Las decls, incluidas las que estan DENTRO de un `namespace`.
@@ -318,8 +320,17 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                     ? static_cast<const ast::StructDecl *>(d)->name
                     : static_cast<const ast::ClassDecl *>(d)->name;
             for (const auto &m : metodos) {
-                if (!m || !m->is_comptime) continue;
-                u.not_collected.push_back(tipo + "." + m->name);
+                if (!m) continue;
+                if (m->is_comptime) {
+                    u.not_collected.push_back(tipo + "." + m->name);
+                    continue;
+                }
+                /* Un tipo viaja ENTERO, y un struct con metodos SI es codigo:
+                 * sus cuerpos llaman a funciones que tambien tienen que viajar.
+                 * Sin sembrar el cierre con ellos, el tipo llegaba y sus
+                 * llamadas no ("el modulo 'atomic' no exporta
+                 * 'vx_cpu_relax'"). */
+                collect_calls_stmt(m->body.get(), seed_calls);
             }
         }
     }
@@ -336,12 +347,20 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
     std::unordered_set<std::string> visited;
     std::vector<std::string> work(seed_calls.begin(), seed_calls.end());
     std::unordered_set<std::string> dep_set;
+    std::unordered_set<std::string> externas;
     while (!work.empty()) {
         const std::string name = work.back();
         work.pop_back();
         if (!visited.insert(name).second) continue;
         auto it = fn_by_name.find(name);
-        if (it == fn_by_name.end()) continue; // builtin/extern/no del modulo.
+        if (it == fn_by_name.end()) {
+            /* No esta en este modulo.  Puede ser un builtin o venir de otro por
+             * un `import`; aqui no se puede distinguir, asi que se anota y lo
+             * decide quien vea todos los modulos.  Tirarlas era lo que dejaba
+             * al modulo que la DEFINE sin incluirla en su conjunto. */
+            externas.insert(name);
+            continue;
+        }
         // Si es comptime, ya esta en su lista; si no, es helper-dep.
         if (!is_comptime_name.count(name)) dep_set.insert(name);
         std::unordered_set<std::string> more;
@@ -350,6 +369,20 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             if (!visited.count(m)) work.push_back(m);
     }
     u.helper_deps.assign(dep_set.begin(), dep_set.end());
+    /* Y los nombres que los `import` piden por su nombre.
+     *
+     * Un `import std.memory only memcpy;` viaja con el conjunto, pero si el
+     * modulo de destino sale recortado sin `memcpy`, el import falla y con el
+     * todo el modulo ("el modulo 'memory' no exporta 'memcpy'").  El import ya
+     * DICE lo que necesita: no hay que deducirlo. */
+    for (const auto *d : decls) {
+        if (!d || d->kind != ast::NodeKind::ImportDecl) continue;
+        const auto *im = static_cast<const ast::ImportDecl *>(d);
+        for (const auto &s : im->only_symbols)
+            if (!s.name.empty()) externas.insert(s.name);
+    }
+    u.external_calls.assign(externas.begin(), externas.end());
+    std::sort(u.external_calls.begin(), u.external_calls.end());
 
     // Orden estable para diagnostico reproducible.
     std::sort(u.comptime_fns.begin(), u.comptime_fns.end());
@@ -437,6 +470,18 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
                 d->kind == ast::NodeKind::EnumDecl ||
                 d->kind == ast::NodeKind::TypeAliasDecl)
                 in = true;
+            /* Y lo que pida quien orquesta.  Son funciones de ESTE modulo que
+             * el codigo comptime de OTRO llama por un `import`: sin esto, el
+             * modulo que las define las deja fuera de su conjunto y el otro se
+             * queda sin poder llamarlas. */
+            if (tambien != nullptr && !in) {
+                std::string nom;
+                if (d->kind == ast::NodeKind::FunctionDecl)
+                    nom = static_cast<const ast::FunctionDecl *>(d)->name;
+                else if (d->kind == ast::NodeKind::GlobalVarDecl)
+                    nom = static_cast<const ast::GlobalVarDecl *>(d)->name;
+                if (!nom.empty() && tambien->count(nom) > 0) in = true;
+            }
             const bool es_import = d->kind == ast::NodeKind::ImportDecl;
             /* El principio REAL, no el que da el AST: si no, el recorte pierde
              * el `comptime`/`@Macro` de esta decl y se lo cuelga a la anterior

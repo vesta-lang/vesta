@@ -25,6 +25,7 @@
 
 #include <ostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "vx/ast.h"
@@ -42,6 +43,18 @@ struct ComptimeUnit {
     std::vector<std::string> comptime_fns;    ///< `comptime fn` (no @Macro).
     std::vector<std::string> macros;          ///< `@Macro`.
     std::vector<std::string> comptime_consts; ///< globales `comptime`/`const`.
+    /**
+     * @brief Lo que el codigo comptime llama y NO esta en este modulo.
+     *
+     * Viene de otro por un `import`.  El cierre de aqui es LOCAL -- solo ve las
+     * decls de este fichero --, asi que estas se perdian: la funcion no viajaba
+     * en el conjunto de quien la DEFINE, y al compilar el conjunto el modulo que
+     * la exporta ya no la tenia ("el modulo 'atomic' no exporta
+     * 'vx_cpu_relax'").  Publicarlas deja que quien orquesta cierre el circulo:
+     * junta las de todos y vuelve a pedir el conjunto de cada modulo diciendole
+     * que ademas incluya las suyas.
+     */
+    std::vector<std::string> external_calls;
     std::vector<std::string> helper_deps; ///< fns no-comptime llamadas por el
                                           ///< codigo comptime (transitivo).
 
@@ -105,8 +118,9 @@ struct ComptimeUnit {
  *               conjunto (clave de cache del artefacto).  Vacio -> hash 0.
  * @return El conjunto comptime.  @c empty() si no hay nada que compilar aparte.
  */
-ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
-                                   const std::string &source = "");
+ComptimeUnit collect_comptime_unit(
+    const ast::ModuleNode &mod, const std::string &source = "",
+    const std::unordered_set<std::string> *tambien = nullptr);
 
 /**
  * @brief Vuelca el conjunto a un stream, legible, para diagnostico.
