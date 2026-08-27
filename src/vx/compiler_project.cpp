@@ -2083,20 +2083,16 @@ CompileResult compile_vx_project(
                          * recuperarlo, o el conjunto sale distinto segun por
                          * cual se entre. */
                         if (!pm.vxi.comptime_unit_source.empty()) {
-                            res.comptime_unit_source +=
+                            pm.comptime_unit_source +=
                                 pm.vxi.comptime_unit_source;
-                            res.comptime_unit_names.insert(
-                                res.comptime_unit_names.end(),
+                            pm.comptime_unit_names.insert(
+                                pm.comptime_unit_names.end(),
                                 pm.vxi.comptime_unit_names.begin(),
                                 pm.vxi.comptime_unit_names.end());
-                            res.comptime_unit_hash ^=
-                                pm.vxi.comptime_unit_hash +
-                                0x9e3779b97f4a7c15ULL +
-                                (res.comptime_unit_hash << 6) +
-                                (res.comptime_unit_hash >> 2);
+                            pm.comptime_unit_hash = pm.vxi.comptime_unit_hash;
                         }
-                        res.comptime_unit_not_collected.insert(
-                            res.comptime_unit_not_collected.end(),
+                        pm.comptime_unit_not_collected.insert(
+                            pm.comptime_unit_not_collected.end(),
                             pm.vxi.comptime_unit_not_collected.begin(),
                             pm.vxi.comptime_unit_not_collected.end());
                         // abi_hash: leerlo del header del .vxi (offset 8).
@@ -2263,20 +2259,17 @@ CompileResult compile_vx_project(
                                  * modulo de siete -- el unico recompilado -- y
                                  * nada lo decia. */
                                 if (!pm.vxi.comptime_unit_source.empty()) {
-                                    res.comptime_unit_source +=
+                                    pm.comptime_unit_source +=
                                         pm.vxi.comptime_unit_source;
-                                    res.comptime_unit_names.insert(
-                                        res.comptime_unit_names.end(),
+                                    pm.comptime_unit_names.insert(
+                                        pm.comptime_unit_names.end(),
                                         pm.vxi.comptime_unit_names.begin(),
                                         pm.vxi.comptime_unit_names.end());
-                                    res.comptime_unit_hash ^=
-                                        pm.vxi.comptime_unit_hash +
-                                        0x9e3779b97f4a7c15ULL +
-                                        (res.comptime_unit_hash << 6) +
-                                        (res.comptime_unit_hash >> 2);
+                                    pm.comptime_unit_hash =
+                                        pm.vxi.comptime_unit_hash;
                                 }
-                                res.comptime_unit_not_collected.insert(
-                                    res.comptime_unit_not_collected.end(),
+                                pm.comptime_unit_not_collected.insert(
+                                    pm.comptime_unit_not_collected.end(),
                                     pm.vxi.comptime_unit_not_collected.begin(),
                                     pm.vxi.comptime_unit_not_collected.end());
                                 pm.ir.functions = std::move(dep_mod.functions);
@@ -2367,20 +2360,15 @@ CompileResult compile_vx_project(
                  * (`nullptr`, `ANCHO`, `UMBRAL_*`...).  No sale de las decls
                  * porque a estas alturas los namespaces ya estan APLANADOS: el
                  * nombre lo tiene el aplanado, que es quien lo sabe. */
-                for (const auto &fns : inline_namespaces) {
-                    if (fns.name.empty()) continue;
-                    res.comptime_unit_source += "namespace ";
-                    res.comptime_unit_source += fns.name;
-                    res.comptime_unit_source += ";";
-                    /* El salto de linea, por su codigo: escribirlo escapado en
-                     * este fichero se lo comen las herramientas de edicion. */
-                    res.comptime_unit_source.push_back(static_cast<char>(10));
-                    break; // el del modulo; los anidados van dentro del texto.
-                }
-                res.comptime_unit_source += cu.unit_source;
-                /* Y en el modulo, para que viaje a su `.vxi`.  Con el
-                 * `namespace` delante, igual que en el acumulado: el texto
-                 * tiene que sostenerse solo venga de donde venga. */
+                /* En el MODULO, no en el acumulado del proyecto: esta lambda
+                 * corre en hasta ocho hilos a la vez y `res` es uno solo.  Un
+                 * `+=` sobre la misma `std::string` desde dos hilos revienta su
+                 * bufer -- el compilador moria con 0xC0000374 sin imprimir
+                 * nada, con victima distinta cada vuelta.  Cada modulo llena lo
+                 * suyo y la suma se hace despues del bucle, en orden de indice,
+                 * que ademas la vuelve determinista.  Con el `namespace`
+                 * delante: el texto tiene que sostenerse solo venga de donde
+                 * venga. */
                 for (const auto &fns : inline_namespaces) {
                     if (fns.name.empty()) continue;
                     pm.comptime_unit_source += "namespace ";
@@ -2398,28 +2386,6 @@ CompileResult compile_vx_project(
                 pm.comptime_unit_not_collected.insert(
                     pm.comptime_unit_not_collected.end(),
                     cu.not_collected.begin(), cu.not_collected.end());
-                /* Los NOMBRES, que son el criterio de pertenencia al emitir el
-                 * artefacto.  Deducirlo del texto seria adivinar: una busqueda
-                 * de subcadena acierta por accidente (un nombre mencionado en
-                 * un comentario, o uno que es prefijo de otro). */
-                for (const auto *lista :
-                     {&cu.comptime_fns, &cu.macros, &cu.helper_deps})
-                    res.comptime_unit_names.insert(
-                        res.comptime_unit_names.end(), lista->begin(),
-                        lista->end());
-                /* Y lo que se vio y no se llevo, tambien cuando SI hay
-                 * conjunto: que el modulo tenga comptime de nivel superior no
-                 * quita que ademas tenga metodos comptime fuera del reparto. */
-                res.comptime_unit_not_collected.insert(
-                    res.comptime_unit_not_collected.end(),
-                    cu.not_collected.begin(), cu.not_collected.end());
-                /* Clave combinada: mezclar los hashes por modulo, no rehashear
-                 * el texto -- asi el orden de los modulos no cambia la clave
-                 * mientras el conjunto sea el mismo. */
-                res.comptime_unit_hash ^= cu.content_hash +
-                                          0x9e3779b97f4a7c15ULL +
-                                          (res.comptime_unit_hash << 6) +
-                                          (res.comptime_unit_hash >> 2);
                 if (util::flag_on(util::FlagId::DumpComptimeUnit)) {
                     std::cerr << "[comptime-unit] modulo " << pm.module_name
                               << "\n";
@@ -2454,8 +2420,8 @@ CompileResult compile_vx_project(
                  * IGUAL desde fuera, y son opuestos: aqui el artefacto se
                  * quedaria sin algo que hace falta.  No saber es un resultado y
                  * se dice por que. */
-                res.comptime_unit_not_collected.insert(
-                    res.comptime_unit_not_collected.end(),
+                pm.comptime_unit_not_collected.insert(
+                    pm.comptime_unit_not_collected.end(),
                     cu.not_collected.begin(), cu.not_collected.end());
                 if (util::flag_on(util::FlagId::DumpComptimeUnit)) {
                     std::cerr << "[comptime-unit] modulo " << pm.module_name
@@ -2626,12 +2592,17 @@ CompileResult compile_vx_project(
                     // escribio el import merece enterarse aqui.
                     SourceLoc iloc;
                     iloc.file = pm.canonical_path;
-                    res.diagnostics.error(
+                    /* Al saco del MODULO, que es el que el bucle de mas abajo
+                     * vuelca en el del proyecto.  Escribir directamente en el
+                     * global desde aqui es lo mismo que hacia el conjunto
+                     * comptime: esta lambda corre en varios hilos y el saco es
+                     * uno solo. */
+                    pm.diags.error(
                         std::move(iloc),
                         "no se encuentra el modulo '" + req.module_name +
                             "' que pide un import; sus simbolos no se han "
                             "importado");
-                    res.ok = false;
+                    pm.ok = false;
                     continue;
                 }
                 dep_idx = itd->second;
@@ -3247,6 +3218,33 @@ CompileResult compile_vx_project(
         for (const auto &d : pm.diags.all()) {
             res.diagnostics.emit(d);
         }
+        /* El conjunto comptime del proyecto se suma AQUi, por el mismo motivo
+         * que los diagnosticos: dentro del bucle, hasta ocho hilos escribian
+         * sobre la misma `std::string` y el mismo `std::vector` sin candado, y
+         * eso destroza el bufer -- el compilador moria con 0xC0000374 sin
+         * imprimir nada y con victima distinta cada vuelta.  Sumar despues, en
+         * orden de indice, ademas quita el otro sintoma: la concatenacion ya
+         * no depende de que hilo llegue antes, asi que dos compilaciones del
+         * mismo fuente dan el mismo texto y la misma clave. */
+        /* "Aporto algo" se mide por el TEXTO o por los NOMBRES, no solo por el
+         * texto: un modulo cuyo conjunto son unicamente constantes comptime
+         * trae nombres con el texto vacio, y mirando solo el texto se perdian
+         * -- y con ellos el criterio de pertenencia al emitir el artefacto. */
+        if (!pm.comptime_unit_source.empty() ||
+            !pm.comptime_unit_names.empty()) {
+            res.comptime_unit_source += pm.comptime_unit_source;
+            res.comptime_unit_names.insert(res.comptime_unit_names.end(),
+                                           pm.comptime_unit_names.begin(),
+                                           pm.comptime_unit_names.end());
+            res.comptime_unit_hash ^= pm.comptime_unit_hash +
+                                      0x9e3779b97f4a7c15ULL +
+                                      (res.comptime_unit_hash << 6) +
+                                      (res.comptime_unit_hash >> 2);
+        }
+        res.comptime_unit_not_collected.insert(
+            res.comptime_unit_not_collected.end(),
+            pm.comptime_unit_not_collected.begin(),
+            pm.comptime_unit_not_collected.end());
         if (!pm.ok) any_pm_failed = true;
     }
     if (any_pm_failed) {

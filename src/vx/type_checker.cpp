@@ -31,6 +31,7 @@
  */
 
 #include "util/env_flags.h"
+#include "util/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
@@ -106,15 +107,45 @@ thread_local TypeChecker *g_active_typechecker = nullptr;
  * via macros recursivos y obtener un string concreto sin
  * preocuparse de comptime_eval_expr.
  *
- * @c msg buffer compartido estatico para mantener el c_str() valido
- * mientras el caller lo necesite.  Limpio al destruir el
- * TypeChecker (cleanup via clear).
+ * El buffer sobrevive al retorno para que el @c c_str() siga valido mientras el
+ * caller lo necesite, y es POR HILO: los modulos se compilan en paralelo y cada
+ * uno ejecuta su propio comptime, asi que uno solo compartido significaba dos
+ * hilos asignando la misma @c std::string -- la misma carrera que mataba al
+ * compilador con 0xC0000374 desde el conjunto comptime.
+ *
+ * Por ranura propia (@c util::ThreadSlot), no por @c thread_local: en MinGW
+ * cada acceso a una variable de hilo es una llamada a `__emutls_get_address`
+ * (12x mas lento que leer el TEB) y su variable de guarda ya provoco cuelgues
+ * en este proyecto.  Mismo patron que `scratch_arena`: un array fijo, un
+ * contador atomico que reparte uno por hilo, y la ranura guardando el puntero.
  */
-static std::string g_comptime_compile_buf;
+constexpr uint32_t kMaxComptimeBufs = 64;
+static std::string g_comptime_compile_bufs[kMaxComptimeBufs];
+static std::atomic<uint32_t> g_next_comptime_buf{0};
+static util::ThreadSlot g_comptime_buf_slot;
+
+/// El buffer de ESTE hilo, reservandolo la primera vez.
+static std::string &comptime_compile_buf() noexcept {
+    g_comptime_buf_slot.ensure();
+    if (void *p = g_comptime_buf_slot.get())
+        return *static_cast<std::string *>(p);
+    const uint32_t id =
+        g_next_comptime_buf.fetch_add(1, std::memory_order_acq_rel);
+    /* Mas hilos de los previstos: se reparten en circulo sobre el array.  Dos
+     * hilos compartiendo buffer vuelve a ser una carrera, pero para llegar aqui
+     * hacen falta mas de 64 hilos compilando comptime a la vez -- el reparto de
+     * modulos tiene tope de ocho -- y la alternativa (reservar uno suelto por
+     * hilo) es memoria que no se devuelve nunca. */
+    std::string &b = g_comptime_compile_bufs[id % kMaxComptimeBufs];
+    g_comptime_buf_slot.set(&b);
+    return b;
+}
+
 extern "C" const char *vx_comptime_compile(const char *src) {
     if (!src) return "";
-    g_comptime_compile_buf = src;
-    return g_comptime_compile_buf.c_str();
+    std::string &buf = comptime_compile_buf();
+    buf = src;
+    return buf.c_str();
 }
 
 /**
