@@ -1631,7 +1631,19 @@ CompileResult compile_vx_project(
                     if (util::read_whole_file(pref + ".velb",
                                               artefacto_comptime) &&
                         !artefacto_comptime.empty())
+                    {
                         opts_modulos.comptime_artifact = &artefacto_comptime;
+                        /* Cuantos modulos entraron y cuanto ocupa lo producido.
+                         * Es la medida que dice si el conjunto llego COMPLETO:
+                         * compila limpio y aun asi puede registrar menos macros
+                         * de los que el programa necesita, y entonces lo que
+                         * dependa de ellos sale con valores de relleno. */
+                        if (util::flag_on(util::FlagId::McVerbose))
+                            std::fprintf(stderr,
+                                         "[conjunto] %zu modulos -> %zu B%c",
+                                         work.size(),
+                                         artefacto_comptime.size(), 10);
+                    }
                 }
             }
         }
