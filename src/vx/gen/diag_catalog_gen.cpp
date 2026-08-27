@@ -124,8 +124,9 @@ const CatEntry kEntries[] = {
     {"VXA050", {"the comptime machine did not accept the bytecode of '{0}'", "la maquina de compilacion no acepto el bytecode de '{0}'"}},
     {"VXA051", {"the comptime set of '{0}' could not be assembled, so its compile-time code has no bytecode to run: what depends on it is compiled with placeholder values", "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de compilacion no tiene bytecode que ejecutar: lo que dependa de el se compila con valores de relleno"}},
     {"VXA052", {"the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY", "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"}},
+    {"VXA053", {"assembling '{0}' into a .velb failed (code {1}): no artifact was produced", "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefacto"}},
 };
-const int kEntryCount = 104;
+const int kEntryCount = 105;
 
 } // namespace
 

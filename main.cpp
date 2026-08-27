@@ -5181,6 +5181,21 @@ int main(int argc, char *argv[]) {
             }
         }
 
+        /* Si el ensamblado fallo, DECIRLO.  Se comprobaba `rc` solo para los
+         * caminos de exito y se devolvia tal cual: la orden terminaba sin
+         * binario y sin una palabra, y desde fuera no habia forma de distinguir
+         * eso de un exito.  Es el mismo silencio que el bloque de ensamblador
+         * sin cuerpo, y sale igual de caro: un caso de la suite que falla
+         * ("no produjo .velb") sin nada que explique por que. */
+        if (rc != EXIT_SUCCESS) {
+            vx::Diagnostic d;
+            d.level = vx::DiagLevel::ERR;
+            d.code = "VXA053";
+            d.args.push_back(vx_path);
+            d.args.push_back(std::to_string(rc));
+            d.loc.file = vx_path;
+            vx::print_diagnostic(std::cerr, d);
+        }
         return rc;
     }
 
