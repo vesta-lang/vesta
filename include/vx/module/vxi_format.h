@@ -62,7 +62,7 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// el mapa: el grafo ya esta en su almacen y es el mismo, porque la clave es el
 /// contenido.  Y va en la cabecera, que ya se lee entera, para no anadir ni una
 /// apertura por modulo -- con seis mil modulos eso serian seis mil.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 17; // tipo base del enum
+inline constexpr uint16_t VXI_FORMAT_VERSION = 18; // v18: conjunto comptime
 
 /// Nombre del SO del HOST de compilacion, en el mismo vocabulario que usan los
 /// atomos `os:` de @Target.  Es el valor por defecto del objetivo cuando no hay
@@ -384,6 +384,33 @@ struct VxiModule {
             ns_path; ///< NS.2 (v9): namespace declarado (vacio = ninguno)
     };
     std::vector<GenericTemplateSource> generic_templates;
+
+    /**
+     * @brief v18: el conjunto comptime de este modulo, tal como se extrajo.
+     *
+     * Es el texto de las decls que se EJECUTAN al compilar (las `comptime fn`,
+     * los `@Macro`, sus constantes y las funciones normales de las que
+     * dependen), listo para compilarse aparte.
+     *
+     * Viaja en el `.vxi` porque extraerlo necesita el AST, y un modulo servido
+     * del cache no se parsea: sin esto, el conjunto de un proyecto salia con un
+     * modulo de siete -- el unico que se recompilo -- y no habia forma de saber
+     * que faltaban los demas.  Guardarlo aqui lo hace disponible SIN parsear
+     * nada, que es la unica forma de que no cueste tiempo de compilacion.
+     *
+     * Mismo criterio que @c generic_templates, que ya lleva texto fuente por
+     * la misma razon.
+     */
+    std::string comptime_unit_source;
+    /// @brief v18: huella del conjunto.  Cambia si y solo si cambia codigo
+    /// comptime, asi que sirve de clave de cache de su artefacto.
+    uint64_t comptime_unit_hash = 0;
+    /// @brief v18: los NOMBRES que forman el conjunto.  Son el criterio de
+    /// pertenencia al emitirlo; deducirlos del texto seria adivinar.
+    std::vector<std::string> comptime_unit_names;
+    /// @brief v18: lo que se vio y NO se llevo, para poder decirlo.  Sin esto,
+    /// un modulo cacheado callaria lo que dejo fuera.
+    std::vector<std::string> comptime_unit_not_collected;
     /// NS.6-ext (v11): metodos de @c extension / @c impl que este modulo
     /// anyade a un tipo (posiblemente IMPORTADO de otro modulo).  El
     /// consumidor los re-apendea al layout del tipo destino para que

@@ -535,6 +535,13 @@ struct ProjectModuleWork {
     std::string canonical_path;
     std::string module_name;
     std::string source;
+    /// v18: el conjunto comptime de este modulo, tal como se extrajo de su AST.
+    /// Se recolecta al compilarlo y se guarda en su `.vxi`, porque la proxima
+    /// compilacion puede servirlo del cache y entonces no habra AST.
+    std::string comptime_unit_source;
+    uint64_t comptime_unit_hash = 0;
+    std::vector<std::string> comptime_unit_names;
+    std::vector<std::string> comptime_unit_not_collected;
     std::unique_ptr<ast::ModuleNode> ast;
     std::unique_ptr<TypeChecker> tc;
     ir::IrModule ir;
@@ -1897,6 +1904,28 @@ CompileResult compile_vx_project(
                     ir::IrModule dep_mod;
                     if (pr.ok && ir::parse_ir_module_cache(ib, dep_mod)) {
                         pm.vxi = std::move(pr.module_);
+                        /* v18: el conjunto comptime tambien por AQUi.  Hay dos
+                         * caminos de cache-hit -- el del almacen global y el de
+                         * los ficheros junto al fuente -- y los dos tienen que
+                         * recuperarlo, o el conjunto sale distinto segun por
+                         * cual se entre. */
+                        if (!pm.vxi.comptime_unit_source.empty()) {
+                            res.comptime_unit_source +=
+                                pm.vxi.comptime_unit_source;
+                            res.comptime_unit_names.insert(
+                                res.comptime_unit_names.end(),
+                                pm.vxi.comptime_unit_names.begin(),
+                                pm.vxi.comptime_unit_names.end());
+                            res.comptime_unit_hash ^=
+                                pm.vxi.comptime_unit_hash +
+                                0x9e3779b97f4a7c15ULL +
+                                (res.comptime_unit_hash << 6) +
+                                (res.comptime_unit_hash >> 2);
+                        }
+                        res.comptime_unit_not_collected.insert(
+                            res.comptime_unit_not_collected.end(),
+                            pm.vxi.comptime_unit_not_collected.begin(),
+                            pm.vxi.comptime_unit_not_collected.end());
                         // abi_hash: leerlo del header del .vxi (offset 8).
                         if (vb.size() >= 16) {
                             uint64_t hh = 0;
@@ -2054,6 +2083,29 @@ CompileResult compile_vx_project(
                             if (par_coherente &&
                                 ir::parse_ir_module_cache(ibytes, dep_mod)) {
                                 pm.vxi = std::move(pr.module_);
+                                /* v18: el conjunto comptime, del `.vxi`.  Un
+                                 * modulo servido del cache NO se parsea, asi
+                                 * que aqui no hay AST del que extraerlo: sin
+                                 * esto el conjunto del proyecto salia con un
+                                 * modulo de siete -- el unico recompilado -- y
+                                 * nada lo decia. */
+                                if (!pm.vxi.comptime_unit_source.empty()) {
+                                    res.comptime_unit_source +=
+                                        pm.vxi.comptime_unit_source;
+                                    res.comptime_unit_names.insert(
+                                        res.comptime_unit_names.end(),
+                                        pm.vxi.comptime_unit_names.begin(),
+                                        pm.vxi.comptime_unit_names.end());
+                                    res.comptime_unit_hash ^=
+                                        pm.vxi.comptime_unit_hash +
+                                        0x9e3779b97f4a7c15ULL +
+                                        (res.comptime_unit_hash << 6) +
+                                        (res.comptime_unit_hash >> 2);
+                                }
+                                res.comptime_unit_not_collected.insert(
+                                    res.comptime_unit_not_collected.end(),
+                                    pm.vxi.comptime_unit_not_collected.begin(),
+                                    pm.vxi.comptime_unit_not_collected.end());
                                 pm.ir.functions = std::move(dep_mod.functions);
                                 pm.ir.static_data =
                                     std::move(dep_mod.static_data);
@@ -2153,6 +2205,26 @@ CompileResult compile_vx_project(
                     break; // el del modulo; los anidados van dentro del texto.
                 }
                 res.comptime_unit_source += cu.unit_source;
+                /* Y en el modulo, para que viaje a su `.vxi`.  Con el
+                 * `namespace` delante, igual que en el acumulado: el texto
+                 * tiene que sostenerse solo venga de donde venga. */
+                for (const auto &fns : inline_namespaces) {
+                    if (fns.name.empty()) continue;
+                    pm.comptime_unit_source += "namespace ";
+                    pm.comptime_unit_source += fns.name;
+                    pm.comptime_unit_source += ";";
+                    pm.comptime_unit_source.push_back(static_cast<char>(10));
+                    break;
+                }
+                pm.comptime_unit_source += cu.unit_source;
+                pm.comptime_unit_hash = cu.content_hash;
+                for (const auto *lista :
+                     {&cu.comptime_fns, &cu.macros, &cu.helper_deps})
+                    pm.comptime_unit_names.insert(pm.comptime_unit_names.end(),
+                                                  lista->begin(), lista->end());
+                pm.comptime_unit_not_collected.insert(
+                    pm.comptime_unit_not_collected.end(),
+                    cu.not_collected.begin(), cu.not_collected.end());
                 /* Los NOMBRES, que son el criterio de pertenencia al emitir el
                  * artefacto.  Deducirlo del texto seria adivinar: una busqueda
                  * de subcadena acierta por accidente (un nombre mencionado en
@@ -2771,6 +2843,14 @@ CompileResult compile_vx_project(
             is_root ? std::string() // root: sin prefix (no se exporta)
                     : (pm.module_name + "__");
         export_typechecker_to_vxi(*pm.tc, source_hash, pm.vxi, strip_prefix);
+        /* v18: y el conjunto comptime de ESTE modulo, para que el `.vxi` lo
+         * lleve.  Extraerlo necesita el AST, y la proxima compilacion que sirva
+         * este modulo del cache no lo va a parsear: si no viaja aqui, se
+         * pierde. */
+        pm.vxi.comptime_unit_source = pm.comptime_unit_source;
+        pm.vxi.comptime_unit_hash = pm.comptime_unit_hash;
+        pm.vxi.comptime_unit_names = pm.comptime_unit_names;
+        pm.vxi.comptime_unit_not_collected = pm.comptime_unit_not_collected;
 
         //  NS.3: estampar el PackageId en el .vxi del modulo.  Por defecto
         // el del proyecto (vx.toml); si el modulo declaro `namespace X
@@ -4068,7 +4148,13 @@ CompileResult compile_vx_project(
         const std::string &d = util::flag_text(util::FlagId::VolcarUnidad);
         std::error_code tec;
         std::filesystem::create_directories(d, tec);
-        std::ofstream f(d + "/_conjunto.vx");
+        /* Con el numero de modulos en el nombre.  Una misma orden compila
+         * VARIAS veces -- se han visto tres, de 2, 11 y 2 modulos -- y con un
+         * nombre fijo la ultima pisaba a las demas: el fichero parecia decir
+         * que el conjunto traia un modulo de siete cuando lo que pasaba es que
+         * se estaba mirando otra compilacion. */
+        std::ofstream f(d + "/_conjunto_" + std::to_string(work.size()) +
+                        "mods.vx");
         if (f) f << res.comptime_unit_source;
     }
     for (const auto &pm : work) {

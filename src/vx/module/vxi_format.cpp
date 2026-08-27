@@ -643,7 +643,7 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // blob_pool_size u32 + blob_pool_alignment u8 + 7 pad en offsets 48..63).
     // v6: crece a 80 (gen_templates_offset u32 + gen_templates_count u32 +
     // 8 pad en offsets 64..79).
-    const size_t HEADER_BYTES = 104; // v17: +vxdbg_map (88, 96)
+    const size_t HEADER_BYTES = 136; // v18: +conjunto comptime (104..132)
     const size_t GEN_ENTRY_BYTES =
         28; // name_off+name_len+kind+src_off+src_len+ns_off+ns_len (v9)
     const size_t SYMENTRY_BYTES = 20; // 1 + 1 + 2 + 4 + 4 + 4 + 4
@@ -680,6 +680,23 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         go.ns_len = static_cast<uint32_t>(g.ns_path.size());
         gen_offs.push_back(go);
     }
+    /* v18: internar el conjunto comptime -- su texto y los nombres que lo
+     * forman.  Va en el `.vxi` porque extraerlo necesita el AST y un modulo
+     * servido del cache no se parsea; guardarlo aqui lo deja disponible sin
+     * volver a parsear nada. */
+    const uint32_t ct_src_off = pool.intern(mod.comptime_unit_source);
+    const uint32_t ct_src_len =
+        static_cast<uint32_t>(mod.comptime_unit_source.size());
+    std::vector<std::pair<uint32_t, uint32_t>> ct_name_offs;
+    ct_name_offs.reserve(mod.comptime_unit_names.size());
+    for (const auto &n : mod.comptime_unit_names)
+        ct_name_offs.emplace_back(pool.intern(n),
+                                  static_cast<uint32_t>(n.size()));
+    std::vector<std::pair<uint32_t, uint32_t>> ct_notcol_offs;
+    ct_notcol_offs.reserve(mod.comptime_unit_not_collected.size());
+    for (const auto &n : mod.comptime_unit_not_collected)
+        ct_notcol_offs.emplace_back(pool.intern(n),
+                                    static_cast<uint32_t>(n.size()));
     // v13: internar el OBJETIVO con el que se genera este .vxi, pero SOLO si el
     // modulo usa @Target.  Vacio -> offset 0 -> artefacto valido para cualquier
     // objetivo, que es el caso de casi todos los modulos.
@@ -797,6 +814,19 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         }
     }
 
+    /* v18: las dos tablas del conjunto comptime (nombres y no-recogidos).
+     * Ocho bytes por entrada: offset en el pool + longitud. */
+    const uint32_t ct_names_start = static_cast<uint32_t>(out.size());
+    for (const auto &p : ct_name_offs) {
+        write_u32(out, p.first);
+        write_u32(out, p.second);
+    }
+    const uint32_t ct_notcol_start = static_cast<uint32_t>(out.size());
+    for (const auto &p : ct_notcol_offs) {
+        write_u32(out, p.first);
+        write_u32(out, p.second);
+    }
+
     // String pool al final.
     const uint32_t pool_start = static_cast<uint32_t>(out.size());
     out.insert(out.end(), pool.bytes().begin(), pool.bytes().end());
@@ -906,6 +936,16 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
     // aporta ninguno, que es lo que era cierto antes de que esto existiera.
     patch_u64(88, mod.vxdbg_map_lo);
     patch_u64(96, mod.vxdbg_map_hi);
+    /* v18 (104..132): el conjunto comptime.  Texto (offset RELATIVO al pool +
+     * longitud), su huella, y las dos tablas de nombres (offset ABSOLUTO en el
+     * fichero + numero de entradas), en la misma convencion que el resto. */
+    patch_u32(104, ct_src_off);
+    patch_u32(108, ct_src_len);
+    patch_u64(112, mod.comptime_unit_hash);
+    patch_u32(120, static_cast<uint32_t>(ct_name_offs.size()));
+    patch_u32(124, ct_names_start);
+    patch_u32(128, static_cast<uint32_t>(ct_notcol_offs.size()));
+    patch_u32(132, ct_notcol_start);
 
     // Adjustar payload_off de cada entry: hasta ahora son relativos al
     // BLOQUE de payloads (empieza en 0).  Sumar payloads_start para que
@@ -1408,6 +1448,18 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     uint64_t vxdbg_hi_hdr = 0;
     read_u64(data, size, off, vxdbg_lo_hdr);
     read_u64(data, size, off, vxdbg_hi_hdr);
+    // v18 (104..132): el conjunto comptime de este modulo.
+    uint32_t ct_src_off_hdr = 0, ct_src_len_hdr = 0;
+    uint64_t ct_hash_hdr = 0;
+    uint32_t ct_names_count_hdr = 0, ct_names_off_hdr = 0;
+    uint32_t ct_notcol_count_hdr = 0, ct_notcol_off_hdr = 0;
+    read_u32(data, size, off, ct_src_off_hdr);
+    read_u32(data, size, off, ct_src_len_hdr);
+    read_u64(data, size, off, ct_hash_hdr);
+    read_u32(data, size, off, ct_names_count_hdr);
+    read_u32(data, size, off, ct_names_off_hdr);
+    read_u32(data, size, off, ct_notcol_count_hdr);
+    read_u32(data, size, off, ct_notcol_off_hdr);
 
     if (magic != VXI_MAGIC) {
         r.error_message = "magic invalido en .vxi";
@@ -1449,9 +1501,12 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     r.module_.vxdbg_map_hi = vxdbg_hi_hdr;
     r.module_.symbols.reserve(symbol_count);
 
-    // Symbol entries empiezan tras el header v17 (104 bytes).
+    // Symbol entries empiezan tras el header v18 (136 bytes).  Este numero y
     constexpr size_t SYMENTRY_BYTES = 20;
-    constexpr size_t HEADER_BYTES = 104;
+    // el del escritor van SIEMPRE juntos: si uno crece y el otro no, las
+    // entradas se leen desplazadas y el sintoma no dice nada de la causa
+    // ("kind de simbolo desconocido").
+    constexpr size_t HEADER_BYTES = 136;
     constexpr size_t DEP_ENTRY_BYTES = 16;
     constexpr size_t GEN_ENTRY_BYTES = 28; // v9: +ns_off+ns_len
     // v4: blob_pool extraido a un std::vector para conservar la API
@@ -1586,6 +1641,44 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     }
 
     // v6: parsear la tabla de plantillas genericas.
+    /* v18: el conjunto comptime.  Un tope por cordura, igual que las
+     * plantillas: un contador absurdo es un fichero corrupto, no un modulo con
+     * cien mil decls comptime. */
+    if (ct_names_count_hdr > 100000 || ct_notcol_count_hdr > 100000) {
+        r.error_message = "conjunto comptime con demasiadas entradas";
+        return r;
+    }
+    r.module_.comptime_unit_hash = ct_hash_hdr;
+    if (ct_src_len_hdr != 0 &&
+        !read_name(data, size, ct_src_off_hdr, ct_src_len_hdr, pool_start,
+                   r.module_.comptime_unit_source)) {
+        r.error_message = "fuente del conjunto comptime fuera de bounds";
+        return r;
+    }
+    for (int cual = 0; cual < 2; ++cual) {
+        const uint32_t n = cual == 0 ? ct_names_count_hdr : ct_notcol_count_hdr;
+        const uint32_t base = cual == 0 ? ct_names_off_hdr : ct_notcol_off_hdr;
+        auto &destino = cual == 0 ? r.module_.comptime_unit_names
+                                  : r.module_.comptime_unit_not_collected;
+        destino.reserve(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            size_t e = base + i * 8u;
+            uint32_t n_off = 0, n_len = 0;
+            if (!read_u32(data, size, e, n_off) ||
+                !read_u32(data, size, e, n_len)) {
+                r.error_message = "entrada del conjunto comptime truncada";
+                return r;
+            }
+            std::string nombre;
+            if (!read_name(data, size, n_off, n_len, pool_start, nombre)) {
+                r.error_message = "nombre del conjunto comptime fuera de "
+                                  "bounds";
+                return r;
+            }
+            destino.push_back(std::move(nombre));
+        }
+    }
+
     if (gen_count_hdr > 100000) {
         r.error_message = "gen_templates_count excesivo (posible corrupcion)";
         return r;
