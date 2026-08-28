@@ -387,14 +387,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                     emit(current_block_, std::move(s));
                     ir::IrValueId v_zero =
                         emit_const(ir::IrType::I64, 0, ex->loc.line);
-                    ir::IrValueId v_pos = fn_->new_value(ir::IrType::BOOL);
-                    ir::IrInstr cgt{};
-                    cgt.op = ir::IrOp::CMP_GT;
-                    cgt.type = ir::IrType::BOOL;
-                    cgt.dst = v_pos;
-                    cgt.operands = {v_sub, v_zero};
-                    cgt.source_line = ex->loc.line;
-                    emit(current_block_, std::move(cgt));
+                    ir::IrValueId v_pos =
+                        emit_ir_binop(ir::IrOp::CMP_GT, v_sub, v_zero, ir::IrType::BOOL, ex->loc.line);
                     ir::IrValueId v_mask = cast_if_needed(
                         v_pos, ir::IrType::BOOL, ir::IrType::I64, ex->loc.line,
                         /*is_explicit=*/true);
@@ -554,24 +548,12 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 ext.operands = {v_arg};
                 ext.source_line = ex->loc.line;
                 emit(current_block_, std::move(ext));
-                ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I64;
-                bc.dst = bits;
-                bc.operands = {f64v};
-                bc.source_line = ex->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId bits =
+                    emit_ir_unop(ir::IrOp::BITCAST, f64v, ir::IrType::I64, ex->loc.line);
                 v_arg = bits;
             } else if (t.kind == PrimitiveKind::F64 && vt != ir::IrType::I64) {
-                ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I64;
-                bc.dst = bits;
-                bc.operands = {v_arg};
-                bc.source_line = ex->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId bits =
+                    emit_ir_unop(ir::IrOp::BITCAST, v_arg, ir::IrType::I64, ex->loc.line);
                 v_arg = bits;
             } else if (t.kind == PrimitiveKind::CLASS) {
                 // CLASS -> GcHandle via instruccion `gchandle`.
@@ -643,14 +625,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 // mul v_sub * bool.
                 ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, ex->loc.line);
-                ir::IrValueId v_pos = fn_->new_value(ir::IrType::BOOL);
-                ir::IrInstr cgt{};
-                cgt.op = ir::IrOp::CMP_GT;
-                cgt.type = ir::IrType::BOOL;
-                cgt.dst = v_pos;
-                cgt.operands = {v_sub, v_zero};
-                cgt.source_line = ex->loc.line;
-                emit(current_block_, std::move(cgt));
+                ir::IrValueId v_pos =
+                    emit_ir_binop(ir::IrOp::CMP_GT, v_sub, v_zero, ir::IrType::BOOL, ex->loc.line);
                 ir::IrValueId v_mask =
                     cast_if_needed(v_pos, ir::IrType::BOOL, ir::IrType::I64,
                                    ex->loc.line, /*is_explicit=*/true);
@@ -744,25 +720,13 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             ext.operands = {v};
             ext.source_line = ex->loc.line;
             emit(current_block_, std::move(ext));
-            ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = ir::IrType::I64;
-            bc.dst = bits;
-            bc.operands = {f64v};
-            bc.source_line = ex->loc.line;
-            emit(current_block_, std::move(bc));
+            ir::IrValueId bits =
+                emit_ir_unop(ir::IrOp::BITCAST, f64v, ir::IrType::I64, ex->loc.line);
             v = bits;
         } else if (t.kind == PrimitiveKind::F64) {
             if (vt != ir::IrType::I64) {
-                ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I64;
-                bc.dst = bits;
-                bc.operands = {v};
-                bc.source_line = ex->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId bits =
+                    emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::I64, ex->loc.line);
                 v = bits;
             }
         } else if (t.kind == PrimitiveKind::CLASS) {

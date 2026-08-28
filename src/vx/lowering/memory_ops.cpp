@@ -1054,16 +1054,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         current_block_ = hdr;
         ir::IrValueId v_i =
             emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
-        ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
-        {
-            ir::IrInstr cmp{};
-            cmp.op = ir::IrOp::CMP_LT;
-            cmp.type = ir::IrType::BOOL;
-            cmp.dst = v_cond;
-            cmp.operands = {v_i, v_len};
-            cmp.source_line = source_line;
-            emit(current_block_, std::move(cmp));
-        }
+        ir::IrValueId v_cond =
+            emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_len, ir::IrType::BOOL, source_line);
         {
             ir::IrInstr brc{};
             brc.op = ir::IrOp::BR_COND;
@@ -1314,6 +1306,33 @@ void Lowering::emit_store_typed(ir::IrValueId addr, ir::IrValueId val,
 void Lowering::emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
                               uint32_t source_line) {
     emit_store_typed(addr, val, ir::IrType::I64, source_line);
+}
+
+/**
+ * @brief Emite una operacion de UN operando y devuelve su resultado.
+ *
+ * El caso mas comun es reinterpretar los bits: leer los mismos ocho bytes como
+ * entero o como numero con decimales.  Ahi el tipo del resultado no es un
+ * detalle sino LA operacion -- no se convierte nada, se cambia con que ojos se
+ * mira --, y por eso se pasa explicito en vez de deducirlo del operando.
+ *
+ * @param op          Que operacion.
+ * @param a           El operando.
+ * @param t           Tipo del resultado.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA con el resultado.
+ */
+ir::IrValueId Lowering::emit_ir_unop(ir::IrOp op, ir::IrValueId a, ir::IrType t,
+                                     uint32_t source_line) {
+    const ir::IrValueId d = fn_->new_value(t);
+    ir::IrInstr in{};
+    in.op = op;
+    in.type = t;
+    in.dst = d;
+    in.operands = {a};
+    in.source_line = source_line;
+    emit(current_block_, std::move(in));
+    return d;
 }
 
 /**

@@ -293,14 +293,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         // ello emitimos un BITCAST de PTR a PTR (no-op a nivel
         // bytecode: se baja a `mov rd, rs` y la siguiente fase de
         // copy-prop suele eliminarlo).
-        const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::BITCAST;
-        ins.type = ir::IrType::PTR;
-        ins.dst = dst;
-        ins.operands = {v_op};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst =
+            emit_ir_unop(ir::IrOp::BITCAST, v_op, ir::IrType::PTR, e->loc.line);
         // Propagar flags segun el tipo destino.
         fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
         // pointee_is_host_ptr: si el destino apunta a otro puntero
@@ -320,14 +314,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             (ir_dst == ir::IrType::VOID)
                 ? (dst_ptr ? ir::IrType::PTR : ir::IrType::I64)
                 : ir_dst;
-        const ir::IrValueId dst = fn_->new_value(ir_use);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::BITCAST;
-        ins.type = ir_use;
-        ins.dst = dst;
-        ins.operands = {v_op};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst =
+            emit_ir_unop(ir::IrOp::BITCAST, v_op, ir_use, e->loc.line);
         if (dst_ptr) {
             fn_->values[dst].is_host_ptr = !dst_type.is_virtual;
         } else if (dst_type.kind == PrimitiveKind::FUNCTION && src_ptr) {
@@ -403,14 +391,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         // `a != b` sin __ne__ propio: niega el BOOL de __eq__ con
         // `cmp.eq result, 0` (= NOT logico).
         const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, e->loc.line);
-        const ir::IrValueId v_neg = fn_->new_value(ir::IrType::BOOL);
-        ir::IrInstr cmp{};
-        cmp.op = ir::IrOp::CMP_EQ;
-        cmp.type = ir::IrType::BOOL;
-        cmp.dst = v_neg;
-        cmp.operands = {v_call, zero};
-        cmp.source_line = e->loc.line;
-        emit(current_block_, std::move(cmp));
+        const ir::IrValueId v_neg =
+            emit_ir_binop(ir::IrOp::CMP_EQ, v_call, zero, ir::IrType::BOOL, e->loc.line);
         return v_neg;
     }
 
@@ -514,16 +496,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                     emit(current_block_, std::move(ld));
                 }
                 // cmp_eq a, b -> v_field_eq
-                ir::IrValueId v_field_eq = fn_->new_value(ir::IrType::BOOL);
-                {
-                    ir::IrInstr cmp{};
-                    cmp.op = ir::IrOp::CMP_EQ;
-                    cmp.type = ir::IrType::BOOL;
-                    cmp.dst = v_field_eq;
-                    cmp.operands = {v_a, v_b};
-                    cmp.source_line = e->loc.line;
-                    emit(current_block_, std::move(cmp));
-                }
+                ir::IrValueId v_field_eq =
+                    emit_ir_binop(ir::IrOp::CMP_EQ, v_a, v_b, ir::IrType::BOOL, e->loc.line);
                 // v_acc = v_acc & v_field_eq
                 ir::IrValueId v_new_acc = fn_->new_value(ir::IrType::I64);
                 {
@@ -1675,14 +1649,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         if (op_type.kind == PrimitiveKind::FUTURE && op_type.pointee) {
             const PrimitiveKind tk = op_type.pointee->kind;
             if (tk == PrimitiveKind::F64) {
-                ir::IrValueId v_dst = fn_->new_value(ir::IrType::F64);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::F64;
-                bc.dst = v_dst;
-                bc.operands = {v_raw};
-                bc.source_line = e->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId v_dst =
+                    emit_ir_unop(ir::IrOp::BITCAST, v_raw, ir::IrType::F64, e->loc.line);
                 return v_dst;
             }
             if (tk == PrimitiveKind::F32) {
@@ -1697,14 +1665,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                     tr.source_line = e->loc.line;
                     emit(current_block_, std::move(tr));
                 }
-                ir::IrValueId v_dst = fn_->new_value(ir::IrType::F32);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::F32;
-                bc.dst = v_dst;
-                bc.operands = {v_i32};
-                bc.source_line = e->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId v_dst =
+                    emit_ir_unop(ir::IrOp::BITCAST, v_i32, ir::IrType::F32, e->loc.line);
                 return v_dst;
             }
             // Tipos enteros mas estrechos (i8..i32, u8..u32, bool, char):

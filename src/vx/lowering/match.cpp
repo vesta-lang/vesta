@@ -448,16 +448,8 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             }
             ir::IrValueId zero =
                 emit_const(ir::IrType::I64, 0, e->arms[idx].loc.line);
-            ir::IrValueId eqb = fn_->new_value(ir::IrType::BOOL);
-            {
-                ir::IrInstr cm{};
-                cm.op = ir::IrOp::CMP_EQ;
-                cm.type = ir::IrType::BOOL;
-                cm.dst = eqb;
-                cm.operands = {scmp, zero};
-                cm.source_line = e->arms[idx].loc.line;
-                emit(current_block_, std::move(cm));
-            }
+            ir::IrValueId eqb =
+                emit_ir_binop(ir::IrOp::CMP_EQ, scmp, zero, ir::IrType::BOOL, e->arms[idx].loc.line);
             ir::IrBlockId vnext = fn_->new_block("strmatch_vnext");
             ir::IrInstr br{};
             br.op = ir::IrOp::BR_COND;
@@ -953,29 +945,15 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 if (arm_var && bi < arm_var->field_types.size()) {
                     const Type &ft = arm_var->field_types[bi];
                     if (ft.kind == PrimitiveKind::F64) {
-                        ir::IrValueId v2 = fn_->new_value(ir::IrType::F64);
-                        ir::IrInstr bc{};
-                        bc.op = ir::IrOp::BITCAST;
-                        bc.type = ir::IrType::F64;
-                        bc.dst = v2;
-                        bc.operands = {v};
-                        bc.source_line = arm.loc.line;
-                        emit(current_block_, std::move(bc));
+                        ir::IrValueId v2 =
+                            emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64, arm.loc.line);
                         v = v2;
                     } else if (ft.kind == PrimitiveKind::F32) {
                         // Recuperar f32: el slot guardo BITCAST(F32TOF64(x))
                         // como i64.  Invertimos: BITCAST i64->f64 +
                         // F64TOF32 narrow para volver al f32 original.
-                        ir::IrValueId vd = fn_->new_value(ir::IrType::F64);
-                        {
-                            ir::IrInstr bc{};
-                            bc.op = ir::IrOp::BITCAST;
-                            bc.type = ir::IrType::F64;
-                            bc.dst = vd;
-                            bc.operands = {v};
-                            bc.source_line = arm.loc.line;
-                            emit(current_block_, std::move(bc));
-                        }
+                        ir::IrValueId vd =
+                            emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64, arm.loc.line);
                         ir::IrValueId v2 = fn_->new_value(ir::IrType::F32);
                         {
                             ir::IrInstr nr{};

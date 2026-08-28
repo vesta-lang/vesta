@@ -663,6 +663,23 @@ class Lowering {
     ir::IrValueId emit_ir_binop(ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
                                 ir::IrType t, uint32_t source_line);
 
+    /**
+     * @brief Emite una operacion de UN operando del IR.
+     *
+     * El caso mas comun es reinterpretar los bits: los mismos ocho bytes
+     * leidos como entero o como numero con decimales.  Ahi el tipo del
+     * resultado ES la operacion -- no se convierte nada, se cambia con que
+     * ojos se mira --, y por eso va explicito.
+     *
+     * @param op          Que operacion.
+     * @param a           El operando.
+     * @param t           Tipo del resultado.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA con el resultado.
+     */
+    ir::IrValueId emit_ir_unop(ir::IrOp op, ir::IrValueId a, ir::IrType t,
+                               uint32_t source_line);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);

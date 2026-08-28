@@ -1425,25 +1425,13 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         } else {
             const ir::IrType pt = fn_->values[v_payload].type;
             if (pt == ir::IrType::F64) {
-                ir::IrValueId v_bits = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I64;
-                bc.dst = v_bits;
-                bc.operands = {v_payload};
-                bc.source_line = s->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId v_bits =
+                    emit_ir_unop(ir::IrOp::BITCAST, v_payload, ir::IrType::I64, s->loc.line);
                 v_payload = v_bits;
             } else if (pt == ir::IrType::F32) {
                 // f32 -> bits i32 -> zero-extend a i64.
-                ir::IrValueId v_i32 = fn_->new_value(ir::IrType::I32);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I32;
-                bc.dst = v_i32;
-                bc.operands = {v_payload};
-                bc.source_line = s->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId v_i32 =
+                    emit_ir_unop(ir::IrOp::BITCAST, v_payload, ir::IrType::I32, s->loc.line);
                 v_payload = cast_if_needed(v_i32, ir::IrType::I32,
                                            ir::IrType::I64, s->loc.line);
             } else if (pt != ir::IrType::I64 && pt != ir::IrType::U64 &&

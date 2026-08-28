@@ -568,16 +568,8 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
     // 3. select sin ramas: big ? sw : value = value ^ ((value ^ sw) &
     // -(big!=0)).
     ir::IrValueId zero = emit_const(ir::IrType::U64, 0, line);
-    ir::IrValueId nz = fn_->new_value(ir::IrType::BOOL);
-    {
-        ir::IrInstr c{};
-        c.op = ir::IrOp::CMP_NE;
-        c.type = ir::IrType::BOOL;
-        c.dst = nz;
-        c.operands = {big, zero};
-        c.source_line = line;
-        emit(current_block_, std::move(c));
-    }
+    ir::IrValueId nz =
+        emit_ir_binop(ir::IrOp::CMP_NE, big, zero, ir::IrType::BOOL, line);
     ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
     {
         ir::IrInstr n{};

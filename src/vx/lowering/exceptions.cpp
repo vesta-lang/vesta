@@ -1285,16 +1285,8 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
 
     // 3. Comparacion tag == 0 (=Err).
     const ir::IrValueId zero_v = emit_const(ir::IrType::I32, 0, src_line);
-    const ir::IrValueId cond_v = fn_->new_value(ir::IrType::BOOL);
-    {
-        ir::IrInstr cm{};
-        cm.op = ir::IrOp::CMP_EQ;
-        cm.type = ir::IrType::BOOL;
-        cm.dst = cond_v;
-        cm.operands = {tag_v, zero_v};
-        cm.source_line = src_line;
-        emit(current_block_, std::move(cm));
-    }
+    const ir::IrValueId cond_v =
+        emit_ir_binop(ir::IrOp::CMP_EQ, tag_v, zero_v, ir::IrType::BOOL, src_line);
 
     // 4. Crear bloques: err_bb (early-return), ok_bb (extract value).
     const ir::IrBlockId err_bb =

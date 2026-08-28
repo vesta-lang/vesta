@@ -931,23 +931,11 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         const ir::IrType pt_ir = fn_->values[v_param].type;
         ir::IrValueId v_qword = v_param;
         if (pt_ir == ir::IrType::F64) {
-            v_qword = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = ir::IrType::I64;
-            bc.dst = v_qword;
-            bc.operands = {v_param};
-            bc.source_line = fd->loc.line;
-            emit(current_block_, std::move(bc));
+            v_qword =
+                emit_ir_unop(ir::IrOp::BITCAST, v_param, ir::IrType::I64, fd->loc.line);
         } else if (pt_ir == ir::IrType::F32) {
-            ir::IrValueId v_i32 = fn_->new_value(ir::IrType::I32);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = ir::IrType::I32;
-            bc.dst = v_i32;
-            bc.operands = {v_param};
-            bc.source_line = fd->loc.line;
-            emit(current_block_, std::move(bc));
+            ir::IrValueId v_i32 =
+                emit_ir_unop(ir::IrOp::BITCAST, v_param, ir::IrType::I32, fd->loc.line);
             v_qword = cast_if_needed(v_i32, ir::IrType::I32, ir::IrType::I64,
                                      fd->loc.line);
         } else if (pt_ir != ir::IrType::I64 && pt_ir != ir::IrType::U64 &&

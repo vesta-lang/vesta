@@ -348,16 +348,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 const ir::IrBlockId bb_do = fn_->new_block("sp_do");
                 const ir::IrBlockId bb_skip = fn_->new_block("sp_skip");
                 const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, ln);
-                const ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
-                {
-                    ir::IrInstr cm{};
-                    cm.op = ir::IrOp::CMP_NE;
-                    cm.type = ir::IrType::BOOL;
-                    cm.dst = v_cond;
-                    cm.operands = {v_ptr, v_z};
-                    cm.source_line = ln;
-                    emit(current_block_, std::move(cm));
-                }
+                const ir::IrValueId v_cond =
+                    emit_ir_binop(ir::IrOp::CMP_NE, v_ptr, v_z, ir::IrType::BOOL, ln);
                 {
                     ir::IrInstr br{};
                     br.op = ir::IrOp::BR_COND;
@@ -419,16 +411,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     const ir::IrBlockId bb_free = fn_->new_block("sp_free");
                     const ir::IrValueId v_z2 =
                         emit_const(ir::IrType::I64, 0, ln);
-                    const ir::IrValueId v_c2 = fn_->new_value(ir::IrType::BOOL);
-                    {
-                        ir::IrInstr cm{};
-                        cm.op = ir::IrOp::CMP_NE;
-                        cm.type = ir::IrType::BOOL;
-                        cm.dst = v_c2;
-                        cm.operands = {v_del, v_z2};
-                        cm.source_line = ln;
-                        emit(current_block_, std::move(cm));
-                    }
+                    const ir::IrValueId v_c2 =
+                        emit_ir_binop(ir::IrOp::CMP_NE, v_del, v_z2, ir::IrType::BOOL, ln);
                     {
                         ir::IrInstr br{};
                         br.op = ir::IrOp::BR_COND;
@@ -1423,14 +1407,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     // if (slot == 0) -> skip  (campo nunca asignado / closure null).
     const ir::IrBlockId slot_ok = fn_->new_block("free_clo_slot_ok");
     {
-        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
-        ir::IrInstr cmp{};
-        cmp.op = ir::IrOp::CMP_EQ;
-        cmp.type = ir::IrType::BOOL;
-        cmp.dst = is_null;
-        cmp.operands = {slot, zero};
-        cmp.source_line = line;
-        emit(current_block_, std::move(cmp));
+        const ir::IrValueId is_null =
+            emit_ir_binop(ir::IrOp::CMP_EQ, slot, zero, ir::IrType::BOOL, line);
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
@@ -1468,14 +1446,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     const ir::IrBlockId free_slot_bb = fn_->new_block("free_clo_slot");
     // if (env == 0) -> free_slot; else RAW_FREE(env) -> free_slot
     {
-        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
-        ir::IrInstr cmp{};
-        cmp.op = ir::IrOp::CMP_EQ;
-        cmp.type = ir::IrType::BOOL;
-        cmp.dst = is_null;
-        cmp.operands = {env, zero};
-        cmp.source_line = line;
-        emit(current_block_, std::move(cmp));
+        const ir::IrValueId is_null =
+            emit_ir_binop(ir::IrOp::CMP_EQ, env, zero, ir::IrType::BOOL, line);
         const ir::IrBlockId free_env_bb = fn_->new_block("free_clo_env");
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
@@ -1522,14 +1494,8 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
     // if (slot == 0) -> skip  (slot nulo / unique movido).
     const ir::IrBlockId slot_ok = fn_->new_block("free_uniq_slot_ok");
     {
-        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
-        ir::IrInstr cmp{};
-        cmp.op = ir::IrOp::CMP_EQ;
-        cmp.type = ir::IrType::BOOL;
-        cmp.dst = is_null;
-        cmp.operands = {slot, zero};
-        cmp.source_line = line;
-        emit(current_block_, std::move(cmp));
+        const ir::IrValueId is_null =
+            emit_ir_binop(ir::IrOp::CMP_EQ, slot, zero, ir::IrType::BOOL, line);
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {is_null};
@@ -1565,14 +1531,8 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
     const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
     const ir::IrBlockId free_bb = fn_->new_block("free_uniq_raw");
     {
-        const ir::IrValueId has_del = fn_->new_value(ir::IrType::BOOL);
-        ir::IrInstr cmp{};
-        cmp.op = ir::IrOp::CMP_NE;
-        cmp.type = ir::IrType::BOOL;
-        cmp.dst = has_del;
-        cmp.operands = {deleter, zero};
-        cmp.source_line = line;
-        emit(current_block_, std::move(cmp));
+        const ir::IrValueId has_del =
+            emit_ir_binop(ir::IrOp::CMP_NE, deleter, zero, ir::IrType::BOOL, line);
         ir::IrInstr br{};
         br.op = ir::IrOp::BR_COND;
         br.operands = {has_del};

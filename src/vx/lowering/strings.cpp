@@ -585,16 +585,8 @@ ir::IrValueId Lowering::emit_native_str_is_owned(ir::IrValueId v_slot,
         emit(current_block_, std::move(sh));
     }
     ir::IrValueId v_dos = emit_const(ir::IrType::I64, 2, source_line);
-    ir::IrValueId v_owned = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr cm{};
-        cm.op = ir::IrOp::CMP_EQ;
-        cm.type = ir::IrType::I64;
-        cm.dst = v_owned;
-        cm.operands = {v_top2, v_dos};
-        cm.source_line = source_line;
-        emit(current_block_, std::move(cm));
-    }
+    ir::IrValueId v_owned =
+        emit_ir_binop(ir::IrOp::CMP_EQ, v_top2, v_dos, ir::IrType::I64, source_line);
     return v_owned;
 }
 
@@ -611,16 +603,8 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
     ir::IrValueId v_ptr0 =
         emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // slot como I64 (la direccion del slot).  BITCAST PTR->I64.
-    ir::IrValueId v_slot_i = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr bc{};
-        bc.op = ir::IrOp::BITCAST;
-        bc.type = ir::IrType::I64;
-        bc.dst = v_slot_i;
-        bc.operands = {v_slot};
-        bc.source_line = source_line;
-        emit(current_block_, std::move(bc));
-    }
+    ir::IrValueId v_slot_i =
+        emit_ir_unop(ir::IrOp::BITCAST, v_slot, ir::IrType::I64, source_line);
     // diff = ptr0 - slot.
     ir::IrValueId v_diff = fn_->new_value(ir::IrType::I64);
     {
@@ -2004,16 +1988,8 @@ std::string Lowering::ensure_btoa_helper() {
 
     // if (b != 0) -> bb_true ; else -> bb_false.
     ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, 0);
-    ir::IrValueId v_cond = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr in{};
-        in.op = ir::IrOp::CMP_NE;
-        in.type = ir::IrType::I64;
-        in.dst = v_cond;
-        in.operands = {p_b, v_zero};
-        in.source_line = 0;
-        emit(current_block_, std::move(in));
-    }
+    ir::IrValueId v_cond =
+        emit_ir_binop(ir::IrOp::CMP_NE, p_b, v_zero, ir::IrType::I64, 0);
     ir::IrBlockId bb_true = fn_->new_block("btoa_true");
     ir::IrBlockId bb_false = fn_->new_block("btoa_false");
     {

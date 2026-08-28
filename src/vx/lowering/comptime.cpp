@@ -280,16 +280,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         emit_load_typed(addr_done, ir::IrType::I64, ln);
     // cond = (done_val == 0)
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, ln);
-    const ir::IrValueId cond = fn_->new_value(ir::IrType::BOOL);
-    {
-        ir::IrInstr c{};
-        c.op = ir::IrOp::CMP_EQ;
-        c.type = ir::IrType::BOOL;
-        c.dst = cond;
-        c.operands = {done_val, zero};
-        c.source_line = ln;
-        emit(current_block_, std::move(c));
-    }
+    const ir::IrValueId cond =
+        emit_ir_binop(ir::IrOp::CMP_EQ, done_val, zero, ir::IrType::BOOL, ln);
     const ir::IrBlockId init_bb = fn_->new_block("static_init");
     const ir::IrBlockId cont_bb = fn_->new_block("static_cont");
     {
@@ -497,14 +489,8 @@ ir::IrValueId Lowering::lower_enum_constructor(
         ir::IrType vt = fn_->values[v].type;
         if (vt == ir::IrType::F64) {
             // bitcast f64 -> i64 (mismo ancho, preserva bits IEEE).
-            ir::IrValueId v2 = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = ir::IrType::I64;
-            bc.dst = v2;
-            bc.operands = {v};
-            bc.source_line = loc.line;
-            emit(current_block_, std::move(bc));
+            ir::IrValueId v2 =
+                emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::I64, loc.line);
             v = v2;
         } else if (vt == ir::IrType::F32) {
             // f32: primero ampliar a f64 (preserva el valor), luego
@@ -519,16 +505,8 @@ ir::IrValueId Lowering::lower_enum_constructor(
                 ext.source_line = loc.line;
                 emit(current_block_, std::move(ext));
             }
-            ir::IrValueId v2 = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I64;
-                bc.dst = v2;
-                bc.operands = {vw};
-                bc.source_line = loc.line;
-                emit(current_block_, std::move(bc));
-            }
+            ir::IrValueId v2 =
+                emit_ir_unop(ir::IrOp::BITCAST, vw, ir::IrType::I64, loc.line);
             v = v2;
         } else if (vt != ir::IrType::I64 && vt != ir::IrType::PTR) {
             // Tipos enteros mas estrechos: promocion normal a i64

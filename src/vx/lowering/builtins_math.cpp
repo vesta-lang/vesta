@@ -289,14 +289,8 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
                     emit(current_block_, std::move(ext));
                     v = f64v;
                 }
-                ir::IrValueId bits = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr bc{};
-                bc.op = ir::IrOp::BITCAST;
-                bc.type = ir::IrType::I64;
-                bc.dst = bits;
-                bc.operands = {v};
-                bc.source_line = e->loc.line;
-                emit(current_block_, std::move(bc));
+                ir::IrValueId bits =
+                    emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::I64, e->loc.line);
                 v = bits;
             } else {
                 v = cast_if_needed(v, vt, arg_ir, e->loc.line);

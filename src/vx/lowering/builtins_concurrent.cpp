@@ -485,14 +485,8 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
                                : (wt == ir::IrType::F64) ? ir::IrType::I64
                                                          : wt;
         auto emit_bc = [&](ir::IrValueId src, ir::IrType tgt) -> ir::IrValueId {
-            ir::IrValueId d = fn_->new_value(tgt);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = tgt;
-            bc.dst = d;
-            bc.operands = {src};
-            bc.source_line = e->loc.line;
-            emit(current_block_, std::move(bc));
+            ir::IrValueId d =
+                emit_ir_unop(ir::IrOp::BITCAST, src, tgt, e->loc.line);
             return d;
         };
         if (is_atomic_load_g) {

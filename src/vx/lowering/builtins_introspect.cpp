@@ -226,14 +226,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         const ir::IrType lfrom =
             ir_type_from_primitive(e->args[1]->result_type.kind);
         lenv = cast_if_needed(lenv, lfrom, ir::IrType::U64, ln);
-        ir::IrValueId res = fn_->new_value(ir::IrType::BOOL);
-        ir::IrInstr c{};
-        c.op = ir::IrOp::CMP_ULE;
-        c.type = ir::IrType::BOOL;
-        c.dst = res;
-        c.operands = {endv, lenv};
-        c.source_line = ln;
-        emit(current_block_, std::move(c));
+        ir::IrValueId res =
+            emit_ir_binop(ir::IrOp::CMP_ULE, endv, lenv, ir::IrType::BOOL, ln);
         out_value = res;
         return true;
     }

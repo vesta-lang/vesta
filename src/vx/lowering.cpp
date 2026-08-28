@@ -1072,14 +1072,8 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
         case PrimitiveKind::F64: {
             // BugFix R7: BITCAST f64->i64 (preserva bits IEEE) y
             // delega a vio_float_to_vmbuf.
-            ir::IrValueId v_bits = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = ir::IrType::I64;
-            bc.dst = v_bits;
-            bc.operands = {v};
-            bc.source_line = ln;
-            emit(current_block_, std::move(bc));
+            ir::IrValueId v_bits =
+                emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::I64, ln);
             return stringify_primitive(v_bits, "vio_float_to_vmbuf", ln);
         }
         case PrimitiveKind::F32: {
@@ -1092,14 +1086,8 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
             ext.operands = {v};
             ext.source_line = ln;
             emit(current_block_, std::move(ext));
-            ir::IrValueId v_bits = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = ir::IrType::I64;
-            bc.dst = v_bits;
-            bc.operands = {v_f64};
-            bc.source_line = ln;
-            emit(current_block_, std::move(bc));
+            ir::IrValueId v_bits =
+                emit_ir_unop(ir::IrOp::BITCAST, v_f64, ir::IrType::I64, ln);
             return stringify_primitive(v_bits, "vio_float_to_vmbuf", ln);
         }
         case PrimitiveKind::CLASS: {

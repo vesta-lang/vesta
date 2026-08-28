@@ -705,14 +705,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
                 emit_native_str_free_if_heap(rb.temp, e->loc.line);
             // str_equals: bool = (strcmp == 0).
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrValueId v_eq = fn_->new_value(ir::IrType::BOOL);
-            ir::IrInstr cmp{};
-            cmp.op = ir::IrOp::CMP_EQ;
-            cmp.type = ir::IrType::BOOL;
-            cmp.dst = v_eq;
-            cmp.operands = {v_cmp, v_zero};
-            cmp.source_line = e->loc.line;
-            emit(current_block_, std::move(cmp));
+            ir::IrValueId v_eq =
+                emit_ir_binop(ir::IrOp::CMP_EQ, v_cmp, v_zero, ir::IrType::BOOL, e->loc.line);
             out_value = v_eq;
             return true;
         }
@@ -752,14 +746,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         // str_equals returns -1/0/1 (strcmp).  Convertir a bool: 0 == equal.
         if (is_str_equals) {
             ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrValueId v_eq = fn_->new_value(ir::IrType::BOOL);
-            ir::IrInstr cmp{};
-            cmp.op = ir::IrOp::CMP_EQ;
-            cmp.type = ir::IrType::BOOL;
-            cmp.dst = v_eq;
-            cmp.operands = {v_dst, v_zero};
-            cmp.source_line = e->loc.line;
-            emit(current_block_, std::move(cmp));
+            ir::IrValueId v_eq =
+                emit_ir_binop(ir::IrOp::CMP_EQ, v_dst, v_zero, ir::IrType::BOOL, e->loc.line);
             out_value = v_eq;
         } else {
             out_value = v_dst;
