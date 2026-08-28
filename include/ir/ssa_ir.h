@@ -1076,6 +1076,16 @@ struct IrInstr {
     /// plugin antes de retornar).  Sin esto, el regalloc no sabe que
     /// el RAW_ASM es un "call site" y los locales vivos quedan
     /// invalidados cuando la callee corre.
+    ///
+    /// SOLO se lee para RAW_ASM, y no es un descuido: en un CALL, un CALLN o
+    /// un SPAWN el asignador YA sabe que hay una llamada -- se lo dice el
+    /// propio opcode -- y preserva lo que esta vivo por su cuenta.  Este campo
+    /// existe justamente para el caso en que eso no se ve: un bloque de
+    /// ensamblador no parece una llamada y por dentro lo es.
+    ///
+    /// Hay codigo que lo pone en instrucciones que no son RAW_ASM.  Ahi no
+    /// hace nada -- ni bien ni mal --, pero induce a pensar que si, y a
+    /// copiarlo "por si acaso".  No hace falta.
     bool is_call_site = false;
 
     ///  D.jit-mem-model AUTO-PROMOTE: si true en un IrOp::ALLOCA,
