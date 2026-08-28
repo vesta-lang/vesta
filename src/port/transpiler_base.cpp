@@ -212,7 +212,14 @@ TranspileResult Transpiler::run() {
 // =========================================================================
 
 /**
- * @brief Es la operacion pura (sin efectos secundarios, sin acceso a memoria)?
+ * @brief Se puede MOVER esta operacion a su punto de uso?
+ *
+ * Se llamaba @c is_pure_op, y no es la pureza: hay otro @c is_pure_op en la
+ * huella de funcion (@c analyze/fingerprint.cpp) que responde otra cosa -- si
+ * la funcion tiene efectos de dato observables, para validar un @c \@pure
+ * declarado -- y cuenta 142 operaciones frente a las 49 de aqui.  Compartir
+ * nombre los hacia parecer dos copias de la misma tabla, y no lo son: esta es
+ * una POLITICA de este transpilador sobre donde puede colocar una expresion.
  *
  * Solo los operadores listados aqui son candidatos a inlining.  LOAD,
  * STORE, CALL, ALLOCA, RAW_ALLOC y RAW_FREE NO son inlineables porque
@@ -223,9 +230,10 @@ TranspileResult Transpiler::run() {
  * de una rama condicional: en SSA single-use el operando puede ya estar
  * fuera del branch original, pero al inlinearlo en el use site cambiamos
  * cuando se evalua.  Cambiar el lugar de un trap es practicamente seguro
- * (UB en ambos casos) pero conservador es preferible.
+ * (UB en ambos casos) pero conservador es preferible.  Ahi se ve que no es la
+ * pureza: una division ES pura y aun asi no se mueve.
  */
-static bool is_pure_op(ir::IrOp op) {
+static bool is_inlinable_expr_op(ir::IrOp op) {
     using ir::IrOp;
     switch (op) {
     case IrOp::CONST:
@@ -366,7 +374,7 @@ void Transpiler::analyze_function(const ir::IrFunction &fn) {
     for (size_t v = 0; v < N; ++v) {
         if (ana_.use_count[v] != 1) continue;
         if (!ana_.def_instr[v]) continue;
-        if (!is_pure_op(ana_.def_instr[v]->op)) continue;
+        if (!is_inlinable_expr_op(ana_.def_instr[v]->op)) continue;
         if (used_in_phi[v]) continue;
         ana_.is_inline_candidate[v] = true;
     }

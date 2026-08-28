@@ -16,7 +16,7 @@
  * rellena EXCLUSIVAMENTE @c crosses_call.  No inventa nada mas.
  *
  * SEMANTICA: un valor "cruza" una llamada si su intervalo COVERS la posicion,
- * @c covers(p) == (def <= p <= end) -- INCLUSIVO.  Asi la respuesta a "¿por que
+ * @c covers(p) == (def <= p <= end) -- INCLUSIVO.  Asi la respuesta a "por que
  * crosses_call=true?" es SIEMPRE "el LivenessAdapter: el intervalo [def,end]
  * cubre la posicion de un call".
  *
@@ -27,7 +27,7 @@
  *
  * QUE ES UNA "LLAMADA" AQUI (decision documentada, no heuristica): las ops de
  * llamada del IR
- * (CALL/CALLIND/TAILCALL/CALLVIRT/CALLN/CALLM/CALLCLOSURE/CALLITF)
+ * (CALL/CALLIND/TAILCALL/CALLVIRT/CALLN/CALLM/CALLCLOSURE/CALLSUPER/CALLITF)
  * -- las que clobbean los caller-saved y motivan la preferencia por
  * callee-saved. Otros clobbers puntuales (DIVMOD clobbea RDX:RAX, INLINE_ASM
  * sus regs) NO son
@@ -57,6 +57,15 @@ namespace rbank {
  * Traduccion de la clasificacion del propio IR (no heuristica): las ops del
  * grupo de llamadas.  DIVMOD / INLINE_ASM NO estan aqui -- sus clobbers son
  * Constraints de lane, no @c crosses_call.
+ *
+ * @c CALLSUPER faltaba, y es la unica de la lista cuya ausencia se paga en
+ * correccion: baja a un @c CALL_ABS al despachador de metodos, asi que clobbea
+ * caller-saved como cualquier otra.  Un valor vivo a traves de un
+ * @c super.metodo() no quedaba marcado @c crosses_call y el asignador podia
+ * dejarlo en un registro volatil.  Hoy no se nota -- el @c crosses_call de
+ * produccion se decide sobre MachineIR, donde @c interval.cpp si trata
+ * @c CALL_ABS como posicion de llamada --, pero se notaria en cuanto este
+ * adaptador gobierne el regalloc, que es para lo que existe.
  */
 inline bool ir_op_is_call(ir::IrOp op) noexcept {
     switch (op) {
@@ -67,6 +76,7 @@ inline bool ir_op_is_call(ir::IrOp op) noexcept {
     case ir::IrOp::CALLN:
     case ir::IrOp::CALLM:
     case ir::IrOp::CALLCLOSURE:
+    case ir::IrOp::CALLSUPER:
     case ir::IrOp::CALLITF: return true;
     default: return false;
     }
@@ -82,7 +92,7 @@ inline bool interval_covers(const ir::LiveInterval &iv, uint32_t p) noexcept {
  * OJO -- @c crosses_call responde HOY a DOS preguntas que necesitan criterios
  * DISTINTOS, y por eso NO se puede estrechar sin mas (medido 2026-08-17):
  *
- *   - PRESERVACION ("¿sobrevive a la llamada?"): querria el criterio ESTRICTO
+ *   - PRESERVACION ("sobrevive a la llamada?"): querria el criterio ESTRICTO
  *     @c def < p < end.  Un valor DEFINIDO en @p p es el resultado de esa
  *     instruccion y no puede destruirlo quien lo produce; uno cuyo ULTIMO uso
  *     esta en @p p lo consume esa instruccion y no necesita sobrevivirla.
