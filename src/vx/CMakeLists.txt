@@ -201,6 +201,19 @@ add_library(vx_lib STATIC
     # Las sentencias: el control de flujo y el retorno.  No producen un valor,
     # producen una FORMA en el grafo de bloques, y se construye ya en SSA.
     lowering/statements.cpp
+    # Las expresiones que CALCULAN: operadores, conversiones, condicional.  Un
+    # operador no dice por si solo que instruccion sale: depende del tipo, del
+    # signo y del ancho de sus operandos.
+    lowering/expressions.cpp
+    # Las expresiones que NOMBRAN: variable, elemento de array, campo.  Su
+    # trabajo no es producir un valor sino resolver DONDE esta, y decidir si
+    # quien pregunta necesita la direccion o el contenido.
+    lowering/access.cpp
+    # Invocar algo: llamadas, construccion de objetos y lambdas.  "Llamar" no
+    # es una sola cosa (funcion del modulo, nativa, puntero a funcion, metodo
+    # virtual, lambda con entorno, builtin, constructor) y averiguar cual es
+    # el trabajo del fichero: cada una tiene su convencion.
+    lowering/calls.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
