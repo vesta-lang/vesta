@@ -214,6 +214,14 @@ add_library(vx_lib STATIC
     # virtual, lambda con entorno, builtin, constructor) y averiguar cual es
     # el trabajo del fichero: cada una tiene su convencion.
     lowering/calls.cpp
+    # Declarar una variable y asignarle un valor: donde vive y como llega ahi.
+    # Declarar decide SI hace falta sitio, donde (pila de la VM o monton del
+    # anfitrion, segun si alguien toma su direccion) y quien lo posee.
+    lowering/declarations.cpp
+    # Asignar: el destino puede ser variable, campo, elemento, lo apuntado por
+    # un puntero, un campo de bits o una propiedad con `set`, y cada uno se
+    # escribe distinto.  Si lo asignado POSEE algo, hay que soltar lo que habia.
+    lowering/assignment.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
