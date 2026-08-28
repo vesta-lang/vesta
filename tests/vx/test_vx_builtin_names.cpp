@@ -20,6 +20,11 @@
  * `print` con una letra de mas, un prefijo de otro builtin, un nombre con la
  * longitud de uno de la tabla pero distinto contenido -- ahi es donde un
  * comparador que mira la longitud antes que los bytes puede equivocarse --.
+ *
+ * Del reparto en familias pasa lo mismo: que sean DISJUNTAS lo garantiza el
+ * compilador -- el reparto es un `switch`, y dos `case` iguales no compilan --,
+ * asi que aqui solo se mira que sea util: que ninguna se haya quedado vacia y
+ * que un builtin de cada una caiga donde debe.
  */
 #include "vx/builtin_names.h"
 
@@ -108,8 +113,53 @@ int main() {
     check(builtin_name(Builtin::Unknown).empty(), "Unknown no tiene texto");
     check(builtin_name(Builtin::Count).empty(), "Count no tiene texto");
 
+    /* --- El reparto en familias ---
+     *
+     * Que las familias sean DISJUNTAS no hace falta comprobarlo aqui: el
+     * reparto es un `switch` y dos `case` con el mismo valor no compilan.  Lo
+     * que si conviene mirar es que el reparto sea util -- que ninguna familia
+     * se haya quedado vacia por un corte mal hecho -- y que un builtin de cada
+     * una caiga donde debe. */
+    int por_familia[9] = {0};
+    for (uint16_t v = static_cast<uint16_t>(primero); v < ultimo; ++v) {
+        const auto fam = vx::builtin_family(static_cast<Builtin>(v));
+        const auto i = static_cast<size_t>(fam);
+        check(i < 9, "familia fuera de rango para el builtin " + std::to_string(v));
+        if (i < 9) ++por_familia[i];
+    }
+    const char *nombres[9] = {"Other",    "Print",     "Runtime",
+                              "Concurrent", "Optional", "Reflect",
+                              "Ownership", "String",   "<sobra>"};
+    for (int i = 1; i <= 7; ++i)
+        check(por_familia[i] > 0,
+              std::string("la familia ") + nombres[i] + " se quedo vacia");
+    check(por_familia[8] == 0, "hay una familia que el test no conoce");
+
+    /* Uno de cada, para que un reparto corrido no pase desapercibido. */
+    using vx::BuiltinFamily;
+    using vx::builtin_family;
+    check(builtin_family(Builtin::Println) == BuiltinFamily::Print, "println -> Print");
+    check(builtin_family(Builtin::TermMove) == BuiltinFamily::Print, "term_move -> Print");
+    check(builtin_family(Builtin::Malloc) == BuiltinFamily::Runtime, "malloc -> Runtime");
+    check(builtin_family(Builtin::Msgsend) == BuiltinFamily::Concurrent, "msgsend -> Concurrent");
+    check(builtin_family(Builtin::Some) == BuiltinFamily::Optional, "Some -> Optional");
+    check(builtin_family(Builtin::ForName) == BuiltinFamily::Reflect, "forName -> Reflect");
+    check(builtin_family(Builtin::UniqueBox) == BuiltinFamily::Ownership, "unique_box -> Ownership");
+    check(builtin_family(Builtin::StrConcat) == BuiltinFamily::String, "str_concat -> String");
+
+    /* Lo que no es de nadie, y lo que no es un builtin. */
+    check(builtin_family(Builtin::Sqrt) == BuiltinFamily::Other, "sqrt no tiene familia propia");
+    check(builtin_family(Builtin::Unknown) == BuiltinFamily::Other, "Unknown -> Other");
+    check(builtin_family(Builtin::Count) == BuiltinFamily::Other, "Count -> Other");
+    check(builtin_family(static_cast<Builtin>(60000)) == BuiltinFamily::Other,
+          "un valor fuera de rango no se sale de la tabla");
+
     if (g_fallos == 0)
-        std::printf("OK: %d builtins, ida y vuelta correcta\n", vistos);
+        std::printf("OK: %d builtins, ida y vuelta correcta; en familias "
+                    "%d/%d/%d/%d/%d/%d/%d, sin familia propia %d\n",
+                    vistos, por_familia[1], por_familia[2], por_familia[3],
+                    por_familia[4], por_familia[5], por_familia[6],
+                    por_familia[7], por_familia[0]);
     else
         std::printf("%d comprobaciones fallidas\n", g_fallos);
     return g_fallos == 0 ? 0 : 1;

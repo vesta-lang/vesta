@@ -84,37 +84,62 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const Builtin b = builtin_from_name(name);
     if (!looks_like_concept && b == Builtin::Unknown) return false;
 
-    /* Imprimir vive aparte (lowering/builtins_print.cpp): eran mil lineas de
-     * las siete mil de esta funcion, y su trabajo -- averiguar QUE se escribe y
-     * con que forma -- no se parece al del resto.  Contesta que no si el nombre
-     * no es suyo, y aqui se sigue como siempre. */
-    if (try_lower_print_builtins(e, b, out_value)) return true;
-    /* Y lo que pide algo al MUNDO -- ficheros, memoria del anfitrion,
-     * fibras, modulos cargados en marcha -- tampoco se parece al resto:
-     * ninguno se resuelve dentro del programa. */
-    if (try_lower_runtime_builtins(e, b, out_value)) return true;
-    /* Y lo que supone que hay ALGUIEN MAS: memoria compartida, atomicos,
-     * buzones y futuros.  Todos existen porque lo que uno escribe lo tiene
-     * que ver el otro, y en el orden correcto. */
-    if (try_lower_concurrent_builtins(e, b, out_value)) return true;
-    /* Y lo que puede NO estar: Optional y Result.  Construirlos, preguntar si
-     * hay algo, y sacarlo.  Van juntos porque los dos son la misma idea -- un
-     * valor que lleva consigo si esta -- y porque ninguno toca el monton. */
-    if (try_lower_optional_builtins(e, b, out_value)) return true;
-    /* Y preguntarle al programa por si mismo: buscar la clase por su
-     * nombre, el campo por el suyo, llamar a un metodo sin saber cual era
-     * hasta ese momento.  Es lo contrario de todo lo demas, que se decide
-     * al compilar. */
-    if (try_lower_reflect_builtins(e, b, out_value)) return true;
-    /* Y quien es dueno de que, y quien lo suelta: punteros con dueno
-     * unico o contado, prestamos que solo miran, y trasladar la
-     * propiedad.  Casi todo se decide al COMPILAR -- un prestamo son
-     * ocho bytes y las reglas desaparecen del codigo generado. */
-    if (try_lower_ownership_builtins(e, b, out_value)) return true;
-    /* Y lo que se hace CON una cadena: medirla, cortarla, unirla,
-     * compararla, sacarla al exterior.  Cada uno baja a UNA instruccion
-     * de la maquina, no a una llamada. */
-    if (try_lower_string_builtins(e, b, out_value)) return true;
+    /* Cada familia atiende un grupo de builtins y son DISJUNTAS, asi que no
+     * hace falta preguntarles por turno: la tabla dice cual es la suya y se va
+     * derecho.  Antes se les preguntaba a las siete, y como cada una empieza
+     * descartando los nombres que no son suyos, eso era recorrer las listas de
+     * las seis que iban a decir que no.
+     *
+     * Una familia puede contestar que NO aunque el nombre sea suyo -- cuando
+     * la forma de la llamada no encaja con ninguno de sus casos --, y entonces
+     * el flujo sigue hacia abajo, al despacho general, igual que antes. */
+    switch (builtin_family(b)) {
+    case BuiltinFamily::Print:
+        /* Imprimir: no es escribir sino averiguar QUE se escribe -- cada tipo
+         * va distinto -- y con que forma.  Mas las secuencias del terminal,
+         * que salen por la misma primitiva. */
+        if (try_lower_print_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::Runtime:
+        /* Lo que pide algo al MUNDO: ficheros, memoria del anfitrion, fibras,
+         * modulos cargados en marcha.  Ninguno se resuelve dentro del
+         * programa. */
+        if (try_lower_runtime_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::Concurrent:
+        /* Lo que supone que hay ALGUIEN MAS: memoria compartida, atomicos,
+         * buzones y futuros.  Existen porque lo que uno escribe lo tiene que
+         * ver el otro, y en el orden correcto. */
+        if (try_lower_concurrent_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::Optional:
+        /* Lo que puede NO estar: Optional y Result.  Los dos son la misma
+         * idea -- un valor que lleva consigo si esta -- y ninguno toca el
+         * monton. */
+        if (try_lower_optional_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::Reflect:
+        /* Preguntarle al programa por si mismo: la clase por su nombre, el
+         * campo por el suyo, llamar sin saber a que hasta ese momento.  Es lo
+         * contrario de todo lo demas, que se decide al compilar. */
+        if (try_lower_reflect_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::Ownership:
+        /* Quien es dueno de que y quien lo suelta.  Casi todo se decide al
+         * COMPILAR: un prestamo son ocho bytes y sus reglas desaparecen del
+         * codigo generado. */
+        if (try_lower_ownership_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::String:
+        /* Lo que se hace CON una cadena: medirla, cortarla, unirla,
+         * compararla, sacarla al exterior.  Cada uno baja a UNA instruccion de
+         * la maquina, no a una llamada. */
+        if (try_lower_string_builtins(e, b, out_value)) return true;
+        break;
+    case BuiltinFamily::Other:
+        /* Los que aun no tienen familia propia: caen al despacho de abajo. */
+        break;
+    }
 
     // -----------------------------------------------------------------
     // AOT 2c (dev OS): simbolos de seccion.  section_start/end(".x") -> void*,

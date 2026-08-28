@@ -23,6 +23,7 @@
 #include "vx/builtin_names.h"
 
 #include <algorithm>
+#include <array>
 
 namespace vx {
 namespace {
@@ -438,6 +439,115 @@ std::string_view builtin_name(Builtin b) noexcept {
             return std::string_view(kTable[i].text, kTable[i].len);
     }
     return {};
+}
+
+namespace {
+
+/**
+ * @brief El reparto: que familia atiende cada builtin.
+ *
+ * Escrito como `switch` a proposito, y no como una tabla de doscientas
+ * entradas indexada a mano: asi el reparto se LEE -- los nombres de una
+ * familia van juntos y se ve de un vistazo que no falta ninguno --, y no hay
+ * que respetar ningun orden.  La tabla la construye el compilador a partir de
+ * esto, de modo que en ejecucion sigue siendo una lectura y no un recorrido.
+ *
+ * Las familias son disjuntas y eso NO es casual: es lo que hace correcto ir
+ * directo a una.  Si un builtin acabara en dos, la segunda no se ejecutaria
+ * nunca.
+ *
+ * @param b El builtin.
+ * @return Su familia, u Other si la atiende el despacho general.
+ */
+constexpr BuiltinFamily family_of(Builtin b) {
+    switch (b) {
+    case Builtin::ComptimePrint: case Builtin::CtPrint: case Builtin::Echo:
+    case Builtin::Flush: case Builtin::GcCollect: case Builtin::GcFinalizeAll:
+    case Builtin::Print: case Builtin::PrintBin: case Builtin::PrintBool:
+    case Builtin::PrintChar: case Builtin::PrintColor:
+    case Builtin::PrintCstr: case Builtin::PrintFloat:
+    case Builtin::PrintGchandle: case Builtin::PrintHex:
+    case Builtin::PrintInt: case Builtin::PrintOct: case Builtin::PrintPad:
+    case Builtin::PrintPtr: case Builtin::PrintUint: case Builtin::Println:
+    case Builtin::TermClear: case Builtin::TermClearLine:
+    case Builtin::TermHideCursor: case Builtin::TermMove:
+    case Builtin::TermReset: case Builtin::TermRestoreCursor:
+    case Builtin::TermSaveCursor: case Builtin::TermShowCursor:
+        return BuiltinFamily::Print;
+
+    case Builtin::Dispose: case Builtin::Fclose: case Builtin::FiberSwapctx:
+    case Builtin::Fopen: case Builtin::Free: case Builtin::Fwrite:
+    case Builtin::Loadmodule: case Builtin::Malloc:
+    case Builtin::Unloadmodule:
+        return BuiltinFamily::Runtime;
+
+    case Builtin::AtomicAddI64: case Builtin::AtomicCasI64:
+    case Builtin::AtomicLoadI64: case Builtin::AtomicStoreI64:
+    case Builtin::Fulfill: case Builtin::FutureAlloc: case Builtin::IsShared:
+    case Builtin::Msgrecv: case Builtin::Msgsend: case Builtin::Share:
+    case Builtin::SharedFree: case Builtin::SharedGcCollect:
+    case Builtin::SharedHeapBytes: case Builtin::SharedHeapLiveCount:
+    case Builtin::SharedMalloc: case Builtin::Unshare:
+        return BuiltinFamily::Concurrent;
+
+    case Builtin::Err: case Builtin::Error: case Builtin::IsOk:
+    case Builtin::IsPresent: case Builtin::None: case Builtin::Ok:
+    case Builtin::Some: case Builtin::Unwrap: case Builtin::UnwrapUnchecked:
+    case Builtin::Value:
+        return BuiltinFamily::Optional;
+
+    case Builtin::ForName: case Builtin::GetClass: case Builtin::GetField:
+    case Builtin::GetFieldAt: case Builtin::GetFields:
+    case Builtin::GetMethod: case Builtin::GetMethodAt:
+    case Builtin::GetMethods: case Builtin::Invoke: case Builtin::NewInstance:
+    case Builtin::Proceed:
+        return BuiltinFamily::Reflect;
+
+    case Builtin::GcBox: case Builtin::Lend: case Builtin::LendMut:
+    case Builtin::Move: case Builtin::PtrOf: case Builtin::ReadBorrow:
+    case Builtin::SharedBox: case Builtin::SharedWith:
+    case Builtin::UniqueBox: case Builtin::UniqueWith: case Builtin::UseCount:
+    case Builtin::WriteBorrow:
+        return BuiltinFamily::Ownership;
+
+    case Builtin::Chr: case Builtin::ComptimeChr:
+    case Builtin::ComptimeConcat: case Builtin::ComptimeContains:
+    case Builtin::ComptimeOrd: case Builtin::ComptimeRepeat:
+    case Builtin::ComptimeReplace: case Builtin::ComptimeStreq:
+    case Builtin::ComptimeStrlen: case Builtin::ComptimeSubstr:
+    case Builtin::ComptimeToStr: case Builtin::Contains: case Builtin::Ord:
+    case Builtin::Repeat: case Builtin::Replace: case Builtin::StrBytes:
+    case Builtin::StrConcat: case Builtin::StrConvert: case Builtin::StrCstr:
+    case Builtin::StrEquals: case Builtin::StrHash: case Builtin::StrIntern:
+    case Builtin::StrLength: case Builtin::StrMake: case Builtin::StrWstr:
+    case Builtin::Substr: case Builtin::ToStr:
+        return BuiltinFamily::String;
+
+    default:
+        return BuiltinFamily::Other;
+    }
+}
+
+/// @brief Cuantas entradas tiene la tabla: una por builtin, mas Unknown.
+constexpr size_t kFamilyCount = static_cast<size_t>(Builtin::Count);
+
+/// @brief La tabla, construida al compilar desde @ref family_of.
+constexpr std::array<BuiltinFamily, kFamilyCount> kFamilyTable = [] {
+    std::array<BuiltinFamily, kFamilyCount> t{};
+    for (size_t i = 0; i < kFamilyCount; ++i)
+        t[i] = family_of(static_cast<Builtin>(i));
+    return t;
+}();
+
+} // namespace
+
+/**
+ * @copydoc vx::builtin_family
+ */
+BuiltinFamily builtin_family(Builtin b) noexcept {
+    const size_t i = static_cast<size_t>(b);
+    if (i >= kFamilyCount) return BuiltinFamily::Other;
+    return kFamilyTable[i];
 }
 
 } // namespace vx

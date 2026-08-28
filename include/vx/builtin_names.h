@@ -339,6 +339,38 @@ enum class Builtin : uint16_t {
 Builtin builtin_from_name(std::string_view name) noexcept;
 
 /**
+ * @brief A que familia del bajador pertenece un builtin.
+ *
+ * Las familias son disjuntas: cada builtin esta en una y solo una.  Eso es lo
+ * que permite ir DIRECTO a la que le toca en vez de preguntarle a las siete
+ * por turno, que era lo que se hacia -- y como cada una empieza descartando
+ * los nombres que no son suyos, preguntarles a todas costaba recorrer las
+ * listas de las seis que iban a decir que no.
+ */
+enum class BuiltinFamily : uint8_t {
+    Other = 0,  ///< No es de ninguna familia separada; lo atiende el general.
+    Print,      ///< Averiguar QUE se escribe y con que forma.
+    Runtime,    ///< Pedirle algo al mundo: ficheros, memoria, fibras, modulos.
+    Concurrent, ///< Suponer que hay alguien mas: compartida, atomicos, buzones.
+    Optional,   ///< Lo que puede no estar: Optional y Result.
+    Reflect,    ///< Preguntarle al programa por si mismo.
+    Ownership,  ///< Quien es dueno de que, y quien lo suelta.
+    String      ///< Lo que se hace con una cadena.
+};
+
+/**
+ * @brief La familia de @p b, o BuiltinFamily::Other si no tiene una separada.
+ *
+ * Una lectura de una tabla plana indexada por el builtin.  La tabla se
+ * construye AL COMPILAR desde el mismo reparto que se lee en el fuente, asi
+ * que no hay dos sitios que mantener.
+ *
+ * @param b El builtin.
+ * @return Su familia.
+ */
+BuiltinFamily builtin_family(Builtin b) noexcept;
+
+/**
  * @brief El texto de un builtin, para diagnosticos.
  *
  * @param b El builtin.
