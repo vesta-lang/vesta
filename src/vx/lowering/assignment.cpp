@@ -989,17 +989,7 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
         }
         // data_ptr (flag-aware) + i -> direccion del byte.
         ir::IrValueId v_ptr = emit_native_str_data_ptr(v_src, e->loc.line);
-        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_addr].is_host_ptr = true;
-        {
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {v_ptr, v_idx};
-            ad.source_line = e->loc.line;
-            emit(current_block_, std::move(ad));
-        }
+        ir::IrValueId v_addr = emit_ptr_add(v_ptr, v_idx, e->loc.line);
         // STORE u8: el char rhs se guarda truncado a 1 byte.
         v_val = cast_if_needed(v_val, fn_->values[v_val].type,
                                ir::IrType::U8, e->loc.line);

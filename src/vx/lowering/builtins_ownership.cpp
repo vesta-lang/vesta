@@ -150,17 +150,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                 }
                 const ir::IrValueId v_word =
                     emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
-                const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_dst_p].is_host_ptr = true;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_dst_p;
-                    ad.operands = {v_box, v_off};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
+                const ir::IrValueId v_dst_p =
+                    emit_ptr_add(v_box, v_off, e->loc.line);
                 emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
             }
             // Refcount inc-on-copy: si el payload es un shared<T> que viene de
@@ -266,15 +257,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             // shared<T>: payload esta en +16 del control block.
             const ir::IrValueId v_sixteen =
                 emit_const(ir::IrType::I64, 16, e->loc.line);
-            const ir::IrValueId v_pay = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_pay].is_host_ptr = true;
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::I64;
-            add.dst = v_pay;
-            add.operands = {v_ptr, v_sixteen};
-            add.source_line = e->loc.line;
-            emit(current_block_, std::move(add));
+            const ir::IrValueId v_pay =
+                emit_ptr_add(v_ptr, v_sixteen, e->loc.line);
             // BugFix R2: si inner es CLASS, el slot @+16 guarda el
             // host_ptr al objeto.  Hacer otro LOAD para obtenerlo y
             // marcarlo como is_gc_object para CALLVIRT.  Sin esto,
@@ -832,15 +816,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         {
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_ctrl8 = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_ctrl8].is_host_ptr = true;
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::I64;
-            add.dst = v_ctrl8;
-            add.operands = {v_ctrl, v_eight};
-            add.source_line = e->loc.line;
-            emit(current_block_, std::move(add));
+            const ir::IrValueId v_ctrl8 =
+                emit_ptr_add(v_ctrl, v_eight, e->loc.line);
             const ir::IrValueId v_zero =
                 emit_const(ir::IrType::I64, 0, e->loc.line);
             emit_store_typed(v_ctrl8, v_zero, ir::IrType::I64, e->loc.line);
@@ -849,15 +826,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         {
             const ir::IrValueId v_sixteen =
                 emit_const(ir::IrType::I64, 16, e->loc.line);
-            const ir::IrValueId v_ctrl16 = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_ctrl16].is_host_ptr = true;
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::I64;
-            add.dst = v_ctrl16;
-            add.operands = {v_ctrl, v_sixteen};
-            add.source_line = e->loc.line;
-            emit(current_block_, std::move(add));
+            const ir::IrValueId v_ctrl16 =
+                emit_ptr_add(v_ctrl, v_sixteen, e->loc.line);
             emit_store_typed(v_ctrl16, v_payload, payload_t, e->loc.line);
         }
         // STORE v_ctrl at [v_slot] (VM memory).
@@ -1231,15 +1201,8 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
             // ctrl_block: refcount@0 + deleter@8 + payload@16).
             const ir::IrValueId v_sixteen =
                 emit_const(ir::IrType::I64, 16, e->loc.line);
-            const ir::IrValueId v_pay = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_pay].is_host_ptr = true;
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::I64;
-            add.dst = v_pay;
-            add.operands = {v_ptr, v_sixteen};
-            add.source_line = e->loc.line;
-            emit(current_block_, std::move(add));
+            const ir::IrValueId v_pay =
+                emit_ptr_add(v_ptr, v_sixteen, e->loc.line);
             anota_prestamo(v_pay, v_arg);
             out_value = v_pay;
             return true;

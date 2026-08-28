@@ -618,18 +618,10 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
         an.source_line = source_line;
         emit(current_block_, std::move(an));
     }
-    // data = slot + masked.
-    ir::IrValueId v_data = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_data].is_host_ptr = true;
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_data;
-        ad.operands = {v_slot_i, v_masked};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    // data = slot + masked.  La base es el slot pasado a ENTERO -- asi se
+    // elige entre las dos direcciones sin bifurcar --, y un entero no lleva la
+    // marca de ser del anfitrion: hay que devolversela.
+    ir::IrValueId v_data = emit_host_ptr_add(v_slot_i, v_masked, source_line);
     return v_data;
 }
 

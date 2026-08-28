@@ -1223,6 +1223,17 @@ ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, uint64_t off,
 }
 
 /**
+ * @copydoc vx::Lowering::emit_host_ptr_add
+ */
+ir::IrValueId Lowering::emit_host_ptr_add(ir::IrValueId base,
+                                          ir::IrValueId off,
+                                          uint32_t source_line) {
+    const ir::IrValueId v = emit_ptr_add(base, off, source_line);
+    fn_->values[v].is_host_ptr = true;
+    return v;
+}
+
+/**
  * @brief Lee de una direccion, con el ancho que se pida.
  *
  * El ancho no se deduce de nada: leer ocho bytes donde hay dos arrastra lo que

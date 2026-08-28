@@ -308,16 +308,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         if (bt.kind == PrimitiveKind::SHARED_PTR) {
             const ir::IrValueId v16 =
                 emit_const(ir::IrType::I64, 16, e->loc.line);
-            const ir::IrValueId v_pay = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_pay].is_host_ptr = true;
-            ir::IrInstr add16{};
-            add16.op = ir::IrOp::ADD;
-            add16.type = ir::IrType::I64;
-            add16.dst = v_pay;
-            add16.operands = {v_data, v16};
-            add16.source_line = e->loc.line;
-            emit(current_block_, std::move(add16));
-            base_eff = v_pay;
+            base_eff = emit_ptr_add(v_data, v16, e->loc.line);
         }
     }
     const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
@@ -365,17 +356,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
             // host_ptr al buffer de datos.
             const ir::IrValueId v_raw = emit_strraw(v_src, e->loc.line);
             // addr = raw + idx (hereda naturaleza host de strraw).
-            const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_at].is_host_ptr = true;
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_at;
-                ad.operands = {v_raw, v_idx};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
+            const ir::IrValueId v_at = emit_ptr_add(v_raw, v_idx, e->loc.line);
             // LOAD u8 (host) -> byte, zero-extendido al ancho del char.
             const ir::IrType rt =
                 (e->result_type.kind == PrimitiveKind::COUNT)

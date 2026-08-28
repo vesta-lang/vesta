@@ -1034,17 +1034,8 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
             // ObjectHeader).  is_host_ptr=true for v_obj => emite movh.
             const ir::IrValueId v_off =
                 emit_const(ir::IrType::I64, 24, e->loc.line);
-            const ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_addr].is_host_ptr = true;
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr;
-                ad.operands = {v_obj, v_off};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
+            const ir::IrValueId v_addr =
+                emit_ptr_add(v_obj, v_off, e->loc.line);
             emit_store_typed(v_addr, v_msg, ir::IrType::I64, e->loc.line);
             ssa_concrete_class_[v_obj] = e->class_name;
             return v_obj;

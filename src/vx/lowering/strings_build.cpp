@@ -238,17 +238,7 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
     // checker marca como char.  v1 asume i valido (0 <= i < src.len).
     ir::IrValueId v_ptr = emit_native_str_data_ptr(v_src, source_line);
     // addr = ptr + i (host_ptr).
-    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_addr].is_host_ptr = true;
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr;
-        ad.operands = {v_ptr, v_idx};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_addr = emit_ptr_add(v_ptr, v_idx, source_line);
     // LOAD u8: el codegen zero-extiende el byte a un registro completo.
     ir::IrValueId v_byte = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     return v_byte;

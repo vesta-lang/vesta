@@ -452,6 +452,26 @@ class Lowering {
                                uint32_t source_line);
 
     /**
+     * @brief Suma a una direccion sabiendo que la de salida es del anfitrion.
+     *
+     * @ref emit_ptr_add hereda la naturaleza de la base, que es lo correcto
+     * casi siempre.  Esto es para cuando la base la PERDIO por el camino y aun
+     * asi se sabe: tipicamente porque paso por un cambio de tipo a entero --
+     * sumar y restar direcciones para elegir una sin bifurcar -- y de ahi sale
+     * un numero, que no lleva la marca.
+     *
+     * Perderla no da un error: da un acceso emitido contra la memoria
+     * equivocada, que es peor.  Por eso se dice aqui, en el sitio donde consta.
+     *
+     * @param base        La direccion de partida.
+     * @param off         Cuanto sumarle.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA resultante, marcado como del anfitrion.
+     */
+    ir::IrValueId emit_host_ptr_add(ir::IrValueId base, ir::IrValueId off,
+                                    uint32_t source_line);
+
+    /**
      * @brief Salta a un bloque, y deja el grafo contado.
      *
      * Emitir el salto es la mitad; la otra es anotar que el bloque de salida
