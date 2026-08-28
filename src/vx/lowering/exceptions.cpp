@@ -1250,18 +1250,11 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         emit(current_block_, std::move(ra));
     }
 
-    // br body_bb.  Edges fantasmas a handler_bb (alcanzable via excepcion).
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = body_bb;
-        br.source_line = s->loc.line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(body_bb);
-        fn_->blocks[current_block_].succs.push_back(handler_bb);
-        fn_->blocks[body_bb].preds.push_back(current_block_);
-        fn_->blocks[handler_bb].preds.push_back(current_block_);
-    }
+    /* El salto va al cuerpo.  Al manejador NO se salta: se llega lanzando,
+     * asi que su arista se anota aparte -- sin instruccion que la respalde --
+     * para que quien recorra el grafo sepa que ese bloque es alcanzable. */
+    emit_br(body_bb, s->loc.line);
+    add_cfg_edge(current_block_, handler_bb);
 
     // 3. Push cleanup: tryleave + monexit en early-return.
     // Sprint 6.C: Kind::SYNC_EXIT emite TRYLEAVE + MONEXIT como IR ops.

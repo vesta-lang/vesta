@@ -665,16 +665,12 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         block_terminated_ = false;
         const ir::IrValueId v_default =
             emit_const(ir::IrType::BOOL, is_and ? 0u : 1u, e->loc.line);
-        {
-            ir::IrInstr brd{};
-            brd.op = ir::IrOp::BR;
-            brd.type = ir::IrType::VOID;
-            brd.target_block = merge_bb;
-            brd.source_line = e->loc.line;
-            emit(current_block_, std::move(brd));
-        }
-        fn_->blocks[default_bb].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(default_bb);
+        /* La arista se anotaba desde `default_bb`, que es el bloque actual aqui
+         * -- entre la asignacion y este salto solo hay una constante --.  Que
+         * salga del actual la hace inmune a que eso cambie: unas lineas mas
+         * abajo, el propio codigo avisa de que bajar el rhs SI puede abrir
+         * bloques intermedios. */
+        emit_br(merge_bb, e->loc.line);
         const ir::IrBlockId default_pred = default_bb;
         // 4) Bloque rhs: bajar rhs (puede crear bloques intermedios si
         //    el rhs tiene su propio short-circuit), capturar el bloque

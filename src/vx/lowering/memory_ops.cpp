@@ -1162,15 +1162,10 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             st.source_line = source_line;
             emit(current_block_, std::move(st));
         }
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = hdr;
-            br.source_line = source_line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[body].succs.push_back(hdr);
-        fn_->blocks[hdr].preds.push_back(body);
+        /* La arista se anotaba desde `body` y el salto sale del bloque ACTUAL.
+         * Hoy son el mismo, pero eso depende de que nada de lo de arriba abra
+         * un bloque nuevo; asi la arista sale siempre de donde sale el salto. */
+        emit_br(hdr, source_line);
 
         current_block_ = done;
         block_terminated_ = false;
@@ -1262,15 +1257,10 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             st.source_line = source_line;
             emit(current_block_, std::move(st));
         }
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = hdr;
-            br.source_line = source_line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[body].succs.push_back(hdr);
-        fn_->blocks[hdr].preds.push_back(body);
+        /* La arista se anotaba desde `body` y el salto sale del bloque ACTUAL.
+         * Hoy son el mismo, pero eso depende de que nada de lo de arriba abra
+         * un bloque nuevo; asi la arista sale siempre de donde sale el salto. */
+        emit_br(hdr, source_line);
 
         current_block_ = done;
         block_terminated_ = false;
