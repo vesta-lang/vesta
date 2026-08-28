@@ -26,6 +26,7 @@
 #include "codegen/regalloc.h"
 #include "jit/machine_ir.h"
 #include "jit/peephole.h"
+#include "vx/asm/asm_effects.h" // isa_host: para quien se genera este codigo
 #include "jit/regalloc_rewrite.h"
 #include "jit/sched/machine_sched.h"
 #include "jit/shape_constraints.h"
@@ -624,7 +625,12 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
     /* 4b. P1 peephole: borrar los self-moves (`mov rX, rX`) que el coalescing
      *     dejo al asignar el mismo fisico a los dos extremos de una copia. */
     peephole_physical(pf);
-    maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
+    /* El JIT genera codigo que se ejecuta AQUI, asi que la ISA es la del host y
+     * se PREGUNTA.  Estaba escrita a mano como x86: correcta mientras el camino
+     * vreg solo compile para x86, pero deja de serlo en cuanto arm64 entre por
+     * aqui -- y lo haria en silencio, dando a instrucciones de una arquitectura
+     * los efectos de otra. */
+    maybe_schedule(pf, vx::isa_host(), sched::SchedMode::JIT_AUTO);
 
     /* 3. Encode a bytes. */
     X86Encoder enc;
@@ -736,7 +742,12 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
      * lenta, pero correcta.  El motivo ya se conto al reescribir. */
     if (pf.asm_sin_bytes) return nullptr;
     peephole_physical(pf);
-    maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
+    /* El JIT genera codigo que se ejecuta AQUI, asi que la ISA es la del host y
+     * se PREGUNTA.  Estaba escrita a mano como x86: correcta mientras el camino
+     * vreg solo compile para x86, pero deja de serlo en cuanto arm64 entre por
+     * aqui -- y lo haria en silencio, dando a instrucciones de una arquitectura
+     * los efectos de otra. */
+    maybe_schedule(pf, vx::isa_host(), sched::SchedMode::JIT_AUTO);
 
     X86Encoder enc;
     std::vector<uint8_t> bytes;
@@ -945,7 +956,12 @@ uint8_t *vreg_compile_osr(const ir::IrFunction &fn, CodeCache &cc,
      * otra cosa, asi que se rechaza aqui y se queda para el interprete: mas
      * lenta, pero correcta.  El motivo ya se conto al reescribir. */
     if (pf.asm_sin_bytes) return nullptr;
-    maybe_schedule(pf, sched::EffIsa::X86, sched::SchedMode::JIT_AUTO);
+    /* El JIT genera codigo que se ejecuta AQUI, asi que la ISA es la del host y
+     * se PREGUNTA.  Estaba escrita a mano como x86: correcta mientras el camino
+     * vreg solo compile para x86, pero deja de serlo en cuanto arm64 entre por
+     * aqui -- y lo haria en silencio, dando a instrucciones de una arquitectura
+     * los efectos de otra. */
+    maybe_schedule(pf, vx::isa_host(), sched::SchedMode::JIT_AUTO);
     if (!osr.osr_entry_valid) return nullptr; // no se pudo emitir el entry
 
     /* 5. Encode. */

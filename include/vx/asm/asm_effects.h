@@ -103,6 +103,23 @@ std::string asm_arch_actual();
 instr_db::Isa isa_of_arch(const std::string &arch);
 
 /**
+ * @brief La arquitectura de la MAQUINA donde corre el compilador.
+ *
+ * Distinta de @c asm_arch_actual, y la diferencia importa: aquella contesta el
+ * objetivo que se compila -- el declarado si lo hay --, y esta contesta donde
+ * se ejecuta.  Quien genera codigo que va a correr AQUI (el JIT) tiene que
+ * preguntar por esta; quien genera un binario para otro sitio (el AOT), por
+ * aquella.  Confundirlas no falla al compilar: falla al ejecutar.
+ */
+const char *arch_host();
+
+/**
+ * @brief La ISA del HOST, para preguntarle a la base por el codigo que se va a
+ *        ejecutar en esta maquina.
+ */
+instr_db::Isa isa_host();
+
+/**
  * @brief La ISA del objetivo ACTIVO, para preguntarle a la base.
  *
  * Sale del mismo sitio que los registros: el objetivo que se compila, no la

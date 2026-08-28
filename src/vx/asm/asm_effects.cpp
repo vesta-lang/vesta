@@ -324,7 +324,11 @@ const ArchPista kArchPistas[] = {
     {"x86", &pista_x86},
 };
 
-/// La arquitectura del host, para cuando no hay override de target.
+} // namespace
+
+/* Sale del anonimato porque ya no la usa solo este fichero: el JIT tiene que
+ * preguntar para QUE maquina genera codigo, y la respuesta no es el objetivo
+ * declarado -- ese es el del AOT -- sino donde se va a ejecutar. */
 const char *arch_host() {
 #if defined(__aarch64__) || defined(_M_ARM64)
     return "arm64";
@@ -334,8 +338,6 @@ const char *arch_host() {
     return "x86_64";
 #endif
 }
-
-} // namespace
 
 std::string asm_canonical_reg(const std::string &raw, const std::string &arch) {
     std::string r;
@@ -353,6 +355,8 @@ std::string asm_arch_actual() {
     if (arch.empty()) arch = arch_host();
     return arch;
 }
+
+instr_db::Isa isa_host() { return isa_of_arch(arch_host()); }
 
 std::string asm_canonical_reg(const std::string &raw) {
     return asm_canonical_reg(raw, asm_arch_actual());

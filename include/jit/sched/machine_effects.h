@@ -81,10 +81,17 @@ struct MEffects {
  * (LOAD_VM, STORE_VM, DIVMOD_V, ALLOCA, SAFEPOINT, ARG, TAILCALL, ...), que no
  * existen en ninguna ISA, se modelan aqui explicitamente.
  *
+ * La ISA es OBLIGATORIA y no tiene valor por defecto.  Lo tuvo -- x86 --, y un
+ * valor por defecto aqui es una suposicion con permiso: quien olvidara pasarla
+ * recibia los efectos de otra arquitectura sin que nada avisara, que es
+ * exactamente el fallo que este modulo existe para evitar.  Quien compila para
+ * ejecutar AQUI la saca de @c vx::isa_host(); quien genera un binario para otro
+ * sitio, del objetivo declarado (@c vx::isa_actual()).
+ *
  * @param mi   instruccion maquina.
- * @param isa  ISA de la DB a consultar (por defecto x86).
+ * @param isa  ISA de la DB a consultar.
  */
-MEffects machine_effects(const MInstr &mi, EffIsa isa = EffIsa::X86);
+MEffects machine_effects(const MInstr &mi, EffIsa isa);
 
 /**
  * @brief Mnemonico de la ISA para un @c MOp REAL (o @c nullptr si es un pseudo
