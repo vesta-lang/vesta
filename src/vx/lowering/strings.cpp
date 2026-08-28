@@ -931,17 +931,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
     ensure_strdisp();
     const uint64_t fp_slot = strlen_fp_slot_;
     // v_fpaddr = &__vx_strlen_fp ; v_fp = LOAD i64 [v_fpaddr].
-    ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_fpaddr].is_host_ptr = true;
-    {
-        ir::IrInstr la{};
-        la.op = ir::IrOp::STR_LIT_ADDR;
-        la.type = ir::IrType::PTR;
-        la.dst = v_fpaddr;
-        la.imm = fp_slot;
-        la.source_line = source_line;
-        emit(current_block_, std::move(la));
-    }
+    ir::IrValueId v_fpaddr = emit_str_lit_addr(fp_slot, source_line, true);
     ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fp].is_host_ptr = true;
     {
@@ -1375,17 +1365,7 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
     ensure_strdisp();
     const uint64_t fp_slot = strcmp_fp_slot_;
     // v_fpaddr = &__vx_strcmp_fp ; v_fp = LOAD i64 [v_fpaddr].
-    ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_fpaddr].is_host_ptr = true;
-    {
-        ir::IrInstr la_i{};
-        la_i.op = ir::IrOp::STR_LIT_ADDR;
-        la_i.type = ir::IrType::PTR;
-        la_i.dst = v_fpaddr;
-        la_i.imm = fp_slot;
-        la_i.source_line = source_line;
-        emit(current_block_, std::move(la_i));
-    }
+    ir::IrValueId v_fpaddr = emit_str_lit_addr(fp_slot, source_line, true);
     ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fp].is_host_ptr = true;
     {
@@ -1562,6 +1542,27 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     emit(current_block_, std::move(rf));
 }
 
+/**
+ * @brief Reserva el hueco de una cadena y lo deja VACIO.
+ *
+ * Una cadena de las que no pasan por el recolector son veinticuatro bytes:
+ * donde estan sus caracteres, cuantos hay y cuantos caben.  Reservar ese hueco
+ * y dejarlo en el estado de "cadena vacia" van SIEMPRE juntos -- un hueco
+ * recien reservado tiene lo que hubiera antes en la pila, y leerlo como cadena
+ * da una longitud absurda y un puntero a cualquier sitio --, y por eso son un
+ * solo metodo y no dos que haya que acordarse de encadenar.
+ *
+ * Estaba escrito cuatro veces, una por cada funcion que fabrica una cadena.
+ *
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA con la direccion del hueco.
+ */
+ir::IrValueId Lowering::emit_new_native_str_slot(uint32_t source_line) {
+    const ir::IrValueId v_slot = stack_alloc_buf(24, source_line, native_poo_);
+    emit_zero_native_str_slot(v_slot, source_line);
+    return v_slot;
+}
+
 void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
                                          uint32_t source_line) {
     // Zerar los bytes 0..22 del slot DEJANDO byte[23] para el caller.
@@ -1736,14 +1737,7 @@ ir::IrValueId Lowering::emit_folded_string_blob(const std::string &utf8,
         folded_str_blobs_[key] = slot;
     }
 
-    const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr is{};
-    is.op = ir::IrOp::STR_LIT_ADDR;
-    is.type = ir::IrType::PTR;
-    is.dst = v;
-    is.imm = slot;
-    is.source_line = line;
-    emit(current_block_, std::move(is));
+    const ir::IrValueId v = emit_str_lit_addr(slot, line);
     fn_->values[v].is_host_ptr = true; // gdata vive en memoria host
     return v;
 }
@@ -1779,14 +1773,7 @@ ir::IrValueId Lowering::lower_string_lit(ast::StringLitExpr *e) {
 
     // Emitir IrOp::STR_LIT_ADDR -> el emisor genera "mov rDst,
     // @Absolute(\"code.s_<idx>\")".
-    const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr ins{};
-    ins.op = ir::IrOp::STR_LIT_ADDR;
-    ins.type = ir::IrType::PTR;
-    ins.dst = dst;
-    ins.imm = idx;
-    ins.source_line = e->loc.line;
-    emit(current_block_, std::move(ins));
+    const ir::IrValueId dst = emit_str_lit_addr(idx, e->loc.line);
     return dst;
 }
 

@@ -1546,14 +1546,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             {
                 auto sit = static_local_slots_.find(id->name);
                 if (sit != static_local_slots_.end()) {
-                    const ir::IrValueId va = fn_->new_value(ir::IrType::PTR);
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = va;
-                    is.imm = sit->second.slot;
-                    is.source_line = e->loc.line;
-                    emit(current_block_, std::move(is));
+                    const ir::IrValueId va =
+                        emit_str_lit_addr(sit->second.slot, e->loc.line);
                     // El slot vive en memoria host (gdata en interp/JIT,
                     // `.data` en AOT): la direccion sobrevive a viajar por
                     // memoria.
@@ -1567,14 +1561,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             // pointer; para un global normal es la direccion lineal.
             auto git = runtime_global_slots_.find(id->name);
             if (git != runtime_global_slots_.end()) {
-                const ir::IrValueId va = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = va;
-                is.imm = git->second;
-                is.source_line = e->loc.line;
-                emit(current_block_, std::move(is));
+                const ir::IrValueId va =
+                    emit_str_lit_addr(git->second, e->loc.line);
                 // `&global` es un `T*`: el storage vive en memoria host (en
                 // `.data` en AOT; en el bloque host de la seccion `gdata` en
                 // interp/JIT).  Asi la direccion sobrevive a viajar por memoria

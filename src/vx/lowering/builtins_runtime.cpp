@@ -317,16 +317,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         const uint64_t path_idx = intern_class_name(*out_mod_, slit->value);
         const uint32_t path_len = static_cast<uint32_t>(slit->value.size());
         // raw_asm-elim wave 2: usar STR_LIT_ADDR + emit_const + MOD_LOAD.
-        const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr sl{};
-            sl.op = ir::IrOp::STR_LIT_ADDR;
-            sl.type = ir::IrType::PTR;
-            sl.dst = v_path_addr;
-            sl.imm = path_idx;
-            sl.source_line = e->loc.line;
-            emit(current_block_, std::move(sl));
-        }
+        const ir::IrValueId v_path_addr =
+            emit_str_lit_addr(path_idx, e->loc.line);
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
         const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
@@ -359,16 +351,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         const uint64_t path_idx = intern_class_name(*out_mod_, slit->value);
         const uint32_t path_len = static_cast<uint32_t>(slit->value.size());
         // raw_asm-elim wave 2: MOD_LOAD con kind=1 (unloadmod).
-        const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr sl{};
-            sl.op = ir::IrOp::STR_LIT_ADDR;
-            sl.type = ir::IrType::PTR;
-            sl.dst = v_path_addr;
-            sl.imm = path_idx;
-            sl.source_line = e->loc.line;
-            emit(current_block_, std::move(sl));
-        }
+        const ir::IrValueId v_path_addr =
+            emit_str_lit_addr(path_idx, e->loc.line);
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
         const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
@@ -479,16 +463,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             intern_class_name(*out_mod_, slit->value + std::string(1, '\0'));
         const uint32_t path_len = static_cast<uint32_t>(slit->value.size());
         // raw_asm-elim wave 2: DLOPEN IR op.
-        const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr sl{};
-            sl.op = ir::IrOp::STR_LIT_ADDR;
-            sl.type = ir::IrType::PTR;
-            sl.dst = v_path_addr;
-            sl.imm = path_idx;
-            sl.source_line = e->loc.line;
-            emit(current_block_, std::move(sl));
-        }
+        const ir::IrValueId v_path_addr =
+            emit_str_lit_addr(path_idx, e->loc.line);
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
         const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
@@ -525,16 +501,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             intern_class_name(*out_mod_, slit->value + std::string(1, '\0'));
         const uint32_t name_len = static_cast<uint32_t>(slit->value.size());
         // raw_asm-elim wave 2: DLSYM IR op.
-        const ir::IrValueId v_name_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr sl{};
-            sl.op = ir::IrOp::STR_LIT_ADDR;
-            sl.type = ir::IrType::PTR;
-            sl.dst = v_name_addr;
-            sl.imm = name_idx;
-            sl.source_line = e->loc.line;
-            emit(current_block_, std::move(sl));
-        }
+        const ir::IrValueId v_name_addr =
+            emit_str_lit_addr(name_idx, e->loc.line);
         const ir::IrValueId v_name_len =
             emit_const(ir::IrType::I64, name_len, e->loc.line);
         const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
@@ -648,16 +616,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         cpu_features_used_ = true;
         const uint64_t slot = ensure_cpu_features_global();
         const int ln = e->loc.line;
-        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr is{};
-            is.op = ir::IrOp::STR_LIT_ADDR;
-            is.type = ir::IrType::PTR;
-            is.dst = v_addr;
-            is.imm = slot;
-            is.source_line = ln;
-            emit(current_block_, std::move(is));
-        }
+        ir::IrValueId v_addr = emit_str_lit_addr(slot, ln);
         ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
         {
             ir::IrInstr ld{};

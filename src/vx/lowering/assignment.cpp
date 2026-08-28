@@ -1139,16 +1139,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 if (e->op != ast::AssignOp::Assign) {
                     /* Compound assign sobre global: load cur from
                      * slot + combine + store back. */
-                    ir::IrValueId v_addr_load = fn_->new_value(ir::IrType::PTR);
-                    {
-                        ir::IrInstr is{};
-                        is.op = ir::IrOp::STR_LIT_ADDR;
-                        is.type = ir::IrType::PTR;
-                        is.dst = v_addr_load;
-                        is.imm = slot_idx;
-                        is.source_line = ln;
-                        emit(current_block_, std::move(is));
-                    }
+                    ir::IrValueId v_addr_load = emit_str_lit_addr(slot_idx, ln);
                     ir::IrValueId v_cur = fn_->new_value(ir::IrType::I64);
                     {
                         ir::IrInstr ld{};
@@ -1194,16 +1185,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     }
                 }
                 /* STORE rhs al slot. */
-                ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = v_addr;
-                    is.imm = slot_idx;
-                    is.source_line = ln;
-                    emit(current_block_, std::move(is));
-                }
+                ir::IrValueId v_addr = emit_str_lit_addr(slot_idx, ln);
                 ir::IrInstr st{};
                 st.op = ir::IrOp::STORE;
                 st.type = ir::IrType::I64;

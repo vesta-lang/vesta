@@ -672,17 +672,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
             const ir::IrType ir_t = ir_type_from_primitive(s_typ.kind);
             const uint64_t slot = get_or_create_runtime_global_slot(
                 "__static_" + base_id->name + "_" + e->field_name, 8);
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_addr].is_host_ptr = true;
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = slot;
-                is.source_line = e->loc.line;
-                emit(current_block_, std::move(is));
-            }
+            ir::IrValueId v_addr = emit_str_lit_addr(slot, e->loc.line, true);
             ir::IrValueId v_val = fn_->new_value(
                 ir_t == ir::IrType::VOID ? ir::IrType::I64 : ir_t);
             {
@@ -961,17 +951,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         if (native_poo_) {
             const uint64_t slot = get_or_create_runtime_global_slot(
                 "__static_" + base_id->name + "_" + target->field_name, 8);
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_addr].is_host_ptr = true;
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = slot;
-                is.source_line = loc.line;
-                emit(current_block_, std::move(is));
-            }
+            ir::IrValueId v_addr = emit_str_lit_addr(slot, loc.line, true);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = field_ir;

@@ -201,14 +201,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         add_8.source_line = e->loc.line;
         emit(current_block_, std::move(add_8));
         // Cargar name_addr via STR_LIT_ADDR.
-        const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ns{};
-        ns.op = ir::IrOp::STR_LIT_ADDR;
-        ns.type = ir::IrType::PTR;
-        ns.dst = v_name;
-        ns.imm = name_idx;
-        ns.source_line = e->loc.line;
-        emit(current_block_, std::move(ns));
+        const ir::IrValueId v_name = emit_str_lit_addr(name_idx, e->loc.line);
         ir::IrInstr st8{};
         st8.op = ir::IrOp::STORE;
         st8.type = ir::IrType::I64;
@@ -328,16 +321,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
             add_8.source_line = e->loc.line;
             emit(current_block_, std::move(add_8));
         }
-        const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr ns{};
-            ns.op = ir::IrOp::STR_LIT_ADDR;
-            ns.type = ir::IrType::PTR;
-            ns.dst = v_name;
-            ns.imm = name_idx;
-            ns.source_line = e->loc.line;
-            emit(current_block_, std::move(ns));
-        }
+        const ir::IrValueId v_name = emit_str_lit_addr(name_idx, e->loc.line);
         {
             ir::IrInstr st8{};
             st8.op = ir::IrOp::STORE;

@@ -283,14 +283,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
     const int ln = vd->loc.line;
 
     auto emit_addr = [&](uint64_t s) -> ir::IrValueId {
-        ir::IrValueId a = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr is{};
-        is.op = ir::IrOp::STR_LIT_ADDR;
-        is.type = ir::IrType::PTR;
-        is.dst = a;
-        is.imm = s;
-        is.source_line = ln;
-        emit(current_block_, std::move(is));
+        ir::IrValueId a = emit_str_lit_addr(s, ln);
         fn_->values[a].is_host_ptr = true; // gdata vive en memoria host
         return a;
     };

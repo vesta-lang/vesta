@@ -41,14 +41,7 @@ Lowering::emit_string_lit(ast::StringLitExpr *slit) {
     std::vector<uint8_t> bytes(slit->value.begin(), slit->value.end());
     const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
     const uint64_t lit_len = (uint64_t)slit->value.size();
-    const ir::IrValueId v_str = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr is{};
-    is.op = ir::IrOp::STR_LIT_ADDR;
-    is.type = ir::IrType::PTR;
-    is.dst = v_str;
-    is.imm = lit_idx;
-    is.source_line = slit->loc.line;
-    emit(current_block_, std::move(is));
+    const ir::IrValueId v_str = emit_str_lit_addr(lit_idx, slit->loc.line);
     const ir::IrValueId v_len =
         emit_const(ir::IrType::I64, lit_len, slit->loc.line);
     return {v_str, v_len};
@@ -109,14 +102,7 @@ void Lowering::emit_print_string_literal(const std::string &text,
     std::vector<uint8_t> bytes(text.begin(), text.end());
     const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
     const uint64_t lit_len = (uint64_t)text.size();
-    const ir::IrValueId v_str = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr is{};
-    is.op = ir::IrOp::STR_LIT_ADDR;
-    is.type = ir::IrType::PTR;
-    is.dst = v_str;
-    is.imm = lit_idx;
-    is.source_line = line;
-    emit(current_block_, std::move(is));
+    const ir::IrValueId v_str = emit_str_lit_addr(lit_idx, line);
     const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
     if (native_poo_) {
         // AOT/bare: sin proc -> escribir los bytes via __vx_write (el

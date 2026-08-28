@@ -857,16 +857,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 std::vector<uint8_t> bytes(r.str.begin(), r.str.end());
                 const uint64_t idx =
                     out_mod_->intern_static_data(std::move(bytes));
-                ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = v_addr;
-                    is.imm = idx;
-                    is.source_line = src_line;
-                    emit(current_block_, std::move(is));
-                }
+                ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64, (uint64_t)r.str.size(), src_line);
                 ir::IrValueId v_str =

@@ -2195,16 +2195,7 @@ void Lowering::emit_instrument_enter(const std::string &fn_name,
     const uint64_t name_idx = out_mod_->intern_static_data(std::move(bytes));
 
     // 2. STR_LIT_ADDR: cargar ptr al literal en un SSA value.
-    const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr sa{};
-        sa.op = ir::IrOp::STR_LIT_ADDR;
-        sa.type = ir::IrType::PTR;
-        sa.dst = v_name;
-        sa.imm = name_idx;
-        sa.source_line = line;
-        emit(current_block_, std::move(sa));
-    }
+    const ir::IrValueId v_name = emit_str_lit_addr(name_idx, line);
 
     // 3. CALLN void a "vx_trace:enter"(proc_ptr, name_ptr).
     //    El proc_ptr lo obtenemos via @c getproc; el plugin nativo
@@ -2235,16 +2226,7 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
     bytes.push_back(0);
     const uint64_t name_idx = out_mod_->intern_static_data(std::move(bytes));
 
-    const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr sa{};
-        sa.op = ir::IrOp::STR_LIT_ADDR;
-        sa.type = ir::IrType::PTR;
-        sa.dst = v_name;
-        sa.imm = name_idx;
-        sa.source_line = line;
-        emit(current_block_, std::move(sa));
-    }
+    const ir::IrValueId v_name = emit_str_lit_addr(name_idx, line);
 
     // Si la funcion es void, pasar 0 como return value placeholder.
     ir::IrValueId v_val = v_ret;

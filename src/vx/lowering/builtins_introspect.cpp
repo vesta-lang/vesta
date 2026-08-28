@@ -353,16 +353,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             const std::string nm = comptime_type_name(tc_, t);
             std::vector<uint8_t> bytes(nm.begin(), nm.end());
             const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr ins{};
-                ins.op = ir::IrOp::STR_LIT_ADDR;
-                ins.type = ir::IrType::PTR;
-                ins.dst = v_addr;
-                ins.imm = idx;
-                ins.source_line = src_line;
-                emit(current_block_, std::move(ins));
-            }
+            ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), src_line);
             /* typename es un literal compile-time: value-string nativo en AOT
@@ -708,16 +699,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             /* Build StringObject para el nombre. */
             std::vector<uint8_t> bytes(nm.begin(), nm.end());
             const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = idx;
-                is.source_line = e->loc.line;
-                emit(current_block_, std::move(is));
-            }
+            ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
             ir::IrValueId v_len = emit_const(
                 ir::IrType::I64, static_cast<uint64_t>(nm.size()), e->loc.line);
             ir::IrValueId v_str =
@@ -905,16 +887,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 std::vector<uint8_t> bytes(nm.begin(), nm.end());
                 const uint64_t idx =
                     out_mod_->intern_static_data(std::move(bytes));
-                ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = v_addr;
-                    is.imm = idx;
-                    is.source_line = src_line;
-                    emit(current_block_, std::move(is));
-                }
+                ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
                                static_cast<uint64_t>(nm.size()), src_line);

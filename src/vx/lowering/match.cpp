@@ -510,15 +510,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 data.push_back(0);
                 const uint64_t li =
                     out_mod_->intern_static_data(std::move(data));
-                ir::IrValueId lit_ptr = fn_->new_value(ir::IrType::PTR);
-                fn_->values[lit_ptr].is_host_ptr = true;
-                ir::IrInstr sa{};
-                sa.op = ir::IrOp::STR_LIT_ADDR;
-                sa.type = ir::IrType::PTR;
-                sa.dst = lit_ptr;
-                sa.imm = li;
-                sa.source_line = aln;
-                emit(current_block_, std::move(sa));
+                ir::IrValueId lit_ptr = emit_str_lit_addr(li, aln, true);
                 ir::IrValueId lit_len = emit_const(
                     ir::IrType::I64, (uint64_t)sl->value.size(), aln);
                 scmp =

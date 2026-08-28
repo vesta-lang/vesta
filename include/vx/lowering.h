@@ -541,6 +541,35 @@ class Lowering {
                      uint32_t source_line);
 
     /**
+     * @brief Reserva el hueco de una cadena nativa y lo deja VACIO.
+     *
+     * Los dos pasos van siempre juntos: un hueco recien reservado tiene lo que
+     * hubiera antes en la pila, y leerlo como cadena da una longitud absurda y
+     * un puntero a cualquier sitio.  Por eso es un metodo y no dos.
+     *
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA con la direccion del hueco.
+     */
+    ir::IrValueId emit_new_native_str_slot(uint32_t source_line);
+
+    /**
+     * @brief La direccion de un dato que ya vive en el ejecutable.
+     *
+     * Lo que se conoce al compilar -- textos, tablas -- no se construye en
+     * marcha: se guarda en el ejecutable y lo unico que hace falta es su
+     * direccion.  @p host_ptr dice si es de la memoria del anfitrion, cosa que
+     * depende de a donde se compile y no del dato; marcarlo mal hace que quien
+     * lo lea emita el acceso contra la otra memoria.
+     *
+     * @param idx         El sitio del dato, el que dio `intern_static_data`.
+     * @param source_line Linea fuente, para la depuracion.
+     * @param host_ptr    Si la direccion es de la memoria del anfitrion.
+     * @return El valor SSA con la direccion.
+     */
+    ir::IrValueId emit_str_lit_addr(uint64_t idx, uint32_t source_line,
+                                    bool host_ptr = false);
+
+    /**
      * @brief Emite una operacion de dos operandos del IR.
      *
      * No confundir con @ref emit_binop_ir, que traduce un operador del

@@ -35,19 +35,7 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
     // nul, byte[23]=1 (flag SSO=0).
 
     // 1. Slot de 24 bytes en stack.
-    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_slot;
-        al.imm = 24;
-        al.host_alloca = native_poo_;
-        al.source_line = source_line;
-        emit(current_block_, std::move(al));
-    }
-    emit_zero_native_str_slot(v_slot, source_line);
+    const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
 
     auto store_u8 = [&](ir::IrValueId v_addr, ir::IrValueId v_val) {
         ir::IrInstr st{};
@@ -106,19 +94,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     }
 
     // 3. Slot de 24 bytes del resultado.
-    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_slot;
-        al.imm = 24;
-        al.host_alloca = native_poo_;
-        al.source_line = source_line;
-        emit(current_block_, std::move(al));
-    }
-    emit_zero_native_str_slot(v_slot, source_line);
+    const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
 
     // 4. cond = (total > 22) -> HEAP.
     ir::IrValueId v_22 = emit_const(ir::IrType::I64, 22, source_line);
@@ -261,19 +237,7 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
     }
 
     // 3. Slot de 24 bytes del resultado.
-    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_slot;
-        al.imm = 24;
-        al.host_alloca = native_poo_;
-        al.source_line = source_line;
-        emit(current_block_, std::move(al));
-    }
-    emit_zero_native_str_slot(v_slot, source_line);
+    const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
 
     // 4. src_off = src.data + a.  String Inc 5 (SSO): finalize decide
     //    SSO vs HEAP runtime (cero malloc si el slice cabe inline).
@@ -448,19 +412,7 @@ ir::IrValueId Lowering::build_native_string_from_buffer(ir::IrValueId v_ptr,
                                                         int64_t known_len) {
     // str_make: COPIA known/runtime len bytes de v_ptr a un value-string
     // PROPIO (sin GC, RAII).  Slot 24B + finalize (SSO/HEAP; copia dispatched).
-    const ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_slot;
-        al.imm = 24;
-        al.host_alloca = native_poo_;
-        al.source_line = source_line;
-        emit(current_block_, std::move(al));
-    }
-    emit_zero_native_str_slot(v_slot, source_line);
+    const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
     build_native_string_finalize(v_slot, v_ptr, v_len, source_line, known_len);
     return v_slot;
 }

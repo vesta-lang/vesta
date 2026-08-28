@@ -673,14 +673,7 @@ void Lowering::emit_struct_vptr_init(ir::IrValueId struct_addr,
     // VALOR guardado (la direccion de la vtable) es VM.  Al leer el vptr
     // (load [struct_addr] = movh) se recupera esa direccion VM, y el load de la
     // entrada (load [vptr] = mov VM) lee la vtable correctamente.
-    const ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr sa{};
-    sa.op = ir::IrOp::STR_LIT_ADDR;
-    sa.type = ir::IrType::PTR;
-    sa.dst = v_vt;
-    sa.imm = vt_idx;
-    sa.source_line = line;
-    emit(current_block_, std::move(sa));
+    const ir::IrValueId v_vt = emit_str_lit_addr(vt_idx, line);
     // STORE %vt -> [struct_addr + 0]  (el vptr).
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;

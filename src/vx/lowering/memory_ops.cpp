@@ -231,16 +231,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
     }
 
     // --- STORE del bitmask al slot global __vx_cpu_features ---
-    const ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr is{};
-        is.op = ir::IrOp::STR_LIT_ADDR;
-        is.type = ir::IrType::PTR;
-        is.dst = v_gaddr;
-        is.imm = slot;
-        is.source_line = ln;
-        emit(current_block_, std::move(is));
-    }
+    const ir::IrValueId v_gaddr = emit_str_lit_addr(slot, ln);
     {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -526,17 +517,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         // de override (RET directo) y por las ramas del dispatch cpuid.
         auto emit_store_fp = [&](const std::string &fn_name) {
             ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
-            ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_gaddr].is_host_ptr = true;
-            {
-                ir::IrInstr la{};
-                la.op = ir::IrOp::STR_LIT_ADDR;
-                la.type = ir::IrType::PTR;
-                la.dst = v_gaddr;
-                la.imm = fp_slot;
-                la.source_line = ln;
-                emit(current_block_, std::move(la));
-            }
+            ir::IrValueId v_gaddr = emit_str_lit_addr(fp_slot, ln, true);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ir::IrType::I64;
@@ -567,17 +548,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
 
         // feat = LOAD i64 [__vx_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
-        ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_faddr].is_host_ptr = true;
-        {
-            ir::IrInstr la{};
-            la.op = ir::IrOp::STR_LIT_ADDR;
-            la.type = ir::IrType::PTR;
-            la.dst = v_faddr;
-            la.imm = feat_slot;
-            la.source_line = ln;
-            emit(current_block_, std::move(la));
-        }
+        ir::IrValueId v_faddr = emit_str_lit_addr(feat_slot, ln, true);
         ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
         {
             ir::IrInstr ld{};
@@ -862,17 +833,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         // STORE &<variante> al fp dado, en el bloque actual (sin terminador).
         auto emit_store_fp = [&](const std::string &variant, uint64_t fp_slot) {
             ir::IrValueId v_addr = emit_label_addr(variant, ln);
-            ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_gaddr].is_host_ptr = true;
-            {
-                ir::IrInstr la{};
-                la.op = ir::IrOp::STR_LIT_ADDR;
-                la.type = ir::IrType::PTR;
-                la.dst = v_gaddr;
-                la.imm = fp_slot;
-                la.source_line = ln;
-                emit(current_block_, std::move(la));
-            }
+            ir::IrValueId v_gaddr = emit_str_lit_addr(fp_slot, ln, true);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ir::IrType::I64;
@@ -884,17 +845,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
 
         // feat = LOAD i64 [__vx_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
-        ir::IrValueId v_faddr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_faddr].is_host_ptr = true;
-        {
-            ir::IrInstr la{};
-            la.op = ir::IrOp::STR_LIT_ADDR;
-            la.type = ir::IrType::PTR;
-            la.dst = v_faddr;
-            la.imm = feat_slot;
-            la.source_line = ln;
-            emit(current_block_, std::move(la));
-        }
+        ir::IrValueId v_faddr = emit_str_lit_addr(feat_slot, ln, true);
         ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
         {
             ir::IrInstr ld{};
@@ -1019,17 +970,7 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
     const uint64_t fp_slot = ensure_memcpy_dispatch();
 
     // v_fpaddr = &__vx_memcpy_fp ; v_fp = LOAD i64 [v_fpaddr].
-    ir::IrValueId v_fpaddr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_fpaddr].is_host_ptr = true;
-    {
-        ir::IrInstr la{};
-        la.op = ir::IrOp::STR_LIT_ADDR;
-        la.type = ir::IrType::PTR;
-        la.dst = v_fpaddr;
-        la.imm = fp_slot;
-        la.source_line = line;
-        emit(current_block_, std::move(la));
-    }
+    ir::IrValueId v_fpaddr = emit_str_lit_addr(fp_slot, line, true);
     ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_fp].is_host_ptr = true;
     {
@@ -1115,17 +1056,7 @@ void Lowering::ensure_strdisp() {
     // STORE &<fn_name> al global fp del slot dado.
     auto emit_store_fp = [&](uint64_t fp_slot, const std::string &fn_name) {
         ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
-        ir::IrValueId v_gaddr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_gaddr].is_host_ptr = true;
-        {
-            ir::IrInstr la{};
-            la.op = ir::IrOp::STR_LIT_ADDR;
-            la.type = ir::IrType::PTR;
-            la.dst = v_gaddr;
-            la.imm = fp_slot;
-            la.source_line = ln;
-            emit(current_block_, std::move(la));
-        }
+        ir::IrValueId v_gaddr = emit_str_lit_addr(fp_slot, ln, true);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = ir::IrType::I64;
@@ -1685,6 +1616,40 @@ void Lowering::emit_memcpy(ir::IrValueId dst, ir::IrValueId src,
     mc.operands = {dst, src, len};
     mc.source_line = source_line;
     emit(current_block_, std::move(mc));
+}
+
+/**
+ * @brief La direccion de un dato que ya vive en el ejecutable.
+ *
+ * Los textos, las tablas y todo lo que se conoce al compilar no se construyen
+ * en marcha: se guardan en el propio ejecutable y lo que hace falta en tiempo
+ * de ejecucion es su DIRECCION.  Eso es una sola instruccion, y el numero que
+ * recibe (@p idx) es el sitio que le dio `intern_static_data`.
+ *
+ * El @p host_ptr dice si esa direccion es de la memoria del anfitrion.  Depende
+ * de a donde se compile, no del dato, y marcarlo mal no da error: hace que
+ * quien lo lea despues emita el acceso contra la otra memoria.
+ *
+ * Estaba escrito cuarenta y cuatro veces, en veinte unidades distintas, con
+ * ocho lineas cada vez.
+ *
+ * @param idx         El sitio del dato, el que devolvio `intern_static_data`.
+ * @param source_line Linea fuente, para la depuracion.
+ * @param host_ptr    Si la direccion es de la memoria del anfitrion.
+ * @return El valor SSA con la direccion.
+ */
+ir::IrValueId Lowering::emit_str_lit_addr(uint64_t idx, uint32_t source_line,
+                                          bool host_ptr) {
+    const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+    if (host_ptr) fn_->values[v].is_host_ptr = true;
+    ir::IrInstr la{};
+    la.op = ir::IrOp::STR_LIT_ADDR;
+    la.type = ir::IrType::PTR;
+    la.dst = v;
+    la.imm = idx;
+    la.source_line = source_line;
+    emit(current_block_, std::move(la));
+    return v;
 }
 
 } // namespace vx

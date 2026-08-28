@@ -953,16 +953,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
         std::vector<uint8_t> pbytes(part_text.begin(), part_text.end());
         const uint64_t p_idx = out_mod_->intern_static_data(std::move(pbytes));
         const uint64_t p_len = (uint64_t)part_text.size();
-        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr is{};
-            is.op = ir::IrOp::STR_LIT_ADDR;
-            is.type = ir::IrType::PTR;
-            is.dst = v_addr;
-            is.imm = p_idx;
-            is.source_line = line;
-            emit(current_block_, std::move(is));
-        }
+        ir::IrValueId v_addr = emit_str_lit_addr(p_idx, line);
         ir::IrValueId v_len = emit_const(ir::IrType::I64, p_len, line);
         ir::IrValueId v_handle =
             emit_string_literal_repr(v_addr, v_len, -1, line);
@@ -2235,17 +2226,8 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
     //
     // El literal se interna con su nul para que `cstr()` valga tal cual.
     (void)cap;
-    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_buf].is_host_ptr = true;
-    {
-        ir::IrInstr sa{};
-        sa.op = ir::IrOp::STR_LIT_ADDR;
-        sa.type = ir::IrType::PTR;
-        sa.dst = v_buf;
-        sa.imm = intern_string_literal_nul(*out_mod_, lit);
-        sa.source_line = source_line;
-        emit(current_block_, std::move(sa));
-    }
+    const ir::IrValueId v_buf =
+        emit_str_lit_addr(intern_string_literal_nul(*out_mod_, lit), source_line, true);
     store_slot_fields_prestado(v_slot, v_buf, len, source_line);
     return v_slot;
 

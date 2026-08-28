@@ -652,16 +652,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                     get_or_create_comptime_global_slot(e->name);
                 if (slot_idx != UINT64_MAX) {
                     const int ln = e->loc.line;
-                    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                    {
-                        ir::IrInstr is{};
-                        is.op = ir::IrOp::STR_LIT_ADDR;
-                        is.type = ir::IrType::PTR;
-                        is.dst = v_addr;
-                        is.imm = slot_idx;
-                        is.source_line = ln;
-                        emit(current_block_, std::move(is));
-                    }
+                    ir::IrValueId v_addr = emit_str_lit_addr(slot_idx, ln);
                     ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
                     {
                         ir::IrInstr ld{};
@@ -691,16 +682,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                                            hit->second.str_value.end());
                 const uint64_t idx =
                     out_mod_->intern_static_data(std::move(bytes));
-                ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = v_addr;
-                    is.imm = idx;
-                    is.source_line = e->loc.line;
-                    emit(current_block_, std::move(is));
-                }
+                ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
                 ir::IrValueId v_len = emit_const(
                     ir::IrType::I64,
                     static_cast<uint64_t>(hit->second.str_value.size()),
@@ -748,16 +730,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                         m.section_name = cit->second.attr_section;
                 }
             }
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = idx;
-                is.source_line = e->loc.line;
-                emit(current_block_, std::move(is));
-            }
+            ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
             ir::IrValueId v_len =
                 emit_const(ir::IrType::I64,
                            static_cast<uint64_t>(e->comptime_const_str.size()),
@@ -785,16 +758,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 std::vector<uint8_t> pbytes(sv.begin(), sv.end());
                 const uint64_t p_idx =
                     out_mod_->intern_static_data(std::move(pbytes));
-                ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = v_addr;
-                    is.imm = p_idx;
-                    is.source_line = e->loc.line;
-                    emit(current_block_, std::move(is));
-                }
+                ir::IrValueId v_addr = emit_str_lit_addr(p_idx, e->loc.line);
                 ir::IrValueId v_len =
                     emit_const(ir::IrType::I64,
                                static_cast<uint64_t>(sv.size()), e->loc.line);
@@ -1023,14 +987,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 std::vector<uint8_t> bytes(seq.begin(), seq.end());
                 const uint64_t lit_idx =
                     out_mod_->intern_static_data(std::move(bytes));
-                const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v;
-                is.imm = lit_idx;
-                is.source_line = e->loc.line;
-                emit(current_block_, std::move(is));
+                const ir::IrValueId v = emit_str_lit_addr(lit_idx, e->loc.line);
                 return v;
             }
         }
@@ -1086,16 +1043,7 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
             std::vector<uint8_t> bytes(e->comptime_const_str.begin(),
                                        e->comptime_const_str.end());
             const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = idx;
-                is.source_line = e->loc.line;
-                emit(current_block_, std::move(is));
-            }
+            ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
             ir::IrValueId v_len =
                 emit_const(ir::IrType::I64,
                            static_cast<uint64_t>(e->comptime_const_str.size()),
@@ -1248,16 +1196,8 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
                             m.flags |= ir::IrModule::SD_FLAG_IMMUTABLE;
                             m.flags |= ir::IrModule::SD_FLAG_IMPORTED;
                         }
-                        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                        {
-                            ir::IrInstr is{};
-                            is.op = ir::IrOp::STR_LIT_ADDR;
-                            is.type = ir::IrType::PTR;
-                            is.dst = v_addr;
-                            is.imm = p_idx;
-                            is.source_line = e->loc.line;
-                            emit(current_block_, std::move(is));
-                        }
+                        ir::IrValueId v_addr =
+                            emit_str_lit_addr(p_idx, e->loc.line);
                         ir::IrValueId v_len = emit_const(
                             ir::IrType::I64, static_cast<uint64_t>(sv.size()),
                             e->loc.line);
