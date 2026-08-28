@@ -112,6 +112,22 @@ ProcessVM::ProcessVM(Scheduler &scheduler, GlobalPID pid)
             osr_buffer = new uint64_t[VESTA_OSR_BUFFER_N](); // zero-init
         }
     }
+    /* El icache nace a ceros, y una entrada a ceros dice `pc == 0`.  Como el
+     * acierto se decide comparando el PC con ese campo, la direccion 0 -- que
+     * es una direccion de codigo legitima: es donde cae la PRIMERA funcion del
+     * modulo -- acertaba contra una entrada VACIA y se ejecutaba una
+     * instruccion de ceros en lugar de la que hay ahi.
+     *
+     * Solo se notaba al SALTAR a la 0 con el cache ya en uso: al arrancar el
+     * proceso, `decoded_ptr` todavia es nulo y la condicion del acierto pide
+     * las dos cosas, asi que la primera instruccion se descodificaba de verdad
+     * y dejaba la entrada buena.  Por eso un programa que EMPIEZA en la 0
+     * funcionaba y uno que LLAMA a la 0 no; y por eso solo pasaba interpretado,
+     * porque el codigo compilado no consulta este cache.
+     *
+     * `reset_cache()` ya usa UINT64_MAX para decir "vacia", que no es una
+     * direccion posible.  Lo que faltaba era nacer asi. */
+    reset_cache();
 }
 
 /**
@@ -153,8 +169,8 @@ ProcessVM::~ProcessVM() {
 void ProcessVM::reset_cache() {
     for (auto &entry : icache) {
         entry.pc = UINT64_MAX; // marcar como entrada invalida
-        decoded_ptr = nullptr; // invalidar el puntero de descodificacion activo
     }
+    decoded_ptr = nullptr; // invalidar el puntero de descodificacion activo
 }
 
 /**
