@@ -246,6 +246,10 @@ add_library(vx_lib STATIC
     # el de una VISTA sobre bytes ajenos, donde el desplazamiento puede depender
     # de los campos anteriores y el orden de bytes no ser el de esta maquina.
     lowering/fields.cpp
+    # Lo que ya se sabe al compilar: se baja su RESULTADO, no su calculo.  Va
+    # con la introspeccion porque es lo mismo del otro lado: lo que el programa
+    # puede preguntar de un tipo viaja como datos ya escritos en el binario.
+    lowering/comptime.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
