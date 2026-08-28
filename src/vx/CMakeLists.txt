@@ -178,6 +178,10 @@ add_library(vx_lib STATIC
     # reflexion, introspeccion comptime, colecciones, concurrencia).  Eran
     # 7425 lineas dentro de lowering.cpp -- el 17% del fichero en UNA funcion.
     lowering/builtins.cpp
+    # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
+    # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
+    # instrucciones) y la bajada de un `asm { }` dentro de una funcion.
+    lowering/asm.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
