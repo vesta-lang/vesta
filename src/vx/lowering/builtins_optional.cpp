@@ -78,9 +78,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_Some) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "Some: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "Some: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_payload = lower_expr(e->args[0].get());
         if (v_payload == ir::IR_NO_VALUE) {
@@ -190,10 +188,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     //   Layout: [+0 i64 tag (1=ok, 0=err)][+8 V][+16 E]. 24 bytes.
     if (is_Ok || is_Err) {
         if (e->args.size() != 1) {
-            error_at(e->loc, (is_Ok ? "Ok" : "Err") +
-                                 std::string(": requiere 1 argumento"));
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, (is_Ok ? "Ok" : "Err") +
+                                             std::string(": requiere 1 argumento"), out_value);
         }
         // Bug fix 2026-05-23: si el payload esperado del Result es STRING
         // y el arg es StringLitExpr no interpolado, promover a StringObject
@@ -251,9 +247,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // ----- isOk(r) -----  LOAD i64 at +0; returns 1/0 as i32.
     if (is_isOk) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "isOk: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "isOk: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_buf = lower_expr(e->args[0].get());
         if (v_buf == ir::IR_NO_VALUE) {
@@ -275,9 +269,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // ----- error(r) -----  LOAD E from r+16 (sin tag check en MVP).
     if (is_value || is_error) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "value/error: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "value/error: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_buf = lower_expr(e->args[0].get());
         if (v_buf == ir::IR_NO_VALUE) {
@@ -315,9 +307,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // @c isnull (0x25) invertida con XOR.
     if (is_isPresent) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "isPresent: requiere exactamente 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "isPresent: requiere exactamente 1 argumento", out_value);
         }
         const ir::IrValueId v_arg = lower_expr(e->args[0].get());
         if (v_arg == ir::IR_NO_VALUE) {
@@ -378,10 +368,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     if (is_unwrap || is_unwrap_unchecked) {
         const char *bn = is_unwrap_unchecked ? "unwrap_unchecked" : "unwrap";
         if (e->args.size() != 1) {
-            error_at(e->loc,
-                     std::string(bn) + ": requiere exactamente 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 std::string(bn) + ": requiere exactamente 1 argumento", out_value);
         }
         const ir::IrValueId v_arg = lower_expr(e->args[0].get());
         if (v_arg == ir::IR_NO_VALUE) {

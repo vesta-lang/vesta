@@ -857,10 +857,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // print y echo son sinonimos; println anade '\n' al final.
     if (is_print || is_println || is_echo) {
         if (e->args.size() != 1 || !e->args[0]) {
-            error_at(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                 "' requiere exactamente un argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
+                                             "' requiere exactamente un argumento", out_value);
         }
         emit_print_arg(e->args[0].get());
         if (is_println) emit_print_newline(e->loc.line);
@@ -872,9 +870,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // Vacia el buffer global de vesta_io ahora mismo.  Util para TUIs.
     if (is_gc_collect) {
         if (!e->args.empty()) {
-            error_at(e->loc, "'gc_collect' no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'gc_collect' no acepta argumentos", out_value);
         }
         if (native_poo_) {
             // AOT: CALL al recolector nativo (libvesta_gc).
@@ -904,9 +900,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // observar la finalizacion de escapados sin polling ni residuos de scan.
     if (is_gc_finalize_all) {
         if (!e->args.empty()) {
-            error_at(e->loc, "'gc_finalize_all' no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'gc_finalize_all' no acepta argumentos", out_value);
         }
         module_has_gc_finalizers_ = true;
         if (native_poo_) {
@@ -935,9 +929,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
 
     if (is_flush) {
         if (!e->args.empty()) {
-            error_at(e->loc, "'flush' no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'flush' no acepta argumentos", out_value);
         }
         if (native_poo_) {
             emit_io_prim("__vx_flush", {}, e->loc.line);
@@ -964,10 +956,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         is_print_char || is_print_color || is_print_cstr || is_print_bin ||
         is_print_oct || is_print_ptr || is_print_gchandle) {
         if (e->args.size() != 1) {
-            error_at(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                 "' requiere exactamente un argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
+                                             "' requiere exactamente un argumento", out_value);
         }
         ir::IrValueId v = lower_expr(e->args[0].get());
         if (v == ir::IR_NO_VALUE) {
@@ -1055,9 +1045,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // para construir alineacion manual de columnas (TUI / tablas).
     if (is_print_pad) {
         if (e->args.size() != 2) {
-            error_at(e->loc, "'print_pad' requiere (fill_cp, width)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'print_pad' requiere (fill_cp, width)", out_value);
         }
         ir::IrValueId v_fill = lower_expr(e->args[0].get());
         ir::IrValueId v_w = lower_expr(e->args[1].get());
@@ -1087,10 +1075,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // numerico directamente, sin VAs.
     if (is_print_int) {
         if (e->args.size() != 1) {
-            error_at(e->loc,
-                     "'print_int' requiere exactamente un argumento entero");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "'print_int' requiere exactamente un argumento entero", out_value);
         }
         ir::IrValueId v = lower_expr(e->args[0].get());
         if (v == ir::IR_NO_VALUE) {
@@ -1124,9 +1110,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
      * seria partir la familia por la mitad. */
     if (is_term_clear) {
         if (!e->args.empty()) {
-            error_at(e->loc, "term_clear: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "term_clear: no acepta argumentos", out_value);
         }
         emit_print_string_literal("\x1b[2J\x1b[H", e->loc.line);
         out_value = ir::IR_NO_VALUE;
@@ -1134,9 +1118,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     }
     if (is_term_clear_line) {
         if (!e->args.empty()) {
-            error_at(e->loc, "term_clear_line: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "term_clear_line: no acepta argumentos", out_value);
         }
         emit_print_string_literal("\x1b[2K", e->loc.line);
         out_value = ir::IR_NO_VALUE;
@@ -1170,9 +1152,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     }
     if (is_term_move) {
         if (e->args.size() != 2 || !e->args[0] || !e->args[1]) {
-            error_at(e->loc, "term_move: requiere 2 argumentos (row, col)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "term_move: requiere 2 argumentos (row, col)", out_value);
         }
         // Emite "\x1b[" + row + ";" + col + "H" usando print + print_int.
         emit_print_string_literal("\x1b[", e->loc.line);

@@ -1734,6 +1734,22 @@ class Lowering {
 
     void error_at(SourceLoc loc, std::string msg);
 
+    /**
+     * @brief Un builtin usado mal: lo dice, no da valor, y lo da por atendido.
+     *
+     * Las tres van juntas: el builtin SI era suyo -- el nombre estaba bien, lo
+     * que fallo son los argumentos --, asi que contestar que no haria que el
+     * despacho siguiera buscando y acabara diciendo que ese nombre no existe.
+     * Y dejar el valor sin valor evita un segundo error mas abajo, lejos de lo
+     * que el programador escribio mal.
+     *
+     * @param loc Donde esta el error, para citarlo.
+     * @param msg Que le pasa.
+     * @param out Donde dejar el resultado: queda sin valor.
+     * @return Siempre @c true.
+     */
+    bool builtin_error(SourceLoc loc, std::string msg, ir::IrValueId &out);
+
     // -----------------------------------------------------------------
     // Datos.
     // -----------------------------------------------------------------

@@ -149,11 +149,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         e->args.size() == 1) {
         auto *lit = dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
         if (lit == nullptr || !lit->interp_parts.empty()) {
-            error_at(e->loc, name + ": el argumento debe ser un string "
-                                    "literal con el nombre de la seccion (e.g. "
-                                    "\".boot\")");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, name + ": el argumento debe ser un string "
+                                                "literal con el nombre de la seccion (e.g. "
+                                                "\".boot\")", out_value);
         }
         const uint64_t kind = (b == Builtin::SectionStart) ? 0u
                               : (b == Builtin::SectionEnd) ? 1u
@@ -198,11 +196,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     if (b == Builtin::AsNativeCallback && e->args.size() == 1) {
         auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
         if (fn_id == nullptr) {
-            error_at(
-                e->loc,
-                "as_native_callback: arg debe ser identificador de fn Vesta");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(
+                            e->loc,
+                            "as_native_callback: arg debe ser identificador de fn Vesta", out_value);
         }
         /* Resolver la signature de la fn Vesta para conocer argc. */
         uint32_t argc = 0;
@@ -240,10 +236,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     if (b == Builtin::FiberEntry && e->args.size() == 1) {
         auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
         if (fn_id == nullptr) {
-            error_at(e->loc,
-                     "fiber_entry: arg debe ser identificador de fn cuerpo");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "fiber_entry: arg debe ser identificador de fn cuerpo", out_value);
         }
         out_value = emit_label_addr(fn_id->name, e->loc.line);
         return true;
@@ -275,10 +269,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     if (b == Builtin::Vacount) {
         const ir::IrValueId v = lookup("__vacount");
         if (v == ir::IR_NO_VALUE) {
-            error_at(e->loc, "vacount() solo es valido dentro de una funcion "
-                             "con un parametro variadico 'T... name'");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "vacount() solo es valido dentro de una funcion "
+                                         "con un parametro variadico 'T... name'", out_value);
         }
         out_value = v;
         return true;
@@ -352,10 +344,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     if (is_panic) {
         if (e->args.size() != 1 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc,
-                     "panic: requiere un string literal con el mensaje");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "panic: requiere un string literal con el mensaje", out_value);
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
         const uint64_t msg_idx = intern_class_name(*out_mod_, slit->value);
@@ -413,9 +403,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
          * la check se ejecuta tambien en compile time -- mismo
          * resultado que el AST eval inline. */
         if (e->args.size() != 2) {
-            error_at(e->loc, "static_assert: se esperaba 2 args (cond, msg)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "static_assert: se esperaba 2 args (cond, msg)", out_value);
         }
         const ir::IrValueId v_cond = lower_expr(e->args[0].get());
         if (v_cond == ir::IR_NO_VALUE) {
@@ -442,12 +430,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                    mv.ok && mv.is_str) {
             msg_text = mv.str;
         } else {
-            error_at(e->loc,
-                     "static_assert: el msg debe ser un string "
-                     "comptime-evaluable (un literal, una 'const string' o una "
-                     "concatenacion de ambos)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "static_assert: el msg debe ser un string "
+                                 "comptime-evaluable (un literal, una 'const string' o una "
+                                 "concatenacion de ambos)", out_value);
         }
         /* El mensaje viaja como (direccion, longitud) del espacio de la VM y
          * el helper lo lee con la API del proceso, igual que cualquier otro
@@ -539,9 +525,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
          * Implementado via CALLN a vio_gensym() en el plugin
          * vesta_io que mantiene un counter estatico. */
         if (!e->args.empty()) {
-            error_at(e->loc, "gensym: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "gensym: no acepta argumentos", out_value);
         }
         out_mod_->register_native_import(
             std::string("stdlib/native/io/vesta_io"), "vio_gensym");

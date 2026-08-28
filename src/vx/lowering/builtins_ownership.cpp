@@ -88,9 +88,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_gc_box) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "gc_box: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "gc_box: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_payload = lower_expr(e->args[0].get());
         if (v_payload == ir::IR_NO_VALUE) {
@@ -224,9 +222,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // del scope: LOAD slot; CMP_EQ 0; CALL free(ptr) si no-null.
     if (is_unique_box || is_shared_box) {
         if (e->args.size() != 1) {
-            error_at(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento", out_value);
         }
         // Construccion IN-PLACE para `unique<Punto> p = {.x=10, .y=20}`:
         // si el arg es un InitListExpr con target_type_name anotado
@@ -705,9 +701,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // es Vesta.  El emit_cleanups_all elige CALLN o CALLVM.
     if (is_unique_with || is_shared_with) {
         if (e->args.size() != 2) {
-            error_at(e->loc, std::string(builtin_name(b)) + ": requiere 2 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 2 argumentos", out_value);
         }
         const ir::IrValueId v_payload = lower_expr(e->args[0].get());
         if (v_payload == ir::IR_NO_VALUE) {
@@ -716,11 +710,9 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         }
         // Validar que arg[1] sea IdentExpr (type_checker ya lo verifico).
         if (e->args[1]->kind != ast::NodeKind::IdentExpr) {
-            error_at(e->args[1]->loc,
-                     std::string(builtin_name(b)) +
-                         ": el deleter debe ser un identificador de funcion");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->args[1]->loc,
+                                 std::string(builtin_name(b)) +
+                                     ": el deleter debe ser un identificador de funcion", out_value);
         }
         const auto *deleter_id =
             static_cast<const ast::IdentExpr *>(e->args[1].get());
@@ -832,9 +824,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // ZERIFICA el origen.  Devolvemos el temporal (el call lee tmp[0] = box).
     if (is_move) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "move: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "move: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_src = lower_expr(e->args[0].get());
         if (v_src == ir::IR_NO_VALUE) {
@@ -971,9 +961,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
 
     if (is_get) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "ptr_of: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "ptr_of: requiere 1 argumento", out_value);
         }
         const Type arg_t = e->args[0]->result_type;
         const ir::IrValueId v_slot = lower_expr(e->args[0].get());
@@ -1045,9 +1033,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // ----- use_count(s) -----  i64 refcount del shared<T>.
     if (is_use_count) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "use_count: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "use_count: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_slot = lower_expr(e->args[0].get());
         if (v_slot == ir::IR_NO_VALUE) {
@@ -1098,9 +1084,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     //   write_borrow(m,v) -> STORE a traves del host_ptr (movh).
     if (is_lend || is_lend_mut) {
         if (e->args.size() != 1) {
-            error_at(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento (owner)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento (owner)", out_value);
         }
         /* El prestamo no deja rastro en el IR -- esto no emite instruccion, el
          * puntero es el mismo --, asi que lo que el borrow checker demuestra se
@@ -1230,9 +1214,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     }
     if (is_read_borrow) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "read_borrow: requiere 1 argumento (borrow)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "read_borrow: requiere 1 argumento (borrow)", out_value);
         }
         const ir::IrValueId v_b = lower_expr(e->args[0].get());
         if (v_b == ir::IR_NO_VALUE) {
@@ -1279,10 +1261,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     }
     if (is_write_borrow) {
         if (e->args.size() != 2) {
-            error_at(e->loc,
-                     "write_borrow: requiere 2 argumentos (borrow_mut, value)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "write_borrow: requiere 2 argumentos (borrow_mut, value)", out_value);
         }
         const ir::IrValueId v_b = lower_expr(e->args[0].get());
         const ir::IrValueId v_v = lower_expr(e->args[1].get());
@@ -1309,12 +1289,10 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         if (inner.kind == PrimitiveKind::STRUCT) {
             auto it_l = tc_.struct_layouts().find(inner.struct_name);
             if (it_l == tc_.struct_layouts().end()) {
-                error_at(e->loc,
-                         "write_borrow: no se conoce la disposicion de '" +
-                             inner.struct_name +
-                             "'; no se puede copiar el valor");
-                out_value = ir::IR_NO_VALUE;
-                return true;
+                return builtin_error(e->loc,
+                                     "write_borrow: no se conoce la disposicion de '" +
+                                         inner.struct_name +
+                                         "'; no se puede copiar el valor", out_value);
             }
             const ir::IrValueId v_n = emit_const(
                 ir::IrType::I64,

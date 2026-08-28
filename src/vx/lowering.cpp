@@ -2631,6 +2631,32 @@ void Lowering::unsupported(SourceLoc loc, const char *feature) {
                      feature);
 }
 
+/**
+ * @brief Un builtin usado mal: lo dice, no da valor, y da el caso por atendido.
+ *
+ * Las tres cosas van juntas siempre y por una razon: el builtin SI era suyo
+ * -- el nombre estaba bien, lo que fallo son los argumentos --, asi que
+ * devolver @c false haria que el despacho siguiera buscando y acabara diciendo
+ * que ese nombre no existe.  El mensaje correcto es el que ya se ha dado.
+ *
+ * Y dejar el valor "sin valor" no es cosmetico: quien pidio el resultado tiene
+ * que ver que no lo hay.  Devolverlo a medias produce un segundo error mas
+ * abajo, lejos y sin relacion aparente con lo que el programador escribio mal.
+ *
+ * Estaba escrito a mano 127 veces, cuatro lineas cada una.
+ *
+ * @param loc Donde esta el error, para citarlo.
+ * @param msg Que le pasa.
+ * @param out Donde dejar el resultado: queda sin valor.
+ * @return Siempre @c true -- el caso queda atendido --.
+ */
+bool Lowering::builtin_error(SourceLoc loc, std::string msg,
+                             ir::IrValueId &out) {
+    error_at(loc, std::move(msg));
+    out = ir::IR_NO_VALUE;
+    return true;
+}
+
 void Lowering::error_at(SourceLoc loc, std::string msg) {
     diags_.error(std::move(loc), std::move(msg));
 }

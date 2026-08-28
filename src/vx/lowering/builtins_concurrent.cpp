@@ -107,9 +107,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
      * y un cast a bool. */
     if (is_z6_isshared) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "is_shared: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "is_shared: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_obj = lower_expr(e->args[0].get());
         if (v_obj == ir::IR_NO_VALUE) {
@@ -166,9 +164,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     //   c = share(c);                  // c ahora apunta a la copia shared
     if (is_z6_share) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "share: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "share: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_obj = lower_expr(e->args[0].get());
         if (v_obj == ir::IR_NO_VALUE) {
@@ -186,9 +182,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // Emite @c gcdemote (extended 0xA8).  Idempotente si NO es shared.
     if (is_z6_unshare) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "unshare: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "unshare: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_obj = lower_expr(e->args[0].get());
         if (v_obj == ir::IR_NO_VALUE) {
@@ -211,9 +205,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // atomic_load_i64(ptr) -> i64
     if (is_z8_atomic_load) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "atomic_load_i64: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "atomic_load_i64: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         out_value = emit_atomic_ld_i64(v_ptr, e->loc.line);
@@ -223,9 +215,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // atomic_store_i64(ptr, val) -> void
     if (is_z8_atomic_store) {
         if (e->args.size() != 2) {
-            error_at(e->loc, "atomic_store_i64: requiere 2 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "atomic_store_i64: requiere 2 argumentos", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         const ir::IrValueId v_val = lower_expr(e->args[1].get());
@@ -237,9 +227,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // atomic_cas_i64(ptr, exp, des) -> i64 (old value)
     if (is_z8_atomic_cas) {
         if (e->args.size() != 3) {
-            error_at(e->loc, "atomic_cas_i64: requiere 3 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "atomic_cas_i64: requiere 3 argumentos", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         const ir::IrValueId v_exp = lower_expr(e->args[1].get());
@@ -251,9 +239,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // atomic_add_i64(ptr, delta) -> i64 (old value)
     if (is_z8_atomic_add) {
         if (e->args.size() != 2) {
-            error_at(e->loc, "atomic_add_i64: requiere 2 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "atomic_add_i64: requiere 2 argumentos", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         const ir::IrValueId v_delta = lower_expr(e->args[1].get());
@@ -267,9 +253,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // memoria host accesible cross-process (mismo address space).
     if (is_z8_shared_malloc) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "shared_malloc: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "shared_malloc: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_size = lower_expr(e->args[0].get());
         const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
@@ -292,9 +276,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // shared_free(ptr) -> void
     if (is_z8_shared_free) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "shared_free: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "shared_free: requiere 1 argumento", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         ir::IrInstr ins{};
@@ -310,9 +292,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
 
     if (is_msgsend) {
         if (e->args.size() != 2) {
-            error_at(e->loc, "msgsend: requiere 2 argumentos (pid, valor)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "msgsend: requiere 2 argumentos (pid, valor)", out_value);
         }
         const ir::IrValueId v_pid = lower_expr(e->args[0].get());
         const ir::IrValueId v_val = lower_expr(e->args[1].get());
@@ -378,9 +358,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // pasa con datos), y leemos el i64 del buffer.
     if (is_msgrecv) {
         if (!e->args.empty()) {
-            error_at(e->loc, "msgrecv: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "msgrecv: no acepta argumentos", out_value);
         }
         // AOT (native_poo_): mailbox por valor -> CALL __vx_msgrecv() -> i64
         // (lee de la mailbox de la tarea actual; no bloquea en Fase 2 -- el
@@ -444,9 +422,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // en R0.  Capturamos R0 a {dst} como i64 para pasarlo a fulfill/await.
     if (is_future_alloc) {
         if (!e->args.empty()) {
-            error_at(e->loc, "future_alloc: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "future_alloc: no acepta argumentos", out_value);
         }
         // future -> aloca FutureObject; R0 contiene el handle.
         const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
@@ -470,9 +446,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // void (no captura R0).
     if (is_fulfill) {
         if (e->args.size() != 2) {
-            error_at(e->loc, "fulfill: requiere 2 argumentos (fut, valor)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "fulfill: requiere 2 argumentos (fut, valor)", out_value);
         }
         const ir::IrValueId v_fut = lower_expr(e->args[0].get());
         const ir::IrValueId v_val = lower_expr(e->args[1].get());
@@ -556,9 +530,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         };
         if (is_atomic_load_g) {
             if (e->args.size() != 1) {
-                error_at(e->loc, "atomic_load: requiere 1 argumento (T*)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
+                return builtin_error(e->loc, "atomic_load: requiere 1 argumento (T*)", out_value);
             }
             const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
             ir::IrValueId bits = emit_atomic_ld_i64(v_ptr, e->loc.line, iwt);
@@ -568,9 +540,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         }
         if (is_atomic_store_g) {
             if (e->args.size() != 2) {
-                error_at(e->loc, "atomic_store: requiere 2 argumentos (T*, T)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
+                return builtin_error(e->loc, "atomic_store: requiere 2 argumentos (T*, T)", out_value);
             }
             const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
             ir::IrValueId v_val = lower_expr(e->args[1].get());
@@ -589,10 +559,8 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         }
         if (is_atomic_cas_g) {
             if (e->args.size() != 3) {
-                error_at(e->loc,
-                         "atomic_cas: requiere 3 argumentos (T*, exp, des)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
+                return builtin_error(e->loc,
+                                     "atomic_cas: requiere 3 argumentos (T*, exp, des)", out_value);
             }
             const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
             ir::IrValueId v_exp = lower_expr(e->args[1].get());
@@ -615,9 +583,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         // .vx nunca invoca atomic_add con float (fetch_add sobre float usa el
         // bucle CAS de arriba).  Se baja como entero del ancho de T.
         if (e->args.size() != 2) {
-            error_at(e->loc, "atomic_add: requiere 2 argumentos (T*, delta)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "atomic_add: requiere 2 argumentos (T*, delta)", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         const ir::IrValueId v_delta = lower_expr(e->args[1].get());
@@ -631,9 +597,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
      * procesos se queden esperandose el uno al otro --. */
     if (is_wait || is_notify || is_notifyAll) {
         if (e->args.size() != 1) {
-            error_at(e->loc, std::string(builtin_name(b)) + ": requiere exactamente 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere exactamente 1 argumento", out_value);
         }
         const ir::IrValueId v_obj = lower_expr(e->args[0].get());
         if (v_obj == ir::IR_NO_VALUE) {

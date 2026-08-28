@@ -81,10 +81,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         if (e->args.size() != 2 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::StringLitExpr || !e->args[1] ||
             e->args[1]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc, "'fopen' requiere dos argumentos literales de "
-                             "string (path, mode)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'fopen' requiere dos argumentos literales de "
+                                         "string (path, mode)", out_value);
         }
         auto *path = static_cast<ast::StringLitExpr *>(e->args[0].get());
         auto *mode = static_cast<ast::StringLitExpr *>(e->args[1].get());
@@ -114,10 +112,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     if (is_fwrite) {
         if (e->args.size() != 2 || !e->args[1] ||
             e->args[1]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc, "'fwrite' requiere (FILE*, literal_string) - el "
-                             "buffer debe ser literal");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'fwrite' requiere (FILE*, literal_string) - el "
+                                         "buffer debe ser literal", out_value);
         }
         ir::IrValueId v_fp = lower_expr(e->args[0].get());
         if (v_fp == ir::IR_NO_VALUE) {
@@ -149,9 +145,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // ----- fclose(fp) -> i32 -----
     if (is_fclose) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "'fclose' requiere un argumento (FILE*)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'fclose' requiere un argumento (FILE*)", out_value);
         }
         ir::IrValueId v_fp = lower_expr(e->args[0].get());
         if (v_fp == ir::IR_NO_VALUE) {
@@ -180,10 +174,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // is_host_ptr=true (LOAD/STORE consultan el flag para emitir movh).
     if (is_malloc) {
         if (e->args.size() != 1) {
-            error_at(e->loc,
-                     "'malloc' requiere exactamente un argumento de tamano");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "'malloc' requiere exactamente un argumento de tamano", out_value);
         }
         ir::IrValueId v_size = lower_expr(e->args[0].get());
         if (v_size == ir::IR_NO_VALUE) {
@@ -211,9 +203,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // ----- free(ptr) -----
     if (is_free) {
         if (e->args.size() != 1) {
-            error_at(e->loc, "'free' requiere exactamente un puntero");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "'free' requiere exactamente un puntero", out_value);
         }
         const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
         if (v_ptr == ir::IR_NO_VALUE) {
@@ -246,11 +236,9 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     //   IrOp::SWAPCTX espera operands[0]=dst_ctx, operands[1]=src_ctx.
     if (is_fiber_swapctx) {
         if (e->args.size() != 2) {
-            error_at(e->loc,
-                     "'fiber_swapctx' requiere dos direcciones de contexto VM "
-                     "(from_ctx, to_ctx)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "'fiber_swapctx' requiere dos direcciones de contexto VM "
+                                 "(from_ctx, to_ctx)", out_value);
         }
         const ir::IrValueId v_from = lower_expr(e->args[0].get()); // src (save)
         const ir::IrValueId v_to = lower_expr(e->args[1].get());   // dst (load)
@@ -307,11 +295,9 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     if (is_loadmodule) {
         if (e->args.size() != 1 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(
-                e->loc,
-                "loadmodule: requiere un string literal con la ruta al .velb");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(
+                            e->loc,
+                            "loadmodule: requiere un string literal con la ruta al .velb", out_value);
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
         const uint64_t path_idx = intern_class_name(*out_mod_, slit->value);
@@ -342,10 +328,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     if (is_unloadmodule) {
         if (e->args.size() != 1 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc, "unloadmodule: requiere un string literal con la "
-                             "ruta al .velb");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "unloadmodule: requiere un string literal con la "
+                                         "ruta al .velb", out_value);
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
         const uint64_t path_idx = intern_class_name(*out_mod_, slit->value);
@@ -377,23 +361,17 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     if (is_dispose) {
         if (e->args.size() != 1 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::IdentExpr) {
-            error_at(e->loc,
-                     "dispose: requiere un IdentExpr local de tipo coleccion");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "dispose: requiere un IdentExpr local de tipo coleccion", out_value);
         }
         auto *id_arg = static_cast<ast::IdentExpr *>(e->args[0].get());
         const Type arg_t = id_arg->result_type;
         if (!is_col_kind(arg_t.kind)) {
-            error_at(e->loc, "dispose: el argumento no es de tipo coleccion");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "dispose: el argumento no es de tipo coleccion", out_value);
         }
         const ColType *ct = find_col_type(arg_t.kind);
         if (!ct) {
-            error_at(e->loc, "dispose: tipo coleccion sin entry en COL_TYPES");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "dispose: tipo coleccion sin entry en COL_TYPES", out_value);
         }
         // 1. Lower del IdentExpr para obtener el handle actual.
         const ir::IrValueId v_handle = lower_expr(id_arg);
@@ -449,10 +427,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     if (is_ffi_open) {
         if (e->args.size() != 1 || !e->args[0] ||
             e->args[0]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc, "ffi_open: requiere un string literal con el "
-                             "nombre/path de la DLL");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "ffi_open: requiere un string literal con el "
+                                         "nombre/path de la DLL", out_value);
         }
         auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
         // NUL-terminar el path interned: en AOT nativo se baja a
@@ -486,9 +462,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     if (is_ffi_sym) {
         if (e->args.size() != 2 || !e->args[0] || !e->args[1] ||
             e->args[1]->kind != ast::NodeKind::StringLitExpr) {
-            error_at(e->loc, "ffi_sym: requiere (i64 handle, string lit name)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "ffi_sym: requiere (i64 handle, string lit name)", out_value);
         }
         const ir::IrValueId v_handle = lower_expr(e->args[0].get());
         if (v_handle == ir::IR_NO_VALUE) {
@@ -529,15 +503,11 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // Reusa toda la maquinaria de CALLN para mantener una sola ruta.
     if (is_ffi_call) {
         if (e->args.empty()) {
-            error_at(e->loc,
-                     "ffi_call: requiere al menos el puntero a funcion");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "ffi_call: requiere al menos el puntero a funcion", out_value);
         }
         if (e->args.size() > 13) {
-            error_at(e->loc, "ffi_call: maximo 12 args ademas del puntero");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "ffi_call: maximo 12 args ademas del puntero", out_value);
         }
         std::vector<ir::IrValueId> arg_ids;
         arg_ids.reserve(e->args.size());
@@ -564,9 +534,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
      * quien lo ejecuta. */
     if (is_pid) {
         if (!e->args.empty()) {
-            error_at(e->loc, "pid: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "pid: no acepta argumentos", out_value);
         }
         out_value = emit_getpid(e->loc.line);
         return true;
@@ -579,9 +547,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // no hay cpuid native disponible -> devuelve 0 (consistente, sin error).
     if (is_cpu_features) {
         if (!e->args.empty()) {
-            error_at(e->loc, "cpu_features: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "cpu_features: no acepta argumentos", out_value);
         }
         if (!native_poo_) {
             // Path Full/interp/JIT: la VM corre sobre la CPU real -> emitimos
@@ -636,9 +602,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // Baja a `getargc r_dst`, deposita uint64 que el caller trunca a i32.
     if (is_args_count) {
         if (!e->args.empty()) {
-            error_at(e->loc, "args_count: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "args_count: no acepta argumentos", out_value);
         }
         // getargc devuelve i64 a nivel IR; truncamos a i32 si el caller lo
         // espera.
@@ -667,9 +631,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     // GC_NULL_HANDLE = 0 (que el frontend trata como string nulo).
     if (is_args_get) {
         if (e->args.size() != 1 || !e->args[0]) {
-            error_at(e->loc, "args_get: requiere 1 argumento (i32 indice)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "args_get: requiere 1 argumento (i32 indice)", out_value);
         }
         const ir::IrValueId v_idx = lower_expr(e->args[0].get());
         if (v_idx == ir::IR_NO_VALUE) {

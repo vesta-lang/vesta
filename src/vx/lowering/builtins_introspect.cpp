@@ -102,17 +102,13 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         ast::Expr *arg = e->args[0].get();
         const Type vt = arg->result_type;
         if (vt.kind != PrimitiveKind::STRUCT) {
-            error_at(e->loc, "extent(v): v debe ser una vista @overlay");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "extent(v): v debe ser una vista @overlay", out_value);
         }
         const auto &lays = tc_.struct_layouts();
         auto it = lays.find(vt.struct_name);
         if (it == lays.end() || !it->second.is_overlay) {
-            error_at(e->loc, "extent(v): '" + vt.struct_name +
-                                 "' no es una vista @overlay");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, "extent(v): '" + vt.struct_name +
+                                             "' no es una vista @overlay", out_value);
         }
         const ir::IrValueId base = lower_expr(arg);
         if (base == ir::IR_NO_VALUE) {
@@ -140,11 +136,9 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     if (name == "parent" && !e->type_args.empty() && e->args.empty()) {
         const ir::IrValueId rv = lookup("__ovl_root");
         if (rv == ir::IR_NO_VALUE) {
-            error_at(e->loc,
-                     "parent<T>() solo es valido dentro de un resolver "
-                     "@offset { } (de un overlay accedido como sub-vista)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc,
+                                 "parent<T>() solo es valido dentro de un resolver "
+                                 "@offset { } (de un overlay accedido como sub-vista)", out_value);
         }
         out_value = rv;
         return true;
@@ -173,10 +167,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             field_addr = lower_index_addr(static_cast<ast::IndexExpr *>(arg));
         }
         if (field_addr == ir::IR_NO_VALUE) {
-            error_at(e->loc, std::string(name) + ": el argumento debe ser un acceso a "
-                                    "campo/elemento de un overlay");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string(name) + ": el argumento debe ser un acceso a "
+                                                "campo/elemento de un overlay", out_value);
         }
         // Puntero base de la vista: raiz de la cadena de accesos.
         ast::Expr *root = arg;
@@ -698,10 +690,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         }
         const int64_t off = comptime_field_offset(tc_, t, fname);
         if (off < 0) {
-            error_at(e->loc, std::string(name) + ": el tipo '" + comptime_type_name(tc_, t) +
-                                 "' no tiene campo '" + fname + "'");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string(name) + ": el tipo '" + comptime_type_name(tc_, t) +
+                                             "' no tiene campo '" + fname + "'", out_value);
         }
         const Type ftype = comptime_field_type(tc_, t, fname);
         const ir::IrType ir_t = ir_type_from_primitive(ftype.kind);

@@ -110,10 +110,8 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
         // tan/pow/exp): libm los implementa mejor que cualquier inline.
         auto emit_float_irop = [&](ir::IrOp op, size_t nargs) -> bool {
             if (e->args.size() != nargs) {
-                error_at(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                     "': " + std::to_string(nargs) + " arg(s)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
+                return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
+                                                 "': " + std::to_string(nargs) + " arg(s)", out_value);
             }
             std::vector<ir::IrValueId> ops;
             ops.reserve(nargs);
@@ -175,10 +173,8 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
         // Producen i64 (no float).  Lambda paralela a emit_float_irop.
         auto emit_int_irop = [&](ir::IrOp op, size_t nargs) -> bool {
             if (e->args.size() != nargs) {
-                error_at(e->loc, std::string("'") + std::string(builtin_name(b)) +
-                                     "': " + std::to_string(nargs) + " arg(s)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
+                return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
+                                                 "': " + std::to_string(nargs) + " arg(s)", out_value);
             }
             std::vector<ir::IrValueId> ops;
             ops.reserve(nargs);
@@ -262,10 +258,8 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
             dst_is_float = false;
         }
         if (e->args.size() != expected_args) {
-            error_at(e->loc, std::string("'") + std::string(builtin_name(b)) + "': " +
-                                 std::to_string(expected_args) + " arg(s)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
+            return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) + "': " +
+                                             std::to_string(expected_args) + " arg(s)", out_value);
         }
         std::vector<ir::IrValueId> ops;
         ops.reserve(expected_args);
