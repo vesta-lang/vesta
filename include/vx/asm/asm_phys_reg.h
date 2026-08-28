@@ -244,6 +244,48 @@ inline unsigned asm_codigo_de_ancho(unsigned bits) {
  * @return Bytes, o 0 si la clase no es de un banco ancho (entonces manda el
  *         tipo, como siempre).
  */
+/**
+ * @brief Ranura del banco ancho que ocupa @p clase dentro de SU banco.
+ *
+ * `xmm3`, `ymm3` y `zmm3` son la MISMA ranura: lo que cambia entre ellos es
+ * cuantos bytes hay que mover, y eso lo dice @ref asm_bytes_de_clase.  Por eso
+ * son dos preguntas y no una.
+ *
+ * Vive aqui, con el resto de lo que sabe de registros por ISA, y no en quien
+ * emite: leer un nombre de registro es conocimiento del objetivo, y repetido en
+ * cada emisor son varias reglas en cuanto entre una ISA.
+ *
+ * @param isa ISA del bloque.
+ * @param clase Clase tal como se escribio.
+ * @return Indice dentro del banco ancho, o -1 si no es de un banco ancho o el
+ *         nombre no se entiende.
+ */
+inline int asm_slot_of_class(uint8_t isa, const std::string &clase) {
+    if (clase.empty()) return -1;
+    std::string c;
+    c.reserve(clase.size());
+    for (char ch : clase)
+        c += static_cast<char>(std::tolower((unsigned char)ch));
+    size_t digits = 0;
+    if (isa <= 2) { // familia x86: tres letras de prefijo
+        if (c.size() < 4) return -1;
+        if (c.compare(0, 3, "xmm") != 0 && c.compare(0, 3, "ymm") != 0 &&
+            c.compare(0, 3, "zmm") != 0)
+            return -1;
+        digits = 3;
+    } else { // arm64: una letra
+        if (c.size() < 2) return -1;
+        if (c[0] != 'q' && c[0] != 'v') return -1; // `z` es de largo variable
+        digits = 1;
+    }
+    int n = 0;
+    for (size_t i = digits; i < c.size(); ++i) {
+        if (c[i] < '0' || c[i] > '9') return -1;
+        n = n * 10 + (c[i] - '0');
+    }
+    return n;
+}
+
 inline uint32_t asm_bytes_de_clase(uint8_t isa, const std::string &clase) {
     if (clase.empty()) return 0;
     std::string c;

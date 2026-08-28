@@ -230,25 +230,44 @@ extern "C" uint64_t vrt_inline_asm_exec(uint64_t proc, uint64_t hash,
      * en la del host; el bit 32+i del descriptor dice cual.  Leerlo por la via
      * equivocada daba basura de entrada y tiraba el resultado a la salida. */
     auto es_host = [&](int i) { return (desc >> (32 + i)) & 1ull; };
+    /* Cuantos bytes mide cada operando: tres bits en los bits 40..63.  El cero
+     * es el banco general, que son ocho.  Sin esto, un operando del banco ancho
+     * se movia como si midiera ocho y llegaba a medias -- eso no da error, deja
+     * basura dentro, y por eso el ancho se DICE en vez de deducirse del
+     * registro (`xmm3`, `ymm3` y `zmm3` son la misma ranura). */
+    auto ancho_de = [&](int i) {
+        return static_cast<unsigned>((desc >> (40 + i * 3)) & 0x7ull);
+    };
+    /* Donde vive el valor de un operando dentro del contexto: los del banco
+     * general en su ranura directa, los anchos en la zona de detras, que tiene
+     * @c kAsmCtxVecQwords por ranura.  Es el mismo reparto que usa la otra via
+     * y que espera el trampolin. */
+    auto hueco_de = [&](int i, int phys) -> uint8_t * {
+        if (ancho_de(i) == 0) return reinterpret_cast<uint8_t *>(&ctx[phys]);
+        return reinterpret_cast<uint8_t *>(
+            &ctx[vx::kAsmCtxGpSlots + (size_t)phys * vx::kAsmCtxVecQwords]);
+    };
     // in-marshalling: hueco -> ctx[phys]
     for (int i = 0; i < n && i < 8; ++i) {
         const int phys = static_cast<int>((desc >> (i * 4)) & 0xF);
+        const unsigned bytes = vx::asm_ancho_de_codigo(ancho_de(i));
+        uint8_t *dst = hueco_de(i, phys);
         if (es_host(i)) {
-            std::memcpy(&ctx[phys], reinterpret_cast<const void *>(slots[i]),
-                        sizeof(uint64_t));
+            std::memcpy(dst, reinterpret_cast<const void *>(slots[i]), bytes);
         } else {
-            ctx[phys] = vm->vm_mem.read_u64(slots[i]);
+            vm->vm_mem.read_bytes(slots[i], dst, bytes);
         }
     }
     tramp(ctx); // ejecuta el asm host
     // out-marshalling: ctx[phys] -> hueco
     for (int i = 0; i < n && i < 8; ++i) {
         const int phys = static_cast<int>((desc >> (i * 4)) & 0xF);
+        const unsigned bytes = vx::asm_ancho_de_codigo(ancho_de(i));
+        const uint8_t *src = hueco_de(i, phys);
         if (es_host(i)) {
-            std::memcpy(reinterpret_cast<void *>(slots[i]), &ctx[phys],
-                        sizeof(uint64_t));
+            std::memcpy(reinterpret_cast<void *>(slots[i]), src, bytes);
         } else {
-            vm->vm_mem.write_u64(slots[i], ctx[phys]);
+            vm->vm_mem.write_bytes(slots[i], src, bytes);
         }
     }
     return 0;
@@ -738,9 +757,14 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
         const unsigned base_ancho = vx::kAsmCtxGpSlots * 8;
         nasm += "push r11\n";
         nasm += "mov r11, [rsp + 8]\n";
+        /* El 128 seguia escrito a mano AQUI.  El aviso de arriba lo cuenta y la
+         * DEVOLUCION ya salia de la constante, pero la carga no: se leia en 128
+         * y se escribia en 256, asi que el valor que entraba al bloque no era
+         * el que se habia dejado.  Y como el bloque igual escribia algo, no
+         * daba error -- daba otro resultado. */
         for (int i = 0; i < 16; ++i) {
             std::snprintf(line, sizeof(line), "movups xmm%d, [r11 + 0x%x]\n", i,
-                          128 + i * 64);
+                          base_ancho + i * vx::kAsmCtxVecQwords * 8);
             nasm += line;
         }
         nasm += "pop r11\n";

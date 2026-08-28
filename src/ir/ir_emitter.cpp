@@ -6122,6 +6122,9 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         struct AsmBind {
             ir::IrValueId slot;
             int phys;
+            /// Codigo de ancho (@ref vx::asm_codigo_de_ancho): 0 = banco
+            /// general (8 bytes), 1/2/3 = 16/32/64 del banco ancho.
+            unsigned width_code = 0;
         };
         std::vector<AsmBind> binds;
         bool ancho_sin_pasar = false;
@@ -6130,23 +6133,37 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             for (const auto &b : ctx.fn.asm_reg_bindings) {
                 if (b.alloca_value != opv) continue;
                 if (b.is_vector) {
-                    /* Por aqui el valor del banco ancho no viaja: esta emision
-                     * pasa los operandos por una lista de enteros.
+                    /* El valor del banco ancho tambien viaja.
                      *
-                     * Antes se salia en SILENCIO, y eso es lo peor que podia
-                     * hacer: la ligadura desaparecia de la lista, el bloque se
-                     * ejecutaba con lo que hubiera en ese registro y devolvia
-                     * sin tocar lo que hubiera calculado.  Un resultado
-                     * equivocado sin una sola queja, que es exactamente el
-                     * fallo que se acaba de perseguir tres veces hoy.
+                     * Lo que se pasa de cada operando es la DIRECCION de su
+                     * hueco, no el valor, asi que da igual que mida 8 bytes o
+                     * 64: lo unico que hacia falta era decir CUANTOS mover, y
+                     * para eso el descriptor tenia 24 bits sin usar -- tres por
+                     * operando, que es justo lo que mide el codigo de ancho.
                      *
-                     * Se anota y abajo se para: mejor un bloque que no se emite
-                     * y lo dice, que uno que se emite mintiendo. */
-                    ancho_sin_pasar = true;
+                     * Antes se renunciaba aqui.  Al principio en SILENCIO -- la
+                     * ligadura desaparecia de la lista y el bloque se ejecutaba
+                     * con lo que hubiera en ese registro --, y despues parando
+                     * con un mensaje.  Ninguna de las dos hacia lo que se pedia.
+                     *
+                     * Se sigue renunciando en lo que de verdad no cabe: un
+                     * registro mas ancho que la ranura del contexto, o un
+                     * indice que no entra en los 4 bits del descriptor.  Mover
+                     * medio valor no da error, deja basura dentro. */
+                    const uint8_t isa = (uint8_t)vx::isa_actual();
+                    const int slot = vx::asm_slot_of_class(isa, b.reg);
+                    const uint32_t bytes = vx::asm_bytes_de_clase(isa, b.reg);
+                    if (slot < 0 || slot > 15 || bytes == 0 ||
+                        !vx::asm_cabe_en_ranura(bytes * 8)) {
+                        ancho_sin_pasar = true;
+                        break;
+                    }
+                    binds.push_back(
+                        {opv, slot, vx::asm_codigo_de_ancho(bytes * 8)});
                     break;
                 }
                 const int phys = gp_phys_of_canon(vx::asm_canonical_reg(b.reg));
-                if (phys >= 0) binds.push_back({opv, phys});
+                if (phys >= 0) binds.push_back({opv, phys, 0u});
                 break;
             }
         }
@@ -6198,6 +6215,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             if (binds[i].slot < ctx.fn.values.size() &&
                 ctx.fn.values[binds[i].slot].is_host_ptr)
                 desc |= 1ull << (32 + i);
+            /* Y en los bits 40..63, el ancho: tres por operando.  Sin esto, un
+             * operando del banco ancho se movia como si midiera ocho bytes y
+             * llegaba a medias -- eso no da error, deja basura dentro. */
+            desc |= (uint64_t)(binds[i].width_code & 0x7u) << (40 + i * 3);
         }
 
         // Salvar regs vivos a traves de la llamada (el helper es un calln).
