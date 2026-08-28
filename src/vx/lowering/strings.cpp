@@ -523,17 +523,7 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
     // is_heap = (byte[23] >> 7) & 1.  Cargamos el byte [23] (u8
     // zero-extended) y lo desplazamos 7 bits.  Resultado I64 0 o 1.
     ir::IrValueId v_off = emit_const(ir::IrType::I64, 23, source_line);
-    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_addr].is_host_ptr = fn_->values[v_slot].is_host_ptr;
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr;
-        ad.operands = {v_slot, v_off};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_addr = emit_ptr_add(v_slot, v_off, source_line);
     ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     // is_heap = b23 >> 7  (logico; b23 es 0..255 zero-extended).
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
@@ -561,17 +551,7 @@ ir::IrValueId Lowering::emit_native_str_is_owned(ir::IrValueId v_slot,
     //   prestado  -> (b23 >> 6) == 0b11 = 3 -> owned = 0
     //   SSO       -> (b23 >> 6) == 0b00 = 0 -> owned = 0 (no hay buffer)
     ir::IrValueId v_off = emit_const(ir::IrType::I64, 23, source_line);
-    ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_addr].is_host_ptr = fn_->values[v_slot].is_host_ptr;
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr;
-        ad.operands = {v_slot, v_off};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_addr = emit_ptr_add(v_slot, v_off, source_line);
     ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     ir::IrValueId v_six = emit_const(ir::IrType::I64, 6, source_line);
     ir::IrValueId v_top2 = fn_->new_value(ir::IrType::I64);
@@ -661,17 +641,7 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
     ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
     // sso_len = byte[23] & 0x7F.
     ir::IrValueId v_off23 = emit_const(ir::IrType::I64, 23, source_line);
-    ir::IrValueId v_addr23 = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_addr23].is_host_ptr = fn_->values[v_slot].is_host_ptr;
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr23;
-        ad.operands = {v_slot, v_off23};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_addr23 = emit_ptr_add(v_slot, v_off23, source_line);
     ir::IrValueId v_b23 =
         emit_load_typed(v_addr23, ir::IrType::U8, source_line);
     ir::IrValueId v_mask7f = emit_const(ir::IrType::I64, 0x7F, source_line);

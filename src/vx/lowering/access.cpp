@@ -240,28 +240,13 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         if (base_absolute) {
             t1 = table_base; // ya es una direccion absoluta
         } else {
-            t1 = fn_->new_value(ir::IrType::PTR);
-            fn_->values[t1].is_host_ptr = fn_->values[ov_base].is_host_ptr;
-            ir::IrInstr a{};
-            a.op = ir::IrOp::ADD;
-            a.type = ir::IrType::PTR;
-            a.dst = t1;
-            a.operands = {ov_base, table_base};
-            a.source_line = e->loc.line;
-            emit(current_block_, std::move(a));
+            t1 = emit_ptr_add(ov_base, table_base, e->loc.line);
         }
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[addr].is_host_ptr = fn_->values[ov_base].is_host_ptr;
-        {
-            ir::IrInstr a{};
-            a.op = ir::IrOp::ADD;
-            a.type = ir::IrType::PTR;
-            a.dst = addr;
-            a.operands = {t1, scaled};
-            a.source_line = e->loc.line;
-            emit(current_block_, std::move(a));
-        }
-        return addr;
+        /* Hereda de `t1`, que es su base, y no de `ov_base` como hacia antes.
+         * En el caso normal da lo mismo -- `t1` ya heredo de `ov_base` --, pero
+         * cuando la base es ABSOLUTA `t1` es `table_base` y `ov_base` ya no
+         * tiene nada que ver con esta direccion. */
+        return emit_ptr_add(t1, scaled, e->loc.line);
     }
     const Type bt = e->base->result_type;
     // unique/shared/borrow permiten indexar sin ptr_of.  OJO: el valor SSA de

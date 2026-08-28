@@ -56,15 +56,7 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
             if (fi.offset == 0) return base_addr;
             ir::IrValueId v_off =
                 emit_const(ir::IrType::I64, (uint64_t)fi.offset, line);
-            ir::IrValueId v_a = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_a].is_host_ptr = fn_->values[base_addr].is_host_ptr;
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_a;
-            ad.operands = {base_addr, v_off};
-            ad.source_line = line;
-            emit(current_block_, std::move(ad));
+            ir::IrValueId v_a = emit_ptr_add(base_addr, v_off, line);
             return v_a;
         };
         if (!fi.default_init) {

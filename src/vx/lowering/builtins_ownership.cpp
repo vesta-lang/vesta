@@ -696,15 +696,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         {
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_slot8 = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_slot8].is_host_ptr = fn_->values[v_slot].is_host_ptr;
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::I64;
-            add.dst = v_slot8;
-            add.operands = {v_slot, v_eight};
-            add.source_line = e->loc.line;
-            emit(current_block_, std::move(add));
+            const ir::IrValueId v_slot8 =
+                emit_ptr_add(v_slot, v_eight, e->loc.line);
             emit_store_typed(v_slot8, v_deleter_addr,
                              ir::IrType::I64, e->loc.line);
         }
