@@ -625,15 +625,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     const ir::IrBlockId exit_id = fn_->new_block("while_exit");
 
     // 1. Entry -> header (BR incondicional).
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = header_id;
-        br.source_line = s->loc.line;
-        emit(entry_block, std::move(br));
-    }
-    fn_->blocks[entry_block].succs.push_back(header_id);
-    fn_->blocks[header_id].preds.push_back(entry_block);
+    emit_br_from(entry_block, header_id, s->loc.line);
 
     // 2. En el header, emitir un PHI por cada variable mutada.  Solo
     //    se añade el primer arg (entry); el back-edge se completa
@@ -724,15 +716,7 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     //    ya emitio BR al target adecuado y marco @c block_terminated_.
     if (!block_terminated_) {
         const ir::IrBlockId body_end_id = current_block_;
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = header_id;
-            br.source_line = s->loc.line;
-            emit(body_end_id, std::move(br));
-        }
-        fn_->blocks[body_end_id].succs.push_back(header_id);
-        fn_->blocks[header_id].preds.push_back(body_end_id);
+        emit_br_from(body_end_id, header_id, s->loc.line);
         block_terminated_ = true;
 
         // 6. Completar PHIs con el valor que queda en scope tras la
@@ -909,15 +893,7 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
     const ir::IrBlockId exit_id = fn_->new_block("dowhile_exit");
 
     // entry -> body (BR incondicional para la primera iteracion).
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = body_id;
-        br.source_line = s->loc.line;
-        emit(entry_block, std::move(br));
-    }
-    fn_->blocks[entry_block].succs.push_back(body_id);
-    fn_->blocks[body_id].preds.push_back(entry_block);
+    emit_br_from(entry_block, body_id, s->loc.line);
 
     // PHIs en body.  El primer pred es entry; el segundo (header) se
     // completa al final.
@@ -946,15 +922,7 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
     // Si el body no termino con return, BR a header.
     if (!block_terminated_) {
         const ir::IrBlockId body_end_id = current_block_;
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = header_id;
-            br.source_line = s->loc.line;
-            emit(body_end_id, std::move(br));
-        }
-        fn_->blocks[body_end_id].succs.push_back(header_id);
-        fn_->blocks[header_id].preds.push_back(body_end_id);
+        emit_br_from(body_end_id, header_id, s->loc.line);
         block_terminated_ = true;
     } else {
         // body termina con return: header nunca se alcanza.  Aun asi
@@ -1150,15 +1118,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
     const ir::IrBlockId exit_id = fn_->new_block("for_exit");
 
     // entry -> header
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = header_id;
-        br.source_line = s->loc.line;
-        emit(entry_block, std::move(br));
-    }
-    fn_->blocks[entry_block].succs.push_back(header_id);
-    fn_->blocks[header_id].preds.push_back(entry_block);
+    emit_br_from(entry_block, header_id, s->loc.line);
 
     // header: bajar cond + br_cond.  Si no hay cond, asumimos true.
     current_block_ = header_id;

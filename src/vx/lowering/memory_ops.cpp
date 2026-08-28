@@ -1081,15 +1081,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         const ir::IrBlockId hdr = fn_->new_block("wcopy_w_hdr");
         const ir::IrBlockId body = fn_->new_block("wcopy_w_body");
         const ir::IrBlockId done = fn_->new_block("wcopy_w_done");
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = hdr;
-            br.source_line = source_line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[current_block_].succs.push_back(hdr);
-        fn_->blocks[hdr].preds.push_back(current_block_);
+        emit_br(hdr, source_line);
 
         // hdr: i = load slot ; cond = i < limit8 ; br body, done
         current_block_ = hdr;
@@ -1189,15 +1181,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         const ir::IrBlockId hdr = fn_->new_block("wcopy_b_hdr");
         const ir::IrBlockId body = fn_->new_block("wcopy_b_body");
         const ir::IrBlockId done = fn_->new_block("wcopy_b_done");
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = hdr;
-            br.source_line = source_line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[current_block_].succs.push_back(hdr);
-        fn_->blocks[hdr].preds.push_back(current_block_);
+        emit_br(hdr, source_line);
 
         // hdr: i = load slot ; cond = i < len ; br body, done
         current_block_ = hdr;

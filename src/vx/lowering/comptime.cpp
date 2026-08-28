@@ -440,15 +440,12 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         st.source_line = ln;
         emit(current_block_, std::move(st));
     }
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = cont_bb;
-        br.source_line = ln;
-        emit(current_block_, std::move(br));
-    }
-    fn_->blocks[init_bb].succs.push_back(cont_bb);
-    fn_->blocks[cont_bb].preds.push_back(init_bb);
+    /* La arista se anotaba desde `init_bb` y el salto sale del bloque ACTUAL.
+     * Hoy son el mismo -- nada entre medias abre un bloque nuevo --, pero dejaba
+     * el grafo a merced de que siguiera siendo asi: bastaria meter un
+     * condicional en este init para que la arista dijera que el salto sale de
+     * un sitio del que ya no sale. */
+    emit_br(cont_bb, ln);
 
     current_block_ = cont_bb;
     block_terminated_ = false;
