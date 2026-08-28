@@ -123,25 +123,11 @@ std::string Lowering::ensure_strcmp_helper() {
         emit(current_block_, std::move(al));
         return v;
     };
-    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v;
-        ld.operands = {addr};
-        ld.source_line = ln;
-        emit(current_block_, std::move(ld));
-        return v;
+    auto load_i64 = [&](ir::IrValueId addr) {
+        return emit_load_i64(addr, ln);
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
+        emit_store_i64(addr, val, ln);
     };
     auto load_byte = [&](ir::IrValueId addr) -> ir::IrValueId {
         // LOAD U8 -> zero-extend a i64 (byte unsigned 0..255).
@@ -155,17 +141,8 @@ std::string Lowering::ensure_strcmp_helper() {
         emit(current_block_, std::move(ld));
         return v;
     };
-    auto bin = [&](ir::IrOp op, ir::IrValueId a,
-                   ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = ir::IrType::I64;
-        in.dst = v;
-        in.operands = {a, b};
-        in.source_line = ln;
-        emit(current_block_, std::move(in));
-        return v;
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
+        return emit_ir_binop(op, a, b, ir::IrType::U64, ln);
     };
     auto cmp = [&](ir::IrOp op, ir::IrValueId a,
                    ir::IrValueId b) -> ir::IrValueId {
@@ -1075,25 +1052,11 @@ std::string Lowering::ensure_str_cplen_helper() {
         emit(current_block_, std::move(al));
         return v;
     };
-    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v;
-        ld.operands = {addr};
-        ld.source_line = ln;
-        emit(current_block_, std::move(ld));
-        return v;
+    auto load_i64 = [&](ir::IrValueId addr) {
+        return emit_load_i64(addr, ln);
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
+        emit_store_i64(addr, val, ln);
     };
     auto load_byte = [&](ir::IrValueId addr) -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::I64);
@@ -1106,17 +1069,8 @@ std::string Lowering::ensure_str_cplen_helper() {
         emit(current_block_, std::move(ld));
         return v;
     };
-    auto bin = [&](ir::IrOp op, ir::IrValueId a,
-                   ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = ir::IrType::I64;
-        in.dst = v;
-        in.operands = {a, b};
-        in.source_line = ln;
-        emit(current_block_, std::move(in));
-        return v;
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
+        return emit_ir_binop(op, a, b, ir::IrType::U64, ln);
     };
     ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, ln);
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, ln);
@@ -1258,25 +1212,11 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         emit(current_block_, std::move(al));
         return v;
     };
-    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v;
-        ld.operands = {addr};
-        ld.source_line = ln;
-        emit(current_block_, std::move(ld));
-        return v;
+    auto load_i64 = [&](ir::IrValueId addr) {
+        return emit_load_i64(addr, ln);
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
+        emit_store_i64(addr, val, ln);
     };
     auto load_byte_at = [&](ir::IrValueId base,
                             ir::IrValueId off) -> ir::IrValueId {
@@ -1300,17 +1240,8 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         st.source_line = ln;
         emit(current_block_, std::move(st));
     };
-    auto bin = [&](ir::IrOp op, ir::IrValueId a,
-                   ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = ir::IrType::I64;
-        in.dst = v;
-        in.operands = {a, b};
-        in.source_line = ln;
-        emit(current_block_, std::move(in));
-        return v;
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
+        return emit_ir_binop(op, a, b, ir::IrType::U64, ln);
     };
     auto cst = [&](uint64_t k) -> ir::IrValueId {
         return emit_const(ir::IrType::I64, k, ln);

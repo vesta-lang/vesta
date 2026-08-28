@@ -474,6 +474,45 @@ class Lowering {
     void emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
                       ir::IrBlockId t_false, uint32_t source_line);
 
+    /**
+     * @brief Lee un qword de una direccion.
+     *
+     * @param addr        De donde leer.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA leido.
+     */
+    ir::IrValueId emit_load_i64(ir::IrValueId addr, uint32_t source_line);
+
+    /**
+     * @brief Escribe un qword en una direccion.
+     *
+     * Los argumentos van como se lee en el fuente -- donde, y que --, no en el
+     * orden que la instruccion guarda por dentro.
+     *
+     * @param addr        Donde escribir.
+     * @param val         Que escribir.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
+                        uint32_t source_line);
+
+    /**
+     * @brief Emite una operacion de dos operandos del IR.
+     *
+     * No confundir con @ref emit_binop_ir, que traduce un operador del
+     * LENGUAJE (con sus reglas de signo y de coma flotante).  Esta emite la
+     * instruccion del IR que se le pida, tal cual.
+     *
+     * @param op          Que operacion.
+     * @param a           Primer operando.
+     * @param b           Segundo operando.
+     * @param t           Tipo del resultado.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA con el resultado.
+     */
+    ir::IrValueId emit_ir_binop(ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
+                                ir::IrType t, uint32_t source_line);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);

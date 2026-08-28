@@ -1587,4 +1587,82 @@ ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, uint64_t off,
                         source_line);
 }
 
+/**
+ * @brief Lee un qword de una direccion.
+ *
+ * Ocho bytes es el ancho con el que se leen los campos internos de una cadena
+ * -- su longitud, su capacidad, el puntero a sus bytes -- y de ahi que este
+ * caso concreto valga la pena aparte: estaba escrito cuatro veces, una por
+ * funcion que monta uno de esos helpers a mano.
+ *
+ * @param addr        De donde leer.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA leido.
+ */
+ir::IrValueId Lowering::emit_load_i64(ir::IrValueId addr,
+                                      uint32_t source_line) {
+    const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ld{};
+    ld.op = ir::IrOp::LOAD;
+    ld.type = ir::IrType::I64;
+    ld.dst = v;
+    ld.operands = {addr};
+    ld.source_line = source_line;
+    emit(current_block_, std::move(ld));
+    return v;
+}
+
+/**
+ * @brief Escribe un qword en una direccion.
+ *
+ * El orden de los operandos NO es el de la firma: la instruccion los quiere
+ * `{valor, direccion}` y aqui se reciben al reves, que es como se lee en el
+ * fuente ("escribe en esta direccion este valor").  Invertirlos escribe la
+ * direccion como si fuera el dato.
+ *
+ * @param addr        Donde escribir.
+ * @param val         Que escribir.
+ * @param source_line Linea fuente, para la depuracion.
+ */
+void Lowering::emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
+                              uint32_t source_line) {
+    ir::IrInstr st{};
+    st.op = ir::IrOp::STORE;
+    st.type = ir::IrType::I64;
+    st.dst = ir::IR_NO_VALUE;
+    st.operands = {val, addr};
+    st.source_line = source_line;
+    emit(current_block_, std::move(st));
+}
+
+/**
+ * @brief Emite una operacion de dos operandos y devuelve su resultado.
+ *
+ * Estaba escrito seis veces en dos formas, y la diferencia entre ellas no era
+ * de estilo: tres pasaban el tipo del resultado y NO ponian linea fuente -- esas
+ * instrucciones salian sin linea, y la depuracion las perdia --, y las otras
+ * tres fijaban el tipo a entero sin signo y si la ponian.  Aqui van las dos
+ * cosas, porque las dos hacen falta.
+ *
+ * @param op          Que operacion.
+ * @param a           Primer operando.
+ * @param b           Segundo operando.
+ * @param t           Tipo del resultado.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA con el resultado.
+ */
+ir::IrValueId Lowering::emit_ir_binop(ir::IrOp op, ir::IrValueId a,
+                                      ir::IrValueId b, ir::IrType t,
+                                      uint32_t source_line) {
+    const ir::IrValueId d = fn_->new_value(t);
+    ir::IrInstr in{};
+    in.op = op;
+    in.type = t;
+    in.dst = d;
+    in.operands = {a, b};
+    in.source_line = source_line;
+    emit(current_block_, std::move(in));
+    return d;
+}
+
 } // namespace vx

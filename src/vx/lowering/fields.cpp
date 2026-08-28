@@ -289,15 +289,8 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
 
     // Helpers de emision (u64).
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
-                   ir::IrType t) -> ir::IrValueId {
-        ir::IrValueId d = fn_->new_value(t);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = t;
-        in.dst = d;
-        in.operands = {a, b};
-        emit(current_block_, std::move(in));
-        return d;
+                   ir::IrType t) {
+        return emit_ir_binop(op, a, b, t, 0);
     };
     // max sin ramas: max(a,b) = b ^ ((a^b) & -(a>b)).
     auto emit_max = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
@@ -607,17 +600,8 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
     pop_scope();
     if (big == ir::IR_NO_VALUE) return value;
 
-    auto bin = [&](ir::IrOp op, ir::IrValueId a,
-                   ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId d = fn_->new_value(ir::IrType::U64);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = ir::IrType::U64;
-        in.dst = d;
-        in.operands = {a, b};
-        in.source_line = line;
-        emit(current_block_, std::move(in));
-        return d;
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
+        return emit_ir_binop(op, a, b, ir::IrType::U64, line);
     };
     // 2. sw = bswap64(value) >> (8-w)*8  (BYTESWAP swapea los 8 bytes).
     ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);

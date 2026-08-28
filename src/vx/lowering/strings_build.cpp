@@ -721,25 +721,11 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         emit(current_block_, std::move(al));
         return v;
     };
-    auto load_i64 = [&](ir::IrValueId addr) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v;
-        ld.operands = {addr};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-        return v;
+    auto load_i64 = [&](ir::IrValueId addr) {
+        return emit_load_i64(addr, source_line);
     };
     auto store_i64 = [&](ir::IrValueId addr, ir::IrValueId val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_i64(addr, val, source_line);
     };
     auto store_byte = [&](ir::IrValueId addr, ir::IrValueId val) {
         ir::IrInstr st{};
@@ -750,17 +736,8 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         st.source_line = source_line;
         emit(current_block_, std::move(st));
     };
-    auto bin = [&](ir::IrOp op, ir::IrValueId a,
-                   ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = ir::IrType::I64;
-        in.dst = v;
-        in.operands = {a, b};
-        in.source_line = source_line;
-        emit(current_block_, std::move(in));
-        return v;
+    auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
+        return emit_ir_binop(op, a, b, ir::IrType::U64, source_line);
     };
     auto new_block = [&]() -> ir::IrBlockId { return fn_->new_block(); };
     auto v_one_helper = [&](uint32_t) -> ir::IrValueId {
