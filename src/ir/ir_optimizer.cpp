@@ -7285,6 +7285,25 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                 }
             }
         }
+        /* Los punteros de clase de la devirtualizacion especulativa, por lo
+         * mismo que el `func_ptr` de arriba: se referencian desde una tabla
+         * lateral (@c spec_devirt_sites), no desde un operando, asi que aqui no
+         * se ven usados -- y todavia no lo estan, porque las guardas que los
+         * comparan las crea @c ir_pass_spec_devirt DESPUES de este pase.
+         *
+         * Sin esto se borraban por muertos, las guardas nacian apuntando a
+         * valores que ya no existian, y al emitir esos operandos caian en un
+         * registro de scratch con lo que hubiera dentro.  El resultado: NINGUNA
+         * guarda acertaba nunca, cada llamada pagaba las K comparaciones
+         * fallidas Y el despacho original.
+         *
+         * No lo delataba ningun test porque la especulacion es correcta por
+         * construccion -- si nada casa, se cae al despacho de siempre --, asi
+         * que el programa daba el resultado bueno y solo perdia tiempo:
+         * `bench_pic_real` tardaba un 77% mas que sin el pase. */
+        for (const auto &kv : fn.spec_devirt_sites)
+            for (const DevirtCandidate &c : kv.second)
+                if (c.cls_value != IR_NO_VALUE) used.insert(c.cls_value);
     }
     /* La cache se valida por TAMANO: si la funcion tiene otras instrucciones
      * que cuando se lleno, las posiciones ya no significan lo mismo y se tira
