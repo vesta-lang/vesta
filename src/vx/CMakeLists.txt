@@ -194,6 +194,13 @@ add_library(vx_lib STATIC
     # distinto (tabla densa de saltos, cadena de comparaciones, comparacion de
     # bytes), y elegir esa forma es el trabajo del fichero.
     lowering/match.cpp
+    # Lo que se ejecuta en OTRO sitio: spawn, @Async y el spawn remoto.  Los
+    # tres tienen el mismo problema: el cuerpo escrito dentro de la funcion no
+    # se ejecuta ahi, hay que sacarlo y averiguar que se lleva consigo.
+    lowering/async.cpp
+    # Las sentencias: el control de flujo y el retorno.  No producen un valor,
+    # producen una FORMA en el grafo de bloques, y se construye ya en SSA.
+    lowering/statements.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp

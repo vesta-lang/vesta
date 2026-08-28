@@ -24,9 +24,11 @@
 #define VESTA_VX_LOWERING_INTERNAL_H
 
 #include "ir/ssa_ir.h"
+#include "vx/ast.h"
 
 #include <cstdint>
 #include <string>
+#include <set>
 #include <vector>
 
 namespace vx {
@@ -92,6 +94,20 @@ uint64_t intern_class_cache_slot(ir::IrModule &mod, const std::string &name);
  * @return @c true si se partio; @c false si se dejo intacta.
  */
 bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out);
+
+/**
+ * @brief Recoge los nombres a los que un sub-arbol ASIGNA.
+ *
+ * Lo necesita quien construye un bucle: una variable que el cuerpo modifica
+ * tiene que entrar por una phi en la cabecera, o el bucle leeria siempre el
+ * valor de la primera vuelta.  Es deliberadamente generoso -- puede nombrar
+ * cosas que no son del ambito --; filtrar es cosa de quien pregunta, que si
+ * sabe que hay declarado justo antes del bucle.
+ *
+ * @param n   Nodo a inspeccionar; @c nullptr no aporta nada.
+ * @param out Conjunto al que se anaden los nombres.
+ */
+void collect_assigned_vars(const ast::Node *n, std::set<std::string> &out);
 
 } // namespace vx
 
