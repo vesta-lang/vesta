@@ -1464,4 +1464,49 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
     }
 }
 
+/**
+ * @brief Reserva un hueco de @p bytes en el marco actual y devuelve su
+ *        direccion.
+ *
+ * Un hueco de pila no se libera: muere con el marco que lo creo.  Por eso es
+ * lo correcto para lo que no debe sobrevivir a la funcion -- el par
+ * {hay, valor} de un `Optional`, el par {puntero, borrador} de un puntero
+ * inteligente -- y por eso envolver un valor no cuesta una reserva de memoria.
+ *
+ * El @p for_optres no es un detalle: un `Optional` que se devuelve viaja por
+ * la direccion que dio el llamante, y esa direccion es del ANFITRION.  Si el
+ * hueco se reservara en la memoria de la maquina virtual, el llamante leeria
+ * en el sitio equivocado.  Marcarlo aqui lo pone en la misma memoria que su
+ * destino.  Los punteros inteligentes NO lo quieren, que por eso el
+ * comportamiento no es el mismo para los dos.
+ *
+ * Era una lambda dentro de la bajada de los builtins, asi que de ahi no salia
+ * aunque la necesitaran otras familias.  No capturaba nada -- solo usa el
+ * estado del propio bajador --, de modo que pasar a metodo no cambio ninguna
+ * llamada.
+ *
+ * @param bytes      Cuanto reservar.
+ * @param line       Linea fuente, para la depuracion.
+ * @param for_optres Si el hueco es de un Optional/Result que se devuelve.
+ * @return El valor SSA con la direccion del hueco.
+ */
+ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
+                                        bool for_optres) {
+    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr al{};
+    al.op = ir::IrOp::ALLOCA;
+    al.type = ir::IrType::I8;
+    al.imm = bytes;
+    al.dst = v_buf;
+    al.source_line = line;
+    if (for_optres) {
+        al.host_alloca = true;
+    }
+    emit(current_block_, std::move(al));
+    if (for_optres) {
+        fn_->values[v_buf].is_host_ptr = true;
+    }
+    return v_buf;
+}
+
 } // namespace vx

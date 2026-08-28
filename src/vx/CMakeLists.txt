@@ -199,6 +199,9 @@ add_library(vx_lib STATIC
     # buzones y futuros.  Existen porque lo que uno escribe lo tiene que ver
     # el otro, y en el orden correcto.
     lowering/builtins_concurrent.cpp
+    # Builtins de lo que puede NO estar: Optional y Result.  Construirlos,
+    # preguntar y sacar el valor.  Ninguno toca el monton: viven en la pila.
+    lowering/builtins_optional.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.

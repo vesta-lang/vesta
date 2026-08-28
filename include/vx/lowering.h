@@ -285,6 +285,37 @@ class Lowering {
     bool try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
                                        ir::IrValueId &out_value);
 
+    /**
+     * @brief Intenta bajar una llamada como uno de los builtins de lo que
+     *        puede NO estar: `Optional<T>` y `Result<T, E>`.
+     *
+     * Construirlos, preguntar si hay algo dentro y sacarlo.  Los dos son la
+     * misma idea -- un valor que lleva consigo si esta o no --, y ninguno toca
+     * el monton: viven en la pila y se devuelven por la direccion que da el
+     * llamante, asi que envolver un valor no cuesta una reserva.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
+                                     ir::IrValueId &out_value);
+
+    /**
+     * @brief Reserva un hueco de @p bytes en el marco actual.
+     *
+     * Lo que se reserva aqui muere con el marco, asi que es lo correcto para
+     * lo que no debe sobrevivir a la funcion.  @p for_optres lo pone en la
+     * memoria del ANFITRION, que es donde un Optional/Result devuelto tiene
+     * que estar para que el llamante lo lea en el sitio correcto; los punteros
+     * inteligentes NO lo quieren.
+     *
+     * @param bytes      Cuanto reservar.
+     * @param line       Linea fuente, para la depuracion.
+     * @param for_optres Si el hueco es de un Optional/Result que se devuelve.
+     * @return El valor SSA con la direccion del hueco.
+     */
+    ir::IrValueId stack_alloc_buf(uint64_t bytes, uint32_t line,
+                                  bool for_optres = false);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);
