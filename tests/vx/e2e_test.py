@@ -3000,6 +3000,17 @@ fails_case("region375", "un acceso demostrablemente fuera de su region corta la 
 fails_case("region376", "con tamano SIMBOLICO tambien se demuestra: el acceso se sale del mayor bloque posible", "376_rango_simbolico.vx", "outside")
 r0_case("rango_ok", "el rango tambien sirve para NO estorbar: acceso que cabe en cualquier tamano posible", "377_rango_ok.vx", 42)
 fails_case("region378", "un indice VARIABLE se juzga por su rango: el intervalo entero cae fuera del objeto", "378_indice_variable.vx", "outside")
+
+# Semantica de la cadena de aspectos.  No van en `diff3_case` porque el AOP no
+# existe en compilacion nativa (se rechaza con un error), asi que se comprueban
+# en interprete y JIT.  Fijan el ORDEN y lo que ve cada advice, que es lo que
+# cualquier optimizacion del despacho -- devirtualizar, tejer, integrar -- tiene
+# que dejar intacto: hasta ahora eso lo cubrian dos ejemplos que solo miraban el
+# resultado final, y el resultado final no distingue una cadena bien recorrida
+# de otra que casualmente suma lo mismo.
+vm_jit_r0_case("aop_cadena_orden", "orden de la cadena: los @Before, el metodo y el @After, y el @After ve los args ORIGINALES", "379_aop_cadena_orden.vx", 42)
+vm_jit_r0_case("aop_around_anidado", "varios @Around se ANIDAN, y el primero declarado es el mas externo", "380_aop_around_anidado.vx", 147)
+vm_jit_r0_case("aop_after_returning", "@AfterReturning recibe el RESULTADO del metodo, no sus argumentos", "381_aop_after_returning.vx", 742)
 r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
 r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)

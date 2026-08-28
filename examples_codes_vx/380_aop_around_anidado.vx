@@ -1,0 +1,45 @@
+/**
+ * @file 380_aop_around_anidado.vx
+ * @brief Varios `@Around` sobre el mismo metodo se ANIDAN, no se encadenan.
+ *
+ * Un `@Around` envuelve al metodo: decide si llamarlo (`proceed()`), con que
+ * y que hacer con lo que devuelva.  Cuando hay varios, cada uno envuelve al
+ * SIGUIENTE, y el ultimo envuelve al metodo:
+ *
+ *     externo( interno( metodo() ) )
+ *
+ * y el orden de anidamiento es el de declaracion: **el primero declarado es el
+ * mas externo**.  Eso importa porque no es conmutativo -- con las operaciones
+ * de este ejemplo, invertirlo da 153 en vez de 147 -- y porque cualquier
+ * optimizacion que teja la cadena en el sitio de llamada tiene que anidar en
+ * ese mismo orden.
+ *
+ * El metodo devuelve 7.  El interno hace `7 * 10 + 3 = 73`; el externo,
+ * `73 * 2 + 1 = 147`.
+ *
+ * Esperado: R0 == 147.
+ */
+
+class Service {
+    public Service() { }
+    public i32 run(i32 x) { return x; }
+}
+
+@Aspect class Envoltura {
+    public Envoltura() { }
+
+    /** @brief Declarado el primero: es el mas EXTERNO, envuelve al de abajo. */
+    @Around("Service.run") public i32 externo(i32 x) {
+        return proceed() * 2 + 1;
+    }
+
+    /** @brief Declarado el segundo: es el mas INTERNO, envuelve al metodo. */
+    @Around("Service.run") public i32 interno(i32 x) {
+        return proceed() * 10 + 3;
+    }
+}
+
+i32 main() {
+    Service s = new Service();
+    return s.run(7); // externo(interno(7)) = (7 * 10 + 3) * 2 + 1 = 147
+}

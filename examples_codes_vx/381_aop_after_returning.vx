@@ -1,0 +1,36 @@
+/**
+ * @file 381_aop_after_returning.vx
+ * @brief `@AfterReturning` recibe el RESULTADO del metodo, no sus argumentos.
+ *
+ * Es lo que lo distingue de un `@After` a secas, que ve los argumentos
+ * originales (ver @ref 379_aop_cadena_orden.vx): aqui el resultado del metodo
+ * se le entrega como su primer parametro, ocupando el sitio del primer
+ * argumento declarado.
+ *
+ * El metodo devuelve `x * 100` = 700 con x=7; el advice recibe ese 700 -- no
+ * el 7 -- y devuelve 742, que es lo que sale de la llamada.
+ *
+ * Esperado: R0 == 742.
+ */
+
+class Service {
+    public Service() { }
+    public i32 run(i32 x) { return x * 100; }
+}
+
+@Aspect class Observador {
+    public Observador() { }
+
+    /**
+     * @brief Recibe el resultado del metodo.
+     * @param resultado Lo que devolvio `run`, no lo que recibio.
+     */
+    @AfterReturning("Service.run") public i32 visto(i32 resultado) {
+        return resultado + 42; // 700 + 42; con los args seria 7 + 42 = 49
+    }
+}
+
+i32 main() {
+    Service s = new Service();
+    return s.run(7); // 742
+}

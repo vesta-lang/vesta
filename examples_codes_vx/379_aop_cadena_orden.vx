@@ -1,0 +1,71 @@
+/**
+ * @file 379_aop_cadena_orden.vx
+ * @brief El ORDEN en que se ejecuta una cadena de aspectos sobre un metodo.
+ *
+ * Un metodo con aspectos no se llama solo: el despacho recorre su cadena.  El
+ * orden y lo que ve cada advice son la semantica que cualquier optimizacion
+ * -- devirtualizar, tejer en el sitio de llamada, integrar -- tiene que dejar
+ * intacta, asi que se fija aqui con un valor que solo sale si se respeta:
+ *
+ *   1. Los `@Before`, en orden de declaracion.  Su valor se descarta.
+ *   2. El metodo.
+ *   3. Los `@After`, en orden de declaracion.  Cada uno recibe los argumentos
+ *      ORIGINALES -- no el resultado -- y lo que devuelve REEMPLAZA el valor.
+ *
+ * Cada paso deja su marca en un contador estatico (`traza = traza * 10 + N`),
+ * de modo que el numero final dice la secuencia exacta y no solo el resultado.
+ *
+ * Esperado: R0 == 42.
+ */
+
+class Traza {
+    public static i32 pasos = 0;
+    public Traza() { }
+}
+
+class Service {
+    public Service() { }
+    public i32 run(i32 x) {
+        Traza.pasos = Traza.pasos * 10 + 3; // el metodo es el paso 3
+        return x * 100;                     // 700; lo reemplazara el @After
+    }
+}
+
+@Aspect class Reloj {
+    public Reloj() { }
+
+    /** @brief Primer `@Before`: se ejecuta el primero de todos. */
+    @Before("Service.run") public i32 antes1(i32 x) {
+        Traza.pasos = Traza.pasos * 10 + 1;
+        return 111; // descartado
+    }
+
+    /** @brief Segundo `@Before`: despues del primero, antes del metodo. */
+    @Before("Service.run") public i32 antes2(i32 x) {
+        Traza.pasos = Traza.pasos * 10 + 2;
+        return 222; // descartado
+    }
+
+    /**
+     * @brief `@After`: recibe los argumentos ORIGINALES, no el resultado.
+     *
+     * Devuelve `x + 38` con la x de la llamada (4), no con el 700 que devolvio
+     * el metodo: si viera el resultado, el total no cuadraria.
+     */
+    @After("Service.run") public i32 despues(i32 x) {
+        Traza.pasos = Traza.pasos * 10 + 4;
+        return x + 38; // 4 + 38 = 42
+    }
+}
+
+i32 main() {
+    Service s = new Service();
+    i32 r = s.run(4); // 42, puesto por el @After
+
+    // La traza tiene que ser exactamente 1234: los dos @Before, el metodo y
+    // el @After, en ese orden.  Cualquier otra secuencia la delata.
+    if (Traza.pasos != 1234) {
+        return 1; // orden equivocado
+    }
+    return r;
+}
