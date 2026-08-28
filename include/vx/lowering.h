@@ -57,6 +57,7 @@
 #include <vector>
 
 #include "ir/ssa_ir.h"
+#include "vx/asm/asm_lift_reason.h" // AsmMotivoOpaco: POR QUE no se pudo elevar
 #include "vx/builtin_names.h" // Builtin: el nombre ya resuelto, no la cadena
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
@@ -809,6 +810,46 @@ class Lowering {
      * @return Siempre @c true; @c false si la llamada estaba mal escrita.
      */
     bool lower_borrow_of(ast::CallExpr *e, Builtin b, ir::IrValueId &out_value);
+
+    /**
+     * @brief Avisa de lo que el compilador ve mal en un bloque `asm`.
+     *
+     * Solo de los que debe ENTENDER: un bloque crudo es cero-analisis por
+     * diseno.  Los avisos salen CATALOGADOS -- codigo mas argumentos, nunca
+     * una frase hecha --, y hay uno que solo aplica al modelo clasico: donde
+     * SI se listan operandos, lo que denuncia no es un fallo sino lo
+     * declarado.
+     *
+     * @param s El bloque.
+     */
+    void emit_asm_diagnostics(ast::AsmStmt *s);
+
+    /**
+     * @brief Comprueba que el cuerpo del bloque `asm` ensambla.
+     *
+     * Se ensambla ENTERO -- una linea sola no ve la etiqueta a la que otra
+     * salta -- y para el OBJETIVO, no para la maquina donde corre el
+     * compilador.  Los bytes se tiran: esto es solo la comprobacion.
+     *
+     * @param s        El bloque.
+     * @param body_sub El cuerpo con los sustitutos ya resueltos.
+     * @return @c false si no ensambla, con el error ya dado.
+     */
+    bool validate_asm_syntax(ast::AsmStmt *s, const std::string &body_sub);
+
+    /**
+     * @brief Intenta traducir el bloque `asm` a IR en vez de dejarlo opaco.
+     *
+     * Un bloque que el compilador entiende deja de ser una caja negra: el
+     * optimizador lo ve y el asignador reparte sus registros.  Si sale, el
+     * bloque NO se emite ademas como opaco.
+     *
+     * @param s        El bloque.
+     * @param asm_name El cuerpo ya normalizado, que identifica al bloque.
+     * @return @c true si quedo traducido y no hay que emitir nada mas.
+     */
+    bool try_lift_asm_block(ast::AsmStmt *s, const std::string &asm_name,
+                            AsmMotivoOpaco &motivo_opaco);
 
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
