@@ -1992,4 +1992,394 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
     emit(current_block_, std::move(st));
 }
 
+ir::IrValueId Lowering::emit_folded_string_blob(const std::string &utf8,
+                                                int enc, uint32_t line) {
+    std::vector<uint8_t> bytes;
+    if (!transcode_literal(utf8, enc, bytes)) return ir::IR_NO_VALUE;
+
+    const auto key = std::make_pair(utf8, enc);
+    auto it = folded_str_blobs_.find(key);
+    uint64_t slot;
+    if (it != folded_str_blobs_.end()) {
+        slot = it->second;
+    } else {
+        // push_back directo (no intern): el intern deduplica POR CONTENIDO y
+        // podria devolver un slot ya existente de la seccion `data` (memoria
+        // VM), que al marcarlo host romperia a quien lo use como direccion VM.
+        slot = static_cast<uint64_t>(
+            out_mod_->static_data.push_back(bytes.data(), bytes.size()));
+        auto &m = out_mod_->static_data.meta_at(slot);
+        m.flags |= ir::IrModule::SD_FLAG_NON_DEDUP;
+        // `.data` es lo que enruta el slot a la seccion `gdata` (memoria HOST):
+        // el blob tiene que ser direccionable por una API nativa.
+        m.section_name = ".data";
+        // UTF-16 y UTF-32 exigen alineacion propia para leerse como u16/u32.
+        m.alignment = (enc == 3) ? 2 : ((enc == 4) ? 4 : 1);
+        folded_str_blobs_[key] = slot;
+    }
+
+    const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr is{};
+    is.op = ir::IrOp::STR_LIT_ADDR;
+    is.type = ir::IrType::PTR;
+    is.dst = v;
+    is.imm = slot;
+    is.source_line = line;
+    emit(current_block_, std::move(is));
+    fn_->values[v].is_host_ptr = true; // gdata vive en memoria host
+    return v;
+}
+
+ir::IrValueId Lowering::lower_string_lit(ast::StringLitExpr *e) {
+    if (!out_mod_) {
+        error_at(e->loc, "lowering: out_mod_ nulo al bajar StringLitExpr");
+        return ir::IR_NO_VALUE;
+    }
+    // Vesta Embed Inc 2: en native_poo_ un literal INTERPOLADO se baja a un
+    // value-string {ptr,len,cap} construido inline (sin StringObject GC ni
+    // STRMAKE/STRCAT).  Devuelve el PTR al slot owned; el caller registra
+    // su STRING_FREE (var-decl caso (c) ya lo hace).  El path Full/JIT/
+    // interp (sin native_poo_) NO entra aqui: cae al STR_LIT_ADDR / a la
+    // promocion StringObject de los callers superiores.
+    if (native_poo_ && e->is_interpolated()) {
+        return build_native_string_interp(e);
+    }
+    // Convertir el contenido resuelto a vector<uint8_t> y registrarlo
+    // (deduplicado) en static_data.  Los duplicados retornan el mismo
+    // indice, ahorrando bytes en el .vel emitido.
+    //
+    // NUL terminator: el STR_LIT_ADDR se usa como `char*` (C string) -- p.ej.
+    // pasado a una funcion que itera hasta el 0.  Sin el nul, dos literales
+    // contiguos en .rodata se leen como uno solo (un `dputs("A")` seguia
+    // hasta el siguiente literal).  En PE/exe "funcionaba" por relleno de
+    // alineacion casual; en el .bin empaquetado no.  El +1 byte es inocuo
+    // para los consumidores que usan longitud explicita (STRMAKE lee
+    // value.size() bytes e ignora el nul).
+    std::vector<uint8_t> bytes(e->value.begin(), e->value.end());
+    bytes.push_back(0);
+    const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
+
+    // Emitir IrOp::STR_LIT_ADDR -> el emisor genera "mov rDst,
+    // @Absolute(\"code.s_<idx>\")".
+    const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::STR_LIT_ADDR;
+    ins.type = ir::IrType::PTR;
+    ins.dst = dst;
+    ins.imm = idx;
+    ins.source_line = e->loc.line;
+    emit(current_block_, std::move(ins));
+    return dst;
+}
+
+ir::IrValueId Lowering::emit_strmake(ir::IrValueId v_buf, ir::IrValueId v_len,
+                                     uint32_t source_line) {
+    // STRMAKE retorna el GcHandle uint32 zero-extended a i64.  El
+    // handle es indice estable en la HandleTable (no se mueve con GC),
+    // asi que NO se marca is_gc_object (esa flag indica "host_ptr a
+    // payload" que SI se mueve y necesita gcderef en reloads).
+    const ir::IrValueId v_str = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::STRMAKE;
+    ins.type = ir::IrType::I64;
+    ins.dst = v_str;
+    ins.operands = {v_buf, v_len};
+    ins.is_call_site = true;
+    ins.source_line = source_line;
+    emit(current_block_, std::move(ins));
+    return v_str;
+}
+
+ir::IrValueId Lowering::emit_string_literal_repr(ir::IrValueId v_addr,
+                                                 ir::IrValueId v_len,
+                                                 int64_t known_len,
+                                                 uint32_t source_line) {
+    // native_poo (AOT): value-string nativo (PURE_NATIVE, SSO) en vez de
+    // STRMAKE (RUNTIME_DEPENDENT).  Resto de tiers: GcHandle via STRMAKE.
+    if (native_poo_)
+        return build_native_string_from_buffer(v_addr, v_len, source_line,
+                                               known_len);
+    return emit_strmake(v_addr, v_len, source_line);
+}
+
+ir::IrValueId Lowering::emit_strcat(ir::IrValueId v_a, ir::IrValueId v_b,
+                                    uint32_t source_line) {
+    const ir::IrValueId v_str = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::STRCAT;
+    ins.type = ir::IrType::I64;
+    ins.dst = v_str;
+    ins.operands = {v_a, v_b};
+    ins.is_call_site = true;
+    ins.source_line = source_line;
+    emit(current_block_, std::move(ins));
+    return v_str;
+}
+
+ir::IrValueId Lowering::emit_strraw(ir::IrValueId v_str, uint32_t source_line) {
+    // STRRAW devuelve host_ptr al buffer data[] del StringObject.
+    // Es PTR-typed con is_host_ptr=true para que LOAD/STORE posteriores
+    // emitan movh (memoria host) en vez de mov (memoria VM).
+    const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_ptr].is_host_ptr = true;
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::STRRAW;
+    ins.type = ir::IrType::PTR;
+    ins.dst = v_ptr;
+    ins.operands = {v_str};
+    ins.source_line = source_line;
+    emit(current_block_, std::move(ins));
+    return v_ptr;
+}
+
+ir::IrValueId Lowering::emit_strconv(ir::IrValueId v_str, uint64_t enc_imm,
+                                     uint32_t source_line) {
+    // AOT (native_poo): el value-string es canonicamente UTF-8 -> un `string`
+    // ES una secuencia de code-points (no de bytes con un tag de encoding).
+    // str_convert preserva los code-points: deep-copy del value-string (los
+    // mismos bytes UTF-8).  str_length(resultado) = cplen (code-points) ->
+    // correcto.  El encoding concreto solo importa en la frontera FFI, donde se
+    // usa str_wstr (UTF-16) / str_raw (bytes) sobre el resultado.  El enc_imm
+    // es advisory en este modelo.
+    if (native_poo_) {
+        (void)enc_imm;
+        const ir::IrValueId v_ptr =
+            emit_native_str_data_ptr(v_str, source_line);
+        const ir::IrValueId v_blen = emit_native_str_len(v_str, source_line);
+        return build_native_string_from_buffer(v_ptr, v_blen, source_line);
+    }
+    // VM/JIT: STRCONV retorna GcHandle del nuevo StringObject re-encoded.
+    const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::STRCONV;
+    ins.type = ir::IrType::I64;
+    ins.dst = v_dst;
+    ins.operands = {v_str};
+    ins.imm = enc_imm;
+    ins.is_call_site = true;
+    ins.source_line = source_line;
+    emit(current_block_, std::move(ins));
+    return v_dst;
+}
+
+ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
+                                         uint32_t source_line) {
+    const ir::IrValueId v_n = fn_->new_value(ir::IrType::U64);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::STRGETBYTES;
+    ins.type = ir::IrType::U64;
+    ins.dst = v_n;
+    ins.operands = {v_str};
+    ins.source_line = source_line;
+    emit(current_block_, std::move(ins));
+    return v_n;
+}
+
+std::string Lowering::ensure_ctoa_helper() {
+    // BUG-3: helper codepoint -> UTF-8 nativo (una vez por modulo).
+    //   i64 __vx_ctoa(u8* buf, i64 cp)
+    //     cp < 0x80    -> 1 byte;  cp < 0x800   -> 2 bytes;
+    //     cp < 0x10000 -> 3 bytes; else         -> 4 bytes.
+    // Paridad byte-exacta con vio_char_to_vmbuf (interp/JIT).  Vive en una
+    // funcion APARTE con branches -> evita const-fold mid-expression.
+    const std::string name = "__vx_ctoa";
+    if (ctoa_helper_emitted_) return name;
+    ctoa_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
+    hf.values[p_buf].is_param = true;
+    hf.values[p_buf].is_host_ptr = true;
+    hf.params.push_back(p_buf);
+    const ir::IrValueId p_cp = hf.new_value(ir::IrType::I64, "%cp");
+    hf.values[p_cp].is_param = true;
+    hf.params.push_back(p_cp);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    // Helpers locales de emision de instrucciones aritmeticas/bit.
+    auto emit_bin = [&](ir::IrOp op, ir::IrValueId a,
+                        ir::IrValueId b) -> ir::IrValueId {
+        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr in{};
+        in.op = op;
+        in.type = ir::IrType::I64;
+        in.dst = v;
+        in.operands = {a, b};
+        in.source_line = 0;
+        emit(current_block_, std::move(in));
+        return v;
+    };
+    auto shr = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
+        return emit_bin(ir::IrOp::SHR, a, emit_const(ir::IrType::I64, k, 0));
+    };
+    auto andc = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
+        return emit_bin(ir::IrOp::AND, a, emit_const(ir::IrType::I64, k, 0));
+    };
+    auto orc = [&](ir::IrValueId a, uint64_t k) -> ir::IrValueId {
+        return emit_bin(ir::IrOp::OR, a, emit_const(ir::IrType::I64, k, 0));
+    };
+    auto store_u8_at = [&](uint64_t off, ir::IrValueId v_val) {
+        ir::IrValueId v_dst = p_buf;
+        if (off != 0) {
+            v_dst = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_dst].is_host_ptr = true;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_dst;
+            ad.operands = {p_buf, emit_const(ir::IrType::I64, off, 0)};
+            ad.source_line = 0;
+            emit(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::U8;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_dst};
+        st.source_line = 0;
+        emit(current_block_, std::move(st));
+    };
+    auto ret_len = [&](uint64_t len) {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {emit_const(ir::IrType::I64, len, 0)};
+        rt.source_line = 0;
+        emit(current_block_, std::move(rt));
+    };
+    // cond = (cp u< limit) -> branch a bb_then, si no a bb_else.
+    auto branch_ult = [&](uint64_t limit, ir::IrBlockId bb_then,
+                          ir::IrBlockId bb_else) {
+        ir::IrValueId v_cond = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrInstr in{};
+            in.op = ir::IrOp::CMP_ULT;
+            in.type = ir::IrType::I64;
+            in.dst = v_cond;
+            in.operands = {p_cp, emit_const(ir::IrType::I64, limit, 0)};
+            in.source_line = 0;
+            emit(current_block_, std::move(in));
+        }
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {v_cond};
+        b.target_block = bb_then;
+        b.false_block = bb_else;
+        b.source_line = 0;
+        emit(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(bb_then);
+        fn_->blocks[current_block_].succs.push_back(bb_else);
+        fn_->blocks[bb_then].preds.push_back(current_block_);
+        fn_->blocks[bb_else].preds.push_back(current_block_);
+    };
+
+    ir::IrBlockId bb1 = fn_->new_block("ctoa_1");
+    ir::IrBlockId bb_ge1 = fn_->new_block("ctoa_ge1");
+    ir::IrBlockId bb2 = fn_->new_block("ctoa_2");
+    ir::IrBlockId bb_ge2 = fn_->new_block("ctoa_ge2");
+    ir::IrBlockId bb3 = fn_->new_block("ctoa_3");
+    ir::IrBlockId bb4 = fn_->new_block("ctoa_4");
+
+    // if (cp < 0x80) -> 1 byte, else -> ge1.
+    branch_ult(0x80, bb1, bb_ge1);
+    // 1 byte: buf[0]=cp; ret 1.
+    current_block_ = bb1;
+    store_u8_at(0, p_cp);
+    ret_len(1);
+    // ge1: if (cp < 0x800) -> 2 bytes, else -> ge2.
+    current_block_ = bb_ge1;
+    branch_ult(0x800, bb2, bb_ge2);
+    // 2 bytes: buf[0]=0xC0|(cp>>6); buf[1]=0x80|(cp&0x3F); ret 2.
+    current_block_ = bb2;
+    store_u8_at(0, orc(shr(p_cp, 6), 0xC0));
+    store_u8_at(1, orc(andc(p_cp, 0x3F), 0x80));
+    ret_len(2);
+    // ge2: if (cp < 0x10000) -> 3 bytes, else -> 4 bytes.
+    current_block_ = bb_ge2;
+    branch_ult(0x10000, bb3, bb4);
+    // 3 bytes.
+    current_block_ = bb3;
+    store_u8_at(0, orc(shr(p_cp, 12), 0xE0));
+    store_u8_at(1, orc(andc(shr(p_cp, 6), 0x3F), 0x80));
+    store_u8_at(2, orc(andc(p_cp, 0x3F), 0x80));
+    ret_len(3);
+    // 4 bytes.
+    current_block_ = bb4;
+    store_u8_at(0, orc(shr(p_cp, 18), 0xF0));
+    store_u8_at(1, orc(andc(shr(p_cp, 12), 0x3F), 0x80));
+    store_u8_at(2, orc(andc(shr(p_cp, 6), 0x3F), 0x80));
+    store_u8_at(3, orc(andc(p_cp, 0x3F), 0x80));
+    ret_len(4);
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
+                                                       const char *native_fn,
+                                                       uint32_t source_line) {
+    const int ln = static_cast<int>(source_line);
+    /* 1. ALLOCA 32 bytes -- buffer en stack VM.  Suficiente para
+     *    todos los tipos: i64=20+signo, hex=18, "false"=5, UTF-8 4 B. */
+    ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_buf;
+        al.imm = 32;
+        al.source_line = ln;
+        emit(current_block_, std::move(al));
+    }
+    /* 2. proc_ptr via getproc. */
+    const ir::IrValueId v_proc = emit_getproc(ln);
+    /* 3. CALLN al native: devuelve length escrita en buf. */
+    /* Se dice lo que hace, porque aqui se sabe: la familia `*_to_vmbuf`
+     * formatea `value` y deja los bytes en el buffer del SEGUNDO argumento.
+     * Nada mas -- ni lee otra memoria, ni hace E/S pese al prefijo `vio_`, ni
+     * puede lanzar, y dos llamadas iguales dan lo mismo.
+     *
+     * Sin decirlo, cada `${n}` de una interpolacion era una barrera total para
+     * cuanto la rodeara (52 sitios solo en std.memory), que es lo unico honesto
+     * ante una funcion nativa de la que no se sabe nada. */
+    {
+        ir::IrNativeEffects fx;
+        fx.declarados = true;
+        fx.escribe_apuntado = 1u << 1; // el buffer destino
+        out_mod_->register_native_import(
+            std::string("stdlib/native/io/vesta_io"), native_fn, fx);
+    }
+    ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr cl{};
+        cl.op = ir::IrOp::CALLN;
+        cl.type = ir::IrType::I64;
+        cl.dst = v_len;
+        cl.func_name = std::string("stdlib/native/io/vesta_io:") + native_fn;
+        cl.operands = {v_proc, v_buf, v_val};
+        cl.source_line = ln;
+        emit(current_block_, std::move(cl));
+    }
+    /* 4. STRMAKE desde buf vm_mem. */
+    ir::IrValueId v_h = emit_strmake(v_buf, v_len, ln);
+    return v_h;
+}
+
+
 } // namespace vx
