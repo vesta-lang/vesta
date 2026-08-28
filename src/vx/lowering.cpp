@@ -19425,6 +19425,24 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 emit(current_block_, std::move(al));
                 fn_->values[v_buf].is_host_ptr = true;
 
+                /* Los valores por defecto de los campos, ANTES del cuerpo: la
+                 * semantica es "defectos primero, constructor encima".
+                 *
+                 * El bufer nace sin inicializar y el constructor solo escribe
+                 * lo que escribe, asi que un campo con valor declarado que el
+                 * constructor no toca se quedaba con lo que hubiera ahi -- y
+                 * como el bufer suele venir limpio, se leia como un cero:
+                 * `struct S { i64 n = 3; S() {} }` daba `n == 0`.  Y solo
+                 * cuando la clase tenia constructor: sin el, la declaracion si
+                 * pasa por aqui, asi que anyadir uno CAMBIABA el valor de un
+                 * campo que no se habia tocado.
+                 *
+                 * El constructor `comptime` ya sembraba sus defectos por su
+                 * cuenta (los escribe en el bufer antes de ejecutar el cuerpo
+                 * en la maquina de compilacion); esto es lo mismo para el de
+                 * ejecucion. */
+                emit_struct_field_defaults(v_buf, slay, e->loc.line);
+
                 std::vector<ir::IrValueId> operands;
                 operands.reserve(e->args.size() + 1);
                 operands.push_back(v_buf); // this = buffer a inicializar
