@@ -77,14 +77,8 @@ void Lowering::emit_monitor_op(ir::IrValueId v_obj_or_handle, bool enter,
         // sin GC ni handle table.  Baja a CALL a la primitiva nativa
         // (__vx_monenter/__vx_monexit) que el auto-bundle de vx_sync.vx
         // fusiona en el .o.  v_obj_or_handle es el host_ptr al ObjectHeader.
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALL;
-        ins.func_name = enter ? "__vx_monenter" : "__vx_monexit";
-        ins.type = ir::IrType::VOID;
-        ins.dst = ir::IR_NO_VALUE;
-        ins.operands = {v_obj_or_handle};
-        ins.source_line = source_line;
-        emit(current_block_, std::move(ins));
+        emit_call(enter ? "__vx_monenter" : "__vx_monexit",
+                  {v_obj_or_handle}, ir::IrType::VOID, source_line);
         return;
     }
     // Resto de tiers (Full/JIT/interp): IR op MONENTER/MONEXIT sobre el handle.

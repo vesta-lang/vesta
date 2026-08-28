@@ -397,17 +397,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string ctoa_fn = ensure_ctoa_helper();
-            ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ca{};
-                ca.op = ir::IrOp::CALL;
-                ca.type = ir::IrType::I64;
-                ca.dst = v_len;
-                ca.func_name = ctoa_fn;
-                ca.operands = {v_scr, v_cp};
-                ca.source_line = ln;
-                emit(current_block_, std::move(ca));
-            }
+            ir::IrValueId v_len = emit_call(ctoa_fn,
+                      {v_scr, v_cp}, ir::IrType::I64, ln);
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
         }
@@ -478,17 +469,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             // constante (el itoa vive en una funcion aparte con loops).
             const std::string itoa_fn =
                 ensure_itoa_helper(is_signed_integral(ek));
-            ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ca{};
-                ca.op = ir::IrOp::CALL;
-                ca.type = ir::IrType::I64;
-                ca.dst = v_len;
-                ca.func_name = itoa_fn;
-                ca.operands = {v_scr, v_int};
-                ca.source_line = ln;
-                emit(current_block_, std::move(ca));
-            }
+            ir::IrValueId v_len = emit_call(itoa_fn,
+                      {v_scr, v_int}, ir::IrType::I64, ln);
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
         }
@@ -522,17 +504,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string btoa_fn = ensure_btoa_helper();
-            ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ca{};
-                ca.op = ir::IrOp::CALL;
-                ca.type = ir::IrType::I64;
-                ca.dst = v_len;
-                ca.func_name = btoa_fn;
-                ca.operands = {v_scr, v_b64};
-                ca.source_line = ln;
-                emit(current_block_, std::move(ca));
-            }
+            ir::IrValueId v_len = emit_call(btoa_fn,
+                      {v_scr, v_b64}, ir::IrType::I64, ln);
             build_native_string_append_inplace(v_slot, v_scr, v_len, ln);
             return true;
         }
@@ -853,15 +826,8 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
     // prepone en main no-native, asi que el fp quedaria a null).
     if (!native_poo_) {
         const std::string name = ensure_strlen_helper();
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ca{};
-        ca.op = ir::IrOp::CALL;
-        ca.type = ir::IrType::I64;
-        ca.dst = v;
-        ca.func_name = name;
-        ca.operands = {v_slot};
-        ca.source_line = source_line;
-        emit(current_block_, std::move(ca));
+        ir::IrValueId v = emit_call(name,
+                  {v_slot}, ir::IrType::I64, source_line);
         return v;
     }
     // CPU dispatch Inc 5a: strlen(s) -> i64 DESPACHADO por tabla de punteros:
@@ -1024,15 +990,8 @@ ir::IrValueId Lowering::emit_native_str_cplen(ir::IrValueId v_ptr,
                                               ir::IrValueId v_blen,
                                               uint32_t source_line) {
     const std::string name = ensure_str_cplen_helper();
-    ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-    ir::IrInstr ca{};
-    ca.op = ir::IrOp::CALL;
-    ca.type = ir::IrType::I64;
-    ca.dst = v;
-    ca.func_name = name;
-    ca.operands = {v_ptr, v_blen};
-    ca.source_line = source_line;
-    emit(current_block_, std::move(ca));
+    ir::IrValueId v = emit_call(name,
+              {v_ptr, v_blen}, ir::IrType::I64, source_line);
     return v;
 }
 
@@ -1941,17 +1900,8 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
         out_mod_->register_native_import(
             std::string("stdlib/native/io/vesta_io"), native_fn, fx);
     }
-    ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr cl{};
-        cl.op = ir::IrOp::CALLN;
-        cl.type = ir::IrType::I64;
-        cl.dst = v_len;
-        cl.func_name = std::string("stdlib/native/io/vesta_io:") + native_fn;
-        cl.operands = {v_proc, v_buf, v_val};
-        cl.source_line = ln;
-        emit(current_block_, std::move(cl));
-    }
+    ir::IrValueId v_len = emit_calln(std::string("stdlib/native/io/vesta_io:") + native_fn,
+              {v_proc, v_buf, v_val}, ir::IrType::I64, ln);
     /* 4. STRMAKE desde buf vm_mem. */
     ir::IrValueId v_h = emit_strmake(v_buf, v_len, ln);
     return v_h;

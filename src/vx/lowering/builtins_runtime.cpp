@@ -92,15 +92,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         auto [v_path, v_path_len] = emit_string_lit(path);
         auto [v_mode, v_mode_len] = emit_string_lit(mode);
 
-        const ir::IrValueId dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ir::IrType::I64;
-        ins.dst = dst;
-        ins.func_name = kVestaIoLib + ":vio_fopen";
-        ins.operands = {v_proc, v_path, v_path_len, v_mode, v_mode_len};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst = emit_calln(kVestaIoLib + ":vio_fopen",
+                  {v_proc, v_path, v_path_len, v_mode, v_mode_len}, ir::IrType::I64, e->loc.line);
         out_value = dst;
         return true;
     }
@@ -156,15 +149,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
                               e->loc.line);
         out_mod_->register_native_import(kVestaIoLib, "vio_fclose");
 
-        const ir::IrValueId dst = fn_->new_value(ir::IrType::I32);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ir::IrType::I32;
-        ins.dst = dst;
-        ins.func_name = kVestaIoLib + ":vio_fclose";
-        ins.operands = {v_fp};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst = emit_calln(kVestaIoLib + ":vio_fclose",
+                  {v_fp}, ir::IrType::I32, e->loc.line);
         out_value = dst;
         return true;
     }
@@ -399,14 +385,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             args.reserve(1);
         }
         args.push_back(v_handle);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ir::IrType::VOID;
-        ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = std::string(COL_NATIVE_LIB) + ":" + fn_name;
-        ins.operands = std::move(args);
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        emit_calln(std::string(COL_NATIVE_LIB) + ":" + fn_name,
+                  std::move(args), ir::IrType::VOID, e->loc.line);
         // 3. Reescribir el binding local a 0 (handle invalido).  El
         // cleanup al exit del scope vera este 0 (via refresh_name) y
         // sera no-op.  Evita double-free.
@@ -567,15 +547,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
                 out_mod_->register_native_import("vesta_runtime",
                                                  "cpu_features", fx);
             }
-            ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
-            ir::IrInstr cl{};
-            cl.op = ir::IrOp::CALLN;
-            cl.type = ir::IrType::U64;
-            cl.dst = v_feat;
-            cl.func_name = "vesta_runtime:cpu_features";
-            cl.operands = {};
-            cl.source_line = ln;
-            emit(current_block_, std::move(cl));
+            ir::IrValueId v_feat = emit_calln("vesta_runtime:cpu_features",
+                      {}, ir::IrType::U64, ln);
             out_value = v_feat;
             return true;
         }

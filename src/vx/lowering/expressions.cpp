@@ -107,15 +107,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 args.push_back(emit_getproc(e->loc.line));
                 args.push_back(
                     emit_const(ir::IrType::I64, name_hash, e->loc.line));
-                const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ins{};
-                ins.op = ir::IrOp::CALLN;
-                ins.type = ir::IrType::PTR;
-                ins.dst = dst;
-                ins.func_name = "vrt:naked_fnaddr";
-                ins.operands = std::move(args);
-                ins.source_line = e->loc.line;
-                emit(current_block_, std::move(ins));
+                const ir::IrValueId dst = emit_calln("vrt:naked_fnaddr",
+                          std::move(args), ir::IrType::PTR, e->loc.line);
                 return dst;
             }
             const ir::IrValueId code = fn_->new_value(ir::IrType::PTR);

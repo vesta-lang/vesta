@@ -304,15 +304,8 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
             ops.push_back(v);
         }
         out_mod_->register_native_import(lib_math, func_name);
-        const ir::IrValueId dst = fn_->new_value(ret_ir);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ret_ir;
-        ins.dst = dst;
-        ins.func_name = lib_math + ":" + func_name;
-        ins.operands = std::move(ops);
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst = emit_calln(lib_math + ":" + func_name,
+                  std::move(ops), ret_ir, e->loc.line);
         (void)dst_is_float;
         out_value = dst;
         return true;

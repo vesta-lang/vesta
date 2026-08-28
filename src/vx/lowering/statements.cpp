@@ -1465,14 +1465,8 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         // -> CALL __vx_fulfill(fut, val) + RET (la tarea retorna al pump, no
         // hay HLT del scheduler de la VM).
         if (native_poo_) {
-            ir::IrInstr fu{};
-            fu.op = ir::IrOp::CALL;
-            fu.func_name = "__vx_fulfill";
-            fu.type = ir::IrType::VOID;
-            fu.dst = ir::IR_NO_VALUE;
-            fu.operands = {async_fut_id_, v_payload};
-            fu.source_line = s->loc.line;
-            emit(current_block_, std::move(fu));
+            emit_call("__vx_fulfill",
+                      {async_fut_id_, v_payload}, ir::IrType::VOID, s->loc.line);
             emit_ret_void(s->loc.line);
             return;
         }

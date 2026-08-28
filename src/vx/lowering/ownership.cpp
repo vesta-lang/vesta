@@ -58,14 +58,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 // DIRECTO -> mas rapido (sin vtable lookup) y compilable en
                 // AOT --target=bare.  El regalloc lo trata como CALL y
                 // preserva los regs vivos del scope (incluido v_ret).
-                ir::IrInstr cd{};
-                cd.op = ir::IrOp::CALL;
-                cd.type = ir::IrType::VOID;
-                cd.dst = ir::IR_NO_VALUE;
-                cd.operands = std::move(opnds);
-                cd.func_name = it->func_name;
-                cd.source_line = it->source_line;
-                emit(current_block_, std::move(cd));
+                emit_call(it->func_name,
+                          std::move(opnds), ir::IrType::VOID, it->source_line);
                 break;
             }
             // Dtor polimorfico (herencia/interfaz): emitir CALLVIRT real
@@ -88,14 +82,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // call nativo en AOT; el inliner puede inlinearlo (dtor trivial =
             // coste ~0).  El regalloc lo trata como CALL y preserva los regs
             // vivos del scope (incluido el reg de v_ret en lower_return).
-            ir::IrInstr cd{};
-            cd.op = ir::IrOp::CALL;
-            cd.type = ir::IrType::VOID;
-            cd.dst = ir::IR_NO_VALUE;
-            cd.operands = std::move(opnds);
-            cd.func_name = it->func_name;
-            cd.source_line = it->source_line;
-            emit(current_block_, std::move(cd));
+            emit_call(it->func_name,
+                      std::move(opnds), ir::IrType::VOID, it->source_line);
             break;
         }
         case CleanupAction::Kind::CLOSURE_ENV_FREE: {
@@ -220,13 +208,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // se popea con __vx_pop_frame (no TRYLEAVE op, que el backend
             // nativo no soporta); el monitor se libera con __vx_monexit.
             if (native_poo_) {
-                ir::IrInstr cp{};
-                cp.op = ir::IrOp::CALL;
-                cp.type = ir::IrType::VOID;
-                cp.dst = ir::IR_NO_VALUE;
-                cp.func_name = "__vx_pop_frame";
-                cp.source_line = it->source_line;
-                emit(current_block_, std::move(cp));
+                emit_call("__vx_pop_frame",
+                          {}, ir::IrType::VOID, it->source_line);
             } else {
                 ir::IrInstr tl{};
                 tl.op = ir::IrOp::TRYLEAVE;
@@ -255,14 +238,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             }
             for (auto vid : opnds)
                 args.push_back(vid);
-            ir::IrInstr cf{};
-            cf.op = ir::IrOp::CALLN;
-            cf.type = ir::IrType::VOID;
-            cf.dst = ir::IR_NO_VALUE;
-            cf.func_name = it->func_name;
-            cf.operands = std::move(args);
-            cf.source_line = it->source_line;
-            emit(current_block_, std::move(cf));
+            emit_calln(it->func_name,
+                      std::move(args), ir::IrType::VOID, it->source_line);
             break;
         }
         case CleanupAction::Kind::SMARTPTR_FREE: {

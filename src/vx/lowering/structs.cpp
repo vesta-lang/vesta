@@ -230,14 +230,7 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
     // llegaba de mas).  El CALL va directo sobre el campo.
     const bool need_temp = false;
     if (!need_temp) {
-        ir::IrInstr cd{};
-        cd.op = ir::IrOp::CALL;
-        cd.type = ir::IrType::VOID;
-        cd.dst = ir::IR_NO_VALUE;
-        cd.operands = {field_addr};
-        cd.func_name = method_label;
-        cd.source_line = line;
-        emit(current_block_, std::move(cd));
+        emit_call(method_label, {field_addr}, ir::IrType::VOID, line);
         return;
     }
     // interp/JIT: copiar el campo (host) a un temporal VM-stack y llamar el
@@ -290,16 +283,7 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
         emit_store_typed(dst_at, word, ir::IrType::I64, line);
     }
     // CALL method_label(tmp).
-    {
-        ir::IrInstr cd{};
-        cd.op = ir::IrOp::CALL;
-        cd.type = ir::IrType::VOID;
-        cd.dst = ir::IR_NO_VALUE;
-        cd.operands = {tmp};
-        cd.func_name = method_label;
-        cd.source_line = line;
-        emit(current_block_, std::move(cd));
-    }
+        emit_call(method_label, {tmp}, ir::IrType::VOID, line);
 }
 
 ir::IrValueId Lowering::emit_struct_arg_copy_clone(

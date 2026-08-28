@@ -2000,14 +2000,8 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
         al.host_alloca = true;
         al.source_line = source_line;
         emit(current_block_, std::move(al));
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALL;
-        ins.type = ir::IrType::VOID;
-        ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = std::move(callee_name);
-        ins.operands = {v_retbuf, v_a, v_b};
-        ins.source_line = source_line;
-        emit(current_block_, std::move(ins));
+        emit_call(std::move(callee_name),
+                  {v_retbuf, v_a, v_b}, ir::IrType::VOID, source_line);
         // Liberar operandos temporales (bytes ya copiados por la callee).
         // Inc 5 (SSO): solo libera si estaba en HEAP.
         if (a_temp) emit_native_str_free_if_heap(v_a, source_line);
@@ -2016,15 +2010,8 @@ Lowering::emit_string_override_call(const std::string &fn_name, ast::Expr *lhs,
         return v_retbuf;
     }
 
-    const ir::IrValueId v_ret = fn_->new_value(ret_ir);
-    ir::IrInstr ins{};
-    ins.op = ir::IrOp::CALL;
-    ins.type = ret_ir;
-    ins.dst = v_ret;
-    ins.func_name = std::move(callee_name);
-    ins.operands = {v_a, v_b};
-    ins.source_line = source_line;
-    emit(current_block_, std::move(ins));
+    const ir::IrValueId v_ret = emit_call(std::move(callee_name),
+              {v_a, v_b}, ret_ir, source_line);
 
     // Liberar los operandos LITERAL/expr-temporales en native (sus bytes
     // ya estan copiados por la callee).  Inc 5 (SSO): solo libera si

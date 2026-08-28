@@ -216,15 +216,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
          */
         out_mod_->register_native_import("vesta_runtime",
                                          "vx_get_native_thunk");
-        ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr cl{};
-        cl.op = ir::IrOp::CALLN;
-        cl.type = ir::IrType::I64;
-        cl.dst = v_dst;
-        cl.func_name = "vesta_runtime:vx_get_native_thunk";
-        cl.operands = {v_fn_pc, v_argc};
-        cl.source_line = src_line;
-        emit(current_block_, std::move(cl));
+        ir::IrValueId v_dst = emit_calln("vesta_runtime:vx_get_native_thunk",
+                  {v_fn_pc, v_argc}, ir::IrType::I64, src_line);
         out_value = v_dst;
         return true;
     }
@@ -474,15 +467,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_mod_->register_native_import("vesta_comptime", "static_assert",
                                              fx);
         }
-        ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr cl{};
-        cl.op = ir::IrOp::CALLN;
-        cl.type = ir::IrType::I64;
-        cl.dst = v_dst;
-        cl.func_name = "vesta_comptime:static_assert";
-        cl.operands = {v_proc, v_cond, v_msg, v_len};
-        cl.source_line = e->loc.line;
-        emit(current_block_, std::move(cl));
+        ir::IrValueId v_dst = emit_calln("vesta_comptime:static_assert",
+                  {v_proc, v_cond, v_msg, v_len}, ir::IrType::I64, e->loc.line);
         /* Una asercion incumplida CORTA la ejecucion aqui mismo.
          *
          * El helper devuelve el veredicto y antes se ignoraba, con lo que el
@@ -529,15 +515,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         out_mod_->register_native_import(
             std::string("stdlib/native/io/vesta_io"), "vio_gensym");
-        ir::IrValueId v_dst = fn_->new_value(ir::IrType::U64);
-        ir::IrInstr cl{};
-        cl.op = ir::IrOp::CALLN;
-        cl.type = ir::IrType::U64;
-        cl.dst = v_dst;
-        cl.func_name = "stdlib/native/io/vesta_io:vio_gensym";
-        cl.operands = {};
-        cl.source_line = e->loc.line;
-        emit(current_block_, std::move(cl));
+        ir::IrValueId v_dst = emit_calln("stdlib/native/io/vesta_io:vio_gensym",
+                  {}, ir::IrType::U64, e->loc.line);
         out_value = v_dst;
         return true;
     }

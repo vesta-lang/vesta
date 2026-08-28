@@ -2661,4 +2661,66 @@ void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
     }
 }
 
+/**
+ * @brief Llama a una funcion de Vesta.
+ *
+ * Si @p ret es VOID no se crea valor: la llamada no devuelve nada y pedir un
+ * hueco para el resultado seria dejar un valor SSA que nadie define.
+ *
+ * Lo que NO hace falta poner aqui, y por eso no esta: la marca de "esto es una
+ * llamada" para el asignador de registros.  Se la dice el propio opcode, y
+ * ponerla a mano no anade nada -- ver `is_call_site` en ssa_ir.h --.
+ *
+ * @param name        Nombre de la funcion.
+ * @param args        Argumentos, en orden.
+ * @param ret         Tipo del resultado, o VOID si no devuelve.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA del resultado, o IR_NO_VALUE si @p ret es VOID.
+ */
+ir::IrValueId Lowering::emit_call(const std::string &name,
+                                  std::vector<ir::IrValueId> args,
+                                  ir::IrType ret, uint32_t source_line) {
+    const ir::IrValueId dst =
+        (ret == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret);
+    ir::IrInstr in{};
+    in.op = ir::IrOp::CALL;
+    in.type = ret;
+    in.dst = dst;
+    in.func_name = name;
+    in.operands = std::move(args);
+    in.source_line = source_line;
+    emit(current_block_, std::move(in));
+    return dst;
+}
+
+/**
+ * @brief Llama a una funcion NATIVA -- codigo que no es Vesta.
+ *
+ * Misma forma que @ref emit_call y otra instruccion, porque el destino no es
+ * una funcion del programa sino un simbolo de fuera: quien la resuelve es el
+ * cargador, no el enlazador de Vesta.  Quien la llama tiene que haber
+ * registrado antes su importacion.
+ *
+ * @param name        Nombre del simbolo, con su biblioteca delante.
+ * @param args        Argumentos, en orden.
+ * @param ret         Tipo del resultado, o VOID si no devuelve.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA del resultado, o IR_NO_VALUE si @p ret es VOID.
+ */
+ir::IrValueId Lowering::emit_calln(const std::string &name,
+                                   std::vector<ir::IrValueId> args,
+                                   ir::IrType ret, uint32_t source_line) {
+    const ir::IrValueId dst =
+        (ret == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret);
+    ir::IrInstr in{};
+    in.op = ir::IrOp::CALLN;
+    in.type = ret;
+    in.dst = dst;
+    in.func_name = name;
+    in.operands = std::move(args);
+    in.source_line = source_line;
+    emit(current_block_, std::move(in));
+    return dst;
+}
+
 } // namespace vx

@@ -540,6 +540,39 @@ class Lowering {
     ir::IrValueId emit_load_i64(ir::IrValueId addr, uint32_t source_line);
 
     /**
+     * @brief Llama a una funcion de Vesta.
+     *
+     * Si @p ret es VOID no se crea valor: pedir un hueco para el resultado de
+     * algo que no devuelve deja un valor SSA que nadie define.
+     *
+     * @param name        Nombre de la funcion.
+     * @param args        Argumentos, en orden.
+     * @param ret         Tipo del resultado, o VOID.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA del resultado, o IR_NO_VALUE si no devuelve.
+     */
+    ir::IrValueId emit_call(const std::string &name,
+                            std::vector<ir::IrValueId> args, ir::IrType ret,
+                            uint32_t source_line);
+
+    /**
+     * @brief Llama a una funcion NATIVA -- codigo que no es Vesta.
+     *
+     * Otra instruccion que @ref emit_call porque el destino es un simbolo de
+     * fuera: lo resuelve el cargador, no el enlazador de Vesta.  Quien llama
+     * tiene que haber registrado antes su importacion.
+     *
+     * @param name        Nombre del simbolo, con su biblioteca delante.
+     * @param args        Argumentos, en orden.
+     * @param ret         Tipo del resultado, o VOID.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA del resultado, o IR_NO_VALUE si no devuelve.
+     */
+    ir::IrValueId emit_calln(const std::string &name,
+                             std::vector<ir::IrValueId> args, ir::IrType ret,
+                             uint32_t source_line);
+
+    /**
      * @brief Escribe un qword en una direccion.
      *
      * Los argumentos van como se lee en el fuente -- donde, y que --, no en el

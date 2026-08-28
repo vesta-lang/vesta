@@ -419,27 +419,10 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // type = 0 (catch-all).  v2: findclass del tipo del catch.
         const ir::IrValueId v_type =
             emit_const(ir::IrType::I64, 0, s->loc.line);
-        {
-            ir::IrInstr cp{};
-            cp.op = ir::IrOp::CALL;
-            cp.type = ir::IrType::VOID;
-            cp.dst = ir::IR_NO_VALUE;
-            cp.func_name = "__vx_push_frame";
-            cp.operands = {v_buf, v_type};
-            cp.source_line = s->loc.line;
-            emit(current_block_, std::move(cp));
-        }
-        const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr cs{};
-            cs.op = ir::IrOp::CALL;
-            cs.type = ir::IrType::I64;
-            cs.dst = v_r;
-            cs.func_name = "__vx_setjmp";
-            cs.operands = {v_buf};
-            cs.source_line = s->loc.line;
-            emit(current_block_, std::move(cs));
-        }
+            emit_call("__vx_push_frame",
+                      {v_buf, v_type}, ir::IrType::VOID, s->loc.line);
+        const ir::IrValueId v_r = emit_call("__vx_setjmp",
+                  {v_buf}, ir::IrType::I64, s->loc.line);
         // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
         // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
         // frame, lee el type-id y elige el catch que matchea (o re-throw).
@@ -684,13 +667,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
 
         if (native_poo_) {
             // AOT: salida normal -> pop del frame setjmp (top = prev).
-            ir::IrInstr cp{};
-            cp.op = ir::IrOp::CALL;
-            cp.type = ir::IrType::VOID;
-            cp.dst = ir::IR_NO_VALUE;
-            cp.func_name = "__vx_pop_frame";
-            cp.source_line = s->loc.line;
-            emit(current_block_, std::move(cp));
+            emit_call("__vx_pop_frame", {}, ir::IrType::VOID, s->loc.line);
         } else {
             // Sprint 6.D: tryleave por cada catch via IR ops puros.
             for (size_t i = 0; i < n_catches; ++i) {
@@ -1083,14 +1060,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         // Helper local: CALL void por nombre (sin args salvo los dados).
         auto vcall = [&](const char *name,
                          std::vector<ir::IrValueId> args = {}) {
-            ir::IrInstr c{};
-            c.op = ir::IrOp::CALL;
-            c.type = ir::IrType::VOID;
-            c.dst = ir::IR_NO_VALUE;
-            c.func_name = name;
-            c.operands = std::move(args);
-            c.source_line = s->loc.line;
-            emit(current_block_, std::move(c));
+            emit_call(name, std::move(args), ir::IrType::VOID, s->loc.line);
         };
 
         // monenter(obj).
@@ -1112,17 +1082,8 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         const ir::IrValueId v_type0 =
             emit_const(ir::IrType::I64, 0, s->loc.line);
         vcall("__vx_push_frame", {v_buf, v_type0});
-        const ir::IrValueId v_r = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr cs{};
-            cs.op = ir::IrOp::CALL;
-            cs.type = ir::IrType::I64;
-            cs.dst = v_r;
-            cs.func_name = "__vx_setjmp";
-            cs.operands = {v_buf};
-            cs.source_line = s->loc.line;
-            emit(current_block_, std::move(cs));
-        }
+        const ir::IrValueId v_r = emit_call("__vx_setjmp",
+                  {v_buf}, ir::IrType::I64, s->loc.line);
         {
             ir::IrInstr br{};
             br.op = ir::IrOp::BR_COND;
@@ -1169,26 +1130,10 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
             // rethrow nativo: leer value+type del estado de excepcion y
             // re-lanzar (longjmp al frame externo).  El frame propio ya
             // fue popeado arriba.
-            const ir::IrValueId v_v = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr c{};
-                c.op = ir::IrOp::CALL;
-                c.type = ir::IrType::I64;
-                c.dst = v_v;
-                c.func_name = "__vx_get_value";
-                c.source_line = s->loc.line;
-                emit(current_block_, std::move(c));
-            }
-            const ir::IrValueId v_ty = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr c{};
-                c.op = ir::IrOp::CALL;
-                c.type = ir::IrType::I64;
-                c.dst = v_ty;
-                c.func_name = "__vx_get_type";
-                c.source_line = s->loc.line;
-                emit(current_block_, std::move(c));
-            }
+            const ir::IrValueId v_v = emit_call("__vx_get_value",
+                      {}, ir::IrType::I64, s->loc.line);
+            const ir::IrValueId v_ty = emit_call("__vx_get_type",
+                      {}, ir::IrType::I64, s->loc.line);
             ir::IrInstr th{};
             th.op = ir::IrOp::THROW;
             th.type = ir::IrType::VOID;

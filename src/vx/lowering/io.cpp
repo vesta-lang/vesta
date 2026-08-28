@@ -113,14 +113,8 @@ void Lowering::emit_print_string_literal(const std::string &text,
     }
     const ir::IrValueId v_proc = emit_getproc(line);
     out_mod_->register_native_import(kVestaIoLib, "vio_print");
-    ir::IrInstr ins{};
-    ins.op = ir::IrOp::CALLN;
-    ins.type = ir::IrType::VOID;
-    ins.dst = ir::IR_NO_VALUE;
-    ins.func_name = kVestaIoLib + ":vio_print";
-    ins.operands = {v_proc, v_str, v_len};
-    ins.source_line = line;
-    emit(current_block_, std::move(ins));
+    emit_calln(kVestaIoLib + ":vio_print",
+              {v_proc, v_str, v_len}, ir::IrType::VOID, line);
 }
 
 
