@@ -11703,6 +11703,19 @@ static bool is_sched_barrier(IrOp op) {
  * LOADs posteriores podrian alias, asi que LOAD depende de todos los
  * STOREs previos del mismo bloque (conservativo).  Otros STOREs tambien
  * dependen del previo (orden de escritura es observable). */
+/* Esta lista NO se sustituye por analysis::memory_access_kind, y la diferencia
+ * es de nivel, no un descuido: aquel vocabulario describe la memoria DEL
+ * PROGRAMA, y esto es una barrera para el PLANIFICADOR, que ordena lo que se va
+ * a emitir.  Un VEC_BCAST no toca memoria del programa -- difunde un escalar a
+ * un registro --, pero en el interprete baja pasando por un scratch en la pila
+ * de la VM; quitarlo de aqui porque el nivel IR diga que no toca memoria seria
+ * perder una barrera que el codigo emitido si necesita.  Marcar de mas aqui
+ * cuesta una reordenacion que no se hace; marcar de menos cuesta correccion.
+ *
+ * Lo que cerraria esta duplicidad de verdad es una capa de efectos POR
+ * OBJETIVO -- MachineIR + la base de instrucciones, que ya sabe que lee y
+ * escribe cada forma en cada ISA --, no forzar a este consumidor a un nivel que
+ * no es el suyo. */
 static bool is_store_like(IrOp op) {
     // VEC_UNOP/VEC_BINOP escriben memoria (dst) y ademas leen (a/b): tratarlas
     // como store-like es la barrera conservativa correcta.

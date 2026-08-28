@@ -170,6 +170,43 @@ int main() {
     CHECK(pc && pc->pure, "pure_caller: pura por composicion");
     const auto *ic = find(fps, "impure_caller");
     CHECK(ic && !ic->pure, "impure_caller: impura por composicion");
+
+    /* -- Vectoriales: escribir el vector del llamante NO es puro -------------
+     *
+     * Estaban todas en la lista de puras bajo el epigrafe "compute + reduccion
+     * local", y para las VEC_ACC_* eso es cierto -- su acumulador es un ALLOCA
+     * de la propia funcion --, pero VEC_UNOP/BINOP/BINOP_S/FMA escriben a
+     * traves de su primer operando, que es el puntero DESTINO del bucle y viene
+     * de fuera.  El vocabulario de acceso siempre dijo que escriben; esta lista
+     * decia que no, y ganaba esta: una funcion cuyo unico trabajo era rellenar
+     * un vector salia pura, y un @pure declarado sobre ella se aprobaba.
+     *
+     * Es la clase de acceso EN EL IR.  A donde baje cada una -- un MOVUPD en el
+     * JIT, un scratch en la pila de la VM en el interprete -- cambia por
+     * objetivo y no es lo que @pure promete: la promesa es sobre la memoria del
+     * PROGRAMA, no sobre por donde pase el backend para escribirla. */
+    for (const auto &c :
+         {std::make_pair("vec_unop", ir::IrOp::VEC_UNOP),
+          std::make_pair("vec_binop", ir::IrOp::VEC_BINOP),
+          std::make_pair("vec_binop_s", ir::IrOp::VEC_BINOP_S),
+          std::make_pair("vec_fma", ir::IrOp::VEC_FMA)}) {
+        const auto f = compute_fingerprint(
+            fn_with(c.first, {op(c.second), op(ir::IrOp::RET)}), "x86_64");
+        CHECK(!f.pure_local && !f.pure,
+              "una op vectorial que escribe el destino del llamante no es "
+              "pura");
+    }
+    for (const auto &c :
+         {std::make_pair("vec_acc_zero", ir::IrOp::VEC_ACC_ZERO),
+          std::make_pair("vec_acc_add", ir::IrOp::VEC_ACC_ADD),
+          std::make_pair("vec_acc_store", ir::IrOp::VEC_ACC_STORE),
+          std::make_pair("vec_bcast", ir::IrOp::VEC_BCAST)}) {
+        const auto f = compute_fingerprint(
+            fn_with(c.first, {op(c.second), op(ir::IrOp::RET)}), "x86_64");
+        CHECK(f.pure_local && f.pure,
+              "el acumulador de una reduccion es local: eso SI sigue siendo "
+              "puro");
+    }
     const auto *dyn2 = find(fps, "dynamic");
     CHECK(dyn2 && !dyn2->pure, "dynamic: no se puede probar pura");
     const auto *allocs2 = find(fps, "allocs");

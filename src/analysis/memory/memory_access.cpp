@@ -29,6 +29,44 @@ int32_t memory_access_size(ir::IrType t) {
     return static_cast<int32_t>(ir::type_access_bytes(t));
 }
 
+MemoryAccessKind memory_access_kind(ir::IrOp op) {
+    using Op = ir::IrOp;
+    MemoryAccessKind k;
+    switch (op) {
+    // --- Solo leen ---
+    case Op::LOAD:
+    case Op::GETFIELD:
+    case Op::ARRAY_LOAD:
+    case Op::ARRAY_LEN: k.touches = k.is_load = true; break;
+    // --- Solo escriben ---
+    case Op::STORE:
+    case Op::SETFIELD:
+    case Op::ARRAY_STORE:
+    case Op::GCWB_IR:
+    case Op::MEMSET:
+    case Op::VEC_ACC_ZERO:
+    case Op::VEC_ACC_STORE: k.touches = k.is_store = true; break;
+    // --- Leen y escriben ---
+    case Op::MEMCPY:
+    // Las vectoriales escriben su destino y leen sus fuentes.  Estan aqui
+    // porque ESCRIBIR era justo lo que otros sitios les negaban.
+    case Op::VEC_UNOP:
+    case Op::VEC_BINOP:
+    case Op::VEC_BINOP_S:
+    case Op::VEC_FMA:
+    case Op::VEC_FMA_S:
+    case Op::VEC_ACC_ADD:
+    case Op::VEC_ACC_FMA:
+    case Op::VEC_ACC_COMBINE:
+        k.touches = k.is_load = k.is_store = true;
+        break;
+    // --- No toca memoria ---
+    // VEC_BCAST difunde un ESCALAR a un registro vectorial: no hay acceso.
+    default: break;
+    }
+    return k;
+}
+
 int32_t memory_access_size_bytes(int32_t raw) {
     // Escalar (1/2/4/8) o vectorial (16/32/64: XMM/YMM/ZMM).  Otro -> 0 (rango
     // no exacto): NUNCA sub-estimar (un vector de 32 B como 8 perderia el
@@ -162,6 +200,20 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             a.touches = a.is_load = a.is_store = true;
             a.writes.push_back(loc_of(pt, ops[0], vw));
             a.reads.push_back(loc_of(pt, ops[1], vw));
+        }
+        return a;
+    /* VEC_FMA_S: {c, a, ESCALAR} -> c += a*escalar.  Faltaba: al no tener caso
+     * caia en el `default` y salia como "no toca memoria", cuando lee y escribe
+     * su acumulador.  A diferencia de MEMSET esto no llego a ser incorrecto:
+     * el modelo de efectos NO la enruta aqui, asi que le aplica su efecto
+     * maximo y ademas deja constancia de la laguna.  Modelarla la quita de ese
+     * saco. */
+    case Op::VEC_FMA_S:
+        if (ops.size() >= 2) {
+            a.touches = a.is_load = a.is_store = true;
+            a.writes.push_back(loc_of(pt, ops[0], vw)); // c (acumulador)
+            a.reads.push_back(loc_of(pt, ops[0], vw));  // c se lee para sumar
+            a.reads.push_back(loc_of(pt, ops[1], vw));  // a
         }
         return a;
     case Op::VEC_FMA: // {c, d, a, b}: c = a*b + d -> escribe c, lee d/a/b

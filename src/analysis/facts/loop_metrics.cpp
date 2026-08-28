@@ -11,6 +11,7 @@
  */
 
 #include "analysis/facts/loop_metrics.h"
+#include "analysis/memory/memory_access.h" // quien decide si una op toca memoria
 
 #include <unordered_set>
 
@@ -24,26 +25,18 @@ using ir::IrValueId;
 
 namespace {
 
+/* Si una op lee o escribe memoria lo contesta el vocabulario de acceso, no una
+ * lista propia.  Aqui habia dos, y no coincidian con las del optimizador: a
+ * estas les faltaban ARRAY_LEN, VEC_ACC_ZERO y VEC_ACC_COMBINE, de modo que un
+ * bucle que solo hiciera eso se contaba como si no tocara memoria.
+ *
+ * Es la clase de acceso EN EL IR: a donde baje cada op depende del objetivo, y
+ * eso lo cubre la capa por backend, no este contador. */
 bool is_load_like(IrOp op) {
-    return op == IrOp::LOAD || op == IrOp::GETFIELD || op == IrOp::ARRAY_LOAD;
+    return analysis::memory_access_kind(op).is_load;
 }
 bool is_store_like(IrOp op) {
-    switch (op) {
-    case IrOp::STORE:
-    case IrOp::SETFIELD:
-    case IrOp::ARRAY_STORE:
-    case IrOp::VEC_UNOP:
-    case IrOp::VEC_BINOP:
-    case IrOp::VEC_BINOP_S:
-    case IrOp::VEC_FMA:
-    case IrOp::VEC_FMA_S:
-    case IrOp::VEC_ACC_ADD:
-    case IrOp::VEC_ACC_FMA:
-    case IrOp::VEC_ACC_STORE:
-    case IrOp::MEMCPY:
-    case IrOp::MEMSET: return true;
-    default: return false;
-    }
+    return analysis::memory_access_kind(op).is_store;
 }
 bool is_call_like(IrOp op) {
     switch (op) {

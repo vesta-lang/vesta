@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "analysis/memory/memory_access.h" // quien decide si una op toca memoria
 #include "ir/ssa_ir.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vx/asm/asm_analyze.h"
@@ -86,11 +87,21 @@ bool is_pure_op(ir::IrOp op) {
     case Op::FCEIL:
     case Op::FROUND:
     case Op::FTRUNC:
-    // Vector (compute + reduccion local).
-    case Op::VEC_UNOP:
-    case Op::VEC_BINOP:
-    case Op::VEC_FMA:
-    case Op::VEC_BINOP_S:
+    /* Vector.  Solo las que se quedan DENTRO de la funcion.
+     *
+     * VEC_UNOP / VEC_BINOP / VEC_BINOP_S / VEC_FMA estaban aqui y NO son puras:
+     * su primer operando es el puntero DESTINO del bucle vectorizado, memoria
+     * que viene de fuera.  El vocabulario de acceso siempre dijo que escriben;
+     * esta lista decia que no, y ganaba esta -- una funcion cuyo unico trabajo
+     * era rellenar el vector del llamante salia `pure_local`, y un @pure
+     * declarado sobre ella se aprobaba como "puro" en vez de marcarse violado.
+     *
+     * Las VEC_ACC_* si se quedan: escriben en el acumulador, que el
+     * vectorizador crea como un ALLOCA de la propia funcion (ver
+     * `acc_slot` en vectorize.cpp).  Escribir en un local propio no es un
+     * efecto que nadie de fuera pueda observar, que es justo lo que "reduccion
+     * local" queria decir.  VEC_BCAST tampoco toca memoria: difunde un escalar
+     * a un registro. */
     case Op::VEC_BCAST:
     case Op::VEC_ACC_ZERO:
     case Op::VEC_ACC_ADD:

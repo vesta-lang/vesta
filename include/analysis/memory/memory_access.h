@@ -28,6 +28,12 @@
 #include "analysis/memory/points_to.h"
 
 #include <cstdint>
+
+namespace ir {
+// El opcode, para poder preguntar por la CLASE de acceso sin arrastrar el IR
+// entero a cada consumidor de esta cabecera.
+enum class IrOp : uint16_t;
+} // namespace ir
 #include <vector>
 
 namespace ir {
@@ -78,6 +84,42 @@ struct MemoryAccess {
 /// consumidor NO construye pt: lo recibe (Regla 1 -- base de hechos
 /// compartida).
 MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt);
+
+/**
+ * @brief QUE CLASE de acceso hace una op EN EL IR, sin mirar a donde apunta.
+ *
+ * Es la misma clasificacion que @c memory_access, quitandole las
+ * localizaciones: responde "lee", "escribe", "no toca" a partir del opcode
+ * solo.  Existe porque media docena de sitios necesitaban justo eso -- si una
+ * op lee o escribe memoria -- y no tenian a mano ni la instruccion completa ni
+ * la tabla points-to, asi que cada uno se escribio su propia lista.  Y las
+ * listas divergian: dos @c is_store_like con contenidos distintos, y un
+ * @c is_pure_op que daba por PURAS ops vectoriales que este mismo vocabulario
+ * dice que escriben memoria.
+ *
+ * EN EL IR, y eso no es una coletilla: los accesos del CODIGO EMITIDO no son
+ * los de la op del IR, y cambian por objetivo.  Una @c VEC_BINOP en el
+ * interprete pasa por un scratch en la pila de la VM (@c movh +
+ * @c fload / @c fstore sobre el banco ancho); en el JIT y en el AOT es un
+ * @c MOVUPD directo sin ese intermediario, y cual de los dos se emite depende
+ * ademas del conjunto de instrucciones del objetivo.  Lo que este vocabulario
+ * describe es la memoria DEL PROGRAMA -- la que el codigo fuente puede
+ * observar --, no la que cada backend use para llegar ahi.  Quien razone sobre
+ * el codigo final (coste, barreras del emisor, presion de registros) necesita
+ * ademas la capa por backend; ver @c aplicar_backend en ir_effects.cpp.
+ *
+ * Quien tenga la instruccion y el points-to debe seguir usando
+ * @c memory_access: esta version no dice DONDE, y no saberlo es justo lo que
+ * separa una barrera conservadora de un analisis util.
+ */
+struct MemoryAccessKind {
+    bool touches = false;
+    bool is_load = false;
+    bool is_store = false;
+};
+
+/// @brief Clase de acceso de @p op.  Ver @c MemoryAccessKind.
+MemoryAccessKind memory_access_kind(ir::IrOp op);
 
 } // namespace analysis
 
