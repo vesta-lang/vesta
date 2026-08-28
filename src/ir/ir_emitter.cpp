@@ -7554,8 +7554,8 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     }
 
     // Emision de cada funcion; la primera funcion no-nativa es el punto de
-    // entrada
-    bool first_func = true;
+    // entrada, salvo que se emita una biblioteca (donde no hay ninguno).
+    bool first_func = !opts.sin_punto_de_entrada;
     for (const auto &fn : mod.functions) {
         if (omit_comptime_bodies && ir::es_cuerpo_comptime(fn.name)) {
             continue;

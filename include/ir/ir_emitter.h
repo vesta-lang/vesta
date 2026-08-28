@@ -84,6 +84,25 @@ struct EmitOptions {
      * nada mas.
      */
     bool ya_optimizado = false;
+    /**
+     * @brief Lo que se emite es una BIBLIOTECA: ninguna funcion es la entrada.
+     *
+     * Por defecto la primera funcion no nativa se toma por el punto de entrada
+     * del programa y se cierra con @c hlt en vez de @c ret, que es lo correcto
+     * para `main`: al acabar, la maquina para.
+     *
+     * El artefacto del comptime no es un programa.  Es un conjunto de funciones
+     * que se invocan UNA A UNA fijando el PC, con una direccion de retorno
+     * puesta a mano, asi que cualquiera de ellas puede ser llamada por otra.
+     * Cerrar la primera con @c hlt hacia que, al llamarla, la ejecucion PARARA
+     * ahi y no volviera nunca: el llamante se quedaba a medias y devolvia lo
+     * que hubiera en R0.  Y en silencio, porque parar es una forma legitima de
+     * terminar -- el que invoca lee R0 y se lo cree.
+     *
+     * Con esto puesto todas terminan en @c ret, que es lo unico coherente
+     * cuando cualquiera puede ser llamada.
+     */
+    bool sin_punto_de_entrada = false;
 };
 
 /**

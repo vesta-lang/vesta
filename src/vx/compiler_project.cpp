@@ -4122,6 +4122,10 @@ CompileResult compile_vx_project(
                 if (dentro.count(f.name)) solo_ct.functions.push_back(f);
             if (!solo_ct.functions.empty()) {
                 ir::EmitOptions eo_ct = emit_opts;
+                /* Ninguna de estas funciones es la entrada de un programa:
+                 * todas se invocan por su PC y cualquiera puede llamar a otra,
+                 * asi que todas tienen que poder VOLVER. */
+                eo_ct.sin_punto_de_entrada = true;
                 ir::EmitResult e_ct = ir::ir_emit_module(solo_ct, eo_ct);
                 if (e_ct.ok) {
                     res.comptime_vel_text = std::move(e_ct.vel_text);
