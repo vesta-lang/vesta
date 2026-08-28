@@ -21,30 +21,9 @@
  * capturaban nada -- solo usan el estado del propio bajador --, asi que pasar a
  * metodos no cambio ninguna llamada.
  */
-#include "util/env_flags.h"
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
-#include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
 #include <algorithm>
-#include <chrono>
-#include <iostream>
-#include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
-#include "vx/asm/asm_effects.h"       // inferencia de clobbers ( AS inc.4)
-#include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
-#include "vx/asm/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
-#include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
-#include "vx/asm/asm_lift_micro.h"
-#include "vx/asm/asm_lift_registro.h"
-#include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
-#include "vx/asm/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
-#include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
-#include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
-#include "vx/comptime/comptime_introspect.h" // helpers compartidos rama A
-#include "vx/generics/concepts.h"      // conceptos como predicado -> CONST bool
-#include "vx/generics/generic_clone.h" // clone_expr (custom print to_string)
-#include "vx/lexer.h"                  // parse de fragments para @Macro
-#include "vx/parser.h"                 // parse_one_expr para @Macro
-#include "ir/ir_optimizer.h"           // register_pure_new_helper
 #include <functional>
 #include <map>
 #include <set>

@@ -30,7 +30,6 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
-#include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
 #include "lowering_internal.h" // la cocina compartida (no es la interfaz)
 #include <utility>
 

@@ -15,33 +15,12 @@
  * @brief Implementacion del pase AST -> ir::IrModule de Vesta.
  */
 
-#include "util/env_flags.h"
 #include "vx/lowering.h"
 #include "util/thread_slot.h" // el estado por hilo NO va en thread_local
 #include "lowering/lowering_internal.h" // helpers que comparten las unidades del lowering
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 
-#include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
 #include <algorithm>
-#include <chrono>
-#include <iostream>
-#include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
-#include "vx/asm/asm_effects.h"       // inferencia de clobbers ( AS inc.4)
-#include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
-#include "vx/asm/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
-#include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
-#include "vx/asm/asm_lift_micro.h"
-#include "vx/asm/asm_lift_registro.h"
-#include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
-#include "vx/asm/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
-#include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
-#include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
-#include "vx/comptime/comptime_introspect.h" // helpers compartidos rama A
-#include "vx/generics/concepts.h"      // conceptos como predicado -> CONST bool
-#include "vx/generics/generic_clone.h" // clone_expr (custom print to_string)
-#include "vx/lexer.h"                  // parse de fragments para @Macro
-#include "vx/parser.h"                 // parse_one_expr para @Macro
-#include "ir/ir_optimizer.h"           // register_pure_new_helper
 
 #include <functional>
 #include <map>
@@ -2197,13 +2176,8 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         st.source_line = source_line;
         emit(current_block_, std::move(st));
     };
-    auto pack = [&](const std::vector<uint8_t> &data, uint64_t pos,
-                    int n) -> uint64_t {
-        uint64_t v = 0;
-        for (int k = 0; k < n; ++k)
-            v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
-        return v;
-    };
+    auto pack = [](const std::vector<uint8_t> &data, uint64_t pos,
+                    int n) { return pack_le(data, pos, n); };
     // Helper: escribir `data` (incluye el nul final) byte-a-byte agrupado
     // en qwords/dword/word/byte a partir de @p v_base + base_off.
     auto write_packed = [&](ir::IrValueId v_base, uint64_t base_off,
@@ -2319,11 +2293,8 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             emit(current_block_, std::move(st));
         };
         // Empaquetar `n` bytes de data[pos..] en un entero little-endian.
-        auto pack = [&](uint64_t pos, int n) -> uint64_t {
-            uint64_t v = 0;
-            for (int k = 0; k < n; ++k)
-                v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
-            return v;
+        auto pack = [&](uint64_t pos, int n) {
+            return pack_le(data, pos, n);
         };
 
         uint64_t pos = 0;
