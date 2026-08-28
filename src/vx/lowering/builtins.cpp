@@ -537,59 +537,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
     }
 
-    // -----------------------------------------------------------------
-    // A.39: builtins comptime sobre strings.  Args ya validados como
-    // comptime-evaluables por type_checker.  Aqui evaluamos y emitimos:
-    //   comptime_concat -> STRMAKE inline con bytes concatenados
-    //   comptime_streq  -> CONST bool con resultado
-    //   comptime_strlen -> CONST u64 con size
-    // -----------------------------------------------------------------
-    if (name == "comptime_concat" || name == "comptime_streq" ||
-        name == "comptime_strlen") {
-        const ComptimeEvalResult r = comptime_eval_expr(tc_, e);
-        if (!r.ok) {
-            /*  MC.24: si el comptime eval falla (e.g. arg es
-             * un comptime var que solo se resuelve en call-site
-             * del macro padre), NO erroreamos.  En su lugar, dejamos
-             * que el path runtime (str_concat/str_equals/str_length
-             * via STRCAT/STRCMP/STRLEN bytecode) maneje el call.
-             * El macro corre via VM al invocarse y produce el
-             * resultado correcto.  Solo fallback si el caller es
-             * NO un macro (en cuyo caso si hay error real). */
-            /* Caer al despacho normal: lo atiende la familia de
-             * cadenas (lowering/builtins_string.cpp). */
-            /* Fall through. */
-        } else {
-            const uint32_t src_line = e->loc.line;
-            if (r.is_str) {
-                /* Materializar como StringObject inline. */
-                std::vector<uint8_t> bytes(r.str.begin(), r.str.end());
-                const uint64_t idx =
-                    out_mod_->intern_static_data(std::move(bytes));
-                ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr is{};
-                    is.op = ir::IrOp::STR_LIT_ADDR;
-                    is.type = ir::IrType::PTR;
-                    is.dst = v_addr;
-                    is.imm = idx;
-                    is.source_line = src_line;
-                    emit(current_block_, std::move(is));
-                }
-                ir::IrValueId v_len = emit_const(
-                    ir::IrType::I64, (uint64_t)r.str.size(), src_line);
-                ir::IrValueId v_str =
-                    emit_string_literal_repr(v_addr, v_len, -1, src_line);
-                out_value = v_str;
-                return true;
-            }
-            /* Int result: comptime_streq -> bool, comptime_strlen -> u64. */
-            ir::IrType t =
-                (name == "comptime_streq") ? ir::IrType::BOOL : ir::IrType::U64;
-            out_value = emit_const(t, (uint64_t)r.value, src_line);
-            return true;
-        } /* end else block (r.ok=true path) */
-    }
 
     // -----------------------------------------------------------------
     // static_assert(cond, "msg").
