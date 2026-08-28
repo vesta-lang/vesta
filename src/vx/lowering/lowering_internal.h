@@ -57,6 +57,42 @@ bool asmblk_assemble(
     std::string &err,
     std::vector<ir::IrModule::StaticDataMeta::SymRef> *sym_refs = nullptr);
 
+/**
+ * @brief Direccion de un campo: @p base mas el desplazamiento, como valor.
+ *
+ * Lo usan tanto la bajada de la POO como la de expresiones, asi que no puede
+ * quedarse dentro de ninguna de las dos.
+ */
+ir::IrValueId emit_field_addr(ir::IrFunction *fn, ir::IrBlockId block,
+                              ir::IrValueId base, uint32_t offset,
+                              uint32_t line);
+
+/**
+ * @brief Reserva el hueco donde se recuerda la clase ya resuelta por su nombre.
+ *
+ * Ocho ceros -- el hueco -- seguidos de un centinela y del nombre.  El
+ * centinela es lo que lo distingue de @c intern_class_name, que interna el
+ * mismo nombre para otra cosa: sin el, las dos entradas se fundirian en una.
+ */
+uint64_t intern_class_cache_slot(ir::IrModule &mod, const std::string &name);
+
+/**
+ * @brief Reparte la funcion de arranque del modulo en tandas mas pequenas.
+ *
+ * @c __module_init acababa siendo una funcion enorme -- una tirada por clase y
+ * por aspecto --, y se puede partir porque sus bloques forman una cadena lineal
+ * que NO se pasa valores: lo que una clase necesita de otra viaja por estado
+ * global.  Es conservador a proposito: cualquier forma que no encaje -- un PHI,
+ * una rama, un valor que cruce y no sea una reserva de pila -- deja la funcion
+ * como estaba, porque partir mal aqui no da un programa mas lento, da uno que
+ * registra mal sus clases.
+ *
+ * @param init La funcion recien generada; queda reescrita a llamadas.
+ * @param out  Modulo donde se anaden las tandas.
+ * @return @c true si se partio; @c false si se dejo intacta.
+ */
+bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out);
+
 } // namespace vx
 
 #endif // VESTA_VX_LOWERING_INTERNAL_H

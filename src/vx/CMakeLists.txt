@@ -182,6 +182,10 @@ add_library(vx_lib STATIC
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.
     lowering/asm.cpp
+    # Orientacion a objetos: metodos de clase y de struct, ayudantes de
+    # construccion (__new_X), la funcion de arranque del modulo que CONSTRUYE
+    # las clases antes de main, y la llamada a un metodo.
+    lowering/oop.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
