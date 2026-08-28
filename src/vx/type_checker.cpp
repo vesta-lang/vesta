@@ -4746,10 +4746,35 @@ void TypeChecker::collect_globals() {
                     }
                 }
 
-                if (!seen_method.emplace(mname, true).second &&
-                    !m->is_constructor) {
-                    diags_.error(m->loc, "metodo duplicado en clase '" +
-                                             c->name + "': '" + mname + "'");
+                /* Los constructores tambien entran, con una clave propia.
+                 *
+                 * Hoy una clase solo puede tener UNO: su simbolo es
+                 * `<Clase>__ctor`, sin nada que distinga a uno de otro -- ni
+                 * siquiera el numero de argumentos, a diferencia del struct,
+                 * cuyo simbolo si lo lleva.  Declarar dos emitia dos etiquetas
+                 * con el MISMO nombre y la llamada se iba a una cualquiera:
+                 * teniendo `K()` y `K(i64)`, `new K(9)` no ejecutaba el que se
+                 * habia escrito.  Y en silencio.
+                 *
+                 * Se dice donde se escribe, en vez de dar un objeto mal
+                 * construido.  Mientras tanto, varias formas de construir se
+                 * escriben como metodos `static` que devuelven la clase, que si
+                 * tienen nombre propio y funcionan hoy. */
+                const std::string clave_m =
+                    m->is_constructor ? std::string("\1ctor") : mname;
+                if (!seen_method.emplace(clave_m, true).second) {
+                    if (m->is_constructor) {
+                        diags_.error(m->loc,
+                                     "la clase '" + c->name +
+                                         "' ya tiene un constructor; por ahora"
+                                         " una clase solo admite uno.  Para"
+                                         " varias formas de construirla, usa"
+                                         " metodos 'static' que la devuelvan");
+                    } else {
+                        diags_.error(m->loc, "metodo duplicado en clase '" +
+                                                 c->name + "': '" + mname +
+                                                 "'");
+                    }
                     continue;
                 }
                 ClassMethodInfo mi_info;
