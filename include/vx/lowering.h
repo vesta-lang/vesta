@@ -419,6 +419,36 @@ class Lowering {
      */
     ir::IrValueId unique_slot_buf(uint32_t line);
 
+    /**
+     * @brief Suma un desplazamiento a una direccion.
+     *
+     * El resultado HEREDA de la base si es direccion del anfitrion: una
+     * direccion mas ocho sigue apuntando a la misma memoria.  Decir que es del
+     * anfitrion cuando la base es de la maquina virtual hace que quien la lea
+     * despues emita el acceso equivocado, y eso no da error: lee otra cosa.
+     *
+     * @param base        La direccion de partida.
+     * @param off         Cuanto sumarle.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA con la direccion resultante.
+     */
+    ir::IrValueId emit_ptr_add(ir::IrValueId base, ir::IrValueId off,
+                               uint32_t source_line);
+
+    /**
+     * @brief Igual, con el desplazamiento conocido al compilar.
+     *
+     * Sumar cero devuelve la base sin emitir nada, para que pedir el campo en
+     * el desplazamiento 0 no haya que tratarlo aparte.
+     *
+     * @param base        La direccion de partida.
+     * @param off         Cuanto sumarle, conocido al compilar.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA resultante, o @p base si @p off es cero.
+     */
+    ir::IrValueId emit_ptr_add(ir::IrValueId base, uint64_t off,
+                               uint32_t source_line);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);

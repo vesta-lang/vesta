@@ -110,18 +110,6 @@ std::string Lowering::ensure_strcmp_helper() {
     const uint32_t ln = 0;
 
     // Helpers locales (mismo patron que emit_native_itoa_to_buf).
-    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {base, off};
-        ad.source_line = ln;
-        emit(current_block_, std::move(ad));
-        return v;
-    };
     auto new_slot = [&]() -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
         fn_->values[v].is_host_ptr = true;
@@ -270,8 +258,8 @@ std::string Lowering::ensure_strcmp_helper() {
         current_block_ = bb_body;
         {
             ir::IrValueId v_i2 = load_i64(s_i);
-            ir::IrValueId v_a_at = ptr_add(p_pa, v_i2);
-            ir::IrValueId v_b_at = ptr_add(p_pb, v_i2);
+            ir::IrValueId v_a_at = emit_ptr_add(p_pa, v_i2, ln);
+            ir::IrValueId v_b_at = emit_ptr_add(p_pb, v_i2, ln);
             ir::IrValueId v_ca = load_byte(v_a_at);
             ir::IrValueId v_cb = load_byte(v_b_at);
             ir::IrValueId ne = cmp(ir::IrOp::CMP_NE, v_ca, v_cb);
@@ -343,19 +331,6 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
     const uint32_t ln = static_cast<uint32_t>(line);
 
     // Helper: addr = base + off (host).
-    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {base, off};
-        ad.source_line = ln;
-        emit(current_block_, std::move(ad));
-        return v;
-    };
-
     // 1. Slot resultado vacio.  String Inc 5 (SSO): arrancamos como SSO
     //    vacio (len=0) -> CERO malloc inicial.  Los appends posteriores
     //    crecen inline (SSO) o transicionan a HEAP via
@@ -404,7 +379,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             ir::IrValueId v_dst =
                 (off == 0)
                     ? v_scratch
-                    : ptr_add(v_scratch, emit_const(ir::IrType::I64, off, ln));
+                    : emit_ptr_add(v_scratch, emit_const(ir::IrType::I64, off, ln), ln);
             ir::IrValueId v_val = emit_const(ty, val, ln);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -1114,18 +1089,6 @@ std::string Lowering::ensure_str_cplen_helper() {
     const uint32_t ln = 0;
 
     // Toolkit local (mismo patron que ensure_strcmp_helper).
-    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {base, off};
-        ad.source_line = ln;
-        emit(current_block_, std::move(ad));
-        return v;
-    };
     auto new_slot = [&]() -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
         fn_->values[v].is_host_ptr = true;
@@ -1234,7 +1197,7 @@ std::string Lowering::ensure_str_cplen_helper() {
     // body: b = p[i]; if ((b & 0xC0) != 0x80) count++; i++.
     current_block_ = bb_body;
     ir::IrValueId v_i2 = load_i64(s_i);
-    ir::IrValueId v_at = ptr_add(p_p, v_i2);
+    ir::IrValueId v_at = emit_ptr_add(p_p, v_i2, ln);
     ir::IrValueId v_b = load_byte(v_at);
     ir::IrValueId v_hi = bin(ir::IrOp::AND, v_b, v_c0);
     ir::IrValueId is_cont = bin(ir::IrOp::CMP_EQ, v_hi, v_80);
@@ -1337,18 +1300,6 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     const uint32_t ln = 0;
 
     // Toolkit local.
-    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {base, off};
-        ad.source_line = ln;
-        emit(current_block_, std::move(ad));
-        return v;
-    };
     auto new_slot = [&]() -> ir::IrValueId {
         ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
         fn_->values[v].is_host_ptr = true;
@@ -1384,7 +1335,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     };
     auto load_byte_at = [&](ir::IrValueId base,
                             ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId a = ptr_add(base, off);
+        ir::IrValueId a = emit_ptr_add(base, off, ln);
         ir::IrValueId v = fn_->new_value(ir::IrType::I64);
         ir::IrInstr ld{};
         ld.op = ir::IrOp::LOAD;
@@ -1558,7 +1509,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     current_block_ = bb_bmp;
     {
         ir::IrValueId v_ob = load_i64(s_ob);
-        store_u16(ptr_add(v_out, v_ob), v_cp);
+        store_u16(emit_ptr_add(v_out, v_ob, ln), v_cp);
         store_i64(s_ob, bin(ir::IrOp::ADD, v_ob, cst(2)));
     }
     br(bb_hdr);
@@ -1571,9 +1522,9 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         ir::IrValueId lo =
             bin(ir::IrOp::OR, cst(0xDC00), bin(ir::IrOp::AND, cp2, cst(0x3FF)));
         ir::IrValueId v_ob = load_i64(s_ob);
-        store_u16(ptr_add(v_out, v_ob), hi);
+        store_u16(emit_ptr_add(v_out, v_ob, ln), hi);
         ir::IrValueId v_ob2 = bin(ir::IrOp::ADD, v_ob, cst(2));
-        store_u16(ptr_add(v_out, v_ob2), lo);
+        store_u16(emit_ptr_add(v_out, v_ob2, ln), lo);
         store_i64(s_ob, bin(ir::IrOp::ADD, v_ob, cst(4)));
     }
     br(bb_hdr);
@@ -1582,7 +1533,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     current_block_ = bb_end;
     {
         ir::IrValueId v_ob = load_i64(s_ob);
-        store_u16(ptr_add(v_out, v_ob), cst(0));
+        store_u16(emit_ptr_add(v_out, v_ob, ln), cst(0));
         ir::IrInstr rt{};
         rt.op = ir::IrOp::RET;
         rt.type = ir::IrType::PTR;
@@ -1832,27 +1783,13 @@ void Lowering::emit_zero_native_str_slot(ir::IrValueId v_slot,
     // 16 forwarda el i64=0 e ignora el U8) -- rompia el MOVE de SSO.  Con
     // I32+I16+U8 (sin i64 que cubra byte[23]) el move lee bytes 16..22=0 +
     // byte[23]=len -> definido y correcto.
-    auto ptr_add = [&](uint64_t off) -> ir::IrValueId {
-        if (off == 0) return v_slot;
-        ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = fn_->values[v_slot].is_host_ptr;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {v_slot, v_off};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-        return v;
-    };
     auto store0 = [&](uint64_t off, ir::IrType ty) {
         ir::IrValueId v_z = emit_const(ty, 0, source_line);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
         st.type = ty;
         st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_z, ptr_add(off)};
+        st.operands = {v_z, emit_ptr_add(v_slot, (uint64_t) (off), source_line)};
         st.source_line = source_line;
         emit(current_block_, std::move(st));
     };
@@ -1899,19 +1836,6 @@ void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
     // qword2 no contiene data -> escribimos cap como i64 a offset 16 (que
     // toca byte[23]=0 si cap < 2^56) y luego byte[23]=0x80 (U8).  El move
     // de un HEAP usa MEMCPY (no i64 LOADs) -> sin solape de forwarding.
-    auto ptr_add = [&](uint64_t off) -> ir::IrValueId {
-        ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = fn_->values[v_slot].is_host_ptr;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {v_slot, v_off};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-        return v;
-    };
     auto store = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -1921,8 +1845,8 @@ void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
         st.source_line = source_line;
         emit(current_block_, std::move(st));
     };
-    store(ptr_add(16), v_cap, ir::IrType::I64);
-    store(ptr_add(23), emit_const(ir::IrType::U8, 0x80, source_line),
+    store(emit_ptr_add(v_slot, (uint64_t) (16), source_line), v_cap, ir::IrType::I64);
+    store(emit_ptr_add(v_slot, (uint64_t) (23), source_line), emit_const(ir::IrType::U8, 0x80, source_line),
           ir::IrType::U8);
 }
 
@@ -2501,21 +2425,8 @@ std::string Lowering::ensure_btoa_helper() {
     // Helper: STORE empaquetado de los bytes de `s` en buf[off..].
     auto write_bytes = [&](const std::string &s) {
         std::vector<uint8_t> data(s.begin(), s.end());
-        auto ptr_add = [&](ir::IrValueId base, uint64_t off) -> ir::IrValueId {
-            if (off == 0) return base;
-            ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v].is_host_ptr = true;
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v;
-            ad.operands = {base, emit_const(ir::IrType::I64, off, 0)};
-            ad.source_line = 0;
-            emit(current_block_, std::move(ad));
-            return v;
-        };
         auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
-            ir::IrValueId v_dst = ptr_add(p_buf, off);
+            ir::IrValueId v_dst = emit_ptr_add(p_buf, off, 0);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ty;

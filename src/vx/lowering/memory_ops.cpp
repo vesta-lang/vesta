@@ -1197,19 +1197,6 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
     // buffer destino tiene cap = total+1 bytes -> margen suficiente.
 
     // Helper local: addr = base + off (off es un IrValue I64).
-    auto ptr_add = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_addr].is_host_ptr = true;
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr;
-        ad.operands = {base, off};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-        return v_addr;
-    };
-
     // Slot del contador i = 0 (compartido por ambos loops).
     const ir::IrValueId v_i_slot = fn_->new_value(ir::IrType::PTR);
     {
@@ -1300,8 +1287,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
 
         // body: w = load.i64 src+i ; store.i64 w -> dst+i ; i += 8 ; -> hdr
         current_block_ = body;
-        ir::IrValueId v_src = ptr_add(src_base, v_i);
-        ir::IrValueId v_dst = ptr_add(dst_base, v_i);
+        ir::IrValueId v_src = emit_ptr_add(src_base, v_i, source_line);
+        ir::IrValueId v_dst = emit_ptr_add(dst_base, v_i, source_line);
         ir::IrValueId v_w = fn_->new_value(ir::IrType::I64);
         {
             ir::IrInstr ld{};
@@ -1408,8 +1395,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
 
         // body: byte = load.u8 src+i ; store.u8 byte -> dst+i ; i += 1 ; -> hdr
         current_block_ = body;
-        ir::IrValueId v_src = ptr_add(src_base, v_i);
-        ir::IrValueId v_dst = ptr_add(dst_base, v_i);
+        ir::IrValueId v_src = emit_ptr_add(src_base, v_i, source_line);
+        ir::IrValueId v_dst = emit_ptr_add(dst_base, v_i, source_line);
         ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
         {
             ir::IrInstr ld{};
@@ -1546,6 +1533,58 @@ ir::IrValueId Lowering::unique_slot_buf(uint32_t line) {
     al.source_line = line;
     emit(current_block_, std::move(al));
     return v_buf;
+}
+
+/**
+ * @brief Suma un desplazamiento a una direccion y devuelve la de destino.
+ *
+ * Estaba escrito DOCE veces, como una lambda dentro de la funcion que lo
+ * necesitaba, en dos formas que no coincidian: nueve fijaban el resultado como
+ * direccion del anfitrion y tres lo HEREDABAN de la base.  Heredarlo es lo
+ * correcto siempre: una direccion mas ocho sigue apuntando a la misma memoria,
+ * y decir que es del anfitrion cuando la base es de la maquina virtual hace que
+ * quien la lea despues emita el acceso equivocado -- no da error, lee otra
+ * cosa --.
+ *
+ * El atajo de desplazamiento cero tampoco estaba en todas: sumar cero emite una
+ * instruccion que no hace nada, y aqui se evita en todas por igual.
+ *
+ * @param base        La direccion de partida.
+ * @param off         Cuanto sumarle.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA con la direccion resultante.
+ */
+ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, ir::IrValueId off,
+                                     uint32_t source_line) {
+    const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v].is_host_ptr = fn_->values[base].is_host_ptr;
+    ir::IrInstr ad{};
+    ad.op = ir::IrOp::ADD;
+    ad.type = ir::IrType::I64;
+    ad.dst = v;
+    ad.operands = {base, off};
+    ad.source_line = source_line;
+    emit(current_block_, std::move(ad));
+    return v;
+}
+
+/**
+ * @brief Igual, con el desplazamiento conocido al compilar.
+ *
+ * Sumar cero devuelve la propia base sin emitir nada: no es una optimizacion
+ * suelta sino lo que hace que quien recorre una estructura pueda pedir el campo
+ * en el desplazamiento 0 igual que los demas, sin tratarlo aparte.
+ *
+ * @param base        La direccion de partida.
+ * @param off         Cuanto sumarle, conocido al compilar.
+ * @param source_line Linea fuente, para la depuracion.
+ * @return El valor SSA con la direccion resultante, o @p base si @p off es 0.
+ */
+ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, uint64_t off,
+                                     uint32_t source_line) {
+    if (off == 0) return base;
+    return emit_ptr_add(base, emit_const(ir::IrType::I64, off, source_line),
+                        source_line);
 }
 
 } // namespace vx
