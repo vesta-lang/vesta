@@ -1101,17 +1101,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         // 1. dec del valor anterior del campo (reasignacion sin fuga).
         emit_shared_refcount_dec(addr, loc.line);
         // 2. LOAD ctrl desde el slot del origen.
-        const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ctrl].is_host_ptr = true;
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_ctrl;
-            ld.operands = {rhs};
-            ld.source_line = loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_ctrl = emit_load_host_ptr(rhs, loc.line);
         // 3. STORE ctrl al campo.
         emit_store_typed(addr, v_ctrl, ir::IrType::I64, loc.line);
         // 4. inc del refcount (el campo es un dueno mas).

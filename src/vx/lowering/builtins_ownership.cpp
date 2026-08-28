@@ -313,17 +313,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         // LOAD ctrl from [slot].
-        const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ctrl].is_host_ptr = true;
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_ctrl;
-            ld.operands = {v_slot};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_ctrl = emit_load_host_ptr(v_slot, e->loc.line);
         // LOAD refcount from [ctrl + 0] (host memory).
         const ir::IrValueId v_rc =
             emit_load_typed(v_ctrl, ir::IrType::I64, e->loc.line);
@@ -1235,15 +1225,7 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
     if (owner_t.kind == PrimitiveKind::UNIQUE_PTR ||
         owner_t.kind == PrimitiveKind::SHARED_PTR) {
         // LOAD slot+0 (para unique) o ctrl+16 (shared payload).
-        const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ptr].is_host_ptr = true;
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_ptr;
-        ld.operands = {v_arg};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        const ir::IrValueId v_ptr = emit_load_host_ptr(v_arg, e->loc.line);
         if (owner_t.kind == PrimitiveKind::SHARED_PTR) {
             // Para shared, sumar 16 (offset del payload inline en
             // ctrl_block: refcount@0 + deleter@8 + payload@16).

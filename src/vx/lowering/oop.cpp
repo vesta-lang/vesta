@@ -2194,45 +2194,8 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // vtable; LOAD fn[idx]; CALLIND.
     if (lay.is_interface && native_poo_) {
         fn_->values[obj].is_host_ptr = true;
-        const uint32_t idx = mtd->vtable_index;
-        ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_vt].is_host_ptr = true;
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_vt;
-            ld.operands = {obj};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
-        ir::IrValueId v_slot = v_vt;
-        if (idx != 0) {
-            const ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, static_cast<uint64_t>(idx) * 8u, e->loc.line);
-            v_slot = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_slot].is_host_ptr = true;
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::PTR;
-                ad.dst = v_slot;
-                ad.operands = {v_vt, v_off};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
-        }
-        ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_fn].is_host_ptr = true;
-        {
-            ir::IrInstr ld2{};
-            ld2.op = ir::IrOp::LOAD;
-            ld2.type = ir::IrType::I64;
-            ld2.dst = v_fn;
-            ld2.operands = {v_slot};
-            ld2.source_line = e->loc.line;
-            emit(current_block_, std::move(ld2));
-        }
+        const ir::IrValueId v_fn =
+            emit_vtable_method_ptr(obj, mtd->vtable_index, e->loc.line);
         ir::IrInstr ci{};
         ci.op = ir::IrOp::CALLIND;
         ci.type = ret_ir;
@@ -2598,46 +2561,8 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         //   %fn   = LOAD [%slot]            (direccion del metodo)
         //   CALLIND %fn (obj, retbuf?, args)
         {
-            const uint32_t idx = mtd->vtable_index;
-            ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_vt].is_host_ptr = true;
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = v_vt;
-                ld.operands = {obj};
-                ld.source_line = e->loc.line;
-                emit(current_block_, std::move(ld));
-            }
-            ir::IrValueId v_slot = v_vt;
-            if (idx != 0) {
-                const ir::IrValueId v_off =
-                    emit_const(ir::IrType::I64, static_cast<uint64_t>(idx) * 8u,
-                               e->loc.line);
-                v_slot = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_slot].is_host_ptr = true;
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::PTR;
-                    ad.dst = v_slot;
-                    ad.operands = {v_vt, v_off};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
-                }
-            }
-            ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_fn].is_host_ptr = true;
-            {
-                ir::IrInstr ld2{};
-                ld2.op = ir::IrOp::LOAD;
-                ld2.type = ir::IrType::I64;
-                ld2.dst = v_fn;
-                ld2.operands = {v_slot};
-                ld2.source_line = e->loc.line;
-                emit(current_block_, std::move(ld2));
-            }
+            const ir::IrValueId v_fn =
+                emit_vtable_method_ptr(obj, mtd->vtable_index, e->loc.line);
             ir::IrInstr ci{};
             ci.op = ir::IrOp::CALLIND;
             ci.type = ret_ir;

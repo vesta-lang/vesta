@@ -303,17 +303,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     ir::IrValueId base_eff = base_v;
     if (bt.kind == PrimitiveKind::UNIQUE_PTR ||
         bt.kind == PrimitiveKind::SHARED_PTR) {
-        const ir::IrValueId v_data = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_data].is_host_ptr = true;
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_data;
-            ld.operands = {base_v};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_data = emit_load_host_ptr(base_v, e->loc.line);
         base_eff = v_data;
         if (bt.kind == PrimitiveKind::SHARED_PTR) {
             const ir::IrValueId v16 =

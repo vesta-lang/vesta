@@ -885,17 +885,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
     // slot origen (rhs), STORE ctrl al campo, inc del refcount.
     if (fa->result_type.kind == PrimitiveKind::SHARED_PTR) {
         emit_shared_refcount_dec(addr, e->loc.line);
-        const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ctrl].is_host_ptr = true;
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_ctrl;
-            ld.operands = {rhs};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_ctrl = emit_load_host_ptr(rhs, e->loc.line);
         emit_store_typed(addr, v_ctrl, ir::IrType::I64, e->loc.line);
         emit_shared_refcount_inc(addr, e->loc.line);
         out = rhs;

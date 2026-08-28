@@ -112,46 +112,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 // que posee una instancia derivada ejecuta el dtor
                 // DERIVADO (la vtable de obj[0] la puso __new_<Derived>).
                 const ir::IrValueId obj = opnds[0];
-                const uint32_t idx = it->dtor_vtable_index;
-                ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_vt].is_host_ptr = true;
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = v_vt;
-                    ld.operands = {obj};
-                    ld.source_line = it->source_line;
-                    emit(current_block_, std::move(ld));
-                }
-                ir::IrValueId v_slot = v_vt;
-                if (idx != 0) {
-                    const ir::IrValueId v_off = emit_const(
-                        ir::IrType::I64, static_cast<uint64_t>(idx) * 8u,
-                        it->source_line);
-                    v_slot = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_slot].is_host_ptr = true;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::PTR;
-                        ad.dst = v_slot;
-                        ad.operands = {v_vt, v_off};
-                        ad.source_line = it->source_line;
-                        emit(current_block_, std::move(ad));
-                    }
-                }
-                ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_fn].is_host_ptr = true;
-                {
-                    ir::IrInstr ld2{};
-                    ld2.op = ir::IrOp::LOAD;
-                    ld2.type = ir::IrType::I64;
-                    ld2.dst = v_fn;
-                    ld2.operands = {v_slot};
-                    ld2.source_line = it->source_line;
-                    emit(current_block_, std::move(ld2));
-                }
+                const ir::IrValueId v_fn = emit_vtable_method_ptr(
+                    obj, it->dtor_vtable_index, it->source_line);
                 ir::IrInstr ci{};
                 ci.op = ir::IrOp::CALLIND;
                 ci.type = ir::IrType::VOID;
@@ -258,17 +220,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // Si NO esta poblado (caso SRET: el unique vino de
             // una funcion que lo creo internamente), leemos el
             // deleter_addr del slot+8 y dispatchamos dinamicamente.
-            const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_ptr].is_host_ptr = true;
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = v_ptr;
-                ld.operands = opnds; // [v_slot]
-                ld.source_line = it->source_line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId v_ptr =
+                emit_load_host_ptr(opnds[0], it->source_line); // [v_slot]
 
             // Bug fix bug2: si el inner T es una CLASS Vesta con
             // destructor, invocar `~T()` ANTES del free.  El
@@ -396,17 +349,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         ad.source_line = ln;
                         emit(current_block_, std::move(ad));
                     }
-                    const ir::IrValueId v_del = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_del].is_host_ptr = true;
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = v_del;
-                        ld.operands = {v_slot8};
-                        ld.source_line = ln;
-                        emit(current_block_, std::move(ld));
-                    }
+                    const ir::IrValueId v_del = emit_load_host_ptr(v_slot8, ln);
                     const ir::IrBlockId bb_call = fn_->new_block("sp_call");
                     const ir::IrBlockId bb_free = fn_->new_block("sp_free");
                     const ir::IrValueId v_z2 =
@@ -572,17 +515,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             if (opnds.empty()) break;
             const ir::IrValueId v_slot = opnds[0];
             // ctrl = LOAD i64 [v_slot]   (host_ptr al control block).
-            const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_ctrl].is_host_ptr = true;
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = v_ctrl;
-                ld.operands = {v_slot};
-                ld.source_line = it->source_line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId v_ctrl =
+                emit_load_host_ptr(v_slot, it->source_line);
             // cmp ctrl, 0  -- si moved/null, skip.
             const ir::IrValueId v_zero =
                 emit_const(ir::IrType::I64, 0, it->source_line);
@@ -1232,17 +1166,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
     // (movido/null).  Lo usan el cleanup SHAREDPTR_REL del scope local y el
     // destructor del contenedor para un campo shared (H5).
     if (v_slot == ir::IR_NO_VALUE) return;
-    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_ctrl].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_ctrl;
-        ld.operands = {v_slot};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId v_ctrl = emit_load_host_ptr(v_slot, line);
     const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
     const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
     {
@@ -1328,17 +1252,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
     // El slot guarda el host_ptr al ctrl block; refcount esta en [ctrl + 0].
     // Si ctrl == 0 (movido/null) es no-op.  Simetrico al SHAREDPTR_REL (dec).
     if (v_slot == ir::IR_NO_VALUE) return;
-    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_ctrl].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_ctrl;
-        ld.operands = {v_slot};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId v_ctrl = emit_load_host_ptr(v_slot, line);
     const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
     const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
     {

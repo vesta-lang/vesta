@@ -838,17 +838,7 @@ void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
 
     // v_fpaddr = &__vx_memcpy_fp ; v_fp = LOAD i64 [v_fpaddr].
     ir::IrValueId v_fpaddr = emit_str_lit_addr(fp_slot, line, true);
-    ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_fp].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_fp;
-        ld.operands = {v_fpaddr};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_fp = emit_load_host_ptr(v_fpaddr, line);
     // CALLIND v_fp(dst, src, len) -> void.
     ir::IrInstr ci{};
     ci.op = ir::IrOp::CALLIND;
@@ -1270,6 +1260,57 @@ ir::IrValueId Lowering::emit_load_typed(ir::IrValueId addr, ir::IrType ty,
 ir::IrValueId Lowering::emit_load_i64(ir::IrValueId addr,
                                       uint32_t source_line) {
     return emit_load_typed(addr, ir::IrType::I64, source_line);
+}
+
+/**
+ * @copydoc vx::Lowering::emit_vtable_method_ptr
+ */
+ir::IrValueId Lowering::emit_vtable_method_ptr(ir::IrValueId obj,
+                                               uint32_t vtable_index,
+                                               uint32_t source_line) {
+    // La tabla esta en los primeros ocho bytes del objeto, no en su clase: es
+    // lo que hace que una referencia a la base ejecute el metodo de la
+    // DERIVADA.  Quien construyo el objeto puso ahi la tabla que le tocaba.
+    const ir::IrValueId v_vt = emit_load_host_ptr(obj, source_line);
+    ir::IrValueId v_slot = v_vt;
+    if (vtable_index != 0) {
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64,
+                       static_cast<uint64_t>(vtable_index) * 8u, source_line);
+        v_slot = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_slot].is_host_ptr = true;
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        // Una direccion se suma SIN signo.  Es lo unico que separa esto de
+        // @ref emit_ptr_add, que la trata como un entero con signo: el
+        // resultado coincide, la instruccion emitida no.
+        ad.type = ir::IrType::PTR;
+        ad.dst = v_slot;
+        ad.operands = {v_vt, v_off};
+        ad.source_line = source_line;
+        emit(current_block_, std::move(ad));
+    }
+    return emit_load_host_ptr(v_slot, source_line);
+}
+
+/**
+ * @copydoc vx::Lowering::emit_load_host_ptr
+ */
+ir::IrValueId Lowering::emit_load_host_ptr(ir::IrValueId addr,
+                                           uint32_t source_line) {
+    // El valor es un PUNTERO y la lectura son OCHO BYTES: dos cosas distintas
+    // que no tienen por que decirse igual.  Lo primero es lo que el resto del
+    // bajado consulta para decidir el acceso; lo segundo, cuanto se lee.
+    const ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v].is_host_ptr = true;
+    ir::IrInstr ld{};
+    ld.op = ir::IrOp::LOAD;
+    ld.type = ir::IrType::I64;
+    ld.dst = v;
+    ld.operands = {addr};
+    ld.source_line = source_line;
+    emit(current_block_, std::move(ld));
+    return v;
 }
 
 /**

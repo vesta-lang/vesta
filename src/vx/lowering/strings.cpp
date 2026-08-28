@@ -742,17 +742,7 @@ ir::IrValueId Lowering::emit_native_str_len(ir::IrValueId v_slot,
     const uint64_t fp_slot = strlen_fp_slot_;
     // v_fpaddr = &__vx_strlen_fp ; v_fp = LOAD i64 [v_fpaddr].
     ir::IrValueId v_fpaddr = emit_str_lit_addr(fp_slot, source_line, true);
-    ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_fp].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_fp;
-        ld.operands = {v_fpaddr};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_fp = emit_load_host_ptr(v_fpaddr, source_line);
     // CALLIND v_fp(s) -> i64.
     ir::IrValueId v = fn_->new_value(ir::IrType::I64);
     ir::IrInstr ci{};
@@ -1155,17 +1145,7 @@ ir::IrValueId Lowering::emit_strcmp_dispatched(ir::IrValueId pa,
     const uint64_t fp_slot = strcmp_fp_slot_;
     // v_fpaddr = &__vx_strcmp_fp ; v_fp = LOAD i64 [v_fpaddr].
     ir::IrValueId v_fpaddr = emit_str_lit_addr(fp_slot, source_line, true);
-    ir::IrValueId v_fp = fn_->new_value(ir::IrType::PTR);
-    fn_->values[v_fp].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_fp;
-        ld.operands = {v_fpaddr};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_fp = emit_load_host_ptr(v_fpaddr, source_line);
     // CALLIND v_fp(pa, la, pb, lb) -> i64.
     ir::IrValueId v = fn_->new_value(ir::IrType::I64);
     ir::IrInstr ci{};

@@ -541,6 +541,36 @@ class Lowering {
     ir::IrValueId emit_load_i64(ir::IrValueId addr, uint32_t source_line);
 
     /**
+     * @brief Lee de memoria una direccion del anfitrion.
+     *
+     * Lo guardado son ocho bytes, pero lo leido es un PUNTERO: el valor sale
+     * marcado como tal, que es lo que despues decide si un acceso a traves de
+     * el va a memoria del anfitrion o de la maquina.  Leerlo como un entero
+     * cualquiera pierde esa marca y el acceso siguiente se emite mal.
+     *
+     * @param addr        De donde leer.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El puntero leido, ya marcado.
+     */
+    ir::IrValueId emit_load_host_ptr(ir::IrValueId addr, uint32_t source_line);
+
+    /**
+     * @brief Resuelve por la tabla de metodos cual toca llamar.
+     *
+     * La tabla esta en los primeros ocho bytes del OBJETO, no en su clase, y
+     * eso es lo que hace que una referencia a la base ejecute el metodo de la
+     * derivada: quien lo construyo puso ahi la tabla que le tocaba.
+     *
+     * @param obj          El objeto sobre el que se llama.
+     * @param vtable_index La posicion del metodo en la tabla.
+     * @param source_line  Linea fuente, para la depuracion.
+     * @return El puntero al codigo del metodo.
+     */
+    ir::IrValueId emit_vtable_method_ptr(ir::IrValueId obj,
+                                         uint32_t vtable_index,
+                                         uint32_t source_line);
+
+    /**
      * @brief Llama a una funcion de Vesta.
      *
      * Si @p ret es VOID no se crea valor: pedir un hueco para el resultado de
