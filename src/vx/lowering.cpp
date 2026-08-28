@@ -2309,14 +2309,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         ir::IrValueId v_addr = v_slot;
         if (off > 0) {
             ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
-            v_addr = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr;
-            ad.operands = {v_slot, v_off};
-            ad.source_line = source_line;
-            emit(current_block_, std::move(ad));
+            v_addr = emit_ptr_add(v_slot, v_off, source_line);
         }
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;

@@ -192,14 +192,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // a buf+8 -- usamos ADD.
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
-        const ir::IrValueId v_buf8 = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr add_8{};
-        add_8.op = ir::IrOp::ADD;
-        add_8.type = ir::IrType::I64;
-        add_8.dst = v_buf8;
-        add_8.operands = {v_buf, v_eight};
-        add_8.source_line = e->loc.line;
-        emit(current_block_, std::move(add_8));
+        const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_eight, e->loc.line);
         // Cargar name_addr via STR_LIT_ADDR.
         const ir::IrValueId v_name = emit_str_lit_addr(name_idx, e->loc.line);
         ir::IrInstr st8{};
@@ -212,14 +205,8 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // STORE name_len en buf+16.
         const ir::IrValueId v_sixteen =
             emit_const(ir::IrType::I64, 16, e->loc.line);
-        const ir::IrValueId v_buf16 = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr add_16{};
-        add_16.op = ir::IrOp::ADD;
-        add_16.type = ir::IrType::I64;
-        add_16.dst = v_buf16;
-        add_16.operands = {v_buf, v_sixteen};
-        add_16.source_line = e->loc.line;
-        emit(current_block_, std::move(add_16));
+        const ir::IrValueId v_buf16 =
+            emit_ptr_add(v_buf, v_sixteen, e->loc.line);
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
         ir::IrInstr st16{};
@@ -311,16 +298,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // [+8] name_addr.
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
-        const ir::IrValueId v_buf8 = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr add_8{};
-            add_8.op = ir::IrOp::ADD;
-            add_8.type = ir::IrType::I64;
-            add_8.dst = v_buf8;
-            add_8.operands = {v_buf, v_eight};
-            add_8.source_line = e->loc.line;
-            emit(current_block_, std::move(add_8));
-        }
+        const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_eight, e->loc.line);
         const ir::IrValueId v_name = emit_str_lit_addr(name_idx, e->loc.line);
         {
             ir::IrInstr st8{};
@@ -333,16 +311,8 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // [+16] name_len.
         const ir::IrValueId v_sixteen =
             emit_const(ir::IrType::I64, 16, e->loc.line);
-        const ir::IrValueId v_buf16 = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr add_16{};
-            add_16.op = ir::IrOp::ADD;
-            add_16.type = ir::IrType::I64;
-            add_16.dst = v_buf16;
-            add_16.operands = {v_buf, v_sixteen};
-            add_16.source_line = e->loc.line;
-            emit(current_block_, std::move(add_16));
-        }
+        const ir::IrValueId v_buf16 =
+            emit_ptr_add(v_buf, v_sixteen, e->loc.line);
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
         {

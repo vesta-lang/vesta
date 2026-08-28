@@ -240,14 +240,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             if (i > 0) {
                 ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
-                v_addr_i = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr_i;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                emit(current_block_, std::move(ad));
+                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -310,14 +303,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             if (f.offset > 0) {
                 ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
-                v_addr_w = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr_w;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                emit(current_block_, std::move(ad));
+                v_addr_w = emit_ptr_add(addr, v_off, vd->loc.line);
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -359,14 +345,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 if (fi->offset > 0) {
                     ir::IrValueId v_off = emit_const(
                         ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                    v_faddr = fn_->new_value(ir::IrType::PTR);
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_faddr;
-                    ad.operands = {addr, v_off};
-                    ad.source_line = vd->loc.line;
-                    emit(current_block_, std::move(ad));
+                    v_faddr = emit_ptr_add(addr, v_off, vd->loc.line);
                 }
                 auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
                 if (it_sl == tc_.struct_layouts().end()) {
@@ -397,14 +376,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             if (fi->offset > 0) {
                 ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                v_addr = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                emit(current_block_, std::move(ad));
+                v_addr = emit_ptr_add(addr, v_off, vd->loc.line);
             }
             // Campo AGREGADO inline (struct/array value-type): @c v_val es la
             // DIRECCION del agregado origen -> copia memberwise (qword a
@@ -842,14 +814,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             if (i > 0) {
                 ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
-                v_addr_i = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr_i;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                emit(current_block_, std::move(ad));
+                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -863,14 +828,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             ir::IrValueId v_zero = emit_const(ir_elem, 0, vd->loc.line);
             ir::IrValueId v_off = emit_const(
                 ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
-            ir::IrValueId v_addr_i = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_addr_i;
-            ad.operands = {addr, v_off};
-            ad.source_line = vd->loc.line;
-            emit(current_block_, std::move(ad));
+            ir::IrValueId v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = ir_elem;
@@ -950,14 +908,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             if (i > 0) {
                 ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
-                v_addr_i = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = v_addr_i;
-                ad.operands = {addr, v_off};
-                ad.source_line = vd->loc.line;
-                emit(current_block_, std::move(ad));
+                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             }
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;

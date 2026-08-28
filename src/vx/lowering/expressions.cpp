@@ -545,28 +545,12 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 // addr_lhs = lhs + offset
                 ir::IrValueId v_off = emit_const(
                     ir::IrType::I64, (uint64_t)f.offset, e->loc.line);
-                ir::IrValueId v_lhs_at = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr add{};
-                    add.op = ir::IrOp::ADD;
-                    add.type = ir::IrType::I64;
-                    add.dst = v_lhs_at;
-                    add.operands = {lhs_addr, v_off};
-                    add.source_line = e->loc.line;
-                    emit(current_block_, std::move(add));
-                }
+                ir::IrValueId v_lhs_at =
+                    emit_ptr_add(lhs_addr, v_off, e->loc.line);
                 ir::IrValueId v_off2 = emit_const(
                     ir::IrType::I64, (uint64_t)f.offset, e->loc.line);
-                ir::IrValueId v_rhs_at = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr add{};
-                    add.op = ir::IrOp::ADD;
-                    add.type = ir::IrType::I64;
-                    add.dst = v_rhs_at;
-                    add.operands = {rhs_addr, v_off2};
-                    add.source_line = e->loc.line;
-                    emit(current_block_, std::move(add));
-                }
+                ir::IrValueId v_rhs_at =
+                    emit_ptr_add(rhs_addr, v_off2, e->loc.line);
                 // LOAD a y b
                 ir::IrValueId v_a = fn_->new_value(field_ir);
                 {

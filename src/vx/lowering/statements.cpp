@@ -1395,16 +1395,8 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 // src+off
                 const ir::IrValueId v_off =
                     emit_const(ir::IrType::I64, off, s->loc.line);
-                const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr add{};
-                    add.op = ir::IrOp::ADD;
-                    add.type = ir::IrType::I64;
-                    add.dst = v_src_at;
-                    add.operands = {v_local, v_off};
-                    add.source_line = s->loc.line;
-                    emit(current_block_, std::move(add));
-                }
+                const ir::IrValueId v_src_at =
+                    emit_ptr_add(v_local, v_off, s->loc.line);
                 // Vesta Embed (native_poo_): el value-string fuente vive en
                 // host stack (ALLOCA host) -> propagar is_host_ptr del
                 // v_local al v_src_at para que el LOAD use `movh` (host) en
@@ -1426,16 +1418,8 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 // dst+off
                 const ir::IrValueId v_off2 =
                     emit_const(ir::IrType::I64, off, s->loc.line);
-                const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr add{};
-                    add.op = ir::IrOp::ADD;
-                    add.type = ir::IrType::I64;
-                    add.dst = v_dst_at;
-                    add.operands = {sret_retbuf_, v_off2};
-                    add.source_line = s->loc.line;
-                    emit(current_block_, std::move(add));
-                }
+                const ir::IrValueId v_dst_at =
+                    emit_ptr_add(sret_retbuf_, v_off2, s->loc.line);
                 // BugFix sret-cross-mem (2026-06-04): propagar
                 // is_host_ptr de sret_retbuf_ al v_dst_at para que el
                 // STORE downstream emita `movh` (host) en lugar de

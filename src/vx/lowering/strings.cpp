@@ -583,14 +583,7 @@ ir::IrValueId Lowering::load_native_string_field(ir::IrValueId v_slot,
     if (byte_off > 0) {
         ir::IrValueId v_off =
             emit_const(ir::IrType::I64, byte_off, source_line);
-        v_addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_addr;
-        ad.operands = {v_slot, v_off};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
+        v_addr = emit_ptr_add(v_slot, v_off, source_line);
     }
     const ir::IrType rt = as_host ? ir::IrType::PTR : ir::IrType::I64;
     ir::IrValueId v_val = fn_->new_value(rt);

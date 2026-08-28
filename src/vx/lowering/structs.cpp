@@ -576,14 +576,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         if (slot != 0) {
             const ir::IrValueId v_off =
                 emit_const(ir::IrType::I64, (uint64_t)slot * 8u, e->loc.line);
-            v_fnaddr = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_fnaddr;
-            ad.operands = {v_vptr, v_off};
-            ad.source_line = e->loc.line;
-            emit(current_block_, std::move(ad));
+            v_fnaddr = emit_ptr_add(v_vptr, v_off, e->loc.line);
         }
         // %fn = LOAD [%fnaddr]  (cfn: direccion del metodo; slot host -> movh)
         const ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);

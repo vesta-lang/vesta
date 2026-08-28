@@ -522,16 +522,7 @@ ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
     ir::IrValueId v_name_len =
         emit_const(ir::IrType::I64, static_cast<uint64_t>(name_len), line);
     ir::IrValueId v_off8 = emit_const(ir::IrType::I64, 8, line);
-    ir::IrValueId v_params8 = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::I64;
-        add.dst = v_params8;
-        add.operands = {v_params, v_off8};
-        add.source_line = line;
-        emit(current_block_, std::move(add));
-    }
+    ir::IrValueId v_params8 = emit_ptr_add(v_params, v_off8, line);
     {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;

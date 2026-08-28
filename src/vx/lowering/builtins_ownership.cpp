@@ -587,14 +587,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             {
                 const ir::IrValueId v_eight =
                     emit_const(ir::IrType::I64, 8, e->loc.line);
-                const ir::IrValueId v_slot8 = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_slot8;
-                add.operands = {v_slot, v_eight};
-                add.source_line = e->loc.line;
-                emit(current_block_, std::move(add));
+                const ir::IrValueId v_slot8 =
+                    emit_ptr_add(v_slot, v_eight, e->loc.line);
                 const ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
                 ir::IrInstr st{};
@@ -895,14 +889,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                 ir::IrValueId v_src_p = v_src;
                 ir::IrValueId v_dst_p = v_tmp;
                 if (i > 0) {
-                    v_src_p = fn_->new_value(ir::IrType::PTR);
-                    ir::IrInstr a1{};
-                    a1.op = ir::IrOp::ADD;
-                    a1.type = ir::IrType::I64;
-                    a1.dst = v_src_p;
-                    a1.operands = {v_src, v_off};
-                    a1.source_line = e->loc.line;
-                    emit(current_block_, std::move(a1));
+                    v_src_p = emit_ptr_add(v_src, v_off, e->loc.line);
                     v_dst_p = fn_->new_value(ir::IrType::PTR);
                     fn_->values[v_dst_p].is_host_ptr = true;
                     ir::IrInstr a2{};

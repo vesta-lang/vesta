@@ -1457,16 +1457,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
             const uint64_t off = qi * 8;
             const ir::IrValueId v_off =
                 emit_const(ir::IrType::I64, off, src_line);
-            const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_src_at;
-                add.operands = {v_buf, v_off};
-                add.source_line = src_line;
-                emit(current_block_, std::move(add));
-            }
+            const ir::IrValueId v_src_at = emit_ptr_add(v_buf, v_off, src_line);
             // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf al LOAD
             // side (igual que el STORE side abajo).  Sin esto el LOAD del
             // Err a copiar usaba `mov` (VM) en vez de `movh` (host) y leia
@@ -1484,16 +1475,8 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
             }
             const ir::IrValueId v_off2 =
                 emit_const(ir::IrType::I64, off, src_line);
-            const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_dst_at;
-                add.operands = {sret_retbuf_, v_off2};
-                add.source_line = src_line;
-                emit(current_block_, std::move(add));
-            }
+            const ir::IrValueId v_dst_at =
+                emit_ptr_add(sret_retbuf_, v_off2, src_line);
             // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
             fn_->values[v_dst_at].is_host_ptr =
                 fn_->values[sret_retbuf_].is_host_ptr;
@@ -1528,16 +1511,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
                                      ? ir_type_from_primitive(result_t.kind)
                                      : ir::IrType::I64;
     const ir::IrValueId v_off8 = emit_const(ir::IrType::I64, 8, src_line);
-    const ir::IrValueId v_at8 = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::I64;
-        add.dst = v_at8;
-        add.operands = {v_buf, v_off8};
-        add.source_line = src_line;
-        emit(current_block_, std::move(add));
-    }
+    const ir::IrValueId v_at8 = emit_ptr_add(v_buf, v_off8, src_line);
     // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf a v_at8.  El
     // buffer del Result temporal del operando es un host_ptr; sin esta
     // marca, el LOAD de V emitia `mov` (VM mem) en vez de `movh` (host) y

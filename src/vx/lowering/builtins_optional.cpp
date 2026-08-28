@@ -120,14 +120,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         // Compute buf+8 and store payload there.
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
-        const ir::IrValueId v_buf8 = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::I64;
-        add.dst = v_buf8;
-        add.operands = {v_buf, v_eight};
-        add.source_line = e->loc.line;
-        emit(current_block_, std::move(add));
+        const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_eight, e->loc.line);
         // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
         // buf+8.  Sin esto, el STORE del payload usa acceso VM (`mov`) sobre un
         // buffer HOST (stack_alloc_buf con host_alloca) -> el valor se escribe
@@ -242,14 +235,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         const uint64_t off = is_Ok ? 8 : 16;
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, off, e->loc.line);
-        const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::I64;
-        add.dst = v_at;
-        add.operands = {v_buf, v_off};
-        add.source_line = e->loc.line;
-        emit(current_block_, std::move(add));
+        const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
         const ir::IrType payload_t = fn_->values[v_payload].type;
@@ -307,14 +293,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         const uint64_t off = is_value ? 8 : 16;
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, off, e->loc.line);
-        const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::I64;
-        add.dst = v_at;
-        add.operands = {v_buf, v_off};
-        add.source_line = e->loc.line;
-        emit(current_block_, std::move(add));
+        const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr de
         // v_buf al v_at para que el LOAD downstream emita `movh`/`loadzh`.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
@@ -441,14 +420,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             // Load payload from buf+8.
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_at = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr add{};
-            add.op = ir::IrOp::ADD;
-            add.type = ir::IrType::I64;
-            add.dst = v_at;
-            add.operands = {v_arg, v_eight};
-            add.source_line = e->loc.line;
-            emit(current_block_, std::move(add));
+            const ir::IrValueId v_at =
+                emit_ptr_add(v_arg, v_eight, e->loc.line);
             // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
             // buf+8 para que el LOAD del payload emita `loadzh`/`movh` (host).
             // Sin esto, un Optional en buffer host (retornado por una fn SRET)

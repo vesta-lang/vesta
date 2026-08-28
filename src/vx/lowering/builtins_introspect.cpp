@@ -468,14 +468,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 } else {
                     ir::IrValueId off_val =
                         emit_const(ir::IrType::I64, offset, src_line);
-                    addr = fn_->new_value(ir::IrType::PTR);
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = addr;
-                    ad.operands = {info_ptr, off_val};
-                    ad.source_line = src_line;
-                    emit(current_block_, std::move(ad));
+                    addr = emit_ptr_add(info_ptr, off_val, src_line);
                 }
                 ir::IrValueId dst = fn_->new_value(ir::IrType::U32);
                 ir::IrInstr ld{};
@@ -513,14 +506,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 ir::IrValueId name_off = emit_load_u32_at(16);
                 ir::IrValueId name_len = emit_load_u32_at(20);
                 /* Promote name_off a i64 antes del ADD. */
-                ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = addr;
-                ad.operands = {info_ptr, name_off};
-                ad.source_line = src_line;
-                emit(current_block_, std::move(ad));
+                ir::IrValueId addr = emit_ptr_add(info_ptr, name_off, src_line);
                 /* STRMAKE necesita addr y len.  Para name_len que es u32
                  * lo usamos como i64 directamente; en la VM ambos caben
                  * en qword. */
@@ -558,30 +544,14 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 ad.source_line = src_line;
                 emit(current_block_, std::move(ad));
             }
-            ir::IrValueId field_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = field_addr;
-                ad.operands = {info_ptr, field_off};
-                ad.source_line = src_line;
-                emit(current_block_, std::move(ad));
-            }
+            ir::IrValueId field_addr =
+                emit_ptr_add(info_ptr, field_off, src_line);
             /* Helper interno LOAD u32 at field_addr + offset. */
             auto load_u32_field = [&](uint32_t off) -> ir::IrValueId {
                 ir::IrValueId off_val =
                     emit_const(ir::IrType::I64, off, src_line);
-                ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = addr;
-                    ad.operands = {field_addr, off_val};
-                    ad.source_line = src_line;
-                    emit(current_block_, std::move(ad));
-                }
+                ir::IrValueId addr =
+                    emit_ptr_add(field_addr, off_val, src_line);
                 ir::IrValueId dst = fn_->new_value(ir::IrType::U32);
                 ir::IrInstr ld{};
                 ld.op = ir::IrOp::LOAD;
@@ -604,16 +574,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                 /* field_addr+8 = name_off; field_addr+12 = name_len */
                 ir::IrValueId fname_off = load_u32_field(8);
                 ir::IrValueId fname_len = load_u32_field(12);
-                ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = addr;
-                    ad.operands = {info_ptr, fname_off};
-                    ad.source_line = src_line;
-                    emit(current_block_, std::move(ad));
-                }
+                ir::IrValueId addr =
+                    emit_ptr_add(info_ptr, fname_off, src_line);
                 ir::IrValueId v_str =
                     emit_string_literal_repr(addr, fname_len, -1, src_line);
                 out_value = v_str;
