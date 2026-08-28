@@ -369,6 +369,25 @@ class Lowering {
                                  ir::IrValueId &out_value);
 
     /**
+     * @brief Intenta bajar una llamada como uno de los builtins que miran los
+     *        TIPOS al compilar.
+     *
+     * Cuanto mide un tipo, como se alinea, cuantos campos tiene, si uno hereda
+     * del otro.  Su respuesta no se calcula: se sabe.  `sizeof<Punto>()` baja
+     * a la constante 16, y recorrer los campos de un tipo no monta ningun
+     * bucle -- lo da el compilador, y al programa llega el cuerpo repetido --.
+     * Junto con los conceptos, es la unica familia cuyo coste en ejecucion es
+     * exactamente cero.
+     *
+     * La contrapartida: todo tiene que saberse aqui.  Preguntar por un tipo EN
+     * MARCHA es otra cosa y vive en la familia de reflexion.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
+                                       ir::IrValueId &out_value);
+
+    /**
      * @brief Reserva un hueco de @p bytes en el marco actual.
      *
      * Lo que se reserva aqui muere con el marco, asi que es lo correcto para

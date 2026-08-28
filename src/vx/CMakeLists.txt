@@ -219,6 +219,11 @@ add_library(vx_lib STATIC
     # argumentos en registros de proposito general --; las que devuelven
     # un entero no hacen esa conversion.
     lowering/builtins_math.cpp
+    # Builtins que se responden MIRANDO LOS TIPOS al compilar: cuanto mide
+    # un tipo, cuantos campos tiene, si uno hereda del otro.  Su respuesta
+    # no se calcula, se sabe: bajan a una constante.  Coste en ejecucion
+    # exactamente cero.
+    lowering/builtins_introspect.cpp
     # Emitir UNA instruccion de la maquina, con su forma exacta.  Son
     # envoltorios de tres lineas, y no sobran: concentran las marcas que
     # viajan con el valor (direccion del anfitrion, objeto del recolector,

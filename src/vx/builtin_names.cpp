@@ -537,6 +537,29 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::Trunc:
         return BuiltinFamily::Math;
 
+
+    case Builtin::Alignof: case Builtin::Bitcast:
+    case Builtin::ComptimeTypeAlignof: case Builtin::ComptimeTypeKind:
+    case Builtin::ComptimeTypeSizeof: case Builtin::Extent:
+    case Builtin::FieldCount: case Builtin::FieldGet: case Builtin::FieldName:
+    case Builtin::FieldSet: case Builtin::FieldType: case Builtin::FindType:
+    case Builtin::ForEachField: case Builtin::ForEachMethod:
+    case Builtin::HasField: case Builtin::HasMethod: case Builtin::InBounds:
+    case Builtin::IsBool: case Builtin::IsChar: case Builtin::IsClass:
+    case Builtin::IsEnum: case Builtin::IsFloat: case Builtin::IsInteger:
+    case Builtin::IsNewtype: case Builtin::IsNumeric: case Builtin::IsOpaque:
+    case Builtin::IsPointer: case Builtin::IsPrimitive: case Builtin::IsSame:
+    case Builtin::IsSigned: case Builtin::IsString: case Builtin::IsStruct:
+    case Builtin::IsSubtype: case Builtin::IsUnsigned: case Builtin::Kind:
+    case Builtin::MethodCount: case Builtin::Offsetof: case Builtin::Parent:
+    case Builtin::Sizeof: case Builtin::StaticAssert: case Builtin::TypeId:
+    case Builtin::TypeInfoAlign: case Builtin::TypeInfoFieldCount:
+    case Builtin::TypeInfoFieldName: case Builtin::TypeInfoFieldOffset:
+    case Builtin::TypeInfoFieldSize: case Builtin::TypeInfoKind:
+    case Builtin::TypeInfoName: case Builtin::TypeInfoSize:
+    case Builtin::Typename: case Builtin::UnderlyingOf:
+        return BuiltinFamily::Introspect;
+
     default:
         return BuiltinFamily::Other;
     }

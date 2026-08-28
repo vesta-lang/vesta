@@ -356,7 +356,8 @@ enum class BuiltinFamily : uint8_t {
     Reflect,    ///< Preguntarle al programa por si mismo.
     Ownership,  ///< Quien es dueno de que, y quien lo suelta.
     String,     ///< Lo que se hace con una cadena.
-    Math        ///< Operaciones matematicas: reales, enteros y bits.
+    Math,       ///< Operaciones matematicas: reales, enteros y bits.
+    Introspect  ///< Lo que se responde mirando los TIPOS al compilar.
 };
 
 /**
