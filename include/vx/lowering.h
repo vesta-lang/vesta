@@ -696,6 +696,33 @@ class Lowering {
      */
     bool try_lower_assign_to_deref(ast::AssignExpr *e, ir::IrValueId &out);
 
+    /**
+     * @brief Reserva el almacenamiento de lo que vive fuera de las funciones.
+     *
+     * Corre ANTES de bajar ninguna funcion, y el orden no es de comodidad: al
+     * bajar `main`, un nombre global sin hueco todavia se lee como no
+     * resuelto, y el prologo de `main` decide si llamar al init del modulo
+     * mirando si hay algun hueco -- uno que solo USA globales ajenas no
+     * tendria ninguno y el init no correria.
+     *
+     * Cubre las globales propias, las importadas por nombre suelto, las que se
+     * usan cualificadas y los campos estaticos de clase.
+     */
+    void lower_global_storage(ir::IrModule &out_module);
+
+    /**
+     * @brief Cablea al arranque lo que el modulo necesite antes de su codigo.
+     *
+     * Solo en nativo y solo despues de bajarlo TODO: el disparador de cada
+     * pieza puede aparecer en cualquier funcion, y `main` se baja la primera.
+     * Son tres: la deteccion de lo que sabe hacer el procesador, la copia
+     * por-hilo de los `thread_local` con valor inicial, y el arranque del
+     * recolector con sus mapas de pila.
+     *
+     * @param out_module El modulo IR ya bajado, que aqui se retoca.
+     */
+    void emit_startup_wiring(ir::IrModule &out_module);
+
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
                             uint32_t source_line);

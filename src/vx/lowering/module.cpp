@@ -346,395 +346,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             }
         }
     }
-    // L2.2: pre-scan global runtime vars y reservar slots ANTES de
-    // bajar main.  Sin esto, lower_ident("g") en main encuentra
-    // runtime_global_slots_ vacio y emite "nombre no resuelto".
-    for (auto &decl : mod_.decls) {
-        if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
-        auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
-        if (gv->is_const || gv->is_comptime) continue;
-        // thread_local: almacenamiento por-hilo (TLS NATIVO).  Su plantilla va
-        // a una seccion SHF_TLS (.tdata) con SD_FLAG_TLS; el acceso usa el
-        // thread pointer (fs/gs + TPOFF) que emite el codegen AOT.  El init
-        // debe ser una constante (literal entero o ausente = 0): es la
-        // plantilla estatica que el cargador copia por-hilo, no un store en
-        // __module_init.
-        if (gv->is_thread_local) {
-            uint64_t nbytes = 8;
-            uint16_t talign = 8;
-            PrimitiveKind prim_kind = PrimitiveKind::I64;
-            if (gv->type &&
-                gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                auto *pt =
-                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
-                prim_kind = pt->prim;
-                nbytes = primitive_size_bytes(pt->prim);
-                if (nbytes == 0) nbytes = 8;
-                talign = static_cast<uint16_t>(nbytes);
-            }
-            const bool is_f64 = (prim_kind == PrimitiveKind::F64);
-            const bool is_f32 = (prim_kind == PrimitiveKind::F32);
-            // Valor inicial: constante (literal entero/float/bool/char, negado,
-            // o una referencia a un `comptime` const).  Es la plantilla
-            // estatica que el cargador copia por-hilo.
-            uint64_t init_val = 0;
-            bool init_ok = true;
-            if (gv->init) {
-                const ast::Expr *ie = gv->init.get();
-                int64_t sign = 1;
-                if (ie->kind == ast::NodeKind::UnaryExpr) {
-                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
-                    if (u->op == ast::UnOp::Neg && u->operand &&
-                        (u->operand->kind == ast::NodeKind::IntLitExpr ||
-                         u->operand->kind == ast::NodeKind::FloatLitExpr)) {
-                        sign = -1;
-                        ie = u->operand.get();
-                    }
-                }
-                if (ie->kind == ast::NodeKind::FloatLitExpr) {
-                    // Empaquetar los bits IEEE 754 (f64 o f32) de la plantilla.
-                    double d =
-                        sign *
-                        static_cast<const ast::FloatLitExpr *>(ie)->value;
-                    if (is_f32) {
-                        float f = static_cast<float>(d);
-                        uint32_t u32;
-                        std::memcpy(&u32, &f, 4);
-                        init_val = u32;
-                    } else {
-                        std::memcpy(&init_val, &d, 8);
-                    }
-                } else if (ie->kind == ast::NodeKind::IntLitExpr) {
-                    int64_t iv =
-                        sign *
-                        static_cast<int64_t>(
-                            static_cast<const ast::IntLitExpr *>(ie)->value);
-                    // i64-literal en un thread_local float -> convertir a IEEE.
-                    if (is_f64) {
-                        double d = static_cast<double>(iv);
-                        std::memcpy(&init_val, &d, 8);
-                    } else if (is_f32) {
-                        float f = static_cast<float>(iv);
-                        uint32_t u32;
-                        std::memcpy(&u32, &f, 4);
-                        init_val = u32;
-                    } else {
-                        init_val = static_cast<uint64_t>(iv);
-                    }
-                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
-                    init_val = static_cast<const ast::BoolLitExpr *>(ie)->value
-                                   ? 1
-                                   : 0;
-                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
-                    init_val = static_cast<uint64_t>(
-                        static_cast<const ast::CharLitExpr *>(ie)->codepoint);
-                } else if (ie->kind == ast::NodeKind::IdentExpr) {
-                    // Referencia a un `comptime` const entero -> su valor.
-                    const auto &cgv = tc_.comptime_const_values();
-                    auto cit =
-                        cgv.find(static_cast<const ast::IdentExpr *>(ie)->name);
-                    if (cit != cgv.end() && !cit->second.is_str &&
-                        !cit->second.is_struct) {
-                        int64_t cv = sign * cit->second.value;
-                        if (is_f64) {
-                            double d = static_cast<double>(cv);
-                            std::memcpy(&init_val, &d, 8);
-                        } else if (is_f32) {
-                            float f = static_cast<float>(cv);
-                            uint32_t u32;
-                            std::memcpy(&u32, &f, 4);
-                            init_val = u32;
-                        } else {
-                            init_val = static_cast<uint64_t>(cv);
-                        }
-                    } else {
-                        init_ok = false;
-                    }
-                } else {
-                    init_ok = false;
-                }
-            }
-            if (!init_ok) {
-                diags_.error(
-                    gv->loc,
-                    "thread_local '" + gv->name +
-                        "': el inicializador debe ser una constante (literal "
-                        "entero/float/bool/char, o un `comptime` const)");
-                continue;
-            }
-            const uint64_t tls_slot = get_or_create_tls_global_slot(
-                gv->name, nbytes, init_val, talign);
-            // Init != 0: registrar para el TLS callback __vx_tls_init (la
-            // plantilla a cero no necesita store -- el bloque ya esta a cero).
-            if (init_val != 0)
-                tls_nonzero_inits_.push_back({tls_slot, init_val});
-            continue;
-        }
-        // Global de tipo STRUCT: reservar un slot de `size_bytes`, igual que un
-        // array.  Sin esto no habia storage y cualquier uso daba "nombre no
-        // resuelto" -- un struct simplemente no podia ser global, aunque un
-        // array de structs si.  El caso natural (un contador compartido, una
-        // config, un registro de estado) es justo una global.
-        //
-        // Un `@overlay struct` NO entra: su valor runtime es un puntero de 8
-        // bytes y lo cubre la rama de primitivos de abajo (lo trata como PTR).
-        if (gv->type && !gv->is_const && !gv->is_comptime &&
-            gv->type->kind == ast::NodeKind::NamedTypeNode) {
-            const Type gt = tc_.resolve_type_node(gv->type.get());
-            if (gt.kind == PrimitiveKind::STRUCT && !gt.struct_name.empty()) {
-                auto sit = tc_.struct_layouts().find(gt.struct_name);
-                if (sit != tc_.struct_layouts().end() &&
-                    !sit->second.is_overlay && sit->second.size_bytes > 0) {
-                    (void)get_or_create_runtime_global_slot(
-                        gv->name, (uint64_t)sit->second.size_bytes);
-                    continue;
-                }
-            }
-        }
-        // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
-        if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
-            const uint64_t ab = vx_global_array_bytes(gv->type.get(), tc_);
-            if (ab > 0) {
-                const uint64_t slot =
-                    get_or_create_runtime_global_slot(gv->name, ab);
-                // Init-list constante `= {e0, e1, ...}`: grabar los bytes
-                // directamente en el slot .data (en AOT no corre
-                // __module_init).  Solo elementos enteros constantes.
-                auto *at = static_cast<ast::ArrayTypeNode *>(gv->type.get());
-                uint64_t esz = 8;
-                if (at->element_type &&
-                    at->element_type->kind == ast::NodeKind::PrimitiveTypeNode)
-                    esz = primitive_size_bytes(
-                        static_cast<ast::PrimitiveTypeNode *>(
-                            at->element_type.get())
-                            ->prim);
-                if (gv->init && gv->init->kind == ast::NodeKind::InitListExpr &&
-                    slot < out_mod_->static_data.entries.size() && esz > 0) {
-                    auto *il = static_cast<ast::InitListExpr *>(gv->init.get());
-                    const uint32_t base_off =
-                        out_mod_->static_data.entries[slot].byte_offset;
-                    for (size_t ei = 0; ei < il->elements.size(); ++ei) {
-                        uint64_t cval = 0;
-                        const ast::Expr *ie = il->elements[ei].get();
-                        bool have = false;
-                        if (ie && ie->kind == ast::NodeKind::IntLitExpr) {
-                            cval =
-                                static_cast<const ast::IntLitExpr *>(ie)->value;
-                            have = true;
-                        } else if (ie && ie->kind == ast::NodeKind::UnaryExpr) {
-                            auto *u = static_cast<const ast::UnaryExpr *>(ie);
-                            if (u->op == ast::UnOp::Neg && u->operand &&
-                                u->operand->kind == ast::NodeKind::IntLitExpr) {
-                                cval = (uint64_t)(-(int64_t)static_cast<
-                                                       const ast::IntLitExpr *>(
-                                                       u->operand.get())
-                                                       ->value);
-                                have = true;
-                            }
-                        } else if (ie &&
-                                   ie->kind == ast::NodeKind::CharLitExpr) {
-                            cval = static_cast<const ast::CharLitExpr *>(ie)
-                                       ->codepoint;
-                            have = true;
-                        } else if (ie &&
-                                   ie->kind == ast::NodeKind::BoolLitExpr) {
-                            cval =
-                                static_cast<const ast::BoolLitExpr *>(ie)->value
-                                    ? 1u
-                                    : 0u;
-                            have = true;
-                        }
-                        if (!have) continue;
-                        const uint64_t eoff = base_off + ei * esz;
-                        for (uint64_t k = 0; k < esz; ++k)
-                            out_mod_->static_data.bytes[eoff + k] =
-                                (uint8_t)((cval >> (8 * k)) & 0xFF);
-                    }
-                }
-            }
-            continue;
-        }
-        // Tipo primitivo directo O newtype (typedef-new) que resuelve a un
-        // primitivo (p.ej. `uintptr` -> u64): en ambos casos pre-creamos el
-        // slot del global para que TODAS las funciones (no solo la que lo
-        // escribe primero) resuelvan su lectura/escritura al mismo slot.
-        // Sin esto, un global de tipo std.types leido/escrito desde otra
-        // funcion daba "nombre no resuelto" o leia 0.
-        if (!gv->type || (gv->type->kind != ast::NodeKind::PrimitiveTypeNode &&
-                          gv->type->kind != ast::NodeKind::NamedTypeNode))
-            continue;
-        PrimitiveKind pt_prim =
-            (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
-                ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim
-                : tc_.resolve_type_node(gv->type.get()).kind;
-        // Un global de tipo overlay (`@overlay struct`) tiene como VALOR
-        // runtime un puntero al bloque host (8 bytes) -> darle slot como un
-        // PTR.
-        if (pt_prim == PrimitiveKind::STRUCT &&
-            gv->type->kind == ast::NodeKind::NamedTypeNode) {
-            Type rt = tc_.resolve_type_node(gv->type.get());
-            auto sit = tc_.struct_layouts().find(rt.struct_name);
-            if (sit != tc_.struct_layouts().end() && sit->second.is_overlay)
-                pt_prim = PrimitiveKind::PTR;
-        }
-        switch (pt_prim) {
-        case PrimitiveKind::STRING:
-        case PrimitiveKind::I8:
-        case PrimitiveKind::I16:
-        case PrimitiveKind::I32:
-        case PrimitiveKind::I64:
-        case PrimitiveKind::U8:
-        case PrimitiveKind::U16:
-        case PrimitiveKind::U32:
-        case PrimitiveKind::U64:
-        case PrimitiveKind::F32:
-        case PrimitiveKind::F64:
-        case PrimitiveKind::BOOL:
-        case PrimitiveKind::CHAR:
-        case PrimitiveKind::PTR:
-            (void)get_or_create_runtime_global_slot(gv->name);
-            break;
-        default: break;
-        }
-    }
-    // Globals IMPORTADOS de otro modulo: mismo pre-pase.  Tiene que ser AQUI y
-    // no al primer uso, porque el prologo de `main` decide si llama a
-    // `__module_init` mirando si hay algun slot -- y un modulo que solo USA
-    // globals de sus deps no tendria ninguno todavia, asi que el init no
-    // correria y el global se leeria a cero.  Como el merge los unifica con los
-    // del dep por `shared_key`, pre-crearlos no cuesta storage.
-    for (const auto &kv : tc_.imported_global_storage())
-        (void)ensure_imported_global_slot(kv.first);
-    // Los que se usan cualificados (`lib.counter`) no estan en esa tabla: viven
-    // en el namespace importado.  Mismo criterio (kind=1 = variable/constante,
-    // sin valor inlineable, y no un string que se materializa desde su blob).
-    //
-    // OJO: la tabla de namespaces incluye tambien los DECLARADOS en este mismo
-    // modulo (`namespace app;` registra sus propios simbolos para el acceso
-    // cualificado).  Esos son locales: su storage ya lo decidio el bucle de
-    // arriba, con el tipo delante -- y hay tipos que NO llevan slot (un global
-    // de tipo funcion se resuelve como closure).  Darles uno aqui los
-    // desviaria a la ruta de global plano y romperia su uso.
-    for (auto &decl : mod_.decls) {
-        if (decl && decl->kind == ast::NodeKind::GlobalVarDecl)
-            local_global_names_.insert(
-                static_cast<ast::GlobalVarDecl *>(decl.get())->name);
-    }
-    for (const auto &ns : tc_.imported_namespaces()) {
-        for (const auto &sym : ns.symbols) {
-            if (sym.kind != 1 || sym.has_const_value ||
-                sym.mangled_label.empty())
-                continue;
-            if (sym.var_type.kind == PrimitiveKind::STRING) continue;
-            if (local_global_names_.count(sym.mangled_label) != 0) continue;
-            (void)shared_global_slot_for(sym.mangled_label, sym.var_type);
-        }
-    }
-    // AOT (native_poo_): los campos estaticos de clase se mapean a globales
-    // planos (slot __static_<Clase>_<campo>).  Pre-grabamos su inicializador
-    // constante en los bytes del slot (no hay __module_init en bare).  Las
-    // rutas de lectura/escritura usan el mismo slot via get_or_create.
-    if (native_poo_) {
-        for (auto &decl : mod_.decls) {
-            if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
-            auto *cd = static_cast<ast::ClassDecl *>(decl.get());
-            for (const auto &fld : cd->fields) {
-                if (!fld.is_static) continue;
-                const uint64_t slot = get_or_create_runtime_global_slot(
-                    "__static_" + cd->name + "_" + fld.name, 8);
-                if (!fld.init) continue;
-                uint64_t cval = 0;
-                bool have = false;
-                const ast::Expr *ie = fld.init.get();
-                if (ie->kind == ast::NodeKind::IntLitExpr) {
-                    cval = static_cast<const ast::IntLitExpr *>(ie)->value;
-                    have = true;
-                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
-                    cval = static_cast<const ast::BoolLitExpr *>(ie)->value
-                               ? 1u
-                               : 0u;
-                    have = true;
-                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
-                    cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
-                    have = true;
-                } else if (ie->kind == ast::NodeKind::UnaryExpr) {
-                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
-                    if (u->op == ast::UnOp::Neg && u->operand &&
-                        u->operand->kind == ast::NodeKind::IntLitExpr) {
-                        cval = (uint64_t)(-(int64_t)static_cast<
-                                               const ast::IntLitExpr *>(
-                                               u->operand.get())
-                                               ->value);
-                        have = true;
-                    }
-                }
-                if (have && slot < out_module.static_data.entries.size()) {
-                    uint32_t off =
-                        out_module.static_data.entries[slot].byte_offset;
-                    for (int k = 0; k < 8; ++k)
-                        out_module.static_data.bytes[off + (size_t)k] =
-                            (uint8_t)((cval >> (8 * k)) & 0xFF);
-                }
-            }
-        }
-    }
-    /* PRE-PASE force-lower: determinar que comptime fns hay que bajar a runtime
-     * porque un @Macro (o comptime fn con asm) lowereable las referencia
-     * (transitivamente).  Sin esto, el `__macro_<X>` que llama a un helper
-     * comptime emitiria un `callvm code.<helper>` colgante (los comptime
-     * helpers no se bajan por defecto).  Poblamos @c
-     * comptime_fns_to_force_lower_ ANTES del lowering para que el orden de
-     * bajada de decls sea irrelevante. */
-    {
-        std::unordered_set<std::string> visiting;
-        set_macro_force_lower(&comptime_fns_to_force_lower_);
-        set_macro_visiting(&visiting);
-        for (auto &decl : mod_.decls) {
-            if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
-            auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-            if (!fd->body || fd->is_imported_comptime) continue;
-            const bool is_lowerable_comptime =
-                (fd->is_comptime && fd->is_macro) ||
-                (fd->is_comptime && !fd->is_macro &&
-                 comptime_fn_needs_vm(tc_, fd));
-            if (!is_lowerable_comptime) continue;
-            visiting.clear();
-            // Efecto colateral: recolecta los helpers lowereables.  Si el macro
-            // NO es lowereable, no pasa nada (sus helpers no se fuerzan; el
-            // macro caera a AST-only en lower_function como antes).
-            if (macro_body_unsupported_reason(tc_, fd->body.get()).empty()) {
-                // macro lowereable: sus helpers ya estan en el set.
-            } else {
-                // No lowereable: quitar cualquier helper que solo el aportara
-                // seria complejo; es inocuo dejarlos (una comptime fn lowerada
-                // de mas es dead code si nadie la llama en runtime).  Los
-                // helpers recolectados de un macro no-lowereable igual pueden
-                // ser referenciados por otro macro lowereable.
-            }
-        }
-        /* Los METODOS comptime (un constructor comptime, por ejemplo) tambien
-         * llaman a helpers, y sin recorrerlos el helper no entra al set: su
-         * llamada acababa rechazada como "no es comptime-evaluable" pese a
-         * estar dentro de un cuerpo que se ejecuta al compilar. */
-        auto scan_methods = [&](const auto &methods) {
-            for (const auto &m : methods) {
-                if (!m || !m->body || !m->is_comptime) continue;
-                visiting.clear();
-                (void)macro_body_unsupported_reason(tc_, m->body.get());
-            }
-        };
-        for (auto &decl : mod_.decls) {
-            if (!decl) continue;
-            if (decl->kind == ast::NodeKind::StructDecl)
-                scan_methods(
-                    static_cast<ast::StructDecl *>(decl.get())->methods);
-            else if (decl->kind == ast::NodeKind::ClassDecl)
-                scan_methods(
-                    static_cast<ast::ClassDecl *>(decl.get())->methods);
-        }
-        set_macro_force_lower(nullptr);
-        set_macro_visiting(nullptr);
-    }
+    lower_global_storage(out_module);
 
     us_previo =
         static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1134,274 +746,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         m.sym_refs = std::move(kept);
     }
 
-    // CPU dispatch (cimiento): si algun cpu_features() se uso, prepender
-    // `call __vx_cpu_init` al ENTRY de main para que la deteccion corra UNA
-    // VEZ antes de cualquier codigo del usuario.  Se hace AQUI (post-lowering)
-    // y no en lower_function porque main se baja ANTES que el resto: un
-    // cpu_features() en una funcion no-main marca cpu_features_used_ DESPUES
-    // de cerrar main.  Solo en native_poo_ (AOT): el helper usa INLINE_ASM
-    // (PURE_NATIVE) + el wiring no toca el stub _start.
-    // AUTO multiversion (--float-isa auto): si main tiene ops VEC_*,
-    // renombrarlo a __vx_main_body + sintetizar un main que despacha por cpuid.
-    // Debe correr ANTES del wiring de inits (necesita que main exista como el
-    // wrapper para prepender alli el call __vx_auto_init).
-    ensure_auto_multiversion(out_module);
-
-    if (native_poo_ && (cpu_features_used_ || cpu_dispatch_used_)) {
-        // Asegurar que el global de features + el helper __vx_cpu_init existan
-        // (idempotente).  El cpuid corre primero: el dispatch lee el bitmask.
-        (void)ensure_cpu_features_global();
-        // Cada init se prepone SOLO si su mecanismo de dispatch se emitio
-        // (evita arrastrar la maquinaria memcpy a un programa que solo usa
-        // strcmp/strlen, y viceversa).  Inc 5a: el strdisp_init setea los fp
-        // de strcmp/strlen (override del usuario o baseline; sin cpuid).
-        const bool mc_disp = memcpy_helpers_emitted_;
-        const bool sd_disp = strdisp_emitted_;
-        // Localizar main y prepender las CALL a su bloque de entrada.  El
-        // ORDEN final de ejecucion debe ser:  __vx_cpu_init (cpuid) ->
-        // __vx_memcpy_init -> __vx_strdisp_init -> codigo del usuario.
-        // insert(begin()) prepende, asi que insertamos en orden inverso:
-        // strdisp_init, luego memcpy_init, luego cpu_init (queda de primero).
-        for (auto &f : out_module.functions) {
-            if (f.name != "main") continue;
-            if (f.blocks.empty()) break;
-            auto &ins = f.blocks[0].instrs;
-            if (sd_disp) {
-                ir::IrInstr call_sd{};
-                call_sd.op = ir::IrOp::CALL;
-                call_sd.type = ir::IrType::VOID;
-                call_sd.dst = ir::IR_NO_VALUE;
-                call_sd.func_name = "__vx_strdisp_init";
-                call_sd.source_line = 0;
-                ins.insert(ins.begin(), std::move(call_sd));
-            }
-            if (mc_disp) {
-                ir::IrInstr call_mc{};
-                call_mc.op = ir::IrOp::CALL;
-                call_mc.type = ir::IrType::VOID;
-                call_mc.dst = ir::IR_NO_VALUE;
-                call_mc.func_name = "__vx_memcpy_init";
-                call_mc.source_line = 0;
-                ins.insert(ins.begin(), std::move(call_mc));
-            }
-            if (auto_dispatch_emitted_) {
-                // AUTO: el dispatch del main (setea __vx_main_body$fp).  Debe
-                // ir DESPUES de cpu_init (lee el bitmask) y ANTES del CALLIND
-                // del wrapper (que lee el fp).  Se inserta aqui (antes que
-                // cpu_init) para quedar justo tras el en el orden final.
-                ir::IrInstr call_auto{};
-                call_auto.op = ir::IrOp::CALL;
-                call_auto.type = ir::IrType::VOID;
-                call_auto.dst = ir::IR_NO_VALUE;
-                call_auto.func_name = "__vx_auto_init";
-                call_auto.source_line = 0;
-                ins.insert(ins.begin(), std::move(call_auto));
-            }
-            ir::IrInstr call_init{};
-            call_init.op = ir::IrOp::CALL;
-            call_init.type = ir::IrType::VOID;
-            call_init.dst = ir::IR_NO_VALUE;
-            call_init.func_name = "__vx_cpu_init";
-            call_init.source_line = 0;
-            ins.insert(ins.begin(), std::move(call_init));
-            break;
-        }
-    }
-
-    // TLS callback (thread_local PE): si el modulo tiene thread_local con init
-    // != 0, sintetizar __vx_tls_init -- la funcion que el cargador de Windows
-    // llama en cada attach de hilo (registrada en AddressOfCallBacks del
-    // IMAGE_TLS_DIRECTORY).  Escribe la plantilla a la copia por-hilo (el
-    // cargador no siempre la copia para el TLS de una .dll en un consumidor
-    // minimal sin CRT).  Reusa el acceso TLS (STR_LIT_ADDR is_tls -> store),
-    // que el driver baja a gs:[0x58]+secrel.  Idempotente y barato (N stores
-    // por attach; N = thread_local con init != 0).
-    if (native_poo_ && !tls_nonzero_inits_.empty()) {
-        ir::IrFunction ti;
-        ti.name = "__vx_tls_init";
-        // Devuelve i64 1 (TRUE): __vx_tls_init es el ENTRY POINT (DllMain) de
-        // la .dll -- el cargador lo llama en cada attach de hilo y aqui
-        // aplicamos la plantilla por-hilo (ntdll no la copia para el TLS de una
-        // .dll sin un entry que dispare su init).  DllMain debe devolver TRUE o
-        // la carga falla.  (Tambien queda registrado como TLS callback, que
-        // ignora el retorno.)
-        ti.ret_type = ir::IrType::I64;
-        const ir::IrBlockId e = ti.new_block("entry");
-        for (const auto &pr : tls_nonzero_inits_) {
-            const uint64_t slot = pr.first;
-            const uint64_t val = pr.second;
-            // %addr = &tls_var (STR_LIT_ADDR del slot; is_tls lo deriva el
-            // driver desde SD_FLAG_TLS -> acceso por thread pointer).
-            const ir::IrValueId v_addr = ti.new_value(ir::IrType::PTR);
-            ti.values[v_addr].is_host_ptr = true;
-            {
-                ir::IrInstr a{};
-                a.op = ir::IrOp::STR_LIT_ADDR;
-                a.type = ir::IrType::PTR;
-                a.dst = v_addr;
-                a.imm = slot;
-                ti.append(e, std::move(a));
-            }
-            // %v = CONST val (8B); el slot esta padded a 8 -> store uniforme
-            // i64.
-            const ir::IrValueId v_val = ti.new_value(ir::IrType::I64);
-            {
-                ir::IrInstr c{};
-                c.op = ir::IrOp::CONST;
-                c.type = ir::IrType::I64;
-                c.dst = v_val;
-                c.imm = val;
-                ti.append(e, std::move(c));
-            }
-            {
-                ir::IrInstr s{};
-                s.op = ir::IrOp::STORE;
-                s.type = ir::IrType::I64;
-                s.operands = {v_val, v_addr};
-                ti.append(e, std::move(s));
-            }
-        }
-        // return 1 (TRUE) -- DllMain debe devolver no-cero o la carga falla.
-        const ir::IrValueId v_one = ti.new_value(ir::IrType::I64);
-        {
-            ir::IrInstr c{};
-            c.op = ir::IrOp::CONST;
-            c.type = ir::IrType::I64;
-            c.dst = v_one;
-            c.imm = 1;
-            ti.append(e, std::move(c));
-        }
-        {
-            ir::IrInstr r{};
-            r.op = ir::IrOp::RET;
-            r.type = ir::IrType::I64;
-            r.operands = {v_one};
-            ti.append(e, std::move(r));
-        }
-        out_module.add_function(std::move(ti));
-    }
-
-    // gc<T> opt-in: si el modulo usa gc<T> (CLASE, unique, shared o primitivo),
-    // generar __vxgc_init que (1) llama vx_gc_init -> construye el heap E
-    // INSTALA el runner nativo de finalizadores, y (2) registra los stackmaps
-    // AOT (seccion .vxgc_smap) en el GC al arranque, inyectando un CALL a el al
-    // INICIO de main -> el scan preciso ve los frames nativos y los gc<T> vivos
-    // sobreviven la coleccion.  El driver emite la seccion .vxgc_smap tras el
-    // layout (con relocs a cada funcion).
-    //
-    // El gate no puede limitarse a `classes_used_gc_` (gc<Clase>): un
-    // gc<unique<T>>/gc<shared<T>> NO es una clase pero SI aloca via vx_gc_* y
-    // registra un finalizador -- sin vx_gc_init su runner no se instala y el
-    // finalizador se descarta (deleter/dtor no corre -> FUGA en AOT, bugs
-    // 248).  Detectamos el uso REAL de gc<T> escaneando si alguna funcion
-    // emitida referencia un simbolo `vx_gc_*` (uniforme para clase/unique/
-    // shared/primitivo).
-    bool module_uses_gc =
-        !classes_used_gc_.empty() || module_has_gc_finalizers_;
-    if (native_poo_ && !module_uses_gc) {
-        for (const auto &f : out_module.functions) {
-            for (const auto &b : f.blocks) {
-                for (const auto &ins : b.instrs)
-                    if (ins.func_name.rfind("vx_gc_", 0) == 0) {
-                        module_uses_gc = true;
-                        break;
-                    }
-                if (module_uses_gc) break;
-            }
-            if (module_uses_gc) break;
-        }
-    }
-    if (native_poo_ && module_uses_gc) {
-        ir::IrFunction gi;
-        gi.name = "__vxgc_init";
-        gi.ret_type = ir::IrType::VOID;
-        const ir::IrBlockId e = gi.new_block("entry");
-        // CALL vx_gc_init(): construye el heap global E INSTALA el runner
-        // nativo de finalizadores (gc_finalizer_run_native).  Debe correr antes
-        // del primer alloc/register_finalizer para que los finalizadores de
-        // objetos escapados se ejecuten (deleter/dtor nativo) al colectar/exit.
-        {
-            ir::IrInstr ci{};
-            ci.op = ir::IrOp::CALL;
-            ci.type = ir::IrType::VOID;
-            ci.dst = ir::IR_NO_VALUE;
-            ci.func_name = "vx_gc_init";
-            ci.is_call_site = true;
-            gi.append(e, std::move(ci));
-        }
-        // %start = section_start(".vxgc_smap")  (PTR)
-        const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
-        gi.values[v_start].is_host_ptr = true;
-        {
-            ir::IrInstr r{};
-            r.op = ir::IrOp::SECTION_REF;
-            r.type = ir::IrType::PTR;
-            r.dst = v_start;
-            r.func_name = ".vxgc_smap";
-            r.imm = 0; // START
-            gi.append(e, std::move(r));
-        }
-        // call vx_gc_register_aot_stackmaps(%start)  -- el tamanño total va
-        // EMBEBIDO en el header de la seccion (section_size seria una reloc
-        // SIZE no soportada en .obj/.o; section_start es una ADDR normal).
-        {
-            ir::IrInstr c{};
-            c.op = ir::IrOp::CALL;
-            c.type = ir::IrType::VOID;
-            c.dst = ir::IR_NO_VALUE;
-            c.func_name = "vx_gc_register_aot_stackmaps";
-            c.operands = {v_start};
-            gi.append(e, std::move(c));
-        }
-        {
-            ir::IrInstr r{};
-            r.op = ir::IrOp::RET;
-            r.type = ir::IrType::VOID;
-            gi.append(e, std::move(r));
-        }
-        out_module.add_function(std::move(gi));
-        // Inyectar CALL __vxgc_init al inicio de main (antes de todo, incl. los
-        // inits de cpu): el registro debe correr antes del primer gc<T> alloc.
-        for (auto &f : out_module.functions) {
-            if (f.name != "main" || f.blocks.empty()) continue;
-            ir::IrInstr cg{};
-            cg.op = ir::IrOp::CALL;
-            cg.type = ir::IrType::VOID;
-            cg.dst = ir::IR_NO_VALUE;
-            cg.func_name = "__vxgc_init";
-            f.blocks[0].instrs.insert(f.blocks[0].instrs.begin(),
-                                      std::move(cg));
-            break;
-        }
-        // Shutdown-time: inyectar CALL vx_gc_finalize_all ANTES de cada RET de
-        // main.  Garantiza cero fuga del recurso interno de objetos gc<T> con
-        // finalizador que ESCAPARON su scope y el sweep no colecto todavia (el
-        // finalizador corre su deleter/dtor nativo antes del exit).  El valor
-        // de retorno de main (RET %v) se preserva: el CALL se inserta ANTES del
-        // RET pero no toca su operando.  Solo si el modulo registra
-        // finalizadores (algun gc<T> con recurso interno): si no, es no-op
-        // inofensivo.
-        if (module_has_gc_finalizers_) {
-            for (auto &f : out_module.functions) {
-                if (f.name != "main") continue;
-                for (auto &blk : f.blocks) {
-                    for (size_t i = 0; i < blk.instrs.size(); ++i) {
-                        if (blk.instrs[i].op != ir::IrOp::RET) continue;
-                        ir::IrInstr cf{};
-                        cf.op = ir::IrOp::CALL;
-                        cf.type = ir::IrType::VOID;
-                        cf.dst = ir::IR_NO_VALUE;
-                        cf.func_name = "vx_gc_finalize_all";
-                        cf.is_call_site = true;
-                        blk.instrs.insert(blk.instrs.begin() + i,
-                                          std::move(cf));
-                        ++i; // saltar el RET recien desplazado
-                    }
-                }
-                break;
-            }
-        }
-    }
+    emit_startup_wiring(out_module);
 
     if (medir_bajada) {
         const long us_total = static_cast<long>(
@@ -2247,6 +1592,703 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
     emit(current_block_, std::move(call));
 
     out_mod_->register_native_import("stdlib/native/runtime/vx_trace", "leave");
+}
+
+/**
+ * @brief Reserva el almacenamiento de todo lo que vive fuera de las funciones.
+ *
+ * Corre ANTES de bajar ninguna funcion, y ese orden no es de comodidad: al
+ * bajar `main`, un nombre global que todavia no tenga hueco se lee como no
+ * resuelto.  Lo mismo con las globales que vienen de otro modulo: el prologo
+ * de `main` decide si llamar al init del modulo mirando si hay algun hueco, y
+ * uno que solo USA globales ajenas no tendria ninguno -- el init no correria y
+ * el global se leeria a cero.
+ *
+ * Cuatro procedencias, y la de fuera no se distingue por como se escribe sino
+ * por donde esta declarada: las del propio modulo, las importadas por nombre
+ * suelto, las que se usan cualificadas -- que viven en el namespace, y ahi
+ * estan tambien las PROPIAS, que ya tienen hueco y no hay que darles otro --,
+ * y los campos estaticos de clase, que sin maquina virtual detras no son mas
+ * que globales con un nombre largo.
+ */
+void Lowering::lower_global_storage(ir::IrModule &out_module) {
+    // L2.2: pre-scan global runtime vars y reservar slots ANTES de
+    // bajar main.  Sin esto, lower_ident("g") en main encuentra
+    // runtime_global_slots_ vacio y emite "nombre no resuelto".
+    for (auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
+        auto *gv = static_cast<ast::GlobalVarDecl *>(decl.get());
+        if (gv->is_const || gv->is_comptime) continue;
+        // thread_local: almacenamiento por-hilo (TLS NATIVO).  Su plantilla va
+        // a una seccion SHF_TLS (.tdata) con SD_FLAG_TLS; el acceso usa el
+        // thread pointer (fs/gs + TPOFF) que emite el codegen AOT.  El init
+        // debe ser una constante (literal entero o ausente = 0): es la
+        // plantilla estatica que el cargador copia por-hilo, no un store en
+        // __module_init.
+        if (gv->is_thread_local) {
+            uint64_t nbytes = 8;
+            uint16_t talign = 8;
+            PrimitiveKind prim_kind = PrimitiveKind::I64;
+            if (gv->type &&
+                gv->type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                auto *pt =
+                    static_cast<ast::PrimitiveTypeNode *>(gv->type.get());
+                prim_kind = pt->prim;
+                nbytes = primitive_size_bytes(pt->prim);
+                if (nbytes == 0) nbytes = 8;
+                talign = static_cast<uint16_t>(nbytes);
+            }
+            const bool is_f64 = (prim_kind == PrimitiveKind::F64);
+            const bool is_f32 = (prim_kind == PrimitiveKind::F32);
+            // Valor inicial: constante (literal entero/float/bool/char, negado,
+            // o una referencia a un `comptime` const).  Es la plantilla
+            // estatica que el cargador copia por-hilo.
+            uint64_t init_val = 0;
+            bool init_ok = true;
+            if (gv->init) {
+                const ast::Expr *ie = gv->init.get();
+                int64_t sign = 1;
+                if (ie->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                    if (u->op == ast::UnOp::Neg && u->operand &&
+                        (u->operand->kind == ast::NodeKind::IntLitExpr ||
+                         u->operand->kind == ast::NodeKind::FloatLitExpr)) {
+                        sign = -1;
+                        ie = u->operand.get();
+                    }
+                }
+                if (ie->kind == ast::NodeKind::FloatLitExpr) {
+                    // Empaquetar los bits IEEE 754 (f64 o f32) de la plantilla.
+                    double d =
+                        sign *
+                        static_cast<const ast::FloatLitExpr *>(ie)->value;
+                    if (is_f32) {
+                        float f = static_cast<float>(d);
+                        uint32_t u32;
+                        std::memcpy(&u32, &f, 4);
+                        init_val = u32;
+                    } else {
+                        std::memcpy(&init_val, &d, 8);
+                    }
+                } else if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    int64_t iv =
+                        sign *
+                        static_cast<int64_t>(
+                            static_cast<const ast::IntLitExpr *>(ie)->value);
+                    // i64-literal en un thread_local float -> convertir a IEEE.
+                    if (is_f64) {
+                        double d = static_cast<double>(iv);
+                        std::memcpy(&init_val, &d, 8);
+                    } else if (is_f32) {
+                        float f = static_cast<float>(iv);
+                        uint32_t u32;
+                        std::memcpy(&u32, &f, 4);
+                        init_val = u32;
+                    } else {
+                        init_val = static_cast<uint64_t>(iv);
+                    }
+                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                    init_val = static_cast<const ast::BoolLitExpr *>(ie)->value
+                                   ? 1
+                                   : 0;
+                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                    init_val = static_cast<uint64_t>(
+                        static_cast<const ast::CharLitExpr *>(ie)->codepoint);
+                } else if (ie->kind == ast::NodeKind::IdentExpr) {
+                    // Referencia a un `comptime` const entero -> su valor.
+                    const auto &cgv = tc_.comptime_const_values();
+                    auto cit =
+                        cgv.find(static_cast<const ast::IdentExpr *>(ie)->name);
+                    if (cit != cgv.end() && !cit->second.is_str &&
+                        !cit->second.is_struct) {
+                        int64_t cv = sign * cit->second.value;
+                        if (is_f64) {
+                            double d = static_cast<double>(cv);
+                            std::memcpy(&init_val, &d, 8);
+                        } else if (is_f32) {
+                            float f = static_cast<float>(cv);
+                            uint32_t u32;
+                            std::memcpy(&u32, &f, 4);
+                            init_val = u32;
+                        } else {
+                            init_val = static_cast<uint64_t>(cv);
+                        }
+                    } else {
+                        init_ok = false;
+                    }
+                } else {
+                    init_ok = false;
+                }
+            }
+            if (!init_ok) {
+                diags_.error(
+                    gv->loc,
+                    "thread_local '" + gv->name +
+                        "': el inicializador debe ser una constante (literal "
+                        "entero/float/bool/char, o un `comptime` const)");
+                continue;
+            }
+            const uint64_t tls_slot = get_or_create_tls_global_slot(
+                gv->name, nbytes, init_val, talign);
+            // Init != 0: registrar para el TLS callback __vx_tls_init (la
+            // plantilla a cero no necesita store -- el bloque ya esta a cero).
+            if (init_val != 0)
+                tls_nonzero_inits_.push_back({tls_slot, init_val});
+            continue;
+        }
+        // Global de tipo STRUCT: reservar un slot de `size_bytes`, igual que un
+        // array.  Sin esto no habia storage y cualquier uso daba "nombre no
+        // resuelto" -- un struct simplemente no podia ser global, aunque un
+        // array de structs si.  El caso natural (un contador compartido, una
+        // config, un registro de estado) es justo una global.
+        //
+        // Un `@overlay struct` NO entra: su valor runtime es un puntero de 8
+        // bytes y lo cubre la rama de primitivos de abajo (lo trata como PTR).
+        if (gv->type && !gv->is_const && !gv->is_comptime &&
+            gv->type->kind == ast::NodeKind::NamedTypeNode) {
+            const Type gt = tc_.resolve_type_node(gv->type.get());
+            if (gt.kind == PrimitiveKind::STRUCT && !gt.struct_name.empty()) {
+                auto sit = tc_.struct_layouts().find(gt.struct_name);
+                if (sit != tc_.struct_layouts().end() &&
+                    !sit->second.is_overlay && sit->second.size_bytes > 0) {
+                    (void)get_or_create_runtime_global_slot(
+                        gv->name, (uint64_t)sit->second.size_bytes);
+                    continue;
+                }
+            }
+        }
+        // Global array nativo T[N]: reservar slot de N*sizeof(T) bytes.
+        if (gv->type && gv->type->kind == ast::NodeKind::ArrayTypeNode) {
+            const uint64_t ab = vx_global_array_bytes(gv->type.get(), tc_);
+            if (ab > 0) {
+                const uint64_t slot =
+                    get_or_create_runtime_global_slot(gv->name, ab);
+                // Init-list constante `= {e0, e1, ...}`: grabar los bytes
+                // directamente en el slot .data (en AOT no corre
+                // __module_init).  Solo elementos enteros constantes.
+                auto *at = static_cast<ast::ArrayTypeNode *>(gv->type.get());
+                uint64_t esz = 8;
+                if (at->element_type &&
+                    at->element_type->kind == ast::NodeKind::PrimitiveTypeNode)
+                    esz = primitive_size_bytes(
+                        static_cast<ast::PrimitiveTypeNode *>(
+                            at->element_type.get())
+                            ->prim);
+                if (gv->init && gv->init->kind == ast::NodeKind::InitListExpr &&
+                    slot < out_mod_->static_data.entries.size() && esz > 0) {
+                    auto *il = static_cast<ast::InitListExpr *>(gv->init.get());
+                    const uint32_t base_off =
+                        out_mod_->static_data.entries[slot].byte_offset;
+                    for (size_t ei = 0; ei < il->elements.size(); ++ei) {
+                        uint64_t cval = 0;
+                        const ast::Expr *ie = il->elements[ei].get();
+                        bool have = false;
+                        if (ie && ie->kind == ast::NodeKind::IntLitExpr) {
+                            cval =
+                                static_cast<const ast::IntLitExpr *>(ie)->value;
+                            have = true;
+                        } else if (ie && ie->kind == ast::NodeKind::UnaryExpr) {
+                            auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                            if (u->op == ast::UnOp::Neg && u->operand &&
+                                u->operand->kind == ast::NodeKind::IntLitExpr) {
+                                cval = (uint64_t)(-(int64_t)static_cast<
+                                                       const ast::IntLitExpr *>(
+                                                       u->operand.get())
+                                                       ->value);
+                                have = true;
+                            }
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::CharLitExpr) {
+                            cval = static_cast<const ast::CharLitExpr *>(ie)
+                                       ->codepoint;
+                            have = true;
+                        } else if (ie &&
+                                   ie->kind == ast::NodeKind::BoolLitExpr) {
+                            cval =
+                                static_cast<const ast::BoolLitExpr *>(ie)->value
+                                    ? 1u
+                                    : 0u;
+                            have = true;
+                        }
+                        if (!have) continue;
+                        const uint64_t eoff = base_off + ei * esz;
+                        for (uint64_t k = 0; k < esz; ++k)
+                            out_mod_->static_data.bytes[eoff + k] =
+                                (uint8_t)((cval >> (8 * k)) & 0xFF);
+                    }
+                }
+            }
+            continue;
+        }
+        // Tipo primitivo directo O newtype (typedef-new) que resuelve a un
+        // primitivo (p.ej. `uintptr` -> u64): en ambos casos pre-creamos el
+        // slot del global para que TODAS las funciones (no solo la que lo
+        // escribe primero) resuelvan su lectura/escritura al mismo slot.
+        // Sin esto, un global de tipo std.types leido/escrito desde otra
+        // funcion daba "nombre no resuelto" o leia 0.
+        if (!gv->type || (gv->type->kind != ast::NodeKind::PrimitiveTypeNode &&
+                          gv->type->kind != ast::NodeKind::NamedTypeNode))
+            continue;
+        PrimitiveKind pt_prim =
+            (gv->type->kind == ast::NodeKind::PrimitiveTypeNode)
+                ? static_cast<ast::PrimitiveTypeNode *>(gv->type.get())->prim
+                : tc_.resolve_type_node(gv->type.get()).kind;
+        // Un global de tipo overlay (`@overlay struct`) tiene como VALOR
+        // runtime un puntero al bloque host (8 bytes) -> darle slot como un
+        // PTR.
+        if (pt_prim == PrimitiveKind::STRUCT &&
+            gv->type->kind == ast::NodeKind::NamedTypeNode) {
+            Type rt = tc_.resolve_type_node(gv->type.get());
+            auto sit = tc_.struct_layouts().find(rt.struct_name);
+            if (sit != tc_.struct_layouts().end() && sit->second.is_overlay)
+                pt_prim = PrimitiveKind::PTR;
+        }
+        switch (pt_prim) {
+        case PrimitiveKind::STRING:
+        case PrimitiveKind::I8:
+        case PrimitiveKind::I16:
+        case PrimitiveKind::I32:
+        case PrimitiveKind::I64:
+        case PrimitiveKind::U8:
+        case PrimitiveKind::U16:
+        case PrimitiveKind::U32:
+        case PrimitiveKind::U64:
+        case PrimitiveKind::F32:
+        case PrimitiveKind::F64:
+        case PrimitiveKind::BOOL:
+        case PrimitiveKind::CHAR:
+        case PrimitiveKind::PTR:
+            (void)get_or_create_runtime_global_slot(gv->name);
+            break;
+        default: break;
+        }
+    }
+    // Globals IMPORTADOS de otro modulo: mismo pre-pase.  Tiene que ser AQUI y
+    // no al primer uso, porque el prologo de `main` decide si llama a
+    // `__module_init` mirando si hay algun slot -- y un modulo que solo USA
+    // globals de sus deps no tendria ninguno todavia, asi que el init no
+    // correria y el global se leeria a cero.  Como el merge los unifica con los
+    // del dep por `shared_key`, pre-crearlos no cuesta storage.
+    for (const auto &kv : tc_.imported_global_storage())
+        (void)ensure_imported_global_slot(kv.first);
+    // Los que se usan cualificados (`lib.counter`) no estan en esa tabla: viven
+    // en el namespace importado.  Mismo criterio (kind=1 = variable/constante,
+    // sin valor inlineable, y no un string que se materializa desde su blob).
+    //
+    // OJO: la tabla de namespaces incluye tambien los DECLARADOS en este mismo
+    // modulo (`namespace app;` registra sus propios simbolos para el acceso
+    // cualificado).  Esos son locales: su storage ya lo decidio el bucle de
+    // arriba, con el tipo delante -- y hay tipos que NO llevan slot (un global
+    // de tipo funcion se resuelve como closure).  Darles uno aqui los
+    // desviaria a la ruta de global plano y romperia su uso.
+    for (auto &decl : mod_.decls) {
+        if (decl && decl->kind == ast::NodeKind::GlobalVarDecl)
+            local_global_names_.insert(
+                static_cast<ast::GlobalVarDecl *>(decl.get())->name);
+    }
+    for (const auto &ns : tc_.imported_namespaces()) {
+        for (const auto &sym : ns.symbols) {
+            if (sym.kind != 1 || sym.has_const_value ||
+                sym.mangled_label.empty())
+                continue;
+            if (sym.var_type.kind == PrimitiveKind::STRING) continue;
+            if (local_global_names_.count(sym.mangled_label) != 0) continue;
+            (void)shared_global_slot_for(sym.mangled_label, sym.var_type);
+        }
+    }
+    // AOT (native_poo_): los campos estaticos de clase se mapean a globales
+    // planos (slot __static_<Clase>_<campo>).  Pre-grabamos su inicializador
+    // constante en los bytes del slot (no hay __module_init en bare).  Las
+    // rutas de lectura/escritura usan el mismo slot via get_or_create.
+    if (native_poo_) {
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
+            auto *cd = static_cast<ast::ClassDecl *>(decl.get());
+            for (const auto &fld : cd->fields) {
+                if (!fld.is_static) continue;
+                const uint64_t slot = get_or_create_runtime_global_slot(
+                    "__static_" + cd->name + "_" + fld.name, 8);
+                if (!fld.init) continue;
+                uint64_t cval = 0;
+                bool have = false;
+                const ast::Expr *ie = fld.init.get();
+                if (ie->kind == ast::NodeKind::IntLitExpr) {
+                    cval = static_cast<const ast::IntLitExpr *>(ie)->value;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::BoolLitExpr) {
+                    cval = static_cast<const ast::BoolLitExpr *>(ie)->value
+                               ? 1u
+                               : 0u;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::CharLitExpr) {
+                    cval = static_cast<const ast::CharLitExpr *>(ie)->codepoint;
+                    have = true;
+                } else if (ie->kind == ast::NodeKind::UnaryExpr) {
+                    auto *u = static_cast<const ast::UnaryExpr *>(ie);
+                    if (u->op == ast::UnOp::Neg && u->operand &&
+                        u->operand->kind == ast::NodeKind::IntLitExpr) {
+                        cval = (uint64_t)(-(int64_t)static_cast<
+                                               const ast::IntLitExpr *>(
+                                               u->operand.get())
+                                               ->value);
+                        have = true;
+                    }
+                }
+                if (have && slot < out_module.static_data.entries.size()) {
+                    uint32_t off =
+                        out_module.static_data.entries[slot].byte_offset;
+                    for (int k = 0; k < 8; ++k)
+                        out_module.static_data.bytes[off + (size_t)k] =
+                            (uint8_t)((cval >> (8 * k)) & 0xFF);
+                }
+            }
+        }
+    }
+    /* PRE-PASE force-lower: determinar que comptime fns hay que bajar a runtime
+     * porque un @Macro (o comptime fn con asm) lowereable las referencia
+     * (transitivamente).  Sin esto, el `__macro_<X>` que llama a un helper
+     * comptime emitiria un `callvm code.<helper>` colgante (los comptime
+     * helpers no se bajan por defecto).  Poblamos @c
+     * comptime_fns_to_force_lower_ ANTES del lowering para que el orden de
+     * bajada de decls sea irrelevante. */
+    {
+        std::unordered_set<std::string> visiting;
+        set_macro_force_lower(&comptime_fns_to_force_lower_);
+        set_macro_visiting(&visiting);
+        for (auto &decl : mod_.decls) {
+            if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+            auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
+            if (!fd->body || fd->is_imported_comptime) continue;
+            const bool is_lowerable_comptime =
+                (fd->is_comptime && fd->is_macro) ||
+                (fd->is_comptime && !fd->is_macro &&
+                 comptime_fn_needs_vm(tc_, fd));
+            if (!is_lowerable_comptime) continue;
+            visiting.clear();
+            // Efecto colateral: recolecta los helpers lowereables.  Si el macro
+            // NO es lowereable, no pasa nada (sus helpers no se fuerzan; el
+            // macro caera a AST-only en lower_function como antes).
+            if (macro_body_unsupported_reason(tc_, fd->body.get()).empty()) {
+                // macro lowereable: sus helpers ya estan en el set.
+            } else {
+                // No lowereable: quitar cualquier helper que solo el aportara
+                // seria complejo; es inocuo dejarlos (una comptime fn lowerada
+                // de mas es dead code si nadie la llama en runtime).  Los
+                // helpers recolectados de un macro no-lowereable igual pueden
+                // ser referenciados por otro macro lowereable.
+            }
+        }
+        /* Los METODOS comptime (un constructor comptime, por ejemplo) tambien
+         * llaman a helpers, y sin recorrerlos el helper no entra al set: su
+         * llamada acababa rechazada como "no es comptime-evaluable" pese a
+         * estar dentro de un cuerpo que se ejecuta al compilar. */
+        auto scan_methods = [&](const auto &methods) {
+            for (const auto &m : methods) {
+                if (!m || !m->body || !m->is_comptime) continue;
+                visiting.clear();
+                (void)macro_body_unsupported_reason(tc_, m->body.get());
+            }
+        };
+        for (auto &decl : mod_.decls) {
+            if (!decl) continue;
+            if (decl->kind == ast::NodeKind::StructDecl)
+                scan_methods(
+                    static_cast<ast::StructDecl *>(decl.get())->methods);
+            else if (decl->kind == ast::NodeKind::ClassDecl)
+                scan_methods(
+                    static_cast<ast::ClassDecl *>(decl.get())->methods);
+        }
+        set_macro_force_lower(nullptr);
+        set_macro_visiting(nullptr);
+    }
+}
+
+/**
+ * @brief Cablea al arranque lo que el modulo necesite antes del codigo propio.
+ *
+ * Solo compilando a nativo, y solo despues de bajarlo TODO: el disparador de
+ * cada pieza puede aparecer en cualquier funcion, y `main` se baja la primera,
+ * asi que mirarlo antes de tiempo daria que nadie la usa.  Cada pieza se
+ * engancha metiendo su llamada al principio de `main`.
+ *
+ * Son tres: la deteccion de lo que sabe hacer el procesador, que tiene que
+ * correr UNA vez antes que nada; la copia por-hilo de los `thread_local` con
+ * valor inicial, que el cargador de Windows llama en cada hilo que empieza; y
+ * el arranque del recolector, que ademas registra los mapas de pila -- sin
+ * ellos el barrido no ve los objetos vivos de los marcos nativos -- y planta
+ * el vaciado de finalizadores antes de cada salida de `main`.
+ *
+ * @param out_module El modulo IR ya bajado, que aqui se retoca.
+ */
+void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
+    // CPU dispatch (cimiento): si algun cpu_features() se uso, prepender
+    // `call __vx_cpu_init` al ENTRY de main para que la deteccion corra UNA
+    // VEZ antes de cualquier codigo del usuario.  Se hace AQUI (post-lowering)
+    // y no en lower_function porque main se baja ANTES que el resto: un
+    // cpu_features() en una funcion no-main marca cpu_features_used_ DESPUES
+    // de cerrar main.  Solo en native_poo_ (AOT): el helper usa INLINE_ASM
+    // (PURE_NATIVE) + el wiring no toca el stub _start.
+    // AUTO multiversion (--float-isa auto): si main tiene ops VEC_*,
+    // renombrarlo a __vx_main_body + sintetizar un main que despacha por cpuid.
+    // Debe correr ANTES del wiring de inits (necesita que main exista como el
+    // wrapper para prepender alli el call __vx_auto_init).
+    ensure_auto_multiversion(out_module);
+
+    if (native_poo_ && (cpu_features_used_ || cpu_dispatch_used_)) {
+        // Asegurar que el global de features + el helper __vx_cpu_init existan
+        // (idempotente).  El cpuid corre primero: el dispatch lee el bitmask.
+        (void)ensure_cpu_features_global();
+        // Cada init se prepone SOLO si su mecanismo de dispatch se emitio
+        // (evita arrastrar la maquinaria memcpy a un programa que solo usa
+        // strcmp/strlen, y viceversa).  Inc 5a: el strdisp_init setea los fp
+        // de strcmp/strlen (override del usuario o baseline; sin cpuid).
+        const bool mc_disp = memcpy_helpers_emitted_;
+        const bool sd_disp = strdisp_emitted_;
+        // Localizar main y prepender las CALL a su bloque de entrada.  El
+        // ORDEN final de ejecucion debe ser:  __vx_cpu_init (cpuid) ->
+        // __vx_memcpy_init -> __vx_strdisp_init -> codigo del usuario.
+        // insert(begin()) prepende, asi que insertamos en orden inverso:
+        // strdisp_init, luego memcpy_init, luego cpu_init (queda de primero).
+        for (auto &f : out_module.functions) {
+            if (f.name != "main") continue;
+            if (f.blocks.empty()) break;
+            auto &ins = f.blocks[0].instrs;
+            if (sd_disp) {
+                ir::IrInstr call_sd{};
+                call_sd.op = ir::IrOp::CALL;
+                call_sd.type = ir::IrType::VOID;
+                call_sd.dst = ir::IR_NO_VALUE;
+                call_sd.func_name = "__vx_strdisp_init";
+                call_sd.source_line = 0;
+                ins.insert(ins.begin(), std::move(call_sd));
+            }
+            if (mc_disp) {
+                ir::IrInstr call_mc{};
+                call_mc.op = ir::IrOp::CALL;
+                call_mc.type = ir::IrType::VOID;
+                call_mc.dst = ir::IR_NO_VALUE;
+                call_mc.func_name = "__vx_memcpy_init";
+                call_mc.source_line = 0;
+                ins.insert(ins.begin(), std::move(call_mc));
+            }
+            if (auto_dispatch_emitted_) {
+                // AUTO: el dispatch del main (setea __vx_main_body$fp).  Debe
+                // ir DESPUES de cpu_init (lee el bitmask) y ANTES del CALLIND
+                // del wrapper (que lee el fp).  Se inserta aqui (antes que
+                // cpu_init) para quedar justo tras el en el orden final.
+                ir::IrInstr call_auto{};
+                call_auto.op = ir::IrOp::CALL;
+                call_auto.type = ir::IrType::VOID;
+                call_auto.dst = ir::IR_NO_VALUE;
+                call_auto.func_name = "__vx_auto_init";
+                call_auto.source_line = 0;
+                ins.insert(ins.begin(), std::move(call_auto));
+            }
+            ir::IrInstr call_init{};
+            call_init.op = ir::IrOp::CALL;
+            call_init.type = ir::IrType::VOID;
+            call_init.dst = ir::IR_NO_VALUE;
+            call_init.func_name = "__vx_cpu_init";
+            call_init.source_line = 0;
+            ins.insert(ins.begin(), std::move(call_init));
+            break;
+        }
+    }
+
+    // TLS callback (thread_local PE): si el modulo tiene thread_local con init
+    // != 0, sintetizar __vx_tls_init -- la funcion que el cargador de Windows
+    // llama en cada attach de hilo (registrada en AddressOfCallBacks del
+    // IMAGE_TLS_DIRECTORY).  Escribe la plantilla a la copia por-hilo (el
+    // cargador no siempre la copia para el TLS de una .dll en un consumidor
+    // minimal sin CRT).  Reusa el acceso TLS (STR_LIT_ADDR is_tls -> store),
+    // que el driver baja a gs:[0x58]+secrel.  Idempotente y barato (N stores
+    // por attach; N = thread_local con init != 0).
+    if (native_poo_ && !tls_nonzero_inits_.empty()) {
+        ir::IrFunction ti;
+        ti.name = "__vx_tls_init";
+        // Devuelve i64 1 (TRUE): __vx_tls_init es el ENTRY POINT (DllMain) de
+        // la .dll -- el cargador lo llama en cada attach de hilo y aqui
+        // aplicamos la plantilla por-hilo (ntdll no la copia para el TLS de una
+        // .dll sin un entry que dispare su init).  DllMain debe devolver TRUE o
+        // la carga falla.  (Tambien queda registrado como TLS callback, que
+        // ignora el retorno.)
+        ti.ret_type = ir::IrType::I64;
+        const ir::IrBlockId e = ti.new_block("entry");
+        for (const auto &pr : tls_nonzero_inits_) {
+            const uint64_t slot = pr.first;
+            const uint64_t val = pr.second;
+            // %addr = &tls_var (STR_LIT_ADDR del slot; is_tls lo deriva el
+            // driver desde SD_FLAG_TLS -> acceso por thread pointer).
+            const ir::IrValueId v_addr = ti.new_value(ir::IrType::PTR);
+            ti.values[v_addr].is_host_ptr = true;
+            {
+                ir::IrInstr a{};
+                a.op = ir::IrOp::STR_LIT_ADDR;
+                a.type = ir::IrType::PTR;
+                a.dst = v_addr;
+                a.imm = slot;
+                ti.append(e, std::move(a));
+            }
+            // %v = CONST val (8B); el slot esta padded a 8 -> store uniforme
+            // i64.
+            const ir::IrValueId v_val = ti.new_value(ir::IrType::I64);
+            {
+                ir::IrInstr c{};
+                c.op = ir::IrOp::CONST;
+                c.type = ir::IrType::I64;
+                c.dst = v_val;
+                c.imm = val;
+                ti.append(e, std::move(c));
+            }
+            {
+                ir::IrInstr s{};
+                s.op = ir::IrOp::STORE;
+                s.type = ir::IrType::I64;
+                s.operands = {v_val, v_addr};
+                ti.append(e, std::move(s));
+            }
+        }
+        // return 1 (TRUE) -- DllMain debe devolver no-cero o la carga falla.
+        const ir::IrValueId v_one = ti.new_value(ir::IrType::I64);
+        {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CONST;
+            c.type = ir::IrType::I64;
+            c.dst = v_one;
+            c.imm = 1;
+            ti.append(e, std::move(c));
+        }
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::RET;
+            r.type = ir::IrType::I64;
+            r.operands = {v_one};
+            ti.append(e, std::move(r));
+        }
+        out_module.add_function(std::move(ti));
+    }
+
+    // gc<T> opt-in: si el modulo usa gc<T> (CLASE, unique, shared o primitivo),
+    // generar __vxgc_init que (1) llama vx_gc_init -> construye el heap E
+    // INSTALA el runner nativo de finalizadores, y (2) registra los stackmaps
+    // AOT (seccion .vxgc_smap) en el GC al arranque, inyectando un CALL a el al
+    // INICIO de main -> el scan preciso ve los frames nativos y los gc<T> vivos
+    // sobreviven la coleccion.  El driver emite la seccion .vxgc_smap tras el
+    // layout (con relocs a cada funcion).
+    //
+    // El gate no puede limitarse a `classes_used_gc_` (gc<Clase>): un
+    // gc<unique<T>>/gc<shared<T>> NO es una clase pero SI aloca via vx_gc_* y
+    // registra un finalizador -- sin vx_gc_init su runner no se instala y el
+    // finalizador se descarta (deleter/dtor no corre -> FUGA en AOT, bugs
+    // 248).  Detectamos el uso REAL de gc<T> escaneando si alguna funcion
+    // emitida referencia un simbolo `vx_gc_*` (uniforme para clase/unique/
+    // shared/primitivo).
+    bool module_uses_gc =
+        !classes_used_gc_.empty() || module_has_gc_finalizers_;
+    if (native_poo_ && !module_uses_gc) {
+        for (const auto &f : out_module.functions) {
+            for (const auto &b : f.blocks) {
+                for (const auto &ins : b.instrs)
+                    if (ins.func_name.rfind("vx_gc_", 0) == 0) {
+                        module_uses_gc = true;
+                        break;
+                    }
+                if (module_uses_gc) break;
+            }
+            if (module_uses_gc) break;
+        }
+    }
+    if (native_poo_ && module_uses_gc) {
+        ir::IrFunction gi;
+        gi.name = "__vxgc_init";
+        gi.ret_type = ir::IrType::VOID;
+        const ir::IrBlockId e = gi.new_block("entry");
+        // CALL vx_gc_init(): construye el heap global E INSTALA el runner
+        // nativo de finalizadores (gc_finalizer_run_native).  Debe correr antes
+        // del primer alloc/register_finalizer para que los finalizadores de
+        // objetos escapados se ejecuten (deleter/dtor nativo) al colectar/exit.
+        {
+            ir::IrInstr ci{};
+            ci.op = ir::IrOp::CALL;
+            ci.type = ir::IrType::VOID;
+            ci.dst = ir::IR_NO_VALUE;
+            ci.func_name = "vx_gc_init";
+            ci.is_call_site = true;
+            gi.append(e, std::move(ci));
+        }
+        // %start = section_start(".vxgc_smap")  (PTR)
+        const ir::IrValueId v_start = gi.new_value(ir::IrType::PTR);
+        gi.values[v_start].is_host_ptr = true;
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::SECTION_REF;
+            r.type = ir::IrType::PTR;
+            r.dst = v_start;
+            r.func_name = ".vxgc_smap";
+            r.imm = 0; // START
+            gi.append(e, std::move(r));
+        }
+        // call vx_gc_register_aot_stackmaps(%start)  -- el tamanño total va
+        // EMBEBIDO en el header de la seccion (section_size seria una reloc
+        // SIZE no soportada en .obj/.o; section_start es una ADDR normal).
+        {
+            ir::IrInstr c{};
+            c.op = ir::IrOp::CALL;
+            c.type = ir::IrType::VOID;
+            c.dst = ir::IR_NO_VALUE;
+            c.func_name = "vx_gc_register_aot_stackmaps";
+            c.operands = {v_start};
+            gi.append(e, std::move(c));
+        }
+        {
+            ir::IrInstr r{};
+            r.op = ir::IrOp::RET;
+            r.type = ir::IrType::VOID;
+            gi.append(e, std::move(r));
+        }
+        out_module.add_function(std::move(gi));
+        // Inyectar CALL __vxgc_init al inicio de main (antes de todo, incl. los
+        // inits de cpu): el registro debe correr antes del primer gc<T> alloc.
+        for (auto &f : out_module.functions) {
+            if (f.name != "main" || f.blocks.empty()) continue;
+            ir::IrInstr cg{};
+            cg.op = ir::IrOp::CALL;
+            cg.type = ir::IrType::VOID;
+            cg.dst = ir::IR_NO_VALUE;
+            cg.func_name = "__vxgc_init";
+            f.blocks[0].instrs.insert(f.blocks[0].instrs.begin(),
+                                      std::move(cg));
+            break;
+        }
+        // Shutdown-time: inyectar CALL vx_gc_finalize_all ANTES de cada RET de
+        // main.  Garantiza cero fuga del recurso interno de objetos gc<T> con
+        // finalizador que ESCAPARON su scope y el sweep no colecto todavia (el
+        // finalizador corre su deleter/dtor nativo antes del exit).  El valor
+        // de retorno de main (RET %v) se preserva: el CALL se inserta ANTES del
+        // RET pero no toca su operando.  Solo si el modulo registra
+        // finalizadores (algun gc<T> con recurso interno): si no, es no-op
+        // inofensivo.
+        if (module_has_gc_finalizers_) {
+            for (auto &f : out_module.functions) {
+                if (f.name != "main") continue;
+                for (auto &blk : f.blocks) {
+                    for (size_t i = 0; i < blk.instrs.size(); ++i) {
+                        if (blk.instrs[i].op != ir::IrOp::RET) continue;
+                        ir::IrInstr cf{};
+                        cf.op = ir::IrOp::CALL;
+                        cf.type = ir::IrType::VOID;
+                        cf.dst = ir::IR_NO_VALUE;
+                        cf.func_name = "vx_gc_finalize_all";
+                        cf.is_call_site = true;
+                        blk.instrs.insert(blk.instrs.begin() + i,
+                                          std::move(cf));
+                        ++i; // saltar el RET recien desplazado
+                    }
+                }
+                break;
+            }
+        }
+    }
 }
 
 } // namespace vx
