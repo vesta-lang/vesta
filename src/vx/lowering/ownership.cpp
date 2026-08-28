@@ -1276,9 +1276,8 @@ void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
     const ir::IrBlockId entry = fn.new_block("entry");
 
     // Activar el contexto del lowering para reusar emit_free_unique_slot.
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_term = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     fn_ = &fn;
     current_block_ = entry;
     block_terminated_ = false;
@@ -1291,9 +1290,6 @@ void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
         ret.source_line = 0;
         fn.append(current_block_, std::move(ret));
     }
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_term;
     out.add_function(std::move(fn));
 }
 

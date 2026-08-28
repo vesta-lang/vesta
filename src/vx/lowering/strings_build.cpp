@@ -801,9 +801,8 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
     itoa_helper_emitted_[idx] = true;
 
     // Guardar el contexto del lowering en curso.
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     // Construir el helper.  Params: buf (host_ptr), val (i64).
     ir::IrFunction hf;
@@ -820,7 +819,6 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     // El itoa escribe en buf y devuelve la longitud.
     ir::IrValueId v_len =
@@ -838,9 +836,6 @@ std::string Lowering::ensure_itoa_helper(bool is_signed) {
     }
 
     // Restaurar el contexto del padre antes de mover el helper al modulo.
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }

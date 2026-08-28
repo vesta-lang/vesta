@@ -66,14 +66,8 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
         is_element ? fi.element_block : fi.offset_block;
 
     // Salvar contexto del padre (mismo protocolo que generate_lambda_helper).
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
-    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
-        std::move(scopes_);
-    std::unordered_set<std::string> saved_addr_taken =
-        std::move(address_taken_locals_);
-    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     const bool saved_sret_active = sret_active_;
     const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
     const uint64_t saved_sret_buf_size = sret_buf_size_;
@@ -113,12 +107,7 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     const ir::IrBlockId entry = child_fn.new_block("entry");
     fn_ = &child_fn;
     current_block_ = entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
 
     // `base` = self; cada campo hermano de offset CONSTANTE se lee de
     // [self + off] (host) y se liga por nombre -> el body los usa como locales.
@@ -180,12 +169,6 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     generated_overlay_resolvers_.insert(fn_name);
 
     // Restaurar contexto del padre.
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     sret_active_ = saved_sret_active;
     sret_retbuf_ = saved_sret_retbuf;
     sret_buf_size_ = saved_sret_buf_size;
@@ -199,14 +182,8 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     generated_overlay_resolvers_.insert(fn_name);
 
     // Salvar contexto (mismo protocolo que generate_overlay_resolver).
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
-    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
-        std::move(scopes_);
-    std::unordered_set<std::string> saved_addr_taken =
-        std::move(address_taken_locals_);
-    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     const bool saved_sret_active = sret_active_;
     const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
     const uint64_t saved_sret_buf_size = sret_buf_size_;
@@ -227,12 +204,7 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     const ir::IrBlockId entry = child_fn.new_block("entry");
     fn_ = &child_fn;
     current_block_ = entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
 
     bind("base", self_pv);
     bind("this", self_pv);
@@ -341,12 +313,6 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     pop_scope();
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     sret_active_ = saved_sret_active;
     sret_retbuf_ = saved_sret_retbuf;
     sret_buf_size_ = saved_sret_buf_size;

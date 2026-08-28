@@ -2084,14 +2084,8 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     const std::string fn_name = "__lambda_" + std::to_string(lam_idx);
 
     // Salvar contexto del padre para poder restaurarlo despues.
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
-    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
-        std::move(scopes_);
-    std::unordered_set<std::string> saved_addr_taken =
-        std::move(address_taken_locals_);
-    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     // el helper sintetico es una FUNCION SEPARADA con su propia
     // firma.  No debe heredar el SRET del padre (que se referia al
     // retbuf del padre).  El helper retorna un valor escalar i32/i64
@@ -2159,12 +2153,7 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
 
     fn_ = &child_fn;
     current_block_ = entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
 
     // Bind de los params en el scope local.
     for (auto &kv : param_bindings)
@@ -2332,12 +2321,6 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
     // Restaurar contexto del padre.
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     // restaurar contexto SRET y returns_function del padre.
     sret_active_ = saved_sret_active;
     sret_retbuf_ = saved_sret_retbuf;

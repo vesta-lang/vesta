@@ -81,6 +81,7 @@ struct ComptimeEvalResult;
  */
 class Lowering {
   public:
+
     /**
      * @brief Construye el lowering sobre un modulo AST y un diags.
      *
@@ -2926,6 +2927,63 @@ class Lowering {
         std::vector<uint32_t> closure_field_offsets;
     };
     std::vector<CleanupAction> cleanup_stack_;
+
+    /**
+     * @brief Bajar un cuerpo en OTRA funcion, y volver donde se estaba.
+     *
+     * Varias cosas del lenguaje se bajan a una funcion aparte -- el cuerpo de
+     * un `spawn`, el de una lambda, el constructor sintetico de una clase --.
+     * Para eso hay que apuntar el bajador a la funcion nueva, bajar, y devolver
+     * TODO como estaba: en que funcion se emite, en que bloque, si ese bloque
+     * ya termino, que nombres son que valores, cuales tienen la direccion
+     * tomada, cuales llevan un puntero del anfitrion y que queda por soltar.
+     *
+     * Siete cosas, y estaban guardadas y restauradas a mano en SEIS sitios.
+     * Olvidarse de una no da error: deja al bajador emitiendo en la funcion
+     * equivocada, o creyendo que un nombre es otro valor.  De hecho una se
+     * olvidaba -- la de los punteros del anfitrion se limpiaba al entrar y no
+     * se devolvia al salir --; no se ha conseguido convertir eso en un fallo
+     * observable, pero tampoco tenia por que estar ahi.
+     *
+     * Se construye, se apunta a la funcion hija, se baja, y al cerrarse la
+     * llave todo vuelve solo.
+     */
+    class ChildFunctionScope {
+      public:
+        /**
+         * @brief Guarda el contexto del padre y lo deja limpio para el hijo.
+         *
+         * @param lo El bajador cuyo contexto se guarda.
+         */
+        explicit ChildFunctionScope(Lowering &lo);
+
+        /// @brief Devuelve el contexto del padre tal y como estaba.
+        ~ChildFunctionScope();
+
+        ChildFunctionScope(const ChildFunctionScope &) = delete;
+        ChildFunctionScope &operator=(const ChildFunctionScope &) = delete;
+
+        /**
+         * @brief La funcion en la que se estaba emitiendo antes.
+         *
+         * Hace falta porque alguna de estas bajadas mira valores del padre
+         * mientras construye el hijo -- lo que el `spawn` captura, por
+         * ejemplo --.
+         *
+         * @return La funcion del padre.
+         */
+        ir::IrFunction *parent_fn() const { return fn_; }
+
+      private:
+        Lowering &lo_;         ///< A quien se le devuelve el contexto.
+        ir::IrFunction *fn_;   ///< En que funcion se emitia.
+        ir::IrBlockId block_;  ///< En que bloque.
+        bool terminated_;      ///< Si ese bloque ya habia terminado.
+        std::vector<std::unordered_map<std::string, ir::IrValueId>> scopes_;
+        std::unordered_set<std::string> addr_taken_;   ///< Con direccion tomada.
+        std::unordered_set<std::string> host_bearing_; ///< Con puntero del host.
+        std::vector<CleanupAction> cleanups_;          ///< Lo que queda por soltar.
+    };
     /// Contador para etiquetas unicas en cleanups que emiten labels
     /// (smart pointer cleanups con branches internos).  Cada invocacion
     /// de emit_cleanups consume el siguiente valor; garantiza que dos

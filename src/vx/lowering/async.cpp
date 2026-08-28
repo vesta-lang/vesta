@@ -317,18 +317,10 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
                      " = share(" + captures[i] + ")` antes del spawn.");
     }
 
-    // Guardar el contexto del lowering (estamos dentro de la funcion
-    // padre que invoca spawn) y crear uno nuevo para la funcion hijo.
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
-    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
-        std::move(scopes_);
-    std::unordered_set<std::string> saved_addr_taken =
-        std::move(address_taken_locals_);
-    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    /* Estamos dentro de la funcion padre que invoca spawn: el guarda se lleva
+     * su contexto y lo devuelve solo al salir de este alcance. */
+    ChildFunctionScope parent(*this);
 
-    // Construir la nueva IrFunction.
     ir::IrFunction child_fn;
     child_fn.name = fn_name;
     child_fn.ret_type = ir::IrType::VOID;
@@ -336,12 +328,7 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
 
     fn_ = &child_fn;
     current_block_ = entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
 
     // Registrar las capturas.
     // - Ruta VM (no native_poo): cada captura es un PARAM del helper que llega
@@ -377,9 +364,9 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
             ir::IrValueId val =
                 child_fn.new_value(ir::IrType::I64, "%" + captures[i]);
             if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
-                spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
+                spawn_captured_ssa_values_[i] < parent.parent_fn()->values.size()) {
                 const auto &src_val =
-                    saved_fn->values[spawn_captured_ssa_values_[i]];
+                    parent.parent_fn()->values[spawn_captured_ssa_values_[i]];
                 if (src_val.is_host_ptr)
                     child_fn.values[val].is_host_ptr = true;
                 if (src_val.is_gc_object)
@@ -410,9 +397,9 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
             child_fn.values[v].is_param = true;
             // Si el SSA value original era host_ptr CLASS, propagarlo.
             if (spawn_captured_ssa_values_[i] != ir::IR_NO_VALUE &&
-                spawn_captured_ssa_values_[i] < saved_fn->values.size()) {
+                spawn_captured_ssa_values_[i] < parent.parent_fn()->values.size()) {
                 const auto &src_val =
-                    saved_fn->values[spawn_captured_ssa_values_[i]];
+                    parent.parent_fn()->values[spawn_captured_ssa_values_[i]];
                 if (src_val.is_host_ptr) child_fn.values[v].is_host_ptr = true;
                 if (src_val.is_gc_object)
                     child_fn.values[v].is_gc_object = true;
@@ -452,13 +439,6 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     // (el emisor IR la trata como entry point y termina con hlt).
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
-    // Restaurar el contexto del padre.
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     return fn_name;
 }
 
@@ -476,14 +456,8 @@ std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
     const std::string fn_name = "__rspawn_" + std::to_string(spawn_idx);
 
     // Guardar contexto del lowering del padre.
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
-    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
-        std::move(scopes_);
-    std::unordered_set<std::string> saved_addr_taken =
-        std::move(address_taken_locals_);
-    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     bool saved_rspawn = is_rspawn_body_;
 
     ir::IrFunction child_fn;
@@ -493,12 +467,7 @@ std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
 
     fn_ = &child_fn;
     current_block_ = entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
     is_rspawn_body_ = true; // activar interception de return en lower_return
 
     if (body) lower_block(body);
@@ -520,12 +489,6 @@ std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
     // Restaurar contexto.
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     is_rspawn_body_ = saved_rspawn;
     return fn_name;
 }
@@ -779,14 +742,8 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // 1. Construir el SPAWN HELPER (lo encolamos en pending_spawn_helpers_
     //    para que se vuelque al final, despues de main).
     // ---------------------------------------------------------------
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
-    std::vector<std::unordered_map<std::string, ir::IrValueId>> saved_scopes =
-        std::move(scopes_);
-    std::unordered_set<std::string> saved_addr_taken =
-        std::move(address_taken_locals_);
-    std::vector<CleanupAction> saved_cleanups = std::move(cleanup_stack_);
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     ir::IrValueId saved_async_fut = async_fut_id_;
 
     ir::IrFunction helper_fn;
@@ -796,12 +753,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
 
     fn_ = &helper_fn;
     current_block_ = entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
 
     // Mejora II optimizada: el helper recibe args directos en R1..R[N+1]
     // gracias a @c spawnargs (sin msgrecv + buffer).  Calling convention:
@@ -879,12 +831,6 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     pending_spawn_helpers_.push_back(std::move(helper_fn));
 
     // Restaurar contexto del lowering.
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     async_fut_id_ = saved_async_fut;
 
     // ---------------------------------------------------------------
@@ -901,12 +847,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
 
     fn_ = &wrapper_fn;
     current_block_ = w_entry;
-    block_terminated_ = false;
-    scopes_.clear();
     push_scope();
-    address_taken_locals_.clear();
-    host_bearing_locals_.clear();
-    cleanup_stack_.clear();
     async_fut_id_ = ir::IR_NO_VALUE; // wrapper NO es async body
 
     // Mejora II: declarar los parametros del wrapper igual que en una
@@ -1114,12 +1055,6 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     out.add_function(std::move(wrapper_fn));
 
     // Restaurar el contexto (aunque ya estamos al final de la funcion).
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
-    scopes_ = std::move(saved_scopes);
-    address_taken_locals_ = std::move(saved_addr_taken);
-    cleanup_stack_ = std::move(saved_cleanups);
     async_fut_id_ = saved_async_fut;
 }
 

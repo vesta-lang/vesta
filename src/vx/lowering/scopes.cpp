@@ -206,5 +206,40 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
     }
 }
 
+/**
+ * @brief Guarda el contexto del padre y lo deja limpio para el hijo.
+ *
+ * Limpiar es parte del contrato, no un anadido: la funcion hija empieza sin
+ * nombres, sin nada con la direccion tomada y sin nada que soltar.  Heredarlos
+ * del padre haria que un nombre del padre se resolviera dentro del hijo, donde
+ * ese valor no existe.
+ *
+ * @param lo El bajador cuyo contexto se guarda.
+ */
+Lowering::ChildFunctionScope::ChildFunctionScope(Lowering &lo)
+    : lo_(lo), fn_(lo.fn_), block_(lo.current_block_),
+      terminated_(lo.block_terminated_), scopes_(std::move(lo.scopes_)),
+      addr_taken_(std::move(lo.address_taken_locals_)),
+      host_bearing_(std::move(lo.host_bearing_locals_)),
+      cleanups_(std::move(lo.cleanup_stack_)) {
+    lo_.scopes_.clear();
+    lo_.address_taken_locals_.clear();
+    lo_.host_bearing_locals_.clear();
+    lo_.cleanup_stack_.clear();
+    lo_.block_terminated_ = false;
+}
+
+/**
+ * @brief Devuelve el contexto del padre tal y como estaba.
+ */
+Lowering::ChildFunctionScope::~ChildFunctionScope() {
+    lo_.fn_ = fn_;
+    lo_.current_block_ = block_;
+    lo_.block_terminated_ = terminated_;
+    lo_.scopes_ = std::move(scopes_);
+    lo_.address_taken_locals_ = std::move(addr_taken_);
+    lo_.host_bearing_locals_ = std::move(host_bearing_);
+    lo_.cleanup_stack_ = std::move(cleanups_);
+}
 
 } // namespace vx

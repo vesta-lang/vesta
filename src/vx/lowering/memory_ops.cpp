@@ -62,9 +62,11 @@ uint64_t Lowering::ensure_cpu_features_global() {
     //    STORE del bitmask al slot.  Construido como IrFunction aparte.
     const std::string name = "__vx_cpu_init";
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir.  Este
+     * sitio guardaba solo tres cosas de las siete porque el cuerpo que baja es
+     * ensamblador y no usa nombres; guardarlas todas no cambia lo que emite y
+     * quita la pregunta de cuales hacian falta. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -73,7 +75,6 @@ uint64_t Lowering::ensure_cpu_features_global() {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
     const uint32_t ln = 0;
 
     // --- binding register("rax") u64 feat;  (output only) ---
@@ -253,9 +254,6 @@ uint64_t Lowering::ensure_cpu_features_global() {
     }
     block_terminated_ = true;
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
 
     // Registrar el import nativo del runner de inline asm (igual que lower_asm)
@@ -307,9 +305,8 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
     }
     const uint64_t fp_slot = memcpy_fp_slot_;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     const uint32_t ln = 0;
 
     // --- Helper para construir una variante memcpy(dst, src, n) -------------
@@ -540,9 +537,8 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
             emit(current_block_, std::move(ret));
             block_terminated_ = true;
             out_mod_->add_function(std::move(hf));
-            fn_ = saved_fn;
-            current_block_ = saved_block;
-            block_terminated_ = saved_terminated;
+            /* Salida temprana: el guarda devuelve el contexto al salir del
+             * alcance, asi que aqui no hay que acordarse de nada. */
             return fp_slot;
         }
 
@@ -646,9 +642,6 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         out_mod_->add_function(std::move(hf));
     }
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     return fp_slot;
 }
 
@@ -730,9 +723,8 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
     // funcion -> realoc, pero ya no tenemos referencias vivas a las funciones).
     (void)ensure_cpu_features_global();
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     const uint32_t ln = 0;
 
     // Por cada funcion VEC: slot fp <body>$fp + wrapper sintetico (nombre
@@ -958,9 +950,6 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         out_module.add_function(std::move(hf));
     }
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
 }
 
 void Lowering::emit_memcpy_dispatched(ir::IrValueId dst, ir::IrValueId src,
@@ -1040,9 +1029,8 @@ void Lowering::ensure_strdisp() {
     (void)ensure_strlen_helper();
 
     // 3. __vx_strdisp_init(): para cada fp, STORE &<variante> al global.
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
     const uint32_t ln = 0;
 
     ir::IrFunction hf;
@@ -1051,7 +1039,6 @@ void Lowering::ensure_strdisp() {
     const ir::IrBlockId e = hf.new_block("entry");
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     // STORE &<fn_name> al global fp del slot dado.
     auto emit_store_fp = [&](uint64_t fp_slot, const std::string &fn_name) {
@@ -1084,9 +1071,6 @@ void Lowering::ensure_strdisp() {
     block_terminated_ = true;
     out_mod_->add_function(std::move(hf));
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
 }
 
 

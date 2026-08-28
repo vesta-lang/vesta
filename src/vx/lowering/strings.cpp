@@ -59,9 +59,8 @@ std::string Lowering::ensure_strcmp_helper() {
     if (strcmp_helper_emitted_) return name;
     strcmp_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -84,7 +83,6 @@ std::string Lowering::ensure_strcmp_helper() {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     const uint32_t ln = 0;
 
@@ -233,9 +231,6 @@ std::string Lowering::ensure_strcmp_helper() {
         }
     }
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }
@@ -973,9 +968,8 @@ std::string Lowering::ensure_str_cplen_helper() {
     if (str_cplen_helper_emitted_) return name;
     str_cplen_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -1077,9 +1071,6 @@ std::string Lowering::ensure_str_cplen_helper() {
     }
     block_terminated_ = true;
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }
@@ -1123,9 +1114,8 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     if (str_to_utf16_helper_emitted_) return name;
     str_to_utf16_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -1328,9 +1318,6 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     }
     block_terminated_ = true;
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }
@@ -1398,9 +1385,8 @@ std::string Lowering::ensure_strdata_helper() {
     if (strdata_helper_emitted_) return name;
     strdata_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -1413,7 +1399,6 @@ std::string Lowering::ensure_strdata_helper() {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     ir::IrValueId v_data = emit_native_str_data_ptr_inline(p_s, 0);
     {
@@ -1425,9 +1410,6 @@ std::string Lowering::ensure_strdata_helper() {
         emit(current_block_, std::move(rt));
     }
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }
@@ -1443,9 +1425,8 @@ std::string Lowering::ensure_strlen_helper() {
     if (strlen_helper_emitted_) return name;
     strlen_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -1458,7 +1439,6 @@ std::string Lowering::ensure_strlen_helper() {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     ir::IrValueId v_len = emit_native_str_len_inline(p_s, 0);
     {
@@ -1470,9 +1450,6 @@ std::string Lowering::ensure_strlen_helper() {
         emit(current_block_, std::move(rt));
     }
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }
@@ -1891,9 +1868,8 @@ std::string Lowering::ensure_ctoa_helper() {
     if (ctoa_helper_emitted_) return name;
     ctoa_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -1909,7 +1885,6 @@ std::string Lowering::ensure_ctoa_helper() {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     // Helpers locales de emision de instrucciones aritmeticas/bit.
     auto emit_bin = [&](ir::IrOp op, ir::IrValueId a,
@@ -2029,9 +2004,6 @@ std::string Lowering::ensure_ctoa_helper() {
     store_u8_at(3, orc(andc(p_cp, 0x3F), 0x80));
     ret_len(4);
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }
@@ -2183,9 +2155,8 @@ std::string Lowering::ensure_btoa_helper() {
     if (btoa_helper_emitted_) return name;
     btoa_helper_emitted_ = true;
 
-    ir::IrFunction *saved_fn = fn_;
-    ir::IrBlockId saved_block = current_block_;
-    bool saved_terminated = block_terminated_;
+    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+    ChildFunctionScope parent(*this);
 
     ir::IrFunction hf;
     hf.name = name;
@@ -2201,7 +2172,6 @@ std::string Lowering::ensure_btoa_helper() {
 
     fn_ = &hf;
     current_block_ = e;
-    block_terminated_ = false;
 
     // Helper: STORE empaquetado de los bytes de `s` en buf[off..].
     auto write_bytes = [&](const std::string &s) {
@@ -2278,9 +2248,6 @@ std::string Lowering::ensure_btoa_helper() {
     write_bytes("false");
     ret_len(5);
 
-    fn_ = saved_fn;
-    current_block_ = saved_block;
-    block_terminated_ = saved_terminated;
     out_mod_->add_function(std::move(hf));
     return name;
 }

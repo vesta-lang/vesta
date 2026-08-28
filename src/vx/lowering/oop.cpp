@@ -1705,9 +1705,8 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
     // @c cur (el ultimo bloque encadenado), no @c entry, porque el
     // generador parte __module_init en multiples bloques.
     if (has_runtime_globals) {
-        ir::IrFunction *saved_fn = fn_;
-        ir::IrBlockId saved_block = current_block_;
-        bool saved_term = block_terminated_;
+        /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+        ChildFunctionScope parent(*this);
         fn_ = &fn;
         current_block_ = cur;
         block_terminated_ = false;
@@ -1780,9 +1779,6 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             st.source_line = ln;
             emit(current_block_, std::move(st));
         }
-        fn_ = saved_fn;
-        current_block_ = saved_block;
-        block_terminated_ = saved_term;
     }
 
     ir::IrInstr ret{};
