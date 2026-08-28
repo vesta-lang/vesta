@@ -110,18 +110,8 @@ std::string Lowering::ensure_strcmp_helper() {
     const uint32_t ln = 0;
 
     // Helpers locales (mismo patron que emit_native_itoa_to_buf).
-    auto new_slot = [&]() -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v;
-        al.imm = 8;
-        al.host_alloca = true;
-        al.source_line = ln;
-        emit(current_block_, std::move(al));
-        return v;
+    auto new_slot = [&]() {
+        return stack_alloc_buf(8, ln, true);
     };
     auto load_i64 = [&](ir::IrValueId addr) {
         return emit_load_i64(addr, ln);
@@ -1039,18 +1029,8 @@ std::string Lowering::ensure_str_cplen_helper() {
     const uint32_t ln = 0;
 
     // Toolkit local (mismo patron que ensure_strcmp_helper).
-    auto new_slot = [&]() -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v;
-        al.imm = 8;
-        al.host_alloca = true;
-        al.source_line = ln;
-        emit(current_block_, std::move(al));
-        return v;
+    auto new_slot = [&]() {
+        return stack_alloc_buf(8, ln, true);
     };
     auto load_i64 = [&](ir::IrValueId addr) {
         return emit_load_i64(addr, ln);
@@ -1199,18 +1179,8 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     const uint32_t ln = 0;
 
     // Toolkit local.
-    auto new_slot = [&]() -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v].is_host_ptr = true;
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v;
-        al.imm = 8;
-        al.host_alloca = true;
-        al.source_line = ln;
-        emit(current_block_, std::move(al));
-        return v;
+    auto new_slot = [&]() {
+        return stack_alloc_buf(8, ln, true);
     };
     auto load_i64 = [&](ir::IrValueId addr) {
         return emit_load_i64(addr, ln);

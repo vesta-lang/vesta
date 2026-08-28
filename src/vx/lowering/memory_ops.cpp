@@ -1460,12 +1460,13 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
  * {hay, valor} de un `Optional`, el par {puntero, borrador} de un puntero
  * inteligente -- y por eso envolver un valor no cuesta una reserva de memoria.
  *
- * El @p for_optres no es un detalle: un `Optional` que se devuelve viaja por
- * la direccion que dio el llamante, y esa direccion es del ANFITRION.  Si el
- * hueco se reservara en la memoria de la maquina virtual, el llamante leeria
- * en el sitio equivocado.  Marcarlo aqui lo pone en la misma memoria que su
- * destino.  Los punteros inteligentes NO lo quieren, que por eso el
- * comportamiento no es el mismo para los dos.
+ * El @p host_memory no es un detalle, y por eso se llama por lo que HACE y no
+ * por quien lo pedia: pone el hueco en la memoria del ANFITRION en vez de en
+ * la de la maquina virtual.  Un `Optional` que se devuelve viaja por la
+ * direccion que dio el llamante, y esa direccion es del anfitrion: reservarlo
+ * en la otra memoria hace que el llamante lea en el sitio equivocado.  En un
+ * binario nativo pasa lo mismo con TODO hueco, no solo con esos, que es la
+ * razon de que el parametro no pudiera seguir llamandose por su primer caso.
  *
  * Era una lambda dentro de la bajada de los builtins, asi que de ahi no salia
  * aunque la necesitaran otras familias.  No capturaba nada -- solo usa el
@@ -1474,11 +1475,11 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
  *
  * @param bytes      Cuanto reservar.
  * @param line       Linea fuente, para la depuracion.
- * @param for_optres Si el hueco es de un Optional/Result que se devuelve.
+ * @param host_memory Si el hueco va en la memoria del anfitrion.
  * @return El valor SSA con la direccion del hueco.
  */
 ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
-                                        bool for_optres) {
+                                        bool host_memory) {
     const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
     ir::IrInstr al{};
     al.op = ir::IrOp::ALLOCA;
@@ -1486,13 +1487,9 @@ ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
     al.imm = bytes;
     al.dst = v_buf;
     al.source_line = line;
-    if (for_optres) {
-        al.host_alloca = true;
-    }
+    al.host_alloca = host_memory;
     emit(current_block_, std::move(al));
-    if (for_optres) {
-        fn_->values[v_buf].is_host_ptr = true;
-    }
+    if (host_memory) fn_->values[v_buf].is_host_ptr = true;
     return v_buf;
 }
 
@@ -1613,26 +1610,39 @@ ir::IrValueId Lowering::emit_load_i64(ir::IrValueId addr,
 }
 
 /**
- * @brief Escribe un qword en una direccion.
+ * @brief Escribe un valor del ancho que se pida en una direccion.
  *
  * El orden de los operandos NO es el de la firma: la instruccion los quiere
  * `{valor, direccion}` y aqui se reciben al reves, que es como se lee en el
  * fuente ("escribe en esta direccion este valor").  Invertirlos escribe la
  * direccion como si fuera el dato.
  *
+ * El ancho importa y no se deduce del valor: escribir un entero de ocho bytes
+ * donde caben dos pisa lo que hay detras, y escribir dos donde van ocho deja la
+ * mitad de antes.
+ *
  * @param addr        Donde escribir.
  * @param val         Que escribir.
+ * @param ty          De que ancho.
  * @param source_line Linea fuente, para la depuracion.
  */
-void Lowering::emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
-                              uint32_t source_line) {
+void Lowering::emit_store_typed(ir::IrValueId addr, ir::IrValueId val,
+                               ir::IrType ty, uint32_t source_line) {
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;
-    st.type = ir::IrType::I64;
+    st.type = ty;
     st.dst = ir::IR_NO_VALUE;
     st.operands = {val, addr};
     st.source_line = source_line;
     emit(current_block_, std::move(st));
+}
+
+/**
+ * @copydoc vx::Lowering::emit_store_i64
+ */
+void Lowering::emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
+                              uint32_t source_line) {
+    emit_store_typed(addr, val, ir::IrType::I64, source_line);
 }
 
 /**

@@ -129,7 +129,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                 ? (8u + ((payload_sz + 7u) & ~static_cast<size_t>(7)))
                 : 16u;
         const ir::IrValueId v_buf =
-            stack_alloc_buf(buf_sz, e->loc.line, /*for_optres=*/true);
+            stack_alloc_buf(buf_sz, e->loc.line, /*host_memory=*/true);
         // Store flag = 1 at +0.
         const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, e->loc.line);
         ir::IrInstr st0{};
@@ -202,7 +202,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         else if (sret_active_ && sret_buf_size_ >= 16)
             none_sz = static_cast<size_t>(sret_buf_size_);
         const ir::IrValueId v_buf =
-            stack_alloc_buf(none_sz, e->loc.line, /*for_optres=*/true);
+            stack_alloc_buf(none_sz, e->loc.line, /*host_memory=*/true);
         const ir::IrValueId v_zero =
             emit_const(ir::IrType::I64, 0, e->loc.line);
         ir::IrInstr st0{};
@@ -249,7 +249,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         const ir::IrValueId v_buf =
-            stack_alloc_buf(24, e->loc.line, /*for_optres=*/true);
+            stack_alloc_buf(24, e->loc.line, /*host_memory=*/true);
         // Tag.
         const ir::IrValueId v_tag =
             emit_const(ir::IrType::I64, is_Ok ? 1 : 0, e->loc.line);

@@ -118,13 +118,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
         emit(current_block_, std::move(mc));
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, val, ty, source_line);
     };
 
     // 1. (ptr, len) de ambos operandos via accesores flag-aware.
@@ -385,13 +379,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         emit(current_block_, std::move(mc));
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, val, ty, source_line);
     };
 
     // Cuerpos SSO/HEAP como lambdas (emiten en current_block_, SIN el BR final
@@ -552,13 +540,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         emit(current_block_, std::move(mc));
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, val, ty, source_line);
     };
 
     // 1. Estado actual del slot via accesores flag-aware.  v_old_data es
@@ -704,22 +686,8 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
     // en O2) para val, write index, y el buffer temporal de digitos.
     // Todas las ops PURE_NATIVE (ALLOCA/LOAD/STORE/DIV/MOD/ADD/SUB/CMP/BR).
 
-    auto new_slot = [&](uint64_t bytes) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
-        // En native_poo_/AOT los ALLOCA viven en HOST stack (host_alloca):
-        // sin esto el slot daria un VM-addr que el codegen native trata
-        // como host -> LOAD/STORE leerian basura.  is_host_ptr mantiene
-        // la coherencia de los LOAD/STORE posteriores.
-        if (native_poo_) fn_->values[v].is_host_ptr = true;
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v;
-        al.imm = bytes;
-        al.host_alloca = native_poo_;
-        al.source_line = source_line;
-        emit(current_block_, std::move(al));
-        return v;
+    auto new_slot = [&](uint64_t bytes) {
+        return stack_alloc_buf(bytes, source_line, native_poo_);
     };
     auto load_i64 = [&](ir::IrValueId addr) {
         return emit_load_i64(addr, source_line);

@@ -391,18 +391,18 @@ class Lowering {
      * @brief Reserva un hueco de @p bytes en el marco actual.
      *
      * Lo que se reserva aqui muere con el marco, asi que es lo correcto para
-     * lo que no debe sobrevivir a la funcion.  @p for_optres lo pone en la
-     * memoria del ANFITRION, que es donde un Optional/Result devuelto tiene
-     * que estar para que el llamante lo lea en el sitio correcto; los punteros
-     * inteligentes NO lo quieren.
+     * lo que no debe sobrevivir a la funcion.  @p host_memory lo pone en la
+     * memoria del ANFITRION en vez de en la de la maquina virtual: es donde un
+     * Optional/Result devuelto tiene que estar para que el llamante lo lea
+     * bien, y donde va TODO hueco en un binario nativo.
      *
-     * @param bytes      Cuanto reservar.
-     * @param line       Linea fuente, para la depuracion.
-     * @param for_optres Si el hueco es de un Optional/Result que se devuelve.
+     * @param bytes       Cuanto reservar.
+     * @param line        Linea fuente, para la depuracion.
+     * @param host_memory Si el hueco va en la memoria del anfitrion.
      * @return El valor SSA con la direccion del hueco.
      */
     ir::IrValueId stack_alloc_buf(uint64_t bytes, uint32_t line,
-                                  bool for_optres = false);
+                                  bool host_memory = false);
 
     /**
      * @brief Reserva el hueco de un puntero inteligente, en la pila o en el
@@ -493,6 +493,21 @@ class Lowering {
      * @param val         Que escribir.
      * @param source_line Linea fuente, para la depuracion.
      */
+    /**
+     * @brief Escribe un valor del ancho que se pida.
+     *
+     * El ancho no se deduce del valor: escribir ocho bytes donde caben dos
+     * pisa lo de detras, y escribir dos donde van ocho deja la mitad de antes.
+     *
+     * @param addr        Donde escribir.
+     * @param val         Que escribir.
+     * @param ty          De que ancho.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_store_typed(ir::IrValueId addr, ir::IrValueId val, ir::IrType ty,
+                          uint32_t source_line);
+
+    /// @brief Atajo de @ref emit_store_typed para el ancho de ocho bytes.
     void emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
                         uint32_t source_line);
 
