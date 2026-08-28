@@ -1831,4 +1831,59 @@ void Lowering::lower_foreach(ast::ForEachStmt *s) {
     lower_stmt(block.get());
 }
 
+/**
+ * @brief Salta a un bloque, y deja el grafo contado.
+ *
+ * Emitir el salto es la mitad; la otra es que el bloque de salida sepa a donde
+ * va y el de llegada sepa de donde viene.  Escrito a mano son cuatro lineas y
+ * las dos ultimas son las faciles de olvidar: sin ellas el codigo generado es
+ * correcto pero el GRAFO miente, y quien lo recorra despues -- el que decide
+ * que valor vive donde, el que quita lo inalcanzable -- toma sus decisiones
+ * sobre un mapa equivocado.  No da error: da codigo peor, o mal.
+ *
+ * Estaba escrito cuatro veces, una por funcion que construye un bucle a mano.
+ *
+ * @param target      El bloque al que saltar.
+ * @param source_line Linea fuente, para la depuracion.
+ */
+void Lowering::emit_br(ir::IrBlockId target, uint32_t source_line) {
+    ir::IrInstr b{};
+    b.op = ir::IrOp::BR;
+    b.type = ir::IrType::VOID;
+    b.dst = ir::IR_NO_VALUE;
+    b.target_block = target;
+    b.source_line = source_line;
+    emit(current_block_, std::move(b));
+    fn_->blocks[current_block_].succs.push_back(target);
+    fn_->blocks[target].preds.push_back(current_block_);
+}
+
+/**
+ * @brief Salta a un bloque o a otro segun @p cond, y deja el grafo contado.
+ *
+ * Lo mismo que @ref emit_br pero con dos salidas, y por eso son CUATRO aristas
+ * las que hay que anotar en vez de dos: es donde mas facil es dejarse una.
+ *
+ * @param cond        El valor que decide.
+ * @param t_true      Bloque al que ir si no es cero.
+ * @param t_false     Bloque al que ir si lo es.
+ * @param source_line Linea fuente, para la depuracion.
+ */
+void Lowering::emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
+                            ir::IrBlockId t_false, uint32_t source_line) {
+    ir::IrInstr b{};
+    b.op = ir::IrOp::BR_COND;
+    b.type = ir::IrType::VOID;
+    b.dst = ir::IR_NO_VALUE;
+    b.operands = {cond};
+    b.target_block = t_true;
+    b.false_block = t_false;
+    b.source_line = source_line;
+    emit(current_block_, std::move(b));
+    fn_->blocks[current_block_].succs.push_back(t_true);
+    fn_->blocks[current_block_].succs.push_back(t_false);
+    fn_->blocks[t_true].preds.push_back(current_block_);
+    fn_->blocks[t_false].preds.push_back(current_block_);
+}
+
 } // namespace vx

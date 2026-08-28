@@ -763,33 +763,6 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         return v;
     };
     auto new_block = [&]() -> ir::IrBlockId { return fn_->new_block(); };
-    auto br = [&](ir::IrBlockId target) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.target_block = target;
-        b.source_line = source_line;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(target);
-        fn_->blocks[target].preds.push_back(current_block_);
-    };
-    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
-                       ir::IrBlockId t_false) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR_COND;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.operands = {cond};
-        b.target_block = t_true;
-        b.false_block = t_false;
-        b.source_line = source_line;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(t_true);
-        fn_->blocks[current_block_].succs.push_back(t_false);
-        fn_->blocks[t_true].preds.push_back(current_block_);
-        fn_->blocks[t_false].preds.push_back(current_block_);
-    };
     auto v_one_helper = [&](uint32_t) -> ir::IrValueId {
         return emit_const(ir::IrType::I64, 1, source_line);
     };
@@ -828,7 +801,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         uint32_t bb_neg = new_block();
         uint32_t bb_pos = new_block();
         uint32_t bb_after_sign = new_block();
-        br_cond(is_neg, bb_neg, bb_pos);
+        emit_br_cond(is_neg, bb_neg, bb_pos, source_line);
         // bb_neg: escribir '-' en v_buf[0], pos=1, mag = 0 - val.
         current_block_ = bb_neg;
         {
@@ -839,11 +812,11 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
             ir::IrValueId v_negmag = bin(ir::IrOp::SUB, v_zero, v_val);
             store_i64(s_mag, v_negmag);
         }
-        br(bb_after_sign);
+        emit_br(bb_after_sign, source_line);
         // bb_pos: mag = val.
         current_block_ = bb_pos;
         store_i64(s_mag, v_val);
-        br(bb_after_sign);
+        emit_br(bb_after_sign, source_line);
         current_block_ = bb_after_sign;
     } else {
         store_i64(s_mag, v_val);
@@ -856,7 +829,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
     uint32_t bb_zero = new_block();
     uint32_t bb_loop_hdr = new_block();
     uint32_t bb_after_digits = new_block();
-    br_cond(is_zero, bb_zero, bb_loop_hdr);
+    emit_br_cond(is_zero, bb_zero, bb_loop_hdr, source_line);
 
     // bb_zero: tmp[0]='0', di=1.
     current_block_ = bb_zero;
@@ -864,7 +837,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         store_byte(s_tmp, v_z48);
         store_i64(s_di, v_one_helper(source_line));
     }
-    br(bb_after_digits);
+    emit_br(bb_after_digits, source_line);
 
     // bb_loop_hdr: while (mag != 0) { tmp[di++] = mag%10+'0'; mag/=10; }
     current_block_ = bb_loop_hdr;
@@ -872,7 +845,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         ir::IrValueId v_mag = load_i64(s_mag);
         ir::IrValueId cont = cmp(ir::IrOp::CMP_NE, v_mag, v_zero);
         uint32_t bb_body = new_block();
-        br_cond(cont, bb_body, bb_after_digits);
+        emit_br_cond(cont, bb_body, bb_after_digits, source_line);
         // bb_body.
         current_block_ = bb_body;
         {
@@ -912,7 +885,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
             }
             store_i64(s_mag, v_div);
         }
-        br(bb_loop_hdr);
+        emit_br(bb_loop_hdr, source_line);
     }
 
     // bb_after_digits: invertir tmp[0..di) -> v_buf[pos..pos+di).
@@ -929,7 +902,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
             bin(ir::IrOp::SUB, v_di_final, v_one_helper(source_line));
         store_i64(s_src, v_src0);
         uint32_t bb_inv_hdr = new_block();
-        br(bb_inv_hdr);
+        emit_br(bb_inv_hdr, source_line);
         // bb_inv_hdr: while (src >= 0) { v_buf[pos++] = tmp[src]; src--; }
         current_block_ = bb_inv_hdr;
         {
@@ -937,7 +910,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
             ir::IrValueId cont = cmp(ir::IrOp::CMP_GE, v_src, v_zero); // signed
             uint32_t bb_inv_body = new_block();
             uint32_t bb_done = new_block();
-            br_cond(cont, bb_inv_body, bb_done);
+            emit_br_cond(cont, bb_inv_body, bb_done, source_line);
             // body.
             current_block_ = bb_inv_body;
             {
@@ -964,7 +937,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
                     bin(ir::IrOp::SUB, v_src_b, v_one_helper(source_line));
                 store_i64(s_src, v_src1);
             }
-            br(bb_inv_hdr);
+            emit_br(bb_inv_hdr, source_line);
             current_block_ = bb_done;
         }
     }

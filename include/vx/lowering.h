@@ -449,6 +449,31 @@ class Lowering {
     ir::IrValueId emit_ptr_add(ir::IrValueId base, uint64_t off,
                                uint32_t source_line);
 
+    /**
+     * @brief Salta a un bloque, y deja el grafo contado.
+     *
+     * Emitir el salto es la mitad; la otra es anotar que el bloque de salida
+     * va ahi y el de llegada viene de aqui.  Sin eso el codigo generado es
+     * correcto pero el GRAFO miente, y quien lo recorra despues decide sobre
+     * un mapa equivocado.
+     *
+     * @param target      El bloque al que saltar.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_br(ir::IrBlockId target, uint32_t source_line);
+
+    /**
+     * @brief Salta a un bloque o a otro segun @p cond, contando las CUATRO
+     *        aristas.
+     *
+     * @param cond        El valor que decide.
+     * @param t_true      Bloque al que ir si no es cero.
+     * @param t_false     Bloque al que ir si lo es.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
+                      ir::IrBlockId t_false, uint32_t source_line);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);

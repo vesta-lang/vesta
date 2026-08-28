@@ -180,33 +180,6 @@ std::string Lowering::ensure_strcmp_helper() {
         return v;
     };
     auto new_block = [&]() -> ir::IrBlockId { return fn_->new_block(); };
-    auto br = [&](ir::IrBlockId target) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.target_block = target;
-        b.source_line = ln;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(target);
-        fn_->blocks[target].preds.push_back(current_block_);
-    };
-    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
-                       ir::IrBlockId t_false) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR_COND;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.operands = {cond};
-        b.target_block = t_true;
-        b.false_block = t_false;
-        b.source_line = ln;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(t_true);
-        fn_->blocks[current_block_].succs.push_back(t_false);
-        fn_->blocks[t_true].preds.push_back(current_block_);
-        fn_->blocks[t_false].preds.push_back(current_block_);
-    };
     auto ret = [&](ir::IrValueId v) {
         ir::IrInstr rt{};
         rt.op = ir::IrOp::RET;
@@ -228,13 +201,13 @@ std::string Lowering::ensure_strcmp_helper() {
         ir::IrBlockId bb_minA = new_block();
         ir::IrBlockId bb_minB = new_block();
         ir::IrBlockId bb_minJ = new_block();
-        br_cond(la_lt_lb, bb_minA, bb_minB);
+        emit_br_cond(la_lt_lb, bb_minA, bb_minB, ln);
         current_block_ = bb_minA;
         store_i64(s_min, p_la);
-        br(bb_minJ);
+        emit_br(bb_minJ, ln);
         current_block_ = bb_minB;
         store_i64(s_min, p_lb);
-        br(bb_minJ);
+        emit_br(bb_minJ, ln);
         current_block_ = bb_minJ;
     }
 
@@ -244,7 +217,7 @@ std::string Lowering::ensure_strcmp_helper() {
 
     // Loop: while (i < min) { ca=pa[i]; cb=pb[i]; if(ca!=cb) ret cmp; i++; }
     ir::IrBlockId bb_hdr = new_block();
-    br(bb_hdr);
+    emit_br(bb_hdr, ln);
     current_block_ = bb_hdr;
     {
         ir::IrValueId v_i = load_i64(s_i);
@@ -252,7 +225,7 @@ std::string Lowering::ensure_strcmp_helper() {
         ir::IrValueId i_lt = cmp(ir::IrOp::CMP_LT, v_i, v_min); // signed
         ir::IrBlockId bb_body = new_block();
         ir::IrBlockId bb_tail = new_block();
-        br_cond(i_lt, bb_body, bb_tail);
+        emit_br_cond(i_lt, bb_body, bb_tail, ln);
 
         // bb_body: comparar bytes.
         current_block_ = bb_body;
@@ -265,7 +238,7 @@ std::string Lowering::ensure_strcmp_helper() {
             ir::IrValueId ne = cmp(ir::IrOp::CMP_NE, v_ca, v_cb);
             ir::IrBlockId bb_diff = new_block();
             ir::IrBlockId bb_cont = new_block();
-            br_cond(ne, bb_diff, bb_cont);
+            emit_br_cond(ne, bb_diff, bb_cont, ln);
 
             // bb_diff: ret (ca < cb) ? -1 : 1.  Bytes 0..255 -> CMP_LT
             //          unsigned == signed (ambos positivos en i64).
@@ -274,7 +247,7 @@ std::string Lowering::ensure_strcmp_helper() {
                 ir::IrValueId lt = cmp(ir::IrOp::CMP_LT, v_ca, v_cb);
                 ir::IrBlockId bb_lt = new_block();
                 ir::IrBlockId bb_gt = new_block();
-                br_cond(lt, bb_lt, bb_gt);
+                emit_br_cond(lt, bb_lt, bb_gt, ln);
                 current_block_ = bb_lt;
                 ret(v_neg1);
                 current_block_ = bb_gt;
@@ -288,7 +261,7 @@ std::string Lowering::ensure_strcmp_helper() {
                 ir::IrValueId v_i4 = bin(ir::IrOp::ADD, v_i3, v_one);
                 store_i64(s_i, v_i4);
             }
-            br(bb_hdr);
+            emit_br(bb_hdr, ln);
         }
 
         // bb_tail: prefijos iguales -> el mas corto es menor.
@@ -297,7 +270,7 @@ std::string Lowering::ensure_strcmp_helper() {
             ir::IrValueId la_lt = cmp(ir::IrOp::CMP_LT, p_la, p_lb);
             ir::IrBlockId bb_short = new_block();
             ir::IrBlockId bb_chk_gt = new_block();
-            br_cond(la_lt, bb_short, bb_chk_gt);
+            emit_br_cond(la_lt, bb_short, bb_chk_gt, ln);
             current_block_ = bb_short;
             ret(v_neg1);
             current_block_ = bb_chk_gt;
@@ -305,7 +278,7 @@ std::string Lowering::ensure_strcmp_helper() {
                 ir::IrValueId la_gt = cmp(ir::IrOp::CMP_GT, p_la, p_lb);
                 ir::IrBlockId bb_long = new_block();
                 ir::IrBlockId bb_eq = new_block();
-                br_cond(la_gt, bb_long, bb_eq);
+                emit_br_cond(la_gt, bb_long, bb_eq, ln);
                 current_block_ = bb_long;
                 ret(v_one);
                 current_block_ = bb_eq;
@@ -1145,34 +1118,6 @@ std::string Lowering::ensure_str_cplen_helper() {
         emit(current_block_, std::move(in));
         return v;
     };
-    auto br = [&](ir::IrBlockId target) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.target_block = target;
-        b.source_line = ln;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(target);
-        fn_->blocks[target].preds.push_back(current_block_);
-    };
-    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
-                       ir::IrBlockId t_false) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR_COND;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.operands = {cond};
-        b.target_block = t_true;
-        b.false_block = t_false;
-        b.source_line = ln;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(t_true);
-        fn_->blocks[current_block_].succs.push_back(t_false);
-        fn_->blocks[t_true].preds.push_back(current_block_);
-        fn_->blocks[t_false].preds.push_back(current_block_);
-    };
-
     ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, ln);
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, ln);
     ir::IrValueId v_c0 = emit_const(ir::IrType::I64, 0xC0, ln);
@@ -1186,13 +1131,13 @@ std::string Lowering::ensure_str_cplen_helper() {
 
     // header: while (i < byte_len)
     ir::IrBlockId bb_hdr = fn_->new_block();
-    br(bb_hdr);
+    emit_br(bb_hdr, ln);
     current_block_ = bb_hdr;
     ir::IrValueId v_i = load_i64(s_i);
     ir::IrValueId i_lt = bin(ir::IrOp::CMP_LT, v_i, p_blen);
     ir::IrBlockId bb_body = fn_->new_block();
     ir::IrBlockId bb_exit = fn_->new_block();
-    br_cond(i_lt, bb_body, bb_exit);
+    emit_br_cond(i_lt, bb_body, bb_exit, ln);
 
     // body: b = p[i]; if ((b & 0xC0) != 0x80) count++; i++.
     current_block_ = bb_body;
@@ -1204,19 +1149,19 @@ std::string Lowering::ensure_str_cplen_helper() {
     ir::IrBlockId bb_inc = fn_->new_block(); // no-continuacion -> count++
     ir::IrBlockId bb_adv = fn_->new_block(); // avanza i
     // si is_cont (==0x80) saltar el count++; si no, contarlo.
-    br_cond(is_cont, bb_adv, bb_inc);
+    emit_br_cond(is_cont, bb_adv, bb_inc, ln);
     current_block_ = bb_inc;
     {
         ir::IrValueId v_c = load_i64(s_cnt);
         store_i64(s_cnt, bin(ir::IrOp::ADD, v_c, v_one));
     }
-    br(bb_adv);
+    emit_br(bb_adv, ln);
     current_block_ = bb_adv;
     {
         ir::IrValueId v_i3 = load_i64(s_i);
         store_i64(s_i, bin(ir::IrOp::ADD, v_i3, v_one));
     }
-    br(bb_hdr);
+    emit_br(bb_hdr, ln);
 
     // exit: ret count.
     current_block_ = bb_exit;
@@ -1370,34 +1315,6 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     auto cst = [&](uint64_t k) -> ir::IrValueId {
         return emit_const(ir::IrType::I64, k, ln);
     };
-    auto br = [&](ir::IrBlockId target) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.target_block = target;
-        b.source_line = ln;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(target);
-        fn_->blocks[target].preds.push_back(current_block_);
-    };
-    auto br_cond = [&](ir::IrValueId cond, ir::IrBlockId t_true,
-                       ir::IrBlockId t_false) {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR_COND;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.operands = {cond};
-        b.target_block = t_true;
-        b.false_block = t_false;
-        b.source_line = ln;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(t_true);
-        fn_->blocks[current_block_].succs.push_back(t_false);
-        fn_->blocks[t_true].preds.push_back(current_block_);
-        fn_->blocks[t_false].preds.push_back(current_block_);
-    };
-
     // out = malloc((byte_len + 1) * 2).
     ir::IrValueId v_units = bin(ir::IrOp::ADD, p_blen, cst(1));
     ir::IrValueId v_bytes = bin(ir::IrOp::SHL, v_units, cst(1)); // *2
@@ -1422,13 +1339,13 @@ std::string Lowering::ensure_str_to_utf16_helper() {
 
     // header: while (i < byte_len).
     ir::IrBlockId bb_hdr = fn_->new_block();
-    br(bb_hdr);
+    emit_br(bb_hdr, ln);
     current_block_ = bb_hdr;
     ir::IrValueId v_i = load_i64(s_i);
     ir::IrValueId i_lt = bin(ir::IrOp::CMP_LT, v_i, p_blen);
     ir::IrBlockId bb_dec = fn_->new_block();
     ir::IrBlockId bb_end = fn_->new_block();
-    br_cond(i_lt, bb_dec, bb_end);
+    emit_br_cond(i_lt, bb_dec, bb_end, ln);
 
     // bb_dec: b0 = p[i] ; 4-way segun rango.
     current_block_ = bb_dec;
@@ -1445,18 +1362,18 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         ir::IrValueId lt80 = bin(ir::IrOp::CMP_LT, v_b0, cst(0x80));
         ir::IrBlockId bb_1 = fn_->new_block();
         ir::IrBlockId bb_n1 = fn_->new_block();
-        br_cond(lt80, bb_1, bb_n1);
+        emit_br_cond(lt80, bb_1, bb_n1, ln);
         // 1 byte.
         current_block_ = bb_1;
         store_i64(s_cp, v_b0);
         store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(1)));
-        br(bb_emit);
+        emit_br(bb_emit, ln);
         // else.
         current_block_ = bb_n1;
         ir::IrValueId ltE0 = bin(ir::IrOp::CMP_LT, v_b0, cst(0xE0));
         ir::IrBlockId bb_2 = fn_->new_block();
         ir::IrBlockId bb_n2 = fn_->new_block();
-        br_cond(ltE0, bb_2, bb_n2);
+        emit_br_cond(ltE0, bb_2, bb_n2, ln);
         // 2 bytes: cp = ((b0&0x1F)<<6) | c(1).
         current_block_ = bb_2;
         {
@@ -1465,13 +1382,13 @@ std::string Lowering::ensure_str_to_utf16_helper() {
             store_i64(s_cp, bin(ir::IrOp::OR, hi, cont(1)));
             store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(2)));
         }
-        br(bb_emit);
+        emit_br(bb_emit, ln);
         // else.
         current_block_ = bb_n2;
         ir::IrValueId ltF0 = bin(ir::IrOp::CMP_LT, v_b0, cst(0xF0));
         ir::IrBlockId bb_3 = fn_->new_block();
         ir::IrBlockId bb_4 = fn_->new_block();
-        br_cond(ltF0, bb_3, bb_4);
+        emit_br_cond(ltF0, bb_3, bb_4, ln);
         // 3 bytes: cp = ((b0&0x0F)<<12) | (c(1)<<6) | c(2).
         current_block_ = bb_3;
         {
@@ -1482,7 +1399,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
                       bin(ir::IrOp::OR, bin(ir::IrOp::OR, hi, mid), cont(2)));
             store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(3)));
         }
-        br(bb_emit);
+        emit_br(bb_emit, ln);
         // 4 bytes: cp = ((b0&0x07)<<18)|(c(1)<<12)|(c(2)<<6)|c(3).
         current_block_ = bb_4;
         {
@@ -1495,7 +1412,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
             store_i64(s_cp, acc);
             store_i64(s_i, bin(ir::IrOp::ADD, load_i64(s_i), cst(4)));
         }
-        br(bb_emit);
+        emit_br(bb_emit, ln);
     }
 
     // bb_emit: codificar cp a UTF-16 (BMP o par suplente) + ob += unidades.
@@ -1504,7 +1421,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
     ir::IrValueId is_bmp = bin(ir::IrOp::CMP_LT, v_cp, cst(0x10000));
     ir::IrBlockId bb_bmp = fn_->new_block();
     ir::IrBlockId bb_ast = fn_->new_block();
-    br_cond(is_bmp, bb_bmp, bb_ast);
+    emit_br_cond(is_bmp, bb_bmp, bb_ast, ln);
     // BMP: out[ob] = cp ; ob += 2.
     current_block_ = bb_bmp;
     {
@@ -1512,7 +1429,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         store_u16(emit_ptr_add(v_out, v_ob, ln), v_cp);
         store_i64(s_ob, bin(ir::IrOp::ADD, v_ob, cst(2)));
     }
-    br(bb_hdr);
+    emit_br(bb_hdr, ln);
     // Astral: cp2 = cp - 0x10000 ; hi/lo surrogates.
     current_block_ = bb_ast;
     {
@@ -1527,7 +1444,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         store_u16(emit_ptr_add(v_out, v_ob2, ln), lo);
         store_i64(s_ob, bin(ir::IrOp::ADD, v_ob, cst(4)));
     }
-    br(bb_hdr);
+    emit_br(bb_hdr, ln);
 
     // bb_end: out[ob] = 0 (NUL u16) ; ret out.
     current_block_ = bb_end;
