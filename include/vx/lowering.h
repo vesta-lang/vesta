@@ -238,6 +238,21 @@ class Lowering {
                       const std::vector<ir::IrValueId> &args,
                       uint32_t source_line);
 
+    /**
+     * @brief Intenta bajar una llamada como uno de los builtins de imprimir.
+     *
+     * Imprimir parece una llamada y no lo es: lo que se escribe puede ser un
+     * literal, una interpolacion, o un valor de cualquier tipo -- y cada tipo
+     * se escribe distinto --, y encima el usuario puede pedir COMO quiere verlo
+     * (hexadecimal, binario, alineado a un ancho).  Ese averiguar es el grueso
+     * del trabajo; escribir de verdad son cuatro lineas.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado; @c false
+     *         si no lo era, para que quien despacha siga probando.
+     */
+    bool try_lower_print_builtins(ast::CallExpr *e, const std::string &name,
+                                  ir::IrValueId &out_value);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);

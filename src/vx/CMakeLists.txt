@@ -182,6 +182,10 @@ add_library(vx_lib STATIC
     # primitiva; en un binario nativo se emiten los bytes por un simbolo que el
     # programador puede REDEFINIR en Vesta.
     lowering/io.cpp
+    # Imprimir: el builtin mas usado y el que mas trabajo da.  El grueso no es
+    # escribir sino AVERIGUAR que se escribe -- cada tipo va distinto -- y con
+    # que forma (hexadecimal, binario, alineado).
+    lowering/builtins_print.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.
