@@ -186,6 +186,14 @@ add_library(vx_lib STATIC
     # construccion (__new_X), la funcion de arranque del modulo que CONSTRUYE
     # las clases antes de main, y la llamada a un metodo.
     lowering/oop.cpp
+    # Lo que altera el curso normal de una funcion: try/catch/finally, lanzar,
+    # y la seccion protegida por un monitor (que es un try/finally con el
+    # desbloqueo dentro).  Comparten el desmontaje del ambito al salir.
+    lowering/exceptions.cpp
+    # `match`: despachar por la FORMA de un valor.  Cada clase de patron baja
+    # distinto (tabla densa de saltos, cadena de comparaciones, comparacion de
+    # bytes), y elegir esa forma es el trabajo del fichero.
+    lowering/match.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
