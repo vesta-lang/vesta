@@ -1037,11 +1037,24 @@ bool ComptimeRuntime::load_macros_from_bytes(
                                 reinterpret_cast<void *>(res.fn);
                         } else if (util::flag_on(util::FlagId::ComptimeDebug)) {
                             /* El comptime corre por el JIT; interpretarlo es
-                             * el camino LENTO, no el habitual.  Pero no es un
-                             * fallo: ese codigo solo corre dentro del
-                             * compilador, asi que caer al interprete cuesta
-                             * tiempo de COMPILACION y nada mas -- no cambia lo
-                             * que el programa hace ni deja nada a medias.
+                             * el camino LENTO, no el habitual.  En teoria solo
+                             * cuesta tiempo de COMPILACION, porque los dos
+                             * caminos deberian dar lo mismo.
+                             *
+                             * En la practica eso hay que comprobarlo, no darlo
+                             * por hecho: aqui ponia que "no cambia lo que el
+                             * programa hace", y durante un tiempo si lo
+                             * cambiaba.  Dos fallos que solo vivian en el
+                             * camino interpretado -- el acierto falso del cache
+                             * de instrucciones en la direccion 0, y la primera
+                             * macro cerrada con `hlt` -- hacian que una macro
+                             * que llamara a otra devolviera un valor vacio.  Se
+                             * tardo en verlos porque este aviso los tapaba: se
+                             * leia como "solo va mas lento".
+                             *
+                             * Asi que si un resultado del comptime sale raro,
+                             * este mensaje SI es una pista, y `VESTA_MC_NO_JIT`
+                             * fuerza el mismo camino para compararlos.
                              *
                              * Se decia en CADA compilacion de cualquier fichero
                              * con generadores, y eso es ruido: un aviso que
