@@ -329,11 +329,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             st.source_line = ln;
             emit(current_block_, std::move(st));
         };
-        auto pack = [&](uint64_t pos, int n) -> uint64_t {
-            uint64_t v = 0;
-            for (int k = 0; k < n; ++k)
-                v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
-            return v;
+        auto pack = [&](uint64_t pos, int n) {
+            return pack_le(data, pos, n);
         };
         uint64_t pos = 0;
         for (; pos + 8 <= plen; pos += 8)
@@ -2253,11 +2250,8 @@ std::string Lowering::ensure_btoa_helper() {
             st.source_line = 0;
             emit(current_block_, std::move(st));
         };
-        auto pack = [&](uint64_t pos, int n) -> uint64_t {
-            uint64_t v = 0;
-            for (int k = 0; k < n; ++k)
-                v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
-            return v;
+        auto pack = [&](uint64_t pos, int n) {
+            return pack_le(data, pos, n);
         };
         const uint64_t plen = data.size();
         uint64_t pos = 0;

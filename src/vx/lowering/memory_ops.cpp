@@ -1675,4 +1675,37 @@ ir::IrValueId Lowering::emit_ir_binop(ir::IrOp op, ir::IrValueId a,
     return d;
 }
 
+/**
+ * @brief Copia @p len bytes, eligiendo COMO segun a donde se compile.
+ *
+ * Hay dos maneras y no son intercambiables.  En la maquina virtual y en el JIT
+ * la copia es una instruccion suya: el motor la hace y sabe hacerla bien.  En
+ * un binario nativo no hay motor detras, asi que se llama a una copia escrita
+ * en Vesta -- y no a una cualquiera: a la que el procesador de esa maquina
+ * pueda ejecutar mas rapido, elegida al arrancar y guardada en una tabla --.
+ *
+ * Elegir mal no da error: en nativo, emitir la instruccion deja una copia que
+ * nadie implementa.  Por eso la decision esta aqui y no en cada llamante, que
+ * es donde estaba -- tres veces, con el mismo comentario copiado --.
+ *
+ * @param dst         Destino.
+ * @param src         Origen.
+ * @param len         Cuantos bytes.
+ * @param source_line Linea fuente, para la depuracion.
+ */
+void Lowering::emit_memcpy(ir::IrValueId dst, ir::IrValueId src,
+                           ir::IrValueId len, uint32_t source_line) {
+    if (native_poo_) {
+        emit_memcpy_dispatched(dst, src, len, source_line);
+        return;
+    }
+    ir::IrInstr mc{};
+    mc.op = ir::IrOp::MEMCPY;
+    mc.type = ir::IrType::I8;
+    mc.dst = ir::IR_NO_VALUE;
+    mc.operands = {dst, src, len};
+    mc.source_line = source_line;
+    emit(current_block_, std::move(mc));
+}
+
 } // namespace vx

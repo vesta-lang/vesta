@@ -102,20 +102,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
 
     auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
                            ir::IrValueId len) {
-        // CPU dispatch (Inc 2): en native (AOT) el memcpy va por la tabla de
-        // punteros (variante elegida por cpuid al arranque).  En interp/JIT/
-        // Full sigue siendo MEMCPY inline (rep movsb), sin cambio.
-        if (native_poo_) {
-            emit_memcpy_dispatched(dst, src, len, source_line);
-            return;
-        }
-        ir::IrInstr mc{};
-        mc.op = ir::IrOp::MEMCPY;
-        mc.type = ir::IrType::I8;
-        mc.dst = ir::IR_NO_VALUE;
-        mc.operands = {dst, src, len};
-        mc.source_line = source_line;
-        emit(current_block_, std::move(mc));
+        this->emit_memcpy(dst, src, len, source_line);
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         emit_store_typed(addr, val, ty, source_line);
@@ -364,19 +351,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
     // es COMPILE-TIME -> se emite solo el cuerpo aplicable, SIN rama runtime.
     auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
                            ir::IrValueId len) {
-        // CPU dispatch (Inc 2): native -> tabla de punteros; interp/JIT/Full
-        // -> MEMCPY inline (rep movsb).
-        if (native_poo_) {
-            emit_memcpy_dispatched(dst, src, len, source_line);
-            return;
-        }
-        ir::IrInstr mc{};
-        mc.op = ir::IrOp::MEMCPY;
-        mc.type = ir::IrType::I8;
-        mc.dst = ir::IR_NO_VALUE;
-        mc.operands = {dst, src, len};
-        mc.source_line = source_line;
-        emit(current_block_, std::move(mc));
+        this->emit_memcpy(dst, src, len, source_line);
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         emit_store_typed(addr, val, ty, source_line);
@@ -525,19 +500,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
     // Todas las ops son PURE_NATIVE/LIBC.
     auto emit_memcpy = [&](ir::IrValueId dst, ir::IrValueId src,
                            ir::IrValueId len) {
-        // CPU dispatch (Inc 2): native -> tabla de punteros; interp/JIT/Full
-        // -> MEMCPY inline (rep movsb).
-        if (native_poo_) {
-            emit_memcpy_dispatched(dst, src, len, source_line);
-            return;
-        }
-        ir::IrInstr mc{};
-        mc.op = ir::IrOp::MEMCPY;
-        mc.type = ir::IrType::I8;
-        mc.dst = ir::IR_NO_VALUE;
-        mc.operands = {dst, src, len};
-        mc.source_line = source_line;
-        emit(current_block_, std::move(mc));
+        this->emit_memcpy(dst, src, len, source_line);
     };
     auto store_at = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
         emit_store_typed(addr, val, ty, source_line);

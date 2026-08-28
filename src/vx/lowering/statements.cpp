@@ -1854,8 +1854,7 @@ void Lowering::emit_br(ir::IrBlockId target, uint32_t source_line) {
     b.target_block = target;
     b.source_line = source_line;
     emit(current_block_, std::move(b));
-    fn_->blocks[current_block_].succs.push_back(target);
-    fn_->blocks[target].preds.push_back(current_block_);
+    add_cfg_edge(current_block_, target);
 }
 
 /**
@@ -1880,10 +1879,27 @@ void Lowering::emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
     b.false_block = t_false;
     b.source_line = source_line;
     emit(current_block_, std::move(b));
-    fn_->blocks[current_block_].succs.push_back(t_true);
-    fn_->blocks[current_block_].succs.push_back(t_false);
-    fn_->blocks[t_true].preds.push_back(current_block_);
-    fn_->blocks[t_false].preds.push_back(current_block_);
+    add_cfg_edge(current_block_, t_true);
+    add_cfg_edge(current_block_, t_false);
+}
+
+/**
+ * @brief Anota que de @p from se puede llegar a @p to.
+ *
+ * No emite nada: solo cuenta la arista en los dos extremos.  Hace falta suelto
+ * -- sin salto -- cuando el salto ya lo pone otra cosa: un `match` construye su
+ * despacho y luego dice a que bloques puede ir, y esas aristas no salen de un
+ * `br` sino de la propia tabla.
+ *
+ * Es la mitad de @ref emit_br, y la que se olvida: sin ella el grafo miente y
+ * quien lo recorra despues decide sobre un mapa equivocado.
+ *
+ * @param from Bloque de salida.
+ * @param to   Bloque de llegada.
+ */
+void Lowering::add_cfg_edge(ir::IrBlockId from, ir::IrBlockId to) {
+    fn_->blocks[from].succs.push_back(to);
+    fn_->blocks[to].preds.push_back(from);
 }
 
 } // namespace vx

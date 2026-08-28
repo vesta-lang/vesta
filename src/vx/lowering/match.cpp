@@ -115,8 +115,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     std::sort(sw_cases.begin(), sw_cases.end());
 
     auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
-        fn_->blocks[from].succs.push_back(to);
-        fn_->blocks[to].preds.push_back(from);
+        add_cfg_edge(from, to);
     };
 
     // Dispatch DENSO O(1): marker SWITCH_DENSE (island nativo en JIT).
@@ -389,8 +388,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             arm_blocks[i] = fn_->new_block("strmatch_arm");
 
     auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
-        fn_->blocks[from].succs.push_back(to);
-        fn_->blocks[to].preds.push_back(from);
+        add_cfg_edge(from, to);
     };
 
     // Dispatch por LONGITUD (entero): SWITCH_DENSE si las longitudes son densas
@@ -820,8 +818,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
 
     // Helper local: anade una arista CFG (succ + pred).
     auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
-        fn_->blocks[from].succs.push_back(to);
-        fn_->blocks[to].preds.push_back(from);
+        add_cfg_edge(from, to);
     };
 
     if (use_bst) {

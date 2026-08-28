@@ -460,6 +460,18 @@ class Lowering {
      * @param target      El bloque al que saltar.
      * @param source_line Linea fuente, para la depuracion.
      */
+    /**
+     * @brief Anota que de @p from se puede llegar a @p to, sin emitir nada.
+     *
+     * Hace falta suelto cuando el salto lo pone otra cosa -- la tabla de un
+     * `match`, por ejemplo --.  Es la mitad de @ref emit_br, y la que se
+     * olvida.
+     *
+     * @param from Bloque de salida.
+     * @param to   Bloque de llegada.
+     */
+    void add_cfg_edge(ir::IrBlockId from, ir::IrBlockId to);
+
     void emit_br(ir::IrBlockId target, uint32_t source_line);
 
     /**
@@ -510,6 +522,23 @@ class Lowering {
     /// @brief Atajo de @ref emit_store_typed para el ancho de ocho bytes.
     void emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
                         uint32_t source_line);
+
+    /**
+     * @brief Copia @p len bytes, eligiendo COMO segun a donde se compile.
+     *
+     * En la maquina virtual y en el JIT la copia es una instruccion suya.  En
+     * un binario nativo no hay motor detras: se llama a una copia escrita en
+     * Vesta, la que el procesador de esa maquina ejecute mas rapido.  Elegir
+     * mal no da error -- en nativo deja una copia que nadie implementa --, y
+     * por eso la decision esta aqui y no en cada llamante.
+     *
+     * @param dst         Destino.
+     * @param src         Origen.
+     * @param len         Cuantos bytes.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_memcpy(ir::IrValueId dst, ir::IrValueId src, ir::IrValueId len,
+                     uint32_t source_line);
 
     /**
      * @brief Emite una operacion de dos operandos del IR.

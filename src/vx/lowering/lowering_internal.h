@@ -183,6 +183,30 @@ void annotate_macro_param_idents(
  */
 extern const std::string kVestaIoLib;
 
+/**
+ * @brief Lee @p n bytes desde @p pos como un entero, el de menor peso primero.
+ *
+ * Sirve para meter en UNA instruccion lo que si no serian ocho: al copiar una
+ * cadena conocida al compilar, sus bytes se agrupan de ocho en ocho y cada
+ * grupo se escribe de una vez.  El orden -- el primer byte en la parte baja --
+ * es el de la maquina, asi que lo escrito coincide con lo leido sin darle la
+ * vuelta a nada.
+ *
+ * Estaba escrito cuatro veces, y no toca nada del bajador: es aritmetica sobre
+ * un vector de bytes, y por eso vive aqui como funcion libre y no como metodo.
+ *
+ * @param data Los bytes.
+ * @param pos  Desde donde.
+ * @param n    Cuantos, de 1 a 8.
+ * @return El entero formado por esos bytes.
+ */
+inline uint64_t pack_le(const std::vector<uint8_t> &data, uint64_t pos, int n) {
+    uint64_t v = 0;
+    for (int k = 0; k < n; ++k)
+        v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
+    return v;
+}
+
 } // namespace vx
 
 #endif // VESTA_VX_LOWERING_INTERNAL_H
