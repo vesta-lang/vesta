@@ -933,6 +933,21 @@ else ()
     target_link_libraries(test_gc_lib PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
 
+# Reconocer un builtin por su nombre.  El orden de la tabla y que cuadre con
+# el enum los comprueba el compilador; esto comprueba lo que no puede: que la
+# busqueda encuentra cada nombre, y que NO encuentra los que se le parecen.
+add_executable(test_vx_builtin_names tests/vx/test_vx_builtin_names.cpp)
+target_include_directories(test_vx_builtin_names PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_vx_builtin_names PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_vx_builtin_names PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_vx_builtin_names PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_vx_builtin_names PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # Driver incremental granular (claves Merkle + CAS + plan_rebuild + fragmentos
 # de IR).  vx_lib aporta el indice + el driver; vmcore aporta ir:: (IrModule,
 # serializacion).  vx_lib va PRIMERO: referencia simbolos ir:: de vmcore.

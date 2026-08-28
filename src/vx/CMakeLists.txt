@@ -151,6 +151,11 @@ add_library(vx_lib STATIC
     gen/instr_db_x86_feat_gen.cpp
     gen/instr_db_arm_feat_gen.cpp
     gen/instr_db_riscv_feat_gen.cpp
+    # LA lista de nombres que el lenguaje reconoce sin que nadie los declare,
+    # y reconocerlos de una vez por busqueda binaria en vez de comparando el
+    # nombre contra doscientos literales.  La necesitan el bajador y el
+    # comprobador de tipos, que antes tenian cada uno la suya.
+    builtin_names.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

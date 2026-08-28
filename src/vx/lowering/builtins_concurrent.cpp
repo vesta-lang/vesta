@@ -68,32 +68,32 @@ namespace vx {
  * @brief Intenta bajar @p e como uno de los builtins de concurrencia.
  *
  * @param e         La llamada.
- * @param name      El nombre invocado, ya resuelto por quien despacha.
+ * @param b         Que builtin es, ya resuelto por quien despacha.
  * @param out_value Donde dejar el resultado; sin valor si el builtin no lo da.
- * @return @c true si @p name era de esta familia y quedo bajado.
+ * @return @c true si @p b era de esta familia y quedo bajado.
  */
 bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
-                                             const std::string &name,
+                                             Builtin b,
                                              ir::IrValueId &out_value) {
     // Memoria compartida entre procesos: sacarla del monton privado y
     // devolverla, mas saber si una direccion dada ya esta compartida.
-    const bool is_z6_isshared = (name == "is_shared");
-    const bool is_z6_share = (name == "share");
-    const bool is_z6_unshare = (name == "unshare");
+    const bool is_z6_isshared = (b == Builtin::IsShared);
+    const bool is_z6_share = (b == Builtin::Share);
+    const bool is_z6_unshare = (b == Builtin::Unshare);
     // Operaciones atomicas sobre esa memoria: leer/escribir sin ver estados a
     // medias, y las dos que hacen falta para construir cualquier otra cosa.
-    const bool is_z8_atomic_load = (name == "atomic_load_i64");
-    const bool is_z8_atomic_store = (name == "atomic_store_i64");
-    const bool is_z8_atomic_cas = (name == "atomic_cas_i64");
-    const bool is_z8_atomic_add = (name == "atomic_add_i64");
-    const bool is_z8_shared_malloc = (name == "shared_malloc");
-    const bool is_z8_shared_free = (name == "shared_free");
+    const bool is_z8_atomic_load = (b == Builtin::AtomicLoadI64);
+    const bool is_z8_atomic_store = (b == Builtin::AtomicStoreI64);
+    const bool is_z8_atomic_cas = (b == Builtin::AtomicCasI64);
+    const bool is_z8_atomic_add = (b == Builtin::AtomicAddI64);
+    const bool is_z8_shared_malloc = (b == Builtin::SharedMalloc);
+    const bool is_z8_shared_free = (b == Builtin::SharedFree);
     // Buzones: dejar un mensaje a otro proceso y recogerlo del propio.
-    const bool is_msgsend = (name == "msgsend");
-    const bool is_msgrecv = (name == "msgrecv");
+    const bool is_msgsend = (b == Builtin::Msgsend);
+    const bool is_msgrecv = (b == Builtin::Msgrecv);
     // Futuros: la casilla de una respuesta que aun no existe, y rellenarla.
-    const bool is_future_alloc = (name == "future_alloc");
-    const bool is_fulfill = (name == "fulfill");
+    const bool is_future_alloc = (b == Builtin::FutureAlloc);
+    const bool is_fulfill = (b == Builtin::Fulfill);
 
     /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
     if (!(is_z6_isshared || is_z6_share || is_z6_unshare ||

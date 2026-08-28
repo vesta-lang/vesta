@@ -63,14 +63,14 @@ namespace vx {
  * @brief Intenta bajar @p e como uno de los builtins de impresion.
  *
  * @param e         La llamada.
- * @param name      El nombre invocado, ya resuelto por quien despacha.
+ * @param b         Que builtin es, ya resuelto por quien despacha.
  * @param out_value Donde dejar el resultado; sin valor si el builtin no lo da.
- * @return @c true si @p name era de esta familia y quedo bajado.
+ * @return @c true si @p b era de esta familia y quedo bajado.
  */
 bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
-                                        const std::string &name,
+                                        Builtin b,
                                         ir::IrValueId &out_value) {
-    const bool is_print = (name == "print");
+    const bool is_print = (b == Builtin::Print);
     /*  MC.18: `comptime_print` / `ct_print` se aliasan a
      * `println` -- en el path VM-lowered es exactamente eso (print
      * a stderr).  El macro corre en compile time (porque la
@@ -78,40 +78,40 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
      * site), asi que el output aparece durante la compilacion
      * igual que el AST eval. */
     const bool is_println =
-        (name == "println" || name == "comptime_print" || name == "ct_print");
-    const bool is_echo = (name == "echo");   // alias de print
-    const bool is_flush = (name == "flush"); // vio_flush() sin args
+        (b == Builtin::Println || b == Builtin::ComptimePrint || b == Builtin::CtPrint);
+    const bool is_echo = (b == Builtin::Echo);   // alias de print
+    const bool is_flush = (b == Builtin::Flush); // vio_flush() sin args
     const bool is_gc_collect =
-        (name == "gc_collect"); // fuerza GC + finalizadores
+        (b == Builtin::GcCollect); // fuerza GC + finalizadores
     const bool is_gc_finalize_all =
-        (name == "gc_finalize_all"); // finaliza todo objeto GC con recurso
-    const bool is_print_int = (name == "print_int");
+        (b == Builtin::GcFinalizeAll); // finaliza todo objeto GC con recurso
+    const bool is_print_int = (b == Builtin::PrintInt);
     // builtins de I/O explicitos por tipo (sin newline; usar
     // println o print + "\n" si lo necesitas).
-    const bool is_print_uint = (name == "print_uint");
-    const bool is_print_hex = (name == "print_hex");
-    const bool is_print_float = (name == "print_float");
-    const bool is_print_bool = (name == "print_bool");
-    const bool is_print_char = (name == "print_char");
-    const bool is_print_color = (name == "print_color");
-    const bool is_print_cstr = (name == "print_cstr");
+    const bool is_print_uint = (b == Builtin::PrintUint);
+    const bool is_print_hex = (b == Builtin::PrintHex);
+    const bool is_print_float = (b == Builtin::PrintFloat);
+    const bool is_print_bool = (b == Builtin::PrintBool);
+    const bool is_print_char = (b == Builtin::PrintChar);
+    const bool is_print_color = (b == Builtin::PrintColor);
+    const bool is_print_cstr = (b == Builtin::PrintCstr);
     // formatos numericos alternativos (binario / octal) y impresion
     // de punteros / handles de objetos GC + padding para alineacion.
-    const bool is_print_bin = (name == "print_bin");
-    const bool is_print_oct = (name == "print_oct");
-    const bool is_print_ptr = (name == "print_ptr");
-    const bool is_print_gchandle = (name == "print_gchandle");
-    const bool is_print_pad = (name == "print_pad");
+    const bool is_print_bin = (b == Builtin::PrintBin);
+    const bool is_print_oct = (b == Builtin::PrintOct);
+    const bool is_print_ptr = (b == Builtin::PrintPtr);
+    const bool is_print_gchandle = (b == Builtin::PrintGchandle);
+    const bool is_print_pad = (b == Builtin::PrintPad);
     // Secuencias de control del terminal (escapes VT100 fijos): sin valor que
     // formatear, pero salen por la misma primitiva que todo lo de arriba.
-    const bool is_term_clear = (name == "term_clear");
-    const bool is_term_clear_line = (name == "term_clear_line");
-    const bool is_term_move = (name == "term_move");
-    const bool is_term_save_cursor = (name == "term_save_cursor");
-    const bool is_term_restore_cursor = (name == "term_restore_cursor");
-    const bool is_term_hide_cursor = (name == "term_hide_cursor");
-    const bool is_term_show_cursor = (name == "term_show_cursor");
-    const bool is_term_reset = (name == "term_reset");
+    const bool is_term_clear = (b == Builtin::TermClear);
+    const bool is_term_clear_line = (b == Builtin::TermClearLine);
+    const bool is_term_move = (b == Builtin::TermMove);
+    const bool is_term_save_cursor = (b == Builtin::TermSaveCursor);
+    const bool is_term_restore_cursor = (b == Builtin::TermRestoreCursor);
+    const bool is_term_hide_cursor = (b == Builtin::TermHideCursor);
+    const bool is_term_show_cursor = (b == Builtin::TermShowCursor);
+    const bool is_term_reset = (b == Builtin::TermReset);
 
     /* Salida rapida: si no es de esta familia no se monta nada de lo de abajo.
      * Antes esto no hacia falta porque todo vivia en la misma funcion; ahora
@@ -877,7 +877,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     // print y echo son sinonimos; println anade '\n' al final.
     if (is_print || is_println || is_echo) {
         if (e->args.size() != 1 || !e->args[0]) {
-            error_at(e->loc, std::string("'") + name +
+            error_at(e->loc, std::string("'") + std::string(builtin_name(b)) +
                                  "' requiere exactamente un argumento");
             out_value = ir::IR_NO_VALUE;
             return true;
@@ -984,7 +984,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         is_print_char || is_print_color || is_print_cstr || is_print_bin ||
         is_print_oct || is_print_ptr || is_print_gchandle) {
         if (e->args.size() != 1) {
-            error_at(e->loc, std::string("'") + name +
+            error_at(e->loc, std::string("'") + std::string(builtin_name(b)) +
                                  "' requiere exactamente un argumento");
             out_value = ir::IR_NO_VALUE;
             return true;
@@ -1025,7 +1025,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             else if (is_print_cstr)
                 nf = "__vx_print_cstr";
             if (nf.empty()) {
-                diags_.warning(e->loc, std::string("'") + name +
+                diags_.warning(e->loc, std::string("'") + std::string(builtin_name(b)) +
                                            "' en AOT nativo aun no soportado; "
                                            "se omite");
                 out_value = ir::IR_NO_VALUE;

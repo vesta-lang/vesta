@@ -57,6 +57,7 @@
 #include <vector>
 
 #include "ir/ssa_ir.h"
+#include "vx/builtin_names.h" // Builtin: el nombre ya resuelto, no la cadena
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
 #include "vx/type_checker.h"
@@ -250,7 +251,7 @@ class Lowering {
      * @return @c true si el nombre era de esta familia y quedo bajado; @c false
      *         si no lo era, para que quien despacha siga probando.
      */
-    bool try_lower_print_builtins(ast::CallExpr *e, const std::string &name,
+    bool try_lower_print_builtins(ast::CallExpr *e, Builtin b,
                                   ir::IrValueId &out_value);
 
     /**
@@ -265,7 +266,7 @@ class Lowering {
      *
      * @return @c true si el nombre era de esta familia y quedo bajado.
      */
-    bool try_lower_runtime_builtins(ast::CallExpr *e, const std::string &name,
+    bool try_lower_runtime_builtins(ast::CallExpr *e, Builtin b,
                                     ir::IrValueId &out_value);
 
     /**
@@ -281,8 +282,7 @@ class Lowering {
      *
      * @return @c true si el nombre era de esta familia y quedo bajado.
      */
-    bool try_lower_concurrent_builtins(ast::CallExpr *e,
-                                       const std::string &name,
+    bool try_lower_concurrent_builtins(ast::CallExpr *e, Builtin b,
                                        ir::IrValueId &out_value);
 
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.

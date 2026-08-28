@@ -28,6 +28,7 @@
  */
 #include "util/env_flags.h"
 #include "vx/lowering.h"
+#include "vx/builtin_names.h" // reconocer el nombre de una vez, no comparandolo 200 veces
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
 #include <algorithm>
@@ -66,19 +67,36 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const auto *id = static_cast<const ast::IdentExpr *>(e->callee.get());
     const std::string &name = id->name;
 
+    /* Lo primero: ¿es siquiera un builtin?  Casi ninguna llamada de un
+     * programa lo es -- son funciones del usuario --, y averiguarlo costaba
+     * recorrer las familias y evaluar doscientas comparaciones de cadena antes
+     * de contestar que no.  Una busqueda binaria lo decide de una vez, y ni
+     * siquiera llega a buscar si la longitud del nombre no cae en el rango de
+     * los que hay.
+     *
+     * Con UNA excepcion, y no es un detalle: un concepto usado como predicado
+     * -- `Comparable<T>()` -- se baja aqui abajo, y su nombre lo pone el
+     * usuario, asi que no puede estar en ninguna lista.  Lo que lo distingue
+     * no es como se llama sino su FORMA: lleva argumentos de tipo y ninguno de
+     * ejecucion.  Los conceptos que trae el lenguaje se invocan igual, asi que
+     * la misma comprobacion los cubre a los dos. */
+    const bool looks_like_concept = !e->type_args.empty() && e->args.empty();
+    const Builtin b = builtin_from_name(name);
+    if (!looks_like_concept && b == Builtin::Unknown) return false;
+
     /* Imprimir vive aparte (lowering/builtins_print.cpp): eran mil lineas de
      * las siete mil de esta funcion, y su trabajo -- averiguar QUE se escribe y
      * con que forma -- no se parece al del resto.  Contesta que no si el nombre
      * no es suyo, y aqui se sigue como siempre. */
-    if (try_lower_print_builtins(e, name, out_value)) return true;
+    if (try_lower_print_builtins(e, b, out_value)) return true;
     /* Y lo que pide algo al MUNDO -- ficheros, memoria del anfitrion,
      * fibras, modulos cargados en marcha -- tampoco se parece al resto:
      * ninguno se resuelve dentro del programa. */
-    if (try_lower_runtime_builtins(e, name, out_value)) return true;
+    if (try_lower_runtime_builtins(e, b, out_value)) return true;
     /* Y lo que supone que hay ALGUIEN MAS: memoria compartida, atomicos,
      * buzones y futuros.  Todos existen porque lo que uno escribe lo tiene
      * que ver el otro, y en el orden correcto. */
-    if (try_lower_concurrent_builtins(e, name, out_value)) return true;
+    if (try_lower_concurrent_builtins(e, b, out_value)) return true;
 
     // -----------------------------------------------------------------
     // AOT 2c (dev OS): simbolos de seccion.  section_start/end(".x") -> void*,

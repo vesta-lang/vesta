@@ -56,20 +56,24 @@ namespace vx {
 
 /**
  * @brief Intenta bajar @p e como uno de los builtins que piden algo al mundo.
- * @return @c true si @p name era de esta familia y quedo bajado.
+ *
+ * @param e         La llamada.
+ * @param b         Que builtin es, ya resuelto por quien despacha.
+ * @param out_value Donde dejar el resultado; sin valor si el builtin no lo da.
+ * @return @c true si @p b era de esta familia y quedo bajado.
  */
 bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
-                                          const std::string &name,
+                                          Builtin b,
                                           ir::IrValueId &out_value) {
-    const bool is_fopen = (name == "fopen");
-    const bool is_fwrite = (name == "fwrite");
-    const bool is_fclose = (name == "fclose");
-    const bool is_malloc = (name == "malloc");
-    const bool is_free = (name == "free");
-    const bool is_fiber_swapctx = (name == "fiber_swapctx");
-    const bool is_loadmodule = (name == "loadmodule");
-    const bool is_unloadmodule = (name == "unloadmodule");
-    const bool is_dispose = (name == "dispose");
+    const bool is_fopen = (b == Builtin::Fopen);
+    const bool is_fwrite = (b == Builtin::Fwrite);
+    const bool is_fclose = (b == Builtin::Fclose);
+    const bool is_malloc = (b == Builtin::Malloc);
+    const bool is_free = (b == Builtin::Free);
+    const bool is_fiber_swapctx = (b == Builtin::FiberSwapctx);
+    const bool is_loadmodule = (b == Builtin::Loadmodule);
+    const bool is_unloadmodule = (b == Builtin::Unloadmodule);
+    const bool is_dispose = (b == Builtin::Dispose);
 
     if (!(is_fopen || is_fwrite || is_fclose || is_malloc || is_free ||
           is_fiber_swapctx || is_loadmodule || is_unloadmodule || is_dispose))
