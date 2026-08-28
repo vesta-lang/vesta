@@ -2690,10 +2690,22 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
         return bail("clase con campo destructible");
     if (cls->is_aspect) return bail("clase es @Aspect");
 
-    /* El modulo entero usa AOP -> los CALLVIRT (incluido el del ctor) pueden
-     * disparar advice chains; eliminar el ctor las saltaria. */
-    for (const auto &c : mod.classes) {
-        if (c.is_aspect) return bail("modulo usa AOP");
+    /* Solo importa si algun metodo de ESTA clase lleva aspectos: sustituirla
+     * por escalares elimina su constructor, y con el la cadena que se hubiera
+     * recorrido al llamarlo.
+     *
+     * Antes se miraba si el modulo -- que es el programa entero -- usaba AOP en
+     * cualquier sitio, y entonces NINGUN objeto se sustituia por escalares.
+     * Medido en bench_polymorphic: con un aspecto que no tocaba ninguna de sus
+     * clases pasaba de 120 a 280 millones de instrucciones, porque sus tres
+     * objetos dejaban de plegarse a constantes.  Y no se veia como lo que era
+     * -- se leia como si el coste viniera del despacho -- porque el numero de
+     * `callvirt` emitidos era exactamente el mismo con aspecto y sin el. */
+    if (!mod.aspectos_atribuidos) return bail("hay aspectos sin atribuir");
+    for (const auto &m : cls->methods) {
+        if (!m.ir_fn_name.empty() &&
+            mod.metodos_con_aspecto.count(m.ir_fn_name) != 0)
+            return bail("un metodo de la clase lleva aspectos");
     }
 
     /* 2) Un unico constructor DEFINIDO en esta clase (los heredados tienen
