@@ -222,6 +222,14 @@ add_library(vx_lib STATIC
     # un puntero, un campo de bits o una propiedad con `set`, y cada uno se
     # escribe distinto.  Si lo asignado POSEE algo, hay que soltar lo que habia.
     lowering/assignment.cpp
+    # Las cadenas nativas: una cadena no es un puntero, es una estructura que
+    # guarda las cortas DENTRO de si misma y solo pide memoria para las largas,
+    # asi que casi ninguna operacion es directa -- hay que mirar antes en cual
+    # de las dos formas esta.
+    lowering/strings.cpp
+    # Construir una cadena: decidir cuanto ocupa, si cabe dentro de la propia
+    # estructura o hay que pedir memoria, y dejar sus metadatos coherentes.
+    lowering/strings_build.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
