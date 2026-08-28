@@ -667,14 +667,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 sub.source_line = it->source_line;
                 emit(current_block_, std::move(sub));
             }
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_rc_dec, v_ctrl};
-                st.source_line = it->source_line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_ctrl, v_rc_dec,
+                             ir::IrType::I64, it->source_line);
             // H3 no-GC: si el refcount cayo a 0, liberar el bloque de control
             // (RAW_FREE).  Refcount puro determinista -> sin GC.  cmp rc==0.
             const ir::IrValueId v_zero2 =
@@ -1267,13 +1261,7 @@ void Lowering::store_slot_fields_prestado(ir::IrValueId v_slot,
             ad.source_line = source_line;
             emit(current_block_, std::move(ad));
         }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, ty, source_line);
     };
     store_at(0, v_buf, ir::IrType::I64);
     store_at(8, emit_const(ir::IrType::I64, len, source_line), ir::IrType::I64);
@@ -1341,14 +1329,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         sub.source_line = line;
         emit(current_block_, std::move(sub));
     }
-    {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {v_rc_dec, v_ctrl};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
-    }
+    emit_store_typed(v_ctrl, v_rc_dec, ir::IrType::I64, line);
     const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
     {
         ir::IrInstr cmp{};
@@ -1444,14 +1425,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         add.source_line = line;
         emit(current_block_, std::move(add));
     }
-    {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {v_rc_inc, v_ctrl};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
-    }
+    emit_store_typed(v_ctrl, v_rc_inc, ir::IrType::I64, line);
     {
         emit_br(skip_bb, line);
     }

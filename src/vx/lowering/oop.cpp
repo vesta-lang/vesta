@@ -1759,12 +1759,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             // slot vive en memoria host (seccion `gdata`).
             const ir::IrValueId v_addr =
                 emit_str_lit_addr(slot_idx, ln, /*host_ptr=*/true);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = sty;
-            st.operands = {v_init, v_addr};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr, v_init, sty, ln);
         }
     }
 

@@ -386,13 +386,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             emit(current_block_, std::move(or_));
                         }
                         // 7. STORE new -> addr
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ft;
-                        st.dst = ir::IR_NO_VALUE;
-                        st.operands = {v_new, addr};
-                        st.source_line = e->loc.line;
-                        emit(current_block_, std::move(st));
+                        emit_store_typed(addr, v_new, ft, e->loc.line);
                         return rhs;
                     }
                 }
@@ -446,14 +440,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                {
-                    ir::IrInstr st{};
-                    st.op = ir::IrOp::STORE;
-                    st.type = ir::IrType::I64;
-                    st.operands = {w, d_at};
-                    st.source_line = e->loc.line;
-                    emit(current_block_, std::move(st));
-                }
+                emit_store_typed(d_at, w, ir::IrType::I64, e->loc.line);
             }
             if (it_sl != tc_.struct_layouts().end() &&
                 it_sl->second.has_copy_hook) {
@@ -480,14 +467,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 ld.source_line = e->loc.line;
                 emit(current_block_, std::move(ld));
             }
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_ctrl, addr};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(addr, v_ctrl, ir::IrType::I64, e->loc.line);
             emit_shared_refcount_inc(addr, e->loc.line);
             return rhs;
         }
@@ -586,15 +566,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             // STORE u8: el char rhs se guarda truncado a 1 byte.
             v_val = cast_if_needed(v_val, fn_->values[v_val].type,
                                    ir::IrType::U8, e->loc.line);
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::U8;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_val, v_addr};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_addr, v_val, ir::IrType::U8, e->loc.line);
             return v_val;
         }
         const ir::IrValueId addr = lower_index_addr(ix);
@@ -675,15 +647,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     }
                     ir::IrValueId v_qw =
                         emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
-                    {
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.dst = ir::IR_NO_VALUE;
-                        st.operands = {v_qw, off_dst};
-                        st.source_line = e->loc.line;
-                        emit(current_block_, std::move(st));
-                    }
+                    emit_store_typed(off_dst, v_qw,
+                                     ir::IrType::I64, e->loc.line);
                 }
                 return addr;
             }
@@ -719,13 +684,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         }
         rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt,
                              e->value ? e->value->loc : e->loc);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = pt;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {rhs, addr};
-        st.source_line = e->loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, rhs, pt, e->loc.line);
         return rhs;
     }
     // Caso UnaryExpr(Deref, p): '*p = v' escribe a traves del puntero.
@@ -833,15 +792,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ir::IrValueId v_qw =
                             emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
                         // STORE al dst + q*8
-                        {
-                            ir::IrInstr st{};
-                            st.op = ir::IrOp::STORE;
-                            st.type = ir::IrType::I64;
-                            st.dst = ir::IR_NO_VALUE;
-                            st.operands = {v_qw, off_dst};
-                            st.source_line = e->loc.line;
-                            emit(current_block_, std::move(st));
-                        }
+                        emit_store_typed(off_dst, v_qw,
+                                         ir::IrType::I64, e->loc.line);
                     }
                     return addr;
                 }
@@ -876,13 +828,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                                     e->loc);
             }
             rhs = cast_if_needed(rhs, fn_->values[rhs].type, pt, e->loc.line);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = pt;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {rhs, addr};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(addr, rhs, pt, e->loc.line);
             return rhs;
         }
     }
@@ -927,15 +873,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::U8;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_ch, v_scr};
-                st.source_line = ln;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_scr, v_ch, ir::IrType::U8, ln);
             build_native_string_append_inplace(
                 v_slot, v_scr, emit_const(ir::IrType::I64, 1, ln), ln);
             return v_slot;
@@ -1077,12 +1015,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     emit_binop_ir(bop, v_cur, rhs,
                                   gfloat ? gprim : PrimitiveKind::I64, e->loc);
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = gty;
-            st.operands = {rhs, v_addr};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr, rhs, gty, ln);
             return rhs;
         }
     }
@@ -1145,12 +1078,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                 }
                 /* STORE rhs al slot. */
                 ir::IrValueId v_addr = emit_str_lit_addr(slot_idx, ln);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {rhs, v_addr};
-                st.source_line = ln;
-                emit(current_block_, std::move(st));
+                emit_store_typed(v_addr, rhs, ir::IrType::I64, ln);
                 return rhs;
             }
         }
@@ -1302,14 +1230,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ad.source_line = e->loc.line;
                         emit(current_block_, std::move(ad));
                     }
-                    {
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.operands = {w, d_at};
-                        st.source_line = e->loc.line;
-                        emit(current_block_, std::move(st));
-                    }
+                    emit_store_typed(d_at, w, ir::IrType::I64, e->loc.line);
                 }
                 return dst_addr;
             }

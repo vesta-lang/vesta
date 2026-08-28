@@ -98,13 +98,7 @@ void Lowering::emit_struct_field_defaults(ir::IrValueId base_addr,
             // deja el campo a 0.  Un default de bit field requeriria RMW.
             continue;
         }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir_ft;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, ir_ft, line);
     }
 }
 
@@ -219,13 +213,7 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
             error_at(il->loc, "lowering: init list no soporta bit fields aun");
             continue;
         }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir_ft;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, ir_ft, line);
     }
 }
 
@@ -299,14 +287,7 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {word, dst_at};
-            st.source_line = line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(dst_at, word, ir::IrType::I64, line);
     }
     // CALL method_label(tmp).
     {
@@ -384,14 +365,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {word, dst_at};
-            st.source_line = line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(dst_at, word, ir::IrType::I64, line);
     }
     // copia.__clone__()  (this = copy, misma memory class -> sin mismatch).
     emit_struct_method_on_host_field(copy, struct_name,
@@ -652,13 +626,7 @@ void Lowering::emit_struct_vptr_init(ir::IrValueId struct_addr,
     // entrada (load [vptr] = mov VM) lee la vtable correctamente.
     const ir::IrValueId v_vt = emit_str_lit_addr(vt_idx, line);
     // STORE %vt -> [struct_addr + 0]  (el vptr).
-    ir::IrInstr st{};
-    st.op = ir::IrOp::STORE;
-    st.type = ir::IrType::I64;
-    st.dst = ir::IR_NO_VALUE;
-    st.operands = {v_vt, struct_addr};
-    st.source_line = line;
-    emit(current_block_, std::move(st));
+    emit_store_typed(struct_addr, v_vt, ir::IrType::I64, line);
 }
 
 ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {

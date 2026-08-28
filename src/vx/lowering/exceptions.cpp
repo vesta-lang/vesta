@@ -1427,14 +1427,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
             // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
             fn_->values[v_dst_at].is_host_ptr =
                 fn_->values[sret_retbuf_].is_host_ptr;
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_tmp, v_dst_at};
-                st.source_line = src_line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_dst_at, v_tmp, ir::IrType::I64, src_line);
         }
     }
     // Emit cleanups (synchronized, etc.) y RET.

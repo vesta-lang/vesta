@@ -224,15 +224,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
 
     // --- STORE del bitmask al slot global __vx_cpu_features ---
     const ir::IrValueId v_gaddr = emit_str_lit_addr(slot, ln);
-    {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_feat, v_gaddr};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
-    }
+    emit_store_typed(v_gaddr, v_feat, ir::IrType::I64, ln);
 
     // --- RET void ---
     {
@@ -399,13 +391,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
                 fn_->asm_reg_bindings.push_back(std::move(b));
             }
             // STORE param -> alloca (carga el input en el reg fijado).
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {param, slot};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(slot, param, ir::IrType::I64, ln);
             return slot;
         };
         const ir::IrValueId s_dst =
@@ -491,13 +477,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         auto emit_store_fp = [&](const std::string &fn_name) {
             ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
             ir::IrValueId v_gaddr = emit_str_lit_addr(fp_slot, ln, true);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_addr, v_gaddr};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_gaddr, v_addr, ir::IrType::I64, ln);
         };
 
         // CPU dispatch Inc 4: si el usuario declaro @HelperOverride(memcpy),
@@ -774,13 +754,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         auto emit_store_fp = [&](const std::string &variant, uint64_t fp_slot) {
             ir::IrValueId v_addr = emit_label_addr(variant, ln);
             ir::IrValueId v_gaddr = emit_str_lit_addr(fp_slot, ln, true);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_addr, v_gaddr};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_gaddr, v_addr, ir::IrType::I64, ln);
         };
 
         // feat = LOAD i64 [__vx_cpu_features].
@@ -970,13 +944,7 @@ void Lowering::ensure_strdisp() {
     auto emit_store_fp = [&](uint64_t fp_slot, const std::string &fn_name) {
         ir::IrValueId v_addr = emit_label_addr(fn_name, ln);
         ir::IrValueId v_gaddr = emit_str_lit_addr(fp_slot, ln, true);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_addr, v_gaddr};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_gaddr, v_addr, ir::IrType::I64, ln);
     };
 
     // fp = override del usuario si lo hay; si no, el baseline.
@@ -1025,13 +993,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
     }
     {
         ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, source_line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_z, v_i_slot};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_i_slot, v_z, ir::IrType::I64, source_line);
     }
 
     // limit8 = len - 7 (el qword corre mientras i < limit8, i.e. i+8 <= len).
@@ -1090,15 +1052,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         ir::IrValueId v_dst = emit_ptr_add(dst_base, v_i, source_line);
         ir::IrValueId v_w =
             emit_load_typed(v_src, ir::IrType::I64, source_line);
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_w, v_dst};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_dst, v_w, ir::IrType::I64, source_line);
         ir::IrValueId v_i8 = fn_->new_value(ir::IrType::I64);
         {
             ir::IrValueId v_8 = emit_const(ir::IrType::I64, 8, source_line);
@@ -1110,15 +1064,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ad.source_line = source_line;
             emit(current_block_, std::move(ad));
         }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_i8, v_i_slot};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_i_slot, v_i8, ir::IrType::I64, source_line);
         /* La arista se anotaba desde `body` y el salto sale del bloque ACTUAL.
          * Hoy son el mismo, pero eso depende de que nada de lo de arriba abra
          * un bloque nuevo; asi la arista sale siempre de donde sale el salto. */
@@ -1169,15 +1115,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         ir::IrValueId v_dst = emit_ptr_add(dst_base, v_i, source_line);
         ir::IrValueId v_byte =
             emit_load_typed(v_src, ir::IrType::U8, source_line);
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::U8;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_byte, v_dst};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_dst, v_byte, ir::IrType::U8, source_line);
         ir::IrValueId v_i1 = fn_->new_value(ir::IrType::I64);
         {
             ir::IrValueId v_1 = emit_const(ir::IrType::I64, 1, source_line);
@@ -1189,15 +1127,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             ad.source_line = source_line;
             emit(current_block_, std::move(ad));
         }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_i1, v_i_slot};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_i_slot, v_i1, ir::IrType::I64, source_line);
         /* La arista se anotaba desde `body` y el salto sale del bloque ACTUAL.
          * Hoy son el mismo, pero eso depende de que nada de lo de arriba abra
          * un bloque nuevo; asi la arista sale siempre de donde sale el salto. */

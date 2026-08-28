@@ -161,14 +161,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                {
-                    ir::IrInstr st{};
-                    st.op = ir::IrOp::STORE;
-                    st.type = ir::IrType::I64;
-                    st.operands = {v_word, v_dst_p};
-                    st.source_line = e->loc.line;
-                    emit(current_block_, std::move(st));
-                }
+                emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
             }
             // Refcount inc-on-copy: si el payload es un shared<T> que viene de
             // COPIAR otra variable shared (IdentExpr, no shared_box/move), el
@@ -197,12 +190,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         } else {
             // Primitivo / raw-ptr / cfn / CLASS: STORE directo del VALOR al
             // box.
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = payload_t;
-            st.operands = {v_payload, v_box};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_box, v_payload, payload_t, e->loc.line);
         }
         out_value = v_box;
         return true;
@@ -318,22 +306,12 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                             v_dst = v_addr;
                         }
                         // STORE val at [v_dst].
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ft;
-                        st.operands = {v_casted, v_dst};
-                        st.source_line = il->elements[i]->loc.line;
-                        emit(current_block_, std::move(st));
+                        emit_store_typed(v_dst, v_casted,
+                                         ft, il->elements[i]->loc.line);
                     }
                     // 4. STORE host_ptr al slot+0 del unique<T>.
-                    {
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.operands = {v_host, v_slot};
-                        st.source_line = e->loc.line;
-                        emit(current_block_, std::move(st));
-                    }
+                    emit_store_typed(v_slot, v_host,
+                                     ir::IrType::I64, e->loc.line);
                     // 5. STORE deleter=0 (sentinel RAW_FREE) al slot+8.
                     {
                         const ir::IrValueId v_eight =
@@ -349,12 +327,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                         emit(current_block_, std::move(ad));
                         const ir::IrValueId v_zero =
                             emit_const(ir::IrType::I64, 0, e->loc.line);
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.operands = {v_zero, v_slot8};
-                        st.source_line = e->loc.line;
-                        emit(current_block_, std::move(st));
+                        emit_store_typed(v_slot8, v_zero,
+                                         ir::IrType::I64, e->loc.line);
                     }
                     out_value = v_slot;
                     return true;
@@ -517,14 +491,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                         ad.source_line = e->loc.line;
                         emit(current_block_, std::move(ad));
                     }
-                    {
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.operands = {v_word, v_dst_p};
-                        st.source_line = e->loc.line;
-                        emit(current_block_, std::move(st));
-                    }
+                    emit_store_typed(v_dst_p, v_word,
+                                     ir::IrType::I64, e->loc.line);
                 }
                 v_to_store = v_payload_ptr;
             } else if (payload_t != ir::IrType::PTR || payload_is_cfn ||
@@ -548,14 +516,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                     emit(current_block_, std::move(ins));
                 }
                 // STORE payload at [v_payload_ptr] (host memory).
-                {
-                    ir::IrInstr st{};
-                    st.op = ir::IrOp::STORE;
-                    st.type = payload_t;
-                    st.operands = {v_payload, v_payload_ptr};
-                    st.source_line = e->loc.line;
-                    emit(current_block_, std::move(st));
-                }
+                emit_store_typed(v_payload_ptr, v_payload,
+                                 payload_t, e->loc.line);
                 v_to_store = v_payload_ptr;
             }
             // STORE v_to_store at [v_slot+0].
@@ -563,14 +525,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             //   Para PTR (class/struct): v_to_store = host_ptr al objeto;
             //                            cleanup hace CALLVIRT dtor + skip
             //                            free.
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_to_store, v_slot};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_slot, v_to_store, ir::IrType::I64, e->loc.line);
             // STORE deleter=0 at [v_slot+8] (sentinel = RAW_FREE).
             {
                 const ir::IrValueId v_eight =
@@ -579,12 +534,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                     emit_ptr_add(v_slot, v_eight, e->loc.line);
                 const ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_zero, v_slot8};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(v_slot8, v_zero, ir::IrType::I64, e->loc.line);
             }
             fn_->values[v_slot].pointee_is_host_ptr = true;
             out_value = v_slot;
@@ -614,12 +564,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             {
                 const ir::IrValueId v_one =
                     emit_const(ir::IrType::I64, 1, e->loc.line);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_one, v_ctrl};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(v_ctrl, v_one, ir::IrType::I64, e->loc.line);
             }
             // STORE deleter=0 at [v_ctrl + 8] (placeholder; cleanup usa free
             // literal).
@@ -637,12 +582,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                 emit(current_block_, std::move(add));
                 const ir::IrValueId v_zero =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_zero, v_ctrl8};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(v_ctrl8, v_zero, ir::IrType::I64, e->loc.line);
             }
             // STORE payload at [v_ctrl + 16].
             {
@@ -657,22 +597,10 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                 add.operands = {v_ctrl, v_sixteen};
                 add.source_line = e->loc.line;
                 emit(current_block_, std::move(add));
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = payload_t;
-                st.operands = {v_payload, v_ctrl16};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(v_ctrl16, v_payload, payload_t, e->loc.line);
             }
             // STORE v_ctrl at [v_slot] (VM memory).
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_ctrl, v_slot};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_slot, v_ctrl, ir::IrType::I64, e->loc.line);
             fn_->values[v_slot].pointee_is_host_ptr = true;
             out_value = v_slot;
             return true;
@@ -719,14 +647,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         // Tier 1: slot 16 + STORE value@+0 + STORE deleter_addr@+8.  HEAP si
         // el unique va a un campo (unique_slot_buf), si no STACK.
         const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_payload, v_slot};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
         // STORE deleter address en slot+8.  Materializamos la
         // direccion via RAW_ASM: `mov {dst}, @Absolute("code.<fn>")`.
         // El assembler resuelve la direccion al linker time.
@@ -784,12 +705,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             add.operands = {v_slot, v_eight};
             add.source_line = e->loc.line;
             emit(current_block_, std::move(add));
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_deleter_addr, v_slot8};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_slot8, v_deleter_addr,
+                             ir::IrType::I64, e->loc.line);
         }
         // El slot contiene un valor con semantica de host_ptr / handle.
         fn_->values[v_slot].pointee_is_host_ptr = true;
@@ -886,24 +803,13 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                 const ir::IrValueId v_word =
                     emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
                 // STORE word -> [dst_p]  (host, movh por is_host_ptr).
-                {
-                    ir::IrInstr st{};
-                    st.op = ir::IrOp::STORE;
-                    st.type = ir::IrType::I64;
-                    st.operands = {v_word, v_dst_p};
-                    st.source_line = e->loc.line;
-                    emit(current_block_, std::move(st));
-                }
+                emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
                 // STORE 0 -> [src_p]  (zerifica origen, vm_mem).
                 {
                     const ir::IrValueId v_zero =
                         emit_const(ir::IrType::I64, 0, e->loc.line);
-                    ir::IrInstr st{};
-                    st.op = ir::IrOp::STORE;
-                    st.type = ir::IrType::I64;
-                    st.operands = {v_zero, v_src_p};
-                    st.source_line = e->loc.line;
-                    emit(current_block_, std::move(st));
+                    emit_store_typed(v_src_p, v_zero,
+                                     ir::IrType::I64, e->loc.line);
                 }
             }
             fn_->values[v_tmp].pointee_is_host_ptr = true;
@@ -1285,12 +1191,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         const ir::IrType payload_t = ir_type_from_primitive(inner.kind);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = payload_t;
-        st.operands = {v_v, v_b};
-        st.source_line = e->loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_b, v_v, payload_t, e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }

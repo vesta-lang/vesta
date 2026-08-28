@@ -1095,12 +1095,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         emit(current_block_, std::move(al));
 
         // STORE pre_loop (el VALOR original SSA) al slot.
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = vi.type;
-        st.operands = {pre, addr};
-        st.source_line = s->loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, pre, vi.type, s->loc.line);
 
         vi.addr = addr;
         vars.push_back(vi);
@@ -1334,14 +1329,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 fn_->values[v_dst_at].is_host_ptr =
                     fn_->values[sret_retbuf_].is_host_ptr;
                 // STORE i64 [dst+off] = tmp
-                {
-                    ir::IrInstr st{};
-                    st.op = ir::IrOp::STORE;
-                    st.type = ir::IrType::I64;
-                    st.operands = {v_tmp, v_dst_at};
-                    st.source_line = s->loc.line;
-                    emit(current_block_, std::move(st));
-                }
+                emit_store_typed(v_dst_at, v_tmp, ir::IrType::I64, s->loc.line);
             }
             // Vesta Embed (native_poo_): `return <ident_string>` (devolver
             // una variable/param string POR VALOR) hace MOVE: tras copiar

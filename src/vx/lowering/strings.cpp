@@ -295,13 +295,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                     ? v_scratch
                     : emit_ptr_add(v_scratch, emit_const(ir::IrType::I64, off, ln), ln);
             ir::IrValueId v_val = emit_const(ty, val, ln);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ty;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_dst};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_dst, v_val, ty, ln);
         };
         auto pack = [&](uint64_t pos, int n) {
             return pack_le(data, pos, n);
@@ -443,15 +437,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 emit(current_block_, std::move(al));
             }
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::U8;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_ch, v_scr};
-                st.source_line = ln;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_scr, v_ch, ir::IrType::U8, ln);
             build_native_string_append_inplace(
                 v_slot, v_scr, emit_const(ir::IrType::I64, 1, ln), ln);
             return true;
@@ -1117,13 +1103,7 @@ std::string Lowering::ensure_str_to_utf16_helper() {
         return v;
     };
     auto store_u16 = [&](ir::IrValueId addr, ir::IrValueId val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I16;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, val, ir::IrType::I16, ln);
     };
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
         return emit_ir_binop(op, a, b, ir::IrType::U64, ln);
@@ -1544,13 +1524,7 @@ void Lowering::emit_str_meta_sso(ir::IrValueId v_slot, ir::IrValueId v_len,
         ad.source_line = source_line;
         emit(current_block_, std::move(ad));
     }
-    ir::IrInstr st{};
-    st.op = ir::IrOp::STORE;
-    st.type = ir::IrType::U8;
-    st.dst = ir::IR_NO_VALUE;
-    st.operands = {v_len, v_addr23};
-    st.source_line = source_line;
-    emit(current_block_, std::move(st));
+    emit_store_typed(v_addr23, v_len, ir::IrType::U8, source_line);
 }
 
 void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
@@ -1560,13 +1534,7 @@ void Lowering::emit_str_meta_heap(ir::IrValueId v_slot, ir::IrValueId v_cap,
     // toca byte[23]=0 si cap < 2^56) y luego byte[23]=0x80 (U8).  El move
     // de un HEAP usa MEMCPY (no i64 LOADs) -> sin solape de forwarding.
     auto store = [&](ir::IrValueId addr, ir::IrValueId val, ir::IrType ty) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, val, ty, source_line);
     };
     store(emit_ptr_add(v_slot, (uint64_t) (16), source_line), v_cap, ir::IrType::I64);
     store(emit_ptr_add(v_slot, (uint64_t) (23), source_line), emit_const(ir::IrType::U8, 0x80, source_line),
@@ -1622,13 +1590,7 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
         an.source_line = source_line;
         emit(current_block_, std::move(an));
     }
-    ir::IrInstr st{};
-    st.op = ir::IrOp::STORE;
-    st.type = ir::IrType::I64;
-    st.dst = ir::IR_NO_VALUE;
-    st.operands = {v_new, v_slot};
-    st.source_line = source_line;
-    emit(current_block_, std::move(st));
+    emit_store_typed(v_slot, v_new, ir::IrType::I64, source_line);
 }
 
 ir::IrValueId Lowering::emit_folded_string_blob(const std::string &utf8,
@@ -1864,13 +1826,7 @@ std::string Lowering::ensure_ctoa_helper() {
             ad.source_line = 0;
             emit(current_block_, std::move(ad));
         }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_dst};
-        st.source_line = 0;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_dst, v_val, ir::IrType::U8, 0);
     };
     auto ret_len = [&](uint64_t len) {
         ir::IrInstr rt{};

@@ -149,12 +149,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             if (native_poo_) fn_->values[fv].is_host_ptr = true;
             {
                 // [fv+0] = fn_addr
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {code, fv};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(fv, code, ir::IrType::I64, e->loc.line);
             }
             {
                 // [fv+8] = 0 (env vacio)
@@ -171,12 +166,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 if (native_poo_) fn_->values[fv8].is_host_ptr = true;
                 const ir::IrValueId z =
                     emit_const(ir::IrType::I64, 0, e->loc.line);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {z, fv8};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(fv8, z, ir::IrType::I64, e->loc.line);
             }
             return fv;
         }
@@ -247,14 +237,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
         }
         if (native_poo_) fn_->values[fv_addr].is_host_ptr = true;
         // [fv_addr + 0] = fn_addr (la direccion cruda).
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_op, fv_addr};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(fv_addr, v_op, ir::IrType::I64, e->loc.line);
         // [fv_addr + 8] = 0 (env vacio).
         {
             const ir::IrValueId fv8 = fn_->new_value(ir::IrType::PTR);
@@ -269,12 +252,7 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             emit(current_block_, std::move(ad));
             if (native_poo_) fn_->values[fv8].is_host_ptr = true;
             const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {z, fv8};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(fv8, z, ir::IrType::I64, e->loc.line);
         }
         return fv_addr;
     }
@@ -1363,12 +1341,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 fa->base->result_type.kind == PrimitiveKind::STRUCT) {
                 const ir::IrValueId addr = lower_field_addr(fa);
                 if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = vt;
-                st.operands = {new_val, addr};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(addr, new_val, vt, e->loc.line);
                 return is_pre ? new_val : old_val;
             }
             /* Campo ESTATICO (`Clase.campo++`): la base no es una instancia
@@ -1405,12 +1378,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             ld.source_line = e->loc.line;
             emit(current_block_, std::move(ld));
             const ir::IrValueId new_val = compute_new(old_val);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = vt;
-            st.operands = {new_val, addr};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(addr, new_val, vt, e->loc.line);
             return is_pre ? new_val : old_val;
         }
         // UnaryExpr Deref (*p++).
@@ -1428,12 +1396,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
                 ld.source_line = e->loc.line;
                 emit(current_block_, std::move(ld));
                 const ir::IrValueId new_val = compute_new(old_val);
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = vt;
-                st.operands = {new_val, addr};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(addr, new_val, vt, e->loc.line);
                 return is_pre ? new_val : old_val;
             }
         }

@@ -38,13 +38,7 @@ ir::IrValueId Lowering::build_native_string_from_char(ir::IrValueId v_char,
     const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
 
     auto store_u8 = [&](ir::IrValueId v_addr, ir::IrValueId v_val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, ir::IrType::U8, source_line);
     };
 
     // byte[0] = char.
@@ -551,13 +545,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         emit_store_i64(addr, val, source_line);
     };
     auto store_byte = [&](ir::IrValueId addr, ir::IrValueId val) {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::U8;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {val, addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, val, ir::IrType::U8, source_line);
     };
     auto bin = [&](ir::IrOp op, ir::IrValueId a, ir::IrValueId b) {
         return emit_ir_binop(op, a, b, ir::IrType::U64, source_line);

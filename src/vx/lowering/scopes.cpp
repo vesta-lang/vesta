@@ -140,13 +140,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
                 emit(current_block_, std::move(is));
                 fn_->values[addr].is_host_ptr = true;
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = sit->second.ld_type;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v, addr};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(addr, v, sit->second.ld_type, source_line);
             return;
         }
     }

@@ -1949,15 +1949,7 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
                 ad.source_line = e->loc.line;
                 emit(current_block_, std::move(ad));
             }
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_msg, v_addr};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_addr, v_msg, ir::IrType::I64, e->loc.line);
             ssa_concrete_class_[v_obj] = e->class_name;
             return v_obj;
         }
@@ -2533,12 +2525,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
                 v = cast_if_needed(v, vt, ir::IrType::I64, e->loc.line);
             }
 
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v, addr_i};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(addr_i, v, ir::IrType::I64, e->loc.line);
         }
     }
 
@@ -2583,14 +2570,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
     // -------------------------------------------------------------
     // 4. STORE fn_addr en [fv_addr+0] y env_addr en [fv_addr+8].
     // -------------------------------------------------------------
-    {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {fn_addr, fv_addr};
-        st.source_line = e->loc.line;
-        emit(current_block_, std::move(st));
-    }
+    emit_store_typed(fv_addr, fn_addr, ir::IrType::I64, e->loc.line);
     {
         ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
         // Si el slot es heap (RAW_ALLOC, env_owned_by_field), el STORE a
@@ -2605,12 +2585,7 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
         ad.source_line = e->loc.line;
         emit(current_block_, std::move(ad));
 
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {env_addr, fv_plus_8};
-        st.source_line = e->loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(fv_plus_8, env_addr, ir::IrType::I64, e->loc.line);
     }
 
     // El SSA value de la lambda es la direccion del slot de 16 bytes.

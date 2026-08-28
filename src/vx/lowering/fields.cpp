@@ -918,12 +918,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
             const uint64_t slot = get_or_create_runtime_global_slot(
                 "__static_" + base_id->name + "_" + target->field_name, 8);
             ir::IrValueId v_addr = emit_str_lit_addr(slot, loc.line, true);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = field_ir;
-            st.operands = {rhs_cast, v_addr};
-            st.source_line = loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr, rhs_cast, field_ir, loc.line);
             return rhs_cast;
         }
         // 1) Sprint 5: findclass via IR ops.
@@ -1084,14 +1079,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 ad.source_line = loc.line;
                 emit(current_block_, std::move(ad));
             }
-            {
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.operands = {v_word, v_dst_at};
-                st.source_line = loc.line;
-                emit(current_block_, std::move(st));
-            }
+            emit_store_typed(v_dst_at, v_word, ir::IrType::I64, loc.line);
         }
         // Copy-hook (ruta B): si el campo struct declara `__clone__`, este
         // store es una COPIA -> tras el memcpy, `campo.__clone__()` aplica el
@@ -1133,14 +1121,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
             emit(current_block_, std::move(ld));
         }
         // 3. STORE ctrl al campo.
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_ctrl, addr};
-            st.source_line = loc.line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(addr, v_ctrl, ir::IrType::I64, loc.line);
         // 4. inc del refcount (el campo es un dueno mas).
         emit_shared_refcount_inc(addr, loc.line);
         return rhs;
@@ -1157,13 +1138,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     if (ftyp.kind == PrimitiveKind::CLASS) {
         v_to_store = emit_gc_handle_for_ptr(rhs_cast, loc.line);
     }
-    ir::IrInstr st{};
-    st.op = ir::IrOp::STORE;
-    st.type = ir_t;
-    st.dst = ir::IR_NO_VALUE;
-    st.operands = {v_to_store, addr};
-    st.source_line = loc.line;
-    emit(current_block_, std::move(st));
+    emit_store_typed(addr, v_to_store, ir_t, loc.line);
     // Write-barrier generacional old->young.  Al guardar una referencia GC
     // (campo CLASS) en el campo de un objeto que puede ser OLD, registrar el
     // CONTENEDOR en el remembered_set del GC para que el minor_gc encuentre el

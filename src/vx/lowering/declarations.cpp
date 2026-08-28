@@ -242,13 +242,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
                 v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_elem;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_addr_i};
-            st.source_line = vd->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
         }
         bind(vd->name, addr);
         return;
@@ -305,13 +299,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
                 v_addr_w = emit_ptr_add(addr, v_off, vd->loc.line);
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ft_zero;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_zero, v_addr_w};
-            st.source_line = vd->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr_w, v_zero, ft_zero, vd->loc.line);
         }
         for (size_t i = 0; i < il->elements.size(); ++i) {
             const StructFieldInfo *fi = nullptr;
@@ -474,22 +462,10 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     or_.source_line = vd->loc.line;
                     emit(current_block_, std::move(or_));
                 }
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir_ft;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {v_new, v_addr};
-                st.source_line = vd->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(v_addr, v_new, ir_ft, vd->loc.line);
                 continue;
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_ft;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_addr};
-            st.source_line = vd->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr, v_val, ir_ft, vd->loc.line);
         }
         bind(vd->name, addr);
         return;
@@ -687,14 +663,8 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                         emit(current_block_, std::move(ad));
                     }
                     // STORE i64 [dst+off] = word
-                    {
-                        ir::IrInstr st{};
-                        st.op = ir::IrOp::STORE;
-                        st.type = ir::IrType::I64;
-                        st.operands = {v_word, v_dst_at};
-                        st.source_line = vd->loc.line;
-                        emit(current_block_, std::move(st));
-                    }
+                    emit_store_typed(v_dst_at, v_word,
+                                     ir::IrType::I64, vd->loc.line);
                 }
             }
         }
@@ -816,12 +786,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
                 v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_elem;
-            st.operands = {v_val, v_addr_i};
-            st.source_line = vd->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
         }
         // Zerificar el resto (semantica C: padding a cero).
         for (uint32_t i = str_n; i < arr_n; ++i) {
@@ -829,12 +794,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             ir::IrValueId v_off = emit_const(
                 ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
             ir::IrValueId v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_elem;
-            st.operands = {v_zero, v_addr_i};
-            st.source_line = vd->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr_i, v_zero, ir_elem, vd->loc.line);
         }
         bind(vd->name, addr);
         return;
@@ -910,13 +870,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
                 v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir_elem;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_addr_i};
-            st.source_line = vd->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
         }
         bind(vd->name, addr);
         return;
@@ -1112,13 +1066,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         }
         if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, vd->loc.line);
 
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = vt;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v0, addr};
-        st.source_line = vd->loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, v0, vt, vd->loc.line);
         return;
     }
 

@@ -406,13 +406,7 @@ void Lowering::emit_zero_fill(ir::IrValueId addr, uint64_t size_bytes,
             emit(current_block_, std::move(ad));
         }
         ir::IrValueId v_zero = emit_const(ty, 0, line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_zero, v_addr};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_zero, ty, line);
     };
     /* A partir de cierto tamano se EMITE EL HECHO (`memset`) en vez de
      * desplegarlo.  Desplegar destruye la semantica "esta region se pone a
@@ -702,14 +696,7 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_word, v_dst_at};
-            st.source_line = line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_dst_at, v_word, ir::IrType::I64, line);
     }
 }
 
@@ -1190,14 +1177,7 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
     // 3. env_addr = 0 (sin captures; el callee no debe leer r14).
     ir::IrValueId env_addr = emit_const(ir::IrType::I64, 0, line);
     // 4. STORE fn_addr en [fv_addr+0].
-    {
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {fn_addr, fv_addr};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
-    }
+    emit_store_typed(fv_addr, fn_addr, ir::IrType::I64, line);
     // 5. STORE env_addr en [fv_addr+8].
     {
         ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
@@ -1210,12 +1190,7 @@ ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
         ad.source_line = line;
         emit(current_block_, std::move(ad));
 
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {env_addr, fv_plus_8};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(fv_plus_8, env_addr, ir::IrType::I64, line);
     }
     return fv_addr;
 }
@@ -1604,14 +1579,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {w, d_at};
-            st.source_line = line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(d_at, w, ir::IrType::I64, line);
     }
 }
 
@@ -2142,13 +2110,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             emit(current_block_, std::move(ad));
         }
         ir::IrValueId v_val = emit_const(ty, val, source_line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ty;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_dst};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_dst, v_val, ty, source_line);
     };
     auto pack = [](const std::vector<uint8_t> &data, uint64_t pos,
                     int n) { return pack_le(data, pos, n); };
@@ -2249,13 +2211,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
         auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
             ir::IrValueId v_dst = buf_at(off);
             ir::IrValueId v_val = emit_const(ty, val, source_line);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ty;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v_val, v_dst};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_dst, v_val, ty, source_line);
         };
         // Empaquetar `n` bytes de data[pos..] en un entero little-endian.
         auto pack = [&](uint64_t pos, int n) {
@@ -2294,13 +2250,7 @@ Lowering::build_native_string_from_literal(ast::StringLitExpr *slit,
             ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
             v_addr = emit_ptr_add(v_slot, v_off, source_line);
         }
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, ir::IrType::I64, source_line);
     };
     store_field(0, v_buf);
     store_field(8, emit_const(ir::IrType::I64, len, source_line));

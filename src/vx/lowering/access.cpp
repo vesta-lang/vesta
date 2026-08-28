@@ -565,12 +565,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
         if (native_poo_) fn_->values[fv].is_host_ptr = true;
         {
             // [fv+0] = fn_addr
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {code, fv};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(fv, code, ir::IrType::I64, e->loc.line);
         }
         {
             // [fv+8] = 0 (env vacio)
@@ -586,12 +581,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             emit(current_block_, std::move(ad));
             if (native_poo_) fn_->values[fv8].is_host_ptr = true;
             const ir::IrValueId z = emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {z, fv8};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(fv8, z, ir::IrType::I64, e->loc.line);
         }
         return fv;
     }

@@ -328,14 +328,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
             emit(current_block_, std::move(al));
         }
         // STORE i64 v_val en v_buf.
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_val, v_buf};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
-        }
+        emit_store_typed(v_buf, v_val, ir::IrType::I64, e->loc.line);
         // msgsend r_pid, r_addr, r_len  -- usar IR op MSGSEND (0xD0) en lugar
         // de RAW_ASM.  Devuelve bool en R0 (1=ok, 0=error).
         const ir::IrValueId v_len = emit_const(ir::IrType::I64, 8, e->loc.line);

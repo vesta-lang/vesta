@@ -109,12 +109,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             stack_alloc_buf(buf_sz, e->loc.line, /*host_memory=*/true);
         // Store flag = 1 at +0.
         const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, e->loc.line);
-        ir::IrInstr st0{};
-        st0.op = ir::IrOp::STORE;
-        st0.type = ir::IrType::I64;
-        st0.operands = {v_one, v_buf};
-        st0.source_line = e->loc.line;
-        emit(current_block_, std::move(st0));
+        emit_store_typed(v_buf, v_one, ir::IrType::I64, e->loc.line);
         // Compute buf+8 and store payload there.
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
@@ -141,12 +136,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             emit(current_block_, std::move(mc));
         } else {
             const ir::IrType payload_t = fn_->values[v_payload].type;
-            ir::IrInstr st1{};
-            st1.op = ir::IrOp::STORE;
-            st1.type = payload_t;
-            st1.operands = {v_payload, v_buf8};
-            st1.source_line = e->loc.line;
-            emit(current_block_, std::move(st1));
+            emit_store_typed(v_buf8, v_payload, payload_t, e->loc.line);
         }
         out_value = v_buf;
         return true;
@@ -175,12 +165,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             stack_alloc_buf(none_sz, e->loc.line, /*host_memory=*/true);
         const ir::IrValueId v_zero =
             emit_const(ir::IrType::I64, 0, e->loc.line);
-        ir::IrInstr st0{};
-        st0.op = ir::IrOp::STORE;
-        st0.type = ir::IrType::I64;
-        st0.operands = {v_zero, v_buf};
-        st0.source_line = e->loc.line;
-        emit(current_block_, std::move(st0));
+        emit_store_typed(v_buf, v_zero, ir::IrType::I64, e->loc.line);
         out_value = v_buf;
         return true;
     }
@@ -221,12 +206,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         // Tag.
         const ir::IrValueId v_tag =
             emit_const(ir::IrType::I64, is_Ok ? 1 : 0, e->loc.line);
-        ir::IrInstr st0{};
-        st0.op = ir::IrOp::STORE;
-        st0.type = ir::IrType::I64;
-        st0.operands = {v_tag, v_buf};
-        st0.source_line = e->loc.line;
-        emit(current_block_, std::move(st0));
+        emit_store_typed(v_buf, v_tag, ir::IrType::I64, e->loc.line);
         // Payload offset: V en +8 (Ok), E en +16 (Err).
         const uint64_t off = is_Ok ? 8 : 16;
         const ir::IrValueId v_off =
@@ -235,12 +215,7 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
         const ir::IrType payload_t = fn_->values[v_payload].type;
-        ir::IrInstr st1{};
-        st1.op = ir::IrOp::STORE;
-        st1.type = payload_t;
-        st1.operands = {v_payload, v_at};
-        st1.source_line = e->loc.line;
-        emit(current_block_, std::move(st1));
+        emit_store_typed(v_at, v_payload, payload_t, e->loc.line);
         out_value = v_buf;
         return true;
     }

@@ -232,13 +232,7 @@ void Lowering::fill_comptime_struct_into(ir::IrValueId base_addr,
         // Campo escalar: constante + STORE en la direccion del campo.
         const ir::IrType ir_ft = ir_type_from_primitive(fi.type.kind);
         const ir::IrValueId v_val = emit_const(ir_ft, (uint64_t)cv.value, line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir_ft;
-        st.dst = ir::IR_NO_VALUE;
-        st.operands = {v_val, v_addr};
-        st.source_line = line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, ir_ft, line);
     }
 }
 
@@ -386,14 +380,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                     ad.source_line = ln;
                     emit(current_block_, std::move(ad));
                 }
-                {
-                    ir::IrInstr st2{};
-                    st2.op = ir::IrOp::STORE;
-                    st2.type = ir::IrType::I64;
-                    st2.operands = {v_w, v_d};
-                    st2.source_line = ln;
-                    emit(current_block_, std::move(st2));
-                }
+                emit_store_typed(v_d, v_w, ir::IrType::I64, ln);
             }
             emit_struct_field_defaults(var_addr, *agg_lay, ln,
                                        /*only_non_comptime=*/true);
@@ -406,23 +393,13 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         const ir::IrValueId iv = lower_expr(vd->init.get());
         if (iv != ir::IR_NO_VALUE) {
             const ir::IrValueId var_addr = emit_addr(slot);
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ld;
-            st.operands = {iv, var_addr};
-            st.source_line = ln;
-            emit(current_block_, std::move(st));
+            emit_store_typed(var_addr, iv, ld, ln);
         }
     }
     {
         const ir::IrValueId one = emit_const(ir::IrType::I64, 1, ln);
         const ir::IrValueId addr_done2 = emit_addr(done_slot);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {one, addr_done2};
-        st.source_line = ln;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr_done2, one, ir::IrType::I64, ln);
     }
     /* La arista se anotaba desde `init_bb` y el salto sale del bloque ACTUAL.
      * Hoy son el mismo -- nada entre medias abre un bloque nuevo --, pero dejaba
@@ -599,12 +576,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
     {
         ir::IrValueId tag_v = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(var->tag), loc.line);
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {tag_v, addr};
-        st.source_line = loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr, tag_v, ir::IrType::I64, loc.line);
     }
 
     // 3. STORE de cada payload arg en offset 8 + 8*i (promovido a i64).
@@ -631,12 +603,7 @@ ir::IrValueId Lowering::lower_enum_constructor(
         // unifica el patron con Some/Ok/value/error/unwrap.
         fn_->values[addr_i].is_host_ptr = fn_->values[addr].is_host_ptr;
 
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::I64;
-        st.operands = {v, addr_i};
-        st.source_line = loc.line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(addr_i, v, ir::IrType::I64, loc.line);
     }
 
     // El SSA value de la expresion es la direccion del slot.
@@ -737,12 +704,7 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
         emit(current_block_, std::move(add));
         fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
 
-        ir::IrInstr st{};
-        st.op = ir::IrOp::STORE;
-        st.type = wt;
-        st.operands = {v_val, v_addr};
-        st.source_line = source_line;
-        emit(current_block_, std::move(st));
+        emit_store_typed(v_addr, v_val, wt, source_line);
     }
     return true;
 }

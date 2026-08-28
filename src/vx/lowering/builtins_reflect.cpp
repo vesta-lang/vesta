@@ -177,13 +177,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         al.source_line = e->loc.line;
         emit(current_block_, std::move(al));
         // STORE v_cls en buf+0 (8 bytes).
-        ir::IrInstr st0{};
-        st0.op = ir::IrOp::STORE;
-        st0.type = ir::IrType::I64;
-        st0.dst = ir::IR_NO_VALUE;
-        st0.operands = {v_cls, v_buf};
-        st0.source_line = e->loc.line;
-        emit(current_block_, std::move(st0));
+        emit_store_typed(v_buf, v_cls, ir::IrType::I64, e->loc.line);
         // STORE name_addr en buf+8.  Para esto necesitamos un puntero
         // a buf+8 -- usamos ADD.
         const ir::IrValueId v_eight =
@@ -191,13 +185,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_eight, e->loc.line);
         // Cargar name_addr via STR_LIT_ADDR.
         const ir::IrValueId v_name = emit_str_lit_addr(name_idx, e->loc.line);
-        ir::IrInstr st8{};
-        st8.op = ir::IrOp::STORE;
-        st8.type = ir::IrType::I64;
-        st8.dst = ir::IR_NO_VALUE;
-        st8.operands = {v_name, v_buf8};
-        st8.source_line = e->loc.line;
-        emit(current_block_, std::move(st8));
+        emit_store_typed(v_buf8, v_name, ir::IrType::I64, e->loc.line);
         // STORE name_len en buf+16.
         const ir::IrValueId v_sixteen =
             emit_const(ir::IrType::I64, 16, e->loc.line);
@@ -205,13 +193,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
             emit_ptr_add(v_buf, v_sixteen, e->loc.line);
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
-        ir::IrInstr st16{};
-        st16.op = ir::IrOp::STORE;
-        st16.type = ir::IrType::I64;
-        st16.dst = ir::IR_NO_VALUE;
-        st16.operands = {v_len, v_buf16};
-        st16.source_line = e->loc.line;
-        emit(current_block_, std::move(st16));
+        emit_store_typed(v_buf16, v_len, ir::IrType::I64, e->loc.line);
         // findfield via RAW_ASM: r12 = buf, dst = SSA capturado con {dst}.
         // El reg de v_buf debe ir a r12; lo movemos via patron MOV.
         // Mas simple: emitimos `mov r12, <reg_v_buf>` mediante MOV IR
@@ -281,27 +263,13 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
             emit(current_block_, std::move(al));
         }
         // [+0] class_ptr.
-        {
-            ir::IrInstr st0{};
-            st0.op = ir::IrOp::STORE;
-            st0.type = ir::IrType::I64;
-            st0.operands = {v_cls, v_buf};
-            st0.source_line = e->loc.line;
-            emit(current_block_, std::move(st0));
-        }
+        emit_store_typed(v_buf, v_cls, ir::IrType::I64, e->loc.line);
         // [+8] name_addr.
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
         const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_eight, e->loc.line);
         const ir::IrValueId v_name = emit_str_lit_addr(name_idx, e->loc.line);
-        {
-            ir::IrInstr st8{};
-            st8.op = ir::IrOp::STORE;
-            st8.type = ir::IrType::I64;
-            st8.operands = {v_name, v_buf8};
-            st8.source_line = e->loc.line;
-            emit(current_block_, std::move(st8));
-        }
+        emit_store_typed(v_buf8, v_name, ir::IrType::I64, e->loc.line);
         // [+16] name_len.
         const ir::IrValueId v_sixteen =
             emit_const(ir::IrType::I64, 16, e->loc.line);
@@ -309,14 +277,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
             emit_ptr_add(v_buf, v_sixteen, e->loc.line);
         const ir::IrValueId v_len = emit_const(
             ir::IrType::I64, static_cast<uint64_t>(name_len), e->loc.line);
-        {
-            ir::IrInstr st16{};
-            st16.op = ir::IrOp::STORE;
-            st16.type = ir::IrType::I64;
-            st16.operands = {v_len, v_buf16};
-            st16.source_line = e->loc.line;
-            emit(current_block_, std::move(st16));
-        }
+        emit_store_typed(v_buf16, v_len, ir::IrType::I64, e->loc.line);
         out_value = emit_findmethod(v_buf, e->loc.line);
         return true;
     }
