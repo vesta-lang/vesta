@@ -238,6 +238,14 @@ add_library(vx_lib STATIC
     # la parte que ORQUESTA -- que se emite, en que orden, y que hay que
     # generar aunque nadie lo escribiera -- no la que traduce.
     lowering/module.cpp
+    # Mover bloques de memoria y elegir COMO segun la maquina que ejecute:
+    # copiar no tiene una forma buena sino varias, y cual es la mejor no se
+    # sabe al compilar.  Se emiten varias y se pregunta una vez al arrancar.
+    lowering/memory_ops.cpp
+    # Llegar a un campo: el de un objeto (desplazamiento sabido al compilar) y
+    # el de una VISTA sobre bytes ajenos, donde el desplazamiento puede depender
+    # de los campos anteriores y el orden de bytes no ser el de esta maquina.
+    lowering/fields.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
