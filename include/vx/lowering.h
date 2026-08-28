@@ -654,6 +654,48 @@ class Lowering {
      */
     bool try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type);
 
+    /**
+     * @brief Asigna a un campo: `obj.campo = v`.
+     *
+     * Dos receptores muy distintos comparten sintaxis.  En una clase el campo
+     * puede ser estatico -- y entonces no hay objeto que mirar --, puede ser
+     * una propiedad con su metodo de escritura, y con herencia de por medio el
+     * desplazamiento sale de la clase que de verdad lo declara.  En un struct
+     * es base mas desplazamiento, sin nada que resolver en ejecucion.
+     *
+     * @param e   La asignacion.
+     * @param out Donde dejar el valor asignado.
+     * @return @c true si el destino era un campo y quedo bajado.
+     */
+    bool try_lower_assign_to_field(ast::AssignExpr *e, ir::IrValueId &out);
+
+    /**
+     * @brief Asigna a un elemento: `arr[i] = v`.
+     *
+     * Es escribir en la direccion del elemento, que sale del mismo calculo que
+     * leerlo.  Con dos formas que no lo son: una clase o struct puede definir
+     * su metodo de escritura por indice, y una coleccion primitiva escribe por
+     * su funcion nativa, no por direccion.
+     *
+     * @param e   La asignacion.
+     * @param out Donde dejar el valor asignado.
+     * @return @c true si el destino era un indice y quedo bajado.
+     */
+    bool try_lower_assign_to_index(ast::AssignExpr *e, ir::IrValueId &out);
+
+    /**
+     * @brief Asigna a traves de un puntero: `*p = v`.
+     *
+     * Lo unico que hay que decidir es de que ancho es la escritura -- lo dice
+     * el tipo apuntado -- y si va a memoria del anfitrion o de la maquina, que
+     * lo dice el propio puntero.
+     *
+     * @param e   La asignacion.
+     * @param out Donde dejar el valor asignado.
+     * @return @c true si el destino era un desreferenciado y quedo bajado.
+     */
+    bool try_lower_assign_to_deref(ast::AssignExpr *e, ir::IrValueId &out);
+
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
                             uint32_t source_line);
