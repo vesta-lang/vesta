@@ -268,6 +268,23 @@ class Lowering {
     bool try_lower_runtime_builtins(ast::CallExpr *e, const std::string &name,
                                     ir::IrValueId &out_value);
 
+    /**
+     * @brief Intenta bajar una llamada como uno de los builtins que suponen
+     *        que hay ALGUIEN MAS: memoria compartida, atomicos, buzones,
+     *        futuros.
+     *
+     * Lo que los une no es lo que hacen sino con quien: todos existen porque
+     * lo que un proceso escribe lo tiene que ver otro, y en el orden correcto.
+     * De ahi que `share` no reserve memoria sino que la saque del monton
+     * privado, y que un atomico no sume sino que sume SIN dejar ver el estado
+     * a medias.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_concurrent_builtins(ast::CallExpr *e,
+                                       const std::string &name,
+                                       ir::IrValueId &out_value);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);

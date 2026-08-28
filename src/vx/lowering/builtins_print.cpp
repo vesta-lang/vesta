@@ -102,6 +102,16 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
     const bool is_print_ptr = (name == "print_ptr");
     const bool is_print_gchandle = (name == "print_gchandle");
     const bool is_print_pad = (name == "print_pad");
+    // Secuencias de control del terminal (escapes VT100 fijos): sin valor que
+    // formatear, pero salen por la misma primitiva que todo lo de arriba.
+    const bool is_term_clear = (name == "term_clear");
+    const bool is_term_clear_line = (name == "term_clear_line");
+    const bool is_term_move = (name == "term_move");
+    const bool is_term_save_cursor = (name == "term_save_cursor");
+    const bool is_term_restore_cursor = (name == "term_restore_cursor");
+    const bool is_term_hide_cursor = (name == "term_hide_cursor");
+    const bool is_term_show_cursor = (name == "term_show_cursor");
+    const bool is_term_reset = (name == "term_reset");
 
     /* Salida rapida: si no es de esta familia no se monta nada de lo de abajo.
      * Antes esto no hacia falta porque todo vivia en la misma funcion; ahora
@@ -110,7 +120,10 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
           is_gc_finalize_all || is_print_int || is_print_uint || is_print_hex ||
           is_print_float || is_print_bool || is_print_char || is_print_color ||
           is_print_cstr || is_print_bin || is_print_oct || is_print_ptr ||
-          is_print_gchandle || is_print_pad))
+          is_print_gchandle || is_print_pad || is_term_clear ||
+          is_term_clear_line || is_term_move || is_term_save_cursor ||
+          is_term_restore_cursor || is_term_hide_cursor ||
+          is_term_show_cursor || is_term_reset))
         return false;
 
     auto emit_print_newline = [&](uint32_t line) {
@@ -1121,6 +1134,92 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         ins.operands = {v};
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+    /* Y las secuencias de control del terminal: mover el cursor, limpiar,
+     * ocultarlo.  No se parecen a imprimir un valor -- no hay valor que
+     * formatear -- pero salen por la misma primitiva, asi que separarlas
+     * seria partir la familia por la mitad. */
+    if (is_term_clear) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "term_clear: no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        emit_print_string_literal("\x1b[2J\x1b[H", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_clear_line) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "term_clear_line: no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        emit_print_string_literal("\x1b[2K", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_save_cursor) {
+        emit_print_string_literal("\x1b[s", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_restore_cursor) {
+        emit_print_string_literal("\x1b[u", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_hide_cursor) {
+        emit_print_string_literal("\x1b[?25l", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_show_cursor) {
+        emit_print_string_literal("\x1b[?25h", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_reset) {
+        // Reset all attributes (color, style, bg, fg).
+        emit_print_string_literal("\x1b[0m", e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (is_term_move) {
+        if (e->args.size() != 2 || !e->args[0] || !e->args[1]) {
+            error_at(e->loc, "term_move: requiere 2 argumentos (row, col)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // Emite "\x1b[" + row + ";" + col + "H" usando print + print_int.
+        emit_print_string_literal("\x1b[", e->loc.line);
+        // Sintetizar print_int(row) y print_int(col) reusando
+        // try_lower_builtin_call con args sintetizados.
+        for (int i = 0; i < 2; ++i) {
+            const ir::IrValueId v = lower_expr(e->args[i].get());
+            if (v == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            // CALLN vio_print_int(v).
+            out_mod_->register_native_import(
+                std::string("stdlib/native/io/vesta_io"), "vio_print_int");
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ir::IrType::VOID;
+            ins.dst = ir::IR_NO_VALUE;
+            ins.func_name = "stdlib/native/io/vesta_io:vio_print_int";
+            ins.operands.push_back(v);
+            ins.source_line = e->loc.line;
+            emit(current_block_, std::move(ins));
+            if (i == 0) {
+                emit_print_string_literal(";", e->loc.line);
+            }
+        }
+        emit_print_string_literal("H", e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }

@@ -190,6 +190,10 @@ add_library(vx_lib STATIC
     # y modulos cargados en marcha.  Ninguno se resuelve dentro del programa, y
     # lo que devuelven es memoria del ANFITRION -- hay que marcarlo.
     lowering/builtins_runtime.cpp
+    # Builtins que suponen que hay ALGUIEN MAS: memoria compartida, atomicos,
+    # buzones y futuros.  Existen porque lo que uno escribe lo tiene que ver
+    # el otro, y en el orden correcto.
+    lowering/builtins_concurrent.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.

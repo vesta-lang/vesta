@@ -75,6 +75,10 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
      * fibras, modulos cargados en marcha -- tampoco se parece al resto:
      * ninguno se resuelve dentro del programa. */
     if (try_lower_runtime_builtins(e, name, out_value)) return true;
+    /* Y lo que supone que hay ALGUIEN MAS: memoria compartida, atomicos,
+     * buzones y futuros.  Todos existen porque lo que uno escribe lo tiene
+     * que ver el otro, y en el orden correcto. */
+    if (try_lower_concurrent_builtins(e, name, out_value)) return true;
 
     // -----------------------------------------------------------------
     // AOT 2c (dev OS): simbolos de seccion.  section_start/end(".x") -> void*,
@@ -1211,17 +1215,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Conjunto de nombres builtin reconocidos.  Si el nombre no esta
     // aqui devolvemos false para que lower_call siga con la ruta
     // generica (CALL a una funcion del usuario).
-    // Builtins de terminal/ANSI (azucar para escapes VT100 comunes).
-    // Cada uno emite secuencias estaticas via vio_print sin necesitar
-    // hardcodear los escapes en el codigo del usuario.
-    const bool is_term_clear = (name == "term_clear");
-    const bool is_term_clear_line = (name == "term_clear_line");
-    const bool is_term_move = (name == "term_move");
-    const bool is_term_save_cursor = (name == "term_save_cursor");
-    const bool is_term_restore_cursor = (name == "term_restore_cursor");
-    const bool is_term_hide_cursor = (name == "term_hide_cursor");
-    const bool is_term_show_cursor = (name == "term_show_cursor");
-    const bool is_term_reset = (name == "term_reset");
     // Builtins de reflexion y AOP
     const bool is_forName = (name == "forName");
     const bool is_getClass = (name == "getClass");
@@ -1252,8 +1245,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_cpu_features = (name == "cpu_features");
     // procesos / IPC builtins.
     const bool is_pid = (name == "pid");
-    const bool is_msgsend = (name == "msgsend");
-    const bool is_msgrecv = (name == "msgrecv");
     // Variadicos: vacount() -> lee el param oculto __vacount (numero de args
     // variadicos empaquetados por el caller).
     if (name == "vacount") {
@@ -1276,8 +1267,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_getFields = (name == "getFields");
     const bool is_getFieldAt = (name == "getFieldAt");
     // futures builtins.
-    const bool is_future_alloc = (name == "future_alloc");
-    const bool is_fulfill = (name == "fulfill");
     // constructor de tipo coleccion primitivo (arraylist, hashmap,
     // hashset, queue, deque, treemap, treeset, stack).  Si find_col_ctor
     // devuelve no-null, el lowering emite CALLN al native_new_fn del
@@ -1351,14 +1340,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const bool is_get = (name == "ptr_of");
     const bool is_use_count = (name == "use_count");
     // Z.6 builtins: is_shared / share / unshare.
-    const bool is_z6_isshared = (name == "is_shared");
-    const bool is_z6_share = (name == "share");
-    const bool is_z6_unshare = (name == "unshare");
-    // Z.8 builtins: atomic primitives + shared raw allocator.
-    const bool is_z8_atomic_load = (name == "atomic_load_i64");
-    const bool is_z8_atomic_store = (name == "atomic_store_i64");
-    const bool is_z8_atomic_cas = (name == "atomic_cas_i64");
-    const bool is_z8_atomic_add = (name == "atomic_add_i64");
     // Atomicos GENERICOS (width-aware): el ancho sale del pointee del puntero.
     const bool is_atomic_load_g = (name == "atomic_load");
     const bool is_atomic_store_g = (name == "atomic_store");
@@ -1465,8 +1446,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         out_value = emit_atomic_add_i64(v_ptr, v_delta, e->loc.line, iwt);
         return true;
     }
-    const bool is_z8_shared_malloc = (name == "shared_malloc");
-    const bool is_z8_shared_free = (name == "shared_free");
     // Z.10 builtins: introspeccion + GC placeholder del SharedHeap.
     const bool is_z10_live_count = (name == "shared_heap_live_count");
     const bool is_z10_bytes = (name == "shared_heap_bytes");
@@ -1515,11 +1494,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_unwrap || is_unwrap_unchecked || is_Some || is_None ||
         is_Ok || is_Err || is_isOk || is_value ||
         is_error || is_wait || is_notify || is_notifyAll ||
-        is_cpu_features || is_pid || is_msgsend || is_msgrecv ||
+        is_cpu_features || is_pid ||
         is_args_count || is_args_get || is_getMethods || is_getMethodAt ||
-        is_getFields || is_getFieldAt || is_term_clear || is_term_clear_line ||
-        is_term_move || is_term_save_cursor || is_term_restore_cursor || is_term_hide_cursor ||
-        is_term_show_cursor || is_term_reset || is_future_alloc || is_fulfill ||
+        is_getFields || is_getFieldAt ||
         is_ffi_open || is_ffi_sym || is_ffi_call || is_panic ||
         is_str_length || is_str_bytes || is_str_cstr || is_str_wstr ||
         is_str_hash || is_str_intern || is_str_concat || is_str_equals ||
@@ -1529,9 +1506,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         is_col_ctor || is_unique_box || is_shared_box || is_gc_box ||
         is_unique_with || is_shared_with || is_move || is_get ||
         is_use_count || is_lend || is_lend_mut || is_read_borrow ||
-        is_write_borrow || is_z6_isshared || is_z6_share || is_z6_unshare ||
-        is_z8_atomic_load || is_z8_atomic_store || is_z8_atomic_cas || is_z8_atomic_add ||
-        is_z8_shared_malloc || is_z8_shared_free || is_z10_live_count || is_z10_bytes ||
+        is_write_borrow || is_z10_live_count || is_z10_bytes ||
         is_z10_gc_collect;
     if (!is_any_builtin) return false;
 
@@ -4869,208 +4844,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     //   3. IrOp::AND_BIT handle & MASK.
     //   4. IrOp::SHR_U result, 31 -> resultado en bit 0 (0 o 1).
     //   5. cast a bool.
-    if (is_z6_isshared) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, "is_shared: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_obj = lower_expr(e->args[0].get());
-        if (v_obj == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // 1) gchandle obj -> handle (u64)
-        const ir::IrValueId v_h = emit_gc_handle_for_ptr(v_obj, e->loc.line);
-        // 2) const mask
-        const ir::IrValueId v_mask =
-            emit_const(ir::IrType::U64, 0x80000000ULL, e->loc.line);
-        // 3) handle & mask
-        const ir::IrValueId v_and = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::AND;
-            ins.type = ir::IrType::U64;
-            ins.dst = v_and;
-            ins.operands = {v_h, v_mask};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-        }
-        // 4) shr 31 -> bit 0 = 0|1
-        const ir::IrValueId v_shift =
-            emit_const(ir::IrType::U64, 31ULL, e->loc.line);
-        const ir::IrValueId v_bit = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::SHR;
-            ins.type = ir::IrType::U64;
-            ins.dst = v_bit;
-            ins.operands = {v_and, v_shift};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-        }
-        // 5) cast a bool
-        const ir::IrValueId v_bool =
-            cast_if_needed(v_bit, ir::IrType::U64, ir::IrType::BOOL,
-                           e->loc.line, /*explicit=*/true);
-        out_value = v_bool;
-        return true;
-    }
-
-    // ----- Z.7: share(obj) -> obj (in-place promotion via gcpromote) -----
-    // Emite el opcode bytecode @c gcpromote (extended 0xA7) que aloca
-    // en el SharedHeap, copia el objeto, registra en SharedHandleTable
-    // y devuelve el nuevo host_ptr.  Si el objeto ya esta shared
-    // (bit 31 en hash_code), el opcode es no-op idempotente.
-    //
-    // NOTA: el resultado de share() es una NUEVA referencia.  El
-    // original sigue en el gc_heap local (se libera por sweep).
-    // Patron correcto en Vesta:
-    //   Counter c = new Counter();
-    //   c = share(c);                  // c ahora apunta a la copia shared
-    if (is_z6_share) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, "share: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_obj = lower_expr(e->args[0].get());
-        if (v_obj == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_new = emit_gc_promote(v_obj, e->loc.line);
-        fn_->values[v_new].is_gc_object =
-            true; // marca de host_ptr a payload GC
-        out_value = v_new;
-        return true;
-    }
-
-    // ----- Z.7: unshare(obj) -> obj (deep copy a heap local) -----
-    // Emite @c gcdemote (extended 0xA8).  Idempotente si NO es shared.
-    if (is_z6_unshare) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, "unshare: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_obj = lower_expr(e->args[0].get());
-        if (v_obj == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_new = emit_gc_demote(v_obj, e->loc.line);
-        fn_->values[v_new].is_gc_object = true;
-        out_value = v_new;
-        return true;
-    }
-
-    // ============================================================
-    // Z.8 atomic primitives: bajan a opcodes atomicld/st/cas/add.
-    // El host_ptr es un i64 que se interpreta como direccion
-    // absoluta del host (no VM addr).  El usuario es responsable
-    // de la alineacion a 8 bytes para lock-free.
-    // ============================================================
-
-    // atomic_load_i64(ptr) -> i64
-    if (is_z8_atomic_load) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, "atomic_load_i64: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-        out_value = emit_atomic_ld_i64(v_ptr, e->loc.line);
-        return true;
-    }
-
-    // atomic_store_i64(ptr, val) -> void
-    if (is_z8_atomic_store) {
-        if (e->args.size() != 2) {
-            error_at(e->loc, "atomic_store_i64: requiere 2 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-        const ir::IrValueId v_val = lower_expr(e->args[1].get());
-        emit_atomic_st_i64(v_ptr, v_val, e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-
-    // atomic_cas_i64(ptr, exp, des) -> i64 (old value)
-    if (is_z8_atomic_cas) {
-        if (e->args.size() != 3) {
-            error_at(e->loc, "atomic_cas_i64: requiere 3 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-        const ir::IrValueId v_exp = lower_expr(e->args[1].get());
-        const ir::IrValueId v_des = lower_expr(e->args[2].get());
-        out_value = emit_atomic_cas_i64(v_ptr, v_exp, v_des, e->loc.line);
-        return true;
-    }
-
-    // atomic_add_i64(ptr, delta) -> i64 (old value)
-    if (is_z8_atomic_add) {
-        if (e->args.size() != 2) {
-            error_at(e->loc, "atomic_add_i64: requiere 2 argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-        const ir::IrValueId v_delta = lower_expr(e->args[1].get());
-        out_value = emit_atomic_add_i64(v_ptr, v_delta, e->loc.line);
-        return true;
-    }
-
-    // shared_malloc(size) -> i64* (host_ptr).  Implementacion via CALLN
-    // a un wrapper que usa @c vm.shared_heap.alloc.  Por ahora
-    // delegamos al @c malloc estandar (raw_allocator) que tambien da
-    // memoria host accesible cross-process (mismo address space).
-    if (is_z8_shared_malloc) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, "shared_malloc: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_size = lower_expr(e->args[0].get());
-        const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ptr].is_host_ptr = true;
-        // Reuse @c alloc opcode (RAW_ALLOC IR op).  La memoria que
-        // retorna es host_ptr, identico en todos los procesos (mismo
-        // address space del OS).  Para promocion al SharedHeap real
-        // (con tracking de GC), usar @c share() en el objeto creado.
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::RAW_ALLOC;
-        ins.type = ir::IrType::PTR;
-        ins.dst = v_ptr;
-        ins.operands = {v_size};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
-        out_value = v_ptr;
-        return true;
-    }
-
-    // shared_free(ptr) -> void
-    if (is_z8_shared_free) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, "shared_free: requiere 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::RAW_FREE;
-        ins.type = ir::IrType::VOID;
-        ins.dst = ir::IR_NO_VALUE;
-        ins.operands = {v_ptr};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
 
     // Z.10: shared_heap_live_count() / shared_heap_bytes() /
     // shared_gc_collect() Lowering comun: const op + sharedstat opcode.
@@ -5578,87 +5351,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // como una mezcla de prints y print_int.  Sin overhead extra
     // gracias al buffer global de 64 KB del plugin vesta_io (todos
     // los prints en una misma frame se agrupan en 1 syscall).
-    if (is_term_clear) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "term_clear: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        emit_print_string_literal("\x1b[2J\x1b[H", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_clear_line) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "term_clear_line: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        emit_print_string_literal("\x1b[2K", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_save_cursor) {
-        emit_print_string_literal("\x1b[s", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_restore_cursor) {
-        emit_print_string_literal("\x1b[u", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_hide_cursor) {
-        emit_print_string_literal("\x1b[?25l", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_show_cursor) {
-        emit_print_string_literal("\x1b[?25h", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_reset) {
-        // Reset all attributes (color, style, bg, fg).
-        emit_print_string_literal("\x1b[0m", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-    if (is_term_move) {
-        if (e->args.size() != 2 || !e->args[0] || !e->args[1]) {
-            error_at(e->loc, "term_move: requiere 2 argumentos (row, col)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // Emite "\x1b[" + row + ";" + col + "H" usando print + print_int.
-        emit_print_string_literal("\x1b[", e->loc.line);
-        // Sintetizar print_int(row) y print_int(col) reusando
-        // try_lower_builtin_call con args sintetizados.
-        for (int i = 0; i < 2; ++i) {
-            const ir::IrValueId v = lower_expr(e->args[i].get());
-            if (v == ir::IR_NO_VALUE) {
-                out_value = ir::IR_NO_VALUE;
-                return true;
-            }
-            // CALLN vio_print_int(v).
-            out_mod_->register_native_import(
-                std::string("stdlib/native/io/vesta_io"), "vio_print_int");
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "stdlib/native/io/vesta_io:vio_print_int";
-            ins.operands.push_back(v);
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-            if (i == 0) {
-                emit_print_string_literal(";", e->loc.line);
-            }
-        }
-        emit_print_string_literal("H", e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
 
     // ----- getMethods(cls) / getFields(cls) -> i32 -----
     // Devuelve el numero de metodos / fields de instancia de la clase
@@ -5749,190 +5441,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     //   msgsend r_pid, r_addr, r_len   (r_len = 8)
     // El opcode bytecode deposita 1/0 en R0 (ok flag), que capturamos
     // como i32 dst de la expresion.
-    if (is_msgsend) {
-        if (e->args.size() != 2) {
-            error_at(e->loc, "msgsend: requiere 2 argumentos (pid, valor)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_pid = lower_expr(e->args[0].get());
-        const ir::IrValueId v_val = lower_expr(e->args[1].get());
-        if (v_pid == ir::IR_NO_VALUE || v_val == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // AOT (native_poo_): mailbox por valor -> CALL __vx_msgsend(pid, val)
-        // (sin buffer ni VM memory).  Devuelve 1 (ok) en el scheduler coop.
-        if (native_poo_) {
-            const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-            ir::IrInstr ms{};
-            ms.op = ir::IrOp::CALL;
-            ms.func_name = "__vx_msgsend";
-            ms.type = ir::IrType::I32;
-            ms.dst = v_dst;
-            ms.operands = {v_pid, v_val};
-            ms.is_call_site = true;
-            ms.source_line = e->loc.line;
-            emit(current_block_, std::move(ms));
-            out_value = v_dst;
-            return true;
-        }
-        // ALLOCA 8 bytes en stack para el buffer del mensaje.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 8;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
-        // STORE i64 v_val en v_buf.
-        {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = ir::IrType::I64;
-            st.operands = {v_val, v_buf};
-            st.source_line = e->loc.line;
-            emit(current_block_, std::move(st));
-        }
-        // msgsend r_pid, r_addr, r_len  -- usar IR op MSGSEND (0xD0) en lugar
-        // de RAW_ASM.  Devuelve bool en R0 (1=ok, 0=error).
-        const ir::IrValueId v_len = emit_const(ir::IrType::I64, 8, e->loc.line);
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-        ir::IrInstr ms{};
-        ms.op = ir::IrOp::MSGSEND;
-        ms.type = ir::IrType::I32;
-        ms.dst = v_dst;
-        ms.operands = {v_pid, v_buf, v_len};
-        ms.is_call_site = true;
-        ms.source_line = e->loc.line;
-        emit(current_block_, std::move(ms));
-        out_value = v_dst;
-        return true;
-    }
-
-    // ----- msgrecv() -----
-    // Reservamos 8 bytes en el frame, llamamos msgrecv (bloquea si
-    // mailbox vacio; al despertar el proceso re-ejecuta msgrecv y
-    // pasa con datos), y leemos el i64 del buffer.
-    if (is_msgrecv) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "msgrecv: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // AOT (native_poo_): mailbox por valor -> CALL __vx_msgrecv() -> i64
-        // (lee de la mailbox de la tarea actual; no bloquea en Fase 2 -- el
-        // mensaje ya esta porque main hace el setup antes de bombear).
-        if (native_poo_) {
-            const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr mr{};
-            mr.op = ir::IrOp::CALL;
-            mr.func_name = "__vx_msgrecv";
-            mr.type = ir::IrType::I64;
-            mr.dst = v_val;
-            mr.is_call_site = true;
-            mr.source_line = e->loc.line;
-            emit(current_block_, std::move(mr));
-            out_value = v_val;
-            return true;
-        }
-        // ALLOCA 8 bytes para el buffer destino.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 8;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
-        // msgrecv r_buf, r_max  -- primer reg = buffer dest, segundo = max len.
-        // Convencion del decoder/exec: reg1=r_buf, reg2=r_max (ver
-        // exec_instr_msgrecv en exec_instruction_distrib.cpp).
-        const ir::IrValueId v_max = emit_const(ir::IrType::I64, 8, e->loc.line);
-        {
-            ir::IrInstr mr{};
-            mr.op = ir::IrOp::MSGRECV;
-            mr.type = ir::IrType::VOID;
-            mr.dst = ir::IR_NO_VALUE;
-            mr.operands = {v_buf, v_max};
-            mr.is_call_site = true; // bloquea -> save/restore live regs
-            mr.source_line = e->loc.line;
-            emit(current_block_, std::move(mr));
-        }
-        // LOAD i64 desde v_buf -> v_val (resultado).
-        const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_val;
-            ld.operands = {v_buf};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
-        out_value = v_val;
-        return true;
-    }
-
-    // ----- future_alloc() -----
-    // Emite la instruccion bytecode `future` (0x29) que crea un nuevo
-    // FutureObject GC-managed en estado PENDING y deposita su GcHandle
-    // en R0.  Capturamos R0 a {dst} como i64 para pasarlo a fulfill/await.
-    if (is_future_alloc) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "future_alloc: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // future -> aloca FutureObject; R0 contiene el handle.
-        const ir::IrValueId v_fut = fn_->new_value(ir::IrType::I64);
-        // AOT (native_poo_): CALL nativo al scheduler cooperativo
-        // (__vx_future_new -> handle), bundle-ado desde vx_async.vx.
-        ir::IrInstr fu{};
-        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FUTURE;
-        if (native_poo_) fu.func_name = "__vx_future_new";
-        fu.type = ir::IrType::I64;
-        fu.dst = v_fut;
-        fu.is_call_site = true; // GC alloc
-        fu.source_line = e->loc.line;
-        emit(current_block_, std::move(fu));
-        out_value = v_fut;
-        return true;
-    }
-
-    // ----- fulfill(fut, value) -----
-    // Emite `fulfill r_fut, r_val` (0x2B): resuelve el future con el
-    // valor, despierta al waiter (si lo hay) via make_ready.  Devuelve
-    // void (no captura R0).
-    if (is_fulfill) {
-        if (e->args.size() != 2) {
-            error_at(e->loc, "fulfill: requiere 2 argumentos (fut, valor)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_fut = lower_expr(e->args[0].get());
-        const ir::IrValueId v_val = lower_expr(e->args[1].get());
-        if (v_fut == ir::IR_NO_VALUE || v_val == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // AOT (native_poo_): CALL nativo __vx_fulfill(fut, val).
-        ir::IrInstr fu{};
-        fu.op = native_poo_ ? ir::IrOp::CALL : ir::IrOp::FULFILL;
-        if (native_poo_) fu.func_name = "__vx_fulfill";
-        fu.type = ir::IrType::VOID;
-        fu.dst = ir::IR_NO_VALUE;
-        fu.operands = {v_fut, v_val};
-        fu.source_line = e->loc.line;
-        emit(current_block_, std::move(fu));
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
 
     // No deberia alcanzarse: todos los builtins listados arriba estan
     // cubiertos.
