@@ -250,6 +250,10 @@ add_library(vx_lib STATIC
     # con la introspeccion porque es lo mismo del otro lado: lo que el programa
     # puede preguntar de un tipo viaja como datos ya escritos en el binario.
     lowering/comptime.cpp
+    # Los structs, que NO son clases: un struct es un VALOR -- vive donde se
+    # declaro, se copia al pasarlo, muere sin que nadie lo recoja --, asi que
+    # su bajada es otra aunque tambien tenga campos y metodos.
+    lowering/structs.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp

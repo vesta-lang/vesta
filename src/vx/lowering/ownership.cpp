@@ -1352,4 +1352,123 @@ void Lowering::store_slot_fields_prestado(ir::IrValueId v_slot,
     store_at(23, emit_const(ir::IrType::U8, 0xC0, source_line), ir::IrType::U8);
 }
 
+void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
+    // Ownership ruta B (H3/H5 dec-on-drop): decrementa el refcount del bloque
+    // de control de un shared<T> y, si cae a 0, lo libera (RAW_FREE).  El slot
+    // guarda el host_ptr al ctrl; refcount en [ctrl+0].  No-op si ctrl==0
+    // (movido/null).  Lo usan el cleanup SHAREDPTR_REL del scope local y el
+    // destructor del contenedor para un campo shared (H5).
+    if (v_slot == ir::IR_NO_VALUE) return;
+    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_ctrl].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ctrl;
+        ld.operands = {v_slot};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
+    const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_NE;
+        cmp.type = ir::IrType::I64;
+        cmp.dst = v_cmp;
+        cmp.operands = {v_ctrl, v_zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId dec_bb = fn_->new_block("shf_dec");
+    const ir::IrBlockId skip_bb = fn_->new_block("shf_skip");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {v_cmp};
+        br.target_block = dec_bb;
+        br.false_block = skip_bb;
+        br.source_line = line;
+        emit(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(dec_bb);
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[dec_bb].preds.push_back(current_block_);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+    }
+    current_block_ = dec_bb;
+    const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_rc;
+        ld.operands = {v_ctrl};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
+    const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr sub{};
+        sub.op = ir::IrOp::SUB;
+        sub.type = ir::IrType::I64;
+        sub.dst = v_rc_dec;
+        sub.operands = {v_rc, v_one};
+        sub.source_line = line;
+        emit(current_block_, std::move(sub));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {v_rc_dec, v_ctrl};
+        st.source_line = line;
+        emit(current_block_, std::move(st));
+    }
+    const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::I64;
+        cmp.dst = v_is0;
+        cmp.operands = {v_rc_dec, v_zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId free_bb = fn_->new_block("shf_free");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {v_is0};
+        br.target_block = free_bb;
+        br.false_block = skip_bb;
+        br.source_line = line;
+        emit(current_block_, std::move(br));
+        fn_->blocks[dec_bb].succs.push_back(free_bb);
+        fn_->blocks[dec_bb].succs.push_back(skip_bb);
+        fn_->blocks[free_bb].preds.push_back(dec_bb);
+        fn_->blocks[skip_bb].preds.push_back(dec_bb);
+    }
+    current_block_ = free_bb;
+    {
+        ir::IrInstr fr{};
+        fr.op = ir::IrOp::RAW_FREE;
+        fr.type = ir::IrType::VOID;
+        fr.operands = {v_ctrl};
+        fr.source_line = line;
+        emit(current_block_, std::move(fr));
+    }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = skip_bb;
+        br.source_line = line;
+        emit(current_block_, std::move(br));
+        fn_->blocks[free_bb].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(free_bb);
+    }
+    current_block_ = skip_bb;
+}
+
 } // namespace vx

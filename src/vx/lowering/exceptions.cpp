@@ -1410,4 +1410,172 @@ void Lowering::lower_throw(ast::ThrowStmt *s) {
     block_terminated_ = true;
 }
 
+ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
+    if (!e || !e->operand) {
+        error_at(e ? e->loc : SourceLoc{}, "lowering: TryExpr sin operand");
+        return ir::IR_NO_VALUE;
+    }
+    const uint32_t src_line = e->loc.line;
+
+    // 1. Bajar el operand -> SSA PTR al slot Result.
+    const ir::IrValueId v_buf = lower_expr(e->operand.get());
+    if (v_buf == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+
+    // 2. LOAD i32 del tag en offset 0.
+    const ir::IrValueId tag_v = fn_->new_value(ir::IrType::I32);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I32;
+        ld.dst = tag_v;
+        ld.operands = {v_buf};
+        ld.source_line = src_line;
+        emit(current_block_, std::move(ld));
+    }
+
+    // 3. Comparacion tag == 0 (=Err).
+    const ir::IrValueId zero_v = emit_const(ir::IrType::I32, 0, src_line);
+    const ir::IrValueId cond_v = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cm{};
+        cm.op = ir::IrOp::CMP_EQ;
+        cm.type = ir::IrType::BOOL;
+        cm.dst = cond_v;
+        cm.operands = {tag_v, zero_v};
+        cm.source_line = src_line;
+        emit(current_block_, std::move(cm));
+    }
+
+    // 4. Crear bloques: err_bb (early-return), ok_bb (extract value).
+    const ir::IrBlockId err_bb =
+        fn_->new_block("try_err_" + std::to_string(ternary_counter_));
+    const ir::IrBlockId ok_bb =
+        fn_->new_block("try_ok_" + std::to_string(ternary_counter_));
+    ++ternary_counter_;
+
+    // br_cond: si tag==0 -> err_bb, else -> ok_bb.
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands.push_back(cond_v);
+        br.target_block = err_bb;
+        br.false_block = ok_bb;
+        br.source_line = src_line;
+        emit(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(err_bb);
+        fn_->blocks[current_block_].succs.push_back(ok_bb);
+        fn_->blocks[err_bb].preds.push_back(current_block_);
+        fn_->blocks[ok_bb].preds.push_back(current_block_);
+    }
+
+    // 5. err_bb: copia v_buf (24 bytes) al sret_retbuf + RET.
+    // Mismo patron que lower_return cuando sret_active_ es true.
+    current_block_ = err_bb;
+    block_terminated_ = false;
+    if (sret_active_ && sret_retbuf_ != ir::IR_NO_VALUE) {
+        const uint64_t qwords = sret_buf_size_ / 8;
+        for (uint64_t qi = 0; qi < qwords; ++qi) {
+            const uint64_t off = qi * 8;
+            const ir::IrValueId v_off =
+                emit_const(ir::IrType::I64, off, src_line);
+            const ir::IrValueId v_src_at = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr add{};
+                add.op = ir::IrOp::ADD;
+                add.type = ir::IrType::I64;
+                add.dst = v_src_at;
+                add.operands = {v_buf, v_off};
+                add.source_line = src_line;
+                emit(current_block_, std::move(add));
+            }
+            // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf al LOAD
+            // side (igual que el STORE side abajo).  Sin esto el LOAD del
+            // Err a copiar usaba `mov` (VM) en vez de `movh` (host) y leia
+            // basura -> error(r) != el valor real (path de error de `?`).
+            fn_->values[v_src_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+            const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::I64;
+                ld.dst = v_tmp;
+                ld.operands = {v_src_at};
+                ld.source_line = src_line;
+                emit(current_block_, std::move(ld));
+            }
+            const ir::IrValueId v_off2 =
+                emit_const(ir::IrType::I64, off, src_line);
+            const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
+            {
+                ir::IrInstr add{};
+                add.op = ir::IrOp::ADD;
+                add.type = ir::IrType::I64;
+                add.dst = v_dst_at;
+                add.operands = {sret_retbuf_, v_off2};
+                add.source_line = src_line;
+                emit(current_block_, std::move(add));
+            }
+            // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
+            fn_->values[v_dst_at].is_host_ptr =
+                fn_->values[sret_retbuf_].is_host_ptr;
+            {
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.operands = {v_tmp, v_dst_at};
+                st.source_line = src_line;
+                emit(current_block_, std::move(st));
+            }
+        }
+    }
+    // Emit cleanups (synchronized, etc.) y RET.
+    emit_cleanups_all();
+    {
+        ir::IrInstr ret{};
+        ret.op = ir::IrOp::RET;
+        ret.type = ir::IrType::VOID;
+        ret.source_line = src_line;
+        emit(current_block_, std::move(ret));
+        block_terminated_ = true;
+    }
+
+    // 6. ok_bb: extraer V de v_buf+8.  El tipo V se obtiene del result_type
+    // que el type checker ya validamos (pointee del Result).
+    current_block_ = ok_bb;
+    block_terminated_ = false;
+    const Type result_t = e->result_type;
+    const ir::IrType payload_t = (result_t.kind != PrimitiveKind::VOID &&
+                                  result_t.kind != PrimitiveKind::COUNT)
+                                     ? ir_type_from_primitive(result_t.kind)
+                                     : ir::IrType::I64;
+    const ir::IrValueId v_off8 = emit_const(ir::IrType::I64, 8, src_line);
+    const ir::IrValueId v_at8 = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr add{};
+        add.op = ir::IrOp::ADD;
+        add.type = ir::IrType::I64;
+        add.dst = v_at8;
+        add.operands = {v_buf, v_off8};
+        add.source_line = src_line;
+        emit(current_block_, std::move(add));
+    }
+    // BugFix 163 (2026-06-05): propagar is_host_ptr de v_buf a v_at8.  El
+    // buffer del Result temporal del operando es un host_ptr; sin esta
+    // marca, el LOAD de V emitia `mov` (VM mem) en vez de `movh` (host) y
+    // leia 0/basura.  La rama err ya lo propagaba (de ahi que err funcione
+    // y ok no).  Aplica al value extraction de la rama ok.
+    fn_->values[v_at8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+    const ir::IrValueId v_dst = fn_->new_value(payload_t);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = payload_t;
+        ld.dst = v_dst;
+        ld.operands = {v_at8};
+        ld.source_line = src_line;
+        emit(current_block_, std::move(ld));
+    }
+    return v_dst;
+}
+
 } // namespace vx
