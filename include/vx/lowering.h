@@ -646,11 +646,17 @@ class Lowering {
                                           bool is_element = false);
     /// Nombres de resolvedores de overlay ya sintetizados (dedup).
     std::unordered_set<std::string> generated_overlay_resolvers_;
-    /// Metodos con aspectos, por nombre IR (`Clase__metodo`).  Se recoge al
-    /// principio de @c run() porque cada sitio de llamada lo consulta para
-    /// decidir si puede devirtualizar/especular: llamar directo a un metodo con
-    /// aspectos se saltaria su cadena de advices.
-    std::unordered_set<std::string> metodos_con_aspecto_;
+    /// La cadena de aspectos de cada metodo, EN ORDEN, por nombre IR
+    /// (`Clase__metodo`).  Se recoge al principio de @c run() porque cada sitio
+    /// de llamada la consulta para decidir si puede devirtualizar/especular:
+    /// llamar directo a un metodo con aspectos se saltaria su cadena.
+    std::unordered_map<std::string,
+                       std::vector<ir::IrModule::AspectoEnCadena>>
+        cadena_de_aspectos_;
+    /// A que llama el `proceed()` de cada `@Around`, por nombre IR: el
+    /// siguiente `@Around` de su cadena, o el metodo si es el mas interno.
+    /// Vacio para todo lo que no sea un `@Around`.
+    std::unordered_map<std::string, std::string> destino_proceed_;
     /// Falso si algun aspecto no se pudo atribuir a un metodo concreto; se
     /// vuelve entonces al criterio ancho (ningun sitio se devirtualiza).
     bool aspectos_atribuidos_ = true;

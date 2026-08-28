@@ -1837,11 +1837,13 @@ struct IrModule {
     std::vector<IrClass> classes;
 
     /**
-     * @brief Metodos que llevan aspectos, por su nombre IR (@c Clase__metodo).
+     * @brief La CADENA de aspectos de cada metodo, por su nombre IR.
      *
-     * A un metodo con aspectos NO se le puede llamar directo: el advice se
-     * recorre en el despacho, asi que convertir su @c callvirt en un @c call
-     * se lo saltaria.  Antes, para no correr ese riesgo, bastaba con que el
+     * A un metodo con aspectos NO se le puede llamar directo tal cual: el
+     * advice se recorre en el despacho, asi que convertir su @c callvirt en un
+     * @c call se lo saltaria.  Estar en el mapa es lo que dice que un metodo
+     * los lleva; la lista, EN ORDEN, es lo que hace falta para tejer la cadena
+     * en el sitio de llamada en vez de renunciar a optimizarlo.  Antes, para no correr ese riesgo, bastaba con que el
      * modulo tuviera UN aspecto para apagar la devirtualizacion ENTERA -- y el
      * modulo aqui es el programa entero.  Un aspecto de registro en un rincon
      * dejaba sin devirtualizar todo lo demas, y eso cuesta entre 1,2x y 9,5x
@@ -1857,10 +1859,15 @@ struct IrModule {
      * nombre lo recoge; si lo redefine, es otro nombre y otro MethodInfo, que
      * es tambien lo correcto.
      */
-    std::unordered_set<std::string> metodos_con_aspecto;
+    struct AspectoEnCadena {
+        uint8_t kind;               ///< ADVICE_* de @c loader/oop_types.h
+        std::string metodo_ir_name; ///< nombre IR del advice (`Aspecto__m`)
+    };
+    std::unordered_map<std::string, std::vector<AspectoEnCadena>>
+        cadena_de_aspectos;
 
     /**
-     * @brief Los aspectos del modulo estan TODOS en @c metodos_con_aspecto.
+     * @brief Los aspectos del modulo estan TODOS en @c cadena_de_aspectos.
      *
      * Falso mientras haya alguno que no se pueda atribuir a un metodo concreto
      * -- hoy, un @c addadvice escrito a mano en ensamblador --, y entonces se

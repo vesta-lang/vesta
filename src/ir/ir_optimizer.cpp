@@ -2704,7 +2704,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
     if (!mod.aspectos_atribuidos) return bail("hay aspectos sin atribuir");
     for (const auto &m : cls->methods) {
         if (!m.ir_fn_name.empty() &&
-            mod.metodos_con_aspecto.count(m.ir_fn_name) != 0)
+            mod.cadena_de_aspectos.count(m.ir_fn_name) != 0)
             return bail("un metodo de la clase lleva aspectos");
     }
 
@@ -10315,7 +10315,7 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
  */
 static bool module_uses_aop_sin_atribuir(const IrModule &mod) {
     /* Los aspectos declarados en Vesta SI se atribuyen: el frontend apunta a
-     * que metodo va cada uno en @c metodos_con_aspecto, y entonces basta con
+     * que metodo va cada uno en @c cadena_de_aspectos, y entonces basta con
      * saltarse esos sitios.  Lo que no se puede atribuir es un `addadvice`
      * escrito a mano en ensamblador: ahi no se sabe a quien apunta, asi que se
      * renuncia al pase entero, que es lo unico seguro. */
@@ -10386,7 +10386,7 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
     /* Solo se renuncia al pase ENTERO cuando hay aspectos que no se pueden
      * atribuir a un metodo concreto -- hoy, un `addadvice` escrito a mano en
      * ensamblador, que no dice a quien apunta.  Cuando todos estan atribuidos,
-     * cada sitio se mira por separado contra @c metodos_con_aspecto.
+     * cada sitio se mira por separado contra @c cadena_de_aspectos.
      *
      * Renunciar por modulo salia caro y es el programa entero: medido en los
      * bancos de despacho, un aspecto que no tocaba ninguna de las clases del
@@ -10508,7 +10508,7 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                  * advices, asi que llamarlo directo se los saltaria.  Se salta
                  * ESTE sitio y se sigue con el resto -- antes bastaba un
                  * aspecto en cualquier rincon para renunciar al pase entero. */
-                if (mod.metodos_con_aspecto.count(mtd->ir_fn_name) != 0)
+                if (mod.cadena_de_aspectos.count(mtd->ir_fn_name) != 0)
                     continue;
                 const bool safe_method = mtd->is_final || safe_class;
                 if (!safe_method) continue;

@@ -17,6 +17,8 @@
 
 #include "util/env_flags.h"
 #include "vx/lowering.h"
+
+#include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
 #include <algorithm>
 #include <chrono>
 #include <iostream>
@@ -1095,9 +1097,13 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // try/throw.
     if (native_poo_) compute_type_intervals();
 
-    /* Que metodos llevan aspectos, por su nombre IR.  Se recoge ANTES de bajar
-     * ningun cuerpo porque el lowering de cada sitio de llamada lo consulta
-     * para decidir si puede especular. */
+    /* La cadena de aspectos de cada metodo, EN ORDEN.  Se recoge ANTES de bajar
+     * ningun cuerpo por dos motivos: cada sitio de llamada la consulta para
+     * decidir si puede especular, y el `proceed()` de un `@Around` necesita
+     * saber a que llama, que depende de su posicion en la cadena.
+     *
+     * El orden es el de declaracion, que es el mismo en que `__module_init`
+     * llama a `addadvice` y por tanto el que tendra la cadena en ejecucion. */
     for (auto &decl : mod_.decls) {
         if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
         auto *cd_asp = static_cast<ast::ClassDecl *>(decl.get());
@@ -1107,15 +1113,37 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             const std::string &t = m->advice_target;
             const size_t p = t.find('.');
             /* Un pointcut mal formado lo diagnostica la emision del advice;
-             * aqui basta con NO poder atribuirlo, que es lo conservador. */
+             * aqui basta con NO poder atribuirlo, que es lo prudente. */
             if (p == std::string::npos || p == 0 || p + 1 >= t.size()) {
                 aspectos_atribuidos_ = false;
                 continue;
             }
-            metodos_con_aspecto_.insert(t.substr(0, p) + "__" + t.substr(p + 1));
+            const std::string objetivo =
+                t.substr(0, p) + "__" + t.substr(p + 1);
+            ir::IrModule::AspectoEnCadena entrada;
+            entrada.kind = static_cast<uint8_t>(m->advice_kind - 1);
+            entrada.metodo_ir_name = cd_asp->name + "__" + m->name;
+            cadena_de_aspectos_[objetivo].push_back(std::move(entrada));
         }
     }
-    out_module.metodos_con_aspecto = metodos_con_aspecto_;
+    /* A que llama el `proceed()` de cada `@Around`.
+     *
+     * Un `@Around` envuelve al SIGUIENTE de su cadena, y el ultimo al metodo.
+     * Como un advice tiene un solo objetivo -- el pointcut es `Clase.metodo`
+     * exacto -- su `proceed` tiene UN destino, conocido aqui.  Eso es lo que
+     * permite llamarlo directo en vez de por el marco. */
+    for (const auto &kv : cadena_de_aspectos_) {
+        const std::string *anterior = nullptr;
+        for (const auto &a : kv.second) {
+            if (a.kind != loader::ADVICE_AROUND) continue;
+            if (anterior != nullptr)
+                destino_proceed_[*anterior] = a.metodo_ir_name;
+            anterior = &a.metodo_ir_name;
+        }
+        /* El mas interno llama al metodo. */
+        if (anterior != nullptr) destino_proceed_[*anterior] = kv.first;
+    }
+    out_module.cadena_de_aspectos = cadena_de_aspectos_;
     out_module.aspectos_atribuidos = aspectos_atribuidos_;
 
     // AOT / Embed (native_poo_): el AOP (@Aspect + advice) se registra en
@@ -33503,11 +33531,6 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             const std::string tmeth = target.substr(dot + 1);
             const uint8_t rt_kind = static_cast<uint8_t>(m->advice_kind - 1);
 
-            /* Se apunta el metodo que queda con aspectos, por su nombre IR.
-             * Es lo que permite al optimizador saltarse SOLO este sitio de
-             * llamada en vez de renunciar a devirtualizar el modulo entero. */
-            out.metodos_con_aspecto.insert(tcls + "__" + tmeth);
-
             // Bloque propio para este advice (presion acotada).
             new_seg("aop_" + cd->name + "_" + m->name);
 
@@ -35254,7 +35277,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                      * FUERA de los candidatos, con lo que sus objetos caen al
                      * despacho normal -- que si la recorre -- y los demas
                      * implementores siguen especulando. */
-                    if (metodos_con_aspecto_.count(callee) != 0) continue;
+                    if (cadena_de_aspectos_.count(callee) != 0) continue;
                     impls.emplace_back(cl.name, callee);
                     if (impls.size() > K_MAX) {
                         too_many = true;
@@ -41398,6 +41421,40 @@ void Lowering::emit_setstatic(ir::IrValueId v_cls, ir::IrValueId v_val,
 
 ir::IrValueId Lowering::emit_proceed(uint32_t line) {
     const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+
+    /* `proceed()` con destino conocido se emite como una llamada normal.
+     *
+     * La instruccion `proceed` no lleva operandos: reusa los registros vivos y
+     * lee a donde ir del MARCO, que se lo prepara el despacho al recorrer la
+     * cadena.  Eso obliga a entrar por el despacho aunque se sepa todo.
+     *
+     * Y se sabe todo: un advice tiene un solo objetivo -- el pointcut es
+     * `Clase.metodo` exacto, sin comodines -- y una sola posicion en su cadena,
+     * asi que su `proceed` tiene UN destino, que es el siguiente `@Around` o el
+     * metodo.  Se calcula en @c run() y se llama directo, pasando lo mismo que
+     * pasaria el despacho: los parametros de este advice, que son los de la
+     * llamada original (el receptor incluido, en el primero).
+     *
+     * Ademas de ahorrarse la indireccion, esto es lo que permite despues TEJER
+     * la cadena en el sitio de llamada: un `@Around` tejido se invoca directo,
+     * sin marco, y entonces la instruccion `proceed` no tendria de donde leer.
+     *
+     * Se conserva la forma antigua para lo que no se pueda atribuir, que sigue
+     * despachandose por la cadena en ejecucion. */
+    auto it = fn_ ? destino_proceed_.find(fn_->name) : destino_proceed_.end();
+    if (it != destino_proceed_.end() && !it->second.empty()) {
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.type = ir::IrType::I64;
+        ins.dst = v;
+        ins.func_name = it->second;
+        ins.operands = fn_->params; // this + args, tal cual llegaron
+        ins.is_call_site = true;
+        ins.source_line = line;
+        emit(current_block_, std::move(ins));
+        return v;
+    }
+
     ir::IrInstr ins{};
     ins.op = ir::IrOp::PROCEED;
     ins.type = ir::IrType::I64;
