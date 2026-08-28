@@ -148,16 +148,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = v_word;
-                    ld.operands = {v_src_p};
-                    ld.source_line = e->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
+                const ir::IrValueId v_word =
+                    emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
                 const ir::IrValueId v_dst_p = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_dst_p].is_host_ptr = true;
                 {
@@ -891,16 +883,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
                     emit(current_block_, std::move(a2));
                 }
                 // word = LOAD [src_p]  (vm_mem).
-                const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = v_word;
-                    ld.operands = {v_src_p};
-                    ld.source_line = e->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
+                const ir::IrValueId v_word =
+                    emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
                 // STORE word -> [dst_p]  (host, movh por is_host_ptr).
                 {
                     ir::IrInstr st{};
@@ -1053,16 +1037,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             emit(current_block_, std::move(ld));
         }
         // LOAD refcount from [ctrl + 0] (host memory).
-        const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_rc;
-            ld.operands = {v_ctrl};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_rc =
+            emit_load_typed(v_ctrl, ir::IrType::I64, e->loc.line);
         out_value = v_rc;
         return true;
     }

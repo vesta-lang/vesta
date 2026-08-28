@@ -518,6 +518,25 @@ class Lowering {
      * @param source_line Linea fuente, para la depuracion.
      * @return El valor SSA leido.
      */
+    /**
+     * @brief Lee de una direccion, con el ancho que se pida.
+     *
+     * El ancho no se deduce: leer ocho bytes donde hay dos arrastra lo de
+     * detras, y leer dos donde hay ocho deja el valor a medias.
+     *
+     * @p host_ptr dice si lo LEIDO es a su vez una direccion del anfitrion, que
+     * no es lo mismo que la naturaleza de @p addr.
+     *
+     * @param addr        De donde leer.
+     * @param ty          De que ancho.
+     * @param source_line Linea fuente, para la depuracion.
+     * @param host_ptr    Si lo leido es una direccion del anfitrion.
+     * @return El valor SSA leido.
+     */
+    ir::IrValueId emit_load_typed(ir::IrValueId addr, ir::IrType ty,
+                                  uint32_t source_line, bool host_ptr = false);
+
+    /// @brief Atajo de @ref emit_load_typed para el ancho de ocho bytes.
     ir::IrValueId emit_load_i64(ir::IrValueId addr, uint32_t source_line);
 
     /**

@@ -402,16 +402,8 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
             emit(current_block_, std::move(mr));
         }
         // LOAD i64 desde v_buf -> v_val (resultado).
-        const ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_val;
-            ld.operands = {v_buf};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_val =
+            emit_load_typed(v_buf, ir::IrType::I64, e->loc.line);
         out_value = v_val;
         return true;
     }

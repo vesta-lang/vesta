@@ -1364,16 +1364,8 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
     if (v_buf == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
     // 2. LOAD i32 del tag en offset 0.
-    const ir::IrValueId tag_v = fn_->new_value(ir::IrType::I32);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I32;
-        ld.dst = tag_v;
-        ld.operands = {v_buf};
-        ld.source_line = src_line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId tag_v =
+        emit_load_typed(v_buf, ir::IrType::I32, src_line);
 
     // 3. Comparacion tag == 0 (=Err).
     const ir::IrValueId zero_v = emit_const(ir::IrType::I32, 0, src_line);
@@ -1426,16 +1418,8 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
             // Err a copiar usaba `mov` (VM) en vez de `movh` (host) y leia
             // basura -> error(r) != el valor real (path de error de `?`).
             fn_->values[v_src_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
-            const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = v_tmp;
-                ld.operands = {v_src_at};
-                ld.source_line = src_line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId v_tmp =
+                emit_load_typed(v_src_at, ir::IrType::I64, src_line);
             const ir::IrValueId v_off2 =
                 emit_const(ir::IrType::I64, off, src_line);
             const ir::IrValueId v_dst_at =

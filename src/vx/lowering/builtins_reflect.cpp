@@ -477,14 +477,8 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         // perderse al pasar por una variable local con register-allocation,
         // asi que lo forzamos aqui antes del LOAD.
         fn_->values[v_obj].is_host_ptr = true;
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_dst;
-        ld.operands = {v_obj};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        const ir::IrValueId v_dst =
+            emit_load_typed(v_obj, ir::IrType::I64, e->loc.line);
         out_value = v_dst;
         return true;
     }

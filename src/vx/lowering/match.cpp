@@ -580,16 +580,8 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     }
 
     // 2. LOAD i64 del tag en offset 0.
-    ir::IrValueId tag_v = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = tag_v;
-        ld.operands = {scrut_addr};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId tag_v =
+        emit_load_typed(scrut_addr, ir::IrType::I64, e->loc.line);
 
     // 3. Construir bloques: uno por arm + uno default + uno merge.
     // Estrategia simple O(N): para cada arm con variant concreto,

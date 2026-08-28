@@ -1071,16 +1071,8 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 ad.source_line = loc.line;
                 emit(current_block_, std::move(ad));
             }
-            const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = v_word;
-                ld.operands = {v_src_at};
-                ld.source_line = loc.line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId v_word =
+                emit_load_typed(v_src_at, ir::IrType::I64, loc.line);
             const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
             fn_->values[v_dst_at].is_host_ptr = dst_host;
             {

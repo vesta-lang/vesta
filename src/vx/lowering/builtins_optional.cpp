@@ -254,14 +254,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I32;
-        ld.dst = v_dst;
-        ld.operands = {v_buf};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        const ir::IrValueId v_dst =
+            emit_load_typed(v_buf, ir::IrType::I32, e->loc.line);
         out_value = v_dst;
         return true;
     }
@@ -316,14 +310,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         }
         // Optional<T>: LOAD i32 (flag) directamente del buffer stack.
         if (e->args[0]->result_type.kind == PrimitiveKind::OPTIONAL) {
-            const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I32;
-            ld.dst = v_dst;
-            ld.operands = {v_arg};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
+            const ir::IrValueId v_dst =
+                emit_load_typed(v_arg, ir::IrType::I32, e->loc.line);
             out_value = v_dst;
             return true;
         }
@@ -387,14 +375,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                 ir_type_from_primitive(payload_st.kind);
             if (is_unwrap) {
                 // Load flag (i64) from buf+0.
-                const ir::IrValueId v_flag = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr ldf{};
-                ldf.op = ir::IrOp::LOAD;
-                ldf.type = ir::IrType::I64;
-                ldf.dst = v_flag;
-                ldf.operands = {v_arg};
-                ldf.source_line = e->loc.line;
-                emit(current_block_, std::move(ldf));
+                const ir::IrValueId v_flag =
+                    emit_load_typed(v_arg, ir::IrType::I64, e->loc.line);
                 // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
                 const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
                 ir::IrInstr uw{};

@@ -331,16 +331,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             (e->callee->result_type.kind == PrimitiveKind::FUNCTION &&
              !e->callee->result_type.fn_is_raw);
         if (is_lambda) {
-            const ir::IrValueId fn_addr = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = fn_addr;
-                ld.operands = {fnp};
-                ld.source_line = e->loc.line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId fn_addr =
+                emit_load_typed(fnp, ir::IrType::I64, e->loc.line);
             const ir::IrValueId fnp8 = fn_->new_value(ir::IrType::PTR);
             {
                 const ir::IrValueId off8 =
@@ -360,16 +352,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 // closure-en-campo cargaba env con mov (vm_mem) -> basura.
                 fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
             }
-            const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = env;
-                ld.operands = {fnp8};
-                ld.source_line = e->loc.line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId env =
+                emit_load_typed(fnp8, ir::IrType::I64, e->loc.line);
             std::vector<ir::IrValueId> cargs;
             cargs.reserve(1 + args.size());
             cargs.push_back(env);
@@ -1324,16 +1308,8 @@ skip_comptime_eval_for_macro_to_macro:
         }
 
         // LOAD fn_addr de [fv_addr + 0].
-        ir::IrValueId fn_addr = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = fn_addr;
-            ld.operands = {fv_addr};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId fn_addr =
+            emit_load_typed(fv_addr, ir::IrType::I64, e->loc.line);
 
         // LOAD env_addr de [fv_addr + 8].
         ir::IrValueId env_addr;

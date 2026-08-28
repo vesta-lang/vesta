@@ -688,16 +688,8 @@ void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        const ir::IrValueId v_word = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_word;
-            ld.operands = {v_src_at};
-            ld.source_line = line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId v_word =
+            emit_load_typed(v_src_at, ir::IrType::I64, line);
         // dst + off (naturaleza del slot destino, tipicamente VM ALLOCA).
         const ir::IrValueId v_dst_at = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_dst_at].is_host_ptr = dst_is_host;
@@ -1600,16 +1592,7 @@ void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = w;
-            ld.operands = {s_at};
-            ld.source_line = line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId w = emit_load_typed(s_at, ir::IrType::I64, line);
         const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
         fn_->values[d_at].is_host_ptr = dst_host;
         {

@@ -653,16 +653,8 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 if (slot_idx != UINT64_MAX) {
                     const int ln = e->loc.line;
                     ir::IrValueId v_addr = emit_str_lit_addr(slot_idx, ln);
-                    ir::IrValueId v_val = fn_->new_value(ir::IrType::I64);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = v_val;
-                        ld.operands = {v_addr};
-                        ld.source_line = ln;
-                        emit(current_block_, std::move(ld));
-                    }
+                    ir::IrValueId v_val =
+                        emit_load_typed(v_addr, ir::IrType::I64, ln);
                     return v_val;
                 }
             }

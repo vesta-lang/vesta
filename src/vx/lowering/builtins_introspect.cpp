@@ -462,14 +462,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                         emit_const(ir::IrType::I64, offset, src_line);
                     addr = emit_ptr_add(info_ptr, off_val, src_line);
                 }
-                ir::IrValueId dst = fn_->new_value(ir::IrType::U32);
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::U32;
-                ld.dst = dst;
-                ld.operands = {addr};
-                ld.source_line = src_line;
-                emit(current_block_, std::move(ld));
+                ir::IrValueId dst =
+                    emit_load_typed(addr, ir::IrType::U32, src_line);
                 return dst;
             };
             if (is_kind_i32) {
@@ -544,14 +538,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                     emit_const(ir::IrType::I64, off, src_line);
                 ir::IrValueId addr =
                     emit_ptr_add(field_addr, off_val, src_line);
-                ir::IrValueId dst = fn_->new_value(ir::IrType::U32);
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::U32;
-                ld.dst = dst;
-                ld.operands = {addr};
-                ld.source_line = src_line;
-                emit(current_block_, std::move(ld));
+                ir::IrValueId dst =
+                    emit_load_typed(addr, ir::IrType::U32, src_line);
                 return dst;
             };
             if (name == "type_info_field_offset") {
@@ -598,16 +586,8 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         /* LOAD fn_addr = [fv_addr]; LOAD env_addr = [fv_addr + 8]. */
-        ir::IrValueId fn_addr = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = fn_addr;
-            ld.operands = {fv_addr};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId fn_addr =
+            emit_load_typed(fv_addr, ir::IrType::I64, e->loc.line);
         ir::IrValueId env_addr = fn_->new_value(ir::IrType::I64);
         {
             ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);

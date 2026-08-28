@@ -583,16 +583,7 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         const uint64_t slot = ensure_cpu_features_global();
         const int ln = e->loc.line;
         ir::IrValueId v_addr = emit_str_lit_addr(slot, ln);
-        ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::U64;
-            ld.dst = v_feat;
-            ld.operands = {v_addr};
-            ld.source_line = ln;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_feat = emit_load_typed(v_addr, ir::IrType::U64, ln);
         out_value = v_feat;
         return true;
     }

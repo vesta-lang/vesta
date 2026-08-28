@@ -433,16 +433,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = w;
-                    ld.operands = {s_at};
-                    ld.source_line = e->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
+                const ir::IrValueId w =
+                    emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
                 const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
                 fn_->values[d_at].is_host_ptr = dst_host;
                 {
@@ -681,16 +673,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             off_dst = v_new;
                         }
                     }
-                    ir::IrValueId v_qw = fn_->new_value(ir::IrType::I64);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = v_qw;
-                        ld.operands = {off_src};
-                        ld.source_line = e->loc.line;
-                        emit(current_block_, std::move(ld));
-                    }
+                    ir::IrValueId v_qw =
+                        emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
                     {
                         ir::IrInstr st{};
                         st.op = ir::IrOp::STORE;
@@ -846,16 +830,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                             }
                         }
                         // LOAD i64 del src + q*8
-                        ir::IrValueId v_qw = fn_->new_value(ir::IrType::I64);
-                        {
-                            ir::IrInstr ld{};
-                            ld.op = ir::IrOp::LOAD;
-                            ld.type = ir::IrType::I64;
-                            ld.dst = v_qw;
-                            ld.operands = {off_src};
-                            ld.source_line = e->loc.line;
-                            emit(current_block_, std::move(ld));
-                        }
+                        ir::IrValueId v_qw =
+                            emit_load_typed(off_src, ir::IrType::I64, e->loc.line);
                         // STORE al dst + q*8
                         {
                             ir::IrInstr st{};
@@ -1131,16 +1107,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                     /* Compound assign sobre global: load cur from
                      * slot + combine + store back. */
                     ir::IrValueId v_addr_load = emit_str_lit_addr(slot_idx, ln);
-                    ir::IrValueId v_cur = fn_->new_value(ir::IrType::I64);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = v_cur;
-                        ld.operands = {v_addr_load};
-                        ld.source_line = ln;
-                        emit(current_block_, std::move(ld));
-                    }
+                    ir::IrValueId v_cur =
+                        emit_load_typed(v_addr_load, ir::IrType::I64, ln);
                     /* Combine via emit_binop equivalent.  Mapeamos
                      * AssignOp -> BinOp y emitimos.  Para simplicidad
                      * solo cubrimos los compound mas comunes; otros
@@ -1321,16 +1289,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
                         ad.source_line = e->loc.line;
                         emit(current_block_, std::move(ad));
                     }
-                    const ir::IrValueId w = fn_->new_value(ir::IrType::I64);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = w;
-                        ld.operands = {s_at};
-                        ld.source_line = e->loc.line;
-                        emit(current_block_, std::move(ld));
-                    }
+                    const ir::IrValueId w =
+                        emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
                     const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
                     fn_->values[d_at].is_host_ptr = dst_host;
                     {

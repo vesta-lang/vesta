@@ -256,16 +256,7 @@ ir::IrValueId Lowering::build_native_string_index_char(ir::IrValueId v_src,
         emit(current_block_, std::move(ad));
     }
     // LOAD u8: el codegen zero-extiende el byte a un registro completo.
-    ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::U8;
-        ld.dst = v_byte;
-        ld.operands = {v_addr};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_byte = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     return v_byte;
 }
 

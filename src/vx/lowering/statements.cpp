@@ -1317,16 +1317,8 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
                 fn_->values[v_src_at].is_host_ptr =
                     fn_->values[v_local].is_host_ptr;
                 // LOAD i64 from src+off
-                const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::I64;
-                    ld.dst = v_tmp;
-                    ld.operands = {v_src_at};
-                    ld.source_line = s->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
+                const ir::IrValueId v_tmp =
+                    emit_load_typed(v_src_at, ir::IrType::I64, s->loc.line);
                 // dst+off
                 const ir::IrValueId v_off2 =
                     emit_const(ir::IrType::I64, off, s->loc.line);

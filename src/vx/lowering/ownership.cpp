@@ -533,16 +533,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     add.source_line = it->source_line;
                     emit(current_block_, std::move(add));
                 }
-                const ir::IrValueId v_del = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ldd{};
-                    ldd.op = ir::IrOp::LOAD;
-                    ldd.type = ir::IrType::I64;
-                    ldd.dst = v_del;
-                    ldd.operands = {v_slot8};
-                    ldd.source_line = it->source_line;
-                    emit(current_block_, std::move(ldd));
-                }
+                const ir::IrValueId v_del =
+                    emit_load_typed(v_slot8, ir::IrType::I64, it->source_line);
                 const uint32_t lbl = ++cleanup_label_seq_;
                 const std::string default_lbl =
                     "__sp_def_" + std::to_string(lbl);
@@ -661,16 +653,8 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             }
             // dec_bb: refcount-- (LOAD + SUB + STORE).
             current_block_ = dec_bb;
-            const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::I64;
-                ld.dst = v_rc;
-                ld.operands = {v_ctrl};
-                ld.source_line = it->source_line;
-                emit(current_block_, std::move(ld));
-            }
+            const ir::IrValueId v_rc =
+                emit_load_typed(v_ctrl, ir::IrType::I64, it->source_line);
             const ir::IrValueId v_one =
                 emit_const(ir::IrType::I64, 1, it->source_line);
             const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
@@ -1345,16 +1329,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         fn_->blocks[skip_bb].preds.push_back(current_block_);
     }
     current_block_ = dec_bb;
-    const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_rc;
-        ld.operands = {v_ctrl};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId v_rc = emit_load_typed(v_ctrl, ir::IrType::I64, line);
     const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
     const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
     {
@@ -1457,16 +1432,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         fn_->blocks[skip_bb].preds.push_back(current_block_);
     }
     current_block_ = inc_bb;
-    const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_rc;
-        ld.operands = {v_ctrl};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId v_rc = emit_load_typed(v_ctrl, ir::IrType::I64, line);
     const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
     const ir::IrValueId v_rc_inc = fn_->new_value(ir::IrType::I64);
     {
@@ -1501,17 +1467,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     // slot = LOAD [this + field_offset]  (host_ptr al slot RAW_ALLOC).
     const ir::IrValueId slot_addr =
         emit_field_addr(fn_, current_block_, this_vid, field_offset, line);
-    const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
-    fn_->values[slot].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = slot;
-        ld.operands = {slot_addr};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId slot =
+        emit_load_typed(slot_addr, ir::IrType::I64, line, /*host_ptr=*/true);
     // if (slot == 0) -> skip  (campo nunca asignado / closure null).
     const ir::IrBlockId slot_ok = fn_->new_block("free_clo_slot_ok");
     {
@@ -1554,17 +1511,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ad.source_line = line;
         emit(current_block_, std::move(ad));
     }
-    const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
-    fn_->values[env].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = env;
-        ld.operands = {env_addr};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId env =
+        emit_load_typed(env_addr, ir::IrType::I64, line, /*host_ptr=*/true);
     // Bloque que SIEMPRE libera el slot (heap owned), tras (quiza) liberar env.
     const ir::IrBlockId free_slot_bb = fn_->new_block("free_clo_slot");
     // if (env == 0) -> free_slot; else RAW_FREE(env) -> free_slot
@@ -1645,17 +1593,8 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         current_block_ = slot_ok;
     }
     // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
-    const ir::IrValueId ptr = fn_->new_value(ir::IrType::I64);
-    fn_->values[ptr].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = ptr;
-        ld.operands = {slot};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId ptr =
+        emit_load_typed(slot, ir::IrType::I64, line, /*host_ptr=*/true);
     // deleter = LOAD [slot + 8].
     const ir::IrValueId del_addr = fn_->new_value(ir::IrType::PTR);
     fn_->values[del_addr].is_host_ptr = true;
@@ -1669,17 +1608,8 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ad.source_line = line;
         emit(current_block_, std::move(ad));
     }
-    const ir::IrValueId deleter = fn_->new_value(ir::IrType::I64);
-    fn_->values[deleter].is_host_ptr = true;
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = deleter;
-        ld.operands = {del_addr};
-        ld.source_line = line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId deleter =
+        emit_load_typed(del_addr, ir::IrType::I64, line, /*host_ptr=*/true);
     // if (deleter != 0) -> CALLIND deleter(ptr); else RAW_FREE(ptr).
     const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
     const ir::IrBlockId free_bb = fn_->new_block("free_uniq_raw");

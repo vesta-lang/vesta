@@ -313,14 +313,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     // nativas que esperan un puntero de funcion crudo.  Solo para VARIABLE.
     if (src_type.kind == PrimitiveKind::FUNCTION &&
         e->operand->kind == ast::NodeKind::IdentExpr && dst_ptr) {
-        const ir::IrValueId fa = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = fa;
-        ld.operands = {v_op};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        const ir::IrValueId fa =
+            emit_load_typed(v_op, ir::IrType::I64, e->loc.line);
         if (native_poo_) fn_->values[fa].is_host_ptr = true;
         return fa;
     }
@@ -494,14 +488,8 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         if (lhs_addr == ir::IR_NO_VALUE || rhs_addr == ir::IR_NO_VALUE)
             return ir::IR_NO_VALUE;
         auto leer_tag = [&](ir::IrValueId dir) {
-            ir::IrValueId t = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = t;
-            ld.operands = {dir};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
+            ir::IrValueId t =
+                emit_load_typed(dir, ir::IrType::I64, e->loc.line);
             return t;
         };
         const ir::IrValueId tl = leer_tag(lhs_addr);

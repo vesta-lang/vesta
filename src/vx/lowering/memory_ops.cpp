@@ -220,16 +220,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
     }
 
     // --- LOAD del binding (lee rax) -> bitmask u64 ---
-    const ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::U64;
-        ld.dst = v_feat;
-        ld.operands = {rax_slot};
-        ld.source_line = ln;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId v_feat = emit_load_typed(rax_slot, ir::IrType::U64, ln);
 
     // --- STORE del bitmask al slot global __vx_cpu_features ---
     const ir::IrValueId v_gaddr = emit_str_lit_addr(slot, ln);
@@ -524,16 +515,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         // feat = LOAD i64 [__vx_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
         ir::IrValueId v_faddr = emit_str_lit_addr(feat_slot, ln, true);
-        ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_feat;
-            ld.operands = {v_faddr};
-            ld.source_line = ln;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_feat = emit_load_typed(v_faddr, ir::IrType::I64, ln);
         // has_avx2 = (feat >> 4) & 1.  (bit4 = AVX2.)
         ir::IrValueId v_sh = fn_->new_value(ir::IrType::I64);
         {
@@ -804,16 +786,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         // feat = LOAD i64 [__vx_cpu_features].
         const uint64_t feat_slot = ensure_cpu_features_global();
         ir::IrValueId v_faddr = emit_str_lit_addr(feat_slot, ln, true);
-        ir::IrValueId v_feat = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_feat;
-            ld.operands = {v_faddr};
-            ld.source_line = ln;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_feat = emit_load_typed(v_faddr, ir::IrType::I64, ln);
         // bit_set(n): has = ((feat >> n) & 1) != 0.
         auto bit_set = [&](int n) -> ir::IrValueId {
             ir::IrValueId v_sh = fn_->new_value(ir::IrType::I64);
@@ -1085,16 +1058,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
 
         // hdr: i = load slot ; cond = i < limit8 ; br body, done
         current_block_ = hdr;
-        ir::IrValueId v_i = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_i;
-            ld.operands = {v_i_slot};
-            ld.source_line = source_line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_i =
+            emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
         ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
         {
             ir::IrInstr cmp{};
@@ -1123,16 +1088,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         current_block_ = body;
         ir::IrValueId v_src = emit_ptr_add(src_base, v_i, source_line);
         ir::IrValueId v_dst = emit_ptr_add(dst_base, v_i, source_line);
-        ir::IrValueId v_w = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_w;
-            ld.operands = {v_src};
-            ld.source_line = source_line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_w =
+            emit_load_typed(v_src, ir::IrType::I64, source_line);
         {
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -1180,16 +1137,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
 
         // hdr: i = load slot ; cond = i < len ; br body, done
         current_block_ = hdr;
-        ir::IrValueId v_i = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_i;
-            ld.operands = {v_i_slot};
-            ld.source_line = source_line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_i =
+            emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
         ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
         {
             ir::IrInstr cmp{};
@@ -1218,16 +1167,8 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         current_block_ = body;
         ir::IrValueId v_src = emit_ptr_add(src_base, v_i, source_line);
         ir::IrValueId v_dst = emit_ptr_add(dst_base, v_i, source_line);
-        ir::IrValueId v_byte = fn_->new_value(ir::IrType::U8);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::U8;
-            ld.dst = v_byte;
-            ld.operands = {v_src};
-            ld.source_line = source_line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_byte =
+            emit_load_typed(v_src, ir::IrType::U8, source_line);
         {
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
@@ -1401,28 +1342,43 @@ ir::IrValueId Lowering::emit_ptr_add(ir::IrValueId base, uint64_t off,
 }
 
 /**
- * @brief Lee un qword de una direccion.
+ * @brief Lee de una direccion, con el ancho que se pida.
  *
- * Ocho bytes es el ancho con el que se leen los campos internos de una cadena
- * -- su longitud, su capacidad, el puntero a sus bytes -- y de ahi que este
- * caso concreto valga la pena aparte: estaba escrito cuatro veces, una por
- * funcion que monta uno de esos helpers a mano.
+ * El ancho no se deduce de nada: leer ocho bytes donde hay dos arrastra lo que
+ * viene detras, y leer dos donde hay ocho deja el valor a medias.  Por eso es
+ * un parametro y no una suposicion.
+ *
+ * @p host_ptr dice si lo LEIDO es a su vez una direccion del anfitrion -- el
+ * caso de leer un puntero guardado en memoria --.  No es lo mismo que la
+ * naturaleza de @p addr: se puede leer un puntero del anfitrion desde la
+ * memoria de la maquina virtual y al reves.
  *
  * @param addr        De donde leer.
+ * @param ty          De que ancho.
  * @param source_line Linea fuente, para la depuracion.
+ * @param host_ptr    Si lo leido es una direccion del anfitrion.
  * @return El valor SSA leido.
  */
-ir::IrValueId Lowering::emit_load_i64(ir::IrValueId addr,
-                                      uint32_t source_line) {
-    const ir::IrValueId v = fn_->new_value(ir::IrType::I64);
+ir::IrValueId Lowering::emit_load_typed(ir::IrValueId addr, ir::IrType ty,
+                                       uint32_t source_line, bool host_ptr) {
+    const ir::IrValueId v = fn_->new_value(ty);
+    if (host_ptr) fn_->values[v].is_host_ptr = true;
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;
-    ld.type = ir::IrType::I64;
+    ld.type = ty;
     ld.dst = v;
     ld.operands = {addr};
     ld.source_line = source_line;
     emit(current_block_, std::move(ld));
     return v;
+}
+
+/**
+ * @copydoc vx::Lowering::emit_load_i64
+ */
+ir::IrValueId Lowering::emit_load_i64(ir::IrValueId addr,
+                                      uint32_t source_line) {
+    return emit_load_typed(addr, ir::IrType::I64, source_line);
 }
 
 /**

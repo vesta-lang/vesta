@@ -625,16 +625,7 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
         ad.source_line = source_line;
         emit(current_block_, std::move(ad));
     }
-    ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::U8;
-        ld.dst = v_b23;
-        ld.operands = {v_addr};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     // is_heap = b23 >> 7  (logico; b23 es 0..255 zero-extended).
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
     ir::IrValueId v_is_heap = fn_->new_value(ir::IrType::I64);
@@ -672,16 +663,7 @@ ir::IrValueId Lowering::emit_native_str_is_owned(ir::IrValueId v_slot,
         ad.source_line = source_line;
         emit(current_block_, std::move(ad));
     }
-    ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::U8;
-        ld.dst = v_b23;
-        ld.operands = {v_addr};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     ir::IrValueId v_six = emit_const(ir::IrType::I64, 6, source_line);
     ir::IrValueId v_top2 = fn_->new_value(ir::IrType::I64);
     {
@@ -717,16 +699,8 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
     // ptr0 cargado SIEMPRE (slot+0 es memoria valida en ambos modos; en
     // SSO son bytes de data, pero solo los usamos si is_heap=1).  Lo
     // tratamos como I64 para la aritmetica de mascara.
-    ir::IrValueId v_ptr0 = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_ptr0;
-        ld.operands = {v_slot};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_ptr0 =
+        emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // slot como I64 (la direccion del slot).  BITCAST PTR->I64.
     ir::IrValueId v_slot_i = fn_->new_value(ir::IrType::I64);
     {
@@ -805,16 +779,8 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
         ad.source_line = source_line;
         emit(current_block_, std::move(ad));
     }
-    ir::IrValueId v_b23 = fn_->new_value(ir::IrType::U8);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::U8;
-        ld.dst = v_b23;
-        ld.operands = {v_addr23};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_b23 =
+        emit_load_typed(v_addr23, ir::IrType::U8, source_line);
     ir::IrValueId v_mask7f = emit_const(ir::IrType::I64, 0x7F, source_line);
     ir::IrValueId v_sso_len = fn_->new_value(ir::IrType::I64);
     {
@@ -1461,16 +1427,8 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     // .rodata tambien tiene puntero, y liberarlo seria pasarle al asignador
     // una direccion que nunca le pidio.
     ir::IrValueId v_is_heap = emit_native_str_is_owned(v_slot, source_line);
-    ir::IrValueId v_ptr0 = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_ptr0;
-        ld.operands = {v_slot};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_ptr0 =
+        emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // mask = -is_heap  (0 - is_heap): 0 -> 0 ; 1 -> ~0.
     ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
     {
@@ -1639,16 +1597,8 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
     //   HEAP (is_heap=1): mask = 0     -> ptr@0 = 0  (free posterior no-op).
     //   SSO  (is_heap=0): mask = ~0    -> ptr@0 sin cambio (data inline).
     ir::IrValueId v_is_heap = emit_native_str_is_heap(v_slot, source_line);
-    ir::IrValueId v_old_ptr0 = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = ir::IrType::I64;
-        ld.dst = v_old_ptr0;
-        ld.operands = {v_slot};
-        ld.source_line = source_line;
-        emit(current_block_, std::move(ld));
-    }
+    ir::IrValueId v_old_ptr0 =
+        emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // mask = is_heap - 1.
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
     ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);

@@ -290,16 +290,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
 
     // done_val = LOAD i64 [done_slot]
     const ir::IrValueId addr_done = emit_addr(done_slot);
-    const ir::IrValueId done_val = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr l{};
-        l.op = ir::IrOp::LOAD;
-        l.type = ir::IrType::I64;
-        l.dst = done_val;
-        l.operands = {addr_done};
-        l.source_line = ln;
-        emit(current_block_, std::move(l));
-    }
+    const ir::IrValueId done_val =
+        emit_load_typed(addr_done, ir::IrType::I64, ln);
     // cond = (done_val == 0)
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, ln);
     const ir::IrValueId cond = fn_->new_value(ir::IrType::BOOL);
@@ -381,16 +373,8 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
                     ad.source_line = ln;
                     emit(current_block_, std::move(ad));
                 }
-                const ir::IrValueId v_w = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr l2{};
-                    l2.op = ir::IrOp::LOAD;
-                    l2.type = ir::IrType::I64;
-                    l2.dst = v_w;
-                    l2.operands = {v_s};
-                    l2.source_line = ln;
-                    emit(current_block_, std::move(l2));
-                }
+                const ir::IrValueId v_w =
+                    emit_load_typed(v_s, ir::IrType::I64, ln);
                 const ir::IrValueId v_d = fn_->new_value(ir::IrType::PTR);
                 fn_->values[v_d].is_host_ptr = true; // gdata = memoria host
                 {

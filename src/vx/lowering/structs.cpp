@@ -286,16 +286,8 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        const ir::IrValueId word = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = word;
-            ld.operands = {src_at};
-            ld.source_line = line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId word =
+            emit_load_typed(src_at, ir::IrType::I64, line);
         const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
         // tmp es VM (is_host_ptr = false por defecto).
         {
@@ -379,16 +371,8 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(
             ad.source_line = line;
             emit(current_block_, std::move(ad));
         }
-        const ir::IrValueId word = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = word;
-            ld.operands = {src_at};
-            ld.source_line = line;
-            emit(current_block_, std::move(ld));
-        }
+        const ir::IrValueId word =
+            emit_load_typed(src_at, ir::IrType::I64, line);
         const ir::IrValueId dst_at = fn_->new_value(ir::IrType::PTR);
         fn_->values[dst_at].is_host_ptr = dst_is_host;
         {
