@@ -116,6 +116,27 @@ MemoryAccess memory_access(const ir::IrInstr &ins, const PointsTo &pt) {
             a.writes.push_back(unknown_loc());
         }
         return a;
+    /* --- MEMSET: escribe dst=ops[0] y NO lee memoria (ops[1] es el valor, un
+     *     escalar; ops[2] la longitud).  Mismo whole-root que MEMCPY.
+     *
+     *     Faltaba, y el modelo de efectos lo enruta AQUI dando por hecho que
+     *     esta modelado, asi que caia en el `default` y contestaba "no toca
+     *     memoria".  Consecuencia: una funcion cuyo unico trabajo es rellenar
+     *     un buffer del llamante -- el bucle `p[i] = 0` que el pase de memoria
+     *     masiva sube a MEMSET -- salia con los contratos `pure` y `readonly`,
+     *     y ademas con el analisis marcado como COMPLETO: no decia "no lo se",
+     *     afirmaba que no escribe nada.  Es el mismo fallo que el comentario
+     *     de ir_effects.cpp da por cerrado para las ops vectoriales; MEMSET se
+     *     quedo fuera. --- */
+    case Op::MEMSET:
+        if (ops.size() >= 3) {
+            a.touches = a.is_store = true;
+            a.writes.push_back(loc_of(pt, ops[0], 0)); // dst
+        } else {
+            a.touches = a.opaque = a.is_store = true;
+            a.writes.push_back(unknown_loc());
+        }
+        return a;
 
     // --- Ops VECTORIALES sobre PUNTEROS (SIMD 16/32/64 B): footprint PRECISO.
     //     El ancho (vw) es 16/32/64 de imm&0xFF; los operandos son punteros a

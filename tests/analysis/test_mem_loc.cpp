@@ -14,6 +14,7 @@
 #include "analysis/effects/effects.h"
 #include "analysis/effects/ir_effects.h" // traer un efecto al sitio de llamada
 #include "analysis/facts/ir_facts.h"
+#include "analysis/memory/memory_access.h"
 #include "analysis/memory/points_to.h"
 #include "ir/ssa_ir.h"
 
@@ -213,8 +214,72 @@ static void test_instanciar_en_llamada() {
     CHECK(visto_global, "lo global no cambia al cruzar la llamada");
 }
 
+// --------------------------------------------------------------------------
+// Un relleno masivo ESCRIBE memoria, y hay que decirlo.
+//
+// MEMSET no estaba en el switch y caia en el default, que contesta "no toca
+// memoria".  Como el modelo de efectos enruta MEMSET aqui dando por hecho que
+// esta modelado, una funcion cuyo unico trabajo era rellenar un buffer del
+// llamante -- el bucle `p[i] = 0` que el pase de memoria masiva sube a MEMSET
+// -- salia con los contratos `pure` y `readonly`, y con el analisis marcado
+// como COMPLETO: no decia "no lo se", afirmaba que no escribe nada.
+// --------------------------------------------------------------------------
+static void test_memset_escribe() {
+    ir::IrFunction fn;
+    fn.name = "t_memset";
+    auto add_val = [&](bool is_const, uint64_t cv) -> ir::IrValueId {
+        ir::IrValue v;
+        v.is_const = is_const;
+        v.const_val = cv;
+        fn.values.push_back(v);
+        return static_cast<ir::IrValueId>(fn.values.size() - 1);
+    };
+    const ir::IrValueId dst = add_val(false, 0);  // destino (un alloca)
+    const ir::IrValueId val = add_val(true, 0);   // valor con el que rellena
+    const ir::IrValueId len = add_val(true, 256); // bytes
+
+    ir::IrBlock bb;
+    bb.id = 0;
+    {
+        ir::IrInstr i;
+        i.op = ir::IrOp::ALLOCA;
+        i.dst = dst;
+        bb.instrs.push_back(i);
+    }
+    ir::IrInstr ms{};
+    ms.op = ir::IrOp::MEMSET;
+    ms.dst = ir::IR_NO_VALUE;
+    ms.operands = {dst, val, len};
+    bb.instrs.push_back(ms);
+    fn.blocks.push_back(bb);
+
+    IrFacts facts = build_ir_facts(fn);
+    PointsTo pt = compute_points_to(fn, facts);
+    const MemoryAccess a = memory_access(bb.instrs.back(), pt);
+
+    CHECK(a.touches, "un memset TOCA memoria");
+    CHECK(a.is_store, "y lo que hace es ESCRIBIR");
+    CHECK(!a.is_load, "el valor con el que rellena es un escalar, no una "
+                      "lectura de memoria");
+    CHECK(a.writes.size() == 1, "escribe en un solo sitio: su destino");
+    if (!a.writes.empty())
+        CHECK(a.writes[0].kind == K::Stack && a.writes[0].id == dst,
+              "y ese sitio es la raiz del destino");
+
+    // Un memset con la forma rota no puede quedarse callado: si no se sabe
+    // donde escribe, se dice que escribe en cualquier parte, no que no escribe.
+    ir::IrInstr roto{};
+    roto.op = ir::IrOp::MEMSET;
+    roto.dst = ir::IR_NO_VALUE;
+    roto.operands = {dst};
+    const MemoryAccess r = memory_access(roto, pt);
+    CHECK(r.touches && r.is_store && r.opaque,
+          "un memset sin sus tres operandos es opaco, nunca inocuo");
+}
+
 int main() {
     test_instanciar_en_llamada();
+    test_memset_escribe();
     test_range_alias();
     test_class_alias();
     test_must_alias();
