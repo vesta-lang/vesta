@@ -32,13 +32,24 @@
 
 namespace jit {
 
+/**
+ * @brief Que le hace al destino de un binop la ALU de @p isa.
+ *
+ * En x86 el destino es tambien operando leido -- `add rax, rbx` deja el
+ * resultado EN rax, destruyendolo --, asi que un binop de tres operandos del IR
+ * se legaliza a `mov dst, op0; OP dst, op1`.  En arm64, arm32 y RISC-V la ALU es
+ * de tres direcciones (`add x0, x1, x2` no toca ni x1 ni x2) y esa legalizacion
+ * no existe.
+ */
+DstKind dst_kind_of_isa(sched::EffIsa isa) noexcept {
+    return isa == sched::EffIsa::X86 ? DstKind::Destructive
+                                     : DstKind::Preserving;
+}
+
 namespace {
 
-/// True si @p op es un binop ALU two-address (`dst = op0 OP op1` -> se
-/// legaliza a `mov dst, op0; OP dst, op1`).  Para estos, dst NO puede
-/// compartir registro con op1 (operands[1]): el `mov dst, op0` clobberearia
-/// op1 antes de leerlo.
-bool is_two_addr_ir(ir::IrOp op) noexcept {
+/// Los binops ALU del IR que se legalizan a dos direcciones donde toca.
+bool is_alu_binop(ir::IrOp op) noexcept {
     switch (op) {
     case ir::IrOp::ADD:
     case ir::IrOp::SUB:
@@ -55,9 +66,19 @@ bool is_two_addr_ir(ir::IrOp op) noexcept {
     }
 }
 
+/// True si @p op es un binop ALU two-address (`dst = op0 OP op1` -> se
+/// legaliza a `mov dst, op0; OP dst, op1`) EN @p isa.  Para estos, dst NO
+/// puede compartir registro con op1 (operands[1]): el `mov dst, op0`
+/// clobberearia op1 antes de leerlo.  Donde la ALU es de tres direcciones no
+/// hay tal `mov`, y por tanto tampoco la restriccion.
+bool is_two_addr_ir(ir::IrOp op, DstKind dst) noexcept {
+    return dst == DstKind::Destructive && is_alu_binop(op);
+}
+
 } // namespace
 
-std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
+std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
+                                             DstKind dst) {
     const uint32_t NV = static_cast<uint32_t>(fn.values.size());
     const uint32_t NB = static_cast<uint32_t>(fn.blocks.size());
     std::vector<uint32_t> remap; // vacio = nada que coalescer
@@ -293,7 +314,7 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
     std::vector<std::vector<uint32_t>> forbidden(NV);
     for (uint32_t b = 0; b < NB; ++b) {
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
-            if (!is_two_addr_ir(in.op)) continue;
+            if (!is_two_addr_ir(in.op, dst)) continue;
             if (in.dst == ir::IR_NO_VALUE || in.operands.size() < 2) continue;
             const ir::IrValueId d = in.dst, o1 = in.operands[1];
             if (d < NV && o1 < NV && d != o1) {
@@ -674,7 +695,8 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn) {
     return remap;
 }
 
-bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
+bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn,
+                        DstKind dst) {
     /* DEFAULT-ON (kill: VESTA_NO_SSA_COALESCE=1).  Coalesce las congruencias de
      * PHI (reduce el trafico de copias de reg en TODO loop con contador/
      * acumulador + if/else/cadenas) usando un GRAFO DE INTERFERENCIA sound
@@ -691,7 +713,7 @@ bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn) {
      * interp-vs-jit). */
     static const bool off = util::flag_on(util::FlagId::NoSsaCoalesce);
     if (off) return false;
-    const std::vector<uint32_t> remap = ssa_phi_coalesce_remap(fn);
+    const std::vector<uint32_t> remap = ssa_phi_coalesce_remap(fn, dst);
     if (remap.empty()) return false;
     const uint32_t NVAL = static_cast<uint32_t>(remap.size());
     bool changed = false;

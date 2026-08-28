@@ -43,6 +43,7 @@
 
 #include "ir/ssa_ir.h"
 #include "jit/machine_ir.h"
+#include "jit/sched/machine_effects.h" // EffIsa: para quien se genera este codigo
 
 #include <cstdint>
 #include <vector>
@@ -55,7 +56,28 @@ namespace jit {
  *         el valor REPRESENTANTE del cluster de v (remap[v]==v si no se
  *         coalesce).  Vacio si no hay nada que coalescer.
  */
-std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn);
+/**
+ * @brief Que le hace el objetivo al destino de un binop ALU.
+ *
+ * Es lo unico que este pase necesita saber del objetivo, y por eso se pregunta
+ * asi y no por la ISA: el emisor de bytecode tampoco es una ISA de la base de
+ * instrucciones, y tenia el mismo derecho a contestar.
+ */
+enum class DstKind : uint8_t {
+    /// Dos direcciones: el destino es tambien operando leido.  Un binop de tres
+    /// operandos del IR se legaliza a `mov dst, op0; OP dst, op1`, y ese `mov`
+    /// obliga a que dst no comparta registro con op1.  Es el caso de x86.
+    Destructive,
+    /// Tres direcciones: `add x0, x1, x2` no toca ni x1 ni x2.  No hay `mov`
+    /// previo, luego tampoco la restriccion.  arm64, arm32 y RISC-V.
+    Preserving,
+};
+
+/// @brief Como trata @p isa el destino de un binop ALU.
+DstKind dst_kind_of_isa(sched::EffIsa isa) noexcept;
+
+std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
+                                             DstKind dst);
 
 /**
  * @brief Aplica el coalescing SSA a la MachineIR @p mf de la funcion @p fn.
@@ -65,9 +87,15 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn);
  * Los vregs temporales (id >= fn.values.size()) no se tocan.  Las copias de
  * PHI coalescidas quedan como `MOV vX, vX` (las elimina el peephole).
  *
+ * @p dst es OBLIGATORIO porque una de las restricciones que impone este pase --
+ * que el destino de un binop no comparta registro con su segundo operando --
+ * solo existe donde la instruccion es de DOS DIRECCIONES.  Donde la ALU es de
+ * tres, esa restriccion no protege de nada: solo impide coalescings que si eran
+ * validos.  Se pregunta, no se supone.
+ *
  * @return true si se reescribio algo (el caller DEBE reconstruir intervalos).
  */
-bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn);
+bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn, DstKind dst);
 
 } // namespace jit
 

@@ -572,7 +572,8 @@ uint8_t *vreg_compile(const ir::IrFunction &fn, CodeCache &cc,
      *    para eliminar las copias de PHI/2-address.  Si coalesce algo,
      *    reconstruye los intervalos sobre la forma coalescida. */
     IntervalResult ivs = build_intervals(mf, tri);
-    if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
+    if (apply_ssa_coalesce(mf, fn, dst_kind_of_isa(vx::isa_host())))
+        ivs = build_intervals(mf, tri);
 
     /* Allocator UNICO: rbank (linear_scan jubilado).  El verificador
      * adversarial de GC roots de abajo + diff_harness (0 bugs) + e2e (724/0)
@@ -716,7 +717,8 @@ uint8_t *vreg_compile_callback(const ir::IrFunction &fn, CodeCache &cc,
                              fn_can_use_wide512(fn, backend_caps_host()));
 
     IntervalResult ivs = build_intervals(mf, tri);
-    if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
+    if (apply_ssa_coalesce(mf, fn, dst_kind_of_isa(vx::isa_host())))
+        ivs = build_intervals(mf, tri);
     codegen::AssignmentPlan
         plan; // Fragmentation Recovery (vacio si el splitting esta OFF).
     codegen::RegAlloc ra = rbank_allocate_belady(
@@ -819,7 +821,10 @@ std::vector<uint8_t> vreg_compile_native_target(
     /* 2. Intervalos + P1 coalescing + 3. asignacion linear-scan (COMUN a todo
      *    target: toman el TargetRegInfo). */
     IntervalResult ivs = build_intervals(mf, tri);
-    if (apply_ssa_coalesce(mf, fn)) ivs = build_intervals(mf, tri);
+    /* Aqui el objetivo NO es el host: se genera un binario para donde diga el
+     * target, que es quien contesta -- igual que el scheduler de mas abajo. */
+    if (apply_ssa_coalesce(mf, fn, dst_kind_of_isa(target.sched_isa())))
+        ivs = build_intervals(mf, tri);
     /* El path AOT baja por @c CodegenTarget::rewrite, que aun consume la @c
      * RegAlloc plana (no el @c AllocationResult) -> no puede materializar un
      * plan.  Se le pasa nullptr explicitamente: no es que no haya splitting, es

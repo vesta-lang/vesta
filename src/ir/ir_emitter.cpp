@@ -6780,7 +6780,20 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     {
         static const bool coal_off = util::flag_on(util::FlagId::NoIrCoalesce);
         if (!coal_off && !fn.is_native) {
-            coal_remap = jit::ssa_phi_coalesce_remap(fn);
+            /* El objetivo aqui es la VM, que no es ninguna ISA de la base de
+             * instrucciones: por eso la pregunta es "que le pasa al destino" y
+             * no "que arquitectura es".  Se contesta `Destructive`, que es la
+             * forma BASE de su ALU (`adds rd, rs` deja el resultado en rd) y lo
+             * que este emisor venia asumiendo.
+             *
+             * Queda apuntado que la VM tiene ademas super-instrucciones de tres
+             * operandos (`adds3 rd, rs1, rs2`), y que este emisor las emite
+             * cuando el destino no coincide con el primer operando.  En la
+             * medida en que siempre pueda emitirlas, la restriccion sobra y la
+             * respuesta seria `Preserving` -- pero eso CAMBIA el bytecode que
+             * se emite, asi que se mide y se decide aparte, no de camino. */
+            coal_remap =
+                jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Destructive);
             if (!coal_remap.empty()) {
                 // Forzar que cada parametro sea el root de su propia clase:
                 // el allocator pre-asigna params por su IrValueId, asi que un

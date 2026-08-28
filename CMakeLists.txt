@@ -1026,6 +1026,20 @@ endif ()
 # Round-trip del serializador del IR.  Importa que este DECLARADO: el AOT
 # compila desde el IR serializado, asi que lo que no cruce esta frontera no
 # existe para el -- y un test que nadie compila no avisa de nada.
+# El coalescing pregunta por su OBJETIVO en vez de suponerlo: la restriccion de
+# dos direcciones solo existe donde la ALU destruye el destino.
+add_executable(test_ssa_coalesce_target tests/jit/test_ssa_coalesce_target.cpp)
+target_include_directories(test_ssa_coalesce_target PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_ssa_coalesce_target PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_ssa_coalesce_target PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_ssa_coalesce_target PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_ssa_coalesce_target PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 # Vocabulario UNICO de propiedades de un IrType (tres ejes de anchura + clase).
 # Los oraculos del test son copias literales de las doce tablas que sustituye:
 # es lo que demuestra que la migracion no cambia comportamiento.
