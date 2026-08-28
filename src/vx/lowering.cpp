@@ -30020,6 +30020,42 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         const Type inner = e->args[0]->result_type.pointee
                                ? *e->args[0]->result_type.pointee
                                : Type{};
+        /* Un AGREGADO no cabe en un STORE.  Su valor SSA es un PUNTERO a su
+         * buffer -- `read_borrow` de un struct hace pass-through del host_ptr,
+         * arriba --, asi que un `STORE` escribia esa DIRECCION sobre los ocho
+         * primeros bytes del propio struct.  Con `P {i32 x; i32 y;}` los dos
+         * campos salian siendo las dos mitades de un puntero:
+         *
+         *     escribir(m): b.x = 99; b.y = 77; write_borrow(m, b);
+         *     -> x=1136459712 y=569        (y distinto en cada ejecucion)
+         *
+         * Lo que toca es COPIAR los bytes.  El tamano sale del layout del
+         * struct; si no se conoce, no se inventa: se avisa y no se emite una
+         * escritura que corromperia el valor. */
+        if (inner.kind == PrimitiveKind::STRUCT) {
+            auto it_l = tc_.struct_layouts().find(inner.struct_name);
+            if (it_l == tc_.struct_layouts().end()) {
+                error_at(e->loc,
+                         "write_borrow: no se conoce la disposicion de '" +
+                             inner.struct_name +
+                             "'; no se puede copiar el valor");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_n = emit_const(
+                ir::IrType::I64,
+                static_cast<uint64_t>(it_l->second.size_bytes), e->loc.line);
+            fn_->values[v_v].is_host_ptr = true;
+            ir::IrInstr mc{};
+            mc.op = ir::IrOp::MEMCPY;
+            mc.type = ir::IrType::I8;
+            mc.dst = ir::IR_NO_VALUE;
+            mc.operands = {v_b, v_v, v_n};
+            mc.source_line = e->loc.line;
+            emit(current_block_, std::move(mc));
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         const ir::IrType payload_t = ir_type_from_primitive(inner.kind);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;

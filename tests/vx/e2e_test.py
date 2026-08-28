@@ -3222,6 +3222,11 @@ modes3_case("dbg_walk", "cadena de llamadas minima (reproductor del depurador)",
 modes3_case("ffi_kernel32", "FFI declarativa contra kernel32", "beep_bepp.vx", 0)
 modes3_case("borrow_unique_owner", "prestamo sobre un unique como duenno (reproductor)", "bug3.vx", 0)
 modes3_case("borrow_class_owner", "prestamo con duenno de clase (reproductor)", "bug3_class.vx", 30)
+# Escribir un AGREGADO por un prestamo mutable.  Estaba roto y nadie lo veia:
+# write_borrow emitia un STORE, y el valor SSA de un struct es un PUNTERO a su
+# buffer -> escribia esa direccion sobre los ocho primeros bytes del propio
+# struct, y los campos salian siendo las dos mitades de un puntero.
+modes3_case("borrow_struct_write", "escribir un struct por un prestamo mutable", "bug3_struct.vx", 90)
 modes3_case("borrow_repro4", "prestamo, cuarto reproductor", "bug4.vx", 3)
 modes3_case("unique_chain", "unique que atraviesa una cadena de llamadas", "check_chain.vx", 99)
 modes3_case("unique_multi", "varios unique en el mismo ambito, liberados al reves", "check_multi.vx", 42)
