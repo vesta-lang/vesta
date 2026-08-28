@@ -39,7 +39,7 @@ static int g_checks = 0, g_fail = 0;
 // --------------------------------------------------------------------------
 // 1) Que le hace cada arquitectura al destino de un binop.
 // --------------------------------------------------------------------------
-static void test_dst_kind_por_isa() {
+static void test_dst_kind_by_isa() {
     using jit::DstKind;
     using jit::sched::EffIsa;
     CHECK(jit::dst_kind_of_isa(EffIsa::X86) == DstKind::Destructive,
@@ -68,7 +68,7 @@ static void test_dst_kind_por_isa() {
  */
 static ir::IrFunction build_loop() {
     ir::IrFunction fn;
-    fn.name = "acumulador";
+    fn.name = "accumulator";
     fn.ret_type = ir::IrType::I64;
 
     const ir::IrBlockId bb0 = fn.new_block("entry");
@@ -131,20 +131,20 @@ static ir::IrFunction build_loop() {
 // --------------------------------------------------------------------------
 // 2) El mismo IR da un reparto DISTINTO segun el objetivo.
 // --------------------------------------------------------------------------
-static void test_la_respuesta_depende_del_objetivo() {
+static void test_answer_depends_on_target() {
     const ir::IrFunction fn = build_loop();
     const ir::IrValueId v1 = 1, v2 = 2;
 
-    const std::vector<uint32_t> destr =
+    const std::vector<uint32_t> destructive =
         jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Destructive);
-    const std::vector<uint32_t> presv =
+    const std::vector<uint32_t> preserving =
         jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Preserving);
 
     // Donde el destino se destruye, %2 y %1 NO pueden acabar en el mismo
     // registro: el `mov dst, op0` de la legalizacion pisaria %1 antes de leerlo.
-    const bool juntos_destr =
-        !destr.empty() && destr[v1] == destr[v2];
-    CHECK(!juntos_destr,
+    const bool joined_destructive =
+        !destructive.empty() && destructive[v1] == destructive[v2];
+    CHECK(!joined_destructive,
           "en dos direcciones, el destino no puede compartir registro con su "
           "segundo operando");
 
@@ -152,9 +152,9 @@ static void test_la_respuesta_depende_del_objetivo() {
     // junte -- eso es su heuristica, no el contrato --, pero SI que la
     // prohibicion desaparezca: nunca puede coalescer MENOS por tener mas
     // libertad.
-    const size_t clases_destr = destr.empty() ? 0 : 1;
-    const size_t clases_presv = presv.empty() ? 0 : 1;
-    CHECK(clases_presv >= clases_destr,
+    const size_t classes_destructive = destructive.empty() ? 0 : 1;
+    const size_t classes_preserving = preserving.empty() ? 0 : 1;
+    CHECK(classes_preserving >= classes_destructive,
           "quitar una restriccion no puede quitar coalescings");
 }
 
@@ -162,9 +162,9 @@ static void test_la_respuesta_depende_del_objetivo() {
 // 3) Un IR sin binops no cambia con el objetivo: la diferencia viene de la
 //    legalizacion, no de mirar el objetivo por mirarlo.
 // --------------------------------------------------------------------------
-static void test_sin_binops_no_cambia() {
+static void test_no_alu_binops_same_answer() {
     ir::IrFunction fn;
-    fn.name = "sin_alu";
+    fn.name = "no_alu";
     fn.ret_type = ir::IrType::I64;
     const ir::IrBlockId bb = fn.new_block("entry");
     const ir::IrValueId v = fn.new_value(ir::IrType::I64, "%0");
@@ -185,9 +185,9 @@ static void test_sin_binops_no_cambia() {
 }
 
 int main() {
-    test_dst_kind_por_isa();
-    test_la_respuesta_depende_del_objetivo();
-    test_sin_binops_no_cambia();
+    test_dst_kind_by_isa();
+    test_answer_depends_on_target();
+    test_no_alu_binops_same_answer();
     std::printf("=== ssa-coalesce (objetivo): %d checks, %d fallos ===\n",
                 g_checks, g_fail);
     return g_fail == 0 ? 0 : 1;

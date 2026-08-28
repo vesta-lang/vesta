@@ -372,7 +372,44 @@ bool acceso_de(const ir::IrInstr &in, ir::IrValueId &ptr, bool &escribe) {
     return false;
 }
 
+/**
+ * @brief Toda forma de llamada, no solo las que se pueden seguir.
+ *
+ * Contaba tres -- CALL, TAILCALL, CALLIND -- y dejaba fuera el despacho
+ * dinamico (CALLVIRT / CALLM / CALLITF / CALLCLOSURE / CALLSUPER) y las
+ * nativas.  El bucle que la usa hace `continue` con lo que no es llamada, asi
+ * que un agregado que se pasaba a un metodo virtual no se anotaba ni como
+ * frontera ni como limitacion: se perdia el rastro EN SILENCIO, y el analisis
+ * seguia como si el valor no hubiera ido a ninguna parte.
+ *
+ * Que no se pueda seguir el destino es una respuesta legitima -- y este modulo
+ * ya sabe darla, @c CodigoLimitacion la tiene --; lo que no vale es no decir
+ * nada.
+ */
 bool es_llamada(IrOp op) {
+    switch (op) {
+    case IrOp::CALL:
+    case IrOp::TAILCALL:
+    case IrOp::CALLIND:
+    case IrOp::CALLN:
+    case IrOp::CALLVIRT:
+    case IrOp::CALLM:
+    case IrOp::CALLITF:
+    case IrOp::CALLSUPER:
+    case IrOp::CALLCLOSURE: return true;
+    default: return false;
+    }
+}
+
+/**
+ * @brief Si de @p op se puede sacar UN destino con IR que mirar.
+ *
+ * @c CALL / @c TAILCALL lo llevan en el nombre y @c CALLIND se intenta
+ * resolver.  El despacho dinamico depende del tipo en ejecucion: obligaria a
+ * que TODOS los destinos posibles conservaran la propiedad, y basta con que uno
+ * la rompa.  Una nativa tiene destino sabido pero no tiene IR dentro.
+ */
+bool is_followable_target(IrOp op) {
     return op == IrOp::CALL || op == IrOp::TAILCALL || op == IrOp::CALLIND;
 }
 
@@ -542,6 +579,19 @@ void observar(const ir::IrModule &mod, const ir::IrFunction &fn,
                 }
             }
             if (arg < 0) continue;
+            /* El valor entra entero en una llamada cuyo destino no se puede
+             * mirar.  Se DICE, con el motivo: una nativa no tiene IR dentro; un
+             * despacho dinamico tendria varios destinos y basta con que uno
+             * rompa la propiedad.  Antes esto no llegaba aqui siquiera -- la op
+             * no contaba como llamada y el bucle la saltaba --, asi que el
+             * rastro se perdia sin dejar constancia. */
+            if (!is_followable_target(in.op)) {
+                o.limitar(in.op == IrOp::CALLN
+                              ? CodigoLimitacion::DestinoNoVisible
+                              : CodigoLimitacion::DestinoIndirectoNoUnico,
+                          sitio, in.func_name, 0, in.operands[arg]);
+                continue;
+            }
             if (hondura <= 0) {
                 o.limitar(CodigoLimitacion::ProfundidadAgotada, sitio,
                           in.func_name,
