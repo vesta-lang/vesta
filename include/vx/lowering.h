@@ -300,6 +300,23 @@ class Lowering {
                                      ir::IrValueId &out_value);
 
     /**
+     * @brief Intenta bajar una llamada como uno de los builtins de reflexion.
+     *
+     * Preguntarle al programa por si mismo: la clase por su nombre, el campo o
+     * el metodo por el suyo, y llamarlo sin saber cual era hasta ese momento.
+     * Es lo contrario del resto, que se decide al compilar.
+     *
+     * Sale barato porque las clases de Vesta no son metadatos del ejecutable
+     * sino objetos que el propio programa construye al arrancar: preguntar por
+     * ellas en marcha es mirar donde ya estan.  Y no encarece a quien no la
+     * usa: el que conoce el tipo no pasa por aqui.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
+                                    ir::IrValueId &out_value);
+
+    /**
      * @brief Reserva un hueco de @p bytes en el marco actual.
      *
      * Lo que se reserva aqui muere con el marco, asi que es lo correcto para
@@ -315,6 +332,21 @@ class Lowering {
      */
     ir::IrValueId stack_alloc_buf(uint64_t bytes, uint32_t line,
                                   bool for_optres = false);
+
+    /**
+     * @brief Reserva el hueco de un puntero inteligente, en la pila o en el
+     *        monton segun a donde vaya a parar.
+     *
+     * Si es una variable local, la pila vale: muere con la funcion, que es
+     * cuando toca soltarlo.  Si se guarda en un CAMPO tiene que sobrevivir a
+     * quien lo creo, asi que va al monton y lo suelta el destructor del que lo
+     * contiene.  Lo decide @c unique_slot_to_heap_, que se CONSUME al leerla
+     * para que no la herede el siguiente.
+     *
+     * @param line Linea fuente, para la depuracion.
+     * @return El valor SSA con la direccion del hueco.
+     */
+    ir::IrValueId unique_slot_buf(uint32_t line);
 
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,

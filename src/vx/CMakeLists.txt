@@ -202,6 +202,10 @@ add_library(vx_lib STATIC
     # Builtins de lo que puede NO estar: Optional y Result.  Construirlos,
     # preguntar y sacar el valor.  Ninguno toca el monton: viven en la pila.
     lowering/builtins_optional.cpp
+    # Builtins de reflexion: preguntarle al programa por si mismo.  Sale
+    # barato porque las clases son objetos que el propio programa
+    # construye al arrancar, no metadatos del ejecutable.
+    lowering/builtins_reflect.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.

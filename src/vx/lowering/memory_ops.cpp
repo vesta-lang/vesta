@@ -1509,4 +1509,43 @@ ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
     return v_buf;
 }
 
+/**
+ * @brief Reserva el hueco donde vive un puntero inteligente, en la pila o en
+ *        el monton segun a donde vaya a parar.
+ *
+ * Un `unique<T>` es un par {puntero, quien lo borra}, y donde vive ese par
+ * depende de a quien pertenece.  Si es una variable local, la pila vale: muere
+ * con la funcion, que es justo cuando toca soltarlo.  Pero si se guarda en un
+ * CAMPO de un objeto, tiene que sobrevivir a la funcion que lo creo -- el
+ * objeto sigue vivo --, asi que va al monton y lo suelta el destructor del que
+ * lo contiene.
+ *
+ * Quien decide es la marca @c unique_slot_to_heap_, que pone el que esta
+ * bajando la asignacion a un campo.  Se CONSUME al leerla: si no, un
+ * `unique<T>` anidado o el siguiente de la misma funcion heredarian una
+ * decision que no era suya y acabarian en el monton sin que nadie los suelte.
+ *
+ * Era una lambda dentro de la bajada de los builtins y de ahi no salia.  No
+ * capturaba nada -- solo usa el estado del propio bajador --, asi que pasar a
+ * metodo no cambio ninguna llamada.
+ *
+ * @param line Linea fuente, para la depuracion.
+ * @return El valor SSA con la direccion del hueco.
+ */
+ir::IrValueId Lowering::unique_slot_buf(uint32_t line) {
+    if (!unique_slot_to_heap_) return stack_alloc_buf(16, line);
+    unique_slot_to_heap_ = false;
+    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_buf].is_host_ptr = true;
+    const ir::IrValueId v_size = emit_const(ir::IrType::I64, 16, line);
+    ir::IrInstr al{};
+    al.op = ir::IrOp::RAW_ALLOC;
+    al.type = ir::IrType::PTR;
+    al.dst = v_buf;
+    al.operands = {v_size};
+    al.source_line = line;
+    emit(current_block_, std::move(al));
+    return v_buf;
+}
+
 } // namespace vx
