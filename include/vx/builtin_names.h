@@ -355,7 +355,8 @@ enum class BuiltinFamily : uint8_t {
     Optional,   ///< Lo que puede no estar: Optional y Result.
     Reflect,    ///< Preguntarle al programa por si mismo.
     Ownership,  ///< Quien es dueno de que, y quien lo suelta.
-    String      ///< Lo que se hace con una cadena.
+    String,     ///< Lo que se hace con una cadena.
+    Math        ///< Operaciones matematicas: reales, enteros y bits.
 };
 
 /**

@@ -214,6 +214,11 @@ add_library(vx_lib STATIC
     # al exterior.  Cada uno baja a UNA instruccion de la maquina; cortar
     # da una vista, no una copia.
     lowering/builtins_string.cpp
+    # Operaciones matematicas.  Los numeros con decimales viajan a la
+    # nativa como sus BITS dentro de un entero -- la maquina pasa los
+    # argumentos en registros de proposito general --; las que devuelven
+    # un entero no hacen esa conversion.
+    lowering/builtins_math.cpp
     # Emitir UNA instruccion de la maquina, con su forma exacta.  Son
     # envoltorios de tres lineas, y no sobran: concentran las marcas que
     # viajan con el valor (direccion del anfitrion, objeto del recolector,

@@ -479,6 +479,7 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::Fopen: case Builtin::Free: case Builtin::Fwrite:
     case Builtin::Loadmodule: case Builtin::Malloc:
     case Builtin::Unloadmodule:
+    case Builtin::FfiOpen: case Builtin::FfiSym: case Builtin::FfiCall:
         return BuiltinFamily::Runtime;
 
     case Builtin::AtomicAddI64: case Builtin::AtomicCasI64:
@@ -522,6 +523,19 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::StrLength: case Builtin::StrMake: case Builtin::StrWstr:
     case Builtin::Substr: case Builtin::ToStr:
         return BuiltinFamily::String;
+
+
+    case Builtin::Abs: case Builtin::Bswap: case Builtin::Ceil:
+    case Builtin::Clamp: case Builtin::Clz: case Builtin::Cos:
+    case Builtin::Ctz: case Builtin::Fabs: case Builtin::Floor:
+    case Builtin::Fmax: case Builtin::Fmin: case Builtin::Ilog2:
+    case Builtin::Imax: case Builtin::Imaxu: case Builtin::Imin:
+    case Builtin::Iminu: case Builtin::Log: case Builtin::Log10:
+    case Builtin::Log2: case Builtin::Popcount: case Builtin::Pow:
+    case Builtin::Rotl: case Builtin::Rotr: case Builtin::Round:
+    case Builtin::Sin: case Builtin::Sqrt: case Builtin::Tan:
+    case Builtin::Trunc:
+        return BuiltinFamily::Math;
 
     default:
         return BuiltinFamily::Other;

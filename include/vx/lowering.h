@@ -355,6 +355,20 @@ class Lowering {
                                    ir::IrValueId &out_value);
 
     /**
+     * @brief Intenta bajar una llamada como una operacion matematica.
+     *
+     * Tres cosas distintas que se escriben igual: numeros reales, enteros, y
+     * los BITS del numero.  Las une como viajan los decimales -- la maquina
+     * pasa los argumentos en registros de proposito general, asi que un `f64`
+     * viaja como sus bits dentro de un entero --.  Las que devuelven un entero
+     * NO hacen esa conversion, y confundir los dos casos da valores absurdos.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_math_builtins(ast::CallExpr *e, Builtin b,
+                                 ir::IrValueId &out_value);
+
+    /**
      * @brief Reserva un hueco de @p bytes en el marco actual.
      *
      * Lo que se reserva aqui muere con el marco, asi que es lo correcto para

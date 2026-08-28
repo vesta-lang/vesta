@@ -74,9 +74,15 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     const bool is_loadmodule = (b == Builtin::Loadmodule);
     const bool is_unloadmodule = (b == Builtin::Unloadmodule);
     const bool is_dispose = (b == Builtin::Dispose);
+    /* Y llamar a codigo que no es Vesta decidiendo en marcha a cual: abrir la
+     * biblioteca, buscar el simbolo, invocarlo. */
+    const bool is_ffi_open = (b == Builtin::FfiOpen);
+    const bool is_ffi_sym = (b == Builtin::FfiSym);
+    const bool is_ffi_call = (b == Builtin::FfiCall);
 
     if (!(is_fopen || is_fwrite || is_fclose || is_malloc || is_free ||
-          is_fiber_swapctx || is_loadmodule || is_unloadmodule || is_dispose))
+          is_fiber_swapctx || is_loadmodule || is_unloadmodule || is_dispose ||
+          is_ffi_open || is_ffi_sym || is_ffi_call))
         return false;
 
     // y emitir un STR_LIT_ADDR + CONST(len) en el bloque actual.
@@ -460,6 +466,140 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             emit_const(ir::IrType::I64, 0, e->loc.line);
         write_local(id_arg->name, v_zero, ir::IrType::I64, e->loc.line);
         out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+
+    /* Cargar una biblioteca del sistema y llamar a un simbolo suyo, decidiendo
+     * EN MARCHA cual.  Hay otra forma de llamar a codigo que no es Vesta -- la
+     * declarativa, `extern "lib" { fn ... }` --, y esa se resuelve al compilar
+     * y no cuesta nada.  Estos tres existen para cuando la biblioteca o la
+     * funcion no se saben hasta que el programa corre: se paga una busqueda
+     * por nombre a cambio de poder decidir tarde. */
+    if (is_ffi_open) {
+        if (e->args.size() != 1 || !e->args[0] ||
+            e->args[0]->kind != ast::NodeKind::StringLitExpr) {
+            error_at(e->loc, "ffi_open: requiere un string literal con el "
+                             "nombre/path de la DLL");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        auto *slit = static_cast<ast::StringLitExpr *>(e->args[0].get());
+        // NUL-terminar el path interned: en AOT nativo se baja a
+        // LoadLibraryA/dlopen (APIs cstring que leen hasta el NUL).  El
+        // path_len sigue siendo el tamano logico (sin NUL); el path VM/JIT usa
+        // (addr,len) e ignora el NUL.
+        const uint64_t path_idx =
+            intern_class_name(*out_mod_, slit->value + std::string(1, '\0'));
+        const uint32_t path_len = static_cast<uint32_t>(slit->value.size());
+        // raw_asm-elim wave 2: DLOPEN IR op.
+        const ir::IrValueId v_path_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr sl{};
+            sl.op = ir::IrOp::STR_LIT_ADDR;
+            sl.type = ir::IrType::PTR;
+            sl.dst = v_path_addr;
+            sl.imm = path_idx;
+            sl.source_line = e->loc.line;
+            emit(current_block_, std::move(sl));
+        }
+        const ir::IrValueId v_path_len =
+            emit_const(ir::IrType::I64, path_len, e->loc.line);
+        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr dl{};
+        dl.op = ir::IrOp::DLOPEN;
+        dl.type = ir::IrType::I64;
+        dl.dst = v_dst;
+        dl.operands = {v_path_addr, v_path_len};
+        dl.source_line = e->loc.line;
+        emit(current_block_, std::move(dl));
+        out_value = v_dst;
+        return true;
+    }
+
+    // ----- ffi_sym(handle, string lit) -----
+    // Resuelve simbolo en una DLL cargada.  El handle viene de un SSA
+    // value (resultado de ffi_open o expression i64); el name es
+    // string literal (interned en static_data).  Devuelve fn_addr i64.
+    if (is_ffi_sym) {
+        if (e->args.size() != 2 || !e->args[0] || !e->args[1] ||
+            e->args[1]->kind != ast::NodeKind::StringLitExpr) {
+            error_at(e->loc, "ffi_sym: requiere (i64 handle, string lit name)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_handle = lower_expr(e->args[0].get());
+        if (v_handle == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        auto *slit = static_cast<ast::StringLitExpr *>(e->args[1].get());
+        // NUL-terminar: en AOT nativo se baja a GetProcAddress/dlsym (cstring).
+        const uint64_t name_idx =
+            intern_class_name(*out_mod_, slit->value + std::string(1, '\0'));
+        const uint32_t name_len = static_cast<uint32_t>(slit->value.size());
+        // raw_asm-elim wave 2: DLSYM IR op.
+        const ir::IrValueId v_name_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr sl{};
+            sl.op = ir::IrOp::STR_LIT_ADDR;
+            sl.type = ir::IrType::PTR;
+            sl.dst = v_name_addr;
+            sl.imm = name_idx;
+            sl.source_line = e->loc.line;
+            emit(current_block_, std::move(sl));
+        }
+        const ir::IrValueId v_name_len =
+            emit_const(ir::IrType::I64, name_len, e->loc.line);
+        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ds{};
+        ds.op = ir::IrOp::DLSYM;
+        ds.type = ir::IrType::I64;
+        ds.dst = v_dst;
+        ds.operands = {v_handle, v_name_addr, v_name_len};
+        ds.source_line = e->loc.line;
+        emit(current_block_, std::move(ds));
+        out_value = v_dst;
+        return true;
+    }
+
+    // ----- ffi_call(fn, ...args) -----  (variadic 0-12 args)
+    // Invoca funcion nativa via puntero (resuelto por ffi_sym/dlsym o
+    // pasado como handle).  Calling convention espejo a CALLN estatico:
+    // argc en R15, args en R01..R12, retorno en R00.
+    //
+    // Implementacion: emitir IrInstr CALLN con func_name="__callni__:"
+    // y operands=[fn, args...].  El emitter detecta el prefix y emite
+    // la secuencia completa (push regs vivos + parallel-move args ->
+    // R1..RN + mov r15, N + callni reg_fn + capturar R0 + pop regs).
+    // Reusa toda la maquinaria de CALLN para mantener una sola ruta.
+    if (is_ffi_call) {
+        if (e->args.empty()) {
+            error_at(e->loc,
+                     "ffi_call: requiere al menos el puntero a funcion");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        if (e->args.size() > 13) {
+            error_at(e->loc, "ffi_call: maximo 12 args ademas del puntero");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        std::vector<ir::IrValueId> arg_ids;
+        arg_ids.reserve(e->args.size());
+        for (auto &a : e->args) {
+            arg_ids.push_back(lower_expr(a.get()));
+        }
+        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALLN;
+        ins.type = ir::IrType::I64;
+        ins.dst = v_dst;
+        ins.func_name = "__callni__:"; // prefix detectado en emitter
+        ins.operands = std::move(arg_ids);
+        ins.source_line = e->loc.line;
+        emit(current_block_, std::move(ins));
+        out_value = v_dst;
         return true;
     }
 

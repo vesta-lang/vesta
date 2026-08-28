@@ -120,20 +120,21 @@ int main() {
      * que si conviene mirar es que el reparto sea util -- que ninguna familia
      * se haya quedado vacia por un corte mal hecho -- y que un builtin de cada
      * una caiga donde debe. */
-    int por_familia[9] = {0};
+    int por_familia[10] = {0};
     for (uint16_t v = static_cast<uint16_t>(primero); v < ultimo; ++v) {
         const auto fam = vx::builtin_family(static_cast<Builtin>(v));
         const auto i = static_cast<size_t>(fam);
-        check(i < 9, "familia fuera de rango para el builtin " + std::to_string(v));
-        if (i < 9) ++por_familia[i];
+        check(i < 10, "familia fuera de rango para el builtin " + std::to_string(v));
+        if (i < 10) ++por_familia[i];
     }
-    const char *nombres[9] = {"Other",    "Print",     "Runtime",
-                              "Concurrent", "Optional", "Reflect",
-                              "Ownership", "String",   "<sobra>"};
-    for (int i = 1; i <= 7; ++i)
+    const char *nombres[10] = {"Other",     "Print",    "Runtime",
+                               "Concurrent", "Optional", "Reflect",
+                               "Ownership",  "String",   "Math",
+                               "<sobra>"};
+    for (int i = 1; i <= 8; ++i)
         check(por_familia[i] > 0,
               std::string("la familia ") + nombres[i] + " se quedo vacia");
-    check(por_familia[8] == 0, "hay una familia que el test no conoce");
+    check(por_familia[9] == 0, "hay una familia que el test no conoce");
 
     /* Uno de cada, para que un reparto corrido no pase desapercibido. */
     using vx::BuiltinFamily;
@@ -146,9 +147,13 @@ int main() {
     check(builtin_family(Builtin::ForName) == BuiltinFamily::Reflect, "forName -> Reflect");
     check(builtin_family(Builtin::UniqueBox) == BuiltinFamily::Ownership, "unique_box -> Ownership");
     check(builtin_family(Builtin::StrConcat) == BuiltinFamily::String, "str_concat -> String");
+    check(builtin_family(Builtin::Sqrt) == BuiltinFamily::Math, "sqrt -> Math");
+    check(builtin_family(Builtin::Popcount) == BuiltinFamily::Math, "popcount -> Math");
+    check(builtin_family(Builtin::FfiOpen) == BuiltinFamily::Runtime, "ffi_open -> Runtime");
 
     /* Lo que no es de nadie, y lo que no es un builtin. */
-    check(builtin_family(Builtin::Sqrt) == BuiltinFamily::Other, "sqrt no tiene familia propia");
+    check(builtin_family(Builtin::Vacount) == BuiltinFamily::Other,
+          "vacount no tiene familia propia");
     check(builtin_family(Builtin::Unknown) == BuiltinFamily::Other, "Unknown -> Other");
     check(builtin_family(Builtin::Count) == BuiltinFamily::Other, "Count -> Other");
     check(builtin_family(static_cast<Builtin>(60000)) == BuiltinFamily::Other,
@@ -156,10 +161,10 @@ int main() {
 
     if (g_fallos == 0)
         std::printf("OK: %d builtins, ida y vuelta correcta; en familias "
-                    "%d/%d/%d/%d/%d/%d/%d, sin familia propia %d\n",
+                    "%d/%d/%d/%d/%d/%d/%d/%d, sin familia propia %d\n",
                     vistos, por_familia[1], por_familia[2], por_familia[3],
                     por_familia[4], por_familia[5], por_familia[6],
-                    por_familia[7], por_familia[0]);
+                    por_familia[7], por_familia[8], por_familia[0]);
     else
         std::printf("%d comprobaciones fallidas\n", g_fallos);
     return g_fallos == 0 ? 0 : 1;
