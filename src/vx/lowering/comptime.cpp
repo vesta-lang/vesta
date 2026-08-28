@@ -812,5 +812,638 @@ uint64_t Lowering::get_or_create_comptime_global_slot(const std::string &name) {
     return idx;
 }
 
+/* ---------------------------------------------------------------------
+ * Que puede ir en el cuerpo de una macro, y por que no.
+ *
+ * Una macro de Vesta corre AL COMPILAR, y hay dos maneras de hacerla correr:
+ * recorriendo su arbol aqui mismo, o compilandola y dejando que la ejecute la
+ * maquina.  La segunda es la buena -- es ejecucion de verdad, con la misma
+ * semantica que el resto del lenguaje --, pero no todo cuerpo se puede
+ * compilar todavia: lo que usa cosas que solo existen al compilar (mirar un
+ * tipo por dentro, pedir un nombre nuevo, una variable que vive en el
+ * compilador) no tiene a donde bajar.
+ *
+ * Lo que hacen estas funciones es DECIDIR cual de las dos vias toca, y decirlo
+ * con una razon concreta en vez de con un si o un no.  Esa razon no es
+ * cosmetica: es lo que permite que el que llama explique al programador por
+ * que su macro va por el camino lento, y lo que hace que ampliar la lista de
+ * lo soportado sea quitar un caso de aqui.
+ * --------------------------------------------------------------------- */
+
+/**
+ * @brief  MC.1 -- detecta si el body de un @Macro contiene
+ * caracteristicas que el IR runtime NO soporta todavia.
+ *
+ * Devuelve la primera razon encontrada (string descriptivo) o cadena
+ * vacia si el body es lowerable.  Used by @c lower_function para
+ * decidir si lowear o saltar el body al IR.
+ *
+ * Patrones detectados como NO soportados (todavia):
+ *   - Calls a builtins comptime-only (`comptime_concat`, `to_str`,
+ *     `gensym`, `comptime_compile`, etc.).
+ *   - Calls con type_args (introspect: `sizeof<T>`, `field_name<T>`,
+ *     `comptime_type<T>`, etc.).
+ *   - VarDeclStmt con `is_comptime=true` (comptime var/const) --
+ *     requiere puente de memoria compartida (MC.5).
+ *   - ExprStmt con AssignExpr a IdentExpr global comptime --
+ *     mismo motivo que arriba.
+ *
+ * En sprints posteriores (MC.4, MC.5) cada categoria se vuelve
+ * "soportada" anadiendo un FFI runtime + bridge de memoria.
+ */
+std::string macro_body_unsupported_reason(const TypeChecker &tc,
+                                                 const ast::Stmt *s);
+
+std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
+                                                      const ast::Expr *e);
+
+/* Force-lower de comptime helpers: cuando el estado de force-lower esta puesto, el
+ * chequeo de lowereabilidad NO rechaza las llamadas a comptime fns no-macro,
+ * sino que RECURRE en su body (chequeo transitivo) y, si son lowereables,
+ * recolecta su nombre ahi para que @c lower_function las
+ * baje a runtime (`code.<helper>`), permitiendo que el `__macro_<X>` que las
+ * llama resuelva.  La guarda de ciclos va aparte.  Por hilo
+ * porque M8 compila modulos en paralelo (cada thread con su propio contexto).
+ * (Definidos arriba, antes de Lowering::run.) */
+
+std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
+                                                      const ast::Expr *e) {
+    if (!e) return "";
+    switch (e->kind) {
+    case ast::NodeKind::IdentExpr: {
+        /*  MC.17.2: refs a `comptime const` (INMUTABLES)
+         * globales de tipo int SE ACEPTAN -- se materializan
+         * como slot @c static_data de 8 bytes, leidos via
+         * LOAD i64.  El valor es fijo, no hay divergencia
+         * posible con el AST evaluator.
+         *
+         * `comptime var` (MUTABLES) siguen rechazados porque
+         * la VM y el AST evaluator mantendrian copias separadas
+         * que se desincronizarian con @Pure memoization
+         * (test 156).  Soportarlos requiere shared memory
+         * cross-AST/VM (deferred). */
+        const auto *id = static_cast<const ast::IdentExpr *>(e);
+        auto cit = tc.comptime_const_values().find(id->name);
+        if (cit != tc.comptime_const_values().end()) {
+            if (cit->second.is_str) {
+                return "ref a comptime global string '" + id->name + "'";
+            }
+            if (cit->second.is_mutable) {
+                /* comptime var MUTABLE global: se comparte entre lectores
+                 * AST-eval (p.ej. `static_assert(g == 3)` top-level, otros
+                 * comptime blocks) y el macro.  Si el macro VM-evaluara y
+                 * mutara un slot static_data de la VM mientras el static_assert
+                 * lee la copia AST (comptime_const_values_) -> DESYNC (el
+                 * assert ve el valor viejo).  Por eso el macro que referencia
+                 * un mutable global se deja AST-eval (misma copia que los
+                 * lectores) -- arquitectural, no un gap de codegen.  Los
+                 * mutables SOLO se podrian VM-evaluar si TODO lector comptime
+                 * (incl. static_assert) leyera el slot de la VM, lo que
+                 * exigiria ejecutar la VM en cada eval comptime -- fuera de
+                 * alcance. */
+                return "ref a comptime var (mutable) global '" + id->name + "'";
+            }
+            /* comptime const int (INMUTABLE) OK: slot static_data read-only. */
+            return "";
+        }
+        return "";
+    }
+    case ast::NodeKind::CallExpr: {
+        const auto *ce = static_cast<const ast::CallExpr *>(e);
+        /* Calls con type-args -> introspect: NO soportado v1. */
+        if (!ce->type_args.empty()) {
+            return "introspect builtin con type_args (sizeof<T>, etc.)";
+        }
+        /* Calls a builtins comptime-only por nombre. */
+        if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
+            const auto *id =
+                static_cast<const ast::IdentExpr *>(ce->callee.get());
+            /*  MC.15B+C: los builtins que YA estan aliasados a
+             * sus equivalentes runtime str_* en @c lower_call NO
+             * deben rechazarse aqui -- el lowering los soporta.
+             * Los demas siguen siendo comptime-only.
+             *
+             * Lowereables (MC.15B: concat/streq/strlen; MC.15C:
+             * to_str/chr/ord/substr/gensym):
+             *   comptime_concat  -> STRCAT
+             *   comptime_streq   -> STRCMP + cmp
+             *   comptime_strlen  -> STRLEN
+             *   comptime_to_str  -> CALLN(vio_int_to_vmbuf) + STRMAKE
+             *   comptime_chr     -> CALLN(vio_char_to_vmbuf) + STRMAKE
+             *   comptime_ord     -> STRRAW + LOAD u8
+             *   comptime_substr  -> STRSLICE
+             *   gensym           -> CALLN(vio_gensym)
+             *
+             * Restantes (MC.15D futuro): repeat, replace, contains,
+             * compile, emit_expr, type, print/ct_print.
+             */
+            /* Restantes comptime-only tras MC.18+MC.20:
+             *   comptime_compile / compile      -- generacion de codigo
+             * dinamica comptime_emit_expr / emit_expr  -- splice de AST en
+             * compile-time comptime_type                   -- type-as-value
+             *
+             * `comptime_print`, `ct_print` -> `println` (MC.18).
+             * `static_assert` -> virtual lib `vesta_comptime`
+             * via FFI bridge (MC.20).  El lowering emite CALLN
+             * a "vesta_comptime:static_assert" que el Loader
+             * resuelve via @c lookup_virtual_fn al cargar el
+             * .velb. */
+            static const std::unordered_set<std::string> COMPTIME_ONLY = {
+                "comptime_compile", "comptime_emit_expr", "comptime_type",
+                "compile",          "emit_expr",
+            };
+            if (COMPTIME_ONLY.count(id->name)) {
+                return "builtin comptime-only '" + id->name + "'";
+            }
+            /* MC.23 fix (bug 161): los nombres registrados como virtual
+             * comptime fns bajo `vesta_comptime`
+             * (comptime_type_sizeof/alignof/kind, comptime_compile,
+             * static_assert) NO tienen simbolo de bytecode real -- solo existen
+             * in-process en el compilador.  Bajar el body del macro a IR
+             * emitiria un `callvm code.<nombre>` colgante que el linker no
+             * resuelve (RelocationError).  Se fuerza a que el macro corra en
+             * comptime (AST/VM eval), que SI resuelve el nombre via
+             * lookup_virtual_fn y embebe el resultado como literal. */
+            /* Las type-metadata (`comptime_type_sizeof/alignof/kind`) con arg
+             * LITERAL string son CONSTANTES compile-time: el lowering las
+             * pliega a un CONST (ver lower_call), asi que NO rechazan el macro.
+             * El resto de virtual fns (static_assert, comptime_compile) sin
+             * simbolo bytecode siguen forzando AST/VM-eval del call site. */
+            static const std::unordered_set<std::string> FOLDABLE_TYPE_META = {
+                "comptime_type_sizeof", "comptime_type_alignof",
+                "comptime_type_kind"};
+            if (ffi::lookup_virtual_fn("vesta_comptime", id->name) &&
+                !(FOLDABLE_TYPE_META.count(id->name) && ce->args.size() == 1 &&
+                  ce->args[0] &&
+                  ce->args[0]->kind == ast::NodeKind::StringLitExpr)) {
+                return "virtual comptime fn '" + id->name + "'";
+            }
+            /*  MC.17.3: calls a @Macros user-defined SE ACEPTAN
+             * (la callee tambien se baja a IR con nombre
+             * `__macro_<callee>`, asi que emitimos CALLVM regular
+             * a esa label).  Calls a comptime fns NO-@Macro
+             * siguen rechazados (necesitarian inline o lower
+             * propio que no esta hecho). */
+            auto fn_it = tc.comptime_fns().find(id->name);
+            if (fn_it != tc.comptime_fns().end()) {
+                if (fn_it->second && fn_it->second->is_macro) {
+                    /* Aceptamos.  El callee macro tambien sera
+                     * lowereado por el linker (al final del
+                     * pase).  Si su body resulta no-lowereable,
+                     * el __macro_<callee> no existira y la
+                     * CALLVM fallara en runtime -- ese caso
+                     * cae al fallback AST por inconsistencia. */
+                    for (const auto &a : ce->args) {
+                        auto ra =
+                            macro_body_unsupported_reason_expr(tc, a.get());
+                        if (!ra.empty()) return ra;
+                    }
+                    return "";
+                }
+                /* Llamada a una comptime fn NO-macro.  Con force-lower activo
+                 * (con force-lower puesto): recurrir en su body; si es
+                 * lowereable, recolectarla para bajarla a runtime y ACEPTAR la
+                 * llamada.  Sin force-lower (call sites legacy): rechazar
+                 * (AST-only), comportamiento previo. */
+                auto *force_lower = macro_force_lower();
+                auto *visiting = macro_visiting();
+                if (force_lower && fn_it->second &&
+                    fn_it->second->body) {
+                    const std::string &hn = fn_it->first; // nombre registrado
+                    if (visiting->count(hn)) {
+                        return ""; // ciclo: asumir OK (el otro nivel decide)
+                    }
+                    visiting->insert(hn);
+                    std::string sub = macro_body_unsupported_reason(
+                        tc, fn_it->second->body.get());
+                    visiting->erase(hn);
+                    if (sub.empty()) {
+                        force_lower->insert(hn);
+                        /* Seguir recorriendo los ARGS de esta llamada: pueden
+                         * contener llamadas anidadas a OTRAS comptime fns
+                         * (p.ej. `bf_emit(bf_classify(x))`) que tambien hay que
+                         * recolectar para el force-lower.  Sin esto, el callee
+                         * del argumento quedaba fuera del set -> su CALL
+                         * emitiria "no es comptime-evaluable (argumento
+                         * runtime?)". */
+                        for (const auto &a : ce->args) {
+                            auto ra =
+                                macro_body_unsupported_reason_expr(tc, a.get());
+                            if (!ra.empty()) return ra;
+                        }
+                        return "";
+                    }
+                    return "helper comptime no-lowereable '" + id->name +
+                           "': " + sub;
+                }
+                return "call a comptime fn user-defined '" + id->name + "'";
+            }
+        }
+        /* Recurse en args. */
+        for (const auto &a : ce->args) {
+            auto r = macro_body_unsupported_reason_expr(tc, a.get());
+            if (!r.empty()) return r;
+        }
+        auto r = macro_body_unsupported_reason_expr(tc, ce->callee.get());
+        if (!r.empty()) return r;
+        return "";
+    }
+    case ast::NodeKind::BinaryExpr: {
+        const auto *bn = static_cast<const ast::BinaryExpr *>(e);
+        auto r = macro_body_unsupported_reason_expr(tc, bn->lhs.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason_expr(tc, bn->rhs.get());
+    }
+    case ast::NodeKind::StringLitExpr: {
+        /* Un string interpolado `"... ${expr} ..."` (o triple-quoted) que un
+         * @Macro devuelve puede llevar en su interpolacion llamadas a otras
+         * comptime fns (p.ej. `"() => { ${bf_compile_body(src)} }"`).  Recorrer
+         * las exprs de interpolacion para que esos callees entren al set de
+         * force-lower; sin esto la interpolacion emitia un CALLVM colgante y el
+         * macro no era comptime-evaluable a string (solo funcionaba con concat
+         * `"a" + f(x) + "b"`, que si se recorre por el case BinaryExpr). */
+        const auto *sl = static_cast<const ast::StringLitExpr *>(e);
+        for (const auto &ie : sl->interp_exprs) {
+            auto r = macro_body_unsupported_reason_expr(tc, ie.get());
+            if (!r.empty()) return r;
+        }
+        return "";
+    }
+    case ast::NodeKind::InitListExpr: {
+        /* Init list `{a, b, c}` de un array local: el lowering del macro lo
+         * soporta via el var-decl tipado (`i64 xs[N] = {...}`) que hace ALLOCA
+         * + STOREs.  Recurrir en los elementos por si alguno no es lowereable
+         * (p.ej. un init list de structs, que si requiere layout). */
+        const auto *il = static_cast<const ast::InitListExpr *>(e);
+        for (const auto &el : il->elements) {
+            auto r = macro_body_unsupported_reason_expr(tc, el.get());
+            if (!r.empty()) return r;
+        }
+        return "";
+    }
+    case ast::NodeKind::IndexExpr: {
+        /* Array indexing `arr[i]`: lowereable en macro body cuando `arr` es un
+         * array local tipado (el lowering conoce el elem type via el var-decl).
+         * Recurrir en base + index. */
+        const auto *ix = static_cast<const ast::IndexExpr *>(e);
+        auto r = macro_body_unsupported_reason_expr(tc, ix->base.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason_expr(tc, ix->index.get());
+    }
+    case ast::NodeKind::UnaryExpr: {
+        const auto *un = static_cast<const ast::UnaryExpr *>(e);
+        return macro_body_unsupported_reason_expr(tc, un->operand.get());
+    }
+    case ast::NodeKind::TernaryExpr: {
+        const auto *te = static_cast<const ast::TernaryExpr *>(e);
+        auto r = macro_body_unsupported_reason_expr(tc, te->cond.get());
+        if (!r.empty()) return r;
+        r = macro_body_unsupported_reason_expr(tc, te->then_expr.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason_expr(tc, te->else_expr.get());
+    }
+    case ast::NodeKind::AssignExpr: {
+        const auto *ae = static_cast<const ast::AssignExpr *>(e);
+        auto r = macro_body_unsupported_reason_expr(tc, ae->target.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason_expr(tc, ae->value.get());
+    }
+    default: return "";
+    }
+}
+
+std::string macro_body_unsupported_reason(const TypeChecker &tc,
+                                                 const ast::Stmt *s) {
+    if (!s) return "";
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body) {
+            auto r = macro_body_unsupported_reason(tc, st.get());
+            if (!r.empty()) return r;
+        }
+        return "";
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        const auto *vd = static_cast<const ast::VarDeclStmt *>(s);
+        /*   (1/3): `comptime var/const` LOCALES dentro
+         * de un macro body ya no se rechazan.  El lowering los
+         * trata como vars runtime regulares (en `lower_var_decl`
+         * detectamos el flag y descartamos la rama comptime
+         * cuando current_fn_is_macro_=true).  El VM computa el
+         * init en cada invocacion -- mismo resultado semantico
+         * que la evaluacion AST que ocurria one-time.
+         *
+         * Validamos solo el init si esta presente. */
+        /* Vars locales de tipo array nativo `T[N]` o struct
+         * nominal NO son lowereables en este path (requeriria
+         * ALLOCA + sizeof del elemento + path completo de
+         * struct layout).  Fallback al AST evaluator que SI
+         * maneja arrays/structs comptime (A.41+A.42). */
+        if (vd->type) {
+            const auto *t = vd->type.get();
+            if (t->kind == ast::NodeKind::ArrayTypeNode) {
+                /* Array local `T[N]`: el lowering hace ALLOCA + init (STOREs) y
+                 * el indexing usa el elem type del var-decl.  Validar solo el
+                 * init. */
+                if (vd->init)
+                    return macro_body_unsupported_reason_expr(tc,
+                                                              vd->init.get());
+                return "";
+            }
+            if (t->kind == ast::NodeKind::NamedTypeNode) {
+                /* Si el nombre matchea un struct declarado, es
+                 * un struct value-type que no lowereamos en el
+                 * body del macro. */
+                const auto *nt = static_cast<const ast::NamedTypeNode *>(t);
+                if (tc.struct_layouts().find(nt->name) !=
+                    tc.struct_layouts().end()) {
+                    return "var local de tipo struct '" + nt->name +
+                           "' en macro body (usa AST eval)";
+                }
+            }
+        }
+        if (vd->init) {
+            return macro_body_unsupported_reason_expr(tc, vd->init.get());
+        }
+        return "";
+    }
+    case ast::NodeKind::ExprStmt: {
+        const auto *es = static_cast<const ast::ExprStmt *>(s);
+        return macro_body_unsupported_reason_expr(tc, es->expr.get());
+    }
+    case ast::NodeKind::ReturnStmt: {
+        const auto *rs = static_cast<const ast::ReturnStmt *>(s);
+        return macro_body_unsupported_reason_expr(tc, rs->value.get());
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        auto r = macro_body_unsupported_reason_expr(tc, is->cond.get());
+        if (!r.empty()) return r;
+        r = macro_body_unsupported_reason(tc, is->then_branch.get());
+        if (!r.empty()) return r;
+        if (is->else_branch) {
+            return macro_body_unsupported_reason(tc, is->else_branch.get());
+        }
+        return "";
+    }
+    case ast::NodeKind::WhileStmt: {
+        const auto *ws = static_cast<const ast::WhileStmt *>(s);
+        auto r = macro_body_unsupported_reason_expr(tc, ws->cond.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason(tc, ws->body.get());
+    }
+    case ast::NodeKind::DoWhileStmt: {
+        const auto *ds = static_cast<const ast::DoWhileStmt *>(s);
+        auto r = macro_body_unsupported_reason_expr(tc, ds->cond.get());
+        if (!r.empty()) return r;
+        return macro_body_unsupported_reason(tc, ds->body.get());
+    }
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        if (fs->init) {
+            auto r = macro_body_unsupported_reason(tc, fs->init.get());
+            if (!r.empty()) return r;
+        }
+        if (fs->cond) {
+            auto r = macro_body_unsupported_reason_expr(tc, fs->cond.get());
+            if (!r.empty()) return r;
+        }
+        if (fs->step) {
+            auto r = macro_body_unsupported_reason_expr(tc, fs->step.get());
+            if (!r.empty()) return r;
+        }
+        return macro_body_unsupported_reason(tc, fs->body.get());
+    }
+    case ast::NodeKind::ComptimeBlockStmt:
+    case ast::NodeKind::ComptimeForStmt:
+        return "comptime block/for en macro body (requiere MC.5)";
+    default: return "";
+    }
+}
+
+/* Detecta si el body de un @Macro FORWARDEA un expr-capture: llama a una
+ * comptime fn que tiene un parametro `expr` (p.ej. `source(e)` / `inject(e)`).
+ * Esos casos NO pueden correr en la ComptimeVM porque el helper necesita
+ * re-capturar el texto en SU sitio de llamada (no una representacion runtime);
+ * se dejan a AST-eval.  Un macro con `expr` param que solo lo usa como string
+ * (p.ej. `bf_compile_body(src)`) NO forwardea y SI va a la VM. */
+bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,
+                                                  const ast::Expr *e) {
+    if (!e) return false;
+    switch (e->kind) {
+    case ast::NodeKind::CallExpr: {
+        const auto *ce = static_cast<const ast::CallExpr *>(e);
+        if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr) {
+            const std::string &n =
+                static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
+            auto it = tc.comptime_fns().find(n);
+            if (it != tc.comptime_fns().end() && it->second) {
+                for (const auto &p : it->second->params)
+                    if (p && p->is_expr_capture) return true;
+            }
+        }
+        for (const auto &a : ce->args)
+            if (macro_body_forwards_expr_capture_expr(tc, a.get())) return true;
+        return macro_body_forwards_expr_capture_expr(tc, ce->callee.get());
+    }
+    case ast::NodeKind::BinaryExpr: {
+        const auto *bn = static_cast<const ast::BinaryExpr *>(e);
+        return macro_body_forwards_expr_capture_expr(tc, bn->lhs.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, bn->rhs.get());
+    }
+    case ast::NodeKind::StringLitExpr: {
+        const auto *sl = static_cast<const ast::StringLitExpr *>(e);
+        for (const auto &ie : sl->interp_exprs)
+            if (macro_body_forwards_expr_capture_expr(tc, ie.get()))
+                return true;
+        return false;
+    }
+    case ast::NodeKind::TernaryExpr: {
+        const auto *te = static_cast<const ast::TernaryExpr *>(e);
+        return macro_body_forwards_expr_capture_expr(tc, te->cond.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, te->then_expr.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, te->else_expr.get());
+    }
+    default: return false;
+    }
+}
+
+bool macro_body_forwards_expr_capture(const TypeChecker &tc,
+                                             const ast::Stmt *s) {
+    if (!s) return false;
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        const auto *bs = static_cast<const ast::BlockStmt *>(s);
+        for (const auto &st : bs->body)
+            if (macro_body_forwards_expr_capture(tc, st.get())) return true;
+        return false;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        const auto *rs = static_cast<const ast::ReturnStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, rs->value.get());
+    }
+    case ast::NodeKind::ExprStmt: {
+        const auto *es = static_cast<const ast::ExprStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, es->expr.get());
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        const auto *vd = static_cast<const ast::VarDeclStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, vd->init.get());
+    }
+    case ast::NodeKind::IfStmt: {
+        const auto *is = static_cast<const ast::IfStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, is->cond.get()) ||
+               macro_body_forwards_expr_capture(tc, is->then_branch.get()) ||
+               macro_body_forwards_expr_capture(tc, is->else_branch.get());
+    }
+    case ast::NodeKind::WhileStmt: {
+        const auto *ws = static_cast<const ast::WhileStmt *>(s);
+        return macro_body_forwards_expr_capture_expr(tc, ws->cond.get()) ||
+               macro_body_forwards_expr_capture(tc, ws->body.get());
+    }
+    case ast::NodeKind::ForStmt: {
+        const auto *fs = static_cast<const ast::ForStmt *>(s);
+        return macro_body_forwards_expr_capture(tc, fs->init.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, fs->cond.get()) ||
+               macro_body_forwards_expr_capture_expr(tc, fs->step.get()) ||
+               macro_body_forwards_expr_capture(tc, fs->body.get());
+    }
+    default: return false;
+    }
+}
+
+/* Pre-pase de annotation de tipos para body de @Macro.
+ *
+ * Los macros NO pasan por `check_functions` (los saltea porque su
+ * body se interpreta solo al call site).  Pero MC.1 los baja a IR para
+ * que la VM eval pueda ejecutarlos.  Sin annotation de tipos, los
+ * IdentExpr en el body tienen result_type=VOID -- `lower_binary` no
+ * detecta el caso `code == "OK"` con `code: string` y emite cmpjmp
+ * directo sobre los handles en lugar de STRCMP runtime.
+ *
+ * Este walker recorre el body y annota result_type de los IdentExpr
+ * cuyo nombre matchee un param del macro.  Es minimal -- solo cubre
+ * el caso de params; otras vars locales se annotan al llamarlas via
+ * lower_expr (que internamente usa el scope del lowering).  */
+void annotate_macro_param_idents(
+    ast::Stmt *s, const std::unordered_map<std::string, Type> &param_types) {
+    if (!s) return;
+    std::function<void(ast::Expr *)> walk_expr = [&](ast::Expr *e) {
+        if (!e) return;
+        if (e->kind == ast::NodeKind::IdentExpr) {
+            auto *id = static_cast<ast::IdentExpr *>(e);
+            auto it = param_types.find(id->name);
+            if (it != param_types.end()) {
+                /* Siempre sobreescribir: dentro del body del macro
+                 * los IdentExpr no fueron type-checkeados; el campo
+                 * puede tener un default heredado del parser. */
+                id->result_type = it->second;
+            }
+            return;
+        }
+        if (e->kind == ast::NodeKind::BinaryExpr) {
+            auto *bn = static_cast<ast::BinaryExpr *>(e);
+            walk_expr(bn->lhs.get());
+            walk_expr(bn->rhs.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::UnaryExpr) {
+            auto *un = static_cast<ast::UnaryExpr *>(e);
+            walk_expr(un->operand.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::CallExpr) {
+            auto *ce = static_cast<ast::CallExpr *>(e);
+            walk_expr(ce->callee.get());
+            for (auto &a : ce->args)
+                walk_expr(a.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::AssignExpr) {
+            auto *ae = static_cast<ast::AssignExpr *>(e);
+            walk_expr(ae->target.get());
+            walk_expr(ae->value.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::TernaryExpr) {
+            auto *te = static_cast<ast::TernaryExpr *>(e);
+            walk_expr(te->cond.get());
+            walk_expr(te->then_expr.get());
+            walk_expr(te->else_expr.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::IndexExpr) {
+            auto *ix = static_cast<ast::IndexExpr *>(e);
+            walk_expr(ix->base.get());
+            walk_expr(ix->index.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::FieldAccessExpr) {
+            auto *fa = static_cast<ast::FieldAccessExpr *>(e);
+            walk_expr(fa->base.get());
+            return;
+        }
+        if (e->kind == ast::NodeKind::CastExpr) {
+            auto *ca = static_cast<ast::CastExpr *>(e);
+            walk_expr(ca->operand.get());
+            return;
+        }
+        /* Otros tipos de expresion: no necesitan recursion para el
+         * caso de annotation de params (literals, ThisExpr, etc.). */
+    };
+    switch (s->kind) {
+    case ast::NodeKind::BlockStmt: {
+        auto *bs = static_cast<ast::BlockStmt *>(s);
+        for (auto &st : bs->body)
+            annotate_macro_param_idents(st.get(), param_types);
+        break;
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        auto *vd = static_cast<ast::VarDeclStmt *>(s);
+        if (vd->init) walk_expr(vd->init.get());
+        break;
+    }
+    case ast::NodeKind::ExprStmt: {
+        auto *es = static_cast<ast::ExprStmt *>(s);
+        walk_expr(es->expr.get());
+        break;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        auto *rs = static_cast<ast::ReturnStmt *>(s);
+        if (rs->value) walk_expr(rs->value.get());
+        break;
+    }
+    case ast::NodeKind::IfStmt: {
+        auto *ifs = static_cast<ast::IfStmt *>(s);
+        walk_expr(ifs->cond.get());
+        annotate_macro_param_idents(ifs->then_branch.get(), param_types);
+        if (ifs->else_branch)
+            annotate_macro_param_idents(ifs->else_branch.get(), param_types);
+        break;
+    }
+    case ast::NodeKind::WhileStmt: {
+        auto *ws = static_cast<ast::WhileStmt *>(s);
+        walk_expr(ws->cond.get());
+        annotate_macro_param_idents(ws->body.get(), param_types);
+        break;
+    }
+    case ast::NodeKind::DoWhileStmt: {
+        auto *ds = static_cast<ast::DoWhileStmt *>(s);
+        walk_expr(ds->cond.get());
+        annotate_macro_param_idents(ds->body.get(), param_types);
+        break;
+    }
+    case ast::NodeKind::ForStmt: {
+        auto *fs = static_cast<ast::ForStmt *>(s);
+        if (fs->init) annotate_macro_param_idents(fs->init.get(), param_types);
+        if (fs->cond) walk_expr(fs->cond.get());
+        if (fs->step) walk_expr(fs->step.get());
+        annotate_macro_param_idents(fs->body.get(), param_types);
+        break;
+    }
+    default: break;
+    }
+}
 
 } // namespace vx

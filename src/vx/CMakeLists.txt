@@ -214,6 +214,11 @@ add_library(vx_lib STATIC
     # al exterior.  Cada uno baja a UNA instruccion de la maquina; cortar
     # da una vista, no una copia.
     lowering/builtins_string.cpp
+    # Emitir UNA instruccion de la maquina, con su forma exacta.  Son
+    # envoltorios de tres lineas, y no sobran: concentran las marcas que
+    # viajan con el valor (direccion del anfitrion, objeto del recolector,
+    # indice opaco) y que deciden despues que acceso a memoria se emite.
+    lowering/instructions.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.
