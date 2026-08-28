@@ -851,19 +851,10 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 return v_a;
             }
             const int ln = e->loc.line;
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = slot_idx;
-                is.source_line = ln;
-                emit(current_block_, std::move(is));
-                // El slot vive en memoria host (seccion `gdata`) -> el LOAD de
-                // abajo es un acceso host directo, sin traducir.
-                fn_->values[v_addr].is_host_ptr = true;
-            }
+            // El slot vive en memoria host (seccion `gdata`) -> el LOAD de
+            // abajo es un acceso host directo, sin traducir.
+            const ir::IrValueId v_addr =
+                emit_str_lit_addr(slot_idx, ln, /*host_ptr=*/true);
             // Para STRING, LOAD i64 (GcHandle); para otros, LOAD con
             // ancho declarado.
             const ir::IrType load_t = is_string ? ir::IrType::I64 : t;

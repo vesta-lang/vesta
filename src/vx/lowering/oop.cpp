@@ -1759,19 +1759,10 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
                     v_init = cast_if_needed(v_init, from, sty, gv->loc);
                 }
             }
-            // STR_LIT_ADDR -> slot addr, STORE init.
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = slot_idx;
-                is.source_line = ln;
-                emit(current_block_, std::move(is));
-                // El slot vive en memoria host (seccion `gdata`).
-                fn_->values[v_addr].is_host_ptr = true;
-            }
+            // La direccion del slot, y luego el STORE del valor inicial.  El
+            // slot vive en memoria host (seccion `gdata`).
+            const ir::IrValueId v_addr =
+                emit_str_lit_addr(slot_idx, ln, /*host_ptr=*/true);
             ir::IrInstr st{};
             st.op = ir::IrOp::STORE;
             st.type = sty;

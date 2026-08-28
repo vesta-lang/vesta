@@ -1047,19 +1047,10 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         if (rit != runtime_global_slots_.end()) {
             const uint64_t slot_idx = rit->second;
             const int ln = e->loc.line;
-            ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr is{};
-                is.op = ir::IrOp::STR_LIT_ADDR;
-                is.type = ir::IrType::PTR;
-                is.dst = v_addr;
-                is.imm = slot_idx;
-                is.source_line = ln;
-                emit(current_block_, std::move(is));
-                // El slot vive en memoria host (seccion `gdata`) -> el
-                // load-modify-store de abajo es acceso host directo.
-                fn_->values[v_addr].is_host_ptr = true;
-            }
+            // El slot vive en memoria host (seccion `gdata`) -> el
+            // load-modify-store de abajo es acceso host directo.
+            const ir::IrValueId v_addr =
+                emit_str_lit_addr(slot_idx, ln, /*host_ptr=*/true);
             // Tipo declarado del global.  El compound assign tiene que operar
             // con EL del global, no con i64: sobre un `f64 g`, un `g += x` con
             // aritmetica entera sumaria los BITS IEEE (basura: 1.5+1.5+1.5 daba
