@@ -345,6 +345,36 @@ def h_verify_3modes(ctx, label, src, expected, out=None):
     ctx.ok("%s (-m aot) -> exit = %d" % (label, expected))
 
 
+def h_verify_aot_only(ctx, label, src, expected, out=None):
+    """Un programa que SOLO tiene sentido en nativo: se compila y se ejecuta.
+
+    Hay ejemplos escritos para el binario y no para la maquina virtual -- hilos
+    del sistema operativo, el planificador M:N de fibras, exclusion mutua entre
+    hilos de verdad --.  Pedirles que corran en el interprete no prueba que
+    esten rotos: prueba que se les pidio algo que no es lo suyo.  Aqui se les
+    pide lo que si son, y el binario nativo devuelve el `return` del programa
+    como codigo de salida.
+    """
+    out = out or ctx.tag
+    exe = aot_build(ctx, ctx.src(src), out + "_aot", label)
+    rc_raw, _ = ctx.run([exe])
+    # Mismo cuidado que en la red diferencial: un binario que CASCA no
+    # "devuelve" un valor.  Enmascarar a 8 bits convierte un 0xC0000005 en un
+    # inocente "exit == 5" y manda a buscar un error de calculo donde lo que hay
+    # es un cuelgue.
+    if rc_raw < 0 or (rc_raw & 0xC0000000) == 0xC0000000:
+        ctx.fail("%s: el binario AOT CASCO (codigo 0x%X)" %
+                 (label, rc_raw & 0xFFFFFFFF),
+                 getattr(ctx, "last_aot_log", ""))
+        return
+    rc = exit_code(rc_raw)
+    if rc != expected:
+        ctx.fail("%s (-m aot): exit == %d, se esperaba %d" %
+                 (label, rc, expected), getattr(ctx, "last_aot_log", ""))
+        return
+    ctx.ok("%s (-m aot) -> exit = %d" % (label, expected))
+
+
 def h_diff3(ctx, label, src, out=None, aot=True):
     """Red de seguridad diferencial (Pilar 1): el INTERP es el ORACULO; jit y aot
     deben COINCIDIR con el.  No hay valor esperado fijo -- basta con que los tres
@@ -676,6 +706,14 @@ def const_reject_case(tag, label, body, line=None):
 def modes3_case(tag, label, src, expected, line=None):
     def fn(ctx):
         h_verify_3modes(ctx, label, src, expected, out=tag)
+    fn.__name__ = "case_" + tag
+    _register(tag, fn, False, line)
+
+
+def aot_case(tag, label, src, expected, line=None):
+    """Un ejemplo que solo corre en nativo.  Ver @c h_verify_aot_only."""
+    def fn(ctx):
+        h_verify_aot_only(ctx, label, src, expected, out=tag)
     fn.__name__ = "case_" + tag
     _register(tag, fn, False, line)
 
@@ -3118,6 +3156,30 @@ diff3_stdout_case("spill_reflexion", "reflexion con operando derramado (jit == i
 
 # --- stdlib: ejemplos y tests de la biblioteca estandar de Vesta -----------
 modes3_case("stdlib_atomic", "stdlib atomic<T>: anchos 1/2/4/8 + f32/f64 + bool + disponibilidad por where", "stdlib/atomic.vx", 161, line=4200)
+
+
+# --- Concurrencia de verdad: hilos del SO y el planificador M:N ------------
+#
+# Estos NO corren en el interprete y no es un fallo suyo: piden hilos del
+# sistema operativo, el planificador M:N de fibras y exclusion mutua entre
+# hilos paralelos, y eso solo existe en el binario nativo.  Todos siguen el
+# mismo convenio que sus cabeceras describen -- devuelven 42 si el resultado
+# salio EXACTO, es decir si la exclusion mutua hizo su trabajo y no se perdio
+# ni se duplico ninguna tarea --, asi que un 42 aqui no es un numero magico:
+# es la unica salida posible cuando la concurrencia es correcta.
+#
+# Estaban los diez SIN CUBRIR: la suite daba 934 pasos verdes sin ejecutar una
+# sola linea de canales, select, mutex, pools ni hilos.
+aot_case("conc_sync_contention", "contencion general del planificador de fibras", "237_sync_general_contention.vx", 42)
+aot_case("conc_real_threads", "dos HILOS del SO bajo el monitor: 100000 incrementos exactos", "238_real_threads.vx", 42)
+aot_case("conc_pool_stealing", "planificador M:N con robo de trabajo (deque Chase-Lev): arbol fork-join", "241_pool_workstealing.vx", 42)
+aot_case("conc_pool_fibers", "fibras que ceden el turno dentro del pool", "242_pool_fibers_yield.vx", 42)
+aot_case("conc_channels", "canales con buffer sobre el M:N: productor/consumidor con park/wake real", "244_channels.vx", 42)
+aot_case("conc_chan_close", "cerrar un canal despierta a quien espera", "250_chan_close.vx", 42)
+aot_case("conc_select", "select sobre varios canales", "252_select.vx", 42)
+aot_case("conc_select_send", "select del lado del envio", "253_select_send.vx", 42)
+aot_case("conc_select_mixed", "select mezclando envio y recepcion", "254_select_mixed.vx", 42)
+aot_case("conc_mutex", "mutex cooperativo de fibras cross-hilo: 4x20000 incrementos exactos", "255_mutex.vx", 42)
 
 
 # ---  AS: inline asm ---------------------------------------------------
