@@ -4156,13 +4156,42 @@ void TypeChecker::collect_globals() {
                 // anyade al layout (es plantilla).  Cada `obj.metodo<U>()`
                 // clona una version concreta via monomorphize_method.
                 if (!m->method_type_params.empty()) continue;
-                // Los constructores admiten OVERLOAD (varios `Struct(...)` con
-                // firmas distintas), asi que NO participan en la deteccion de
-                // duplicados por nombre (mismo criterio que las clases).
-                if (!m->is_constructor &&
-                    !seen_methods.emplace(m->name, true).second) {
-                    diags_.error(m->loc, "metodo duplicado en struct '" +
-                                             s->name + "': '" + m->name + "'");
+                /* Un struct no sobrecarga: un nombre, un metodo.  Los
+                 * constructores son la unica excepcion, y lo que los distingue
+                 * es el NUMERO de argumentos -- literalmente su identidad,
+                 * porque el simbolo que se emite es `<T>__ctor_<aridad>`.
+                 *
+                 * Por eso entran en la comprobacion con esa clave, y no con su
+                 * nombre.  Antes quedaban FUERA por completo, asi que dos
+                 * constructores de la misma aridad se emitian los dos con el
+                 * mismo nombre -- dos etiquetas iguales que el enlazador se
+                 * tragaba -- y la llamada se iba a uno cualquiera: con
+                 * `V(f64,f64)` y `V(i64,i64)`, escribir `V(1.0, 2.0)` acababa
+                 * en el de enteros.  Sin una sola queja.
+                 *
+                 * Distinguirlos ademas por tipos seria darle al struct una
+                 * sobrecarga que no tiene en ningun otro sitio -- ni sus
+                 * metodos ni las funciones libres la tienen -- , asi que lo que
+                 * se hace es DECIRLO donde se escribe. */
+                const std::string clave =
+                    m->is_constructor
+                        ? ("ctor/" + std::to_string(m->params.size()))
+                        : m->name;
+                if (!seen_methods.emplace(clave, true).second) {
+                    if (m->is_constructor) {
+                        diags_.error(
+                            m->loc,
+                            "el struct '" + s->name +
+                                "' ya tiene un constructor de " +
+                                std::to_string(m->params.size()) +
+                                " argumentos; en un struct los constructores se"
+                                " distinguen por el numero de argumentos, no"
+                                " por sus tipos");
+                    } else {
+                        diags_.error(m->loc,
+                                     "metodo duplicado en struct '" + s->name +
+                                         "': '" + m->name + "'");
+                    }
                     continue;
                 }
                 ClassMethodInfo mi;
