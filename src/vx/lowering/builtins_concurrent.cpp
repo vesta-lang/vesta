@@ -317,16 +317,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
             return true;
         }
         // ALLOCA 8 bytes en stack para el buffer del mensaje.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 8;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId v_buf = stack_alloc_buf(8, e->loc.line);
         // STORE i64 v_val en v_buf.
         emit_store_typed(v_buf, v_val, ir::IrType::I64, e->loc.line);
         // msgsend r_pid, r_addr, r_len  -- usar IR op MSGSEND (0xD0) en lugar
@@ -370,16 +361,7 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
             return true;
         }
         // ALLOCA 8 bytes para el buffer destino.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 8;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId v_buf = stack_alloc_buf(8, e->loc.line);
         // msgrecv r_buf, r_max  -- primer reg = buffer dest, segundo = max len.
         // Convencion del decoder/exec: reg1=r_buf, reg2=r_max (ver
         // exec_instr_msgrecv en exec_instruction_distrib.cpp).

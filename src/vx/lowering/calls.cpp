@@ -85,15 +85,8 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             if (has_ctor) {
                 const uint64_t buf_bytes =
                     (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
-                const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.imm = buf_bytes;
-                al.dst = v_buf;
-                al.host_alloca = true;
-                al.source_line = e->loc.line;
-                emit(current_block_, std::move(al));
+                const ir::IrValueId v_buf =
+                    stack_alloc_buf(buf_bytes, e->loc.line, true);
                 fn_->values[v_buf].is_host_ptr = true;
 
                 /* Los valores por defecto de los campos, ANTES del cuerpo: la

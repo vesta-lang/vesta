@@ -275,17 +275,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
         if (part.empty()) return;
         const uint64_t plen = static_cast<uint64_t>(part.size());
         // Buffer scratch de plen bytes (sin nul; append no lo necesita).
-        ir::IrValueId v_scratch = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_scratch;
-            al.imm = plen;
-            al.host_alloca = native_poo_;
-            al.source_line = ln;
-            emit(current_block_, std::move(al));
-        }
+        ir::IrValueId v_scratch = stack_alloc_buf(plen, ln, native_poo_);
         if (native_poo_) fn_->values[v_scratch].is_host_ptr = true;
         // STOREs empaquetados (qword/dword/word/byte) de los bytes.
         std::vector<uint8_t> data(part.begin(), part.end());
@@ -384,17 +374,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 v_cp = v64;
             }
             // scratch de 4 bytes (max UTF-8).
-            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_scr;
-                al.imm = 4;
-                al.host_alloca = native_poo_;
-                al.source_line = ln;
-                emit(current_block_, std::move(al));
-            }
+            ir::IrValueId v_scr = stack_alloc_buf(4, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string ctoa_fn = ensure_ctoa_helper();
             ir::IrValueId v_len = emit_call(ctoa_fn,
@@ -416,17 +396,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             ir::IrValueId v_ch = lower_expr(ex);
             if (v_ch == ir::IR_NO_VALUE) return false;
             // Buffer scratch de 1 byte con el char.
-            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_scr;
-                al.imm = 1;
-                al.host_alloca = native_poo_;
-                al.source_line = ln;
-                emit(current_block_, std::move(al));
-            }
+            ir::IrValueId v_scr = stack_alloc_buf(1, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             emit_store_typed(v_scr, v_ch, ir::IrType::U8, ln);
             build_native_string_append_inplace(
@@ -452,17 +422,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 v_int = v64;
             }
             // scratch de 24 bytes (suficiente para i64 con signo).
-            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_scr;
-                al.imm = 24;
-                al.host_alloca = native_poo_;
-                al.source_line = ln;
-                emit(current_block_, std::move(al));
-            }
+            ir::IrValueId v_scr = stack_alloc_buf(24, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             // CALL al helper itoa (no inline): evita el const-fold
             // mid-expression que daba longitudes erroneas con argumento
@@ -491,17 +451,7 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
                 emit(current_block_, std::move(ext));
             }
             // scratch de 8 bytes (cabe "false" + margen).
-            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_scr;
-                al.imm = 8;
-                al.host_alloca = native_poo_;
-                al.source_line = ln;
-                emit(current_block_, std::move(al));
-            }
+            ir::IrValueId v_scr = stack_alloc_buf(8, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             const std::string btoa_fn = ensure_btoa_helper();
             ir::IrValueId v_len = emit_call(btoa_fn,
@@ -1872,16 +1822,7 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
     const int ln = static_cast<int>(source_line);
     /* 1. ALLOCA 32 bytes -- buffer en stack VM.  Suficiente para
      *    todos los tipos: i64=20+signo, hex=18, "false"=5, UTF-8 4 B. */
-    ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_buf;
-        al.imm = 32;
-        al.source_line = ln;
-        emit(current_block_, std::move(al));
-    }
+    ir::IrValueId v_buf = stack_alloc_buf(32, ln);
     /* 2. proc_ptr via getproc. */
     const ir::IrValueId v_proc = emit_getproc(ln);
     /* 3. CALLN al native: devuelve length escrita en buf. */

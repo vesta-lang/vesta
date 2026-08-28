@@ -490,16 +490,7 @@ ir::IrValueId Lowering::emit_findclass_by_name(uint64_t name_idx,
                                                uint32_t name_len,
                                                uint32_t line) {
     // 1. ALLOCA 16 bytes para FindClassParams.
-    ir::IrValueId v_params = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_params;
-        al.imm = 16;
-        al.source_line = line;
-        emit(current_block_, std::move(al));
-    }
+    ir::IrValueId v_params = stack_alloc_buf(16, line);
     // 2. LABEL_ADDR @Absolute("code.s_<idx>") -> name_addr.
     ir::IrValueId v_name_addr =
         emit_label_addr("s_" + std::to_string(name_idx), line);

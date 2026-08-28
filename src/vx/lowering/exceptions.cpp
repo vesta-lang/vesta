@@ -347,14 +347,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // Solo si no esta ya address-taken (otro mecanismo cubre).
         if (address_taken_locals_.count(name)) continue;
         // Alocar slot 8 bytes y STORE entry value.
-        ir::IrValueId v_slot = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_slot;
-        al.imm = 8;
-        al.source_line = s->loc.line;
-        emit(current_block_, std::move(al));
+        ir::IrValueId v_slot = stack_alloc_buf(8, s->loc.line);
         // STORE entry binding al slot (sera visible en catch via LOAD).
         auto it_e = entry_bindings.find(name);
         if (it_e != entry_bindings.end() && it_e->second != ir::IR_NO_VALUE) {
@@ -404,18 +397,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // buf en host-stack: 96B cubre el peor caso (Win64 buf 80 +
         // prev 8 + type 8); SysV/x86-32 usan menos.  El layout interno
         // (offsets prev/type) lo conoce vx_exc.vx via comptime const.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_buf].is_host_ptr = true;
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 96;
-            al.host_alloca = true;
-            al.source_line = s->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
         // type = 0 (catch-all).  v2: findclass del tipo del catch.
         const ir::IrValueId v_type =
             emit_const(ir::IrType::I64, 0, s->loc.line);
@@ -1067,18 +1049,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         emit_monitor_op(v_obj, /*enter=*/true, s->loc.line);
 
         // buf + push_frame catch-all + setjmp.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_buf].is_host_ptr = true;
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = 96;
-            al.host_alloca = true;
-            al.source_line = s->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
         const ir::IrValueId v_type0 =
             emit_const(ir::IrType::I64, 0, s->loc.line);
         vcall("__vx_push_frame", {v_buf, v_type0});

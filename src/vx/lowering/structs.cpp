@@ -241,16 +241,7 @@ void Lowering::emit_struct_method_on_host_field(ir::IrValueId field_addr,
         sz = static_cast<uint64_t>(it_sl->second.size_bytes);
     if (sz == 0) sz = 8;
     // ALLOCA temp VM (is_host_ptr = false).
-    const ir::IrValueId tmp = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.imm = sz;
-        al.dst = tmp;
-        al.source_line = line;
-        emit(current_block_, std::move(al));
-    }
+    const ir::IrValueId tmp = stack_alloc_buf(sz, line);
     // memcpy field_addr (host) -> tmp (VM): qword por qword.
     const uint64_t qwords = (sz + 7) / 8;
     for (uint64_t qi = 0; qi < qwords; ++qi) {
@@ -306,17 +297,7 @@ ir::IrValueId Lowering::emit_struct_arg_copy_clone(
     // VM en interp/JIT, el callee -- que lee sus params agregados con `movh` --
     // la leia como basura, y su `__clone__` / `~dtor` operaban sobre esa
     // basura.
-    const ir::IrValueId copy = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.imm = sz;
-        al.dst = copy;
-        al.host_alloca = true;
-        al.source_line = line;
-        emit(current_block_, std::move(al));
-    }
+    const ir::IrValueId copy = stack_alloc_buf(sz, line, true);
     fn_->values[copy].is_host_ptr = true;
     // memcpy v_src -> copy (respetando host-ness de origen y destino).
     const bool src_is_host = fn_->values[v_src].is_host_ptr;

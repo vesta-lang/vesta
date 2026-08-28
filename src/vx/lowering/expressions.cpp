@@ -128,17 +128,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
                 (e->result_type.kind == PrimitiveKind::FUNCTION &&
                  !e->result_type.fn_is_raw);
             if (!dst_is_lambda) return code;
-            const ir::IrValueId fv = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = fv;
-                al.imm = 16;
-                al.host_alloca = native_poo_;
-                al.source_line = e->loc.line;
-                emit(current_block_, std::move(al));
-            }
+            const ir::IrValueId fv =
+                stack_alloc_buf(16, e->loc.line, native_poo_);
             if (native_poo_) fn_->values[fv].is_host_ptr = true;
             {
                 // [fv+0] = fn_addr
@@ -217,17 +208,8 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
     if (dst_type.kind == PrimitiveKind::FUNCTION &&
         is_int_kind(src_type.kind)) {
         // v_op es la direccion de la funcion (i64).  Construir el slot.
-        const ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = fv_addr;
-            al.imm = 16;
-            al.host_alloca = native_poo_;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId fv_addr =
+            stack_alloc_buf(16, e->loc.line, native_poo_);
         if (native_poo_) fn_->values[fv_addr].is_host_ptr = true;
         // [fv_addr + 0] = fn_addr (la direccion cruda).
         emit_store_typed(fv_addr, v_op, ir::IrType::I64, e->loc.line);

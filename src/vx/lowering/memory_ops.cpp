@@ -79,18 +79,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
 
     // --- binding register("rax") u64 feat;  (output only) ---
     // ALLOCA estable + AsmRegBinding -> el selector lo precolorea a rax.
-    const ir::IrValueId rax_slot = fn_->new_value(ir::IrType::PTR);
-    fn_->values[rax_slot].is_host_ptr = true;
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = rax_slot;
-        al.imm = 8;
-        al.host_alloca = true;
-        al.source_line = ln;
-        emit(current_block_, std::move(al));
-    }
+    const ir::IrValueId rax_slot = stack_alloc_buf(8, ln, true);
     // En modo protegido los registros son de 32 bits y `rax` no existe: el
     // binding, y todo el cuerpo de abajo, se nombran segun el ANCHO DEL TARGET.
     // Antes se emitia siempre en 64 bits, asi que en x86-32 el ensamblado
@@ -373,18 +362,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         auto make_binding = [&](const char *reg, ir::IrType ty,
                                 ir::IrValueId param,
                                 const char *dbg) -> ir::IrValueId {
-            ir::IrValueId slot = fn_->new_value(ir::IrType::PTR);
-            fn_->values[slot].is_host_ptr = true;
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = slot;
-                al.imm = 8;
-                al.host_alloca = true;
-                al.source_line = ln;
-                emit(current_block_, std::move(al));
-            }
+            ir::IrValueId slot = stack_alloc_buf(8, ln, true);
             {
                 ir::AsmRegBinding b{slot, reg, ty, false, dbg};
                 b.reg_class = reg; // registro concreto.
@@ -981,16 +959,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
 
     // Helper local: addr = base + off (off es un IrValue I64).
     // Slot del contador i = 0 (compartido por ambos loops).
-    const ir::IrValueId v_i_slot = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = v_i_slot;
-        al.imm = 8;
-        al.source_line = source_line;
-        emit(current_block_, std::move(al));
-    }
+    const ir::IrValueId v_i_slot = stack_alloc_buf(8, source_line);
     {
         ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, source_line);
         emit_store_typed(v_i_slot, v_z, ir::IrType::I64, source_line);

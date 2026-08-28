@@ -551,17 +551,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
         }
         if (e->result_type.fn_is_raw) return code; // cfn: 8 bytes crudos
         // Lambda: fat-pointer de 16 bytes {fn_addr, env=0}.
-        const ir::IrValueId fv = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = fv;
-            al.imm = 16;
-            al.host_alloca = native_poo_;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId fv = stack_alloc_buf(16, e->loc.line, native_poo_);
         if (native_poo_) fn_->values[fv].is_host_ptr = true;
         {
             // [fv+0] = fn_addr

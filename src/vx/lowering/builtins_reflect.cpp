@@ -168,14 +168,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         (void)mv_cls; // descartar el plan abortado anterior
 
         // Reservar 24 bytes en stack: usamos ALLOCA i8 con count 24.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.imm = 24;
-        al.dst = v_buf;
-        al.source_line = e->loc.line;
-        emit(current_block_, std::move(al));
+        const ir::IrValueId v_buf = stack_alloc_buf(24, e->loc.line);
         // STORE v_cls en buf+0 (8 bytes).
         emit_store_typed(v_buf, v_cls, ir::IrType::I64, e->loc.line);
         // STORE name_addr en buf+8.  Para esto necesitamos un puntero
@@ -252,16 +245,7 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
         const uint64_t name_idx = intern_class_name(*out_mod_, slit->value);
         const uint32_t name_len = static_cast<uint32_t>(slit->value.size());
         // ALLOCA 24 bytes para FindMethodParams.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.imm = 24;
-            al.dst = v_buf;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
+        const ir::IrValueId v_buf = stack_alloc_buf(24, e->loc.line);
         // [+0] class_ptr.
         emit_store_typed(v_buf, v_cls, ir::IrType::I64, e->loc.line);
         // [+8] name_addr.

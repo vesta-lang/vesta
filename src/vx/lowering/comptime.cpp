@@ -182,15 +182,7 @@ ir::IrValueId Lowering::materialize_comptime_struct(const ComptimeEvalResult &r,
     // Alocar el buffer del struct en memoria host (es un value-type).
     const uint64_t buf_bytes =
         (static_cast<uint64_t>(lay.size_bytes) + 7ULL) & ~7ULL;
-    const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-    ir::IrInstr al{};
-    al.op = ir::IrOp::ALLOCA;
-    al.type = ir::IrType::I8;
-    al.imm = buf_bytes;
-    al.dst = v_buf;
-    al.host_alloca = true;
-    al.source_line = line;
-    emit(current_block_, std::move(al));
+    const ir::IrValueId v_buf = stack_alloc_buf(buf_bytes, line, true);
     fn_->values[v_buf].is_host_ptr = true;
     fill_comptime_struct_into(v_buf, r, lay, line);
     return v_buf;

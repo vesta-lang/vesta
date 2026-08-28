@@ -861,17 +861,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             const ir::IrValueId v_ch = lower_expr(e->value.get());
             if (v_ch == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             // Buffer scratch de 1 byte con el char.
-            ir::IrValueId v_scr = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_scr;
-                al.imm = 1;
-                al.host_alloca = native_poo_;
-                al.source_line = ln;
-                emit(current_block_, std::move(al));
-            }
+            ir::IrValueId v_scr = stack_alloc_buf(1, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
             emit_store_typed(v_scr, v_ch, ir::IrType::U8, ln);
             build_native_string_append_inplace(

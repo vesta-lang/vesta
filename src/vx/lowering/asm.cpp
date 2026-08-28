@@ -844,14 +844,8 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
             vx::asm_bytes_de_clase((uint8_t)vx::isa_actual(), op.reg_class);
         const size_t bytes =
             bytes_clase != 0 ? (size_t)bytes_clase : ir::type_access_bytes(vt);
-        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ai{};
-        ai.op = ir::IrOp::ALLOCA;
-        ai.type = ir::IrType::I8;
-        ai.dst = addr;
-        ai.imm = (uint64_t)bytes;
-        ai.source_line = s->loc.line;
-        emit(current_block_, std::move(ai));
+        const ir::IrValueId addr =
+            stack_alloc_buf((uint64_t)bytes, s->loc.line);
         bind(op.name, addr);
         address_taken_locals_.insert(op.name);
         /* De que banco es lo decide quien conoce los bancos de cada ISA, no

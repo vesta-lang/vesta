@@ -1162,16 +1162,7 @@ Lowering::lower_string_literal_to_string_object(ast::StringLitExpr *slit) {
 
 ir::IrValueId Lowering::emit_topfn_value(const std::string &fn_name, int line) {
     // 1. ALLOCA 16 bytes para el slot del function value.
-    ir::IrValueId fv_addr = fn_->new_value(ir::IrType::PTR);
-    {
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = fv_addr;
-        al.imm = 16;
-        al.source_line = line;
-        emit(current_block_, std::move(al));
-    }
+    ir::IrValueId fv_addr = stack_alloc_buf(16, line);
     // 2. fn_addr via LABEL_ADDR IR op (Sprint 3).
     ir::IrValueId fn_addr = emit_label_addr(fn_name, line);
     // 3. env_addr = 0 (sin captures; el callee no debe leer r14).

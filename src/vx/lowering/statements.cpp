@@ -1085,14 +1085,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         vi.pre_loop = pre;
 
         // ALLOCA 8 bytes (i64) en current block (entry block del for).
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = addr;
-        al.imm = 8;
-        al.source_line = s->loc.line;
-        emit(current_block_, std::move(al));
+        ir::IrValueId addr = stack_alloc_buf(8, s->loc.line);
 
         // STORE pre_loop (el VALOR original SSA) al slot.
         emit_store_typed(addr, pre, vi.type, s->loc.line);
