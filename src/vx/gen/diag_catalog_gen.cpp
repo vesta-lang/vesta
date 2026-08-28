@@ -72,6 +72,7 @@ const CatEntry kEntries[] = {
     {"VX7022", {"requires:    {0}", "exige:       {0}"}},
     {"VX7023", {"this processor has: {0}", "este procesador tiene: {0}"}},
     {"VX7024", {"a catch below takes it, so the program continues", "un catch de mas abajo se hace cargo, asi que el programa continua"}},
+    {"VX7025", {"assembly block with wide-bank operands (xmm/ymm/zmm) cannot run this way: their values do not fit in the integer list the operands travel in, so they neither go in nor come out", "bloque de ensamblador con operandos del banco ancho (xmm/ymm/zmm) no ejecutable por esta via: sus valores no caben en la lista de enteros por la que viajan los operandos, asi que ni entran ni salen"}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -126,7 +127,7 @@ const CatEntry kEntries[] = {
     {"VXA052", {"the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY", "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"}},
     {"VXA053", {"assembling '{0}' into a .velb failed (code {1}): no artifact was produced", "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefacto"}},
 };
-const int kEntryCount = 105;
+const int kEntryCount = 106;
 
 } // namespace
 

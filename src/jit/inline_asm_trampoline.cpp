@@ -18,6 +18,7 @@
 #include "vx/asm/asm_backend.h"
 #include "ffi/virtual_lib_registry.h"  // inc.6: registrar el helper runner
 #include "runtime/exception_runtime.h" // parar si el asm no se puede ejecutar
+#include "vx/diag/diag_catalog.h" // el fallo se cuenta en el idioma del lector
 #include "runtime/proceso_runtime.h" // inc.6: acceso a ProcessVM::asm_ctx + vm_mem
 
 #include <atomic> // emulacion portable del efecto (barrera) sin ensamblador
@@ -523,9 +524,39 @@ extern "C" uint64_t vrt_asm_micro_ops(uint64_t proc, uint64_t hash,
     return 0;
 }
 
+/**
+ * @brief Un bloque de ensamblador con operandos del banco ancho, por la via que
+ *        no puede transportarlos.
+ *
+ * Esta via pasa los operandos por una lista de enteros, asi que un valor de
+ * 128, 256 o 512 bits no cabe: ni entra ni sale.  El emisor lo detecta y manda
+ * aqui en vez de emitir el bloque.
+ *
+ * Antes lo que se emitia era un `hlt` pelado, y eso en ejecucion es
+ * INDISTINGUIBLE de que el programa termine bien: el proceso paraba a mitad de
+ * la funcion y quien la llamo leia lo que hubiera quedado en R0.  Asi es como
+ * `367_std_memory_variantes` devolvia un puntero -- y en otra de sus rutinas, el
+ * propio byte de relleno -- en lugar de su resultado, sin una sola queja.
+ *
+ * @param proc @c ProcessVM* del proceso que ejecuta el bloque.
+ * @return Nunca devuelve por la via normal: @c throw_fatal desvia.
+ */
+extern "C" uint64_t vrt_asm_wide_operand_unsupported(uint64_t proc) {
+    auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
+    /* Por catalogo: un fallo en ejecucion tambien es un diagnostico, y se
+     * cuenta en el idioma de quien lo lee. */
+    const std::string detalle = vx::diag::format("VX7025", {});
+    runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+                         detalle.c_str());
+    return 0;
+}
+
 void register_inline_asm_runner() {
     ffi::register_virtual_fn("vrt", "inline_asm_exec",
                              reinterpret_cast<void *>(&vrt_inline_asm_exec));
+    ffi::register_virtual_fn(
+        "vrt", "asm_wide_operand_unsupported",
+        reinterpret_cast<void *>(&vrt_asm_wide_operand_unsupported));
     ffi::register_virtual_fn("vrt", "asm_micro_exec",
                              reinterpret_cast<void *>(&vrt_asm_micro_exec));
     ffi::register_virtual_fn("vrt", "asm_micro_regs",

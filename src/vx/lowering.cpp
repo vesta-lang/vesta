@@ -15121,6 +15121,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // ir_emitter emite en el backend bytecode (interp puro, sin JIT).
     // Idempotente (register_native_import dedup).
     out_mod_->register_native_import("vrt", "inline_asm_exec");
+    /* Y el de la salida por fallo: si el bloque lleva operandos del banco ancho
+     * no hay forma de pasarlos por esa via, y el emisor llama a esta otra en su
+     * lugar para PARARLO DICIENDOLO.  Se declara aqui porque el bloque
+     * `@Import` se escribe antes que los cuerpos: al emitir ya es tarde. */
+    out_mod_->register_native_import("vrt", "asm_wide_operand_unsupported");
 }
 
 // ---------------------------------------------------------------------

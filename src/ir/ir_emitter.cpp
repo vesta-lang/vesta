@@ -6151,10 +6151,24 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
         }
         if (ancho_sin_pasar) {
+            /* Se para, pero DICIENDOLO.
+             *
+             * Antes se emitia un `hlt` pelado, y eso en ejecucion es
+             * indistinguible de que el programa termine bien: el proceso paraba
+             * a mitad de la funcion y quien la llamo leia lo que hubiera
+             * quedado en R0.  Asi devolvia `367_std_memory_variantes` un
+             * puntero -- y en otra de sus rutinas, el propio byte de relleno --
+             * en vez de su resultado, sin una queja.
+             *
+             * Ahora se llama a una funcion del runtime que lanza el fallo con
+             * su mensaje, capturable con `try`/`catch` como cualquier otro. */
             ctx.comment("inline_asm: un operando del banco ancho no puede "
                         "pasar por esta via (sus valores no entran ni salen) "
-                        "-> trap en vez de resultado falso");
-            ctx.out.emit(emmit::Mnemonic::HLT);
+                        "-> fallo con mensaje en vez de resultado falso");
+            ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
+            ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), 1);
+            ctx.out.emit(emmit::Mnemonic::CALLN,
+                         Ann::method("vrt:asm_wide_operand_unsupported"));
             break;
         }
         if (binds.size() > 8) {
