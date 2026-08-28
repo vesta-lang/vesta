@@ -1199,13 +1199,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
     // Si el body cayo (no return/break), BR a step.
     if (!block_terminated_) {
         const ir::IrBlockId body_end_id = current_block_;
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = step_id;
-        brm.source_line = s->loc.line;
-        emit(body_end_id, std::move(brm));
-        fn_->blocks[body_end_id].succs.push_back(step_id);
-        fn_->blocks[step_id].preds.push_back(body_end_id);
+        emit_br_from(body_end_id, step_id, s->loc.line);
     }
 
     current_block_ = step_id;
@@ -1215,13 +1209,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
     }
     if (!block_terminated_) {
         const ir::IrBlockId step_end_id = current_block_;
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = header_id;
-        brm.source_line = s->loc.line;
-        emit(step_end_id, std::move(brm));
-        fn_->blocks[step_end_id].succs.push_back(header_id);
-        fn_->blocks[header_id].preds.push_back(step_end_id);
+        emit_br_from(step_end_id, header_id, s->loc.line);
     }
     // Suprimir el unused warning si hay continue_preds (las edges ya
     // estan registradas por ContinueStmt; no hace falta hacer nada
@@ -1769,14 +1757,31 @@ void Lowering::lower_foreach(ast::ForEachStmt *s) {
  * @param source_line Linea fuente, para la depuracion.
  */
 void Lowering::emit_br(ir::IrBlockId target, uint32_t source_line) {
+    emit_br_from(current_block_, target, source_line);
+}
+
+/**
+ * @brief Salta a un bloque DESDE otro que no es el actual.
+ *
+ * Hace falta mas de lo que parece: al construir un bucle, el salto de entrada
+ * sale del bloque de ANTES del bucle, y para entonces el bajador ya esta
+ * emitiendo en la cabecera.  Lo mismo al cerrar las dos ramas de un
+ * condicional, que saltan al bloque comun desde donde cada una termino.
+ *
+ * @param from        Bloque del que sale el salto.
+ * @param target      Bloque al que va.
+ * @param source_line Linea fuente, para la depuracion.
+ */
+void Lowering::emit_br_from(ir::IrBlockId from, ir::IrBlockId target,
+                            uint32_t source_line) {
     ir::IrInstr b{};
     b.op = ir::IrOp::BR;
     b.type = ir::IrType::VOID;
     b.dst = ir::IR_NO_VALUE;
     b.target_block = target;
     b.source_line = source_line;
-    emit(current_block_, std::move(b));
-    add_cfg_edge(current_block_, target);
+    emit(from, std::move(b));
+    add_cfg_edge(from, target);
 }
 
 /**

@@ -486,6 +486,20 @@ class Lowering {
     void emit_br(ir::IrBlockId target, uint32_t source_line);
 
     /**
+     * @brief Salta a un bloque DESDE otro que no es el actual.
+     *
+     * Al construir un bucle, el salto de entrada sale del bloque de ANTES, y
+     * para entonces el bajador ya esta emitiendo en la cabecera; al cerrar un
+     * condicional, cada rama salta al bloque comun desde donde termino.
+     *
+     * @param from        Bloque del que sale el salto.
+     * @param target      Bloque al que va.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_br_from(ir::IrBlockId from, ir::IrBlockId target,
+                      uint32_t source_line);
+
+    /**
      * @brief Salta a un bloque o a otro segun @p cond, contando las CUATRO
      *        aristas.
      *

@@ -503,13 +503,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             if (catch_all) {
                 // BR incondicional al handler; el resto de catches queda
                 // muerto.
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR;
-                br.target_block = handler_bbs[ci];
-                br.source_line = cc.loc.line;
-                emit(cur_check, std::move(br));
-                fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
-                fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
+                emit_br_from(cur_check, handler_bbs[ci], cc.loc.line);
                 cur_check = ir::IR_NO_BLOCK;
                 break;
             }

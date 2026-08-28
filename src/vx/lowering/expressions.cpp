@@ -1843,13 +1843,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
                             ? fn_->values[then_val].type
                             : ir::IrType::I64;
     {
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = merge_bb;
-        brm.source_line = src_line;
-        emit(then_end, std::move(brm));
-        fn_->blocks[then_end].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(then_end);
+        emit_br_from(then_end, merge_bb, src_line);
     }
     /* Bajar else_expr en else_bb. */
     current_block_ = else_bb;
@@ -1863,13 +1857,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
         }
     }
     {
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = merge_bb;
-        brm.source_line = src_line;
-        emit(else_end, std::move(brm));
-        fn_->blocks[else_end].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(else_end);
+        emit_br_from(else_end, merge_bb, src_line);
     }
     /* Merge: PHI. */
     current_block_ = merge_bb;
