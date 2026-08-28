@@ -1599,13 +1599,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         rf.operands = {env};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
-        ir::IrInstr brj{};
-        brj.op = ir::IrOp::BR;
-        brj.target_block = free_slot_bb;
-        brj.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
-        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(brj));
+        emit_br(free_slot_bb, line);
     }
     // free_slot_bb: RAW_FREE(slot); br skip.
     current_block_ = free_slot_bb;
@@ -1617,13 +1611,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         rf.operands = {slot};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
-        ir::IrInstr brj{};
-        brj.op = ir::IrOp::BR;
-        brj.target_block = skip_bb;
-        brj.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(skip_bb);
-        fn_->blocks[skip_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(brj));
+        emit_br(skip_bb, line);
     }
     current_block_ = skip_bb;
     block_terminated_ = false;
@@ -1730,13 +1718,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ci.source_line = line;
         ci.is_call_site = true;
         emit(current_block_, std::move(ci));
-        ir::IrInstr brj{};
-        brj.op = ir::IrOp::BR;
-        brj.target_block = free_slot_bb;
-        brj.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
-        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(brj));
+        emit_br(free_slot_bb, line);
     }
     // free_bb: RAW_FREE(ptr) -> free_slot  (deleter por defecto; null-safe).
     current_block_ = free_bb;
@@ -1748,13 +1730,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         rf.operands = {ptr};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
-        ir::IrInstr brj{};
-        brj.op = ir::IrOp::BR;
-        brj.target_block = free_slot_bb;
-        brj.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
-        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(brj));
+        emit_br(free_slot_bb, line);
     }
     // free_slot_bb: RAW_FREE(slot heap) -> skip.
     current_block_ = free_slot_bb;
@@ -1766,13 +1742,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         rf.operands = {slot};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
-        ir::IrInstr brj{};
-        brj.op = ir::IrOp::BR;
-        brj.target_block = skip_bb;
-        brj.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(skip_bb);
-        fn_->blocks[skip_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(brj));
+        emit_br(skip_bb, line);
     }
     current_block_ = skip_bb;
     block_terminated_ = false;

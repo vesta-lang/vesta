@@ -507,11 +507,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     cv.operands = {field_val};
                     cv.source_line = m->loc.line;
                     emit(current_block_, std::move(cv));
-                    ir::IrInstr brj{};
-                    brj.op = ir::IrOp::BR;
-                    brj.target_block = skip_bb;
-                    brj.source_line = m->loc.line;
-                    emit(current_block_, std::move(brj));
+                    emit_br(skip_bb, m->loc.line);
                     // 6) merge en skip_bb -> continuar con el siguiente field.
                     current_block_ = skip_bb;
                     block_terminated_ = false;
