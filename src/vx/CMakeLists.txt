@@ -186,6 +186,10 @@ add_library(vx_lib STATIC
     # escribir sino AVERIGUAR que se escribe -- cada tipo va distinto -- y con
     # que forma (hexadecimal, binario, alineado).
     lowering/builtins_print.cpp
+    # Builtins que piden algo al MUNDO: ficheros, memoria del anfitrion, fibras
+    # y modulos cargados en marcha.  Ninguno se resuelve dentro del programa, y
+    # lo que devuelven es memoria del ANFITRION -- hay que marcarlo.
+    lowering/builtins_runtime.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.

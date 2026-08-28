@@ -253,6 +253,21 @@ class Lowering {
     bool try_lower_print_builtins(ast::CallExpr *e, const std::string &name,
                                   ir::IrValueId &out_value);
 
+    /**
+     * @brief Intenta bajar una llamada como uno de los builtins que piden algo
+     *        al MUNDO: ficheros, memoria del anfitrion, fibras, modulos.
+     *
+     * Ninguno se resuelve dentro del programa: hay que pedirselo a alguien de
+     * fuera y quedarse con lo que devuelva, sabiendo que puede fallar.  Y lo
+     * que devuelve es memoria del ANFITRION, no de la maquina virtual, cosa que
+     * hay que marcar en el valor o quien lo lea despues acabaria en la memoria
+     * equivocada.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_runtime_builtins(ast::CallExpr *e, const std::string &name,
+                                    ir::IrValueId &out_value);
+
     /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
     void emit_print_string_literal(const std::string &text,
                                    uint32_t source_line);
