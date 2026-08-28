@@ -217,13 +217,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         // continue_preds/continue_scopes.
         lt.break_preds.push_back(current_block_);
         lt.break_scopes.push_back(scopes_);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = lt.break_bb;
-        br.source_line = s->loc.line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(lt.break_bb);
-        fn_->blocks[lt.break_bb].preds.push_back(current_block_);
+        emit_br(lt.break_bb, s->loc.line);
         block_terminated_ = true;
         return;
     }
@@ -238,13 +232,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         // con los SSA values en este punto de la ejecucion.
         lt.continue_preds.push_back(current_block_);
         lt.continue_scopes.push_back(scopes_);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = lt.continue_bb;
-        br.source_line = s->loc.line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(lt.continue_bb);
-        fn_->blocks[lt.continue_bb].preds.push_back(current_block_);
+        emit_br(lt.continue_bb, s->loc.line);
         block_terminated_ = true;
         return;
     }
@@ -277,13 +265,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         // Conectar el bloque actual al label_bb si todavia no
         // termino (fall-through al label).
         if (!block_terminated_) {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = lab_bb;
-            br.source_line = ls->loc.line;
-            emit(current_block_, std::move(br));
-            fn_->blocks[current_block_].succs.push_back(lab_bb);
-            fn_->blocks[lab_bb].preds.push_back(current_block_);
+            emit_br(lab_bb, ls->loc.line);
         }
         current_block_ = lab_bb;
         block_terminated_ = false;
@@ -305,13 +287,7 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         } else {
             lab_bb = it->second.block;
         }
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = lab_bb;
-        br.source_line = gs->loc.line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(lab_bb);
-        fn_->blocks[lab_bb].preds.push_back(current_block_);
+        emit_br(lab_bb, gs->loc.line);
         block_terminated_ = true;
         return;
     }
@@ -436,13 +412,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
     const bool then_falls_through = !block_terminated_;
     if (then_falls_through) {
         // br merge_bb
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = merge_bb;
-        brm.source_line = s->loc.line;
-        emit(current_block_, std::move(brm));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, s->loc.line);
         block_terminated_ = true;
     }
 
@@ -462,13 +432,7 @@ void Lowering::lower_if(ast::IfStmt *s) {
         else_pred = current_block_;
         else_falls_through = !block_terminated_;
         if (else_falls_through) {
-            ir::IrInstr brm{};
-            brm.op = ir::IrOp::BR;
-            brm.target_block = merge_bb;
-            brm.source_line = s->loc.line;
-            emit(current_block_, std::move(brm));
-            fn_->blocks[current_block_].succs.push_back(merge_bb);
-            fn_->blocks[merge_bb].preds.push_back(current_block_);
+            emit_br(merge_bb, s->loc.line);
             block_terminated_ = true;
         }
     } else {

@@ -141,12 +141,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                         emit_br_cond(cmp, sw_cases[k].second, nb, e->loc.line);
                         current_block_ = nb;
                     }
-                    ir::IrInstr br{};
-                    br.op = ir::IrOp::BR;
-                    br.target_block = default_bb;
-                    br.source_line = e->loc.line;
-                    emit(current_block_, std::move(br));
-                    sw_edge(current_block_, default_bb);
+                    emit_br(default_bb, e->loc.line);
                     return;
                 }
                 const size_t mid = lo + (hi - lo) / 2;
@@ -212,12 +207,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             current_block_ = fall;
             block_terminated_ = false;
         }
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = default_bb;
-        br.source_line = e->loc.line;
-        emit(current_block_, std::move(br));
-        sw_edge(current_block_, default_bb);
+        emit_br(default_bb, e->loc.line);
     }
 
     // 4. Bodies (con guard opcional).  SSA N-vias: snapshot del scope de entry,
@@ -254,12 +244,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             arm_reaches[i] = 1;
             arm_preds[i] = current_block_;
             arm_scopes[i] = scopes_; // snapshot ANTES del pop
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = merge_bb;
-            br.source_line = arm.loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, merge_bb);
+            emit_br(merge_bb, arm.loc.line);
         }
         pop_scope();
     }
@@ -386,12 +371,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                         emit_br_cond(cmp, sw_cases[k].second, nb, e->loc.line);
                         current_block_ = nb;
                     }
-                    ir::IrInstr br{};
-                    br.op = ir::IrOp::BR;
-                    br.target_block = default_bb;
-                    br.source_line = e->loc.line;
-                    emit(current_block_, std::move(br));
-                    sw_edge(current_block_, default_bb);
+                    emit_br(default_bb, e->loc.line);
                     return;
                 }
                 const size_t mid = lo + (hi - lo) / 2;
@@ -429,12 +409,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             emit_br_cond(cmp, c.second, nb, e->loc.line);
             current_block_ = nb;
         }
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = default_bb;
-        br.source_line = e->loc.line;
-        emit(current_block_, std::move(br));
-        sw_edge(current_block_, default_bb);
+        emit_br(default_bb, e->loc.line);
     }
 
     // Verify: en cada verify block, STRCMP del scrutinee contra cada case
@@ -496,12 +471,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             current_block_ = vnext;
             block_terminated_ = false;
         }
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = default_bb;
-        br.source_line = e->loc.line;
-        emit(current_block_, std::move(br));
-        sw_edge(current_block_, default_bb);
+        emit_br(default_bb, e->loc.line);
     }
 
     // Bodies (con guard opcional: fallo del guard -> default) + merge N-vias.
@@ -532,12 +502,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             arm_reaches[i] = 1;
             arm_preds[i] = current_block_;
             arm_scopes[i] = scopes_;
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = merge_bb;
-            br.source_line = arm.loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, merge_bb);
+            emit_br(merge_bb, arm.loc.line);
         }
         pop_scope();
     }
@@ -755,12 +720,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                                      nb, e->loc.line);
                         current_block_ = nb;
                     }
-                    ir::IrInstr br{};
-                    br.op = ir::IrOp::BR;
-                    br.target_block = default_bb;
-                    br.source_line = e->loc.line;
-                    emit(current_block_, std::move(br));
-                    sw_edge(current_block_, default_bb);
+                    emit_br(default_bb, e->loc.line);
                     return;
                 }
                 const size_t mid = lo + (hi - lo) / 2;
@@ -826,12 +786,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         }
         // Ultima rama: ninguna variante matcheada -> default (o merge).
         {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = default_bb;
-            br.source_line = e->loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, default_bb);
+            emit_br(default_bb, e->loc.line);
         }
     }
 
@@ -1097,13 +1052,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
 
         if (!block_terminated_) {
             // br merge_bb
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = merge_bb;
-            br.source_line = arm.loc.line;
-            emit(current_block_, std::move(br));
-            fn_->blocks[current_block_].succs.push_back(merge_bb);
-            fn_->blocks[merge_bb].preds.push_back(current_block_);
+            emit_br(merge_bb, arm.loc.line);
             block_terminated_ = true;
         }
         pop_scope();

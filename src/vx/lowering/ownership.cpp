@@ -479,14 +479,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         ci.source_line = ln;
                         ci.is_call_site = true;
                         emit(current_block_, std::move(ci));
-                        ir::IrInstr br{};
-                        br.op = ir::IrOp::BR;
-                        br.type = ir::IrType::VOID;
-                        br.target_block = bb_skip;
-                        br.source_line = ln;
-                        emit(current_block_, std::move(br));
-                        fn_->blocks[bb_call].succs.push_back(bb_skip);
-                        fn_->blocks[bb_skip].preds.push_back(bb_call);
+                        emit_br(bb_skip, ln);
                     }
                     // bb_free: RAW_FREE(ptr) -> bb_skip.
                     current_block_ = bb_free;
@@ -498,14 +491,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                         fr.operands = {v_ptr};
                         fr.source_line = ln;
                         emit(current_block_, std::move(fr));
-                        ir::IrInstr br{};
-                        br.op = ir::IrOp::BR;
-                        br.type = ir::IrType::VOID;
-                        br.target_block = bb_skip;
-                        br.source_line = ln;
-                        emit(current_block_, std::move(br));
-                        fn_->blocks[bb_free].succs.push_back(bb_skip);
-                        fn_->blocks[bb_skip].preds.push_back(bb_free);
+                        emit_br(bb_skip, ln);
                     }
                     current_block_ = bb_skip;
                     break;
@@ -523,14 +509,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 }
                 // bb_do -> bb_skip (para extern/vesta; SRET ya retorno).
                 {
-                    ir::IrInstr br{};
-                    br.op = ir::IrOp::BR;
-                    br.type = ir::IrType::VOID;
-                    br.target_block = bb_skip;
-                    br.source_line = ln;
-                    emit(current_block_, std::move(br));
-                    fn_->blocks[bb_do].succs.push_back(bb_skip);
-                    fn_->blocks[bb_skip].preds.push_back(bb_do);
+                    emit_br(bb_skip, ln);
                 }
                 current_block_ = bb_skip;
                 break;
@@ -751,13 +730,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 emit(current_block_, std::move(fr));
             }
             {
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR;
-                br.target_block = skip_bb;
-                br.source_line = it->source_line;
-                emit(current_block_, std::move(br));
-                fn_->blocks[free_bb].succs.push_back(skip_bb);
-                fn_->blocks[skip_bb].preds.push_back(free_bb);
+                emit_br(skip_bb, it->source_line);
             }
             // current_block_ = skip_bb para que el siguiente cleanup
             // se siga emitiendo en orden lineal.
@@ -1435,13 +1408,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         emit(current_block_, std::move(fr));
     }
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = skip_bb;
-        br.source_line = line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[free_bb].succs.push_back(skip_bb);
-        fn_->blocks[skip_bb].preds.push_back(free_bb);
+        emit_br(skip_bb, line);
     }
     current_block_ = skip_bb;
 }
@@ -1520,13 +1487,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
         emit(current_block_, std::move(st));
     }
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = skip_bb;
-        br.source_line = line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[inc_bb].succs.push_back(skip_bb);
-        fn_->blocks[skip_bb].preds.push_back(inc_bb);
+        emit_br(skip_bb, line);
     }
     current_block_ = skip_bb;
 }

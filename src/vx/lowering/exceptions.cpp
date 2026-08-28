@@ -648,13 +648,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
         }
 
         // br body_bb.
-        ir::IrInstr br_to_body{};
-        br_to_body.op = ir::IrOp::BR;
-        br_to_body.target_block = body_bb;
-        br_to_body.source_line = s->loc.line;
-        emit(current_block_, std::move(br_to_body));
-        fn_->blocks[current_block_].succs.push_back(body_bb);
-        fn_->blocks[body_bb].preds.push_back(current_block_);
+        emit_br(body_bb, s->loc.line);
         // Edges fantasmas a cada handler (alcanzables via excepcion).
         for (ir::IrBlockId hb : handler_bbs) {
             fn_->blocks[current_block_].succs.push_back(hb);
@@ -674,13 +668,7 @@ try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
             lower_stmt(s->finally_body.get());
             if (block_terminated_) return; // finally returned/threw
         }
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = merge_bb;
-        brm.source_line = line;
-        emit(current_block_, std::move(brm));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, line);
         block_terminated_ = true;
     };
 
@@ -1174,13 +1162,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         if (!block_terminated_) {
             vcall("__vx_pop_frame");
             emit_monitor_op(v_obj, /*enter=*/false, s->loc.line);
-            ir::IrInstr brm{};
-            brm.op = ir::IrOp::BR;
-            brm.target_block = nmerge;
-            brm.source_line = s->loc.line;
-            emit(current_block_, std::move(brm));
-            fn_->blocks[current_block_].succs.push_back(nmerge);
-            fn_->blocks[nmerge].preds.push_back(current_block_);
+            emit_br(nmerge, s->loc.line);
             block_terminated_ = true;
         }
 
@@ -1318,13 +1300,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         }
         emit_monitor_op(v_handle, /*enter=*/false, s->loc.line);
 
-        ir::IrInstr brm{};
-        brm.op = ir::IrOp::BR;
-        brm.target_block = merge_bb;
-        brm.source_line = s->loc.line;
-        emit(current_block_, std::move(brm));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, s->loc.line);
         block_terminated_ = true;
     }
 

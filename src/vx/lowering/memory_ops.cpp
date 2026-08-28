@@ -592,15 +592,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         // Helper: en el bloque actual, STORE &<fn_name> al global fp + BR join.
         auto store_fp_and_join = [&](const std::string &fn_name) {
             emit_store_fp(fn_name);
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.type = ir::IrType::VOID;
-            br.dst = ir::IR_NO_VALUE;
-            br.target_block = bb_join;
-            br.source_line = ln;
-            emit(current_block_, std::move(br));
-            fn_->blocks[current_block_].succs.push_back(bb_join);
-            fn_->blocks[bb_join].preds.push_back(current_block_);
+            emit_br(bb_join, ln);
         };
 
         current_block_ = bb_avx2;
@@ -887,15 +879,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         auto store_all_and_join = [&](const char *suffix) {
             for (const auto &en : mv)
                 emit_store_fp(en.body_name + suffix, en.fp_slot);
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.type = ir::IrType::VOID;
-            br.dst = ir::IR_NO_VALUE;
-            br.target_block = bb_join;
-            br.source_line = ln;
-            emit(current_block_, std::move(br));
-            fn_->blocks[current_block_].succs.push_back(bb_join);
-            fn_->blocks[bb_join].preds.push_back(current_block_);
+            emit_br(bb_join, ln);
         };
 
         // entry: has512 = bit7 ; br has512 -> pick512 : not512.

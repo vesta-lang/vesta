@@ -159,13 +159,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
                  v_total, ir::IrType::I64);
         // qword2 = cap | flag HEAP (un solo i64).
         emit_str_meta_heap(v_slot, v_cap, source_line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, source_line);
     }
 
     // --- SSO: total <= 22 ---
@@ -177,13 +171,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // qword2 = (total << 56): byte[23]=total (SSO).
         emit_str_meta_sso(v_slot, v_total, source_line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, source_line);
     }
 
     current_block_ = merge_bb;
@@ -389,13 +377,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
         fn_->blocks[sso_bb].preds.push_back(current_block_);
     }
     auto close_to_merge = [&]() {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, source_line);
     };
     current_block_ = heap_bb;
     fill_heap();
@@ -527,13 +509,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
             v_new_len, ir::IrType::I64);
         // qword2 = cap | flag HEAP (un solo i64).
         emit_str_meta_heap(v_dst_slot, v_new_cap, source_line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, source_line);
     }
 
     // --- SSO: new_len <= 22 (siempre SSO->SSO; la data vieja ya esta
@@ -547,13 +523,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
                  emit_const(ir::IrType::U8, 0, source_line), ir::IrType::U8);
         // qword2 = (new_len << 56): byte[23]=new_len (SSO).
         emit_str_meta_sso(v_dst_slot, v_new_len, source_line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = merge_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(merge_bb);
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+        emit_br(merge_bb, source_line);
     }
 
     current_block_ = merge_bb;

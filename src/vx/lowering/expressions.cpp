@@ -687,14 +687,7 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             v_rhs, fn_->values[v_rhs].type, ir::IrType::BOOL, e->loc.line);
         const ir::IrBlockId rhs_pred = current_block_;
         if (!block_terminated_) {
-            ir::IrInstr brm{};
-            brm.op = ir::IrOp::BR;
-            brm.type = ir::IrType::VOID;
-            brm.target_block = merge_bb;
-            brm.source_line = e->loc.line;
-            emit(current_block_, std::move(brm));
-            fn_->blocks[rhs_pred].succs.push_back(merge_bb);
-            fn_->blocks[merge_bb].preds.push_back(rhs_pred);
+            emit_br(merge_bb, e->loc.line);
         }
         // 5) Bloque merge: PHI(default desde default_pred, rhs desde rhs_pred).
         current_block_ = merge_bb;
