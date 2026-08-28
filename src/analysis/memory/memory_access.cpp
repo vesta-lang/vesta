@@ -13,6 +13,7 @@
  */
 #include "analysis/memory/memory_access.h"
 
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/ssa_ir.h"
 
 namespace analysis {
@@ -20,18 +21,12 @@ namespace analysis {
 using effects::AbstractLoc;
 
 int32_t memory_access_size(ir::IrType t) {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 1;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 2;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32:
-    case ir::IrType::HANDLE: return 4;
-    default: return 8; // I64/U64/F64/PTR/VOID: conservador
-    }
+    /* Este era el sitio que el resto del arbol citaba como "la unica verdad
+     * IrType->bytes" (lo dice el adaptador de tipo de rbank), pero seguia
+     * llevando su propia tabla, asi que la unica verdad podia separarse de las
+     * demas sin que nada avisara.  Ahora pregunta al vocabulario: lo que aqui
+     * queda es el NOMBRE con el que la capa de memoria llama a ese eje. */
+    return static_cast<int32_t>(ir::type_access_bytes(t));
 }
 
 int32_t memory_access_size_bytes(int32_t raw) {

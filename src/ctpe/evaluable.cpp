@@ -18,6 +18,8 @@
 
 #include "ctpe/evaluable.h"
 
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+
 namespace ctpe {
 
 using ir::IrOp;
@@ -165,20 +167,9 @@ Evaluability compute_evaluability(const ir::IrModule &mod) {
 // Tipo escalar inyectable como CONST (int/float/bool).  VOID/PTR/HANDLE no lo
 // son (un puntero comptime no tiene sentido en runtime; agregados -> fase 2).
 static bool is_scalar(ir::IrType t) {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::I16:
-    case ir::IrType::I32:
-    case ir::IrType::I64:
-    case ir::IrType::U8:
-    case ir::IrType::U16:
-    case ir::IrType::U32:
-    case ir::IrType::U64:
-    case ir::IrType::F32:
-    case ir::IrType::F64:
-    case ir::IrType::BOOL: return true;
-    default: return false;
-    }
+    // Un escalar es un entero o un flotante; ambas preguntas las contesta el
+    // vocabulario unico, y un puntero o un handle no son ninguna de las dos.
+    return ir::type_is_integer(t) || ir::type_is_float(t);
 }
 
 std::vector<Candidate> find_candidates(const ir::IrModule &mod,

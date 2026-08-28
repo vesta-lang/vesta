@@ -37,6 +37,7 @@
 
 #include "util/env_flags.h"
 #include "ir/ir_emitter.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)
 #include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
 #include "analysis/asa/aggregate_facts.h"
@@ -455,33 +456,17 @@ static bool slot_is_gdata(const IrModule &mod, size_t idx) {
 // Mapeo:  1 byte -> "b"  | 2 bytes -> "w"  | 4 bytes -> "d"  | 8 bytes -> ""
 // Ejemplo: para r3 con tipo I32, devuelve "r3d" (32 bits low de r3).
 static Reg reg_name_sized(int reg, IrType t) {
-    switch (t) {
-    case IrType::I8:
-    case IrType::U8:
-    case IrType::BOOL: return Reg::gp(reg, Reg::Width::B);
-    case IrType::I16:
-    case IrType::U16: return Reg::gp(reg, Reg::Width::W);
-    case IrType::I32:
-    case IrType::U32:
-    case IrType::F32: return Reg::gp(reg, Reg::Width::D);
-    default: return Reg::gp(reg); // 64-bit
-    }
+    // El ancho sale del eje de RANURA del vocabulario unico, que es el que
+    // habla de registros; width_for_bytes lo traduce al sufijo del .vel.  Antes
+    // habia aqui una tercera copia de esa misma tabla, escrita en terminos de
+    // Reg::Width en vez de bytes -- la misma regla dicha de otra forma.
+    return Reg::gp(reg,
+                   width_for_bytes(static_cast<unsigned>(type_slot_bytes(t))));
 }
 
-// Devuelve el tamano en bytes del tipo IR (para strides de arrays y similares)
-static uint64_t ir_type_size(IrType t) {
-    switch (t) {
-    case IrType::I8:
-    case IrType::U8:
-    case IrType::BOOL: return 1;
-    case IrType::I16:
-    case IrType::U16: return 2;
-    case IrType::I32:
-    case IrType::U32:
-    case IrType::F32: return 4;
-    default: return 8;
-    }
-}
+// El tamano en bytes del tipo (paso de arrays, ancho de registro, hueco de
+// pila) lo contesta ir::type_slot_bytes, del vocabulario unico -- aqui vivia
+// una copia de esa tabla.
 
 // Anade a un NOMBRE de registro ya formado (p.ej. "r5", "r14") el sufijo de
 // tamano (b/w/d) segun el ancho del tipo, para los atomicos width-aware: el
@@ -490,7 +475,7 @@ static uint64_t ir_type_size(IrType t) {
 // @c reg_name_sized pero operando sobre el string ya resuelto por el regalloc.
 static Reg atomic_sized(Reg reg, IrType t) {
     // El ancho es parte del operando, no un sufijo que se le pega al nombre.
-    reg.width = width_for_bytes(static_cast<unsigned>(ir_type_size(t)));
+    reg.width = width_for_bytes(static_cast<unsigned>(type_slot_bytes(t)));
     return reg;
 }
 
@@ -2584,8 +2569,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             const Reg rd = ctx.dst_of(ins.dst);
             const IrType src_t = ctx.fn.values[ins.operands[0]].type;
             const IrType dst_t = ins.type;
-            const uint64_t src_bytes = ir_type_size(src_t);
-            const uint64_t dst_bytes = ir_type_size(dst_t);
+            const uint64_t src_bytes = type_slot_bytes(src_t);
+            const uint64_t dst_bytes = type_slot_bytes(dst_t);
             const bool dst_signed =
                 (dst_t == IrType::I8 || dst_t == IrType::I16 ||
                  dst_t == IrType::I32 || dst_t == IrType::I64);
@@ -3710,7 +3695,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // El frontend Vesta pasa type=i8, imm=N para reservar N bytes
         // (variables struct); otros frontends pueden usar
         // type=i64, imm=N para arrays de N qwords.
-        const uint64_t bytes = ins.imm * ir_type_size(ins.type);
+        const uint64_t bytes = ins.imm * type_slot_bytes(ins.type);
 
         // AUTO-PROMOTE ( D.jit-mem-model MMM ext, 2026-06-01):
         // si `ir_pass_promote_callned_allocas` marco esta ALLOCA con
@@ -3781,7 +3766,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         {
             const int freg = ctx.zmm_of(ins.dst);
             if (freg >= 0) {
-                const size_t tsz = ir_type_size(ins.type);
+                const size_t tsz = type_slot_bytes(ins.type);
                 const unsigned wcode = (tsz == 4) ? 2u : 3u;
                 const WideAddr w = compute_wide_addr(ctx, ins, 0);
                 emit_wide_mem(ctx, /*is_load=*/true, freg, w, wcode);
@@ -3800,7 +3785,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const int idx_reg =
                     (fa.index == IR_NO_VALUE) ? 0 : ctx.reg_num(fa.index);
                 const int dst_reg = ctx.reg_num(ins.dst); // reg o scratch
-                const size_t tsz = ir_type_size(ins.type);
+                const size_t tsz = type_slot_bytes(ins.type);
                 const unsigned wcode = (tsz == 1)   ? 0u
                                        : (tsz == 2) ? 1u
                                        : (tsz == 4) ? 2u
@@ -3863,7 +3848,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // cargas i8/i16/i32 (el caso comun en bench_struct_field,
         // bench_array_sum, y todo codigo con structs/arrays nativos).
         // Para tsz == 8 (load 64-bit completo) seguimos con mov normal.
-        const size_t tsz = ir_type_size(ins.type);
+        const size_t tsz = type_slot_bytes(ins.type);
         const bool host_ptr = ins.operands[0] != IR_NO_VALUE &&
                               ctx.fn.values[ins.operands[0]].is_host_ptr;
         if (tsz < 8) {
@@ -3918,7 +3903,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         {
             const int freg = ctx.zmm_of(ins.operands[0]);
             if (freg >= 0) {
-                const size_t tsz = ir_type_size(ins.type);
+                const size_t tsz = type_slot_bytes(ins.type);
                 const unsigned wcode = (tsz == 4) ? 2u : 3u;
                 const WideAddr w = compute_wide_addr(ctx, ins, 1);
                 emit_wide_mem(ctx, /*is_load=*/false, freg, w, wcode);
@@ -3936,7 +3921,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
                 const int base_reg = ctx.reg_num(fa.base);
                 const int idx_reg =
                     (fa.index == IR_NO_VALUE) ? 0 : ctx.reg_num(fa.index);
-                const size_t tsz = ir_type_size(ins.type);
+                const size_t tsz = type_slot_bytes(ins.type);
                 const unsigned wcode = (tsz == 1)   ? 0u
                                        : (tsz == 2) ? 1u
                                        : (tsz == 4) ? 2u
@@ -4122,7 +4107,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() < 2) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t subop = (ins.imm >> 8) & 0xFF;
-        const size_t esz = ir_type_size(ins.type); // F64=8
+        const size_t esz = type_slot_bytes(ins.type); // F64=8
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const emmit::Mnemonic uop =
@@ -4173,7 +4158,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t subop = (ins.imm >> 8) & 0xFF;
-        const size_t esz = ir_type_size(ins.type);
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
@@ -4262,7 +4247,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t subop = (ins.imm >> 8) & 0xFF;
-        const size_t esz = ir_type_size(ins.type);
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
@@ -4332,7 +4317,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     case IrOp::VEC_FMA_S: {
         if (ins.operands.size() < 3) break;
         const uint64_t width = ins.imm & 0xFF;
-        const size_t esz = ir_type_size(ins.type);
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool es_ps = (ins.type == IrType::F32);
@@ -4399,7 +4384,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // negando el sumando: fma(a,b,-d) = round(a*b - d), BIT-EXACTO con el
         // VFMSUB231 del JIT (el -d es exacto).
         const bool fma_sub = fma3 && ((ins.imm >> 8) & 1u);
-        const size_t esz = ir_type_size(ins.type);
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool es_ps = (ins.type == IrType::F32);
@@ -4494,7 +4479,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         const bool is_fma = (ins.op == IrOp::VEC_ACC_FMA);
         if (ins.operands.size() < (is_fma ? 3u : 2u)) break;
         const uint64_t width = ins.imm & 0xFF;
-        const size_t esz = ir_type_size(ins.type);
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool es_ps = (ins.type == IrType::F32);
@@ -4586,7 +4571,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // acc[dst] += acc[src] por lane, sobre sub-slots de memoria del slot.
         if (ins.operands.empty()) break;
         const uint64_t width = ins.imm & 0xFF;
-        const size_t esz = ir_type_size(ins.type);
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
         const bool is_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
@@ -4872,7 +4857,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // esize, count)
         Reg r_len = ins.operands.empty() ? Reg::gp(0)
                                          : ctx.load_src(ins.operands[0], 0);
-        uint64_t esize = ir_type_size(ins.type);
+        uint64_t esize = type_slot_bytes(ins.type);
         ctx.out.emit(emmit::Mnemonic::GETPROC, Reg::gp(1));
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(2), esize);
         emit_mov_if_needed(ctx, Reg::gp(3), r_len);
@@ -4904,7 +4889,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         Reg r_arr = ctx.load_src(ins.operands[0], 0);
         Reg r_idx = ctx.load_src(ins.operands[1], 1);
         Reg rd = ctx.dst_of(ins.dst);
-        uint64_t stride = ir_type_size(ins.type);
+        uint64_t stride = type_slot_bytes(ins.type);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), r_idx);
         if (stride > 1)
             ctx.out.emit(emmit::Mnemonic::MULU, Reg::gp(13), stride);
@@ -4921,7 +4906,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         Reg r_arr = ctx.load_src(ins.operands[0], 0);
         Reg r_idx = ctx.load_src(ins.operands[1], 1);
         Reg r_val = ctx.load_src(ins.operands[2], 0);
-        uint64_t stride = ir_type_size(ins.type);
+        uint64_t stride = type_slot_bytes(ins.type);
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), r_idx);
         if (stride > 1)
             ctx.out.emit(emmit::Mnemonic::MULU, Reg::gp(13), stride);

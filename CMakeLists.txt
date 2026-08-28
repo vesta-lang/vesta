@@ -1026,6 +1026,21 @@ endif ()
 # Round-trip del serializador del IR.  Importa que este DECLARADO: el AOT
 # compila desde el IR serializado, asi que lo que no cruce esta frontera no
 # existe para el -- y un test que nadie compila no avisa de nada.
+# Vocabulario UNICO de propiedades de un IrType (tres ejes de anchura + clase).
+# Los oraculos del test son copias literales de las doce tablas que sustituye:
+# es lo que demuestra que la migracion no cambia comportamiento.
+add_executable(test_ir_type_info tests/ir/test_ir_type_info.cpp)
+target_include_directories(test_ir_type_info PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_ir_type_info PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
+if(VESTA_BUILD_PREPROCESSOR)
+    target_link_libraries(test_ir_type_info PRIVATE vpp_lib)
+endif()
+if (WIN32)
+    target_link_libraries(test_ir_type_info PRIVATE vesta_openssl ws2_32 synchronization)
+else ()
+    target_link_libraries(test_ir_type_info PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
+endif ()
+
 add_executable(test_ir_serialize tests/ir/test_ir_serialize.cpp)
 target_include_directories(test_ir_serialize PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_ir_serialize PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)

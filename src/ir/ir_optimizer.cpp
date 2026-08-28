@@ -11,6 +11,7 @@
  */
 
 #include "ir/ir_optimizer.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 
 #include "ir/parallel_for.h"
 
@@ -2590,42 +2591,10 @@ bool ir_pass_escape_detect_gc(IrFunction &fn) {
 //==============================================================================
 
 namespace {
-/** @brief Tamano en bytes de un IrType (para elegir trunc/widen). */
-int sr_type_size(IrType t) {
-    switch (t) {
-    case IrType::I8:
-    case IrType::U8:
-    case IrType::BOOL: return 1;
-    case IrType::I16:
-    case IrType::U16: return 2;
-    case IrType::I32:
-    case IrType::U32:
-    case IrType::F32: return 4;
-    default: return 8; /* I64/U64/F64/PTR/HANDLE */
-    }
-}
-
-/** @brief true si @p t es un entero (no float, no ptr, no handle). */
-bool sr_type_is_int(IrType t) {
-    switch (t) {
-    case IrType::I8:
-    case IrType::I16:
-    case IrType::I32:
-    case IrType::I64:
-    case IrType::U8:
-    case IrType::U16:
-    case IrType::U32:
-    case IrType::U64:
-    case IrType::BOOL: return true;
-    default: return false;
-    }
-}
-
-/** @brief true si @p t es un entero con signo. */
-bool sr_type_is_signed(IrType t) {
-    return t == IrType::I8 || t == IrType::I16 || t == IrType::I32 ||
-           t == IrType::I64;
-}
+/* El tamano en bytes del tipo, si es entero y si lleva signo los contesta el
+ * vocabulario unico (ir/ir_type_info.h) -- aqui vivian tres copias de esas
+ * tablas.  El eje que este pase necesita es el de RANURA: elige entre truncar
+ * y ensanchar, que es una decision sobre el registro, no sobre la memoria. */
 
 /** @brief Inicializacion de un campo por parte del ctor. */
 struct SrFieldInit {
@@ -2881,13 +2850,13 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
                      bool apply) {
     const IrType T = ld.type; /* tipo leido del campo */
     /* Solo enteros por ahora (float/ptr/handle -> abortar, conservador). */
-    if (!sr_type_is_int(T)) return false;
+    if (!type_is_integer(T)) return false;
     /* El ctor escribio el campo con field_type; debe coincidir con el read. */
     if (fi.field_type != T) return false;
 
     if (fi.kind == SrFieldInit::CONST) {
         uint64_t v = fi.const_val;
-        int sz = sr_type_size(T);
+        int sz = type_slot_bytes(T);
         if (sz < 8) v &= ((uint64_t{1} << (sz * 8)) - 1);
         if (apply) {
             /* Reescribir el LOAD como CONST T value (truncado al ancho de T).
@@ -2912,10 +2881,10 @@ bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
     const IrValueId arg = args[fi.new_arg_index];
     if (arg == IR_NO_VALUE || arg >= fn.values.size()) return false;
     const IrType Ta = fn.values[arg].type;
-    if (!sr_type_is_int(Ta)) return false; /* arg no entero -> abortar */
+    if (!type_is_integer(Ta)) return false; /* arg no entero -> abortar */
 
-    const int szA = sr_type_size(Ta);
-    const int szT = sr_type_size(T);
+    const int szA = type_slot_bytes(Ta);
+    const int szT = type_slot_bytes(T);
     /* arg mas estrecho que el campo: widening (raro al pasar literales).
      * v1 no lo modela con seguridad -> abortar. */
     if (szA < szT) return false;
@@ -2958,7 +2927,7 @@ static constexpr uint32_t SR_OBJ_HEADER_SIZE = 24;
 
 bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
     const IrType T = ld.type;
-    if (!sr_type_is_int(T)) return false; /* solo enteros */
+    if (!type_is_integer(T)) return false; /* solo enteros */
     if (apply) {
         ld.op = IrOp::CONST;
         ld.imm = 0;
@@ -3209,7 +3178,7 @@ bool sr_mem2reg_object(
             IrType t =
                 ld ? in.type
                    : (sv < fn.values.size() ? fn.values[sv].type : IrType::I64);
-            if (!sr_type_is_int(t)) {
+            if (!type_is_integer(t)) {
                 reason = "campo no-entero en mem2reg";
                 return false;
             }
@@ -3295,7 +3264,7 @@ bool sr_mem2reg_object(
         }
         if (fi->kind == SrFieldInit::CONST) {
             uint64_t v = fi->const_val;
-            int sz = sr_type_size(T);
+            int sz = type_slot_bytes(T);
             if (sz < 8) v &= ((uint64_t{1} << (sz * 8)) - 1);
             IrInstr ci;
             ci.op = IrOp::CONST;
@@ -3324,11 +3293,11 @@ bool sr_mem2reg_object(
                 return false;
             }
             IrType Ta = fn.values[arg].type;
-            if (!sr_type_is_int(Ta)) {
+            if (!type_is_integer(Ta)) {
                 reason = "arg no entero";
                 return false;
             }
-            int szA = sr_type_size(Ta), szT = sr_type_size(T);
+            int szA = type_slot_bytes(Ta), szT = type_slot_bytes(T);
             if (szA == szT) {
                 init_val[off] = arg; /* sin conversion */
             } else if (szA > szT) {
@@ -4102,7 +4071,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                     /* Solo enteros: el forwarding via MOV de un valor float/
                      * ptr/handle podria mezclar bancos GP/ZMM en codegen.
                      * Consistente con el path read-only (int-only). */
-                    if (!sr_type_is_int(in.type)) {
+                    if (!type_is_integer(in.type)) {
                         vok = false;
                         vreason = "campo no-entero con field-write "
                                   "(float/ptr/handle)";
@@ -4488,25 +4457,8 @@ bool is_const_with_value(const IrFunction &fn, IrValueId vid, int64_t &out) {
     return false;
 }
 
-/** @brief Mascara de bits para truncar a @p type. */
-uint64_t type_mask(IrType t) {
-    switch (t) {
-    case IrType::I8:
-    case IrType::U8:
-    case IrType::BOOL: return 0xFFu;
-    case IrType::I16:
-    case IrType::U16: return 0xFFFFu;
-    case IrType::I32:
-    case IrType::U32:
-    case IrType::F32: return 0xFFFFFFFFu;
-    default: return ~static_cast<uint64_t>(0u);
-    }
-}
-
-bool type_is_signed_int(IrType t) {
-    return t == IrType::I8 || t == IrType::I16 || t == IrType::I32 ||
-           t == IrType::I64;
-}
+/* La mascara de truncado y el signo del tipo salen del vocabulario unico
+ * (ir/ir_type_info.h); aqui habia otra copia de ambas tablas. */
 
 /** @brief Sign-extiende @p v desde @p from_t a 64-bit. */
 int64_t sign_extend_from(int64_t v, IrType from_t) {
@@ -4718,17 +4670,9 @@ bool ir_pass_narrow_cmp(IrFunction &fn) {
     }
 
     // Ancho en bits de un tipo entero estrecho (0 = no aplicable:
-    // i64/u64/no-int).
+    // i64/u64/no-int).  Lo contesta el vocabulario unico.
     auto narrow_bits = [](IrType t) -> int {
-        switch (t) {
-        case IrType::I8:
-        case IrType::U8: return 8;
-        case IrType::I16:
-        case IrType::U16: return 16;
-        case IrType::I32:
-        case IrType::U32: return 32;
-        default: return 0; // I64/U64/PTR/float: no estrechar
-        }
+        return static_cast<int>(type_narrow_bits(t));
     };
     auto is_signed_cmp = [](IrOp op) -> bool {
         switch (op) {
@@ -5106,7 +5050,7 @@ bool ir_pass_simplify(IrFunction &fn) {
                     /* Si el tipo destino es signed, sign-extender de
                      * vuelta a i64 para preservar el valor logico. */
                     int64_t out_val;
-                    if (type_is_signed_int(ins.type)) {
+                    if (type_is_signed(ins.type)) {
                         out_val =
                             sign_extend_from(static_cast<int64_t>(v), ins.type);
                     } else {
@@ -6010,13 +5954,12 @@ compute_value_facts(const IrFunction &fn) {
 static bool
 elim_casts_with_facts(IrFunction &fn,
                       const std::unordered_map<IrValueId, ValueFacts> &facts) {
+    /* Aqui el estrechable tiene que llevar SIGNO, a diferencia del resto del
+     * fichero: este pase razona sobre extensiones con signo, y admitir los u*
+     * cambiaria lo que elimina.  Se escribe sobre el vocabulario unico en vez
+     * de con otra tabla, pero conservando esa condicion extra. */
     auto narrow_bits = [](IrType t) -> int {
-        switch (t) {
-        case IrType::I8: return 8;
-        case IrType::I16: return 16;
-        case IrType::I32: return 32;
-        default: return 0;
-        }
+        return type_is_signed(t) ? static_cast<int>(type_narrow_bits(t)) : 0;
     };
     auto facts_of = [&](IrValueId v) -> ValueFacts {
         auto it = facts.find(v);
@@ -7920,7 +7863,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
      * constantes distintos. */
     // Bytes accedidos: delega en la UNICA verdad compartida.
     auto access_bytes = [](IrType t) -> int64_t {
-        return analysis::memory_access_size(t);
+        return static_cast<int64_t>(type_access_bytes(t));
     };
 
     /* Clave canonica de direccion: (raiz, offset const).  Dos punteros con

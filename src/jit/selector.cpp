@@ -33,6 +33,7 @@
 
 #include "util/env_flags.h"
 #include "jit/selector.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 
 #include "jit/auto_jit.h"
 #include "jit/jit_regalloc.h"
@@ -319,27 +320,9 @@ inline uint64_t resolve_runtime_entry(const std::string &name,
     return 0;
 }
 
-/** @brief Tamano en bytes de un @c IrType (mismo que ir_emitter). */
-inline uint64_t ir_type_size_bytes(ir::IrType t) noexcept {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 1;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 2;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32: return 4;
-    default: return 8;
-    }
-}
-
-/** @brief True si el tipo entero es con signo (I8/I16/I32/I64). */
-inline bool ir_type_is_signed_int(ir::IrType t) noexcept {
-    return t == ir::IrType::I8 || t == ir::IrType::I16 ||
-           t == ir::IrType::I32 || t == ir::IrType::I64;
-}
-
+/* El tamano en bytes y el signo del tipo los contesta el vocabulario unico
+ * (ir/ir_type_info.h) -- aqui vivia otra copia de ambas tablas.  El eje que
+ * este selector necesita es el de RANURA: elige el ancho del registro. */
 /**
  * @brief Magic-number para division signed por constante de 32 bits.
  *
@@ -1932,8 +1915,8 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                  * Potencia-de-2 y |d|<2 / unsigned / i64 caen al IDIV. */
                 static const bool sr_off =
                     (util::flag_on(util::FlagId::NoStrengthReduce));
-                if (!sr_off && ir_type_size_bytes(ins.type) == 4 &&
-                    ir_type_is_signed_int(ins.type) &&
+                if (!sr_off && ir::type_slot_bytes(ins.type) == 4 &&
+                    ir::type_is_signed(ins.type) &&
                     ins.operands[1] < ir_fn.values.size() &&
                     ir_fn.values[ins.operands[1]].is_const) {
                     const int32_t d = static_cast<int32_t>(
@@ -2196,10 +2179,10 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 if (ins.dst == ir::IR_NO_VALUE) break;
                 const ir::IrType src_t = ir_fn.values[ins.operands[0]].type;
                 const ir::IrType dst_t = ins.type;
-                const uint64_t src_bytes = ir_type_size_bytes(src_t);
-                const uint64_t dst_bytes = ir_type_size_bytes(dst_t);
-                const bool dst_signed = ir_type_is_signed_int(dst_t);
-                const bool src_signed = ir_type_is_signed_int(src_t);
+                const uint64_t src_bytes = ir::type_slot_bytes(src_t);
+                const uint64_t dst_bytes = ir::type_slot_bytes(dst_t);
+                const bool dst_signed = ir::type_is_signed(dst_t);
+                const bool src_signed = ir::type_is_signed(src_t);
 
                 /* Cargar src a SCRATCH_A (RAX). */
                 load_op_rematerializable(mf, ir_fn, ins.operands[0], SCRATCH_A);
@@ -2251,8 +2234,8 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
             case IrOp::LOAD: {
                 if (ins.operands.empty()) break;
                 const ir::IrValueId p_vid = ins.operands[0];
-                const uint64_t lbytes = ir_type_size_bytes(ins.type);
-                const bool lsigned = ir_type_is_signed_int(ins.type);
+                const uint64_t lbytes = ir::type_slot_bytes(ins.type);
+                const bool lsigned = ir::type_is_signed(ins.type);
                 const bool ptr_is_host =
                     (p_vid < host_in_jit.size() && host_in_jit[p_vid]);
                 load_op_rematerializable(mf, ir_fn, p_vid, SCRATCH_B);
@@ -2496,7 +2479,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                 const ir::IrValueId ptr_vid = ins.operands[1];
                 const bool ptr_is_host =
                     (ptr_vid < host_in_jit.size() && host_in_jit[ptr_vid]);
-                const uint64_t sbytes = ir_type_size_bytes(ins.type);
+                const uint64_t sbytes = ir::type_slot_bytes(ins.type);
 
                 /*  D.jit-mem-model INLINE-CACHE.  Mismo
                  * patron que LOAD: hit en page cache -> native

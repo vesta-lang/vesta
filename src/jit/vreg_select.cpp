@@ -32,6 +32,7 @@
 #include "jit/auto_jit.h" // FN.3: lookup_jit_code_at_pc (LABEL_ADDR -> nativo)
 
 #include "ir/ssa_ir.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h"  //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"         // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
@@ -149,28 +150,9 @@ inline MOperand vr(ir::IrValueId v) {
     return MOperand::make_vreg(static_cast<uint32_t>(v), RegClass::GP, 8);
 }
 
-/** @brief Tamano en bytes de un IrType entero/puntero. */
-inline int ir_type_bytes(ir::IrType t) {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 1;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 2;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32: return 4;
-    default: return 8; // I64/U64/F64/PTR/HANDLE
-    }
-}
-/** @brief True si el tipo entero tiene signo. */
-inline bool ir_type_signed(ir::IrType t) {
-    return t == ir::IrType::I8 || t == ir::IrType::I16 ||
-           t == ir::IrType::I32 || t == ir::IrType::I64;
-}
-inline bool ir_type_is_float(ir::IrType t) {
-    return t == ir::IrType::F32 || t == ir::IrType::F64;
-}
+/* El tamano en bytes, el signo y si es flotante los contesta el vocabulario
+ * unico (ir/ir_type_info.h) -- aqui vivian tres copias de esas tablas.  El eje
+ * que este selector necesita es el de RANURA: elige el ancho del registro. */
 
 /** @brief Operando memoria [rbx + proc->registers.regs[j]] (VM_ABI).
  *  RBX = ProcessVM* durante la funcion.  j=0 retorno, j>=1 argumentos. */
@@ -768,7 +750,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * fp_ok (en otro caso ningun op float llega a emitirse). */
     if (fp_ok)
         for (size_t i = 0; i < fn.values.size(); ++i)
-            if (ir_type_is_float(fn.values[i].type))
+            if (ir::type_is_float(fn.values[i].type))
                 out.vreg_class[i] = RegClass::FP;
 
     /* De que banco es cada operando de un bloque asm, ANTES de seleccionar.
@@ -1033,7 +1015,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         for (size_t a = 0; a < operands.size(); ++a) {
             const ir::IrValueId av = operands[a];
             const bool is_f = fp_ok && av < fn.values.size() &&
-                              ir_type_is_float(fn.values[av].type);
+                              ir::type_is_float(fn.values[av].type);
             // ABI custom (register() en el param/cfn): si el a-esimo arg
             // declara un registro fisico, se coloca ahi (via MInstr::dst del
             // pseudo-ARG) en vez del i-esimo arg-reg del ABI estandar.  Solo GP
@@ -1075,7 +1057,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     auto store_vm_arg = [&](std::vector<MInstr> &OO, int slot,
                             ir::IrValueId av) {
         const bool av_fp = fp_ok && av < fn.values.size() &&
-                           ir_type_is_float(fn.values[av].type);
+                           ir::type_is_float(fn.values[av].type);
         OO.push_back(MInstr::make_unary(MOp::MOV, vm_reg_mem(slot),
                                         av_fp ? vrt(av) : vr(av)));
     };
@@ -1308,7 +1290,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const ir::IrType pt = (fn.params[i] < fn.values.size())
                                           ? fn.values[fn.params[i]].type
                                           : ir::IrType::I64;
-                if (ir_type_bytes(pt) > 8) {
+                if (ir::type_slot_bytes(pt) > 8) {
                     vreg_dbg(fn.name.c_str(), "callback(wide-arg>8)");
                     return false;
                 }
@@ -1339,7 +1321,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     const ir::IrType pt = (fn.params[i] < fn.values.size())
                                               ? fn.values[fn.params[i]].type
                                               : ir::IrType::I64;
-                    const bool isf = ir_type_is_float(pt); /* f32 o f64 */
+                    const bool isf = ir::type_is_float(pt); /* f32 o f64 */
                     bool on_stack = false;
                     int32_t stk_off = 0;
                     MReg srcreg = MReg::RAX;
@@ -1485,7 +1467,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
             const int32_t base_p = 2 * pal_p; // retorno + rbp/ebp guardado
             auto is_fparam = [&](ir::IrValueId pv) -> bool {
                 return fp_ok && pv < fn.values.size() &&
-                       ir_type_is_float(fn.values[pv].type);
+                       ir::type_is_float(fn.values[pv].type);
             };
             // ¿Este param declara un registro fisico de entrada (ABI custom)?
             auto param_custom_reg = [&](size_t i) -> int {
@@ -1850,7 +1832,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * GP temporal (imm32/imm64) y se bitcastean al XMM dst via
                  * MOVQ_GP_XMM.  El rewrite resuelve el GP temp y el XMM dst
                  * (incluido el spill).  Mejora futura: lea de .rodata. */
-                if (fp_ok && ir_type_is_float(in.type)) {
+                if (fp_ok && ir::type_is_float(in.type)) {
                     const ir::IrValueId t = new_tmp();
                     const int64_t fs = static_cast<int64_t>(in.imm);
                     if (fs >= INT32_MIN && fs <= INT32_MAX) {
@@ -2261,7 +2243,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 /* variant: bit0 = MOD(1)/DIV(0), bit1 = UNSIGNED(2).  El tipo
                  * del IR decide signed vs unsigned (idiv/cqo vs div/xor). */
                 dm.variant = (in.op == ir::IrOp::MOD) ? 1u : 0u;
-                if (!ir_type_signed(in.type)) dm.variant |= 2u;
+                if (!ir::type_is_signed(in.type)) dm.variant |= 2u;
                 O.push_back(dm);
                 break;
             }
@@ -3001,9 +2983,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * escribir -> resultado basura. */
                 const ir::IrValueId src = in.operands[0];
                 const bool dst_f = in.dst < fn.values.size() &&
-                                   ir_type_is_float(fn.values[in.dst].type);
+                                   ir::type_is_float(fn.values[in.dst].type);
                 const bool src_f = src < fn.values.size() &&
-                                   ir_type_is_float(fn.values[src].type);
+                                   ir::type_is_float(fn.values[src].type);
                 if (dst_f != src_f && !fp_ok) {
                     /* bitcast GP<->FP pero el target no soporta float -> no
                      * podemos emitir MOVQ; fallback. */
@@ -3034,11 +3016,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 const ir::IrType st = fn.values[in.operands[0]].type;
                 const ir::IrType dt = in.type;
-                if (ir_type_is_float(st) || ir_type_is_float(dt)) {
+                if (ir::type_is_float(st) || ir::type_is_float(dt)) {
                     vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
                     return false;
                 }
-                const int sb = ir_type_bytes(st), db = ir_type_bytes(dt);
+                const int sb = ir::type_slot_bytes(st), db = ir::type_slot_bytes(dt);
                 /* MOV de ancho w (w<8 zero-extiende los bits altos). */
                 auto mov_w = [&](int w) {
                     MOperand d = vr(in.dst);
@@ -3062,7 +3044,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* EXTENSION (zext/sext). */
                     const bool sign =
                         (in.op == ir::IrOp::SEXT) ||
-                        (in.op == ir::IrOp::CAST && ir_type_signed(st));
+                        (in.op == ir::IrOp::CAST && ir::type_is_signed(st));
                     if (sb == 1 || sb == 2)
                         ext(sign ? MOp::MOVSX : MOp::MOVZX, sb);
                     else if (sign)
@@ -3071,7 +3053,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                         mov_w(4); // u32->u64 zero-ext
                 } else {
                     /* TRUNCACION (db < sb): el signo lo da el DESTINO. */
-                    const bool sign = ir_type_signed(dt);
+                    const bool sign = ir::type_is_signed(dt);
                     if (db == 4) {
                         if (sign)
                             ext(MOp::MOVSX, 4); // i32: 32 bajos sign-ext
@@ -3160,7 +3142,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (!in.operands.empty()) {
                     const ir::IrValueId rv = in.operands[0];
                     const bool rv_fp = fp_ok && rv < fn.values.size() &&
-                                       ir_type_is_float(fn.values[rv].type);
+                                       ir::type_is_float(fn.values[rv].type);
                     /* Float return HOST_LEAF ( AOT C1): el valor va a XMM0
                      * (ret_reg[FP]).  El MOV XMM0 <- vreg_fp lo enruta el
                      * rewrite a MOVSD (is_fp_operand). */
@@ -3329,8 +3311,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                    vr(in.operands[0])));
                     break;
                 }
-                const int w = ir_type_bytes(in.type);
-                const bool sgn = ir_type_signed(in.type);
+                const int w = ir::type_slot_bytes(in.type);
+                const bool sgn = ir::type_is_signed(in.type);
                 /* AOT (HOST_LEAF): NO hay vm_mem -> toda direccion es host
                  * (el str_lit_addr/.rodata, malloc, alloca son host_ptr
                  * reales).  Solo el VM_ABI traduce vaddr -> host via
@@ -3339,7 +3321,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* float desde memoria VM (vaddr): LOAD_VM no materializa a
                      * XMM aun -> bail.  El caso HOST si se soporta (make_load
                      * + rewrite enruta el dst FP a MOVSD/MOVSS). */
-                    if (ir_type_is_float(in.type)) {
+                    if (ir::type_is_float(in.type)) {
                         vreg_dbg(fn.name.c_str(), "load-float-vm");
                         return false;
                     }
@@ -3397,14 +3379,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                                                    vr(in.operands[0])));
                     break;
                 }
-                const int w = ir_type_bytes(in.type);
+                const int w = ir::type_slot_bytes(in.type);
                 /* AOT (HOST_LEAF): toda direccion es host -> STORE directo
                  * (ver nota en LOAD).  Solo VM_ABI usa STORE_VM. */
                 if (vm && !fn.values[in.operands[1]].is_host_ptr) {
                     /* float a memoria VM (vaddr): STORE_VM no soporta XMM aun
                      * -> bail.  El caso HOST si (make_store + rewrite MOVSD).
                      */
-                    if (ir_type_is_float(in.type)) {
+                    if (ir::type_is_float(in.type)) {
                         vreg_dbg(fn.name.c_str(), "store-float-vm");
                         return false;
                     }
@@ -4539,7 +4521,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             d.regclass = 2; // ASM_RC_VEC
                         } else {
                             d.width = static_cast<uint16_t>(
-                                ir_type_bytes(b.type) * 8);
+                                ir::type_slot_bytes(b.type) * 8);
                             d.regclass = 0; // ASM_RC_GP
                         }
                     }
@@ -5540,7 +5522,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                          * entero/ptr -> RAX. */
                         const bool dst_f =
                             fp_ok && in.dst < fn.values.size() &&
-                            ir_type_is_float(fn.values[in.dst].type);
+                            ir::type_is_float(fn.values[in.dst].type);
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, dst_f ? vrt(in.dst) : vr(in.dst),
                             MOperand::make_reg(dst_f ? MReg::XMM0 : MReg::RAX,
@@ -5675,7 +5657,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     if (in.dst != ir::IR_NO_VALUE) {
                         const bool dst_f =
                             fp_ok && in.dst < fn.values.size() &&
-                            ir_type_is_float(fn.values[in.dst].type);
+                            ir::type_is_float(fn.values[in.dst].type);
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, dst_f ? vrt(in.dst) : vr(in.dst),
                             MOperand::make_reg(dst_f ? MReg::XMM0 : MReg::RAX,
@@ -6229,7 +6211,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     if (in.dst != ir::IR_NO_VALUE) {
                         const bool dst_f =
                             fp_ok && in.dst < fn.values.size() &&
-                            ir_type_is_float(fn.values[in.dst].type);
+                            ir::type_is_float(fn.values[in.dst].type);
                         O.push_back(MInstr::make_unary(
                             MOp::MOV, dst_f ? vrt(in.dst) : vr(in.dst),
                             MOperand::make_reg(dst_f ? MReg::XMM0 : MReg::RAX,
@@ -6441,7 +6423,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                             const ir::IrValueId av = in.operands[a];
                             const bool is_f =
                                 fp_ok && av < fn.values.size() &&
-                                ir_type_is_float(fn.values[av].type);
+                                ir::type_is_float(fn.values[av].type);
                             if (is_f) {
                                 if (hl_fi >= hl_fmax) {
                                     hl_fp_ovf = true;
@@ -6495,7 +6477,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 for (size_t a = 0; a < calln_nargs; ++a) {
                     const ir::IrValueId av = in.operands[a];
                     const bool is_f = fp_ok && av < fn.values.size() &&
-                                      ir_type_is_float(fn.values[av].type);
+                                      ir::type_is_float(fn.values[av].type);
                     if (is_f) {
                         if (cn_fi >= calln_fmax) {
                             calln_fp_ovf = true;

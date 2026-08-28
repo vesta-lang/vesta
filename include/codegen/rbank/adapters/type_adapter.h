@@ -16,7 +16,7 @@
  * llamadas, si es rematerializable, si conviene derramarlo -- esos hechos
  * vienen de OTROS adaptadores (Liveness, Const, Loop, Alias, Profile), cada uno
  * en su fichero, pequeno y testeable.  Asi, cuando algo salga mal, la pregunta
- * "¿por que este valor tiene X?" tiene una respuesta de UN adaptador, no de un
+ * "por que este valor tiene X?" tiene una respuesta de UN adaptador, no de un
  * bloque de 500 lineas.
  *
  * SNAPSHOT: los adaptadores rellenan UN mismo @c ValueRequirements durante su

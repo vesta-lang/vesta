@@ -17,6 +17,7 @@
 
 #include "util/env_flags.h"
 #include "vx/lowering.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 
 #include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
 #include <algorithm>
@@ -14723,18 +14724,10 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
                      * la vida, acababa como instruccion sin representar. */
                     const std::string c = asm_canonical_reg(b.reg);
                     if (c.empty()) continue;
-                    int wbits = 64;
-                    switch (b.type) {
-                    case ir::IrType::I8:
-                    case ir::IrType::U8:
-                    case ir::IrType::BOOL: wbits = 8; break;
-                    case ir::IrType::I16:
-                    case ir::IrType::U16: wbits = 16; break;
-                    case ir::IrType::I32:
-                    case ir::IrType::U32:
-                    case ir::IrType::F32: wbits = 32; break;
-                    default: wbits = 64; break; // I64/U64/PTR/HANDLE/F64
-                    }
+                    // Ancho en bits desde el eje de RANURA del vocabulario
+                    // unico: aqui habia otra copia de esa tabla.
+                    const int wbits =
+                        static_cast<int>(ir::type_slot_bytes(b.type) * 8u);
                     bound[c] = vx::AsmBoundReg{b.alloca_value, wbits};
                     /* Y por su MARCADOR.  Una ligadura automatica lleva
                      * ademas un registro elegido por defecto para el
@@ -41925,17 +41918,7 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
     // GCC/Clang.
     if (!is_explicit) {
         auto bytes_for = [](ir::IrType t) -> int {
-            switch (t) {
-            case ir::IrType::I8:
-            case ir::IrType::U8:
-            case ir::IrType::BOOL: return 1;
-            case ir::IrType::I16:
-            case ir::IrType::U16: return 2;
-            case ir::IrType::I32:
-            case ir::IrType::U32:
-            case ir::IrType::F32: return 4;
-            default: return 8;
-            }
+            return static_cast<int>(ir::type_slot_bytes(t));
         };
         const bool from_is_float =
             (from == ir::IrType::F32 || from == ir::IrType::F64);
@@ -42013,17 +41996,12 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
         // 0xFFFFFFF9 con bits altos = 0 -> ITOF lo lee como 4294967289
         // (no -7).  Fix: SEXT (signed) o ZEXT (unsigned) a i64 ANTES
         // del ITOF/UITOF.
+        /* Esta tabla se escribia a mano y OMITIA F32, que caia en el default y
+         * valia 8 en vez de 4.  No fallaba porque esta rama solo se recorre
+         * cuando el origen NO es flotante -- estaba protegida por el contexto,
+         * no por ser correcta.  El vocabulario unico ya no deja escribir eso. */
         auto bytes_of_local = [](ir::IrType t) -> int {
-            switch (t) {
-            case ir::IrType::I8:
-            case ir::IrType::U8:
-            case ir::IrType::BOOL: return 1;
-            case ir::IrType::I16:
-            case ir::IrType::U16: return 2;
-            case ir::IrType::I32:
-            case ir::IrType::U32: return 4;
-            default: return 8;
-            }
+            return static_cast<int>(ir::type_slot_bytes(t));
         };
         if (bytes_of_local(from) < 8) {
             ir::IrValueId v_ext = fn_->new_value(ir::IrType::I64);
@@ -42043,17 +42021,10 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
         // emitter recibia siempre CAST y emitia un mov plano que NO
         // truncaba ni extendia: `i32 x = i64_value` dejaba los 8
         // bytes originales en el registro (bug de truncacion).
+        /* Misma historia que bytes_of_local: omitia F32 y sobrevivia porque la
+         * rama excluye los flotantes.  Ahora lo contesta el vocabulario. */
         auto bytes_of = [](ir::IrType t) -> int {
-            switch (t) {
-            case ir::IrType::I8:
-            case ir::IrType::U8:
-            case ir::IrType::BOOL: return 1;
-            case ir::IrType::I16:
-            case ir::IrType::U16: return 2;
-            case ir::IrType::I32:
-            case ir::IrType::U32: return 4;
-            default: return 8;
-            }
+            return static_cast<int>(ir::type_slot_bytes(t));
         };
         const int from_b = bytes_of(from);
         const int to_b = bytes_of(to);

@@ -30,6 +30,7 @@
  */
 
 #include "ir/ir_builder.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <cassert>
 
 namespace ir {
@@ -719,22 +720,9 @@ void IrBuilder::append(IrInstr ins) {
  * trivial (max 7 bytes desperdiciados por variable).
  */
 IrValueId IrBuilder::alloca_init(IrValueId initial, IrType type) {
-    uint32_t bytes = 8;
-    switch (type) {
-    case IrType::I8:
-    case IrType::U8:
-    case IrType::BOOL: bytes = 1; break;
-    case IrType::I16:
-    case IrType::U16: bytes = 2; break;
-    case IrType::I32:
-    case IrType::U32:
-    case IrType::F32: bytes = 4; break;
-    case IrType::I64:
-    case IrType::U64:
-    case IrType::F64:
-    case IrType::PTR: bytes = 8; break;
-    default: bytes = 8; break;
-    }
+    // Eje de RANURA del vocabulario unico: el hueco de pila de un valor.  Aqui
+    // habia otra copia de esa tabla.
+    uint32_t bytes = type_slot_bytes(type);
     // Redondear al alto a 8 bytes: cualquier slot tiene capacidad de
     // qword, lo que permite alocacion uniforme + reuso entre tipos.
     if (bytes < 8) bytes = 8;

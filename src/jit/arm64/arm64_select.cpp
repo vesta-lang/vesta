@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include "jit/arm64/arm64_select.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 
 #include <cctype>
 #include <sstream>
@@ -88,27 +89,12 @@ const char *cmp_cc(ir::IrOp op) {
     }
 }
 
-/// Bytes de un IrType entero/ptr (para SEXT/ZEXT/CAST/TRUNC).
-int a64_type_bytes(ir::IrType t) {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 1;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 2;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32:
-    case ir::IrType::HANDLE: return 4;
-    default: return 8; // I64/U64/PTR/F64
-    }
-}
-/// ¿Es un tipo entero CON signo? (para elegir sign- vs zero-extend).
-bool a64_type_signed(ir::IrType t) {
-    return t == ir::IrType::I8 || t == ir::IrType::I16 ||
-           t == ir::IrType::I32 || t == ir::IrType::I64;
-}
-/// ¿Es un tipo float? (las conversiones float son H.7).
+/* Los bytes del tipo y su signo (para SEXT/ZEXT/CAST/TRUNC) los contesta el
+ * vocabulario unico (ir/ir_type_info.h) -- aqui vivia otra copia de ambas
+ * tablas.  El eje que este selector necesita es el de ACCESO: elige el ancho
+ * de la carga o el almacenamiento, y un handle son 4 bytes de dato. */
+
+/// Es un tipo float? (las conversiones float son H.7).
 bool a64_type_float(ir::IrType t) {
     return t == ir::IrType::F32 || t == ir::IrType::F64;
 }
@@ -141,7 +127,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
         return "";
     }
 
-    // ¿La funcion hace alguna llamada?  Si la hace, `bl` machaca LR (x30): hay
+    // La funcion hace alguna llamada?  Si la hace, `bl` machaca LR (x30): hay
     // que salvarlo en el prologo y restaurarlo antes de cada ret.
     bool has_call = false;
     for (const ir::IrBlock &bb : fn.blocks)
@@ -224,7 +210,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                     out_unsupported = true;
                     return "";
                 }
-                const int sb = a64_type_bytes(st), db = a64_type_bytes(dt);
+                const int sb = ir::type_access_bytes(st), db = ir::type_access_bytes(dt);
                 emit_ld(os, "x9", in.operands[0]);
                 if (db == sb) {
                     // Mismo ancho: copia de bits (x9 ya cargado).
@@ -233,7 +219,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                     // signo).
                     const bool sign =
                         (in.op == ir::IrOp::SEXT) ||
-                        (in.op == ir::IrOp::CAST && a64_type_signed(st));
+                        (in.op == ir::IrOp::CAST && ir::type_is_signed(st));
                     if (sb == 1)
                         os << (sign ? "    sxtb x9, w9\n"
                                     : "    uxtb w9, w9\n");
@@ -244,7 +230,7 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                         os << (sign ? "    sxtw x9, w9\n" : "    mov w9, w9\n");
                 } else {
                     // Truncacion (db < sb): el signo lo da el tipo DESTINO.
-                    const bool sign = a64_type_signed(dt);
+                    const bool sign = ir::type_is_signed(dt);
                     if (db == 4)
                         os << (sign ? "    sxtw x9, w9\n" : "    mov w9, w9\n");
                     else if (db == 2)

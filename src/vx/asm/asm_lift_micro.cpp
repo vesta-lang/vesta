@@ -19,6 +19,7 @@
 #include "vx/asm/asm_lift_micro.h"
 
 #include "ir/ssa_ir.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vx/asm/asm_cfg.h"
 #include "vx/asm/asm_effects.h"
 #include "vx/asm/asm_phys_reg.h"
@@ -281,17 +282,10 @@ uint16_t ancho_declarado(const ir::AsmRegBinding &b) {
     if (b.reg_class == "zmm") return 512;
     if (b.reg_class == "ymm") return 256;
     if (b.reg_class == "xmm") return 128;
-    switch (b.type) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 8;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 16;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32: return 32;
-    default: return 64;
-    }
+    // Una clase vectorial declara su ancho por si misma (arriba); el resto lo
+    // saca del eje de RANURA del vocabulario unico, que es el que habla de
+    // registros.  Aqui vivia otra copia de esa tabla, en bits.
+    return static_cast<uint16_t>(ir::type_slot_bytes(b.type) * 8u);
 }
 
 bool build_operands(

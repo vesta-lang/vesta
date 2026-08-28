@@ -10,32 +10,17 @@
 #include <unordered_set>
 
 #include "ir/ssa_ir.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "vx/asm/asm_analyze.h"
 
 namespace analyze {
 
 namespace {
 
-/// Bytes de un @c IrType escalar (para el tamano de un ALLOCA).
-uint64_t type_size_bytes(ir::IrType t) {
-    switch (t) {
-    case ir::IrType::I8:
-    case ir::IrType::U8:
-    case ir::IrType::BOOL: return 1;
-    case ir::IrType::I16:
-    case ir::IrType::U16: return 2;
-    case ir::IrType::I32:
-    case ir::IrType::U32:
-    case ir::IrType::F32:
-    case ir::IrType::HANDLE: return 4;
-    case ir::IrType::I64:
-    case ir::IrType::U64:
-    case ir::IrType::F64:
-    case ir::IrType::PTR: return 8;
-    case ir::IrType::VOID:
-    default: return 0;
-    }
-}
+/* Los bytes que un tipo ocupa en el marco (el tamano de un ALLOCA) los contesta
+ * el vocabulario unico (ir/ir_type_info.h) -- aqui vivia otra copia de esa
+ * tabla.  El eje es el de ALMACENAMIENTO, y es justo el que necesita un
+ * resumen que SUMA bytes reservados: void ocupa cero. */
 
 /// @c true si @p op puede ALLOCAR en heap (para @c @alloc: contar todo lo que
 /// pueda allocar es sound -- @c @alloc(0) solo pasa si no hay ninguno).
@@ -244,7 +229,7 @@ FunctionFingerprint compute_fingerprint(const ir::IrFunction &fn,
 
             switch (ins.op) {
             case Op::ALLOCA:
-                fp.stack_bytes += ins.imm * type_size_bytes(ins.type);
+                fp.stack_bytes += ins.imm * ir::type_storage_bytes(ins.type);
                 break;
             case Op::THROW:
             case Op::RETHROW: fp.throws = true; break;
