@@ -206,6 +206,10 @@ add_library(vx_lib STATIC
     # barato porque las clases son objetos que el propio programa
     # construye al arrancar, no metadatos del ejecutable.
     lowering/builtins_reflect.cpp
+    # Builtins de quien es dueno de que y quien lo suelta: punteros con
+    # dueno unico o contado, prestamos, y trasladar la propiedad.  Casi
+    # todo se decide al compilar y no llega al codigo generado.
+    lowering/builtins_ownership.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.

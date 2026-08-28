@@ -317,6 +317,26 @@ class Lowering {
                                     ir::IrValueId &out_value);
 
     /**
+     * @brief Intenta bajar una llamada como uno de los builtins de propiedad
+     *        y prestamo.
+     *
+     * Vesta no tiene un recolector que decida cuando se libera: lo decide el
+     * codigo, y estos son la manera de decirlo.  Un dueno unico se suelta al
+     * salir del ambito; uno compartido se cuenta y lo suelta el ultimo; un
+     * prestamo no es dueno de nada.
+     *
+     * No cuesta nada en ejecucion porque casi todo se decide antes: un
+     * prestamo es una direccion, y las reglas de quien puede mirar o escribir
+     * se comprueban al compilar.  Quien SUELTA no siempre es el mismo -- el
+     * `free` del anfitrion, una funcion en Vesta, una del sistema --, y lo
+     * elige el programador al construir.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
+                                      ir::IrValueId &out_value);
+
+    /**
      * @brief Reserva un hueco de @p bytes en el marco actual.
      *
      * Lo que se reserva aqui muere con el marco, asi que es lo correcto para

@@ -94,14 +94,27 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     // Futuros: la casilla de una respuesta que aun no existe, y rellenarla.
     const bool is_future_alloc = (b == Builtin::FutureAlloc);
     const bool is_fulfill = (b == Builtin::Fulfill);
+    // Y mirar como esta ese monton: vivos, bytes, y forzar una recogida.
+    const bool is_z10_live_count = (b == Builtin::SharedHeapLiveCount);
+    const bool is_z10_bytes = (b == Builtin::SharedHeapBytes);
+    const bool is_z10_gc_collect = (b == Builtin::SharedGcCollect);
 
     /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
     if (!(is_z6_isshared || is_z6_share || is_z6_unshare ||
           is_z8_atomic_load || is_z8_atomic_store || is_z8_atomic_cas ||
           is_z8_atomic_add || is_z8_shared_malloc || is_z8_shared_free ||
-          is_msgsend || is_msgrecv || is_future_alloc || is_fulfill))
+          is_msgsend || is_msgrecv || is_future_alloc || is_fulfill ||
+          is_z10_live_count || is_z10_bytes || is_z10_gc_collect))
         return false;
 
+    /* Preguntar si una direccion ya esta compartida no es una llamada: el
+     * dato esta en el propio identificador del objeto, en su bit mas alto.
+     * Sacarlo son cuatro operaciones sin tocar memoria:
+     *   1. RAW_ASM gchandle dst,src  -> dst = el identificador de 32 bits.
+     *   2. CONST u64 0x80000000      -> la mascara de ese bit.
+     *   3. AND_BIT                   -> queda el bit, o cero.
+     *   4. SHR_U 31                  -> bajarlo a la posicion 0.
+     * y un cast a bool. */
     if (is_z6_isshared) {
         if (e->args.size() != 1) {
             error_at(e->loc, "is_shared: requiere 1 argumento");
@@ -487,6 +500,35 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         fu.source_line = e->loc.line;
         emit(current_block_, std::move(fu));
         out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+    /* Mirar como esta el monton compartido: cuantos objetos vivos tiene,
+     * cuantos bytes ocupa, y forzar una pasada de recogida.  Los tres bajan
+     * igual -- una constante que dice cual de los tres y una instruccion --,
+     * asi que van en el mismo bloque. */
+    if (is_z10_live_count || is_z10_bytes || is_z10_gc_collect) {
+        const int op_code = is_z10_live_count ? 0 : is_z10_bytes ? 1 : 2;
+        const ir::IrType ret_type =
+            is_z10_bytes
+                ? ir::IrType::U64
+                : (is_z10_live_count ? ir::IrType::U32 : ir::IrType::VOID);
+        // raw_asm-elim wave 3: SHARED_STAT IR op dedicado.  El emit
+        // del bytecode usa `r14` como dst dummy para el caso VOID
+        // (op_code=2 gc_collect) automaticamente.
+        const ir::IrValueId v_op =
+            emit_const(ir::IrType::I32, (uint64_t)op_code, e->loc.line);
+        const ir::IrValueId v_dst = (ret_type == ir::IrType::VOID)
+                                        ? ir::IR_NO_VALUE
+                                        : fn_->new_value(ret_type);
+        ir::IrInstr ss{};
+        ss.op = ir::IrOp::SHARED_STAT;
+        ss.type = ret_type;
+        ss.dst = v_dst;
+        ss.operands = {v_op};
+        ss.source_line = e->loc.line;
+        emit(current_block_, std::move(ss));
+        out_value = v_dst;
         return true;
     }
 
