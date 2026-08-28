@@ -473,6 +473,16 @@ class Lowering {
      */
     void add_cfg_edge(ir::IrBlockId from, ir::IrBlockId to);
 
+    /**
+     * @brief Termina la funcion actual sin devolver nada.
+     *
+     * Marca el bloque como terminado, que es la mitad que se olvida: si el
+     * bajador no lo sabe, emite codigo detras del retorno.
+     *
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_ret_void(uint32_t source_line);
+
     void emit_br(ir::IrBlockId target, uint32_t source_line);
 
     /**

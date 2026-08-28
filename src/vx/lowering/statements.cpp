@@ -1597,13 +1597,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             fu.operands = {async_fut_id_, v_payload};
             fu.source_line = s->loc.line;
             emit(current_block_, std::move(fu));
-            ir::IrInstr ret{};
-            ret.op = ir::IrOp::RET;
-            ret.type = ir::IrType::VOID;
-            ret.dst = ir::IR_NO_VALUE;
-            ret.source_line = s->loc.line;
-            emit(current_block_, std::move(ret));
-            block_terminated_ = true;
+            emit_ret_void(s->loc.line);
             return;
         }
         ir::IrInstr fh{};
@@ -1880,6 +1874,24 @@ void Lowering::emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
 void Lowering::add_cfg_edge(ir::IrBlockId from, ir::IrBlockId to) {
     fn_->blocks[from].succs.push_back(to);
     fn_->blocks[to].preds.push_back(from);
+}
+
+/**
+ * @brief Termina la funcion actual sin devolver nada.
+ *
+ * Marca el bloque como terminado, que es la mitad que se olvida: un bloque que
+ * ya retorno no puede seguir recibiendo instrucciones, y si el bajador no lo
+ * sabe emite codigo detras del retorno -- inalcanzable, pero ahi --.
+ *
+ * @param source_line Linea fuente, para la depuracion.
+ */
+void Lowering::emit_ret_void(uint32_t source_line) {
+    ir::IrInstr ret{};
+    ret.op = ir::IrOp::RET;
+    ret.type = ir::IrType::VOID;
+    ret.dst = ir::IR_NO_VALUE;
+    ret.source_line = source_line;
+    emit(current_block_, std::move(ret));
 }
 
 } // namespace vx

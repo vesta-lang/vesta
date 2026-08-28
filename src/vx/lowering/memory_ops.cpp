@@ -245,12 +245,7 @@ uint64_t Lowering::ensure_cpu_features_global() {
 
     // --- RET void ---
     {
-        ir::IrInstr ret{};
-        ret.op = ir::IrOp::RET;
-        ret.type = ir::IrType::VOID;
-        ret.dst = ir::IR_NO_VALUE;
-        ret.source_line = ln;
-        emit(current_block_, std::move(ret));
+        emit_ret_void(ln);
     }
     block_terminated_ = true;
 
@@ -353,12 +348,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         mc.operands = {dst, src, n};
         mc.source_line = ln;
         emit(current_block_, std::move(mc));
-        ir::IrInstr ret{};
-        ret.op = ir::IrOp::RET;
-        ret.type = ir::IrType::VOID;
-        ret.dst = ir::IR_NO_VALUE;
-        ret.source_line = ln;
-        emit(current_block_, std::move(ret));
+        emit_ret_void(ln);
     };
 
     build_variant("__vx_memcpy_base", emit_base_body);
@@ -487,12 +477,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
 
         // RET void.
         {
-            ir::IrInstr ret{};
-            ret.op = ir::IrOp::RET;
-            ret.type = ir::IrType::VOID;
-            ret.dst = ir::IR_NO_VALUE;
-            ret.source_line = ln;
-            emit(current_block_, std::move(ret));
+            emit_ret_void(ln);
         }
         block_terminated_ = true;
         out_mod_->add_function(std::move(hf));
@@ -529,13 +514,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         // Esto reemplaza el memcpy del build entero por el del usuario.
         if (!memcpy_override_.empty()) {
             emit_store_fp(memcpy_override_);
-            ir::IrInstr ret{};
-            ret.op = ir::IrOp::RET;
-            ret.type = ir::IrType::VOID;
-            ret.dst = ir::IR_NO_VALUE;
-            ret.source_line = ln;
-            emit(current_block_, std::move(ret));
-            block_terminated_ = true;
+            emit_ret_void(ln);
             out_mod_->add_function(std::move(hf));
             /* Salida temprana: el guarda devuelve el contexto al salir del
              * alcance, asi que aqui no hay que acordarse de nada. */
@@ -631,12 +610,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
 
         current_block_ = bb_join;
         {
-            ir::IrInstr ret{};
-            ret.op = ir::IrOp::RET;
-            ret.type = ir::IrType::VOID;
-            ret.dst = ir::IR_NO_VALUE;
-            ret.source_line = ln;
-            emit(current_block_, std::move(ret));
+            emit_ret_void(ln);
         }
         block_terminated_ = true;
         out_mod_->add_function(std::move(hf));
@@ -939,12 +913,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
         // join: RET void.
         current_block_ = bb_join;
         {
-            ir::IrInstr ret{};
-            ret.op = ir::IrOp::RET;
-            ret.type = ir::IrType::VOID;
-            ret.dst = ir::IR_NO_VALUE;
-            ret.source_line = ln;
-            emit(current_block_, std::move(ret));
+            emit_ret_void(ln);
         }
         block_terminated_ = true;
         out_module.add_function(std::move(hf));
@@ -1061,12 +1030,7 @@ void Lowering::ensure_strdisp() {
                                        ? std::string("__vx_strlen_base")
                                        : strlen_override_);
     {
-        ir::IrInstr ret{};
-        ret.op = ir::IrOp::RET;
-        ret.type = ir::IrType::VOID;
-        ret.dst = ir::IR_NO_VALUE;
-        ret.source_line = ln;
-        emit(current_block_, std::move(ret));
+        emit_ret_void(ln);
     }
     block_terminated_ = true;
     out_mod_->add_function(std::move(hf));

@@ -138,15 +138,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                         cm.source_line = e->loc.line;
                         emit(current_block_, std::move(cm));
                         ir::IrBlockId nb = fn_->new_block("s_next");
-                        ir::IrInstr br{};
-                        br.op = ir::IrOp::BR_COND;
-                        br.operands.push_back(cmp);
-                        br.target_block = sw_cases[k].second;
-                        br.false_block = nb;
-                        br.source_line = e->loc.line;
-                        emit(current_block_, std::move(br));
-                        sw_edge(current_block_, sw_cases[k].second);
-                        sw_edge(current_block_, nb);
+                        emit_br_cond(cmp, sw_cases[k].second, nb, e->loc.line);
                         current_block_ = nb;
                     }
                     ir::IrInstr br{};
@@ -171,15 +163,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
                 emit(current_block_, std::move(cm));
                 ir::IrBlockId lb = fn_->new_block("s_lt");
                 ir::IrBlockId rb = fn_->new_block("s_ge");
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR_COND;
-                br.operands.push_back(cmp);
-                br.target_block = lb;
-                br.false_block = rb;
-                br.source_line = e->loc.line;
-                emit(current_block_, std::move(br));
-                sw_edge(current_block_, lb);
-                sw_edge(current_block_, rb);
+                emit_br_cond(cmp, lb, rb, e->loc.line);
                 emit_bst(lo, mid, lb);
                 emit_bst(mid, hi, rb);
             };
@@ -199,15 +183,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             cm.operands = {a, tc};
             cm.source_line = line;
             emit(current_block_, std::move(cm));
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(cmp);
-            br.target_block = target;
-            br.false_block = fall;
-            br.source_line = line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, target);
-            sw_edge(current_block_, fall);
+            emit_br_cond(cmp, target, fall, line);
         };
         for (size_t i = 0; i < e->arms.size(); ++i) {
             if ((ssize_t)i == default_arm_idx || !e->arms[i].value_pattern)
@@ -269,15 +245,7 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
             ir::IrBlockId gfall = (arm_fall_bbs[i] != ir::IR_NO_BLOCK)
                                       ? arm_fall_bbs[i]
                                       : default_bb;
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(g);
-            br.target_block = body_bb;
-            br.false_block = gfall;
-            br.source_line = arm.loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, body_bb);
-            sw_edge(current_block_, gfall);
+            emit_br_cond(g, body_bb, gfall, arm.loc.line);
             current_block_ = body_bb;
             block_terminated_ = false;
         }
@@ -415,15 +383,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                         cm.source_line = e->loc.line;
                         emit(current_block_, std::move(cm));
                         ir::IrBlockId nb = fn_->new_block("h_next");
-                        ir::IrInstr br{};
-                        br.op = ir::IrOp::BR_COND;
-                        br.operands.push_back(cmp);
-                        br.target_block = sw_cases[k].second;
-                        br.false_block = nb;
-                        br.source_line = e->loc.line;
-                        emit(current_block_, std::move(br));
-                        sw_edge(current_block_, sw_cases[k].second);
-                        sw_edge(current_block_, nb);
+                        emit_br_cond(cmp, sw_cases[k].second, nb, e->loc.line);
                         current_block_ = nb;
                     }
                     ir::IrInstr br{};
@@ -448,15 +408,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
                 emit(current_block_, std::move(cm));
                 ir::IrBlockId lb = fn_->new_block("h_lt");
                 ir::IrBlockId rb = fn_->new_block("h_ge");
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR_COND;
-                br.operands.push_back(cmp);
-                br.target_block = lb;
-                br.false_block = rb;
-                br.source_line = e->loc.line;
-                emit(current_block_, std::move(br));
-                sw_edge(current_block_, lb);
-                sw_edge(current_block_, rb);
+                emit_br_cond(cmp, lb, rb, e->loc.line);
                 emit_bst(lo, mid, lb);
                 emit_bst(mid, hi, rb);
             };
@@ -474,15 +426,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             cm.source_line = e->loc.line;
             emit(current_block_, std::move(cm));
             ir::IrBlockId nb = fn_->new_block("h_next");
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(cmp);
-            br.target_block = c.second;
-            br.false_block = nb;
-            br.source_line = e->loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, c.second);
-            sw_edge(current_block_, nb);
+            emit_br_cond(cmp, c.second, nb, e->loc.line);
             current_block_ = nb;
         }
         ir::IrInstr br{};
@@ -579,15 +523,7 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         if (arm.guard) {
             ir::IrValueId g = lower_expr(arm.guard.get());
             ir::IrBlockId body_bb = fn_->new_block("strmatch_body");
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(g);
-            br.target_block = body_bb;
-            br.false_block = default_bb;
-            br.source_line = arm.loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, body_bb);
-            sw_edge(current_block_, default_bb);
+            emit_br_cond(g, body_bb, default_bb, arm.loc.line);
             current_block_ = body_bb;
             block_terminated_ = false;
         }
@@ -815,15 +751,8 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                         cm.source_line = e->loc.line;
                         emit(current_block_, std::move(cm));
                         ir::IrBlockId nb = fn_->new_block("sw_next");
-                        ir::IrInstr br{};
-                        br.op = ir::IrOp::BR_COND;
-                        br.operands.push_back(cmp_v);
-                        br.target_block = sw_cases[k].second;
-                        br.false_block = nb;
-                        br.source_line = e->loc.line;
-                        emit(current_block_, std::move(br));
-                        sw_edge(current_block_, sw_cases[k].second);
-                        sw_edge(current_block_, nb);
+                        emit_br_cond(cmp_v, sw_cases[k].second,
+                                     nb, e->loc.line);
                         current_block_ = nb;
                     }
                     ir::IrInstr br{};
@@ -848,15 +777,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                 emit(current_block_, std::move(cm));
                 ir::IrBlockId lb = fn_->new_block("sw_lt");
                 ir::IrBlockId rb = fn_->new_block("sw_ge");
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR_COND;
-                br.operands.push_back(cmp_v);
-                br.target_block = lb; // tag < mid
-                br.false_block = rb;  // tag >= mid
-                br.source_line = e->loc.line;
-                emit(current_block_, std::move(br));
-                sw_edge(current_block_, lb);
-                sw_edge(current_block_, rb);
+                emit_br_cond(cmp_v, lb, rb, e->loc.line);
                 emit_bst(lo, mid, lb);
                 emit_bst(mid, hi, rb);
             };
