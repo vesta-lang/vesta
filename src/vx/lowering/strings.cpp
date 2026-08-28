@@ -2382,4 +2382,219 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
 }
 
 
+bool Lowering::transcode_literal(const std::string &utf8, int enc,
+                                 std::vector<uint8_t> &out) {
+    out.clear();
+    // ENC_ANSI (1) NO se pliega: la codepage es del sistema donde se EJECUTA,
+    // no donde se compila.  Plegarlo produciria bytes correctos solo en las
+    // maquinas que compartan codepage con la de compilacion.
+    if (enc == 1) return false;
+
+    // Decodificar la forma canonica (UTF-8) a code points.
+    std::vector<uint32_t> cps;
+    cps.reserve(utf8.size());
+    for (size_t i = 0; i < utf8.size();) {
+        const uint8_t b = static_cast<uint8_t>(utf8[i]);
+        uint32_t cp = 0;
+        size_t n = 1;
+        if ((b & 0x80) == 0) {
+            cp = b;
+        } else if ((b & 0xE0) == 0xC0) {
+            cp = b & 0x1Fu;
+            n = 2;
+        } else if ((b & 0xF0) == 0xE0) {
+            cp = b & 0x0Fu;
+            n = 3;
+        } else if ((b & 0xF8) == 0xF0) {
+            cp = b & 0x07u;
+            n = 4;
+        } else {
+            return false; // byte inicial invalido
+        }
+        if (i + n > utf8.size()) return false;
+        for (size_t k = 1; k < n; ++k) {
+            const uint8_t c = static_cast<uint8_t>(utf8[i + k]);
+            if ((c & 0xC0) != 0x80) return false;
+            cp = (cp << 6) | (c & 0x3Fu);
+        }
+        cps.push_back(cp);
+        i += n;
+    }
+
+    switch (enc) {
+    case 0: // ENC_ASCII: solo representable si TODO cae por debajo de 0x80.
+        for (uint32_t cp : cps) {
+            if (cp >= 0x80) return false;
+            out.push_back(static_cast<uint8_t>(cp));
+        }
+        out.push_back(0);
+        return true;
+    case 2: // ENC_UTF8: la forma canonica ya lo es.
+        out.assign(utf8.begin(), utf8.end());
+        out.push_back(0);
+        return true;
+    case 3: {
+        // ENC_UTF16 (LE), con pares sustitutos.
+        auto put16 = [&out](uint16_t u) {
+            out.push_back(static_cast<uint8_t>(u & 0xFFu));
+            out.push_back(static_cast<uint8_t>((u >> 8) & 0xFFu));
+        };
+        for (uint32_t cp : cps) {
+            if (cp < 0x10000u) {
+                put16(static_cast<uint16_t>(cp));
+            } else {
+                const uint32_t v = cp - 0x10000u;
+                put16(static_cast<uint16_t>(0xD800u + (v >> 10)));
+                put16(static_cast<uint16_t>(0xDC00u + (v & 0x3FFu)));
+            }
+        }
+        put16(0);
+        return true;
+    }
+    case 4: // ENC_UTF32 (LE).
+        for (uint32_t cp : cps) {
+            out.push_back(static_cast<uint8_t>(cp & 0xFFu));
+            out.push_back(static_cast<uint8_t>((cp >> 8) & 0xFFu));
+            out.push_back(static_cast<uint8_t>((cp >> 16) & 0xFFu));
+            out.push_back(static_cast<uint8_t>((cp >> 24) & 0xFFu));
+        }
+        out.push_back(0);
+        out.push_back(0);
+        out.push_back(0);
+        out.push_back(0);
+        return true;
+    default: return false;
+    }
+}
+
+std::string Lowering::ensure_btoa_helper() {
+    // Vesta Embed Inc 2: helper bool->string nativo (una vez por modulo).
+    //   i64 __vx_btoa(u8* buf, i64 b)
+    //     if (b != 0) { buf <- "true";  ret 4; }
+    //     else        { buf <- "false"; ret 5; }
+    // Vive en una funcion APARTE con branch -> el optimizer no foldea el
+    // append condicional mid-expression con argumento constante.
+    const std::string name = "__vx_btoa";
+    if (btoa_helper_emitted_) return name;
+    btoa_helper_emitted_ = true;
+
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_terminated = block_terminated_;
+
+    ir::IrFunction hf;
+    hf.name = name;
+    hf.ret_type = ir::IrType::I64;
+    const ir::IrValueId p_buf = hf.new_value(ir::IrType::PTR, "%buf");
+    hf.values[p_buf].is_param = true;
+    hf.values[p_buf].is_host_ptr = true;
+    hf.params.push_back(p_buf);
+    const ir::IrValueId p_b = hf.new_value(ir::IrType::I64, "%b");
+    hf.values[p_b].is_param = true;
+    hf.params.push_back(p_b);
+    const ir::IrBlockId e = hf.new_block("entry");
+
+    fn_ = &hf;
+    current_block_ = e;
+    block_terminated_ = false;
+
+    // Helper: STORE empaquetado de los bytes de `s` en buf[off..].
+    auto write_bytes = [&](const std::string &s) {
+        std::vector<uint8_t> data(s.begin(), s.end());
+        auto ptr_add = [&](ir::IrValueId base, uint64_t off) -> ir::IrValueId {
+            if (off == 0) return base;
+            ir::IrValueId v = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v].is_host_ptr = true;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v;
+            ad.operands = {base, emit_const(ir::IrType::I64, off, 0)};
+            ad.source_line = 0;
+            emit(current_block_, std::move(ad));
+            return v;
+        };
+        auto store_chunk = [&](uint64_t off, uint64_t val, ir::IrType ty) {
+            ir::IrValueId v_dst = ptr_add(p_buf, off);
+            ir::IrInstr st{};
+            st.op = ir::IrOp::STORE;
+            st.type = ty;
+            st.dst = ir::IR_NO_VALUE;
+            st.operands = {emit_const(ty, val, 0), v_dst};
+            st.source_line = 0;
+            emit(current_block_, std::move(st));
+        };
+        auto pack = [&](uint64_t pos, int n) -> uint64_t {
+            uint64_t v = 0;
+            for (int k = 0; k < n; ++k)
+                v |= static_cast<uint64_t>(data[pos + k]) << (8 * k);
+            return v;
+        };
+        const uint64_t plen = data.size();
+        uint64_t pos = 0;
+        for (; pos + 4 <= plen; pos += 4)
+            store_chunk(pos, pack(pos, 4), ir::IrType::I32);
+        if (pos + 2 <= plen) {
+            store_chunk(pos, pack(pos, 2), ir::IrType::I16);
+            pos += 2;
+        }
+        if (pos + 1 <= plen) {
+            store_chunk(pos, pack(pos, 1), ir::IrType::U8);
+            pos += 1;
+        }
+    };
+    auto ret_len = [&](uint64_t len) {
+        ir::IrInstr rt{};
+        rt.op = ir::IrOp::RET;
+        rt.type = ir::IrType::I64;
+        rt.dst = ir::IR_NO_VALUE;
+        rt.operands = {emit_const(ir::IrType::I64, len, 0)};
+        rt.source_line = 0;
+        emit(current_block_, std::move(rt));
+    };
+
+    // if (b != 0) -> bb_true ; else -> bb_false.
+    ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, 0);
+    ir::IrValueId v_cond = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr in{};
+        in.op = ir::IrOp::CMP_NE;
+        in.type = ir::IrType::I64;
+        in.dst = v_cond;
+        in.operands = {p_b, v_zero};
+        in.source_line = 0;
+        emit(current_block_, std::move(in));
+    }
+    ir::IrBlockId bb_true = fn_->new_block("btoa_true");
+    ir::IrBlockId bb_false = fn_->new_block("btoa_false");
+    {
+        ir::IrInstr b{};
+        b.op = ir::IrOp::BR_COND;
+        b.type = ir::IrType::VOID;
+        b.dst = ir::IR_NO_VALUE;
+        b.operands = {v_cond};
+        b.target_block = bb_true;
+        b.false_block = bb_false;
+        b.source_line = 0;
+        emit(current_block_, std::move(b));
+        fn_->blocks[current_block_].succs.push_back(bb_true);
+        fn_->blocks[current_block_].succs.push_back(bb_false);
+        fn_->blocks[bb_true].preds.push_back(current_block_);
+        fn_->blocks[bb_false].preds.push_back(current_block_);
+    }
+    current_block_ = bb_true;
+    write_bytes("true");
+    ret_len(4);
+    current_block_ = bb_false;
+    write_bytes("false");
+    ret_len(5);
+
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_terminated;
+    out_mod_->add_function(std::move(hf));
+    return name;
+}
+
+
 } // namespace vx

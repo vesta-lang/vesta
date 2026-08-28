@@ -814,4 +814,387 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
 }
 
 
+void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
+    // Cada metodo de struct se baja a una IrFunction libre con nombre
+    // <Struct>__<metodo>.  El primer parametro implicito 'this' es un
+    // PTR a la direccion del buffer del struct.  A diferencia de los
+    // metodos de clase, 'this' NO es un objeto GC ni host_ptr: el
+    // struct vive en VM-stack (ALLOCA) y se accede con `mov`
+    // (memoria VM).  El dispatch en el call site es CALL directo.
+    //
+    // Templates genericos (con type_params) y especializaciones (#7) se
+    // omiten: sus monomorphizaciones concretas (que SI aparecen en
+    // mod_.decls) se procesan normalmente.
+    if (!sd->type_params.empty() || sd->is_specialization) return;
+    for (auto &m_uptr : sd->methods) {
+        auto *m = m_uptr.get();
+        if (!m || !m->body) continue;
+        // Metodo generico template (`R metodo<U>(...)`, #4): se omite.  Sus
+        // monomorphizaciones concretas (`metodo_<U>`) tambien estan en
+        // sd->methods (anyadidas por drain_pending_method_monos).
+        if (!m->method_type_params.empty()) continue;
+
+        ir::IrFunction fn;
+        // El constructor baja a `<Struct>__ctor_<aridad>` (la aridad discrimina
+        // los OVERLOADS, que compartirian `__ctor` y colisionarian); el
+        // destructor a `<Struct>____dtor`; el resto a `<Struct>__<metodo>`.
+        const std::string suffix =
+            m->is_destructor    ? std::string("__dtor")
+            : m->is_constructor ? ("ctor_" + std::to_string(m->params.size()))
+                                : m->name;
+        fn.name = sd->name + "__" + suffix;
+
+        // F1b: un ctor `comptime T(expr)` se ejecuta en la ComptimeVM.  Se baja
+        // con el prefijo `__macro_` (lo identifica como codigo comptime) y se
+        // registra para invocacion; ademas su body se lowerea en modo macro
+        // para que las llamadas comptime internas emitan CALLVM en vez de
+        // hornearse (misma disciplina que lower_function para las comptime
+        // fns-VM).
+        const bool is_comptime_ctor = m->is_constructor && m->is_comptime;
+        if (is_comptime_ctor) {
+            fn.name = "__macro_" + fn.name;
+            fn.is_macro_compiled = true;
+            const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
+                fn.name, ComptimeRuntime::kPcUnresolved);
+        }
+        const bool prev_fn_is_macro = current_fn_is_macro_;
+        current_fn_is_macro_ = is_comptime_ctor;
+        struct MacroGuard {
+            bool *flag;
+            bool saved;
+
+            ~MacroGuard() { *flag = saved; }
+        } macro_guard{&current_fn_is_macro_, prev_fn_is_macro};
+
+        // B.3 contract: si el struct es una instanciacion generica
+        // (`atomic_i64` viene de `struct atomic<T>`), marcar la IrFunction con
+        // el template + los type args.  Lo mismo que hacen los metodos de clase
+        // y los helpers `__new_`; la ruta de structs genericos, que llego
+        // despues, se habia quedado sin ello.  Sin esta procedencia no hay
+        // forma de saber que `atomic_i64__swap` sale de `atomic<T>::swap`, y de
+        // eso depende que un contrato declarado sobre la PLANTILLA se pueda
+        // verificar contra sus instanciaciones.
+        if (const auto *mi = tc_.monomorph_info(sd->name)) {
+            fn.generic_template_name = mi->template_name;
+            fn.generic_type_args = mi->type_args;
+        }
+
+        // @complexity del metodo al IR, igual que en una funcion libre (ver
+        // lower_function): metadata pura que solo consume el analizador.
+        fn.complexity_expr = m->complexity_expr;
+        fn.complexity_vars = m->complexity_vars;
+        fn.complexity_partial_pre = m->complexity_partial_pre;
+        fn.complexity_partial_post = m->complexity_partial_post;
+        fn.complexity_total_pre = m->complexity_total_pre;
+        fn.complexity_total_post = m->complexity_total_post;
+
+        // Tipo de retorno + deteccion de SRET (Optional/Result).  El
+        // retbuf hidden va tras 'this'.
+        Type sem_ret_m = Type{PrimitiveKind::VOID};
+        if (m->return_type)
+            sem_ret_m = tc_.resolve_type_node(m->return_type.get());
+        // Vesta Embed (native_poo_): `string` es value-type de 24 bytes
+        // {ptr,len,cap} -> SRET, igual que en lower_function (2707).  Sin
+        // esto un metodo que CONSTRUYE un string (interpolacion, concat) lo
+        // arma en su propio host-stack y devuelve un puntero colgante ->
+        // SIGSEGV en el caller.  Un string CONSTANTE no lo necesitaba
+        // (retorna un puntero a un value-string en .rodata), por eso el bug
+        // solo se veia con retornos construidos.  Caller simetrico abajo.
+        // Y un STRUCT por valor: EXACTAMENTE el mismo problema que el string de
+        // arriba -- se arma en el frame del callee y se devolvia un puntero a
+        // esa memoria, muerta tras el `ret`.  Era el unico agregado sin SRET.
+        // Un enum (STRUCT con enum_layout) y un `@overlay struct` (que ES un
+        // puntero de 8 bytes) no entran.
+        const StructLayout *m_ret_slay = nullptr;
+        if (sem_ret_m.kind == PrimitiveKind::STRUCT &&
+            !sem_ret_m.struct_name.empty() &&
+            tc_.find_enum_layout(sem_ret_m.struct_name) == nullptr) {
+            auto it_ms = tc_.struct_layouts().find(sem_ret_m.struct_name);
+            if (it_ms != tc_.struct_layouts().end() &&
+                !it_ms->second.is_overlay)
+                m_ret_slay = &it_ms->second;
+        }
+        const bool method_sret =
+            (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
+             sem_ret_m.kind == PrimitiveKind::RESULT ||
+             (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING) ||
+             m_ret_slay != nullptr);
+        if (method_sret) {
+            fn.ret_type = ir::IrType::VOID;
+        } else if (m->return_type &&
+                   m->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
+            auto *pt =
+                static_cast<ast::PrimitiveTypeNode *>(m->return_type.get());
+            fn.ret_type = ir_type_from_primitive(pt->prim);
+        } else if (m->return_type) {
+            fn.ret_type = (sem_ret_m.kind != PrimitiveKind::COUNT &&
+                           sem_ret_m.kind != PrimitiveKind::VOID)
+                              ? ir_type_from_primitive(sem_ret_m.kind)
+                              : ir::IrType::VOID;
+        } else {
+            fn.ret_type = ir::IrType::VOID;
+        }
+
+        // Param 0: 'this' como PTR a la direccion del struct.  En el
+        // path interp/Full el struct vive en VM-stack (ALLOCA) -> 'this'
+        // es VM addr (is_host_ptr=false).  En AOT (native_poo_) NO hay
+        // memoria VM: el struct vive en la pila nativa y su direccion es
+        // un host_ptr; sin esta marca el callee leeria los campos con
+        // `mov` (VM) en lugar de `movh` (host) -> SIGSEGV cross-funcion.
+        std::vector<std::pair<std::string, ir::IrValueId>> bindings;
+        // Metodos `static` de struct (factorias tipo `u128.zero()`) NO tienen
+        // `this` implicito: sus params son [retbuf?, args...].  Sin este guard
+        // el callee esperaba [this, retbuf, args] y el caller pasaba [retbuf,
+        // args]
+        // -> todo desalineado un slot (retbuf leido como this, arg como
+        // retbuf).
+        if (!m->is_static) {
+            const ir::IrValueId this_vid =
+                fn.new_value(ir::IrType::PTR, "%this");
+            fn.values[this_vid].is_param = true;
+            // `this` es la DIRECCION del receptor y todo agregado vive en
+            // memoria host (ver lower_var_decl) -> host SIEMPRE, no solo en
+            // AOT.  Mientras fue condicional, un receptor en host se leia aqui
+            // con `mov` (VM) y `this` llegaba a CEROS.  Un overlay es host por
+            // su propia naturaleza (su vista ES un puntero a memoria ajena):
+            // habilita ademas `self.translate(rva)` /
+            // `parent<T>().translate(rva)`.
+            fn.values[this_vid].is_host_ptr = true;
+            // NS.6-ext: extension sobre una CLASE -> `this` es un objeto GC
+            // (host_ptr al payload, refrescable tras GC), no un buffer
+            // VM-stack.
+            if (ext_this_is_class_) {
+                fn.values[this_vid].is_host_ptr = true;
+                fn.values[this_vid].is_gc_object = true;
+            }
+            fn.params.push_back(this_vid);
+            bindings.emplace_back("this", this_vid);
+        }
+
+        // SRET retbuf hidden tras 'this'.
+        ir::IrValueId v_method_retbuf = ir::IR_NO_VALUE;
+        if (method_sret) {
+            v_method_retbuf = fn.new_value(ir::IrType::PTR, "%__retbuf");
+            fn.values[v_method_retbuf].is_param = true;
+            fn.values[v_method_retbuf].is_host_ptr = true;
+            fn.params.push_back(v_method_retbuf);
+        }
+
+        // Resto de parametros declarados (misma resolucion de
+        // host_ptr/gc que en lower_function).
+        for (auto &p : m->params) {
+            ir::IrType pt = ir::IrType::I64;
+            bool param_is_class = false;
+            bool param_is_host_ptr = false;
+            if (p->type && p->type->kind == ast::NodeKind::PrimitiveTypeNode) {
+                auto *ptn =
+                    static_cast<ast::PrimitiveTypeNode *>(p->type.get());
+                pt = ir_type_from_primitive(ptn->prim);
+            } else if (p->type) {
+                const Type sem = tc_.resolve_type_node(p->type.get());
+                if (sem.kind != PrimitiveKind::COUNT &&
+                    sem.kind != PrimitiveKind::VOID) {
+                    pt = ir_type_from_primitive(sem.kind);
+                }
+                if (sem.kind == PrimitiveKind::CLASS) param_is_class = true;
+                if ((sem.kind == PrimitiveKind::PTR ||
+                     sem.kind == PrimitiveKind::ARRAY) &&
+                    !sem.is_virtual) {
+                    param_is_host_ptr = true;
+                }
+                if (sem.kind == PrimitiveKind::OPTIONAL ||
+                    sem.kind == PrimitiveKind::RESULT) {
+                    param_is_host_ptr = true;
+                }
+                // Agregado por valor: el callee recibe un PTR a su buffer,
+                // y todo agregado vive en memoria HOST en los TRES modos (ver
+                // lower_var_decl) -> `movh`.  El `&& native_poo_` que habia
+                // aqui era el bug: en interp/JIT el callee leia el buffer con
+                // `mov` (VM) y, en cuanto el receptor acababa en host, llegaba
+                // a CEROS -- con el arg de al lado funcionando.
+                if (sem.kind == PrimitiveKind::STRUCT) {
+                    param_is_host_ptr = true;
+                }
+            }
+            const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
+            fn.values[vid].is_param = true;
+            if (param_is_class) {
+                fn.values[vid].is_host_ptr = true;
+                fn.values[vid].is_gc_object = true;
+            } else if (param_is_host_ptr) {
+                fn.values[vid].is_host_ptr = true;
+            }
+            fn.params.push_back(vid);
+            bindings.emplace_back(p->name, vid);
+        }
+
+        // Configurar contexto del lowering para esta funcion.
+        const ir::IrBlockId entry = fn.new_block("entry");
+        fn_ = &fn;
+        current_block_ = entry;
+        block_terminated_ = false;
+        scopes_.clear();
+        push_scope();
+        for (auto &kv : bindings)
+            bind(kv.first, kv.second);
+
+        address_taken_locals_.clear();
+        host_bearing_locals_.clear();
+        goto_labels_.clear();
+        cleanup_stack_.clear();
+        const_str_locals_.clear();
+        escaping_locals_.clear();
+        try_spill_slots_.clear();
+        current_fn_has_loops_ = false;
+        current_fn_has_try_ = false;
+        scan_address_taken(m->body.get());
+        scan_escaping_locals(m->body.get());
+
+        const bool saved_returns_str = current_fn_returns_string_;
+        current_fn_returns_string_ = (sem_ret_m.kind == PrimitiveKind::STRING);
+
+        // SRET context.
+        const bool saved_sret_active = sret_active_;
+        const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
+        const uint64_t saved_sret_buf_size = sret_buf_size_;
+        // native_poo_ string: activar current_fn_sret_str_value_ para que el
+        // `return <literal>` construya un value-string real (build_native_
+        // string_from_literal + emit_native_str_move_copy) en vez de copiar
+        // los bytes crudos del str_lit_addr como si fueran {ptr,len,cap}.
+        const bool saved_sret_str_value = current_fn_sret_str_value_;
+        const bool method_str_sret =
+            (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
+        // SIEMPRE fijar el contexto SRET segun ESTE metodo (no solo cuando hay
+        // SRET): un metodo que NO usa SRET (u64/void/...) debe tener
+        // sret_active_/sret_retbuf_/current_fn_sret_str_value_ en false/none
+        // aunque un metodo o funcion-libre STRING previo los dejara activos
+        // (lower_function pone sret_active_=true para `-> string` en native_poo
+        // y no lo restaura).  Sin este reset, el `return <cte>` de rex_len se
+        // compila como copia value-string de 24 bytes desde el valor como
+        // puntero -> deref invalido -> crash en AOT.  Reset incondicional =
+        // robusto y cero-coste (asignaciones triviales).
+        current_fn_sret_str_value_ = method_str_sret;
+        sret_active_ = method_sret;
+        sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
+        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
+        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
+        // bytes copiaria 24 y pisaria memoria del caller.
+        sret_buf_size_ =
+            !method_sret ? 0ULL
+            : m_ret_slay != nullptr
+                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
+                   ~7ULL)
+            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL)
+                ? (uint64_t)optional_buf_bytes(sem_ret_m)
+                : 24ULL;
+
+        lower_block(m->body.get());
+
+        // Fase 2b ownership: augmentar el dtor del struct para liberar sus
+        // campos struct destructibles (RAII recursivo).  Un campo struct es
+        // INLINE en el contenedor, asi que su dtor se invoca con CALL directo a
+        // <FieldStruct>__dtor(this + offset) -- mismo memory class que el
+        // contenedor (sin divergencia host: ambos VM en interp, host en AOT).
+        // Sin null-check (un campo struct siempre esta presente, inline).
+        if (m->is_destructor && !block_terminated_) {
+            const ir::IrValueId this_dtor =
+                bindings.empty() ? ir::IR_NO_VALUE : bindings[0].second;
+            auto it_sl = tc_.struct_layouts().find(sd->name);
+            if (this_dtor != ir::IR_NO_VALUE &&
+                it_sl != tc_.struct_layouts().end()) {
+                for (const auto &f : it_sl->second.fields) {
+                    // Campo unique<T> (ownership): liberar el inner via el
+                    // deleter del slot.  fn_ == &fn aqui (set en el setup).
+                    if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
+                        emit_free_unique_field(this_dtor, f.offset,
+                                               m->loc.line);
+                        continue;
+                    }
+                    // Campo shared<T> (H5): decrementar el refcount
+                    // (free-when-0). El campo vive en la memoria del CONTENEDOR
+                    // (VM para un struct en VM-stack); su direccion hereda la
+                    // host-ness de
+                    // @c this_dtor -- NO emit_field_addr, que la forzaria a
+                    // host y leeria basura (mismo patron que
+                    // emit_free_unique_field).
+                    if (f.type.kind == PrimitiveKind::SHARED_PTR) {
+                        const bool container_host =
+                            fn_->values[this_dtor].is_host_ptr;
+                        ir::IrValueId saddr = this_dtor;
+                        if (f.offset != 0) {
+                            const ir::IrValueId off = emit_const(
+                                ir::IrType::I64, static_cast<int64_t>(f.offset),
+                                m->loc.line);
+                            saddr = fn_->new_value(ir::IrType::PTR);
+                            fn_->values[saddr].is_host_ptr = container_host;
+                            ir::IrInstr ad{};
+                            ad.op = ir::IrOp::ADD;
+                            ad.type = ir::IrType::I64;
+                            ad.dst = saddr;
+                            ad.operands = {this_dtor, off};
+                            ad.source_line = m->loc.line;
+                            emit(current_block_, std::move(ad));
+                        }
+                        emit_shared_refcount_dec(saddr, m->loc.line);
+                        continue;
+                    }
+                    if (f.type.kind != PrimitiveKind::STRUCT) continue;
+                    auto it_inner =
+                        tc_.struct_layouts().find(f.type.struct_name);
+                    if (it_inner == tc_.struct_layouts().end()) continue;
+                    bool inner_has_dtor = false;
+                    for (const auto &im : it_inner->second.methods)
+                        if (im.is_destructor) {
+                            inner_has_dtor = true;
+                            break;
+                        }
+                    if (!inner_has_dtor) continue;
+                    const ir::IrValueId faddr = emit_field_addr(
+                        &fn, current_block_, this_dtor, f.offset, m->loc.line);
+                    ir::IrInstr cd{};
+                    cd.op = ir::IrOp::CALL;
+                    cd.type = ir::IrType::VOID;
+                    cd.dst = ir::IR_NO_VALUE;
+                    cd.operands = {faddr};
+                    cd.func_name = f.type.struct_name + "__" + "__dtor";
+                    cd.source_line = m->loc.line;
+                    fn.append(current_block_, std::move(cd));
+                }
+            }
+        }
+
+        // Restaurar SIEMPRE (se fijaron incondicionalmente arriba).
+        sret_active_ = saved_sret_active;
+        sret_retbuf_ = saved_sret_retbuf;
+        sret_buf_size_ = saved_sret_buf_size;
+        current_fn_sret_str_value_ = saved_sret_str_value;
+        current_fn_returns_string_ = saved_returns_str;
+
+        // RET por defecto si el body no termino con uno.
+        if (!block_terminated_) {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = fn.ret_type;
+            if (fn.ret_type != ir::IrType::VOID) {
+                const ir::IrValueId zero =
+                    emit_const(fn.ret_type, 0, m->loc.line);
+                ret.operands.push_back(zero);
+            }
+            ret.source_line = m->loc.line;
+            fn.append(current_block_, std::move(ret));
+            block_terminated_ = true;
+        }
+
+        pop_scope();
+        propagate_is_gc_object_through_phis(fn);
+        // Igual que en los metodos de clase: el vinculo se anota donde se crea
+        // el nombre.  Aqui las formas son aun mas: `Struct__ctor_<aridad>`,
+        // `Struct____dtor`, y con prefijo `__macro_` si el constructor es
+        // comptime.  Ninguna se puede deducir del nombre del metodo.
+        note_emitted_symbol(fn.name, sd->name, m->name);
+        out.add_function(std::move(fn));
+        fn_ = nullptr;
+    }
+}
+
 } // namespace vx

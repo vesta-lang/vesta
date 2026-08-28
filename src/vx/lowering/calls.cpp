@@ -2689,4 +2689,70 @@ ir::IrValueId Lowering::lower_lambda_expr(ast::LambdaExpr *e) {
     return fv_addr;
 }
 
+void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
+    // Por cada extern cuya direccion se tomo como cfn, sintetizamos un
+    // thunk Vesta:  __cfnthunk_<fn>(params...) { return <lib>:<fn>(params...);
+    // } El cuerpo es un unico CALLN (reenvio nativo) + RET.  Asi el cfn se
+    // invoca por CALLIND -> entra al thunk -> el thunk hace el CALLN, que
+    // cada backend resuelve normalmente (LoadLibrary/GetProcAddress, IAT/GOT).
+    for (const auto &fn_name : extern_cfn_thunks_) {
+        const FunctionSig *sig = tc_.function_sig_by_name(fn_name);
+        if (!sig || sig->extern_lib.empty()) continue;
+
+        ir::IrFunction fn;
+        fn.name = "__cfnthunk_" + fn_name;
+        const ir::IrType ret_ir =
+            (sig->return_type.kind == PrimitiveKind::VOID ||
+             sig->return_type.kind == PrimitiveKind::COUNT)
+                ? ir::IrType::VOID
+                : ir_type_from_primitive(sig->return_type.kind);
+        fn.ret_type = ret_ir;
+
+        // Params: uno por parametro del extern, en orden.
+        std::vector<ir::IrValueId> param_vids;
+        param_vids.reserve(sig->param_types.size());
+        for (size_t i = 0; i < sig->param_types.size(); ++i) {
+            const ir::IrType pt =
+                ir_type_from_primitive(sig->param_types[i].kind);
+            const ir::IrValueId vid =
+                fn.new_value(pt, "%a" + std::to_string(i));
+            fn.values[vid].is_param = true;
+            // PTR/ARRAY nativos (no VirtualPtr) son host_ptr.
+            const PrimitiveKind pk = sig->param_types[i].kind;
+            if ((pk == PrimitiveKind::PTR || pk == PrimitiveKind::ARRAY) &&
+                !sig->param_types[i].is_virtual) {
+                fn.values[vid].is_host_ptr = true;
+            }
+            fn.params.push_back(vid);
+            param_vids.push_back(vid);
+        }
+
+        const ir::IrBlockId entry = fn.new_block("entry");
+        // CALLN @Method("<lib>:<fn>") con los params como args.
+        out.register_native_import(sig->extern_lib, fn_name);
+        const ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
+                                      ? ir::IR_NO_VALUE
+                                      : fn.new_value(ret_ir);
+        {
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ret_ir;
+            ins.dst = dst;
+            ins.func_name = sig->extern_lib + ":" + fn_name;
+            ins.operands = param_vids;
+            ins.source_line = 0;
+            fn.append(entry, std::move(ins));
+        }
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ret_ir;
+            if (dst != ir::IR_NO_VALUE) ret.operands = {dst};
+            ret.source_line = 0;
+            fn.append(entry, std::move(ret));
+        }
+        out.add_function(std::move(fn));
+    }
+}
+
 } // namespace vx

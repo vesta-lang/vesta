@@ -2200,4 +2200,87 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn_ = nullptr;
 }
 
+void Lowering::emit_instrument_enter(const std::string &fn_name,
+                                     uint32_t line) {
+    if (!fn_ || !out_mod_) return;
+    // 1. Internar el nombre como literal en static_data.  Incluye nul
+    //    terminator para que sea NUL-terminated C string utilizable
+    //    por strdup/printf en cualquier backend hosted.
+    std::vector<uint8_t> bytes(fn_name.begin(), fn_name.end());
+    bytes.push_back(0);
+    const uint64_t name_idx = out_mod_->intern_static_data(std::move(bytes));
+
+    // 2. STR_LIT_ADDR: cargar ptr al literal en un SSA value.
+    const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr sa{};
+        sa.op = ir::IrOp::STR_LIT_ADDR;
+        sa.type = ir::IrType::PTR;
+        sa.dst = v_name;
+        sa.imm = name_idx;
+        sa.source_line = line;
+        emit(current_block_, std::move(sa));
+    }
+
+    // 3. CALLN void a "vx_trace:enter"(proc_ptr, name_ptr).
+    //    El proc_ptr lo obtenemos via @c getproc; el plugin nativo
+    //    lo usa para @c vm_read_bytes del nombre.  En port C el
+    //    bridge ignora el proc_ptr.
+    const ir::IrValueId v_proc = emit_getproc(line);
+    ir::IrInstr call{};
+    call.op = ir::IrOp::CALLN;
+    call.type = ir::IrType::VOID;
+    call.dst = ir::IR_NO_VALUE;
+    // El @c lib_path incluye el subdir bajo @c stdlib/native/ para
+    // que el loader pueda resolver la DLL via path relativo al
+    // @c vm.exe (igual convencion que vesta_io / vesta_math).
+    call.func_name = "stdlib/native/runtime/vx_trace:enter";
+    call.operands = {v_proc, v_name};
+    call.source_line = line;
+    emit(current_block_, std::move(call));
+
+    // 4. Registrar el import nativo para que el linker .velb
+    //    incluya la libreria.
+    out_mod_->register_native_import("stdlib/native/runtime/vx_trace", "enter");
+}
+
+void Lowering::emit_instrument_exit(const std::string &fn_name,
+                                    ir::IrValueId v_ret, uint32_t line) {
+    if (!fn_ || !out_mod_) return;
+    std::vector<uint8_t> bytes(fn_name.begin(), fn_name.end());
+    bytes.push_back(0);
+    const uint64_t name_idx = out_mod_->intern_static_data(std::move(bytes));
+
+    const ir::IrValueId v_name = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr sa{};
+        sa.op = ir::IrOp::STR_LIT_ADDR;
+        sa.type = ir::IrType::PTR;
+        sa.dst = v_name;
+        sa.imm = name_idx;
+        sa.source_line = line;
+        emit(current_block_, std::move(sa));
+    }
+
+    // Si la funcion es void, pasar 0 como return value placeholder.
+    ir::IrValueId v_val = v_ret;
+    if (v_val == ir::IR_NO_VALUE) {
+        v_val = emit_const(ir::IrType::I64, 0, line);
+    }
+
+    const ir::IrValueId v_proc = emit_getproc(line);
+    ir::IrInstr call{};
+    call.op = ir::IrOp::CALLN;
+    call.type = ir::IrType::VOID;
+    call.dst = ir::IR_NO_VALUE;
+    // Usamos @c leave en lugar de @c exit para evitar colision con la
+    // libc @c exit() cuando el port C emite @c extern declarations.
+    call.func_name = "stdlib/native/runtime/vx_trace:leave";
+    call.operands = {v_proc, v_name, v_val};
+    call.source_line = line;
+    emit(current_block_, std::move(call));
+
+    out_mod_->register_native_import("stdlib/native/runtime/vx_trace", "leave");
+}
+
 } // namespace vx

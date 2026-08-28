@@ -1471,4 +1471,376 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
     current_block_ = skip_bb;
 }
 
+void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
+    // Ownership ruta B (H3 inc-on-copy): al COPIAR un shared<T> (`b = a`, campo
+    // = a, paso por valor) incrementamos el refcount del bloque de control.
+    // El slot guarda el host_ptr al ctrl block; refcount esta en [ctrl + 0].
+    // Si ctrl == 0 (movido/null) es no-op.  Simetrico al SHAREDPTR_REL (dec).
+    if (v_slot == ir::IR_NO_VALUE) return;
+    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_ctrl].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ctrl;
+        ld.operands = {v_slot};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
+    const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
+    {
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_NE;
+        cmp.type = ir::IrType::I64;
+        cmp.dst = v_cmp;
+        cmp.operands = {v_ctrl, v_zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+    }
+    const ir::IrBlockId inc_bb = fn_->new_block("sh_inc");
+    const ir::IrBlockId skip_bb = fn_->new_block("sh_inc_skip");
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {v_cmp};
+        br.target_block = inc_bb;
+        br.false_block = skip_bb;
+        br.source_line = line;
+        emit(current_block_, std::move(br));
+        fn_->blocks[current_block_].succs.push_back(inc_bb);
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[inc_bb].preds.push_back(current_block_);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+    }
+    current_block_ = inc_bb;
+    const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_rc;
+        ld.operands = {v_ctrl};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
+    const ir::IrValueId v_rc_inc = fn_->new_value(ir::IrType::I64);
+    {
+        ir::IrInstr add{};
+        add.op = ir::IrOp::ADD;
+        add.type = ir::IrType::I64;
+        add.dst = v_rc_inc;
+        add.operands = {v_rc, v_one};
+        add.source_line = line;
+        emit(current_block_, std::move(add));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {v_rc_inc, v_ctrl};
+        st.source_line = line;
+        emit(current_block_, std::move(st));
+    }
+    {
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR;
+        br.target_block = skip_bb;
+        br.source_line = line;
+        emit(current_block_, std::move(br));
+        fn_->blocks[inc_bb].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(inc_bb);
+    }
+    current_block_ = skip_bb;
+}
+
+void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
+                                           uint32_t field_offset,
+                                           uint32_t line) {
+    const ir::IrBlockId skip_bb = fn_->new_block("free_clo_skip");
+    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
+
+    // slot = LOAD [this + field_offset]  (host_ptr al slot RAW_ALLOC).
+    const ir::IrValueId slot_addr =
+        emit_field_addr(fn_, current_block_, this_vid, field_offset, line);
+    const ir::IrValueId slot = fn_->new_value(ir::IrType::I64);
+    fn_->values[slot].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = slot;
+        ld.operands = {slot_addr};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    // if (slot == 0) -> skip  (campo nunca asignado / closure null).
+    const ir::IrBlockId slot_ok = fn_->new_block("free_clo_slot_ok");
+    {
+        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = is_null;
+        cmp.operands = {slot, zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {is_null};
+        br.target_block = skip_bb; // null -> skip
+        br.false_block = slot_ok;
+        br.source_line = line;
+        // CFG explicita (succs/preds): SIN esto el analisis de vivacidad NO
+        // ve los edges del diamante del free hacia skip_bb -> las constantes
+        // vivas que cruzan el free (p.ej. el offset +8 del call posterior)
+        // se consideran muertas y el regalloc reusa su registro como scratch
+        // del env-load -> direccion basura en el call -> segfault.
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[current_block_].succs.push_back(slot_ok);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        fn_->blocks[slot_ok].preds.push_back(current_block_);
+        emit(current_block_, std::move(br));
+        current_block_ = slot_ok;
+    }
+    // env = LOAD [slot + 8]
+    const ir::IrValueId env_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[env_addr].is_host_ptr = true;
+    {
+        const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = env_addr;
+        ad.operands = {slot, eight};
+        ad.source_line = line;
+        emit(current_block_, std::move(ad));
+    }
+    const ir::IrValueId env = fn_->new_value(ir::IrType::I64);
+    fn_->values[env].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = env;
+        ld.operands = {env_addr};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    // Bloque que SIEMPRE libera el slot (heap owned), tras (quiza) liberar env.
+    const ir::IrBlockId free_slot_bb = fn_->new_block("free_clo_slot");
+    // if (env == 0) -> free_slot; else RAW_FREE(env) -> free_slot
+    {
+        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = is_null;
+        cmp.operands = {env, zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+        const ir::IrBlockId free_env_bb = fn_->new_block("free_clo_env");
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {is_null};
+        br.target_block = free_slot_bb; // env null -> solo libera el slot
+        br.false_block = free_env_bb;
+        br.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[current_block_].succs.push_back(free_env_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        fn_->blocks[free_env_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(br));
+        current_block_ = free_env_bb;
+    }
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {env};
+        rf.source_line = line;
+        emit(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = free_slot_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(brj));
+    }
+    // free_slot_bb: RAW_FREE(slot); br skip.
+    current_block_ = free_slot_bb;
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {slot};
+        rf.source_line = line;
+        emit(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = skip_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(brj));
+    }
+    current_block_ = skip_bb;
+    block_terminated_ = false;
+}
+
+void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
+    const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
+    const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
+    // if (slot == 0) -> skip  (slot nulo / unique movido).
+    const ir::IrBlockId slot_ok = fn_->new_block("free_uniq_slot_ok");
+    {
+        const ir::IrValueId is_null = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_EQ;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = is_null;
+        cmp.operands = {slot, zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {is_null};
+        br.target_block = skip_bb;
+        br.false_block = slot_ok;
+        br.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[current_block_].succs.push_back(slot_ok);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        fn_->blocks[slot_ok].preds.push_back(current_block_);
+        emit(current_block_, std::move(br));
+        current_block_ = slot_ok;
+    }
+    // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
+    const ir::IrValueId ptr = fn_->new_value(ir::IrType::I64);
+    fn_->values[ptr].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = ptr;
+        ld.operands = {slot};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    // deleter = LOAD [slot + 8].
+    const ir::IrValueId del_addr = fn_->new_value(ir::IrType::PTR);
+    fn_->values[del_addr].is_host_ptr = true;
+    {
+        const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = del_addr;
+        ad.operands = {slot, eight};
+        ad.source_line = line;
+        emit(current_block_, std::move(ad));
+    }
+    const ir::IrValueId deleter = fn_->new_value(ir::IrType::I64);
+    fn_->values[deleter].is_host_ptr = true;
+    {
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = deleter;
+        ld.operands = {del_addr};
+        ld.source_line = line;
+        emit(current_block_, std::move(ld));
+    }
+    // if (deleter != 0) -> CALLIND deleter(ptr); else RAW_FREE(ptr).
+    const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
+    const ir::IrBlockId free_bb = fn_->new_block("free_uniq_raw");
+    {
+        const ir::IrValueId has_del = fn_->new_value(ir::IrType::BOOL);
+        ir::IrInstr cmp{};
+        cmp.op = ir::IrOp::CMP_NE;
+        cmp.type = ir::IrType::BOOL;
+        cmp.dst = has_del;
+        cmp.operands = {deleter, zero};
+        cmp.source_line = line;
+        emit(current_block_, std::move(cmp));
+        ir::IrInstr br{};
+        br.op = ir::IrOp::BR_COND;
+        br.operands = {has_del};
+        br.target_block = call_bb;
+        br.false_block = free_bb;
+        br.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(call_bb);
+        fn_->blocks[current_block_].succs.push_back(free_bb);
+        fn_->blocks[call_bb].preds.push_back(current_block_);
+        fn_->blocks[free_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(br));
+    }
+    // Bloque que SIEMPRE libera el slot heap (16B), tras liberar el inner.
+    const ir::IrBlockId free_slot_bb = fn_->new_block("free_uniq_slot");
+    // call_bb: CALLIND deleter(ptr) -> free_slot.
+    current_block_ = call_bb;
+    {
+        ir::IrInstr ci{};
+        ci.op = ir::IrOp::CALLIND;
+        ci.type = ir::IrType::VOID;
+        ci.dst = ir::IR_NO_VALUE;
+        ci.func_ptr = deleter;
+        ci.operands = {ptr};
+        ci.source_line = line;
+        ci.is_call_site = true;
+        emit(current_block_, std::move(ci));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = free_slot_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(brj));
+    }
+    // free_bb: RAW_FREE(ptr) -> free_slot  (deleter por defecto; null-safe).
+    current_block_ = free_bb;
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {ptr};
+        rf.source_line = line;
+        emit(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = free_slot_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
+        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(brj));
+    }
+    // free_slot_bb: RAW_FREE(slot heap) -> skip.
+    current_block_ = free_slot_bb;
+    {
+        ir::IrInstr rf{};
+        rf.op = ir::IrOp::RAW_FREE;
+        rf.type = ir::IrType::VOID;
+        rf.dst = ir::IR_NO_VALUE;
+        rf.operands = {slot};
+        rf.source_line = line;
+        emit(current_block_, std::move(rf));
+        ir::IrInstr brj{};
+        brj.op = ir::IrOp::BR;
+        brj.target_block = skip_bb;
+        brj.source_line = line;
+        fn_->blocks[current_block_].succs.push_back(skip_bb);
+        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        emit(current_block_, std::move(brj));
+    }
+    current_block_ = skip_bb;
+    block_terminated_ = false;
+}
+
+
 } // namespace vx
