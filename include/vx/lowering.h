@@ -609,6 +609,51 @@ class Lowering {
      */
     bool try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out);
 
+    /**
+     * @brief Declara un struct dado por una lista de inicializacion.
+     *
+     * Cubre `Point p = {1, 2}` y `Point p = {.x=1, .y=2}`: el struct se
+     * reserva en memoria del anfitrion y cada campo se escribe en su
+     * desplazamiento.  Lo que cambia es de donde sale el valor de cada campo,
+     * y que en la forma con nombres un campo puede faltar y tomar entonces el
+     * valor por defecto que declare el struct.
+     *
+     * @param vd       La declaracion.
+     * @param sem_type El tipo ya resuelto (alias aplicados).
+     * @return @c true si era esta forma y quedo bajada.
+     */
+    bool try_lower_struct_init_list(ast::VarDeclStmt *vd,
+                                    const Type &sem_type);
+
+    /**
+     * @brief Declara una variable de tipo struct (o enum, mismo camino).
+     *
+     * Reserva el hueco en memoria del anfitrion -- en los tres modos, porque
+     * el callee solo recibe una direccion y no sabria si detras hay pila de la
+     * maquina o del anfitrion -- y ata el nombre a esa direccion.  El hueco se
+     * pone a cero antes de nada, y si el struct tiene destructor o punteros
+     * con dueno se apunta la limpieza del final del ambito.
+     *
+     * @param vd       La declaracion.
+     * @param sem_type El tipo ya resuelto (alias aplicados).
+     * @return @c true si era un struct y quedo bajado.
+     */
+    bool try_lower_struct_var(ast::VarDeclStmt *vd, const Type &sem_type);
+
+    /**
+     * @brief Declara una variable de tipo array nativo `T[N]`.
+     *
+     * Desde el lowering un array es lo mismo que un struct: un hueco contiguo
+     * y un nombre atado a su base.  Lo que cambia es de donde salen los bytes
+     * iniciales: de un literal de cadena escrito byte a byte (memoria cruda,
+     * sin GC), de una lista posicional, o de nada -- reservar y poner a cero.
+     *
+     * @param vd       La declaracion.
+     * @param sem_type El tipo ya resuelto (alias aplicados).
+     * @return @c true si era un array y quedo bajado.
+     */
+    bool try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type);
+
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
                             uint32_t source_line);

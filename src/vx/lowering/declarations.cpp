@@ -250,729 +250,19 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
 
     // Struct init C-style: `Point p = {.x=1, .y=2};` o
     // posicional `Point p = {1, 2};`.
-    if (sem_type.kind == PrimitiveKind::STRUCT && vd->init &&
-        vd->init->kind == ast::NodeKind::InitListExpr) {
-        auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
-        const auto &layouts = tc_.struct_layouts();
-        auto it_l = layouts.find(sem_type.struct_name);
-        if (it_l == layouts.end()) {
-            error_at(vd->loc, "lowering: struct '" + sem_type.struct_name +
-                                  "' sin layout");
-            return;
-        }
-        const StructLayout &lay = it_l->second;
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = addr;
-        al.imm = (uint64_t)lay.size_bytes;
-        // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
-        al.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
-        al.source_line = vd->loc.line;
-        emit(current_block_, std::move(al));
-        // Seguridad: zero-inicializar TODO el struct antes de escribir los
-        // campos listados.  Asi los campos NO presentes en el init-list quedan
-        // a 0 (no basura de la pila).  Subsume el zero de los bit fields.
-        emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
-        // Valores por defecto de los campos (`u8 a = 0x10`); el init-list
-        // explicito de abajo sobrescribe los campos que liste.
-        emit_struct_field_defaults(addr, lay, vd->loc.line);
-        // @Virtual: fijar el vptr del struct polimorfico a su vtable (tras el
-        // zero_fill; el init-list solo escribe campos, no el vptr en offset 0).
-        if (lay.is_polymorphic) emit_struct_vptr_init(addr, lay, vd->loc.line);
-        // Zero los storage words de bit fields antes del
-        // loop para evitar que el RMW lea basura del ALLOCA.  Los
-        // unique (offset, size) ya estan en lay.fields para bit
-        // fields; emit STORE 0 una sola vez por word.
-        std::set<std::pair<uint32_t, uint32_t>> zeroed_bf;
-        for (const auto &f : lay.fields) {
-            if (f.bit_width == 0) continue;
-            auto key = std::make_pair(f.offset, f.size);
-            if (!zeroed_bf.insert(key).second) continue;
-            ir::IrType ft_zero = ir_type_from_primitive(f.type.kind);
-            ir::IrValueId v_zero = emit_const(ft_zero, 0, vd->loc.line);
-            ir::IrValueId v_addr_w = addr;
-            if (f.offset > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
-                v_addr_w = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            emit_store_typed(v_addr_w, v_zero, ft_zero, vd->loc.line);
-        }
-        for (size_t i = 0; i < il->elements.size(); ++i) {
-            const StructFieldInfo *fi = nullptr;
-            if (il->is_designated) {
-                const std::string &fname = il->field_names[i];
-                for (const auto &f : lay.fields) {
-                    if (f.name == fname) {
-                        fi = &f;
-                        break;
-                    }
-                }
-                if (!fi) {
-                    error_at(vd->loc,
-                             "lowering: campo '" + fname + "' no existe");
-                    continue;
-                }
-            } else {
-                if (i >= lay.fields.size()) {
-                    error_at(vd->loc, "lowering: init list excede campos");
-                    break;
-                }
-                fi = &lay.fields[i];
-            }
-            // Campo STRUCT inicializado con un init-list ANIDADO
-            // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
-            // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
-            // baja un InitListExpr como valor -> hay que tratarlo aqui.
-            if (fi->type.kind == PrimitiveKind::STRUCT &&
-                il->elements[i]->kind == ast::NodeKind::InitListExpr) {
-                ir::IrValueId v_faddr = addr;
-                if (fi->offset > 0) {
-                    ir::IrValueId v_off = emit_const(
-                        ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                    v_faddr = emit_ptr_add(addr, v_off, vd->loc.line);
-                }
-                auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
-                if (it_sl == tc_.struct_layouts().end()) {
-                    error_at(vd->loc, "lowering: struct '" +
-                                          fi->type.struct_name +
-                                          "' sin layout (init anidado)");
-                    continue;
-                }
-                emit_struct_init_fields(
-                    v_faddr, it_sl->second,
-                    static_cast<ast::InitListExpr *>(il->elements[i].get()),
-                    vd->loc.line);
-                continue;
-            }
-            ir::IrValueId v_val = lower_expr(il->elements[i].get());
-            if (v_val == ir::IR_NO_VALUE) continue;
-            const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
-            ir::IrValueId v_addr = addr;
-            if (fi->offset > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
-                v_addr = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            // Campo AGREGADO inline (struct/array value-type): @c v_val es la
-            // DIRECCION del agregado origen -> copia memberwise (qword a
-            // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
-            // direccion origen).  Sin esto un `Outer o = {.w = inner}`
-            // guardaba &inner en o.w y leer o.w.v devolvia la direccion
-            // (bug struct-en-struct, value-type anidado).
-            // Un campo de tipo `@overlay struct` NO es un agregado inline:
-            // guarda el HANDLE de la vista (8 bytes) -> STORE escalar (abajo).
-            if ((fi->type.kind == PrimitiveKind::STRUCT &&
-                 !type_is_overlay(fi->type)) ||
-                fi->type.kind == PrimitiveKind::ARRAY) {
-                uint64_t sz = size_of_type(fi->type);
-                if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
-                    auto it_sl =
-                        tc_.struct_layouts().find(fi->type.struct_name);
-                    if (it_sl != tc_.struct_layouts().end())
-                        sz = (uint64_t)it_sl->second.size_bytes;
-                }
-                if (sz == 0) sz = 8;
-                emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
-                if (fi->type.kind == PrimitiveKind::STRUCT) {
-                    auto it_sl =
-                        tc_.struct_layouts().find(fi->type.struct_name);
-                    if (it_sl != tc_.struct_layouts().end() &&
-                        it_sl->second.has_copy_hook) {
-                        emit_struct_method_on_host_field(
-                            v_addr, fi->type.struct_name,
-                            fi->type.struct_name + "____clone__", vd->loc.line);
-                    }
-                }
-                continue;
-            }
-            // Bit field en init list: read-modify-write.
-            // El ALLOCA inicial deja basura; debemos LOAD el storage
-            // word actual, limpiar los bits del rango con AND ~mask,
-            // OR con (val<<offset), STORE.  Igual que en lower_assign
-            // para bit fields.
-            if (fi->bit_width > 0) {
-                ir::IrValueId v_old = fn_->new_value(ir_ft);
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir_ft;
-                ld.dst = v_old;
-                ld.operands = {v_addr};
-                ld.source_line = vd->loc.line;
-                emit(current_block_, std::move(ld));
-                const uint64_t mask =
-                    (fi->bit_width == 64)
-                        ? UINT64_MAX
-                        : ((uint64_t(1) << fi->bit_width) - 1);
-                const uint64_t inv_mask = ~(mask << fi->bit_offset);
-                ir::IrValueId v_inv = emit_const(ir_ft, inv_mask, vd->loc.line);
-                ir::IrValueId v_clr = fn_->new_value(ir_ft);
-                {
-                    ir::IrInstr an{};
-                    an.op = ir::IrOp::AND;
-                    an.type = ir_ft;
-                    an.dst = v_clr;
-                    an.operands = {v_old, v_inv};
-                    an.source_line = vd->loc.line;
-                    emit(current_block_, std::move(an));
-                }
-                ir::IrValueId v_msk = emit_const(ir_ft, mask, vd->loc.line);
-                ir::IrValueId v_tr = fn_->new_value(ir_ft);
-                {
-                    ir::IrInstr an{};
-                    an.op = ir::IrOp::AND;
-                    an.type = ir_ft;
-                    an.dst = v_tr;
-                    an.operands = {v_val, v_msk};
-                    an.source_line = vd->loc.line;
-                    emit(current_block_, std::move(an));
-                }
-                ir::IrValueId v_sh = v_tr;
-                if (fi->bit_offset > 0) {
-                    ir::IrValueId v_amt = emit_const(
-                        ir_ft, (uint64_t)fi->bit_offset, vd->loc.line);
-                    v_sh = fn_->new_value(ir_ft);
-                    ir::IrInstr sh{};
-                    sh.op = ir::IrOp::SHL;
-                    sh.type = ir_ft;
-                    sh.dst = v_sh;
-                    sh.operands = {v_tr, v_amt};
-                    sh.source_line = vd->loc.line;
-                    emit(current_block_, std::move(sh));
-                }
-                ir::IrValueId v_new = fn_->new_value(ir_ft);
-                {
-                    ir::IrInstr or_{};
-                    or_.op = ir::IrOp::OR;
-                    or_.type = ir_ft;
-                    or_.dst = v_new;
-                    or_.operands = {v_clr, v_sh};
-                    or_.source_line = vd->loc.line;
-                    emit(current_block_, std::move(or_));
-                }
-                emit_store_typed(v_addr, v_new, ir_ft, vd->loc.line);
-                continue;
-            }
-            emit_store_typed(v_addr, v_val, ir_ft, vd->loc.line);
-        }
-        bind(vd->name, addr);
-        return;
-    }
+    if (try_lower_struct_init_list(vd, sem_type)) return;
 
-    // Caso 1: variable de tipo struct.  Reservamos memoria local con
-    // ALLOCA del IR (el emisor lo baja a 'subsp rsp, N + readcur') y
-    // guardamos el IrValueId del puntero como "current value" de la
-    // variable en scope.  El acceso a campos via FieldAccessExpr
-    // calcula offsets desde este puntero base.
-    if (sem_type.kind == PrimitiveKind::STRUCT) {
-        const auto &layouts = tc_.struct_layouts();
-        auto it = layouts.find(sem_type.struct_name);
-        // ADTs: si NO esta en struct_layouts, puede ser un enum
-        // (compartimos PrimitiveKind::STRUCT para reusar el camino
-        // de value-type).  Buscar en enum_layouts_ y alocar slot
-        // de @c size_bytes (8 + 8*max_payload_fields).
-        if (it == layouts.end()) {
-            const auto &elays = tc_.enum_layouts();
-            auto ite = elays.find(sem_type.struct_name);
-            if (ite != elays.end()) {
-                const EnumLayout &elay = ite->second;
-                const ir::IrValueId eaddr = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr eal{};
-                eal.op = ir::IrOp::ALLOCA;
-                eal.type = ir::IrType::I8;
-                eal.dst = eaddr;
-                eal.imm = static_cast<uint64_t>(elay.size_bytes);
-                // Todo agregado (struct Y enum) vive en memoria HOST en los
-                // tres modos.  Ver la rama STRUCT: si unos acaban en host y
-                // otros en la pila VM, el callee -- que solo recibe una
-                // direccion -- lee unos u otros como basura.
-                eal.host_alloca = true;
-                eal.source_line = vd->loc.line;
-                emit(current_block_, std::move(eal));
-                fn_->values[eaddr].is_host_ptr = true;
-                // La variable es un value-type: se bindea a un SLOT ESTABLE
-                // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
-                // qword-by-qword al slot -- MISMO modelo que un struct
-                // (ver rama STRUCT abajo).  Antes se bindeaba la variable al
-                // slot del constructor (repunte del puntero); eso rompia con
-                // una asignacion condicional (`if { t = X }` / arm de match):
-                // el var-decl apuntaba a un slot (p.ej. GC-host) y el assign
-                // a otro (ALLOCA VM), un PHI mezclaba punteros de naturaleza
-                // distinta y el LOAD del tag del `match t` usaba movh sobre
-                // una direccion VM -> SIGSEGV.  Con el slot estable, `t`
-                // tiene UNA sola direccion (VM) y el match lee siempre con mov.
-                bind(vd->name, eaddr);
-                if (vd->init) {
-                    const ir::IrValueId init_addr = lower_expr(vd->init.get());
-                    if (init_addr != ir::IR_NO_VALUE) {
-                        emit_enum_copy(eaddr, init_addr,
-                                       fn_->values[init_addr].is_host_ptr,
-                                       elay.size_bytes, vd->loc.line);
-                    }
-                }
-                return;
-            }
-            error_at(vd->loc, "lowering: struct/enum desconocido '" +
-                                  sem_type.struct_name + "'");
-            return;
-        }
-        const StructLayout &lay = it->second;
-        // ALLOCA del IR reserva count * sizeof(T) bytes; pasamos
-        // tipo i8 para que count sea exactamente size_bytes.  El
-        // emisor lo traduce a 'subsp rsp, N' + 'readcur rDst'.
-        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::ALLOCA;
-        ins.type = ir::IrType::I8; // unidad: 1 byte
-        ins.dst = addr;
-        ins.imm = (uint64_t)lay.size_bytes;
-        ins.source_line = vd->loc.line;
-        // AOT bare (native_poo_): NO hay VM stack -> el struct debe vivir
-        // en la pila nativa (host_alloca).  Sin esto, un struct que
-        // escapa (p.ej. se pasa por puntero a un metodo s.metodo()) se
-        // aloca con ALLOCA_VM ([rbx+0x40]); el .exe standalone no tiene
-        // ProcessVM en rbx -> SIGSEGV.
-        //
-        // Bug host-vs-VM (2026-07-15): tambien en interp/JIT cuando se toma
-        // `&p`.  El comentario anterior daba por bueno que "los escapantes
-        // usan VM stack que el runtime mapea", pero el consumidor del `P*`
-        // resultante (param, campo o elemento) lo deref-ea con movh por la
-        // convencion `T*`=host -> movh sobre direccion VM -> SIGSEGV.  Solo
-        // pasaba inadvertido mientras el inliner borraba la llamada.  Un
-        // struct que NO se address-takea se queda en la pila VM (y el
-        // ir_optimizer ya lo promueve por perf si no escapa).
-        // Host SIEMPRE, no solo en AOT ni solo si se toma la direccion.  Mismo
-        // criterio (y mismo motivo) que el buffer de un `T[N]` local.
-        //
-        // Que fuera CONDICIONAL era el bug: cualquier cosa que marcara UN local
-        // lo mandaba a host y dejaba al de al lado en la pila VM.  El callee no
-        // puede distinguirlos -- recibe una direccion y punto -- asi que leia
-        // uno de los dos como basura, con el otro funcionando (que es lo que lo
-        // hacia dificil de ver).  Medido: dos structs y un metodo con arg ->
-        // this=(0,0) y o=(1,2).  Con TODOS los agregados en host, caller y
-        // callee coinciden siempre.  Memoria VM explicita = `VirtualPtr<T>`.
-        ins.host_alloca = true;
-        const bool struct_is_host = ins.host_alloca;
-        emit(current_block_, std::move(ins));
-        if (struct_is_host) fn_->values[addr].is_host_ptr = true;
-        bind(vd->name, addr);
-        // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
-        // struct local en pila NO se zeroea solo (a diferencia de un objeto
-        // GC); sin esto, (a) los campos no asignados exponen basura de la pila
-        // (seguridad), y (b) un campo shared/unique/closure sin asignar tendria
-        // un ctrl/slot basura y su dtor haria free de basura (UAF).  El
-        // init-list / copy posterior sobrescribe los campos que toque.
-        emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
-        // Declaracion sin init (`P p;`): aplicar los valores por defecto de los
-        // campos.  Si hay init (copia de otro struct/llamada) el copy de abajo
-        // sobrescribe todo, asi que los defaults solo aplican sin init.
-        if (!vd->init) emit_struct_field_defaults(addr, lay, vd->loc.line);
-        // @Virtual: un struct polimorfico recien construido apunta su vptr
-        // (offset 0) a la vtable de SU tipo declarado.  Va tras el zero_fill
-        // (que dejo el vptr en 0) y los defaults.  Para `Derivado d;` fija
-        // vptr=vtable_Derivado, de modo que un dispatch posterior por `Base*`
-        // resuelve al metodo del derivado (dispatch dinamico correcto).
-        if (lay.is_polymorphic && !vd->init)
-            emit_struct_vptr_init(addr, lay, vd->loc.line);
-        // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
-        // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
-        // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
-        // `b.__clone__()` (CALL <S>____clone__(b)) que aplica el efecto sobre
-        // la copia (p.ej. ++refcount de su recurso).  Opera sobre `this`=b
-        // (misma memory class que cualquier metodo de struct -> sin mismatch
-        // host/VM). `S b = move(a)` o `S b = call()` (valor
-        // fresco/transferencia) NO entran.
-        const bool do_copy_hook =
-            vd->init && vd->init->kind == ast::NodeKind::IdentExpr &&
-            lay.has_copy_hook &&
-            escaping_locals_.find(vd->name) == escaping_locals_.end();
-        // B3 fix: si hay inicializador, lower-lo como PTR al struct
-        // origen y copiar qword-by-qword al slot ALLOCA recien creado.
-        // Soporta:
-        //   - Call result: `Punto v = funcion_que_devuelve_struct(...)`
-        //   - read_borrow: `Punto v = read_borrow(b)` (B2 pass-through)
-        //   - Otros SSA values PTR a struct.
-        // El init list (que SI estaba soportado) se maneja en la rama
-        // de mas arriba antes de llegar aqui (linea 1837).
-        if (vd->init) {
-            const ir::IrValueId v_src = lower_expr(vd->init.get());
-            if (v_src != ir::IR_NO_VALUE) {
-                // Heredar is_host_ptr del source para los LOADs.  Si
-                // el src viene de read_borrow / ptr_of (unique), es
-                // host_ptr; si viene de un struct stack ALLOCA es VM.
-                const bool src_is_host = fn_->values[v_src].is_host_ptr;
-                // Copia qword-by-qword (size_bytes redondeado a 8).
-                const uint64_t qwords = (lay.size_bytes + 7) / 8;
-                for (uint64_t qi = 0; qi < qwords; ++qi) {
-                    const uint64_t off = qi * 8;
-                    const ir::IrValueId v_off =
-                        emit_const(ir::IrType::I64, static_cast<int64_t>(off),
-                                   vd->loc.line);
-                    // src + off
-                    const ir::IrValueId v_src_at =
-                        fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_src_at].is_host_ptr = src_is_host;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_src_at;
-                        ad.operands = {v_src, v_off};
-                        ad.source_line = vd->loc.line;
-                        emit(current_block_, std::move(ad));
-                    }
-                    // LOAD i64 from src+off
-                    const ir::IrValueId v_word =
-                        fn_->new_value(ir::IrType::I64);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = v_word;
-                        ld.operands = {v_src_at};
-                        ld.source_line = vd->loc.line;
-                        emit(current_block_, std::move(ld));
-                    }
-                    // dst slot + off.  Su naturaleza se HEREDA del slot: dar
-                    // por hecho que es VM hacia que la copia escribiera con
-                    // `mov` sobre una direccion host -> el struct se quedaba a
-                    // ceros (y su copy-hook/dtor operaban sobre basura).
-                    const ir::IrValueId v_dst_at =
-                        fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_dst_at].is_host_ptr =
-                        fn_->values[addr].is_host_ptr;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_dst_at;
-                        ad.operands = {addr, v_off};
-                        ad.source_line = vd->loc.line;
-                        emit(current_block_, std::move(ad));
-                    }
-                    // STORE i64 [dst+off] = word
-                    emit_store_typed(v_dst_at, v_word,
-                                     ir::IrType::I64, vd->loc.line);
-                }
-            }
-        }
-        // Copy-hook: tras el memcpy, `b.__clone__()` aplica el efecto de copia
-        // sobre la nueva copia (this = addr = b).
-        if (do_copy_hook) {
-            ir::IrInstr cc{};
-            cc.op = ir::IrOp::CALL;
-            cc.type = ir::IrType::VOID;
-            cc.dst = ir::IR_NO_VALUE;
-            cc.operands = {addr}; // this = b (la copia)
-            cc.func_name = sem_type.struct_name + "__" + "__clone__";
-            cc.source_line = vd->loc.line;
-            emit(current_block_, std::move(cc));
-        }
-        // Fase 2a interop C / ownership: destructor automatico (RAII) del
-        // struct value-type local con `~Struct()` declarado y que NO escapa.
-        // CALL directo a <Struct>__dtor(addr) al exit del scope (dispatch
-        // estatico, sin vtable; inlineable -> un dtor trivial cuesta ~0).  Si
-        // el struct ESCAPA (return/store -> escaping_locals_), se SUPRIME el
-        // cleanup: move-on-return (el caller re-registra el dtor de su copia
-        // -> un solo free).  Cero overhead para structs sin `~Struct()`.
-        if (escaping_locals_.find(vd->name) == escaping_locals_.end()) {
-            bool has_dtor = false;
-            for (const auto &mi : lay.methods)
-                if (mi.is_destructor) {
-                    has_dtor = true;
-                    break;
-                }
-            if (has_dtor) {
-                CleanupAction act;
-                act.kind = CleanupAction::Kind::STRUCT_DTOR;
-                act.operands = {addr};
-                act.source_line = vd->loc.line;
-                act.refresh_name = vd->name;
-                // Naming de lower_struct_methods: <Struct>__ + __dtor.
-                act.func_name = sem_type.struct_name + "__" + "__dtor";
-                cleanup_stack_.push_back(std::move(act));
-            }
-            // Ownership escape-sensitive: si el struct tiene campos closure
-            // (lambda con captura) y su valor llega POR MOVE desde una call
-            // (init = CallExpr) que retorna un struct con closure escapado, su
-            // env vive en HEAP y este consumidor es el unico responsable de
-            // liberarlo al exit del scope (el productor suprimio su cleanup via
-            // escaping_locals_ al hacer return).  Registramos CLOSURE_ENV_FREE
-            // con los offsets de los campos fn.  El caso local-no-escapa NO
-            // entra aqui (su env vive en stack, sin liberacion).
-            if (vd->init && vd->init->kind == ast::NodeKind::CallExpr) {
-                std::vector<uint32_t> fn_offs;
-                for (const auto &f : lay.fields)
-                    if (f.type.kind == PrimitiveKind::FUNCTION &&
-                        !f.type.fn_is_raw)
-                        fn_offs.push_back(f.offset);
-                if (!fn_offs.empty()) {
-                    CleanupAction act;
-                    act.kind = CleanupAction::Kind::CLOSURE_ENV_FREE;
-                    act.operands = {addr};
-                    act.source_line = vd->loc.line;
-                    act.refresh_name = vd->name;
-                    act.closure_field_offsets = std::move(fn_offs);
-                    cleanup_stack_.push_back(std::move(act));
-                }
-            }
-        }
-        return;
-    }
 
-    // C-style string init para arrays byte-like: `u8[N] arr = "literal"`.
-    // Detecta el patron y emite STOREs byte-a-byte del contenido del
-    // string literal, con zerificacion del resto si N > strlen.  Si
-    // strlen > N reporta error (truncation, comportamiento C).
-    // No se promueve el literal a StringObject (es array de bytes
-    // crudo, sin GC).  Aceptamos solo literales no interpolados.
-    if (sem_type.kind == PrimitiveKind::ARRAY && vd->init &&
-        vd->init->kind == ast::NodeKind::StringLitExpr && sem_type.pointee &&
-        (sem_type.pointee->kind == PrimitiveKind::U8 ||
-         sem_type.pointee->kind == PrimitiveKind::I8 ||
-         sem_type.pointee->kind == PrimitiveKind::CHAR)) {
-        auto *sl = static_cast<ast::StringLitExpr *>(vd->init.get());
-        if (sl->is_interpolated()) {
-            error_at(vd->loc,
-                     "init de array con string no acepta interpolacion");
-            return;
-        }
-        const std::string &bytes = sl->value;
-        const uint32_t str_n = (uint32_t)bytes.size();
-        const uint32_t arr_n =
-            sem_type.array_size > 0 ? (uint32_t)sem_type.array_size : str_n;
-        if (str_n > arr_n) {
-            error_at(vd->loc, "literal de string (" + std::to_string(str_n) +
-                                  " bytes) mas grande que el array (" +
-                                  std::to_string(arr_n) + ")");
-            return;
-        }
-        const Type elem_t = *sem_type.pointee;
-        const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
-        const uint32_t elem_sz = (uint32_t)primitive_size_bytes(elem_t.kind);
-        // ALLOCA del array (siempre arr_n elementos).
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = addr;
-            al.imm = (uint64_t)arr_n * elem_sz;
-            al.source_line = vd->loc.line;
-            /* Buffer HOST: ver la nota de las otras rutas de array local. */
-            al.host_alloca = true;
-            fn_->values[addr].is_host_ptr = true;
-            emit(current_block_, std::move(al));
-        }
-        // STORE byte-a-byte del string.
-        for (uint32_t i = 0; i < str_n; ++i) {
-            ir::IrValueId v_val =
-                emit_const(ir_elem, (uint64_t)(uint8_t)bytes[i], vd->loc.line);
-            ir::IrValueId v_addr_i = addr;
-            if (i > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
-                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
-        }
-        // Zerificar el resto (semantica C: padding a cero).
-        for (uint32_t i = str_n; i < arr_n; ++i) {
-            ir::IrValueId v_zero = emit_const(ir_elem, 0, vd->loc.line);
-            ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
-            ir::IrValueId v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
-            emit_store_typed(v_addr_i, v_zero, ir_elem, vd->loc.line);
-        }
-        bind(vd->name, addr);
-        return;
-    }
+    // Variable de tipo struct.  Reservamos memoria local con ALLOCA del IR
+    // (el emisor lo baja a 'subsp rsp, N + readcur') y guardamos el
+    // IrValueId del puntero como "current value" de la variable en scope.
+    // El acceso a campos via FieldAccessExpr calcula offsets desde esa base.
+    if (try_lower_struct_var(vd, sem_type)) return;
 
-    // Array init C-style: `i32 arr[N] = {e0, e1, ...};`.
-    // Detectamos InitListExpr en el inicializador y emitimos:
-    //   ALLOCA del array (igual que sin init).
-    //   Por cada elemento: STORE val a (base + i * sizeof(T)).
-    //   bind nombre al PTR base.
-    // Solo positional (sin .field=); reportamos error si is_designated.
-    if (sem_type.kind == PrimitiveKind::ARRAY && vd->init &&
-        vd->init->kind == ast::NodeKind::InitListExpr) {
-        auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
-        if (il->is_designated) {
-            error_at(vd->loc,
-                     "lowering: init designado '.field=' no aplica a arrays");
-            return;
-        }
-        const Type elem_t = sem_type.pointee ? *sem_type.pointee : Type{};
-        const uint32_t elem_sz = (uint32_t)primitive_size_bytes(elem_t.kind);
-        if (elem_sz == 0) {
-            error_at(vd->loc, "lowering: tipo del elemento sin sizeof");
-            return;
-        }
-        const uint32_t arr_size = sem_type.array_size > 0
-                                      ? (uint32_t)sem_type.array_size
-                                      : (uint32_t)il->elements.size();
-        if (il->elements.size() > arr_size) {
-            error_at(vd->loc, "lowering: init list mas elementos que el array");
-            return;
-        }
-        // ALLOCA arr_size * elem_sz bytes.
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = addr;
-        al.imm = (uint64_t)arr_size * elem_sz;
-        al.source_line = vd->loc.line;
-        /* El buffer va a memoria HOST, igual que el de un array local SIN
-         * inicializador (ver la otra rama y su nota de 2026-07-15).  Este
-         * camino -- el de `T[N] a = {...}` -- se quedo sin marcar, asi que el
-         * array acababa en la pila de la VM mientras todo lo que lo consume
-         * (`a` decaido a `T*`, `&a[i]`, la funcion que lo recibe) emitia
-         * accesos de HOST.  Leer una direccion VM como si fuera host mata el
-         * proceso, y solo se notaba al RECORRERLO con indice variable: con
-         * indices constantes el optimizador resolvia los accesos antes. */
-        al.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
-        emit(current_block_, std::move(al));
-        // STORE de cada elemento.
-        const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
-        for (size_t i = 0; i < il->elements.size(); ++i) {
-            ir::IrValueId v_val = lower_expr(il->elements[i].get());
-            if (v_val == ir::IR_NO_VALUE) continue;
-            // Suprimir warning de narrowing si el elemento es literal
-            // (`{10, 20, ...}` con i64-defaulted literals encajando en
-            // el tipo de elemento).  Mismo razonamiento que en
-            // var-decl con init literal.
-            const bool elem_is_literal =
-                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
-                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
-            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_elem,
-                                   vd->loc.line,
-                                   /*is_explicit=*/elem_is_literal);
-            ir::IrValueId v_addr_i = addr;
-            if (i > 0) {
-                ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
-                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
-            }
-            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
-        }
-        bind(vd->name, addr);
-        return;
-    }
-
-    // Struct init C-style: `Point p = {.x = 1, .y = 2};`
-    // o `Point p = {1, 2};` (positional).  ALLOCA del struct + STORE
-    // de cada campo en su offset.
-    if (sem_type.kind == PrimitiveKind::STRUCT && vd->init &&
-        vd->init->kind == ast::NodeKind::InitListExpr) {
-        auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
-        const auto &layouts = tc_.struct_layouts();
-        auto it_l = layouts.find(sem_type.struct_name);
-        if (it_l == layouts.end()) {
-            error_at(vd->loc, "lowering: struct '" + sem_type.struct_name +
-                                  "' sin layout");
-            return;
-        }
-        const StructLayout &lay = it_l->second;
-        // ALLOCA del struct.
-        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr al{};
-        al.op = ir::IrOp::ALLOCA;
-        al.type = ir::IrType::I8;
-        al.dst = addr;
-        al.imm = (uint64_t)lay.size_bytes;
-        // Bug host-vs-VM (2026-07-15): si se toma `&p`, el slot vive en host
-        // (`T*` = direccion host por convencion).  Ver el comentario extenso
-        // en la rama del struct sin init-list.
-        // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
-        al.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
-        al.source_line = vd->loc.line;
-        emit(current_block_, std::move(al));
-        // STORE cada campo en su offset (recursivo para structs anidados).
-        emit_struct_init_fields(addr, lay, il, vd->loc.line);
-        bind(vd->name, addr);
-        return;
-    }
 
     // Array nativo T[N]: identico a struct desde la optica del lowering.
-    // Reservamos N*sizeof(T) bytes en stack y guardamos la direccion base
-    // como "valor" de la variable.  Los accesos arr[i] se desugan a
-    // ADD(addr, i*sizeof(T)) + LOAD/STORE igual que para T*; el tipo del
-    // pointee se obtiene del propio sem_type para escalar el offset.
-    if (sem_type.kind == PrimitiveKind::ARRAY) {
-        // bug4: array dinamico `T[]` con init `new T[N]` o assigned
-        // desde otro host_ptr.  El slot guarda el host_ptr al buffer
-        // alocado en heap.  Cuando array_size == 0 y hay init, bindeo
-        // el local al SSA value del init (host_ptr) sin ALLOCA stack.
-        if (!sem_type.pointee || sem_type.array_size == 0) {
-            if (vd->init) {
-                const ir::IrValueId v_init = lower_expr(vd->init.get());
-                if (v_init != ir::IR_NO_VALUE) {
-                    // Mark is_host_ptr para que LOAD/STORE indirectos
-                    // emitan movh.  El IR del new T[N] ya lo marca.
-                    bind(vd->name, v_init);
-                    return;
-                }
-            }
-            error_at(
-                vd->loc,
-                "lowering: array sin tamano fijo requiere init con `new T[N]`");
-            return;
-        }
-        const size_t bytes = size_of_type(sem_type);
-        if (bytes == 0) {
-            error_at(vd->loc, "lowering: tamano del array es 0 (tipo de "
-                              "elemento desconocido?)");
-            return;
-        }
-        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::ALLOCA;
-        ins.type = ir::IrType::I8;
-        ins.dst = addr;
-        ins.imm = (uint64_t)bytes;
-        ins.source_line = vd->loc.line;
-        // Bug host-vs-VM (2026-07-15): el buffer de un `T[N]` local va SIEMPRE
-        // a memoria host, no solo en AOT.  Su tipo es un array NO virtual (ver
-        // @c type_from_node), asi que `arr` decaido a `T[]`/`T*` y `&arr[i]`
-        // son direcciones host y sus consumidores emiten movh.  Cuando el
-        // buffer se quedaba en la pila VM (interp/JIT) las dos rutas
-        // discrepaban: `sum_array(arr, n)` leia el array con movh sobre una
-        // direccion VM.  Un array VM explicito se nombra con `VirtualPtr<T>`.
-        ins.host_alloca = true;
-        emit(current_block_, std::move(ins));
-        fn_->values[addr].is_host_ptr = true;
-        bind(vd->name, addr);
-        // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
-        // los structs, ~L4415): un array en pila NO se zeroea solo.  El interp
-        // daba 0 solo porque su VM stack esta a cero; el JIT (pila HOST) leia
-        // basura -> DIVERGENCIA interp/JIT (un `i32[N] a` leido sin escribir, o
-        // `a[i]++` sobre un elemento no inicializado, daba garbage en JIT).
-        // Ademas es seguridad: sin esto el array expone basura de la pila.
-        emit_zero_fill(addr, (uint64_t)bytes, vd->loc.line);
-        if (vd->init) {
-            error_at(vd->loc, "lowering: inicializador de array aun no "
-                              "soportado en esta ruta");
-        }
-        return;
-    }
+    if (try_lower_array_var(vd, sem_type)) return;
+
 
     // Caso 2: tipos primitivos / PTR (camino tradicional).
     ir::IrType vt = ir::IrType::I64;
@@ -1726,5 +1016,748 @@ bind_and_cleanup:
     pending_smartptr_deleter_.clear();
 }
 
+
+/**
+ * @brief Declara un struct dado por una lista de inicializacion.
+ *
+ * Cubre `Point p = {1, 2}` y `Point p = {.x=1, .y=2}`, que se escriben
+ * distinto pero acaban igual: el struct se reserva en memoria del anfitrion y
+ * cada campo se escribe en su desplazamiento.  Lo unico que cambia es de
+ * donde sale el valor de cada campo -- de la posicion o del nombre --, y que
+ * en la forma con nombres un campo puede no aparecer, en cuyo caso toma el
+ * valor por defecto que declare el struct.
+ *
+ * @param vd       La declaracion.
+ * @param sem_type El tipo ya resuelto (alias aplicados).
+ * @return @c true si era esta forma y quedo bajada.
+ */
+bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
+                                          const Type &sem_type) {
+    if (sem_type.kind != PrimitiveKind::STRUCT || !vd->init ||
+        vd->init->kind != ast::NodeKind::InitListExpr)
+        return false;
+    auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
+    const auto &layouts = tc_.struct_layouts();
+    auto it_l = layouts.find(sem_type.struct_name);
+    if (it_l == layouts.end()) {
+        error_at(vd->loc, "lowering: struct '" + sem_type.struct_name +
+                              "' sin layout");
+        return true;
+    }
+    const StructLayout &lay = it_l->second;
+    ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr al{};
+    al.op = ir::IrOp::ALLOCA;
+    al.type = ir::IrType::I8;
+    al.dst = addr;
+    al.imm = (uint64_t)lay.size_bytes;
+    // Host SIEMPRE: ver el comentario extenso de la rama sin init-list.
+    al.host_alloca = true;
+    fn_->values[addr].is_host_ptr = true;
+    al.source_line = vd->loc.line;
+    emit(current_block_, std::move(al));
+    // Seguridad: zero-inicializar TODO el struct antes de escribir los
+    // campos listados.  Asi los campos NO presentes en el init-list quedan
+    // a 0 (no basura de la pila).  Subsume el zero de los bit fields.
+    emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
+    // Valores por defecto de los campos (`u8 a = 0x10`); el init-list
+    // explicito de abajo sobrescribe los campos que liste.
+    emit_struct_field_defaults(addr, lay, vd->loc.line);
+    // @Virtual: fijar el vptr del struct polimorfico a su vtable (tras el
+    // zero_fill; el init-list solo escribe campos, no el vptr en offset 0).
+    if (lay.is_polymorphic) emit_struct_vptr_init(addr, lay, vd->loc.line);
+    // Zero los storage words de bit fields antes del
+    // loop para evitar que el RMW lea basura del ALLOCA.  Los
+    // unique (offset, size) ya estan en lay.fields para bit
+    // fields; emit STORE 0 una sola vez por word.
+    std::set<std::pair<uint32_t, uint32_t>> zeroed_bf;
+    for (const auto &f : lay.fields) {
+        if (f.bit_width == 0) continue;
+        auto key = std::make_pair(f.offset, f.size);
+        if (!zeroed_bf.insert(key).second) continue;
+        ir::IrType ft_zero = ir_type_from_primitive(f.type.kind);
+        ir::IrValueId v_zero = emit_const(ft_zero, 0, vd->loc.line);
+        ir::IrValueId v_addr_w = addr;
+        if (f.offset > 0) {
+            ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, (uint64_t)f.offset, vd->loc.line);
+            v_addr_w = emit_ptr_add(addr, v_off, vd->loc.line);
+        }
+        emit_store_typed(v_addr_w, v_zero, ft_zero, vd->loc.line);
+    }
+    for (size_t i = 0; i < il->elements.size(); ++i) {
+        const StructFieldInfo *fi = nullptr;
+        if (il->is_designated) {
+            const std::string &fname = il->field_names[i];
+            for (const auto &f : lay.fields) {
+                if (f.name == fname) {
+                    fi = &f;
+                    break;
+                }
+            }
+            if (!fi) {
+                error_at(vd->loc,
+                         "lowering: campo '" + fname + "' no existe");
+                continue;
+            }
+        } else {
+            if (i >= lay.fields.size()) {
+                error_at(vd->loc, "lowering: init list excede campos");
+                break;
+            }
+            fi = &lay.fields[i];
+        }
+        // Campo STRUCT inicializado con un init-list ANIDADO
+        // (`{.min = {.x=.., .y=..}}` o `{.min = Punto{...}}`): se rellena
+        // RECURSIVAMENTE in-place en la direccion del campo.  lower_expr no
+        // baja un InitListExpr como valor -> hay que tratarlo aqui.
+        if (fi->type.kind == PrimitiveKind::STRUCT &&
+            il->elements[i]->kind == ast::NodeKind::InitListExpr) {
+            ir::IrValueId v_faddr = addr;
+            if (fi->offset > 0) {
+                ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
+                v_faddr = emit_ptr_add(addr, v_off, vd->loc.line);
+            }
+            auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
+            if (it_sl == tc_.struct_layouts().end()) {
+                error_at(vd->loc, "lowering: struct '" +
+                                      fi->type.struct_name +
+                                      "' sin layout (init anidado)");
+                continue;
+            }
+            emit_struct_init_fields(
+                v_faddr, it_sl->second,
+                static_cast<ast::InitListExpr *>(il->elements[i].get()),
+                vd->loc.line);
+            continue;
+        }
+        ir::IrValueId v_val = lower_expr(il->elements[i].get());
+        if (v_val == ir::IR_NO_VALUE) continue;
+        const ir::IrType ir_ft = ir_type_from_primitive(fi->type.kind);
+        const bool elem_is_literal =
+            il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
+            il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
+            il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
+            il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
+            il->elements[i]->kind == ast::NodeKind::NullLitExpr;
+        v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_ft,
+                               vd->loc.line,
+                               /*is_explicit=*/elem_is_literal);
+        ir::IrValueId v_addr = addr;
+        if (fi->offset > 0) {
+            ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, (uint64_t)fi->offset, vd->loc.line);
+            v_addr = emit_ptr_add(addr, v_off, vd->loc.line);
+        }
+        // Campo AGREGADO inline (struct/array value-type): @c v_val es la
+        // DIRECCION del agregado origen -> copia memberwise (qword a
+        // qword) sus bytes al campo, NO un STORE escalar (que guardaria la
+        // direccion origen).  Sin esto un `Outer o = {.w = inner}`
+        // guardaba &inner en o.w y leer o.w.v devolvia la direccion
+        // (bug struct-en-struct, value-type anidado).
+        // Un campo de tipo `@overlay struct` NO es un agregado inline:
+        // guarda el HANDLE de la vista (8 bytes) -> STORE escalar (abajo).
+        if ((fi->type.kind == PrimitiveKind::STRUCT &&
+             !type_is_overlay(fi->type)) ||
+            fi->type.kind == PrimitiveKind::ARRAY) {
+            uint64_t sz = size_of_type(fi->type);
+            if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
+                auto it_sl =
+                    tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl != tc_.struct_layouts().end())
+                    sz = (uint64_t)it_sl->second.size_bytes;
+            }
+            if (sz == 0) sz = 8;
+            emit_memberwise_copy(v_addr, v_val, sz, vd->loc.line);
+            if (fi->type.kind == PrimitiveKind::STRUCT) {
+                auto it_sl =
+                    tc_.struct_layouts().find(fi->type.struct_name);
+                if (it_sl != tc_.struct_layouts().end() &&
+                    it_sl->second.has_copy_hook) {
+                    emit_struct_method_on_host_field(
+                        v_addr, fi->type.struct_name,
+                        fi->type.struct_name + "____clone__", vd->loc.line);
+                }
+            }
+            continue;
+        }
+        // Bit field en init list: read-modify-write.
+        // El ALLOCA inicial deja basura; debemos LOAD el storage
+        // word actual, limpiar los bits del rango con AND ~mask,
+        // OR con (val<<offset), STORE.  Igual que en lower_assign
+        // para bit fields.
+        if (fi->bit_width > 0) {
+            ir::IrValueId v_old = fn_->new_value(ir_ft);
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir_ft;
+            ld.dst = v_old;
+            ld.operands = {v_addr};
+            ld.source_line = vd->loc.line;
+            emit(current_block_, std::move(ld));
+            const uint64_t mask =
+                (fi->bit_width == 64)
+                    ? UINT64_MAX
+                    : ((uint64_t(1) << fi->bit_width) - 1);
+            const uint64_t inv_mask = ~(mask << fi->bit_offset);
+            ir::IrValueId v_inv = emit_const(ir_ft, inv_mask, vd->loc.line);
+            ir::IrValueId v_clr = fn_->new_value(ir_ft);
+            {
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ir_ft;
+                an.dst = v_clr;
+                an.operands = {v_old, v_inv};
+                an.source_line = vd->loc.line;
+                emit(current_block_, std::move(an));
+            }
+            ir::IrValueId v_msk = emit_const(ir_ft, mask, vd->loc.line);
+            ir::IrValueId v_tr = fn_->new_value(ir_ft);
+            {
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ir_ft;
+                an.dst = v_tr;
+                an.operands = {v_val, v_msk};
+                an.source_line = vd->loc.line;
+                emit(current_block_, std::move(an));
+            }
+            ir::IrValueId v_sh = v_tr;
+            if (fi->bit_offset > 0) {
+                ir::IrValueId v_amt = emit_const(
+                    ir_ft, (uint64_t)fi->bit_offset, vd->loc.line);
+                v_sh = fn_->new_value(ir_ft);
+                ir::IrInstr sh{};
+                sh.op = ir::IrOp::SHL;
+                sh.type = ir_ft;
+                sh.dst = v_sh;
+                sh.operands = {v_tr, v_amt};
+                sh.source_line = vd->loc.line;
+                emit(current_block_, std::move(sh));
+            }
+            ir::IrValueId v_new = fn_->new_value(ir_ft);
+            {
+                ir::IrInstr or_{};
+                or_.op = ir::IrOp::OR;
+                or_.type = ir_ft;
+                or_.dst = v_new;
+                or_.operands = {v_clr, v_sh};
+                or_.source_line = vd->loc.line;
+                emit(current_block_, std::move(or_));
+            }
+            emit_store_typed(v_addr, v_new, ir_ft, vd->loc.line);
+            continue;
+        }
+        emit_store_typed(v_addr, v_val, ir_ft, vd->loc.line);
+    }
+    bind(vd->name, addr);
+    return true;
+}
+
+/**
+ * @brief Declara una variable de tipo struct (o enum, que comparte camino).
+ *
+ * Reserva el hueco en memoria del anfitrion -- en los tres modos, porque el
+ * callee solo recibe una direccion y no sabria si lo que hay detras es de la
+ * pila de la maquina o del anfitrion -- y ata el nombre a esa direccion.  Los
+ * campos se acceden despues como base + desplazamiento.
+ *
+ * El hueco se pone a cero antes de escribir nada: la pila trae lo que hubiera,
+ * y un campo sin valor declarado se quedaria con esa basura.  Si el struct
+ * tiene destructor o guarda punteros con dueno, aqui se apunta ademas la
+ * limpieza que toca al salir del ambito.
+ *
+ * @param vd       La declaracion.
+ * @param sem_type El tipo ya resuelto (alias aplicados).
+ * @return @c true si era un struct y quedo bajado.
+ */
+bool Lowering::try_lower_struct_var(ast::VarDeclStmt *vd,
+                                    const Type &sem_type) {
+    if (sem_type.kind != PrimitiveKind::STRUCT) return false;
+    const auto &layouts = tc_.struct_layouts();
+    auto it = layouts.find(sem_type.struct_name);
+    // ADTs: si NO esta en struct_layouts, puede ser un enum
+    // (compartimos PrimitiveKind::STRUCT para reusar el camino
+    // de value-type).  Buscar en enum_layouts_ y alocar slot
+    // de @c size_bytes (8 + 8*max_payload_fields).
+    if (it == layouts.end()) {
+        const auto &elays = tc_.enum_layouts();
+        auto ite = elays.find(sem_type.struct_name);
+        if (ite != elays.end()) {
+            const EnumLayout &elay = ite->second;
+            const ir::IrValueId eaddr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr eal{};
+            eal.op = ir::IrOp::ALLOCA;
+            eal.type = ir::IrType::I8;
+            eal.dst = eaddr;
+            eal.imm = static_cast<uint64_t>(elay.size_bytes);
+            // Todo agregado (struct Y enum) vive en memoria HOST en los
+            // tres modos.  Ver la rama STRUCT: si unos acaban en host y
+            // otros en la pila VM, el callee -- que solo recibe una
+            // direccion -- lee unos u otros como basura.
+            eal.host_alloca = true;
+            eal.source_line = vd->loc.line;
+            emit(current_block_, std::move(eal));
+            fn_->values[eaddr].is_host_ptr = true;
+            // La variable es un value-type: se bindea a un SLOT ESTABLE
+            // (@c eaddr, ALLOCA en VM stack) y el inicializador se COPIA
+            // qword-by-qword al slot -- MISMO modelo que un struct
+            // (ver rama STRUCT abajo).  Antes se bindeaba la variable al
+            // slot del constructor (repunte del puntero); eso rompia con
+            // una asignacion condicional (`if { t = X }` / arm de match):
+            // el var-decl apuntaba a un slot (p.ej. GC-host) y el assign
+            // a otro (ALLOCA VM), un PHI mezclaba punteros de naturaleza
+            // distinta y el LOAD del tag del `match t` usaba movh sobre
+            // una direccion VM -> SIGSEGV.  Con el slot estable, `t`
+            // tiene UNA sola direccion (VM) y el match lee siempre con mov.
+            bind(vd->name, eaddr);
+            if (vd->init) {
+                const ir::IrValueId init_addr = lower_expr(vd->init.get());
+                if (init_addr != ir::IR_NO_VALUE) {
+                    emit_enum_copy(eaddr, init_addr,
+                                   fn_->values[init_addr].is_host_ptr,
+                                   elay.size_bytes, vd->loc.line);
+                }
+            }
+            return true;
+        }
+        error_at(vd->loc, "lowering: struct/enum desconocido '" +
+                              sem_type.struct_name + "'");
+        return true;
+    }
+    const StructLayout &lay = it->second;
+    // ALLOCA del IR reserva count * sizeof(T) bytes; pasamos
+    // tipo i8 para que count sea exactamente size_bytes.  El
+    // emisor lo traduce a 'subsp rsp, N' + 'readcur rDst'.
+    const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::ALLOCA;
+    ins.type = ir::IrType::I8; // unidad: 1 byte
+    ins.dst = addr;
+    ins.imm = (uint64_t)lay.size_bytes;
+    ins.source_line = vd->loc.line;
+    // AOT bare (native_poo_): NO hay VM stack -> el struct debe vivir
+    // en la pila nativa (host_alloca).  Sin esto, un struct que
+    // escapa (p.ej. se pasa por puntero a un metodo s.metodo()) se
+    // aloca con ALLOCA_VM ([rbx+0x40]); el .exe standalone no tiene
+    // ProcessVM en rbx -> SIGSEGV.
+    //
+    // Bug host-vs-VM (2026-07-15): tambien en interp/JIT cuando se toma
+    // `&p`.  El comentario anterior daba por bueno que "los escapantes
+    // usan VM stack que el runtime mapea", pero el consumidor del `P*`
+    // resultante (param, campo o elemento) lo deref-ea con movh por la
+    // convencion `T*`=host -> movh sobre direccion VM -> SIGSEGV.  Solo
+    // pasaba inadvertido mientras el inliner borraba la llamada.  Un
+    // struct que NO se address-takea se queda en la pila VM (y el
+    // ir_optimizer ya lo promueve por perf si no escapa).
+    // Host SIEMPRE, no solo en AOT ni solo si se toma la direccion.  Mismo
+    // criterio (y mismo motivo) que el buffer de un `T[N]` local.
+    //
+    // Que fuera CONDICIONAL era el bug: cualquier cosa que marcara UN local
+    // lo mandaba a host y dejaba al de al lado en la pila VM.  El callee no
+    // puede distinguirlos -- recibe una direccion y punto -- asi que leia
+    // uno de los dos como basura, con el otro funcionando (que es lo que lo
+    // hacia dificil de ver).  Medido: dos structs y un metodo con arg ->
+    // this=(0,0) y o=(1,2).  Con TODOS los agregados en host, caller y
+    // callee coinciden siempre.  Memoria VM explicita = `VirtualPtr<T>`.
+    ins.host_alloca = true;
+    const bool struct_is_host = ins.host_alloca;
+    emit(current_block_, std::move(ins));
+    if (struct_is_host) fn_->values[addr].is_host_ptr = true;
+    bind(vd->name, addr);
+    // Seguridad + RAII: zero-inicializar SIEMPRE el buffer del struct.  Un
+    // struct local en pila NO se zeroea solo (a diferencia de un objeto
+    // GC); sin esto, (a) los campos no asignados exponen basura de la pila
+    // (seguridad), y (b) un campo shared/unique/closure sin asignar tendria
+    // un ctrl/slot basura y su dtor haria free de basura (UAF).  El
+    // init-list / copy posterior sobrescribe los campos que toque.
+    emit_zero_fill(addr, (uint64_t)lay.size_bytes, vd->loc.line);
+    // Declaracion sin init (`P p;`): aplicar los valores por defecto de los
+    // campos.  Si hay init (copia de otro struct/llamada) el copy de abajo
+    // sobrescribe todo, asi que los defaults solo aplican sin init.
+    if (!vd->init) emit_struct_field_defaults(addr, lay, vd->loc.line);
+    // @Virtual: un struct polimorfico recien construido apunta su vptr
+    // (offset 0) a la vtable de SU tipo declarado.  Va tras el zero_fill
+    // (que dejo el vptr en 0) y los defaults.  Para `Derivado d;` fija
+    // vptr=vtable_Derivado, de modo que un dispatch posterior por `Base*`
+    // resuelve al metodo del derivado (dispatch dinamico correcto).
+    if (lay.is_polymorphic && !vd->init)
+        emit_struct_vptr_init(addr, lay, vd->loc.line);
+    // Ownership ruta B (copy-hook): `S b = a;` donde S declara `__clone__`
+    // y `a` es un lvalue struct existente (IdentExpr) es una COPIA.  Modelo
+    // (estilo Rust Clone): memcpy bit a bit a->b (abajo) y DESPUES
+    // `b.__clone__()` (CALL <S>____clone__(b)) que aplica el efecto sobre
+    // la copia (p.ej. ++refcount de su recurso).  Opera sobre `this`=b
+    // (misma memory class que cualquier metodo de struct -> sin mismatch
+    // host/VM). `S b = move(a)` o `S b = call()` (valor
+    // fresco/transferencia) NO entran.
+    const bool do_copy_hook =
+        vd->init && vd->init->kind == ast::NodeKind::IdentExpr &&
+        lay.has_copy_hook &&
+        escaping_locals_.find(vd->name) == escaping_locals_.end();
+    // B3 fix: si hay inicializador, lower-lo como PTR al struct
+    // origen y copiar qword-by-qword al slot ALLOCA recien creado.
+    // Soporta:
+    //   - Call result: `Punto v = funcion_que_devuelve_struct(...)`
+    //   - read_borrow: `Punto v = read_borrow(b)` (B2 pass-through)
+    //   - Otros SSA values PTR a struct.
+    // El init list (que SI estaba soportado) se maneja en la rama
+    // de mas arriba antes de llegar aqui (linea 1837).
+    if (vd->init) {
+        const ir::IrValueId v_src = lower_expr(vd->init.get());
+        if (v_src != ir::IR_NO_VALUE) {
+            // Heredar is_host_ptr del source para los LOADs.  Si
+            // el src viene de read_borrow / ptr_of (unique), es
+            // host_ptr; si viene de un struct stack ALLOCA es VM.
+            const bool src_is_host = fn_->values[v_src].is_host_ptr;
+            // Copia qword-by-qword (size_bytes redondeado a 8).
+            const uint64_t qwords = (lay.size_bytes + 7) / 8;
+            for (uint64_t qi = 0; qi < qwords; ++qi) {
+                const uint64_t off = qi * 8;
+                const ir::IrValueId v_off =
+                    emit_const(ir::IrType::I64, static_cast<int64_t>(off),
+                               vd->loc.line);
+                // src + off
+                const ir::IrValueId v_src_at =
+                    fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_src_at].is_host_ptr = src_is_host;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_src_at;
+                    ad.operands = {v_src, v_off};
+                    ad.source_line = vd->loc.line;
+                    emit(current_block_, std::move(ad));
+                }
+                // LOAD i64 from src+off
+                const ir::IrValueId v_word =
+                    fn_->new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr ld{};
+                    ld.op = ir::IrOp::LOAD;
+                    ld.type = ir::IrType::I64;
+                    ld.dst = v_word;
+                    ld.operands = {v_src_at};
+                    ld.source_line = vd->loc.line;
+                    emit(current_block_, std::move(ld));
+                }
+                // dst slot + off.  Su naturaleza se HEREDA del slot: dar
+                // por hecho que es VM hacia que la copia escribiera con
+                // `mov` sobre una direccion host -> el struct se quedaba a
+                // ceros (y su copy-hook/dtor operaban sobre basura).
+                const ir::IrValueId v_dst_at =
+                    fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_dst_at].is_host_ptr =
+                    fn_->values[addr].is_host_ptr;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_dst_at;
+                    ad.operands = {addr, v_off};
+                    ad.source_line = vd->loc.line;
+                    emit(current_block_, std::move(ad));
+                }
+                // STORE i64 [dst+off] = word
+                emit_store_typed(v_dst_at, v_word,
+                                 ir::IrType::I64, vd->loc.line);
+            }
+        }
+    }
+    // Copy-hook: tras el memcpy, `b.__clone__()` aplica el efecto de copia
+    // sobre la nueva copia (this = addr = b).
+    if (do_copy_hook) {
+        ir::IrInstr cc{};
+        cc.op = ir::IrOp::CALL;
+        cc.type = ir::IrType::VOID;
+        cc.dst = ir::IR_NO_VALUE;
+        cc.operands = {addr}; // this = b (la copia)
+        cc.func_name = sem_type.struct_name + "__" + "__clone__";
+        cc.source_line = vd->loc.line;
+        emit(current_block_, std::move(cc));
+    }
+    // Fase 2a interop C / ownership: destructor automatico (RAII) del
+    // struct value-type local con `~Struct()` declarado y que NO escapa.
+    // CALL directo a <Struct>__dtor(addr) al exit del scope (dispatch
+    // estatico, sin vtable; inlineable -> un dtor trivial cuesta ~0).  Si
+    // el struct ESCAPA (return/store -> escaping_locals_), se SUPRIME el
+    // cleanup: move-on-return (el caller re-registra el dtor de su copia
+    // -> un solo free).  Cero overhead para structs sin `~Struct()`.
+    if (escaping_locals_.find(vd->name) == escaping_locals_.end()) {
+        bool has_dtor = false;
+        for (const auto &mi : lay.methods)
+            if (mi.is_destructor) {
+                has_dtor = true;
+                break;
+            }
+        if (has_dtor) {
+            CleanupAction act;
+            act.kind = CleanupAction::Kind::STRUCT_DTOR;
+            act.operands = {addr};
+            act.source_line = vd->loc.line;
+            act.refresh_name = vd->name;
+            // Naming de lower_struct_methods: <Struct>__ + __dtor.
+            act.func_name = sem_type.struct_name + "__" + "__dtor";
+            cleanup_stack_.push_back(std::move(act));
+        }
+        // Ownership escape-sensitive: si el struct tiene campos closure
+        // (lambda con captura) y su valor llega POR MOVE desde una call
+        // (init = CallExpr) que retorna un struct con closure escapado, su
+        // env vive en HEAP y este consumidor es el unico responsable de
+        // liberarlo al exit del scope (el productor suprimio su cleanup via
+        // escaping_locals_ al hacer return).  Registramos CLOSURE_ENV_FREE
+        // con los offsets de los campos fn.  El caso local-no-escapa NO
+        // entra aqui (su env vive en stack, sin liberacion).
+        if (vd->init && vd->init->kind == ast::NodeKind::CallExpr) {
+            std::vector<uint32_t> fn_offs;
+            for (const auto &f : lay.fields)
+                if (f.type.kind == PrimitiveKind::FUNCTION &&
+                    !f.type.fn_is_raw)
+                    fn_offs.push_back(f.offset);
+            if (!fn_offs.empty()) {
+                CleanupAction act;
+                act.kind = CleanupAction::Kind::CLOSURE_ENV_FREE;
+                act.operands = {addr};
+                act.source_line = vd->loc.line;
+                act.refresh_name = vd->name;
+                act.closure_field_offsets = std::move(fn_offs);
+                cleanup_stack_.push_back(std::move(act));
+            }
+        }
+    }
+    return true;
+}
+
+/**
+ * @brief Declara una variable de tipo array nativo `T[N]`.
+ *
+ * Desde el lowering un array es lo mismo que un struct: un hueco contiguo y un
+ * nombre atado a su direccion base, con `arr[i]` resuelto luego como base mas
+ * i por el tamano del elemento.  Lo que cambia es de donde salen los bytes
+ * iniciales, y hay tres formas:
+ *
+ *   - de un literal de cadena (`u8[N] s = "hola"`), que se escribe byte a byte
+ *     sin promoverlo a objeto cadena, porque esto es memoria cruda sin GC; si
+ *     el texto no cabe es un error, y si sobra hueco el resto queda a cero;
+ *   - de una lista (`i32 v[3] = {1, 2, 3}`), solo posicional -- un array no
+ *     tiene nombres de campo que designar;
+ *   - sin inicializador, que reserva y pone a cero.
+ *
+ * @param vd       La declaracion.
+ * @param sem_type El tipo ya resuelto (alias aplicados).
+ * @return @c true si era un array y quedo bajado.
+ */
+bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd,
+                                   const Type &sem_type) {
+    if (sem_type.kind != PrimitiveKind::ARRAY) return false;
+    // C-style string init para arrays byte-like: `u8[N] arr = "literal"`.
+    // Detecta el patron y emite STOREs byte-a-byte del contenido del
+    // string literal, con zerificacion del resto si N > strlen.  Si
+    // strlen > N reporta error (truncation, comportamiento C).
+    // No se promueve el literal a StringObject (es array de bytes
+    // crudo, sin GC).  Aceptamos solo literales no interpolados.
+    if (vd->init &&
+        vd->init->kind == ast::NodeKind::StringLitExpr && sem_type.pointee &&
+        (sem_type.pointee->kind == PrimitiveKind::U8 ||
+         sem_type.pointee->kind == PrimitiveKind::I8 ||
+         sem_type.pointee->kind == PrimitiveKind::CHAR)) {
+        auto *sl = static_cast<ast::StringLitExpr *>(vd->init.get());
+        if (sl->is_interpolated()) {
+            error_at(vd->loc,
+                     "init de array con string no acepta interpolacion");
+            return true;
+        }
+        const std::string &bytes = sl->value;
+        const uint32_t str_n = (uint32_t)bytes.size();
+        const uint32_t arr_n =
+            sem_type.array_size > 0 ? (uint32_t)sem_type.array_size : str_n;
+        if (str_n > arr_n) {
+            error_at(vd->loc, "literal de string (" + std::to_string(str_n) +
+                                  " bytes) mas grande que el array (" +
+                                  std::to_string(arr_n) + ")");
+            return true;
+        }
+        const Type elem_t = *sem_type.pointee;
+        const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
+        const uint32_t elem_sz = (uint32_t)primitive_size_bytes(elem_t.kind);
+        // ALLOCA del array (siempre arr_n elementos).
+        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = addr;
+            al.imm = (uint64_t)arr_n * elem_sz;
+            al.source_line = vd->loc.line;
+            /* Buffer HOST: ver la nota de las otras rutas de array local. */
+            al.host_alloca = true;
+            fn_->values[addr].is_host_ptr = true;
+            emit(current_block_, std::move(al));
+        }
+        // STORE byte-a-byte del string.
+        for (uint32_t i = 0; i < str_n; ++i) {
+            ir::IrValueId v_val =
+                emit_const(ir_elem, (uint64_t)(uint8_t)bytes[i], vd->loc.line);
+            ir::IrValueId v_addr_i = addr;
+            if (i > 0) {
+                ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
+                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
+            }
+            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
+        }
+        // Zerificar el resto (semantica C: padding a cero).
+        for (uint32_t i = str_n; i < arr_n; ++i) {
+            ir::IrValueId v_zero = emit_const(ir_elem, 0, vd->loc.line);
+            ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, (uint64_t)i * elem_sz, vd->loc.line);
+            ir::IrValueId v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
+            emit_store_typed(v_addr_i, v_zero, ir_elem, vd->loc.line);
+        }
+        bind(vd->name, addr);
+        return true;
+    }
+
+    // Array init C-style: `i32 arr[N] = {e0, e1, ...};`.
+    // Detectamos InitListExpr en el inicializador y emitimos:
+    //   ALLOCA del array (igual que sin init).
+    //   Por cada elemento: STORE val a (base + i * sizeof(T)).
+    //   bind nombre al PTR base.
+    // Solo positional (sin .field=); reportamos error si is_designated.
+    if (vd->init &&
+        vd->init->kind == ast::NodeKind::InitListExpr) {
+        auto *il = static_cast<ast::InitListExpr *>(vd->init.get());
+        if (il->is_designated) {
+            error_at(vd->loc,
+                     "lowering: init designado '.field=' no aplica a arrays");
+            return true;
+        }
+        const Type elem_t = sem_type.pointee ? *sem_type.pointee : Type{};
+        const uint32_t elem_sz = (uint32_t)primitive_size_bytes(elem_t.kind);
+        if (elem_sz == 0) {
+            error_at(vd->loc, "lowering: tipo del elemento sin sizeof");
+            return true;
+        }
+        const uint32_t arr_size = sem_type.array_size > 0
+                                      ? (uint32_t)sem_type.array_size
+                                      : (uint32_t)il->elements.size();
+        if (il->elements.size() > arr_size) {
+            error_at(vd->loc, "lowering: init list mas elementos que el array");
+            return true;
+        }
+        // ALLOCA arr_size * elem_sz bytes.
+        ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = addr;
+        al.imm = (uint64_t)arr_size * elem_sz;
+        al.source_line = vd->loc.line;
+        /* El buffer va a memoria HOST, igual que el de un array local SIN
+         * inicializador (ver la otra rama y su nota de 2026-07-15).  Este
+         * camino -- el de `T[N] a = {...}` -- se quedo sin marcar, asi que el
+         * array acababa en la pila de la VM mientras todo lo que lo consume
+         * (`a` decaido a `T*`, `&a[i]`, la funcion que lo recibe) emitia
+         * accesos de HOST.  Leer una direccion VM como si fuera host mata el
+         * proceso, y solo se notaba al RECORRERLO con indice variable: con
+         * indices constantes el optimizador resolvia los accesos antes. */
+        al.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
+        emit(current_block_, std::move(al));
+        // STORE de cada elemento.
+        const ir::IrType ir_elem = ir_type_from_primitive(elem_t.kind);
+        for (size_t i = 0; i < il->elements.size(); ++i) {
+            ir::IrValueId v_val = lower_expr(il->elements[i].get());
+            if (v_val == ir::IR_NO_VALUE) continue;
+            // Suprimir warning de narrowing si el elemento es literal
+            // (`{10, 20, ...}` con i64-defaulted literals encajando en
+            // el tipo de elemento).  Mismo razonamiento que en
+            // var-decl con init literal.
+            const bool elem_is_literal =
+                il->elements[i]->kind == ast::NodeKind::IntLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::FloatLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::BoolLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::CharLitExpr ||
+                il->elements[i]->kind == ast::NodeKind::NullLitExpr;
+            v_val = cast_if_needed(v_val, fn_->values[v_val].type, ir_elem,
+                                   vd->loc.line,
+                                   /*is_explicit=*/elem_is_literal);
+            ir::IrValueId v_addr_i = addr;
+            if (i > 0) {
+                ir::IrValueId v_off = emit_const(
+                    ir::IrType::I64, (uint64_t)(i * elem_sz), vd->loc.line);
+                v_addr_i = emit_ptr_add(addr, v_off, vd->loc.line);
+            }
+            emit_store_typed(v_addr_i, v_val, ir_elem, vd->loc.line);
+        }
+        bind(vd->name, addr);
+        return true;
+    }
+
+    // Array nativo T[N]: identico a struct desde la optica del lowering.
+    // Reservamos N*sizeof(T) bytes en stack y guardamos la direccion base
+    // como "valor" de la variable.  Los accesos arr[i] se desugan a
+    // ADD(addr, i*sizeof(T)) + LOAD/STORE igual que para T*; el tipo del
+    // pointee se obtiene del propio sem_type para escalar el offset.
+    {
+        // bug4: array dinamico `T[]` con init `new T[N]` o assigned
+        // desde otro host_ptr.  El slot guarda el host_ptr al buffer
+        // alocado en heap.  Cuando array_size == 0 y hay init, bindeo
+        // el local al SSA value del init (host_ptr) sin ALLOCA stack.
+        if (!sem_type.pointee || sem_type.array_size == 0) {
+            if (vd->init) {
+                const ir::IrValueId v_init = lower_expr(vd->init.get());
+                if (v_init != ir::IR_NO_VALUE) {
+                    // Mark is_host_ptr para que LOAD/STORE indirectos
+                    // emitan movh.  El IR del new T[N] ya lo marca.
+                    bind(vd->name, v_init);
+                    return true;
+                }
+            }
+            error_at(
+                vd->loc,
+                "lowering: array sin tamano fijo requiere init con `new T[N]`");
+            return true;
+        }
+        const size_t bytes = size_of_type(sem_type);
+        if (bytes == 0) {
+            error_at(vd->loc, "lowering: tamano del array es 0 (tipo de "
+                              "elemento desconocido?)");
+            return true;
+        }
+        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::ALLOCA;
+        ins.type = ir::IrType::I8;
+        ins.dst = addr;
+        ins.imm = (uint64_t)bytes;
+        ins.source_line = vd->loc.line;
+        // Bug host-vs-VM (2026-07-15): el buffer de un `T[N]` local va SIEMPRE
+        // a memoria host, no solo en AOT.  Su tipo es un array NO virtual (ver
+        // @c type_from_node), asi que `arr` decaido a `T[]`/`T*` y `&arr[i]`
+        // son direcciones host y sus consumidores emiten movh.  Cuando el
+        // buffer se quedaba en la pila VM (interp/JIT) las dos rutas
+        // discrepaban: `sum_array(arr, n)` leia el array con movh sobre una
+        // direccion VM.  Un array VM explicito se nombra con `VirtualPtr<T>`.
+        ins.host_alloca = true;
+        emit(current_block_, std::move(ins));
+        fn_->values[addr].is_host_ptr = true;
+        bind(vd->name, addr);
+        // Zero-inicializar SIEMPRE el buffer del array local (mismo motivo que
+        // los structs, ~L4415): un array en pila NO se zeroea solo.  El interp
+        // daba 0 solo porque su VM stack esta a cero; el JIT (pila HOST) leia
+        // basura -> DIVERGENCIA interp/JIT (un `i32[N] a` leido sin escribir, o
+        // `a[i]++` sobre un elemento no inicializado, daba garbage en JIT).
+        // Ademas es seguridad: sin esto el array expone basura de la pila.
+        emit_zero_fill(addr, (uint64_t)bytes, vd->loc.line);
+        if (vd->init) {
+            error_at(vd->loc, "lowering: inicializador de array aun no "
+                              "soportado en esta ruta");
+        }
+    }
+    return true;
+}
 
 } // namespace vx
