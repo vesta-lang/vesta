@@ -209,6 +209,41 @@ class Lowering {
     ir::IrValueId emit_const(ir::IrType t, uint64_t imm, uint32_t source_line);
 
     /**
+     * @name Escribir al exterior, y los literales que se escriben
+     *
+     * Vivian como lambdas dentro de la bajada de los builtins, y de ahi no
+     * podian salir: media docena de sitios los necesitaban y la funcion que los
+     * contenia tenia siete mil lineas.  Son metodos porque no capturan nada --
+     * solo usan el estado del propio bajador --, asi que el cambio no altera
+     * ninguna llamada.
+     *
+     * Escribir tiene DOS caminos y por eso no es una linea: con el runtime de
+     * la maquina virtual delante se llama a su primitiva de salida; en un
+     * binario nativo no hay tal cosa, asi que se emiten los bytes por un
+     * simbolo que el programador puede redefinir en Vesta.
+     * @{
+     */
+
+    /// @brief Interna un literal de cadena y devuelve (direccion, longitud).
+    std::pair<ir::IrValueId, ir::IrValueId>
+    emit_string_lit(ast::StringLitExpr *slit);
+
+    /**
+     * @brief Llama a una primitiva de salida por su nombre.
+     *
+     * Si el programa define una funcion con ese nombre, gana la suya: asi se
+     * puede sustituir la salida entera desde Vesta sin tocar el compilador.
+     */
+    void emit_io_prim(const std::string &prim,
+                      const std::vector<ir::IrValueId> &args,
+                      uint32_t source_line);
+
+    /// @brief Escribe un texto conocido al compilar.  Vacio no emite nada.
+    void emit_print_string_literal(const std::string &text,
+                                   uint32_t source_line);
+    /** @} */
+
+    /**
      * @brief Vuelca el resultado de una ejecucion comptime como constantes.
      *
      * El valor ES el bloque de memoria que dejo la ejecucion, asi que se copia

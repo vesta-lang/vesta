@@ -1,0 +1,162 @@
+/*
+ * VestaVM -- Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+/**
+ * @file vx/lowering/io.cpp
+ * @brief Escribir al exterior, y los literales que se escriben.
+ *
+ * Escribir tiene DOS caminos, y de ahi que no sea una linea: con el runtime de
+ * la maquina virtual delante se llama a su primitiva de salida, pasandole el
+ * proceso; en un binario nativo no hay tal cosa, asi que se emiten los bytes
+ * por un simbolo que el programador PUEDE REDEFINIR en Vesta.  Ese segundo
+ * camino es lo que permite que un programa sin sistema operativo detras siga
+ * pudiendo imprimir: quien sabe como se escribe ahi es el, no el compilador.
+ *
+ * Estas cuatro vivian como lambdas dentro de la bajada de los builtins, y de
+ * ahi no podian salir aunque media docena de sitios las necesitara.  No
+ * capturaban nada -- solo usan el estado del propio bajador --, asi que pasar a
+ * metodos no cambio ninguna llamada.
+ */
+#include "util/env_flags.h"
+#include "vx/lowering.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
+#include "vx/asm/asm_effects.h"       // inferencia de clobbers ( AS inc.4)
+#include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
+#include "vx/asm/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
+#include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
+#include "vx/asm/asm_lift_micro.h"
+#include "vx/asm/asm_lift_registro.h"
+#include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
+#include "vx/asm/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
+#include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
+#include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
+#include "vx/comptime/comptime_introspect.h" // helpers compartidos rama A
+#include "vx/generics/concepts.h"      // conceptos como predicado -> CONST bool
+#include "vx/generics/generic_clone.h" // clone_expr (custom print to_string)
+#include "vx/lexer.h"                  // parse de fragments para @Macro
+#include "vx/parser.h"                 // parse_one_expr para @Macro
+#include "ir/ir_optimizer.h"           // register_pure_new_helper
+#include <functional>
+#include <map>
+#include <set>
+#include <sstream>
+#include <utility>
+#include "lowering_internal.h" // la cocina compartida del lowering (no es su interfaz)
+
+namespace vx {
+
+/// La biblioteca nativa de entrada y salida de la maquina virtual.
+const std::string kVestaIoLib = "stdlib/native/io/vesta_io";
+
+std::pair<ir::IrValueId, ir::IrValueId>
+Lowering::emit_string_lit(ast::StringLitExpr *slit) {
+    std::vector<uint8_t> bytes(slit->value.begin(), slit->value.end());
+    const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
+    const uint64_t lit_len = (uint64_t)slit->value.size();
+    const ir::IrValueId v_str = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr is{};
+    is.op = ir::IrOp::STR_LIT_ADDR;
+    is.type = ir::IrType::PTR;
+    is.dst = v_str;
+    is.imm = lit_idx;
+    is.source_line = slit->loc.line;
+    emit(current_block_, std::move(is));
+    const ir::IrValueId v_len =
+        emit_const(ir::IrType::I64, lit_len, slit->loc.line);
+    return {v_str, v_len};
+}
+
+    // Helper que emite getproc en el bloque actual.
+
+
+    // -----------------------------------------------------------------
+    // Helpers para emitir un fragmento de salida.
+    //
+    // emit_print_string_literal(text):  CALLN vio_print(proc, addr, len)
+    //   con text registrado en static_data.  Si text vacio, no-op.
+    //
+    // emit_print_typed_value(expr):  segun el tipo de expr, despacha a
+    //   vio_print_int / _uint / _hex / _float / _bool / _char / o
+    //   vio_print(proc, addr, len) si el tipo es PTR (string).  Solo
+    //   un CALLN por valor; cero overhead intermedio.
+    //
+    // emit_print_arg(expr): si expr es StringLitExpr interpolado,
+    //   itera parts/exprs y emite UN CALLN por fragmento.  Si es un
+    //   string simple emite UN solo CALLN.  Si es escalar despacha
+    //   por tipo via emit_print_typed_value.
+    //
+    // emit_print_newline():  CALLN vio_print_newline (cero args).
+    // -----------------------------------------------------------------
+
+    // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
+    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vesta con
+    // ese nombre (p.ej. `void __vx_write(u8* b, u64 n) {...}`) se llama a la
+    // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
+    // si no, se usa el simbolo C por defecto (CALLN vx_bare_io:<prim>, lo
+    // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
+    // programables en el propio lenguaje sin import ni libreria std.
+void Lowering::emit_io_prim(const std::string &prim,
+                        const std::vector<ir::IrValueId> &args,
+                        uint32_t line) {
+    const bool user_defined = (tc_.function_sig_by_name(prim) != nullptr);
+    ir::IrInstr ins{};
+    ins.type = ir::IrType::VOID;
+    ins.dst = ir::IR_NO_VALUE;
+    ins.operands = args;
+    ins.source_line = line;
+    if (user_defined) {
+        ins.op = ir::IrOp::CALL;
+        ins.func_name = prim;
+    } else {
+        out_mod_->register_native_import("vx_bare_io", prim);
+        ins.op = ir::IrOp::CALLN;
+        ins.func_name = "vx_bare_io:" + prim;
+    }
+    emit(current_block_, std::move(ins));
+}
+
+void Lowering::emit_print_string_literal(const std::string &text,
+                                     uint32_t line) {
+    if (text.empty()) return;
+    std::vector<uint8_t> bytes(text.begin(), text.end());
+    const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
+    const uint64_t lit_len = (uint64_t)text.size();
+    const ir::IrValueId v_str = fn_->new_value(ir::IrType::PTR);
+    ir::IrInstr is{};
+    is.op = ir::IrOp::STR_LIT_ADDR;
+    is.type = ir::IrType::PTR;
+    is.dst = v_str;
+    is.imm = lit_idx;
+    is.source_line = line;
+    emit(current_block_, std::move(is));
+    const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
+    if (native_poo_) {
+        // AOT/bare: sin proc -> escribir los bytes via __vx_write (el
+        // usuario puede redefinirlo en Vesta).  v_str es host_ptr.
+        fn_->values[v_str].is_host_ptr = true;
+        emit_io_prim("__vx_write", {v_str, v_len}, line);
+        return;
+    }
+    const ir::IrValueId v_proc = emit_getproc(line);
+    out_mod_->register_native_import(kVestaIoLib, "vio_print");
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::CALLN;
+    ins.type = ir::IrType::VOID;
+    ins.dst = ir::IR_NO_VALUE;
+    ins.func_name = kVestaIoLib + ":vio_print";
+    ins.operands = {v_proc, v_str, v_len};
+    ins.source_line = line;
+    emit(current_block_, std::move(ins));
+}
+
+
+} // namespace vx

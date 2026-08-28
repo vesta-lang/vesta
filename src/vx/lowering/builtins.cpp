@@ -1578,129 +1578,17 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // Helper interno para registrar un literal de string en static_data
     // y emitir un STR_LIT_ADDR + CONST(len) en el bloque actual.
     // Devuelve par (str_ptr_ir_value, len_ir_value).
-    auto emit_string_lit = [&](ast::StringLitExpr *slit)
-        -> std::pair<ir::IrValueId, ir::IrValueId> {
-        std::vector<uint8_t> bytes(slit->value.begin(), slit->value.end());
-        const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
-        const uint64_t lit_len = (uint64_t)slit->value.size();
-        const ir::IrValueId v_str = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr is{};
-        is.op = ir::IrOp::STR_LIT_ADDR;
-        is.type = ir::IrType::PTR;
-        is.dst = v_str;
-        is.imm = lit_idx;
-        is.source_line = slit->loc.line;
-        emit(current_block_, std::move(is));
-        const ir::IrValueId v_len =
-            emit_const(ir::IrType::I64, lit_len, slit->loc.line);
-        return {v_str, v_len};
-    };
-
-    // Helper que emite getproc en el bloque actual.
-    auto emit_getproc = [&](uint32_t line) -> ir::IrValueId {
-        const ir::IrValueId v_proc = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ip{};
-        ip.op = ir::IrOp::GETPROC;
-        ip.type = ir::IrType::PTR;
-        ip.dst = v_proc;
-        ip.source_line = line;
-        emit(current_block_, std::move(ip));
-        return v_proc;
-    };
-
-    const std::string lib = "stdlib/native/io/vesta_io";
-
-    // -----------------------------------------------------------------
-    // Helpers para emitir un fragmento de salida.
-    //
-    // emit_print_string_literal(text):  CALLN vio_print(proc, addr, len)
-    //   con text registrado en static_data.  Si text vacio, no-op.
-    //
-    // emit_print_typed_value(expr):  segun el tipo de expr, despacha a
-    //   vio_print_int / _uint / _hex / _float / _bool / _char / o
-    //   vio_print(proc, addr, len) si el tipo es PTR (string).  Solo
-    //   un CALLN por valor; cero overhead intermedio.
-    //
-    // emit_print_arg(expr): si expr es StringLitExpr interpolado,
-    //   itera parts/exprs y emite UN CALLN por fragmento.  Si es un
-    //   string simple emite UN solo CALLN.  Si es escalar despacha
-    //   por tipo via emit_print_typed_value.
-    //
-    // emit_print_newline():  CALLN vio_print_newline (cero args).
-    // -----------------------------------------------------------------
-
-    // emit_io_prim(prim, args):  emite la llamada a una primitiva de I/O
-    // nativa (solo native_poo_).  Si el usuario DEFINIO una funcion Vesta con
-    // ese nombre (p.ej. `void __vx_write(u8* b, u64 n) {...}`) se llama a la
-    // SUYA (CALL interno, resuelto en el mismo objeto -> override en Vesta);
-    // si no, se usa el simbolo C por defecto (CALLN vx_bare_io:<prim>, lo
-    // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
-    // programables en el propio lenguaje sin import ni libreria std.
-    auto emit_io_prim = [&](const std::string &prim,
-                            const std::vector<ir::IrValueId> &args,
-                            uint32_t line) {
-        const bool user_defined = (tc_.function_sig_by_name(prim) != nullptr);
-        ir::IrInstr ins{};
-        ins.type = ir::IrType::VOID;
-        ins.dst = ir::IR_NO_VALUE;
-        ins.operands = args;
-        ins.source_line = line;
-        if (user_defined) {
-            ins.op = ir::IrOp::CALL;
-            ins.func_name = prim;
-        } else {
-            out_mod_->register_native_import("vx_bare_io", prim);
-            ins.op = ir::IrOp::CALLN;
-            ins.func_name = "vx_bare_io:" + prim;
-        }
-        emit(current_block_, std::move(ins));
-    };
-
-    auto emit_print_string_literal = [&](const std::string &text,
-                                         uint32_t line) {
-        if (text.empty()) return;
-        std::vector<uint8_t> bytes(text.begin(), text.end());
-        const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
-        const uint64_t lit_len = (uint64_t)text.size();
-        const ir::IrValueId v_str = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr is{};
-        is.op = ir::IrOp::STR_LIT_ADDR;
-        is.type = ir::IrType::PTR;
-        is.dst = v_str;
-        is.imm = lit_idx;
-        is.source_line = line;
-        emit(current_block_, std::move(is));
-        const ir::IrValueId v_len = emit_const(ir::IrType::I64, lit_len, line);
-        if (native_poo_) {
-            // AOT/bare: sin proc -> escribir los bytes via __vx_write (el
-            // usuario puede redefinirlo en Vesta).  v_str es host_ptr.
-            fn_->values[v_str].is_host_ptr = true;
-            emit_io_prim("__vx_write", {v_str, v_len}, line);
-            return;
-        }
-        const ir::IrValueId v_proc = emit_getproc(line);
-        out_mod_->register_native_import(lib, "vio_print");
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ir::IrType::VOID;
-        ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":vio_print";
-        ins.operands = {v_proc, v_str, v_len};
-        ins.source_line = line;
-        emit(current_block_, std::move(ins));
-    };
-
     auto emit_print_newline = [&](uint32_t line) {
         if (native_poo_) {
             emit_print_string_literal("\n", line); // via __vx_write
             return;
         }
-        out_mod_->register_native_import(lib, "vio_print_newline");
+        out_mod_->register_native_import(kVestaIoLib, "vio_print_newline");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":vio_print_newline";
+        ins.func_name = kVestaIoLib + ":vio_print_newline";
         ins.source_line = line;
         emit(current_block_, std::move(ins));
     };
@@ -2182,12 +2070,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                                                                    : 0;
             ir::IrValueId v_align =
                 emit_const(ir::IrType::I64, (uint64_t)align_code, ex->loc.line);
-            out_mod_->register_native_import(lib, "vio_print_fmt");
+            out_mod_->register_native_import(kVestaIoLib, "vio_print_fmt");
             ir::IrInstr ins{};
             ins.op = ir::IrOp::CALLN;
             ins.type = ir::IrType::VOID;
             ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = lib + ":vio_print_fmt";
+            ins.func_name = kVestaIoLib + ":vio_print_fmt";
             ins.operands = {v_arg, v_kind, v_width, v_fill, v_align};
             ins.source_line = ex->loc.line;
             emit(current_block_, std::move(ins));
@@ -2269,12 +2157,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                     emit_io_prim("__vx_pad", {v_fill, v_count}, ex->loc.line);
                     return;
                 }
-                out_mod_->register_native_import(lib, "vio_print_pad");
+                out_mod_->register_native_import(kVestaIoLib, "vio_print_pad");
                 ir::IrInstr pc{};
                 pc.op = ir::IrOp::CALLN;
                 pc.type = ir::IrType::VOID;
                 pc.dst = ir::IR_NO_VALUE;
-                pc.func_name = lib + ":vio_print_pad";
+                pc.func_name = kVestaIoLib + ":vio_print_pad";
                 pc.operands = {v_fill, v_count};
                 pc.source_line = ex->loc.line;
                 emit(current_block_, std::move(pc));
@@ -2286,12 +2174,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 // AOT: escribir los bytes via __vx_write (PURE_NATIVE).
                 emit_io_prim("__vx_write", {v_ptr, v_len}, ex->loc.line);
             } else {
-                out_mod_->register_native_import(lib, "vio_print_buf");
+                out_mod_->register_native_import(kVestaIoLib, "vio_print_buf");
                 ir::IrInstr ins{};
                 ins.op = ir::IrOp::CALLN;
                 ins.type = ir::IrType::VOID;
                 ins.dst = ir::IR_NO_VALUE;
-                ins.func_name = lib + ":vio_print_buf";
+                ins.func_name = kVestaIoLib + ":vio_print_buf";
                 ins.operands = {v_ptr, v_len};
                 ins.source_line = ex->loc.line;
                 emit(current_block_, std::move(ins));
@@ -2387,12 +2275,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             v = cast_if_needed(v, vt, promote, ex->loc.line,
                                /*is_explicit=*/true);
         }
-        out_mod_->register_native_import(lib, func);
+        out_mod_->register_native_import(kVestaIoLib, func);
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":" + func;
+        ins.func_name = kVestaIoLib + ":" + func;
         ins.operands = {v};
         ins.source_line = ex->loc.line;
         emit(current_block_, std::move(ins));
@@ -2528,12 +2416,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        out_mod_->register_native_import(lib, "vio_flush");
+        out_mod_->register_native_import(kVestaIoLib, "vio_flush");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":vio_flush";
+        ins.func_name = kVestaIoLib + ":vio_flush";
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
         out_value = ir::IR_NO_VALUE;
@@ -2622,12 +2510,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             func = "vio_print_gchandle";
         else
             func = "vio_print_cstr"; // host_ptr -> bytes hasta NUL
-        out_mod_->register_native_import(lib, func);
+        out_mod_->register_native_import(kVestaIoLib, func);
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":" + func;
+        ins.func_name = kVestaIoLib + ":" + func;
         ins.operands = {v};
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -2653,12 +2541,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                                 ir::IrType::I64, e->loc.line, true);
         v_w = cast_if_needed(v_w, fn_->values[v_w].type, ir::IrType::I64,
                              e->loc.line, true);
-        out_mod_->register_native_import(lib, "vio_print_pad");
+        out_mod_->register_native_import(kVestaIoLib, "vio_print_pad");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":vio_print_pad";
+        ins.func_name = kVestaIoLib + ":vio_print_pad";
         ins.operands = {v_fill, v_w};
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -2689,12 +2577,12 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        out_mod_->register_native_import(lib, "vio_print_int");
+        out_mod_->register_native_import(kVestaIoLib, "vio_print_int");
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = lib + ":vio_print_int";
+        ins.func_name = kVestaIoLib + ":vio_print_int";
         ins.operands = {v};
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -2716,7 +2604,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         auto *path = static_cast<ast::StringLitExpr *>(e->args[0].get());
         auto *mode = static_cast<ast::StringLitExpr *>(e->args[1].get());
-        out_mod_->register_native_import(lib, "vio_fopen");
+        out_mod_->register_native_import(kVestaIoLib, "vio_fopen");
 
         const ir::IrValueId v_proc = emit_getproc(e->loc.line);
         auto [v_path, v_path_len] = emit_string_lit(path);
@@ -2727,7 +2615,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::I64;
         ins.dst = dst;
-        ins.func_name = lib + ":vio_fopen";
+        ins.func_name = kVestaIoLib + ":vio_fopen";
         ins.operands = {v_proc, v_path, v_path_len, v_mode, v_mode_len};
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -2755,7 +2643,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         v_fp = cast_if_needed(v_fp, fn_->values[v_fp].type, ir::IrType::I64,
                               e->loc.line);
         auto *buf = static_cast<ast::StringLitExpr *>(e->args[1].get());
-        out_mod_->register_native_import(lib, "vio_fwrite");
+        out_mod_->register_native_import(kVestaIoLib, "vio_fwrite");
 
         const ir::IrValueId v_proc = emit_getproc(e->loc.line);
         auto [v_buf, v_buf_len] = emit_string_lit(buf);
@@ -2765,7 +2653,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::I64;
         ins.dst = dst;
-        ins.func_name = lib + ":vio_fwrite";
+        ins.func_name = kVestaIoLib + ":vio_fwrite";
         // Orden de args segun signature C: (proc, vm_addr, size, handle).
         ins.operands = {v_proc, v_buf, v_buf_len, v_fp};
         ins.source_line = e->loc.line;
@@ -2788,14 +2676,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         }
         v_fp = cast_if_needed(v_fp, fn_->values[v_fp].type, ir::IrType::I64,
                               e->loc.line);
-        out_mod_->register_native_import(lib, "vio_fclose");
+        out_mod_->register_native_import(kVestaIoLib, "vio_fclose");
 
         const ir::IrValueId dst = fn_->new_value(ir::IrType::I32);
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLN;
         ins.type = ir::IrType::I32;
         ins.dst = dst;
-        ins.func_name = lib + ":vio_fclose";
+        ins.func_name = kVestaIoLib + ":vio_fclose";
         ins.operands = {v_fp};
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -3668,7 +3556,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
     if (is_static_assert_b) {
         /*  MC.20: `static_assert(cond, msg)` se baja a CALLN
-         * a la virtual lib `vesta_comptime:static_assert`.  El fn
+         * a la virtual kVestaIoLib `vesta_comptime:static_assert`.  El fn
          * recibe (cond_i64, msg_cstr) y emite diagnostic error si
          * cond es 0.  Cuando el macro corre via VM en compile time,
          * la check se ejecuta tambien en compile time -- mismo
@@ -6133,7 +6021,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // LOAD ptr; if (ptr != 0) CALL deleter(ptr); zero slot.
     //
     // El nombre del deleter se almacena en CleanupAction::literal_deleter
-    // con prefijo "@extern:lib:fn" si es extern, o el nombre puro si
+    // con prefijo "@extern:kVestaIoLib:fn" si es extern, o el nombre puro si
     // es Vesta.  El emit_cleanups_all elige CALLN o CALLVM.
     if (is_unique_with || is_shared_with) {
         if (e->args.size() != 2) {
@@ -6163,7 +6051,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             // No es extern -> es funcion Vesta.  Usamos el nombre puro;
             // el cleanup emitira CALLVM @Absolute("code.<name>").
             deleter_label = deleter_id->name;
-        } // else: ya viene con prefijo "@extern:lib:fn".
+        } // else: ya viene con prefijo "@extern:kVestaIoLib:fn".
         // Tier 1: slot 16 + STORE value@+0 + STORE deleter_addr@+8.  HEAP si
         // el unique va a un campo (unique_slot_buf), si no STACK.
         const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
@@ -6193,7 +6081,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             // null-safe).  Sin esto un unique_with(malloc(..), free) que va a
             // un CAMPO (SRET) emitiria `@Absolute("code.free")` -> el linker
             // no resuelve el simbolo (RelocationError code.free).
-            // Extern (`@extern:lib:fn`): tampoco es direccionable como fn
+            // Extern (`@extern:kVestaIoLib:fn`): tampoco es direccionable como fn
             // Vesta; mismo sentinel 0 + literal_deleter local para el call.
             const ir::IrValueId v_zero =
                 emit_const(ir::IrType::I64, 0, e->loc.line);

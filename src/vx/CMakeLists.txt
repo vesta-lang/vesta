@@ -178,6 +178,10 @@ add_library(vx_lib STATIC
     # reflexion, introspeccion comptime, colecciones, concurrencia).  Eran
     # 7425 lineas dentro de lowering.cpp -- el 17% del fichero en UNA funcion.
     lowering/builtins.cpp
+    # Escribir al exterior: con el runtime de la VM delante se llama a su
+    # primitiva; en un binario nativo se emiten los bytes por un simbolo que el
+    # programador puede REDEFINIR en Vesta.
+    lowering/io.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.

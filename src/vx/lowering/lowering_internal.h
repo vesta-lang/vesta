@@ -173,6 +173,16 @@ void annotate_macro_param_idents(
     ast::Stmt *s, const std::unordered_map<std::string, Type> &param_types);
 /** @} */
 
+/**
+ * @brief La biblioteca nativa de entrada y salida de la maquina virtual.
+ *
+ * Se comparte porque los builtins de impresion la nombran en varios sitios y el
+ * nombre tiene que ser EL MISMO en todos: es la clave con la que se registra la
+ * importacion nativa, asi que dos escrituras distintas darian dos
+ * importaciones.
+ */
+extern const std::string kVestaIoLib;
+
 } // namespace vx
 
 #endif // VESTA_VX_LOWERING_INTERNAL_H
