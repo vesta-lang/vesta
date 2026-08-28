@@ -10301,10 +10301,12 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
  * modulo se considera AOP-enabled y se skip-ea el devirt.  Sin esto las
  * callvirt convertidas a call directo saltarian el advice chain runtime.
  */
-static bool module_uses_aop(const IrModule &mod) {
-    for (const auto &cls : mod.classes) {
-        if (cls.is_aspect) return true;
-    }
+static bool module_uses_aop_sin_atribuir(const IrModule &mod) {
+    /* Los aspectos declarados en Vesta SI se atribuyen: el frontend apunta a
+     * que metodo va cada uno en @c metodos_con_aspecto, y entonces basta con
+     * saltarse esos sitios.  Lo que no se puede atribuir es un `addadvice`
+     * escrito a mano en ensamblador: ahi no se sabe a quien apunta, asi que se
+     * renuncia al pase entero, que es lo unico seguro. */
     for (const auto &fn : mod.functions) {
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
@@ -10369,7 +10371,16 @@ bool ir_pass_devirt_cfn(IrFunction &fn) {
 }
 
 bool ir_pass_devirt_monomorphic(IrModule &mod) {
-    if (module_uses_aop(mod)) return false;
+    /* Solo se renuncia al pase ENTERO cuando hay aspectos que no se pueden
+     * atribuir a un metodo concreto -- hoy, un `addadvice` escrito a mano en
+     * ensamblador, que no dice a quien apunta.  Cuando todos estan atribuidos,
+     * cada sitio se mira por separado contra @c metodos_con_aspecto.
+     *
+     * Renunciar por modulo salia caro y es el programa entero: medido en los
+     * bancos de despacho, un aspecto que no tocaba ninguna de las clases del
+     * programa costaba entre 1,2x y 9,5x. */
+    if (!mod.aspectos_atribuidos || module_uses_aop_sin_atribuir(mod))
+        return false;
 
     /* Indice por nombre de clase. */
     std::unordered_map<std::string, const IrClass *> class_by_name;
@@ -10481,6 +10492,12 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                 }
                 if (!mtd) continue;
                 if (mtd->ir_fn_name.empty()) continue;
+                /* Un metodo con aspectos se despacha recorriendo su cadena de
+                 * advices, asi que llamarlo directo se los saltaria.  Se salta
+                 * ESTE sitio y se sigue con el resto -- antes bastaba un
+                 * aspecto en cualquier rincon para renunciar al pase entero. */
+                if (mod.metodos_con_aspecto.count(mtd->ir_fn_name) != 0)
+                    continue;
                 const bool safe_method = mtd->is_final || safe_class;
                 if (!safe_method) continue;
 

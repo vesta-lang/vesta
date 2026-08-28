@@ -646,6 +646,14 @@ class Lowering {
                                           bool is_element = false);
     /// Nombres de resolvedores de overlay ya sintetizados (dedup).
     std::unordered_set<std::string> generated_overlay_resolvers_;
+    /// Metodos con aspectos, por nombre IR (`Clase__metodo`).  Se recoge al
+    /// principio de @c run() porque cada sitio de llamada lo consulta para
+    /// decidir si puede devirtualizar/especular: llamar directo a un metodo con
+    /// aspectos se saltaria su cadena de advices.
+    std::unordered_set<std::string> metodos_con_aspecto_;
+    /// Falso si algun aspecto no se pudo atribuir a un metodo concreto; se
+    /// vuelve entonces al criterio ancho (ningun sitio se devirtualiza).
+    bool aspectos_atribuidos_ = true;
     /**
      * @brief `extent(v)`: sintetiza `__ovl_extent_<S>(self) -> u64` que computa
      * el SPAN total del layout de la vista con los datos de la instancia

@@ -54,6 +54,7 @@
 #include <vector>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 // Windows (windef.h) define VOID->void, CONST->const, BOOL->int como macros,
 // lo que rompe los enumerados de la IR.  Guardamos y anulamos antes de entrar.
@@ -1834,6 +1835,40 @@ struct IrModule {
     /// Vacio en modulos sin POO -- el transpiler entonces opera solo
     /// sobre funciones libres.  El IR emitter (a .vel) la ignora.
     std::vector<IrClass> classes;
+
+    /**
+     * @brief Metodos que llevan aspectos, por su nombre IR (@c Clase__metodo).
+     *
+     * A un metodo con aspectos NO se le puede llamar directo: el advice se
+     * recorre en el despacho, asi que convertir su @c callvirt en un @c call
+     * se lo saltaria.  Antes, para no correr ese riesgo, bastaba con que el
+     * modulo tuviera UN aspecto para apagar la devirtualizacion ENTERA -- y el
+     * modulo aqui es el programa entero.  Un aspecto de registro en un rincon
+     * dejaba sin devirtualizar todo lo demas, y eso cuesta entre 1,2x y 9,5x
+     * medido en los bancos de despacho.
+     *
+     * Con la lista, cada sitio de llamada se mira por separado: se salta el que
+     * apunta a un metodo de aqui y se devirtualiza el resto.  El pointcut es
+     * @c Clase.metodo exacto (no hay comodines), asi que la lista es exacta.
+     *
+     * Se compara por NOMBRE IR y no por clase, que es justo lo que hace falta
+     * con herencia: si la derivada no redefine el metodo, la llamada acaba en
+     * el mismo @c Base__m -- el mismo MethodInfo que lleva la cadena --, y el
+     * nombre lo recoge; si lo redefine, es otro nombre y otro MethodInfo, que
+     * es tambien lo correcto.
+     */
+    std::unordered_set<std::string> metodos_con_aspecto;
+
+    /**
+     * @brief Los aspectos del modulo estan TODOS en @c metodos_con_aspecto.
+     *
+     * Falso mientras haya alguno que no se pueda atribuir a un metodo concreto
+     * -- hoy, un @c addadvice escrito a mano en ensamblador --, y entonces se
+     * vuelve a apagar la devirtualizacion del modulo entero.  Sin esta
+     * distincion, una lista vacia significaria las dos cosas opuestas: que no
+     * hay aspectos, o que no se sabe cuales son.
+     */
+    bool aspectos_atribuidos = true;
 
     /**
      * @brief v4: metadatos de cada entrada en @c static_data.

@@ -1095,6 +1095,29 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // try/throw.
     if (native_poo_) compute_type_intervals();
 
+    /* Que metodos llevan aspectos, por su nombre IR.  Se recoge ANTES de bajar
+     * ningun cuerpo porque el lowering de cada sitio de llamada lo consulta
+     * para decidir si puede especular. */
+    for (auto &decl : mod_.decls) {
+        if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
+        auto *cd_asp = static_cast<ast::ClassDecl *>(decl.get());
+        for (auto &m_uptr : cd_asp->methods) {
+            auto *m = m_uptr.get();
+            if (!m || m->advice_kind == 0) continue;
+            const std::string &t = m->advice_target;
+            const size_t p = t.find('.');
+            /* Un pointcut mal formado lo diagnostica la emision del advice;
+             * aqui basta con NO poder atribuirlo, que es lo conservador. */
+            if (p == std::string::npos || p == 0 || p + 1 >= t.size()) {
+                aspectos_atribuidos_ = false;
+                continue;
+            }
+            metodos_con_aspecto_.insert(t.substr(0, p) + "__" + t.substr(p + 1));
+        }
+    }
+    out_module.metodos_con_aspecto = metodos_con_aspecto_;
+    out_module.aspectos_atribuidos = aspectos_atribuidos_;
+
     // AOT / Embed (native_poo_): el AOP (@Aspect + advice) se registra en
     // RUNTIME (MethodInfo::advice_chain via addadvice en __module_init), que
     // native_poo NO emite.  Sin esto, el advice se ignoraria SILENCIOSAMENTE y
@@ -33480,6 +33503,11 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             const std::string tmeth = target.substr(dot + 1);
             const uint8_t rt_kind = static_cast<uint8_t>(m->advice_kind - 1);
 
+            /* Se apunta el metodo que queda con aspectos, por su nombre IR.
+             * Es lo que permite al optimizador saltarse SOLO este sitio de
+             * llamada en vez de renunciar a devirtualizar el modulo entero. */
+            out.metodos_con_aspecto.insert(tcls + "__" + tmeth);
+
             // Bloque propio para este advice (presion acotada).
             new_seg("aop_" + cd->name + "_" + m->name);
 
@@ -35189,14 +35217,12 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         // eager en __module_init (1x total).
         std::vector<ir::DevirtCandidate> spec_cands;
         if (dst != ir::IR_NO_VALUE && !method_call_sret) {
-            bool module_has_aspect = false;
-            for (const auto &kv : tc_.class_layouts()) {
-                if (kv.second.is_aspect) {
-                    module_has_aspect = true;
-                    break;
-                }
-            }
-            if (!module_has_aspect) {
+            /* Antes bastaba con que el modulo tuviera UN aspecto para no
+             * especular en NINGUN sitio.  Ahora solo se renuncia cuando hay
+             * alguno que no se pudo atribuir a un metodo concreto: los
+             * candidatos con aspectos se descartan uno a uno mas abajo, y el
+             * resto sigue especulando. */
+            if (aspectos_atribuidos_) {
                 constexpr size_t K_MAX = 4;
                 // (cls_name, callee_ir_name) por implementor concreto.
                 std::vector<std::pair<std::string, std::string>> impls;
@@ -35222,7 +35248,14 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                         }
                     }
                     if (!owner) continue; // no deberia pasar si implements
-                    impls.emplace_back(cl.name, *owner + "__" + method_name);
+                    const std::string callee = *owner + "__" + method_name;
+                    /* Este implementor lleva aspectos: su camino rapido seria
+                     * una llamada directa que se saltaria la cadena.  Se deja
+                     * FUERA de los candidatos, con lo que sus objetos caen al
+                     * despacho normal -- que si la recorre -- y los demas
+                     * implementores siguen especulando. */
+                    if (metodos_con_aspecto_.count(callee) != 0) continue;
+                    impls.emplace_back(cl.name, callee);
                     if (impls.size() > K_MAX) {
                         too_many = true;
                         break;
