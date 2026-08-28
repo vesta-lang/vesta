@@ -173,6 +173,11 @@ add_library(vx_lib STATIC
     c_header_gen.cpp
     lombok.cpp
     lowering.cpp
+    # Bajada de los builtins: las llamadas que el compilador reconoce por su
+    # nombre y baja el mismo (imprimir, prestamos, atomicos, cadenas,
+    # reflexion, introspeccion comptime, colecciones, concurrencia).  Eran
+    # 7425 lineas dentro de lowering.cpp -- el 17% del fichero en UNA funcion.
+    lowering/builtins.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
