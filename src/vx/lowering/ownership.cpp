@@ -1,0 +1,1355 @@
+/*
+ * VestaVM -- Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+/**
+ * @file vx/lowering/ownership.cpp
+ * @brief Quien posee cada cosa, y que hay que soltar al salir de un ambito.
+ *
+ * Vesta libera sin recolector: lo que un ambito posee se suelta al salir de el,
+ * y el compilador emite ese desmontaje en cada via de salida -- el final, un
+ * `return`, un `break`, una excepcion --, en orden inverso al de adquisicion.
+ *
+ * Que se emite depende de QUIEN posee: un `unique` con su liberador, uno con
+ * uno propio del programador, un `shared` que solo baja su cuenta, un objeto
+ * con destructor, una coleccion.  Y sobre todo depende de si el valor SIGUE
+ * siendo del ambito: si se devuelve, se guarda en un campo o se presta hacia
+ * fuera, ya no es suyo y soltarlo seria liberar algo vivo.  Averiguar eso -- a
+ * donde ESCAPA un valor, y de quien se toma la direccion -- es la otra mitad
+ * del fichero, y es lo que hace que el desmontaje sea correcto y no solo
+ * puntual.
+ */
+#include "util/env_flags.h"
+#include "vx/lowering.h"
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "loader/oop_types.h" // ADVICE_*: el orden de la cadena
+#include <algorithm>
+#include <chrono>
+#include <iostream>
+#include "ffi/virtual_lib_registry.h" // lookup_virtual_fn (bug 161: MC.23)
+#include "vx/asm/asm_effects.h"       // inferencia de clobbers ( AS inc.4)
+#include "vx/asm/asm_diag.h"      // diagnosticos estructurales del asm (ASA.2)
+#include "vx/asm/asm_lift_emit.h" // lift de patrones atomicos a IR tipado (ASA.3)
+#include "vx/asm/asm_lift_general.h" // lift general straight-line entero a IR real
+#include "vx/asm/asm_lift_micro.h"
+#include "vx/asm/asm_lift_registro.h"
+#include "vx/asm/asm_phys_reg.h" // asm_body_subst_greedy // lift de asm opaco sin operandos -> ASM_MICRO
+#include "vx/asm/instr_db.h"    // reschedule_asm (reoptimizador de asm, ASA)
+#include "vx/asm/asm_backend.h" // validacion de sintaxis via Keystone (inc.4b)
+#include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
+#include "vx/comptime/comptime_introspect.h" // helpers compartidos rama A
+#include "vx/generics/concepts.h"      // conceptos como predicado -> CONST bool
+#include "vx/generics/generic_clone.h" // clone_expr (custom print to_string)
+#include "vx/lexer.h"                  // parse de fragments para @Macro
+#include "vx/parser.h"                 // parse_one_expr para @Macro
+#include "ir/ir_optimizer.h"           // register_pure_new_helper
+#include <functional>
+#include <map>
+#include <set>
+#include <sstream>
+#include <utility>
+#include "lowering_internal.h" // la cocina compartida del lowering
+
+namespace vx {
+void Lowering::emit_cleanups_range(size_t start, size_t end) {
+    if (end > cleanup_stack_.size()) end = cleanup_stack_.size();
+    if (start >= end) return;
+    // Recorrer [start, end) en orden INVERSO (LIFO).  El cleanup mas
+    // reciente (top del stack) se ejecuta primero, igual que destructores
+    // C++ en el orden inverso a su construccion.
+    for (size_t k = end; k-- > start;) {
+        const CleanupAction *it = &cleanup_stack_[k];
+        std::vector<ir::IrValueId> opnds = it->operands;
+        // refresh: sustituir operands[0] con el binding ACTUAL
+        // del local (permite dispose(xs)+cleanup idempotente, etc.).
+        if (!it->refresh_name.empty() && !opnds.empty()) {
+            const ir::IrValueId v_now = lookup(it->refresh_name);
+            if (v_now != ir::IR_NO_VALUE) {
+                opnds[0] = v_now;
+            }
+        }
+        switch (it->kind) {
+        case CleanupAction::Kind::CALL_DTOR: {
+            if (!it->func_name.empty()) {
+                // Dispatch estatico: el dtor sintetizado del contenedor se
+                // resuelve por el tipo declarado (no polimorfico).  CALL
+                // DIRECTO -> mas rapido (sin vtable lookup) y compilable en
+                // AOT --target=bare.  El regalloc lo trata como CALL y
+                // preserva los regs vivos del scope (incluido v_ret).
+                ir::IrInstr cd{};
+                cd.op = ir::IrOp::CALL;
+                cd.type = ir::IrType::VOID;
+                cd.dst = ir::IR_NO_VALUE;
+                cd.operands = std::move(opnds);
+                cd.func_name = it->func_name;
+                cd.source_line = it->source_line;
+                emit(current_block_, std::move(cd));
+                break;
+            }
+            // Dtor polimorfico (herencia/interfaz): emitir CALLVIRT real
+            // para que el regalloc lo trate como CALL y preserve regs
+            // caller-saved vivos (especialmente el reg que lleva v_ret en
+            // lower_return).
+            ir::IrInstr cv{};
+            cv.op = ir::IrOp::CALLVIRT;
+            cv.type = ir::IrType::VOID;
+            cv.dst = ir::IR_NO_VALUE;
+            cv.operands = std::move(opnds);
+            cv.imm = static_cast<uint64_t>(it->dtor_vtable_index);
+            cv.source_line = it->source_line;
+            emit(current_block_, std::move(cv));
+            break;
+        }
+        case CleanupAction::Kind::STRUCT_DTOR: {
+            // CALL directo a <Struct>__dtor(addr): dispatch estatico (los
+            // structs no tienen vtable).  IrOp::CALL -> CALLVM en interp/JIT,
+            // call nativo en AOT; el inliner puede inlinearlo (dtor trivial =
+            // coste ~0).  El regalloc lo trata como CALL y preserva los regs
+            // vivos del scope (incluido el reg de v_ret en lower_return).
+            ir::IrInstr cd{};
+            cd.op = ir::IrOp::CALL;
+            cd.type = ir::IrType::VOID;
+            cd.dst = ir::IR_NO_VALUE;
+            cd.operands = std::move(opnds);
+            cd.func_name = it->func_name;
+            cd.source_line = it->source_line;
+            emit(current_block_, std::move(cd));
+            break;
+        }
+        case CleanupAction::Kind::CLOSURE_ENV_FREE: {
+            // Ownership: liberar el env+slot heap de cada campo closure del
+            // struct (move-on-return: el productor suprimio su cleanup via
+            // escaping_locals_, asi que este consumidor es el unico que
+            // libera).  opnds[0] = PTR al struct (refrescado).  Por campo,
+            // reusa emit_free_closure_env_field (null-guard interno).
+            if (!opnds.empty()) {
+                for (uint32_t off : it->closure_field_offsets) {
+                    emit_free_closure_env_field(opnds[0], off, it->source_line);
+                }
+            }
+            break;
+        }
+        case CleanupAction::Kind::NATIVE_FREE: {
+            //  AOT.2.d: invocar `~T()` (CALL directo al dtor del
+            // tipo estatico) ANTES de liberar -> el dtor libera sus
+            // recursos propios (RAII).  Luego RAW_FREE de la instancia
+            // (host_ptr de calloc) -> aot_lower lo baja a call<free>.
+            // RAW_FREE(0)/free(NULL) es no-op -> seguro si fue movido.
+            if (it->native_dtor_virtual) {
+                // AOT.2.d (4): dtor polimorfico via vtable de la
+                // instancia.  %vt = LOAD [obj+0]; %fn = LOAD
+                // [%vt + idx*8]; CALLIND %fn(obj).  Asi una ref base
+                // que posee una instancia derivada ejecuta el dtor
+                // DERIVADO (la vtable de obj[0] la puso __new_<Derived>).
+                const ir::IrValueId obj = opnds[0];
+                const uint32_t idx = it->dtor_vtable_index;
+                ir::IrValueId v_vt = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_vt].is_host_ptr = true;
+                {
+                    ir::IrInstr ld{};
+                    ld.op = ir::IrOp::LOAD;
+                    ld.type = ir::IrType::I64;
+                    ld.dst = v_vt;
+                    ld.operands = {obj};
+                    ld.source_line = it->source_line;
+                    emit(current_block_, std::move(ld));
+                }
+                ir::IrValueId v_slot = v_vt;
+                if (idx != 0) {
+                    const ir::IrValueId v_off = emit_const(
+                        ir::IrType::I64, static_cast<uint64_t>(idx) * 8u,
+                        it->source_line);
+                    v_slot = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_slot].is_host_ptr = true;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::PTR;
+                        ad.dst = v_slot;
+                        ad.operands = {v_vt, v_off};
+                        ad.source_line = it->source_line;
+                        emit(current_block_, std::move(ad));
+                    }
+                }
+                ir::IrValueId v_fn = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_fn].is_host_ptr = true;
+                {
+                    ir::IrInstr ld2{};
+                    ld2.op = ir::IrOp::LOAD;
+                    ld2.type = ir::IrType::I64;
+                    ld2.dst = v_fn;
+                    ld2.operands = {v_slot};
+                    ld2.source_line = it->source_line;
+                    emit(current_block_, std::move(ld2));
+                }
+                ir::IrInstr ci{};
+                ci.op = ir::IrOp::CALLIND;
+                ci.type = ir::IrType::VOID;
+                ci.dst = ir::IR_NO_VALUE;
+                ci.func_ptr = v_fn;
+                ci.operands = {obj};
+                ci.source_line = it->source_line;
+                emit(current_block_, std::move(ci));
+            } else if (!it->func_name.empty()) {
+                ir::IrInstr dc{};
+                dc.op = ir::IrOp::CALL;
+                dc.type = ir::IrType::VOID;
+                dc.dst = ir::IR_NO_VALUE;
+                dc.func_name = it->func_name;
+                dc.operands = opnds; // this
+                dc.source_line = it->source_line;
+                emit(current_block_, std::move(dc));
+            }
+            ir::IrInstr rf{};
+            rf.op = ir::IrOp::RAW_FREE;
+            rf.type = ir::IrType::VOID;
+            rf.dst = ir::IR_NO_VALUE;
+            rf.operands = std::move(opnds);
+            rf.source_line = it->source_line;
+            emit(current_block_, std::move(rf));
+            break;
+        }
+        case CleanupAction::Kind::STRING_FREE: {
+            // Vesta Embed Inc 0 / Inc 5 (SSO): liberar el buffer de un
+            // string value-type al exit del scope.  opnds[0] = PTR al slot
+            // de 24 bytes.  emit_native_str_free_if_heap libera SOLO si el
+            // slot esta en modo HEAP (la data SSO es inline, no se libera)
+            // y free(0) es no-op -> seguro tras un move-out.
+            emit_native_str_free_if_heap(opnds[0], it->source_line);
+            break;
+        }
+        case CleanupAction::Kind::RAW_ASM: {
+            // raw_asm-elim wave 2: dead code.  Todas las creaciones
+            // de CleanupAction setean su @c kind explicitamente a un
+            // valor especifico (CALL_DTOR/CALLN_FREE/SMARTPTR_FREE/
+            // SHAREDPTR_REL/SYNC_EXIT).  Si esta rama se alcanza, es
+            // un bug del frontend que olvido setear el kind; emitir
+            // diagnostico claro en lugar de raw_asm opaco.
+            error_at(
+                SourceLoc{"", it->source_line, 1},
+                "internal: CleanupAction con Kind::RAW_ASM (default) "
+                "alcanzado al exit del scope; el frontend debe setear "
+                "un kind especifico (CALL_DTOR/CALLN_FREE/SMARTPTR_FREE/etc.)");
+            break;
+        }
+        case CleanupAction::Kind::SYNC_EXIT: {
+            // Sprint 6.C: tryleave + monexit como IR ops puros.
+            // AOT (native_poo_): el frame de excepcion es setjmp/longjmp ->
+            // se popea con __vx_pop_frame (no TRYLEAVE op, que el backend
+            // nativo no soporta); el monitor se libera con __vx_monexit.
+            if (native_poo_) {
+                ir::IrInstr cp{};
+                cp.op = ir::IrOp::CALL;
+                cp.type = ir::IrType::VOID;
+                cp.dst = ir::IR_NO_VALUE;
+                cp.func_name = "__vx_pop_frame";
+                cp.source_line = it->source_line;
+                emit(current_block_, std::move(cp));
+            } else {
+                ir::IrInstr tl{};
+                tl.op = ir::IrOp::TRYLEAVE;
+                tl.type = ir::IrType::VOID;
+                tl.dst = ir::IR_NO_VALUE;
+                tl.source_line = it->source_line;
+                emit(current_block_, std::move(tl));
+            }
+            if (!opnds.empty()) {
+                emit_monitor_op(opnds[0], /*enter=*/false, it->source_line);
+            }
+            break;
+        }
+        case CleanupAction::Kind::CALLN_FREE: {
+            // CALLN al free nativo de la coleccion (variante GC
+            // o no-GC).  Para la variante *_gc prependemos un
+            // GETPROC como primer argumento; el
+            // regalloc trata el CALLN como call normal y preserva
+            // los regs vivos del caller.
+            std::vector<ir::IrValueId> args;
+            if (it->needs_proc) {
+                args.reserve(opnds.size() + 1);
+                args.push_back(emit_getproc(it->source_line));
+            } else {
+                args.reserve(opnds.size());
+            }
+            for (auto vid : opnds)
+                args.push_back(vid);
+            ir::IrInstr cf{};
+            cf.op = ir::IrOp::CALLN;
+            cf.type = ir::IrType::VOID;
+            cf.dst = ir::IR_NO_VALUE;
+            cf.func_name = it->func_name;
+            cf.operands = std::move(args);
+            cf.source_line = it->source_line;
+            emit(current_block_, std::move(cf));
+            break;
+        }
+        case CleanupAction::Kind::SMARTPTR_FREE: {
+            // Cleanup de @c unique<T> en scope exit.
+            //
+            // Tier 1 layout: slot[+0]=ptr, slot[+8]=deleter_addr.
+            //   deleter_addr == 0 -> sentinel: RAW_FREE(ptr).
+            //   deleter_addr != 0 -> CALLVMR(deleter_addr, ptr).
+            //
+            // Si literal_deleter esta poblado (caso comun:
+            // var-decl con init = unique_box/unique_with), usamos
+            // ese conocimiento compile-time para emitir el cleanup
+            // mas eficiente (RAW_FREE directo, CALLVM @Absolute
+            // fijo, o CALLN @Method para extern wrappers).
+            //
+            // Si NO esta poblado (caso SRET: el unique vino de
+            // una funcion que lo creo internamente), leemos el
+            // deleter_addr del slot+8 y dispatchamos dinamicamente.
+            const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_ptr].is_host_ptr = true;
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::I64;
+                ld.dst = v_ptr;
+                ld.operands = opnds; // [v_slot]
+                ld.source_line = it->source_line;
+                emit(current_block_, std::move(ld));
+            }
+
+            // Bug fix bug2: si el inner T es una CLASS Vesta con
+            // destructor, invocar `~T()` ANTES del free.  El
+            // CALLVIRT requiere host_ptr no nulo; emitimos guard
+            // implicito via skip si v_ptr == 0 (no debe ocurrir
+            // tras unique_box(new T()), pero defensive).
+            //
+            // Bug fix adicional: si inner_is_gc_class, el host_ptr
+            // que vive en el slot apunta a un objeto GC-managed
+            // (no a RAW_ALLOC memory).  Hacer RAW_FREE corromperia
+            // el heap.  Solo invocamos el destructor + dejamos
+            // que el GC libere el objeto cuando ningun root lo
+            // referencie (stack scanning A.34.fix8).
+            if (it->inner_dtor_vtable_index > 0) {
+                // AOT (native_poo): el inner de un unique<T> tiene tipo
+                // ESTATICO conocido (T == tipo dinamico salvo polimorfismo).
+                // Si NO es polimorfico, despachar el dtor con un CALL DIRECTO a
+                // `<Class>____dtor` (PURE_NATIVE) en vez de CALLVIRT (que el
+                // selector AOT no soporta).  Asi unique<T> con dtor compila a
+                // nativo.  Para inner polimorfico o el path VM/JIT, CALLVIRT.
+                if (native_poo_ && !it->inner_dtor_virtual &&
+                    !it->inner_dtor_func_name.empty()) {
+                    ir::IrInstr cd{};
+                    cd.op = ir::IrOp::CALL;
+                    cd.type = ir::IrType::VOID;
+                    cd.dst = ir::IR_NO_VALUE;
+                    cd.operands = {v_ptr};
+                    cd.func_name = it->inner_dtor_func_name; // <Class>____dtor
+                    cd.source_line = it->source_line;
+                    emit(current_block_, std::move(cd));
+                } else {
+                    ir::IrInstr cv{};
+                    cv.op = ir::IrOp::CALLVIRT;
+                    cv.type = ir::IrType::VOID;
+                    cv.dst = ir::IR_NO_VALUE;
+                    cv.operands = {v_ptr};
+                    cv.imm = static_cast<uint64_t>(it->inner_dtor_vtable_index);
+                    cv.source_line = it->source_line;
+                    emit(current_block_, std::move(cv));
+                }
+            }
+            if (it->inner_is_gc_class) {
+                // El objeto inner es GC-managed: NO hacer RAW_FREE
+                // del host_ptr (el GC se encarga del inner object).
+                // El SLOT (raw-alloced de 8/16 bytes) tambien necesita
+                // liberarse, pero usa slot_addr (opnds[0]) no v_ptr.
+                // Sin embargo, el slot RAW_ALLOC vive solo si fue
+                // unique_box (que sigue siendo Tier 0 sin slot RAW).
+                // En Tier 1 el slot es ALLOCA stack (no requiere free).
+                // Por simplicidad: skip el free completo en este caso.
+                // El GC libera el inner; el ALLOCA stack se libera
+                // al exit del frame automaticamente.
+                break;
+            }
+
+            // AOT (native_poo): el selector HOST_LEAF NO soporta el op
+            // SMARTPTR_FREE.  Bajamos el cleanup a ops nativas que el selector
+            // ya conoce: guard de null (el slot se zerifica tras un move -> no
+            // llamar al deleter sobre un null) + CALL al deleter (Vesta) /
+            // CALLN (extern) / RAW_FREE (default "free", null-safe) / CALLIND
+            // dinamico (SRET).  El path VM/JIT (no native) sigue usando el op
+            // SMARTPTR_FREE mas abajo.
+            if (native_poo_) {
+                const uint32_t ln = it->source_line;
+                // "free" es null-safe (RAW_FREE(0)=no-op) -> sin guard.
+                if (it->literal_deleter == "free") {
+                    ir::IrInstr fr{};
+                    fr.op = ir::IrOp::RAW_FREE;
+                    fr.type = ir::IrType::VOID;
+                    fr.dst = ir::IR_NO_VALUE;
+                    fr.operands = {v_ptr};
+                    fr.source_line = ln;
+                    emit(current_block_, std::move(fr));
+                    break;
+                }
+                // Resto (deleter custom/extern/SRET): guard `if (ptr != 0)`.
+                const ir::IrBlockId bb_do = fn_->new_block("sp_do");
+                const ir::IrBlockId bb_skip = fn_->new_block("sp_skip");
+                const ir::IrValueId v_z = emit_const(ir::IrType::I64, 0, ln);
+                const ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
+                {
+                    ir::IrInstr cm{};
+                    cm.op = ir::IrOp::CMP_NE;
+                    cm.type = ir::IrType::BOOL;
+                    cm.dst = v_cond;
+                    cm.operands = {v_ptr, v_z};
+                    cm.source_line = ln;
+                    emit(current_block_, std::move(cm));
+                }
+                {
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR_COND;
+                    br.type = ir::IrType::VOID;
+                    br.dst = ir::IR_NO_VALUE;
+                    br.operands = {v_cond};
+                    br.target_block = bb_do;
+                    br.false_block = bb_skip;
+                    br.source_line = ln;
+                    emit(current_block_, std::move(br));
+                    fn_->blocks[current_block_].succs.push_back(bb_do);
+                    fn_->blocks[current_block_].succs.push_back(bb_skip);
+                    fn_->blocks[bb_do].preds.push_back(current_block_);
+                    fn_->blocks[bb_skip].preds.push_back(current_block_);
+                }
+                current_block_ = bb_do;
+                if (it->literal_deleter.rfind("@extern:", 0) == 0) {
+                    // deleter extern "<lib>:<fn>" -> CALLN (HOST_LEAF lo baja a
+                    // CALL_SYM; el linker lo resuelve).
+                    const std::string sym = it->literal_deleter.substr(8);
+                    ir::IrInstr cn{};
+                    cn.op = ir::IrOp::CALLN;
+                    cn.type = ir::IrType::VOID;
+                    cn.dst = ir::IR_NO_VALUE;
+                    cn.func_name = sym;
+                    cn.operands = {v_ptr};
+                    cn.source_line = ln;
+                    cn.is_call_site = true;
+                    emit(current_block_, std::move(cn));
+                } else if (it->literal_deleter.empty()) {
+                    // SRET: deleter dinamico en slot+8.  Si !=0 -> CALLIND;
+                    // si ==0 -> RAW_FREE.  Nested guard.
+                    const ir::IrValueId v_eight =
+                        emit_const(ir::IrType::I64, 8, ln);
+                    const ir::IrValueId v_slot8 =
+                        fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_slot8].is_host_ptr = true;
+                    {
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::PTR;
+                        ad.dst = v_slot8;
+                        ad.operands = {opnds[0], v_eight};
+                        ad.source_line = ln;
+                        emit(current_block_, std::move(ad));
+                    }
+                    const ir::IrValueId v_del = fn_->new_value(ir::IrType::PTR);
+                    fn_->values[v_del].is_host_ptr = true;
+                    {
+                        ir::IrInstr ld{};
+                        ld.op = ir::IrOp::LOAD;
+                        ld.type = ir::IrType::I64;
+                        ld.dst = v_del;
+                        ld.operands = {v_slot8};
+                        ld.source_line = ln;
+                        emit(current_block_, std::move(ld));
+                    }
+                    const ir::IrBlockId bb_call = fn_->new_block("sp_call");
+                    const ir::IrBlockId bb_free = fn_->new_block("sp_free");
+                    const ir::IrValueId v_z2 =
+                        emit_const(ir::IrType::I64, 0, ln);
+                    const ir::IrValueId v_c2 = fn_->new_value(ir::IrType::BOOL);
+                    {
+                        ir::IrInstr cm{};
+                        cm.op = ir::IrOp::CMP_NE;
+                        cm.type = ir::IrType::BOOL;
+                        cm.dst = v_c2;
+                        cm.operands = {v_del, v_z2};
+                        cm.source_line = ln;
+                        emit(current_block_, std::move(cm));
+                    }
+                    {
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR_COND;
+                        br.type = ir::IrType::VOID;
+                        br.dst = ir::IR_NO_VALUE;
+                        br.operands = {v_c2};
+                        br.target_block = bb_call;
+                        br.false_block = bb_free;
+                        br.source_line = ln;
+                        emit(current_block_, std::move(br));
+                        fn_->blocks[current_block_].succs.push_back(bb_call);
+                        fn_->blocks[current_block_].succs.push_back(bb_free);
+                        fn_->blocks[bb_call].preds.push_back(current_block_);
+                        fn_->blocks[bb_free].preds.push_back(current_block_);
+                    }
+                    // bb_call: CALLIND deleter(ptr) -> bb_skip.
+                    current_block_ = bb_call;
+                    {
+                        ir::IrInstr ci{};
+                        ci.op = ir::IrOp::CALLIND;
+                        ci.type = ir::IrType::VOID;
+                        ci.dst = ir::IR_NO_VALUE;
+                        ci.func_ptr = v_del;
+                        ci.operands = {v_ptr};
+                        ci.source_line = ln;
+                        ci.is_call_site = true;
+                        emit(current_block_, std::move(ci));
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR;
+                        br.type = ir::IrType::VOID;
+                        br.target_block = bb_skip;
+                        br.source_line = ln;
+                        emit(current_block_, std::move(br));
+                        fn_->blocks[bb_call].succs.push_back(bb_skip);
+                        fn_->blocks[bb_skip].preds.push_back(bb_call);
+                    }
+                    // bb_free: RAW_FREE(ptr) -> bb_skip.
+                    current_block_ = bb_free;
+                    {
+                        ir::IrInstr fr{};
+                        fr.op = ir::IrOp::RAW_FREE;
+                        fr.type = ir::IrType::VOID;
+                        fr.dst = ir::IR_NO_VALUE;
+                        fr.operands = {v_ptr};
+                        fr.source_line = ln;
+                        emit(current_block_, std::move(fr));
+                        ir::IrInstr br{};
+                        br.op = ir::IrOp::BR;
+                        br.type = ir::IrType::VOID;
+                        br.target_block = bb_skip;
+                        br.source_line = ln;
+                        emit(current_block_, std::move(br));
+                        fn_->blocks[bb_free].succs.push_back(bb_skip);
+                        fn_->blocks[bb_skip].preds.push_back(bb_free);
+                    }
+                    current_block_ = bb_skip;
+                    break;
+                } else {
+                    // deleter Vesta (fn por nombre) -> CALL directo.
+                    ir::IrInstr ca{};
+                    ca.op = ir::IrOp::CALL;
+                    ca.type = ir::IrType::VOID;
+                    ca.dst = ir::IR_NO_VALUE;
+                    ca.func_name = it->literal_deleter;
+                    ca.operands = {v_ptr};
+                    ca.source_line = ln;
+                    ca.is_call_site = true;
+                    emit(current_block_, std::move(ca));
+                }
+                // bb_do -> bb_skip (para extern/vesta; SRET ya retorno).
+                {
+                    ir::IrInstr br{};
+                    br.op = ir::IrOp::BR;
+                    br.type = ir::IrType::VOID;
+                    br.target_block = bb_skip;
+                    br.source_line = ln;
+                    emit(current_block_, std::move(br));
+                    fn_->blocks[bb_do].succs.push_back(bb_skip);
+                    fn_->blocks[bb_skip].preds.push_back(bb_do);
+                }
+                current_block_ = bb_skip;
+                break;
+            }
+
+            if (it->literal_deleter.empty()) {
+                // SRET case: el smart pointer vino de una funcion
+                // (factory).  No tenemos info compile-time del
+                // deleter; lo leemos dinamicamente del slot+8.
+                // Si deleter_addr == 0 -> RAW_FREE; si != 0 ->
+                // callvmr al puntero (deleter Vesta).
+                const ir::IrValueId v_eight =
+                    emit_const(ir::IrType::I64, 8, it->source_line);
+                const ir::IrValueId v_slot8 = fn_->new_value(ir::IrType::PTR);
+                {
+                    ir::IrInstr add{};
+                    add.op = ir::IrOp::ADD;
+                    add.type = ir::IrType::I64;
+                    add.dst = v_slot8;
+                    add.operands = {opnds[0], v_eight};
+                    add.source_line = it->source_line;
+                    emit(current_block_, std::move(add));
+                }
+                const ir::IrValueId v_del = fn_->new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr ldd{};
+                    ldd.op = ir::IrOp::LOAD;
+                    ldd.type = ir::IrType::I64;
+                    ldd.dst = v_del;
+                    ldd.operands = {v_slot8};
+                    ldd.source_line = it->source_line;
+                    emit(current_block_, std::move(ldd));
+                }
+                const uint32_t lbl = ++cleanup_label_seq_;
+                const std::string default_lbl =
+                    "__sp_def_" + std::to_string(lbl);
+                const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
+                const std::string done_lbl = "__sp_done_" + std::to_string(lbl);
+                // cmpu ptr, 0; jmp.je done  (skip si moved)
+                // cmpu deleter, 0; jmp.je default  (deleter=0 -> RAW_FREE)
+                // mov r1, ptr; mov r15, 1; callvmr deleter; jmp done
+                // default: mov r1, ptr; (RAW_FREE inline)
+                // raw_asm-elim wave 2: SMARTPTR_FREE kind=0 (SRET_DISPATCH).
+                // El emitter expande a la secuencia equivalente con
+                // labels unicos via contador thread-local; mismo
+                // bytecode emitido.  Eliminamos done_lbl/default_lbl
+                // ya que el emitter los genera internamente.
+                ir::IrInstr sf{};
+                sf.op = ir::IrOp::SMARTPTR_FREE;
+                sf.type = ir::IrType::VOID;
+                sf.dst = ir::IR_NO_VALUE;
+                sf.operands = {v_ptr, v_del};
+                sf.imm = 0; /* SRET_DISPATCH */
+                sf.source_line = it->source_line;
+                sf.is_call_site = true;
+                emit(current_block_, std::move(sf));
+                (void)done_lbl;
+                (void)default_lbl; /* labels no usadas (emitter las genera) */
+            } else if (it->literal_deleter == "free") {
+                // Deleter por defecto: RAW_FREE (null-safe).
+                ir::IrInstr fr{};
+                fr.op = ir::IrOp::RAW_FREE;
+                fr.type = ir::IrType::VOID;
+                fr.dst = ir::IR_NO_VALUE;
+                fr.operands = {v_ptr};
+                fr.source_line = it->source_line;
+                emit(current_block_, std::move(fr));
+            } else if (it->literal_deleter.rfind("@extern:", 0) == 0) {
+                // raw_asm-elim wave 2: SMARTPTR_FREE kind=1 (EXTERN_CALLN).
+                const std::string fn_label =
+                    it->literal_deleter.substr(8); // skip "@extern:"
+                ir::IrInstr sf{};
+                sf.op = ir::IrOp::SMARTPTR_FREE;
+                sf.type = ir::IrType::VOID;
+                sf.dst = ir::IR_NO_VALUE;
+                sf.operands = {v_ptr};
+                sf.imm = 1;              /* EXTERN_CALLN */
+                sf.func_name = fn_label; /* "<lib>:<fn>" */
+                sf.source_line = it->source_line;
+                sf.is_call_site = true;
+                emit(current_block_, std::move(sf));
+            } else {
+                // raw_asm-elim wave 2: SMARTPTR_FREE kind=2 (VESTA_CALLVM).
+                ir::IrInstr sf{};
+                sf.op = ir::IrOp::SMARTPTR_FREE;
+                sf.type = ir::IrType::VOID;
+                sf.dst = ir::IR_NO_VALUE;
+                sf.operands = {v_ptr};
+                sf.imm = 2;                         /* VESTA_CALLVM */
+                sf.func_name = it->literal_deleter; /* "<fn_label>" */
+                sf.source_line = it->source_line;
+                sf.is_call_site = true;
+                emit(current_block_, std::move(sf));
+            }
+            break;
+        }
+        case CleanupAction::Kind::SHAREDPTR_REL: {
+            // Sprint 6.C: cleanup de @c shared<T> via IR ops puros.
+            //
+            // Implementacion: LOAD ctrl; si ctrl != 0, LOAD rc; SUB 1; STORE
+            // rc. No emitimos free explicito porque el GcHeap se encarga de
+            // liberar bloques sin roots cuando se ejecuta major_gc.
+            //
+            // Antes: 7 lineas de RAW_ASM con jmp.je por label.
+            // Ahora: 7 IR ops (LOAD + CMP + BR_COND + 2 bloques + LOAD + SUB +
+            // STORE).
+            if (opnds.empty()) break;
+            const ir::IrValueId v_slot = opnds[0];
+            // ctrl = LOAD i64 [v_slot]   (host_ptr al control block).
+            const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_ctrl].is_host_ptr = true;
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::I64;
+                ld.dst = v_ctrl;
+                ld.operands = {v_slot};
+                ld.source_line = it->source_line;
+                emit(current_block_, std::move(ld));
+            }
+            // cmp ctrl, 0  -- si moved/null, skip.
+            const ir::IrValueId v_zero =
+                emit_const(ir::IrType::I64, 0, it->source_line);
+            const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cmp{};
+                cmp.op = ir::IrOp::CMP_NE;
+                cmp.type = ir::IrType::I64;
+                cmp.dst = v_cmp;
+                cmp.operands = {v_ctrl, v_zero};
+                cmp.source_line = it->source_line;
+                emit(current_block_, std::move(cmp));
+            }
+            // br.cond v_cmp, dec_bb, skip_bb.
+            const ir::IrBlockId dec_bb = fn_->new_block("sh_dec");
+            const ir::IrBlockId skip_bb = fn_->new_block("sh_skip");
+            {
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands = {v_cmp};
+                br.target_block = dec_bb;
+                br.false_block = skip_bb;
+                br.source_line = it->source_line;
+                emit(current_block_, std::move(br));
+                fn_->blocks[current_block_].succs.push_back(dec_bb);
+                fn_->blocks[current_block_].succs.push_back(skip_bb);
+                fn_->blocks[dec_bb].preds.push_back(current_block_);
+                fn_->blocks[skip_bb].preds.push_back(current_block_);
+            }
+            // dec_bb: refcount-- (LOAD + SUB + STORE).
+            current_block_ = dec_bb;
+            const ir::IrValueId v_rc = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr ld{};
+                ld.op = ir::IrOp::LOAD;
+                ld.type = ir::IrType::I64;
+                ld.dst = v_rc;
+                ld.operands = {v_ctrl};
+                ld.source_line = it->source_line;
+                emit(current_block_, std::move(ld));
+            }
+            const ir::IrValueId v_one =
+                emit_const(ir::IrType::I64, 1, it->source_line);
+            const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
+            {
+                ir::IrInstr sub{};
+                sub.op = ir::IrOp::SUB;
+                sub.type = ir::IrType::I64;
+                sub.dst = v_rc_dec;
+                sub.operands = {v_rc, v_one};
+                sub.source_line = it->source_line;
+                emit(current_block_, std::move(sub));
+            }
+            {
+                ir::IrInstr st{};
+                st.op = ir::IrOp::STORE;
+                st.type = ir::IrType::I64;
+                st.operands = {v_rc_dec, v_ctrl};
+                st.source_line = it->source_line;
+                emit(current_block_, std::move(st));
+            }
+            // H3 no-GC: si el refcount cayo a 0, liberar el bloque de control
+            // (RAW_FREE).  Refcount puro determinista -> sin GC.  cmp rc==0.
+            const ir::IrValueId v_zero2 =
+                emit_const(ir::IrType::I64, 0, it->source_line);
+            const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
+            {
+                ir::IrInstr cmp{};
+                cmp.op = ir::IrOp::CMP_EQ;
+                cmp.type = ir::IrType::I64;
+                cmp.dst = v_is0;
+                cmp.operands = {v_rc_dec, v_zero2};
+                cmp.source_line = it->source_line;
+                emit(current_block_, std::move(cmp));
+            }
+            const ir::IrBlockId free_bb = fn_->new_block("sh_free");
+            {
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR_COND;
+                br.operands = {v_is0};
+                br.target_block = free_bb;
+                br.false_block = skip_bb;
+                br.source_line = it->source_line;
+                emit(current_block_, std::move(br));
+                fn_->blocks[dec_bb].succs.push_back(free_bb);
+                fn_->blocks[dec_bb].succs.push_back(skip_bb);
+                fn_->blocks[free_bb].preds.push_back(dec_bb);
+                fn_->blocks[skip_bb].preds.push_back(dec_bb);
+            }
+            // free_bb: RAW_FREE(v_ctrl) + br skip_bb.
+            current_block_ = free_bb;
+            {
+                ir::IrInstr fr{};
+                fr.op = ir::IrOp::RAW_FREE;
+                fr.type = ir::IrType::VOID;
+                fr.operands = {v_ctrl};
+                fr.source_line = it->source_line;
+                emit(current_block_, std::move(fr));
+            }
+            {
+                ir::IrInstr br{};
+                br.op = ir::IrOp::BR;
+                br.target_block = skip_bb;
+                br.source_line = it->source_line;
+                emit(current_block_, std::move(br));
+                fn_->blocks[free_bb].succs.push_back(skip_bb);
+                fn_->blocks[skip_bb].preds.push_back(free_bb);
+            }
+            // current_block_ = skip_bb para que el siguiente cleanup
+            // se siga emitiendo en orden lineal.
+            current_block_ = skip_bb;
+            break;
+        }
+        }
+    }
+}
+
+void Lowering::scan_address_taken(ast::Stmt *s) {
+    if (!s) return;
+    // Recorrido recursivo de stmts y exprs.  Definimos lambdas locales
+    // para mantener las dependencias contenidas.
+    std::function<void(ast::Expr *)> visit_expr;
+    std::function<void(ast::Stmt *)> visit_stmt;
+
+    // Marca address-taken toda variable asignada en @p n (parte de un loop):
+    // fuerza su ALLOCA en la declaracion (dominante), evitando el PHI
+    // direccion-vs-valor de un loop anidado en una rama condicional.
+    auto mark_loop_assigned = [&](const ast::Node *n) {
+        if (!n) return;
+        std::set<std::string> tmp;
+        collect_assigned_vars(n, tmp);
+        for (const auto &nm : tmp)
+            address_taken_locals_.insert(nm);
+    };
+
+    // Profundidad de anidamiento en ramas CONDICIONALES (then/else de un if,
+    // cuerpos de catch).  Solo promovemos las vars loop-carried a address-taken
+    // cuando el loop esta DENTRO de una rama condicional: ahi su ALLOCA (creado
+    // en el bloque del loop) no domina la rama hermana del if -> el merge
+    // produce el PHI direccion-vs-valor (el bug).  Un loop a nivel de funcion
+    // (cond_depth==0) crea su ALLOCA en un bloque que domina el exit -> no hay
+    // rama hermana problematica; ademas promover ahi romperia al vectorizador
+    // (que espera el contador/acumulador como PHI SSA).
+    int cond_depth = 0;
+
+    visit_expr = [&](ast::Expr *e) {
+        if (!e) return;
+        switch (e->kind) {
+        case ast::NodeKind::UnaryExpr: {
+            auto *u = static_cast<ast::UnaryExpr *>(e);
+            if (u->op == ast::UnOp::AddrOf && u->operand &&
+                u->operand->kind == ast::NodeKind::IdentExpr) {
+                auto *id = static_cast<ast::IdentExpr *>(u->operand.get());
+                address_taken_locals_.insert(id->name);
+            }
+            visit_expr(u->operand.get());
+            return;
+        }
+        case ast::NodeKind::LambdaExpr: {
+            // Captures mutables: las variables modificadas dentro
+            // del cuerpo de la lambda deben ser address-taken en
+            // el outer scope para que el modelo de captura-por-
+            // referencia funcione.  El env block guarda el PUNTERO
+            // al slot del owner; el helper de la lambda hace
+            // LOAD/STORE indirectos sobre ese puntero, de modo
+            // que las mutaciones se ven desde fuera del lambda.
+            auto *lam = static_cast<ast::LambdaExpr *>(e);
+            for (const auto &nm : lam->mutable_captures) {
+                address_taken_locals_.insert(nm);
+            }
+            if (lam->body) visit_stmt(lam->body.get());
+            return;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            auto *b = static_cast<ast::BinaryExpr *>(e);
+            visit_expr(b->lhs.get());
+            visit_expr(b->rhs.get());
+            return;
+        }
+        case ast::NodeKind::AssignExpr: {
+            auto *a = static_cast<ast::AssignExpr *>(e);
+            visit_expr(a->target.get());
+            visit_expr(a->value.get());
+            return;
+        }
+        case ast::NodeKind::CallExpr: {
+            auto *c = static_cast<ast::CallExpr *>(e);
+            // Borrow checker: lend(x) / lend_mut(x) sobre una
+            // variable local plain requiere tomar su direccion
+            // (un borrow ES, en runtime, un host_ptr al slot
+            // donde vive el local; cero overhead vs un T*).
+            // Forzamos address-taken promotion para que el lowering
+            // deje el local en stack via ALLOCA + LOAD/STORE en
+            // lugar de en registro SSA puro.  Sin esto, lend(local)
+            // devuelve un valor (no una direccion) y read_borrow/
+            // write_borrow dereferencian basura.  EXCEPCION: si la
+            // var ya es de tipo borrow<T>/borrow_mut<T> (es un
+            // borrow_var, no un local plain), NO la promocionamos
+            // (su SSA value ya es host_ptr; el lend lo bypassa).
+            if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr &&
+                c->args.size() == 1 &&
+                c->args[0]->kind == ast::NodeKind::IdentExpr) {
+                auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
+                if (cid->name == "lend" || cid->name == "lend_mut") {
+                    auto *aid = static_cast<ast::IdentExpr *>(c->args[0].get());
+                    const Type at = aid->result_type;
+                    if (at.kind != PrimitiveKind::BORROW &&
+                        at.kind != PrimitiveKind::BORROW_MUT &&
+                        at.kind != PrimitiveKind::UNIQUE_PTR &&
+                        at.kind != PrimitiveKind::SHARED_PTR) {
+                        address_taken_locals_.insert(aid->name);
+                    }
+                }
+            }
+            visit_expr(c->callee.get());
+            for (auto &arg : c->args)
+                visit_expr(arg.get());
+            return;
+        }
+        case ast::NodeKind::FieldAccessExpr: {
+            auto *fa = static_cast<ast::FieldAccessExpr *>(e);
+            visit_expr(fa->base.get());
+            return;
+        }
+        case ast::NodeKind::IndexExpr: {
+            auto *ix = static_cast<ast::IndexExpr *>(e);
+            visit_expr(ix->base.get());
+            visit_expr(ix->index.get());
+            return;
+        }
+        case ast::NodeKind::CastExpr: {
+            // `(T)(&x)`: el cast ENVUELVE el `&x`.  Sin recursar en el
+            // operando, el `&x` interno no se veia y `x` no se promocionaba a
+            // address-taken
+            // -> error "& sobre variable no promocionada".  Bug de deteccion.
+            auto *ce = static_cast<ast::CastExpr *>(e);
+            visit_expr(ce->operand.get());
+            return;
+        }
+        case ast::NodeKind::TernaryExpr: {
+            // `cond ? &a : &b` -- recursar en las 3 ramas por el mismo motivo.
+            auto *te = static_cast<ast::TernaryExpr *>(e);
+            visit_expr(te->cond.get());
+            visit_expr(te->then_expr.get());
+            visit_expr(te->else_expr.get());
+            return;
+        }
+        default: return; // literales, IdentExpr puro, etc. no aportan
+        }
+    };
+
+    visit_stmt = [&](ast::Stmt *st) {
+        if (!st) return;
+        switch (st->kind) {
+        case ast::NodeKind::BlockStmt: {
+            auto *b = static_cast<ast::BlockStmt *>(st);
+            for (auto &child : b->body)
+                visit_stmt(child.get());
+            return;
+        }
+        case ast::NodeKind::VarDeclStmt: {
+            auto *vd = static_cast<ast::VarDeclStmt *>(st);
+            if (vd->init) visit_expr(vd->init.get());
+            return;
+        }
+        case ast::NodeKind::ExprStmt: {
+            auto *es = static_cast<ast::ExprStmt *>(st);
+            visit_expr(es->expr.get());
+            return;
+        }
+        case ast::NodeKind::IfStmt: {
+            auto *si = static_cast<ast::IfStmt *>(st);
+            visit_expr(si->cond.get());
+            // then/else son ramas condicionales: un loop dentro de ellas es el
+            // caso del bug (su ALLOCA no domina la rama hermana).
+            ++cond_depth;
+            visit_stmt(si->then_branch.get());
+            visit_stmt(si->else_branch.get());
+            --cond_depth;
+            return;
+        }
+        case ast::NodeKind::WhileStmt: {
+            auto *w = static_cast<ast::WhileStmt *>(st);
+            // Toda variable ASIGNADA dentro de un loop es loop-carried: el
+            // lowering le crea un ALLOCA para persistir su valor entre
+            // iteraciones (linea ~6377).  Si el loop esta dentro de una rama
+            // condicional, ese ALLOCA (creado en el bloque del loop) NO domina
+            // la rama HERMANA -> el merge del `if` termina con un PHI que
+            // mezcla la DIRECCION del alloca (rama del loop) con el VALOR
+            // original (rama sin loop) -> un `load` posterior deref-ea un valor
+            // como si fuera puntero (SIGSEGV / basura).  Marcarla address-taken
+            // AQUI (pre-pase) fuerza el ALLOCA en su DECLARACION (que domina
+            // todo) y todas las ramas la ven como memoria -> representacion
+            // consistente. Cero coste: el optimizer re-promueve a SSA los
+            // allocas que no escapan (mem2reg / promote_local_allocas).
+            if (cond_depth > 0) {
+                mark_loop_assigned(w->cond.get());
+                mark_loop_assigned(w->body.get());
+            }
+            visit_expr(w->cond.get());
+            visit_stmt(w->body.get());
+            return;
+        }
+        case ast::NodeKind::DoWhileStmt: {
+            auto *dw = static_cast<ast::DoWhileStmt *>(st);
+            if (cond_depth > 0) {
+                mark_loop_assigned(dw->body.get());
+                mark_loop_assigned(dw->cond.get());
+            }
+            visit_stmt(dw->body.get());
+            visit_expr(dw->cond.get());
+            return;
+        }
+        case ast::NodeKind::ForStmt: {
+            auto *f = static_cast<ast::ForStmt *>(st);
+            // Ver la nota en WhileStmt: toda variable asignada dentro del loop
+            // se marca address-taken para que su ALLOCA nazca en la declaracion
+            // (que domina todo), evitando el PHI direccion-vs-valor cuando el
+            // loop esta anidado en una rama condicional.
+            if (cond_depth > 0) {
+                mark_loop_assigned(f->cond.get());
+                mark_loop_assigned(f->step.get());
+                mark_loop_assigned(f->body.get());
+            }
+            visit_stmt(f->init.get());
+            visit_expr(f->cond.get());
+            visit_expr(f->step.get());
+            visit_stmt(f->body.get());
+            return;
+        }
+        case ast::NodeKind::TryStmt: {
+            // Sin esta rama, las variables declaradas dentro de un
+            // try/catch/finally no se promocionan a address-taken
+            // aunque aparezca `&var` en el body (error: '&x' sobre
+            // variable no promocionada).  Y el cascade de errores
+            // "nombre no resuelto" surge porque el lowering del
+            // var-decl falla al evaluar `&var` y deja el binding
+            // sin registrar.
+            auto *ts = static_cast<ast::TryStmt *>(st);
+            // try/catch introducen ramas (el catch se alcanza por un edge
+            // de excepcion): un loop dentro puede sufrir el mismo PHI mixto.
+            ++cond_depth;
+            visit_stmt(ts->body.get());
+            for (auto &cc : ts->catches)
+                visit_stmt(cc.body.get());
+            if (ts->finally_body) visit_stmt(ts->finally_body.get());
+            --cond_depth;
+            return;
+        }
+        case ast::NodeKind::ReturnStmt: {
+            auto *r = static_cast<ast::ReturnStmt *>(st);
+            visit_expr(r->value.get());
+            return;
+        }
+        case ast::NodeKind::SynchronizedStmt: {
+            auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+            visit_expr(sy->target.get());
+            visit_stmt(sy->body.get());
+            return;
+        }
+        default: return;
+        }
+    };
+    visit_stmt(s);
+}
+
+void Lowering::scan_escaping_locals(ast::Stmt *body) {
+    if (!body) return;
+    std::function<void(ast::Expr *)> visit_expr;
+    std::function<void(ast::Stmt *)> visit_stmt;
+
+    // Grafo de aliasing local-to-local: alias_graph[A] = {B, C, ...}
+    // significa "A puede contener un valor que vino de B, C, ..." (a
+    // traves de asignaciones `A = B;`).  Tras la primera pasada
+    // propagamos el escape hacia atras: si A es escaping, todos los
+    // que feed-en a A tambien escapan.
+    std::unordered_map<std::string, std::vector<std::string>> alias_graph;
+
+    // Helper: si @p e es IdentExpr, marca el nombre como escaping.
+    auto mark_if_ident = [&](ast::Expr *e) {
+        if (e && e->kind == ast::NodeKind::IdentExpr) {
+            auto *id = static_cast<ast::IdentExpr *>(e);
+            escaping_locals_.insert(id->name);
+        }
+    };
+    // Ruta B: un valor de un tipo con copy-hook NO escapa al guardarse en un
+    // campo -- es una COPIA (el store llama __clone__ sobre la copia del campo;
+    // el origen conserva su propia copia y su dtor corre).  No lo marcamos como
+    // escaping (no es un move).
+    auto value_has_copy_hook = [&](ast::Expr *e) -> bool {
+        if (!e || e->kind != ast::NodeKind::IdentExpr) return false;
+        const Type &t = e->result_type;
+        // H5: un shared<T> guardado en un campo es una COPIA (inc-on-store); el
+        // origen conserva su propia referencia y su dtor decrementa.  No es un
+        // move -> no lo marcamos escaping (mismo trato que un copy-hook).
+        if (t.kind == PrimitiveKind::SHARED_PTR) return true;
+        if (t.kind != PrimitiveKind::STRUCT) return false;
+        auto it = tc_.struct_layouts().find(t.struct_name);
+        return it != tc_.struct_layouts().end() && it->second.has_copy_hook;
+    };
+
+    visit_expr = [&](ast::Expr *e) {
+        if (!e) return;
+        switch (e->kind) {
+        case ast::NodeKind::AssignExpr: {
+            auto *a = static_cast<ast::AssignExpr *>(e);
+            // El target NO escapa por la asignacion misma.  El value
+            // SI escapa cuando el target es un campo/slot/deref:
+            //   - FieldAccessExpr: this.x = value, obj.x = value
+            //   - IndexExpr:       arr[i] = value, p[i] = value
+            //   - UnaryExpr Deref: *p = value
+            if (a->target) {
+                switch (a->target->kind) {
+                case ast::NodeKind::FieldAccessExpr:
+                    if (!value_has_copy_hook(a->value.get()))
+                        mark_if_ident(a->value.get());
+                    break;
+                case ast::NodeKind::IndexExpr:
+                    mark_if_ident(a->value.get());
+                    break;
+                case ast::NodeKind::UnaryExpr: {
+                    auto *u = static_cast<ast::UnaryExpr *>(a->target.get());
+                    if (u->op == ast::UnOp::Deref) {
+                        mark_if_ident(a->value.get());
+                    }
+                    break;
+                }
+                case ast::NodeKind::IdentExpr: {
+                    // Asignacion local-a-local: `target = source`.
+                    // No marcamos escape ahora; registramos en el
+                    // grafo de alias para propagacion transitiva.
+                    // Si `target` resulta escaping al final, `source`
+                    // tambien lo sera.
+                    auto *id_t = static_cast<ast::IdentExpr *>(a->target.get());
+                    // Una variable que se reasigna (o a la que se le anade con
+                    // `+=`) puede pasar a tener buffer propio, asi que su
+                    // limpieza al salir del ambito NO se puede omitir.  Se
+                    // apunta aqui, que es el unico sitio que ya recorre el
+                    // cuerpo entero.
+                    reassigned_locals_.insert(id_t->name);
+                    if (a->value &&
+                        a->value->kind == ast::NodeKind::IdentExpr) {
+                        auto *id_v =
+                            static_cast<ast::IdentExpr *>(a->value.get());
+                        alias_graph[id_t->name].push_back(id_v->name);
+                    }
+                    break;
+                }
+                default: break;
+                }
+            }
+            visit_expr(a->target.get());
+            visit_expr(a->value.get());
+            return;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            auto *b = static_cast<ast::BinaryExpr *>(e);
+            visit_expr(b->lhs.get());
+            visit_expr(b->rhs.get());
+            return;
+        }
+        case ast::NodeKind::UnaryExpr: {
+            auto *u = static_cast<ast::UnaryExpr *>(e);
+            visit_expr(u->operand.get());
+            return;
+        }
+        case ast::NodeKind::CallExpr: {
+            auto *c = static_cast<ast::CallExpr *>(e);
+            visit_expr(c->callee.get());
+            for (auto &arg : c->args)
+                visit_expr(arg.get());
+            return;
+        }
+        case ast::NodeKind::FieldAccessExpr: {
+            auto *fa = static_cast<ast::FieldAccessExpr *>(e);
+            visit_expr(fa->base.get());
+            return;
+        }
+        case ast::NodeKind::IndexExpr: {
+            auto *ix = static_cast<ast::IndexExpr *>(e);
+            visit_expr(ix->base.get());
+            visit_expr(ix->index.get());
+            return;
+        }
+        default: return;
+        }
+    };
+
+    visit_stmt = [&](ast::Stmt *st) {
+        if (!st) return;
+        switch (st->kind) {
+        case ast::NodeKind::BlockStmt: {
+            auto *b = static_cast<ast::BlockStmt *>(st);
+            for (auto &child : b->body)
+                visit_stmt(child.get());
+            return;
+        }
+        case ast::NodeKind::VarDeclStmt: {
+            auto *vd = static_cast<ast::VarDeclStmt *>(st);
+            // `T target = source;` propaga alias para tracking transitivo.
+            if (vd->init && vd->init->kind == ast::NodeKind::IdentExpr) {
+                auto *id_v = static_cast<ast::IdentExpr *>(vd->init.get());
+                alias_graph[vd->name].push_back(id_v->name);
+                // Ruta B (move-only): `S b = a` de un struct GESTIONADO (con
+                // dtor o campo destructible) SIN copy-hook es un MOVE (estilo
+                // Rust): `b` toma el ownership y el dtor de `a` se SUPRIME. Sin
+                // esto la copia bit a bit dejaria a `a` y `b` con el mismo
+                // recurso -> doble free.  Para tipos con copy-hook NO es move
+                // (la copia es real, ambos gestionan via __clone__).
+                const Type &st_t = id_v->result_type;
+                if (st_t.kind == PrimitiveKind::STRUCT) {
+                    auto it = tc_.struct_layouts().find(st_t.struct_name);
+                    if (it != tc_.struct_layouts().end()) {
+                        const StructLayout &sl = it->second;
+                        bool managed = sl.has_destructible_field;
+                        if (!managed)
+                            for (const auto &mm : sl.methods)
+                                if (mm.is_destructor) {
+                                    managed = true;
+                                    break;
+                                }
+                        if (managed && !sl.has_copy_hook)
+                            escaping_locals_.insert(id_v->name);
+                    }
+                }
+            }
+            if (vd->init) visit_expr(vd->init.get());
+            return;
+        }
+        case ast::NodeKind::ExprStmt: {
+            auto *es = static_cast<ast::ExprStmt *>(st);
+            visit_expr(es->expr.get());
+            return;
+        }
+        case ast::NodeKind::IfStmt: {
+            auto *si = static_cast<ast::IfStmt *>(st);
+            visit_expr(si->cond.get());
+            visit_stmt(si->then_branch.get());
+            visit_stmt(si->else_branch.get());
+            return;
+        }
+        case ast::NodeKind::WhileStmt: {
+            auto *w = static_cast<ast::WhileStmt *>(st);
+            visit_expr(w->cond.get());
+            visit_stmt(w->body.get());
+            return;
+        }
+        case ast::NodeKind::DoWhileStmt: {
+            auto *dw = static_cast<ast::DoWhileStmt *>(st);
+            visit_stmt(dw->body.get());
+            visit_expr(dw->cond.get());
+            return;
+        }
+        case ast::NodeKind::ForStmt: {
+            auto *f = static_cast<ast::ForStmt *>(st);
+            visit_stmt(f->init.get());
+            visit_expr(f->cond.get());
+            visit_expr(f->step.get());
+            visit_stmt(f->body.get());
+            return;
+        }
+        case ast::NodeKind::TryStmt: {
+            // Recursar tambien en try para detectar escapes de
+            // locales dentro de body, catches y finally.
+            auto *ts = static_cast<ast::TryStmt *>(st);
+            visit_stmt(ts->body.get());
+            for (auto &cc : ts->catches)
+                visit_stmt(cc.body.get());
+            if (ts->finally_body) visit_stmt(ts->finally_body.get());
+            return;
+        }
+        case ast::NodeKind::SynchronizedStmt: {
+            auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+            visit_expr(sy->target.get());
+            visit_stmt(sy->body.get());
+            return;
+        }
+        case ast::NodeKind::ReturnStmt: {
+            auto *r = static_cast<ast::ReturnStmt *>(st);
+            // return ident; -> ident escapa.
+            mark_if_ident(r->value.get());
+            visit_expr(r->value.get());
+            return;
+        }
+        default: return;
+        }
+    };
+    visit_stmt(body);
+
+    // ----- Propagacion transitiva del escape via alias_graph -----
+    // Si `target = source` y target ya esta marcado como escaping, source
+    // tambien debe estarlo (aliasing semantico).  Iteramos hasta punto fijo.
+    // Coste: O(N*M) donde N=#locales escaping, M=longitud cadena alias.
+    // En la practica las cadenas son cortas (1-3 hops); converge rapido.
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const auto &kv : alias_graph) {
+            const std::string &target = kv.first;
+            if (escaping_locals_.count(target) == 0) continue;
+            for (const std::string &source : kv.second) {
+                if (escaping_locals_.insert(source).second) {
+                    changed = true;
+                }
+            }
+        }
+    }
+}
+
+void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
+    if (!needs_free_uniq_helper_) return;
+    // void __vx_free_uniq(i64 slot) { <emit_free_unique_slot(slot)>; ret; }
+    // El cuerpo reusa emit_free_unique_slot (null-guard + deleter dispatch +
+    // RAW_FREE del slot).  Como es una funcion normal, su diamante interno no
+    // colisiona con el tailcall del dtor en el call site del reassign-free.
+    ir::IrFunction fn;
+    fn.name = "__vx_free_uniq";
+    fn.ret_type = ir::IrType::VOID;
+    const ir::IrValueId slot = fn.new_value(ir::IrType::I64, "%slot");
+    fn.values[slot].is_param = true;
+    fn.values[slot].is_host_ptr = true; // el slot es heap host
+    fn.params.push_back(slot);
+    const ir::IrBlockId entry = fn.new_block("entry");
+
+    // Activar el contexto del lowering para reusar emit_free_unique_slot.
+    ir::IrFunction *saved_fn = fn_;
+    ir::IrBlockId saved_block = current_block_;
+    bool saved_term = block_terminated_;
+    fn_ = &fn;
+    current_block_ = entry;
+    block_terminated_ = false;
+    emit_free_unique_slot(slot, 0);
+    // RET void al final (emit_free_unique_slot deja current_block_ en su skip).
+    {
+        ir::IrInstr ret{};
+        ret.op = ir::IrOp::RET;
+        ret.type = ir::IrType::VOID;
+        ret.source_line = 0;
+        fn.append(current_block_, std::move(ret));
+    }
+    fn_ = saved_fn;
+    current_block_ = saved_block;
+    block_terminated_ = saved_term;
+    out.add_function(std::move(fn));
+}
+
+void Lowering::store_slot_fields_prestado(ir::IrValueId v_slot,
+                                          ir::IrValueId v_buf, uint64_t len,
+                                          uint32_t source_line) {
+    auto store_at = [&](uint64_t off, ir::IrValueId v_val, ir::IrType ty) {
+        ir::IrValueId v_addr = v_slot;
+        if (off > 0) {
+            ir::IrValueId v_off = emit_const(ir::IrType::I64, off, source_line);
+            v_addr = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_addr].is_host_ptr = fn_->values[v_slot].is_host_ptr;
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = v_addr;
+            ad.operands = {v_slot, v_off};
+            ad.source_line = source_line;
+            emit(current_block_, std::move(ad));
+        }
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ty;
+        st.dst = ir::IR_NO_VALUE;
+        st.operands = {v_val, v_addr};
+        st.source_line = source_line;
+        emit(current_block_, std::move(st));
+    };
+    store_at(0, v_buf, ir::IrType::I64);
+    store_at(8, emit_const(ir::IrType::I64, len, source_line), ir::IrType::I64);
+    // Capacidad 0: no hay sitio libre detras, cualquier escritura tiene que
+    // copiar antes.  byte[23] = 0xC0 -> bit 7 (los datos estan detras del
+    // puntero) + bit 6 (prestado).
+    store_at(16, emit_const(ir::IrType::I64, 0, source_line), ir::IrType::I64);
+    store_at(23, emit_const(ir::IrType::U8, 0xC0, source_line), ir::IrType::U8);
+}
+
+} // namespace vx

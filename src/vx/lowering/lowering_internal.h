@@ -25,10 +25,13 @@
 
 #include "ir/ssa_ir.h"
 #include "vx/ast.h"
+#include "vx/type_checker.h"
 
 #include <cstdint>
 #include <string>
 #include <set>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace vx {
@@ -108,6 +111,67 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out);
  * @param out Conjunto al que se anaden los nombres.
  */
 void collect_assigned_vars(const ast::Node *n, std::set<std::string> &out);
+
+/**
+ * @name Estado del bajado de macros, por hilo
+ *
+ * Una macro puede llamar a un ayudante que todavia no se ha bajado, y hay que
+ * bajarlo aunque nadie mas lo llame.  @c macro_force_lower recoge esos nombres
+ * para que el recorrido de arriba los emita; @c macro_visiting es la guarda que
+ * impide que una macro que se llama a si misma -- directa o indirectamente --
+ * se persiga sin fin.  Nulo significa "no estamos dentro de una macro", que es
+ * el caso normal.
+ *
+ * Es estado POR HILO porque el compilador baja varios modulos a la vez, y va en
+ * las ranuras propias del proyecto (@c util/thread_slot.h), NO en
+ * @c thread_local.  Se intento lo segundo y rompio el compilador: declaradas
+ * @c extern @c thread_local, otra unidad las alcanzaba por la capa emulada de
+ * este toolchain y no leia el nulo con el que nacen sino memoria sin sentido --
+ * el @c if daba verdadero y se desreferenciaba --, reventando al compilar
+ * programas que ni siquiera tienen macros.  Aquella cabecera ya contaba esta
+ * misma historia: la via emulada les habia costado antes un cuelgue.
+ * @{
+ */
+std::unordered_set<std::string> *macro_force_lower();
+void set_macro_force_lower(std::unordered_set<std::string> *p);
+std::unordered_set<std::string> *macro_visiting();
+void set_macro_visiting(std::unordered_set<std::string> *p);
+/** @} */
+
+/**
+ * @name Si el cuerpo de una macro se puede bajar, y que se le pasa
+ *
+ * Una macro se ejecuta AL COMPILAR, asi que su cuerpo no puede hacer cualquier
+ * cosa: hay formas que no tienen sentido ahi -- o que no se sabrian ejecutar --
+ * y hay que rechazarlas DICIENDO cual es, no con un "no se puede".  De ahi que
+ * estas devuelvan el motivo y no un booleano: la cadena vacia es el si.
+ *
+ * Las dos de `forwards_expr_capture` responden otra cosa: si el cuerpo se
+ * limita a pasar una captura de expresion a otra macro.  Eso permite encadenar
+ * macros sin evaluar la expresion por el camino, que es lo que la haria
+ * ejecutarse antes de tiempo.
+ * @{
+ */
+std::string macro_body_unsupported_reason(const TypeChecker &tc,
+                                          const ast::Stmt *s);
+std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
+                                               const ast::Expr *e);
+bool macro_body_forwards_expr_capture(const TypeChecker &tc,
+                                      const ast::Stmt *s);
+bool macro_body_forwards_expr_capture_expr(const TypeChecker &tc,
+                                           const ast::Expr *e);
+
+/**
+ * @brief Marca en el arbol que ciertos identificadores son parametros de la
+ *        macro, y de que tipo.
+ *
+ * El cuerpo de una macro se clona en cada uso, y al clonarlo sus parametros
+ * dejan de tener quien los declare: sin esta anotacion, quien lo baja despues
+ * no sabria de que tipo son.
+ */
+void annotate_macro_param_idents(
+    ast::Stmt *s, const std::unordered_map<std::string, Type> &param_types);
+/** @} */
 
 } // namespace vx
 

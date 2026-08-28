@@ -230,6 +230,14 @@ add_library(vx_lib STATIC
     # Construir una cadena: decidir cuanto ocupa, si cabe dentro de la propia
     # estructura o hay que pedir memoria, y dejar sus metadatos coherentes.
     lowering/strings_build.cpp
+    # Quien posee cada cosa y que hay que soltar al salir de un ambito.  Vesta
+    # libera sin recolector, asi que el desmontaje se emite en cada via de
+    # salida -- y solo si el valor no ESCAPO (devuelto, guardado, prestado).
+    lowering/ownership.cpp
+    # El recorrido de arriba: bajar un modulo entero y bajar una funcion.  Es
+    # la parte que ORQUESTA -- que se emite, en que orden, y que hay que
+    # generar aunque nadie lo escribiera -- no la que traduce.
+    lowering/module.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
