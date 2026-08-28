@@ -723,6 +723,34 @@ class Lowering {
      */
     void emit_startup_wiring(ir::IrModule &out_module);
 
+    /**
+     * @brief Intenta bajar la llamada como INDIRECTA, por puntero a funcion.
+     *
+     * A donde se salta no se sabe hasta ejecutar, salvo cuando SI se sabe: si
+     * el puntero resulta ser una funcion conocida aqui, se emite la llamada
+     * directa, que ademas se puede meter en linea despues.
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar el valor que la llamada produce.
+     * @return @c true si era indirecta y quedo bajada.
+     */
+    bool try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out);
+
+    /**
+     * @brief Intenta EJECUTAR la llamada ahora, si es a una funcion comptime.
+     *
+     * Si la funcion se declaro comptime y sus argumentos se conocen ya, la
+     * llamada no llega al programa: queda su resultado como constante.  Se
+     * renuncia si algun argumento no se conoce, y si esto es una macro
+     * llamando a otra -- la llamada aun no esta cargada en la maquina
+     * comptime y evaluarla daria relleno horneado como constante.
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar la constante resultante.
+     * @return @c true si se ejecuto; @c false para bajarla normal.
+     */
+    bool try_lower_comptime_fn_call(ast::CallExpr *e, ir::IrValueId &out);
+
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
                             uint32_t source_line);

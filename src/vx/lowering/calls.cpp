@@ -180,339 +180,22 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         if (try_lower_struct_default_ctor(e, v_def)) return v_def;
     }
 
-    // Function pointers: llamada INDIRECTA.  Evaluamos el callee a un SSA
-    // value (la direccion del codigo: una variable fn(...), un cast, etc.) y
-    // emitimos CALLIND con func_ptr = ese valor.  El tipo de retorno viene
-    // del result_type que dejo el type checker.
-    if (e->is_indirect_call) {
-        // OPTIMIZACION (callback conocido): si el puntero a funcion es una
-        // funcion CONOCIDA en compile-time -- `(cfn(...)) nombre` o `&nombre`
-        // -- emitimos un CALL DIRECTO a la funcion en vez de CALLIND.  Mismo
-        // coste que una llamada normal y el inliner del IR puede inlinearla.
-        // (Un cfn que viene de un entero/tabla/variable sigue por CALLIND.)
-        {
-            ast::Expr *inner = nullptr;
-            if (e->callee->kind == ast::NodeKind::CastExpr)
-                inner = static_cast<ast::CastExpr *>(e->callee.get())
-                            ->operand.get();
-            else if (e->callee->kind == ast::NodeKind::UnaryExpr) {
-                auto *u = static_cast<ast::UnaryExpr *>(e->callee.get());
-                if (u->op == ast::UnOp::AddrOf) inner = u->operand.get();
-            }
-            if (inner && inner->kind == ast::NodeKind::IdentExpr) {
-                auto *iid = static_cast<ast::IdentExpr *>(inner);
-                if (iid->is_func_ref) {
-                    const std::string fname = iid->func_ref_mangled.empty()
-                                                  ? iid->name
-                                                  : iid->func_ref_mangled;
-                    std::vector<ir::IrValueId> dargs;
-                    dargs.reserve(e->args.size());
-                    for (auto &a : e->args) {
-                        const ir::IrValueId av = lower_expr(a.get());
-                        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                        dargs.push_back(av);
-                    }
-                    const ir::IrType drt =
-                        ir_type_from_primitive(e->result_type.kind);
-                    const ir::IrValueId ddst =
-                        (e->result_type.kind == PrimitiveKind::VOID)
-                            ? ir::IR_NO_VALUE
-                            : fn_->new_value(drt);
-                    ir::IrInstr di{};
-                    di.op = ir::IrOp::CALL;
-                    di.func_name = fname;
-                    di.type = drt;
-                    di.dst = ddst;
-                    di.operands = std::move(dargs);
-                    // ABI del CFN del cast/&: cuando `(cfn con register) fn` se
-                    // devirtualiza a CALL directo, la ABI a usar es la del TIPO
-                    // del puntero (el cfn), NO la de la funcion destino -- que
-                    // puede ser un `invoke` @Naked SIN register en sus params
-                    // (la ABI vive solo en el cfn).  Sin esto el CALL usaria la
-                    // ABI estandar y el marshalling seria incorrecto.
-                    di.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
-                    di.source_line = e->loc.line;
-                    emit(current_block_, std::move(di));
-                    return ddst;
-                }
-            }
-        }
-        const ir::IrValueId fnp = lower_expr(e->callee.get());
-        std::vector<ir::IrValueId> args;
-        args.reserve(e->args.size());
-        // Promocion del literal a StringObject usando los tipos de parametro
-        // que DECLARA el cfn.  En una llamada directa el lowering conoce la
-        // firma del callee y la hace; por la via indirecta no se consultaba, y
-        // un literal en posicion `string` llegaba como puntero crudo a
-        // static_data -> el callee lo leia como StringObject y sacaba basura
-        // (str_length daba 0).  Mismo criterio que el resto de sitios que
-        // conocen el tipo esperado.
-        const Type &fnty = e->callee->result_type;
-        for (size_t ai = 0; ai < e->args.size(); ++ai) {
-            ast::Expr *a = e->args[ai].get();
-            ir::IrValueId av;
-            if (a && a->kind == ast::NodeKind::StringLitExpr &&
-                ai < fnty.fn_params.size() &&
-                fnty.fn_params[ai].kind == PrimitiveKind::STRING) {
-                av = lower_string_literal_to_string_object(
-                    static_cast<ast::StringLitExpr *>(a));
-            } else {
-                av = lower_expr(a);
-            }
-            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-            args.push_back(av);
-        }
-        const ir::IrType rt = ir_type_from_primitive(e->result_type.kind);
-        const ir::IrValueId dst = (e->result_type.kind == PrimitiveKind::VOID)
-                                      ? ir::IR_NO_VALUE
-                                      : fn_->new_value(rt);
-        // El callee puede ser un LAMBDA (fn(...), fat-pointer de 16 bytes) o un
-        // puntero a funcion CRUDO (cfn(...), 8 bytes).  Lambda: fnp es el
-        // PUNTERO al slot {fn_addr, env} -> cargar fn_addr de [fnp+0] y env de
-        // [fnp+8] y emitir CALLCLOSURE (env en R14).  cfn: fnp ES la direccion
-        // -> CALLIND directo (sin slot, sin env).
-        const bool is_lambda =
-            (e->callee->result_type.kind == PrimitiveKind::FUNCTION &&
-             !e->callee->result_type.fn_is_raw);
-        if (is_lambda) {
-            const ir::IrValueId fn_addr =
-                emit_load_typed(fnp, ir::IrType::I64, e->loc.line);
-            const ir::IrValueId fnp8 = fn_->new_value(ir::IrType::PTR);
-            {
-                const ir::IrValueId off8 =
-                    emit_const(ir::IrType::I64, 8, e->loc.line);
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = fnp8;
-                ad.operands = {fnp, off8};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-                // El slot {fn_addr, env} puede ser host (closure-en-campo de
-                // clase, RAW_ALLOC) o VM (lambda local en stack, ALLOCA).  La
-                // host-ness del slot+8 debe HEREDAR la del slot en TODOS los
-                // backends para que la carga de env emita movh/mov correcto.
-                // Antes solo se propagaba en native_poo (AOT) -> en VM/JIT un
-                // closure-en-campo cargaba env con mov (vm_mem) -> basura.
-                fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
-            }
-            const ir::IrValueId env =
-                emit_load_typed(fnp8, ir::IrType::I64, e->loc.line);
-            std::vector<ir::IrValueId> cargs;
-            cargs.reserve(1 + args.size());
-            cargs.push_back(env);
-            for (auto v : args)
-                cargs.push_back(v);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLCLOSURE;
-            ins.type = rt;
-            ins.dst = dst;
-            ins.func_ptr = fn_addr;
-            ins.operands = std::move(cargs);
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-            return dst;
-        }
-        // Naturaleza HOST vs VM del puntero: un cfn cuyo valor es una direccion
-        // del proceso host (p.ej. un export resuelto con GetProcAddress/dlsym)
-        // NO se puede invocar con CALLIND, que es una llamada indirecta DE LA
-        // VM e interpreta la direccion como codigo VM -- los argumentos no
-        // llegan y el fallo es silencioso.  Esa direccion se invoca por la via
-        // nativa, la misma que usa `ffi_call`.  La distincion sale del dato que
-        // el IR ya lleva por valor (@c is_host_ptr), igual que decide `mov`
-        // frente a `movh`; no hace falta marcarla en el tipo.
-        if (fnp != ir::IR_NO_VALUE && fn_->values[fnp].is_host_ptr) {
-            ir::IrInstr ni{};
-            ni.op = ir::IrOp::CALLN;
-            ni.type = rt;
-            ni.dst = dst;
-            ni.func_name =
-                "__callni__:"; // prefijo que el emitter baja a CALLNI
-            ni.operands.reserve(args.size() + 1);
-            ni.operands.push_back(fnp); // operando 0 = puntero a la funcion
-            for (const auto &a : args)
-                ni.operands.push_back(a);
-            ni.source_line = e->loc.line;
-            emit(current_block_, std::move(ni));
-            return dst;
-        }
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLIND;
-        ins.type = rt;
-        ins.dst = dst;
-        ins.func_ptr = fnp;
-        ins.operands = std::move(args);
-        // ABI custom: el tipo del puntero (cfn) LLEVA los abi_regs; los fijamos
-        // en la instruccion en compile-time (el codegen coloca cada arg en su
-        // registro).  Aunque el valor del puntero cambie en runtime, todas las
-        // funciones asignables comparten esta ABI (garantia del type checker).
-        ins.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
-        return dst;
+    {
+        ir::IrValueId v_ind = ir::IR_NO_VALUE;
+        if (try_lower_indirect_call(e, v_ind)) return v_ind;
     }
+
 
     {
         ir::IrValueId v_ns = ir::IR_NO_VALUE;
         if (try_lower_namespaced_call(e, v_ns)) return v_ns;
     }
 
-    // A.39: si el callee es una `comptime fn` y todos los args son
-    // comptime-evaluables, ejecutamos la fn en compile-time y
-    // emitimos el resultado como CONST.  Caso comun: usar comptime
-    // fn dentro de un `comptime for` body donde los args son
-    // constantes por iteracion.
-    if (e->callee && e->callee->kind == ast::NodeKind::IdentExpr) {
-        auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
-        const auto &cfns = tc_.comptime_fns();
-        auto cit = cfns.find(cid->name);
-        if (cit != cfns.end()) {
-            /*  MC.17.3: si estamos dentro de un @Macro body
-             * lowereado a IR Y el callee es OTRO @Macro, NO
-             * intentamos comptime-eval; en su lugar caemos al
-             * lowering normal mas abajo que emitira CALLVM regular
-             * a `__macro_<callee>`.  Los args pueden ser params del
-             * macro contenedor (runtime values) lo cual es valido.
-             *
-             * MA.2-nested-call: la misma regla aplica a una comptime
-             * fn-VM llamada dentro de otra (`comptime Caja caja(){ c.min =
-             * punto(2,3); }`).  Al bajar `__macro_caja` en el pass 1 la
-             * ComptimeVM aun no tiene `__macro_punto`, asi que comptime-eval
-             * daria DIFERIDO y hornearia ceros dentro de `__macro_caja`.  En
-             * su lugar emitimos un CALLVM a `__macro_punto` (con SRET si el
-             * callee devuelve struct por valor): cuando `__macro_caja` corre
-             * en la VM (invocado desde el call site) llama al `__macro_punto`
-             * ya cargado y el struct se rellena de verdad.  Se EXCLUYEN las
-             * force-lowered (un @Macro las baja con nombre plano `code.<X>`;
-             * el rewrite a `__macro_` las rompe -> caen a su propio path en
-             * 18646). */
-            const bool callee_is_vm_comptime =
-                cit->second && !cit->second->is_macro &&
-                comptime_fn_needs_vm(tc_, cit->second) &&
-                comptime_fns_to_force_lower_.count(cid->name) == 0;
-            if (current_fn_is_macro_ && cit->second &&
-                (cit->second->is_macro || callee_is_vm_comptime)) {
-                /* Caer al lowering normal de CallExpr -- no
-                 * intentar comptime eval aqui.  El rewrite del
-                 * nombre callee_name -> __macro_<name> se hace al
-                 * emitir el IrInstr::CALL al final de lower_call. */
-                goto skip_comptime_eval_for_macro_to_macro;
-            }
-            /* Solo-LSP: cuando bajamos comptime fns a IR para inspeccion
-             * (emit_comptime_fns_), una llamada con args runtime -- p.ej. la
-             * auto-llamada de una comptime fn RECURSIVA -- no es
-             * comptime-evaluable; en vez de error, caemos al CALLVM normal
-             * (la callee ya esta en el IR como funcion regular). */
-            ComptimeEvalResult r = comptime_eval_expr(tc_, e);
-            if (!r.ok && emit_comptime_fns_) {
-                goto skip_comptime_eval_for_macro_to_macro;
-            }
-            /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
-             * interp fallback).  Con el two- (.velb y AOT), pass 2
-             * (bytecode comptime cargado via prebuilt) da el valor real; el
-             * pass 1 (sin bytecode) emite placeholder 0 -- inocuo, porque el
-             * cr del pass 1 se descarta y el pass 2 recompila.  La fn ya se
-             * bajo a `__macro_<name>` en lower_function. */
-            if (!r.ok && comptime_fn_uses_asm(tc_, cit->second)) {
-                const uint32_t src_line_asm = e->loc.line;
-                ir::IrType t_asm = ir::IrType::I64;
-                if (cit->second->return_type) {
-                    Type rt =
-                        tc_.resolve_type_node(cit->second->return_type.get());
-                    t_asm = ir_type_from_primitive(rt.kind);
-                }
-                std::vector<uint64_t> vm_args;
-                bool args_ok = true;
-                for (const auto &a : e->args) {
-                    ComptimeEvalResult av = comptime_eval_expr(tc_, a.get());
-                    if (!av.ok) {
-                        args_ok = false;
-                        break;
-                    }
-                    vm_args.push_back(static_cast<uint64_t>(av.value));
-                }
-                uint64_t r0 = 0;
-                if (args_ok) {
-                    (void)const_cast<TypeChecker &>(tc_)
-                        .comptime_runtime()
-                        .invoke_simple_macro("__macro_" + cid->name, vm_args,
-                                             r0);
-                }
-                return emit_const(t_asm, r0, src_line_asm);
-            }
-            /* Force-lower: si la comptime fn fue recolectada para bajarse a
-             * runtime (porque un @Macro lowereable la referencia), su llamada
-             * NO se comptime-evalua -- se emite un CALL normal a
-             * `code.<helper>` (via el label mas abajo).  El arg puede ser un
-             * param runtime del macro; el helper es ahora una fn runtime que lo
-             * recibe.  El rewrite a `__macro_` NO aplica (la fn no es
-             * is_macro), asi que el nombre queda plano y resuelve contra la fn
-             * force-lowered. */
-            if ((!r.ok || r.deferred) &&
-                comptime_fns_to_force_lower_.count(cid->name)) {
-                /* El fold en pass-1 puede devolver DIFERIDO (r.ok=true pero
-                 * r.deferred): la comptime fn corre en la ComptimeVM que aun no
-                 * tiene bytecode -> el fold da un valor vacio/placeholder. Para
-                 * una fn force-lowered (un @Macro lowereable la referencia), NO
-                 * hornear ese vacio: emitir CALLVM a code.<helper>, que se
-                 * ejecuta al INVOCAR el macro (cuando el helper ya existe). Sin
-                 * esto, un @Macro que llama a un helper comptime devolvia "".
-                 */
-                goto skip_comptime_eval_for_macro_to_macro;
-            }
-            if (!r.ok) {
-                error_at(e->loc,
-                         "llamada a comptime fn '" + cid->name +
-                             "' no es comptime-evaluable (argumento runtime?)");
-                return ir::IR_NO_VALUE;
-            }
-            const uint32_t src_line = e->loc.line;
-            /* A.43.16: para @Macro fns, el type checker ya parseo +
-             * type-checo la expresion generada y la guardo en
-             * `e->macro_expanded`.  La rama temprana al inicio de
-             * lower_call (A.43.10) ya hizo lower_expr del AST
-             * sustituido y retorno antes de llegar aqui.  Asi que
-             * en este punto NO esperamos un @Macro -- todos los
-             * callees con string return son los comptime fns
-             * regulares que materializan StringObject. */
-            if (r.is_str) {
-                /* Construir StringObject inline. */
-                std::vector<uint8_t> bytes(r.str.begin(), r.str.end());
-                const uint64_t idx =
-                    out_mod_->intern_static_data(std::move(bytes));
-                ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
-                ir::IrValueId v_len = emit_const(
-                    ir::IrType::I64, (uint64_t)r.str.size(), src_line);
-                ir::IrValueId v_str =
-                    emit_string_literal_repr(v_addr, v_len, -1, src_line);
-                return v_str;
-            }
-            /* Retorno struct por valor: la funcion comptime calculo el struct y
-             * lo devolvio con un campo por miembro; lo materializamos como un
-             * struct constante (buffer + STORE por campo), sin llamada en
-             * tiempo de ejecucion. */
-            if (r.is_struct) {
-                auto *fn_decl_s = cfns.at(cid->name);
-                if (fn_decl_s && fn_decl_s->return_type) {
-                    const Type rt =
-                        tc_.resolve_type_node(fn_decl_s->return_type.get());
-                    auto it_sl = tc_.struct_layouts().find(rt.struct_name);
-                    if (it_sl != tc_.struct_layouts().end())
-                        return materialize_comptime_struct(r, it_sl->second,
-                                                           src_line);
-                }
-            }
-            /* Tipo de retorno declarado por la fn. */
-            ir::IrType t = ir::IrType::I64;
-            auto *fn_decl = cfns.at(cid->name);
-            if (fn_decl && fn_decl->return_type) {
-                Type rt = tc_.resolve_type_node(fn_decl->return_type.get());
-                t = ir_type_from_primitive(rt.kind);
-            }
-            return emit_const(t, (uint64_t)r.value, src_line);
-        }
+    {
+        ir::IrValueId v_ct = ir::IR_NO_VALUE;
+        if (try_lower_comptime_fn_call(e, v_ct)) return v_ct;
     }
-skip_comptime_eval_for_macro_to_macro:
+
 
     {
         ir::IrValueId v_enum = ir::IR_NO_VALUE;
@@ -2838,6 +2521,372 @@ bool Lowering::try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out) {
             out = v_dst;
             return true;
         }
+    }
+    return false;
+}
+
+/**
+ * @brief Intenta bajar la llamada como INDIRECTA, por un puntero a funcion.
+ *
+ * A donde se salta no se sabe hasta ejecutar, asi que se evalua el callee a un
+ * valor -- una variable de tipo funcion, un cast, un `&nombre` -- y se salta a
+ * el.  Salvo cuando SI se sabe: si el puntero resulta ser una funcion conocida
+ * aqui mismo, se emite la llamada directa, que ademas se puede meter en linea
+ * despues; el salto indirecto impide las dos cosas.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar el valor que la llamada produce.
+ * @return @c true si era indirecta y quedo bajada.
+ */
+bool Lowering::try_lower_indirect_call(ast::CallExpr *e, ir::IrValueId &out) {
+    if (!e->is_indirect_call) return false;
+    // OPTIMIZACION (callback conocido): si el puntero a funcion es una
+    // funcion CONOCIDA en compile-time -- `(cfn(...)) nombre` o `&nombre`
+    // -- emitimos un CALL DIRECTO a la funcion en vez de CALLIND.  Mismo
+    // coste que una llamada normal y el inliner del IR puede inlinearla.
+    // (Un cfn que viene de un entero/tabla/variable sigue por CALLIND.)
+    {
+        ast::Expr *inner = nullptr;
+        if (e->callee->kind == ast::NodeKind::CastExpr)
+            inner = static_cast<ast::CastExpr *>(e->callee.get())
+                        ->operand.get();
+        else if (e->callee->kind == ast::NodeKind::UnaryExpr) {
+            auto *u = static_cast<ast::UnaryExpr *>(e->callee.get());
+            if (u->op == ast::UnOp::AddrOf) inner = u->operand.get();
+        }
+        if (inner && inner->kind == ast::NodeKind::IdentExpr) {
+            auto *iid = static_cast<ast::IdentExpr *>(inner);
+            if (iid->is_func_ref) {
+                const std::string fname = iid->func_ref_mangled.empty()
+                                              ? iid->name
+                                              : iid->func_ref_mangled;
+                std::vector<ir::IrValueId> dargs;
+                dargs.reserve(e->args.size());
+                for (auto &a : e->args) {
+                    const ir::IrValueId av = lower_expr(a.get());
+                    if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                    dargs.push_back(av);
+                }
+                const ir::IrType drt =
+                    ir_type_from_primitive(e->result_type.kind);
+                const ir::IrValueId ddst =
+                    (e->result_type.kind == PrimitiveKind::VOID)
+                        ? ir::IR_NO_VALUE
+                        : fn_->new_value(drt);
+                ir::IrInstr di{};
+                di.op = ir::IrOp::CALL;
+                di.func_name = fname;
+                di.type = drt;
+                di.dst = ddst;
+                di.operands = std::move(dargs);
+                // ABI del CFN del cast/&: cuando `(cfn con register) fn` se
+                // devirtualiza a CALL directo, la ABI a usar es la del TIPO
+                // del puntero (el cfn), NO la de la funcion destino -- que
+                // puede ser un `invoke` @Naked SIN register en sus params
+                // (la ABI vive solo en el cfn).  Sin esto el CALL usaria la
+                // ABI estandar y el marshalling seria incorrecto.
+                di.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
+                di.source_line = e->loc.line;
+                emit(current_block_, std::move(di));
+                out = ddst;
+                return true;
+            }
+        }
+    }
+    const ir::IrValueId fnp = lower_expr(e->callee.get());
+    std::vector<ir::IrValueId> args;
+    args.reserve(e->args.size());
+    // Promocion del literal a StringObject usando los tipos de parametro
+    // que DECLARA el cfn.  En una llamada directa el lowering conoce la
+    // firma del callee y la hace; por la via indirecta no se consultaba, y
+    // un literal en posicion `string` llegaba como puntero crudo a
+    // static_data -> el callee lo leia como StringObject y sacaba basura
+    // (str_length daba 0).  Mismo criterio que el resto de sitios que
+    // conocen el tipo esperado.
+    const Type &fnty = e->callee->result_type;
+    for (size_t ai = 0; ai < e->args.size(); ++ai) {
+        ast::Expr *a = e->args[ai].get();
+        ir::IrValueId av;
+        if (a && a->kind == ast::NodeKind::StringLitExpr &&
+            ai < fnty.fn_params.size() &&
+            fnty.fn_params[ai].kind == PrimitiveKind::STRING) {
+            av = lower_string_literal_to_string_object(
+                static_cast<ast::StringLitExpr *>(a));
+        } else {
+            av = lower_expr(a);
+        }
+        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+        args.push_back(av);
+    }
+    const ir::IrType rt = ir_type_from_primitive(e->result_type.kind);
+    const ir::IrValueId dst = (e->result_type.kind == PrimitiveKind::VOID)
+                                  ? ir::IR_NO_VALUE
+                                  : fn_->new_value(rt);
+    // El callee puede ser un LAMBDA (fn(...), fat-pointer de 16 bytes) o un
+    // puntero a funcion CRUDO (cfn(...), 8 bytes).  Lambda: fnp es el
+    // PUNTERO al slot {fn_addr, env} -> cargar fn_addr de [fnp+0] y env de
+    // [fnp+8] y emitir CALLCLOSURE (env en R14).  cfn: fnp ES la direccion
+    // -> CALLIND directo (sin slot, sin env).
+    const bool is_lambda =
+        (e->callee->result_type.kind == PrimitiveKind::FUNCTION &&
+         !e->callee->result_type.fn_is_raw);
+    if (is_lambda) {
+        const ir::IrValueId fn_addr =
+            emit_load_typed(fnp, ir::IrType::I64, e->loc.line);
+        const ir::IrValueId fnp8 = fn_->new_value(ir::IrType::PTR);
+        {
+            const ir::IrValueId off8 =
+                emit_const(ir::IrType::I64, 8, e->loc.line);
+            ir::IrInstr ad{};
+            ad.op = ir::IrOp::ADD;
+            ad.type = ir::IrType::I64;
+            ad.dst = fnp8;
+            ad.operands = {fnp, off8};
+            ad.source_line = e->loc.line;
+            emit(current_block_, std::move(ad));
+            // El slot {fn_addr, env} puede ser host (closure-en-campo de
+            // clase, RAW_ALLOC) o VM (lambda local en stack, ALLOCA).  La
+            // host-ness del slot+8 debe HEREDAR la del slot en TODOS los
+            // backends para que la carga de env emita movh/mov correcto.
+            // Antes solo se propagaba en native_poo (AOT) -> en VM/JIT un
+            // closure-en-campo cargaba env con mov (vm_mem) -> basura.
+            fn_->values[fnp8].is_host_ptr = fn_->values[fnp].is_host_ptr;
+        }
+        const ir::IrValueId env =
+            emit_load_typed(fnp8, ir::IrType::I64, e->loc.line);
+        std::vector<ir::IrValueId> cargs;
+        cargs.reserve(1 + args.size());
+        cargs.push_back(env);
+        for (auto v : args)
+            cargs.push_back(v);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALLCLOSURE;
+        ins.type = rt;
+        ins.dst = dst;
+        ins.func_ptr = fn_addr;
+        ins.operands = std::move(cargs);
+        ins.source_line = e->loc.line;
+        emit(current_block_, std::move(ins));
+        out = dst;
+        return true;
+    }
+    // Naturaleza HOST vs VM del puntero: un cfn cuyo valor es una direccion
+    // del proceso host (p.ej. un export resuelto con GetProcAddress/dlsym)
+    // NO se puede invocar con CALLIND, que es una llamada indirecta DE LA
+    // VM e interpreta la direccion como codigo VM -- los argumentos no
+    // llegan y el fallo es silencioso.  Esa direccion se invoca por la via
+    // nativa, la misma que usa `ffi_call`.  La distincion sale del dato que
+    // el IR ya lleva por valor (@c is_host_ptr), igual que decide `mov`
+    // frente a `movh`; no hace falta marcarla en el tipo.
+    if (fnp != ir::IR_NO_VALUE && fn_->values[fnp].is_host_ptr) {
+        ir::IrInstr ni{};
+        ni.op = ir::IrOp::CALLN;
+        ni.type = rt;
+        ni.dst = dst;
+        ni.func_name =
+            "__callni__:"; // prefijo que el emitter baja a CALLNI
+        ni.operands.reserve(args.size() + 1);
+        ni.operands.push_back(fnp); // operando 0 = puntero a la funcion
+        for (const auto &a : args)
+            ni.operands.push_back(a);
+        ni.source_line = e->loc.line;
+        emit(current_block_, std::move(ni));
+        out = dst;
+        return true;
+    }
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::CALLIND;
+    ins.type = rt;
+    ins.dst = dst;
+    ins.func_ptr = fnp;
+    ins.operands = std::move(args);
+    // ABI custom: el tipo del puntero (cfn) LLEVA los abi_regs; los fijamos
+    // en la instruccion en compile-time (el codegen coloca cada arg en su
+    // registro).  Aunque el valor del puntero cambie en runtime, todas las
+    // funciones asignables comparten esta ABI (garantia del type checker).
+    ins.call_abi_regs = e->callee->result_type.fn_param_abi_regs;
+    ins.source_line = e->loc.line;
+    emit(current_block_, std::move(ins));
+    out = dst;
+    return true;
+}
+
+/**
+ * @brief Intenta EJECUTAR la llamada ahora, si es a una funcion comptime.
+ *
+ * Si la funcion se declaro comptime y sus argumentos se conocen ya, la llamada
+ * no llega al programa: se ejecuta aqui y lo que queda es su resultado como
+ * constante.  Segun lo que devuelva eso es un entero, una cadena internada, o
+ * un struct materializado campo a campo.
+ *
+ * Se renuncia -- y la llamada se baja como cualquier otra -- cuando algun
+ * argumento no se conoce todavia, y cuando esto es una macro llamando a otra:
+ * la funcion llamada aun no esta cargada en la maquina comptime, asi que
+ * evaluarla ahora daria un resultado de relleno horneado como constante.
+ * Entonces se emite la llamada de verdad, que corre cuando la macro corra.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar la constante resultante.
+ * @return @c true si se ejecuto en compilacion; @c false para bajarla normal.
+ */
+bool Lowering::try_lower_comptime_fn_call(ast::CallExpr *e,
+                                          ir::IrValueId &out) {
+    if (!e->callee || e->callee->kind != ast::NodeKind::IdentExpr)
+        return false;
+    auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
+    const auto &cfns = tc_.comptime_fns();
+    auto cit = cfns.find(cid->name);
+    if (cit != cfns.end()) {
+        /*  MC.17.3: si estamos dentro de un @Macro body
+         * lowereado a IR Y el callee es OTRO @Macro, NO
+         * intentamos comptime-eval; en su lugar caemos al
+         * lowering normal mas abajo que emitira CALLVM regular
+         * a `__macro_<callee>`.  Los args pueden ser params del
+         * macro contenedor (runtime values) lo cual es valido.
+         *
+         * MA.2-nested-call: la misma regla aplica a una comptime
+         * fn-VM llamada dentro de otra (`comptime Caja caja(){ c.min =
+         * punto(2,3); }`).  Al bajar `__macro_caja` en el pass 1 la
+         * ComptimeVM aun no tiene `__macro_punto`, asi que comptime-eval
+         * daria DIFERIDO y hornearia ceros dentro de `__macro_caja`.  En
+         * su lugar emitimos un CALLVM a `__macro_punto` (con SRET si el
+         * callee devuelve struct por valor): cuando `__macro_caja` corre
+         * en la VM (invocado desde el call site) llama al `__macro_punto`
+         * ya cargado y el struct se rellena de verdad.  Se EXCLUYEN las
+         * force-lowered (un @Macro las baja con nombre plano `code.<X>`;
+         * el rewrite a `__macro_` las rompe -> caen a su propio path en
+         * 18646). */
+        const bool callee_is_vm_comptime =
+            cit->second && !cit->second->is_macro &&
+            comptime_fn_needs_vm(tc_, cit->second) &&
+            comptime_fns_to_force_lower_.count(cid->name) == 0;
+        if (current_fn_is_macro_ && cit->second &&
+            (cit->second->is_macro || callee_is_vm_comptime)) {
+            /* Caer al lowering normal de CallExpr -- no
+             * intentar comptime eval aqui.  El rewrite del
+             * nombre callee_name -> __macro_<name> se hace al
+             * emitir el IrInstr::CALL al final de lower_call. */
+                return false;
+        }
+        /* Solo-LSP: cuando bajamos comptime fns a IR para inspeccion
+         * (emit_comptime_fns_), una llamada con args runtime -- p.ej. la
+         * auto-llamada de una comptime fn RECURSIVA -- no es
+         * comptime-evaluable; en vez de error, caemos al CALLVM normal
+         * (la callee ya esta en el IR como funcion regular). */
+        ComptimeEvalResult r = comptime_eval_expr(tc_, e);
+        if (!r.ok && emit_comptime_fns_) {
+                return false;
+        }
+        /* F1: comptime fn con asm -> ejecutar en el ComptimeVM (JIT +
+         * interp fallback).  Con el two- (.velb y AOT), pass 2
+         * (bytecode comptime cargado via prebuilt) da el valor real; el
+         * pass 1 (sin bytecode) emite placeholder 0 -- inocuo, porque el
+         * cr del pass 1 se descarta y el pass 2 recompila.  La fn ya se
+         * bajo a `__macro_<name>` en lower_function. */
+        if (!r.ok && comptime_fn_uses_asm(tc_, cit->second)) {
+            const uint32_t src_line_asm = e->loc.line;
+            ir::IrType t_asm = ir::IrType::I64;
+            if (cit->second->return_type) {
+                Type rt =
+                    tc_.resolve_type_node(cit->second->return_type.get());
+                t_asm = ir_type_from_primitive(rt.kind);
+            }
+            std::vector<uint64_t> vm_args;
+            bool args_ok = true;
+            for (const auto &a : e->args) {
+                ComptimeEvalResult av = comptime_eval_expr(tc_, a.get());
+                if (!av.ok) {
+                    args_ok = false;
+                    break;
+                }
+                vm_args.push_back(static_cast<uint64_t>(av.value));
+            }
+            uint64_t r0 = 0;
+            if (args_ok) {
+                (void)const_cast<TypeChecker &>(tc_)
+                    .comptime_runtime()
+                    .invoke_simple_macro("__macro_" + cid->name, vm_args,
+                                         r0);
+            }
+            out = emit_const(t_asm, r0, src_line_asm);
+            return true;
+        }
+        /* Force-lower: si la comptime fn fue recolectada para bajarse a
+         * runtime (porque un @Macro lowereable la referencia), su llamada
+         * NO se comptime-evalua -- se emite un CALL normal a
+         * `code.<helper>` (via el label mas abajo).  El arg puede ser un
+         * param runtime del macro; el helper es ahora una fn runtime que lo
+         * recibe.  El rewrite a `__macro_` NO aplica (la fn no es
+         * is_macro), asi que el nombre queda plano y resuelve contra la fn
+         * force-lowered. */
+        if ((!r.ok || r.deferred) &&
+            comptime_fns_to_force_lower_.count(cid->name)) {
+            /* El fold en pass-1 puede devolver DIFERIDO (r.ok=true pero
+             * r.deferred): la comptime fn corre en la ComptimeVM que aun no
+             * tiene bytecode -> el fold da un valor vacio/placeholder. Para
+             * una fn force-lowered (un @Macro lowereable la referencia), NO
+             * hornear ese vacio: emitir CALLVM a code.<helper>, que se
+             * ejecuta al INVOCAR el macro (cuando el helper ya existe). Sin
+             * esto, un @Macro que llama a un helper comptime devolvia "".
+             */
+                return false;
+        }
+        if (!r.ok) {
+            error_at(e->loc,
+                     "llamada a comptime fn '" + cid->name +
+                         "' no es comptime-evaluable (argumento runtime?)");
+            out = ir::IR_NO_VALUE;
+            return true;
+        }
+        const uint32_t src_line = e->loc.line;
+        /* A.43.16: para @Macro fns, el type checker ya parseo +
+         * type-checo la expresion generada y la guardo en
+         * `e->macro_expanded`.  La rama temprana al inicio de
+         * lower_call (A.43.10) ya hizo lower_expr del AST
+         * sustituido y retorno antes de llegar aqui.  Asi que
+         * en este punto NO esperamos un @Macro -- todos los
+         * callees con string return son los comptime fns
+         * regulares que materializan StringObject. */
+        if (r.is_str) {
+            /* Construir StringObject inline. */
+            std::vector<uint8_t> bytes(r.str.begin(), r.str.end());
+            const uint64_t idx =
+                out_mod_->intern_static_data(std::move(bytes));
+            ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
+            ir::IrValueId v_len = emit_const(
+                ir::IrType::I64, (uint64_t)r.str.size(), src_line);
+            ir::IrValueId v_str =
+                emit_string_literal_repr(v_addr, v_len, -1, src_line);
+            out = v_str;
+            return true;
+        }
+        /* Retorno struct por valor: la funcion comptime calculo el struct y
+         * lo devolvio con un campo por miembro; lo materializamos como un
+         * struct constante (buffer + STORE por campo), sin llamada en
+         * tiempo de ejecucion. */
+        if (r.is_struct) {
+            auto *fn_decl_s = cfns.at(cid->name);
+            if (fn_decl_s && fn_decl_s->return_type) {
+                const Type rt =
+                    tc_.resolve_type_node(fn_decl_s->return_type.get());
+                auto it_sl = tc_.struct_layouts().find(rt.struct_name);
+                if (it_sl != tc_.struct_layouts().end())
+                    {
+                        out = materialize_comptime_struct(r, it_sl->second,
+                                                          src_line);
+                        return true;
+                    }
+            }
+        }
+        /* Tipo de retorno declarado por la fn. */
+        ir::IrType t = ir::IrType::I64;
+        auto *fn_decl = cfns.at(cid->name);
+        if (fn_decl && fn_decl->return_type) {
+            Type rt = tc_.resolve_type_node(fn_decl->return_type.get());
+            t = ir_type_from_primitive(rt.kind);
+        }
+        out = emit_const(t, (uint64_t)r.value, src_line);
+        return true;
     }
     return false;
 }
