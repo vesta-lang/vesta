@@ -81,6 +81,55 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
     }
     if (!has_comptime_ctor) return ir::IR_NO_VALUE;
 
+    /* Dentro de codigo comptime la llamada NO se materializa: se LLAMA.
+     *
+     * Materializar es lo correcto en un sitio de ejecucion -- el struct se
+     * calcula al compilar y en el binario solo quedan sus campos ya escritos --
+     * pero aqui el sitio es el cuerpo de OTRA funcion comptime, que todavia se
+     * esta bajando.  La maquina de compilacion no puede ejecutar un ctor cuyo
+     * bytecode aun se esta emitiendo, asi que se caia al relleno de mas abajo:
+     * un bufer SIN INICIALIZAR del que luego se leen los campos.  Lo que salia
+     * no era cero -- era lo que hubiera en el monton, o sea una direccion
+     * cualquiera leida como si fuera el struct -- y salia sin decir nada.
+     *
+     * En el artefacto comptime el ctor SI existe, con su nombre `__macro_`, y
+     * ahi cualquier funcion puede llamar a cualquier otra.  Asi que se emite la
+     * llamada igual que la de un constructor normal -- bufer del tamano del
+     * struct como `this`, y los argumentos detras -- y la ejecuta la maquina
+     * cuando le toque, con el resto del cuerpo. */
+    if (fn_ != nullptr && ir::es_cuerpo_comptime(fn_->name)) {
+        const uint64_t buf_bytes =
+            (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
+        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.imm = buf_bytes;
+        al.dst = v_buf;
+        al.host_alloca = true;
+        al.source_line = e->loc.line;
+        emit(current_block_, std::move(al));
+        fn_->values[v_buf].is_host_ptr = true;
+
+        std::vector<ir::IrValueId> operands;
+        operands.reserve(e->args.size() + 1);
+        operands.push_back(v_buf); // `this`: el bufer que el ctor inicializa
+        for (auto &a : e->args) {
+            const ir::IrValueId av = lower_expr(a.get());
+            if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+            operands.push_back(av);
+        }
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.type = ir::IrType::VOID;
+        ins.dst = ir::IR_NO_VALUE;
+        ins.func_name = comptime_ctor_ir_name(slay.name, arity);
+        ins.operands = std::move(operands);
+        ins.source_line = e->loc.line;
+        emit(current_block_, std::move(ins));
+        return v_buf;
+    }
+
     // A partir de aqui el ctor comptime SIEMPRE materializa el struct (con su
     // valor real o con un placeholder): un ctor comptime no tiene version
     // runtime, asi que caer al ctor `<T>__ctor_N` dejaria un simbolo sin
