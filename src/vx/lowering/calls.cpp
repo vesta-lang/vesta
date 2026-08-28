@@ -175,58 +175,9 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         }
     }
 
-    // `Tipo.default([{...}])` / `val.default([{...}])`: struct con sus valores
-    // por defecto (+ overrides opcionales).  Reutiliza zero-fill + defaults de
-    // campo + init-list.  Forma estatica (base = nombre de struct) aloca un
-    // struct fresco; forma de instancia (base = variable struct) lo resetea.
-    if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr &&
-        e->result_type.kind == PrimitiveKind::STRUCT) {
-        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        if (fa->field_name == "default") {
-            const std::string &sname = e->result_type.struct_name;
-            auto it = tc_.struct_layouts().find(sname);
-            if (it != tc_.struct_layouts().end()) {
-                const StructLayout &lay = it->second;
-                bool is_static = false;
-                if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
-                    const std::string &bn =
-                        static_cast<ast::IdentExpr *>(fa->base.get())->name;
-                    if (lookup(bn) == ir::IR_NO_VALUE &&
-                        tc_.struct_layouts().count(bn))
-                        is_static = true;
-                }
-                ir::IrValueId addr;
-                if (is_static) {
-                    addr = fn_->new_value(ir::IrType::PTR);
-                    ir::IrInstr al{};
-                    al.op = ir::IrOp::ALLOCA;
-                    al.type = ir::IrType::I8;
-                    al.dst = addr;
-                    al.imm = (uint64_t)lay.size_bytes;
-                    al.source_line = e->loc.line;
-                    // Agregado -> host en los tres modos, no solo en AOT.
-                    al.host_alloca = true;
-                    emit(current_block_, std::move(al));
-                    fn_->values[addr].is_host_ptr = true;
-                } else {
-                    addr = lower_expr(fa->base.get());
-                    if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                }
-                emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
-                if (e->args.size() == 1 &&
-                    e->args[0]->kind == ast::NodeKind::InitListExpr) {
-                    // emit_struct_init_fields ya aplica los defaults + el
-                    // override; evita duplicar los defaults.
-                    emit_struct_init_fields(
-                        addr, lay,
-                        static_cast<ast::InitListExpr *>(e->args[0].get()),
-                        e->loc.line);
-                } else {
-                    emit_struct_field_defaults(addr, lay, e->loc.line);
-                }
-                return addr;
-            }
-        }
+    {
+        ir::IrValueId v_def = ir::IR_NO_VALUE;
+        if (try_lower_struct_default_ctor(e, v_def)) return v_def;
     }
 
     // Function pointers: llamada INDIRECTA.  Evaluamos el callee a un SSA
@@ -401,316 +352,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         return dst;
     }
 
-    //  M.7: llamada a funcion de namespace importado, ej.
-    // `lib_a.valor_a(args)`.  El TypeChecker marca el FieldAccessExpr
-    // callee con property_kind=4 y resuelve la firma del simbolo en
-    // imported_namespaces_.  Aqui obtenemos el mangled_label y
-    // emitimos CALL como si fuera una llamada normal.
-    if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr) {
-        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        //  NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
-        // una cadena de field-access (multi-segment `ui.widgets`).  La
-        // resolucion usa @c fa->ns_index (autoritativo); @c idb solo se usa en
-        // el fallback de static-method (ns_index no resuelto), que no aplica a
-        // los namespaces multi-segmento.
-        if (fa->property_kind == 4 && fa->base &&
-            (fa->base->kind == ast::NodeKind::IdentExpr ||
-             fa->base->kind == ast::NodeKind::FieldAccessExpr)) {
-            ast::IdentExpr *idb =
-                (fa->base->kind == ast::NodeKind::IdentExpr)
-                    ? static_cast<ast::IdentExpr *>(fa->base.get())
-                    : nullptr;
-            // Localizar el namespace EXACTO via ns_index que el
-            // TypeChecker dejo en el FieldAccessExpr.  Sentinel
-            // UINT32_MAX significa no resuelto (defensivo).
-            std::string mangled_label;
-            ir::IrType ret_ir = ir::IrType::I64;
-            bool found = false;
-            // SRET cross-module: capturar el PrimitiveKind real del
-            // retorno del callee para detectar Optional/Result que
-            // requieren retbuf hidden como primer arg.
-            PrimitiveKind callee_kind_ns = PrimitiveKind::VOID;
-            // Capturar tambien los tipos de parametros del callee para
-            // auto-promotion literal -> StringObject al lowering args.
-            std::vector<Type> ns_param_types;
-            if (fa->ns_index != 0xFFFFFFFFu) {
-                const auto &nss = tc_.imported_namespaces();
-                if (fa->ns_index < nss.size()) {
-                    const auto &ns = nss[fa->ns_index];
-                    auto its = ns.by_name.find(fa->field_name);
-                    if (its != ns.by_name.end()) {
-                        const auto &sym = ns.symbols[its->second];
-                        mangled_label = sym.mangled_label;
-                        // Para namespaces inline la sig esta vacia
-                        // (se rellena durante run()); buscamos la
-                        // real via function_sig_by_name.
-                        const FunctionSig *real_sig =
-                            tc_.function_sig_by_name(mangled_label);
-                        if (real_sig) {
-                            ret_ir = ir_type_from_primitive(
-                                real_sig->return_type.kind);
-                            callee_kind_ns = real_sig->return_type.kind;
-                            ns_param_types = real_sig->param_types;
-                        } else {
-                            ret_ir = ir_type_from_primitive(
-                                sym.sig.return_type.kind);
-                            callee_kind_ns = sym.sig.return_type.kind;
-                            ns_param_types = sym.sig.param_types;
-                        }
-                        found = true;
-                    }
-                }
-            }
-            if (!found && idb) {
-                // L2.1: static method de clase cross-class (e.g.
-                // `Stats.inc()`). El TypeChecker marca @c property_kind=4 pero
-                // deja
-                // @c ns_index=UINT32_MAX porque la "clase" no se registra como
-                // namespace.  Aqui resolvemos el metodo via class_layouts del
-                // tc y emitimos CALL al mangled label @c ClassName__method.
-                auto it_cls = tc_.class_layouts().find(idb->name);
-                if (it_cls != tc_.class_layouts().end()) {
-                    for (const auto &m : it_cls->second.methods) {
-                        if (m.is_static && !m.is_constructor &&
-                            m.name == fa->field_name) {
-                            mangled_label = idb->name + "__" + m.name;
-                            ret_ir = ir_type_from_primitive(m.return_type.kind);
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (!found) {
-                diags_.error(e->loc, "namespace '" +
-                                         (idb ? idb->name : fa->field_name) +
-                                         "' no resuelto en lowering");
-                return ir::IR_NO_VALUE;
-            }
-            // LIM-A: si el simbolo importado es @Naked (asm nativo puro), su
-            // cuerpo NO tiene representacion en bytecode VM.  En interp/JIT
-            // (VM_ABI) enrutamos la llamada cross-modulo al dispatcher
-            // @c vrt:naked_dispatch, que compila la @Naked al vuelo (viendo el
-            // IR del modulo importado ya mergeado en el .velb) y la invoca con
-            // ABI nativo.  En AOT (native_poo_) la llamada nativa directa ya
-            // funciona, asi que este re-ruteo se limita al path VM_ABI.  Mismo
-            // patron que la rama IdentExpr-callee de arriba, pero con el
-            // @c mangled_label del simbolo importado como clave del hash.
-            if (!native_poo_) {
-                bool ns_is_naked = false;
-                if (fa->ns_index != 0xFFFFFFFFu) {
-                    const auto &nss2 = tc_.imported_namespaces();
-                    if (fa->ns_index < nss2.size()) {
-                        const auto &ns2 = nss2[fa->ns_index];
-                        auto it2 = ns2.by_name.find(fa->field_name);
-                        if (it2 != ns2.by_name.end()) {
-                            const auto &sig2 = ns2.symbols[it2->second].sig;
-                            ns_is_naked =
-                                sig2.is_naked && sig2.extern_lib.empty();
-                        }
-                    }
-                }
-                if (ns_is_naked) {
-                    const std::string &label = mangled_label;
-                    out_mod_->register_native_import("vrt", "naked_dispatch");
-                    std::vector<ir::IrValueId> arg_ids;
-                    arg_ids.reserve(e->args.size() + 3);
-                    // R1 = proc; R2 = hash(label); R3 = argc_real.
-                    arg_ids.push_back(emit_getproc(e->loc.line));
-                    // FNV-1a 64-bit del mangled_label (DEBE coincidir con
-                    // jit::fnv1a64_name -- clave que el dispatcher usa para
-                    // localizar el IrFunction @Naked por nombre).
-                    uint64_t name_hash = 1469598103934665603ull;
-                    for (unsigned char c : label) {
-                        name_hash ^= static_cast<uint64_t>(c);
-                        name_hash *= 1099511628211ull;
-                    }
-                    arg_ids.push_back(
-                        emit_const(ir::IrType::I64, name_hash, e->loc.line));
-                    arg_ids.push_back(emit_const(
-                        ir::IrType::I64, static_cast<uint64_t>(e->args.size()),
-                        e->loc.line));
-                    // R4.. = args reales (max 6; promocionados a i64).
-                    for (auto &a : e->args) {
-                        const ir::IrValueId av = lower_expr(a.get());
-                        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                        arg_ids.push_back(av);
-                    }
-                    const ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
-                                                  ? ir::IR_NO_VALUE
-                                                  : fn_->new_value(ret_ir);
-                    ir::IrInstr ins{};
-                    ins.op = ir::IrOp::CALLN;
-                    ins.type = ret_ir;
-                    ins.dst = dst;
-                    ins.func_name = "vrt:naked_dispatch";
-                    ins.operands = std::move(arg_ids);
-                    ins.source_line = e->loc.line;
-                    emit(current_block_, std::move(ins));
-                    return dst;
-                }
-            }
-            // SRET cross-module: si el callee declara devolver
-            // Optional<T>, Result<V,E>, un enum declarado por usuario
-            // (encoded como STRUCT con struct_name = enum_name) o un
-            // struct value-type, su firma IR real es void y espera un
-            // retbuf hidden como primer argumento.  Sin este marshalling,
-            // el callee escribe a R1 (garbage) y el caller lee basura.
-            // Mismo patron que la rama IdentExpr-callee de lower_call.
-            std::string callee_struct_name;
-            if (fa->ns_index != 0xFFFFFFFFu) {
-                const auto &nss = tc_.imported_namespaces();
-                if (fa->ns_index < nss.size()) {
-                    const auto &ns = nss[fa->ns_index];
-                    auto its = ns.by_name.find(fa->field_name);
-                    if (its != ns.by_name.end()) {
-                        callee_struct_name =
-                            ns.symbols[its->second].sig.return_type.struct_name;
-                    }
-                }
-            }
-            // Detectar enum (user enum) o struct via lookup en layouts.
-            bool callee_is_enum_ret_ns = false;
-            bool callee_is_struct_ret_ns = false;
-            uint64_t enum_struct_size_ns = 0;
-            if (callee_kind_ns == PrimitiveKind::STRUCT &&
-                !callee_struct_name.empty()) {
-                const auto &elays = tc_.enum_layouts();
-                auto it_e = elays.find(callee_struct_name);
-                if (it_e != elays.end()) {
-                    callee_is_enum_ret_ns = true;
-                    enum_struct_size_ns =
-                        static_cast<uint64_t>(it_e->second.size_bytes);
-                } else {
-                    const auto &slays = tc_.struct_layouts();
-                    auto it_s = slays.find(callee_struct_name);
-                    if (it_s != slays.end()) {
-                        callee_is_struct_ret_ns = true;
-                        enum_struct_size_ns =
-                            static_cast<uint64_t>(it_s->second.size_bytes);
-                    }
-                }
-            }
-            // Vesta Embed: un retorno `string` value-type (24B) tambien usa
-            // SRET en native_poo_ (igual que un struct); el retbuf vive en
-            // host stack.  Sin esto, una fn importada que devuelve string
-            // (p.ej. `string greet(...)`) escribia el value-string a R0 en
-            // vez del retbuf -> el caller leia basura y crasheaba.
-            const bool callee_is_str_value_sret_ns =
-                (native_poo_ && callee_kind_ns == PrimitiveKind::STRING);
-            const bool callee_is_sret_ns =
-                (callee_kind_ns == PrimitiveKind::OPTIONAL ||
-                 callee_kind_ns == PrimitiveKind::RESULT ||
-                 callee_is_enum_ret_ns || callee_is_struct_ret_ns ||
-                 callee_is_str_value_sret_ns);
-            ir::IrValueId v_call_retbuf_ns = ir::IR_NO_VALUE;
-            if (callee_is_sret_ns) {
-                uint64_t buf_bytes;
-                if (callee_kind_ns == PrimitiveKind::RESULT) {
-                    buf_bytes = 24ULL;
-                } else if (callee_kind_ns == PrimitiveKind::OPTIONAL) {
-                    buf_bytes = 16ULL;
-                } else if (callee_is_str_value_sret_ns) {
-                    buf_bytes = 24ULL;
-                } else {
-                    buf_bytes = enum_struct_size_ns;
-                }
-                v_call_retbuf_ns = fn_->new_value(ir::IrType::PTR);
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_call_retbuf_ns;
-                al.imm = buf_bytes;
-                if (callee_is_str_value_sret_ns) {
-                    // value-string vive en host stack (igual que el path
-                    // same-module callee_is_str_value_sret).
-                    al.host_alloca = true;
-                    fn_->values[v_call_retbuf_ns].is_host_ptr = true;
-                }
-                al.source_line = e->loc.line;
-                emit(current_block_, std::move(al));
-            }
-            // Lower args.  Si es sret, el retbuf va PRIMERO.
-            std::vector<ir::IrValueId> arg_vals;
-            arg_vals.reserve(e->args.size() + (callee_is_sret_ns ? 1 : 0));
-            if (callee_is_sret_ns) arg_vals.push_back(v_call_retbuf_ns);
-            // value-strings TEMPORALES creados aqui (literal promovido) que
-            // hay que liberar tras el CALL si quedaron en HEAP (SSO = no-op),
-            // igual que el path same-module (tmp_str_args_to_free).  Sin esto
-            // un literal HEAP (>22 chars) pasado cross-module fugaba.
-            std::vector<ir::IrValueId> ns_tmp_str_to_free;
-            // Auto-promotion literal -> StringObject cuando el
-            // parametro espera STRING.  Mismo patron que el local
-            // IdentExpr-callee path (lower_call lineas ~10125+).
-            // Sin esto, `lib.fn("hola")` pushea el ptr crudo del
-            // literal en lugar del GcHandle, y el callee crashea
-            // al hacer strraw sobre puntero invalido.
-            for (size_t ai = 0; ai < e->args.size(); ++ai) {
-                auto &a = e->args[ai];
-                bool promote = false;
-                if (ai < ns_param_types.size() &&
-                    ns_param_types[ai].kind == PrimitiveKind::STRING && a &&
-                    a->kind == ast::NodeKind::StringLitExpr) {
-                    auto *slit = static_cast<ast::StringLitExpr *>(a.get());
-                    if (native_poo_) {
-                        // Vesta Embed cross-module: value-string nativo (24B),
-                        // no StringObject GC (mismo fix que el path regular).
-                        ir::IrValueId v_lit = build_native_string_from_literal(
-                            slit, slit->loc.line);
-                        arg_vals.push_back(v_lit);
-                        if (v_lit != ir::IR_NO_VALUE)
-                            ns_tmp_str_to_free.push_back(v_lit);
-                    } else {
-                        arg_vals.push_back(
-                            lower_string_literal_to_string_object(slit));
-                    }
-                    promote = true;
-                }
-                if (!promote) {
-                    ir::IrValueId v = lower_expr(a.get());
-                    // Coercionar el arg a la PRECISION del parametro cuando hay
-                    // mismatch float (p.ej. un literal f64 3.0 pasado a un
-                    // param f32).  Sin esto se pasan los bits f64 tal cual y el
-                    // callee los relee como f32 -> basura (fmul.f32 daba 0).
-                    // Solo float<->float: los enteros/punteros ya los coacciona
-                    // el type checker.  cast_if_needed es no-op si coinciden.
-                    if (v != ir::IR_NO_VALUE && ai < ns_param_types.size()) {
-                        const ir::IrType pt =
-                            ir_type_from_primitive(ns_param_types[ai].kind);
-                        const ir::IrType at = fn_->values[v].type;
-                        const bool pt_f =
-                            (pt == ir::IrType::F32 || pt == ir::IrType::F64);
-                        const bool at_f =
-                            (at == ir::IrType::F32 || at == ir::IrType::F64);
-                        if (pt != at && pt_f && at_f)
-                            v = cast_if_needed(v, at, pt, e->loc.line);
-                    }
-                    arg_vals.push_back(v);
-                }
-            }
-            // Para sret la firma IR es VOID; el "valor" SSA del CALL es
-            // el retbuf que se bindea al var-decl o se pasa a otras fns.
-            ir::IrValueId dst = ir::IR_NO_VALUE;
-            if (!callee_is_sret_ns) {
-                dst = (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE
-                                                   : fn_->new_value(ret_ir);
-            }
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALL;
-            ins.type = callee_is_sret_ns ? ir::IrType::VOID : ret_ir;
-            ins.dst = dst;
-            ins.operands = std::move(arg_vals);
-            ins.func_name = mangled_label;
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-            // Liberar los value-strings temporales (literales promovidos):
-            // el callee ya copio/uso sus bytes; libera el buffer HEAP si lo
-            // hubo (SSO corto = no-op).  Evita la fuga cross-module.
-            for (ir::IrValueId v_free : ns_tmp_str_to_free)
-                emit_native_str_free_if_heap(v_free, e->loc.line);
-            return callee_is_sret_ns ? v_call_retbuf_ns : dst;
-        }
+    {
+        ir::IrValueId v_ns = ir::IR_NO_VALUE;
+        if (try_lower_namespaced_call(e, v_ns)) return v_ns;
     }
+
     // A.39: si el callee es una `comptime fn` y todos los args son
     // comptime-evaluables, ejecutamos la fn en compile-time y
     // emitimos el resultado como CONST.  Caso comun: usar comptime
@@ -868,241 +514,15 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     }
 skip_comptime_eval_for_macro_to_macro:
 
-    // constructor de variante de enum: el type checker lo
-    // marco con FieldAccessExpr::property_kind = 99.  Se trata como
-    // un CallExpr cuyo callee es FieldAccessExpr(IdentExpr(enum_name),
-    // variant_name).  Lowering: alocar slot del enum, escribir tag +
-    // payloads, devolver puntero al slot.
-    if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr) {
-        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        if (fa->property_kind == 99 && fa->base &&
-            fa->base->kind == ast::NodeKind::IdentExpr) {
-            auto *base_id = static_cast<ast::IdentExpr *>(fa->base.get());
-            return lower_enum_constructor(base_id->name, fa->field_name,
-                                          e->args, e->loc);
-        }
-        // M.L7 ext: enum constructor cross-module
-        // (`command.Command.InsertChar(65)`).  El base es FieldAccess
-        // que el type checker ya resolvio a Type{STRUCT, mangled_enum}.
-        // Usamos el struct_name del result_type como enum_name.
-        if (fa->property_kind == 99 && fa->base &&
-            fa->base->kind == ast::NodeKind::FieldAccessExpr) {
-            const auto &bt = fa->base->result_type;
-            if (bt.kind == PrimitiveKind::STRUCT && !bt.struct_name.empty()) {
-                return lower_enum_constructor(bt.struct_name, fa->field_name,
-                                              e->args, e->loc);
-            }
-        }
+    {
+        ir::IrValueId v_enum = ir::IR_NO_VALUE;
+        if (try_lower_enum_variant_ctor(e, v_enum)) return v_enum;
     }
-    // Metodos OO sobre tipo string.  Mapping:
-    //   s.length() -> str_length(s)
-    //   s.bytes()  -> str_bytes(s)
-    //   s.cstr()   -> str_cstr(s)
-    //   s.wstr()   -> str_wstr(s)
-    //   s.hash()   -> str_hash(s)
-    //   s.intern() -> str_intern(s)
-    //   s.equals(t)-> str_equals(s, t)
-    //   s.concat(t)-> str_concat(s, t)
-    // Cero overhead: se reescribe el call al builtin equivalente con
-    // self como primer arg.
-    if (e->callee && e->callee->kind == ast::NodeKind::FieldAccessExpr) {
-        auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
-        if (fa->base && fa->base->result_type.kind == PrimitiveKind::STRING) {
-            static const char *METHOD_TO_BUILTIN[][2] = {
-                {"length", "str_length"}, {"bytes", "str_bytes"},
-                {"cstr", "str_cstr"},     {"wstr", "str_wstr"},
-                {"hash", "str_hash"},     {"intern", "str_intern"},
-                {"equals", "str_equals"}, {"concat", "str_concat"},
-            };
-            for (const auto &m : METHOD_TO_BUILTIN) {
-                if (fa->field_name == m[0]) {
-                    // Construir un IdentExpr del builtin + reescribir
-                    // args: [base, ...e->args].
-                    ast::CallExpr synth;
-                    synth.loc = e->loc;
-                    auto id = std::make_unique<ast::IdentExpr>();
-                    id->loc = e->loc;
-                    id->name = m[1];
-                    synth.callee = std::move(id);
-                    // Ojo: NO movemos los originales (los devolvemos
-                    // intactos).  Para evitar deep-clone, hacemos un
-                    // approach sucio: temporalmente robamos los args
-                    // del CallExpr original, llamamos try_lower_builtin,
-                    // y restauramos.
-                    std::vector<std::unique_ptr<ast::Expr>> saved_args;
-                    saved_args.reserve(e->args.size() + 1);
-                    saved_args.push_back(std::move(fa->base));
-                    for (auto &a : e->args)
-                        saved_args.push_back(std::move(a));
-                    synth.args = std::move(saved_args);
-                    ir::IrValueId out;
-                    bool ok = try_lower_builtin_call(&synth, out);
-                    // Restaurar: mover args de vuelta a originales.
-                    fa->base = std::move(synth.args[0]);
-                    for (size_t i = 0; i < e->args.size(); ++i) {
-                        e->args[i] = std::move(synth.args[i + 1]);
-                    }
-                    if (ok) return out;
-                }
-            }
-        }
-        // Reflexion OO: dispatch ergonomico cuando el type checker
-        // marco el FieldAccessExpr con property_kind 100..106.
-        // Reescribe el call al builtin standalone equivalente.
-        //   100: forName(name)               estatico, no toma self
-        //   101: getMethod(cls, name)
-        //   102: getField(cls, name)
-        //   103: newInstance(cls)
-        //   104: getMethods(cls)            (placeholder; no impl runtime aun)
-        //   105: invoke(method, this, args...)
-        //   106: getClass(obj)
-        if (fa->property_kind >= 100 && fa->property_kind <= 106) {
-            static const char *KIND_TO_BUILTIN[] = {
-                "forName",     // 100
-                "getMethod",   // 101
-                "getField",    // 102
-                "newInstance", // 103
-                "getMethods",  // 104
-                "invoke",      // 105
-                "getClass",    // 106
-            };
-            const char *bn = KIND_TO_BUILTIN[fa->property_kind - 100];
-            ast::CallExpr synth;
-            synth.loc = e->loc;
-            auto id = std::make_unique<ast::IdentExpr>();
-            id->loc = e->loc;
-            id->name = bn;
-            synth.callee = std::move(id);
-            // Para los metodos de instancia (101..103, 105, 106) prepend
-            // el base (self) como primer argumento.  Para forName (100)
-            // solo los args originales.  El base original sera devuelto
-            // tras la lower.
-            std::vector<std::unique_ptr<ast::Expr>> saved_args;
-            const bool prepend_self = (fa->property_kind != 100);
-            saved_args.reserve(e->args.size() + (prepend_self ? 1 : 0));
-            if (prepend_self) {
-                saved_args.push_back(std::move(fa->base));
-            }
-            for (auto &a : e->args)
-                saved_args.push_back(std::move(a));
-            synth.args = std::move(saved_args);
-            ir::IrValueId out;
-            const bool ok = try_lower_builtin_call(&synth, out);
-            // Restaurar args originales para no afectar el AST.
-            size_t k = 0;
-            if (prepend_self) {
-                fa->base = std::move(synth.args[k++]);
-            }
-            for (size_t i = 0; i < e->args.size(); ++i, ++k) {
-                e->args[i] = std::move(synth.args[k]);
-            }
-            if (ok) return out;
-            // try_lower_builtin_call devolvio false (e.g. argumento
-            // ausente o mal formado); el error ya se reporto.  Devolvemos
-            // un valor invalido para que el caller no use un IrValueId
-            // basura.
-            return ir::IR_NO_VALUE;
-        }
-        // Bug fix 2026-05-23: metodos estaticos.  property_kind=4 marca
-        // llamada estatica `ClassName.method()` que NO tiene receptor
-        // CLASS; el dispatch va a lower_class_method_call que detecta
-        // property_kind=4 y emite CALLVM directo.
-        if (fa->property_kind == 4 || fa->property_kind == 7) {
-            return lower_class_method_call(e);
-        }
-        if (fa->base && fa->base->result_type.kind == PrimitiveKind::CLASS) {
-            return lower_class_method_call(e);
-        }
-        // Metodo de struct (value-type, dispatch estatico).  Si la base
-        // es STRUCT y el layout declara el metodo, emitimos CALL directo
-        // a <Struct>__<metodo>(struct_addr, args...).  Si no es un
-        // metodo conocido, cae a las rutas siguientes (colecciones, etc).
-        // @Virtual: tambien enrutar `ptr.metodo()` sobre un `Struct*` (dispatch
-        // dinamico por vtable).  El struct efectivo es el pointee.
-        std::string sm_struct_name;
-        if (fa->base) {
-            const Type &rbt = fa->base->result_type;
-            if (rbt.kind == PrimitiveKind::STRUCT && !rbt.struct_name.empty())
-                sm_struct_name = rbt.struct_name;
-            else if (rbt.kind == PrimitiveKind::PTR && rbt.pointee &&
-                     rbt.pointee->kind == PrimitiveKind::STRUCT)
-                sm_struct_name = rbt.pointee->struct_name;
-        }
-        if (!sm_struct_name.empty()) {
-            auto it_s = tc_.struct_layouts().find(sm_struct_name);
-            if (it_s != tc_.struct_layouts().end()) {
-                bool has_m = false;
-                for (const auto &mm : it_s->second.methods) {
-                    if (mm.name == fa->field_name) {
-                        has_m = true;
-                        break;
-                    }
-                }
-                if (has_m) return lower_struct_method_call(e);
-            }
-        }
-        // ===== dispatch de metodos de coleccion primitiva =====
-        // Si la base es uno de los tipos coleccion (ARRAYLIST, HASHMAP,
-        // ...), buscamos el metodo en la tabla COL_METHODS y emitimos
-        // CALLN directo al native_fn con (handle, ...args).  Cero
-        // overhead vs llamar el plugin manualmente; sin vtable ni
-        // CALLVIRT (no son objetos GC, son handles host pointer).
-        if (fa->base && is_col_kind(fa->base->result_type.kind)) {
-            const ColMethod *cm =
-                find_col_method(fa->base->result_type.kind, fa->field_name);
-            if (cm) {
-                // decidir si la coleccion retiene refs GC.
-                // El frontend setea pointee/pointee2 al resolver el tipo
-                // declarado (`ArrayList<string>` etc.).  Si es GC y la
-                // operacion tiene variante *_gc, llamamos a esa con un
-                // `getproc` extra como primer argumento.  Si la coleccion
-                // se declaro sin <T> (legacy o tipo opaco i64), pointee
-                // es nulo y caemos al camino no-GC de cero overhead.
-                const Type &recv_ty = fa->base->result_type;
-                PrimitiveKind elem_k = PrimitiveKind::VOID;
-                PrimitiveKind val_k = PrimitiveKind::VOID;
-                if (recv_ty.pointee) elem_k = recv_ty.pointee->kind;
-                if (recv_ty.pointee2) val_k = recv_ty.pointee2->kind;
-                // native_poo (AOT): sin VM -> sin getproc ni gc_addref/release;
-                // usar la variante NO-GC (cero overhead, el handle/ptr se
-                // guarda tal cual).  El lifetime lo gestiona el modelo nativo.
-                const bool gc_aware =
-                    (cm->native_fn_gc != nullptr) && !native_poo_ &&
-                    col_needs_gc_aware(recv_ty.kind, elem_k, val_k);
+    {
+        ir::IrValueId v_meth = ir::IR_NO_VALUE;
+        if (try_lower_method_call(e, v_meth)) return v_meth;
+    }
 
-                // Lower base (handle).
-                const ir::IrValueId v_handle = lower_expr(fa->base.get());
-                if (v_handle == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                // Lower args.
-                std::vector<ir::IrValueId> arg_ids;
-                arg_ids.reserve(2 + e->args.size());
-                if (gc_aware) {
-                    // proc va PRIMERO en las variantes *_gc.
-                    arg_ids.push_back(emit_getproc(e->loc.line));
-                }
-                arg_ids.push_back(v_handle);
-                for (auto &a : e->args) {
-                    arg_ids.push_back(lower_expr(a.get()));
-                }
-                const char *fn_name =
-                    gc_aware ? cm->native_fn_gc : cm->native_fn;
-                out_mod_->register_native_import(COL_NATIVE_LIB, fn_name);
-                const ir::IrType ret_ir = ir_type_from_primitive(cm->ret);
-                const ir::IrValueId v_dst = (ret_ir == ir::IrType::VOID)
-                                                ? ir::IR_NO_VALUE
-                                                : fn_->new_value(ret_ir);
-                ir::IrInstr ins{};
-                ins.op = ir::IrOp::CALLN;
-                ins.type = ret_ir;
-                ins.dst = v_dst;
-                ins.func_name = std::string(COL_NATIVE_LIB) + ":" + fn_name;
-                ins.operands = std::move(arg_ids);
-                ins.source_line = e->loc.line;
-                emit(current_block_, std::move(ins));
-                return v_dst;
-            }
-        }
-    }
     // Resto: llamada directa a funcion top-level.
     if (!e->callee || e->callee->kind != ast::NodeKind::IdentExpr) {
         error_at(e->loc, "lowering: callee no es identificador");
@@ -2714,6 +2134,712 @@ ir::IrValueId Lowering::emit_calln(const std::string &name,
     in.source_line = source_line;
     emit(current_block_, std::move(in));
     return dst;
+}
+
+/**
+ * @brief Intenta bajar la llamada como el constructor de una variante de enum.
+ *
+ * `Color.Red` y `Color.Rgb(1, 2, 3)` se escriben como una llamada cuyo destino
+ * es un acceso a campo, igual que un metodo, y no lo son: no hay objeto ni
+ * funcion que llamar, hay un valor que construir.  Quien los distingue es el
+ * comprobador de tipos, que ya los marco al resolverlos; aqui solo se mira esa
+ * marca.
+ *
+ * De donde sale el nombre del enum depende de como se escribio: si se nombro
+ * directo (`Color.Red`) esta en la base; si se llego por un modulo
+ * (`edicion.Command.InsertChar`) la base es a su vez un acceso a campo, y el
+ * nombre bueno -- ya con su modulo delante -- es el del tipo que el
+ * comprobador le resolvio.  Tomar el otro daria un enum que no existe.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar el valor construido.
+ * @return @c true si era un constructor de variante y quedo bajado.
+ */
+bool Lowering::try_lower_enum_variant_ctor(ast::CallExpr *e,
+                                           ir::IrValueId &out) {
+    if (!e->callee || e->callee->kind != ast::NodeKind::FieldAccessExpr)
+        return false;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+    if (fa->property_kind != 99 || !fa->base) return false;
+
+    if (fa->base->kind == ast::NodeKind::IdentExpr) {
+        auto *base_id = static_cast<ast::IdentExpr *>(fa->base.get());
+        out = lower_enum_constructor(base_id->name, fa->field_name, e->args,
+                                     e->loc);
+        return true;
+    }
+    if (fa->base->kind == ast::NodeKind::FieldAccessExpr) {
+        const auto &bt = fa->base->result_type;
+        if (bt.kind == PrimitiveKind::STRUCT && !bt.struct_name.empty()) {
+            out = lower_enum_constructor(bt.struct_name, fa->field_name,
+                                         e->args, e->loc);
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Intenta bajar la llamada como `Tipo.default()` de un struct.
+ *
+ * Da un struct con los valores que su declaracion pone por defecto, y admite
+ * dos formas que no hacen lo mismo: `Punto.default()` -- el nombre de un tipo
+ * -- reserva uno nuevo, mientras que `p.default()` -- una variable -- resetea
+ * el que ya existe.  Distinguirlas es mirar si ese nombre es una variable en
+ * el ambito: si no lo es y si es un struct conocido, es la forma estatica.
+ *
+ * Y en las dos se pone a CERO antes de nada, aunque despues se escriba campo
+ * por campo: un struct recien reservado tiene lo que hubiera en la pila, y un
+ * campo sin valor por defecto se quedaria con esa basura en vez de en cero.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar la direccion del struct.
+ * @return @c true si era un `default()` y quedo bajado.
+ */
+bool Lowering::try_lower_struct_default_ctor(ast::CallExpr *e,
+                                             ir::IrValueId &out) {
+    if (!e->callee || e->callee->kind != ast::NodeKind::FieldAccessExpr ||
+        e->result_type.kind != PrimitiveKind::STRUCT)
+        return false;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+    if (fa->field_name != "default") return false;
+    const std::string &sname = e->result_type.struct_name;
+    auto it = tc_.struct_layouts().find(sname);
+    if (it != tc_.struct_layouts().end()) {
+        const StructLayout &lay = it->second;
+        bool is_static = false;
+        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+            const std::string &bn =
+                static_cast<ast::IdentExpr *>(fa->base.get())->name;
+            if (lookup(bn) == ir::IR_NO_VALUE &&
+                tc_.struct_layouts().count(bn))
+                is_static = true;
+        }
+        ir::IrValueId addr;
+        if (is_static) {
+            addr = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.dst = addr;
+            al.imm = (uint64_t)lay.size_bytes;
+            al.source_line = e->loc.line;
+            // Agregado -> host en los tres modos, no solo en AOT.
+            al.host_alloca = true;
+            emit(current_block_, std::move(al));
+            fn_->values[addr].is_host_ptr = true;
+        } else {
+            addr = lower_expr(fa->base.get());
+            if (addr == ir::IR_NO_VALUE) {
+                out = ir::IR_NO_VALUE;
+                return true;
+            }
+        }
+        emit_zero_fill(addr, (uint64_t)lay.size_bytes, e->loc.line);
+        if (e->args.size() == 1 &&
+            e->args[0]->kind == ast::NodeKind::InitListExpr) {
+            // emit_struct_init_fields ya aplica los defaults + el
+            // override; evita duplicar los defaults.
+            emit_struct_init_fields(
+                addr, lay,
+                static_cast<ast::InitListExpr *>(e->args[0].get()),
+                e->loc.line);
+        } else {
+            emit_struct_field_defaults(addr, lay, e->loc.line);
+        }
+        out = addr;
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Intenta bajar la llamada como una funcion de un namespace importado.
+ *
+ * La forma es `lib.funcion(args)`, y el nombre visible no es el que acaba en
+ * el binario: cada namespace mangla los suyos, asi que aqui se busca el
+ * simbolo y se emite un CALL a su etiqueta manglada, igual que una llamada
+ * normal.  Quien resolvio a que namespace apunta la base fue el type checker
+ * -- lo dejo en @c ns_index --, porque el nombre por si solo no basta cuando
+ * la base tiene varios segmentos (`ui.widgets.Boton`).
+ *
+ * Tres casos se salen del CALL directo y estan tratados aparte: un simbolo
+ * @Naked no tiene cuerpo en bytecode y va por un despachador; uno que
+ * devuelve un agregado usa SRET, con el hueco del retorno pasado como primer
+ * argumento; y los literales de cadena promovidos se liberan tras la llamada,
+ * que si no se quedan colgando al cruzar de modulo.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar el valor que la llamada produce.
+ * @return @c true si el callee era de un namespace y quedo bajado.
+ */
+bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
+                                         ir::IrValueId &out) {
+    //  M.7: llamada a funcion de namespace importado, ej.
+    // `lib_a.valor_a(args)`.  El TypeChecker marca el FieldAccessExpr
+    // callee con property_kind=4 y resuelve la firma del simbolo en
+    // imported_namespaces_.  Aqui obtenemos el mangled_label y
+    // emitimos CALL como si fuera una llamada normal.
+    if (!e->callee || e->callee->kind != ast::NodeKind::FieldAccessExpr)
+        return false;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+    //  NS.1b: la base puede ser un IdentExpr (single-segment `ui`) o
+    // una cadena de field-access (multi-segment `ui.widgets`).  La
+    // resolucion usa @c fa->ns_index (autoritativo); @c idb solo se usa en
+    // el fallback de static-method (ns_index no resuelto), que no aplica a
+    // los namespaces multi-segmento.
+    if (fa->property_kind != 4 || !fa->base ||
+        (fa->base->kind != ast::NodeKind::IdentExpr &&
+         fa->base->kind != ast::NodeKind::FieldAccessExpr))
+        return false;
+    ast::IdentExpr *idb =
+        (fa->base->kind == ast::NodeKind::IdentExpr)
+            ? static_cast<ast::IdentExpr *>(fa->base.get())
+            : nullptr;
+    // Localizar el namespace EXACTO via ns_index que el
+    // TypeChecker dejo en el FieldAccessExpr.  Sentinel
+    // UINT32_MAX significa no resuelto (defensivo).
+    std::string mangled_label;
+    ir::IrType ret_ir = ir::IrType::I64;
+    bool found = false;
+    // SRET cross-module: capturar el PrimitiveKind real del
+    // retorno del callee para detectar Optional/Result que
+    // requieren retbuf hidden como primer arg.
+    PrimitiveKind callee_kind_ns = PrimitiveKind::VOID;
+    // Capturar tambien los tipos de parametros del callee para
+    // auto-promotion literal -> StringObject al lowering args.
+    std::vector<Type> ns_param_types;
+    if (fa->ns_index != 0xFFFFFFFFu) {
+        const auto &nss = tc_.imported_namespaces();
+        if (fa->ns_index < nss.size()) {
+            const auto &ns = nss[fa->ns_index];
+            auto its = ns.by_name.find(fa->field_name);
+            if (its != ns.by_name.end()) {
+                const auto &sym = ns.symbols[its->second];
+                mangled_label = sym.mangled_label;
+                // Para namespaces inline la sig esta vacia
+                // (se rellena durante run()); buscamos la
+                // real via function_sig_by_name.
+                const FunctionSig *real_sig =
+                    tc_.function_sig_by_name(mangled_label);
+                if (real_sig) {
+                    ret_ir = ir_type_from_primitive(
+                        real_sig->return_type.kind);
+                    callee_kind_ns = real_sig->return_type.kind;
+                    ns_param_types = real_sig->param_types;
+                } else {
+                    ret_ir = ir_type_from_primitive(
+                        sym.sig.return_type.kind);
+                    callee_kind_ns = sym.sig.return_type.kind;
+                    ns_param_types = sym.sig.param_types;
+                }
+                found = true;
+            }
+        }
+    }
+    if (!found && idb) {
+        // L2.1: static method de clase cross-class (e.g.
+        // `Stats.inc()`). El TypeChecker marca @c property_kind=4 pero
+        // deja
+        // @c ns_index=UINT32_MAX porque la "clase" no se registra como
+        // namespace.  Aqui resolvemos el metodo via class_layouts del
+        // tc y emitimos CALL al mangled label @c ClassName__method.
+        auto it_cls = tc_.class_layouts().find(idb->name);
+        if (it_cls != tc_.class_layouts().end()) {
+            for (const auto &m : it_cls->second.methods) {
+                if (m.is_static && !m.is_constructor &&
+                    m.name == fa->field_name) {
+                    mangled_label = idb->name + "__" + m.name;
+                    ret_ir = ir_type_from_primitive(m.return_type.kind);
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    if (!found) {
+        diags_.error(e->loc, "namespace '" +
+                                 (idb ? idb->name : fa->field_name) +
+                                 "' no resuelto en lowering");
+        out = ir::IR_NO_VALUE;
+        return true;
+    }
+    // LIM-A: si el simbolo importado es @Naked (asm nativo puro), su
+    // cuerpo NO tiene representacion en bytecode VM.  En interp/JIT
+    // (VM_ABI) enrutamos la llamada cross-modulo al dispatcher
+    // @c vrt:naked_dispatch, que compila la @Naked al vuelo (viendo el
+    // IR del modulo importado ya mergeado en el .velb) y la invoca con
+    // ABI nativo.  En AOT (native_poo_) la llamada nativa directa ya
+    // funciona, asi que este re-ruteo se limita al path VM_ABI.  Mismo
+    // patron que la rama IdentExpr-callee de arriba, pero con el
+    // @c mangled_label del simbolo importado como clave del hash.
+    if (!native_poo_) {
+        bool ns_is_naked = false;
+        if (fa->ns_index != 0xFFFFFFFFu) {
+            const auto &nss2 = tc_.imported_namespaces();
+            if (fa->ns_index < nss2.size()) {
+                const auto &ns2 = nss2[fa->ns_index];
+                auto it2 = ns2.by_name.find(fa->field_name);
+                if (it2 != ns2.by_name.end()) {
+                    const auto &sig2 = ns2.symbols[it2->second].sig;
+                    ns_is_naked =
+                        sig2.is_naked && sig2.extern_lib.empty();
+                }
+            }
+        }
+        if (ns_is_naked) {
+            const std::string &label = mangled_label;
+            out_mod_->register_native_import("vrt", "naked_dispatch");
+            std::vector<ir::IrValueId> arg_ids;
+            arg_ids.reserve(e->args.size() + 3);
+            // R1 = proc; R2 = hash(label); R3 = argc_real.
+            arg_ids.push_back(emit_getproc(e->loc.line));
+            // FNV-1a 64-bit del mangled_label (DEBE coincidir con
+            // jit::fnv1a64_name -- clave que el dispatcher usa para
+            // localizar el IrFunction @Naked por nombre).
+            uint64_t name_hash = 1469598103934665603ull;
+            for (unsigned char c : label) {
+                name_hash ^= static_cast<uint64_t>(c);
+                name_hash *= 1099511628211ull;
+            }
+            arg_ids.push_back(
+                emit_const(ir::IrType::I64, name_hash, e->loc.line));
+            arg_ids.push_back(emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(e->args.size()),
+                e->loc.line));
+            // R4.. = args reales (max 6; promocionados a i64).
+            for (auto &a : e->args) {
+                const ir::IrValueId av = lower_expr(a.get());
+                if (av == ir::IR_NO_VALUE) {
+                    out = ir::IR_NO_VALUE;
+                    return true;
+                }
+                arg_ids.push_back(av);
+            }
+            const ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
+                                          ? ir::IR_NO_VALUE
+                                          : fn_->new_value(ret_ir);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ret_ir;
+            ins.dst = dst;
+            ins.func_name = "vrt:naked_dispatch";
+            ins.operands = std::move(arg_ids);
+            ins.source_line = e->loc.line;
+            emit(current_block_, std::move(ins));
+            out = dst;
+            return true;
+        }
+    }
+    // SRET cross-module: si el callee declara devolver
+    // Optional<T>, Result<V,E>, un enum declarado por usuario
+    // (encoded como STRUCT con struct_name = enum_name) o un
+    // struct value-type, su firma IR real es void y espera un
+    // retbuf hidden como primer argumento.  Sin este marshalling,
+    // el callee escribe a R1 (garbage) y el caller lee basura.
+    // Mismo patron que la rama IdentExpr-callee de lower_call.
+    std::string callee_struct_name;
+    if (fa->ns_index != 0xFFFFFFFFu) {
+        const auto &nss = tc_.imported_namespaces();
+        if (fa->ns_index < nss.size()) {
+            const auto &ns = nss[fa->ns_index];
+            auto its = ns.by_name.find(fa->field_name);
+            if (its != ns.by_name.end()) {
+                callee_struct_name =
+                    ns.symbols[its->second].sig.return_type.struct_name;
+            }
+        }
+    }
+    // Detectar enum (user enum) o struct via lookup en layouts.
+    bool callee_is_enum_ret_ns = false;
+    bool callee_is_struct_ret_ns = false;
+    uint64_t enum_struct_size_ns = 0;
+    if (callee_kind_ns == PrimitiveKind::STRUCT &&
+        !callee_struct_name.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        auto it_e = elays.find(callee_struct_name);
+        if (it_e != elays.end()) {
+            callee_is_enum_ret_ns = true;
+            enum_struct_size_ns =
+                static_cast<uint64_t>(it_e->second.size_bytes);
+        } else {
+            const auto &slays = tc_.struct_layouts();
+            auto it_s = slays.find(callee_struct_name);
+            if (it_s != slays.end()) {
+                callee_is_struct_ret_ns = true;
+                enum_struct_size_ns =
+                    static_cast<uint64_t>(it_s->second.size_bytes);
+            }
+        }
+    }
+    // Vesta Embed: un retorno `string` value-type (24B) tambien usa
+    // SRET en native_poo_ (igual que un struct); el retbuf vive en
+    // host stack.  Sin esto, una fn importada que devuelve string
+    // (p.ej. `string greet(...)`) escribia el value-string a R0 en
+    // vez del retbuf -> el caller leia basura y crasheaba.
+    const bool callee_is_str_value_sret_ns =
+        (native_poo_ && callee_kind_ns == PrimitiveKind::STRING);
+    const bool callee_is_sret_ns =
+        (callee_kind_ns == PrimitiveKind::OPTIONAL ||
+         callee_kind_ns == PrimitiveKind::RESULT ||
+         callee_is_enum_ret_ns || callee_is_struct_ret_ns ||
+         callee_is_str_value_sret_ns);
+    ir::IrValueId v_call_retbuf_ns = ir::IR_NO_VALUE;
+    if (callee_is_sret_ns) {
+        uint64_t buf_bytes;
+        if (callee_kind_ns == PrimitiveKind::RESULT) {
+            buf_bytes = 24ULL;
+        } else if (callee_kind_ns == PrimitiveKind::OPTIONAL) {
+            buf_bytes = 16ULL;
+        } else if (callee_is_str_value_sret_ns) {
+            buf_bytes = 24ULL;
+        } else {
+            buf_bytes = enum_struct_size_ns;
+        }
+        v_call_retbuf_ns = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_call_retbuf_ns;
+        al.imm = buf_bytes;
+        if (callee_is_str_value_sret_ns) {
+            // value-string vive en host stack (igual que el path
+            // same-module callee_is_str_value_sret).
+            al.host_alloca = true;
+            fn_->values[v_call_retbuf_ns].is_host_ptr = true;
+        }
+        al.source_line = e->loc.line;
+        emit(current_block_, std::move(al));
+    }
+    // Lower args.  Si es sret, el retbuf va PRIMERO.
+    std::vector<ir::IrValueId> arg_vals;
+    arg_vals.reserve(e->args.size() + (callee_is_sret_ns ? 1 : 0));
+    if (callee_is_sret_ns) arg_vals.push_back(v_call_retbuf_ns);
+    // value-strings TEMPORALES creados aqui (literal promovido) que
+    // hay que liberar tras el CALL si quedaron en HEAP (SSO = no-op),
+    // igual que el path same-module (tmp_str_args_to_free).  Sin esto
+    // un literal HEAP (>22 chars) pasado cross-module fugaba.
+    std::vector<ir::IrValueId> ns_tmp_str_to_free;
+    // Auto-promotion literal -> StringObject cuando el
+    // parametro espera STRING.  Mismo patron que el local
+    // IdentExpr-callee path (lower_call lineas ~10125+).
+    // Sin esto, `lib.fn("hola")` pushea el ptr crudo del
+    // literal en lugar del GcHandle, y el callee crashea
+    // al hacer strraw sobre puntero invalido.
+    for (size_t ai = 0; ai < e->args.size(); ++ai) {
+        auto &a = e->args[ai];
+        bool promote = false;
+        if (ai < ns_param_types.size() &&
+            ns_param_types[ai].kind == PrimitiveKind::STRING && a &&
+            a->kind == ast::NodeKind::StringLitExpr) {
+            auto *slit = static_cast<ast::StringLitExpr *>(a.get());
+            if (native_poo_) {
+                // Vesta Embed cross-module: value-string nativo (24B),
+                // no StringObject GC (mismo fix que el path regular).
+                ir::IrValueId v_lit = build_native_string_from_literal(
+                    slit, slit->loc.line);
+                arg_vals.push_back(v_lit);
+                if (v_lit != ir::IR_NO_VALUE)
+                    ns_tmp_str_to_free.push_back(v_lit);
+            } else {
+                arg_vals.push_back(
+                    lower_string_literal_to_string_object(slit));
+            }
+            promote = true;
+        }
+        if (!promote) {
+            ir::IrValueId v = lower_expr(a.get());
+            // Coercionar el arg a la PRECISION del parametro cuando hay
+            // mismatch float (p.ej. un literal f64 3.0 pasado a un
+            // param f32).  Sin esto se pasan los bits f64 tal cual y el
+            // callee los relee como f32 -> basura (fmul.f32 daba 0).
+            // Solo float<->float: los enteros/punteros ya los coacciona
+            // el type checker.  cast_if_needed es no-op si coinciden.
+            if (v != ir::IR_NO_VALUE && ai < ns_param_types.size()) {
+                const ir::IrType pt =
+                    ir_type_from_primitive(ns_param_types[ai].kind);
+                const ir::IrType at = fn_->values[v].type;
+                const bool pt_f =
+                    (pt == ir::IrType::F32 || pt == ir::IrType::F64);
+                const bool at_f =
+                    (at == ir::IrType::F32 || at == ir::IrType::F64);
+                if (pt != at && pt_f && at_f)
+                    v = cast_if_needed(v, at, pt, e->loc.line);
+            }
+            arg_vals.push_back(v);
+        }
+    }
+    // Para sret la firma IR es VOID; el "valor" SSA del CALL es
+    // el retbuf que se bindea al var-decl o se pasa a otras fns.
+    ir::IrValueId dst = ir::IR_NO_VALUE;
+    if (!callee_is_sret_ns) {
+        dst = (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE
+                                           : fn_->new_value(ret_ir);
+    }
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::CALL;
+    ins.type = callee_is_sret_ns ? ir::IrType::VOID : ret_ir;
+    ins.dst = dst;
+    ins.operands = std::move(arg_vals);
+    ins.func_name = mangled_label;
+    ins.source_line = e->loc.line;
+    emit(current_block_, std::move(ins));
+    // Liberar los value-strings temporales (literales promovidos):
+    // el callee ya copio/uso sus bytes; libera el buffer HEAP si lo
+    // hubo (SSO corto = no-op).  Evita la fuga cross-module.
+    for (ir::IrValueId v_free : ns_tmp_str_to_free)
+        emit_native_str_free_if_heap(v_free, e->loc.line);
+    out = callee_is_sret_ns ? v_call_retbuf_ns : dst;
+    return true;
+    return false;
+}
+
+/**
+ * @brief Intenta bajar la llamada como un metodo sobre un receptor.
+ *
+ * Todo lo que se escribe `algo.metodo(args)` entra aqui, y a donde va lo
+ * decide el TIPO del receptor, no el nombre del metodo: una cadena reescribe
+ * a su builtin equivalente pasando el receptor como primer argumento; una
+ * clase va al despacho por vtable; un struct, a la llamada directa a su
+ * funcion; y una coleccion primitiva, a la funcion nativa del plugin -- sin
+ * vtable, porque no son objetos del GC sino punteros del anfitrion.
+ *
+ * Aparte quedan dos formas que no son "un metodo sobre un valor" pese a
+ * escribirse igual: los estaticos (`Clase.metodo()`), que no tienen receptor,
+ * y la reflexion ergonomica (`obj.getClass()`), que el type checker ya marco
+ * para reescribir a su builtin suelto.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar el valor que el metodo produce.
+ * @return @c true si era un metodo y quedo bajado.
+ */
+bool Lowering::try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out) {
+    // Metodos OO sobre tipo string.  Mapping:
+    //   s.length() -> str_length(s)
+    //   s.bytes()  -> str_bytes(s)
+    //   s.cstr()   -> str_cstr(s)
+    //   s.wstr()   -> str_wstr(s)
+    //   s.hash()   -> str_hash(s)
+    //   s.intern() -> str_intern(s)
+    //   s.equals(t)-> str_equals(s, t)
+    //   s.concat(t)-> str_concat(s, t)
+    // Cero overhead: se reescribe el call al builtin equivalente con
+    // self como primer arg.
+    if (!e->callee || e->callee->kind != ast::NodeKind::FieldAccessExpr)
+        return false;
+    auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+    if (fa->base && fa->base->result_type.kind == PrimitiveKind::STRING) {
+        static const char *METHOD_TO_BUILTIN[][2] = {
+            {"length", "str_length"}, {"bytes", "str_bytes"},
+            {"cstr", "str_cstr"},     {"wstr", "str_wstr"},
+            {"hash", "str_hash"},     {"intern", "str_intern"},
+            {"equals", "str_equals"}, {"concat", "str_concat"},
+        };
+        for (const auto &m : METHOD_TO_BUILTIN) {
+            if (fa->field_name == m[0]) {
+                // Construir un IdentExpr del builtin + reescribir
+                // args: [base, ...e->args].
+                ast::CallExpr synth;
+                synth.loc = e->loc;
+                auto id = std::make_unique<ast::IdentExpr>();
+                id->loc = e->loc;
+                id->name = m[1];
+                synth.callee = std::move(id);
+                // Ojo: NO movemos los originales (los devolvemos
+                // intactos).  Para evitar deep-clone, hacemos un
+                // approach sucio: temporalmente robamos los args
+                // del CallExpr original, llamamos try_lower_builtin,
+                // y restauramos.
+                std::vector<std::unique_ptr<ast::Expr>> saved_args;
+                saved_args.reserve(e->args.size() + 1);
+                saved_args.push_back(std::move(fa->base));
+                for (auto &a : e->args)
+                    saved_args.push_back(std::move(a));
+                synth.args = std::move(saved_args);
+                ir::IrValueId v_builtin;
+                bool ok = try_lower_builtin_call(&synth, v_builtin);
+                // Restaurar: mover args de vuelta a originales.
+                fa->base = std::move(synth.args[0]);
+                for (size_t i = 0; i < e->args.size(); ++i) {
+                    e->args[i] = std::move(synth.args[i + 1]);
+                }
+                if (ok) {
+                    out = v_builtin;
+                    return true;
+                }
+            }
+        }
+    }
+    // Reflexion OO: dispatch ergonomico cuando el type checker
+    // marco el FieldAccessExpr con property_kind 100..106.
+    // Reescribe el call al builtin standalone equivalente.
+    //   100: forName(name)               estatico, no toma self
+    //   101: getMethod(cls, name)
+    //   102: getField(cls, name)
+    //   103: newInstance(cls)
+    //   104: getMethods(cls)            (placeholder; no impl runtime aun)
+    //   105: invoke(method, this, args...)
+    //   106: getClass(obj)
+    if (fa->property_kind >= 100 && fa->property_kind <= 106) {
+        static const char *KIND_TO_BUILTIN[] = {
+            "forName",     // 100
+            "getMethod",   // 101
+            "getField",    // 102
+            "newInstance", // 103
+            "getMethods",  // 104
+            "invoke",      // 105
+            "getClass",    // 106
+        };
+        const char *bn = KIND_TO_BUILTIN[fa->property_kind - 100];
+        ast::CallExpr synth;
+        synth.loc = e->loc;
+        auto id = std::make_unique<ast::IdentExpr>();
+        id->loc = e->loc;
+        id->name = bn;
+        synth.callee = std::move(id);
+        // Para los metodos de instancia (101..103, 105, 106) prepend
+        // el base (self) como primer argumento.  Para forName (100)
+        // solo los args originales.  El base original sera devuelto
+        // tras la lower.
+        std::vector<std::unique_ptr<ast::Expr>> saved_args;
+        const bool prepend_self = (fa->property_kind != 100);
+        saved_args.reserve(e->args.size() + (prepend_self ? 1 : 0));
+        if (prepend_self) {
+            saved_args.push_back(std::move(fa->base));
+        }
+        for (auto &a : e->args)
+            saved_args.push_back(std::move(a));
+        synth.args = std::move(saved_args);
+        ir::IrValueId v_builtin;
+        const bool ok = try_lower_builtin_call(&synth, v_builtin);
+        // Restaurar args originales para no afectar el AST.
+        size_t k = 0;
+        if (prepend_self) {
+            fa->base = std::move(synth.args[k++]);
+        }
+        for (size_t i = 0; i < e->args.size(); ++i, ++k) {
+            e->args[i] = std::move(synth.args[k]);
+        }
+        if (ok) {
+            out = v_builtin;
+            return true;
+        }
+        // try_lower_builtin_call devolvio false (e.g. argumento
+        // ausente o mal formado); el error ya se reporto.  Devolvemos
+        // un valor invalido para que el caller no use un IrValueId
+        // basura.
+        out = ir::IR_NO_VALUE;
+        return true;
+    }
+    // Bug fix 2026-05-23: metodos estaticos.  property_kind=4 marca
+    // llamada estatica `ClassName.method()` que NO tiene receptor
+    // CLASS; el dispatch va a lower_class_method_call que detecta
+    // property_kind=4 y emite CALLVM directo.
+    if (fa->property_kind == 4 || fa->property_kind == 7) {
+        out = lower_class_method_call(e);
+        return true;
+    }
+    if (fa->base && fa->base->result_type.kind == PrimitiveKind::CLASS) {
+        out = lower_class_method_call(e);
+        return true;
+    }
+    // Metodo de struct (value-type, dispatch estatico).  Si la base
+    // es STRUCT y el layout declara el metodo, emitimos CALL directo
+    // a <Struct>__<metodo>(struct_addr, args...).  Si no es un
+    // metodo conocido, cae a las rutas siguientes (colecciones, etc).
+    // @Virtual: tambien enrutar `ptr.metodo()` sobre un `Struct*` (dispatch
+    // dinamico por vtable).  El struct efectivo es el pointee.
+    std::string sm_struct_name;
+    if (fa->base) {
+        const Type &rbt = fa->base->result_type;
+        if (rbt.kind == PrimitiveKind::STRUCT && !rbt.struct_name.empty())
+            sm_struct_name = rbt.struct_name;
+        else if (rbt.kind == PrimitiveKind::PTR && rbt.pointee &&
+                 rbt.pointee->kind == PrimitiveKind::STRUCT)
+            sm_struct_name = rbt.pointee->struct_name;
+    }
+    if (!sm_struct_name.empty()) {
+        auto it_s = tc_.struct_layouts().find(sm_struct_name);
+        if (it_s != tc_.struct_layouts().end()) {
+            bool has_m = false;
+            for (const auto &mm : it_s->second.methods) {
+                if (mm.name == fa->field_name) {
+                    has_m = true;
+                    break;
+                }
+            }
+            if (has_m) {
+                out = lower_struct_method_call(e);
+                return true;
+            }
+        }
+    }
+    // ===== dispatch de metodos de coleccion primitiva =====
+    // Si la base es uno de los tipos coleccion (ARRAYLIST, HASHMAP,
+    // ...), buscamos el metodo en la tabla COL_METHODS y emitimos
+    // CALLN directo al native_fn con (handle, ...args).  Cero
+    // overhead vs llamar el plugin manualmente; sin vtable ni
+    // CALLVIRT (no son objetos GC, son handles host pointer).
+    if (fa->base && is_col_kind(fa->base->result_type.kind)) {
+        const ColMethod *cm =
+            find_col_method(fa->base->result_type.kind, fa->field_name);
+        if (cm) {
+            // decidir si la coleccion retiene refs GC.
+            // El frontend setea pointee/pointee2 al resolver el tipo
+            // declarado (`ArrayList<string>` etc.).  Si es GC y la
+            // operacion tiene variante *_gc, llamamos a esa con un
+            // `getproc` extra como primer argumento.  Si la coleccion
+            // se declaro sin <T> (legacy o tipo opaco i64), pointee
+            // es nulo y caemos al camino no-GC de cero overhead.
+            const Type &recv_ty = fa->base->result_type;
+            PrimitiveKind elem_k = PrimitiveKind::VOID;
+            PrimitiveKind val_k = PrimitiveKind::VOID;
+            if (recv_ty.pointee) elem_k = recv_ty.pointee->kind;
+            if (recv_ty.pointee2) val_k = recv_ty.pointee2->kind;
+            // native_poo (AOT): sin VM -> sin getproc ni gc_addref/release;
+            // usar la variante NO-GC (cero overhead, el handle/ptr se
+            // guarda tal cual).  El lifetime lo gestiona el modelo nativo.
+            const bool gc_aware =
+                (cm->native_fn_gc != nullptr) && !native_poo_ &&
+                col_needs_gc_aware(recv_ty.kind, elem_k, val_k);
+
+            // Lower base (handle).
+            const ir::IrValueId v_handle = lower_expr(fa->base.get());
+            if (v_handle == ir::IR_NO_VALUE) {
+                out = ir::IR_NO_VALUE;
+                return true;
+            }
+            // Lower args.
+            std::vector<ir::IrValueId> arg_ids;
+            arg_ids.reserve(2 + e->args.size());
+            if (gc_aware) {
+                // proc va PRIMERO en las variantes *_gc.
+                arg_ids.push_back(emit_getproc(e->loc.line));
+            }
+            arg_ids.push_back(v_handle);
+            for (auto &a : e->args) {
+                arg_ids.push_back(lower_expr(a.get()));
+            }
+            const char *fn_name =
+                gc_aware ? cm->native_fn_gc : cm->native_fn;
+            out_mod_->register_native_import(COL_NATIVE_LIB, fn_name);
+            const ir::IrType ret_ir = ir_type_from_primitive(cm->ret);
+            const ir::IrValueId v_dst = (ret_ir == ir::IrType::VOID)
+                                            ? ir::IR_NO_VALUE
+                                            : fn_->new_value(ret_ir);
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::CALLN;
+            ins.type = ret_ir;
+            ins.dst = v_dst;
+            ins.func_name = std::string(COL_NATIVE_LIB) + ":" + fn_name;
+            ins.operands = std::move(arg_ids);
+            ins.source_line = e->loc.line;
+            emit(current_block_, std::move(ins));
+            out = v_dst;
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace vx

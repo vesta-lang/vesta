@@ -551,6 +551,64 @@ class Lowering {
      * @param source_line Linea fuente, para la depuracion.
      * @return El valor SSA del resultado, o IR_NO_VALUE si no devuelve.
      */
+    /**
+     * @brief Intenta bajar la llamada como constructor de variante de enum.
+     *
+     * `Color.Red` se escribe como una llamada a un acceso a campo, igual que
+     * un metodo, y no lo es: no hay nada que llamar, hay un valor que
+     * construir.  Los distingue una marca que dejo el comprobador de tipos.
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar el valor construido.
+     * @return @c true si lo era y quedo bajado.
+     */
+    bool try_lower_enum_variant_ctor(ast::CallExpr *e, ir::IrValueId &out);
+
+    /**
+     * @brief Intenta bajar la llamada como `Tipo.default()` de un struct.
+     *
+     * Dos formas que no hacen lo mismo: con el nombre de un tipo reserva uno
+     * nuevo, con una variable resetea el que ya existe.  Y en las dos se pone
+     * a cero primero: un struct recien reservado tiene lo que hubiera en la
+     * pila, y un campo sin valor por defecto se quedaria con esa basura.
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar la direccion del struct.
+     * @return @c true si lo era y quedo bajado.
+     */
+    bool try_lower_struct_default_ctor(ast::CallExpr *e, ir::IrValueId &out);
+
+    /**
+     * @brief Intenta bajar la llamada como funcion de un namespace importado.
+     *
+     * Forma `lib.funcion(args)`.  El nombre visible no es el que acaba en el
+     * binario: cada namespace mangla los suyos, asi que se busca el simbolo y
+     * se emite un CALL a su etiqueta manglada.  A que namespace apunta la base
+     * lo resolvio el type checker en @c ns_index, porque el nombre por si solo
+     * no basta con bases de varios segmentos (`ui.widgets.Boton`).
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar el valor que la llamada produce.
+     * @return @c true si el callee era de un namespace y quedo bajado.
+     */
+    bool try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out);
+
+    /**
+     * @brief Intenta bajar la llamada como un metodo sobre un receptor.
+     *
+     * A donde va `algo.metodo(args)` lo decide el TIPO del receptor, no el
+     * nombre: una cadena reescribe a su builtin con el receptor de primer
+     * argumento; una clase va al despacho por vtable; un struct, a la llamada
+     * directa a su funcion; una coleccion primitiva, a la funcion nativa del
+     * plugin.  Aparte quedan los estaticos y la reflexion ergonomica, que se
+     * escriben igual pero no son un metodo sobre un valor.
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar el valor que el metodo produce.
+     * @return @c true si era un metodo y quedo bajado.
+     */
+    bool try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out);
+
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
                             uint32_t source_line);
