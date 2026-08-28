@@ -1115,15 +1115,14 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             /* Un pointcut mal formado lo diagnostica la emision del advice;
              * aqui basta con NO poder atribuirlo, que es lo prudente. */
             if (p == std::string::npos || p == 0 || p + 1 >= t.size()) {
-                aspectos_atribuidos_ = false;
+                all_advices_attributed_ = false;
                 continue;
             }
-            const std::string objetivo =
-                t.substr(0, p) + "__" + t.substr(p + 1);
-            ir::IrModule::AspectoEnCadena entrada;
-            entrada.kind = static_cast<uint8_t>(m->advice_kind - 1);
-            entrada.metodo_ir_name = cd_asp->name + "__" + m->name;
-            cadena_de_aspectos_[objetivo].push_back(std::move(entrada));
+            const std::string target = t.substr(0, p) + "__" + t.substr(p + 1);
+            ir::IrModule::ChainedAdvice entry;
+            entry.kind = static_cast<uint8_t>(m->advice_kind - 1);
+            entry.method_ir_name = cd_asp->name + "__" + m->name;
+            advice_chains_[target].push_back(std::move(entry));
         }
     }
     /* A que llama el `proceed()` de cada `@Around`.
@@ -1132,19 +1131,18 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
      * Como un advice tiene un solo objetivo -- el pointcut es `Clase.metodo`
      * exacto -- su `proceed` tiene UN destino, conocido aqui.  Eso es lo que
      * permite llamarlo directo en vez de por el marco. */
-    for (const auto &kv : cadena_de_aspectos_) {
-        const std::string *anterior = nullptr;
+    for (const auto &kv : advice_chains_) {
+        const std::string *prev = nullptr;
         for (const auto &a : kv.second) {
             if (a.kind != loader::ADVICE_AROUND) continue;
-            if (anterior != nullptr)
-                destino_proceed_[*anterior] = a.metodo_ir_name;
-            anterior = &a.metodo_ir_name;
+            if (prev != nullptr) proceed_target_[*prev] = a.method_ir_name;
+            prev = &a.method_ir_name;
         }
         /* El mas interno llama al metodo. */
-        if (anterior != nullptr) destino_proceed_[*anterior] = kv.first;
+        if (prev != nullptr) proceed_target_[*prev] = kv.first;
     }
-    out_module.cadena_de_aspectos = cadena_de_aspectos_;
-    out_module.aspectos_atribuidos = aspectos_atribuidos_;
+    out_module.advice_chains = advice_chains_;
+    out_module.all_advices_attributed = all_advices_attributed_;
 
     // AOT / Embed (native_poo_): el AOP (@Aspect + advice) se registra en
     // RUNTIME (MethodInfo::advice_chain via addadvice en __module_init), que
@@ -35245,7 +35243,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
              * alguno que no se pudo atribuir a un metodo concreto: los
              * candidatos con aspectos se descartan uno a uno mas abajo, y el
              * resto sigue especulando. */
-            if (aspectos_atribuidos_) {
+            if (all_advices_attributed_) {
                 constexpr size_t K_MAX = 4;
                 // (cls_name, callee_ir_name) por implementor concreto.
                 std::vector<std::pair<std::string, std::string>> impls;
@@ -35277,7 +35275,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                      * FUERA de los candidatos, con lo que sus objetos caen al
                      * despacho normal -- que si la recorre -- y los demas
                      * implementores siguen especulando. */
-                    if (cadena_de_aspectos_.count(callee) != 0) continue;
+                    if (advice_chains_.count(callee) != 0) continue;
                     impls.emplace_back(cl.name, callee);
                     if (impls.size() > K_MAX) {
                         too_many = true;
@@ -41441,8 +41439,8 @@ ir::IrValueId Lowering::emit_proceed(uint32_t line) {
      *
      * Se conserva la forma antigua para lo que no se pueda atribuir, que sigue
      * despachandose por la cadena en ejecucion. */
-    auto it = fn_ ? destino_proceed_.find(fn_->name) : destino_proceed_.end();
-    if (it != destino_proceed_.end() && !it->second.empty()) {
+    auto it = fn_ ? proceed_target_.find(fn_->name) : proceed_target_.end();
+    if (it != proceed_target_.end() && !it->second.empty()) {
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALL;
         ins.type = ir::IrType::I64;

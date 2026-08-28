@@ -1843,11 +1843,12 @@ struct IrModule {
      * advice se recorre en el despacho, asi que convertir su @c callvirt en un
      * @c call se lo saltaria.  Estar en el mapa es lo que dice que un metodo
      * los lleva; la lista, EN ORDEN, es lo que hace falta para tejer la cadena
-     * en el sitio de llamada en vez de renunciar a optimizarlo.  Antes, para no correr ese riesgo, bastaba con que el
-     * modulo tuviera UN aspecto para apagar la devirtualizacion ENTERA -- y el
-     * modulo aqui es el programa entero.  Un aspecto de registro en un rincon
-     * dejaba sin devirtualizar todo lo demas, y eso cuesta entre 1,2x y 9,5x
-     * medido en los bancos de despacho.
+     * en el sitio de llamada en vez de renunciar a optimizarlo.
+     *
+     * Antes bastaba con que el modulo tuviera UN aspecto para apagar la
+     * devirtualizacion ENTERA -- y el modulo aqui es el programa entero.  Un
+     * aspecto de registro en un rincon dejaba sin devirtualizar todo lo demas,
+     * y eso cuesta entre 1,2x y 9,5x medido en los bancos de despacho.
      *
      * Con la lista, cada sitio de llamada se mira por separado: se salta el que
      * apunta a un metodo de aqui y se devirtualiza el resto.  El pointcut es
@@ -1859,23 +1860,22 @@ struct IrModule {
      * nombre lo recoge; si lo redefine, es otro nombre y otro MethodInfo, que
      * es tambien lo correcto.
      */
-    struct AspectoEnCadena {
+    struct ChainedAdvice {
         uint8_t kind;               ///< ADVICE_* de @c loader/oop_types.h
-        std::string metodo_ir_name; ///< nombre IR del advice (`Aspecto__m`)
+        std::string method_ir_name; ///< nombre IR del advice (`Aspecto__m`)
     };
-    std::unordered_map<std::string, std::vector<AspectoEnCadena>>
-        cadena_de_aspectos;
+    std::unordered_map<std::string, std::vector<ChainedAdvice>> advice_chains;
 
     /**
-     * @brief Los aspectos del modulo estan TODOS en @c cadena_de_aspectos.
+     * @brief Los aspectos del modulo estan TODOS en @c advice_chains.
      *
      * Falso mientras haya alguno que no se pueda atribuir a un metodo concreto
      * -- hoy, un @c addadvice escrito a mano en ensamblador --, y entonces se
      * vuelve a apagar la devirtualizacion del modulo entero.  Sin esta
-     * distincion, una lista vacia significaria las dos cosas opuestas: que no
-     * hay aspectos, o que no se sabe cuales son.
+     * distincion, un mapa vacio significaria las dos cosas opuestas: que no hay
+     * aspectos, o que no se sabe cuales son.
      */
-    bool aspectos_atribuidos = true;
+    bool all_advices_attributed = true;
 
     /**
      * @brief v4: metadatos de cada entrada en @c static_data.

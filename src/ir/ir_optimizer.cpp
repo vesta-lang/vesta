@@ -19,6 +19,8 @@
 
 #include "util/reloj.h"
 
+#include "loader/oop_types.h" // ADVICE_*: los tipos de la cadena de aspectos
+
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -2701,10 +2703,10 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
      * objetos dejaban de plegarse a constantes.  Y no se veia como lo que era
      * -- se leia como si el coste viniera del despacho -- porque el numero de
      * `callvirt` emitidos era exactamente el mismo con aspecto y sin el. */
-    if (!mod.aspectos_atribuidos) return bail("hay aspectos sin atribuir");
+    if (!mod.all_advices_attributed) return bail("hay aspectos sin atribuir");
     for (const auto &m : cls->methods) {
         if (!m.ir_fn_name.empty() &&
-            mod.cadena_de_aspectos.count(m.ir_fn_name) != 0)
+            mod.advice_chains.count(m.ir_fn_name) != 0)
             return bail("un metodo de la clase lleva aspectos");
     }
 
@@ -10313,9 +10315,9 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
  * modulo se considera AOP-enabled y se skip-ea el devirt.  Sin esto las
  * callvirt convertidas a call directo saltarian el advice chain runtime.
  */
-static bool module_uses_aop_sin_atribuir(const IrModule &mod) {
+static bool module_has_unattributed_aop(const IrModule &mod) {
     /* Los aspectos declarados en Vesta SI se atribuyen: el frontend apunta a
-     * que metodo va cada uno en @c cadena_de_aspectos, y entonces basta con
+     * que metodo va cada uno en @c advice_chains, y entonces basta con
      * saltarse esos sitios.  Lo que no se puede atribuir es un `addadvice`
      * escrito a mano en ensamblador: ahi no se sabe a quien apunta, asi que se
      * renuncia al pase entero, que es lo unico seguro. */
@@ -10386,12 +10388,12 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
     /* Solo se renuncia al pase ENTERO cuando hay aspectos que no se pueden
      * atribuir a un metodo concreto -- hoy, un `addadvice` escrito a mano en
      * ensamblador, que no dice a quien apunta.  Cuando todos estan atribuidos,
-     * cada sitio se mira por separado contra @c cadena_de_aspectos.
+     * cada sitio se mira por separado contra @c advice_chains.
      *
      * Renunciar por modulo salia caro y es el programa entero: medido en los
      * bancos de despacho, un aspecto que no tocaba ninguna de las clases del
      * programa costaba entre 1,2x y 9,5x. */
-    if (!mod.aspectos_atribuidos || module_uses_aop_sin_atribuir(mod))
+    if (!mod.all_advices_attributed || module_has_unattributed_aop(mod))
         return false;
 
     /* Indice por nombre de clase. */
@@ -10480,9 +10482,22 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
             if (!grew) break;
         }
 
+        /* Sitios cuyo objetivo lleva aspectos: en vez de renunciar a
+         * optimizarlos, se TEJE la cadena aqui (ver mas abajo).  Se apuntan y
+         * se aplican despues porque tejer INSERTA instrucciones, y hacerlo
+         * mientras se recorre el bloque invalidaria el recorrido. */
+        struct WeaveSite {
+            size_t block;
+            size_t instr;
+            std::string target;
+        };
+        std::vector<WeaveSite> to_weave;
+
         /* Aplicar devirt. */
-        for (auto &bb : fn.blocks) {
-            for (auto &ins : bb.instrs) {
+        for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+            auto &bb = fn.blocks[bi];
+            for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
+                auto &ins = bb.instrs[ii];
                 if (ins.op != IrOp::CALLVIRT) continue;
                 if (ins.operands.empty()) continue;
                 auto it = class_of.find(ins.operands[0]);
@@ -10504,14 +10519,17 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                 }
                 if (!mtd) continue;
                 if (mtd->ir_fn_name.empty()) continue;
-                /* Un metodo con aspectos se despacha recorriendo su cadena de
-                 * advices, asi que llamarlo directo se los saltaria.  Se salta
-                 * ESTE sitio y se sigue con el resto -- antes bastaba un
-                 * aspecto en cualquier rincon para renunciar al pase entero. */
-                if (mod.cadena_de_aspectos.count(mtd->ir_fn_name) != 0)
-                    continue;
                 const bool safe_method = mtd->is_final || safe_class;
                 if (!safe_method) continue;
+
+                /* Un metodo con aspectos se despacha recorriendo su cadena, asi
+                 * que llamarlo directo se los saltaria.  Pero aqui se sabe QUE
+                 * cadena es, y el receptor tambien: en vez de renunciar, se
+                 * apunta para tejerla. */
+                if (mod.advice_chains.count(mtd->ir_fn_name) != 0) {
+                    to_weave.push_back({bi, ii, mtd->ir_fn_name});
+                    continue;
+                }
 
                 /* Rewrite CALLVIRT -> CALL */
                 ins.op = IrOp::CALL;
@@ -10520,6 +10538,99 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
                 /* operands sin cambio: [obj, args...] */
                 changed = true;
             }
+        }
+
+        /* TEJER la cadena en el sitio de llamada.
+         *
+         * Donde se conoce el receptor se conoce el despacho entero, asi que en
+         * vez de dejar el `callvirt` -- que recorreria la cadena en ejecucion,
+         * un marco por paso -- se emite la secuencia:
+         *
+         *     call before_1(obj, args...)      ; su valor se descarta
+         *     ...
+         *     r = call m_slot(obj, args...)    ; el @Around mas externo, o el
+         *                                      ; metodo si no hay ninguno
+         *     r = call after_1(obj, args...)   ; recibe los args ORIGINALES y
+         *     ...                              ; su retorno REEMPLAZA
+         *     r = call after_ret(obj, r, ...)  ; este recibe el RESULTADO
+         *
+         * Los `@Around` interiores NO van en la secuencia: al mas externo se
+         * llega directo y el encadena con los suyos por su `proceed`, que ya se
+         * emite como llamada (ver @c Lowering::emit_proceed).
+         *
+         * Todo son llamadas directas, asi que el inliner se las come.  La
+         * semantica que se reproduce esta fijada en los ejemplos 379, 380 y 381.
+         *
+         * Los sitios con receptor DESCONOCIDO siguen por el `callvirt` y su
+         * cadena en ejecucion, que se sigue registrando: es lo que hara falta
+         * el dia que los advices se puedan anadir o alterar sobre la marcha.  Y
+         * este es el unico punto que habria que revisar entonces, el mismo que
+         * la devirtualizacion de arriba. */
+        for (size_t k = to_weave.size(); k-- > 0;) {
+            const WeaveSite &s = to_weave[k];
+            auto itc = mod.advice_chains.find(s.target);
+            if (itc == mod.advice_chains.end()) continue;
+            const auto &chain = itc->second;
+            if (chain.empty()) continue;
+            auto &instrs = fn.blocks[s.block].instrs;
+            if (s.instr >= instrs.size()) continue;
+            const IrInstr orig = instrs[s.instr]; // copia: se va a sustituir
+
+            /* El paso central: el `@Around` mas externo, o el metodo. */
+            std::string m_slot = s.target;
+            for (const auto &a : chain)
+                if (a.kind == loader::ADVICE_AROUND) {
+                    m_slot = a.method_ir_name;
+                    break;
+                }
+
+            std::vector<IrInstr> woven;
+            auto emit_call = [&](const std::string &callee,
+                                 std::vector<IrValueId> ops, IrValueId dst) {
+                IrInstr c{};
+                c.op = IrOp::CALL;
+                c.type = orig.type;
+                c.dst = dst;
+                c.func_name = callee;
+                c.operands = std::move(ops);
+                c.is_call_site = true;
+                c.source_line = orig.source_line;
+                woven.push_back(std::move(c));
+            };
+
+            for (const auto &a : chain)
+                if (a.kind == loader::ADVICE_BEFORE)
+                    emit_call(a.method_ir_name, orig.operands,
+                              fn.new_value(orig.type));
+
+            IrValueId r = fn.new_value(orig.type);
+            emit_call(m_slot, orig.operands, r);
+
+            for (const auto &a : chain) {
+                if (a.kind != loader::ADVICE_AFTER &&
+                    a.kind != loader::ADVICE_AFTER_RETURNING)
+                    continue;
+                std::vector<IrValueId> ops = orig.operands;
+                /* `@AfterReturning` recibe el RESULTADO en el sitio del primer
+                 * argumento declarado; un `@After` a secas ve los originales. */
+                if (a.kind == loader::ADVICE_AFTER_RETURNING) {
+                    if (ops.size() >= 2)
+                        ops[1] = r;
+                    else
+                        ops.push_back(r);
+                }
+                const IrValueId r2 = fn.new_value(orig.type);
+                emit_call(a.method_ir_name, std::move(ops), r2);
+                r = r2;
+            }
+
+            /* Lo que la llamada original dejaba, lo deja ahora el ultimo paso. */
+            if (orig.dst != IR_NO_VALUE) woven.back().dst = orig.dst;
+
+            instrs.erase(instrs.begin() + static_cast<long>(s.instr));
+            instrs.insert(instrs.begin() + static_cast<long>(s.instr),
+                          woven.begin(), woven.end());
+            changed = true;
         }
     }
     return changed;

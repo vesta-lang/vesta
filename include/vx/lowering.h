@@ -651,15 +651,15 @@ class Lowering {
     /// de llamada la consulta para decidir si puede devirtualizar/especular:
     /// llamar directo a un metodo con aspectos se saltaria su cadena.
     std::unordered_map<std::string,
-                       std::vector<ir::IrModule::AspectoEnCadena>>
-        cadena_de_aspectos_;
+                       std::vector<ir::IrModule::ChainedAdvice>>
+        advice_chains_;
     /// A que llama el `proceed()` de cada `@Around`, por nombre IR: el
     /// siguiente `@Around` de su cadena, o el metodo si es el mas interno.
     /// Vacio para todo lo que no sea un `@Around`.
-    std::unordered_map<std::string, std::string> destino_proceed_;
+    std::unordered_map<std::string, std::string> proceed_target_;
     /// Falso si algun aspecto no se pudo atribuir a un metodo concreto; se
     /// vuelve entonces al criterio ancho (ningun sitio se devirtualiza).
-    bool aspectos_atribuidos_ = true;
+    bool all_advices_attributed_ = true;
     /**
      * @brief `extent(v)`: sintetiza `__ovl_extent_<S>(self) -> u64` que computa
      * el SPAN total del layout de la vista con los datos de la instancia
