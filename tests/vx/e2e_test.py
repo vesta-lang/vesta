@@ -3180,6 +3180,74 @@ aot_case("conc_select", "select sobre varios canales", "252_select.vx", 42)
 aot_case("conc_select_send", "select del lado del envio", "253_select_send.vx", 42)
 aot_case("conc_select_mixed", "select mezclando envio y recepcion", "254_select_mixed.vx", 42)
 aot_case("conc_mutex", "mutex cooperativo de fibras cross-hilo: 4x20000 incrementos exactos", "255_mutex.vx", 42)
+# El interprete los ejecuta sin quejarse pero devuelve 0: el trabajo lo hacen
+# los hilos, que ahi no existen.  Un 0 silencioso es peor que un fallo, y por
+# eso se les pide el modo en el que su respuesta significa algo.
+aot_case("conc_spawn_threads", "spawn sobre hilos del SO", "239_spawn_threads.vx", 42)
+aot_case("conc_spawn_captures", "spawn con capturas sobre hilos del SO", "240_spawn_captures.vx", 42)
+
+
+# --- Ejemplos que corrian igual en los tres modos y nadie ejecutaba ---------
+#
+# Estaban fuera de la suite sin motivo: se comprobo uno por uno que interprete,
+# JIT y nativo dan el MISMO resultado.  Los que caben en un codigo de salida
+# (<= 255) se fijan por valor exacto; los que no, van por la red diferencial --
+# el codigo de salida de un binario son 8 bits, y exigir ahi un 0x2476 seria
+# pedirle al AOT algo que no puede contestar.
+modes3_case("macro_walk_pchase", "macro que recorre una cadena de punteros en tiempo de compilacion", "160_macro_walk_pchase.vx", 42)
+modes3_case("vreg_obj_loop_callvirt", "bucle con despacho virtual sobre objeto (camino vreg)", "180_vreg_obj_loop_callvirt.vx", 34)
+modes3_case("vreg_alloca_vm_escape", "reserva local que escapa a memoria de la VM", "181_vreg_alloca_vm_escape.vx", 70)
+modes3_case("fiber_lifecycle", "ciclo de vida de una fibra: crear, cambiar, terminar", "232_fiber_lifecycle.vx", 2)
+modes3_case("chan_try", "canal en su forma NO bloqueante (try_send / try_recv)", "251_chan_try.vx", 42)
+modes3_case("overlay_dynamic", "vista con campos cuyo offset se decide en ejecucion", "262_overlay_dynamic.vx", 128)
+modes3_case("overlay_scan", "recorrido de una estructura con vistas encadenadas", "265_overlay_scan.vx", 140)
+modes3_case("overlay_elf_parser", "leer las cabeceras de un ELF con vistas", "272_overlay_elf_parser.vx", 2)
+modes3_case("overlay_pe_parser", "leer las cabeceras de un PE con vistas", "273_overlay_pe_parser.vx", 2)
+modes3_case("overlay_parent_walk", "una vista que sube a la que la contiene", "276_overlay_parent_walk.vx", 162)
+modes3_case("overlay_element_tlv", "elementos tipo-longitud-valor sobre una vista", "277_overlay_element_tlv.vx", 170)
+modes3_case("overlay_extent", "extension de una vista calculada de sus propios campos", "278_overlay_extent.vx", 40)
+modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
+modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
+modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)
+modes3_case("lambda_no_capture", "lambda que no captura nada: baja a funcion suelta", "50b_lambda_no_capture.vx", 42)
+modes3_case("lambda_captura", "lambda que captura de su entorno", "51_lambda_captura.vx", 30)
+modes3_case("lambda_hof", "lambdas pasadas y devueltas como valores", "52_lambda_hof.vx", 100)
+modes3_case("enum_payload", "enum cuyas variantes llevan datos", "54_enum_payload.vx", 105)
+modes3_case("linkedlist_basico", "lista enlazada: construir y recorrer", "55_linkedlist_basico.vx", 6)
+modes3_case("linkedlist_hof", "lista enlazada con funciones de orden superior", "56_linkedlist_hof.vx", 21)
+modes3_case("rpn_calc", "calculadora en notacion polaca: se comprueba a si misma y devuelve 42", "61_rpn_calc.vx", 42)
+modes3_case("compose_curry", "composicion y aplicacion parcial de funciones", "62_compose_curry.vx", 42)
+modes3_case("match_repro", "reproductor minimo de match", "90_match_repro.vx", 2)
+modes3_case("dbg_walk", "cadena de llamadas minima (reproductor del depurador)", "_dbg_test.vx", 42)
+modes3_case("ffi_kernel32", "FFI declarativa contra kernel32", "beep_bepp.vx", 0)
+modes3_case("borrow_unique_owner", "prestamo sobre un unique como duenno (reproductor)", "bug3.vx", 0)
+modes3_case("borrow_class_owner", "prestamo con duenno de clase (reproductor)", "bug3_class.vx", 30)
+modes3_case("borrow_repro4", "prestamo, cuarto reproductor", "bug4.vx", 3)
+modes3_case("unique_chain", "unique que atraviesa una cadena de llamadas", "check_chain.vx", 99)
+modes3_case("unique_multi", "varios unique en el mismo ambito, liberados al reves", "check_multi.vx", 42)
+modes3_case("unique_return", "unique devuelto: el duenno se va con el retorno", "check_return_unique.vx", 42)
+modes3_case("unique_with_return", "unique vivo cuando la funcion retorna por otra rama", "check_with_return.vx", 42)
+modes3_case("fmt_spec", "especificadores de formato en la interpolacion", "test_fmt_spec.vx", 0)
+diff3_case("vectorize_fmsub", "vectorizacion: multiplicar y restar fundidos", "200_vectorize_fmsub.vx")
+diff3_case("vectorize_f32_scalar", "vectorizacion de f32 con un escalar difundido", "201_vectorize_f32_scalar.vx")
+diff3_case("f32_param_coercion", "conversion de f32 al pasarlo como parametro", "202_f32_param_coercion.vx")
+diff3_case("vectorize_scalar_factor", "reduccion vectorial con factor escalar", "203_vectorize_scalar_factor.vx")
+diff3_case("vectorize_two_scaled", "dos vectores escalados en la misma expresion", "204_vectorize_two_scaled.vx")
+diff3_case("overlay_block", "vista sobre un bloque de bytes", "263_overlay_block.vx")
+diff3_case("overlay_block_if", "vista cuyos campos dependen de una condicion", "264_overlay_block_if.vx")
+diff3_case("match_int", "match sobre enteros y chars (el switch de Vesta)", "266_match_int.vx")
+diff3_case("match_string", "match sobre cadenas constantes", "267_match_string.vx")
+diff3_case("match_string_runtime", "match sobre cadenas conocidas en ejecucion", "268_match_string_runtime.vx")
+diff3_case("match_range", "match por rangos de valores", "269_match_range.vx")
+diff3_case("overlay_array", "arrays dentro de una vista", "270_overlay_array.vx")
+diff3_case("overlay_pe_sections", "recorrer la tabla de secciones de un PE", "271_overlay_pe_sections.vx")
+diff3_case("overlay_checked", "vista con comprobacion de limites", "274_overlay_checked.vx")
+diff3_case("overlay_rva_resolver", "resolver direcciones virtuales relativas desde la vista", "275_overlay_rva_resolver.vx")
+diff3_case("overlay_assembler", "ensamblar una estructura escribiendo por la vista", "279_overlay_assembler.vx")
+diff3_case("overlay_endian", "vistas con campos de orden de bytes contrario", "280_overlay_endian.vx")
+diff3_case("overlay_endian_ctx", "el orden de bytes sale del contexto de la propia vista", "281_overlay_endian_ctx.vx")
+diff3_case("valued_enums", "enums con valor explicito, estilo C", "283_valued_enums.vx")
+diff3_case("paralelismo_heavy", "carga paralela sostenida sobre el planificador", "44_paralelismo_heavy.vx")
 
 
 # ---  AS: inline asm ---------------------------------------------------
