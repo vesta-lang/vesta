@@ -337,6 +337,24 @@ class Lowering {
                                       ir::IrValueId &out_value);
 
     /**
+     * @brief Intenta bajar una llamada como uno de los builtins de cadena.
+     *
+     * Medirla, cortarla, unirla, compararla y sacarla al exterior.  Una cadena
+     * de Vesta es una secuencia de puntos de codigo que sabe en que
+     * codificacion los guarda, asi que medir su longitud y contar sus bytes no
+     * son la misma pregunta.
+     *
+     * Cada uno baja a UNA instruccion de la maquina, no a una llamada: medir
+     * es leer un campo ya calculado y cortar da una vista sobre la original
+     * sin copiar, de modo que partir una cadena en un bucle no reserva memoria
+     * en cada vuelta.
+     *
+     * @return @c true si el nombre era de esta familia y quedo bajado.
+     */
+    bool try_lower_string_builtins(ast::CallExpr *e, Builtin b,
+                                   ir::IrValueId &out_value);
+
+    /**
      * @brief Reserva un hueco de @p bytes en el marco actual.
      *
      * Lo que se reserva aqui muere con el marco, asi que es lo correcto para

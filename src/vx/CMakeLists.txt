@@ -210,6 +210,10 @@ add_library(vx_lib STATIC
     # dueno unico o contado, prestamos, y trasladar la propiedad.  Casi
     # todo se decide al compilar y no llega al codigo generado.
     lowering/builtins_ownership.cpp
+    # Builtins de cadena: medirla, cortarla, unirla, compararla y sacarla
+    # al exterior.  Cada uno baja a UNA instruccion de la maquina; cortar
+    # da una vista, no una copia.
+    lowering/builtins_string.cpp
     # Ensamblador escrito a mano: el mini-ensamblador de bloques `asm` a nivel
     # de datos (literales, db/dw/dd/dq, times, $ y $$, con Keystone para las
     # instrucciones) y la bajada de un `asm { }` dentro de una funcion.
