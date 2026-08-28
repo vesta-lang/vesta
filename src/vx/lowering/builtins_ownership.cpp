@@ -200,412 +200,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // Layout: ALLOCA 8 bytes (slot) + malloc(sizeof(T)) (host) +
     // STORE value en host + STORE host_ptr en slot.  Cleanup al exit
     // del scope: LOAD slot; CMP_EQ 0; CALL free(ptr) si no-null.
-    if (is_unique_box || is_shared_box) {
-        if (e->args.size() != 1) {
-            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento", out_value);
-        }
-        // Construccion IN-PLACE para `unique<Punto> p = {.x=10, .y=20}`:
-        // si el arg es un InitListExpr con target_type_name anotado
-        // (desugar de Opcion B en check_var_decl), alocamos host heap
-        // PRIMERO y escribimos los campos DIRECTO sobre el host_ptr.
-        // Cero memcpy stack -> heap.  Coste = solo los STOREs del init
-        // list, igual que un struct value-type normal.
-        //
-        // El path generico mas abajo (lower_expr del arg + memcpy)
-        // sigue cubriendo `unique_box(struct_var_existente)` y otros
-        // casos donde el arg ya es un PTR a struct construido.
-        if (is_unique_box && e->args[0]->kind == ast::NodeKind::InitListExpr) {
-            auto *il = static_cast<ast::InitListExpr *>(e->args[0].get());
-            if (!il->target_type_name.empty()) {
-                const auto &layouts = tc_.struct_layouts();
-                auto it_lay = layouts.find(il->target_type_name);
-                if (it_lay != layouts.end()) {
-                    const StructLayout &lay = it_lay->second;
-                    // 1. Slot del unique<T> Tier 1 (16 bytes).  M7:
-                    //    si lower_return seteo unique_box_target_slot_,
-                    //    construimos directo en el retbuf del caller
-                    //    (saltamos el stack_alloc_buf intermedio).
-                    const ir::IrValueId v_slot =
-                        (unique_box_target_slot_ != ir::IR_NO_VALUE)
-                            ? unique_box_target_slot_
-                            : stack_alloc_buf(16, e->loc.line);
-                    // 2. RAW_ALLOC(sizeof_struct) -> host_ptr.
-                    const ir::IrValueId v_size = emit_const(
-                        ir::IrType::I64, static_cast<int64_t>(lay.size_bytes),
-                        e->loc.line);
-                    const ir::IrValueId v_host =
-                        fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_host].is_host_ptr = true;
-                    {
-                        ir::IrInstr ins{};
-                        ins.op = ir::IrOp::RAW_ALLOC;
-                        ins.type = ir::IrType::PTR;
-                        ins.dst = v_host;
-                        ins.operands = {v_size};
-                        ins.source_line = e->loc.line;
-                        emit(current_block_, std::move(ins));
-                    }
-                    // 3. STOREs por campo directo al host_ptr.  Soporta
-                    //    designated (.x=10) y posicional ({10, 20}).
-                    for (size_t i = 0; i < il->elements.size(); ++i) {
-                        // Encontrar el StructFieldInfo correspondiente.
-                        const StructFieldInfo *fld = nullptr;
-                        if (il->is_designated && i < il->field_names.size()) {
-                            const std::string &fname = il->field_names[i];
-                            for (const auto &f : lay.fields) {
-                                if (f.name == fname) {
-                                    fld = &f;
-                                    break;
-                                }
-                            }
-                            if (!fld) {
-                                error_at(il->elements[i]->loc,
-                                         "init list: campo '" + fname +
-                                             "' no existe en struct '" +
-                                             il->target_type_name + "'");
-                                continue;
-                            }
-                        } else {
-                            if (i >= lay.fields.size()) {
-                                error_at(il->elements[i]->loc,
-                                         "init list: demasiados elementos para "
-                                         "struct '" +
-                                             il->target_type_name + "'");
-                                continue;
-                            }
-                            fld = &lay.fields[i];
-                        }
-                        // Lower el valor.
-                        const ir::IrValueId v_val =
-                            lower_expr(il->elements[i].get());
-                        if (v_val == ir::IR_NO_VALUE) continue;
-                        const ir::IrType ft =
-                            ir_type_from_primitive(fld->type.kind);
-                        // Cast si hace falta (literal int -> i32 del field,
-                        // etc.).
-                        const ir::IrType vt_from = fn_->values[v_val].type;
-                        const ir::IrValueId v_casted = cast_if_needed(
-                            v_val, vt_from, ft, il->elements[i]->loc.line,
-                            /*is_explicit=*/true);
-                        // Calcular addr destino = v_host + fld->offset.
-                        ir::IrValueId v_dst = v_host;
-                        if (fld->offset > 0) {
-                            const ir::IrValueId v_off = emit_const(
-                                ir::IrType::I64,
-                                static_cast<int64_t>(fld->offset), e->loc.line);
-                            const ir::IrValueId v_addr =
-                                fn_->new_value(ir::IrType::PTR);
-                            fn_->values[v_addr].is_host_ptr = true;
-                            ir::IrInstr ad{};
-                            ad.op = ir::IrOp::ADD;
-                            ad.type = ir::IrType::I64;
-                            ad.dst = v_addr;
-                            ad.operands = {v_host, v_off};
-                            ad.source_line = e->loc.line;
-                            emit(current_block_, std::move(ad));
-                            v_dst = v_addr;
-                        }
-                        // STORE val at [v_dst].
-                        emit_store_typed(v_dst, v_casted,
-                                         ft, il->elements[i]->loc.line);
-                    }
-                    // 4. STORE host_ptr al slot+0 del unique<T>.
-                    emit_store_typed(v_slot, v_host,
-                                     ir::IrType::I64, e->loc.line);
-                    // 5. STORE deleter=0 (sentinel RAW_FREE) al slot+8.
-                    {
-                        const ir::IrValueId v_eight =
-                            emit_const(ir::IrType::I64, 8, e->loc.line);
-                        const ir::IrValueId v_slot8 =
-                            fn_->new_value(ir::IrType::PTR);
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_slot8;
-                        ad.operands = {v_slot, v_eight};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                        const ir::IrValueId v_zero =
-                            emit_const(ir::IrType::I64, 0, e->loc.line);
-                        emit_store_typed(v_slot8, v_zero,
-                                         ir::IrType::I64, e->loc.line);
-                    }
-                    out_value = v_slot;
-                    return true;
-                }
-            }
-        }
-        const ir::IrValueId v_payload = lower_expr(e->args[0].get());
-        if (v_payload == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrType payload_t = fn_->values[v_payload].type;
-        // Determinar el tipo Vesta semantico para saber si es struct value
-        // (necesita memcpy a host heap) o si es CLASS/primitivo.
-        const Type sem_payload = e->args[0]->result_type;
-        const bool payload_is_struct_value =
-            (sem_payload.kind == PrimitiveKind::STRUCT) &&
-            (tc_.struct_layouts().find(sem_payload.struct_name) !=
-             tc_.struct_layouts().end());
-        // Un cfn (puntero a funcion crudo) es un VALOR de 8 bytes, igual que
-        // un i64 -- NO un host_ptr a un objeto.  Aunque su IR type sea PTR,
-        // debe alojar una celda heap de 8 bytes y guardar la direccion ahi
-        // (como un primitivo), para que `ptr_of(p)` devuelva un cfn* y
-        // `*ptr_of(p)` recupere el cfn con un solo LOAD.  Sin esto tomaria
-        // la rama class-PTR (store directo) y `*ptr_of` deref-earia el codigo
-        // de la funcion -> basura/#UD.
-        const bool payload_is_cfn =
-            (sem_payload.kind == PrimitiveKind::FUNCTION);
-        // bug1: el payload es OTRO smart pointer (unique<T>/shared<T>/borrow).
-        // Su @c lower_expr devuelve la DIRECCION del slot (igual que un struct
-        // inline: su valor ES su buffer), con @c payload_t == PTR.  Si lo
-        // trataramos como un host_ptr-a-objeto (store directo + free), el
-        // cleanup haria RAW_FREE sobre la direccion del slot fuente (una ALLOCA
-        // en vm_mem) -> SIGSEGV en VM/JIT.  La semantica correcta: el wrapper
-        // externo POSEE una COPIA en heap del wrapper interno (sus bytes de
-        // slot: shared/borrow=8, unique Tier 1=16).  Copiamos qword-a-qword
-        // (mismo mecanismo que un struct value-type) para que el cleanup
-        // RAW_FREE libere la copia heap -- NO el control block interno, que el
-        // dueno interno (la variable `s`/`a`, aun en scope) decrementa/libera
-        // por su cuenta.  Asi no hay double-free ni free de stack address.
-        const bool payload_is_smart_wrapper =
-            (sem_payload.kind == PrimitiveKind::UNIQUE_PTR ||
-             sem_payload.kind == PrimitiveKind::SHARED_PTR ||
-             sem_payload.kind == PrimitiveKind::BORROW ||
-             sem_payload.kind == PrimitiveKind::BORROW_MUT);
-        // bug2: el payload es un PUNTERO RAW (`i64*`, `void*`, etc.) -- un
-        // VALOR de 8 bytes, NO un host_ptr a un objeto gestionado (a diferencia
-        // de `new Class()` cuyo sem kind es CLASS).  Debe alojarse en una celda
-        // heap de 8 bytes y guardar el puntero ahi (igual que cfn / primitivo),
-        // para que `ptr_of(u)` devuelva `T**` (la celda) y `*ptr_of(u)`
-        // recupere el `T*` con un solo LOAD.  Sin esto se tomaba la rama
-        // store-directo (pensada para objetos CLASS) y `*ptr_of` deref-eaba el
-        // VALOR del puntero como si fuera una direccion de slot -> se leia el
-        // i64 apuntado y luego se deref-eaba ESE como direccion -> SIGSEGV.
-        const bool payload_is_raw_ptr =
-            (sem_payload.kind == PrimitiveKind::PTR);
-        // sizeof(T): para primitivos usar ir_type_size; para structs
-        // value-type consultar struct_layouts; para PTR/CLASS no se usa
-        // (no alocamos memoria extra, guardamos el host_ptr directo).
-        uint64_t payload_size = ir::type_access_bytes(payload_t);
-        if (payload_is_struct_value) {
-            payload_size = static_cast<uint64_t>(
-                tc_.struct_layouts().at(sem_payload.struct_name).size_bytes);
-        } else if (payload_is_smart_wrapper) {
-            // Tamano del slot del wrapper interno: unique = 16 (Tier 1,
-            // [ptr][deleter]), shared/borrow = 8 (un solo host_ptr/ctrl).
-            payload_size =
-                (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
-        }
-        if (is_unique_box) {
-            // unique<T> Tier 1 (16 bytes):
-            //   [+0 i64 ptr][+8 i64 deleter_addr]
-            // deleter_addr = 0 (sentinel) -> cleanup hace RAW_FREE.
-            // Layout 16 bytes para que el deleter info sobreviva
-            // cuando la funcion devuelve el unique<T> via SRET.
-            // M7: si lower_return seteo target slot, usar el retbuf del
-            // caller directamente (skip allocacion intermedia en stack).
-            const ir::IrValueId v_slot =
-                (unique_box_target_slot_ != ir::IR_NO_VALUE)
-                    ? unique_box_target_slot_
-                    : unique_slot_buf(e->loc.line);
-
-            // Bug fix bug2: si el payload ya es un host_ptr (e.g.
-            // `new Recurso(1)` devuelve PTR), guardarlo DIRECTAMENTE
-            // en slot[+0] sin doble indireccion via RAW_ALLOC.  De
-            // lo contrario, el cleanup CALLVIRT al destructor opera
-            // sobre el malloc'd region (8 bytes basura) en vez del
-            // objeto Recurso real, y el dtor nunca se invoca.
-            //
-            // Para primitivos (i32, f64, etc.) seguimos usando
-            // RAW_ALLOC porque `ptr_of(p)` debe devolver `T*` (host
-            // memory).  Para PTR el `ptr_of` devuelve el mismo
-            // host_ptr almacenado.
-            ir::IrValueId v_to_store = v_payload;
-            if (payload_is_struct_value || payload_is_smart_wrapper) {
-                // Struct value-type O smart-pointer wrapper (bug1):
-                // RAW_ALLOC(N) + memcpy qword-by-qword desde v_payload (PTR al
-                // slot fuente) hacia v_payload_ptr (host heap).  Asi el
-                // unique<T> ES dueno exclusivo de una copia en heap; el slot
-                // fuente original puede morir al exit del scope sin afectar la
-                // copia.  Para un wrapper interno, la copia contiene el
-                // host_ptr/ctrl del wrapper (que su dueno original libera); el
-                // cleanup del externo solo RAW_FREE-a esta celda de N bytes.
-                const ir::IrValueId v_size =
-                    emit_const(ir::IrType::I64,
-                               static_cast<int64_t>(payload_size), e->loc.line);
-                const ir::IrValueId v_payload_ptr =
-                    fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_payload_ptr].is_host_ptr = true;
-                {
-                    ir::IrInstr ins{};
-                    ins.op = ir::IrOp::RAW_ALLOC;
-                    ins.type = ir::IrType::PTR;
-                    ins.dst = v_payload_ptr;
-                    ins.operands = {v_size};
-                    ins.source_line = e->loc.line;
-                    emit(current_block_, std::move(ins));
-                }
-                // Copy qword-by-qword (size redondeado hacia arriba a
-                // multiplos de 8 bytes; el ultimo qword puede tener
-                // padding pero no afecta correctness porque escribimos
-                // sobre RAW_ALLOC zero-init y leemos desde el slot
-                // ALLOCA que tiene tamano >= size_bytes).
-                const uint64_t qwords = (payload_size + 7) / 8;
-                for (uint64_t i = 0; i < qwords; ++i) {
-                    const ir::IrValueId v_off =
-                        emit_const(ir::IrType::I64, static_cast<int64_t>(i * 8),
-                                   e->loc.line);
-                    const ir::IrValueId v_src_p =
-                        fn_->new_value(ir::IrType::PTR);
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_src_p;
-                        ad.operands = {v_payload, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                    }
-                    const ir::IrValueId v_word =
-                        fn_->new_value(ir::IrType::I64);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ir::IrType::I64;
-                        ld.dst = v_word;
-                        ld.operands = {v_src_p};
-                        ld.source_line = e->loc.line;
-                        emit(current_block_, std::move(ld));
-                    }
-                    const ir::IrValueId v_dst_p =
-                        fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_dst_p].is_host_ptr = true;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::I64;
-                        ad.dst = v_dst_p;
-                        ad.operands = {v_payload_ptr, v_off};
-                        ad.source_line = e->loc.line;
-                        emit(current_block_, std::move(ad));
-                    }
-                    emit_store_typed(v_dst_p, v_word,
-                                     ir::IrType::I64, e->loc.line);
-                }
-                v_to_store = v_payload_ptr;
-            } else if (payload_t != ir::IrType::PTR || payload_is_cfn ||
-                       payload_is_raw_ptr) {
-                // RAW_ALLOC(payload_size) -> v_payload_ptr (host ptr).
-                // (cfn y punteros raw entran aqui pese a ser PTR: son valores
-                //  de 8 bytes que se cajean, no host_ptrs a objetos.)
-                const ir::IrValueId v_size =
-                    emit_const(ir::IrType::I64,
-                               static_cast<int64_t>(payload_size), e->loc.line);
-                const ir::IrValueId v_payload_ptr =
-                    fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_payload_ptr].is_host_ptr = true;
-                {
-                    ir::IrInstr ins{};
-                    ins.op = ir::IrOp::RAW_ALLOC;
-                    ins.type = ir::IrType::PTR;
-                    ins.dst = v_payload_ptr;
-                    ins.operands = {v_size};
-                    ins.source_line = e->loc.line;
-                    emit(current_block_, std::move(ins));
-                }
-                // STORE payload at [v_payload_ptr] (host memory).
-                emit_store_typed(v_payload_ptr, v_payload,
-                                 payload_t, e->loc.line);
-                v_to_store = v_payload_ptr;
-            }
-            // STORE v_to_store at [v_slot+0].
-            //   Para primitivos: v_to_store = malloc'd ptr -> RAW_FREE valido.
-            //   Para PTR (class/struct): v_to_store = host_ptr al objeto;
-            //                            cleanup hace CALLVIRT dtor + skip
-            //                            free.
-            emit_store_typed(v_slot, v_to_store, ir::IrType::I64, e->loc.line);
-            // STORE deleter=0 at [v_slot+8] (sentinel = RAW_FREE).
-            {
-                const ir::IrValueId v_eight =
-                    emit_const(ir::IrType::I64, 8, e->loc.line);
-                const ir::IrValueId v_slot8 =
-                    emit_ptr_add(v_slot, v_eight, e->loc.line);
-                const ir::IrValueId v_zero =
-                    emit_const(ir::IrType::I64, 0, e->loc.line);
-                emit_store_typed(v_slot8, v_zero, ir::IrType::I64, e->loc.line);
-            }
-            fn_->values[v_slot].pointee_is_host_ptr = true;
-            out_value = v_slot;
-            return true;
-        } else {
-            // shared<T> (H3 no-GC): RAW_ALLOC(16 + 8) del bloque de control.
-            // Layout: [+0 i64 refcount=1][+8 u64 deleter=0][+16 T payload].
-            // El slot stack guarda host_ptr al control block.  El cleanup
-            // SHAREDPTR_REL hace `free` cuando el refcount cae a 0 (refcount
-            // puro, determinista, sin GC -> funciona en AOT standalone).
-            const ir::IrValueId v_slot = stack_alloc_buf(8, e->loc.line);
-            const ir::IrValueId v_ctrl_size = emit_const(
-                ir::IrType::I64, 16 + 8, e->loc.line); // 24 bytes total
-            // RAW_ALLOC -> host_ptr al bloque de control.
-            const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_ctrl].is_host_ptr = true;
-            {
-                ir::IrInstr ins{};
-                ins.op = ir::IrOp::RAW_ALLOC;
-                ins.type = ir::IrType::PTR;
-                ins.dst = v_ctrl;
-                ins.operands = {v_ctrl_size};
-                ins.source_line = e->loc.line;
-                emit(current_block_, std::move(ins));
-            }
-            // STORE refcount=1 at [v_ctrl + 0].
-            {
-                const ir::IrValueId v_one =
-                    emit_const(ir::IrType::I64, 1, e->loc.line);
-                emit_store_typed(v_ctrl, v_one, ir::IrType::I64, e->loc.line);
-            }
-            // STORE deleter=0 at [v_ctrl + 8] (placeholder; cleanup usa free
-            // literal).
-            {
-                const ir::IrValueId v_eight =
-                    emit_const(ir::IrType::I64, 8, e->loc.line);
-                const ir::IrValueId v_ctrl8 = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_ctrl8].is_host_ptr = true;
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_ctrl8;
-                add.operands = {v_ctrl, v_eight};
-                add.source_line = e->loc.line;
-                emit(current_block_, std::move(add));
-                const ir::IrValueId v_zero =
-                    emit_const(ir::IrType::I64, 0, e->loc.line);
-                emit_store_typed(v_ctrl8, v_zero, ir::IrType::I64, e->loc.line);
-            }
-            // STORE payload at [v_ctrl + 16].
-            {
-                const ir::IrValueId v_sixteen =
-                    emit_const(ir::IrType::I64, 16, e->loc.line);
-                const ir::IrValueId v_ctrl16 = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_ctrl16].is_host_ptr = true;
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_ctrl16;
-                add.operands = {v_ctrl, v_sixteen};
-                add.source_line = e->loc.line;
-                emit(current_block_, std::move(add));
-                emit_store_typed(v_ctrl16, v_payload, payload_t, e->loc.line);
-            }
-            // STORE v_ctrl at [v_slot] (VM memory).
-            emit_store_typed(v_slot, v_ctrl, ir::IrType::I64, e->loc.line);
-            fn_->values[v_slot].pointee_is_host_ptr = true;
-            out_value = v_slot;
-            return true;
-        }
-    }
+    if (is_unique_box || is_shared_box) return lower_owner_box(e, b, out_value);
 
     // ----- unique_with(value, deleter_fn) / shared_with(...) -----
     // Forma generica donde el programador especifica el deleter.
@@ -619,98 +214,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // El nombre del deleter se almacena en CleanupAction::literal_deleter
     // con prefijo "@extern:kVestaIoLib:fn" si es extern, o el nombre puro si
     // es Vesta.  El emit_cleanups_all elige CALLN o CALLVM.
-    if (is_unique_with || is_shared_with) {
-        if (e->args.size() != 2) {
-            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 2 argumentos", out_value);
-        }
-        const ir::IrValueId v_payload = lower_expr(e->args[0].get());
-        if (v_payload == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // Validar que arg[1] sea IdentExpr (type_checker ya lo verifico).
-        if (e->args[1]->kind != ast::NodeKind::IdentExpr) {
-            return builtin_error(e->args[1]->loc,
-                                 std::string(builtin_name(b)) +
-                                     ": el deleter debe ser un identificador de funcion", out_value);
-        }
-        const auto *deleter_id =
-            static_cast<const ast::IdentExpr *>(e->args[1].get());
-        // Capturamos el nombre del deleter; el cleanup lo usara.
-        std::string deleter_label =
-            tc_.lookup_extern_qualified(deleter_id->name);
-        if (deleter_label.empty()) {
-            // No es extern -> es funcion Vesta.  Usamos el nombre puro;
-            // el cleanup emitira CALLVM @Absolute("code.<name>").
-            deleter_label = deleter_id->name;
-        } // else: ya viene con prefijo "@extern:kVestaIoLib:fn".
-        // Tier 1: slot 16 + STORE value@+0 + STORE deleter_addr@+8.  HEAP si
-        // el unique va a un campo (unique_slot_buf), si no STACK.
-        const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
-        emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
-        // STORE deleter address en slot+8.  Materializamos la
-        // direccion via RAW_ASM: `mov {dst}, @Absolute("code.<fn>")`.
-        // El assembler resuelve la direccion al linker time.
-        //
-        // Limitacion: para deleters extern no podemos obtener una
-        // direccion vesta-callable, por lo que usamos 0 (sentinel)
-        // y el cleanup local conoce el deleter por compile-time via
-        // literal_deleter.  SRET return con extern deleter no
-        // preserva la info (futuro: añadir tabla de deleter ids).
-        const ir::IrValueId v_deleter_addr = fn_->new_value(ir::IrType::I64);
-        if (deleter_label == "free" ||
-            deleter_label.rfind("@extern:", 0) == 0) {
-            // Deleter "free" (builtin, no una fn Vesta): NO hay `code.free`
-            // que direccionar -> se almacena 0, el sentinel que el dtor del
-            // slot (emit_free_unique_slot) interpreta como RAW_FREE (== free
-            // null-safe).  Sin esto un unique_with(malloc(..), free) que va a
-            // un CAMPO (SRET) emitiria `@Absolute("code.free")` -> el linker
-            // no resuelve el simbolo (RelocationError code.free).
-            // Extern (`@extern:kVestaIoLib:fn`): tampoco es direccionable como fn
-            // Vesta; mismo sentinel 0 + literal_deleter local para el call.
-            const ir::IrValueId v_zero =
-                emit_const(ir::IrType::I64, 0, e->loc.line);
-            ir::IrInstr mov{};
-            mov.op = ir::IrOp::MOV;
-            mov.type = ir::IrType::I64;
-            mov.dst = v_deleter_addr;
-            mov.operands = {v_zero};
-            mov.source_line = e->loc.line;
-            emit(current_block_, std::move(mov));
-        } else {
-            // Vesta: emitir LABEL_ADDR -> v_deleter_addr.
-            ir::IrValueId v_label = emit_label_addr(deleter_label, e->loc.line);
-            ir::IrInstr mov{};
-            mov.op = ir::IrOp::MOV;
-            mov.type = ir::IrType::I64;
-            mov.dst = v_deleter_addr;
-            mov.operands = {v_label};
-            mov.source_line = e->loc.line;
-            emit(current_block_, std::move(mov));
-        }
-        // STORE deleter_addr en slot+8.  v_slot8 HEREDA la host-ness de v_slot
-        // (heap -> movh, stack -> mov) para que sea consistente con la store de
-        // slot+0 y con las lecturas del dtor; sin esto el deleter se escribiria
-        // en vm_mem con un slot heap -> el dtor leeria 0 -> RAW_FREE en vez de
-        // invocar el deleter.
-        {
-            const ir::IrValueId v_eight =
-                emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_slot8 =
-                emit_ptr_add(v_slot, v_eight, e->loc.line);
-            emit_store_typed(v_slot8, v_deleter_addr,
-                             ir::IrType::I64, e->loc.line);
-        }
-        // El slot contiene un valor con semantica de host_ptr / handle.
-        fn_->values[v_slot].pointee_is_host_ptr = true;
-        // Anotamos la accion de cleanup pendiente para que el cleanup
-        // local pueda usar el deleter por compile-time (cero overhead).
-        // El cleanup dinamico via slot+8 solo se activa cuando se
-        // accede al smart pointer tras SRET (no tenemos info compile-time).
-        pending_smartptr_deleter_ = deleter_label;
-        out_value = v_slot;
-        return true;
-    }
+    if (is_unique_with || is_shared_with)
+        return lower_owner_box_with(e, b, out_value);
 
     // ----- move(p) -----  transfer ownership.
     // Cuando `move(p)` es el init DIRECTO de un var-decl, lo maneja
@@ -724,123 +229,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     // Replicamos la logica del var-decl: ALLOCA temporal + mvtake [tmp+0]<-
     // [src+0] (+ [tmp+8]<-[src+8] para unique<T>), que MUEVE el contenido y
     // ZERIFICA el origen.  Devolvemos el temporal (el call lee tmp[0] = box).
-    if (is_move) {
-        if (e->args.size() != 1) {
-            return builtin_error(e->loc, "move: requiere 1 argumento", out_value);
-        }
-        const ir::IrValueId v_src = lower_expr(e->args[0].get());
-        if (v_src == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
-        // shared<T>: slot = 8 bytes (ctrl_block_ptr).
-        const bool is_unique =
-            (e->args[0]->result_type.kind == PrimitiveKind::UNIQUE_PTR);
-        const uint32_t slot_bytes = is_unique ? 16 : 8;
-        // bug3: si el resultado del move aterriza en un CAMPO owned
-        // (unique_slot_to_heap_ set por lower_assign), el slot destino debe
-        // vivir en HEAP (RAW_ALLOC) para sobrevivir al scope y ser liberado por
-        // el dtor del contenedor.  En cualquier otro caso (arg de funcion,
-        // var-decl local, return) sigue siendo un ALLOCA de stack.
-        const bool move_to_heap = unique_slot_to_heap_;
-        if (move_to_heap) unique_slot_to_heap_ = false;
-        const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::PTR);
-        if (move_to_heap) {
-            fn_->values[v_tmp].is_host_ptr = true;
-            const ir::IrValueId v_size =
-                emit_const(ir::IrType::I64, slot_bytes, e->loc.line);
-            ir::IrInstr al{};
-            al.op = ir::IrOp::RAW_ALLOC;
-            al.type = ir::IrType::PTR;
-            al.dst = v_tmp;
-            al.operands = {v_size};
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        } else {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_tmp;
-            al.imm = slot_bytes;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-        }
-        if (move_to_heap) {
-            // bug3: destino en HEAP (host_ptr).  `mvtake` (opcode 0x72) opera
-            // SIEMPRE sobre vm_mem, por lo que NO puede escribir un host_ptr en
-            // VM/JIT.  Emitimos el move explicito con addressing host-aware:
-            // LOAD [src+off] (vm_mem, el slot fuente es un ALLOCA local) ->
-            // STORE [tmp+off] (movh, host); luego STORE 0 [src+off] para
-            // invalidar el origen (evita double-free).  qword a qword.
-            const uint32_t qwords = slot_bytes / 8;
-            for (uint32_t i = 0; i < qwords; ++i) {
-                const ir::IrValueId v_off = emit_const(
-                    ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
-                // src_p = v_src + off  (VM addr).
-                ir::IrValueId v_src_p = v_src;
-                ir::IrValueId v_dst_p = v_tmp;
-                if (i > 0) {
-                    v_src_p = emit_ptr_add(v_src, v_off, e->loc.line);
-                    v_dst_p = fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_dst_p].is_host_ptr = true;
-                    ir::IrInstr a2{};
-                    a2.op = ir::IrOp::ADD;
-                    a2.type = ir::IrType::I64;
-                    a2.dst = v_dst_p;
-                    a2.operands = {v_tmp, v_off};
-                    a2.source_line = e->loc.line;
-                    emit(current_block_, std::move(a2));
-                }
-                // word = LOAD [src_p]  (vm_mem).
-                const ir::IrValueId v_word =
-                    emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
-                // STORE word -> [dst_p]  (host, movh por is_host_ptr).
-                emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
-                // STORE 0 -> [src_p]  (zerifica origen, vm_mem).
-                {
-                    const ir::IrValueId v_zero =
-                        emit_const(ir::IrType::I64, 0, e->loc.line);
-                    emit_store_typed(v_src_p, v_zero,
-                                     ir::IrType::I64, e->loc.line);
-                }
-            }
-            fn_->values[v_tmp].pointee_is_host_ptr = true;
-            out_value = v_tmp;
-            return true;
-        }
-        // mvtake [tmp+0] <- [src+0]  (mueve el box-ptr + zerifica origen).
-        emit_mvtake(v_tmp, v_src, e->loc.line);
-        if (slot_bytes == 16) {
-            // Segundo qword: deleter.
-            const ir::IrValueId v_eight =
-                emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_tmp8 = fn_->new_value(ir::IrType::PTR);
-            const ir::IrValueId v_src8 = fn_->new_value(ir::IrType::PTR);
-            {
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_tmp8;
-                add.operands = {v_tmp, v_eight};
-                add.source_line = e->loc.line;
-                emit(current_block_, std::move(add));
-            }
-            {
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_src8;
-                add.operands = {v_src, v_eight};
-                add.source_line = e->loc.line;
-                emit(current_block_, std::move(add));
-            }
-            emit_mvtake(v_tmp8, v_src8, e->loc.line);
-        }
-        fn_->values[v_tmp].pointee_is_host_ptr = true;
-        out_value = v_tmp;
-        return true;
-    }
+    if (is_move) return lower_owner_move(e, out_value);
 
     if (is_get) {
         if (e->args.size() != 1) {
@@ -957,136 +346,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     //                        es puramente compile-time.
     //   read_borrow(b)    -> LOAD a traves del host_ptr (movh).
     //   write_borrow(m,v) -> STORE a traves del host_ptr (movh).
-    if (is_lend || is_lend_mut) {
-        if (e->args.size() != 1) {
-            return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento (owner)", out_value);
-        }
-        /* El prestamo no deja rastro en el IR -- esto no emite instruccion, el
-         * puntero es el mismo --, asi que lo que el borrow checker demuestra se
-         * quedaba dentro del type checker.  Se apunta como HECHO del IR, con su
-         * procedencia, para que el analisis pueda componerlo con regiones y
-         * efectos.  Anotar no cambia el codigo generado. */
-        auto anota_prestamo = [&](ir::IrValueId v_pres, ir::IrValueId v_owner) {
-            if (v_pres == ir::IR_NO_VALUE || !fn_) return;
-            ir::IrFunction::BorrowFact bf;
-            bf.value = v_pres;
-            bf.owner = v_owner;
-            bf.mutable_ = is_lend_mut;
-            /* La naturaleza de lo prestado viaja con el hecho: prestar un
-             * `unique` no es lo mismo que prestar un local, y nadie debe
-             * confundirlos despues. */
-            const Type &ot = e->args[0]->result_type;
-            using OK = ir::IrFunction::BorrowOwnerKind;
-            bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR) ? OK::Unique
-                            : (ot.kind == PrimitiveKind::SHARED_PTR)
-                                ? OK::Shared
-                            : (ot.kind == PrimitiveKind::BORROW ||
-                               ot.kind == PrimitiveKind::BORROW_MUT)
-                                ? OK::Reborrow
-                                : OK::Plain;
-            bf.line = e->loc.line;
-            if (e->args[0]->kind == ast::NodeKind::IdentExpr)
-                bf.owner_name =
-                    static_cast<ast::IdentExpr *>(e->args[0].get())->name;
-            fn_->borrow_facts.push_back(std::move(bf));
-        };
-        // Si el owner es unique<T>/shared<T>, equivale a ptr_of(owner)
-        // que carga slot+0.  Si es una variable plain, devolvemos
-        // &owner (su SSA value, que ya tiene is_host_ptr correcto
-        // gracias al pre-pase de address-taken promotion: cualquier
-        // local cuya direccion se toma con @c & se promociona a slot
-        // estable en stack en lugar de vivir solo en un SSA value).
-        const Type owner_t = e->args[0]->result_type;
-        // F3 reborrow: si el arg ES un borrow/borrow_mut (var o param),
-        // su SSA value YA ES el host_ptr al payload.  No queremos
-        // emitir LOAD via read_local (eso es para slots de unique).
-        // Bypass: usar lookup directamente cuando el arg es un
-        // IdentExpr cuyo tipo es borrow.
-        if (e->args[0]->kind == ast::NodeKind::IdentExpr &&
-            (owner_t.kind == PrimitiveKind::BORROW ||
-             owner_t.kind == PrimitiveKind::BORROW_MUT)) {
-            auto *id = static_cast<ast::IdentExpr *>(e->args[0].get());
-            const ir::IrValueId v = lookup(id->name);
-            if (v != ir::IR_NO_VALUE) {
-                // El borrow_var ya es host_ptr; lo devolvemos tal cual.
-                // (read_borrow/write_borrow lo usaran con movh.)
-                anota_prestamo(v, v); // represtamo: el owner ES otro prestamo
-                out_value = v;
-                return true;
-            }
-        }
-        // Owner plain (i32, i64, etc.): si es un IdentExpr de variable
-        // address-taken, el SSA value del scope es la DIRECCION del
-        // ALLOCA (no el valor).  Hacer lower_expr pasaria por lower_ident
-        // que para address-taken locals emite un LOAD i32 (devuelve el
-        // VALOR), corrompiendo read_borrow/write_borrow posteriores.
-        // Bypass: lookup directo cuando el arg es IdentExpr y la var
-        // esta address-taken (lo cual el scan_address_taken garantiza
-        // que sea verdad para `lend(local)` en owner plain).
-        if (e->args[0]->kind == ast::NodeKind::IdentExpr) {
-            auto *id = static_cast<ast::IdentExpr *>(e->args[0].get());
-            if (address_taken_locals_.count(id->name)) {
-                const ir::IrValueId v = lookup(id->name);
-                if (v != ir::IR_NO_VALUE) {
-                    // v es PTR al slot del local.  Marcamos is_host_ptr
-                    // (es un slot vm-mem en stack, pero la convencion
-                    // para borrows es host_ptr; read_borrow/write_borrow
-                    // emiten LOAD/STORE indirecto con movh sobre este).
-                    // En realidad el slot vive en vm_mem (ALLOCA),
-                    // asi que NO marcamos is_host_ptr aqui: los LOAD/
-                    // STORE de read/write_borrow ya consultan eso del
-                    // SSA value y emiten mov (no movh) si es slot VM.
-                    anota_prestamo(v, v);
-                    out_value = v;
-                    return true;
-                }
-            }
-        }
-        const ir::IrValueId v_arg = lower_expr(e->args[0].get());
-        if (v_arg == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        if (owner_t.kind == PrimitiveKind::UNIQUE_PTR ||
-            owner_t.kind == PrimitiveKind::SHARED_PTR) {
-            // LOAD slot+0 (para unique) o ctrl+16 (shared payload).
-            const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_ptr].is_host_ptr = true;
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = v_ptr;
-            ld.operands = {v_arg};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-            if (owner_t.kind == PrimitiveKind::SHARED_PTR) {
-                // Para shared, sumar 16 (offset del payload inline en
-                // ctrl_block: refcount@0 + deleter@8 + payload@16).
-                const ir::IrValueId v_sixteen =
-                    emit_const(ir::IrType::I64, 16, e->loc.line);
-                const ir::IrValueId v_pay = fn_->new_value(ir::IrType::PTR);
-                fn_->values[v_pay].is_host_ptr = true;
-                ir::IrInstr add{};
-                add.op = ir::IrOp::ADD;
-                add.type = ir::IrType::I64;
-                add.dst = v_pay;
-                add.operands = {v_ptr, v_sixteen};
-                add.source_line = e->loc.line;
-                emit(current_block_, std::move(add));
-                anota_prestamo(v_pay, v_arg);
-                out_value = v_pay;
-                return true;
-            }
-            anota_prestamo(v_ptr, v_arg);
-            out_value = v_ptr;
-            return true;
-        }
-        // owner plain: el SSA value ya es la direccion (address-taken).
-        // Lo devolvemos tal cual.
-        anota_prestamo(v_arg, v_arg);
-        out_value = v_arg;
-        return true;
-    }
+    if (is_lend || is_lend_mut) return lower_borrow_of(e, b, out_value);
     if (is_read_borrow) {
         if (e->args.size() != 1) {
             return builtin_error(e->loc, "read_borrow: requiere 1 argumento (borrow)", out_value);
@@ -1190,6 +450,828 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
     }
 
     return false;
+}
+
+/**
+ * @brief Construye un valor con dueno y el soltador de siempre.
+ *
+ * `unique_box(v)` y `shared_box(v)`, que se diferencian en quien lo suelta --
+ * el `free` del anfitrion o la cuenta de referencias -- pero construyen igual,
+ * y de ahi que compartan camino.
+ *
+ * Lo que se guarda no siempre se copia: si el valor se acaba de construir en
+ * el sitio, se construye YA dentro del bloque del monton y no hay copia
+ * ninguna.  La copia queda para cuando lo que se guarda es una variable que ya
+ * existia, que es el unico caso donde hay dos sitios de verdad.
+ *
+ * @param e         La llamada.
+ * @param b         Cual de los dos es.
+ * @param out_value Donde dejar el valor con dueno.
+ * @return Siempre @c true; @c false solo si la llamada estaba mal escrita.
+ */
+bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
+                               ir::IrValueId &out_value) {
+    const bool is_unique_box = (b == Builtin::UniqueBox);
+    if (e->args.size() != 1) {
+        return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento", out_value);
+    }
+    // Construccion IN-PLACE para `unique<Punto> p = {.x=10, .y=20}`:
+    // si el arg es un InitListExpr con target_type_name anotado
+    // (desugar de Opcion B en check_var_decl), alocamos host heap
+    // PRIMERO y escribimos los campos DIRECTO sobre el host_ptr.
+    // Cero memcpy stack -> heap.  Coste = solo los STOREs del init
+    // list, igual que un struct value-type normal.
+    //
+    // El path generico mas abajo (lower_expr del arg + memcpy)
+    // sigue cubriendo `unique_box(struct_var_existente)` y otros
+    // casos donde el arg ya es un PTR a struct construido.
+    if (is_unique_box && e->args[0]->kind == ast::NodeKind::InitListExpr) {
+        auto *il = static_cast<ast::InitListExpr *>(e->args[0].get());
+        if (!il->target_type_name.empty()) {
+            const auto &layouts = tc_.struct_layouts();
+            auto it_lay = layouts.find(il->target_type_name);
+            if (it_lay != layouts.end()) {
+                const StructLayout &lay = it_lay->second;
+                // 1. Slot del unique<T> Tier 1 (16 bytes).  M7:
+                //    si lower_return seteo unique_box_target_slot_,
+                //    construimos directo en el retbuf del caller
+                //    (saltamos el stack_alloc_buf intermedio).
+                const ir::IrValueId v_slot =
+                    (unique_box_target_slot_ != ir::IR_NO_VALUE)
+                        ? unique_box_target_slot_
+                        : stack_alloc_buf(16, e->loc.line);
+                // 2. RAW_ALLOC(sizeof_struct) -> host_ptr.
+                const ir::IrValueId v_size = emit_const(
+                    ir::IrType::I64, static_cast<int64_t>(lay.size_bytes),
+                    e->loc.line);
+                const ir::IrValueId v_host =
+                    fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_host].is_host_ptr = true;
+                {
+                    ir::IrInstr ins{};
+                    ins.op = ir::IrOp::RAW_ALLOC;
+                    ins.type = ir::IrType::PTR;
+                    ins.dst = v_host;
+                    ins.operands = {v_size};
+                    ins.source_line = e->loc.line;
+                    emit(current_block_, std::move(ins));
+                }
+                // 3. STOREs por campo directo al host_ptr.  Soporta
+                //    designated (.x=10) y posicional ({10, 20}).
+                for (size_t i = 0; i < il->elements.size(); ++i) {
+                    // Encontrar el StructFieldInfo correspondiente.
+                    const StructFieldInfo *fld = nullptr;
+                    if (il->is_designated && i < il->field_names.size()) {
+                        const std::string &fname = il->field_names[i];
+                        for (const auto &f : lay.fields) {
+                            if (f.name == fname) {
+                                fld = &f;
+                                break;
+                            }
+                        }
+                        if (!fld) {
+                            error_at(il->elements[i]->loc,
+                                     "init list: campo '" + fname +
+                                         "' no existe en struct '" +
+                                         il->target_type_name + "'");
+                            continue;
+                        }
+                    } else {
+                        if (i >= lay.fields.size()) {
+                            error_at(il->elements[i]->loc,
+                                     "init list: demasiados elementos para "
+                                     "struct '" +
+                                         il->target_type_name + "'");
+                            continue;
+                        }
+                        fld = &lay.fields[i];
+                    }
+                    // Lower el valor.
+                    const ir::IrValueId v_val =
+                        lower_expr(il->elements[i].get());
+                    if (v_val == ir::IR_NO_VALUE) continue;
+                    const ir::IrType ft =
+                        ir_type_from_primitive(fld->type.kind);
+                    // Cast si hace falta (literal int -> i32 del field,
+                    // etc.).
+                    const ir::IrType vt_from = fn_->values[v_val].type;
+                    const ir::IrValueId v_casted = cast_if_needed(
+                        v_val, vt_from, ft, il->elements[i]->loc.line,
+                        /*is_explicit=*/true);
+                    // Calcular addr destino = v_host + fld->offset.
+                    ir::IrValueId v_dst = v_host;
+                    if (fld->offset > 0) {
+                        const ir::IrValueId v_off = emit_const(
+                            ir::IrType::I64,
+                            static_cast<int64_t>(fld->offset), e->loc.line);
+                        const ir::IrValueId v_addr =
+                            fn_->new_value(ir::IrType::PTR);
+                        fn_->values[v_addr].is_host_ptr = true;
+                        ir::IrInstr ad{};
+                        ad.op = ir::IrOp::ADD;
+                        ad.type = ir::IrType::I64;
+                        ad.dst = v_addr;
+                        ad.operands = {v_host, v_off};
+                        ad.source_line = e->loc.line;
+                        emit(current_block_, std::move(ad));
+                        v_dst = v_addr;
+                    }
+                    // STORE val at [v_dst].
+                    emit_store_typed(v_dst, v_casted,
+                                     ft, il->elements[i]->loc.line);
+                }
+                // 4. STORE host_ptr al slot+0 del unique<T>.
+                emit_store_typed(v_slot, v_host,
+                                 ir::IrType::I64, e->loc.line);
+                // 5. STORE deleter=0 (sentinel RAW_FREE) al slot+8.
+                {
+                    const ir::IrValueId v_eight =
+                        emit_const(ir::IrType::I64, 8, e->loc.line);
+                    const ir::IrValueId v_slot8 =
+                        fn_->new_value(ir::IrType::PTR);
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_slot8;
+                    ad.operands = {v_slot, v_eight};
+                    ad.source_line = e->loc.line;
+                    emit(current_block_, std::move(ad));
+                    const ir::IrValueId v_zero =
+                        emit_const(ir::IrType::I64, 0, e->loc.line);
+                    emit_store_typed(v_slot8, v_zero,
+                                     ir::IrType::I64, e->loc.line);
+                }
+                out_value = v_slot;
+                return true;
+            }
+        }
+    }
+    const ir::IrValueId v_payload = lower_expr(e->args[0].get());
+    if (v_payload == ir::IR_NO_VALUE) {
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    const ir::IrType payload_t = fn_->values[v_payload].type;
+    // Determinar el tipo Vesta semantico para saber si es struct value
+    // (necesita memcpy a host heap) o si es CLASS/primitivo.
+    const Type sem_payload = e->args[0]->result_type;
+    const bool payload_is_struct_value =
+        (sem_payload.kind == PrimitiveKind::STRUCT) &&
+        (tc_.struct_layouts().find(sem_payload.struct_name) !=
+         tc_.struct_layouts().end());
+    // Un cfn (puntero a funcion crudo) es un VALOR de 8 bytes, igual que
+    // un i64 -- NO un host_ptr a un objeto.  Aunque su IR type sea PTR,
+    // debe alojar una celda heap de 8 bytes y guardar la direccion ahi
+    // (como un primitivo), para que `ptr_of(p)` devuelva un cfn* y
+    // `*ptr_of(p)` recupere el cfn con un solo LOAD.  Sin esto tomaria
+    // la rama class-PTR (store directo) y `*ptr_of` deref-earia el codigo
+    // de la funcion -> basura/#UD.
+    const bool payload_is_cfn =
+        (sem_payload.kind == PrimitiveKind::FUNCTION);
+    // bug1: el payload es OTRO smart pointer (unique<T>/shared<T>/borrow).
+    // Su @c lower_expr devuelve la DIRECCION del slot (igual que un struct
+    // inline: su valor ES su buffer), con @c payload_t == PTR.  Si lo
+    // trataramos como un host_ptr-a-objeto (store directo + free), el
+    // cleanup haria RAW_FREE sobre la direccion del slot fuente (una ALLOCA
+    // en vm_mem) -> SIGSEGV en VM/JIT.  La semantica correcta: el wrapper
+    // externo POSEE una COPIA en heap del wrapper interno (sus bytes de
+    // slot: shared/borrow=8, unique Tier 1=16).  Copiamos qword-a-qword
+    // (mismo mecanismo que un struct value-type) para que el cleanup
+    // RAW_FREE libere la copia heap -- NO el control block interno, que el
+    // dueno interno (la variable `s`/`a`, aun en scope) decrementa/libera
+    // por su cuenta.  Asi no hay double-free ni free de stack address.
+    const bool payload_is_smart_wrapper =
+        (sem_payload.kind == PrimitiveKind::UNIQUE_PTR ||
+         sem_payload.kind == PrimitiveKind::SHARED_PTR ||
+         sem_payload.kind == PrimitiveKind::BORROW ||
+         sem_payload.kind == PrimitiveKind::BORROW_MUT);
+    // bug2: el payload es un PUNTERO RAW (`i64*`, `void*`, etc.) -- un
+    // VALOR de 8 bytes, NO un host_ptr a un objeto gestionado (a diferencia
+    // de `new Class()` cuyo sem kind es CLASS).  Debe alojarse en una celda
+    // heap de 8 bytes y guardar el puntero ahi (igual que cfn / primitivo),
+    // para que `ptr_of(u)` devuelva `T**` (la celda) y `*ptr_of(u)`
+    // recupere el `T*` con un solo LOAD.  Sin esto se tomaba la rama
+    // store-directo (pensada para objetos CLASS) y `*ptr_of` deref-eaba el
+    // VALOR del puntero como si fuera una direccion de slot -> se leia el
+    // i64 apuntado y luego se deref-eaba ESE como direccion -> SIGSEGV.
+    const bool payload_is_raw_ptr =
+        (sem_payload.kind == PrimitiveKind::PTR);
+    // sizeof(T): para primitivos usar ir_type_size; para structs
+    // value-type consultar struct_layouts; para PTR/CLASS no se usa
+    // (no alocamos memoria extra, guardamos el host_ptr directo).
+    uint64_t payload_size = ir::type_access_bytes(payload_t);
+    if (payload_is_struct_value) {
+        payload_size = static_cast<uint64_t>(
+            tc_.struct_layouts().at(sem_payload.struct_name).size_bytes);
+    } else if (payload_is_smart_wrapper) {
+        // Tamano del slot del wrapper interno: unique = 16 (Tier 1,
+        // [ptr][deleter]), shared/borrow = 8 (un solo host_ptr/ctrl).
+        payload_size =
+            (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
+    }
+    if (is_unique_box) {
+        // unique<T> Tier 1 (16 bytes):
+        //   [+0 i64 ptr][+8 i64 deleter_addr]
+        // deleter_addr = 0 (sentinel) -> cleanup hace RAW_FREE.
+        // Layout 16 bytes para que el deleter info sobreviva
+        // cuando la funcion devuelve el unique<T> via SRET.
+        // M7: si lower_return seteo target slot, usar el retbuf del
+        // caller directamente (skip allocacion intermedia en stack).
+        const ir::IrValueId v_slot =
+            (unique_box_target_slot_ != ir::IR_NO_VALUE)
+                ? unique_box_target_slot_
+                : unique_slot_buf(e->loc.line);
+
+        // Bug fix bug2: si el payload ya es un host_ptr (e.g.
+        // `new Recurso(1)` devuelve PTR), guardarlo DIRECTAMENTE
+        // en slot[+0] sin doble indireccion via RAW_ALLOC.  De
+        // lo contrario, el cleanup CALLVIRT al destructor opera
+        // sobre el malloc'd region (8 bytes basura) en vez del
+        // objeto Recurso real, y el dtor nunca se invoca.
+        //
+        // Para primitivos (i32, f64, etc.) seguimos usando
+        // RAW_ALLOC porque `ptr_of(p)` debe devolver `T*` (host
+        // memory).  Para PTR el `ptr_of` devuelve el mismo
+        // host_ptr almacenado.
+        ir::IrValueId v_to_store = v_payload;
+        if (payload_is_struct_value || payload_is_smart_wrapper) {
+            // Struct value-type O smart-pointer wrapper (bug1):
+            // RAW_ALLOC(N) + memcpy qword-by-qword desde v_payload (PTR al
+            // slot fuente) hacia v_payload_ptr (host heap).  Asi el
+            // unique<T> ES dueno exclusivo de una copia en heap; el slot
+            // fuente original puede morir al exit del scope sin afectar la
+            // copia.  Para un wrapper interno, la copia contiene el
+            // host_ptr/ctrl del wrapper (que su dueno original libera); el
+            // cleanup del externo solo RAW_FREE-a esta celda de N bytes.
+            const ir::IrValueId v_size =
+                emit_const(ir::IrType::I64,
+                           static_cast<int64_t>(payload_size), e->loc.line);
+            const ir::IrValueId v_payload_ptr =
+                fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_payload_ptr].is_host_ptr = true;
+            {
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::RAW_ALLOC;
+                ins.type = ir::IrType::PTR;
+                ins.dst = v_payload_ptr;
+                ins.operands = {v_size};
+                ins.source_line = e->loc.line;
+                emit(current_block_, std::move(ins));
+            }
+            // Copy qword-by-qword (size redondeado hacia arriba a
+            // multiplos de 8 bytes; el ultimo qword puede tener
+            // padding pero no afecta correctness porque escribimos
+            // sobre RAW_ALLOC zero-init y leemos desde el slot
+            // ALLOCA que tiene tamano >= size_bytes).
+            const uint64_t qwords = (payload_size + 7) / 8;
+            for (uint64_t i = 0; i < qwords; ++i) {
+                const ir::IrValueId v_off =
+                    emit_const(ir::IrType::I64, static_cast<int64_t>(i * 8),
+                               e->loc.line);
+                const ir::IrValueId v_src_p =
+                    fn_->new_value(ir::IrType::PTR);
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_src_p;
+                    ad.operands = {v_payload, v_off};
+                    ad.source_line = e->loc.line;
+                    emit(current_block_, std::move(ad));
+                }
+                const ir::IrValueId v_word =
+                    fn_->new_value(ir::IrType::I64);
+                {
+                    ir::IrInstr ld{};
+                    ld.op = ir::IrOp::LOAD;
+                    ld.type = ir::IrType::I64;
+                    ld.dst = v_word;
+                    ld.operands = {v_src_p};
+                    ld.source_line = e->loc.line;
+                    emit(current_block_, std::move(ld));
+                }
+                const ir::IrValueId v_dst_p =
+                    fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_dst_p].is_host_ptr = true;
+                {
+                    ir::IrInstr ad{};
+                    ad.op = ir::IrOp::ADD;
+                    ad.type = ir::IrType::I64;
+                    ad.dst = v_dst_p;
+                    ad.operands = {v_payload_ptr, v_off};
+                    ad.source_line = e->loc.line;
+                    emit(current_block_, std::move(ad));
+                }
+                emit_store_typed(v_dst_p, v_word,
+                                 ir::IrType::I64, e->loc.line);
+            }
+            v_to_store = v_payload_ptr;
+        } else if (payload_t != ir::IrType::PTR || payload_is_cfn ||
+                   payload_is_raw_ptr) {
+            // RAW_ALLOC(payload_size) -> v_payload_ptr (host ptr).
+            // (cfn y punteros raw entran aqui pese a ser PTR: son valores
+            //  de 8 bytes que se cajean, no host_ptrs a objetos.)
+            const ir::IrValueId v_size =
+                emit_const(ir::IrType::I64,
+                           static_cast<int64_t>(payload_size), e->loc.line);
+            const ir::IrValueId v_payload_ptr =
+                fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_payload_ptr].is_host_ptr = true;
+            {
+                ir::IrInstr ins{};
+                ins.op = ir::IrOp::RAW_ALLOC;
+                ins.type = ir::IrType::PTR;
+                ins.dst = v_payload_ptr;
+                ins.operands = {v_size};
+                ins.source_line = e->loc.line;
+                emit(current_block_, std::move(ins));
+            }
+            // STORE payload at [v_payload_ptr] (host memory).
+            emit_store_typed(v_payload_ptr, v_payload,
+                             payload_t, e->loc.line);
+            v_to_store = v_payload_ptr;
+        }
+        // STORE v_to_store at [v_slot+0].
+        //   Para primitivos: v_to_store = malloc'd ptr -> RAW_FREE valido.
+        //   Para PTR (class/struct): v_to_store = host_ptr al objeto;
+        //                            cleanup hace CALLVIRT dtor + skip
+        //                            free.
+        emit_store_typed(v_slot, v_to_store, ir::IrType::I64, e->loc.line);
+        // STORE deleter=0 at [v_slot+8] (sentinel = RAW_FREE).
+        {
+            const ir::IrValueId v_eight =
+                emit_const(ir::IrType::I64, 8, e->loc.line);
+            const ir::IrValueId v_slot8 =
+                emit_ptr_add(v_slot, v_eight, e->loc.line);
+            const ir::IrValueId v_zero =
+                emit_const(ir::IrType::I64, 0, e->loc.line);
+            emit_store_typed(v_slot8, v_zero, ir::IrType::I64, e->loc.line);
+        }
+        fn_->values[v_slot].pointee_is_host_ptr = true;
+        out_value = v_slot;
+        return true;
+    } else {
+        // shared<T> (H3 no-GC): RAW_ALLOC(16 + 8) del bloque de control.
+        // Layout: [+0 i64 refcount=1][+8 u64 deleter=0][+16 T payload].
+        // El slot stack guarda host_ptr al control block.  El cleanup
+        // SHAREDPTR_REL hace `free` cuando el refcount cae a 0 (refcount
+        // puro, determinista, sin GC -> funciona en AOT standalone).
+        const ir::IrValueId v_slot = stack_alloc_buf(8, e->loc.line);
+        const ir::IrValueId v_ctrl_size = emit_const(
+            ir::IrType::I64, 16 + 8, e->loc.line); // 24 bytes total
+        // RAW_ALLOC -> host_ptr al bloque de control.
+        const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_ctrl].is_host_ptr = true;
+        {
+            ir::IrInstr ins{};
+            ins.op = ir::IrOp::RAW_ALLOC;
+            ins.type = ir::IrType::PTR;
+            ins.dst = v_ctrl;
+            ins.operands = {v_ctrl_size};
+            ins.source_line = e->loc.line;
+            emit(current_block_, std::move(ins));
+        }
+        // STORE refcount=1 at [v_ctrl + 0].
+        {
+            const ir::IrValueId v_one =
+                emit_const(ir::IrType::I64, 1, e->loc.line);
+            emit_store_typed(v_ctrl, v_one, ir::IrType::I64, e->loc.line);
+        }
+        // STORE deleter=0 at [v_ctrl + 8] (placeholder; cleanup usa free
+        // literal).
+        {
+            const ir::IrValueId v_eight =
+                emit_const(ir::IrType::I64, 8, e->loc.line);
+            const ir::IrValueId v_ctrl8 = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_ctrl8].is_host_ptr = true;
+            ir::IrInstr add{};
+            add.op = ir::IrOp::ADD;
+            add.type = ir::IrType::I64;
+            add.dst = v_ctrl8;
+            add.operands = {v_ctrl, v_eight};
+            add.source_line = e->loc.line;
+            emit(current_block_, std::move(add));
+            const ir::IrValueId v_zero =
+                emit_const(ir::IrType::I64, 0, e->loc.line);
+            emit_store_typed(v_ctrl8, v_zero, ir::IrType::I64, e->loc.line);
+        }
+        // STORE payload at [v_ctrl + 16].
+        {
+            const ir::IrValueId v_sixteen =
+                emit_const(ir::IrType::I64, 16, e->loc.line);
+            const ir::IrValueId v_ctrl16 = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_ctrl16].is_host_ptr = true;
+            ir::IrInstr add{};
+            add.op = ir::IrOp::ADD;
+            add.type = ir::IrType::I64;
+            add.dst = v_ctrl16;
+            add.operands = {v_ctrl, v_sixteen};
+            add.source_line = e->loc.line;
+            emit(current_block_, std::move(add));
+            emit_store_typed(v_ctrl16, v_payload, payload_t, e->loc.line);
+        }
+        // STORE v_ctrl at [v_slot] (VM memory).
+        emit_store_typed(v_slot, v_ctrl, ir::IrType::I64, e->loc.line);
+        fn_->values[v_slot].pointee_is_host_ptr = true;
+        out_value = v_slot;
+        return true;
+    }
+    return true;
+}
+
+/**
+ * @brief Construye un valor con dueno eligiendo QUIEN lo suelta.
+ *
+ * `unique_with(v, soltar)` y `shared_with(v, soltar)`, con cualquier funcion
+ * de un argumento -- escrita en Vesta o del sistema.  Es lo que permite poner
+ * bajo dueno cosas que no salieron de pedir memoria: un fichero abierto, un
+ * descriptor, memoria que dio el sistema operativo.
+ *
+ * Aqui no se pide nada: el valor YA es el resultado de haberlo hecho, asi que
+ * solo se guarda y se apunta con que soltarlo al salir del ambito.
+ *
+ * @param e         La llamada.
+ * @param b         Cual de los dos es.
+ * @param out_value Donde dejar el valor con dueno.
+ * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+ */
+bool Lowering::lower_owner_box_with(ast::CallExpr *e, Builtin b,
+                                    ir::IrValueId &out_value) {
+    const bool is_unique_with = (b == Builtin::UniqueWith);
+    if (e->args.size() != 2) {
+        return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 2 argumentos", out_value);
+    }
+    const ir::IrValueId v_payload = lower_expr(e->args[0].get());
+    if (v_payload == ir::IR_NO_VALUE) {
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    // Validar que arg[1] sea IdentExpr (type_checker ya lo verifico).
+    if (e->args[1]->kind != ast::NodeKind::IdentExpr) {
+        return builtin_error(e->args[1]->loc,
+                             std::string(builtin_name(b)) +
+                                 ": el deleter debe ser un identificador de funcion", out_value);
+    }
+    const auto *deleter_id =
+        static_cast<const ast::IdentExpr *>(e->args[1].get());
+    // Capturamos el nombre del deleter; el cleanup lo usara.
+    std::string deleter_label =
+        tc_.lookup_extern_qualified(deleter_id->name);
+    if (deleter_label.empty()) {
+        // No es extern -> es funcion Vesta.  Usamos el nombre puro;
+        // el cleanup emitira CALLVM @Absolute("code.<name>").
+        deleter_label = deleter_id->name;
+    } // else: ya viene con prefijo "@extern:kVestaIoLib:fn".
+    // Tier 1: slot 16 + STORE value@+0 + STORE deleter_addr@+8.  HEAP si
+    // el unique va a un campo (unique_slot_buf), si no STACK.
+    const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
+    emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
+    // STORE deleter address en slot+8.  Materializamos la
+    // direccion via RAW_ASM: `mov {dst}, @Absolute("code.<fn>")`.
+    // El assembler resuelve la direccion al linker time.
+    //
+    // Limitacion: para deleters extern no podemos obtener una
+    // direccion vesta-callable, por lo que usamos 0 (sentinel)
+    // y el cleanup local conoce el deleter por compile-time via
+    // literal_deleter.  SRET return con extern deleter no
+    // preserva la info (futuro: añadir tabla de deleter ids).
+    const ir::IrValueId v_deleter_addr = fn_->new_value(ir::IrType::I64);
+    if (deleter_label == "free" ||
+        deleter_label.rfind("@extern:", 0) == 0) {
+        // Deleter "free" (builtin, no una fn Vesta): NO hay `code.free`
+        // que direccionar -> se almacena 0, el sentinel que el dtor del
+        // slot (emit_free_unique_slot) interpreta como RAW_FREE (== free
+        // null-safe).  Sin esto un unique_with(malloc(..), free) que va a
+        // un CAMPO (SRET) emitiria `@Absolute("code.free")` -> el linker
+        // no resuelve el simbolo (RelocationError code.free).
+        // Extern (`@extern:kVestaIoLib:fn`): tampoco es direccionable como fn
+        // Vesta; mismo sentinel 0 + literal_deleter local para el call.
+        const ir::IrValueId v_zero =
+            emit_const(ir::IrType::I64, 0, e->loc.line);
+        ir::IrInstr mov{};
+        mov.op = ir::IrOp::MOV;
+        mov.type = ir::IrType::I64;
+        mov.dst = v_deleter_addr;
+        mov.operands = {v_zero};
+        mov.source_line = e->loc.line;
+        emit(current_block_, std::move(mov));
+    } else {
+        // Vesta: emitir LABEL_ADDR -> v_deleter_addr.
+        ir::IrValueId v_label = emit_label_addr(deleter_label, e->loc.line);
+        ir::IrInstr mov{};
+        mov.op = ir::IrOp::MOV;
+        mov.type = ir::IrType::I64;
+        mov.dst = v_deleter_addr;
+        mov.operands = {v_label};
+        mov.source_line = e->loc.line;
+        emit(current_block_, std::move(mov));
+    }
+    // STORE deleter_addr en slot+8.  v_slot8 HEREDA la host-ness de v_slot
+    // (heap -> movh, stack -> mov) para que sea consistente con la store de
+    // slot+0 y con las lecturas del dtor; sin esto el deleter se escribiria
+    // en vm_mem con un slot heap -> el dtor leeria 0 -> RAW_FREE en vez de
+    // invocar el deleter.
+    {
+        const ir::IrValueId v_eight =
+            emit_const(ir::IrType::I64, 8, e->loc.line);
+        const ir::IrValueId v_slot8 =
+            emit_ptr_add(v_slot, v_eight, e->loc.line);
+        emit_store_typed(v_slot8, v_deleter_addr,
+                         ir::IrType::I64, e->loc.line);
+    }
+    // El slot contiene un valor con semantica de host_ptr / handle.
+    fn_->values[v_slot].pointee_is_host_ptr = true;
+    // Anotamos la accion de cleanup pendiente para que el cleanup
+    // local pueda usar el deleter por compile-time (cero overhead).
+    // El cleanup dinamico via slot+8 solo se activa cuando se
+    // accede al smart pointer tras SRET (no tenemos info compile-time).
+    pending_smartptr_deleter_ = deleter_label;
+    out_value = v_slot;
+    return true;
+    return true;
+}
+
+/**
+ * @brief Traslada la propiedad de un valor: `move(p)`.
+ *
+ * Deja el origen a CERO, y esa es toda la garantia: al salir del ambito se
+ * sueltan los dos, pero el que ya no es dueno tiene un cero, y soltar un cero
+ * no hace nada.  Sin llevar ninguna cuenta ni marcar nada en ejecucion.
+ *
+ * Copiar sin mas no valdria: origen y destino soltarian lo MISMO, que en el
+ * anfitrion es un fallo de verdad, no un no-op.
+ *
+ * @param e         La llamada.
+ * @param out_value Donde dejar el valor que ahora tiene la propiedad.
+ * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+ */
+bool Lowering::lower_owner_move(ast::CallExpr *e, ir::IrValueId &out_value) {
+    if (e->args.size() != 1) {
+        return builtin_error(e->loc, "move: requiere 1 argumento", out_value);
+    }
+    const ir::IrValueId v_src = lower_expr(e->args[0].get());
+    if (v_src == ir::IR_NO_VALUE) {
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
+    // shared<T>: slot = 8 bytes (ctrl_block_ptr).
+    const bool is_unique =
+        (e->args[0]->result_type.kind == PrimitiveKind::UNIQUE_PTR);
+    const uint32_t slot_bytes = is_unique ? 16 : 8;
+    // bug3: si el resultado del move aterriza en un CAMPO owned
+    // (unique_slot_to_heap_ set por lower_assign), el slot destino debe
+    // vivir en HEAP (RAW_ALLOC) para sobrevivir al scope y ser liberado por
+    // el dtor del contenedor.  En cualquier otro caso (arg de funcion,
+    // var-decl local, return) sigue siendo un ALLOCA de stack.
+    const bool move_to_heap = unique_slot_to_heap_;
+    if (move_to_heap) unique_slot_to_heap_ = false;
+    const ir::IrValueId v_tmp = fn_->new_value(ir::IrType::PTR);
+    if (move_to_heap) {
+        fn_->values[v_tmp].is_host_ptr = true;
+        const ir::IrValueId v_size =
+            emit_const(ir::IrType::I64, slot_bytes, e->loc.line);
+        ir::IrInstr al{};
+        al.op = ir::IrOp::RAW_ALLOC;
+        al.type = ir::IrType::PTR;
+        al.dst = v_tmp;
+        al.operands = {v_size};
+        al.source_line = e->loc.line;
+        emit(current_block_, std::move(al));
+    } else {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = v_tmp;
+        al.imm = slot_bytes;
+        al.source_line = e->loc.line;
+        emit(current_block_, std::move(al));
+    }
+    if (move_to_heap) {
+        // bug3: destino en HEAP (host_ptr).  `mvtake` (opcode 0x72) opera
+        // SIEMPRE sobre vm_mem, por lo que NO puede escribir un host_ptr en
+        // VM/JIT.  Emitimos el move explicito con addressing host-aware:
+        // LOAD [src+off] (vm_mem, el slot fuente es un ALLOCA local) ->
+        // STORE [tmp+off] (movh, host); luego STORE 0 [src+off] para
+        // invalidar el origen (evita double-free).  qword a qword.
+        const uint32_t qwords = slot_bytes / 8;
+        for (uint32_t i = 0; i < qwords; ++i) {
+            const ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, static_cast<int64_t>(i * 8), e->loc.line);
+            // src_p = v_src + off  (VM addr).
+            ir::IrValueId v_src_p = v_src;
+            ir::IrValueId v_dst_p = v_tmp;
+            if (i > 0) {
+                v_src_p = emit_ptr_add(v_src, v_off, e->loc.line);
+                v_dst_p = fn_->new_value(ir::IrType::PTR);
+                fn_->values[v_dst_p].is_host_ptr = true;
+                ir::IrInstr a2{};
+                a2.op = ir::IrOp::ADD;
+                a2.type = ir::IrType::I64;
+                a2.dst = v_dst_p;
+                a2.operands = {v_tmp, v_off};
+                a2.source_line = e->loc.line;
+                emit(current_block_, std::move(a2));
+            }
+            // word = LOAD [src_p]  (vm_mem).
+            const ir::IrValueId v_word =
+                emit_load_typed(v_src_p, ir::IrType::I64, e->loc.line);
+            // STORE word -> [dst_p]  (host, movh por is_host_ptr).
+            emit_store_typed(v_dst_p, v_word, ir::IrType::I64, e->loc.line);
+            // STORE 0 -> [src_p]  (zerifica origen, vm_mem).
+            {
+                const ir::IrValueId v_zero =
+                    emit_const(ir::IrType::I64, 0, e->loc.line);
+                emit_store_typed(v_src_p, v_zero,
+                                 ir::IrType::I64, e->loc.line);
+            }
+        }
+        fn_->values[v_tmp].pointee_is_host_ptr = true;
+        out_value = v_tmp;
+        return true;
+    }
+    // mvtake [tmp+0] <- [src+0]  (mueve el box-ptr + zerifica origen).
+    emit_mvtake(v_tmp, v_src, e->loc.line);
+    if (slot_bytes == 16) {
+        // Segundo qword: deleter.
+        const ir::IrValueId v_eight =
+            emit_const(ir::IrType::I64, 8, e->loc.line);
+        const ir::IrValueId v_tmp8 = fn_->new_value(ir::IrType::PTR);
+        const ir::IrValueId v_src8 = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr add{};
+            add.op = ir::IrOp::ADD;
+            add.type = ir::IrType::I64;
+            add.dst = v_tmp8;
+            add.operands = {v_tmp, v_eight};
+            add.source_line = e->loc.line;
+            emit(current_block_, std::move(add));
+        }
+        {
+            ir::IrInstr add{};
+            add.op = ir::IrOp::ADD;
+            add.type = ir::IrType::I64;
+            add.dst = v_src8;
+            add.operands = {v_src, v_eight};
+            add.source_line = e->loc.line;
+            emit(current_block_, std::move(add));
+        }
+        emit_mvtake(v_tmp8, v_src8, e->loc.line);
+    }
+    fn_->values[v_tmp].pointee_is_host_ptr = true;
+    out_value = v_tmp;
+    return true;
+    return true;
+}
+
+/**
+ * @brief Presta un valor: `lend(o)` y `lend_mut(o)`.
+ *
+ * Un prestamo es una direccion y nada mas -- ni cuenta, ni marca, ni nada en
+ * ejecucion --, asi que los dos emiten lo MISMO: quien puede leer y quien
+ * puede escribir se comprueba al compilar y no deja rastro.
+ *
+ * De donde sale la direccion depende de a quien se presta: de un valor con
+ * dueno es lo que guarda dentro; de otro prestamo es el mismo puntero, y ahi
+ * ademas se suspende el original mientras el nuevo viva; y de una variable
+ * cuya direccion ya se tomo, ella misma.
+ *
+ * @param e         La llamada.
+ * @param out_value Donde dejar la direccion prestada.
+ * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+ */
+bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
+                               ir::IrValueId &out_value) {
+    const bool is_lend_mut = (b == Builtin::LendMut);
+    if (e->args.size() != 1) {
+        return builtin_error(e->loc, std::string(builtin_name(b)) + ": requiere 1 argumento (owner)", out_value);
+    }
+    /* El prestamo no deja rastro en el IR -- esto no emite instruccion, el
+     * puntero es el mismo --, asi que lo que el borrow checker demuestra se
+     * quedaba dentro del type checker.  Se apunta como HECHO del IR, con su
+     * procedencia, para que el analisis pueda componerlo con regiones y
+     * efectos.  Anotar no cambia el codigo generado. */
+    auto anota_prestamo = [&](ir::IrValueId v_pres, ir::IrValueId v_owner) {
+        if (v_pres == ir::IR_NO_VALUE || !fn_) return;
+        ir::IrFunction::BorrowFact bf;
+        bf.value = v_pres;
+        bf.owner = v_owner;
+        bf.mutable_ = is_lend_mut;
+        /* La naturaleza de lo prestado viaja con el hecho: prestar un
+         * `unique` no es lo mismo que prestar un local, y nadie debe
+         * confundirlos despues. */
+        const Type &ot = e->args[0]->result_type;
+        using OK = ir::IrFunction::BorrowOwnerKind;
+        bf.owner_kind = (ot.kind == PrimitiveKind::UNIQUE_PTR) ? OK::Unique
+                        : (ot.kind == PrimitiveKind::SHARED_PTR)
+                            ? OK::Shared
+                        : (ot.kind == PrimitiveKind::BORROW ||
+                           ot.kind == PrimitiveKind::BORROW_MUT)
+                            ? OK::Reborrow
+                            : OK::Plain;
+        bf.line = e->loc.line;
+        if (e->args[0]->kind == ast::NodeKind::IdentExpr)
+            bf.owner_name =
+                static_cast<ast::IdentExpr *>(e->args[0].get())->name;
+        fn_->borrow_facts.push_back(std::move(bf));
+    };
+    // Si el owner es unique<T>/shared<T>, equivale a ptr_of(owner)
+    // que carga slot+0.  Si es una variable plain, devolvemos
+    // &owner (su SSA value, que ya tiene is_host_ptr correcto
+    // gracias al pre-pase de address-taken promotion: cualquier
+    // local cuya direccion se toma con @c & se promociona a slot
+    // estable en stack en lugar de vivir solo en un SSA value).
+    const Type owner_t = e->args[0]->result_type;
+    // F3 reborrow: si el arg ES un borrow/borrow_mut (var o param),
+    // su SSA value YA ES el host_ptr al payload.  No queremos
+    // emitir LOAD via read_local (eso es para slots de unique).
+    // Bypass: usar lookup directamente cuando el arg es un
+    // IdentExpr cuyo tipo es borrow.
+    if (e->args[0]->kind == ast::NodeKind::IdentExpr &&
+        (owner_t.kind == PrimitiveKind::BORROW ||
+         owner_t.kind == PrimitiveKind::BORROW_MUT)) {
+        auto *id = static_cast<ast::IdentExpr *>(e->args[0].get());
+        const ir::IrValueId v = lookup(id->name);
+        if (v != ir::IR_NO_VALUE) {
+            // El borrow_var ya es host_ptr; lo devolvemos tal cual.
+            // (read_borrow/write_borrow lo usaran con movh.)
+            anota_prestamo(v, v); // represtamo: el owner ES otro prestamo
+            out_value = v;
+            return true;
+        }
+    }
+    // Owner plain (i32, i64, etc.): si es un IdentExpr de variable
+    // address-taken, el SSA value del scope es la DIRECCION del
+    // ALLOCA (no el valor).  Hacer lower_expr pasaria por lower_ident
+    // que para address-taken locals emite un LOAD i32 (devuelve el
+    // VALOR), corrompiendo read_borrow/write_borrow posteriores.
+    // Bypass: lookup directo cuando el arg es IdentExpr y la var
+    // esta address-taken (lo cual el scan_address_taken garantiza
+    // que sea verdad para `lend(local)` en owner plain).
+    if (e->args[0]->kind == ast::NodeKind::IdentExpr) {
+        auto *id = static_cast<ast::IdentExpr *>(e->args[0].get());
+        if (address_taken_locals_.count(id->name)) {
+            const ir::IrValueId v = lookup(id->name);
+            if (v != ir::IR_NO_VALUE) {
+                // v es PTR al slot del local.  Marcamos is_host_ptr
+                // (es un slot vm-mem en stack, pero la convencion
+                // para borrows es host_ptr; read_borrow/write_borrow
+                // emiten LOAD/STORE indirecto con movh sobre este).
+                // En realidad el slot vive en vm_mem (ALLOCA),
+                // asi que NO marcamos is_host_ptr aqui: los LOAD/
+                // STORE de read/write_borrow ya consultan eso del
+                // SSA value y emiten mov (no movh) si es slot VM.
+                anota_prestamo(v, v);
+                out_value = v;
+                return true;
+            }
+        }
+    }
+    const ir::IrValueId v_arg = lower_expr(e->args[0].get());
+    if (v_arg == ir::IR_NO_VALUE) {
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+    if (owner_t.kind == PrimitiveKind::UNIQUE_PTR ||
+        owner_t.kind == PrimitiveKind::SHARED_PTR) {
+        // LOAD slot+0 (para unique) o ctrl+16 (shared payload).
+        const ir::IrValueId v_ptr = fn_->new_value(ir::IrType::PTR);
+        fn_->values[v_ptr].is_host_ptr = true;
+        ir::IrInstr ld{};
+        ld.op = ir::IrOp::LOAD;
+        ld.type = ir::IrType::I64;
+        ld.dst = v_ptr;
+        ld.operands = {v_arg};
+        ld.source_line = e->loc.line;
+        emit(current_block_, std::move(ld));
+        if (owner_t.kind == PrimitiveKind::SHARED_PTR) {
+            // Para shared, sumar 16 (offset del payload inline en
+            // ctrl_block: refcount@0 + deleter@8 + payload@16).
+            const ir::IrValueId v_sixteen =
+                emit_const(ir::IrType::I64, 16, e->loc.line);
+            const ir::IrValueId v_pay = fn_->new_value(ir::IrType::PTR);
+            fn_->values[v_pay].is_host_ptr = true;
+            ir::IrInstr add{};
+            add.op = ir::IrOp::ADD;
+            add.type = ir::IrType::I64;
+            add.dst = v_pay;
+            add.operands = {v_ptr, v_sixteen};
+            add.source_line = e->loc.line;
+            emit(current_block_, std::move(add));
+            anota_prestamo(v_pay, v_arg);
+            out_value = v_pay;
+            return true;
+        }
+        anota_prestamo(v_ptr, v_arg);
+        out_value = v_ptr;
+        return true;
+    }
+    // owner plain: el SSA value ya es la direccion (address-taken).
+    // Lo devolvemos tal cual.
+    anota_prestamo(v_arg, v_arg);
+    out_value = v_arg;
+    return true;
+    return true;
 }
 
 } // namespace vx

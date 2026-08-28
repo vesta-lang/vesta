@@ -751,6 +751,65 @@ class Lowering {
      */
     bool try_lower_comptime_fn_call(ast::CallExpr *e, ir::IrValueId &out);
 
+    /**
+     * @brief Construye un valor con dueno y el soltador de siempre.
+     *
+     * `unique_box(v)` y `shared_box(v)`: se diferencian en quien lo suelta --
+     * el `free` del anfitrion o la cuenta de referencias -- pero construyen
+     * igual.  Si el valor se acaba de construir en el sitio se construye YA
+     * dentro del bloque del monton, sin copia; la copia queda para cuando lo
+     * que se guarda es una variable que ya existia.
+     *
+     * @param e         La llamada.
+     * @param b         Cual de los dos es.
+     * @param out_value Donde dejar el valor con dueno.
+     * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+     */
+    bool lower_owner_box(ast::CallExpr *e, Builtin b, ir::IrValueId &out_value);
+
+    /**
+     * @brief Construye un valor con dueno eligiendo QUIEN lo suelta.
+     *
+     * `unique_with(v, soltar)` / `shared_with(v, soltar)`, con cualquier
+     * funcion de un argumento.  Es lo que permite poner bajo dueno cosas que
+     * no salieron de pedir memoria: un fichero, un descriptor, memoria del
+     * sistema.  Aqui no se pide nada: el valor YA es el resultado de haberlo
+     * hecho, solo se guarda y se apunta con que soltarlo.
+     *
+     * @param e         La llamada.
+     * @param b         Cual de los dos es.
+     * @param out_value Donde dejar el valor con dueno.
+     * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+     */
+    bool lower_owner_box_with(ast::CallExpr *e, Builtin b,
+                              ir::IrValueId &out_value);
+
+    /**
+     * @brief Traslada la propiedad de un valor: `move(p)`.
+     *
+     * Deja el origen a CERO, y esa es toda la garantia: al salir del ambito se
+     * sueltan los dos, pero el que ya no es dueno tiene un cero y soltar un
+     * cero no hace nada.  Copiar sin mas soltaria lo MISMO dos veces.
+     *
+     * @param e         La llamada.
+     * @param out_value Donde dejar el valor que ahora tiene la propiedad.
+     * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+     */
+    bool lower_owner_move(ast::CallExpr *e, ir::IrValueId &out_value);
+
+    /**
+     * @brief Presta un valor: `lend(o)` y `lend_mut(o)`.
+     *
+     * Un prestamo es una direccion y nada mas, asi que los dos emiten lo
+     * MISMO: quien puede leer y quien escribir se comprueba al compilar y no
+     * deja rastro.  De donde sale la direccion depende de a quien se presta.
+     *
+     * @param e         La llamada.
+     * @param out_value Donde dejar la direccion prestada.
+     * @return Siempre @c true; @c false si la llamada estaba mal escrita.
+     */
+    bool lower_borrow_of(ast::CallExpr *e, Builtin b, ir::IrValueId &out_value);
+
     ir::IrValueId emit_call(const std::string &name,
                             std::vector<ir::IrValueId> args, ir::IrType ret,
                             uint32_t source_line);
