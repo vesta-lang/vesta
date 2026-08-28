@@ -254,6 +254,14 @@ add_library(vx_lib STATIC
     # declaro, se copia al pasarlo, muere sin que nadie lo recoja --, asi que
     # su bajada es otra aunque tambien tenga campos y metodos.
     lowering/structs.cpp
+    # De los tipos de Vesta a los del IR, y las conversiones entre ellos: el
+    # lenguaje tiene mas tipos de los que el IR distingue, y convertir mal no
+    # da un error sino un numero distinto.
+    lowering/types.cpp
+    # Que nombre se refiere a que valor en cada punto: en SSA reasignar no
+    # cambia el valor, crea otro, y una variable de la que se toma la direccion
+    # deja de vivir en un valor para vivir en memoria.
+    lowering/scopes.cpp
     # Auto-vectorizacion de bucles (idiomas memcpy/copy; futuro unroll+SIMD).
     # Metodos de Lowering separados de lowering.cpp para mantenerlos agrupados.
     vectorize.cpp
