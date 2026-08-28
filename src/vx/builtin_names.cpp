@@ -480,6 +480,8 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::Loadmodule: case Builtin::Malloc:
     case Builtin::Unloadmodule:
     case Builtin::FfiOpen: case Builtin::FfiSym: case Builtin::FfiCall:
+    case Builtin::Pid: case Builtin::CpuFeatures:
+    case Builtin::ArgsCount: case Builtin::ArgsGet:
         return BuiltinFamily::Runtime;
 
     case Builtin::AtomicAddI64: case Builtin::AtomicCasI64:
@@ -489,6 +491,9 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::SharedFree: case Builtin::SharedGcCollect:
     case Builtin::SharedHeapBytes: case Builtin::SharedHeapLiveCount:
     case Builtin::SharedMalloc: case Builtin::Unshare:
+    case Builtin::AtomicLoad: case Builtin::AtomicStore:
+    case Builtin::AtomicCas: case Builtin::AtomicAdd:
+    case Builtin::Wait: case Builtin::Notify: case Builtin::NotifyAll:
         return BuiltinFamily::Concurrent;
 
     case Builtin::Err: case Builtin::Error: case Builtin::IsOk:

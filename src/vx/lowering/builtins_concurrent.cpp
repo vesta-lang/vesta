@@ -98,13 +98,24 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
     const bool is_z10_live_count = (b == Builtin::SharedHeapLiveCount);
     const bool is_z10_bytes = (b == Builtin::SharedHeapBytes);
     const bool is_z10_gc_collect = (b == Builtin::SharedGcCollect);
+    /* Los atomicos SIN sufijo: el ancho lo da el tipo del puntero. */
+    const bool is_atomic_load_g = (b == Builtin::AtomicLoad);
+    const bool is_atomic_store_g = (b == Builtin::AtomicStore);
+    const bool is_atomic_cas_g = (b == Builtin::AtomicCas);
+    const bool is_atomic_add_g = (b == Builtin::AtomicAdd);
+    /* Y esperar el turno: un monitor no es memoria compartida, es el turno. */
+    const bool is_wait = (b == Builtin::Wait);
+    const bool is_notify = (b == Builtin::Notify);
+    const bool is_notifyAll = (b == Builtin::NotifyAll);
 
     /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
     if (!(is_z6_isshared || is_z6_share || is_z6_unshare ||
           is_z8_atomic_load || is_z8_atomic_store || is_z8_atomic_cas ||
           is_z8_atomic_add || is_z8_shared_malloc || is_z8_shared_free ||
           is_msgsend || is_msgrecv || is_future_alloc || is_fulfill ||
-          is_z10_live_count || is_z10_bytes || is_z10_gc_collect))
+          is_z10_live_count || is_z10_bytes || is_z10_gc_collect ||
+          is_atomic_load_g || is_atomic_store_g || is_atomic_cas_g ||
+          is_atomic_add_g || is_wait || is_notify || is_notifyAll))
         return false;
 
     /* Preguntar si una direccion ya esta compartida no es una llamada: el
@@ -529,6 +540,162 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         ss.source_line = e->loc.line;
         emit(current_block_, std::move(ss));
         out_value = v_dst;
+        return true;
+    }
+
+
+    /* Los atomicos SIN sufijo de ancho: el ancho sale del tipo al que apunta
+     * el puntero, no del nombre.  `atomic_add(p, 1)` sobre un `u8*` suma un
+     * byte y sobre un `u64*` suma ocho, y quien lo decide es el tipo -- de ahi
+     * que esto no se pueda resolver sin haber comprobado tipos antes. */
+    if (is_atomic_load_g || is_atomic_store_g || is_atomic_cas_g ||
+        is_atomic_add_g) {
+        ir::IrType wt = ir::IrType::I64;
+        if (!e->args.empty() && e->args[0]->result_type.pointee)
+            wt = ir_type_from_primitive(e->args[0]->result_type.pointee->kind);
+        // Los atomicos operan sobre BITS enteros (banco GP + instruccion `lock`
+        // del ancho).  Un pointee FLOAT (f32/f64) vive en el banco ZMM: la
+        // operacion se hace sobre el entero del MISMO ancho (F32->I32,
+        // F64->I64) y el valor cruza con BITCAST puro (misma anchura, mismos
+        // bits IEEE), que baja a movd/movq -- cero coste.  Sin esto, un
+        // `atomic_store` de f32 guardaba los 32 bits bajos de un patron f64 (=
+        // 0).
+        const bool is_flt = (wt == ir::IrType::F32 || wt == ir::IrType::F64);
+        const ir::IrType iwt = (wt == ir::IrType::F32)   ? ir::IrType::I32
+                               : (wt == ir::IrType::F64) ? ir::IrType::I64
+                                                         : wt;
+        auto emit_bc = [&](ir::IrValueId src, ir::IrType tgt) -> ir::IrValueId {
+            ir::IrValueId d = fn_->new_value(tgt);
+            ir::IrInstr bc{};
+            bc.op = ir::IrOp::BITCAST;
+            bc.type = tgt;
+            bc.dst = d;
+            bc.operands = {src};
+            bc.source_line = e->loc.line;
+            emit(current_block_, std::move(bc));
+            return d;
+        };
+        if (is_atomic_load_g) {
+            if (e->args.size() != 1) {
+                error_at(e->loc, "atomic_load: requiere 1 argumento (T*)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId bits = emit_atomic_ld_i64(v_ptr, e->loc.line, iwt);
+            out_value =
+                is_flt ? emit_bc(bits, wt) : bits; // bits GP -> float ZMM
+            return true;
+        }
+        if (is_atomic_store_g) {
+            if (e->args.size() != 2) {
+                error_at(e->loc, "atomic_store: requiere 2 argumentos (T*, T)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId v_val = lower_expr(e->args[1].get());
+            if (is_flt) {
+                // El valor puede llegar como f64 (un literal `5.0`, que es f64
+                // por defecto, propagado por la cadena de inline sin
+                // re-estrecharse) mientras la celda es f32.  Coaccionar al
+                // ancho float REAL de T antes de tomar sus bits.
+                v_val = cast_if_needed(v_val, fn_->values[v_val].type, wt,
+                                       e->loc.line, true);
+                v_val = emit_bc(v_val, iwt); // float ZMM -> bits GP
+            }
+            emit_atomic_st_i64(v_ptr, v_val, e->loc.line, iwt);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        if (is_atomic_cas_g) {
+            if (e->args.size() != 3) {
+                error_at(e->loc,
+                         "atomic_cas: requiere 3 argumentos (T*, exp, des)");
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+            ir::IrValueId v_exp = lower_expr(e->args[1].get());
+            ir::IrValueId v_des = lower_expr(e->args[2].get());
+            if (is_flt) {
+                // comparar/escribir los BITS, no el valor
+                v_exp = cast_if_needed(v_exp, fn_->values[v_exp].type, wt,
+                                       e->loc.line, true);
+                v_des = cast_if_needed(v_des, fn_->values[v_des].type, wt,
+                                       e->loc.line, true);
+                v_exp = emit_bc(v_exp, iwt);
+                v_des = emit_bc(v_des, iwt);
+            }
+            ir::IrValueId res =
+                emit_atomic_cas_i64(v_ptr, v_exp, v_des, e->loc.line, iwt);
+            out_value = is_flt ? emit_bc(res, wt) : res; // OLD bits -> float
+            return true;
+        }
+        // is_atomic_add_g.  El delta de un xadd es entero por naturaleza; el
+        // .vx nunca invoca atomic_add con float (fetch_add sobre float usa el
+        // bucle CAS de arriba).  Se baja como entero del ancho de T.
+        if (e->args.size() != 2) {
+            error_at(e->loc, "atomic_add: requiere 2 argumentos (T*, delta)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+        const ir::IrValueId v_delta = lower_expr(e->args[1].get());
+        out_value = emit_atomic_add_i64(v_ptr, v_delta, e->loc.line, iwt);
+        return true;
+    }
+
+    /* Y esperar a que otro avise.  Un monitor no es memoria compartida: es el
+     * turno.  `wait` suelta el cerrojo y se duerme, `notify` despierta a uno y
+     * `notifyAll` a todos -- y que suelte el cerrojo es lo que evita que dos
+     * procesos se queden esperandose el uno al otro --. */
+    if (is_wait || is_notify || is_notifyAll) {
+        if (e->args.size() != 1) {
+            error_at(e->loc, std::string(builtin_name(b)) + ": requiere exactamente 1 argumento");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_obj = lower_expr(e->args[0].get());
+        if (v_obj == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // raw_asm-elim 2026-05-28: reemplazado el blob RAW_ASM original
+        // por una secuencia de IR ops nativos (GC_HANDLE_FOR_PTR +
+        // MONWAIT/MONNOTI/MONNOTA + MONENTER opcional).  Beneficios:
+        //   (a) DCE puede eliminar el handle si la op se elimina.
+        //   (b) El Selector JIT no tiene que parsear texto raw_asm.
+        //   (c) Cada paso es individualmente reorderable por el optimizer.
+        //   (d) Cero overhead vs el RAW_ASM previo: mismo bytecode emitido.
+        //
+        // BugFix t13 preservado: wait(obj) re-adquiere el monitor tras
+        // despertar (semantica Java/POSIX condvar) via MONENTER explicito.
+        const ir::IrValueId v_handle =
+            emit_gc_handle_for_ptr(v_obj, e->loc.line);
+        ir::IrOp mop = is_wait     ? ir::IrOp::MONWAIT
+                       : is_notify ? ir::IrOp::MONNOTI
+                                   : ir::IrOp::MONNOTA;
+        {
+            ir::IrInstr mi{};
+            mi.op = mop;
+            mi.type = ir::IrType::VOID;
+            mi.dst = ir::IR_NO_VALUE;
+            mi.operands = {v_handle};
+            mi.source_line = e->loc.line;
+            emit(current_block_, std::move(mi));
+        }
+        if (is_wait) {
+            // Re-adquirir el monitor tras wake.
+            ir::IrInstr me{};
+            me.op = ir::IrOp::MONENTER;
+            me.type = ir::IrType::VOID;
+            me.dst = ir::IR_NO_VALUE;
+            me.operands = {v_handle};
+            me.source_line = e->loc.line;
+            emit(current_block_, std::move(me));
+        }
+        out_value = ir::IR_NO_VALUE;
         return true;
     }
 

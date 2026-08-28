@@ -79,10 +79,16 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
     const bool is_ffi_open = (b == Builtin::FfiOpen);
     const bool is_ffi_sym = (b == Builtin::FfiSym);
     const bool is_ffi_call = (b == Builtin::FfiCall);
+    /* Y lo que el programa no sabe de si mismo hasta que corre. */
+    const bool is_pid = (b == Builtin::Pid);
+    const bool is_cpu_features = (b == Builtin::CpuFeatures);
+    const bool is_args_count = (b == Builtin::ArgsCount);
+    const bool is_args_get = (b == Builtin::ArgsGet);
 
     if (!(is_fopen || is_fwrite || is_fclose || is_malloc || is_free ||
           is_fiber_swapctx || is_loadmodule || is_unloadmodule || is_dispose ||
-          is_ffi_open || is_ffi_sym || is_ffi_call))
+          is_ffi_open || is_ffi_sym || is_ffi_call || is_pid ||
+          is_cpu_features || is_args_count || is_args_get))
         return false;
 
     // y emitir un STR_LIT_ADDR + CONST(len) en el bloque actual.
@@ -600,6 +606,138 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
         out_value = v_dst;
+        return true;
+    }
+
+
+    /* Y lo que el programa no sabe de si mismo hasta que corre: su numero de
+     * proceso, en que maquina esta -- que instrucciones tiene esa CPU -- y con
+     * que argumentos lo llamaron.  Nada de esto esta en el fuente: lo pone
+     * quien lo ejecuta. */
+    if (is_pid) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "pid: no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = emit_getpid(e->loc.line);
+        return true;
+    }
+
+    // ----- cpu_features() -> u64 (CPU dispatch, cimiento) -----
+    // En native_poo_ (AOT): marca el uso (para wirear __vx_cpu_init en main),
+    // asegura el global, y emite STR_LIT_ADDR(slot) + LOAD u64 (lectura del
+    // bitmask que __vx_cpu_init dejo escrito al arranque).  En Full/interp
+    // no hay cpuid native disponible -> devuelve 0 (consistente, sin error).
+    if (is_cpu_features) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "cpu_features: no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        if (!native_poo_) {
+            // Path Full/interp/JIT: la VM corre sobre la CPU real -> emitimos
+            // CALLN a la fn nativa `vesta_runtime:cpu_features` (registrada en
+            // el virtual_lib_registry, sin DLL), que corre cpuid en el host y
+            // devuelve el bitmask con el MISMO layout que el __vx_cpu_init de
+            // AOT.  Resuelve igual en interp (loader/native_ffi) y en JIT
+            // (auto_jit).  0 args, retorno u64 en R0.
+            const int ln = e->loc.line;
+            /* Un `cpuid` y devolver el bitmask: sin argumentos, sin memoria,
+             * sin E/S.  Y determinista -- la CPU no cambia a mitad de
+             * ejecucion --, que es lo que permite calcularlo UNA vez aunque se
+             * consulte en un bucle. */
+            {
+                ir::IrNativeEffects fx;
+                fx.declarados = true;
+                out_mod_->register_native_import("vesta_runtime",
+                                                 "cpu_features", fx);
+            }
+            ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
+            ir::IrInstr cl{};
+            cl.op = ir::IrOp::CALLN;
+            cl.type = ir::IrType::U64;
+            cl.dst = v_feat;
+            cl.func_name = "vesta_runtime:cpu_features";
+            cl.operands = {};
+            cl.source_line = ln;
+            emit(current_block_, std::move(cl));
+            out_value = v_feat;
+            return true;
+        }
+        cpu_features_used_ = true;
+        const uint64_t slot = ensure_cpu_features_global();
+        const int ln = e->loc.line;
+        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
+        {
+            ir::IrInstr is{};
+            is.op = ir::IrOp::STR_LIT_ADDR;
+            is.type = ir::IrType::PTR;
+            is.dst = v_addr;
+            is.imm = slot;
+            is.source_line = ln;
+            emit(current_block_, std::move(is));
+        }
+        ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
+        {
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::U64;
+            ld.dst = v_feat;
+            ld.operands = {v_addr};
+            ld.source_line = ln;
+            emit(current_block_, std::move(ld));
+        }
+        out_value = v_feat;
+        return true;
+    }
+
+    // ----- args_count() -> i32 -----
+    // Devuelve el numero de argumentos del script (vm->script_args.size()).
+    // Baja a `getargc r_dst`, deposita uint64 que el caller trunca a i32.
+    if (is_args_count) {
+        if (!e->args.empty()) {
+            error_at(e->loc, "args_count: no acepta argumentos");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        // getargc devuelve i64 a nivel IR; truncamos a i32 si el caller lo
+        // espera.
+        ir::IrValueId v_n = emit_getargc(e->loc.line);
+        v_n = cast_if_needed(v_n, ir::IrType::I64, ir::IrType::I32, e->loc.line,
+                             /*is_explicit=*/true);
+        out_value = v_n;
+        return true;
+    }
+
+    // ----- Builtins de terminal / VT100 -----
+    // Cada uno emite via vio_print una secuencia ANSI estatica.
+    // term_move(row, col) requiere format dinamico: emite la secuencia
+    // como una mezcla de prints y print_int.  Sin overhead extra
+    // gracias al buffer global de 64 KB del plugin vesta_io (todos
+    // los prints en una misma frame se agrupan en 1 syscall).
+
+    // ----- getMethods(cls) / getFields(cls) -> i32 -----
+    // Devuelve el numero de metodos / fields de instancia de la clase
+    // via los opcodes existentes methodcount (0xDB) / fieldcount (0xDA).
+    // Ambos depositan el count en R00 (no toman r_dst); capturamos a SSA.
+
+    // ----- args_get(i) -> string -----
+    // Devuelve un StringObject GC-managed con el contenido de args[i].
+    // Baja a `getarg r_dst, r_idx`.  Si i fuera de rango, devuelve
+    // GC_NULL_HANDLE = 0 (que el frontend trata como string nulo).
+    if (is_args_get) {
+        if (e->args.size() != 1 || !e->args[0]) {
+            error_at(e->loc, "args_get: requiere 1 argumento (i32 indice)");
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const ir::IrValueId v_idx = lower_expr(e->args[0].get());
+        if (v_idx == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        out_value = emit_getarg(v_idx, e->loc.line);
         return true;
     }
 

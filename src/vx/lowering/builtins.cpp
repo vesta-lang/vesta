@@ -162,8 +162,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // de la seccion); emitimos SECTION_REF(func_name=nombre, imm=kind).  El
     // writer AOT lo resuelve via reloc tras el layout; en interp/JIT -> 0.
     // -----------------------------------------------------------------
-    if ((name == "section_start" || name == "section_end" ||
-         name == "section_size") &&
+    if ((b == Builtin::SectionStart || b == Builtin::SectionEnd ||
+         b == Builtin::SectionSize) &&
         e->args.size() == 1) {
         auto *lit = dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
         if (lit == nullptr || !lit->interp_parts.empty()) {
@@ -173,11 +173,11 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        const uint64_t kind = (name == "section_start") ? 0u
-                              : (name == "section_end") ? 1u
+        const uint64_t kind = (b == Builtin::SectionStart) ? 0u
+                              : (b == Builtin::SectionEnd) ? 1u
                                                         : 2u;
         const ir::IrType rt =
-            (name == "section_size") ? ir::IrType::I64 : ir::IrType::PTR;
+            (b == Builtin::SectionSize) ? ir::IrType::I64 : ir::IrType::PTR;
         const ir::IrValueId dst = fn_->new_value(rt);
         // section_start/end devuelven un host_ptr real (la VA de la seccion);
         // marcarlo asi para que un LOAD/STORE posterior use el path host.
@@ -213,7 +213,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     //   r2 = argc (numero de parametros que la fn Vesta recibe)
     // El runtime genera (o reusa) un thunk x86-64 callable con cc C
     // nativa y devuelve el host_ptr.
-    if (name == "as_native_callback" && e->args.size() == 1) {
+    if (b == Builtin::AsNativeCallback && e->args.size() == 1) {
         auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
         if (fn_id == nullptr) {
             error_at(
@@ -255,7 +255,7 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // fibra en el path INTERPRETE, FN.1).  Emite LABEL_ADDR("code.<fn>") sin
     // pasar por el enrutado a naked_fnaddr del cast `(cfn) fn` -> el `swapctx`
     // fija este PC y el interprete ejecuta el cuerpo como bytecode NORMAL.
-    if (name == "fiber_entry" && e->args.size() == 1) {
+    if (b == Builtin::FiberEntry && e->args.size() == 1) {
         auto *fn_id = dynamic_cast<ast::IdentExpr *>(e->args[0].get());
         if (fn_id == nullptr) {
             error_at(e->loc,
@@ -288,16 +288,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // aqui devolvemos false para que lower_call siga con la ruta
     // generica (CALL a una funcion del usuario).
     // monitor builtins.  Cada uno baja a 1 instruccion bytecode.
-    const bool is_wait = (name == "wait");
-    const bool is_notify = (name == "notify");
-    const bool is_notifyAll = (name == "notifyAll");
-    // CPU dispatch (cimiento): consulta runtime de features.
-    const bool is_cpu_features = (name == "cpu_features");
-    // procesos / IPC builtins.
-    const bool is_pid = (name == "pid");
     // Variadicos: vacount() -> lee el param oculto __vacount (numero de args
     // variadicos empaquetados por el caller).
-    if (name == "vacount") {
+    if (b == Builtin::Vacount) {
         const ir::IrValueId v = lookup("__vacount");
         if (v == ir::IR_NO_VALUE) {
             error_at(e->loc, "vacount() solo es valido dentro de una funcion "
@@ -309,8 +302,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         return true;
     }
     // argv del script: bajan a getargc/getarg.
-    const bool is_args_count = (name == "args_count");
-    const bool is_args_get = (name == "args_get");
     // futures builtins.
     // constructor de tipo coleccion primitivo (arraylist, hashmap,
     // hashset, queue, deque, treemap, treeset, stack).  Si find_col_ctor
@@ -319,131 +310,15 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // (o sin args para tipos sin default_cap como TreeMap).
     const ColType *col_ctor = find_col_ctor(name);
     const bool is_col_ctor = (col_ctor != nullptr);
-    // FFI runtime dinamico: builtins sintaxis-VSH para cargar
-    // DLLs y resolver/llamar simbolos en tiempo de ejecucion.
     // panic("msg") -> opcode panic con FATAL_USER_ABORT.
-    const bool is_panic = (name == "panic");
-    // Z.6 builtins: is_shared / share / unshare.
-    // Atomicos GENERICOS (width-aware): el ancho sale del pointee del puntero.
-    const bool is_atomic_load_g = (name == "atomic_load");
-    const bool is_atomic_store_g = (name == "atomic_store");
-    const bool is_atomic_cas_g = (name == "atomic_cas");
-    const bool is_atomic_add_g = (name == "atomic_add");
-    // Atomicos GENERICOS (ancho = pointee del puntero arg 0).  Se resuelve
-    // AQUI, temprano, antes que cualquier handler que pudiera retornar antes.
-    // Sirven a atomic<T> para 1/2/4/8 bytes (i8..i64, u8..u64, f32, f64, bool,
-    // ptr).
-    if (is_atomic_load_g || is_atomic_store_g || is_atomic_cas_g ||
-        is_atomic_add_g) {
-        ir::IrType wt = ir::IrType::I64;
-        if (!e->args.empty() && e->args[0]->result_type.pointee)
-            wt = ir_type_from_primitive(e->args[0]->result_type.pointee->kind);
-        // Los atomicos operan sobre BITS enteros (banco GP + instruccion `lock`
-        // del ancho).  Un pointee FLOAT (f32/f64) vive en el banco ZMM: la
-        // operacion se hace sobre el entero del MISMO ancho (F32->I32,
-        // F64->I64) y el valor cruza con BITCAST puro (misma anchura, mismos
-        // bits IEEE), que baja a movd/movq -- cero coste.  Sin esto, un
-        // `atomic_store` de f32 guardaba los 32 bits bajos de un patron f64 (=
-        // 0).
-        const bool is_flt = (wt == ir::IrType::F32 || wt == ir::IrType::F64);
-        const ir::IrType iwt = (wt == ir::IrType::F32)   ? ir::IrType::I32
-                               : (wt == ir::IrType::F64) ? ir::IrType::I64
-                                                         : wt;
-        auto emit_bc = [&](ir::IrValueId src, ir::IrType tgt) -> ir::IrValueId {
-            ir::IrValueId d = fn_->new_value(tgt);
-            ir::IrInstr bc{};
-            bc.op = ir::IrOp::BITCAST;
-            bc.type = tgt;
-            bc.dst = d;
-            bc.operands = {src};
-            bc.source_line = e->loc.line;
-            emit(current_block_, std::move(bc));
-            return d;
-        };
-        if (is_atomic_load_g) {
-            if (e->args.size() != 1) {
-                error_at(e->loc, "atomic_load: requiere 1 argumento (T*)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
-            }
-            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-            ir::IrValueId bits = emit_atomic_ld_i64(v_ptr, e->loc.line, iwt);
-            out_value =
-                is_flt ? emit_bc(bits, wt) : bits; // bits GP -> float ZMM
-            return true;
-        }
-        if (is_atomic_store_g) {
-            if (e->args.size() != 2) {
-                error_at(e->loc, "atomic_store: requiere 2 argumentos (T*, T)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
-            }
-            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-            ir::IrValueId v_val = lower_expr(e->args[1].get());
-            if (is_flt) {
-                // El valor puede llegar como f64 (un literal `5.0`, que es f64
-                // por defecto, propagado por la cadena de inline sin
-                // re-estrecharse) mientras la celda es f32.  Coaccionar al
-                // ancho float REAL de T antes de tomar sus bits.
-                v_val = cast_if_needed(v_val, fn_->values[v_val].type, wt,
-                                       e->loc.line, true);
-                v_val = emit_bc(v_val, iwt); // float ZMM -> bits GP
-            }
-            emit_atomic_st_i64(v_ptr, v_val, e->loc.line, iwt);
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        if (is_atomic_cas_g) {
-            if (e->args.size() != 3) {
-                error_at(e->loc,
-                         "atomic_cas: requiere 3 argumentos (T*, exp, des)");
-                out_value = ir::IR_NO_VALUE;
-                return true;
-            }
-            const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-            ir::IrValueId v_exp = lower_expr(e->args[1].get());
-            ir::IrValueId v_des = lower_expr(e->args[2].get());
-            if (is_flt) {
-                // comparar/escribir los BITS, no el valor
-                v_exp = cast_if_needed(v_exp, fn_->values[v_exp].type, wt,
-                                       e->loc.line, true);
-                v_des = cast_if_needed(v_des, fn_->values[v_des].type, wt,
-                                       e->loc.line, true);
-                v_exp = emit_bc(v_exp, iwt);
-                v_des = emit_bc(v_des, iwt);
-            }
-            ir::IrValueId res =
-                emit_atomic_cas_i64(v_ptr, v_exp, v_des, e->loc.line, iwt);
-            out_value = is_flt ? emit_bc(res, wt) : res; // OLD bits -> float
-            return true;
-        }
-        // is_atomic_add_g.  El delta de un xadd es entero por naturaleza; el
-        // .vx nunca invoca atomic_add con float (fetch_add sobre float usa el
-        // bucle CAS de arriba).  Se baja como entero del ancho de T.
-        if (e->args.size() != 2) {
-            error_at(e->loc, "atomic_add: requiere 2 argumentos (T*, delta)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_ptr = lower_expr(e->args[0].get());
-        const ir::IrValueId v_delta = lower_expr(e->args[1].get());
-        out_value = emit_atomic_add_i64(v_ptr, v_delta, e->loc.line, iwt);
-        return true;
-    }
-    const bool is_gensym_b = (name == "gensym");
-    const bool is_static_assert_b = (name == "static_assert");
-    /* Los de imprimir NO estan en esta lista, y no es un olvido: se atienden
-     * arriba del todo, asi que si el flujo llega hasta aqui es que el nombre no
-     * era de esa familia. */
-    /* Tampoco estan los que se atienden ARRIBA (imprimir, y lo que pide
-     * algo al mundo): si el flujo llega hasta aqui, el nombre no era de
-     * esas familias. */
+    const bool is_panic = (b == Builtin::Panic);
+    const bool is_gensym_b = (b == Builtin::Gensym);
+    const bool is_static_assert_b = (b == Builtin::StaticAssert);
+    /* Aqui NO estan los que atienden las familias, y no es un olvido: se
+     * despachan arriba, asi que si el flujo llega hasta este punto es que el
+     * nombre no era de ninguna de ellas. */
     const bool is_any_builtin =
-        is_wait || is_notify || is_notifyAll ||
-        is_cpu_features || is_pid ||
-        is_args_count || is_args_get ||
-        is_panic || is_gensym_b || is_static_assert_b ||
-        is_col_ctor;
+        is_panic || is_gensym_b || is_static_assert_b || is_col_ctor;
     if (!is_any_builtin) return false;
 
     // Helper interno para registrar un literal de string en static_data
@@ -713,54 +588,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     // monnoti/monnota requieren GcHandle.  Convertimos primero via
     // gchandle (O(1) en el GcHeap) y luego ejecutamos la operacion.
     // Devuelven void; no participan en expresiones.
-    if (is_wait || is_notify || is_notifyAll) {
-        if (e->args.size() != 1) {
-            error_at(e->loc, name + ": requiere exactamente 1 argumento");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_obj = lower_expr(e->args[0].get());
-        if (v_obj == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // raw_asm-elim 2026-05-28: reemplazado el blob RAW_ASM original
-        // por una secuencia de IR ops nativos (GC_HANDLE_FOR_PTR +
-        // MONWAIT/MONNOTI/MONNOTA + MONENTER opcional).  Beneficios:
-        //   (a) DCE puede eliminar el handle si la op se elimina.
-        //   (b) El Selector JIT no tiene que parsear texto raw_asm.
-        //   (c) Cada paso es individualmente reorderable por el optimizer.
-        //   (d) Cero overhead vs el RAW_ASM previo: mismo bytecode emitido.
-        //
-        // BugFix t13 preservado: wait(obj) re-adquiere el monitor tras
-        // despertar (semantica Java/POSIX condvar) via MONENTER explicito.
-        const ir::IrValueId v_handle =
-            emit_gc_handle_for_ptr(v_obj, e->loc.line);
-        ir::IrOp mop = is_wait     ? ir::IrOp::MONWAIT
-                       : is_notify ? ir::IrOp::MONNOTI
-                                   : ir::IrOp::MONNOTA;
-        {
-            ir::IrInstr mi{};
-            mi.op = mop;
-            mi.type = ir::IrType::VOID;
-            mi.dst = ir::IR_NO_VALUE;
-            mi.operands = {v_handle};
-            mi.source_line = e->loc.line;
-            emit(current_block_, std::move(mi));
-        }
-        if (is_wait) {
-            // Re-adquirir el monitor tras wake.
-            ir::IrInstr me{};
-            me.op = ir::IrOp::MONENTER;
-            me.type = ir::IrType::VOID;
-            me.dst = ir::IR_NO_VALUE;
-            me.operands = {v_handle};
-            me.source_line = e->loc.line;
-            emit(current_block_, std::move(me));
-        }
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
 
     // =====================================================================
     // Smart pointers builtins: unique<T> / shared<T>.
@@ -793,132 +620,6 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
 
     // ----- pid() -----
     // Devuelve el PID encoded del proceso actual via getpid r_dst.
-    if (is_pid) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "pid: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        out_value = emit_getpid(e->loc.line);
-        return true;
-    }
-
-    // ----- cpu_features() -> u64 (CPU dispatch, cimiento) -----
-    // En native_poo_ (AOT): marca el uso (para wirear __vx_cpu_init en main),
-    // asegura el global, y emite STR_LIT_ADDR(slot) + LOAD u64 (lectura del
-    // bitmask que __vx_cpu_init dejo escrito al arranque).  En Full/interp
-    // no hay cpuid native disponible -> devuelve 0 (consistente, sin error).
-    if (is_cpu_features) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "cpu_features: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        if (!native_poo_) {
-            // Path Full/interp/JIT: la VM corre sobre la CPU real -> emitimos
-            // CALLN a la fn nativa `vesta_runtime:cpu_features` (registrada en
-            // el virtual_lib_registry, sin DLL), que corre cpuid en el host y
-            // devuelve el bitmask con el MISMO layout que el __vx_cpu_init de
-            // AOT.  Resuelve igual en interp (loader/native_ffi) y en JIT
-            // (auto_jit).  0 args, retorno u64 en R0.
-            const int ln = e->loc.line;
-            /* Un `cpuid` y devolver el bitmask: sin argumentos, sin memoria,
-             * sin E/S.  Y determinista -- la CPU no cambia a mitad de
-             * ejecucion --, que es lo que permite calcularlo UNA vez aunque se
-             * consulte en un bucle. */
-            {
-                ir::IrNativeEffects fx;
-                fx.declarados = true;
-                out_mod_->register_native_import("vesta_runtime",
-                                                 "cpu_features", fx);
-            }
-            ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
-            ir::IrInstr cl{};
-            cl.op = ir::IrOp::CALLN;
-            cl.type = ir::IrType::U64;
-            cl.dst = v_feat;
-            cl.func_name = "vesta_runtime:cpu_features";
-            cl.operands = {};
-            cl.source_line = ln;
-            emit(current_block_, std::move(cl));
-            out_value = v_feat;
-            return true;
-        }
-        cpu_features_used_ = true;
-        const uint64_t slot = ensure_cpu_features_global();
-        const int ln = e->loc.line;
-        ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr is{};
-            is.op = ir::IrOp::STR_LIT_ADDR;
-            is.type = ir::IrType::PTR;
-            is.dst = v_addr;
-            is.imm = slot;
-            is.source_line = ln;
-            emit(current_block_, std::move(is));
-        }
-        ir::IrValueId v_feat = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::U64;
-            ld.dst = v_feat;
-            ld.operands = {v_addr};
-            ld.source_line = ln;
-            emit(current_block_, std::move(ld));
-        }
-        out_value = v_feat;
-        return true;
-    }
-
-    // ----- args_count() -> i32 -----
-    // Devuelve el numero de argumentos del script (vm->script_args.size()).
-    // Baja a `getargc r_dst`, deposita uint64 que el caller trunca a i32.
-    if (is_args_count) {
-        if (!e->args.empty()) {
-            error_at(e->loc, "args_count: no acepta argumentos");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // getargc devuelve i64 a nivel IR; truncamos a i32 si el caller lo
-        // espera.
-        ir::IrValueId v_n = emit_getargc(e->loc.line);
-        v_n = cast_if_needed(v_n, ir::IrType::I64, ir::IrType::I32, e->loc.line,
-                             /*is_explicit=*/true);
-        out_value = v_n;
-        return true;
-    }
-
-    // ----- Builtins de terminal / VT100 -----
-    // Cada uno emite via vio_print una secuencia ANSI estatica.
-    // term_move(row, col) requiere format dinamico: emite la secuencia
-    // como una mezcla de prints y print_int.  Sin overhead extra
-    // gracias al buffer global de 64 KB del plugin vesta_io (todos
-    // los prints en una misma frame se agrupan en 1 syscall).
-
-    // ----- getMethods(cls) / getFields(cls) -> i32 -----
-    // Devuelve el numero de metodos / fields de instancia de la clase
-    // via los opcodes existentes methodcount (0xDB) / fieldcount (0xDA).
-    // Ambos depositan el count en R00 (no toman r_dst); capturamos a SSA.
-
-    // ----- args_get(i) -> string -----
-    // Devuelve un StringObject GC-managed con el contenido de args[i].
-    // Baja a `getarg r_dst, r_idx`.  Si i fuera de rango, devuelve
-    // GC_NULL_HANDLE = 0 (que el frontend trata como string nulo).
-    if (is_args_get) {
-        if (e->args.size() != 1 || !e->args[0]) {
-            error_at(e->loc, "args_get: requiere 1 argumento (i32 indice)");
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        const ir::IrValueId v_idx = lower_expr(e->args[0].get());
-        if (v_idx == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        out_value = emit_getarg(v_idx, e->loc.line);
-        return true;
-    }
 
     // ----- msgsend(pid, value) -----
     // Reservamos 8 bytes en el frame del caller (alloca i8[8]),
