@@ -29,6 +29,7 @@ export const VestaMethod = {
     ParamHints: 'vesta/paramHints',
     Asa: 'vesta/asa',
     AsaFacts: 'vesta/asaFacts',
+    Targets: 'vesta/targets',
     SymbolInfo: 'vesta/symbolInfo',
     Compile: 'vesta/compile',
     CompileProject: 'vesta/compileProject',
@@ -40,10 +41,42 @@ export interface VestaResponse {
     error?: string;
 }
 
-/** Objetivo de compilacion de las vistas; vacio significa el anfitrion. */
+/**
+ * Con que se compila lo que se mira.
+ *
+ * No es solo "para que maquina": el nivel de optimizacion, el juego de
+ * instrucciones de coma flotante y la microarquitectura cambian el codigo que
+ * sale, asi que forman parte de la pregunta.  Campos vacios = lo de por
+ * defecto.
+ */
 export interface InspectTarget {
     os?: string;
     arch?: string;
+    /** 0..3; ausente = el nivel con el que compila el analisis normal. */
+    opt?: number;
+    floatIsa?: string;
+    /** Microarquitectura concreta, de las que conoce el compilador. */
+    cpu?: string;
+}
+
+/** Una arquitectura para la que se puede compilar o mirar. */
+export interface TargetArch {
+    /** Lo que se manda en `arch`. */
+    id: string;
+    name: string;
+    /** false = se conoce su juego de instrucciones, pero no se genera codigo. */
+    codegen: boolean;
+    /** Microarquitecturas cronometradas en la base de instrucciones. */
+    microarchs: string[];
+    /** CPU concretas conocidas, con sus capacidades. */
+    cpus: string[];
+}
+
+/** Respuesta de `vesta/targets`: lo que el compilador sabe hacer. */
+export interface TargetsResponse extends VestaResponse {
+    architectures?: TargetArch[];
+    floatIsas?: string[];
+    optLevels?: number[];
 }
 
 /** Respuesta de las vistas que devuelven un texto (IR, bytecode, diagramas). */

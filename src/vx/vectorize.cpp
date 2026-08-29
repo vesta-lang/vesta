@@ -479,6 +479,136 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
                         s->loc.line, /*idx_name_for_post=*/std::string());
 }
 
+
+/**
+ * @brief Monta la primera mitad del andamio y deja listo el cuerpo ancho.
+ *
+ * Crea los cinco bloques, salta al bucle ancho, y en su cabecera pone el indice
+ * -- con su phi, que entra con el valor inicial -- y la condicion de que queden
+ * al menos W elementos.  Al volver, se emite en el cuerpo ancho.
+ *
+ * @param sk       Donde queda el andamio.
+ * @param prefijo  Con que nombrar los bloques, para leer el IR.
+ * @param i_init   Con que valor empieza el indice.
+ * @param v_N      Cuantos elementos hay.
+ * @param w        Cuantos carriles caben de golpe.
+ * @param ln       Linea del fuente.
+ */
+void Lowering::vec_begin(VecSkeleton &sk, const char *prefijo,
+                         ir::IrValueId i_init, ir::IrValueId v_N, uint64_t w,
+                         uint32_t ln) {
+    sk.idx_ty = fn_->values[i_init].type;
+    sk.entry = current_block_;
+    sk.mhdr = fn_->new_block(std::string(prefijo) + "_main_hdr");
+    sk.mbody = fn_->new_block(std::string(prefijo) + "_main_body");
+    sk.thdr = fn_->new_block(std::string(prefijo) + "_tail_hdr");
+    sk.tbody = fn_->new_block(std::string(prefijo) + "_tail_body");
+    sk.exit = fn_->new_block(std::string(prefijo) + "_exit");
+
+    current_block_ = sk.entry;
+    sk.v_W = emit_const(sk.idx_ty, w, ln);
+    emit_br(sk.mhdr, ln);
+
+    current_block_ = sk.mhdr;
+    sk.phi_main = fn_->new_value(sk.idx_ty);
+    {
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = sk.idx_ty;
+        phi.dst = sk.phi_main;
+        phi.source_line = ln;
+        phi.phi_args.push_back({i_init, sk.entry});
+        fn_->append(sk.mhdr, std::move(phi));
+    }
+    /* Se entra al cuerpo ancho solo si quedan W elementos ENTEROS: con menos,
+     * leer de golpe se saldria del array. */
+    const ir::IrValueId v_ipW =
+        vec_bin(ir::IrOp::ADD, sk.idx_ty, sk.phi_main, sk.v_W, ln);
+    const ir::IrValueId cond_m =
+        vec_bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N, ln);
+    emit_br_cond(cond_m, sk.mbody, sk.thdr, ln);
+
+    current_block_ = sk.mbody;
+}
+
+/**
+ * @brief Cierra el cuerpo ancho y deja listo el de uno en uno.
+ *
+ * Avanza el indice de W, vuelve a la cabecera del bucle ancho, y monta la
+ * cabecera del otro: su propio indice -- que ENTRA con el que dejo el ancho --
+ * y la condicion de que aun quede algo.
+ *
+ * @param sk  El andamio.
+ * @param v_N Cuantos elementos hay.
+ * @param ln  Linea del fuente.
+ */
+void Lowering::vec_to_tail(VecSkeleton &sk, ir::IrValueId v_N, uint32_t ln) {
+    const ir::IrValueId i_mnext =
+        vec_bin(ir::IrOp::ADD, sk.idx_ty, sk.phi_main, sk.v_W, ln);
+    emit_br(sk.mhdr, ln);
+    fn_->blocks[sk.mhdr].instrs[0].phi_args.push_back({i_mnext, sk.mbody});
+
+    current_block_ = sk.thdr;
+    sk.phi_tail = fn_->new_value(sk.idx_ty);
+    {
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = sk.idx_ty;
+        phi.dst = sk.phi_tail;
+        phi.source_line = ln;
+        phi.phi_args.push_back({sk.phi_main, sk.mhdr});
+        fn_->append(sk.thdr, std::move(phi));
+    }
+    const ir::IrValueId cond_t =
+        vec_bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, sk.phi_tail, v_N, ln);
+    emit_br_cond(cond_t, sk.tbody, sk.exit, ln);
+
+    current_block_ = sk.tbody;
+}
+
+/**
+ * @brief Cierra el cuerpo de uno en uno y deja el programa en la salida.
+ *
+ * @param sk El andamio.
+ * @param ln Linea del fuente.
+ */
+void Lowering::vec_end(VecSkeleton &sk, uint32_t ln) {
+    const ir::IrValueId uno = emit_const(sk.idx_ty, 1, ln);
+    const ir::IrValueId i_tnext =
+        vec_bin(ir::IrOp::ADD, sk.idx_ty, sk.phi_tail, uno, ln);
+    emit_br(sk.thdr, ln);
+    fn_->blocks[sk.thdr].instrs[0].phi_args.push_back({i_tnext, sk.tbody});
+
+    current_block_ = sk.exit;
+    block_terminated_ = false;
+}
+
+/**
+ * @brief Emite una operacion binaria en el bloque actual.
+ *
+ * Los ayudantes de constantes y conversiones tambien emiten en el bloque
+ * actual, y por eso aqui se lleva el bloque a mano en vez de emitir a uno
+ * cualquiera.
+ *
+ * @param op El operador.
+ * @param ty De que tipo es el resultado.
+ * @param a  Primer operando.
+ * @param b  Segundo operando.
+ * @param ln Linea del fuente.
+ * @return El valor resultante.
+ */
+ir::IrValueId Lowering::vec_bin(ir::IrOp op, ir::IrType ty, ir::IrValueId a,
+                                ir::IrValueId b, uint32_t ln) {
+    const ir::IrValueId d = fn_->new_value(ty);
+    ir::IrInstr in{};
+    in.op = op;
+    in.type = ty;
+    in.dst = d;
+    in.operands = {a, b};
+    in.source_line = ln;
+    fn_->append(current_block_, std::move(in));
+    return d;
+}
 bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     using namespace ast;
     static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
@@ -669,76 +799,17 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         v_b == ir::IR_NO_VALUE || v_c == ir::IR_NO_VALUE ||
         v_N == ir::IR_NO_VALUE)
         return false;
-    const ir::IrType idx_ty = fn_->values[i_init].type;
-
-    // bin: emite una op binaria en current_block_ (los helpers emit_const/
-    // cast_if_needed tambien usan current_block_; por eso gestionamos
-    // current_block_ por bloque en vez de emitir a un bloque arbitrario).
-    auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
-                   ir::IrValueId b) -> ir::IrValueId {
-        const ir::IrValueId d = fn_->new_value(ty);
-        ir::IrInstr in{};
-        in.op = op;
-        in.type = ty;
-        in.dst = d;
-        in.operands = {a, b};
-        in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
-        return d;
-    };
-
-    const ir::IrBlockId entry = current_block_;
-    const ir::IrBlockId mhdr = fn_->new_block("vec_main_hdr");
-    const ir::IrBlockId mbody = fn_->new_block("vec_main_body");
-    const ir::IrBlockId thdr = fn_->new_block("vec_tail_hdr");
-    const ir::IrBlockId tbody = fn_->new_block("vec_tail_body");
-    const ir::IrBlockId exit = fn_->new_block("vec_exit");
-
-    // --- entry: consts loop-invariantes + BR mhdr ---
-    current_block_ = entry;
-    const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
+    /* El andamio -- los cinco bloques, los dos indices y sus condiciones -- lo
+     * monta `vec_begin`; aqui solo queda lo que este idioma hace dentro.  Al
+     * volver se emite en el cuerpo ancho. */
+    VecSkeleton sk;
+    vec_begin(sk, "vec", i_init, v_N, (uint64_t)W, ln);
+    const ir::IrType idx_ty = sk.idx_ty;
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(entry, std::move(br));
-    }
-    fn_->blocks[entry].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(entry);
+    const ir::IrValueId phi_im = sk.phi_main;
+    auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
+                   ir::IrValueId b) { return vec_bin(op, ty, a, b, ln); };
 
-    // --- mhdr: PHI i + cond (i+W) <= N -> mbody|thdr ---
-    current_block_ = mhdr;
-    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_im;
-        phi.source_line = ln;
-        phi.phi_args.push_back({i_init, entry});
-        fn_->append(mhdr, std::move(phi));
-    }
-    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    const ir::IrValueId cond_m =
-        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_m};
-        brc.target_block = mbody;
-        brc.false_block = thdr;
-        brc.source_line = ln;
-        fn_->append(mhdr, std::move(brc));
-    }
-    fn_->blocks[mhdr].succs.push_back(mbody);
-    fn_->blocks[mhdr].succs.push_back(thdr);
-    fn_->blocks[mbody].preds.push_back(mhdr);
-    fn_->blocks[thdr].preds.push_back(mhdr);
-
-    // --- mbody: VEC_BINOP(c+i*esz, a+i*esz, b+i*esz); i += W; BR mhdr ---
-    current_block_ = mbody;
     auto ptr_at = [&](ir::IrValueId base,
                       ir::IrValueId i64off) -> ir::IrValueId {
         const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
@@ -776,49 +847,11 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         vb.source_line = ln;
         fn_->append(current_block_, std::move(vb));
     }
-    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[mbody].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(mbody);
-    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+    /* Cierra el cuerpo ancho y abre el que recoge los que sobran. */
+    vec_to_tail(sk, v_N, ln);
+    const ir::IrValueId phi_it = sk.phi_tail;
 
-    // --- thdr: PHI i + cond i<N -> tbody|exit ---
-    current_block_ = thdr;
-    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_it;
-        phi.source_line = ln;
-        phi.phi_args.push_back({phi_im, mhdr});
-        fn_->append(thdr, std::move(phi));
-    }
-    const ir::IrValueId cond_t =
-        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_t};
-        brc.target_block = tbody;
-        brc.false_block = exit;
-        brc.source_line = ln;
-        fn_->append(thdr, std::move(brc));
-    }
-    fn_->blocks[thdr].succs.push_back(tbody);
-    fn_->blocks[thdr].succs.push_back(exit);
-    fn_->blocks[tbody].preds.push_back(thdr);
-    fn_->blocks[exit].preds.push_back(thdr);
-
-    // --- tbody: op escalar c[i]=a[i] OP b[i] (emitida a mano, i=phi_it) ---
-    current_block_ = tbody;
-    block_terminated_ = false;
+    // --- cuerpo de uno en uno: la misma operacion, escalar ---
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
@@ -858,22 +891,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
-    const ir::IrValueId i_tnext =
-        bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = thdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[tbody].succs.push_back(thdr);
-    fn_->blocks[thdr].preds.push_back(tbody);
-    fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
-
-    // continuar en exit.
-    current_block_ = exit;
-    block_terminated_ = false;
+    vec_end(sk, ln);
     return true;
 }
 

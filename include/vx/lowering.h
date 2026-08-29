@@ -306,6 +306,47 @@ class Lowering {
     bool emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
                              ir::IrType ret_ir, ir::IrValueId &out_dst);
 
+
+    /**
+     * @brief Los cinco bloques de un bucle vectorizado y sus dos indices.
+     *
+     * Vectorizar un bucle no es cambiar una instruccion por otra: es partirlo
+     * en DOS.  Uno ancho, que avanza de W en W mientras queden al menos W
+     * elementos, y otro de uno en uno para los que sobran al final -- entre
+     * cero y W-1, que no se pueden hacer de golpe sin leer fuera del array.
+     *
+     * Ese andamio -- cinco bloques, dos indices con su phi, dos condiciones y
+     * las aristas que los unen -- es el MISMO para todos los idiomas que se
+     * vectorizan.  Lo unico que cambia es que se hace DENTRO de cada cuerpo, y
+     * por eso estaba escrito cinco veces: una por idioma.
+     */
+    struct VecSkeleton {
+        ir::IrBlockId entry = 0;  ///< De donde se viene.
+        ir::IrBlockId mhdr = 0;   ///< Cabecera del bucle ancho.
+        ir::IrBlockId mbody = 0;  ///< Su cuerpo: el idioma, de W en W.
+        ir::IrBlockId thdr = 0;   ///< Cabecera del que recoge los que sobran.
+        ir::IrBlockId tbody = 0;  ///< Su cuerpo: lo mismo, de uno en uno.
+        ir::IrBlockId exit = 0;   ///< Donde sigue el programa.
+        ir::IrValueId phi_main = ir::IR_NO_VALUE; ///< El indice en el ancho.
+        ir::IrValueId phi_tail = ir::IR_NO_VALUE; ///< El indice en el de uno.
+        ir::IrValueId v_W = ir::IR_NO_VALUE;      ///< Los carriles, como valor.
+        ir::IrType idx_ty = ir::IrType::I64;      ///< El tipo del indice.
+    };
+
+    /// @brief Monta la primera mitad del andamio; deja listo el cuerpo ancho.
+    void vec_begin(VecSkeleton &sk, const char *prefijo, ir::IrValueId i_init,
+                   ir::IrValueId v_N, uint64_t w, uint32_t ln);
+
+    /// @brief Cierra el cuerpo ancho; deja listo el de uno en uno.
+    void vec_to_tail(VecSkeleton &sk, ir::IrValueId v_N, uint32_t ln);
+
+    /// @brief Cierra el cuerpo de uno en uno; deja el programa en la salida.
+    void vec_end(VecSkeleton &sk, uint32_t ln);
+
+    /// @brief Emite una operacion binaria en el bloque actual.
+    ir::IrValueId vec_bin(ir::IrOp op, ir::IrType ty, ir::IrValueId a,
+                          ir::IrValueId b, uint32_t ln);
+
     void pack_variadic_args(std::vector<ir::IrValueId> &arg_ids, size_t fixed,
                             ir::IrType elem_ty, uint32_t line);
 

@@ -23,10 +23,38 @@ function config(): vscode.WorkspaceConfiguration {
  */
 export function inspectTarget(): InspectTarget {
     const cfg = config();
+    // El nivel se guarda como texto para poder decir "el de por defecto" sin
+    // inventarse un numero que signifique eso.
+    const nivel = cfg.get<string>('inspect.opt', '');
     return {
         os: cfg.get<string>('inspect.os', ''),
         arch: cfg.get<string>('inspect.arch', ''),
+        opt: nivel === '' ? undefined : Number(nivel),
+        floatIsa: cfg.get<string>('inspect.floatIsa', ''),
+        cpu: cfg.get<string>('inspect.cpu', ''),
     };
+}
+
+/**
+ * @brief Anade a una peticion con que se compila lo que se mira.
+ * @param params Parametros de la peticion, que se modifican.
+ * @param target Objetivo elegido.
+ */
+export function applyTarget(
+    params: Record<string, unknown>,
+    target: InspectTarget,
+): void {
+    params.os = target.os ?? '';
+    params.arch = target.arch ?? '';
+    if (target.opt !== undefined && !Number.isNaN(target.opt)) {
+        params.opt = target.opt;
+    }
+    if (target.floatIsa) {
+        params.floatIsa = target.floatIsa;
+    }
+    if (target.cpu) {
+        params.cpu = target.cpu;
+    }
 }
 
 /** @brief Nivel de runtime que asumen las vistas de compilacion anticipada. */

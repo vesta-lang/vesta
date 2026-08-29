@@ -52,6 +52,7 @@
 #include "analyze/bigo.h"
 #include "lsp/symbol_index.h"          // uri_to_fs_path
 #include "jit/vreg_select.h"           // vreg_ultimo_motivo
+#include "vx/asm/instr_db.h"           // microarquitecturas y CPU conocidas
 #include "toolchain/native_backend.h"  // el mismo codegen que usa el AOT real
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
@@ -190,6 +191,163 @@ const ir::IrFunction *pick_function(const ir::IrModule &mod,
  * @param base      Direccion base mostrada (offset relativo si 0).
  * @return Texto del desensamblado (multilinea).
  */
+/**
+ * @brief Arquitectura que el usuario pide ver.
+ *
+ * Las vistas de codigo maquina no son de x86: el compilador genera para varias
+ * arquitecturas y ensenar solo una obligaria a compilar por fuera para mirar
+ * las demas, que es justo lo que estas vistas evitan.
+ *
+ * @param arch Nombre pedido; vacio = la de por defecto.
+ * @return La arquitectura del generador.
+ */
+/**
+ * @brief Traduce el nombre del juego de instrucciones de coma flotante.
+ * @param nombre "sse2"|"avx"|"avx512"|"x87"|"auto"; vacio o desconocido = el de
+ *               por defecto.
+ * @return El valor que entiende el generador.
+ */
+jit::FloatIsa float_isa_from_str(const std::string &nombre) {
+    if (nombre == "x87") return jit::FloatIsa::X87;
+    if (nombre == "avx") return jit::FloatIsa::AVX;
+    if (nombre == "avx512") return jit::FloatIsa::AVX512F;
+    if (nombre == "auto") return jit::FloatIsa::AUTO;
+    return jit::FloatIsa::SSE2;
+}
+
+aot::AotArch arch_from_name(const std::string &arch) {
+    if (arch == "x86-32" || arch == "x86_32" || arch == "i386")
+        return aot::AotArch::X86_32;
+    if (arch == "aarch64" || arch == "arm64") return aot::AotArch::ARM64;
+    if (arch == "arm32" || arch == "armv7") return aot::AotArch::ARM32;
+    if (arch == "riscv64") return aot::AotArch::RISCV64;
+    return aot::AotArch::X86_64;
+}
+
+/**
+ * @brief Traduce la arquitectura a lo que entiende el desensamblador.
+ * @param arch     Arquitectura.
+ * @param out_arch Salida: familia para Capstone.
+ * @param out_mode Salida: modo para Capstone.
+ * @return false si no hay desensamblador para ella.
+ */
+bool capstone_for(aot::AotArch arch, cs_arch &out_arch, cs_mode &out_mode) {
+    switch (arch) {
+    case aot::AotArch::X86_64:
+        out_arch = CS_ARCH_X86;
+        out_mode = CS_MODE_64;
+        return true;
+    case aot::AotArch::X86_32:
+        out_arch = CS_ARCH_X86;
+        out_mode = CS_MODE_32;
+        return true;
+    case aot::AotArch::X86_16:
+        out_arch = CS_ARCH_X86;
+        out_mode = CS_MODE_16;
+        return true;
+    case aot::AotArch::ARM64:
+        out_arch = CS_ARCH_ARM64;
+        out_mode = CS_MODE_ARM;
+        return true;
+    case aot::AotArch::ARM32:
+        out_arch = CS_ARCH_ARM;
+        out_mode = CS_MODE_ARM;
+        return true;
+    default: return false;
+    }
+}
+
+/**
+ * @brief Desensambla codigo de cualquiera de las arquitecturas que se generan.
+ * @param code      Bytes.
+ * @param code_size Cuantos.
+ * @param base      Direccion base con la que numerar.
+ * @param arch      Arquitectura de esos bytes.
+ * @return El desensamblado, una instruccion por linea.
+ */
+std::string disasm_native(const uint8_t *code, size_t code_size, uint64_t base,
+                          aot::AotArch arch) {
+    if (!code || code_size == 0) return "(codigo vacio)";
+    cs_arch cs_a = CS_ARCH_X86;
+    cs_mode cs_m = CS_MODE_64;
+    if (!capstone_for(arch, cs_a, cs_m))
+        return "(no hay desensamblador para esta arquitectura)";
+    csh handle;
+    if (cs_open(cs_a, cs_m, &handle) != CS_ERR_OK)
+        return "(Capstone: no se pudo abrir el desensamblador)";
+    cs_option(handle, CS_OPT_DETAIL, CS_OPT_OFF);
+    cs_insn *insn = nullptr;
+    const size_t count = cs_disasm(handle, code, code_size, base, 0, &insn);
+    std::ostringstream oss;
+    if (count > 0) {
+        for (size_t i = 0; i < count; ++i) {
+            const uint64_t off = insn[i].address - base;
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "%04llx",
+                          static_cast<unsigned long long>(off));
+            oss << buf << "  " << insn[i].mnemonic;
+            if (insn[i].op_str[0] != '\0') oss << ' ' << insn[i].op_str;
+            oss << '\n';
+        }
+        cs_free(insn, count);
+    } else {
+        oss << "(Capstone no pudo desensamblar los bytes generados)\n";
+    }
+    cs_close(&handle);
+    return oss.str();
+}
+
+/**
+ * @brief Desensambla correlando cada instruccion con su linea, sin anotar.
+ *
+ * La version de x86 ademas rastrea los registros para decir que valor lleva
+ * cada uno; eso es propio de esa arquitectura.  Esta sirve para el resto: da
+ * el desplazamiento, el texto y la linea, que es lo que la vista necesita para
+ * cruzar fuente y codigo.
+ *
+ * @param code      Bytes.
+ * @param code_size Cuantos.
+ * @param line_map  Correlacion desplazamiento -> linea que dejo el generador.
+ * @param arch      Arquitectura de esos bytes.
+ * @return Un array de @c {addr, text, line}.
+ */
+nlohmann::json disasm_correlated_generic(const uint8_t *code, size_t code_size,
+                                         const std::vector<jit::LineMapEntry>
+                                             &line_map,
+                                         aot::AotArch arch) {
+    nlohmann::json arr = nlohmann::json::array();
+    cs_arch cs_a = CS_ARCH_X86;
+    cs_mode cs_m = CS_MODE_64;
+    if (!code || code_size == 0 || !capstone_for(arch, cs_a, cs_m)) return arr;
+    csh handle;
+    if (cs_open(cs_a, cs_m, &handle) != CS_ERR_OK) return arr;
+    cs_insn *insn = nullptr;
+    const size_t count = cs_disasm(handle, code, code_size, 0, 0, &insn);
+    for (size_t i = 0; i < count; ++i) {
+        const uint64_t off = insn[i].address;
+        // La entrada vigente es la ultima que empieza en este desplazamiento o
+        // antes; el mapa viene en orden de emision.
+        uint32_t linea = 0;
+        for (const auto &e : line_map) {
+            if (e.byte_offset > off) break;
+            linea = e.source_line;
+        }
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%04llx",
+                      static_cast<unsigned long long>(off));
+        std::string texto = insn[i].mnemonic;
+        if (insn[i].op_str[0] != '\0') texto += std::string(" ") + insn[i].op_str;
+        nlohmann::json ji;
+        ji["addr"] = buf;
+        ji["text"] = std::move(texto);
+        ji["line"] = linea;
+        arr.push_back(std::move(ji));
+    }
+    if (count > 0) cs_free(insn, count);
+    cs_close(&handle);
+    return arr;
+}
+
 std::string disasm_x86_64(const uint8_t *code, size_t code_size, uint64_t base,
                           bool mode32 = false) {
     if (!code || code_size == 0) return "(codigo vacio)";
@@ -2165,11 +2323,13 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     std::vector<jit::LineMapEntry> line_map;
     std::vector<std::pair<uint32_t, std::string>> asm_labels;
     std::vector<uint8_t> bytes;
-    std::unique_ptr<aot::NativeBackend> backend = aot::make_native_backend(
-        mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64);
+    // La arquitectura que se pidio ver, no la del anfitrion: el compilador
+    // genera para varias y esta vista existe para poder mirarlas.
+    const aot::AotArch arco = arch_from_name(target.arch);
+    std::unique_ptr<aot::NativeBackend> backend = aot::make_native_backend(arco);
     if (!backend)
-        return {{"error", "no hay generador de codigo nativo para el objetivo "
-                          "pedido"}};
+        return {{"error", "no hay generador de codigo nativo para esa "
+                          "arquitectura"}};
     aot::NativeCompileOpts nopts;
     nopts.pic = true;
     nopts.target_sysv = sysv;
@@ -2201,23 +2361,33 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
                                                : ": " + motivo)}};
     }
 
-    std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0, mode32);
+    std::string text = disasm_native(bytes.data(), bytes.size(), 0, arco);
+    // Los registros por los que llegan los argumentos son propios de cada
+    // convencion: SysV y Win64 en x86-64, y AAPCS64 en aarch64.
+    const bool es_arm64 = (arco == aot::AotArch::ARM64);
     nlohmann::json args = function_args(
         *fn,
-        sysv ? std::vector<const char *>{"rdi", "rsi", "rdx", "rcx", "r8", "r9"}
-             : std::vector<const char *>{"rcx", "rdx", "r8", "r9"});
+        es_arm64
+            ? std::vector<const char *>{"x0", "x1", "x2", "x3", "x4", "x5",
+                                        "x6", "x7"}
+            : (sysv ? std::vector<const char *>{"rdi", "rsi", "rdx", "rcx",
+                                                "r8", "r9"}
+                    : std::vector<const char *>{"rcx", "rdx", "r8", "r9"}));
     std::vector<std::pair<std::string, std::string>> seed;
     for (const auto &a : args)
         seed.emplace_back(a["reg"].get<std::string>(),
                           a["name"].get<std::string>());
     nlohmann::json frame = nlohmann::json::array();
-    // Vista correlada (solo-LSP): asm por-instruccion + fuente de la funcion.
-    // La vista correlada usa disasm x86-64; para x86-32 el listado plano `text`
-    // ya refleja el arch, y la correlacion se omite en 32-bit (line_map sigue).
+    // Vista correlada: instruccion a instruccion, con su linea del fuente.
+    // Solo x86-64 lleva ademas el rastreo de registros y el marco de pila --
+    // eso es propio de esa arquitectura --; el resto sale correlado igual, que
+    // es lo que la vista necesita para cruzar fuente y codigo.
     nlohmann::json instrs =
-        mode32 ? nlohmann::json::array()
-               : disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map,
-                                          relocs, seed, &frame);
+        (arco == aot::AotArch::X86_64)
+            ? disasm_x86_64_correlated(bytes.data(), bytes.size(), line_map,
+                                       relocs, seed, &frame)
+            : disasm_correlated_generic(bytes.data(), bytes.size(), line_map,
+                                        arco);
     nlohmann::json src = function_source_lines(docs_.text(uri), *fn);
 
     nlohmann::json jrelocs = nlohmann::json::array();
@@ -2409,6 +2579,60 @@ std::string etiqueta_del_hecho(const analysis::asa::Proposicion &p) {
 
 } // namespace
 
+nlohmann::json Inspector::targets() {
+    // Cada arquitectura con su nombre para el usuario, su clave para las
+    // peticiones y la ISA con la que buscarla en la base de instrucciones.
+    struct Entrada {
+        const char *id;   ///< lo que se manda en `arch`.
+        const char *name; ///< como se lee.
+        vx::instr_db::Isa isa;
+        aot::AotArch arch;
+    };
+    static const Entrada kArquitecturas[] = {
+        {"x86-64", "x86-64", vx::instr_db::Isa::X86, aot::AotArch::X86_64},
+        {"x86-32", "x86-32 (modo protegido)", vx::instr_db::Isa::X86,
+         aot::AotArch::X86_32},
+        {"aarch64", "AArch64", vx::instr_db::Isa::ARM64, aot::AotArch::ARM64},
+        {"arm32", "ARM de 32 bits", vx::instr_db::Isa::ARM32,
+         aot::AotArch::ARM32},
+        {"riscv64", "RISC-V 64", vx::instr_db::Isa::RISCV, aot::AotArch::RISCV64},
+    };
+
+    nlohmann::json arquitecturas = nlohmann::json::array();
+    for (const Entrada &e : kArquitecturas) {
+        nlohmann::json ja;
+        ja["id"] = e.id;
+        ja["name"] = e.name;
+        // Si hay generador de codigo o solo se puede mirar la base: decirlo
+        // evita ofrecer una vista que despues no puede responder.
+        ja["codegen"] = (aot::make_native_backend(e.arch) != nullptr);
+
+        nlohmann::json micros = nlohmann::json::array();
+        const uint32_t nm = vx::instr_db::microarch_count(e.isa);
+        for (uint32_t i = 0; i < nm; ++i) {
+            const char *nombre = vx::instr_db::microarch_name(e.isa, i);
+            if (nombre != nullptr && *nombre != '\0') micros.push_back(nombre);
+        }
+        ja["microarchs"] = std::move(micros);
+
+        nlohmann::json cpus = nlohmann::json::array();
+        const uint32_t nc = vx::instr_db::cpu_count(e.isa);
+        for (uint32_t i = 0; i < nc; ++i) {
+            const char *nombre = vx::instr_db::cpu_name(e.isa, i);
+            if (nombre != nullptr && *nombre != '\0') cpus.push_back(nombre);
+        }
+        ja["cpus"] = std::move(cpus);
+        arquitecturas.push_back(std::move(ja));
+    }
+
+    nlohmann::json out;
+    out["architectures"] = std::move(arquitecturas);
+    out["floatIsas"] =
+        nlohmann::json::array({"sse2", "avx", "avx512", "x87", "auto"});
+    out["optLevels"] = nlohmann::json::array({0, 1, 2, 3});
+    return out;
+}
+
 nlohmann::json Inspector::asa_facts(const std::string &uri) {
     if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
     const std::string &text = docs_.text(uri);
@@ -2472,7 +2696,8 @@ nlohmann::json Inspector::asa_facts(const std::string &uri) {
 
 const Inspector::AotBuild &Inspector::aot_build(const std::string &uri,
                                                 const std::string &text,
-                                                const std::string &target_key) {
+                                                const std::string &target_key,
+                                                int opt_level) {
     const std::string key =
         uri + "|" + std::to_string(fnv1a_hash(text)) + "|aot" + target_key;
     auto it = aot_cache_.find(key);
@@ -2484,6 +2709,10 @@ const Inspector::AotBuild &Inspector::aot_build(const std::string &uri,
     // constructo, y por tanto la unica sobre la que tiene sentido preguntar si
     // el modo nativo puede con el.
     co.native_poo = true;
+    // El nivel de optimizacion pedido, si se pidio alguno.  Ver el MISMO
+    // codigo a dos niveles es como se ve que hizo el optimizador, que es media
+    // pregunta de por que algo va como va.
+    if (opt_level >= 0) co.opt_level = opt_level;
 
     // SIEMPRE como proyecto.  Compilar el fichero suelto solo funciona si no
     // importa nada, y decidirlo mirando el fuente es un criterio mas que puede

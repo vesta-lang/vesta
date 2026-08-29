@@ -326,6 +326,23 @@ class Inspector {
      */
     nlohmann::json asa_facts(const std::string &uri);
 
+    /**
+     * @brief @c vesta/targets: para que se puede compilar y mirar.
+     *
+     * Las arquitecturas que el generador cubre y, por cada una, las
+     * microarquitecturas y las CPU que el compilador tiene cronometradas en su
+     * base de datos de instrucciones.
+     *
+     * Sale de esa base y no de una lista escrita aparte a proposito: la lista
+     * escrita aparte envejece en cuanto alguien anade una microarquitectura, y
+     * el sintoma es que el editor ofrece menos de lo que el compilador sabe
+     * hacer, sin que nada avise.  No depende del documento.
+     *
+     * @return @c { "architectures": [ { id, name, codegen, microarchs: [...],
+     *         cpus: [...] } ], "floatIsas": [...], "optLevels": [...] }.
+     */
+    nlohmann::json targets();
+
   private:
     /// Estado opaco del subsistema JIT propio (CodeCache + RuntimeEntries +
     /// JitCompiler).  Inicializado perezosamente en la primera @c jit_asm.
@@ -382,11 +399,15 @@ class Inspector {
      *                   forma parte de la identidad de la compilacion.  Quien
      *                   pase una clave no vacia debe tener el objetivo puesto
      *                   durante la llamada.
-     * @return La compilacion; reutilizada si ya se hizo para este mismo texto
-     *         y el mismo objetivo.
+     * @param opt_level  Nivel de optimizacion pedido (0..3); -1 = el de por
+     *                   defecto.  Va tambien en @p target_key, porque compilar
+     *                   lo mismo a otro nivel es otra compilacion.
+     * @return La compilacion; reutilizada si ya se hizo para este mismo texto,
+     *         el mismo objetivo y el mismo nivel.
      */
     const AotBuild &aot_build(const std::string &uri, const std::string &text,
-                              const std::string &target_key = std::string());
+                              const std::string &target_key = std::string(),
+                              int opt_level = -1);
 };
 
 } // namespace lsp

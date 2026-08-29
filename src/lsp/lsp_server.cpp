@@ -1938,6 +1938,14 @@ bool LspServer::handle_vesta_request(const std::string &method,
             return true;
         }
         const nlohmann::json &params = msg.at("params");
+
+        // El catalogo de objetivos habla del compilador, no de un documento:
+        // se atiende antes de exigir uno.
+        if (method == "vesta/targets") {
+            send_result(id, inspector_.targets());
+            return true;
+        }
+
         const std::string uri = params.value("uri", std::string());
         if (uri.empty()) {
             respond_error("falta params.uri");
@@ -1951,6 +1959,13 @@ bool LspServer::handle_vesta_request(const std::string &method,
         lsp::InspectTarget itarget;
         itarget.os = params.value("os", std::string());
         itarget.arch = params.value("arch", std::string());
+        // Con que se compila y para que maquina concreta: el nivel de
+        // optimizacion, el juego de instrucciones de coma flotante y la
+        // microarquitectura cambian lo que sale, asi que son parte de la
+        // pregunta.  Sin ellos se responde siempre por el mismo binario.
+        itarget.opt = params.value("opt", -1);
+        itarget.float_isa = params.value("floatIsa", std::string());
+        itarget.cpu = params.value("cpu", std::string());
 
         nlohmann::json result;
         if (method == "vesta/bytecode") {
