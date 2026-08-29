@@ -2308,6 +2308,35 @@ class Lowering {
     void scan_address_taken(ast::Stmt *s);
 
     /**
+     * @brief Marca como address-taken todo lo que se asigne en @p n.
+     *
+     * @param n Nodo (el cuerpo de un bucle) por el que mirar.
+     */
+    void mark_loop_assigned_vars(const ast::Node *n);
+
+    /**
+     * @brief Busca en una expresion de quien se toma la direccion.
+     *
+     * @param e     Expresion por la que empezar.
+     * @param depth Cuantas ramas condicionales hay por encima.
+     */
+    void scan_address_taken_expr(ast::Expr *e, int &depth);
+
+    /**
+     * @brief Igual, sobre una sentencia.
+     *
+     * Lleva la cuenta de ramas condicionales porque de ella depende una
+     * decision: una variable que un bucle arrastra solo se promueve cuando el
+     * bucle esta DENTRO de una rama -- ahi su hueco no domina la rama hermana
+     * y el merge saldria mal --.  A nivel de funcion no hace falta, y hacerlo
+     * ademas estropearia la vectorizacion, que espera el contador como valor.
+     *
+     * @param st    Sentencia por la que empezar.
+     * @param depth Cuantas ramas condicionales hay por encima.
+     */
+    void scan_address_taken_stmt(ast::Stmt *st, int &depth);
+
+    /**
      * @brief Detecta si el body de un `spawn { }` usa primitivas de asincronia
      *        COOPERATIVA (msgrecv/msgsend/fulfill/future_alloc/await).
      *

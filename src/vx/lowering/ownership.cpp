@@ -563,251 +563,11 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
 
 void Lowering::scan_address_taken(ast::Stmt *s) {
     if (!s) return;
-    // Recorrido recursivo de stmts y exprs.  Definimos lambdas locales
-    // para mantener las dependencias contenidas.
-    std::function<void(ast::Expr *)> visit_expr;
-    std::function<void(ast::Stmt *)> visit_stmt;
-
-    // Marca address-taken toda variable asignada en @p n (parte de un loop):
-    // fuerza su ALLOCA en la declaracion (dominante), evitando el PHI
-    // direccion-vs-valor de un loop anidado en una rama condicional.
-    auto mark_loop_assigned = [&](const ast::Node *n) {
-        if (!n) return;
-        std::set<std::string> tmp;
-        collect_assigned_vars(n, tmp);
-        for (const auto &nm : tmp)
-            address_taken_locals_.insert(nm);
-    };
-
-    // Profundidad de anidamiento en ramas CONDICIONALES (then/else de un if,
-    // cuerpos de catch).  Solo promovemos las vars loop-carried a address-taken
-    // cuando el loop esta DENTRO de una rama condicional: ahi su ALLOCA (creado
-    // en el bloque del loop) no domina la rama hermana del if -> el merge
-    // produce el PHI direccion-vs-valor (el bug).  Un loop a nivel de funcion
-    // (cond_depth==0) crea su ALLOCA en un bloque que domina el exit -> no hay
-    // rama hermana problematica; ademas promover ahi romperia al vectorizador
-    // (que espera el contador/acumulador como PHI SSA).
+    /* Cuenta de ramas CONDICIONALES por encima (then/else de un if, cuerpo de
+     * catch).  Va por referencia porque los dos recorridos la comparten: la
+     * sube al entrar en una rama y la baja al salir. */
     int cond_depth = 0;
-
-    visit_expr = [&](ast::Expr *e) {
-        if (!e) return;
-        switch (e->kind) {
-        case ast::NodeKind::UnaryExpr: {
-            auto *u = static_cast<ast::UnaryExpr *>(e);
-            if (u->op == ast::UnOp::AddrOf && u->operand &&
-                u->operand->kind == ast::NodeKind::IdentExpr) {
-                auto *id = static_cast<ast::IdentExpr *>(u->operand.get());
-                address_taken_locals_.insert(id->name);
-            }
-            visit_expr(u->operand.get());
-            return;
-        }
-        case ast::NodeKind::LambdaExpr: {
-            // Captures mutables: las variables modificadas dentro
-            // del cuerpo de la lambda deben ser address-taken en
-            // el outer scope para que el modelo de captura-por-
-            // referencia funcione.  El env block guarda el PUNTERO
-            // al slot del owner; el helper de la lambda hace
-            // LOAD/STORE indirectos sobre ese puntero, de modo
-            // que las mutaciones se ven desde fuera del lambda.
-            auto *lam = static_cast<ast::LambdaExpr *>(e);
-            for (const auto &nm : lam->mutable_captures) {
-                address_taken_locals_.insert(nm);
-            }
-            if (lam->body) visit_stmt(lam->body.get());
-            return;
-        }
-        case ast::NodeKind::BinaryExpr: {
-            auto *b = static_cast<ast::BinaryExpr *>(e);
-            visit_expr(b->lhs.get());
-            visit_expr(b->rhs.get());
-            return;
-        }
-        case ast::NodeKind::AssignExpr: {
-            auto *a = static_cast<ast::AssignExpr *>(e);
-            visit_expr(a->target.get());
-            visit_expr(a->value.get());
-            return;
-        }
-        case ast::NodeKind::CallExpr: {
-            auto *c = static_cast<ast::CallExpr *>(e);
-            // Borrow checker: lend(x) / lend_mut(x) sobre una
-            // variable local plain requiere tomar su direccion
-            // (un borrow ES, en runtime, un host_ptr al slot
-            // donde vive el local; cero overhead vs un T*).
-            // Forzamos address-taken promotion para que el lowering
-            // deje el local en stack via ALLOCA + LOAD/STORE en
-            // lugar de en registro SSA puro.  Sin esto, lend(local)
-            // devuelve un valor (no una direccion) y read_borrow/
-            // write_borrow dereferencian basura.  EXCEPCION: si la
-            // var ya es de tipo borrow<T>/borrow_mut<T> (es un
-            // borrow_var, no un local plain), NO la promocionamos
-            // (su SSA value ya es host_ptr; el lend lo bypassa).
-            if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr &&
-                c->args.size() == 1 &&
-                c->args[0]->kind == ast::NodeKind::IdentExpr) {
-                auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
-                if (cid->name == "lend" || cid->name == "lend_mut") {
-                    auto *aid = static_cast<ast::IdentExpr *>(c->args[0].get());
-                    const Type at = aid->result_type;
-                    if (at.kind != PrimitiveKind::BORROW &&
-                        at.kind != PrimitiveKind::BORROW_MUT &&
-                        at.kind != PrimitiveKind::UNIQUE_PTR &&
-                        at.kind != PrimitiveKind::SHARED_PTR) {
-                        address_taken_locals_.insert(aid->name);
-                    }
-                }
-            }
-            visit_expr(c->callee.get());
-            for (auto &arg : c->args)
-                visit_expr(arg.get());
-            return;
-        }
-        case ast::NodeKind::FieldAccessExpr: {
-            auto *fa = static_cast<ast::FieldAccessExpr *>(e);
-            visit_expr(fa->base.get());
-            return;
-        }
-        case ast::NodeKind::IndexExpr: {
-            auto *ix = static_cast<ast::IndexExpr *>(e);
-            visit_expr(ix->base.get());
-            visit_expr(ix->index.get());
-            return;
-        }
-        case ast::NodeKind::CastExpr: {
-            // `(T)(&x)`: el cast ENVUELVE el `&x`.  Sin recursar en el
-            // operando, el `&x` interno no se veia y `x` no se promocionaba a
-            // address-taken
-            // -> error "& sobre variable no promocionada".  Bug de deteccion.
-            auto *ce = static_cast<ast::CastExpr *>(e);
-            visit_expr(ce->operand.get());
-            return;
-        }
-        case ast::NodeKind::TernaryExpr: {
-            // `cond ? &a : &b` -- recursar en las 3 ramas por el mismo motivo.
-            auto *te = static_cast<ast::TernaryExpr *>(e);
-            visit_expr(te->cond.get());
-            visit_expr(te->then_expr.get());
-            visit_expr(te->else_expr.get());
-            return;
-        }
-        default: return; // literales, IdentExpr puro, etc. no aportan
-        }
-    };
-
-    visit_stmt = [&](ast::Stmt *st) {
-        if (!st) return;
-        switch (st->kind) {
-        case ast::NodeKind::BlockStmt: {
-            auto *b = static_cast<ast::BlockStmt *>(st);
-            for (auto &child : b->body)
-                visit_stmt(child.get());
-            return;
-        }
-        case ast::NodeKind::VarDeclStmt: {
-            auto *vd = static_cast<ast::VarDeclStmt *>(st);
-            if (vd->init) visit_expr(vd->init.get());
-            return;
-        }
-        case ast::NodeKind::ExprStmt: {
-            auto *es = static_cast<ast::ExprStmt *>(st);
-            visit_expr(es->expr.get());
-            return;
-        }
-        case ast::NodeKind::IfStmt: {
-            auto *si = static_cast<ast::IfStmt *>(st);
-            visit_expr(si->cond.get());
-            // then/else son ramas condicionales: un loop dentro de ellas es el
-            // caso del bug (su ALLOCA no domina la rama hermana).
-            ++cond_depth;
-            visit_stmt(si->then_branch.get());
-            visit_stmt(si->else_branch.get());
-            --cond_depth;
-            return;
-        }
-        case ast::NodeKind::WhileStmt: {
-            auto *w = static_cast<ast::WhileStmt *>(st);
-            // Toda variable ASIGNADA dentro de un loop es loop-carried: el
-            // lowering le crea un ALLOCA para persistir su valor entre
-            // iteraciones (linea ~6377).  Si el loop esta dentro de una rama
-            // condicional, ese ALLOCA (creado en el bloque del loop) NO domina
-            // la rama HERMANA -> el merge del `if` termina con un PHI que
-            // mezcla la DIRECCION del alloca (rama del loop) con el VALOR
-            // original (rama sin loop) -> un `load` posterior deref-ea un valor
-            // como si fuera puntero (SIGSEGV / basura).  Marcarla address-taken
-            // AQUI (pre-pase) fuerza el ALLOCA en su DECLARACION (que domina
-            // todo) y todas las ramas la ven como memoria -> representacion
-            // consistente. Cero coste: el optimizer re-promueve a SSA los
-            // allocas que no escapan (mem2reg / promote_local_allocas).
-            if (cond_depth > 0) {
-                mark_loop_assigned(w->cond.get());
-                mark_loop_assigned(w->body.get());
-            }
-            visit_expr(w->cond.get());
-            visit_stmt(w->body.get());
-            return;
-        }
-        case ast::NodeKind::DoWhileStmt: {
-            auto *dw = static_cast<ast::DoWhileStmt *>(st);
-            if (cond_depth > 0) {
-                mark_loop_assigned(dw->body.get());
-                mark_loop_assigned(dw->cond.get());
-            }
-            visit_stmt(dw->body.get());
-            visit_expr(dw->cond.get());
-            return;
-        }
-        case ast::NodeKind::ForStmt: {
-            auto *f = static_cast<ast::ForStmt *>(st);
-            // Ver la nota en WhileStmt: toda variable asignada dentro del loop
-            // se marca address-taken para que su ALLOCA nazca en la declaracion
-            // (que domina todo), evitando el PHI direccion-vs-valor cuando el
-            // loop esta anidado en una rama condicional.
-            if (cond_depth > 0) {
-                mark_loop_assigned(f->cond.get());
-                mark_loop_assigned(f->step.get());
-                mark_loop_assigned(f->body.get());
-            }
-            visit_stmt(f->init.get());
-            visit_expr(f->cond.get());
-            visit_expr(f->step.get());
-            visit_stmt(f->body.get());
-            return;
-        }
-        case ast::NodeKind::TryStmt: {
-            // Sin esta rama, las variables declaradas dentro de un
-            // try/catch/finally no se promocionan a address-taken
-            // aunque aparezca `&var` en el body (error: '&x' sobre
-            // variable no promocionada).  Y el cascade de errores
-            // "nombre no resuelto" surge porque el lowering del
-            // var-decl falla al evaluar `&var` y deja el binding
-            // sin registrar.
-            auto *ts = static_cast<ast::TryStmt *>(st);
-            // try/catch introducen ramas (el catch se alcanza por un edge
-            // de excepcion): un loop dentro puede sufrir el mismo PHI mixto.
-            ++cond_depth;
-            visit_stmt(ts->body.get());
-            for (auto &cc : ts->catches)
-                visit_stmt(cc.body.get());
-            if (ts->finally_body) visit_stmt(ts->finally_body.get());
-            --cond_depth;
-            return;
-        }
-        case ast::NodeKind::ReturnStmt: {
-            auto *r = static_cast<ast::ReturnStmt *>(st);
-            visit_expr(r->value.get());
-            return;
-        }
-        case ast::NodeKind::SynchronizedStmt: {
-            auto *sy = static_cast<ast::SynchronizedStmt *>(st);
-            visit_expr(sy->target.get());
-            visit_stmt(sy->body.get());
-            return;
-        }
-        default: return;
-        }
-    };
-    visit_stmt(s);
+    scan_address_taken_stmt(s, cond_depth);
 }
 
 void Lowering::scan_escaping_locals(ast::Stmt *body) {
@@ -1351,5 +1111,241 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
     block_terminated_ = false;
 }
 
+
+/**
+ * @copydoc vx::Lowering::mark_loop_assigned_vars
+ */
+void Lowering::mark_loop_assigned_vars(const ast::Node *n) {
+    if (!n) return;
+    std::set<std::string> tmp;
+    collect_assigned_vars(n, tmp);
+    for (const auto &nm : tmp)
+        address_taken_locals_.insert(nm);
+}
+
+/**
+ * @copydoc vx::Lowering::scan_address_taken_expr
+ */
+void Lowering::scan_address_taken_expr(ast::Expr *e, int &depth) {
+    if (!e) return;
+    switch (e->kind) {
+    case ast::NodeKind::UnaryExpr: {
+        auto *u = static_cast<ast::UnaryExpr *>(e);
+        if (u->op == ast::UnOp::AddrOf && u->operand &&
+            u->operand->kind == ast::NodeKind::IdentExpr) {
+            auto *id = static_cast<ast::IdentExpr *>(u->operand.get());
+            address_taken_locals_.insert(id->name);
+        }
+        scan_address_taken_expr(u->operand.get(), depth);
+        return;
+    }
+    case ast::NodeKind::LambdaExpr: {
+        // Captures mutables: las variables modificadas dentro
+        // del cuerpo de la lambda deben ser address-taken en
+        // el outer scope para que el modelo de captura-por-
+        // referencia funcione.  El env block guarda el PUNTERO
+        // al slot del owner; el helper de la lambda hace
+        // LOAD/STORE indirectos sobre ese puntero, de modo
+        // que las mutaciones se ven desde fuera del lambda.
+        auto *lam = static_cast<ast::LambdaExpr *>(e);
+        for (const auto &nm : lam->mutable_captures) {
+            address_taken_locals_.insert(nm);
+        }
+        if (lam->body) scan_address_taken_stmt(lam->body.get(), depth);
+        return;
+    }
+    case ast::NodeKind::BinaryExpr: {
+        auto *b = static_cast<ast::BinaryExpr *>(e);
+        scan_address_taken_expr(b->lhs.get(), depth);
+        scan_address_taken_expr(b->rhs.get(), depth);
+        return;
+    }
+    case ast::NodeKind::AssignExpr: {
+        auto *a = static_cast<ast::AssignExpr *>(e);
+        scan_address_taken_expr(a->target.get(), depth);
+        scan_address_taken_expr(a->value.get(), depth);
+        return;
+    }
+    case ast::NodeKind::CallExpr: {
+        auto *c = static_cast<ast::CallExpr *>(e);
+        // Borrow checker: lend(x) / lend_mut(x) sobre una
+        // variable local plain requiere tomar su direccion
+        // (un borrow ES, en runtime, un host_ptr al slot
+        // donde vive el local; cero overhead vs un T*).
+        // Forzamos address-taken promotion para que el lowering
+        // deje el local en stack via ALLOCA + LOAD/STORE en
+        // lugar de en registro SSA puro.  Sin esto, lend(local)
+        // devuelve un valor (no una direccion) y read_borrow/
+        // write_borrow dereferencian basura.  EXCEPCION: si la
+        // var ya es de tipo borrow<T>/borrow_mut<T> (es un
+        // borrow_var, no un local plain), NO la promocionamos
+        // (su SSA value ya es host_ptr; el lend lo bypassa).
+        if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr &&
+            c->args.size() == 1 &&
+            c->args[0]->kind == ast::NodeKind::IdentExpr) {
+            auto *cid = static_cast<ast::IdentExpr *>(c->callee.get());
+            if (cid->name == "lend" || cid->name == "lend_mut") {
+                auto *aid = static_cast<ast::IdentExpr *>(c->args[0].get());
+                const Type at = aid->result_type;
+                if (at.kind != PrimitiveKind::BORROW &&
+                    at.kind != PrimitiveKind::BORROW_MUT &&
+                    at.kind != PrimitiveKind::UNIQUE_PTR &&
+                    at.kind != PrimitiveKind::SHARED_PTR) {
+                    address_taken_locals_.insert(aid->name);
+                }
+            }
+        }
+        scan_address_taken_expr(c->callee.get(), depth);
+        for (auto &arg : c->args)
+            scan_address_taken_expr(arg.get(), depth);
+        return;
+    }
+    case ast::NodeKind::FieldAccessExpr: {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e);
+        scan_address_taken_expr(fa->base.get(), depth);
+        return;
+    }
+    case ast::NodeKind::IndexExpr: {
+        auto *ix = static_cast<ast::IndexExpr *>(e);
+        scan_address_taken_expr(ix->base.get(), depth);
+        scan_address_taken_expr(ix->index.get(), depth);
+        return;
+    }
+    case ast::NodeKind::CastExpr: {
+        // `(T)(&x)`: el cast ENVUELVE el `&x`.  Sin recursar en el
+        // operando, el `&x` interno no se veia y `x` no se promocionaba a
+        // address-taken
+        // -> error "& sobre variable no promocionada".  Bug de deteccion.
+        auto *ce = static_cast<ast::CastExpr *>(e);
+        scan_address_taken_expr(ce->operand.get(), depth);
+        return;
+    }
+    case ast::NodeKind::TernaryExpr: {
+        // `cond ? &a : &b` -- recursar en las 3 ramas por el mismo motivo.
+        auto *te = static_cast<ast::TernaryExpr *>(e);
+        scan_address_taken_expr(te->cond.get(), depth);
+        scan_address_taken_expr(te->then_expr.get(), depth);
+        scan_address_taken_expr(te->else_expr.get(), depth);
+        return;
+    }
+    default: return; // literales, IdentExpr puro, etc. no aportan
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::scan_address_taken_stmt
+ */
+void Lowering::scan_address_taken_stmt(ast::Stmt *st, int &depth) {
+    if (!st) return;
+    switch (st->kind) {
+    case ast::NodeKind::BlockStmt: {
+        auto *b = static_cast<ast::BlockStmt *>(st);
+        for (auto &child : b->body)
+            scan_address_taken_stmt(child.get(), depth);
+        return;
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        auto *vd = static_cast<ast::VarDeclStmt *>(st);
+        if (vd->init) scan_address_taken_expr(vd->init.get(), depth);
+        return;
+    }
+    case ast::NodeKind::ExprStmt: {
+        auto *es = static_cast<ast::ExprStmt *>(st);
+        scan_address_taken_expr(es->expr.get(), depth);
+        return;
+    }
+    case ast::NodeKind::IfStmt: {
+        auto *si = static_cast<ast::IfStmt *>(st);
+        scan_address_taken_expr(si->cond.get(), depth);
+        // then/else son ramas condicionales: un loop dentro de ellas es el
+        // caso del bug (su ALLOCA no domina la rama hermana).
+        ++depth;
+        scan_address_taken_stmt(si->then_branch.get(), depth);
+        scan_address_taken_stmt(si->else_branch.get(), depth);
+        --depth;
+        return;
+    }
+    case ast::NodeKind::WhileStmt: {
+        auto *w = static_cast<ast::WhileStmt *>(st);
+        // Toda variable ASIGNADA dentro de un loop es loop-carried: el
+        // lowering le crea un ALLOCA para persistir su valor entre
+        // iteraciones (linea ~6377).  Si el loop esta dentro de una rama
+        // condicional, ese ALLOCA (creado en el bloque del loop) NO domina
+        // la rama HERMANA -> el merge del `if` termina con un PHI que
+        // mezcla la DIRECCION del alloca (rama del loop) con el VALOR
+        // original (rama sin loop) -> un `load` posterior deref-ea un valor
+        // como si fuera puntero (SIGSEGV / basura).  Marcarla address-taken
+        // AQUI (pre-pase) fuerza el ALLOCA en su DECLARACION (que domina
+        // todo) y todas las ramas la ven como memoria -> representacion
+        // consistente. Cero coste: el optimizer re-promueve a SSA los
+        // allocas que no escapan (mem2reg / promote_local_allocas).
+        if (depth > 0) {
+            mark_loop_assigned_vars(w->cond.get());
+            mark_loop_assigned_vars(w->body.get());
+        }
+        scan_address_taken_expr(w->cond.get(), depth);
+        scan_address_taken_stmt(w->body.get(), depth);
+        return;
+    }
+    case ast::NodeKind::DoWhileStmt: {
+        auto *dw = static_cast<ast::DoWhileStmt *>(st);
+        if (depth > 0) {
+            mark_loop_assigned_vars(dw->body.get());
+            mark_loop_assigned_vars(dw->cond.get());
+        }
+        scan_address_taken_stmt(dw->body.get(), depth);
+        scan_address_taken_expr(dw->cond.get(), depth);
+        return;
+    }
+    case ast::NodeKind::ForStmt: {
+        auto *f = static_cast<ast::ForStmt *>(st);
+        // Ver la nota en WhileStmt: toda variable asignada dentro del loop
+        // se marca address-taken para que su ALLOCA nazca en la declaracion
+        // (que domina todo), evitando el PHI direccion-vs-valor cuando el
+        // loop esta anidado en una rama condicional.
+        if (depth > 0) {
+            mark_loop_assigned_vars(f->cond.get());
+            mark_loop_assigned_vars(f->step.get());
+            mark_loop_assigned_vars(f->body.get());
+        }
+        scan_address_taken_stmt(f->init.get(), depth);
+        scan_address_taken_expr(f->cond.get(), depth);
+        scan_address_taken_expr(f->step.get(), depth);
+        scan_address_taken_stmt(f->body.get(), depth);
+        return;
+    }
+    case ast::NodeKind::TryStmt: {
+        // Sin esta rama, las variables declaradas dentro de un
+        // try/catch/finally no se promocionan a address-taken
+        // aunque aparezca `&var` en el body (error: '&x' sobre
+        // variable no promocionada).  Y el cascade de errores
+        // "nombre no resuelto" surge porque el lowering del
+        // var-decl falla al evaluar `&var` y deja el binding
+        // sin registrar.
+        auto *ts = static_cast<ast::TryStmt *>(st);
+        // try/catch introducen ramas (el catch se alcanza por un edge
+        // de excepcion): un loop dentro puede sufrir el mismo PHI mixto.
+        ++depth;
+        scan_address_taken_stmt(ts->body.get(), depth);
+        for (auto &cc : ts->catches)
+            scan_address_taken_stmt(cc.body.get(), depth);
+        if (ts->finally_body) scan_address_taken_stmt(ts->finally_body.get(), depth);
+        --depth;
+        return;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        auto *r = static_cast<ast::ReturnStmt *>(st);
+        scan_address_taken_expr(r->value.get(), depth);
+        return;
+    }
+    case ast::NodeKind::SynchronizedStmt: {
+        auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+        scan_address_taken_expr(sy->target.get(), depth);
+        scan_address_taken_stmt(sy->body.get(), depth);
+        return;
+    }
+    default: return;
+    }
+}
 
 } // namespace vx
