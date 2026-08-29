@@ -467,17 +467,8 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
          * permitiria. */
         const ir::IrBlockId sa_fail = fn_->new_block("assert_fail");
         const ir::IrBlockId sa_cont = fn_->new_block("assert_ok");
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(v_dst);
-            br.target_block = sa_fail; // != 0 -> incumplida
-            br.false_block = sa_cont;  // == 0 -> sigue
-            br.source_line = e->loc.line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[current_block_].succs.push_back(sa_fail);
-        fn_->blocks[current_block_].succs.push_back(sa_cont);
+        // El helper devuelve != 0 cuando la asercion NO se cumple.
+        emit_br_cond(v_dst, sa_fail, sa_cont, e->loc.line);
         {
             /* PANIC lee el mensaje de la memoria de la VM, igual que el helper:
              * se reusan las mismas direccion y longitud. */

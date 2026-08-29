@@ -524,6 +524,13 @@ class Lowering {
      * @brief Salta a un bloque o a otro segun @p cond, contando las CUATRO
      *        aristas.
      *
+     * Las aristas no son contabilidad: son lo que el analisis de vivacidad
+     * camina para saber hasta donde vive un valor.  Sin ellas, un valor que
+     * cruza el salto parece muerto al llegar al bloque de destino, y el
+     * asignador reutiliza su registro para otra cosa -- lo que en un caso ya
+     * costo una direccion basura y un fallo de segmentacion --.  Por eso
+     * emitir el salto y apuntarlas es UNA operacion y no dos.
+     *
      * @param cond        El valor que decide.
      * @param t_true      Bloque al que ir si no es cero.
      * @param t_false     Bloque al que ir si lo es.

@@ -1238,22 +1238,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     {
         const ir::IrValueId is_null =
             emit_ir_binop(ir::IrOp::CMP_EQ, slot, zero, ir::IrType::BOOL, line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {is_null};
-        br.target_block = skip_bb; // null -> skip
-        br.false_block = slot_ok;
-        br.source_line = line;
-        // CFG explicita (succs/preds): SIN esto el analisis de vivacidad NO
-        // ve los edges del diamante del free hacia skip_bb -> las constantes
-        // vivas que cruzan el free (p.ej. el offset +8 del call posterior)
-        // se consideran muertas y el regalloc reusa su registro como scratch
-        // del env-load -> direccion basura en el call -> segfault.
-        fn_->blocks[current_block_].succs.push_back(skip_bb);
-        fn_->blocks[current_block_].succs.push_back(slot_ok);
-        fn_->blocks[skip_bb].preds.push_back(current_block_);
-        fn_->blocks[slot_ok].preds.push_back(current_block_);
-        emit(current_block_, std::move(br));
+        // Campo nunca asignado -> no hay nada que soltar.
+        emit_br_cond(is_null, skip_bb, slot_ok, line);
         current_block_ = slot_ok;
     }
     // env = LOAD [slot + 8]
@@ -1278,17 +1264,8 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         const ir::IrValueId is_null =
             emit_ir_binop(ir::IrOp::CMP_EQ, env, zero, ir::IrType::BOOL, line);
         const ir::IrBlockId free_env_bb = fn_->new_block("free_clo_env");
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {is_null};
-        br.target_block = free_slot_bb; // env null -> solo libera el slot
-        br.false_block = free_env_bb;
-        br.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(free_slot_bb);
-        fn_->blocks[current_block_].succs.push_back(free_env_bb);
-        fn_->blocks[free_slot_bb].preds.push_back(current_block_);
-        fn_->blocks[free_env_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(br));
+        // Sin entorno solo hay que soltar la ranura.
+        emit_br_cond(is_null, free_slot_bb, free_env_bb, line);
         current_block_ = free_env_bb;
     }
     {
@@ -1325,17 +1302,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
     {
         const ir::IrValueId is_null =
             emit_ir_binop(ir::IrOp::CMP_EQ, slot, zero, ir::IrType::BOOL, line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {is_null};
-        br.target_block = skip_bb;
-        br.false_block = slot_ok;
-        br.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(skip_bb);
-        fn_->blocks[current_block_].succs.push_back(slot_ok);
-        fn_->blocks[skip_bb].preds.push_back(current_block_);
-        fn_->blocks[slot_ok].preds.push_back(current_block_);
-        emit(current_block_, std::move(br));
+        emit_br_cond(is_null, skip_bb, slot_ok, line);
         current_block_ = slot_ok;
     }
     // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
@@ -1362,17 +1329,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
     {
         const ir::IrValueId has_del =
             emit_ir_binop(ir::IrOp::CMP_NE, deleter, zero, ir::IrType::BOOL, line);
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {has_del};
-        br.target_block = call_bb;
-        br.false_block = free_bb;
-        br.source_line = line;
-        fn_->blocks[current_block_].succs.push_back(call_bb);
-        fn_->blocks[current_block_].succs.push_back(free_bb);
-        fn_->blocks[call_bb].preds.push_back(current_block_);
-        fn_->blocks[free_bb].preds.push_back(current_block_);
-        emit(current_block_, std::move(br));
+        emit_br_cond(has_del, call_bb, free_bb, line);
     }
     // Bloque que SIEMPRE libera el slot heap (16B), tras liberar el inner.
     const ir::IrBlockId free_slot_bb = fn_->new_block("free_uniq_slot");
