@@ -2219,157 +2219,15 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         // eager en __module_init (1x total).
         std::vector<ir::DevirtCandidate> spec_cands;
         if (dst != ir::IR_NO_VALUE && !method_call_sret) {
-            /* Antes bastaba con que el modulo tuviera UN aspecto para no
-             * especular en NINGUN sitio.  Ahora solo se renuncia cuando hay
-             * alguno que no se pudo atribuir a un metodo concreto: los
-             * candidatos con aspectos se descartan uno a uno mas abajo, y el
-             * resto sigue especulando. */
-            if (all_advices_attributed_) {
-                constexpr size_t K_MAX = 4;
-                // (cls_name, callee_ir_name) por implementor concreto.
-                std::vector<std::pair<std::string, std::string>> impls;
-                bool too_many = false;
-                for (const auto &kv : tc_.class_layouts()) {
-                    const auto &cl = kv.second;
-                    if (cl.is_interface || cl.is_aspect) continue;
-                    bool implements = false;
-                    for (const auto &in : cl.interface_names)
-                        if (in == iface_name) {
-                            implements = true;
-                            break;
-                        }
-                    if (!implements) continue;
-                    // Localizar el metodo de la interfaz en la clase.
-                    /* No vale @ref find_method: eso da el PRIMERO con ese
-                     * nombre, y aqui los constructores no cuentan -- uno puede
-                     * llamarse igual que un metodo, y quedarse con el deja sin
-                     * encontrar al que se busca. */
-                    const std::string *owner = nullptr;
-                    for (const ClassMethodInfo &mm : cl.methods) {
-                        if (mm.name != method_name || mm.is_constructor)
-                            continue;
-                        owner = mm.defining_class.empty() ? &cl.name
-                                                          : &mm.defining_class;
-                        break;
-                    }
-                    if (!owner) continue; // no deberia pasar si implements
-                    const std::string callee = *owner + "__" + method_name;
-                    /* Este implementor lleva aspectos: su camino rapido seria
-                     * una llamada directa que se saltaria la cadena.  Se deja
-                     * FUERA de los candidatos, con lo que sus objetos caen al
-                     * despacho normal -- que si la recorre -- y los demas
-                     * implementores siguen especulando. */
-                    if (advice_chains_.count(callee) != 0) continue;
-                    impls.emplace_back(cl.name, callee);
-                    if (impls.size() > K_MAX) {
-                        too_many = true;
-                        break;
-                    }
-                }
-                if (!too_many && !impls.empty() && impls.size() <= K_MAX) {
-                    const int ln = e->loc.line;
-                    // Resolver cada ClassInfo* via findclass construido en el
-                    // vector `setup` (que se splice en block 0, el entry).
-                    auto setup_findclass =
-                        [&](const std::string &cls_name) -> ir::IrValueId {
-                        const uint64_t nidx =
-                            intern_class_name(*out_mod_, cls_name);
-                        const uint32_t nlen =
-                            static_cast<uint32_t>(cls_name.size());
-                        const ir::IrValueId vp =
-                            fn_->new_value(ir::IrType::PTR);
-                        {
-                            ir::IrInstr al{};
-                            al.op = ir::IrOp::ALLOCA;
-                            al.type = ir::IrType::I8;
-                            al.dst = vp;
-                            al.imm = 16;
-                            al.source_line = ln;
-                            setup.push_back(std::move(al));
-                        }
-                        const ir::IrValueId vna =
-                            fn_->new_value(ir::IrType::PTR);
-                        {
-                            ir::IrInstr la{};
-                            la.op = ir::IrOp::LABEL_ADDR;
-                            la.type = ir::IrType::PTR;
-                            la.dst = vna;
-                            la.func_name = "s_" + std::to_string(nidx);
-                            la.source_line = ln;
-                            setup.push_back(std::move(la));
-                        }
-                        {
-                            ir::IrInstr st{};
-                            st.op = ir::IrOp::STORE;
-                            st.type = ir::IrType::I64;
-                            st.operands = {vna, vp};
-                            st.source_line = ln;
-                            setup.push_back(std::move(st));
-                        }
-                        const ir::IrValueId vlen =
-                            setup_const(static_cast<uint64_t>(nlen));
-                        const ir::IrValueId voff = setup_const(8);
-                        const ir::IrValueId vp8 =
-                            fn_->new_value(ir::IrType::PTR);
-                        {
-                            ir::IrInstr add{};
-                            add.op = ir::IrOp::ADD;
-                            add.type = ir::IrType::I64;
-                            add.dst = vp8;
-                            add.operands = {vp, voff};
-                            add.source_line = ln;
-                            setup.push_back(std::move(add));
-                        }
-                        {
-                            ir::IrInstr st{};
-                            st.op = ir::IrOp::STORE;
-                            st.type = ir::IrType::I64;
-                            st.operands = {vlen, vp8};
-                            st.source_line = ln;
-                            setup.push_back(std::move(st));
-                        }
-                        const ir::IrValueId vc =
-                            fn_->new_value(ir::IrType::PTR);
-                        fn_->values[vc].is_host_ptr = true;
-                        {
-                            ir::IrInstr fc{};
-                            fc.op = ir::IrOp::FINDCLASS;
-                            fc.type = ir::IrType::PTR;
-                            fc.dst = vc;
-                            fc.operands = {vp};
-                            fc.is_call_site = true;
-                            fc.source_line = ln;
-                            setup.push_back(std::move(fc));
-                        }
-                        return vc;
-                    };
-                    for (const auto &pr : impls) {
-                        const ir::IrValueId v_cls = setup_findclass(pr.first);
-                        spec_cands.push_back(
-                            ir::DevirtCandidate{v_cls, pr.second});
-                    }
-                }
+            for (const auto &pr :
+                 spec_devirt_impls(iface_name, method_name, true)) {
+                spec_cands.push_back(ir::DevirtCandidate{
+                    emit_findclass_into(setup, pr.first, e->loc.line),
+                    pr.second});
             }
         }
 
-        // Splice de las instrucciones de construccion en block 0 antes de
-        // su terminador (op de control de flujo final).  Si block 0 no esta
-        // terminado (dispatch en el propio entry), se anexan al final.
-        {
-            auto &e0 = fn_->blocks[0].instrs;
-            size_t pos = e0.size();
-            if (pos > 0) {
-                const ir::IrOp last = e0.back().op;
-                if (last == ir::IrOp::BR || last == ir::IrOp::BR_COND ||
-                    last == ir::IrOp::RET || last == ir::IrOp::UNREACHABLE ||
-                    last == ir::IrOp::TAILCALL || last == ir::IrOp::RETHROW ||
-                    last == ir::IrOp::THROW) {
-                    pos = e0.size() - 1;
-                }
-            }
-            e0.insert(e0.begin() + pos, std::make_move_iterator(setup.begin()),
-                      std::make_move_iterator(setup.end()));
-        }
+        splice_into_entry_block(setup);
 
         // CALLITF: operands[0]=obj, [1]=params_ptr, [2..]=args (retbuf SRET
         // como [2] si aplica).  func_name = "iface\x1fmethod", imm packed.
@@ -2463,6 +2321,25 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         }
     }
 
+    /* Adivinar la clase del receptor, igual que ya se hacia en las llamadas
+     * por INTERFAZ.  El pase que lo aprovecha sabe reescribir tambien esto --
+     * CALLVIRT esta en su lista desde siempre --, pero nadie le daba de comer:
+     * los sitios solo se registraban en la interfaz.  Resultado: la llamada a
+     * un metodo de interfaz se resolvia con una comparacion y una llamada
+     * directa, y la de un metodo de clase -- que es el despacho corriente de
+     * todo el lenguaje -- pasaba entera por la tabla. */
+    std::vector<ir::DevirtCandidate> cv_spec;
+    if (dst != ir::IR_NO_VALUE && !method_call_sret && !native_poo_) {
+        std::vector<ir::IrInstr> cv_setup;
+        for (const auto &pr :
+             spec_devirt_impls(bt.struct_name, mtd->name, false)) {
+            cv_spec.push_back(ir::DevirtCandidate{
+                emit_findclass_into(cv_setup, pr.first, e->loc.line),
+                pr.second});
+        }
+        splice_into_entry_block(cv_setup);
+    }
+
     // Path por defecto: dispatch via vtable_idx (clase concreta).
     ir::IrInstr ins{};
     ins.op = ir::IrOp::CALLVIRT;
@@ -2477,6 +2354,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     ins.imm = static_cast<uint64_t>(mtd->vtable_index);
     ins.source_line = e->loc.line;
     emit(current_block_, std::move(ins));
+    if (!cv_spec.empty()) fn_->spec_devirt_sites[dst] = std::move(cv_spec);
     // Sprint edge-bugs (2026-06-03): marcar dst con flags GC.  Critico
     // para que el regalloc trate el value como host_ptr GC-managed
     // (save/restore convierte a GcHandle).  Esto es la correccion
@@ -2787,6 +2665,174 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
         out = sret ? v_retbuf : dst;
     }
     return true;
+}
+
+/**
+ * @copydoc vx::Lowering::spec_devirt_impls
+ */
+std::vector<std::pair<std::string, std::string>>
+Lowering::spec_devirt_impls(const std::string &static_class,
+                            const std::string &method_name,
+                            bool is_interface) const {
+    std::vector<std::pair<std::string, std::string>> impls;
+    /* Basta un aspecto que no se haya podido atribuir a un metodo concreto
+     * para no adivinar en ningun sitio: podria apuntar a cualquiera. */
+    if (!all_advices_attributed_) return impls;
+
+    constexpr size_t K_MAX = 4;
+    for (const auto &kv : tc_.class_layouts()) {
+        const ClassLayout &cl = kv.second;
+        if (cl.is_interface || cl.is_aspect) continue;
+
+        /* Que la clase encaje: que cumpla la interfaz, o que sea el tipo
+         * declarado o descienda de el. */
+        bool encaja = false;
+        if (is_interface) {
+            for (const auto &in : cl.interface_names)
+                if (in == static_class) {
+                    encaja = true;
+                    break;
+                }
+        } else {
+            std::string cur = cl.name;
+            for (int guard = 0; !cur.empty() && guard < 64; ++guard) {
+                if (cur == static_class) {
+                    encaja = true;
+                    break;
+                }
+                const auto itc = tc_.class_layouts().find(cur);
+                if (itc == tc_.class_layouts().end()) break;
+                cur = itc->second.super_name;
+            }
+        }
+        if (!encaja) continue;
+
+        /* Quien DEFINE el metodo: puede estar heredado sin aplanar, asi que se
+         * sube por la cadena.  No vale buscar el primero con ese nombre: un
+         * constructor puede llamarse igual y dejaria sin encontrar al que se
+         * busca. */
+        const std::string *owner = nullptr;
+        for (const ClassMethodInfo &mm : cl.methods) {
+            if (mm.name != method_name || mm.is_constructor) continue;
+            owner = mm.defining_class.empty() ? &cl.name : &mm.defining_class;
+            break;
+        }
+        if (!owner) continue;
+
+        const std::string callee = *owner + "__" + method_name;
+        if (advice_chains_.count(callee) != 0) continue; // lleva aspectos
+        impls.emplace_back(cl.name, callee);
+        if (impls.size() > K_MAX) return {}; // demasiados: no compensa
+    }
+    return impls;
+}
+
+/**
+ * @copydoc vx::Lowering::emit_findclass_into
+ */
+ir::IrValueId Lowering::emit_findclass_into(std::vector<ir::IrInstr> &setup,
+                                            const std::string &cls_name,
+                                            uint32_t source_line) {
+    const uint32_t ln = source_line;
+    auto konst = [&](uint64_t v) -> ir::IrValueId {
+        const ir::IrValueId d = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CONST;
+        c.type = ir::IrType::I64;
+        c.dst = d;
+        c.imm = v;
+        c.source_line = ln;
+        setup.push_back(std::move(c));
+        return d;
+    };
+
+    const uint64_t nidx = intern_class_name(*out_mod_, cls_name);
+    const uint32_t nlen = static_cast<uint32_t>(cls_name.size());
+
+    // Los parametros de findclass: {direccion del nombre, longitud}.
+    const ir::IrValueId vp = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr al{};
+        al.op = ir::IrOp::ALLOCA;
+        al.type = ir::IrType::I8;
+        al.dst = vp;
+        al.imm = 16;
+        al.source_line = ln;
+        setup.push_back(std::move(al));
+    }
+    const ir::IrValueId vna = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr la{};
+        la.op = ir::IrOp::LABEL_ADDR;
+        la.type = ir::IrType::PTR;
+        la.dst = vna;
+        la.func_name = "s_" + std::to_string(nidx);
+        la.source_line = ln;
+        setup.push_back(std::move(la));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {vna, vp};
+        st.source_line = ln;
+        setup.push_back(std::move(st));
+    }
+    const ir::IrValueId vlen = konst(static_cast<uint64_t>(nlen));
+    const ir::IrValueId voff = konst(8);
+    const ir::IrValueId vp8 = fn_->new_value(ir::IrType::PTR);
+    {
+        ir::IrInstr add{};
+        add.op = ir::IrOp::ADD;
+        add.type = ir::IrType::I64;
+        add.dst = vp8;
+        add.operands = {vp, voff};
+        add.source_line = ln;
+        setup.push_back(std::move(add));
+    }
+    {
+        ir::IrInstr st{};
+        st.op = ir::IrOp::STORE;
+        st.type = ir::IrType::I64;
+        st.operands = {vlen, vp8};
+        st.source_line = ln;
+        setup.push_back(std::move(st));
+    }
+    const ir::IrValueId vc = fn_->new_value(ir::IrType::PTR);
+    fn_->values[vc].is_host_ptr = true;
+    {
+        ir::IrInstr fc{};
+        fc.op = ir::IrOp::FINDCLASS;
+        fc.type = ir::IrType::PTR;
+        fc.dst = vc;
+        fc.operands = {vp};
+        fc.is_call_site = true;
+        fc.source_line = ln;
+        setup.push_back(std::move(fc));
+    }
+    return vc;
+}
+
+/**
+ * @copydoc vx::Lowering::splice_into_entry_block
+ */
+void Lowering::splice_into_entry_block(std::vector<ir::IrInstr> &setup) {
+    if (setup.empty()) return;
+    auto &e0 = fn_->blocks[0].instrs;
+    size_t pos = e0.size();
+    if (pos > 0) {
+        const ir::IrOp last = e0.back().op;
+        // Si el bloque ya termina en un salto, va ANTES de el.
+        if (last == ir::IrOp::BR || last == ir::IrOp::BR_COND ||
+            last == ir::IrOp::RET || last == ir::IrOp::UNREACHABLE ||
+            last == ir::IrOp::TAILCALL || last == ir::IrOp::RETHROW ||
+            last == ir::IrOp::THROW) {
+            pos = e0.size() - 1;
+        }
+    }
+    e0.insert(e0.begin() + pos, std::make_move_iterator(setup.begin()),
+              std::make_move_iterator(setup.end()));
+    setup.clear();
 }
 
 } // namespace vx

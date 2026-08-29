@@ -635,6 +635,51 @@ class Lowering {
         return native_iface_slot_count() + vtable_index;
     }
 
+    /**
+     * @brief Que clases concretas puede tener de verdad el receptor de un
+     *        despacho dinamico, para poder ADIVINARLO y llamar directo.
+     *
+     * El programa esta entero delante, asi que se sabe quien puede estar al
+     * otro lado de un `obj.metodo()`: si son pocos, se compara la clase y se
+     * llama directo, y solo si ninguna acierta se despacha como siempre.
+     *
+     * Se dejan fuera los que llevan aspectos: su camino rapido seria una
+     * llamada directa que se saltaria la cadena.  Sus objetos caen al despacho
+     * normal, que si la recorre, y los demas siguen adivinandose.
+     *
+     * @param static_class  Tipo declarado del receptor (clase o interfaz).
+     * @param method_name   Metodo que se llama.
+     * @param is_interface  Si el tipo declarado es una interfaz.
+     * @return Pares (clase concreta, nombre IR del metodo), vacio si son
+     *         demasiados o hay algun aspecto sin atribuir.
+     */
+    std::vector<std::pair<std::string, std::string>>
+    spec_devirt_impls(const std::string &static_class,
+                      const std::string &method_name,
+                      bool is_interface) const;
+
+    /**
+     * @brief Emite en @p setup la resolucion del @c ClassInfo* de una clase
+     *        por su nombre, y devuelve el valor que lo sostiene.
+     *
+     * Va a un vector aparte porque su sitio es el bloque de ENTRADA: se
+     * resuelve una vez por invocacion y no una por vuelta del bucle.
+     *
+     * @param setup       Vector donde se acumulan las instrucciones.
+     * @param cls_name    Nombre de la clase.
+     * @param source_line Linea del fuente a la que atribuirlas.
+     * @return El valor con el @c ClassInfo*.
+     */
+    ir::IrValueId emit_findclass_into(std::vector<ir::IrInstr> &setup,
+                                      const std::string &cls_name,
+                                      uint32_t source_line);
+
+    /**
+     * @brief Mete @p setup al final del bloque de entrada, antes de su
+     *        terminador si lo tiene.
+     */
+    void splice_into_entry_block(std::vector<ir::IrInstr> &setup);
+
     /// Reparto de tramos por interfaz.  Se calcula una vez, la primera que
     /// alguien pregunta; la jerarquia ya no cambia cuando se llega aqui.
     mutable std::unordered_map<std::string, uint32_t> iface_slot_base_;
