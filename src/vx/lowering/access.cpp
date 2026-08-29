@@ -225,16 +225,9 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         i_v = cast_if_needed(i_v, fn_->values[i_v].type, ir::IrType::I64,
                              e->loc.line);
         // scaled = i * stride
-        ir::IrValueId scaled = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr mul{};
-            mul.op = ir::IrOp::MUL;
-            mul.type = ir::IrType::I64;
-            mul.dst = scaled;
-            mul.operands = {i_v, stride_v};
-            mul.source_line = e->loc.line;
-            emit(current_block_, std::move(mul));
-        }
+        ir::IrValueId scaled =
+            emit_ir_binop(ir::IrOp::MUL, i_v, stride_v,
+                          ir::IrType::I64, e->loc.line);
         // addr = (base_absolute ? table_base : ov_base + pos) + scaled
         ir::IrValueId t1;
         if (base_absolute) {
@@ -284,14 +277,9 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
     if (esz != 1) {
         const ir::IrValueId sz_v =
             emit_const(ir::IrType::I64, (uint64_t)esz, e->loc.line);
-        const ir::IrValueId scaled = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr mul{};
-        mul.op = ir::IrOp::MUL;
-        mul.type = ir::IrType::I64;
-        mul.dst = scaled;
-        mul.operands = {idx_v, sz_v};
-        mul.source_line = e->loc.line;
-        emit(current_block_, std::move(mul));
+        const ir::IrValueId scaled =
+            emit_ir_binop(ir::IrOp::MUL, idx_v, sz_v,
+                          ir::IrType::I64, e->loc.line);
         offset = scaled;
     }
     // unique<T>/shared<T>: el valor SSA de `base` es la DIRECCION del slot

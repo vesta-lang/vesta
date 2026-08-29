@@ -1014,6 +1014,24 @@ class Lowering {
                                 ir::IrType t, uint32_t source_line);
 
     /**
+     * @brief Emite una operacion del IR con los operandos que sean.
+     *
+     * La forma general de la que @ref emit_ir_unop y @ref emit_ir_binop son
+     * los dos casos comunes: reserva el valor de salida, arma la instruccion y
+     * la emite.  Existe porque hay operaciones que no son de uno ni de dos
+     * operandos -- buscar un simbolo en una biblioteca toma tres -- y sin ella
+     * esas se quedaban escritas a mano por no caber en la forma corta.
+     *
+     * @param op          Que operacion.
+     * @param operands    Sus operandos, en orden.
+     * @param t           Tipo del resultado.
+     * @param source_line Linea fuente, para la depuracion.
+     * @return El valor SSA con el resultado.
+     */
+    ir::IrValueId emit_ir_op(ir::IrOp op, std::vector<ir::IrValueId> operands,
+                             ir::IrType t, uint32_t source_line);
+
+    /**
      * @brief Emite una operacion de UN operando del IR.
      *
      * El caso mas comun es reinterpretar los bits: los mismos ocho bytes

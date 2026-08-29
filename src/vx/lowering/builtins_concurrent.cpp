@@ -120,29 +120,15 @@ bool Lowering::try_lower_concurrent_builtins(ast::CallExpr *e,
         const ir::IrValueId v_mask =
             emit_const(ir::IrType::U64, 0x80000000ULL, e->loc.line);
         // 3) handle & mask
-        const ir::IrValueId v_and = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::AND;
-            ins.type = ir::IrType::U64;
-            ins.dst = v_and;
-            ins.operands = {v_h, v_mask};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-        }
+        const ir::IrValueId v_and =
+            emit_ir_binop(ir::IrOp::AND, v_h, v_mask,
+                          ir::IrType::U64, e->loc.line);
         // 4) shr 31 -> bit 0 = 0|1
         const ir::IrValueId v_shift =
             emit_const(ir::IrType::U64, 31ULL, e->loc.line);
-        const ir::IrValueId v_bit = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::SHR;
-            ins.type = ir::IrType::U64;
-            ins.dst = v_bit;
-            ins.operands = {v_and, v_shift};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-        }
+        const ir::IrValueId v_bit =
+            emit_ir_binop(ir::IrOp::SHR, v_and, v_shift,
+                          ir::IrType::U64, e->loc.line);
         // 5) cast a bool
         const ir::IrValueId v_bool =
             cast_if_needed(v_bit, ir::IrType::U64, ir::IrType::BOOL,

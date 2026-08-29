@@ -549,16 +549,8 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
         return emit_ir_binop(op, a, b, ir::IrType::U64, line);
     };
     // 2. sw = bswap64(value) >> (8-w)*8  (BYTESWAP swapea los 8 bytes).
-    ir::IrValueId sw64 = fn_->new_value(ir::IrType::U64);
-    {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BYTESWAP;
-        b.type = ir::IrType::U64;
-        b.dst = sw64;
-        b.operands = {value};
-        b.source_line = line;
-        emit(current_block_, std::move(b));
-    }
+    ir::IrValueId sw64 =
+        emit_ir_unop(ir::IrOp::BYTESWAP, value, ir::IrType::U64, line);
     ir::IrValueId sw = sw64;
     if (fi.size < 8) {
         ir::IrValueId shamt =
@@ -570,16 +562,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
     ir::IrValueId zero = emit_const(ir::IrType::U64, 0, line);
     ir::IrValueId nz =
         emit_ir_binop(ir::IrOp::CMP_NE, big, zero, ir::IrType::BOOL, line);
-    ir::IrValueId mask = fn_->new_value(ir::IrType::U64);
-    {
-        ir::IrInstr n{};
-        n.op = ir::IrOp::NEG;
-        n.type = ir::IrType::U64;
-        n.dst = mask;
-        n.operands = {nz};
-        n.source_line = line;
-        emit(current_block_, std::move(n));
-    }
+    ir::IrValueId mask = emit_ir_unop(ir::IrOp::NEG, nz, ir::IrType::U64, line);
     ir::IrValueId vxs = bin(ir::IrOp::XOR, value, sw);
     ir::IrValueId tmp = bin(ir::IrOp::AND, vxs, mask);
     return bin(ir::IrOp::XOR, value, tmp);

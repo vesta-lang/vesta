@@ -40,14 +40,9 @@ ir::IrValueId Lowering::emit_gc_handle_for_ptr(ir::IrValueId v_host_ptr,
     // GC_HANDLE_FOR_PTR devuelve un GcHandle uint32 zero-extended a i64.
     // No es is_host_ptr (es un indice opaco), no es is_gc_object (no es
     // el host_ptr al payload).
-    const ir::IrValueId v_h = fn_->new_value(ir::IrType::I64);
-    ir::IrInstr ins{};
-    ins.op = ir::IrOp::GC_HANDLE_FOR_PTR;
-    ins.type = ir::IrType::I64;
-    ins.dst = v_h;
-    ins.operands = {v_host_ptr};
-    ins.source_line = source_line;
-    emit(current_block_, std::move(ins));
+    const ir::IrValueId v_h =
+        emit_ir_unop(ir::IrOp::GC_HANDLE_FOR_PTR, v_host_ptr,
+                     ir::IrType::I64, source_line);
     return v_h;
 }
 

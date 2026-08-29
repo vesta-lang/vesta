@@ -423,14 +423,9 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             emit_str_lit_addr(path_idx, e->loc.line);
         const ir::IrValueId v_path_len =
             emit_const(ir::IrType::I64, path_len, e->loc.line);
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr dl{};
-        dl.op = ir::IrOp::DLOPEN;
-        dl.type = ir::IrType::I64;
-        dl.dst = v_dst;
-        dl.operands = {v_path_addr, v_path_len};
-        dl.source_line = e->loc.line;
-        emit(current_block_, std::move(dl));
+        const ir::IrValueId v_dst =
+            emit_ir_binop(ir::IrOp::DLOPEN, v_path_addr, v_path_len,
+                          ir::IrType::I64, e->loc.line);
         out_value = v_dst;
         return true;
     }
@@ -459,14 +454,9 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             emit_str_lit_addr(name_idx, e->loc.line);
         const ir::IrValueId v_name_len =
             emit_const(ir::IrType::I64, name_len, e->loc.line);
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ds{};
-        ds.op = ir::IrOp::DLSYM;
-        ds.type = ir::IrType::I64;
-        ds.dst = v_dst;
-        ds.operands = {v_handle, v_name_addr, v_name_len};
-        ds.source_line = e->loc.line;
-        emit(current_block_, std::move(ds));
+        const ir::IrValueId v_dst =
+            emit_ir_op(ir::IrOp::DLSYM, {v_handle, v_name_addr, v_name_len},
+                       ir::IrType::I64, e->loc.line);
         out_value = v_dst;
         return true;
     }

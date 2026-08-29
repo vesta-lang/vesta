@@ -954,16 +954,9 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                         // F64TOF32 narrow para volver al f32 original.
                         ir::IrValueId vd =
                             emit_ir_unop(ir::IrOp::BITCAST, v, ir::IrType::F64, arm.loc.line);
-                        ir::IrValueId v2 = fn_->new_value(ir::IrType::F32);
-                        {
-                            ir::IrInstr nr{};
-                            nr.op = ir::IrOp::F64TOF32;
-                            nr.type = ir::IrType::F32;
-                            nr.dst = v2;
-                            nr.operands = {vd};
-                            nr.source_line = arm.loc.line;
-                            emit(current_block_, std::move(nr));
-                        }
+                        ir::IrValueId v2 =
+                            emit_ir_unop(ir::IrOp::F64TOF32, vd,
+                                         ir::IrType::F32, arm.loc.line);
                         v = v2;
                     }
                     // Para tipos enteros mas estrechos, dejar v como i64;

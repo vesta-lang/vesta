@@ -552,16 +552,9 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 emit_load_typed(v_ctrl, ir::IrType::I64, it->source_line);
             const ir::IrValueId v_one =
                 emit_const(ir::IrType::I64, 1, it->source_line);
-            const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr sub{};
-                sub.op = ir::IrOp::SUB;
-                sub.type = ir::IrType::I64;
-                sub.dst = v_rc_dec;
-                sub.operands = {v_rc, v_one};
-                sub.source_line = it->source_line;
-                emit(current_block_, std::move(sub));
-            }
+            const ir::IrValueId v_rc_dec =
+                emit_ir_binop(ir::IrOp::SUB, v_rc, v_one,
+                              ir::IrType::I64, it->source_line);
             emit_store_typed(v_ctrl, v_rc_dec,
                              ir::IrType::I64, it->source_line);
             // H3 no-GC: si el refcount cayo a 0, liberar el bloque de control
@@ -1196,16 +1189,8 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
     current_block_ = dec_bb;
     const ir::IrValueId v_rc = emit_load_typed(v_ctrl, ir::IrType::I64, line);
     const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
-    const ir::IrValueId v_rc_dec = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr sub{};
-        sub.op = ir::IrOp::SUB;
-        sub.type = ir::IrType::I64;
-        sub.dst = v_rc_dec;
-        sub.operands = {v_rc, v_one};
-        sub.source_line = line;
-        emit(current_block_, std::move(sub));
-    }
+    const ir::IrValueId v_rc_dec =
+        emit_ir_binop(ir::IrOp::SUB, v_rc, v_one, ir::IrType::I64, line);
     emit_store_typed(v_ctrl, v_rc_dec, ir::IrType::I64, line);
     const ir::IrValueId v_is0 = fn_->new_value(ir::IrType::BOOL);
     {
@@ -1282,16 +1267,8 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
     current_block_ = inc_bb;
     const ir::IrValueId v_rc = emit_load_typed(v_ctrl, ir::IrType::I64, line);
     const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
-    const ir::IrValueId v_rc_inc = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::I64;
-        add.dst = v_rc_inc;
-        add.operands = {v_rc, v_one};
-        add.source_line = line;
-        emit(current_block_, std::move(add));
-    }
+    const ir::IrValueId v_rc_inc =
+        emit_ir_binop(ir::IrOp::ADD, v_rc, v_one, ir::IrType::I64, line);
     emit_store_typed(v_ctrl, v_rc_inc, ir::IrType::I64, line);
     {
         emit_br(skip_bb, line);

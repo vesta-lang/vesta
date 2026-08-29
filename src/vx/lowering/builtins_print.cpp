@@ -352,14 +352,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 // aproximado en Vesta puro).  F32 se promociona a F64 antes.
                 ir::IrValueId vf = v;
                 if (t.kind == PrimitiveKind::F32) {
-                    ir::IrValueId vp = fn_->new_value(ir::IrType::F64);
-                    ir::IrInstr cv{};
-                    cv.op = ir::IrOp::F32TOF64;
-                    cv.type = ir::IrType::F64;
-                    cv.dst = vp;
-                    cv.operands = {v};
-                    cv.source_line = ex->loc.line;
-                    emit(current_block_, std::move(cv));
+                    ir::IrValueId vp =
+                        emit_ir_unop(ir::IrOp::F32TOF64, v,
+                                     ir::IrType::F64, ex->loc.line);
                     vf = vp;
                 }
                 emit_io_prim("__vx_print_float", {vf}, ex->loc.line);
@@ -377,14 +372,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 auto compute_pad = [&]() -> ir::IrValueId {
                     ir::IrValueId v_width = emit_const(
                         ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
-                    ir::IrValueId v_sub = fn_->new_value(ir::IrType::I64);
-                    ir::IrInstr s{};
-                    s.op = ir::IrOp::SUB;
-                    s.type = ir::IrType::I64;
-                    s.dst = v_sub;
-                    s.operands = {v_width, slen};
-                    s.source_line = ex->loc.line;
-                    emit(current_block_, std::move(s));
+                    ir::IrValueId v_sub =
+                        emit_ir_binop(ir::IrOp::SUB, v_width, slen,
+                                      ir::IrType::I64, ex->loc.line);
                     ir::IrValueId v_zero =
                         emit_const(ir::IrType::I64, 0, ex->loc.line);
                     ir::IrValueId v_pos =
@@ -392,14 +382,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                     ir::IrValueId v_mask = cast_if_needed(
                         v_pos, ir::IrType::BOOL, ir::IrType::I64, ex->loc.line,
                         /*is_explicit=*/true);
-                    ir::IrValueId v_cl = fn_->new_value(ir::IrType::I64);
-                    ir::IrInstr m{};
-                    m.op = ir::IrOp::MUL;
-                    m.type = ir::IrType::I64;
-                    m.dst = v_cl;
-                    m.operands = {v_sub, v_mask};
-                    m.source_line = ex->loc.line;
-                    emit(current_block_, std::move(m));
+                    ir::IrValueId v_cl =
+                        emit_ir_binop(ir::IrOp::MUL, v_sub, v_mask,
+                                      ir::IrType::I64, ex->loc.line);
                     return v_cl;
                 };
                 auto emit_pad = [&](ir::IrValueId v_count) {
@@ -540,14 +525,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             ir::IrValueId v_arg = v;
             if (t.kind == PrimitiveKind::F32) {
                 // F32 -> F64 (re-encoding) -> i64 bits.
-                ir::IrValueId f64v = fn_->new_value(ir::IrType::F64);
-                ir::IrInstr ext{};
-                ext.op = ir::IrOp::F32TOF64;
-                ext.type = ir::IrType::F64;
-                ext.dst = f64v;
-                ext.operands = {v_arg};
-                ext.source_line = ex->loc.line;
-                emit(current_block_, std::move(ext));
+                ir::IrValueId f64v =
+                    emit_ir_unop(ir::IrOp::F32TOF64, v_arg,
+                                 ir::IrType::F64, ex->loc.line);
                 ir::IrValueId bits =
                     emit_ir_unop(ir::IrOp::BITCAST, f64v, ir::IrType::I64, ex->loc.line);
                 v_arg = bits;
@@ -610,14 +590,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 // Cmps signed: si len > width, sub queda negativo.
                 ir::IrValueId v_width = emit_const(
                     ir::IrType::I64, (uint64_t)fs.width, ex->loc.line);
-                ir::IrValueId v_sub = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr s{};
-                s.op = ir::IrOp::SUB;
-                s.type = ir::IrType::I64;
-                s.dst = v_sub;
-                s.operands = {v_width, v_len};
-                s.source_line = ex->loc.line;
-                emit(current_block_, std::move(s));
+                ir::IrValueId v_sub =
+                    emit_ir_binop(ir::IrOp::SUB, v_width, v_len,
+                                  ir::IrType::I64, ex->loc.line);
                 // Clamp a 0: si v_sub < 0, usar 0.  Patron:
                 // cmps v_sub, 0 -> SF; setcc gt -> 1 si positivo;
                 // mul v_sub * mask = clamp.  Mas simple: usar
@@ -630,14 +605,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 ir::IrValueId v_mask =
                     cast_if_needed(v_pos, ir::IrType::BOOL, ir::IrType::I64,
                                    ex->loc.line, /*is_explicit=*/true);
-                ir::IrValueId v_clamped = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr m{};
-                m.op = ir::IrOp::MUL;
-                m.type = ir::IrType::I64;
-                m.dst = v_clamped;
-                m.operands = {v_sub, v_mask};
-                m.source_line = ex->loc.line;
-                emit(current_block_, std::move(m));
+                ir::IrValueId v_clamped =
+                    emit_ir_binop(ir::IrOp::MUL, v_sub, v_mask,
+                                  ir::IrType::I64, ex->loc.line);
                 v_pad = v_clamped;
             }
             // Emit padding LEADING si align==RIGHT.
@@ -712,14 +682,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         // Para F64 basta el bitcast (mismo ancho).  Para enteros
         // pequenos hace SEXT/ZEXT/TRUNC normal via cast_if_needed.
         if (t.kind == PrimitiveKind::F32) {
-            ir::IrValueId f64v = fn_->new_value(ir::IrType::F64);
-            ir::IrInstr ext{};
-            ext.op = ir::IrOp::F32TOF64;
-            ext.type = ir::IrType::F64;
-            ext.dst = f64v;
-            ext.operands = {v};
-            ext.source_line = ex->loc.line;
-            emit(current_block_, std::move(ext));
+            ir::IrValueId f64v =
+                emit_ir_unop(ir::IrOp::F32TOF64, v,
+                             ir::IrType::F64, ex->loc.line);
             ir::IrValueId bits =
                 emit_ir_unop(ir::IrOp::BITCAST, f64v, ir::IrType::I64, ex->loc.line);
             v = bits;

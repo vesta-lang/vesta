@@ -298,27 +298,12 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         // xor`. Beneficios: DCE puede eliminar la cadena si v_dst no se usa, el
         // Selector JIT trata cada paso natively, y CSE puede fundir
         // multiples isPresent del mismo arg.  Mismo bytecode emitido.
-        const ir::IrValueId v_is_null = fn_->new_value(ir::IrType::I32);
-        {
-            ir::IrInstr in{};
-            in.op = ir::IrOp::ISNULL;
-            in.type = ir::IrType::I32;
-            in.dst = v_is_null;
-            in.operands = {v_arg};
-            in.source_line = e->loc.line;
-            emit(current_block_, std::move(in));
-        }
+        const ir::IrValueId v_is_null =
+            emit_ir_unop(ir::IrOp::ISNULL, v_arg, ir::IrType::I32, e->loc.line);
         const ir::IrValueId v_one = emit_const(ir::IrType::I32, 1, e->loc.line);
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I32);
-        {
-            ir::IrInstr xr{};
-            xr.op = ir::IrOp::XOR;
-            xr.type = ir::IrType::I32;
-            xr.dst = v_dst;
-            xr.operands = {v_is_null, v_one};
-            xr.source_line = e->loc.line;
-            emit(current_block_, std::move(xr));
-        }
+        const ir::IrValueId v_dst =
+            emit_ir_binop(ir::IrOp::XOR, v_is_null, v_one,
+                          ir::IrType::I32, e->loc.line);
         out_value = v_dst;
         return true;
     }
@@ -353,14 +338,9 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                 const ir::IrValueId v_flag =
                     emit_load_typed(v_arg, ir::IrType::I64, e->loc.line);
                 // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
-                const ir::IrValueId v_chk = fn_->new_value(ir::IrType::I64);
-                ir::IrInstr uw{};
-                uw.op = ir::IrOp::UNWRAP;
-                uw.type = ir::IrType::I64;
-                uw.dst = v_chk;
-                uw.operands = {v_flag};
-                uw.source_line = e->loc.line;
-                emit(current_block_, std::move(uw));
+                const ir::IrValueId v_chk =
+                    emit_ir_unop(ir::IrOp::UNWRAP, v_flag,
+                                 ir::IrType::I64, e->loc.line);
             }
             // Load payload from buf+8.
             const ir::IrValueId v_eight =

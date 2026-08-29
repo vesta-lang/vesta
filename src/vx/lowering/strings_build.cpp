@@ -76,16 +76,9 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     ir::IrValueId v_b_len = emit_native_str_len(v_b, source_line);
 
     // 2. total = la + lb.
-    ir::IrValueId v_total = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_total;
-        ad.operands = {v_a_len, v_b_len};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_total =
+        emit_ir_binop(ir::IrOp::ADD, v_a_len, v_b_len,
+                      ir::IrType::I64, source_line);
 
     // 3. Slot de 24 bytes del resultado.
     const ir::IrValueId v_slot = emit_new_native_str_slot(source_line);
@@ -123,16 +116,9 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     current_block_ = heap_bb;
     {
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-        ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_cap;
-            ad.operands = {v_total, v_one};
-            ad.source_line = source_line;
-            emit(current_block_, std::move(ad));
-        }
+        ir::IrValueId v_cap =
+            emit_ir_binop(ir::IrOp::ADD, v_total, v_one,
+                          ir::IrType::I64, source_line);
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
         {
@@ -185,25 +171,13 @@ ir::IrValueId Lowering::build_native_string_slice(ir::IrValueId v_src,
     // indices validos (a <= b <= src.len); indices negativos / OOB no
     // soportados (mismo contrato que el resto del AOT bare).
     auto emit_sub = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr s{};
-        s.op = ir::IrOp::SUB;
-        s.type = ir::IrType::I64;
-        s.dst = v;
-        s.operands = {a, b};
-        s.source_line = source_line;
-        emit(current_block_, std::move(s));
+        ir::IrValueId v =
+            emit_ir_binop(ir::IrOp::SUB, a, b, ir::IrType::I64, source_line);
         return v;
     };
     auto emit_add = [&](ir::IrValueId a, ir::IrValueId b) -> ir::IrValueId {
-        ir::IrValueId v = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v;
-        ad.operands = {a, b};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
+        ir::IrValueId v =
+            emit_ir_binop(ir::IrOp::ADD, a, b, ir::IrType::I64, source_line);
         return v;
     };
 
@@ -269,16 +243,9 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
     auto fill_heap = [&]() {
         // cap = len + 1.
         ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-        ir::IrValueId v_cap = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr ad{};
-            ad.op = ir::IrOp::ADD;
-            ad.type = ir::IrType::I64;
-            ad.dst = v_cap;
-            ad.operands = {v_len, v_one};
-            ad.source_line = source_line;
-            emit(current_block_, std::move(ad));
-        }
+        ir::IrValueId v_cap =
+            emit_ir_binop(ir::IrOp::ADD, v_len, v_one,
+                          ir::IrType::I64, source_line);
         // buf = RAW_ALLOC(cap).
         ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
         fn_->values[v_buf].is_host_ptr = true;
@@ -400,27 +367,13 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
         emit_native_str_data_ptr(v_dst_slot, source_line);
     ir::IrValueId v_old_len = emit_native_str_len(v_dst_slot, source_line);
     // 2. new_len = old_len + app_len ; new_cap = new_len + 1.
-    ir::IrValueId v_new_len = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_new_len;
-        ad.operands = {v_old_len, v_app_len};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_new_len =
+        emit_ir_binop(ir::IrOp::ADD, v_old_len, v_app_len,
+                      ir::IrType::I64, source_line);
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_new_cap = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_new_cap;
-        ad.operands = {v_new_len, v_one};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_new_cap =
+        emit_ir_binop(ir::IrOp::ADD, v_new_len, v_one,
+                      ir::IrType::I64, source_line);
 
     // 3. Branch new_len > 22.  HEAP nunca decrece (new_len >= old_len) ->
     //    HEAP solo transiciona a HEAP; SSO crece SSO->SSO (cero malloc,

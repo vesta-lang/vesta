@@ -189,16 +189,9 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         // off = field_addr - base_ptr   (u64)
-        ir::IrValueId off = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr s{};
-            s.op = ir::IrOp::SUB;
-            s.type = ir::IrType::U64;
-            s.dst = off;
-            s.operands = {field_addr, base_ptr};
-            s.source_line = ln;
-            emit(current_block_, std::move(s));
-        }
+        ir::IrValueId off =
+            emit_ir_binop(ir::IrOp::SUB, field_addr, base_ptr,
+                          ir::IrType::U64, ln);
         if (name == "offsetof") {
             out_value = off;
             return true;
@@ -503,27 +496,13 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             ir::IrValueId idx_val = lower_expr(e->args[1].get());
             /* field_addr = info_ptr + 24 + idx * 16 */
             ir::IrValueId v16 = emit_const(ir::IrType::I64, 16, src_line);
-            ir::IrValueId idx_x16 = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr mu{};
-                mu.op = ir::IrOp::MUL;
-                mu.type = ir::IrType::I64;
-                mu.dst = idx_x16;
-                mu.operands = {idx_val, v16};
-                mu.source_line = src_line;
-                emit(current_block_, std::move(mu));
-            }
+            ir::IrValueId idx_x16 =
+                emit_ir_binop(ir::IrOp::MUL, idx_val, v16,
+                              ir::IrType::I64, src_line);
             ir::IrValueId v24 = emit_const(ir::IrType::I64, 24, src_line);
-            ir::IrValueId field_off = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = field_off;
-                ad.operands = {idx_x16, v24};
-                ad.source_line = src_line;
-                emit(current_block_, std::move(ad));
-            }
+            ir::IrValueId field_off =
+                emit_ir_binop(ir::IrOp::ADD, idx_x16, v24,
+                              ir::IrType::I64, src_line);
             ir::IrValueId field_addr =
                 emit_ptr_add(info_ptr, field_off, src_line);
             /* Helper interno LOAD u32 at field_addr + offset. */

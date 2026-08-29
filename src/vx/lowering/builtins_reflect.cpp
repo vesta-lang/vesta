@@ -313,16 +313,8 @@ bool Lowering::try_lower_reflect_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         // Usar IR_OP NEWOBJ con operands[0] = cls.
-        const ir::IrValueId v_handle = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrInstr no{};
-            no.op = ir::IrOp::NEWOBJ;
-            no.type = ir::IrType::I64;
-            no.dst = v_handle;
-            no.operands = {v_cls};
-            no.source_line = e->loc.line;
-            emit(current_block_, std::move(no));
-        }
+        const ir::IrValueId v_handle =
+            emit_ir_unop(ir::IrOp::NEWOBJ, v_cls, ir::IrType::I64, e->loc.line);
         // Convertir handle a host_ptr (igual que __new_<X> antes del
         // ctor).  El resultado es un host_ptr GC-managed.
         const ir::IrValueId v_host = fn_->new_value(ir::IrType::I64);

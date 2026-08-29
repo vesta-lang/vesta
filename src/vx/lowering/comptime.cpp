@@ -495,16 +495,8 @@ ir::IrValueId Lowering::lower_enum_constructor(
         } else if (vt == ir::IrType::F32) {
             // f32: primero ampliar a f64 (preserva el valor), luego
             // bitcast a i64 (preserva los bits IEEE).
-            ir::IrValueId vw = fn_->new_value(ir::IrType::F64);
-            {
-                ir::IrInstr ext{};
-                ext.op = ir::IrOp::F32TOF64;
-                ext.type = ir::IrType::F64;
-                ext.dst = vw;
-                ext.operands = {v};
-                ext.source_line = loc.line;
-                emit(current_block_, std::move(ext));
-            }
+            ir::IrValueId vw =
+                emit_ir_unop(ir::IrOp::F32TOF64, v, ir::IrType::F64, loc.line);
             ir::IrValueId v2 =
                 emit_ir_unop(ir::IrOp::BITCAST, vw, ir::IrType::I64, loc.line);
             v = v2;
@@ -664,14 +656,9 @@ bool Lowering::materialize_comptime_bytes(const std::vector<uint8_t> &bytes,
         const ir::IrValueId v_val = emit_const(wt, raw, source_line);
         const ir::IrValueId v_off =
             emit_const(ir::IrType::I64, off, source_line);
-        const ir::IrValueId v_addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr add{};
-        add.op = ir::IrOp::ADD;
-        add.type = ir::IrType::PTR;
-        add.dst = v_addr;
-        add.operands = {v_dst, v_off};
-        add.source_line = source_line;
-        emit(current_block_, std::move(add));
+        const ir::IrValueId v_addr =
+            emit_ir_binop(ir::IrOp::ADD, v_dst, v_off,
+                          ir::IrType::PTR, source_line);
         fn_->values[v_addr].is_host_ptr = fn_->values[v_dst].is_host_ptr;
 
         emit_store_typed(v_addr, v_val, wt, source_line);

@@ -440,16 +440,8 @@ ir::IrValueId Lowering::build_native_string_interp(ast::StringLitExpr *slit) {
             ir::IrValueId v_b = lower_expr(ex);
             if (v_b == ir::IR_NO_VALUE) return false;
             // Promover el bool a i64 para el helper (cmp != 0).
-            ir::IrValueId v_b64 = fn_->new_value(ir::IrType::I64);
-            {
-                ir::IrInstr ext{};
-                ext.op = ir::IrOp::ZEXT;
-                ext.type = ir::IrType::I64;
-                ext.dst = v_b64;
-                ext.operands = {v_b};
-                ext.source_line = ln;
-                emit(current_block_, std::move(ext));
-            }
+            ir::IrValueId v_b64 =
+                emit_ir_unop(ir::IrOp::ZEXT, v_b, ir::IrType::I64, ln);
             // scratch de 8 bytes (cabe "false" + margen).
             ir::IrValueId v_scr = stack_alloc_buf(8, ln, native_poo_);
             if (native_poo_) fn_->values[v_scr].is_host_ptr = true;
@@ -527,16 +519,9 @@ ir::IrValueId Lowering::emit_native_str_is_heap(ir::IrValueId v_slot,
     ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     // is_heap = b23 >> 7  (logico; b23 es 0..255 zero-extended).
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
-    ir::IrValueId v_is_heap = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr sh{};
-        sh.op = ir::IrOp::SHR;
-        sh.type = ir::IrType::I64;
-        sh.dst = v_is_heap;
-        sh.operands = {v_b23, v_seven};
-        sh.source_line = source_line;
-        emit(current_block_, std::move(sh));
-    }
+    ir::IrValueId v_is_heap =
+        emit_ir_binop(ir::IrOp::SHR, v_b23, v_seven,
+                      ir::IrType::I64, source_line);
     return v_is_heap;
 }
 
@@ -554,16 +539,9 @@ ir::IrValueId Lowering::emit_native_str_is_owned(ir::IrValueId v_slot,
     ir::IrValueId v_addr = emit_ptr_add(v_slot, v_off, source_line);
     ir::IrValueId v_b23 = emit_load_typed(v_addr, ir::IrType::U8, source_line);
     ir::IrValueId v_six = emit_const(ir::IrType::I64, 6, source_line);
-    ir::IrValueId v_top2 = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr sh{};
-        sh.op = ir::IrOp::SHR;
-        sh.type = ir::IrType::I64;
-        sh.dst = v_top2;
-        sh.operands = {v_b23, v_six};
-        sh.source_line = source_line;
-        emit(current_block_, std::move(sh));
-    }
+    ir::IrValueId v_top2 =
+        emit_ir_binop(ir::IrOp::SHR, v_b23, v_six,
+                      ir::IrType::I64, source_line);
     ir::IrValueId v_dos = emit_const(ir::IrType::I64, 2, source_line);
     ir::IrValueId v_owned =
         emit_ir_binop(ir::IrOp::CMP_EQ, v_top2, v_dos, ir::IrType::I64, source_line);
@@ -586,38 +564,16 @@ ir::IrValueId Lowering::emit_native_str_data_ptr_inline(ir::IrValueId v_slot,
     ir::IrValueId v_slot_i =
         emit_ir_unop(ir::IrOp::BITCAST, v_slot, ir::IrType::I64, source_line);
     // diff = ptr0 - slot.
-    ir::IrValueId v_diff = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr s{};
-        s.op = ir::IrOp::SUB;
-        s.type = ir::IrType::I64;
-        s.dst = v_diff;
-        s.operands = {v_ptr0, v_slot_i};
-        s.source_line = source_line;
-        emit(current_block_, std::move(s));
-    }
+    ir::IrValueId v_diff =
+        emit_ir_binop(ir::IrOp::SUB, v_ptr0, v_slot_i,
+                      ir::IrType::I64, source_line);
     // masked = diff & (-is_heap)  (AND, no MUL: valgrind sabe x&0=0 es
     // definido aunque diff use ptr0 con bits de data inline SSO).
-    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ng{};
-        ng.op = ir::IrOp::NEG;
-        ng.type = ir::IrType::I64;
-        ng.dst = v_mask;
-        ng.operands = {v_is_heap};
-        ng.source_line = source_line;
-        emit(current_block_, std::move(ng));
-    }
-    ir::IrValueId v_masked = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr an{};
-        an.op = ir::IrOp::AND;
-        an.type = ir::IrType::I64;
-        an.dst = v_masked;
-        an.operands = {v_diff, v_mask};
-        an.source_line = source_line;
-        emit(current_block_, std::move(an));
-    }
+    ir::IrValueId v_mask =
+        emit_ir_unop(ir::IrOp::NEG, v_is_heap, ir::IrType::I64, source_line);
+    ir::IrValueId v_masked =
+        emit_ir_binop(ir::IrOp::AND, v_diff, v_mask,
+                      ir::IrType::I64, source_line);
     // data = slot + masked.  La base es el slot pasado a ENTERO -- asi se
     // elige entre las dos direcciones sin bifurcar --, y un entero no lleva la
     // marca de ser del anfitrion: hay que devolversela.
@@ -637,63 +593,27 @@ ir::IrValueId Lowering::emit_native_str_len_inline(ir::IrValueId v_slot,
     ir::IrValueId v_b23 =
         emit_load_typed(v_addr23, ir::IrType::U8, source_line);
     ir::IrValueId v_mask7f = emit_const(ir::IrType::I64, 0x7F, source_line);
-    ir::IrValueId v_sso_len = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr an{};
-        an.op = ir::IrOp::AND;
-        an.type = ir::IrType::I64;
-        an.dst = v_sso_len;
-        an.operands = {v_b23, v_mask7f};
-        an.source_line = source_line;
-        emit(current_block_, std::move(an));
-    }
+    ir::IrValueId v_sso_len =
+        emit_ir_binop(ir::IrOp::AND, v_b23, v_mask7f,
+                      ir::IrType::I64, source_line);
     // heap_len = LOAD len@8.
     ir::IrValueId v_heap_len =
         load_native_string_field(v_slot, 8, /*as_host=*/false, source_line);
     // diff = heap_len - sso_len.
-    ir::IrValueId v_diff = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr s{};
-        s.op = ir::IrOp::SUB;
-        s.type = ir::IrType::I64;
-        s.dst = v_diff;
-        s.operands = {v_heap_len, v_sso_len};
-        s.source_line = source_line;
-        emit(current_block_, std::move(s));
-    }
+    ir::IrValueId v_diff =
+        emit_ir_binop(ir::IrOp::SUB, v_heap_len, v_sso_len,
+                      ir::IrType::I64, source_line);
     // masked = diff & (-is_heap)  (AND, no MUL: heap_len puede ser un
     // LOAD de bytes no inicializados en modo SSO; x&0=0 es definido).
-    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ng{};
-        ng.op = ir::IrOp::NEG;
-        ng.type = ir::IrType::I64;
-        ng.dst = v_mask;
-        ng.operands = {v_is_heap};
-        ng.source_line = source_line;
-        emit(current_block_, std::move(ng));
-    }
-    ir::IrValueId v_masked = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr an{};
-        an.op = ir::IrOp::AND;
-        an.type = ir::IrType::I64;
-        an.dst = v_masked;
-        an.operands = {v_diff, v_mask};
-        an.source_line = source_line;
-        emit(current_block_, std::move(an));
-    }
+    ir::IrValueId v_mask =
+        emit_ir_unop(ir::IrOp::NEG, v_is_heap, ir::IrType::I64, source_line);
+    ir::IrValueId v_masked =
+        emit_ir_binop(ir::IrOp::AND, v_diff, v_mask,
+                      ir::IrType::I64, source_line);
     // len = sso_len + masked.
-    ir::IrValueId v_len = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = v_len;
-        ad.operands = {v_sso_len, v_masked};
-        ad.source_line = source_line;
-        emit(current_block_, std::move(ad));
-    }
+    ir::IrValueId v_len =
+        emit_ir_binop(ir::IrOp::ADD, v_sso_len, v_masked,
+                      ir::IrType::I64, source_line);
     return v_len;
 }
 
@@ -1245,26 +1165,11 @@ void Lowering::emit_native_str_free_if_heap(ir::IrValueId v_slot,
     ir::IrValueId v_ptr0 =
         emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // mask = -is_heap  (0 - is_heap): 0 -> 0 ; 1 -> ~0.
-    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr ng{};
-        ng.op = ir::IrOp::NEG;
-        ng.type = ir::IrType::I64;
-        ng.dst = v_mask;
-        ng.operands = {v_is_heap};
-        ng.source_line = source_line;
-        emit(current_block_, std::move(ng));
-    }
-    ir::IrValueId v_to_free_i = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr an{};
-        an.op = ir::IrOp::AND;
-        an.type = ir::IrType::I64;
-        an.dst = v_to_free_i;
-        an.operands = {v_ptr0, v_mask};
-        an.source_line = source_line;
-        emit(current_block_, std::move(an));
-    }
+    ir::IrValueId v_mask =
+        emit_ir_unop(ir::IrOp::NEG, v_is_heap, ir::IrType::I64, source_line);
+    ir::IrValueId v_to_free_i =
+        emit_ir_binop(ir::IrOp::AND, v_ptr0, v_mask,
+                      ir::IrType::I64, source_line);
     ir::IrValueId v_to_free = fn_->new_value(ir::IrType::PTR);
     fn_->values[v_to_free].is_host_ptr = true;
     {
@@ -1404,27 +1309,13 @@ void Lowering::emit_native_str_invalidate_moved(ir::IrValueId v_slot,
         emit_load_typed(v_slot, ir::IrType::I64, source_line);
     // mask = is_heap - 1.
     ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, source_line);
-    ir::IrValueId v_mask = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr s{};
-        s.op = ir::IrOp::SUB;
-        s.type = ir::IrType::I64;
-        s.dst = v_mask;
-        s.operands = {v_is_heap, v_one};
-        s.source_line = source_line;
-        emit(current_block_, std::move(s));
-    }
+    ir::IrValueId v_mask =
+        emit_ir_binop(ir::IrOp::SUB, v_is_heap, v_one,
+                      ir::IrType::I64, source_line);
     // new_ptr0 = old_ptr0 & mask.
-    ir::IrValueId v_new = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr an{};
-        an.op = ir::IrOp::AND;
-        an.type = ir::IrType::I64;
-        an.dst = v_new;
-        an.operands = {v_old_ptr0, v_mask};
-        an.source_line = source_line;
-        emit(current_block_, std::move(an));
-    }
+    ir::IrValueId v_new =
+        emit_ir_binop(ir::IrOp::AND, v_old_ptr0, v_mask,
+                      ir::IrType::I64, source_line);
     emit_store_typed(v_slot, v_new, ir::IrType::I64, source_line);
 }
 
@@ -1586,14 +1477,9 @@ ir::IrValueId Lowering::emit_strconv(ir::IrValueId v_str, uint64_t enc_imm,
 
 ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
                                          uint32_t source_line) {
-    const ir::IrValueId v_n = fn_->new_value(ir::IrType::U64);
-    ir::IrInstr ins{};
-    ins.op = ir::IrOp::STRGETBYTES;
-    ins.type = ir::IrType::U64;
-    ins.dst = v_n;
-    ins.operands = {v_str};
-    ins.source_line = source_line;
-    emit(current_block_, std::move(ins));
+    const ir::IrValueId v_n =
+        emit_ir_unop(ir::IrOp::STRGETBYTES, v_str,
+                     ir::IrType::U64, source_line);
     return v_n;
 }
 

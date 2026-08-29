@@ -190,16 +190,9 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
             sh.source_line = e->loc.line;
             emit(current_block_, std::move(sh));
         }
-        ir::IrValueId v_range = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr orop{};
-            orop.op = ir::IrOp::OR;
-            orop.type = ir::IrType::U64;
-            orop.dst = v_range;
-            orop.operands = {v_shifted, v_len};
-            orop.source_line = e->loc.line;
-            emit(current_block_, std::move(orop));
-        }
+        ir::IrValueId v_range =
+            emit_ir_binop(ir::IrOp::OR, v_shifted, v_len,
+                          ir::IrType::U64, e->loc.line);
         ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
         {
             ir::IrInstr sl{};
@@ -529,28 +522,18 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         }
         // Resto: 1 sola instruccion bytecode mediante IR ops dedicados.
         if (is_str_length) {
-            ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::STRLEN;
-            ins.type = ir::IrType::I64;
-            ins.dst = v_dst;
-            ins.operands = {v_str};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
+            ir::IrValueId v_dst =
+                emit_ir_unop(ir::IrOp::STRLEN, v_str,
+                             ir::IrType::I64, e->loc.line);
             out_value = v_dst;
         } else if (is_str_bytes) {
             out_value = emit_strgetbytes(v_str, e->loc.line);
         } else if (is_str_cstr) {
             out_value = emit_strraw(v_str, e->loc.line);
         } else if (is_str_hash) {
-            ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::STRHASH;
-            ins.type = ir::IrType::I64;
-            ins.dst = v_dst;
-            ins.operands = {v_str};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
+            ir::IrValueId v_dst =
+                emit_ir_unop(ir::IrOp::STRHASH, v_str,
+                             ir::IrType::I64, e->loc.line);
             out_value = v_dst;
         } else {
             // str_intern: aloca nuevo StringObject canonical o reusa pool.

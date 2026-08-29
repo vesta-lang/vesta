@@ -124,14 +124,9 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
                 // Promover f32 a f64 si hace falta (IR ops trabajan en f64).
                 const ir::IrType vt = fn_->values[v].type;
                 if (vt == ir::IrType::F32) {
-                    ir::IrValueId f64v = fn_->new_value(ir::IrType::F64);
-                    ir::IrInstr ext{};
-                    ext.op = ir::IrOp::F32TOF64;
-                    ext.type = ir::IrType::F64;
-                    ext.dst = f64v;
-                    ext.operands = {v};
-                    ext.source_line = e->loc.line;
-                    emit(current_block_, std::move(ext));
+                    ir::IrValueId f64v =
+                        emit_ir_unop(ir::IrOp::F32TOF64, v,
+                                     ir::IrType::F64, e->loc.line);
                     v = f64v;
                 } else if (vt != ir::IrType::F64) {
                     // Si el arg no es float, lo dejamos como esta (el
@@ -279,14 +274,9 @@ bool Lowering::try_lower_math_builtins(ast::CallExpr *e, Builtin b,
             if ((vt == ir::IrType::F64 || vt == ir::IrType::F32) &&
                 arg_ir == ir::IrType::I64) {
                 if (vt == ir::IrType::F32) {
-                    ir::IrValueId f64v = fn_->new_value(ir::IrType::F64);
-                    ir::IrInstr ext{};
-                    ext.op = ir::IrOp::F32TOF64;
-                    ext.type = ir::IrType::F64;
-                    ext.dst = f64v;
-                    ext.operands = {v};
-                    ext.source_line = e->loc.line;
-                    emit(current_block_, std::move(ext));
+                    ir::IrValueId f64v =
+                        emit_ir_unop(ir::IrOp::F32TOF64, v,
+                                     ir::IrType::F64, e->loc.line);
                     v = f64v;
                 }
                 ir::IrValueId bits =

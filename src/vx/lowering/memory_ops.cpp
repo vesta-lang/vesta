@@ -959,16 +959,9 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
     // Para len < 8 -> limit8 <= 0 -> el loop de palabra no entra (i=0 >= 0
     // no se cumple con CMP_LT signed) y todo se copia por la cola.
     ir::IrValueId v_seven = emit_const(ir::IrType::I64, 7, source_line);
-    ir::IrValueId v_limit8 = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrInstr su{};
-        su.op = ir::IrOp::SUB;
-        su.type = ir::IrType::I64;
-        su.dst = v_limit8;
-        su.operands = {v_len, v_seven};
-        su.source_line = source_line;
-        emit(current_block_, std::move(su));
-    }
+    ir::IrValueId v_limit8 =
+        emit_ir_binop(ir::IrOp::SUB, v_len, v_seven,
+                      ir::IrType::I64, source_line);
 
     // ---- Loop 1: copia de palabra (8 bytes/iter). ----
     {
@@ -981,16 +974,9 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         current_block_ = hdr;
         ir::IrValueId v_i =
             emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
-        ir::IrValueId v_cond = fn_->new_value(ir::IrType::BOOL);
-        {
-            ir::IrInstr cmp{};
-            cmp.op = ir::IrOp::CMP_LT; // signed; len/i no negativos
-            cmp.type = ir::IrType::BOOL;
-            cmp.dst = v_cond;
-            cmp.operands = {v_i, v_limit8};
-            cmp.source_line = source_line;
-            emit(current_block_, std::move(cmp));
-        }
+        ir::IrValueId v_cond =
+            emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_limit8,
+                          ir::IrType::BOOL, source_line);
         {
             ir::IrInstr brc{};
             brc.op = ir::IrOp::BR_COND;
@@ -1376,15 +1362,7 @@ void Lowering::emit_store_i64(ir::IrValueId addr, ir::IrValueId val,
  */
 ir::IrValueId Lowering::emit_ir_unop(ir::IrOp op, ir::IrValueId a, ir::IrType t,
                                      uint32_t source_line) {
-    const ir::IrValueId d = fn_->new_value(t);
-    ir::IrInstr in{};
-    in.op = op;
-    in.type = t;
-    in.dst = d;
-    in.operands = {a};
-    in.source_line = source_line;
-    emit(current_block_, std::move(in));
-    return d;
+    return emit_ir_op(op, {a}, t, source_line);
 }
 
 /**
@@ -1406,12 +1384,21 @@ ir::IrValueId Lowering::emit_ir_unop(ir::IrOp op, ir::IrValueId a, ir::IrType t,
 ir::IrValueId Lowering::emit_ir_binop(ir::IrOp op, ir::IrValueId a,
                                       ir::IrValueId b, ir::IrType t,
                                       uint32_t source_line) {
+    return emit_ir_op(op, {a, b}, t, source_line);
+}
+
+/**
+ * @copydoc vx::Lowering::emit_ir_op
+ */
+ir::IrValueId Lowering::emit_ir_op(ir::IrOp op,
+                                   std::vector<ir::IrValueId> operands,
+                                   ir::IrType t, uint32_t source_line) {
     const ir::IrValueId d = fn_->new_value(t);
     ir::IrInstr in{};
     in.op = op;
     in.type = t;
     in.dst = d;
-    in.operands = {a, b};
+    in.operands = std::move(operands);
     in.source_line = source_line;
     emit(current_block_, std::move(in));
     return d;
