@@ -157,25 +157,46 @@ ir::IrValueId Lowering::enforce_nonnull(ir::IrValueId v, int line) {
     return v_new;
 }
 
-void Lowering::mark_value_from_type(ir::IrValueId v, const Type &t) {
-    if (v == ir::IR_NO_VALUE || !fn_ || v >= fn_->values.size()) return;
+Lowering::TypeMemory Lowering::type_memory(const Type &t) const {
+    TypeMemory m;
+    /* Una referencia a clase apunta a un objeto del recolector, y eso hay que
+     * decirlo ademas de que sea del anfitrion: el asignador de registros tiene
+     * que salvarlo por su manejador cuando una llamada por medio pueda mover
+     * el monton. */
     if (t.kind == PrimitiveKind::CLASS) {
-        fn_->values[v].is_host_ptr = true;
-        fn_->values[v].is_gc_object = true;
-        return;
+        m.is_host_ptr = true;
+        m.is_gc_object = true;
+        return m;
     }
+    /* Un puntero o un array que NO sea `VirtualPtr` apunta a memoria del
+     * anfitrion.  De eso depende que un deref se emita con una instruccion o
+     * con la otra, y equivocarse no da un error: da un cero. */
     if ((t.kind != PrimitiveKind::PTR && t.kind != PrimitiveKind::ARRAY) ||
         t.is_virtual)
-        return;
-    fn_->values[v].is_host_ptr = true;
+        return m;
+    m.is_host_ptr = true;
     // `T**`: un deref intermedio tiene que conservar que lo de dentro tambien
     // es del anfitrion.
     if (t.pointee &&
         (t.pointee->kind == PrimitiveKind::PTR ||
          t.pointee->kind == PrimitiveKind::ARRAY) &&
         !t.pointee->is_virtual) {
-        fn_->values[v].pointee_is_host_ptr = true;
+        m.pointee_is_host_ptr = true;
     }
+    return m;
+}
+
+void Lowering::apply_type_memory(ir::IrFunction &fn, ir::IrValueId v,
+                                 const TypeMemory &m) const {
+    if (v == ir::IR_NO_VALUE || v >= fn.values.size()) return;
+    if (m.is_host_ptr) fn.values[v].is_host_ptr = true;
+    if (m.is_gc_object) fn.values[v].is_gc_object = true;
+    if (m.pointee_is_host_ptr) fn.values[v].pointee_is_host_ptr = true;
+}
+
+void Lowering::mark_value_from_type(ir::IrValueId v, const Type &t) {
+    if (!fn_) return;
+    apply_type_memory(*fn_, v, type_memory(t));
 }
 
 OptionalLayout Lowering::optional_layout(const Type &t) const {
@@ -469,7 +490,7 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
         const auto *ptn = static_cast<const ast::PrimitiveTypeNode *>(p.type.get());
         abi.type = ir_type_from_primitive(ptn->prim);
         if (native_poo_ && ptn->prim == PrimitiveKind::STRING)
-            abi.is_host_ptr = true;
+            abi.mem.is_host_ptr = true;
     } else if (p.type) {
         /* Un tipo compuesto -- un puntero, un array, un nombre que hay que
          * resolver -- no se lee del nodo: se le pregunta al comprobador de
@@ -478,22 +499,28 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
         if (sem.kind != PrimitiveKind::COUNT && sem.kind != PrimitiveKind::VOID)
             abi.type = ir_type_from_primitive(sem.kind);
 
-        if (sem.kind == PrimitiveKind::CLASS) abi.is_class = true;
+        /* Lo que el tipo dice de la memoria lo contesta un solo sitio -- ver
+         * @c type_memory --, el mismo que responde para el resultado de una
+         * llamada o para lo que se saca de un `Optional`. */
+        abi.mem = type_memory(sem);
 
-        if ((sem.kind == PrimitiveKind::PTR || sem.kind == PrimitiveKind::ARRAY) &&
-            !sem.is_virtual)
-            abi.is_host_ptr = true;
-
+        /* Y lo que es propio de un PARAMETRO: un agregado no viaja en un
+         * registro, llega como la DIRECCION de donde esta, y todo agregado
+         * vive en memoria del anfitrion.  Por eso esto no esta en
+         * `type_memory`: ahi se pregunta por un valor cualquiera, y el de un
+         * agregado saca su memoria de donde se construyo. */
         if (sem.kind == PrimitiveKind::STRUCT ||
             sem.kind == PrimitiveKind::OPTIONAL ||
             sem.kind == PrimitiveKind::RESULT)
-            abi.is_host_ptr = true;
+            abi.mem.is_host_ptr = true;
     }
 
     if (p.is_variadic) {
+        // Llega la DIRECCION del array que monto quien llama, sea lo que sea
+        // lo que se declaro: eso manda sobre todo lo de arriba.
         abi.type = ir::IrType::PTR;
-        abi.is_host_ptr = true;
-        abi.is_class = false;
+        abi.mem = TypeMemory{};
+        abi.mem.is_host_ptr = true;
     }
     return abi;
 }
@@ -554,15 +581,7 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
         const ParamAbi abi = param_abi(*p);
         const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
         fn.values[vid].is_param = true;
-        if (abi.is_class) {
-            /* Un objeto del recolector se sigue ademas como tal: el asignador
-             * de registros tiene que saberlo para salvarlo por su manejador
-             * cuando una llamada por medio pueda mover el monton. */
-            fn.values[vid].is_host_ptr = true;
-            fn.values[vid].is_gc_object = true;
-        } else if (abi.is_host_ptr) {
-            fn.values[vid].is_host_ptr = true;
-        }
+        apply_type_memory(fn, vid, abi.mem);
         fn.params.push_back(vid);
         bindings.emplace_back(p->name, vid);
         out.push_back({p.get(), vid, abi.type});

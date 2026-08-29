@@ -217,10 +217,33 @@ class Lowering {
      * recolector, que el asignador de registros tiene que seguir cuando una
      * llamada por medio pueda mover el monton.
      */
+    /**
+     * @struct TypeMemory
+     * @brief Lo que un TIPO implica sobre la memoria de un valor suyo.
+     *
+     * El nucleo comun de @ref type_memory, @ref mark_value_from_type y
+     * @ref param_abi, que contestaban lo mismo por separado -- y de los tres
+     * sitios que APLICABAN la respuesta a un valor con las mismas siete lineas
+     * copiadas.
+     *
+     * De esto depende que un deref se emita con la instruccion de memoria del
+     * anfitrion o con la de la maquina virtual: equivocarse no da un error, da
+     * un cero.  Y si ademas es un objeto del recolector, el asignador de
+     * registros tiene que seguirlo cuando una llamada por medio pueda mover el
+     * monton.
+     */
+    struct TypeMemory {
+        bool is_host_ptr = false;         ///< Direccion de memoria del host.
+        bool is_gc_object = false;        ///< Ademas, objeto del recolector.
+        bool pointee_is_host_ptr = false; ///< Lo de dentro, tambien (`T**`).
+    };
+
     struct ParamAbi {
         ir::IrType type = ir::IrType::I64; ///< Su tipo en el IR.
-        bool is_class = false;             ///< Objeto del recolector.
-        bool is_host_ptr = false;          ///< Lleva una direccion del host.
+        /// De que memoria es (@ref TypeMemory).  Lo contesta el mismo sitio
+        /// que para cualquier otro valor, mas lo que es propio de un
+        /// parametro: un agregado llega como la direccion de donde esta.
+        TypeMemory mem;
     };
 
     /**
@@ -2835,6 +2858,36 @@ class Lowering {
      * @param t Su tipo Vesta.
      */
     void mark_value_from_type(ir::IrValueId v, const Type &t);
+
+    /**
+     * @struct TypeMemory
+     * @brief Lo que un TIPO implica sobre la memoria de un valor suyo.
+     *
+     * El nucleo comun de @ref mark_value_from_type y @ref param_abi, que
+     * contestaban lo mismo por separado, y de los tres sitios que APLICABAN la
+     * respuesta a un valor con las mismas siete lineas copiadas.
+     */
+    /**
+     * @brief La respuesta, para un tipo.
+     *
+     * @param t El tipo Vesta.
+     * @return Que decir de un valor suyo.
+     */
+    TypeMemory type_memory(const Type &t) const;
+
+    /**
+     * @brief Escribe esa respuesta en un valor de la funcion @p fn.
+     *
+     * Recibe la funcion en vez de usar la que se esta bajando porque hay
+     * quien construye una APARTE -- el envoltorio de una funcion externa, el
+     * cuerpo de un lambda -- y necesita la misma regla.
+     *
+     * @param fn La funcion donde vive el valor.
+     * @param v  El valor.
+     * @param m  Lo que hay que decir de el.
+     */
+    void apply_type_memory(ir::IrFunction &fn, ir::IrValueId v,
+                           const TypeMemory &m) const;
 
     /**
      * @brief Hace cumplir un `nonnull`: devuelve el mismo valor, y si es nulo

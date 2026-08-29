@@ -1617,12 +1617,10 @@ void Lowering::generate_extern_cfn_thunks(ir::IrModule &out) {
             const ir::IrValueId vid =
                 fn.new_value(pt, "%a" + std::to_string(i));
             fn.values[vid].is_param = true;
-            // PTR/ARRAY nativos (no VirtualPtr) son host_ptr.
-            const PrimitiveKind pk = sig->param_types[i].kind;
-            if ((pk == PrimitiveKind::PTR || pk == PrimitiveKind::ARRAY) &&
-                !sig->param_types[i].is_virtual) {
-                fn.values[vid].is_host_ptr = true;
-            }
+            /* De que memoria es lo contesta el mismo sitio que para todo lo
+             * demas.  Aqui estaba la mitad: solo miraba puntero y array, asi
+             * que un `T**` perdia que lo de dentro tambien es del anfitrion. */
+            apply_type_memory(fn, vid, type_memory(sig->param_types[i]));
             fn.params.push_back(vid);
             param_vids.push_back(vid);
         }

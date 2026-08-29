@@ -760,12 +760,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         const ParamAbi abi = param_abi(*p);
         const ir::IrValueId pv = fn_->new_value(abi.type, p->name);
         fn_->values[pv].is_param = true;
-        if (abi.is_class) {
-            fn_->values[pv].is_host_ptr = true;
-            fn_->values[pv].is_gc_object = true;
-        } else if (abi.is_host_ptr) {
-            fn_->values[pv].is_host_ptr = true;
-        }
+        apply_type_memory(*fn_, pv, abi.mem);
         fn_->params.push_back(pv);
         bind(p->name, pv);
     }
@@ -828,12 +823,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         const ParamAbi abi = param_abi(*p);
         const ir::IrValueId pv = fn_->new_value(abi.type, p->name);
         fn_->values[pv].is_param = true;
-        if (abi.is_class) {
-            fn_->values[pv].is_host_ptr = true;
-            fn_->values[pv].is_gc_object = true;
-        } else if (abi.is_host_ptr) {
-            fn_->values[pv].is_host_ptr = true;
-        }
+        apply_type_memory(*fn_, pv, abi.mem);
         fn_->params.push_back(pv);
         bind(p->name, pv);
         param_vals.push_back(pv);
