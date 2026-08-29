@@ -3116,6 +3116,8 @@ r0_case("extimpl488", "impl: metodos anadidos desde fuera con 0..3 parametros, s
 r0_case("arguni489", "la MISMA expresion como argumento en las siete formas de llamar (funcion, ctor, metodo, estatico, struct, closure, variante)", "489_argumentos_uniformes.vx", 42, line=3776)
 fails_case("ctornomet490", "un constructor no se puede llamar como metodo de instancia (viven en la misma lista)", "490_ctor_no_es_metodo.vx", "no tiene un metodo", line=3778)
 fails_case("extret491", "'extension' esta retirada y el error dice con que se sustituye", "491_extension_retirada_err.vx", "ya no existe", line=3780)
+r0_case("vecall492", "todas las formas que el vectorizador reconoce, y las dos que no: la salida es la misma con y sin vectorizar, asi que lo que se comprueba es el IR (tools/verify_vectorize.sh idiomas)", "492_vectorizador_completo.vx", 42, line=3782)
+r0_case("stdnum493", "std.numeric desde fuera: las diez operaciones, con el segundo import que rompia la instanciacion de plantillas cross-module", "493_std_numeric.vx", 42, line=3784)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

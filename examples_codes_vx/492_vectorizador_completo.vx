@@ -1,0 +1,93 @@
+namespace ejemplos.vectorizador_completo;
+
+// Las formas de bucle que `std.numeric` NO cubre.
+//
+// La libreria es la escritura canonica de todo lo que se ensancha, y es lo que
+// ejercita `493_std_numeric.vx`.  Aqui quedan las tres cosas que no puede
+// expresar, y que sin embargo hay que fijar igual:
+//
+//   1. La COPIA.  No se ensancha: se reconoce que el bucle entero es un
+//      movimiento de bloque y queda UNA instruccion, que es mejor que
+//      ensancharlo.  Su sitio en la libreria es `std.memory`, no `std.numeric`.
+//
+//   2. Una CADENA de operaciones.  El reconocedor exige una sola operacion en
+//      el cuerpo, asi que `a[i] + b[i] - a[i]` se queda fuera.
+//
+//   3. El PRODUCTO de 64 bits.  No existe empaquetado en ninguna de las dos
+//      maquinas.  Por eso `std.numeric.mul<i64>` no compila: una funcion de
+//      libreria que baja a un bucle de uno en uno es una promesa incumplida.
+//
+// Las dos ultimas no son fallos que arreglar, son limites -- uno del
+// reconocedor y otro de la maquina -- y estan escritas para que consten
+// MEDIDAS.  `tools/verify_vectorize.py idioms` las fija en cero: si algun dia
+// una empieza a ensancharse sera porque alguien lo hizo a proposito, y esa
+// linea del arnes es la que hay que mover.
+//
+// Nada de esto se ve en la salida: con la vectorizacion desactivada el
+// programa devuelve exactamente lo mismo, solo que recorriendo los elementos
+// de uno en uno.  Por eso lo que se comprueba es el IR.
+
+const i64 N = 64;
+
+// --- 1. La copia, en las dos formas de escribir el bucle. ------------------
+
+i64 copy_while(i64* dst, i64* src, i64 n) {
+    i64 i = 0;
+    while (i < n) {
+        dst[i] = src[i];
+        i = i + 1;
+    }
+    return dst[0] + dst[n - 1];
+}
+
+i64 copy_for(i64* dst, i64* src, i64 n) {
+    for (i64 i = 0; i < n; i = i + 1) {
+        dst[i] = src[i];
+    }
+    return dst[0] + dst[n - 1];
+}
+
+// --- 2. Dos operaciones en el cuerpo: el reconocedor exige una. ------------
+
+i64 chain(i64* c, i64* a, i64* b, i64 n) {
+    for (i64 i = 0; i < n; i = i + 1) {
+        c[i] = a[i] + b[i] - a[i];
+    }
+    return c[0] + c[n - 1];
+}
+
+// --- 3. Producto de 64 bits: no existe empaquetado. ------------------------
+
+i64 scalar_i64(i64* c, i64* a, i64 k, i64 n) {
+    for (i64 i = 0; i < n; i = i + 1) {
+        c[i] = a[i] * k;
+    }
+    return c[0] + c[n - 1];
+}
+
+i32 main() {
+    i64* a = (i64*) malloc(N * 8);
+    i64* b = (i64*) malloc(N * 8);
+    i64* c = (i64*) malloc(N * 8);
+
+    for (i64 i = 0; i < N; i = i + 1) {
+        a[i] = i;
+        b[i] = 2;
+    }
+
+    // La copia deja c igual que a:  0 + 63 = 63, las dos veces.
+    const i64 r1 = copy_while(c, a, N);
+    const i64 r2 = copy_for(c, a, N);
+    // a + b - a = b = 2 en todos:  2 + 2 = 4.
+    const i64 r3 = chain(c, a, b, N);
+    // 0*3 = 0 y 63*3 = 189.
+    const i64 r4 = scalar_i64(c, a, 3, N);
+
+    println("copia=${r1},${r2} cadena=${r3} escalar_i64=${r4}");
+
+    free(a); free(b); free(c);
+
+    // 63 + 63 + 4 + 189 = 319
+    const i64 total = r1 + r2 + r3 + r4;
+    return (i32) (total - 277);   // 42
+}

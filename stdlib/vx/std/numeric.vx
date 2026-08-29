@@ -1,0 +1,303 @@
+namespace std.numeric;
+
+/**
+ * @file numeric.vx
+ * @brief Operaciones sobre rangos contiguos de numeros.
+ *
+ * Un bucle que recorre dos bloques y escribe un tercero se escribe a mano en
+ * cuatro lineas.  El problema no es escribirlo: es que el compilador lo
+ * RECONOZCA.  El reconocedor acepta una forma muy concreta -- un indice
+ * contado, un solo enunciado en el cuerpo, una sola operacion -- y una linea
+ * de mas, un indice que se toca dos veces o una operacion extra lo dejan fuera
+ * sin decir nada.  El programa sigue dando el mismo numero; solo que
+ * recorriendo los elementos de uno en uno.
+ *
+ * Este modulo es la ESCRITURA CANONICA de cada una de esas formas.  Llamar a
+ * @ref add es pedir explicitamente el bucle que el compilador sabe ensanchar,
+ * en lugar de escribirlo otra vez y confiar en haber acertado con la forma.
+ *
+ * INVARIANTE: todo lo que se exporta de aqui se ensancha.  No es una promesa
+ * escrita en un comentario -- las restricciones de la firma la hacen cumplir.
+ * `mul<i64>` NO COMPILA, porque no existe producto empaquetado de 64 bits y
+ * una funcion de libreria que baja a un bucle de uno en uno es una promesa
+ * incumplida.  Cuando el reconocedor aprenda una forma nueva se afloja el
+ * concepto que la excluia y la funcion pasa a cubrirla; hasta entonces el
+ * error lo dice, en vez de que el programa vaya despacio en silencio.
+ *
+ * Que tipo admite cada operacion no es una decision de estilo sino lo que la
+ * maquina tiene, y esta MEDIDO -- no supuesto -- con
+ * `tools/verify_vectorize.sh idioms`:
+ *
+ *   operacion           tipos admitidos           por que no el resto
+ *   ------------------- ------------------------- ------------------------
+ *   add sub             los diez                  --
+ *   add_into sub_into   los diez                  --
+ *   mul                 i16 u16 i32 u32 f32 f64   no hay producto empaquetado
+ *                                                 de 8 ni de 64 bits
+ *   div                 f32 f64                   no hay division entera
+ *                                                 empaquetada
+ *   add_scalar          todos menos f32           hueco del reconocedor
+ *   mul_scalar          i16 u16 i32 u32 f64       suma de los dos anteriores
+ *   negate              f64                       hueco del reconocedor
+ *   sum                 i32 u32 i64 u64 f32 f64   de 8 y 16 bits el acumulador
+ *                                                 se desborda enseguida
+ *
+ * Las dos filas que dicen "hueco del reconocedor" no son limites de la
+ * maquina: repartir un escalar a todos los carriles existe tambien para f32, y
+ * negar existe para enteros y para f32.  Es el reconocedor el que todavia no
+ * las mira.  Quedan anotadas para que se vea cuales son, y para que al
+ * cerrarlas se afloje el concepto que les corresponde.
+ *
+ * Hoy la tabla es la misma en todas las arquitecturas, porque la decision se
+ * toma sobre el IR -- que es comun -- y no sobre el juego de instrucciones del
+ * objetivo.  El dia que una maquina pueda algo que otra no, el concepto
+ * correspondiente se declara una vez por arquitectura con `@Target` y no hace
+ * falta partir el modulo: aqui solo va lo portable, y a un `numeric/<arch>.vx`
+ * iria unicamente lo que dependa DE VERDAD de esa ISA.
+ *
+ * Ninguna de estas funciones tolera que los rangos se SOLAPEN parcialmente;
+ * que el destino sea exactamente uno de los origenes si esta permitido.  Y
+ * ninguna comprueba @p n contra el tamano real de los bloques: quien llama
+ * responde de que haya @p n elementos en cada uno.
+ *
+ * @see std.memory  Copiar y rellenar bloques, la otra mitad del asunto: alli
+ *                  el mejor resultado no es ensanchar el bucle sino que el
+ *                  bucle desaparezca y quede una sola instruccion de bloque.
+ */
+
+import std.types only usize;
+
+// ---------------------------------------------------------------------------
+// Que sabe hacer la maquina con un tipo de elemento.
+//
+// Son publicos a proposito.  Quien escriba su propio nucleo generico necesita
+// poder exigir la MISMA condicion que exige este modulo; copiarla a mano
+// significa que el dia que aqui se afloje, alla se quede corta y nadie se
+// entere.
+//
+// Se llaman `Packed*` porque eso es exactamente lo que afirman: que existe la
+// version EMPAQUETADA de esa operacion para ese ancho de elemento.  No son una
+// propiedad matematica del tipo -- multiplicar dos enteros de 64 bits se puede,
+// por supuesto; lo que no hay es una instruccion que lo haga con varios a la
+// vez.
+// ---------------------------------------------------------------------------
+
+/// Existe suma y resta empaquetadas.  Para todo tipo numerico.
+public concept PackedAdd<T> = is_numeric<T>();
+
+/// Existe producto empaquetado.
+///
+/// Los flotantes, si.  Los enteros solo de 16 y de 32 bits: no hay producto
+/// empaquetado de 8 bits, y el de 64 tampoco existe -- ni en SSE/AVX ni en
+/// NEON.  Para multiplicar enteros de 64 bits hay que hacerlo de uno en uno, y
+/// entonces esta libreria no es lo que se busca.
+public concept PackedMul<T> =
+    is_float<T>() || (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4));
+
+/// Existe division empaquetada.  Solo flotantes: la division entera no la
+/// tiene ninguna de las dos maquinas.
+public concept PackedDiv<T> = is_float<T>();
+
+/// Se puede repartir un mismo sumando a todos los carriles.
+///
+/// Todos menos f32, y no porque la maquina no sepa repartir un f32 -- sabe --
+/// sino porque el reconocedor todavia no lo mira.
+public concept PackedScalarAdd<T> =
+    is_numeric<T>() && (is_integer<T>() || sizeof<T>() == 8);
+
+/// Se puede repartir un mismo factor a todos los carriles.
+///
+/// La interseccion de las dos condiciones anteriores: hace falta que exista el
+/// producto empaquetado Y que el reparto del escalar se reconozca.
+public concept PackedScalarMul<T> =
+    (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4))
+    || (is_float<T>() && sizeof<T>() == 8);
+
+/// Existe negacion empaquetada.  Hoy solo f64, por hueco del reconocedor.
+public concept PackedNegate<T> = is_float<T>() && sizeof<T>() == 8;
+
+/// Se puede acumular en una sola variable.
+///
+/// Los de 8 y 16 bits quedan fuera por una razon distinta a todas las demas:
+/// no es que la maquina no pueda, es que el acumulador tendria el ancho del
+/// elemento y una suma de unos pocos cientos de valores ya se sale.  Para
+/// sumar bytes, conviertelos antes al ancho en el que quieras el total.
+public concept PackedSum<T> = is_numeric<T>() && sizeof<T>() >= 4;
+
+// ---------------------------------------------------------------------------
+// Dos rangos de entrada, uno de salida.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief @p dst[i] = @p a[i] + @p b[i], para @p n elementos.
+ *
+ * @param dst Destino.  Puede ser el mismo bloque que @p a o que @p b.
+ * @param a Primer sumando.
+ * @param b Segundo sumando.
+ * @param n Numero de ELEMENTOS, no de bytes.
+ */
+public void add<T: PackedAdd>(T* dst, T* a, T* b, usize n) {
+    // Un solo enunciado en el cuerpo y una sola operacion: es la forma exacta
+    // que el reconocedor busca.  Partirlo en dos lineas lo dejaria fuera.
+    for (usize i = 0; i < n; i++) {
+        dst[i] = a[i] + b[i];
+    }
+}
+
+/**
+ * @brief @p dst[i] = @p a[i] - @p b[i], para @p n elementos.
+ *
+ * @param dst Destino.
+ * @param a Minuendo.
+ * @param b Sustraendo.
+ * @param n Numero de elementos.
+ */
+public void sub<T: PackedAdd>(T* dst, T* a, T* b, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] = a[i] - b[i];
+    }
+}
+
+/**
+ * @brief @p dst[i] = @p a[i] * @p b[i], para @p n elementos.
+ *
+ * @param dst Destino.
+ * @param a Primer factor.
+ * @param b Segundo factor.
+ * @param n Numero de elementos.
+ */
+public void mul<T: PackedMul>(T* dst, T* a, T* b, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] = a[i] * b[i];
+    }
+}
+
+/**
+ * @brief @p dst[i] = @p a[i] / @p b[i], para @p n elementos.
+ *
+ * No se comprueba el divisor.  Con flotantes un cero da infinito o NaN segun
+ * IEEE 754, que es exactamente lo que hace la instruccion; anadir una rama por
+ * elemento seria justo lo que impide ensanchar el bucle.  Quien necesite
+ * comprobarlo, que lo haga fuera.
+ *
+ * @param dst Destino.
+ * @param a Dividendo.
+ * @param b Divisor.
+ * @param n Numero de elementos.
+ */
+public void div<T: PackedDiv>(T* dst, T* a, T* b, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] = a[i] / b[i];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Un rango y un valor suelto, que se reparte a todos los carriles.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief @p dst[i] = @p a[i] + @p k, para @p n elementos.
+ *
+ * @param dst Destino.
+ * @param a Origen.
+ * @param k El mismo sumando para todos los elementos.
+ * @param n Numero de elementos.
+ */
+public void add_scalar<T: PackedScalarAdd>(T* dst, T* a, T k, usize n) {
+    // `k` no depende del indice, asi que se reparte a todos los carriles UNA
+    // vez, fuera del bucle; dentro solo queda la suma.
+    for (usize i = 0; i < n; i++) {
+        dst[i] = a[i] + k;
+    }
+}
+
+/**
+ * @brief @p dst[i] = @p a[i] * @p k, para @p n elementos.
+ *
+ * @param dst Destino.
+ * @param a Origen.
+ * @param k El mismo factor para todos los elementos.
+ * @param n Numero de elementos.
+ */
+public void mul_scalar<T: PackedScalarMul>(T* dst, T* a, T k, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] = a[i] * k;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// El destino es tambien operando.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief @p dst[i] += @p a[i], para @p n elementos.
+ *
+ * @param dst Destino y primer sumando.
+ * @param a Segundo sumando.
+ * @param n Numero de elementos.
+ */
+public void add_into<T: PackedAdd>(T* dst, T* a, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] += a[i];
+    }
+}
+
+/**
+ * @brief @p dst[i] -= @p a[i], para @p n elementos.
+ *
+ * @param dst Destino y minuendo.
+ * @param a Sustraendo.
+ * @param n Numero de elementos.
+ */
+public void sub_into<T: PackedAdd>(T* dst, T* a, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] -= a[i];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Un solo rango de entrada.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief @p dst[i] = -@p a[i], para @p n elementos.
+ *
+ * @param dst Destino.
+ * @param a Origen.
+ * @param n Numero de elementos.
+ */
+public void negate<T: PackedNegate>(T* dst, T* a, usize n) {
+    for (usize i = 0; i < n; i++) {
+        dst[i] = -a[i];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// De un rango a un solo valor.
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Suma los @p n elementos de @p a.
+ *
+ * Es la unica de este fichero con dependencia entre vueltas -- cada suma
+ * necesita el resultado de la anterior -- y se resuelve llevando varios
+ * acumuladores en paralelo y juntandolos al final.
+ *
+ * Con flotantes eso CAMBIA EL RESULTADO respecto a sumar de uno en uno: la
+ * suma en coma flotante no es asociativa, asi que agrupar de otra forma
+ * redondea distinto.  La diferencia es del orden del error de redondeo, y en
+ * la practica suele ser MENOR que la de la suma secuencial porque los
+ * parciales se mantienen mas pequenos -- pero es una diferencia.  Quien
+ * necesite el mismo bit exacto que un bucle secuencial no debe usar esto.
+ *
+ * @param a Origen.
+ * @param n Numero de elementos.
+ * @return La suma de los @p n elementos.
+ */
+public T sum<T: PackedSum>(T* a, usize n) {
+    T acc = 0;
+    for (usize i = 0; i < n; i++) {
+        acc = acc + a[i];
+    }
+    return acc;
+}
