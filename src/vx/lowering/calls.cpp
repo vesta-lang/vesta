@@ -18,6 +18,7 @@
  * compilar: falla al ejecutar.
  */
 #include "vx/lowering.h"
+#include "jit/naked_native.h" // la clave del despachador, calculada en UN sitio
 #include "vx/collection_intrinsics.h"
 #include "vx/comptime/comptime_introspect.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
@@ -30,6 +31,68 @@
 #include "lowering_internal.h" // la cocina compartida del lowering
 
 namespace vx {
+
+/**
+ * @brief Emite la llamada a una funcion @c @Naked a traves del despachador.
+ *
+ * Una funcion @c @Naked no tiene prologo ni epilogo: su cuerpo es ensamblador
+ * puro, asi que no se puede llamar como a cualquier otra.  Se llama a un
+ * despachador del runtime, que la localiza por una CLAVE calculada del nombre y
+ * salta a ella con la convencion nativa.
+ *
+ * La clave la calcula @c jit::fnv1a64_name, y se usa la SUYA a proposito: quien
+ * baja la llamada y quien la resuelve tienen que sacar exactamente el mismo
+ * numero.  Antes esto estaba escrito a mano aqui -- dos veces, una por cada
+ * forma de nombrar la funcion -- con la semilla y el primo copiados, y el
+ * comentario de al lado avisando de que "DEBE coincidir".  Tres sitios donde
+ * cambiar un digito rompe el enlace, y el fallo seria mudo: el despachador no
+ * encuentra la funcion.
+ *
+ * Los tres primeros argumentos son fijos -- el proceso, la clave y cuantos
+ * argumentos reales hay -- y detras van los del usuario.
+ *
+ * @param label   El nombre con el que la funcion quedo registrada.
+ * @param e       La llamada.
+ * @param ret_ir  El tipo que devuelve.
+ * @param out_dst Donde dejar el valor devuelto (sin valor si es void).
+ * @return @c false si alguno de los argumentos no se pudo bajar.
+ */
+bool Lowering::emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
+                                   ir::IrType ret_ir,
+                                   ir::IrValueId &out_dst) {
+    out_mod_->register_native_import("vrt", "naked_dispatch");
+
+    std::vector<ir::IrValueId> arg_ids;
+    arg_ids.reserve(e->args.size() + 3);
+    arg_ids.push_back(emit_getproc(e->loc.line));
+    arg_ids.push_back(emit_const(ir::IrType::I64,
+                                 jit::fnv1a64_name(label.c_str()),
+                                 e->loc.line));
+    arg_ids.push_back(emit_const(
+        ir::IrType::I64, static_cast<uint64_t>(e->args.size()), e->loc.line));
+
+    for (auto &a : e->args) {
+        const ir::IrValueId av = lower_expr(a.get());
+        if (av == ir::IR_NO_VALUE) {
+            out_dst = ir::IR_NO_VALUE;
+            return false;
+        }
+        arg_ids.push_back(av);
+    }
+
+    out_dst = (ret_ir == ir::IrType::VOID)
+                  ? ir::IR_NO_VALUE
+                  : fn_->new_value(ret_ir);
+    ir::IrInstr ins{};
+    ins.op = ir::IrOp::CALLN;
+    ins.type = ret_ir;
+    ins.dst = out_dst;
+    ins.func_name = "vrt:naked_dispatch";
+    ins.operands = std::move(arg_ids);
+    ins.source_line = e->loc.line;
+    emit(current_block_, std::move(ins));
+    return true;
+}
 ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     /* A.43.10: macros Lisp con splice/emit.  Si el type checker
      * sustituyo la llamada por un AST expandido (campo macro_expanded
@@ -276,47 +339,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         if (sig != nullptr && sig->is_naked && sig->extern_lib.empty()) {
             const std::string label =
                 sig->mangled_label.empty() ? id->name : sig->mangled_label;
-            out_mod_->register_native_import("vrt", "naked_dispatch");
-            std::vector<ir::IrValueId> arg_ids;
-            arg_ids.reserve(e->args.size() + 3);
-            // R1 = proc (getproc); R2 = hash; R3 = argc_real.
-            arg_ids.push_back(emit_getproc(e->loc.line));
-            // FNV-1a 64-bit del label (DEBE coincidir con jit::fnv1a64_name en
-            // naked_native.h -- clave que el dispatcher usa para localizar el
-            // IrFunction @Naked por nombre).
-            uint64_t name_hash = 1469598103934665603ull;
-            for (unsigned char c : label) {
-                name_hash ^= static_cast<uint64_t>(c);
-                name_hash *= 1099511628211ull;
-            }
-            arg_ids.push_back(
-                emit_const(ir::IrType::I64, name_hash, e->loc.line));
-            arg_ids.push_back(emit_const(ir::IrType::I64,
-                                         static_cast<uint64_t>(e->args.size()),
-                                         e->loc.line));
-            // R4.. = argumentos reales (max 6; el dispatcher los pasa al ABI
-            // nativo).  Se promocionan a i64 (convencion C uniforme).
-            for (auto &a : e->args) {
-                const ir::IrValueId av = lower_expr(a.get());
-                if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                arg_ids.push_back(av);
-            }
             const ir::IrType ret_ir =
                 ir_type_from_primitive(sig->return_type.kind);
-            const ir::IrValueId dst =
-                (sig->return_type.kind == PrimitiveKind::VOID)
-                    ? ir::IR_NO_VALUE
-                    : fn_->new_value(ret_ir == ir::IrType::VOID
-                                         ? ir::IrType::I64
-                                         : ret_ir);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ret_ir;
-            ins.dst = dst;
-            ins.func_name = "vrt:naked_dispatch";
-            ins.operands = std::move(arg_ids);
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
+            ir::IrValueId dst = ir::IR_NO_VALUE;
+            if (!emit_naked_dispatch(label, e, ret_ir, dst))
+                return ir::IR_NO_VALUE;
             return dst;
         }
     }
@@ -2030,45 +2057,11 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
             }
         }
         if (ns_is_naked) {
-            const std::string &label = mangled_label;
-            out_mod_->register_native_import("vrt", "naked_dispatch");
-            std::vector<ir::IrValueId> arg_ids;
-            arg_ids.reserve(e->args.size() + 3);
-            // R1 = proc; R2 = hash(label); R3 = argc_real.
-            arg_ids.push_back(emit_getproc(e->loc.line));
-            // FNV-1a 64-bit del mangled_label (DEBE coincidir con
-            // jit::fnv1a64_name -- clave que el dispatcher usa para
-            // localizar el IrFunction @Naked por nombre).
-            uint64_t name_hash = 1469598103934665603ull;
-            for (unsigned char c : label) {
-                name_hash ^= static_cast<uint64_t>(c);
-                name_hash *= 1099511628211ull;
-            }
-            arg_ids.push_back(
-                emit_const(ir::IrType::I64, name_hash, e->loc.line));
-            arg_ids.push_back(emit_const(
-                ir::IrType::I64, static_cast<uint64_t>(e->args.size()),
-                e->loc.line));
-            // R4.. = args reales (max 6; promocionados a i64).
-            for (auto &a : e->args) {
-                const ir::IrValueId av = lower_expr(a.get());
-                if (av == ir::IR_NO_VALUE) {
-                    out = ir::IR_NO_VALUE;
-                    return true;
-                }
-                arg_ids.push_back(av);
-            }
-            const ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
-                                          ? ir::IR_NO_VALUE
-                                          : fn_->new_value(ret_ir);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ret_ir;
-            ins.dst = dst;
-            ins.func_name = "vrt:naked_dispatch";
-            ins.operands = std::move(arg_ids);
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
+            /* Se devuelve que SI se atendio pase lo que pase: si un argumento
+             * no se pudo bajar, `out` queda sin valor y quien llamo ya lo mira.
+             * Seguir buscando otra forma de bajarlo seria repetir el error. */
+            ir::IrValueId dst = ir::IR_NO_VALUE;
+            (void)emit_naked_dispatch(mangled_label, e, ret_ir, dst);
             out = dst;
             return true;
         }

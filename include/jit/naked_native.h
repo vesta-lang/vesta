@@ -36,6 +36,8 @@
 #ifndef VESTA_JIT_NAKED_NATIVE_H
 #define VESTA_JIT_NAKED_NATIVE_H
 
+#include "util/fnv.h" // la semilla y el primo viven en UN sitio
+
 #include <cstdint>
 #include <string>
 
@@ -83,12 +85,14 @@ void register_naked_fnaddr_runner();
  *        @c Executable cargado.
  */
 inline uint64_t fnv1a64_name(const char *s) {
-    uint64_t h = 1469598103934665603ull;
-    for (const char *p = s; *p; ++p) {
-        h ^= static_cast<uint64_t>(static_cast<unsigned char>(*p));
-        h *= 1099511628211ull;
-    }
-    return h;
+    /* La semilla y el primo NO se escriben aqui: los pone `util/fnv.h`.  Es lo
+     * unico que hace que esto valga -- quien BAJA la llamada computa la misma
+     * clave, y si las dos mitades no usaran exactamente los mismos numeros el
+     * despachador no encontraria la funcion y el fallo seria mudo. */
+    size_t n = 0;
+    while (s[n] != '\0')
+        ++n;
+    return util::fnv_bytes(util::kFnvOffset, s, n);
 }
 
 /* ===================================================================== */

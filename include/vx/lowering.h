@@ -285,6 +285,27 @@ class Lowering {
      * @param elem_ty  De que tipo es cada uno de los que sobran.
      * @param line     Linea fuente, para la depuracion.
      */
+    /**
+     * @brief Emite la llamada a una funcion @c @Naked por el despachador.
+     *
+     * Una @c @Naked no tiene prologo ni epilogo -- su cuerpo es ensamblador
+     * puro -- asi que no se llama como a cualquier otra: se llama a un
+     * despachador que la localiza por una CLAVE calculada del nombre.
+     *
+     * La clave la calcula @c jit::fnv1a64_name, la MISMA que usa quien la
+     * resuelve.  Estaba escrita a mano aqui, dos veces, con la semilla y el
+     * primo copiados y un comentario avisando de que "DEBE coincidir": tres
+     * sitios donde cambiar un digito rompe el enlace, y el fallo seria mudo.
+     *
+     * @param label   Con que nombre quedo registrada.
+     * @param e       La llamada.
+     * @param ret_ir  El tipo que devuelve.
+     * @param out_dst Donde dejar el valor devuelto.
+     * @return @c false si algun argumento no se pudo bajar.
+     */
+    bool emit_naked_dispatch(const std::string &label, ast::CallExpr *e,
+                             ir::IrType ret_ir, ir::IrValueId &out_dst);
+
     void pack_variadic_args(std::vector<ir::IrValueId> &arg_ids, size_t fixed,
                             ir::IrType elem_ty, uint32_t line);
 

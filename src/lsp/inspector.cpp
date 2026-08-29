@@ -43,9 +43,16 @@
 
 #include <capstone/capstone.h>
 
+#include <filesystem>
+
+#include "analysis/asa/dump.h"         // la vista del conocimiento
+#include "analysis/asa/productores.h"  // producir()
+#include "analyze/asm_report.h"        // registrar_productor_asm()
 #include "aot/aot_analyze.h"
 #include "analyze/bigo.h"
-#include "lsp/symbol_index.h" // uri_to_fs_path
+#include "lsp/symbol_index.h"          // uri_to_fs_path
+#include "jit/vreg_select.h"           // vreg_ultimo_motivo
+#include "toolchain/native_backend.h"  // el mismo codegen que usa el AOT real
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "jit/code_cache.h"
@@ -2147,27 +2154,48 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         return {{"incompatible", true}, {"reason", reason}};
     }
 
-    // Compilar a bytes nativos (HOST_LEAF) con resolvers vacios: vista
-    // aislada de UNA funcion (las CALL cross-funcion / datos quedan como
-    // relocations sin resolver, que se reportan al cliente).
+    // Compilar por el MISMO backend que usa la compilacion anticipada de
+    // verdad.  Antes esta vista llamaba al generador por debajo y sin
+    // resolutores, y entonces cualquier funcion con un literal de cadena --
+    // casi todas -- se declaraba "no soportada" aunque el modo nativo la
+    // compilase sin una queja: el selector no puede resolver el simbolo y
+    // renuncia, mientras que por esta via el mismo simbolo sale como
+    // reubicacion, que es justo lo que un objeto necesita.
     std::vector<jit::NativeReloc> relocs;
     std::vector<jit::LineMapEntry> line_map;
     std::vector<std::pair<uint32_t, std::string>> asm_labels;
     std::vector<uint8_t> bytes;
+    std::unique_ptr<aot::NativeBackend> backend = aot::make_native_backend(
+        mode32 ? aot::AotArch::X86_32 : aot::AotArch::X86_64);
+    if (!backend)
+        return {{"error", "no hay generador de codigo nativo para el objetivo "
+                          "pedido"}};
+    aot::NativeCompileOpts nopts;
+    nopts.pic = true;
+    nopts.target_sysv = sysv;
+    nopts.mode32 = mode32;
+    nopts.fisa = jit::FloatIsa::SSE2;
+    nopts.want_line_map = true;
     try {
-        bytes = jit::vreg_compile_native(
-            *fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
-            /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
-            /*target_sysv=*/sysv, /*mode32=*/mode32, jit::FloatIsa::SSE2,
-            /*emit_line_map=*/true, &line_map, &asm_labels);
+        aot::NativeCompileResult ncr = backend->compile_function(*fn, nopts);
+        bytes = std::move(ncr.bytes);
+        relocs = std::move(ncr.relocs);
+        line_map = std::move(ncr.line_map);
     } catch (...) {
         return {{"error",
                  "el codegen AOT lanzo una excepcion para '" + fn->name + "'"}};
     }
-    if (bytes.empty())
+    if (bytes.empty()) {
+        // El selector deja escrito QUE operacion le hizo renunciar.  Decirlo
+        // es la diferencia entre un aviso que se puede investigar y uno que
+        // solo dice que no.
+        const std::string motivo = jit::vreg_ultimo_motivo();
         return {{"incompatible", true},
                 {"reason", "la funcion '" + fn->name +
-                               "' no esta soportada por el selector vreg AOT"}};
+                               "' no esta soportada por el generador nativo" +
+                               (motivo.empty() ? std::string()
+                                               : ": " + motivo)}};
+    }
 
     std::string text = disasm_x86_64(bytes.data(), bytes.size(), 0, mode32);
     nlohmann::json args = function_args(
@@ -2238,6 +2266,57 @@ std::pair<size_t, size_t> count_diags(const vx::CompileResult &res) {
 }
 
 } // namespace
+
+nlohmann::json Inspector::asa(const std::string &uri) {
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
+    const std::string &text = docs_.text(uri);
+    const DocAnalysis &an = engine_.analyze_document(uri, text);
+    ir::IrModule mod;
+    if (!parse_post_opt_module(an.result, mod))
+        return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
+
+    /* El asm es un dominio mas, pero su productor vive junto a la base de datos
+     * de instrucciones: se da de alta desde aqui, que es quien la tiene, igual
+     * que hace la linea de ordenes.  El alta es idempotente. */
+    analyze::registrar_productor_asm();
+
+    analysis::asa::FactStore almacen;
+    const std::vector<analysis::asa::ResumenProduccion> resumenes =
+        analysis::asa::producir(mod, almacen);
+
+    /* La vista del subsistema escribe a un fichero abierto, no a una cadena, y
+     * asi debe seguir: quien decide como se ensena el conocimiento es el, no
+     * cada consumidor.  Se le da un temporal y se lee de vuelta. */
+    const std::filesystem::path ruta =
+        std::filesystem::temp_directory_path() /
+        ("vesta_asa_" + std::to_string(fnv1a_hash(uri + text)) + ".txt");
+    std::string volcado;
+    {
+#if defined(_WIN32)
+        FILE *salida = nullptr;
+        if (fopen_s(&salida, ruta.string().c_str(), "w+b") != 0) salida = nullptr;
+#else
+        FILE *salida = std::fopen(ruta.string().c_str(), "w+b");
+#endif
+        if (salida == nullptr)
+            return {{"error", "no se pudo abrir un fichero temporal para el "
+                              "volcado del ASA"}};
+        analysis::asa::imprimir_volcado(almacen, resumenes, salida);
+        std::fflush(salida);
+        std::rewind(salida);
+        char buf[8192];
+        size_t leidos = 0;
+        while ((leidos = std::fread(buf, 1, sizeof(buf), salida)) > 0)
+            volcado.append(buf, leidos);
+        std::fclose(salida);
+    }
+    std::error_code ec;
+    std::filesystem::remove(ruta, ec); // best-effort: no es un fallo si queda.
+
+    nlohmann::json out;
+    out["text"] = std::move(volcado);
+    return out;
+}
 
 const Inspector::AotBuild &Inspector::aot_build(const std::string &uri,
                                                 const std::string &text,

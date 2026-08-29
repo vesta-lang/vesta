@@ -269,6 +269,24 @@ class Inspector {
      */
     nlohmann::json comptime_values(const std::string &uri);
 
+    /**
+     * @brief @c vesta/asa: todo lo que el compilador SABE del modulo.
+     *
+     * Es el mismo volcado que la linea de ordenes: los hechos, de donde sale
+     * cada uno y con que certeza, lo que se miro sin sacar nada y por que, y el
+     * resumen por dominio.  Se pide entero y sin variantes, igual que alli: un
+     * volcado que hay que pedir por partes obliga a saber que se busca ANTES de
+     * mirarlo, que es lo contrario de para lo que sirve.
+     *
+     * Aqui no se decide que es un hecho ni como se ordena -- eso es del
+     * productor de cada dominio y de la vista del propio subsistema --; esto
+     * solo lo hace llegar al editor.
+     *
+     * @param uri URI del documento abierto.
+     * @return @c { "text": "<volcado>" } o @c { "error": "..." }.
+     */
+    nlohmann::json asa(const std::string &uri);
+
   private:
     /// Estado opaco del subsistema JIT propio (CodeCache + RuntimeEntries +
     /// JitCompiler).  Inicializado perezosamente en la primera @c jit_asm.
