@@ -444,19 +444,8 @@ class Inspector {
     nlohmann::json asm_flow(const std::string &uri, const std::string &arch);
 
   private:
-    /// Estado opaco del subsistema JIT propio (CodeCache + RuntimeEntries +
-    /// JitCompiler).  Inicializado perezosamente en la primera @c jit_asm.
-    struct JitState;
-
-    /// Inicializa (si hace falta) y devuelve el estado JIT, o nullptr si la
-    /// inicializacion fallo.  Idempotente.
-    JitState *jit_state();
-
     AnalysisEngine &engine_; ///< Motor de analisis (cache CompileResult).
     DocumentStore &docs_;    ///< Almacen de documentos abiertos.
-
-    std::unique_ptr<JitState> jit_; ///< Subsistema JIT (lazy).
-    bool jit_init_failed_ = false;  ///< true si la init del JIT fallo.
 
     /// Cerrojo de las dos caches de abajo.  Solo cubre mirar y guardar, jamas
     /// la compilacion: si se tuviera mientras se compila, dos vistas de

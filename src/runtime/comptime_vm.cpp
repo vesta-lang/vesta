@@ -35,7 +35,7 @@
 #include "jit/auto_jit.h"         /*   : eager-compile macros */
 #include "ffi/virtual_lib_registry.h" /* #3: resolver vrt:* en el JIT del CV */
 #include "jit/interp_jit_bridge.h"    /* CTPE: enter_jit (invocacion directa) */
-#include "jit/jit_compiler.h"         /* CompileResult */
+#include "jit/jit_compile_options.h" /* CompileResult */
 #include "jit/vreg_pipeline.h" /* CTPE: vreg_set_ctpe_safepoint_handler */
 
 #include <atomic>

@@ -240,7 +240,7 @@ extern "C" void jit_tier2_request_entry(void *proc,
 ///        caer el linker del DLL por el tamano de esa funcion).
 void tier2_tick(runtime::ProcessVM *vm, loader::MethodInfo *method) noexcept;
 
-/* Forward decl de CompileResult (definido en jit_compiler.h). */
+/* Forward decl de CompileResult (definido en jit_compile_options.h). */
 struct CompileResult;
 
 /* La base de hechos del ASA (@c analysis/asa/base_hechos.h).  Aqui solo se pasa

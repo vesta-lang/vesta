@@ -20,7 +20,7 @@
 #include <thread>
 #include <functional>
 #include "jit/auto_jit.h"
-#include "jit/jit_compiler.h"
+#include "jit/jit_compile_options.h"
 #include "jit/code_cache.h"
 #include "jit/runtime_entries.h"
 #include "jit/vreg_pipeline.h"
@@ -100,12 +100,6 @@ uint32_t g_jit_threshold = 1500;
  */
 bool g_jit_warn_unsupported = false;
 bool g_jit_disasm = false;
-/*  D.7: path de registros virtuales (opt-in via VESTA_JIT_VREGS).
- * Default OFF -> el JIT usa el path de slots de siempre (cero cambio).
- * Con el flag, las funciones del subset soportado por el selector vreg
- * (aritmetica / control de flujo / loops, sin GC) se compilan por el
- * register allocator; el resto cae al path de slots via fallback. */
-bool g_jit_use_vregs = false;
 /* Sprint string-perf-6 (2026-06-02): emit del MIPS counter per-block
  * en el JIT.  Default OFF porque cuesta ~3ns por block ejecutado;
  * en hot loops con muchos bloques (e.g. bench_branch_unpredict con
@@ -163,15 +157,6 @@ void init_threshold_from_env() {
     /* VESTA_JIT_STATS=1 -> emit del MIPS counter per-block (opt-in
      * porque cuesta ~3ns/block; en hot loops el overhead es alto). */
     if (util::flag_on(util::FlagId::JitStats)) g_jit_emit_instr_counter = true;
-    /*  D.7: el path de REGISTROS VIRTUALES es el UNICO path del JIT.
-     * El selector-slots legacy (src/jit/selector.cpp, backlog B-JIT-1) esta
-     * JUBILADO: una op fuera del subset vreg cae al INTERPRETE (siempre
-     * correcto), no a slots.  Por eso `g_jit_use_vregs` es siempre true; el
-     * env-var `VESTA_JIT_VREGS=0` ya NO reactiva slots (queda como no-op).
-     * Consecuencia: los "SLOTS_BUG" del selector legacy no pueden manifestarse
-     * (slots inalcanzable).  El C2 tambien recompila por vreg (ver mas abajo).
-     */
-    g_jit_use_vregs = true;
     /* C2 tier-up (opt-in).  VESTA_C2_THRESHOLD=N activa el tier-up con
      * umbral N; ausente o 0 = C2 apagado (default). */
     {
@@ -192,7 +177,6 @@ void init_threshold_from_env() {
 std::once_flag g_jit_init_flag;
 CodeCache *g_code_cache = nullptr;
 RuntimeEntries *g_runtime_entries = nullptr;
-JitCompiler *g_compiler = nullptr;
 std::mutex g_compile_mtx;
 
 /* OSR ( D.8, 2c): tabla loop_id -> direccion del OSR-entry del C2
@@ -249,7 +233,6 @@ void init_jit_subsystem() {
     g_code_cache = new CodeCache();
     g_runtime_entries = new RuntimeEntries();
     g_runtime_entries->resolve();
-    g_compiler = new JitCompiler(*g_code_cache, *g_runtime_entries);
     /* OSR: instalar el handler de lookup (antes de cualquier compile,
      * por tanto antes de cualquier trigger en runtime). */
     set_osr_handler(&osr_lookup_handler);
@@ -818,7 +801,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
 
     /* Resolver de simbolos del linker (STR_LIT_ADDR / LABEL_ADDR, Phase
      * D.3-H) desde el symbol_table del executable propietario.  Se reusa
-     * tanto en el intento vreg como en el SelectorOptions de slots. */
+     * que lee el camino de registros virtuales. */
     CallResolver mc_sym_res;
     if (owning_symtab != nullptr) {
         const auto *st_ptr = owning_symtab;
@@ -836,8 +819,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     /* Phase: compile_with_opts pasando el symbol_table de la
      * executable que poseyo este metodo, para que el mini-parser
      * resuelva @Absolute("X") y los CALLs a __module_init / __new_<X>. */
-    SelectorOptions mc_opts;
-    mc_opts.mode = SelectorMode::VM_ABI;
+    JitCompileOptions mc_opts;
     mc_opts.runtime = g_runtime_entries;
     mc_opts.safepoint_handler_addr =
         reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler);
@@ -984,9 +966,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             }
             g_eager_cache[n] = EAGER_IN_PROGRESS;
             const ir::IrFunction &child_ir = (*fn_ptr)[lit->second];
-            SelectorOptions child_opts;
-            child_opts.mode = SelectorMode::VM_ABI;
-            child_opts.runtime = g_runtime_entries;
+            JitCompileOptions child_opts;
+                    child_opts.runtime = g_runtime_entries;
             child_opts.safepoint_handler_addr = reinterpret_cast<uint64_t>(
                 g_runtime_entries->safepoint_handler);
             if (st_ptr2) {
@@ -1006,81 +987,36 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             child_opts.exc_frame_stack_offset = exc_off_mc;
             child_opts.exc_free_list_offset = exc_free_off_mc;
             child_opts.jit_instr_counter_addr = jit_counter_mc;
-            /*  D.7 (opt-in): callee por el path de registros
-             * virtuales si esta soportada; si no, slots. */
-            if (g_jit_use_vregs) {
-                size_t vc_size = 0;
-                std::vector<LineMapEntry> vc_lines;
-                uint8_t *vc = vreg_compile(child_ir, *g_code_cache, {},
-                                           make_vreg_entries(), native_resolver,
-                                           child_opts.resolve_symbol, &vc_size,
-                                           &vc_lines);
-                if (vc != nullptr) {
-                    const uint64_t a = reinterpret_cast<uint64_t>(vc);
-                    g_eager_cache[n] = a;
-                    ++g_jit_compiled_count;
-                    if (st_ptr2) {
-                        auto sit = st_ptr2->find("code." + n);
-                        if (sit != st_ptr2->end() && sit->second != 0) {
-                            register_jit_code_at_pc(
-                                sit->second, reinterpret_cast<void *>(vc),
-                                vc_size, &vc_lines);
-                        }
-                    }
-                    if (g_jit_warn_unsupported)
-                        std::fprintf(stderr,
-                                     "[jit-vreg] eager callee compilado '%s'\n",
-                                     n.c_str());
-                    return a;
-                }
-                /* Jubilacion slots (A3): vreg no soporta esta callee -> NO cae
-                 * al selector-slots (legacy, B-JIT-1).  Devolvemos 0: el caller
-                 * vera la CALL sin resolver y bailara tambien a interp (siempre
-                 * correcto).  VESTA_JIT_VREGS=0 reactiva slots para A/B. */
-                g_eager_cache[n] = 0;
-                ++g_jit_unsupported_count;
-                return 0;
-            }
-            CompileResult cres =
-                g_compiler->compile_with_opts(child_ir, child_opts);
-            const uint64_t addr =
-                cres.fn ? reinterpret_cast<uint64_t>(cres.fn) : 0;
-            g_eager_cache[n] = addr;
-            if (cres.fn)
+            size_t vc_size = 0;
+            std::vector<LineMapEntry> vc_lines;
+            uint8_t *vc =
+                vreg_compile(child_ir, *g_code_cache, {}, make_vreg_entries(),
+                             native_resolver, child_opts.resolve_symbol,
+                             &vc_size, &vc_lines);
+            if (vc != nullptr) {
+                const uint64_t a = reinterpret_cast<uint64_t>(vc);
+                g_eager_cache[n] = a;
                 ++g_jit_compiled_count;
-            else
-                ++g_jit_unsupported_count;
-            /* Sprint JIT-cross-fn 2026-06-01: registrar pc -> jit_code
-             * en el mapa global para que `lookup_jit_code_at_pc` pueda
-             * encontrar las callees compiladas en cascade.  Sin esto,
-             * `as_native_callback(fn)` no podia obtener el thunk para
-             * fns compiladas via cascade (solo via top-level eager o
-             * via maybe_compile_*). */
-            if (cres.fn && st_ptr2) {
-                auto sit = st_ptr2->find("code." + n);
-                if (sit != st_ptr2->end() && sit->second != 0) {
-                    register_jit_code_at_pc(sit->second,
-                                            reinterpret_cast<void *>(cres.fn),
-                                            cres.code_size);
+                if (st_ptr2) {
+                    auto sit = st_ptr2->find("code." + n);
+                    if (sit != st_ptr2->end() && sit->second != 0) {
+                        register_jit_code_at_pc(sit->second,
+                                                reinterpret_cast<void *>(vc),
+                                                vc_size, &vc_lines);
+                    }
                 }
+                if (g_jit_warn_unsupported)
+                    std::fprintf(stderr,
+                                 "[jit-vreg] eager callee compilado '%s'\n",
+                                 n.c_str());
+                return a;
             }
-            if (g_jit_warn_unsupported) {
-                if (cres.fn) {
-                    std::fprintf(
-                        stderr,
-                        "[jit] eager compiled '%s' (%zu bytes, %zu MInstrs)\n",
-                        n.c_str(), cres.code_size, cres.instr_count);
-                } else {
-                    std::fprintf(
-                        stderr,
-                        "[jit] eager '%s' no se compilo (unsupported=%d)\n",
-                        n.c_str(), cres.unsupported ? 1 : 0);
-                }
-            }
-            if (g_jit_disasm && cres.fn) {
-                debug_dump_jit_code(n, cres.code_start, cres.code_size);
-            }
-            return addr;
+            /* Si el camino de registros virtuales no sabe con esta llamada, se
+             * devuelve 0: quien llama vera la llamada sin resolver y se ira
+             * tambien al interprete, que siempre es correcto. */
+            g_eager_cache[n] = 0;
+            ++g_jit_unsupported_count;
+            return 0;
         };
     }
 
@@ -1128,11 +1064,10 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                          any ? "cambio el IR" : "sin cambio");
     }
 
-    /*  D.7 (opt-in): intento vreg con el resolver recursivo + native
-     * resolver ya construidos (mc_opts) -> los CALL a otras funciones Vesta se
-     * resuelven/compilan por vreg en vez de bailar a slots.  Si la funcion no
-     * es del subset vreg, cae al compile_with_opts (slots) de abajo. */
-    if (g_jit_use_vregs) {
+    /* Compilar por el camino de registros virtuales, con el resolvedor
+     * recursivo y el de nativas ya construidos (mc_opts): las llamadas a otras
+     * funciones Vesta se resuelven y compilan por el mismo camino. */
+    {
         /* Exponer el MethodInfo al vreg para que su prologo emita el contador
          * tier-2 (inc [&method->invocation_count] + call tier2_request).  Se
          * limpia tras compilar.  En tier-2 (g_tier2_recompiling) el vreg NO
@@ -1172,71 +1107,20 @@ void maybe_compile_method(runtime::ProcessVM *vm,
             return;
         }
         if (g_jit_warn_unsupported)
-            std::fprintf(
-                stderr,
-                "[jit-vreg] '%s' no soportada -> interp (slots jubilado)\n",
-                key.c_str());
-        /* Jubilacion slots (A3): un metodo que el vreg no soporta NO cae al
-         * selector-slots (legacy, backlog B-JIT-1) -> se queda en el INTERPRETE
-         * (siempre correcto).  maybe_compile_method NUNCA compila callbacks
-         * (esos van por compile_native_callback), asi que no hay caso que
-         * necesite codigo nativo aqui.  En produccion ningun SLOTS_BUG usa
-         * slots
-         * -> sin regresion (verificado por subagente).  VESTA_JIT_VREGS=0
-         * (g_jit_use_vregs=false) reactiva slots para A/B. */
-        return;
-    }
-
-    const CompileResult res = g_compiler->compile_with_opts(*ir_fn, mc_opts);
-    if (res.fn != nullptr) {
-        /* Exito: asignar jit_code.  El proximo CALLVIRT despacha
-         * automaticamente al codigo nativo via el hook D.3-C. */
-        method->jit_code = reinterpret_cast<void *>(res.fn);
-        /* D.5-callvm-hook: tambien registrar pc -> jit para que
-         * @c exec_instr_callvm pueda dispatchar a este metodo
-         * cuando se invoque directamente via CALLVM (e.g. desde
-         * codigo interp con label resuelto al @c code_vaddr). */
-        if (method->code_vaddr != 0) {
-            register_jit_code_at_pc(method->code_vaddr,
-                                    reinterpret_cast<void *>(res.fn),
-                                    res.code_size);
-        }
-        /* C2 tier-up: mapear fn_pc (symbol "code.<name>", el mismo que el
-         * contador on-entry pasa al handler) -> method + region del codigo
-         * C1, para que el swap actualice method->jit_code (ademas del
-         * pc-map) y para reciclar la region C1 al subir a C2. */
-        if (g_c2_threshold != 0 && owning_symtab != nullptr) {
-            auto sit = owning_symtab->find("code." + ir_fn->name);
-            if (sit != owning_symtab->end() && sit->second != 0) {
-                g_pc_to_method[sit->second] = method;
-                if (res.code_start != nullptr && res.code_size != 0) {
-                    g_c1_region[sit->second] = {
-                        const_cast<uint8_t *>(res.code_start), res.code_size};
-                }
-            }
-        }
-        ++g_jit_compiled_count;
-        if (g_jit_warn_unsupported) {
             std::fprintf(stderr,
-                         "[jit] compiled '%s' (%zu bytes, %zu MInstrs)\n",
-                         key.c_str(), res.code_size, res.instr_count);
-        }
-        if (g_jit_disasm) {
-            debug_dump_jit_code(key, res.code_start, res.code_size);
-        }
-    } else {
-        /* Fallo: marcar para no reintentar (igual que IR ausente).
-         * res.unsupported = true significa que el Selector encontro
-         * una IR op que no sabe lowerizar; printamos warning para
-         * que el dev sepa que IR op añadir. */
+                         "[jit-vreg] '%s' no soportada -> interp\n",
+                         key.c_str());
+        /* Un metodo que el camino de registros virtuales no sabe compilar se
+         * queda en el INTERPRETE, que siempre es correcto.  Aqui no hay ningun
+         * caso que necesite codigo nativo si o si: los callbacks nunca pasan
+         * por esta funcion, van por compile_native_callback.
+         *
+         * Y se marca para NO REINTENTARLO.  Quien lo marcaba era la rama del
+         * selector jubilado; cuando esa rama dejo de ejecutarse, la marca se
+         * fue con ella, y como el contador de invocaciones solo sube, a partir
+         * del umbral se volvia a intentar la compilacion entera en CADA
+         * llamada a un metodo que nunca iba a compilar. */
         ++g_jit_unsupported_count;
-        if (g_jit_warn_unsupported) {
-            std::fprintf(
-                stderr,
-                "[jit] '%s' no se compilo (Selector unsupported=%d) -- "
-                "fallback a interp\n",
-                key.c_str(), res.unsupported ? 1 : 0);
-        }
         method->invocation_count = UINT32_MAX;
     }
 }
@@ -1445,8 +1329,8 @@ CompileResult eager_compile_function(
      * Es el mismo bucle de inline + constantes que ya usan el OSR y la
      * devirtualizacion. */
     ir::IrFunction esp_clone;
-    if (g_jit_use_vregs && !callback_entry && ir_lookup != nullptr &&
-        ir_functions != nullptr && !jit_sin_especializar_reservas()) {
+    if (!callback_entry && ir_lookup != nullptr && ir_functions != nullptr &&
+        !jit_sin_especializar_reservas()) {
         /* Que cuerpos hacen falta: los de las llamadas de esta funcion, mas el
          * del asignador si reserva memoria. */
         std::unordered_set<std::string> quiero;
@@ -1619,9 +1503,8 @@ CompileResult eager_compile_function(
                     child_sel = &(*funcs_ptr)[itv2->second];
             }
             const ir::IrFunction &child_ir = *child_sel;
-            SelectorOptions opts;
-            opts.mode = SelectorMode::VM_ABI;
-            opts.runtime = g_runtime_entries;
+            JitCompileOptions opts;
+                    opts.runtime = g_runtime_entries;
             opts.safepoint_handler_addr = reinterpret_cast<uint64_t>(
                 g_runtime_entries->safepoint_handler);
             opts.resolve_user_fn = *resolver_holder; /* SAME resolver */
@@ -1635,82 +1518,42 @@ CompileResult eager_compile_function(
             opts.exc_free_list_offset = exc_free_list_offset; /* no leak */
             opts.jit_instr_counter_addr =
                 jit_instr_counter_addr; /* MIPS counter */
-            /*  D.7 (opt-in): callee por el path de registros virtuales.
-             * Pasamos el PROPIO resolver (recursivo) para que los CALLs
-             * del callee se resuelvan a sus direcciones. */
-            if (g_jit_use_vregs) {
-                size_t vc_size2 = 0;
-                std::vector<LineMapEntry> vc_lines2;
-                uint8_t *vc =
-                    vreg_compile(child_ir, *g_code_cache, *resolver_holder,
-                                 make_vreg_entries(), resolve_native_fn,
-                                 sym_resolver, &vc_size2, &vc_lines2);
-                if (vc != nullptr) {
-                    const uint64_t va = reinterpret_cast<uint64_t>(vc);
-                    g_eager_cache[name] = va;
-                    ++g_jit_compiled_count;
-                    if (sym_resolver) {
-                        const uint64_t pc = sym_resolver("code." + name);
-                        if (pc != 0)
-                            register_jit_code_at_pc(
-                                pc, reinterpret_cast<void *>(vc), vc_size2,
-                                &vc_lines2);
-                    }
-                    if (g_jit_warn_unsupported)
-                        std::fprintf(stderr,
-                                     "[jit-vreg] eager callee compilado '%s'\n",
-                                     name.c_str());
-                    return va;
-                }
-                /* Jubilacion slots (A3): vreg no soporta -> interp, NO slots.
-                 * Devolvemos 0; el caller vera la CALL sin resolver y bailara a
-                 * interp tambien.  VESTA_JIT_VREGS=0 reactiva slots para A/B.
-                 */
-                g_eager_cache[name] = 0;
-                return 0;
-            }
-            CompileResult cres = g_compiler->compile_with_opts(child_ir, opts);
-            const uint64_t addr =
-                cres.fn ? reinterpret_cast<uint64_t>(cres.fn) : 0;
-            g_eager_cache[name] = addr;
-            if (cres.fn)
+            /* La llamada se compila por el camino de registros virtuales,
+             * pasandole el PROPIO resolvedor (recursivo) para que las llamadas
+             * de dentro se resuelvan a sus direcciones. */
+            size_t vc_size2 = 0;
+            std::vector<LineMapEntry> vc_lines2;
+            uint8_t *vc = vreg_compile(
+                child_ir, *g_code_cache, *resolver_holder, make_vreg_entries(),
+                resolve_native_fn, sym_resolver, &vc_size2, &vc_lines2);
+            if (vc != nullptr) {
+                const uint64_t va = reinterpret_cast<uint64_t>(vc);
+                g_eager_cache[name] = va;
                 ++g_jit_compiled_count;
-            else
-                ++g_jit_unsupported_count;
-            /* D.5-callvm-hook: registrar pc -> jit en el mapa global
-             * para que exec_instr_callvm pueda dispatchar interp ->
-             * JIT al llamar a esta funcion via @c callvm. */
-            if (cres.fn && sym_resolver) {
-                const uint64_t pc = sym_resolver("code." + name);
-                if (pc != 0) {
-                    register_jit_code_at_pc(
-                        pc, reinterpret_cast<void *>(cres.fn), cres.code_size);
+                if (sym_resolver) {
+                    const uint64_t pc = sym_resolver("code." + name);
+                    if (pc != 0)
+                        register_jit_code_at_pc(pc,
+                                                reinterpret_cast<void *>(vc),
+                                                vc_size2, &vc_lines2);
                 }
+                if (g_jit_warn_unsupported)
+                    std::fprintf(stderr,
+                                 "[jit-vreg] eager callee compilado '%s'\n",
+                                 name.c_str());
+                return va;
             }
-            if (g_jit_warn_unsupported) {
-                if (cres.fn) {
-                    std::fprintf(
-                        stderr,
-                        "[jit] eager compiled '%s' (%zu bytes, %zu MInstrs)\n",
-                        name.c_str(), cres.code_size, cres.instr_count);
-                } else {
-                    std::fprintf(
-                        stderr,
-                        "[jit] eager '%s' no se compilo (unsupported=%d)\n",
-                        name.c_str(), cres.unsupported ? 1 : 0);
-                }
-            }
-            if (g_jit_disasm && cres.fn) {
-                debug_dump_jit_code(name, cres.code_start, cres.code_size);
-            }
-            return addr;
+            /* Si no sabe con ella se devuelve 0: quien llama vera la llamada
+             * sin resolver y se ira al interprete tambien. */
+            g_eager_cache[name] = 0;
+            ++g_jit_unsupported_count;
+            return 0;
         };
         resolver = *resolver_holder;
     }
 
     /* Setup opciones del top-level compile (main). */
-    SelectorOptions top_opts;
-    top_opts.mode = SelectorMode::VM_ABI;
+    JitCompileOptions top_opts;
     top_opts.runtime = g_runtime_entries;
     top_opts.safepoint_handler_addr =
         reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler);
@@ -1760,7 +1603,7 @@ CompileResult eager_compile_function(
      * El path vreg NO conoce el modo callback (entry nativo); en callback
      * forzamos el path del Selector (slots + regalloc rewrite) que SI lo
      * implementa. */
-    if (g_jit_use_vregs && !callback_entry) {
+    if (!callback_entry) {
         size_t vcode_size = 0;
         std::vector<LineMapEntry> vcode_lines;
         uint8_t *vcode = vreg_compile(ir_fn_sel, *g_code_cache, resolver,
@@ -1925,7 +1768,7 @@ CompileResult eager_compile_function(
      * VESTA_VREG_CALLBACKS=0 fuerza slots para todos (A/B testing). */
     static const bool g_vreg_callbacks =
         util::flag_on(util::FlagId::VregCallbacks);
-    if (callback_entry && g_jit_use_vregs && g_vreg_callbacks) {
+    if (callback_entry && g_vreg_callbacks) {
         VregCallbackOpts cbopts;
         cbopts.callback_entry = true;
         cbopts.get_proc_addr = callback_get_proc_addr;
@@ -2832,9 +2675,8 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
         }
 
         /* --- (3) recompile C2 por el path Selector (terminal). --- */
-        SelectorOptions c2;
-        c2.mode = SelectorMode::VM_ABI;
-        c2.runtime = g_runtime_entries;
+        JitCompileOptions c2;
+            c2.runtime = g_runtime_entries;
         c2.safepoint_handler_addr =
             reinterpret_cast<uint64_t>(g_runtime_entries->safepoint_handler);
         const auto *st_ptr = &owning_exe->symbol_table;
@@ -3024,12 +2866,9 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
         size_t c2_size = 0;
         const uint8_t *c2_code = nullptr;
         bool c2_unsupported = false;
-        /* Camino preparado para el C2 sin slots: con vregs on (default) el C2
-         * recompila el IR especulado por el PATH VREG (regalloc real), igual
-         * que el JIT normal.  `g_c2_vreg` (VESTA_C2_VREG) fuerza el path vreg
-         * incluso con vregs off (para A/B del propio C2).  Solo cae a slots
-         * (abajo) si vregs esta off. */
-        if (g_c2_vreg || g_jit_use_vregs) {
+        /* El nivel dos recompila el IR especulado por el mismo camino que el
+         * JIT normal: registros virtuales con asignador de verdad. */
+        {
             ffi::FFI *ffi2 = &owning_vm.loader_public.ffi_loader;
             auto nat_res = [ffi2](const std::string &name) -> uint64_t {
                 size_t colon = name.find(':');
@@ -3054,27 +2893,20 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
                     return it->second;
                 return 0;
             };
-            uint8_t *vc =
-                vreg_compile(*compile_target, *g_code_cache, user_res,
-                             make_vreg_entries(), nat_res, c2.resolve_symbol);
+            /* Se pide tambien el TAMANO: quien lo rellenaba era la rama del
+             * selector jubilado, asi que sin esto c2_size se quedaba a cero y
+             * el volcado de VESTA_JIT_DISASM del nivel dos -- que exige
+             * tamano != 0 -- no salia nunca. */
+            uint8_t *vc = vreg_compile(*compile_target, *g_code_cache, user_res,
+                                       make_vreg_entries(), nat_res,
+                                       c2.resolve_symbol, &c2_size);
             if (vc != nullptr) {
                 c2_fn = reinterpret_cast<JitFn>(vc);
                 c2_code = vc;
             }
         }
-        CompileResult res{};
-        /* Jubilacion slots (A3): con vregs on (default), el C2 NO cae al
-         * selector-slots.  Si el recompile por vreg (arriba, cuando g_c2_vreg
-         * || g_jit_use_vregs) no produjo codigo, queda C1 (tier-1 vreg) -- ver
-         * el "queda C1" de abajo.  Solo VESTA_JIT_VREGS=0 reactiva slots para
-         * A/B. */
-        if (c2_fn == nullptr && !g_jit_use_vregs) {
-            res = g_compiler->compile_with_opts(*compile_target, c2);
-            c2_fn = res.fn;
-            c2_size = res.code_size;
-            c2_code = res.code_start;
-            c2_unsupported = res.unsupported;
-        }
+        /* Si el recompile por registros virtuales (arriba) no produjo codigo,
+         * la funcion se queda en el nivel uno -- ver el "queda C1" de abajo. */
         if (c2_fn == nullptr) {
             /* No se pudo recompilar (alguna op sin contexto recursivo).
              * Queda C1; g_tiered_pcs evita reintentos. */
@@ -3138,11 +2970,10 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
         ++g_c2_tierup_count;
         if (g_c2_log) {
             std::fprintf(stderr,
-                         "[c2] tier-up '%s' (pc=0x%llx) -> C2 (%zu bytes, %s); "
-                         "C1 a free-list pendiente\n",
+                         "[c2] tier-up '%s' (pc=0x%llx) -> C2 (%zu bytes, "
+                         "vreg); C1 a free-list pendiente\n",
                          fn_name.c_str(),
-                         static_cast<unsigned long long>(fn_pc), c2_size,
-                         g_c2_vreg ? "vreg" : "slots");
+                         static_cast<unsigned long long>(fn_pc), c2_size);
         }
         if (g_jit_disasm && c2_code != nullptr && c2_size != 0) {
             debug_dump_jit_code(fn_name + " [C2]", c2_code, c2_size);

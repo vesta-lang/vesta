@@ -30,7 +30,7 @@
 #include "ffi/vesta_plugin.h"
 #include "cli/sync_io.h"
 #include "jit/auto_jit.h"     // eager-compile main + jit_entry_fn
-#include "jit/jit_compiler.h" // CompileResult forward decl ya en auto_jit.h
+#include "jit/jit_compile_options.h" // CompileResult
 #include "jit/jit_facts.h"    // base de hechos compartida por el modulo
 #include "jit/inline_asm_trampoline.h" // inc.6: trampolines de inline-asm para interp
 

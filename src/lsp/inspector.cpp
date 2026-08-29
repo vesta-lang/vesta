@@ -60,9 +60,7 @@
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "jit/code_cache.h"
-#include "jit/jit_compiler.h"
 #include "jit/runtime_entries.h"
-#include "jit/selector.h"
 #include "jit/vreg_pipeline.h"
 #include "lsp/document_store.h"
 #include "vx/compiler.h"
@@ -1183,42 +1181,10 @@ const char *reloc_kind_str(jit::NativeReloc::Kind k) {
 
 } // namespace
 
-/**
- * @struct Inspector::JitState
- * @brief Subsistema JIT propio del inspector (aislado del runtime).
- *
- * Mantiene un @c CodeCache + @c RuntimeEntries + @c JitCompiler dedicados
- * para compilar funciones a x86-64 sin interferir con el JIT del proceso.
- * El mismo patron que usa @c auto_jit al inicializar su singleton.
- */
-struct Inspector::JitState {
-    jit::CodeCache cache;        ///< Cache de codigo nativo del inspector.
-    jit::RuntimeEntries entries; ///< Punteros a runtime entries resueltos.
-    jit::JitCompiler compiler;   ///< Compilador JIT.
-
-    JitState() : cache(), entries(), compiler(cache, entries) {
-        // Resolver los simbolos vrt_* una vez (estables durante el proceso).
-        entries.resolve();
-    }
-};
-
 Inspector::Inspector(AnalysisEngine &engine, DocumentStore &docs) noexcept
     : engine_(engine), docs_(docs) {}
 
 Inspector::~Inspector() = default;
-
-Inspector::JitState *Inspector::jit_state() {
-    if (jit_) return jit_.get();
-    if (jit_init_failed_) return nullptr;
-    try {
-        jit_ = std::make_unique<JitState>();
-    } catch (...) {
-        // Si la inicializacion del JIT falla, no reintentar en cada peticion.
-        jit_init_failed_ = true;
-        return nullptr;
-    }
-    return jit_.get();
-}
 
 namespace {
 /// Forward-decls: las definiciones viven mas abajo (mismo TU, namespace
@@ -1722,7 +1688,19 @@ nlohmann::json Inspector::function_report(const std::string &uri) {
             m["allocPartial"] = h.alloc_sites;
             m["allocTotal"] = h.alloc_sites_total;
             m["stackPartial"] = static_cast<uint64_t>(h.stack_bytes);
-            m["stackTotal"] = static_cast<uint64_t>(h.stack_bytes_total);
+            /* La pila que no se puede acotar se DICE, no se manda como numero.
+             *
+             * `STACK_UNBOUNDED` es `UINT64_MAX`, un valor perfectamente valido
+             * usado de centinela: mandado tal cual, al otro lado se lee como un
+             * tamano y se pinta "18446744073709552000 B", que no es que la
+             * funcion gaste dieciocho trillones de bytes sino que NO SE SABE
+             * cuanto gasta -- aqui, porque hay un `asm` cuyo marco no se ve --.
+             */
+            const bool acotada =
+                h.stack_bytes_total != analyze::STACK_UNBOUNDED;
+            m["stackBounded"] = acotada;
+            if (acotada)
+                m["stackTotal"] = static_cast<uint64_t>(h.stack_bytes_total);
             m["throws"] = h.throws_total;
             m["panics"] = h.panics_total;
             m["pure"] = h.pure;
@@ -3099,6 +3077,14 @@ nlohmann::json Inspector::asm_block(const std::string &uri, uint32_t line,
         auto it = por_etiqueta.find(in.target);
         j["targetIndex"] = it == por_etiqueta.end() ? -1
                                                     : static_cast<int>(it->second);
+        /* Salta a algo que no esta en el bloque, pero que existe: una funcion
+         * del modulo.  Sin decirlo, la linea se quedaba sin flecha y sin
+         * explicacion, como si el salto no fuera a ninguna parte. */
+        j["exitsTo"] =
+            (it == por_etiqueta.end() && !in.target.empty() &&
+             vx::asm_is_external_symbol(in.target))
+                ? in.target
+                : std::string();
 
         // Lo que la base sabe de ella, y lo que cuesta aqui.
         const vx::instr_db::AsmInsnSem sem =
@@ -3144,6 +3130,7 @@ nlohmann::json Inspector::asm_block(const std::string &uri, uint32_t line,
      * flujo, y ensenarlas sin decirlo seria afirmar de mas. */
     out["hasIndirect"] = cfg.has_indirect;
     out["hasUnresolved"] = cfg.has_unresolved_target;
+    out["hasExternal"] = cfg.has_external_target;
     out["unknownTerminators"] = cfg.unknown_terminators;
     return out;
 }
@@ -3170,12 +3157,28 @@ nlohmann::json Inspector::asm_flow(const std::string &uri,
                 j["lastLine"] = b["lastLine"];
                 j["hasIndirect"] = b["hasIndirect"];
                 j["hasUnresolved"] = b["hasUnresolved"];
+                j["hasExternal"] = b["hasExternal"];
                 /* Solo lo que hace falta para dibujar: de que linea a que
                  * linea, y de que clase es el salto.  Lo demas lo pide quien
                  * quiera el detalle. */
                 nlohmann::json saltos = nlohmann::json::array();
+                /* Las lineas por las que el flujo SALE del bloque hacia una
+                 * funcion del modulo.  No son un salto que dibujar entre dos
+                 * lineas -- el destino no esta aqui -- pero tampoco son nada:
+                 * dejarlas mudas es lo que hacia parecer que un bloque entero
+                 * no tenia flujo. */
+                nlohmann::json salidas = nlohmann::json::array();
                 const auto &insns = b["instructions"];
                 for (const auto &in : insns) {
+                    const std::string fuera =
+                        in.value("exitsTo", std::string());
+                    if (!fuera.empty() && in.value("line", 0u) != 0) {
+                        nlohmann::json e;
+                        e["line"] = in.value("line", 0u);
+                        e["symbol"] = fuera;
+                        e["flow"] = in.value("flow", std::string());
+                        salidas.push_back(std::move(e));
+                    }
                     const int destino = in.value("targetIndex", -1);
                     if (destino < 0) continue;
                     if (destino >= static_cast<int>(insns.size())) continue;
@@ -3189,6 +3192,7 @@ nlohmann::json Inspector::asm_flow(const std::string &uri,
                         saltos.push_back(std::move(s));
                 }
                 j["jumps"] = std::move(saltos);
+                j["exits"] = std::move(salidas);
                 bloques.push_back(std::move(j));
             }
             linea = fin + 1;

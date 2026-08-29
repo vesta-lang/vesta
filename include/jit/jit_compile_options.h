@@ -6,55 +6,25 @@
  */
 
 /**
- * @file jit/selector.h
- * @brief Instruction selector @c ssa_ir::IrFunction -> @c jit::MFunction (Phase
- * D.1.b).
+ * @file jit/jit_compile_options.h
+ * @brief Con que opciones se compila una funcion IR a codigo nativo, y que
+ *        sale de ello.
  *
- * = Diseno =
- *
- * Selector C1-style "template" minimal: cada SSA value tiene un slot
- * stack fijo (offset = -8 * (vid+1) desde RBP).  Cada IrInstr emite:
- *
- *   1. LOAD operandos desde sus slots a regs scratch.
- *   2. Compute (ADD/SUB/IMUL/CMP/etc.).
- *   3. STORE resultado a slot del dst.
- *
- * Cero regalloc: el codigo emitido es sub-optimo en hot loops (cada
- * op accede memoria stack), pero CORRECTO y simple.   D.3
- * (C1 con minimal regalloc) y D.7 (linear scan) lo refinaran.
- *
- * = Calling convention =
- *
- * @c SelectorMode::NATIVE_ABI (default v1):
- *   - Params en rdi/rsi/rdx/rcx/r8/r9 (SysV) o rcx/rdx/r8/r9 (Win64)
- *   - Return en rax
- *   - Permite testear el selector sin ProcessVM setup
- *
- * @c SelectorMode::VM_ABI:
- *   - rdi/rcx = ProcessVM*
- *   - args reales en proc->registers.regs[1..N]
- *   - return en proc->registers.regs[0]
- *
- * = Cobertura v1 =
- *
- * IR ops soportados: CONST, MOV, ADD, SUB, MUL (IMUL), AND, OR, XOR,
- * NEG, NOT, SHL, SHR, SAR, LOAD, STORE, CMP_EQ/NE/LT/GT/LE/GE (signed
- * y unsigned), BR, BR_COND, RET.
- *
- * No soportados (caen al interprete via fallback en D.5):
- * - PHI (emit phi copies en preds aun no implementado)
- * - CALL/CALLVIRT/CALLN/CALLCLOSURE/TAILCALL (D.3 los añade)
- * - DIV/MOD (necesitan setup de RDX:RAX para IDIV)
- * - FADD/FSUB/FMUL/FDIV y otros float (D.3+)
- * - ALLOCA/STR_LIT_ADDR/etc.
+ * Estas opciones las lee el camino de REGISTROS VIRTUALES, que es el unico
+ * que compila.  El fichero se llamaba selector.h y llevaba dentro un segundo
+ * selector de instrucciones -- el que daba a cada valor SSA un hueco fijo en
+ * la pila -- que quedo jubilado cuando el camino de registros virtuales paso a
+ * ser el de produccion.  Aquello se retiro; las opciones, que nunca fueron
+ * suyas, se quedan.
  */
 
-#ifndef VESTA_JIT_SELECTOR_H
-#define VESTA_JIT_SELECTOR_H
+#ifndef VESTA_JIT_COMPILE_OPTIONS_H
+#define VESTA_JIT_COMPILE_OPTIONS_H
 
+#include "ir/ssa_ir.h"
+#include "jit/interp_jit_bridge.h" // JitFn: la firma del codigo generado
 #include "jit/machine_ir.h"
 #include "jit/runtime_entries.h"
-#include "ir/ssa_ir.h"
 
 #include <functional>
 #include <string>
@@ -62,20 +32,10 @@
 namespace jit {
 
 /**
- * @enum SelectorMode
- * @brief Convencion de llamada para el codigo generado.
- */
-enum class SelectorMode {
-    NATIVE_ABI, ///< Convencion C nativa del host (SysV / Win64).
-    VM_ABI      ///< Convencion VM (ProcessVM* + regs internos).
-};
-
-/**
- * @struct SelectorOptions
+ * @struct JitCompileOptions
  * @brief Opciones de configuracion del selector.
  */
-struct SelectorOptions {
-    SelectorMode mode = SelectorMode::NATIVE_ABI;
+struct JitCompileOptions {
     /// Direccion absoluta de @c vrt_safepoint_handler para que el
     /// selector pueda emitir safepoints en VM_ABI mode.  Tipicamente
     /// se obtiene de @c jit::RuntimeEntries::safepoint_handler.
@@ -234,7 +194,7 @@ struct SelectorOptions {
     int32_t exc_free_list_offset = 0;
 
     /* ================= C2 tier-up (recompile-and-swap) ================= */
-    /// C2 (2026-06-07): si != 0, el Selector emite en el prologo un
+    /// C2 (2026-06-07): si != 0, el codegen emite en el prologo un
     /// contador on-entry + check; cuando el contador cruza
     /// @c tier_up_threshold (exactamente), llama a esta direccion con
     /// ABI C nativo: @c void handler(ProcessVM* proc, uint64_t fn_pc).
@@ -260,7 +220,7 @@ struct SelectorOptions {
     /// Retorna la addr HOST del contador, 0 si no disponible.
     std::function<uint64_t(uint64_t /*fn_pc*/)> reserve_tier_counter{};
 
-    /// Solo-LSP (vista "Godbolt", 2026-06-22): si true, el Selector estampa
+    /// Solo-LSP (vista "Godbolt", 2026-06-22): si true, el codegen estampa
     /// @c MInstr::source_pc con la @c IrInstr::source_line de la op que la
     /// genero, y marca @c MFunction::emit_line_map para que el encoder
     /// produzca la tabla byte_offset -> source_line.  OFF por defecto: ningun
@@ -271,30 +231,21 @@ struct SelectorOptions {
 };
 
 /**
- * @class Selector
- * @brief Baja un @c IrFunction a un @c MFunction.
+ * @struct CompileResult
+ * @brief Lo que sale de compilar una funcion: el codigo y como fue.
  */
-class Selector {
-  public:
-    explicit Selector(SelectorOptions opts = {}) : opts_(opts) {}
-
-    /**
-     * @brief Selecciona instrucciones para @p ir_fn.
-     * @return @c MFunction listo para encoder.  Si encuentra un IR
-     *         op no soportado, añade un @c MOp::INT3 como marker y
-     *         pone @p out_unsupported a true.
-     */
-    MFunction select(const ir::IrFunction &ir_fn,
-                     bool *out_unsupported = nullptr);
-
-  private:
-    SelectorOptions opts_;
-    /// Indice en imm64_pool de la direccion del safepoint handler.
-    /// Computado al inicio de @c select() si VM_ABI y handler != 0.
-    /// UINT32_MAX = no disponible (safepoints omitidos).
-    uint32_t safepoint_pool_idx_ = UINT32_MAX;
+struct CompileResult {
+    JitFn fn = nullptr;       ///< Puntero al codigo nativo (null si fallo)
+    size_t code_size = 0;     ///< Bytes emitidos
+    size_t instr_count = 0;   ///< MInstrs emitidos
+    bool unsupported = false; ///< IR contenia op no soportada
+    const uint8_t *code_start = nullptr; ///< Para unregister + invalidate
+    /// Solo-LSP (vista "Godbolt"): correlacion byte_offset -> source_line.
+    /// Vacia salvo que se compile con @c JitCompileOptions::emit_line_map=true
+    /// (solo el inspector del LSP lo hace).  Ver @c jit::LineMapEntry.
+    std::vector<LineMapEntry> line_map;
 };
 
 } // namespace jit
 
-#endif // VESTA_JIT_SELECTOR_H
+#endif // VESTA_JIT_COMPILE_OPTIONS_H

@@ -63,7 +63,6 @@
 #include "vx/semantic_index.h" // build_semantic_index
 
 #include "jit/code_cache.h"      // vista JIT
-#include "jit/jit_compiler.h"    // vista JIT
 #include "jit/runtime_entries.h" // vista JIT
 #include "jit/vreg_pipeline.h"   // vista asm nativo (AOT)
 
@@ -1015,25 +1014,30 @@ VESTA_API int vesta_compile_to_jit_t(const char *src, const char *unit_name,
             set_err(out_err, "no se pudo obtener el IR del modulo para el JIT");
             return 1;
         }
-        jit::CodeCache cache;
-        jit::RuntimeEntries rt;
-        rt.resolve();
-        jit::JitCompiler jc(cache, rt);
+        /* La vista la produce el MISMO camino que el JIT de verdad -- el de
+         * registros virtuales --, igual que hace el inspector del editor.
+         * Antes decia "vreg" en la cabecera y en el mensaje de operacion no
+         * soportada, pero compilaba con el selector de huecos de pila, que
+         * estaba jubilado: se ensenaba codigo de un backend que ya no ejecuta
+         * nada.  Se compila cada funcion AISLADA (sin resolver las llamadas a
+         * otras) porque esto solo se lee, no se ejecuta. */
         std::string out;
-        out += "; asm JIT (vreg, VM_ABI, x86-64 host)\n";
+        out += "; asm JIT (vreg, x86-64 host)\n";
         for (const auto &fn : mod.functions) {
-            jit::CompileResult res = jc.compile(fn, jit::SelectorMode::VM_ABI);
             out += "\n; === " + fn.name + " ===\n";
-            if (!res.code_start || res.code_size == 0) {
-                out += res.unsupported ? "; (op no soportada por el JIT vreg)\n"
-                                       : "; (no compilable)\n";
+            std::vector<uint8_t> bytes;
+            try {
+                bytes = jit::vreg_compile_native(fn);
+            } catch (...) {
+                out += "; (el codegen lanzo una excepcion)\n";
                 continue;
             }
-            std::vector<uint8_t> bytes(res.code_start,
-                                       res.code_start + res.code_size);
+            if (bytes.empty()) {
+                out += "; (operacion no soportada por el JIT)\n";
+                continue;
+            }
             const std::string dis = vt_disasm_(bytes, /*mode32=*/false);
             out += dis.empty() ? "; (desensamblado vacio)\n" : dis;
-            jc.invalidate(res);
         }
         *out_asm = dup_cstr(out);
         if (!*out_asm) {
