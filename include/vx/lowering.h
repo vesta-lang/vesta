@@ -801,6 +801,35 @@ class Lowering {
      */
     void emit_print_typed_value(ast::Expr *ex, const std::string &fmt_str);
 
+    /**
+     * @brief Apunta que nombres visibles LEE una expresion.
+     *
+     * Va con @ref scan_read_names_stmt, y se llaman entre si porque en este
+     * lenguaje una sentencia contiene expresiones y una expresion puede
+     * contener sentencias.
+     *
+     * @param e   Expresion por la que empezar.
+     * @param out Donde anñadir los nombres leidos.
+     */
+    void scan_read_names_expr(const ast::Expr *e,
+                              std::unordered_set<std::string> &out);
+
+    /**
+     * @brief Apunta que nombres visibles LEE una sentencia.
+     *
+     * Se usa sobre los `catch`: lo que leen tiene que sobrevivir al salto, y
+     * eso incluye `this` y los parametros -- que no estan en el ambito mas
+     * interno, de ahi que se pregunte por TODOS.
+     *
+     * @param st  Sentencia por la que empezar.
+     * @param out Donde anñadir los nombres leidos.
+     */
+    void scan_read_names_stmt(const ast::Stmt *st,
+                              std::unordered_set<std::string> &out);
+
+    /// @brief @c true si @p name esta atado en ALGUN ambito, no solo el ultimo.
+    bool name_visible_in_any_scope(const std::string &name) const;
+
     bool try_lower_address_taken_var(ast::VarDeclStmt *vd,
                                      const Type &sem_type, ir::IrType vt);
 

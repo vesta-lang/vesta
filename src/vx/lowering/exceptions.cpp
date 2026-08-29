@@ -194,158 +194,10 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // NOTA: solo escaneamos los CATCH bodies (no el try-body) porque
     // dentro del try-body los registros se mantienen normales hasta
     // el throw; el problema es post-throw -> handler.
-    std::function<void(const ast::Expr *)> scan_read_expr;
-    std::function<void(const ast::Stmt *)> scan_read_stmt;
-    // Helper: comprueba si `name` esta visible en CUALQUIER scope
-    // (no solo el innermost).  `this` y los parametros del metodo
-    // viven en el outer scope, por lo que entry_bindings (que solo
-    // tiene el innermost) no los ve.
-    auto is_visible_in_any_scope = [&](const std::string &name) -> bool {
-        for (const auto &sc : scopes_) {
-            if (sc.count(name)) return true;
-        }
-        return false;
-    };
-    scan_read_expr = [&](const ast::Expr *e) {
-        if (!e) return;
-        switch (e->kind) {
-        case ast::NodeKind::IdentExpr: {
-            auto *id = static_cast<const ast::IdentExpr *>(e);
-            if (is_visible_in_any_scope(id->name)) {
-                assigned_in_try.insert(id->name);
-            }
-            return;
-        }
-        case ast::NodeKind::ThisExpr: {
-            // `this` se resuelve via lookup("this") en
-            // lower_this_expr, igual que un IdentExpr.  Vive
-            // en el outer scope (function-level binding), no
-            // en entry_bindings (innermost).  Por eso usamos
-            // is_visible_in_any_scope.
-            if (is_visible_in_any_scope("this")) {
-                assigned_in_try.insert("this");
-            }
-            return;
-        }
-        case ast::NodeKind::AssignExpr: {
-            auto *ae = static_cast<const ast::AssignExpr *>(e);
-            scan_read_expr(ae->target.get());
-            scan_read_expr(ae->value.get());
-            return;
-        }
-        case ast::NodeKind::BinaryExpr: {
-            auto *be = static_cast<const ast::BinaryExpr *>(e);
-            scan_read_expr(be->lhs.get());
-            scan_read_expr(be->rhs.get());
-            return;
-        }
-        case ast::NodeKind::UnaryExpr: {
-            auto *ue = static_cast<const ast::UnaryExpr *>(e);
-            scan_read_expr(ue->operand.get());
-            return;
-        }
-        case ast::NodeKind::CallExpr: {
-            auto *ce = static_cast<const ast::CallExpr *>(e);
-            scan_read_expr(ce->callee.get());
-            for (auto &a : ce->args)
-                scan_read_expr(a.get());
-            return;
-        }
-        case ast::NodeKind::FieldAccessExpr: {
-            auto *fa = static_cast<const ast::FieldAccessExpr *>(e);
-            scan_read_expr(fa->base.get());
-            return;
-        }
-        case ast::NodeKind::IndexExpr: {
-            auto *ix = static_cast<const ast::IndexExpr *>(e);
-            scan_read_expr(ix->base.get());
-            scan_read_expr(ix->index.get());
-            return;
-        }
-        case ast::NodeKind::CastExpr: {
-            auto *ce = static_cast<const ast::CastExpr *>(e);
-            scan_read_expr(ce->operand.get());
-            return;
-        }
-        case ast::NodeKind::NewExpr: {
-            auto *ne = static_cast<const ast::NewExpr *>(e);
-            for (auto &a : ne->args)
-                scan_read_expr(a.get());
-            return;
-        }
-        default: return;
-        }
-    };
-    scan_read_stmt = [&](const ast::Stmt *st) {
-        if (!st) return;
-        switch (st->kind) {
-        case ast::NodeKind::ExprStmt: {
-            auto *es = static_cast<const ast::ExprStmt *>(st);
-            scan_read_expr(es->expr.get());
-            return;
-        }
-        case ast::NodeKind::BlockStmt: {
-            auto *b = static_cast<const ast::BlockStmt *>(st);
-            for (auto &s2 : b->body)
-                scan_read_stmt(s2.get());
-            return;
-        }
-        case ast::NodeKind::VarDeclStmt: {
-            auto *vd = static_cast<const ast::VarDeclStmt *>(st);
-            if (vd->init) scan_read_expr(vd->init.get());
-            return;
-        }
-        case ast::NodeKind::IfStmt: {
-            auto *ifs = static_cast<const ast::IfStmt *>(st);
-            scan_read_expr(ifs->cond.get());
-            scan_read_stmt(ifs->then_branch.get());
-            scan_read_stmt(ifs->else_branch.get());
-            return;
-        }
-        case ast::NodeKind::WhileStmt: {
-            auto *ws = static_cast<const ast::WhileStmt *>(st);
-            scan_read_expr(ws->cond.get());
-            scan_read_stmt(ws->body.get());
-            return;
-        }
-        case ast::NodeKind::ForStmt: {
-            auto *fs = static_cast<const ast::ForStmt *>(st);
-            scan_read_stmt(fs->init.get());
-            scan_read_expr(fs->cond.get());
-            scan_read_expr(fs->step.get());
-            scan_read_stmt(fs->body.get());
-            return;
-        }
-        case ast::NodeKind::ReturnStmt: {
-            auto *rs = static_cast<const ast::ReturnStmt *>(st);
-            if (rs->value) scan_read_expr(rs->value.get());
-            return;
-        }
-        case ast::NodeKind::ThrowStmt: {
-            auto *ts = static_cast<const ast::ThrowStmt *>(st);
-            if (ts->value) scan_read_expr(ts->value.get());
-            return;
-        }
-        case ast::NodeKind::TryStmt: {
-            auto *ts = static_cast<const ast::TryStmt *>(st);
-            scan_read_stmt(ts->body.get());
-            for (auto &cc : ts->catches)
-                scan_read_stmt(cc.body.get());
-            if (ts->finally_body) scan_read_stmt(ts->finally_body.get());
-            return;
-        }
-        case ast::NodeKind::SynchronizedStmt: {
-            auto *ss = static_cast<const ast::SynchronizedStmt *>(st);
-            scan_read_expr(ss->target.get());
-            scan_read_stmt(ss->body.get());
-            return;
-        }
-        default: return;
-        }
-    };
     for (const auto &cc : s->catches)
-        scan_read_stmt(cc.body.get());
-    if (s->finally_body) scan_read_stmt(s->finally_body.get());
+        scan_read_names_stmt(cc.body.get(), assigned_in_try);
+    if (s->finally_body)
+        scan_read_names_stmt(s->finally_body.get(), assigned_in_try);
 
     // Reservar slots y guardar entry value para cada var asignada.
     // Save try_spill_slots_ previo (puede haber try anidado).
@@ -1347,6 +1199,162 @@ void Lowering::emit_try_frame_native(
         th.source_line = s->loc.line;
         emit(rethrow_bb, std::move(th));
     }
+}
+
+/**
+ * @copydoc vx::Lowering::scan_read_names_expr
+ */
+void Lowering::scan_read_names_expr(const ast::Expr *e,
+                                    std::unordered_set<std::string> &out) {
+    if (!e) return;
+    switch (e->kind) {
+    case ast::NodeKind::IdentExpr: {
+        auto *id = static_cast<const ast::IdentExpr *>(e);
+        if (name_visible_in_any_scope(id->name)) {
+            out.insert(id->name);
+        }
+        return;
+    }
+    case ast::NodeKind::ThisExpr: {
+        // `this` se resuelve via lookup("this") en
+        // lower_this_expr, igual que un IdentExpr.  Vive
+        // en el outer scope (function-level binding), no
+        // en entry_bindings (innermost).  Por eso usamos
+        // is_visible_in_any_scope.
+        if (name_visible_in_any_scope("this")) {
+            out.insert("this");
+        }
+        return;
+    }
+    case ast::NodeKind::AssignExpr: {
+        auto *ae = static_cast<const ast::AssignExpr *>(e);
+        scan_read_names_expr(ae->target.get(), out);
+        scan_read_names_expr(ae->value.get(), out);
+        return;
+    }
+    case ast::NodeKind::BinaryExpr: {
+        auto *be = static_cast<const ast::BinaryExpr *>(e);
+        scan_read_names_expr(be->lhs.get(), out);
+        scan_read_names_expr(be->rhs.get(), out);
+        return;
+    }
+    case ast::NodeKind::UnaryExpr: {
+        auto *ue = static_cast<const ast::UnaryExpr *>(e);
+        scan_read_names_expr(ue->operand.get(), out);
+        return;
+    }
+    case ast::NodeKind::CallExpr: {
+        auto *ce = static_cast<const ast::CallExpr *>(e);
+        scan_read_names_expr(ce->callee.get(), out);
+        for (auto &a : ce->args)
+            scan_read_names_expr(a.get(), out);
+        return;
+    }
+    case ast::NodeKind::FieldAccessExpr: {
+        auto *fa = static_cast<const ast::FieldAccessExpr *>(e);
+        scan_read_names_expr(fa->base.get(), out);
+        return;
+    }
+    case ast::NodeKind::IndexExpr: {
+        auto *ix = static_cast<const ast::IndexExpr *>(e);
+        scan_read_names_expr(ix->base.get(), out);
+        scan_read_names_expr(ix->index.get(), out);
+        return;
+    }
+    case ast::NodeKind::CastExpr: {
+        auto *ce = static_cast<const ast::CastExpr *>(e);
+        scan_read_names_expr(ce->operand.get(), out);
+        return;
+    }
+    case ast::NodeKind::NewExpr: {
+        auto *ne = static_cast<const ast::NewExpr *>(e);
+        for (auto &a : ne->args)
+            scan_read_names_expr(a.get(), out);
+        return;
+    }
+    default: return;
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::scan_read_names_stmt
+ */
+void Lowering::scan_read_names_stmt(const ast::Stmt *st,
+                                    std::unordered_set<std::string> &out) {
+    if (!st) return;
+    switch (st->kind) {
+    case ast::NodeKind::ExprStmt: {
+        auto *es = static_cast<const ast::ExprStmt *>(st);
+        scan_read_names_expr(es->expr.get(), out);
+        return;
+    }
+    case ast::NodeKind::BlockStmt: {
+        auto *b = static_cast<const ast::BlockStmt *>(st);
+        for (auto &s2 : b->body)
+            scan_read_names_stmt(s2.get(), out);
+        return;
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        auto *vd = static_cast<const ast::VarDeclStmt *>(st);
+        if (vd->init) scan_read_names_expr(vd->init.get(), out);
+        return;
+    }
+    case ast::NodeKind::IfStmt: {
+        auto *ifs = static_cast<const ast::IfStmt *>(st);
+        scan_read_names_expr(ifs->cond.get(), out);
+        scan_read_names_stmt(ifs->then_branch.get(), out);
+        scan_read_names_stmt(ifs->else_branch.get(), out);
+        return;
+    }
+    case ast::NodeKind::WhileStmt: {
+        auto *ws = static_cast<const ast::WhileStmt *>(st);
+        scan_read_names_expr(ws->cond.get(), out);
+        scan_read_names_stmt(ws->body.get(), out);
+        return;
+    }
+    case ast::NodeKind::ForStmt: {
+        auto *fs = static_cast<const ast::ForStmt *>(st);
+        scan_read_names_stmt(fs->init.get(), out);
+        scan_read_names_expr(fs->cond.get(), out);
+        scan_read_names_expr(fs->step.get(), out);
+        scan_read_names_stmt(fs->body.get(), out);
+        return;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        auto *rs = static_cast<const ast::ReturnStmt *>(st);
+        if (rs->value) scan_read_names_expr(rs->value.get(), out);
+        return;
+    }
+    case ast::NodeKind::ThrowStmt: {
+        auto *ts = static_cast<const ast::ThrowStmt *>(st);
+        if (ts->value) scan_read_names_expr(ts->value.get(), out);
+        return;
+    }
+    case ast::NodeKind::TryStmt: {
+        auto *ts = static_cast<const ast::TryStmt *>(st);
+        scan_read_names_stmt(ts->body.get(), out);
+        for (auto &cc : ts->catches)
+            scan_read_names_stmt(cc.body.get(), out);
+        if (ts->finally_body) scan_read_names_stmt(ts->finally_body.get(), out);
+        return;
+    }
+    case ast::NodeKind::SynchronizedStmt: {
+        auto *ss = static_cast<const ast::SynchronizedStmt *>(st);
+        scan_read_names_expr(ss->target.get(), out);
+        scan_read_names_stmt(ss->body.get(), out);
+        return;
+    }
+    default: return;
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::name_visible_in_any_scope
+ */
+bool Lowering::name_visible_in_any_scope(const std::string &name) const {
+    for (const auto &sc : scopes_)
+        if (sc.count(name)) return true;
+    return false;
 }
 
 } // namespace vx
