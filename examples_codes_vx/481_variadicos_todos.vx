@@ -1,0 +1,67 @@
+namespace ejemplos.variadico_todos;
+
+// El variadico (`T... xs`) en TODOS los contextos donde se puede declarar un
+// parametro.  Era la casilla que faltaba de la matriz del 482.
+//
+// Solo valia en una funcion suelta, y no por diseno: la maquinaria estaba
+// escrita ahi y en ningun otro sitio.  Cinco cosas hay que saber para que
+// funcione, y cada una vivia en un solo camino -- que dentro del cuerpo el
+// parametro se ve como la DIRECCION del array, que detras va un contador que
+// nadie escribio, que la aridad tiene un minimo y no un numero exacto, que los
+// argumentos de mas se comprueban contra el tipo del ELEMENTO, y que al llamar
+// hay que meterlos en un array --.
+//
+// Ahora las cinco se dicen una vez y valen en los seis contextos.
+
+i64 suma(i64* xs, i64 n) {
+    i64 a = 0;
+    for (i64 i = 0; i < n; i = i + 1) { a = a + xs[i]; }
+    return a;
+}
+
+// 1. Funcion suelta: la que siempre funciono.
+i64 fn_var(i64... xs) { return suma(xs, vacount()); }
+
+// 2. Metodo de clase.  3. Su constructor.
+class Clase {
+    public i64 delCtor;
+    public Clase(i64... xs) { this.delCtor = suma(xs, vacount()); }
+    public i64 total(i64... xs) { return suma(xs, vacount()); }
+    // Con parametros fijos DELANTE del variadico: los de delante son
+    // obligatorios, de ahi en adelante cualquier cantidad.
+    public i64 desde(i64 base, i64... xs) { return base + suma(xs, vacount()); }
+}
+
+// 4. Metodo de struct.
+struct Estructura {
+    i64 total(i64... xs) { return suma(xs, vacount()); }
+}
+
+// 5. Metodo de interfaz.
+interface Contrato { i64 total(i64... xs); }
+class Implementa : Contrato {
+    @Override
+    public i64 total(i64... xs) { return suma(xs, vacount()); }
+}
+
+i32 main() {
+    Clase c = new Clase(1, 2, 3);          // ctor -> 6
+    Estructura s;
+    Contrato i = new Implementa();
+
+    // 6. Lambda.  Su TIPO tiene que saber decirlo: `fn(T...) -> R`.
+    fn(i64...) -> i64 lam = (i64... xs) => { return suma(xs, vacount()); };
+
+    i64 a = fn_var(1, 2, 3, 4);            // 10
+    i64 b = c.total(5, 5);                 // 10
+    i64 d = c.desde(4, 1, 2, 3);           // 4 + 6 = 10
+    i64 f = s.total(10);                   // 10
+    i64 g = i.total(2, 3, 5);              // 10
+    i64 h = lam(6, 4);                     // 10
+    i64 z = fn_var();                      // ninguno: 0
+
+    println("funcion=${a} metodo=${b} conFijos=${d} struct=${f} interfaz=${g} lambda=${h} vacio=${z} ctor=${c.delCtor}");
+
+    // 10*6 + 0 + 6 = 66
+    return (i32) (a + b + d + f + g + h + z + c.delCtor - 24);  // 42
+}

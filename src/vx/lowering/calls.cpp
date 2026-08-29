@@ -438,6 +438,20 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         for (auto &a : e->args) {
             arg_ids.push_back(lower_expr(a.get()));
         }
+        /* Si el ultimo parametro recoge los que sobren, se meten en un array y
+         * se pasa su direccion y cuantos son.  El uno de mas es el entorno, que
+         * va delante de todo por la convencion del opcode. */
+        if (id->result_type.fn_is_variadic &&
+            !id->result_type.fn_params.empty() &&
+            id->result_type.fn_params.back().pointee) {
+            const size_t fixed = id->result_type.fn_params.size() - 1;
+            if (arg_ids.size() >= 1 + fixed)
+                pack_variadic_args(
+                    arg_ids, 1 + fixed,
+                    ir_type_from_primitive(
+                        id->result_type.fn_params.back().pointee->kind),
+                    e->loc.line);
+        }
 
         // Tipo de retorno deducido del FUNCTION type del callee.
         ir::IrType ret_ir = ir::IrType::VOID;
@@ -746,55 +760,9 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     if (callee_sig && callee_sig->is_variadic && !callee_sig->is_raw_variadic &&
         !callee_is_sret &&
         arg_ids.size() >= callee_sig->param_types.size() - 1) {
-        const size_t fixed = callee_sig->param_types.size() - 1;
-        const size_t vcount = arg_ids.size() - fixed;
-        const ir::IrType et =
-            ir_type_from_primitive(callee_sig->variadic_elem.kind);
-        const uint64_t esz = ir::type_access_bytes(et);
-        ir::IrValueId v_arr;
-        if (vcount > 0) {
-            v_arr = fn_->new_value(ir::IrType::PTR);
-            fn_->values[v_arr].is_host_ptr = true;
-            {
-                ir::IrInstr al{};
-                al.op = ir::IrOp::ALLOCA;
-                al.type = ir::IrType::I8;
-                al.dst = v_arr;
-                al.imm = vcount * esz;
-                al.host_alloca = true;
-                al.source_line = e->loc.line;
-                emit(current_block_, std::move(al));
-            }
-            for (size_t i = 0; i < vcount; ++i) {
-                ir::IrValueId slot = v_arr;
-                if (i != 0) {
-                    slot = fn_->new_value(ir::IrType::PTR);
-                    const ir::IrValueId off =
-                        emit_const(ir::IrType::I64, i * esz, e->loc.line);
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = slot;
-                    ad.operands = {v_arr, off};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
-                    fn_->values[slot].is_host_ptr = true;
-                }
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = et;
-                st.operands = {arg_ids[fixed + i], slot};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
-            }
-        } else {
-            v_arr = emit_const(ir::IrType::PTR, 0, e->loc.line); // array vacio
-        }
-        std::vector<ir::IrValueId> packed(arg_ids.begin(),
-                                          arg_ids.begin() + fixed);
-        packed.push_back(v_arr);
-        packed.push_back(emit_const(ir::IrType::I64, vcount, e->loc.line));
-        arg_ids = std::move(packed);
+        pack_variadic_args(arg_ids, callee_sig->param_types.size() - 1,
+                           ir_type_from_primitive(callee_sig->variadic_elem.kind),
+                           e->loc.line);
     }
 
     // Para sret la "firma" de retorno es VOID; el dst SSA visible al
@@ -1084,6 +1052,15 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
         arg_vals.push_back(av);
     }
 
+    /* Si el constructor recoge los que sobren, no van uno por uno: se meten en
+     * un array y se pasa su direccion y cuantos son. */
+    if (ctor_sig && ctor_sig->is_variadic && !ctor_sig->param_types.empty() &&
+        arg_vals.size() >= ctor_sig->param_types.size() - 1) {
+        pack_variadic_args(arg_vals, ctor_sig->param_types.size() - 1,
+                           ir_type_from_primitive(ctor_sig->variadic_elem.kind),
+                           e->loc.line);
+    }
+
     // Emit IrInstr::CALL a __new_<ClassName>(args).  La funcion auxiliar
     // se genera al final de run() via generate_new_helpers.
     //
@@ -1166,20 +1143,13 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     // Modelo del IR: @c IrFunction::params es @c vector<IrValueId>;
     // los nombres se mantienen aparte para hacer el bind() en el
     // scope local del lowering tras crear el bloque entry.
+    /* Los parametros de una lambda se declaran como los de cualquier otra
+     * funcion: mismo tipo, misma naturaleza, y el contador oculto detras si el
+     * ultimo recoge los que sobren.  Aqui habia una sexta copia del bucle que
+     * no sabia ni lo uno ni lo otro. */
     std::vector<std::pair<std::string, ir::IrValueId>> param_bindings;
-    param_bindings.reserve(e->params.size());
-    for (size_t i = 0; i < e->params.size(); ++i) {
-        ir::IrType pt = ir::IrType::I64;
-        const Type sem = tc_.resolve_type_node(e->params[i]->type.get());
-        if (sem.kind != PrimitiveKind::COUNT &&
-            sem.kind != PrimitiveKind::VOID) {
-            pt = ir_type_from_primitive(sem.kind);
-        }
-        ir::IrValueId pv = child_fn.new_value(pt, "%" + e->params[i]->name);
-        child_fn.values[pv].is_param = true;
-        child_fn.params.push_back(pv);
-        param_bindings.emplace_back(e->params[i]->name, pv);
-    }
+    param_bindings.reserve(e->params.size() + 1);
+    declare_params(child_fn, e->params, param_bindings);
 
     // AOT (native_poo_) con capturas: el env se pasa como PARAMETRO OCULTO
     // FINAL (convencion C `void* userdata`), no por R14.  Asi el helper usa

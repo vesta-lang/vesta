@@ -350,6 +350,13 @@ struct Type {
     /// direccion, llamada directa via CALLIND, sin env).  lambda != cfn.
     bool fn_is_raw = false;
 
+    /// Solo para @c kind == FUNCTION: el ultimo parametro recoge los que
+    /// sobren.  En @c fn_params ese ultimo aparece ya como `T*` -- que es lo
+    /// que el cuerpo ve --, asi que el tipo del ELEMENTO se saca de su
+    /// @c pointee.  Forma parte del tipo: una funcion variadica y una que no lo
+    /// es NO son intercambiables, porque la llamada se monta distinto.
+    bool fn_is_variadic = false;
+
     /// Newtype nominal ID (typedef T name new).  0 = no es newtype
     /// (alias transparente clasico).  Cualquier valor > 0 identifica
     /// univocamente al newtype: dos Type con kinds/representacion
@@ -457,6 +464,7 @@ struct Type {
             // lambda (fn) != puntero a funcion crudo (cfn): tipos distintos
             // aunque compartan firma (representacion 16B vs 8B).
             if (fn_is_raw != o.fn_is_raw) return false;
+            if (fn_is_variadic != o.fn_is_variadic) return false;
             if (fn_params.size() != o.fn_params.size()) return false;
             for (size_t i = 0; i < fn_params.size(); ++i) {
                 if (!(fn_params[i] == o.fn_params[i])) return false;

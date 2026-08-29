@@ -383,6 +383,15 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         arg_vals.push_back(av);
     }
 
+    /* Si el ultimo parametro recoge los que sobren, los que sobran no van uno
+     * por uno: se meten en un array y se pasa su direccion y cuantos son. */
+    if (mtd->is_variadic && !mtd->param_types.empty() &&
+        arg_vals.size() >= mtd->param_types.size() - 1) {
+        pack_variadic_args(arg_vals, mtd->param_types.size() - 1,
+                           ir_type_from_primitive(mtd->variadic_elem.kind),
+                           e->loc.line);
+    }
+
     // SRET: si el metodo devuelve Optional/Result, el caller aloca el
     // retbuf (host_alloca para que callee/caller usen movh) y lo pasa
     // como segundo "arg" (tras this).  El dst del CALL es VOID; el

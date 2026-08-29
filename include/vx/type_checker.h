@@ -249,6 +249,33 @@ struct ClassMethodInfo {
     std::string name;
     Type return_type;
     std::vector<Type> param_types;
+    /**
+     * @name El ultimo parametro recoge los que sobren
+     *
+     * `i64... xs` no es un parametro mas: quien llama puede pasar cuantos
+     * quiera, los mete en un array y pasa su direccion y cuantos son.  Por eso
+     * en @c param_types el ultimo aparece ya como `T*`, y el numero de
+     * elementos viaja en un parametro que no se escribio.
+     *
+     * @c variadic_elem es la T con la que se comprueban los argumentos que
+     * sobran; sin ella habria que deshacer el puntero cada vez.
+     * @{
+     */
+    bool is_variadic = false;
+    Type variadic_elem;
+
+    /**
+     * @brief Cuantos parametros ve el IR, contando el que no se escribio.
+     *
+     * Los declarados, mas UNO si el ultimo recoge los que sobren: ese lleva
+     * detras cuantos son.  Quien construya la firma a nivel de IR -- el
+     * ayudante que crea el objeto, por ejemplo -- tiene que contarlo, o
+     * declarara un parametro menos de los que le van a llegar.
+     */
+    size_t ir_param_count() const {
+        return param_types.size() + (is_variadic ? 1u : 0u);
+    }
+    /** @} */
     uint32_t vtable_index = 0;
     /// `@Virtual` (structs polimorficos): el metodo se despacha por vtable.
     /// En un struct polimorfico `vtable_index` es el slot dentro de la vtable
@@ -1534,6 +1561,31 @@ class TypeChecker {
      * @param m  El metodo declarado.
      * @param mi Donde anotar los tipos.
      */
+    /**
+     * @brief Comprueba los argumentos de una llamada a metodo contra su firma.
+     *
+     * Estaba escrito dos veces -- struct y clase -- y a las dos les faltaba lo
+     * mismo: que el ultimo parametro puede recoger los que sobren.
+     *
+     * @param e    La llamada.
+     * @param mi   El metodo al que se llama.
+     * @param name Su nombre, para los mensajes.
+     */
+    /**
+     * @brief Declara los parametros de @p params en el ambito actual.
+     *
+     * El `...` pelado no declara nada, y un variadico empaquetado se ve dentro
+     * del cuerpo como `T*`.  Las dos cosas estaban mal en dos de las tres
+     * copias que habia.
+     *
+     * @param params Los parametros declarados.
+     */
+    void declare_params_in_scope(
+        const std::vector<std::unique_ptr<ast::ParamDecl>> &params);
+
+    void check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
+                           const std::string &name);
+
     void record_method_params(const ast::ClassMethodDecl &m,
                               ClassMethodInfo &mi);
 

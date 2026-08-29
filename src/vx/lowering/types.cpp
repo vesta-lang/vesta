@@ -493,6 +493,38 @@ std::vector<Lowering::DeclaredParam> Lowering::declare_params(
 }
 
 /**
+ * @copydoc vx::Lowering::pack_variadic_args
+ */
+void Lowering::pack_variadic_args(std::vector<ir::IrValueId> &arg_ids,
+                                  size_t fixed, ir::IrType elem_ty,
+                                  uint32_t line) {
+    const size_t vcount = arg_ids.size() - fixed;
+    const uint64_t esz = ir::type_access_bytes(elem_ty);
+
+    ir::IrValueId v_arr;
+    if (vcount > 0) {
+        /* El array vive en la pila del ANFITRION: quien lo recibe lo lee por su
+         * direccion, y esa direccion tiene que ser de la misma memoria en los
+         * tres modos. */
+        v_arr = stack_alloc_buf(vcount * esz, line, /*host_memory=*/true);
+        for (size_t i = 0; i < vcount; ++i) {
+            ir::IrValueId slot = v_arr;
+            if (i != 0)
+                slot = emit_ptr_add(v_arr, emit_const(ir::IrType::I64, i * esz, line),
+                                    line);
+            emit_store_typed(slot, arg_ids[fixed + i], elem_ty, line);
+        }
+    } else {
+        v_arr = emit_const(ir::IrType::PTR, 0, line); // ninguno: array vacio
+    }
+
+    std::vector<ir::IrValueId> packed(arg_ids.begin(), arg_ids.begin() + fixed);
+    packed.push_back(v_arr);
+    packed.push_back(emit_const(ir::IrType::I64, vcount, line));
+    arg_ids = std::move(packed);
+}
+
+/**
  * @brief Si los metodos de una clase se despachan por tabla.
  *
  * Tres motivos, y el tercero es el que obliga a mirar el programa entero: que

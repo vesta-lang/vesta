@@ -557,7 +557,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
         const ClassMethodInfo *effective_ctor =
             ctor_is_trivial_zero_init ? nullptr : ctor;
         const size_t nargs =
-            effective_ctor ? effective_ctor->param_types.size() : 0;
+            effective_ctor ? effective_ctor->ir_param_count() : 0;
         const uint32_t ctor_vtable_idx =
             effective_ctor ? effective_ctor->vtable_index : 0;
 
@@ -1019,10 +1019,13 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                                         : ("__new_" + cd->name);
             fn.ret_type = ir::IrType::PTR;
 
-            // Params: replicar tipos del ctor (si existe).
+            // Params: replicar tipos del ctor (si existe).  El ultimo puede ser
+            // el contador oculto de un variadico, que no tiene declaracion.
             for (size_t i = 0; i < nargs; ++i) {
                 const ir::IrType pt =
-                    ir_type_from_primitive(ctor->param_types[i].kind);
+                    (i < ctor->param_types.size())
+                        ? ir_type_from_primitive(ctor->param_types[i].kind)
+                        : ir::IrType::I64;
                 const ir::IrValueId vid =
                     fn.new_value(pt, "%a" + std::to_string(i));
                 fn.values[vid].is_param = true;
@@ -1784,6 +1787,14 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         const ir::IrValueId av = lower_expr(a.get());
         if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         arg_vals.push_back(av);
+    }
+    /* Si el ultimo parametro recoge los que sobren, los que sobran no van uno
+     * por uno: se meten en un array y se pasa su direccion y cuantos son. */
+    if (mtd->is_variadic && !mtd->param_types.empty() &&
+        arg_vals.size() >= mtd->param_types.size() - 1) {
+        pack_variadic_args(arg_vals, mtd->param_types.size() - 1,
+                           ir_type_from_primitive(mtd->variadic_elem.kind),
+                           e->loc.line);
     }
     const ir::IrType ret_ir_decl =
         ir_type_from_primitive(mtd->return_type.kind);

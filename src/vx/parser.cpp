@@ -3301,6 +3301,13 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
             if (!abi.empty()) any_abi = true;
             auto pt = parse_type_node();
             if (!pt) break;
+            /* `fn(T...) -> R`: el ultimo recoge los que sobren.  Se escribe
+             * igual que en una declaracion de parametros, para que el tipo se
+             * lea como lo que nombra. */
+            if (current_.kind == TokenKind::DOTDOTDOT) {
+                (void)consume();
+                fn->is_variadic = true;
+            }
             fn->param_types.push_back(std::move(pt));
             fn->param_abi_regs.push_back(std::move(abi));
             if (!match(TokenKind::COMMA)) break;

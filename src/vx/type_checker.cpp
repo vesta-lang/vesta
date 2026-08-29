@@ -2947,12 +2947,19 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
         const auto *fn = static_cast<const ast::FunctionTypeNode *>(tn);
         std::vector<Type> params;
         params.reserve(fn->param_types.size());
-        for (auto &p : fn->param_types) {
-            params.push_back(type_from_node(p.get()));
+        for (size_t i = 0; i < fn->param_types.size(); ++i) {
+            Type pt = type_from_node(fn->param_types[i].get());
+            /* `fn(T...) -> R`: dentro del cuerpo el ultimo es la DIRECCION del
+             * array, no un `T`.  Se guarda ya asi para que la firma diga lo
+             * mismo aqui que en una declaracion de parametros. */
+            if (fn->is_variadic && i + 1 == fn->param_types.size())
+                pt = Type::make_ptr(pt);
+            params.push_back(std::move(pt));
         }
         Type ret = type_from_node(fn->return_type.get());
         Type ft = Type::make_function(std::move(params), std::move(ret));
         ft.fn_is_raw = fn->is_raw; // cfn(...) -> puntero a funcion crudo (8B)
+        ft.fn_is_variadic = fn->is_variadic;
         // ABI custom por-parametro: forma parte de la identidad del tipo (dos
         // cfn con abi_regs distintos son tipos incompatibles).  El operator==
         // de Type ya lo distingue; aqui se valida el nombre del registro y se
@@ -5611,17 +5618,116 @@ bool TypeChecker::type_declares_to_string(const Type &t) const {
 void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
                                        ClassMethodInfo &mi) {
     mi.param_types.reserve(m.params.size());
-    for (const auto &p : m.params) {
+    for (size_t pi = 0; pi < m.params.size(); ++pi) {
+        const auto &p = m.params[pi];
+        const Type pt = type_from_node(p->type.get());
         if (p->is_variadic) {
-            diags_.error(p->loc,
-                         "un parametro variadico ('" + p->name +
-                             "') todavia no esta soportado en un metodo; "
-                             "solo en una funcion suelta.\n"
-                             "  sugerencia: pasa un array (`T[] xs`) con su "
-                             "longitud, o declara la funcion fuera de la clase");
+            /* El que recoge los que sobren tiene que ser el ULTIMO: si no, no
+             * habria forma de saber donde acaban los suyos y empiezan los del
+             * siguiente. */
+            if (pi + 1 != m.params.size())
+                diags_.error(p->loc, "el parametro variadico '" + p->name +
+                                         "' debe ser el ultimo");
+            mi.is_variadic = true;
+            mi.variadic_elem = pt;
+            /* Dentro del cuerpo `xs` es la direccion del array que monto quien
+             * llamo, no un `T`. */
+            mi.param_types.push_back(Type::make_ptr(pt));
             continue;
         }
-        mi.param_types.push_back(type_from_node(p->type.get()));
+        mi.param_types.push_back(pt);
+    }
+}
+
+/**
+ * @brief Comprueba los argumentos de una llamada a metodo contra su firma.
+ *
+ * Estaba escrito dos veces -- para el metodo de un struct y para el de una
+ * clase --, casi igual pero no del todo: una comprobaba ademas que un puntero a
+ * struct se puede subir a su base y la otra no.
+ *
+ * Y de las dos faltaba lo mismo: que el ultimo parametro puede recoger los que
+ * sobren.  Entonces la aridad se cuenta distinto -- hay un minimo, no un numero
+ * exacto -- y los argumentos de mas se comprueban contra el tipo del ELEMENTO,
+ * no contra el del array.
+ *
+ * @param e    La llamada.
+ * @param mi   El metodo al que se llama.
+ * @param name Su nombre, para los mensajes.
+ */
+void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
+                                    const std::string &name) {
+    /* Con un variadico, los parametros FIJOS son todos menos el ultimo -- que
+     * es el array -- y de ahi en adelante se admite cualquier cantidad. */
+    const size_t fixed =
+        mi.is_variadic ? mi.param_types.size() - 1 : mi.param_types.size();
+
+    if (mi.is_variadic) {
+        if (e->args.size() < fixed)
+            diags_.error(e->loc, "numero de argumentos insuficiente en metodo "
+                                 "variadico '" +
+                                     name + "': minimo " +
+                                     std::to_string(fixed) + ", recibidos " +
+                                     std::to_string(e->args.size()));
+    } else if (e->args.size() != mi.param_types.size()) {
+        diags_.error(e->loc, "numero de argumentos incorrecto en metodo '" +
+                                 name + "': esperados " +
+                                 std::to_string(mi.param_types.size()) +
+                                 ", recibidos " +
+                                 std::to_string(e->args.size()));
+    }
+
+    for (size_t i = 0; i < e->args.size(); ++i) {
+        const Type ta = check_expr(e->args[i].get());
+        if (ta.kind == PrimitiveKind::COUNT) continue;
+        /* Un argumento de mas se compara con el tipo del elemento; uno fijo,
+         * con el suyo.  Si sobran y el metodo no es variadico, ya se dijo
+         * arriba y aqui no hay con que compararlo. */
+        if (i >= fixed && !mi.is_variadic) continue;
+        const Type &tp = (i >= fixed) ? mi.variadic_elem : mi.param_types[i];
+        /* Un literal con decimales es de sesenta y cuatro bits por omision; si
+         * el parametro es de treinta y dos hay que re-tiparlo AQUI, o abajo se
+         * guardarian los bits del ancho equivocado. */
+        if ((tp.kind == PrimitiveKind::F32 || tp.kind == PrimitiveKind::F64) &&
+            e->args[i]->kind == ast::NodeKind::FloatLitExpr && ta.kind != tp.kind)
+            e->args[i]->result_type = tp;
+        if (!types_assignable(tp, ta) && !value_assignable_to_interface(tp, ta) &&
+            !struct_ptr_upcast_ok(tp, ta)) {
+            diags_.error(e->args[i]->loc,
+                         std::string("argumento ") + std::to_string(i + 1) +
+                             " del metodo '" + name + "': tipo (" +
+                             type_to_string(ta) +
+                             ") incompatible con parametro (" +
+                             type_to_string(tp) + ")");
+        }
+    }
+}
+
+/**
+ * @brief Declara los parametros de @p params en el ambito actual.
+ *
+ * Dos cosas no son obvias y por eso estaban mal en dos de las tres copias que
+ * habia (funcion suelta, metodo de clase, metodo de struct):
+ *
+ *   - El `...` pelado NO declara nada: sus argumentos van crudos en los
+ *     registros que diga la convencion y el cuerpo en ensamblador los lee de
+ *     ahi.
+ *   - Un variadico empaquetado se ve DENTRO del cuerpo como `T*`, la direccion
+ *     del array que monto quien llamo -- se indexa `xs[i]` y se pregunta
+ *     cuantos con `vacount()` --, no como un `T`.
+ *
+ * @param params Los parametros declarados.
+ */
+void TypeChecker::declare_params_in_scope(
+    const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
+    for (const auto &p : params) {
+        if (p->is_raw_variadic) continue;
+        Symbol sp;
+        sp.kind = SymbolKind::Param;
+        const Type pt = type_from_node(p->type.get());
+        sp.type = p->is_variadic ? Type::make_ptr(pt) : pt;
+        if (!declare(p->name, sp))
+            diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
     }
 }
 void TypeChecker::check_free_function_bodies() {
@@ -5818,22 +5924,7 @@ void TypeChecker::check_free_function_bodies() {
 
         const Type fn_ret = type_from_node(fn->return_type.get());
         push_scope(); // scope de la funcion (parametros)
-        for (auto &p : fn->params) {
-            // Variadico CRUDO (`...`): sin nombre ni tipo, no se declara -- el
-            // cuerpo asm accede a los registros de argumento directamente.
-            if (p->is_raw_variadic) continue;
-            Symbol sp;
-            sp.kind = SymbolKind::Param;
-            // Variadico: dentro del body, `name` es un `T*` (puntero al array
-            // empaquetado).  El usuario lo indexa `name[i]` y lee el numero de
-            // elementos con `vacount()`.
-            sp.type = p->is_variadic
-                          ? Type::make_ptr(type_from_node(p->type.get()))
-                          : type_from_node(p->type.get());
-            if (!declare(p->name, sp)) {
-                diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
-            }
-        }
+        declare_params_in_scope(fn->params);
         // Guardar y settear current_fn_return_type_ para que
         // check_match (que recibe expected_return_type via miembro
         // y no via param para no contaminar la signature) pueda
@@ -6390,14 +6481,7 @@ void TypeChecker::check_class_method(const ClassLayout &cls,
         (void)declare("this", s_this);
     }
     // Parametros declarados.
-    for (auto &p : m->params) {
-        Symbol sp;
-        sp.kind = SymbolKind::Param;
-        sp.type = type_from_node(p->type.get());
-        if (!declare(p->name, sp)) {
-            diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
-        }
-    }
+    declare_params_in_scope(m->params);
     // Sprint edge-bugs (2026-06-02): pre-pase de implicit-this.
     // Recolecta field names de la clase + sus supers transitivos.
     // Despues walkea el body y reescribe identifiers de fields a
@@ -6472,14 +6556,7 @@ void TypeChecker::check_struct_method(const StructLayout &lay,
     s_this.type = Type{PrimitiveKind::STRUCT, lay.name};
     (void)declare("this", s_this);
     // Parametros declarados.
-    for (auto &p : m->params) {
-        Symbol sp;
-        sp.kind = SymbolKind::Param;
-        sp.type = type_from_node(p->type.get());
-        if (!declare(p->name, sp)) {
-            diags_.error(p->loc, "parametro repetido: '" + p->name + "'");
-        }
-    }
+    declare_params_in_scope(m->params);
     // Pre-pase implicit-this: reescribe identifiers que matchean un
     // campo del struct a FieldAccessExpr(this, campo).  Mismo
     // mecanismo que metodos de clase (sin supers: los structs no
@@ -8887,7 +8964,14 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
     const ClassMethodInfo *ctor = nullptr;
     for (const auto &m : cls.methods) {
         if (!m.is_constructor) continue;
-        if (m.param_types.size() != arg_types.size()) continue;
+        /* Con un variadico la aridad no es exacta: los parametros de delante
+         * son obligatorios y de ahi en adelante se admite cualquier cantidad,
+         * incluida ninguna. */
+        if (m.is_variadic) {
+            if (arg_types.size() + 1 < m.param_types.size()) continue;
+        } else if (m.param_types.size() != arg_types.size()) {
+            continue;
+        }
         ctor = &m;
         break;
     }
@@ -8905,9 +8989,14 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         }
     } else {
         // Verificar tipos de cada argumento contra el constructor.
+        /* Los de delante del variadico van contra su parametro; los que sobran,
+         * contra el tipo del ELEMENTO -- el parametro es ya el array. */
+        const size_t fixed = ctor->is_variadic ? ctor->param_types.size() - 1
+                                               : ctor->param_types.size();
         for (size_t i = 0; i < arg_types.size(); ++i) {
             const Type &ta = arg_types[i];
-            const Type &tp = ctor->param_types[i];
+            const Type &tp =
+                (i >= fixed) ? ctor->variadic_elem : ctor->param_types[i];
             if (ta.kind == PrimitiveKind::COUNT) continue;
             if (!types_assignable(tp, ta) &&
                 !value_assignable_to_interface(tp, ta)) {
@@ -9105,6 +9194,7 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     // i64 por defecto.
     std::vector<Type> param_types;
     param_types.reserve(e->params.size());
+    bool lam_variadic = false;
     for (auto &p : e->params) {
         Type pt;
         if (p->type) {
@@ -9114,6 +9204,13 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
             // MVP (la mayoria de lambdas cortas usan enteros); el
             // usuario puede anotar el tipo si quiere otro.
             pt = Type{PrimitiveKind::I64};
+        }
+        /* `(T... xs) => ...`: el ultimo recoge los que sobren, y dentro del
+         * cuerpo se ve como la DIRECCION del array.  Igual que en cualquier
+         * otra declaracion; la lambda no es una excepcion. */
+        if (p->is_variadic) {
+            lam_variadic = true;
+            pt = Type::make_ptr(pt);
         }
         param_types.push_back(pt);
     }
@@ -9172,7 +9269,10 @@ Type TypeChecker::check_lambda(ast::LambdaExpr *e) {
     pop_scope();
     lambda_stack_.pop_back();
 
-    return Type::make_function(std::move(param_types), std::move(return_t));
+    Type lam_t =
+        Type::make_function(std::move(param_types), std::move(return_t));
+    lam_t.fn_is_variadic = lam_variadic;
+    return lam_t;
 }
 
 // ---------------------------------------------------------------------
@@ -13494,45 +13594,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     (void)check_expr(a.get());
                 return Type{};
             }
-            if (e->args.size() != smtd->param_types.size()) {
-                diags_.error(e->loc,
-                             "numero de argumentos incorrecto en metodo '" +
-                                 fa->field_name + "': esperados " +
-                                 std::to_string(smtd->param_types.size()) +
-                                 ", recibidos " +
-                                 std::to_string(e->args.size()));
-            }
-            const size_t ns =
-                std::min(e->args.size(), smtd->param_types.size());
-            for (size_t i = 0; i < ns; ++i) {
-                const Type ta = check_expr(e->args[i].get());
-                const Type &tp = smtd->param_types[i];
-                if (ta.kind == PrimitiveKind::COUNT) continue;
-                // Coercion de un literal float al ancho del param (`store(5.0)`
-                // con param f32): el literal es f64 por defecto; si no se
-                // re-tipa aqui, el lowering conservaria sus 64 bits IEEE al
-                // meterlos en un slot f32 (guardando basura).  Marca el nodo
-                // como F32 para que el CONST se emita con los 32 bits
-                // correctos.
-                if ((tp.kind == PrimitiveKind::F32 ||
-                     tp.kind == PrimitiveKind::F64) &&
-                    e->args[i]->kind == ast::NodeKind::FloatLitExpr &&
-                    ta.kind != tp.kind)
-                    e->args[i]->result_type = tp;
-                if (!types_assignable(tp, ta) &&
-                    !value_assignable_to_interface(tp, ta) &&
-                    !struct_ptr_upcast_ok(tp, ta)) {
-                    diags_.error(e->args[i]->loc,
-                                 std::string("argumento ") +
-                                     std::to_string(i + 1) + " del metodo '" +
-                                     fa->field_name + "': tipo (" +
-                                     type_to_string(ta) +
-                                     ") incompatible con parametro (" +
-                                     type_to_string(tp) + ")");
-                }
-            }
-            for (size_t i = ns; i < e->args.size(); ++i)
-                (void)check_expr(e->args[i].get());
+            check_method_args(e, *smtd, fa->field_name);
             fa->result_type = smtd->return_type;
             return smtd->return_type;
         }
@@ -13607,31 +13669,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
             break;
         }
-        // Aridad y tipos de arg.
-        if (e->args.size() != mtd->param_types.size()) {
-            diags_.error(e->loc, "numero de argumentos incorrecto en metodo '" +
-                                     fa->field_name + "': esperados " +
-                                     std::to_string(mtd->param_types.size()) +
-                                     ", recibidos " +
-                                     std::to_string(e->args.size()));
-        }
-        const size_t n = std::min(e->args.size(), mtd->param_types.size());
-        for (size_t i = 0; i < n; ++i) {
-            const Type ta = check_expr(e->args[i].get());
-            const Type &tp = mtd->param_types[i];
-            if (ta.kind == PrimitiveKind::COUNT) continue;
-            if (!types_assignable(tp, ta) &&
-                !value_assignable_to_interface(tp, ta)) {
-                diags_.error(e->args[i]->loc,
-                             std::string("argumento ") + std::to_string(i + 1) +
-                                 " del metodo '" + fa->field_name +
-                                 "': tipo (" + type_to_string(ta) +
-                                 ") incompatible con parametro (" +
-                                 type_to_string(tp) + ")");
-            }
-        }
-        for (size_t i = n; i < e->args.size(); ++i)
-            (void)check_expr(e->args[i].get());
+        check_method_args(e, *mtd, fa->field_name);
         // Anotar el tipo del FieldAccessExpr como el tipo de retorno
         // (util para que el lowering tenga el target_type listo).
         fa->result_type = mtd->return_type;
@@ -16518,8 +16556,22 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
         }
         const Type fn_type = s->type;
+        /* Con un variadico la aridad no es exacta: los de delante son
+         * obligatorios y de ahi en adelante vale cualquier cantidad. */
+        const size_t fn_fixed = (fn_type.fn_is_variadic &&
+                                 !fn_type.fn_params.empty())
+                                    ? fn_type.fn_params.size() - 1
+                                    : fn_type.fn_params.size();
         // Validar aridad y tipos de los argumentos contra fn_params.
-        if (e->args.size() != fn_type.fn_params.size()) {
+        if (fn_type.fn_is_variadic) {
+            if (e->args.size() < fn_fixed)
+                diags_.error(e->loc,
+                             std::string("numero de argumentos insuficiente en "
+                                         "llamada al closure variadico '") +
+                                 id->name + "': minimo " +
+                                 std::to_string(fn_fixed) + ", recibidos " +
+                                 std::to_string(e->args.size()));
+        } else if (e->args.size() != fn_type.fn_params.size()) {
             diags_.error(
                 e->loc,
                 std::string(
@@ -16528,10 +16580,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     std::to_string(fn_type.fn_params.size()) + ", recibidos " +
                     std::to_string(e->args.size()));
         }
-        const size_t n = std::min(e->args.size(), fn_type.fn_params.size());
+        const size_t n = fn_type.fn_is_variadic
+                             ? e->args.size()
+                             : std::min(e->args.size(), fn_type.fn_params.size());
+        /* El que sobra se compara con el tipo del ELEMENTO: el parametro
+         * declarado es ya la direccion del array. */
+        const Type var_elem =
+            (fn_type.fn_is_variadic && !fn_type.fn_params.empty() &&
+             fn_type.fn_params.back().pointee)
+                ? *fn_type.fn_params.back().pointee
+                : Type{};
         for (size_t i = 0; i < n; ++i) {
             Type ta = check_expr(e->args[i].get());
-            const Type &tp = fn_type.fn_params[i];
+            const Type &tp = (i >= fn_fixed) ? var_elem : fn_type.fn_params[i];
             // Promocion automatica de funcion top-level a function
             // value cuando se pasa por nombre como argumento:  si el
             // parametro espera FUNCTION y el argumento es un identifier

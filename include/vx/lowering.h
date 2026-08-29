@@ -272,6 +272,22 @@ class Lowering {
      * @param bindings Donde apuntar el par (nombre, valor) de cada uno.
      * @return Uno por parametro declarado, en el orden en que quedaron.
      */
+    /**
+     * @brief Mete en un array los argumentos que sobran y los sustituye por su
+     *        direccion y cuantos son.
+     *
+     * Es lo que hace que `f(1, 2, 3)` llegue a `f(i64... xs)` como un array de
+     * tres y un tres.  Estaba dentro de la bajada de una llamada a funcion, asi
+     * que una llamada a un METODO variadico no tenia como empaquetar nada.
+     *
+     * @param arg_ids  Los argumentos ya bajados; queda reescrito.
+     * @param fixed    Cuantos son fijos (los de delante del variadico).
+     * @param elem_ty  De que tipo es cada uno de los que sobran.
+     * @param line     Linea fuente, para la depuracion.
+     */
+    void pack_variadic_args(std::vector<ir::IrValueId> &arg_ids, size_t fixed,
+                            ir::IrType elem_ty, uint32_t line);
+
     std::vector<DeclaredParam> declare_params(
         ir::IrFunction &fn,
         const std::vector<std::unique_ptr<ast::ParamDecl>> &params,

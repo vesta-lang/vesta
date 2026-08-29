@@ -16,9 +16,9 @@ namespace ejemplos.matriz_parametros;
 // recorre la matriz ENTERA -- seis contextos por seis formas -- y no una
 // muestra: si alguien vuelve a copiar el lector, aqui deja de compilar.
 //
-// La unica casilla que falta a proposito es el variadico fuera de una funcion
-// suelta, que se declara y se lee pero cuya llamada aun no se sabe empaquetar.
-// Eso se rechaza DICIENDOLO, y va en el 481, que es un test negativo.
+// El variadico va aparte, en el 481: necesita mas de una linea por casilla
+// (hay que sumar lo que llegue) y ahi se prueba con y sin parametros fijos
+// delante, y con cero argumentos.
 
 i64 g_valor = 5;
 

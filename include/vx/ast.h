@@ -504,6 +504,10 @@ struct FunctionTypeNode : TypeNode {
     /// false = lambda/closure (@c fn(...) -> R): fat-pointer de 16 bytes
     /// {fn_addr, env}.  Conceptos distintos: lambda != puntero a funcion.
     bool is_raw = false;
+    /// El ultimo parametro recoge los que sobren (`fn(T...) -> R`).  Quien
+    /// llame puede pasar cuantos quiera: se meten en un array y el llamado
+    /// recibe su direccion y cuantos son.
+    bool is_variadic = false;
     /// ABI custom por-parametro (`cfn(register("rax") T, register("rdi") T,
     /// ...)`): registro fisico de entrada por parametro, alineado con @c
     /// param_types. Cadena vacia = ABI estandar.  La ABI forma parte del TIPO:
@@ -606,6 +610,10 @@ struct StringLitExpr : Expr {
                ///< Para STRINGS INTERPOLADOS queda vacio y los datos
                ///< viven en @c interp_parts + @c interp_exprs.
     bool is_raw = false;
+    /// El ultimo parametro recoge los que sobren (`fn(T...) -> R`).  Quien
+    /// llame puede pasar cuantos quiera: se meten en un array y el llamado
+    /// recibe su direccion y cuantos son.
+    bool is_variadic = false;
 
     /// Interpolacion ${expr}.  Layout intercalado:
     ///   parts[0] + expr[0] + parts[1] + expr[1] + ... + parts[N]
