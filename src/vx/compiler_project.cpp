@@ -2632,6 +2632,17 @@ CompileResult compile_vx_project(
             VxiModule dep_filtered_storage;
             const VxiModule &dep_vxi =
                 filter_internal_(dep.vxi, dep_filtered_storage);
+            // Los modulos de los que el dep importa.  Sus plantillas viajan
+            // como texto y se re-parsean aqui, asi que sus firmas pueden
+            // nombrar tipos que el dep trajo de un tercero (`usize`, de
+            // `std.types`); sin esto ese nombre no existe al re-parsear y el
+            // parametro se queda en `void`.
+            std::vector<const VxiModule *> dep_alias_srcs;
+            for (const auto &dr : dep_vxi.deps) {
+                auto itx = by_name.find(dr.name);
+                if (itx != by_name.end())
+                    dep_alias_srcs.push_back(&work[itx->second].vxi);
+            }
             // `only *` (glob): expandir a TODOS los simbolos publicos del dep,
             // como si el usuario hubiera listado cada uno (nombre directo, sin
             // rename).  Se hace aqui -- no en el mapeo AST -- porque necesita
@@ -2655,7 +2666,8 @@ CompileResult compile_vx_project(
                 // #cross-module-generics: inyectar TODAS las plantillas del
                 // dep bajo el namespace (`lib.Caja<i64>`).
                 inject_generic_templates_from_vxi(
-                    *pm.tc, dep_vxi, /*wanted=*/{}, req.local_name);
+                    *pm.tc, dep_vxi, /*wanted=*/{}, req.local_name,
+                    /*alias_unqualified=*/{}, dep_alias_srcs);
                 // Namespace PARCIAL: registrar tambien los simbolos de los
                 // OTROS ficheros que declaran el mismo `namespace X;` (p.ej.
                 // std.types + std/types/x86_64.vx).  Sin esto, `import
@@ -2673,9 +2685,10 @@ CompileResult compile_vx_project(
                                 work[ito->second].vxi, other_store);
                             register_namespace_for_import(
                                 *pm.tc, req.local_name, other_mn, other_vxi);
-                            inject_generic_templates_from_vxi(*pm.tc, other_vxi,
-                                                              /*wanted=*/{},
-                                                              req.local_name);
+                            inject_generic_templates_from_vxi(
+                                *pm.tc, other_vxi, /*wanted=*/{},
+                                req.local_name, /*alias_unqualified=*/{},
+                                dep_alias_srcs);
                         }
                     }
                 }
@@ -2753,7 +2766,8 @@ CompileResult compile_vx_project(
                     only_alias.insert(os.name);
                 inject_generic_templates_from_vxi(*pm.tc, dep_vxi,
                                                   /*wanted=*/{},
-                                                  /*ns_prefix=*/"", only_alias);
+                                                  /*ns_prefix=*/"", only_alias,
+                                                  dep_alias_srcs);
                 // M2.d: inyeccion directa via only.  M6.a.3: usar la variante
                 // que devuelve los missing para emitir diagnostico claro.
                 // Cualificar por NAMESPACE, no por fichero (ver flatten_ns_).

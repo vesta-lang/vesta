@@ -55,7 +55,7 @@ static std::string qualify_once_(const std::string &ns_path,
     std::string out;
     out.reserve(ns_path.size() + name.size() + 4);
     for (const char c : ns_path) {
-        if (c == '.')
+        if (c == 0x2E)
             out += "__";
         else
             out.push_back(c);
@@ -1456,13 +1456,132 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     }
 }
 
+
+/**
+ * @brief Registra en el comprobador un typedef que viene de un `.vxi`.
+ *
+ * Un alias es transparente y un newtype tiene identidad propia, y esa identidad
+ * tiene que ser LA MISMA que ve el modulo donde se declaro: el id sale del
+ * nombre canonico, y lo que se guarda como tipo de debajo va SIN esa identidad
+ * -- si la llevara, preguntar de que esta hecho `usize` respondaria `usize`, y
+ * resolverlo se llamaria a si mismo hasta desbordar la pila.
+ *
+ * Esto vivia dentro del bucle que importa los simbolos de un `.vxi`.  Hace
+ * falta tambien al inyectar plantillas genericas, que se re-parsean y necesitan
+ * resolver los tipos que su modulo trajo de un tercero; escribirlo alli otra vez
+ * habria sido una segunda version de las mismas reglas, y la copia que se
+ * quedara corta seria la que fallara -- que es exactamente lo que paso al
+ * intentarlo: una version reducida se dejo lo de la identidad y el compilador
+ * se caia.
+ *
+ * @param tc Comprobador de tipos destino.
+ * @param s Simbolo del `.vxi` (debe ser TYPEDEF_ALIAS o TYPEDEF_NEW).
+ * @param canon Nombre canonico (cualificado) del tipo.
+ * @param local_name Nombre con el que se ve desde el modulo que importa.
+ */
+static void register_vxi_typedef_(TypeChecker &tc, const VxiSymbol &s,
+                                  const std::string &canon,
+                                  const std::string &local_name) {
+    Type underlying = tc.resolve_type_string(s.underlying_type);
+    if (underlying.kind == PrimitiveKind::VOID &&
+        s.underlying_type != "void") {
+        // No se pudo resolver el underlying (e.g. apunta a un
+        // tipo no importado todavia).  Skip silente; M5
+        // añadira un round adicional de resolucion.
+        return;
+    }
+    if (s.kind == VxiSymbolKind::TYPEDEF_NEW) {
+        // Id ESTABLE por identidad mangled (la clave canonica de
+        // arriba).  Sin esto un `only T` recibia un id de contador !=
+        // al de las firmas de las funciones libres del mismo modulo
+        // (`f(T)`) -> no unificaban.
+        underlying.nominal_id = tc.stable_nominal_id(canon);
+        // nominal_name CANONICO (no el local), igual que la ruta
+        // namespaced.  canonical_typename_of lo serializa como
+        // `<nombre>#<underlying>` en las firmas del .vxi, y el decoder
+        // deriva el id de ESE nombre: si aqui fuera el local, un modulo
+        // que importa la firma antes que el typedef obtendria
+        // id(FNV"usize") mientras que quien importa el typedef
+        // obtendria id(FNV"std__types__usize") -> dos identidades para
+        // un tipo.
+        underlying.nominal_name = canon;
+        underlying.is_opaque = s.is_opaque;
+        underlying.align_override = s.align_override;
+        Type clean = underlying;
+        clean.nominal_id = 0;
+        clean.nominal_name.clear();
+        clean.is_opaque = false;
+        clean.align_override = 0;
+        tc.register_imported_newtype(local_name, clean);
+        //  M.L8: registrar el bloque {explicit from/to T;}
+        // si el .vxi lo trae.  Las entries no-public ya fueron
+        // filtradas por el lado emit.  Las que llegan aqui son
+        // siempre is_public=true.
+        if (!s.from_conversions.empty() || !s.to_conversions.empty() ||
+            !s.implicit_from_conversions.empty() ||
+            !s.implicit_to_conversions.empty()) {
+            TypeChecker::NewtypeInfo ni;
+            ni.from_conversions.reserve(s.from_conversions.size());
+            for (const auto &c : s.from_conversions) {
+        TypeChecker::ExplicitConv ec;
+        ec.type = tc.resolve_type_string(c.type_str);
+        ec.is_public = c.is_public;
+        ni.from_conversions.push_back(std::move(ec));
+            }
+            ni.to_conversions.reserve(s.to_conversions.size());
+            for (const auto &c : s.to_conversions) {
+        TypeChecker::ExplicitConv ec;
+        ec.type = tc.resolve_type_string(c.type_str);
+        ec.is_public = c.is_public;
+        ni.to_conversions.push_back(std::move(ec));
+            }
+            ni.implicit_from_conversions.reserve(
+        s.implicit_from_conversions.size());
+            for (const auto &c : s.implicit_from_conversions) {
+        TypeChecker::ExplicitConv ec;
+        ec.type = tc.resolve_type_string(c.type_str);
+        ec.is_public = c.is_public;
+        ni.implicit_from_conversions.push_back(std::move(ec));
+            }
+            ni.implicit_to_conversions.reserve(
+        s.implicit_to_conversions.size());
+            for (const auto &c : s.implicit_to_conversions) {
+        TypeChecker::ExplicitConv ec;
+        ec.type = tc.resolve_type_string(c.type_str);
+        ec.is_public = c.is_public;
+        ni.implicit_to_conversions.push_back(std::move(ec));
+            }
+            // El newtype importado responde a su nombre local Y al
+            // canonico (mangled): las firmas de otros .vxi lo
+            // referencian por el segundo, y si solo estuviera el
+            // primero la conversion no se encontraria desde ahi.
+            if (canon != local_name) {
+        TypeChecker::NewtypeInfo copia = ni;
+        tc.register_imported_newtype_info(canon,
+                                  std::move(copia));
+            }
+            tc.register_imported_newtype_info(local_name,
+                              std::move(ni));
+        }
+    }
+    // Igual que con struct/class/enum: atar el tipo TAMBIEN a su clave
+    // canonica.  Las firmas serializadas en los .vxi referencian el
+    // nombre mangled (`std__types__usize`); si solo estuviera el
+    // publico, esa referencia no resolveria al MISMO tipo y un newtype
+    // acabaria con dos identidades ("(usize) incompatible con
+    // (usize)").
+    tc.register_imported_type_alias(local_name, underlying);
+    if (canon != local_name)
+        tc.register_imported_type_alias(canon, std::move(underlying));
+}
 // ---------------------------------------------------------------------------
 // #cross-module-generics: inyectar plantillas genericas + conceptos.
 // ---------------------------------------------------------------------------
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
-    const std::unordered_set<std::string> &alias_unqualified) {
+    const std::unordered_set<std::string> &alias_unqualified,
+    const std::vector<const VxiModule *> &alias_sources) {
     if (mod.generic_templates.empty()) return;
 
     // Dedup a nivel de (modulo + namespace): un modulo importado dos veces
@@ -1502,6 +1621,22 @@ void inject_generic_templates_from_vxi(
             parser.add_known_alias(sym.name);
         }
     }
+    // Y los de los modulos de los que ESTE importa: la firma de una plantilla
+    // puede nombrar un tipo que su modulo trajo de un tercero (`usize`, de
+    // `std.types`).  Sin sembrarlos, el re-parseo no reconoce el nombre y el
+    // parametro se queda en `void`.
+    for (const VxiModule *src : alias_sources) {
+        if (!src) continue;
+        for (const auto &sym : src->symbols) {
+            if (sym.kind == VxiSymbolKind::TYPEDEF_ALIAS ||
+                sym.kind == VxiSymbolKind::TYPEDEF_NEW ||
+                sym.kind == VxiSymbolKind::STRUCT ||
+                sym.kind == VxiSymbolKind::CLASS ||
+                sym.kind == VxiSymbolKind::ENUM) {
+                parser.add_known_alias(sym.name);
+            }
+        }
+    }
     // Las plantillas comptime/macro se inyectan TODAS (wanted vacio) y se
     // type-checkean; si su firma referencia un typedef transparente del modulo
     // (WORD -> u16) que NO fue importado por `only`, el checker no lo
@@ -1517,6 +1652,34 @@ void inject_generic_templates_from_vxi(
         // emplace es idempotente: no pisa un alias ya registrado (local o
         // import).
         tc.register_imported_type_alias(sym.name, std::move(u));
+    }
+    // Y los tipos de los modulos de los que ESTE importa: la firma de una
+    // plantilla puede nombrar uno que su modulo trajo de un tercero (`usize`,
+    // de `std.types`).  Se registran con la MISMA rutina que usa el import
+    // normal -- ver @ref register_vxi_typedef_ --, porque una version reducida
+    // aqui volveria a equivocarse en lo mismo.
+    for (const VxiModule *src : alias_sources) {
+        if (!src) continue;
+        for (const auto &sym : src->symbols) {
+            if (sym.kind != VxiSymbolKind::TYPEDEF_ALIAS &&
+                sym.kind != VxiSymbolKind::TYPEDEF_NEW)
+                continue;
+            if (sym.ns_path.empty()) continue; // sin canonica no se puede atar
+            // Solo los que se apoyan DIRECTAMENTE en un tipo del lenguaje.
+            //
+            // Estos tipos son de un modulo que no es el nuestro y se recorren
+            // en el orden en que estan, que no es el de dependencia: en cuanto
+            // uno se apoya en otro del mismo sitio, registrarlo puede pasar por
+            // uno a medio hacer y volver sobre si mismo.  `usize`, que es un
+            // `u64`, no tiene esa vuelta -- y es lo que hace falta para que las
+            // firmas de las plantillas resuelvan.  Lo demas lo trae el import
+            // normal cuando alguien lo pida de verdad.
+            if (!comptime_is_primitive(tc.resolve_type_string(
+                    sym.underlying_type)))
+                continue;
+            register_vxi_typedef_(tc, sym, qualify_once_(sym.ns_path, sym.name),
+                                  sym.name);
+        }
     }
     auto parsed = parser.parse_program();
     if (!parsed || tmp_diags.has_errors()) return; // best-effort
@@ -1641,6 +1804,38 @@ void inject_generic_templates_from_vxi(
         default: break;
         }
     };
+    // Los conceptos inyectados se registran con su nombre cualificado
+    // (`std__numeric__PackedSum`), pero las plantillas viajan como TEXTO
+    // FUENTE y su restriccion sigue diciendo el nombre corto que se
+    // escribio en el modulo de origen (`<T: PackedSum>`).  Sin traducir
+    // una a la otra, importar una funcion generica restringida fallaba
+    // con "concepto desconocido" -- y el concepto estaba, solo que
+    // guardado bajo otro nombre.
+    //
+    // El mapa se construye ANTES del bucle porque una plantilla puede
+    // inyectarse antes que el concepto que exige; el orden de las decls
+    // en la interfaz no es el de dependencia.
+    std::unordered_map<std::string, std::string> concept_rename;
+    for (const auto &d : parsed->decls) {
+        if (!d || d->kind != ast::NodeKind::ConceptDecl) continue;
+        const std::string cnm = decl_name(d.get());
+        std::string cns;
+        for (const auto &g : mod.generic_templates)
+            if (g.name == cnm) { cns = g.ns_path; break; }
+        if (cns.empty()) continue;
+        std::string ns_m;
+        for (char c : cns)
+            ns_m += (c == 0x2E) ? std::string("__") : std::string(1, c);
+        concept_rename[cnm] = ns_m + "__" + cnm;
+    }
+    // Aplica el mapa a las restricciones de una decl ya inyectada.
+    auto rename_bounds = [&](std::vector<ast::TypeBound> &bounds) {
+        for (auto &b : bounds)
+            for (auto &c : b.concepts) {
+                auto it = concept_rename.find(c);
+                if (it != concept_rename.end()) c = it->second;
+            }
+    };
 
     for (auto &decl : parsed->decls) {
         if (!decl) continue;
@@ -1676,6 +1871,11 @@ void inject_generic_templates_from_vxi(
                 ns_m += (c == '.') ? std::string("__") : std::string(1, c);
             const std::string mangled_full = ns_m + "__" + nm;
             set_decl_name(decl.get(), mangled_full);
+            // El nombre corto tiene que seguir llevando a la plantilla: un
+            // `import std.numeric;` mete `add` en el scope, y sin este puente
+            // `add<i64>(...)` no se reconocia como generica.
+            if (decl->kind == ast::NodeKind::FunctionDecl)
+                tc.register_generic_fn_alias(nm, mangled_full);
             // NS.2: registrar el template bajo su namespace DECLARADO para que
             // el acceso cualificado resuelva (`geo.doble<i64>()` / `geo.Caja`).
             // El concepto usa la ruta comptime_eval_concept (`.`->`__`), pero
@@ -1703,6 +1903,29 @@ void inject_generic_templates_from_vxi(
             auto *cfd = static_cast<ast::FunctionDecl *>(decl.get());
             if (cfd->is_comptime || cfd->is_macro)
                 tc.register_comptime_fn(nm, cfd);
+        }
+        // Traducir las restricciones al nombre con el que el concepto
+        // acaba de quedar registrado.
+        if (!concept_rename.empty()) {
+            switch (decl->kind) {
+            case ast::NodeKind::FunctionDecl:
+                rename_bounds(
+                    static_cast<ast::FunctionDecl *>(decl.get())->type_bounds);
+                break;
+            case ast::NodeKind::StructDecl:
+                rename_bounds(
+                    static_cast<ast::StructDecl *>(decl.get())->type_bounds);
+                break;
+            case ast::NodeKind::ClassDecl:
+                rename_bounds(
+                    static_cast<ast::ClassDecl *>(decl.get())->type_bounds);
+                break;
+            case ast::NodeKind::EnumDecl:
+                rename_bounds(
+                    static_cast<ast::EnumDecl *>(decl.get())->type_bounds);
+                break;
+            default: break;
+            }
         }
         tc.inject_decl(std::move(decl));
     }
@@ -1960,97 +2183,7 @@ void import_vxi_into_typechecker(
         switch (s.kind) {
         case VxiSymbolKind::TYPEDEF_ALIAS:
         case VxiSymbolKind::TYPEDEF_NEW: {
-            Type underlying = tc.resolve_type_string(s.underlying_type);
-            if (underlying.kind == PrimitiveKind::VOID &&
-                s.underlying_type != "void") {
-                // No se pudo resolver el underlying (e.g. apunta a un
-                // tipo no importado todavia).  Skip silente; M5
-                // añadira un round adicional de resolucion.
-                continue;
-            }
-            if (s.kind == VxiSymbolKind::TYPEDEF_NEW) {
-                // Id ESTABLE por identidad mangled (la clave canonica de
-                // arriba).  Sin esto un `only T` recibia un id de contador !=
-                // al de las firmas de las funciones libres del mismo modulo
-                // (`f(T)`) -> no unificaban.
-                underlying.nominal_id = tc.stable_nominal_id(canon);
-                // nominal_name CANONICO (no el local), igual que la ruta
-                // namespaced.  canonical_typename_of lo serializa como
-                // `<nombre>#<underlying>` en las firmas del .vxi, y el decoder
-                // deriva el id de ESE nombre: si aqui fuera el local, un modulo
-                // que importa la firma antes que el typedef obtendria
-                // id(FNV"usize") mientras que quien importa el typedef
-                // obtendria id(FNV"std__types__usize") -> dos identidades para
-                // un tipo.
-                underlying.nominal_name = canon;
-                underlying.is_opaque = s.is_opaque;
-                underlying.align_override = s.align_override;
-                Type clean = underlying;
-                clean.nominal_id = 0;
-                clean.nominal_name.clear();
-                clean.is_opaque = false;
-                clean.align_override = 0;
-                tc.register_imported_newtype(local_name, clean);
-                //  M.L8: registrar el bloque {explicit from/to T;}
-                // si el .vxi lo trae.  Las entries no-public ya fueron
-                // filtradas por el lado emit.  Las que llegan aqui son
-                // siempre is_public=true.
-                if (!s.from_conversions.empty() || !s.to_conversions.empty() ||
-                    !s.implicit_from_conversions.empty() ||
-                    !s.implicit_to_conversions.empty()) {
-                    TypeChecker::NewtypeInfo ni;
-                    ni.from_conversions.reserve(s.from_conversions.size());
-                    for (const auto &c : s.from_conversions) {
-                        TypeChecker::ExplicitConv ec;
-                        ec.type = tc.resolve_type_string(c.type_str);
-                        ec.is_public = c.is_public;
-                        ni.from_conversions.push_back(std::move(ec));
-                    }
-                    ni.to_conversions.reserve(s.to_conversions.size());
-                    for (const auto &c : s.to_conversions) {
-                        TypeChecker::ExplicitConv ec;
-                        ec.type = tc.resolve_type_string(c.type_str);
-                        ec.is_public = c.is_public;
-                        ni.to_conversions.push_back(std::move(ec));
-                    }
-                    ni.implicit_from_conversions.reserve(
-                        s.implicit_from_conversions.size());
-                    for (const auto &c : s.implicit_from_conversions) {
-                        TypeChecker::ExplicitConv ec;
-                        ec.type = tc.resolve_type_string(c.type_str);
-                        ec.is_public = c.is_public;
-                        ni.implicit_from_conversions.push_back(std::move(ec));
-                    }
-                    ni.implicit_to_conversions.reserve(
-                        s.implicit_to_conversions.size());
-                    for (const auto &c : s.implicit_to_conversions) {
-                        TypeChecker::ExplicitConv ec;
-                        ec.type = tc.resolve_type_string(c.type_str);
-                        ec.is_public = c.is_public;
-                        ni.implicit_to_conversions.push_back(std::move(ec));
-                    }
-                    // El newtype importado responde a su nombre local Y al
-                    // canonico (mangled): las firmas de otros .vxi lo
-                    // referencian por el segundo, y si solo estuviera el
-                    // primero la conversion no se encontraria desde ahi.
-                    if (canon != local_name) {
-                        TypeChecker::NewtypeInfo copia = ni;
-                        tc.register_imported_newtype_info(canon,
-                                                          std::move(copia));
-                    }
-                    tc.register_imported_newtype_info(local_name,
-                                                      std::move(ni));
-                }
-            }
-            // Igual que con struct/class/enum: atar el tipo TAMBIEN a su clave
-            // canonica.  Las firmas serializadas en los .vxi referencian el
-            // nombre mangled (`std__types__usize`); si solo estuviera el
-            // publico, esa referencia no resolveria al MISMO tipo y un newtype
-            // acabaria con dos identidades ("(usize) incompatible con
-            // (usize)").
-            tc.register_imported_type_alias(local_name, underlying);
-            if (canon != local_name)
-                tc.register_imported_type_alias(canon, std::move(underlying));
+            register_vxi_typedef_(tc, s, canon, local_name);
             break;
         }
         case VxiSymbolKind::STRUCT: {

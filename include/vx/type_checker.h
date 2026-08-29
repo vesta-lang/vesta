@@ -1067,7 +1067,46 @@ class TypeChecker {
 
     /// El nombre es una funcion generica (template)?
     bool is_generic_fn_template(const std::string &name) const noexcept {
-        return generic_fn_templates_.count(name) > 0;
+        if (generic_fn_templates_.count(name) > 0) return true;
+        // Por el nombre publico solo cuenta si de verdad lleva a una plantilla
+        // REGISTRADA.  Decir que si sin comprobarlo es peor que decir que no:
+        // quien pregunta lo siguiente que hace es buscarla en la tabla y usar
+        // lo que encuentre, y ahi no habria nada que usar.
+        auto it = generic_fn_public_names_.find(name);
+        return it != generic_fn_public_names_.end() &&
+               generic_fn_templates_.count(it->second) > 0;
+    }
+
+    /**
+     * @brief Ata el nombre PUBLICO de una plantilla importada a su label real.
+     *
+     * Una funcion normal importada se registra con el nombre que el usuario
+     * escribe y lleva su label real aparte (@c FunctionSig::mangled_label): el
+     * resolutor de nombres ve `add`, y quien emite el codigo, `std__numeric__
+     * add`.  Las plantillas genericas no tenian ese puente -- al inyectarlas se
+     * las renombraba al label y el nombre corto dejaba de existir --, asi que
+     * `add<i64>(...)` no se reconocia como generica: se trataba como una
+     * llamada normal, no se instanciaba ninguna version concreta, y el fallo
+     * aparecia mucho despues, al enlazar, como un simbolo que nadie define.
+     *
+     * @param public_name Nombre tal y como se escribe en el modulo de origen.
+     * @param mangled Label con el que la plantilla quedo registrada.
+     */
+    void register_generic_fn_alias(const std::string &public_name,
+                                   const std::string &mangled) {
+        if (public_name.empty() || public_name == mangled) return;
+        generic_fn_public_names_[public_name] = mangled;
+    }
+
+    /**
+     * @brief Traduce un nombre de plantilla al que esta registrado.
+     * @param name Nombre visto en la llamada.
+     * @return El label real si @p name era un nombre publico; si no, @p name.
+     */
+    const std::string &
+    resolve_generic_fn_name(const std::string &name) const noexcept {
+        auto it = generic_fn_public_names_.find(name);
+        return it == generic_fn_public_names_.end() ? name : it->second;
     }
 
     /// #6: registro de conceptos de usuario (consultado por concepts.cpp).
@@ -2603,6 +2642,9 @@ class TypeChecker {
     /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
     /// inferidos) se monomorphiza via monomorphize_function().
     std::unordered_map<std::string, size_t> generic_fn_templates_;
+    /// Nombre publico de una plantilla importada -> label con el que quedo
+    /// registrada.  Ver @ref register_generic_fn_alias.
+    std::unordered_map<std::string, std::string> generic_fn_public_names_;
 
     /// Idempotencia de monomorphize_method: clave = "Container#metodo_i32"
     /// (separador '#' interno; el lenguaje no usa sintaxis '::').

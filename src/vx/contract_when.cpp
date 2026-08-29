@@ -175,9 +175,38 @@ const std::vector<std::string> &type_preds() {
 }
 
 const std::vector<std::string> &known_archs() {
-    // Las que el compilador sabe targetear (ver `g_cc_target_arch`).
-    static const std::vector<std::string> k = {"x86_64", "arm64", "x86"};
+    // Las que el registro de objetivos define (@ref aot::AotArch).  Estaban
+    // solo tres, y `arch:x86_16` ya se escribia en siete sitios del arbol sin
+    // figurar aqui: un registro que dice ser cerrado y no lo esta no puede
+    // distinguir una arquitectura que falta de uno mal escrito.
+    static const std::vector<std::string> k = {"x86_64", "x86",     "x86_16",
+                                              "arm64",  "arm32",  "riscv64"};
     return k;
+}
+
+std::string normalize_arch(const std::string &spelling) {
+    // Las grafias que llegan de la linea de ordenes, de la API C y de los
+    // ficheros de proyecto.  Estaban escritas por separado en cada sitio que
+    // las necesitaba, y una de esas copias decidia la arquitectura con un
+    // booleano -- "si no es de 32 bits, es x86-64" -- de modo que pedir
+    // aarch64 evaluaba los `@Target` como si fuera x86-64 y seleccionaba las
+    // variantes de otra maquina sin decir nada.
+    if (spelling == "x86-64" || spelling == "x86_64" || spelling == "x64" ||
+        spelling == "amd64")
+        return "x86_64";
+    if (spelling == "x86-32" || spelling == "x86_32" || spelling == "x86" ||
+        spelling == "i386")
+        return "x86";
+    if (spelling == "arm64" || spelling == "aarch64") return "arm64";
+    if (spelling == "arm32" || spelling == "armv7" || spelling == "arm")
+        return "arm32";
+    if (spelling == "x86-16" || spelling == "x86_16" || spelling == "i8086" ||
+        spelling == "real")
+        return "x86_16";
+    if (spelling == "riscv64" || spelling == "riscv" || spelling == "rv64")
+        return "riscv64";
+    // Desconocida: se devuelve intacta y no casara con ningun atomo.
+    return spelling;
 }
 
 AtomKind atom_kind(const std::string &atomo, std::string *esperado) {

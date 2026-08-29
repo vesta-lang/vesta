@@ -1725,12 +1725,16 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
         if (!c->type_args.empty() && c->callee &&
             c->callee->kind == ast::NodeKind::IdentExpr) {
             auto *cid = static_cast<const ast::IdentExpr *>(c->callee.get());
-            if (tc.is_generic_fn_template(cid->name)) {
+            // Una plantilla importada se ve por su nombre corto; el registro
+            // esta bajo su label.
+            const std::string &tpl_name =
+                tc.resolve_generic_fn_name(cid->name);
+            if (tc.is_generic_fn_template(tpl_name)) {
                 std::vector<Type> targs;
                 targs.reserve(c->type_args.size());
                 for (auto &ta : c->type_args)
                     targs.push_back(tc.resolve_type_node(ta.get()));
-                (void)tc.monomorphize_function(cid->name, targs, c->loc);
+                (void)tc.monomorphize_function(tpl_name, targs, c->loc);
             }
         }
         for (auto &a : c->args)
@@ -12996,6 +13000,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // resuelve tambien aqui (los args ya tienen result_type).
     if (e->callee->kind == ast::NodeKind::IdentExpr) {
         auto *cid = static_cast<ast::IdentExpr *>(e->callee.get());
+        // Nombre corto de una plantilla importada -> su label registrado.  Se
+        // reescribe en el AST para que el resto de check_call y la bajada
+        // trabajen con un solo nombre.
+        {
+            const std::string &tn = resolve_generic_fn_name(cid->name);
+            if (&tn != &cid->name && generic_fn_templates_.count(tn) > 0)
+                cid->name = tn;
+        }
         if (is_generic_fn_template(cid->name)) {
             auto it_t = generic_fn_templates_.find(cid->name);
             auto *tmpl = static_cast<const ast::FunctionDecl *>(

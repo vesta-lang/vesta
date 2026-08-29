@@ -1393,10 +1393,11 @@ int main(int argc, char *argv[]) {
             const std::string arch_s =
                 result.count("aot-arch") ? result["aot-arch"].as<std::string>()
                                          : std::string("x86-64");
-            const bool is32 =
-                (arch_s == "x86-32" || arch_s == "x86_32" || arch_s == "i386");
+            // La arquitectura del objetivo la traduce el registro que la
+            // define; decidirla aqui con un booleano dejaba a aarch64
+            // evaluando los `@Target` como x86-64.
             vx::set_aot_condcomp_target(fmt_s == "pe" ? "windows" : "linux",
-                                        is32 ? "x86" : "x86_64");
+                                        vx::cwhen::normalize_arch(arch_s));
             // Camino de compilacion: lo que hace utilizable
             // @Target("mode:aot") frente a @Target("mode:bytecode").
             vx::set_aot_condcomp_mode("aot");
@@ -2328,8 +2329,6 @@ int main(int argc, char *argv[]) {
             const std::string arch = result.count("aot-arch")
                                          ? result["aot-arch"].as<std::string>()
                                          : std::string("x86-64");
-            const bool es32 =
-                (arch == "x86-32" || arch == "x86_32" || arch == "i386");
             std::string os_obj;
             if (fmt == "pe")
                 os_obj = "windows";
@@ -2342,7 +2341,8 @@ int main(int argc, char *argv[]) {
                 os_obj = "linux";
 #endif
             }
-            vx::set_aot_condcomp_target(os_obj, es32 ? "x86" : "x86_64");
+            // Misma traduccion que arriba, por el mismo motivo.
+            vx::set_aot_condcomp_target(os_obj, vx::cwhen::normalize_arch(arch));
             /* Pedir un objetivo nativo tambien cambia QUIEN ejecuta: alli las
              * ops que dependen del runtime son llamadas a libvesta_rt, y varias
              * ni existen.  El informe de efectos tiene que hablar de ese. */

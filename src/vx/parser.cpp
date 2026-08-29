@@ -2137,6 +2137,25 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         pending_visibility_ = 3; // NS.3: internal tras annotations
         (void)consume();
     }
+    // Un `concept` con anotaciones.  La comprobacion original esta ANTES
+    // del bucle que consume las anotaciones, asi que sin esta segunda un
+    // `@Target("arch:...") concept C<T> = ...;` caia al camino de las
+    // funciones y fallaba pidiendo un parentesis.  Es el mismo caso que
+    // el `import` de arriba: la decl es valida, pero quien la reconoce
+    // ya quedo atras.
+    //
+    // Anotar un concepto tiene sentido justamente porque un concepto dice
+    // QUE puede hacer un tipo, y eso puede depender del objetivo: la misma
+    // operacion existe empaquetada en una maquina y no en otra.  Con esto
+    // se declara una vez por arquitectura en el mismo fichero, en vez de
+    // partir el modulo entero en dos por una sola diferencia.
+    if (current_.kind == TokenKind::IDENTIFIER &&
+        current_.lexeme == "concept" &&
+        lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
+        auto cn = parse_concept_decl();
+        apply_pending_visibility(cn.get());
+        return cn;
+    }
     // bytes <nombre> { db/dw/dd/dq/times ... }  (datos crudos estilo NASM)
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "bytes" &&
         lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&

@@ -98,11 +98,19 @@ void register_namespace_for_import(TypeChecker &tc,
  * quedar invocables SIN cualificar (import `only`).  Para cada uno se registra
  * su nombre suelto en comptime_fns_ apuntando al decl mangled -- consistente
  * con como una fn regular via `only` queda en scope sin cualificar.
+ * @p alias_sources: modulos de los que tomar TAMBIEN los alias de tipo al
+ * re-parsear las plantillas.  Una plantilla viaja como TEXTO y se re-parsea
+ * aqui, asi que su firma tiene que resolverse en un sitio donde no esta lo que
+ * su modulo importo: `void add<T>(T*, T*, T*, usize)` sacaba `usize` de
+ * `std.types`, y aqui ese nombre no existia -> el parametro se quedaba en
+ * `void` y la llamada fallaba diciendo que un `i64` no cabe en un `void`.
+ * Aqui se pasan los modulos de los que el suyo importa, para que resuelva.
  */
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
-    const std::unordered_set<std::string> &alias_unqualified = {});
+    const std::unordered_set<std::string> &alias_unqualified = {},
+    const std::vector<const VxiModule *> &alias_sources = {});
 
 } // namespace vx
 

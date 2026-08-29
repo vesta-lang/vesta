@@ -95,6 +95,24 @@ const std::vector<std::string> &type_preds();
 /// total cambia con ella cuando hay variantes `@Target` de cuerpos distintos, y
 /// analizar solo el host enseña media foto.  Se enumera el registro en vez de
 /// rascar los `arch:` del fuente a mano, que es la clase de heuristica que hace
+
+/// @brief Traduce la grafia de una arquitectura a la que usa `arch:`.
+///
+/// La linea de ordenes, la API C y el generador de codigo cada uno escriben
+/// la misma arquitectura a su manera (`x86-64`, `amd64`, `aarch64`, ...),
+/// mientras que los atomos `@Target("arch:...")` solo entienden los tres
+/// nombres de @ref known_archs.  Traducir entre unos y otros es un dato del
+/// registro, no de quien llama, asi que vive aqui con el.
+///
+/// Una grafia DESCONOCIDA se devuelve tal cual, y entonces no casa con
+/// ningun atomo.  Es a proposito: quien pida una arquitectura que el
+/// registro no conoce se queda sin ninguna de las variantes y eso falla al
+/// enlazar, en voz alta.  Devolver una por defecto seria peor -- se
+/// compilaria la variante de OTRA maquina sin que nadie se entere.
+///
+/// @param spelling La arquitectura como la escribio quien llama.
+/// @return El nombre de @ref known_archs, o @p spelling si no se reconoce.
+std::string normalize_arch(const std::string &spelling);
 /// que un `archh:` mal escrito pase desapercibido.
 const std::vector<std::string> &known_archs();
 
