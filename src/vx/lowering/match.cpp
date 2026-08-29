@@ -93,10 +93,6 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     }
     std::sort(sw_cases.begin(), sw_cases.end());
 
-    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
-        add_cfg_edge(from, to);
-    };
-
     // Dispatch DENSO O(1): marker SWITCH_DENSE (island nativo en JIT).
     if (!any_guard && !any_range && sw_cases.size() >= 4) {
         const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
@@ -319,10 +315,6 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         if ((ssize_t)i != default_arm_idx && e->arms[i].value_pattern)
             arm_blocks[i] = fn_->new_block("strmatch_arm");
 
-    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
-        add_cfg_edge(from, to);
-    };
-
     // Dispatch por LONGITUD (entero): SWITCH_DENSE si las longitudes son densas
     // (comun: 3,4,5,6...), BST O(log N) si dispersas y muchas, else lineal.
     std::vector<std::pair<int64_t, ir::IrBlockId>> sw_cases;
@@ -451,15 +443,8 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
             ir::IrValueId eqb =
                 emit_ir_binop(ir::IrOp::CMP_EQ, scmp, zero, ir::IrType::BOOL, e->arms[idx].loc.line);
             ir::IrBlockId vnext = fn_->new_block("strmatch_vnext");
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(eqb);
-            br.target_block = arm_blocks[idx];
-            br.false_block = vnext;
-            br.source_line = e->arms[idx].loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, arm_blocks[idx]);
-            sw_edge(current_block_, vnext);
+            emit_br_cond(eqb, arm_blocks[idx], vnext,
+                         e->arms[idx].loc.line);
             current_block_ = vnext;
             block_terminated_ = false;
         }
@@ -673,10 +658,6 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     }
 
     // Helper local: anade una arista CFG (succ + pred).
-    auto sw_edge = [&](ir::IrBlockId from, ir::IrBlockId to) {
-        add_cfg_edge(from, to);
-    };
-
     if (use_bst) {
         // BST balanceado sobre sw_cases [lo,hi).  En cada nodo interno:
         // cmp_lt tag < cases[mid] -> izquierda [lo,mid); else derecha
@@ -755,15 +736,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
 
             const ir::IrBlockId fall_bb = fn_->new_block("match_next");
             arm_fall_bbs[i] = fall_bb; // para uso si la arm tiene guard
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(cmp_v);
-            br.target_block = arm_blocks[i];
-            br.false_block = fall_bb;
-            br.source_line = e->arms[i].loc.line;
-            emit(current_block_, std::move(br));
-            sw_edge(current_block_, arm_blocks[i]);
-            sw_edge(current_block_, fall_bb);
+            emit_br_cond(cmp_v, arm_blocks[i], fall_bb, e->arms[i].loc.line);
 
             current_block_ = fall_bb;
             block_terminated_ = false;
@@ -965,17 +938,8 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
             if (guard_v != ir::IR_NO_VALUE &&
                 arm_fall_bbs[i] != ir::IR_NO_BLOCK) {
                 const ir::IrBlockId body_bb = fn_->new_block("match_arm_body");
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR_COND;
-                br.operands.push_back(guard_v);
-                br.target_block = body_bb;
-                br.false_block = arm_fall_bbs[i];
-                br.source_line = arm.loc.line;
-                emit(current_block_, std::move(br));
-                fn_->blocks[current_block_].succs.push_back(body_bb);
-                fn_->blocks[current_block_].succs.push_back(arm_fall_bbs[i]);
-                fn_->blocks[body_bb].preds.push_back(current_block_);
-                fn_->blocks[arm_fall_bbs[i]].preds.push_back(current_block_);
+                // Guarda incumplida -> se sigue probando la siguiente rama.
+                emit_br_cond(guard_v, body_bb, arm_fall_bbs[i], arm.loc.line);
                 current_block_ = body_bb;
                 block_terminated_ = false;
             }

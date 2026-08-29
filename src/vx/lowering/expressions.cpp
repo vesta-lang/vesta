@@ -529,24 +529,10 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
         // 2) BR_COND lhs:
         //   && : true -> rhs_bb (evaluar rhs); false -> default_bb (false)
         //   || : true -> default_bb (true);    false -> rhs_bb (evaluar rhs)
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.type = ir::IrType::VOID;
-            br.operands = {v_lhs};
-            br.target_block = is_and ? rhs_bb : default_bb;
-            br.false_block = is_and ? default_bb : rhs_bb;
-            br.source_line = e->loc.line;
-            emit(lhs_end_bb, std::move(br));
-        }
-        // CFG: lhs_end_bb -> {rhs_bb, default_bb}.  CRITICO: sin esto el
-        // dataflow de liveness no puede propagar valores back-edge a
-        // traves del CFG -> el regalloc reusa registros de valores aun
-        // vivos -> crash en runtime.
-        fn_->blocks[lhs_end_bb].succs.push_back(rhs_bb);
-        fn_->blocks[lhs_end_bb].succs.push_back(default_bb);
-        fn_->blocks[rhs_bb].preds.push_back(lhs_end_bb);
-        fn_->blocks[default_bb].preds.push_back(lhs_end_bb);
+        // El salto sale de donde ACABO el lado izquierdo, que puede no ser el
+        // bloque actual: bajarlo pudo abrir bloques por su cuenta.
+        emit_br_cond_from(lhs_end_bb, v_lhs, is_and ? rhs_bb : default_bb,
+                          is_and ? default_bb : rhs_bb, e->loc.line);
         // 3) Bloque default: emitir const por defecto y BR merge.
         current_block_ = default_bb;
         block_terminated_ = false;

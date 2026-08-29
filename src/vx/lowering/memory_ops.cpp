@@ -953,19 +953,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
         ir::IrValueId v_cond =
             emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_limit8,
                           ir::IrType::BOOL, source_line);
-        {
-            ir::IrInstr brc{};
-            brc.op = ir::IrOp::BR_COND;
-            brc.operands = {v_cond};
-            brc.target_block = body;
-            brc.false_block = done;
-            brc.source_line = source_line;
-            emit(current_block_, std::move(brc));
-        }
-        fn_->blocks[hdr].succs.push_back(body);
-        fn_->blocks[hdr].succs.push_back(done);
-        fn_->blocks[body].preds.push_back(hdr);
-        fn_->blocks[done].preds.push_back(hdr);
+        emit_br_cond(v_cond, body, done, source_line);
 
         // body: w = load.i64 src+i ; store.i64 w -> dst+i ; i += 8 ; -> hdr
         current_block_ = body;
@@ -1008,19 +996,7 @@ void Lowering::emit_word_copy_loop(ir::IrValueId dst_base,
             emit_load_typed(v_i_slot, ir::IrType::I64, source_line);
         ir::IrValueId v_cond =
             emit_ir_binop(ir::IrOp::CMP_LT, v_i, v_len, ir::IrType::BOOL, source_line);
-        {
-            ir::IrInstr brc{};
-            brc.op = ir::IrOp::BR_COND;
-            brc.operands = {v_cond};
-            brc.target_block = body;
-            brc.false_block = done;
-            brc.source_line = source_line;
-            emit(current_block_, std::move(brc));
-        }
-        fn_->blocks[hdr].succs.push_back(body);
-        fn_->blocks[hdr].succs.push_back(done);
-        fn_->blocks[body].preds.push_back(hdr);
-        fn_->blocks[done].preds.push_back(hdr);
+        emit_br_cond(v_cond, body, done, source_line);
 
         // body: byte = load.u8 src+i ; store.u8 byte -> dst+i ; i += 1 ; -> hdr
         current_block_ = body;

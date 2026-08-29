@@ -538,19 +538,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 emit(current_block_, std::move(cmp));
             }
             const ir::IrBlockId free_bb = fn_->new_block("sh_free");
-            {
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR_COND;
-                br.operands = {v_is0};
-                br.target_block = free_bb;
-                br.false_block = skip_bb;
-                br.source_line = it->source_line;
-                emit(current_block_, std::move(br));
-                fn_->blocks[dec_bb].succs.push_back(free_bb);
-                fn_->blocks[dec_bb].succs.push_back(skip_bb);
-                fn_->blocks[free_bb].preds.push_back(dec_bb);
-                fn_->blocks[skip_bb].preds.push_back(dec_bb);
-            }
+            emit_br_cond(v_is0, free_bb, skip_bb, it->source_line);
             // free_bb: RAW_FREE(v_ctrl) + br skip_bb.
             current_block_ = free_bb;
             {
@@ -1159,19 +1147,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
         emit(current_block_, std::move(cmp));
     }
     const ir::IrBlockId free_bb = fn_->new_block("shf_free");
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {v_is0};
-        br.target_block = free_bb;
-        br.false_block = skip_bb;
-        br.source_line = line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[dec_bb].succs.push_back(free_bb);
-        fn_->blocks[dec_bb].succs.push_back(skip_bb);
-        fn_->blocks[free_bb].preds.push_back(dec_bb);
-        fn_->blocks[skip_bb].preds.push_back(dec_bb);
-    }
+    emit_br_cond(v_is0, free_bb, skip_bb, line);
     current_block_ = free_bb;
     {
         ir::IrInstr fr{};

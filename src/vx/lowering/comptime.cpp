@@ -284,19 +284,7 @@ void Lowering::lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type) {
         emit_ir_binop(ir::IrOp::CMP_EQ, done_val, zero, ir::IrType::BOOL, ln);
     const ir::IrBlockId init_bb = fn_->new_block("static_init");
     const ir::IrBlockId cont_bb = fn_->new_block("static_cont");
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(cond);
-        br.target_block = init_bb;
-        br.false_block = cont_bb;
-        br.source_line = ln;
-        emit(current_block_, std::move(br));
-    }
-    fn_->blocks[current_block_].succs.push_back(init_bb);
-    fn_->blocks[current_block_].succs.push_back(cont_bb);
-    fn_->blocks[init_bb].preds.push_back(current_block_);
-    fn_->blocks[cont_bb].preds.push_back(current_block_);
+    emit_br_cond(cond, init_bb, cont_bb, ln);
 
     // init_bb: correr el init -> STORE al slot + STORE done=1 -> BR cont.
     current_block_ = init_bb;

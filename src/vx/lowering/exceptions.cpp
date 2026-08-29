@@ -404,20 +404,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
         // frame, lee el type-id y elige el catch que matchea (o re-throw).
         const ir::IrBlockId dispatch_bb = fn_->new_block("try_dispatch");
         const ir::IrBlockId rethrow_bb = fn_->new_block("try_rethrow");
-        // br_cond r: !=0 (true) -> dispatch ; ==0 (false) -> body.
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(v_r);
-            br.target_block = dispatch_bb;
-            br.false_block = body_bb;
-            br.source_line = s->loc.line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[current_block_].succs.push_back(dispatch_bb);
-        fn_->blocks[current_block_].succs.push_back(body_bb);
-        fn_->blocks[dispatch_bb].preds.push_back(current_block_);
-        fn_->blocks[body_bb].preds.push_back(current_block_);
+        // Distinto de cero = se volvio aqui por una excepcion, asi que toca
+        // buscarle un `catch`; cero = se entra al bloque por primera vez.
+        emit_br_cond(v_r, dispatch_bb, body_bb, s->loc.line);
 
         // Helpers locales para emitir CALLs al runtime de excepciones.
         auto emit_void_call = [&](ir::IrBlockId blk, const char *name) {
@@ -503,17 +492,8 @@ void Lowering::lower_try(ast::TryStmt *s) {
             }
             const ir::IrBlockId next_check =
                 (ci + 1 < n_catches) ? fn_->new_block("try_check") : rethrow_bb;
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(v_and);
-            br.target_block = handler_bbs[ci];
-            br.false_block = next_check;
-            br.source_line = cc.loc.line;
-            emit(cur_check, std::move(br));
-            fn_->blocks[cur_check].succs.push_back(handler_bbs[ci]);
-            fn_->blocks[cur_check].succs.push_back(next_check);
-            fn_->blocks[handler_bbs[ci]].preds.push_back(cur_check);
-            fn_->blocks[next_check].preds.push_back(cur_check);
+            emit_br_cond_from(cur_check, v_and, handler_bbs[ci], next_check,
+                              cc.loc.line);
             cur_check = next_check;
         }
 
@@ -1049,19 +1029,7 @@ void Lowering::lower_synchronized(ast::SynchronizedStmt *s) {
         vcall("__vx_push_frame", {v_buf, v_type0});
         const ir::IrValueId v_r = emit_call("__vx_setjmp",
                   {v_buf}, ir::IrType::I64, s->loc.line);
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.operands.push_back(v_r);
-            br.target_block = nhandler;
-            br.false_block = nbody;
-            br.source_line = s->loc.line;
-            emit(current_block_, std::move(br));
-        }
-        fn_->blocks[current_block_].succs.push_back(nhandler);
-        fn_->blocks[current_block_].succs.push_back(nbody);
-        fn_->blocks[nhandler].preds.push_back(current_block_);
-        fn_->blocks[nbody].preds.push_back(current_block_);
+        emit_br_cond(v_r, nhandler, nbody, s->loc.line);
 
         // Cleanup para return temprano: pop_frame + monexit.
         {
