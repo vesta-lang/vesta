@@ -9353,15 +9353,13 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
         /* Lambda helpers: invocados via function pointer en CALLCLOSURE.
          * Sus IR son single-block + RET pero el calling convention es
          * distinta (env_addr en r14, etc). */
-        if (name.size() > 9 && name.compare(0, 9, "__lambda_") == 0)
-            return true;
+        if (name.rfind("__lambda_", 0) == 0) return true;
         /* Spawn helpers: invocados por SPAWN op, no por CALL. */
-        if (name.size() > 8 && name.compare(0, 8, "__spawn_") == 0) return true;
+        if (name.rfind("__spawn_", 0) == 0) return true;
         /* Async helpers: invocados por @Async machinery. */
-        if (name.size() > 8 && name.compare(0, 8, "__async_") == 0) return true;
+        if (name.rfind("__async_", 0) == 0) return true;
         /* rspawn body helpers. */
-        if (name.size() > 9 && name.compare(0, 9, "__rspawn_") == 0)
-            return true;
+        if (name.rfind("__rspawn_", 0) == 0) return true;
         /* Helpers de string value-type (Vesta Embed): __vx_strlen,
          * __vx_strdata,
          * __vx_strcmp.  Se mantienen como funciones APARTE: cada accesor de
@@ -9369,7 +9367,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * sumar varias en una funcion reventaba el regalloc SysV (4
          * callee-saved vs 6 en Win64) -> resultado erroneo en ELF.  Una sola
          * CALL por uso elimina la presion y unifica el codegen PE/ELF. */
-        if (name.size() > 9 && name.compare(0, 9, "__vx_str") == 0) return true;
+        if (name.rfind("__vx_str", 0) == 0) return true;
         return false;
     };
 
