@@ -571,21 +571,19 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
         // evita recursion infinita
         auto itl = tc_.struct_layouts().find(ex->result_type.struct_name);
         if (itl != tc_.struct_layouts().end()) {
-            for (const auto &mth : itl->second.methods) {
-                if (mth.name == "to_string" &&
-                    mth.return_type.kind == PrimitiveKind::STRING) {
-                    auto synth = std::make_unique<ast::CallExpr>();
-                    synth->loc = ex->loc;
-                    auto fa = std::make_unique<ast::FieldAccessExpr>();
-                    fa->loc = ex->loc;
-                    fa->field_name = "to_string";
-                    fa->base = vxgen::clone_expr(ex);
-                    if (fa->base) fa->base->result_type = ex->result_type;
-                    synth->callee = std::move(fa);
-                    synth->result_type = Type{PrimitiveKind::STRING};
-                    emit_print_typed_value(synth.get(), fmt_str);
-                    return;
-                }
+            const ClassMethodInfo *mth = find_method(itl->second, "to_string");
+            if (mth && mth->return_type.kind == PrimitiveKind::STRING) {
+                auto synth = std::make_unique<ast::CallExpr>();
+                synth->loc = ex->loc;
+                auto fa = std::make_unique<ast::FieldAccessExpr>();
+                fa->loc = ex->loc;
+                fa->field_name = "to_string";
+                fa->base = vxgen::clone_expr(ex);
+                if (fa->base) fa->base->result_type = ex->result_type;
+                synth->callee = std::move(fa);
+                synth->result_type = Type{PrimitiveKind::STRING};
+                emit_print_typed_value(synth.get(), fmt_str);
+                return;
             }
         }
     }

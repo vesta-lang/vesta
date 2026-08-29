@@ -491,12 +491,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                     const StructFieldInfo *fld = nullptr;
                     if (il->is_designated && i < il->field_names.size()) {
                         const std::string &fname = il->field_names[i];
-                        for (const auto &f : lay.fields) {
-                            if (f.name == fname) {
-                                fld = &f;
-                                break;
-                            }
-                        }
+                        fld = find_field(lay, fname);
                         if (!fld) {
                             error_at(il->elements[i]->loc,
                                      "init list: campo '" + fname +

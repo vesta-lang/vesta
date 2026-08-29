@@ -493,10 +493,11 @@ void Lowering::lower_try(ast::TryStmt *s) {
         for (const auto &kv : try_spill_slots_) {
             const std::string &name = kv.first;
             const ir::IrValueId v_slot = kv.second;
-            if (saved_spill_slots.count(name) &&
-                saved_spill_slots.at(name) == v_slot) {
+            /* Una sola busqueda: preguntar si esta y luego pedirlo son dos
+             * recorridos de la tabla para la misma pregunta. */
+            const auto it_prev = saved_spill_slots.find(name);
+            if (it_prev != saved_spill_slots.end() && it_prev->second == v_slot)
                 continue; // slot heredado de try outer
-            }
             ir::IrType ity = ir::IrType::I64;
             auto it_e = entry_bindings.find(name);
             if (it_e != entry_bindings.end() &&
@@ -672,10 +673,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
         const ir::IrValueId v_slot = kv.second;
         // Solo override para vars que estaban en el slot ESTE try
         // (no las del saved_spill_slots de un try outer).
-        if (saved_spill_slots.count(name) &&
-            saved_spill_slots.at(name) == v_slot) {
+        const auto it_prev = saved_spill_slots.find(name);
+        if (it_prev != saved_spill_slots.end() && it_prev->second == v_slot)
             continue;
-        }
         ir::IrType ity = ir::IrType::I64;
         auto it_e = entry_bindings.find(name);
         if (it_e != entry_bindings.end() && it_e->second != ir::IR_NO_VALUE &&

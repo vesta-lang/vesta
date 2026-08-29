@@ -637,13 +637,11 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             auto it_cls =
                 tc_.class_layouts().find(fa->base->result_type.struct_name);
             if (it_cls != tc_.class_layouts().end()) {
-                for (const auto &f : it_cls->second.fields) {
-                    if (f.name == fa->field_name &&
-                        f.type.kind == PrimitiveKind::STRING) {
-                        rhs = lower_string_literal_to_string_object(slit);
-                        promoted = true;
-                        break;
-                    }
+                const StructFieldInfo *f =
+                    find_field(it_cls->second, fa->field_name);
+                if (f && f->type.kind == PrimitiveKind::STRING) {
+                    rhs = lower_string_literal_to_string_object(slit);
+                    promoted = true;
                 }
             }
         }
@@ -708,15 +706,13 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         if (bt_w.kind == PrimitiveKind::STRUCT) {
             auto it_w = tc_.struct_layouts().find(bt_w.struct_name);
             if (it_w != tc_.struct_layouts().end()) {
-                for (const auto &f : it_w->second.fields) {
-                    if (f.name == fa->field_name && f.endian_expr &&
-                        f.bit_width == 0 &&
-                        (f.size == 2 || f.size == 4 || f.size == 8)) {
-                        rhs = emit_overlay_endian_swap(fa->base.get(),
-                                                       it_w->second, f, rhs,
-                                                       e->loc.line);
-                        break;
-                    }
+                const StructFieldInfo *f =
+                    find_field(it_w->second, fa->field_name);
+                if (f && f->endian_expr && f->bit_width == 0 &&
+                    (f->size == 2 || f->size == 4 || f->size == 8)) {
+                    rhs = emit_overlay_endian_swap(fa->base.get(),
+                                                   it_w->second, *f, rhs,
+                                                   e->loc.line);
                 }
             }
         }
@@ -733,73 +729,72 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         const auto &layouts = tc_.struct_layouts();
         auto it_l = layouts.find(bt.struct_name);
         if (it_l != layouts.end()) {
-            for (const auto &f : it_l->second.fields) {
-                if (f.name == fa->field_name && f.bit_width > 0) {
-                    // 1. LOAD storage word completo.
-                    ir::IrValueId v_old =
-                        emit_load_typed(addr, ft, e->loc.line);
-                    // 2. mask = (1 << bit_width) - 1 (en el tipo
-                    //    del storage; truncar a tamano del LOAD).
-                    const uint64_t mask =
-                        (f.bit_width == 64)
-                            ? UINT64_MAX
-                            : ((uint64_t(1) << f.bit_width) - 1);
-                    const uint64_t inv_mask = ~(mask << f.bit_offset);
-                    // 3. cleared = old & inv_mask
-                    ir::IrValueId v_inv =
-                        emit_const(ft, inv_mask, e->loc.line);
-                    ir::IrValueId v_clr = fn_->new_value(ft);
-                    {
-                        ir::IrInstr an{};
-                        an.op = ir::IrOp::AND;
-                        an.type = ft;
-                        an.dst = v_clr;
-                        an.operands = {v_old, v_inv};
-                        an.source_line = e->loc.line;
-                        emit(current_block_, std::move(an));
-                    }
-                    // 4. trimmed = rhs & mask  (clamp a rango).
-                    ir::IrValueId v_msk = emit_const(ft, mask, e->loc.line);
-                    ir::IrValueId v_tr = fn_->new_value(ft);
-                    {
-                        ir::IrInstr an{};
-                        an.op = ir::IrOp::AND;
-                        an.type = ft;
-                        an.dst = v_tr;
-                        an.operands = {rhs, v_msk};
-                        an.source_line = e->loc.line;
-                        emit(current_block_, std::move(an));
-                    }
-                    // 5. shifted = trimmed << bit_offset
-                    ir::IrValueId v_sh = v_tr;
-                    if (f.bit_offset > 0) {
-                        ir::IrValueId v_amt = emit_const(
-                            ft, (uint64_t)f.bit_offset, e->loc.line);
-                        v_sh = fn_->new_value(ft);
-                        ir::IrInstr sh{};
-                        sh.op = ir::IrOp::SHL;
-                        sh.type = ft;
-                        sh.dst = v_sh;
-                        sh.operands = {v_tr, v_amt};
-                        sh.source_line = e->loc.line;
-                        emit(current_block_, std::move(sh));
-                    }
-                    // 6. new = cleared | shifted
-                    ir::IrValueId v_new = fn_->new_value(ft);
-                    {
-                        ir::IrInstr or_{};
-                        or_.op = ir::IrOp::OR;
-                        or_.type = ft;
-                        or_.dst = v_new;
-                        or_.operands = {v_clr, v_sh};
-                        or_.source_line = e->loc.line;
-                        emit(current_block_, std::move(or_));
-                    }
-                    // 7. STORE new -> addr
-                    emit_store_typed(addr, v_new, ft, e->loc.line);
-                    out = rhs;
-                    return true;
+            const StructFieldInfo *f = find_field(it_l->second, fa->field_name);
+            if (f && f->bit_width > 0) {
+                // 1. LOAD storage word completo.
+                ir::IrValueId v_old =
+                    emit_load_typed(addr, ft, e->loc.line);
+                // 2. mask = (1 << bit_width) - 1 (en el tipo
+                //    del storage; truncar a tamano del LOAD).
+                const uint64_t mask =
+                    (f->bit_width == 64)
+                        ? UINT64_MAX
+                        : ((uint64_t(1) << f->bit_width) - 1);
+                const uint64_t inv_mask = ~(mask << f->bit_offset);
+                // 3. cleared = old & inv_mask
+                ir::IrValueId v_inv =
+                    emit_const(ft, inv_mask, e->loc.line);
+                ir::IrValueId v_clr = fn_->new_value(ft);
+                {
+                    ir::IrInstr an{};
+                    an.op = ir::IrOp::AND;
+                    an.type = ft;
+                    an.dst = v_clr;
+                    an.operands = {v_old, v_inv};
+                    an.source_line = e->loc.line;
+                    emit(current_block_, std::move(an));
                 }
+                // 4. trimmed = rhs & mask  (clamp a rango).
+                ir::IrValueId v_msk = emit_const(ft, mask, e->loc.line);
+                ir::IrValueId v_tr = fn_->new_value(ft);
+                {
+                    ir::IrInstr an{};
+                    an.op = ir::IrOp::AND;
+                    an.type = ft;
+                    an.dst = v_tr;
+                    an.operands = {rhs, v_msk};
+                    an.source_line = e->loc.line;
+                    emit(current_block_, std::move(an));
+                }
+                // 5. shifted = trimmed << bit_offset
+                ir::IrValueId v_sh = v_tr;
+                if (f->bit_offset > 0) {
+                    ir::IrValueId v_amt = emit_const(
+                        ft, (uint64_t)f->bit_offset, e->loc.line);
+                    v_sh = fn_->new_value(ft);
+                    ir::IrInstr sh{};
+                    sh.op = ir::IrOp::SHL;
+                    sh.type = ft;
+                    sh.dst = v_sh;
+                    sh.operands = {v_tr, v_amt};
+                    sh.source_line = e->loc.line;
+                    emit(current_block_, std::move(sh));
+                }
+                // 6. new = cleared | shifted
+                ir::IrValueId v_new = fn_->new_value(ft);
+                {
+                    ir::IrInstr or_{};
+                    or_.op = ir::IrOp::OR;
+                    or_.type = ft;
+                    or_.dst = v_new;
+                    or_.operands = {v_clr, v_sh};
+                    or_.source_line = e->loc.line;
+                    emit(current_block_, std::move(or_));
+                }
+                // 7. STORE new -> addr
+                emit_store_typed(addr, v_new, ft, e->loc.line);
+                out = rhs;
+                return true;
             }
         }
     }

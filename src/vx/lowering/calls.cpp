@@ -2450,14 +2450,7 @@ bool Lowering::try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out) {
     if (!sm_struct_name.empty()) {
         auto it_s = tc_.struct_layouts().find(sm_struct_name);
         if (it_s != tc_.struct_layouts().end()) {
-            bool has_m = false;
-            for (const auto &mm : it_s->second.methods) {
-                if (mm.name == fa->field_name) {
-                    has_m = true;
-                    break;
-                }
-            }
-            if (has_m) {
+            if (find_method(it_s->second, fa->field_name) != nullptr) {
                 out = lower_struct_method_call(e);
                 return true;
             }

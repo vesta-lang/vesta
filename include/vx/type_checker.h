@@ -401,6 +401,55 @@ struct StructLayout {
 };
 
 /**
+ * @brief El campo que se llama @p name, o nada.
+ *
+ * Vale para las dos clases de layout -- un struct y una clase -- porque la
+ * pregunta es la misma y sus campos son del mismo tipo.  Escribirla dos veces
+ * seria empezar a que una se quede atras.
+ *
+ * Se busca recorriendo: un struct tiene pocos campos y el orden importa --
+ * es el orden en que estan en memoria --, asi que la lista es lo natural.  Lo
+ * que no era natural es que este recorrido estuviera escrito diecisiete veces;
+ * el dia que a alguien le sobren campos, aqui hay UN sitio donde poner otra
+ * cosa.
+ *
+ * @param lay  El layout donde mirar.
+ * @param name El nombre del campo.
+ * @return Puntero al campo, o @c nullptr si ese struct no lo tiene.
+ */
+template <typename Layout>
+inline const StructFieldInfo *find_field(const Layout &lay,
+                                         const std::string &name) noexcept {
+    for (const StructFieldInfo &f : lay.fields)
+        if (f.name == name) return &f;
+    return nullptr;
+}
+
+/**
+ * @brief El metodo que se llama @p name, o nada.
+ *
+ * Se queda con el PRIMERO.  Con sobrecarga habria varios con el mismo nombre y
+ * habria que mirar ademas los argumentos, pero eso lo resuelve el type checker
+ * antes de llegar aqui: al bajar ya se sabe cual es.
+ *
+ * OJO: los constructores estan en esta misma lista.  Si lo que se busca es un
+ * METODO, no vale esto -- un constructor puede llamarse igual, y quedarse con
+ * el deja sin encontrar al que se buscaba.  Para eso hay que recorrer saltando
+ * los que tengan @c is_constructor.
+ *
+ * @param lay  El layout donde mirar.
+ * @param name El nombre del metodo.
+ * @return Puntero al metodo, o @c nullptr si ese struct no lo tiene.
+ */
+template <typename Layout>
+inline const ClassMethodInfo *find_method(const Layout &lay,
+                                          const std::string &name) noexcept {
+    for (const ClassMethodInfo &m : lay.methods)
+        if (m.name == name) return &m;
+    return nullptr;
+}
+
+/**
  * @struct EnumVariantInfo
  * @brief Resumen de una variante de enum (ADT, tagged union).
  *

@@ -355,15 +355,8 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const StructLayout &lay = it->second;
-    uint32_t offset = 0;
-    const StructFieldInfo *fifound = nullptr;
-    for (const auto &f : lay.fields) {
-        if (f.name == e->field_name) {
-            offset = f.offset;
-            fifound = &f;
-            break;
-        }
-    }
+    const StructFieldInfo *fifound = find_field(lay, e->field_name);
+    uint32_t offset = fifound != nullptr ? fifound->offset : 0u;
     // Campo `comptime` (property_kind=97): su slot vive apilado tras los campos
     // runtime (offset asignado en el layout, dentro de @c comptime_size_bytes).
     // Solo se accede desde codigo comptime (ctor/metodo comptime, ejecutado en
@@ -708,17 +701,10 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         emit(current_block_, std::move(ins));
         return dst;
     }
-    uint32_t off = 0;
-    bool ok = false;
-    Type ftyp = Type{PrimitiveKind::COUNT};
-    for (const auto &f : lay.fields) {
-        if (f.name == e->field_name) {
-            off = f.offset;
-            ftyp = f.type;
-            ok = true;
-            break;
-        }
-    }
+    const StructFieldInfo *fi_hit = find_field(lay, e->field_name);
+    const uint32_t off = fi_hit != nullptr ? fi_hit->offset : 0u;
+    const Type ftyp = fi_hit != nullptr ? fi_hit->type : Type{PrimitiveKind::COUNT};
+    const bool ok = (fi_hit != nullptr);
     if (!ok) {
         error_at(e->loc, "lowering: campo '" + e->field_name +
                              "' no encontrado en la clase '" + bt.struct_name +
@@ -944,17 +930,10 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         emit(current_block_, std::move(ins));
         return rhs_cast;
     }
-    uint32_t off = 0;
-    bool ok = false;
-    Type ftyp = Type{PrimitiveKind::COUNT};
-    for (const auto &f : lay.fields) {
-        if (f.name == target->field_name) {
-            off = f.offset;
-            ftyp = f.type;
-            ok = true;
-            break;
-        }
-    }
+    const StructFieldInfo *fi_hit = find_field(lay, target->field_name);
+    const uint32_t off = fi_hit != nullptr ? fi_hit->offset : 0u;
+    const Type ftyp = fi_hit != nullptr ? fi_hit->type : Type{PrimitiveKind::COUNT};
+    const bool ok = (fi_hit != nullptr);
     if (!ok) {
         error_at(loc, "lowering: campo '" + target->field_name +
                           "' no encontrado en la clase '" + bt.struct_name +

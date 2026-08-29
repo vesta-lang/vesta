@@ -52,12 +52,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
             return ir::IR_NO_VALUE;
         }
         const StructLayout &lay = it->second;
-        const StructFieldInfo *afi = nullptr;
-        for (const auto &fi : lay.fields)
-            if (fi.name == fa->field_name) {
-                afi = &fi;
-                break;
-            }
+        const StructFieldInfo *afi = find_field(lay, fa->field_name);
         if (!afi || (!afi->array_stride && !afi->element_block)) {
             error_at(e->loc, "lowering: campo array de overlay no encontrado");
             return ir::IR_NO_VALUE;
@@ -1117,14 +1112,15 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
         if (bt_e.kind == PrimitiveKind::STRUCT) {
             auto it_e = tc_.struct_layouts().find(bt_e.struct_name);
             if (it_e != tc_.struct_layouts().end()) {
-                for (const auto &f : it_e->second.fields) {
-                    if (f.name == e->field_name && f.endian_expr &&
-                        f.bit_width == 0 &&
-                        (f.size == 2 || f.size == 4 || f.size == 8)) {
-                        dst = emit_overlay_endian_swap(
-                            e->base.get(), it_e->second, f, dst, e->loc.line);
-                        break;
-                    }
+                // Los nombres de campo son unicos en un layout, asi que
+                // buscarlo y luego mirar si cumple es lo mismo que recorrer
+                // comprobando las dos cosas a la vez.
+                const StructFieldInfo *f = find_field(it_e->second,
+                                                      e->field_name);
+                if (f && f->endian_expr && f->bit_width == 0 &&
+                    (f->size == 2 || f->size == 4 || f->size == 8)) {
+                    dst = emit_overlay_endian_swap(e->base.get(), it_e->second,
+                                                   *f, dst, e->loc.line);
                 }
             }
         }
@@ -1166,38 +1162,37 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
         const auto &layouts = tc_.struct_layouts();
         auto it_l = layouts.find(bt.struct_name);
         if (it_l != layouts.end()) {
-            for (const auto &f : it_l->second.fields) {
-                if (f.name == e->field_name && f.bit_width > 0) {
-                    // shifted = dst >> bit_offset; masked = shifted & mask.
-                    ir::IrValueId v_shifted = dst;
-                    if (f.bit_offset > 0) {
-                        ir::IrValueId v_shamt =
-                            emit_const(ft, (uint64_t)f.bit_offset, e->loc.line);
-                        v_shifted = fn_->new_value(ft);
-                        ir::IrInstr sh{};
-                        sh.op = ir::IrOp::SHR;
-                        sh.type = ft;
-                        sh.dst = v_shifted;
-                        sh.operands = {dst, v_shamt};
-                        sh.source_line = e->loc.line;
-                        emit(current_block_, std::move(sh));
-                    }
-                    // mask = (1 << bit_width) - 1.
-                    const uint64_t mask =
-                        (f.bit_width == 64)
-                            ? UINT64_MAX
-                            : ((uint64_t(1) << f.bit_width) - 1);
-                    ir::IrValueId v_mask = emit_const(ft, mask, e->loc.line);
-                    ir::IrValueId v_masked = fn_->new_value(ft);
-                    ir::IrInstr an{};
-                    an.op = ir::IrOp::AND;
-                    an.type = ft;
-                    an.dst = v_masked;
-                    an.operands = {v_shifted, v_mask};
-                    an.source_line = e->loc.line;
-                    emit(current_block_, std::move(an));
-                    return v_masked;
-                }
+            const StructFieldInfo *f = find_field(it_l->second, e->field_name);
+            if (f && f->bit_width > 0) {
+                // shifted = dst >> bit_offset; masked = shifted & mask.
+                ir::IrValueId v_shifted = dst;
+                if (f->bit_offset > 0) {
+                    ir::IrValueId v_shamt =
+                        emit_const(ft, (uint64_t)f->bit_offset, e->loc.line);
+                    v_shifted = fn_->new_value(ft);
+                    ir::IrInstr sh{};
+                    sh.op = ir::IrOp::SHR;
+                    sh.type = ft;
+                    sh.dst = v_shifted;
+                    sh.operands = {dst, v_shamt};
+                    sh.source_line = e->loc.line;
+                    emit(current_block_, std::move(sh));
+            }
+                // mask = (1 << bit_width) - 1.
+                const uint64_t mask =
+                    (f->bit_width == 64)
+                        ? UINT64_MAX
+                        : ((uint64_t(1) << f->bit_width) - 1);
+                ir::IrValueId v_mask = emit_const(ft, mask, e->loc.line);
+                ir::IrValueId v_masked = fn_->new_value(ft);
+                ir::IrInstr an{};
+                an.op = ir::IrOp::AND;
+                an.type = ft;
+                an.dst = v_masked;
+                an.operands = {v_shifted, v_mask};
+                an.source_line = e->loc.line;
+                emit(current_block_, std::move(an));
+                return v_masked;
             }
         }
     }

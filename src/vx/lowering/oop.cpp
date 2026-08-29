@@ -2359,14 +2359,17 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                         }
                     if (!implements) continue;
                     // Localizar el metodo de la interfaz en la clase.
+                    /* No vale @ref find_method: eso da el PRIMERO con ese
+                     * nombre, y aqui los constructores no cuentan -- uno puede
+                     * llamarse igual que un metodo, y quedarse con el deja sin
+                     * encontrar al que se busca. */
                     const std::string *owner = nullptr;
-                    for (const auto &mm : cl.methods) {
-                        if (mm.name == method_name && !mm.is_constructor) {
-                            owner = mm.defining_class.empty()
-                                        ? &cl.name
-                                        : &mm.defining_class;
-                            break;
-                        }
+                    for (const ClassMethodInfo &mm : cl.methods) {
+                        if (mm.name != method_name || mm.is_constructor)
+                            continue;
+                        owner = mm.defining_class.empty() ? &cl.name
+                                                          : &mm.defining_class;
+                        break;
                     }
                     if (!owner) continue; // no deberia pasar si implements
                     const std::string callee = *owner + "__" + method_name;

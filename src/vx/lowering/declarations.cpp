@@ -791,12 +791,7 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
         const StructFieldInfo *fi = nullptr;
         if (il->is_designated) {
             const std::string &fname = il->field_names[i];
-            for (const auto &f : lay.fields) {
-                if (f.name == fname) {
-                    fi = &f;
-                    break;
-                }
-            }
+            fi = find_field(lay, fname);
             if (!fi) {
                 error_at(vd->loc,
                          "lowering: campo '" + fname + "' no existe");

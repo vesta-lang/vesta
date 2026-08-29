@@ -105,12 +105,7 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
         const StructFieldInfo *fi = nullptr;
         if (il->is_designated) {
             const std::string &fname = il->field_names[i];
-            for (const auto &f : lay.fields) {
-                if (f.name == fname) {
-                    fi = &f;
-                    break;
-                }
-            }
+            fi = find_field(lay, fname);
             if (!fi) {
                 error_at(il->loc, "lowering: campo '" + fname +
                                       "' no existe en struct '" + lay.name +
@@ -354,13 +349,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const StructLayout &lay = it->second;
-    const ClassMethodInfo *mtd = nullptr;
-    for (const auto &m : lay.methods) {
-        if (m.name == fa->field_name) {
-            mtd = &m;
-            break;
-        }
-    }
+    const ClassMethodInfo *mtd = find_method(lay, fa->field_name);
     if (!mtd) {
         error_at(e->loc, "lowering: metodo '" + fa->field_name +
                              "' no encontrado en struct '" + bt.struct_name +
