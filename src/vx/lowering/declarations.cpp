@@ -332,15 +332,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
             // escape) queda como incremento futuro (fallback: se colecta sin
             // dtor).
             if (dtor != nullptr) {
-                bool has_vtable =
-                    !lay.super_name.empty() || !lay.interface_names.empty();
-                if (!has_vtable)
-                    for (const auto &kv : class_layouts)
-                        if (kv.second.super_name == sem_type.struct_name) {
-                            has_vtable = true;
-                            break;
-                        }
-                if (!has_vtable) {
+                if (!class_has_vtable(sem_type.struct_name)) {
                     const std::string owner = dtor->defining_class.empty()
                                                   ? sem_type.struct_name
                                                   : dtor->defining_class;
@@ -408,17 +400,8 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     // tiene vtable (es base/derivada o implementa interfaz),
                     // el dtor es virtual -> despachar por la vtable de la
                     // INSTANCIA (no por el tipo estatico) para que
-                    // `Base b = new Derived()` ejecute ~Derived().  Misma
-                    // deteccion de needs_vtable que __new_<Class>.
-                    bool has_vtable =
-                        !lay.super_name.empty() || !lay.interface_names.empty();
-                    if (!has_vtable)
-                        for (const auto &kv : class_layouts)
-                            if (kv.second.super_name == sem_type.struct_name) {
-                                has_vtable = true;
-                                break;
-                            }
-                    if (has_vtable) {
+                    // `Base b = new Derived()` ejecute ~Derived().
+                    if (class_has_vtable(sem_type.struct_name)) {
                         act.native_dtor_virtual = true;
                         act.dtor_vtable_index = dtor->vtable_index;
                     }
@@ -442,19 +425,10 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                 // resuelve en compile-time.  Emitir CALL DIRECTO al
                 // `<owner>____dtor` en lugar de CALLVIRT: mas rapido (sin
                 // vtable lookup) en interp/JIT y compilable en AOT
-                // --target=bare (que no tiene vtable runtime).  Misma deteccion
-                // de vtable que NATIVE_FREE / __new_<Class>.  Solo cuando
+                // --target=bare (que no tiene vtable runtime).  Solo cuando
                 // existe vtable (herencia/interfaz real) se conserva el
                 // CALLVIRT.
-                bool has_vtable =
-                    !lay.super_name.empty() || !lay.interface_names.empty();
-                if (!has_vtable)
-                    for (const auto &kv : class_layouts)
-                        if (kv.second.super_name == sem_type.struct_name) {
-                            has_vtable = true;
-                            break;
-                        }
-                if (!has_vtable) {
+                if (!class_has_vtable(sem_type.struct_name)) {
                     const std::string owner = dtor->defining_class.empty()
                                                   ? sem_type.struct_name
                                                   : dtor->defining_class;
@@ -664,19 +638,11 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                                     ? sem_type.pointee->struct_name
                                     : mi.defining_class;
                             act.inner_dtor_func_name = owner + "__" + mi.name;
-                            // Polimorfico si la clase inner tiene vtable
-                            // (super/interfaz o alguna subclase) -> mismo
-                            // criterio que __new_<Class> / NATIVE_FREE.
-                            bool has_vtable = !ilay.super_name.empty() ||
-                                              !ilay.interface_names.empty();
-                            if (!has_vtable)
-                                for (const auto &kv : cls_layouts)
-                                    if (kv.second.super_name ==
-                                        sem_type.pointee->struct_name) {
-                                        has_vtable = true;
-                                        break;
-                                    }
-                            act.inner_dtor_virtual = has_vtable;
+                            // Polimorfico si la clase de dentro tiene tabla de
+                            // metodos: el destructor hay que buscarlo por lo
+                            // que el objeto ES, no por como se declaro.
+                            act.inner_dtor_virtual =
+                                class_has_vtable(sem_type.pointee->struct_name);
                             break;
                         }
                     }

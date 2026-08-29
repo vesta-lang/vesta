@@ -444,4 +444,35 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
     }
     return abi;
 }
+
+/**
+ * @brief Si los metodos de una clase se despachan por tabla.
+ *
+ * Tres motivos, y el tercero es el que obliga a mirar el programa entero: que
+ * ALGUIEN LA EXTIENDA.  Una clase sin super ni interfaces puede necesitar tabla
+ * igualmente, porque `Base b = new Derivada()` tiene que ejecutar el metodo de
+ * la derivada y eso solo se sabe viendo quien hereda de quien.
+ *
+ * Ese tercer motivo se responde con un conjunto que se construye una sola vez.
+ * Antes cada consulta recorria TODAS las clases del programa, y las consultas
+ * salen dentro de bucles sobre clases y sobre sus campos.
+ *
+ * @param class_name Nombre de la clase.
+ * @return @c true si necesita tabla de metodos.
+ */
+bool Lowering::class_has_vtable(const std::string &class_name) const {
+    const auto &layouts = tc_.class_layouts();
+    const auto it = layouts.find(class_name);
+    if (it == layouts.end()) return false;
+    const ClassLayout &lay = it->second;
+    if (!lay.super_name.empty() || !lay.interface_names.empty()) return true;
+
+    if (!extended_classes_built_) {
+        for (const auto &kv : layouts)
+            if (!kv.second.super_name.empty())
+                extended_classes_.insert(kv.second.super_name);
+        extended_classes_built_ = true;
+    }
+    return extended_classes_.count(class_name) != 0;
+}
 } // namespace vx

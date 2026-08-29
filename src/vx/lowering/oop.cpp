@@ -397,21 +397,12 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     }
                     if (inner_dtor_idx == UINT32_MAX) continue;
                     // El field tiene tipo ESTATICO conocido -> en native_poo,
-                    // si el inner NO es polimorfico, despachar el dtor con CALL
-                    // directo (PURE_NATIVE) en vez de CALLVIRT (no soportado
-                    // por el selector AOT).  Mismo criterio de vtable que
-                    // __new_.
-                    bool inner_has_vtable = !inner.super_name.empty() ||
-                                            !inner.interface_names.empty();
-                    if (!inner_has_vtable)
-                        for (const auto &kv : tc_.class_layouts())
-                            if (kv.second.super_name == f.type.struct_name) {
-                                inner_has_vtable = true;
-                                break;
-                            }
-                    const bool inner_dtor_direct = native_poo_ &&
-                                                   !inner_has_vtable &&
-                                                   !inner_dtor_name.empty();
+                    // si el de dentro NO es polimorfico, despachar el dtor con
+                    // CALL directo (PURE_NATIVE) en vez de CALLVIRT, que el
+                    // selector nativo no atiende.
+                    const bool inner_dtor_direct =
+                        native_poo_ && !class_has_vtable(f.type.struct_name) &&
+                        !inner_dtor_name.empty();
 
                     // 1) addr = this + offset
                     const ir::IrValueId addr = emit_field_addr(
@@ -604,14 +595,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // (tiene super o es extendida) -> dispatch virtual nativo.  La
             // vtable = blob en .rodata con sym_refs a <owner>__<metodo> por
             // vtable_index (mismo mecanismo que `dq func` del bloque bytes).
-            bool needs_vtable =
-                !lay.super_name.empty() || !lay.interface_names.empty();
-            if (!needs_vtable)
-                for (const auto &kv : tc_.class_layouts())
-                    if (kv.second.super_name == cd->name) {
-                        needs_vtable = true;
-                        break;
-                    }
+            bool needs_vtable = class_has_vtable(cd->name);
             uint64_t vtable_idx = UINT64_MAX;
             // Hoisted fuera del bloque needs_vtable: el DESCRIPTOR DE TIPO de
             // una clase gc<X> (ver mas abajo) reusa el numero de slots y la
@@ -1045,9 +1029,6 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
 
         for (int variant = 0; variant < n_variants; ++variant) {
             const bool is_shared_variant = (variant == 1);
-            // Mnemonico para la instruccion alloc.  newobjs (Z.6) usa
-            // exactamente el mismo encoding REG/FIXED_4 que newobj.
-            const char *newobj_op = is_shared_variant ? "newobjs" : "newobj";
 
             // Construir IrFunction __new_<Class>[_shared].
             ir::IrFunction fn;

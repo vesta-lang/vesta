@@ -246,6 +246,42 @@ class Lowering {
     ParamAbi param_abi(const ast::ParamDecl &p) const;
 
     /**
+     * @brief Si los metodos de @p class_name se despachan por tabla.
+     *
+     * Una clase la necesita si HEREDA de otra, si implementa alguna interfaz, o
+     * si ALGUIEN LA EXTIENDE -- lo tercero es lo que obliga a mirar el programa
+     * entero: `Base b = new Derivada()` tiene que ejecutar el metodo de la
+     * derivada, y eso solo se sabe mirando quien hereda de quien.  Sin ninguna
+     * de las tres, el metodo se llama directo y no hay tabla que consultar.
+     *
+     * La regla estaba escrita SEIS veces -- construir el objeto, el destructor
+     * al salir de un ambito, el de dentro de un puntero con dueno, liberar en
+     * nativo, dos mas -- y cada copia lleva un comentario diciendo que tiene
+     * que coincidir con otra ("mismo criterio que __new_", "misma deteccion de
+     * needs_vtable").  Seis sitios donde un dia dejaran de coincidir, y lo que
+     * se rompe entonces es que un destructor se llame por el tipo ESCRITO en
+     * vez de por el que el objeto tiene de verdad.
+     *
+     * El conjunto de clases de las que alguien hereda se calcula UNA vez y se
+     * recuerda: antes cada consulta recorria todas las clases del programa, y
+     * las consultas salen dentro de bucles sobre clases y sobre sus campos.
+     *
+     * @param class_name Nombre de la clase.
+     * @return @c true si necesita tabla de metodos.
+     */
+    bool class_has_vtable(const std::string &class_name) const;
+
+    /**
+     * @brief Las clases de las que alguna otra hereda.
+     *
+     * Se llena la primera vez que alguien pregunta por una tabla de metodos.
+     * Es del bajado entero, no de una funcion, porque la jerarquia ya no cambia
+     * cuando se llega aqui: el comprobador de tipos la cerro.
+     */
+    mutable std::unordered_set<std::string> extended_classes_;
+    mutable bool extended_classes_built_ = false;
+
+    /**
      * @brief Genera una instruccion CONST en el bloque actual.
      */
     ir::IrValueId emit_const(ir::IrType t, uint64_t imm, uint32_t source_line);

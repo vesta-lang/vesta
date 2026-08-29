@@ -1,0 +1,60 @@
+namespace ejemplos.dtor_virtual;
+
+// Como se llama al destructor: por tabla de metodos o directo.
+//
+// Una clase necesita tabla si HEREDA, si implementa una interfaz, o si ALGUIEN
+// LA EXTIENDE.  Lo tercero es lo que obliga a mirar el programa entero: `Base`
+// no hereda de nadie, pero como `Deriv` la extiende, su destructor hay que
+// buscarlo por lo que el objeto ES y no por como se declaro.  A `Sola` no la
+// extiende nadie, asi que su destructor se llama directo -- mas rapido, y es lo
+// unico que se puede emitir en un binario nativo sin tabla en ejecucion.
+//
+// Esa decision estaba escrita en SEIS sitios del compilador y ninguno de los
+// ejemplos la cubria: no habia en todo el corpus una sola clase con herencia Y
+// destructor.
+
+class Cuenta {
+    public static i32 base_dtor;
+    public static i32 sola_dtor;
+}
+
+// A Base la extiende Deriv -> SI necesita tabla de metodos.
+class Base {
+    public i32 id;
+    public Base(i32 i) { this.id = i; }
+    public ~Base() { Cuenta.base_dtor = Cuenta.base_dtor + 1; }
+}
+
+// Existe para que Base sea una clase extendida.  No declara destructor propio:
+// hereda el de Base.
+class Deriv : Base {
+    public Deriv(i32 i) { super(i); }
+    public i32 doble() { return this.id * 2; }
+}
+
+// A esta no la extiende nadie -> NO necesita tabla: llamada directa.
+class Sola {
+    public i32 id;
+    public Sola(i32 i) { this.id = i; }
+    public ~Sola() { Cuenta.sola_dtor = Cuenta.sola_dtor + 1; }
+}
+
+void usar() {
+    unique<Base> b = unique_box(new Base(2));
+    unique<Sola> s = unique_box(new Sola(3));
+    // Los dos se destruyen al salir del ambito, en orden inverso.
+}
+
+i32 main() {
+    Cuenta.base_dtor = 0;
+    Cuenta.sola_dtor = 0;
+
+    Deriv d = new Deriv(7);
+    println("doble=${d.doble()}");
+
+    usar();
+    println("base=${Cuenta.base_dtor} sola=${Cuenta.sola_dtor}");
+
+    // 1 por tabla * 20 + 1 directo * 22 = 42
+    return Cuenta.base_dtor * 20 + Cuenta.sola_dtor * 22;
+}
