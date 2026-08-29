@@ -45,6 +45,80 @@
 namespace vx {
 
 /**
+ * @copydoc vx::Lowering::emit_optional_present
+ */
+ir::IrValueId Lowering::emit_optional_present(ir::IrValueId v_arg,
+                                              const Type &at, int line) {
+    /* Como se responde depende de como este puesto en memoria.  Con marca
+     * aparte se lee la marca; sin ella, la lleva el propio valor -- si no puede
+     * ser cero, que no sea cero ES la marca -- y la pregunta pasa a ser la
+     * misma que para un puntero crudo.  Preguntandolo aqui, el dia que la
+     * disposicion cambie no hay que tocar a quien la use. */
+    if (at.kind == PrimitiveKind::OPTIONAL) {
+        const OptionalLayout lay = optional_layout(at);
+        if (lay.has_tag) return emit_load_typed(v_arg, ir::IrType::I32, line);
+        v_arg = emit_load_typed(v_arg, ir::IrType::I64, line);
+    }
+    /* Referencia (o valor sin marca): hay algo si no es nulo.  Dos operaciones
+     * de IR en vez de ensamblador escrito a mano, para que el eliminador de
+     * codigo muerto pueda quitar la cadena entera si nadie mira la respuesta y
+     * el JIT trate cada paso de forma nativa. */
+    const ir::IrValueId v_es_nulo =
+        emit_ir_unop(ir::IrOp::ISNULL, v_arg, ir::IrType::I32, line);
+    const ir::IrValueId v_uno = emit_const(ir::IrType::I32, 1, line);
+    return emit_ir_binop(ir::IrOp::XOR, v_es_nulo, v_uno, ir::IrType::I32,
+                         line);
+}
+
+/**
+ * @copydoc vx::Lowering::emit_optional_value
+ */
+ir::IrValueId Lowering::emit_optional_value(ir::IrValueId v_arg, const Type &at,
+                                            bool checked, int line) {
+    if (at.kind == PrimitiveKind::OPTIONAL) {
+        const Type payload_st =
+            at.pointee ? *at.pointee : Type{PrimitiveKind::I64};
+        const ir::IrType payload_t = ir_type_from_primitive(payload_st.kind);
+        const OptionalLayout lay = optional_layout(at);
+        if (checked) {
+            /* Lo que hay en el desplazamiento cero es lo que decide si el valor
+             * esta: la marca cuando va aparte, y el valor mismo cuando no.  En
+             * los dos casos la comprobacion es la misma: fallar si es cero. */
+            const ir::IrValueId v_marca =
+                emit_load_typed(v_arg, ir::IrType::I64, line);
+            (void)enforce_nonnull(v_marca, line);
+        }
+        // Y el valor, donde la disposicion diga.
+        const ir::IrValueId v_off =
+            emit_const(ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
+                       line);
+        const ir::IrValueId v_at = emit_ptr_add(v_arg, v_off, line);
+        // BugFix sret-cross-mem: el puntero al valor es de la misma memoria que
+        // el buffer.  Sin esto, un Optional en un buffer del anfitrion -- el
+        // que devuelve una funcion -- se leia con la instruccion de la maquina
+        // virtual y daba cero.
+        fn_->values[v_at].is_host_ptr = fn_->values[v_arg].is_host_ptr;
+        // Un agregado no se carga en un registro: su valor ES su direccion.  Se
+        // devuelve el puntero y quien lo consuma copia los bytes que necesite.
+        if (payload_st.kind == PrimitiveKind::STRUCT &&
+            !payload_st.struct_name.empty())
+            return v_at;
+        const ir::IrValueId v_dst = emit_load_typed(v_at, payload_t, line);
+        /* Y se dice de que memoria es lo que sale, que es la misma regla que
+         * para el resultado de cualquier llamada: sin la marca, sacar un
+         * `Optional<T*>` daba un puntero que luego se dereferenciaba con la
+         * instruccion equivocada y valia cero. */
+        mark_value_from_type(v_dst, payload_st);
+        return v_dst;
+    }
+    /* Referencia nullable: el valor ES el puntero.  Sin comprobar es la
+     * identidad -- cero IR, cero coste --; comprobando, lo unico que se anade
+     * es la afirmacion. */
+    if (!checked) return v_arg;
+    return enforce_nonnull(v_arg, line);
+}
+
+/**
  * @brief Intenta bajar @p e como uno de los builtins de Optional / Result.
  *
  * @param e         La llamada.
@@ -62,6 +136,11 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     // que unwrap pero sin el chequeo (baja a leer el payload directo); si el
     // valor no estaba, lee basura.
     const bool is_unwrap_unchecked = (b == Builtin::UnwrapUnchecked);
+    // Los que NO afirman nada: preguntan y eligen.  Son la salida recuperable,
+    // y estan aqui para que sea la comoda: sin ellos, lo unico que quedaba era
+    // escribir el `if` a mano, y eso empuja a afirmar por pereza.
+    const bool is_unwrap_or = (b == Builtin::UnwrapOr);
+    const bool is_expect = (b == Builtin::Expect);
     // Construir y consultar los que viven en la PILA.
     const bool is_Some = (b == Builtin::Some);
     const bool is_None = (b == Builtin::None);
@@ -72,8 +151,9 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     const bool is_error = (b == Builtin::Error);
 
     /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
-    if (!(is_isPresent || is_unwrap || is_unwrap_unchecked || is_Some ||
-          is_None || is_Ok || is_Err || is_isOk || is_value || is_error))
+    if (!(is_isPresent || is_unwrap || is_unwrap_unchecked || is_unwrap_or ||
+          is_expect || is_Some || is_None || is_Ok || is_Err || is_isOk ||
+          is_value || is_error))
         return false;
 
     if (is_Some) {
@@ -270,9 +350,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
     }
 
     // ----- isPresent(x) -----
-    // Para Optional<T> builtin: LOAD i64 al offset 0 del buffer.
-    // Para referencias (CLASS/PTR) legacy: usa la instruccion VM
-    // @c isnull (0x25) invertida con XOR.
+    // La pregunta la contesta `emit_optional_present`, que es la misma que se
+    // hace `unwrap_or` para elegir rama.
     if (is_isPresent) {
         if (e->args.size() != 1) {
             return builtin_error(e->loc, "isPresent: requiere exactamente 1 argumento", out_value);
@@ -282,52 +361,75 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        /* Optional<T>: la respuesta depende de como este puesto en memoria.
-         * Con marca aparte se lee la marca; sin ella, la lleva el propio valor
-         * -- un puntero presente no puede ser nulo -- y la pregunta es la misma
-         * que para un puntero crudo, que ya esta resuelta unas lineas mas
-         * abajo.  Preguntando aqui, el dia que la disposicion cambie este sitio
-         * no hay que tocarlo. */
-        if (e->args[0]->result_type.kind == PrimitiveKind::OPTIONAL) {
-            const OptionalLayout lay = optional_layout(e->args[0]->result_type);
-            if (lay.has_tag) {
-                out_value =
-                    emit_load_typed(v_arg, ir::IrType::I32, e->loc.line);
-                return true;
-            }
-            const ir::IrValueId v_val =
-                emit_load_typed(v_arg, ir::IrType::I64, e->loc.line);
-            const ir::IrValueId v_nulo = emit_ir_unop(
-                ir::IrOp::ISNULL, v_val, ir::IrType::I32, e->loc.line);
-            const ir::IrValueId v_uno =
-                emit_const(ir::IrType::I32, 1, e->loc.line);
-            out_value = emit_ir_binop(ir::IrOp::XOR, v_nulo, v_uno,
-                                      ir::IrType::I32, e->loc.line);
-            return true;
-        }
-        // raw_asm-elim 2026-05-28: isPresent(p) = (p != null) implementado
-        // como secuencia de 2 IR ops:
-        //   v_is_null = ISNULL(v_arg)   -> i32 (0 = not null, 1 = null)
-        //   v_dst     = XOR(v_is_null, 1) -> i32 (invierte el bit 0)
-        // Esto reemplaza el RAW_ASM original que hacia `isnull + mov r14,1 +
-        // xor`. Beneficios: DCE puede eliminar la cadena si v_dst no se usa, el
-        // Selector JIT trata cada paso natively, y CSE puede fundir
-        // multiples isPresent del mismo arg.  Mismo bytecode emitido.
-        const ir::IrValueId v_is_null =
-            emit_ir_unop(ir::IrOp::ISNULL, v_arg, ir::IrType::I32, e->loc.line);
-        const ir::IrValueId v_one = emit_const(ir::IrType::I32, 1, e->loc.line);
-        const ir::IrValueId v_dst =
-            emit_ir_binop(ir::IrOp::XOR, v_is_null, v_one,
-                          ir::IrType::I32, e->loc.line);
-        out_value = v_dst;
+        out_value = emit_optional_present(v_arg, e->args[0]->result_type,
+                                          e->loc.line);
         return true;
     }
 
-    // ----- unwrap(x) -----
-    // Para Optional<T> builtin: LOAD flag at +0; pasa por VM
-    // `unwrap` (genera NPE si flag==0); luego LOAD payload at +8.
-    // Para referencias (CLASS/PTR) legacy: VM `unwrap` directo sobre
-    // el puntero (0 = null).
+    // ----- unwrap_or(x, def) -----  y  ----- expect(x, "msg") -----
+    //
+    // Los dos se montan con las MISMAS dos piezas que `isPresent` y `unwrap`:
+    // preguntar si hay, y sacar el valor.  Ninguno vuelve a escribir como se
+    // lee un Optional.
+    if (is_unwrap_or || is_expect) {
+        if (e->args.size() != 2) {
+            out_value = ir::IR_NO_VALUE;
+            return true; // el comprobador de tipos ya lo dijo
+        }
+        const ir::IrValueId v_arg = lower_expr(e->args[0].get());
+        if (v_arg == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const Type at = e->args[0]->result_type;
+        if (is_expect) {
+            /* `expect` es `unwrap` con una pista.  Desde que fallar es fatal,
+             * el mensaje del sitio es lo unico que dice QUE se dio por hecho;
+             * el mensaje generico del catalogo y la traza los sigue poniendo el
+             * runtime detras.
+             *
+             * Solo se escribe cuando NO hay nada, asi que el camino bueno no
+             * paga: la rama esta y no se toma.  Y el texto es conocido al
+             * compilar -- por eso el comprobador exige una cadena escrita en el
+             * sitio --, asi que no hay que construir nada en ejecucion. */
+            std::string msg;
+            if (e->args[1]->kind == ast::NodeKind::StringLitExpr)
+                msg = static_cast<ast::StringLitExpr *>(e->args[1].get())->value;
+            const ir::IrValueId v_hay =
+                emit_optional_present(v_arg, at, e->loc.line);
+            const ir::IrValueId v_cero =
+                emit_const(ir::IrType::I64, 0, e->loc.line);
+            (void)emit_branching_select(
+                v_hay, [&] { return v_cero; },
+                [&] {
+                    emit_print_string_literal("expect: " + msg + "\n",
+                                              e->loc.line);
+                    return v_cero;
+                },
+                "expect", e->loc.line);
+            out_value = emit_optional_value(v_arg, at, /*checked=*/true,
+                                            e->loc.line);
+            return true;
+        }
+        /* `unwrap_or` NO afirma nada, asi que no puede fallar: se pregunta y se
+         * elige.  El valor solo se lee en la rama donde lo hay, que es lo que
+         * lo hace seguro. */
+        const ir::IrValueId v_hay =
+            emit_optional_present(v_arg, at, e->loc.line);
+        out_value = emit_branching_select(
+            v_hay,
+            [&] {
+                return emit_optional_value(v_arg, at, /*checked=*/false,
+                                           e->loc.line);
+            },
+            [&] { return lower_expr(e->args[1].get()); }, "unwrap_or",
+            e->loc.line);
+        return true;
+    }
+
+    // ----- unwrap(x) / unwrap_unchecked(x) -----
+    // Sacar el valor lo hace `emit_optional_value`; lo unico que cambia entre
+    // los dos es si ademas se afirma que hay algo.
     if (is_unwrap || is_unwrap_unchecked) {
         const char *bn = is_unwrap_unchecked ? "unwrap_unchecked" : "unwrap";
         if (e->args.size() != 1) {
@@ -339,75 +441,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        // Optional<T>: LOAD flag, unwrap (lanza si 0), LOAD payload.
-        // unwrap_unchecked: omite flag+UNWRAP, LOAD payload directo (UB
-        // si vacio) -- cero coste, sin red.
-        if (e->args[0]->result_type.kind == PrimitiveKind::OPTIONAL) {
-            const Type at = e->args[0]->result_type;
-            const Type payload_st =
-                at.pointee ? *at.pointee : Type{PrimitiveKind::I64};
-            const ir::IrType payload_t =
-                ir_type_from_primitive(payload_st.kind);
-            /* Donde esta cada cosa lo dice la disposicion.  Sin marca aparte,
-             * lo que se comprueba es el propio valor -- que es lo que la lleva
-             * -- y esta en el desplazamiento cero. */
-            const OptionalLayout lay = optional_layout(at);
-            if (is_unwrap) {
-                /* Lo que hay en el desplazamiento cero es lo que decide si el
-                 * valor esta: la marca cuando va aparte, y el valor mismo
-                 * cuando no -- un puntero presente no es nulo --.  En los dos
-                 * casos la comprobacion es la misma: lanzar si es cero. */
-                const ir::IrValueId v_marca =
-                    emit_load_typed(v_arg, ir::IrType::I64, e->loc.line);
-                (void)emit_ir_unop(ir::IrOp::UNWRAP, v_marca, ir::IrType::I64,
-                                   e->loc.line);
-            }
-            // Y el valor, donde la disposicion diga.
-            const ir::IrValueId v_off = emit_const(
-                ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
-                e->loc.line);
-            const ir::IrValueId v_at =
-                emit_ptr_add(v_arg, v_off, e->loc.line);
-            // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
-            // buf+8 para que el LOAD del payload emita `loadzh`/`movh` (host).
-            // Sin esto, un Optional en buffer host (retornado por una fn SRET)
-            // se leia con `loadz` (VM) sobre direccion host -> unwrap daba 0.
-            // value/error ya lo hacian; unwrap no.
-            fn_->values[v_at].is_host_ptr = fn_->values[v_arg].is_host_ptr;
-            // Un payload STRUCT no se carga en un registro: el valor de un
-            // agregado ES su direccion.  Se devuelve `buf+8` y quien lo
-            // consuma copiara los bytes que necesite.
-            if (payload_st.kind == PrimitiveKind::STRUCT &&
-                !payload_st.struct_name.empty()) {
-                out_value = v_at;
-                return true;
-            }
-            const ir::IrValueId v_dst =
-                emit_load_typed(v_at, payload_t, e->loc.line);
-            out_value = v_dst;
-            return true;
-        }
-        // Referencias: unwrap_unchecked baja a IDENTIDAD (el "valor" de
-        // un unwrap es el mismo puntero; lo unico que anade unwrap es el
-        // chequeo).  Devolvemos v_arg directo -> cero IR, cero coste.
-        if (is_unwrap_unchecked) {
-            out_value = v_arg;
-            return true;
-        }
-        // Referencias legacy: VM `unwrap` directo (con chequeo runtime).
-        const ir::IrType t = fn_->values[v_arg].type;
-        const ir::IrValueId v_dst = fn_->new_value(t);
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::UNWRAP;
-        ra.type = t;
-        ra.dst = v_dst;
-        ra.operands = {v_arg};
-        ra.source_line = e->loc.line;
-        emit(current_block_, std::move(ra));
-        if (fn_->values[v_arg].is_host_ptr) {
-            fn_->values[v_dst].is_host_ptr = true;
-        }
-        out_value = v_dst;
+        out_value = emit_optional_value(v_arg, e->args[0]->result_type,
+                                        /*checked=*/is_unwrap, e->loc.line);
         return true;
     }
 

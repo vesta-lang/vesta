@@ -117,6 +117,7 @@ enum class Builtin : uint16_t {
 
     /* --- 6 caracteres --- */
     BgRgb,
+    Expect,
     Extent,
     Fclose,
     FgRgb,
@@ -202,6 +203,7 @@ enum class Builtin : uint16_t {
     StrBytes,
     TermMove,
     ToString,
+    UnwrapOr,
     UseCount,
 
     /* --- 10 caracteres --- */

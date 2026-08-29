@@ -1486,6 +1486,23 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         return dst;
     }
 
+    /* `-128` es la constante -128, no un `128` que se niega en ejecucion.
+     *
+     * Plegarlo aqui ahorra la instruccion, pero sobre todo deja el valor
+     * marcado como CONSTANTE, y de eso depende el aviso de estrechamiento:
+     * solo se calla cuando la constante CABE en el destino.  Sin plegar,
+     * `i8 x = -128;` avisaba de una perdida que no existe -- -128 es justo el
+     * minimo de i8 --, mientras que `i8 x = 127;` no decia nada.  El mismo
+     * codigo, dos respuestas, y la equivocada era la del borde. */
+    if (e->op == ast::UnOp::Neg && e->operand &&
+        e->operand->kind == ast::NodeKind::IntLitExpr) {
+        const auto *lit =
+            static_cast<const ast::IntLitExpr *>(e->operand.get());
+        const ir::IrType t = ir_type_from_primitive(e->result_type.kind);
+        return emit_const(t == ir::IrType::VOID ? ir::IrType::I64 : t,
+                          (uint64_t)(-(int64_t)lit->value), e->loc.line);
+    }
+
     const ir::IrValueId v = lower_expr(e->operand.get());
     if (v == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
 
@@ -1517,23 +1534,14 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
         }
         break;
     case ast::UnOp::BitNot: ins.op = ir::IrOp::NOT; break;
-    case ast::UnOp::Unwrap: {
-        // !!x  <=>  unwrap(x): assert non-null + return value.
-        // Lowering directo a la instruccion bytecode @c unwrap
-        // (0x26) via RAW_ASM con tokens {dst}/{src0}; mismo
-        // patron que el builtin unwrap() en try_lower_builtin_call.
-        ir::IrInstr ra{};
-        ra.op = ir::IrOp::UNWRAP;
-        ra.type = vt;
-        ra.dst = dst;
-        ra.operands = {v};
-        ra.source_line = e->loc.line;
-        emit(current_block_, std::move(ra));
-        if (fn_->values[v].is_host_ptr) {
-            fn_->values[dst].is_host_ptr = true;
-        }
-        return dst;
-    }
+    case ast::UnOp::Unwrap:
+        /* `!!x` es exactamente hacer cumplir un no-nulo: devuelve el mismo
+         * valor y lanza si es cero.  Lo hace el MISMO sitio que lo hace al
+         * asignar a un `nonnull` -- eran dos escrituras de la operacion, y esta
+         * se dejaba dos cosas: que lo devuelto siga siendo un objeto del
+         * recolector, y que un `T**` conserve que lo de dentro tambien es del
+         * anfitrion. */
+        return enforce_nonnull(v, e->loc.line);
     case ast::UnOp::Await: {
         // `await fut` bloquea hasta que el future este resuelto.
         // El bytecode `await r_fut` (0x2A) suspende el proceso si el
@@ -1601,66 +1609,68 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
     return dst;
 }
 
-ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
-    const uint32_t src_line = e->loc.line;
-    if (!e->cond || !e->then_expr || !e->else_expr) {
-        error_at(e->loc, "lowering: ternario incompleto");
-        return ir::IR_NO_VALUE;
-    }
-    /* Bajar cond y crear los 3 bloques. */
-    ir::IrValueId cond = lower_expr(e->cond.get());
+ir::IrValueId Lowering::emit_branching_select(
+    ir::IrValueId cond, const std::function<ir::IrValueId()> &on_true,
+    const std::function<ir::IrValueId()> &on_false, const char *tag,
+    uint32_t line) {
     if (cond == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-    const ir::IrBlockId then_bb =
-        fn_->new_block("ter_then_" + std::to_string(ternary_counter_));
-    const ir::IrBlockId else_bb =
-        fn_->new_block("ter_else_" + std::to_string(ternary_counter_));
+    const std::string n = std::to_string(ternary_counter_++);
+    const ir::IrBlockId then_bb = fn_->new_block(std::string(tag) + "_then_" + n);
+    const ir::IrBlockId else_bb = fn_->new_block(std::string(tag) + "_else_" + n);
     const ir::IrBlockId merge_bb =
-        fn_->new_block("ter_merge_" + std::to_string(ternary_counter_));
-    ++ternary_counter_;
-    /* br_cond. */
-    {
-        emit_br_cond(cond, then_bb, else_bb, src_line);
-    }
-    /* Bajar then_expr en then_bb. */
+        fn_->new_block(std::string(tag) + "_merge_" + n);
+    emit_br_cond(cond, then_bb, else_bb, line);
+
     current_block_ = then_bb;
-    ir::IrValueId then_val = lower_expr(e->then_expr.get());
-    ir::IrBlockId then_end = current_block_;
-    ir::IrType then_t = (then_val != ir::IR_NO_VALUE)
-                            ? fn_->values[then_val].type
-                            : ir::IrType::I64;
-    {
-        emit_br_from(then_end, merge_bb, src_line);
-    }
-    /* Bajar else_expr en else_bb. */
+    const ir::IrValueId then_val = on_true();
+    const ir::IrBlockId then_end = current_block_;
+    const ir::IrType then_t = (then_val != ir::IR_NO_VALUE)
+                                  ? fn_->values[then_val].type
+                                  : ir::IrType::I64;
+    emit_br_from(then_end, merge_bb, line);
+
     current_block_ = else_bb;
-    ir::IrValueId else_val = lower_expr(e->else_expr.get());
-    ir::IrBlockId else_end = current_block_;
-    /* Coerce else_val al tipo de then si difieren. */
+    ir::IrValueId else_val = on_false();
+    const ir::IrBlockId else_end = current_block_;
+    // Los dos lados tienen que llegar al PHI con el mismo tipo.
     if (else_val != ir::IR_NO_VALUE) {
         const ir::IrType else_t = fn_->values[else_val].type;
-        if (else_t != then_t) {
-            else_val = cast_if_needed(else_val, else_t, then_t, src_line);
-        }
+        if (else_t != then_t)
+            else_val = cast_if_needed(else_val, else_t, then_t, line);
     }
-    {
-        emit_br_from(else_end, merge_bb, src_line);
-    }
-    /* Merge: PHI. */
+    emit_br_from(else_end, merge_bb, line);
+
     current_block_ = merge_bb;
-    if (then_val == ir::IR_NO_VALUE || else_val == ir::IR_NO_VALUE) {
-        error_at(e->loc, "ternario: una de las ramas no produjo valor");
+    if (then_val == ir::IR_NO_VALUE || else_val == ir::IR_NO_VALUE)
         return ir::IR_NO_VALUE;
-    }
-    ir::IrValueId result = fn_->new_value(then_t);
+    const ir::IrValueId result = fn_->new_value(then_t);
     ir::IrInstr phi{};
     phi.op = ir::IrOp::PHI;
     phi.type = then_t;
     phi.dst = result;
     phi.phi_args.push_back({then_val, then_end});
     phi.phi_args.push_back({else_val, else_end});
-    phi.source_line = src_line;
+    phi.source_line = line;
     emit(merge_bb, std::move(phi));
     return result;
+}
+
+ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
+    if (!e->cond || !e->then_expr || !e->else_expr) {
+        error_at(e->loc, "lowering: ternario incompleto");
+        return ir::IR_NO_VALUE;
+    }
+    /* La forma -- dos ramas y un punto donde se juntan -- la monta
+     * `emit_branching_select`, que es la misma que necesita `unwrap_or`.  Aqui
+     * solo se dice QUE va en cada lado. */
+    const ir::IrValueId cond = lower_expr(e->cond.get());
+    if (cond == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+    const ir::IrValueId r = emit_branching_select(
+        cond, [&] { return lower_expr(e->then_expr.get()); },
+        [&] { return lower_expr(e->else_expr.get()); }, "ter", e->loc.line);
+    if (r == ir::IR_NO_VALUE)
+        error_at(e->loc, "ternario: una de las ramas no produjo valor");
+    return r;
 }
 
 } // namespace vx

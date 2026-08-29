@@ -132,6 +132,7 @@ constexpr BuiltinEntry kTable[] = {
 
     /* --- 6 caracteres --- */
     {"bg_rgb",                 Builtin::BgRgb},
+    {"expect",                 Builtin::Expect},
     {"extent",                 Builtin::Extent},
     {"fclose",                 Builtin::Fclose},
     {"fg_rgb",                 Builtin::FgRgb},
@@ -217,6 +218,7 @@ constexpr BuiltinEntry kTable[] = {
     {"str_bytes",              Builtin::StrBytes},
     {"term_move",              Builtin::TermMove},
     {"to_string",              Builtin::ToString},
+    {"unwrap_or",              Builtin::UnwrapOr},
     {"use_count",              Builtin::UseCount},
 
     /* --- 10 caracteres --- */
@@ -496,9 +498,11 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::Wait: case Builtin::Notify: case Builtin::NotifyAll:
         return BuiltinFamily::Concurrent;
 
-    case Builtin::Err: case Builtin::Error: case Builtin::IsOk:
+    case Builtin::Err: case Builtin::Error: case Builtin::Expect:
+    case Builtin::IsOk:
     case Builtin::IsPresent: case Builtin::None: case Builtin::Ok:
-    case Builtin::Some: case Builtin::Unwrap: case Builtin::UnwrapUnchecked:
+    case Builtin::Some: case Builtin::Unwrap: case Builtin::UnwrapOr:
+    case Builtin::UnwrapUnchecked:
     case Builtin::Value:
         return BuiltinFamily::Optional;
 
