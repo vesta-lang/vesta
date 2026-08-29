@@ -1,0 +1,11 @@
+namespace ejemplos.neg_sufijo_no_cabe;
+
+// Un literal que se contradice a si mismo.
+//
+// El sufijo dice `u8` y el numero no es ningun `u8`.  Truncar es una decision,
+// y una decision se escribe: para eso esta el cast, `(u8) 300`.
+
+i32 main() {
+    u8 no = 300_u8;
+    return (i32) no;
+}

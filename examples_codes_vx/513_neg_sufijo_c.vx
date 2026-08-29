@@ -1,0 +1,12 @@
+namespace ejemplos.neg_sufijo_c;
+
+// Un sufijo de C no nombra ningun tipo de Vesta.
+//
+// `100L` dice `long`, que aqui no existe.  Hasta ahora se consumia sin efecto
+// ninguno: el literal valia `i32` igual, de modo que el sufijo le mentia a
+// quien viniera de C y nadie se enteraba.
+
+i32 main() {
+    i64 c = 100L;
+    return (i32) c;
+}

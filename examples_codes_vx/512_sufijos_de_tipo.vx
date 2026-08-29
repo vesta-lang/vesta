@@ -1,5 +1,5 @@
 /**
- * @file 501_sufijos_de_tipo.vx
+ * @file 512_sufijos_de_tipo.vx
  * @brief Un literal puede decir de que tipo es: `42_i8`, `3.14_f64`.
  *
  * Sin sufijo, el tipo de un literal lo decide el contexto, y esa sigue siendo

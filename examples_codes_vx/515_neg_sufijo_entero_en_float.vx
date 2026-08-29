@@ -1,0 +1,11 @@
+namespace ejemplos.neg_sufijo_entero_en_float;
+
+// Un sufijo entero sobre un numero con decimales.
+//
+// `3.14_i32` pide guardar tres coma catorce en un entero.  Perder la parte
+// decimal tambien es una decision y tambien se escribe.
+
+i32 main() {
+    f64 mal = 3.14_i32;
+    return (i32) mal;
+}

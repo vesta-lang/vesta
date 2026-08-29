@@ -3145,6 +3145,20 @@ modes3_case("optptr503", "sacar el valor de un Optional<T*> daba un puntero SIN 
 modes3_case("optsinmarca504", "un Optional cuyo valor no puede ser cero no necesita una palabra aparte que diga si hay algo: el cero sobra y sirve de marca, y el conjunto mide 8 en vez de 16.  Se aplica solo donde el tipo lo promete (un prestamo), nunca a un T* crudo, donde Some(nulo) dejaria de distinguirse de vacio", "504_optional_sin_marca.vx", 42, line=3806)
 modes3_case("nonnull505", "`nonnull` se comprueba al asignar (antes solo se rechazaba el literal null), y no cuesta nada cuando el valor no puede ser nulo: el pase que quita comprobaciones demostrables las borra.  Ademas `nonnull` y `!!` son la misma cosa, asi que escribir `!!` al asignar a un nonnull es redundante y tampoco cuesta", "505_nonnull_se_cumple.vx", 42, line=3808)
 modes3_case("ayudantes507", "unwrap_or(x, def) y expect(x, \"msg\"): la salida que NO mata el proceso y la que si pero diciendo por que.  Desde que fallar una afirmacion es fatal, importa que la forma recuperable sea la comoda -- antes solo estaba escribir el if a mano --.  Los dos se montan con las mismas dos piezas que isPresent y unwrap; ninguno vuelve a escribir como se lee un Optional", "507_ayudantes_optional.vx", 42, line=3810)
+modes3_case("sufijos512", "un literal puede decir de que tipo es (42_i8, 0xFF_u32, 3.14_f64), en cualquier base y con `_` separando millares.  Sin sufijo lo sigue poniendo el contexto, que es la forma normal; el sufijo sirve cuando no hay contexto o cuando decirlo aclara", "512_sufijos_de_tipo.vx", 55, line=3812)
+fails_case("neg_sufijo_c",
+           "un sufijo de C no nombra ningun tipo de Vesta: `100L` dice `long`, "
+           "y hasta ahora se consumia sin efecto ninguno -- el literal valia "
+           "i32 igual, o sea que el sufijo mentia a quien viniera de C",
+           "513_neg_sufijo_c.vx", "Vesta has no such type")
+fails_case("neg_sufijo_no_cabe",
+           "un literal que se contradice: el sufijo dice u8 y 300 no es "
+           "ningun u8.  Truncar es una decision y se escribe: `(u8) 300`",
+           "514_neg_sufijo_no_cabe.vx", "does not fit in its own suffix")
+fails_case("neg_sufijo_entero_en_float",
+           "sufijo entero sobre un numero con decimales: perder la parte "
+           "decimal tambien es una decision y tambien se escribe",
+           "515_neg_sufijo_entero_en_float.vx", "integer suffix")
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)
