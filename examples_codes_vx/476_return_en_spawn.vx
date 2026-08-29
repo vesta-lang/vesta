@@ -1,0 +1,34 @@
+// Un `return` escrito a mano dentro del cuerpo de un `spawn`.
+//
+// El cuerpo de un spawn NO es una funcion a la que se llame: es por donde
+// EMPIEZA un proceso nuevo, y en su pila no hay ninguna direccion de retorno
+// porque nadie lo llamo, lo lanzaron.  Terminar con el `ret` normal hacia que
+// el proceso saltara a una direccion que nadie habia puesto: el programa se
+// repetia sin fin y acababa cascando.
+//
+// Llegar al final del bloque SI terminaba bien, asi que el mismo programa
+// acababa de una forma o de otra segun si el `return` estaba escrito.
+//
+// Y una lambda escrita DENTRO del cuerpo si es una funcion de verdad: su
+// `return` tiene que volver a quien la llamo, no parar el proceso.
+
+i64 con_return_pronto(i64 umbral) {
+    i64 base = 7;
+
+    i64 hijo = spawn {
+        fn(i64) -> i64 doble = (i64 x) => { return x * 2; };
+        i64 r = doble(base);
+        if (r > umbral) {
+            return;             // termina el proceso aqui
+        }
+        i64 nunca = r + 1000;   // no se llega
+    };
+
+    return base * 6;
+}
+
+i32 main() {
+    i64 v = con_return_pronto(3);
+    println("${v}");
+    return (i32) v;
+}

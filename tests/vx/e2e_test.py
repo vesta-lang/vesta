@@ -3100,6 +3100,7 @@ r0_case("nwt320", "typedef T X new sobre tipos de usuario: struct, clase y enum"
 r0_case("str321", "cadenas conocidas al compilar: literales adyacentes, \"a\"+\"b\" y a+b via variables", "321_strings_comptime.vx", 42, line=3745)
 r0_case("tryasg474", "asignar a una variable de fuera DENTRO del init de otra, en un try que lanza", "474_try_assign_en_init.vx", 60, line=3746)
 r0_case("asynctipos475", "@Async con parametros de tipos aliased (no primitivos sueltos)", "475_async_tipos_no_listados.vx", 42, line=3748)
+r0_case("retspawn476", "`return` a mano dentro del cuerpo de un spawn (y una lambda dentro, que si retorna)", "476_return_en_spawn.vx", 42, line=3750)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

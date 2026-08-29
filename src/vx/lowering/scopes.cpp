@@ -196,12 +196,28 @@ Lowering::ChildFunctionScope::ChildFunctionScope(Lowering &lo)
       terminated_(lo.block_terminated_), scopes_(std::move(lo.scopes_)),
       addr_taken_(std::move(lo.address_taken_locals_)),
       host_bearing_(std::move(lo.host_bearing_locals_)),
-      cleanups_(std::move(lo.cleanup_stack_)) {
+      cleanups_(std::move(lo.cleanup_stack_)),
+      sret_active_(lo.sret_active_), sret_retbuf_(lo.sret_retbuf_),
+      sret_buf_size_(lo.sret_buf_size_),
+      returns_function_(lo.current_fn_returns_function_),
+      async_fut_id_(lo.async_fut_id_), is_rspawn_body_(lo.is_rspawn_body_),
+      is_spawn_body_(lo.is_spawn_body_) {
     lo_.scopes_.clear();
     lo_.address_taken_locals_.clear();
     lo_.host_bearing_locals_.clear();
     lo_.cleanup_stack_.clear();
     lo_.block_terminated_ = false;
+    /* Como se sale es propio de cada funcion, asi que la hija empieza sin nada
+     * de eso: retornando normal.  Quien construya un cuerpo que NO sea una
+     * funcion -- el de una asincrona, el de un proceso -- lo dice DESPUES de
+     * construir el guarda, y solo vale mientras dure. */
+    lo_.sret_active_ = false;
+    lo_.sret_retbuf_ = ir::IR_NO_VALUE;
+    lo_.sret_buf_size_ = 0;
+    lo_.current_fn_returns_function_ = false;
+    lo_.async_fut_id_ = ir::IR_NO_VALUE;
+    lo_.is_rspawn_body_ = false;
+    lo_.is_spawn_body_ = false;
 }
 
 /**
@@ -215,6 +231,13 @@ Lowering::ChildFunctionScope::~ChildFunctionScope() {
     lo_.address_taken_locals_ = std::move(addr_taken_);
     lo_.host_bearing_locals_ = std::move(host_bearing_);
     lo_.cleanup_stack_ = std::move(cleanups_);
+    lo_.sret_active_ = sret_active_;
+    lo_.sret_retbuf_ = sret_retbuf_;
+    lo_.sret_buf_size_ = sret_buf_size_;
+    lo_.current_fn_returns_function_ = returns_function_;
+    lo_.async_fut_id_ = async_fut_id_;
+    lo_.is_rspawn_body_ = is_rspawn_body_;
+    lo_.is_spawn_body_ = is_spawn_body_;
 }
 
 } // namespace vx

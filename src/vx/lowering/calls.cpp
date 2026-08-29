@@ -1141,21 +1141,10 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     // Salvar contexto del padre para poder restaurarlo despues.
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
     ChildFunctionScope parent(*this);
-    // el helper sintetico es una FUNCION SEPARADA con su propia
-    // firma.  No debe heredar el SRET del padre (que se referia al
-    // retbuf del padre).  El helper retorna un valor escalar i32/i64
-    // mediante R0, sin SRET.  Save y reset.
-    const bool saved_sret_active = sret_active_;
-    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
-    const uint64_t saved_sret_buf_size = sret_buf_size_;
-    const bool saved_returns_fn = current_fn_returns_function_;
-    sret_active_ = false;
-    sret_retbuf_ = ir::IR_NO_VALUE;
-    sret_buf_size_ = 0;
-    // El helper en si mismo no retorna FUNCTION (los tests actuales
-    // no anidan factories de closures dentro de lambdas).  Si en el
-    // futuro lo necesitamos, detectarlo via e->result_type.pointee.
-    current_fn_returns_function_ = false;
+    /* El ayudante es una FUNCION SEPARADA con su firma: devuelve un escalar
+     * por el registro de retorno, no por el hueco prestado que tuviera el
+     * padre -- ese hueco es del marco del padre --.  Eso ya lo deja limpio el
+     * guarda de arriba, que es quien sabe que se entra en otra funcion. */
 
     // Construir la nueva IrFunction.
     ir::IrFunction child_fn;
@@ -1375,12 +1364,6 @@ std::string Lowering::generate_lambda_helper(ast::LambdaExpr *e) {
     // Encolar el helper para volcado al modulo al final de run().
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
-    // Restaurar contexto del padre.
-    // restaurar contexto SRET y returns_function del padre.
-    sret_active_ = saved_sret_active;
-    sret_retbuf_ = saved_sret_retbuf;
-    sret_buf_size_ = saved_sret_buf_size;
-    current_fn_returns_function_ = saved_returns_fn;
     return fn_name;
 }
 

@@ -417,21 +417,14 @@ std::string Lowering::generate_spawn_helper(ast::BlockStmt *body,
     // de `enter`/`leave` y las locales caben en la region (1 MiB
     // por defecto, mas que suficiente para spawn bodies tipicos).
 
+    /* Mientras se baja el cuerpo, un `return` escrito a mano tiene que acabar
+     * igual que llegar al final: parando el proceso.  Se dice aqui porque el
+     * cuerpo puede llevar dentro otra cosa que se baje aparte -- una lambda --
+     * y esa si es una funcion de verdad. */
+    is_spawn_body_ = true;
     if (body) lower_block(body);
 
-    // Sprint 6.D: terminador HLT via IR op puro (no RAW_ASM).
-    // AOT (native_poo_): el spawn body ES la funcion de entrada del hilo del
-    // SO -> termina con RET (el hilo se reclama al retornar), no con HLT (que
-    // es RUNTIME_DEPENDENT, propio del scheduler de la VM).
-    if (!block_terminated_) {
-        ir::IrInstr h{};
-        h.op = native_poo_ ? ir::IrOp::RET : ir::IrOp::HLT;
-        h.type = ir::IrType::VOID;
-        h.dst = ir::IR_NO_VALUE;
-        h.source_line = loc.line;
-        emit(current_block_, std::move(h));
-        block_terminated_ = true;
-    }
+    if (!block_terminated_) emit_process_body_end(loc.line);
 
     pop_scope();
     // Guardar el helper en la cola pendiente; se añadira a out_mod_
@@ -458,7 +451,6 @@ std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
     // Guardar contexto del lowering del padre.
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
     ChildFunctionScope parent(*this);
-    bool saved_rspawn = is_rspawn_body_;
 
     ir::IrFunction child_fn;
     child_fn.name = fn_name;
@@ -488,8 +480,6 @@ std::string Lowering::generate_rspawn_helper(ast::BlockStmt *body,
     pop_scope();
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
-    // Restaurar contexto.
-    is_rspawn_body_ = saved_rspawn;
     return fn_name;
 }
 
@@ -738,7 +728,6 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // ---------------------------------------------------------------
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
     ChildFunctionScope parent(*this);
-    ir::IrValueId saved_async_fut = async_fut_id_;
 
     ir::IrFunction helper_fn;
     helper_fn.name = helper_name;
@@ -801,8 +790,10 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // main para preservar el orden de entry point).
     pending_spawn_helpers_.push_back(std::move(helper_fn));
 
-    // Restaurar contexto del lowering.
-    async_fut_id_ = saved_async_fut;
+    /* El helper acaba aqui.  Lo que viene despues -- la envoltura publica que
+     * el usuario llama -- es una funcion NORMAL: sale retornando, no
+     * resolviendo el futuro, asi que deja de estar en un cuerpo asincrono. */
+    async_fut_id_ = ir::IR_NO_VALUE;
 
     // ---------------------------------------------------------------
     // 2. Construir el WRAPPER publico con el nombre de la funcion.
@@ -819,7 +810,6 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     fn_ = &wrapper_fn;
     current_block_ = w_entry;
     push_scope();
-    async_fut_id_ = ir::IR_NO_VALUE; // wrapper NO es async body
 
     // Mejora II: declarar los parametros del wrapper igual que en una
     // funcion normal.  Cada param se mapea a un IrType y se vincula
@@ -982,8 +972,30 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     propagate_is_gc_object_through_phis(wrapper_fn);
     out.add_function(std::move(wrapper_fn));
 
-    // Restaurar el contexto (aunque ya estamos al final de la funcion).
-    async_fut_id_ = saved_async_fut;
 }
 
+
+/**
+ * @brief Termina el cuerpo de un proceso: parar, o retornar en nativo.
+ *
+ * Un proceso de la maquina virtual acaba parando: su pila no tiene ninguna
+ * direccion de retorno porque nadie lo llamo, lo LANZARON.  En un binario
+ * nativo el mismo cuerpo ES la funcion de entrada de un hilo del sistema, que
+ * se recoge cuando esa funcion retorna, asi que ahi si se retorna.
+ *
+ * La regla vive aqui porque el cuerpo tiene DOS finales posibles -- llegar al
+ * ultimo statement, o escribir un `return` -- y antes solo el primero la
+ * conocia.
+ *
+ * @param line Linea del fuente a la que atribuir la instruccion.
+ */
+void Lowering::emit_process_body_end(uint32_t line) {
+    ir::IrInstr h{};
+    h.op = native_poo_ ? ir::IrOp::RET : ir::IrOp::HLT;
+    h.type = ir::IrType::VOID;
+    h.dst = ir::IR_NO_VALUE;
+    h.source_line = line;
+    emit(current_block_, std::move(h));
+    block_terminated_ = true;
+}
 } // namespace vx

@@ -1423,6 +1423,20 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         block_terminated_ = true;
         return;
     }
+    /* Y el tercer cuerpo que tampoco es una funcion: el de un `spawn { }` de
+     * aqui.  No hay futuro que resolver ni nodo al que contestar -- un spawn
+     * local devuelve el identificador del proceso, no un valor --, asi que un
+     * `return` solo dice "acaba".  Termina como si se hubiera llegado al final
+     * del bloque, que es lo unico correcto: en la pila de un proceso no hay
+     * ninguna direccion de retorno a la que ir. */
+    if (is_spawn_body_) {
+        /* Devolver un VALOR desde aqui no llega: el comprobador de tipos ya lo
+         * rechaza antes -- para el, el cuerpo es void -- y con mejor mensaje
+         * del que se daria aqui.  Asi que esto solo atiende al `return;` seco. */
+        emit_cleanups_all();
+        emit_process_body_end(s->loc.line);
+        return;
+    }
     // ejecutar cleanups activos (synchronized -> tryleave + monexit).
     // El SSA value v_ret sobrevive: el regalloc garantiza que se mantenga
     // vivo hasta el RET (o se reescriba antes si conviene).

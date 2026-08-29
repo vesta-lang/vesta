@@ -65,17 +65,8 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     ast::BlockStmt *body_block =
         is_element ? fi.element_block : fi.offset_block;
 
-    // Salvar contexto del padre (mismo protocolo que generate_lambda_helper).
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
     ChildFunctionScope parent(*this);
-    const bool saved_sret_active = sret_active_;
-    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
-    const uint64_t saved_sret_buf_size = sret_buf_size_;
-    const bool saved_returns_fn = current_fn_returns_function_;
-    sret_active_ = false;
-    sret_retbuf_ = ir::IR_NO_VALUE;
-    sret_buf_size_ = 0;
-    current_fn_returns_function_ = false;
 
     ir::IrFunction child_fn;
     child_fn.name = fn_name;
@@ -168,11 +159,6 @@ std::string Lowering::generate_overlay_resolver(const StructLayout &lay,
     pending_spawn_helpers_.push_back(std::move(child_fn));
     generated_overlay_resolvers_.insert(fn_name);
 
-    // Restaurar contexto del padre.
-    sret_active_ = saved_sret_active;
-    sret_retbuf_ = saved_sret_retbuf;
-    sret_buf_size_ = saved_sret_buf_size;
-    current_fn_returns_function_ = saved_returns_fn;
     return fn_name;
 }
 
@@ -184,14 +170,6 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     // Salvar contexto (mismo protocolo que generate_overlay_resolver).
     /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
     ChildFunctionScope parent(*this);
-    const bool saved_sret_active = sret_active_;
-    const ir::IrValueId saved_sret_retbuf = sret_retbuf_;
-    const uint64_t saved_sret_buf_size = sret_buf_size_;
-    const bool saved_returns_fn = current_fn_returns_function_;
-    sret_active_ = false;
-    sret_retbuf_ = ir::IR_NO_VALUE;
-    sret_buf_size_ = 0;
-    current_fn_returns_function_ = false;
 
     ir::IrFunction child_fn;
     child_fn.name = fn_name;
@@ -313,10 +291,6 @@ std::string Lowering::generate_overlay_extent(const StructLayout &lay) {
     pop_scope();
     pending_spawn_helpers_.push_back(std::move(child_fn));
 
-    sret_active_ = saved_sret_active;
-    sret_retbuf_ = saved_sret_retbuf;
-    sret_buf_size_ = saved_sret_buf_size;
-    current_fn_returns_function_ = saved_returns_fn;
     return fn_name;
 }
 

@@ -3748,6 +3748,31 @@ class Lowering {
         std::unordered_set<std::string> addr_taken_;   ///< Con direccion tomada.
         std::unordered_set<std::string> host_bearing_; ///< Con puntero del host.
         std::vector<CleanupAction> cleanups_;          ///< Lo que queda por soltar.
+
+        /**
+         * @name Como termina la funcion en la que se estaba
+         *
+         * COMO se sale de una funcion es propio de ESA funcion: si devuelve un
+         * valor grande por un hueco que le presta quien la llama, si es el
+         * cuerpo de una asincrona y cada salida resuelve un futuro, si es un
+         * proceso que en vez de retornar para.  La hija no hereda nada de eso,
+         * y por eso el guarda lo pone a cero al entrar.
+         *
+         * Estaba fuera del guarda y a mano: tres sitios guardaban el hueco del
+         * valor grande, dos guardaban cada uno su bandera, y los demas no
+         * guardaban nada.  Con lo cual una lambda escrita dentro del cuerpo de
+         * un proceso salia PARANDO EL PROCESO en vez de volviendo a quien la
+         * llamo -- son las mismas llaves, pero no es la misma funcion --.
+         * @{
+         */
+        bool sret_active_;               ///< Si devolvia por hueco prestado.
+        ir::IrValueId sret_retbuf_;      ///< Cual era ese hueco.
+        uint64_t sret_buf_size_;         ///< Cuanto medía.
+        bool returns_function_;          ///< Si devolvia una funcion.
+        ir::IrValueId async_fut_id_;     ///< El futuro que resolvia al salir.
+        bool is_rspawn_body_;            ///< Si era un proceso en otro nodo.
+        bool is_spawn_body_;             ///< Si era un proceso de aqui.
+        /** @} */
     };
     /// Contador para etiquetas unicas en cleanups que emiten labels
     /// (smart pointer cleanups con branches internos).  Cada invocacion
@@ -3918,6 +3943,37 @@ class Lowering {
     /// VDP_FUTURE_FULFILL al nodo origen con ese valor.  No usa async_fut_id_
     /// porque el future vive en el nodo CALLER, no en el remoto.
     bool is_rspawn_body_ = false;
+
+    /**
+     * @brief Cierto mientras se baja el cuerpo de un `spawn { ... }` local.
+     *
+     * Un cuerpo de spawn NO es una funcion a la que se llame: es por donde
+     * EMPIEZA un proceso nuevo, y en su pila no hay ninguna direccion de
+     * retorno.  Por eso no termina con un RET sino parando el proceso, que es
+     * lo que hace @ref emit_process_body_end.
+     *
+     * Hacia falta decirlo porque @c lower_return sabia de los otros dos cuerpos
+     * que tampoco son funciones -- el de una funcion asincrona y el de un
+     * `rspawn` remoto -- y de este no, asi que un `return;` escrito a mano
+     * emitia el RET normal y el proceso saltaba a una direccion que nadie habia
+     * puesto.  El camino implicito -- llegar al final del bloque sin escribir
+     * nada -- si lo hacia bien, asi que el mismo programa terminaba de una
+     * forma o de otra segun si el `return` estaba escrito.
+     */
+    bool is_spawn_body_ = false;
+
+    /**
+     * @brief Termina el cuerpo de un proceso: parar, o retornar en nativo.
+     *
+     * Un proceso de la maquina virtual acaba parando (@c HLT); en un binario
+     * nativo el mismo cuerpo ES la funcion de entrada de un hilo del sistema,
+     * que se recoge cuando esa funcion retorna.  La regla es una y vive aqui
+     * porque la usan los dos finales posibles del cuerpo: llegar al ultimo
+     * statement y escribir un `return`.
+     *
+     * @param line Linea del fuente a la que atribuir la instruccion.
+     */
+    void emit_process_body_end(uint32_t line);
 
     /// Emite todos los cleanups activos del @c cleanup_stack_ en orden
     /// inverso (LIFO).  No modifica el stack.  Usado por @c lower_return
