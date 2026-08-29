@@ -71,15 +71,32 @@ class DocumentStore;
 struct InspectTarget {
     std::string os;   ///< "windows"|"linux"|"macos"; vacio = host.
     std::string arch; ///< "x86-64"|"x86-32"; vacio = "x86-64".
+    /// Nivel de optimizacion con el que compilar la vista, 0..3.  -1 = el que
+    /// use el analisis normal.  Mirar el mismo codigo a dos niveles es como se
+    /// ve QUE hizo el optimizador, que es media pregunta de por que algo va
+    /// como va.
+    int opt = -1;
+    /// Juego de instrucciones de coma flotante del codigo generado:
+    /// "sse2"|"avx"|"avx512".  Vacio = el de por defecto.
+    std::string float_isa;
+    /// Microarquitectura concreta ("znver3", "skylake", ...).  Vacia = lo que
+    /// se deduzca del juego de instrucciones.  Cambia lo que el generador se
+    /// permite emitir, asi que forma parte de la identidad de la vista.
+    std::string cpu;
     /// @return true si hay un override real (no es el host por defecto).
     bool active() const {
         return !os.empty() ||
                (!arch.empty() && arch != "x86-64" && arch != "x86_64");
     }
-    /// @return clave estable para el cache de vistas ("" si host).
+    /// @return true si algo de lo pedido cambia lo que se compila o se emite.
+    bool any_override() const {
+        return active() || opt >= 0 || !float_isa.empty() || !cpu.empty();
+    }
+    /// @return clave estable para el cache de vistas ("" si nada se cambio).
     std::string cache_key() const {
-        if (!active()) return std::string();
-        return "@" + os + "-" + arch;
+        if (!any_override()) return std::string();
+        return "@" + os + "-" + arch + "-o" + std::to_string(opt) + "-" +
+               float_isa + "-" + cpu;
     }
 };
 

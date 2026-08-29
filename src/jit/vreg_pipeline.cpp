@@ -901,14 +901,18 @@ std::vector<uint8_t> vreg_compile_native(
     bool pic, bool target_sysv, bool mode32, FloatIsa fisa, bool emit_line_map,
     std::vector<LineMapEntry> *line_map_out,
     std::vector<std::pair<uint32_t, std::string>> *asm_labels_out,
-    std::vector<Stackmap> *stackmaps_out) {
+    std::vector<Stackmap> *stackmaps_out, const std::string &cpu) {
     /* Ruta AOT x86: construye el X86Target y delega en el orquestador comun.
-     * Reserva VEC_ACC demand-driven (misma politica que el JIT). */
+     * Reserva VEC_ACC demand-driven (misma politica que el JIT).
+     *
+     * La microarquitectura, si se da, manda sobre el nivel de coma flotante:
+     * es la fuente mas precisa de las tres y no depende de la maquina que
+     * compila.  Vacia = el comportamiento de siempre. */
     const X86Target target(
         resolve_call, ent, resolve_native, resolve_symbol, pic, target_sysv,
         mode32, fisa, emit_line_map, fn_needs_vec_reserve(fn),
         fn_needs_fp_scratch(fn),
-        fn_can_use_wide512(fn, resolve_backend_caps(/*cpu=*/"",
+        fn_can_use_wide512(fn, resolve_backend_caps(cpu,
                                                     /*jit_host=*/false, fisa)));
     return vreg_compile_native_target(fn, target, relocs_out, line_map_out,
                                       asm_labels_out, stackmaps_out);

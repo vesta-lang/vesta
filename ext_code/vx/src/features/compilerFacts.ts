@@ -113,7 +113,14 @@ export class CompilerFactsProvider implements vscode.InlayHintsProvider {
             if (indice >= document.lineCount) {
                 continue;
             }
-            const texto = componerEtiqueta(hechos);
+            // Lo mas corto primero: es lo que el catalogo traduce, o sea lo que
+            // se lee de un vistazo.  Se ordena UNA vez y con ese mismo orden se
+            // arma tanto lo que se ve como lo que se ensena al posar el cursor,
+            // para que uno sea la continuacion del otro y no dos listas.
+            const ordenados = [...hechos].sort(
+                (a, b) => a.label.length - b.label.length,
+            );
+            const texto = componerEtiqueta(ordenados);
             if (!texto) {
                 continue;
             }
@@ -122,7 +129,7 @@ export class CompilerFactsProvider implements vscode.InlayHintsProvider {
             const finalDeLinea = document.lineAt(indice).range.end;
             const anotacion = new vscode.InlayHint(finalDeLinea, texto);
             anotacion.paddingLeft = true;
-            anotacion.tooltip = componerDetalle(hechos);
+            anotacion.tooltip = componerDetalle(ordenados);
             anotaciones.push(anotacion);
         }
         return anotaciones;
@@ -140,13 +147,9 @@ export class CompilerFactsProvider implements vscode.InlayHintsProvider {
  * @return Texto a mostrar, o vacio si no hay nada que decir.
  */
 function componerEtiqueta(hechos: AsaFact[]): string {
-    // Lo mas corto primero: es lo que el catalogo traduce, o sea lo que se lee
-    // de un vistazo.  Lo largo casi siempre es un volcado de estructura, que se
-    // consulta cuando hace falta y no estorbando la linea.
-    const ordenados = [...hechos].sort((a, b) => a.label.length - b.label.length);
     const vistos = new Set<string>();
     const partes: string[] = [];
-    for (const hecho of ordenados) {
+    for (const hecho of hechos) {
         // Dos analisis pueden llegar a lo mismo; decirlo dos veces no aporta.
         if (vistos.has(hecho.label)) {
             continue;
@@ -183,13 +186,22 @@ function marcaDeAmbito(hecho: AsaFact): string {
 
 /**
  * @brief Detalle que se ensena al posar el cursor sobre la anotacion.
- * @param hechos Hechos de esa linea.
- * @return Texto con quien lo afirma, con que certeza y de donde sale.
+ *
+ * Lleva SIEMPRE el texto completo de cada hecho, sin recortar, y TODOS los de
+ * la linea aunque al final solo se muestren unos pocos: lo que se ve es un
+ * resumen, y un resumen sin forma de abrirlo esconde en vez de resumir.
+ *
+ * @param hechos Hechos de esa linea, en el mismo orden en que se muestran.
+ * @return Texto con lo que dice cada uno, quien lo afirma, con que certeza y de
+ *         donde sale.
  */
 function componerDetalle(hechos: AsaFact[]): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    for (const hecho of hechos) {
-        md.appendMarkdown(`**${hecho.label}**\n\n`);
+    hechos.forEach((hecho, indice) => {
+        // Marcar los que no caben en la linea, para que se entienda que el
+        // emergente no repite lo visible sino que lo completa.
+        const oculto = indice >= MAX_POR_LINEA;
+        md.appendMarkdown(`**${hecho.label}**${oculto ? '  _(no cabe en la linea)_' : ''}\n\n`);
         md.appendMarkdown(`- analisis: \`${hecho.domain}\`\n`);
         md.appendMarkdown(`- afirma: \`${hecho.code}\`\n`);
         md.appendMarkdown(`- certeza: ${hecho.certainty}\n`);
@@ -199,6 +211,6 @@ function componerDetalle(hechos: AsaFact[]): vscode.MarkdownString {
             md.appendMarkdown(`- solo en: ${ambito.join(' / ')}\n`);
         }
         md.appendMarkdown('\n');
-    }
+    });
     return md;
 }

@@ -55,6 +55,11 @@ struct NativeCompileOpts {
     /// de su direccion, sin que el binario lleve nada que lo explique por si
     /// mismo -- meterle codigo cambiaria el programa que se depura.
     bool want_line_map = false;
+    /// Microarquitectura concreta ("znver3", "skylake", ...).  Vacia = lo que
+    /// se deduzca de @c fisa.  Misma fuente que `--cpu`: decide contra la base
+    /// de datos de instrucciones que se permite emitir el generador, sin
+    /// depender de la maquina que compila.
+    std::string cpu;
 };
 
 /// Resultado del codegen de UNA funcion.  @c bytes vacio => no soportada.

@@ -195,7 +195,13 @@ std::vector<uint8_t> vreg_compile_native(
      * Vacios salvo que el codigo tenga valores GC (gc<T>, Inc 3).  El driver
      * los serializa en la seccion .vxgc_smap para el scan preciso en runtime.
      */
-    std::vector<Stackmap> *stackmaps_out = nullptr);
+    std::vector<Stackmap> *stackmaps_out = nullptr,
+    /* Microarquitectura concreta ("znver3", "skylake", ...).  Vacia = lo que
+     * se deduzca de @p fisa.  Es la MISMA fuente que `--cpu`: decide, contra la
+     * base de datos de instrucciones, que se permite emitir el generador -- y
+     * lo hace sin depender de la maquina que compila, que es lo que la hace
+     * util al compilar para otra. */
+    const std::string &cpu = std::string());
 
 class CodegenTarget; // include/jit/codegen_target.h
 

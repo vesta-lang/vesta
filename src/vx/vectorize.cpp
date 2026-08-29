@@ -134,6 +134,38 @@ struct VecLoop {
     ast::Expr *for_init = nullptr;       // vd->init (for) o nullptr (while)
 };
 
+/**
+ * @brief Reconoce la condicion de un bucle contado: `i < N`.
+ *
+ * Es la forma que TODOS los idiomas de este fichero exigen antes de mirar nada
+ * mas -- copiar un bloque, vectorizar una operacion, reducir --, y estaba
+ * escrita tres veces: aqui dentro como lambda y dos mas a mano en los dos
+ * reconocedores de copia.
+ *
+ * `N` puede ser un nombre o un numero escrito, pero no una expresion: una
+ * expresion habria que evaluarla, y en un bucle se evaluaria en CADA vuelta, de
+ * modo que sacarla fuera cambiaria el programa si tiene efectos.
+ *
+ * @param cond     La condicion.
+ * @param idx_name Donde dejar el nombre del indice.
+ * @param limit    Donde dejar el limite, sin evaluar.
+ * @return @c false si la forma no encaja; entonces el bucle se baja normal.
+ */
+static bool mc_parse_counted_cond(ast::Expr *cond, std::string &idx_name,
+                                  ast::Expr *&limit) {
+    using namespace ast;
+    if (!cond || cond->kind != NodeKind::BinaryExpr) return false;
+    auto *c = static_cast<BinaryExpr *>(cond);
+    if (c->op != BinOp::Lt) return false;
+    if (!c->lhs || c->lhs->kind != NodeKind::IdentExpr) return false;
+    if (!c->rhs) return false;
+    const NodeKind rk = c->rhs->kind;
+    if (rk != NodeKind::IdentExpr && rk != NodeKind::IntLitExpr) return false;
+    idx_name = static_cast<IdentExpr *>(c->lhs.get())->name;
+    limit = c->rhs.get();
+    return true;
+}
+
 /// Extrae un @c VecLoop de un @c for(T i=init; i<N; i++) BODY o de un
 /// @c while(i<N){ BODY; i=i+1; }.  El cuerpo del @c for es 1 sentencia; el del
 /// @c while son las sentencias previas a un incremento final de @c i.  Devuelve
@@ -142,19 +174,8 @@ struct VecLoop {
 bool mc_extract_vec_loop(ast::Stmt *s, VecLoop &out) {
     using namespace ast;
     if (!s) return false;
-    // cond comun: i < N con i identificador y N ident/intlit.
     auto parse_cond = [&](ast::Expr *cond) -> bool {
-        if (!cond || cond->kind != NodeKind::BinaryExpr) return false;
-        auto *c = static_cast<BinaryExpr *>(cond);
-        if (c->op != BinOp::Lt) return false;
-        if (!c->lhs || c->lhs->kind != NodeKind::IdentExpr) return false;
-        if (!c->rhs) return false;
-        const NodeKind rk = c->rhs->kind;
-        if (rk != NodeKind::IdentExpr && rk != NodeKind::IntLitExpr)
-            return false;
-        out.idx_name = static_cast<IdentExpr *>(c->lhs.get())->name;
-        out.limit = c->rhs.get();
-        return true;
+        return mc_parse_counted_cond(cond, out.idx_name, out.limit);
     };
     // extrae el ExprStmt(AssignExpr) de una sentencia; null si no lo es.
     auto as_assign = [](ast::Stmt *st) -> ast::Expr * {
@@ -368,18 +389,9 @@ bool Lowering::try_lower_memcpy_idiom(ast::WhileStmt *s) {
     if (!s->cond || !s->body) return false;
 
     // cond = (idx < limit): idx ident, limit libre de efectos (1 evaluacion).
-    if (s->cond->kind != NodeKind::BinaryExpr) return false;
-    auto *cond = static_cast<BinaryExpr *>(s->cond.get());
-    if (cond->op != BinOp::Lt) return false;
-    if (!cond->lhs || cond->lhs->kind != NodeKind::IdentExpr) return false;
-    if (!cond->rhs) return false;
-    {
-        const NodeKind lk = cond->rhs->kind;
-        if (lk != NodeKind::IdentExpr && lk != NodeKind::IntLitExpr)
-            return false;
-    }
-    const std::string idx_name =
-        static_cast<IdentExpr *>(cond->lhs.get())->name;
+    std::string idx_name;
+    ast::Expr *limit = nullptr;
+    if (!mc_parse_counted_cond(s->cond.get(), idx_name, limit)) return false;
     if (lookup(idx_name) == ir::IR_NO_VALUE) return false;
 
     // body = bloque con EXACTAMENTE 2 statements (la copia + el incremento).
@@ -406,7 +418,7 @@ bool Lowering::try_lower_memcpy_idiom(ast::WhileStmt *s) {
                      idx_name.c_str(), esz);
     // idx es una var EXTERNA: su valor actual viene del scope; tras el loop hay
     // que escribir el idx post-loop (idx_name_for_post = idx_name).
-    return mc_emit_copy(lookup(idx_name), cond->rhs.get(), dst_base, src_base,
+    return mc_emit_copy(lookup(idx_name), limit, dst_base, src_base,
                         esz, s->loc.line, /*idx_name_for_post=*/idx_name);
 }
 
@@ -419,18 +431,9 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
     if (!s->cond || !s->body || !s->init || !s->step) return false;
 
     // cond = (idx < limit).
-    if (s->cond->kind != NodeKind::BinaryExpr) return false;
-    auto *cond = static_cast<BinaryExpr *>(s->cond.get());
-    if (cond->op != BinOp::Lt) return false;
-    if (!cond->lhs || cond->lhs->kind != NodeKind::IdentExpr) return false;
-    if (!cond->rhs) return false;
-    {
-        const NodeKind lk = cond->rhs->kind;
-        if (lk != NodeKind::IdentExpr && lk != NodeKind::IntLitExpr)
-            return false;
-    }
-    const std::string idx_name =
-        static_cast<IdentExpr *>(cond->lhs.get())->name;
+    std::string idx_name;
+    ast::Expr *limit = nullptr;
+    if (!mc_parse_counted_cond(s->cond.get(), idx_name, limit)) return false;
 
     // init DECLARA la var del loop con inicializador -> loop-local (sin
     // writeback de scope tras el loop).  Otras formas de init bailan (el
@@ -472,7 +475,7 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
     // Bajamos directamente el init.  Sin push_scope ni post-update.
     const ir::IrValueId v_init = lower_expr(vd->init.get());
     if (v_init == ir::IR_NO_VALUE) return false;
-    return mc_emit_copy(v_init, cond->rhs.get(), dst_base, src_base, esz,
+    return mc_emit_copy(v_init, limit, dst_base, src_base, esz,
                         s->loc.line, /*idx_name_for_post=*/std::string());
 }
 

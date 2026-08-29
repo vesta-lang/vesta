@@ -2174,7 +2174,11 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     nopts.pic = true;
     nopts.target_sysv = sysv;
     nopts.mode32 = mode32;
-    nopts.fisa = jit::FloatIsa::SSE2;
+    // Lo que se pidio ver: el juego de instrucciones de coma flotante y la
+    // microarquitectura cambian lo que el generador se permite emitir, asi que
+    // son parte de la pregunta, no del entorno.
+    nopts.fisa = float_isa_from_str(target.float_isa);
+    nopts.cpu = target.cpu;
     nopts.want_line_map = true;
     try {
         aot::NativeCompileResult ncr = backend->compile_function(*fn, nopts);
