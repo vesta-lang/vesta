@@ -324,6 +324,10 @@ add_library(vx_lib STATIC
     # el vocabulario de Vesta y el modelo generico solo la conoce quien declara
     # los tipos; vxdbg no sabe de ningun lenguaje.
     vxdbg_emit.cpp
+    # Que se LEE de un texto .vel -- mnemonico, etiqueta, llamada, destino del
+    # salto, instruccion fusionada.  Comun a los dos generadores, porque la
+    # respuesta no depende del formato en el que luego se dibuje.
+    diagram/vel_text_model.cpp
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp

@@ -31,6 +31,7 @@
 #include "vx/diagram/graphviz_diagrams.h"
 
 #include "vx/asm/asm_diagram.h" // expansion del CFG de inline asm con coste
+#include "vx/diagram/vel_text_model.h" // que se lee del .vel, comun a los dos
 
 #include "analyze/bigo.h"
 #include "vx/ast.h"
@@ -1590,70 +1591,9 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
 //  GENERADOR 3: .vel ensamblador -> Graphviz
 // =====================================================================
 
-bool is_label_line(const std::string &line, std::string &name_out) {
-    size_t i = 0;
-    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
-        ++i;
-    size_t start = i;
-    while (
-        i < line.size() &&
-        (std::isalnum(static_cast<unsigned char>(line[i])) || line[i] == '_')) {
-        ++i;
-    }
-    if (i == start) return false;
-    size_t after_ident = i;
-    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
-        ++i;
-    if (i >= line.size() || line[i] != ':') return false;
-    size_t j = i + 1;
-    while (j < line.size()) {
-        if (std::isspace(static_cast<unsigned char>(line[j]))) {
-            ++j;
-            continue;
-        }
-        if (line[j] == '/' && j + 1 < line.size() && line[j + 1] == '/') break;
-        return false;
-    }
-    name_out = line.substr(start, after_ident - start);
-    return true;
-}
-
-std::string get_mnemonic(const std::string &line) {
-    size_t i = 0;
-    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
-        ++i;
-    size_t start = i;
-    while (i < line.size() &&
-           !std::isspace(static_cast<unsigned char>(line[i]))) {
-        ++i;
-    }
-    return line.substr(start, i - start);
-}
-
-std::string extract_abs_target(const std::string &line) {
-    const std::string marker = "@Absolute(\"code.";
-    auto pos = line.find(marker);
-    if (pos == std::string::npos) return std::string();
-    pos += marker.size();
-    auto end = line.find('"', pos);
-    if (end == std::string::npos) return std::string();
-    return line.substr(pos, end - pos);
-}
-
-bool is_call_mnemonic(const std::string &mn) {
-    return mn == "callvm" || mn == "callvmr" || mn == "calln" ||
-           mn == "callni" || mn == "callvirt" || mn == "callm" ||
-           mn == "callsuper" || mn == "callclosure" || mn == "callrawclosure" ||
-           mn == "spawn" || mn == "spawnon" || mn == "spawnargs" ||
-           mn == "rspawn" || mn == "loadmod";
-}
-
-bool is_opt_instr(const std::string &mn) {
-    return mn == "cmpjmp" || mn == "cmpjmpu" || mn == "decjnz" ||
-           mn == "gcallocp" || mn == "spawnargs" || mn == "fulfillhlt" ||
-           (mn.size() >= 7 && mn.substr(0, 7) == "cmpjmp.") ||
-           (mn.size() >= 8 && mn.substr(0, 8) == "cmpjmpu.");
-}
+// Lo que se lee del texto .vel -- mnemonico, etiqueta, llamada, destino del
+// salto, instruccion fusionada -- vive en vx/diagram/vel_text_model.h, porque
+// la respuesta es la misma se dibuje en DOT o en Mermaid.
 
 } // namespace
 
@@ -1961,7 +1901,7 @@ std::string graphviz_from_vel_text(const std::string &vel_text) {
         for (const auto &ins : b.instrs) {
             record << " | " << escape_record(ins);
             std::string mn = get_mnemonic(ins);
-            if (is_opt_instr(mn)) has_opt = true;
+            if (is_fused_instr(mn)) has_opt = true;
         }
         record << " }";
 

@@ -37,6 +37,7 @@
 #include "analyze/bigo.h"
 #include "vx/asm/asm_diagram.h" // expansion del CFG de inline asm con coste
 #include "vx/ast.h"
+#include "vx/diagram/vel_text_model.h" // que se lee del .vel, comun a los dos
 #include "ir/ssa_ir.h"
 #include "vx/types.h"
 
@@ -931,69 +932,9 @@ void render_ir_function(std::ostringstream &os, const ir::IrFunction &fn,
 //  GENERADOR 3: .vel ensamblador -> Mermaid
 // =====================================================================
 
-/**
- * @brief Indica si un line es un label (`name:`).
- */
-bool is_label_line(const std::string &line, std::string &name_out) {
-    // Trim leading whitespace.
-    size_t i = 0;
-    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
-        ++i;
-    // Acepta letras, digitos, _ y termina con ":"
-    size_t start = i;
-    while (
-        i < line.size() &&
-        (std::isalnum(static_cast<unsigned char>(line[i])) || line[i] == '_')) {
-        ++i;
-    }
-    if (i == start) return false;
-    // Skip whitespace antes de ':'
-    size_t after_ident = i;
-    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
-        ++i;
-    if (i >= line.size() || line[i] != ':') return false;
-    // Verificar que tras ':' solo haya espacios o comentario.
-    size_t j = i + 1;
-    while (j < line.size()) {
-        if (std::isspace(static_cast<unsigned char>(line[j]))) {
-            ++j;
-            continue;
-        }
-        if (line[j] == '/' && j + 1 < line.size() && line[j + 1] == '/') break;
-        return false; // hay codigo tras ':' -> no es solo un label
-    }
-    name_out = line.substr(start, after_ident - start);
-    return true;
-}
-
-/**
- * @brief Extrae la primera palabra (mnemonic) de una linea de codigo.
- */
-std::string get_mnemonic(const std::string &line) {
-    size_t i = 0;
-    while (i < line.size() && std::isspace(static_cast<unsigned char>(line[i])))
-        ++i;
-    size_t start = i;
-    while (i < line.size() &&
-           !std::isspace(static_cast<unsigned char>(line[i]))) {
-        ++i;
-    }
-    return line.substr(start, i - start);
-}
-
-/**
- * @brief Si la linea contiene `@Absolute("code.<X>")`, devuelve <X>.
- *        Vacio si no se encuentra.
- */
-std::string extract_abs_target(const std::string &line) {
-    const std::string marker = "@Absolute(\"code.";
-    auto pos = line.find(marker);
-    if (pos == std::string::npos) return std::string();
-    pos += marker.size();
-    auto end = line.find('"', pos);
-    if (end == std::string::npos) return std::string();
-    return line.substr(pos, end - pos);
-}
+// Lo que se lee del texto .vel -- mnemonico, etiqueta, llamada, destino del
+// salto, instruccion fusionada -- vive en vx/diagram/vel_text_model.h, porque
+// la respuesta es la misma se dibuje en Mermaid o en DOT.
 
 // is_terminator helper se mantenia para futuras extensiones de tagging
 // pero la deteccion de "exit" en render_vel ahora usa solo last mnemonic
@@ -1614,18 +1555,6 @@ void render_function_body_subgraph(std::ostringstream &os,
     os << "    end\n";
 }
 
-/**
- * @brief Determina si una mnemonic es una llamada (no terminador, edge
- * punteado).
- */
-bool is_call_mnemonic(const std::string &mn) {
-    return mn == "callvm" || mn == "callvmr" || mn == "calln" ||
-           mn == "callni" || mn == "callvirt" || mn == "callm" ||
-           mn == "callsuper" || mn == "callclosure" || mn == "callrawclosure" ||
-           mn == "spawn" || mn == "spawnon" || mn == "spawnargs" ||
-           mn == "rspawn" || mn == "loadmod";
-}
-
 } // namespace
 
 // =========================================================================
@@ -2002,13 +1931,6 @@ std::string mermaid_from_vel_text(const std::string &vel_text) {
     for (const auto &b : blocks)
         known_labels.insert(b.name);
 
-    // Detectar opcodes optimizados para destacar visualmente.
-    auto is_opt_instr = [](const std::string &mn) {
-        return mn == "cmpjmp" || mn == "cmpjmpu" || mn == "decjnz" ||
-               mn == "gcallocp" || mn == "spawnargs" || mn == "fulfillhlt" ||
-               (mn.size() >= 7 && mn.substr(0, 7) == "cmpjmp.") ||
-               (mn.size() >= 8 && mn.substr(0, 8) == "cmpjmpu.");
-    };
 
     // Emit nodos sin truncamiento de instrs ni de longitud por linea.
     for (size_t bi = 0; bi < blocks.size(); ++bi) {
@@ -2019,7 +1941,7 @@ std::string mermaid_from_vel_text(const std::string &vel_text) {
         for (const auto &ins : b.instrs) {
             lbl << "<br/>" << escape_label(ins);
             std::string mn = get_mnemonic(ins);
-            if (is_opt_instr(mn)) has_opt = true;
+            if (is_fused_instr(mn)) has_opt = true;
         }
         std::string css = has_opt ? "velOptInstr" : "velBlock";
         // Detectar terminador para clase de exit
