@@ -1,0 +1,69 @@
+namespace ejemplos.estaticos_retorno_buffer;
+
+// Un metodo estatico que devuelve algo que viaja por BUFFER.
+//
+// Hay tipos cuyo valor no cabe en un registro -- un `Optional`, un `Result`,
+// una cadena por valor en el camino nativo, un struct --, y para esos el metodo
+// no devuelve nada: recibe la direccion de un buffer del llamante y escribe
+// ahi.  Eso obliga a que el que llama y el llamado esten de acuerdo en TRES
+// cosas, y cada una fallaba por su cuenta:
+//
+//   1. QUE hace falta buffer.  La condicion estaba escrita en varios sitios y
+//      no en todos igual: al que resuelve `Clase.metodo()` le faltaba el caso
+//      de la cadena, asi que el metodo esperaba un buffer que nadie le pasaba
+//      y el binario nativo caia.
+//   2. CUANTO mide.  Estaba clavado en dieciseis, y un `Optional` de un struct
+//      necesita ocho de marca mas lo que ocupe el struct.
+//   3. DONDE vive.  El metodo lo marca como puntero del anfitrion y escribe
+//      con la instruccion de memoria del anfitrion; reservarlo en memoria de
+//      la maquina virtual hacia que escribiera una direccion de una en la otra.
+//
+// Se comprueba con las dos formas de declararlo -- clase y struct -- porque se
+// resuelven por caminos distintos, y con payloads de tamanos distintos porque
+// el fallo del tamano solo aparece cuando el payload no cabe en el numero fijo.
+
+struct Grande { i64 a; i64 b; i64 c; i64 d; }   // 32 bytes
+
+class FabricaC {
+    public static string           saluda()  { return "hola"; }
+    public static Optional<i64>    escalar() { return Some(7); }
+    public static Optional<Grande> grande()  {
+        Grande g; g.a = 1; g.b = 2; g.c = 3; g.d = 4;
+        return Some(g);
+    }
+}
+
+struct FabricaS {
+    public static string           saluda()  { return "hola"; }
+    public static Optional<i64>    escalar() { return Some(7); }
+    public static Optional<Grande> grande()  {
+        Grande g; g.a = 1; g.b = 2; g.c = 3; g.d = 4;
+        return Some(g);
+    }
+}
+
+i32 main() {
+    // Un centinela en la pila del llamante: si el metodo escribiera fuera de
+    // su buffer, lo primero que se lleva por delante es esto.
+    const i64 centinela = 777;
+
+    // Cadena por valor: el caso que caia en el binario nativo.
+    const string c1 = FabricaC.saluda();
+    const string s1 = FabricaS.saluda();
+
+    // Payload que cabe en el tamano fijo de antes.
+    const i64 c2 = unwrap(FabricaC.escalar());
+    const i64 s2 = unwrap(FabricaS.escalar());
+
+    // Payload que NO cabe: aqui se veia el desbordamiento.
+    const Grande c3 = unwrap(FabricaC.grande());
+    const Grande s3 = unwrap(FabricaS.grande());
+
+    const i64 sumas = c3.a + c3.b + c3.c + c3.d + s3.a + s3.b + s3.c + s3.d;
+
+    println("cadena=${c1},${s1} escalar=${c2},${s2} suma=${sumas} centinela=${centinela}");
+
+    // 7 + 7 + 20 + 777 = 811
+    const i64 total = c2 + s2 + sumas + centinela;
+    return (i32) (total - 769); // 42
+}

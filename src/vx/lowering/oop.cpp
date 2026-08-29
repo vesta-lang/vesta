@@ -2637,6 +2637,8 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
         const bool sret =
             (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
              static_mtd->return_type.kind == PrimitiveKind::RESULT ||
+             (native_poo_ &&
+              static_mtd->return_type.kind == PrimitiveKind::STRING) ||
              ret_slay != nullptr);
         ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
         if (sret) {
