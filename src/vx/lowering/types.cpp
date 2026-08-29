@@ -384,4 +384,64 @@ ir::IrValueId Lowering::cast_if_needed(ir::IrValueId v, ir::IrType from,
 }
 
 
+
+/**
+ * @brief Resuelve como se ve un parametro desde el IR.
+ *
+ * El tipo sale del nodo declarado; lo demas son las excepciones, y cada una
+ * esta porque sin ella el codigo generado lee de donde no es:
+ *
+ *   - Una cadena en un binario nativo es un valor de veinticuatro bytes que
+ *     viaja por su direccion, no un manejador del recolector como en la
+ *     maquina virtual.
+ *   - Un puntero crudo `T*` y un array `T[]` apuntan a memoria del anfitrion;
+ *     `VirtualPtr<T>` es la unica forma de nombrar una direccion de la maquina
+ *     virtual, y por eso la distincion es @c is_virtual y no el tipo.
+ *   - Todo agregado -- struct, enum, vista sobre bytes, Optional, Result --
+ *     se pasa por su direccion y vive en memoria del anfitrion en los TRES
+ *     modos.  Aqui hubo un fallo que se arreglo tres veces por separado:
+ *     limitarlo al modo nativo hacia que en interprete el llamado leyera el
+ *     agregado con la instruccion de la maquina virtual y le llegaran ceros,
+ *     con el argumento de al lado funcionando.
+ *   - Un variadico empaquetado no llega como @c T sino como la direccion del
+ *     array que monto quien llama.
+ *
+ * @param p El parametro declarado.
+ * @return Su tipo y su naturaleza.
+ */
+Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
+    ParamAbi abi;
+
+    if (p.type && p.type->kind == ast::NodeKind::PrimitiveTypeNode) {
+        const auto *ptn = static_cast<const ast::PrimitiveTypeNode *>(p.type.get());
+        abi.type = ir_type_from_primitive(ptn->prim);
+        if (native_poo_ && ptn->prim == PrimitiveKind::STRING)
+            abi.is_host_ptr = true;
+    } else if (p.type) {
+        /* Un tipo compuesto -- un puntero, un array, un nombre que hay que
+         * resolver -- no se lee del nodo: se le pregunta al comprobador de
+         * tipos, que es quien deshizo los alias y las instanciaciones. */
+        const Type sem = tc_.resolve_type_node(p.type.get());
+        if (sem.kind != PrimitiveKind::COUNT && sem.kind != PrimitiveKind::VOID)
+            abi.type = ir_type_from_primitive(sem.kind);
+
+        if (sem.kind == PrimitiveKind::CLASS) abi.is_class = true;
+
+        if ((sem.kind == PrimitiveKind::PTR || sem.kind == PrimitiveKind::ARRAY) &&
+            !sem.is_virtual)
+            abi.is_host_ptr = true;
+
+        if (sem.kind == PrimitiveKind::STRUCT ||
+            sem.kind == PrimitiveKind::OPTIONAL ||
+            sem.kind == PrimitiveKind::RESULT)
+            abi.is_host_ptr = true;
+    }
+
+    if (p.is_variadic) {
+        abi.type = ir::IrType::PTR;
+        abi.is_host_ptr = true;
+        abi.is_class = false;
+    }
+    return abi;
+}
 } // namespace vx

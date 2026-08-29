@@ -207,6 +207,45 @@ class Lowering {
     static ir::IrType ir_type_from_primitive(PrimitiveKind p) noexcept;
 
     /**
+     * @brief Como se ve un parametro desde el IR.
+     *
+     * Su tipo, y las dos cosas que el tipo no dice: si lo que lleva es una
+     * direccion de memoria del ANFITRION -- que decide si leerlo se emite con
+     * la instruccion de memoria del anfitrion o con la de la maquina virtual, y
+     * equivocarse ahi da ceros o basura -- y si ademas es un objeto del
+     * recolector, que el asignador de registros tiene que seguir cuando una
+     * llamada por medio pueda mover el monton.
+     */
+    struct ParamAbi {
+        ir::IrType type = ir::IrType::I64; ///< Su tipo en el IR.
+        bool is_class = false;             ///< Objeto del recolector.
+        bool is_host_ptr = false;          ///< Lleva una direccion del host.
+    };
+
+    /**
+     * @brief Resuelve como se ve @p p desde el IR.
+     *
+     * Esta regla estaba escrita TRES veces -- para una funcion suelta, para un
+     * metodo de clase y para uno de struct -- y las tres no decian lo mismo: la
+     * de las funciones sueltas conocia dos casos que las otras dos no.  Que la
+     * misma declaracion signifique una cosa u otra segun DONDE se escriba la
+     * funcion no es una diferencia defendible: es la convencion de llamada, y
+     * quien llama y quien es llamado tienen que estar de acuerdo.
+     *
+     * La prueba de que dolia esta en los comentarios que quedaron: uno de los
+     * tres cuenta un fallo -- un agregado que llegaba a ceros porque se leia
+     * con la instruccion equivocada -- que hubo que arreglar en cada copia por
+     * separado.
+     *
+     * NO decide el control del bucle que recorre los parametros: que un
+     * variadico crudo se salte entero es cosa de quien recorre.
+     *
+     * @param p El parametro declarado.
+     * @return Su tipo y su naturaleza.
+     */
+    ParamAbi param_abi(const ast::ParamDecl &p) const;
+
+    /**
      * @brief Genera una instruccion CONST en el bloque actual.
      */
     ir::IrValueId emit_const(ir::IrType t, uint64_t imm, uint32_t source_line);

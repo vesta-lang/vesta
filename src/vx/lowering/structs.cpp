@@ -844,48 +844,15 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             fn.params.push_back(v_method_retbuf);
         }
 
-        // Resto de parametros declarados (misma resolucion de
-        // host_ptr/gc que en lower_function).
+        // Resto de parametros declarados.
         for (auto &p : m->params) {
-            ir::IrType pt = ir::IrType::I64;
-            bool param_is_class = false;
-            bool param_is_host_ptr = false;
-            if (p->type && p->type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                auto *ptn =
-                    static_cast<ast::PrimitiveTypeNode *>(p->type.get());
-                pt = ir_type_from_primitive(ptn->prim);
-            } else if (p->type) {
-                const Type sem = tc_.resolve_type_node(p->type.get());
-                if (sem.kind != PrimitiveKind::COUNT &&
-                    sem.kind != PrimitiveKind::VOID) {
-                    pt = ir_type_from_primitive(sem.kind);
-                }
-                if (sem.kind == PrimitiveKind::CLASS) param_is_class = true;
-                if ((sem.kind == PrimitiveKind::PTR ||
-                     sem.kind == PrimitiveKind::ARRAY) &&
-                    !sem.is_virtual) {
-                    param_is_host_ptr = true;
-                }
-                if (sem.kind == PrimitiveKind::OPTIONAL ||
-                    sem.kind == PrimitiveKind::RESULT) {
-                    param_is_host_ptr = true;
-                }
-                // Agregado por valor: el callee recibe un PTR a su buffer,
-                // y todo agregado vive en memoria HOST en los TRES modos (ver
-                // lower_var_decl) -> `movh`.  El `&& native_poo_` que habia
-                // aqui era el bug: en interp/JIT el callee leia el buffer con
-                // `mov` (VM) y, en cuanto el receptor acababa en host, llegaba
-                // a CEROS -- con el arg de al lado funcionando.
-                if (sem.kind == PrimitiveKind::STRUCT) {
-                    param_is_host_ptr = true;
-                }
-            }
-            const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
+            const ParamAbi abi = param_abi(*p);
+            const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
             fn.values[vid].is_param = true;
-            if (param_is_class) {
+            if (abi.is_class) {
                 fn.values[vid].is_host_ptr = true;
                 fn.values[vid].is_gc_object = true;
-            } else if (param_is_host_ptr) {
+            } else if (abi.is_host_ptr) {
                 fn.values[vid].is_host_ptr = true;
             }
             fn.params.push_back(vid);

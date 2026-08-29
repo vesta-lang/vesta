@@ -754,17 +754,18 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     }
     for (size_t pi = 0; pi < n_params; ++pi) {
         auto &p = fd->params[pi];
-        /* El tipo lo resuelve el type checker: ya aplico los alias y conoce
-         * todos los tipos, incluidos los que no son nombres sueltos. */
-        ir::IrType pt_ir = ir::IrType::I64;
-        if (p->type) {
-            const Type sem = tc_.resolve_type_node(p->type.get());
-            if (sem.kind != PrimitiveKind::COUNT &&
-                sem.kind != PrimitiveKind::VOID)
-                pt_ir = ir_type_from_primitive(sem.kind);
-        }
-        ir::IrValueId pv = fn_->new_value(pt_ir, p->name);
+        /* Un parametro se ve igual desde el IR aqui que en cualquier otra
+         * funcion: la anchura y el signo son parte de la convencion de
+         * llamada, y quien llama y quien es llamado tienen que coincidir. */
+        const ParamAbi abi = param_abi(*p);
+        const ir::IrValueId pv = fn_->new_value(abi.type, p->name);
         fn_->values[pv].is_param = true;
+        if (abi.is_class) {
+            fn_->values[pv].is_host_ptr = true;
+            fn_->values[pv].is_gc_object = true;
+        } else if (abi.is_host_ptr) {
+            fn_->values[pv].is_host_ptr = true;
+        }
         fn_->params.push_back(pv);
         bind(p->name, pv);
     }
@@ -819,19 +820,20 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     param_vals.reserve(n_params);
     for (size_t pi = 0; pi < n_params; ++pi) {
         auto &p = fd->params[pi];
-        /* El tipo lo resuelve el type checker, que ya aplico los alias y
-         * conoce TODOS los tipos.  Aqui habia una lista a mano de doce
-         * nombres: lo que no estaba en ella -- un puntero, un struct, un
+        /* La envoltura publica declara los MISMOS parametros que el ayudante:
+         * es la que el usuario llama, asi que su firma tiene que ser la que el
+         * resto del programa espera.  Aqui habia una lista a mano de doce
+         * nombres, y lo que no estaba en ella -- un puntero, un struct, un
          * `usize`, un typedef -- caia al valor por omision. */
-        ir::IrType pt_ir = ir::IrType::I64;
-        if (p->type) {
-            const Type sem = tc_.resolve_type_node(p->type.get());
-            if (sem.kind != PrimitiveKind::COUNT &&
-                sem.kind != PrimitiveKind::VOID)
-                pt_ir = ir_type_from_primitive(sem.kind);
-        }
-        const ir::IrValueId pv = fn_->new_value(pt_ir, p->name);
+        const ParamAbi abi = param_abi(*p);
+        const ir::IrValueId pv = fn_->new_value(abi.type, p->name);
         fn_->values[pv].is_param = true;
+        if (abi.is_class) {
+            fn_->values[pv].is_host_ptr = true;
+            fn_->values[pv].is_gc_object = true;
+        } else if (abi.is_host_ptr) {
+            fn_->values[pv].is_host_ptr = true;
+        }
         fn_->params.push_back(pv);
         bind(p->name, pv);
         param_vals.push_back(pv);

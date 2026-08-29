@@ -159,39 +159,10 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
 
         // Resto de parametros declarados.
         for (auto &p : m->params) {
-            ir::IrType pt = ir::IrType::I64;
-            bool param_is_class = false;
-            bool param_is_host_ptr = false;
-            if (p->type && p->type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                auto *ptn =
-                    static_cast<ast::PrimitiveTypeNode *>(p->type.get());
-                pt = ir_type_from_primitive(ptn->prim);
-            } else if (p->type) {
-                const Type sem = tc_.resolve_type_node(p->type.get());
-                if (sem.kind != PrimitiveKind::COUNT &&
-                    sem.kind != PrimitiveKind::VOID) {
-                    pt = ir_type_from_primitive(sem.kind);
-                }
-                if (sem.kind == PrimitiveKind::CLASS) param_is_class = true;
-                // PTR/ARRAY consultan is_virtual (mismo criterio que
-                // en lower_function): T* host -> host_ptr=true,
-                // VirtualPtr<T> -> host_ptr=false.
-                if ((sem.kind == PrimitiveKind::PTR ||
-                     sem.kind == PrimitiveKind::ARRAY) &&
-                    !sem.is_virtual) {
-                    param_is_host_ptr = true;
-                }
-                // Agregado por valor: host, como en el resto de rutas.  Este
-                // path (metodos de CLASE) no lo marcaba NI en AOT.
-                if (sem.kind == PrimitiveKind::OPTIONAL ||
-                    sem.kind == PrimitiveKind::RESULT ||
-                    sem.kind == PrimitiveKind::STRUCT) {
-                    param_is_host_ptr = true;
-                }
-            }
-            const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
+            const ParamAbi abi = param_abi(*p);
+            const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
             fn.values[vid].is_param = true;
-            if (param_is_class) {
+            if (abi.is_class) {
                 // Param de tipo CLASS es host_ptr a un objeto GC.
                 // Marcamos @c is_gc_object para que el regalloc, al
                 // salvar este reg alrededor de un CALL que pueda
@@ -199,7 +170,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                 // y restaure con @c gcderef (host_ptr fresco post-GC).
                 fn.values[vid].is_host_ptr = true;
                 fn.values[vid].is_gc_object = true;
-            } else if (param_is_host_ptr) {
+            } else if (abi.is_host_ptr) {
                 fn.values[vid].is_host_ptr = true;
             }
             fn.params.push_back(vid);

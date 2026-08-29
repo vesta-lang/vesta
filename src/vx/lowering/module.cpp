@@ -1068,105 +1068,26 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         push_abi(""); // retbuf SRET: ABI estandar (primer arg-reg)
     }
     for (auto &p : fd->params) {
-        ir::IrType pt = ir::IrType::I64;
-        bool param_is_class = false;
-        bool param_is_host_ptr = false;
-        if (p->type && p->type->kind == ast::NodeKind::PrimitiveTypeNode) {
-            auto *ptn = static_cast<ast::PrimitiveTypeNode *>(p->type.get());
-            pt = ir_type_from_primitive(ptn->prim);
-            // Vesta Embed (native_poo_): un param `string` es value-type
-            // (24 bytes); el caller pasa un PTR HOST al value-string en
-            // su stack.  Marcar host_ptr para que los LOAD del callee
-            // (s.length(), s.cstr(), concat operand) usen `movh` (host).
-            // En Full/JIT `string` es un GcHandle i64 -> NO host_ptr.
-            if (native_poo_ && ptn->prim == PrimitiveKind::STRING) {
-                param_is_host_ptr = true;
-            }
-        } else if (p->type) {
-            // Para tipos compuestos (PointerTypeNode, ArrayTypeNode,
-            // NamedTypeNode resuelto) usamos el helper de tipos del
-            // checker para obtener el Type semantico y mapear su kind.
-            const Type sem = tc_.resolve_type_node(p->type.get());
-            if (sem.kind != PrimitiveKind::COUNT &&
-                sem.kind != PrimitiveKind::VOID) {
-                pt = ir_type_from_primitive(sem.kind);
-            }
-            if (sem.kind == PrimitiveKind::CLASS) param_is_class = true;
-            // Punteros raw (`T*`) y arrays (`T[]`) consultan @c is_virtual
-            // del Type para decidir naturaleza del SSA value:
-            //   T*               (is_virtual=false) -> host_ptr=true
-            //   VirtualPtr<T>    (is_virtual=true)  -> host_ptr=false
-            //   T[N] (decay)     (is_virtual=true)  -> host_ptr=false
-            // Sin esta propagacion, indexar @c bdat[i] en parametros
-            // emite mov (memoria VM) para tipos host -> garbage.
-            if ((sem.kind == PrimitiveKind::PTR ||
-                 sem.kind == PrimitiveKind::ARRAY) &&
-                !sem.is_virtual) {
-                param_is_host_ptr = true;
-            }
-            // Overlay: un valor overlay ES un puntero (host) de 8 bytes a la
-            // memoria ajena.  Pasado como parametro se recibe como PTR host;
-            // sin esto los accesos `v.campo`/`v.arr[i]` dentro del callee
-            // emiten mov/loadz (VM) en vez de movh/loadzh -> memoria erronea.
-            if (sem.kind == PrimitiveKind::STRUCT && !sem.struct_name.empty()) {
-                auto ovit = tc_.struct_layouts().find(sem.struct_name);
-                if (ovit != tc_.struct_layouts().end() &&
-                    ovit->second.is_overlay) {
-                    pt = ir::IrType::PTR;
-                }
-                // Un agregado se pasa por su DIRECCION y vive en memoria HOST
-                // (ver lower_var_decl): struct, enum/ADT (que tambien son
-                // PrimitiveKind::STRUCT) y overlay (puntero host ajeno).
-                param_is_host_ptr = true;
-            }
-            // BugFix sret-cross-mem (2026-06-04): los parametros de
-            // tipo Optional<T>/Result<V,E> son PTRs al buffer SRET
-            // alocado por el caller (que ahora siempre es host_alloca).
-            // Sin marcar is_host_ptr=true, isOk/value/error en el callee
-            // emiten LOAD con `mov` (VM mem) en lugar de `movh` (host)
-            // -> Result llega zeroed al usar dentro del callee.
-            if (sem.kind == PrimitiveKind::OPTIONAL ||
-                sem.kind == PrimitiveKind::RESULT) {
-                param_is_host_ptr = true;
-            }
-            // Bug host-vs-VM (2026-07-15): la ambiguedad historica de `T[]`
-            // como parametro (array dinamico host de `new T[N]` vs stack-decay
-            // de un `T[N]` local, que vivia en la pila VM) ESTA CERRADA: desde
-            // que @c ir_pass_promote_local_allocas promueve con force_all, todo
-            // `T[N]` local es tambien host.  Con ambos origenes en host, un
-            // `T[]` NO virtual es siempre una direccion host y se marca como
-            // tal arriba junto con `T*`.  `VirtualPtr<T>` (is_virtual=true)
-            // sigue siendo la unica forma de nombrar una direccion VM.
-        }
-        // Variadico CRUDO (`...` pelado): PASS-THROUGH.  El compilador NO
-        // empaqueta los args -- ocupan los arg-regs del ABI segun la convencion
-        // de llamada, y el cuerpo asm (para @Naked) los accede directamente. No
-        // se crea binding ni __vacount: no hay array ni vacount().  Es el
-        // equivalente a una `F(a, ...)` en C, que acepta N args crudos.
-        if (p->is_raw_variadic) {
-            continue;
-        }
-        // Variadico (`T... name`): el callee lo recibe como `T*` (puntero host
-        // al array empaquetado por el caller), NO como T.  El count va en un
-        // param i64 OCULTO que se anñade tras el loop (leido con vacount()).
-        if (p->is_variadic) {
-            pt = ir::IrType::PTR;
-            param_is_host_ptr = true;
-            param_is_class = false;
-        }
-        const ir::IrValueId vid = fn.new_value(pt, "%" + p->name);
+        /* Variadico CRUDO (`...` pelado): PASS-THROUGH.  El compilador NO
+         * empaqueta nada -- los argumentos ocupan los registros que diga la
+         * convencion de llamada y el cuerpo en ensamblador los lee de ahi --,
+         * asi que no hay parametro que declarar.  Es la `F(a, ...)` de C. */
+        if (p->is_raw_variadic) continue;
+
+        const ParamAbi abi = param_abi(*p);
+        const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
         fn.values[vid].is_param = true;
-        if (param_is_class) {
+        if (abi.is_class) {
             fn.values[vid].is_host_ptr = true;
             fn.values[vid].is_gc_object = true;
-        } else if (param_is_host_ptr) {
+        } else if (abi.is_host_ptr) {
             fn.values[vid].is_host_ptr = true;
         }
         fn.params.push_back(vid);
         push_abi(p->abi_reg); // ABI custom del param (o "" si estandar)
         param_bindings.emplace_back(p->name, vid);
         if (!p->abi_reg.empty())
-            custom_abi_params.push_back({p->name, vid, p->abi_reg, pt});
+            custom_abi_params.push_back({p->name, vid, p->abi_reg, abi.type});
     }
     // Variadicos: param OCULTO i64 del count, tras el `T*` del ultimo param.
     // `vacount()` en el body resuelve a este binding.  (Un variadico CRUDO
