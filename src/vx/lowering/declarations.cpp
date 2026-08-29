@@ -1653,6 +1653,16 @@ bool Lowering::try_lower_var_init(ast::VarDeclStmt *vd, const Type &sem_type,
                 vd->init->kind == ast::NodeKind::NullLitExpr;
             v = cast_if_needed(v, vfrom, vt, vd->init->loc,
                                /*is_explicit=*/init_is_literal);
+            /* `nonnull T x = expr;` -- hacer cumplir lo que el tipo promete.
+             * Solo se rechazaba escribir `null` LITERAL; asignar una variable
+             * o el resultado de una funcion que valiera nulo pasaba entero, y
+             * el tipo quedaba mintiendo.  Un parametro `nonnull` ya se
+             * comprobaba asi desde el principio -- lo que faltaba era la
+             * variable --.  Lo normal es que no cueste nada: el pase que quita
+             * comprobaciones de nulo demostrables la borra cuando el valor es
+             * la direccion de algo, un objeto recien creado o una constante. */
+            if (vd->type && vd->type->is_nonnull)
+                v = enforce_nonnull(v, vd->init->loc.line);
         }
     } else {
         // Sin init: defecto 0.  Las variables sin init son raras

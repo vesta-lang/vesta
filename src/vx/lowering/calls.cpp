@@ -516,97 +516,33 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     PrimitiveKind callee_kind = PrimitiveKind::VOID;
     auto it_kind = fn_ret_kind_.find(id->name);
     if (it_kind != fn_ret_kind_.end()) callee_kind = it_kind->second;
-    // ADTs: detectar enum SRET via fn_ret_enum_name_.
-    auto it_enum_ret = fn_ret_enum_name_.find(id->name);
-    const bool callee_is_enum_sret = (it_enum_ret != fn_ret_enum_name_.end());
-    // (gap O): detectar funcion que retorna FUNCTION via
-    // fn_returns_function_; el slot tiene siempre 16 bytes.
-    const bool callee_is_function_sret =
-        (fn_returns_function_.find(id->name) != fn_returns_function_.end());
-    // Smart pointers: detectar funcion que retorna unique<T>/shared<T>
-    // via fn_returns_smartptr_; el slot tiene 8 bytes (host_ptr).
-    const bool callee_is_smartptr_sret =
-        (fn_returns_smartptr_.find(id->name) != fn_returns_smartptr_.end());
-    // Vesta Embed (native_poo_): callee que retorna `string` value-type
-    // (24 bytes) usa SRET igual que un struct; el caller aloca el retbuf.
-    const bool callee_is_str_value_sret =
-        (fn_returns_str_value_.find(id->name) != fn_returns_str_value_.end());
-    // STRUCT por valor: el callee escribe en el retbuf que le pasa el caller.
-    // Sin esto devolvia un puntero a su propio frame, ya muerto.
-    auto it_struct_ret = fn_ret_struct_name_.find(id->name);
-    const bool callee_is_struct_sret =
-        (it_struct_ret != fn_ret_struct_name_.end());
-    const bool callee_is_sret =
-        (callee_kind == PrimitiveKind::OPTIONAL ||
-         callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
-         callee_is_function_sret || callee_is_smartptr_sret ||
-         callee_is_str_value_sret || callee_is_struct_sret);
+    /* Si hace falta buffer, cuanto mide y donde vive: lo que se anoto al
+     * registrar la funcion.  Deducirlo aqui de nuevo era la tercera copia del
+     * mismo criterio, y con menos datos: desde aqui no se sabe si un puntero
+     * inteligente es `unique` o `shared`, asi que se reservaban dieciseis
+     * siempre; y el tamano de un `Optional` salia del tipo del sitio de la
+     * llamada en vez de lo que la funcion declara devolver. */
+    const SretInfo si = sret_info_for(id->name);
+    const bool callee_is_sret = si.uses_buffer;
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
     if (callee_is_sret) {
-        // El retbuf del caller debe medir EXACTAMENTE lo que la callee copia
-        // (`sret_buf_size_/8` qwords).  Con un `Optional<struct>` el payload ya
-        // no son 8 bytes, asi que reservar 16 a ciegas dejaba a la callee
-        // escribiendo fuera y al caller leyendo un campo sin inicializar.
-        uint64_t buf_bytes =
-            (callee_kind == PrimitiveKind::OPTIONAL &&
-             e->result_type.kind == PrimitiveKind::OPTIONAL)
-                ? static_cast<uint64_t>(optional_buf_bytes(e->result_type))
-                : 16ULL;
-        if (callee_is_enum_sret) {
-            const auto &elays = tc_.enum_layouts();
-            auto it_e = elays.find(it_enum_ret->second);
-            if (it_e != elays.end()) {
-                buf_bytes = static_cast<uint64_t>(it_e->second.size_bytes);
-            }
-        } else if (callee_kind == PrimitiveKind::RESULT) {
-            buf_bytes = 24ULL;
-        } else if (callee_is_function_sret) {
-            buf_bytes = 16ULL; // function value: fn_addr + env_addr
-        } else if (callee_is_str_value_sret) {
-            buf_bytes = 24ULL; // value-string {ptr,len,cap}
-        } else if (callee_is_smartptr_sret) {
-            // unique<T> Tier 1 = 16 bytes (ptr+deleter); shared<T> = 8
-            // (ctrl_ptr). No tenemos info del kind aqui sin parsear la firma;
-            // usamos 16 que cubre ambos (shared solo usa los primeros 8 bytes;
-            // la segunda mitad del slot es padding).
-            buf_bytes = 16ULL;
-        } else if (callee_is_struct_sret) {
-            // Tamano del struct, redondeado a qword: el callee copia
-            // `sret_buf_size_/8` qwords y usa el mismo redondeo.
-            const auto &slays = tc_.struct_layouts();
-            auto it_s = slays.find(it_struct_ret->second);
-            if (it_s != slays.end()) {
-                buf_bytes =
-                    (static_cast<uint64_t>(it_s->second.size_bytes) + 7ULL) &
-                    ~7ULL;
-            }
-        }
         v_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8; // unidad: 1 byte
         al.dst = v_call_retbuf;
-        al.imm = buf_bytes;
+        // Tiene que medir EXACTAMENTE lo que el llamado copia: el llamado
+        // escribe `bytes/8` palabras, asi que quedarse corto es escribir
+        // fuera, en el marco de quien llama.
+        al.imm = si.bytes;
         al.source_line = e->loc.line;
-        // BugFix sret-cross-mem (2026-06-04): forzar host_alloca SOLO
-        // para retbuf de Optional/Result/enum (donde el bug cross-mem
-        // se manifiesta).  NO para FUNCTION/smart-ptr cuyo lowering
-        // tiene su propio manejo de memoria (env_addr=heap GC, ctrl_ptr).
-        // El retbuf del value-string vive en host stack (igual que
-        // Optional/Result/enum): host_alloca + is_host_ptr para que las
-        // copias del callee usen `movh` y el caller lea/libere host mem.
-        // El retbuf de un agregado vive en host, como el propio agregado.
-        const bool is_optres_retbuf =
-            (callee_kind == PrimitiveKind::OPTIONAL ||
-             callee_kind == PrimitiveKind::RESULT || callee_is_enum_sret ||
-             callee_is_str_value_sret || callee_is_struct_sret);
-        if (is_optres_retbuf) {
-            al.host_alloca = true;
-        }
+        // Donde vive: en memoria del anfitrion para los agregados, porque el
+        // llamado marca su parametro como puntero de anfitrion y escribe con
+        // `movh`.  Un lambda y un puntero inteligente NO: su bajado tiene su
+        // propio manejo de memoria (entorno en el monton, bloque de control).
+        if (si.host_buffer) al.host_alloca = true;
         emit(current_block_, std::move(al));
-        if (is_optres_retbuf) {
-            fn_->values[v_call_retbuf].is_host_ptr = true;
-        }
+        if (si.host_buffer) fn_->values[v_call_retbuf].is_host_ptr = true;
     }
 
     // Bajar argumentos.  Si es sret, el retbuf va PRIMERO (convencion
@@ -859,16 +795,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         (callee_sig->return_type.kind == PrimitiveKind::PTR ||
          callee_sig->return_type.kind == PrimitiveKind::ARRAY) &&
         !callee_sig->return_type.is_virtual) {
-        fn_->values[dst].is_host_ptr = true;
-        // Si el pointee es a su vez un puntero host (`T**`), propagar
-        // pointee_is_host_ptr para que un deref intermedio conserve la
-        // naturaleza host.
-        if (callee_sig->return_type.pointee &&
-            (callee_sig->return_type.pointee->kind == PrimitiveKind::PTR ||
-             callee_sig->return_type.pointee->kind == PrimitiveKind::ARRAY) &&
-            !callee_sig->return_type.pointee->is_virtual) {
-            fn_->values[dst].pointee_is_host_ptr = true;
-        }
+        mark_value_from_type(dst, callee_sig->return_type);
     }
     // native_poo_: liberar los buffers de los args value-string temporales
     // (ya copiados/usados por el callee).  Inc 5 (SSO): solo libera si el
@@ -2107,90 +2034,25 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
     // retbuf hidden como primer argumento.  Sin este marshalling,
     // el callee escribe a R1 (garbage) y el caller lee basura.
     // Mismo patron que la rama IdentExpr-callee de lower_call.
-    std::string callee_struct_name = callee_struct_name_cls;
-    if (fa->ns_index != 0xFFFFFFFFu) {
-        const auto &nss = tc_.imported_namespaces();
-        if (fa->ns_index < nss.size()) {
-            const auto &ns = nss[fa->ns_index];
-            auto its = ns.by_name.find(fa->field_name);
-            if (its != ns.by_name.end()) {
-                callee_struct_name =
-                    ns.symbols[its->second].sig.return_type.struct_name;
-            }
-        }
-    }
-    // Detectar enum (user enum) o struct via lookup en layouts.
-    bool callee_is_enum_ret_ns = false;
-    bool callee_is_struct_ret_ns = false;
-    uint64_t enum_struct_size_ns = 0;
-    if (callee_kind_ns == PrimitiveKind::STRUCT &&
-        !callee_struct_name.empty()) {
-        const auto &elays = tc_.enum_layouts();
-        auto it_e = elays.find(callee_struct_name);
-        if (it_e != elays.end()) {
-            callee_is_enum_ret_ns = true;
-            enum_struct_size_ns =
-                static_cast<uint64_t>(it_e->second.size_bytes);
-        } else {
-            const auto &slays = tc_.struct_layouts();
-            auto it_s = slays.find(callee_struct_name);
-            if (it_s != slays.end()) {
-                callee_is_struct_ret_ns = true;
-                enum_struct_size_ns =
-                    static_cast<uint64_t>(it_s->second.size_bytes);
-            }
-        }
-    }
-    // Vesta Embed: un retorno `string` value-type (24B) tambien usa
-    // SRET en native_poo_ (igual que un struct); el retbuf vive en
-    // host stack.  Sin esto, una fn importada que devuelve string
-    // (p.ej. `string greet(...)`) escribia el value-string a R0 en
-    // vez del retbuf -> el caller leia basura y crasheaba.
-    const bool callee_is_str_value_sret_ns =
-        (native_poo_ && callee_kind_ns == PrimitiveKind::STRING);
-    const bool callee_is_sret_ns =
-        (callee_kind_ns == PrimitiveKind::OPTIONAL ||
-         callee_kind_ns == PrimitiveKind::RESULT ||
-         callee_is_enum_ret_ns || callee_is_struct_ret_ns ||
-         callee_is_str_value_sret_ns);
+    /* Las tres preguntas -- si hace falta buffer, cuanto mide y donde vive --
+     * las contesta el mismo sitio que en el otro camino de llamada y que al
+     * bajar la propia funcion.  Aqui estaban contestadas aparte, con una lista
+     * MAS CORTA: se dejaba fuera devolver un lambda y devolver un puntero
+     * inteligente, asi que no se reservaba nada y el metodo escribia sobre el
+     * primer argumento de verdad.  Y el tamano de un struct no se redondeaba a
+     * palabra, mientras que el llamado copia palabras enteras: uno de doce
+     * reservaba doce y recibia dieciseis. */
+    const SretInfo si_ns = sret_info(callee_ret_type_ns);
+    const bool callee_is_sret_ns = si_ns.uses_buffer;
     ir::IrValueId v_call_retbuf_ns = ir::IR_NO_VALUE;
     if (callee_is_sret_ns) {
-        uint64_t buf_bytes;
-        if (callee_kind_ns == PrimitiveKind::RESULT) {
-            buf_bytes = 24ULL;
-        } else if (callee_kind_ns == PrimitiveKind::OPTIONAL) {
-            /* Lo que ESE Optional necesita, no un numero fijo: ocho de marca
-             * mas el payload, y el payload solo crece cuando envuelve un
-             * struct por valor.  Con el 16 clavado, devolver
-             * `Optional<StructDeDieciseis>` reservaba dieciseis para algo de
-             * veinticuatro y el llamado escribia fuera. */
-            buf_bytes =
-                (callee_ret_type_ns.kind == PrimitiveKind::OPTIONAL)
-                    ? static_cast<uint64_t>(
-                          optional_buf_bytes(callee_ret_type_ns))
-                    : 16ULL;
-        } else if (callee_is_str_value_sret_ns) {
-            buf_bytes = 24ULL;
-        } else {
-            buf_bytes = enum_struct_size_ns;
-        }
         v_call_retbuf_ns = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
         al.dst = v_call_retbuf_ns;
-        al.imm = buf_bytes;
-        /* El buffer de un Optional/Result vive en memoria del HOST, igual que
-         * el del value-string y por el mismo motivo: el metodo llamado marca su
-         * parametro como puntero de host y escribe con `movh`.  Reservarlo en
-         * memoria de la maquina virtual hacia que escribiera una direccion de
-         * una en la otra -- acceso invalido dentro del propio metodo --.  La
-         * regla esta escrita unas lineas mas arriba en este mismo fichero, para
-         * el camino del mismo modulo; esta rama no la aplicaba. */
-        if (callee_is_str_value_sret_ns ||
-            callee_kind_ns == PrimitiveKind::OPTIONAL ||
-            callee_kind_ns == PrimitiveKind::RESULT ||
-            callee_is_enum_ret_ns || callee_is_struct_ret_ns) {
+        al.imm = si_ns.bytes;
+        if (si_ns.host_buffer) {
             al.host_alloca = true;
             fn_->values[v_call_retbuf_ns].is_host_ptr = true;
         }

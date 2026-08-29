@@ -100,12 +100,17 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                 !it_ms->second.is_overlay)
                 m_ret_slay = &it_ms->second;
         }
-        const bool method_sret =
-            !m->is_constructor &&
-            (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
-             sem_ret_m.kind == PrimitiveKind::RESULT ||
-             (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING) ||
-             m_ret_slay != nullptr);
+        /* Si hace falta buffer, cuanto mide y donde vive: lo contesta el mismo
+         * sitio que para una funcion suelta y que para quien llama.  Aqui
+         * estaba contestado aparte y con CUATRO casos de los siete: faltaban
+         * el enum, el lambda y el puntero inteligente, asi que un metodo que
+         * devolvia uno de esos no declaraba el buffer, devolvia un puntero a
+         * su propio marco -- muerto tras el `ret` -- y quien llamaba leia lo
+         * que hubiera pasado por esa pila.  Un constructor nunca lleva buffer:
+         * no devuelve nada. */
+        const SretInfo msi =
+            m->is_constructor ? SretInfo{} : sret_info(sem_ret_m);
+        const bool method_sret = msi.uses_buffer;
         if (m->is_constructor) {
             fn.ret_type = ir::IrType::VOID;
         } else if (method_sret) {
@@ -153,7 +158,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             // -> el Result llega siempre en ceros al caller.  Caso
             // observado: file_io.FileReader.read_all retornaba con
             // tag=0, error=0 aunque el archivo se hubiera leido OK.
-            fn.values[v_method_retbuf].is_host_ptr = true;
+            fn.values[v_method_retbuf].is_host_ptr = msi.host_buffer;
             fn.params.push_back(v_method_retbuf);
         }
 
@@ -254,17 +259,9 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING);
         sret_active_ = method_sret;
         sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
-        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
-        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
-        // bytes copiaria 24 y pisaria memoria del caller.
-        sret_buf_size_ =
-            !method_sret ? 0ULL
-            : m_ret_slay != nullptr
-                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
-                   ~7ULL)
-            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL)
-                ? (uint64_t)optional_buf_bytes(sem_ret_m)
-                : 24ULL;
+        // El tamano manda la copia al retbuf (palabra a palabra) de cada
+        // `return`, y es el MISMO que reserva quien llama.
+        sret_buf_size_ = msi.bytes;
 
         lower_block(m->body.get());
 
@@ -1874,29 +1871,27 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // primer "arg" del CALLVIRT (entre obj y los args declarados).  El
     // dst del CALLVIRT es VOID; el SSA value visible al lowering es el
     // retbuf (PTR), que se bindea a la var-decl o se pasa a otras fns.
-    const bool method_call_sret =
-        (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-         mtd->return_type.kind == PrimitiveKind::RESULT ||
-         (native_poo_ && mtd->return_type.kind == PrimitiveKind::STRING));
+    /* Las tres respuestas salen del mismo sitio que las del metodo llamado.
+     * Aqui estaban contestadas aparte y con TRES casos de los siete, mientras
+     * que el lado del metodo tenia cuatro: devolver un struct por valor lo
+     * contaba el metodo -- declaraba el buffer -- y no quien llamaba, que ni
+     * lo reservaba ni lo pasaba. */
+    const SretInfo mcsi = sret_info(mtd->return_type);
+    const bool method_call_sret = mcsi.uses_buffer;
     ir::IrValueId v_method_call_retbuf = ir::IR_NO_VALUE;
     if (method_call_sret) {
-        uint64_t buf_bytes =
-            (mtd->return_type.kind == PrimitiveKind::OPTIONAL)
-                ? (uint64_t)optional_buf_bytes(mtd->return_type)
-                : 24ULL;
         v_method_call_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
-        al.imm = buf_bytes;
+        al.imm = mcsi.bytes;
         al.dst = v_method_call_retbuf;
         al.source_line = e->loc.line;
-        // BugFix sret-cross-mem (2026-06-04): forzar host_alloca para
-        // el retbuf de metodos Optional/Result.  Asi el callee escribe
-        // con `movh` y el caller lee con `movh` consistentemente.
-        al.host_alloca = true;
+        // BugFix sret-cross-mem (2026-06-04): en memoria del anfitrion, para
+        // que el metodo escriba con `movh` y quien llama lea con `movh`.
+        al.host_alloca = mcsi.host_buffer;
         emit(current_block_, std::move(al));
-        fn_->values[v_method_call_retbuf].is_host_ptr = true;
+        fn_->values[v_method_call_retbuf].is_host_ptr = mcsi.host_buffer;
     }
     const ir::IrType ret_ir = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
 
@@ -1951,16 +1946,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // is_gc_object cuando el metodo retorna CLASS/PTR.  Critico
     // para que el regalloc preserve el value a traves de calls
     // GC posteriores (save/restore con conversion a GcHandle).
-    if (dst != ir::IR_NO_VALUE) {
-        const PrimitiveKind rk = mtd->return_type.kind;
-        if (rk == PrimitiveKind::CLASS) {
-            fn_->values[dst].is_host_ptr = true;
-            fn_->values[dst].is_gc_object = true;
-        } else if ((rk == PrimitiveKind::PTR || rk == PrimitiveKind::ARRAY) &&
-                   !mtd->return_type.is_virtual) {
-            fn_->values[dst].is_host_ptr = true;
-        }
-    }
+    mark_value_from_type(dst, mtd->return_type);
     // El valor SSA "visible" al lowering tras el CALLVIRT.  Para SRET
     // es el retbuf (PTR); para calls normales es dst.
     const ir::IrValueId visible_dst =
@@ -2623,49 +2609,25 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
                 !it_rs->second.is_overlay)
                 ret_slay = &it_rs->second;
         }
-        /* OJO: esta condicion NO coincide con la que usa el metodo al
-         * declararse (`method_sret`, arriba en este mismo fichero), que ademas
-         * incluye devolver una cadena en el camino nativo.
-         *
-         * Anadirlo aqui es necesario pero NO suficiente, comprobado: con la
-         * clausula puesta, la llamada de clase ya pasa el buffer -- y se ve en
-         * el IR -- pero el binario nativo sigue cayendo, porque entonces la que
-         * no lo pasa es la del mismo metodo declarado en un STRUCT.  Ese camino
-         * se resuelve por un tercer sitio que todavia no he localizado, y hasta
-         * saber cual es, tocar solo esta mitad cambia que lado esta roto sin
-         * arreglar ninguno. */
-        const bool sret =
-            (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-             static_mtd->return_type.kind == PrimitiveKind::RESULT ||
-             (native_poo_ &&
-              static_mtd->return_type.kind == PrimitiveKind::STRING) ||
-             ret_slay != nullptr);
+        /* La misma respuesta que da el metodo al declararse y que dan los
+         * otros caminos de llamada.  Aqui habia una nota que decia que esta
+         * condicion NO coincidia con la del metodo, que anadirle el caso que
+         * le faltaba no bastaba, y que quedaba un tercer sitio sin localizar.
+         * Eran SIETE, cada uno con una lista distinta; ya no hay listas. */
+        const SretInfo ssi = sret_info(static_mtd->return_type);
+        const bool sret = ssi.uses_buffer;
         ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
         if (sret) {
-            const uint64_t buf_bytes =
-                ret_slay != nullptr
-                    ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) &
-                       ~7ULL)
-                /* Lo que ESE Optional necesita, no un numero fijo: ocho de
-                 * marca mas el payload, y el payload solo crece cuando envuelve
-                 * un struct por valor.  Con el 16 clavado que habia aqui, un
-                 * metodo estatico que devolviera `Optional<StructGrande>`
-                 * reservaba dieciseis para algo de cuarenta y el llamado
-                 * escribia fuera.  El mismo calculo estaba tres lineas mas alla
-                 * en el metodo de un struct, hecho bien. */
-                : (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL)
-                    ? (uint64_t)optional_buf_bytes(static_mtd->return_type)
-                    : 24ULL;
             v_retbuf = fn_->new_value(ir::IrType::PTR);
             ir::IrInstr al{};
             al.op = ir::IrOp::ALLOCA;
             al.type = ir::IrType::I8;
-            al.imm = buf_bytes;
+            al.imm = ssi.bytes;
             al.dst = v_retbuf;
-            al.host_alloca = true;
+            al.host_alloca = ssi.host_buffer;
             al.source_line = e->loc.line;
             emit(current_block_, std::move(al));
-            fn_->values[v_retbuf].is_host_ptr = true;
+            fn_->values[v_retbuf].is_host_ptr = ssi.host_buffer;
         }
         // Bajar args (retbuf primero si SRET).
         std::vector<ir::IrValueId> arg_vals;

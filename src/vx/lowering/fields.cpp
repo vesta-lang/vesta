@@ -655,15 +655,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         // factory.  Mismo bug con `*->is_host_ptr` no marcado para
         // tipos PTR (e.g. `int* get_buf()`).
         if (dst != ir::IR_NO_VALUE) {
-            const PrimitiveKind rk = mtd->return_type.kind;
-            if (rk == PrimitiveKind::CLASS) {
-                fn_->values[dst].is_host_ptr = true;
-                fn_->values[dst].is_gc_object = true;
-            } else if ((rk == PrimitiveKind::PTR ||
-                        rk == PrimitiveKind::ARRAY) &&
-                       !mtd->return_type.is_virtual) {
-                fn_->values[dst].is_host_ptr = true;
-            }
+            mark_value_from_type(dst, mtd->return_type);
         }
         ir::IrInstr ins{};
         ins.op = ir::IrOp::CALLVIRT;

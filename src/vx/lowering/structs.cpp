@@ -402,41 +402,23 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     // STRUCT por valor: mismo motivo que Optional/Result -- el buffer del
     // struct vive en el frame del callee y muere al RET.  Un `@overlay struct`
     // no: su valor ES un puntero de 8 bytes, va por registro.
-    const StructLayout *ret_slay = nullptr;
-    if (mtd->return_type.kind == PrimitiveKind::STRUCT &&
-        !mtd->return_type.struct_name.empty()) {
-        const auto &elays = tc_.enum_layouts();
-        if (elays.find(mtd->return_type.struct_name) == elays.end()) {
-            auto it_rs =
-                tc_.struct_layouts().find(mtd->return_type.struct_name);
-            if (it_rs != tc_.struct_layouts().end() &&
-                !it_rs->second.is_overlay)
-                ret_slay = &it_rs->second;
-        }
-    }
-    const bool method_sret =
-        (mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-         mtd->return_type.kind == PrimitiveKind::RESULT ||
-         (native_poo_ && mtd->return_type.kind == PrimitiveKind::STRING) ||
-         ret_slay != nullptr);
+    /* Las tres respuestas -- si hace falta buffer, cuanto y donde -- salen del
+     * mismo sitio que usa el metodo al declararse.  Cada camino tenia su
+     * lista, y ninguna estaba completa. */
+    const SretInfo msi = sret_info(mtd->return_type);
+    const bool method_sret = msi.uses_buffer;
     ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
     if (method_sret) {
-        const uint64_t buf_bytes =
-            ret_slay != nullptr
-                ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) & ~7ULL)
-            : (mtd->return_type.kind == PrimitiveKind::OPTIONAL)
-                ? (uint64_t)optional_buf_bytes(mtd->return_type)
-                : 24ULL;
         v_retbuf = fn_->new_value(ir::IrType::PTR);
         ir::IrInstr al{};
         al.op = ir::IrOp::ALLOCA;
         al.type = ir::IrType::I8;
-        al.imm = buf_bytes;
+        al.imm = msi.bytes;
         al.dst = v_retbuf;
-        al.host_alloca = true;
+        al.host_alloca = msi.host_buffer;
         al.source_line = e->loc.line;
         emit(current_block_, std::move(al));
-        fn_->values[v_retbuf].is_host_ptr = true;
+        fn_->values[v_retbuf].is_host_ptr = msi.host_buffer;
     }
 
     const ir::IrType ret_ir_decl =
@@ -444,16 +426,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     const ir::IrType ret_ir = method_sret ? ir::IrType::VOID : ret_ir_decl;
     const ir::IrValueId dst =
         (ret_ir == ir::IrType::VOID) ? ir::IR_NO_VALUE : fn_->new_value(ret_ir);
-    if (dst != ir::IR_NO_VALUE) {
-        const PrimitiveKind rk = mtd->return_type.kind;
-        if (rk == PrimitiveKind::CLASS) {
-            fn_->values[dst].is_host_ptr = true;
-            fn_->values[dst].is_gc_object = true;
-        } else if ((rk == PrimitiveKind::PTR || rk == PrimitiveKind::ARRAY) &&
-                   !mtd->return_type.is_virtual) {
-            fn_->values[dst].is_host_ptr = true;
-        }
-    }
+    mark_value_from_type(dst, mtd->return_type);
 
     // Operandos del CALL: this_addr, [retbuf], args...
     std::vector<ir::IrValueId> operands;
@@ -787,11 +760,9 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                 !it_ms->second.is_overlay)
                 m_ret_slay = &it_ms->second;
         }
-        const bool method_sret =
-            (sem_ret_m.kind == PrimitiveKind::OPTIONAL ||
-             sem_ret_m.kind == PrimitiveKind::RESULT ||
-             (native_poo_ && sem_ret_m.kind == PrimitiveKind::STRING) ||
-             m_ret_slay != nullptr);
+        /* La misma respuesta que da quien llama a este metodo. */
+        const SretInfo msi = sret_info(sem_ret_m);
+        const bool method_sret = msi.uses_buffer;
         if (method_sret) {
             fn.ret_type = ir::IrType::VOID;
         } else if (m->return_type &&
@@ -849,7 +820,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         if (method_sret) {
             v_method_retbuf = fn.new_value(ir::IrType::PTR, "%__retbuf");
             fn.values[v_method_retbuf].is_param = true;
-            fn.values[v_method_retbuf].is_host_ptr = true;
+            fn.values[v_method_retbuf].is_host_ptr = msi.host_buffer;
             fn.params.push_back(v_method_retbuf);
         }
 
@@ -904,17 +875,9 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         current_fn_sret_str_value_ = method_str_sret;
         sret_active_ = method_sret;
         sret_retbuf_ = method_sret ? v_method_retbuf : ir::IR_NO_VALUE;
-        // El tamano manda la copia al retbuf (qword a qword) de cada `return`.
-        // Un struct usa SU tamano redondeado a qword: con el 24 fijo, uno de 8
-        // bytes copiaria 24 y pisaria memoria del caller.
-        sret_buf_size_ =
-            !method_sret ? 0ULL
-            : m_ret_slay != nullptr
-                ? ((static_cast<uint64_t>(m_ret_slay->size_bytes) + 7ULL) &
-                   ~7ULL)
-            : (sem_ret_m.kind == PrimitiveKind::OPTIONAL)
-                ? (uint64_t)optional_buf_bytes(sem_ret_m)
-                : 24ULL;
+        // El tamano manda la copia al retbuf (palabra a palabra) de cada
+        // `return`, y es el MISMO que reserva quien llama.
+        sret_buf_size_ = msi.bytes;
 
         lower_block(m->body.get());
 

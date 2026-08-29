@@ -267,65 +267,130 @@ void set_macro_visiting(std::unordered_set<std::string> *p) {
     g_macro_visiting_slot.set(p);
 }
 
-void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
-                                    const std::string &enum_struct_name,
+/* El buffer de retorno vive SIEMPRE en memoria del anfitrion, sea lo que sea
+ * lo que se devuelva.  No es una preferencia: el pase que promueve reservas a
+ * memoria del anfitrion cuando lo que sale de ellas acaba en una funcion
+ * nativa mira SOLO el lado de quien llama, asi que podia mover el buffer de
+ * sitio sin que el llamado se enterara -- y entonces uno escribia en una
+ * memoria y el otro leia en la otra.  Los agregados ya estaban fijados aqui
+ * por eso mismo; lo que quedaba suelto era devolver un lambda o un puntero
+ * inteligente, y bastaba un `println` detras para que el pase disparara.
+ *
+ * Que sea siempre el mismo lado quita la pregunta de en medio: ya no hay dos
+ * respuestas que puedan discrepar. */
+Lowering::SretInfo Lowering::sret_info(const Type &ret) const {
+    SretInfo info;
+    const PrimitiveKind kind = ret.kind;
+    const std::string &tname = ret.struct_name;
+
+    // Enum de usuario: se modela como STRUCT cuyo struct_name esta en
+    // enum_layouts_.  Es SRET (retbuf del tamano del layout).
+    if (kind == PrimitiveKind::STRUCT && !tname.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        auto it_e = elays.find(tname);
+        if (it_e != elays.end()) {
+            info.uses_buffer = true;
+            info.host_buffer = true;
+            info.bytes = static_cast<uint64_t>(it_e->second.size_bytes);
+            return info;
+        }
+        // STRUCT por valor: MISMO motivo que el puntero inteligente -- el
+        // buffer vive en el marco del llamado y muere al RET.  Era el unico
+        // agregado sin buffer: devolvia el puntero a esa memoria muerta y
+        // funcionaba solo si quien llamaba la copiaba antes de tocar la pila.
+        // Un `@overlay struct` es un puntero de 8 bytes -> por registro.
+        const auto &slays = tc_.struct_layouts();
+        auto it_s = slays.find(tname);
+        if (it_s != slays.end() && !it_s->second.is_overlay) {
+            info.uses_buffer = true;
+            info.host_buffer = true;
+            // Redondeado a palabra: la copia va palabra a palabra
+            // (`bytes / 8`), asi que un struct de 12 copiaria solo 8 y
+            // perderia el ultimo campo.  Los dos lados usan ESTE redondeo,
+            // asi que copiar la palabra de mas cae dentro del buffer.
+            info.bytes =
+                (static_cast<uint64_t>(it_s->second.size_bytes) + 7ULL) & ~7ULL;
+        }
+        return info;
+    }
+    if (kind == PrimitiveKind::OPTIONAL) {
+        info.uses_buffer = true;
+        info.host_buffer = true;
+        info.bytes = static_cast<uint64_t>(optional_layout(ret).bytes);
+        return info;
+    }
+    if (kind == PrimitiveKind::RESULT) {
+        info.uses_buffer = true;
+        info.host_buffer = true;
+        info.bytes = 24ULL; // marca + valor + error
+        return info;
+    }
+    // (gap O): devolver un lambda.  El buffer es su ranura: direccion de la
+    // funcion en +0, del entorno en +8.
+    if (kind == PrimitiveKind::FUNCTION) {
+        info.uses_buffer = true;
+        info.host_buffer = true;
+        info.bytes = 16ULL;
+        return info;
+    }
+    // Punteros inteligentes.  Sin buffer seria inseguro: la ranura vive en la
+    // pila del llamado y muere al RET.  El tamano lo decide un solo sitio, y
+    // no son 16 siempre -- un `shared<T>` son 8 --; quien llamaba reservaba
+    // 16 a ciegas porque desde alli no se sabia cual de los dos era.
+    if (kind == PrimitiveKind::UNIQUE_PTR || kind == PrimitiveKind::SHARED_PTR) {
+        info.uses_buffer = true;
+        info.host_buffer = true;
+        info.bytes = static_cast<uint64_t>(smart_ptr_slot_bytes(kind));
+        return info;
+    }
+    // Vesta Embed (native_poo_): `string` es valor de 24 bytes {ptr,len,cap}
+    // -> se devuelve por buffer, igual que un struct.  Solo en native; en
+    // Full/JIT un `string` es un asa i64 que cabe en un registro.
+    if (native_poo_ && kind == PrimitiveKind::STRING) {
+        info.uses_buffer = true;
+        info.host_buffer = true;
+        info.bytes = 24ULL;
+        return info;
+    }
+    return info;
+}
+
+Lowering::SretInfo Lowering::sret_info_for(const std::string &name) const {
+    auto it = fn_sret_.find(name);
+    return (it == fn_sret_.end()) ? SretInfo{} : it->second;
+}
+
+void Lowering::register_fn_ret_info(const std::string &name, const Type &ret,
                                     bool is_async) {
+    PrimitiveKind kind = ret.kind;
     ir::IrType rt =
         (kind == PrimitiveKind::VOID || kind == PrimitiveKind::COUNT)
             ? ir::IrType::VOID
             : ir_type_from_primitive(kind);
 
-    // Enum de usuario: se modela como STRUCT cuyo struct_name esta en
-    // enum_layouts_.  Es SRET (retbuf del tamano del layout).
-    bool is_user_enum = false;
-    if (kind == PrimitiveKind::STRUCT && !enum_struct_name.empty()) {
-        const auto &elays = tc_.enum_layouts();
-        is_user_enum = (elays.find(enum_struct_name) != elays.end());
-    }
-    // (gap O): funciones que devuelven FUNCTION.  Mismo patron que los
-    // enums: el tipo IR pasa a VOID y el caller pasa un retbuf hidden de
-    // 16 bytes (slot del function value).
-    const bool is_function_ret = (kind == PrimitiveKind::FUNCTION);
-    if (is_function_ret) fn_returns_function_.insert(name);
-    // Smart pointers: SRET para `unique<T>` / `shared<T>`.  Sin esto,
-    // devolver un smart pointer seria inseguro (su slot vive en el stack
-    // del callee y muere al RET).  Con SRET el caller aloca el slot y el
-    // callee copia los bytes ahi.
-    const bool is_smartptr_ret = (kind == PrimitiveKind::UNIQUE_PTR ||
-                                  kind == PrimitiveKind::SHARED_PTR);
-    if (is_smartptr_ret) fn_returns_smartptr_.insert(name);
-    // Vesta Embed (native_poo_): `string` es value-type de 24 bytes ->
-    // retorno por valor via SRET (igual que un struct).  Solo en native;
-    // en Full/JIT `string` es un handle i64.
-    const bool is_str_value_ret =
-        (native_poo_ && kind == PrimitiveKind::STRING);
-    if (is_str_value_ret) fn_returns_str_value_.insert(name);
-    // STRUCT por valor: MISMO motivo que el smart pointer de arriba -- el
-    // buffer del struct vive en el frame del callee y muere al RET.  Era el
-    // unico agregado sin SRET: devolvia el puntero a esa memoria muerta y
-    // funcionaba solo si el caller la copiaba antes de tocar la pila.
-    // Los enums (STRUCT con enum_layout) ya salen por `is_user_enum`, y un
-    // `@overlay struct` es un puntero de 8 bytes -> por registro, correcto.
-    bool is_struct_ret = false;
-    if (kind == PrimitiveKind::STRUCT && !is_user_enum &&
-        !enum_struct_name.empty()) {
-        const auto &slays = tc_.struct_layouts();
-        auto it_s = slays.find(enum_struct_name);
-        if (it_s != slays.end() && !it_s->second.is_overlay) {
-            is_struct_ret = true;
-            fn_ret_struct_name_[name] = enum_struct_name;
-        }
-    }
+    const SretInfo info = sret_info(ret);
+    fn_sret_[name] = info;
 
-    // sret: estas funciones tienen ret_type IR = VOID y un retbuf hidden
-    // como primer param.  Sin este ajuste, fn_return_types_ apuntaria a PTR
-    // y los callers crearian un dst SSA "huerfano" que el emisor intentaria
-    // escribir desde la salida (que no existe).
-    if (kind == PrimitiveKind::OPTIONAL || kind == PrimitiveKind::RESULT ||
-        is_user_enum || is_function_ret || is_smartptr_ret ||
-        is_str_value_ret || is_struct_ret) {
-        rt = ir::IrType::VOID;
+    // Enum de usuario: se modela como STRUCT cuyo struct_name esta en
+    // enum_layouts_.
+    bool is_user_enum = false;
+    if (kind == PrimitiveKind::STRUCT && !ret.struct_name.empty()) {
+        const auto &elays = tc_.enum_layouts();
+        is_user_enum = (elays.find(ret.struct_name) != elays.end());
     }
+    if (kind == PrimitiveKind::FUNCTION) fn_returns_function_.insert(name);
+    if (kind == PrimitiveKind::UNIQUE_PTR || kind == PrimitiveKind::SHARED_PTR)
+        fn_returns_smartptr_.insert(name);
+    if (native_poo_ && kind == PrimitiveKind::STRING)
+        fn_returns_str_value_.insert(name);
+    if (kind == PrimitiveKind::STRUCT && !is_user_enum && info.uses_buffer)
+        fn_ret_struct_name_[name] = ret.struct_name;
+
+    // Estas funciones tienen ret_type IR = VOID y un buffer oculto como
+    // primer parametro.  Sin este ajuste, fn_return_types_ apuntaria a PTR
+    // y quien llama crearia un destino SSA "huerfano" que el emisor
+    // intentaria escribir desde la salida (que no existe).
+    if (info.uses_buffer) rt = ir::IrType::VOID;
     // Item 9: @Async wrapper retorna i64 (Future handle), no T.  El tipo
     // logico T se preserva como Future<T> en el sig del type checker para
     // el `await fut`, pero el bytecode del wrapper devuelve i64 raw en R0.
@@ -339,9 +404,9 @@ void Lowering::register_fn_ret_info(const std::string &name, PrimitiveKind kind,
 
     fn_return_types_[name] = rt;
     fn_ret_kind_[name] = kind;
-    // Guardamos el nombre del enum para que el caller pueda buscar su
-    // size_bytes al alocar el retbuf.
-    if (is_user_enum) fn_ret_enum_name_[name] = enum_struct_name;
+    // El nombre del enum devuelto: lo consultan otros pasos del bajado.  El
+    // tamano del buffer ya no sale de aqui, sino de `fn_sret_`.
+    if (is_user_enum) fn_ret_enum_name_[name] = ret.struct_name;
 }
 
 

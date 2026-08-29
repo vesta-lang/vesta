@@ -232,14 +232,19 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!decl) continue;
         if (decl->kind == ast::NodeKind::FunctionDecl) {
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-            PrimitiveKind kind = PrimitiveKind::VOID;
+            /* El tipo devuelto, ENTERO.  Antes se guardaba solo su especie, y
+             * el tamano de un `Optional` depende de lo que envuelva: quien
+             * llamaba tenia que ir a buscarlo por otro lado, y donde no podia,
+             * suponia dieciseis. */
+            Type ret_sem;
+            ret_sem.kind = PrimitiveKind::VOID;
             if (fd->return_type &&
                 fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode &&
                 static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get())
                         ->prim != PrimitiveKind::GC_PTR) {
                 auto *pt = static_cast<ast::PrimitiveTypeNode *>(
                     fd->return_type.get());
-                kind = pt->prim;
+                ret_sem.kind = pt->prim;
             } else if (fd->return_type) {
                 // NOTA gc<T>: `gc<unique<i64>>` es un PrimitiveTypeNode(GC_PTR)
                 // con type_args, pero su tipo REAL de retorno es el inner T
@@ -261,23 +266,13 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 const Type sem = tc_.resolve_type_node(fd->return_type.get());
                 if (sem.kind != PrimitiveKind::COUNT &&
                     sem.kind != PrimitiveKind::VOID) {
-                    kind = sem.kind;
+                    ret_sem = sem;
                 }
             }
-            // El nombre del tipo cuando el retorno es STRUCT: sirve para
-            // distinguir un enum de usuario (SRET) de un struct normal.
-            std::string enum_struct_name;
-            if (kind == PrimitiveKind::STRUCT && fd->return_type) {
-                const Type sem_check =
-                    tc_.resolve_type_node(fd->return_type.get());
-                if (sem_check.kind == PrimitiveKind::STRUCT)
-                    enum_struct_name = sem_check.struct_name;
-            }
-            // El registro (incluida la decision de SRET) vive en un unico
-            // helper compartido con las funciones importadas -- ver
+            // El registro (incluida la decision del buffer de retorno) vive en
+            // un unico sitio, compartido con las funciones importadas -- ver
             // register_fn_ret_info.
-            register_fn_ret_info(fd->name, kind, enum_struct_name,
-                                 fd->is_async);
+            register_fn_ret_info(fd->name, ret_sem, fd->is_async);
         } else if (decl->kind == ast::NodeKind::ExternFnDecl) {
             // FFI declarativo: registrar tipo de retorno y
             // mapeo nombre -> libreria nativa para que @c lower_call
@@ -321,9 +316,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
         if (!sig) continue;
         // FFI nativo: convencion CALLN propia (valor en R0), nunca SRET.
         if (!sig->extern_lib.empty()) continue;
-        register_fn_ret_info(fname, sig->return_type.kind,
-                             sig->return_type.struct_name,
-                             /*is_async=*/false);
+        register_fn_ret_info(fname, sig->return_type, /*is_async=*/false);
     }
 
     // Pase 2: bajar cada funcion.
@@ -990,10 +983,13 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     const bool sret_struct = sem_ret.kind == PrimitiveKind::STRUCT &&
                              !sret_enum && it_slay_ret != slays_check.end() &&
                              !it_slay_ret->second.is_overlay;
-    const bool sret =
-        (sem_ret.kind == PrimitiveKind::OPTIONAL ||
-         sem_ret.kind == PrimitiveKind::RESULT || sret_enum || sret_function ||
-         sret_smartptr || sret_str_value || sret_struct);
+    /* Si hace falta buffer, cuanto mide y donde vive lo contesta un solo
+     * sitio, el mismo que consulta quien llama.  Las banderas de arriba se
+     * quedan porque cada una dispara ademas otra cosa (el entorno de un
+     * lambda en el monton, la promocion de un literal a cadena), pero ya no
+     * deciden esto. */
+    const SretInfo sret_i = sret_info(sem_ret);
+    const bool sret = sret_i.uses_buffer;
     if (fd->return_type &&
         fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode && !sret) {
         auto *pt = static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get());
@@ -1057,11 +1053,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // -> su retbuf tambien es host_ptr para que las copias usen `movh`.
         // El retbuf de un agregado vive en host, como el propio agregado
         // (ver lower_var_decl): el `return` copia ahi con `movh`.
-        const bool sret_optres_like =
-            (sem_ret.kind == PrimitiveKind::OPTIONAL ||
-             sem_ret.kind == PrimitiveKind::RESULT || sret_enum ||
-             sret_str_value || sret_struct);
-        if (sret_optres_like) {
+        if (sret_i.host_buffer) {
             fn.values[v_retbuf].is_host_ptr = true;
         }
         fn.params.push_back(v_retbuf);
@@ -1143,41 +1135,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // vez de devolver un valor.
     sret_active_ = sret;
     sret_retbuf_ = v_retbuf;
-    if (sret_enum) {
-        // Tamano dinamico segun el enum declarado.
-        auto it_e = elays_check.find(sem_ret.struct_name);
-        sret_buf_size_ = it_e != elays_check.end()
-                             ? static_cast<uint64_t>(it_e->second.size_bytes)
-                             : 16ULL;
-    } else if (sret_function) {
-        // el slot del function value es siempre 16 bytes.
-        sret_buf_size_ = 16ULL;
-    } else if (sret_smartptr) {
-        // Smart pointer slot.  unique<T> usa Tier 1 (16 bytes: ptr + deleter).
-        // shared<T> usa 8 bytes (host_ptr al control block; deleter
-        // vive en el control block del GcHeap).  No tenemos forma
-        // simple de discriminar aqui (sem_ret.kind UNIQUE vs SHARED);
-        // usamos 16 para unique y 8 para shared.
-        sret_buf_size_ = smart_ptr_slot_bytes(sem_ret.kind);
-    } else if (sret_str_value) {
-        // value-string: {ptr,len,cap} = 3 qwords = 24 bytes.
-        sret_buf_size_ = 24ULL;
-    } else if (sret_struct) {
-        // Tamano del struct declarado, redondeado a multiplo de 8: la copia al
-        // retbuf va qword a qword (`sret_buf_size_ / 8`), asi que un struct de
-        // 12 bytes copiaria solo 8 y perderia el ultimo campo.  El caller aloca
-        // con ESTE mismo redondeo, asi que copiar el qword de mas es escribir
-        // en su propio buffer.
-        sret_buf_size_ =
-            (static_cast<uint64_t>(it_slay_ret->second.size_bytes) + 7ULL) &
-            ~7ULL;
-    } else if (sret) {
-        sret_buf_size_ = (sem_ret.kind == PrimitiveKind::OPTIONAL
-                              ? (uint64_t)optional_buf_bytes(sem_ret)
-                              : 24ULL);
-    } else {
-        sret_buf_size_ = 0ULL;
-    }
+    sret_buf_size_ = sret_i.bytes;
     // (gap O): activar el modo "env en heap" para todos los
     // lambdas creados dentro del body de esta funcion.  Asi el env
     // sobrevive al RET y el caller puede invocar la closure sin
@@ -1204,21 +1162,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         const auto &p = fd->params[pi];
         if (!p || !p->type || !p->type->is_nonnull) continue;
         const ir::IrValueId v_old = param_bindings[pi].second;
-        const ir::IrType t_old = fn_->values[v_old].type;
-        const ir::IrValueId v_new = fn_->new_value(t_old);
-        // raw_asm-elim 2026-05-28: nonnull param check via IrOp::UNWRAP
-        // (lanza FATAL_NULL_POINTER si src==0).  Reemplaza RAW_ASM.
-        ir::IrInstr uw{};
-        uw.op = ir::IrOp::UNWRAP;
-        uw.type = t_old;
-        uw.dst = v_new;
-        uw.operands = {v_old};
-        uw.source_line = p->loc.line;
-        emit(current_block_, std::move(uw));
+        // Misma comprobacion que en cualquier otro sitio donde se hace cumplir
+        // un `nonnull` -- ver enforce_nonnull.
+        const ir::IrValueId v_new = enforce_nonnull(v_old, p->loc.line);
         // Re-bind: futuros usos de p->name resuelven al valor unwrapped.
-        if (fn_->values[v_old].is_host_ptr) {
-            fn_->values[v_new].is_host_ptr = true;
-        }
         // Sustituir el binding del scope (push_scope nuevo + el viejo
         // se reemplaza re-bindeando con bind() que sobrescribe).
         bind(p->name, v_new);
