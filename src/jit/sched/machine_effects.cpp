@@ -142,8 +142,8 @@ uint32_t regset_to_key(const char *rs, uint16_t regset_idx, EffIsa isa) {
 
     // --- vector XMM/YMM/ZMM (SSE/AVX/AVX512): 0-15 aliasan MReg XMM ---
     if (s.size() >= 4 &&
-        (s.compare(0, 3, "XMM") == 0 || s.compare(0, 3, "YMM") == 0 ||
-         s.compare(0, 3, "ZMM") == 0)) {
+        (s.rfind("XMM", 0) == 0 || s.rfind("YMM", 0) == 0 ||
+         s.rfind("ZMM", 0) == 0)) {
         const int n = suffix_num(s, 3);
         if (n >= 0 && n <= 15)
             return static_cast<uint32_t>(static_cast<int>(MReg::XMM0) + n);

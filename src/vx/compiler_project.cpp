@@ -4334,7 +4334,7 @@ CompileResult compile_vx_project(
         // es lo que sobrevive al merge; sin esto la fase no se disparaba y el
         // constructor acababa resolviendose por el evaluador de AST -- que
         // solo funciona dentro del mismo fichero.
-        if (fn.is_macro_compiled || fn.name.compare(0, 8, "__macro_") == 0) {
+        if (fn.is_macro_compiled || fn.name.rfind("__macro_", 0) == 0) {
             res.has_lowerable_macros = true;
             break;
         }

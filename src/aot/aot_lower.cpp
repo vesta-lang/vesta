@@ -112,7 +112,7 @@ void aot_lower_runtime(ir::IrModule &mod, const AotLowerConfig &cfg) {
                     // -> CALLIND (llamada INDIRECTA nativa que vreg_select baja
                     // a `call reg`): func_ptr = operands[0], args = el resto.
                     // El resto de CALLN (extern "lib" fn) pasa sin cambios.
-                    if (in.func_name.compare(0, 11, "__callni__:") == 0 &&
+                    if (in.func_name.rfind("__callni__:", 0) == 0 &&
                         !in.operands.empty()) {
                         in.op = ir::IrOp::CALLIND;
                         in.func_ptr = in.operands[0];

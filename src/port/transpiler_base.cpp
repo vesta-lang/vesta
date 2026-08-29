@@ -498,9 +498,9 @@ void Transpiler::emit_block(EmitContext &ctx, const ir::IrBlock &bb,
     // aunque no haya predecesor CFG normal.
     const bool has_preds = block_has_preds(bb.id);
     const bool is_handler_block =
-        (!bb.name.empty()) && (bb.name.compare(0, 12, "try_handler_") == 0 ||
-                               bb.name.compare(0, 9, "try_body_") == 0 ||
-                               bb.name.compare(0, 10, "try_merge_") == 0 ||
+        (!bb.name.empty()) && (bb.name.rfind("try_handler_", 0) == 0 ||
+                               bb.name.rfind("try_body_", 0) == 0 ||
+                               bb.name.rfind("try_merge_", 0) == 0 ||
                                bb.name.find("_handler") != std::string::npos);
     if (has_preds || is_handler_block) {
         backend_.emit_label_def(ctx, bb.id);
@@ -1258,9 +1258,9 @@ void Transpiler::emit_region(EmitContext &ctx, const ir::IrFunction &fn,
         // destino de @c goto computado via labels-as-values.
         const bool is_try_block =
             (!bb.name.empty()) &&
-            (bb.name.compare(0, 12, "try_handler_") == 0 ||
-             bb.name.compare(0, 9, "try_body_") == 0 ||
-             bb.name.compare(0, 10, "try_merge_") == 0);
+            (bb.name.rfind("try_handler_", 0) == 0 ||
+             bb.name.rfind("try_body_", 0) == 0 ||
+             bb.name.rfind("try_merge_", 0) == 0);
         if (cur != start && !is_structured_header &&
             (ana_.block_preds[cur].size() > 1 || is_try_block)) {
             backend_.emit_label_def(ctx, cur);

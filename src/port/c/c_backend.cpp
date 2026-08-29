@@ -508,7 +508,7 @@ void CBackend::analyze_escapes(const ir::IrFunction &fn) {
         for (const auto &ins : bb.instrs) {
             if (ins.op != ir::IrOp::CALL) continue;
             if (ins.dst == ir::IR_NO_VALUE) continue;
-            if (ins.func_name.compare(0, 6, "__new_") != 0) continue;
+            if (ins.func_name.rfind("__new_", 0) != 0) continue;
             std::string cls_name = ins.func_name.substr(6);
             if (lookup_class(cls_name)) {
                 candidates.push_back(ins.dst);
@@ -615,7 +615,7 @@ void CBackend::infer_concrete_types(const ir::IrFunction &fn) {
 
                 if (ins.op == ir::IrOp::CALL && !ins.func_name.empty()) {
                     // Si la funcion es @c __new_<X>, el resultado es X*.
-                    if (ins.func_name.compare(0, 6, "__new_") == 0) {
+                    if (ins.func_name.rfind("__new_", 0) == 0) {
                         new_type = ins.func_name.substr(6);
                     } else {
                         // Si la funcion es @c <Class>__<method> y el
@@ -1028,7 +1028,7 @@ static bool module_uses_strings(const ir::IrModule &mod) {
             for (const auto &ins : bb.instrs) {
                 if (ins.op == ir::IrOp::STR_LIT_ADDR) return true;
                 if (ins.op == ir::IrOp::RAW_ASM &&
-                    ins.func_name.compare(0, 3, "str") == 0)
+                    ins.func_name.rfind("str", 0) == 0)
                     return true;
             }
         }
@@ -1470,7 +1470,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
                 // El @Absolute apunta a una etiqueta de @c static_data
                 // (e.g. code.s_0 para un literal).  En C, los literales
                 // se exponen como @c __str_<i>.
-                if (full_label.compare(0, 2, "s_") == 0) {
+                if (full_label.rfind("s_", 0) == 0) {
                     std::string idx = full_label.substr(2);
                     dst_lhs();
                     ctx.out << "(void*)__str_" << idx << ";\n";
@@ -1852,7 +1852,7 @@ void CBackend::emit_native_call(EmitContext &ctx, ir::IrValueId dst,
     }
 
     // ---- vmath_* -> math.h C estandar ----
-    if (sym.compare(0, 6, "vmath_") == 0) {
+    if (sym.rfind("vmath_", 0) == 0) {
         // Cada vmath_* toma bits IEEE 754 como uint64 y devuelve idem.
         // Mapping a libm:
         // sqrt/pow/floor/ceil/round/fmin/fmax/log/log2/log10/sin/cos/tan/fabs.
@@ -1948,8 +1948,8 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
                 auto colon = ins.func_name.find(':');
                 if (colon == std::string::npos) continue;
                 std::string sym = ins.func_name.substr(colon + 1);
-                if (sym.compare(0, 4, "vio_") == 0) uses_io = true;
-                if (sym.compare(0, 6, "vmath_") == 0) uses_math = true;
+                if (sym.rfind("vio_", 0) == 0) uses_io = true;
+                if (sym.rfind("vmath_", 0) == 0) uses_math = true;
             }
         }
     }
@@ -2097,12 +2097,12 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
                     const std::string sym = ins.func_name.substr(colon + 1);
                     // Skip los builtins de vesta_io/vesta_math que
                     // tienen bridges manuales (vio_*, vmath_*).
-                    if (sym.compare(0, 4, "vio_") == 0) continue;
-                    if (sym.compare(0, 6, "vmath_") == 0) continue;
+                    if (sym.rfind("vio_", 0) == 0) continue;
+                    if (sym.rfind("vmath_", 0) == 0) continue;
                     // Por prefijo: tambien las tandas en que se parte
                     // (`__module_init_partN`) y las de las dependencias.
                     if (sym.rfind("__module_init", 0) == 0) continue;
-                    if (sym.compare(0, 6, "__new_") == 0) continue;
+                    if (sym.rfind("__new_", 0) == 0) continue;
                     // Skip vx_trace:* (provistos por snippet inline).
                     // Match por basename para tolerar tanto "vx_trace"
                     // como "stdlib/native/runtime/vx_trace".
@@ -2220,10 +2220,10 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         // dependencias, que son la misma maquinaria.
         if (n.rfind("__module_init", 0) == 0) continue;
         // Skip @c __new_<X>: emitido por @c emit_class_bodies.
-        if (n.compare(0, 6, "__new_") == 0 && lookup_class(n.substr(6))) {
+        if (n.rfind("__new_", 0) == 0 && lookup_class(n.substr(6))) {
             continue;
         }
-        bool is_lambda = (fn.name.compare(0, 9, "__lambda_") == 0);
+        bool is_lambda = (fn.name.rfind("__lambda_", 0) == 0);
         ctx.out << type_for(fn.ret_type, false) << " " << sanitize_name(fn.name)
                 << "(";
         if (is_lambda) ctx.out << "void*";
@@ -2262,7 +2262,7 @@ bool CBackend::should_skip_function(const ir::IrFunction &fn,
     // 2. @c __new_<X>: reemplazado por @c X__new del backend (definido
     //    en emit_class_bodies).  El user code que llamaba a __new_<X>
     //    se redirige a X__new en emit_call.
-    if (n.compare(0, 6, "__new_") == 0) {
+    if (n.rfind("__new_", 0) == 0) {
         std::string class_name = n.substr(6);
         if (lookup_class(class_name)) return true;
     }
@@ -2485,7 +2485,7 @@ void CBackend::emit_fn_signature(EmitContext &ctx, const ir::IrFunction &fn) {
     // Lambdas (__lambda_<N>): emit con @c void* @c env como primer param
     // para que la convencion coincida con CALLCLOSURE.  Si la lambda no
     // captura, el env_addr sera @c NULL y el callee lo ignora.
-    bool is_lambda = (fn.name.compare(0, 9, "__lambda_") == 0);
+    bool is_lambda = (fn.name.rfind("__lambda_", 0) == 0);
 
     // Atributos agresivos: const para puras, cold para throw-only,
     // always_inline para accesors triviales.  Estos atributos vienen
@@ -3139,7 +3139,7 @@ void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
     // Si si, emitir STACK ALLOC en lugar de heap.  Tiene que decidirse
     // ANTES de emit_assign_lhs para evitar @c "v0 = Counter __stk..." rota.
     std::string new_class_name;
-    if (func_name.compare(0, 6, "__new_") == 0) {
+    if (func_name.rfind("__new_", 0) == 0) {
         std::string class_name = func_name.substr(6);
         if (lookup_class(class_name)) {
             new_class_name = class_name;

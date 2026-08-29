@@ -93,7 +93,7 @@ CostClass parse_cost_class(const std::string &expr) {
             static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
     }
     // Quitar prefijo "o(" y sufijo ")" si estan presentes.
-    if (s.size() >= 3 && s.compare(0, 2, "o(") == 0 && s.back() == ')')
+    if (s.size() >= 3 && s.rfind("o(", 0) == 0 && s.back() == ')')
         s = s.substr(2, s.size() - 3);
     // Tabla de equivalencias canonicas.  Comparamos contra la forma sin
     // espacios.  "nlogn" es la forma normalizada de "n log n".

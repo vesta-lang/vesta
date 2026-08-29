@@ -482,7 +482,7 @@ static bool is_pure_allocator_name(const std::string &name) {
     if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_shared") == 0)
         return false;
     /* Frontend Vesta emite @c __new_<ClassName> para cada @c new X(). */
-    if (name.size() > 6 && name.compare(0, 6, "__new_") == 0) return true;
+    if (name.size() > 6 && name.rfind("__new_", 0) == 0) return true;
     /* Runtime entries de alloc puros. */
     if (name == "vrt_newobj") return true;
     if (name == "vrt_newobj_handle") return true;
@@ -2294,7 +2294,7 @@ struct GcAllocSite {
  */
 bool is_new_helper_name(const std::string &name, std::string *out_class) {
     if (name.size() <= 6) return false;
-    if (name.compare(0, 6, "__new_") != 0) return false;
+    if (name.rfind("__new_", 0) != 0) return false;
     /* Excluir variantes shared (`__new_X_shared`) que registran el objeto en
      * la SharedHandleTable -- eliminar ese alloc cambia shared_heap_live_count
      * (efecto observable), igual que en is_pure_allocator_name. */
@@ -9461,7 +9461,7 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
          * la direccion pierde is_host_ptr y el STORE/LOAD del campo emite `mov`
          * (VM) en vez de `movh` (host) -> lee/escribe la memoria equivocada.
          * Mantenerlos como CALL preserva la naturaleza host del acceso. */
-        if (fn.name.compare(0, 14, "__ovl_resolve_") == 0) return false;
+        if (fn.name.rfind("__ovl_resolve_", 0) == 0) return false;
         if (fn.blocks.size() != 1) return false;
         if (fn.blocks[0].instrs.empty()) return false;
         /* Ultima instr debe ser RET. */
@@ -11051,7 +11051,7 @@ static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
     /* Resolvedores de overlay: inlinarlos pierde la naturaleza host de la
      * direccion del campo -> `mov`/`loadz` (VM) en vez de `movh`/`loadzh`
      * (host).  Mantener como CALL (mismo motivo que en @c is_inlineable). */
-    if (fn.name.compare(0, 14, "__ovl_resolve_") == 0) return false;
+    if (fn.name.rfind("__ovl_resolve_", 0) == 0) return false;
     size_t total = 0;
     bool has_ret = false;
     for (size_t k = 0; k < fn.blocks.size(); ++k) {

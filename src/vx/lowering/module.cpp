@@ -1440,10 +1440,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     // __spawn_* y wrappers internos).  El bytecode VM, JIT y ports
     // heredan la instrumentacion porque vive en el IR.
     if (instrument_mode_ != "none" && instrument_mode_ != "" &&
-        fd->name != "__module_init" && fd->name.compare(0, 6, "__new_") != 0 &&
-        fd->name.compare(0, 8, "__async_") != 0 &&
-        fd->name.compare(0, 9, "__lambda_") != 0 &&
-        fd->name.compare(0, 8, "__spawn_") != 0) {
+        fd->name != "__module_init" && fd->name.rfind("__new_", 0) != 0 &&
+        fd->name.rfind("__async_", 0) != 0 &&
+        fd->name.rfind("__lambda_", 0) != 0 &&
+        fd->name.rfind("__spawn_", 0) != 0) {
         emit_instrument_enter(fd->name, fd->loc.line);
     }
 
@@ -1487,10 +1487,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // Instrumentacion: vx_trace:exit antes del RET implicito.
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
             fd->name != "__module_init" &&
-            fd->name.compare(0, 6, "__new_") != 0 &&
-            fd->name.compare(0, 8, "__async_") != 0 &&
-            fd->name.compare(0, 9, "__lambda_") != 0 &&
-            fd->name.compare(0, 8, "__spawn_") != 0) {
+            fd->name.rfind("__new_", 0) != 0 &&
+            fd->name.rfind("__async_", 0) != 0 &&
+            fd->name.rfind("__lambda_", 0) != 0 &&
+            fd->name.rfind("__spawn_", 0) != 0) {
             emit_instrument_exit(fd->name, ir::IR_NO_VALUE, fd->loc.line);
         }
         ir::IrInstr ret{};

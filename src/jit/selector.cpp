@@ -3487,7 +3487,7 @@ MFunction Selector::select(const ir::IrFunction &ir_fn, bool *out_unsupported) {
                  * resolver compile-time. */
                 const bool is_callni =
                     ins.func_name.size() >= 11 &&
-                    ins.func_name.compare(0, 11, "__callni__:") == 0;
+                    ins.func_name.rfind("__callni__:", 0) == 0;
 
                 if (is_callni) {
                     if (ins.operands.empty()) {

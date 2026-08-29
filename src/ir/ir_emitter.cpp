@@ -3626,7 +3626,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // convention: argc en R15, args en R01..R12, retorno en R00.
         const bool is_indirect =
             ins.func_name.size() >= 11 &&
-            ins.func_name.compare(0, 11, "__callni__:") == 0;
+            ins.func_name.rfind("__callni__:", 0) == 0;
         const size_t arg_offset = is_indirect ? 1 : 0;
         const size_t nargs =
             std::min(ins.operands.size() - arg_offset, (size_t)12);

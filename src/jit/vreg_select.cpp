@@ -447,8 +447,8 @@ inline bool has_critical_edge_to_phi(const ir::IrFunction &fn) {
 inline int canon_vec_to_mreg(const std::string &c) {
     if (c.size() < 4) return -1;
     const bool es_vec =
-        (c.compare(0, 3, "xmm") == 0 || c.compare(0, 3, "ymm") == 0 ||
-         c.compare(0, 3, "zmm") == 0);
+        (c.rfind("xmm", 0) == 0 || c.rfind("ymm", 0) == 0 ||
+         c.rfind("zmm", 0) == 0);
     if (!es_vec) return -1;
     unsigned n = 0;
     for (size_t i = 3; i < c.size(); ++i) {

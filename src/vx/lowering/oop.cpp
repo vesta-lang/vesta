@@ -276,10 +276,10 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         // sinteticos; los ctors/dtors/metodos normales se instrumentan).
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
             fn.name != "__module_init" &&
-            fn.name.compare(0, 6, "__new_") != 0 &&
-            fn.name.compare(0, 8, "__async_") != 0 &&
-            fn.name.compare(0, 9, "__lambda_") != 0 &&
-            fn.name.compare(0, 8, "__spawn_") != 0) {
+            fn.name.rfind("__new_", 0) != 0 &&
+            fn.name.rfind("__async_", 0) != 0 &&
+            fn.name.rfind("__lambda_", 0) != 0 &&
+            fn.name.rfind("__spawn_", 0) != 0) {
             emit_instrument_enter(fn.name, m->loc.line);
         }
 
@@ -515,10 +515,10 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
             // Instrumentacion: vx_trace:leave antes del RET implicito.
             if (instrument_mode_ != "none" && instrument_mode_ != "" &&
                 fn.name != "__module_init" &&
-                fn.name.compare(0, 6, "__new_") != 0 &&
-                fn.name.compare(0, 8, "__async_") != 0 &&
-                fn.name.compare(0, 9, "__lambda_") != 0 &&
-                fn.name.compare(0, 8, "__spawn_") != 0) {
+                fn.name.rfind("__new_", 0) != 0 &&
+                fn.name.rfind("__async_", 0) != 0 &&
+                fn.name.rfind("__lambda_", 0) != 0 &&
+                fn.name.rfind("__spawn_", 0) != 0) {
                 emit_instrument_exit(fn.name, ir::IR_NO_VALUE, m->loc.line);
             }
             ir::IrInstr ret{};

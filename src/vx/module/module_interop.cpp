@@ -283,8 +283,8 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
     // cfn(i64) -> u8", el typedef importado quedaba en void y el campo que lo
     // usaba dejaba de ser invocable cross-module.
     const bool is_fn_typename =
-        (type_str.size() >= 3 && type_str.compare(0, 3, "fn(") == 0) ||
-        (type_str.size() >= 4 && type_str.compare(0, 4, "cfn(") == 0);
+        (type_str.size() >= 3 && type_str.rfind("fn(", 0) == 0) ||
+        (type_str.size() >= 4 && type_str.rfind("cfn(", 0) == 0);
 
     // Punteros: stripear sufijo '*' antes del resto.
     if (!is_fn_typename && type_str.back() == '*') {
@@ -402,7 +402,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         // bytes) del campo/typedef importado.
         bool is_raw = false;
         std::string prefix = "fn(";
-        if (type_str.size() >= 4 && type_str.compare(0, 4, "cfn(") == 0) {
+        if (type_str.size() >= 4 && type_str.rfind("cfn(", 0) == 0) {
             prefix = "cfn(";
             is_raw = true;
         }

@@ -752,9 +752,9 @@ static int cmd_run(const std::vector<std::string> &args) {
         // (la VM puede instalarse como cualquiera de los dos nombres).
         // Sin esto cualquier paquete podria ejecutar @c rm/curl/etc.
         size_t off = 0;
-        if (sub.size() >= 3 && sub.compare(0, 3, "vm ") == 0) {
+        if (sub.size() >= 3 && sub.rfind("vm ", 0) == 0) {
             off = 3;
-        } else if (sub.size() >= 6 && sub.compare(0, 6, "vesta ") == 0) {
+        } else if (sub.size() >= 6 && sub.rfind("vesta ", 0) == 0) {
             off = 6;
         } else {
             ui::error("scripts solo pueden invocar 'vm <args>' o 'vesta "

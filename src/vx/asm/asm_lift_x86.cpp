@@ -540,8 +540,8 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
             m == "xchg" || m == "cqo" || m == "cqto" || m == "cdq" ||
             m == "cdqe" || m == "cwde" || m == "cbw")
             return true;
-        return (m.size() >= 3 && m.compare(0, 3, "set") == 0) ||
-               (m.size() >= 4 && m.compare(0, 4, "cmov") == 0);
+        return (m.size() >= 3 && m.rfind("set", 0) == 0) ||
+               (m.size() >= 4 && m.rfind("cmov", 0) == 0);
     };
 
     // Calcula la SSA (0/1) de la condicion @p cop (signo @p csigned) a partir
@@ -661,7 +661,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                 flags.a_high = ah;
                 flags.b_high = bh;
                 // (no invalidar abajo: cmp/test SoLO definen)
-            } else if (m.size() >= 4 && m.compare(0, 3, "set") == 0 &&
+            } else if (m.size() >= 4 && m.rfind("set", 0) == 0 &&
                        ops.size() == 1) {
                 // setcc rd: LEE las flags -> byte 0/1; resto del registro
                 // preservado.
@@ -673,7 +673,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                     return lift_no(insn, __LINE__);
                 write_reg(dc, 8, dh, cond, ok);
                 if (!ok) return lift_no(insn, __LINE__);
-            } else if (m.size() > 4 && m.compare(0, 4, "cmov") == 0 &&
+            } else if (m.size() > 4 && m.rfind("cmov", 0) == 0 &&
                        ops.size() == 2) {
                 // cmovcc rd, rs: LEE las flags.  rd = cond ? (rs al ancho) : rd
                 // via SELECT branchless (mask = -(cond); rd = rd_old ^ ((rd_old

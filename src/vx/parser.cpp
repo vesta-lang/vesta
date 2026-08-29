@@ -518,7 +518,7 @@ static std::string strip_mode_atoms_(const std::string &spec) {
                 ++j;
             }
             const std::string atomo = spec.substr(i, j - i);
-            if (atomo.compare(0, 5, "mode:") == 0) {
+            if (atomo.rfind("mode:", 0) == 0) {
                 // `mode:auto` ya evalua a cierto, asi que sirve de neutro sin
                 // inventar un atomo nuevo.
                 out += "mode:auto";
@@ -1997,7 +1997,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     for (const auto &a : ats) {
                         // Un valor de `mode` que nadie conoce evaluaba a false
                         // y BORRABA la declaracion sin decir nada.  Se avisa.
-                        if (a.compare(0, 5, "mode:") == 0 && a != "mode:auto" &&
+                        if (a.rfind("mode:", 0) == 0 && a != "mode:auto" &&
                             a != "mode:aot" && a != "mode:bytecode" &&
                             a != "mode:jit" && a != "mode:vm" &&
                             a != "mode:jit-required") {

@@ -139,8 +139,8 @@ uint16_t reg_width(Isa isa, const std::string &r) {
             std::isdigit((unsigned char)r[1]))
             return 64;
         if (r.size() >= 2 &&
-            (r.compare(0, 2, "ft") == 0 || r.compare(0, 2, "fs") == 0 ||
-             r.compare(0, 2, "fa") == 0))
+            (r.rfind("ft", 0) == 0 || r.rfind("fs", 0) == 0 ||
+             r.rfind("fa", 0) == 0))
             return 64;
         return 0;
     }
