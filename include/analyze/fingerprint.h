@@ -199,6 +199,43 @@ std::vector<ContractCheck> verify_contracts(
  * referencia el heap gestionado.  Son propiedades EXACTAS/sound (decidibles del
  * layout), asi que su contrato es DURO (OK / VIOLATED, sin UNVERIFIABLE).
  */
+/**
+ * @struct FieldPlacement
+ * @brief Donde quedo UN campo dentro de su agregado.
+ *
+ * Es el layout ya resuelto por el comprobador de tipos, no una estimacion:
+ * el mismo que usa el generador de codigo para leer y escribir el campo.  Se
+ * lleva aqui para que las herramientas -- el editor y el modo de analisis --
+ * puedan ensenarlo sin rehacer el calculo, que es como se acaba teniendo dos
+ * respuestas distintas a la misma pregunta.
+ */
+struct FieldPlacement {
+    std::string name;
+    std::string type_name; ///< tipo legible, ya resuelto.
+    uint32_t offset = 0;   ///< desplazamiento en bytes desde el inicio.
+    uint32_t size = 0;     ///< tamano del campo en bytes.
+    /// Campo de bits: @c bit_width > 0 indica que el campo ocupa @c bit_width
+    /// bits a partir de @c bit_offset DENTRO de la palabra de @c size bytes
+    /// que empieza en @c offset.  Varios campos comparten esa palabra.
+    uint8_t bit_offset = 0;
+    uint8_t bit_width = 0;
+};
+
+/**
+ * @struct VariantPlacement
+ * @brief Una variante de un enum, con el valor que le corresponde.
+ *
+ * @c tag es el indice por orden de declaracion, que es lo que se guarda en
+ * memoria.  @c int_value es el valor del enum con base entera (estilo C), que
+ * puede no coincidir con el tag cuando el autor lo fija a mano.
+ */
+struct VariantPlacement {
+    std::string name;
+    uint32_t tag = 0;
+    int64_t int_value = 0;
+    uint32_t payload_fields = 0; ///< numero de campos de carga util.
+};
+
 struct TypeFingerprint {
     std::string type_name;
     enum Kind { STRUCT, CLASS, ENUM } kind = STRUCT;
@@ -213,6 +250,16 @@ struct TypeFingerprint {
         false; ///< declara `~Tipo()` (o algun campo destructible).
     bool is_reference =
         false; ///< tipo por referencia (clase): vive en el heap por naturaleza.
+    bool is_union = false; ///< union C-style: todos los campos en offset 0.
+    bool is_overlay =
+        false; ///< vista sobre memoria ajena: los offsets son explicitos.
+    bool is_polymorphic =
+        false; ///< lleva puntero a tabla de metodos al principio.
+
+    /// Disposicion de cada campo de instancia, en orden de declaracion.
+    std::vector<FieldPlacement> fields;
+    /// Variantes, solo para @c ENUM.
+    std::vector<VariantPlacement> variants;
 };
 
 /**

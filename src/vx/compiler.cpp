@@ -209,6 +209,19 @@ compute_type_fingerprints_(const TypeChecker &tc) {
         tf.no_heap = no_heap;
         tf.is_pod = all_c_repr && !has_dtor && no_heap;
         tf.is_reference = false;
+        tf.is_union = lay.is_union;
+        tf.is_overlay = lay.is_overlay;
+        tf.is_polymorphic = lay.is_polymorphic;
+        for (const auto &f : lay.fields) {
+            analyze::FieldPlacement fp;
+            fp.name = f.name;
+            fp.type_name = type_to_string(f.type);
+            fp.offset = f.offset;
+            fp.size = f.size;
+            fp.bit_offset = f.bit_offset;
+            fp.bit_width = f.bit_width;
+            tf.fields.push_back(std::move(fp));
+        }
         out.push_back(std::move(tf));
     }
 
@@ -229,6 +242,16 @@ compute_type_fingerprints_(const TypeChecker &tc) {
         tf.is_reference = true;
         tf.is_pod = false;
         tf.no_heap = false;
+        for (const auto &f : lay.fields) {
+            analyze::FieldPlacement fp;
+            fp.name = f.name;
+            fp.type_name = type_to_string(f.type);
+            fp.offset = f.offset;
+            fp.size = f.size;
+            fp.bit_offset = f.bit_offset;
+            fp.bit_width = f.bit_width;
+            tf.fields.push_back(std::move(fp));
+        }
         out.push_back(std::move(tf));
     }
 
@@ -250,6 +273,14 @@ compute_type_fingerprints_(const TypeChecker &tc) {
         tf.no_heap = no_heap;
         tf.is_pod = all_c_repr && no_heap;
         tf.is_reference = false;
+        for (const auto &v : lay.variants) {
+            analyze::VariantPlacement vp;
+            vp.name = v.name;
+            vp.tag = v.tag;
+            vp.int_value = v.int_value;
+            vp.payload_fields = static_cast<uint32_t>(v.field_types.size());
+            tf.variants.push_back(std::move(vp));
+        }
         out.push_back(std::move(tf));
     }
     return out;

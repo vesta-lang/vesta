@@ -1630,6 +1630,24 @@ class TypeChecker {
      * @param ta  Su tipo ya calculado; puede quedar reescrito.
      * @return @c true si encaja.
      */
+    /**
+     * @brief Comprueba la construccion de una variante de enum y da su tipo.
+     *
+     * `Color.Rojo(3)` no es una llamada, pero se comprueba igual que una --
+     * misma cantidad, mismos tipos, mismas conversiones -- porque para quien
+     * escribe el programa es lo mismo.  Estaba escrito dos veces, en las dos
+     * ramas del despacho que llegan a una variante.
+     *
+     * @param e         La construccion.
+     * @param fa        El acceso `Enum.Variante`, que queda marcado.
+     * @param var       La variante y los tipos de su carga.
+     * @param enum_name Nombre del enum, que es el tipo del resultado.
+     * @return El tipo del valor construido.
+     */
+    Type check_variant_ctor(ast::CallExpr *e, ast::FieldAccessExpr *fa,
+                            const EnumVariantInfo &var,
+                            const std::string &enum_name);
+
     bool arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta);
 
     void check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,

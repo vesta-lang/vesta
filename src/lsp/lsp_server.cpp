@@ -1129,6 +1129,9 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             def_text,
             lsp_position_to_byte_offset(def_text, doc_line, doc_char));
     }
+    // Analisis del fichero que define: de ahi salen el coste, los contratos y
+    // la disposicion en memoria de los tipos.  Se pide una sola vez.
+    const DocAnalysis &def_an = engine_.analyze_document(def_uri, def_text);
 
     // Construir el markdown del hover.
     std::string md;
@@ -1160,8 +1163,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     // (los metodos viven en el IR como `Clase__metodo`).
     if (kind == SymbolKind::Function || kind == SymbolKind::Method) {
         // El coste sale del analisis del fichero que DEFINE la funcion, que
-        // puede ser otro modulo; su texto ya se cargo arriba.
-        const DocAnalysis &an = engine_.analyze_document(def_uri, def_text);
+        // puede ser otro modulo; ya se pidio arriba.
+        const DocAnalysis &an = def_an;
         const analyze::CostResult *cr = nullptr;
         for (const auto &c : an.cost.functions) {
             if (c.function == word) {
@@ -1273,6 +1276,96 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 md += partes[i];
             }
             md += "\n";
+        }
+    }
+
+    // Un campo y una variante de enum se leen igual: lo que uno quiere saber es
+    // DONDE cae en memoria y QUE valor tiene.  El comprobador de tipos ya lo
+    // resolvio -- es el mismo layout que usa el generador de codigo --, asi que
+    // aqui solo se busca por nombre de tipo contenedor.
+    if ((kind == SymbolKind::Field || kind == SymbolKind::EnumVariant) &&
+        !container.empty()) {
+        const analyze::TypeFingerprint *tf = nullptr;
+        for (const auto &f : def_an.result.type_fingerprints) {
+            if (f.type_name == container) {
+                tf = &f;
+                break;
+            }
+        }
+        if (tf != nullptr && kind == SymbolKind::EnumVariant) {
+            for (size_t i = 0; i < tf->variants.size(); ++i) {
+                const analyze::VariantPlacement &v = tf->variants[i];
+                if (v.name != word) continue;
+                md += "\nValor: **" + std::to_string(v.int_value) + "**";
+                // El tag es lo que se guarda en memoria; solo se ensena cuando
+                // NO coincide con el valor, que es cuando confundirlos duele.
+                if (static_cast<int64_t>(v.tag) != v.int_value) {
+                    md += "  (etiqueta interna " + std::to_string(v.tag) + ")";
+                }
+                md += "\n";
+                char hex[32];
+                std::snprintf(hex, sizeof(hex), "0x%llX",
+                              static_cast<unsigned long long>(v.int_value));
+                md += "\nEn hexadecimal: `";
+                md += hex;
+                md += "`\n";
+                if (v.payload_fields > 0) {
+                    md += "\nLleva " + std::to_string(v.payload_fields) +
+                          " campo(s) de carga util.\n";
+                }
+                md += "\nEl enum ocupa " + std::to_string(tf->size_bytes) +
+                      " bytes.\n";
+                break;
+            }
+        } else if (tf != nullptr) {
+            for (size_t i = 0; i < tf->fields.size(); ++i) {
+                const analyze::FieldPlacement &f = tf->fields[i];
+                if (f.name != word) continue;
+                char hex[32];
+                std::snprintf(hex, sizeof(hex), "0x%X", f.offset);
+                md += "\nDesplazamiento: **+" + std::to_string(f.offset) +
+                      "** (`" + hex + "`)";
+                md += "  Tamano: **" + std::to_string(f.size) + "** byte(s)\n";
+                if (f.bit_width > 0) {
+                    // Campo de bits: lo que importa es que trozo de la palabra
+                    // ocupa, no el tamano de la palabra entera.
+                    md += "\nCampo de bits: bits " +
+                          std::to_string(f.bit_offset) + ".." +
+                          std::to_string(f.bit_offset + f.bit_width - 1) +
+                          " de la palabra en +" + std::to_string(f.offset) +
+                          "\n";
+                }
+                // El relleno solo significa algo cuando los campos se colocan
+                // en orden: en una union todos empiezan en cero, y en una
+                // vista los desplazamientos los fija el autor.
+                if (!tf->is_union && !tf->is_overlay) {
+                    const uint32_t anterior =
+                        (i == 0) ? 0
+                                 : tf->fields[i - 1].offset +
+                                       tf->fields[i - 1].size;
+                    if (f.offset > anterior) {
+                        md += "\nRelleno antes: **" +
+                              std::to_string(f.offset - anterior) +
+                              "** byte(s)\n";
+                    }
+                    if (i + 1 == tf->fields.size()) {
+                        const uint64_t fin = f.offset + f.size;
+                        if (tf->size_bytes > fin) {
+                            md += "\nRelleno al final del tipo: **" +
+                                  std::to_string(tf->size_bytes - fin) +
+                                  "** byte(s)\n";
+                        }
+                    }
+                }
+                md += "\nEn `" + container + "`: " +
+                      std::to_string(tf->size_bytes) + " bytes, alineado a " +
+                      std::to_string(tf->align_bytes);
+                if (tf->is_union) md += ", union";
+                if (tf->is_overlay) md += ", vista superpuesta";
+                if (tf->is_polymorphic) md += ", con tabla de metodos";
+                md += "\n";
+                break;
+            }
         }
     }
 

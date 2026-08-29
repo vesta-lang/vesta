@@ -10451,6 +10451,52 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
 }
 
 /**
+ * @brief Comprueba la construccion de una variante de enum y da su tipo.
+ *
+ * `Color.Rojo(3)` no es una llamada a nada: es fabricar un valor del enum con
+ * la carga que la variante declara.  Aun asi se comprueba igual que una llamada
+ * -- misma cantidad, mismos tipos, mismas conversiones -- porque para quien
+ * escribe el programa es lo mismo, y que una constante valga como argumento y
+ * no como carga seria una diferencia que nadie sabria explicar.
+ *
+ * Estaba escrito dos veces, en dos ramas distintas del mismo despacho: la que
+ * llega por el nombre del enum y la que llega por un valor de ese tipo.
+ *
+ * @param e    La construccion.
+ * @param fa   El acceso `Enum.Variante`, que queda marcado para la bajada.
+ * @param var  La variante y los tipos de su carga.
+ * @param enum_name Nombre del enum, que es el tipo del resultado.
+ * @return El tipo del valor construido.
+ */
+Type TypeChecker::check_variant_ctor(ast::CallExpr *e,
+                                     ast::FieldAccessExpr *fa,
+                                     const EnumVariantInfo &var,
+                                     const std::string &enum_name) {
+    if (e->args.size() != var.field_types.size()) {
+        diags_.error(e->loc, std::string("variante '") + var.name +
+                                 "': esperados " +
+                                 std::to_string(var.field_types.size()) +
+                                 " argumentos, recibidos " +
+                                 std::to_string(e->args.size()));
+    }
+    const size_t n = std::min(e->args.size(), var.field_types.size());
+    for (size_t i = 0; i < n; ++i)
+        check_call_arg(e->args[i].get(), var.field_types[i], i,
+                       "la variante '" + var.name + "'");
+    /* Los que sobran se comprueban igual, por sus efectos: un error dentro de
+     * uno de ellos hay que decirlo aunque el argumento no pinte nada. */
+    for (size_t i = n; i < e->args.size(); ++i)
+        (void)check_expr(e->args[i].get());
+
+    /* 99 marca "esto construye una variante": la bajada tiene un camino propio
+     * para eso y lo reconoce por este valor. */
+    fa->property_kind = 99;
+    Type rt{PrimitiveKind::STRUCT, enum_name};
+    fa->result_type = rt;
+    return rt;
+}
+
+/**
  * @copydoc vx::TypeChecker::check_call_arg
  */
 void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
@@ -13455,26 +13501,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                             (void)check_expr(a.get());
                         return Type{};
                     }
-                    if (e->args.size() != var->field_types.size()) {
-                        diags_.error(
-                            e->loc,
-                            std::string("variante '") + var->name +
-                                "': esperados " +
-                                std::to_string(var->field_types.size()) +
-                                " argumentos, recibidos " +
-                                std::to_string(e->args.size()));
-                    }
-                    const size_t n =
-                        std::min(e->args.size(), var->field_types.size());
-                    for (size_t i = 0; i < n; ++i)
-                        check_call_arg(e->args[i].get(), var->field_types[i], i,
-                                       "la variante '" + var->name + "'");
-                    for (size_t i = n; i < e->args.size(); ++i)
-                        (void)check_expr(e->args[i].get());
-                    fa->property_kind = 99;
-                    Type rt{PrimitiveKind::STRUCT, elay.name};
-                    fa->result_type = rt;
-                    return rt;
+                    return check_variant_ctor(e, fa, *var, elay.name);
                 }
             }
         }
@@ -13609,31 +13636,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         (void)check_expr(a.get());
                     return Type{};
                 }
-                // Aridad y tipos de argumentos.
-                if (e->args.size() != var->field_types.size()) {
-                    diags_.error(e->loc,
-                                 std::string("variante '") + var->name +
-                                     "': esperados " +
-                                     std::to_string(var->field_types.size()) +
-                                     " argumentos, recibidos " +
-                                     std::to_string(e->args.size()));
-                }
-                const size_t n =
-                    std::min(e->args.size(), var->field_types.size());
-                for (size_t i = 0; i < n; ++i)
-                    check_call_arg(e->args[i].get(), var->field_types[i], i,
-                                   "la variante '" + var->name + "'");
-                for (size_t i = n; i < e->args.size(); ++i)
-                    (void)check_expr(e->args[i].get());
-                // Marcar el FieldAccessExpr y CallExpr para que el
-                // lowering los reconozca como constructor de variante.
-                // Usamos `property_kind` como flag: 99 indica "es
-                // constructor de variante de enum"; el lowering hace
-                // un dispatch dedicado al ver este valor.
-                fa->property_kind = 99;
-                Type rt{PrimitiveKind::STRUCT, elay.name};
-                fa->result_type = rt;
-                return rt;
+                return check_variant_ctor(e, fa, *var, elay.name);
             }
         }
     }
