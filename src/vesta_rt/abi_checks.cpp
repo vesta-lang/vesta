@@ -33,6 +33,7 @@
 #include "arena/VirtualMemory.h"
 #include "loader/oop_types.h"
 #include "loader/string_object.h"
+#include "runtime/exception_runtime.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/vm_registers.h"
 
@@ -263,3 +264,43 @@ static_assert(offsetof(loader::MethodInfo, advice_chain) ==
                   VESTA_METHODINFO_ADVICE_CHAIN_OFFSET,
               "ABI drift: offsetof(MethodInfo, advice_chain) != "
               "VESTA_METHODINFO_ADVICE_CHAIN_OFFSET");
+
+/* =========================================================================
+ * Los NUMEROS que viajan al exterior
+ * =========================================================================
+ *
+ * Todo lo de arriba comprueba DONDE esta cada cosa.  Esto comprueba CUANTO
+ * VALE, que es la otra mitad del contrato y estaba sin atar: treinta
+ * constantes publicadas y ninguna comprobada.
+ *
+ * Un numero de estos no se rompe al cambiarlo -- nadie cambia un codigo de
+ * error a mano --; se rompe al INSERTAR uno nuevo en medio de la lista, que
+ * corre todos los de abajo.  Dentro del proyecto eso se arregla solo, porque
+ * todo el mundo usa el nombre; fuera no: quien escribio `if (kind == 7)`
+ * contra este fichero se queda comparando contra otra cosa.
+ * ========================================================================= */
+
+static_assert(runtime::FATAL_NULL_POINTER == VESTA_FATAL_NULL_POINTER,
+              "ABI drift: FATAL_NULL_POINTER");
+static_assert(runtime::FATAL_DIVISION_BY_ZERO == VESTA_FATAL_DIVISION_BY_ZERO,
+              "ABI drift: FATAL_DIVISION_BY_ZERO");
+static_assert(runtime::FATAL_STACK_OVERFLOW == VESTA_FATAL_STACK_OVERFLOW,
+              "ABI drift: FATAL_STACK_OVERFLOW");
+static_assert(runtime::FATAL_STACK_UNDERFLOW == VESTA_FATAL_STACK_UNDERFLOW,
+              "ABI drift: FATAL_STACK_UNDERFLOW");
+static_assert(runtime::FATAL_ILLEGAL_INSTRUCTION ==
+                  VESTA_FATAL_ILLEGAL_INSTRUCTION,
+              "ABI drift: FATAL_ILLEGAL_INSTRUCTION");
+static_assert(runtime::FATAL_INVALID_SYSCALL == VESTA_FATAL_INVALID_SYSCALL,
+              "ABI drift: FATAL_INVALID_SYSCALL");
+static_assert(runtime::FATAL_SEGMENTATION_FAULT ==
+                  VESTA_FATAL_SEGMENTATION_FAULT,
+              "ABI drift: FATAL_SEGMENTATION_FAULT");
+static_assert(runtime::FATAL_NATIVE_CRASH == VESTA_FATAL_NATIVE_CRASH,
+              "ABI drift: FATAL_NATIVE_CRASH");
+static_assert(runtime::FATAL_NATIVE_EXCEPTION == VESTA_FATAL_NATIVE_EXCEPTION,
+              "ABI drift: FATAL_NATIVE_EXCEPTION");
+static_assert(runtime::FATAL_OUT_OF_MEMORY == VESTA_FATAL_OUT_OF_MEMORY,
+              "ABI drift: FATAL_OUT_OF_MEMORY");
+static_assert(runtime::FATAL_USER_ABORT == VESTA_FATAL_USER_ABORT,
+              "ABI drift: FATAL_USER_ABORT");
