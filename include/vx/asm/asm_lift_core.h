@@ -14,6 +14,8 @@
 #include "ir/ssa_ir.h"
 #include "vx/asm/asm_cfg.h"
 #include "vx/asm/asm_lift_general.h" // AsmBoundReg
+#include "util/env_flags.h"   // el mando que hace hablar al elevado
+#include <cstdio>
 
 #include <cctype>
 #include <cstdint>
@@ -278,10 +280,22 @@ struct CfgHooks {
  * y los terminadores como BR/BR_COND.  @p out_exit = bloque de continuacion
  * (donde sigue el codigo tras el asm).  @return false si algun bloque no lifta.
  */
+inline bool cfg_give_up(const vx::AsmBasicBlock *bb, const char *why) {
+    static const bool on = util::flag_on(util::FlagId::AsmLiftDebug);
+    if (on) {
+        std::fprintf(stderr, "[asm-lift] el grafo no se eleva: %s", why);
+        if (bb != nullptr)
+            std::fprintf(stderr, " (bloque %u..%u, %zu salidas)", bb->first,
+                         bb->last, bb->succs.size());
+        std::fprintf(stderr, "\n");
+    }
+    return false;
+}
+
 inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg,
                              const CfgHooks &hooks, uint32_t &out_exit) {
     const size_t nb = cfg.blocks.size();
-    if (nb == 0) return false;
+    if (nb == 0) return cfg_give_up(nullptr, "el asm no tiene ni un bloque");
     // Un bloque IR NUEVO por bloque basico.  El bloque de entrada actual NO se
     // reusa como BB0: si el asm tiene un back-edge al inicio (loop), reusar la
     // entrada re-ejecutaria el codigo previo (p.ej. la init de las variables)
@@ -297,26 +311,38 @@ inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg,
         c.block = irb[i];
         c.cur.clear(); // register-file por bloque: cada uno recarga de su slot
         c.wrote.clear();
-        if (!hooks.lift_range(bb.first, hooks.term_start(bb))) return false;
+        if (!hooks.lift_range(bb.first, hooks.term_start(bb)))
+            return cfg_give_up(&bb, "una instruccion del cuerpo no se pudo "
+                                    "elevar");
         switch (bb.term) {
         case vx::AsmTerm::Fallthrough:
             cfg_flush_block(c);
             cfg_emit_br(c, (i + 1 < nb) ? irb[i + 1] : cont);
             break;
         case vx::AsmTerm::UncondJump:
-            if (bb.succs.size() != 1) return false;
+            if (bb.succs.size() != 1)
+                return cfg_give_up(&bb, "un salto incondicional que no lleva "
+                                        "a UN solo sitio");
             cfg_flush_block(c);
             cfg_emit_br(c, irb[bb.succs[0]]);
             break;
         case vx::AsmTerm::CondBranch: {
-            if (bb.succs.size() != 2) return false; // succs[0]=tomado, [1]=ft
+            // succs[0] = si se toma, succs[1] = si se cae.
+            if (bb.succs.size() != 2)
+                return cfg_give_up(&bb, "un salto condicional que no tiene "
+                                        "DOS salidas");
             const ir::IrValueId cond = hooks.branch_cond(bb);
-            if (cond == ir::IR_NO_VALUE) return false;
+            if (cond == ir::IR_NO_VALUE)
+                return cfg_give_up(&bb, "no se supo que condicion mira el "
+                                        "salto");
             cfg_flush_block(c); // tras calcular cond (usa cur) y antes de ramar
             cfg_emit_br_cond(c, cond, irb[bb.succs[0]], irb[bb.succs[1]]);
             break;
         }
-        default: return false; // Ret/Call/Indirect/Unknown -> aun no liftable
+        default:
+            // Ret/Call/Indirect/Unknown: aun no se sabe elevarlos.
+            return cfg_give_up(&bb, "el bloque acaba en algo que no es caer, "
+                                    "saltar ni ramificar");
         }
     }
     c.block = cont;
