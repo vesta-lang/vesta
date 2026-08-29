@@ -1,0 +1,185 @@
+namespace ejemplos.matriz_parametros;
+
+// LA MATRIZ COMPLETA: cada FORMA de parametro en cada CONTEXTO donde se puede
+// declarar uno.
+//
+// Existe porque esto ya paso dos veces.  Lo que va entre los parentesis de una
+// declaracion no depende de si lo que se declara es una funcion suelta, un
+// metodo, un constructor o una lambda: es la MISMA gramatica.  Pero el bucle
+// que la lee estaba copiado -- cinco veces para los metodos y una mas para las
+// lambdas --, y las copias eran versiones POBRES que solo aceptaban `tipo
+// nombre`.  El resultado: un parametro no-nulo o un puntero a funcion valian en
+// una funcion y no en un metodo, sin ninguna razon de diseno.
+//
+// Un fallo asi no se nota: nadie escribe la combinacion rara hasta que le hace
+// falta, y entonces parece una limitacion del lenguaje.  Por eso este ejemplo
+// recorre la matriz ENTERA -- seis contextos por seis formas -- y no una
+// muestra: si alguien vuelve a copiar el lector, aqui deja de compilar.
+//
+// La unica casilla que falta a proposito es el variadico fuera de una funcion
+// suelta, que se declara y se lee pero cuya llamada aun no se sabe empaquetar.
+// Eso se rechaza DICIENDOLO, y va en el 481, que es un test negativo.
+
+i64 g_valor = 5;
+
+i64 doblar(i64 x) { return x * 2; }
+
+// ---------------------------------------------------------------------------
+// Contexto 1: funcion suelta.  Es la que siempre acepto todo, y por eso sirve
+// de referencia contra la que comparar las demas.
+// ---------------------------------------------------------------------------
+i64 fn_plano(i64 x) { return x; }
+i64 fn_puntero(i64* p) { return *p; }
+i64 fn_nonulo(i64 !!x) { return x; }
+i64 fn_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+i64 fn_registro(register("rax") i64 x) { return x; }
+i64 fn_compartido(shared i64 x) { return x; }
+i64 fn_variadico(i64... xs) {
+    i64 n = vacount();
+    i64 acc = 0;
+    for (i64 i = 0; i < n; i = i + 1) { acc = acc + xs[i]; }
+    return acc;
+}
+
+// ---------------------------------------------------------------------------
+// Contexto 2: metodo de clase.  Contexto 3: su constructor.
+// ---------------------------------------------------------------------------
+class Clase {
+    public i64 semilla;
+
+    // El constructor es un contexto propio: lo parsea otra rama.
+    public Clase(i64 !!s, i64* p, i64 (*cb)(i64), register("rax") i64 r,
+                 shared i64 c) {
+        this.semilla = s + *p + cb(1) + r + c;
+    }
+
+    public i64 m_plano(i64 x) { return x; }
+    public i64 m_puntero(i64* p) { return *p; }
+    public i64 m_nonulo(i64 !!x) { return x; }
+    public i64 m_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+    public i64 m_registro(register("rax") i64 x) { return x; }
+    public i64 m_compartido(shared i64 x) { return x; }
+}
+
+// ---------------------------------------------------------------------------
+// Contexto 4: metodo de struct.  No es lo mismo que un metodo de clase: lo
+// parsea otra rama y lo baja otro fichero.
+// ---------------------------------------------------------------------------
+struct Estructura {
+    i64 m_plano(i64 x) { return x; }
+    i64 m_puntero(i64* p) { return *p; }
+    i64 m_nonulo(i64 !!x) { return x; }
+    i64 m_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+    i64 m_registro(register("rax") i64 x) { return x; }
+    i64 m_compartido(shared i64 x) { return x; }
+}
+
+// ---------------------------------------------------------------------------
+// Contexto 5: metodo de interfaz.  Solo declara la firma, sin cuerpo: es la
+// rama del parser que mas facil se queda corta, porque ahi no hay nada mas que
+// parametros.
+// ---------------------------------------------------------------------------
+interface Contrato {
+    i64 i_plano(i64 x);
+    i64 i_puntero(i64* p);
+    i64 i_nonulo(i64 !!x);
+    i64 i_fnptr(i64 (*cb)(i64), i64 v);
+    i64 i_registro(register("rax") i64 x);
+    i64 i_compartido(shared i64 x);
+}
+
+class Implementa : Contrato {
+    @Override
+    public i64 i_plano(i64 x) { return x; }
+    @Override
+    public i64 i_puntero(i64* p) { return *p; }
+    @Override
+    public i64 i_nonulo(i64 !!x) { return x; }
+    @Override
+    public i64 i_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+    @Override
+    public i64 i_registro(register("rax") i64 x) { return x; }
+    @Override
+    public i64 i_compartido(shared i64 x) { return x; }
+}
+
+// ---------------------------------------------------------------------------
+// El recorrido.  Cada contexto imprime su fila para que, si algo se rompe, el
+// diff diga QUE casilla y no solo que el total no cuadra.
+// ---------------------------------------------------------------------------
+i64 fila_funcion() {
+    i64 a = fn_plano(1);
+    i64 b = fn_puntero(&g_valor);          // 5
+    i64 c = fn_nonulo(2);
+    i64 d = fn_fnptr(&doblar, 3);          // 6
+    i64 e = fn_registro(4);
+    i64 f = fn_compartido(7);
+    i64 v = fn_variadico(1, 2, 3);         // 6
+    println("funcion:      ${a} ${b} ${c} ${d} ${e} ${f} ${v}");
+    return a + b + c + d + e + f + v;      // 31
+}
+
+i64 fila_clase() {
+    Clase k = new Clase(1, &g_valor, &doblar, 4, 7);  // 1+5+2+4+7 = 19
+    i64 a = k.m_plano(1);
+    i64 b = k.m_puntero(&g_valor);
+    i64 c = k.m_nonulo(2);
+    i64 d = k.m_fnptr(&doblar, 3);
+    i64 e = k.m_registro(4);
+    i64 f = k.m_compartido(7);
+    println("clase:        ${a} ${b} ${c} ${d} ${e} ${f}  (ctor ${k.semilla})");
+    return a + b + c + d + e + f + k.semilla;  // 25 + 19 = 44
+}
+
+i64 fila_struct() {
+    Estructura s;
+    i64 a = s.m_plano(1);
+    i64 b = s.m_puntero(&g_valor);
+    i64 c = s.m_nonulo(2);
+    i64 d = s.m_fnptr(&doblar, 3);
+    i64 e = s.m_registro(4);
+    i64 f = s.m_compartido(7);
+    println("struct:       ${a} ${b} ${c} ${d} ${e} ${f}");
+    return a + b + c + d + e + f;          // 25
+}
+
+i64 fila_interfaz() {
+    Contrato i = new Implementa();
+    i64 a = i.i_plano(1);
+    i64 b = i.i_puntero(&g_valor);
+    i64 c = i.i_nonulo(2);
+    i64 d = i.i_fnptr(&doblar, 3);
+    i64 e = i.i_registro(4);
+    i64 f = i.i_compartido(7);
+    println("interfaz:     ${a} ${b} ${c} ${d} ${e} ${f}");
+    return a + b + c + d + e + f;          // 25
+}
+
+i64 fila_lambda() {
+    // La lambda tiene una diferencia REAL: el tipo se puede omitir y se deduce
+    // del contexto.  Eso no justifica que las demas formas no valgan ahi, que
+    // era lo que pasaba.
+    fn(i64) -> i64 sin_tipo = (x) => { return x; };
+    fn(i64) -> i64 con_tipo = (i64 x) => { return x; };
+    fn(i64) -> i64 nonulo = (i64 !!x) => { return x; };
+    fn(i64) -> i64 registro = (register("rax") i64 x) => { return x; };
+    fn(i64) -> i64 compartido = (shared i64 x) => { return x; };
+
+    i64 a = sin_tipo(1);
+    i64 b = con_tipo(2);
+    i64 c = nonulo(3);
+    i64 d = registro(4);
+    i64 e = compartido(5);
+    println("lambda:       ${a} ${b} ${c} ${d} ${e}");
+    return a + b + c + d + e;              // 15
+}
+
+i32 main() {
+    i64 total = fila_funcion()    // 31
+              + fila_clase()      // 44
+              + fila_struct()     // 25
+              + fila_interfaz()   // 25
+              + fila_lambda();    // 15
+    println("total=${total}");
+    return (i32) (total - 98);    // 140 - 98 = 42
+}

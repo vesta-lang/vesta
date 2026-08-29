@@ -9144,28 +9144,31 @@ std::unique_ptr<ast::Expr> Parser::parse_lambda_expr() {
     // parseamos `tipo nombre`; en caso contrario solo `nombre`.
     while (current_.kind != TokenKind::RPAREN &&
            current_.kind != TokenKind::END_OF_FILE) {
-        auto p = std::make_unique<ast::ParamDecl>();
-        p->loc = current_.loc;
-        if (starts_type()) {
-            // Forma con tipo: "T name".
-            p->type = parse_type_node();
-            if (!p->type) return nullptr;
-            if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre del parametro tras el tipo "
-                           "en lambda");
-                return nullptr;
-            }
-            p->name = consume().lexeme;
-        } else if (current_.kind == TokenKind::IDENTIFIER) {
-            // Forma sin tipo: "name" -> p->type = null y el type
-            // checker lo deducira del contexto (asignacion a fn(T)).
+        /* La forma SIN tipo es un nombre a secas, y se reconoce por lo que
+         * viene detras: una coma o el cierre.  Cualquier otra cosa lleva tipo,
+         * y entonces lo que hay entre los parentesis es la misma gramatica que
+         * en cualquier otra declaracion -- se lee con el mismo lector, para que
+         * una lambda no acabe siendo el sitio donde no valen las formas que
+         * valen en todos los demas. */
+        const bool sin_tipo = (current_.kind == TokenKind::IDENTIFIER &&
+                               (lex_.peek_at(0).kind == TokenKind::COMMA ||
+                                lex_.peek_at(0).kind == TokenKind::RPAREN));
+        if (sin_tipo) {
+            auto p = std::make_unique<ast::ParamDecl>();
+            p->loc = current_.loc;
+            // Sin tipo: el comprobador lo deduce del contexto (de la `fn(T)`
+            // a la que se asigna).
             p->name = consume().lexeme;
             p->type = nullptr;
+            lam->params.push_back(std::move(p));
         } else {
-            error_here("se esperaba un parametro en la lambda");
-            return nullptr;
+            auto p = parse_param();
+            if (!p || p->name.empty()) {
+                error_here("se esperaba un parametro en la lambda");
+                return nullptr;
+            }
+            lam->params.push_back(std::move(p));
         }
-        lam->params.push_back(std::move(p));
         if (!match(TokenKind::COMMA)) break;
     }
     (void)expect(TokenKind::RPAREN,

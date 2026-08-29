@@ -3106,6 +3106,7 @@ r0_case("finales478", "clases final: las dos formas, con visibilidad, y una fina
 fails_case("finalher479", "heredar de una clase final es error de compilacion", "479_final_hereda_err.vx", "declarada final", line=3756)
 r0_case("parmet480", "un metodo acepta lo mismo que una funcion suelta: puntero a funcion y no-nulo", "480_params_metodo.vx", 42, line=3758)
 fails_case("varmet481", "un variadico en un metodo se rechaza diciendo por que", "481_variadico_metodo_err.vx", "no esta soportado en un metodo", line=3760)
+r0_case("matrizparam482", "matriz COMPLETA de parametros: cada forma en cada contexto (funcion, metodo, ctor, struct, interfaz, lambda)", "482_matriz_parametros.vx", 42, line=3762)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)
