@@ -1836,6 +1836,38 @@ void inject_generic_templates_from_vxi(
                 if (it != concept_rename.end()) c = it->second;
             }
     };
+    /* Y lo mismo DENTRO del predicado de un concepto, que puede llamar a otro
+     * del mismo modulo (`concept A<T> = B<T>() && ...`).  Ese cuerpo tambien
+     * viaja como texto y tambien nombra al otro por su nombre corto, asi que
+     * sin traducirlo el predicado no encontraba nada y el tipo no satisfacia
+     * una condicion que si cumplia.  Solo hace falta mirar a quien se LLAMA:
+     * un concepto se usa como `Otro<T>()`. */
+    std::function<void(ast::Expr *)> rename_in_expr = [&](ast::Expr *e) {
+        if (!e) return;
+        switch (e->kind) {
+        case ast::NodeKind::CallExpr: {
+            auto *c = static_cast<ast::CallExpr *>(e);
+            if (c->callee && c->callee->kind == ast::NodeKind::IdentExpr) {
+                auto *id = static_cast<ast::IdentExpr *>(c->callee.get());
+                auto it = concept_rename.find(id->name);
+                if (it != concept_rename.end()) id->name = it->second;
+            }
+            rename_in_expr(c->callee.get());
+            for (auto &a : c->args) rename_in_expr(a.get());
+            break;
+        }
+        case ast::NodeKind::BinaryExpr: {
+            auto *b = static_cast<ast::BinaryExpr *>(e);
+            rename_in_expr(b->lhs.get());
+            rename_in_expr(b->rhs.get());
+            break;
+        }
+        case ast::NodeKind::UnaryExpr:
+            rename_in_expr(static_cast<ast::UnaryExpr *>(e)->operand.get());
+            break;
+        default: break;
+        }
+    };
 
     for (auto &decl : parsed->decls) {
         if (!decl) continue;
@@ -1923,6 +1955,10 @@ void inject_generic_templates_from_vxi(
             case ast::NodeKind::EnumDecl:
                 rename_bounds(
                     static_cast<ast::EnumDecl *>(decl.get())->type_bounds);
+                break;
+            case ast::NodeKind::ConceptDecl:
+                rename_in_expr(
+                    static_cast<ast::ConceptDecl *>(decl.get())->predicate.get());
                 break;
             default: break;
             }

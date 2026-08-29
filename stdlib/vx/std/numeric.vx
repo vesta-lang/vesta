@@ -98,20 +98,20 @@ public concept PackedMul<T> =
 /// tiene ninguna de las dos maquinas.
 public concept PackedDiv<T> = is_float<T>();
 
-/// Se puede repartir un mismo sumando a todos los carriles.
+/// Se puede repartir un mismo sumando a todos los carriles.  Cualquier numero.
 ///
-/// Todos menos f32, y no porque la maquina no sepa repartir un f32 -- sabe --
-/// sino porque el reconocedor todavia no lo mira.
-public concept PackedScalarAdd<T> =
-    is_numeric<T>() && (is_integer<T>() || sizeof<T>() == 8);
+/// Estuvo cerrado a todo menos f32.  No era un limite de la maquina -- repartir
+/// un f32 se sabe hacer desde el baseline -- sino que la tabla de tipos del
+/// compilador estaba escrita tres veces y la copia del reparto de escalar se
+/// habia quedado sin f32.  Al dejar una sola, el hueco desaparecio.
+public concept PackedScalarAdd<T> = is_numeric<T>();
 
 /// Se puede repartir un mismo factor a todos los carriles.
 ///
-/// La interseccion de las dos condiciones anteriores: hace falta que exista el
-/// producto empaquetado Y que el reparto del escalar se reconozca.
-public concept PackedScalarMul<T> =
-    (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4))
-    || (is_float<T>() && sizeof<T>() == 8);
+/// Es la interseccion de las dos condiciones de arriba: hace falta que exista
+/// el producto empaquetado Y que el reparto del escalar se reconozca.  Como lo
+/// segundo ya vale para cualquier numero, queda en lo primero.
+public concept PackedScalarMul<T> = PackedMul<T>();
 
 /// Existe negacion empaquetada.  Hoy solo f64, por hueco del reconocedor.
 public concept PackedNegate<T> = is_float<T>() && sizeof<T>() == 8;

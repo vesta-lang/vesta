@@ -481,11 +481,128 @@ bool Lowering::try_lower_memcpy_idiom_for(ast::ForStmt *s) {
 
 
 /**
+ * @brief Abre un bucle contado y deja listo su cuerpo.
+ *
+ * Es la unica descripcion de como se construye un bucle en el vectorizador.
+ * Antes cada idioma la escribia entera -- los phis, la condicion, el salto, la
+ * arista de vuelta y las listas de predecesores y sucesores -- y son cuarenta
+ * lineas donde los fallos no dan error: una arista contada dos veces o una
+ * entrada de phi que apunta al bloque equivocado producen codigo que compila y
+ * hace otra cosa.
+ *
+ * Los bloques los crea quien llama.  Podria crearlos esto, pero entonces el
+ * nombre y el ORDEN en que aparecen en el volcado del IR dejarian de ser cosa
+ * del idioma, y esos dos detalles son justamente por donde se lee lo que hizo.
+ *
+ * @param f            Marco a rellenar.
+ * @param hdr          Bloque de la cabecera.
+ * @param body         Bloque del cuerpo.
+ * @param after        Bloque al que se sale.
+ * @param i_init       Valor inicial del indice.
+ * @param bound        Contra que se compara.
+ * @param step         Cuanto avanza el indice por vuelta.
+ * @param guard        Cuando se entra a una vuelta.
+ * @param carried_init Valor inicial de cada cosa que viaje entre vueltas.
+ * @param ln           Linea del fuente.
+ */
+void Lowering::vec_loop_open(VecLoopFrame &f, ir::IrBlockId hdr,
+                             ir::IrBlockId body, ir::IrBlockId after,
+                             ir::IrValueId i_init, ir::IrValueId bound,
+                             ir::IrValueId step, uint64_t step_imm,
+                             VecLoopGuard guard,
+                             const std::vector<ir::IrValueId> &carried_init,
+                             uint32_t ln, ir::IrBlockId from_hint) {
+    /* Se puede llegar a la cabecera de dos maneras, y confundirlas produce un
+     * bucle infinito que compila sin quejarse: o se viene de un bloque
+     * anterior -- y entonces hay que saltar aqui --, o ya se esta dentro
+     * porque el bucle de antes salio justo a esta cabecera, y entonces el
+     * salto sobra y el phi tiene que apuntar a quien de verdad manda el
+     * control, no a la cabecera misma. */
+    const ir::IrBlockId from = from_hint ? from_hint : current_block_;
+    f.hdr = hdr;
+    f.body = body;
+    f.after = after;
+    f.step = step;
+    f.step_imm = step_imm;
+    f.idx_ty = fn_->values[i_init].type;
+    if (!from_hint) emit_br(f.hdr, ln);
+
+    current_block_ = f.hdr;
+    /* El phi del indice va SIEMPRE el primero: quien cierra el bucle ata la
+     * arista de vuelta por posicion, y los que viajan van detras en el orden en
+     * que se pasaron. */
+    f.phi_idx = fn_->new_value(f.idx_ty);
+    {
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = f.idx_ty;
+        phi.dst = f.phi_idx;
+        phi.source_line = ln;
+        phi.phi_args.push_back({i_init, from});
+        fn_->append(f.hdr, std::move(phi));
+    }
+    f.phi_carried.clear();
+    f.phi_carried.reserve(carried_init.size());
+    for (const ir::IrValueId v : carried_init) {
+        const ir::IrType ty = fn_->values[v].type;
+        const ir::IrValueId p = fn_->new_value(ty);
+        ir::IrInstr phi{};
+        phi.op = ir::IrOp::PHI;
+        phi.type = ty;
+        phi.dst = p;
+        phi.source_line = ln;
+        phi.phi_args.push_back({v, from});
+        fn_->append(f.hdr, std::move(phi));
+        f.phi_carried.push_back(p);
+    }
+
+    ir::IrValueId cond;
+    if (guard == VecLoopGuard::WholeStep) {
+        const ir::IrValueId next =
+            vec_bin(ir::IrOp::ADD, f.idx_ty, f.phi_idx, f.step, ln);
+        cond = vec_bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, next, bound, ln);
+    } else {
+        cond = vec_bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, f.phi_idx, bound,
+                       ln);
+    }
+    emit_br_cond(cond, f.body, f.after, ln);
+
+    current_block_ = f.body;
+}
+
+/**
+ * @brief Cierra el cuerpo de un bucle contado y sale a su bloque de salida.
+ *
+ * @param f            El marco.
+ * @param carried_next Con que sigue cada valor que viaja, en el mismo orden.
+ * @param ln           Linea del fuente.
+ */
+void Lowering::vec_loop_close(VecLoopFrame &f,
+                              const std::vector<ir::IrValueId> &carried_next,
+                              uint32_t ln) {
+    const ir::IrBlockId from = current_block_;
+    const ir::IrValueId paso = (f.step != ir::IR_NO_VALUE)
+                                   ? f.step
+                                   : emit_const(f.idx_ty, f.step_imm, ln);
+    const ir::IrValueId i_next =
+        vec_bin(ir::IrOp::ADD, f.idx_ty, f.phi_idx, paso, ln);
+    emit_br(f.hdr, ln);
+    /* Mismo orden que al abrirlo: el indice y detras los que viajan. */
+    fn_->blocks[f.hdr].instrs[0].phi_args.push_back({i_next, from});
+    for (size_t k = 0; k < f.phi_carried.size() && k < carried_next.size(); ++k)
+        fn_->blocks[f.hdr].instrs[k + 1].phi_args.push_back(
+            {carried_next[k], from});
+
+    current_block_ = f.after;
+    block_terminated_ = false;
+}
+
+/**
  * @brief Monta la primera mitad del andamio y deja listo el cuerpo ancho.
  *
- * Crea los cinco bloques, salta al bucle ancho, y en su cabecera pone el indice
- * -- con su phi, que entra con el valor inicial -- y la condicion de que queden
- * al menos W elementos.  Al volver, se emite en el cuerpo ancho.
+ * Los cinco bloques del vectorizador son dos bucles contados encadenados: uno
+ * que avanza de W en W y otro que recoge de uno en uno lo que sobra.  Los monta
+ * @ref vec_loop_open.
  *
  * @param sk       Donde queda el andamio.
  * @param prefijo  Con que nombrar los bloques, para leer el IR.
@@ -505,30 +622,11 @@ void Lowering::vec_begin(VecSkeleton &sk, const char *prefijo,
     sk.tbody = fn_->new_block(std::string(prefijo) + "_tail_body");
     sk.exit = fn_->new_block(std::string(prefijo) + "_exit");
 
-    current_block_ = sk.entry;
     sk.v_W = emit_const(sk.idx_ty, w, ln);
-    emit_br(sk.mhdr, ln);
-
-    current_block_ = sk.mhdr;
-    sk.phi_main = fn_->new_value(sk.idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = sk.idx_ty;
-        phi.dst = sk.phi_main;
-        phi.source_line = ln;
-        phi.phi_args.push_back({i_init, sk.entry});
-        fn_->append(sk.mhdr, std::move(phi));
-    }
-    /* Se entra al cuerpo ancho solo si quedan W elementos ENTEROS: con menos,
-     * leer de golpe se saldria del array. */
-    const ir::IrValueId v_ipW =
-        vec_bin(ir::IrOp::ADD, sk.idx_ty, sk.phi_main, sk.v_W, ln);
-    const ir::IrValueId cond_m =
-        vec_bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N, ln);
-    emit_br_cond(cond_m, sk.mbody, sk.thdr, ln);
-
-    current_block_ = sk.mbody;
+    /* El bucle ancho sale al de uno en uno cuando ya no caben W enteros. */
+    vec_loop_open(sk.main, sk.mhdr, sk.mbody, sk.thdr, i_init, v_N, sk.v_W, w,
+                  VecLoopGuard::WholeStep, {}, ln);
+    sk.phi_main = sk.main.phi_idx;
 }
 
 /**
@@ -543,27 +641,14 @@ void Lowering::vec_begin(VecSkeleton &sk, const char *prefijo,
  * @param ln  Linea del fuente.
  */
 void Lowering::vec_to_tail(VecSkeleton &sk, ir::IrValueId v_N, uint32_t ln) {
-    const ir::IrValueId i_mnext =
-        vec_bin(ir::IrOp::ADD, sk.idx_ty, sk.phi_main, sk.v_W, ln);
-    emit_br(sk.mhdr, ln);
-    fn_->blocks[sk.mhdr].instrs[0].phi_args.push_back({i_mnext, sk.mbody});
-
-    current_block_ = sk.thdr;
-    sk.phi_tail = fn_->new_value(sk.idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = sk.idx_ty;
-        phi.dst = sk.phi_tail;
-        phi.source_line = ln;
-        phi.phi_args.push_back({sk.phi_main, sk.mhdr});
-        fn_->append(sk.thdr, std::move(phi));
-    }
-    const ir::IrValueId cond_t =
-        vec_bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, sk.phi_tail, v_N, ln);
-    emit_br_cond(cond_t, sk.tbody, sk.exit, ln);
-
-    current_block_ = sk.tbody;
+    /* Cerrar el ancho deja el programa en su salida, que es la cabecera del
+     * otro; alli el indice arranca donde lo dejo el ancho. */
+    vec_loop_close(sk.main, {}, ln);
+    /* Al de uno en uno se llega por la arista que sale de la cabecera del
+     * ancho cuando ya no caben W enteros; no hay que saltar otra vez. */
+    vec_loop_open(sk.tail, sk.thdr, sk.tbody, sk.exit, sk.phi_main, v_N,
+                  ir::IR_NO_VALUE, 1, VecLoopGuard::Remaining, {}, ln, sk.mhdr);
+    sk.phi_tail = sk.tail.phi_idx;
 }
 
 /**
@@ -573,14 +658,7 @@ void Lowering::vec_to_tail(VecSkeleton &sk, ir::IrValueId v_N, uint32_t ln) {
  * @param ln Linea del fuente.
  */
 void Lowering::vec_end(VecSkeleton &sk, uint32_t ln) {
-    const ir::IrValueId uno = emit_const(sk.idx_ty, 1, ln);
-    const ir::IrValueId i_tnext =
-        vec_bin(ir::IrOp::ADD, sk.idx_ty, sk.phi_tail, uno, ln);
-    emit_br(sk.thdr, ln);
-    fn_->blocks[sk.thdr].instrs[0].phi_args.push_back({i_tnext, sk.tbody});
-
-    current_block_ = sk.exit;
-    block_terminated_ = false;
+    vec_loop_close(sk.tail, {}, ln);
 }
 
 /**
@@ -609,6 +687,121 @@ ir::IrValueId Lowering::vec_bin(ir::IrOp op, ir::IrType ty, ir::IrValueId a,
     fn_->append(current_block_, std::move(in));
     return d;
 }
+
+/**
+ * @brief Que tipo de elemento es, y cuanto ocupa, para vectorizar.
+ *
+ * Ver la declaracion: estaba escrita tres veces y una de las copias se habia
+ * quedado sin `f32`.
+ *
+ * @param k Tipo del elemento.
+ * @param out_ty Tipo equivalente del IR.
+ * @param out_esz Bytes que ocupa.
+ * @param out_fp Si es de coma flotante.
+ * @return false si no es un tipo que se pueda vectorizar.
+ */
+bool Lowering::vec_elem_info(PrimitiveKind k, ir::IrType *out_ty,
+                             uint64_t *out_esz, bool *out_fp) noexcept {
+    switch (k) {
+    case PrimitiveKind::F64: *out_ty = ir::IrType::F64; break;
+    case PrimitiveKind::F32: *out_ty = ir::IrType::F32; break;
+    case PrimitiveKind::I64: *out_ty = ir::IrType::I64; break;
+    case PrimitiveKind::U64: *out_ty = ir::IrType::U64; break;
+    case PrimitiveKind::I32: *out_ty = ir::IrType::I32; break;
+    case PrimitiveKind::U32: *out_ty = ir::IrType::U32; break;
+    case PrimitiveKind::I16: *out_ty = ir::IrType::I16; break;
+    case PrimitiveKind::U16: *out_ty = ir::IrType::U16; break;
+    case PrimitiveKind::I8: *out_ty = ir::IrType::I8; break;
+    case PrimitiveKind::U8: *out_ty = ir::IrType::U8; break;
+    default: return false;
+    }
+    *out_fp = (k == PrimitiveKind::F64 || k == PrimitiveKind::F32);
+    switch (k) {
+    case PrimitiveKind::I8:
+    case PrimitiveKind::U8: *out_esz = 1; break;
+    case PrimitiveKind::I16:
+    case PrimitiveKind::U16: *out_esz = 2; break;
+    case PrimitiveKind::I32:
+    case PrimitiveKind::U32:
+    case PrimitiveKind::F32: *out_esz = 4; break;
+    default: *out_esz = 8; break;
+    }
+    return true;
+}
+
+/**
+ * @brief Cuantos BYTES avanza de golpe un bucle vectorizado.
+ *
+ * Estaba escrito en cada idioma, y cuatro de las cinco copias decian lo mismo.
+ * La quinta no -- la reduccion corre a 128 bits porque su acumulador vive en un
+ * registro y no se parte --, y esa diferencia, siendo deliberada, era
+ * indistinguible de un despiste: se leia como una copia que se habia quedado
+ * atras.  Aqui es un argumento, que es lo que era.
+ *
+ * @param auto_width Ancho a usar en el automatico nativo.
+ * @return Bytes por vuelta del bucle ancho.
+ */
+uint64_t Lowering::vec_chunk_width(uint64_t auto_width) const noexcept {
+    if (native_poo_)
+        return aot_auto_vec_ ? auto_width
+                             : static_cast<uint64_t>(aot_vec_width_);
+    return jit::vec_isa_width(jit::vec_chunk_isa());
+}
+
+/**
+ * @brief Direccion de un elemento: @p base desplazada @p off bytes.
+ *
+ * La aritmetica de punteros HEREDA la naturaleza de la base, y eso no es un
+ * detalle de estilo: un array de `malloc` vive en memoria del proceso y uno
+ * local vive en la pila de la maquina virtual.  Marcarlo host a ciegas hacia
+ * que el acceso saliera con la instruccion equivocada -- leer memoria de la
+ * maquina como si fuera del proceso -- y el programa moria al recorrer un array
+ * local vectorizado.
+ *
+ * Esto estaba escrito cinco veces, una por idioma, con este mismo comentario al
+ * lado.  Basta con que una de las copias se quede sin la linea que hereda la
+ * naturaleza para que vuelva aquel fallo, y en un sitio distinto.
+ *
+ * @param base Puntero de partida.
+ * @param off Desplazamiento en BYTES.
+ * @param ln Linea del fuente.
+ * @return El puntero al elemento.
+ */
+ir::IrValueId Lowering::vec_elem_ptr(ir::IrValueId base, ir::IrValueId off,
+                                     uint32_t ln) {
+    const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
+    fn_->values[d].is_host_ptr =
+        (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
+    ir::IrInstr in{};
+    in.op = ir::IrOp::ADD;
+    in.type = ir::IrType::PTR;
+    in.dst = d;
+    in.operands = {base, off};
+    in.source_line = ln;
+    fn_->append(current_block_, std::move(in));
+    return d;
+}
+
+/**
+ * @brief Lee un elemento de la direccion @p at.
+ * @param at Direccion.
+ * @param elem_ty Tipo del elemento.
+ * @param ln Linea del fuente.
+ * @return El valor leido.
+ */
+ir::IrValueId Lowering::vec_load_elem(ir::IrValueId at, ir::IrType elem_ty,
+                                      uint32_t ln) {
+    const ir::IrValueId v = fn_->new_value(elem_ty);
+    ir::IrInstr ld{};
+    ld.op = ir::IrOp::LOAD;
+    ld.type = elem_ty;
+    ld.dst = v;
+    ld.operands = {at};
+    ld.source_line = ln;
+    fn_->append(current_block_, std::move(ld));
+    return v;
+}
+
 bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     using namespace ast;
     static const bool MC_DBG = util::flag_on(util::FlagId::McIdiomDebug);
@@ -660,62 +853,6 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     // Tipos de elemento vectorizables (HOST): f64 (todas las ops) e enteros
     // i64/i32 (solo add/sub -- SSE2 no tiene mul/div packed de enteros).  El
     // valor de salida es el PrimitiveKind comun a las 3 bases.
-    auto elem_info = [](PrimitiveKind k, ir::IrType *out_ty, uint64_t *out_esz,
-                        bool *out_fp) -> bool {
-        switch (k) {
-        case PrimitiveKind::F64:
-            *out_ty = ir::IrType::F64;
-            *out_esz = 8;
-            *out_fp = true;
-            return true;
-        case PrimitiveKind::F32:
-            *out_ty = ir::IrType::F32;
-            *out_esz = 4;
-            *out_fp = true;
-            return true;
-        case PrimitiveKind::I64:
-            *out_ty = ir::IrType::I64;
-            *out_esz = 8;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::U64:
-            *out_ty = ir::IrType::U64;
-            *out_esz = 8;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::I32:
-            *out_ty = ir::IrType::I32;
-            *out_esz = 4;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::U32:
-            *out_ty = ir::IrType::U32;
-            *out_esz = 4;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::I16:
-            *out_ty = ir::IrType::I16;
-            *out_esz = 2;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::U16:
-            *out_ty = ir::IrType::U16;
-            *out_esz = 2;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::I8:
-            *out_ty = ir::IrType::I8;
-            *out_esz = 1;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::U8:
-            *out_ty = ir::IrType::U8;
-            *out_esz = 1;
-            *out_fp = false;
-            return true;
-        default: return false;
-        }
-    };
     // Helper: valida que @p ix es base_ident[idx] HOST de un tipo vectorizable;
     // devuelve la base + su PrimitiveKind de elemento.
     auto check_idx_host = [&](IndexExpr *ix, IdentExpr **out_base,
@@ -736,7 +873,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
         ir::IrType ety;
         uint64_t esz2;
         bool fp2;
-        if (!elem_info(t.pointee->kind, &ety, &esz2, &fp2)) return false;
+        if (!vec_elem_info(t.pointee->kind, &ety, &esz2, &fp2)) return false;
         *out_base = base;
         *out_kind = t.pointee->kind;
         return true;
@@ -750,7 +887,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     ir::IrType elem_ty;
     uint64_t esz;
     bool elem_fp;
-    elem_info(ck, &elem_ty, &esz, &elem_fp);
+    vec_elem_info(ck, &elem_ty, &esz, &elem_fp);
     // Enteros: nunca div packed (subop 3 bail).  mul (subop 2) solo donde hay
     // packed mul: i16/u16 (PMULLW) e i32/u32 (PMULLD); i8/u8 e i64/u64 sin mul.
     if (!elem_fp) {
@@ -774,12 +911,7 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     // -> cross-compile correcto + la reduccion (acc de 1 reg, no splittea) cabe
     // (chunk==host_w del codegen).  Fuera de AOT: host (vec_chunk_isa) para que
     // el .velb sea portable (el JIT descompone el chunk al ancho del host).
-    const uint64_t width =
-        native_poo_ ? (aot_auto_vec_
-                           ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada
-                                 // variante decompone (4x128/2x256/1x512)
-                           : static_cast<uint64_t>(aot_vec_width_))
-                    : jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t width = vec_chunk_width(64u);
     const uint64_t W = width / esz; // lanes segun ancho/tipo
 
     // Bajar el VALOR inicial + las bases directamente (NO lower_stmt(init), que
@@ -810,25 +942,8 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     auto bin = [&](ir::IrOp op, ir::IrType ty, ir::IrValueId a,
                    ir::IrValueId b) { return vec_bin(op, ty, a, b, ln); };
 
-    auto ptr_at = [&](ir::IrValueId base,
-                      ir::IrValueId i64off) -> ir::IrValueId {
-        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
-         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
-         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
-         * el acceso saliera con la instruccion equivocada -- leer memoria VM
-         * como si fuera host -- y el proceso moria al recorrer un array local
-         * vectorizado. */
-        fn_->values[d].is_host_ptr =
-            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{};
-        in.op = ir::IrOp::ADD;
-        in.type = ir::IrType::PTR;
-        in.dst = d;
-        in.operands = {base, i64off};
-        in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
-        return d;
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) {
+        return vec_elem_ptr(base, off, ln);
     };
     {
         const ir::IrValueId i64 =
@@ -857,17 +972,8 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64,
                                       emit_const(ir::IrType::I64, esz, ln));
-        auto load_el = [&](ir::IrValueId base) -> ir::IrValueId {
-            const ir::IrValueId at = ptr_at(base, off);
-            const ir::IrValueId v = fn_->new_value(elem_ty);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = elem_ty;
-            ld.dst = v;
-            ld.operands = {at};
-            ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
-            return v;
+        auto load_el = [&](ir::IrValueId base) {
+            return vec_load_elem(ptr_at(base, off), elem_ty, ln);
         };
         const ir::IrValueId v_ai = load_el(v_a);
         const ir::IrValueId v_bi = load_el(v_b);
@@ -1110,9 +1216,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
 
     // ===== Emision (CFG espejo de elementwise) =====
     const uint32_t ln = s->loc.line;
-    const uint64_t width =
-        native_poo_ ? (aot_auto_vec_ ? 64u : (uint64_t)aot_vec_width_)
-                    : jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t width = vec_chunk_width(64u);
     const uint64_t W = width / esz;
 
     const ir::IrValueId i_init =
@@ -1186,16 +1290,9 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         return d;
     };
 
-    const ir::IrBlockId entry = current_block_;
-    const ir::IrBlockId mhdr = fn_->new_block("vcp_main_hdr");
-    const ir::IrBlockId mbody = fn_->new_block("vcp_main_body");
-    const ir::IrBlockId thdr = fn_->new_block("vcp_tail_hdr");
-    const ir::IrBlockId tbody = fn_->new_block("vcp_tail_body");
-    const ir::IrBlockId exit = fn_->new_block("vcp_exit");
-
-    // --- entry: consts + un VEC_BCAST por escalar (a XMM13-idx) + BR mhdr ---
-    current_block_ = entry;
-    const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
+    /* Los escalares de la cadena se reparten a todos los carriles UNA vez,
+     * antes de entrar al bucle: dentro no cambian.  Va antes de montar el
+     * andamio porque tiene que quedar en el bloque de entrada. */
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
     for (size_t k = 0; k < S.size(); ++k) {
         if (!S[k].is_scalar && !S[k].is_scaled_arr) continue;
@@ -1207,68 +1304,18 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         // imm: bits 0-7 = ancho ; bits 8-10 = indice de reg (XMM13-idx).
         bc.imm = width | ((uint64_t)(step_sidx[k] & 0x7) << 8);
         bc.source_line = ln;
-        fn_->append(entry, std::move(bc));
+        fn_->append(current_block_, std::move(bc));
     }
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(entry, std::move(br));
-    }
-    fn_->blocks[entry].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(entry);
+    /* El andamio -- los cinco bloques, los dos indices y sus condiciones -- lo
+     * monta `vec_begin`; aqui solo queda lo que este idioma hace dentro.  Al
+     * volver se emite en el cuerpo ancho. */
+    VecSkeleton sk;
+    vec_begin(sk, "vcp", i_init, v_N, (uint64_t)W, ln);
+    const ir::IrValueId phi_im = sk.phi_main;
 
-    // --- mhdr: PHI i + (i+W)<=N -> mbody|thdr ---
-    current_block_ = mhdr;
-    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_im;
-        phi.source_line = ln;
-        phi.phi_args.push_back({i_init, entry});
-        fn_->append(mhdr, std::move(phi));
-    }
-    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    const ir::IrValueId cond_m =
-        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_m};
-        brc.target_block = mbody;
-        brc.false_block = thdr;
-        brc.source_line = ln;
-        fn_->append(mhdr, std::move(brc));
-    }
-    fn_->blocks[mhdr].succs.push_back(mbody);
-    fn_->blocks[mhdr].succs.push_back(thdr);
-    fn_->blocks[mbody].preds.push_back(mhdr);
-    fn_->blocks[thdr].preds.push_back(mhdr);
-
-    // --- mbody: cadena de VEC ops con c acumulador; i += W; BR mhdr ---
-    current_block_ = mbody;
-    auto ptr_at = [&](ir::IrValueId base,
-                      ir::IrValueId i64off) -> ir::IrValueId {
-        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
-         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
-         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
-         * el acceso saliera con la instruccion equivocada -- leer memoria VM
-         * como si fuera host -- y el proceso moria al recorrer un array local
-         * vectorizado. */
-        fn_->values[d].is_host_ptr =
-            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{};
-        in.op = ir::IrOp::ADD;
-        in.type = ir::IrType::PTR;
-        in.dst = d;
-        in.operands = {base, i64off};
-        in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
-        return d;
+    // --- cuerpo ancho: la cadena de operaciones, de W en W ---
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) {
+        return vec_elem_ptr(base, off, ln);
     };
     {
         const ir::IrValueId i64 =
@@ -1345,65 +1392,19 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
                 }
             }
     }
-    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[mbody].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(mbody);
-    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+    /* Cierra el cuerpo ancho y abre el que recoge los que sobran. */
+    vec_to_tail(sk, v_N, ln);
+    const ir::IrValueId phi_it = sk.phi_tail;
 
-    // --- thdr: PHI i + i<N -> tbody|exit ---
-    current_block_ = thdr;
-    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_it;
-        phi.source_line = ln;
-        phi.phi_args.push_back({phi_im, mhdr});
-        fn_->append(thdr, std::move(phi));
-    }
-    const ir::IrValueId cond_t =
-        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_t};
-        brc.target_block = tbody;
-        brc.false_block = exit;
-        brc.source_line = ln;
-        fn_->append(thdr, std::move(brc));
-    }
-    fn_->blocks[thdr].succs.push_back(tbody);
-    fn_->blocks[thdr].succs.push_back(exit);
-    fn_->blocks[tbody].preds.push_back(thdr);
-    fn_->blocks[exit].preds.push_back(thdr);
-
-    // --- tbody: cadena escalar c[i] = start[i] OP0 r0 OP1 r1 ... ---
-    current_block_ = tbody;
+    // --- cuerpo de uno en uno: la misma cadena, escalar ---
     block_terminated_ = false;
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_it, idx_ty, ir::IrType::I64, ln);
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64,
                                       emit_const(ir::IrType::I64, esz, ln));
-        auto load_el = [&](ir::IrValueId base) -> ir::IrValueId {
-            const ir::IrValueId at = ptr_at(base, off);
-            const ir::IrValueId v = fn_->new_value(elem_ty);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = elem_ty;
-            ld.dst = v;
-            ld.operands = {at};
-            ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
-            return v;
+        auto load_el = [&](ir::IrValueId base) {
+            return vec_load_elem(ptr_at(base, off), elem_ty, ln);
         };
         auto fop_of = [](int so) -> ir::IrOp {
             return (so == 0)   ? ir::IrOp::FADD
@@ -1434,21 +1435,7 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
-    const ir::IrValueId i_tnext =
-        bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = thdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[tbody].succs.push_back(thdr);
-    fn_->blocks[thdr].preds.push_back(tbody);
-    fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
-
-    current_block_ = exit;
-    block_terminated_ = false;
+    vec_end(sk, ln);
     return true;
 }
 
@@ -1545,57 +1532,6 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
 
     // Tipo de elemento vectorizable (HOST): f64 (todas las ops) + enteros
     // i8..i64/u8..u64.  El escalar se DIFUNDE a todos los lanes.
-    auto sb_elem_info = [](PrimitiveKind k, ir::IrType *ty, uint64_t *esz,
-                           bool *fp) -> bool {
-        switch (k) {
-        case PrimitiveKind::F64:
-            *ty = ir::IrType::F64;
-            *esz = 8;
-            *fp = true;
-            return true;
-        case PrimitiveKind::I64:
-            *ty = ir::IrType::I64;
-            *esz = 8;
-            *fp = false;
-            return true;
-        case PrimitiveKind::U64:
-            *ty = ir::IrType::U64;
-            *esz = 8;
-            *fp = false;
-            return true;
-        case PrimitiveKind::I32:
-            *ty = ir::IrType::I32;
-            *esz = 4;
-            *fp = false;
-            return true;
-        case PrimitiveKind::U32:
-            *ty = ir::IrType::U32;
-            *esz = 4;
-            *fp = false;
-            return true;
-        case PrimitiveKind::I16:
-            *ty = ir::IrType::I16;
-            *esz = 2;
-            *fp = false;
-            return true;
-        case PrimitiveKind::U16:
-            *ty = ir::IrType::U16;
-            *esz = 2;
-            *fp = false;
-            return true;
-        case PrimitiveKind::I8:
-            *ty = ir::IrType::I8;
-            *esz = 1;
-            *fp = false;
-            return true;
-        case PrimitiveKind::U8:
-            *ty = ir::IrType::U8;
-            *esz = 1;
-            *fp = false;
-            return true;
-        default: return false;
-        }
-    };
     // Valida c_ix / a_ix son base[idx] HOST de un tipo vectorizable; devuelve
     // la base + su PrimitiveKind de elemento.
     auto check_idx = [&](IndexExpr *ix, IdentExpr **out_base,
@@ -1616,7 +1552,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         ir::IrType ety;
         uint64_t es2;
         bool fp2;
-        if (!sb_elem_info(t.pointee->kind, &ety, &es2, &fp2)) return false;
+        if (!vec_elem_info(t.pointee->kind, &ety, &es2, &fp2)) return false;
         *out_base = base;
         *out_kind = t.pointee->kind;
         return true;
@@ -1629,7 +1565,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     ir::IrType elem_ty;
     uint64_t esz;
     bool elem_fp;
-    sb_elem_info(ck, &elem_ty, &esz, &elem_fp);
+    vec_elem_info(ck, &elem_ty, &esz, &elem_fp);
     // Enteros: div siempre escalar; mul solo donde hay packed (i16/i32, esz
     // 2/4).
     if (!elem_fp) {
@@ -1645,12 +1581,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
     const uint32_t ln = s->loc.line;
     // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad
     // .velb).
-    const uint64_t width =
-        native_poo_ ? (aot_auto_vec_
-                           ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada
-                                 // variante decompone (4x128/2x256/1x512)
-                           : static_cast<uint64_t>(aot_vec_width_))
-                    : jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t width = vec_chunk_width(64u);
     const uint64_t W = width / esz;
 
     const ir::IrValueId i_init =
@@ -1710,19 +1641,10 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         v_s = r;
     }
 
-    const ir::IrBlockId entry = current_block_;
-    const ir::IrBlockId mhdr = fn_->new_block("vsc_main_hdr");
-    const ir::IrBlockId mbody = fn_->new_block("vsc_main_body");
-    const ir::IrBlockId thdr = fn_->new_block("vsc_tail_hdr");
-    const ir::IrBlockId tbody = fn_->new_block("vsc_tail_body");
-    const ir::IrBlockId exit = fn_->new_block("vsc_exit");
-
-    // --- entry ---
-    current_block_ = entry;
-    const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    // HOIST del broadcast: difundir el escalar a XMM13 UNA vez en el preheader
-    // (el JIT lo reusa en el cuerpo sin re-broadcast; no-op en interp).
+    /* El escalar se reparte a todos los carriles UNA vez, antes de entrar: no
+     * depende del indice, asi que dentro del bucle solo queda la operacion.
+     * Va antes de montar el andamio porque tiene que quedar en la entrada. */
     {
         ir::IrInstr bc{};
         bc.op = ir::IrOp::VEC_BCAST;
@@ -1731,68 +1653,17 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         bc.operands = {v_s};
         bc.imm = width;
         bc.source_line = ln;
-        fn_->append(entry, std::move(bc));
+        fn_->append(current_block_, std::move(bc));
     }
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(entry, std::move(br));
-    }
-    fn_->blocks[entry].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(entry);
+    /* El andamio -- los cinco bloques, los dos indices y sus condiciones -- lo
+     * monta `vec_begin`; aqui solo queda lo que este idioma hace dentro. */
+    VecSkeleton sk;
+    vec_begin(sk, "vsc", i_init, v_N, (uint64_t)W, ln);
+    const ir::IrValueId phi_im = sk.phi_main;
 
-    // --- mhdr ---
-    current_block_ = mhdr;
-    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_im;
-        phi.source_line = ln;
-        phi.phi_args.push_back({i_init, entry});
-        fn_->append(mhdr, std::move(phi));
-    }
-    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    const ir::IrValueId cond_m =
-        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_m};
-        brc.target_block = mbody;
-        brc.false_block = thdr;
-        brc.source_line = ln;
-        fn_->append(mhdr, std::move(brc));
-    }
-    fn_->blocks[mhdr].succs.push_back(mbody);
-    fn_->blocks[mhdr].succs.push_back(thdr);
-    fn_->blocks[mbody].preds.push_back(mhdr);
-    fn_->blocks[thdr].preds.push_back(mhdr);
-
-    // --- mbody: VEC_BINOP_S(c+off, a+off, scalar); i += W ---
-    current_block_ = mbody;
-    auto ptr_at = [&](ir::IrValueId base,
-                      ir::IrValueId i64off) -> ir::IrValueId {
-        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
-         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
-         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
-         * el acceso saliera con la instruccion equivocada -- leer memoria VM
-         * como si fuera host -- y el proceso moria al recorrer un array local
-         * vectorizado. */
-        fn_->values[d].is_host_ptr =
-            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{};
-        in.op = ir::IrOp::ADD;
-        in.type = ir::IrType::PTR;
-        in.dst = d;
-        in.operands = {base, i64off};
-        in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
-        return d;
+    // --- cuerpo ancho: VEC_BINOP_S(c+off, a+off, escalar) ---
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) {
+        return vec_elem_ptr(base, off, ln);
     };
     {
         const ir::IrValueId i64 =
@@ -1812,48 +1683,11 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         vb.source_line = ln;
         fn_->append(current_block_, std::move(vb));
     }
-    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[mbody].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(mbody);
-    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+    /* Cierra el cuerpo ancho y abre el que recoge los que sobran. */
+    vec_to_tail(sk, v_N, ln);
+    const ir::IrValueId phi_it = sk.phi_tail;
 
-    // --- thdr ---
-    current_block_ = thdr;
-    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_it;
-        phi.source_line = ln;
-        phi.phi_args.push_back({phi_im, mhdr});
-        fn_->append(thdr, std::move(phi));
-    }
-    const ir::IrValueId cond_t =
-        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_t};
-        brc.target_block = tbody;
-        brc.false_block = exit;
-        brc.source_line = ln;
-        fn_->append(thdr, std::move(brc));
-    }
-    fn_->blocks[thdr].succs.push_back(tbody);
-    fn_->blocks[thdr].succs.push_back(exit);
-    fn_->blocks[tbody].preds.push_back(thdr);
-    fn_->blocks[exit].preds.push_back(thdr);
-
-    // --- tbody: c[i] = a[i] OP scalar (escalar a mano) ---
-    current_block_ = tbody;
+    // --- cuerpo de uno en uno: c[i] = a[i] OP escalar ---
     block_terminated_ = false;
     {
         const ir::IrValueId i64 =
@@ -1893,21 +1727,7 @@ bool Lowering::try_vectorize_scalar_for(ast::Stmt *s) {
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
-    const ir::IrValueId i_tnext =
-        bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = thdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[tbody].succs.push_back(thdr);
-    fn_->blocks[thdr].preds.push_back(tbody);
-    fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
-
-    current_block_ = exit;
-    block_terminated_ = false;
+    vec_end(sk, ln);
     return true;
 }
 
@@ -1995,12 +1815,7 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     const uint64_t esz = 8; // f64
     // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad
     // .velb).
-    const uint64_t width =
-        native_poo_ ? (aot_auto_vec_
-                           ? 64u // AUTO: element-wise/unary/scalar a 64 -> cada
-                                 // variante decompone (4x128/2x256/1x512)
-                           : static_cast<uint64_t>(aot_vec_width_))
-                    : jit::vec_isa_width(jit::vec_chunk_isa());
+    const uint64_t width = vec_chunk_width(64u);
     const uint64_t W = width / esz;
 
     const ir::IrValueId i_init =
@@ -2025,78 +1840,19 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         fn_->append(current_block_, std::move(in));
         return d;
     };
-    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
-         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
-         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
-         * el acceso saliera con la instruccion equivocada -- leer memoria VM
-         * como si fuera host -- y el proceso moria al recorrer un array local
-         * vectorizado. */
-        fn_->values[d].is_host_ptr =
-            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{};
-        in.op = ir::IrOp::ADD;
-        in.type = ir::IrType::PTR;
-        in.dst = d;
-        in.operands = {base, off};
-        in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
-        return d;
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) {
+        return vec_elem_ptr(base, off, ln);
     };
 
-    const ir::IrBlockId entry = current_block_;
-    const ir::IrBlockId mhdr = fn_->new_block("vun_main_hdr");
-    const ir::IrBlockId mbody = fn_->new_block("vun_main_body");
-    const ir::IrBlockId thdr = fn_->new_block("vun_tail_hdr");
-    const ir::IrBlockId tbody = fn_->new_block("vun_tail_body");
-    const ir::IrBlockId exit = fn_->new_block("vun_exit");
-
-    // --- entry: consts + BR mhdr ---
-    current_block_ = entry;
-    const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
+    /* El andamio -- los cinco bloques, los dos indices y sus condiciones -- lo
+     * monta `vec_begin`; aqui solo queda lo que este idioma hace dentro.  Al
+     * volver se emite en el cuerpo ancho. */
+    VecSkeleton sk;
+    vec_begin(sk, "vun", i_init, v_N, (uint64_t)W, ln);
+    const ir::IrValueId phi_im = sk.phi_main;
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(entry, std::move(br));
-    }
-    fn_->blocks[entry].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(entry);
 
-    // --- mhdr: PHI i + cond (i+W)<=N -> mbody|thdr ---
-    current_block_ = mhdr;
-    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_im;
-        phi.source_line = ln;
-        phi.phi_args.push_back({i_init, entry});
-        fn_->append(mhdr, std::move(phi));
-    }
-    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    const ir::IrValueId cond_m =
-        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_m};
-        brc.target_block = mbody;
-        brc.false_block = thdr;
-        brc.source_line = ln;
-        fn_->append(mhdr, std::move(brc));
-    }
-    fn_->blocks[mhdr].succs.push_back(mbody);
-    fn_->blocks[mhdr].succs.push_back(thdr);
-    fn_->blocks[mbody].preds.push_back(mhdr);
-    fn_->blocks[thdr].preds.push_back(mhdr);
-
-    // --- mbody: VEC_UNOP(b+i*esz, a+i*esz); i += W; BR mhdr ---
-    current_block_ = mbody;
+    // --- cuerpo ancho: VEC_UNOP(b+i*esz, a+i*esz) ---
     {
         const ir::IrValueId i64 =
             cast_if_needed(phi_im, idx_ty, ir::IrType::I64, ln);
@@ -2113,48 +1869,11 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         vu.source_line = ln;
         fn_->append(current_block_, std::move(vu));
     }
-    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[mbody].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(mbody);
-    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+    /* Cierra el cuerpo ancho y abre el que recoge los que sobran. */
+    vec_to_tail(sk, v_N, ln);
+    const ir::IrValueId phi_it = sk.phi_tail;
 
-    // --- thdr: PHI i + cond i<N -> tbody|exit ---
-    current_block_ = thdr;
-    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_it;
-        phi.source_line = ln;
-        phi.phi_args.push_back({phi_im, mhdr});
-        fn_->append(thdr, std::move(phi));
-    }
-    const ir::IrValueId cond_t =
-        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_t};
-        brc.target_block = tbody;
-        brc.false_block = exit;
-        brc.source_line = ln;
-        fn_->append(thdr, std::move(brc));
-    }
-    fn_->blocks[thdr].succs.push_back(tbody);
-    fn_->blocks[thdr].succs.push_back(exit);
-    fn_->blocks[tbody].preds.push_back(thdr);
-    fn_->blocks[exit].preds.push_back(thdr);
-
-    // --- tbody: op escalar b[i] = OP a[i] (emitida a mano, i=phi_it) ---
-    current_block_ = tbody;
+    // --- cuerpo de uno en uno: b[i] = OP a[i] ---
     block_terminated_ = false;
     {
         const ir::IrValueId i64 =
@@ -2194,22 +1913,7 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         st.source_line = ln;
         fn_->append(current_block_, std::move(st));
     }
-    const ir::IrValueId i_tnext =
-        bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = thdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[tbody].succs.push_back(thdr);
-    fn_->blocks[thdr].preds.push_back(tbody);
-    fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
-
-    // continuar en exit.
-    current_block_ = exit;
-    block_terminated_ = false;
+    vec_end(sk, ln);
     return true;
 }
 
@@ -2230,47 +1934,16 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     if (!asg->target || asg->target->kind != NodeKind::IdentExpr) return false;
     auto *acc_id = static_cast<IdentExpr *>(asg->target.get());
     // Tipos de acumulador vectorizables: f64 e enteros i64/i32 (suma).
-    auto red_elem_info = [](PrimitiveKind k, ir::IrType *out_ty,
-                            uint64_t *out_esz, bool *out_fp) -> bool {
-        switch (k) {
-        case PrimitiveKind::F64:
-            *out_ty = ir::IrType::F64;
-            *out_esz = 8;
-            *out_fp = true;
-            return true;
-        case PrimitiveKind::F32:
-            *out_ty = ir::IrType::F32;
-            *out_esz = 4;
-            *out_fp = true;
-            return true;
-        case PrimitiveKind::I64:
-            *out_ty = ir::IrType::I64;
-            *out_esz = 8;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::U64:
-            *out_ty = ir::IrType::U64;
-            *out_esz = 8;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::I32:
-            *out_ty = ir::IrType::I32;
-            *out_esz = 4;
-            *out_fp = false;
-            return true;
-        case PrimitiveKind::U32:
-            *out_ty = ir::IrType::U32;
-            *out_esz = 4;
-            *out_fp = false;
-            return true;
-        default: return false;
-        }
-    };
     ir::IrType elem_ty;
     uint64_t esz;
     bool elem_fp;
-    if (!red_elem_info(acc_id->result_type.kind, &elem_ty, &esz, &elem_fp))
+    if (!vec_elem_info(acc_id->result_type.kind, &elem_ty, &esz, &elem_fp))
         return false;
+    /* Los de 1 y 2 bytes quedan fuera por una razon que no es de la maquina:
+     * el acumulador tendria el ancho del elemento y una suma de unos pocos
+     * cientos de valores ya se sale.  Quien quiera sumar bytes que los
+     * convierta antes al ancho en el que quiera el total. */
+    if (esz < 4) return false;
     const std::string acc_name = acc_id->name;
     // value = acc + a[idx]  (reduccion) o  acc + a[idx]*b[idx]
     // (dot-product/FMA)
@@ -2356,10 +2029,10 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     // acumulador register-resident (1 reg, no splittea) cabe en TODAS las
     // variantes (sse2/avx2/avx512); las 3 corren la reduccion a 128b (correcto;
     // el unroll multi-acc compensa la falta de width win).
-    const uint64_t width =
-        native_poo_
-            ? (aot_auto_vec_ ? 16u : static_cast<uint64_t>(aot_vec_width_))
-            : jit::vec_isa_width(jit::vec_chunk_isa());
+    /* 16 y no 64: el acumulador vive en UN registro y no se parte, asi que las
+     * tres variantes corren la reduccion a 128 bits.  Lo que se pierde de
+     * ancho lo compensa el desenrollado con varios acumuladores. */
+    const uint64_t width = vec_chunk_width(16u);
     const uint64_t W = width / esz; // lanes segun ancho/tipo
     const uint64_t U = 4;           // acumuladores (XMM13,12,11,10)
     // imm de las VEC_ACC ops: ancho | acc_idx<<8 | src_idx<<12 | disp<<16.
@@ -2440,36 +2113,12 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         fn_->append(current_block_, std::move(in));
         return d;
     };
-    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) -> ir::IrValueId {
-        const ir::IrValueId d = fn_->new_value(ir::IrType::PTR);
-        /* La aritmetica de punteros HEREDA la naturaleza de la base: un array
-         * de `malloc` vive en memoria host, pero uno local (`T[N]`, que baja a
-         * ALLOCA) vive en la pila de la VM.  Marcarlo host a ciegas hacia que
-         * el acceso saliera con la instruccion equivocada -- leer memoria VM
-         * como si fuera host -- y el proceso moria al recorrer un array local
-         * vectorizado. */
-        fn_->values[d].is_host_ptr =
-            (base < fn_->values.size()) && fn_->values[base].is_host_ptr;
-        ir::IrInstr in{};
-        in.op = ir::IrOp::ADD;
-        in.type = ir::IrType::PTR;
-        in.dst = d;
-        in.operands = {base, off};
-        in.source_line = ln;
-        fn_->append(current_block_, std::move(in));
-        return d;
+    auto ptr_at = [&](ir::IrValueId base, ir::IrValueId off) {
+        return vec_elem_ptr(base, off, ln);
     };
     // load/store del tipo de elemento (acumulador y array).
-    auto load_el = [&](ir::IrValueId at) -> ir::IrValueId {
-        const ir::IrValueId v = fn_->new_value(elem_ty);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = elem_ty;
-        ld.dst = v;
-        ld.operands = {at};
-        ld.source_line = ln;
-        fn_->append(current_block_, std::move(ld));
-        return v;
+    auto load_el = [&](ir::IrValueId at) {
+        return vec_load_elem(at, elem_ty, ln);
     };
     // op de acumulacion: FADD para float, ADD para entero.
     const ir::IrOp acc_op = elem_fp ? ir::IrOp::FADD : ir::IrOp::ADD;
@@ -2550,44 +2199,12 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
     const ir::IrValueId v_W = emit_const(idx_ty, (uint64_t)W, ln);
     const ir::IrValueId v_UW = emit_const(idx_ty, (uint64_t)(U * W), ln);
     const ir::IrValueId v_esz = emit_const(ir::IrType::I64, esz, ln);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = uhdr;
-        br.source_line = ln;
-        fn_->append(entry, std::move(br));
-    }
-    fn_->blocks[entry].succs.push_back(uhdr);
-    fn_->blocks[uhdr].preds.push_back(entry);
-
-    // --- uhdr: PHI i; cond (i + U*W) <= N -> ubody | comb ---
-    current_block_ = uhdr;
-    const ir::IrValueId phi_iu = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_iu;
-        phi.source_line = ln;
-        phi.phi_args.push_back({i_init, entry});
-        fn_->append(uhdr, std::move(phi));
-    }
-    const ir::IrValueId v_iuUW = bin(ir::IrOp::ADD, idx_ty, phi_iu, v_UW);
-    const ir::IrValueId cond_u =
-        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_iuUW, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_u};
-        brc.target_block = ubody;
-        brc.false_block = comb;
-        brc.source_line = ln;
-        fn_->append(uhdr, std::move(brc));
-    }
-    fn_->blocks[uhdr].succs.push_back(ubody);
-    fn_->blocks[uhdr].succs.push_back(comb);
-    fn_->blocks[ubody].preds.push_back(uhdr);
-    fn_->blocks[comb].preds.push_back(uhdr);
+    /* Primer bucle: el desenrollado, que avanza de U*W en U*W con U
+     * acumuladores a la vez.  Se sale a `comb`, donde se juntan. */
+    VecLoopFrame lu;
+    vec_loop_open(lu, uhdr, ubody, comb, i_init, v_N, v_UW, (uint64_t)(U * W),
+                  VecLoopGuard::WholeStep, {}, ln);
+    const ir::IrValueId phi_iu = lu.phi_idx;
 
     // --- ubody: acc_u += a[i + u*W] para u=0..U-1; i += U*W; BR uhdr ---
     // OPTIMIZACION de direccionamiento: en vez de recalcular el puntero por
@@ -2624,20 +2241,10 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         }
         fn_->append(ubody, std::move(v));
     }
-    const ir::IrValueId i_unext = bin(ir::IrOp::ADD, idx_ty, phi_iu, v_UW);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = uhdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[ubody].succs.push_back(uhdr);
-    fn_->blocks[uhdr].preds.push_back(ubody);
-    fn_->blocks[uhdr].instrs[0].phi_args.push_back({i_unext, ubody});
+    /* Cerrar el desenrollado deja el programa en `comb`. */
+    vec_loop_close(lu, {}, ln);
 
     // --- comb: acc0 += acc_u (u=1..U-1); BR mhdr ---
-    current_block_ = comb;
     for (uint8_t u = 1; u < U; ++u) {
         ir::IrInstr c{};
         c.op = ir::IrOp::VEC_ACC_COMBINE;
@@ -2648,44 +2255,13 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         c.source_line = ln; // acc0 += acc_u
         fn_->append(comb, std::move(c));
     }
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(comb, std::move(br));
-    }
-    fn_->blocks[comb].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(comb);
-
-    // --- mhdr: PHI i (desde comb); cond (i+W)<=N -> mbody|redb (remainder) ---
-    current_block_ = mhdr;
-    const ir::IrValueId phi_im = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_im;
-        phi.source_line = ln;
-        phi.phi_args.push_back({phi_iu, comb}); // i continua tras el unroll
-        fn_->append(mhdr, std::move(phi));
-    }
-    const ir::IrValueId v_ipW = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    const ir::IrValueId cond_m =
-        bin(ir::IrOp::CMP_LE, ir::IrType::BOOL, v_ipW, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_m};
-        brc.target_block = mbody;
-        brc.false_block = redb;
-        brc.source_line = ln;
-        fn_->append(mhdr, std::move(brc));
-    }
-    fn_->blocks[mhdr].succs.push_back(mbody);
-    fn_->blocks[mhdr].succs.push_back(redb);
-    fn_->blocks[mbody].preds.push_back(mhdr);
-    fn_->blocks[redb].preds.push_back(mhdr);
+    /* Segundo bucle: el ancho, de W en W y con un solo acumulador.  El indice
+     * continua donde lo dejo el desenrollado.  Se sale a `redb`, que junta los
+     * carriles en un escalar. */
+    VecLoopFrame lm;
+    vec_loop_open(lm, mhdr, mbody, redb, phi_iu, v_N, v_W, (uint64_t)W,
+                  VecLoopGuard::WholeStep, {}, ln);
+    const ir::IrValueId phi_im = lm.phi_idx;
 
     // --- mbody: acc += a[i..]  (VEC_ACC_ADD) o  acc += a*b (VEC_ACC_FMA);
     //     acc REGISTER-RESIDENT (XMM dedicado en JIT, sin round-trip a
@@ -2719,21 +2295,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
             fn_->append(current_block_, std::move(va));
         }
     }
-    const ir::IrValueId i_mnext = bin(ir::IrOp::ADD, idx_ty, phi_im, v_W);
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = mhdr;
-        br.source_line = ln;
-        fn_->append(current_block_, std::move(br));
-    }
-    fn_->blocks[mbody].succs.push_back(mhdr);
-    fn_->blocks[mhdr].preds.push_back(mbody);
-    fn_->blocks[mhdr].instrs[0].phi_args.push_back({i_mnext, mbody});
+    /* Cerrar el ancho deja el programa en `redb`. */
+    vec_loop_close(lm, {}, ln);
 
     // --- redb: vuelca el acc register-resident al slot (JIT; no-op interp) y
     //     reduce horizontalmente sum_{k<W} acc_slot[k] + acc_init; BR thdr ---
-    current_block_ = redb;
     {
         ir::IrInstr st{};
         st.op = ir::IrOp::VEC_ACC_STORE;
@@ -2753,53 +2319,15 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         const ir::IrValueId lane = load_el(at);
         result0 = bin(acc_op, elem_ty, result0, lane);
     }
-    {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR;
-        br.target_block = thdr;
-        br.source_line = ln;
-        fn_->append(redb, std::move(br));
-    }
-    fn_->blocks[redb].succs.push_back(thdr);
-    fn_->blocks[thdr].preds.push_back(redb);
-
-    // --- thdr: PHI i + PHI result; cond i<N -> tbody|exit ---
-    current_block_ = thdr;
-    const ir::IrValueId phi_it = fn_->new_value(idx_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = idx_ty;
-        phi.dst = phi_it;
-        phi.source_line = ln;
-        phi.phi_args.push_back({phi_im, redb});
-        fn_->append(thdr, std::move(phi));
-    }
-    const ir::IrValueId phi_res = fn_->new_value(elem_ty);
-    {
-        ir::IrInstr phi{};
-        phi.op = ir::IrOp::PHI;
-        phi.type = elem_ty;
-        phi.dst = phi_res;
-        phi.source_line = ln;
-        phi.phi_args.push_back({result0, redb});
-        fn_->append(thdr, std::move(phi));
-    }
-    const ir::IrValueId cond_t =
-        bin(ir::IrOp::CMP_LT, ir::IrType::BOOL, phi_it, v_N);
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_t};
-        brc.target_block = tbody;
-        brc.false_block = exit;
-        brc.source_line = ln;
-        fn_->append(thdr, std::move(brc));
-    }
-    fn_->blocks[thdr].succs.push_back(tbody);
-    fn_->blocks[thdr].succs.push_back(exit);
-    fn_->blocks[tbody].preds.push_back(thdr);
-    fn_->blocks[exit].preds.push_back(thdr);
+    /* Tercer bucle: la cola, de uno en uno.  Es el unico de los tres que
+     * ademas del indice lleva un valor viajando entre vueltas -- la suma
+     * parcial --, porque aqui ya no hay carriles: el acumulador es un escalar
+     * normal y tiene que pasar de una vuelta a la siguiente. */
+    VecLoopFrame lt;
+    vec_loop_open(lt, thdr, tbody, exit, phi_im, v_N, ir::IR_NO_VALUE, 1,
+                  VecLoopGuard::Remaining, {result0}, ln);
+    const ir::IrValueId phi_it = lt.phi_idx;
+    const ir::IrValueId phi_res = lt.phi_carried[0];
 
     // --- tbody: result += a[i]  o  result += a[i]*b[i] (FMA); i++; BR thdr ---
     // La cola usa FMUL+FADD separados (2 redondeos) en interp Y jit por igual
@@ -2822,24 +2350,11 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
             addend = bin(ir::IrOp::FMUL, elem_ty, ai, bi); // a[i]*b[i]
         }
         const ir::IrValueId rnext = bin(acc_op, elem_ty, phi_res, addend);
-        const ir::IrValueId i_tnext =
-            bin(ir::IrOp::ADD, idx_ty, phi_it, emit_const(idx_ty, 1, ln));
-        {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR;
-            br.target_block = thdr;
-            br.source_line = ln;
-            fn_->append(current_block_, std::move(br));
-        }
-        fn_->blocks[tbody].succs.push_back(thdr);
-        fn_->blocks[thdr].preds.push_back(tbody);
-        fn_->blocks[thdr].instrs[0].phi_args.push_back({i_tnext, tbody});
-        fn_->blocks[thdr].instrs[1].phi_args.push_back({rnext, tbody});
+        /* La suma parcial es lo que viaja: entra al cierre y sale por el phi. */
+        vec_loop_close(lt, {rnext}, ln);
     }
 
     // --- exit: resultado final = phi_res ---
-    current_block_ = exit;
-    block_terminated_ = false;
     if (acc_slot_ext != ir::IR_NO_VALUE) {
         // acc vive en un slot: escribir el resultado de vuelta (el binding
         // sigue siendo el slot; lecturas posteriores de acc cargan de ahi).

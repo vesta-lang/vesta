@@ -16,7 +16,7 @@ public const u16 PATH_MAX = 260;
 
 typedef int                 BOOL;
 typedef char                CHAR;
-typedef short_int               SHORT;
+typedef short_int           SHORT;
 typedef int                 INT;
 typedef u32                 UINT;
 typedef u8                  BYTE;

@@ -308,6 +308,47 @@ class Lowering {
 
 
     /**
+     * @brief Cuando se entra a una vuelta del bucle.
+     *
+     * Un bucle que avanza de W en W solo puede entrar si quedan W elementos
+     * ENTEROS: con menos, leerlos de golpe se saldria del array.  Uno que
+     * avanza de uno en uno entra mientras quede algo.
+     */
+    enum class VecLoopGuard {
+        WholeStep, ///< `(i + paso) <= N`, para el que avanza a saltos.
+        Remaining, ///< `i < N`, para el que recoge lo que sobra.
+    };
+
+    /**
+     * @struct VecLoopFrame
+     * @brief Un bucle contado a medio montar.
+     *
+     * Los cinco idiomas del vectorizador -- y la reduccion, que ademas lleva
+     * uno desenrollado -- construyen todos el mismo bucle: una cabecera con el
+     * phi del indice, una condicion, un cuerpo, y una arista de vuelta que
+     * avanza el indice.  Escrito a mano son unas cuarenta lineas por bucle, y
+     * es donde salen los fallos que no dan error: una arista contada dos veces,
+     * o una entrada de phi que apunta al bloque equivocado.
+     */
+    struct VecLoopFrame {
+        ir::IrBlockId hdr = 0;   ///< La cabecera: phi, condicion y salto.
+        ir::IrBlockId body = 0;  ///< El cuerpo.
+        ir::IrBlockId after = 0; ///< Donde sigue cuando ya no se entra.
+        ir::IrValueId phi_idx = ir::IR_NO_VALUE; ///< El indice.
+        /// Lo que ademas viaja de una vuelta a la siguiente, en el mismo orden
+        /// en que se paso al abrirlo.
+        std::vector<ir::IrValueId> phi_carried;
+        /// Cuanto avanza el indice, si ya hay un valor que valga en TODOS los
+        /// bloques del bucle.  Vacio -> se emite la constante @ref step_imm al
+        /// cerrarlo, dentro del cuerpo: un bucle que solo la necesita ahi no
+        /// tiene por que arrastrarla desde fuera, y en una cabecera no cabe
+        /// nada antes del phi.
+        ir::IrValueId step = ir::IR_NO_VALUE;
+        uint64_t step_imm = 1;               ///< El paso, cuando no hay valor.
+        ir::IrType idx_ty = ir::IrType::I64; ///< El tipo del indice.
+    };
+
+    /**
      * @brief Los cinco bloques de un bucle vectorizado y sus dos indices.
      *
      * Vectorizar un bucle no es cambiar una instruccion por otra: es partirlo
@@ -315,10 +356,11 @@ class Lowering {
      * elementos, y otro de uno en uno para los que sobran al final -- entre
      * cero y W-1, que no se pueden hacer de golpe sin leer fuera del array.
      *
-     * Ese andamio -- cinco bloques, dos indices con su phi, dos condiciones y
-     * las aristas que los unen -- es el MISMO para todos los idiomas que se
-     * vectorizan.  Lo unico que cambia es que se hace DENTRO de cada cuerpo, y
-     * por eso estaba escrito cinco veces: una por idioma.
+     * Son dos bucles contados encadenados (@ref VecLoopFrame), y esta forma --
+     * cinco bloques con esos nombres -- es la que comparten los idiomas que
+     * escriben un array.  La reduccion no la usa: la suya lleva ademas uno
+     * desenrollado y dos bloques de pegamento, y monta sus bucles con la misma
+     * pieza pero en otra figura.
      */
     struct VecSkeleton {
         ir::IrBlockId entry = 0;  ///< De donde se viene.
@@ -331,7 +373,53 @@ class Lowering {
         ir::IrValueId phi_tail = ir::IR_NO_VALUE; ///< El indice en el de uno.
         ir::IrValueId v_W = ir::IR_NO_VALUE;      ///< Los carriles, como valor.
         ir::IrType idx_ty = ir::IrType::I64;      ///< El tipo del indice.
+        VecLoopFrame main; ///< El bucle que avanza de W en W.
+        VecLoopFrame tail; ///< El que recoge de uno en uno lo que sobra.
     };
+
+    /**
+     * @brief Abre un bucle contado; al volver se emite en su cuerpo.
+     *
+     * Los bloques los crea QUIEN LLAMA y se pasan hechos: asi cada idioma les
+     * pone su nombre y su orden, que es lo que se lee luego en el volcado del
+     * IR.
+     *
+     * @param f Marco a rellenar.
+     * @param hdr Bloque de la cabecera.
+     * @param body Bloque del cuerpo.
+     * @param after Bloque al que se sale.
+     * @param i_init Valor inicial del indice.
+     * @param bound Contra que se compara (cuantos elementos hay).
+     * @param step Cuanto avanza el indice; @c IR_NO_VALUE para emitir
+     *             @p step_imm dentro del cuerpo al cerrarlo.
+     * @param step_imm El paso, cuando @p step viene vacio.
+     * @param guard Cuando se entra a una vuelta.
+     * @param carried_init Valor inicial de cada cosa que viaje entre vueltas.
+     * @param ln Linea del fuente.
+     * @param from_hint De donde se ENTRA a la cabecera.  Cero = del bloque
+     *        actual, y entonces se emite el salto.  Distinto de cero = ya se
+     *        llega por una arista que existe (el bucle anterior salio aqui), y
+     *        entonces NO se emite salto y el phi toma ese bloque como
+     *        predecesor.  Sin esto, encadenar dos bucles emitia un salto de la
+     *        cabecera a si misma: un bucle infinito que compila.
+     */
+    void vec_loop_open(VecLoopFrame &f, ir::IrBlockId hdr, ir::IrBlockId body,
+                       ir::IrBlockId after, ir::IrValueId i_init,
+                       ir::IrValueId bound, ir::IrValueId step,
+                       uint64_t step_imm, VecLoopGuard guard,
+                       const std::vector<ir::IrValueId> &carried_init,
+                       uint32_t ln, ir::IrBlockId from_hint = 0);
+
+    /**
+     * @brief Cierra el cuerpo de un bucle contado y sale a su bloque de salida.
+     *
+     * @param f El marco.
+     * @param carried_next Con que sigue cada valor que viaja, en el mismo orden.
+     * @param ln Linea del fuente.
+     */
+    void vec_loop_close(VecLoopFrame &f,
+                        const std::vector<ir::IrValueId> &carried_next,
+                        uint32_t ln);
 
     /// @brief Monta la primera mitad del andamio; deja listo el cuerpo ancho.
     void vec_begin(VecSkeleton &sk, const char *prefijo, ir::IrValueId i_init,
@@ -346,6 +434,75 @@ class Lowering {
     /// @brief Emite una operacion binaria en el bloque actual.
     ir::IrValueId vec_bin(ir::IrOp op, ir::IrType ty, ir::IrValueId a,
                           ir::IrValueId b, uint32_t ln);
+
+    /**
+     * @brief Que tipo de elemento es, y cuanto ocupa, para vectorizar.
+     *
+     * Estaba escrita tres veces, una por idioma, y las tres copias NO cubrian
+     * lo mismo: la del reparto de escalar se habia quedado sin `f32`, asi que
+     * `c[i] = a[i] + k` con flotantes de 32 bits se bajaba de uno en uno.  No
+     * era una decision -- la maquina sabe repartir un f32 -- ni se veia: el
+     * programa daba el mismo numero.
+     *
+     * La tabla dice lo que un tipo ES.  Lo que cada idioma puede hacer con el
+     * lo dice el idioma, con su motivo al lado: la reduccion, por ejemplo,
+     * rechaza los de 1 y 2 bytes porque su acumulador tendria ese ancho y una
+     * suma de unos pocos cientos de valores ya se sale.
+     *
+     * @param k Tipo del elemento.
+     * @param out_ty Tipo equivalente del IR.
+     * @param out_esz Bytes que ocupa.
+     * @param out_fp Si es de coma flotante.
+     * @return false si no es un tipo que se pueda vectorizar.
+     */
+    static bool vec_elem_info(PrimitiveKind k, ir::IrType *out_ty,
+                              uint64_t *out_esz, bool *out_fp) noexcept;
+
+    /**
+     * @brief Cuantos BYTES avanza de golpe un bucle vectorizado.
+     *
+     * Tres casos, y el tercero es el que obliga a que esto sea un parametro:
+     *
+     *   - Nativo con ancho pedido a mano: el que se pidio.
+     *   - Nativo en automatico: @p auto_width.  Casi todos los idiomas quieren
+     *     el mas ancho y dejan que cada variante lo descomponga, pero la
+     *     reduccion no: su acumulador vive en UN registro, no se parte, y las
+     *     tres variantes la corren a 128 bits.
+     *   - Bytecode: el del objetivo, para que el `.velb` sea portable -- el JIT
+     *     descompone despues al ancho de la maquina que lo ejecute.
+     *
+     * @param auto_width Ancho a usar en el automatico nativo.
+     * @return Bytes por vuelta del bucle ancho.
+     */
+    uint64_t vec_chunk_width(uint64_t auto_width) const noexcept;
+
+    /**
+     * @brief Direccion de un elemento: @p base desplazada @p off bytes.
+     *
+     * La aritmetica de punteros HEREDA la naturaleza de la base, y eso no es un
+     * detalle: un array de `malloc` vive en memoria del proceso y uno local
+     * vive en la pila de la maquina virtual.  Marcarlo host a ciegas hacia que
+     * el acceso saliera con la instruccion equivocada -- leer memoria de la
+     * maquina como si fuera del proceso -- y el programa moria al recorrer un
+     * array local vectorizado.
+     *
+     * @param base Puntero de partida.
+     * @param off Desplazamiento en BYTES.
+     * @param ln Linea del fuente.
+     * @return El puntero al elemento.
+     */
+    ir::IrValueId vec_elem_ptr(ir::IrValueId base, ir::IrValueId off,
+                               uint32_t ln);
+
+    /**
+     * @brief Lee un elemento de la direccion @p at.
+     * @param at Direccion.
+     * @param elem_ty Tipo del elemento.
+     * @param ln Linea del fuente.
+     * @return El valor leido.
+     */
+    ir::IrValueId vec_load_elem(ir::IrValueId at, ir::IrType elem_ty,
+                                uint32_t ln);
 
     void pack_variadic_args(std::vector<ir::IrValueId> &arg_ids, size_t fixed,
                             ir::IrType elem_ty, uint32_t line);
