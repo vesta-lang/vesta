@@ -3118,6 +3118,7 @@ fails_case("ctornomet490", "un constructor no se puede llamar como metodo de ins
 fails_case("extret491", "'extension' esta retirada y el error dice con que se sustituye", "491_extension_retirada_err.vx", "ya no existe", line=3780)
 r0_case("vecall492", "todas las formas que el vectorizador reconoce, y las dos que no: la salida es la misma con y sin vectorizar, asi que lo que se comprueba es el IR (tools/verify_vectorize.sh idiomas)", "492_vectorizador_completo.vx", 42, line=3782)
 r0_case("stdnum493", "std.numeric desde fuera: las diez operaciones, con el segundo import que rompia la instanciacion de plantillas cross-module", "493_std_numeric.vx", 42, line=3784)
+r0_case("upcast494", "una subclase cabe donde se espera la base en los SEIS sitios que preguntan si un valor cabe (declarar, reasignar, devolver, argumento, campo, parametro de un set); la reasignacion y tres mas no lo aceptaban", "494_asignar_subclase.vx", 42, line=3786)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

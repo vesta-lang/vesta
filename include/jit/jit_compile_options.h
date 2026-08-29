@@ -153,14 +153,6 @@ struct JitCompileOptions {
     /// callback.  Funciones hoja puras NO salvan nada (save-set vacio).
     /// Reemplaza el thunk hand-emitted de @c native_callback.cpp.
     bool callback_entry = false;
-    /// Direccion de @c runtime::get_current_executing_process (fallback
-    /// del @c LOAD_PROC cuando no hay TLS-direct).  Solo usado si
-    /// @c callback_entry.
-    uint64_t callback_get_proc_addr = 0;
-    /// Desplazamiento @c gs:[disp] para leer @c ProcessVM* en TLS-direct
-    /// (Win64).  -1 = usar el fallback por call.  Solo usado si
-    /// @c callback_entry.
-    int32_t callback_tls_gs_disp = -1;
 
     /// Direccion absoluta de @c proc->scheduler.profiler_jit_instr_counter.
     /// Si != 0, el JIT emite al inicio de cada metodo:
@@ -193,32 +185,16 @@ struct JitCompileOptions {
     /// pop-ea del free list en lugar de hacer new.
     int32_t exc_free_list_offset = 0;
 
-    /* ================= C2 tier-up (recompile-and-swap) ================= */
-    /// C2 (2026-06-07): si != 0, el codegen emite en el prologo un
-    /// contador on-entry + check; cuando el contador cruza
-    /// @c tier_up_threshold (exactamente), llama a esta direccion con
-    /// ABI C nativo: @c void handler(ProcessVM* proc, uint64_t fn_pc).
-    /// El handler recompila la funcion con el pipeline C2 y hace swap
-    /// atomico de su codigo (pc-map + method->jit_code).  0 = no emitir
-    /// contador (cero overhead; comportamiento C1 puro).
-    ///
-    /// Modelo HotSpot: el contador cuenta INVOCACIONES (entradas a la
-    /// funcion), no iteraciones de loop.  Captura las llamadas JIT->JIT
-    /// e interp->JIT (a diferencia de los contadores del interprete, que
-    /// se congelan tras C1).  Una funcion con su hotness en un loop de
-    /// entrada-unica (e.g. main) no sube de tier con esto -> requiere
-    /// backedge-counter + OSR (futuro).
-    uint64_t tier_up_handler_addr = 0;
-    /// Umbral de invocaciones (post-C1) que dispara el recompile C2.
-    uint32_t tier_up_threshold = 0;
-    /// Si true, emite el contador en TODA funcion compilada; si false
-    /// (default), solo en funciones con >=1 CALLVIRT (candidato real a
-    /// especulacion).  Configurable para A/B (VESTA_C2_TIER_ALL).
-    bool tier_up_all_fns = false;
-    /// Callback para reservar el contador de 8 bytes (zero-init) keyed
-    /// por @c fn_pc (mismo contador entre recompilaciones del call site).
-    /// Retorna la addr HOST del contador, 0 si no disponible.
-    std::function<uint64_t(uint64_t /*fn_pc*/)> reserve_tier_counter{};
+    /* El contador del nivel dos NO se pide por aqui.
+     *
+     * Aqui vivian seis campos -- la direccion del manejador, el umbral, si
+     * emitirlo en toda funcion, como reservar el contador, y los dos del
+     * callback -- que solo leia el selector de huecos de pila.  Al retirarlo
+     * se quedaron escribiendose sin que nadie los mirara, y ademas DUPLICABAN
+     * lo que si se usa: el contador del nivel dos viaja en VregEntries
+     * (tier2_request / tier2_ctr_addr / tier2_threshold) y lo del callback en
+     * VregCallbackOpts.  Dos sitios para lo mismo, uno de ellos muerto, es la
+     * forma exacta en que alguien acaba rellenando el que no hace nada. */
 
     /// Solo-LSP (vista "Godbolt", 2026-06-22): si true, el codegen estampa
     /// @c MInstr::source_pc con la @c IrInstr::source_line de la op que la

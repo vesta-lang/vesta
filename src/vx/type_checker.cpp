@@ -10429,7 +10429,10 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
         return true;
     }
     if (ta.kind == PrimitiveKind::COUNT) return true; // ya se dijo que fallaba
-    return types_assignable(tp, ta) || value_assignable_to_interface(tp, ta) ||
+    // El ascenso de una subclase a su base, igual que el de punteros a struct
+    // que ya estaba aqui al lado: pasar un `Perro` donde se pide un `Animal`.
+    return types_assignable(tp, ta) || class_is_assignable(tp, ta) ||
+           value_assignable_to_interface(tp, ta) ||
            struct_ptr_upcast_ok(tp, ta);
 }
 
@@ -12411,9 +12414,13 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
                                             : setter->param_types.front();
                         fa->result_type = pt;
                         const Type tv = check_expr(e->value.get());
+                        // Una subclase cabe en el parametro de un `set`,
+                        // igual que en cualquier otro parametro.
                         if (tv.kind != PrimitiveKind::COUNT &&
                             pt.kind != PrimitiveKind::COUNT &&
-                            !types_assignable(pt, tv)) {
+                            !types_assignable(pt, tv) &&
+                            !class_is_assignable(pt, tv) &&
+                            !value_assignable_to_interface(pt, tv)) {
                             diags_.error(
                                 e->loc,
                                 std::string("tipo del valor (") +
@@ -12796,9 +12803,18 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
         e->op != ast::AssignOp::Assign && s->type.nominal_id != 0 &&
         is_integral(s->type.kind) && is_integral(tv.kind) &&
         (tv.nominal_id == 0 || tv.nominal_id == s->type.nominal_id);
+    // Una subclase cabe donde se espera la base: es el ascenso de toda la vida.
+    // Aqui faltaba, y era el UNICO sitio del checker que preguntaba si un valor
+    // cabe sin consultarlo -- la declaracion, el retorno, el argumento, el
+    // campo y el parametro de un `set` si lo hacen.  Efecto: `A a = new B();`
+    // se aceptaba y `a = new B();` no, la misma conversion resuelta de dos
+    // formas segun estuviera escrita.  Pasaba desapercibido porque la
+    // asignacion si miraba la mitad del criterio, la de las interfaces: con el
+    // destino declarado como interfaz funcionaba, y solo fallaba con la
+    // superclase.
     if (tv.kind != PrimitiveKind::COUNT && !string_append_ok &&
         !num_const_to_newtype && !newtype_compound_ok &&
-        !types_assignable(s->type, tv) &&
+        !types_assignable(s->type, tv) && !class_is_assignable(s->type, tv) &&
         !value_assignable_to_interface(s->type, tv)) {
         diags_.error(e->loc, std::string("tipo del valor (") +
                                  type_to_string(tv) +
@@ -16812,6 +16828,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->args[i]->result_type = tp; // el literal es del newtype
             } else if (ta.kind != PrimitiveKind::COUNT &&
                        !types_assignable(tp, ta) &&
+                       !class_is_assignable(tp, ta) &&
                        !value_assignable_to_interface(tp, ta) &&
                        !struct_ptr_upcast_ok(tp, ta)) {
                 diags_.error(e->args[i]->loc,

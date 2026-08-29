@@ -836,17 +836,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     mc_opts.reserve_ic_slot = [](uint64_t key) -> uint64_t {
         return get_ic_slot(key);
     };
-    /* C2 tier-up (opt-in): instrumentar el prologo con el contador
-     * on-entry cuando C2 esta activo.  El Selector solo lo emite si la
-     * funcion tiene >=1 CALLVIRT (o tier_all). */
-    if (g_c2_threshold != 0) {
-        mc_opts.tier_up_handler_addr = reinterpret_cast<uint64_t>(&c2_tier_up);
-        mc_opts.tier_up_threshold = g_c2_threshold;
-        mc_opts.tier_up_all_fns = g_c2_tier_all;
-        mc_opts.reserve_tier_counter = [](uint64_t pc) -> uint64_t {
-            return reserve_tier_counter(pc);
-        };
-    }
+    /* El contador del nivel dos lo emite el prologo del camino de registros
+     * virtuales y viaja en VregEntries (ver mas abajo), no en estas opciones. */
     ffi::FFI *ffi_ptr = &owning_vm.loader_public.ffi_loader;
     auto native_resolver = [ffi_ptr](const std::string &name) -> uint64_t {
         size_t colon = name.find(':');
@@ -1581,11 +1572,10 @@ CompileResult eager_compile_function(
     /* callback-ABI: el top-level se compila con entry nativo.  El cuerpo
      * sigue siendo VM_ABI (RBX=proc) -> los callees usan el resolver
      * normal (VM_ABI), solo cambia el entry de esta funcion. */
-    if (callback_entry) {
-        top_opts.callback_entry = true;
-        top_opts.callback_get_proc_addr = callback_get_proc_addr;
-        top_opts.callback_tls_gs_disp = callback_tls_gs_disp;
-    }
+    /* Como se lee el ProcessVM en un callback -- por TLS directo o llamando al
+     * runtime -- viaja en VregCallbackOpts, que es lo que mira quien compila el
+     * entry.  Aqui solo se marca que ESTA funcion es un callback. */
+    if (callback_entry) top_opts.callback_entry = true;
 
     /* Marcar IN_PROGRESS antes de compilar para detectar self-recursion.
      * En callback NO tocamos g_eager_cache (su ABI difiere del VM_ABI). */
