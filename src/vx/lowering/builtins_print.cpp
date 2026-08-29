@@ -112,9 +112,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             emit_print_string_literal("\n", line); // via __vx_write
             return;
         }
-        out_mod_->register_native_import(kVestaIoLib, "vio_print_newline");
-        emit_calln(kVestaIoLib + ":vio_print_newline",
-                  {}, ir::IrType::VOID, line);
+        emit_native_call(kVestaIoLib, "vio_print_newline", {}, ir::IrType::VOID,
+                         line);
     };
 
     // Helper local: parsea una cadena de formato `${expr:fmt}` en
@@ -529,9 +528,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                                                                    : 0;
             ir::IrValueId v_align =
                 emit_const(ir::IrType::I64, (uint64_t)align_code, ex->loc.line);
-            out_mod_->register_native_import(kVestaIoLib, "vio_print_fmt");
-            emit_calln(kVestaIoLib + ":vio_print_fmt",
-                      {v_arg, v_kind, v_width, v_fill, v_align}, ir::IrType::VOID, ex->loc.line);
+            emit_native_call(kVestaIoLib, "vio_print_fmt",
+                             {v_arg, v_kind, v_width, v_fill, v_align},
+                             ir::IrType::VOID, ex->loc.line);
             return;
         }
 
@@ -594,9 +593,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                     emit_io_prim("__vx_pad", {v_fill, v_count}, ex->loc.line);
                     return;
                 }
-                out_mod_->register_native_import(kVestaIoLib, "vio_print_pad");
-                emit_calln(kVestaIoLib + ":vio_print_pad",
-                          {v_fill, v_count}, ir::IrType::VOID, ex->loc.line);
+                emit_native_call(kVestaIoLib, "vio_print_pad", {v_fill, v_count},
+                                 ir::IrType::VOID, ex->loc.line);
             };
             if (need_pad && fs.align == FmtSpec::Align::RIGHT) {
                 emit_pad_call(v_pad);
@@ -605,9 +603,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 // AOT: escribir los bytes via __vx_write (PURE_NATIVE).
                 emit_io_prim("__vx_write", {v_ptr, v_len}, ex->loc.line);
             } else {
-                out_mod_->register_native_import(kVestaIoLib, "vio_print_buf");
-                emit_calln(kVestaIoLib + ":vio_print_buf",
-                          {v_ptr, v_len}, ir::IrType::VOID, ex->loc.line);
+                emit_native_call(kVestaIoLib, "vio_print_buf", {v_ptr, v_len},
+                                 ir::IrType::VOID, ex->loc.line);
             }
             if (need_pad && fs.align == FmtSpec::Align::LEFT) {
                 emit_pad_call(v_pad);
@@ -683,9 +680,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             v = cast_if_needed(v, vt, promote, ex->loc.line,
                                /*is_explicit=*/true);
         }
-        out_mod_->register_native_import(kVestaIoLib, func);
-        emit_calln(kVestaIoLib + ":" + func,
-                  {v}, ir::IrType::VOID, ex->loc.line);
+        emit_native_call(kVestaIoLib, func, {v}, ir::IrType::VOID,
+                         ex->loc.line);
     };
 
     auto emit_print_arg = [&](ast::Expr *ex) {
@@ -810,9 +806,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        out_mod_->register_native_import(kVestaIoLib, "vio_flush");
-        emit_calln(kVestaIoLib + ":vio_flush",
-                  {}, ir::IrType::VOID, e->loc.line);
+        emit_native_call(kVestaIoLib, "vio_flush", {}, ir::IrType::VOID,
+                         e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -897,9 +892,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             func = "vio_print_gchandle";
         else
             func = "vio_print_cstr"; // host_ptr -> bytes hasta NUL
-        out_mod_->register_native_import(kVestaIoLib, func);
-        emit_calln(kVestaIoLib + ":" + func,
-                  {v}, ir::IrType::VOID, e->loc.line);
+        emit_native_call(kVestaIoLib, func, {v}, ir::IrType::VOID, e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -920,9 +913,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                                 ir::IrType::I64, e->loc.line, true);
         v_w = cast_if_needed(v_w, fn_->values[v_w].type, ir::IrType::I64,
                              e->loc.line, true);
-        out_mod_->register_native_import(kVestaIoLib, "vio_print_pad");
-        emit_calln(kVestaIoLib + ":vio_print_pad",
-                  {v_fill, v_w}, ir::IrType::VOID, e->loc.line);
+        emit_native_call(kVestaIoLib, "vio_print_pad", {v_fill, v_w},
+                         ir::IrType::VOID, e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -948,9 +940,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        out_mod_->register_native_import(kVestaIoLib, "vio_print_int");
-        emit_calln(kVestaIoLib + ":vio_print_int",
-                  {v}, ir::IrType::VOID, e->loc.line);
+        emit_native_call(kVestaIoLib, "vio_print_int", {v}, ir::IrType::VOID,
+                         e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -1015,17 +1006,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
-            // CALLN vio_print_int(v).
-            out_mod_->register_native_import(
-                std::string("stdlib/native/io/vesta_io"), "vio_print_int");
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ir::IrType::VOID;
-            ins.dst = ir::IR_NO_VALUE;
-            ins.func_name = "stdlib/native/io/vesta_io:vio_print_int";
-            ins.operands.push_back(v);
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
+            emit_native_call(kVestaIoLib, "vio_print_int", {v},
+                             ir::IrType::VOID, e->loc.line);
             if (i == 0) {
                 emit_print_string_literal(";", e->loc.line);
             }

@@ -923,6 +923,35 @@ class Lowering {
                              uint32_t source_line);
 
     /**
+     * @brief Llama a una funcion de una biblioteca nativa, y la importa.
+     *
+     * Llamar a codigo de fuera son SIEMPRE dos cosas: apuntar que el modulo
+     * necesita ese simbolo, y emitir la llamada.  Escritas por separado, la
+     * primera se olvida -- o se queda atras al copiar la segunda -- y el fallo
+     * no sale al compilar sino al enlazar, diciendo que falta un simbolo que
+     * en el fuente esta a la vista.
+     *
+     * Aqui van juntas, y de paso el nombre de la biblioteca se escribe una vez
+     * en lugar de dos (una para importar y otra pegada al simbolo).
+     *
+     * @param lib         La biblioteca (@ref kVestaIoLib y compania).
+     * @param fn          El simbolo dentro de ella.
+     * @param args        Argumentos, en orden.
+     * @param ret         Tipo del resultado, o VOID.
+     * @param source_line Linea fuente, para la depuracion.
+     * @param efectos     Lo que la funcion hace, si se sabe.  Sin esto el
+     *                    optimizador ha de suponer lo peor -- que lee y
+     *                    escribe cualquier cosa -- y no puede mover nada a su
+     *                    alrededor.
+     * @return El valor SSA del resultado, o IR_NO_VALUE si no devuelve.
+     */
+    ir::IrValueId emit_native_call(const std::string &lib,
+                                   const std::string &fn,
+                                   std::vector<ir::IrValueId> args,
+                                   ir::IrType ret, uint32_t source_line,
+                                   const ir::IrNativeEffects *efectos = nullptr);
+
+    /**
      * @brief Escribe un qword en una direccion.
      *
      * Los argumentos van como se lee en el fuente -- donde, y que --, no en el

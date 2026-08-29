@@ -214,10 +214,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
             emit_const(ir::IrType::I64, (uint64_t)argc, src_line);
         /* CALLN @Method("vesta_runtime:vx_get_native_thunk", v_fn_pc, v_argc).
          */
-        out_mod_->register_native_import("vesta_runtime",
-                                         "vx_get_native_thunk");
-        ir::IrValueId v_dst = emit_calln("vesta_runtime:vx_get_native_thunk",
-                  {v_fn_pc, v_argc}, ir::IrType::I64, src_line);
+        ir::IrValueId v_dst =
+            emit_native_call("vesta_runtime", "vx_get_native_thunk",
+                             {v_fn_pc, v_argc}, ir::IrType::I64, src_line);
         out_value = v_dst;
         return true;
     }
@@ -513,10 +512,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
         if (!e->args.empty()) {
             return builtin_error(e->loc, "gensym: no acepta argumentos", out_value);
         }
-        out_mod_->register_native_import(
-            std::string("stdlib/native/io/vesta_io"), "vio_gensym");
-        ir::IrValueId v_dst = emit_calln("stdlib/native/io/vesta_io:vio_gensym",
-                  {}, ir::IrType::U64, e->loc.line);
+        ir::IrValueId v_dst =
+            emit_native_call(kVestaIoLib, "vio_gensym", {}, ir::IrType::U64,
+                             e->loc.line);
         out_value = v_dst;
         return true;
     }

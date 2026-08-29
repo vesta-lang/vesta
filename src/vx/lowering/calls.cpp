@@ -1811,6 +1811,21 @@ ir::IrValueId Lowering::emit_calln(const std::string &name,
 }
 
 /**
+ * @copydoc vx::Lowering::emit_native_call
+ */
+ir::IrValueId Lowering::emit_native_call(const std::string &lib,
+                                         const std::string &fn,
+                                         std::vector<ir::IrValueId> args,
+                                         ir::IrType ret, uint32_t source_line,
+                                         const ir::IrNativeEffects *efectos) {
+    if (efectos)
+        out_mod_->register_native_import(lib, fn, *efectos);
+    else
+        out_mod_->register_native_import(lib, fn);
+    return emit_calln(lib + ":" + fn, std::move(args), ret, source_line);
+}
+
+/**
  * @brief Intenta bajar la llamada como el constructor de una variante de enum.
  *
  * `Color.Red` y `Color.Rgb(1, 2, 3)` se escriben como una llamada cuyo destino

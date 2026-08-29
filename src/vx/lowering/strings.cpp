@@ -1646,15 +1646,12 @@ ir::IrValueId Lowering::stringify_primitive_via_native(ir::IrValueId v_val,
      * Sin decirlo, cada `${n}` de una interpolacion era una barrera total para
      * cuanto la rodeara (52 sitios solo en std.memory), que es lo unico honesto
      * ante una funcion nativa de la que no se sabe nada. */
-    {
-        ir::IrNativeEffects fx;
-        fx.declarados = true;
-        fx.escribe_apuntado = 1u << 1; // el buffer destino
-        out_mod_->register_native_import(
-            std::string("stdlib/native/io/vesta_io"), native_fn, fx);
-    }
-    ir::IrValueId v_len = emit_calln(std::string("stdlib/native/io/vesta_io:") + native_fn,
-              {v_proc, v_buf, v_val}, ir::IrType::I64, ln);
+    ir::IrNativeEffects fx;
+    fx.declarados = true;
+    fx.escribe_apuntado = 1u << 1; // el buffer destino
+    ir::IrValueId v_len =
+        emit_native_call(kVestaIoLib, native_fn, {v_proc, v_buf, v_val},
+                         ir::IrType::I64, ln, &fx);
     /* 4. STRMAKE desde buf vm_mem. */
     ir::IrValueId v_h = emit_strmake(v_buf, v_len, ln);
     return v_h;

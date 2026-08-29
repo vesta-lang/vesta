@@ -291,10 +291,10 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
              * longitud escrita y abortara con 0 si excede 16 MB. */
             ir::IrValueId v_dst_buf = stack_alloc_buf(65536, e->loc.line);
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
-            out_mod_->register_native_import("stdlib/native/io/vesta_io",
-                                             "vstr_repeat_to_vmbuf");
-            ir::IrValueId v_len = emit_calln("stdlib/native/io/vesta_io:vstr_repeat_to_vmbuf",
-                      {v_proc, v_dst_buf, v_src_addr, v_src_len, v_n}, ir::IrType::U64, e->loc.line);
+            ir::IrValueId v_len = emit_native_call(
+                kVestaIoLib, "vstr_repeat_to_vmbuf",
+                {v_proc, v_dst_buf, v_src_addr, v_src_len, v_n},
+                ir::IrType::U64, e->loc.line);
             /* STRMAKE desde el buffer dst. */
             ir::IrValueId v_h = emit_strmake(v_dst_buf, v_len, e->loc.line);
             out_value = v_h;
@@ -318,10 +318,10 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
             auto [v_n_addr, v_n_len] =
                 materialize_str_to_vmbuf(v_needle, e->loc.line);
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
-            out_mod_->register_native_import("stdlib/native/io/vesta_io",
-                                             "vstr_contains");
-            ir::IrValueId v_dst = emit_calln("stdlib/native/io/vesta_io:vstr_contains",
-                      {v_proc, v_h_addr, v_h_len, v_n_addr, v_n_len}, ir::IrType::BOOL, e->loc.line);
+            ir::IrValueId v_dst = emit_native_call(
+                kVestaIoLib, "vstr_contains",
+                {v_proc, v_h_addr, v_h_len, v_n_addr, v_n_len},
+                ir::IrType::BOOL, e->loc.line);
             out_value = v_dst;
             return true;
         }
@@ -352,21 +352,11 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
             /* Buffer destino (64 KB ALLOCA). */
             ir::IrValueId v_dst_buf = stack_alloc_buf(65536, e->loc.line);
             const ir::IrValueId v_proc = emit_getproc(e->loc.line);
-            out_mod_->register_native_import("stdlib/native/io/vesta_io",
-                                             "vstr_replace_to_vmbuf");
-            ir::IrValueId v_len = fn_->new_value(ir::IrType::U64);
-            {
-                ir::IrInstr cl{};
-                cl.op = ir::IrOp::CALLN;
-                cl.type = ir::IrType::U64;
-                cl.dst = v_len;
-                cl.func_name =
-                    "stdlib/native/io/vesta_io:vstr_replace_to_vmbuf";
-                cl.operands = {v_proc,      v_dst_buf,  v_src_addr, v_src_len,
-                               v_from_addr, v_from_len, v_to_addr,  v_to_len};
-                cl.source_line = e->loc.line;
-                emit(current_block_, std::move(cl));
-            }
+            ir::IrValueId v_len = emit_native_call(
+                kVestaIoLib, "vstr_replace_to_vmbuf",
+                {v_proc, v_dst_buf, v_src_addr, v_src_len, v_from_addr,
+                 v_from_len, v_to_addr, v_to_len},
+                ir::IrType::U64, e->loc.line);
             ir::IrValueId v_h = emit_strmake(v_dst_buf, v_len, e->loc.line);
             out_value = v_h;
             return true;
