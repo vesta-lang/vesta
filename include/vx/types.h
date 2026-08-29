@@ -982,6 +982,117 @@ inline const char *primitive_name(PrimitiveKind k) noexcept {
 }
 
 /**
+ * @brief Inverso de @c primitive_name para los diez tipos numericos cortos.
+ *
+ * Recorre la propia @c primitive_name en vez de repetir la tabla, que en este
+ * fichero ya esta escrita dos veces.  Asi un tipo nuevo se reconoce por los
+ * dos lados en cuanto se anade a un solo sitio, y no hay forma de que las dos
+ * direcciones discrepen.
+ *
+ * @param name Nombre canonico corto (`"i8"`, `"u32"`, `"f64"`).
+ * @return La categoria, o @c PrimitiveKind::VOID si el nombre no es de ninguna.
+ */
+inline PrimitiveKind numeric_primitive_from_name(const std::string &name) {
+    static const PrimitiveKind kNumeric[] = {
+        PrimitiveKind::I8,  PrimitiveKind::I16, PrimitiveKind::I32,
+        PrimitiveKind::I64, PrimitiveKind::U8,  PrimitiveKind::U16,
+        PrimitiveKind::U32, PrimitiveKind::U64, PrimitiveKind::F32,
+        PrimitiveKind::F64};
+    for (const PrimitiveKind k : kNumeric)
+        if (name == primitive_name(k)) return k;
+    return PrimitiveKind::VOID;
+}
+
+/**
+ * @struct NumericRange
+ * @brief Valores que caben en un tipo entero.
+ *
+ * @c max se guarda sin signo para poder representar el de @c u64, que no cabe
+ * en un @c int64_t.  Para los tipos con signo, @c max nunca pasa de
+ * @c INT64_MAX, asi que la comparacion es segura por los dos lados.
+ */
+struct NumericRange {
+    int64_t min = 0;       ///< Minimo representable (0 en los sin signo).
+    uint64_t max = 0;      ///< Maximo representable.
+    bool is_signed = false; ///< Cierto si el tipo admite negativos.
+    bool valid = false;    ///< Falso si el tipo no es entero.
+};
+
+/**
+ * @brief Rango de un tipo entero.
+ *
+ * Escrito UNA vez: lo consultan tanto el aviso de literal fuera de rango como
+ * la comprobacion del sufijo de un literal (`300u8`).  Antes el rango vivia en
+ * un switch dentro del comprobador que ademas se dejaba fuera @c i64 y @c u64.
+ *
+ * @param k Categoria del tipo.
+ * @return El rango, con @c valid a falso si @p k no es un entero.
+ */
+inline NumericRange numeric_range_of(PrimitiveKind k) noexcept {
+    switch (k) {
+    case PrimitiveKind::I8: return {-128, 127, true, true};
+    case PrimitiveKind::I16: return {-32768, 32767, true, true};
+    case PrimitiveKind::I32: return {-2147483648LL, 2147483647ULL, true, true};
+    case PrimitiveKind::I64:
+        return {INT64_MIN, (uint64_t)INT64_MAX, true, true};
+    case PrimitiveKind::U8: return {0, 255, false, true};
+    case PrimitiveKind::U16: return {0, 65535, false, true};
+    case PrimitiveKind::U32: return {0, 4294967295ULL, false, true};
+    case PrimitiveKind::U64: return {0, UINT64_MAX, false, true};
+    default: return {};
+    }
+}
+
+/**
+ * @brief Texto del rango para un diagnostico (`"u8 [0, 255]"`).
+ * @param k Categoria del tipo.
+ * @return El texto, o vacio si @p k no es un entero.
+ */
+inline std::string numeric_range_text(PrimitiveKind k) {
+    const NumericRange r = numeric_range_of(k);
+    if (!r.valid) return {};
+    std::string s = primitive_name(k);
+    s += " [";
+    s += r.is_signed ? std::to_string(r.min) : "0";
+    s += ", ";
+    s += std::to_string(r.max);
+    s += "]";
+    return s;
+}
+
+/**
+ * @brief Comprueba si un literal entero cabe en un tipo.
+ *
+ * Toma el signo y la MAGNITUD por separado en vez de un valor con signo: el
+ * maximo de @c u64 no cabe en un @c int64_t, asi que leerlo como tal lo
+ * convertiria en -1 y parecerian no caber justo los valores del borde.
+ *
+ * @param k Categoria del tipo destino.
+ * @param negative Cierto si el literal lleva un `-` delante.
+ * @param magnitude Valor absoluto tal como lo leyo el lexer.
+ * @return Cierto si cabe, o si @p k no es un entero (nada que comprobar).
+ */
+inline bool literal_fits(PrimitiveKind k, bool negative,
+                         uint64_t magnitude) noexcept {
+    const NumericRange r = numeric_range_of(k);
+    if (!r.valid) return true;
+    if (!negative) return magnitude <= r.max;
+    if (!r.is_signed) return false; // un negativo nunca cabe en un sin signo
+    // El minimo con signo tiene una unidad mas de magnitud que el maximo
+    // (-128 frente a 127), y se calcula asi para no desbordar al negarlo.
+    return magnitude <= (uint64_t)r.max + 1u;
+}
+
+/**
+ * @brief Texto de un literal entero para un diagnostico, con su signo.
+ * @param negative Cierto si lleva un `-` delante.
+ * @param magnitude Valor absoluto.
+ */
+inline std::string literal_text(bool negative, uint64_t magnitude) {
+    return (negative ? "-" : "") + std::to_string(magnitude);
+}
+
+/**
  * @brief Calcula el tipo resultante de una promocion entre dos numericos.
  *
  * Reglas (estilo C, simplificadas):

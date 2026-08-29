@@ -138,17 +138,17 @@ public const u32 MAXDWORD  = 0xffffffff;
 /* ========================================================================== */
 /* Errors: */
 /* ========================================================================== */
-public const u8 ERROR_SUCCESS               = 0L;
-public const u8 ERROR_FILE_NOT_FOUND        = 2L;
-public const u8 ERROR_PATH_NOT_FOUND        = 3L;
-public const u8 ERROR_TOO_MANY_OPEN_FILES   = 4L;
-public const u8 ERROR_ACCESS_DENIED         = 5L;
-public const u8 ERROR_NO_MORE_FILES         = 18L;
-public const u8 ERROR_SHARING_VIOLATION     = 32L;
-public const u8 ERROR_FILE_EXISTS           = 80L;
-public const u8 ERROR_INSUFFICIENT_BUFFER   = 122L;
-public const u8 ERROR_ALREADY_EXISTS        = 183L;
-public const u8 ERROR_MORE_DATA             = 234L;
+public const u32 ERROR_SUCCESS               = 0;
+public const u32 ERROR_FILE_NOT_FOUND        = 2;
+public const u32 ERROR_PATH_NOT_FOUND        = 3;
+public const u32 ERROR_TOO_MANY_OPEN_FILES   = 4;
+public const u32 ERROR_ACCESS_DENIED         = 5;
+public const u32 ERROR_NO_MORE_FILES         = 18;
+public const u32 ERROR_SHARING_VIOLATION     = 32;
+public const u32 ERROR_FILE_EXISTS           = 80;
+public const u32 ERROR_INSUFFICIENT_BUFFER   = 122;
+public const u32 ERROR_ALREADY_EXISTS        = 183;
+public const u32 ERROR_MORE_DATA             = 234;
 
 
 
@@ -156,10 +156,10 @@ public const u8 ERROR_MORE_DATA             = 234L;
 /* Enums                                                                      */
 /* ========================================================================== */
 /* DllMain Reason: */
-public const u8 DLL_PROCESS_ATTACH          = (1);
-public const u8 DLL_PROCESS_DETACH          = (0);
-public const u8 DLL_THREAD_ATTACH           = (2);
-public const u8 DLL_THREAD_DETACH           = (3);
+public const u32 DLL_PROCESS_ATTACH          = (1);
+public const u32 DLL_PROCESS_DETACH          = (0);
+public const u32 DLL_THREAD_ATTACH           = (2);
+public const u32 DLL_THREAD_DETACH           = (3);
 
 
 
@@ -244,11 +244,11 @@ public const u32 TH32CS_SNAPTHREAD                   = 0x00000004;
 public const u32 IMAGE_FILE_MACHINE_I386             = 0x014c;
 public const u32 IMAGE_FILE_MACHINE_AMD64            = 0x8664;
 public const u32 CONTEXT_AMD64                       = 0x100000;
-public const u32 CONTEXT_CONTROL                     = (CONTEXT_AMD64 | 0x1L);
-public const u32 CONTEXT_INTEGER                     = (CONTEXT_AMD64 | 0x2L);
-public const u32 CONTEXT_SEGMENTS                    = (CONTEXT_AMD64 | 0x4L);
-public const u32 CONTEXT_FLOATING_POINT              = (CONTEXT_AMD64 | 0x8L);
-public const u32 CONTEXT_DEBUG_REGISTERS             = (CONTEXT_AMD64 | 0x10L);
+public const u32 CONTEXT_CONTROL                     = (CONTEXT_AMD64 | 0x1);
+public const u32 CONTEXT_INTEGER                     = (CONTEXT_AMD64 | 0x2);
+public const u32 CONTEXT_SEGMENTS                    = (CONTEXT_AMD64 | 0x4);
+public const u32 CONTEXT_FLOATING_POINT              = (CONTEXT_AMD64 | 0x8);
+public const u32 CONTEXT_DEBUG_REGISTERS             = (CONTEXT_AMD64 | 0x10);
 
 
 public const u32 CONTEXT_FULL                        = (
@@ -517,26 +517,26 @@ public const u32 FILE_SHARE_READ             = 0x00000001;
 public const u32 FILE_SHARE_WRITE            = 0x00000002;
 
 /* Generic Access Rights: */
-public const u32 GENERIC_READ                = 0x80000000L;
-public const u32 GENERIC_WRITE               = 0x40000000L;
-public const u32 GENERIC_EXECUTE             = 0x20000000L;
-public const u32 GENERIC_ALL                 = 0x10000000L;
+public const u32 GENERIC_READ                = 0x80000000;
+public const u32 GENERIC_WRITE               = 0x40000000;
+public const u32 GENERIC_EXECUTE             = 0x20000000;
+public const u32 GENERIC_ALL                 = 0x10000000;
 
 /* Standard Access Rights: */
-public const u32 DELETE                      = 0x00010000L;
-public const u32 READ_CONTROL                = 0x00020000L;
-public const u32 WRITE_DAC                   = 0x00040000L;
-public const u32 WRITE_OWNER                 = 0x00080000L;
-public const u32 SYNCHRONIZE                 = 0x00100000L;
+public const u32 DELETE                      = 0x00010000;
+public const u32 READ_CONTROL                = 0x00020000;
+public const u32 WRITE_DAC                   = 0x00040000;
+public const u32 WRITE_OWNER                 = 0x00080000;
+public const u32 SYNCHRONIZE                 = 0x00100000;
 
-public const u32 STANDARD_RIGHTS_REQUIRED    = 0x000F0000L;
+public const u32 STANDARD_RIGHTS_REQUIRED    = 0x000F0000;
 
 public const u32 STANDARD_RIGHTS_READ        = READ_CONTROL;
 public const u32 STANDARD_RIGHTS_WRITE       = READ_CONTROL;
 public const u32 STANDARD_RIGHTS_EXECUTE     = READ_CONTROL;
 
-public const u32 STANDARD_RIGHTS_ALL         = 0x001F0000L;
-public const u32 SPECIFIC_RIGHTS_ALL         = 0x0000FFFFL;
+public const u32 STANDARD_RIGHTS_ALL         = 0x001F0000;
+public const u32 SPECIFIC_RIGHTS_ALL         = 0x0000FFFF;
 
 /* Commulated Access Rights: */
 public const u32 FILE_READ_DATA              = 0x0001;
@@ -886,12 +886,12 @@ comptime u32 _byteswap_ulong(u32 x) {
 
 comptime u64 _byteswap_uint64(u64 x) {
     return (((u64)(x) << 56) |
-            (((u64)(x) << 40) & 0xff000000000000ULL) |
-            (((u64)(x) << 24) & 0xff0000000000ULL) |
-            (((u64)(x) << 8)  & 0xff00000000ULL) |
-            (((u64)(x) >> 8)  & 0xff000000ULL) |
-            (((u64)(x) >> 24) & 0xff0000ULL) |
-            (((u64)(x) >> 40) & 0xff00ULL) |
+            (((u64)(x) << 40) & 0xff000000000000) |
+            (((u64)(x) << 24) & 0xff0000000000) |
+            (((u64)(x) << 8)  & 0xff00000000) |
+            (((u64)(x) >> 8)  & 0xff000000) |
+            (((u64)(x) >> 24) & 0xff0000) |
+            (((u64)(x) >> 40) & 0xff00) |
             ((u64)(x)  >> 56));
 }
 
@@ -948,15 +948,15 @@ public const u32 TOKEN_ALL_ACCESS_P = (
     TOKEN_ADJUST_DEFAULT
 );
 
-public const u32 SE_PRIVILEGE_ENABLED_BY_DEFAULT = (0x00000001L);
-public const u32 SE_PRIVILEGE_ENABLED            = (0x00000002L);
-public const u32 SE_PRIVILEGE_REMOVED            = (0X00000004L);
-public const u32 SE_PRIVILEGE_USED_FOR_ACCESS    = (0x80000000L);
+public const u32 SE_PRIVILEGE_ENABLED_BY_DEFAULT = (0x00000001);
+public const u32 SE_PRIVILEGE_ENABLED            = (0x00000002);
+public const u32 SE_PRIVILEGE_REMOVED            = (0X00000004);
+public const u32 SE_PRIVILEGE_USED_FOR_ACCESS    = (0x80000000);
 
 /* Status */
-public const u32 STATUS_WAIT_0                   = ((DWORD)0x00000000L);
-public const u32 STATUS_TIMEOUT                  = ((DWORD)0x00000102L);
-public const u32 STATUS_PENDING                  = ((DWORD)0x00000103L);
+public const u32 STATUS_WAIT_0                   = ((DWORD)0x00000000);
+public const u32 STATUS_TIMEOUT                  = ((DWORD)0x00000102);
+public const u32 STATUS_PENDING                  = ((DWORD)0x00000103);
 public const u32 STILL_ACTIVE                    = STATUS_PENDING;
 
 /* Startupinfo */
@@ -1576,7 +1576,7 @@ public const u32 PIPE_ACCESS_OUTBOUND                = 0x00000002;
 public const u32 PIPE_ACCESS_DUPLEX                  = 0x00000003;
 
 public const u32 PIPE_UNLIMITED_INSTANCES            = 255;
-public const u32 ERROR_PIPE_BUSY                     = 231L;
+public const u32 ERROR_PIPE_BUSY                     = 231;
 
 
 

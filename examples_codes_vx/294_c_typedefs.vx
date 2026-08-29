@@ -34,10 +34,10 @@ struct Mat { u32 grid[2][2]; }
 typedef int DWORD_LIKE;
 
 i32 main() {
-    // Sufijos de literal C.
-    u64 hexv  = 0x10UL;   // 16
-    u32 uns   = 5U;       // 5
-    long_int lv = 4L;     // 4  (long_int en Windows = i32, LP64 = i64)
+    // Sufijos de tipo: nombran un tipo de Vesta, no uno de C.
+    u64 hexv  = 0x10u64;  // 16
+    u32 uns   = 5u32;     // 5
+    long_int lv = 4;      // 4  (long_int en Windows = i32, LP64 = i64)
 
     // union: escribir un campo, leer otro.
     U u; u.a = 7;

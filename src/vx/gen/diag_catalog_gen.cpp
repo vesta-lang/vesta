@@ -183,8 +183,18 @@ const CatEntry kEntries[] = {
     {"VXA051", {"the comptime set of '{0}' could not be assembled, so its compile-time code has no bytecode to run: what depends on it is compiled with placeholder values", "el conjunto comptime de '{0}' no se pudo ensamblar, asi que su codigo de compilacion no tiene bytecode que ejecutar: lo que dependa de el se compila con valores de relleno"}},
     {"VXA052", {"the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY", "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"}},
     {"VXA053", {"assembling '{0}' into a .velb failed (code {1}): no artifact was produced", "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefacto"}},
+    {"VXF001", {"formatter: the lexer moved backwards through the source", "formateador: el lexer retrocedio en el fuente"}},
+    {"VXF002", {"formatter: a token falls outside the source buffer", "formateador: un token cae fuera del fuente"}},
+    {"VXF003", {"formatter: the source could not be tokenized, left untouched", "formateador: el fuente no se pudo tokenizar; se deja intacto"}},
+    {"VXF004", {"formatter: formatting would have changed the program; file left untouched", "formateador: dar formato habria cambiado el programa; el fichero se deja intacto"}},
+    {"VXF005", {"formatter: cannot read file '{0}'", "formateador: no se puede leer el fichero '{0}'"}},
+    {"VXL001", {"C-style literal suffix '{0}': Vesta has no such type, write '{1}' instead", "sufijo de literal estilo C '{0}': Vesta no tiene ese tipo; escribe '{1}'"}},
+    {"VXL002", {"unknown type suffix '{0}' on a numeric literal", "sufijo de tipo desconocido '{0}' en un literal numerico"}},
+    {"VXL003", {"integer suffix '{0}' on a literal that has a fractional part", "sufijo entero '{0}' en un literal con parte decimal"}},
+    {"VXT001", {"literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended", "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"}},
+    {"VXT002", {"literal {0} does not fit in its own suffix '{1}' ({2})", "el literal {0} no cabe en su propio sufijo '{1}' ({2})"}},
 };
-const int kEntryCount = 163;
+const int kEntryCount = 173;
 
 } // namespace
 

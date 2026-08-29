@@ -1,0 +1,75 @@
+/**
+ * @file 501_sufijos_de_tipo.vx
+ * @brief Un literal puede decir de que tipo es: `42_i8`, `3.14_f64`.
+ *
+ * Sin sufijo, el tipo de un literal lo decide el contexto, y esa sigue siendo
+ * la forma normal de escribirlo.  El sufijo sirve para cuando NO hay contexto
+ * que lo diga, o cuando decirlo aclara lo que se esta leyendo.
+ *
+ * Los sufijos nombran los tipos de ESTE lenguaje -- `i8`..`i64`, `u8`..`u64`,
+ * `f32`, `f64` --, no los de C.  Los de C (`100L`, `1.5F`, `2U`) se rechazan:
+ * nombran `long` y `float`, que aqui no existen, y hasta ahora se consumian sin
+ * efecto ninguno.  Un `i32 a = 100L;` compilaba y valia `i32`, de modo que el
+ * sufijo le mentia a quien viniera de C.
+ *
+ * Y un literal que no cabe en su tipo es un ERROR, no un aviso.  Truncar es una
+ * decision, y una decision se escribe: para eso esta el cast.
+ */
+
+i32 main() {
+    // El sufijo FIJA el tipo; sin el, lo pone el contexto.
+    i64 con_sufijo = 42_i8;
+    i64 sin_sufijo = 42;
+
+    // El separador `_` agrupa los millares, y tambien separa el sufijo.
+    i64 grande = 1_000_000;
+    i64 grande_tipado = 1_000_000_i64;
+
+    // En cualquier base.  Los digitos hexadecimales van en mayuscula y
+    // rellenos hasta la anchura de un tipo: `0x0F` ocupa un byte.
+    u32 mascara = 0xFF_u32;
+    u8 bits = 0b0101_u8;
+    u16 permisos = 0o755_u16;
+
+    // Los limites de cada tipo se pueden escribir exactos.  `-128_i8` vale
+    // porque el minimo con signo tiene una unidad mas de magnitud que el
+    // maximo; `128_i8` seria un error.
+    i8 minimo = -128_i8;
+    i8 maximo = 127_i8;
+
+    // Un flotante tambien.
+    f64 razon = 3.14_f64;
+    f32 corta = 1.5_f32;
+
+    println("con sufijo   = ${con_sufijo}");
+    println("sin sufijo   = ${sin_sufijo}");
+    println("grande       = ${grande}");
+    println("mascara      = ${mascara:hex}");
+    println("bits         = ${bits}");
+    println("permisos     = ${permisos}");
+    println("minimo i8    = ${minimo}");
+    println("maximo i8    = ${maximo}");
+    println("razon        = ${razon}");
+
+    // Lo que sigue seria un error de compilacion, cada uno por su motivo:
+    //
+    //   i64 c   = 100L;      // `long` no es un tipo de Vesta -> escribe i64
+    //   u8  no  = 300_u8;    // 300 no es ningun u8: el literal se contradice
+    //   u8  ni  = 300;       // tampoco cabe en la variable
+    //   f64 mal = 3.14_i32;  // un sufijo entero sobre un numero con decimales
+    //
+    // Y asi se trunca a proposito, que es la unica forma de truncar:
+    u8 truncado = (u8) 300;
+
+    i32 ok = 0;
+    if (con_sufijo == 42) { ok = ok + 10; }
+    if (grande == grande_tipado) { ok = ok + 10; }
+    if (mascara == 255) { ok = ok + 10; }
+    if (bits == 5) { ok = ok + 5; }
+    if (permisos == 493) { ok = ok + 5; }
+    if (minimo == -128) { ok = ok + 5; }
+    if (maximo == 127) { ok = ok + 5; }
+    if (truncado == 44) { ok = ok + 5; }
+    println("ok = ${ok}");
+    return ok;
+}

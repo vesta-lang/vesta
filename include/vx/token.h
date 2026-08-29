@@ -300,6 +300,25 @@ const char *token_kind_name(TokenKind k) noexcept;
  * literales numericos llevan ademas su valor pre-parseado para evitar
  * que el parser tenga que reparsear cadenas como "0x1A2B".
  */
+/**
+ * @brief Cierto si el token nombra un tipo numerico en su forma corta.
+ *
+ * Son los diez que pueden ir de sufijo en un literal (`42i8`, `3.14f64`).
+ * Se dejan fuera los alias C-style (`int8_t`) a proposito: un sufijo debe
+ * tener UNA sola forma, o el formateador no sabria a cual normalizar.
+ *
+ * @param k Categoria del token.
+ */
+inline bool is_numeric_type_keyword(TokenKind k) noexcept {
+    return (k >= TokenKind::KW_INT8 && k <= TokenKind::KW_UINT64) ||
+           k == TokenKind::KW_F32 || k == TokenKind::KW_F64;
+}
+
+/// @brief Cierto si el token nombra un tipo de coma flotante corto.
+inline bool is_float_type_keyword(TokenKind k) noexcept {
+    return k == TokenKind::KW_F32 || k == TokenKind::KW_F64;
+}
+
 struct Token {
     TokenKind kind = TokenKind::END_OF_FILE; ///< Categoria del token.
     SourceLoc loc;                           ///< Posicion en el fuente.
@@ -308,6 +327,12 @@ struct Token {
     // Valores pre-parseados para literales (zero-cost si no se usan).
     uint64_t int_val = 0; ///< Para INT_LIT y CHAR_LIT (sin signo).
     double flt_val = 0.0; ///< Para FLOAT_LIT.
+    /// Sufijo de tipo del literal (`42i8`, `3.14f64`): el `KW_*` del tipo que
+    /// nombra, o @c END_OF_FILE si el literal va desnudo y el tipo lo sigue
+    /// infiriendo el contexto.  Se reusa @c TokenKind en lugar de una enum
+    /// propia porque el sufijo ES el nombre de un tipo, y tanto la tabla de
+    /// palabras clave como la conversion a @c Type ya trabajan con el.
+    TokenKind suffix = TokenKind::END_OF_FILE;
     std::string
         str_val; ///< Para STRING_LIT y RAW_STRING_LIT (escapes ya resueltos).
 

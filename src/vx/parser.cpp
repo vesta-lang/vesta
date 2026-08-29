@@ -49,6 +49,24 @@
 #endif
 
 namespace vx {
+
+/**
+ * @brief Traduce el sufijo de tipo de un literal a su categoria primitiva.
+ *
+ * El lexer guarda el sufijo como el `KW_*` del tipo que nombra (`42i8` ->
+ * @c KW_INT8), porque el sufijo ES el nombre de un tipo y esa tabla ya
+ * existia.  El puente hasta @c PrimitiveKind es el nombre canonico, que las
+ * dos tablas saben producir: asi no hay una tercera que mantener a mano ni
+ * forma de que discrepen.
+ *
+ * @param t Token del literal.
+ * @return La categoria del sufijo, o @c VOID si el literal va desnudo.
+ */
+static PrimitiveKind suffix_primitive(const Token &t) {
+    if (!is_numeric_type_keyword(t.suffix)) return PrimitiveKind::VOID;
+    return numeric_primitive_from_name(token_kind_name(t.suffix));
+}
+
 /**
  * @brief Reconoce nombres de builtins comptime de introspection.
  *
@@ -8102,6 +8120,12 @@ std::unique_ptr<ast::Expr> Parser::parse_unary() {
         }
         (void)consume();
         auto operand = parse_unary();
+        // `-128i8` es valido y `128i8` no: el rango de un literal con signo
+        // depende de si lleva el menos delante, asi que se marca aqui, que es
+        // donde se sabe.
+        if (op == ast::UnOp::Neg && operand &&
+            operand->kind == ast::NodeKind::IntLitExpr)
+            static_cast<ast::IntLitExpr *>(operand.get())->negated = true;
         auto u = std::make_unique<ast::UnaryExpr>();
         u->loc = loc;
         u->op = op;
@@ -8686,6 +8710,7 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         auto e = std::make_unique<ast::IntLitExpr>();
         e->loc = loc;
         e->value = current_.int_val;
+        e->suffix = suffix_primitive(current_);
         (void)consume();
         return e;
     }
@@ -8693,6 +8718,7 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         auto e = std::make_unique<ast::FloatLitExpr>();
         e->loc = loc;
         e->value = current_.flt_val;
+        e->suffix = suffix_primitive(current_);
         (void)consume();
         return e;
     }

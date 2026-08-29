@@ -27,6 +27,8 @@
 
 #include "vx/lexer.h"
 
+#include "vx/diag/diag_catalog.h"
+
 #include <cctype>
 #include <cstring>
 #include <string>
@@ -497,22 +499,93 @@ Token Lexer::lex_number() {
     bool is_float = false;
     uint64_t int_val = 0;
 
-    // Sufijos de literal estilo C.  Se ACEPTAN y se consumen; el tipo del
-    // literal lo sigue infiriendo el contexto (igual que un literal desnudo),
-    // asi que el sufijo no cambia el valor.  Habilita portar headers C
-    // (`0L`, `2U`, `0xFFFFFFFFUL`, `1.5f`) sin reescribir cada constante.
-    //   - entero: cualquier combinacion de u/U y l/L (U, L, UL, LL, ULL, ...).
-    //   - float:  f/F (float) y l/L (long double).
-    auto eat_suffix = [&](bool floaty) {
-        while (pos_ < source_.size()) {
-            const char c = source_[pos_];
-            const bool ok =
-                floaty ? (c == 'f' || c == 'F' || c == 'l' || c == 'L')
-                       : (c == 'u' || c == 'U' || c == 'l' || c == 'L');
-            if (!ok) break;
-            ++pos_;
-            ++column_;
+    // Sufijo de tipo del literal: `42i8`, `0xFFu32`, `3.14f64`.  El sufijo
+    // NOMBRA un tipo del lenguaje, asi que se reconoce con la MISMA tabla que
+    // las palabras clave (`classify_identifier`) en lugar de con una lista
+    // aparte: cuando se anada un tipo primitivo, el sufijo lo hereda solo.
+    // Con sufijo el tipo del literal queda FIJADO; sin el lo infiere el
+    // contexto, igual que antes.
+    //
+    // Los sufijos de C (`100L`, `1.5F`, `2U`) se RECHAZAN con una sugerencia.
+    // Nombran `long` y `float`, que no son tipos de Vesta, y hasta ahora se
+    // consumian sin efecto ninguno: `i32 a = 100L;` compilaba y valia i32,
+    // mintiendo a quien viniera de C.
+    TokenKind suffix = TokenKind::END_OF_FILE;
+    auto read_type_suffix = [&](bool floaty) {
+        // El sufijo va pegado al numero, asi que se lee como un identificador.
+        size_t end = pos_;
+        while (end < source_.size()) {
+            const char c = source_[end];
+            if (!std::isalnum((unsigned char)c) && c != '_') break;
+            ++end;
         }
+        if (end == pos_) return; // literal desnudo: el tipo lo da el contexto
+
+        // Un sufijo empieza por letra (`i8`, `u32`, `f64`).  Si lo pegado al
+        // numero empieza por un DIGITO no es un sufijo, sino un digito que no
+        // encaja con la base: el `2` de `0b1210`.  Se deja sin consumir para
+        // que el diagnostico lo de quien sabe de bases, en vez de taparlo con
+        // un "sufijo desconocido" que despista.
+        if (std::isdigit((unsigned char)source_[pos_])) return;
+
+        const std::string text = source_.substr(pos_, end - pos_);
+        const uint32_t width = (uint32_t)(end - pos_);
+        SourceLoc loc{filename_, line_, column_, (uint32_t)pos_, width};
+
+        // Se consume SIEMPRE, aunque no valga: dejar el resto suelto
+        // convertiria un error en una cascada de errores sin relacion.
+        pos_ = end;
+        column_ += width;
+
+        const TokenKind kind = classify_identifier(text);
+        if (is_numeric_type_keyword(kind)) {
+            // `3.14i32` no describe nada: el valor tiene parte decimal.
+            if (floaty && !is_float_type_keyword(kind)) {
+                error_at(std::move(loc),
+                         vx::diag::format("VXL003", {text}));
+                return;
+            }
+            suffix = kind;
+            return;
+        }
+
+        // Un sufijo de C: solo letras de su juego (u/U, l/L, f/F).
+        bool c_style = true;
+        for (const char c : text)
+            if (c != 'u' && c != 'U' && c != 'l' && c != 'L' && c != 'f' &&
+                c != 'F')
+                c_style = false;
+        if (c_style) {
+            // Se sugiere el tipo de Vesta mas cercano a lo que el sufijo de C
+            // queria decir, para que la correccion sea copiar y pegar.
+            bool has_u = false, has_f = false, has_l = false;
+            for (const char c : text) {
+                has_u |= (c == 'u' || c == 'U');
+                has_f |= (c == 'f' || c == 'F');
+                has_l |= (c == 'l' || c == 'L');
+            }
+            const char *hint = floaty ? (has_f ? "f32" : "f64")
+                                      : (has_u ? (has_l ? "u64" : "u32")
+                                               : (has_l ? "i64" : "i32"));
+            error_at(std::move(loc),
+                     vx::diag::format("VXL001", {text, hint}));
+            return;
+        }
+        error_at(std::move(loc), vx::diag::format("VXL002", {text}));
+    };
+
+    // Cierre comun de los tres caminos con base explicita (hex, binario y
+    // octal): leer el sufijo, recortar el lexema y armar el token.  El decimal
+    // no lo usa porque todavia no sabe si acabara siendo entero o flotante.
+    auto finish_int = [&]() {
+        read_type_suffix(/*floaty=*/false);
+        SourceLoc loc = start;
+        loc.length = (uint32_t)(pos_ - begin);
+        Token t = make_token(TokenKind::INT_LIT,
+                             source_.substr(begin, pos_ - begin), loc);
+        t.int_val = int_val;
+        t.suffix = suffix;
+        return t;
     };
 
     // Detectar prefijo de base: 0x / 0b / 0o.
@@ -541,13 +614,7 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
-            eat_suffix(/*floaty=*/false);
-            std::string lex = source_.substr(begin, pos_ - begin);
-            SourceLoc loc = start;
-            loc.length = (uint32_t)(pos_ - begin);
-            Token t = make_token(TokenKind::INT_LIT, std::move(lex), loc);
-            t.int_val = int_val;
-            return t;
+            return finish_int();
         }
         if (b == 'b' || b == 'B') {
             pos_ += 2;
@@ -564,13 +631,7 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
-            eat_suffix(/*floaty=*/false);
-            std::string lex = source_.substr(begin, pos_ - begin);
-            SourceLoc loc = start;
-            loc.length = (uint32_t)(pos_ - begin);
-            Token t = make_token(TokenKind::INT_LIT, std::move(lex), loc);
-            t.int_val = int_val;
-            return t;
+            return finish_int();
         }
         if (b == 'o' || b == 'O') {
             pos_ += 2;
@@ -587,13 +648,7 @@ Token Lexer::lex_number() {
                 ++pos_;
                 ++column_;
             }
-            eat_suffix(/*floaty=*/false);
-            std::string lex = source_.substr(begin, pos_ - begin);
-            SourceLoc loc = start;
-            loc.length = (uint32_t)(pos_ - begin);
-            Token t = make_token(TokenKind::INT_LIT, std::move(lex), loc);
-            t.int_val = int_val;
-            return t;
+            return finish_int();
         }
     }
 
@@ -650,23 +705,31 @@ Token Lexer::lex_number() {
         }
     }
 
-    eat_suffix(is_float);
+    read_type_suffix(is_float);
+
+    // Un sufijo flotante sobre un literal sin parte decimal (`42f64`) lo
+    // convierte: el sufijo manda sobre la forma en que se escribio el numero.
+    if (!is_float && is_float_type_keyword(suffix)) is_float = true;
+
     std::string lex = source_.substr(begin, pos_ - begin);
     SourceLoc loc = start;
     loc.length = (uint32_t)(pos_ - begin);
 
     if (is_float) {
-        // strtod ignora '_' incrustados?  No.  Limpiamos antes.
+        // strtod ignora '_' incrustados?  No.  Limpiamos antes.  El sufijo se
+        // queda fuera: strtod para solo en la primera letra que no encaja.
         std::string clean;
         clean.reserve(lex.size());
         for (char c : lex)
             if (c != '_') clean.push_back(c);
         Token t = make_token(TokenKind::FLOAT_LIT, std::move(lex), loc);
         t.flt_val = std::strtod(clean.c_str(), nullptr);
+        t.suffix = suffix;
         return t;
     }
     Token t = make_token(TokenKind::INT_LIT, std::move(lex), loc);
     t.int_val = int_val;
+    t.suffix = suffix;
     return t;
 }
 

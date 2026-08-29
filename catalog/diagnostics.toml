@@ -14,7 +14,7 @@
 #
 # Numeracion por componente: VX0xxx lexer | VX1xxx parser | VX2xxx type-checker |
 # VX3xxx lowering/IR | VX4xxx linker/modulos | VX5xxx codegen/AOT | VX6xxx VPP |
-# VXAxxx asm/ASA | VX9xxx CLI/driver.
+# VXAxxx asm/ASA | VXFxxx formateador | VX9xxx CLI/driver.
 
 [meta]
 # El ORDEN fija el indice interno de idioma (0 = primero = fallback).
@@ -757,3 +757,49 @@ es = "como se coloca cada tipo en memoria"
 [VX9168]
 en = "the concrete shape of a value: width, sign, whether it is a pointer"
 es = "la forma concreta de un valor: ancho, signo, si es un puntero"
+
+# --- formateador (VXFxxx) ---
+
+[VXF001]
+en = "formatter: the lexer moved backwards through the source"
+es = "formateador: el lexer retrocedio en el fuente"
+
+[VXF002]
+en = "formatter: a token falls outside the source buffer"
+es = "formateador: un token cae fuera del fuente"
+
+[VXF003]
+en = "formatter: the source could not be tokenized, left untouched"
+es = "formateador: el fuente no se pudo tokenizar; se deja intacto"
+
+[VXF004]
+en = "formatter: formatting would have changed the program; file left untouched"
+es = "formateador: dar formato habria cambiado el programa; el fichero se deja intacto"
+
+# --- lexer (VXLxxx) ---
+
+[VXL001]
+en = "C-style literal suffix '{0}': Vesta has no such type, write '{1}' instead"
+es = "sufijo de literal estilo C '{0}': Vesta no tiene ese tipo; escribe '{1}'"
+
+[VXL002]
+en = "unknown type suffix '{0}' on a numeric literal"
+es = "sufijo de tipo desconocido '{0}' en un literal numerico"
+
+[VXL003]
+en = "integer suffix '{0}' on a literal that has a fractional part"
+es = "sufijo entero '{0}' en un literal con parte decimal"
+
+# --- comprobador de tipos (VXTxxx) ---
+
+[VXT001]
+en = "literal {0} does not fit in {1} ({2}); write a cast if the truncation is intended"
+es = "el literal {0} no cabe en {1} ({2}); escribe un cast si la truncacion es intencionada"
+
+[VXT002]
+en = "literal {0} does not fit in its own suffix '{1}' ({2})"
+es = "el literal {0} no cabe en su propio sufijo '{1}' ({2})"
+
+[VXF005]
+en = "formatter: cannot read file '{0}'"
+es = "formateador: no se puede leer el fichero '{0}'"

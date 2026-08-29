@@ -571,11 +571,20 @@ struct Expr : Node {
 
 struct IntLitExpr : Expr {
     uint64_t value = 0;
+    /// Tipo fijado por el sufijo (`42i8`), o @c VOID si el literal va desnudo
+    /// y el tipo lo sigue infiriendo el contexto.
+    PrimitiveKind suffix = PrimitiveKind::VOID;
+    /// Cierto si el literal aparece justo detras de un `-`.  Lo marca el
+    /// parser porque el rango no se puede juzgar mirando solo el numero:
+    /// `128i8` se sale, pero `-128i8` es exactamente el minimo de i8.
+    bool negated = false;
     IntLitExpr() : Expr(NodeKind::IntLitExpr) {}
 };
 
 struct FloatLitExpr : Expr {
     double value = 0.0;
+    /// Tipo fijado por el sufijo (`3.14f32`), o @c VOID si va desnudo.
+    PrimitiveKind suffix = PrimitiveKind::VOID;
     FloatLitExpr() : Expr(NodeKind::FloatLitExpr) {}
 };
 
