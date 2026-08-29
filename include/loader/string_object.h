@@ -87,6 +87,7 @@
  * @endcode
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "loader/oop_types.h"
 #include <cstdint>
 
@@ -254,10 +255,10 @@ inline uint32_t str_hash_compute(StringObject *s) {
     // fast paths en exec_instruction_string.cpp (STRMAKE/STRCAT).
     // El campo str_hash es uint32_t -> truncamos al low half.
     const uint8_t *data = str_data(s);
-    uint64_t h64 = 1469598103934665603ULL; // FNV-1a 64-bit offset
+    uint64_t h64 = util::kFnvOffset; // FNV-1a 64-bit offset
     for (uint32_t i = 0; i < s->byte_len; ++i) {
         h64 ^= data[i];
-        h64 *= 1099511628211ULL; // FNV-1a 64-bit prime
+        h64 *= util::kFnvPrime; // FNV-1a 64-bit prime
     }
     uint32_t h = static_cast<uint32_t>(h64 & 0xFFFFFFFFu);
     if (h == 0) h = 1; // 0 es centinela; usar 1 en su lugar

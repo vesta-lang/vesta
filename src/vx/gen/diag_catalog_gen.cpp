@@ -113,6 +113,12 @@ const CatEntry kEntries[] = {
     {"VX9139", {"enum variant", "variante de enum"}},
     {"VX9140", {"concept", "concepto"}},
     {"VX9141", {"symbol", "simbolo"}},
+    {"VX9150", {"range {0}..{1}", "rango {0}..{1}"}},
+    {"VX9151", {"constant {0}", "constante {0}"}},
+    {"VX9152", {"unreachable", "inalcanzable"}},
+    {"VX9153", {"aligned to {0} in {1}", "alineado a {0} en {1}"}},
+    {"VX9154", {"loop header, depth {0}", "cabecera de bucle, profundidad {0}"}},
+    {"VX9155", {"points to {0}", "apunta a {0}"}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -167,7 +173,7 @@ const CatEntry kEntries[] = {
     {"VXA052", {"the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY", "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"}},
     {"VXA053", {"assembling '{0}' into a .velb failed (code {1}): no artifact was produced", "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefacto"}},
 };
-const int kEntryCount = 146;
+const int kEntryCount = 152;
 
 } // namespace
 

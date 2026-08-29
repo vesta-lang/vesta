@@ -25,6 +25,7 @@
  *   - Sin checks de colision de nombres cross-module todavia (M5).
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/file_read.h"
 
 /* El ensamblador, DECLARADO y no incluido.  Su cabecera arrastra `windows.h`,
@@ -238,11 +239,11 @@ uint64_t module_content_key_(uint64_t source_hash,
                              const std::vector<uint64_t> &dep_hashes,
                              const std::string &tgt_suffix,
                              uint64_t config_fp) {
-    uint64_t h = 1469598103934665603ull; // FNV-1a 64 offset basis.
+    uint64_t h = util::kFnvOffset; // FNV-1a 64 offset basis.
     auto mix = [&](uint64_t v) {
         for (int i = 0; i < 8; ++i) {
             h ^= (v >> (i * 8)) & 0xFF;
-            h *= 1099511628211ull;
+            h *= util::kFnvPrime;
         }
     };
     mix(0x5641434B4559ull);           // dominio "CAS module key".

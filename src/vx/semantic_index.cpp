@@ -3,6 +3,7 @@
  * @brief Implementacion del indice semantico por-declaracion (ver
  *        semantic_index.h).
  */
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/semantic_index.h"
 
 #include <algorithm>
@@ -22,10 +23,10 @@ namespace {
 
 /// @brief FNV-1a 64 bits sobre un rango de bytes.
 uint64_t fnv1a64(const char *data, size_t n) {
-    uint64_t h = 1469598103934665603ULL;
+    uint64_t h = util::kFnvOffset;
     for (size_t i = 0; i < n; ++i) {
         h ^= static_cast<uint8_t>(data[i]);
-        h *= 1099511628211ULL;
+        h *= util::kFnvPrime;
     }
     return h;
 }

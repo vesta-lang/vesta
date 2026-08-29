@@ -16,6 +16,7 @@ import * as vscode from 'vscode';
 
 import { VESTA_LANGUAGE_ID, VestaLanguageClient } from './lsp/client';
 import { VestaInlayHintsProvider } from './features/paramHints';
+import { CompilerFactsProvider } from './features/compilerFacts';
 import { VestaTextViewProvider } from './views/textViews';
 import { DiagramPanel } from './views/diagramPanel';
 import { MachineViewPanel } from './views/machinePanel';
@@ -61,13 +62,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // El nombre de los parametros en las llamadas viene de un metodo propio del
     // servidor, no del estandar, asi que hay que traducirlo aqui.
+    const selector = { scheme: 'file', language: VESTA_LANGUAGE_ID };
     const inlayHints = new VestaInlayHintsProvider(activeClient);
+    // Y lo que el compilador deduce de cada valor -- limites, alineacion, a
+    // donde apunta -- puesto en la linea de la que habla, mientras se escribe.
+    const compilerFacts = new CompilerFactsProvider(activeClient);
     context.subscriptions.push(
-        vscode.languages.registerInlayHintsProvider(
-            { scheme: 'file', language: VESTA_LANGUAGE_ID },
-            inlayHints,
-        ),
+        vscode.languages.registerInlayHintsProvider(selector, inlayHints),
+        vscode.languages.registerInlayHintsProvider(selector, compilerFacts),
         new vscode.Disposable(() => inlayHints.dispose()),
+        new vscode.Disposable(() => compilerFacts.dispose()),
     );
 
     // Un terminal cerrado a mano no debe volver a usarse.
@@ -80,6 +84,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
             if (event.affectsConfiguration('vesta.inlayHints.parameterNames')) {
                 inlayHints.refresh();
+            }
+            if (event.affectsConfiguration('vesta.inlayHints.compilerFacts') ||
+                event.affectsConfiguration('vesta.inlayHints.compilerFactsUnknown')) {
+                compilerFacts.refresh();
             }
         }),
     );

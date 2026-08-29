@@ -287,6 +287,28 @@ class Inspector {
      */
     nlohmann::json asa(const std::string &uri);
 
+    /**
+     * @brief @c vesta/asaFacts: lo que el compilador sabe, ATADO al fuente.
+     *
+     * El volcado de @ref asa se lee entero, de arriba abajo, cuando uno va a
+     * auditar.  Esto es lo contrario: cada hecho con la LINEA a la que
+     * pertenece, para que el editor lo ensene ahi mismo mientras se escribe --
+     * los limites de un valor, la alineacion, a donde apunta un puntero -- sin
+     * que haya que ir a buscarlo.
+     *
+     * Devuelve DATOS: el dominio, el codigo del vocabulario y sus numeros.  La
+     * etiqueta corta viene ya resuelta en el idioma activo para los codigos que
+     * el catalogo conoce; para los que no, se manda el codigo tal cual antes
+     * que inventar una frase.
+     *
+     * Incluye tambien lo que cada dominio NO pudo saber y por que: sin eso no
+     * se distingue "aqui no hay nada que decir" de "nadie ha mirado".
+     *
+     * @param uri URI del documento abierto.
+     * @return @c { "facts": [...], "domains": [...] } o @c { "error": "..." }.
+     */
+    nlohmann::json asa_facts(const std::string &uri);
+
   private:
     /// Estado opaco del subsistema JIT propio (CodeCache + RuntimeEntries +
     /// JitCompiler).  Inicializado perezosamente en la primera @c jit_asm.

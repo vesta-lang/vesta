@@ -188,6 +188,11 @@
                 "category": "Vesta"
             },
             {
+                "command": "vesta.showAsa",
+                "title": "Ver todo lo que el compilador sabe del modulo",
+                "category": "Vesta"
+            },
+            {
                 "command": "vesta.showDiagram",
                 "title": "Ver un diagrama del modulo",
                 "category": "Vesta",
@@ -298,6 +303,10 @@
                     "when": "resourceLangId == vesta"
                 },
                 {
+                    "command": "vesta.showAsa",
+                    "when": "resourceLangId == vesta"
+                },
+                {
                     "command": "vesta.showDiagram",
                     "when": "resourceLangId == vesta"
                 },
@@ -369,6 +378,16 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Mostrar el nombre de cada parametro delante de su argumento en las llamadas."
+                },
+                "vesta.inlayHints.compilerFacts": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Mostrar al final de cada linea lo que el compilador deduce de ella: entre que limites se mueve un valor, si es constante, con que alineacion queda, a donde apunta."
+                },
+                "vesta.inlayHints.compilerFactsUnknown": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "Mostrar tambien donde el compilador **miro sin sacar nada**, y por que. Sirve para auditar que se sabe y que no; en cada linea tapa lo que si se sabe, por eso viene apagado."
                 },
                 "vesta.inspect.os": {
                     "type": "string",

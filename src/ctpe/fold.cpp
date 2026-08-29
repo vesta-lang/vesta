@@ -10,6 +10,7 @@
  * @brief Implementacion del pase de plegado CTPE (ver fold.h).
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
 #include "ctpe/fold.h"
 
@@ -32,10 +33,10 @@ namespace {
 
 // FNV-1a 64: huella determinista del IR del modulo -> clave de cache.
 uint64_t fnv1a(const uint8_t *p, size_t n) {
-    uint64_t h = 1469598103934665603ULL;
+    uint64_t h = util::kFnvOffset;
     for (size_t i = 0; i < n; ++i) {
         h ^= p[i];
-        h *= 1099511628211ULL;
+        h *= util::kFnvPrime;
     }
     return h;
 }

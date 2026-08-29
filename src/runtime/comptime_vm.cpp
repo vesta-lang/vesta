@@ -18,6 +18,7 @@
  * .velb in-memory que contenga los `__macro_*` lowered).
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
 #include "vx/comptime/comptime_vm.h"
 #include "vx/type_checker.h" // report_comptime_fatal
@@ -558,8 +559,8 @@ bool ComptimeRuntime::try_invoke_ctpe(const std::string &fn_name,
  */
 static std::string build_memo_key(const std::string &macro_name,
                                   const std::vector<uint64_t> &args) {
-    constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
-    constexpr uint64_t FNV_PRIME = 1099511628211ULL;
+    constexpr uint64_t FNV_OFFSET = util::kFnvOffset;
+    constexpr uint64_t FNV_PRIME = util::kFnvPrime;
     uint64_t h = FNV_OFFSET;
     for (char c : macro_name) {
         h ^= static_cast<uint8_t>(c);

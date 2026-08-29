@@ -59,6 +59,7 @@
  * FLAT mutable
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/runtime.h" // para acceder a vm->scheduler.vm_reference.script_args
@@ -585,11 +586,11 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm, uint64_t vm_addr,
         // En x86-64 multiplica con un solo IMUL (~3 ciclos).
         bool all_ascii = true;
         uint32_t cp_count = 0;
-        uint64_t fnv64 = 1469598103934665603ULL;
+        uint64_t fnv64 = util::kFnvOffset;
         for (uint32_t i = 0; i < byte_len;) {
             uint8_t b = stack_buf[i];
             fnv64 ^= b;
-            fnv64 *= 1099511628211ULL;
+            fnv64 *= util::kFnvPrime;
             if ((b & 0x80) == 0) {
                 ++cp_count;
                 i += 1;
@@ -614,7 +615,7 @@ gc::GcHandle make_string_from_vm_mem(ProcessVM *vm, uint64_t vm_addr,
         const uint32_t str_hash32 = static_cast<uint32_t>(fnv64 & 0xFFFFFFFFu);
         uint64_t fnv = fnv64;
         fnv ^= static_cast<uint8_t>(final_enc);
-        fnv *= 1099511628211ULL;
+        fnv *= util::kFnvPrime;
 
         // Sprint string-perf: intern lookup ANTES de alloc.  Si hit y
         // bytes matchean, evitamos TODO el alloc + memset + intern map
@@ -728,11 +729,11 @@ gc::GcHandle make_string_from_host_mem(ProcessVM *vm, uint64_t host_addr,
     // Sprint string-perf-3: FNV-1a 64-bit consistente con todos los paths.
     bool all_ascii = true;
     uint32_t cp_count = 0;
-    uint64_t fnv64 = 1469598103934665603ULL;
+    uint64_t fnv64 = util::kFnvOffset;
     for (uint32_t i = 0; i < byte_len;) {
         uint8_t b = src[i];
         fnv64 ^= b;
-        fnv64 *= 1099511628211ULL;
+        fnv64 *= util::kFnvPrime;
         if ((b & 0x80) == 0) {
             ++cp_count;
             i += 1;
@@ -755,7 +756,7 @@ gc::GcHandle make_string_from_host_mem(ProcessVM *vm, uint64_t host_addr,
     const uint32_t str_hash32 = static_cast<uint32_t>(fnv64 & 0xFFFFFFFFu);
     uint64_t fnv = fnv64;
     fnv ^= static_cast<uint8_t>(final_enc);
-    fnv *= 1099511628211ULL;
+    fnv *= util::kFnvPrime;
 
     // Intern lookup-first (idem STRMAKE).
     if (byte_len > 0 && byte_len <= loader::STR_INTERN_THRESHOLD) {
@@ -913,15 +914,15 @@ void exec_instr_strcat(ProcessVM *vm, const DecodedInstr &instr) {
 
         // Sprint string-perf-3: FNV-1a 64-bit identico a str_hash_compute
         // y a STRMAKE.  str_hash = low 32 bits; cache key = full 64 + enc mix.
-        uint64_t fnv64 = 1469598103934665603ULL;
+        uint64_t fnv64 = util::kFnvOffset;
         for (uint32_t i = 0; i < total_byte_len; ++i) {
             fnv64 ^= stack_buf[i];
-            fnv64 *= 1099511628211ULL;
+            fnv64 *= util::kFnvPrime;
         }
         const uint32_t str_hash32 = static_cast<uint32_t>(fnv64 & 0xFFFFFFFFu);
         uint64_t fnv = fnv64;
         fnv ^= static_cast<uint8_t>(enc);
-        fnv *= 1099511628211ULL;
+        fnv *= util::kFnvPrime;
 
         if (total_byte_len <= loader::STR_INTERN_THRESHOLD) {
             StringInternPool &pool = get_intern_pool(vm);
@@ -1794,15 +1795,15 @@ gc::GcHandle strcat_public(ProcessVM *vm, gc::GcHandle a,
         std::memcpy(stack_buf + sa->byte_len, loader::str_data(sb),
                     sb->byte_len);
 
-        uint64_t fnv64 = 1469598103934665603ULL;
+        uint64_t fnv64 = util::kFnvOffset;
         for (uint32_t i = 0; i < total_bytes; ++i) {
             fnv64 ^= stack_buf[i];
-            fnv64 *= 1099511628211ULL;
+            fnv64 *= util::kFnvPrime;
         }
         const uint32_t str_hash32 = static_cast<uint32_t>(fnv64 & 0xFFFFFFFFu);
         uint64_t fnv = fnv64;
         fnv ^= static_cast<uint8_t>(enc);
-        fnv *= 1099511628211ULL;
+        fnv *= util::kFnvPrime;
 
         if (total_bytes <= loader::STR_INTERN_THRESHOLD) {
             StringInternPool &pool = get_intern_pool(vm);

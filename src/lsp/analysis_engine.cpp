@@ -22,6 +22,7 @@
  * que el frontend reporta errores via diagnosticos y no aborta.
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "lsp/analysis_engine.h"
 
 #include <exception>
@@ -43,10 +44,10 @@ namespace lsp {
 uint64_t fnv1a_hash(const std::string &s) {
     // FNV-1a 64-bit: rapido, sin dependencias, suficiente para detectar
     // cambios del texto entre peticiones (no es hash criptografico).
-    uint64_t h = 1469598103934665603ULL; // offset basis
+    uint64_t h = util::kFnvOffset; // offset basis
     for (unsigned char c : s) {
         h ^= static_cast<uint64_t>(c);
-        h *= 1099511628211ULL; // prime
+        h *= util::kFnvPrime; // prime
     }
     return h;
 }

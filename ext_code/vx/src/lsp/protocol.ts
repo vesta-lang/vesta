@@ -27,6 +27,8 @@ export const VestaMethod = {
     MacroExpand: 'vesta/macroExpand',
     ComptimeValues: 'vesta/comptimeValues',
     ParamHints: 'vesta/paramHints',
+    Asa: 'vesta/asa',
+    AsaFacts: 'vesta/asaFacts',
     SymbolInfo: 'vesta/symbolInfo',
     Compile: 'vesta/compile',
     CompileProject: 'vesta/compileProject',
@@ -265,6 +267,56 @@ export interface ParamHint {
 /** Respuesta de `vesta/paramHints`. */
 export interface ParamHintsResponse extends VestaResponse {
     hints?: ParamHint[];
+}
+
+/**
+ * Un hecho del compilador, atado a la linea del fuente a la que pertenece.
+ *
+ * Lleva el dato en crudo (`code`, `a`, `b`, `detail`) y su etiqueta ya
+ * resuelta en el idioma activo, para poder ensenarla sin reinterpretarla.
+ * El ambito importa tanto como el hecho: uno que solo vale para una
+ * arquitectura o un backend no se puede ensenar como si valiera siempre.
+ */
+export interface AsaFact {
+    /** Linea del fuente, contando desde uno; 0 si no se pudo atar. */
+    line: number;
+    function: string;
+    /** De que habla: modulo, funcion, valor, bloque, instruccion o simbolo. */
+    subject: string;
+    /** Analisis que lo afirma. */
+    domain: string;
+    /** Codigo estable del vocabulario de ese analisis. */
+    code: string;
+    a: number;
+    b: number;
+    detail: string;
+    /** Texto corto listo para mostrar. */
+    label: string;
+    /** demostrada | inferida | desconocida. */
+    certainty: string;
+    /** estatico | ejecucion | perfil | declarado. */
+    source: string;
+    isa: string;
+    os: string;
+    backend: string;
+}
+
+/** Lo que produjo un analisis, incluido lo que NO pudo saber. */
+export interface AsaDomain {
+    domain: string;
+    facts: number;
+    /** Entidades examinadas, incluidas las que no dieron nada. */
+    looked: number;
+    silent: number;
+    micros: number;
+    /** Por que se callo, por motivo y cuantas veces. */
+    unknown: { code: string; times: number }[];
+}
+
+/** Respuesta de `vesta/asaFacts`. */
+export interface AsaFactsResponse extends VestaResponse {
+    facts?: AsaFact[];
+    domains?: AsaDomain[];
 }
 
 /** Fases del IR que admite `vesta/ir`. */

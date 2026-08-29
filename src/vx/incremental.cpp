@@ -3,6 +3,7 @@
  * @brief Implementacion del driver incremental granular + CAS (ver
  *        incremental.h).
  */
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
 #include "vx/incremental.h"
 
@@ -27,10 +28,10 @@ namespace {
 /// FNV-1a 64 sobre un bloque de bytes.
 uint64_t fnv1a64(const void *data, size_t n) {
     const uint8_t *p = static_cast<const uint8_t *>(data);
-    uint64_t h = 1469598103934665603ull;
+    uint64_t h = util::kFnvOffset;
     for (size_t i = 0; i < n; ++i) {
         h ^= p[i];
-        h *= 1099511628211ull;
+        h *= util::kFnvPrime;
     }
     return h;
 }
@@ -115,23 +116,23 @@ namespace {
 /// Mezcla un string en un hash FNV-1a acumulado (con separador de longitud).
 void mix_str(uint64_t &h, const std::string &s) {
     h ^= s.size();
-    h *= 1099511628211ull;
+    h *= util::kFnvPrime;
     for (unsigned char c : s) {
         h ^= c;
-        h *= 1099511628211ull;
+        h *= util::kFnvPrime;
     }
 }
 void mix_u64(uint64_t &h, uint64_t v) {
     for (int i = 0; i < 8; ++i) {
         h ^= (v >> (i * 8)) & 0xFF;
-        h *= 1099511628211ull;
+        h *= util::kFnvPrime;
     }
 }
 } // namespace
 
 uint64_t BuildConfig::ir_fingerprint() const {
     // SOLO las dimensiones que cambian el IR pre-optimize.
-    uint64_t h = 1469598103934665603ull;
+    uint64_t h = util::kFnvOffset;
     mix_u64(h, 0x49524647u); // dominio "IRFG".
     mix_u64(h, asm_target_bits);
     mix_u64(h, native_poo ? 1u : 0u);

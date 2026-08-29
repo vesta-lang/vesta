@@ -33,6 +33,7 @@
 #ifndef VESTA_JIT_INLINE_ASM_TRAMPOLINE_H
 #define VESTA_JIT_INLINE_ASM_TRAMPOLINE_H
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -78,10 +79,10 @@ AsmTrampolineFn build_asm_trampoline(const std::string &user_asm, CodeCache &cc,
  * @return  Hash FNV-1a 64-bit.
  */
 inline uint64_t fnv1a64_asm(const std::string &s) {
-    uint64_t h = 1469598103934665603ull; // offset basis
+    uint64_t h = util::kFnvOffset; // offset basis
     for (unsigned char c : s) {
         h ^= static_cast<uint64_t>(c);
-        h *= 1099511628211ull; // prime
+        h *= util::kFnvPrime; // prime
     }
     return h;
 }

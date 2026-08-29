@@ -2318,6 +2318,154 @@ nlohmann::json Inspector::asa(const std::string &uri) {
     return out;
 }
 
+namespace {
+
+/**
+ * @brief Linea del fuente a la que pertenece un hecho.
+ *
+ * Los hechos hablan del programa ya bajado -- de un valor, de un bloque, de una
+ * instruccion --, y el editor solo entiende de lineas.  La traduccion la da el
+ * propio intermedio, que arrastra la linea de la que salio cada instruccion.
+ *
+ * @param mod    Modulo intermedio del que salieron los hechos.
+ * @param sujeto De quien habla el hecho.
+ * @return La linea (contando desde uno), o 0 si no se puede atar a ninguna.
+ */
+uint32_t linea_del_sujeto(const ir::IrModule &mod,
+                          const analysis::asa::Sujeto &sujeto) {
+    using Clase = analysis::asa::Sujeto::Clase;
+    if (sujeto.funcion == nullptr || *sujeto.funcion == '\0') return 0;
+
+    const ir::IrFunction *fn = nullptr;
+    for (const auto &f : mod.functions) {
+        if (f.name == sujeto.funcion) {
+            fn = &f;
+            break;
+        }
+    }
+    if (fn == nullptr) return 0;
+
+    // La primera linea de la funcion sirve de respaldo para todo lo que hable
+    // de ella entera.
+    uint32_t primera = 0;
+    uint32_t posicion = 0;
+    for (const auto &blk : fn->blocks) {
+        for (const auto &in : blk.instrs) {
+            if (primera == 0 && in.source_line > 0) primera = in.source_line;
+            switch (sujeto.clase) {
+            case Clase::Valor:
+                if (in.dst == sujeto.id && in.source_line > 0)
+                    return in.source_line;
+                break;
+            case Clase::Instruccion:
+                if (posicion == sujeto.id && in.source_line > 0)
+                    return in.source_line;
+                break;
+            default: break;
+            }
+            ++posicion;
+        }
+        if (sujeto.clase == Clase::Bloque &&
+            static_cast<uint32_t>(&blk - &fn->blocks[0]) == sujeto.id &&
+            !blk.instrs.empty()) {
+            for (const auto &in : blk.instrs)
+                if (in.source_line > 0) return in.source_line;
+        }
+    }
+    return primera;
+}
+
+/**
+ * @brief Etiqueta corta de un hecho, en el idioma activo.
+ *
+ * Solo se traducen los codigos que el catalogo conoce.  Para el resto se manda
+ * el codigo del vocabulario tal cual: es estable y se puede buscar, que es mas
+ * util que una frase inventada aqui.
+ *
+ * @param p Lo que se afirma.
+ * @return Texto listo para ensenar junto al codigo.
+ */
+std::string etiqueta_del_hecho(const analysis::asa::Proposicion &p) {
+    const std::string codigo = p.codigo ? p.codigo : "";
+    const std::string a = std::to_string(p.a);
+    const std::string b = std::to_string(p.b);
+    const std::string detalle = p.detalle ? p.detalle : "";
+    if (codigo == "rango.acotado") return vx::diag::format("VX9150", {a, b});
+    if (codigo == "rango.constante") return vx::diag::format("VX9151", {a});
+    if (codigo == "rango.inalcanzable") return vx::diag::format("VX9152");
+    if (codigo == "disposicion.alineacion_seccion")
+        return vx::diag::format("VX9153", {a, detalle});
+    if (codigo == "bucle.cabecera") return vx::diag::format("VX9154", {a});
+    if (codigo == "memoria.apunta_a")
+        return vx::diag::format("VX9155", {detalle.empty() ? a : detalle});
+    // Sin entrada en el catalogo: el codigo, que es vocabulario estable.
+    if (detalle.empty()) return codigo;
+    return codigo + " " + detalle;
+}
+
+} // namespace
+
+nlohmann::json Inspector::asa_facts(const std::string &uri) {
+    if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
+    const std::string &text = docs_.text(uri);
+    const DocAnalysis &an = engine_.analyze_document(uri, text);
+    ir::IrModule mod;
+    if (!parse_post_opt_module(an.result, mod))
+        return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
+
+    analyze::registrar_productor_asm();
+    analysis::asa::FactStore almacen;
+    const std::vector<analysis::asa::ResumenProduccion> resumenes =
+        analysis::asa::producir(mod, almacen);
+
+    nlohmann::json hechos = nlohmann::json::array();
+    for (size_t i = 0; i < almacen.size(); ++i) {
+        const analysis::asa::Fact &f = almacen.at(i);
+        nlohmann::json j;
+        j["line"] = linea_del_sujeto(mod, f.de_quien);
+        j["function"] = f.de_quien.funcion ? f.de_quien.funcion : "";
+        j["subject"] = analysis::asa::nombre_clase_sujeto(f.de_quien.clase);
+        j["domain"] = f.que.dominio ? f.que.dominio : "";
+        j["code"] = f.que.codigo ? f.que.codigo : "";
+        j["a"] = f.que.a;
+        j["b"] = f.que.b;
+        j["detail"] = f.que.detalle ? f.que.detalle : "";
+        j["label"] = etiqueta_del_hecho(f.que);
+        j["certainty"] = analysis::asa::nombre_certeza(f.sello.certeza);
+        j["source"] = analysis::asa::nombre_fuente(f.sello.origen.fuente);
+        // El ambito importa: un hecho puede valer solo para una arquitectura o
+        // un backend, y ensenarlo sin decirlo seria mentir por omision.
+        j["isa"] = f.donde.isa ? f.donde.isa : "";
+        j["os"] = f.donde.sistema ? f.donde.sistema : "";
+        j["backend"] = f.donde.backend ? f.donde.backend : "";
+        hechos.push_back(std::move(j));
+    }
+
+    nlohmann::json dominios = nlohmann::json::array();
+    for (const auto &r : resumenes) {
+        nlohmann::json j;
+        j["domain"] = r.dominio ? r.dominio : "";
+        j["facts"] = r.hechos;
+        j["looked"] = r.miradas;
+        j["silent"] = r.callados;
+        j["micros"] = static_cast<int64_t>(r.micros);
+        nlohmann::json motivos = nlohmann::json::array();
+        for (const auto &m : r.motivos) {
+            nlohmann::json jm;
+            jm["code"] = m.codigo ? m.codigo : "";
+            jm["times"] = m.veces;
+            motivos.push_back(std::move(jm));
+        }
+        j["unknown"] = std::move(motivos);
+        dominios.push_back(std::move(j));
+    }
+
+    nlohmann::json out;
+    out["facts"] = std::move(hechos);
+    out["domains"] = std::move(dominios);
+    return out;
+}
+
 const Inspector::AotBuild &Inspector::aot_build(const std::string &uri,
                                                 const std::string &text,
                                                 const std::string &target_key) {

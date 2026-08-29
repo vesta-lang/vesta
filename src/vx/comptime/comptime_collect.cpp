@@ -14,6 +14,7 @@
  * artefacto comptime separado sea auto-suficiente.
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include <cstdio>
 #include "vx/comptime/comptime_collect.h"
 #include "util/env_flags.h"
@@ -511,7 +512,7 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
         std::sort(spans.begin(), spans.end(),
                   [](const Span &a, const Span &b) { return a.off < b.off; });
 
-        uint64_t h = 1469598103934665603ULL; // FNV-1a offset basis.
+        uint64_t h = util::kFnvOffset; // FNV-1a offset basis.
         const uint32_t src_len = static_cast<uint32_t>(source.size());
         for (size_t i = 0; i < spans.size(); ++i) {
             if (!spans[i].in_unit && !spans[i].is_import) continue;
@@ -539,7 +540,7 @@ ComptimeUnit collect_comptime_unit(const ast::ModuleNode &mod,
             if (!spans[i].in_unit) continue; // un import viaja, pero no hashea.
             for (uint32_t j = start; j < end; ++j) {
                 h ^= static_cast<uint8_t>(source[j]);
-                h *= 1099511628211ULL; // FNV-1a prime.
+                h *= util::kFnvPrime; // FNV-1a prime.
             }
         }
         u.content_hash = h;

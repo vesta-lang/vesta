@@ -76,6 +76,7 @@ export function registerInspectCommands(
     register('vesta.showAotCompat', () => showAotCompat(deps));
     register('vesta.showMacroExpand', () => showMacroExpand(deps));
     register('vesta.showComptimeValues', () => showComptimeValues(deps));
+    register('vesta.showAsa', () => showAsa(deps));
     register('vesta.showDiagram', () => showDiagram(deps));
     register('vesta.showMachineView', () => showMachineView(deps));
 }
@@ -552,6 +553,38 @@ async function showComptimeValues(deps: InspectContext): Promise<void> {
         );
 
     await deps.views.show('comptime', `${baseName(document)} (comptime).txt`, text);
+}
+
+/**
+ * @brief Abre todo lo que el compilador sabe del modulo.
+ *
+ * Es el volcado completo, el mismo que da la linea de ordenes: los hechos, de
+ * donde sale cada uno y con que certeza, y lo que se miro sin sacar nada.  Se
+ * abre entero a proposito -- pedirlo por partes obligaria a saber que se busca
+ * antes de mirarlo --; lo que se lee al vuelo mientras se escribe son las
+ * anotaciones al final de cada linea, que es otra cosa.
+ *
+ * @param deps Contexto de los comandos.
+ */
+async function showAsa(deps: InspectContext): Promise<void> {
+    const document = activeVestaDocument();
+    if (!document) {
+        return;
+    }
+
+    const response = await request<TextResponse>(
+        deps.client,
+        'reuniendo lo que sabe el compilador',
+        VestaMethod.Asa,
+        { uri: document.uri.toString() },
+    );
+    if (!showErrorIfAny(response)) {
+        await deps.views.show(
+            'asa',
+            `${baseName(document)} (lo que se sabe).txt`,
+            response.text ?? '',
+        );
+    }
 }
 
 /** @brief Abre un diagrama del modulo. */

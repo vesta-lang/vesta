@@ -28,9 +28,25 @@
 
 namespace util {
 
-/** @brief Semilla y primo FNV-1a de 64 bits. */
-static constexpr uint64_t kFnvOffset = 1469598103934665603ull;
-static constexpr uint64_t kFnvPrime = 1099511628211ull;
+/**
+ * @brief Semilla y primo FNV-1a de 64 bits.
+ *
+ * Los dos numeros son los que define el algoritmo, no unos cualesquiera: la
+ * semilla es 0xcbf29ce484222325 y el primo 0x100000001b3.  Estuvieron mal --
+ * a la semilla le faltaba un digito, 1469598103934665603 en vez de
+ * 14695981039346656037 -- y el hash seguia funcionando, porque como identidad
+ * de datos propios sirve cualquier par razonable mientras TODOS usen el mismo.
+ *
+ * Que funcionara es justo lo que lo hizo durar: nadie tenia motivo para
+ * mirarlo, y mientras tanto el algoritmo se copiaba a mano por el proyecto con
+ * el numero equivocado y el comentario diciendo "FNV-1a".  Se corrigio el
+ * 2026-08-29, y con el todas las copias pasaron a usar ESTAS constantes.
+ *
+ * Cambiar el valor mueve cualquier cosa guardada con el hash viejo, asi que al
+ * corregirlo hubo que tirar las caches.  Si vuelve a cambiar, lo mismo.
+ */
+static constexpr uint64_t kFnvOffset = 14695981039346656037ull; // 0xcbf29ce484222325
+static constexpr uint64_t kFnvPrime = 1099511628211ull;         // 0x100000001b3
 
 /**
  * @brief Mezcla un entero de 64 bits (byte a byte) en un acumulador.

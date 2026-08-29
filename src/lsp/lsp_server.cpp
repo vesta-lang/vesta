@@ -257,7 +257,8 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
         {"vesta/bytecode", "vesta/ir", "vesta/complexity", "vesta/diagram",
          "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
          "vesta/modes", "vesta/compile", "vesta/compileProject",
-         "vesta/macroExpand", "vesta/comptimeValues", "vesta/asa"});
+         "vesta/macroExpand", "vesta/comptimeValues", "vesta/asa",
+         "vesta/asaFacts"});
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -2004,6 +2005,10 @@ bool LspServer::handle_vesta_request(const std::string &method,
             // Todo lo que el compilador sabe del modulo, tal y como lo cuenta
             // la linea de ordenes.
             result = inspector_.asa(uri);
+        } else if (method == "vesta/asaFacts") {
+            // Lo mismo, pero atado a la linea a la que pertenece cada cosa:
+            // para ensenarlo EN el codigo mientras se escribe.
+            result = inspector_.asa_facts(uri);
         } else if (method == "vesta/paramHints") {
             // Parameter hints (inlay): nombre de cada parametro antes de su
             // argumento en las llamadas a funciones conocidas.

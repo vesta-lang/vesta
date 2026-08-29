@@ -49,6 +49,21 @@ export function parameterHintsEnabled(): boolean {
     return config().get<boolean>('inlayHints.parameterNames', true);
 }
 
+/** @brief Indica si hay que ensenar en el codigo lo que el compilador sabe. */
+export function compilerFactsEnabled(): boolean {
+    return config().get<boolean>('inlayHints.compilerFacts', true);
+}
+
+/**
+ * @brief Indica si tambien se ensena lo que el compilador NO pudo saber.
+ *
+ * Por defecto no: es valioso para auditar, pero puesto en cada linea tapa lo
+ * que si se sabe.
+ */
+export function compilerFactsShowUnknown(): boolean {
+    return config().get<boolean>('inlayHints.compilerFactsUnknown', false);
+}
+
 /** @brief Ruta configurada de la maquina virtual; puede ir vacia. */
 export function vmPathSetting(): string {
     return config().get<string>('vmPath', '');

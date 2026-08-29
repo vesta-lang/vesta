@@ -683,3 +683,31 @@ es = "concepto"
 [VX9141]
 en = "symbol"
 es = "simbolo"
+
+# --- Lo que el compilador SABE, ensenado en el propio codigo ---------------
+# Etiquetas cortas: se dibujan al final de la linea, junto al codigo, asi que
+# dicen el dato y nada mas.  Los numeros llegan como argumentos.
+
+[VX9150]
+en = "range {0}..{1}"
+es = "rango {0}..{1}"
+
+[VX9151]
+en = "constant {0}"
+es = "constante {0}"
+
+[VX9152]
+en = "unreachable"
+es = "inalcanzable"
+
+[VX9153]
+en = "aligned to {0} in {1}"
+es = "alineado a {0} en {1}"
+
+[VX9154]
+en = "loop header, depth {0}"
+es = "cabecera de bucle, profundidad {0}"
+
+[VX9155]
+en = "points to {0}"
+es = "apunta a {0}"

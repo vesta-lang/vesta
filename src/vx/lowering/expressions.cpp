@@ -17,6 +17,7 @@
  * operandos antes -- con el ancho y el signo correctos -- para que el resultado
  * sea el que el lenguaje promete y no el que la maquina daria por accidente.
  */
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
@@ -98,10 +99,10 @@ ir::IrValueId Lowering::lower_cast_expr(ast::CastExpr *e) {
             if (!native_poo_ && fs != nullptr && fs->extern_lib.empty() &&
                 !extern_lib_by_fn_name_.count(id->name)) {
                 out_mod_->register_native_import("vrt", "naked_fnaddr");
-                uint64_t name_hash = 1469598103934665603ull;
+                uint64_t name_hash = util::kFnvOffset;
                 for (unsigned char c : label) {
                     name_hash ^= static_cast<uint64_t>(c);
-                    name_hash *= 1099511628211ull;
+                    name_hash *= util::kFnvPrime;
                 }
                 std::vector<ir::IrValueId> args;
                 args.push_back(emit_getproc(e->loc.line));
