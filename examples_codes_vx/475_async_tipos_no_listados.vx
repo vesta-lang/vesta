@@ -1,0 +1,38 @@
+/*
+ * VestaVM -- Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+/*
+ * Parametros de una `@Async` cuyo tipo no es un nombre primitivo suelto.
+ *
+ * El tipo de un parametro dice dos cosas: cuantos bytes ocupa y si tiene
+ * SIGNO.  Lo primero perdona: los argumentos viajan en registros de 64
+ * bits ya extendidos, asi que tomar uno de 16 por uno de 64 no pierde
+ * nada.  Lo segundo no: si un tipo SIN signo se toma por uno CON signo,
+ * cualquier comparacion cambia de sentido en cuanto el valor pasa de la
+ * mitad del rango.
+ *
+ * `grande` vale 2^63, que sin signo es enorme y con signo es negativo.
+ */
+
+typedef u64 Contador;  // alias del usuario sobre un tipo SIN signo
+
+@Async
+i64 clasifica(Contador grande) {
+    // Sin signo: 2^63 > 1000 -> 1.  Con signo seria negativo -> 0.
+    if (grande > 1000) {
+        return 1;
+    }
+    return 0;
+}
+
+i32 main() {
+    Contador enorme = 9223372036854775808;  // 2^63
+    Future<i64> f = clasifica(enorme);
+    i64 r = await f;
+    println("r = ${r}");
+    return (i32) (41 + r);
+}

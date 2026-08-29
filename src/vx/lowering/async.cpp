@@ -765,37 +765,14 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     }
     for (size_t pi = 0; pi < n_params; ++pi) {
         auto &p = fd->params[pi];
-        // Determinar el IrType del param segun el tipo declarado.
+        /* El tipo lo resuelve el type checker: ya aplico los alias y conoce
+         * todos los tipos, incluidos los que no son nombres sueltos. */
         ir::IrType pt_ir = ir::IrType::I64;
         if (p->type) {
-            if (auto *prim =
-                    dynamic_cast<ast::NamedTypeNode *>(p->type.get())) {
-                const std::string &nm = prim->name;
-                if (nm == "i8")
-                    pt_ir = ir::IrType::I8;
-                else if (nm == "i16")
-                    pt_ir = ir::IrType::I16;
-                else if (nm == "i32" || nm == "int32_t")
-                    pt_ir = ir::IrType::I32;
-                else if (nm == "i64" || nm == "int64_t")
-                    pt_ir = ir::IrType::I64;
-                else if (nm == "u8")
-                    pt_ir = ir::IrType::U8;
-                else if (nm == "u16")
-                    pt_ir = ir::IrType::U16;
-                else if (nm == "u32" || nm == "uint32_t")
-                    pt_ir = ir::IrType::U32;
-                else if (nm == "u64" || nm == "uint64_t")
-                    pt_ir = ir::IrType::U64;
-                else if (nm == "f32" || nm == "float")
-                    pt_ir = ir::IrType::F32;
-                else if (nm == "f64" || nm == "double")
-                    pt_ir = ir::IrType::F64;
-                else if (nm == "bool")
-                    pt_ir = ir::IrType::BOOL;
-                else if (nm == "char")
-                    pt_ir = ir::IrType::I8;
-            }
+            const Type sem = tc_.resolve_type_node(p->type.get());
+            if (sem.kind != PrimitiveKind::COUNT &&
+                sem.kind != PrimitiveKind::VOID)
+                pt_ir = ir_type_from_primitive(sem.kind);
         }
         ir::IrValueId pv = fn_->new_value(pt_ir, p->name);
         fn_->values[pv].is_param = true;
@@ -852,36 +829,16 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     param_vals.reserve(n_params);
     for (size_t pi = 0; pi < n_params; ++pi) {
         auto &p = fd->params[pi];
+        /* El tipo lo resuelve el type checker, que ya aplico los alias y
+         * conoce TODOS los tipos.  Aqui habia una lista a mano de doce
+         * nombres: lo que no estaba en ella -- un puntero, un struct, un
+         * `usize`, un typedef -- caia al valor por omision. */
         ir::IrType pt_ir = ir::IrType::I64;
         if (p->type) {
-            if (auto *prim =
-                    dynamic_cast<ast::NamedTypeNode *>(p->type.get())) {
-                const std::string &nm = prim->name;
-                if (nm == "i8")
-                    pt_ir = ir::IrType::I8;
-                else if (nm == "i16")
-                    pt_ir = ir::IrType::I16;
-                else if (nm == "i32" || nm == "int32_t")
-                    pt_ir = ir::IrType::I32;
-                else if (nm == "i64" || nm == "int64_t")
-                    pt_ir = ir::IrType::I64;
-                else if (nm == "u8")
-                    pt_ir = ir::IrType::U8;
-                else if (nm == "u16")
-                    pt_ir = ir::IrType::U16;
-                else if (nm == "u32" || nm == "uint32_t")
-                    pt_ir = ir::IrType::U32;
-                else if (nm == "u64" || nm == "uint64_t")
-                    pt_ir = ir::IrType::U64;
-                else if (nm == "f32" || nm == "float")
-                    pt_ir = ir::IrType::F32;
-                else if (nm == "f64" || nm == "double")
-                    pt_ir = ir::IrType::F64;
-                else if (nm == "bool")
-                    pt_ir = ir::IrType::BOOL;
-                else if (nm == "char")
-                    pt_ir = ir::IrType::I8;
-            }
+            const Type sem = tc_.resolve_type_node(p->type.get());
+            if (sem.kind != PrimitiveKind::COUNT &&
+                sem.kind != PrimitiveKind::VOID)
+                pt_ir = ir_type_from_primitive(sem.kind);
         }
         const ir::IrValueId pv = fn_->new_value(pt_ir, p->name);
         fn_->values[pv].is_param = true;
