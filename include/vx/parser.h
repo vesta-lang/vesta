@@ -304,6 +304,25 @@ class Parser {
     parse_global_var_decl(std::unique_ptr<ast::TypeNode> type, std::string name,
                           SourceLoc loc, bool is_const);
     std::unique_ptr<ast::ParamDecl> parse_param();
+
+    /**
+     * @brief Lee la lista de parametros que va entre parentesis, hasta el
+     *        cierre (que NO consume).
+     *
+     * Lo que hay entre esos parentesis no depende de si lo que se declara es
+     * una funcion suelta, un metodo o un constructor: es la MISMA gramatica.  Y
+     * no lo era: el cuerpo de este bucle estaba copiado cinco veces para los
+     * metodos, identico byte a byte, y era una version pobre que solo aceptaba
+     * `tipo nombre`.  Un metodo no podia declarar un variadico `T... xs`, ni un
+     * parametro no-nulo `T !!x`, ni un puntero a funcion al estilo de C -- todo
+     * eso si valia en una funcion suelta --, y no por ninguna razon: por que la
+     * copia no lo sabia leer.
+     *
+     * @param out  Donde dejar los parametros leidos.
+     * @param what Como nombrar lo que se declara en los mensajes de error.
+     */
+    void parse_param_list(std::vector<std::unique_ptr<ast::ParamDecl>> &out,
+                          const char *what);
     std::unique_ptr<ast::TypeAliasDecl> parse_typedef_decl();
     std::unique_ptr<ast::TypeAliasDecl> parse_using_decl();
     /// @brief Parsea @c import "path" [as alias] [only A, B];

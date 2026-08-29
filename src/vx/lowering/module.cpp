@@ -1067,39 +1067,15 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         fn.params.push_back(v_retbuf);
         push_abi(""); // retbuf SRET: ABI estandar (primer arg-reg)
     }
-    for (auto &p : fd->params) {
-        /* Variadico CRUDO (`...` pelado): PASS-THROUGH.  El compilador NO
-         * empaqueta nada -- los argumentos ocupan los registros que diga la
-         * convencion de llamada y el cuerpo en ensamblador los lee de ahi --,
-         * asi que no hay parametro que declarar.  Es la `F(a, ...)` de C. */
-        if (p->is_raw_variadic) continue;
-
-        const ParamAbi abi = param_abi(*p);
-        const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
-        fn.values[vid].is_param = true;
-        if (abi.is_class) {
-            fn.values[vid].is_host_ptr = true;
-            fn.values[vid].is_gc_object = true;
-        } else if (abi.is_host_ptr) {
-            fn.values[vid].is_host_ptr = true;
-        }
-        fn.params.push_back(vid);
-        push_abi(p->abi_reg); // ABI custom del param (o "" si estandar)
-        param_bindings.emplace_back(p->name, vid);
-        if (!p->abi_reg.empty())
-            custom_abi_params.push_back({p->name, vid, p->abi_reg, abi.type});
-    }
-    // Variadicos: param OCULTO i64 del count, tras el `T*` del ultimo param.
-    // `vacount()` en el body resuelve a este binding.  (Un variadico CRUDO
-    // `...` no empaqueta ni tiene count: los args pasan crudos en los
-    // arg-regs.)
-    if (!fd->params.empty() && fd->params.back()->is_variadic &&
-        !fd->params.back()->is_raw_variadic) {
-        const ir::IrValueId vcnt = fn.new_value(ir::IrType::I64, "%__vacount");
-        fn.values[vcnt].is_param = true;
-        fn.params.push_back(vcnt);
-        push_abi(""); // count oculto de variadico: ABI estandar
-        param_bindings.emplace_back("__vacount", vcnt);
+    for (const DeclaredParam &d :
+         declare_params(fn, fd->params, param_bindings)) {
+        /* El registro que cada parametro pidio, en el orden en que quedaron.
+         * El contador oculto de un variadico no pide ninguno: va por donde
+         * diga la convencion. */
+        push_abi(d.decl ? d.decl->abi_reg : std::string());
+        if (d.decl && !d.decl->abi_reg.empty())
+            custom_abi_params.push_back(
+                {d.decl->name, d.value, d.decl->abi_reg, d.type});
     }
 
     // Bloque entry.

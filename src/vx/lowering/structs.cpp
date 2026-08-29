@@ -845,19 +845,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         }
 
         // Resto de parametros declarados.
-        for (auto &p : m->params) {
-            const ParamAbi abi = param_abi(*p);
-            const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
-            fn.values[vid].is_param = true;
-            if (abi.is_class) {
-                fn.values[vid].is_host_ptr = true;
-                fn.values[vid].is_gc_object = true;
-            } else if (abi.is_host_ptr) {
-                fn.values[vid].is_host_ptr = true;
-            }
-            fn.params.push_back(vid);
-            bindings.emplace_back(p->name, vid);
-        }
+        declare_params(fn, m->params, bindings);
 
         // Configurar contexto del lowering para esta funcion.
         const ir::IrBlockId entry = fn.new_block("entry");

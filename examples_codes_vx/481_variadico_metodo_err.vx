@@ -1,0 +1,20 @@
+namespace ejemplos.variadico_metodo_err;
+
+// NEGATIVO: un variadico en un metodo se declara y se lee, pero la
+// comprobacion de la llamada y el empaquetado de los argumentos solo existen
+// para las funciones sueltas.  Asi que se dice, con su motivo y su alternativa,
+// en vez de dejar que reviente mas tarde contando argumentos.
+
+class Suma {
+    public i64 total(i64... xs) {
+        i64 n = vacount();
+        i64 acc = 0;
+        for (i64 i = 0; i < n; i = i + 1) { acc = acc + xs[i]; }
+        return acc;
+    }
+}
+
+i32 main() {
+    Suma s = new Suma();
+    return (i32) s.total(1, 2, 3);
+}

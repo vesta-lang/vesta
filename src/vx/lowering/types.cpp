@@ -446,6 +446,53 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
 }
 
 /**
+ * @copydoc vx::Lowering::declare_params
+ */
+std::vector<Lowering::DeclaredParam> Lowering::declare_params(
+    ir::IrFunction &fn,
+    const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
+    std::vector<std::pair<std::string, ir::IrValueId>> &bindings) {
+    std::vector<DeclaredParam> out;
+    out.reserve(params.size() + 1);
+
+    for (const auto &p : params) {
+        /* El `...` pelado NO declara nada: sus argumentos ocupan los registros
+         * que diga la convencion de llamada y el cuerpo en ensamblador los lee
+         * de ahi.  Es la `F(a, ...)` de C. */
+        if (p->is_raw_variadic) continue;
+
+        const ParamAbi abi = param_abi(*p);
+        const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
+        fn.values[vid].is_param = true;
+        if (abi.is_class) {
+            /* Un objeto del recolector se sigue ademas como tal: el asignador
+             * de registros tiene que saberlo para salvarlo por su manejador
+             * cuando una llamada por medio pueda mover el monton. */
+            fn.values[vid].is_host_ptr = true;
+            fn.values[vid].is_gc_object = true;
+        } else if (abi.is_host_ptr) {
+            fn.values[vid].is_host_ptr = true;
+        }
+        fn.params.push_back(vid);
+        bindings.emplace_back(p->name, vid);
+        out.push_back({p.get(), vid, abi.type});
+    }
+
+    /* Un variadico EMPAQUETADO (`T... xs`) llega como la direccion del array
+     * que monto quien llama, y detras un parametro mas que no se escribio:
+     * cuantos hay.  Es lo que `vacount()` lee. */
+    if (!params.empty() && params.back()->is_variadic &&
+        !params.back()->is_raw_variadic) {
+        const ir::IrValueId vcnt = fn.new_value(ir::IrType::I64, "%__vacount");
+        fn.values[vcnt].is_param = true;
+        fn.params.push_back(vcnt);
+        bindings.emplace_back("__vacount", vcnt);
+        out.push_back({nullptr, vcnt, ir::IrType::I64});
+    }
+    return out;
+}
+
+/**
  * @brief Si los metodos de una clase se despachan por tabla.
  *
  * Tres motivos, y el tercero es el que obliga a mirar el programa entero: que

@@ -2815,6 +2815,34 @@ std::unique_ptr<ast::ParamDecl> Parser::parse_param() {
     return p;
 }
 
+/**
+ * @copydoc vx::Parser::parse_param_list
+ */
+void Parser::parse_param_list(
+    std::vector<std::unique_ptr<ast::ParamDecl>> &out, const char *what) {
+    while (current_.kind != TokenKind::RPAREN &&
+           current_.kind != TokenKind::END_OF_FILE) {
+        auto p = parse_param();
+        if (!p) {
+            /* @c parse_param ya dijo que pasaba; aqui solo hay que llegar a un
+             * punto desde el que se pueda seguir leyendo el fichero. */
+            synchronize();
+            break;
+        }
+        if (p->name.empty() && !p->is_raw_variadic) {
+            /* Sin nombre y sin ser el `...` pelado -- el unico que no lo
+             * lleva -- no hay parametro que declarar. */
+            const std::string msg =
+                std::string("se esperaba el nombre del parametro del ") + what;
+            error_here(msg.c_str());
+            synchronize();
+            break;
+        }
+        out.push_back(std::move(p));
+        if (!match(TokenKind::COMMA)) break;
+    }
+}
+
 // ---------------------------------------------------------------------
 // GlobalVarDecl: ('=' expr)? ';'
 // ---------------------------------------------------------------------
@@ -5536,24 +5564,7 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
             m->method_type_params = method_tparams;
             m->type_bounds = method_tbounds;
             (void)consume(); // '('
-            while (current_.kind != TokenKind::RPAREN &&
-                   current_.kind != TokenKind::END_OF_FILE) {
-                auto p = std::make_unique<ast::ParamDecl>();
-                p->loc = current_.loc;
-                p->type = parse_type_node();
-                if (!p->type) {
-                    synchronize();
-                    break;
-                }
-                if (current_.kind != TokenKind::IDENTIFIER) {
-                    error_here("se esperaba el nombre del parametro");
-                    synchronize();
-                    break;
-                }
-                p->name = consume().lexeme;
-                m->params.push_back(std::move(p));
-                if (!match(TokenKind::COMMA)) break;
-            }
+            parse_param_list(m->params, "metodo");
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar parametros del metodo");
             // #6: clausula `where U: A + B` opcional tras los params.
@@ -5818,24 +5829,7 @@ Parser::parse_extension_method(uint8_t access) {
     m->method_type_params = method_tparams;
     m->type_bounds = method_tbounds;
     (void)consume(); // '('
-    while (current_.kind != TokenKind::RPAREN &&
-           current_.kind != TokenKind::END_OF_FILE) {
-        auto p = std::make_unique<ast::ParamDecl>();
-        p->loc = current_.loc;
-        p->type = parse_type_node();
-        if (!p->type) {
-            synchronize();
-            break;
-        }
-        if (current_.kind != TokenKind::IDENTIFIER) {
-            error_here("se esperaba el nombre del parametro");
-            synchronize();
-            break;
-        }
-        p->name = consume().lexeme;
-        m->params.push_back(std::move(p));
-        if (!match(TokenKind::COMMA)) break;
-    }
+    parse_param_list(m->params, "metodo");
     (void)expect(TokenKind::RPAREN,
                  "se esperaba ')' al cerrar parametros del metodo");
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
@@ -6264,24 +6258,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->is_override = annot_override;
             (void)expect(TokenKind::LPAREN,
                          "se esperaba '(' tras nombre del constructor");
-            while (current_.kind != TokenKind::RPAREN &&
-                   current_.kind != TokenKind::END_OF_FILE) {
-                auto p = std::make_unique<ast::ParamDecl>();
-                p->loc = current_.loc;
-                p->type = parse_type_node();
-                if (!p->type) {
-                    synchronize();
-                    break;
-                }
-                if (current_.kind != TokenKind::IDENTIFIER) {
-                    error_here("se esperaba el nombre del parametro");
-                    synchronize();
-                    break;
-                }
-                p->name = consume().lexeme;
-                m->params.push_back(std::move(p));
-                if (!match(TokenKind::COMMA)) break;
-            }
+            parse_param_list(m->params, "constructor");
             (void)expect(
                 TokenKind::RPAREN,
                 "se esperaba ')' al cerrar parametros del constructor");
@@ -6390,24 +6367,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
             m->method_type_params = method_tparams;
             m->type_bounds = method_tbounds;
             (void)consume(); // '('
-            while (current_.kind != TokenKind::RPAREN &&
-                   current_.kind != TokenKind::END_OF_FILE) {
-                auto p = std::make_unique<ast::ParamDecl>();
-                p->loc = current_.loc;
-                p->type = parse_type_node();
-                if (!p->type) {
-                    synchronize();
-                    break;
-                }
-                if (current_.kind != TokenKind::IDENTIFIER) {
-                    error_here("se esperaba el nombre del parametro");
-                    synchronize();
-                    break;
-                }
-                p->name = consume().lexeme;
-                m->params.push_back(std::move(p));
-                if (!match(TokenKind::COMMA)) break;
-            }
+            parse_param_list(m->params, "metodo");
             (void)expect(TokenKind::RPAREN,
                          "se esperaba ')' al cerrar parametros del metodo");
             // #6: clausula `where U: A + B` opcional tras los params.
@@ -6536,24 +6496,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_interface_decl() {
         m->is_final = false;
         m->is_constructor = false;
         (void)consume(); // '('
-        while (current_.kind != TokenKind::RPAREN &&
-               current_.kind != TokenKind::END_OF_FILE) {
-            auto p = std::make_unique<ast::ParamDecl>();
-            p->loc = current_.loc;
-            p->type = parse_type_node();
-            if (!p->type) {
-                synchronize();
-                break;
-            }
-            if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba el nombre del parametro");
-                synchronize();
-                break;
-            }
-            p->name = consume().lexeme;
-            m->params.push_back(std::move(p));
-            if (!match(TokenKind::COMMA)) break;
-        }
+        parse_param_list(m->params, "metodo");
         (void)expect(TokenKind::RPAREN,
                      "se esperaba ')' al cerrar parametros del metodo");
         (void)expect(TokenKind::SEMICOLON,

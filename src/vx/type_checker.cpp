@@ -4184,11 +4184,7 @@ void TypeChecker::collect_globals() {
                 mi.return_type = m->return_type
                                      ? type_from_node(m->return_type.get())
                                      : Type{PrimitiveKind::VOID};
-                mi.param_types.reserve(m->params.size());
-                for (const auto &p : m->params) {
-                    mi.param_types.push_back(type_from_node(p->type.get()));
-                }
-                // Ownership ruta B: el metodo reservado `__clone__` es el
+                record_method_params(*m, mi);
                 // copy-hook (copy-constructor implicito).  El compilador lo
                 // invoca en cada sitio de copia del struct.
                 if (m->name == "__clone__") layout.has_copy_hook = true;
@@ -4685,11 +4681,7 @@ void TypeChecker::collect_globals() {
                     mi_info.return_type =
                         m->return_type ? type_from_node(m->return_type.get())
                                        : Type{PrimitiveKind::VOID};
-                    mi_info.param_types.reserve(m->params.size());
-                    for (const auto &p : m->params) {
-                        mi_info.param_types.push_back(
-                            type_from_node(p->type.get()));
-                    }
+                    record_method_params(*m, mi_info);
                     mi_info.vtable_index =
                         layout.methods[override_idx].vtable_index;
                     layout.methods[override_idx] = std::move(mi_info);
@@ -4774,11 +4766,7 @@ void TypeChecker::collect_globals() {
                 mi_info.return_type = m->return_type
                                           ? type_from_node(m->return_type.get())
                                           : Type{PrimitiveKind::VOID};
-                mi_info.param_types.reserve(m->params.size());
-                for (const auto &p : m->params) {
-                    mi_info.param_types.push_back(
-                        type_from_node(p->type.get()));
-                }
+                record_method_params(*m, mi_info);
                 mi_info.vtable_index =
                     static_cast<uint32_t>(layout.methods.size());
 
@@ -4979,9 +4967,7 @@ void TypeChecker::collect_globals() {
                                  : Type{PrimitiveKind::VOID};
             mi.param_types.reserve(m->params.size());
             for (const auto &p : m->params)
-                mi.param_types.push_back(type_from_node(p->type.get()));
-            if (is_class_target)
-                mi.vtable_index = static_cast<uint32_t>(dst->size());
+            record_method_params(*m, mi);
             dst->push_back(std::move(mi));
         }
         if (is_impl && !concept_name.empty())
@@ -5604,6 +5590,40 @@ bool TypeChecker::type_declares_to_string(const Type &t) const {
     return false;
 }
 
+
+/**
+ * @brief Anota en @p mi los tipos de los parametros de @p m.
+ *
+ * Estaba escrito dos veces -- una para el metodo que sobrescribe a otro y otra
+ * para el que no --, que son el mismo trabajo con distinto destino.
+ *
+ * Ademas es el punto donde se ve un parametro que la declaracion admite y el
+ * resto del compilador todavia no sabe llevar hasta el final: un variadico en
+ * un metodo se PARSEA y se DECLARA -- desde que la lista de parametros dejo de
+ * tener una version pobre para los metodos --, pero la comprobacion de la
+ * llamada y el empaquetado de los argumentos solo existen para las funciones
+ * sueltas.  Decirlo aqui, una vez y con su motivo, es mejor que dejar que
+ * reviente mas tarde contando los argumentos.
+ *
+ * @param m  El metodo declarado.
+ * @param mi Donde anotar los tipos.
+ */
+void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
+                                       ClassMethodInfo &mi) {
+    mi.param_types.reserve(m.params.size());
+    for (const auto &p : m.params) {
+        if (p->is_variadic) {
+            diags_.error(p->loc,
+                         "un parametro variadico ('" + p->name +
+                             "') todavia no esta soportado en un metodo; "
+                             "solo en una funcion suelta.\n"
+                             "  sugerencia: pasa un array (`T[] xs`) con su "
+                             "longitud, o declara la funcion fuera de la clase");
+            continue;
+        }
+        mi.param_types.push_back(type_from_node(p->type.get()));
+    }
+}
 void TypeChecker::check_free_function_bodies() {
     for (size_t di_ = 0; di_ < mod_.decls.size(); ++di_) {
         ast::Node *decl = mod_.decls[di_].get();

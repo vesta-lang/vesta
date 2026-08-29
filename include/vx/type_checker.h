@@ -1523,6 +1523,20 @@ class TypeChecker {
      *        de cuerpos.  Permite que un metodo refiera a otra clase
      *        sin importar el orden de declaracion.
      */
+    /**
+     * @brief Anota en @p mi los tipos de los parametros de @p m.
+     *
+     * Estaba escrito dos veces -- para el metodo que sobrescribe a otro y para
+     * el que no --, que son el mismo trabajo con distinto destino.  Es ademas
+     * el punto donde se ve un parametro que la declaracion admite y el resto
+     * del compilador aun no sabe llevar hasta el final.
+     *
+     * @param m  El metodo declarado.
+     * @param mi Donde anotar los tipos.
+     */
+    void record_method_params(const ast::ClassMethodDecl &m,
+                              ClassMethodInfo &mi);
+
     void collect_classes();
 
     // -----------------------------------------------------------------

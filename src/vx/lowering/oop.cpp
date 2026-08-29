@@ -158,24 +158,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         }
 
         // Resto de parametros declarados.
-        for (auto &p : m->params) {
-            const ParamAbi abi = param_abi(*p);
-            const ir::IrValueId vid = fn.new_value(abi.type, "%" + p->name);
-            fn.values[vid].is_param = true;
-            if (abi.is_class) {
-                // Param de tipo CLASS es host_ptr a un objeto GC.
-                // Marcamos @c is_gc_object para que el regalloc, al
-                // salvar este reg alrededor de un CALL que pueda
-                // disparar GC, lo haga via @c gchandle (handle estable)
-                // y restaure con @c gcderef (host_ptr fresco post-GC).
-                fn.values[vid].is_host_ptr = true;
-                fn.values[vid].is_gc_object = true;
-            } else if (abi.is_host_ptr) {
-                fn.values[vid].is_host_ptr = true;
-            }
-            fn.params.push_back(vid);
-            bindings.emplace_back(p->name, vid);
-        }
+        declare_params(fn, m->params, bindings);
 
         // Configurar contexto del lowering para esta funcion.
         const ir::IrBlockId entry = fn.new_block("entry");

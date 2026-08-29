@@ -245,6 +245,38 @@ class Lowering {
      */
     ParamAbi param_abi(const ast::ParamDecl &p) const;
 
+    /// @brief Un parametro ya declarado en la funcion que se construye.
+    struct DeclaredParam {
+        /// Su declaracion, o nulo si es el contador oculto de un variadico.
+        const ast::ParamDecl *decl;
+        ir::IrValueId value; ///< El valor SSA que lo representa.
+        ir::IrType type;     ///< Con que tipo quedo declarado.
+    };
+
+    /**
+     * @brief Declara los parametros de una funcion y los ata a sus nombres.
+     *
+     * Esto no es solo crear un valor por cada uno: hay que saltarse el `...`
+     * pelado -- que no declara nada, sus argumentos van crudos en los registros
+     * que diga la convencion --, marcar cada valor con lo que @ref param_abi
+     * diga, y anadir al final el CONTADOR OCULTO de un variadico empaquetado,
+     * que es lo que `vacount()` lee dentro del cuerpo.
+     *
+     * Estaba escrito tres veces -- funcion suelta, metodo de clase, metodo de
+     * struct -- y solo la primera sabia lo del contador, asi que un variadico
+     * declarado en un metodo se aceptaba y luego no habia de donde sacar
+     * cuantos eran.
+     *
+     * @param fn       La funcion que se esta construyendo.
+     * @param params   Los parametros declarados.
+     * @param bindings Donde apuntar el par (nombre, valor) de cada uno.
+     * @return Uno por parametro declarado, en el orden en que quedaron.
+     */
+    std::vector<DeclaredParam> declare_params(
+        ir::IrFunction &fn,
+        const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
+        std::vector<std::pair<std::string, ir::IrValueId>> &bindings);
+
     /**
      * @brief Si los metodos de @p class_name se despachan por tabla.
      *
