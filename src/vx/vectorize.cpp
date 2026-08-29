@@ -730,6 +730,52 @@ bool Lowering::vec_elem_info(PrimitiveKind k, ir::IrType *out_ty,
 }
 
 /**
+ * @brief Es @p e un `array[i]` que se puede ensanchar?
+ *
+ * Ver la declaracion: estaba escrita tres veces, una por idioma.
+ *
+ * @param e Expresion candidata.
+ * @param idx_name Nombre del indice del bucle.
+ * @param expected Tipo de las hojas ya vistas, o @c COUNT si es la primera.
+ * @param out_base Sale con el array.
+ * @return false si no es esa forma.
+ */
+bool Lowering::vec_index_leaf(ast::Expr *e, const std::string &idx_name,
+                              PrimitiveKind *expected,
+                              ast::IdentExpr **out_base) {
+    using namespace ast;
+    if (!e || e->kind != NodeKind::IndexExpr) return false;
+    auto *ix = static_cast<IndexExpr *>(e);
+    /* Un indice con operador redefinido o un rango no son un acceso plano: hay
+     * codigo del usuario por medio y no se puede leer de W en W. */
+    if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
+        ix->is_range)
+        return false;
+    if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return false;
+    if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return false;
+    if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
+        return false;
+    auto *base = static_cast<IdentExpr *>(ix->base.get());
+    const Type &t = base->result_type;
+    const bool ptr_like =
+        (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
+        static_cast<bool>(t.pointee);
+    if (!ptr_like || t.is_virtual) return false; // solo memoria del proceso
+    ir::IrType ety;
+    uint64_t esz;
+    bool fp;
+    if (!vec_elem_info(t.pointee->kind, &ety, &esz, &fp)) return false;
+    /* Todas las hojas del mismo bucle, del mismo tipo: ninguno de los idiomas
+     * convierte, asi que mezclar anchos daria otro numero. */
+    if (*expected == PrimitiveKind::COUNT)
+        *expected = t.pointee->kind;
+    else if (*expected != t.pointee->kind)
+        return false;
+    *out_base = base;
+    return true;
+}
+
+/**
  * @brief Cuantos BYTES avanza de golpe un bucle vectorizado.
  *
  * Estaba escrito en cada idioma, y cuatro de las cinco copias decian lo mismo.
@@ -853,37 +899,13 @@ bool Lowering::try_vectorize_elementwise_for(ast::Stmt *s) {
     // Tipos de elemento vectorizables (HOST): f64 (todas las ops) e enteros
     // i64/i32 (solo add/sub -- SSE2 no tiene mul/div packed de enteros).  El
     // valor de salida es el PrimitiveKind comun a las 3 bases.
-    // Helper: valida que @p ix es base_ident[idx] HOST de un tipo vectorizable;
-    // devuelve la base + su PrimitiveKind de elemento.
-    auto check_idx_host = [&](IndexExpr *ix, IdentExpr **out_base,
-                              PrimitiveKind *out_kind) -> bool {
-        if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
-            ix->is_range)
-            return false;
-        if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return false;
-        if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return false;
-        if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
-            return false;
-        auto *base = static_cast<IdentExpr *>(ix->base.get());
-        const Type &t = base->result_type;
-        const bool ptr_like =
-            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
-            static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false; // solo HOST
-        ir::IrType ety;
-        uint64_t esz2;
-        bool fp2;
-        if (!vec_elem_info(t.pointee->kind, &ety, &esz2, &fp2)) return false;
-        *out_base = base;
-        *out_kind = t.pointee->kind;
-        return true;
-    };
     ast::IdentExpr *c_base = nullptr, *a_base = nullptr, *b_base = nullptr;
-    PrimitiveKind ck, ak, bk;
-    if (!check_idx_host(c_ix, &c_base, &ck)) return false;
-    if (!check_idx_host(a_ix, &a_base, &ak)) return false;
-    if (!check_idx_host(b_ix, &b_base, &bk)) return false;
-    if (ck != ak || ak != bk) return false; // mismo tipo de elemento
+    /* Las tres hojas, con la regla de que sean del mismo tipo aplicada por el
+     * propio comprobador segun las va viendo. */
+    PrimitiveKind ck = PrimitiveKind::COUNT;
+    if (!vec_index_leaf(c_ix, idx_name, &ck, &c_base)) return false;
+    if (!vec_index_leaf(a_ix, idx_name, &ck, &a_base)) return false;
+    if (!vec_index_leaf(b_ix, idx_name, &ck, &b_base)) return false;
     ir::IrType elem_ty;
     uint64_t esz;
     bool elem_fp;
@@ -1043,47 +1065,16 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     // @p c_kind (todas las hojas array deben ser del MISMO tipo que el
     // destino).
     PrimitiveKind c_kind =
-        PrimitiveKind::F64; // se fija al clasificar el destino
-    auto as_fp_arr = [&](ast::Expr *e, IdentExpr **base,
-                         PrimitiveKind expected) -> bool {
-        if (!e || e->kind != NodeKind::IndexExpr) return false;
-        auto *ix = static_cast<IndexExpr *>(e);
-        if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
-            ix->is_range)
-            return false;
-        if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return false;
-        if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return false;
-        if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
-            return false;
-        auto *b = static_cast<IdentExpr *>(ix->base.get());
-        const Type &t = b->result_type;
-        const bool ptr_like =
-            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
-            static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false;
-        const PrimitiveKind ek = t.pointee->kind;
-        /* Cualquier tipo que se sepa vectorizar.  Estuvo cerrado a los dos
-         * flotantes, y no porque una cadena de enteros no se pueda: sumar y
-         * restar carriles existe para todos los anchos.  Lo que SI depende del
-         * tipo es la operacion concreta, y eso se mira abajo, una por una: asi
-         * `c[i] = a[i] + b[i] - a[i]` con enteros entra, y la division entera
-         * -- que no tiene forma empaquetada -- se queda fuera por lo que es y
-         * no por el tipo de la hoja. */
-        ir::IrType ety_h;
-        uint64_t esz_h;
-        bool fp_h;
-        if (!vec_elem_info(ek, &ety_h, &esz_h, &fp_h)) return false;
-        if (expected != PrimitiveKind::COUNT && ek != expected)
-            return false; // todas las hojas mismo tipo de elemento
-        *base = b;
-        return true;
-    };
-    // Helpers locales que fijan el tipo del destino (COUNT al clasificar c).
+        PrimitiveKind::COUNT; // se fija al clasificar el destino
+    /* Sin restringir: para saber si algo ES un acceso, no de que tipo.  El tipo
+     * que se descarta va a una variable local a proposito. */
     auto as_arr_any = [&](ast::Expr *e, IdentExpr **base) -> bool {
-        return as_fp_arr(e, base, PrimitiveKind::COUNT);
+        PrimitiveKind libre = PrimitiveKind::COUNT;
+        return vec_index_leaf(e, idx_name, &libre, base);
     };
+    /* Restringido al tipo del destino, que para entonces ya esta fijado. */
     auto as_arr_c = [&](ast::Expr *e, IdentExpr **base) -> bool {
-        return as_fp_arr(e, base, c_kind);
+        return vec_index_leaf(e, idx_name, &c_kind, base);
     };
     // Hoja ESCALAR: invariante del loop (ni array[idx] ni referencia a idx).
     auto is_scalar_leaf = [&](ast::Expr *e) -> bool {
@@ -1823,38 +1814,10 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         return false;
     }
 
-    // Helper: valida que @p ix es base_ident[idx] HOST f64, devuelve la base.
-    // Solo f64: fneg/fabs/fsqrt son float (SQRTPD/XORPD/ANDPD operan f64).
-    PrimitiveKind un_kind = PrimitiveKind::COUNT;
-    auto check_idx_host = [&](IndexExpr *ix, IdentExpr **out_base) -> bool {
-        if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
-            ix->is_range)
-            return false;
-        if (!ix->base || ix->base->kind != NodeKind::IdentExpr) return false;
-        if (!ix->index || ix->index->kind != NodeKind::IdentExpr) return false;
-        if (static_cast<IdentExpr *>(ix->index.get())->name != idx_name)
-            return false;
-        auto *base = static_cast<IdentExpr *>(ix->base.get());
-        const Type &t = base->result_type;
-        const bool ptr_like =
-            (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
-            static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false; // solo HOST
-        ir::IrType ety;
-        uint64_t es2;
-        bool fp2;
-        if (!vec_elem_info(t.pointee->kind, &ety, &es2, &fp2)) return false;
-        /* Los dos lados tienen que ser del mismo tipo: negar no convierte. */
-        if (un_kind == PrimitiveKind::COUNT)
-            un_kind = t.pointee->kind;
-        else if (un_kind != t.pointee->kind)
-            return false;
-        *out_base = base;
-        return true;
-    };
     ast::IdentExpr *b_base = nullptr, *a_base = nullptr;
-    if (!check_idx_host(b_ix, &b_base)) return false;
-    if (!check_idx_host(a_ix, &a_base)) return false;
+    PrimitiveKind un_kind = PrimitiveKind::COUNT;
+    if (!vec_index_leaf(b_ix, idx_name, &un_kind, &b_base)) return false;
+    if (!vec_index_leaf(a_ix, idx_name, &un_kind, &a_base)) return false;
     ir::IrType elem_ty;
     uint64_t esz;
     bool elem_fp;

@@ -459,6 +459,36 @@ class Lowering {
                               uint64_t *out_esz, bool *out_fp) noexcept;
 
     /**
+     * @brief Es @p e un `array[i]` que se puede ensanchar?
+     *
+     * Exige cuatro cosas: que sea un acceso por indice sin nada raro -- ni
+     * operador redefinido ni rango --, que el indice sea EL del bucle, que el
+     * array viva en memoria del proceso (uno local vive en la pila de la
+     * maquina virtual y no se accede igual), y que su tipo de elemento se sepa
+     * ensanchar.
+     *
+     * Y una quinta que no es del acceso sino del idioma, y por eso va aqui: que
+     * TODAS las hojas del mismo bucle sean del mismo tipo.  Ninguno de los
+     * idiomas convierte, asi que mezclar anchos daria otro numero.
+     *
+     * Esto estaba escrito tres veces -- una por idioma --, con la quinta regla
+     * dicha de tres maneras distintas.  Es la clase de sitio donde un hueco
+     * pasa desapercibido: el reparto de escalar en `f32` no funcionaba porque
+     * una de las copias de la TABLA DE TIPOS, que se consulta justo aqui, se
+     * habia quedado sin ese tipo.
+     *
+     * @param e Expresion candidata.
+     * @param idx_name Nombre del indice del bucle.
+     * @param expected Tipo de las hojas ya vistas, o @c COUNT si es la primera;
+     *        sale con el de esta.
+     * @param out_base Sale con el array.
+     * @return false si no es esa forma.
+     */
+    static bool vec_index_leaf(ast::Expr *e, const std::string &idx_name,
+                               PrimitiveKind *expected,
+                               ast::IdentExpr **out_base);
+
+    /**
      * @brief Cuantos BYTES avanza de golpe un bucle vectorizado.
      *
      * Tres casos, y el tercero es el que obliga a que esto sea un parametro:
