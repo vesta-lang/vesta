@@ -33,6 +33,7 @@
 
 #include "ir/ssa_ir.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_vec_ops.h"   // cuales son las operaciones vectoriales
 #include "vesta_rt/abi.h"
 #include "jit/target_reginfo.h"  //  AOT.3 2b: arg_regs del ABI host (HOST_LEAF)
 #include "jit/vec_isa.h"         // ancho SIMD (SSE2/AVX2/AVX512) del VEC_BINOP
@@ -1088,22 +1089,16 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         bool has_complex_mem = false;
         for (const auto &blk : fn.blocks) {
             for (const ir::IrInstr &in : blk.instrs) {
-                switch (in.op) {
-                case ir::IrOp::VEC_ACC_ZERO:
-                case ir::IrOp::VEC_ACC_ADD:
-                case ir::IrOp::VEC_ACC_FMA:
-                case ir::IrOp::VEC_ACC_COMBINE:
-                case ir::IrOp::VEC_ACC_STORE:
-                case ir::IrOp::VEC_BINOP:
-                case ir::IrOp::VEC_BINOP_S:
-                case ir::IrOp::VEC_FMA:
-                case ir::IrOp::VEC_FMA_S:
-                case ir::IrOp::VEC_BCAST:
-                case ir::IrOp::MEMCPY:
-                case ir::IrOp::MEMSET: has_complex_mem = true; break;
-                default: break;
+                // Cualquier operacion vectorial cuenta, no una lista escrita a
+                // mano: enumerarlas aqui ya dejo fuera VEC_UNOP -- que hace el
+                // mismo direccionamiento que sus companeras -- y con ella el
+                // guarda no saltaba en una funcion cuyo unico uso del banco
+                // ancho fuera esa (por ejemplo, negar un array entero).
+                if (ir::is_vec_op(in.op) || in.op == ir::IrOp::MEMCPY ||
+                    in.op == ir::IrOp::MEMSET) {
+                    has_complex_mem = true;
+                    break;
                 }
-                if (has_complex_mem) break;
             }
             if (has_complex_mem) break;
         }

@@ -12,6 +12,7 @@
 
 #include "ir/ir_optimizer.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_vec_ops.h"   // cuales son las operaciones vectoriales
 
 #include "ir/parallel_for.h"
 
@@ -10081,23 +10082,14 @@ bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
         std::vector<analysis::effects::AbstractLoc> loop_store_locs;
         for (IrBlockId b : loop_set) {
             for (const auto &ins : fn.blocks[b].instrs) {
-                bool is_write = false;
+                // Las vectoriales que escriben memoria las decide
+                // vec_op_writes_memory: son todas menos VEC_BCAST, que solo
+                // reparte un escalar por los carriles de un registro.
+                bool is_write = vec_op_writes_memory(ins.op);
                 switch (ins.op) {
                 case IrOp::STORE:
                 case IrOp::MEMCPY:
                 case IrOp::MEMSET:
-                case IrOp::VEC_UNOP:
-                case IrOp::VEC_BINOP:
-                case IrOp::VEC_FMA:
-                case IrOp::VEC_ACC_ZERO:
-                case IrOp::VEC_ACC_ADD:
-                case IrOp::VEC_ACC_FMA:
-                case IrOp::VEC_ACC_STORE:
-                case IrOp::VEC_ACC_COMBINE:
-                case IrOp::VEC_FMA_S:
-                case IrOp::VEC_BINOP_S:
-                // VEC_BCAST NO escribe memoria (broadcast escalar->registro) ->
-                // fuera de la lista de escrituras.
                 case IrOp::SETFIELD:
                 case IrOp::ARRAY_STORE:
                 case IrOp::STRFINALIZE:

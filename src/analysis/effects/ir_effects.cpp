@@ -708,12 +708,17 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
     // estaban mal clasificados como PUROS, lo que podia clasificar una funcion
     // que solo hace stores vectoriales como "pura" -> unsound en las
     // relajaciones pure-call).  opaco -> top; VEC_BCAST no toca memoria.
+    // La lista tiene que ser la de ir::is_vec_op AL COMPLETO: la que faltaba,
+    // VEC_FMA_S, caia al `default` y salia con su efecto MAXIMO -- correcto,
+    // pero anotado como laguna del motor y sin precision ninguna, pese a que
+    // memory_access si sabe modelarla.
     case IrOp::MEMCPY:
     case IrOp::MEMSET:
     case IrOp::VEC_UNOP:
     case IrOp::VEC_BINOP:
     case IrOp::VEC_BINOP_S:
     case IrOp::VEC_FMA:
+    case IrOp::VEC_FMA_S:
     case IrOp::VEC_BCAST:
     case IrOp::VEC_ACC_ZERO:
     case IrOp::VEC_ACC_ADD:

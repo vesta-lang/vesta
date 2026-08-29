@@ -16,6 +16,7 @@
 #include <functional>
 #include "jit/vreg_pipeline.h"
 
+#include "ir/ir_vec_ops.h" // cuales son las operaciones vectoriales
 #include "ir/ssa_ir.h"
 #include "jit/auto_jit.h"
 #include "jit/code_cache.h"
@@ -109,21 +110,13 @@ bool fn_can_use_wide512(const ir::IrFunction &fn, const BackendCaps &caps) {
 bool fn_needs_vec_reserve(const ir::IrFunction &fn) {
     static const bool gate_force = util::flag_on(util::FlagId::NoWideHome);
     if (gate_force) return true;
+    // Reservar si la funcion usa el camino vectorial, sea cual sea la
+    // operacion: es la MISMA condicion que decide el USO de XMM10-13, y de eso
+    // depende que nadie pise un acumulador vivo.  Enumerarlas aqui a mano ya
+    // dejo fuera VEC_FMA_S, que fija XMM13-idx igual que sus companeras.
     for (const auto &b : fn.blocks)
         for (const auto &in : b.instrs)
-            switch (in.op) {
-            case ir::IrOp::VEC_UNOP:
-            case ir::IrOp::VEC_BINOP:
-            case ir::IrOp::VEC_FMA:
-            case ir::IrOp::VEC_BINOP_S:
-            case ir::IrOp::VEC_BCAST:
-            case ir::IrOp::VEC_ACC_ZERO:
-            case ir::IrOp::VEC_ACC_ADD:
-            case ir::IrOp::VEC_ACC_FMA:
-            case ir::IrOp::VEC_ACC_STORE:
-            case ir::IrOp::VEC_ACC_COMBINE: return true;
-            default: break;
-            }
+            if (ir::is_vec_op(in.op)) return true;
     return false;
 }
 

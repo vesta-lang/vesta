@@ -12,6 +12,7 @@
 
 #include "analysis/facts/loop_metrics.h"
 #include "analysis/memory/memory_access.h" // quien decide si una op toca memoria
+#include "ir/ir_vec_ops.h" // cuales son las operaciones vectoriales
 
 #include <unordered_set>
 
@@ -52,22 +53,7 @@ bool is_call_like(IrOp op) {
     default: return false;
     }
 }
-bool is_vec(IrOp op) {
-    switch (op) {
-    case IrOp::VEC_UNOP:
-    case IrOp::VEC_BINOP:
-    case IrOp::VEC_BINOP_S:
-    case IrOp::VEC_FMA:
-    case IrOp::VEC_FMA_S:
-    case IrOp::VEC_BCAST:
-    case IrOp::VEC_ACC_ZERO:
-    case IrOp::VEC_ACC_ADD:
-    case IrOp::VEC_ACC_FMA:
-    case IrOp::VEC_ACC_COMBINE:
-    case IrOp::VEC_ACC_STORE: return true;
-    default: return false;
-    }
-}
+bool is_vec(IrOp op) { return ir::is_vec_op(op); }
 bool is_fp(IrOp op) {
     switch (op) {
     case IrOp::FADD:

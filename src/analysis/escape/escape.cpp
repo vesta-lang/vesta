@@ -14,6 +14,7 @@
  */
 #include "analysis/escape/escape.h"
 
+#include "ir/ir_vec_ops.h" // cuales son las operaciones vectoriales
 #include "ir/ssa_ir.h"
 
 #include <deque>
@@ -30,6 +31,16 @@ using ir::IrOp;
 // (leer/escribir su CONTENIDO, sin capturar el puntero)?  Lista COMPLETA de
 // accesos a memoria.
 bool is_address_operand(IrOp op, size_t idx) {
+    // Ops VECTORIALES: todos sus operandos-puntero son DIRECCIONES (leen/
+    // escriben memoria, no capturan el puntero), asi que la posicion da igual.
+    // Se resuelven antes del switch para no repetir la lista: enumerarlas a
+    // mano ya dejo fuera VEC_FMA_S, y una operacion que falte aqui cae al
+    // `default` -- se da su puntero por capturado y el objeto escapa, que es
+    // el lado seguro, pero pierde la optimizacion sin decirlo.
+    if (is_vec_op(op)) {
+        (void)idx;
+        return true;
+    }
     switch (op) {
     case IrOp::LOAD: return idx == 0;
     case IrOp::STORE: return idx == 1; // [0]=valor (captura), [1]=addr
@@ -45,18 +56,6 @@ bool is_address_operand(IrOp op, size_t idx) {
     case IrOp::MEMCPY: return idx == 0 || idx == 1; // dst, src (contenido)
     case IrOp::MEMSET:
         return idx == 0; // dst (contenido); val es escalar
-    // Ops VECTORIALES: todos sus operandos-puntero son DIRECCIONES (leen/
-    // escriben memoria, no capturan el puntero).
-    case IrOp::VEC_UNOP:
-    case IrOp::VEC_BINOP:
-    case IrOp::VEC_BINOP_S:
-    case IrOp::VEC_FMA:
-    case IrOp::VEC_ACC_ZERO:
-    case IrOp::VEC_ACC_ADD:
-    case IrOp::VEC_ACC_FMA:
-    case IrOp::VEC_ACC_STORE:
-    case IrOp::VEC_ACC_COMBINE:
-    case IrOp::VEC_BCAST: return true;
     default: return false;
     }
 }
