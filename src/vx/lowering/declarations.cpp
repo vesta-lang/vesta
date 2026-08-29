@@ -284,307 +284,9 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         vt = ir::IrType::PTR;
     }
 
-    // variable address-taken (&x aparece en algun sitio del body).
-    // Reservamos memoria local con ALLOCA y emitimos un STORE inicial
-    // si hay inicializador.  El scope guarda la DIRECCION (no el valor),
-    // y read_local/write_local hacen LOAD/STORE para todos los usos.
-    if (address_taken_locals_.count(vd->name)) {
-        const size_t bytes = ir::type_access_bytes(vt); // tamano del tipo escalar
-        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
-        ir::IrInstr ai{};
-        ai.op = ir::IrOp::ALLOCA;
-        ai.type = ir::IrType::I8; // unidad: 1 byte
-        ai.dst = addr;
-        ai.imm = (uint64_t)bytes;
-        // Bug host-vs-VM (2026-07-15): si se toma `&x`, el puntero resultante
-        // es un `T*` y por convencion del lenguaje un `T*` es una direccion
-        // HOST: el callee que reciba `T*`, o el campo/elemento `T*` donde se
-        // guarde, lo deref-earan con movh.  Por tanto el slot debe vivir en
-        // memoria host desde el principio.  Antes se quedaba en la pila VM y
-        // solo "funcionaba" mientras el inliner o el store-to-load forwarding
-        // borraban el deref; en cuanto el puntero cruzaba una frontera real
-        // (callee no inlineado, o guardado en un struct/array y releido) se
-        // hacia movh sobre una direccion VM -> SIGSEGV.
-        //
-        // Es el mismo criterio que @c ir_pass_promote_callned_allocas aplica a
-        // los args de CALLN.  Se marca AQUI (y no en un pase del IR) porque
-        // solo el lowering distingue un consumidor host (`T*`) de uno VM: los
-        // structs de params de los opcodes meta viven en la pila VM y NO se
-        // address-takean desde el codigo del usuario, asi que no se ven
-        // afectados.  `VirtualPtr<T>` sigue siendo la via para memoria VM.
-        ai.host_alloca = true;
-        fn_->values[addr].is_host_ptr = true;
-        ai.source_line = vd->loc.line;
-        emit(current_block_, std::move(ai));
-        bind(vd->name, addr);
-
-        //  AS inc.3: registrar el binding register("reg") -> slot.
-        // El backend port-C materializa este ALLOCA como una variable C
-        // con register-pin de GCC y traduce sus LOAD/STORE a accesos
-        // directos a la variable.
-        if (!vd->reg_binding.empty()) {
-            const std::string &rb = vd->reg_binding;
-            const bool is_vec =
-                rb.rfind("xmm", 0) == 0 || rb.rfind("ymm", 0) == 0 ||
-                rb.rfind("zmm", 0) == 0 || rb.rfind("XMM", 0) == 0 ||
-                rb.rfind("YMM", 0) == 0 || rb.rfind("ZMM", 0) == 0;
-            ir::AsmRegBinding b{addr, rb, vt, is_vec, vd->name};
-            b.reg_class = rb; // registro concreto: la clase es el registro.
-            fn_->asm_reg_bindings.push_back(std::move(b));
-        }
-
-        // Store del valor inicial (o 0 si no hay init).
-        ir::IrValueId v0 = ir::IR_NO_VALUE;
-        if (vd->init) {
-            v0 = lower_expr(vd->init.get());
-            if (v0 != ir::IR_NO_VALUE) {
-                const ir::IrType vfrom = fn_->values[v0].type;
-                // Suprimir el warning de cast implicito cuando el
-                // init es un literal: `u8 init = 0` no merece
-                // alarma porque el valor es estatico y conocido en
-                // compile-time; es un patron habitual y el type
-                // checker ya valida el rango.
-                const bool init_is_literal =
-                    vd->init->kind == ast::NodeKind::IntLitExpr ||
-                    vd->init->kind == ast::NodeKind::FloatLitExpr ||
-                    vd->init->kind == ast::NodeKind::BoolLitExpr ||
-                    vd->init->kind == ast::NodeKind::CharLitExpr ||
-                    vd->init->kind == ast::NodeKind::NullLitExpr;
-                v0 = cast_if_needed(v0, vfrom, vt, vd->init->loc,
-                                    /*is_explicit=*/init_is_literal);
-            }
-        }
-        if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, vd->loc.line);
-
-        emit_store_typed(addr, v0, vt, vd->loc.line);
-        return;
-    }
-
+    if (try_lower_address_taken_var(vd, sem_type, vt)) return;
     ir::IrValueId v = ir::IR_NO_VALUE;
-    if (vd->init) {
-        // ----- Smart pointer move: unique/shared = move(p) -----
-        // Patron especial: si el tipo destino es unique<T>/shared<T>
-        // y el init es CallExpr(IdentExpr("move"), [p]), transferimos
-        // ownership via mvtake (1 instr VM: copia + zero source).
-        //
-        // Lowering:
-        //   1. lower p -> v_src_slot (SSA value que es la direccion
-        //                            del slot stack del origen).
-        //   2. ALLOCA 8 bytes -> v_dst_slot.
-        //   3. Emit `mvtake [dst], [src]` via RAW_ASM.
-        //   4. Marcar pointee_is_host_ptr en v_dst_slot.
-        //
-        // El cleanup del origen (registrado al declarar p) seguira
-        // ejecutandose al exit del scope; vera 0 en el slot (zerificado
-        // por mvtake) y RAW_FREE(0) sera no-op limpio.
-        if ((sem_type.kind == PrimitiveKind::UNIQUE_PTR ||
-             sem_type.kind == PrimitiveKind::SHARED_PTR) &&
-            vd->init->kind == ast::NodeKind::CallExpr) {
-            auto *ce = static_cast<ast::CallExpr *>(vd->init.get());
-            if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr &&
-                ce->args.size() == 1) {
-                auto *cid = static_cast<ast::IdentExpr *>(ce->callee.get());
-                if (cid->name == "move") {
-                    const ir::IrValueId v_src = lower_expr(ce->args[0].get());
-                    if (v_src != ir::IR_NO_VALUE) {
-                        // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
-                        // shared<T>: slot = 8 bytes (ctrl_block_ptr).
-                        const uint32_t slot_bytes =
-                            (sem_type.kind == PrimitiveKind::UNIQUE_PTR) ? 16
-                                                                         : 8;
-                        // ALLOCA para el slot destino.
-                        const ir::IrValueId v_dst =
-                            fn_->new_value(ir::IrType::PTR);
-                        {
-                            ir::IrInstr al{};
-                            al.op = ir::IrOp::ALLOCA;
-                            al.type = ir::IrType::I8;
-                            al.dst = v_dst;
-                            al.imm = slot_bytes;
-                            al.source_line = vd->loc.line;
-                            emit(current_block_, std::move(al));
-                        }
-                        // Emit mvtake [v_dst+0], [v_src+0] (ptr).
-                        // Para unique<T> tambien emit mvtake [v_dst+8],
-                        // [v_src+8] (deleter).
-                        emit_mvtake(v_dst, v_src, vd->loc.line);
-                        if (slot_bytes == 16) {
-                            // Segundo qword: deleter.  Calculamos los dos
-                            // punteros +8 y emitimos otro mvtake.
-                            const ir::IrValueId v_eight =
-                                emit_const(ir::IrType::I64, 8, vd->loc.line);
-                            const ir::IrValueId v_dst8 =
-                                fn_->new_value(ir::IrType::PTR);
-                            const ir::IrValueId v_src8 =
-                                fn_->new_value(ir::IrType::PTR);
-                            {
-                                ir::IrInstr add{};
-                                add.op = ir::IrOp::ADD;
-                                add.type = ir::IrType::I64;
-                                add.dst = v_dst8;
-                                add.operands = {v_dst, v_eight};
-                                add.source_line = vd->loc.line;
-                                emit(current_block_, std::move(add));
-                            }
-                            {
-                                ir::IrInstr add{};
-                                add.op = ir::IrOp::ADD;
-                                add.type = ir::IrType::I64;
-                                add.dst = v_src8;
-                                add.operands = {v_src, v_eight};
-                                add.source_line = vd->loc.line;
-                                emit(current_block_, std::move(add));
-                            }
-                            emit_mvtake(v_dst8, v_src8, vd->loc.line);
-                        }
-                        fn_->values[v_dst].pointee_is_host_ptr = true;
-                        v = v_dst;
-                        goto bind_and_cleanup;
-                    }
-                }
-            }
-        }
-        // Vesta Embed Inc 0: en modo native_poo_ (AOT) el tipo `string`
-        // es VALUE-TYPE (struct {ptr,len,cap} de 24 bytes en stack,
-        // HEAP-ALWAYS, RAII), NO un StringObject GC.  Dos casos:
-        //   (a) `string s = "literal"`  -> construir el repr (ALLOCA +
-        //       RAW_ALLOC + copia + nul + STOREs).
-        //   (b) `string b = a`          -> MOVE: copiar los 24 bytes del
-        //       slot de `a` al de `b` y ZERAR el ptr@0 del slot fuente
-        //       (para que su cleanup sea no-op, sin doble-free).
-        // El path Full/JIT/interp (sin native_poo_) NO entra aqui: cae a
-        // la promocion StringObject GC de abajo.
-        if (native_poo_ && sem_type.kind == PrimitiveKind::STRING && vd->init) {
-            // Caso (a): literal NO interpolado (Inc 0 no cubre
-            // interpolacion ni concat -- esos son Inc 1-4).
-            if (vd->init->kind == ast::NodeKind::StringLitExpr) {
-                auto *slit = static_cast<ast::StringLitExpr *>(vd->init.get());
-                if (!slit->is_interpolated()) {
-                    v = build_native_string_from_literal(slit, vd->loc.line);
-                    bind(vd->name, v);
-                    // Una cadena que sale de un literal no tiene buffer propio
-                    // -- o cabe inline, o es una vista sobre .rodata -- asi que
-                    // mientras nadie la reasigne no hay nada que liberar.
-                    // Registrar la limpieza igualmente no era gratis: emite un
-                    // `free`, y ESO es lo que hacia que cualquier programa con
-                    // una cadena constante enlazara el asignador entero.
-                    const bool puede_acabar_siendo_suyo =
-                        reassigned_locals_.count(vd->name) != 0;
-                    // RAII: liberar el buffer al exit del scope, salvo
-                    // que el string escape (return/asignacion a campo).
-                    if (puede_acabar_siendo_suyo &&
-                        escaping_locals_.find(vd->name) ==
-                            escaping_locals_.end()) {
-                        CleanupAction act;
-                        act.kind = CleanupAction::Kind::STRING_FREE;
-                        act.operands = {v};
-                        act.source_line = vd->loc.line;
-                        act.refresh_name = vd->name;
-                        cleanup_stack_.push_back(std::move(act));
-                    }
-                    return;
-                }
-            }
-            // Caso (b): MOVE desde otra variable string (IdentExpr).
-            if (vd->init->kind == ast::NodeKind::IdentExpr &&
-                vd->init->result_type.kind == PrimitiveKind::STRING) {
-                const ir::IrValueId v_src = lower_expr(vd->init.get());
-                if (v_src != ir::IR_NO_VALUE) {
-                    // Nuevo slot de 24 bytes para `b` (host stack en native).
-                    const ir::IrValueId v_slot =
-                        fn_->new_value(ir::IrType::PTR);
-                    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
-                    {
-                        ir::IrInstr al{};
-                        al.op = ir::IrOp::ALLOCA;
-                        al.type = ir::IrType::I8;
-                        al.dst = v_slot;
-                        al.imm = 24;
-                        al.host_alloca = native_poo_;
-                        al.source_line = vd->loc.line;
-                        emit(current_block_, std::move(al));
-                    }
-                    // String Inc 5 (SSO): copiar los 24 bytes via MEMCPY
-                    // (no 3 LOAD/STORE i64) -> evita el store-forwarding
-                    // sobre qword2 que perdia la longitud SSO.
-                    emit_native_str_move_copy(v_slot, v_src, vd->loc.line);
-                    // Invalidar el slot fuente (move-out).  Inc 5 (SSO):
-                    // si era HEAP -> ptr@0=0 (su cleanup hara free(0)=
-                    // no-op; el buffer ahora lo posee `b`); si era SSO ->
-                    // sin cambio (data inline, no hay buffer compartido).
-                    emit_native_str_invalidate_moved(v_src, vd->loc.line);
-                    bind(vd->name, v_slot);
-                    // RAII para `b` (poseedor del buffer tras el move).
-                    if (escaping_locals_.find(vd->name) ==
-                        escaping_locals_.end()) {
-                        CleanupAction act;
-                        act.kind = CleanupAction::Kind::STRING_FREE;
-                        act.operands = {v_slot};
-                        act.source_line = vd->loc.line;
-                        act.refresh_name = vd->name;
-                        cleanup_stack_.push_back(std::move(act));
-                    }
-                    return;
-                }
-            }
-            // Caso (c): init es una EXPRESION que produce un value-string
-            // owned (concat `a + b`, str_concat(a, b), o futuras ops Inc
-            // 2+).  lower_expr devuelve el PTR al slot nativo.  Bind +
-            // RAII STRING_FREE (el resultado de un concat es owned).
-            {
-                const ir::IrValueId v_slot = lower_expr(vd->init.get());
-                if (v_slot != ir::IR_NO_VALUE) {
-                    bind(vd->name, v_slot);
-                    if (escaping_locals_.find(vd->name) ==
-                        escaping_locals_.end()) {
-                        CleanupAction act;
-                        act.kind = CleanupAction::Kind::STRING_FREE;
-                        act.operands = {v_slot};
-                        act.source_line = vd->loc.line;
-                        act.refresh_name = vd->name;
-                        cleanup_stack_.push_back(std::move(act));
-                    }
-                    return;
-                }
-            }
-        }
-        // Lazy promotion: si el tipo destino es STRING y el
-        // init es un string literal puro (StringLitExpr), promover
-        // a StringObject GC-managed via STRMAKE.  Asi `string s =
-        // "hola"` aloca 1 vez; `print("hola")` (sin var-decl) sigue
-        // sin alocar.
-        if (sem_type.kind == PrimitiveKind::STRING && vd->init &&
-            vd->init->kind == ast::NodeKind::StringLitExpr) {
-            // Tanto literales puros como interpolados se promueven
-            // a StringObject GC-managed; el helper detecta el caso
-            // y emite STRMAKE simple o cadena de STRMAKE+STRCAT
-            // segun corresponda.
-            auto *slit = static_cast<ast::StringLitExpr *>(vd->init.get());
-            v = lower_string_literal_to_string_object(slit);
-            bind(vd->name, v);
-            return;
-        }
-        v = lower_expr(vd->init.get());
-        if (v != ir::IR_NO_VALUE) {
-            const ir::IrType vfrom = fn_->values[v].type;
-            // Misma supresion de warning que en la rama
-            // address-taken: literales no merecen alarma de
-            // narrowing porque el valor es compile-time conocido.
-            const bool init_is_literal =
-                vd->init->kind == ast::NodeKind::IntLitExpr ||
-                vd->init->kind == ast::NodeKind::FloatLitExpr ||
-                vd->init->kind == ast::NodeKind::BoolLitExpr ||
-                vd->init->kind == ast::NodeKind::CharLitExpr ||
-                vd->init->kind == ast::NodeKind::NullLitExpr;
-            v = cast_if_needed(v, vfrom, vt, vd->init->loc,
-                               /*is_explicit=*/init_is_literal);
-        }
-    } else {
-        // Sin init: defecto 0.  Las variables sin init son raras
-        // en uso normal pero el type checker no las prohibe.
-        v = emit_const(vt, 0, vd->loc.line);
-    }
-bind_and_cleanup:
+    if (try_lower_var_init(vd, sem_type, vt, v)) return;
     bind(vd->name, v);
 
     // auto-free de colecciones primitivas.  Si el tipo del var
@@ -1749,6 +1451,349 @@ bool Lowering::try_lower_array_var(ast::VarDeclStmt *vd,
             error_at(vd->loc, "lowering: inicializador de array aun no "
                               "soportado en esta ruta");
         }
+    }
+    return true;
+}
+
+/**
+ * @brief Baja el valor con el que arranca una variable.
+ *
+ * De aqui sale el valor que se ata al nombre, pero varias formas no dejan un
+ * valor que atar: trasladar la propiedad de un puntero con dueno mueve el
+ * contenido y no produce nada nuevo, y una funcion que devuelve un agregado lo
+ * escribe en el hueco de la variable en vez de devolverlo.  Esas terminan la
+ * declaracion aqui mismo.
+ *
+ * Sin inicializador el valor es CERO, y no es un capricho: una variable con la
+ * basura que hubiera en la pila se lee distinto cada vez que se ejecuta.
+ *
+ * @param vd       La declaracion.
+ * @param sem_type El tipo ya resuelto.
+ * @param vt       Ese tipo, en el vocabulario del IR.
+ * @param v        Donde dejar el valor inicial.
+ * @return @c true si la declaracion quedo bajada ENTERA; @c false si lo unico
+ *         que falta es atar @p v al nombre.
+ */
+bool Lowering::try_lower_var_init(ast::VarDeclStmt *vd, const Type &sem_type,
+                                  ir::IrType vt, ir::IrValueId &v) {
+    v = ir::IR_NO_VALUE;
+    if (vd->init) {
+        // ----- Smart pointer move: unique/shared = move(p) -----
+        // Patron especial: si el tipo destino es unique<T>/shared<T>
+        // y el init es CallExpr(IdentExpr("move"), [p]), transferimos
+        // ownership via mvtake (1 instr VM: copia + zero source).
+        //
+        // Lowering:
+        //   1. lower p -> v_src_slot (SSA value que es la direccion
+        //                            del slot stack del origen).
+        //   2. ALLOCA 8 bytes -> v_dst_slot.
+        //   3. Emit `mvtake [dst], [src]` via RAW_ASM.
+        //   4. Marcar pointee_is_host_ptr en v_dst_slot.
+        //
+        // El cleanup del origen (registrado al declarar p) seguira
+        // ejecutandose al exit del scope; vera 0 en el slot (zerificado
+        // por mvtake) y RAW_FREE(0) sera no-op limpio.
+        if ((sem_type.kind == PrimitiveKind::UNIQUE_PTR ||
+             sem_type.kind == PrimitiveKind::SHARED_PTR) &&
+            vd->init->kind == ast::NodeKind::CallExpr) {
+            auto *ce = static_cast<ast::CallExpr *>(vd->init.get());
+            if (ce->callee && ce->callee->kind == ast::NodeKind::IdentExpr &&
+                ce->args.size() == 1) {
+                auto *cid = static_cast<ast::IdentExpr *>(ce->callee.get());
+                if (cid->name == "move") {
+                    const ir::IrValueId v_src = lower_expr(ce->args[0].get());
+                    if (v_src != ir::IR_NO_VALUE) {
+                        // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
+                        // shared<T>: slot = 8 bytes (ctrl_block_ptr).
+                        const uint32_t slot_bytes =
+                            (sem_type.kind == PrimitiveKind::UNIQUE_PTR) ? 16
+                                                                         : 8;
+                        // ALLOCA para el slot destino.
+                        const ir::IrValueId v_dst =
+                            fn_->new_value(ir::IrType::PTR);
+                        {
+                            ir::IrInstr al{};
+                            al.op = ir::IrOp::ALLOCA;
+                            al.type = ir::IrType::I8;
+                            al.dst = v_dst;
+                            al.imm = slot_bytes;
+                            al.source_line = vd->loc.line;
+                            emit(current_block_, std::move(al));
+                        }
+                        // Emit mvtake [v_dst+0], [v_src+0] (ptr).
+                        // Para unique<T> tambien emit mvtake [v_dst+8],
+                        // [v_src+8] (deleter).
+                        emit_mvtake(v_dst, v_src, vd->loc.line);
+                        if (slot_bytes == 16) {
+                            // Segundo qword: deleter.  Calculamos los dos
+                            // punteros +8 y emitimos otro mvtake.
+                            const ir::IrValueId v_eight =
+                                emit_const(ir::IrType::I64, 8, vd->loc.line);
+                            const ir::IrValueId v_dst8 =
+                                fn_->new_value(ir::IrType::PTR);
+                            const ir::IrValueId v_src8 =
+                                fn_->new_value(ir::IrType::PTR);
+                            {
+                                ir::IrInstr add{};
+                                add.op = ir::IrOp::ADD;
+                                add.type = ir::IrType::I64;
+                                add.dst = v_dst8;
+                                add.operands = {v_dst, v_eight};
+                                add.source_line = vd->loc.line;
+                                emit(current_block_, std::move(add));
+                            }
+                            {
+                                ir::IrInstr add{};
+                                add.op = ir::IrOp::ADD;
+                                add.type = ir::IrType::I64;
+                                add.dst = v_src8;
+                                add.operands = {v_src, v_eight};
+                                add.source_line = vd->loc.line;
+                                emit(current_block_, std::move(add));
+                            }
+                            emit_mvtake(v_dst8, v_src8, vd->loc.line);
+                        }
+                        fn_->values[v_dst].pointee_is_host_ptr = true;
+                        v = v_dst;
+                        return false; // el valor ya esta; solo falta atarlo
+                    }
+                }
+            }
+        }
+        // Vesta Embed Inc 0: en modo native_poo_ (AOT) el tipo `string`
+        // es VALUE-TYPE (struct {ptr,len,cap} de 24 bytes en stack,
+        // HEAP-ALWAYS, RAII), NO un StringObject GC.  Dos casos:
+        //   (a) `string s = "literal"`  -> construir el repr (ALLOCA +
+        //       RAW_ALLOC + copia + nul + STOREs).
+        //   (b) `string b = a`          -> MOVE: copiar los 24 bytes del
+        //       slot de `a` al de `b` y ZERAR el ptr@0 del slot fuente
+        //       (para que su cleanup sea no-op, sin doble-free).
+        // El path Full/JIT/interp (sin native_poo_) NO entra aqui: cae a
+        // la promocion StringObject GC de abajo.
+        if (native_poo_ && sem_type.kind == PrimitiveKind::STRING && vd->init) {
+            // Caso (a): literal NO interpolado (Inc 0 no cubre
+            // interpolacion ni concat -- esos son Inc 1-4).
+            if (vd->init->kind == ast::NodeKind::StringLitExpr) {
+                auto *slit = static_cast<ast::StringLitExpr *>(vd->init.get());
+                if (!slit->is_interpolated()) {
+                    v = build_native_string_from_literal(slit, vd->loc.line);
+                    bind(vd->name, v);
+                    // Una cadena que sale de un literal no tiene buffer propio
+                    // -- o cabe inline, o es una vista sobre .rodata -- asi que
+                    // mientras nadie la reasigne no hay nada que liberar.
+                    // Registrar la limpieza igualmente no era gratis: emite un
+                    // `free`, y ESO es lo que hacia que cualquier programa con
+                    // una cadena constante enlazara el asignador entero.
+                    const bool puede_acabar_siendo_suyo =
+                        reassigned_locals_.count(vd->name) != 0;
+                    // RAII: liberar el buffer al exit del scope, salvo
+                    // que el string escape (return/asignacion a campo).
+                    if (puede_acabar_siendo_suyo &&
+                        escaping_locals_.find(vd->name) ==
+                            escaping_locals_.end()) {
+                        CleanupAction act;
+                        act.kind = CleanupAction::Kind::STRING_FREE;
+                        act.operands = {v};
+                        act.source_line = vd->loc.line;
+                        act.refresh_name = vd->name;
+                        cleanup_stack_.push_back(std::move(act));
+                    }
+                    return true;
+                }
+            }
+            // Caso (b): MOVE desde otra variable string (IdentExpr).
+            if (vd->init->kind == ast::NodeKind::IdentExpr &&
+                vd->init->result_type.kind == PrimitiveKind::STRING) {
+                const ir::IrValueId v_src = lower_expr(vd->init.get());
+                if (v_src != ir::IR_NO_VALUE) {
+                    // Nuevo slot de 24 bytes para `b` (host stack en native).
+                    const ir::IrValueId v_slot =
+                        fn_->new_value(ir::IrType::PTR);
+                    if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+                    {
+                        ir::IrInstr al{};
+                        al.op = ir::IrOp::ALLOCA;
+                        al.type = ir::IrType::I8;
+                        al.dst = v_slot;
+                        al.imm = 24;
+                        al.host_alloca = native_poo_;
+                        al.source_line = vd->loc.line;
+                        emit(current_block_, std::move(al));
+                    }
+                    // String Inc 5 (SSO): copiar los 24 bytes via MEMCPY
+                    // (no 3 LOAD/STORE i64) -> evita el store-forwarding
+                    // sobre qword2 que perdia la longitud SSO.
+                    emit_native_str_move_copy(v_slot, v_src, vd->loc.line);
+                    // Invalidar el slot fuente (move-out).  Inc 5 (SSO):
+                    // si era HEAP -> ptr@0=0 (su cleanup hara free(0)=
+                    // no-op; el buffer ahora lo posee `b`); si era SSO ->
+                    // sin cambio (data inline, no hay buffer compartido).
+                    emit_native_str_invalidate_moved(v_src, vd->loc.line);
+                    bind(vd->name, v_slot);
+                    // RAII para `b` (poseedor del buffer tras el move).
+                    if (escaping_locals_.find(vd->name) ==
+                        escaping_locals_.end()) {
+                        CleanupAction act;
+                        act.kind = CleanupAction::Kind::STRING_FREE;
+                        act.operands = {v_slot};
+                        act.source_line = vd->loc.line;
+                        act.refresh_name = vd->name;
+                        cleanup_stack_.push_back(std::move(act));
+                    }
+                    return true;
+                }
+            }
+            // Caso (c): init es una EXPRESION que produce un value-string
+            // owned (concat `a + b`, str_concat(a, b), o futuras ops Inc
+            // 2+).  lower_expr devuelve el PTR al slot nativo.  Bind +
+            // RAII STRING_FREE (el resultado de un concat es owned).
+            {
+                const ir::IrValueId v_slot = lower_expr(vd->init.get());
+                if (v_slot != ir::IR_NO_VALUE) {
+                    bind(vd->name, v_slot);
+                    if (escaping_locals_.find(vd->name) ==
+                        escaping_locals_.end()) {
+                        CleanupAction act;
+                        act.kind = CleanupAction::Kind::STRING_FREE;
+                        act.operands = {v_slot};
+                        act.source_line = vd->loc.line;
+                        act.refresh_name = vd->name;
+                        cleanup_stack_.push_back(std::move(act));
+                    }
+                    return true;
+                }
+            }
+        }
+        // Lazy promotion: si el tipo destino es STRING y el
+        // init es un string literal puro (StringLitExpr), promover
+        // a StringObject GC-managed via STRMAKE.  Asi `string s =
+        // "hola"` aloca 1 vez; `print("hola")` (sin var-decl) sigue
+        // sin alocar.
+        if (sem_type.kind == PrimitiveKind::STRING && vd->init &&
+            vd->init->kind == ast::NodeKind::StringLitExpr) {
+            // Tanto literales puros como interpolados se promueven
+            // a StringObject GC-managed; el helper detecta el caso
+            // y emite STRMAKE simple o cadena de STRMAKE+STRCAT
+            // segun corresponda.
+            auto *slit = static_cast<ast::StringLitExpr *>(vd->init.get());
+            v = lower_string_literal_to_string_object(slit);
+            bind(vd->name, v);
+            return true;
+        }
+        v = lower_expr(vd->init.get());
+        if (v != ir::IR_NO_VALUE) {
+            const ir::IrType vfrom = fn_->values[v].type;
+            // Misma supresion de warning que en la rama
+            // address-taken: literales no merecen alarma de
+            // narrowing porque el valor es compile-time conocido.
+            const bool init_is_literal =
+                vd->init->kind == ast::NodeKind::IntLitExpr ||
+                vd->init->kind == ast::NodeKind::FloatLitExpr ||
+                vd->init->kind == ast::NodeKind::BoolLitExpr ||
+                vd->init->kind == ast::NodeKind::CharLitExpr ||
+                vd->init->kind == ast::NodeKind::NullLitExpr;
+            v = cast_if_needed(v, vfrom, vt, vd->init->loc,
+                               /*is_explicit=*/init_is_literal);
+        }
+    } else {
+        // Sin init: defecto 0.  Las variables sin init son raras
+        // en uso normal pero el type checker no las prohibe.
+        v = emit_const(vt, 0, vd->loc.line);
+    }
+    return false;
+}
+
+/**
+ * @brief Declara una variable de la que alguien toma la direccion.
+ *
+ * Una variable normal es un valor SSA y nada mas -- vive donde el asignador
+ * decida, incluso solo en un registro --.  Pero si en algun sitio aparece
+ * `&x`, hay que poder dar una direccion, asi que se le reserva su hueco y lo
+ * que el ambito guarda es la DIRECCION y no el valor: cada lectura y cada
+ * escritura pasan por memoria.
+ *
+ * Se sabe antes de bajar nada porque el recorrido previo del cuerpo apunto que
+ * nombres tienen su direccion tomada: cuando se ve el `&x` ya es tarde para
+ * decidirlo -- los usos anteriores se habrian bajado como valor --.
+ *
+ * @param vd       La declaracion.
+ * @param sem_type El tipo ya resuelto.
+ * @param vt       Ese tipo, en el vocabulario del IR.
+ * @return @c true si era una de estas y quedo bajada.
+ */
+bool Lowering::try_lower_address_taken_var(ast::VarDeclStmt *vd,
+                                           const Type &sem_type,
+                                           ir::IrType vt) {
+    if (!address_taken_locals_.count(vd->name)) return false;
+    {
+        const size_t bytes = ir::type_access_bytes(vt); // tamano del tipo escalar
+        const ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+        ir::IrInstr ai{};
+        ai.op = ir::IrOp::ALLOCA;
+        ai.type = ir::IrType::I8; // unidad: 1 byte
+        ai.dst = addr;
+        ai.imm = (uint64_t)bytes;
+        // Bug host-vs-VM (2026-07-15): si se toma `&x`, el puntero resultante
+        // es un `T*` y por convencion del lenguaje un `T*` es una direccion
+        // HOST: el callee que reciba `T*`, o el campo/elemento `T*` donde se
+        // guarde, lo deref-earan con movh.  Por tanto el slot debe vivir en
+        // memoria host desde el principio.  Antes se quedaba en la pila VM y
+        // solo "funcionaba" mientras el inliner o el store-to-load forwarding
+        // borraban el deref; en cuanto el puntero cruzaba una frontera real
+        // (callee no inlineado, o guardado en un struct/array y releido) se
+        // hacia movh sobre una direccion VM -> SIGSEGV.
+        //
+        // Es el mismo criterio que @c ir_pass_promote_callned_allocas aplica a
+        // los args de CALLN.  Se marca AQUI (y no en un pase del IR) porque
+        // solo el lowering distingue un consumidor host (`T*`) de uno VM: los
+        // structs de params de los opcodes meta viven en la pila VM y NO se
+        // address-takean desde el codigo del usuario, asi que no se ven
+        // afectados.  `VirtualPtr<T>` sigue siendo la via para memoria VM.
+        ai.host_alloca = true;
+        fn_->values[addr].is_host_ptr = true;
+        ai.source_line = vd->loc.line;
+        emit(current_block_, std::move(ai));
+        bind(vd->name, addr);
+
+        //  AS inc.3: registrar el binding register("reg") -> slot.
+        // El backend port-C materializa este ALLOCA como una variable C
+        // con register-pin de GCC y traduce sus LOAD/STORE a accesos
+        // directos a la variable.
+        if (!vd->reg_binding.empty()) {
+            const std::string &rb = vd->reg_binding;
+            const bool is_vec =
+                rb.rfind("xmm", 0) == 0 || rb.rfind("ymm", 0) == 0 ||
+                rb.rfind("zmm", 0) == 0 || rb.rfind("XMM", 0) == 0 ||
+                rb.rfind("YMM", 0) == 0 || rb.rfind("ZMM", 0) == 0;
+            ir::AsmRegBinding b{addr, rb, vt, is_vec, vd->name};
+            b.reg_class = rb; // registro concreto: la clase es el registro.
+            fn_->asm_reg_bindings.push_back(std::move(b));
+        }
+
+        // Store del valor inicial (o 0 si no hay init).
+        ir::IrValueId v0 = ir::IR_NO_VALUE;
+        if (vd->init) {
+            v0 = lower_expr(vd->init.get());
+            if (v0 != ir::IR_NO_VALUE) {
+                const ir::IrType vfrom = fn_->values[v0].type;
+                // Suprimir el warning de cast implicito cuando el
+                // init es un literal: `u8 init = 0` no merece
+                // alarma porque el valor es estatico y conocido en
+                // compile-time; es un patron habitual y el type
+                // checker ya valida el rango.
+                const bool init_is_literal =
+                    vd->init->kind == ast::NodeKind::IntLitExpr ||
+                    vd->init->kind == ast::NodeKind::FloatLitExpr ||
+                    vd->init->kind == ast::NodeKind::BoolLitExpr ||
+                    vd->init->kind == ast::NodeKind::CharLitExpr ||
+                    vd->init->kind == ast::NodeKind::NullLitExpr;
+                v0 = cast_if_needed(v0, vfrom, vt, vd->init->loc,
+                                    /*is_explicit=*/init_is_literal);
+            }
+        }
+        if (v0 == ir::IR_NO_VALUE) v0 = emit_const(vt, 0, vd->loc.line);
+
+        emit_store_typed(addr, v0, vt, vd->loc.line);
     }
     return true;
 }

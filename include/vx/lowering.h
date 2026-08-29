@@ -749,6 +749,46 @@ class Lowering {
     bool try_lower_array_var(ast::VarDeclStmt *vd, const Type &sem_type);
 
     /**
+     * @brief Baja el valor con el que arranca una variable.
+     *
+     * De aqui sale el valor que se ata al nombre, pero varias formas no dejan
+     * un valor que atar: trasladar la propiedad de un puntero con dueno mueve
+     * el contenido sin producir nada nuevo, y una funcion que devuelve un
+     * agregado lo escribe en el hueco de la variable en vez de devolverlo.
+     * Esas terminan la declaracion aqui mismo.
+     *
+     * Sin inicializador el valor es CERO: una variable con la basura que
+     * hubiera en la pila se lee distinto cada vez que se ejecuta.
+     *
+     * @param vd       La declaracion.
+     * @param sem_type El tipo ya resuelto.
+     * @param vt       Ese tipo, en el vocabulario del IR.
+     * @param v        Donde dejar el valor inicial.
+     * @return @c true si la declaracion quedo bajada ENTERA; @c false si lo
+     *         unico que falta es atar @p v al nombre.
+     */
+    /**
+     * @brief Declara una variable de la que alguien toma la direccion.
+     *
+     * Una variable normal es un valor SSA y nada mas.  Pero si en algun sitio
+     * aparece `&x` hay que poder dar una direccion, asi que se le reserva su
+     * hueco y lo que el ambito guarda es la DIRECCION: cada lectura y cada
+     * escritura pasan por memoria.  Se sabe antes de bajar nada porque el
+     * recorrido previo del cuerpo lo apunto -- cuando se ve el `&x` ya es
+     * tarde, los usos anteriores se habrian bajado como valor --.
+     *
+     * @param vd       La declaracion.
+     * @param sem_type El tipo ya resuelto.
+     * @param vt       Ese tipo, en el vocabulario del IR.
+     * @return @c true si era una de estas y quedo bajada.
+     */
+    bool try_lower_address_taken_var(ast::VarDeclStmt *vd,
+                                     const Type &sem_type, ir::IrType vt);
+
+    bool try_lower_var_init(ast::VarDeclStmt *vd, const Type &sem_type,
+                            ir::IrType vt, ir::IrValueId &v);
+
+    /**
      * @brief Asigna a un campo: `obj.campo = v`.
      *
      * Dos receptores muy distintos comparten sintaxis.  En una clase el campo
