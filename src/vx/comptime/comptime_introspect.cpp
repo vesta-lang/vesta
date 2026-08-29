@@ -1424,15 +1424,15 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
      * (Numeric/Integer/Float/...).  Todos derivan de t1.kind. */
     {
         const PrimitiveKind k = t1.kind;
-        const bool is_int = k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-                            k == PrimitiveKind::I32 ||
-                            k == PrimitiveKind::I64 || k == PrimitiveKind::U8 ||
-                            k == PrimitiveKind::U16 ||
-                            k == PrimitiveKind::U32 || k == PrimitiveKind::U64;
-        const bool is_signed =
-            k == PrimitiveKind::I8 || k == PrimitiveKind::I16 ||
-            k == PrimitiveKind::I32 || k == PrimitiveKind::I64;
-        const bool is_flt = k == PrimitiveKind::F32 || k == PrimitiveKind::F64;
+        /* Que es entero, que lleva signo y que es de coma flotante lo dice
+         * types.h, que es donde vive el enum.  Escrito aqui aparte -- ocho
+         * comparaciones a mano frente a la comprobacion de rango de alla --
+         * coincidia hoy, pero el dia que se meta una clase de tipo dentro de
+         * ese rango las dos respuestas se separan sin que nada avise, y de
+         * estos predicados cuelgan los conceptos de la libreria numerica. */
+        const bool is_int = is_integral(k);
+        const bool is_signed = is_signed_integral(k);
+        const bool is_flt = is_floating(k);
         if (nm == "is_integer") {
             r.ok = true;
             r.value = is_int ? 1 : 0;
