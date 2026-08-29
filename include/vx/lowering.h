@@ -2768,6 +2768,36 @@ class Lowering {
     size_t optional_buf_bytes(const Type &t, size_t base = 8) const;
 
     /**
+     * @struct OptionalLayout
+     * @brief Como esta puesto en memoria un `Optional<T>`.
+     *
+     * No solo cuanto ocupa: TAMBIEN donde esta cada cosa y si hace falta una
+     * marca aparte.  Eso ultimo es lo que abre la puerta a que ocupe menos: un
+     * `Optional` de algo que ya tiene un valor imposible -- un puntero, que no
+     * puede ser nulo si esta presente -- no necesita marca, porque el propio
+     * valor la lleva; y entonces mide ocho en vez de dieciseis.
+     *
+     * Estaba repartido: el tamano se calculaba en seis sitios y la forma --
+     * marca en el cero, valor en el ocho -- venia clavada en cada lectura y en
+     * cada escritura.  Con eso, "aqui no hace falta marca" habria que
+     * escribirlo en todos ellos, y el primero que se olvidara leeria el valor
+     * donde no esta.
+     */
+    struct OptionalLayout {
+        uint32_t bytes = 16;        ///< Lo que ocupa el conjunto.
+        uint32_t value_offset = 8;  ///< Donde empieza el valor.
+        bool has_tag = true;        ///< Si la marca va aparte, en el cero.
+    };
+
+    /**
+     * @brief La disposicion en memoria de un `Optional<T>`.
+     *
+     * @param t Tipo `OPTIONAL`.
+     * @return Su disposicion.
+     */
+    OptionalLayout optional_layout(const Type &t) const;
+
+    /**
      * @brief ¿@p t es un `@overlay struct` (una VISTA sobre memoria ajena)?
      *
      * Un overlay comparte @c PrimitiveKind::STRUCT con los structs value-type,

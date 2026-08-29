@@ -136,9 +136,38 @@ void Lowering::compute_type_intervals() {
         dfs(r);
 }
 
-size_t Lowering::optional_buf_bytes(const Type &t, size_t base) const {
+/**
+ * @copydoc vx::Lowering::optional_layout
+ */
+Lowering::OptionalLayout Lowering::optional_layout(const Type &t) const {
+    OptionalLayout lay;
     // Payload escalar: 8 bytes, como toda la vida.  Struct por valor: su
     // tamano real alineado a 8, para que quepa entero dentro del buffer.
+    uint32_t payload = 8;
+    if (t.pointee) {
+        const Type &p = *t.pointee;
+        if (p.kind == PrimitiveKind::STRUCT) {
+            const size_t sz = size_of_type(p);
+            if (sz > payload)
+                payload = static_cast<uint32_t>((sz + 7u) & ~size_t(7));
+        }
+    }
+    /* AQUI ES DONDE ENTRA QUE OCUPE MENOS.  Hoy siempre hay marca aparte, que
+     * es lo que hacia antes y lo unico que todos los sitios saben leer.  Cuando
+     * el payload tenga un valor imposible que sirva de marca -- un puntero, que
+     * no puede ser nulo si el valor esta presente --, aqui se devolvera
+     * `{8, 0, false}` y el conjunto medira la mitad.  El resto del bajado ya no
+     * hay que tocarlo: pregunta. */
+    lay.has_tag = true;
+    lay.value_offset = 8;
+    lay.bytes = 8 + payload;
+    return lay;
+}
+
+size_t Lowering::optional_buf_bytes(const Type &t, size_t base) const {
+    /* El tamano sale de la disposicion, que es quien la decide.  El parametro
+     * `base` sigue existiendo porque un `Result` lo llama con otra cabecera. */
+    if (base == 8) return optional_layout(t).bytes;
     size_t payload = 8;
     if (t.pointee) {
         const Type &p = *t.pointee;

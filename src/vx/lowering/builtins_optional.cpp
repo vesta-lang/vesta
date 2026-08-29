@@ -101,19 +101,24 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                                        !arg_t.struct_name.empty() &&
                                        !type_is_overlay(arg_t);
         const size_t payload_sz = payload_is_struct ? size_of_type(arg_t) : 8u;
-        const size_t buf_sz =
-            payload_is_struct
-                ? (8u + ((payload_sz + 7u) & ~static_cast<size_t>(7)))
-                : 16u;
+        /* Cuanto ocupa y donde va cada cosa lo decide `optional_layout`, no
+         * este sitio: aqui habia una sexta copia del calculo del tamano, y la
+         * marca y el valor iban clavados en el cero y el ocho.  Con eso, hacer
+         * que un `Optional` ocupe menos habria que escribirlo tambien aqui. */
+        const OptionalLayout lay = optional_layout(e->result_type);
         const ir::IrValueId v_buf =
-            stack_alloc_buf(buf_sz, e->loc.line, /*host_memory=*/true);
-        // Store flag = 1 at +0.
-        const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, e->loc.line);
-        emit_store_typed(v_buf, v_one, ir::IrType::I64, e->loc.line);
-        // Compute buf+8 and store payload there.
-        const ir::IrValueId v_eight =
-            emit_const(ir::IrType::I64, 8, e->loc.line);
-        const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_eight, e->loc.line);
+            stack_alloc_buf(lay.bytes, e->loc.line, /*host_memory=*/true);
+        // La marca, si la disposicion dice que va aparte.
+        if (lay.has_tag) {
+            const ir::IrValueId v_one =
+                emit_const(ir::IrType::I64, 1, e->loc.line);
+            emit_store_typed(v_buf, v_one, ir::IrType::I64, e->loc.line);
+        }
+        // Y el valor, donde la disposicion diga.
+        const ir::IrValueId v_off = emit_const(
+            ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
+            e->loc.line);
+        const ir::IrValueId v_buf8 = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
         // buf+8.  Sin esto, el STORE del payload usa acceso VM (`mov`) sobre un
         // buffer HOST (stack_alloc_buf con host_alloca) -> el valor se escribe
