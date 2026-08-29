@@ -24,31 +24,48 @@ const RAIZ = path.resolve(__dirname, '..');
 const PAQUETE = path.join(RAIZ, 'dist', 'extension.js');
 
 /**
- * Interfaz minima que el editor inyecta.  Solo hace falta lo que se toca al
- * CARGAR el modulo (no al activarlo): constructores y espacios de nombres que
- * el codigo referencia en el cuerpo de sus modulos.
+ * Espacio de nombres del editor donde cualquier miembro es una funcion que no
+ * hace nada.  Vale para `vscode.window`, `vscode.workspace` y compania.
+ * @returns {object} Objeto que responde a cualquier nombre.
+ */
+function espacioDeNombres() {
+    return new Proxy({}, { get: () => () => undefined });
+}
+
+/**
+ * Interfaz que el editor inyecta, fingida.
+ *
+ * No se enumera: el cliente del protocolo hereda de clases del editor que van
+ * cambiando de version en version, y una lista escrita a mano solo diria que
+ * la lista esta incompleta.  Cualquier nombre desconocido se resuelve a una
+ * clase vacia, que sirve tanto para instanciar como para heredar; lo que se
+ * comprueba aqui es que el paquete CARGA, no que el editor funcione.
+ *
+ * @returns {object} Un `vscode` suficiente para cargar el modulo.
  */
 function vscodeFingido() {
-    const nada = () => undefined;
-    return {
-        window: { createOutputChannel: nada, createStatusBarItem: nada },
-        workspace: { getConfiguration: nada, workspaceFolders: [] },
-        commands: { registerCommand: nada, executeCommand: nada },
-        languages: { registerInlayHintsProvider: nada },
-        Uri: { file: nada, parse: nada },
-        EventEmitter: class { },
-        Disposable: class { },
-        Position: class { },
-        Range: class { },
-        Selection: class { },
-        InlayHint: class { },
+    const conocidos = {
+        window: espacioDeNombres(),
+        workspace: new Proxy(
+            { workspaceFolders: [] },
+            { get: (destino, nombre) => (nombre in destino ? destino[nombre] : () => undefined) },
+        ),
+        commands: espacioDeNombres(),
+        languages: espacioDeNombres(),
+        env: espacioDeNombres(),
+        extensions: espacioDeNombres(),
+        Uri: espacioDeNombres(),
         ViewColumn: { One: 1, Beside: -2 },
-        ProgressLocation: { Window: 10 },
-        InlayHintKind: { Parameter: 2 },
+        ProgressLocation: { Window: 10, Notification: 15 },
+        InlayHintKind: { Type: 1, Parameter: 2 },
         TextEditorRevealType: { InCenterIfOutsideViewport: 2 },
-        StatusBarAlignment: { Right: 2 },
-        ThemeColor: class { },
+        StatusBarAlignment: { Left: 1, Right: 2 },
+        version: '1.91.0',
     };
+    return new Proxy(conocidos, {
+        get: (destino, nombre) =>
+            nombre in destino ? destino[nombre] : class { },
+    });
 }
 
 /** Punto de entrada. */
@@ -64,6 +81,9 @@ function main() {
             fallos.push(detalle ? `${descripcion} -- ${detalle}` : descripcion);
             console.log(`  FALLA ${descripcion}${detalle ? ' -- ' + detalle : ''}`);
         }
+        // Se devuelve para poder cortar cuando el fallo deja sin sentido lo
+        // que viene detras.
+        return condicion;
     };
 
     if (!exigir(fs.existsSync(PAQUETE), 'el fichero agrupado existe',

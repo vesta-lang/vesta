@@ -10302,6 +10302,110 @@ static bool numeric_const_fits_newtype(const Type &param, const Type &arg,
  * @param idx  Su posicion, contando desde cero, para el mensaje.
  * @param what Como nombrar lo que se llama en el mensaje ("" = generico).
  */
+
+/**
+ * @brief Empaqueta los argumentos de una llamada para ejecutarla al COMPILAR,
+ *        si TODOS son constantes que se sepan escribir.
+ *
+ * La maquina que ejecuta al compilar recibe los argumentos por sus registros,
+ * asi que cada constante se escribe en uno.  Eso NO cambia el tipo de nada: el
+ * ancho del registro es el del TRANSPORTE, y quien recibe el argumento lo lee
+ * con el ancho que declaro -- un `i16` sigue siendo de dieciseis bits, y uno
+ * negativo llega negativo --.  Confundir las dos cosas seria decir que el
+ * lenguaje trabaja en palabras de sesenta y cuatro, y no es cierto ni aqui ni,
+ * mucho menos, en otros procesadores.
+ *
+ * Un argumento que no sea constante -- o que lo sea de una forma que no sepamos
+ * escribir -- impide la jugada entera, y por eso la respuesta es un si o un no
+ * para todos y no una palabra por argumento.
+ *
+ * Estaba escrito dos veces, para las dos cosas que ejecutan al compilar: la
+ * expansion de una macro y la comprobacion cruzada que valida el resultado del
+ * arbol contra el de la maquina.  Y la segunda copia no sabia empaquetar
+ * CADENAS -- su propio comentario lo dejaba como pendiente --, asi que se
+ * saltaba en silencio toda llamada que pasara una, que son muchas.
+ *
+ * Lo que cabe: enteros, booleanos, caracteres, nulo, decimales (por sus bits) y
+ * cadenas no interpoladas (por el manejador del objeto que se construye).  Y el
+ * signo menos delante de un numero, que el arbol representa como una operacion
+ * y aqui se resuelve al vuelo -- sin eso, `f(-42)` no se podria ejecutar al
+ * compilar, que es un caso de lo mas normal.
+ *
+ * @param e   La llamada.
+ * @param out Donde dejar las palabras; queda a medias si se devuelve @c false.
+ * @return @c true si TODOS los argumentos se pudieron escribir.
+ */
+bool TypeChecker::marshal_const_args(const ast::CallExpr &e,
+                                     std::vector<uint64_t> &out) {
+    out.clear();
+    out.reserve(e.args.size());
+    for (const auto &a : e.args) {
+        if (!a) return false;
+        switch (a->kind) {
+        case ast::NodeKind::IntLitExpr:
+            out.push_back(static_cast<const ast::IntLitExpr *>(a.get())->value);
+            break;
+        case ast::NodeKind::BoolLitExpr:
+            out.push_back(
+                static_cast<const ast::BoolLitExpr *>(a.get())->value ? 1u : 0u);
+            break;
+        case ast::NodeKind::CharLitExpr:
+            out.push_back(
+                static_cast<const ast::CharLitExpr *>(a.get())->codepoint);
+            break;
+        case ast::NodeKind::NullLitExpr: out.push_back(0u); break;
+        case ast::NodeKind::FloatLitExpr: {
+            /* Un decimal viaja por sus BITS, no por su valor: los registros por
+             * los que pasan los argumentos son de enteros, y quien lo recibe
+             * vuelve a leerlos como numero. */
+            const double v =
+                static_cast<const ast::FloatLitExpr *>(a.get())->value;
+            uint64_t bits = 0;
+            std::memcpy(&bits, &v, sizeof(bits));
+            out.push_back(bits);
+            break;
+        }
+        case ast::NodeKind::StringLitExpr: {
+            /* Una cadena viaja por el manejador del objeto que se construye con
+             * la misma maquinaria que en ejecucion.  Una INTERPOLADA no: sus
+             * huecos son expresiones que hay que evaluar, y eso es justo lo que
+             * no se puede hacer todavia. */
+            const auto *lit = static_cast<const ast::StringLitExpr *>(a.get());
+            if (lit->is_interpolated()) return false;
+            uint64_t handle = 0;
+            if (!comptime_runtime_.marshal_string(lit->value, handle))
+                return false;
+            out.push_back(handle);
+            break;
+        }
+        case ast::NodeKind::UnaryExpr: {
+            /* El signo menos delante de un numero: el arbol lo representa como
+             * una operacion, y aqui se resuelve al vuelo.  Sin esto, `f(-42)`
+             * -- de lo mas normal -- no se podria ejecutar al compilar. */
+            const auto *u = static_cast<const ast::UnaryExpr *>(a.get());
+            if (u->op != ast::UnOp::Neg || !u->operand) return false;
+            if (u->operand->kind == ast::NodeKind::IntLitExpr) {
+                const auto *lit =
+                    static_cast<const ast::IntLitExpr *>(u->operand.get());
+                out.push_back(static_cast<uint64_t>(
+                    -static_cast<int64_t>(lit->value)));
+            } else if (u->operand->kind == ast::NodeKind::FloatLitExpr) {
+                const double neg =
+                    -static_cast<const ast::FloatLitExpr *>(u->operand.get())
+                         ->value;
+                uint64_t bits = 0;
+                std::memcpy(&bits, &neg, sizeof(bits));
+                out.push_back(bits);
+            } else {
+                return false;
+            }
+            break;
+        }
+        default: return false;
+        }
+    }
+    return true;
+}
 void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
                                  const std::string &what) {
     if (!arg) return;
@@ -16134,107 +16238,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if ((comptime_runtime_.registered_macro_count() > 0) &&
                 e->args.size() <= 12) {
                 std::vector<uint64_t> arg_words;
-                arg_words.reserve(e->args.size());
-                bool can_encode = true;
-                for (const auto &a : e->args) {
-                    if (!a) {
-                        can_encode = false;
-                        break;
-                    }
-                    switch (a->kind) {
-                    case ast::NodeKind::IntLitExpr: {
-                        const auto *lit =
-                            static_cast<const ast::IntLitExpr *>(a.get());
-                        arg_words.push_back(lit->value);
-                        break;
-                    }
-                    case ast::NodeKind::BoolLitExpr: {
-                        const auto *lit =
-                            static_cast<const ast::BoolLitExpr *>(a.get());
-                        arg_words.push_back(lit->value ? 1u : 0u);
-                        break;
-                    }
-                    case ast::NodeKind::CharLitExpr: {
-                        const auto *lit =
-                            static_cast<const ast::CharLitExpr *>(a.get());
-                        arg_words.push_back(lit->codepoint);
-                        break;
-                    }
-                    case ast::NodeKind::NullLitExpr:
-                        arg_words.push_back(0u);
-                        break;
-                    case ast::NodeKind::FloatLitExpr: {
-                        /* f64 literal -> bits IEEE 754 en u64
-                         * (bitcast).  El body del macro lee el reg
-                         * como bits y reconstruye el f64 via FCVT/
-                         * BITCAST IR si es necesario. */
-                        const auto *lit =
-                            static_cast<const ast::FloatLitExpr *>(a.get());
-                        uint64_t bits = 0;
-                        std::memcpy(&bits, &lit->value, sizeof(bits));
-                        arg_words.push_back(bits);
-                        break;
-                    }
-                    case ast::NodeKind::StringLitExpr: {
-                        /* string literal -> GcHandle a un
-                         * StringObject construido via
-                         * @c runtime::make_string_flat (misma maquinaria
-                         * que STRMAKE).  Solo soportamos literales
-                         * NO interpolados; los interpolados requieren
-                         * runtime evaluation que no podemos pre-computar. */
-                        const auto *lit =
-                            static_cast<const ast::StringLitExpr *>(a.get());
-                        if (lit->is_interpolated()) {
-                            can_encode = false;
-                            break;
-                        }
-                        uint64_t handle = 0;
-                        if (!comptime_runtime_.marshal_string(lit->value,
-                                                              handle)) {
-                            can_encode = false;
-                            break;
-                        }
-                        arg_words.push_back(handle);
-                        break;
-                    }
-                    case ast::NodeKind::UnaryExpr: {
-                        /* -literal -> negacion compile-time.
-                         * Cubre patrones comunes como `M(-42)` que
-                         * el parser representa como UnaryExpr(Neg,
-                         * IntLit(42)). */
-                        const auto *u =
-                            static_cast<const ast::UnaryExpr *>(a.get());
-                        if (u->op == ast::UnOp::Neg && u->operand) {
-                            if (u->operand->kind == ast::NodeKind::IntLitExpr) {
-                                const auto *lit =
-                                    static_cast<const ast::IntLitExpr *>(
-                                        u->operand.get());
-                                const int64_t signed_val =
-                                    -static_cast<int64_t>(lit->value);
-                                arg_words.push_back(
-                                    static_cast<uint64_t>(signed_val));
-                            } else if (u->operand->kind ==
-                                       ast::NodeKind::FloatLitExpr) {
-                                const auto *lit =
-                                    static_cast<const ast::FloatLitExpr *>(
-                                        u->operand.get());
-                                const double neg = -lit->value;
-                                uint64_t bits = 0;
-                                std::memcpy(&bits, &neg, sizeof(bits));
-                                arg_words.push_back(bits);
-                            } else {
-                                can_encode = false;
-                            }
-                        } else {
-                            can_encode = false;
-                        }
-                        break;
-                    }
-                    default: can_encode = false; break;
-                    }
-                    if (!can_encode) break;
-                }
-                if (can_encode) {
+                if (marshal_const_args(*e, arg_words)) {
                     std::string vm_out;
                     /* si el macro es @Pure, usar la
                      * variante memoized (cache HOST-side @c
@@ -16331,78 +16335,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              * el marshalling para string args, structs, etc. */
             if (e->args.size() <= 12) {
                 std::vector<uint64_t> arg_words;
-                arg_words.reserve(e->args.size());
-                bool can_record = true;
-                for (const auto &a : e->args) {
-                    if (!a) {
-                        can_record = false;
-                        break;
-                    }
-                    switch (a->kind) {
-                    case ast::NodeKind::IntLitExpr: {
-                        const auto *lit =
-                            static_cast<const ast::IntLitExpr *>(a.get());
-                        arg_words.push_back(lit->value);
-                        break;
-                    }
-                    case ast::NodeKind::BoolLitExpr: {
-                        const auto *lit =
-                            static_cast<const ast::BoolLitExpr *>(a.get());
-                        arg_words.push_back(lit->value ? 1u : 0u);
-                        break;
-                    }
-                    case ast::NodeKind::CharLitExpr: {
-                        const auto *lit =
-                            static_cast<const ast::CharLitExpr *>(a.get());
-                        arg_words.push_back(lit->codepoint);
-                        break;
-                    }
-                    case ast::NodeKind::NullLitExpr:
-                        arg_words.push_back(0u);
-                        break;
-                    case ast::NodeKind::FloatLitExpr: {
-                        /* bitcast double -> u64. */
-                        const auto *lit =
-                            static_cast<const ast::FloatLitExpr *>(a.get());
-                        uint64_t bits = 0;
-                        std::memcpy(&bits, &lit->value, sizeof(bits));
-                        arg_words.push_back(bits);
-                        break;
-                    }
-                    case ast::NodeKind::UnaryExpr: {
-                        /* -literal -> negacion comptime. */
-                        const auto *u =
-                            static_cast<const ast::UnaryExpr *>(a.get());
-                        if (u->op == ast::UnOp::Neg && u->operand) {
-                            if (u->operand->kind == ast::NodeKind::IntLitExpr) {
-                                const auto *lit =
-                                    static_cast<const ast::IntLitExpr *>(
-                                        u->operand.get());
-                                const int64_t sv =
-                                    -static_cast<int64_t>(lit->value);
-                                arg_words.push_back(static_cast<uint64_t>(sv));
-                            } else if (u->operand->kind ==
-                                       ast::NodeKind::FloatLitExpr) {
-                                const auto *lit =
-                                    static_cast<const ast::FloatLitExpr *>(
-                                        u->operand.get());
-                                const double neg = -lit->value;
-                                uint64_t bits = 0;
-                                std::memcpy(&bits, &neg, sizeof(bits));
-                                arg_words.push_back(bits);
-                            } else {
-                                can_record = false;
-                            }
-                        } else {
-                            can_record = false;
-                        }
-                        break;
-                    }
-                    default: can_record = false; break;
-                    }
-                    if (!can_record) break;
-                }
-                if (can_record) {
+                if (marshal_const_args(*e, arg_words)) {
                     const std::string src_loc =
                         e->loc.file + ":" + std::to_string(e->loc.line) + ":" +
                         std::to_string(e->loc.column);

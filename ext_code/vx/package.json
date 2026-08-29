@@ -435,7 +435,7 @@
         "test:bundle": "node test/bundle.test.js",
         "test:lsp": "python test/smoke_lsp.py",
         "test": "npm run build && npm run lint && npm run test:grammar && npm run test:bundle",
-        "package": "vsce package"
+        "package": "npx --yes @vscode/vsce package"
     },
     "dependencies": {
         "vscode-languageclient": "^10.1.0"
@@ -443,11 +443,10 @@
     "devDependencies": {
         "@types/node": "22.x",
         "@types/vscode": "^1.91.0",
-        "@vscode/vsce": "^3.9.2",
         "esbuild": "^0.28.2",
-        "eslint": "^9.39.3",
+        "eslint": "^10.9.1",
         "typescript": "^5.9.3",
-        "typescript-eslint": "^8.56.1",
+        "typescript-eslint": "^8.68.0",
         "vscode-oniguruma": "^2.0.1",
         "vscode-textmate": "^9.3.2"
     }

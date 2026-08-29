@@ -1597,6 +1597,24 @@ class TypeChecker {
      * @param idx  Su posicion desde cero, para el mensaje.
      * @param what Como nombrar lo que se llama ("" = generico).
      */
+    /**
+     * @brief Empaqueta los argumentos de una llamada para ejecutarla al
+     *        COMPILAR, si TODOS son constantes que se sepan escribir.
+     *
+     * El ancho del registro por el que viaja cada constante es el del
+     * TRANSPORTE, no el del tipo: un `i16` sigue siendo de dieciseis bits.
+     *
+     * Estaba escrito dos veces -- expansion de macro y comprobacion cruzada --
+     * y la segunda no sabia empaquetar CADENAS, asi que se saltaba en silencio
+     * toda llamada que pasara una.
+     *
+     * @param e   La llamada.
+     * @param out Donde dejar las palabras; a medias si devuelve @c false.
+     * @return @c true si TODOS se pudieron escribir.
+     */
+    bool marshal_const_args(const ast::CallExpr &e,
+                            std::vector<uint64_t> &out);
+
     void check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
                         const std::string &what = std::string());
 

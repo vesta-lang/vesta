@@ -119,7 +119,19 @@ ensamblador que el compilador generaria para ese objetivo, no para el anfitrion.
 ```bash
 npm install
 npm run compile        # o npm run watch mientras se itera
+npm run package        # genera el .vsix
 ```
+
+`vsce`, la herramienta de empaquetado, se invoca bajo demanda con `npx` en
+lugar de instalarse: es lo unico que necesita la mitad de las dependencias del
+proyecto, y solo hace falta para comprimir el paquete.
+
+El codigo se agrupa con esbuild en un solo fichero (`dist/extension.js`): sin
+agrupar, el paquete son casi doscientos ficheros de JavaScript -- casi todos
+del cliente del protocolo -- que el editor abre uno a uno al activar la
+extension.  Agrupado, el paquete baja de 466 KB y 262 ficheros a 135 KB y 12.
+`check-types` sigue pasando el comprobador de tipos por separado, porque
+esbuild agrupa pero no comprueba tipos.
 
 Para probarla, abrir esta carpeta en el editor y lanzar la depuracion de
 extensiones (F5).
@@ -127,8 +139,9 @@ extensiones (F5).
 ### Comprobaciones
 
 ```bash
-npm test                 # compila, pasa el linter y comprueba las gramaticas
+npm test                 # agrupa, pasa el linter y comprueba gramaticas y paquete
 npm run test:grammar     # solo las gramaticas
+npm run test:bundle      # solo el paquete agrupado
 npm run test:lsp         # solo el servidor (necesita Python y el binario)
 ```
 
@@ -139,6 +152,13 @@ casos tomados del corpus.  Ademas tokeniza los cerca de 500 ejemplos del
 repositorio y exige que ninguno deje una construccion abierta al final, que es
 como se cuela un resaltado que se apaga a mitad de fichero.  Una gramatica rota
 no da error: se apaga en silencio.
+
+**Paquete** (`test/bundle.test.js`): carga `dist/extension.js` en Node con un
+`vscode` fingido y exige que exponga sus dos puntos de entrada y que lleve
+dentro el cliente del protocolo.  Agrupar puede romper lo que compila bien
+-- una dependencia que se pide en tiempo de ejecucion, o el modulo del editor
+colado dentro del paquete -- y el sintoma llega tarde: la extension no activa
+en la maquina de otro.
 
 **Servidor** (`test/smoke_lsp.py`): habla con el servidor **real** y comprueba
 lo que la extension da por supuesto: los nombres de los campos de cada
