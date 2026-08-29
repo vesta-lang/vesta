@@ -5668,6 +5668,7 @@ ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
  * @param mi   El metodo al que se llama.
  * @param name Su nombre, para los mensajes.
  */
+
 void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
                                     const std::string &name) {
     /* Con un variadico, los parametros FIJOS son todos menos el ultimo -- que
@@ -5691,28 +5692,16 @@ void TypeChecker::check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
     }
 
     for (size_t i = 0; i < e->args.size(); ++i) {
-        const Type ta = check_expr(e->args[i].get());
-        if (ta.kind == PrimitiveKind::COUNT) continue;
         /* Un argumento de mas se compara con el tipo del elemento; uno fijo,
          * con el suyo.  Si sobran y el metodo no es variadico, ya se dijo
-         * arriba y aqui no hay con que compararlo. */
-        if (i >= fixed && !mi.is_variadic) continue;
-        const Type &tp = (i >= fixed) ? mi.variadic_elem : mi.param_types[i];
-        /* Un literal con decimales es de sesenta y cuatro bits por omision; si
-         * el parametro es de treinta y dos hay que re-tiparlo AQUI, o abajo se
-         * guardarian los bits del ancho equivocado. */
-        if ((tp.kind == PrimitiveKind::F32 || tp.kind == PrimitiveKind::F64) &&
-            e->args[i]->kind == ast::NodeKind::FloatLitExpr && ta.kind != tp.kind)
-            e->args[i]->result_type = tp;
-        if (!types_assignable(tp, ta) && !value_assignable_to_interface(tp, ta) &&
-            !struct_ptr_upcast_ok(tp, ta)) {
-            diags_.error(e->args[i]->loc,
-                         std::string("argumento ") + std::to_string(i + 1) +
-                             " del metodo '" + name + "': tipo (" +
-                             type_to_string(ta) +
-                             ") incompatible con parametro (" +
-                             type_to_string(tp) + ")");
+         * arriba y aqui no hay con que compararlo -- pero se comprueba igual,
+         * por sus efectos. */
+        if (i >= fixed && !mi.is_variadic) {
+            (void)check_expr(e->args[i].get());
+            continue;
         }
+        const Type &tp = (i >= fixed) ? mi.variadic_elem : mi.param_types[i];
+        check_call_arg(e->args[i].get(), tp, i, "el metodo '" + name + "'");
     }
 }
 
@@ -10288,6 +10277,84 @@ static bool numeric_const_fits_newtype(const Type &param, const Type &arg,
     }
 }
 
+/**
+ * @brief Comprueba UN argumento contra el parametro que le toca.
+ *
+ * Es la pregunta que mas veces se hace el comprobador -- por cada argumento de
+ * cada llamada -- y estaba escrita varias veces, una por clase de llamada:
+ * funcion suelta, closure, metodo, constructor, variante de enum.  Las copias
+ * no coincidian: una admitia subir un puntero a struct a su base y otra no.
+ *
+ * Dos cosas ocurren aqui ademas de comparar, y por eso no es un simple
+ * @c types_assignable:
+ *
+ *   - Si el parametro espera una FUNCION y el argumento es el NOMBRE de una
+ *     declarada en el modulo, se convierte en un valor-funcion.  Sin esto,
+ *     pasar `&doblar` seria lo unico que valdria, y escribir el nombre a secas
+ *     daria un error raro sobre `void`.  Se respeta la naturaleza del
+ *     parametro: un puntero a codigo crudo y un lambda no son lo mismo.
+ *   - Una constante numerica que cabe en un newtype se re-tipa a el, para que
+ *     `f(3)` valga cuando el parametro es un `Metros` y no obligue a escribir
+ *     la conversion.
+ *
+ * @param arg  El argumento; su @c result_type puede quedar reescrito.
+ * @param tp   El tipo del parametro.
+ * @param idx  Su posicion, contando desde cero, para el mensaje.
+ * @param what Como nombrar lo que se llama en el mensaje ("" = generico).
+ */
+void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
+                                 const std::string &what) {
+    if (!arg) return;
+    Type ta = check_expr(arg);
+
+    /* Un literal con decimales es de sesenta y cuatro bits por omision.  Si el
+     * parametro es de treinta y dos hay que re-tiparlo AQUI, despues de
+     * comprobarlo -- comprobar vuelve a calcular su tipo y desharia la marca --
+     * o la bajada guardaria en un hueco de cuatro bytes los bits de ocho, que
+     * es guardar basura. */
+    if ((tp.kind == PrimitiveKind::F32 || tp.kind == PrimitiveKind::F64) &&
+        arg->kind == ast::NodeKind::FloatLitExpr && ta.kind != tp.kind) {
+        arg->result_type = tp;
+        ta = tp;
+    }
+
+    /* El NOMBRE de una funcion del modulo, donde se espera una funcion, se
+     * convierte en un valor-funcion (direccion + entorno vacio).  El nodo se
+     * marca con ese tipo para que la bajada emita el par de ocho mas ocho. */
+    if (tp.kind == PrimitiveKind::FUNCTION && ta.kind == PrimitiveKind::VOID &&
+        arg->kind == ast::NodeKind::IdentExpr) {
+        auto *id_arg = static_cast<ast::IdentExpr *>(arg);
+        const Symbol *s_arg = lookup(id_arg->name);
+        if (s_arg && s_arg->kind == SymbolKind::Function) {
+            const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
+            Type fnv =
+                Type::make_function(arg_sig.param_types, arg_sig.return_type);
+            /* Un puntero a codigo crudo (ocho bytes) y un lambda (direccion mas
+             * entorno) NO son el mismo tipo: se respeta el del parametro. */
+            fnv.fn_is_raw = tp.fn_is_raw;
+            if (types_assignable(tp, fnv)) {
+                ta = fnv;
+                id_arg->result_type = fnv;
+            }
+        }
+    }
+
+    if (numeric_const_fits_newtype(tp, ta, arg)) {
+        arg->result_type = tp; // una constante que cabe ES de ese tipo
+        return;
+    }
+    if (ta.kind == PrimitiveKind::COUNT) return; // ya se dijo lo que fallaba
+    if (types_assignable(tp, ta) || value_assignable_to_interface(tp, ta) ||
+        struct_ptr_upcast_ok(tp, ta))
+        return;
+
+    diags_.error(arg->loc, std::string("argumento ") + std::to_string(idx + 1) +
+                               (what.empty() ? std::string()
+                                             : (" de " + what)) +
+                               ": tipo (" + type_to_string(ta) +
+                               ") incompatible con parametro (" +
+                               type_to_string(tp) + ")");
+}
 /**
  * @brief Tipo que vale `new X(...)`.
  *
@@ -16603,51 +16670,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              fn_type.fn_params.back().pointee)
                 ? *fn_type.fn_params.back().pointee
                 : Type{};
-        for (size_t i = 0; i < n; ++i) {
-            Type ta = check_expr(e->args[i].get());
-            const Type &tp = (i >= fn_fixed) ? var_elem : fn_type.fn_params[i];
-            // Promocion automatica de funcion top-level a function
-            // value cuando se pasa por nombre como argumento:  si el
-            // parametro espera FUNCTION y el argumento es un identifier
-            // que resuelve a una funcion declarada en el modulo con
-            // firma compatible, sintetizar un function value
-            // (fn_addr, env_addr=0).  Patcheamos result_type del
-            // IdentExpr para que el lowering lo
-            // reconozca y emita el slot de 16 bytes con env=0.
-            if (tp.kind == PrimitiveKind::FUNCTION &&
-                ta.kind == PrimitiveKind::VOID &&
-                e->args[i]->kind == ast::NodeKind::IdentExpr) {
-                auto *id_arg = static_cast<ast::IdentExpr *>(e->args[i].get());
-                const Symbol *s_arg = lookup(id_arg->name);
-                if (s_arg && s_arg->kind == SymbolKind::Function) {
-                    const FunctionSig &arg_sig =
-                        function_sigs_[s_arg->sig_index];
-                    Type fnv = Type::make_function(arg_sig.param_types,
-                                                   arg_sig.return_type);
-                    // Respetar la naturaleza del parametro: cfn (puntero puro a
-                    // codigo, 8 bytes) vs fn (closure fat, 16 bytes).  Sin esto
-                    // un param cfn recibia un function value de 16 bytes (o el
-                    // match fallaba por fn_is_raw distinto).
-                    fnv.fn_is_raw = tp.fn_is_raw;
-                    if (types_assignable(tp, fnv)) {
-                        ta = fnv;
-                        id_arg->result_type = fnv;
-                    }
-                }
-            }
-            if (numeric_const_fits_newtype(tp, ta, e->args[i].get())) {
-                e->args[i]->result_type = tp; // constante numerica -> newtype
-            } else if (ta.kind != PrimitiveKind::COUNT &&
-                       !types_assignable(tp, ta) &&
-                       !value_assignable_to_interface(tp, ta) &&
-                       !struct_ptr_upcast_ok(tp, ta)) {
-                diags_.error(e->args[i]->loc,
-                             std::string("argumento ") + std::to_string(i + 1) +
-                                 ": tipo (" + type_to_string(ta) +
-                                 ") incompatible con parametro (" +
-                                 type_to_string(tp) + ")");
-            }
-        }
+        for (size_t i = 0; i < n; ++i)
+            check_call_arg(e->args[i].get(),
+                           (i >= fn_fixed) ? var_elem : fn_type.fn_params[i], i);
         for (size_t i = n; i < e->args.size(); ++i)
             (void)check_expr(e->args[i].get());
         // Marcar el callee con el tipo function para que el lowering
@@ -16904,44 +16929,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // como free(PTR), el parametro declarado es PTR sin pointee
     // (equivalente a void*) y types_assignable acepta cualquier T*.
     const size_t n = std::min(e->args.size(), sig.param_types.size());
-    for (size_t i = 0; i < n; ++i) {
-        Type ta = check_expr(e->args[i].get());
-        const Type tp = sig.param_types[i];
-        // Coercion gap N : mismo patron que en el closure-call
-        // de arriba.  Si el parametro espera FUNCTION y el argumento
-        // es un identifier que resuelve a funcion top-level, lo
-        // promovemos a function value (fn_addr, env_addr=0).
-        if (tp.kind == PrimitiveKind::FUNCTION &&
-            ta.kind == PrimitiveKind::VOID &&
-            e->args[i]->kind == ast::NodeKind::IdentExpr) {
-            auto *id_arg = static_cast<ast::IdentExpr *>(e->args[i].get());
-            const Symbol *s_arg = lookup(id_arg->name);
-            if (s_arg && s_arg->kind == SymbolKind::Function) {
-                const FunctionSig &arg_sig = function_sigs_[s_arg->sig_index];
-                Type fnv = Type::make_function(arg_sig.param_types,
-                                               arg_sig.return_type);
-                // cfn (puntero puro a codigo) vs fn (closure): respetar la
-                // naturaleza del parametro.
-                fnv.fn_is_raw = tp.fn_is_raw;
-                if (types_assignable(tp, fnv)) {
-                    ta = fnv;
-                    id_arg->result_type = fnv;
-                }
-            }
-        }
-        if (numeric_const_fits_newtype(tp, ta, e->args[i].get())) {
-            e->args[i]->result_type = tp; // constante numerica -> newtype
-        } else if (ta.kind != PrimitiveKind::COUNT &&
-                   !types_assignable(tp, ta) &&
-                   !value_assignable_to_interface(tp, ta) &&
-                   !struct_ptr_upcast_ok(tp, ta)) {
-            diags_.error(e->args[i]->loc, std::string("argumento ") +
-                                              std::to_string(i + 1) +
-                                              ": tipo (" + type_to_string(ta) +
-                                              ") incompatible con parametro (" +
-                                              type_to_string(tp) + ")");
-        }
-    }
+    for (size_t i = 0; i < n; ++i)
+        check_call_arg(e->args[i].get(), sig.param_types[i], i);
     // Chequear los argumentos extra para sus efectos (si la aridad fallo).
     for (size_t i = n; i < e->args.size(); ++i)
         (void)check_expr(e->args[i].get());

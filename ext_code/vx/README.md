@@ -19,6 +19,25 @@ que va a generar.
 - Autocompletado, con acceso a miembros tras el punto.
 - Nombre de cada parametro delante de su argumento en las llamadas.
 
+**Ensamblador en linea, con NASM de verdad:** el ensamblador de Vesta ES NASM,
+asi que dentro de un bloque manda una gramatica NASM completa -- mnemonicos,
+prefijos, registros (generales, de segmento, de control, vectoriales y de
+mascara, y los de aarch64), operandos de memoria, especificadores de tamano,
+directivas de datos, las cinco formas de escribir un numero y el preprocesador.
+Se reconocen las tres formas que admite el lenguaje:
+
+```vesta
+asm volatile noinfer { ... }                  // dentro de una funcion
+asm ( rdi d = dst, reg c = n, ) { ... }       // atando registros a expresiones
+@bits(16) @section(".text", "rx")
+asm boot { ... }                              // bloque con nombre, en el nivel superior
+bytes tabla { db 0x01, 'A', "Hi" }            // datos con las mismas directivas
+```
+
+Dentro del ensamblador valen los comentarios de NASM (`;`) y los del lenguaje
+(`//`), que es lo que se usa en la biblioteca; y comentar con Ctrl+/ inserta el
+de NASM.
+
 **Vistas del compilador** (paleta de ordenes, categoria `Vesta`):
 
 | Orden | Que ensena |
@@ -108,17 +127,30 @@ extensiones (F5).
 ### Comprobaciones
 
 ```bash
-python test/smoke_lsp.py                     # contra el servidor que se encuentre
-python test/smoke_lsp.py --lsp RUTA --file EJEMPLO.vx
+npm test                 # compila, pasa el linter y comprueba las gramaticas
+npm run test:grammar     # solo las gramaticas
+npm run test:lsp         # solo el servidor (necesita Python y el binario)
 ```
 
-El script habla con el servidor **real** y comprueba lo que la extension da por
-supuesto: los nombres de los campos de cada respuesta, que la correlacion trae
-la linea fuente y la identidad de la operacion del IR, que el diagrama en HTML
-es autocontenido y que la navegacion a un modulo importado devuelve una
-direccion que el editor puede abrir.  Si el servidor cambia un nombre, el
-editor no fallaria: dejaria de ensenar algo en silencio, que es peor.  Por eso
-las suposiciones estan escritas.
+**Gramaticas** (`test/grammar.test.js`): carga las dos con el mismo motor de
+expresiones que usa el editor -- mas estricto que el de JavaScript -- y
+comprueba que cada construccion del lenguaje cae en el ambito que le toca, con
+casos tomados del corpus.  Ademas tokeniza los cerca de 500 ejemplos del
+repositorio y exige que ninguno deje una construccion abierta al final, que es
+como se cuela un resaltado que se apaga a mitad de fichero.  Una gramatica rota
+no da error: se apaga en silencio.
+
+**Servidor** (`test/smoke_lsp.py`): habla con el servidor **real** y comprueba
+lo que la extension da por supuesto: los nombres de los campos de cada
+respuesta, que la correlacion trae la linea fuente y la identidad de la
+operacion del IR, que el diagrama en HTML es autocontenido y que la navegacion
+a un modulo importado devuelve una direccion que el editor puede abrir.  Si el
+servidor cambia un nombre, el editor no fallaria: dejaria de ensenar algo sin
+decirlo, que es peor.  Por eso las suposiciones estan escritas.
+
+```bash
+python test/smoke_lsp.py --lsp RUTA --file EJEMPLO.vx
+```
 
 ## Extensiones hermanas
 

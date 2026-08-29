@@ -138,8 +138,6 @@ const CASOS_BLOQUE = [
             '.bucle:',
             '    lock inc qword [rsi + rdi*8 + 16]',
             '    movaps xmm0, [rel datos]',
-            '    times 510-($-$$) db 0',
-            '    dw 0AA55h',
             '    ret',
             '}',
         ],
@@ -163,30 +161,90 @@ const CASOS_BLOQUE = [
             [5, 'movaps', 'keyword.operator.word.mnemonic.nasm'],
             [5, 'xmm0', 'variable.language.register.vector.nasm'],
             [5, 'rel', 'storage.modifier.size.nasm'],
-            [6, 'times', 'keyword.control.directive.data.nasm'],
-            [6, '$-$$', 'constant.language.position.nasm'],
-            [7, 'dw', 'keyword.control.directive.data.nasm'],
-            [7, '0AA55h', 'constant.numeric.hexadecimal.nasm'],
         ],
     },
     {
-        nombre: 'ensamblador con ancho fijado y preprocesador',
+        // Forma tomada de examples_codes_vx/aot/17_boot16.vx, tal cual.
+        nombre: 'bloque de ensamblador con nombre',
         lineas: [
-            'asm @bits(16) {',
-            '%define BASE 0x7C00',
-            '    mov ax, 0b1010',
-            '    add bx, 777q',
-            '    db `linea\\n`',
+            '@bits(16) @section(".text", "rx")',
+            'asm boot {',
+            '    cli',
+            '    mov sp, 0x7C00',
+            '    mov ah, 0x0E          ; BIOS teletype',
+            'hang:',
+            '    jmp hang',
+            '    times 510-($-$$) db 0',
+            '    dw 0xAA55',
             '}',
         ],
         esperado: [
             [0, '@bits', 'storage.type.annotation'],
-            [1, '%', 'punctuation.definition.directive.nasm'],
-            [1, 'define', 'keyword.control.directive.nasm'],
-            [2, 'ax', 'variable.language.register.gp.nasm'],
-            [2, '0b1010', 'constant.numeric.binary.nasm'],
-            [3, '777q', 'constant.numeric.octal.nasm'],
-            [4, '\\n', 'constant.character.escape.nasm'],
+            [0, '".text"', 'string.quoted.double'],
+            [1, 'asm', 'keyword.other.asm'],
+            [1, 'boot', 'entity.name.function.asm'],
+            [2, 'cli', 'keyword.operator.word.mnemonic.nasm'],
+            [3, 'sp', 'variable.language.register'],
+            [4, '; BIOS teletype', 'comment.line.semicolon.nasm'],
+            [5, 'hang', 'entity.name.label.nasm'],
+            [7, 'times', 'keyword.control.directive.data.nasm'],
+            [7, '$-$$', 'constant.language.position.nasm'],
+            [8, 'dw', 'keyword.control.directive.data.nasm'],
+            [8, '0xAA55', 'constant.numeric.hexadecimal.nasm'],
+        ],
+    },
+    {
+        // Misma forma que usa la biblioteca (`asm ( rdi d = dst, ... ) {`),
+        // con nombres largos para que la comprobacion no pueda confundirlos
+        // con las letras de los propios registros.
+        nombre: 'ensamblador con lista de operandos',
+        lineas: [
+            'asm ( rdi destino = dst, reg contador = n, ) {',
+            '    rep movsb',
+            '}',
+        ],
+        esperado: [
+            [0, 'asm', 'keyword.other.asm'],
+            [0, 'rdi', 'variable.language.register'],
+            [0, 'destino', 'variable.parameter.asm'],
+            [0, 'reg', 'storage.type.asm-operand'],
+            [0, 'contador', 'variable.parameter.asm'],
+            [1, 'rep', 'storage.modifier.prefix.nasm'],
+            [1, 'movsb', 'keyword.operator.word.mnemonic.nasm'],
+        ],
+    },
+    {
+        nombre: 'ensamblador con calificadores y comentario de Vesta',
+        lineas: [
+            'asm volatile noinfer {',
+            '    mov al, 0x50            // marca de modo protegido',
+            '    out 0xE9, al',
+            '}',
+        ],
+        esperado: [
+            [0, 'volatile', 'storage.modifier'],
+            [0, 'noinfer', 'storage.modifier'],
+            // Dentro del ensamblador valen los dos comentarios: el de NASM y
+            // el del lenguaje.  En el corpus se usan ambos.
+            [1, '// marca', 'comment.line.double-slash'],
+            [2, 'out', 'keyword.operator.word.mnemonic.nasm'],
+        ],
+    },
+    {
+        // Forma tomada de la biblioteca: bytes vx_exc_state { times 24 db 0 }
+        nombre: 'bloque de datos con nombre',
+        lineas: [
+            'bytes tabla {',
+            "    db 0x01, 'A', \"Hi\"",
+            '    dq main',
+            '}',
+        ],
+        esperado: [
+            [0, 'bytes', 'storage.type'],
+            [0, 'tabla', 'entity.name.constant.bytes'],
+            [1, 'db', 'keyword.control.directive.data.nasm'],
+            [1, '"Hi"', 'string.quoted.double.nasm'],
+            [2, 'dq', 'keyword.control.directive.data.nasm'],
         ],
     },
     {
@@ -359,6 +417,16 @@ async function main() {
                     `llego [${[...new Set(ambitos)].join(', ')}]`,
                 );
             }
+        }
+    }
+
+    const corpus = pasarPorElCorpus(gramatica);
+    if (corpus.revisados > 0) {
+        if (corpus.fallos.length === 0) {
+            pasadas++;
+            console.log(`  ok    ${corpus.revisados} ejemplos del corpus tokenizan sin dejar nada abierto`);
+        } else {
+            fallos.push(...corpus.fallos);
         }
     }
 

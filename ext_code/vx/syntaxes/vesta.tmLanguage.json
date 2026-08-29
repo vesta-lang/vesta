@@ -10,7 +10,9 @@
         { "include": "#strings" },
         { "include": "#characters" },
         { "include": "#numbers" },
-        { "include": "#asm-block" },
+        { "include": "#asm-declaration" },
+        { "include": "#bytes-block" },
+        { "include": "#asm-statement" },
         { "include": "#imports" },
         { "include": "#declarations" },
         { "include": "#labels" },
@@ -258,15 +260,52 @@
             ]
         },
 
-        "asm-block": {
-            "comment": "Ensamblador en linea (sintaxis NASM Intel).  Los valores entran y salen por variables con almacenamiento register(\"rax\").",
+        "asm-statement": {
+            "comment": "Ensamblador en linea dentro de una funcion.  La cabecera admite calificadores (volatile, raw, nomem, preserves_flags, pure, noinfer), una lista de operandos que ata registros a expresiones de Vesta, y una clausula clobber tanto delante como detras del bloque.",
             "name": "meta.asm.vesta",
-            "begin": "\\b(asm)\\b(?:\\s+(volatile))?\\s*((?:@bits\\s*\\(\\s*(?:16|32|64)\\s*\\)\\s*)?)(?:(clobbers?)\\s*\\([^)]*\\)\\s*)?(\\{)",
+            "begin": "\\b(asm)\\b((?:\\s+(?:volatile|raw|nomem|preserves_flags|pure|noinfer))*)\\s*(\\([^)]*\\))?\\s*((?:clobbers?\\s*\\([^)]*\\))?)\\s*(\\{)",
             "beginCaptures": {
                 "1": { "name": "keyword.other.asm.vesta" },
                 "2": { "name": "storage.modifier.vesta" },
-                "3": { "name": "storage.type.annotation.vesta" },
-                "4": { "name": "keyword.other.asm.vesta" },
+                "3": {
+                    "name": "meta.asm.operands.vesta",
+                    "patterns": [
+                        {
+                            "comment": "Cada enlace es <clase> <nombre> [= <expr>]; la clase es reg (elige el compilador), un registro fijo, un banco vectorial o mem",
+                            "match": "\\b(reg|mem|imm|[xyz]mm)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                            "captures": {
+                                "1": { "name": "storage.type.asm-operand.vesta" },
+                                "2": { "name": "variable.parameter.asm.vesta" }
+                            }
+                        },
+                        {
+                            "match": "\\b(r[abcd]x|r(si|di|bp|sp)|r([89]|1[0-5]))\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                            "captures": {
+                                "1": { "name": "variable.language.register.vesta" },
+                                "4": { "name": "variable.parameter.asm.vesta" }
+                            }
+                        },
+                        { "include": "$self" }
+                    ]
+                },
+                "4": {
+                    "patterns": [
+                        {
+                            "match": "\\b(clobbers?)\\b",
+                            "name": "keyword.other.asm.vesta"
+                        },
+                        {
+                            "comment": "memory y flags no son registros: nombran el efecto entero",
+                            "match": "\\b(memory|flags|cc)\\b",
+                            "name": "support.constant.asm.vesta"
+                        },
+                        { "include": "#strings" },
+                        {
+                            "name": "variable.language.register.vesta",
+                            "match": "\\b[a-z][a-z0-9]*\\b"
+                        }
+                    ]
+                },
                 "5": { "name": "punctuation.section.block.begin.vesta" }
             },
             "end": "\\}",
@@ -274,11 +313,48 @@
                 "0": { "name": "punctuation.section.block.end.vesta" }
             },
             "contentName": "meta.embedded.block.nasm",
+            "patterns": [{ "include": "#asm-body" }]
+        },
+
+        "asm-declaration": {
+            "comment": "Bloque de ensamblador con nombre, en el nivel superior.  Es el que se coloca con @bits, @section y @at para escribir un sector de arranque o el arranque de un nucleo, y ahi el compilador SI evalua times y $/$$.",
+            "name": "meta.asm.declaration.vesta",
+            "begin": "\\b(asm)\\s+(?!(?:volatile|raw|nomem|preserves_flags|pure|noinfer)\\b)([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+            "beginCaptures": {
+                "1": { "name": "keyword.other.asm.vesta" },
+                "2": { "name": "entity.name.function.asm.vesta" },
+                "3": { "name": "punctuation.section.block.begin.vesta" }
+            },
+            "end": "\\}",
+            "endCaptures": {
+                "0": { "name": "punctuation.section.block.end.vesta" }
+            },
+            "contentName": "meta.embedded.block.nasm",
+            "patterns": [{ "include": "#asm-body" }]
+        },
+
+        "bytes-block": {
+            "comment": "Bloque de datos con nombre: db/dw/dd/dq/times, numeros, caracteres, cadenas y referencias a simbolos.  Comparte sintaxis con las directivas de datos del ensamblador, asi que comparte gramatica.",
+            "name": "meta.bytes.vesta",
+            "begin": "\\b(bytes)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+            "beginCaptures": {
+                "1": { "name": "storage.type.vesta" },
+                "2": { "name": "entity.name.constant.bytes.vesta" },
+                "3": { "name": "punctuation.section.block.begin.vesta" }
+            },
+            "end": "\\}",
+            "endCaptures": {
+                "0": { "name": "punctuation.section.block.end.vesta" }
+            },
+            "contentName": "meta.embedded.block.nasm",
+            "patterns": [{ "include": "#asm-body" }]
+        },
+
+        "asm-body": {
+            "comment": "Cuerpo de cualquiera de los tres bloques.  El ensamblador de Vesta ES NASM, asi que dentro manda su gramatica entera y no una imitacion.  Antes van los comentarios de Vesta: el cuerpo lo recorre el lexer del lenguaje para encontrar la llave de cierre, de modo que ahi valen tanto el punto y coma de NASM como las dos barras de Vesta, y en el corpus se usan las dos.",
             "patterns": [
-                {
-                    "comment": "El ensamblador de Vesta ES NASM, asi que dentro del bloque manda su gramatica entera y no una imitacion: mnemonicos, registros, operandos de memoria, directivas, sus cinco bases numericas y su preprocesador.",
-                    "include": "source.nasm"
-                }
+                { "include": "#comments" },
+                { "include": "source.nasm" }
             ]
         },
 

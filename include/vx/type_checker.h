@@ -1583,6 +1583,23 @@ class TypeChecker {
     void declare_params_in_scope(
         const std::vector<std::unique_ptr<ast::ParamDecl>> &params);
 
+    /**
+     * @brief Comprueba UN argumento contra el parametro que le toca.
+     *
+     * Es la pregunta que mas veces se hace el comprobador y estaba escrita una
+     * vez por clase de llamada -- funcion, closure, metodo, constructor,
+     * variante de enum -- y las copias no coincidian.  Ademas de comparar,
+     * convierte el nombre de una funcion en un valor-funcion y re-tipa una
+     * constante que cabe en un newtype.
+     *
+     * @param arg  El argumento; su @c result_type puede quedar reescrito.
+     * @param tp   El tipo del parametro.
+     * @param idx  Su posicion desde cero, para el mensaje.
+     * @param what Como nombrar lo que se llama ("" = generico).
+     */
+    void check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
+                        const std::string &what = std::string());
+
     void check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
                            const std::string &name);
 
