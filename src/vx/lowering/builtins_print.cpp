@@ -27,6 +27,7 @@
  * contesta que no y quien pregunta sigue con las demas.
  */
 #include "vx/lowering.h"
+#include "vx/ansi_names.h" // los nombres de color que el lenguaje conoce
 #include "vx/generics/generic_clone.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
@@ -114,31 +115,6 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         out_mod_->register_native_import(kVestaIoLib, "vio_print_newline");
         emit_calln(kVestaIoLib + ":vio_print_newline",
                   {}, ir::IrType::VOID, line);
-    };
-
-    // Tabla de ANSI codes (duplicada con lower_ident por simplicidad).
-    // Lookup O(N=33) ejecutado solo en compile time.
-    static const struct {
-        const char *name;
-        const char *seq;
-    } ANSI_LU[] = {
-        {"BLACK", "\x1b[30m"},     {"RED", "\x1b[31m"},
-        {"GREEN", "\x1b[32m"},     {"YELLOW", "\x1b[33m"},
-        {"BLUE", "\x1b[34m"},      {"MAGENTA", "\x1b[35m"},
-        {"CYAN", "\x1b[36m"},      {"WHITE", "\x1b[37m"},
-        {"BR_BLACK", "\x1b[90m"},  {"BR_RED", "\x1b[91m"},
-        {"BR_GREEN", "\x1b[92m"},  {"BR_YELLOW", "\x1b[93m"},
-        {"BR_BLUE", "\x1b[94m"},   {"BR_MAGENTA", "\x1b[95m"},
-        {"BR_CYAN", "\x1b[96m"},   {"BR_WHITE", "\x1b[97m"},
-        {"BG_BLACK", "\x1b[40m"},  {"BG_RED", "\x1b[41m"},
-        {"BG_GREEN", "\x1b[42m"},  {"BG_YELLOW", "\x1b[43m"},
-        {"BG_BLUE", "\x1b[44m"},   {"BG_MAGENTA", "\x1b[45m"},
-        {"BG_CYAN", "\x1b[46m"},   {"BG_WHITE", "\x1b[47m"},
-        {"BOLD", "\x1b[1m"},       {"DIM", "\x1b[2m"},
-        {"ITALIC", "\x1b[3m"},     {"UNDERLINE", "\x1b[4m"},
-        {"BLINK", "\x1b[5m"},      {"REVERSE", "\x1b[7m"},
-        {"RESET", "\x1b[0m"},      {"CLEAR_SCREEN", "\x1b[2J"},
-        {"CURSOR_HOME", "\x1b[H"},
     };
 
     // Helper local: parsea una cadena de formato `${expr:fmt}` en
@@ -311,11 +287,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         // directamente como string literal (sin pasar por print_int).
         if (ex->kind == ast::NodeKind::IdentExpr) {
             auto *id_ex = static_cast<ast::IdentExpr *>(ex);
-            for (const auto &m : ANSI_LU) {
-                if (id_ex->name == m.name) {
-                    emit_print_string_literal(m.seq, ex->loc.line);
-                    return;
-                }
+            if (const char *ansi = ansi_sequence_for(id_ex->name)) {
+                emit_print_string_literal(ansi, ex->loc.line);
+                return;
             }
         }
         // Caso especial: string literal directo (PTR a static_data).

@@ -33,6 +33,7 @@
 #include "util/env_flags.h"
 #include "util/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
+#include "vx/ansi_names.h" // los nombres de color que el lenguaje conoce
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
@@ -3304,43 +3305,10 @@ void TypeChecker::collect_globals() {
         s.type = Type{PrimitiveKind::PTR};
         (void)declare(name, s);
     };
-    // Foreground (regulares 30..37 y brillantes 90..97).
-    reg_const_string("BLACK");
-    reg_const_string("RED");
-    reg_const_string("GREEN");
-    reg_const_string("YELLOW");
-    reg_const_string("BLUE");
-    reg_const_string("MAGENTA");
-    reg_const_string("CYAN");
-    reg_const_string("WHITE");
-    reg_const_string("BR_BLACK");
-    reg_const_string("BR_RED");
-    reg_const_string("BR_GREEN");
-    reg_const_string("BR_YELLOW");
-    reg_const_string("BR_BLUE");
-    reg_const_string("BR_MAGENTA");
-    reg_const_string("BR_CYAN");
-    reg_const_string("BR_WHITE");
-    // Background (40..47).
-    reg_const_string("BG_BLACK");
-    reg_const_string("BG_RED");
-    reg_const_string("BG_GREEN");
-    reg_const_string("BG_YELLOW");
-    reg_const_string("BG_BLUE");
-    reg_const_string("BG_MAGENTA");
-    reg_const_string("BG_CYAN");
-    reg_const_string("BG_WHITE");
-    // Atributos de estilo y reset.
-    reg_const_string("BOLD");
-    reg_const_string("DIM");
-    reg_const_string("ITALIC");
-    reg_const_string("UNDERLINE");
-    reg_const_string("BLINK");
-    reg_const_string("REVERSE");
-    reg_const_string("RESET");
-    // Helpers de pantalla (utiles para TUIs).
-    reg_const_string("CLEAR_SCREEN");
-    reg_const_string("CURSOR_HOME");
+    // La lista vive en un solo sitio (vx/ansi_names.h) porque tambien la
+    // necesita el bajado, y una lista por sitio se desincroniza sin que nada
+    // lo note: un color que existe como nombre pero no se baja, o al reves.
+    for (const AnsiName &a : kAnsiNames) reg_const_string(a.name);
 
     // Builtins de color verdadero (truecolor, SGR 24-bit).  A
     // diferencia de los identificadores magicos anteriores (cadenas

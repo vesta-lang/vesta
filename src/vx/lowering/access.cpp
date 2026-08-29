@@ -17,6 +17,7 @@
  * fichero es decidir cual de las dos se debe entregar.
  */
 #include "vx/lowering.h"
+#include "vx/ansi_names.h" // los nombres de color que el lenguaje conoce
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
@@ -842,39 +843,11 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
     // en una tabla estatica.  Permite que el usuario escriba
     // @c println("Error: ${RED}..${RESET}") sin necesidad de
     // memorizar los codigos ANSI ni de declararlos como constantes.
-    {
-        static const struct {
-            const char *name;
-            const char *seq;
-        } ANSI[] = {
-            {"BLACK", "\x1b[30m"},     {"RED", "\x1b[31m"},
-            {"GREEN", "\x1b[32m"},     {"YELLOW", "\x1b[33m"},
-            {"BLUE", "\x1b[34m"},      {"MAGENTA", "\x1b[35m"},
-            {"CYAN", "\x1b[36m"},      {"WHITE", "\x1b[37m"},
-            {"BR_BLACK", "\x1b[90m"},  {"BR_RED", "\x1b[91m"},
-            {"BR_GREEN", "\x1b[92m"},  {"BR_YELLOW", "\x1b[93m"},
-            {"BR_BLUE", "\x1b[94m"},   {"BR_MAGENTA", "\x1b[95m"},
-            {"BR_CYAN", "\x1b[96m"},   {"BR_WHITE", "\x1b[97m"},
-            {"BG_BLACK", "\x1b[40m"},  {"BG_RED", "\x1b[41m"},
-            {"BG_GREEN", "\x1b[42m"},  {"BG_YELLOW", "\x1b[43m"},
-            {"BG_BLUE", "\x1b[44m"},   {"BG_MAGENTA", "\x1b[45m"},
-            {"BG_CYAN", "\x1b[46m"},   {"BG_WHITE", "\x1b[47m"},
-            {"BOLD", "\x1b[1m"},       {"DIM", "\x1b[2m"},
-            {"ITALIC", "\x1b[3m"},     {"UNDERLINE", "\x1b[4m"},
-            {"BLINK", "\x1b[5m"},      {"REVERSE", "\x1b[7m"},
-            {"RESET", "\x1b[0m"},      {"CLEAR_SCREEN", "\x1b[2J"},
-            {"CURSOR_HOME", "\x1b[H"},
-        };
-        for (const auto &m : ANSI) {
-            if (e->name == m.name) {
-                const std::string seq = m.seq;
-                std::vector<uint8_t> bytes(seq.begin(), seq.end());
-                const uint64_t lit_idx =
-                    out_mod_->intern_static_data(std::move(bytes));
-                const ir::IrValueId v = emit_str_lit_addr(lit_idx, e->loc.line);
-                return v;
-            }
-        }
+    if (const char *ansi = ansi_sequence_for(e->name)) {
+        const std::string seq = ansi;
+        std::vector<uint8_t> bytes(seq.begin(), seq.end());
+        const uint64_t lit_idx = out_mod_->intern_static_data(std::move(bytes));
+        return emit_str_lit_addr(lit_idx, e->loc.line);
     }
     // Gap N: coercion de funcion top-level a function value.
     // Si el ident esta tipado como FUNCTION pero NO existe en
