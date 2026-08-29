@@ -1237,7 +1237,18 @@ def _(ctx):
 
 @case("pn")
 def _(ctx):
-    """35. Param null pasado a `T !!arg` lanza NPE catchable al entry."""
+    """35. Un null pasado a `T !!arg` mata el proceso al entrar, y no se captura.
+
+    Antes se capturaba y este mismo programa devolvia 999.  Pero afirmar que
+    algo no es nulo y equivocarse es un BUG del programa, no una condicion
+    recuperable: seguir corriendo solo sirve para hacerlo con la suposicion ya
+    rota.  Y ademas en nativo NO hay desenrollado de excepciones, asi que ahi
+    siempre murio -- el mismo programa hacia una cosa al interpretarlo y otra
+    al compilarlo, que es peor que cualquiera de las dos.
+
+    Se comprueba que el `catch` NO corre (nada de 999) y que el fallo se
+    cuenta: codigo del catalogo y cadena de llamadas.
+    """
     vx = ctx.path("pn.vx")
     with open(vx, "w", encoding="utf-8") as f:
         f.write("class T { public T() {} }\n"
@@ -1253,10 +1264,13 @@ def _(ctx):
         ctx.fail("compilacion de pn.vx no produjo .velb", log)
     _, log = ctx.run_velb("pn")
     got = get_r00(log)
-    if got != 999:
-        ctx.fail("param-null-check: R00 == %s, se esperaba 999" % got, log)
-    check_lasterr(ctx, log, "param-null-check")
-    ctx.ok("T !!arg en param: null pasado lanza NPE capturada -> R0 = 999  (LastErr=0)")
+    if got == 999:
+        ctx.fail("param-null-check: el catch corrio; ya no debe capturarse", log)
+    if "VX7001" not in log:
+        ctx.fail("param-null-check: no aparece VX7001 (puntero nulo)", log)
+    if "Stack trace" not in log:
+        ctx.fail("param-null-check: sin cadena de llamadas", log)
+    ctx.ok("T !!arg en param: null pasado mata el proceso, sin capturar -> VX7001")
 
 
 @case("orb")
@@ -3125,6 +3139,12 @@ modes3_case("tdstruct497", "las dos formas de declarar un agregado admiten lo mi
 modes3_case("typename498", "typename<T>() nombra cualquier tipo del lenguaje.  La introspeccion tenia su propia tabla y las ocho colecciones primitivas no estaban: caian a un default que devolvia \"?\", pese a que el compilador escribe su nombre en cualquier mensaje de error", "498_typename_completo.vx", 42, line=3794)
 modes3_case("alinea499", "la alineacion de un campo NO es su tamano: un Result mide 24 y se alinea a 8.  El layout la tomaba igual al tamano -- 24, que ni es potencia de dos -- y el struct media 72 donde le bastan 40.  La alineacion buena estaba en la tabla de la introspeccion, al lado", "499_alineacion_campos.vx", 42, line=3796)
 modes3_case("estbuf500", "un metodo estatico que devuelve algo que viaja por buffer: quien llama y quien es llamado tienen que estar de acuerdo en QUE hace falta buffer, CUANTO mide y DONDE vive.  Las tres fallaban por su cuenta, en clase y en struct, que se resuelven por caminos distintos", "500_estaticos_retorno_buffer.vx", 42, line=3798)
+modes3_case("estlambda501", "un metodo estatico que devuelve un lambda o un puntero inteligente.  La condicion de \"esto viaja por buffer\" estaba escrita NUEVE veces y ninguna lista estaba completa: la de este camino contaba cinco casos de siete y se dejaba fuera justo estos dos, asi que el metodo escribia encima de su primer argumento de verdad", "501_estaticos_lambda_y_unique.vx", 42, line=3800)
+modes3_case("metstruct502", "un metodo de instancia que devuelve un struct por valor: el metodo declaraba el buffer y quien llamaba no lo reservaba ni lo pasaba, porque sus dos listas de \"esto viaja por buffer\" tenian cuatro y tres casos respectivamente", "502_metodo_devuelve_struct.vx", 42, line=3802)
+modes3_case("optptr503", "sacar el valor de un Optional<T*> daba un puntero SIN marcar de que memoria es, asi que el deref se emitia con la instruccion de la maquina virtual sobre una direccion del anfitrion y devolvia cero, en silencio.  La regla estaba escrita en cuatro sitios y ninguno cubria este; hacia falta una llamada nativa detras para destaparlo", "503_optional_de_puntero.vx", 42, line=3804)
+modes3_case("optsinmarca504", "un Optional cuyo valor no puede ser cero no necesita una palabra aparte que diga si hay algo: el cero sobra y sirve de marca, y el conjunto mide 8 en vez de 16.  Se aplica solo donde el tipo lo promete (un prestamo), nunca a un T* crudo, donde Some(nulo) dejaria de distinguirse de vacio", "504_optional_sin_marca.vx", 42, line=3806)
+modes3_case("nonnull505", "`nonnull` se comprueba al asignar (antes solo se rechazaba el literal null), y no cuesta nada cuando el valor no puede ser nulo: el pase que quita comprobaciones demostrables las borra.  Ademas `nonnull` y `!!` son la misma cosa, asi que escribir `!!` al asignar a un nonnull es redundante y tampoco cuesta", "505_nonnull_se_cumple.vx", 42, line=3808)
+modes3_case("ayudantes507", "unwrap_or(x, def) y expect(x, \"msg\"): la salida que NO mata el proceso y la que si pero diciendo por que.  Desde que fallar una afirmacion es fatal, importa que la forma recuperable sea la comoda -- antes solo estaba escribir el if a mano --.  Los dos se montan con las mismas dos piezas que isPresent y unwrap; ninguno vuelve a escribir como se lee un Optional", "507_ayudantes_optional.vx", 42, line=3810)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)
@@ -4150,6 +4170,60 @@ fault3_case("fallo_division_cero",
             "369_fallo_division_cero.vx", "VX7002", 136)
 fault3_case("fallo_panic", "panic sin capturar",
             "370_fallo_panic.vx", "VX7011", 134)
+@case("expect508")
+def _(ctx):
+    """`expect` que falla: dice QUE se dio por hecho, y despues muere.
+
+    `unwrap` que falla solo puede contar el mensaje generico del catalogo, que
+    dice lo que paso y no lo que se esperaba.  `expect` deja escrito el supuesto
+    en el propio sitio, y es lo unico que queda cuando falla -- por eso se
+    comprueba que el texto sale, no solo que el proceso muere.
+
+    Interprete y JIT: el mensaje propio, el codigo del catalogo y la cadena de
+    llamadas.  El nativo NO reporta a ese nivel a proposito (tiene que ser
+    ligero), asi que ahi solo se exige que no salga con cero.
+    """
+    ctx.compile_vx(ctx.src("508_expect_falla.vx"), "expect508")
+    ctx.ok("compilacion 508_expect_falla.vx -> .velb")
+    for modo in ("vm", "jit"):
+        rc, log = ctx.run_velb("expect508", schedulers=1, mode=modo)
+        if "el limite de reintentos venia de la configuracion" not in log:
+            ctx.fail("expect (-m %s): no sale el mensaje del sitio" % modo, log)
+        if "VX7001" not in log:
+            ctx.fail("expect (-m %s): no aparece VX7001" % modo, log)
+        if "Stack trace" not in log:
+            ctx.fail("expect (-m %s): sin cadena de llamadas" % modo, log)
+        if exit_code(rc) == 0:
+            ctx.fail("expect (-m %s): salio con cero tras reventar" % modo, log)
+        ctx.ok("expect (-m %s) -> mensaje del sitio + VX7001, muere" % modo)
+    exe = aot_build(ctx, ctx.src("508_expect_falla.vx"), "expect508_aot",
+                    "expect que falla (-m aot)")
+    rc, _ = ctx.run([exe])
+    if exit_code(rc) == 0:
+        ctx.fail("expect (-m aot): salio con cero tras reventar")
+    ctx.ok("expect (-m aot) -> muere, como debe")
+
+
+fails_case("neg_unwrap_or_tipo",
+           "unwrap_or: el valor de repuesto tiene que ser del tipo del valor",
+           "509_neg_unwrap_or_tipo.vx", "el valor por defecto es")
+fails_case("neg_expect_mensaje",
+           "expect: el mensaje tiene que estar escrito en el sitio (se emite "
+           "como texto conocido al compilar)",
+           "510_neg_expect_mensaje.vx", "una cadena escrita en el sitio")
+fails_case("neg_unwrap_or_aridad",
+           "unwrap_or con un solo argumento: se parece demasiado a unwrap, que "
+           "SI mata el proceso, asi que se rechaza en vez de interpretarlo",
+           "511_neg_unwrap_or_aridad.vx", "se esperaban 2 argumentos")
+
+
+fault3_case("unwrap_fatal506",
+            "afirmar que hay algo y equivocarse mata el proceso en los TRES "
+            "modos, y ningun catch lo intercepta: es un bug del programa, no "
+            "una condicion recuperable.  Antes se capturaba en interprete y "
+            "JIT y mataba en nativo -- el mismo programa hacia dos cosas "
+            "distintas segun el modo",
+            "506_unwrap_fallido_es_fatal.vx", "VX7001", 139)
 
 
 def main():

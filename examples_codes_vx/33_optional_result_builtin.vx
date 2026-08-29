@@ -23,7 +23,13 @@ namespace ejemplos.optional_result_builtin;
 // Cero alocacion de heap, cero clases nuevas en el bytecode (a
 // diferencia de Box<T> con templates que genera Box_i32, Box_i64...).
 //
-// Test: 50 (Some unwrap) + 7 (Ok value) + 1000 (None / catch) = 1057.
+// Test: 50 (Some unwrap) + 7 (Ok value) + 1000 (None -> valor por defecto)
+// = 1057.
+//
+// Fijarse en `dec_or`: pregunta con `isPresent` y solo desenvuelve si hay.  Esa
+// es la forma recuperable, y la unica.  Desenvolver algo que no esta es fatal y
+// NO se captura -- es una afirmacion del programador, y fallarla es un bug --.
+// Escrito a mano aqui porque no existe `unwrap_or`; seria justo esto.
 
 i32 dec_or(Optional<i32> o, i32 def) {
     if (isPresent(o) == 1) {

@@ -1,0 +1,70 @@
+namespace ejemplos.optional_de_puntero;
+
+// Un `Optional` que envuelve un PUNTERO.
+//
+// Sacar el valor de un `Optional` daba un puntero sin marcar, y de esa marca
+// depende con que instruccion se lee la memoria a la que apunta: la del
+// anfitrion o la de la maquina virtual.  Sin ella, el deref se emitia con la
+// de la maquina virtual sobre una direccion del anfitrion y devolvia cero, en
+// silencio y sin error.
+//
+// La regla -- un `T*` que no sea `VirtualPtr` apunta a memoria del anfitrion,
+// y una referencia a clase ademas a un objeto del recolector -- estaba escrita
+// en cuatro sitios: el resultado de una funcion suelta, el de un metodo, el de
+// un metodo de struct y el de un campo.  Ninguno cubria esto, y de los cuatro
+// solo el primero conservaba ademas lo de dentro de un `T**`.
+//
+// El fallo NO aparecia siempre: hacia falta que entre medias hubiera una
+// llamada nativa -- un `println` basta -- para que el pase que mueve reservas
+// a memoria del anfitrion cambiara de sitio el buffer del `Optional`.  Por eso
+// aqui se imprime dentro del bloque.
+
+struct Celda { i64 valor; }
+
+i64 leer(Optional<i64*> o) {
+    if (isPresent(o) != 0) {
+        i64* p = unwrap(o);
+        i64 v = *p;
+        println("  dentro de la funcion: ${v}");
+        return v;
+    }
+    return -1;
+}
+
+i32 main() {
+    i64 a = 10;
+    i64 b = 32;
+
+    // Puntero a un local, sacado dentro de un bloque con una llamada nativa
+    // detras: la combinacion que lo destapaba.
+    Optional<i64*> o1 = Some(&a);
+    i64 s1 = 0;
+    if (isPresent(o1) != 0) {
+        i64* p = unwrap(o1);
+        s1 = *p;
+        println("primero: ${s1}");
+    }
+
+    // El mismo `Optional` cruzando una frontera de funcion.
+    Optional<i64*> o2 = Some(&b);
+    const i64 s2 = leer(o2);
+
+    // Y el caso vacio, que debe seguir distinguiendose.
+    Optional<i64*> vacio = None();
+    const i64 s3 = leer(vacio);   // -1
+
+    // Puntero a un campo de un struct, para que no sea siempre un escalar
+    // suelto en la pila.
+    Celda c;
+    c.valor = 1;
+    Optional<i64*> o3 = Some(&c.valor);
+    i64 s4 = 0;
+    if (isPresent(o3) != 0) {
+        i64* p = unwrap(o3);
+        s4 = *p;
+        println("campo: ${s4}");
+    }
+
+    // 10 + 32 + (-1) + 1 = 42
+    return (i32) (s1 + s2 + s3 + s4);
+}

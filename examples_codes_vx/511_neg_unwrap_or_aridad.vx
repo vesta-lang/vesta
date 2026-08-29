@@ -1,0 +1,13 @@
+namespace ejemplos.neg_unwrap_or_aridad;
+
+// `unwrap_or` necesita el valor Y el repuesto.
+//
+// Escrito con uno solo se parece demasiado a `unwrap`, que es justo el que SI
+// mata el proceso: confundirlos es el error que mas caro sale, asi que se
+// rechaza en vez de interpretarlo.
+
+i32 main() {
+    Optional<i64> o = Some(7);
+    const i64 v = unwrap_or(o);
+    return (i32) v;
+}

@@ -1,14 +1,23 @@
 namespace ejemplos.unwrap_null;
 
-// unwrap de null lanza NullPointerException; capturable
-// con try/catch (catch-all en MVP, ya que la excepcion no tiene
-// ClassInfo asignada en el bytecode `unwrap`).
+// Desenvolver algo que no esta es FATAL, y no se captura.
 //
-// Verifica que la integracion entre la instruccion VM `unwrap` (0x26)
-// y el manejador de excepciones (`tryenter`/`do_throw`) funciona end
-// to end desde codigo Vesta-lang.
+// Desenvolver es AFIRMAR que hay algo.  Si no lo hay, el que se equivoco fue
+// quien lo afirmo: es un bug del programa, no una condicion que el programa se
+// encuentre.  Capturarlo solo sirve para seguir corriendo con la suposicion ya
+// rota.  Es lo que hacen Swift (trampa) y Rust (panico); Kotlin lanza porque
+// vive en una maquina donde siempre hay excepciones.
 //
-// Resultado esperado: 999 (handler activado).
+// Y ademas hace que los TRES modos coincidan.  En nativo no hay desenrollado
+// de excepciones, asi que ahi SIEMPRE fue fatal: antes, este mismo programa
+// devolvia 999 en el interprete y se moria al compilarlo, que es peor que
+// cualquiera de las dos.
+//
+// Este ejemplo comprueba la mitad que SIGUE VIVA: como se pregunta sin
+// afirmar.  Que la afirmacion falsa mata el proceso lo comprueba el caso
+// negativo de la suite, que corre el programa y mira que muera.
+//
+// Resultado esperado: 999.
 
 class Box {
     public i32 v;
@@ -18,11 +27,22 @@ class Box {
 i32 main() {
     Box b = null;
     i32 res = 0;
-    try {
-        Box ok = unwrap(b);   // null -> NullPointerException
-        res = 111;            // dead code: no se ejecuta
-    } catch () {
-        res = 999;            // catch-all captura la excepcion
+
+    // La forma de preguntar sin afirmar.  `isPresent` no desenvuelve nada:
+    // solo dice si hay.  Esta es la sustituta del `try/catch` de antes.
+    if (isPresent(b) != 0) {
+        Box ok = unwrap(b);   // no se llega: no hay nada
+        res = 111;
+    } else {
+        res = 999;            // la rama de "no hay", sin morirse
     }
+
+    // Y sobre algo que SI esta, desenvolver es lo de siempre.
+    Box c = new Box(7);
+    if (isPresent(c) != 0) {
+        Box ok = unwrap(c);
+        res = res + ok.v - 7; // suma cero; solo comprueba que salio bien
+    }
+
     return res;
 }

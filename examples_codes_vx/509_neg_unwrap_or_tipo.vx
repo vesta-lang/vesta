@@ -1,0 +1,13 @@
+namespace ejemplos.neg_unwrap_or_tipo;
+
+// El valor de repuesto de `unwrap_or` tiene que ser del tipo del valor.
+//
+// Sin esta comprobacion, `unwrap_or` de un `Optional<i64>` con una cadena de
+// repuesto compilaria y una de las dos ramas devolveria algo que no es lo que
+// se declaro -- y el error saldria mucho mas tarde, o no saldria.
+
+i32 main() {
+    Optional<i64> o = Some(7);
+    const i64 v = unwrap_or(o, "no es un numero");
+    return (i32) v;
+}

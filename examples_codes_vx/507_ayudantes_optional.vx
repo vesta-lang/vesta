@@ -1,0 +1,46 @@
+namespace ejemplos.ayudantes_optional;
+
+// `unwrap_or` y `expect`: la salida que NO mata el proceso, y la que si pero
+// diciendo por que.
+//
+// Desde que fallar una afirmacion es fatal, importa que la forma recuperable
+// sea la COMODA.  Antes lo unico que habia era `isPresent` y escribir el `if` a
+// mano -- lo hace el propio ejemplo 33 --, y eso empuja a afirmar por pereza,
+// que es justo lo que no se quiere incentivar.
+//
+//   unwrap_or(x, def)  el valor si hay, y si no `def`.  NO afirma nada, asi
+//                      que no puede fallar.  El valor SOLO se lee en la rama
+//                      donde lo hay: eso es lo que lo hace seguro.
+//   expect(x, "msg")   afirma, como `unwrap`, pero deja dicho QUE se dio por
+//                      hecho.  El mensaje solo se imprime cuando falla, asi
+//                      que el camino bueno no paga nada.
+//
+// Nada de esto es codigo nuevo por debajo: los dos se montan con las mismas
+// dos piezas que ya usaban `isPresent` y `unwrap` -- preguntar si hay, y sacar
+// el valor --.  Ninguno vuelve a escribir como se lee un Optional.
+
+i32 main() {
+    Optional<i64> hay = Some(30);
+    Optional<i64> nada = None();
+
+    // Con valor y sin valor, por la via que no puede fallar.
+    const i64 a = unwrap_or(hay, 999);    // 30
+    const i64 b = unwrap_or(nada, 12);    // 12, y sin morirse
+
+    // Tambien sobre una referencia nullable, que es la misma pregunta sobre
+    // otra forma de guardarla.
+    i64 x = 7;
+    i64* p = &x;
+    i64* nulo = null;
+    const i64 c = *unwrap_or(p, &x);      // 7
+    const i64 d = *unwrap_or(nulo, &x);   // 7, tomando el de repuesto
+
+    // `expect` sobre algo que SI esta: mismo resultado que `unwrap` y el
+    // mensaje no aparece por ningun lado.
+    const i64 e = expect(hay, "el contador tenia que estar inicializado");
+
+    println("a=${a} b=${b} c=${c} d=${d} e=${e}");
+
+    // 30 + 12 + 7 + 7 + 30 = 86
+    return (i32) (a + b + c + d + e - 44);
+}

@@ -1,0 +1,15 @@
+namespace ejemplos.neg_expect_mensaje;
+
+// El mensaje de `expect` tiene que estar escrito en el sitio.
+//
+// Se escribe SOLO cuando la afirmacion falla, y se emite como texto conocido al
+// compilar: asi el camino bueno no paga nada y no hay que construir una cadena
+// en ejecucion justo cuando el programa se esta muriendo.  Un mensaje calculado
+// exigiria lo contrario.
+
+i32 main() {
+    Optional<i64> o = Some(7);
+    string s = "calculado";
+    const i64 v = expect(o, s);
+    return (i32) v;
+}

@@ -1,0 +1,60 @@
+namespace ejemplos.optional_sin_marca;
+
+// Un `Optional` que ocupa OCHO bytes en vez de dieciseis.
+//
+// Un `Optional<T>` se guarda normalmente como una palabra que dice si hay algo
+// mas el valor: dieciseis bytes para envolver ocho.  Pero cuando el valor no
+// puede valer cero, el cero sobra y sirve de marca por si solo: no hace falta
+// la palabra aparte y el conjunto se queda en ocho.
+//
+// Solo se aplica donde el tipo lo PROMETE.  Un prestamo (`borrow<T>`) es la
+// direccion de algo vivo -- solo se obtiene prestando algo que existe --, asi
+// que nunca es cero.  Un `T*` crudo SI puede serlo, y ahi `Some(nulo)` y "no
+// hay nada" pasarian a ser el mismo valor: por eso queda fuera y sigue
+// midiendo dieciseis.
+//
+// Lo que se comprueba aqui es que el cambio de forma no se nota desde fuera:
+// las mismas cuatro operaciones -- construir con algo, construir vacio,
+// preguntar si hay, y sacarlo -- y ademas el `match`, que es el unico sitio
+// que miraba la palabra del principio dando por hecho que era una marca.
+
+i64 sumar(Optional<borrow<i64>> o) {
+    // El camino que mira la palabra del principio.
+    match (o) {
+        case Some(b) => { return read_borrow(b); }
+        case None    => { return 0; }
+    }
+}
+
+i32 main() {
+    unique<i64> a = unique_box(30);
+    unique<i64> b = unique_box(12);
+
+    // Con valor, por las dos vias: la de preguntar y la de emparejar.
+    borrow<i64> ra = lend(a);
+    Optional<borrow<i64>> o1 = Some(ra);
+    i64 s1 = 0;
+    if (isPresent(o1) != 0) {
+        borrow<i64> sacado = unwrap(o1);
+        s1 = read_borrow(sacado);       // 30
+    }
+
+    borrow<i64> rb = lend(b);
+    const i64 s2 = sumar(Some(rb));     // 12
+
+    // Vacio: tiene que seguir distinguiendose de "hay algo", que es justo lo
+    // que se pierde si se aplica esto a un tipo que si puede valer cero.
+    Optional<borrow<i64>> vacio = None();
+    const i64 s3 = sumar(vacio);        // 0
+    const i32 hay = isPresent(vacio);   // 0
+
+    // Y el que NO cambia de forma, para que el camino de siempre siga vivo.
+    Optional<i64> plano = Some(99);
+    i64 s4 = 0;
+    if (isPresent(plano) != 0) { s4 = unwrap(plano); }
+
+    println("con=${s1} match=${s2} vacio=${s3} hay=${hay} plano=${s4}");
+
+    // 30 + 12 + 0 + 0 = 42, y el plano se resta entero.
+    return (i32) (s1 + s2 + s3 + (i64) hay + s4 - 99);
+}

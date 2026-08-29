@@ -1,0 +1,40 @@
+namespace ejemplos.unwrap_fallido_es_fatal;
+
+// Afirmar que hay algo y equivocarse MATA el proceso, en los tres modos.
+//
+// Desenvolver es AFIRMAR que hay algo.  Si no lo hay, el que se equivoco fue
+// quien lo afirmo: es un bug del programa, no una condicion que el programa se
+// encuentre.  Capturarlo solo sirve para seguir corriendo con la suposicion ya
+// rota.  Es lo que hacen Swift (trampa) y Rust (panico); Kotlin lanza porque
+// vive en una maquina donde siempre hay excepciones.
+//
+// Y hay una razon mas fuerte que la teoria: en nativo NO hay desenrollado de
+// excepciones, asi que ahi siempre fue fatal.  Mientras el interprete lo dejaba
+// capturar, el mismo programa hacia una cosa al interpretarlo y otra al
+// compilarlo -- que es peor que cualquiera de las dos.
+//
+// `!!`, `nonnull` y `unwrap()` son UNA sola operacion, asi que esto vale para
+// las tres formas de escribirla.  Aqui se rompe por la de `nonnull`; da igual
+// cual se use.
+//
+// La forma recuperable sigue existiendo y es la de siempre: preguntar antes de
+// afirmar (`isPresent`, `match`, `Result` con `?`).  Ver el 30 y el 33.
+//
+// Este programa TIENE que morir: la suite comprueba el codigo del catalogo, la
+// cadena de llamadas y el codigo de salida.
+
+i64* dame_nulo() { i64* z = null; return z; }
+
+i32 main() {
+    // El `try` esta puesto A PROPOSITO: la gracia es que NO captura.  Antes
+    // este mismo programa salia por el `catch` en interprete y JIT, y se moria
+    // al compilarlo a nativo.
+    try {
+        nonnull i64* p = dame_nulo();
+        println("no se debe llegar aqui: ${*p}");
+    } catch (FatalError e) {
+        println("tampoco aqui: capturar esto ya no es posible");
+    }
+
+    return 0;
+}
