@@ -113,8 +113,13 @@ public concept PackedScalarAdd<T> = is_numeric<T>();
 /// segundo ya vale para cualquier numero, queda en lo primero.
 public concept PackedScalarMul<T> = PackedMul<T>();
 
-/// Existe negacion empaquetada.  Hoy solo f64, por hueco del reconocedor.
-public concept PackedNegate<T> = is_float<T>() && sizeof<T>() == 8;
+/// Existe negacion empaquetada.  Cualquier numero.
+///
+/// En coma flotante es dar la vuelta al bit de signo; en enteros no hace falta
+/// una instruccion dedicada, se resta de cero.  Estuvo cerrado a f64 -- ni la
+/// maquina ni el generador de codigo lo impedian: era el reconocedor, que
+/// exigia ese tipo y nada mas.
+public concept PackedNegate<T> = is_numeric<T>();
 
 /// Se puede acumular en una sola variable.
 ///

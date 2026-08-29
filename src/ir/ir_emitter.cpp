@@ -4115,14 +4115,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         if (ins.operands.size() < 2) break;
         const uint64_t width = ins.imm & 0xFF;
         const uint64_t subop = (ins.imm >> 8) & 0xFF;
-        const size_t esz = type_slot_bytes(ins.type); // F64=8
+        const size_t esz = type_slot_bytes(ins.type);
         if (esz == 0) break;
         const uint64_t W = width / esz;
+        /* Negar un entero no es la operacion flotante: es restar de cero.  Lo
+         * demas -- valor absoluto y raiz -- solo tiene sentido en coma
+         * flotante.  Y en f32 la operacion es la variante empaquetada: aplicar
+         * la de f64 sobre bits de 32 leeria otro numero. */
+        const bool es_fp = (ins.type == IrType::F64 || ins.type == IrType::F32);
+        const bool es_ps = (ins.type == IrType::F32);
         const emmit::Mnemonic uop =
             (subop == 1)   ? emmit::Mnemonic::FNEG
             : (subop == 2) ? emmit::Mnemonic::FABS
             : (subop == 3) ? emmit::Mnemonic::FSQRT
                            : emmit::Mnemonic::kCount; // 0=copy (sin op)
+        if (!es_fp && subop != 0 && subop != 1) break; // entero: solo negar
         ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(10));
         ctx.out.emit(emmit::Mnemonic::PUSH, Reg::gp(11));
         {
@@ -4142,9 +4149,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             }
             ctx.out.emit(vec_mv(ctx, ins, 1), Reg::gp(14),
                          Mem(Reg::gp(11))); // a[k] bits
-            if (emmit::is_valid(uop)) {
+            if (!es_fp) {
+                /* Entero: -a[k] es 0 - a[k].  Se calcula en r13, que este
+                 * bloque invalida al salir. */
+                if (subop == 1) {
+                    ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13),
+                                 static_cast<uint64_t>(0));
+                    ctx.out.emit(emmit::Mnemonic::SUBS, Reg::gp(13),
+                                 Reg::gp(14));
+                    ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(14),
+                                 Reg::gp(13));
+                }
+            } else if (emmit::is_valid(uop)) {
                 ctx.out.emit(emmit::Mnemonic::BITG2Z, Reg::fp(0), Reg::gp(14));
-                ctx.out.emit(uop, Reg::fp(0), Reg::fp(0));
+                ctx.out.emit(emmit::packed_if(uop, es_ps), Reg::fp(0),
+                             Reg::fp(0));
                 ctx.out.emit(emmit::Mnemonic::BITZ2G, Reg::gp(14), Reg::fp(0));
             }
             ctx.out.emit(vec_mv(ctx, ins, 0), Mem(Reg::gp(10)),

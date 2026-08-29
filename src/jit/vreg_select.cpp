@@ -3561,7 +3561,31 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const uint64_t subop = (in.imm >> 8) & 0xFF;
                 if (chunk_w != 16 && chunk_w != 32 && chunk_w != 64)
                     return vreg_bail(fn.name.c_str(), __LINE__);
-                if (!fp_ok || in.type != ir::IrType::F64) return false; // f64
+                /* Coma flotante de 64 y de 32, y negacion entera de cualquier
+                 * ancho.  Estuvo cerrado a f64: negar es restar de cero, y eso
+                 * la maquina lo tiene para todos los anchos desde el baseline.
+                 * El valor absoluto entero se queda fuera porque necesita PABS*
+                 * y ese aun no se emite. */
+                const bool u_fp = (in.type == ir::IrType::F64 ||
+                                   in.type == ir::IrType::F32);
+                const bool u_f32 = (in.type == ir::IrType::F32);
+                if (u_fp && !fp_ok) return false;
+                if (!u_fp && subop != 0 && subop != 1)
+                    return vreg_bail(fn.name.c_str(), __LINE__);
+                MOp u_psub = MOp::PSUBQ;
+                if (!u_fp) {
+                    switch (in.type) {
+                    case ir::IrType::I8:
+                    case ir::IrType::U8: u_psub = MOp::PSUBB; break;
+                    case ir::IrType::I16:
+                    case ir::IrType::U16: u_psub = MOp::PSUBW; break;
+                    case ir::IrType::I32:
+                    case ir::IrType::U32: u_psub = MOp::PSUBD; break;
+                    case ir::IrType::I64:
+                    case ir::IrType::U64: u_psub = MOp::PSUBQ; break;
+                    default: return vreg_bail(fn.name.c_str(), __LINE__);
+                    }
+                }
                 /* mismo chunk/descompone que VEC_BINOP: emite al ancho del host
                  * (eff_w), descomponiendo el chunk en n_pieces. */
                 const uint64_t host_w = vec_host_w();
@@ -3585,9 +3609,15 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * difundir a todos los lanes (UNPCKLPD para 128b, VBROADCASTSD
                  * para YMM/ZMM).  Vive a traves del bucle de piezas (los MOV de
                  * base son GP, no tocan el scratch FP). */
-                if (subop == 1 || subop == 2) {
-                    const uint64_t mask = (subop == 1) ? 0x8000000000000000ULL
-                                                       : 0x7fffffffffffffffULL;
+                if (u_fp && (subop == 1 || subop == 2)) {
+                    /* La mascara se difunde como bloque de 64 bits, asi que
+                     * para f32 lleva el patron de 32 repetido: cada mitad tapa
+                     * un carril. */
+                    const uint64_t mask =
+                        u_f32 ? ((subop == 1) ? 0x8000000080000000ULL
+                                              : 0x7fffffff7fffffffULL)
+                              : ((subop == 1) ? 0x8000000000000000ULL
+                                              : 0x7fffffffffffffffULL);
                     const uint32_t idx = out.intern_imm64(mask);
                     O.push_back(
                         MInstr::make_unary(MOp::MOV, MOperand::make_reg(gp1, 8),
@@ -3610,16 +3640,34 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(MInstr::make_unary(MOp::MOV,
                                                    MOperand::make_reg(gp0, 8),
                                                    vr(in.operands[1])));
+                    /* Para negar un entero el dato entra en x1 y el resultado
+                     * se calcula en x0, que es el que se guarda: asi no hace
+                     * falta moverlo de un registro a otro despues. */
                     O.push_back(MInstr::make_unary(
-                        MOp::MOVUPD, x0, MOperand::make_mem(gp0, off)));
+                        MOp::MOVUPD, (u_fp || subop == 0) ? x0 : x1,
+                        MOperand::make_mem(gp0, off)));
                     // op
                     if (subop == 0) {
                         /* copy: nada */
+                    } else if (!u_fp) {
+                        /* Entero: -a es 0 - a.
+                         *
+                         * Se pone a cero con XORPD y no con XORPS aunque los
+                         * dos hagan el mismo XOR de bits: la version de aqui
+                         * solo tiene forma de 128 bits, y con registros mas
+                         * anchos el codificador no sabia emitirla -- dejaba un
+                         * `int3` en medio del bucle y el proceso moria sin
+                         * decir nada. */
+                        O.push_back(MInstr::make_unary(MOp::XORPD, x0, x0));
+                        O.push_back(MInstr::make_unary(u_psub, x0, x1));
                     } else if (subop == 1) {
+                        /* Mismo motivo para f32: la mascara se aplica con la
+                         * forma que ensancha.  Es un XOR de bits; que el
+                         * nombre diga "doble" no cambia lo que hace. */
                         O.push_back(MInstr::make_unary(MOp::XORPD, x0, x1));
                     } else if (subop == 2) {
                         O.push_back(MInstr::make_unary(MOp::ANDPD, x0, x1));
-                    } else if (subop == 3) {
+                    } else if (subop == 3 && !u_f32) {
                         O.push_back(MInstr::make_unary(MOp::SQRTPD, x0, x0));
                     } else {
                         return vreg_bail(fn.name.c_str(), __LINE__);

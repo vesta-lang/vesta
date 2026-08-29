@@ -82,6 +82,15 @@ i32 main() {
     mul<f64>(dc, dc, db, N);          // 1.0
     div<f64>(dc, dc, db, N);          // 2.0
     negate<f64>(dc, dc, N);           // -2.0
+    /* Negar tambien en enteros y en f32: en coma flotante es dar la vuelta al
+     * bit de signo y en enteros es restar de cero, asi que vale para todos.
+     * Se negan dos veces para dejarlos como estaban y no mover las cuentas. */
+    negate<i32>(wc, wc, N);
+    negate<i32>(wc, wc, N);
+    negate<i16>(hc, hc, N);
+    negate<i16>(hc, hc, N);
+    negate<f32>(gout, gout, N);
+    negate<f32>(gout, gout, N);
 
     // Reducciones: la unica forma con dependencia entre vueltas.
     const i64 s = sum<i64>(a, N);     // 0 + 1 + ... + 63 = 2016

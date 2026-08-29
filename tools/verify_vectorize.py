@@ -60,7 +60,7 @@ LIBRARY_MUST_WIDEN = (
     "div_f64",
     "add_scalar_i64", "mul_scalar_i32",
     "add_into_i64", "sub_into_i64",
-    "negate_f64",
+    "negate_f64", "negate_f32", "negate_i32", "negate_i16",
     "sum_i64", "sum_f64",
 )
 

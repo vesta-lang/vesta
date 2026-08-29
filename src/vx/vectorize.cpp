@@ -1783,7 +1783,8 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
 
     // Helper: valida que @p ix es base_ident[idx] HOST f64, devuelve la base.
     // Solo f64: fneg/fabs/fsqrt son float (SQRTPD/XORPD/ANDPD operan f64).
-    auto check_idx_f64_host = [&](IndexExpr *ix, IdentExpr **out_base) -> bool {
+    PrimitiveKind un_kind = PrimitiveKind::COUNT;
+    auto check_idx_host = [&](IndexExpr *ix, IdentExpr **out_base) -> bool {
         if (!ix->overload_method.empty() || !ix->index_set_method.empty() ||
             ix->is_range)
             return false;
@@ -1796,14 +1797,30 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         const bool ptr_like =
             (t.kind == PrimitiveKind::PTR || t.kind == PrimitiveKind::ARRAY) &&
             static_cast<bool>(t.pointee);
-        if (!ptr_like || t.is_virtual) return false;             // solo HOST
-        if (t.pointee->kind != PrimitiveKind::F64) return false; // solo f64
+        if (!ptr_like || t.is_virtual) return false; // solo HOST
+        ir::IrType ety;
+        uint64_t es2;
+        bool fp2;
+        if (!vec_elem_info(t.pointee->kind, &ety, &es2, &fp2)) return false;
+        /* Los dos lados tienen que ser del mismo tipo: negar no convierte. */
+        if (un_kind == PrimitiveKind::COUNT)
+            un_kind = t.pointee->kind;
+        else if (un_kind != t.pointee->kind)
+            return false;
         *out_base = base;
         return true;
     };
     ast::IdentExpr *b_base = nullptr, *a_base = nullptr;
-    if (!check_idx_f64_host(b_ix, &b_base)) return false;
-    if (!check_idx_f64_host(a_ix, &a_base)) return false;
+    if (!check_idx_host(b_ix, &b_base)) return false;
+    if (!check_idx_host(a_ix, &a_base)) return false;
+    ir::IrType elem_ty;
+    uint64_t esz;
+    bool elem_fp;
+    if (!vec_elem_info(un_kind, &elem_ty, &esz, &elem_fp)) return false;
+    /* Negar existe para cualquier ancho -- en enteros es restar de cero --,
+     * pero el valor absoluto y la raiz solo tienen sentido en coma flotante, y
+     * el absoluto entero ademas no se emite todavia. */
+    if (!elem_fp && subop != 1) return false;
 
     if (MC_DBG)
         std::fprintf(stderr, "[mc-idiom] MATCH vec_unop idx=%s subop=%d\n",
@@ -1812,7 +1829,6 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
     // ======== Emitir el loop vectorizado + cola escalar. ========
     // Chunk por ISA (SSE2/AVX2/AVX512); el JIT descompone al ancho del host.
     const uint32_t ln = s->loc.line;
-    const uint64_t esz = 8; // f64
     // AOT: chunk del TARGET (--float-isa); fuera de AOT, host (portabilidad
     // .velb).
     const uint64_t width = vec_chunk_width(64u);
@@ -1862,7 +1878,7 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         const ir::IrValueId a_at = ptr_at(v_a, off);
         ir::IrInstr vu{};
         vu.op = ir::IrOp::VEC_UNOP;
-        vu.type = ir::IrType::F64;
+        vu.type = elem_ty;
         vu.dst = ir::IR_NO_VALUE;
         vu.operands = {b_at, a_at};
         vu.imm = ((uint64_t)subop << 8) | width;
@@ -1881,33 +1897,30 @@ bool Lowering::try_vectorize_unary_for(ast::Stmt *s) {
         const ir::IrValueId off = bin(ir::IrOp::MUL, ir::IrType::I64, i64,
                                       emit_const(ir::IrType::I64, esz, ln));
         const ir::IrValueId a_at = ptr_at(v_a, off);
-        const ir::IrValueId v_ai = fn_->new_value(ir::IrType::F64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::F64;
-            ld.dst = v_ai;
-            ld.operands = {a_at};
-            ld.source_line = ln;
-            fn_->append(current_block_, std::move(ld));
-        }
-        const ir::IrOp uop = (subop == 1)   ? ir::IrOp::FNEG
-                             : (subop == 2) ? ir::IrOp::FABS
-                                            : ir::IrOp::FSQRT;
-        const ir::IrValueId v_res = fn_->new_value(ir::IrType::F64);
-        {
+        const ir::IrValueId v_ai = vec_load_elem(a_at, elem_ty, ln);
+        ir::IrValueId v_res;
+        if (elem_fp) {
+            const ir::IrOp uop = (subop == 1)   ? ir::IrOp::FNEG
+                                 : (subop == 2) ? ir::IrOp::FABS
+                                                : ir::IrOp::FSQRT;
+            v_res = fn_->new_value(elem_ty);
             ir::IrInstr un{};
             un.op = uop;
-            un.type = ir::IrType::F64;
+            un.type = elem_ty;
             un.dst = v_res;
             un.operands = {v_ai};
             un.source_line = ln;
             fn_->append(current_block_, std::move(un));
+        } else {
+            /* Entero: -a es 0 - a.  El IR tiene NEG, pero la resta deja el
+             * mismo codigo y no obliga a que todos los caminos la conozcan. */
+            v_res = bin(ir::IrOp::SUB, elem_ty,
+                        emit_const(elem_ty, 0, ln), v_ai);
         }
         const ir::IrValueId b_at = ptr_at(v_b, off);
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
-        st.type = ir::IrType::F64;
+        st.type = elem_ty;
         st.dst = ir::IR_NO_VALUE;
         st.operands = {v_res, b_at};
         st.source_line = ln;
