@@ -10451,6 +10451,53 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
 }
 
 /**
+ * @brief Busca un metodo ESTATICO por nombre en una lista de metodos.
+ *
+ * Se salta los constructores a proposito: viven en la misma lista que los
+ * metodos, asi que buscar solo por nombre encuentra el constructor de una clase
+ * que se llame igual -- es la trampa clasica de esta estructura.
+ *
+ * @param metodos La lista del layout (de clase o de struct).
+ * @param nombre  El que se busca.
+ * @return El metodo, o nulo si no hay uno estatico con ese nombre.
+ */
+static const ClassMethodInfo *
+find_static_method(const std::vector<ClassMethodInfo> &metodos,
+                   const std::string &nombre) {
+    for (const auto &m : metodos) {
+        if (m.is_constructor) continue;
+        if (m.is_static && m.name == nombre) return &m;
+    }
+    return nullptr;
+}
+
+/**
+ * @copydoc vx::TypeChecker::check_static_method_call
+ */
+Type TypeChecker::check_static_method_call(ast::CallExpr *e,
+                                           ast::FieldAccessExpr *fa,
+                                           const ClassMethodInfo &smtd,
+                                           const std::string &donde,
+                                           uint8_t marca) {
+    if (e->args.size() != smtd.param_types.size()) {
+        diags_.error(e->loc, donde +
+                                 ": numero de argumentos incorrecto (esperado " +
+                                 std::to_string(smtd.param_types.size()) +
+                                 ", recibido " +
+                                 std::to_string(e->args.size()) + ")");
+    }
+    for (size_t i = 0; i < e->args.size(); ++i)
+        check_call_arg(e->args[i].get(),
+                       i < smtd.param_types.size() ? smtd.param_types[i]
+                                                   : Type{},
+                       i, donde);
+    fa->property_kind = marca;
+    fa->base->result_type = Type{PrimitiveKind::VOID};
+    e->result_type = smtd.return_type;
+    return smtd.return_type;
+}
+
+/**
  * @brief Comprueba la construccion de una variante de enum y da su tipo.
  *
  * `Color.Rojo(3)` no es una llamada a nada: es fabricar un valor del enum con
@@ -13171,36 +13218,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             auto it_cls_s = class_layouts_.find(idb->name);
             if (it_cls_s != class_layouts_.end() &&
                 lookup(idb->name) == nullptr) {
-                const ClassLayout &cls = it_cls_s->second;
-                const ClassMethodInfo *smtd = nullptr;
-                for (const auto &m : cls.methods) {
-                    if (m.is_constructor) continue;
-                    if (m.is_static && m.name == fa->field_name) {
-                        smtd = &m;
-                        break;
-                    }
-                }
-                if (smtd) {
-                    if (e->args.size() != smtd->param_types.size()) {
-                        diags_.error(
-                            e->loc,
-                            idb->name + "." + fa->field_name +
-                                ": numero de argumentos incorrecto (esperado " +
-                                std::to_string(smtd->param_types.size()) +
-                                ", recibido " + std::to_string(e->args.size()) +
-                                ")");
-                    }
-                    for (size_t i = 0; i < e->args.size(); ++i)
-                        check_call_arg(e->args[i].get(),
-                                       i < smtd->param_types.size()
-                                           ? smtd->param_types[i]
-                                           : Type{},
-                                       i, idb->name + "." + fa->field_name);
-                    fa->property_kind = 4;
-                    fa->base->result_type = Type{PrimitiveKind::VOID};
-                    e->result_type = smtd->return_type;
-                    return smtd->return_type;
-                }
+                const ClassMethodInfo *smtd = find_static_method(
+                    it_cls_s->second.methods, fa->field_name);
+                if (smtd)
+                    return check_static_method_call(
+                        e, fa, *smtd, idb->name + "." + fa->field_name,
+                        /*marca=*/4);
             }
             // Gemelo para STRUCT: `StructName.staticMethod(...)` (factoria sin
             // this, p.ej. `u128.zero()`).  Mismo criterio que la clase (es un
@@ -13211,41 +13234,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             auto it_str_s = struct_layouts_.find(idb->name);
             if (it_str_s != struct_layouts_.end() &&
                 lookup(idb->name) == nullptr) {
-                const StructLayout &st = it_str_s->second;
-                const ClassMethodInfo *smtd = nullptr;
-                for (const auto &m : st.methods) {
-                    if (m.is_constructor) continue;
-                    if (m.is_static && m.name == fa->field_name) {
-                        smtd = &m;
-                        break;
-                    }
-                }
-                if (smtd) {
-                    if (e->args.size() != smtd->param_types.size()) {
-                        diags_.error(
-                            e->loc,
-                            idb->name + "." + fa->field_name +
-                                ": numero de argumentos incorrecto (esperado " +
-                                std::to_string(smtd->param_types.size()) +
-                                ", recibido " + std::to_string(e->args.size()) +
-                                ")");
-                    }
-                    for (size_t i = 0; i < e->args.size(); ++i)
-                        check_call_arg(e->args[i].get(),
-                                       i < smtd->param_types.size()
-                                           ? smtd->param_types[i]
-                                           : Type{},
-                                       i, idb->name + "." + fa->field_name);
-                    // property_kind=7 (static de STRUCT): distinto del 4
-                    // (namespace/ static de clase) para enrutar a
-                    // lower_class_method_call, que maneja el SRET del retorno
-                    // struct por valor (factorias que devuelven el propio tipo,
-                    // p.ej. u128.zero()).
-                    fa->property_kind = 7;
-                    fa->base->result_type = Type{PrimitiveKind::VOID};
-                    e->result_type = smtd->return_type;
-                    return smtd->return_type;
-                }
+                /* La marca es 7 y no 4 porque al bajar toma otro camino: el
+                 * del struct tiene que atender una factoria que devuelve el
+                 * propio struct POR VALOR, que viaja por el hueco que presta
+                 * quien llama. */
+                const ClassMethodInfo *smtd = find_static_method(
+                    it_str_s->second.methods, fa->field_name);
+                if (smtd)
+                    return check_static_method_call(
+                        e, fa, *smtd, idb->name + "." + fa->field_name,
+                        /*marca=*/7);
             }
         }
         bool base_is_enum_id = false;

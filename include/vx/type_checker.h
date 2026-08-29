@@ -1644,6 +1644,25 @@ class TypeChecker {
      * @param enum_name Nombre del enum, que es el tipo del resultado.
      * @return El tipo del valor construido.
      */
+    /**
+     * @brief Comprueba `Tipo.metodoEstatico(args)` y da su tipo de retorno.
+     *
+     * Estaba escrito dos veces -- clase y struct -- con la unica diferencia de
+     * la MARCA que se deja para la bajada, que es distinta porque cada una
+     * toma un camino distinto: la del struct atiende la factoria que devuelve
+     * el propio struct por valor.
+     *
+     * @param e     La llamada.
+     * @param fa    El acceso `Tipo.metodo`, que queda marcado.
+     * @param smtd  El metodo encontrado.
+     * @param donde `Tipo.metodo`, para los mensajes.
+     * @param marca Que camino toma la bajada.
+     * @return El tipo que devuelve el metodo.
+     */
+    Type check_static_method_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
+                                  const ClassMethodInfo &smtd,
+                                  const std::string &donde, uint8_t marca);
+
     Type check_variant_ctor(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                             const EnumVariantInfo &var,
                             const std::string &enum_name);
