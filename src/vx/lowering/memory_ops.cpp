@@ -1212,6 +1212,22 @@ ir::IrValueId Lowering::emit_load_i64(ir::IrValueId addr,
 }
 
 /**
+ * @copydoc vx::Lowering::emit_load_byte
+ */
+ir::IrValueId Lowering::emit_load_byte(ir::IrValueId addr, uint32_t source_line,
+                                       ir::IrType value_ty) {
+    const ir::IrValueId v = fn_->new_value(value_ty);
+    ir::IrInstr ld{};
+    ld.op = ir::IrOp::LOAD;
+    ld.type = ir::IrType::U8; // el ancho de la LECTURA, no el del valor
+    ld.dst = v;
+    ld.operands = {addr};
+    ld.source_line = source_line;
+    emit(current_block_, std::move(ld));
+    return v;
+}
+
+/**
  * @copydoc vx::Lowering::emit_vtable_method_ptr
  */
 ir::IrValueId Lowering::emit_vtable_method_ptr(ir::IrValueId obj,

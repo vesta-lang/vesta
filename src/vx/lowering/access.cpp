@@ -339,17 +339,7 @@ ir::IrValueId Lowering::lower_index(ast::IndexExpr *e) {
                 (e->result_type.kind == PrimitiveKind::COUNT)
                     ? ir::IrType::I64
                     : ir_type_from_primitive(e->result_type.kind);
-            const ir::IrValueId v_byte = fn_->new_value(rt);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = ir::IrType::U8;
-                ld.dst = v_byte;
-                ld.operands = {v_at};
-                ld.source_line = e->loc.line;
-                emit(current_block_, std::move(ld));
-            }
-            return v_byte;
+            return emit_load_byte(v_at, e->loc.line, rt);
         }
         const ir::IrValueId v_src = lower_expr(e->base.get());
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;

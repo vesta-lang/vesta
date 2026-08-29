@@ -671,6 +671,30 @@ class Lowering {
     ir::IrValueId emit_load_i64(ir::IrValueId addr, uint32_t source_line);
 
     /**
+     * @brief Lee UN byte y lo deja en un valor mas ancho, rellenado con ceros.
+     *
+     * Lo que separa esto de @ref emit_load_typed es que ahi el ancho de la
+     * LECTURA y el del VALOR resultante son el mismo, y aqui no: se leen ocho
+     * bits y el valor mide sesenta y cuatro.  Un byte vale de 0 a 255, asi que
+     * lo de arriba son ceros y no hay que mirar el signo; tenerlo ya ancho es
+     * lo que permite operarlo con el resto sin ir mezclando anchuras.
+     *
+     * Hacia falta porque esa combinacion no se podia pedir: estaba escrita a
+     * mano -- creando la instruccion campo a campo -- en SEIS sitios (recorrer
+     * los bytes de una cadena, contar sus puntos de codigo, pasarla a otra
+     * codificacion, leer un caracter suelto, dos mas), y construir una
+     * instruccion a mano es donde se olvida la linea del fuente o se pone un
+     * ancho por otro.
+     *
+     * @param addr        De donde leer.
+     * @param source_line Linea fuente, para la depuracion.
+     * @param value_ty    De que ancho es el valor resultante.
+     * @return El valor SSA con el byte leido.
+     */
+    ir::IrValueId emit_load_byte(ir::IrValueId addr, uint32_t source_line,
+                                 ir::IrType value_ty = ir::IrType::I64);
+
+    /**
      * @brief Lee de memoria una direccion del anfitrion.
      *
      * Lo guardado son ocho bytes, pero lo leido es un PUNTERO: el valor sale

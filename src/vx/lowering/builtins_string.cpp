@@ -149,16 +149,8 @@ bool Lowering::try_lower_string_builtins(ast::CallExpr *e, Builtin b,
         ir::IrValueId v_raw = emit_strraw(v_str, e->loc.line);
         /* LOAD.u8 al primer byte (host).  El IR LOAD con is_host_ptr
          * en la fuente emite `movh` automaticamente. */
-        ir::IrValueId v_byte = fn_->new_value(ir::IrType::U64);
-        {
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::U8;
-            ld.dst = v_byte;
-            ld.operands = {v_raw};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
+        ir::IrValueId v_byte =
+            emit_load_byte(v_raw, e->loc.line, ir::IrType::U64);
         out_value = v_byte;
         return true;
     }

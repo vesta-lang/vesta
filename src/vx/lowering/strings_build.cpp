@@ -617,17 +617,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
             {
                 ir::IrValueId v_src_b = load_i64(s_src);
                 ir::IrValueId v_tmp_at = emit_ptr_add(s_tmp, v_src_b, source_line);
-                // LOAD u8 del digito.
-                ir::IrValueId v_d = fn_->new_value(ir::IrType::I64);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = ir::IrType::U8;
-                    ld.dst = v_d;
-                    ld.operands = {v_tmp_at};
-                    ld.source_line = source_line;
-                    emit(current_block_, std::move(ld));
-                }
+                ir::IrValueId v_d = emit_load_byte(v_tmp_at, source_line);
                 ir::IrValueId v_pos = load_i64(s_pos);
                 ir::IrValueId v_dst_at = emit_ptr_add(v_buf, v_pos, source_line);
                 store_byte(v_dst_at, v_d);
