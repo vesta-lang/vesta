@@ -656,16 +656,39 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 // DIRECTAS -> sin esto, la vtable de E no colocaria el metodo
                 // de Sh en su slot de interfaz y el dispatch dinamico leeria
                 // basura (bug: s[1].a() sobre un E heredado daba garbage).
+                /* Y de la cadena de las propias INTERFACES: una interfaz que
+                 * extiende a otra obliga a quien la cumple a cumplir tambien la
+                 * de arriba, y su padre no esta en su lista de interfaces sino
+                 * en su superclase -- la promocion a esa lista solo ocurre
+                 * cuando quien declara no es una interfaz --.  Sin cerrar por
+                 * ahi, la tabla de la clase se quedaba sin los metodos de las
+                 * interfaces intermedias y una llamada por el tipo de arriba
+                 * leia una ranura vacia. */
                 std::vector<std::string> all_ifaces;
                 {
+                    std::vector<std::string> pendientes;
                     std::string cur = cd->name;
                     int guard = 0;
                     while (!cur.empty() && guard++ < 64) {
                         auto itc = tc_.class_layouts().find(cur);
                         if (itc == tc_.class_layouts().end()) break;
                         for (const auto &in : itc->second.interface_names)
-                            all_ifaces.push_back(in);
+                            pendientes.push_back(in);
                         cur = itc->second.super_name;
+                    }
+                    // Cierre hacia arriba, sin repetir.
+                    for (size_t k = 0; k < pendientes.size() && k < 256; ++k) {
+                        const std::string n = pendientes[k];
+                        if (std::find(all_ifaces.begin(), all_ifaces.end(), n) !=
+                            all_ifaces.end())
+                            continue;
+                        all_ifaces.push_back(n);
+                        auto itn = tc_.class_layouts().find(n);
+                        if (itn == tc_.class_layouts().end()) continue;
+                        if (!itn->second.super_name.empty())
+                            pendientes.push_back(itn->second.super_name);
+                        for (const auto &sup : itn->second.interface_names)
+                            pendientes.push_back(sup);
                     }
                 }
                 for (const auto &iname : all_ifaces) {

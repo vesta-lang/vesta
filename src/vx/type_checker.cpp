@@ -1548,32 +1548,39 @@ bool TypeChecker::class_is_assignable(const Type &target,
     }
     if (target.kind != PrimitiveKind::CLASS) return false;
     if (value.kind != PrimitiveKind::CLASS) return false;
-    if (target.struct_name == value.struct_name) return true;
-    // Buscar la cadena de supers/interfaces de @c value.
-    std::string current = value.struct_name;
-    // Cota dura para evitar bucles si la jerarquia esta corrupta.
-    for (int depth = 0; depth < 256; ++depth) {
-        auto it = class_layouts_.find(current);
-        if (it == class_layouts_.end()) return false;
-        const ClassLayout &cl = it->second;
-        // Las interfaces declaradas (incluyendo super-interfaz si la
-        // hubiese) se consideran tipos asignables del receptor.
-        for (const std::string &iname : cl.interface_names) {
-            if (iname == target.struct_name) return true;
-            // Permitimos transitividad: si la interfaz extiende otra,
-            // el target podria ser la super-interfaz.  Cota: 1 nivel
-            // explicito; recursion completa requeriria un BFS aparte.
-            auto it_i = class_layouts_.find(iname);
-            if (it_i != class_layouts_.end()) {
-                for (const std::string &super_i :
-                     it_i->second.interface_names) {
-                    if (super_i == target.struct_name) return true;
-                }
+    return type_derives_from(value.struct_name, target.struct_name);
+}
+
+/**
+ * @copydoc vx::TypeChecker::type_derives_from
+ */
+bool TypeChecker::type_derives_from(const std::string &sub,
+                                    const std::string &super) const noexcept {
+    if (sub.empty() || super.empty()) return false;
+    if (sub == super) return true;
+
+    /* Se sube en anchura por las DOS vias -- superclase e interfaces -- porque
+     * el padre de una interfaz vive en la primera y el de una clase que cumple
+     * interfaces en la segunda.  Antes se subia solo por la lista de
+     * interfaces, con un nivel de transitividad escrito a mano que miraba
+     * donde el dato no esta: la transitividad no funcionaba ni un nivel. */
+    std::vector<std::string> nivel{sub};
+    std::vector<std::string> siguiente;
+    // Cota dura por si la jerarquia estuviera corrupta.
+    for (int depth = 0; !nivel.empty() && depth < 256; ++depth) {
+        siguiente.clear();
+        for (const std::string &n : nivel) {
+            const auto it = class_layouts_.find(n);
+            if (it == class_layouts_.end()) continue;
+            const ClassLayout &cl = it->second;
+            if (cl.super_name == super) return true;
+            if (!cl.super_name.empty()) siguiente.push_back(cl.super_name);
+            for (const std::string &iname : cl.interface_names) {
+                if (iname == super) return true;
+                siguiente.push_back(iname);
             }
         }
-        if (cl.super_name.empty()) return false;
-        if (cl.super_name == target.struct_name) return true;
-        current = cl.super_name;
+        nivel.swap(siguiente);
     }
     return false;
 }

@@ -1858,6 +1858,30 @@ class TypeChecker {
 
   public:
     /**
+     * @brief Indica si @p sub es, subiendo por donde sea, un @p super.
+     *
+     * Sube por las DOS vias a la vez -- la superclase y las interfaces -- y
+     * hasta arriba del todo, no un nivel.  Que sean las dos importa mas de lo
+     * que parece: el padre de una INTERFAZ no se guarda en su lista de
+     * interfaces sino en su superclase, porque la promocion a esa lista solo
+     * ocurre cuando quien declara no es una interfaz.  Un recorrido que solo
+     * mire la lista no encuentra nunca el padre de una interfaz, que es
+     * exactamente lo que pasaba: con `interface Alta : Media : Base`, una clase
+     * que cumple `Alta` no se podia asignar ni a `Media` ni a `Base`.
+     *
+     * Lo preguntan dos: la comprobacion de tipos y la introspeccion en tiempo
+     * de compilacion.  Estaba escrito en los dos sitios -- el segundo lo decia
+     * en su comentario, "reimplementado" -- y solo uno subia por las dos vias,
+     * asi que a la misma pregunta respondian cosas distintas.
+     *
+     * @param sub   Nombre del tipo de partida.
+     * @param super Nombre del tipo al que se quiere llegar.
+     * @return true si se llega, o si son el mismo.
+     */
+    bool type_derives_from(const std::string &sub,
+                           const std::string &super) const noexcept;
+
+    /**
      * @brief tabla de constantes comptime declaradas con
      * `comptime const T NAME = expr;` a nivel modulo.
      *

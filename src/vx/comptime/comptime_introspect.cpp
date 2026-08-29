@@ -458,33 +458,13 @@ bool comptime_is_same(const TypeChecker &tc, const Type &a, const Type &b) {
 bool comptime_is_subtype(const TypeChecker &tc, const Type &sub,
                          const Type &super) {
     if (comptime_is_same(tc, sub, super)) return true;
-    /* Subtipo via jerarquia de clases.  Algoritmo: BFS desde sub
-     * subiendo por super_name + interfaces; si alguno coincide con
-     * super.struct_name -> es subtipo.  Cota dura 256 niveles para
-     * evitar ciclos en layouts mal formados.  Mismo predicado que
-     * type_checker.class_is_assignable (privado), reimplementado
-     * sobre la API publica `class_layouts()`. */
-    const auto &cls = tc.class_layouts();
-    if (sub.struct_name.empty() || super.struct_name.empty()) return false;
-
-    std::vector<std::string> queue;
-    queue.push_back(sub.struct_name);
-    for (int depth = 0; !queue.empty() && depth < 256; ++depth) {
-        std::vector<std::string> next;
-        for (const auto &n : queue) {
-            if (n == super.struct_name) return true;
-            auto it = cls.find(n);
-            if (it == cls.end()) continue;
-            if (!it->second.super_name.empty()) {
-                next.push_back(it->second.super_name);
-            }
-            for (const auto &iface : it->second.interface_names) {
-                next.push_back(iface);
-            }
-        }
-        queue.swap(next);
-    }
-    return false;
+    /* El recorrido de la jerarquia lo hace el comprobador de tipos, que es
+     * quien la construyo: `type_derives_from`.  Aqui habia una segunda copia
+     * -- el comentario lo decia, "reimplementado sobre la API publica" -- y las
+     * dos no respondian igual: esta subia por la superclase Y por las
+     * interfaces, y la del comprobador solo por las interfaces, con lo que a la
+     * misma pregunta contestaban cosas distintas. */
+    return tc.type_derives_from(sub.struct_name, super.struct_name);
 }
 
 bool comptime_is_class(const Type &t) {
