@@ -1,0 +1,65 @@
+namespace ejemplos.extension_impl;
+
+// Anadir metodos a un tipo desde fuera: `extension Tipo { }` e
+// `impl Concepto for Tipo { }`.
+//
+// Este ejemplo existe porque de esas dos formas NO habia ni una linea en todo
+// el corpus, y eso tuvo consecuencias: al juntar copias de la lectura de
+// parametros se me quedo un bucle a medias -- el cuerpo sustituido pero la
+// cabecera `for` en pie --, asi que la ficha de un metodo de extension se
+// rellenaba UNA VEZ POR PARAMETRO.  Con dos parametros el metodo pasaba a tener
+// cuatro, y llamarlo daba un error de aridad que no tenia sentido.
+//
+// La suite entera siguio verde.  No porque el fallo fuera leve, sino porque
+// nadie habia escrito nunca un `extension` en un ejemplo: una funcion del
+// lenguaje sin una sola linea que la ejercite es una funcion que se puede
+// romper sin enterarse.
+//
+// Por eso lo que se prueba aqui es lo que lo habria cogido: metodos de
+// extension con CERO, UNO, DOS y TRES parametros, sobre un struct y sobre una
+// clase, y la otra forma (`impl`) sobre el mismo tipo.
+
+struct Punto { i64 x; i64 y; }
+
+class Caja {
+    public i64 v;
+    public Caja(i64 n) { this.v = n; }
+}
+
+concept Sumable<T> = true;
+
+// Sobre un struct: el numero de parametros es justo lo que se rompia.
+extension Punto {
+    i64 cero() { return this.y; }
+    i64 uno(i64 a) { return this.x + a; }
+    i64 dos(i64 a, i64 b) { return this.x + this.y + a + b; }
+    i64 tres(i64 a, i64 b, i64 c) { return this.x + a + b + c; }
+}
+
+// Sobre una CLASE: otra rama, mismo mecanismo.
+extension Caja {
+    i64 mas(i64 a, i64 b, i64 c) { return this.v + a + b + c; }
+}
+
+// La otra forma de anadir metodos, atada a un concepto.
+impl Sumable for Punto {
+    i64 total(i64 k) { return this.x + this.y + k; }
+}
+
+i32 main() {
+    Punto p;
+    p.x = 10; p.y = 20;
+    Caja k = new Caja(1);
+
+    i64 a = p.cero();          // 20
+    i64 b = p.uno(2);          // 12
+    i64 c = p.dos(5, 7);       // 42
+    i64 d = p.tres(1, 2, 3);   // 16
+    i64 e = k.mas(2, 3, 4);    // 10
+    i64 f = p.total(3);        // 33
+
+    println("cero=${a} uno=${b} dos=${c} tres=${d} clase=${e} impl=${f}");
+
+    // 20 + 12 + 42 + 16 + 10 + 33 = 133
+    return (i32) (a + b + c + d + e + f - 91);   // 42
+}

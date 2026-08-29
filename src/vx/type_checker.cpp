@@ -4949,8 +4949,6 @@ void TypeChecker::collect_globals() {
             mi.return_type = m->return_type
                                  ? type_from_node(m->return_type.get())
                                  : Type{PrimitiveKind::VOID};
-            mi.param_types.reserve(m->params.size());
-            for (const auto &p : m->params)
             record_method_params(*m, mi);
             dst->push_back(std::move(mi));
         }
