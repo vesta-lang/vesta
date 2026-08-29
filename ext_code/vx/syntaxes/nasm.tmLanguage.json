@@ -105,8 +105,8 @@
         },
 
         "instruction": {
-            "comment": "Primera palabra de la linea (tras los prefijos): el mnemonico.  Se reconoce por POSICION y no por lista, para que valga cualquier instruccion del juego, incluidas las que se anadan manana.",
-            "match": "(?i)(?:^|:)\\s*((?:(?:lock|rep|repe|repz|repne|repnz|bnd|xacquire|xrelease|notrack)\\s+)*)([A-Za-z][A-Za-z0-9._]*)",
+            "comment": "Primera palabra de la linea (tras los prefijos): el mnemonico.  Se reconoce por POSICION y no por lista, para que valga cualquier instruccion del juego, incluidas las que se anadan manana.  Las directivas quedan excluidas a mano: aparecen en el mismo sitio que un mnemonico y, como esta regla empieza a emparejar en el margen, ganaria siempre a la de directivas aunque vaya despues.",
+            "match": "(?i)(?:^|:)\\s*((?:(?:lock|rep|repe|repz|repne|repnz|bnd|xacquire|xrelease|notrack)\\s+)*)(?!(?:d[bwdqtoyz]|res[bwdqtoyz]|equ|times|incbin|section|segment|global|extern|common|static|bits|use16|use32|use64|org|align|alignb|absolute|default|cpu|float|struc|endstruc|istruc|iend|group)\\b)([A-Za-z][A-Za-z0-9._]*)",
             "captures": {
                 "1": { "name": "storage.modifier.prefix.nasm" },
                 "2": { "name": "keyword.operator.word.mnemonic.nasm" }

@@ -20,7 +20,12 @@ const oniguruma = require('vscode-oniguruma');
 const textmate = require('vscode-textmate');
 
 const RAIZ = path.resolve(__dirname, '..');
-const RUTA_GRAMATICA = path.join(RAIZ, 'syntaxes', 'vesta.tmLanguage.json');
+
+/** Gramaticas de la extension, por su ambito. */
+const GRAMATICAS = {
+    'source.vesta': path.join(RAIZ, 'syntaxes', 'vesta.tmLanguage.json'),
+    'source.nasm': path.join(RAIZ, 'syntaxes', 'nasm.tmLanguage.json'),
+};
 
 /**
  * Casos: por cada linea de codigo, que fragmento debe llevar que ambito.
@@ -125,23 +130,63 @@ const CASOS = [
 /** Casos de varias lineas: bloques que dependen de su contexto. */
 const CASOS_BLOQUE = [
     {
-        nombre: 'bloque de ensamblador',
+        nombre: 'bloque de ensamblador NASM',
         lineas: [
             'register("rax") i64 r;',
             'asm volatile {',
-            '    mov rax, gs:[0x60]',
+            '    mov rax, gs:[0x60]      ; el PEB',
             '.bucle:',
+            '    lock inc qword [rsi + rdi*8 + 16]',
+            '    movaps xmm0, [rel datos]',
+            '    times 510-($-$$) db 0',
+            '    dw 0AA55h',
             '    ret',
             '}',
         ],
         esperado: [
+            // Lo de fuera del bloque sigue siendo Vesta.
             [0, 'register', 'storage.modifier'],
             [0, '"rax"', 'variable.language.register'],
             [1, 'asm', 'keyword.other.asm'],
             [1, 'volatile', 'storage.modifier'],
-            [2, 'mov', 'support.function.mnemonic'],
-            [2, 'rax', 'variable.language.register'],
-            [3, '.bucle', 'entity.name.label'],
+            // Y lo de dentro es NASM.
+            [2, 'mov', 'keyword.operator.word.mnemonic.nasm'],
+            [2, 'rax', 'variable.language.register.gp.nasm'],
+            [2, 'gs', 'variable.language.register.system.nasm'],
+            [2, '0x60', 'constant.numeric.hexadecimal.nasm'],
+            [2, '; el PEB', 'comment.line.semicolon.nasm'],
+            [3, '.bucle', 'entity.name.label.local.nasm'],
+            [4, 'lock', 'storage.modifier.prefix.nasm'],
+            [4, 'inc', 'keyword.operator.word.mnemonic.nasm'],
+            [4, 'qword', 'storage.modifier.size.nasm'],
+            [4, 'rsi', 'variable.language.register.gp.nasm'],
+            [5, 'movaps', 'keyword.operator.word.mnemonic.nasm'],
+            [5, 'xmm0', 'variable.language.register.vector.nasm'],
+            [5, 'rel', 'storage.modifier.size.nasm'],
+            [6, 'times', 'keyword.control.directive.data.nasm'],
+            [6, '$-$$', 'constant.language.position.nasm'],
+            [7, 'dw', 'keyword.control.directive.data.nasm'],
+            [7, '0AA55h', 'constant.numeric.hexadecimal.nasm'],
+        ],
+    },
+    {
+        nombre: 'ensamblador con ancho fijado y preprocesador',
+        lineas: [
+            'asm @bits(16) {',
+            '%define BASE 0x7C00',
+            '    mov ax, 0b1010',
+            '    add bx, 777q',
+            '    db `linea\\n`',
+            '}',
+        ],
+        esperado: [
+            [0, '@bits', 'storage.type.annotation'],
+            [1, '%', 'punctuation.definition.directive.nasm'],
+            [1, 'define', 'keyword.control.directive.nasm'],
+            [2, 'ax', 'variable.language.register.gp.nasm'],
+            [2, '0b1010', 'constant.numeric.binary.nasm'],
+            [3, '777q', 'constant.numeric.octal.nasm'],
+            [4, '\\n', 'constant.character.escape.nasm'],
         ],
     },
     {
@@ -170,11 +215,14 @@ async function cargarGramatica() {
             createOnigString: cadena => new oniguruma.OnigString(cadena),
         }),
         loadGrammar: async ambito => {
-            if (ambito !== 'source.vesta') {
+            // La de Vesta empotra la de NASM, asi que hay que saber servir las
+            // dos: si la empotrada no se resuelve, el bloque asm se queda sin
+            // resaltar y no salta ningun error.
+            const ruta = GRAMATICAS[ambito];
+            if (!ruta) {
                 return null;
             }
-            const crudo = fs.readFileSync(RUTA_GRAMATICA, 'utf8');
-            return textmate.parseRawGrammar(crudo, RUTA_GRAMATICA);
+            return textmate.parseRawGrammar(fs.readFileSync(ruta, 'utf8'), ruta);
         },
     });
 

@@ -608,8 +608,13 @@ std::vector<std::unique_ptr<ASTNode>> Parser::parse() {
     while (current.type != TokenType::EndOfFile) {
         std::unique_ptr<ASTNode> node = nullptr;
         Token next = peek();
-        // IDENTIFICADOR + COLON? -> SECCION
-        if (current.type == TokenType::IDENTIFIER &&
+        /* NOMBRE + COLON -> ETIQUETA.  Se acepta tambien un token que el lexer
+         * clasifico como REGISTER: el lexer decide sin ver lo que viene
+         * detras, asi que una funcion de Vesta llamada como un registro --
+         * `f11`, `xmm3` -- llega asi, y sin esto rompia el ensamblado entero.
+         * Un registro nunca abre una etiqueta, siempre es operando. */
+        if ((current.type == TokenType::IDENTIFIER ||
+             current.type == TokenType::REGISTER) &&
             peek().type == TokenType::COLON) {
             node = parse_section();
         }
@@ -722,8 +727,11 @@ std::vector<std::unique_ptr<ASTNode>> Parser::parse_in_label() {
     while (current.type != TokenType::EndOfFile) {
         std::unique_ptr<ASTNode> node = nullptr;
         Token next = peek();
-        // IDENTIFICADOR + COLON? -> SECCION
-        if (current.type == TokenType::IDENTIFIER &&
+        /* NOMBRE + COLON -> otra etiqueta empieza aqui, asi que esta termina.
+         * Mismo criterio que arriba: un token clasificado como REGISTER cuenta,
+         * porque el lexer decide sin ver los dos puntos. */
+        if ((current.type == TokenType::IDENTIFIER ||
+             current.type == TokenType::REGISTER) &&
             peek().type == TokenType::COLON) {
             // node = parse_section();
             break;
@@ -769,7 +777,18 @@ std::unique_ptr<ASTNode> Parser::parser_end_label() {
 }
 
 std::unique_ptr<ASTNode> Parser::parse_section() {
-    if (current.type != TokenType::IDENTIFIER) {
+    /* Un nombre seguido de dos puntos ES una etiqueta, se parezca a lo que se
+     * parezca.  Hace falta decirlo porque el lexer clasifica antes de saber que
+     * viene detras, y una funcion de Vesta que se llame como un registro --
+     * `f11`, `xmm3` -- llega aqui como REGISTER y no como IDENTIFIER.  Sin
+     * esto, esa funcion rompia el ensamblado del programa entero, y el usuario
+     * no tenia como saber por que: el nombre es suyo y no tiene nada de malo.
+     *
+     * Es seguro por la forma de la sintaxis: ningun `.vel` empieza una linea
+     * con un registro seguido de dos puntos -- un registro es SIEMPRE operando
+     * de una instruccion, nunca lo primero de una etiqueta --. */
+    if (current.type != TokenType::IDENTIFIER &&
+        current.type != TokenType::REGISTER) {
         return nullptr;
     }
 

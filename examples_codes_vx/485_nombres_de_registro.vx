@@ -1,0 +1,33 @@
+namespace ejemplos.nombres_de_registro;
+
+// Un nombre del usuario que coincide con el de un registro.
+//
+// Los nombres de Vesta acaban siendo etiquetas del ensamblador intermedio, y su
+// lexer clasifica cada palabra ANTES de ver lo que viene detras.  Asi que una
+// funcion llamada `f11` -- o `xmm3`, o una clase `rax`, o un campo `rsp` --
+// llegaba al parser como REGISTER en vez de como nombre, y la linea que la
+// declaraba se descartaba con un "Skipping invalid token".  No fallaba esa
+// funcion: fallaba el ENSAMBLADO DEL PROGRAMA ENTERO, y el usuario no tenia
+// como saber por que, porque el nombre es suyo y no tiene nada de malo.
+//
+// El arreglo es contextual y de una linea: un nombre seguido de dos puntos ES
+// una etiqueta, se parezca a lo que se parezca.  Es seguro por la forma de la
+// sintaxis -- un registro es siempre operando de una instruccion, nunca lo
+// primero de una etiqueta --, y ningun `.vel` del proyecto empieza una linea
+// con un registro y dos puntos.
+//
+// Aqui hay nombres de registro en todos los sitios donde el usuario pone uno:
+// clase, campo, metodo, struct, funcion, parametro y variable local.
+
+class rax { public i64 rbx; public rax(i64 n) { this.rbx = n; } public i64 f0() { return this.rbx; } }
+struct zmm1 { i64 rsp; i64 cur0; }
+i64 xmm3(i64 rdi) { return rdi; }
+i64 f11(i64 x) { return x; }
+i64 ymm7(i64 r15) { i64 rbp = r15 + 1; return rbp; }
+i32 main() {
+    rax k = new rax(10);
+    zmm1 s;
+    s.rsp = 5; s.cur0 = 6;
+    i64 r13 = 4;
+    return (i32) (k.f0() + xmm3(7) + f11(9) + ymm7(0) + s.rsp + s.cur0 + r13);
+}
