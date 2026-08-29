@@ -291,7 +291,21 @@ class Lowering {
     std::vector<DeclaredParam> declare_params(
         ir::IrFunction &fn,
         const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
-        std::vector<std::pair<std::string, ir::IrValueId>> &bindings);
+        std::vector<std::pair<std::string, ir::IrValueId>> &bindings,
+        size_t reserved_slots = 0);
+
+    /**
+     * @brief Cuantos huecos de argumento ocupa esta lista de parametros.
+     *
+     * Uno por parametro, DOS por un variadico empaquetado -- la direccion del
+     * array y cuantos son -- y NINGUNO por el `...` pelado, cuyos argumentos
+     * viajan crudos por donde diga la convencion.
+     *
+     * @param params Los parametros declarados.
+     * @return El numero de huecos.
+     */
+    static size_t param_slot_count(
+        const std::vector<std::unique_ptr<ast::ParamDecl>> &params);
 
     /**
      * @brief Si los metodos de @p class_name se despachan por tabla.

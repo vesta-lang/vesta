@@ -103,6 +103,21 @@
                 "category": "Vesta"
             },
             {
+                "command": "vesta.openStdlib",
+                "title": "Abrir un modulo de la biblioteca estandar",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.openImport",
+                "title": "Abrir el modulo importado bajo el cursor",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showPaths",
+                "title": "Mostrar las rutas en uso",
+                "category": "Vesta"
+            },
+            {
                 "command": "vesta.showIr",
                 "title": "Ver el IR SSA",
                 "category": "Vesta"
@@ -193,6 +208,11 @@
             "editor/context": [
                 {
                     "when": "resourceLangId == vesta",
+                    "command": "vesta.openImport",
+                    "group": "navigation@10"
+                },
+                {
+                    "when": "resourceLangId == vesta",
                     "command": "vesta.run",
                     "group": "vesta@1"
                 },
@@ -213,6 +233,10 @@
                 }
             ],
             "commandPalette": [
+                {
+                    "command": "vesta.openImport",
+                    "when": "resourceLangId == vesta"
+                },
                 {
                     "command": "vesta.showIr",
                     "when": "resourceLangId == vesta"
@@ -303,6 +327,12 @@
                     ],
                     "default": "off",
                     "description": "Nivel de traza del protocolo entre el editor y el servidor de lenguaje."
+                },
+                "vesta.stdlibPath": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Ruta del directorio `stdlib/vx` con la biblioteca estandar escrita en Vesta. Vacia = busqueda automatica: la variable de entorno `VX_STDLIB_DIR`, la carpeta del servidor de lenguaje (`<instalacion>/stdlib/vx`) y el arbol del repositorio. Es la biblioteca a la que salta ir a la definicion de un simbolo `std.*`.",
+                    "scope": "machine-overridable"
                 },
                 "vesta.vmPath": {
                     "type": "string",

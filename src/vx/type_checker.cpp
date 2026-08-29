@@ -5617,29 +5617,6 @@ bool TypeChecker::type_declares_to_string(const Type &t) const {
  */
 void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
                                        ClassMethodInfo &mi) {
-    /* Los argumentos viajan en doce registros, y en un metodo el primero es
-     * `this`: quedan ONCE para lo declarado.  Un variadico se lleva dos (la
-     * direccion del array y cuantos son).  Pasarse no daba un error sino un
-     * argumento con basura -- el doceavo acababa en un registro que el propio
-     * emisor usa de scratch, asi que sobrevivia hasta la primera llamada dentro
-     * del metodo --, que es la peor forma de fallar: el programa compila,
-     * arranca y da numeros absurdos. */
-    {
-        size_t slots = 0;
-        for (const auto &p : m.params)
-            slots += p->is_raw_variadic ? 0u : (p->is_variadic ? 2u : 1u);
-        if (slots > 11) {
-            diags_.error(m.loc,
-                         std::string(m.is_constructor ? "el constructor '"
-                                                      : "el metodo '") +
-                             m.name + "' declara " + std::to_string(slots) +
-                             " parametros y caben once: los argumentos viajan "
-                             "en doce registros y el primero lo ocupa 'this'"
-                             ".\n  sugerencia: agrupa los que sobren en un "
-                             "struct, o declara la funcion fuera de la clase, "
-                             "que ahi caben doce");
-        }
-    }
     mi.param_types.reserve(m.params.size());
     for (size_t pi = 0; pi < m.params.size(); ++pi) {
         const auto &p = m.params[pi];

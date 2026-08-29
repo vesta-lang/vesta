@@ -44,11 +44,15 @@ namespace ejemplos.matriz_parametros;
 //
 // Los dos limites:
 //
-//   - CUANTOS caben.  Los argumentos viajan en doce registros.  Una funcion
-//     suelta puede declarar doce; un metodo o un constructor, ONCE, porque el
-//     primero lo ocupa `this`.  Un variadico se lleva dos (la direccion del
-//     array y cuantos son).  Pasarse es un error de compilacion -- antes era
-//     un argumento con basura, que compilaba y arrancaba.
+//   - CUANTOS caben, y esto SOLO en la maquina virtual.  Ahi los argumentos
+//     viajan en doce registros -- el modelo mas rapido para un interprete, y
+//     por eso se queda -- y el JIT usa el mismo banco.  Una funcion suelta
+//     declara hasta doce; un metodo o un constructor, ONCE, porque el primero
+//     lo ocupa `this`.  Un variadico se lleva dos (la direccion del array y
+//     cuantos son).  Un binario NATIVO no tiene limite: la convencion del
+//     procesador derrama en la pila lo que no cabe.  Pasarse en la maquina
+//     virtual es un error de compilacion que apunta al modo nativo; antes era
+//     un argumento con basura, que compilaba y arrancaba.  Ver el 483.
 //
 //   - QUE se le puede pasar a una `comptime`.  Las doce formas se DECLARAN
 //     igual, pero solo se pueden LLAMAR con lo que sea constante al compilar:

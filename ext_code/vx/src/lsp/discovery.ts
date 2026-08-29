@@ -254,6 +254,91 @@ export function discoverLanguageServer(
 }
 
 /**
+ * @brief Comprueba si un directorio es la biblioteca estandar en Vesta.
+ *
+ * Se acepta por su contenido, no por su nombre: o esta el modulo suelto que el
+ * propio compilador usa como testigo, o esta el arbol `std/`.  Asi vale tanto
+ * la copia instalada como la del arbol de compilacion.
+ *
+ * @param dir Directorio candidato.
+ * @return true si el directorio parece la biblioteca estandar.
+ */
+function looksLikeStdlib(dir: string): boolean {
+    return isFile(path.join(dir, 'simd_string.vx')) || isDirectory(path.join(dir, 'std'));
+}
+
+/** @brief Indica si la ruta existe y es un directorio. */
+function isDirectory(candidate: string): boolean {
+    try {
+        return fs.statSync(candidate).isDirectory();
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * @brief Localiza el directorio de la biblioteca estandar escrita en Vesta.
+ *
+ * Se sigue el mismo orden que el compilador, para que el editor y la
+ * compilacion no puedan discrepar sobre que biblioteca se esta usando: la ruta
+ * configurada, la variable de entorno, la carpeta del ejecutable del servidor
+ * (que es donde la deja el instalador), las raices de instalacion y, por
+ * ultimo, el arbol de compilacion.
+ *
+ * @param explicit   Ruta del ajuste `vesta.stdlibPath` (puede ir vacia).
+ * @param serverPath Ruta del servidor de lenguaje, si ya se localizo.
+ * @param searchFrom Carpetas desde las que buscar en el arbol del repositorio.
+ * @return Ruta absoluta del directorio, o undefined si no aparece.
+ */
+export function discoverStdlib(
+    explicit: string | undefined,
+    serverPath: string | undefined,
+    searchFrom: string[],
+): string | undefined {
+    const configured = explicit?.trim();
+    if (configured && isDirectory(configured)) {
+        return path.resolve(configured);
+    }
+
+    const fromEnv = process.env.VX_STDLIB_DIR;
+    if (fromEnv && isDirectory(fromEnv)) {
+        return path.resolve(fromEnv);
+    }
+
+    const candidates: string[] = [];
+    if (serverPath) {
+        // La instalacion deja los binarios en `<raiz>/bin` y la biblioteca en
+        // `<raiz>/stdlib/vx`; el arbol de compilacion tiene ambas cosas juntas.
+        const binDir = path.dirname(serverPath);
+        candidates.push(
+            path.join(binDir, 'stdlib', 'vx'),
+            path.join(path.dirname(binDir), 'stdlib', 'vx'),
+        );
+    }
+    for (const root of installRoots()) {
+        candidates.push(path.join(root, 'stdlib', 'vx'));
+    }
+    for (const start of searchFrom) {
+        let dir = start;
+        for (let depth = 0; depth < 8; depth++) {
+            candidates.push(path.join(dir, 'stdlib', 'vx'));
+            const parent = path.dirname(dir);
+            if (parent === dir) {
+                break;
+            }
+            dir = parent;
+        }
+    }
+
+    for (const candidate of candidates) {
+        if (isDirectory(candidate) && looksLikeStdlib(candidate)) {
+            return candidate;
+        }
+    }
+    return undefined;
+}
+
+/**
  * @brief Localiza la maquina virtual con la que se ejecutan los programas.
  *
  * El binario instalado se llama `vesta`; dentro del arbol de compilacion del

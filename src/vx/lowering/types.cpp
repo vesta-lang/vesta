@@ -448,10 +448,47 @@ Lowering::ParamAbi Lowering::param_abi(const ast::ParamDecl &p) const {
 /**
  * @copydoc vx::Lowering::declare_params
  */
+size_t Lowering::param_slot_count(
+    const std::vector<std::unique_ptr<ast::ParamDecl>> &params) {
+    size_t n = 0;
+    for (const auto &p : params)
+        n += p->is_raw_variadic ? 0u : (p->is_variadic ? 2u : 1u);
+    return n;
+}
+
 std::vector<Lowering::DeclaredParam> Lowering::declare_params(
     ir::IrFunction &fn,
     const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
-    std::vector<std::pair<std::string, ir::IrValueId>> &bindings) {
+    std::vector<std::pair<std::string, ir::IrValueId>> &bindings,
+    size_t reserved_slots) {
+    /* La maquina virtual pasa los argumentos en DOCE registros, y ese modelo se
+     * queda: para un interprete es lo mas rapido que hay, y cambiarlo por una
+     * pila lo haria mas lento en el caso comun, que es el de siempre -- pocos
+     * argumentos --.  El JIT usa el mismo banco, asi que hereda el limite.
+     *
+     * Un binario NATIVO no lo tiene: la convencion del procesador derrama en la
+     * pila lo que no cabe en registros, y ahi doce o veinte da igual.
+     *
+     * Asi que esto NO es un limite del lenguaje, es de un modo de ejecucion, y
+     * por eso se dice aqui -- donde ya se sabe para donde se compila -- y no en
+     * el comprobador de tipos, que rechazaria tambien lo que en nativo funciona.
+     * Y hay que decirlo: pasarse no daba un error sino un argumento con basura,
+     * que compila, arranca y da numeros absurdos. */
+    if (!native_poo_ && !params.empty()) {
+        const size_t slots = param_slot_count(params) + reserved_slots;
+        if (slots > 12) {
+            error_at(params.front()->loc,
+                     "'" + fn.name + "' necesita " + std::to_string(slots) +
+                         " huecos de argumento y la maquina virtual tiene "
+                         "doce" +
+                         (reserved_slots ? " (uno lo ocupa 'this')" : "") +
+                         ".\n  Un variadico ocupa dos: la direccion y cuantos "
+                         "son.\n  sugerencia: agrupa los que sobren en un "
+                         "struct, o compila a nativo (`-m aot`), que ahi no hay "
+                         "limite");
+        }
+    }
+
     std::vector<DeclaredParam> out;
     out.reserve(params.size() + 1);
 

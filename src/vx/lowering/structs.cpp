@@ -854,7 +854,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         }
 
         // Resto de parametros declarados.
-        declare_params(fn, m->params, bindings);
+        declare_params(fn, m->params, bindings, /*reserved_slots=*/1);
 
         // Configurar contexto del lowering para esta funcion.
         const ir::IrBlockId entry = fn.new_block("entry");

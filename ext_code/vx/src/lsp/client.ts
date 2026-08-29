@@ -24,7 +24,7 @@ import {
     TransportKind,
 } from 'vscode-languageclient/node';
 
-import { BinaryLocation, discoverLanguageServer } from './discovery';
+import { BinaryLocation, discoverLanguageServer, discoverStdlib } from './discovery';
 
 /** Identificador del lenguaje que contribuye esta extension. */
 export const VESTA_LANGUAGE_ID = 'vesta';
@@ -38,10 +38,13 @@ export class VestaLanguageClient {
     private client: LanguageClient | undefined;
 
     /** Canal donde el servidor escribe su registro. */
-    private readonly output: vscode.OutputChannel;
+    private readonly output: vscode.LogOutputChannel;
 
     /** Ubicacion del binario en uso, para poder explicarla al usuario. */
     private location: BinaryLocation | undefined;
+
+    /** Biblioteca estandar que ve el servidor; undefined si no aparece. */
+    private stdlib: string | undefined;
 
     /** Evita repetir el aviso de "no encuentro el servidor" en cada arranque. */
     private missingReported = false;
@@ -51,7 +54,7 @@ export class VestaLanguageClient {
      * @param context Contexto de la extension, para resolver rutas propias.
      */
     constructor(private readonly context: vscode.ExtensionContext) {
-        this.output = vscode.window.createOutputChannel('Vesta');
+        this.output = vscode.window.createOutputChannel('Vesta', { log: true });
         context.subscriptions.push(this.output);
     }
 
@@ -63,6 +66,23 @@ export class VestaLanguageClient {
     /** @brief Ubicacion del binario en uso, si el servidor esta levantado. */
     public get binaryLocation(): BinaryLocation | undefined {
         return this.location;
+    }
+
+    /**
+     * @brief Biblioteca estandar que ve el servidor.
+     *
+     * Es la que resuelve los `import std.*`, y por tanto la que se abre al ir a
+     * la definicion de un simbolo de la biblioteca.
+     *
+     * @return Ruta del directorio, o undefined si no se localizo.
+     */
+    public get stdlibPath(): string | undefined {
+        return this.stdlib ?? this.resolveStdlib();
+    }
+
+    /** @brief Carpetas desde las que se busca; publicas para los comandos. */
+    public get searchRootsForTools(): string[] {
+        return this.searchRoots();
     }
 
     /** @brief Muestra el canal de registro del servidor. */
@@ -102,9 +122,27 @@ export class VestaLanguageClient {
         );
 
         const args = config.get<string[]>('server.arguments', []);
+
+        // El servidor localiza la biblioteca estandar por su cuenta (relativa a
+        // su propio ejecutable), pero quien desarrolla el compilador suele
+        // tener una instalada y otra de trabajo.  Pasar la ruta elegida por su
+        // variable de entorno hace que el editor y la compilacion no puedan
+        // discrepar sobre cual se esta usando.
+        this.stdlib = this.resolveStdlib(location.path);
+        const env = { ...process.env };
+        if (this.stdlib) {
+            env.VX_STDLIB_DIR = this.stdlib;
+            this.output.appendLine(`Biblioteca estandar: ${this.stdlib}`);
+        } else {
+            this.output.appendLine(
+                'No se localizo la biblioteca estandar en Vesta; los import std.* ' +
+                'pueden quedar sin resolver.  Se puede fijar con vesta.stdlibPath.',
+            );
+        }
+
         const serverOptions: ServerOptions = {
-            run: { command: location.path, args, transport: TransportKind.stdio },
-            debug: { command: location.path, args, transport: TransportKind.stdio },
+            run: { command: location.path, args, options: { env }, transport: TransportKind.stdio },
+            debug: { command: location.path, args, options: { env }, transport: TransportKind.stdio },
         };
 
         const clientOptions: LanguageClientOptions = {
@@ -145,6 +183,7 @@ export class VestaLanguageClient {
         const client = this.client;
         this.client = undefined;
         this.location = undefined;
+        this.stdlib = undefined;
         if (!client) {
             return;
         }
@@ -185,6 +224,22 @@ export class VestaLanguageClient {
             );
         }
         return this.client.sendRequest<T>(method, params);
+    }
+
+    /**
+     * @brief Localiza la biblioteca estandar con la configuracion actual.
+     * @param serverPath Ruta del servidor, si ya se conoce.
+     * @return Ruta del directorio, o undefined.
+     */
+    private resolveStdlib(serverPath?: string): string | undefined {
+        const configured = vscode.workspace
+            .getConfiguration('vesta')
+            .get<string>('stdlibPath', '');
+        return discoverStdlib(
+            configured,
+            serverPath ?? this.location?.path,
+            this.searchRoots(),
+        );
     }
 
     /**
