@@ -59,12 +59,25 @@ extern "C" {
 /* ========================================================================= */
 /* ObjectHeader (24 bytes, alignof=8)                                         */
 /* ========================================================================= */
-/*  +0  [8]  class_ptr   ClassInfo*                                           */
-/*  +8  [4]  flags       OBJ_FLAG_* bitmask                                   */
-/*  +12 [4]  hash_code   identidad lazy                                       */
-/*  +16 [4]  owner_pid   local_pid del propietario del monitor (0 = libre)    */
-/*  +20 [2]  lock_depth  contador reentrante                                  */
-/*  +22 [2]  _mon_pad    padding                                              */
+/*  +0  [8]  class_ptr     ClassInfo*                                         */
+/*  +8  [4]  flags         OBJ_FLAG_* bitmask                                 */
+/*  +12 [4]  hash_code     identidad lazy                                     */
+/*  +16 [8]  monitor_word  quien tiene el monitor y cuantas veces, EMPACADOS  */
+/* ========================================================================= */
+/*                                                                           */
+/* El monitor es UN qword y no dos campos, porque tomarlo y soltarlo tiene    */
+/* que ser una sola operacion atomica: con el propietario y la cuenta en      */
+/* sitios distintos harian falta dos escrituras, y entre ellas otro hilo      */
+/* veria un estado que no existe.                                            */
+/*                                                                           */
+/*   bits 0-47   propietario (scheduler<<32 | pid local); cero = libre        */
+/*   bits 48-63  cuantas veces lo ha tomado su propietario                    */
+/*                                                                           */
+/* Antes SI eran dos campos, y este fichero siguio describiendolos mucho      */
+/* despues de que dejaran de existir: declaraba la cuenta en el offset 20     */
+/* cuando vive en los bytes 22-23 del qword.  Nadie lo leia -- por eso no     */
+/* reventó nada --, pero un fichero cuyo trabajo es DECIR el ABI no puede     */
+/* decirlo mal: quien lo lea escribira codigo contra lo que ponga aqui.       */
 /* ========================================================================= */
 
 #define VESTA_OBJ_HDR_SIZE 24
@@ -72,9 +85,13 @@ extern "C" {
 #define VESTA_OBJ_HDR_CLASS_PTR_OFFSET 0
 #define VESTA_OBJ_HDR_FLAGS_OFFSET 8
 #define VESTA_OBJ_HDR_HASH_CODE_OFFSET 12
-#define VESTA_OBJ_HDR_OWNER_PID_OFFSET 16
-#define VESTA_OBJ_HDR_LOCK_DEPTH_OFFSET 20
-/* offset 22-23: _mon_pad (no usado por codigo generado) */
+#define VESTA_OBJ_HDR_MONITOR_WORD_OFFSET 16
+
+/* Como se lee el monitor_word.  No son offsets de bytes: son posiciones de
+ * bits dentro del qword de +16.  */
+#define VESTA_MONITOR_OWNER_MASK 0x0000FFFFFFFFFFFFULL
+#define VESTA_MONITOR_DEPTH_SHIFT 48
+#define VESTA_MONITOR_DEPTH_MASK 0xFFFFULL
 
 /* Bits del campo flags (OBJ_FLAG_*) */
 #define VESTA_OBJ_FLAG_GC_OWNED (1u << 0)

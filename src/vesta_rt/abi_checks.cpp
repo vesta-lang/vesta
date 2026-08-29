@@ -82,11 +82,24 @@ static_assert(offsetof(loader::ObjectHeader, hash_code) ==
                   VESTA_OBJ_HDR_HASH_CODE_OFFSET,
               "ABI drift: offsetof(ObjectHeader, hash_code)");
 
-// owner_pid + lock_depth viven empacados en @c monitor_word (8 bytes) en
-// offset 16. El layout es: bits 0-47 owner_encoded, bits 48-63 lock_depth.
 static_assert(offsetof(loader::ObjectHeader, monitor_word) ==
-                  VESTA_OBJ_HDR_OWNER_PID_OFFSET,
+                  VESTA_OBJ_HDR_MONITOR_WORD_OFFSET,
               "ABI drift: offsetof(ObjectHeader, monitor_word)");
+
+/* Y COMO se lee ese qword, no solo donde esta.  El reparto de bits estaba
+ * publicado en abi.h y sin atar a nada: cuando el propietario y la cuenta
+ * dejaron de ser dos campos, el fichero siguio diciendo que lo eran.  Estas
+ * tres comprobaciones son lo que impide que vuelva a separarse. */
+static_assert(loader::MONITOR_OWNER_MASK == VESTA_MONITOR_OWNER_MASK,
+              "ABI drift: la mascara del propietario del monitor");
+
+static_assert(loader::monitor_depth(1ULL << VESTA_MONITOR_DEPTH_SHIFT) == 1u,
+              "ABI drift: donde empieza la cuenta de reentradas");
+
+static_assert(loader::monitor_depth(VESTA_MONITOR_DEPTH_MASK
+                                    << VESTA_MONITOR_DEPTH_SHIFT) ==
+                  VESTA_MONITOR_DEPTH_MASK,
+              "ABI drift: cuantos bits ocupa la cuenta de reentradas");
 
 static_assert(alignof(loader::ObjectHeader) == 8,
               "ABI drift: alignof(ObjectHeader) != 8");
