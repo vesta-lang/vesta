@@ -2037,7 +2037,14 @@ bool Lowering::try_vectorize_reduction_for(ast::Stmt *s) {
         a_base = check_idx_base(rhs->rhs.get());
         if (!a_base) return false;
     } else if (rhs->rhs && rhs->rhs->kind == NodeKind::BinaryExpr) {
-        // dot-product: acc += a[i] * b[i]  (solo float -> VFMADD/fmadd)
+        /* Producto escalar: `acc += a[i] * b[i]`.  Solo en coma flotante.
+         *
+         * En enteros la instruccion que multiplica y acumula de una vez no
+         * existe, y hacerlo en dos -- multiplicar y sumar -- se INTENTO: el
+         * reconocedor y los tres caminos de ejecucion lo aceptaban, y cada uno
+         * daba un numero DISTINTO y ninguno el correcto.  Queda fuera hasta que
+         * se entienda por que; una respuesta equivocada es peor que no
+         * vectorizar. */
         auto *mul = static_cast<BinaryExpr *>(rhs->rhs.get());
         if (mul->op != BinOp::Mul || !elem_fp) return false;
         a_base = check_idx_base(mul->lhs.get());
