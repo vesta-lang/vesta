@@ -1,0 +1,411 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Vesta",
+    "scopeName": "source.vesta",
+    "fileTypes": ["vx"],
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#preprocessor" },
+        { "include": "#annotations" },
+        { "include": "#strings" },
+        { "include": "#characters" },
+        { "include": "#numbers" },
+        { "include": "#asm-block" },
+        { "include": "#declarations" },
+        { "include": "#keywords" },
+        { "include": "#types" },
+        { "include": "#constants" },
+        { "include": "#functions" },
+        { "include": "#operators" },
+        { "include": "#punctuation" },
+        { "include": "#identifiers" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.block.documentation.vesta",
+                    "begin": "/\\*\\*",
+                    "end": "\\*/",
+                    "patterns": [{ "include": "#doc-tags" }]
+                },
+                {
+                    "name": "comment.block.vesta",
+                    "begin": "/\\*",
+                    "end": "\\*/"
+                },
+                {
+                    "name": "comment.line.double-slash.vesta",
+                    "begin": "//",
+                    "end": "$",
+                    "patterns": [{ "include": "#doc-tags" }]
+                }
+            ]
+        },
+        "doc-tags": {
+            "name": "storage.type.class.doc.vesta",
+            "match": "@(param|return|returns|brief|file|throws|see|note|complexity)\\b"
+        },
+        "preprocessor": {
+            "comment": "Directivas del preprocesador VPP, que corre como primera etapa sobre cada .vx",
+            "patterns": [
+                {
+                    "name": "meta.preprocessor.include.vesta",
+                    "begin": "^\\s*(#)\\s*(include)\\b",
+                    "beginCaptures": {
+                        "1": { "name": "punctuation.definition.directive.vesta" },
+                        "2": { "name": "keyword.control.directive.include.vesta" }
+                    },
+                    "end": "$",
+                    "patterns": [
+                        {
+                            "name": "string.quoted.other.include.vesta",
+                            "match": "<[^>]*>|\"[^\"]*\""
+                        }
+                    ]
+                },
+                {
+                    "name": "meta.preprocessor.vesta",
+                    "begin": "^\\s*(#)\\s*(define|undef|if|ifdef|ifndef|elif|else|endif|foreach|endforeach|repeat|endrepeat|array|exec|error|warning|pragma)\\b",
+                    "beginCaptures": {
+                        "1": { "name": "punctuation.definition.directive.vesta" },
+                        "2": { "name": "keyword.control.directive.vesta" }
+                    },
+                    "end": "(?<!\\\\)$",
+                    "patterns": [
+                        { "include": "#comments" },
+                        { "include": "#strings" },
+                        { "include": "#numbers" }
+                    ]
+                }
+            ]
+        },
+        "annotations": {
+            "comment": "Anotaciones del lenguaje: @Override, @Async, @Target(...), @Macro, @Asm, ...",
+            "patterns": [
+                {
+                    "name": "meta.annotation.vesta",
+                    "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "punctuation.definition.annotation.vesta" },
+                        "2": { "name": "storage.type.annotation.vesta" }
+                    }
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "comment": "Cadena de varias lineas con interpolacion",
+                    "name": "string.quoted.triple.vesta",
+                    "begin": "\"\"\"",
+                    "end": "\"\"\"",
+                    "patterns": [
+                        { "include": "#string-escape" },
+                        { "include": "#string-interpolation" }
+                    ]
+                },
+                {
+                    "comment": "Cadena cruda: ni escapes ni interpolacion",
+                    "name": "string.quoted.other.raw.vesta",
+                    "begin": "r\"",
+                    "end": "\"",
+                    "beginCaptures": {
+                        "0": { "name": "punctuation.definition.string.begin.vesta" }
+                    },
+                    "endCaptures": {
+                        "0": { "name": "punctuation.definition.string.end.vesta" }
+                    }
+                },
+                {
+                    "name": "string.quoted.double.vesta",
+                    "begin": "\"",
+                    "end": "\"",
+                    "beginCaptures": {
+                        "0": { "name": "punctuation.definition.string.begin.vesta" }
+                    },
+                    "endCaptures": {
+                        "0": { "name": "punctuation.definition.string.end.vesta" }
+                    },
+                    "patterns": [
+                        { "include": "#string-escape" },
+                        { "include": "#string-interpolation" }
+                    ]
+                }
+            ]
+        },
+        "string-escape": {
+            "name": "constant.character.escape.vesta",
+            "match": "\\\\(u\\{[0-9a-fA-F]+\\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0nrtvfab\\\\'\"$])"
+        },
+        "string-interpolation": {
+            "comment": "Interpolacion ${expr} con especificador de formato opcional",
+            "name": "meta.embedded.expression.vesta",
+            "begin": "\\$\\{",
+            "end": "\\}",
+            "beginCaptures": {
+                "0": { "name": "punctuation.definition.template-expression.begin.vesta" }
+            },
+            "endCaptures": {
+                "0": { "name": "punctuation.definition.template-expression.end.vesta" }
+            },
+            "patterns": [
+                {
+                    "comment": "Especificador de formato: ${n:hex:>20}",
+                    "match": "(:)\\s*(hex|bin|oct|dec|ptr|gc|char|bool)?",
+                    "captures": {
+                        "1": { "name": "punctuation.separator.format.vesta" },
+                        "2": { "name": "support.constant.format.vesta" }
+                    }
+                },
+                { "include": "$self" }
+            ]
+        },
+        "characters": {
+            "name": "string.quoted.single.vesta",
+            "match": "'(\\\\(u\\{[0-9a-fA-F]+\\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0nrtvfab\\\\'\"])|[^'\\\\])'",
+            "captures": {
+                "1": { "name": "constant.character.escape.vesta" }
+            }
+        },
+        "numbers": {
+            "patterns": [
+                {
+                    "comment": "Flotante hexadecimal: 0x1.8p+1",
+                    "name": "constant.numeric.float.hexadecimal.vesta",
+                    "match": "\\b0[xX][0-9a-fA-F_]+(\\.[0-9a-fA-F_]+)?[pP][+-]?[0-9]+\\b"
+                },
+                {
+                    "name": "constant.numeric.hexadecimal.vesta",
+                    "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+                },
+                {
+                    "name": "constant.numeric.binary.vesta",
+                    "match": "\\b0[bB][01_]+\\b"
+                },
+                {
+                    "name": "constant.numeric.octal.vesta",
+                    "match": "\\b0[oO][0-7_]+\\b"
+                },
+                {
+                    "name": "constant.numeric.float.vesta",
+                    "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9]+)?\\b|\\b[0-9][0-9_]*[eE][+-]?[0-9]+\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.vesta",
+                    "match": "\\b[0-9][0-9_]*\\b"
+                }
+            ]
+        },
+        "asm-block": {
+            "comment": "Bloque de ensamblador en linea: asm { ... } / asm volatile { ... }",
+            "name": "meta.asm.vesta",
+            "begin": "\\b(asm)\\b(?:\\s+(volatile))?\\s*(?:(@bits)\\s*\\(\\s*(16|32|64)\\s*\\)\\s*)?(\\{)",
+            "beginCaptures": {
+                "1": { "name": "keyword.other.asm.vesta" },
+                "2": { "name": "storage.modifier.vesta" },
+                "3": { "name": "storage.type.annotation.vesta" },
+                "4": { "name": "constant.numeric.integer.vesta" },
+                "5": { "name": "punctuation.section.block.begin.vesta" }
+            },
+            "end": "\\}",
+            "endCaptures": {
+                "0": { "name": "punctuation.section.block.end.vesta" }
+            },
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#numbers" },
+                {
+                    "comment": "Etiqueta local del ensamblador",
+                    "match": "^\\s*(\\.?[A-Za-z_][A-Za-z0-9_]*)\\s*:",
+                    "captures": {
+                        "1": { "name": "entity.name.label.vesta" }
+                    }
+                },
+                {
+                    "name": "variable.language.register.vesta",
+                    "match": "\\b([re]?(ax|bx|cx|dx|si|di|sp|bp)|r([89]|1[0-5])[dwb]?|[abcd][lh]|[sd]il|spl|bpl|[xyz]mm([0-9]|1[0-5])|[wx]([0-9]|[12][0-9]|30)|sp|lr|pc)\\b"
+                },
+                {
+                    "name": "support.function.mnemonic.vesta",
+                    "match": "^\\s*([a-z][a-z0-9.]*)\\b"
+                }
+            ]
+        },
+        "declarations": {
+            "patterns": [
+                {
+                    "comment": "Declaracion de tipo: class / struct / union / interface / enum / concept",
+                    "match": "\\b(class|struct|union|interface|enum|concept)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "storage.type.vesta" },
+                        "2": { "name": "entity.name.type.vesta" }
+                    }
+                },
+                {
+                    "comment": "Declaracion de espacio de nombres",
+                    "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_.]*)",
+                    "captures": {
+                        "1": { "name": "keyword.other.namespace.vesta" },
+                        "2": { "name": "entity.name.namespace.vesta" }
+                    }
+                },
+                {
+                    "comment": "Importacion de modulo",
+                    "match": "\\b(extern\\s+)?(import)\\s+([A-Za-z_][A-Za-z0-9_.]*)",
+                    "captures": {
+                        "1": { "name": "keyword.other.vesta" },
+                        "2": { "name": "keyword.control.import.vesta" },
+                        "3": { "name": "entity.name.namespace.vesta" }
+                    }
+                },
+                {
+                    "comment": "Alias de tipo",
+                    "match": "\\b(typedef|using)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.other.vesta" },
+                        "2": { "name": "entity.name.type.vesta" }
+                    }
+                },
+                {
+                    "comment": "Instanciacion: new Tipo(...)",
+                    "match": "\\b(new)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+                    "captures": {
+                        "1": { "name": "keyword.control.new.vesta" },
+                        "2": { "name": "entity.name.type.vesta" }
+                    }
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.vesta",
+                    "match": "\\b(if|else|while|do|for|in|break|continue|goto|return|match|case|try|catch|finally|throw|delete)\\b"
+                },
+                {
+                    "name": "keyword.control.concurrency.vesta",
+                    "match": "\\b(await|spawn|rspawn|synchronized|monitor|yield)\\b"
+                },
+                {
+                    "name": "keyword.other.vesta",
+                    "match": "\\b(import|extern|typedef|using|namespace|get|set|impl|extension|where|comptime|static_assert|sizeof|alignof|offsetof|as|asm|new)\\b"
+                },
+                {
+                    "name": "storage.type.vesta",
+                    "match": "\\b(class|struct|union|interface|enum|concept|fn|cfn)\\b"
+                },
+                {
+                    "name": "storage.modifier.vesta",
+                    "match": "\\b(public|private|protected|static|const|final|override|nonnull|thread_local|volatile|register|auto|var)\\b"
+                },
+                {
+                    "name": "variable.language.vesta",
+                    "match": "\\b(this|super)\\b"
+                }
+            ]
+        },
+        "types": {
+            "patterns": [
+                {
+                    "name": "support.type.primitive.vesta",
+                    "match": "\\b(void|bool|char|string|i8|i16|i32|i64|u8|u16|u32|u64|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|f32|f64|float|double)\\b"
+                },
+                {
+                    "name": "support.class.collection.vesta",
+                    "match": "\\b(ArrayList|HashMap|HashSet|Queue|Deque|TreeMap|TreeSet|Stack|Optional|Result|Future|Array)\\b"
+                },
+                {
+                    "name": "support.type.ownership.vesta",
+                    "match": "\\b(unique|shared|gc|borrow|borrow_mut|VirtualPtr|atomic)\\b"
+                }
+            ]
+        },
+        "constants": {
+            "patterns": [
+                {
+                    "name": "constant.language.vesta",
+                    "match": "\\b(true|false|null)\\b"
+                },
+                {
+                    "comment": "Identificadores ANSI magicos aceptados en print/println",
+                    "name": "support.constant.ansi.vesta",
+                    "match": "\\b(RESET|BOLD|DIM|ITALIC|UNDERLINE|BLINK|REVERSE|HIDDEN|BLACK|RED|GREEN|YELLOW|BLUE|MAGENTA|CYAN|WHITE|BG_BLACK|BG_RED|BG_GREEN|BG_YELLOW|BG_BLUE|BG_MAGENTA|BG_CYAN|BG_WHITE)\\b"
+                },
+                {
+                    "comment": "Constante en mayusculas por convencion",
+                    "name": "variable.other.constant.vesta",
+                    "match": "\\b[A-Z][A-Z0-9_]{2,}\\b"
+                }
+            ]
+        },
+        "functions": {
+            "patterns": [
+                {
+                    "comment": "Llamada o definicion: nombre seguido de parentesis",
+                    "match": "([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+                    "captures": {
+                        "1": { "name": "entity.name.function.vesta" }
+                    }
+                },
+                {
+                    "comment": "Llamada generica explicita: nombre<T>(...)",
+                    "match": "([A-Za-z_][A-Za-z0-9_]*)\\s*(?=<[A-Za-z_0-9_,*<>\\s]+>\\s*\\()",
+                    "captures": {
+                        "1": { "name": "entity.name.function.vesta" }
+                    }
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.assignment.vesta",
+                    "match": "(<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|=)"
+                },
+                {
+                    "name": "keyword.operator.comparison.vesta",
+                    "match": "(==|!=|<=|>=|<|>)"
+                },
+                {
+                    "name": "keyword.operator.logical.vesta",
+                    "match": "(&&|\\|\\||!!|!)"
+                },
+                {
+                    "name": "keyword.operator.bitwise.vesta",
+                    "match": "(<<|>>|&|\\||\\^|~)"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.vesta",
+                    "match": "(\\+\\+|--|\\+|-|\\*|/|%)"
+                },
+                {
+                    "name": "keyword.operator.other.vesta",
+                    "match": "(=>|->|\\?|:)"
+                }
+            ]
+        },
+        "punctuation": {
+            "patterns": [
+                { "name": "punctuation.terminator.vesta", "match": ";" },
+                { "name": "punctuation.separator.vesta", "match": "[,.]" },
+                { "name": "punctuation.section.block.vesta", "match": "[{}]" },
+                { "name": "punctuation.section.brackets.vesta", "match": "[\\[\\]]" },
+                { "name": "punctuation.section.parens.vesta", "match": "[()]" }
+            ]
+        },
+        "identifiers": {
+            "patterns": [
+                {
+                    "comment": "Nombre en PascalCase: se asume tipo",
+                    "name": "entity.name.type.vesta",
+                    "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+                },
+                {
+                    "name": "variable.other.vesta",
+                    "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+                }
+            ]
+        }
+    }
+}

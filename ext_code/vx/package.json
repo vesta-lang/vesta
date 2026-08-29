@@ -1,0 +1,400 @@
+{
+    "name": "vesta",
+    "displayName": "Vesta",
+    "description": "Soporte del lenguaje Vesta (.vx): servidor LSP, resaltado semantico, diagnosticos y vistas del compilador (IR, bytecode, JIT/AOT, diagramas y complejidad).",
+    "version": "0.1.0",
+    "publisher": "desmonhak",
+    "license": "SEE LICENSE IN LICENSE.md",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/vesta-lang/vesta"
+    },
+    "homepage": "https://github.com/vesta-lang",
+    "bugs": {
+        "url": "https://github.com/vesta-lang/vesta/issues"
+    },
+    "engines": {
+        "vscode": "^1.91.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Snippets",
+        "Linters",
+        "Visualization"
+    ],
+    "keywords": [
+        "vesta",
+        "vx",
+        "vestavm",
+        "lsp",
+        "compiler"
+    ],
+    "main": "./out/extension.js",
+    "contributes": {
+        "languages": [
+            {
+                "id": "vesta",
+                "aliases": [
+                    "Vesta",
+                    "vesta",
+                    "vx"
+                ],
+                "extensions": [
+                    ".vx"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "vesta",
+                "scopeName": "source.vesta",
+                "path": "./syntaxes/vesta.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "vesta",
+                "path": "./snippets/vesta.json"
+            }
+        ],
+        "semanticTokenTypes": [
+            {
+                "id": "escapeSequence",
+                "superType": "string",
+                "description": "Secuencia de escape dentro de una cadena o literal de caracter."
+            },
+            {
+                "id": "interpolation",
+                "superType": "variable",
+                "description": "Expresion interpolada dentro de una cadena."
+            },
+            {
+                "id": "register",
+                "superType": "variable",
+                "description": "Registro de maquina dentro de un bloque asm."
+            }
+        ],
+        "semanticTokenScopes": [
+            {
+                "language": "vesta",
+                "scopes": {
+                    "escapeSequence": [
+                        "constant.character.escape.vesta"
+                    ],
+                    "interpolation": [
+                        "meta.embedded.expression.vesta"
+                    ],
+                    "register": [
+                        "variable.language.register.vesta"
+                    ]
+                }
+            }
+        ],
+        "commands": [
+            {
+                "command": "vesta.restartServer",
+                "title": "Reiniciar el servidor de lenguaje",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showServerLog",
+                "title": "Mostrar el registro del servidor",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showIr",
+                "title": "Ver el IR SSA",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showIrDiff",
+                "title": "Ver el diff del IR (antes y despues de optimizar)",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showBytecode",
+                "title": "Ver el bytecode .vel",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showJitAsm",
+                "title": "Ver el ensamblador del JIT",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showAotAsm",
+                "title": "Ver el ensamblador AOT",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showComplexity",
+                "title": "Ver la complejidad Big-O por funcion",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showModes",
+                "title": "Ver el reporte de los tres modos de ejecucion",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showAotCompat",
+                "title": "Ver la compatibilidad AOT",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showMacroExpand",
+                "title": "Ver la expansion de las macros",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showComptimeValues",
+                "title": "Ver los valores comptime",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.showDiagram",
+                "title": "Ver un diagrama del modulo",
+                "category": "Vesta",
+                "icon": "$(type-hierarchy)"
+            },
+            {
+                "command": "vesta.showMachineView",
+                "title": "Ver la correlacion fuente / IR / ensamblador",
+                "category": "Vesta",
+                "icon": "$(circuit-board)"
+            },
+            {
+                "command": "vesta.compile",
+                "title": "Compilar el fichero activo",
+                "category": "Vesta",
+                "icon": "$(gear)"
+            },
+            {
+                "command": "vesta.run",
+                "title": "Compilar y ejecutar el fichero activo",
+                "category": "Vesta",
+                "icon": "$(play)"
+            }
+        ],
+        "menus": {
+            "editor/title": [
+                {
+                    "when": "resourceLangId == vesta",
+                    "command": "vesta.run",
+                    "group": "navigation@1"
+                },
+                {
+                    "when": "resourceLangId == vesta",
+                    "command": "vesta.showMachineView",
+                    "group": "navigation@2"
+                }
+            ],
+            "editor/context": [
+                {
+                    "when": "resourceLangId == vesta",
+                    "command": "vesta.run",
+                    "group": "vesta@1"
+                },
+                {
+                    "when": "resourceLangId == vesta",
+                    "command": "vesta.compile",
+                    "group": "vesta@2"
+                },
+                {
+                    "when": "resourceLangId == vesta",
+                    "command": "vesta.showMachineView",
+                    "group": "vesta@3"
+                },
+                {
+                    "when": "resourceLangId == vesta",
+                    "command": "vesta.showDiagram",
+                    "group": "vesta@4"
+                }
+            ],
+            "commandPalette": [
+                {
+                    "command": "vesta.showIr",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showIrDiff",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showBytecode",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showJitAsm",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showAotAsm",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showComplexity",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showModes",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showAotCompat",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showMacroExpand",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showComptimeValues",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showDiagram",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.showMachineView",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.compile",
+                    "when": "resourceLangId == vesta"
+                },
+                {
+                    "command": "vesta.run",
+                    "when": "resourceLangId == vesta"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Vesta",
+            "properties": {
+                "vesta.server.path": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Ruta al ejecutable `vesta_lsp`. Vacia = busqueda automatica: variable de entorno `VESTA_LSP`, `PATH`, rutas de instalacion (`%ProgramFiles%\\VestaVM\\bin`, `VESTA_HOME`, `/usr/local/vesta`, ...) y directorios de compilacion del repositorio (`cmake-build-release/`, `build/`).",
+                    "scope": "machine-overridable"
+                },
+                "vesta.server.arguments": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Argumentos adicionales para el servidor de lenguaje.",
+                    "scope": "machine-overridable"
+                },
+                "vesta.server.enable": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Arrancar el servidor de lenguaje al abrir un fichero .vx. Si se desactiva solo queda el resaltado por gramatica."
+                },
+                "vesta.trace.server": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "default": "off",
+                    "description": "Nivel de traza del protocolo entre el editor y el servidor de lenguaje."
+                },
+                "vesta.vmPath": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Ruta al ejecutable de la maquina virtual (`vesta` instalado, `vm` en el arbol de compilacion). Vacia = misma busqueda automatica que el servidor de lenguaje.",
+                    "scope": "machine-overridable"
+                },
+                "vesta.reuseTerminal": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Reutilizar el mismo terminal al ejecutar programas consecutivos."
+                },
+                "vesta.inlayHints.parameterNames": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Mostrar el nombre de cada parametro delante de su argumento en las llamadas."
+                },
+                "vesta.inspect.os": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "windows",
+                        "linux"
+                    ],
+                    "enumDescriptions": [
+                        "El sistema anfitrion",
+                        "Windows",
+                        "Linux"
+                    ],
+                    "default": "",
+                    "description": "Sistema operativo objetivo de las vistas del compilador (IR, bytecode, ensamblador y diagramas). Vacio = el anfitrion."
+                },
+                "vesta.inspect.arch": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "x86-64",
+                        "x86-32",
+                        "aarch64"
+                    ],
+                    "default": "",
+                    "description": "Arquitectura objetivo de las vistas del compilador. Vacia = la del anfitrion."
+                },
+                "vesta.aot.tier": {
+                    "type": "string",
+                    "enum": [
+                        "bare",
+                        "embed",
+                        "full"
+                    ],
+                    "default": "bare",
+                    "description": "Nivel de runtime que asumen las vistas AOT (compatibilidad y reporte de modos)."
+                },
+                "vesta.diagram.format": {
+                    "type": "string",
+                    "enum": [
+                        "html",
+                        "mermaid",
+                        "graphviz"
+                    ],
+                    "enumDescriptions": [
+                        "Pagina interactiva autocontenida, renderizada dentro del editor",
+                        "Texto .mmd (Mermaid)",
+                        "Texto .dot (Graphviz)"
+                    ],
+                    "default": "html",
+                    "description": "Formato con el que se piden los diagramas al servidor."
+                },
+                "vesta.diagram.cost": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Anotar los nodos de funcion del diagrama con su coste Big-O."
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./",
+        "pretest": "npm run compile && npm run lint",
+        "lint": "eslint src",
+        "package": "vsce package"
+    },
+    "dependencies": {
+        "vscode-languageclient": "^10.1.0"
+    },
+    "devDependencies": {
+        "@types/node": "22.x",
+        "@types/vscode": "^1.91.0",
+        "eslint": "^9.39.3",
+        "typescript": "^5.9.3",
+        "typescript-eslint": "^8.56.1"
+    }
+}

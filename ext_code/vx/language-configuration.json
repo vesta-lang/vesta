@@ -1,0 +1,151 @@
+// Configuracion del lenguaje Vesta (.vx) para el editor.
+//
+// Cubre lo que el lenguaje admite de verdad: comentarios de linea, de bloque y
+// de documentacion; cadenas normales, crudas (r"...") y de varias lineas
+// ("""..."""); interpolacion ${...}; anotaciones @Nombre; genericos con < >;
+// brazos de match; etiquetas de goto y de asm; y las directivas del
+// preprocesador VPP, que corre como primera etapa sobre cada .vx.
+//
+// Este fichero solo describe EDICION (sangrado, cierre de pares, plegado).  El
+// resaltado fino lo pone el servidor de lenguaje con sus tipos semanticos, y la
+// gramatica de syntaxes/ es el respaldo cuando el servidor no esta corriendo.
+{
+    "comments": {
+        "lineComment": "//",
+        "blockComment": ["/*", "*/"]
+    },
+
+    // Los genericos (<T>) NO entran aqui a proposito: '<' y '>' son tambien
+    // comparacion y desplazamiento, asi que emparejarlos como corchetes marca
+    // como pareja cualquier "a < b" suelto.  Van solo en surroundingPairs, que
+    // se aplica a una seleccion explicita y no puede confundirse.
+    "brackets": [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"]
+    ],
+
+    // Coloreado de pares anidados: el mismo juego que "brackets".
+    "colorizedBracketPairs": [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"]
+    ],
+
+    "autoClosingPairs": [
+        { "open": "{", "close": "}" },
+        { "open": "[", "close": "]" },
+        { "open": "(", "close": ")" },
+        // Interpolacion dentro de una cadena: al escribir ${ se cierra la llave.
+        { "open": "${", "close": "}", "notIn": ["comment"] },
+        // Cadena de varias lineas.  Va ANTES de la comilla simple doble para
+        // que al teclear la tercera comilla se cierre el triple, no una suelta.
+        { "open": "\"\"\"", "close": "\"\"\"", "notIn": ["comment"] },
+        { "open": "\"", "close": "\"", "notIn": ["string", "comment"] },
+        // Cadena cruda: sin escapes ni interpolacion.
+        { "open": "r\"", "close": "\"", "notIn": ["string", "comment"] },
+        { "open": "'", "close": "'", "notIn": ["string", "comment"] },
+        // Al abrir un comentario de bloque se cierra con el espacio delante,
+        // que es donde queda el cursor al continuar la linea.
+        { "open": "/*", "close": " */", "notIn": ["string"] }
+    ],
+
+    // Caracteres delante de los cuales SI se auto-cierra.  Sin esta lista el
+    // editor solo cierra al final de linea o antes de un espacio, lo que
+    // estorba al envolver una expresion ya escrita.
+    "autoCloseBefore": ";:.,=}])>` \n\t",
+
+    "surroundingPairs": [
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"],
+        ["\"", "\""],
+        ["'", "'"],
+        // Envolver una seleccion en genericos: List<T>, unique<T>, gc<T>.
+        ["<", ">"]
+    ],
+
+    "folding": {
+        // Vesta usa llaves, no sangrado significativo.
+        "offSide": false,
+        "markers": {
+            // Regiones marcadas a mano y bloques condicionales / de repeticion
+            // del preprocesador VPP.
+            "start": "^\\s*(?://\\s*#?region\\b|#\\s*(?:region|if|ifdef|ifndef|foreach|repeat)\\b)",
+            "end": "^\\s*(?://\\s*#?endregion\\b|#\\s*(?:endregion|endif|endforeach|endrepeat)\\b)"
+        }
+    },
+
+    // Una palabra es un identificador de Vesta o un numero.  El punto queda
+    // FUERA para que al hacer doble clic en "std.io.println" se seleccione un
+    // solo segmento, y el '$' tambien, para que ${expr} no absorba la llave.
+    "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\$\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
+
+    "indentationRules": {
+        // Sangrar tras una llave, un parentesis o un corchete que quedan
+        // abiertos al final de la linea; y tras el '=>' de un brazo de match o
+        // de un cuerpo por expresion que continua en la linea siguiente.  El
+        // "(?!\\/\\/)" descarta las lineas comentadas.
+        "increaseIndentPattern": "^((?!\\/\\/).)*(\\{[^}\"'`]*|\\([^)\"'`]*|\\[[^\\]\"'`]*)$|^\\s*(case|default)\\b[^;{]*=>\\s*$",
+
+        // Quitar sangrado en la linea que cierra el bloque, y en las
+        // continuaciones de una construccion (else / catch / finally) que
+        // vengan sin llave delante.
+        "decreaseIndentPattern": "^\\s*[\\}\\]\\)]|^\\s*(else|catch|finally)\\b",
+
+        // Sangrar SOLO la linea siguiente cuando la construccion no lleva
+        // llaves: `if (c)` / `while (c)` / `for (...)` / `else` sueltos.
+        "indentNextLinePattern": "^\\s*(if|while|for)\\s*\\(.*\\)\\s*$|^\\s*else\\s*$|^\\s*do\\s*$",
+
+        // Lineas que nunca se sangran: directivas del preprocesador, etiquetas
+        // de goto y etiquetas dentro de un bloque asm.
+        "unIndentedLinePattern": "^\\s*#\\s*\\w+|^\\s*\\.?[A-Za-z_][A-Za-z0-9_]*\\s*:\\s*(?://.*)?$"
+    },
+
+    "onEnterRules": [
+        // --- Comentarios de documentacion /** ... */ ---
+        {
+            // Enter dentro de un /** recien abierto y con el */ ya delante:
+            // abre el bloque en dos lineas y deja el cursor en medio.
+            "beforeText": "^\\s*\\/\\*\\*(?!\\/)([^\\*]|\\*(?!\\/))*$",
+            "afterText": "^\\s*\\*\\/$",
+            "action": { "indent": "indentOutdent", "appendText": " * " }
+        },
+        {
+            // Enter tras abrir /** sin cierre a la vista: continuar el bloque.
+            "beforeText": "^\\s*\\/\\*\\*(?!\\/)([^\\*]|\\*(?!\\/))*$",
+            "action": { "indent": "none", "appendText": " * " }
+        },
+        {
+            // Continuar una linea intermedia " * ..." del bloque.
+            "beforeText": "^(\\t|[ ])*[ ]\\*([ ]([^\\*]|\\*(?!\\/))*)?$",
+            "action": { "indent": "none", "appendText": "* " }
+        },
+        {
+            // Tras cerrar el bloque, recuperar la columna original.
+            "beforeText": "^(\\t|[ ])*[ ]\\*\\/\\s*$",
+            "action": { "indent": "none", "removeText": 1 }
+        },
+        {
+            // Enter dentro de un /* ... */ normal ya cerrado.
+            "beforeText": "^\\s*\\/\\*(?!\\*)([^\\*]|\\*(?!\\/))*$",
+            "afterText": "^\\s*\\*\\/$",
+            "action": { "indent": "indentOutdent", "appendText": " * " }
+        },
+
+        // --- Comentarios de linea ---
+        {
+            // Continuar una cadena de comentarios de documentacion "///".
+            "beforeText": "^\\s*\\/\\/\\/.*$",
+            "action": { "indent": "none", "appendText": "/// " }
+        },
+
+        // --- Anotaciones ---
+        {
+            // Tras una anotacion suelta (@Override, @Async, @Inline, ...) la
+            // declaracion que anota va en la MISMA columna, no sangrada.
+            "beforeText": "^\\s*@[A-Za-z_][A-Za-z0-9_]*(\\s*\\(.*\\))?\\s*$",
+            "action": { "indent": "none" }
+        }
+    ]
+}

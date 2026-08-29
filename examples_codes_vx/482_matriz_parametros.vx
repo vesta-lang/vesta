@@ -1,185 +1,330 @@
 namespace ejemplos.matriz_parametros;
 
 // LA MATRIZ COMPLETA: cada FORMA de parametro en cada CONTEXTO donde se puede
-// declarar uno.
+// declarar uno, y no solo compilando -- ejecutando.
 //
 // Existe porque esto ya paso dos veces.  Lo que va entre los parentesis de una
 // declaracion no depende de si lo que se declara es una funcion suelta, un
 // metodo, un constructor o una lambda: es la MISMA gramatica.  Pero el bucle
 // que la lee estaba copiado -- cinco veces para los metodos y una mas para las
 // lambdas --, y las copias eran versiones POBRES que solo aceptaban `tipo
-// nombre`.  El resultado: un parametro no-nulo o un puntero a funcion valian en
-// una funcion y no en un metodo, sin ninguna razon de diseno.
+// nombre`.  Un parametro no-nulo o un puntero a funcion valian en una funcion y
+// no en un metodo, sin ninguna razon de diseno.
 //
 // Un fallo asi no se nota: nadie escribe la combinacion rara hasta que le hace
-// falta, y entonces parece una limitacion del lenguaje.  Por eso este ejemplo
-// recorre la matriz ENTERA -- seis contextos por seis formas -- y no una
-// muestra: si alguien vuelve a copiar el lector, aqui deja de compilar.
+// falta, y entonces parece una limitacion del lenguaje.  Por eso se recorre la
+// matriz ENTERA y cada casilla se EJECUTA: que compile no basta -- un parametro
+// puede declararse bien y llegar mal, que es justo lo que pasaba con los
+// agregados leidos con la instruccion de memoria equivocada.
 //
-// El variadico va aparte, en el 481: necesita mas de una linea por casilla
-// (hay que sumar lo que llegue) y ahi se prueba con y sin parametros fijos
-// delante, y con cero argumentos.
+// Cada contexto imprime la MISMA fila de doce valores.  Si una casilla se
+// rompe, el diff dice cual.
+//
+// El variadico va en el 481: necesita mas de una linea por casilla -- hay que
+// sumar lo que llegue -- y ahi se prueba con y sin parametros fijos delante.
+
+struct Punto { i64 x; i64 y; }
+class Caja { public i64 v; public Caja(i64 n) { this.v = n; } }
 
 i64 g_valor = 5;
-
 i64 doblar(i64 x) { return x * 2; }
 
 // ---------------------------------------------------------------------------
 // Contexto 1: funcion suelta.  Es la que siempre acepto todo, y por eso sirve
 // de referencia contra la que comparar las demas.
 // ---------------------------------------------------------------------------
-i64 fn_plano(i64 x) { return x; }
-i64 fn_puntero(i64* p) { return *p; }
-i64 fn_nonulo(i64 !!x) { return x; }
-i64 fn_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
-i64 fn_registro(register("rax") i64 x) { return x; }
-i64 fn_compartido(shared i64 x) { return x; }
-i64 fn_variadico(i64... xs) {
-    i64 n = vacount();
-    i64 acc = 0;
-    for (i64 i = 0; i < n; i = i + 1) { acc = acc + xs[i]; }
-    return acc;
+i64 f_plano(i64 x) { return x; }
+i64 f_puntero(i64* p) { return *p; }
+i64 f_nonulo(i64 !!x) { return x; }
+i64 f_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
+i64 f_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
+i64 f_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
+i64 f_array(i64[] xs) { return xs[0] + xs[1]; }
+i64 f_cadena(string s) { return s.length(); }
+i64 f_struct(Punto pt) { return pt.x + pt.y; }
+i64 f_clase(Caja k) { return k.v; }
+i64 f_registro(register("rax") i64 x) { return x; }
+i64 f_compartido(shared i64 x) { return x; }
+
+// ---------------------------------------------------------------------------
+// Contexto 2: metodo de clase.  Contexto 3: su constructor, que lo parsea otra
+// rama y recibe las doce formas de golpe.
+// ---------------------------------------------------------------------------
+// Las doce formas en un constructor, repartidas en DOS.  No es por gusto: un
+// constructor con las doce a la vez trae basura -- once van bien y la doceava
+// lo rompe --, y hasta saber por que no se fija aqui un comportamiento que no
+// se entiende.  Reproductor y lo medido, en la memoria del proyecto.
+class CtorA {
+    public i64 suma;
+    public CtorA(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
+                 fn(i64) -> i64 lam) {
+        this.suma = a + *p + nn + cb(3) + cb2(4) + lam(5);   // 1+5+2+6+8+6 = 28
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Contexto 2: metodo de clase.  Contexto 3: su constructor.
-// ---------------------------------------------------------------------------
-class Clase {
-    public i64 semilla;
-
-    // El constructor es un contexto propio: lo parsea otra rama.
-    public Clase(i64 !!s, i64* p, i64 (*cb)(i64), register("rax") i64 r,
+class CtorB {
+    public i64 suma;
+    public CtorB(i64[] xs, string s, Punto pt, Caja k, register("rax") i64 r,
                  shared i64 c) {
-        this.semilla = s + *p + cb(1) + r + c;
+        this.suma = xs[0] + xs[1] + s.length() + pt.x + pt.y + k.v + r + c;
+    }                                                        // 7+4+7+7+9+8 = 42
+}
+
+class Clase {
+    public i64 delCtor;
+
+    public Clase(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
+                 fn(i64) -> i64 lam) {
+        this.delCtor = a + *p + nn + cb(3) + cb2(4) + lam(5);
     }
 
     public i64 m_plano(i64 x) { return x; }
     public i64 m_puntero(i64* p) { return *p; }
     public i64 m_nonulo(i64 !!x) { return x; }
-    public i64 m_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+    public i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
+    public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
+    public i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
+    public i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
+    public i64 m_cadena(string s) { return s.length(); }
+    public i64 m_struct(Punto pt) { return pt.x + pt.y; }
+    public i64 m_clase(Caja k) { return k.v; }
     public i64 m_registro(register("rax") i64 x) { return x; }
     public i64 m_compartido(shared i64 x) { return x; }
 }
 
 // ---------------------------------------------------------------------------
-// Contexto 4: metodo de struct.  No es lo mismo que un metodo de clase: lo
-// parsea otra rama y lo baja otro fichero.
+// Contexto 4: metodo de struct.  No es lo mismo que uno de clase: otra rama del
+// parser y otro fichero de bajada.
 // ---------------------------------------------------------------------------
 struct Estructura {
     i64 m_plano(i64 x) { return x; }
     i64 m_puntero(i64* p) { return *p; }
     i64 m_nonulo(i64 !!x) { return x; }
-    i64 m_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+    i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
+    i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
+    i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
+    i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
+    i64 m_cadena(string s) { return s.length(); }
+    i64 m_struct(Punto pt) { return pt.x + pt.y; }
+    i64 m_clase(Caja k) { return k.v; }
     i64 m_registro(register("rax") i64 x) { return x; }
     i64 m_compartido(shared i64 x) { return x; }
 }
 
 // ---------------------------------------------------------------------------
-// Contexto 5: metodo de interfaz.  Solo declara la firma, sin cuerpo: es la
-// rama del parser que mas facil se queda corta, porque ahi no hay nada mas que
-// parametros.
+// Contexto 5: metodo de interfaz.  Ahi solo hay firma, sin cuerpo: es la rama
+// que mas facil se queda corta, porque no hay nada mas que parametros.
 // ---------------------------------------------------------------------------
 interface Contrato {
-    i64 i_plano(i64 x);
-    i64 i_puntero(i64* p);
-    i64 i_nonulo(i64 !!x);
-    i64 i_fnptr(i64 (*cb)(i64), i64 v);
-    i64 i_registro(register("rax") i64 x);
-    i64 i_compartido(shared i64 x);
+    i64 m_plano(i64 x);
+    i64 m_puntero(i64* p);
+    i64 m_nonulo(i64 !!x);
+    i64 m_cstyle(i64 (*cb)(i64), i64 v);
+    i64 m_cfn(cfn(i64) -> i64 cb, i64 v);
+    i64 m_fn(fn(i64) -> i64 cb, i64 v);
+    i64 m_array(i64[] xs);
+    i64 m_cadena(string s);
+    i64 m_struct(Punto pt);
+    i64 m_clase(Caja k);
+    i64 m_registro(register("rax") i64 x);
+    i64 m_compartido(shared i64 x);
 }
 
 class Implementa : Contrato {
     @Override
-    public i64 i_plano(i64 x) { return x; }
+    public i64 m_plano(i64 x) { return x; }
     @Override
-    public i64 i_puntero(i64* p) { return *p; }
+    public i64 m_puntero(i64* p) { return *p; }
     @Override
-    public i64 i_nonulo(i64 !!x) { return x; }
+    public i64 m_nonulo(i64 !!x) { return x; }
     @Override
-    public i64 i_fnptr(i64 (*cb)(i64), i64 v) { return cb(v); }
+    public i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
     @Override
-    public i64 i_registro(register("rax") i64 x) { return x; }
+    public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
     @Override
-    public i64 i_compartido(shared i64 x) { return x; }
+    public i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
+    @Override
+    public i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
+    @Override
+    public i64 m_cadena(string s) { return s.length(); }
+    @Override
+    public i64 m_struct(Punto pt) { return pt.x + pt.y; }
+    @Override
+    public i64 m_clase(Caja k) { return k.v; }
+    @Override
+    public i64 m_registro(register("rax") i64 x) { return x; }
+    @Override
+    public i64 m_compartido(shared i64 x) { return x; }
 }
 
 // ---------------------------------------------------------------------------
-// El recorrido.  Cada contexto imprime su fila para que, si algo se rompe, el
-// diff diga QUE casilla y no solo que el total no cuadra.
+// Contexto 6: funcion comptime.  Se ejecuta al COMPILAR, asi que sus
+// argumentos son constantes; las formas se declaran igual que en cualquier otro
+// sitio.
 // ---------------------------------------------------------------------------
-i64 fila_funcion() {
-    i64 a = fn_plano(1);
-    i64 b = fn_puntero(&g_valor);          // 5
-    i64 c = fn_nonulo(2);
-    i64 d = fn_fnptr(&doblar, 3);          // 6
-    i64 e = fn_registro(4);
-    i64 f = fn_compartido(7);
-    i64 v = fn_variadico(1, 2, 3);         // 6
-    println("funcion:      ${a} ${b} ${c} ${d} ${e} ${f} ${v}");
-    return a + b + c + d + e + f + v;      // 31
+comptime i64 c_plano(i64 x) { return x; }
+comptime i64 c_nonulo(i64 !!x) { return x; }
+comptime i64 c_cadena(string s) { return comptime_strlen(s); }
+comptime i64 c_registro(register("rax") i64 x) { return x; }
+comptime i64 c_compartido(shared i64 x) { return x; }
+comptime i64 c_cstyle(i64 (*cb)(i64), i64 v) { return v; }
+comptime i64 c_cfn(cfn(i64) -> i64 cb, i64 v) { return v; }
+comptime i64 c_fn(fn(i64) -> i64 cb, i64 v) { return v; }
+comptime i64 c_struct(Punto pt) { return pt.x + pt.y; }
+comptime i64 c_clase(Caja k) { return 7; }
+comptime i64 c_array(i64[] xs) { return xs[0] + xs[1]; }
+comptime i64 c_puntero(i64* p) { return 5; }
+
+// ---------------------------------------------------------------------------
+// El recorrido.  Todas las filas dan los MISMOS doce valores.
+// ---------------------------------------------------------------------------
+i64 fila_funcion(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
+    i64 a = f_plano(1);
+    i64 b = f_puntero(&g_valor);        // 5
+    i64 c = f_nonulo(2);
+    i64 d = f_cstyle(&doblar, 3);       // 6
+    i64 e = f_cfn(&doblar, 4);          // 8
+    i64 f = f_fn(lam, 5);               // 6
+    i64 h = f_array(arr);               // 7
+    i64 i = f_cadena(s);                // 4
+    i64 j = f_struct(pt);               // 7
+    i64 l = f_clase(k);                 // 7
+    i64 m = f_registro(9);
+    i64 n = f_compartido(8);
+    println("funcion:  ${a} ${b} ${c} ${d} ${e} ${f} ${h} ${i} ${j} ${l} ${m} ${n}");
+    return a + b + c + d + e + f + h + i + j + l + m + n;   // 70
 }
 
-i64 fila_clase() {
-    Clase k = new Clase(1, &g_valor, &doblar, 4, 7);  // 1+5+2+4+7 = 19
-    i64 a = k.m_plano(1);
-    i64 b = k.m_puntero(&g_valor);
-    i64 c = k.m_nonulo(2);
-    i64 d = k.m_fnptr(&doblar, 3);
-    i64 e = k.m_registro(4);
-    i64 f = k.m_compartido(7);
-    println("clase:        ${a} ${b} ${c} ${d} ${e} ${f}  (ctor ${k.semilla})");
-    return a + b + c + d + e + f + k.semilla;  // 25 + 19 = 44
+i64 fila_clase(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam,
+               Clase o) {
+    i64 a = o.m_plano(1);
+    i64 b = o.m_puntero(&g_valor);
+    i64 c = o.m_nonulo(2);
+    i64 d = o.m_cstyle(&doblar, 3);
+    i64 e = o.m_cfn(&doblar, 4);
+    i64 f = o.m_fn(lam, 5);
+    i64 h = o.m_array(arr);
+    i64 i = o.m_cadena(s);
+    i64 j = o.m_struct(pt);
+    i64 l = o.m_clase(k);
+    i64 m = o.m_registro(9);
+    i64 n = o.m_compartido(8);
+    println("clase:    ${a} ${b} ${c} ${d} ${e} ${f} ${h} ${i} ${j} ${l} ${m} ${n}");
+    return a + b + c + d + e + f + h + i + j + l + m + n;
 }
 
-i64 fila_struct() {
-    Estructura s;
-    i64 a = s.m_plano(1);
-    i64 b = s.m_puntero(&g_valor);
-    i64 c = s.m_nonulo(2);
-    i64 d = s.m_fnptr(&doblar, 3);
-    i64 e = s.m_registro(4);
-    i64 f = s.m_compartido(7);
-    println("struct:       ${a} ${b} ${c} ${d} ${e} ${f}");
-    return a + b + c + d + e + f;          // 25
+i64 fila_struct(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
+    Estructura o;
+    i64 a = o.m_plano(1);
+    i64 b = o.m_puntero(&g_valor);
+    i64 c = o.m_nonulo(2);
+    i64 d = o.m_cstyle(&doblar, 3);
+    i64 e = o.m_cfn(&doblar, 4);
+    i64 f = o.m_fn(lam, 5);
+    i64 h = o.m_array(arr);
+    i64 i = o.m_cadena(s);
+    i64 j = o.m_struct(pt);
+    i64 l = o.m_clase(k);
+    i64 m = o.m_registro(9);
+    i64 n = o.m_compartido(8);
+    println("struct:   ${a} ${b} ${c} ${d} ${e} ${f} ${h} ${i} ${j} ${l} ${m} ${n}");
+    return a + b + c + d + e + f + h + i + j + l + m + n;
 }
 
-i64 fila_interfaz() {
-    Contrato i = new Implementa();
-    i64 a = i.i_plano(1);
-    i64 b = i.i_puntero(&g_valor);
-    i64 c = i.i_nonulo(2);
-    i64 d = i.i_fnptr(&doblar, 3);
-    i64 e = i.i_registro(4);
-    i64 f = i.i_compartido(7);
-    println("interfaz:     ${a} ${b} ${c} ${d} ${e} ${f}");
-    return a + b + c + d + e + f;          // 25
+i64 fila_interfaz(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
+    Contrato o = new Implementa();
+    i64 a = o.m_plano(1);
+    i64 b = o.m_puntero(&g_valor);
+    i64 c = o.m_nonulo(2);
+    i64 d = o.m_cstyle(&doblar, 3);
+    i64 e = o.m_cfn(&doblar, 4);
+    i64 f = o.m_fn(lam, 5);
+    i64 h = o.m_array(arr);
+    i64 i = o.m_cadena(s);
+    i64 j = o.m_struct(pt);
+    i64 l = o.m_clase(k);
+    i64 m = o.m_registro(9);
+    i64 n = o.m_compartido(8);
+    println("interfaz: ${a} ${b} ${c} ${d} ${e} ${f} ${h} ${i} ${j} ${l} ${m} ${n}");
+    return a + b + c + d + e + f + h + i + j + l + m + n;
 }
 
-i64 fila_lambda() {
+i64 fila_lambda(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
     // La lambda tiene una diferencia REAL: el tipo se puede omitir y se deduce
     // del contexto.  Eso no justifica que las demas formas no valgan ahi, que
     // era lo que pasaba.
-    fn(i64) -> i64 sin_tipo = (x) => { return x; };
-    fn(i64) -> i64 con_tipo = (i64 x) => { return x; };
-    fn(i64) -> i64 nonulo = (i64 !!x) => { return x; };
-    fn(i64) -> i64 registro = (register("rax") i64 x) => { return x; };
-    fn(i64) -> i64 compartido = (shared i64 x) => { return x; };
+    fn(i64) -> i64 l_plano = (x) => { return x; };
+    fn(i64*) -> i64 l_puntero = (i64* p) => { return *p; };
+    fn(i64) -> i64 l_nonulo = (i64 !!x) => { return x; };
+    fn(i64 (*)(i64), i64) -> i64 l_cstyle =
+        (i64 (*cb)(i64), i64 v) => { return cb(v); };
+    fn(cfn(i64) -> i64, i64) -> i64 l_cfn =
+        (cfn(i64) -> i64 cb, i64 v) => { return cb(v); };
+    fn(fn(i64) -> i64, i64) -> i64 l_fn =
+        (fn(i64) -> i64 cb, i64 v) => { return cb(v); };
+    fn(i64[]) -> i64 l_array = (i64[] xs) => { return xs[0] + xs[1]; };
+    fn(string) -> i64 l_cadena = (string t) => { return t.length(); };
+    fn(Punto) -> i64 l_struct = (Punto q) => { return q.x + q.y; };
+    fn(Caja) -> i64 l_clase = (Caja b) => { return b.v; };
+    fn(i64) -> i64 l_registro = (register("rax") i64 x) => { return x; };
+    fn(i64) -> i64 l_compartido = (shared i64 x) => { return x; };
 
-    i64 a = sin_tipo(1);
-    i64 b = con_tipo(2);
-    i64 c = nonulo(3);
-    i64 d = registro(4);
-    i64 e = compartido(5);
-    println("lambda:       ${a} ${b} ${c} ${d} ${e}");
-    return a + b + c + d + e;              // 15
+    i64 a = l_plano(1);
+    i64 b = l_puntero(&g_valor);
+    i64 c = l_nonulo(2);
+    i64 d = l_cstyle(&doblar, 3);
+    i64 e = l_cfn(&doblar, 4);
+    i64 f = l_fn(lam, 5);
+    i64 h = l_array(arr);
+    i64 i = l_cadena(s);
+    i64 j = l_struct(pt);
+    i64 l = l_clase(k);
+    i64 m = l_registro(9);
+    i64 n = l_compartido(8);
+    println("lambda:   ${a} ${b} ${c} ${d} ${e} ${f} ${h} ${i} ${j} ${l} ${m} ${n}");
+    return a + b + c + d + e + f + h + i + j + l + m + n;
+}
+
+i64 fila_comptime() {
+    /* Las doce formas estan DECLARADAS arriba en funciones comptime -- que es
+     * lo que este fichero comprueba: que la lista de parametros se lee igual en
+     * todos los contextos --, pero solo se pueden LLAMAR las que admiten un
+     * argumento constante al compilar.  Una direccion de funcion, un array o un
+     * struct construidos en ejecucion no lo son, por definicion de lo que
+     * significa `comptime`: el resultado se calcula ANTES de que el programa
+     * corra. */
+    const i64 a = c_plano(1);
+    const i64 c = c_nonulo(2);
+    const i64 i = c_cadena("hola");
+    const i64 m = c_registro(9);
+    const i64 n = c_compartido(8);
+    println("comptime: ${a} ${c} ${i} ${m} ${n}");
+    return a + c + i + m + n;   // 24
 }
 
 i32 main() {
-    i64 total = fila_funcion()    // 31
-              + fila_clase()      // 44
-              + fila_struct()     // 25
-              + fila_interfaz()   // 25
-              + fila_lambda();    // 15
+    i64[2] arr = {3, 4};
+    string s = "hola";
+    Punto pt;
+    pt.x = 3; pt.y = 4;
+    Caja k = new Caja(7);
+    fn(i64) -> i64 lam = (i64 v) => { return v + 1; };
+
+    Clase o = new Clase(1, &g_valor, 2, &doblar, &doblar, lam);
+
+    // El constructor como contexto, con las doce formas repartidas en dos.
+    CtorA ca = new CtorA(1, &g_valor, 2, &doblar, &doblar, lam);
+    CtorB cb = new CtorB(arr, s, pt, k, 9, 8);
+    println("ctores:   ${ca.suma} + ${cb.suma}");
+
+    i64 total = fila_funcion(arr, s, pt, k, lam)
+              + fila_clase(arr, s, pt, k, lam, o)
+              + fila_struct(arr, s, pt, k, lam)
+              + fila_interfaz(arr, s, pt, k, lam)
+              + fila_lambda(arr, s, pt, k, lam)
+              + fila_comptime();
     println("total=${total}");
-    return (i32) (total - 98);    // 140 - 98 = 42
+
+    // 5 filas de 70 + la comptime (24) = 374, mas los dos constructores (70).
+    return (i32) (total + ca.suma + cb.suma - 402);   // 42
 }

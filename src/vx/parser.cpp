@@ -3490,6 +3490,26 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
                      "se esperaba ']' al cerrar el tamano del array");
         base = std::move(an);
     }
+    /* Declarador ABSTRACTO de puntero a funcion al estilo de C: `R (*)(T)`, o
+     * sea el mismo `R (*f)(T)` sin nombre.  Nombra un TIPO, no declara nada, y
+     * hace falta para escribirlo dentro de otro tipo -- un parametro de un tipo
+     * funcion, un cast --.  Solo se toma la forma SIN nombre: la que lo lleva
+     * la leen quienes ademas declaran algo, que son los que tienen donde
+     * guardarlo. */
+    if (base && current_.kind == TokenKind::LPAREN) {
+        Lexer &ml = const_cast<Lexer &>(lex_);
+        size_t off = 0;
+        while (ml.peek_at(off).kind == TokenKind::STAR)
+            ++off;
+        const bool abstracto = off > 0 &&
+                               ml.peek_at(off).kind == TokenKind::RPAREN &&
+                               ml.peek_at(off + 1).kind == TokenKind::LPAREN;
+        if (abstracto) {
+            std::string sin_nombre;
+            std::unique_ptr<ast::TypeNode> fp;
+            if (try_parse_c_func_ptr_(base, sin_nombre, fp)) base = std::move(fp);
+        }
+    }
     if (base) base->is_nonnull = nonnull;
     return base;
 }
@@ -3569,17 +3589,22 @@ bool Parser::try_parse_c_func_ptr_(std::unique_ptr<ast::TypeNode> &ret,
     }
     if (stars == 0)
         return false; // `(algo` que no empieza por '*' no es func-ptr
-    if (ml.peek_at(off).kind != TokenKind::IDENTIFIER) return false;
-    ++off; // el nombre
+    /* El nombre es OPCIONAL: con el, `R (*f)(T)` DECLARA algo; sin el,
+     * `R (*)(T)` NOMBRA un tipo -- el declarador abstracto de C --, que es lo
+     * que hace falta para escribirlo dentro de otro tipo, en un cast o como
+     * parametro de un tipo funcion.  Sin esta rama, un puntero a funcion al
+     * estilo de C solo se podia escribir donde ademas se le daba nombre. */
+    const bool has_name = (ml.peek_at(off).kind == TokenKind::IDENTIFIER);
+    if (has_name) ++off; // el nombre
     if (ml.peek_at(off).kind != TokenKind::RPAREN) return false;
     ++off; // ')'
     if (ml.peek_at(off).kind != TokenKind::LPAREN)
         return false; // '(' de params
-    // Confirmado.  Consumir: '(' '*'... IDENT ')'.
+    // Confirmado.  Consumir: '(' '*'... [IDENT] ')'.
     (void)consume(); // '('
     for (int i = 0; i < stars; ++i)
-        (void)consume();         // '*'...
-    out_name = consume().lexeme; // nombre
+        (void)consume(); // '*'...
+    if (has_name) out_name = consume().lexeme;
     (void)expect(TokenKind::RPAREN,
                  "se esperaba ')' en el declarador de puntero a funcion");
     (void)expect(TokenKind::LPAREN,

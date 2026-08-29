@@ -1,0 +1,289 @@
+{
+    "Punto de entrada": {
+        "prefix": "main",
+        "body": [
+            "i32 main() {",
+            "\t$0",
+            "\treturn 0;",
+            "}"
+        ],
+        "description": "Funcion de entrada del programa."
+    },
+    "Punto de entrada con argumentos": {
+        "prefix": "mainargs",
+        "body": [
+            "i32 main(string[] args) {",
+            "\t$0",
+            "\treturn 0;",
+            "}"
+        ],
+        "description": "Funcion de entrada que recibe los argumentos de la linea de ordenes."
+    },
+    "Funcion": {
+        "prefix": "fn",
+        "body": [
+            "${1:void} ${2:nombre}(${3}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Definicion de una funcion libre."
+    },
+    "Funcion generica": {
+        "prefix": "fngen",
+        "body": [
+            "${1:T} ${2:nombre}<${3:T}>(${4:${3:T} value}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Funcion generica: se monomorfiza al compilar, sin coste en ejecucion."
+    },
+    "Clase": {
+        "prefix": "class",
+        "body": [
+            "class ${1:Nombre} {",
+            "\tpublic ${1:Nombre}(${2}) {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Clase con constructor."
+    },
+    "Clase derivada": {
+        "prefix": "classext",
+        "body": [
+            "class ${1:Nombre} : ${2:Base} {",
+            "\tpublic ${1:Nombre}(${3}) {",
+            "\t\tsuper(${4});",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Clase que hereda de una base."
+    },
+    "Estructura": {
+        "prefix": "struct",
+        "body": [
+            "struct ${1:Nombre} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Tipo por valor: vive en la pila o en linea dentro de su contenedor."
+    },
+    "Interfaz": {
+        "prefix": "interface",
+        "body": [
+            "interface ${1:Nombre} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Interfaz implementable por varias clases."
+    },
+    "Enumerado": {
+        "prefix": "enum",
+        "body": [
+            "enum ${1:Nombre} {",
+            "\t${2:Variante},",
+            "\t$0",
+            "}"
+        ],
+        "description": "Enumerado; admite variantes con carga util y genericos."
+    },
+    "Metodo publico": {
+        "prefix": "method",
+        "body": [
+            "public ${1:void} ${2:nombre}(${3}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Metodo publico de una clase."
+    },
+    "Redefinicion de metodo": {
+        "prefix": "override",
+        "body": [
+            "@Override",
+            "public ${1:string} ${2:toString}(${3}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Redefinicion de un metodo heredado: la anotacion @Override es obligatoria."
+    },
+    "Propiedad": {
+        "prefix": "prop",
+        "body": [
+            "public get ${1:nombre} => this.${2:campo};",
+            "public set ${1:nombre}(${3:i32} v) { this.${2:campo} = v; }"
+        ],
+        "description": "Par de acceso y modificacion de una propiedad."
+    },
+    "Condicional": {
+        "prefix": "if",
+        "body": [
+            "if (${1:condicion}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Condicional."
+    },
+    "Condicional con alternativa": {
+        "prefix": "ifelse",
+        "body": [
+            "if (${1:condicion}) {",
+            "\t$2",
+            "} else {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Condicional con rama alternativa."
+    },
+    "Bucle for": {
+        "prefix": "for",
+        "body": [
+            "for (${1:i64} ${2:i} = 0; ${2:i} < ${3:n}; ${2:i} += 1) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Bucle contador al estilo de C."
+    },
+    "Bucle sobre una coleccion": {
+        "prefix": "forin",
+        "body": [
+            "for (${1:item} in ${2:coleccion}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Recorrido de una coleccion."
+    },
+    "Bucle while": {
+        "prefix": "while",
+        "body": [
+            "while (${1:condicion}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Bucle con condicion al principio."
+    },
+    "Bucle do-while": {
+        "prefix": "do",
+        "body": [
+            "do {",
+            "\t$0",
+            "} while (${1:condicion});"
+        ],
+        "description": "Bucle con condicion al final."
+    },
+    "Encaje de patrones": {
+        "prefix": "match",
+        "body": [
+            "match (${1:valor}) {",
+            "\tcase ${2:Variante}(${3:x}) => ${4:0},",
+            "\tcase _ => ${0:0}",
+            "}"
+        ],
+        "description": "Encaje de patrones con comprobacion de exhaustividad."
+    },
+    "Manejo de excepciones": {
+        "prefix": "try",
+        "body": [
+            "try {",
+            "\t$1",
+            "} catch (${2:FatalError} e) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Bloque protegido con manejador."
+    },
+    "Manejo de excepciones con finalizador": {
+        "prefix": "tryf",
+        "body": [
+            "try {",
+            "\t$1",
+            "} catch (${2:FatalError} e) {",
+            "\t$3",
+            "} finally {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Bloque protegido con manejador y finalizador."
+    },
+    "Importacion": {
+        "prefix": "import",
+        "body": ["import ${1:std.io};"],
+        "description": "Importacion de un modulo Vesta."
+    },
+    "Biblioteca nativa": {
+        "prefix": "extern",
+        "body": [
+            "extern \"${1:kernel32.dll}\" {",
+            "\tfn ${2:GetTickCount}() -> ${3:u32};",
+            "}"
+        ],
+        "description": "Declaracion de funciones de una biblioteca del sistema (resuelta al compilar)."
+    },
+    "Espacio de nombres": {
+        "prefix": "namespace",
+        "body": ["namespace ${1:std.collections};", "", "$0"],
+        "description": "Espacio de nombres del resto del fichero."
+    },
+    "Funcion asincrona": {
+        "prefix": "async",
+        "body": [
+            "@Async",
+            "${1:i32} ${2:nombre}(${3}) {",
+            "\t$0",
+            "\treturn ${4:0};",
+            "}"
+        ],
+        "description": "Funcion asincrona: devuelve un Future de forma implicita."
+    },
+    "Proceso nuevo": {
+        "prefix": "spawn",
+        "body": ["spawn {", "\t$0", "}"],
+        "description": "Creacion de un proceso local."
+    },
+    "Seccion sincronizada": {
+        "prefix": "sync",
+        "body": ["synchronized (${1:obj}) {", "\t$0", "}"],
+        "description": "Seccion protegida por el monitor del objeto."
+    },
+    "Puntero unico": {
+        "prefix": "unique",
+        "body": ["unique<${1:i64}> ${2:p} = unique_box(${3:valor});"],
+        "description": "Puntero con dueno unico: se libera al salir del ambito."
+    },
+    "Puntero compartido": {
+        "prefix": "shared",
+        "body": ["shared<${1:i64}> ${2:p} = shared_box(${3:valor});"],
+        "description": "Puntero con cuenta de referencias."
+    },
+    "Bloque de tiempo de compilacion": {
+        "prefix": "comptime",
+        "body": ["comptime {", "\t$0", "}"],
+        "description": "Bloque que el compilador ejecuta al compilar."
+    },
+    "Ensamblador en linea": {
+        "prefix": "asm",
+        "body": [
+            "register(\"${1:rax}\") ${2:i64} ${3:r} = ${4:0};",
+            "asm volatile {",
+            "\t$0",
+            "};"
+        ],
+        "description": "Bloque de ensamblador en linea; los valores entran y salen por variables con registro fijo."
+    },
+    "Funcion en ensamblador": {
+        "prefix": "asmfn",
+        "body": [
+            "@Asm",
+            "${1:u64} ${2:nombre}(${3:u64 a}) {",
+            "\t$0",
+            "\tret",
+            "}"
+        ],
+        "description": "Funcion cuyo cuerpo entero se escribe en ensamblador de la maquina virtual."
+    },
+    "Contrato de complejidad": {
+        "prefix": "complexity",
+        "body": ["@complexity(O(${1:n}), n = ${2:arg0})"],
+        "description": "Contrato de coste que el compilador comprueba contra lo que infiere."
+    }
+}
