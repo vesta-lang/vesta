@@ -752,6 +752,25 @@ class Parser {
     /// @c pending_before_decls_ y referencia como tipo del campo. Precondicion:
     /// current_ es 'struct'/'union' y el siguiente token (tras un tag opcional)
     /// es '{'.
+    /**
+     * @brief Analiza el CUERPO de un struct: lo que va entre las llaves.
+     *
+     * Campos, agregados anonimos, metodos, constructores y destructor, con sus
+     * modificadores de acceso, `static`, `comptime`, contratos y anotaciones.
+     *
+     * Lo llaman las DOS formas de declarar un agregado -- `struct X { }` y
+     * `typedef struct { } X;` --, que es el motivo de que este aparte: la
+     * segunda tenia su propia copia, y se habia quedado en los campos a secas.
+     * Un metodo, un `private`, un `static` o un destructor escritos en la forma
+     * C se rechazaban con un "se esperaba un tipo de campo", sin que nada
+     * dijera que esa forma admite menos.
+     *
+     * @param sd         Declaracion que se va rellenando.
+     * @param is_overlay Si es una vista sobre memoria (admite `[count]` y
+     *                   `stride(...)` en los campos).
+     */
+    void parse_struct_body_(ast::StructDecl &sd, bool is_overlay);
+
     std::unique_ptr<ast::StructDecl> parse_inline_anon_aggregate_();
 
     /// Declarador de PUNTERO A FUNCION estilo C: `R (*name)(params)`.  Tras

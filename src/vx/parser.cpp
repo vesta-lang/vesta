@@ -3965,110 +3965,13 @@ Parser::parse_typedef_struct_or_enum(bool leading_typedef) {
         auto s = std::make_unique<ast::StructDecl>();
         s->loc = loc_td;
         s->is_union = is_union;
-        // Reusar logica de parse_struct_decl (cuerpo del struct).
-        while (current_.kind != TokenKind::RBRACE &&
-               current_.kind != TokenKind::END_OF_FILE) {
-            // Agregado anonimo inline dentro del typedef struct/union.
-            if ((current_.kind == TokenKind::KW_STRUCT ||
-                 current_.kind == TokenKind::KW_UNION) &&
-                (lex_.peek_at(0).kind == TokenKind::LBRACE ||
-                 (lex_.peek_at(0).kind == TokenKind::IDENTIFIER &&
-                  lex_.peek_at(1).kind == TokenKind::LBRACE))) {
-                auto anon = parse_inline_anon_aggregate_();
-                const std::string anon_name = anon->name;
-                pending_before_decls_.push_back(std::move(anon));
-                ast::StructFieldDecl f;
-                f.loc = current_.loc;
-                auto nt = std::make_unique<ast::NamedTypeNode>();
-                nt->loc = f.loc;
-                nt->name = anon_name;
-                f.type = std::move(nt);
-                if (current_.kind == TokenKind::IDENTIFIER) {
-                    f.name = consume().lexeme;
-                    if (current_.kind == TokenKind::LBRACKET)
-                        f.type = wrap_c_array_dims_(std::move(f.type));
-                } else {
-                    f.is_anonymous = true;
-                    f.name = anon_name;
-                }
-                (void)expect(TokenKind::SEMICOLON,
-                             "se esperaba ';' tras el agregado anonimo");
-                s->fields.push_back(std::move(f));
-                continue;
-            }
-            if (!starts_type()) {
-                error_here("se esperaba un tipo de campo dentro del struct");
-                synchronize();
-                continue;
-            }
-            ast::StructFieldDecl f;
-            f.loc = current_.loc;
-            f.type = parse_type_node();
-            if (!f.type) {
-                synchronize();
-                continue;
-            }
-            {
-                std::string fp_name;
-                std::unique_ptr<ast::TypeNode> fp_type;
-                if (try_parse_c_func_ptr_(f.type, fp_name, fp_type)) {
-                    f.type = std::move(fp_type);
-                    f.name = std::move(fp_name);
-                    if (current_.kind == TokenKind::LBRACKET)
-                        f.type = wrap_c_array_dims_(std::move(f.type));
-                    (void)expect(
-                        TokenKind::SEMICOLON,
-                        "se esperaba ';' tras el campo puntero a funcion");
-                    s->fields.push_back(std::move(f));
-                    continue;
-                }
-            }
-            if (current_.kind != TokenKind::IDENTIFIER) {
-                error_here("se esperaba un nombre de campo tras el tipo");
-                synchronize();
-                continue;
-            }
-            // Clon del tipo BASE para el multi-declarador C `T a, b, c;`.
-            auto base_type_clone = clone_type_node_td_(f.type.get());
-            f.name = consume().lexeme;
-            // Array C-style `T name[N][M]` (uni/multidimensional).
-            if (current_.kind == TokenKind::LBRACKET) {
-                f.type = wrap_c_array_dims_(std::move(f.type));
-            }
-            if (current_.kind == TokenKind::COLON) {
-                (void)consume();
-                if (current_.kind == TokenKind::INT_LIT) {
-                    f.bit_width = (uint8_t)current_.int_val;
-                    (void)consume();
-                }
-            }
-            s->fields.push_back(std::move(f));
-            // Multi-declarador C `T a, b, c;` en el cuerpo del typedef struct.
-            while (current_.kind == TokenKind::COMMA) {
-                (void)consume(); // ','
-                if (current_.kind != TokenKind::IDENTIFIER) {
-                    error_here("se esperaba el nombre del campo tras ','");
-                    break;
-                }
-                ast::StructFieldDecl g;
-                g.loc = current_.loc;
-                g.type = clone_type_node_td_(base_type_clone.get());
-                g.name = consume().lexeme;
-                if (current_.kind == TokenKind::LBRACKET) {
-                    g.type = wrap_c_array_dims_(std::move(g.type));
-                }
-                if (current_.kind == TokenKind::COLON) {
-                    (void)consume();
-                    if (current_.kind == TokenKind::INT_LIT) {
-                        g.bit_width = (uint8_t)current_.int_val;
-                        (void)consume();
-                    }
-                }
-                s->fields.push_back(std::move(g));
-            }
-            (void)expect(TokenKind::SEMICOLON,
-                         "se esperaba ';' al final del campo");
-        }
+        /* El cuerpo lo analiza el MISMO sitio que la forma con nombre.  Aqui
+         * habia una copia -- el comentario decia "reusar" y copiaba -- que se
+         * habia quedado en los campos a secas: un metodo, un `private`, un
+         * `static` o un destructor escritos asi se rechazaban con un "se
+         * esperaba un tipo de campo", sin que nada dijera que esta forma
+         * admitia menos que la otra. */
+        parse_struct_body_(*s, /*is_overlay=*/false);
         (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
         if (current_.kind != TokenKind::IDENTIFIER) {
             error_here("se esperaba el nombre del typedef tras '}'");
@@ -5301,65 +5204,11 @@ std::unique_ptr<ast::Expr> Parser::parse_match_expr() {
     return m;
 }
 
-std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
-    auto s = std::make_unique<ast::StructDecl>();
-    s->loc = current_.loc;
-    // Overlay: fijarlo YA (antes de los campos) para que el parseo de campos
-    // vea `s->is_overlay` (arrays `[count]` + `stride(...)`).  El call site
-    // tambien lo re-asegura tras el return.
-    s->is_overlay = is_overlay;
-    (void)consume(); // 'struct'
-
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba un nombre tras 'struct'");
-        return nullptr;
-    }
-    s->name = consume().lexeme;
-    // Registrar el nombre para que `looks_like_compound_literal` distinga
-    // `(Struct){...}` de un scrutinee `match (val) {`.
-    declared_structs_.insert(s->name);
-    // Genericos opcionales `<T>`, `<K, V>` tras el nombre.  Mismo patron que
-    // parse_class_decl / parse_enum_decl: cada parametro es un identificador;
-    // el struct se trata como plantilla y se monomorphiza en cada uso
-    // `Box<i32>` en el type checker.
-    if (current_.kind == TokenKind::LT) {
-        // #7: la PRIMERA `struct Caja<...>` es el template primario; las
-        // siguientes con el mismo nombre son ESPECIALIZACIONES (total/parcial).
-        if (generic_struct_names_seen_.count(s->name)) {
-            s->is_specialization = true;
-            parse_specialization_pattern(s->spec_pattern, s->type_params);
-        } else {
-            // #6: cada param puede llevar un bound inline `<T: Concepto>`.
-            parse_type_params_with_bounds(s->type_params, s->type_bounds);
-            generic_struct_names_seen_.insert(s->name);
-        }
-    }
-    // #6: clausula `where T: A + B` opcional tras los params.
-    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
-        parse_where_clause(s->type_bounds);
-    }
-    // Herencia estatica opcional via ':' (mismo patron que parse_class_decl):
-    // `struct D : Base` (base) + lista opcional de interfaces `, IFoo, IBar`.
-    // El type checker distingue cual es el struct base y cuales interfaces.
-    if (current_.kind == TokenKind::COLON) {
-        (void)consume();
-        if (current_.kind != TokenKind::IDENTIFIER) {
-            error_here(
-                "se esperaba un nombre de struct base o interface tras ':'");
-            return nullptr;
-        }
-        s->super_name = consume().lexeme;
-        while (current_.kind == TokenKind::COMMA) {
-            (void)consume();
-            if (current_.kind == TokenKind::IDENTIFIER)
-                s->interface_names.push_back(consume().lexeme);
-            else
-                break;
-        }
-    }
-    (void)expect(TokenKind::LBRACE,
-                 "se esperaba '{' al abrir el cuerpo del struct");
-
+/**
+ * @copydoc vx::Parser::parse_struct_body_
+ */
+void Parser::parse_struct_body_(ast::StructDecl &sd, bool is_overlay) {
+    ast::StructDecl *const s = &sd;
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
         // Contratos de huella declarados sobre el metodo, antes del acceso:
@@ -5838,6 +5687,68 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
         (void)expect(TokenKind::SEMICOLON,
                      "se esperaba ';' al final del campo");
     }
+}
+
+std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
+    auto s = std::make_unique<ast::StructDecl>();
+    s->loc = current_.loc;
+    // Overlay: fijarlo YA (antes de los campos) para que el parseo de campos
+    // vea `s->is_overlay` (arrays `[count]` + `stride(...)`).  El call site
+    // tambien lo re-asegura tras el return.
+    s->is_overlay = is_overlay;
+    (void)consume(); // 'struct'
+
+    if (current_.kind != TokenKind::IDENTIFIER) {
+        error_here("se esperaba un nombre tras 'struct'");
+        return nullptr;
+    }
+    s->name = consume().lexeme;
+    // Registrar el nombre para que `looks_like_compound_literal` distinga
+    // `(Struct){...}` de un scrutinee `match (val) {`.
+    declared_structs_.insert(s->name);
+    // Genericos opcionales `<T>`, `<K, V>` tras el nombre.  Mismo patron que
+    // parse_class_decl / parse_enum_decl: cada parametro es un identificador;
+    // el struct se trata como plantilla y se monomorphiza en cada uso
+    // `Box<i32>` en el type checker.
+    if (current_.kind == TokenKind::LT) {
+        // #7: la PRIMERA `struct Caja<...>` es el template primario; las
+        // siguientes con el mismo nombre son ESPECIALIZACIONES (total/parcial).
+        if (generic_struct_names_seen_.count(s->name)) {
+            s->is_specialization = true;
+            parse_specialization_pattern(s->spec_pattern, s->type_params);
+        } else {
+            // #6: cada param puede llevar un bound inline `<T: Concepto>`.
+            parse_type_params_with_bounds(s->type_params, s->type_bounds);
+            generic_struct_names_seen_.insert(s->name);
+        }
+    }
+    // #6: clausula `where T: A + B` opcional tras los params.
+    if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
+        parse_where_clause(s->type_bounds);
+    }
+    // Herencia estatica opcional via ':' (mismo patron que parse_class_decl):
+    // `struct D : Base` (base) + lista opcional de interfaces `, IFoo, IBar`.
+    // El type checker distingue cual es el struct base y cuales interfaces.
+    if (current_.kind == TokenKind::COLON) {
+        (void)consume();
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here(
+                "se esperaba un nombre de struct base o interface tras ':'");
+            return nullptr;
+        }
+        s->super_name = consume().lexeme;
+        while (current_.kind == TokenKind::COMMA) {
+            (void)consume();
+            if (current_.kind == TokenKind::IDENTIFIER)
+                s->interface_names.push_back(consume().lexeme);
+            else
+                break;
+        }
+    }
+    (void)expect(TokenKind::LBRACE,
+                 "se esperaba '{' al abrir el cuerpo del struct");
+
+    parse_struct_body_(*s, is_overlay);
     (void)expect(TokenKind::RBRACE, "se esperaba '}' al cerrar el struct");
     return s;
 }

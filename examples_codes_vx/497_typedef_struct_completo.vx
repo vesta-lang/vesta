@@ -1,0 +1,50 @@
+namespace ejemplos.typedef_struct_completo;
+
+// Las dos formas de declarar un agregado admiten lo mismo.
+//
+// `struct X { ... }` y `typedef struct { ... } X;` describen la misma cosa, asi
+// que dentro de las llaves tiene que valer lo mismo.  No valia: la forma C
+// tenia su propio analizador -- una copia cuyo comentario decia "reusar logica
+// de parse_struct_decl" y a continuacion la copiaba -- que se habia quedado en
+// los campos a secas.  Un metodo, un modificador de acceso o un miembro
+// `static` escritos asi se rechazaban con "se esperaba un tipo de campo", sin
+// que nada dijera que esa forma admitia menos.
+//
+// Se comprueba miembro a miembro que las dos dan el mismo resultado.
+
+struct Vesta {
+    private i64 valor;
+    static i64 cuantos = 0;
+
+    public i64 doble() { return this.valor * 2; }
+    public void poner(i64 v) { this.valor = v; }
+}
+
+typedef struct {
+    private i64 valor;
+    static i64 cuantos = 0;
+
+    public i64 doble() { return this.valor * 2; }
+    public void poner(i64 v) { this.valor = v; }
+} Ce;
+
+i32 main() {
+    Vesta a;
+    a.poner(21);
+
+    Ce b;
+    b.poner(21);
+
+    // Metodo: las dos formas.
+    const i64 m = a.doble() + b.doble();          // 42 + 42 = 84
+
+    // Miembro estatico: se declara y se usa igual en las dos.
+    Vesta.cuantos = 3;
+    Ce.cuantos = 4;
+    const i64 s = Vesta.cuantos + Ce.cuantos;     // 7
+
+    println("metodos=${m} estaticos=${s}");
+
+    // 84 + 7 = 91
+    return (i32) (m + s - 49); // 42
+}
