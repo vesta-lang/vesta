@@ -1973,8 +1973,18 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
                 }
 
                 // verificar terminadores
-                if (ins.op == IrOp::BR || ins.op == IrOp::BR_COND ||
-                    ins.op == IrOp::RET || ins.op == IrOp::UNREACHABLE) {
+                if (ir_op_ends_block(ins.op)) {
+                    // Y que sea el ULTIMO.  No es una regla de estilo: quien
+                    // recalcula las aristas del grafo lee la ULTIMA
+                    // instruccion del bloque para saber a donde salta.  Si hay
+                    // algo detras, ese bloque se queda sin salidas -- y lo que
+                    // fuera detras, sin ejecutarse.
+                    if (has_terminator || &ins != &bb.instrs.back()) {
+                        errors.push_back(
+                            "fn '" + fn.name + "' bloque '" + bb.name +
+                            "': el terminador no es la ultima instruccion");
+                        ok = false;
+                    }
                     has_terminator = true;
                 }
 
@@ -2013,15 +2023,9 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
 
             // bloque no vacio sin terminador
             if (!has_terminator && !bb.instrs.empty()) {
-                // CALLN y otros pueden ser el ultimo opcode de un bloque hoja
-                // solo reportar si el ultimo opcode no es un intrinsic terminal
-                const IrInstr &last = bb.instrs.back();
-                bool terminal_intrinsic = (last.op == IrOp::THROW);
-                if (!terminal_intrinsic) {
-                    errors.push_back("fn '" + fn.name + "' bloque '" + bb.name +
-                                     "': sin instruccion terminadora");
-                    ok = false;
-                }
+                errors.push_back("fn '" + fn.name + "' bloque '" + bb.name +
+                                 "': sin instruccion terminadora");
+                ok = false;
             }
         }
     }

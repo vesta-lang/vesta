@@ -760,6 +760,25 @@ CompileResult compile_vx_source(const std::string &source,
         return res;
     }
 
+    /* Comprobar que el IR recien construido cumple sus propias reglas: cada
+     * valor definido una vez, los operandos existen, y todo bloque acaba -- y
+     * acaba de verdad, con el terminador el ULTIMO -- porque quien recalcula
+     * el grafo lee esa instruccion para saber a donde salta.
+     *
+     * Bajo bandera y no siempre: es un recorrido completo del modulo, y no se
+     * hace pagar a quien solo quiere compilar.  El verificador existia desde
+     * hace tiempo y NADIE lo llamaba; solo lo usaba un test sobre un modulo
+     * escrito a mano, que es justo el codigo que no tiene los fallos. */
+    if (util::flag_on(util::FlagId::VerifyIr)) {
+        std::vector<std::string> ir_errs;
+        if (!ir::ir_verify(irmod, ir_errs)) {
+            for (const std::string &m : ir_errs)
+                std::fprintf(stderr, "[ir-verify] %s\n", m.c_str());
+            std::fprintf(stderr, "[ir-verify] %zu problemas en '%s'\n",
+                         ir_errs.size(), mod_name.c_str());
+        }
+    }
+
     // Grafo de conocimiento del programa: los tipos, sus miembros y como se
     // relacionan, mas el mapa que liga los simbolos del artefacto con ellos.
     // Se emite AQUI y no antes porque los SIMBOLOS solo existen tras el

@@ -1120,11 +1120,46 @@ struct IrInstr {
 // =========================================================================
 
 /**
+ * @brief @c true si @p op cierra un bloque: detras de ella no va nada.
+ *
+ * Son de dos clases y conviene no confundirlas.  Unas dicen A DONDE se sigue
+ * -- saltar, saltar segun una condicion, volver de la funcion --; las otras
+ * dicen que NO se sigue: reventar con un mensaje, relanzar la excepcion que
+ * venia, resolver la promesa y acabar el proceso, parar.  Para el grafo las
+ * segundas son bloques SIN salidas, que es distinto de un bloque al que le
+ * falta el final.
+ *
+ * Existe porque la lista estaba escrita en dos sitios que no coincidian: el
+ * verificador solo conocia las primeras (mas @c THROW) y daba por incompleto
+ * todo bloque que acabara en un `panic` o en un `hlt` -- veintiocho ejemplos
+ * de los que ninguno tenia nada malo --.  Un verificador que grita sin motivo
+ * es peor que no tenerlo: nadie lo mira.
+ */
+inline bool ir_op_ends_block(IrOp op) noexcept {
+    switch (op) {
+    // Dicen a donde se sigue.
+    case IrOp::BR:
+    case IrOp::BR_COND:
+    case IrOp::RET:
+    case IrOp::TAILCALL:
+    // Dicen que no se sigue.
+    case IrOp::UNREACHABLE:
+    case IrOp::THROW:
+    case IrOp::RETHROW:
+    case IrOp::PANIC:
+    case IrOp::HLT:
+    case IrOp::FULFILL_HLT:
+    case IrOp::RSPAWN_RETURN: return true;
+    default: return false;
+    }
+}
+
+/**
  * @brief Bloque basico de la CFG (Control Flow Graph).
  *
  * Un bloque basico es una secuencia lineal de instrucciones con una
  * sola entrada y una sola salida.  La ultima instruccion es siempre
- * un terminador: BR, BR_COND, RET o UNREACHABLE.
+ * un terminador (@ref ir_op_ends_block).
  */
 struct IrBlock {
     IrBlockId id;     ///< identificador unico (indice en IrFunction::blocks)

@@ -4135,7 +4135,19 @@ def main():
                     help="ejecutar solo los casos cuyo tag contenga esta cadena")
     ap.add_argument("--keep", action="store_true",
                     help="no borrar el directorio temporal al terminar")
+    ap.add_argument("--verify-ir", action="store_true",
+                    help="hacer que el compilador verifique el IR que "
+                         "construye (cada valor definido una vez, operandos "
+                         "existentes, todo bloque acabado y acabado en su "
+                         "ultima instruccion)")
     args = ap.parse_args()
+
+    # La verificacion va por variable de entorno para que la vean TODAS las
+    # invocaciones del compilador, incluidas las que un caso lanza por su
+    # cuenta.  Los problemas salen por el error estandar y el caso los
+    # arrastra a su registro.
+    if args.verify_ir:
+        os.environ["VESTA_VERIFY_IR"] = "1"
 
     vm = os.path.join(args.build_dir, "vm.exe")
     if not os.path.exists(vm):

@@ -237,6 +237,11 @@ VESTA_ENV_FLAG(VerboseProjectCache,"VX_VERBOSE_PROJECT_CACHE", Report,  Cache, B
 VESTA_ENV_FLAG(DbgVxi,            "VX_DBG_VXI",               Report,   Cache, Bool, Any)
 VESTA_ENV_FLAG(DbgReg,            "VX_DBG_REG",               Report,   Cache, Bool, Any)
 
+/* -- Comprobaciones internas ---------------------------------------------- */
+/* Verifica el IR recien construido contra sus propias reglas.  Cuesta un
+ * recorrido del modulo, asi que no va por defecto. */
+VESTA_ENV_FLAG(VerifyIr,          "VESTA_VERIFY_IR",          Report,  None, Bool, Any)
+
 /* -- Medicion transversal ------------------------------------------------- */
 VESTA_ENV_FLAG(Times,             "VESTA_TIMES",              Report,  None, Bool, Any)
 VESTA_ENV_FLAG(Tramos,            "VESTA_TRAMOS",             Emitted, RegAlloc, BoolOn, Any)
