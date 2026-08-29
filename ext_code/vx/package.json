@@ -43,13 +43,28 @@
                     ".vx"
                 ],
                 "configuration": "./language-configuration.json"
+            },
+            {
+                "id": "nasm",
+                "aliases": [
+                    "NASM"
+                ],
+                "configuration": "./nasm-language-configuration.json"
             }
         ],
         "grammars": [
             {
                 "language": "vesta",
                 "scopeName": "source.vesta",
-                "path": "./syntaxes/vesta.tmLanguage.json"
+                "path": "./syntaxes/vesta.tmLanguage.json",
+                "embeddedLanguages": {
+                    "meta.embedded.block.nasm": "nasm"
+                }
+            },
+            {
+                "language": "nasm",
+                "scopeName": "source.nasm",
+                "path": "./syntaxes/nasm.tmLanguage.json"
             }
         ],
         "snippets": [

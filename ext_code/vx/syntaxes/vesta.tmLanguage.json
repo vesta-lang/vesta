@@ -273,45 +273,12 @@
             "endCaptures": {
                 "0": { "name": "punctuation.section.block.end.vesta" }
             },
+            "contentName": "meta.embedded.block.nasm",
             "patterns": [
-                { "include": "#comments" },
-                { "include": "#strings" },
                 {
-                    "comment": "Etiqueta local del ensamblador",
-                    "match": "^\\s*(\\.?[A-Za-z_][A-Za-z0-9_]*)\\s*:",
-                    "captures": {
-                        "1": { "name": "entity.name.label.vesta" }
-                    }
-                },
-                {
-                    "comment": "Directivas de datos y relleno de NASM",
-                    "name": "keyword.control.directive.asm.vesta",
-                    "match": "\\b(times|db|dw|dd|dq|dt|resb|resw|resd|resq|equ|align|section|global|extern|bits|org)\\b"
-                },
-                {
-                    "comment": "Modificadores de tamano de operando",
-                    "name": "storage.modifier.asm.vesta",
-                    "match": "\\b(byte|word|dword|qword|tword|oword|yword|zword|ptr|short|near|far|rel)\\b"
-                },
-                {
-                    "comment": "Offset actual ($) y offset de la seccion ($$)",
-                    "name": "constant.language.asm.vesta",
-                    "match": "\\$\\$?"
-                },
-                {
-                    "name": "variable.language.register.vesta",
-                    "match": "\\b([re]?(ax|bx|cx|dx|si|di|sp|bp)|r([89]|1[0-5])[dwb]?|[abcd][lh]|[sd]il|spl|bpl|[xyz]mm(3[01]|[12][0-9]|[0-9])|k[0-7]|st[0-7]|mm[0-7]|[cd]r[0-8]|[cdefgs]s|[wx](3[01]|[12][0-9]|[0-9])|sp|lr|pc|xzr|wzr)\\b"
-                },
-                { "include": "#numbers" },
-                {
-                    "comment": "Mnemonico al principio de la instruccion, sola o detras de una etiqueta.  Se captura en vez de mirar hacia atras: una alternativa de anchos distintos no vale como contexto previo en el motor de expresiones del editor.",
-                    "match": "(?:^|:)\\s*([a-z][a-z0-9._]*)\\b",
-                    "captures": {
-                        "1": { "name": "support.function.mnemonic.vesta" }
-                    }
-                },
-                { "include": "#operators" },
-                { "include": "#punctuation" }
+                    "comment": "El ensamblador de Vesta ES NASM, asi que dentro del bloque manda su gramatica entera y no una imitacion: mnemonicos, registros, operandos de memoria, directivas, sus cinco bases numericas y su preprocesador.",
+                    "include": "source.nasm"
+                }
             ]
         },
 
@@ -618,6 +585,7 @@
         },
 
         "operators": {
+            "comment": "El orden es el que manda: quien va antes gana.  Los operadores de varios caracteres tienen que ir DELANTE de los de uno, o '-' se come la flecha de '->' y '=' la de '=>', y cada mitad acaba con un color distinto.",
             "patterns": [
                 {
                     "comment": "Rangos de los bucles comptime y parametro variadico",
@@ -625,30 +593,55 @@
                     "match": "(\\.\\.\\.|\\.\\.=|\\.\\.)"
                 },
                 {
+                    "comment": "Cuerpo por expresion y tipo de retorno",
+                    "name": "keyword.operator.other.vesta",
+                    "match": "(=>|->)"
+                },
+                {
                     "name": "keyword.operator.assignment.vesta",
-                    "match": "(<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|=)"
+                    "match": "(<<=|>>=|\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=)"
                 },
                 {
                     "name": "keyword.operator.comparison.vesta",
-                    "match": "(==|!=|<=|>=|<|>)"
+                    "match": "(==|!=|<=|>=)"
+                },
+                {
+                    "name": "keyword.operator.bitwise.vesta",
+                    "match": "(<<|>>)"
                 },
                 {
                     "comment": "El !! desenvuelve un Optional y aborta si esta vacio",
                     "name": "keyword.operator.logical.vesta",
-                    "match": "(&&|\\|\\||!!|!)"
-                },
-                {
-                    "name": "keyword.operator.bitwise.vesta",
-                    "match": "(<<|>>|&|\\||\\^|~)"
+                    "match": "(&&|\\|\\||!!)"
                 },
                 {
                     "name": "keyword.operator.arithmetic.vesta",
-                    "match": "(\\+\\+|--|\\+|-|\\*|/|%)"
+                    "match": "(\\+\\+|--)"
                 },
                 {
-                    "comment": "Cuerpo por expresion, tipo de retorno y propagacion de error",
+                    "name": "keyword.operator.assignment.vesta",
+                    "match": "="
+                },
+                {
+                    "name": "keyword.operator.comparison.vesta",
+                    "match": "[<>]"
+                },
+                {
+                    "name": "keyword.operator.logical.vesta",
+                    "match": "!"
+                },
+                {
+                    "name": "keyword.operator.bitwise.vesta",
+                    "match": "[&|^~]"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.vesta",
+                    "match": "[+\\-*/%]"
+                },
+                {
+                    "comment": "Propagacion de error, condicional y separador de tipo",
                     "name": "keyword.operator.other.vesta",
-                    "match": "(=>|->|\\?|:)"
+                    "match": "[?:]"
                 }
             ]
         },

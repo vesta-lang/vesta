@@ -1,0 +1,31 @@
+// Configuracion de edicion de NASM, que se aplica DENTRO de los bloques asm de
+// Vesta.  Se declara sin extensiones de fichero a proposito: este lenguaje
+// existe para empotrarlo, no para adueniarse de los .asm de la maquina, que
+// pueden ser de otro ensamblador y de otra extension.
+//
+// Lo que aporta: comentar y descomentar con punto y coma, que es el comentario
+// de NASM, y emparejar los corchetes de los operandos de memoria.
+{
+    "comments": {
+        "lineComment": ";"
+    },
+    "brackets": [
+        ["[", "]"],
+        ["(", ")"]
+    ],
+    "autoClosingPairs": [
+        { "open": "[", "close": "]" },
+        { "open": "(", "close": ")" },
+        { "open": "\"", "close": "\"", "notIn": ["string", "comment"] },
+        { "open": "'", "close": "'", "notIn": ["string", "comment"] },
+        { "open": "`", "close": "`", "notIn": ["string", "comment"] }
+    ],
+    "surroundingPairs": [
+        ["[", "]"],
+        ["(", ")"],
+        ["\"", "\""],
+        ["'", "'"],
+        ["`", "`"]
+    ],
+    "wordPattern": "[A-Za-z_.?][A-Za-z0-9_.?$#@~]*"
+}

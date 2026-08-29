@@ -26,6 +26,7 @@ class Cuenta {
     public static i32 con_ctor;
     public static i32 base_solo;
     public static i32 derivada;
+    public static i32 orden;
 }
 
 // Sin constructor: su destructor es el PRIMER metodo, indice cero.
@@ -49,10 +50,12 @@ class DerivA : BaseA {
     public i64 f() { return 1; }
 }
 
-// Herencia CON destructor propio: sobrescribe el hueco de la tabla, asi que
-// corre el de la derivada.  El de la base NO se encadena -- a diferencia de
-// C++, donde los destructores suben por la jerarquia --; hoy el override
-// sustituye.
+// Herencia CON destructor propio: corren LOS DOS, primero el de la derivada y
+// luego el de la base.  Un destructor es un metodo mas de la tabla, asi que el
+// de la derivada SUSTITUYE al heredado; sin encadenar, lo que la base liberaba
+// se quedaba sin liberar en cuanto la derivada declaraba el suyo.  La llamada
+// al de la base es DIRECTA, nunca por la tabla: por la tabla se volveria a
+// encontrar el de la derivada y se llamaria a si mismo sin fin.
 class BaseB {
     public ~BaseB() { Cuenta.base_solo = Cuenta.base_solo + 1; }
 }
@@ -60,11 +63,19 @@ class DerivB : BaseB {
     public ~DerivB() { Cuenta.derivada = Cuenta.derivada + 1; }
 }
 
+// Y la cadena entera, para fijar el ORDEN y que un nivel sin destructor propio
+// no la corta.  Cada uno apunta su digito: de la derivada hacia la base, que es
+// el inverso al de construccion.
+class Abuela   { public ~Abuela() { Cuenta.orden = Cuenta.orden * 10 + 1; } }
+class Madre : Abuela { public ~Madre() { Cuenta.orden = Cuenta.orden * 10 + 2; } }
+class Hija  : Madre  { public ~Hija()  { Cuenta.orden = Cuenta.orden * 10 + 3; } }
+
 void usar() {
     unique<SinCtor> a = unique_box(new SinCtor());
     unique<ConCtor> b = unique_box(new ConCtor(1));
     unique<DerivA> c = unique_box(new DerivA());
     unique<DerivB> d = unique_box(new DerivB());
+    unique<Hija> h = unique_box(new Hija());
 }
 
 i32 main() {
@@ -72,13 +83,16 @@ i32 main() {
     Cuenta.con_ctor = 0;
     Cuenta.base_solo = 0;
     Cuenta.derivada = 0;
+    Cuenta.orden = 0;
 
     usar();
 
-    println("sin_ctor=${Cuenta.sin_ctor} con_ctor=${Cuenta.con_ctor} base_solo=${Cuenta.base_solo} derivada=${Cuenta.derivada}");
+    println("sin_ctor=${Cuenta.sin_ctor} con_ctor=${Cuenta.con_ctor} base_solo=${Cuenta.base_solo} derivada=${Cuenta.derivada} orden=${Cuenta.orden}");
 
-    // 1 + 1 + 1 (el heredado de DerivA) + 1 (el propio de DerivB) = 4
+    // 1 + 1 + 2 (el heredado de DerivA, y el de BaseB al encadenar) + 1 = 5.
+    // Y el orden tiene que ser 321: de la derivada hacia la base.
     const i64 total = Cuenta.sin_ctor + Cuenta.con_ctor + Cuenta.base_solo +
                       Cuenta.derivada;
-    return (i32) (total * 10 + 2);   // 42
+    const i64 orden_ok = (Cuenta.orden == 321) ? 1 : 0;
+    return (i32) (total * 8 + orden_ok * 2);   // 42
 }

@@ -1,0 +1,243 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "NASM",
+    "scopeName": "source.nasm",
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#preprocessor" },
+        { "include": "#labels" },
+        { "include": "#directives" },
+        { "include": "#instruction" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#registers" },
+        { "include": "#size-specifiers" },
+        { "include": "#memory" },
+        { "include": "#special" },
+        { "include": "#operators" }
+    ],
+    "repository": {
+
+        "comments": {
+            "name": "comment.line.semicolon.nasm",
+            "begin": ";",
+            "end": "$"
+        },
+
+        "preprocessor": {
+            "comment": "Directivas del preprocesador de NASM, que empiezan por porcentaje",
+            "patterns": [
+                {
+                    "name": "meta.preprocessor.macro.nasm",
+                    "begin": "^\\s*(%)(macro|imacro|endmacro|endm|rmacro|irmacro)\\b",
+                    "beginCaptures": {
+                        "1": { "name": "punctuation.definition.directive.nasm" },
+                        "2": { "name": "keyword.control.directive.nasm" }
+                    },
+                    "end": "$",
+                    "patterns": [
+                        { "include": "#comments" },
+                        { "include": "#numbers" },
+                        {
+                            "name": "entity.name.function.macro.nasm",
+                            "match": "\\b[A-Za-z_.?][A-Za-z0-9_.?$#@~]*\\b"
+                        }
+                    ]
+                },
+                {
+                    "name": "meta.preprocessor.nasm",
+                    "begin": "^\\s*(%)([a-z_]+)\\b",
+                    "beginCaptures": {
+                        "1": { "name": "punctuation.definition.directive.nasm" },
+                        "2": { "name": "keyword.control.directive.nasm" }
+                    },
+                    "end": "$",
+                    "patterns": [
+                        { "include": "#comments" },
+                        { "include": "#strings" },
+                        { "include": "#numbers" },
+                        { "include": "#registers" },
+                        { "include": "#operators" }
+                    ]
+                },
+                {
+                    "comment": "Parametro de macro: %1, %2, %%local",
+                    "name": "variable.parameter.macro.nasm",
+                    "match": "%[%$]?[0-9A-Za-z_.?][A-Za-z0-9_.?$#@~]*"
+                }
+            ]
+        },
+
+        "labels": {
+            "patterns": [
+                {
+                    "comment": "Etiqueta local: empieza por punto y pertenece a la ultima global",
+                    "match": "^\\s*(\\.[A-Za-z0-9_.?$#@~]+)(:)?",
+                    "captures": {
+                        "1": { "name": "entity.name.label.local.nasm" },
+                        "2": { "name": "punctuation.separator.label.nasm" }
+                    }
+                },
+                {
+                    "comment": "Etiqueta global, con dos puntos o sin ellos (NASM los admite optativos)",
+                    "match": "^\\s*([A-Za-z_?][A-Za-z0-9_.?$#@~]*)(:)",
+                    "captures": {
+                        "1": { "name": "entity.name.label.nasm" },
+                        "2": { "name": "punctuation.separator.label.nasm" }
+                    }
+                }
+            ]
+        },
+
+        "directives": {
+            "patterns": [
+                {
+                    "comment": "Reserva e inicializacion de datos, y el relleno de times",
+                    "name": "keyword.control.directive.data.nasm",
+                    "match": "(?i)\\b(d[bwdqtoyz]|res[bwdqtoyz]|equ|times|incbin)\\b"
+                },
+                {
+                    "comment": "Secciones, simbolos y modo del ensamblador",
+                    "name": "keyword.control.directive.nasm",
+                    "match": "(?i)\\b(section|segment|global|extern|common|static|bits|use16|use32|use64|org|align|alignb|absolute|default|cpu|float|struc|endstruc|istruc|iend|at|group|import|export|library|module|uppercase|safeseh)\\b"
+                }
+            ]
+        },
+
+        "instruction": {
+            "comment": "Primera palabra de la linea (tras los prefijos): el mnemonico.  Se reconoce por POSICION y no por lista, para que valga cualquier instruccion del juego, incluidas las que se anadan manana.",
+            "match": "(?i)(?:^|:)\\s*((?:(?:lock|rep|repe|repz|repne|repnz|bnd|xacquire|xrelease|notrack)\\s+)*)([A-Za-z][A-Za-z0-9._]*)",
+            "captures": {
+                "1": { "name": "storage.modifier.prefix.nasm" },
+                "2": { "name": "keyword.operator.word.mnemonic.nasm" }
+            }
+        },
+
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.nasm",
+                    "begin": "\"",
+                    "end": "\""
+                },
+                {
+                    "name": "string.quoted.single.nasm",
+                    "begin": "'",
+                    "end": "'"
+                },
+                {
+                    "comment": "Cadena con acento grave: la unica de NASM que interpreta escapes",
+                    "name": "string.quoted.other.backtick.nasm",
+                    "begin": "`",
+                    "end": "`",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.nasm",
+                            "match": "\\\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|[abtnvfre'\"`\\\\?])"
+                        }
+                    ]
+                }
+            ]
+        },
+
+        "numbers": {
+            "comment": "NASM admite la base por prefijo y por sufijo, y las dos se usan",
+            "patterns": [
+                {
+                    "name": "constant.numeric.float.nasm",
+                    "match": "(?i)\\b[0-9][0-9_]*\\.[0-9_]*(e[+-]?[0-9]+)?\\b|\\b[0-9][0-9_]*e[+-]?[0-9]+\\b"
+                },
+                {
+                    "name": "constant.numeric.hexadecimal.nasm",
+                    "match": "(?i)(\\b0[xh][0-9a-f_]+\\b|\\$[0-9][0-9a-f_]*\\b|\\b[0-9][0-9a-f_]*h\\b)"
+                },
+                {
+                    "name": "constant.numeric.binary.nasm",
+                    "match": "(?i)(\\b0[by][01_]+\\b|\\b[01][01_]*[by]\\b)"
+                },
+                {
+                    "name": "constant.numeric.octal.nasm",
+                    "match": "(?i)(\\b0[oq][0-7_]+\\b|\\b[0-7][0-7_]*[oq]\\b)"
+                },
+                {
+                    "name": "constant.numeric.decimal.nasm",
+                    "match": "(?i)(\\b0d[0-9_]+\\b|\\b[0-9][0-9_]*d?\\b)"
+                }
+            ]
+        },
+
+        "registers": {
+            "patterns": [
+                {
+                    "comment": "Registros de proposito general de x86 y x86-64, en sus cuatro anchos",
+                    "name": "variable.language.register.gp.nasm",
+                    "match": "(?i)\\b(r[abcd]x|e[abcd]x|[abcd]x|[abcd][lh]|r(si|di|bp|sp)|e(si|di|bp|sp)|(si|di|bp|sp)|(sil|dil|bpl|spl)|r([89]|1[0-5])[dwb]?|rip|eip|ip)\\b"
+                },
+                {
+                    "comment": "Registros de segmento, de control, de depuracion y de prueba",
+                    "name": "variable.language.register.system.nasm",
+                    "match": "(?i)\\b([cdefgs]s|cr([0-9]|1[0-5])|dr[0-7]|tr[0-7])\\b"
+                },
+                {
+                    "comment": "Coma flotante, vectoriales y mascaras",
+                    "name": "variable.language.register.vector.nasm",
+                    "match": "(?i)\\b(st[0-7]|st\\([0-7]\\)|mm[0-7]|[xyz]mm(3[01]|[12][0-9]|[0-9])|k[0-7]|bnd[0-3])\\b"
+                },
+                {
+                    "comment": "Registros de aarch64, que tambien pasan por el mismo ensamblador",
+                    "name": "variable.language.register.arm.nasm",
+                    "match": "(?i)\\b([xw](3[01]|[12][0-9]|[0-9])|[vqdshb](3[01]|[12][0-9]|[0-9])|xzr|wzr|sp|lr|pc|fp)\\b"
+                }
+            ]
+        },
+
+        "size-specifiers": {
+            "name": "storage.modifier.size.nasm",
+            "match": "(?i)\\b(byte|word|dword|qword|tword|oword|yword|zword|ptr|short|near|far|strict|nosplit|rel|abs)\\b"
+        },
+
+        "memory": {
+            "comment": "Operando de memoria; dentro valen registros, numeros y aritmetica de direcciones",
+            "name": "meta.memory.nasm",
+            "begin": "\\[",
+            "end": "\\]",
+            "beginCaptures": {
+                "0": { "name": "punctuation.section.brackets.begin.nasm" }
+            },
+            "endCaptures": {
+                "0": { "name": "punctuation.section.brackets.end.nasm" }
+            },
+            "patterns": [
+                { "include": "#registers" },
+                { "include": "#size-specifiers" },
+                { "include": "#numbers" },
+                { "include": "#special" },
+                { "include": "#operators" },
+                {
+                    "name": "variable.other.symbol.nasm",
+                    "match": "\\b[A-Za-z_.?][A-Za-z0-9_.?$#@~]*\\b"
+                }
+            ]
+        },
+
+        "special": {
+            "patterns": [
+                {
+                    "comment": "Posicion actual ($) y principio de la seccion ($$)",
+                    "name": "constant.language.position.nasm",
+                    "match": "\\$\\$?(?![0-9A-Za-z_])"
+                },
+                {
+                    "comment": "Operadores de seccion y de reubicacion",
+                    "name": "keyword.operator.word.nasm",
+                    "match": "(?i)\\b(seg|wrt)\\b"
+                }
+            ]
+        },
+
+        "operators": {
+            "name": "keyword.operator.nasm",
+            "match": "(<<|>>|//|%%|[+\\-*/&|^~!])"
+        }
+    }
+}

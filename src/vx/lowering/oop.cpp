@@ -452,6 +452,51 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     current_block_ = skip_bb;
                     block_terminated_ = false;
                 }
+
+                /* Y por ultimo el destructor de la SUPERCLASE.  Un destructor
+                 * es un metodo mas de la tabla, asi que el de una derivada
+                 * SUSTITUYE al heredado; sin esto, lo que la base liberaba --
+                 * un fichero abierto, memoria cruda -- se quedaba sin liberar
+                 * en cuanto la derivada declaraba el suyo, y sin decir nada.
+                 *
+                 * Va DESPUES del cuerpo y de los campos: primero se deshace lo
+                 * que anadio la derivada y luego lo de la base, que es el orden
+                 * inverso al de construccion.
+                 *
+                 * La llamada es DIRECTA, nunca por la tabla: por la tabla se
+                 * volveria a encontrar el de la derivada -- que es el que la
+                 * sustituyo -- y el destructor se llamaria a si mismo sin fin.
+                 * Encadenar de nivel en nivel sale solo: el de la base hace lo
+                 * mismo con la suya. */
+                if (!lay.super_name.empty()) {
+                    auto it_sup = tc_.class_layouts().find(lay.super_name);
+                    if (it_sup != tc_.class_layouts().end()) {
+                        const ClassMethodInfo *sup_dtor = nullptr;
+                        for (const auto &sm : it_sup->second.methods)
+                            if (sm.is_destructor) {
+                                sup_dtor = &sm;
+                                break;
+                            }
+                        /* Solo si el destructor de la base es OTRO: si la
+                         * derivada no declaro el suyo, la ficha heredada ES la
+                         * misma y llamarla seria repetirla. */
+                        if (sup_dtor != nullptr &&
+                            sup_dtor->defining_class != cd->name) {
+                            const std::string owner =
+                                sup_dtor->defining_class.empty()
+                                    ? lay.super_name
+                                    : sup_dtor->defining_class;
+                            ir::IrInstr sc{};
+                            sc.op = ir::IrOp::CALL;
+                            sc.func_name = owner + "__" + sup_dtor->name;
+                            sc.type = ir::IrType::VOID;
+                            sc.dst = ir::IR_NO_VALUE;
+                            sc.operands = {this_vid};
+                            sc.source_line = m->loc.line;
+                            emit(current_block_, std::move(sc));
+                        }
+                    }
+                }
             }
         }
 
