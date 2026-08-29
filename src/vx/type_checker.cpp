@@ -1557,19 +1557,52 @@ bool TypeChecker::class_is_assignable(const Type &target,
  * @copydoc vx::TypeChecker::type_derives_from
  */
 /**
+ * @copydoc vx::TypeChecker::payload_slot_bytes
+ */
+uint32_t TypeChecker::payload_slot_bytes(const Type &p) const {
+    /* Un escalar ocupa una palabra; un struct por valor, su tamano real
+     * redondeado a palabra, para que quepa entero.  El redondeo importa porque
+     * la copia va palabra a palabra: uno de doce que se cuente como doce
+     * copiaria ocho y perderia el ultimo campo. */
+    uint32_t bytes = 8;
+    if (p.kind == PrimitiveKind::STRUCT && !p.struct_name.empty()) {
+        const auto it = struct_layouts_.find(p.struct_name);
+        if (it != struct_layouts_.end() && it->second.size_bytes > bytes)
+            bytes = (it->second.size_bytes + 7u) & ~uint32_t(7);
+    }
+    return bytes;
+}
+
+/**
+ * @copydoc vx::TypeChecker::result_layout
+ */
+ResultLayout TypeChecker::result_layout(const Type &t) const {
+    ResultLayout lay;
+    /* La marca en el cero, el valor detras y el error detras del valor.  Los
+     * dos payloads se guardan UNO AL LADO DEL OTRO aunque solo uno este vivo
+     * cada vez: son ocho mas lo que ocupe cada uno.
+     *
+     * Escrito a mano -- veinticuatro, valor en el ocho, error en el dieciseis --
+     * un `Result` cuyo valor fuera un struct de mas de una palabra no cabia, y
+     * lo que se sacaba eran ceros.  Es el mismo fallo que tenia el `Optional` y
+     * se arregla igual: preguntando. */
+    lay.value_offset = 8;
+    const uint32_t v = t.pointee ? payload_slot_bytes(*t.pointee) : 8u;
+    const uint32_t e = t.pointee2 ? payload_slot_bytes(*t.pointee2) : 8u;
+    lay.error_offset = lay.value_offset + v;
+    lay.bytes = lay.error_offset + e;
+    return lay;
+}
+
+/**
  * @copydoc vx::TypeChecker::optional_layout
  */
 OptionalLayout TypeChecker::optional_layout(const Type &t) const {
     OptionalLayout lay;
     /* El payload de un escalar ocupa una palabra; el de un struct por valor,
      * su tamano real redondeado a palabra, para que quepa entero. */
-    uint32_t payload = 8;
-    if (t.pointee && t.pointee->kind == PrimitiveKind::STRUCT &&
-        !t.pointee->struct_name.empty()) {
-        const auto it = struct_layouts_.find(t.pointee->struct_name);
-        if (it != struct_layouts_.end() && it->second.size_bytes > payload)
-            payload = (it->second.size_bytes + 7u) & ~uint32_t(7);
-    }
+    const uint32_t payload =
+        t.pointee ? payload_slot_bytes(*t.pointee) : 8u;
     /* AQUI ES DONDE OCUPA MENOS.  Cuando el payload no puede valer cero, el
      * cero SOBRA como valor y sirve de marca: no hace falta una palabra aparte
      * para decir si esta o no esta, y el conjunto mide ocho en vez de dieciseis.
@@ -9440,7 +9473,8 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
     const EnumLayout *elayp = nullptr;
     if (st.kind == PrimitiveKind::OPTIONAL ||
         st.kind == PrimitiveKind::RESULT) {
-        syn_optlike = build_optlike_enum_layout(st, optional_layout(st));
+        syn_optlike = build_optlike_enum_layout(st, optional_layout(st),
+                                                result_layout(st));
         elayp = &syn_optlike;
     } else {
         if (st.kind != PrimitiveKind::STRUCT) {

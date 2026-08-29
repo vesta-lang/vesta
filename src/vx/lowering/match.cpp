@@ -482,7 +482,8 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     EnumLayout syn_optlike;
     const EnumLayout *elayp = nullptr;
     if (st_optlike) {
-        syn_optlike = build_optlike_enum_layout(st, optional_layout(st));
+        syn_optlike = build_optlike_enum_layout(st, optional_layout(st),
+                                                tc_.result_layout(st));
         elayp = &syn_optlike;
     } else {
         auto it = elays.find(st.struct_name);

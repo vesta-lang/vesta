@@ -109,8 +109,17 @@ uint64_t comptime_type_size(const TypeChecker &tc, const Type &t) {
     case PrimitiveKind::CLASS: return 8;
     case PrimitiveKind::STRING: return 8;
     case PrimitiveKind::FUNCTION: return 16;
-    case PrimitiveKind::OPTIONAL: return 16;
-    case PrimitiveKind::RESULT: return 24;
+    /* Un `Optional` NO mide siempre lo mismo: depende de lo que envuelva, y
+     * cuando el valor no puede ser cero no lleva marca aparte y son ocho en
+     * vez de dieciseis.  Lo decide `TypeChecker::optional_layout`, que es el
+     * unico sitio que sabe como esta puesto en memoria.
+     *
+     * Escrito aqui aparte -- un 16 clavado -- `sizeof<Optional<borrow<i64>>>()`
+     * decia dieciseis mientras el bajado reservaba ocho.  Es exactamente lo que
+     * avisa la nota de los punteros inteligentes tres lineas mas abajo, escrita
+     * antes y por lo mismo. */
+    case PrimitiveKind::OPTIONAL: return tc.optional_layout(t).bytes;
+    case PrimitiveKind::RESULT: return tc.result_layout(t).bytes;
     /* La ranura de un puntero inteligente la decide un solo sitio
      * (smart_ptr_slot_bytes), que es donde ira la optimizacion de ocupar menos
      * cuando se pueda.  Escrito aqui aparte, `sizeof<T>` empezaria a decir un
@@ -187,21 +196,16 @@ std::string comptime_type_name(const TypeChecker &tc, const Type &t) {
     // identifica univocamente al newtype.
     if (t.nominal_id != 0 && !t.nominal_name.empty())
         return ns_public_name_(t.nominal_name);
+    /* Aqui SOLO estan los tipos cuyo nombre depende de lo que llevan dentro --
+     * un puntero, un array, un `Optional<T>` -- y por eso hace falta bajar
+     * recursivamente.  Los demas los nombra `primitive_name` en el `default`
+     * de abajo, que es la tabla de siempre.
+     *
+     * Los catorce escalares estaban ademas escritos aqui, diciendo lo mismo.
+     * Coincidian, pero eran dos tablas: un tipo nuevo se nombraba en una y en
+     * la otra salia el nombre por defecto -- que es como las ocho colecciones
+     * primitivas acabaron devolviendo "?" en `typename<T>`. */
     switch (t.kind) {
-    case PrimitiveKind::VOID: return "void";
-    case PrimitiveKind::BOOL: return "bool";
-    case PrimitiveKind::CHAR: return "char";
-    case PrimitiveKind::I8: return "i8";
-    case PrimitiveKind::I16: return "i16";
-    case PrimitiveKind::I32: return "i32";
-    case PrimitiveKind::I64: return "i64";
-    case PrimitiveKind::U8: return "u8";
-    case PrimitiveKind::U16: return "u16";
-    case PrimitiveKind::U32: return "u32";
-    case PrimitiveKind::U64: return "u64";
-    case PrimitiveKind::F32: return "f32";
-    case PrimitiveKind::F64: return "f64";
-    case PrimitiveKind::STRING: return "string";
     case PrimitiveKind::PTR: {
         if (!t.pointee) return "void*";
         return comptime_type_name(tc, *t.pointee) +

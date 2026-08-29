@@ -286,21 +286,48 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
+        /* Cuanto ocupa y donde va cada cosa lo dice `result_layout`, no este
+         * sitio: aqui estaban clavados el veinticuatro y los desplazamientos
+         * ocho y dieciseis, asi que un `Result` cuyo valor fuera un struct de
+         * mas de una palabra no cabia. */
+        const ResultLayout lay = tc_.result_layout(e->result_type);
         const ir::IrValueId v_buf =
-            stack_alloc_buf(24, e->loc.line, /*host_memory=*/true);
-        // Tag.
+            stack_alloc_buf(lay.bytes, e->loc.line, /*host_memory=*/true);
+        // La marca.
         const ir::IrValueId v_tag =
             emit_const(ir::IrType::I64, is_Ok ? 1 : 0, e->loc.line);
         emit_store_typed(v_buf, v_tag, ir::IrType::I64, e->loc.line);
-        // Payload offset: V en +8 (Ok), E en +16 (Err).
-        const uint64_t off = is_Ok ? 8 : 16;
-        const ir::IrValueId v_off =
-            emit_const(ir::IrType::I64, off, e->loc.line);
+        // Y el payload, donde la disposicion diga.
+        const ir::IrValueId v_off = emit_const(
+            ir::IrType::I64,
+            static_cast<uint64_t>(is_Ok ? lay.value_offset : lay.error_offset),
+            e->loc.line);
         const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
-        const ir::IrType payload_t = fn_->values[v_payload].type;
-        emit_store_typed(v_at, v_payload, payload_t, e->loc.line);
+        /* Un agregado no viaja en un registro: su valor ES su direccion, asi
+         * que hay que COPIAR sus bytes.  Guardandolo como una palabra se
+         * guardaba la direccion de algo que muere, y lo que se sacaba eran
+         * ceros -- el mismo fallo que tenia `Some` y se arreglo igual. */
+        const Type *pt = is_Ok ? e->result_type.pointee.get()
+                               : e->result_type.pointee2.get();
+        if (pt && pt->kind == PrimitiveKind::STRUCT &&
+            !pt->struct_name.empty() && !type_is_overlay(*pt)) {
+            const ir::IrValueId v_len = emit_const(
+                ir::IrType::I64,
+                static_cast<uint64_t>(tc_.payload_slot_bytes(*pt)),
+                e->loc.line);
+            ir::IrInstr mc{};
+            mc.op = ir::IrOp::MEMCPY;
+            mc.type = ir::IrType::I8;
+            mc.dst = ir::IR_NO_VALUE;
+            mc.operands = {v_at, v_payload, v_len};
+            mc.source_line = e->loc.line;
+            emit(current_block_, std::move(mc));
+        } else {
+            const ir::IrType payload_t = fn_->values[v_payload].type;
+            emit_store_typed(v_at, v_payload, payload_t, e->loc.line);
+        }
         out_value = v_buf;
         return true;
     }
@@ -336,15 +363,28 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                  ? (at.pointee ? *at.pointee : Type{PrimitiveKind::I64})
                  : (at.pointee2 ? *at.pointee2 : Type{PrimitiveKind::I64}));
         const ir::IrType payload_t = ir_type_from_primitive(payload_st.kind);
-        const uint64_t off = is_value ? 8 : 16;
-        const ir::IrValueId v_off =
-            emit_const(ir::IrType::I64, off, e->loc.line);
+        // Donde esta cada cosa lo dice la disposicion, no este sitio.
+        const ResultLayout lay = tc_.result_layout(at);
+        const ir::IrValueId v_off = emit_const(
+            ir::IrType::I64,
+            static_cast<uint64_t>(is_value ? lay.value_offset
+                                           : lay.error_offset),
+            e->loc.line);
         const ir::IrValueId v_at = emit_ptr_add(v_buf, v_off, e->loc.line);
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr de
         // v_buf al v_at para que el LOAD downstream emita `movh`/`loadzh`.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
+        /* Un agregado no se carga en un registro: su valor ES su direccion.
+         * Se devuelve el puntero y quien lo consuma copia lo que necesite --
+         * igual que hace `unwrap` sobre un `Optional<struct>`. */
+        if (payload_st.kind == PrimitiveKind::STRUCT &&
+            !payload_st.struct_name.empty()) {
+            out_value = v_at;
+            return true;
+        }
         const ir::IrValueId v_dst =
             emit_load_typed(v_at, payload_t, e->loc.line);
+        mark_value_from_type(v_dst, payload_st);
         out_value = v_dst;
         return true;
     }

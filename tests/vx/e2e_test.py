@@ -3159,6 +3159,7 @@ fails_case("neg_sufijo_entero_en_float",
            "sufijo entero sobre un numero con decimales: perder la parte "
            "decimal tambien es una decision y tambien se escribe",
            "515_neg_sufijo_entero_en_float.vx", "integer suffix")
+modes3_case("resultgrande516", "un Result cuyo valor no cabe en una palabra: la disposicion estaba escrita a mano en seis sitios (24 bytes, valor en el 8, error en el 16), y ademas un agregado se guardaba como una palabra en vez de copiar sus bytes -- lo que se sacaba eran CEROS, sin error ni aviso.  Mismo fallo que tenia Optional y mismo arreglo: preguntar a un solo sitio", "516_result_payload_grande.vx", 42, line=3814)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

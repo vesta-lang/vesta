@@ -322,7 +322,7 @@ Lowering::SretInfo Lowering::sret_info(const Type &ret) const {
     if (kind == PrimitiveKind::RESULT) {
         info.uses_buffer = true;
         info.host_buffer = true;
-        info.bytes = 24ULL; // marca + valor + error
+        info.bytes = static_cast<uint64_t>(tc_.result_layout(ret).bytes);
         return info;
     }
     // (gap O): devolver un lambda.  El buffer es su ranura: direccion de la
@@ -700,29 +700,22 @@ uint64_t Lowering::nested_sret_flat_size(const std::string &callee,
     //     slot VM daria segfault (leeria host en una direccion VM).
     // function/smart-ptr se excluyen (ownership de env/ctrl: copiar el buffer
     // los duplicaria).
-    if (out_is_host) *out_is_host = false;
-    auto it_er = fn_ret_enum_name_.find(callee);
-    if (it_er != fn_ret_enum_name_.end()) {
-        const auto &elays = tc_.enum_layouts();
-        auto it_e = elays.find(it_er->second);
-        if (it_e != elays.end()) {
-            if (out_is_host) *out_is_host = true; // enum agregado -> host
-            return static_cast<uint64_t>(it_e->second.size_bytes);
-        }
-        return 0;
-    }
-    auto it_kind = fn_ret_kind_.find(callee);
-    if (it_kind != fn_ret_kind_.end()) {
-        if (it_kind->second == PrimitiveKind::OPTIONAL) {
-            if (out_is_host) *out_is_host = true;
-            return 16ULL;
-        }
-        if (it_kind->second == PrimitiveKind::RESULT) {
-            if (out_is_host) *out_is_host = true;
-            return 24ULL;
-        }
-    }
-    return 0;
+    /* Cuanto mide el buffer y donde vive ya se contesto al registrar la
+     * funcion -- ver `sret_info` --, asi que aqui se consulta en vez de
+     * volver a deducirlo: era otra copia mas, y con menos datos (tenia el
+     * NOMBRE del llamado, no su tipo de retorno, asi que el tamano de un
+     * `Optional` o un `Result` salia clavado y no daba para un payload que
+     * no fuera una palabra).
+     *
+     * Lo que SI es propio de aqui: un lambda y un puntero inteligente quedan
+     * fuera aunque usen buffer, porque copiarlo duplicaria la propiedad de lo
+     * que hay dentro (el entorno, el bloque de control). */
+    const SretInfo si = sret_info_for(callee);
+    const bool copiable =
+        si.uses_buffer && si.host_buffer; // agregados: enum, Optional, Result,
+                                          // struct, cadena por valor
+    if (out_is_host) *out_is_host = copiable;
+    return copiable ? si.bytes : 0ULL;
 }
 
 void Lowering::emit_enum_copy(ir::IrValueId dst_addr, ir::IrValueId src_addr,

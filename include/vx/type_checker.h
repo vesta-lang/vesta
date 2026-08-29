@@ -573,6 +573,23 @@ struct EnumLayout {
  * tamano de un struct que lo lleva de campo.  Repartida, "aqui no hace falta
  * marca" habria que escribirlo en los tres.
  */
+/**
+ * @struct ResultLayout
+ * @brief Como esta puesto en memoria un `Result<V,E>`.
+ *
+ * La marca en el cero, el valor detras y el error detras del valor.  Los dos
+ * payloads se guardan uno al lado del otro aunque solo uno este vivo cada vez.
+ *
+ * Vive aqui, con el tipo, por lo mismo que @ref OptionalLayout: lo preguntan el
+ * emisor, el `match` y el calculo del tamano de un struct que lo lleve de
+ * campo, y ninguno de los tres puede permitirse una respuesta propia.
+ */
+struct ResultLayout {
+    uint32_t bytes = 24;        ///< Lo que ocupa el conjunto.
+    uint32_t value_offset = 8;  ///< Donde empieza el valor.
+    uint32_t error_offset = 16; ///< Donde empieza el error.
+};
+
 struct OptionalLayout {
     uint32_t bytes = 16;       ///< Lo que ocupa el conjunto.
     uint32_t value_offset = 8; ///< Donde empieza el valor.
@@ -592,7 +609,8 @@ struct OptionalLayout {
  *            que describia la misma disposicion por su cuenta.
  */
 inline EnumLayout build_optlike_enum_layout(const Type &st,
-                                            const OptionalLayout &opt) {
+                                            const OptionalLayout &opt,
+                                            const ResultLayout &res) {
     EnumLayout lay;
     lay.is_optlike = true;
     lay.max_payload_fields = 1;
@@ -616,22 +634,22 @@ inline EnumLayout build_optlike_enum_layout(const Type &st,
     } else {
         // Result<V,E>.
         lay.name = "Result";
-        lay.size_bytes = 24;
-        // Err (tag 0, payload E en +16).
+        lay.size_bytes = res.bytes;
+        // Err (tag 0, payload E).
         EnumVariantInfo ve;
         ve.name = "Err";
         ve.tag = 0;
         ve.field_types.push_back(st.pointee2 ? *st.pointee2
                                              : Type{PrimitiveKind::I64});
-        ve.field_offsets.push_back(16);
+        ve.field_offsets.push_back(res.error_offset);
         lay.variants.push_back(std::move(ve));
-        // Ok (tag 1, payload V en +8).
+        // Ok (tag 1, payload V).
         EnumVariantInfo vo;
         vo.name = "Ok";
         vo.tag = 1;
         vo.field_types.push_back(st.pointee ? *st.pointee
                                             : Type{PrimitiveKind::I64});
-        vo.field_offsets.push_back(8);
+        vo.field_offsets.push_back(res.value_offset);
         lay.variants.push_back(std::move(vo));
     }
     return lay;
@@ -1933,6 +1951,31 @@ class TypeChecker {
      * @return Su disposicion.
      */
     OptionalLayout optional_layout(const Type &t) const;
+
+    /**
+     * @brief La disposicion en memoria de un `Result<V,E>`.
+     *
+     * Misma idea y mismo motivo que @ref optional_layout: el tamano y los
+     * desplazamientos dependen de lo que envuelva, y estaban escritos a mano
+     * -- veinticuatro, valor en el ocho, error en el dieciseis -- en seis
+     * sitios.  Con eso, un `Result` cuyo valor fuera un struct de mas de una
+     * palabra no cabia y lo que se sacaba eran ceros.
+     *
+     * @param t Tipo `RESULT`.
+     * @return Su disposicion.
+     */
+    ResultLayout result_layout(const Type &t) const;
+
+    /**
+     * @brief Lo que ocupa un payload dentro de un `Optional` o un `Result`.
+     *
+     * Lo comparten los dos porque es la misma pregunta: una palabra para un
+     * escalar, y el tamano real redondeado a palabra para un struct por valor.
+     *
+     * @param p Tipo del payload.
+     * @return Su hueco, en bytes.
+     */
+    uint32_t payload_slot_bytes(const Type &p) const;
 
     /**
      * @brief tabla de constantes comptime declaradas con
