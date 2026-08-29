@@ -684,6 +684,7 @@ constexpr bool is_numeric(PrimitiveKind k) noexcept {
     return is_integral(k) || is_floating(k);
 }
 
+
 /**
  * @brief Bytes que ocupa la RANURA de un envoltorio de puntero inteligente.
  *
@@ -780,6 +781,28 @@ constexpr size_t primitive_size_bytes(PrimitiveKind k) noexcept {
     case PrimitiveKind::COUNT: return 0;
     }
     return 0;
+}
+
+/**
+ * @brief A cuantos bytes se alinea un valor de este tipo.
+ *
+ * No es lo mismo que su tamano, y confundirlos sale caro.  Un `Result` mide
+ * veinticuatro bytes -- tres palabras -- pero se alinea a ocho: alinearlo a su
+ * tamano da un numero que ni siquiera es potencia de dos, y un struct con un
+ * campo asi acaba midiendo setenta y dos bytes donde le bastan cuarenta.
+ *
+ * Esto lo decidian dos sitios: el calculo del layout de un struct, que tomaba
+ * la alineacion IGUAL al tamano, y la introspeccion, que tenia esta tabla.  La
+ * segunda estaba bien.
+ *
+ * @param k Clase del tipo.
+ * @return Alineacion en bytes.
+ */
+constexpr size_t primitive_align_bytes(PrimitiveKind k) noexcept {
+    const size_t sz = primitive_size_bytes(k);
+    // Nada se alinea a mas de una palabra, y nada a cero.
+    if (sz == 0) return 1;
+    return sz > 8 ? 8 : sz;
 }
 
 /**

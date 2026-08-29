@@ -1,0 +1,53 @@
+namespace ejemplos.alineacion_campos;
+
+// La alineacion de un campo no es su tamano.
+//
+// Un `Result` mide veinticuatro bytes -- tres palabras -- y se alinea a ocho.
+// El calculo del layout tomaba la alineacion IGUAL al tamano, lo que para ese
+// tipo daba veinticuatro: un numero que ni siquiera es potencia de dos.  El
+// struct de abajo media setenta y dos bytes donde le bastan cuarenta, con el
+// campo empezando en el desplazamiento veinticuatro en vez de en el ocho.
+//
+// La alineacion buena estaba escrita al lado, en la tabla de la introspeccion.
+// Eran dos tablas para la misma pregunta y solo una acertaba.
+//
+// El caso de los tipos funcion ya estaba corregido a mano en el mismo sitio,
+// con este mismo motivo escrito en su comentario -- le pasaba a mas de un tipo
+// y se arreglo uno.
+
+struct ConResult {
+    i8 a;
+    Result<i64, i64> r;
+    i8 b;
+}
+
+struct ConOptional {
+    i8 a;
+    Optional<i64> o;
+    i8 b;
+}
+
+// El de funciones, que ya estaba bien: sirve de control.
+struct ConFuncion {
+    i8 a;
+    fn(i64) -> i64 f;
+    i8 b;
+}
+
+i32 main() {
+    // Un campo de tres palabras alineado a palabra: empieza en 8, no en 24.
+    const i64 r_off  = (i64) offsetof<ConResult>("r");     // 8
+    const i64 r_size = (i64) sizeof<ConResult>();          // 40, no 72
+
+    // Dos palabras, misma regla.
+    const i64 o_off  = (i64) offsetof<ConOptional>("o");   // 8
+
+    // Control: este ya se alineaba bien antes.
+    const i64 f_off  = (i64) offsetof<ConFuncion>("f");    // 8
+
+    println("Result off=${r_off} size=${r_size} | Optional off=${o_off} | fn off=${f_off}");
+
+    // 8 + 40 + 8 + 8 = 64
+    const i64 total = r_off + r_size + o_off + f_off;
+    return (i32) (total - 22); // 42
+}

@@ -150,30 +150,6 @@ uint64_t comptime_type_size(const TypeChecker &tc, const Type &t) {
 
 uint64_t comptime_type_align(const TypeChecker &tc, const Type &t) {
     switch (t.kind) {
-    case PrimitiveKind::VOID: return 1;
-    case PrimitiveKind::BOOL:
-    case PrimitiveKind::CHAR:
-    case PrimitiveKind::I8:
-    case PrimitiveKind::U8: return 1;
-    case PrimitiveKind::I16:
-    case PrimitiveKind::U16: return 2;
-    case PrimitiveKind::I32:
-    case PrimitiveKind::U32:
-    case PrimitiveKind::F32: return 4;
-    case PrimitiveKind::I64:
-    case PrimitiveKind::U64:
-    case PrimitiveKind::F64:
-    case PrimitiveKind::PTR:
-    case PrimitiveKind::CLASS:
-    case PrimitiveKind::STRING:
-    case PrimitiveKind::FUNCTION:
-    case PrimitiveKind::OPTIONAL:
-    case PrimitiveKind::RESULT:
-    case PrimitiveKind::UNIQUE_PTR:
-    case PrimitiveKind::SHARED_PTR:
-    case PrimitiveKind::BORROW:
-    case PrimitiveKind::BORROW_MUT:
-    case PrimitiveKind::FUTURE: return 8;
     case PrimitiveKind::STRUCT: {
         auto it = tc.struct_layouts().find(t.struct_name);
         if (it != tc.struct_layouts().end()) return it->second.align_bytes;
@@ -185,7 +161,13 @@ uint64_t comptime_type_align(const TypeChecker &tc, const Type &t) {
         if (!t.pointee) return 1;
         return comptime_type_align(tc, *t.pointee);
     }
-    default: return 1;
+    default:
+        /* Lo que no lleva layout propio lo decide la tabla comun, que es la
+         * misma que usa el calculo del layout de un struct.  Estaba escrito
+         * aqui aparte, y de las dos versiones la que acertaba era esta: el
+         * layout tomaba la alineacion IGUAL al tamano, y para un `Result` eso
+         * daba veinticuatro. */
+        return primitive_align_bytes(t.kind);
     }
 }
 

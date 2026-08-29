@@ -3727,11 +3727,16 @@ void TypeChecker::collect_globals() {
                 // si aun no se registro (forward ref dentro del mismo
                 // pase) emitimos error de orden de declaracion.
                 uint32_t fsize = (uint32_t)primitive_size_bytes(ft.kind);
-                uint32_t falign = fsize;
+                /* La alineacion NO es el tamano.  Un `Result` mide veinticuatro
+                 * -- tres palabras -- y se alinea a ocho; tomarla igual al
+                 * tamano daba veinticuatro, que ni siquiera es potencia de dos,
+                 * y un struct con un campo asi acababa midiendo setenta y dos
+                 * bytes donde le bastan cuarenta.  El caso de las funciones ya
+                 * estaba corregido a mano aqui debajo con este mismo motivo
+                 * escrito; le pasaba a mas de un tipo. */
+                uint32_t falign = (uint32_t)primitive_align_bytes(ft.kind);
                 // Tipos funcion en un campo: cfn (`fn_is_raw`) = 1 puntero (8
-                // bytes); fn (lambda fat) = par (fn_addr, env) = 16 bytes.  En
-                // ambos casos la ALINEACION es 8 (punteros), no 16.  Sin esto
-                // un campo `R (*f)(...)`/`cfn(...)->R` inflaba el struct.
+                // bytes); fn (lambda fat) = par (fn_addr, env) = 16 bytes.
                 if (ft.kind == PrimitiveKind::FUNCTION) {
                     fsize = ft.fn_is_raw ? 8 : 16;
                     falign = 8;
@@ -3796,7 +3801,13 @@ void TypeChecker::collect_globals() {
                                 al = ea;
                             } else {
                                 sz = (uint32_t)primitive_size_bytes(t.kind);
-                                al = sz;
+                                /* La alineacion NO es el tamano: un `Result`
+                                 * mide veinticuatro y se alinea a ocho.
+                                 * Tomarla igual al tamano daba un numero que
+                                 * ni es potencia de dos, y un struct con un
+                                 * campo asi media setenta y dos bytes donde le
+                                 * bastan cuarenta. */
+                                al = (uint32_t)primitive_align_bytes(t.kind);
                             }
                             if (sz == 0) sz = 1;
                             if (al == 0) al = 1;
