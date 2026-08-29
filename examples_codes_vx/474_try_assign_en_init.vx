@@ -1,0 +1,52 @@
+/*
+ * VestaVM -- Maquina Virtual Distribuida
+ *
+ * Copyright (C) 2026 David Lopez.T (DesmonHak) (Castilla y Leon, ES)
+ * Licencia: GPLv2 + excepcion de runtime (ver LICENSE).
+ */
+
+/*
+ * Una variable de fuera que se asigna DENTRO del inicializador de otra,
+ * dentro de un `try` que lanza.
+ *
+ * Lanzar salta al `catch` con los registros a medias, asi que a las
+ * variables de fuera que el `try` cambia hay que darles un hueco en
+ * memoria -- que el salto no toca -- o el `catch` lee lo que quedara en
+ * el registro.
+ *
+ * El rastreo que decide a quien darselo miraba las asignaciones sueltas
+ * (`x = 5;`) pero, en el inicializador de una variable, solo la forma
+ * desnuda: un `x = 5` metido en una suma o en una llamada se le escapaba.
+ * Aqui estan las tres formas, y las tres tienen que llegar enteras al
+ * `catch`.
+ */
+
+i32 main() {
+    i32 a = 1;
+    i32 b = 2;
+    i32 c = 3;
+
+    try {
+        // Forma 1: desnuda en el init.  Esta si se detectaba.
+        i32 u = (a = 10);
+        // Forma 2: dentro de una suma.
+        i32 v = (b = 20) + 1;
+        // Forma 3: como argumento de una llamada.
+        i32 w = suma(c = 30, 0);
+        println("dentro: u=${u} v=${v} w=${w}");
+        lanza();
+    } catch (FatalError e) {
+        println("fuera: a=${a} b=${b} c=${c}");
+    }
+
+    // 10 + 20 + 30 = 60 si los tres sobrevivieron al salto.
+    return a + b + c;
+}
+
+i32 suma(i32 x, i32 y) {
+    return x + y;
+}
+
+void lanza() {
+    panic("corta aqui");
+}

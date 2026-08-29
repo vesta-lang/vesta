@@ -43,6 +43,49 @@ namespace vx {
  * @param outer Los nombres visibles al entrar.
  * @param out   Donde anñadir los que se asignan.
  */
+/**
+ * @brief Apunta que nombres de @p outer se asignan dentro de una expresion.
+ *
+ * Asignar es una EXPRESION en este lenguaje, asi que un `x = 5` puede estar
+ * en cualquier sitio donde quepa un valor: dentro de una suma, como argumento
+ * de una llamada, o en el inicializador de otra variable.  Buscarlo solo donde
+ * la sentencia es una asignacion se deja fuera todos esos.
+ *
+ * @param e     Expresion por la que empezar.
+ * @param outer Los nombres visibles al entrar al `try`.
+ * @param out   Donde anñadir los que se asignan.
+ */
+static void scan_assigned_in_expr(
+    const ast::Expr *e,
+    const std::unordered_map<std::string, ir::IrValueId> &outer,
+    std::unordered_set<std::string> &out) {
+    if (!e) return;
+    switch (e->kind) {
+    case ast::NodeKind::AssignExpr: {
+        auto *ae = static_cast<const ast::AssignExpr *>(e);
+        if (ae->target && ae->target->kind == ast::NodeKind::IdentExpr) {
+            auto *id = static_cast<const ast::IdentExpr *>(ae->target.get());
+            if (outer.count(id->name)) out.insert(id->name);
+        }
+        scan_assigned_in_expr(ae->value.get(), outer, out);
+        return;
+    }
+    case ast::NodeKind::BinaryExpr: {
+        auto *be = static_cast<const ast::BinaryExpr *>(e);
+        scan_assigned_in_expr(be->lhs.get(), outer, out);
+        scan_assigned_in_expr(be->rhs.get(), outer, out);
+        return;
+    }
+    case ast::NodeKind::CallExpr: {
+        auto *ce = static_cast<const ast::CallExpr *>(e);
+        for (auto &a : ce->args)
+            scan_assigned_in_expr(a.get(), outer, out);
+        return;
+    }
+    default: return;
+    }
+}
+
 static void scan_assigned_names(
     const ast::Stmt *st,
     const std::unordered_map<std::string, ir::IrValueId> &outer,
@@ -54,37 +97,7 @@ static void scan_assigned_names(
     switch (st->kind) {
     case ast::NodeKind::ExprStmt: {
         auto *es = static_cast<const ast::ExprStmt *>(st);
-        // Recursar en la expr para detectar assign.
-        std::function<void(const ast::Expr *)> visit_expr =
-            [&](const ast::Expr *e) {
-                if (!e) return;
-                if (e->kind == ast::NodeKind::AssignExpr) {
-                    auto *ae = static_cast<const ast::AssignExpr *>(e);
-                    if (ae->target &&
-                        ae->target->kind == ast::NodeKind::IdentExpr) {
-                        auto *id = static_cast<const ast::IdentExpr *>(
-                            ae->target.get());
-                        if (outer.count(id->name)) {
-                            out.insert(id->name);
-                        }
-                    }
-                    visit_expr(ae->value.get());
-                    return;
-                }
-                if (e->kind == ast::NodeKind::BinaryExpr) {
-                    auto *be = static_cast<const ast::BinaryExpr *>(e);
-                    visit_expr(be->lhs.get());
-                    visit_expr(be->rhs.get());
-                    return;
-                }
-                if (e->kind == ast::NodeKind::CallExpr) {
-                    auto *ce = static_cast<const ast::CallExpr *>(e);
-                    for (auto &a : ce->args)
-                        visit_expr(a.get());
-                    return;
-                }
-            };
-        visit_expr(es->expr.get());
+        scan_assigned_in_expr(es->expr.get(), outer, out);
         break;
     }
     case ast::NodeKind::BlockStmt: {
@@ -121,28 +134,7 @@ static void scan_assigned_names(
         // var-decl introduce nuevo nombre; el init expr
         // puede contener assigns a otras vars.
         auto *vd = static_cast<const ast::VarDeclStmt *>(st);
-        if (vd->init) {
-            std::function<void(const ast::Expr *)> visit2 =
-                [&](const ast::Expr *e) {
-                    if (!e) return;
-                    if (e->kind == ast::NodeKind::AssignExpr) {
-                        auto *ae =
-                            static_cast<const ast::AssignExpr *>(e);
-                        if (ae->target &&
-                            ae->target->kind ==
-                                ast::NodeKind::IdentExpr) {
-                            auto *id =
-                                static_cast<const ast::IdentExpr *>(
-                                    ae->target.get());
-                            if (outer.count(id->name)) {
-                                out.insert(id->name);
-                            }
-                        }
-                        visit2(ae->value.get());
-                    }
-                };
-            visit2(vd->init.get());
-        }
+        if (vd->init) scan_assigned_in_expr(vd->init.get(), outer, out);
         break;
     }
     default: break;
