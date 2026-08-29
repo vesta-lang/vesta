@@ -782,6 +782,25 @@ class Lowering {
      * @param vt       Ese tipo, en el vocabulario del IR.
      * @return @c true si era una de estas y quedo bajada.
      */
+    /**
+     * @brief Escribe UN valor interpolado, con la forma que se haya pedido.
+     *
+     * Lo que hay dentro de un `${...}` puede ser de cualquier tipo, y cada uno
+     * se escribe distinto: un entero con signo no es uno sin signo, un
+     * flotante no es un puntero, una cadena no es un caracter.  Aqui se
+     * averigua cual es y se elige la primitiva que le toca, con las
+     * conversiones que haga falta.
+     *
+     * Se llama a si misma, y no por elegancia: un color de 24 bits se escribe
+     * como tres numeros dentro de la misma secuencia, y un struct que sabe
+     * decir su nombre se imprime pidiendoselo -- lo que devuelve hay que
+     * escribirlo otra vez por aqui --.
+     *
+     * @param ex       La expresion a escribir.
+     * @param fmt_str  Lo que seguia a los dos puntos, o vacio.
+     */
+    void emit_print_typed_value(ast::Expr *ex, const std::string &fmt_str);
+
     bool try_lower_address_taken_var(ast::VarDeclStmt *vd,
                                      const Type &sem_type, ir::IrType vt);
 
