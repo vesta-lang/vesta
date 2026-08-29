@@ -383,22 +383,8 @@ void Lowering::lower_if(ast::IfStmt *s) {
     std::vector<std::unordered_map<std::string, ir::IrValueId>> entry_scopes =
         scopes_;
 
-    // br.cond cond, then_bb, (else_bb o merge_bb si no hay else)
-    ir::IrInstr br{};
-    br.op = ir::IrOp::BR_COND;
-    br.operands.push_back(cond);
-    br.target_block = then_bb;
-    br.false_block = has_else ? else_bb : merge_bb;
-    br.source_line = s->loc.line;
-    emit(current_block_, std::move(br));
-    // Mantener la CFG explicita para validacion del IR.
-    fn_->blocks[current_block_].succs.push_back(then_bb);
-    fn_->blocks[current_block_].succs.push_back(has_else ? else_bb : merge_bb);
-    fn_->blocks[then_bb].preds.push_back(current_block_);
-    if (has_else)
-        fn_->blocks[else_bb].preds.push_back(current_block_);
-    else
-        fn_->blocks[merge_bb].preds.push_back(current_block_);
+    // Sin `else`, la salida falsa es directamente el punto de reunion.
+    emit_br_cond(cond, then_bb, has_else ? else_bb : merge_bb, s->loc.line);
 
     // Rama then.
     current_block_ = then_bb;
@@ -660,21 +646,8 @@ void Lowering::lower_while(ast::WhileStmt *s) {
         return;
     }
     const ir::IrBlockId cond_end_block = current_block_;
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_v};
-        brc.target_block = body_id;
-        brc.false_block = exit_id;
-        brc.source_line = s->loc.line;
-        emit(cond_end_block, std::move(brc));
-    }
-    fn_->blocks[cond_end_block].succs.push_back(body_id);
-    fn_->blocks[cond_end_block].succs.push_back(exit_id);
-    fn_->blocks[body_id].preds.push_back(cond_end_block);
-    fn_->blocks[exit_id].preds.push_back(cond_end_block);
+    emit_br_cond_from(cond_end_block, cond_v, body_id, exit_id, s->loc.line);
     block_terminated_ = true;
-
     // 4. Bajar el body en body_id.  Push targets de break/continue
     //    para que cualquier @c BreakStmt o @c ContinueStmt anidado
     //    sepa adonde saltar.
@@ -947,21 +920,9 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
     ir::IrValueId cond_v = lower_expr(s->cond.get());
     if (cond_v == ir::IR_NO_VALUE) return;
     const ir::IrBlockId cond_end_block = current_block_;
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_v};
-        brc.target_block = body_id; // back-edge
-        brc.false_block = exit_id;
-        brc.source_line = s->loc.line;
-        emit(cond_end_block, std::move(brc));
-    }
-    fn_->blocks[cond_end_block].succs.push_back(body_id);
-    fn_->blocks[cond_end_block].succs.push_back(exit_id);
-    fn_->blocks[body_id].preds.push_back(cond_end_block);
-    fn_->blocks[exit_id].preds.push_back(cond_end_block);
+    // El destino verdadero es el back-edge: vuelve al cuerpo del bucle.
+    emit_br_cond_from(cond_end_block, cond_v, body_id, exit_id, s->loc.line);
     block_terminated_ = true;
-
     // Patchar PHIs de body con el back-edge desde el bloque que termina
     // la cond (puede ser != header si hubo short-circuit).
     for (auto &vi : vars) {
@@ -1122,20 +1083,7 @@ void Lowering::lower_for(ast::ForStmt *s) {
         cond_v = emit_const(ir::IrType::BOOL, 1, s->loc.line);
     }
     const ir::IrBlockId cond_end_block = current_block_;
-    {
-        ir::IrInstr brc{};
-        brc.op = ir::IrOp::BR_COND;
-        brc.operands = {cond_v};
-        brc.target_block = body_id;
-        brc.false_block = exit_id;
-        brc.source_line = s->loc.line;
-        emit(cond_end_block, std::move(brc));
-    }
-    fn_->blocks[cond_end_block].succs.push_back(body_id);
-    fn_->blocks[cond_end_block].succs.push_back(exit_id);
-    fn_->blocks[body_id].preds.push_back(cond_end_block);
-    fn_->blocks[exit_id].preds.push_back(cond_end_block);
-
+    emit_br_cond_from(cond_end_block, cond_v, body_id, exit_id, s->loc.line);
     // Body: push targets {continue=step, break=exit}.
     loop_targets_.push_back({step_id, exit_id, {}, {}});
     current_block_ = body_id;
