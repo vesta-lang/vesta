@@ -1710,8 +1710,9 @@ void Lowering::emit_br_from(ir::IrBlockId from, ir::IrBlockId target,
  * @param t_false     Bloque al que ir si lo es.
  * @param source_line Linea fuente, para la depuracion.
  */
-void Lowering::emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
-                            ir::IrBlockId t_false, uint32_t source_line) {
+void Lowering::emit_br_cond_from(ir::IrBlockId from, ir::IrValueId cond,
+                                 ir::IrBlockId t_true, ir::IrBlockId t_false,
+                                 uint32_t source_line) {
     ir::IrInstr b{};
     b.op = ir::IrOp::BR_COND;
     b.type = ir::IrType::VOID;
@@ -1720,9 +1721,14 @@ void Lowering::emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
     b.target_block = t_true;
     b.false_block = t_false;
     b.source_line = source_line;
-    emit(current_block_, std::move(b));
-    add_cfg_edge(current_block_, t_true);
-    add_cfg_edge(current_block_, t_false);
+    emit(from, std::move(b));
+    add_cfg_edge(from, t_true);
+    add_cfg_edge(from, t_false);
+}
+
+void Lowering::emit_br_cond(ir::IrValueId cond, ir::IrBlockId t_true,
+                            ir::IrBlockId t_false, uint32_t source_line) {
+    emit_br_cond_from(current_block_, cond, t_true, t_false, source_line);
 }
 
 /**

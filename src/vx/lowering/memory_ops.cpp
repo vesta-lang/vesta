@@ -514,19 +514,7 @@ uint64_t Lowering::ensure_memcpy_dispatch() {
         const ir::IrBlockId bb_base = fn_->new_block("base");
         const ir::IrBlockId bb_join = fn_->new_block("join");
         {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.type = ir::IrType::VOID;
-            br.dst = ir::IR_NO_VALUE;
-            br.operands = {v_has};
-            br.target_block = bb_avx2;
-            br.false_block = bb_base;
-            br.source_line = ln;
-            emit(current_block_, std::move(br));
-            fn_->blocks[current_block_].succs.push_back(bb_avx2);
-            fn_->blocks[current_block_].succs.push_back(bb_base);
-            fn_->blocks[bb_avx2].preds.push_back(current_block_);
-            fn_->blocks[bb_base].preds.push_back(current_block_);
+            emit_br_cond(v_has, bb_avx2, bb_base, ln);
         }
 
         // Helper: en el bloque actual, STORE &<fn_name> al global fp + BR join.
@@ -785,19 +773,7 @@ void Lowering::ensure_auto_multiversion(ir::IrModule &out_module) {
 
         auto branch = [&](ir::IrValueId cond, ir::IrBlockId t,
                           ir::IrBlockId f) {
-            ir::IrInstr br{};
-            br.op = ir::IrOp::BR_COND;
-            br.type = ir::IrType::VOID;
-            br.dst = ir::IR_NO_VALUE;
-            br.operands = {cond};
-            br.target_block = t;
-            br.false_block = f;
-            br.source_line = ln;
-            emit(current_block_, std::move(br));
-            fn_->blocks[current_block_].succs.push_back(t);
-            fn_->blocks[current_block_].succs.push_back(f);
-            fn_->blocks[t].preds.push_back(current_block_);
-            fn_->blocks[f].preds.push_back(current_block_);
+            emit_br_cond(cond, t, f, ln);
         };
         // En el bloque actual: setea el fp de TODAS las entries a la variante
         // del sufijo dado + BR a join.

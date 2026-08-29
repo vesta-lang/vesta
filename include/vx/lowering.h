@@ -533,6 +533,26 @@ class Lowering {
                       ir::IrBlockId t_false, uint32_t source_line);
 
     /**
+     * @brief Igual, pero saliendo del bloque que se diga y no del actual.
+     *
+     * Hace falta porque un bloque se cierra a menudo DESPUES de haber seguido
+     * bajando por otro sitio: la condicion de un bucle, el lado izquierdo de un
+     * `&&`, la cadena de comprobaciones de un `catch`.  Cuando llega el momento
+     * de poner el salto, el bloque actual ya es otro, y las aristas apuntadas
+     * desde el son mentira: el analisis de vivacidad cree que un valor muere
+     * donde no muere y el asignador reutiliza su registro.
+     *
+     * @param from        Bloque del que sale el salto.
+     * @param cond        El valor que decide.
+     * @param t_true      Bloque al que ir si no es cero.
+     * @param t_false     Bloque al que ir si lo es.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_br_cond_from(ir::IrBlockId from, ir::IrValueId cond,
+                           ir::IrBlockId t_true, ir::IrBlockId t_false,
+                           uint32_t source_line);
+
+    /**
      * @brief Lee un qword de una direccion.
      *
      * @param addr        De donde leer.

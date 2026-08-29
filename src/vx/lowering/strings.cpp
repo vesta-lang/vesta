@@ -1571,19 +1571,7 @@ std::string Lowering::ensure_ctoa_helper() {
             in.source_line = 0;
             emit(current_block_, std::move(in));
         }
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR_COND;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.operands = {v_cond};
-        b.target_block = bb_then;
-        b.false_block = bb_else;
-        b.source_line = 0;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(bb_then);
-        fn_->blocks[current_block_].succs.push_back(bb_else);
-        fn_->blocks[bb_then].preds.push_back(current_block_);
-        fn_->blocks[bb_else].preds.push_back(current_block_);
+        emit_br_cond(v_cond, bb_then, bb_else, 0);
     };
 
     ir::IrBlockId bb1 = fn_->new_block("ctoa_1");
@@ -1818,19 +1806,7 @@ std::string Lowering::ensure_btoa_helper() {
     ir::IrBlockId bb_true = fn_->new_block("btoa_true");
     ir::IrBlockId bb_false = fn_->new_block("btoa_false");
     {
-        ir::IrInstr b{};
-        b.op = ir::IrOp::BR_COND;
-        b.type = ir::IrType::VOID;
-        b.dst = ir::IR_NO_VALUE;
-        b.operands = {v_cond};
-        b.target_block = bb_true;
-        b.false_block = bb_false;
-        b.source_line = 0;
-        emit(current_block_, std::move(b));
-        fn_->blocks[current_block_].succs.push_back(bb_true);
-        fn_->blocks[current_block_].succs.push_back(bb_false);
-        fn_->blocks[bb_true].preds.push_back(current_block_);
-        fn_->blocks[bb_false].preds.push_back(current_block_);
+        emit_br_cond(v_cond, bb_true, bb_false, 0);
     }
     current_block_ = bb_true;
     write_bytes("true");

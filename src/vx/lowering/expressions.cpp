@@ -1632,17 +1632,7 @@ ir::IrValueId Lowering::lower_ternary(ast::TernaryExpr *e) {
     ++ternary_counter_;
     /* br_cond. */
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(cond);
-        br.target_block = then_bb;
-        br.false_block = else_bb;
-        br.source_line = src_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(then_bb);
-        fn_->blocks[current_block_].succs.push_back(else_bb);
-        fn_->blocks[then_bb].preds.push_back(current_block_);
-        fn_->blocks[else_bb].preds.push_back(current_block_);
+        emit_br_cond(cond, then_bb, else_bb, src_line);
     }
     /* Bajar then_expr en then_bb. */
     current_block_ = then_bb;

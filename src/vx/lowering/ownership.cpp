@@ -304,19 +304,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 const ir::IrValueId v_cond =
                     emit_ir_binop(ir::IrOp::CMP_NE, v_ptr, v_z, ir::IrType::BOOL, ln);
                 {
-                    ir::IrInstr br{};
-                    br.op = ir::IrOp::BR_COND;
-                    br.type = ir::IrType::VOID;
-                    br.dst = ir::IR_NO_VALUE;
-                    br.operands = {v_cond};
-                    br.target_block = bb_do;
-                    br.false_block = bb_skip;
-                    br.source_line = ln;
-                    emit(current_block_, std::move(br));
-                    fn_->blocks[current_block_].succs.push_back(bb_do);
-                    fn_->blocks[current_block_].succs.push_back(bb_skip);
-                    fn_->blocks[bb_do].preds.push_back(current_block_);
-                    fn_->blocks[bb_skip].preds.push_back(current_block_);
+                    emit_br_cond(v_cond, bb_do, bb_skip, ln);
                 }
                 current_block_ = bb_do;
                 if (it->literal_deleter.rfind("@extern:", 0) == 0) {
@@ -357,19 +345,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     const ir::IrValueId v_c2 =
                         emit_ir_binop(ir::IrOp::CMP_NE, v_del, v_z2, ir::IrType::BOOL, ln);
                     {
-                        ir::IrInstr br{};
-                        br.op = ir::IrOp::BR_COND;
-                        br.type = ir::IrType::VOID;
-                        br.dst = ir::IR_NO_VALUE;
-                        br.operands = {v_c2};
-                        br.target_block = bb_call;
-                        br.false_block = bb_free;
-                        br.source_line = ln;
-                        emit(current_block_, std::move(br));
-                        fn_->blocks[current_block_].succs.push_back(bb_call);
-                        fn_->blocks[current_block_].succs.push_back(bb_free);
-                        fn_->blocks[bb_call].preds.push_back(current_block_);
-                        fn_->blocks[bb_free].preds.push_back(current_block_);
+                        emit_br_cond(v_c2, bb_call, bb_free, ln);
                     }
                     // bb_call: CALLIND deleter(ptr) -> bb_skip.
                     current_block_ = bb_call;
@@ -534,17 +510,7 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             const ir::IrBlockId dec_bb = fn_->new_block("sh_dec");
             const ir::IrBlockId skip_bb = fn_->new_block("sh_skip");
             {
-                ir::IrInstr br{};
-                br.op = ir::IrOp::BR_COND;
-                br.operands = {v_cmp};
-                br.target_block = dec_bb;
-                br.false_block = skip_bb;
-                br.source_line = it->source_line;
-                emit(current_block_, std::move(br));
-                fn_->blocks[current_block_].succs.push_back(dec_bb);
-                fn_->blocks[current_block_].succs.push_back(skip_bb);
-                fn_->blocks[dec_bb].preds.push_back(current_block_);
-                fn_->blocks[skip_bb].preds.push_back(current_block_);
+                emit_br_cond(v_cmp, dec_bb, skip_bb, it->source_line);
             }
             // dec_bb: refcount-- (LOAD + SUB + STORE).
             current_block_ = dec_bb;
@@ -1174,17 +1140,7 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
     const ir::IrBlockId dec_bb = fn_->new_block("shf_dec");
     const ir::IrBlockId skip_bb = fn_->new_block("shf_skip");
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {v_cmp};
-        br.target_block = dec_bb;
-        br.false_block = skip_bb;
-        br.source_line = line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(dec_bb);
-        fn_->blocks[current_block_].succs.push_back(skip_bb);
-        fn_->blocks[dec_bb].preds.push_back(current_block_);
-        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        emit_br_cond(v_cmp, dec_bb, skip_bb, line);
     }
     current_block_ = dec_bb;
     const ir::IrValueId v_rc = emit_load_typed(v_ctrl, ir::IrType::I64, line);
@@ -1252,17 +1208,7 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
     const ir::IrBlockId inc_bb = fn_->new_block("sh_inc");
     const ir::IrBlockId skip_bb = fn_->new_block("sh_inc_skip");
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands = {v_cmp};
-        br.target_block = inc_bb;
-        br.false_block = skip_bb;
-        br.source_line = line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(inc_bb);
-        fn_->blocks[current_block_].succs.push_back(skip_bb);
-        fn_->blocks[inc_bb].preds.push_back(current_block_);
-        fn_->blocks[skip_bb].preds.push_back(current_block_);
+        emit_br_cond(v_cmp, inc_bb, skip_bb, line);
     }
     current_block_ = inc_bb;
     const ir::IrValueId v_rc = emit_load_typed(v_ctrl, ir::IrType::I64, line);

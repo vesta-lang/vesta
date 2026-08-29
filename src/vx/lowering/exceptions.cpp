@@ -1291,17 +1291,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
 
     // br_cond: si tag==0 -> err_bb, else -> ok_bb.
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(cond_v);
-        br.target_block = err_bb;
-        br.false_block = ok_bb;
-        br.source_line = src_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(err_bb);
-        fn_->blocks[current_block_].succs.push_back(ok_bb);
-        fn_->blocks[err_bb].preds.push_back(current_block_);
-        fn_->blocks[ok_bb].preds.push_back(current_block_);
+        emit_br_cond(cond_v, err_bb, ok_bb, src_line);
     }
 
     // 5. err_bb: copia v_buf (24 bytes) al sret_retbuf + RET.

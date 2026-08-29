@@ -99,17 +99,7 @@ ir::IrValueId Lowering::build_native_string_concat(ir::IrValueId v_a,
     const ir::IrBlockId sso_bb = fn_->new_block("concat_sso");
     const ir::IrBlockId merge_bb = fn_->new_block("concat_merge");
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(v_cond);
-        br.target_block = heap_bb;
-        br.false_block = sso_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(heap_bb);
-        fn_->blocks[current_block_].succs.push_back(sso_bb);
-        fn_->blocks[heap_bb].preds.push_back(current_block_);
-        fn_->blocks[sso_bb].preds.push_back(current_block_);
+        emit_br_cond(v_cond, heap_bb, sso_bb, source_line);
     }
 
     // --- HEAP: total > 22 ---
@@ -306,17 +296,7 @@ void Lowering::build_native_string_finalize(ir::IrValueId v_slot,
     const ir::IrBlockId sso_bb = fn_->new_block("strfin_sso");
     const ir::IrBlockId merge_bb = fn_->new_block("strfin_merge");
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(v_cond);
-        br.target_block = heap_bb;
-        br.false_block = sso_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(heap_bb);
-        fn_->blocks[current_block_].succs.push_back(sso_bb);
-        fn_->blocks[heap_bb].preds.push_back(current_block_);
-        fn_->blocks[sso_bb].preds.push_back(current_block_);
+        emit_br_cond(v_cond, heap_bb, sso_bb, source_line);
     }
     auto close_to_merge = [&]() {
         emit_br(merge_bb, source_line);
@@ -394,17 +374,7 @@ void Lowering::build_native_string_append_inplace(ir::IrValueId v_dst_slot,
     const ir::IrBlockId sso_bb = fn_->new_block("append_sso");
     const ir::IrBlockId merge_bb = fn_->new_block("append_merge");
     {
-        ir::IrInstr br{};
-        br.op = ir::IrOp::BR_COND;
-        br.operands.push_back(v_cond);
-        br.target_block = heap_bb;
-        br.false_block = sso_bb;
-        br.source_line = source_line;
-        emit(current_block_, std::move(br));
-        fn_->blocks[current_block_].succs.push_back(heap_bb);
-        fn_->blocks[current_block_].succs.push_back(sso_bb);
-        fn_->blocks[heap_bb].preds.push_back(current_block_);
-        fn_->blocks[sso_bb].preds.push_back(current_block_);
+        emit_br_cond(v_cond, heap_bb, sso_bb, source_line);
     }
 
     // --- HEAP: new_len > 22 (SSO->HEAP o HEAP->HEAP) ---

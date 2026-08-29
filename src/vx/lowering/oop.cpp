@@ -484,13 +484,8 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     // 4) br_cond is_null skip do_dtor
                     const ir::IrBlockId do_bb = fn_->new_block("dtor_field");
                     const ir::IrBlockId skip_bb = fn_->new_block("dtor_skip");
-                    ir::IrInstr br{};
-                    br.op = ir::IrOp::BR_COND;
-                    br.operands = {is_null};
-                    br.target_block = skip_bb; // true (null) -> skip
-                    br.false_block = do_bb;    // false -> do_dtor
-                    br.source_line = m->loc.line;
-                    emit(current_block_, std::move(br));
+                    // true (null) -> saltar; false -> llamar al destructor.
+                    emit_br_cond(is_null, skip_bb, do_bb, m->loc.line);
                     // 5) do_bb: dtor del field; br skip.  CALL directo en
                     //    native_poo no-polimorfico; CALLVIRT en otro caso.
                     current_block_ = do_bb;
