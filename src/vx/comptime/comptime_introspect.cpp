@@ -280,7 +280,16 @@ std::string comptime_type_name(const TypeChecker &tc, const Type &t) {
             t.pointee ? comptime_type_name(tc, *t.pointee) : "?";
         return "Future<" + inner + ">";
     }
-    default: return "?";
+    default:
+        /* Lo que no tenga forma propia lo nombra la tabla de types.h, que es
+         * la misma que usan los diagnosticos.  Antes salia "?": las ocho
+         * colecciones primitivas del lenguaje -- ArrayList, HashMap, HashSet,
+         * Queue, Deque, Stack, TreeMap, TreeSet -- no tienen caso aqui y caian
+         * a este default, asi que `typename<HashMap>()` no devolvia su nombre
+         * pese a que el compilador lo sabe y lo escribe en cualquier mensaje de
+         * error.  Preguntando, una clase de tipo nueva tampoco se queda sin
+         * nombre por olvido. */
+        return primitive_name(t.kind);
     }
 }
 

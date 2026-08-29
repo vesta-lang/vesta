@@ -1,0 +1,53 @@
+namespace ejemplos.typename_completo;
+
+// `typename<T>()` nombra CUALQUIER tipo del lenguaje.
+//
+// El compilador sabe como se llama cada uno -- lo escribe en cualquier mensaje
+// de error --, pero la introspeccion tenia su propia tabla y las ocho
+// colecciones primitivas no estaban en ella: caian a un `default` que devolvia
+// "?".  Un programa que decide algo por el nombre del tipo, o que lo imprime en
+// un diagnostico propio, se quedaba sin saber que tenia delante.
+//
+// Se comprueban las cuatro familias: los que tienen nombre a secas, los que se
+// construyen con el del tipo interior, los que llevan el nombre que les puso el
+// usuario, y las colecciones, que eran las que faltaban.
+
+struct Punto { i64 x; i64 y; }
+
+class Animal { public i64 patas() { return 4; } }
+
+i64 cuenta(string s, string esperado) { return s.equals(esperado) ? 1 : 0; }
+
+i32 main() {
+    i64 ok = 0;
+
+    // 1. Nombre a secas.
+    ok = ok + cuenta(typename<i64>(), "i64");
+    ok = ok + cuenta(typename<bool>(), "bool");
+    ok = ok + cuenta(typename<string>(), "string");
+
+    // 2. Construido con el del tipo interior.
+    ok = ok + cuenta(typename<i64*>(), "i64*");
+    ok = ok + cuenta(typename<Optional<i64>>(), "Optional<i64>");
+    ok = ok + cuenta(typename<unique<i64>>(), "unique<i64>");
+    ok = ok + cuenta(typename<i64[4]>(), "i64[4]");
+
+    // 3. El nombre que le puso el usuario.
+    ok = ok + cuenta(typename<Punto>(), "Punto");
+    ok = ok + cuenta(typename<Animal>(), "Animal");
+
+    // 4. Las colecciones: las que devolvian "?".
+    ok = ok + cuenta(typename<ArrayList>(), "ArrayList");
+    ok = ok + cuenta(typename<HashMap>(), "HashMap");
+    ok = ok + cuenta(typename<HashSet>(), "HashSet");
+    ok = ok + cuenta(typename<Queue>(), "Queue");
+    ok = ok + cuenta(typename<Deque>(), "Deque");
+    ok = ok + cuenta(typename<Stack>(), "Stack");
+    ok = ok + cuenta(typename<TreeMap>(), "TreeMap");
+    ok = ok + cuenta(typename<TreeSet>(), "TreeSet");
+
+    println("nombres correctos: ${ok} de 17");
+
+    // 17 aciertos.
+    return (i32) (ok + 25); // 42
+}
