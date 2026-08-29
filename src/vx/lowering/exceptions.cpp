@@ -388,135 +388,8 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // en stdlib/vx/vx_exc.vx (enlazado en el .exe AOT).
     // ---------------------------------------------------------------
     if (native_poo_) {
-        // buf en host-stack: 96B cubre el peor caso (Win64 buf 80 +
-        // prev 8 + type 8); SysV/x86-32 usan menos.  El layout interno
-        // (offsets prev/type) lo conoce vx_exc.vx via comptime const.
-        const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
-        // type = 0 (catch-all).  v2: findclass del tipo del catch.
-        const ir::IrValueId v_type =
-            emit_const(ir::IrType::I64, 0, s->loc.line);
-            emit_call("__vx_push_frame",
-                      {v_buf, v_type}, ir::IrType::VOID, s->loc.line);
-        const ir::IrValueId v_r = emit_call("__vx_setjmp",
-                  {v_buf}, ir::IrType::I64, s->loc.line);
-        // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
-        // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
-        // frame, lee el type-id y elige el catch que matchea (o re-throw).
-        const ir::IrBlockId dispatch_bb = fn_->new_block("try_dispatch");
-        const ir::IrBlockId rethrow_bb = fn_->new_block("try_rethrow");
-        // Distinto de cero = se volvio aqui por una excepcion, asi que toca
-        // buscarle un `catch`; cero = se entra al bloque por primera vez.
-        emit_br_cond(v_r, dispatch_bb, body_bb, s->loc.line);
-
-        // Helpers locales para emitir CALLs al runtime de excepciones.
-        auto emit_void_call = [&](ir::IrBlockId blk, const char *name) {
-            ir::IrInstr c{};
-            c.op = ir::IrOp::CALL;
-            c.type = ir::IrType::VOID;
-            c.dst = ir::IR_NO_VALUE;
-            c.func_name = name;
-            c.source_line = s->loc.line;
-            emit(blk, std::move(c));
-        };
-        auto emit_i64_call = [&](ir::IrBlockId blk,
-                                 const char *name) -> ir::IrValueId {
-            const ir::IrValueId d = fn_->new_value(ir::IrType::I64);
-            ir::IrInstr c{};
-            c.op = ir::IrOp::CALL;
-            c.type = ir::IrType::I64;
-            c.dst = d;
-            c.func_name = name;
-            c.source_line = s->loc.line;
-            emit(blk, std::move(c));
-            return d;
-        };
-
-        // dispatch_bb: pop del frame consumido + leer el type-id.
-        current_block_ = dispatch_bb;
-        emit_void_call(dispatch_bb, "__vx_pop_frame");
-        const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vx_get_type");
-        // Cadena de chequeos: por cada catch, si su tipo es desconocido
-        // (catch-all, builtin como FatalError, o base no registrada) matchea
-        // SIEMPRE; si es una clase con intervalo, matchea si lo<=t<=hi (el
-        // intervalo cubre la clase y sus subclases).
-        ir::IrBlockId cur_check = dispatch_bb;
-        for (size_t ci = 0; ci < n_catches && cur_check != ir::IR_NO_BLOCK;
-             ++ci) {
-            const ast::CatchClause &cc = s->catches[ci];
-            current_block_ = cur_check;
-            auto itv = cc.exc_class_name.empty()
-                           ? type_intervals_.end()
-                           : type_intervals_.find(cc.exc_class_name);
-            const bool catch_all = (itv == type_intervals_.end());
-            if (catch_all) {
-                // BR incondicional al handler; el resto de catches queda
-                // muerto.
-                emit_br_from(cur_check, handler_bbs[ci], cc.loc.line);
-                cur_check = ir::IR_NO_BLOCK;
-                break;
-            }
-            const uint32_t lo = itv->second.first, hi = itv->second.second;
-            const ir::IrValueId v_lo = emit_const(
-                ir::IrType::I64, static_cast<int64_t>(lo), cc.loc.line);
-            const ir::IrValueId v_hi = emit_const(
-                ir::IrType::I64, static_cast<int64_t>(hi), cc.loc.line);
-            const ir::IrValueId v_ge = fn_->new_value(ir::IrType::BOOL);
-            {
-                ir::IrInstr cm{};
-                cm.op = ir::IrOp::CMP_GE;
-                cm.type = ir::IrType::BOOL;
-                cm.dst = v_ge;
-                cm.operands = {v_t, v_lo};
-                cm.source_line = cc.loc.line;
-                emit(cur_check, std::move(cm));
-            }
-            const ir::IrValueId v_le = fn_->new_value(ir::IrType::BOOL);
-            {
-                ir::IrInstr cm{};
-                cm.op = ir::IrOp::CMP_LE;
-                cm.type = ir::IrType::BOOL;
-                cm.dst = v_le;
-                cm.operands = {v_t, v_hi};
-                cm.source_line = cc.loc.line;
-                emit(cur_check, std::move(cm));
-            }
-            const ir::IrValueId v_and = fn_->new_value(ir::IrType::BOOL);
-            {
-                ir::IrInstr an{};
-                an.op = ir::IrOp::AND;
-                an.type = ir::IrType::BOOL;
-                an.dst = v_and;
-                an.operands = {v_ge, v_le};
-                an.source_line = cc.loc.line;
-                emit(cur_check, std::move(an));
-            }
-            const ir::IrBlockId next_check =
-                (ci + 1 < n_catches) ? fn_->new_block("try_check") : rethrow_bb;
-            emit_br_cond_from(cur_check, v_and, handler_bbs[ci], next_check,
-                              cc.loc.line);
-            cur_check = next_check;
-        }
-
-        // rethrow_bb: ningun catch matcheo -> re-lanzar al frame externo.
-        // El frame ya se popeo en dispatch_bb, asi que el __vx_throw del
-        // THROW hace longjmp al handler de fuera (propagacion).
-        current_block_ = rethrow_bb;
-        {
-            const ir::IrValueId v_v =
-                emit_i64_call(rethrow_bb, "__vx_get_value");
-            const ir::IrValueId v_ty =
-                emit_i64_call(rethrow_bb, "__vx_get_type");
-            ir::IrInstr th{};
-            th.op = ir::IrOp::THROW;
-            th.type = ir::IrType::VOID;
-            th.dst = ir::IR_NO_VALUE;
-            th.operands = {v_v, v_ty};
-            th.source_line = s->loc.line;
-            emit(rethrow_bb, std::move(th));
-        }
-        goto try_after_entry; // saltar la emision TRYENTER del path VM
-    }
-    {
+        emit_try_frame_native(s, body_bb, handler_bbs);
+    } else {
         // bloque del path VM (TRYENTER): cerrar el scope de sus locales
         // (br_to_body, etc.) ANTES del label try_after_entry para que el
         // goto del path native no salte sobre destructores en scope.
@@ -587,9 +460,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             fn_->blocks[current_block_].succs.push_back(hb);
             fn_->blocks[hb].preds.push_back(current_block_);
         }
-    } // fin del bloque del path VM (TRYENTER)
-
-try_after_entry:; // destino del salto del path native_poo_ (setjmp ya emitido)
+    }
 
     // Helper local: emite el bloque finally (clonado en cada salida) y
     // luego un branch al merge.  El finally en MVP se INLINEA en cada
@@ -1320,6 +1191,155 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
     fn_->values[v_at8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
     const ir::IrValueId v_dst = emit_load_typed(v_at8, payload_t, src_line);
     return v_dst;
+}
+
+/**
+ * @brief Monta el `try` del modo NATIVO, sin maquina virtual detras.
+ *
+ * Sin VM no hay pila de marcos de excepcion que consultar, asi que el modelo es
+ * el de C: se guarda el estado del punto de entrada y lanzar es volver a el.
+ * El mismo sitio se ejecuta DOS veces y lo unico que los distingue es lo que
+ * devuelve guardar -- cero la primera, distinto de cero cuando se vuelve --,
+ * asi que la bifurcacion de ahi no es del programa: es "entro por primera vez"
+ * contra "he vuelto porque alguien lanzo".
+ *
+ * De momento el marco es uno solo y atrapa todo: lo que se lanza no lleva
+ * todavia su tipo, asi que varios `catch` van todos al primero.
+ *
+ * @param s           El `try` que se esta bajando.
+ * @param body_bb     Bloque del cuerpo, al que se entra la primera vez.
+ * @param handler_bbs Bloques de los `catch`, en orden.
+ */
+void Lowering::emit_try_frame_native(
+    ast::TryStmt *s, ir::IrBlockId body_bb,
+    const std::vector<ir::IrBlockId> &handler_bbs) {
+    // buf en host-stack: 96B cubre el peor caso (Win64 buf 80 +
+    // prev 8 + type 8); SysV/x86-32 usan menos.  El layout interno
+    // (offsets prev/type) lo conoce vx_exc.vx via comptime const.
+    const ir::IrValueId v_buf = stack_alloc_buf(96, s->loc.line, true);
+    // type = 0 (catch-all).  v2: findclass del tipo del catch.
+    const ir::IrValueId v_type =
+        emit_const(ir::IrType::I64, 0, s->loc.line);
+        emit_call("__vx_push_frame",
+                  {v_buf, v_type}, ir::IrType::VOID, s->loc.line);
+    const ir::IrValueId v_r = emit_call("__vx_setjmp",
+              {v_buf}, ir::IrType::I64, s->loc.line);
+    // Bloques del dispatch por tipo (type matching v2): tras el setjmp,
+    // si el longjmp reanudo (r!=0) saltamos a dispatch_bb que popea el
+    // frame, lee el type-id y elige el catch que matchea (o re-throw).
+    const ir::IrBlockId dispatch_bb = fn_->new_block("try_dispatch");
+    const ir::IrBlockId rethrow_bb = fn_->new_block("try_rethrow");
+    // Distinto de cero = se volvio aqui por una excepcion, asi que toca
+    // buscarle un `catch`; cero = se entra al bloque por primera vez.
+    emit_br_cond(v_r, dispatch_bb, body_bb, s->loc.line);
+
+    // Helpers locales para emitir CALLs al runtime de excepciones.
+    auto emit_void_call = [&](ir::IrBlockId blk, const char *name) {
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CALL;
+        c.type = ir::IrType::VOID;
+        c.dst = ir::IR_NO_VALUE;
+        c.func_name = name;
+        c.source_line = s->loc.line;
+        emit(blk, std::move(c));
+    };
+    auto emit_i64_call = [&](ir::IrBlockId blk,
+                             const char *name) -> ir::IrValueId {
+        const ir::IrValueId d = fn_->new_value(ir::IrType::I64);
+        ir::IrInstr c{};
+        c.op = ir::IrOp::CALL;
+        c.type = ir::IrType::I64;
+        c.dst = d;
+        c.func_name = name;
+        c.source_line = s->loc.line;
+        emit(blk, std::move(c));
+        return d;
+    };
+
+    // dispatch_bb: pop del frame consumido + leer el type-id.
+    current_block_ = dispatch_bb;
+    emit_void_call(dispatch_bb, "__vx_pop_frame");
+    const ir::IrValueId v_t = emit_i64_call(dispatch_bb, "__vx_get_type");
+    // Cadena de chequeos: por cada catch, si su tipo es desconocido
+    // (catch-all, builtin como FatalError, o base no registrada) matchea
+    // SIEMPRE; si es una clase con intervalo, matchea si lo<=t<=hi (el
+    // intervalo cubre la clase y sus subclases).
+    const size_t n_catches = s->catches.size();
+    ir::IrBlockId cur_check = dispatch_bb;
+    for (size_t ci = 0; ci < n_catches && cur_check != ir::IR_NO_BLOCK;
+         ++ci) {
+        const ast::CatchClause &cc = s->catches[ci];
+        current_block_ = cur_check;
+        auto itv = cc.exc_class_name.empty()
+                       ? type_intervals_.end()
+                       : type_intervals_.find(cc.exc_class_name);
+        const bool catch_all = (itv == type_intervals_.end());
+        if (catch_all) {
+            // BR incondicional al handler; el resto de catches queda
+            // muerto.
+            emit_br_from(cur_check, handler_bbs[ci], cc.loc.line);
+            cur_check = ir::IR_NO_BLOCK;
+            break;
+        }
+        const uint32_t lo = itv->second.first, hi = itv->second.second;
+        const ir::IrValueId v_lo = emit_const(
+            ir::IrType::I64, static_cast<int64_t>(lo), cc.loc.line);
+        const ir::IrValueId v_hi = emit_const(
+            ir::IrType::I64, static_cast<int64_t>(hi), cc.loc.line);
+        const ir::IrValueId v_ge = fn_->new_value(ir::IrType::BOOL);
+        {
+            ir::IrInstr cm{};
+            cm.op = ir::IrOp::CMP_GE;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = v_ge;
+            cm.operands = {v_t, v_lo};
+            cm.source_line = cc.loc.line;
+            emit(cur_check, std::move(cm));
+        }
+        const ir::IrValueId v_le = fn_->new_value(ir::IrType::BOOL);
+        {
+            ir::IrInstr cm{};
+            cm.op = ir::IrOp::CMP_LE;
+            cm.type = ir::IrType::BOOL;
+            cm.dst = v_le;
+            cm.operands = {v_t, v_hi};
+            cm.source_line = cc.loc.line;
+            emit(cur_check, std::move(cm));
+        }
+        const ir::IrValueId v_and = fn_->new_value(ir::IrType::BOOL);
+        {
+            ir::IrInstr an{};
+            an.op = ir::IrOp::AND;
+            an.type = ir::IrType::BOOL;
+            an.dst = v_and;
+            an.operands = {v_ge, v_le};
+            an.source_line = cc.loc.line;
+            emit(cur_check, std::move(an));
+        }
+        const ir::IrBlockId next_check =
+            (ci + 1 < n_catches) ? fn_->new_block("try_check") : rethrow_bb;
+        emit_br_cond_from(cur_check, v_and, handler_bbs[ci], next_check,
+                          cc.loc.line);
+        cur_check = next_check;
+    }
+
+    // rethrow_bb: ningun catch matcheo -> re-lanzar al frame externo.
+    // El frame ya se popeo en dispatch_bb, asi que el __vx_throw del
+    // THROW hace longjmp al handler de fuera (propagacion).
+    current_block_ = rethrow_bb;
+    {
+        const ir::IrValueId v_v =
+            emit_i64_call(rethrow_bb, "__vx_get_value");
+        const ir::IrValueId v_ty =
+            emit_i64_call(rethrow_bb, "__vx_get_type");
+        ir::IrInstr th{};
+        th.op = ir::IrOp::THROW;
+        th.type = ir::IrType::VOID;
+        th.dst = ir::IR_NO_VALUE;
+        th.operands = {v_v, v_ty};
+        th.source_line = s->loc.line;
+        emit(rethrow_bb, std::move(th));
+    }
 }
 
 } // namespace vx

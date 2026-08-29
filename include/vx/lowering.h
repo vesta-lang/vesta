@@ -688,6 +688,22 @@ class Lowering {
     bool try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out);
 
     /**
+     * @brief Monta el `try` del modo NATIVO, sin maquina virtual detras.
+     *
+     * Sin VM no hay pila de marcos de excepcion, asi que el modelo es el de C:
+     * se guarda el estado del punto de entrada y lanzar es volver a el.  Ese
+     * sitio se ejecuta DOS veces y lo unico que las distingue es lo que
+     * devuelve guardar -- cero la primera, distinto de cero al volver --, asi
+     * que la bifurcacion no es del programa: es "entro" contra "he vuelto".
+     *
+     * @param s           El `try` que se esta bajando.
+     * @param body_bb     Bloque del cuerpo, al que se entra la primera vez.
+     * @param handler_bbs Bloques de los `catch`, en orden.
+     */
+    void emit_try_frame_native(ast::TryStmt *s, ir::IrBlockId body_bb,
+                               const std::vector<ir::IrBlockId> &handler_bbs);
+
+    /**
      * @brief Declara un struct dado por una lista de inicializacion.
      *
      * Cubre `Point p = {1, 2}` y `Point p = {.x=1, .y=2}`: el struct se
