@@ -4169,29 +4169,11 @@ void TypeChecker::collect_globals() {
                     }
                     continue;
                 }
-                ClassMethodInfo mi;
-                mi.name = m->name;
-                mi.is_destructor = m->is_destructor;
-                mi.is_virtual = m->is_virtual;
-                // Constructor del struct (`Struct(args)`): sin el flag, el
-                // StructLayout no lo distinguia de un metodo normal y la
-                // resolucion de `u128(x)` no lo encontraba.
-                mi.is_constructor = m->is_constructor;
-                // F1b: un ctor `comptime T(expr)` se ejecuta en compile-time y
-                // materializa el struct; el lowering lo baja a un `__macro_`.
-                mi.is_comptime = m->is_comptime;
-                // `static`: factoria/constructor sin `this` (Struct.metodo()).
-                // Sin copiar el flag, el StructLayout siempre lo veia false y
-                // la resolucion de `Struct.zero()` no encontraba el metodo.
-                mi.is_static = m->is_static;
+                ClassMethodInfo mi = make_method_info(*m, s->name);
+                /* El hueco en la tabla solo lo tienen los virtuales, y se
+                 * reparten EN ORDEN de declaracion: eso es propio de montar el
+                 * layout, no de la ficha del metodo. */
                 if (m->is_virtual) mi.vtable_index = vslot++;
-                mi.defining_class = s->name;
-                mi.source_file = m->loc.file;
-                mi.source_line = m->loc.line;
-                mi.return_type = m->return_type
-                                     ? type_from_node(m->return_type.get())
-                                     : Type{PrimitiveKind::VOID};
-                record_method_params(*m, mi);
                 // copy-hook (copy-constructor implicito).  El compilador lo
                 // invoca en cada sitio de copia del struct.
                 if (m->name == "__clone__") layout.has_copy_hook = true;
@@ -4940,16 +4922,8 @@ void TypeChecker::collect_globals() {
                                          "redefinirlo");
                 continue;
             }
-            ClassMethodInfo mi;
-            mi.name = m->name;
-            mi.defining_class = key; // label = <key>__<name>
-            mi.is_extension = true;
-            mi.source_file = m->loc.file;
-            mi.source_line = m->loc.line;
-            mi.return_type = m->return_type
-                                 ? type_from_node(m->return_type.get())
-                                 : Type{PrimitiveKind::VOID};
-            record_method_params(*m, mi);
+            ClassMethodInfo mi = make_method_info(*m, key);
+            mi.is_extension = true; // label = <key>__<name>, despacho estatico
             dst->push_back(std::move(mi));
         }
         if (is_impl && !concept_name.empty())
@@ -5641,6 +5615,11 @@ ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
     mi.is_static = m.is_static;
     mi.is_final = m.is_final;
     mi.is_inline = m.is_inline;
+    /* Un struct puede declarar metodos VIRTUALES y constructores que se
+     * ejecutan al compilar; sin copiarlos aqui, el layout del struct los perdia
+     * y ni `Struct.zero()` ni el despacho por tabla los encontraban. */
+    mi.is_virtual = m.is_virtual;
+    mi.is_comptime = m.is_comptime;
     mi.defining_class = class_name;
     mi.source_file = m.loc.file;
     mi.source_line = m.loc.line;

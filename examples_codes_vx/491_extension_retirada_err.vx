@@ -1,0 +1,27 @@
+namespace ejemplos.extension_retirada_err;
+
+// NEGATIVO: `extension` ya no existe.
+//
+// Hubo dos palabras para anadir metodos a un tipo: `extension Tipo { }` e
+// `impl Tipo { }`.  Hacian lo mismo, y por eso se retiro una.
+//
+// No es cuestion de gusto.  Dos formas de escribir lo mismo parten en dos todo
+// lo que hay detras -- resolucion del nombre, comprobacion, construccion de la
+// ficha del metodo, bajada -- y una de las dos mitades se queda corta sin que
+// nadie lo note.  Aqui ya habia pasado: la rama de `extension` perdia `static`,
+// `final`, `inline` y la marca de destructor al construir la ficha, y nadie se
+// entero porque de esa forma no habia ni un ejemplo en todo el corpus.
+//
+// Se rechaza DICIENDO con que se sustituye, no con un error de sintaxis.
+
+struct Punto { i64 x; i64 y; }
+
+extension Punto {
+    i64 suma() { return this.x + this.y; }
+}
+
+i32 main() {
+    Punto p;
+    p.x = 20; p.y = 22;
+    return (i32) p.suma();
+}

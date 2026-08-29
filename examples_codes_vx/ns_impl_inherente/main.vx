@@ -1,8 +1,12 @@
-// NS.6-ext: `extension Tipo { metodos }` anyade metodos a un tipo existente
-// (struct o clase), estilo Swift/C#.  Dispatch estatico (CALL directo,
-// inline-able).  Coherencia: colision de metodo+aridad = error de compilacion.
+// `impl Tipo { metodos }` anade metodos a un tipo existente (struct o clase)
+// sin atarlos a ningun concepto -- la forma "inherente", como en Rust --.
+// Despacho ESTATICO: llamada directa, y por tanto inline-able.  Colision de
+// metodo y aridad con uno que el tipo ya tenga = error de compilacion.
+//
+// Hubo una segunda palabra para esto, `extension Tipo { }`, y se retiro: hacia
+// lo mismo por otro camino, y ese camino se habia quedado corto.
 struct Punto { i64 x; i64 y; }
-extension Punto {
+impl Punto {
     i64 suma() { return this.x + this.y; }
     i64 escala(i64 k) { return (this.x + this.y) * k; }
 }
@@ -12,7 +16,7 @@ class Contador {
     Contador(i64 v) { this.n = v; }
     i64 get() { return this.n; }
 }
-extension Contador {
+impl Contador {
     i64 doble() { return this.get() * 2; }
 }
 

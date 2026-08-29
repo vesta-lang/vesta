@@ -175,7 +175,21 @@ struct DeclName {
  * variantes de enum).  Robusto frente a nodos nulos (AST parcial mientras se
  * teclea).
  */
-void collect_decl_names(const vx::ast::ModuleNode &mod,
+/**
+ * @brief Recoge los nombres declarados de una lista de declaraciones.
+ *
+ * Se separa del modulo porque un @c namespace CONTIENE sus declaraciones, en
+ * sus dos formas: tanto @c "namespace a.b.c;" -- que agrupa el resto del
+ * fichero -- como @c "namespace a { ... }".  Sin bajar por el, un fichero que
+ * empieza declarando su namespace no aportaba NI UN nombre: los campos, los
+ * metodos y los parametros dejaban de resolverse, y las funciones parecian
+ * funcionar solo porque las rescataba el indice semantico, que no llega a los
+ * miembros.  Y casi todo el corpus y toda la biblioteca empiezan asi.
+ *
+ * @param decls Declaraciones a recorrer.
+ * @param out   Nombres encontrados; se anaden al final.
+ */
+void collect_decls_from(const std::vector<std::unique_ptr<vx::ast::Node>> &decls,
                         std::vector<DeclName> &out) {
     using namespace vx::ast;
 
@@ -193,9 +207,15 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
         }
     };
 
-    for (const auto &node : mod.decls) {
+    for (const auto &node : decls) {
         if (!node) continue;
         switch (node->kind) {
+        case NodeKind::NamespaceDecl: {
+            // Bajar: lo declarado dentro es tan visible como lo de fuera.
+            auto *ns = static_cast<const NamespaceDecl *>(node.get());
+            collect_decls_from(ns->decls, out);
+            break;
+        }
         case NodeKind::FunctionDecl: {
             // ClassMethodDecl tambien usa NodeKind::FunctionDecl, pero a nivel
             // top-level solo aparecen FunctionDecl reales.
@@ -352,6 +372,11 @@ void collect_decl_names(const vx::ast::ModuleNode &mod,
         default: break;
         }
     }
+}
+
+void collect_decl_names(const vx::ast::ModuleNode &mod,
+                        std::vector<DeclName> &out) {
+    collect_decls_from(mod.decls, out);
 }
 
 } // namespace

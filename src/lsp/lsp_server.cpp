@@ -1439,6 +1439,20 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 break;
             }
         }
+        if (tf == nullptr) {
+            // Dentro de un namespace el tipo lleva su path por delante
+            // (`std__syscall__windows__Ctx`), mientras que el contenedor que
+            // ve el hover es el nombre a secas.  Se busca por el final.
+            const std::string sufijo = "__" + container;
+            for (const auto &f : def_an.result.type_fingerprints) {
+                if (f.type_name.size() >= sufijo.size() &&
+                    f.type_name.compare(f.type_name.size() - sufijo.size(),
+                                        sufijo.size(), sufijo) == 0) {
+                    tf = &f;
+                    break;
+                }
+            }
+        }
         if (tf != nullptr && kind == SymbolKind::EnumVariant) {
             for (size_t i = 0; i < tf->variants.size(); ++i) {
                 const analyze::VariantPlacement &v = tf->variants[i];

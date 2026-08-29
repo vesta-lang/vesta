@@ -1,23 +1,32 @@
 namespace ejemplos.extension_impl;
 
-// Anadir metodos a un tipo desde fuera: `extension Tipo { }` e
-// `impl Concepto for Tipo { }`.
+// Anadir metodos a un tipo desde fuera, con `impl`.  Dos formas:
 //
-// Este ejemplo existe porque de esas dos formas NO habia ni una linea en todo
-// el corpus, y eso tuvo consecuencias: al juntar copias de la lectura de
+//   impl Tipo { ... }               anade metodos, sin mas;
+//   impl Concepto for Tipo { ... }  ademas declara que el tipo lo cumple.
+//
+// Hubo una tercera, `extension Tipo { }`, que hacia exactamente lo primero.  Se
+// retiro: tener dos palabras para lo mismo no es dar opciones, es partir en dos
+// todo lo que hay detras -- resolucion, comprobacion, bajada -- y que una de
+// las dos mitades se quede corta sin que nadie lo note.  De hecho la de
+// `extension` ya estaba mas corta: perdia `static`, `final` y varias marcas mas
+// al construir la ficha del metodo.
+//
+// Este ejemplo existe porque de estas formas NO habia ni una linea en todo el
+// corpus, y eso tuvo consecuencias: al juntar copias de la lectura de
 // parametros se me quedo un bucle a medias -- el cuerpo sustituido pero la
 // cabecera `for` en pie --, asi que la ficha de un metodo de extension se
 // rellenaba UNA VEZ POR PARAMETRO.  Con dos parametros el metodo pasaba a tener
 // cuatro, y llamarlo daba un error de aridad que no tenia sentido.
 //
 // La suite entera siguio verde.  No porque el fallo fuera leve, sino porque
-// nadie habia escrito nunca un `extension` en un ejemplo: una funcion del
-// lenguaje sin una sola linea que la ejercite es una funcion que se puede
-// romper sin enterarse.
+// nadie habia escrito nunca uno en un ejemplo: una funcion del lenguaje sin
+// una sola linea que la ejercite es una funcion que se puede romper sin
+// enterarse.
 //
-// Por eso lo que se prueba aqui es lo que lo habria cogido: metodos de
-// extension con CERO, UNO, DOS y TRES parametros, sobre un struct y sobre una
-// clase, y la otra forma (`impl`) sobre el mismo tipo.
+// Por eso lo que se prueba aqui es lo que lo habria cogido: metodos anadidos
+// con CERO, UNO, DOS y TRES parametros, sobre un struct y sobre una clase, y
+// las dos formas de `impl` sobre el mismo tipo.
 
 struct Punto { i64 x; i64 y; }
 
@@ -29,7 +38,7 @@ class Caja {
 concept Sumable<T> = true;
 
 // Sobre un struct: el numero de parametros es justo lo que se rompia.
-extension Punto {
+impl Punto {
     i64 cero() { return this.y; }
     i64 uno(i64 a) { return this.x + a; }
     i64 dos(i64 a, i64 b) { return this.x + this.y + a + b; }
@@ -37,7 +46,7 @@ extension Punto {
 }
 
 // Sobre una CLASE: otra rama, mismo mecanismo.
-extension Caja {
+impl Caja {
     i64 mas(i64 a, i64 b, i64 c) { return this.v + a + b + c; }
 }
 

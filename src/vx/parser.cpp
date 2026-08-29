@@ -1548,13 +1548,18 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         apply_pending_visibility(n.get());
         return n;
     }
-    // NS.6-ext: extension Tipo { ... }  (keyword contextual; exige IDENT tras).
+    /* `extension Tipo { ... }` fue una segunda forma de anadir metodos a un
+     * tipo, y se retiro: hacia exactamente lo que hace `impl Tipo { ... }`.
+     * Tener dos palabras para lo mismo no es dar opciones, es partir en dos
+     * todo lo que hay detras -- resolucion, comprobacion, bajada -- y que una
+     * de las dos mitades se quede corta sin que nadie lo note. */
     if (current_.kind == TokenKind::IDENTIFIER &&
         current_.lexeme == "extension" &&
         lex_.peek_at(0).kind == TokenKind::IDENTIFIER) {
-        auto n = parse_extension_decl();
-        apply_pending_visibility(n.get());
-        return n;
+        error_here("'extension' ya no existe: usa 'impl Tipo { ... }' para "
+                   "anadir metodos, o 'impl Concepto for Tipo { ... }' si "
+                   "ademas quieres declarar que lo cumple");
+        return nullptr;
     }
     // NS.6-ext: impl Concept for Tipo { ... }  (keyword contextual).
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "impl" &&
@@ -5927,29 +5932,42 @@ std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
         error_here("se esperaba el nombre del concept tras 'impl'");
         return nullptr;
     }
-    std::string cname = consume().lexeme;
+    std::string primero = consume().lexeme;
     while (current_.kind == TokenKind::DOT) {
         (void)consume();
         if (current_.kind != TokenKind::IDENTIFIER) {
-            error_here("se esperaba un identificador tras '.' en el concept");
+            error_here("se esperaba un identificador tras '.' en el impl");
             return nullptr;
         }
-        cname += ".";
-        cname += consume().lexeme;
+        primero += ".";
+        primero += consume().lexeme;
     }
-    im->concept_name = std::move(cname);
-    // 'for' (keyword contextual).
-    if (!(current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "for") &&
-        current_.kind != TokenKind::KW_FOR) {
-        error_here("se esperaba 'for' en 'impl Concept for Tipo'");
-        return nullptr;
+
+    /* Dos formas, y lo que las separa es el `for`:
+     *
+     *   impl Tipo { ... }              anade metodos al tipo, sin mas;
+     *   impl Concepto for Tipo { ... } ademas declara que lo cumple.
+     *
+     * Sin la primera hacia falta inventarse un concepto para anadir un par de
+     * ayudantes, o usar OTRA palabra distinta que hiciera justo eso -- que es
+     * lo que habia, y por eso habia dos formas de escribir lo mismo. */
+    const bool con_concepto =
+        (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "for") ||
+        current_.kind == TokenKind::KW_FOR;
+
+    std::string tgt;
+    if (!con_concepto) {
+        im->concept_name.clear();
+        tgt = std::move(primero);
+    } else {
+        im->concept_name = std::move(primero);
+        (void)consume(); // 'for'
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del tipo tras 'for'");
+            return nullptr;
+        }
+        tgt = consume().lexeme;
     }
-    (void)consume(); // 'for'
-    if (current_.kind != TokenKind::IDENTIFIER) {
-        error_here("se esperaba el nombre del tipo tras 'for'");
-        return nullptr;
-    }
-    std::string tgt = consume().lexeme;
     while (current_.kind == TokenKind::DOT) {
         (void)consume();
         if (current_.kind != TokenKind::IDENTIFIER) {
@@ -5961,8 +5979,12 @@ std::unique_ptr<ast::ImplDecl> Parser::parse_impl_decl() {
         tgt += consume().lexeme;
     }
     im->target_type = std::move(tgt);
-    (void)expect(TokenKind::LBRACE,
-                 "se esperaba '{' al abrir el cuerpo del impl");
+    if (current_.kind != TokenKind::LBRACE) {
+        error_here("se esperaba '{' al abrir el cuerpo del impl, o 'for' si lo "
+                   "que va delante es un concepto");
+        return nullptr;
+    }
+    (void)consume(); // '{'
     while (current_.kind != TokenKind::RBRACE &&
            current_.kind != TokenKind::END_OF_FILE) {
         uint8_t access = 0;
