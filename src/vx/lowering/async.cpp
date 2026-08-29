@@ -960,18 +960,7 @@ void Lowering::lower_async_function(ast::FunctionDecl *fd, ir::IrModule &out) {
             real_args.push_back(v);
         const uint64_t argc = real_args.size();
         // argbuf = ALLOCA(argc*8) en host-stack.
-        const ir::IrValueId v_buf = fn_->new_value(ir::IrType::PTR);
-        {
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.dst = v_buf;
-            al.imm = argc * 8;
-            al.host_alloca = true;
-            al.source_line = fd->loc.line;
-            emit(current_block_, std::move(al));
-            fn_->values[v_buf].is_host_ptr = true;
-        }
+    const ir::IrValueId v_buf = stack_alloc_buf(argc * 8, fd->loc.line, true);
         // STORE cada arg en argbuf[i].
         for (size_t k = 0; k < real_args.size(); ++k) {
             ir::IrValueId slot = v_buf;
