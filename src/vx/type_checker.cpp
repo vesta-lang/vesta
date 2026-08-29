@@ -13372,20 +13372,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     }
                     const size_t n =
                         std::min(e->args.size(), var->field_types.size());
-                    for (size_t i = 0; i < n; ++i) {
-                        const Type ta = check_expr(e->args[i].get());
-                        const Type &tp = var->field_types[i];
-                        if (ta.kind == PrimitiveKind::COUNT) continue;
-                        if (!types_assignable(tp, ta)) {
-                            diags_.error(e->args[i]->loc,
-                                         std::string("variante '") + var->name +
-                                             "', payload " +
-                                             std::to_string(i + 1) +
-                                             ": tipo (" + type_to_string(ta) +
-                                             ") incompatible con declarado (" +
-                                             type_to_string(tp) + ")");
-                        }
-                    }
+                    for (size_t i = 0; i < n; ++i)
+                        check_call_arg(e->args[i].get(), var->field_types[i], i,
+                                       "la variante '" + var->name + "'");
                     for (size_t i = n; i < e->args.size(); ++i)
                         (void)check_expr(e->args[i].get());
                     fa->property_kind = 99;
@@ -13537,19 +13526,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
                 const size_t n =
                     std::min(e->args.size(), var->field_types.size());
-                for (size_t i = 0; i < n; ++i) {
-                    const Type ta = check_expr(e->args[i].get());
-                    const Type &tp = var->field_types[i];
-                    if (ta.kind == PrimitiveKind::COUNT) continue;
-                    if (!types_assignable(tp, ta)) {
-                        diags_.error(e->args[i]->loc,
-                                     std::string("variante '") + var->name +
-                                         "', payload " + std::to_string(i + 1) +
-                                         ": tipo (" + type_to_string(ta) +
-                                         ") incompatible con declarado (" +
-                                         type_to_string(tp) + ")");
-                    }
-                }
+                for (size_t i = 0; i < n; ++i)
+                    check_call_arg(e->args[i].get(), var->field_types[i], i,
+                                   "la variante '" + var->name + "'");
                 for (size_t i = n; i < e->args.size(); ++i)
                     (void)check_expr(e->args[i].get());
                 // Marcar el FieldAccessExpr y CallExpr para que el

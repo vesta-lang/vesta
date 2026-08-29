@@ -3110,6 +3110,7 @@ r0_case("matrizparam482", "matriz COMPLETA de parametros: cada forma en cada con
 r0_case("params_modo483", "cuantos argumentos caben segun el modo: doce en nativo, repartidos en bytecode (@Target)", "483_params_limite_por_modo.vx", 42, line=3764)
 r0_case("dtorslot484", "destructores: hueco cero de la tabla, override, y la CADENA hacia la base en orden", "484_dtor_slot_cero.vx", 42, line=3766)
 r0_case("regnames485", "nombres del usuario que coinciden con registros (clase, campo, metodo, funcion, parametro, local)", "485_nombres_de_registro.vx", 42, line=3768)
+r0_case("payloadvar486", "la carga de una variante admite lo mismo que un parametro (newtype por constante, nombre de funcion)", "486_payload_variante.vx", 42, line=3770)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

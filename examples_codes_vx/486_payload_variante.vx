@@ -1,0 +1,57 @@
+namespace ejemplos.payload_variante;
+
+// Lo que cabe en la carga de una variante de enum es lo mismo que cabe en un
+// parametro.  Y no lo era.
+//
+// "Encaja este argumento con su parametro" es la pregunta que mas veces se hace
+// el comprobador, y estaba escrita una vez por CLASE de llamada: funcion
+// suelta, closure, metodo, constructor, variante de enum.  La de las variantes
+// era la mas pobre de todas -- solo comparaba tipos --, asi que dos cosas que
+// valen en cualquier llamada se rechazaban ahi:
+//
+//   - una CONSTANTE que cabe en un newtype, que en una llamada se re-tipa sola
+//     y aqui obligaba a escribir la conversion;
+//   - el NOMBRE de una funcion donde se espera una funcion, que en una llamada
+//     se convierte en un valor-funcion y aqui daba un error raro sobre `void`.
+//
+// La misma expresion, aceptada en un sitio y rechazada en otro, sin ninguna
+// razon de diseno.  Aqui se escriben las dos formas seguidas para que se vea
+// que dan lo mismo.
+
+typedef i64 Metros new;
+
+i64 doblar(i64 x) { return x * 2; }
+
+enum Caja {
+    ConNewtype(Metros),
+    ConFn(cfn(i64) -> i64)
+}
+
+i64 usa_newtype(Metros m) { return (i64) m; }
+i64 usa_fn(cfn(i64) -> i64 cb) { return cb(21); }
+
+i32 main() {
+    // Como argumento de una funcion.
+    i64 a = usa_newtype(3);      // 3
+    i64 b = usa_fn(doblar);      // 42
+    println("funcion:  newtype=${a} fn=${b}");
+
+    // Como carga de una variante: la MISMA expresion.
+    Caja c1 = Caja.ConNewtype(3);
+    Caja c2 = Caja.ConFn(doblar);
+
+    i64 c = 0;
+    match (c1) {
+        case ConNewtype(m) => { c = (i64) m; }
+        case ConFn(f) => { c = 0; }
+    }
+    i64 d = 0;
+    match (c2) {
+        case ConNewtype(m) => { d = 0; }
+        case ConFn(f) => { d = f(21); }
+    }
+    println("variante: newtype=${c} fn=${d}");
+
+    // 3 + 42 + 3 + 42 = 90
+    return (i32) (a + b + c + d - 48);   // 42
+}
