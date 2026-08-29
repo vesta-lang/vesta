@@ -1988,7 +1988,8 @@ static state_err_thread fatal_to_thread_err(uint32_t kind) noexcept {
 // throw_fatal: ruta dual (capturable / fatal-original).
 // ---------------------------------------------------------------------
 
-void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
+void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message,
+                 bool catchable) {
     if (!vm) return;
 
     // Notificar al debugger de la excepcion ANTES de elegir ruta
@@ -2006,7 +2007,10 @@ void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message) {
     // FAST PATH: si no hay handler activo, ruta antigua.  Esto es
     // el caso comun (programas sin try/catch envolvente).  Cero
     // overhead anadido: 1 lectura + 1 branch.
-    if (vm->exc_frame_stack == nullptr) {
+    //
+    // Y tambien se toma cuando el fallo NO es capturable, haya `try` o no:
+    // ver el parametro `catchable` en la cabecera.
+    if (vm->exc_frame_stack == nullptr || !catchable) {
         /* Guardar el mensaje aunque no haya quien lo capture.  Antes solo se
          * conservaba en la ruta CON handler, asi que un fallo sin `try` se
          * llevaba consigo la unica pista de que habia pasado.  Quien recoja

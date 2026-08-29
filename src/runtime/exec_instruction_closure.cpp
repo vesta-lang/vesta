@@ -403,16 +403,31 @@ void exec_instr_unwrap(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t val = vm->registers.regs[r_src].qword();
 
     if (val == 0) {
-        // Sprint edge-bugs (2026-06-02): lanzar FatalError capturable.
-        // Antes: ObjectHeader con class_ptr=nullptr que el `catch (FatalError)`
-        // del usuario NUNCA matcheaba porque `is_instance_of(null, FatalError)`
-        // siempre da false.  Resultado: unwrap(None) terminaba el proceso
-        // silenciosamente sin ejecutar el catch.
-        // Solucion: usar throw_fatal con FATAL_NULL_POINTER, que el
-        // exception_runtime registra como instancia REAL de FatalError ->
-        // is_instance_of(FatalError, FatalError) == true -> catch matchea.
+        /* NO capturable, y a proposito.
+         *
+         * Desenvolver es AFIRMAR que hay algo.  Si no lo hay, el que se
+         * equivoco fue quien lo afirmo: es un bug del programa, no una
+         * condicion que el programa se encuentre.  Capturarlo solo sirve para
+         * seguir corriendo con la suposicion ya rota.  Es lo que hacen Swift
+         * (trampa) y Rust (panico); Kotlin lanza porque vive en una maquina
+         * donde siempre hay excepciones.
+         *
+         * Y ademas hace que los TRES modos coincidan.  En nativo no hay
+         * desenrollado de excepciones, asi que ahi siempre fue fatal: el mismo
+         * programa se comportaba de una forma en el interprete y de otra al
+         * compilarlo, que es peor que cualquiera de las dos.
+         *
+         * Antes de esto la ruta era capturable, y antes de eso terminaba el
+         * proceso EN SILENCIO -- sin mensaje ni traza --, que es lo que se
+         * arreglo en 2026-06-02 haciendola excepcion.  Se conserva lo que
+         * aquello gano: por aqui se sigue imprimiendo el mensaje y la traza de
+         * pila.  Lo unico que cambia es que ningun `catch` la intercepta.
+         *
+         * Quien quiera la version que NO se muere tiene `isPresent(o)`, el
+         * `match` sobre el Optional, y `Result` con el operador `?`. */
         runtime::throw_fatal(vm, runtime::FATAL_NULL_POINTER,
-                             "unwrap sobre Optional/Result/referencia null");
+                             "unwrap sobre Optional/Result/referencia null",
+                             /*catchable=*/false);
         return;
     }
 

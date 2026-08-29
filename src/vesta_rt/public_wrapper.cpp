@@ -303,10 +303,14 @@ void vrt_throw_fatal(vrt_proc *proc, uint32_t kind, const char *message) {
 
 void vrt_unwrap_throw(vrt_proc *proc) {
     if (!proc) return;
-    /* Mismo throw que exec_instr_unwrap (bytecode 0x26): FatalError
-     * capturable con FATAL_NULL_POINTER. */
+    /* Lo MISMO que exec_instr_unwrap (bytecode 0x26), y ahi esta explicado por
+     * que no es capturable: desenvolver es afirmar que hay algo, y fallar la
+     * afirmacion es un bug, no una condicion recuperable.  El nativo ya se
+     * comportaba asi (aborta por `__vx_panic_null`); esto hace que los tres
+     * modos coincidan. */
     runtime::throw_fatal(as_proc(proc), VESTA_FATAL_NULL_POINTER,
-                         "unwrap sobre Optional/Result/referencia null");
+                         "unwrap sobre Optional/Result/referencia null",
+                         /*catchable=*/false);
 }
 
 /* Forward decl: do_throw vive en exec_instruction_oop.cpp con C++ mangling.

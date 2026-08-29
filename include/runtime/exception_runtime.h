@@ -143,8 +143,20 @@ void init_exception_classes(loader::Loader &loader);
  * @param vm        Proceso donde se origina el error.
  * @param kind      Codigo @c FatalKind del error.
  * @param message   String C nul-terminado con descripcion legible.
+ * @param catchable Si es @c false, NINGUN `catch` lo intercepta: se toma
+ *                  siempre la ruta de arriba (mensaje + traza + fin del
+ *                  proceso) aunque haya un `try` envolviendo.  Es para los
+ *                  fallos que son un BUG del programa y no una condicion que
+ *                  el programa pueda encontrarse -- afirmar que algo no es
+ *                  nulo y equivocarse --, donde capturar solo sirve para
+ *                  seguir corriendo con la suposicion ya rota.  Ademas hace
+ *                  que los tres modos coincidan: en nativo no hay
+ *                  desenrollado de excepciones, asi que ahi SIEMPRE fue
+ *                  fatal, y el mismo programa se comportaba distinto segun
+ *                  el modo.
  */
-void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message);
+void throw_fatal(ProcessVM *vm, uint32_t kind, const char *message,
+                 bool catchable = true);
 
 /**
  * @brief Variante de @c throw_fatal con mensaje formateado tipo printf.
