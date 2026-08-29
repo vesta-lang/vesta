@@ -131,6 +131,21 @@ add_library(vx_lib STATIC
     # asm_lift_core.h; cada ISA aporta su lift_<isa> sin tocar el core.
     asm/asm_lift_general.cpp
     asm/asm_lift_x86.cpp
+    # Formateador del lenguaje (estandar en doc/VMdoc/Vesta/EstiloYFormato.md).
+    #
+    # Solo depende del LEXER: ni del parser ni del type checker.  Eso le permite
+    # formatear codigo a medio escribir -- el caso normal en un editor -- y deja
+    # el modulo listo para extraerlo a una libreria propia el dia que haya quien
+    # la aproveche; hoy no la hay, y sacarla ya solo duplicaria la compilacion
+    # del lexer sin que nadie gane nada.
+    #
+    # NO se toca el camino de compilar: la trivia se recupera del texto con los
+    # offsets de cada token, asi que el compilador no paga un solo ciclo.
+    fmt/trivia.cpp
+    fmt/width.cpp
+    fmt/spacing.cpp
+    fmt/indent.cpp
+    fmt/fmt.cpp
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con
     # tools/import/gen_diag_catalog.py.  Seleccion de idioma por entorno.
@@ -328,6 +343,9 @@ add_library(vx_lib STATIC
     # salto, instruccion fusionada.  Comun a los dos generadores, porque la
     # respuesta no depende del formato en el que luego se dibuje.
     diagram/vel_text_model.cpp
+    # Como se LEE una expresion, un tipo, un valor o una instruccion del IR.
+    # Tampoco depende del formato en el que se dibuje.
+    diagram/diagram_labels.cpp
     diagram/mermaid_diagrams.cpp
     diagram/graphviz_diagrams.cpp
     diagram/html_diagrams.cpp
