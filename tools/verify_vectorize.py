@@ -56,12 +56,17 @@ SOURCES = ("493_std_numeric.vx", "492_vectorizador_completo.vx")
 LIBRARY_MUST_WIDEN = (
     "add_i64", "add_i32", "add_f32", "add_f64",
     "sub_i64",
-    "mul_i32", "mul_i16", "mul_f64",
-    "div_f64",
-    "add_scalar_i64", "mul_scalar_i32",
-    "add_into_i64", "sub_into_i64",
-    "negate_f64", "negate_f32", "negate_i32", "negate_i16",
-    "sum_i64", "sum_f64",
+    "mul_i32", "mul_i16", "mul_f32", "mul_f64",
+    "div_f32", "div_f64",
+    # El reparto de un escalar en f32 estuvo bajando de uno en uno y daba el
+    # mismo numero, asi que nada lo delataba.  Va fijado por eso.
+    "add_scalar_i64", "add_scalar_f32",
+    "mul_scalar_i32", "mul_scalar_f32",
+    "add_into_i64", "sub_into_i64", "sub_into_i8",
+    # Negar: los dos extremos de ancho y uno de cada familia.
+    "negate_f64", "negate_f32", "negate_i64", "negate_i32", "negate_i16",
+    "negate_i8",
+    "sum_i64", "sum_u32", "sum_f32", "sum_f64",
 )
 
 # La copia no se ensancha: se reconoce que el bucle entero es un movimiento de

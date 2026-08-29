@@ -32,21 +32,29 @@ namespace std.numeric;
  *   ------------------- ------------------------- ------------------------
  *   add sub             los diez                  --
  *   add_into sub_into   los diez                  --
+ *   add_scalar          los diez                  --
+ *   negate              los diez                  --
  *   mul                 i16 u16 i32 u32 f32 f64   no hay producto empaquetado
- *                                                 de 8 ni de 64 bits
+ *   mul_scalar          i16 u16 i32 u32 f32 f64   de 8 ni de 64 bits
  *   div                 f32 f64                   no hay division entera
  *                                                 empaquetada
- *   add_scalar          todos menos f32           hueco del reconocedor
- *   mul_scalar          i16 u16 i32 u32 f64       suma de los dos anteriores
- *   negate              f64                       hueco del reconocedor
  *   sum                 i32 u32 i64 u64 f32 f64   de 8 y 16 bits el acumulador
  *                                                 se desborda enseguida
  *
- * Las dos filas que dicen "hueco del reconocedor" no son limites de la
- * maquina: repartir un escalar a todos los carriles existe tambien para f32, y
- * negar existe para enteros y para f32.  Es el reconocedor el que todavia no
- * las mira.  Quedan anotadas para que se vea cuales son, y para que al
- * cerrarlas se afloje el concepto que les corresponde.
+ * Las tres filas que quedan cortas lo estan por la MAQUINA, no por el
+ * compilador: no existe producto empaquetado de 8 ni de 64 bits -- el de 64
+ * solo con AVX-512DQ, que este generador de codigo aun no emite --, ni division
+ * entera empaquetada en ninguna de las dos arquitecturas.  Y la ultima no es
+ * siquiera un limite de la maquina sino de la aritmetica: un acumulador del
+ * ancho del elemento se desborda enseguida.
+ *
+ * Hubo dos filas mas que decian "hueco del reconocedor" -- el reparto de un
+ * escalar f32 y la negacion fuera de f64 --, y ninguna era un limite de nada:
+ * la primera salio de una tabla de tipos escrita tres veces en el compilador,
+ * de la que una copia se habia quedado sin f32; la segunda, de un tipo escrito
+ * a mano.  Se anotaron aqui, se cerraron, y la tabla lo refleja.  Merece la
+ * pena decirlo porque el patron se repite: una fila que dice "no se puede" y no
+ * dice POR QUE suele ser una copia que se quedo atras.
  *
  * Hoy la tabla es la misma en todas las arquitecturas, porque la decision se
  * toma sobre el IR -- que es comun -- y no sobre el juego de instrucciones del
