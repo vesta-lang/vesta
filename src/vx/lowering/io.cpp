@@ -23,6 +23,7 @@
  */
 #include "vx/lowering.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
+#include <cstring>  // strlen, para comparar prefijos
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -35,6 +36,42 @@ namespace vx {
 
 /// La biblioteca nativa de entrada y salida de la maquina virtual.
 const std::string kVestaIoLib = "stdlib/native/io/vesta_io";
+
+
+/**
+ * @brief @c true si @p fn_name es una funcion que se invento el compilador.
+ *
+ * Sirve para no ponerles traza: quien la pide quiere ver SU programa, y un
+ * recorrido lleno de nombres que no ha escrito no dice nada -- ademas de
+ * meterse por medio en sitios donde no se le espera, como el resolutor de un
+ * campo de una vista, que corre en cada acceso.
+ *
+ * La lista estaba escrita en TRES sitios y en ninguno completa: faltaban los
+ * ayudantes de las vistas, los de las macros, los de copiar y los del spawn
+ * remoto, que quedaban tratados como codigo del usuario.
+ *
+ * @param fn_name El nombre de la funcion, ya manglado.
+ * @return @c true si la genero el compilador.
+ */
+bool is_compiler_generated_fn(const std::string &fn_name) {
+    if (fn_name == "__module_init") return true;
+    // Todas empiezan por dos guiones bajos, que un nombre de Vesta no puede
+    // llevar: es lo que hace el prefijo seguro como marca.
+    static const char *const kPrefixes[] = {
+        "__new_",    // constructor sintetico de una clase
+        "__async_",  // cuerpo de una funcion asincrona
+        "__lambda_", // cuerpo de una lambda
+        "__spawn_",  // cuerpo de un spawn
+        "__rspawn_", // cuerpo de un spawn remoto
+        "__ovl_",    // resolutores de una vista sobre bytes
+        "__macro_",  // cuerpo de una macro bajado a funcion
+        "__clone_",  // copia profunda generada para un tipo
+        "__vx_",     // todo lo que aporta el runtime
+    };
+    for (const char *p : kPrefixes)
+        if (fn_name.compare(0, std::strlen(p), p) == 0) return true;
+    return false;
+}
 
 /// La que instrumenta la entrada y la salida de cada funcion.
 const std::string kVestaTraceLib = "stdlib/native/runtime/vx_trace";

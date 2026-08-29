@@ -193,6 +193,15 @@ extern const std::string kVestaIoLib;
 extern const std::string kVestaTraceLib;
 
 /**
+ * @brief @c true si @p fn_name es una funcion que se invento el compilador.
+ *
+ * Sirve para no ponerles traza: quien la pide quiere ver SU programa.  La
+ * lista de prefijos vive en un solo sitio porque estaba en tres y en ninguno
+ * completa.
+ */
+bool is_compiler_generated_fn(const std::string &fn_name);
+
+/**
  * @brief Lee @p n bytes desde @p pos como un entero, el de menor peso primero.
  *
  * Sirve para meter en UNA instruccion lo que si no serian ocho: al copiar una

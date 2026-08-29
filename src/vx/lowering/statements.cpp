@@ -1198,11 +1198,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
             if (instrument_mode_ != "none" && instrument_mode_ != "" &&
                 fn_ != nullptr) {
                 const std::string &fname = fn_->name;
-                const bool is_helper = fname == "__module_init" ||
-                                       fname.compare(0, 6, "__new_") == 0 ||
-                                       fname.compare(0, 8, "__async_") == 0 ||
-                                       fname.compare(0, 9, "__lambda_") == 0 ||
-                                       fname.compare(0, 8, "__spawn_") == 0;
+                const bool is_helper = is_compiler_generated_fn(fn_->name);
                 if (!is_helper) {
                     emit_instrument_exit(fname, sret_retbuf_, s->loc.line);
                 }
@@ -1300,11 +1296,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
         if (instrument_mode_ != "none" && instrument_mode_ != "" &&
             fn_ != nullptr) {
             const std::string &fname = fn_->name;
-            const bool is_helper = fname == "__module_init" ||
-                                   fname.compare(0, 6, "__new_") == 0 ||
-                                   fname.compare(0, 8, "__async_") == 0 ||
-                                   fname.compare(0, 9, "__lambda_") == 0 ||
-                                   fname.compare(0, 8, "__spawn_") == 0;
+            const bool is_helper = is_compiler_generated_fn(fn_->name);
             if (!is_helper) {
                 emit_instrument_exit(fname, sret_retbuf_, s->loc.line);
             }
@@ -1440,11 +1432,7 @@ void Lowering::lower_return(ast::ReturnStmt *s) {
     if (instrument_mode_ != "none" && instrument_mode_ != "" &&
         fn_ != nullptr) {
         const std::string &fname = fn_->name;
-        const bool is_helper = fname == "__module_init" ||
-                               fname.compare(0, 6, "__new_") == 0 ||
-                               fname.compare(0, 8, "__async_") == 0 ||
-                               fname.compare(0, 9, "__lambda_") == 0 ||
-                               fname.compare(0, 8, "__spawn_") == 0;
+        const bool is_helper = is_compiler_generated_fn(fn_->name);
         if (!is_helper) {
             emit_instrument_exit(fname, v_ret, s->loc.line);
         }
