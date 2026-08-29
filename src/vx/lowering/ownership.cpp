@@ -572,228 +572,14 @@ void Lowering::scan_address_taken(ast::Stmt *s) {
 
 void Lowering::scan_escaping_locals(ast::Stmt *body) {
     if (!body) return;
-    std::function<void(ast::Expr *)> visit_expr;
-    std::function<void(ast::Stmt *)> visit_stmt;
 
-    // Grafo de aliasing local-to-local: alias_graph[A] = {B, C, ...}
-    // significa "A puede contener un valor que vino de B, C, ..." (a
-    // traves de asignaciones `A = B;`).  Tras la primera pasada
-    // propagamos el escape hacia atras: si A es escaping, todos los
-    // que feed-en a A tambien escapan.
-    std::unordered_map<std::string, std::vector<std::string>> alias_graph;
+    // Grafo de aliasing entre locales: alias[A] = {B, C, ...} significa que A
+    // puede contener un valor que vino de B o de C, por asignaciones `A = B;`.
+    // Sirve para la propagacion de abajo.
+    AliasGraph alias;
+    scan_escaping_stmt(body, alias);
 
-    // Helper: si @p e es IdentExpr, marca el nombre como escaping.
-    auto mark_if_ident = [&](ast::Expr *e) {
-        if (e && e->kind == ast::NodeKind::IdentExpr) {
-            auto *id = static_cast<ast::IdentExpr *>(e);
-            escaping_locals_.insert(id->name);
-        }
-    };
-    // Ruta B: un valor de un tipo con copy-hook NO escapa al guardarse en un
-    // campo -- es una COPIA (el store llama __clone__ sobre la copia del campo;
-    // el origen conserva su propia copia y su dtor corre).  No lo marcamos como
-    // escaping (no es un move).
-    auto value_has_copy_hook = [&](ast::Expr *e) -> bool {
-        if (!e || e->kind != ast::NodeKind::IdentExpr) return false;
-        const Type &t = e->result_type;
-        // H5: un shared<T> guardado en un campo es una COPIA (inc-on-store); el
-        // origen conserva su propia referencia y su dtor decrementa.  No es un
-        // move -> no lo marcamos escaping (mismo trato que un copy-hook).
-        if (t.kind == PrimitiveKind::SHARED_PTR) return true;
-        if (t.kind != PrimitiveKind::STRUCT) return false;
-        auto it = tc_.struct_layouts().find(t.struct_name);
-        return it != tc_.struct_layouts().end() && it->second.has_copy_hook;
-    };
-
-    visit_expr = [&](ast::Expr *e) {
-        if (!e) return;
-        switch (e->kind) {
-        case ast::NodeKind::AssignExpr: {
-            auto *a = static_cast<ast::AssignExpr *>(e);
-            // El target NO escapa por la asignacion misma.  El value
-            // SI escapa cuando el target es un campo/slot/deref:
-            //   - FieldAccessExpr: this.x = value, obj.x = value
-            //   - IndexExpr:       arr[i] = value, p[i] = value
-            //   - UnaryExpr Deref: *p = value
-            if (a->target) {
-                switch (a->target->kind) {
-                case ast::NodeKind::FieldAccessExpr:
-                    if (!value_has_copy_hook(a->value.get()))
-                        mark_if_ident(a->value.get());
-                    break;
-                case ast::NodeKind::IndexExpr:
-                    mark_if_ident(a->value.get());
-                    break;
-                case ast::NodeKind::UnaryExpr: {
-                    auto *u = static_cast<ast::UnaryExpr *>(a->target.get());
-                    if (u->op == ast::UnOp::Deref) {
-                        mark_if_ident(a->value.get());
-                    }
-                    break;
-                }
-                case ast::NodeKind::IdentExpr: {
-                    // Asignacion local-a-local: `target = source`.
-                    // No marcamos escape ahora; registramos en el
-                    // grafo de alias para propagacion transitiva.
-                    // Si `target` resulta escaping al final, `source`
-                    // tambien lo sera.
-                    auto *id_t = static_cast<ast::IdentExpr *>(a->target.get());
-                    // Una variable que se reasigna (o a la que se le anade con
-                    // `+=`) puede pasar a tener buffer propio, asi que su
-                    // limpieza al salir del ambito NO se puede omitir.  Se
-                    // apunta aqui, que es el unico sitio que ya recorre el
-                    // cuerpo entero.
-                    reassigned_locals_.insert(id_t->name);
-                    if (a->value &&
-                        a->value->kind == ast::NodeKind::IdentExpr) {
-                        auto *id_v =
-                            static_cast<ast::IdentExpr *>(a->value.get());
-                        alias_graph[id_t->name].push_back(id_v->name);
-                    }
-                    break;
-                }
-                default: break;
-                }
-            }
-            visit_expr(a->target.get());
-            visit_expr(a->value.get());
-            return;
-        }
-        case ast::NodeKind::BinaryExpr: {
-            auto *b = static_cast<ast::BinaryExpr *>(e);
-            visit_expr(b->lhs.get());
-            visit_expr(b->rhs.get());
-            return;
-        }
-        case ast::NodeKind::UnaryExpr: {
-            auto *u = static_cast<ast::UnaryExpr *>(e);
-            visit_expr(u->operand.get());
-            return;
-        }
-        case ast::NodeKind::CallExpr: {
-            auto *c = static_cast<ast::CallExpr *>(e);
-            visit_expr(c->callee.get());
-            for (auto &arg : c->args)
-                visit_expr(arg.get());
-            return;
-        }
-        case ast::NodeKind::FieldAccessExpr: {
-            auto *fa = static_cast<ast::FieldAccessExpr *>(e);
-            visit_expr(fa->base.get());
-            return;
-        }
-        case ast::NodeKind::IndexExpr: {
-            auto *ix = static_cast<ast::IndexExpr *>(e);
-            visit_expr(ix->base.get());
-            visit_expr(ix->index.get());
-            return;
-        }
-        default: return;
-        }
-    };
-
-    visit_stmt = [&](ast::Stmt *st) {
-        if (!st) return;
-        switch (st->kind) {
-        case ast::NodeKind::BlockStmt: {
-            auto *b = static_cast<ast::BlockStmt *>(st);
-            for (auto &child : b->body)
-                visit_stmt(child.get());
-            return;
-        }
-        case ast::NodeKind::VarDeclStmt: {
-            auto *vd = static_cast<ast::VarDeclStmt *>(st);
-            // `T target = source;` propaga alias para tracking transitivo.
-            if (vd->init && vd->init->kind == ast::NodeKind::IdentExpr) {
-                auto *id_v = static_cast<ast::IdentExpr *>(vd->init.get());
-                alias_graph[vd->name].push_back(id_v->name);
-                // Ruta B (move-only): `S b = a` de un struct GESTIONADO (con
-                // dtor o campo destructible) SIN copy-hook es un MOVE (estilo
-                // Rust): `b` toma el ownership y el dtor de `a` se SUPRIME. Sin
-                // esto la copia bit a bit dejaria a `a` y `b` con el mismo
-                // recurso -> doble free.  Para tipos con copy-hook NO es move
-                // (la copia es real, ambos gestionan via __clone__).
-                const Type &st_t = id_v->result_type;
-                if (st_t.kind == PrimitiveKind::STRUCT) {
-                    auto it = tc_.struct_layouts().find(st_t.struct_name);
-                    if (it != tc_.struct_layouts().end()) {
-                        const StructLayout &sl = it->second;
-                        bool managed = sl.has_destructible_field;
-                        if (!managed)
-                            for (const auto &mm : sl.methods)
-                                if (mm.is_destructor) {
-                                    managed = true;
-                                    break;
-                                }
-                        if (managed && !sl.has_copy_hook)
-                            escaping_locals_.insert(id_v->name);
-                    }
-                }
-            }
-            if (vd->init) visit_expr(vd->init.get());
-            return;
-        }
-        case ast::NodeKind::ExprStmt: {
-            auto *es = static_cast<ast::ExprStmt *>(st);
-            visit_expr(es->expr.get());
-            return;
-        }
-        case ast::NodeKind::IfStmt: {
-            auto *si = static_cast<ast::IfStmt *>(st);
-            visit_expr(si->cond.get());
-            visit_stmt(si->then_branch.get());
-            visit_stmt(si->else_branch.get());
-            return;
-        }
-        case ast::NodeKind::WhileStmt: {
-            auto *w = static_cast<ast::WhileStmt *>(st);
-            visit_expr(w->cond.get());
-            visit_stmt(w->body.get());
-            return;
-        }
-        case ast::NodeKind::DoWhileStmt: {
-            auto *dw = static_cast<ast::DoWhileStmt *>(st);
-            visit_stmt(dw->body.get());
-            visit_expr(dw->cond.get());
-            return;
-        }
-        case ast::NodeKind::ForStmt: {
-            auto *f = static_cast<ast::ForStmt *>(st);
-            visit_stmt(f->init.get());
-            visit_expr(f->cond.get());
-            visit_expr(f->step.get());
-            visit_stmt(f->body.get());
-            return;
-        }
-        case ast::NodeKind::TryStmt: {
-            // Recursar tambien en try para detectar escapes de
-            // locales dentro de body, catches y finally.
-            auto *ts = static_cast<ast::TryStmt *>(st);
-            visit_stmt(ts->body.get());
-            for (auto &cc : ts->catches)
-                visit_stmt(cc.body.get());
-            if (ts->finally_body) visit_stmt(ts->finally_body.get());
-            return;
-        }
-        case ast::NodeKind::SynchronizedStmt: {
-            auto *sy = static_cast<ast::SynchronizedStmt *>(st);
-            visit_expr(sy->target.get());
-            visit_stmt(sy->body.get());
-            return;
-        }
-        case ast::NodeKind::ReturnStmt: {
-            auto *r = static_cast<ast::ReturnStmt *>(st);
-            // return ident; -> ident escapa.
-            mark_if_ident(r->value.get());
-            visit_expr(r->value.get());
-            return;
-        }
-        default: return;
-        }
-    };
-    visit_stmt(body);
-
-    // ----- Propagacion transitiva del escape via alias_graph -----
+    // ----- Propagacion transitiva del escape via alias -----
     // Si `target = source` y target ya esta marcado como escaping, source
     // tambien debe estarlo (aliasing semantico).  Iteramos hasta punto fijo.
     // Coste: O(N*M) donde N=#locales escaping, M=longitud cadena alias.
@@ -801,7 +587,7 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
     bool changed = true;
     while (changed) {
         changed = false;
-        for (const auto &kv : alias_graph) {
+        for (const auto &kv : alias) {
             const std::string &target = kv.first;
             if (escaping_locals_.count(target) == 0) continue;
             for (const std::string &source : kv.second) {
@@ -1342,6 +1128,222 @@ void Lowering::scan_address_taken_stmt(ast::Stmt *st, int &depth) {
         auto *sy = static_cast<ast::SynchronizedStmt *>(st);
         scan_address_taken_expr(sy->target.get(), depth);
         scan_address_taken_stmt(sy->body.get(), depth);
+        return;
+    }
+    default: return;
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::mark_escaping_if_ident
+ */
+void Lowering::mark_escaping_if_ident(ast::Expr *e) {
+    if (e && e->kind == ast::NodeKind::IdentExpr)
+        escaping_locals_.insert(static_cast<ast::IdentExpr *>(e)->name);
+}
+
+/**
+ * @copydoc vx::Lowering::value_has_copy_hook
+ */
+bool Lowering::value_has_copy_hook(ast::Expr *e) const {
+    if (!e || e->kind != ast::NodeKind::IdentExpr) return false;
+    const Type &t = e->result_type;
+    // Un compartido guardado en un campo es una COPIA: se incrementa la cuenta
+    // al guardarlo, el origen conserva la suya y su destructor la decrementa.
+    // No es un traslado, asi que no escapa.
+    if (t.kind == PrimitiveKind::SHARED_PTR) return true;
+    if (t.kind != PrimitiveKind::STRUCT) return false;
+    auto it = tc_.struct_layouts().find(t.struct_name);
+    return it != tc_.struct_layouts().end() && it->second.has_copy_hook;
+}
+
+/**
+ * @copydoc vx::Lowering::scan_escaping_expr
+ */
+void Lowering::scan_escaping_expr(ast::Expr *e, AliasGraph &alias) {
+    if (!e) return;
+    switch (e->kind) {
+    case ast::NodeKind::AssignExpr: {
+        auto *a = static_cast<ast::AssignExpr *>(e);
+        // El target NO escapa por la asignacion misma.  El value
+        // SI escapa cuando el target es un campo/slot/deref:
+        //   - FieldAccessExpr: this.x = value, obj.x = value
+        //   - IndexExpr:       arr[i] = value, p[i] = value
+        //   - UnaryExpr Deref: *p = value
+        if (a->target) {
+            switch (a->target->kind) {
+            case ast::NodeKind::FieldAccessExpr:
+                if (!value_has_copy_hook(a->value.get()))
+                    mark_escaping_if_ident(a->value.get());
+                break;
+            case ast::NodeKind::IndexExpr:
+                mark_escaping_if_ident(a->value.get());
+                break;
+            case ast::NodeKind::UnaryExpr: {
+                auto *u = static_cast<ast::UnaryExpr *>(a->target.get());
+                if (u->op == ast::UnOp::Deref) {
+                    mark_escaping_if_ident(a->value.get());
+                }
+                break;
+            }
+            case ast::NodeKind::IdentExpr: {
+                // Asignacion local-a-local: `target = source`.
+                // No marcamos escape ahora; registramos en el
+                // grafo de alias para propagacion transitiva.
+                // Si `target` resulta escaping al final, `source`
+                // tambien lo sera.
+                auto *id_t = static_cast<ast::IdentExpr *>(a->target.get());
+                // Una variable que se reasigna (o a la que se le anade con
+                // `+=`) puede pasar a tener buffer propio, asi que su
+                // limpieza al salir del ambito NO se puede omitir.  Se
+                // apunta aqui, que es el unico sitio que ya recorre el
+                // cuerpo entero.
+                reassigned_locals_.insert(id_t->name);
+                if (a->value &&
+                    a->value->kind == ast::NodeKind::IdentExpr) {
+                    auto *id_v =
+                        static_cast<ast::IdentExpr *>(a->value.get());
+                    alias[id_t->name].push_back(id_v->name);
+                }
+                break;
+            }
+            default: break;
+            }
+        }
+        scan_escaping_expr(a->target.get(), alias);
+        scan_escaping_expr(a->value.get(), alias);
+        return;
+    }
+    case ast::NodeKind::BinaryExpr: {
+        auto *b = static_cast<ast::BinaryExpr *>(e);
+        scan_escaping_expr(b->lhs.get(), alias);
+        scan_escaping_expr(b->rhs.get(), alias);
+        return;
+    }
+    case ast::NodeKind::UnaryExpr: {
+        auto *u = static_cast<ast::UnaryExpr *>(e);
+        scan_escaping_expr(u->operand.get(), alias);
+        return;
+    }
+    case ast::NodeKind::CallExpr: {
+        auto *c = static_cast<ast::CallExpr *>(e);
+        scan_escaping_expr(c->callee.get(), alias);
+        for (auto &arg : c->args)
+            scan_escaping_expr(arg.get(), alias);
+        return;
+    }
+    case ast::NodeKind::FieldAccessExpr: {
+        auto *fa = static_cast<ast::FieldAccessExpr *>(e);
+        scan_escaping_expr(fa->base.get(), alias);
+        return;
+    }
+    case ast::NodeKind::IndexExpr: {
+        auto *ix = static_cast<ast::IndexExpr *>(e);
+        scan_escaping_expr(ix->base.get(), alias);
+        scan_escaping_expr(ix->index.get(), alias);
+        return;
+    }
+    default: return;
+    }
+}
+
+/**
+ * @copydoc vx::Lowering::scan_escaping_stmt
+ */
+void Lowering::scan_escaping_stmt(ast::Stmt *st, AliasGraph &alias) {
+    if (!st) return;
+    switch (st->kind) {
+    case ast::NodeKind::BlockStmt: {
+        auto *b = static_cast<ast::BlockStmt *>(st);
+        for (auto &child : b->body)
+            scan_escaping_stmt(child.get(), alias);
+        return;
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        auto *vd = static_cast<ast::VarDeclStmt *>(st);
+        // `T target = source;` propaga alias para tracking transitivo.
+        if (vd->init && vd->init->kind == ast::NodeKind::IdentExpr) {
+            auto *id_v = static_cast<ast::IdentExpr *>(vd->init.get());
+            alias[vd->name].push_back(id_v->name);
+            // Ruta B (move-only): `S b = a` de un struct GESTIONADO (con
+            // dtor o campo destructible) SIN copy-hook es un MOVE (estilo
+            // Rust): `b` toma el ownership y el dtor de `a` se SUPRIME. Sin
+            // esto la copia bit a bit dejaria a `a` y `b` con el mismo
+            // recurso -> doble free.  Para tipos con copy-hook NO es move
+            // (la copia es real, ambos gestionan via __clone__).
+            const Type &st_t = id_v->result_type;
+            if (st_t.kind == PrimitiveKind::STRUCT) {
+                auto it = tc_.struct_layouts().find(st_t.struct_name);
+                if (it != tc_.struct_layouts().end()) {
+                    const StructLayout &sl = it->second;
+                    bool managed = sl.has_destructible_field;
+                    if (!managed)
+                        for (const auto &mm : sl.methods)
+                            if (mm.is_destructor) {
+                                managed = true;
+                                break;
+                            }
+                    if (managed && !sl.has_copy_hook)
+                        escaping_locals_.insert(id_v->name);
+                }
+            }
+        }
+        if (vd->init) scan_escaping_expr(vd->init.get(), alias);
+        return;
+    }
+    case ast::NodeKind::ExprStmt: {
+        auto *es = static_cast<ast::ExprStmt *>(st);
+        scan_escaping_expr(es->expr.get(), alias);
+        return;
+    }
+    case ast::NodeKind::IfStmt: {
+        auto *si = static_cast<ast::IfStmt *>(st);
+        scan_escaping_expr(si->cond.get(), alias);
+        scan_escaping_stmt(si->then_branch.get(), alias);
+        scan_escaping_stmt(si->else_branch.get(), alias);
+        return;
+    }
+    case ast::NodeKind::WhileStmt: {
+        auto *w = static_cast<ast::WhileStmt *>(st);
+        scan_escaping_expr(w->cond.get(), alias);
+        scan_escaping_stmt(w->body.get(), alias);
+        return;
+    }
+    case ast::NodeKind::DoWhileStmt: {
+        auto *dw = static_cast<ast::DoWhileStmt *>(st);
+        scan_escaping_stmt(dw->body.get(), alias);
+        scan_escaping_expr(dw->cond.get(), alias);
+        return;
+    }
+    case ast::NodeKind::ForStmt: {
+        auto *f = static_cast<ast::ForStmt *>(st);
+        scan_escaping_stmt(f->init.get(), alias);
+        scan_escaping_expr(f->cond.get(), alias);
+        scan_escaping_expr(f->step.get(), alias);
+        scan_escaping_stmt(f->body.get(), alias);
+        return;
+    }
+    case ast::NodeKind::TryStmt: {
+        // Recursar tambien en try para detectar escapes de
+        // locales dentro de body, catches y finally.
+        auto *ts = static_cast<ast::TryStmt *>(st);
+        scan_escaping_stmt(ts->body.get(), alias);
+        for (auto &cc : ts->catches)
+            scan_escaping_stmt(cc.body.get(), alias);
+        if (ts->finally_body) scan_escaping_stmt(ts->finally_body.get(), alias);
+        return;
+    }
+    case ast::NodeKind::SynchronizedStmt: {
+        auto *sy = static_cast<ast::SynchronizedStmt *>(st);
+        scan_escaping_expr(sy->target.get(), alias);
+        scan_escaping_stmt(sy->body.get(), alias);
+        return;
+    }
+    case ast::NodeKind::ReturnStmt: {
+        auto *r = static_cast<ast::ReturnStmt *>(st);
+        // return ident; -> ident escapa.
+        mark_escaping_if_ident(r->value.get());
+        scan_escaping_expr(r->value.get(), alias);
         return;
     }
     default: return;

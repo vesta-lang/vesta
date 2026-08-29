@@ -2817,6 +2817,32 @@ class Lowering {
     /// helper de futuras analizadores de escape mas precisas.
     void scan_escaping_locals(ast::Stmt *body);
 
+    /// @brief Quien puede contener un valor que vino de quien, por asignacion.
+    using AliasGraph = std::unordered_map<std::string, std::vector<std::string>>;
+
+    /// @brief Marca @p e como escapado, si es un nombre.
+    void mark_escaping_if_ident(ast::Expr *e);
+
+    /**
+     * @brief @c true si guardar @p e en un campo es COPIARLO, no trasladarlo.
+     *
+     * Un compartido o un tipo con copia propia se duplican al guardarse: el
+     * origen conserva el suyo y lo suelta cuando le toca.  Eso no es un
+     * traslado, asi que el origen no escapa.
+     */
+    bool value_has_copy_hook(ast::Expr *e) const;
+
+    /**
+     * @brief Busca en una expresion que locales se escapan de su ambito.
+     *
+     * @param e     Expresion por la que empezar.
+     * @param alias Donde apuntar quien puede contener el valor de quien.
+     */
+    void scan_escaping_expr(ast::Expr *e, AliasGraph &alias);
+
+    /// @brief Igual, sobre una sentencia.
+    void scan_escaping_stmt(ast::Stmt *st, AliasGraph &alias);
+
     /// Bug D fix: propagar @c is_gc_object a traves de todos los PHI
     /// nodes de la funcion hasta punto fijo.  Llamado al final de cada
     /// lowering de funcion (top-level, class methods, helpers
