@@ -72,9 +72,20 @@ RAW_MUST_BULK = ("copy_while", "copy_for")
 # Y las formas que HOY no se reconocen.  Se fijan igual que las demas: si
 # alguna empieza a ensancharse sera porque alguien lo hizo a proposito, y
 # entonces esta lista es la que hay que mover.
+# Formas escritas a mano que SI se ensanchan y que la libreria no cubre.
+#
+# Una cadena de operaciones sobre el mismo elemento no cabe en una funcion de
+# libreria: `std.numeric` da una operacion por llamada, y encadenarlas
+# escribiendo el array intermedio seria peor que escribir el bucle.
+RAW_MUST_WIDEN = ("chain",)
+
+# Y las formas que HOY no se reconocen.  Se fijan igual que las demas: si
+# alguna empieza a ensancharse sera porque alguien lo hizo a proposito, y
+# entonces esta lista es la que hay que mover.
 RAW_MUST_NOT_WIDEN = (
-    "chain",       # dos operaciones en el cuerpo; el reconocedor exige una
-    "scalar_i64",  # producto de 64 bits: no existe empaquetado
+    # Producto de 64 bits: solo existe empaquetado con AVX-512DQ, y el
+    # generador de codigo aun no emite esa instruccion.
+    "scalar_i64",
 )
 
 
@@ -134,21 +145,37 @@ def main():
     work = os.path.join(os.environ.get("TEMP", "/tmp"), "vecverify")
     os.makedirs(work, exist_ok=True)
 
-    counts = {}
-    for name in SOURCES:
-        src = os.path.join(root, "examples_codes_vx", name)
-        if not os.path.exists(src):
-            sys.stderr.write("falta %s\n" % src)
-            return 2
-        # Las caches se tiran para que lo que se mide se genere de verdad.
-        for d in (".cache", ".vx_cache"):
-            shutil.rmtree(os.path.join(root, d), ignore_errors=True)
-        base = os.path.join(work, os.path.splitext(name)[0])
-        run([vm, "--vx-emit-ir", "--vesta", src, "-o", base])
-        if not os.path.exists(base + ".ir"):
-            sys.stderr.write("no se genero el IR de %s\n" % name)
-            return 2
-        counts.update(count_by_function(base + ".ir"))
+    # Se mide en CADA arquitectura que el compilador sabe targetear, no solo en
+    # la de quien compila.  Que una forma se reconozca no deberia depender del
+    # objetivo -- la decision se toma sobre el IR, que es comun -- y esa es
+    # justamente la afirmacion que hay que comprobar, no dar por buena: el dia
+    # que una de las dos deje de reconocer algo, se ve aqui y no en la maquina
+    # de quien lo sufra.
+    objetivos = [("del compilador", []),
+                 ("aarch64", ["-m", "aot", "--aot-arch", "aarch64",
+                              "--format", "elf", "--emit", "obj"])]
+    por_objetivo = {}
+    for etiqueta, extra in objetivos:
+        counts = {}
+        for name in SOURCES:
+            src = os.path.join(root, "examples_codes_vx", name)
+            if not os.path.exists(src):
+                sys.stderr.write("falta %s\n" % src)
+                return 2
+            # Las caches se tiran para que lo que se mide se genere de verdad.
+            for d in (".cache", ".vx_cache"):
+                shutil.rmtree(os.path.join(root, d), ignore_errors=True)
+            base = os.path.join(work,
+                                os.path.splitext(name)[0] + "_" +
+                                etiqueta.replace(" ", "_"))
+            run([vm] + extra + ["--vx-emit-ir", "--vesta", src, "-o", base])
+            if not os.path.exists(base + ".ir"):
+                sys.stderr.write("no se genero el IR de %s (%s)\n"
+                                 % (name, etiqueta))
+                return 2
+            counts.update(count_by_function(base + ".ir"))
+        por_objetivo[etiqueta] = counts
+    counts = por_objetivo["del compilador"]
 
     # El IR trae los nombres cualificados; aqui se buscan por el corto, que es
     # como se escriben en las listas de arriba.
@@ -166,6 +193,13 @@ def main():
             bad += 1
         else:
             print("  ok  std.numeric  %-18s anchas=%d" % (short, wide))
+    for short in RAW_MUST_WIDEN:
+        wide, _ = find(short)
+        if wide < 1:
+            print("DEJO DE ENSANCHAR: %s (escrito a mano)" % short)
+            bad += 1
+        else:
+            print("  ok  a mano       %-18s anchas=%d" % (short, wide))
     for short in RAW_MUST_BULK:
         _, bulk = find(short)
         if bulk < 1:
@@ -206,6 +240,24 @@ def main():
             bad += 1
         else:
             print("  ok  ejecuta     %-18s R00=42" % os.path.splitext(name)[0])
+
+    # Y que las dos arquitecturas reconozcan LO MISMO.  Si un dia dejan de
+    # coincidir puede ser deliberado -- una maquina tiene una instruccion que la
+    # otra no --, pero tiene que verse y decidirse, no ocurrir sin que nadie se
+    # entere.
+    otro = por_objetivo.get("aarch64", {})
+    for nombre, (wide, bulk) in sorted(counts.items()):
+        if not nombre.startswith(("std__numeric__",
+                                  "ejemplos__vectorizador_completo__")):
+            continue
+        w2, b2 = otro.get(nombre, (-1, -1))
+        if (w2, b2) != (wide, bulk):
+            print("DIFIERE POR ARQUITECTURA: %s -- aqui anchas=%d bloque=%d,"
+                  " en aarch64 anchas=%d bloque=%d"
+                  % (nombre, wide, bulk, w2, b2))
+            bad += 1
+    if bad == 0:
+        print("  ok  aarch64      reconoce exactamente lo mismo")
 
     if bad == 0:
         print("todas las formas siguen como estaban, y los programas corren.")

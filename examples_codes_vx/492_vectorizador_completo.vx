@@ -10,18 +10,37 @@ namespace ejemplos.vectorizador_completo;
 //      movimiento de bloque y queda UNA instruccion, que es mejor que
 //      ensancharlo.  Su sitio en la libreria es `std.memory`, no `std.numeric`.
 //
-//   2. Una CADENA de operaciones.  El reconocedor exige una sola operacion en
-//      el cuerpo, asi que `a[i] + b[i] - a[i]` se queda fuera.
+//   2. Una CADENA de operaciones sobre el mismo elemento.  Esta SI se ensancha
+//      -- tambien con enteros --, pero no la cubre la libreria: `std.numeric`
+//      da una operacion por llamada, y encadenarlas escribiendo el array
+//      intermedio seria peor que escribir el bucle.  Aqui se fija que la forma
+//      escrita a mano sigue reconociendose.
 //
-//   3. El PRODUCTO de 64 bits.  No existe empaquetado en ninguna de las dos
-//      maquinas.  Por eso `std.numeric.mul<i64>` no compila: una funcion de
-//      libreria que baja a un bucle de uno en uno es una promesa incumplida.
+//   3. El PRODUCTO de 64 bits.  No existe empaquetado salvo con AVX-512DQ, y
+//      el generador de codigo aun no emite esa instruccion.  Por eso
+//      `std.numeric.mul<i64>` no compila: una funcion de libreria que baja a un
+//      bucle de uno en uno es una promesa incumplida.
 //
-// Las dos ultimas no son fallos que arreglar, son limites -- uno del
-// reconocedor y otro de la maquina -- y estan escritas para que consten
-// MEDIDAS.  `tools/verify_vectorize.py idioms` las fija en cero: si algun dia
-// una empieza a ensancharse sera porque alguien lo hizo a proposito, y esa
-// linea del arnes es la que hay que mover.
+// QUE DEPENDE DEL OBJETIVO Y QUE NO -- porque no es lo mismo y decir "no se
+// ensancha" a secas seria falso en cuanto se cambie de maquina:
+//
+//   * Que una forma se reconozca NO depende hoy del objetivo.  La decision se
+//     toma sobre el IR, que es comun, asi que este fichero da los MISMOS
+//     numeros compilado para x86-64 y para aarch64 -- comprobado, y el arnes lo
+//     comprueba en las dos.
+//
+//   * Cuantos carriles caben SI depende, y se decide al ejecutar: 2, 4 u 8
+//     elementos de 64 bits segun lo que tenga la maquina.  El `.velb` es el
+//     mismo; quien lo corre lo reparte al ancho que haya.
+//
+//   * Y lo de arriba sobre el producto de 64 bits es un limite del GENERADOR DE
+//     CODIGO, no de toda maquina: en x86-64 con AVX-512DQ la instruccion
+//     existe.  Que aqui salga cero es cierto hoy y en todas las maquinas que
+//     este compilador sabe targetear, no una verdad universal.
+//
+// `tools/verify_vectorize.py` fija esos ceros: si algun dia uno empieza a
+// ensancharse sera porque alguien lo hizo a proposito, y esa linea del arnes es
+// la que hay que mover.
 //
 // Nada de esto se ve en la salida: con la vectorizacion desactivada el
 // programa devuelve exactamente lo mismo, solo que recorriendo los elementos
@@ -47,7 +66,13 @@ i64 copy_for(i64* dst, i64* src, i64 n) {
     return dst[0] + dst[n - 1];
 }
 
-// --- 2. Dos operaciones en el cuerpo: el reconocedor exige una. ------------
+// --- 2. Cadena: varias operaciones sobre el mismo elemento. ----------------
+//
+// Se ensancha, y tambien con enteros: sumar y restar carriles existe para todos
+// los anchos.  Lo que NO se ensancha es la division entera, ni el producto de
+// 8 y de 64 bits, y por eso la cadena mira operacion por operacion en vez de
+// mirar el tipo: basta con que UNA no exista para que el resultado intermedio
+// deje de ser el que toca.
 
 i64 chain(i64* c, i64* a, i64* b, i64 n) {
     for (i64 i = 0; i < n; i = i + 1) {

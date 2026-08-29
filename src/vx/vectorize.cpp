@@ -1062,7 +1062,17 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
             static_cast<bool>(t.pointee);
         if (!ptr_like || t.is_virtual) return false;
         const PrimitiveKind ek = t.pointee->kind;
-        if (ek != PrimitiveKind::F32 && ek != PrimitiveKind::F64) return false;
+        /* Cualquier tipo que se sepa vectorizar.  Estuvo cerrado a los dos
+         * flotantes, y no porque una cadena de enteros no se pueda: sumar y
+         * restar carriles existe para todos los anchos.  Lo que SI depende del
+         * tipo es la operacion concreta, y eso se mira abajo, una por una: asi
+         * `c[i] = a[i] + b[i] - a[i]` con enteros entra, y la division entera
+         * -- que no tiene forma empaquetada -- se queda fuera por lo que es y
+         * no por el tipo de la hoja. */
+        ir::IrType ety_h;
+        uint64_t esz_h;
+        bool fp_h;
+        if (!vec_elem_info(ek, &ety_h, &esz_h, &fp_h)) return false;
         if (expected != PrimitiveKind::COUNT && ek != expected)
             return false; // todas las hojas mismo tipo de elemento
         *base = b;
@@ -1174,8 +1184,21 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
     // SHUFPS(0) (SSE2 128b) o VBROADCASTSS (AVX/AVX512), y operan packed-single
     // (ADDPS/MULPS/...).  El escalar se castea a elem_ty (F32) mas abajo.
     const bool is_f32 = (c_kind == PrimitiveKind::F32);
-    const ir::IrType elem_ty = is_f32 ? ir::IrType::F32 : ir::IrType::F64;
-    const uint64_t esz = is_f32 ? 4u : 8u;
+    ir::IrType elem_ty;
+    uint64_t esz;
+    bool elem_fp;
+    if (!vec_elem_info(c_kind, &elem_ty, &esz, &elem_fp)) return false;
+    /* Con enteros, la cadena entera tiene que estar hecha de operaciones que
+     * existan empaquetadas para ese ancho.  No hay division entera en ninguna
+     * de las dos maquinas, y el producto solo de 16 y de 32 bits.  Basta con
+     * que UNA de la cadena no exista para que no se pueda: el resultado
+     * intermedio ya no seria el que toca. */
+    if (!elem_fp)
+        for (const auto &st : S) {
+            if (st.subop == 3) return false; // division entera
+            if (st.subop == 2 && esz != 2 && esz != 4)
+                return false; // producto solo de 16 y 32 bits
+        }
 
     // FMA fusion del patron `c[i] = a[i]*b[i] + d[i]` (2 pasos array Mul+Add,
     // sin escalares) -> UN VFMADD231 (4 instr vs 8 de mul+add) + 1 redondeo
@@ -1189,6 +1212,13 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         can_fma = (!aot_auto_vec_ && aot_vec_width_ >= 32);
     else
         can_fma = true;
+    /* Y solo en coma flotante.  La multiplicacion-suma fusionada existe porque
+     * ahorra UN REDONDEO, que es un concepto de la coma flotante: en enteros no
+     * hay tal instruccion.  Al abrir las cadenas a los enteros, un
+     * `a[i]*b[i] + a[i]` entraba por aqui y salia como una operacion de
+     * flotantes sobre bits de entero -- daba otro numero, y el mismo en los
+     * tres modos, que es lo que lo hace dificil de ver. */
+    if (!elem_fp) can_fma = false;
     // FMA element-wise: c = a*b + d  (subop Add)  o  c = a*b - d  (subop Sub).
     // Ambos array-only (2 pasos, sin escalares); Sub -> VFMSUB231.
     const bool is_fma = can_fma && S.size() == 2 && !S[0].is_scalar &&
@@ -1406,20 +1436,32 @@ bool Lowering::try_vectorize_compound_for(ast::Stmt *s) {
         auto load_el = [&](ir::IrValueId base) {
             return vec_load_elem(ptr_at(base, off), elem_ty, ln);
         };
-        auto fop_of = [](int so) -> ir::IrOp {
-            return (so == 0)   ? ir::IrOp::FADD
-                   : (so == 1) ? ir::IrOp::FSUB
-                   : (so == 2) ? ir::IrOp::FMUL
-                               : ir::IrOp::FDIV;
+        /* La operacion depende del TIPO, no solo del simbolo.  Esta cola se
+         * escribio cuando la cadena solo admitia flotantes, asi que emitia
+         * siempre las de coma flotante; al abrirla a enteros, un `a[i]*b[i]`
+         * salia como un producto de flotantes sobre bits de entero -- daba otro
+         * numero, y el mismo en los tres modos, que es lo que lo hace dificil
+         * de ver. */
+        auto fop_of = [&](int so) -> ir::IrOp {
+            if (elem_fp)
+                return (so == 0)   ? ir::IrOp::FADD
+                       : (so == 1) ? ir::IrOp::FSUB
+                       : (so == 2) ? ir::IrOp::FMUL
+                                   : ir::IrOp::FDIV;
+            return (so == 0)   ? ir::IrOp::ADD
+                   : (so == 1) ? ir::IrOp::SUB
+                               : ir::IrOp::MUL; // la division entera no llega
         };
         ir::IrValueId acc = load_el(v_start);
         for (size_t k = 0; k < S.size(); ++k) {
             if (S[k].is_scaled_arr) {
-                // acc += arr[i]*escalar (escalar ya negado si Sub -> FADD).
+                // acc += arr[i]*escalar (escalar ya negado si Sub -> suma).
                 const ir::IrValueId ai = load_el(step_base[k]);
-                const ir::IrValueId prod =
-                    bin(ir::IrOp::FMUL, elem_ty, ai, step_scalar[k]);
-                acc = bin(ir::IrOp::FADD, elem_ty, acc, prod);
+                const ir::IrValueId prod = bin(
+                    elem_fp ? ir::IrOp::FMUL : ir::IrOp::MUL, elem_ty, ai,
+                    step_scalar[k]);
+                acc = bin(elem_fp ? ir::IrOp::FADD : ir::IrOp::ADD, elem_ty,
+                          acc, prod);
             } else {
                 const ir::IrValueId rhs =
                     S[k].is_scalar ? step_scalar[k] : load_el(step_base[k]);
