@@ -28,6 +28,126 @@
 #include "lowering_internal.h" // la cocina compartida del lowering
 
 namespace vx {
+/**
+ * @brief Apunta que nombres de FUERA se asignan dentro de un `try`.
+ *
+ * Hace falta porque lanzar salta a otro sitio con los registros a medias: una
+ * variable que el `try` cambio puede estar en un registro que el salto se
+ * lleva por delante, y el `catch` leeria basura.  A las que se listan aqui se
+ * les da un hueco en memoria, que el salto no toca.
+ *
+ * Solo cuentan las que YA existian fuera: una declarada dentro del `try` no
+ * sobrevive a el, asi que no hay nada que conservar.
+ *
+ * @param st    Sentencia por la que empezar.
+ * @param outer Los nombres visibles al entrar.
+ * @param out   Donde anñadir los que se asignan.
+ */
+static void scan_assigned_names(
+    const ast::Stmt *st,
+    const std::unordered_map<std::string, ir::IrValueId> &outer,
+    std::unordered_set<std::string> &out) {
+    if (!st) return;
+    // Casos relevantes: ExprStmt con AssignExpr o BinaryExpr con
+    // op=ASSIGN; BlockStmt con multiples stmts; If con then/else;
+    // While/For con body; ReturnStmt; throw, try (anidado).
+    switch (st->kind) {
+    case ast::NodeKind::ExprStmt: {
+        auto *es = static_cast<const ast::ExprStmt *>(st);
+        // Recursar en la expr para detectar assign.
+        std::function<void(const ast::Expr *)> visit_expr =
+            [&](const ast::Expr *e) {
+                if (!e) return;
+                if (e->kind == ast::NodeKind::AssignExpr) {
+                    auto *ae = static_cast<const ast::AssignExpr *>(e);
+                    if (ae->target &&
+                        ae->target->kind == ast::NodeKind::IdentExpr) {
+                        auto *id = static_cast<const ast::IdentExpr *>(
+                            ae->target.get());
+                        if (outer.count(id->name)) {
+                            out.insert(id->name);
+                        }
+                    }
+                    visit_expr(ae->value.get());
+                    return;
+                }
+                if (e->kind == ast::NodeKind::BinaryExpr) {
+                    auto *be = static_cast<const ast::BinaryExpr *>(e);
+                    visit_expr(be->lhs.get());
+                    visit_expr(be->rhs.get());
+                    return;
+                }
+                if (e->kind == ast::NodeKind::CallExpr) {
+                    auto *ce = static_cast<const ast::CallExpr *>(e);
+                    for (auto &a : ce->args)
+                        visit_expr(a.get());
+                    return;
+                }
+            };
+        visit_expr(es->expr.get());
+        break;
+    }
+    case ast::NodeKind::BlockStmt: {
+        auto *b = static_cast<const ast::BlockStmt *>(st);
+        for (auto &s2 : b->body)
+            scan_assigned_names(s2.get(), outer, out);
+        break;
+    }
+    case ast::NodeKind::IfStmt: {
+        auto *ifs = static_cast<const ast::IfStmt *>(st);
+        scan_assigned_names(ifs->then_branch.get(), outer, out);
+        scan_assigned_names(ifs->else_branch.get(), outer, out);
+        break;
+    }
+    case ast::NodeKind::WhileStmt: {
+        auto *ws = static_cast<const ast::WhileStmt *>(st);
+        scan_assigned_names(ws->body.get(), outer, out);
+        break;
+    }
+    case ast::NodeKind::ForStmt: {
+        auto *fs = static_cast<const ast::ForStmt *>(st);
+        scan_assigned_names(fs->body.get(), outer, out);
+        break;
+    }
+    case ast::NodeKind::TryStmt: {
+        auto *ts = static_cast<const ast::TryStmt *>(st);
+        scan_assigned_names(ts->body.get(), outer, out);
+        for (auto &cc : ts->catches)
+            scan_assigned_names(cc.body.get(), outer, out);
+        if (ts->finally_body) scan_assigned_names(ts->finally_body.get(), outer, out);
+        break;
+    }
+    case ast::NodeKind::VarDeclStmt: {
+        // var-decl introduce nuevo nombre; el init expr
+        // puede contener assigns a otras vars.
+        auto *vd = static_cast<const ast::VarDeclStmt *>(st);
+        if (vd->init) {
+            std::function<void(const ast::Expr *)> visit2 =
+                [&](const ast::Expr *e) {
+                    if (!e) return;
+                    if (e->kind == ast::NodeKind::AssignExpr) {
+                        auto *ae =
+                            static_cast<const ast::AssignExpr *>(e);
+                        if (ae->target &&
+                            ae->target->kind ==
+                                ast::NodeKind::IdentExpr) {
+                            auto *id =
+                                static_cast<const ast::IdentExpr *>(
+                                    ae->target.get());
+                            if (outer.count(id->name)) {
+                                out.insert(id->name);
+                            }
+                        }
+                        visit2(ae->value.get());
+                    }
+                };
+            visit2(vd->init.get());
+        }
+        break;
+    }
+    default: break;
+    }
+}
 
 void Lowering::lower_try(ast::TryStmt *s) {
     if (!s->body) {
@@ -66,114 +186,9 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // el problema del regalloc: el throw salta los pop pendientes
     // pero el slot vive en stack VM y conserva el valor correcto.
     std::unordered_set<std::string> assigned_in_try;
-    // Helper recursivo: visita un Stmt y registra IdentExpr en
-    // lhs de assign cuyo nombre exista en el scope outer.
-    std::function<void(const ast::Stmt *)> scan_assign =
-        [&](const ast::Stmt *st) {
-            if (!st) return;
-            // Casos relevantes: ExprStmt con AssignExpr o BinaryExpr con
-            // op=ASSIGN; BlockStmt con multiples stmts; If con then/else;
-            // While/For con body; ReturnStmt; throw, try (anidado).
-            switch (st->kind) {
-            case ast::NodeKind::ExprStmt: {
-                auto *es = static_cast<const ast::ExprStmt *>(st);
-                // Recursar en la expr para detectar assign.
-                std::function<void(const ast::Expr *)> visit_expr =
-                    [&](const ast::Expr *e) {
-                        if (!e) return;
-                        if (e->kind == ast::NodeKind::AssignExpr) {
-                            auto *ae = static_cast<const ast::AssignExpr *>(e);
-                            if (ae->target &&
-                                ae->target->kind == ast::NodeKind::IdentExpr) {
-                                auto *id = static_cast<const ast::IdentExpr *>(
-                                    ae->target.get());
-                                if (entry_bindings.count(id->name)) {
-                                    assigned_in_try.insert(id->name);
-                                }
-                            }
-                            visit_expr(ae->value.get());
-                            return;
-                        }
-                        if (e->kind == ast::NodeKind::BinaryExpr) {
-                            auto *be = static_cast<const ast::BinaryExpr *>(e);
-                            visit_expr(be->lhs.get());
-                            visit_expr(be->rhs.get());
-                            return;
-                        }
-                        if (e->kind == ast::NodeKind::CallExpr) {
-                            auto *ce = static_cast<const ast::CallExpr *>(e);
-                            for (auto &a : ce->args)
-                                visit_expr(a.get());
-                            return;
-                        }
-                    };
-                visit_expr(es->expr.get());
-                break;
-            }
-            case ast::NodeKind::BlockStmt: {
-                auto *b = static_cast<const ast::BlockStmt *>(st);
-                for (auto &s2 : b->body)
-                    scan_assign(s2.get());
-                break;
-            }
-            case ast::NodeKind::IfStmt: {
-                auto *ifs = static_cast<const ast::IfStmt *>(st);
-                scan_assign(ifs->then_branch.get());
-                scan_assign(ifs->else_branch.get());
-                break;
-            }
-            case ast::NodeKind::WhileStmt: {
-                auto *ws = static_cast<const ast::WhileStmt *>(st);
-                scan_assign(ws->body.get());
-                break;
-            }
-            case ast::NodeKind::ForStmt: {
-                auto *fs = static_cast<const ast::ForStmt *>(st);
-                scan_assign(fs->body.get());
-                break;
-            }
-            case ast::NodeKind::TryStmt: {
-                auto *ts = static_cast<const ast::TryStmt *>(st);
-                scan_assign(ts->body.get());
-                for (auto &cc : ts->catches)
-                    scan_assign(cc.body.get());
-                if (ts->finally_body) scan_assign(ts->finally_body.get());
-                break;
-            }
-            case ast::NodeKind::VarDeclStmt: {
-                // var-decl introduce nuevo nombre; el init expr
-                // puede contener assigns a otras vars.
-                auto *vd = static_cast<const ast::VarDeclStmt *>(st);
-                if (vd->init) {
-                    std::function<void(const ast::Expr *)> visit2 =
-                        [&](const ast::Expr *e) {
-                            if (!e) return;
-                            if (e->kind == ast::NodeKind::AssignExpr) {
-                                auto *ae =
-                                    static_cast<const ast::AssignExpr *>(e);
-                                if (ae->target &&
-                                    ae->target->kind ==
-                                        ast::NodeKind::IdentExpr) {
-                                    auto *id =
-                                        static_cast<const ast::IdentExpr *>(
-                                            ae->target.get());
-                                    if (entry_bindings.count(id->name)) {
-                                        assigned_in_try.insert(id->name);
-                                    }
-                                }
-                                visit2(ae->value.get());
-                            }
-                        };
-                    visit2(vd->init.get());
-                }
-                break;
-            }
-            default: break;
-            }
-        };
-    scan_assign(s->body.get());
+    scan_assigned_names(s->body.get(), entry_bindings, assigned_in_try);
     for (const auto &cc : s->catches)
-        scan_assign(cc.body.get());
+        scan_assigned_names(cc.body.get(), entry_bindings, assigned_in_try);
 
     // Pre-scan adicional: detectar variables del scope outer que se
     // LEEN dentro de los catches (incluyendo `this` y parametros del
@@ -465,7 +480,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // Helper local: emite el bloque finally (clonado en cada salida) y
     // luego un branch al merge.  El finally en MVP se INLINEA en cada
     // exit point; alternativa mas eficiente es un bloque compartido
-    // con tabla de continuaciones (fuera de scope).
+    // con tabla de continuaciones (outer de scope).
     auto emit_finally_then_merge = [&](ir::IrBlockId from, uint32_t line) {
         (void)from;
         if (s->finally_body) {
@@ -1325,7 +1340,7 @@ void Lowering::emit_try_frame_native(
 
     // rethrow_bb: ningun catch matcheo -> re-lanzar al frame externo.
     // El frame ya se popeo en dispatch_bb, asi que el __vx_throw del
-    // THROW hace longjmp al handler de fuera (propagacion).
+    // THROW hace longjmp al handler de outer (propagacion).
     current_block_ = rethrow_bb;
     {
         const ir::IrValueId v_v =
