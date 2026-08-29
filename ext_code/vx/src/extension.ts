@@ -91,7 +91,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.workspace.onDidChangeTextDocument(ev => {
             const editor = vscode.window.activeTextEditor;
             if (editor && ev.document === editor.document) {
-                void flechas.refresh(editor);
+                // Al escribir se espera a que pare la mano: una peticion por
+                // pulsacion no llega a tiempo y deja el dibujo del texto
+                // anterior, con las lineas nuevas sin su parte de la cuneta.
+                flechas.alCambiar(editor);
             }
         }),
     );

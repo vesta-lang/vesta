@@ -510,7 +510,16 @@ export interface FunctionMeasured {
     allocTotal: number;
     /** Bytes de pila: propios y con lo que llama. */
     stackPartial: number;
-    stackTotal: number;
+    /** Solo viene si la pila se puede acotar; si no, `stackBounded` es false. */
+    stackTotal?: number;
+    /**
+     * false = la profundidad de pila NO se puede acotar.
+     *
+     * Va aparte a proposito: el compilador lo marca con un centinela que es un
+     * numero valido, y mandandolo tal cual se pinta como si la funcion gastara
+     * dieciocho trillones de bytes.
+     */
+    stackBounded?: boolean;
     throws: boolean;
     panics: boolean;
     pure: boolean;
@@ -642,10 +651,20 @@ export interface AsmFlowResponse extends VestaResponse {
         firstLine: number;
         lastLine: number;
         jumps: AsmJump[];
+        /**
+         * Por donde el flujo SALE del bloque hacia una funcion del modulo.
+         *
+         * No es un salto entre dos lineas de aqui -- el destino esta fuera --,
+         * pero tampoco es nada: sin dibujarlo, un bloque cuyo unico salto va a
+         * otra funcion salia sin una sola marca, como si no tuviera flujo.
+         */
+        exits?: { line: number; symbol: string; flow: string }[];
         /** true = hay un salto cuyo destino no se sabe: faltan flechas. */
         hasIndirect: boolean;
-        /** true = hay un salto a una etiqueta que no esta en el bloque. */
+        /** true = hay un salto a una etiqueta LOCAL que no esta en el bloque. */
         hasUnresolved: boolean;
+        /** true = algun salto sale a un simbolo del modulo (no es un fallo). */
+        hasExternal?: boolean;
     }[];
 }
 

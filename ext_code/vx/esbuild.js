@@ -11,6 +11,11 @@
  * la interfaz que el propio editor inyecta en tiempo de ejecucion.  Agruparlo
  * seria meter en el paquete algo que no existe fuera del editor.
  *
+ * Ademas se saca aparte el dibujo de las flechas de flujo: es calculo puro, no
+ * toca el editor, y con el fuera del paquete se puede EJECUTAR desde las
+ * pruebas -- darle saltos y comprobar el dibujo -- en lugar de mirar el fuente
+ * con expresiones regulares.  Va a `out/`, que no entra en el paquete.
+ *
  * Uso:
  *   node esbuild.js               agrupa para desarrollar (con mapa de fuente)
  *   node esbuild.js --production  agrupa para publicar (minificado)
@@ -24,29 +29,35 @@ const esbuild = require('esbuild');
 const produccion = process.argv.includes('--production');
 const observar = process.argv.includes('--watch');
 
-/** Informa del resultado de cada pasada, tambien en modo observador. */
-const informar = {
-    name: 'informar',
-    setup(build) {
-        build.onEnd(resultado => {
-            for (const error of resultado.errors) {
-                const donde = error.location;
-                console.error(
-                    donde
-                        ? `error: ${error.text}  (${donde.file}:${donde.line}:${donde.column})`
-                        : `error: ${error.text}`,
-                );
-            }
-            if (resultado.errors.length === 0) {
-                console.log(
-                    produccion
-                        ? 'agrupado para publicar: dist/extension.js'
-                        : 'agrupado: dist/extension.js',
-                );
-            }
-        });
-    },
-};
+/**
+ * Informa del resultado de cada pasada, tambien en modo observador.
+ * @param {string} salida Fichero que produce esta pasada.
+ * @returns {object} Complemento de esbuild.
+ */
+function informar(salida) {
+    return {
+        name: 'informar',
+        setup(build) {
+            build.onEnd(resultado => {
+                for (const error of resultado.errors) {
+                    const donde = error.location;
+                    console.error(
+                        donde
+                            ? `error: ${error.text}  (${donde.file}:${donde.line}:${donde.column})`
+                            : `error: ${error.text}`,
+                    );
+                }
+                if (resultado.errors.length === 0) {
+                    console.log(
+                        produccion
+                            ? `agrupado para publicar: ${salida}`
+                            : `agrupado: ${salida}`,
+                    );
+                }
+            });
+        },
+    };
+}
 
 /**
  * @brief Construye (o queda observando) el paquete de la extension.
@@ -70,14 +81,31 @@ async function main() {
         sourcemap: !produccion,
         sourcesContent: false,
         logLevel: 'silent',
-        plugins: [informar],
+        plugins: [informar('dist/extension.js')],
+    });
+
+    /* El dibujo de las flechas, aparte y sin minificar: lo cargan las pruebas
+     * para ejecutarlo de verdad.  Nunca se minifica -- un fallo aqui hay que
+     * poder leerlo -- y no viaja en el paquete. */
+    const dibujo = await esbuild.context({
+        entryPoints: ['src/features/flowLayout.ts'],
+        bundle: true,
+        outfile: 'out/flowLayout.js',
+        format: 'cjs',
+        platform: 'node',
+        target: 'node18',
+        logLevel: 'silent',
+        plugins: [informar('out/flowLayout.js')],
     });
 
     if (observar) {
         await contexto.watch();
+        await dibujo.watch();
     } else {
         await contexto.rebuild();
         await contexto.dispose();
+        await dibujo.rebuild();
+        await dibujo.dispose();
     }
 }
 

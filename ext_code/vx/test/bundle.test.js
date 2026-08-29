@@ -122,6 +122,145 @@ function main() {
         'si no, la extension no arrancaria el servidor',
     );
 
+    /* Las flechas del flujo: lo que se aprendio probandolas.
+     *
+     * Costo tres intentos y las tres veces el fallo era invisible para el
+     * comprobador de tipos.  Antes esto se comprobaba mirando el fuente con
+     * expresiones regulares, que fijaba el NOMBRE de las variables y no la
+     * propiedad: al renombrarlas la prueba fallaba sin que nada estuviera mal.
+     * Ahora se EJECUTA el dibujo -- por eso vive aparte del editor -- y se mira
+     * lo que sale.
+     */
+    const dibujo = require(path.join(RAIZ, 'out', 'flowLayout.js'));
+
+    /* Dos saltos que se solapan, uno corto dentro de uno largo.  Lo que sale,
+     * dibujado (las lineas 1 y 9 quedan fuera de los dos):
+     *
+     *     2   ,-->   a donde llega la rama
+     *     3   |
+     *     4   | ,-   de donde sale el salto corto
+     *     5   | '->  a donde llega
+     *     6   |
+     *     7   '---   de donde sale la rama
+     */
+    const saltos = dibujo.repartirCarriles([
+        { fromLine: 8, toLine: 3, flow: 'rama' },
+        { fromLine: 5, toLine: 6, flow: 'salto' },
+    ]);
+    exigir(saltos.length === 2, 'se reparten los dos saltos');
+    exigir(new Set(saltos.map(s => s.carril)).size === 2,
+           'dos saltos que se solapan van en carriles distintos',
+           'compartiendo carril sus lineas se confunden en una');
+
+    /* Lo que se dibuja es el DESTINO, no el salto.  Un bloque escrito a mano
+     * manda a la misma etiqueta desde varios sitios -- tres `jmp .less` es lo
+     * normal --, y una vertical por salto daba tres rayas paralelas que
+     * acababan en el mismo punto sin que nada lo dijera.  Aqui, seis saltos a
+     * dos etiquetas tienen que salir en DOS trazos, no en seis. */
+    const converge = dibujo.repartirCarriles([
+        { fromLine: 10, toLine: 40, flow: 'rama' },
+        { fromLine: 20, toLine: 40, flow: 'rama' },
+        { fromLine: 30, toLine: 40, flow: 'salto' },
+        { fromLine: 11, toLine: 50, flow: 'rama' },
+        { fromLine: 21, toLine: 50, flow: 'rama' },
+        { fromLine: 31, toLine: 50, flow: 'salto' },
+    ]);
+    exigir(converge.length === 2,
+           'los saltos a una misma etiqueta comparten trazo',
+           `${converge.length} trazos para 2 destinos`);
+    exigir(dibujo.carrilesUsados(converge) === 2,
+           'y por tanto ocupan dos carriles, no seis',
+           `${dibujo.carrilesUsados(converge)} carriles`);
+    /* Un origen a mitad del recorrido no puede pintarse como una vertical
+     * cualquiera: el trazo sigue de largo Y ademas sale hacia el codigo.  Sin
+     * esa distincion el tramo horizontal salia de la nada. */
+    const enMedio = dibujo.dibujarLinea(converge, 19, 2);
+    exigir(enMedio.some(c => c.trazo === '\u251c'),
+           'un origen a mitad del trazo se dibuja como empalme');
+
+    /* Salidas del bloque: en Vesta un `asm` puede saltar a una funcion del
+     * modulo.  El destino no esta en el bloque, asi que no hay flecha entre dos
+     * lineas -- pero tampoco es nada: un bloque cuyo unico salto se va a otra
+     * funcion salia sin una sola marca, como si no tuviera flujo. */
+    const soloSalida = new Set([4]);
+    const sinSaltos = dibujo.carrilesUsados([], true);
+    exigir(sinSaltos === 1,
+           'una salida se dibuja aunque no haya ningun salto interno');
+    const marcada = dibujo.dibujarLinea([], 4, sinSaltos, soloSalida);
+    exigir(marcada[0].trazo === '\u25c0',
+           'la salida apunta hacia FUERA, no al codigo');
+    exigir(marcada[marcada.length - 1].trazo !== ' ',
+           'y llega hasta el codigo');
+
+    /* La salida va en una columna PROPIA, la de mas afuera.  Metida en el
+     * carril 0 tapaba la vertical de un salto que pasara por esa linea y
+     * partia la flecha en dos. */
+    const conSalto = dibujo.repartirCarriles(
+        [{ fromLine: 2, toLine: 9, flow: 'rama' }]);
+    const anchoConSalida = dibujo.carrilesUsados(conSalto, true);
+    exigir(anchoConSalida === dibujo.carrilesUsados(conSalto) + 1,
+           'la salida se lleva su propia columna');
+    const cruzada = dibujo.dibujarLinea(conSalto, 5, anchoConSalida,
+                                        new Set([5]));
+    exigir(cruzada[0].trazo === '\u25c0' && cruzada[1].trazo === '\u253c',
+           'y cruza el carril del salto sin borrarlo');
+
+    const carriles = dibujo.carrilesUsados(saltos);
+    const lineas = [];
+    for (let linea = 1; linea <= 9; linea++) {
+        lineas.push(dibujo.dibujarLinea(saltos, linea, carriles));
+    }
+
+    /* ESTO es lo que descuadraba el bloque: si una linea sin trazo devolviera
+     * menos celdas, el codigo de esa linea quedaria corrido respecto del de la
+     * de al lado -- y un bloque de ensamblador esta alineado a mano en
+     * columnas --.  La linea 1 esta fuera de todo salto: tiene que medir igual
+     * que las demas. */
+    const anchuras = new Set(lineas.map(l => l.length));
+    exigir(anchuras.size === 1,
+           'todas las lineas del bloque miden lo mismo',
+           `anchuras distintas: ${[...anchuras].join(', ')}`);
+    exigir(lineas[0].every(c => c.trazo === ' '),
+           'una linea fuera de todo salto sale en blanco, pero ocupa');
+
+    // Cada extremo tiene que TOCAR el codigo: sin el tramo horizontal se ve
+    // una raya que no llega a ninguna instruccion.
+    const ultima = l => l[l.length - 1].trazo;
+    exigir(ultima(lineas[1]) === '\u25b6',
+           'a donde llega un salto se pinta la punta');
+    exigir(ultima(lineas[6]) !== ' ',
+           'de donde sale un salto tambien toca el codigo');
+
+    // Un color por carril: con varios saltos anidados es lo unico que permite
+    // seguir cada uno con la vista.
+    exigir(new Set(dibujo.COLORES).size === dibujo.COLORES.length,
+           'ningun color se repite entre carriles');
+    const colorDe = c => c.color;
+    const colores = new Set(
+        lineas.flat().filter(c => c.trazo !== ' ').map(colorDe));
+    exigir(colores.size === 2,
+           'cada salto se dibuja de su color',
+           `${colores.size} colores para 2 saltos`);
+
+    const flechas = fs.readFileSync(
+        path.join(RAIZ, 'src', 'features', 'flowArrows.ts'), 'utf8');
+    exigir(
+        !flechas.includes('gutterIconPath'),
+        'no se usa el icono de cuneta',
+        'ahi el dibujo se encoge hasta no verse',
+    );
+    /* Al escribir, cada pulsacion cambia el bloque.  Sin esperar se pide una
+     * compilacion por tecla y ninguna llega a tiempo; y descartando las que
+     * llegan tarde el dibujo se queda en el texto anterior -- las lineas
+     * nuevas sin su parte de la cuneta, y un salto recien escrito sin
+     * aparecer --.  Se espera, y lo que cambio mientras se preguntaba se
+     * vuelve a preguntar. */
+    exigir(/alCambiar/.test(flechas) && /setTimeout/.test(flechas),
+           'se espera a que pare la mano antes de repintar');
+    exigir(/repetir\.(add|delete)/.test(flechas),
+           'un cambio durante la peticion se vuelve a preguntar',
+           'si no, el dibujo se queda en el texto anterior');
+
     console.log(`${pasadas} comprobaciones pasadas, ${fallos.length} fallidas`);
     for (const fallo of fallos) {
         console.log(`  - ${fallo}`);
