@@ -551,6 +551,73 @@ static bool asm_blob_mark_clobbers(const ir::AsmMicro &am, AsmBlob &blob,
     return true;
 }
 
+/**
+ * @brief Instruccion EMPAQUETADA que aplica @p subop a elementos de tipo @p t.
+ *
+ * @p subop es el codigo del vectorizador: 0 suma, 1 resta, 2 multiplicacion,
+ * 3 division.  Las combinaciones que la maquina no tiene empaquetadas -- la
+ * multiplicacion de 64 bits, cualquier division entera, multiplicar bytes --
+ * no se inventan: se devuelve false y quien pregunta se rinde, dejando la cola
+ * escalar del bucle a cargo de esos elementos.
+ *
+ * La tabla la necesitan las dos formas de la operacion binaria vectorial (con
+ * los dos operandos en memoria, y con uno de ellos difundido desde un escalar)
+ * y estaba escrita entera en cada una.  Eran la misma salvo en un detalle que
+ * si importa: una dejaba escrito el motivo al rendirse y la otra se callaba,
+ * asi que por ese camino nadie podia averiguar por que no se habia
+ * vectorizado.  Ahora el motivo lo escribe siempre el llamante.
+ *
+ * @param t     Tipo de cada elemento del carril.
+ * @param subop Operacion segun el codigo del vectorizador.
+ * @param out   Recibe la instruccion empaquetada si existe.
+ * @return true si la combinacion existe empaquetada.
+ */
+static bool packed_binop_mop(ir::IrType t, uint64_t subop, MOp &out) {
+    switch (t) {
+    case ir::IrType::F64:
+        out = (subop == 0)   ? MOp::ADDPD
+              : (subop == 1) ? MOp::SUBPD
+              : (subop == 2) ? MOp::MULPD
+                             : MOp::DIVPD;
+        return true;
+    case ir::IrType::F32:
+        out = (subop == 0)   ? MOp::ADDPS
+              : (subop == 1) ? MOp::SUBPS
+              : (subop == 2) ? MOp::MULPS
+                             : MOp::DIVPS;
+        return true;
+    case ir::IrType::I64:
+    case ir::IrType::U64:
+        // No hay multiplicacion de 64 bits empaquetada hasta AVX-512.
+        if (subop == 0) out = MOp::PADDQ;
+        else if (subop == 1) out = MOp::PSUBQ;
+        else return false;
+        return true;
+    case ir::IrType::I32:
+    case ir::IrType::U32:
+        if (subop == 0) out = MOp::PADDD;
+        else if (subop == 1) out = MOp::PSUBD;
+        else if (subop == 2) out = MOp::PMULLD; // SSE4.1 / AVX2
+        else return false;                      // la division no existe
+        return true;
+    case ir::IrType::I16:
+    case ir::IrType::U16:
+        if (subop == 0) out = MOp::PADDW;
+        else if (subop == 1) out = MOp::PSUBW;
+        else if (subop == 2) out = MOp::PMULLW; // parte baja, SSE2
+        else return false;
+        return true;
+    case ir::IrType::I8:
+    case ir::IrType::U8:
+        // Multiplicar bytes no existe empaquetado en ninguna extension.
+        if (subop == 0) out = MOp::PADDB;
+        else if (subop == 1) out = MOp::PSUBB;
+        else return false;
+        return true;
+    default: return false; // el resto de tipos no viaja por carriles
+    }
+}
+
 } // namespace
 
 // Watchdog CTPE: direccion del handler de safepoint (0 = desactivado).  Es
@@ -1221,6 +1288,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         MBlock mb;
         mb.label_id = blbl[b];
         auto &O = mb.instrs;
+
+        /* Leer el qword que hay en base + desplazamiento, devolviendo el
+         * temporal que lo sostiene.  Es lo que hace falta para caminar una
+         * cadena de punteros del runtime -- objeto, clase, tabla de metodos,
+         * metodo, codigo compilado --, y lo necesitan los tres despachos que
+         * se resuelven en linea (metodo virtual, metodo por puntero y llamada
+         * a la superclase).  Estaba escrito entero en los tres, identico salvo
+         * los saltos de linea. */
+        auto load_qword_at = [&](ir::IrValueId base,
+                                 int32_t off) -> ir::IrValueId {
+            const ir::IrValueId d = new_tmp();
+            if (off == 0) {
+                O.push_back(MInstr::make_load(vr(d), vr(base), 8, false));
+                return d;
+            }
+            const ir::IrValueId addr = new_tmp();
+            O.push_back(MInstr::make_unary(MOp::MOV, vr(addr), vr(base)));
+            O.push_back(MInstr::make_binary(MOp::ADD, vr(addr), vr(addr),
+                                            MOperand::make_imm32(off)));
+            O.push_back(MInstr::make_load(vr(d), vr(addr), 8, false));
+            return d;
+        };
 
         /* Auto-PGO: si este bloque es el destino single-pred de un BR_COND,
          * emitir el incremento del contador de su linea al ENTRY (flags
@@ -3699,60 +3788,14 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const uint64_t host_w = vec_host_w();
                 const uint64_t eff_w = (chunk_w < host_w) ? chunk_w : host_w;
                 const uint64_t n_pieces = chunk_w / eff_w;
-                /* op packed segun el tipo de elemento: float (ADDPD/...) o
-                 * entero (PADDD/PSUBD i32, PADDQ/PSUBQ i64).  No hay mul/div
-                 * entero packed en SSE2 -> bail (la cola/loop escalar lo hace).
-                 */
+                /* Instruccion empaquetada segun el tipo de elemento.  La tabla
+                 * es la misma para las dos formas de la binaria vectorial:
+                 * vive en packed_binop_mop.  Si esa combinacion no existe
+                 * empaquetada, se renuncia dejando escrito el motivo y la cola
+                 * escalar del bucle se encarga. */
                 MOp pop;
-                if (in.type == ir::IrType::F64) {
-                    pop = (subop == 0)   ? MOp::ADDPD
-                          : (subop == 1) ? MOp::SUBPD
-                          : (subop == 2) ? MOp::MULPD
-                                         : MOp::DIVPD;
-                } else if (in.type == ir::IrType::F32) {
-                    pop = (subop == 0)   ? MOp::ADDPS
-                          : (subop == 1) ? MOp::SUBPS
-                          : (subop == 2) ? MOp::MULPS
-                                         : MOp::DIVPS;
-                } else if (in.type == ir::IrType::I64 ||
-                           in.type == ir::IrType::U64) {
-                    if (subop == 0)
-                        pop = MOp::PADDQ;
-                    else if (subop == 1)
-                        pop = MOp::PSUBQ;
-                    else
-                        return false; // mul/div i64 no packed en SSE2
-                } else if (in.type == ir::IrType::I32 ||
-                           in.type == ir::IrType::U32) {
-                    if (subop == 0)
-                        pop = MOp::PADDD;
-                    else if (subop == 1)
-                        pop = MOp::PSUBD;
-                    else if (subop == 2)
-                        pop = MOp::PMULLD; // SSE4.1/AVX2
-                    else
-                        return false; // div i32 no packed
-                } else if (in.type == ir::IrType::I16 ||
-                           in.type == ir::IrType::U16) {
-                    if (subop == 0)
-                        pop = MOp::PADDW;
-                    else if (subop == 1)
-                        pop = MOp::PSUBW;
-                    else if (subop == 2)
-                        pop = MOp::PMULLW; // SSE2 word mul (low)
-                    else
-                        return false; // div i16 no packed
-                } else if (in.type == ir::IrType::I8 ||
-                           in.type == ir::IrType::U8) {
-                    if (subop == 0)
-                        pop = MOp::PADDB;
-                    else if (subop == 1)
-                        pop = MOp::PSUBB;
-                    else
-                        return false; // no hay mul/div byte packed en SSE2
-                } else {
-                    return false; // tipo no soportado
-                }
+                if (!packed_binop_mop(in.type, subop, pop))
+                    return vreg_bail(fn.name.c_str(), __LINE__);
                 // ROBUSTEZ (clobber set formal): los scratch los DERIVAMOS del
                 // TargetRegInfo (tri_sel.scratch[GP]/[FP]) en vez de hardcodear
                 // R10/R11/XMM14/XMM15.  Estos registros estan RESERVADOS por el
@@ -3839,54 +3882,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const bool is_fp =
                     (in.type == ir::IrType::F64 || in.type == ir::IrType::F32);
                 const bool is_f32s = (in.type == ir::IrType::F32);
+                // Misma tabla que la binaria de dos memorias: packed_binop_mop.
                 MOp pop;
-                if (in.type == ir::IrType::F64) {
-                    pop = (subop == 0)   ? MOp::ADDPD
-                          : (subop == 1) ? MOp::SUBPD
-                          : (subop == 2) ? MOp::MULPD
-                                         : MOp::DIVPD;
-                } else if (in.type == ir::IrType::F32) {
-                    pop = (subop == 0)   ? MOp::ADDPS
-                          : (subop == 1) ? MOp::SUBPS
-                          : (subop == 2) ? MOp::MULPS
-                                         : MOp::DIVPS;
-                } else if (in.type == ir::IrType::I64 ||
-                           in.type == ir::IrType::U64) {
-                    if (subop == 0)
-                        pop = MOp::PADDQ;
-                    else if (subop == 1)
-                        pop = MOp::PSUBQ;
-                    else
-                        return vreg_bail(fn.name.c_str(), __LINE__);
-                } else if (in.type == ir::IrType::I32 ||
-                           in.type == ir::IrType::U32) {
-                    if (subop == 0)
-                        pop = MOp::PADDD;
-                    else if (subop == 1)
-                        pop = MOp::PSUBD;
-                    else if (subop == 2)
-                        pop = MOp::PMULLD;
-                    else
-                        return vreg_bail(fn.name.c_str(), __LINE__);
-                } else if (in.type == ir::IrType::I16 ||
-                           in.type == ir::IrType::U16) {
-                    if (subop == 0)
-                        pop = MOp::PADDW;
-                    else if (subop == 1)
-                        pop = MOp::PSUBW;
-                    else if (subop == 2)
-                        pop = MOp::PMULLW;
-                    else
-                        return vreg_bail(fn.name.c_str(), __LINE__);
-                } else if (in.type == ir::IrType::I8 ||
-                           in.type == ir::IrType::U8) {
-                    if (subop == 0)
-                        pop = MOp::PADDB;
-                    else if (subop == 1)
-                        pop = MOp::PSUBB;
-                    else
-                        return vreg_bail(fn.name.c_str(), __LINE__);
-                } else {
+                if (!packed_binop_mop(in.type, subop, pop)) {
                     return vreg_bail(fn.name.c_str(), __LINE__);
                 }
                 // HOIST: el escalar ya esta DIFUNDIDO en XMM13 por un VEC_BCAST
@@ -5865,47 +5863,29 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      *     a vrt_callvirt en cualquier otro caso. */
                     const MLabelId Lfb = out.new_label();
                     const MLabelId Ldone = out.new_label();
-                    auto load_field = [&](ir::IrValueId base,
-                                          int32_t off) -> ir::IrValueId {
-                        const ir::IrValueId d = new_tmp();
-                        if (off == 0) {
-                            O.push_back(
-                                MInstr::make_load(vr(d), vr(base), 8, false));
-                        } else {
-                            const ir::IrValueId addr = new_tmp();
-                            O.push_back(MInstr::make_unary(MOp::MOV, vr(addr),
-                                                           vr(base)));
-                            O.push_back(MInstr::make_binary(
-                                MOp::ADD, vr(addr), vr(addr),
-                                MOperand::make_imm32(off)));
-                            O.push_back(
-                                MInstr::make_load(vr(d), vr(addr), 8, false));
-                        }
-                        return d;
-                    };
                     /* cls = [obj]  (class_ptr offset 0). */
-                    const ir::IrValueId cls = load_field(obj, 0);
+                    const ir::IrValueId cls = load_qword_at(obj, 0);
                     O.push_back(mk_test(cls, cls));
                     O.push_back(MInstr::make_jcc(MCond::E, Lfb));
                     /* vtbl = [cls + VTABLE_OFFSET]. */
                     const ir::IrValueId vtbl =
-                        load_field(cls, VESTA_CLASSINFO_VTABLE_OFFSET);
+                        load_qword_at(cls, VESTA_CLASSINFO_VTABLE_OFFSET);
                     O.push_back(mk_test(vtbl, vtbl));
                     O.push_back(MInstr::make_jcc(MCond::E, Lfb));
                     /* method = [vtbl + vtbl_idx*8]. */
                     const ir::IrValueId method =
-                        load_field(vtbl, static_cast<int32_t>(vtbl_idx * 8u));
+                        load_qword_at(vtbl, static_cast<int32_t>(vtbl_idx * 8u));
                     O.push_back(mk_test(method, method));
                     O.push_back(MInstr::make_jcc(MCond::E, Lfb));
                     /* advice = [method + ADVICE_CHAIN_OFFSET]; si != 0
                      * (tiene aspectos AOP) -> slow path. */
-                    const ir::IrValueId adv = load_field(
+                    const ir::IrValueId adv = load_qword_at(
                         method, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
                     O.push_back(mk_test(adv, adv));
                     O.push_back(MInstr::make_jcc(MCond::NE, Lfb));
                     /* code = [method + JIT_CODE_OFFSET]; si 0 -> slow. */
                     const ir::IrValueId code =
-                        load_field(method, VESTA_METHODINFO_JIT_CODE_OFFSET);
+                        load_qword_at(method, VESTA_METHODINFO_JIT_CODE_OFFSET);
                     O.push_back(mk_test(code, code));
                     O.push_back(MInstr::make_jcc(MCond::E, Lfb));
                     /* FAST: proc en arg0; call directo (indirecto) a
@@ -5985,35 +5965,17 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const MReg cm_pr = MReg::RDI, cm_obj = MReg::RSI,
                            cm_m = MReg::RDX;
 #endif
-                auto cm_load_field = [&](ir::IrValueId base,
-                                         int32_t off) -> ir::IrValueId {
-                    const ir::IrValueId d = new_tmp();
-                    if (off == 0) {
-                        O.push_back(
-                            MInstr::make_load(vr(d), vr(base), 8, false));
-                    } else {
-                        const ir::IrValueId addr = new_tmp();
-                        O.push_back(
-                            MInstr::make_unary(MOp::MOV, vr(addr), vr(base)));
-                        O.push_back(
-                            MInstr::make_binary(MOp::ADD, vr(addr), vr(addr),
-                                                MOperand::make_imm32(off)));
-                        O.push_back(
-                            MInstr::make_load(vr(d), vr(addr), 8, false));
-                    }
-                    return d;
-                };
                 const MLabelId Lcm_fb = out.new_label();
                 const MLabelId Lcm_done = out.new_label();
                 /* INLINE: method no-null; sin advice; jit_code presente. */
                 O.push_back(mk_test(method, method));
                 O.push_back(MInstr::make_jcc(MCond::E, Lcm_fb));
                 const ir::IrValueId cm_adv =
-                    cm_load_field(method, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
+                    load_qword_at(method, VESTA_METHODINFO_ADVICE_CHAIN_OFFSET);
                 O.push_back(mk_test(cm_adv, cm_adv));
                 O.push_back(MInstr::make_jcc(MCond::NE, Lcm_fb));
                 const ir::IrValueId cm_code =
-                    cm_load_field(method, VESTA_METHODINFO_JIT_CODE_OFFSET);
+                    load_qword_at(method, VESTA_METHODINFO_JIT_CODE_OFFSET);
                 O.push_back(mk_test(cm_code, cm_code));
                 O.push_back(MInstr::make_jcc(MCond::E, Lcm_fb));
                 /* FAST: R10=code (scratch, no colisiona con pr_reg=rbx mov);
@@ -6147,28 +6109,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MOperand::make_imm32(static_cast<int32_t>(su_nargs + 1))));
                 /* Resolver method = cls->vtable[idx] (2 loads).  cls es valido
                  * (super class resuelta); sin null-check defensivo. */
-                auto su_load_field = [&](ir::IrValueId base,
-                                         int32_t off) -> ir::IrValueId {
-                    const ir::IrValueId d = new_tmp();
-                    if (off == 0) {
-                        O.push_back(
-                            MInstr::make_load(vr(d), vr(base), 8, false));
-                    } else {
-                        const ir::IrValueId addr = new_tmp();
-                        O.push_back(
-                            MInstr::make_unary(MOp::MOV, vr(addr), vr(base)));
-                        O.push_back(
-                            MInstr::make_binary(MOp::ADD, vr(addr), vr(addr),
-                                                MOperand::make_imm32(off)));
-                        O.push_back(
-                            MInstr::make_load(vr(d), vr(addr), 8, false));
-                    }
-                    return d;
-                };
                 const ir::IrValueId su_vtbl =
-                    su_load_field(su_cls, VESTA_CLASSINFO_VTABLE_OFFSET);
+                    load_qword_at(su_cls, VESTA_CLASSINFO_VTABLE_OFFSET);
                 const ir::IrValueId su_method =
-                    su_load_field(su_vtbl, static_cast<int32_t>(su_idx * 8u));
+                    load_qword_at(su_vtbl, static_cast<int32_t>(su_idx * 8u));
                 /* vrt_callm(proc, this, method).  R10/R11 temporales. */
 #if defined(_WIN32)
                 const MReg su_pr = MReg::RCX, su_obj = MReg::RDX,

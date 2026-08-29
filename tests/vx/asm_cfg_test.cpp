@@ -114,6 +114,94 @@ int main() {
               "jmp rax: terminador indirecto");
     }
 
+    /* --- 5.b) Saltos CALCULADOS: hasta donde llega el seguidor. ---
+     *
+     * La direccion se monta en un registro y se pasa a otro antes de saltar.
+     * Mirando solo la etiqueta escrita tal cual, eso se perdia: el destino
+     * estaba delante y el grafo lo daba por desconocido.  Lo que NO se puede
+     * saber -- una lectura de memoria, un desplazamiento dentro de la etiqueta
+     * -- tiene que seguir dandose por desconocido: senalar la linea equivocada
+     * es peor que no senalar. */
+    {
+        // La etiqueta pasa de un registro a otro.
+        AsmCfg c = build_asm_cfg(Isa::X86, ".top:\n"
+                                           "mov r8, .top\n"
+                                           "mov rax, r8\n"
+                                           "jmp rax\n");
+        CHECK(!c.has_indirect, "copia entre registros: destino conocido");
+
+        // `lea` toma la DIRECCION, que es la misma.
+        AsmCfg d = build_asm_cfg(Isa::X86, ".top:\n"
+                                           "mov r8, .top\n"
+                                           "lea rax, [r8]\n"
+                                           "jmp rax\n");
+        CHECK(!d.has_indirect, "lea [reg]: destino conocido");
+
+        // `mov` de memoria LEE la etiqueta; lo que hay dentro no es la
+        // etiqueta.
+        AsmCfg e = build_asm_cfg(Isa::X86, ".top:\n"
+                                           "mov r8, .top\n"
+                                           "mov rax, [r8]\n"
+                                           "jmp rax\n");
+        CHECK(e.has_indirect, "mov reg, [reg]: lee memoria, no se sabe");
+
+        // Un desplazamiento apunta DENTRO: a que instruccion cae no se sabe
+        // sin ensamblar.
+        AsmCfg f = build_asm_cfg(Isa::X86, ".top:\n"
+                                           "mov r8, .top\n"
+                                           "lea rax, [r8 + 16]\n"
+                                           "jmp rax\n");
+        CHECK(f.has_indirect, "lea [reg + N]: dentro de la etiqueta, no se sabe");
+
+        // Pisar el registro borra lo que se sabia de el.
+        AsmCfg g = build_asm_cfg(Isa::X86, ".top:\n"
+                                           "mov r8, .top\n"
+                                           "mov rax, r8\n"
+                                           "xor rax, rax\n"
+                                           "jmp rax\n");
+        CHECK(g.has_indirect, "registro pisado: se olvida el destino");
+
+        // `push` de un registro que lleva la etiqueta, recogido por el `ret`.
+        AsmCfg h = build_asm_cfg(Isa::X86, ".top:\n"
+                                           "mov r8, .top\n"
+                                           "push r8\n"
+                                           "ret\n");
+        CHECK(!h.has_indirect, "push reg + ret: destino conocido");
+    }
+
+    /* --- 5.c) Saltar FUERA del bloque no es una etiqueta rota. ---
+     *
+     * En Vesta un bloque `asm` puede saltar a una funcion del modulo: lo
+     * resuelve el enlazador y es codigo correcto.  Metiendolo en el mismo saco
+     * que una etiqueta mal escrita, un `jmp __vxp_fiber_exit` sacaba un aviso
+     * de "etiqueta no definida" sobre la linea buena y ademas tumbaba el
+     * analisis del bloque entero.  Un nombre que empieza por `.` SI es local:
+     * si no esta, esta mal escrito. */
+    {
+        AsmCfg c = build_asm_cfg(Isa::X86, "call r12\n"
+                                           "jmp __vxp_fiber_exit\n");
+        CHECK(c.has_external_target, "jmp a simbolo del modulo: es una salida");
+        CHECK(!c.has_unresolved_target, "y no una etiqueta rota");
+
+        AsmCfg d = build_asm_cfg(Isa::X86, "cmp rax, 0\n"
+                                           "je __vxp_fiber_exit\n"
+                                           "ret\n");
+        CHECK(d.has_external_target, "rama condicional a simbolo: salida");
+
+        AsmCfg e = build_asm_cfg(Isa::X86, "jmp .noexiste\n"
+                                           "ret\n");
+        CHECK(e.has_unresolved_target, "etiqueta local sin definir: rota");
+        CHECK(!e.has_external_target, "y no cuenta como salida");
+
+        // El criterio, en el mismo sitio que usa el ensamblador.
+        CHECK(asm_is_external_symbol("__vxp_fiber_exit"),
+              "un identificador desnudo puede venir de fuera");
+        CHECK(!asm_is_external_symbol(".local"),
+              "el punto inicial lo hace local de NASM");
+        CHECK(!asm_is_external_symbol("[rax + 8]"),
+              "una direccion de memoria no es un simbolo");
+    }
+
     // --- 6) call retorna (fallthrough), no corta el bloque en aristas. ---
     {
         AsmCfg c = build_asm_cfg(Isa::X86, "call foo\n"

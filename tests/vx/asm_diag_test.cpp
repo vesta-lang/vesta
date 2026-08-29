@@ -74,6 +74,28 @@ int main() {
         CHECK(has_code(ds, "VXA002"), "salto a etiqueta externa -> VXA002");
     }
 
+    /* --- Salto a una FUNCION del modulo: no es un fallo. ---
+     *
+     * En Vesta un bloque `asm` puede saltar a otra funcion del modulo y lo
+     * resuelve el enlazador.  Confundirlo con una etiqueta mal escrita sacaba
+     * DOS avisos sobre codigo correcto: "etiqueta no definida" y, como el
+     * bloque se quedaba sin salida, "bucle infinito". */
+    {
+        auto ds = asm_diagnose(Isa::X86, "mov rdi, rbx\n"
+                                         "jmp __vxp_fiber_exit\n");
+        CHECK(!has_code(ds, "VXA002"), "salto a funcion del modulo: sin VXA002");
+        CHECK(!has_code(ds, "VXA003"), "y tampoco es un bucle infinito");
+    }
+
+    // Una rama condicional a una funcion del modulo, igual.
+    {
+        auto ds = asm_diagnose(Isa::X86, "cmp rax, 0\n"
+                                         "je fiber_exit\n"
+                                         "mov rax, 1\n"
+                                         "ret\n");
+        CHECK(!has_code(ds, "VXA002"), "rama a funcion del modulo: sin VXA002");
+    }
+
     // --- Bucle sin salida (infinito). ---
     {
         auto ds = asm_diagnose(Isa::X86,
