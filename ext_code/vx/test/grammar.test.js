@@ -164,6 +164,41 @@ const CASOS_BLOQUE = [
         ],
     },
     {
+        // Lo que hay en pantalla MIENTRAS se escribe: la cadena esta abierta
+        // porque aun no se ha tecleado la comilla de cierre.  Si esa cadena
+        // sobrevive al salto de linea, el resto del fichero queda marcado como
+        // cadena, y entonces el editor deja de colorear Y de sugerir -- trae
+        // las sugerencias apagadas dentro de cadenas.  El sintoma no apunta a
+        // la causa: parece que el servidor no responde.
+        nombre: 'cadena a medio escribir',
+        lineas: [
+            'i32 main() {',
+            '    println("hola',
+            '    i64 x = 0;',
+            '    return x;',
+            '}',
+        ],
+        esperado: [
+            [1, '"hola', 'string.quoted.double'],
+            // La linea siguiente ya NO es cadena: vuelve a ser codigo.
+            [2, 'i64', 'support.type.primitive'],
+            [3, 'return', 'keyword.control'],
+        ],
+    },
+    {
+        nombre: 'cadena cruda a medio escribir',
+        lineas: ['string s = r"sin cerrar', 'i64 y = 1;'],
+        esperado: [[1, 'i64', 'support.type.primitive']],
+    },
+    {
+        nombre: 'cadena de varias lineas, que SI continua',
+        lineas: ['string s = """primera', 'sigue dentro', '""";', 'i64 z = 2;'],
+        esperado: [
+            [1, 'sigue dentro', 'string.quoted.triple'],
+            [3, 'i64', 'support.type.primitive'],
+        ],
+    },
+    {
         // Forma tomada de examples_codes_vx/aot/17_boot16.vx, tal cual.
         nombre: 'bloque de ensamblador con nombre',
         lineas: [

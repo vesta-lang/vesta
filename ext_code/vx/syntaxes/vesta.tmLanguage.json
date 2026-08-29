@@ -2,38 +2,83 @@
     "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
     "name": "Vesta",
     "scopeName": "source.vesta",
-    "fileTypes": ["vx"],
+    "fileTypes": [
+        "vx"
+    ],
     "patterns": [
-        { "include": "#comments" },
-        { "include": "#preprocessor" },
-        { "include": "#annotations" },
-        { "include": "#strings" },
-        { "include": "#characters" },
-        { "include": "#numbers" },
-        { "include": "#asm-declaration" },
-        { "include": "#bytes-block" },
-        { "include": "#asm-statement" },
-        { "include": "#imports" },
-        { "include": "#declarations" },
-        { "include": "#labels" },
-        { "include": "#keywords" },
-        { "include": "#types" },
-        { "include": "#constants" },
-        { "include": "#builtins" },
-        { "include": "#functions" },
-        { "include": "#operators" },
-        { "include": "#punctuation" },
-        { "include": "#identifiers" }
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#preprocessor"
+        },
+        {
+            "include": "#annotations"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#characters"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#asm-declaration"
+        },
+        {
+            "include": "#bytes-block"
+        },
+        {
+            "include": "#asm-statement"
+        },
+        {
+            "include": "#imports"
+        },
+        {
+            "include": "#declarations"
+        },
+        {
+            "include": "#labels"
+        },
+        {
+            "include": "#keywords"
+        },
+        {
+            "include": "#types"
+        },
+        {
+            "include": "#constants"
+        },
+        {
+            "include": "#builtins"
+        },
+        {
+            "include": "#functions"
+        },
+        {
+            "include": "#operators"
+        },
+        {
+            "include": "#punctuation"
+        },
+        {
+            "include": "#identifiers"
+        }
     ],
     "repository": {
-
         "comments": {
             "patterns": [
                 {
                     "name": "comment.block.documentation.vesta",
                     "begin": "/\\*\\*",
                     "end": "\\*/",
-                    "patterns": [{ "include": "#doc-tags" }]
+                    "patterns": [
+                        {
+                            "include": "#doc-tags"
+                        }
+                    ]
                 },
                 {
                     "name": "comment.block.vesta",
@@ -44,16 +89,18 @@
                     "name": "comment.line.double-slash.vesta",
                     "begin": "//",
                     "end": "$",
-                    "patterns": [{ "include": "#doc-tags" }]
+                    "patterns": [
+                        {
+                            "include": "#doc-tags"
+                        }
+                    ]
                 }
             ]
         },
-
         "doc-tags": {
             "name": "storage.type.class.doc.vesta",
             "match": "@(param|tparam|return|returns|brief|file|throws|see|note|warning|since|deprecated|complexity)\\b"
         },
-
         "preprocessor": {
             "comment": "Directivas del preprocesador VPP, primera etapa sobre cada .vx",
             "patterns": [
@@ -61,8 +108,12 @@
                     "name": "meta.preprocessor.include.vesta",
                     "begin": "^\\s*(#)\\s*(include)\\b",
                     "beginCaptures": {
-                        "1": { "name": "punctuation.definition.directive.vesta" },
-                        "2": { "name": "keyword.control.directive.include.vesta" }
+                        "1": {
+                            "name": "punctuation.definition.directive.vesta"
+                        },
+                        "2": {
+                            "name": "keyword.control.directive.include.vesta"
+                        }
                     },
                     "end": "$",
                     "patterns": [
@@ -76,14 +127,24 @@
                     "name": "meta.preprocessor.vesta",
                     "begin": "^\\s*(#)\\s*(define|undef|if|ifdef|ifndef|elif|else|endif|foreach|endforeach|repeat|endrepeat|array|exec|error|warning|pragma|region|endregion)\\b",
                     "beginCaptures": {
-                        "1": { "name": "punctuation.definition.directive.vesta" },
-                        "2": { "name": "keyword.control.directive.vesta" }
+                        "1": {
+                            "name": "punctuation.definition.directive.vesta"
+                        },
+                        "2": {
+                            "name": "keyword.control.directive.vesta"
+                        }
                     },
                     "end": "(?<!\\\\)$",
                     "patterns": [
-                        { "include": "#comments" },
-                        { "include": "#strings" },
-                        { "include": "#numbers" },
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#strings"
+                        },
+                        {
+                            "include": "#numbers"
+                        },
                         {
                             "name": "entity.name.function.preprocessor.vesta",
                             "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
@@ -92,7 +153,6 @@
                 }
             ]
         },
-
         "annotations": {
             "comment": "Anotaciones del lenguaje.  Las de comportamiento van en PascalCase (@Override, @Async, @Target) y los atributos de disposicion en minusculas (@align, @section, @overlay).",
             "patterns": [
@@ -101,18 +161,32 @@
                     "name": "meta.annotation.known.vesta",
                     "begin": "(@)(Abstract|After|AfterReturning|AllArgsConstructor|AllocatorOverride|Around|Aspect|Async|Before|Builder|Data|EqualsAndHashCode|Final|Getter|HelperOverride|Inline|Introspect|Log|Macro|Naked|Name|NoArgsConstructor|NoExcept|NoExceptions|NoIdiom|NonNull|Override|PanicHandler|Pure|RequiredArgsConstructor|Setter|StringConcat|StringEq|Sync|SyncImpl|Synchronized|Target|ToString|Value|Virtual|With|align|alloc|at|bits|cold|complexity|comptime|element|endian|fp|from|hot|id|implicit|lazy|no_heap|nopanic|nothrow|offset|opaque|order|overlay|partial|pod|pure|section|size|stack|stride|total|when)\\b\\s*(\\()",
                     "beginCaptures": {
-                        "1": { "name": "punctuation.definition.annotation.vesta" },
-                        "2": { "name": "storage.type.annotation.vesta" },
-                        "3": { "name": "punctuation.section.parens.begin.vesta" }
+                        "1": {
+                            "name": "punctuation.definition.annotation.vesta"
+                        },
+                        "2": {
+                            "name": "storage.type.annotation.vesta"
+                        },
+                        "3": {
+                            "name": "punctuation.section.parens.begin.vesta"
+                        }
                     },
                     "end": "\\)",
                     "endCaptures": {
-                        "0": { "name": "punctuation.section.parens.end.vesta" }
+                        "0": {
+                            "name": "punctuation.section.parens.end.vesta"
+                        }
                     },
                     "patterns": [
-                        { "include": "#comments" },
-                        { "include": "#strings" },
-                        { "include": "#numbers" },
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#strings"
+                        },
+                        {
+                            "include": "#numbers"
+                        },
                         {
                             "comment": "Objetivos de @Target y modos de @fp",
                             "name": "support.constant.annotation-argument.vesta",
@@ -127,8 +201,12 @@
                             "name": "variable.parameter.annotation.vesta",
                             "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
                         },
-                        { "include": "#operators" },
-                        { "include": "#punctuation" }
+                        {
+                            "include": "#operators"
+                        },
+                        {
+                            "include": "#punctuation"
+                        }
                     ]
                 },
                 {
@@ -136,13 +214,16 @@
                     "name": "meta.annotation.vesta",
                     "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
-                        "1": { "name": "punctuation.definition.annotation.vesta" },
-                        "2": { "name": "storage.type.annotation.vesta" }
+                        "1": {
+                            "name": "punctuation.definition.annotation.vesta"
+                        },
+                        "2": {
+                            "name": "storage.type.annotation.vesta"
+                        }
                     }
                 }
             ]
         },
-
         "strings": {
             "patterns": [
                 {
@@ -151,85 +232,120 @@
                     "begin": "\"\"\"",
                     "end": "\"\"\"",
                     "beginCaptures": {
-                        "0": { "name": "punctuation.definition.string.begin.vesta" }
+                        "0": {
+                            "name": "punctuation.definition.string.begin.vesta"
+                        }
                     },
                     "endCaptures": {
-                        "0": { "name": "punctuation.definition.string.end.vesta" }
+                        "0": {
+                            "name": "punctuation.definition.string.end.vesta"
+                        }
                     },
                     "patterns": [
-                        { "include": "#string-escape" },
-                        { "include": "#string-interpolation" }
+                        {
+                            "include": "#string-escape"
+                        },
+                        {
+                            "include": "#string-interpolation"
+                        }
                     ]
                 },
                 {
-                    "comment": "Cadena cruda: ni escapes ni interpolacion",
+                    "comment": "Cadena cruda: ni escapes ni interpolacion  Termina en la comilla O al acabar la linea: una cadena a medio escribir no puede tenir el resto del fichero, que apaga el coloreado y las sugerencias a partir de ahi.",
                     "name": "string.quoted.other.raw.vesta",
                     "begin": "\\br\"",
-                    "end": "\"",
+                    "end": "\"|$",
                     "beginCaptures": {
-                        "0": { "name": "punctuation.definition.string.begin.vesta" }
+                        "0": {
+                            "name": "punctuation.definition.string.begin.vesta"
+                        }
                     },
                     "endCaptures": {
-                        "0": { "name": "punctuation.definition.string.end.vesta" }
+                        "0": {
+                            "name": "punctuation.definition.string.end.vesta"
+                        }
                     }
                 },
                 {
                     "name": "string.quoted.double.vesta",
                     "begin": "\"",
-                    "end": "\"",
+                    "end": "\"|$",
                     "beginCaptures": {
-                        "0": { "name": "punctuation.definition.string.begin.vesta" }
+                        "0": {
+                            "name": "punctuation.definition.string.begin.vesta"
+                        }
                     },
                     "endCaptures": {
-                        "0": { "name": "punctuation.definition.string.end.vesta" }
+                        "0": {
+                            "name": "punctuation.definition.string.end.vesta"
+                        }
                     },
                     "patterns": [
-                        { "include": "#string-escape" },
-                        { "include": "#string-interpolation" }
-                    ]
+                        {
+                            "include": "#string-escape"
+                        },
+                        {
+                            "include": "#string-interpolation"
+                        }
+                    ],
+                    "comment": "Termina en la comilla O al acabar la linea: una cadena a medio escribir no puede tenir el resto del fichero, que apaga el coloreado y las sugerencias a partir de ahi."
                 }
             ]
         },
-
         "string-escape": {
             "name": "constant.character.escape.vesta",
             "match": "\\\\(u\\{[0-9a-fA-F]+\\}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|x[0-9a-fA-F]{2}|[0nrtvfabe\\\\'\"$])"
         },
-
         "string-interpolation": {
             "comment": "Interpolacion ${expr} con especificador de formato opcional: ${n:hex:>20}",
             "name": "meta.embedded.expression.vesta",
             "begin": "\\$\\{",
             "end": "\\}",
             "beginCaptures": {
-                "0": { "name": "punctuation.definition.template-expression.begin.vesta" }
+                "0": {
+                    "name": "punctuation.definition.template-expression.begin.vesta"
+                }
             },
             "endCaptures": {
-                "0": { "name": "punctuation.definition.template-expression.end.vesta" }
+                "0": {
+                    "name": "punctuation.definition.template-expression.end.vesta"
+                }
             },
             "patterns": [
                 {
                     "match": "(:)\\s*(hex|bin|oct|dec|ptr|gc|char|bool)?\\s*(?:(:)\\s*(.?[<>])\\s*([0-9]+))?",
                     "captures": {
-                        "1": { "name": "punctuation.separator.format.vesta" },
-                        "2": { "name": "support.constant.format.vesta" },
-                        "3": { "name": "punctuation.separator.format.vesta" },
-                        "4": { "name": "keyword.operator.format.vesta" },
-                        "5": { "name": "constant.numeric.integer.vesta" }
+                        "1": {
+                            "name": "punctuation.separator.format.vesta"
+                        },
+                        "2": {
+                            "name": "support.constant.format.vesta"
+                        },
+                        "3": {
+                            "name": "punctuation.separator.format.vesta"
+                        },
+                        "4": {
+                            "name": "keyword.operator.format.vesta"
+                        },
+                        "5": {
+                            "name": "constant.numeric.integer.vesta"
+                        }
                     }
                 },
-                { "include": "$self" }
+                {
+                    "include": "$self"
+                }
             ]
         },
-
         "characters": {
             "name": "string.quoted.single.vesta",
             "match": "'(\\\\(u\\{[0-9a-fA-F]+\\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[0nrtvfabe\\\\'\"])|[^'\\\\])'",
             "captures": {
-                "1": { "name": "constant.character.escape.vesta" }
+                "1": {
+                    "name": "constant.character.escape.vesta"
+                }
             }
         },
-
         "numbers": {
             "patterns": [
                 {
@@ -259,14 +375,17 @@
                 }
             ]
         },
-
         "asm-statement": {
             "comment": "Ensamblador en linea dentro de una funcion.  La cabecera admite calificadores (volatile, raw, nomem, preserves_flags, pure, noinfer), una lista de operandos que ata registros a expresiones de Vesta, y una clausula clobber tanto delante como detras del bloque.",
             "name": "meta.asm.vesta",
             "begin": "\\b(asm)\\b((?:\\s+(?:volatile|raw|nomem|preserves_flags|pure|noinfer))*)\\s*(\\([^)]*\\))?\\s*((?:clobbers?\\s*\\([^)]*\\))?)\\s*(\\{)",
             "beginCaptures": {
-                "1": { "name": "keyword.other.asm.vesta" },
-                "2": { "name": "storage.modifier.vesta" },
+                "1": {
+                    "name": "keyword.other.asm.vesta"
+                },
+                "2": {
+                    "name": "storage.modifier.vesta"
+                },
                 "3": {
                     "name": "meta.asm.operands.vesta",
                     "patterns": [
@@ -274,18 +393,28 @@
                             "comment": "Cada enlace es <clase> <nombre> [= <expr>]; la clase es reg (elige el compilador), un registro fijo, un banco vectorial o mem",
                             "match": "\\b(reg|mem|imm|[xyz]mm)\\s+([A-Za-z_][A-Za-z0-9_]*)",
                             "captures": {
-                                "1": { "name": "storage.type.asm-operand.vesta" },
-                                "2": { "name": "variable.parameter.asm.vesta" }
+                                "1": {
+                                    "name": "storage.type.asm-operand.vesta"
+                                },
+                                "2": {
+                                    "name": "variable.parameter.asm.vesta"
+                                }
                             }
                         },
                         {
                             "match": "\\b(r[abcd]x|r(si|di|bp|sp)|r([89]|1[0-5]))\\s+([A-Za-z_][A-Za-z0-9_]*)",
                             "captures": {
-                                "1": { "name": "variable.language.register.vesta" },
-                                "4": { "name": "variable.parameter.asm.vesta" }
+                                "1": {
+                                    "name": "variable.language.register.vesta"
+                                },
+                                "4": {
+                                    "name": "variable.parameter.asm.vesta"
+                                }
                             }
                         },
-                        { "include": "$self" }
+                        {
+                            "include": "$self"
+                        }
                     ]
                 },
                 "4": {
@@ -299,79 +428,123 @@
                             "match": "\\b(memory|flags|cc)\\b",
                             "name": "support.constant.asm.vesta"
                         },
-                        { "include": "#strings" },
+                        {
+                            "include": "#strings"
+                        },
                         {
                             "name": "variable.language.register.vesta",
                             "match": "\\b[a-z][a-z0-9]*\\b"
                         }
                     ]
                 },
-                "5": { "name": "punctuation.section.block.begin.vesta" }
+                "5": {
+                    "name": "punctuation.section.block.begin.vesta"
+                }
             },
             "end": "\\}",
             "endCaptures": {
-                "0": { "name": "punctuation.section.block.end.vesta" }
+                "0": {
+                    "name": "punctuation.section.block.end.vesta"
+                }
             },
             "contentName": "meta.embedded.block.nasm",
-            "patterns": [{ "include": "#asm-body" }]
+            "patterns": [
+                {
+                    "include": "#asm-body"
+                }
+            ]
         },
-
         "asm-declaration": {
             "comment": "Bloque de ensamblador con nombre, en el nivel superior.  Es el que se coloca con @bits, @section y @at para escribir un sector de arranque o el arranque de un nucleo, y ahi el compilador SI evalua times y $/$$.",
             "name": "meta.asm.declaration.vesta",
             "begin": "\\b(asm)\\s+(?!(?:volatile|raw|nomem|preserves_flags|pure|noinfer)\\b)([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
             "beginCaptures": {
-                "1": { "name": "keyword.other.asm.vesta" },
-                "2": { "name": "entity.name.function.asm.vesta" },
-                "3": { "name": "punctuation.section.block.begin.vesta" }
+                "1": {
+                    "name": "keyword.other.asm.vesta"
+                },
+                "2": {
+                    "name": "entity.name.function.asm.vesta"
+                },
+                "3": {
+                    "name": "punctuation.section.block.begin.vesta"
+                }
             },
             "end": "\\}",
             "endCaptures": {
-                "0": { "name": "punctuation.section.block.end.vesta" }
+                "0": {
+                    "name": "punctuation.section.block.end.vesta"
+                }
             },
             "contentName": "meta.embedded.block.nasm",
-            "patterns": [{ "include": "#asm-body" }]
+            "patterns": [
+                {
+                    "include": "#asm-body"
+                }
+            ]
         },
-
         "bytes-block": {
             "comment": "Bloque de datos con nombre: db/dw/dd/dq/times, numeros, caracteres, cadenas y referencias a simbolos.  Comparte sintaxis con las directivas de datos del ensamblador, asi que comparte gramatica.",
             "name": "meta.bytes.vesta",
             "begin": "\\b(bytes)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
             "beginCaptures": {
-                "1": { "name": "storage.type.vesta" },
-                "2": { "name": "entity.name.constant.bytes.vesta" },
-                "3": { "name": "punctuation.section.block.begin.vesta" }
+                "1": {
+                    "name": "storage.type.vesta"
+                },
+                "2": {
+                    "name": "entity.name.constant.bytes.vesta"
+                },
+                "3": {
+                    "name": "punctuation.section.block.begin.vesta"
+                }
             },
             "end": "\\}",
             "endCaptures": {
-                "0": { "name": "punctuation.section.block.end.vesta" }
+                "0": {
+                    "name": "punctuation.section.block.end.vesta"
+                }
             },
             "contentName": "meta.embedded.block.nasm",
-            "patterns": [{ "include": "#asm-body" }]
+            "patterns": [
+                {
+                    "include": "#asm-body"
+                }
+            ]
         },
-
         "asm-body": {
             "comment": "Cuerpo de cualquiera de los tres bloques.  El ensamblador de Vesta ES NASM, asi que dentro manda su gramatica entera y no una imitacion.  Antes van los comentarios de Vesta: el cuerpo lo recorre el lexer del lenguaje para encontrar la llave de cierre, de modo que ahi valen tanto el punto y coma de NASM como las dos barras de Vesta, y en el corpus se usan las dos.",
             "patterns": [
-                { "include": "#comments" },
-                { "include": "source.nasm" }
+                {
+                    "include": "#comments"
+                },
+                {
+                    "include": "source.nasm"
+                }
             ]
         },
-
         "imports": {
             "comment": "import std.io;  |  import std.memory only memset, memcpy;  |  import std.syscall only *;  |  import \"vx_async\" only vasync_run;  |  public import ...;",
             "begin": "\\b(?:(public|internal)\\s+)?(?:(extern)\\s+)?(import)\\b",
             "beginCaptures": {
-                "1": { "name": "storage.modifier.vesta" },
-                "2": { "name": "keyword.other.vesta" },
-                "3": { "name": "keyword.control.import.vesta" }
+                "1": {
+                    "name": "storage.modifier.vesta"
+                },
+                "2": {
+                    "name": "keyword.other.vesta"
+                },
+                "3": {
+                    "name": "keyword.control.import.vesta"
+                }
             },
             "end": ";",
             "endCaptures": {
-                "0": { "name": "punctuation.terminator.vesta" }
+                "0": {
+                    "name": "punctuation.terminator.vesta"
+                }
             },
             "patterns": [
-                { "include": "#comments" },
+                {
+                    "include": "#comments"
+                },
                 {
                     "name": "string.quoted.double.module.vesta",
                     "match": "\"[^\"]*\""
@@ -392,83 +565,124 @@
                     "name": "entity.name.type.vesta",
                     "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
                 },
-                { "include": "#punctuation" }
+                {
+                    "include": "#punctuation"
+                }
             ]
         },
-
         "declarations": {
             "patterns": [
                 {
                     "comment": "Declaracion de tipo, con lista de parametros genericos opcional",
                     "match": "\\b(class|struct|union|interface|enum|concept)\\s+([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
-                        "1": { "name": "storage.type.vesta" },
-                        "2": { "name": "entity.name.type.vesta" }
+                        "1": {
+                            "name": "storage.type.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.type.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Bloque de extension o implementacion de concepto",
                     "match": "\\b(extension|impl)\\s+([A-Za-z_][A-Za-z0-9_]*)(?:\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*))?",
                     "captures": {
-                        "1": { "name": "keyword.other.vesta" },
-                        "2": { "name": "entity.name.type.vesta" },
-                        "3": { "name": "keyword.other.vesta" },
-                        "4": { "name": "entity.name.type.vesta" }
+                        "1": {
+                            "name": "keyword.other.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.type.vesta"
+                        },
+                        "3": {
+                            "name": "keyword.other.vesta"
+                        },
+                        "4": {
+                            "name": "entity.name.type.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Espacio de nombres, con path punteado",
                     "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_.]*)",
                     "captures": {
-                        "1": { "name": "keyword.other.namespace.vesta" },
-                        "2": { "name": "entity.name.namespace.vesta" }
+                        "1": {
+                            "name": "keyword.other.namespace.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.namespace.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Alias de tipo: typedef T Nombre;  using Nombre = T;",
                     "match": "\\b(typedef)\\s+([A-Za-z_][A-Za-z0-9_<>,\\s*]*?)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=;)",
                     "captures": {
-                        "1": { "name": "keyword.other.vesta" },
-                        "2": { "name": "entity.name.type.alias-source.vesta" },
-                        "3": { "name": "entity.name.type.vesta" }
+                        "1": {
+                            "name": "keyword.other.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.type.alias-source.vesta"
+                        },
+                        "3": {
+                            "name": "entity.name.type.vesta"
+                        }
                     }
                 },
                 {
                     "match": "\\b(using)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?==)",
                     "captures": {
-                        "1": { "name": "keyword.other.vesta" },
-                        "2": { "name": "entity.name.type.vesta" }
+                        "1": {
+                            "name": "keyword.other.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.type.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Instanciacion: new Tipo(...) / new Tipo<T>(...)",
                     "match": "\\b(new)\\s+([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
-                        "1": { "name": "keyword.control.new.vesta" },
-                        "2": { "name": "entity.name.type.vesta" }
+                        "1": {
+                            "name": "keyword.control.new.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.type.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Bloque de biblioteca nativa: extern \"kernel32.dll\" { ... }",
                     "match": "\\b(extern)\\s+(\"[^\"]*\")",
                     "captures": {
-                        "1": { "name": "keyword.other.vesta" },
-                        "2": { "name": "string.quoted.double.vesta" }
+                        "1": {
+                            "name": "keyword.other.vesta"
+                        },
+                        "2": {
+                            "name": "string.quoted.double.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Almacenamiento en registro fijo: register(\"rax\") i64 r",
                     "match": "\\b(register)\\s*\\(\\s*(\"[a-z0-9]+\")\\s*\\)",
                     "captures": {
-                        "1": { "name": "storage.modifier.vesta" },
-                        "2": { "name": "variable.language.register.vesta" }
+                        "1": {
+                            "name": "storage.modifier.vesta"
+                        },
+                        "2": {
+                            "name": "variable.language.register.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Clausula de restriccion de un generico: where T: Numeric + Ordered",
                     "begin": "\\b(where)\\b",
                     "beginCaptures": {
-                        "1": { "name": "keyword.other.vesta" }
+                        "1": {
+                            "name": "keyword.other.vesta"
+                        }
                     },
                     "end": "(?=\\{|;|$)",
                     "patterns": [
@@ -476,21 +690,25 @@
                             "name": "entity.name.type.concept.vesta",
                             "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
                         },
-                        { "include": "#operators" },
-                        { "include": "#punctuation" }
+                        {
+                            "include": "#operators"
+                        },
+                        {
+                            "include": "#punctuation"
+                        }
                     ]
                 }
             ]
         },
-
         "labels": {
             "comment": "Etiqueta de goto: nombre al principio de la linea seguido de dos puntos",
             "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*:(?!:|=)",
             "captures": {
-                "1": { "name": "entity.name.label.vesta" }
+                "1": {
+                    "name": "entity.name.label.vesta"
+                }
             }
         },
-
         "keywords": {
             "patterns": [
                 {
@@ -525,7 +743,6 @@
                 }
             ]
         },
-
         "types": {
             "patterns": [
                 {
@@ -560,7 +777,6 @@
                 }
             ]
         },
-
         "constants": {
             "patterns": [
                 {
@@ -579,7 +795,6 @@
                 }
             ]
         },
-
         "builtins": {
             "comment": "Funciones que el lenguaje reconoce sin que nadie las declare.  La lista sale de la tabla de builtins del compilador.",
             "patterns": [
@@ -640,26 +855,28 @@
                 }
             ]
         },
-
         "functions": {
             "patterns": [
                 {
                     "comment": "Llamada generica explicita: nombre<T>(...)",
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=<[A-Za-z_0-9,*\\s<>]+>\\s*\\()",
                     "captures": {
-                        "1": { "name": "entity.name.function.vesta" }
+                        "1": {
+                            "name": "entity.name.function.vesta"
+                        }
                     }
                 },
                 {
                     "comment": "Definicion o llamada: nombre seguido de parentesis",
                     "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
                     "captures": {
-                        "1": { "name": "entity.name.function.vesta" }
+                        "1": {
+                            "name": "entity.name.function.vesta"
+                        }
                     }
                 }
             ]
         },
-
         "operators": {
             "comment": "El orden es el que manda: quien va antes gana.  Los operadores de varios caracteres tienen que ir DELANTE de los de uno, o '-' se come la flecha de '->' y '=' la de '=>', y cada mitad acaba con un color distinto.",
             "patterns": [
@@ -721,17 +938,30 @@
                 }
             ]
         },
-
         "punctuation": {
             "patterns": [
-                { "name": "punctuation.terminator.vesta", "match": ";" },
-                { "name": "punctuation.separator.vesta", "match": "[,.]" },
-                { "name": "punctuation.section.block.vesta", "match": "[{}]" },
-                { "name": "punctuation.section.brackets.vesta", "match": "[\\[\\]]" },
-                { "name": "punctuation.section.parens.vesta", "match": "[()]" }
+                {
+                    "name": "punctuation.terminator.vesta",
+                    "match": ";"
+                },
+                {
+                    "name": "punctuation.separator.vesta",
+                    "match": "[,.]"
+                },
+                {
+                    "name": "punctuation.section.block.vesta",
+                    "match": "[{}]"
+                },
+                {
+                    "name": "punctuation.section.brackets.vesta",
+                    "match": "[\\[\\]]"
+                },
+                {
+                    "name": "punctuation.section.parens.vesta",
+                    "match": "[()]"
+                }
             ]
         },
-
         "identifiers": {
             "patterns": [
                 {

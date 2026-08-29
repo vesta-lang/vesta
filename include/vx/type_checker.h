@@ -1659,6 +1659,28 @@ class TypeChecker {
      * @param marca Que camino toma la bajada.
      * @return El tipo que devuelve el metodo.
      */
+    /**
+     * @brief Dice por que no hay tal metodo, y comprueba los argumentos igual.
+     *
+     * No siempre es que no exista: puede ser un CAMPO que guarda una funcion,
+     * o un metodo que esta instanciacion dejo fuera por su condicion -- y ahi
+     * "no tiene ese metodo" seria enganoso.  Estaba escrito dos veces, clase y
+     * struct, con la unica diferencia de como se nombra el tipo.
+     *
+     * @param e      La llamada.
+     * @param fa     El acceso `obj.metodo`.
+     * @param campos Los campos del tipo.
+     * @param tipo   Nombre del tipo, para el mensaje.
+     * @param clase_o_struct Como llamarlo en el mensaje.
+     * @param llamada_indirecta Que hacer si el nombre es un campo funcion.
+     * @return El tipo del resultado, o ninguno.
+     */
+    Type report_method_missing(
+        ast::CallExpr *e, ast::FieldAccessExpr *fa,
+        const std::vector<StructFieldInfo> &campos, const std::string &tipo,
+        const char *clase_o_struct,
+        const std::function<Type(const Type &)> &llamada_indirecta);
+
     Type check_static_method_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                                   const ClassMethodInfo &smtd,
                                   const std::string &donde, uint8_t marca);

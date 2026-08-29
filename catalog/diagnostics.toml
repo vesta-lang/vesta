@@ -510,3 +510,176 @@ es = "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefact
 [VX7025]
 en = "assembly block with wide-bank operands (xmm/ymm/zmm) cannot run this way: their values do not fit in the integer list the operands travel in, so they neither go in nor come out"
 es = "bloque de ensamblador con operandos del banco ancho (xmm/ymm/zmm) no ejecutable por esta via: sus valores no caben en la lista de enteros por la que viajan los operandos, asi que ni entran ni salen"
+
+# ---------------------------------------------------------------------------
+# VX9xxx -- texto de las herramientas (CLI y servidor de lenguaje).
+#
+# No son diagnosticos: son las etiquetas con las que el editor ensena lo que el
+# compilador sabe de un simbolo.  Van al catalogo por la misma razon que los
+# errores -- que anadir un idioma no obligue a tocar el codigo --, y porque una
+# ventana mitad traducida es peor que una sin traducir.
+#
+# Lo que NO se traduce nunca sigue igual aqui: los nombres de tipo, los
+# identificadores del usuario y los atributos del lenguaje viajan como
+# argumentos, no como texto.
+# ---------------------------------------------------------------------------
+
+[VX9100]
+en = "Container: `{0}`"
+es = "Contenedor: `{0}`"
+
+[VX9101]
+en = "Complexity: **{0}**"
+es = "Complejidad: **{0}**"
+
+[VX9102]
+en = "(own body {0})"
+es = "(cuerpo propio {0})"
+
+[VX9103]
+en = "Declared: `{0}`"
+es = "Declarada: `{0}`"
+
+[VX9104]
+en = "**does not match what was inferred**"
+es = "**no cuadra con lo inferido**"
+
+[VX9105]
+en = "Contracts: {0}"
+es = "Contratos: {0}"
+
+[VX9106]
+en = "**Parameters**"
+es = "**Parametros**"
+
+[VX9107]
+en = "**Returns:**"
+es = "**Devuelve:**"
+
+[VX9108]
+en = "**Throws:**"
+es = "**Lanza:**"
+
+[VX9109]
+en = "**See:**"
+es = "**Ver:**"
+
+[VX9110]
+en = "**Note:**"
+es = "**Nota:**"
+
+[VX9111]
+en = "**Warning:**"
+es = "**Aviso:**"
+
+[VX9112]
+en = "**Since:**"
+es = "**Desde:**"
+
+[VX9113]
+en = "**Deprecated:**"
+es = "**Obsoleto:**"
+
+[VX9114]
+en = "**Declared complexity:**"
+es = "**Complejidad declarada:**"
+
+[VX9115]
+en = "Value: **{0}**"
+es = "Valor: **{0}**"
+
+[VX9116]
+en = "(internal tag {0})"
+es = "(etiqueta interna {0})"
+
+[VX9117]
+en = "In hexadecimal: `{0}`"
+es = "En hexadecimal: `{0}`"
+
+[VX9118]
+en = "Carries {0} payload field(s)."
+es = "Lleva {0} campo(s) de carga util."
+
+[VX9119]
+en = "The enum takes up {0} bytes."
+es = "El enum ocupa {0} bytes."
+
+[VX9120]
+en = "Offset: **+{0}** (`{1}`)  Size: **{2}** byte(s)"
+es = "Desplazamiento: **+{0}** (`{1}`)  Tamano: **{2}** byte(s)"
+
+[VX9121]
+en = "Bit field: bits {0}..{1} of the word at +{2}"
+es = "Campo de bits: bits {0}..{1} de la palabra en +{2}"
+
+[VX9122]
+en = "Padding before: **{0}** byte(s)"
+es = "Relleno antes: **{0}** byte(s)"
+
+[VX9123]
+en = "Padding at the end of the type: **{0}** byte(s)"
+es = "Relleno al final del tipo: **{0}** byte(s)"
+
+[VX9124]
+en = "In `{0}`: {1} bytes, aligned to {2}"
+es = "En `{0}`: {1} bytes, alineado a {2}"
+
+[VX9125]
+en = "union"
+es = "union"
+
+[VX9126]
+en = "overlay view"
+es = "vista superpuesta"
+
+[VX9127]
+en = "with method table"
+es = "con tabla de metodos"
+
+[VX9130]
+en = "function"
+es = "funcion"
+
+[VX9131]
+en = "class"
+es = "clase"
+
+[VX9132]
+en = "struct"
+es = "struct"
+
+[VX9133]
+en = "enum"
+es = "enum"
+
+[VX9134]
+en = "type alias"
+es = "alias de tipo"
+
+[VX9135]
+en = "variable"
+es = "variable"
+
+[VX9136]
+en = "parameter"
+es = "parametro"
+
+[VX9137]
+en = "method"
+es = "metodo"
+
+[VX9138]
+en = "field"
+es = "campo"
+
+[VX9139]
+en = "enum variant"
+es = "variante de enum"
+
+[VX9140]
+en = "concept"
+es = "concepto"
+
+[VX9141]
+en = "symbol"
+es = "simbolo"

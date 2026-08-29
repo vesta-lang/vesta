@@ -1,0 +1,27 @@
+namespace ejemplos.ctor_no_es_metodo;
+
+// NEGATIVO: un constructor no es un metodo de instancia.
+//
+// Los constructores viven en la MISMA lista que los metodos del tipo, asi que
+// buscar solo por nombre encuentra el constructor.  La busqueda estaba escrita
+// dos veces y solo la de las clases se los saltaba, con lo que `k.K(5)` se
+// rechazaba y `s.S(5)` -- lo mismo, sobre un struct -- se colaba y se
+// type-checkeaba como una llamada que devuelve void.
+//
+// Es la trampa clasica de esa estructura, y ya mordio otra vez en este mismo
+// refactor: convertir un bucle de busqueda en un `find_method` generico rompio
+// una prueba, porque el generico devolvia el primero que coincidia de nombre y
+// el primero era el constructor.
+
+struct S {
+    i64 v;
+    S(i64 n) { this.v = n; }
+    i64 dame() { return this.v; }
+}
+
+i32 main() {
+    S s = S(1);
+    // El constructor NO se puede llamar como metodo de instancia.
+    i64 a = s.S(5);
+    return (i32) a;
+}

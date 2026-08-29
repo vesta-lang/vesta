@@ -3,27 +3,49 @@
     "name": "NASM",
     "scopeName": "source.nasm",
     "patterns": [
-        { "include": "#comments" },
-        { "include": "#preprocessor" },
-        { "include": "#labels" },
-        { "include": "#directives" },
-        { "include": "#instruction" },
-        { "include": "#strings" },
-        { "include": "#numbers" },
-        { "include": "#registers" },
-        { "include": "#size-specifiers" },
-        { "include": "#memory" },
-        { "include": "#special" },
-        { "include": "#operators" }
+        {
+            "include": "#comments"
+        },
+        {
+            "include": "#preprocessor"
+        },
+        {
+            "include": "#labels"
+        },
+        {
+            "include": "#directives"
+        },
+        {
+            "include": "#instruction"
+        },
+        {
+            "include": "#strings"
+        },
+        {
+            "include": "#numbers"
+        },
+        {
+            "include": "#registers"
+        },
+        {
+            "include": "#size-specifiers"
+        },
+        {
+            "include": "#memory"
+        },
+        {
+            "include": "#special"
+        },
+        {
+            "include": "#operators"
+        }
     ],
     "repository": {
-
         "comments": {
             "name": "comment.line.semicolon.nasm",
             "begin": ";",
             "end": "$"
         },
-
         "preprocessor": {
             "comment": "Directivas del preprocesador de NASM, que empiezan por porcentaje",
             "patterns": [
@@ -31,13 +53,21 @@
                     "name": "meta.preprocessor.macro.nasm",
                     "begin": "^\\s*(%)(macro|imacro|endmacro|endm|rmacro|irmacro)\\b",
                     "beginCaptures": {
-                        "1": { "name": "punctuation.definition.directive.nasm" },
-                        "2": { "name": "keyword.control.directive.nasm" }
+                        "1": {
+                            "name": "punctuation.definition.directive.nasm"
+                        },
+                        "2": {
+                            "name": "keyword.control.directive.nasm"
+                        }
                     },
                     "end": "$",
                     "patterns": [
-                        { "include": "#comments" },
-                        { "include": "#numbers" },
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#numbers"
+                        },
                         {
                             "name": "entity.name.function.macro.nasm",
                             "match": "\\b[A-Za-z_.?][A-Za-z0-9_.?$#@~]*\\b"
@@ -48,16 +78,30 @@
                     "name": "meta.preprocessor.nasm",
                     "begin": "^\\s*(%)([a-z_]+)\\b",
                     "beginCaptures": {
-                        "1": { "name": "punctuation.definition.directive.nasm" },
-                        "2": { "name": "keyword.control.directive.nasm" }
+                        "1": {
+                            "name": "punctuation.definition.directive.nasm"
+                        },
+                        "2": {
+                            "name": "keyword.control.directive.nasm"
+                        }
                     },
                     "end": "$",
                     "patterns": [
-                        { "include": "#comments" },
-                        { "include": "#strings" },
-                        { "include": "#numbers" },
-                        { "include": "#registers" },
-                        { "include": "#operators" }
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#strings"
+                        },
+                        {
+                            "include": "#numbers"
+                        },
+                        {
+                            "include": "#registers"
+                        },
+                        {
+                            "include": "#operators"
+                        }
                     ]
                 },
                 {
@@ -67,28 +111,34 @@
                 }
             ]
         },
-
         "labels": {
             "patterns": [
                 {
                     "comment": "Etiqueta local: empieza por punto y pertenece a la ultima global",
                     "match": "^\\s*(\\.[A-Za-z0-9_.?$#@~]+)(:)?",
                     "captures": {
-                        "1": { "name": "entity.name.label.local.nasm" },
-                        "2": { "name": "punctuation.separator.label.nasm" }
+                        "1": {
+                            "name": "entity.name.label.local.nasm"
+                        },
+                        "2": {
+                            "name": "punctuation.separator.label.nasm"
+                        }
                     }
                 },
                 {
                     "comment": "Etiqueta global, con dos puntos o sin ellos (NASM los admite optativos)",
                     "match": "^\\s*([A-Za-z_?][A-Za-z0-9_.?$#@~]*)(:)",
                     "captures": {
-                        "1": { "name": "entity.name.label.nasm" },
-                        "2": { "name": "punctuation.separator.label.nasm" }
+                        "1": {
+                            "name": "entity.name.label.nasm"
+                        },
+                        "2": {
+                            "name": "punctuation.separator.label.nasm"
+                        }
                     }
                 }
             ]
         },
-
         "directives": {
             "patterns": [
                 {
@@ -103,33 +153,35 @@
                 }
             ]
         },
-
         "instruction": {
             "comment": "Primera palabra de la linea (tras los prefijos): el mnemonico.  Se reconoce por POSICION y no por lista, para que valga cualquier instruccion del juego, incluidas las que se anadan manana.  Las directivas quedan excluidas a mano: aparecen en el mismo sitio que un mnemonico y, como esta regla empieza a emparejar en el margen, ganaria siempre a la de directivas aunque vaya despues.",
             "match": "(?i)(?:^|:)\\s*((?:(?:lock|rep|repe|repz|repne|repnz|bnd|xacquire|xrelease|notrack)\\s+)*)(?!(?:d[bwdqtoyz]|res[bwdqtoyz]|equ|times|incbin|section|segment|global|extern|common|static|bits|use16|use32|use64|org|align|alignb|absolute|default|cpu|float|struc|endstruc|istruc|iend|group)\\b)([A-Za-z][A-Za-z0-9._]*)",
             "captures": {
-                "1": { "name": "storage.modifier.prefix.nasm" },
-                "2": { "name": "keyword.operator.word.mnemonic.nasm" }
+                "1": {
+                    "name": "storage.modifier.prefix.nasm"
+                },
+                "2": {
+                    "name": "keyword.operator.word.mnemonic.nasm"
+                }
             }
         },
-
         "strings": {
             "patterns": [
                 {
                     "name": "string.quoted.double.nasm",
                     "begin": "\"",
-                    "end": "\""
+                    "end": "\"|$"
                 },
                 {
                     "name": "string.quoted.single.nasm",
                     "begin": "'",
-                    "end": "'"
+                    "end": "'|$"
                 },
                 {
                     "comment": "Cadena con acento grave: la unica de NASM que interpreta escapes",
                     "name": "string.quoted.other.backtick.nasm",
                     "begin": "`",
-                    "end": "`",
+                    "end": "`|$",
                     "patterns": [
                         {
                             "name": "constant.character.escape.nasm",
@@ -139,7 +191,6 @@
                 }
             ]
         },
-
         "numbers": {
             "comment": "NASM admite la base por prefijo y por sufijo, y las dos se usan",
             "patterns": [
@@ -165,7 +216,6 @@
                 }
             ]
         },
-
         "registers": {
             "patterns": [
                 {
@@ -190,36 +240,47 @@
                 }
             ]
         },
-
         "size-specifiers": {
             "name": "storage.modifier.size.nasm",
             "match": "(?i)\\b(byte|word|dword|qword|tword|oword|yword|zword|ptr|short|near|far|strict|nosplit|rel|abs)\\b"
         },
-
         "memory": {
             "comment": "Operando de memoria; dentro valen registros, numeros y aritmetica de direcciones",
             "name": "meta.memory.nasm",
             "begin": "\\[",
             "end": "\\]",
             "beginCaptures": {
-                "0": { "name": "punctuation.section.brackets.begin.nasm" }
+                "0": {
+                    "name": "punctuation.section.brackets.begin.nasm"
+                }
             },
             "endCaptures": {
-                "0": { "name": "punctuation.section.brackets.end.nasm" }
+                "0": {
+                    "name": "punctuation.section.brackets.end.nasm"
+                }
             },
             "patterns": [
-                { "include": "#registers" },
-                { "include": "#size-specifiers" },
-                { "include": "#numbers" },
-                { "include": "#special" },
-                { "include": "#operators" },
+                {
+                    "include": "#registers"
+                },
+                {
+                    "include": "#size-specifiers"
+                },
+                {
+                    "include": "#numbers"
+                },
+                {
+                    "include": "#special"
+                },
+                {
+                    "include": "#operators"
+                },
                 {
                     "name": "variable.other.symbol.nasm",
                     "match": "\\b[A-Za-z_.?][A-Za-z0-9_.?$#@~]*\\b"
                 }
             ]
         },
-
         "special": {
             "patterns": [
                 {
@@ -234,7 +295,6 @@
                 }
             ]
         },
-
         "operators": {
             "name": "keyword.operator.nasm",
             "match": "(<<|>>|//|%%|[+\\-*/&|^~!])"

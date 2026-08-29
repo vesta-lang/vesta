@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -44,6 +45,7 @@
 
 #include "aot/aot_analyze.h"
 #include "analyze/bigo.h"
+#include "lsp/symbol_index.h" // uri_to_fs_path
 #include "ir/ssa_ir.h"
 #include "ir/ssa_ir_serialize.h"
 #include "jit/code_cache.h"
@@ -1923,10 +1925,16 @@ nlohmann::json Inspector::functions(const std::string &uri) {
 nlohmann::json Inspector::aot_compat(const std::string &uri,
                                      const std::string &tier) {
     if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
-    const DocAnalysis &an = engine_.analyze_document(uri, docs_.text(uri));
+    // El IR del modo NATIVO, no el del interprete: son distintos para el mismo
+    // fuente, y preguntar por el equivocado da un veredicto sobre un binario
+    // que no es el que se va a generar.
+    const AotBuild &build = aot_build(uri, docs_.text(uri));
     ir::IrModule mod;
-    if (!parse_post_opt_module(an.result, mod))
-        return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
+    if (build.ir_bytes.empty() ||
+        !ir::parse_ir_module_cache(build.ir_bytes, mod))
+        return {{"error",
+                 "el modulo no produjo IR en modo nativo (revisa los "
+                 "diagnosticos)"}};
 
     aot::AotTarget target;
     target.tier = tier_from_str(tier);
@@ -2079,19 +2087,18 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
     const bool mode32 = target_is_mode32(target);
     const std::string &doc_text = docs_.text(uri);
     ir::IrModule mod;
-    bool got_ir = false;
-    if (target.active()) {
-        vx::CompileOptions co;
-        co.module_name = "main";
-        co.native_poo = true; // la vista AOT usa el lowering nativo
-        vx::CompileResult cr = vx::compile_vx_source(doc_text, uri, co);
-        got_ir = parse_post_opt_module(cr, mod);
-    } else {
-        const DocAnalysis &an = engine_.analyze_document(uri, doc_text);
-        got_ir = parse_post_opt_module(an.result, mod);
-    }
+    // Siempre el IR del modo NATIVO, haya objetivo explicito o no.  Antes, sin
+    // objetivo, esta vista desensamblaba el IR del INTERPRETE: ensenaba codigo
+    // maquina que el modo nativo no genera, porque el mismo fuente baja
+    // distinto en cada modo.  Y sin objetivo es el caso por defecto.
+    const AotBuild &build =
+        aot_build(uri, doc_text, target.active() ? target.cache_key() : "");
+    const bool got_ir =
+        !build.ir_bytes.empty() && ir::parse_ir_module_cache(build.ir_bytes, mod);
     if (!got_ir)
-        return {{"error", "el modulo no produjo IR (revisa los diagnosticos)"}};
+        return {{"error",
+                 "el modulo no produjo IR en modo nativo (revisa los "
+                 "diagnosticos)"}};
 
     const ir::IrFunction *fn = pick_function(mod, function);
     if (!fn && !function.empty()) {
@@ -2101,7 +2108,8 @@ nlohmann::json Inspector::aot_asm(const std::string &uri,
         vx::CompileOptions co;
         co.module_name = "main";
         co.emit_comptime_fns = true;
-        if (target.active()) co.native_poo = true;
+        // Tambien aqui el lowering nativo: es la vista del modo nativo.
+        co.native_poo = true;
         vx::CompileResult cr2 = vx::compile_vx_source(doc_text, uri, co);
         ir::IrModule m2;
         if (parse_post_opt_module(cr2, m2)) {
@@ -2231,6 +2239,60 @@ std::pair<size_t, size_t> count_diags(const vx::CompileResult &res) {
 
 } // namespace
 
+const Inspector::AotBuild &Inspector::aot_build(const std::string &uri,
+                                                const std::string &text,
+                                                const std::string &target_key) {
+    const std::string key =
+        uri + "|" + std::to_string(fnv1a_hash(text)) + "|aot" + target_key;
+    auto it = aot_cache_.find(key);
+    if (it != aot_cache_.end()) return it->second;
+
+    vx::CompileOptions co;
+    co.module_name = "main";
+    // La semantica del modo nativo.  Es la que decide como baja cada
+    // constructo, y por tanto la unica sobre la que tiene sentido preguntar si
+    // el modo nativo puede con el.
+    co.native_poo = true;
+
+    // SIEMPRE como proyecto.  Compilar el fichero suelto solo funciona si no
+    // importa nada, y decidirlo mirando el fuente es un criterio mas que puede
+    // discrepar: cuando falla, los imports no resuelven y salen decenas de
+    // errores que no son del programa sino de como se le pregunto.  La unica
+    // excepcion es fisica, no de criterio: un buffer que aun no esta en disco
+    // no tiene raiz desde la que resolver nada.
+    const std::string fs_path = uri_to_fs_path(uri);
+    const bool en_disco = !fs_path.empty() && std::ifstream(fs_path).good();
+    vx::CompileResult res;
+    if (en_disco) {
+        // El texto vivo del editor manda sobre el del disco.
+        std::unordered_map<std::string, std::string> overlay;
+        overlay[fs_path] = text;
+        // Los directorios que hay por encima, para resolver los imports
+        // relativos a la raiz del proyecto aunque el fichero no sea la raiz.
+        std::vector<std::string> ancestros;
+        std::string d = fs_path;
+        const size_t barra = d.find_last_of("/\\");
+        if (barra != std::string::npos) d = d.substr(0, barra);
+        for (int nivel = 0; nivel < 40 && !d.empty(); ++nivel) {
+            ancestros.push_back(d);
+            const size_t s = d.find_last_of("/\\");
+            if (s == std::string::npos || s == 0 || (s == 2 && d[1] == ':'))
+                break;
+            d = d.substr(0, s);
+        }
+        res = vx::compile_vx_project(fs_path, co, &overlay, &ancestros);
+    } else {
+        res = vx::compile_vx_source(text, uri, co);
+    }
+
+    AotBuild build;
+    const std::pair<size_t, size_t> diags = count_diags(res);
+    build.errors = diags.first;
+    build.warnings = diags.second;
+    build.ir_bytes = res.ir_module_cache_bytes;
+    return aot_cache_.emplace(key, std::move(build)).first->second;
+}
+
 nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
                                 const std::string &tier) {
     if (!docs_.has(uri)) return {{"error", "documento no abierto"}};
@@ -2296,17 +2358,15 @@ nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
         m["mode"] = "aot";
         const std::string t = tier.empty() ? std::string("bare") : tier;
         m["tier"] = t;
-        // Recompilar con la semantica AOT para no reportar los constructos
-        // AOT-only como errores del modo interprete.
-        vx::CompileOptions co;
-        co.module_name = "main";
-        co.native_poo = true;
-        vx::CompileResult res = vx::compile_vx_source(text, uri, co);
-        auto [err, warn] = count_diags(res);
-        m["errors"] = static_cast<uint64_t>(err);
-        m["warnings"] = static_cast<uint64_t>(warn);
+        // La compilacion con la semantica nativa, por el mismo sitio que la
+        // usa `aot_compat`: si cada vista la hiciera por su cuenta acabarian
+        // contestando cosas distintas sobre el mismo programa.
+        const AotBuild &build = aot_build(uri, text);
+        m["errors"] = static_cast<uint64_t>(build.errors);
+        m["warnings"] = static_cast<uint64_t>(build.warnings);
         ir::IrModule mod;
-        if (!parse_post_opt_module(res, mod)) {
+        if (build.ir_bytes.empty() ||
+            !ir::parse_ir_module_cache(build.ir_bytes, mod)) {
             m["ok"] = false;
             m["compatible"] = false;
             m["note"] = "el modulo no produjo IR en modo AOT";
@@ -2326,7 +2386,7 @@ nlohmann::json Inspector::modes(const std::string &uri, const std::string &mode,
             nlohmann::json okfns = nlohmann::json::array();
             for (const auto &name : report.ok_functions)
                 okfns.push_back(name);
-            m["ok"] = !res.diagnostics.has_errors();
+            m["ok"] = (build.errors == 0);
             m["compatible"] = report.compatible;
             m["issues"] = std::move(issues);
             m["ok_functions"] = std::move(okfns);

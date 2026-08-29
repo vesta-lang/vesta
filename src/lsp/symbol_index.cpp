@@ -56,24 +56,30 @@
 #include <sys/stat.h>
 #endif
 
+#include "vx/diag/diag_catalog.h"
+
 namespace lsp {
 
-const char *symbol_kind_name(SymbolKind k) {
+std::string symbol_kind_name(SymbolKind k) {
+    // El texto sale del catalogo, no de aqui: el idioma lo elige el entorno y
+    // anadir uno nuevo no debe obligar a tocar este fichero.
+    const char *code = "VX9141";
     switch (k) {
-    case SymbolKind::Function: return "funcion";
-    case SymbolKind::Class: return "clase";
-    case SymbolKind::Struct: return "struct";
-    case SymbolKind::Enum: return "enum";
-    case SymbolKind::TypeAlias: return "alias de tipo";
-    case SymbolKind::Variable: return "variable";
-    case SymbolKind::Parameter: return "parametro";
-    case SymbolKind::Method: return "metodo";
-    case SymbolKind::Field: return "campo";
-    case SymbolKind::EnumVariant: return "variante de enum";
-    case SymbolKind::Concept: return "concepto";
+    case SymbolKind::Function: code = "VX9130"; break;
+    case SymbolKind::Class: code = "VX9131"; break;
+    case SymbolKind::Struct: code = "VX9132"; break;
+    case SymbolKind::Enum: code = "VX9133"; break;
+    case SymbolKind::TypeAlias: code = "VX9134"; break;
+    case SymbolKind::Variable: code = "VX9135"; break;
+    case SymbolKind::Parameter: code = "VX9136"; break;
+    case SymbolKind::Method: code = "VX9137"; break;
+    case SymbolKind::Field: code = "VX9138"; break;
+    case SymbolKind::EnumVariant: code = "VX9139"; break;
+    case SymbolKind::Concept: code = "VX9140"; break;
     case SymbolKind::Unknown:
-    default: return "simbolo";
+    default: break;
     }
+    return vx::diag::format(code);
 }
 
 const SymbolRef *DocSymbols::ref_at(size_t byte_offset) const {

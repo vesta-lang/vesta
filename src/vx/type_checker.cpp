@@ -10451,6 +10451,88 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
 }
 
 /**
+ * @brief Dice por que no hay tal metodo, y comprueba los argumentos igual.
+ *
+ * No siempre es que el metodo no exista.  Puede que el nombre sea el de un
+ * CAMPO que guarda una funcion -- y entonces `obj.cb(3)` es una llamada
+ * indirecta perfectamente valida --, o puede que el metodo exista en la
+ * plantilla y esta instanciacion lo haya DEJADO FUERA porque su condicion no se
+ * cumple, que es un caso donde decir "no tiene ese metodo" seria enganoso: lo
+ * tiene, pero no para este tipo.
+ *
+ * Los argumentos se comprueban aunque no haya a que llamar, para no callar un
+ * error que este dentro de uno de ellos.
+ *
+ * @param e      La llamada.
+ * @param fa     El acceso `obj.metodo`.
+ * @param campos Los campos del tipo, por si el nombre es uno que guarda una
+ *               funcion.
+ * @param tipo   Nombre del tipo, para el mensaje.
+ * @param clase_o_struct Como llamarlo ("la clase" / "el struct").
+ * @param llamada_indirecta Que hacer si el nombre resulta ser un campo funcion.
+ * @return El tipo del resultado: el de la llamada indirecta, o ninguno.
+ */
+Type TypeChecker::report_method_missing(
+    ast::CallExpr *e, ast::FieldAccessExpr *fa,
+    const std::vector<StructFieldInfo> &campos, const std::string &tipo,
+    const char *clase_o_struct,
+    const std::function<Type(const Type &)> &llamada_indirecta) {
+    /* Antes de dar el nombre por inexistente: puede ser un CAMPO que guarda una
+     * funcion, y entonces `obj.cb(3)` es una llamada indirecta valida. */
+    for (const auto &fld : campos)
+        if (fld.name == fa->field_name &&
+            fld.type.kind == PrimitiveKind::FUNCTION)
+            return llamada_indirecta(fld.type);
+
+    /* Si la plantilla lo declara pero esta instanciacion lo dejo fuera, se dice
+     * QUE condicion falta; "no tiene ese metodo" seria enganoso. */
+    std::string requiere;
+    auto uit = unavailable_methods_.find(tipo);
+    if (uit != unavailable_methods_.end())
+        for (const auto &pr : uit->second)
+            if (pr.first == fa->field_name) {
+                requiere = pr.second;
+                break;
+            }
+
+    if (!requiere.empty())
+        diags_.error(e->loc, "el metodo '" + fa->field_name +
+                                 "' no esta disponible para '" + tipo +
+                                 "' (requiere " + requiere + ")");
+    else
+        diags_.error(e->loc, std::string(clase_o_struct) + " '" + tipo +
+                                 "' no tiene un metodo '" + fa->field_name +
+                                 "'");
+
+    for (auto &a : e->args)
+        (void)check_expr(a.get());
+    return Type{};
+}
+
+/**
+ * @brief Busca un metodo de INSTANCIA por nombre.
+ *
+ * Se salta los constructores, y no es un detalle: viven en la misma lista que
+ * los metodos, asi que buscar solo por nombre deja llamar al constructor como
+ * si fuera un metodo -- `s.S(5)` --, que no es lo que nadie quiere decir.  La
+ * copia de las clases ya lo hacia y la de los structs no, con lo que la misma
+ * escritura se rechazaba en una y se colaba en la otra.
+ *
+ * @param metodos La lista del layout.
+ * @param nombre  El que se busca.
+ * @return El metodo, o nulo.
+ */
+static const ClassMethodInfo *
+find_instance_method(const std::vector<ClassMethodInfo> &metodos,
+                     const std::string &nombre) {
+    for (const auto &m : metodos) {
+        if (m.is_constructor) continue;
+        if (m.name == nombre) return &m;
+    }
+    return nullptr;
+}
+
+/**
  * @brief Busca un metodo ESTATICO por nombre en una lista de metodos.
  *
  * Se salta los constructores a proposito: viven en la misma lista que los
@@ -13689,14 +13771,6 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // CALLCLOSURE (fn lambda, fat-pointer de 16 bytes con env) segun
         // fn_is_raw.  NOTA: un campo lambda guarda el PUNTERO a un slot que
         // vive en stack -> el programador es responsable del lifetime.
-        auto find_fn_field = [&](const std::vector<StructFieldInfo> &flds)
-            -> const StructFieldInfo * {
-            for (const auto &fld : flds)
-                if (fld.name == fa->field_name &&
-                    fld.type.kind == PrimitiveKind::FUNCTION)
-                    return &fld;
-            return nullptr;
-        };
         // #4 metodos genericos: `obj.metodo<U>(args)` (explicito) o
         // `obj.metodo(args)` con U inferido.  Si lo es, monomorphiza +
         // reescribe fa->field_name al concreto (`metodo_<U>`) y deja que
@@ -13715,39 +13789,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 return Type{};
             }
             const StructLayout &slay = it_s->second;
-            const ClassMethodInfo *smtd = nullptr;
-            for (const auto &mm : slay.methods) {
-                if (mm.name == fa->field_name) {
-                    smtd = &mm;
-                    break;
-                }
-            }
-            if (!smtd) {
-                // No es metodo: ¿es un CAMPO puntero a funcion?  -> CALLIND.
-                if (const StructFieldInfo *ff = find_fn_field(slay.fields))
-                    return funcptr_field_call(ff->type);
-                // #6: ¿fue OMITIDO por su `where` en esta instanciacion?
-                std::string wreq;
-                auto uit = unavailable_methods_.find(bt.struct_name);
-                if (uit != unavailable_methods_.end())
-                    for (const auto &pr : uit->second)
-                        if (pr.first == fa->field_name) {
-                            wreq = pr.second;
-                            break;
-                        }
-                if (!wreq.empty())
-                    diags_.error(e->loc, "el metodo '" + fa->field_name +
-                                             "' no esta disponible para '" +
-                                             bt.struct_name + "' (requiere " +
-                                             wreq + ")");
-                else
-                    diags_.error(e->loc, "el struct '" + bt.struct_name +
-                                             "' no tiene un metodo '" +
-                                             fa->field_name + "'");
-                for (auto &a : e->args)
-                    (void)check_expr(a.get());
-                return Type{};
-            }
+            const ClassMethodInfo *smtd =
+                find_instance_method(slay.methods, fa->field_name);
+            if (!smtd)
+                return report_method_missing(e, fa, slay.fields, bt.struct_name,
+                                             "el struct", funcptr_field_call);
             check_method_args(e, *smtd, fa->field_name);
             fa->result_type = smtd->return_type;
             return smtd->return_type;
@@ -13767,40 +13813,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             return Type{};
         }
         const ClassLayout &cls = it->second;
-        const ClassMethodInfo *mtd = nullptr;
-        for (const auto &m : cls.methods) {
-            if (m.is_constructor) continue;
-            if (m.name == fa->field_name) {
-                mtd = &m;
-                break;
-            }
-        }
-        if (!mtd) {
-            // No es metodo: ¿es un CAMPO puntero a funcion?  -> CALLIND.
-            if (const StructFieldInfo *ff = find_fn_field(cls.fields))
-                return funcptr_field_call(ff->type);
-            // #6: ¿fue OMITIDO por su `where` en esta instanciacion?
-            std::string wreq;
-            auto uit = unavailable_methods_.find(bt.struct_name);
-            if (uit != unavailable_methods_.end())
-                for (const auto &pr : uit->second)
-                    if (pr.first == fa->field_name) {
-                        wreq = pr.second;
-                        break;
-                    }
-            if (!wreq.empty())
-                diags_.error(e->loc, "el metodo '" + fa->field_name +
-                                         "' no esta disponible para '" +
-                                         bt.struct_name + "' (requiere " +
-                                         wreq + ")");
-            else
-                diags_.error(e->loc, "la clase '" + bt.struct_name +
-                                         "' no tiene un metodo '" +
-                                         fa->field_name + "'");
-            for (auto &a : e->args)
-                (void)check_expr(a.get());
-            return Type{};
-        }
+        const ClassMethodInfo *mtd =
+            find_instance_method(cls.methods, fa->field_name);
+        if (!mtd)
+            return report_method_missing(e, fa, cls.fields, bt.struct_name,
+                                         "la clase", funcptr_field_call);
         // Enforcement de visibilidad en metodos (private = solo dentro
         // de la misma clase).  Buscamos el ClassMethodDecl original
         // en el AST para consultar el flag access.

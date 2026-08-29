@@ -443,6 +443,7 @@
         "package": "npx --yes @vscode/vsce package"
     },
     "dependencies": {
+        "package": "^1.0.1",
         "vscode-languageclient": "^10.1.0"
     },
     "devDependencies": {

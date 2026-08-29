@@ -287,6 +287,49 @@ class Inspector {
     /// Cache propia de vistas caras (diagramas + ir-pre) por clave compuesta
     /// "<uri>|<hash>|<vista>".  Evita recompilar peticiones identicas.
     std::unordered_map<std::string, std::string> view_cache_;
+
+    /**
+     * @struct AotBuild
+     * @brief El documento compilado con la semantica del modo NATIVO.
+     *
+     * El modo nativo no compila el mismo IR que el interprete: el mismo fuente
+     * baja distinto.  Un literal de cadena, por ejemplo, es un @c StringObject
+     * gestionado para el interprete y una vista sobre @c .rodata para el modo
+     * nativo, de modo que el primero emite @c strmake y el segundo no.
+     *
+     * Por eso las vistas que hablan del modo nativo tienen que mirar ESTE IR:
+     * juzgar su compatibilidad sobre el del interprete responde por un binario
+     * que no es el que se va a generar, y la respuesta no falla -- simplemente
+     * es de otro programa.
+     */
+    struct AotBuild {
+        /// IR post-optimizacion serializado; vacio si la compilacion no lo
+        /// produjo (errores en el fuente).
+        std::vector<uint8_t> ir_bytes;
+        size_t errors = 0;   ///< diagnosticos de error en este modo.
+        size_t warnings = 0; ///< avisos en este modo.
+    };
+
+    /// Compilaciones nativas ya hechas, por "<uri>|<hash>".  Cuesta una
+    /// compilacion entera y mas de una vista pregunta lo mismo.
+    std::unordered_map<std::string, AotBuild> aot_cache_;
+
+    /**
+     * @brief Compila el documento como lo hace el modo nativo, y lo cachea.
+     *
+     * @param uri        Documento.
+     * @param text       Texto vivo del documento.
+     * @param target_key Clave del objetivo activo (vacia = el anfitrion).  El
+     *                   objetivo cambia lo que sale -- decide las ramas
+     *                   @c \@Target y la convencion de llamada --, asi que
+     *                   forma parte de la identidad de la compilacion.  Quien
+     *                   pase una clave no vacia debe tener el objetivo puesto
+     *                   durante la llamada.
+     * @return La compilacion; reutilizada si ya se hizo para este mismo texto
+     *         y el mismo objetivo.
+     */
+    const AotBuild &aot_build(const std::string &uri, const std::string &text,
+                              const std::string &target_key = std::string());
 };
 
 } // namespace lsp

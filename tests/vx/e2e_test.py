@@ -3114,6 +3114,7 @@ r0_case("payloadvar486", "la carga de una variante admite lo mismo que un parame
 r0_case("companchos487", "un tipo estrecho sigue siendolo al ejecutar en compilacion: el registro es transporte, no tipo", "487_comptime_anchos.vx", 42, line=3772)
 r0_case("extimpl488", "extension e impl: metodos anadidos desde fuera con 0..3 parametros, sobre struct y sobre clase", "488_extension_impl.vx", 42, line=3774)
 r0_case("arguni489", "la MISMA expresion como argumento en las siete formas de llamar (funcion, ctor, metodo, estatico, struct, closure, variante)", "489_argumentos_uniformes.vx", 42, line=3776)
+fails_case("ctornomet490", "un constructor no se puede llamar como metodo de instancia (viven en la misma lista)", "490_ctor_no_es_metodo.vx", "no tiene un metodo", line=3778)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

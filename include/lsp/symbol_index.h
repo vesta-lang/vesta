@@ -70,8 +70,8 @@ enum class SymbolKind : uint8_t {
     Concept,     ///< concepto (predicado comptime; bound o predicado).
 };
 
-/// @brief Nombre legible de un @c SymbolKind (e.g. "funcion", "clase").
-const char *symbol_kind_name(SymbolKind k);
+/// @brief Nombre legible de un @c SymbolKind, en el idioma activo.
+std::string symbol_kind_name(SymbolKind k);
 
 /**
  * @struct SymbolDef

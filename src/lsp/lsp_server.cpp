@@ -16,6 +16,7 @@
  */
 
 #include "lsp/lsp_server.h"
+#include "vx/diag/diag_catalog.h"
 
 #include "lsp/builtin_docs.h"
 #include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
@@ -562,14 +563,17 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
         if (t == "*/" || t.rfind("* ", 0) == 0 || t == "*" ||
             t.rfind("/**", 0) == 0 || t.rfind("/*", 0) == 0) {
             std::string c = t;
-            // limpiar delimitadores.
+            // Limpiar delimitadores.  El CIERRE va primero: quitandolo despues
+            // del asterisco de la izquierda, una linea que solo tiene `*/` se
+            // quedaba en una barra suelta que aparecia dentro de la
+            // documentacion.
+            if (c.size() >= 2 && c.compare(c.size() - 2, 2, "*/") == 0)
+                c = c.substr(0, c.size() - 2);
             if (c.rfind("/**", 0) == 0)
                 c = c.substr(3);
             else if (c.rfind("/*", 0) == 0)
                 c = c.substr(2);
             if (!c.empty() && c[0] == '*') c = c.substr(1);
-            if (c.size() >= 2 && c.substr(c.size() - 2) == "*/")
-                c = c.substr(0, c.size() - 2);
             c = trim(c);
             if (!c.empty()) doc.push_back(c);
             pos = prev_start;
@@ -608,6 +612,148 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
     for (auto it = doc.rbegin(); it != doc.rend(); ++it) {
         if (!out.empty()) out += "\n";
         out += *it;
+    }
+    return out;
+}
+
+/**
+ * @brief Da forma de markdown a un comentario de documentacion.
+ *
+ * El comentario se escribe en lineas, pero markdown junta las lineas seguidas
+ * en un parrafo: sin dar forma, la descripcion y todos los @param acaban en un
+ * bloque corrido donde no se distingue donde empieza cada cosa.
+ *
+ * Las etiquetas de Doxygen pasan a ser lo que son: los parametros, una lista
+ * con su nombre destacado; lo que se devuelve y lo que se lanza, lineas
+ * propias.  El texto libre se deja fluir, que es lo que quiere la prosa.
+ *
+ * @param doc Comentario tal y como se escribio, linea a linea.
+ * @return El mismo contenido listo para mostrar.
+ */
+std::string doc_to_markdown(const std::string &doc) {
+    if (doc.empty()) return doc;
+
+    auto trim = [](const std::string &s) -> std::string {
+        const size_t a = s.find_first_not_of(" \t\r");
+        if (a == std::string::npos) return std::string();
+        const size_t b = s.find_last_not_of(" \t\r");
+        return s.substr(a, b - a + 1);
+    };
+
+    std::string descripcion;   ///< texto libre, que fluye.
+    std::vector<std::string> parametros;
+    std::vector<std::string> otras; ///< devuelve / lanza / ve / nota.
+    // A que se le esta anadiendo el texto que continua en la linea siguiente.
+    enum class Destino { Descripcion, Parametro, Otra } destino =
+        Destino::Descripcion;
+
+    size_t pos = 0;
+    while (pos <= doc.size()) {
+        const size_t nl = doc.find('\n', pos);
+        const std::string linea =
+            trim(doc.substr(pos, nl == std::string::npos ? std::string::npos
+                                                         : nl - pos));
+        pos = (nl == std::string::npos) ? doc.size() + 1 : nl + 1;
+
+        if (linea.empty()) {
+            // Una linea en blanco separa parrafos y corta la continuacion.
+            if (destino == Destino::Descripcion && !descripcion.empty() &&
+                descripcion.size() >= 2 &&
+                descripcion.compare(descripcion.size() - 2, 2, "\n\n") != 0) {
+                descripcion += "\n\n";
+            }
+            destino = Destino::Descripcion;
+            continue;
+        }
+
+        if (linea[0] == '@') {
+            const size_t fin_tag = linea.find_first_of(" \t");
+            const std::string tag = linea.substr(
+                1, (fin_tag == std::string::npos ? linea.size() : fin_tag) - 1);
+            const std::string resto =
+                (fin_tag == std::string::npos) ? std::string()
+                                               : trim(linea.substr(fin_tag));
+            if (tag == "param" || tag == "tparam") {
+                // El primer termino es el nombre del parametro.
+                const size_t fin_nombre = resto.find_first_of(" \t");
+                const std::string nombre =
+                    (fin_nombre == std::string::npos)
+                        ? resto
+                        : resto.substr(0, fin_nombre);
+                const std::string texto =
+                    (fin_nombre == std::string::npos)
+                        ? std::string()
+                        : trim(resto.substr(fin_nombre));
+                parametros.push_back("- `" + nombre + "`" +
+                                     (texto.empty() ? "" : " -- " + texto));
+                destino = Destino::Parametro;
+                continue;
+            }
+            if (tag == "brief") {
+                // El resumen ES la descripcion; la etiqueta sobra al mostrarlo.
+                if (!descripcion.empty()) descripcion += "\n";
+                descripcion += resto;
+                destino = Destino::Descripcion;
+                continue;
+            }
+            // La etiqueta que ve el lector sale del catalogo; lo que va
+            // detras es el texto del autor, que no se traduce.
+            static const struct {
+                const char *tag;
+                const char *code;
+            } kNombres[] = {
+                {"return", "VX9107"},     {"returns", "VX9107"},
+                {"throws", "VX9108"},     {"throw", "VX9108"},
+                {"see", "VX9109"},        {"note", "VX9110"},
+                {"warning", "VX9111"},    {"since", "VX9112"},
+                {"deprecated", "VX9113"}, {"complexity", "VX9114"},
+            };
+            const char *code = nullptr;
+            for (const auto &n : kNombres) {
+                if (tag == n.tag) {
+                    code = n.code;
+                    break;
+                }
+            }
+            if (code != nullptr) {
+                otras.push_back(vx::diag::format(code) + " " + resto);
+                destino = Destino::Otra;
+                continue;
+            }
+            // Etiqueta que no conocemos: se deja tal cual, sin inventar.
+            otras.push_back(linea);
+            destino = Destino::Otra;
+            continue;
+        }
+
+        // Continuacion de lo anterior.
+        switch (destino) {
+        case Destino::Parametro:
+            if (!parametros.empty()) parametros.back() += " " + linea;
+            break;
+        case Destino::Otra:
+            if (!otras.empty()) otras.back() += " " + linea;
+            break;
+        case Destino::Descripcion:
+            if (!descripcion.empty() && descripcion.back() != '\n')
+                descripcion += "\n";
+            descripcion += linea;
+            break;
+        }
+    }
+
+    std::string out = trim(descripcion);
+    if (!parametros.empty()) {
+        if (!out.empty()) out += "\n\n";
+        out += vx::diag::format("VX9106") + "\n\n";
+        for (size_t i = 0; i < parametros.size(); ++i) {
+            if (i) out += "\n";
+            out += parametros[i];
+        }
+    }
+    for (const auto &o : otras) {
+        if (!out.empty()) out += "\n\n";
+        out += o;
     }
     return out;
 }
@@ -1142,20 +1288,19 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     md += symbol_kind_name(kind);
     md += ")_\n\n";
     if (!container.empty()) {
-        md += "Contenedor: `";
-        md += container;
-        md += "`\n\n";
+        md += vx::diag::format("VX9100", {container});
+        md += "\n\n";
     }
     if (!signature.empty()) {
         md += "```vx\n";
         md += signature;
         md += "\n```\n";
     }
-    // La documentacion que el autor escribio encima de la declaracion.  Va
-    // detras de la firma, que es donde se lee.
+    // La documentacion que el autor escribio encima de la declaracion, con
+    // forma de markdown.  Va detras de la firma, que es donde se lee.
     if (!doc.empty()) {
         md += "\n";
-        md += doc;
+        md += doc_to_markdown(doc);
         md += "\n";
     }
     // Complejidad Big-O si es una funcion (o un metodo) conocida por el
@@ -1186,14 +1331,14 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             }
         }
         if (cr != nullptr) {
-            md += "\nComplejidad: **";
-            md += analyze::cost_class_str(cr->total_class);
-            md += "**";
-            // Si el coste parcial difiere del total, mostrarlo tambien.
+            md += "\n";
+            md += vx::diag::format("VX9101",
+                                   {analyze::cost_class_str(cr->total_class)});
+            // Si el coste del cuerpo propio difiere del total, ensenar los dos.
             if (cr->big_o != cr->total_class) {
-                md += " (parcial ";
-                md += analyze::cost_class_str(cr->big_o);
-                md += ")";
+                md += " ";
+                md += vx::diag::format("VX9102",
+                                       {analyze::cost_class_str(cr->big_o)});
             }
             md += "\n";
 
@@ -1213,11 +1358,11 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 }
             }
             if (!declarado.empty()) {
-                md += "\nDeclarada: `";
-                md += declarado;
-                md += "`";
+                md += "\n";
+                md += vx::diag::format("VX9103", {declarado});
                 if (cr->contract_mismatch) {
-                    md += "  **no cuadra con lo inferido**";
+                    md += "  ";
+                    md += vx::diag::format("VX9104");
                 }
                 md += "\n";
             }
@@ -1270,11 +1415,13 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             con_dimensiones("alloc", fc->alloc_partial, fc->alloc_total);
             con_dimensiones("stack", fc->stack_partial, fc->stack_total);
 
-            md += "\nContratos: ";
+            std::string lista;
             for (size_t i = 0; i < partes.size(); ++i) {
-                if (i) md += " ";
-                md += partes[i];
+                if (i) lista += " ";
+                lista += partes[i];
             }
+            md += "\n";
+            md += vx::diag::format("VX9105", {lista});
             md += "\n";
         }
     }
@@ -1296,25 +1443,33 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             for (size_t i = 0; i < tf->variants.size(); ++i) {
                 const analyze::VariantPlacement &v = tf->variants[i];
                 if (v.name != word) continue;
-                md += "\nValor: **" + std::to_string(v.int_value) + "**";
-                // El tag es lo que se guarda en memoria; solo se ensena cuando
-                // NO coincide con el valor, que es cuando confundirlos duele.
+                md += "\n";
+                md += vx::diag::format("VX9115",
+                                       {std::to_string(v.int_value)});
+                // La etiqueta es lo que se guarda en memoria; solo se ensena
+                // cuando NO coincide con el valor, que es cuando confundirlos
+                // duele.
                 if (static_cast<int64_t>(v.tag) != v.int_value) {
-                    md += "  (etiqueta interna " + std::to_string(v.tag) + ")";
+                    md += "  ";
+                    md += vx::diag::format("VX9116", {std::to_string(v.tag)});
                 }
                 md += "\n";
                 char hex[32];
                 std::snprintf(hex, sizeof(hex), "0x%llX",
                               static_cast<unsigned long long>(v.int_value));
-                md += "\nEn hexadecimal: `";
-                md += hex;
-                md += "`\n";
+                md += "\n";
+                md += vx::diag::format("VX9117", {hex});
+                md += "\n";
                 if (v.payload_fields > 0) {
-                    md += "\nLleva " + std::to_string(v.payload_fields) +
-                          " campo(s) de carga util.\n";
+                    md += "\n";
+                    md += vx::diag::format(
+                        "VX9118", {std::to_string(v.payload_fields)});
+                    md += "\n";
                 }
-                md += "\nEl enum ocupa " + std::to_string(tf->size_bytes) +
-                      " bytes.\n";
+                md += "\n";
+                md += vx::diag::format("VX9119",
+                                       {std::to_string(tf->size_bytes)});
+                md += "\n";
                 break;
             }
         } else if (tf != nullptr) {
@@ -1323,17 +1478,21 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 if (f.name != word) continue;
                 char hex[32];
                 std::snprintf(hex, sizeof(hex), "0x%X", f.offset);
-                md += "\nDesplazamiento: **+" + std::to_string(f.offset) +
-                      "** (`" + hex + "`)";
-                md += "  Tamano: **" + std::to_string(f.size) + "** byte(s)\n";
+                md += "\n";
+                md += vx::diag::format("VX9120",
+                                       {std::to_string(f.offset), hex,
+                                        std::to_string(f.size)});
+                md += "\n";
                 if (f.bit_width > 0) {
                     // Campo de bits: lo que importa es que trozo de la palabra
                     // ocupa, no el tamano de la palabra entera.
-                    md += "\nCampo de bits: bits " +
-                          std::to_string(f.bit_offset) + ".." +
-                          std::to_string(f.bit_offset + f.bit_width - 1) +
-                          " de la palabra en +" + std::to_string(f.offset) +
-                          "\n";
+                    md += "\n";
+                    md += vx::diag::format(
+                        "VX9121",
+                        {std::to_string(f.bit_offset),
+                         std::to_string(f.bit_offset + f.bit_width - 1),
+                         std::to_string(f.offset)});
+                    md += "\n";
                 }
                 // El relleno solo significa algo cuando los campos se colocan
                 // en orden: en una union todos empiezan en cero, y en una
@@ -1344,25 +1503,31 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                                  : tf->fields[i - 1].offset +
                                        tf->fields[i - 1].size;
                     if (f.offset > anterior) {
-                        md += "\nRelleno antes: **" +
-                              std::to_string(f.offset - anterior) +
-                              "** byte(s)\n";
+                        md += "\n";
+                        md += vx::diag::format(
+                            "VX9122", {std::to_string(f.offset - anterior)});
+                        md += "\n";
                     }
                     if (i + 1 == tf->fields.size()) {
                         const uint64_t fin = f.offset + f.size;
                         if (tf->size_bytes > fin) {
-                            md += "\nRelleno al final del tipo: **" +
-                                  std::to_string(tf->size_bytes - fin) +
-                                  "** byte(s)\n";
+                            md += "\n";
+                            md += vx::diag::format(
+                                "VX9123",
+                                {std::to_string(tf->size_bytes - fin)});
+                            md += "\n";
                         }
                     }
                 }
-                md += "\nEn `" + container + "`: " +
-                      std::to_string(tf->size_bytes) + " bytes, alineado a " +
-                      std::to_string(tf->align_bytes);
-                if (tf->is_union) md += ", union";
-                if (tf->is_overlay) md += ", vista superpuesta";
-                if (tf->is_polymorphic) md += ", con tabla de metodos";
+                md += "\n";
+                md += vx::diag::format("VX9124",
+                                       {container,
+                                        std::to_string(tf->size_bytes),
+                                        std::to_string(tf->align_bytes)});
+                if (tf->is_union) md += ", " + vx::diag::format("VX9125");
+                if (tf->is_overlay) md += ", " + vx::diag::format("VX9126");
+                if (tf->is_polymorphic)
+                    md += ", " + vx::diag::format("VX9127");
                 md += "\n";
                 break;
             }
