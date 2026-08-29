@@ -467,6 +467,14 @@ bool Lowering::class_has_vtable(const std::string &class_name) const {
     const ClassLayout &lay = it->second;
     if (!lay.super_name.empty() || !lay.interface_names.empty()) return true;
 
+    /* Una clase final no la extiende nadie, asi que la tercera pregunta ya
+     * tiene respuesta y no hay que mirar el programa.  El atajo se apoya en que
+     * el comprobador de tipos RECHAZA extender una final: sin ese rechazo esto
+     * seria un fallo silencioso -- llamada directa donde hace falta tabla, y el
+     * metodo de la derivada sin ejecutarse --, y por eso las dos cosas
+     * entraron a la vez. */
+    if (lay.is_final) return false;
+
     if (!extended_classes_built_) {
         for (const auto &kv : layouts)
             if (!kv.second.super_name.empty())

@@ -610,6 +610,20 @@ struct ClassLayout {
     /// que sea localizable via reflexion.  El validador rechaza @c new
     /// X() para layouts con esta marca.
     bool is_interface = false;
+    /**
+     * @brief `final class C` (o `@Final`): nadie puede extenderla.
+     *
+     * El comprobador rechaza cualquier clase que la ponga como super.  Sirve
+     * ademas para decidir por lo BARATO si sus metodos se despachan por tabla:
+     * si nadie puede extenderla, no hay que recorrer el programa buscando quien
+     * lo hace (ver @c Lowering::class_has_vtable).
+     *
+     * Ese atajo es SOLO valido mientras la prohibicion se cumpla de verdad:
+     * marcar una clase como final y dejar que la extiendan igual daria llamada
+     * directa donde hace falta tabla, y el metodo de la derivada no se
+     * ejecutaria.  De ahi que el rechazo y este campo entraran a la vez.
+     */
+    bool is_final = false;
     /// true si la clase es @c @Aspect (contiene @Before/@After/@Around).
     /// Habilita el devirt monomorfico saber que CALLVIRTs no se pueden
     /// resolver estaticamente en este modulo (los advice chains corren

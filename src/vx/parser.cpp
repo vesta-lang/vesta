@@ -1512,12 +1512,32 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         (void)consume();
         pending_visibility_ = 3; // 3 = internal explicito
     }
+    /* `final class C { ... }`: la clase no se puede extender.  Se recoge aqui
+     * -- como la visibilidad -- porque el modificador va DELANTE de la palabra
+     * `class`, igual que en Java y en C#, y quien parsea la clase ya empieza en
+     * la palabra `class`.  El orden con la visibilidad da igual: `public final
+     * class` y `final public class` son lo mismo. */
+    if (current_.kind == TokenKind::KW_FINAL) {
+        (void)consume();
+        pending_final_ = true;
+        if (current_.kind == TokenKind::KW_PUBLIC) {
+            (void)consume();
+            pending_visibility_ = 1;
+        } else if (current_.kind == TokenKind::KW_PRIVATE) {
+            (void)consume();
+            pending_visibility_ = 2;
+        }
+    }
     // Cleanup garantizado al salir de parse_top_level_decl.
     struct VisGuard {
         uint8_t &flag;
+        bool &fin;
 
-        ~VisGuard() { flag = 0; }
-    } guard{pending_visibility_};
+        ~VisGuard() {
+            flag = 0;
+            fin = false;
+        }
+    } guard{pending_visibility_, pending_final_};
     // concept Name<T> = pred; | { ... }  (#6, keyword contextual).  Se exige
     // que tras `concept` venga un identificador (el nombre) para no chocar con
     // un hipotetico uso de `concept` como identificador normal.
@@ -1574,6 +1594,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     //   @Target("os:linux"):  M.L24 - compilacion condicional;
     //                la decl se descarta si no matchea el target actual.
     //   Otras se aceptan y se ignoran silenciosamente.
+    bool top_is_final = false;
     bool top_is_aspect = false;
     bool top_is_async = false;
     bool top_fp_contract =
@@ -1652,7 +1673,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         (void)consume();
         if (current_.kind == TokenKind::IDENTIFIER) {
             const bool is_target = (current_.lexeme == "Target");
-            if (current_.lexeme == "Aspect")
+            if (current_.lexeme == "Final")
+                top_is_final = true;
+            else if (current_.lexeme == "Aspect")
                 top_is_aspect = true;
             else if (current_.lexeme == "Async")
                 top_is_async = true;
@@ -2208,6 +2231,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     // class <nombre> { ... }
     if (current_.kind == TokenKind::KW_CLASS) {
         auto cd = parse_class_decl();
+        // `final class C` y `@Final class C` dicen lo mismo, como promete la
+        // documentacion del lenguaje.
+        if (cd && (pending_final_ || top_is_final)) cd->is_final = true;
         if (cd && top_is_aspect) cd->is_aspect = true;
         if (cd && top_is_introspect) cd->is_introspect = true;
         // Sprint lombok: propagar flags class-level.
@@ -6024,6 +6050,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         // El resto se aceptan silenciosamente.
         bool annot_override = false;
         bool annot_inline = false;
+        bool annot_final = false; ///< @Final: alias de la palabra clave `final`
         uint8_t annot_advice_kind = 0; // 0=ninguno, 1=BEFORE, 2=AFTER, 3=AROUND
         std::string annot_advice_target;
         // Sprint lombok (2026-06-03): anotaciones de campo Lombok.
@@ -6048,6 +6075,7 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
                     this_kind = 4;
                 if (aname == "Override") annot_override = true;
                 if (aname == "Inline") annot_inline = true;
+                if (aname == "Final") annot_final = true;
                 // Sprint lombok: marcas de campo.
                 if (aname == "Getter") lk_getter = true;
                 if (aname == "Setter") lk_setter = true;
@@ -6099,7 +6127,9 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
         // Parsear modificadores prefijos.
         uint8_t access = 0; // 0 = default/public, 1 = private, 2 = protected
         bool is_static = false;
-        bool is_final = false;
+        /* `final i32 f()` y `@Final i32 f()` dicen lo mismo, como promete la
+         * documentacion del lenguaje: la anotacion se leyo arriba. */
+        bool is_final = annot_final;
         bool saw_access = false;
         for (;;) {
             if (current_.kind == TokenKind::KW_PUBLIC) {

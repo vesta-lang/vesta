@@ -1,0 +1,60 @@
+namespace ejemplos.clases_finales;
+
+// Una clase `final` no se puede extender.  Las dos formas que documenta el
+// lenguaje valen y dicen lo mismo: la palabra clave delante y la anotacion.
+//
+// No es solo una promesa de la declaracion: el compilador se FIA de ella.  Para
+// saber si los metodos de una clase se despachan por tabla hay que preguntar si
+// alguien la extiende, y eso obliga a mirar el programa entero -- salvo si es
+// final, que entonces la respuesta ya se sabe --.  Por eso el rechazo de la
+// herencia y ese atajo tienen que ir juntos: dejar extender una final daria
+// llamada directa donde hace falta tabla, y el metodo de la derivada no se
+// ejecutaria nunca.
+//
+// El caso negativo -- `class H : Cerrada` -- esta en la suite como test que
+// DEBE fallar al compilar; aqui va lo que si compila.
+
+final class Cerrada {
+    public i32 v;
+    public Cerrada(i32 x) { this.v = x; }
+    public i32 doble() { return this.v * 2; }
+}
+
+@Final
+class TambienCerrada {
+    public i32 v;
+    public TambienCerrada(i32 x) { this.v = x; }
+    public i32 triple() { return this.v * 3; }
+}
+
+// Una final PUEDE heredar; lo que no puede es que hereden DE ella.  Asi que
+// esta si necesita tabla de metodos, por su super.
+class Abierta {
+    public i32 base_v;
+    public Abierta(i32 x) { this.base_v = x; }
+    public i32 quien() { return 1; }
+}
+
+final class HojaDeAbierta : Abierta {
+    public HojaDeAbierta(i32 x) { super(x); }
+    @Override
+    public i32 quien() { return 2; }
+}
+
+// Y el modificador combina con la visibilidad, en cualquier orden.
+public final class ConVisibilidad { public i32 v = 4; }
+
+i32 main() {
+    Cerrada a = new Cerrada(6);
+    TambienCerrada b = new TambienCerrada(4);
+    HojaDeAbierta c = new HojaDeAbierta(9);
+    ConVisibilidad d = new ConVisibilidad();
+
+    // Por la super, `quien()` se despacha por tabla y devuelve el 2 de la hoja.
+    Abierta como_base = c;
+
+    println("doble=${a.doble()} triple=${b.triple()} quien=${como_base.quien()}");
+
+    // 12 + 12 + 2 * 8 + 4 - 2 = 42
+    return a.doble() + b.triple() + como_base.quien() * 8 + d.v - 2;
+}

@@ -3102,6 +3102,8 @@ r0_case("tryasg474", "asignar a una variable de fuera DENTRO del init de otra, e
 r0_case("asynctipos475", "@Async con parametros de tipos aliased (no primitivos sueltos)", "475_async_tipos_no_listados.vx", 42, line=3748)
 r0_case("retspawn476", "`return` a mano dentro del cuerpo de un spawn (y una lambda dentro, que si retorna)", "476_return_en_spawn.vx", 42, line=3750)
 r0_case("dtorvirt477", "destructor por tabla (clase extendida) vs directo (clase que nadie extiende)", "477_dtor_virtual.vx", 42, line=3752)
+r0_case("finales478", "clases final: las dos formas, con visibilidad, y una final que SI hereda", "478_clases_finales.vx", 42, line=3754)
+fails_case("finalher479", "heredar de una clase final es error de compilacion", "479_final_hereda_err.vx", "declarada final", line=3756)
 const_reject_case("cneg_ptr_pointee", "escribir *p con const i32* (pointee const)", "const i32* p; i32 c = 1; p = &c; *p = 2;", line=3747)
 const_reject_case("cneg_ptr_const", "reasignar q con i32* const (puntero const)", "i32 c = 1; i32* const q = &c; i32 d = 2; q = &d;", line=3749)
 const_reject_case("cneg_var", "escribir a variable const no-puntero", "const i32 x = 5; x = 6;", line=3751)

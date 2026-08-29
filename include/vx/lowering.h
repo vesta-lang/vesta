@@ -266,21 +266,13 @@ class Lowering {
      * recuerda: antes cada consulta recorria todas las clases del programa, y
      * las consultas salen dentro de bucles sobre clases y sobre sus campos.
      *
-     * = Por que NO se atajan las clases finales =
-     *
-     * Una clase que no se puede extender no necesita que se mire el programa
-     * entero: la tercera pregunta ya tiene respuesta.  Es cierto, y AUN ASI no
-     * se hace, porque hoy el lenguaje no cierra esas clases (comprobado
-     * 2026-08-29): `final class C {}` no llega a parsear -- es un error de
-     * sintaxis en el nivel superior -- y `@Final class C {}` si parsea pero
-     * NADIE impide extenderla, la declaracion se acepta sin una palabra.  Con
-     * ese hueco, atajar aqui convertiria un fallo del comprobador en codigo
-     * mal generado: una clase marcada como final Y extendida saldria con
-     * llamada directa, y el metodo de la derivada no se ejecutaria nunca.
-     *
-     * El atajo entra el dia que la finalidad se cumpla de verdad.  Mientras
-     * tanto la tercera pregunta responde bien por si sola, porque mira quien
-     * hereda de quien y no lo que la declaracion promete.
+     * Salvo si la clase es FINAL: entonces la tercera pregunta ya tiene
+     * respuesta -- nadie puede extenderla -- y no hay programa que mirar.  Ese
+     * atajo se apoya en que el comprobador de tipos RECHACE extender una final;
+     * sin ese rechazo seria un fallo silencioso, porque saldria con llamada
+     * directa una clase que si tiene derivadas.  Las dos cosas entraron a la
+     * vez, y hasta entonces `final` en una clase no existia: la palabra clave
+     * no parseaba y la anotacion no se aplicaba.
      *
      * @param class_name Nombre de la clase.
      * @return @c true si necesita tabla de metodos.

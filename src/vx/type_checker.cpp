@@ -4495,6 +4495,7 @@ void TypeChecker::collect_globals() {
             /* preservar la marca @Introspect del AST. */
             layout.is_introspect = c->is_introspect;
             layout.is_aspect = c->is_aspect;
+            layout.is_final = c->is_final;
             //  M6.a L.3: visibilidad cross-module.
             layout.is_public = c->is_public;
 
@@ -4549,6 +4550,20 @@ void TypeChecker::collect_globals() {
                     layout.interface_names.insert(
                         layout.interface_names.begin(), c->super_name);
                     layout.super_name.clear();
+                } else if (it_super->second.is_final) {
+                    /* Una clase final no se extiende.  El rechazo no es solo
+                     * por respetar lo que la declaracion promete: el bajado se
+                     * FIA de esa promesa para despachar sus metodos con llamada
+                     * directa en vez de por tabla.  Dejar pasar esto daria un
+                     * programa en el que el metodo de la derivada no se ejecuta
+                     * nunca, sin un solo aviso. */
+                    diags_.error(c->loc,
+                                 "'" + c->name + "' no puede heredar de '" +
+                                     c->super_name +
+                                     "': esta declarada final.\n"
+                                     "  sugerencia: quita el `final` de '" +
+                                     c->super_name +
+                                     "', o usa composicion en vez de herencia");
                 } else {
                     super_layout = &it_super->second;
                     // Copiar fields heredados (offsets ya incluyen header).

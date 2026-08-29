@@ -777,6 +777,17 @@ class Parser {
     /// @c parse_top_level_decl resetea a 0 al salir.
     uint8_t pending_visibility_ = 0;
 
+    /**
+     * @brief Un @c final leido antes de la palabra @c class.
+     *
+     * Mismo mecanismo que la visibilidad y por el mismo motivo: el modificador
+     * va DELANTE -- `final class C` --, igual que en Java y en C#, y quien
+     * parsea la clase ya empieza en la palabra @c class.  Lo recoge
+     * @c parse_top_level_decl y lo aplica el parseo de la clase; el guarda lo
+     * limpia al salir.
+     */
+    bool pending_final_ = false;
+
   public:
     /// Helper que aplica @c pending_visibility_ al nodo si el nodo
     /// es de un kind con campo @c is_public.  Llamado al final de
