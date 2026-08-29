@@ -117,8 +117,7 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             box_size = static_cast<uint64_t>(
                 tc_.struct_layouts().at(sem_payload.struct_name).size_bytes);
         } else if (payload_is_smart_wrapper) {
-            box_size =
-                (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
+            box_size = smart_ptr_slot_bytes(sem_payload.kind);
         }
         if (box_size == 0) box_size = 8u; // defensivo: nunca alocar 0 bytes.
         // %box = GC_ALLOCP(sizeof(T))  (host_ptr GC-managed).
@@ -627,10 +626,7 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         payload_size = static_cast<uint64_t>(
             tc_.struct_layouts().at(sem_payload.struct_name).size_bytes);
     } else if (payload_is_smart_wrapper) {
-        // Tamano del slot del wrapper interno: unique = 16 (Tier 1,
-        // [ptr][deleter]), shared/borrow = 8 (un solo host_ptr/ctrl).
-        payload_size =
-            (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
+        payload_size = smart_ptr_slot_bytes(sem_payload.kind);
     }
     if (is_unique_box) {
         // unique<T> Tier 1 (16 bytes):

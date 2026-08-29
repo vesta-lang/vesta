@@ -111,8 +111,12 @@ uint64_t comptime_type_size(const TypeChecker &tc, const Type &t) {
     case PrimitiveKind::FUNCTION: return 16;
     case PrimitiveKind::OPTIONAL: return 16;
     case PrimitiveKind::RESULT: return 24;
-    case PrimitiveKind::UNIQUE_PTR: return 16;
-    case PrimitiveKind::SHARED_PTR: return 8;
+    /* La ranura de un puntero inteligente la decide un solo sitio
+     * (smart_ptr_slot_bytes), que es donde ira la optimizacion de ocupar menos
+     * cuando se pueda.  Escrito aqui aparte, `sizeof<T>` empezaria a decir un
+     * numero y el bajado a reservar otro en cuanto uno de los dos cambiara. */
+    case PrimitiveKind::UNIQUE_PTR:
+    case PrimitiveKind::SHARED_PTR: return smart_ptr_slot_bytes(t.kind);
     case PrimitiveKind::BORROW: return 8;
     case PrimitiveKind::BORROW_MUT: return 8;
     case PrimitiveKind::FUTURE: return 8;

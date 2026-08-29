@@ -685,6 +685,32 @@ constexpr bool is_numeric(PrimitiveKind k) noexcept {
 }
 
 /**
+ * @brief Bytes que ocupa la RANURA de un envoltorio de puntero inteligente.
+ *
+ * Un `unique<T>` suelto guarda dos cosas -- el puntero y su liberador --, y un
+ * `shared<T>` o un `borrow<T>` una sola: el puntero al bloque de control, que
+ * ya lleva el liberador dentro.
+ *
+ * ESTE ES EL SITIO DONDE VA LA OPTIMIZACION.  El tamano de estos tipos NO es
+ * fijo: siempre que se pueda ocupar menos, mejor, y cuanto se puede ocupar
+ * depende del caso concreto -- un `Optional` de un puntero acaba midiendo lo
+ * que el puntero, porque el nulo ya sirve de marca, y un `unique` cuyo
+ * liberador se conoce al compilar no necesita guardarlo --.  Mientras eso no
+ * este, esta funcion devuelve la cota de arriba, que es siempre correcta
+ * aunque gaste.
+ *
+ * Estaba escrita a mano en cuatro sitios del bajado.  Con la decision repartida,
+ * la optimizacion habria que meterla en los cuatro y el primero que se olvidara
+ * daria una ranura de un tamano y una escritura de otro.
+ *
+ * @param k Clase del tipo.
+ * @return Bytes de la ranura.
+ */
+constexpr size_t smart_ptr_slot_bytes(PrimitiveKind k) noexcept {
+    return (k == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
+}
+
+/**
  * @brief Tamano en bytes del tipo primitivo.
  *
  * @return Numero de bytes ocupados por una instancia, o 0 para VOID.

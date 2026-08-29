@@ -1465,11 +1465,8 @@ bool Lowering::try_lower_var_init(ast::VarDeclStmt *vd, const Type &sem_type,
                 if (cid->name == "move") {
                     const ir::IrValueId v_src = lower_expr(ce->args[0].get());
                     if (v_src != ir::IR_NO_VALUE) {
-                        // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
-                        // shared<T>: slot = 8 bytes (ctrl_block_ptr).
-                        const uint32_t slot_bytes =
-                            (sem_type.kind == PrimitiveKind::UNIQUE_PTR) ? 16
-                                                                         : 8;
+                        const uint32_t slot_bytes = static_cast<uint32_t>(
+                            smart_ptr_slot_bytes(sem_type.kind));
                         // ALLOCA para el slot destino.
                         const ir::IrValueId v_dst =
                             fn_->new_value(ir::IrType::PTR);

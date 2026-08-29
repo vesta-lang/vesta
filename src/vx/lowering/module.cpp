@@ -1158,8 +1158,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         // vive en el control block del GcHeap).  No tenemos forma
         // simple de discriminar aqui (sem_ret.kind UNIQUE vs SHARED);
         // usamos 16 para unique y 8 para shared.
-        sret_buf_size_ =
-            (sem_ret.kind == PrimitiveKind::UNIQUE_PTR) ? 16ULL : 8ULL;
+        sret_buf_size_ = smart_ptr_slot_bytes(sem_ret.kind);
     } else if (sret_str_value) {
         // value-string: {ptr,len,cap} = 3 qwords = 24 bytes.
         sret_buf_size_ = 24ULL;
