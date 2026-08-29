@@ -1980,9 +1980,17 @@ bool ir_verify(const IrModule &mod, std::vector<std::string> &errors) {
                     // algo detras, ese bloque se queda sin salidas -- y lo que
                     // fuera detras, sin ejecutarse.
                     if (has_terminator || &ins != &bb.instrs.back()) {
+                        // Con el sitio: "hay un problema" no basta para ir a
+                        // buscarlo en un bloque de cincuenta instrucciones.
+                        const size_t pos =
+                            static_cast<size_t>(&ins - &bb.instrs.front());
                         errors.push_back(
                             "fn '" + fn.name + "' bloque '" + bb.name +
-                            "': el terminador no es la ultima instruccion");
+                            "': el terminador " + ir_op_name(ins.op) +
+                            " esta en la posicion " + std::to_string(pos) +
+                            " de " + std::to_string(bb.instrs.size()) +
+                            "; detras queda " +
+                            ir_op_name(bb.instrs.back().op));
                         ok = false;
                     }
                     has_terminator = true;

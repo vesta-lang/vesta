@@ -1256,12 +1256,40 @@ CompileResult compile_vx_source(const std::string &source,
             res.ir_module_cache_bytes_inlined =
                 ir::emit_ir_module_cache(con_inline);
         }
+        /* Antes de optimizar, sobre el modulo COMPLETO -- el propio mas lo que
+         * traen los imports, que puede venir de la cache y no de compilarlo
+         * ahora --.  Con esta y la de despues se distingue quien lo rompio: si
+         * salta aqui, llego roto; si solo salta despues, lo rompio un pase. */
+        if (util::flag_on(util::FlagId::VerifyIr)) {
+            std::vector<std::string> ir_errs;
+            if (!ir::ir_verify(irmod_for_section, ir_errs)) {
+                for (const std::string &m : ir_errs)
+                    std::fprintf(stderr, "[ir-verify pre-opt] %s\n", m.c_str());
+                std::fprintf(stderr,
+                             "[ir-verify pre-opt] %zu problemas en '%s'\n",
+                             ir_errs.size(), filename.c_str());
+            }
+        }
         ir::ir_optimize(irmod_for_section, opt_level_from_int(opts.opt_level),
                         /*allow_inline=*/!opts.emit_ir_preopt);
         res.tiempos.optimizar_us += static_cast<long>(
             std::chrono::duration_cast<std::chrono::microseconds>(
                 RelojFase::now() - marca_opt)
                 .count());
+        /* Y aqui otra vez, si se pidio.  Es el sitio donde mas falta hace: el
+         * optimizador opera SOBRE el grafo -- corta bloques, los une, mueve
+         * instrucciones -- y una cirugia mal cerrada no se nota hasta que el
+         * programa hace otra cosa. */
+        if (util::flag_on(util::FlagId::VerifyIr)) {
+            std::vector<std::string> ir_errs;
+            if (!ir::ir_verify(irmod_for_section, ir_errs)) {
+                for (const std::string &m : ir_errs)
+                    std::fprintf(stderr, "[ir-verify post-opt] %s\n", m.c_str());
+                std::fprintf(stderr,
+                             "[ir-verify post-opt] %zu problemas en '%s'\n",
+                             ir_errs.size(), filename.c_str());
+            }
+        }
         /* No se serializa todavia: falta saber en que registro dejo el
          * asignador cada valor, y eso solo se sabe tras emitir.  Se guarda y
          * se serializa mas abajo, ya con esa informacion dentro. */

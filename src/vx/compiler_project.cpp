@@ -2076,6 +2076,26 @@ CompileResult compile_vx_project(
                     auto pr = vxi_parse(vb.data(), vb.size());
                     ir::IrModule dep_mod;
                     if (pr.ok && ir::parse_ir_module_cache(ib, dep_mod)) {
+                        /* Lo que sale del almacen se comprueba igual que lo
+                         * recien construido.  Es el sitio donde un IR mal
+                         * guardado deja de ser un problema de quien lo guardo
+                         * y pasa a ser el de quien lo usa: aqui ya no hay
+                         * fuente al que volver, y lo que venga se optimiza y
+                         * se emite tal cual. */
+                        if (util::flag_on(util::FlagId::VerifyIr)) {
+                            std::vector<std::string> ir_errs;
+                            if (!ir::ir_verify(dep_mod, ir_errs)) {
+                                for (const std::string &m : ir_errs)
+                                    std::fprintf(stderr,
+                                                 "[ir-verify cache] %s\n",
+                                                 m.c_str());
+                                std::fprintf(
+                                    stderr,
+                                    "[ir-verify cache] %zu problemas en lo "
+                                    "guardado de '%s'\n",
+                                    ir_errs.size(), pm.module_name.c_str());
+                            }
+                        }
                         pm.vxi = std::move(pr.module_);
                         /* v18: el conjunto comptime tambien por AQUi.  Hay dos
                          * caminos de cache-hit -- el del almacen global y el de
