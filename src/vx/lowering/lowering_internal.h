@@ -184,6 +184,15 @@ void annotate_macro_param_idents(
 extern const std::string kVestaIoLib;
 
 /**
+ * @brief La biblioteca nativa que instrumenta la entrada y salida de funciones.
+ *
+ * Igual que @ref kVestaIoLib: el nombre lleva el subdirectorio bajo
+ * `stdlib/native/` porque el cargador resuelve la biblioteca por ruta relativa
+ * al ejecutable, y ese nombre ES la clave de la importacion.
+ */
+extern const std::string kVestaTraceLib;
+
+/**
  * @brief Lee @p n bytes desde @p pos como un entero, el de menor peso primero.
  *
  * Sirve para meter en UNA instruccion lo que si no serian ocho: al copiar una

@@ -86,14 +86,15 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         }
         auto *path = static_cast<ast::StringLitExpr *>(e->args[0].get());
         auto *mode = static_cast<ast::StringLitExpr *>(e->args[1].get());
-        out_mod_->register_native_import(kVestaIoLib, "vio_fopen");
 
         const ir::IrValueId v_proc = emit_getproc(e->loc.line);
         auto [v_path, v_path_len] = emit_string_lit(path);
         auto [v_mode, v_mode_len] = emit_string_lit(mode);
 
-        const ir::IrValueId dst = emit_calln(kVestaIoLib + ":vio_fopen",
-                  {v_proc, v_path, v_path_len, v_mode, v_mode_len}, ir::IrType::I64, e->loc.line);
+        const ir::IrValueId dst = emit_native_call(
+            kVestaIoLib, "vio_fopen",
+            {v_proc, v_path, v_path_len, v_mode, v_mode_len}, ir::IrType::I64,
+            e->loc.line);
         out_value = dst;
         return true;
     }
@@ -116,21 +117,14 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         v_fp = cast_if_needed(v_fp, fn_->values[v_fp].type, ir::IrType::I64,
                               e->loc.line);
         auto *buf = static_cast<ast::StringLitExpr *>(e->args[1].get());
-        out_mod_->register_native_import(kVestaIoLib, "vio_fwrite");
 
         const ir::IrValueId v_proc = emit_getproc(e->loc.line);
         auto [v_buf, v_buf_len] = emit_string_lit(buf);
 
-        const ir::IrValueId dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ir::IrType::I64;
-        ins.dst = dst;
-        ins.func_name = kVestaIoLib + ":vio_fwrite";
-        // Orden de args segun signature C: (proc, vm_addr, size, handle).
-        ins.operands = {v_proc, v_buf, v_buf_len, v_fp};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst = emit_native_call(
+            kVestaIoLib, "vio_fwrite",
+            /* Orden de args segun signature C: (proc, vm_addr, size, handle). */
+            {v_proc, v_buf, v_buf_len, v_fp}, ir::IrType::I64, e->loc.line);
         out_value = dst;
         return true;
     }
@@ -147,10 +141,9 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         }
         v_fp = cast_if_needed(v_fp, fn_->values[v_fp].type, ir::IrType::I64,
                               e->loc.line);
-        out_mod_->register_native_import(kVestaIoLib, "vio_fclose");
 
-        const ir::IrValueId dst = emit_calln(kVestaIoLib + ":vio_fclose",
-                  {v_fp}, ir::IrType::I32, e->loc.line);
+        const ir::IrValueId dst = emit_native_call(
+            kVestaIoLib, "vio_fclose", {v_fp}, ir::IrType::I32, e->loc.line);
         out_value = dst;
         return true;
     }
@@ -376,7 +369,6 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
         const char *fn_name =
             gc_aware ? ct->native_free_fn_gc : ct->native_free_fn;
         // 2. CALLN al free fn (idempotente por null-check del plugin).
-        out_mod_->register_native_import(COL_NATIVE_LIB, fn_name);
         std::vector<ir::IrValueId> args;
         if (gc_aware) {
             args.reserve(2);
@@ -385,8 +377,8 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
             args.reserve(1);
         }
         args.push_back(v_handle);
-        emit_calln(std::string(COL_NATIVE_LIB) + ":" + fn_name,
-                  std::move(args), ir::IrType::VOID, e->loc.line);
+        emit_native_call(COL_NATIVE_LIB, fn_name, std::move(args),
+                         ir::IrType::VOID, e->loc.line);
         // 3. Reescribir el binding local a 0 (handle invalido).  El
         // cleanup al exit del scope vera este 0 (via refresh_name) y
         // sera no-op.  Evita double-free.
@@ -531,14 +523,11 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e,
              * sin E/S.  Y determinista -- la CPU no cambia a mitad de
              * ejecucion --, que es lo que permite calcularlo UNA vez aunque se
              * consulte en un bucle. */
-            {
-                ir::IrNativeEffects fx;
-                fx.declarados = true;
-                out_mod_->register_native_import("vesta_runtime",
-                                                 "cpu_features", fx);
-            }
-            ir::IrValueId v_feat = emit_calln("vesta_runtime:cpu_features",
-                      {}, ir::IrType::U64, ln);
+            ir::IrNativeEffects fx;
+            fx.declarados = true;
+            ir::IrValueId v_feat =
+                emit_native_call("vesta_runtime", "cpu_features", {},
+                                 ir::IrType::U64, ln, &fx);
             out_value = v_feat;
             return true;
         }

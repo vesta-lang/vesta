@@ -1546,22 +1546,12 @@ void Lowering::emit_instrument_enter(const std::string &fn_name,
     //    El proc_ptr lo obtenemos via @c getproc; el plugin nativo
     //    lo usa para @c vm_read_bytes del nombre.  En port C el
     //    bridge ignora el proc_ptr.
+    // El nombre de la biblioteca incluye el subdir bajo @c stdlib/native/ para
+    // que el cargador resuelva la DLL por ruta relativa al @c vm.exe (igual
+    // convencion que vesta_io / vesta_math).
     const ir::IrValueId v_proc = emit_getproc(line);
-    ir::IrInstr call{};
-    call.op = ir::IrOp::CALLN;
-    call.type = ir::IrType::VOID;
-    call.dst = ir::IR_NO_VALUE;
-    // El @c lib_path incluye el subdir bajo @c stdlib/native/ para
-    // que el loader pueda resolver la DLL via path relativo al
-    // @c vm.exe (igual convencion que vesta_io / vesta_math).
-    call.func_name = "stdlib/native/runtime/vx_trace:enter";
-    call.operands = {v_proc, v_name};
-    call.source_line = line;
-    emit(current_block_, std::move(call));
-
-    // 4. Registrar el import nativo para que el linker .velb
-    //    incluya la libreria.
-    out_mod_->register_native_import("stdlib/native/runtime/vx_trace", "enter");
+    emit_native_call(kVestaTraceLib, "enter", {v_proc, v_name},
+                     ir::IrType::VOID, line);
 }
 
 void Lowering::emit_instrument_exit(const std::string &fn_name,
@@ -1579,19 +1569,11 @@ void Lowering::emit_instrument_exit(const std::string &fn_name,
         v_val = emit_const(ir::IrType::I64, 0, line);
     }
 
+    // Se llama @c leave y no @c exit para no chocar con el @c exit() de la
+    // libc cuando el port a C emite las declaraciones extern.
     const ir::IrValueId v_proc = emit_getproc(line);
-    ir::IrInstr call{};
-    call.op = ir::IrOp::CALLN;
-    call.type = ir::IrType::VOID;
-    call.dst = ir::IR_NO_VALUE;
-    // Usamos @c leave en lugar de @c exit para evitar colision con la
-    // libc @c exit() cuando el port C emite @c extern declarations.
-    call.func_name = "stdlib/native/runtime/vx_trace:leave";
-    call.operands = {v_proc, v_name, v_val};
-    call.source_line = line;
-    emit(current_block_, std::move(call));
-
-    out_mod_->register_native_import("stdlib/native/runtime/vx_trace", "leave");
+    emit_native_call(kVestaTraceLib, "leave", {v_proc, v_name, v_val},
+                     ir::IrType::VOID, line);
 }
 
 /**

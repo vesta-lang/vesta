@@ -36,6 +36,9 @@ namespace vx {
 /// La biblioteca nativa de entrada y salida de la maquina virtual.
 const std::string kVestaIoLib = "stdlib/native/io/vesta_io";
 
+/// La que instrumenta la entrada y la salida de cada funcion.
+const std::string kVestaTraceLib = "stdlib/native/runtime/vx_trace";
+
 std::pair<ir::IrValueId, ir::IrValueId>
 Lowering::emit_string_lit(ast::StringLitExpr *slit) {
     std::vector<uint8_t> bytes(slit->value.begin(), slit->value.end());

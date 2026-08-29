@@ -307,18 +307,9 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
                 ir::IrType::I64, static_cast<uint64_t>(col_ctor->default_cap),
                 e->loc.line));
         }
-        out_mod_->register_native_import(COL_NATIVE_LIB,
-                                         col_ctor->native_new_fn);
-        const ir::IrValueId v_dst = fn_->new_value(ir::IrType::I64);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALLN;
-        ins.type = ir::IrType::I64;
-        ins.dst = v_dst;
-        ins.func_name =
-            std::string(COL_NATIVE_LIB) + ":" + col_ctor->native_new_fn;
-        ins.operands = std::move(arg_ids);
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId v_dst =
+            emit_native_call(COL_NATIVE_LIB, col_ctor->native_new_fn,
+                             std::move(arg_ids), ir::IrType::I64, e->loc.line);
         out_value = v_dst;
         return true;
     }
@@ -458,16 +449,14 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
          * Lo que hace el codigo comptime son efectos sobre la COMPILACION, no
          * sobre el programa compilado; de ahi que no haya nada mas que declarar
          * aunque aborte. */
-        {
-            ir::IrNativeEffects fx;
-            fx.declarados = true;
-            fx.comptime = true;
-            fx.lee_apuntado = 1u << 2; // el mensaje
-            out_mod_->register_native_import("vesta_comptime", "static_assert",
-                                             fx);
-        }
-        ir::IrValueId v_dst = emit_calln("vesta_comptime:static_assert",
-                  {v_proc, v_cond, v_msg, v_len}, ir::IrType::I64, e->loc.line);
+        ir::IrNativeEffects fx;
+        fx.declarados = true;
+        fx.comptime = true;
+        fx.lee_apuntado = 1u << 2; // el mensaje
+        ir::IrValueId v_dst =
+            emit_native_call("vesta_comptime", "static_assert",
+                             {v_proc, v_cond, v_msg, v_len}, ir::IrType::I64,
+                             e->loc.line, &fx);
         /* Una asercion incumplida CORTA la ejecucion aqui mismo.
          *
          * El helper devuelve el veredicto y antes se ignoraba, con lo que el

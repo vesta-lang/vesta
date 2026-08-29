@@ -2511,20 +2511,9 @@ bool Lowering::try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out) {
             }
             const char *fn_name =
                 gc_aware ? cm->native_fn_gc : cm->native_fn;
-            out_mod_->register_native_import(COL_NATIVE_LIB, fn_name);
             const ir::IrType ret_ir = ir_type_from_primitive(cm->ret);
-            const ir::IrValueId v_dst = (ret_ir == ir::IrType::VOID)
-                                            ? ir::IR_NO_VALUE
-                                            : fn_->new_value(ret_ir);
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::CALLN;
-            ins.type = ret_ir;
-            ins.dst = v_dst;
-            ins.func_name = std::string(COL_NATIVE_LIB) + ":" + fn_name;
-            ins.operands = std::move(arg_ids);
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-            out = v_dst;
+            out = emit_native_call(COL_NATIVE_LIB, fn_name,
+                                   std::move(arg_ids), ret_ir, e->loc.line);
             return true;
         }
     }
