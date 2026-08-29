@@ -591,6 +591,57 @@ class Lowering {
     bool class_has_vtable(const std::string &class_name) const;
 
     /**
+     * @brief Cuantas ranuras de la tabla de metodos se reservan, en el camino
+     *        NATIVO, para el despacho por interfaz.
+     *
+     * En el camino nativo un objeto tiene UNA tabla y por ella se despachan
+     * las dos cosas: los metodos de su clase y los de las interfaces que
+     * cumple.  Cada despacho numera por su cuenta -- la clase por su cadena de
+     * herencia, la interfaz por el orden en que declara los suyos --, asi que
+     * hay que darle a cada uno su tramo o se pisan.
+     *
+     * Las interfaces van DELANTE, todas seguidas, con el mismo reparto para
+     * todo el programa; los metodos de la clase, detras.  Que el reparto sea
+     * del programa entero y no de cada clase es lo que hace que una base y su
+     * derivada coincidan sin tener que ponerse de acuerdo: si el tramo lo
+     * eligiera cada clase, una derivada que cumple una interfaz que su base no
+     * cumple correria los metodos heredados y una llamada por el tipo base
+     * leeria la ranura equivocada.
+     *
+     * Vale 0 si el programa no declara ninguna interfaz, y entonces esto no
+     * cambia una sola ranura.
+     *
+     * @return Numero total de ranuras reservadas para interfaces.
+     */
+    uint32_t native_iface_slot_count() const;
+
+    /**
+     * @brief Ranura de un metodo de interfaz en la tabla nativa.
+     *
+     * @param iface  Nombre de la interfaz.
+     * @param midx   Posicion del metodo dentro de la declaracion de la interfaz.
+     * @return La ranura, dentro del tramo reservado a esa interfaz.
+     */
+    uint32_t native_iface_slot(const std::string &iface, uint32_t midx) const;
+
+    /**
+     * @brief Ranura de un metodo de clase en la tabla nativa: su indice de
+     *        siempre, corrido detras del tramo de las interfaces.
+     *
+     * @param vtable_index Indice del metodo en la tabla de su clase.
+     * @return La ranura.
+     */
+    uint32_t native_class_slot(uint32_t vtable_index) const {
+        return native_iface_slot_count() + vtable_index;
+    }
+
+    /// Reparto de tramos por interfaz.  Se calcula una vez, la primera que
+    /// alguien pregunta; la jerarquia ya no cambia cuando se llega aqui.
+    mutable std::unordered_map<std::string, uint32_t> iface_slot_base_;
+    /// Total de ranuras reservadas, o UINT32_MAX mientras no se ha calculado.
+    mutable uint32_t iface_slot_total_ = UINT32_MAX;
+
+    /**
      * @brief Las clases de las que alguna otra hereda.
      *
      * Se llena la primera vez que alguien pregunta por una tabla de metodos.

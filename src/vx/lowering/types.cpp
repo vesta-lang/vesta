@@ -599,4 +599,49 @@ bool Lowering::class_has_vtable(const std::string &class_name) const {
     }
     return extended_classes_.count(class_name) != 0;
 }
+
+/**
+ * @copydoc vx::Lowering::native_iface_slot_count
+ */
+uint32_t Lowering::native_iface_slot_count() const {
+    if (iface_slot_total_ != UINT32_MAX) return iface_slot_total_;
+
+    /* Se recorren las interfaces por NOMBRE, en orden, no en el que las
+     * devuelva la tabla: el reparto tiene que salir igual en dos compilaciones
+     * del mismo programa o el binario cambia sin que el fuente cambie, y con
+     * el cambia su huella en la cache. */
+    std::vector<const ClassLayout *> ifaces;
+    for (const auto &kv : tc_.class_layouts())
+        if (kv.second.is_interface) ifaces.push_back(&kv.second);
+    std::sort(ifaces.begin(), ifaces.end(),
+              [](const ClassLayout *a, const ClassLayout *b) {
+                  return a->name < b->name;
+              });
+
+    uint32_t next = 0;
+    for (const ClassLayout *lay : ifaces) {
+        iface_slot_base_[lay->name] = next;
+        /* El tramo mide lo que la interfaz declara.  Se cuenta por el mayor
+         * indice y no por cuantos metodos hay, porque los constructores no
+         * entran en la numeracion y dejarian huecos. */
+        uint32_t hi = 0;
+        for (const ClassMethodInfo &m : lay->methods) {
+            if (m.is_constructor) continue;
+            if (m.vtable_index + 1u > hi) hi = m.vtable_index + 1u;
+        }
+        next += hi;
+    }
+    iface_slot_total_ = next;
+    return iface_slot_total_;
+}
+
+/**
+ * @copydoc vx::Lowering::native_iface_slot
+ */
+uint32_t Lowering::native_iface_slot(const std::string &iface,
+                                     uint32_t midx) const {
+    native_iface_slot_count(); // asegura el reparto
+    const auto it = iface_slot_base_.find(iface);
+    return (it == iface_slot_base_.end() ? 0u : it->second) + midx;
+}
 } // namespace vx

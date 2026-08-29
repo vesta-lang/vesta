@@ -631,19 +631,20 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             uint32_t nslots = 0;
             std::map<uint32_t, std::string> slot_sym;
             if (needs_vtable) {
+                /* Los metodos de la clase van DETRAS del tramo reservado a las
+                 * interfaces.  Cada despacho numera por su cuenta -- la clase
+                 * por su cadena de herencia, la interfaz por el orden en que
+                 * declara los suyos --, y antes compartian tabla: los de
+                 * interfaz se colocaban ENCIMA de los de la clase, dando por
+                 * muerta la ranura del constructor.  Eso se cae de dos formas,
+                 * las dos normales: si la clase no declara constructor, esa
+                 * ranura la ocupa un metodo de verdad; y si la interfaz tiene
+                 * mas de un metodo, el segundo cae sobre otro metodo de la
+                 * clase aunque el constructor exista.  En los dos casos la
+                 * llamada acababa en el metodo equivocado, sin aviso. */
                 for (const auto &mi : lay.methods)
-                    if (mi.vtable_index + 1u > nslots)
-                        nslots = mi.vtable_index + 1u;
-                // El dispatch de INTERFAZ usa el vtable_index del metodo en la
-                // INTERFAZ (numerada 0-based, sin ctor).  La clase numera con
-                // el ctor en el slot 0 -> los slots no coinciden.  En
-                // native_poo el ctor NUNCA se despacha por vtable (new/super
-                // llaman directo)
-                // -> su slot esta MUERTO y podemos colocar ahi el metodo de
-                // interfaz.  Recolectamos esas colocaciones (offset de interfaz
-                // -> metodo implementador) y las aplicamos DESPUES de los slots
-                // propios para que ganen su slot.  Tambien ampliamos nslots a
-                // los slots de interfaz por si la interfaz tuviera mas metodos.
+                    if (native_class_slot(mi.vtable_index) + 1u > nslots)
+                        nslots = native_class_slot(mi.vtable_index) + 1u;
                 struct IfaceSlot {
                     uint32_t slot;
                     std::string sym;
@@ -696,10 +697,11 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                             }
                         }
                         if (!impl) continue;
+                        const uint32_t slot =
+                            native_iface_slot(iname, im.vtable_index);
                         iface_slots.push_back(
-                            {im.vtable_index, impl_owner + "__" + impl->name});
-                        if (im.vtable_index + 1u > nslots)
-                            nslots = im.vtable_index + 1u;
+                            {slot, impl_owner + "__" + impl->name});
+                        if (slot + 1u > nslots) nslots = slot + 1u;
                     }
                 }
                 if (nslots == 0) {
@@ -716,16 +718,15 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     vm.section_name = ".data.rel.ro";
                     vm.flags |= ir::IrModule::SD_FLAG_FORCE_EMIT |
                                 ir::IrModule::SD_FLAG_NON_DEDUP;
-                    // Un simbolo por slot (offset).  Los metodos propios
-                    // primero; las colocaciones de interfaz SOBREESCRIBEN
-                    // (priman) su slot -- el slot del ctor esta muerto en
-                    // native_poo.  Sin depender del orden de aplicacion de
-                    // relocs del emisor.
+                    // Un simbolo por ranura (desplazamiento).  Los tramos
+                    // de la clase y de las interfaces son DISJUNTOS, asi que
+                    // ya no hay colocacion que prime sobre otra y el orden en
+                    // que se escriben da igual.
                     for (const auto &mi : lay.methods) {
                         const std::string owner = mi.defining_class.empty()
                                                       ? cd->name
                                                       : mi.defining_class;
-                        slot_sym[mi.vtable_index * 8u] =
+                        slot_sym[native_class_slot(mi.vtable_index) * 8u] =
                             owner + "__" +
                             (mi.is_constructor ? std::string("ctor") : mi.name);
                     }
@@ -2067,8 +2068,10 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // vtable; LOAD fn[idx]; CALLIND.
     if (lay.is_interface && native_poo_) {
         fn_->values[obj].is_host_ptr = true;
-        const ir::IrValueId v_fn =
-            emit_vtable_method_ptr(obj, mtd->vtable_index, e->loc.line);
+        // La ranura sale del tramo reservado a ESTA interfaz, no del indice a
+        // secas: el indice a secas cae encima de los metodos de la clase.
+        const ir::IrValueId v_fn = emit_vtable_method_ptr(
+            obj, native_iface_slot(lay.name, mtd->vtable_index), e->loc.line);
         ir::IrInstr ci{};
         ci.op = ir::IrOp::CALLIND;
         ci.type = ret_ir;
@@ -2438,7 +2441,8 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         //   CALLIND %fn (obj, retbuf?, args)
         {
             const ir::IrValueId v_fn =
-                emit_vtable_method_ptr(obj, mtd->vtable_index, e->loc.line);
+                emit_vtable_method_ptr(
+                    obj, native_class_slot(mtd->vtable_index), e->loc.line);
             ir::IrInstr ci{};
             ci.op = ir::IrOp::CALLIND;
             ci.type = ret_ir;

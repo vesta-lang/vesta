@@ -112,8 +112,11 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 // que posee una instancia derivada ejecuta el dtor
                 // DERIVADO (la vtable de obj[0] la puso __new_<Derived>).
                 const ir::IrValueId obj = opnds[0];
+                // El destructor es un metodo de la CLASE: su ranura va detras
+                // del tramo reservado a las interfaces.
                 const ir::IrValueId v_fn = emit_vtable_method_ptr(
-                    obj, it->dtor_vtable_index, it->source_line);
+                    obj, native_class_slot(it->dtor_vtable_index),
+                    it->source_line);
                 ir::IrInstr ci{};
                 ci.op = ir::IrOp::CALLIND;
                 ci.type = ir::IrType::VOID;
