@@ -1615,6 +1615,23 @@ class TypeChecker {
     bool marshal_const_args(const ast::CallExpr &e,
                             std::vector<uint64_t> &out);
 
+    /**
+     * @brief La REGLA: si un argumento de tipo @p ta encaja con un parametro
+     *        de tipo @p tp, aplicando de paso las dos conversiones que un
+     *        argumento admite (nombre de funcion -> valor-funcion, constante
+     *        -> newtype).
+     *
+     * Separada de @ref check_call_arg porque quien pregunta no siempre es
+     * quien calculo el tipo: al elegir entre varios constructores hay que
+     * calcularlo ANTES, y volver a comprobarlo repetiria sus avisos.
+     *
+     * @param arg El argumento; su @c result_type puede quedar reescrito.
+     * @param tp  El tipo del parametro.
+     * @param ta  Su tipo ya calculado; puede quedar reescrito.
+     * @return @c true si encaja.
+     */
+    bool arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta);
+
     void check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
                         const std::string &what = std::string());
 

@@ -8997,13 +8997,15 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             const Type &ta = arg_types[i];
             const Type &tp =
                 (i >= fixed) ? ctor->variadic_elem : ctor->param_types[i];
-            if (ta.kind == PrimitiveKind::COUNT) continue;
-            if (!types_assignable(tp, ta) &&
-                !value_assignable_to_interface(tp, ta)) {
+            /* Los tipos ya se calcularon arriba para elegir el constructor,
+             * asi que aqui se aplica la REGLA sin volver a comprobar: hacerlo
+             * dos veces repetiria los avisos del propio argumento. */
+            Type targ = ta;
+            if (!arg_fits_param(e->args[i].get(), tp, targ)) {
                 diags_.error(e->args[i]->loc,
                              std::string("argumento ") + std::to_string(i + 1) +
                                  " del constructor '" + e->class_name +
-                                 "': tipo (" + type_to_string(ta) +
+                                 "': tipo (" + type_to_string(targ) +
                                  ") incompatible con parametro (" +
                                  type_to_string(tp) + ")");
             }
@@ -10404,10 +10406,8 @@ bool TypeChecker::marshal_const_args(const ast::CallExpr &e,
     }
     return true;
 }
-void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
-                                 const std::string &what) {
-    if (!arg) return;
-    Type ta = check_expr(arg);
+bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
+    if (!arg) return true;
 
     /* Un literal con decimales es de sesenta y cuatro bits por omision.  Si el
      * parametro es de treinta y dos hay que re-tiparlo AQUI, despues de
@@ -10443,13 +10443,21 @@ void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
 
     if (numeric_const_fits_newtype(tp, ta, arg)) {
         arg->result_type = tp; // una constante que cabe ES de ese tipo
-        return;
+        return true;
     }
-    if (ta.kind == PrimitiveKind::COUNT) return; // ya se dijo lo que fallaba
-    if (types_assignable(tp, ta) || value_assignable_to_interface(tp, ta) ||
-        struct_ptr_upcast_ok(tp, ta))
-        return;
+    if (ta.kind == PrimitiveKind::COUNT) return true; // ya se dijo que fallaba
+    return types_assignable(tp, ta) || value_assignable_to_interface(tp, ta) ||
+           struct_ptr_upcast_ok(tp, ta);
+}
 
+/**
+ * @copydoc vx::TypeChecker::check_call_arg
+ */
+void TypeChecker::check_call_arg(ast::Expr *arg, const Type &tp, size_t idx,
+                                 const std::string &what) {
+    if (!arg) return;
+    Type ta = check_expr(arg);
+    if (arg_fits_param(arg, tp, ta)) return;
     diags_.error(arg->loc, std::string("argumento ") + std::to_string(idx + 1) +
                                (what.empty() ? std::string()
                                              : (" de " + what)) +
@@ -13136,20 +13144,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                 ", recibido " + std::to_string(e->args.size()) +
                                 ")");
                     }
-                    for (size_t i = 0; i < e->args.size(); ++i) {
-                        Type at = check_expr(e->args[i].get());
-                        if (i < smtd->param_types.size() &&
-                            !types_assignable(smtd->param_types[i], at) &&
-                            at.kind != PrimitiveKind::COUNT) {
-                            diags_.error(
-                                e->loc,
-                                idb->name + "." + fa->field_name + ": arg " +
-                                    std::to_string(i + 1) + " tipo (" +
-                                    type_to_string(at) +
-                                    ") incompatible con (" +
-                                    type_to_string(smtd->param_types[i]) + ")");
-                        }
-                    }
+                    for (size_t i = 0; i < e->args.size(); ++i)
+                        check_call_arg(e->args[i].get(),
+                                       i < smtd->param_types.size()
+                                           ? smtd->param_types[i]
+                                           : Type{},
+                                       i, idb->name + "." + fa->field_name);
                     fa->property_kind = 4;
                     fa->base->result_type = Type{PrimitiveKind::VOID};
                     e->result_type = smtd->return_type;
@@ -13184,20 +13184,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                 ", recibido " + std::to_string(e->args.size()) +
                                 ")");
                     }
-                    for (size_t i = 0; i < e->args.size(); ++i) {
-                        Type at = check_expr(e->args[i].get());
-                        if (i < smtd->param_types.size() &&
-                            !types_assignable(smtd->param_types[i], at) &&
-                            at.kind != PrimitiveKind::COUNT) {
-                            diags_.error(
-                                e->loc,
-                                idb->name + "." + fa->field_name + ": arg " +
-                                    std::to_string(i + 1) + " tipo (" +
-                                    type_to_string(at) +
-                                    ") incompatible con (" +
-                                    type_to_string(smtd->param_types[i]) + ")");
-                        }
-                    }
+                    for (size_t i = 0; i < e->args.size(); ++i)
+                        check_call_arg(e->args[i].get(),
+                                       i < smtd->param_types.size()
+                                           ? smtd->param_types[i]
+                                           : Type{},
+                                       i, idb->name + "." + fa->field_name);
                     // property_kind=7 (static de STRUCT): distinto del 4
                     // (namespace/ static de clase) para enrutar a
                     // lower_class_method_call, que maneja el SRET del retorno

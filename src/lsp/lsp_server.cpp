@@ -531,6 +531,12 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
         doc; // de la mas cercana a la mas lejana (luego se invierte)
     size_t pos = line_start;
     int guard = 0;
+    /* Balance de parentesis contado HACIA ARRIBA.  Una anotacion puede
+     * repartir sus argumentos en varias lineas (`@complexity(O(n),` y en la
+     * siguiente `n = len(arg0))`); subiendo, la linea de cierre se reconoce
+     * porque cierra mas de lo que abre.  Mientras el balance sea negativo
+     * seguimos dentro de esa anotacion. */
+    int paren_depth = 0;
     while (pos > 0 && guard++ < 200) {
         // Linea anterior: [prev_start, prev_end) sin el '\n'.
         size_t nl = text.rfind('\n', pos - 2 < text.size() ? pos - 2 : 0);
@@ -542,6 +548,10 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
         std::string t = trim(raw);
         if (t.rfind("//", 0) == 0) {
             std::string c = t.substr(2);
+            // Las formas de documentacion `///` y `//!` llevan un tercer
+            // caracter que es marca, no texto: sin quitarlo cada linea
+            // empezaba por una barra suelta.
+            if (!c.empty() && (c[0] == '/' || c[0] == '!')) c = c.substr(1);
             if (!c.empty() && c[0] == ' ') c = c.substr(1);
             // saltar las marcas Doxygen de mero formato (@brief queda visible).
             doc.push_back(c);
@@ -567,7 +577,30 @@ std::string extract_doc_comment(const std::string &text, size_t name_offset) {
             if (t.rfind("/*", 0) == 0) break;
             continue;
         }
-        // Ni comentario ni continuacion de bloque: fin de la doc.
+        /* Entre el comentario y la declaracion caben anotaciones -- @Target,
+         * @nothrow, @complexity(...) --, y son lo normal en la biblioteca.  No
+         * cortan la documentacion: se saltan.  Sin esto, un comentario perdia
+         * a su funcion en cuanto alguien le ponia un atributo delante, y el
+         * hover se quedaba mudo sin decir por que. */
+        {
+            int balance = 0;
+            for (char c : t) {
+                if (c == '(')
+                    ++balance;
+                else if (c == ')')
+                    --balance;
+            }
+            const bool es_anotacion = !t.empty() && t[0] == '@';
+            // Negativo = esta linea cierra parentesis que abrio otra de mas
+            // arriba, luego es la continuacion de una anotacion.
+            if (es_anotacion || balance < 0 || paren_depth < 0) {
+                paren_depth += balance;
+                pos = prev_start;
+                continue;
+            }
+        }
+        // Ni comentario, ni continuacion de bloque, ni anotacion: fin de la
+        // doc.
         break;
     }
     if (doc.empty()) return std::string();
@@ -936,6 +969,14 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     std::string container;
     std::string def_uri = uri; ///< fichero donde vive la definicion (Big-O).
     bool resolved = false;
+    /// Comentario de documentacion que precede a la declaracion.  Se recoge en
+    /// la rama que resuelve, porque cada una tiene a mano un texto distinto
+    /// (el del documento, o el del modulo importado).
+    std::string doc;
+    /// Para la rama del workspace, que da la posicion pero no el texto: se
+    /// apunta donde esta y la doc se extrae al cargar el fichero que define.
+    bool doc_pendiente = false;
+    uint32_t doc_line = 0, doc_char = 0;
 
     // Buscar en las definiciones locales (preferencia por exactitud de scope).
     for (const auto &d : local.defs) {
@@ -943,6 +984,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             kind = d.kind;
             signature = d.signature;
             container = d.container;
+            doc = extract_doc_comment(text, d.byte_offset);
             resolved = true;
             break;
         }
@@ -957,6 +999,9 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
             container = wdefs.front().container;
             def_uri =
                 wdefs.front().uri; // Big-O sale del fichero que la define.
+            doc_pendiente = true;
+            doc_line = wdefs.front().start_line;
+            doc_char = wdefs.front().start_char;
             resolved = true;
         }
     }
@@ -1001,6 +1046,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                    (signature.back() == ' ' || signature.back() == '\t' ||
                     signature.back() == '\r'))
                 signature.pop_back();
+            doc = extract_doc_comment(text, s.src_offset);
             resolved = true;
             break;
         }
@@ -1047,6 +1093,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                                 signature.back() == '\t' ||
                                 signature.back() == '\r'))
                             signature.pop_back();
+                        doc = extract_doc_comment(im.source, s.src_offset);
                     }
                     resolved = true;
                     break;
@@ -1059,6 +1106,28 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     if (!resolved) {
         send_result(msg.at("id"), nullptr);
         return;
+    }
+
+    // Texto del fichero que DEFINE el simbolo, que puede ser otro modulo.  Se
+    // carga UNA vez: lo usan tanto la documentacion como el coste y los
+    // contratos.  Si esta abierto en el editor se usa su texto vivo.
+    std::string def_text;
+    if (def_uri == uri) {
+        def_text = text;
+    } else if (docs_.has(def_uri)) {
+        def_text = docs_.text(def_uri);
+    } else {
+        std::ifstream f(uri_to_fs_path(def_uri), std::ios::binary);
+        if (f) {
+            std::ostringstream ss;
+            ss << f.rdbuf();
+            def_text = ss.str();
+        }
+    }
+    if (doc_pendiente && !def_text.empty()) {
+        doc = extract_doc_comment(
+            def_text,
+            lsp_position_to_byte_offset(def_text, doc_line, doc_char));
     }
 
     // Construir el markdown del hover.
@@ -1079,24 +1148,19 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         md += signature;
         md += "\n```\n";
     }
+    // La documentacion que el autor escribio encima de la declaracion.  Va
+    // detras de la firma, que es donde se lee.
+    if (!doc.empty()) {
+        md += "\n";
+        md += doc;
+        md += "\n";
+    }
     // Complejidad Big-O si es una funcion (o un metodo) conocida por el
     // analizador de coste.  Buscamos por nombre exacto y, si no, por sufijo
     // (los metodos viven en el IR como `Clase__metodo`).
     if (kind == SymbolKind::Function || kind == SymbolKind::Method) {
-        // El coste sale del analisis del fichero que DEFINE la funcion (que
-        // puede ser otro modulo).  Si esta abierto, usamos su texto vivo; si
-        // no, lo leemos de disco best-effort.
-        std::string def_text;
-        if (docs_.has(def_uri)) {
-            def_text = docs_.text(def_uri);
-        } else {
-            std::ifstream f(uri_to_fs_path(def_uri), std::ios::binary);
-            if (f) {
-                std::ostringstream ss;
-                ss << f.rdbuf();
-                def_text = ss.str();
-            }
-        }
+        // El coste sale del analisis del fichero que DEFINE la funcion, que
+        // puede ser otro modulo; su texto ya se cargo arriba.
         const DocAnalysis &an = engine_.analyze_document(def_uri, def_text);
         const analyze::CostResult *cr = nullptr;
         for (const auto &c : an.cost.functions) {
@@ -1127,6 +1191,86 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 md += " (parcial ";
                 md += analyze::cost_class_str(cr->big_o);
                 md += ")";
+            }
+            md += "\n";
+
+            // Lo DECLARADO con @complexity, junto a lo inferido: verlos a la
+            // vez es el motivo de que el contrato exista.
+            std::string declarado = cr->declared_expr;
+            if (declarado.empty()) {
+                // Las cuatro dimensiones crudas, por si el contrato hablaba de
+                // una distinta de la que representa este resultado.
+                for (const std::string *d :
+                     {&cr->decl_total_post, &cr->decl_total_pre,
+                      &cr->decl_partial_post, &cr->decl_partial_pre}) {
+                    if (!d->empty()) {
+                        declarado = *d;
+                        break;
+                    }
+                }
+            }
+            if (!declarado.empty()) {
+                md += "\nDeclarada: `";
+                md += declarado;
+                md += "`";
+                if (cr->contract_mismatch) {
+                    md += "  **no cuadra con lo inferido**";
+                }
+                md += "\n";
+            }
+        }
+
+        // Contratos de huella declarados sobre la funcion (@pure, @nothrow,
+        // @nopanic, @alloc, @stack).  El compilador los verifica contra lo que
+        // infiere del IR; aqui se ensena lo que el autor prometio, que es lo
+        // que un lector necesita saber antes de llamarla.
+        const analyze::FunctionContracts *fc = nullptr;
+        {
+            auto it = an.result.contracts.find(word);
+            if (it != an.result.contracts.end()) {
+                fc = &it->second;
+            } else {
+                // Los metodos viven con el nombre de su clase por delante.
+                const std::string suffix = "__" + word;
+                for (const auto &entry : an.result.contracts) {
+                    const std::string &n = entry.first;
+                    if (n.size() >= suffix.size() &&
+                        n.compare(n.size() - suffix.size(), suffix.size(),
+                                  suffix) == 0) {
+                        fc = &entry.second;
+                        break;
+                    }
+                }
+            }
+        }
+        if (fc != nullptr && fc->any()) {
+            std::vector<std::string> partes;
+            if (fc->pure) partes.push_back("`@pure`");
+            if (fc->nothrow) partes.push_back("`@nothrow`");
+            if (fc->nopanic) partes.push_back("`@nopanic`");
+            // @alloc y @stack tienen dos dimensiones: lo propio de la funcion
+            // y el peor caso de toda la cadena de llamadas.
+            auto con_dimensiones = [&partes](const char *nombre,
+                                             int64_t parcial, int64_t total) {
+                if (parcial < 0 && total < 0) return;
+                std::string s = "`@";
+                s += nombre;
+                s += "(";
+                if (parcial >= 0) {
+                    s += "partial: " + std::to_string(parcial);
+                    if (total >= 0) s += ", ";
+                }
+                if (total >= 0) s += "total: " + std::to_string(total);
+                s += ")`";
+                partes.push_back(std::move(s));
+            };
+            con_dimensiones("alloc", fc->alloc_partial, fc->alloc_total);
+            con_dimensiones("stack", fc->stack_partial, fc->stack_total);
+
+            md += "\nContratos: ";
+            for (size_t i = 0; i < partes.size(); ++i) {
+                if (i) md += " ";
+                md += partes[i];
             }
             md += "\n";
         }
