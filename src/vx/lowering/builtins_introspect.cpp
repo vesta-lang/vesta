@@ -60,9 +60,10 @@ namespace vx {
  */
 bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                                              ir::IrValueId &out_value) {
-    /* El nombre sigue haciendo falta: varios de estos bloques agrupan muchos
-     * builtins y distinguen por el, y ademas se cita en los diagnosticos.  Es
-     * una VISTA al texto de la tabla, que vive en `.rodata`: no se copia. */
+    /* El nombre solo para los DIAGNOSTICOS: quien lee un error quiere leer
+     * `sizeof`, no un numero.  Para decidir se usa el enum, que es lo que
+     * llega ya resuelto -- volver al texto para compararlo seria deshacer el
+     * trabajo que hizo quien reparte. */
     const std::string_view name = builtin_name(b);
 
     /* Salida rapida: si no es de esta familia no se mira nada de lo de abajo. */
@@ -98,7 +99,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
 
     // Overlay: `extent(v)` -> span total en runtime del layout de la vista.
     // Baja a un CALL a `__ovl_extent_<S>(base)`.
-    if (name == "extent" && e->type_args.empty() && e->args.size() == 1) {
+    if (b == Builtin::Extent && e->type_args.empty() && e->args.size() == 1) {
         ast::Expr *arg = e->args[0].get();
         const Type vt = arg->result_type;
         if (vt.kind != PrimitiveKind::STRUCT) {
@@ -133,7 +134,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // F4: `parent<T>()` dentro de un resolver `@offset { }` = el puntero de la
     // vista RAIZ, enhebrado como 2o param `root` (bind "__ovl_root").  Devuelve
     // ese puntero tipado como la vista T (el CallExpr ya tiene result_type=T).
-    if (name == "parent" && !e->type_args.empty() && e->args.empty()) {
+    if (b == Builtin::Parent && !e->type_args.empty() && e->args.empty()) {
         const ir::IrValueId rv = lookup("__ovl_root");
         if (rv == ir::IR_NO_VALUE) {
             return builtin_error(e->loc,
@@ -153,7 +154,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // (que ya resuelve @offset(expr) dinamico + stride de arrays); la raiz
     // de la cadena de accesos ES el puntero base construido con `T(buf)`.
     if (e->type_args.empty() && !e->args.empty() &&
-        (name == "offsetof" || name == "in_bounds") &&
+        (b == Builtin::Offsetof || b == Builtin::InBounds) &&
         (e->result_type.kind == PrimitiveKind::U64 ||
          e->result_type.kind == PrimitiveKind::BOOL)) {
         const uint32_t ln = e->loc.line;
@@ -192,7 +193,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         ir::IrValueId off =
             emit_ir_binop(ir::IrOp::SUB, field_addr, base_ptr,
                           ir::IrType::U64, ln);
-        if (name == "offsetof") {
+        if (b == Builtin::Offsetof) {
             out_value = off;
             return true;
         }
@@ -232,18 +233,18 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
      * los typenames canonicos importados). */
     if (e->args.size() == 1 && e->args[0] &&
         e->args[0]->kind == ast::NodeKind::StringLitExpr &&
-        (name == "comptime_type_sizeof" || name == "comptime_type_alignof" ||
-         name == "comptime_type_kind")) {
+        (b == Builtin::ComptimeTypeSizeof || b == Builtin::ComptimeTypeAlignof ||
+         b == Builtin::ComptimeTypeKind)) {
         const std::string tn =
             static_cast<ast::StringLitExpr *>(e->args[0].get())->value;
         const Type t = tc_.resolve_type_string(tn);
         const uint32_t src_line = e->loc.line;
-        if (name == "comptime_type_sizeof") {
+        if (b == Builtin::ComptimeTypeSizeof) {
             out_value = emit_const(ir::IrType::U64, comptime_type_size(tc_, t),
                                    src_line);
             return true;
         }
-        if (name == "comptime_type_alignof") {
+        if (b == Builtin::ComptimeTypeAlignof) {
             out_value = emit_const(ir::IrType::U64, comptime_type_align(tc_, t),
                                    src_line);
             return true;
@@ -259,7 +260,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // `bitcast<T>(v)`: reinterpretar los BITS.  El type checker ya exigio que
     // origen y destino midan lo mismo, asi que aqui es un BITCAST del IR -- que
     // entre tipos del mismo ancho baja a un `mov`: coste cero.
-    if (name == "bitcast" && !e->type_args.empty() && e->args.size() == 1) {
+    if (b == Builtin::Bitcast && !e->type_args.empty() && e->args.size() == 1) {
         const Type dst_t = tc_.resolve_type_node(e->type_args[0].get());
         const ir::IrValueId v_src = lower_expr(e->args[0].get());
         if (v_src == ir::IR_NO_VALUE) return true;
@@ -281,11 +282,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // que los use lo pliega el optimizer y la rama muerta desaparece: en el
     // binario solo queda el camino que corresponde a T.
     if (e->type_args.size() == 1 && e->args.empty() &&
-        (name == "is_float" || name == "is_integer" || name == "is_signed" ||
-         name == "is_unsigned" || name == "is_numeric" || name == "is_bool" ||
-         name == "is_char" || name == "is_pointer" || name == "is_string" ||
-         name == "is_class" || name == "is_struct" || name == "is_primitive" ||
-         name == "is_enum")) {
+        (b == Builtin::IsFloat || b == Builtin::IsInteger || b == Builtin::IsSigned ||
+         b == Builtin::IsUnsigned || b == Builtin::IsNumeric || b == Builtin::IsBool ||
+         b == Builtin::IsChar || b == Builtin::IsPointer || b == Builtin::IsString ||
+         b == Builtin::IsClass || b == Builtin::IsStruct || b == Builtin::IsPrimitive ||
+         b == Builtin::IsEnum)) {
         int64_t v = 0;
         if (!const_cast<TypeChecker &>(tc_).lsp_eval_builtin_scalar(e, &v)) {
             error_at(e->loc, "lowering: '" + std::string(name) +
@@ -297,27 +298,27 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         return true;
     }
     if (!e->type_args.empty() &&
-        (name == "sizeof" || name == "alignof" || name == "typename" ||
-         name == "type_id" || name == "kind")) {
+        (b == Builtin::Sizeof || b == Builtin::Alignof || b == Builtin::Typename ||
+         b == Builtin::TypeId || b == Builtin::Kind)) {
         const Type t = tc_.resolve_type_node(e->type_args[0].get());
         const uint32_t src_line = e->loc.line;
-        if (name == "sizeof") {
+        if (b == Builtin::Sizeof) {
             const uint64_t v = comptime_type_size(tc_, t);
             out_value = emit_const(ir::IrType::U64, v, src_line);
             return true;
         }
-        if (name == "alignof") {
+        if (b == Builtin::Alignof) {
             const uint64_t v = comptime_type_align(tc_, t);
             out_value = emit_const(ir::IrType::U64, v, src_line);
             return true;
         }
-        if (name == "type_id") {
+        if (b == Builtin::TypeId) {
             const uint32_t v = comptime_type_id(tc_, t);
             out_value =
                 emit_const(ir::IrType::U32, static_cast<uint64_t>(v), src_line);
             return true;
         }
-        if (name == "kind") {
+        if (b == Builtin::Kind) {
             const ComptimeKind k = comptime_type_kind(t);
             out_value = emit_const(
                 ir::IrType::I32, static_cast<uint64_t>(static_cast<int32_t>(k)),
@@ -328,7 +329,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
          * nombre canonico.  Reusa el mismo patron que el path no-
          * interpolado de @c lower_string_literal_to_string_object:
          * STR_LIT_ADDR a static_data + RAW_ASM strmake. */
-        if (name == "typename") {
+        if (b == Builtin::Typename) {
             const std::string nm = comptime_type_name(tc_, t);
             std::vector<uint8_t> bytes(nm.begin(), nm.end());
             const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
@@ -368,7 +369,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
      * lo captura, devuelve que no, y lo atiende el despacho general emitiendo
      * una comprobacion que corre cuando la macro corra.  Quitar el
      * `!current_fn_is_macro_` dejaria el otro bloque inalcanzable. */
-    if (name == "static_assert" && !current_fn_is_macro_) {
+    if (b == Builtin::StaticAssert && !current_fn_is_macro_) {
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -382,15 +383,15 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     //   type_info_field_offset / _field_size  -> LOAD u32 con stride 16
     // -----------------------------------------------------------------
     {
-        const bool is_find = (name == "find_type");
-        const bool is_simple_u32 = name == "type_info_size" ||
-                                   name == "type_info_align" ||
-                                   name == "type_info_field_count";
-        const bool is_kind_i32 = (name == "type_info_kind");
-        const bool is_name_q = (name == "type_info_name");
-        const bool is_field_name = (name == "type_info_field_name");
+        const bool is_find = (b == Builtin::FindType);
+        const bool is_simple_u32 = b == Builtin::TypeInfoSize ||
+                                   b == Builtin::TypeInfoAlign ||
+                                   b == Builtin::TypeInfoFieldCount;
+        const bool is_kind_i32 = (b == Builtin::TypeInfoKind);
+        const bool is_name_q = (b == Builtin::TypeInfoName);
+        const bool is_field_name = (b == Builtin::TypeInfoFieldName);
         const bool is_field_u32 =
-            name == "type_info_field_offset" || name == "type_info_field_size";
+            b == Builtin::TypeInfoFieldOffset || b == Builtin::TypeInfoFieldSize;
         if (is_find || is_simple_u32 || is_kind_i32 || is_name_q ||
             is_field_name || is_field_u32) {
             const uint32_t src_line = e->loc.line;
@@ -463,11 +464,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             }
             if (is_simple_u32) {
                 uint32_t off = 0;
-                if (name == "type_info_size")
+                if (b == Builtin::TypeInfoSize)
                     off = 4;
-                else if (name == "type_info_align")
+                else if (b == Builtin::TypeInfoAlign)
                     off = 8;
-                else if (name == "type_info_field_count")
+                else if (b == Builtin::TypeInfoFieldCount)
                     off = 12;
                 out_value = emit_load_u32_at(off);
                 return true;
@@ -515,11 +516,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                     emit_load_typed(addr, ir::IrType::U32, src_line);
                 return dst;
             };
-            if (name == "type_info_field_offset") {
+            if (b == Builtin::TypeInfoFieldOffset) {
                 out_value = load_u32_field(0);
                 return true;
             }
-            if (name == "type_info_field_size") {
+            if (b == Builtin::TypeInfoFieldSize) {
                 out_value = load_u32_field(4);
                 return true;
             }
@@ -544,86 +545,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // con el nombre como string.  Cero overhead de loop runtime
     // (vs map dinamico), pero N llamadas reales al callback.
     // -----------------------------------------------------------------
-    if (!e->type_args.empty() &&
-        (name == "for_each_field" || name == "for_each_method")) {
-        const bool is_fields = (name == "for_each_field");
-        const Type t = tc_.resolve_type_node(e->type_args[0].get());
-        if (e->args.empty()) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        /* Lower el callback una sola vez -> fv_addr (16 bytes en stack). */
-        const ir::IrValueId fv_addr = lower_expr(e->args[0].get());
-        if (fv_addr == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        /* LOAD fn_addr = [fv_addr]; LOAD env_addr = [fv_addr + 8]. */
-        ir::IrValueId fn_addr =
-            emit_load_typed(fv_addr, ir::IrType::I64, e->loc.line);
-        ir::IrValueId env_addr = fn_->new_value(ir::IrType::I64);
-        {
-            ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
-            ir::IrValueId off8 = emit_const(ir::IrType::I64, 8, e->loc.line);
-            {
-                ir::IrInstr ad{};
-                ad.op = ir::IrOp::ADD;
-                ad.type = ir::IrType::I64;
-                ad.dst = fv_plus_8;
-                ad.operands = {fv_addr, off8};
-                ad.source_line = e->loc.line;
-                emit(current_block_, std::move(ad));
-            }
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir::IrType::I64;
-            ld.dst = env_addr;
-            ld.operands = {fv_plus_8};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
-        }
-        /* Iterar fields/methods y emitir una CALLCLOSURE por cada uno. */
-        const uint32_t n = is_fields ? comptime_field_count(tc_, t)
-                                     : comptime_method_count(tc_, t);
-        for (uint32_t i = 0; i < n; ++i) {
-            const std::string nm =
-                is_fields
-                    ? comptime_field_name(tc_, t, i)
-                    : (i < comptime_method_count(tc_, t) ? [&]() {
-                          /* Buscar el i-esimo method name. */
-                          if (t.kind == PrimitiveKind::STRUCT ||
-                              t.kind == PrimitiveKind::CLASS) {
-                              auto it = tc_.class_layouts().find(t.struct_name);
-                              if (it != tc_.class_layouts().end() &&
-                                  i < it->second.methods.size()) {
-                                  return it->second.methods[i].name;
-                              }
-                          }
-                          return std::string();
-                      }()
-                                                         : std::string());
-            if (nm.empty()) continue;
-            /* Build StringObject para el nombre. */
-            std::vector<uint8_t> bytes(nm.begin(), nm.end());
-            const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
-            ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
-            ir::IrValueId v_len = emit_const(
-                ir::IrType::I64, static_cast<uint64_t>(nm.size()), e->loc.line);
-            ir::IrValueId v_str =
-                emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
-            /* CALLCLOSURE(env_addr, v_str) -- void return. */
-            ir::IrInstr cl{};
-            cl.op = ir::IrOp::CALLCLOSURE;
-            cl.type = ir::IrType::VOID;
-            cl.dst = ir::IR_NO_VALUE;
-            cl.func_ptr = fn_addr;
-            cl.operands = {env_addr, v_str};
-            cl.source_line = e->loc.line;
-            emit(current_block_, std::move(cl));
-        }
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
+    if (try_lower_for_each_member(e, b, out_value)) return true;
 
     // -----------------------------------------------------------------
     // Sprint 3-A introspection: field_get<T>(obj, "f") / field_set.
@@ -631,8 +553,203 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
     // comptime_field_offset.  El type checker ya valido tipos y
     // que el segundo arg sea string literal.
     // -----------------------------------------------------------------
-    if (!e->type_args.empty() && (name == "field_get" || name == "field_set")) {
-        const bool is_get = (name == "field_get");
+    if (try_lower_field_access_by_name(e, b, out_value)) return true;
+
+    // -----------------------------------------------------------------
+    // Sprint 2 introspection: 12 builtins de fields/methods/types.
+    // Mismas garantias que Sprint 1: cada llamada baja a UN solo
+    // IrOp::CONST (o STR_LIT_ADDR + STRMAKE para los que devuelven
+    // string).  El type checker ya valido aridad + que los args
+    // runtime sean literales compile-time.
+    // -----------------------------------------------------------------
+    {
+        const bool one_targ_no_args =
+            b == Builtin::FieldCount || b == Builtin::MethodCount ||
+            b == Builtin::IsClass || b == Builtin::IsStruct ||
+            b == Builtin::IsPrimitive || b == Builtin::IsEnum ||
+            b == Builtin::IsNewtype || b == Builtin::IsOpaque ||
+            b == Builtin::UnderlyingOf;
+        const bool one_targ_str_arg =
+            b == Builtin::Offsetof || b == Builtin::HasField || b == Builtin::HasMethod ||
+            b == Builtin::FieldType;
+        const bool one_targ_int_arg = (b == Builtin::FieldName);
+        const bool two_targ_no_args = b == Builtin::IsSubtype || b == Builtin::IsSame;
+
+        if ((one_targ_no_args || one_targ_str_arg || one_targ_int_arg ||
+             two_targ_no_args) &&
+            !e->type_args.empty()) {
+            const uint32_t src_line = e->loc.line;
+            const Type t1 = tc_.resolve_type_node(e->type_args[0].get());
+            /* Helper local: emite STRMAKE con el nombre canonico recibido. */
+            auto emit_strmake_for =
+                [&](const std::string &nm) -> ir::IrValueId {
+                std::vector<uint8_t> bytes(nm.begin(), nm.end());
+                const uint64_t idx =
+                    out_mod_->intern_static_data(std::move(bytes));
+                ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
+                ir::IrValueId v_len =
+                    emit_const(ir::IrType::I64,
+                               static_cast<uint64_t>(nm.size()), src_line);
+                ir::IrValueId v_str =
+                    emit_string_literal_repr(v_addr, v_len, -1, src_line);
+                return v_str;
+            };
+
+            /* Extraer el arg literal compile-time si lo hay. */
+            std::string slit_arg;
+            uint64_t ilit_arg = 0;
+            if (one_targ_str_arg) {
+                auto *slit =
+                    dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
+                if (slit) slit_arg = slit->value;
+            }
+            if (one_targ_int_arg) {
+                auto *ilit = dynamic_cast<ast::IntLitExpr *>(e->args[0].get());
+                if (ilit) ilit_arg = ilit->value;
+            }
+
+            if (b == Builtin::FieldCount) {
+                const uint32_t v = comptime_field_count(tc_, t1);
+                out_value = emit_const(ir::IrType::U32, v, src_line);
+                return true;
+            }
+            if (b == Builtin::MethodCount) {
+                const uint32_t v = comptime_method_count(tc_, t1);
+                out_value = emit_const(ir::IrType::U32, v, src_line);
+                return true;
+            }
+            if (b == Builtin::IsClass) {
+                const bool v = comptime_is_class(t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::IsStruct) {
+                const bool v = comptime_is_struct(tc_, t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::IsEnum) {
+                const bool v = comptime_is_enum(tc_, t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::IsPrimitive) {
+                const bool v = comptime_is_primitive(t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::IsNewtype) {
+                const bool v = comptime_is_newtype(t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::IsOpaque) {
+                const bool v = comptime_is_opaque(t1);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::UnderlyingOf) {
+                const std::string un = comptime_underlying_name(tc_, t1);
+                out_value = emit_strmake_for(un);
+                return true;
+            }
+            if (b == Builtin::Offsetof) {
+                const int64_t off = comptime_field_offset(tc_, t1, slit_arg);
+                /* off==-1 (campo no existe): emitir error claro y
+                 * usar 0 como fallback para no romper el flujo. */
+                if (off < 0) {
+                    diags_.error(e->loc, "offsetof: el tipo '" +
+                                             comptime_type_name(tc_, t1) +
+                                             "' no tiene campo '" + slit_arg +
+                                             "'");
+                }
+                out_value = emit_const(
+                    ir::IrType::U64,
+                    off < 0 ? 0ULL : static_cast<uint64_t>(off), src_line);
+                return true;
+            }
+            if (b == Builtin::HasField) {
+                const bool v = comptime_has_field(tc_, t1, slit_arg);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::HasMethod) {
+                const bool v = comptime_has_method(tc_, t1, slit_arg);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::FieldType) {
+                const std::string tn =
+                    comptime_field_type_name(tc_, t1, slit_arg);
+                if (tn.empty()) {
+                    diags_.error(e->loc, "field_type: el tipo '" +
+                                             comptime_type_name(tc_, t1) +
+                                             "' no tiene campo '" + slit_arg +
+                                             "'");
+                }
+                out_value = emit_strmake_for(tn);
+                return true;
+            }
+            if (b == Builtin::FieldName) {
+                const std::string nm_v = comptime_field_name(
+                    tc_, t1, static_cast<uint32_t>(ilit_arg));
+                if (nm_v.empty()) {
+                    diags_.error(e->loc, "field_name: el tipo '" +
+                                             comptime_type_name(tc_, t1) +
+                                             "' no tiene campo en indice " +
+                                             std::to_string(ilit_arg));
+                }
+                out_value = emit_strmake_for(nm_v);
+                return true;
+            }
+            if (b == Builtin::IsSame) {
+                const Type t2 = tc_.resolve_type_node(e->type_args[1].get());
+                const bool v = comptime_is_same(tc_, t1, t2);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+            if (b == Builtin::IsSubtype) {
+                const Type t2 = tc_.resolve_type_node(e->type_args[1].get());
+                const bool v = comptime_is_subtype(tc_, t1, t2);
+                out_value =
+                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/**
+ * @brief Lee o escribe un campo nombrandolo con una CADENA.
+ *
+ * `field_get<T>(obj, "x")` parece reflexion y no lo es: el nombre es un
+ * literal, asi que el desplazamiento se resuelve AL COMPILAR y lo que se emite
+ * es el mismo acceso que habria escrito `obj.x`.  No queda ni busqueda ni
+ * tabla en el programa.
+ *
+ * @param e         La llamada.
+ * @param b         Cual de los dos es.
+ * @param out_value Donde dejar lo leido; sin valor al escribir.
+ * @return @c true si era uno de los dos y quedo bajado.
+ */
+bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
+                                              ir::IrValueId &out_value) {
+    if (e->type_args.empty() ||
+        (b != Builtin::FieldGet && b != Builtin::FieldSet))
+        return false;
+    {
+        const bool is_get = (b == Builtin::FieldGet);
         const Type t = tc_.resolve_type_node(e->type_args[0].get());
         std::string fname;
         if (e->args.size() >= 2) {
@@ -643,7 +760,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         }
         const int64_t off = comptime_field_offset(tc_, t, fname);
         if (off < 0) {
-            return builtin_error(e->loc, std::string(name) + ": el tipo '" + comptime_type_name(tc_, t) +
+            return builtin_error(e->loc, std::string(builtin_name(b)) + ": el tipo '" + comptime_type_name(tc_, t) +
                                              "' no tiene campo '" + fname + "'", out_value);
         }
         const Type ftype = comptime_field_type(tc_, t, fname);
@@ -753,180 +870,107 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         out_value = ir::IR_NO_VALUE;
         return true;
     }
+    return true;
+}
 
-    // -----------------------------------------------------------------
-    // Sprint 2 introspection: 12 builtins de fields/methods/types.
-    // Mismas garantias que Sprint 1: cada llamada baja a UN solo
-    // IrOp::CONST (o STR_LIT_ADDR + STRMAKE para los que devuelven
-    // string).  El type checker ya valido aridad + que los args
-    // runtime sean literales compile-time.
-    // -----------------------------------------------------------------
+/**
+ * @brief Recorre los campos o los metodos de un tipo, AL COMPILAR.
+ *
+ * `for_each_field<T>(...)` no es un bucle: el compilador conoce los campos del
+ * tipo, asi que repite el cuerpo una vez por cada uno con su nombre y su
+ * desplazamiento ya puestos.  Lo que llega al programa son N copias, sin
+ * contador ni condicion.
+ *
+ * @param e         La llamada.
+ * @param b         Cual de los dos es.
+ * @param out_value Donde dejar el resultado, si lo hay.
+ * @return @c true si era uno de los dos y quedo bajado.
+ */
+bool Lowering::try_lower_for_each_member(ast::CallExpr *e, Builtin b,
+                                         ir::IrValueId &out_value) {
+    if (e->type_args.empty() ||
+        (b != Builtin::ForEachField && b != Builtin::ForEachMethod))
+        return false;
     {
-        const bool one_targ_no_args =
-            name == "field_count" || name == "method_count" ||
-            name == "is_class" || name == "is_struct" ||
-            name == "is_primitive" || name == "is_enum" ||
-            name == "is_newtype" || name == "is_opaque" ||
-            name == "underlying_of";
-        const bool one_targ_str_arg =
-            name == "offsetof" || name == "has_field" || name == "has_method" ||
-            name == "field_type";
-        const bool one_targ_int_arg = (name == "field_name");
-        const bool two_targ_no_args = name == "is_subtype" || name == "is_same";
-
-        if ((one_targ_no_args || one_targ_str_arg || one_targ_int_arg ||
-             two_targ_no_args) &&
-            !e->type_args.empty()) {
-            const uint32_t src_line = e->loc.line;
-            const Type t1 = tc_.resolve_type_node(e->type_args[0].get());
-            /* Helper local: emite STRMAKE con el nombre canonico recibido. */
-            auto emit_strmake_for =
-                [&](const std::string &nm) -> ir::IrValueId {
-                std::vector<uint8_t> bytes(nm.begin(), nm.end());
-                const uint64_t idx =
-                    out_mod_->intern_static_data(std::move(bytes));
-                ir::IrValueId v_addr = emit_str_lit_addr(idx, src_line);
-                ir::IrValueId v_len =
-                    emit_const(ir::IrType::I64,
-                               static_cast<uint64_t>(nm.size()), src_line);
-                ir::IrValueId v_str =
-                    emit_string_literal_repr(v_addr, v_len, -1, src_line);
-                return v_str;
-            };
-
-            /* Extraer el arg literal compile-time si lo hay. */
-            std::string slit_arg;
-            uint64_t ilit_arg = 0;
-            if (one_targ_str_arg) {
-                auto *slit =
-                    dynamic_cast<ast::StringLitExpr *>(e->args[0].get());
-                if (slit) slit_arg = slit->value;
-            }
-            if (one_targ_int_arg) {
-                auto *ilit = dynamic_cast<ast::IntLitExpr *>(e->args[0].get());
-                if (ilit) ilit_arg = ilit->value;
-            }
-
-            if (name == "field_count") {
-                const uint32_t v = comptime_field_count(tc_, t1);
-                out_value = emit_const(ir::IrType::U32, v, src_line);
-                return true;
-            }
-            if (name == "method_count") {
-                const uint32_t v = comptime_method_count(tc_, t1);
-                out_value = emit_const(ir::IrType::U32, v, src_line);
-                return true;
-            }
-            if (name == "is_class") {
-                const bool v = comptime_is_class(t1);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "is_struct") {
-                const bool v = comptime_is_struct(tc_, t1);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "is_enum") {
-                const bool v = comptime_is_enum(tc_, t1);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "is_primitive") {
-                const bool v = comptime_is_primitive(t1);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "is_newtype") {
-                const bool v = comptime_is_newtype(t1);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "is_opaque") {
-                const bool v = comptime_is_opaque(t1);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "underlying_of") {
-                const std::string un = comptime_underlying_name(tc_, t1);
-                out_value = emit_strmake_for(un);
-                return true;
-            }
-            if (name == "offsetof") {
-                const int64_t off = comptime_field_offset(tc_, t1, slit_arg);
-                /* off==-1 (campo no existe): emitir error claro y
-                 * usar 0 como fallback para no romper el flujo. */
-                if (off < 0) {
-                    diags_.error(e->loc, "offsetof: el tipo '" +
-                                             comptime_type_name(tc_, t1) +
-                                             "' no tiene campo '" + slit_arg +
-                                             "'");
-                }
-                out_value = emit_const(
-                    ir::IrType::U64,
-                    off < 0 ? 0ULL : static_cast<uint64_t>(off), src_line);
-                return true;
-            }
-            if (name == "has_field") {
-                const bool v = comptime_has_field(tc_, t1, slit_arg);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "has_method") {
-                const bool v = comptime_has_method(tc_, t1, slit_arg);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "field_type") {
-                const std::string tn =
-                    comptime_field_type_name(tc_, t1, slit_arg);
-                if (tn.empty()) {
-                    diags_.error(e->loc, "field_type: el tipo '" +
-                                             comptime_type_name(tc_, t1) +
-                                             "' no tiene campo '" + slit_arg +
-                                             "'");
-                }
-                out_value = emit_strmake_for(tn);
-                return true;
-            }
-            if (name == "field_name") {
-                const std::string nm_v = comptime_field_name(
-                    tc_, t1, static_cast<uint32_t>(ilit_arg));
-                if (nm_v.empty()) {
-                    diags_.error(e->loc, "field_name: el tipo '" +
-                                             comptime_type_name(tc_, t1) +
-                                             "' no tiene campo en indice " +
-                                             std::to_string(ilit_arg));
-                }
-                out_value = emit_strmake_for(nm_v);
-                return true;
-            }
-            if (name == "is_same") {
-                const Type t2 = tc_.resolve_type_node(e->type_args[1].get());
-                const bool v = comptime_is_same(tc_, t1, t2);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
-            if (name == "is_subtype") {
-                const Type t2 = tc_.resolve_type_node(e->type_args[1].get());
-                const bool v = comptime_is_subtype(tc_, t1, t2);
-                out_value =
-                    emit_const(ir::IrType::BOOL, v ? 1ULL : 0ULL, src_line);
-                return true;
-            }
+        const bool is_fields = (b == Builtin::ForEachField);
+        const Type t = tc_.resolve_type_node(e->type_args[0].get());
+        if (e->args.empty()) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
         }
+        /* Lower el callback una sola vez -> fv_addr (16 bytes en stack). */
+        const ir::IrValueId fv_addr = lower_expr(e->args[0].get());
+        if (fv_addr == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        /* LOAD fn_addr = [fv_addr]; LOAD env_addr = [fv_addr + 8]. */
+        ir::IrValueId fn_addr =
+            emit_load_typed(fv_addr, ir::IrType::I64, e->loc.line);
+        ir::IrValueId env_addr = fn_->new_value(ir::IrType::I64);
+        {
+            ir::IrValueId fv_plus_8 = fn_->new_value(ir::IrType::PTR);
+            ir::IrValueId off8 = emit_const(ir::IrType::I64, 8, e->loc.line);
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = fv_plus_8;
+                ad.operands = {fv_addr, off8};
+                ad.source_line = e->loc.line;
+                emit(current_block_, std::move(ad));
+            }
+            ir::IrInstr ld{};
+            ld.op = ir::IrOp::LOAD;
+            ld.type = ir::IrType::I64;
+            ld.dst = env_addr;
+            ld.operands = {fv_plus_8};
+            ld.source_line = e->loc.line;
+            emit(current_block_, std::move(ld));
+        }
+        /* Iterar fields/methods y emitir una CALLCLOSURE por cada uno. */
+        const uint32_t n = is_fields ? comptime_field_count(tc_, t)
+                                     : comptime_method_count(tc_, t);
+        for (uint32_t i = 0; i < n; ++i) {
+            const std::string nm =
+                is_fields
+                    ? comptime_field_name(tc_, t, i)
+                    : (i < comptime_method_count(tc_, t) ? [&]() {
+                          /* Buscar el i-esimo method name. */
+                          if (t.kind == PrimitiveKind::STRUCT ||
+                              t.kind == PrimitiveKind::CLASS) {
+                              auto it = tc_.class_layouts().find(t.struct_name);
+                              if (it != tc_.class_layouts().end() &&
+                                  i < it->second.methods.size()) {
+                                  return it->second.methods[i].name;
+                              }
+                          }
+                          return std::string();
+                      }()
+                                                         : std::string());
+            if (nm.empty()) continue;
+            /* Build StringObject para el nombre. */
+            std::vector<uint8_t> bytes(nm.begin(), nm.end());
+            const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
+            ir::IrValueId v_addr = emit_str_lit_addr(idx, e->loc.line);
+            ir::IrValueId v_len = emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(nm.size()), e->loc.line);
+            ir::IrValueId v_str =
+                emit_string_literal_repr(v_addr, v_len, -1, e->loc.line);
+            /* CALLCLOSURE(env_addr, v_str) -- void return. */
+            ir::IrInstr cl{};
+            cl.op = ir::IrOp::CALLCLOSURE;
+            cl.type = ir::IrType::VOID;
+            cl.dst = ir::IR_NO_VALUE;
+            cl.func_ptr = fn_addr;
+            cl.operands = {env_addr, v_str};
+            cl.source_line = e->loc.line;
+            emit(current_block_, std::move(cl));
+        }
+        out_value = ir::IR_NO_VALUE;
+        return true;
     }
-
-    return false;
+    return true;
 }
 
 } // namespace vx

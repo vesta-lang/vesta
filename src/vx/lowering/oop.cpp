@@ -1787,122 +1787,9 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     // Bug fix 2026-05-23: metodos estaticos.  property_kind=4 marca una
     // llamada estatica `ClassName.method(args)`.  Emitimos CALLVM directo
     // a `<Class>__<method>` sin pasar this como primer arg.
-    if (fa->property_kind == 4 || fa->property_kind == 7) {
-        std::string class_name;
-        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
-            class_name = static_cast<ast::IdentExpr *>(fa->base.get())->name;
-        }
-        if (class_name.empty()) {
-            error_at(e->loc,
-                     "lowering: nombre de clase vacio en llamada estatica");
-            return ir::IR_NO_VALUE;
-        }
-        // El metodo static puede vivir en una CLASE o en un STRUCT (factorias
-        // tipo `u128.zero()`).  Buscar en ambos mapas.
-        const ClassMethodInfo *static_mtd = nullptr;
-        auto it_cls = tc_.class_layouts().find(class_name);
-        if (it_cls != tc_.class_layouts().end()) {
-            for (const auto &m : it_cls->second.methods)
-                if (!m.is_constructor && m.is_static &&
-                    m.name == fa->field_name) {
-                    static_mtd = &m;
-                    break;
-                }
-        }
-        if (!static_mtd) {
-            auto it_str = tc_.struct_layouts().find(class_name);
-            if (it_str != tc_.struct_layouts().end())
-                for (const auto &m : it_str->second.methods)
-                    if (!m.is_constructor && m.is_static &&
-                        m.name == fa->field_name) {
-                        static_mtd = &m;
-                        break;
-                    }
-        }
-        if (!static_mtd) {
-            error_at(e->loc, "lowering: metodo estatico '" + class_name + "." +
-                                 fa->field_name + "' no encontrado");
-            return ir::IR_NO_VALUE;
-        }
-        // SRET si el retorno es un agregado value-type (struct por valor /
-        // Optional / Result): el caller aloca el retbuf en host-stack y lo pasa
-        // como PRIMER operando (no hay `this` en un metodo static).  Simetrico
-        // con el callee en lower_struct_methods (que ya trata static sin this +
-        // retbuf hidden).
-        const StructLayout *ret_slay = nullptr;
-        if (static_mtd->return_type.kind == PrimitiveKind::STRUCT &&
-            !static_mtd->return_type.struct_name.empty() &&
-            tc_.enum_layouts().find(static_mtd->return_type.struct_name) ==
-                tc_.enum_layouts().end()) {
-            auto it_rs =
-                tc_.struct_layouts().find(static_mtd->return_type.struct_name);
-            if (it_rs != tc_.struct_layouts().end() &&
-                !it_rs->second.is_overlay)
-                ret_slay = &it_rs->second;
-        }
-        const bool sret =
-            (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
-             static_mtd->return_type.kind == PrimitiveKind::RESULT ||
-             ret_slay != nullptr);
-        ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
-        if (sret) {
-            const uint64_t buf_bytes =
-                ret_slay != nullptr
-                    ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) &
-                       ~7ULL)
-                : (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL)
-                    ? 16ULL
-                    : 24ULL;
-            v_retbuf = fn_->new_value(ir::IrType::PTR);
-            ir::IrInstr al{};
-            al.op = ir::IrOp::ALLOCA;
-            al.type = ir::IrType::I8;
-            al.imm = buf_bytes;
-            al.dst = v_retbuf;
-            al.host_alloca = true;
-            al.source_line = e->loc.line;
-            emit(current_block_, std::move(al));
-            fn_->values[v_retbuf].is_host_ptr = true;
-        }
-        // Bajar args (retbuf primero si SRET).
-        std::vector<ir::IrValueId> arg_vals;
-        arg_vals.reserve(e->args.size() + (sret ? 1 : 0));
-        if (sret) arg_vals.push_back(v_retbuf);
-        for (size_t ai = 0; ai < e->args.size(); ++ai) {
-            auto &a = e->args[ai];
-            if (!a) return ir::IR_NO_VALUE;
-            const bool param_is_string =
-                ai < static_mtd->param_types.size() &&
-                static_mtd->param_types[ai].kind == PrimitiveKind::STRING;
-            if (param_is_string && a->kind == ast::NodeKind::StringLitExpr) {
-                auto *slit = static_cast<ast::StringLitExpr *>(a.get());
-                arg_vals.push_back(lower_string_literal_to_string_object(slit));
-            } else {
-                const ir::IrValueId av = lower_expr(a.get());
-                if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                arg_vals.push_back(av);
-            }
-        }
-        const ir::IrType ret_ir =
-            sret ? ir::IrType::VOID
-                 : ir_type_from_primitive(static_mtd->return_type.kind);
-        ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
-                                ? ir::IR_NO_VALUE
-                                : fn_->new_value(ret_ir);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::CALL;
-        ins.type = ret_ir;
-        ins.dst = dst;
-        // Metodo static IMPORTADO cross-module: usar el simbolo real del .velb
-        // origen (link_name); si no, "<Name>__<metodo>".
-        ins.func_name = static_mtd->link_name.empty()
-                            ? (class_name + "__" + fa->field_name)
-                            : static_mtd->link_name;
-        ins.operands = arg_vals;
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
-        // El resultado de una factoria SRET es el retbuf (ptr al struct).
-        return sret ? v_retbuf : dst;
+    {
+        ir::IrValueId v_static = ir::IR_NO_VALUE;
+        if (try_lower_static_method_call(e, fa, v_static)) return v_static;
     }
 
     const Type bt = fa->base->result_type;
@@ -2768,5 +2655,143 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
     }
 }
 
+
+/**
+ * @brief Intenta bajar la llamada como un metodo ESTATICO de la clase.
+ *
+ * `Clase.metodo(args)` no tiene receptor: no hay objeto sobre el que llamar,
+ * asi que no se pasa `this` y no hay tabla que consultar -- el destino se sabe
+ * al compilar y es una llamada directa a `<Clase>__<metodo>`.
+ *
+ * @param e   La llamada.
+ * @param fa  Su callee, que es de donde sale el nombre de la clase.
+ * @param out Donde dejar el valor que la llamada produce.
+ * @return @c true si era estatica y quedo bajada.
+ */
+bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
+                                            ast::FieldAccessExpr *fa,
+                                            ir::IrValueId &out) {
+    if (fa->property_kind != 4 && fa->property_kind != 7) return false;
+    {
+        std::string class_name;
+        if (fa->base && fa->base->kind == ast::NodeKind::IdentExpr) {
+            class_name = static_cast<ast::IdentExpr *>(fa->base.get())->name;
+        }
+        if (class_name.empty()) {
+            error_at(e->loc,
+                     "lowering: nombre de clase vacio en llamada estatica");
+            out = ir::IR_NO_VALUE;
+            return true;
+        }
+        // El metodo static puede vivir en una CLASE o en un STRUCT (factorias
+        // tipo `u128.zero()`).  Buscar en ambos mapas.
+        const ClassMethodInfo *static_mtd = nullptr;
+        auto it_cls = tc_.class_layouts().find(class_name);
+        if (it_cls != tc_.class_layouts().end()) {
+            for (const auto &m : it_cls->second.methods)
+                if (!m.is_constructor && m.is_static &&
+                    m.name == fa->field_name) {
+                    static_mtd = &m;
+                    break;
+                }
+        }
+        if (!static_mtd) {
+            auto it_str = tc_.struct_layouts().find(class_name);
+            if (it_str != tc_.struct_layouts().end())
+                for (const auto &m : it_str->second.methods)
+                    if (!m.is_constructor && m.is_static &&
+                        m.name == fa->field_name) {
+                        static_mtd = &m;
+                        break;
+                    }
+        }
+        if (!static_mtd) {
+            error_at(e->loc, "lowering: metodo estatico '" + class_name + "." +
+                                 fa->field_name + "' no encontrado");
+            out = ir::IR_NO_VALUE;
+            return true;
+        }
+        // SRET si el retorno es un agregado value-type (struct por valor /
+        // Optional / Result): el caller aloca el retbuf en host-stack y lo pasa
+        // como PRIMER operando (no hay `this` en un metodo static).  Simetrico
+        // con el callee en lower_struct_methods (que ya trata static sin this +
+        // retbuf hidden).
+        const StructLayout *ret_slay = nullptr;
+        if (static_mtd->return_type.kind == PrimitiveKind::STRUCT &&
+            !static_mtd->return_type.struct_name.empty() &&
+            tc_.enum_layouts().find(static_mtd->return_type.struct_name) ==
+                tc_.enum_layouts().end()) {
+            auto it_rs =
+                tc_.struct_layouts().find(static_mtd->return_type.struct_name);
+            if (it_rs != tc_.struct_layouts().end() &&
+                !it_rs->second.is_overlay)
+                ret_slay = &it_rs->second;
+        }
+        const bool sret =
+            (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
+             static_mtd->return_type.kind == PrimitiveKind::RESULT ||
+             ret_slay != nullptr);
+        ir::IrValueId v_retbuf = ir::IR_NO_VALUE;
+        if (sret) {
+            const uint64_t buf_bytes =
+                ret_slay != nullptr
+                    ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) &
+                       ~7ULL)
+                : (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL)
+                    ? 16ULL
+                    : 24ULL;
+            v_retbuf = fn_->new_value(ir::IrType::PTR);
+            ir::IrInstr al{};
+            al.op = ir::IrOp::ALLOCA;
+            al.type = ir::IrType::I8;
+            al.imm = buf_bytes;
+            al.dst = v_retbuf;
+            al.host_alloca = true;
+            al.source_line = e->loc.line;
+            emit(current_block_, std::move(al));
+            fn_->values[v_retbuf].is_host_ptr = true;
+        }
+        // Bajar args (retbuf primero si SRET).
+        std::vector<ir::IrValueId> arg_vals;
+        arg_vals.reserve(e->args.size() + (sret ? 1 : 0));
+        if (sret) arg_vals.push_back(v_retbuf);
+        for (size_t ai = 0; ai < e->args.size(); ++ai) {
+            auto &a = e->args[ai];
+            if (!a) return ir::IR_NO_VALUE;
+            const bool param_is_string =
+                ai < static_mtd->param_types.size() &&
+                static_mtd->param_types[ai].kind == PrimitiveKind::STRING;
+            if (param_is_string && a->kind == ast::NodeKind::StringLitExpr) {
+                auto *slit = static_cast<ast::StringLitExpr *>(a.get());
+                arg_vals.push_back(lower_string_literal_to_string_object(slit));
+            } else {
+                const ir::IrValueId av = lower_expr(a.get());
+                if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
+                arg_vals.push_back(av);
+            }
+        }
+        const ir::IrType ret_ir =
+            sret ? ir::IrType::VOID
+                 : ir_type_from_primitive(static_mtd->return_type.kind);
+        ir::IrValueId dst = (ret_ir == ir::IrType::VOID)
+                                ? ir::IR_NO_VALUE
+                                : fn_->new_value(ret_ir);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.type = ret_ir;
+        ins.dst = dst;
+        // Metodo static IMPORTADO cross-module: usar el simbolo real del .velb
+        // origen (link_name); si no, "<Name>__<metodo>".
+        ins.func_name = static_mtd->link_name.empty()
+                            ? (class_name + "__" + fa->field_name)
+                            : static_mtd->link_name;
+        ins.operands = arg_vals;
+        ins.source_line = e->loc.line;
+        emit(current_block_, std::move(ins));
+        // El resultado de una factoria SRET es el retbuf (ptr al struct).
+        out = sret ? v_retbuf : dst;
+    }
+    return true;
+}
 
 } // namespace vx

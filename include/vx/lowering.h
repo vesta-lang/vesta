@@ -688,6 +688,53 @@ class Lowering {
     bool try_lower_method_call(ast::CallExpr *e, ir::IrValueId &out);
 
     /**
+     * @brief Intenta bajar la llamada como un metodo ESTATICO de la clase.
+     *
+     * `Clase.metodo(args)` no tiene receptor: no hay objeto sobre el que
+     * llamar, asi que no se pasa `this` y no hay tabla que consultar -- el
+     * destino se sabe al compilar y es una llamada directa.
+     *
+     * @param e   La llamada.
+     * @param fa  Su callee, de donde sale el nombre de la clase.
+     * @param out Donde dejar el valor que la llamada produce.
+     * @return @c true si era estatica y quedo bajada.
+     */
+    /**
+     * @brief Lee o escribe un campo nombrandolo con una CADENA.
+     *
+     * `field_get<T>(obj, "x")` parece reflexion y no lo es: el nombre es un
+     * literal, asi que el desplazamiento se resuelve AL COMPILAR y se emite el
+     * mismo acceso que habria escrito `obj.x`.
+     *
+     * @param e         La llamada.
+     * @param b         Cual de los dos es.
+     * @param out_value Donde dejar lo leido; sin valor al escribir.
+     * @return @c true si era uno de los dos y quedo bajado.
+     */
+    /**
+     * @brief Recorre los campos o los metodos de un tipo, AL COMPILAR.
+     *
+     * No es un bucle: el compilador conoce los campos, asi que repite el
+     * cuerpo una vez por cada uno con su nombre y su desplazamiento ya
+     * puestos.  Al programa llegan N copias, sin contador ni condicion.
+     *
+     * @param e         La llamada.
+     * @param b         Cual de los dos es.
+     * @param out_value Donde dejar el resultado, si lo hay.
+     * @return @c true si era uno de los dos y quedo bajado.
+     */
+    bool try_lower_for_each_member(ast::CallExpr *e, Builtin b,
+                                   ir::IrValueId &out_value);
+
+    bool try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
+
+                                        ir::IrValueId &out_value);
+
+    bool try_lower_static_method_call(ast::CallExpr *e,
+                                      ast::FieldAccessExpr *fa,
+                                      ir::IrValueId &out);
+
+    /**
      * @brief Monta el `try` del modo NATIVO, sin maquina virtual detras.
      *
      * Sin VM no hay pila de marcos de excepcion, asi que el modelo es el de C:
