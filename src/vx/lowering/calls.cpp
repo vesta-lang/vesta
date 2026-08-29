@@ -1975,6 +1975,13 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
     // retorno del callee para detectar Optional/Result que
     // requieren retbuf hidden como primer arg.
     PrimitiveKind callee_kind_ns = PrimitiveKind::VOID;
+    /// Nombre del tipo devuelto cuando quien resuelve es la rama de metodo
+    /// estatico de clase (no hay namespace del que sacarlo).
+    std::string callee_struct_name_cls;
+    /// El tipo devuelto ENTERO, no solo su clase: hace falta para saber cuanto
+    /// mide el buffer de retorno de un `Optional`, que depende de lo que
+    /// envuelve.
+    Type callee_ret_type_ns;
     // Capturar tambien los tipos de parametros del callee para
     // auto-promotion literal -> StringObject al lowering args.
     std::vector<Type> ns_param_types;
@@ -1995,11 +2002,13 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
                     ret_ir = ir_type_from_primitive(
                         real_sig->return_type.kind);
                     callee_kind_ns = real_sig->return_type.kind;
+                    callee_ret_type_ns = real_sig->return_type;
                     ns_param_types = real_sig->param_types;
                 } else {
                     ret_ir = ir_type_from_primitive(
                         sym.sig.return_type.kind);
                     callee_kind_ns = sym.sig.return_type.kind;
+                    callee_ret_type_ns = sym.sig.return_type;
                     ns_param_types = sym.sig.param_types;
                 }
                 found = true;
@@ -2013,13 +2022,38 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
         // @c ns_index=UINT32_MAX porque la "clase" no se registra como
         // namespace.  Aqui resolvemos el metodo via class_layouts del
         // tc y emitimos CALL al mangled label @c ClassName__method.
+        /* Se mira en las clases Y en los structs: un metodo estatico se
+         * declara igual en los dos y se llama igual, asi que resolverlo solo
+         * en uno deja al otro sin el tratamiento del buffer de retorno. */
         auto it_cls = tc_.class_layouts().find(idb->name);
-        if (it_cls != tc_.class_layouts().end()) {
-            for (const auto &m : it_cls->second.methods) {
+        const bool en_clases = it_cls != tc_.class_layouts().end();
+        auto it_str = tc_.struct_layouts().find(idb->name);
+        const bool en_structs = !en_clases &&
+                                it_str != tc_.struct_layouts().end();
+        if (en_clases || en_structs) {
+            const auto &metodos =
+                en_clases ? it_cls->second.methods : it_str->second.methods;
+            for (const auto &m : metodos) {
                 if (m.is_static && !m.is_constructor &&
                     m.name == fa->field_name) {
                     mangled_label = idb->name + "__" + m.name;
                     ret_ir = ir_type_from_primitive(m.return_type.kind);
+                    /* Y QUE devuelve, no solo de que tipo IR es.  Lo que hay
+                     * mas abajo decide con esto si la llamada necesita un
+                     * buffer de retorno, y esta rama no lo rellenaba: un
+                     * metodo estatico de clase que devolviera `Optional<T>`
+                     * -- cuya firma real es void mas un buffer -- se llamaba
+                     * SIN pasarlo y tratando el resultado como si volviera un
+                     * puntero.  El metodo escribia en un parametro que nadie
+                     * le habia dado; con el cuerpo inlinado, las escrituras
+                     * acababan en `<void>` y la lectura en la direccion cero.
+                     *
+                     * La decision de si hace falta buffer estaba escrita en
+                     * tres sitios -- el metodo de un struct, el estatico por
+                     * el otro camino, y aqui -- y este no sabia que existia. */
+                    callee_kind_ns = m.return_type.kind;
+                    callee_struct_name_cls = m.return_type.struct_name;
+                    callee_ret_type_ns = m.return_type;
                     found = true;
                     break;
                 }
@@ -2073,7 +2107,7 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
     // retbuf hidden como primer argumento.  Sin este marshalling,
     // el callee escribe a R1 (garbage) y el caller lee basura.
     // Mismo patron que la rama IdentExpr-callee de lower_call.
-    std::string callee_struct_name;
+    std::string callee_struct_name = callee_struct_name_cls;
     if (fa->ns_index != 0xFFFFFFFFu) {
         const auto &nss = tc_.imported_namespaces();
         if (fa->ns_index < nss.size()) {
@@ -2125,7 +2159,16 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
         if (callee_kind_ns == PrimitiveKind::RESULT) {
             buf_bytes = 24ULL;
         } else if (callee_kind_ns == PrimitiveKind::OPTIONAL) {
-            buf_bytes = 16ULL;
+            /* Lo que ESE Optional necesita, no un numero fijo: ocho de marca
+             * mas el payload, y el payload solo crece cuando envuelve un
+             * struct por valor.  Con el 16 clavado, devolver
+             * `Optional<StructDeDieciseis>` reservaba dieciseis para algo de
+             * veinticuatro y el llamado escribia fuera. */
+            buf_bytes =
+                (callee_ret_type_ns.kind == PrimitiveKind::OPTIONAL)
+                    ? static_cast<uint64_t>(
+                          optional_buf_bytes(callee_ret_type_ns))
+                    : 16ULL;
         } else if (callee_is_str_value_sret_ns) {
             buf_bytes = 24ULL;
         } else {
@@ -2137,9 +2180,17 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e,
         al.type = ir::IrType::I8;
         al.dst = v_call_retbuf_ns;
         al.imm = buf_bytes;
-        if (callee_is_str_value_sret_ns) {
-            // value-string vive en host stack (igual que el path
-            // same-module callee_is_str_value_sret).
+        /* El buffer de un Optional/Result vive en memoria del HOST, igual que
+         * el del value-string y por el mismo motivo: el metodo llamado marca su
+         * parametro como puntero de host y escribe con `movh`.  Reservarlo en
+         * memoria de la maquina virtual hacia que escribiera una direccion de
+         * una en la otra -- acceso invalido dentro del propio metodo --.  La
+         * regla esta escrita unas lineas mas arriba en este mismo fichero, para
+         * el camino del mismo modulo; esta rama no la aplicaba. */
+        if (callee_is_str_value_sret_ns ||
+            callee_kind_ns == PrimitiveKind::OPTIONAL ||
+            callee_kind_ns == PrimitiveKind::RESULT ||
+            callee_is_enum_ret_ns || callee_is_struct_ret_ns) {
             al.host_alloca = true;
             fn_->values[v_call_retbuf_ns].is_host_ptr = true;
         }

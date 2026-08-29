@@ -2623,6 +2623,17 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
                 !it_rs->second.is_overlay)
                 ret_slay = &it_rs->second;
         }
+        /* OJO: esta condicion NO coincide con la que usa el metodo al
+         * declararse (`method_sret`, arriba en este mismo fichero), que ademas
+         * incluye devolver una cadena en el camino nativo.
+         *
+         * Anadirlo aqui es necesario pero NO suficiente, comprobado: con la
+         * clausula puesta, la llamada de clase ya pasa el buffer -- y se ve en
+         * el IR -- pero el binario nativo sigue cayendo, porque entonces la que
+         * no lo pasa es la del mismo metodo declarado en un STRUCT.  Ese camino
+         * se resuelve por un tercer sitio que todavia no he localizado, y hasta
+         * saber cual es, tocar solo esta mitad cambia que lado esta roto sin
+         * arreglar ninguno. */
         const bool sret =
             (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL ||
              static_mtd->return_type.kind == PrimitiveKind::RESULT ||
@@ -2633,8 +2644,15 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
                 ret_slay != nullptr
                     ? ((static_cast<uint64_t>(ret_slay->size_bytes) + 7ULL) &
                        ~7ULL)
+                /* Lo que ESE Optional necesita, no un numero fijo: ocho de
+                 * marca mas el payload, y el payload solo crece cuando envuelve
+                 * un struct por valor.  Con el 16 clavado que habia aqui, un
+                 * metodo estatico que devolviera `Optional<StructGrande>`
+                 * reservaba dieciseis para algo de cuarenta y el llamado
+                 * escribia fuera.  El mismo calculo estaba tres lineas mas alla
+                 * en el metodo de un struct, hecho bien. */
                 : (static_mtd->return_type.kind == PrimitiveKind::OPTIONAL)
-                    ? 16ULL
+                    ? (uint64_t)optional_buf_bytes(static_mtd->return_type)
                     : 24ULL;
             v_retbuf = fn_->new_value(ir::IrType::PTR);
             ir::IrInstr al{};
