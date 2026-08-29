@@ -95,14 +95,18 @@
             "comment": "Anotaciones del lenguaje.  Las de comportamiento van en PascalCase (@Override, @Async, @Target) y los atributos de disposicion en minusculas (@align, @section, @overlay).",
             "patterns": [
                 {
+                    "comment": "Anotacion CON argumentos: el ambito llega solo hasta el parentesis de cierre, para no tenirse la declaracion que viene detras",
                     "name": "meta.annotation.known.vesta",
-                    "begin": "(@)(Abstract|After|AfterReturning|AllArgsConstructor|AllocatorOverride|Around|Aspect|Async|Before|Builder|Data|EqualsAndHashCode|Final|Getter|HelperOverride|Inline|Introspect|Log|Macro|Naked|Name|NoArgsConstructor|NoExcept|NoExceptions|NoIdiom|NonNull|Override|PanicHandler|Pure|RequiredArgsConstructor|Setter|StringConcat|StringEq|Sync|SyncImpl|Synchronized|Target|ToString|Value|Virtual|With|align|alloc|at|bits|cold|complexity|comptime|element|endian|fp|from|hot|id|implicit|lazy|no_heap|nopanic|nothrow|offset|opaque|order|overlay|partial|pod|pure|section|size|stack|stride|total|when)\\b\\s*(\\()?",
+                    "begin": "(@)(Abstract|After|AfterReturning|AllArgsConstructor|AllocatorOverride|Around|Aspect|Async|Before|Builder|Data|EqualsAndHashCode|Final|Getter|HelperOverride|Inline|Introspect|Log|Macro|Naked|Name|NoArgsConstructor|NoExcept|NoExceptions|NoIdiom|NonNull|Override|PanicHandler|Pure|RequiredArgsConstructor|Setter|StringConcat|StringEq|Sync|SyncImpl|Synchronized|Target|ToString|Value|Virtual|With|align|alloc|at|bits|cold|complexity|comptime|element|endian|fp|from|hot|id|implicit|lazy|no_heap|nopanic|nothrow|offset|opaque|order|overlay|partial|pod|pure|section|size|stack|stride|total|when)\\b\\s*(\\()",
                     "beginCaptures": {
                         "1": { "name": "punctuation.definition.annotation.vesta" },
                         "2": { "name": "storage.type.annotation.vesta" },
                         "3": { "name": "punctuation.section.parens.begin.vesta" }
                     },
-                    "end": "(?<=\\))|(?<!\\()$",
+                    "end": "\\)",
+                    "endCaptures": {
+                        "0": { "name": "punctuation.section.parens.end.vesta" }
+                    },
                     "patterns": [
                         { "include": "#comments" },
                         { "include": "#strings" },
@@ -126,7 +130,7 @@
                     ]
                 },
                 {
-                    "comment": "Anotacion no reconocida: se marca igual para no perder el resaltado",
+                    "comment": "Anotacion sin argumentos, reconocida o no: se marca solo el nombre",
                     "name": "meta.annotation.vesta",
                     "match": "(@)([A-Za-z_][A-Za-z0-9_]*)",
                     "captures": {
@@ -300,9 +304,11 @@
                 },
                 { "include": "#numbers" },
                 {
-                    "comment": "Mnemonico al principio de la instruccion",
-                    "name": "support.function.mnemonic.vesta",
-                    "match": "(?<=^|:)\\s*([a-z][a-z0-9._]*)\\b"
+                    "comment": "Mnemonico al principio de la instruccion, sola o detras de una etiqueta.  Se captura en vez de mirar hacia atras: una alternativa de anchos distintos no vale como contexto previo en el motor de expresiones del editor.",
+                    "match": "(?:^|:)\\s*([a-z][a-z0-9._]*)\\b",
+                    "captures": {
+                        "1": { "name": "support.function.mnemonic.vesta" }
+                    }
                 },
                 { "include": "#operators" },
                 { "include": "#punctuation" }

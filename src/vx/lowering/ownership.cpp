@@ -235,7 +235,12 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // el heap.  Solo invocamos el destructor + dejamos
             // que el GC libere el objeto cuando ningun root lo
             // referencie (stack scanning A.34.fix8).
-            if (it->inner_dtor_vtable_index > 0) {
+            /* Se pregunta si HAY destructor, no si su indice es distinto de
+             * cero: cero es el indice del primer metodo de la tabla, y usarlo
+             * como "no hay" hacia que una clase sin constructor -- donde el
+             * destructor cae justo el primero -- perdiera su limpieza sin decir
+             * nada. */
+            if (it->inner_has_dtor) {
                 // AOT (native_poo): el inner de un unique<T> tiene tipo
                 // ESTATICO conocido (T == tipo dinamico salvo polimorfismo).
                 // Si NO es polimorfico, despachar el dtor con un CALL DIRECTO a

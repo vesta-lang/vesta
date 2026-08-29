@@ -3826,8 +3826,19 @@ class Lowering {
         /// del inner via @c CALLVIRT (@c inner_dtor_vtable_index) y NO
         /// hace @c RAW_FREE del host_ptr (rompedria el heap GC).
         bool inner_is_gc_class = false;
-        /// Indice en la vtable del destructor del tipo contenido (>0).
-        /// Usado solo si @c inner_is_gc_class.
+        /**
+         * @brief Si el tipo contenido tiene destructor.
+         *
+         * Hace falta porque el INDICE no puede decirlo: cero es un indice de
+         * tabla perfectamente valido -- el del primer metodo --.  Se uso como
+         * "no hay" y el resultado era que una clase cuyo destructor caia el
+         * primero perdia su limpieza en silencio.  Y caia el primero justo
+         * cuando la clase no declaraba constructor, que es el caso mas comun
+         * de todos.
+         */
+        bool inner_has_dtor = false;
+        /// Indice en la vtable del destructor del tipo contenido.  Solo vale
+        /// si @c inner_has_dtor; cero es un indice como cualquier otro.
         uint32_t inner_dtor_vtable_index = 0;
         /// Nombre IR del destructor del tipo contenido (@c <Class>____dtor),
         /// para CALL DIRECTO en native_poo (AOT) cuando el inner NO es

@@ -1586,6 +1586,21 @@ class TypeChecker {
     void check_method_args(ast::CallExpr *e, const ClassMethodInfo &mi,
                            const std::string &name);
 
+    /**
+     * @brief Construye la ficha de un metodo a partir de su declaracion.
+     *
+     * Estaba escrito dos veces -- override y no-override -- y a la copia del
+     * override le faltaban tres cosas: si es un DESTRUCTOR, y el fichero y la
+     * linea.  Lo primero hacia que una clase derivada con destructor propio no
+     * llamara a NINGUNO al salir de un ambito.
+     *
+     * @param m          El metodo declarado.
+     * @param class_name La clase que lo define.
+     * @return La ficha, sin el indice de tabla.
+     */
+    ClassMethodInfo make_method_info(const ast::ClassMethodDecl &m,
+                                     const std::string &class_name);
+
     void record_method_params(const ast::ClassMethodDecl &m,
                               ClassMethodInfo &mi);
 

@@ -1204,7 +1204,9 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
                         (dot == std::string::npos) ? q : q.substr(dot + 1);
                     if (simple != word) continue;
                     WorkspaceLocation l;
-                    l.uri = im.uri;
+                    // El frontend entrega la RUTA del modulo; darle forma de
+                    // uri es cosa de aqui, que es donde se habla el protocolo.
+                    l.uri = fs_path_to_uri(im.path);
                     byte_offset_to_lsp_position(im.source, s.src_offset,
                                                 l.start_line, l.start_char);
                     byte_offset_to_lsp_position(im.source,

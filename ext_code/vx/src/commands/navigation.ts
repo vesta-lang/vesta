@@ -123,7 +123,8 @@ async function showPaths(client: VestaLanguageClient): Promise<void> {
 
     interface Item extends vscode.QuickPickItem {
         target?: string;
-        isDirectory?: boolean;
+        /** Orden a ejecutar en lugar de revelar la ruta en el sistema. */
+        command?: string;
     }
     const items: Item[] = [
         {
@@ -139,7 +140,9 @@ async function showPaths(client: VestaLanguageClient): Promise<void> {
                 ? 'Es la que resuelve los import std.* y a la que salta ir a la definicion'
                 : 'Se puede fijar con vesta.stdlibPath',
             target: stdlib,
-            isDirectory: true,
+            // Sobre la biblioteca lo util no es abrir su carpeta, sino elegir
+            // uno de sus modulos.
+            command: stdlib ? 'vesta.openStdlib' : undefined,
         },
         {
             label: 'Maquina virtual',
@@ -155,14 +158,11 @@ async function showPaths(client: VestaLanguageClient): Promise<void> {
     if (!choice?.target) {
         return;
     }
-    if (choice.isDirectory) {
-        await vscode.commands.executeCommand(
-            'revealFileInOS',
-            vscode.Uri.file(choice.target),
-        );
-    } else {
-        await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(choice.target));
+    if (choice.command) {
+        await vscode.commands.executeCommand(choice.command);
+        return;
     }
+    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(choice.target));
 }
 
 /** Referencia a un modulo tal y como aparece en un import. */

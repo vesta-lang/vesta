@@ -210,26 +210,49 @@ std::string override_de_paquete(const std::string &nombre) {
 // Autodetecta el directorio de la stdlib Vesta.  Misma logica que usaba
 // compiler_project.cpp inline; factorizada aqui para que el LSP (indices de
 // modulos importados) la reuse sin duplicar la sonda.
+/**
+ * @brief Deja una ruta en forma absoluta y sin `.` ni `..`.
+ *
+ * La ruta de la stdlib acaba siendo la base de la @c canonical_path de cada
+ * modulo de la biblioteca, y esa se documenta -- y se usa -- como absoluta:
+ * es la que viaja al editor como ubicacion de un simbolo y la que entra en la
+ * clave de la cache.  Una relativa solo significa lo mismo mientras nadie
+ * cambie de directorio de trabajo, y quien la recibe ya no esta en el proceso
+ * que la resolvio.
+ *
+ * @param ruta Ruta candidata, absoluta o relativa al directorio de trabajo.
+ * @return La misma ubicacion en forma absoluta; la ruta original si el sistema
+ *         no puede resolverla.
+ */
+static std::string absolutizar_(const std::string &ruta) {
+    if (ruta.empty()) return ruta;
+    std::error_code ec;
+    std::filesystem::path abs =
+        std::filesystem::absolute(std::filesystem::path(ruta), ec);
+    if (ec) return ruta;
+    return abs.lexically_normal().string();
+}
+
 std::string detect_stdlib_vx_dir() {
     std::string sd;
     /* (1) La variable de entorno: lo mas inmediato, para un script o una
      * prueba suelta.  Manda sobre todo lo demas justamente por eso. */
     sd = util::flag_text(util::FlagId::StdlibDir);
-    if (!sd.empty()) return sd;
+    if (!sd.empty()) return absolutizar_(sd);
     /* (2) El override del usuario: se dice UNA vez por maquina y vale para
      * todos sus proyectos sin tocar ninguno.  Es lo que necesita quien
      * desarrolla el propio compilador, que tiene la stdlib de trabajo en un
      * sitio y la instalada en otro. */
     {
         const std::string ov = override_de_paquete("std");
-        if (!ov.empty()) return ov;
+        if (!ov.empty()) return absolutizar_(ov);
     }
     // (2) Candidatos relativos al cwd.
     static const char *cands[] = {"stdlib/vx", "../stdlib/vx",
                                   "../../stdlib/vx"};
     for (const char *c : cands) {
         std::ifstream test(std::string(c) + "/simd_string.vx");
-        if (test.good()) return c;
+        if (test.good()) return absolutizar_(c);
     }
     // (3) Candidatos relativos al ejecutable (instalacion + build-tree).
     std::string exe = fs::get_executable_path();
@@ -239,7 +262,7 @@ std::string detect_stdlib_vx_dir() {
             ed / "stdlib" / "vx", ed.parent_path() / "stdlib" / "vx"};
         for (const auto &c : exe_cands) {
             std::ifstream test((c / "simd_string.vx").string());
-            if (test.good()) return c.string();
+            if (test.good()) return absolutizar_(c.string());
         }
     }
     return {};

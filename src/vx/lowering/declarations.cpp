@@ -630,6 +630,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                     const ClassLayout &ilay = it_cls->second;
                     for (const auto &mi : ilay.methods) {
                         if (mi.is_destructor) {
+                            act.inner_has_dtor = true;
                             act.inner_dtor_vtable_index = mi.vtable_index;
                             // Nombre directo del dtor (<owner>__<dtor>) para
                             // CALL directo en native_poo (AOT).

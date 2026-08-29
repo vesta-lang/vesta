@@ -112,14 +112,23 @@ std::string semantic_index_to_json(const SemanticIndex &idx);
 /**
  * @struct ImportedModuleSemIndex
  * @brief Indice semantico de un modulo IMPORTADO por el fichero analizado,
- *        con su fuente cruda (para extraer firmas) y su uri.
+ *        con su fuente cruda (para extraer firmas) y su ruta.
  *
  * Lo consume el LSP para el completado / navegacion CROSS-MODULE: cuando el
  * usuario escribe @c "lib.<TAB>", los simbolos publicos de @c lib viven en
  * OTRO fichero, no en el indice del documento actual.
+ *
+ * Lo que se guarda aqui es la RUTA del modulo, no su @c file:// -- el frontend
+ * no habla el protocolo del editor, y darle forma de uri aqui obligaba a tener
+ * dos maneras de construirlo (esta y la del indice de workspace) que podian
+ * discrepar, y discrepaban: esta pegaba el prefijo a la ruta sin anteponer la
+ * barra de la letra de unidad, asi que en Windows salia @c file://F:/... y esa
+ * forma nombra una maquina llamada @c F:, no un fichero.  Quien habla el
+ * protocolo convierte, con @c lsp::fs_path_to_uri, que es la unica que sabe.
  */
 struct ImportedModuleSemIndex {
-    std::string uri; ///< file:// del modulo importado (para Location futura).
+    /// Ruta canonica del modulo importado en el sistema de ficheros.
+    std::string path;
     std::string source; ///< fuente cruda del modulo (extraccion de firmas).
     SemanticIndex index;
 };

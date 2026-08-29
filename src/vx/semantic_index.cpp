@@ -488,7 +488,7 @@ build_imported_sem_indexes(const std::string &root_file,
         ss << f.rdbuf();
         std::string src = ss.str();
         ImportedModuleSemIndex e;
-        e.uri = "file://" + m->canonical_path;
+        e.path = m->canonical_path;
         e.source = std::move(src);
         try {
             e.index = build_semantic_index(*m->parsed_ast, e.source,

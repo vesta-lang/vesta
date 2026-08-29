@@ -4678,17 +4678,8 @@ void TypeChecker::collect_globals() {
                         continue;
                     }
                     // Reemplazar el slot manteniendo vtable_index.
-                    ClassMethodInfo mi_info;
-                    mi_info.name = mname;
-                    mi_info.is_constructor = false;
-                    mi_info.is_static = m->is_static;
-                    mi_info.is_final = m->is_final;
-                    mi_info.is_inline = m->is_inline;
-                    mi_info.defining_class = c->name; // override en esta clase
-                    mi_info.return_type =
-                        m->return_type ? type_from_node(m->return_type.get())
-                                       : Type{PrimitiveKind::VOID};
-                    record_method_params(*m, mi_info);
+                    ClassMethodInfo mi_info = make_method_info(*m, c->name);
+                    mi_info.is_constructor = false; // un ctor no sobrescribe
                     mi_info.vtable_index =
                         layout.methods[override_idx].vtable_index;
                     layout.methods[override_idx] = std::move(mi_info);
@@ -4759,21 +4750,7 @@ void TypeChecker::collect_globals() {
                     }
                     continue;
                 }
-                ClassMethodInfo mi_info;
-                mi_info.name = mname;
-                mi_info.is_constructor = m->is_constructor;
-                mi_info.is_destructor = m->is_destructor;
-                mi_info.is_static = m->is_static;
-                mi_info.is_final = m->is_final;
-                mi_info.is_inline = m->is_inline;
-                mi_info.defining_class = c->name;
-                // capturar source file + line del decl.
-                mi_info.source_file = m->loc.file;
-                mi_info.source_line = m->loc.line;
-                mi_info.return_type = m->return_type
-                                          ? type_from_node(m->return_type.get())
-                                          : Type{PrimitiveKind::VOID};
-                record_method_params(*m, mi_info);
+                ClassMethodInfo mi_info = make_method_info(*m, c->name);
                 mi_info.vtable_index =
                     static_cast<uint32_t>(layout.methods.size());
 
@@ -5637,6 +5614,42 @@ void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
         }
         mi.param_types.push_back(pt);
     }
+}
+
+/**
+ * @brief Construye la ficha de un metodo a partir de su declaracion.
+ *
+ * Estaba escrito dos veces -- para el metodo que sobrescribe a otro y para el
+ * que no -- y a la copia del override le faltaban tres cosas: si es un
+ * DESTRUCTOR, y el fichero y la linea donde se escribio.
+ *
+ * Lo del destructor no era cosmetico.  Una clase derivada que declara el suyo
+ * reemplaza la ficha heredada por una que ya no dice que lo es, asi que al
+ * salir de un ambito no se llamaba a NINGUNO -- ni al propio ni al de la base
+ * --, sin un solo aviso.  Y lo del fichero y la linea deja a un metodo
+ * sobrescrito sin sitio en una traza de llamadas.
+ *
+ * @param m          El metodo declarado.
+ * @param class_name La clase donde se escribe (la que lo define).
+ * @return La ficha, sin el indice de tabla, que lo pone quien llama porque
+ *         depende de si sustituye a otro o se anade al final.
+ */
+ClassMethodInfo TypeChecker::make_method_info(const ast::ClassMethodDecl &m,
+                                              const std::string &class_name) {
+    ClassMethodInfo mi;
+    mi.name = m.name;
+    mi.is_constructor = m.is_constructor;
+    mi.is_destructor = m.is_destructor;
+    mi.is_static = m.is_static;
+    mi.is_final = m.is_final;
+    mi.is_inline = m.is_inline;
+    mi.defining_class = class_name;
+    mi.source_file = m.loc.file;
+    mi.source_line = m.loc.line;
+    mi.return_type = m.return_type ? type_from_node(m.return_type.get())
+                                   : Type{PrimitiveKind::VOID};
+    record_method_params(m, mi);
+    return mi;
 }
 
 /**

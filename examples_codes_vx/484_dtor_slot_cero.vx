@@ -1,0 +1,84 @@
+namespace ejemplos.dtor_slot_cero;
+
+// Cuando el destructor de un `unique<T>` SI se llama.  Habia dos formas de
+// perderlo, las dos en silencio, y las dos por lo mismo: informacion que se
+// escribe dos veces y una de las copias se queda corta.
+//
+// 1. CERO ES UN INDICE VALIDO.  La limpieza guardaba el indice del destructor
+//    en la tabla de metodos y preguntaba `indice > 0` para saber si lo habia.
+//    Pero cero es el indice del PRIMER metodo, y el destructor cae el primero
+//    justo cuando la clase no declara constructor -- el caso mas comun --.  Una
+//    clase asi perdia su destructor entero.
+//
+// 2. EL OVERRIDE NO DECIA QUE ERA UN DESTRUCTOR.  La ficha de un metodo se
+//    construia en dos sitios -- el que sobrescribe a otro y el que no -- y a la
+//    del override le faltaba esa marca (y el fichero y la linea, que dejaban a
+//    un metodo sobrescrito sin sitio en una traza).  Asi que una clase derivada
+//    que declara su propio destructor reemplazaba la ficha heredada por una que
+//    ya no decia que lo era, y no se llamaba a NINGUNO: ni al suyo ni al de la
+//    base.
+//
+// Los dos casos estan aqui, y el que ya funcionaba tambien, para que se vea la
+// diferencia si alguno vuelve a romperse.
+
+class Cuenta {
+    public static i32 sin_ctor;
+    public static i32 con_ctor;
+    public static i32 base_solo;
+    public static i32 derivada;
+}
+
+// Sin constructor: su destructor es el PRIMER metodo, indice cero.
+class SinCtor {
+    public ~SinCtor() { Cuenta.sin_ctor = Cuenta.sin_ctor + 1; }
+}
+
+// Con constructor: el destructor cae en el indice uno.  Este caso siempre
+// funciono, y por eso escondia al de arriba.
+class ConCtor {
+    public i64 v;
+    public ConCtor(i64 n) { this.v = n; }
+    public ~ConCtor() { Cuenta.con_ctor = Cuenta.con_ctor + 1; }
+}
+
+// Herencia SIN destructor propio en la derivada: corre el heredado.
+class BaseA {
+    public ~BaseA() { Cuenta.base_solo = Cuenta.base_solo + 1; }
+}
+class DerivA : BaseA {
+    public i64 f() { return 1; }
+}
+
+// Herencia CON destructor propio: sobrescribe el hueco de la tabla, asi que
+// corre el de la derivada.  El de la base NO se encadena -- a diferencia de
+// C++, donde los destructores suben por la jerarquia --; hoy el override
+// sustituye.
+class BaseB {
+    public ~BaseB() { Cuenta.base_solo = Cuenta.base_solo + 1; }
+}
+class DerivB : BaseB {
+    public ~DerivB() { Cuenta.derivada = Cuenta.derivada + 1; }
+}
+
+void usar() {
+    unique<SinCtor> a = unique_box(new SinCtor());
+    unique<ConCtor> b = unique_box(new ConCtor(1));
+    unique<DerivA> c = unique_box(new DerivA());
+    unique<DerivB> d = unique_box(new DerivB());
+}
+
+i32 main() {
+    Cuenta.sin_ctor = 0;
+    Cuenta.con_ctor = 0;
+    Cuenta.base_solo = 0;
+    Cuenta.derivada = 0;
+
+    usar();
+
+    println("sin_ctor=${Cuenta.sin_ctor} con_ctor=${Cuenta.con_ctor} base_solo=${Cuenta.base_solo} derivada=${Cuenta.derivada}");
+
+    // 1 + 1 + 1 (el heredado de DerivA) + 1 (el propio de DerivB) = 4
+    const i64 total = Cuenta.sin_ctor + Cuenta.con_ctor + Cuenta.base_solo +
+                      Cuenta.derivada;
+    return (i32) (total * 10 + 2);   // 42
+}
