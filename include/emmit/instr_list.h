@@ -351,17 +351,32 @@ VX_INSTR(SPECIALIZE, "specialize", Object)
 VX_INSTR(THROW, "throw", Object)
 
 /* --- Other --- */
+/* Las cuatro de abajo no son instrucciones: son DIRECTIVAS del ensamblador
+ * (reservar, alinear, fijar el origen, traer otro modulo).  Van aqui porque el
+ * parser las lee por el mismo sitio que una instruccion -- lo dice su propia
+ * tabla: "aunque no es una instruccion, se detectara como una" -- y esta lista
+ * es la que decide que nombres reconoce.
+ *
+ * Faltaban, y el fallo era mudo a medias: el nombre no estaba en el indice, asi
+ * que cada `align 16` del fichero caia por la ruta de recuperacion de erratas,
+ * avisaba de una "instruccion desconocida" y se arreglaba sugiriendose a si
+ * misma.  Que acertara era casualidad: esa ruta REESCRIBE el nombre por el mas
+ * parecido, y el mas parecido pudo haber sido otro. */
+VX_INSTR(ALIGN, "align", Other)
 VX_INSTR(GCHANDLE, "gchandle", Other)
 VX_INSTR(GETMGR, "getmgr", Other)
 VX_INSTR(GETPROC, "getproc", Other)
 VX_INSTR(GETVM, "getvm", Other)
 VX_INSTR(HTRACK, "htrack", Other)
+VX_INSTR(IMPORT, "import", Other)
 VX_INSTR(ISNULL, "isnull", Other)
 VX_INSTR(LOADZ, "loadz", Other)
 VX_INSTR(LOADZH, "loadzh", Other)
 VX_INSTR(MEMSYNC, "memsync", Other)
 VX_INSTR(MSGRECV, "msgrecv", Other)
 VX_INSTR(MSGSEND, "msgsend", Other)
+VX_INSTR(ORG, "org", Other)
+VX_INSTR(RESBP, "resbp", Other)
 VX_INSTR(RSPAWN, "rspawn", Other)
 VX_INSTR(SETCC, "setcc", Other)
 VX_INSTR(SEXT, "sext", Other)

@@ -30,6 +30,8 @@
 
 #include "json.hpp"
 
+#include <atomic>
+
 #include "lsp/analysis_engine.h"
 #include "lsp/document_store.h"
 #include "lsp/inspector.h"
@@ -135,6 +137,18 @@ class LspServer {
     void handle_references(const nlohmann::json &msg);
 
     /**
+     * @brief @c workspace/symbol: buscar un simbolo por su NOMBRE.
+     *
+     * "Ir a la definicion" necesita una posicion en un fichero, y hay sitios
+     * donde se nombra una funcion sin tenerla delante: un informe, una vista
+     * del compilador, un hecho del analisis.  Desde ahi, lo unico que se tiene
+     * es el nombre, y esto es lo que lo convierte en un sitio al que ir.
+     *
+     * @param msg Peticion, con @c params.query.
+     */
+    void handle_workspace_symbol(const nlohmann::json &msg);
+
+    /**
      * @brief Responde a @c textDocument/completion (Fase 5).
      *
      * Ofrece autocompletado pragmatico:
@@ -186,6 +200,17 @@ class LspServer {
     void publish_diagnostics(const std::string &uri);
 
     /**
+     * @brief Lee del editor para que maquina hay que analizar.
+     *
+     * Acepta tanto @c {"vesta":{"inspect":{"os":...}}} -- la forma en que un
+     * editor manda su configuracion -- como el objeto plano @c {"os":...}.
+     * Lo que no venga se deja como esta.
+     *
+     * @param settings Objeto de configuracion recibido.
+     */
+    void apply_target_settings(const nlohmann::json &settings);
+
+    /**
      * @brief Envia una respuesta de exito (result) a una peticion con id.
      * @param id     Identificador de la peticion (numero o string).
      * @param result Cuerpo del resultado.
@@ -214,7 +239,9 @@ class LspServer {
                          docs_}; ///< Inspector del ecosistema (Fase 3).
     WorkspaceIndex workspace_;   ///< Indice de simbolos del workspace (Fase 4).
     bool initialized_ = false;   ///< true tras un initialize correcto.
-    bool shutdown_requested_ = false; ///< true tras shutdown (espera exit).
+    /// true tras @c shutdown (espera @c exit).  Atomico porque lo escribe el
+    /// hilo que despacha y lo lee el que lee la entrada.
+    std::atomic<bool> shutdown_requested_{false};
 };
 
 } // namespace lsp

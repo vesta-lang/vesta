@@ -17,12 +17,18 @@ import * as vscode from 'vscode';
 import { VESTA_LANGUAGE_ID, VestaLanguageClient } from './lsp/client';
 import { VestaInlayHintsProvider } from './features/paramHints';
 import { CompilerFactsProvider } from './features/compilerFacts';
+import { InstructionHoverProvider } from './features/instructionHover';
+import { FlowArrowsDecorator } from './features/flowArrows';
+import { VestaActionsProvider } from './views/actionsTree';
 import { VestaTextViewProvider } from './views/textViews';
 import { DiagramPanel } from './views/diagramPanel';
 import { MachineViewPanel } from './views/machinePanel';
 import { registerInspectCommands } from './commands/inspect';
 import { registerNavigationCommands } from './commands/navigation';
+import { registerTargetCommand } from './commands/selectTarget';
+import { registerCellCommands } from './features/cells';
 import { compileActiveFile, forgetTerminal, runActiveFile } from './commands/build';
+import { recordarDocumentoVesta } from './util/settings';
 
 /** Cliente del servidor de lenguaje mientras la extension esta activa. */
 let client: VestaLanguageClient | undefined;
@@ -42,6 +48,25 @@ const RESTART_SETTINGS = [
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
     client = new VestaLanguageClient(context);
 
+    // Todo lo que la extension sabe hacer, en la barra lateral.  Estaba solo en
+    // la paleta de comandos, que exige saber que existe y como se llama.
+    context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('vesta.actions',
+                                               new VestaActionsProvider()),
+        // Se apunta cual es el programa que se esta mirando.  Las vistas del
+        // compilador no son ficheros Vesta, asi que al abrir una el "fichero
+        // activo" deja de serlo y la siguiente accion se quedaria sin sobre
+        // que trabajar.
+        vscode.window.onDidChangeActiveTextEditor(editor => {
+            if (editor) {
+                recordarDocumentoVesta(editor.document);
+            }
+        }),
+    );
+    if (vscode.window.activeTextEditor) {
+        recordarDocumentoVesta(vscode.window.activeTextEditor.document);
+    }
+
     // Documentos virtuales donde se muestran las vistas en texto.
     const views = new VestaTextViewProvider();
     context.subscriptions.push(
@@ -51,6 +76,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     registerInspectCommands(context, { client, views });
     registerNavigationCommands(context, client);
+    registerTargetCommand(context, client);
+    // Ejecutar trozos del propio fichero y ver la salida al lado, sin montar un
+    // programa aparte.
+    registerCellCommands(context, client);
+
+    /* Las flechas del flujo, SOBRE el codigo.  No es una vista aparte: se
+     * dibujan en el propio editor, encima de los bloques de asm, porque es
+     * donde se leen. */
+    const flechas = new FlowArrowsDecorator(client);
+    context.subscriptions.push(
+        new vscode.Disposable(() => flechas.dispose()),
+        vscode.window.onDidChangeActiveTextEditor(e => void flechas.refresh(e)),
+        vscode.workspace.onDidChangeTextDocument(ev => {
+            const editor = vscode.window.activeTextEditor;
+            if (editor && ev.document === editor.document) {
+                void flechas.refresh(editor);
+            }
+        }),
+    );
+    void flechas.refresh(vscode.window.activeTextEditor);
 
     const activeClient = client;
     context.subscriptions.push(
@@ -70,6 +115,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
         vscode.languages.registerInlayHintsProvider(selector, inlayHints),
         vscode.languages.registerInlayHintsProvider(selector, compilerFacts),
+        // Dentro de un bloque asm, lo que cuesta cada instruccion segun la
+        // base que el propio compilador consulta para planificarlas.
+        vscode.languages.registerHoverProvider(
+            selector,
+            new InstructionHoverProvider(activeClient),
+        ),
         new vscode.Disposable(() => inlayHints.dispose()),
         new vscode.Disposable(() => compilerFacts.dispose()),
     );
@@ -88,6 +139,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             if (event.affectsConfiguration('vesta.inlayHints.compilerFacts') ||
                 event.affectsConfiguration('vesta.inlayHints.compilerFactsUnknown')) {
                 compilerFacts.refresh();
+            }
+            // El objetivo decide tambien los errores, no solo las vistas: hay
+            // que decirselo al servidor para que reanalice.
+            if (event.affectsConfiguration('vesta.inspect.os') ||
+                event.affectsConfiguration('vesta.inspect.arch')) {
+                activeClient.notificarObjetivo();
+                compilerFacts.refresh();
+                void flechas.refresh(vscode.window.activeTextEditor);
+            }
+            if (event.affectsConfiguration('vesta.flowArrows')) {
+                void flechas.refresh(vscode.window.activeTextEditor);
             }
         }),
     );

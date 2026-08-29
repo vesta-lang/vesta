@@ -730,4 +730,29 @@ void WorkspaceIndex::for_each_def_name(
     }
 }
 
+std::vector<std::string> import_search_roots(const std::string &fs_path) {
+    std::vector<std::string> raices;
+    if (fs_path.empty()) return raices;
+
+    std::string d = fs_path;
+    const size_t barra = d.find_last_of("/\\");
+    if (barra == std::string::npos) return raices;
+    d = d.substr(0, barra);
+
+    /* Acotado a 40 niveles por si la ruta es patologica: nadie anida cuarenta
+     * directorios, y una ruta que se repita a si misma colgaria el bucle. */
+    for (int nivel = 0; nivel < 40 && !d.empty(); ++nivel) {
+        raices.push_back(d);
+        // Con manifiesto, aqui empieza el paquete: se incluye y se para.
+        if (std::ifstream(d + "/vx.toml").good() ||
+            std::ifstream(d + "/vx.json").good())
+            break;
+        const size_t s = d.find_last_of("/\\");
+        // La raiz del sistema de ficheros: POSIX "/" o Windows "C:".
+        if (s == std::string::npos || s == 0 || (s == 2 && d[1] == ':')) break;
+        d = d.substr(0, s);
+    }
+    return raices;
+}
+
 } // namespace lsp

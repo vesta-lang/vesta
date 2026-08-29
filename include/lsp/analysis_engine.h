@@ -37,6 +37,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -104,13 +105,66 @@ struct DocAnalysis {
 };
 
 /**
+ * @brief Normaliza el arch tal y como lo escribe el editor al que espera el
+ *        parser (@c "x86-64" -> @c "x86_64", @c "x86-32" -> @c "x86").
+ * @param arch Nombre de la arquitectura.
+ * @return El nombre que entiende la compilacion condicional.
+ */
+std::string norm_target_arch(const std::string &arch);
+
+/**
+ * @struct CondCompTargetGuard
+ * @brief Aplica el objetivo contra el que se evalua @c @Target y lo restaura.
+ *
+ * Con os y arch vacios no toca nada: se compila para el anfitrion, que es lo
+ * de siempre.  Existe una sola vez porque lo usan el analisis y las vistas, y
+ * dos formas de fijar el mismo objetivo acabarian discrepando.
+ */
+struct CondCompTargetGuard {
+    /**
+     * @brief Fija el objetivo si se pidio alguno.
+     * @param os   @c "windows"/@c "linux"/@c "macos"; vacio = anfitrion.
+     * @param arch Arquitectura sin normalizar; vacia = la del anfitrion.
+     */
+    CondCompTargetGuard(const std::string &os, const std::string &arch);
+    ~CondCompTargetGuard();
+    CondCompTargetGuard(const CondCompTargetGuard &) = delete;
+    CondCompTargetGuard &operator=(const CondCompTargetGuard &) = delete;
+
+  private:
+    std::string prev_os_, prev_arch_;
+    bool aplicado_ = false;
+};
+
+/**
  * @class AnalysisEngine
  * @brief Compila y cachea analisis de documentos Vesta para el LSP.
  *
- * No es thread-safe: el servidor procesa peticiones secuencialmente.
+ * SE PUEDE USAR DESDE VARIOS HILOS.  Dos documentos distintos se compilan a la
+ * vez; el mismo documento no se compila dos veces a la vez -- el segundo espera
+ * y se lleva el resultado del primero --.  El cerrojo del mapa se tiene solo
+ * para mirar y guardar, nunca mientras se compila: tenerlo ahi convertiria el
+ * motor en una cola de uno y no habria ganado nada.
  */
 class AnalysisEngine {
   public:
+    /**
+     * @brief Fija el objetivo con el que se analiza a partir de ahora.
+     *
+     * Los diagnosticos y el hover salen de COMPILAR, asi que dependen de para
+     * que maquina se compila: un modulo que solo existe en Linux, leido desde
+     * Windows, no tiene ni sus imports ni sus tipos -- y eso son cientos de
+     * errores ciertos y sin ningun valor para quien lo esta editando.
+     *
+     * Vacios = el anfitrion, que es el comportamiento de siempre.  Cambiarlo
+     * invalida lo analizado: la respuesta anterior era sobre otra pregunta.
+     *
+     * @param os   @c "windows"/@c "linux"/@c "macos"; vacio = anfitrion.
+     * @param arch @c "x86-64"/@c "x86-32"/...; vacia = la del anfitrion.
+     */
+    void set_target(const std::string &os, const std::string &arch);
+
+
     /**
      * @brief Analiza un documento, reutilizando la cache si el texto no
      *        cambio.
@@ -120,22 +174,26 @@ class AnalysisEngine {
      * teclea), devuelve un @c DocAnalysis con un unico diagnostico de error
      * interno en la posicion 0:0 en lugar de propagar el fallo.
      *
+     * Devuelve un puntero COMPARTIDO y no una referencia: mientras uno lo
+     * esta usando, otro puede reanalizar el mismo documento y sustituir lo que
+     * hay en la cache.  Con una referencia, el que estaba usando el anterior se
+     * queda mirando memoria liberada -- y no falla ahi, falla mas tarde y en
+     * otro sitio.  Con esto, cada uno conserva vivo el suyo hasta que termina.
+     *
      * @param uri  URI del documento (para nombrar el fichero en diagnosticos
      *             y como clave de cache).
      * @param text Texto completo actual del documento.
-     * @return Referencia al @c DocAnalysis cacheado para este documento.  La
-     *         referencia es valida hasta el siguiente @c analyze_document
-     *         sobre el MISMO uri o hasta @c forget.
+     * @return El analisis de ese documento.  Nunca nulo.
      */
-    const DocAnalysis &analyze_document(const std::string &uri,
-                                        const std::string &text);
+    std::shared_ptr<const DocAnalysis> analyze_document(const std::string &uri,
+                                                        const std::string &text);
 
     /**
      * @brief Devuelve el analisis cacheado de un documento, o nullptr.
      * @param uri URI del documento.
-     * @return Puntero al analisis previo, o nullptr si no hay ninguno.
+     * @return El analisis previo, o nullptr si no hay ninguno.
      */
-    const DocAnalysis *cached(const std::string &uri) const;
+    std::shared_ptr<const DocAnalysis> cached(const std::string &uri) const;
 
     /**
      * @brief Olvida el analisis cacheado de un documento (al cerrarlo).
@@ -144,8 +202,18 @@ class AnalysisEngine {
     void forget(const std::string &uri);
 
   private:
+    /// Cerrojo del mapa.  Solo cubre mirar y guardar, que es instantaneo; NO
+    /// se tiene mientras se compila, o dos documentos distintos no podrian
+    /// compilarse a la vez, que es justo lo que se busca.
+    mutable std::mutex mapa_;
     /// Cache por URI del ultimo analisis (uno por documento abierto).
-    std::unordered_map<std::string, std::unique_ptr<DocAnalysis>> cache_;
+    std::unordered_map<std::string, std::shared_ptr<const DocAnalysis>> cache_;
+    /// Un cerrojo por documento, para que dos peticiones sobre el MISMO
+    /// fichero no lo compilen dos veces a la vez: la segunda espera y se lleva
+    /// lo que hizo la primera.  Documentos distintos no se estorban.
+    std::unordered_map<std::string, std::shared_ptr<std::mutex>> por_documento_;
+    /// Objetivo con el que se compila el analisis.  Vacios = anfitrion.
+    std::string target_os_, target_arch_;
 };
 
 /**

@@ -47,6 +47,7 @@
 #define VESTA_LSP_INSPECTOR_H
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -104,8 +105,11 @@ struct InspectTarget {
  * @class Inspector
  * @brief Sirve las peticiones @c vesta/* del LSP (vistas del ecosistema).
  *
- * No es thread-safe: el servidor procesa peticiones secuencialmente.  Cada
- * metodo devuelve un @c nlohmann::json con la forma de respuesta del
+ * SE PUEDE USAR DESDE VARIOS HILOS: dos vistas de documentos distintos se
+ * atienden a la vez.  Sus caches van con cerrojo, que solo se tiene para mirar
+ * y guardar -- nunca mientras se compila, que es lo que se quiere solapar --.
+ *
+ * Cada metodo devuelve un @c nlohmann::json con la forma de respuesta del
  * protocolo (campos documentados en cada metodo); ante un error controlado
  * devuelve un objeto con @c {"error": "<motivo>"} para que el cliente lo
  * muestre sin tumbar la sesion.
@@ -169,6 +173,25 @@ class Inspector {
      *         contract_mismatch }, ... ] } o @c { "error": "..." }.
      */
     nlohmann::json complexity(const std::string &uri);
+
+    /**
+     * @brief @c vesta/functionReport: lo DECLARADO frente a lo MEDIDO.
+     *
+     * Una funcion declara cosas -- @c \@pure, @c \@nothrow, @c \@alloc(N),
+     * @c \@stack(N), @c \@complexity -- y el compilador MIDE esas mismas cosas
+     * sobre el codigo que sale.  Lo interesante no es ninguna de las dos listas
+     * por separado: es ponerlas una al lado de la otra y ver donde no cuadran,
+     * que es exactamente lo que un contrato existe para detectar.
+     *
+     * Se responde por funcion y en datos, no en texto: lo declarado, lo medido,
+     * el veredicto de cada contrato y si el modo nativo puede con ella.  Como
+     * se ensena es cosa de quien lo ensena.
+     *
+     * @param uri URI del documento.
+     * @return @c { "functions": [ { name, display, line, cost{...},
+     *         measured{...}, declared{...}, checks[...], aot{...} } ] }.
+     */
+    nlohmann::json function_report(const std::string &uri);
 
     /**
      * @brief @c vesta/diagram: diagrama de una fase en un formato.
@@ -343,6 +366,83 @@ class Inspector {
      */
     nlohmann::json targets();
 
+    /**
+     * @brief @c vesta/instruction: lo que el compilador sabe de UNA instruccion.
+     *
+     * Lo mismo que consulta el planificador para decidir si puede mover una
+     * instruccion respecto de otra: cuanto tarda, cuanto ocupa, por que puertos
+     * pasa, que registros y que banderas toca, y que estado del procesador lee
+     * o escribe.  Con eso, leer un bloque de ensamblador deja de ser adivinar
+     * el coste.
+     *
+     * El coste depende de la MICROARQUITECTURA: la misma instruccion no cuesta
+     * lo mismo en dos maquinas, asi que se responde para la que se pida y se
+     * dice cual fue.
+     *
+     * NO se vuelve a emparejar el texto: se busca la instruccion que el
+     * compilador YA elevo para esa linea, que lleva su identidad en la base
+     * (ISA y forma) resuelta por el mismo elevado que usa el optimizador.  Es
+     * la diferencia entre decir lo que el compilador entendio y decir lo que
+     * otro emparejador cree que pone.
+     *
+     * Una instruccion que la base NO conoce se responde igual, diciendo que no
+     * la conoce (@c known=false) y por que: callarse la deja indistinguible de
+     * una linea que no es una instruccion, y son cosas distintas -- de la
+     * segunda no hay nada que decir, y la primera es justo la que conviene
+     * mirar, porque el compilador la trata como barrera y no mueve nada a su
+     * alrededor.
+     *
+     * @param uri  Documento abierto.
+     * @param line Linea del fuente, contando desde uno.
+     * @param cpu  Microarquitectura; vacia = la primera que tenga la base.
+     * @param arch Arquitectura del bloque (@c x86-64, @c aarch64...); decide a
+     *             que ISA se pregunta cuando no hay micro que ya lo diga.
+     *             Vacia = x86-64.
+     * @return La ficha de la instruccion, o @c { "found": false } si esa linea
+     *         no es una instruccion (etiqueta, comentario, vacia).
+     */
+    nlohmann::json instruction(const std::string &uri, uint32_t line,
+                               const std::string &cpu,
+                               const std::string &arch);
+
+    /**
+     * @brief @c vesta/asmBlock: un bloque de ensamblador entero, con su FLUJO.
+     *
+     * Un bloque escrito a mano se lee saltando: se mira un salto y hay que
+     * buscar su etiqueta arriba o abajo, y volver.  El compilador ya construye
+     * el grafo de flujo de ese bloque para poder analizarlo -- sabe que
+     * instruccion salta a cual --, y con eso se pueden dibujar las flechas en
+     * vez de obligar a seguirlas con el dedo.
+     *
+     * Se devuelve ademas lo que se sabe de CADA instruccion: su clase en la
+     * base, lo que cuesta en la microarquitectura pedida, que toca y si es
+     * barrera.  Y lo que el grafo NO pudo resolver -- un salto indirecto, una
+     * etiqueta que no esta -- porque es justo donde el analisis deja de valer.
+     *
+     * @param uri  Documento abierto.
+     * @param line Una linea CUALQUIERA dentro del bloque.
+     * @param cpu  Microarquitectura para el coste; vacia = la primera.
+     * @param arch Arquitectura del bloque; vacia = x86-64.
+     * @return El bloque con sus instrucciones, o @c { "found": false }.
+     */
+    nlohmann::json asm_block(const std::string &uri, uint32_t line,
+                             const std::string &cpu, const std::string &arch);
+
+    /**
+     * @brief @c vesta/asmFlow: el flujo de TODOS los bloques del fichero.
+     *
+     * Lo mismo que @ref asm_block pero de todo el documento y solo con lo que
+     * hace falta para DIBUJAR: que linea salta a que linea.  Es lo que permite
+     * pintar las flechas sobre el propio codigo, que es donde se leen -- en un
+     * panel aparte obligan a mirar a otro sitio, que es lo que se queria
+     * evitar --.
+     *
+     * @param uri  Documento abierto.
+     * @param arch Arquitectura de los bloques; vacia = x86-64.
+     * @return @c { "blocks": [ { firstLine, lastLine, jumps: [...] } ] }.
+     */
+    nlohmann::json asm_flow(const std::string &uri, const std::string &arch);
+
   private:
     /// Estado opaco del subsistema JIT propio (CodeCache + RuntimeEntries +
     /// JitCompiler).  Inicializado perezosamente en la primera @c jit_asm.
@@ -358,9 +458,34 @@ class Inspector {
     std::unique_ptr<JitState> jit_; ///< Subsistema JIT (lazy).
     bool jit_init_failed_ = false;  ///< true si la init del JIT fallo.
 
+    /// Cerrojo de las dos caches de abajo.  Solo cubre mirar y guardar, jamas
+    /// la compilacion: si se tuviera mientras se compila, dos vistas de
+    /// documentos distintos harian cola y no se ganaria nada por tener hilos.
+    mutable std::mutex caches_;
+
     /// Cache propia de vistas caras (diagramas + ir-pre) por clave compuesta
     /// "<uri>|<hash>|<vista>".  Evita recompilar peticiones identicas.
     std::unordered_map<std::string, std::string> view_cache_;
+
+    /**
+     * @brief Lo guardado para @p key, si esta.
+     *
+     * Se copia lo guardado en vez de devolver una referencia dentro del mapa:
+     * quien lo pide lo usa despues de soltar el cerrojo, y para entonces otra
+     * peticion puede haber metido una entrada y realojado el mapa.
+     *
+     * @param key  Clave de la vista.
+     * @param out  Recibe lo guardado si estaba.
+     * @return true si estaba.
+     */
+    bool view_cached(const std::string &key, std::string &out) const;
+
+    /**
+     * @brief Guarda el resultado de una vista.
+     * @param key   Clave de la vista.
+     * @param value Texto a guardar.
+     */
+    void view_store(const std::string &key, std::string value);
 
     /**
      * @struct AotBuild
@@ -386,7 +511,12 @@ class Inspector {
 
     /// Compilaciones nativas ya hechas, por "<uri>|<hash>".  Cuesta una
     /// compilacion entera y mas de una vista pregunta lo mismo.
-    std::unordered_map<std::string, AotBuild> aot_cache_;
+    ///
+    /// Por puntero compartido y no por valor: quien la recibe la usa despues de
+    /// soltar el cerrojo, y para entonces otra peticion puede haber metido una
+    /// entrada nueva y realojado el mapa.  Con el puntero, cada uno conserva la
+    /// suya.
+    std::unordered_map<std::string, std::shared_ptr<const AotBuild>> aot_cache_;
 
     /**
      * @brief Compila el documento como lo hace el modo nativo, y lo cachea.
@@ -405,9 +535,10 @@ class Inspector {
      * @return La compilacion; reutilizada si ya se hizo para este mismo texto,
      *         el mismo objetivo y el mismo nivel.
      */
-    const AotBuild &aot_build(const std::string &uri, const std::string &text,
-                              const std::string &target_key = std::string(),
-                              int opt_level = -1);
+    std::shared_ptr<const AotBuild>
+    aot_build(const std::string &uri, const std::string &text,
+              const std::string &target_key = std::string(),
+              int opt_level = -1);
 };
 
 } // namespace lsp

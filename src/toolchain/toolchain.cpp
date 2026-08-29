@@ -154,6 +154,7 @@ CompileResponse compile(const CompileRequest &req) {
     vx::CompileOptions opts;
     opts.module_name = req.module_name.empty() ? "main" : req.module_name;
     opts.emit_debug = req.debug;
+    if (req.opt_level >= 0) opts.opt_level = req.opt_level;
     opts.instrument_mode = req.instrument;
     // AOT usa POO nativa (clases sin registry); VM/JIT producen el mismo .velb.
     opts.native_poo = aot;

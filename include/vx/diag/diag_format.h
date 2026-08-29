@@ -45,6 +45,23 @@ DiagFormat parse_diag_format(const std::string &s, bool *ok = nullptr);
 void render_diagnostics(std::ostream &os, const Diagnostics &diags,
                         DiagFormat fmt);
 
+/**
+ * @brief El TEXTO de un diagnostico, en el idioma activo.
+ *
+ * Un diagnostico migrado al catalogo NO lleva su texto escrito: lleva el codigo
+ * y los datos, y la frase se compone al mostrarla -- que es lo que permite
+ * mostrarla en otro idioma sin recompilar --.  Su campo @c message queda vacio.
+ *
+ * Por eso esto es publico y no un detalle de la impresion: quien ensena un
+ * diagnostico tiene que pasar por aqui.  Leer @c message directamente devuelve
+ * la cadena vacia para todo lo catalogado, y un diagnostico sin texto no es un
+ * diagnostico pobre: el editor lo rechaza entero y con el toda la tanda.
+ *
+ * @param d Diagnostico.
+ * @return Su texto ya compuesto, o el crudo si el codigo no esta catalogado.
+ */
+std::string formatted_message(const Diagnostic &d);
+
 } // namespace vx
 
 #endif // VX_DIAG_FORMAT_H

@@ -30,6 +30,10 @@ export const VestaMethod = {
     Asa: 'vesta/asa',
     AsaFacts: 'vesta/asaFacts',
     Targets: 'vesta/targets',
+    Instruction: 'vesta/instruction',
+    FunctionReport: 'vesta/functionReport',
+    AsmBlock: 'vesta/asmBlock',
+    AsmFlow: 'vesta/asmFlow',
     SymbolInfo: 'vesta/symbolInfo',
     Compile: 'vesta/compile',
     CompileProject: 'vesta/compileProject',
@@ -79,6 +83,29 @@ export interface TargetsResponse extends VestaResponse {
     optLevels?: number[];
 }
 
+/**
+ * Una fila del diff del IR, con las dos versiones ALINEADAS.
+ *
+ * No es un texto con `+` y `-`: es la comparacion ya resuelta, para poder
+ * ensenarla como se quiera -- unificada, a dos columnas, o contando cuanto
+ * cambio --.
+ */
+export interface IrDiffRow {
+    /** same = igual, del = desaparecio, add = es nueva, chg = cambio. */
+    k: 'same' | 'del' | 'add' | 'chg';
+    /** Como estaba antes de optimizar. */
+    l: string;
+    /** Como quedo despues. */
+    r: string;
+}
+
+/** Respuesta de `vesta/irDiff`. */
+export interface IrDiffResponse extends VestaResponse {
+    rows?: IrDiffRow[];
+    /** Funcion comparada; vacia = el modulo entero. */
+    function?: string;
+}
+
 /** Respuesta de las vistas que devuelven un texto (IR, bytecode, diagramas). */
 export interface TextResponse extends VestaResponse {
     text?: string;
@@ -86,7 +113,20 @@ export interface TextResponse extends VestaResponse {
 
 /** Una funcion del modulo, con la linea en la que empieza. */
 export interface FunctionEntry {
+    /**
+     * Nombre INTERNO (`std__windows__GetCurrentFiber`).
+     *
+     * Es el que identifica: unico, y el que hay que mandarle al servidor al
+     * pedir algo sobre esta funcion.  NO es el que se ensena.
+     */
     name: string;
+    /**
+     * El nombre que se ESCRIBIO (`std.windows.GetCurrentFiber`).
+     *
+     * El interno no lo escribio nadie: lo construye el compilador al aplanar
+     * los namespaces, y ensenarlo obliga a quien lee a traducirlo de cabeza.
+     */
+    display?: string;
     line: number;
 }
 
@@ -97,12 +137,16 @@ export interface FunctionsResponse extends VestaResponse {
 
 /** Coste estimado de una funcion. */
 export interface ComplexityEntry {
+    /** Nombre interno; identifica. */
     name: string;
+    /** El nombre que se escribio; es el que se ensena. */
+    display?: string;
     /** Coste del cuerpo propio, sin contar las llamadas. */
     partial: string;
     /** Coste total, incluyendo lo que cuestan las llamadas. */
     total: string;
     confidence: string;
+    /** Nombre de la confianza: exacta | heuristica | desconocida. */
     total_confidence: string;
     max_loop_depth: number;
     recursive: boolean;
@@ -202,7 +246,10 @@ export interface AsmResponse extends VestaResponse {
 
 /** Un motivo por el que una funcion no puede compilarse de forma anticipada. */
 export interface AotIssue {
+    /** Nombre interno de la funcion; identifica. */
     fn_name: string;
+    /** El nombre que se escribio; es el que se ensena. */
+    fn_display?: string;
     source_line: number;
     op: string;
     reason: string;
@@ -313,7 +360,10 @@ export interface ParamHintsResponse extends VestaResponse {
 export interface AsaFact {
     /** Linea del fuente, contando desde uno; 0 si no se pudo atar. */
     line: number;
+    /** Nombre interno de la funcion a la que pertenece. */
     function: string;
+    /** El nombre que se escribio; es el que se ensena. */
+    functionDisplay?: string;
     /** De que habla: modulo, funcion, valor, bloque, instruccion o simbolo. */
     subject: string;
     /** Analisis que lo afirma. */
@@ -325,6 +375,32 @@ export interface AsaFact {
     detail: string;
     /** Texto corto listo para mostrar. */
     label: string;
+    /** Identificador del sujeto: el valor SSA, el bloque o la instruccion. */
+    subjectId: number;
+    /**
+     * La operacion que DEFINE al sujeto, cuando se puede situar.
+     *
+     * "valor" no identifica nada -- en una linea puede haber ocho --, asi que
+     * lo que se ensena es su operacion: `%12 = add %7, 40`.
+     */
+    subjectText: string;
+    /**
+     * La linea del FUENTE de la que habla.
+     *
+     * Es lo que se ensena por defecto: la operacion del IR identifica sin lugar
+     * a dudas y no dice nada a quien no lo tiene delante.
+     */
+    sourceText: string;
+    /** Regla por la que se dedujo; vacia si es una observacion directa. */
+    rule: string;
+    /** Hechos de los que se sigue, por su indice en `facts`. */
+    from: number[];
+    /** Analisis que lo emitio. */
+    producer: string;
+    /** Sitio exacto que miro (valor, bloque o linea, segun el analisis). */
+    site: number;
+    /** En que otros analisis se apoya. */
+    restsOn: string[];
     /** demostrada | inferida | desconocida. */
     certainty: string;
     /** estatico | ejecucion | perfil | declarado. */
@@ -337,6 +413,8 @@ export interface AsaFact {
 /** Lo que produjo un analisis, incluido lo que NO pudo saber. */
 export interface AsaDomain {
     domain: string;
+    /** Que mira este analisis, en una frase. */
+    purpose?: string;
     facts: number;
     /** Entidades examinadas, incluidas las que no dieron nada. */
     looked: number;
@@ -350,6 +428,225 @@ export interface AsaDomain {
 export interface AsaFactsResponse extends VestaResponse {
     facts?: AsaFact[];
     domains?: AsaDomain[];
+}
+
+/** Un puerto de ejecucion por el que pasa una instruccion. */
+export interface InstructionPort {
+    port: number;
+    uops: number;
+    name?: string;
+}
+
+/** Lo que cuesta una instruccion en una microarquitectura concreta. */
+export interface InstructionCost {
+    /** false = esa microarquitectura no cronometra esta forma. */
+    timed: boolean;
+    latency?: number;
+    /** Cada cuantos ciclos se puede repetir. */
+    reciprocalThroughput?: number;
+    uops?: number;
+    microcoded?: boolean;
+    macroFusible?: boolean;
+    divCycles?: number;
+    ports?: InstructionPort[];
+}
+
+/** Respuesta de `vesta/instruction`: la ficha de una instruccion. */
+export interface InstructionResponse extends VestaResponse {
+    /** false = esa linea no es una instruccion (etiqueta, llave, comentario). */
+    found?: boolean;
+    /**
+     * false = la base no conoce esta instruccion.  No es lo mismo que `found`:
+     * ahi si hay una instruccion, y saber que el compilador no la reconoce es
+     * lo mas util que se puede decir de ella -- la trata como barrera.
+     */
+    known?: boolean;
+    /** Por que no se conoce, cuando `known` es false. */
+    unknownReason?: string;
+    /** A que base se pregunto: x86, arm64, arm32, riscv. */
+    isa?: string;
+    /** Microarquitectura con la que se respondio el coste. */
+    microarch?: string;
+    /** Clase de planificacion. */
+    iclass?: string;
+    /** Extension del juego de instrucciones a la que pertenece. */
+    extension?: string;
+    /** false = sus operandos no estan modelados; se trata conservador. */
+    modeled?: boolean;
+    /** true = nada se puede mover al otro lado. */
+    barrier?: boolean;
+    /** true = es una llamada; se le supone todo efecto. */
+    isCall?: boolean;
+    touchesMemory?: boolean;
+    /**
+     * Que hizo el compilador con ella: "micro" (se emite tal cual, con su
+     * identidad en la base resuelta), "ir" (se elevo a operaciones del IR y se
+     * optimiza como el resto del codigo) o "ninguno".
+     */
+    lifted?: string;
+    /** "compilador" o "texto": de donde sale lo que se cuenta. */
+    resolvedBy?: string;
+    /** Operaciones del IR en las que quedo, cuando se elevo. */
+    irOps?: string[];
+    reads?: string[];
+    writes?: string[];
+    readsMemory?: boolean;
+    writesMemory?: boolean;
+    readsFlags?: boolean;
+    writesFlags?: boolean;
+    /** Que banderas concretas, cuando la base trae el detalle. */
+    flagsRead?: string[];
+    flagsWritten?: string[];
+    /** Estado del procesador que no es un registro general. */
+    readsState?: string[];
+    writesState?: string[];
+    cost?: InstructionCost;
+}
+
+/** Lo que el compilador MIDE de una funcion, sobre el codigo que sale. */
+export interface FunctionMeasured {
+    /** Sitios donde reserva memoria: propios y con lo que llama. */
+    allocPartial: number;
+    allocTotal: number;
+    /** Bytes de pila: propios y con lo que llama. */
+    stackPartial: number;
+    stackTotal: number;
+    throws: boolean;
+    panics: boolean;
+    pure: boolean;
+    recursive: boolean;
+    /** false = hay llamadas cuyos efectos no se pueden cerrar. */
+    effectsKnown: boolean;
+    /** true = tiene asm, su marco de pila no se ve en el IR. */
+    frameOpaque: boolean;
+    dynamicCall: boolean;
+}
+
+/** Lo que la funcion DECLARA.  Solo lo declarado aparece. */
+export interface FunctionDeclared {
+    pure?: boolean;
+    nothrow?: boolean;
+    nopanic?: boolean;
+    allocPartial?: number;
+    allocTotal?: number;
+    stackPartial?: number;
+    stackTotal?: number;
+}
+
+/** El veredicto de UN contrato declarado. */
+export interface ContractCheck {
+    /** "@pure", "@alloc", "@stack"... */
+    contract: string;
+    /** cumple | incumple | no se puede decidir. */
+    status: string;
+    detail: string;
+}
+
+/** Lo que cuesta una funcion, con lo que declaro al lado. */
+export interface FunctionCost {
+    partial: string;
+    total: string;
+    confidence: string;
+    totalConfidence: string;
+    loops: number;
+    recursive: boolean;
+    /** Lo declarado con `@complexity`; vacio si no declaro. */
+    declared: string;
+    /** true si lo declarado no cuadra con lo inferido. */
+    mismatch: boolean;
+}
+
+/** Una funcion en el informe: lo que declara frente a lo que hace. */
+export interface FunctionReportEntry {
+    /** Nombre interno; identifica. */
+    name: string;
+    /** El nombre que se escribio; es el que se ensena. */
+    display: string;
+    line: number;
+    cost: FunctionCost;
+    measured?: FunctionMeasured;
+    declared?: FunctionDeclared;
+    checks: ContractCheck[];
+    aot: {
+        ok: boolean;
+        issues: { op: string; reason: string; line: number }[];
+    };
+}
+
+/** Respuesta de `vesta/functionReport`. */
+export interface FunctionReportResponse extends VestaResponse {
+    functions?: FunctionReportEntry[];
+}
+
+/** Una instruccion del bloque, con su flujo y lo que se sabe de ella. */
+export interface AsmBlockInsn {
+    /** Su posicion en el bloque; es a lo que apuntan los saltos. */
+    index: number;
+    text: string;
+    /** Linea del fuente, para poder ir a ella. */
+    line: number;
+    /** Etiquetas definidas justo antes de ella. */
+    labels: string[];
+    /** sigue | salto | rama | llamada | retorno | indirecto | sin clasificar. */
+    flow: string;
+    /** Etiqueta destino, si salta. */
+    target: string;
+    /** Instruccion destino; -1 si no salta o no se pudo resolver. */
+    targetIndex: number;
+    /** false = la base no conoce esta instruccion. */
+    known: boolean;
+    iclass?: string;
+    cost?: { latency: number; reciprocalThroughput: number; uops: number };
+    modeled: boolean;
+    barrier: boolean;
+    reads: string[];
+    writes: string[];
+    readsMemory: boolean;
+    writesMemory: boolean;
+    flagsRead?: string[];
+    flagsWritten?: string[];
+}
+
+/** Respuesta de `vesta/asmBlock`. */
+export interface AsmBlockResponse extends VestaResponse {
+    /** false = esa linea no cae dentro de un bloque de ensamblador. */
+    found?: boolean;
+    isa?: string;
+    microarch?: string;
+    firstLine?: number;
+    lastLine?: number;
+    instructions?: AsmBlockInsn[];
+    /** true = hay un salto cuyo destino no se sabe: faltan flechas. */
+    hasIndirect?: boolean;
+    /** true = hay un salto a una etiqueta que no esta en el bloque. */
+    hasUnresolved?: boolean;
+    /** Mnemonicos de rama que el grafo no supo clasificar. */
+    unknownTerminators?: string[];
+}
+
+/** Un salto dentro de un bloque, ya resuelto a lineas del fuente. */
+export interface AsmJump {
+    /** Linea de la que sale, contando desde uno. */
+    fromLine: number;
+    /** Linea a la que va. */
+    toLine: number;
+    /** salto | rama | llamada... */
+    flow: string;
+    /** Etiqueta destino, tal y como esta escrita. */
+    target: string;
+}
+
+/** Respuesta de `vesta/asmFlow`: el flujo de todos los bloques del fichero. */
+export interface AsmFlowResponse extends VestaResponse {
+    blocks?: {
+        firstLine: number;
+        lastLine: number;
+        jumps: AsmJump[];
+        /** true = hay un salto cuyo destino no se sabe: faltan flechas. */
+        hasIndirect: boolean;
+        /** true = hay un salto a una etiqueta que no esta en el bloque. */
+        hasUnresolved: boolean;
+    }[];
 }
 
 /** Fases del IR que admite `vesta/ir`. */

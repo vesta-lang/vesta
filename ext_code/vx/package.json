@@ -31,6 +31,9 @@
         "compiler"
     ],
     "main": "./dist/extension.js",
+    "activationEvents": [
+        "onView:vesta.actions"
+    ],
     "contributes": {
         "languages": [
             {
@@ -111,6 +114,24 @@
                 }
             }
         ],
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "vesta",
+                    "title": "Vesta",
+                    "icon": "images/vesta-activity.svg"
+                }
+            ]
+        },
+        "views": {
+            "vesta": [
+                {
+                    "id": "vesta.actions",
+                    "name": "Acciones",
+                    "icon": "images/vesta-activity.svg"
+                }
+            ]
+        },
         "commands": [
             {
                 "command": "vesta.restartServer",
@@ -164,7 +185,7 @@
             },
             {
                 "command": "vesta.showComplexity",
-                "title": "Ver la complejidad Big-O por funcion",
+                "title": "Ver el coste y los contratos de cada funcion",
                 "category": "Vesta"
             },
             {
@@ -193,6 +214,28 @@
                 "category": "Vesta"
             },
             {
+                "command": "vesta.selectTarget",
+                "title": "Elegir con que se compila lo que se mira",
+                "category": "Vesta"
+            },
+            {
+                "command": "vesta.runCell",
+                "title": "Ejecutar la celda",
+                "category": "Vesta",
+                "icon": "$(run)"
+            },
+            {
+                "command": "vesta.runSelection",
+                "title": "Ejecutar lo seleccionado",
+                "category": "Vesta",
+                "icon": "$(run-all)"
+            },
+            {
+                "command": "vesta.selectRunOptions",
+                "title": "Elegir como se ejecuta (modo, optimizacion, depuracion)",
+                "category": "Vesta"
+            },
+            {
                 "command": "vesta.showDiagram",
                 "title": "Ver un diagrama del modulo",
                 "category": "Vesta",
@@ -215,6 +258,11 @@
                 "title": "Compilar y ejecutar el fichero activo",
                 "category": "Vesta",
                 "icon": "$(play)"
+            },
+            {
+                "command": "vesta.showAsmBlock",
+                "title": "Ver el bloque de ensamblador con su flujo",
+                "category": "Vesta"
             }
         ],
         "menus": {
@@ -231,6 +279,11 @@
                 }
             ],
             "editor/context": [
+                {
+                    "when": "resourceLangId == vesta && editorHasSelection",
+                    "command": "vesta.runSelection",
+                    "group": "navigation@9"
+                },
                 {
                     "when": "resourceLangId == vesta",
                     "command": "vesta.openImport",
@@ -255,6 +308,11 @@
                     "when": "resourceLangId == vesta",
                     "command": "vesta.showDiagram",
                     "group": "vesta@4"
+                },
+                {
+                    "command": "vesta.showAsmBlock",
+                    "when": "resourceLangId == vesta",
+                    "group": "vesta@5"
                 }
             ],
             "commandPalette": [
@@ -369,6 +427,50 @@
                     "markdownDescription": "Ruta al ejecutable de la maquina virtual (`vesta` instalado, `vm` en el arbol de compilacion). Vacia = misma busqueda automatica que el servidor de lenguaje.",
                     "scope": "machine-overridable"
                 },
+                "vesta.run.mode": {
+                    "type": "string",
+                    "enum": [
+                        "vm",
+                        "jit",
+                        "aot"
+                    ],
+                    "enumDescriptions": [
+                        "Interprete: la maquina virtual ejecuta el bytecode sin compilar a nativo",
+                        "JIT: la maquina virtual compila a nativo lo que se calienta",
+                        "Nativo: se compila a un ejecutable y se lanza"
+                    ],
+                    "default": "jit",
+                    "description": "Como se ejecuta lo que se lanza desde el editor (celdas y seleccion)."
+                },
+                "vesta.run.opt": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "0",
+                        "1",
+                        "2",
+                        "3"
+                    ],
+                    "enumDescriptions": [
+                        "El nivel de por defecto del compilador",
+                        "O0: sin optimizar, el codigo tal y como se bajo",
+                        "O1: lo basico",
+                        "O2: el nivel con el que se compila normalmente",
+                        "O3: todo lo que hay"
+                    ],
+                    "default": "",
+                    "description": "Nivel de optimizacion con el que se compila lo que se ejecuta."
+                },
+                "vesta.run.debug": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Compilar con informacion de depuracion lo que se ejecuta."
+                },
+                "vesta.run.timeout": {
+                    "type": "number",
+                    "default": 10000,
+                    "description": "Tiempo maximo, en milisegundos, que puede durar una ejecucion antes de cortarla. Un bucle infinito es un accidente normal escribiendo."
+                },
                 "vesta.reuseTerminal": {
                     "type": "boolean",
                     "default": true,
@@ -402,7 +504,7 @@
                         "Linux"
                     ],
                     "default": "",
-                    "description": "Sistema operativo objetivo de las vistas del compilador (IR, bytecode, ensamblador y diagramas). Vacio = el anfitrion."
+                    "description": "Sistema operativo para el que se compila: decide las vistas (IR, bytecode, ensamblador y diagramas) y tambien los errores y el hover, porque salen de compilar. Con el vacio se analiza para el anfitrion, y un modulo escrito para otro sistema aparece lleno de errores ciertos que ahi no importan."
                 },
                 "vesta.inspect.arch": {
                     "type": "string",
@@ -413,7 +515,44 @@
                         "aarch64"
                     ],
                     "default": "",
-                    "description": "Arquitectura objetivo de las vistas del compilador. Vacia = la del anfitrion."
+                    "description": "Arquitectura para la que se compila: decide las vistas del compilador y tambien los errores y el hover. Vacia = la del anfitrion."
+                },
+                "vesta.inspect.opt": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "0",
+                        "1",
+                        "2",
+                        "3"
+                    ],
+                    "enumDescriptions": [
+                        "El nivel con el que compila el analisis normal",
+                        "O0: sin optimizar, el codigo tal y como se bajo",
+                        "O1: lo basico",
+                        "O2: el nivel con el que se compila normalmente",
+                        "O3: todo lo que hay"
+                    ],
+                    "default": "",
+                    "description": "Nivel de optimizacion con el que se compila lo que ensenan las vistas. Ver el mismo codigo a dos niveles es como se ve que hizo el optimizador."
+                },
+                "vesta.inspect.floatIsa": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "sse2",
+                        "avx",
+                        "avx512",
+                        "x87",
+                        "auto"
+                    ],
+                    "default": "",
+                    "description": "Juego de instrucciones de coma flotante del codigo que se ensena. Vacio = el de por defecto."
+                },
+                "vesta.inspect.cpu": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "Microarquitectura concreta (`znver3`, `skylake`, ...) con la que se genera el codigo que se ensena. Vacia = lo que se deduzca del juego de instrucciones. La orden **Vesta: elegir con que se compila lo que se mira** ofrece las que el compilador tiene cronometradas."
                 },
                 "vesta.aot.tier": {
                     "type": "string",
@@ -444,6 +583,11 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Anotar los nodos de funcion del diagrama con su coste Big-O."
+                },
+                "vesta.flowArrows": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Dibuja sobre el codigo las flechas de los saltos dentro de los bloques asm. Las calcula el compilador, que ya construye el grafo de flujo de cada bloque; el fichero no se toca."
                 }
             }
         }
@@ -458,8 +602,9 @@
         "test:grammar": "node test/grammar.test.js",
         "test:bundle": "node test/bundle.test.js",
         "test:lsp": "python test/smoke_lsp.py",
-        "test": "npm run build && npm run lint && npm run test:grammar && npm run test:bundle",
-        "package": "npx --yes @vscode/vsce package"
+        "test": "npm run build && npm run lint && npm run test:grammar && npm run test:manifest && npm run test:bundle",
+        "package": "npx --yes @vscode/vsce package",
+        "test:manifest": "node test/manifest.test.js"
     },
     "dependencies": {
         "package": "^1.0.1",

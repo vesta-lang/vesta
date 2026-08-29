@@ -119,6 +119,17 @@ const CatEntry kEntries[] = {
     {"VX9153", {"aligned to {0} in {1}", "alineado a {0} en {1}"}},
     {"VX9154", {"loop header, depth {0}", "cabecera de bucle, profundidad {0}"}},
     {"VX9155", {"points to {0}", "apunta a {0}"}},
+    {"VX9156", {"the {0} database does not know this instruction; the compiler treats it as a barrier and does not move anything across it", "la base de {0} no conoce esta instruccion; el compilador la trata como barrera y no mueve nada a su alrededor"}},
+    {"VX9157", {"Its placement in memory is unknown: the module does not compile for the current target, so there is no layout to consult.", "No se sabe donde cae en memoria: el modulo no compila para el objetivo actual, asi que no hay disposicion de tipos que consultar."}},
+    {"VX9160", {"what values it can take, and what that rules out", "entre que valores se puede mover, y que descarta eso"}},
+    {"VX9161", {"what memory it can point to, and what it can never touch", "a que memoria puede apuntar, y a cual no puede llegar nunca"}},
+    {"VX9162", {"the shape of the code: blocks, loops, calls, values", "la forma del codigo: bloques, bucles, llamadas y valores"}},
+    {"VX9163", {"what is known about who calls it, and therefore what its parameters are worth", "que se sabe de quien la llama, y por tanto cuanto valen sus parametros"}},
+    {"VX9164", {"the loops: how deep they nest and how many times they run", "los bucles: cuanto se anidan y cuantas vueltas dan"}},
+    {"VX9165", {"the assembly written by hand: what it touches and whether it can be moved", "el ensamblador escrito a mano: que toca y si se puede mover"}},
+    {"VX9166", {"the control flow of the hand-written assembly", "el flujo de control del ensamblador escrito a mano"}},
+    {"VX9167", {"how each type is laid out in memory", "como se coloca cada tipo en memoria"}},
+    {"VX9168", {"the concrete shape of a value: width, sign, whether it is a pointer", "la forma concreta de un valor: ancho, signo, si es un puntero"}},
     {"VXA001", {"asm: dead code: unreachable instruction in the asm block", "asm: codigo muerto: instruccion inalcanzable en el bloque asm"}},
     {"VXA002", {"asm: jump to label '{0}' not defined in the asm block", "asm: salto a etiqueta '{0}' no definida en el bloque asm"}},
     {"VXA003", {"asm: infinite loop: control cannot leave the asm block", "asm: bucle sin salida: el flujo no puede abandonar el bloque asm"}},
@@ -173,7 +184,7 @@ const CatEntry kEntries[] = {
     {"VXA052", {"the body of an inline asm block in '{0}' was never generated: the compile-time code that produces it could not run, so the block would be emitted EMPTY", "el cuerpo de un bloque de ensamblador de '{0}' no llego a generarse: el codigo de compilacion que lo produce no se pudo ejecutar, asi que el bloque saldria VACiO"}},
     {"VXA053", {"assembling '{0}' into a .velb failed (code {1}): no artifact was produced", "ensamblar '{0}' a .velb no salio bien (codigo {1}): no se produjo artefacto"}},
 };
-const int kEntryCount = 152;
+const int kEntryCount = 163;
 
 } // namespace
 

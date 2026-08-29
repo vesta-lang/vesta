@@ -7,6 +7,7 @@
 #include "runtime/exception_runtime.h"
 
 #include "util/thread_slot.h" // ranura por hilo propia (sin la TLS emulada)
+#include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 #include "runtime/decode_instruction.h"
 #include "runtime/proceso_runtime.h"
 #include "runtime/scheduler.h"
@@ -239,31 +240,15 @@ void init_exception_classes(loader::Loader &loader_ref) {
 /**
  * @brief Pasa un simbolo interno a algo que se pueda leer.
  *
- * Un nombre como `code.__macro_std__comptime__literal__parse_int_lit` no le
- * dice nada a nadie.  Se le quita el prefijo de seccion, la marca de cuerpo
- * comptime y se devuelven los puntos al camino del modulo, que es como lo
- * escribio quien programo: `std.comptime.literal.parse_int_lit`.
+ * La conversion vive junto al aplanado de namespaces, que es quien construye
+ * esos nombres: aqui habia una copia, y dos sitios que deshacen lo que un
+ * tercero hace acaban conociendo reglas distintas.
  *
  * @param raw Nombre tal como esta en la tabla de simbolos.
  * @return El nombre legible.
  */
 static std::string demangle_symbol(const std::string &raw) {
-    std::string s = raw;
-    if (s.rfind("code.", 0) == 0) s.erase(0, 5);
-    if (s.rfind("__macro_", 0) == 0) s.erase(0, 8);
-    /* Los separadores del mangling vuelven a ser puntos de modulo. */
-    std::string out;
-    out.reserve(s.size());
-    for (size_t k = 0; k < s.size();) {
-        if (k + 1 < s.size() && s[k] == '_' && s[k + 1] == '_') {
-            out.push_back('.');
-            k += 2;
-        } else {
-            out.push_back(s[k]);
-            ++k;
-        }
-    }
-    return out;
+    return vx::demangle_symbol(raw);
 }
 
 /**

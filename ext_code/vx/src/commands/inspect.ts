@@ -18,16 +18,20 @@ import { VestaLanguageClient, describeError } from '../lsp/client';
 import {
     AotCompatResponse,
     AsmResponse,
-    ComplexityResponse,
     ComptimeValuesResponse,
     DiagramKind,
+    FunctionEntry,
     FunctionsResponse,
+    IrDiffResponse,
     IrPhase,
     MacroExpandResponse,
     ModesResponse,
     TextResponse,
     VestaMethod,
 } from '../lsp/protocol';
+import { AsaPanel } from '../views/asaPanel';
+import { AsmBlockPanel } from '../views/asmBlockPanel';
+import { ReportPanel } from '../views/reportPanel';
 import { DiagramPanel } from '../views/diagramPanel';
 import { MachineViewPanel } from '../views/machinePanel';
 import { VestaTextViewProvider } from '../views/textViews';
@@ -37,6 +41,7 @@ import {
     diagramCost,
     diagramFormat,
     inspectTarget,
+    applyTarget,
 } from '../util/settings';
 
 /** Contexto compartido por todos los comandos de inspeccion. */
@@ -79,6 +84,7 @@ export function registerInspectCommands(
     register('vesta.showAsa', () => showAsa(deps));
     register('vesta.showDiagram', () => showDiagram(deps));
     register('vesta.showMachineView', () => showMachineView(deps));
+    register('vesta.showAsmBlock', () => showAsmBlock(deps));
 }
 
 /**
@@ -115,17 +121,17 @@ async function pickFunction(
     uri: string,
     allowModule: boolean,
 ): Promise<string | undefined> {
-    let names: string[] = [];
+    let entradas: FunctionEntry[] = [];
     try {
         const response = await client.request<FunctionsResponse>(VestaMethod.Functions, { uri });
-        names = (response.functions ?? []).map(fn => fn.name);
+        entradas = response.functions ?? [];
     } catch {
         // Sin lista de funciones se sigue adelante: el servidor elige por su
         // cuenta la primera compilable.
         return '';
     }
 
-    if (names.length === 0) {
+    if (entradas.length === 0) {
         return '';
     }
 
@@ -140,8 +146,10 @@ async function pickFunction(
             value: '',
         });
     }
-    for (const name of names) {
-        items.push({ label: name, value: name });
+    for (const fn of entradas) {
+        // Se ensena el nombre ESCRITO y se manda el interno: uno es para leer,
+        // el otro es el que el servidor entiende.
+        items.push({ label: fn.display || fn.name, value: fn.name });
     }
 
     const choice = await vscode.window.showQuickPick(items, {
@@ -184,13 +192,19 @@ async function showIr(deps: InspectContext): Promise<void> {
         return;
     }
 
-    const target = inspectTarget();
-    const response = await request<TextResponse>(deps.client, 'generando el IR', VestaMethod.Ir, {
+    // Con que se compila forma parte de la pregunta: el mismo fuente da otro
+    // IR a otro nivel de optimizacion o para otra maquina.
+    const params: Record<string, unknown> = {
         uri: document.uri.toString(),
         phase: choice.phase,
-        os: target.os,
-        arch: target.arch,
-    });
+    };
+    applyTarget(params, inspectTarget());
+    const response = await request<TextResponse>(
+        deps.client,
+        'generando el IR',
+        VestaMethod.Ir,
+        params,
+    );
     if (!showErrorIfAny(response)) {
         await deps.views.show(
             `ir-${choice.phase}`,
@@ -212,21 +226,68 @@ async function showIrDiff(deps: InspectContext): Promise<void> {
         return;
     }
 
-    const response = await request<TextResponse>(
+    const response = await request<IrDiffResponse>(
         deps.client,
         'comparando el IR',
         VestaMethod.IrDiff,
         { uri, function: functionName },
     );
-    if (!showErrorIfAny(response)) {
-        const label = functionName || 'modulo';
-        await deps.views.show(
-            'ir-diff',
-            `${baseName(document)} (${label}).diff`,
-            response.text ?? '',
-            'diff',
-        );
+    if (showErrorIfAny(response)) {
+        return;
     }
+
+    /* El servidor devuelve FILAS, no un texto: cada una dice si la linea sigue
+     * igual, si desaparecio, si es nueva o si cambio, con las dos versiones
+     * alineadas.  Se pedia `text`, que no existe en esa respuesta, asi que la
+     * vista salia vacia sin un solo error -- ni del servidor, que contesto
+     * bien, ni de aqui, que leyo un campo ausente y siguio --.
+     *
+     * Se compone en unificado (+/-) porque es lo que el editor sabe colorear
+     * como un diff. */
+    const rows = response.rows ?? [];
+    const label = functionName || 'modulo';
+    if (rows.length === 0) {
+        void vscode.window.showInformationMessage(
+            `Vesta: no hay IR que comparar en ${label}.`,
+        );
+        return;
+    }
+
+    const lineas: string[] = [];
+    let cambios = 0;
+    for (const row of rows) {
+        switch (row.k) {
+            case 'del':
+                lineas.push('-' + row.l);
+                cambios++;
+                break;
+            case 'add':
+                lineas.push('+' + row.r);
+                cambios++;
+                break;
+            case 'chg':
+                lineas.push('-' + row.l);
+                lineas.push('+' + row.r);
+                cambios++;
+                break;
+            default:
+                lineas.push(' ' + row.l);
+                break;
+        }
+    }
+
+    // Decirlo arriba: sin esto, un diff sin cambios se lee como un fallo.
+    const cabecera = cambios === 0
+        ? `# El optimizador no toco ${label}.\n`
+        : `# El optimizador cambio ${cambios} de ${rows.length} lineas de ${label}.\n` +
+          '# -- antes de optimizar    ++ despues\n';
+
+    await deps.views.show(
+        'ir-diff',
+        `${baseName(document)} (${label}).diff`,
+        cabecera + lineas.join('\n') + '\n',
+        'diff',
+    );
 }
 
 /** @brief Abre el bytecode del modulo o de una funcion. */
@@ -241,12 +302,13 @@ async function showBytecode(deps: InspectContext): Promise<void> {
         return;
     }
 
-    const target = inspectTarget();
+    const params: Record<string, unknown> = { uri, function: functionName };
+    applyTarget(params, inspectTarget());
     const response = await request<TextResponse>(
         deps.client,
         'generando el bytecode',
         VestaMethod.Bytecode,
-        { uri, function: functionName, os: target.os, arch: target.arch },
+        params,
     );
     if (!showErrorIfAny(response)) {
         const label = functionName || 'modulo';
@@ -283,13 +345,7 @@ async function showAsm(deps: InspectContext, backend: 'jit' | 'aot'): Promise<vo
         deps.client,
         `compilando (${backend.toUpperCase()})`,
         method,
-        {
-            uri,
-            function: functionName,
-            os: target.os,
-            arch: target.arch,
-            tier: aotTier(),
-        },
+        asmParams(uri, functionName, target),
     );
 
     if (showErrorIfAny(response)) {
@@ -308,6 +364,27 @@ async function showAsm(deps: InspectContext, backend: 'jit' | 'aot'): Promise<vo
         `${baseName(document)} (${response.function ?? functionName} ${backend.toUpperCase()}).asm`,
         header + (response.text ?? ''),
     );
+}
+
+/**
+ * @brief Parametros de una peticion de desensamblado.
+ * @param uri          Documento.
+ * @param functionName Funcion pedida (vacio = la que elija el servidor).
+ * @param target       Con que se compila.
+ * @return Los parametros listos para la peticion.
+ */
+function asmParams(
+    uri: string,
+    functionName: string,
+    target: ReturnType<typeof inspectTarget>,
+): Record<string, unknown> {
+    const params: Record<string, unknown> = {
+        uri,
+        function: functionName,
+        tier: aotTier(),
+    };
+    applyTarget(params, target);
+    return params;
 }
 
 /**
@@ -336,47 +413,24 @@ function buildAsmHeader(response: AsmResponse, backend: string): string {
     return lines.join('\n');
 }
 
-/** @brief Abre el informe de coste por funcion. */
+/**
+ * @brief Abre el informe por funcion: lo que declara frente a lo que hace.
+ *
+ * Era una tabla de texto en un documento aparte -- un volcado, que no se puede
+ * filtrar, ni ordenar, ni pulsar --.  Ahora es un panel donde cada fila es una
+ * funcion: lo que cuesta, lo que reserva, cuanta pila usa, que hace, que
+ * declaro y si lo cumple, y si el modo nativo puede con ella.  Lo que no cuadra
+ * se ve sin tener que compararlo de cabeza, que es justo para lo que existe un
+ * contrato.
+ *
+ * @param deps Contexto de los comandos.
+ */
 async function showComplexity(deps: InspectContext): Promise<void> {
     const document = activeVestaDocument();
     if (!document) {
         return;
     }
-
-    const response = await request<ComplexityResponse>(
-        deps.client,
-        'calculando el coste',
-        VestaMethod.Complexity,
-        { uri: document.uri.toString() },
-    );
-    if (showErrorIfAny(response)) {
-        return;
-    }
-
-    const entries = response.functions ?? [];
-    const rows = entries.map(fn => [
-        fn.name,
-        fn.total,
-        fn.partial,
-        fn.total_confidence,
-        String(fn.max_loop_depth),
-        fn.recursive ? 'si' : 'no',
-        fn.declared ?? '',
-        fn.contract_mismatch ? 'NO CUADRA' : '',
-    ]);
-
-    const text =
-        titleFor(document, 'Coste por funcion') +
-        renderTable(
-            ['funcion', 'total', 'propio', 'confianza', 'bucles', 'recursiva', 'declarado', 'contrato'],
-            rows,
-        ) +
-        '\n' +
-        'El coste "propio" es el del cuerpo sin contar las llamadas; el "total"\n' +
-        'incluye lo que cuestan.  La columna "contrato" avisa cuando lo declarado\n' +
-        'con @complexity no cuadra con lo que el compilador infiere.\n';
-
-    await deps.views.show('complexity', `${baseName(document)} (coste).txt`, text);
+    await ReportPanel.show(deps.client, document.uri);
 }
 
 /** @brief Abre el informe de los tres modos de ejecucion. */
@@ -421,7 +475,9 @@ async function showModes(deps: InspectContext): Promise<void> {
             parts.push(`  al interprete : ${mode.fallback_functions.join(', ')}`);
         }
         for (const issue of mode.issues ?? []) {
-            parts.push(`  - ${issue.fn_name} (linea ${issue.source_line}): ${issue.reason}`);
+            parts.push(
+                `  - ${issue.fn_display || issue.fn_name} ` +
+                `(linea ${issue.source_line}): ${issue.reason}`);
         }
         if (mode.note) {
             parts.push(`  nota          : ${mode.note}`);
@@ -460,7 +516,8 @@ async function showAotCompat(deps: InspectContext): Promise<void> {
         parts.push(
             renderTable(
                 ['funcion', 'linea', 'operacion', 'motivo'],
-                issues.map(i => [i.fn_name, String(i.source_line), i.op, i.reason]),
+                issues.map(i => [i.fn_display || i.fn_name,
+                                 String(i.source_line), i.op, i.reason]),
             ),
         );
     }
@@ -558,11 +615,15 @@ async function showComptimeValues(deps: InspectContext): Promise<void> {
 /**
  * @brief Abre todo lo que el compilador sabe del modulo.
  *
- * Es el volcado completo, el mismo que da la linea de ordenes: los hechos, de
- * donde sale cada uno y con que certeza, y lo que se miro sin sacar nada.  Se
- * abre entero a proposito -- pedirlo por partes obligaria a saber que se busca
- * antes de mirarlo --; lo que se lee al vuelo mientras se escribe son las
- * anotaciones al final de cada linea, que es otra cosa.
+ * El analisis produce miles de hechos -- a donde apunta cada valor, entre que
+ * limites se mueve, a que esta alineado, si escapa, que efectos tiene --, y
+ * eso como volcado de texto es como no tenerlo: nadie lee miles de lineas
+ * buscando una cosa.  Se abre en un panel donde se filtra por funcion, por
+ * analisis y por certeza, se busca por texto, y cada fila lleva al codigo del
+ * que habla.
+ *
+ * Quien quiera el volcado literal -- el mismo que da la linea de ordenes --
+ * lo tiene ahi, con `vm --analyze`.
  *
  * @param deps Contexto de los comandos.
  */
@@ -571,20 +632,7 @@ async function showAsa(deps: InspectContext): Promise<void> {
     if (!document) {
         return;
     }
-
-    const response = await request<TextResponse>(
-        deps.client,
-        'reuniendo lo que sabe el compilador',
-        VestaMethod.Asa,
-        { uri: document.uri.toString() },
-    );
-    if (!showErrorIfAny(response)) {
-        await deps.views.show(
-            'asa',
-            `${baseName(document)} (lo que se sabe).txt`,
-            response.text ?? '',
-        );
-    }
+    await AsaPanel.show(deps.client, document.uri);
 }
 
 /** @brief Abre un diagrama del modulo. */
@@ -629,15 +677,7 @@ async function showDiagram(deps: InspectContext): Promise<void> {
         deps.client,
         'dibujando el diagrama',
         VestaMethod.Diagram,
-        {
-            uri,
-            kind: choice.diagram,
-            format,
-            cost: diagramCost(),
-            function: functionName,
-            os: target.os,
-            arch: target.arch,
-        },
+        diagramParams(uri, choice.diagram, format, functionName, target),
     );
     if (showErrorIfAny(response)) {
         return;
@@ -654,6 +694,33 @@ async function showDiagram(deps: InspectContext): Promise<void> {
         `${baseName(document)} (${choice.diagram}).${extension}`,
         text,
     );
+}
+
+/**
+ * @brief Parametros de una peticion de diagrama.
+ * @param uri          Documento.
+ * @param kind         Que se diagrama.
+ * @param format       En que formato.
+ * @param functionName Funcion, solo para el diagrama del codigo maquina.
+ * @param target       Con que se compila.
+ * @return Los parametros listos para la peticion.
+ */
+function diagramParams(
+    uri: string,
+    kind: DiagramKind,
+    format: string,
+    functionName: string,
+    target: ReturnType<typeof inspectTarget>,
+): Record<string, unknown> {
+    const params: Record<string, unknown> = {
+        uri,
+        kind,
+        format,
+        cost: diagramCost(),
+        function: functionName,
+    };
+    applyTarget(params, target);
+    return params;
 }
 
 /** @brief Abre la vista correlacionada del fuente, el IR y el ensamblador. */
@@ -692,22 +759,33 @@ function titleFor(document: vscode.TextDocument, title: string): string {
 
 /**
  * @brief Formatea una tabla con las columnas alineadas.
+ *
+ * Las celdas llegan como lo que el servidor puso en su JSON, que no siempre es
+ * texto: un numero, un booleano o un ausente.  Se convierten aqui.  Antes se
+ * exigia texto y bastaba con que un campo llegara como numero para que la
+ * vista entera reventara con "padEnd is not a function" -- y el ancho de la
+ * columna se calculaba mal MUCHO antes de eso, sin avisar.
+ *
  * @param headers Titulos de las columnas.
  * @param rows    Filas; cada una con tantas celdas como titulos.
  * @return Texto de la tabla, terminado en salto de linea.
  */
-function renderTable(headers: string[], rows: string[][]): string {
+function renderTable(headers: string[], rows: unknown[][]): string {
+    /** Lo que sea, como texto.  Ausente y nulo son la celda vacia. */
+    const texto = (celda: unknown): string =>
+        celda === undefined || celda === null ? '' : String(celda);
+
     const widths = headers.map((header, index) => {
         let width = header.length;
         for (const row of rows) {
-            width = Math.max(width, (row[index] ?? '').length);
+            width = Math.max(width, texto(row[index]).length);
         }
         return width;
     });
 
-    const pad = (cells: string[]): string =>
+    const pad = (cells: unknown[]): string =>
         cells
-            .map((cell, index) => (cell ?? '').padEnd(widths[index]))
+            .map((cell, index) => texto(cell).padEnd(widths[index]))
             .join('  ')
             .trimEnd();
 
@@ -716,4 +794,27 @@ function renderTable(headers: string[], rows: string[][]): string {
         lines.push(pad(row));
     }
     return lines.join('\n') + '\n';
+}
+
+/**
+ * @brief Abre el bloque de ensamblador donde esta el cursor, con su flujo.
+ *
+ * Se pide por la LINEA del cursor y el servidor localiza el bloque: quien lo
+ * sabe es quien lo analiza, y hacerlo aqui seria una segunda idea de donde
+ * empieza y acaba un bloque.
+ *
+ * @param deps Contexto de los comandos.
+ */
+async function showAsmBlock(deps: InspectContext): Promise<void> {
+    const document = activeVestaDocument();
+    if (!document) {
+        return;
+    }
+    // La linea del cursor si lo hay; si no, la primera del fichero, y que el
+    // servidor conteste que ahi no hay ningun bloque.
+    const editor = vscode.window.visibleTextEditors.find(
+        e => e.document.uri.toString() === document.uri.toString(),
+    );
+    const linea = (editor ? editor.selection.active.line : 0) + 1;
+    await AsmBlockPanel.show(deps.client, document.uri, linea);
 }

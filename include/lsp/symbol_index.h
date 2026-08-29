@@ -292,6 +292,31 @@ std::string uri_to_fs_path(const std::string &uri);
  */
 std::string fs_path_to_uri(const std::string &fs_path);
 
+/**
+ * @brief Los directorios donde buscar los imports de @p fs_path.
+ *
+ * Un fichero que no es la raiz del proyecto importa relativo a esa raiz, asi
+ * que hay que ofrecer los directorios de encima como sitios donde mirar.  Pero
+ * SOLO hasta la raiz del paquete: el primer ancestro con manifiesto
+ * (@c vx.toml / @c vx.json) es donde el paquete empieza, y por encima ya se
+ * esta fuera.
+ *
+ * Subir mas alla tiene una consecuencia que no se ve venir: esos directorios
+ * CONTIENEN al paquete, asi que ofrecen sus mismos namespaces con otra
+ * identidad -- una sin manifiesto --, y el resolutor se encuentra el mismo
+ * namespace en dos sitios y avisa de que hay dos librerias en disputa.  Es lo
+ * que dejaba sin analizar a cualquier fichero de la biblioteca estandar abierto
+ * en el editor: 607 diagnosticos y ningun IR, luego ni disposicion de tipos, ni
+ * coste, ni nada de lo que se calcula compilando.
+ *
+ * Si no hay manifiesto en ninguna parte -- un ejemplo suelto -- se sube hasta
+ * la raiz, que es lo que se hacia siempre.
+ *
+ * @param fs_path Fichero que se esta analizando.
+ * @return Directorios, del mas cercano al mas lejano.
+ */
+std::vector<std::string> import_search_roots(const std::string &fs_path);
+
 } // namespace lsp
 
 #endif // VESTA_LSP_SYMBOL_INDEX_H

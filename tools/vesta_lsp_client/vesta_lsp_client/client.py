@@ -200,6 +200,10 @@ class VestaLspClient:
         self._closed = False
         # uri -> lista de diagnosticos de la ultima publishDiagnostics.
         self._diagnostics: Dict[str, List[Dict[str, Any]]] = {}
+        # Respuestas que llegaron antes de que las reclamaran.  El servidor
+        # atiende varias consultas a la vez y contesta en cuanto tiene cada
+        # una, no en el orden en que se le preguntaron.
+        self._pendientes: Dict[int, Dict[str, Any]] = {}
 
         try:
             self._proc = subprocess.Popen(
@@ -341,26 +345,54 @@ class VestaLspClient:
             uri = params.get("uri", "")
             self._diagnostics[uri] = params.get("diagnostics", [])
 
+    def send_request(self, method: str, params: Any) -> int:
+        """Envia una peticion SIN esperarla y devuelve su ``id``.
+
+        El servidor atiende varias consultas a la vez, asi que puede contestar
+        en un orden distinto al que se le pregunto.  Lanzar varias y recogerlas
+        despues con :meth:`await_response` es la unica forma de comprobar eso
+        -- y de aprovecharlo.
+        """
+        rid = self._next
+        self._next += 1
+        self._write({"jsonrpc": "2.0", "id": rid, "method": method,
+                     "params": params})
+        return rid
+
+    def await_response(self, rid: int, method: str = "") -> Any:
+        """Espera la respuesta de ``rid`` y devuelve su ``result``.
+
+        Lo que llegue por el camino no se tira: las notificaciones se procesan
+        y las respuestas de OTRAS peticiones se guardan, porque son igual de
+        buenas y quien las pidio las va a reclamar.
+        """
+        if rid in self._pendientes:
+            msg = self._pendientes.pop(rid)
+            if msg.get("error"):
+                raise LspError("%s: %s" % (method or rid, msg["error"]))
+            return msg.get("result")
+        while True:
+            msg = self._read_message()
+            if "method" in msg and "id" not in msg:
+                self._handle_notification(msg)
+                continue
+            if "id" not in msg:
+                continue
+            if msg.get("id") == rid:
+                if "error" in msg and msg["error"] is not None:
+                    raise LspError("%s: %s" % (method or rid, msg["error"]))
+                return msg.get("result")
+            # De otro: se guarda.  Antes se tiraba, y con un servidor que
+            # contesta desordenado eso es perder una respuesta pedida.
+            self._pendientes[msg["id"]] = msg
+
     def _request(self, method: str, params: Any) -> Any:
         """Envia una peticion y devuelve su ``result`` (lanza en ``error``).
 
         Las notificaciones que lleguen mientras se espera la respuesta (como
         ``publishDiagnostics``) se capturan por el camino.
         """
-        rid = self._next
-        self._next += 1
-        self._write({"jsonrpc": "2.0", "id": rid, "method": method,
-                     "params": params})
-        # Leer mensajes hasta encontrar la respuesta con nuestro id.
-        while True:
-            msg = self._read_message()
-            if "id" in msg and msg.get("id") == rid:
-                if "error" in msg and msg["error"] is not None:
-                    raise LspError("%s: %s" % (method, msg["error"]))
-                return msg.get("result")
-            if "method" in msg and "id" not in msg:
-                self._handle_notification(msg)
-            # Respuestas a otros id (no deberia pasar en uso sincrono): ignorar.
+        return self.await_response(self.send_request(method, params), method)
 
     def request(self, method: str, params: Any) -> Any:
         """Peticion JSON-RPC generica (escotilla de escape).

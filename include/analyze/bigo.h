@@ -76,6 +76,20 @@ enum class CostClass : uint8_t {
 const char *cost_class_str(CostClass c);
 
 /**
+ * @brief Nombre de una confianza (@c "exacta", @c "heuristica",
+ *        @c "desconocida").
+ *
+ * Existia y no estaba declarada, asi que quien la necesitaba fuera del modulo
+ * -- el servidor de lenguaje -- mandaba el numero del enum.  Un "2" no dice
+ * nada a quien lee el informe, y ademas obligaba a que el otro lado supiera la
+ * numeracion: dos sitios sabiendo lo mismo, que es como empiezan a discrepar.
+ *
+ * @param c Confianza.
+ * @return Su nombre.
+ */
+const char *confidence_str(Confidence c);
+
+/**
  * @brief Normaliza una expresion de coste textual a una @c CostClass.
  *
  * Acepta las formas que el parser captura en @c @complexity:

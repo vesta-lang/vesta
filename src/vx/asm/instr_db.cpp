@@ -97,6 +97,81 @@ const DbIclassRange *find_iclass(const IsaData &t, const std::string &up) {
     return nullptr;
 }
 
+/// Nombre CANONICO de una condicion x86, o nullptr si la escrita ya lo es.
+///
+/// El ensamblador acepta varios nombres para la misma condicion -- `jne` y
+/// `jnz` son la MISMA instruccion, igual que `jc` y `jb`, o `setg` y `setnle`
+/// --, y la base guarda uno solo por condicion: el que nombra la fuente.  Sin
+/// esta equivalencia, la mitad de los saltos que se escriben de verdad no
+/// existian para la base.
+const char *cond_canonica_x86(const std::string &c) {
+    static const std::pair<const char *, const char *> alias[] = {
+        {"A", "NBE"}, {"AE", "NB"},  {"C", "B"},    {"E", "Z"},
+        {"G", "NLE"}, {"GE", "NL"},  {"NA", "BE"},  {"NAE", "B"},
+        {"NC", "NB"}, {"NE", "NZ"},  {"NG", "LE"},  {"NGE", "L"},
+        {"PE", "P"},  {"PO", "NP"},
+    };
+    for (const auto &a : alias)
+        if (c == a.first) return a.second;
+    return nullptr;
+}
+
+/// Busca la clase de un mnemonico TAL Y COMO SE ESCRIBE.
+///
+/// @ref find_iclass busca el nombre exacto de la base, que es el de la fuente
+/// de la que salio (estilo XED en x86).  Ese nombre y el que se teclea no
+/// siempre coinciden, y no por capricho: la base separa lo que el ensamblador
+/// deja junto -- `ret` son dos instrucciones distintas segun a donde vuelva,
+/// `RET_NEAR` y `RET_FAR` --, y elige un nombre por condicion donde el
+/// ensamblador admite varios.  Preguntar solo por el nombre exacto dejaba
+/// mudos precisamente a los mnemonicos mas comunes: `ret`, `call`, `jne`,
+/// `ja`, `sete`, `cmovg`.
+///
+/// Aqui se resuelve una vez, para que lo ganen a la vez el planificador, el
+/// analisis, el informe y el editor.
+///
+/// @param t   Tablas de la ISA.
+/// @param isa ISA a la que pertenece el mnemonico.
+/// @param up  Mnemonico ya en mayusculas.
+/// @return El rango de formas, o nullptr si la base no lo conoce.
+const DbIclassRange *find_iclass_escrito(const IsaData &t, Isa isa,
+                                         const std::string &up) {
+    if (const DbIclassRange *r = find_iclass(t, up)) return r;
+
+    /* En arm la condicion va PEGADA al mnemonico (`b.ne`) y la base nombra la
+     * clase sin ella (`B`): la condicion es un campo del encoding, no otra
+     * instruccion. */
+    if (isa == Isa::ARM64 || isa == Isa::ARM32) {
+        const size_t punto = up.find('.');
+        if (punto != std::string::npos && punto > 0)
+            return find_iclass(t, up.substr(0, punto));
+        return nullptr;
+    }
+    if (isa != Isa::X86) return nullptr;
+
+    /* Los nombres que el ensamblador deja sin desambiguar.  `ret` y `call` son
+     * los dos casos que de verdad se escriben; `retn`/`retf` los desambiguan a
+     * mano y son los mismos dos destinos. */
+    if (up == "RETN") return find_iclass(t, "RET_NEAR");
+    if (up == "RETF") return find_iclass(t, "RET_FAR");
+    if (up == "LOOPZ") return find_iclass(t, "LOOPE");
+    if (up == "LOOPNZ") return find_iclass(t, "LOOPNE");
+    if (const DbIclassRange *r = find_iclass(t, up + "_NEAR")) return r;
+    if (const DbIclassRange *r = find_iclass(t, up + "_FAR")) return r;
+
+    /* Condiciones: la raiz dice QUE hace (saltar, asignar, mover) y el resto
+     * es la condicion, que es lo unico que cambia de nombre. */
+    static const char *const raices[] = {"CMOV", "SET", "J"};
+    for (const char *raiz : raices) {
+        const size_t n = std::strlen(raiz);
+        if (up.size() <= n || up.compare(0, n, raiz) != 0) continue;
+        const char *canon = cond_canonica_x86(up.substr(n));
+        if (canon == nullptr) break; // la raiz casa: no hay otra que probar
+        return find_iclass(t, std::string(raiz) + canon);
+    }
+    return nullptr;
+}
+
 } // namespace
 
 namespace {
@@ -254,6 +329,25 @@ bool split_asm_line(const std::string &line, std::string &mnem,
         std::string bajo = mnem;
         for (char &c : bajo)
             c = static_cast<char>(std::tolower((unsigned char)c));
+        /* `lock` es lo contrario: NO cambia de instruccion, obliga a que la que
+         * viene detras sea atomica.  La base modela la instruccion, asi que el
+         * prefijo se descarta y se responde por ella; sin esto, un `lock xadd`
+         * salia como el mnemonico "lock", que no existe en ninguna tabla. */
+        if ((bajo == "lock" || bajo == "xacquire" || bajo == "xrelease") &&
+            !rest.empty()) {
+            const size_t sp2 = rest.find_first_of(" \t");
+            mnem = (sp2 == std::string::npos) ? rest : rest.substr(0, sp2);
+            rest = (sp2 == std::string::npos) ? "" : rest.substr(sp2 + 1);
+            bajo = mnem;
+            for (char &c : bajo)
+                c = static_cast<char>(std::tolower((unsigned char)c));
+        }
+        /* `repz` y `repnz` son otra forma de escribir `repe` y `repne`; la base
+         * guarda una sola. */
+        if (bajo == "repz")
+            mnem = "repe";
+        else if (bajo == "repnz")
+            mnem = "repne";
         const bool es_prefijo =
             (bajo == "rep" || bajo == "repe" || bajo == "repz" ||
              bajo == "repne" || bajo == "repnz");
@@ -352,6 +446,26 @@ void addr_regs(Isa isa, const std::string &tok, std::vector<std::string> &out) {
 
 } // namespace
 
+const char *isa_name(Isa isa) {
+    switch (isa) {
+    case Isa::X86:
+        return "x86";
+    case Isa::ARM64:
+        return "arm64";
+    case Isa::ARM32:
+        return "arm32";
+    case Isa::RISCV:
+        return "riscv";
+    }
+    return "";
+}
+
+bool has_mnemonic(const std::string &line) {
+    std::string mnem;
+    std::vector<std::string> toks;
+    return split_asm_line(line, mnem, toks);
+}
+
 int32_t match_asm_line(Isa isa, const std::string &line) {
     std::string mnem;
     std::vector<std::string> toks;
@@ -370,7 +484,7 @@ int32_t match(Isa isa, const std::string &mnemonic,
     std::string up = mnemonic;
     for (char &c : up)
         c = static_cast<char>(std::toupper((unsigned char)c));
-    const DbIclassRange *r = find_iclass(t, up);
+    const DbIclassRange *r = find_iclass_escrito(t, isa, up);
     if (!r) return -1; // mnemonico no existe
     int32_t best = -1;
     int best_s = -1;
@@ -599,7 +713,7 @@ bool flag_names_of_mnemonic(Isa isa, const std::string &mnemonic,
     up.reserve(base.size());
     for (char c : base)
         up.push_back(static_cast<char>(std::toupper((unsigned char)c)));
-    const DbIclassRange *r = find_iclass(t, up);
+    const DbIclassRange *r = find_iclass_escrito(t, isa, up);
     if (r == nullptr || r->count == 0) return false;
     /* Las formas que TIENEN el dato tienen que coincidir.  Si discrepan no se
      * contesta: elegir una seria inventar cual de ellas se escribio.
@@ -665,7 +779,7 @@ std::string requisito_de_mnemonico(Isa isa, const std::string &mnemonic) {
     std::string up = mnemonic;
     for (char &c : up)
         c = static_cast<char>(std::toupper((unsigned char)c));
-    const DbIclassRange *r = find_iclass(t, up);
+    const DbIclassRange *r = find_iclass_escrito(t, isa, up);
     if (!r || r->count == 0) return std::string();
     // Se compara el RASGO, no el conjunto en crudo: las formas de `vmovdqu64`
     // son AVX512F_128, _256 y _512, tres conjuntos distintos que son el mismo
@@ -873,6 +987,19 @@ bool contains(const std::vector<std::string> &v, const std::string &x) {
     return false;
 }
 
+/// Indica si un nombre de registro es el CONTADOR DE PROGRAMA.
+///
+/// Son los nombres con los que lo llama cada fuente; no hay mas de cuatro
+/// porque no hay mas maneras de llamarlo.  Escribirlo es la definicion de
+/// transferir el control, y de ahi sale que nada se pueda mover al otro lado.
+bool es_contador_de_programa(const std::string &reg) {
+    std::string low;
+    low.reserve(reg.size());
+    for (char c : reg)
+        low.push_back(static_cast<char>(std::tolower((unsigned char)c)));
+    return low == "rip" || low == "eip" || low == "ip" || low == "pc";
+}
+
 /// Todo bit de overlay que impide reordenar (barrera dura).
 const uint16_t OVL_BARRIER_ANY = OVL_BARRIER | OVL_SERIALIZING | OVL_ATOMIC |
                                  OVL_LL_SC | OVL_MEM_ACQUIRE | OVL_MEM_RELEASE |
@@ -969,6 +1096,16 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
          */
         const std::string &donde = io.reg.empty() ? io.state : io.reg;
         if (donde.empty()) continue;
+        /* Quien escribe el CONTADOR DE PROGRAMA transfiere el control, y nada
+         * se puede mover al otro lado: una llamada no dice en su forma que se
+         * lleva por delante los registros que la convencion le deja usar, y un
+         * salto condicional decide si lo de despues llega a ejecutarse.
+         *
+         * El dato es de la propia base -- `call`, `ret` y los saltos declaran
+         * `rip` como operando implicito escrito --, no una lista de mnemonicos
+         * escrita aparte.  El campo overlay que lo diria (rama/call/ret) viene
+         * vacio de la fuente en x86, asi que se lee de donde SI esta. */
+        if (io.writes && es_contador_de_programa(donde)) s.barrier = true;
         std::vector<std::string> &lee =
             io.reg.empty() ? s.reads_state : s.reads;
         std::vector<std::string> &escribe =

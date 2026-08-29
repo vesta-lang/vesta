@@ -187,10 +187,37 @@ asm_diagnose_uninit(const AsmCfg &cfg, instr_db::Isa isa,
         for (const std::string &r : sem[i].writes)
             if (!r.empty()) universe.insert(r);
         if (has_flags) {
+            /* Leer una bandera solo es sospechoso si es de las que deja una
+             * COMPARACION.  Las demas no se ponen en el bloque ni tienen por
+             * que: la de direccion vale cero al entrar por convencion de
+             * llamada -- y las instrucciones de cadena la leen SIEMPRE, para
+             * saber si avanzan o retroceden --, y las de modo del procesador
+             * vienen de fuera por definicion.
+             *
+             * Sin esta distincion, un `rep movsb` avisaba de "banderas leidas
+             * sin comparacion previa" y el aviso tumbaba su elevacion: la
+             * instruccion pasaba a modelarse por la forma sin prefijo, que no
+             * sabe del contador, y la variable ligada a `rcx` se borraba por
+             * muerta.  La base distingue las banderas una por una; quien
+             * preguntaba las juntaba todas en un bit. */
+            bool lee_condicion = sem[i].reads_flags;
+            if (sem[i].reads_flags && sem[i].form_id >= 0) {
+                std::vector<std::string> lee_n, escribe_n;
+                if (instr_db::flag_names_of(isa, sem[i].form_id,
+                                            lee_n, escribe_n)) {
+                    lee_condicion = false;
+                    for (const std::string &f : lee_n)
+                        if (f == "af" || f == "cf" || f == "of" || f == "pf" ||
+                            f == "sf" || f == "zf") {
+                            lee_condicion = true;
+                            break;
+                        }
+                }
+            }
             // Lee flags: una rama condicional (jCC / b.CC), o un consumidor de
             // flags que la DB modela (adc/sbb/cmovCC/setCC -> operando FLAGS).
-            flag_read[i] = (cfg.insns[i].term == AsmTerm::CondBranch) ||
-                           sem[i].reads_flags;
+            flag_read[i] =
+                (cfg.insns[i].term == AsmTerm::CondBranch) || lee_condicion;
             // Escribe flags: cmp/add/sub/test/... (la DB los modela con un
             // operando FLAGS de escritura).
             flag_write[i] = sem[i].writes_flags;

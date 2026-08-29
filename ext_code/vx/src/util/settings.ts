@@ -92,9 +92,46 @@ export function compilerFactsShowUnknown(): boolean {
     return config().get<boolean>('inlayHints.compilerFactsUnknown', false);
 }
 
+/**
+ * @brief Como se ejecuta lo que se lanza desde el editor.
+ * @return "vm" (interprete), "jit" o "aot" (nativo).
+ */
+export function runMode(): string {
+    return config().get<string>('run.mode', 'jit');
+}
+
+/**
+ * @brief Nivel de optimizacion con el que se compila lo que se ejecuta.
+ * @return El nivel, o undefined para el de por defecto del compilador.
+ */
+export function runOptLevel(): number | undefined {
+    const valor = config().get<string>('run.opt', '');
+    return valor === '' ? undefined : Number(valor);
+}
+
+/** @brief Indica si se compila con informacion de depuracion. */
+export function runDebug(): boolean {
+    return config().get<boolean>('run.debug', false);
+}
+
+/** @brief Tiempo maximo, en milisegundos, que puede durar una ejecucion. */
+export function runTimeoutMs(): number {
+    return config().get<number>('run.timeout', 10000);
+}
+
 /** @brief Ruta configurada de la maquina virtual; puede ir vacia. */
 export function vmPathSetting(): string {
     return config().get<string>('vmPath', '');
+}
+
+/**
+ * @brief Indica si se dibujan las flechas de flujo sobre el codigo.
+ *
+ * Encendidas por defecto: es informacion que el compilador ya tiene y que sin
+ * dibujar obliga a seguir cada salto a mano.
+ */
+export function flowArrowsEnabled(): boolean {
+    return config().get<boolean>('flowArrows', true);
 }
 
 /** @brief Indica si hay que reutilizar el terminal entre ejecuciones. */
@@ -103,22 +140,66 @@ export function reuseTerminal(): boolean {
 }
 
 /**
- * @brief Devuelve el documento Vesta activo, avisando si no lo hay.
+ * El ultimo fichero Vesta que se tuvo delante.
+ *
+ * Lo que las vistas del compilador ensenan NO es un fichero Vesta: es un
+ * volcado, un diagrama o una pagina.  En cuanto se mira una, el fichero activo
+ * deja de ser el programa, asi que la siguiente accion no encontraba sobre que
+ * trabajar y contestaba "no hay ningun fichero abierto" -- teniendo el fichero
+ * a la izquierda, abierto, delante --.  Con la barra lateral eso pasa
+ * constantemente, porque el flujo normal es mirar una vista y pedir otra.
+ */
+let ultimoVesta: vscode.Uri | undefined;
+
+/**
+ * @brief Toma nota de que este es el fichero sobre el que se esta trabajando.
+ * @param documento Documento que acaba de ponerse delante.
+ */
+export function recordarDocumentoVesta(documento: vscode.TextDocument): void {
+    if (documento.languageId === VESTA_LANGUAGE_ID) {
+        ultimoVesta = documento.uri;
+    }
+}
+
+/**
+ * @brief Devuelve el documento Vesta sobre el que trabajar, avisando si no hay.
  *
  * Todas las vistas del compilador trabajan sobre un fichero concreto, asi que
- * este es el primer paso de casi todos los comandos.
+ * este es el primer paso de casi todos los comandos.  Se busca en tres sitios,
+ * en este orden: el editor activo, los editores visibles, y el ultimo fichero
+ * Vesta que se tuvo delante -- que es el caso de siempre cuando la accion se
+ * pide desde la barra lateral con una vista abierta --.
  *
- * @return El documento activo, o undefined si no hay ninguno en Vesta.
+ * @return El documento, o undefined si no hay ninguno.
  */
 export function activeVestaDocument(): vscode.TextDocument | undefined {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) {
-        void vscode.window.showWarningMessage('Vesta: no hay ningun fichero abierto.');
-        return undefined;
+    const activo = vscode.window.activeTextEditor;
+    if (activo && activo.document.languageId === VESTA_LANGUAGE_ID) {
+        recordarDocumentoVesta(activo.document);
+        return activo.document;
     }
-    if (editor.document.languageId !== VESTA_LANGUAGE_ID) {
-        void vscode.window.showWarningMessage('Vesta: el fichero activo no es un .vx.');
-        return undefined;
+
+    // Alguno de los visibles: con la vista al lado, el programa sigue ahi.
+    for (const editor of vscode.window.visibleTextEditors) {
+        if (editor.document.languageId === VESTA_LANGUAGE_ID) {
+            recordarDocumentoVesta(editor.document);
+            return editor.document;
+        }
     }
-    return editor.document;
+
+    // El ultimo que se miro, si sigue abierto.
+    if (ultimoVesta) {
+        const guardado = vscode.workspace.textDocuments.find(
+            d => d.uri.toString() === ultimoVesta?.toString(),
+        );
+        if (guardado) {
+            return guardado;
+        }
+        ultimoVesta = undefined; // se cerro: no se insiste
+    }
+
+    void vscode.window.showWarningMessage(
+        'Vesta: abre un fichero .vx para poder mirar lo que hace el compilador con el.',
+    );
+    return undefined;
 }

@@ -50,14 +50,6 @@ std::string json_esc(const std::string &s) {
     return o;
 }
 
-/// Mensaje formateado de un diagnostico: del catalogo (idioma activo) si el
-/// codigo esta catalogado; si no, el @c message crudo.
-std::string formatted_message(const Diagnostic &d) {
-    if (!d.code.empty() && diag::has_code(d.code))
-        return diag::format(d.code, d.args);
-    return d.message;
-}
-
 /// Nombre de severidad para JSON/SARIF (SARIF usa error|warning|note).
 const char *severity_name(DiagLevel l) {
     switch (l) {
@@ -139,6 +131,12 @@ void render_sarif(std::ostream &os, const Diagnostics &diags) {
 }
 
 } // namespace
+
+std::string formatted_message(const Diagnostic &d) {
+    if (!d.code.empty() && diag::has_code(d.code))
+        return diag::format(d.code, d.args);
+    return d.message;
+}
 
 DiagFormat parse_diag_format(const std::string &s, bool *ok) {
     if (ok) *ok = true;

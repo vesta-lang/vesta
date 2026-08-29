@@ -17,15 +17,23 @@
 
 #include "lsp/lsp_server.h"
 #include "vx/diag/diag_catalog.h"
+#include "vx/diag/diag_format.h" // formatted_message: el MISMO texto que la CLI
+#include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 
 #include "lsp/builtin_docs.h"
 #include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
 #include "util/fs_utils.h"       // fs::get_executable_path (localizar stdlib)
 
+#include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
+#include <deque>
 #include <exception>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -84,10 +92,12 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     tc::CompileRequest req;
     req.input = fs_path;
     // Si el documento esta abierto, usar su buffer (overlay) en vez del disco.
-    if (docs_.has(uri)) req.source_overlay = docs_.text(uri);
+    if (docs_.has(uri)) req.source_overlay = *docs_.text(uri);
     req.output = params.value("output", std::string());
     req.module_name = params.value("moduleName", std::string("main"));
     req.debug = params.value("debug", false);
+    // Con que nivel optimizar: -1 = el de por defecto del frontend.
+    req.opt_level = params.value("opt", -1);
     req.instrument = params.value("instrument", std::string());
     req.keep_labels = params.value("keepLabels", false);
     req.emit_map = params.value("emitMap", false);
@@ -127,7 +137,8 @@ nlohmann::json LspServer::compile_request(const std::string &method,
 
     // Proyecto: explicito por el metodo/param, o auto-detectado si el fuente
     // tiene algun `import "..."`.
-    const std::string &src = docs_.has(uri) ? docs_.text(uri) : std::string();
+    const auto src_ref = docs_.text(uri);
+    const std::string &src = *src_ref;
     const bool has_imports = src.find("import \"") != std::string::npos ||
                              src.find("import\t\"") != std::string::npos;
     req.is_project = (method == "vesta/compileProject") ||
@@ -136,16 +147,8 @@ nlohmann::json LspServer::compile_request(const std::string &method,
     // Para proyectos, pasar los directorios ancestros como search paths (igual
     // que el analisis), para resolver imports relativos al root.
     if (req.is_project) {
-        std::string d = fs_path;
-        size_t slash = d.find_last_of("/\\");
-        if (slash != std::string::npos) d = d.substr(0, slash);
-        for (int lvl = 0; lvl < 40 && !d.empty(); ++lvl) {
+        for (const auto &d : import_search_roots(fs_path))
             req.search_paths.push_back(d);
-            size_t s = d.find_last_of("/\\");
-            if (s == std::string::npos || s == 0 || (s == 2 && d[1] == ':'))
-                break;
-            d = d.substr(0, s);
-        }
     }
 
     tc::CompileResponse cr = tc::compile(req);
@@ -202,6 +205,10 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
         if (params.contains("rootPath") && params.at("rootPath").is_string()) {
             roots.push_back(params.at("rootPath").get<std::string>());
         }
+        // Para que maquina analizar.  El editor lo manda al arrancar y cada
+        // vez que se cambia (@c workspace/didChangeConfiguration).
+        apply_target_settings(params.value("initializationOptions",
+                                           nlohmann::json::object()));
         // Deduplicar entradas vacias/repetidas conservando el orden.
         std::vector<std::string> uniq;
         for (const auto &r : roots) {
@@ -240,6 +247,9 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
     caps["hoverProvider"] = true;
     caps["definitionProvider"] = true;
     caps["referencesProvider"] = true;
+    // Buscar un simbolo por su nombre: es lo que permite ir a una funcion
+    // desde un sitio donde solo se la nombra.
+    caps["workspaceSymbolProvider"] = true;
 
     // Autocompletado (Fase 5): se dispara al teclear o tras el punto '.'
     // (acceso a miembros).  No resolvemos detalles diferidos (resolveProvider
@@ -258,7 +268,9 @@ void LspServer::handle_initialize(const nlohmann::json &msg) {
          "vesta/functions", "vesta/aotCompat", "vesta/jitAsm", "vesta/aotAsm",
          "vesta/modes", "vesta/compile", "vesta/compileProject",
          "vesta/macroExpand", "vesta/comptimeValues", "vesta/asa",
-         "vesta/asaFacts"});
+         "vesta/asaFacts", "vesta/targets", "vesta/instruction",
+         "vesta/functionReport", "vesta/asmBlock",
+         "vesta/asmFlow"});
     caps["experimental"] = std::move(experimental);
 
     nlohmann::json result;
@@ -336,10 +348,29 @@ void LspServer::handle_did_close(const nlohmann::json &params) {
     transport_.write_message(note);
 }
 
+void LspServer::apply_target_settings(const nlohmann::json &settings) {
+    if (!settings.is_object()) return;
+    /* Un editor manda su configuracion anidada bajo el nombre de la extension;
+     * quien llame al servidor a mano suele mandar el objeto plano.  Se aceptan
+     * las dos porque las dos dicen lo mismo. */
+    const nlohmann::json *donde = &settings;
+    if (settings.contains("vesta") && settings.at("vesta").is_object()) {
+        const nlohmann::json &v = settings.at("vesta");
+        if (v.contains("inspect") && v.at("inspect").is_object())
+            donde = &v.at("inspect");
+        else
+            donde = &v;
+    }
+    engine_.set_target(donde->value("os", std::string()),
+                       donde->value("arch", std::string()));
+}
+
 void LspServer::publish_diagnostics(const std::string &uri) {
     // Compilar (o reusar cache) el documento.
-    const std::string &text = docs_.text(uri);
-    const DocAnalysis &an = engine_.analyze_document(uri, text);
+    const auto text_ref = docs_.text(uri);
+    const std::string &text = *text_ref;
+    const auto an_ref = engine_.analyze_document(uri, text);
+    const DocAnalysis &an = *an_ref;
 
     // Construir el array de diagnosticos LSP a partir de los del compilador.
     nlohmann::json diags = nlohmann::json::array();
@@ -405,7 +436,19 @@ void LspServer::publish_diagnostics(const std::string &uri) {
         jd["severity"] = diag_severity_to_lsp(d.level);
         jd["source"] = "vesta";
         if (!d.code.empty()) jd["code"] = d.code;
-        jd["message"] = d.message;
+        /* El texto se compone AQUI, igual que al imprimirlo por la linea de
+         * ordenes: un diagnostico catalogado no lleva la frase escrita, lleva
+         * el codigo y los datos.  Publicando el campo crudo salia vacio, y el
+         * editor rechaza un diagnostico sin texto -- y con el, la tanda entera:
+         * no se veia NINGUNO.
+         *
+         * Y si aun asi no hubiera texto -- un codigo que no esta en el catalogo
+         * y sin mensaje crudo --, se manda el codigo antes que nada: decir poco
+         * es mejor que tirar la tanda. */
+        std::string texto = vx::formatted_message(d);
+        if (texto.empty())
+            texto = d.code.empty() ? std::string("(sin texto)") : d.code;
+        jd["message"] = std::move(texto);
         diags.push_back(std::move(jd));
     }
 
@@ -430,10 +473,12 @@ void LspServer::handle_semantic_tokens_full(const nlohmann::json &msg) {
     // lista vacia (data: []) en lugar de un error: el cliente lo tolera.
     nlohmann::json data = nlohmann::json::array();
     if (docs_.has(uri)) {
-        const std::string &text = docs_.text(uri);
+        const auto text_ref = docs_.text(uri);
+        const std::string &text = *text_ref;
         // Reusar el analisis cacheado (mismo punto que los diagnosticos) para
         // enriquecer los identificadores con los nombres declarados.
-        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        const auto an_ref = engine_.analyze_document(uri, text);
+        const DocAnalysis &an = *an_ref;
         std::vector<uint32_t> toks = compute_semantic_tokens(text, uri, &an);
         // Volcar el array plano de uint32 a JSON.
         data = nlohmann::json(toks);
@@ -1040,7 +1085,8 @@ bool LspServer::word_under_cursor(const nlohmann::json &params,
     const uint32_t line = pos.value("line", 0u);
     const uint32_t character = pos.value("character", 0u);
 
-    const std::string &text = docs_.text(out_uri);
+    const auto text_ref = docs_.text(out_uri);
+    const std::string &text = *text_ref;
     // Convertir la posicion LSP a un offset de byte para localizar el token.
     const uint32_t byte_off =
         lsp_position_to_byte_offset(text, line, character);
@@ -1073,8 +1119,10 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
         const uint32_t pline = params.at("position").at("line").get<uint32_t>();
         const uint32_t pchar =
             params.at("position").at("character").get<uint32_t>();
-        const std::string &htext = docs_.text(huri);
-        const DocAnalysis &an = engine_.analyze_document(huri, htext);
+        const auto htext_ref = docs_.text(huri);
+        const std::string &htext = *htext_ref;
+        const auto an_ref = engine_.analyze_document(huri, htext);
+        const DocAnalysis &an = *an_ref;
         const std::string line_text = docs_.line(huri, pline);
         for (const auto &cv : an.result.comptime_values) {
             if (cv.loc.line == 0 || cv.builtin_kind.empty()) continue;
@@ -1108,7 +1156,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     // Resolver a una definicion: primero las del propio fichero (texto vivo),
     // luego el workspace.  La definicion da el kind + firma; la complejidad
     // sale de la ModuleCost cacheada del propio documento.
-    const std::string &text = docs_.text(uri);
+    const auto text_ref = docs_.text(uri);
+    const std::string &text = *text_ref;
     DocSymbols local = build_doc_symbols(text, uri);
 
     SymbolKind kind = SymbolKind::Unknown;
@@ -1125,16 +1174,37 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     bool doc_pendiente = false;
     uint32_t doc_line = 0, doc_char = 0;
 
+    /* Donde esta el cursor, en bytes.  Sirve para desempatar entre
+     * definiciones que se llaman igual: dos structs pueden tener un campo con
+     * el mismo nombre, y quedarse con la primera hacia que el hover de uno
+     * contara el contenedor y la disposicion en memoria del OTRO -- con
+     * aplomo, porque los dos existen y la respuesta parecia buena. */
+    size_t cursor_off = std::string::npos;
+    if (params.contains("position") && params["position"].is_object()) {
+        const auto &pos = params["position"];
+        cursor_off = lsp_position_to_byte_offset(
+            text, pos.value("line", 0u), pos.value("character", 0u));
+    }
+
     // Buscar en las definiciones locales (preferencia por exactitud de scope).
+    // Si el cursor cae DENTRO del nombre de una de ellas, es esa: ahi no hay
+    // nada que adivinar, se esta senalando la declaracion.
+    const SymbolDef *elegida = nullptr;
     for (const auto &d : local.defs) {
-        if (d.name == word) {
-            kind = d.kind;
-            signature = d.signature;
-            container = d.container;
-            doc = extract_doc_comment(text, d.byte_offset);
-            resolved = true;
+        if (d.name != word) continue;
+        if (elegida == nullptr) elegida = &d;
+        if (cursor_off != std::string::npos && cursor_off >= d.byte_offset &&
+            cursor_off < d.byte_offset + d.byte_length) {
+            elegida = &d;
             break;
         }
+    }
+    if (elegida != nullptr) {
+        kind = elegida->kind;
+        signature = elegida->signature;
+        container = elegida->container;
+        doc = extract_doc_comment(text, elegida->byte_offset);
+        resolved = true;
     }
     // Si no esta en el fichero, mirar el workspace.
     if (!resolved) {
@@ -1159,7 +1229,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     // complejidad Big-O de abajo ya encuentra el coste por sufijo `__area`
     // (el nombre mangled `org__geo__shapes__area` termina asi).
     if (!resolved) {
-        const DocAnalysis &anx = engine_.analyze_document(uri, text);
+        const auto anx_ref = engine_.analyze_document(uri, text);
+        const DocAnalysis &anx = *anx_ref;
         for (const auto &s : anx.sem_index.symbols) {
             const std::string &q = s.name;
             const size_t dot = q.rfind('.');
@@ -1262,7 +1333,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     if (def_uri == uri) {
         def_text = text;
     } else if (docs_.has(def_uri)) {
-        def_text = docs_.text(def_uri);
+        def_text = *docs_.text(def_uri);
     } else {
         std::ifstream f(uri_to_fs_path(def_uri), std::ios::binary);
         if (f) {
@@ -1278,7 +1349,8 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
     }
     // Analisis del fichero que define: de ahi salen el coste, los contratos y
     // la disposicion en memoria de los tipos.  Se pide una sola vez.
-    const DocAnalysis &def_an = engine_.analyze_document(def_uri, def_text);
+    const auto def_an_ref = engine_.analyze_document(def_uri, def_text);
+    const DocAnalysis &def_an = *def_an_ref;
 
     // Construir el markdown del hover.
     std::string md;
@@ -1454,6 +1526,17 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
                 }
             }
         }
+        /* Y si no hay huella, se dice por que.  Callarse deja "de este tipo no
+         * se sabe la disposicion" indistinguible de "este tipo no tiene
+         * ninguna", y lo normal es lo primero: el modulo no compilo para el
+         * objetivo con el que se esta mirando -- un fichero de Linux leido
+         * desde Windows, por ejemplo -- y sin compilar no hay layout que
+         * consultar. */
+        if (tf == nullptr && def_an.result.ir_module_cache_bytes.empty()) {
+            md += "\n";
+            md += vx::diag::format("VX9157", {});
+            md += "\n";
+        }
         if (tf != nullptr && kind == SymbolKind::EnumVariant) {
             for (size_t i = 0; i < tf->variants.size(); ++i) {
                 const analyze::VariantPlacement &v = tf->variants[i];
@@ -1567,7 +1650,8 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
 
     // Preferir las definiciones del propio fichero (texto vivo); si no hay,
     // usar el workspace (incluye librerias/modulos importados).
-    const std::string &text = docs_.text(uri);
+    const auto text_ref = docs_.text(uri);
+    const std::string &text = *text_ref;
     DocSymbols local = build_doc_symbols(text, uri);
 
     nlohmann::json locs = nlohmann::json::array();
@@ -1593,7 +1677,8 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
     // simple (ultimo segmento del nombre cualificado) coincide y devolvemos su
     // span.
     if (locs.empty()) {
-        const DocAnalysis &an = engine_.analyze_document(uri, text);
+        const auto an_ref = engine_.analyze_document(uri, text);
+        const DocAnalysis &an = *an_ref;
         for (const auto &s : an.sem_index.symbols) {
             const std::string &q = s.name;
             const size_t dot = q.rfind('.');
@@ -1642,6 +1727,95 @@ void LspServer::handle_definition(const nlohmann::json &msg) {
     send_result(msg.at("id"), locs);
 }
 
+/**
+ * @brief Traduce el kind propio al numero de @c SymbolKind del protocolo.
+ *
+ * Los numeros son los del LSP; el editor los usa para el icono de cada
+ * resultado.  Lo que no encaje va como Funcion, que es lo mas comun aqui.
+ *
+ * @param k Kind propio.
+ * @return El numero del protocolo.
+ */
+static int symbol_kind_to_lsp(SymbolKind k) {
+    switch (k) {
+    case SymbolKind::Struct: return 23;    // Struct
+    case SymbolKind::Class: return 5;      // Class
+    case SymbolKind::Enum: return 10;      // Enum
+    case SymbolKind::EnumVariant: return 22; // EnumMember
+    case SymbolKind::TypeAlias: return 26; // TypeParameter
+    case SymbolKind::Variable: return 13;  // Variable
+    case SymbolKind::Field: return 8;      // Field
+    case SymbolKind::Method: return 6;     // Method
+    default: return 12;                    // Function
+    }
+}
+
+void LspServer::handle_workspace_symbol(const nlohmann::json &msg) {
+    const std::string consulta =
+        msg.contains("params") && msg.at("params").is_object()
+            ? msg.at("params").value("query", std::string())
+            : std::string();
+
+    nlohmann::json salida = nlohmann::json::array();
+    if (consulta.empty()) {
+        send_result(msg.at("id"), std::move(salida));
+        return;
+    }
+    workspace_.ensure_built();
+
+    /* Se busca por el nombre INTERNO y tambien por el ESCRITO.
+     *
+     * Quien pide esto suele venir de una vista donde se ensena el nombre real
+     * -- `std.windows.GetCurrentFiber` --, y en el indice esta el interno
+     * (`std__windows__GetCurrentFiber`).  Exigir uno de los dos obligaria a
+     * quien pregunta a saber cual, que es justo lo que no tiene por que
+     * saber. */
+    std::vector<std::string> candidatos;
+    candidatos.push_back(consulta);
+    {
+        // Del nombre escrito al interno: los puntos vuelven a ser separadores.
+        std::string interno;
+        interno.reserve(consulta.size() + 8);
+        for (char c : consulta) {
+            if (c == '.')
+                interno += "__";
+            else
+                interno.push_back(c);
+        }
+        if (interno != consulta) candidatos.push_back(interno);
+    }
+    /* Y al reves: si lo que llega es el nombre interno, se deshace.  El indice
+     * guarda el nombre tal y como esta ESCRITO en el fuente (`MAKELANGID`), no
+     * el que el compilador construye (`__macro_std__windows__MAKELANGID`), asi
+     * que hay que quedarse con el ultimo segmento. */
+    const std::string escrito = vx::demangle_symbol(consulta);
+    if (escrito != consulta) candidatos.push_back(escrito);
+    for (const std::string &c : {consulta, escrito}) {
+        const size_t punto = c.find_last_of('.');
+        if (punto != std::string::npos && punto + 1 < c.size())
+            candidatos.push_back(c.substr(punto + 1));
+    }
+
+    for (const std::string &nombre : candidatos) {
+        for (const WorkspaceLocation &def : workspace_.defs_for(nombre)) {
+            nlohmann::json s;
+            // El nombre que se ensena es el escrito, siempre.
+            s["name"] = vx::demangle_symbol(nombre);
+            s["kind"] = symbol_kind_to_lsp(def.kind);
+            if (!def.container.empty()) s["containerName"] = def.container;
+            nlohmann::json rango;
+            rango["start"] = {{"line", def.start_line},
+                              {"character", def.start_char}};
+            rango["end"] = {{"line", def.end_line},
+                            {"character", def.end_char}};
+            s["location"] = {{"uri", def.uri}, {"range", std::move(rango)}};
+            salida.push_back(std::move(s));
+        }
+        if (!salida.empty()) break; // el primero que encaja manda
+    }
+    send_result(msg.at("id"), std::move(salida));
+}
+
 void LspServer::handle_references(const nlohmann::json &msg) {
     const auto &params = msg.at("params");
     std::string uri, word;
@@ -1687,7 +1861,8 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
     const uint32_t line = pos.value("line", 0u);
     const uint32_t character = pos.value("character", 0u);
 
-    const std::string &text = docs_.text(uri);
+    const auto text_ref = docs_.text(uri);
+    const std::string &text = *text_ref;
     // Offset de byte del cursor, prefijo que se esta escribiendo y su inicio.
     const size_t cursor = lsp_position_to_byte_offset(text, line, character);
     size_t prefix_start = cursor;
@@ -1708,7 +1883,8 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
 
     // El analisis cacheado da los conjuntos de nombres declarados (clases,
     // structs, enums, alias, funciones) del propio documento.
-    const DocAnalysis &an = engine_.analyze_document(uri, text);
+    const auto an_ref = engine_.analyze_document(uri, text);
+    const DocAnalysis &an = *an_ref;
 
     // -- COMPLETADO DE MIEMBRO tras '.' --------------------------------------
     std::string receiver;
@@ -1946,6 +2122,34 @@ bool LspServer::handle_vesta_request(const std::string &method,
             return true;
         }
 
+        // La ficha de una instruccion se pide por su LINEA, no por su texto:
+        // asi se responde por lo que el compilador entendio de ella.
+        if (method == "vesta/asmFlow") {
+            // El flujo de todos los bloques, para pintarlo sobre el codigo.
+            send_result(id, inspector_.asm_flow(
+                                params.value("uri", std::string()),
+                                params.value("arch", std::string())));
+            return true;
+        }
+        if (method == "vesta/asmBlock") {
+            // Un bloque de asm entero, con su flujo y lo que se sabe de cada
+            // instruccion.
+            send_result(id, inspector_.asm_block(
+                                params.value("uri", std::string()),
+                                params.value("line", 0u),
+                                params.value("cpu", std::string()),
+                                params.value("arch", std::string())));
+            return true;
+        }
+        if (method == "vesta/instruction") {
+            send_result(id, inspector_.instruction(
+                                params.value("uri", std::string()),
+                                params.value("line", 0u),
+                                params.value("cpu", std::string()),
+                                params.value("arch", std::string())));
+            return true;
+        }
+
         const std::string uri = params.value("uri", std::string());
         if (uri.empty()) {
             respond_error("falta params.uri");
@@ -1980,6 +2184,9 @@ bool LspServer::handle_vesta_request(const std::string &method,
             result = inspector_.ir_diff(uri, fn);
         } else if (method == "vesta/complexity") {
             result = inspector_.complexity(uri);
+        } else if (method == "vesta/functionReport") {
+            // Lo declarado frente a lo medido, por funcion.
+            result = inspector_.function_report(uri);
         } else if (method == "vesta/diagram") {
             const std::string kind =
                 params.value("kind", std::string("ir-post"));
@@ -2029,7 +2236,8 @@ bool LspServer::handle_vesta_request(const std::string &method,
             // argumento en las llamadas a funciones conocidas.
             nlohmann::json arr = nlohmann::json::array();
             if (docs_.has(uri)) {
-                const std::string &text = docs_.text(uri);
+                const auto text_ref = docs_.text(uri);
+                const std::string &text = *text_ref;
                 std::vector<ParamHint> ph = compute_param_hints(text, uri);
                 for (const auto &h : ph) {
                     nlohmann::json o;
@@ -2059,7 +2267,8 @@ bool LspServer::handle_vesta_request(const std::string &method,
                 hp["position"]["character"] = character;
                 std::string u2, word;
                 if (word_under_cursor(hp, u2, word) && !word.empty()) {
-                    const std::string &text = docs_.text(uri);
+                    const auto text_ref = docs_.text(uri);
+                    const std::string &text = *text_ref;
                     DocSymbols local = build_doc_symbols(text, uri);
                     const SymbolDef *def = nullptr;
                     for (const auto &d : local.defs)
@@ -2131,6 +2340,16 @@ void LspServer::dispatch(const nlohmann::json &msg) {
         handle_initialize(msg);
     } else if (method == "initialized") {
         // Notificacion sin payload relevante: no requiere respuesta.
+    } else if (method == "workspace/didChangeConfiguration") {
+        // Cambiar el objetivo cambia lo que se compila, asi que hay que
+        // reanalizar y volver a publicar: los errores de antes eran los de
+        // otra maquina.
+        if (msg.contains("params") && msg.at("params").is_object()) {
+            apply_target_settings(
+                msg.at("params").value("settings", nlohmann::json::object()));
+            for (const auto &uri : docs_.open_uris())
+                publish_diagnostics(uri);
+        }
     } else if (method == "shutdown") {
         handle_shutdown(msg);
     } else if (method == "exit") {
@@ -2157,6 +2376,17 @@ void LspServer::dispatch(const nlohmann::json &msg) {
             handle_definition(msg);
         } catch (...) {
             if (msg.contains("id")) send_result(msg.at("id"), nullptr);
+        }
+    } else if (method == "workspace/symbol") {
+        /* Buscar un simbolo por su NOMBRE, sin tener que saber en que fichero
+         * esta.  Hace falta para ir a una funcion desde donde se la nombra --
+         * un informe, una vista, un hecho del analisis --, que es sitio donde
+         * no hay posicion que dar y por tanto "ir a la definicion" no sirve. */
+        try {
+            handle_workspace_symbol(msg);
+        } catch (...) {
+            if (msg.contains("id"))
+                send_result(msg.at("id"), nlohmann::json::array());
         }
     } else if (method == "textDocument/references") {
         try {
@@ -2190,15 +2420,155 @@ void LspServer::dispatch(const nlohmann::json &msg) {
     // Notificaciones no soportadas: se ignoran en silencio (permitido).
 }
 
+/**
+ * @brief Nombre del metodo de un mensaje, o vacio si no lo lleva.
+ * @param msg Mensaje JSON-RPC.
+ * @return El metodo.
+ */
+static std::string metodo_de(const nlohmann::json &msg) {
+    if (!msg.contains("method") || !msg.at("method").is_string())
+        return std::string();
+    return msg.at("method").get<std::string>();
+}
+
+/**
+ * @brief La URI del documento de un mensaje, o vacia.
+ * @param msg Mensaje JSON-RPC.
+ * @return La URI.
+ */
+static std::string uri_de(const nlohmann::json &msg) {
+    if (!msg.contains("params") || !msg.at("params").is_object())
+        return std::string();
+    const nlohmann::json &p = msg.at("params");
+    if (!p.contains("textDocument") || !p.at("textDocument").is_object())
+        return std::string();
+    return p.at("textDocument").value("uri", std::string());
+}
+
+/**
+ * @brief Indica si un mensaje CAMBIA el estado del servidor.
+ *
+ * Estos van en orden y por un solo hilo; el resto se reparte.  La lista es
+ * corta a proposito: en la duda, un mensaje se trata como si cambiara algo,
+ * que es lo conservador.
+ *
+ * @param metodo Nombre del metodo.
+ * @return true si hay que atenderlo en orden.
+ */
+static bool es_mutacion(const std::string &metodo) {
+    return metodo == "initialize" || metodo == "initialized" ||
+           metodo == "shutdown" || metodo == "textDocument/didOpen" ||
+           metodo == "textDocument/didChange" ||
+           metodo == "textDocument/didClose" ||
+           metodo == "workspace/didChangeConfiguration" ||
+           metodo == "workspace/didChangeWatchedFiles" ||
+           metodo.rfind("vesta/compile", 0) == 0; // escribe en disco
+}
+
 int LspServer::run() {
-    nlohmann::json msg;
-    // Bucle de eventos: leer-despachar hasta EOF o exit.
-    while (transport_.read_message(msg)) {
-        // Detectar exit antes de despachar para terminar limpio.
-        if (msg.contains("method") && msg.at("method").is_string() &&
-            msg.at("method").get<std::string>() == "exit") {
-            // Por protocolo: exit tras shutdown => codigo 0; sin shutdown => 1.
-            return shutdown_requested_ ? 0 : 1;
+    /* Leer la entrada NO puede depender de haber terminado lo anterior.
+     *
+     * Con un solo hilo, mientras se compila no se lee, y compilar un modulo
+     * grande son minutos: en ese rato el `exit` del editor se queda en la
+     * tuberia sin que nadie lo mire, y el servidor "no se deja cerrar" -- que
+     * es exactamente como se ve desde fuera --.  Asi que un hilo lee y encola,
+     * y este despacha.  Escribir sigue siendo cosa de uno solo (este), que es
+     * lo que evita que dos respuestas se entrelacen. */
+    std::mutex m;
+    std::condition_variable cv;
+    std::deque<nlohmann::json> cola;
+
+    std::thread lector([&] {
+        nlohmann::json msg;
+        while (transport_.read_message(msg)) {
+            const std::string metodo = metodo_de(msg);
+            if (metodo == "exit") {
+                /* Se termina AQUI, sin esperar a que el hilo principal salga de
+                 * donde este.  Es lo que el editor ha pedido, y esperar es
+                 * justo lo que no funcionaba.  `_Exit` no corre destructores:
+                 * hacerlo mientras el otro hilo esta dentro del compilador
+                 * seria peor que no hacerlo.  Lo ya respondido esta fuera --
+                 * cada escritura hace flush --. */
+                std::_Exit(shutdown_requested_.load() ? 0 : 1);
+            }
+            {
+                std::lock_guard<std::mutex> guard(m);
+                /* Un cambio de documento SUSTITUYE al anterior del mismo
+                 * fichero: la sincronizacion es de texto completo, asi que el
+                 * ultimo dice todo lo que hay que saber.  Sin esto, teclear
+                 * durante una compilacion larga encola una compilacion por
+                 * pulsacion y el servidor se queda minutos por detras
+                 * recalculando textos que ya nadie tiene delante. */
+                if (metodo == "textDocument/didChange") {
+                    const std::string uri = uri_de(msg);
+                    if (!uri.empty()) {
+                        for (auto it = cola.begin(); it != cola.end();) {
+                            if (metodo_de(*it) == "textDocument/didChange" &&
+                                uri_de(*it) == uri)
+                                it = cola.erase(it);
+                            else
+                                ++it;
+                        }
+                    }
+                }
+                /* Cancelar lo que aun no ha empezado.  El editor cancela en
+                 * cuanto el cursor se mueve, y una peticion que ya no le
+                 * interesa a nadie no tiene por que costar una compilacion --
+                 * ni retrasar a las que vienen detras --.  Lo que YA se esta
+                 * atendiendo no se puede parar todavia: eso necesita puntos de
+                 * cancelacion dentro del compilador. */
+                if (metodo == "$/cancelRequest") {
+                    const nlohmann::json &p =
+                        msg.value("params", nlohmann::json::object());
+                    if (p.contains("id")) {
+                        const nlohmann::json &quien = p.at("id");
+                        for (auto &encolada : cola) {
+                            if (encolada.contains("id") &&
+                                encolada.at("id") == quien) {
+                                /* Se marca, no se borra: toda peticion tiene
+                                 * que recibir respuesta, y quien responde es el
+                                 * hilo que despacha -- el unico que escribe --.
+                                 * Borrarla dejaria al editor esperando algo que
+                                 * no va a llegar. */
+                                encolada["__cancelada"] = true;
+                            }
+                        }
+                    }
+                    continue; // la cancelacion en si no se despacha
+                }
+                cola.push_back(std::move(msg));
+            }
+            cv.notify_one();
+        }
+        /* El editor cerro la tuberia: no hay a quien responder.
+         *
+         * Sin vaciar nada a proposito: `fflush(NULL)` pide el cerrojo de CADA
+         * flujo, y el de la salida puede tenerlo el otro hilo escribiendo en
+         * una tuberia que ya nadie lee.  Ahi el cierre se quedaba esperando
+         * para siempre -- justo lo contrario de lo que se busca --.  Cada
+         * respuesta se vacia al escribirse, asi que no hay nada pendiente. */
+        std::_Exit(0);
+    });
+    lector.detach(); // vive lo que el proceso; su final es el del proceso.
+
+    /* No hay salida por aqui: quien lee es quien sabe que la conversacion se
+     * acabo -- por `exit` o porque la tuberia se cerro -- y termina el proceso
+     * en ese momento.  Este hilo solo atiende. */
+
+    /* Atender un mensaje.  Lo hace este hilo o uno del grupo, segun el mensaje;
+     * la diferencia esta abajo. */
+    auto atender = [this](const nlohmann::json &msg) {
+        /* Cancelada mientras esperaba: se contesta que se cancelo y no se hace
+         * el trabajo.  El codigo -32800 es el que el protocolo reserva para
+         * esto, y el editor lo entiende como "no pasa nada". */
+        if (msg.value("__cancelada", false) && msg.contains("id")) {
+            nlohmann::json resp;
+            resp["jsonrpc"] = "2.0";
+            resp["id"] = msg.at("id");
+            resp["error"] = {{"code", -32800}, // RequestCancelled
+                             {"message", "peticion cancelada"}};
+            transport_.write_message(resp);
+            return;
         }
         // Despachar bajo try/catch: un mensaje malformado (campos ausentes)
         // no debe tumbar el servidor.
@@ -2207,9 +2577,73 @@ int LspServer::run() {
         } catch (...) {
             // Ignorar errores de un mensaje individual y seguir sirviendo.
         }
+    };
+
+    /* El grupo de hilos que atiende las CONSULTAS.
+     *
+     * Se crean una vez y viven lo que el proceso: crear y destruir hilos por
+     * peticion cuesta, y en este toolchain ademas es la situacion en la que la
+     * TLS emulada se ha colgado alguna vez (ver util/thread_slot.h).
+     *
+     * Tantos como nucleos, con techo: el compilador ya reparte SUS modulos
+     * entre hilos, asi que poner aqui veinte no compila mas rapido, solo se
+     * pelean por los mismos nucleos. */
+    unsigned cuantos = std::thread::hardware_concurrency();
+    if (cuantos == 0) cuantos = 2;
+    if (cuantos > 4) cuantos = 4;
+
+    std::mutex m_trabajo;
+    std::condition_variable cv_trabajo;
+    std::deque<nlohmann::json> trabajo;
+    std::vector<std::thread> grupo;
+    grupo.reserve(cuantos);
+    for (unsigned i = 0; i < cuantos; ++i) {
+        grupo.emplace_back([&] {
+            for (;;) {
+                nlohmann::json tarea;
+                {
+                    std::unique_lock<std::mutex> guard(m_trabajo);
+                    cv_trabajo.wait(guard, [&] { return !trabajo.empty(); });
+                    tarea = std::move(trabajo.front());
+                    trabajo.pop_front();
+                }
+                atender(tarea);
+            }
+        });
     }
-    // EOF sin exit explicito: salida limpia.
-    return 0;
+    for (auto &h : grupo)
+        h.detach(); // viven lo que el proceso, como el lector
+
+    for (;;) {
+        nlohmann::json msg;
+        {
+            std::unique_lock<std::mutex> guard(m);
+            cv.wait(guard, [&] { return !cola.empty(); });
+            msg = std::move(cola.front());
+            cola.pop_front();
+        }
+        /* Lo que CAMBIA el estado se atiende aqui y en orden; lo que solo
+         * PREGUNTA se reparte.
+         *
+         * El orden importa en lo primero y no en lo segundo: abrir, escribir y
+         * cerrar un documento tienen que ocurrir en el orden en que se
+         * escribieron -- si un cambio adelantara al anterior, el fichero
+         * quedaria con un texto que nunca se tecleo --.  Una consulta, en
+         * cambio, mira un estado y no lo toca, asi que dos consultas sobre
+         * documentos distintos no tienen nada que decirse.
+         *
+         * Y es justo lo que se queria: mientras una consulta compila un modulo
+         * grande, las demas siguen contestando. */
+        if (es_mutacion(metodo_de(msg))) {
+            atender(msg);
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> guard(m_trabajo);
+            trabajo.push_back(std::move(msg));
+        }
+        cv_trabajo.notify_one();
+    }
 }
 
 } // namespace lsp

@@ -298,7 +298,29 @@ bool build_operands(
     std::string mnem;
     std::vector<std::string> toks;
     split_insn(insn, mnem, toks);
-    if (toks.empty()) return AsmMotivoOpaco::anotar(motivo, insn, "VXA022");
+    if (toks.empty()) {
+        /* Sin operandos ESCRITOS hay dos situaciones distintas, y tratarlas
+         * igual dejaba fuera a un grupo entero de instrucciones.
+         *
+         * Una es que no se haya reconocido lo que hay, y ahi si hay que
+         * rendirse.  La otra es que no haya nada que reconocer porque la
+         * instruccion no lleva operandos en el texto: `rep movsb` los tiene
+         * TODOS implicitos -- origen, destino y contador --, y la base los
+         * sabe.  Rechazarla por "no se le reconocio ningun operando" era
+         * confundir "no hay" con "no se pudo": la instruccion quedaba opaca y
+         * con ella se perdian las ligaduras de sus registros.
+         *
+         * Que la forma exista y no declare ninguno explicito es justamente la
+         * senal de que estamos en el segundo caso. */
+        bool lee = false, escribe = false;
+        const bool tiene_explicitos =
+            sem.form_id >= 0 &&
+            instr_db::explicit_operand(isa, sem.form_id, 0, lee, escribe);
+        if (tiene_explicitos)
+            return AsmMotivoOpaco::anotar(motivo, insn, "VXA022");
+        tmpl = mnem;
+        return true;
+    }
 
     tmpl = mnem;
     for (size_t k = 0; k < toks.size(); ++k) {
@@ -701,22 +723,42 @@ bool asm_lift_micro(
          * como los de cualquier otra.  Que la repeticion no se convierta en
          * operaciones del IR es otra cosa: no elevarla no es no conocerla, y
          * tratarlo igual tiraba informacion que si teniamos. */
-        std::string consulta_db = consulta;
+        /* Se pregunta por la linea ENTERA, con su prefijo.  La base junta las
+         * dos partes ella misma -- `rep movsb` es `rep_movsb`, otra forma -- y
+         * esa forma es la que sabe que se lee y se escribe el contador.
+         *
+         * Antes se le quitaba el prefijo antes de preguntar, y la respuesta era
+         * la de `movsb` a secas, que no mira `rcx`.  Con eso, una variable
+         * ligada a `rcx` no la leia nadie: el optimizador la borraba por muerta
+         * y el bloque arrancaba con lo que hubiera en el registro.  Se veia
+         * como `memcpy_erms` copiando basura, o sin terminar nunca.
+         *
+         * Si la forma con prefijo no esta en la base se vuelve a preguntar sin
+         * el: perder el contador es peor que quedarse opaco, pero quedarse
+         * opaco sin necesidad tambien es perder. */
+        std::string consulta_sin_prefijo = consulta;
         {
             size_t ini = 0;
             while (true) {
-                const size_t sp0 = consulta_db.find_first_of(" \t", ini);
+                const size_t sp0 =
+                    consulta_sin_prefijo.find_first_of(" \t", ini);
                 if (sp0 == std::string::npos) break;
-                if (!es_prefijo(trim(consulta_db.substr(ini, sp0 - ini))))
+                if (!es_prefijo(
+                        trim(consulta_sin_prefijo.substr(ini, sp0 - ini))))
                     break;
-                const size_t sig = consulta_db.find_first_not_of(" \t", sp0);
+                const size_t sig =
+                    consulta_sin_prefijo.find_first_not_of(" \t", sp0);
                 if (sig == std::string::npos) break;
                 ini = sig;
             }
-            if (ini != 0) consulta_db = consulta_db.substr(ini);
+            if (ini != 0)
+                consulta_sin_prefijo = consulta_sin_prefijo.substr(ini);
         }
         instr_db::AsmInsnSem sem =
-            instr_db::asm_insn_sem(isa, consulta_db, (uint32_t)ua);
+            instr_db::asm_insn_sem(isa, consulta, (uint32_t)ua);
+        if (sem.form_id < 0 && consulta_sin_prefijo != consulta)
+            sem = instr_db::asm_insn_sem(isa, consulta_sin_prefijo,
+                                         (uint32_t)ua);
         if (sem.form_id < 0) { // desconocida por la DB
             anotar_hueco_db(insn, "la base de datos no conoce esta forma");
             return AsmMotivoOpaco::anotar(motivo, insn, "VXA029");
@@ -729,22 +771,46 @@ bool asm_lift_micro(
         // elimina sus stores.  Lo dejamos al INLINE_ASM, que SI marca los
         // bindings como in/out vregs y respeta el pin al registro fisico.
         {
-            std::string mnem;
-            size_t sp = insn.find_first_of(" \t");
-            mnem = (sp == std::string::npos) ? insn : insn.substr(0, sp);
-            vx::AsmEffects ef = vx::asm_effects_for(mnem, arch_s);
-            bool binds_implicit = false;
-            for (const std::string &r : ef.implicit_read)
-                if (slot_of.find(lower(r)) != slot_of.end()) {
-                    binds_implicit = true;
-                    break;
+            /* Se pregunta por la LINEA, no por su primera palabra.  Cortando
+             * por el primer espacio, `rep movsb` preguntaba por `rep` -- que no
+             * es una instruccion y no tiene efectos --, asi que no se veia que
+             * toca `rsi`, `rdi` y `rcx`: se micro-elevaba, las ligaduras de esos
+             * tres se quedaban sin nadie que las leyera y el optimizador las
+             * borraba.  El bloque arrancaba con lo que hubiera en los
+             * registros.
+             *
+             * Y se miran las CUATRO listas.  Un registro por el que se accede a
+             * memoria esta tan ligado como cualquier otro: `movsb` lee por
+             * `rsi` y escribe por `rdi`, y eso vive en su propia lista porque
+             * dice POR DONDE, no QUE. */
+            std::string mnem_ef;
+            {
+                const size_t sp1 = insn.find_first_of(" \t");
+                mnem_ef = (sp1 == std::string::npos) ? insn : insn.substr(0, sp1);
+                /* Un prefijo de repeticion no es la instruccion: se une con la
+                 * que viene detras, que es como la nombra la base. */
+                if (sp1 != std::string::npos && es_prefijo(trim(mnem_ef))) {
+                    const size_t ini = insn.find_first_not_of(" \t", sp1);
+                    if (ini != std::string::npos) {
+                        const size_t sp2 = insn.find_first_of(" \t", ini);
+                        mnem_ef = (sp2 == std::string::npos)
+                                      ? insn.substr(ini)
+                                      : insn.substr(ini, sp2 - ini);
+                    }
                 }
-            if (!binds_implicit)
-                for (const std::string &r : ef.implicit_write)
+            }
+            vx::AsmEffects ef = vx::asm_effects_for(mnem_ef, arch_s);
+            bool binds_implicit = false;
+            for (const std::vector<std::string> *lista :
+                 {&ef.implicit_read, &ef.implicit_write, &ef.implicit_mem_read,
+                  &ef.implicit_mem_write}) {
+                for (const std::string &r : *lista)
                     if (slot_of.find(lower(r)) != slot_of.end()) {
                         binds_implicit = true;
                         break;
                     }
+                if (binds_implicit) break;
+            }
             if (binds_implicit)
                 return AsmMotivoOpaco::anotar(motivo, insn, "VXA030");
         }

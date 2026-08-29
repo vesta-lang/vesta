@@ -711,3 +711,49 @@ es = "cabecera de bucle, profundidad {0}"
 [VX9155]
 en = "points to {0}"
 es = "apunta a {0}"
+
+[VX9156]
+en = "the {0} database does not know this instruction; the compiler treats it as a barrier and does not move anything across it"
+es = "la base de {0} no conoce esta instruccion; el compilador la trata como barrera y no mueve nada a su alrededor"
+
+[VX9157]
+en = "Its placement in memory is unknown: the module does not compile for the current target, so there is no layout to consult."
+es = "No se sabe donde cae en memoria: el modulo no compila para el objetivo actual, asi que no hay disposicion de tipos que consultar."
+
+# Que mira cada analisis, en una frase.  Un hecho suelto -- "rango 0..65535" --
+# no dice para que sirve saberlo; esto pone el analisis en contexto.
+[VX9160]
+en = "what values it can take, and what that rules out"
+es = "entre que valores se puede mover, y que descarta eso"
+
+[VX9161]
+en = "what memory it can point to, and what it can never touch"
+es = "a que memoria puede apuntar, y a cual no puede llegar nunca"
+
+[VX9162]
+en = "the shape of the code: blocks, loops, calls, values"
+es = "la forma del codigo: bloques, bucles, llamadas y valores"
+
+[VX9163]
+en = "what is known about who calls it, and therefore what its parameters are worth"
+es = "que se sabe de quien la llama, y por tanto cuanto valen sus parametros"
+
+[VX9164]
+en = "the loops: how deep they nest and how many times they run"
+es = "los bucles: cuanto se anidan y cuantas vueltas dan"
+
+[VX9165]
+en = "the assembly written by hand: what it touches and whether it can be moved"
+es = "el ensamblador escrito a mano: que toca y si se puede mover"
+
+[VX9166]
+en = "the control flow of the hand-written assembly"
+es = "el flujo de control del ensamblador escrito a mano"
+
+[VX9167]
+en = "how each type is laid out in memory"
+es = "como se coloca cada tipo en memoria"
+
+[VX9168]
+en = "the concrete shape of a value: width, sign, whether it is a pointer"
+es = "la forma concreta de un valor: ancho, signo, si es un puntero"

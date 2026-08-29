@@ -35,6 +35,7 @@
 #define VESTA_LSP_JSON_RPC_H
 
 #include <cstdio>
+#include <mutex>
 #include <string>
 
 #include "json.hpp"
@@ -67,6 +68,18 @@ class JsonRpcTransport {
      */
     explicit JsonRpcTransport(std::FILE *in = nullptr,
                               std::FILE *out = nullptr);
+
+    /**
+     * @brief Se mueve llevandose los flujos, con un cerrojo nuevo.
+     *
+     * Un cerrojo no se mueve -- ni tendria sentido: representa quien esta
+     * escribiendo AHORA --.  Moverlo solo ocurre al montar el servidor, antes
+     * de que exista ningun hilo y por tanto nadie a quien quitarle el turno.
+     */
+    JsonRpcTransport(JsonRpcTransport &&otro) noexcept;
+    JsonRpcTransport &operator=(JsonRpcTransport &&otro) noexcept;
+    JsonRpcTransport(const JsonRpcTransport &) = delete;
+    JsonRpcTransport &operator=(const JsonRpcTransport &) = delete;
 
     /**
      * @brief Lee el siguiente mensaje completo del flujo de entrada.
@@ -102,6 +115,10 @@ class JsonRpcTransport {
 
     std::FILE *in_;  ///< Flujo de entrada (no se cierra; propiedad del caller).
     std::FILE *out_; ///< Flujo de salida (no se cierra; propiedad del caller).
+    /// Un mensaje se escribe ENTERO o no se escribe: son varias llamadas
+    /// (cabecera + cuerpo) y dos respuestas a la vez dejarian una dentro de la
+    /// otra, con lo que el marco deja de cuadrar y la conversacion se pierde.
+    mutable std::mutex escritura_;
 };
 
 } // namespace lsp

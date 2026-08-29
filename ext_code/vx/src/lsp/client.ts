@@ -154,6 +154,12 @@ export class VestaLanguageClient {
             synchronize: {
                 fileEvents: vscode.workspace.createFileSystemWatcher('**/*.vx'),
             },
+            // Para que maquina analizar, desde el primer momento.  Los errores
+            // salen de COMPILAR, asi que dependen del objetivo: un modulo que
+            // solo existe en Linux, leido desde Windows, no tiene ni sus
+            // imports ni sus tipos -- cientos de errores ciertos y sin ningun
+            // valor para quien lo esta editando.
+            initializationOptions: objetivoDeAnalisis(),
         };
 
         this.client = new LanguageClient(
@@ -192,6 +198,21 @@ export class VestaLanguageClient {
         } catch (err) {
             this.output.appendLine(`Fallo al detener el servidor: ${describeError(err)}`);
         }
+    }
+
+    /**
+     * @brief Le dice al servidor para que maquina analizar.
+     *
+     * Se llama al cambiar el objetivo en los ajustes.  El servidor tira lo
+     * analizado y vuelve a publicar: lo de antes hablaba de otra maquina.
+     */
+    public notificarObjetivo(): void {
+        if (!this.client || !this.isRunning) {
+            return;
+        }
+        void this.client.sendNotification('workspace/didChangeConfiguration', {
+            settings: { vesta: { inspect: objetivoDeAnalisis() } },
+        });
     }
 
     /** @brief Detiene el servidor y lo vuelve a levantar con la configuracion actual. */
@@ -293,6 +314,23 @@ export class VestaLanguageClient {
                 }
             });
     }
+}
+
+/**
+ * @brief El objetivo con el que el servidor tiene que analizar.
+ *
+ * Es el mismo que eligen las vistas (`vesta.inspect.os` / `vesta.inspect.arch`):
+ * mirar el IR de una maquina y que los errores sean de otra seria contarse dos
+ * cosas distintas a la vez.  Vacios = la maquina en la que se trabaja.
+ *
+ * @return Objeto con `os` y `arch`, listo para el servidor.
+ */
+function objetivoDeAnalisis(): { os: string; arch: string } {
+    const cfg = vscode.workspace.getConfiguration('vesta');
+    return {
+        os: cfg.get<string>('inspect.os', ''),
+        arch: cfg.get<string>('inspect.arch', ''),
+    };
 }
 
 /**

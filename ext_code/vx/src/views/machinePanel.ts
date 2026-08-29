@@ -18,7 +18,7 @@ import * as vscode from 'vscode';
 import { VestaLanguageClient, describeError } from '../lsp/client';
 import { AsmResponse, FunctionsResponse, VestaMethod } from '../lsp/protocol';
 import { createNonce } from '../util/html';
-import { aotTier, inspectTarget } from '../util/settings';
+import { applyTarget, aotTier, inspectTarget } from '../util/settings';
 
 /** Generador de codigo del que se pide el desensamblado. */
 export type MachineBackend = 'jit' | 'aot';
@@ -170,16 +170,17 @@ export class MachineViewPanel {
         try {
             await this.loadFunctions(uri);
 
-            const target = inspectTarget();
             const method =
                 this.backend === 'jit' ? VestaMethod.JitAsm : VestaMethod.AotAsm;
-            const response = await this.client.request<AsmResponse>(method, {
+            const params: Record<string, unknown> = {
                 uri,
                 function: this.functionName,
-                os: target.os,
-                arch: target.arch,
                 tier: aotTier(),
-            });
+            };
+            // Con que se compila lo que se ensena: arquitectura, nivel de
+            // optimizacion, coma flotante y microarquitectura.
+            applyTarget(params, inspectTarget());
+            const response = await this.client.request<AsmResponse>(method, params);
 
             this.panel.webview.postMessage({
                 kind: 'data',
@@ -303,6 +304,17 @@ function buildHtml(webview: vscode.Webview): string {
     .row.label .text { opacity: .75; font-style: italic; }
     .row.clickable { cursor: pointer; }
     .comment { opacity: .6; }
+    /* Colores del resaltado.  Salen de la paleta del tema, no de valores
+     * fijos: asi el panel se ve como el editor que lo rodea y no como una
+     * pagina pegada dentro.  El respaldo es para temas que no definan alguna. */
+    .tk-mnem  { color: var(--vscode-debugTokenExpression-name, #4ec9b0); }
+    .tk-reg   { color: var(--vscode-charts-blue, #569cd6); }
+    .tk-num   { color: var(--vscode-debugTokenExpression-number, #b5cea8); }
+    .tk-str   { color: var(--vscode-debugTokenExpression-string, #ce9178); }
+    .tk-size  { color: var(--vscode-charts-purple, #c586c0); }
+    .tk-sym   { color: var(--vscode-charts-orange, #dcdcaa); }
+    .tk-val   { color: var(--vscode-charts-green, #9cdcfe); }
+    .tk-punct { opacity: .55; }
     #footer {
         flex: 0 0 auto;
         border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.35));
@@ -315,8 +327,21 @@ function buildHtml(webview: vscode.Webview): string {
     #message { padding: 16px; font-family: var(--vscode-font-family); }
     #message.error { color: var(--vscode-errorForeground); }
     .hidden { display: none; }
-    details { padding: 4px 10px; font-family: var(--vscode-font-family); font-size: 12px; }
-    summary { cursor: pointer; opacity: .8; }
+    /* El detalle NO puede comerse la vista.  Abierto se queda en un tercio de
+     * la altura y se desplaza por dentro; antes crecia sin limite y dejaba el
+     * IR y el ensamblador en una franja de cuatro lineas. */
+    details {
+        flex: 0 0 auto;
+        max-height: 33vh;
+        overflow: auto;
+        padding: 4px 10px;
+        border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,.35));
+        font-family: var(--vscode-font-family);
+        font-size: 12px;
+    }
+    summary { cursor: pointer; opacity: .8; position: sticky; top: 0; background: var(--vscode-editor-background); padding: 2px 0; }
+    /* La casilla de la fuente, en la barra de arriba. */
+    .toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
     table { border-collapse: collapse; margin-top: 6px; }
     td { padding: 1px 10px 1px 0; white-space: pre; }
 </style>
@@ -331,16 +356,19 @@ function buildHtml(webview: vscode.Webview): string {
     <label for="fn">Funcion</label>
     <select id="fn"></select>
     <button id="reload" title="Volver a compilar y repintar">Actualizar</button>
+    <label class="toggle" title="El fuente ya esta en el editor; aqui solo si se quiere ver alineado">
+        <input type="checkbox" id="verFuente"> Fuente
+    </label>
     <span id="stats"></span>
 </header>
 <div id="message" class="hidden"></div>
 <div id="columns">
-    <div class="column"><h2>Fuente</h2><div class="rows" id="src"></div></div>
+    <div class="column hidden" id="colSrc"><h2>Fuente</h2><div class="rows" id="src"></div></div>
     <div class="column"><h2>IR</h2><div class="rows" id="ir"></div></div>
     <div class="column"><h2>Ensamblador</h2><div class="rows" id="asm"></div></div>
 </div>
 <details id="detail" class="hidden">
-    <summary>Marco de pila y argumentos</summary>
+    <summary id="detailSummary">Marco de pila y argumentos</summary>
     <div id="detailBody"></div>
 </details>
 <div id="footer"></div>
@@ -354,11 +382,14 @@ function buildHtml(webview: vscode.Webview): string {
     var elMessage = document.getElementById('message');
     var elColumns = document.getElementById('columns');
     var elSrc = document.getElementById('src');
+    var elColSrc = document.getElementById('colSrc');
+    var elVerFuente = document.getElementById('verFuente');
     var elIr = document.getElementById('ir');
     var elAsm = document.getElementById('asm');
     var elFooter = document.getElementById('footer');
     var elDetail = document.getElementById('detail');
     var elDetailBody = document.getElementById('detailBody');
+    var elDetailSummary = document.getElementById('detailSummary');
 
     // Mapa de identidad de operacion del IR a su texto, para poder decir cual
     // genero exactamente cada instruccion.
@@ -373,6 +404,25 @@ function buildHtml(webview: vscode.Webview): string {
     elReload.addEventListener('click', function () {
         vscodeApi.postMessage({ type: 'refresh' });
     });
+
+    /* La columna del fuente, apagada de entrada.
+     *
+     * El fuente ya esta abierto en el editor, a un panel de distancia, y aqui
+     * ocupaba un tercio del ancho para repetirlo.  Lo que no se puede ver en
+     * ningun otro sitio es el IR y el ensamblador, asi que se quedan con todo.
+     * Quien la quiera -- para leer las tres alineadas -- la enciende, y el
+     * panel lo recuerda. */
+    var estado = vscodeApi.getState() || {};
+    function aplicarFuente(ver) {
+        elColSrc.classList.toggle('hidden', !ver);
+        elVerFuente.checked = ver;
+        estado.verFuente = ver;
+        vscodeApi.setState(estado);
+    }
+    elVerFuente.addEventListener('change', function () {
+        aplicarFuente(elVerFuente.checked);
+    });
+    aplicarFuente(estado.verFuente === true);
 
     window.addEventListener('message', function (event) {
         var data = event.data;
@@ -455,7 +505,76 @@ function buildHtml(webview: vscode.Webview): string {
         elFn.value = selected || current || names[0];
     }
 
-    function makeRow(gutterText, text, line, extraClass) {
+    /* Registros de las cuatro arquitecturas que la base conoce.  Se comprueba
+     * por forma y no con una lista de nombres: son cientos entre x86, arm y
+     * riscv, y una lista se queda corta en cuanto aparece uno nuevo. */
+    var RE_REG = /^(?:[re]?[abcd]x|[re]?[sd]i|[re]?[sb]p|r(?:8|9|1[0-5])[dwb]?|[abcd][lh]|[sd]il|[sb]pl|[xyz]mm\\d+|st\\d|k[0-7]|[cd]r\\d|[cdefgs]s|rip|eip|ip|[wx]\\d+|v\\d+(?:\\.\\d*[bhsdq])?|[qds]\\d+|sp|lr|pc|xzr|wzr|[ft]?\\d+|zero|ra|[ast]\\d+|[gt]p|fp)$/i;
+    var RE_TAM = /^(?:byte|word|dword|qword|tword|oword|yword|zword|ptr|rel|near|far|short|lock|rep|repe|repz|repne|repnz)$/i;
+
+    /**
+     * Pinta una linea de ensamblador o de IR.
+     *
+     * No es un analizador: es lo justo para distinguir de un vistazo el
+     * mnemonico del registro y del numero, que es lo que se busca al leer
+     * codigo generado.  La gramatica de verdad -- la que colorea los bloques
+     * asm del fuente -- vive en syntaxes/nasm.tmLanguage.json, pero ahi no
+     * llega: esto es una pagina, no un documento del editor.
+     */
+    function pintar(destino, texto, dialecto) {
+        // El comentario se lleva todo lo que queda, en las dos sintaxis.
+        var corte = texto.length;
+        var pc = texto.indexOf(';');
+        var pb = texto.indexOf('//');
+        if (pc >= 0) { corte = pc; }
+        if (pb >= 0 && pb < corte) { corte = pb; }
+        var cuerpo = texto.slice(0, corte);
+        var resto = texto.slice(corte);
+
+        // Se trocea conservando los separadores para no perder la alineacion.
+        var piezas = cuerpo.split(/([A-Za-z_.$%@][\\w.$%@]*|0[xX][0-9a-fA-F]+|\\d+(?:\\.\\d+)?|"[^"]*"|'[^']*')/);
+        var primera = true;
+        for (var i = 0; i < piezas.length; i++) {
+            var p = piezas[i];
+            if (!p) { continue; }
+            var clase = '';
+            if (i % 2 === 1) { // es una pieza reconocida, no un separador
+                if (p.charAt(0) === '"' || p.charAt(0) === "'") {
+                    clase = 'tk-str';
+                } else if (/^[0-9]/.test(p)) {
+                    clase = 'tk-num';
+                } else if (dialecto === 'ir' && p.charAt(0) === '%') {
+                    clase = 'tk-val';
+                } else if (RE_TAM.test(p)) {
+                    clase = 'tk-size';
+                } else if (RE_REG.test(p)) {
+                    clase = 'tk-reg';
+                } else if (primera) {
+                    clase = 'tk-mnem';
+                } else {
+                    clase = 'tk-sym';
+                }
+                if (clase !== 'tk-size') { primera = false; }
+            } else if (/^[\\[\\](),:+*-]+$/.test(p.trim()) && p.trim()) {
+                clase = 'tk-punct';
+            }
+            if (clase) {
+                var s = document.createElement('span');
+                s.className = clase;
+                s.textContent = p;
+                destino.appendChild(s);
+            } else {
+                destino.appendChild(document.createTextNode(p));
+            }
+        }
+        if (resto) {
+            var nota = document.createElement('span');
+            nota.className = 'comment';
+            nota.textContent = resto;
+            destino.appendChild(nota);
+        }
+    }
+
+    function makeRow(gutterText, text, line, extraClass, dialecto) {
         var row = document.createElement('div');
         row.className = 'row' + (extraClass ? ' ' + extraClass : '');
         if (line > 0) { row.dataset.line = String(line); }
@@ -467,15 +586,19 @@ function buildHtml(webview: vscode.Webview): string {
 
         var body = document.createElement('span');
         body.className = 'text';
-        var comment = text.indexOf('  ; ');
-        if (comment >= 0) {
-            body.appendChild(document.createTextNode(text.slice(0, comment)));
-            var note = document.createElement('span');
-            note.className = 'comment';
-            note.textContent = text.slice(comment);
-            body.appendChild(note);
+        if (dialecto) {
+            pintar(body, text, dialecto);
         } else {
-            body.textContent = text;
+            var comment = text.indexOf('  ; ');
+            if (comment >= 0) {
+                body.appendChild(document.createTextNode(text.slice(0, comment)));
+                var note = document.createElement('span');
+                note.className = 'comment';
+                note.textContent = text.slice(comment);
+                body.appendChild(note);
+            } else {
+                body.textContent = text;
+            }
         }
         row.appendChild(body);
         return row;
@@ -497,7 +620,9 @@ function buildHtml(webview: vscode.Webview): string {
             var isLabel = rows[i].kind === 'label';
             var gutter = rows[i].line > 0 ? String(rows[i].line) : '';
             var text = isLabel ? rows[i].text + ':' : rows[i].text;
-            var row = makeRow(gutter, text, rows[i].line, isLabel ? 'label' : 'clickable');
+            var row = makeRow(gutter, text, rows[i].line,
+                              isLabel ? 'label' : 'clickable',
+                              isLabel ? '' : 'ir');
             attachHover(row, rows[i].line, -1);
             if (!isLabel) { attachReveal(row, rows[i].line); }
             elIr.appendChild(row);
@@ -516,7 +641,8 @@ function buildHtml(webview: vscode.Webview): string {
                 var labelRow = makeRow('', byOffset[entry.addr] + ':', 0, 'label');
                 elAsm.appendChild(labelRow);
             }
-            var row = makeRow(entry.addr, entry.text, entry.line, 'clickable');
+            var row = makeRow(entry.addr, entry.text, entry.line, 'clickable',
+                              'asm');
             var irId = entry.ir_id === undefined ? -1 : entry.ir_id;
             attachHover(row, entry.line, irId);
             attachReveal(row, entry.line);
@@ -533,6 +659,24 @@ function buildHtml(webview: vscode.Webview): string {
             return;
         }
         elDetail.classList.remove('hidden');
+
+        /* Que se vea QUE hay dentro sin tener que abrirlo.
+         *
+         * Plegado era una linea que decia "Marco de pila y argumentos" y nada
+         * mas: no habia forma de saber si merecia la pena abrirlo, asi que en
+         * la practica no existia.  Con las cuentas delante, se abre cuando
+         * dicen algo. */
+        var resumen = [];
+        if (args.length) { resumen.push(args.length + ' arg'); }
+        if (frame.length) {
+            var bytes = 0;
+            for (var f = 0; f < frame.length; f++) { bytes += frame[f].size || 0; }
+            resumen.push(bytes + ' B de marco');
+        }
+        if (relocs.length) { resumen.push(relocs.length + ' reubic'); }
+        elDetailSummary.textContent = 'Marco de pila y argumentos' +
+            (resumen.length ? '   ' + resumen.join('  |  ') : '');
+
         elDetailBody.innerHTML = '';
         if (args.length) {
             elDetailBody.appendChild(buildTable('Argumentos', args.map(function (a) {

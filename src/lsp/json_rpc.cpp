@@ -42,6 +42,21 @@ void set_stdio_binary() {
 JsonRpcTransport::JsonRpcTransport(std::FILE *in, std::FILE *out)
     : in_(in ? in : stdin), out_(out ? out : stdout) {}
 
+JsonRpcTransport::JsonRpcTransport(JsonRpcTransport &&otro) noexcept
+    : in_(otro.in_), out_(otro.out_) {
+    // El cerrojo se queda: el nuestro nace libre, que es lo correcto para algo
+    // que aun no ha escrito nada.
+}
+
+JsonRpcTransport &
+JsonRpcTransport::operator=(JsonRpcTransport &&otro) noexcept {
+    if (this != &otro) {
+        in_ = otro.in_;
+        out_ = otro.out_;
+    }
+    return *this;
+}
+
 bool JsonRpcTransport::read_header_line(std::string &out_line) {
     // Acumular bytes hasta encontrar el fin de linea.  Aceptamos CRLF (lo
     // normal en LSP) y tambien LF a secas por robustez frente a clientes
@@ -130,6 +145,10 @@ void JsonRpcTransport::write_message(const nlohmann::json &msg) {
     // y ahorra bytes).  dump() devuelve UTF-8, por lo que la longitud en
     // bytes coincide con string::size().
     const std::string body = msg.dump();
+    // Un mensaje entero, sin que otro se cuele en medio: el marco lo forman la
+    // cabecera y el cuerpo juntos, y partirlo deja la conversacion inservible.
+    // El cuerpo se serializa FUERA del cerrojo, que es lo que cuesta.
+    std::lock_guard<std::mutex> guard(escritura_);
     // Emitir la cabecera de framing seguida de la linea en blanco.
     std::fprintf(out_, "Content-Length: %zu\r\n\r\n", body.size());
     // Escribir el cuerpo exacto.

@@ -854,4 +854,31 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
     return namespaces;
 }
 
+std::string demangle_symbol(const std::string &mangled) {
+    std::string s = mangled;
+    // Prefijo de seccion de la tabla de simbolos.
+    if (s.rfind("code.", 0) == 0) s.erase(0, 5);
+    if (s.rfind("data.", 0) == 0) s.erase(0, 5);
+    /* El cuerpo de una macro es una funcion mas, generada: se ensena por lo que
+     * es -- la macro -- y no por el nombre que se le invento para emitirla. */
+    if (s.rfind("__macro_", 0) == 0) s.erase(0, 8);
+    if (s.rfind("__tpl__", 0) == 0) s.erase(0, 7);
+
+    /* Los separadores del mangling vuelven a ser puntos de modulo.  Un solo
+     * subrayado NO se toca: forma parte del nombre que se escribio
+     * (`parse_int_lit`), y convertirlo partiria la palabra. */
+    std::string out;
+    out.reserve(s.size());
+    for (size_t k = 0; k < s.size();) {
+        if (k + 1 < s.size() && s[k] == '_' && s[k + 1] == '_') {
+            out.push_back('.');
+            k += 2;
+        } else {
+            out.push_back(s[k]);
+            ++k;
+        }
+    }
+    return out;
+}
+
 } // namespace vx

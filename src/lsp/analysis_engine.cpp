@@ -235,17 +235,81 @@ void extract_declared_names(const std::string &text, const std::string &uri,
 
 } // namespace
 
-const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
-                                                    const std::string &text) {
+std::string norm_target_arch(const std::string &arch) {
+    if (arch.empty() || arch == "x86-64" || arch == "x86_64" || arch == "x64")
+        return "x86_64";
+    if (arch == "x86-32" || arch == "x86_32" || arch == "x86" ||
+        arch == "i386")
+        return "x86";
+    return arch;
+}
+
+CondCompTargetGuard::CondCompTargetGuard(const std::string &os,
+                                         const std::string &arch) {
+    // Sin objetivo pedido no se toca el thread_local: compilar para el
+    // anfitrion es lo normal y no tiene que pagar nada.
+    if (os.empty() && arch.empty()) return;
+    vx::get_aot_condcomp_target(prev_os_, prev_arch_);
+    vx::set_aot_condcomp_target(os, norm_target_arch(arch));
+    aplicado_ = true;
+}
+
+CondCompTargetGuard::~CondCompTargetGuard() {
+    if (aplicado_) vx::set_aot_condcomp_target(prev_os_, prev_arch_);
+}
+
+void AnalysisEngine::set_target(const std::string &os,
+                                const std::string &arch) {
+    std::lock_guard<std::mutex> guard(mapa_);
+    if (os == target_os_ && arch == target_arch_) return;
+    target_os_ = os;
+    target_arch_ = arch;
+    // Lo analizado respondia a otra pregunta: se tira entero.  Lo que alguien
+    // este usando ahora sigue vivo mientras lo use; simplemente ya no se
+    // ofrece a nadie mas.
+    cache_.clear();
+}
+
+std::shared_ptr<const DocAnalysis>
+AnalysisEngine::analyze_document(const std::string &uri,
+                                 const std::string &text) {
     const uint64_t h = fnv1a_hash(text);
 
-    // Cache hit: mismo texto, mismo resultado.  Evita recompilar.
-    auto it = cache_.find(uri);
-    if (it != cache_.end() && it->second->text_hash == h) return *it->second;
+    /* El cerrojo del documento se saca bajo el del mapa y se suelta este
+     * enseguida: mientras uno compila `a.vx`, otro puede entrar aqui y ponerse
+     * a compilar `b.vx`.  Lo que no puede es compilar `a.vx` otra vez, y para
+     * eso espera en el cerrojo de `a.vx`. */
+    std::shared_ptr<std::mutex> cerrojo_doc;
+    std::string os_ahora, arch_ahora;
+    {
+        std::lock_guard<std::mutex> guard(mapa_);
+        auto it = cache_.find(uri);
+        if (it != cache_.end() && it->second->text_hash == h) return it->second;
+        auto &slot = por_documento_[uri];
+        if (!slot) slot = std::make_shared<std::mutex>();
+        cerrojo_doc = slot;
+        os_ahora = target_os_;
+        arch_ahora = target_arch_;
+    }
+    std::lock_guard<std::mutex> guard_doc(*cerrojo_doc);
+    {
+        // Puede que quien iba delante ya lo haya dejado hecho.
+        std::lock_guard<std::mutex> guard(mapa_);
+        auto it = cache_.find(uri);
+        if (it != cache_.end() && it->second->text_hash == h) return it->second;
+    }
 
     // Crear (o reusar el slot de) el analisis para este documento.
-    auto analysis = std::make_unique<DocAnalysis>();
+    auto analysis = std::make_shared<DocAnalysis>();
     analysis->text_hash = h;
+
+    /* Para que maquina se compila.  Los diagnosticos y todo lo que sale de
+     * compilar dependen de esto: las variantes @Target que no encajan con el
+     * objetivo no existen, y con ellas se van sus imports y sus tipos.
+     *
+     * La guarda es POR HILO, asi que se aplica aqui: cada uno fija el suyo y lo
+     * restaura al salir. */
+    const CondCompTargetGuard tguard(os_ahora, arch_ahora);
 
     try {
         // Compilar el fuente.  No aplicamos VPP en Fase 1 (el frontend no lo
@@ -276,28 +340,12 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
         if (has_imports && file_on_disk) {
             std::unordered_map<std::string, std::string> overlay;
             overlay[fs_path] = text;
-            // Ancestros del fichero como search paths extra: permite resolver
-            // imports relativos al root del proyecto (p.ej. `import
-            // "modules/buffer"`) cuando el fichero analizado es un modulo que
-            // no es la raiz.  Subimos hasta la RAIZ del filesystem (profundidad
-            // arbitraria), acotado defensivamente a 40 niveles para no colgar
-            // ante paths patologicos.  Asi librerias anidadas a cualquier
-            // profundidad resuelven sus imports project-relative.
-            std::vector<std::string> anc;
-            {
-                std::string d = fs_path;
-                size_t slash = d.find_last_of("/\\");
-                if (slash != std::string::npos) d = d.substr(0, slash);
-                for (int lvl = 0; lvl < 40 && !d.empty(); ++lvl) {
-                    anc.push_back(d);
-                    size_t s = d.find_last_of("/\\");
-                    // Parar en la raiz (POSIX "/" o Windows "C:").
-                    if (s == std::string::npos || s == 0 ||
-                        (s == 2 && d[1] == ':'))
-                        break;
-                    d = d.substr(0, s);
-                }
-            }
+            // Los directorios de encima, para resolver los imports relativos
+            // al root del proyecto cuando el fichero analizado es un modulo
+            // que no es la raiz.  La regla de hasta donde subir vive en un
+            // solo sitio (@ref lsp::import_search_roots).
+            const std::vector<std::string> anc =
+                lsp::import_search_roots(fs_path);
             analysis->result =
                 vx::compile_vx_project(fs_path, opts, &overlay, &anc);
             // Cross-module: indexar los modulos importados para el completado
@@ -362,19 +410,29 @@ const DocAnalysis &AnalysisEngine::analyze_document(const std::string &uri,
             loc, "error interno del analizador (excepcion desconocida)");
     }
 
-    // Insertar/actualizar la cache y devolver la referencia estable.
-    DocAnalysis &ref = *analysis;
-    cache_[uri] = std::move(analysis);
-    return ref;
+    // Guardar y devolver.  Quien lo recibe conserva el suyo vivo aunque otro
+    // lo sustituya aqui dentro un instante despues.
+    std::shared_ptr<const DocAnalysis> hecho = std::move(analysis);
+    {
+        std::lock_guard<std::mutex> guard(mapa_);
+        cache_[uri] = hecho;
+    }
+    return hecho;
 }
 
-const DocAnalysis *AnalysisEngine::cached(const std::string &uri) const {
+std::shared_ptr<const DocAnalysis>
+AnalysisEngine::cached(const std::string &uri) const {
+    std::lock_guard<std::mutex> guard(mapa_);
     auto it = cache_.find(uri);
-    return it == cache_.end() ? nullptr : it->second.get();
+    return it == cache_.end() ? nullptr : it->second;
 }
 
 void AnalysisEngine::forget(const std::string &uri) {
+    std::lock_guard<std::mutex> guard(mapa_);
     cache_.erase(uri);
+    /* El cerrojo del documento NO se borra: puede haber alguien dentro de el
+     * compilando ese mismo fichero ahora mismo.  Son unos pocos bytes por
+     * documento abierto en toda la sesion. */
 }
 
 } // namespace lsp

@@ -29,6 +29,7 @@
 #include "parser/parser.h"
 
 #include <cstdio>
+#include <map>
 #include <set>
 #include <string>
 
@@ -52,12 +53,20 @@ static std::set<std::string> de_la_lista() {
 }
 
 /**
- * @brief Las que el parser sabe leer.
+ * @brief DIRECTIVAS que el parser trata como si fueran instrucciones.
  *
- * DIRECTIVAS del ensamblador que el parser trata como si fueran instrucciones:
- * no tienen -- ni deben tener -- entrada en el codificador, porque no producen
- * bytes.  Se descuentan aqui para que la comparacion hable solo de
- * instrucciones.
+ * No tienen -- ni deben tener -- entrada en el codificador, porque no se
+ * convierten en un opcode.  Eso las exime de las comprobaciones que hablan del
+ * CODIFICADOR, y de nada mas.
+ *
+ * Estaban exentas tambien de la tercera -- la que exige que la lista unica
+ * cubra todo lo que el parser acepta --, y ahi si tenian que entrar: la lista
+ * es de donde sale el indice con el que el parser reconoce un nombre, asi que
+ * un nombre que no este en ella no se reconoce, sea directiva o no.  Las cuatro
+ * faltaban, y cada `align 16` de cada fichero se iba por la ruta de
+ * recuperacion de erratas avisando de una "instruccion desconocida" que existia
+ * -- una ruta que ademas REESCRIBE el nombre por el mas parecido --.  La
+ * exencion de mas es lo que hizo que este test no lo viera.
  */
 static bool es_directiva(const std::string &m) {
     return m == "align" || m == "org" || m == "resbp" || m == "import";
@@ -90,9 +99,11 @@ static bool es_legacy(const std::string &m) {
 int main() {
     const std::set<std::string> lista = de_la_lista();
 
+    // Todo lo que el parser acepta, directivas incluidas: se descuentan mas
+    // abajo y solo donde toca.
     std::set<std::string> parser;
     for (const auto &e : vm::instruction_set_names())
-        if (!es_directiva(e)) parser.insert(e);
+        parser.insert(e);
 
     std::set<std::string> codificador;
     for (const auto &e : Assembly::Bytecode::instr_table_names())
@@ -112,8 +123,10 @@ int main() {
               "toda instruccion codificable tiene que ser escribible");
     }
 
-    // 2) Nada que se pueda escribir debe morir al codificar.
+    // 2) Nada que se pueda escribir debe morir al codificar.  Una directiva no
+    // llega al codificador por definicion, asi que no entra aqui.
     for (const auto &m : parser) {
+        if (es_directiva(m)) continue;
         const bool codificable = codificador.count(m) != 0;
         if (!codificable)
             std::printf("  SIN CODIFICAR: el parser acepta '%s' y el "
@@ -122,13 +135,39 @@ int main() {
         CHECK(codificable, "toda instruccion escribible tiene que codificarse");
     }
 
-    // 3) La lista unica es la fuente: tiene que cubrir a las dos.
+    // 3) La lista unica es la fuente: tiene que cubrir a las dos.  Aqui SI
+    // entran las directivas: la lista es de donde sale el indice que reconoce
+    // los nombres, y lo que no este en ella no se reconoce.
     for (const auto &m : codificador)
         CHECK(lista.count(m) != 0,
               "el codificador usa algo que no esta en la lista");
-    for (const auto &m : parser)
+    for (const auto &m : parser) {
+        if (lista.count(m) == 0)
+            std::printf("  FUERA DE LA LISTA: el parser acepta '%s' y la lista "
+                        "unica no lo tiene\n",
+                        m.c_str());
         CHECK(lista.count(m) != 0,
               "el parser acepta algo que no esta en la lista");
+    }
+
+    /* 4) Y dicho de la forma en que se rompio: el indice que el parser usa para
+     * reconocer un nombre se construye desde la lista, y sabe decir que nombres
+     * de la tabla no encontro.  Preguntarselo es la comprobacion directa; las
+     * de arriba lo deducen. */
+    {
+        // El indice se construye sobre los NOMBRES, que es de lo que habla la
+        // comprobacion; el valor asociado da igual.
+        std::map<std::string, int> tabla;
+        for (const auto &e : vm::instruction_set_names())
+            tabla.emplace(e, 0);
+        const emmit::MnemonicIndex<int> idx(tabla);
+        for (const auto &n : idx.unknown_names())
+            std::printf("  SIN INDICE: '%s' esta en la tabla del parser y el "
+                        "indice no lo resuelve\n",
+                        n.c_str());
+        CHECK(idx.unknown_names().empty(),
+              "el indice del parser resuelve todos los nombres de su tabla");
+    }
 
     std::printf("=== tablas de instrucciones: %d checks, %d fallos ===\n",
                 g_checks, g_fail);

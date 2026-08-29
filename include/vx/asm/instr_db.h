@@ -419,6 +419,27 @@ ParsedOp parse_operand(Isa isa, const std::string &token);
 int32_t match_asm_line(Isa isa, const std::string &line);
 
 /**
+ * @brief Indica si una linea LLEVA un mnemonico, sin resolver cual.
+ *
+ * Es la diferencia entre "esto no es una instruccion" -- una etiqueta, un
+ * comentario, una linea en blanco, de las que no hay nada que contar -- y "esto
+ * es una instruccion que no reconozco", que si hay que contarlo: el compilador
+ * la trata como barrera y deja de mover nada a su alrededor, y quien lee el
+ * bloque merece saberlo.  @ref match_asm_line devuelve -1 en los dos casos y no
+ * permite separarlos.
+ *
+ * @param line Linea de ensamblador, con o sin comentario.
+ * @return true si hay un mnemonico que resolver.
+ */
+bool has_mnemonic(const std::string &line);
+
+/**
+ * @brief Nombre corto de una ISA (@c "x86", @c "arm64", @c "arm32",
+ *        @c "riscv"), para decir a que base se pregunto.
+ */
+const char *isa_name(Isa isa);
+
+/**
  * @brief Resuelve el texto de una instruccion (mnemonico + operandos) a su
  *        FormID en la DB de la ISA dada.  Devuelve -1 si el mnemonico no
  * existe.

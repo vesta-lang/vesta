@@ -94,6 +94,11 @@ struct CompileRequest {
     bool is_project = false;
     /// Emitir informacion de depuracion (mapeo linea<->bytecode en el .velb).
     bool debug = false;
+    /// Nivel de optimizacion, 0..3.  -1 = el que traiga el frontend por
+    /// defecto.  Se expone porque ejecutar lo mismo a dos niveles es la forma
+    /// directa de ver que hizo el optimizador, y porque depurar sin optimizar
+    /// ensena el codigo que se escribio y no el que quedo.
+    int opt_level = -1;
     /// Modo de instrumentacion (vacio o "none" = sin instrumentar).  Se pasa
     /// tal cual al lowering (@c CompileOptions::instrument_mode).
     std::string instrument;

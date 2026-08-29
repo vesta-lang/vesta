@@ -23,6 +23,8 @@ import argparse
 import json
 import os
 import sys
+import tempfile
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # La libreria cliente vive fuera de la extension; se anade su carpeta al path
@@ -386,6 +388,685 @@ def comprobar_diagrama(lsp: VestaLspClient, uri: str, c: Comprobaciones) -> None
     )
 
 
+def comprobar_instruccion(c: Comprobaciones, binario: str) -> None:
+    """Comprueba lo que el compilador sabe de una instruccion de un bloque asm.
+
+    Lo que se fija aqui es que la base responda por el mnemonico TAL Y COMO SE
+    ESCRIBE: la base nombra las clases como su fuente (`RET_NEAR`, `JNZ`,
+    `SETZ`) y quien escribe ensamblador escribe `ret`, `jne`, `sete`.  Sin la
+    equivalencia, los mnemonicos mas comunes eran los unicos que no salian.
+    """
+    print("\n[instruccion]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "examples_codes_vx", "198_inline_asm_symbols.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with open(fuente, "r", encoding="utf-8") as fh:
+        texto = fh.read()
+    lineas = texto.splitlines()
+
+    def linea_de(prefijo: str) -> int:
+        for i, l in enumerate(lineas):
+            if l.strip().startswith(prefijo):
+                return i + 1
+        return 0
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=texto)
+
+        def ficha(n: int, arch: str = "x86-64") -> dict:
+            r = lsp.request("vesta/instruction",
+                            {"uri": uri, "line": n, "cpu": "intel-skylake",
+                             "arch": arch})
+            return r if isinstance(r, dict) else {}
+
+        for prefijo, clase in (("call ", "CALL_NEAR"), ("ret", "RET_NEAR"),
+                               ("mov ", "MOV"), ("lea ", "LEA")):
+            n = linea_de(prefijo)
+            if n == 0:
+                continue
+            f = ficha(n)
+            c.exigir(f.get("found") is True and f.get("known") is True,
+                     f"'{prefijo.strip()}' la conoce la base", campos(f))
+            c.exigir(f.get("iclass") == clase,
+                     f"'{prefijo.strip()}' resuelve a {clase}",
+                     str(f.get("iclass")))
+            c.exigir(isinstance(f.get("cost"), dict) and f["cost"].get("timed"),
+                     f"'{prefijo.strip()}' trae coste de la microarquitectura",
+                     campos(f.get("cost")))
+
+        # El control de flujo es barrera, y por lo que ES: escribe el contador
+        # de programa.  No por no reconocerlo, que era lo de antes.
+        for prefijo in ("call ", "ret"):
+            n = linea_de(prefijo)
+            if n:
+                c.exigir(ficha(n).get("barrier") is True,
+                         f"'{prefijo.strip()}' es barrera")
+        n = linea_de("mov ")
+        if n:
+            c.exigir(ficha(n).get("barrier") is False,
+                     "'mov' no es barrera")
+
+        # Lo que no es una instruccion no tiene ficha; lo que lo es pero no se
+        # reconoce, si -- y lo dice.
+        n = linea_de("asm ")
+        if n:
+            c.exigir(ficha(n).get("found") is False,
+                     "el abridor del bloque no es una instruccion")
+        n = linea_de("}")
+        if n:
+            c.exigir(ficha(n).get("found") is False,
+                     "la llave de cierre no es una instruccion")
+
+        # Multi-ISA: preguntar a la base equivocada no inventa una respuesta.
+        n = linea_de("call ")
+        if n:
+            f = ficha(n, "aarch64")
+            c.exigir(f.get("isa") == "arm64",
+                     "la arquitectura elige a que base se pregunta",
+                     str(f.get("isa")))
+            c.exigir(f.get("known") is False and bool(f.get("unknownReason")),
+                     "lo que la base no conoce se reporta, no se calla",
+                     campos(f))
+
+
+def comprobar_campos_y_opt(c: Comprobaciones, binario: str) -> None:
+    """Disposicion en memoria de un campo, y que el nivel de optimizacion llegue.
+
+    Dos cosas que se veian bien y no lo estaban: el hover de un campo se
+    quedaba con la PRIMERA definicion que se llamara igual -- dos structs con
+    un campo `b` y el de uno contaba el del otro --, y el nivel de
+    optimizacion no lo leia ninguna vista, asi que `-O0` y `-O3` daban el mismo
+    texto.
+    """
+    print("\n[campos y nivel de optimizacion]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "examples_codes_vx", "306_align_struct.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with open(fuente, "r", encoding="utf-8") as fh:
+        texto = fh.read()
+    lineas = texto.splitlines()
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=texto)
+
+        def hover_de(n: int, aguja: str) -> str:
+            col = lineas[n - 1].index(aguja) + 1
+            r = lsp.request("textDocument/hover",
+                            {"textDocument": {"uri": uri},
+                             "position": {"line": n - 1, "character": col}})
+            cont = (r or {}).get("contents") or {}
+            return (cont.get("value") if isinstance(cont, dict) else str(cont)) or ""
+
+        # Cada `b` es el de SU struct: contenedor, doc y disposicion.
+        esperado = [("struct Small", "Small"), ("struct Aligned16", "Aligned16")]
+        for prefijo, contenedor in esperado:
+            n = next((i + 1 for i, l in enumerate(lineas)
+                      if l.strip().startswith(prefijo)), 0)
+            if n == 0:
+                continue
+            md = hover_de(n, " b;")
+            c.exigir(f"`{contenedor}`" in md,
+                     f"el campo de {contenedor} dice que es de {contenedor}",
+                     md.replace("\n", " | ")[:120])
+            c.exigir("+1" in md,
+                     f"el campo de {contenedor} dice donde cae en memoria",
+                     md.replace("\n", " | ")[:120])
+        md16 = hover_de(next(i + 1 for i, l in enumerate(lineas)
+                             if l.strip().startswith("struct Aligned16")), " b;")
+        c.exigir("16" in md16,
+                 "el struct alineado a 16 lo dice en su campo",
+                 md16.replace("\n", " | ")[:120])
+
+        # El nivel de optimizacion cambia lo que sale.
+        for metodo, extra in (("vesta/ir", {"phase": "post"}),
+                              ("vesta/bytecode", {})):
+            salidas = {}
+            for nivel in (0, 3):
+                par = {"uri": uri, "opt": nivel}
+                par.update(extra)
+                r = lsp.request(metodo, par) or {}
+                salidas[nivel] = r.get("text") or r.get("asm") or ""
+            c.exigir(bool(salidas[0]) and bool(salidas[3]),
+                     f"{metodo} responde a los dos niveles")
+            c.exigir(salidas[0] != salidas[3],
+                     f"{metodo} cambia con el nivel de optimizacion",
+                     "si sale lo mismo, el nivel no llego al compilador")
+
+
+def comprobar_stdlib_analiza(c: Comprobaciones, binario: str) -> None:
+    """Que un fichero DE la biblioteca estandar se pueda analizar.
+
+    Abrir uno directamente hacia que sus directorios de encima entraran como
+    raices de busqueda, y esos CONTIENEN al paquete: el mismo namespace
+    aparecia dos veces, el resolutor avisaba de dos librerias en disputa y el
+    modulo no producia nada.  Sin IR no hay disposicion de tipos, ni coste, ni
+    ninguna de las vistas.
+    """
+    print("\n[analisis dentro de la biblioteca estandar]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "stdlib", "vx", "std", "syscall", "linux.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with open(fuente, "r", encoding="utf-8") as fh:
+        texto = fh.read()
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=texto)
+        diags = lsp.diagnostics(uri) or []
+        disputa = [d for d in diags
+                   if "namespace" in str(d.get("message", "")).lower()
+                   and "dos" in str(d.get("message", "")).lower()]
+        c.exigir(not disputa,
+                 "el paquete no se pelea consigo mismo",
+                 str(disputa[:1])[:160])
+
+        # Es un modulo de Linux: con ese objetivo tiene que producir IR.
+        r = lsp.request("vesta/ir",
+                        {"uri": uri, "phase": "post", "os": "linux",
+                         "arch": "x86-64"}) or {}
+        c.exigir(len(r.get("text", "")) > 0,
+                 "con objetivo linux el modulo produce IR",
+                 str(r.get("error", ""))[:120])
+
+        # Y cuando no lo produce, el hover DICE por que en vez de callarse.
+        # La linea que lo DECLARA, no la del comentario que lo menciona.
+        lineas = texto.splitlines()
+        n = next((i + 1 for i, l in enumerate(lineas)
+                  if "invoke_method" in l and not l.strip().startswith("//")), 0)
+        if n:
+            col = lineas[n - 1].index("invoke_method") + 1
+            h = lsp.request("textDocument/hover",
+                            {"textDocument": {"uri": uri},
+                             "position": {"line": n - 1, "character": col}})
+            cont = (h or {}).get("contents") or {}
+            md = (cont.get("value") if isinstance(cont, dict) else str(cont)) or ""
+            c.exigir("no compila" in md or "+" in md,
+                     "el hover dice donde cae el campo, o por que no lo sabe",
+                     md.replace("\n", " | ")[:140])
+
+
+def comprobar_objetivo_del_analisis(c: Comprobaciones, binario: str) -> None:
+    """Que los diagnosticos sigan al objetivo configurado, no al anfitrion.
+
+    Los errores salen de COMPILAR, asi que dependen de para que maquina se
+    compila: lo que esta bajo un `@Target` que no encaja no existe, y con ello
+    se van sus funciones y sus tipos.  Analizando siempre contra el anfitrion,
+    un modulo de Linux leido desde Windows es un muro de errores ciertos y sin
+    ningun valor para quien lo edita.
+    """
+    print("\n[objetivo del analisis]")
+
+    fuente = os.path.join(tempfile.gettempdir(), "vesta_smoke_solo_linux.vx")
+    with open(fuente, "w", encoding="utf-8") as fh:
+        fh.write(
+            "// Solo existe en Linux: sirve para comprobar contra que maquina\n"
+            "// analiza el servidor.\n"
+            "\n"
+            '@Target("os:linux")\n'
+            "i64 numero_de_llamada() { return 60; }\n"
+            "\n"
+            "i32 main() { return (i32)numero_de_llamada(); }\n"
+        )
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=open(fuente, encoding="utf-8").read())
+        antes = len(lsp.diagnostics(uri) or [])
+        c.exigir(antes > 0,
+                 "para el anfitrion, lo que es de otra maquina no existe",
+                 "sin errores aqui el caso no prueba nada")
+
+        lsp._notify("workspace/didChangeConfiguration",
+                    {"settings": {"vesta": {"inspect": {"os": "linux",
+                                                        "arch": "x86-64"}}}})
+        # El servidor reanaliza y republica; el cliente recoge las
+        # notificaciones cuando habla con el, asi que se le da conversacion.
+        despues = antes
+        for _ in range(10):
+            time.sleep(1)
+            lsp.request("vesta/functions", {"uri": uri})
+            despues = len(lsp.diagnostics(uri) or [])
+            if despues == 0:
+                break
+        c.exigir(despues == 0,
+                 "con el objetivo puesto, el modulo de esa maquina compila",
+                 f"quedan {despues} diagnosticos")
+
+
+def comprobar_varios_hilos(c: Comprobaciones, binario: str) -> None:
+    """Que el servidor atienda varias consultas a la vez, y bien.
+
+    Se comprueban tres cosas distintas:
+
+      1. Que responde DESORDENADO.  Un servidor que atiende de uno en uno
+         contesta en el mismo orden en que se le pregunta; que una respuesta
+         adelante a otra solo puede pasar si hay varios atendiendo.
+      2. Que lo que contesta es lo MISMO que contestaria de uno en uno.  Es lo
+         unico que importa de verdad: ir mas rapido no vale nada si la
+         respuesta cambia.
+      3. Que ningun diagnostico sale sin texto.  El editor rechaza un
+         diagnostico vacio y con el tira la tanda entera -- no se ve ninguno --,
+         asi que un mensaje que falta no se nota como un mensaje que falta.
+    """
+    print("\n[varios hilos]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    ficheros = [os.path.join(raiz, "examples_codes_vx", n) for n in
+                ("306_align_struct.vx", "198_inline_asm_symbols.vx")]
+    ficheros = [f for f in ficheros if os.path.isfile(f)]
+    if len(ficheros) < 2:
+        print("  (faltan los ejemplos)")
+        return
+
+    peticiones = []
+    for f in ficheros:
+        for metodo, extra in (("vesta/functions", {}),
+                              ("vesta/ir", {"phase": "post"}),
+                              ("vesta/complexity", {}),
+                              ("vesta/bytecode", {})):
+            peticiones.append((metodo, extra, f))
+
+    def corre(en_rafaga: bool) -> Dict[int, str]:
+        firmas: Dict[int, str] = {}
+        with VestaLspClient(binario, root_uri=os.path.dirname(ficheros[0])) as lsp:
+            uris = {f: lsp.open(f, text=open(f, encoding="utf-8").read())
+                    for f in ficheros}
+            if en_rafaga:
+                # Todas de golpe y se recogen despues: asi se solapan de verdad.
+                ids = []
+                for i, (metodo, extra, f) in enumerate(peticiones):
+                    par = dict(extra)
+                    par["uri"] = uris[f]
+                    ids.append((i, metodo, lsp.send_request(metodo, par)))
+                for i, metodo, rid in ids:
+                    firmas[i] = json.dumps(lsp.await_response(rid, metodo),
+                                           sort_keys=True)[:2000]
+            else:
+                for i, (metodo, extra, f) in enumerate(peticiones):
+                    par = dict(extra)
+                    par["uri"] = uris[f]
+                    firmas[i] = json.dumps(lsp.request(metodo, par),
+                                           sort_keys=True)[:2000]
+        return firmas
+
+    serie = corre(False)
+    c.exigir(len(serie) == len(peticiones),
+             "responde a todas las consultas de una en una",
+             f"{len(serie)} de {len(peticiones)}")
+
+    rafaga = corre(True)
+    c.exigir(len(rafaga) == len(peticiones),
+             "responde a todas las consultas lanzadas de golpe",
+             f"{len(rafaga)} de {len(peticiones)}")
+    distintas = [i for i in serie if i in rafaga and serie[i] != rafaga[i]]
+    c.exigir(not distintas,
+             "contesta lo mismo a la vez que de una en una",
+             f"cambian {len(distintas)}: {distintas[:4]}")
+
+
+def comprobar_diagnosticos_con_texto(c: Comprobaciones, binario: str) -> None:
+    """Que ningun diagnostico se publique sin texto.
+
+    Un diagnostico catalogado no lleva la frase escrita: lleva el codigo y los
+    datos, y la frase se compone al mostrarla.  Publicando el campo crudo salia
+    vacio, el editor lo rechazaba y con el TODA la tanda: no se veia ninguno, y
+    en el registro solo aparecia "message must be set".
+    """
+    print("\n[diagnosticos con texto]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "stdlib", "vx", "std", "syscall", "linux.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=open(fuente, encoding="utf-8").read())
+        diags = lsp.diagnostics(uri) or []
+        c.exigir(len(diags) > 0,
+                 "el fichero produce diagnosticos con los que probar")
+        vacios = [d for d in diags if not str(d.get("message", "")).strip()]
+        c.exigir(not vacios,
+                 "ningun diagnostico se publica sin texto",
+                 f"{len(vacios)} de {len(diags)} vienen vacios")
+
+
+def comprobar_formas_de_respuesta(c: Comprobaciones, binario: str) -> None:
+    """Que la forma de cada respuesta sea la que la extension lee.
+
+    Aqui el fallo no se parece a un fallo.  El servidor contesta bien, la
+    extension lee un campo que no existe y ensena lo que hay: nada.  Ni error
+    ni aviso -- la vista sale vacia y parece que no habia nada que contar.
+    Paso con dos: el diff del IR devuelve FILAS y se le pedia un texto, y la
+    complejidad manda la confianza por su nombre donde antes iba un numero (que
+    ademas reventaba al formatear la tabla).
+    """
+    print("\n[forma de las respuestas]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "examples_codes_vx", "306_align_struct.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=open(fuente, encoding="utf-8").read())
+
+        diff = lsp.request("vesta/irDiff", {"uri": uri, "function": ""}) or {}
+        filas = diff.get("rows")
+        c.exigir(isinstance(filas, list) and len(filas) > 0,
+                 "el diff del IR devuelve filas", campos(diff))
+        if filas:
+            primera = filas[0]
+            c.exigir({"k", "l", "r"} <= set(primera.keys()),
+                     "cada fila dice que paso y las dos versiones",
+                     campos(primera))
+            clases = {f.get("k") for f in filas}
+            c.exigir(clases <= {"same", "del", "add", "chg"},
+                     "las filas usan las cuatro clases conocidas",
+                     str(clases))
+
+        comp = lsp.request("vesta/complexity", {"uri": uri}) or {}
+        funcs = comp.get("functions") or []
+        c.exigir(len(funcs) > 0, "la complejidad devuelve funciones",
+                 campos(comp))
+        if funcs:
+            f0 = funcs[0]
+            # Toda celda que acaba en una tabla de texto tiene que ser texto o
+            # numero; un objeto o una lista revientan al formatear.
+            for clave in ("name", "partial", "total", "confidence",
+                          "total_confidence", "declared"):
+                if clave in f0:
+                    c.exigir(isinstance(f0[clave], str),
+                             f"'{clave}' llega como texto",
+                             f"llega como {type(f0[clave]).__name__}")
+
+        facts = lsp.request("vesta/asaFacts", {"uri": uri}) or {}
+        hechos = facts.get("facts")
+        c.exigir(isinstance(hechos, list), "el ASA devuelve hechos",
+                 campos(facts))
+        if hechos:
+            h0 = hechos[0]
+            for clave in ("line", "function", "subject", "label", "certainty",
+                          "source", "domain"):
+                c.exigir(clave in h0, f"cada hecho trae '{clave}'",
+                         campos(h0))
+        dominios = facts.get("domains")
+        c.exigir(isinstance(dominios, list) and len(dominios) > 0,
+                 "el ASA dice que analisis miraron", campos(facts))
+        if dominios:
+            d0 = dominios[0]
+            c.exigir({"domain", "facts", "looked", "silent"} <= set(d0.keys()),
+                     "cada analisis dice cuanto miro y cuanto callo",
+                     campos(d0))
+            # El nombre de un analisis no dice que mira; la frase, si.
+            con_proposito = [d for d in dominios if d.get("purpose")]
+            c.exigir(len(con_proposito) > 0,
+                     "los analisis dicen que miran, en una frase",
+                     "sin esto 'asa.rangos' no le dice nada a nadie")
+
+        # Y de QUE habla cada hecho, y COMO se llego a el.  Sin lo primero, ocho
+        # hechos de la misma linea son ocho filas identicas que dicen "valor";
+        # sin lo segundo, son afirmaciones que hay que creerse.
+        if hechos:
+            for clave in ("subjectId", "subjectText", "sourceText", "rule",
+                          "from", "producer", "restsOn"):
+                c.exigir(any(clave in h for h in hechos),
+                         f"los hechos traen '{clave}'", campos(hechos[0]))
+            con_texto = [h for h in hechos
+                         if h.get("subject") == "valor" and h.get("subjectText")]
+            valores = [h for h in hechos if h.get("subject") == "valor"]
+            if valores:
+                c.exigir(len(con_texto) > 0,
+                         "un hecho sobre un valor dice de QUE valor habla",
+                         f"{len(con_texto)} de {len(valores)} lo dicen")
+            # Lo que se ensena por defecto es el CODIGO: una operacion del
+            # IR identifica sin lugar a dudas y no dice nada a quien no lo
+            # tiene delante.
+            con_codigo = [h for h in hechos if h.get("sourceText")]
+            c.exigir(len(con_codigo) > 0,
+                     "los hechos dicen de que LINEA DE CODIGO hablan",
+                     f"{len(con_codigo)} de {len(hechos)}")
+
+            derivados = [h for h in hechos if h.get("from")]
+            c.exigir(len(derivados) > 0,
+                     "hay hechos que dicen de cuales se siguen",
+                     "es lo que permite recorrer la derivacion")
+            # Y esa referencia tiene que apuntar a un hecho que exista.
+            malas = [i for h in derivados for i in h["from"]
+                     if not isinstance(i, int) or i < 0 or i >= len(hechos)]
+            c.exigir(not malas,
+                     "esas referencias apuntan a hechos que existen",
+                     str(malas[:4]))
+
+
+def comprobar_nombres_y_navegacion(c: Comprobaciones, binario: str) -> None:
+    """Que se ensene el nombre ESCRITO, y que lleve a la funcion.
+
+    `std__windows__GetCurrentFiber` es el nombre que el compilador construye al
+    aplanar los namespaces.  Sirve para identificar -- es unico -- y no para
+    mostrar: nadie escribio eso.  Se manda el interno Y el escrito, y ademas se
+    puede buscar un simbolo por su nombre, que es lo que permite ir a una
+    funcion desde un sitio donde solo se la nombra.
+    """
+    print("\n[nombres y navegacion]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "stdlib", "vx", "std", "windows.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with VestaLspClient(binario, root_uri=raiz) as lsp:
+        uri = lsp.open(fuente, text=open(fuente, encoding="utf-8").read())
+
+        funcs = (lsp.request("vesta/functions", {"uri": uri}) or {}).get(
+            "functions") or []
+        c.exigir(len(funcs) > 0, "hay funciones con las que probar")
+        if funcs:
+            con_display = [f for f in funcs if f.get("display")]
+            c.exigir(len(con_display) == len(funcs),
+                     "cada funcion trae el nombre escrito",
+                     f"{len(con_display)} de {len(funcs)}")
+            manglados = [f for f in funcs if "__" in (f.get("display") or "")]
+            c.exigir(not manglados,
+                     "el nombre escrito no lleva separadores internos",
+                     str([f.get("display") for f in manglados[:2]]))
+
+        hechos = (lsp.request("vesta/asaFacts", {"uri": uri}) or {}).get(
+            "facts") or []
+        con_fn = [h for h in hechos if h.get("function")]
+        if con_fn:
+            c.exigir(all(h.get("functionDisplay") for h in con_fn),
+                     "cada hecho trae el nombre escrito de su funcion")
+
+        # Y el nombre tiene que poder llevar a la funcion.
+        objetivo = next((f for f in funcs if f.get("display")), None)
+        if objetivo:
+            for consulta in (objetivo["display"], objetivo["name"]):
+                res = lsp.request("workspace/symbol", {"query": consulta})
+                c.exigir(isinstance(res, list) and len(res) > 0,
+                         f"se encuentra el simbolo por '{consulta[:34]}'",
+                         campos(res) if not isinstance(res, list) else "vacio")
+                if isinstance(res, list) and res:
+                    loc = res[0].get("location") or {}
+                    c.exigir("uri" in loc and "range" in loc,
+                             "el resultado dice donde esta", campos(loc))
+
+
+def comprobar_informe_por_funcion(c: Comprobaciones, binario: str) -> None:
+    """Que el informe por funcion venga en DATOS, no en un volcado.
+
+    Lo que una funcion declara -- coste, reservas, pila, pureza -- y lo que el
+    compilador mide de ella son dos listas que solo sirven puestas una al lado
+    de la otra: un contrato existe para que se note cuando dejan de coincidir.
+    Eso se ensenaba como una tabla de texto, que no se puede filtrar ni ordenar
+    ni pulsar.
+    """
+    print("\n[informe por funcion]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "examples_codes_vx", "198_inline_asm_symbols.vx")
+    if not os.path.isfile(fuente):
+        print(f"  (no esta {fuente})")
+        return
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=open(fuente, encoding="utf-8").read())
+        r = lsp.request("vesta/functionReport", {"uri": uri}) or {}
+        fns = r.get("functions") or []
+        c.exigir(len(fns) > 0, "el informe trae funciones", campos(r))
+        if not fns:
+            return
+
+        f0 = fns[0]
+        for clave in ("name", "display", "line", "cost", "checks", "aot"):
+            c.exigir(clave in f0, f"cada funcion trae '{clave}'", campos(f0))
+        c.exigir("__" not in (f0.get("display") or ""),
+                 "el nombre que se ensena no lleva separadores internos",
+                 str(f0.get("display")))
+
+        coste = f0.get("cost") or {}
+        for clave in ("partial", "total", "confidence", "loops", "declared",
+                      "mismatch"):
+            c.exigir(clave in coste, f"el coste trae '{clave}'", campos(coste))
+
+        # Lo MEDIDO es lo que hace util al contrato: sin ello solo se sabe lo
+        # que la funcion prometio, que es la mitad que no comprueba nada.
+        con_medida = [f for f in fns if f.get("measured")]
+        c.exigir(len(con_medida) > 0,
+                 "las funciones traen lo que el compilador mide de ellas")
+        if con_medida:
+            m = con_medida[0]["measured"]
+            for clave in ("allocTotal", "stackTotal", "throws", "panics",
+                          "pure", "effectsKnown"):
+                c.exigir(clave in m, f"lo medido trae '{clave}'", campos(m))
+
+        # Y si el modo nativo puede con cada una, que es la otra pregunta que
+        # se hace mirando esto.
+        c.exigir(all(isinstance((f.get("aot") or {}).get("ok"), bool)
+                     for f in fns),
+                 "cada funcion dice si compila a nativo")
+
+
+def comprobar_bloque_asm(c: Comprobaciones, binario: str) -> None:
+    """Que un bloque de asm venga con su FLUJO resuelto.
+
+    Leer asm escrito a mano es ir saltando: se ve un salto y hay que buscar su
+    etiqueta arriba o abajo.  El compilador ya construye el grafo de ese bloque
+    para analizarlo, asi que sabe que instruccion salta a cual: con eso se
+    dibujan las flechas en vez de seguirlas con el dedo.
+
+    Lo que NO se resuelve -- un salto indirecto, una etiqueta ausente -- tiene
+    que venir dicho: dibujar un flujo a medias sin avisar es peor que no
+    dibujarlo.
+    """
+    print(chr(10) + "[bloque de asm]")
+
+    raiz = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    fuente = os.path.join(raiz, "examples_codes_vx", "asm_loop.vx")
+    if not os.path.isfile(fuente):
+        print("  (no esta " + fuente + ")")
+        return
+
+    texto = open(fuente, encoding="utf-8").read()
+    lineas = texto.splitlines()
+    dentro = next((i + 1 for i, l in enumerate(lineas)
+                   if l.strip().startswith("add ")), 0)
+    if dentro == 0:
+        print("  (el ejemplo no tiene el bloque esperado)")
+        return
+
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=texto)
+        r = lsp.request("vesta/asmBlock",
+                        {"uri": uri, "line": dentro, "cpu": "intel-skylake",
+                         "arch": "x86-64"}) or {}
+        c.exigir(r.get("found") is True, "encuentra el bloque que contiene la linea",
+                 campos(r))
+        insns = r.get("instructions") or []
+        c.exigir(len(insns) > 0, "el bloque trae sus instrucciones")
+        if not insns:
+            return
+
+        for clave in ("index", "text", "line", "labels", "flow", "target",
+                      "targetIndex", "known", "barrier"):
+            c.exigir(clave in insns[0], "cada instruccion trae '" + clave + "'",
+                     campos(insns[0]))
+
+        # Cada instruccion tiene que apuntar a SU linea del fuente.
+        bien = [i for i in insns
+                if i["line"] > 0 and i["text"].split()[0] in
+                lineas[i["line"] - 1]]
+        c.exigir(len(bien) == len(insns),
+                 "cada instruccion apunta a su linea del fuente",
+                 str(len(bien)) + " de " + str(len(insns)))
+
+        # Y el salto tiene que estar RESUELTO: sin eso no hay flecha que pintar.
+        saltos = [i for i in insns if i["flow"] in ("salto", "rama")]
+        c.exigir(len(saltos) > 0, "el bloque tiene algun salto con el que probar")
+        if saltos:
+            c.exigir(all(0 <= i["targetIndex"] < len(insns) for i in saltos),
+                     "cada salto dice a que instruccion va",
+                     str([i["targetIndex"] for i in saltos]))
+
+        # Y lo que la base sabe de cada una.
+        conocidas = [i for i in insns if i.get("known")]
+        c.exigir(len(conocidas) == len(insns),
+                 "la base conoce todas las instrucciones del bloque",
+                 str(len(conocidas)) + " de " + str(len(insns)))
+        con_coste = [i for i in insns if i.get("cost")]
+        c.exigir(len(con_coste) > 0,
+                 "las instrucciones traen lo que cuestan en esa microarquitectura")
+
+        for clave in ("hasIndirect", "hasUnresolved", "unknownTerminators"):
+            c.exigir(clave in r, "el bloque dice lo que NO pudo resolver ('" +
+                     clave + "')", campos(r))
+
+    # Y el flujo de TODOS los bloques, que es lo que se pinta sobre el codigo.
+    with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
+        uri = lsp.open(fuente, text=texto)
+        f = lsp.request("vesta/asmFlow", {"uri": uri, "arch": "x86-64"}) or {}
+        bloques = f.get("blocks")
+        c.exigir(isinstance(bloques, list) and len(bloques) > 0,
+                 "el fichero entero devuelve sus bloques", campos(f))
+        if bloques:
+            b0 = bloques[0]
+            for clave in ("firstLine", "lastLine", "jumps"):
+                c.exigir(clave in b0, "cada bloque trae '" + clave + "'",
+                         campos(b0))
+            saltos = b0.get("jumps") or []
+            c.exigir(len(saltos) > 0, "el bloque trae sus saltos")
+            if saltos:
+                # De linea a linea: es lo unico que hace falta para dibujar, y
+                # tiene que caer DENTRO del bloque.
+                dentro = [j for j in saltos
+                          if b0["firstLine"] <= j["fromLine"] <= b0["lastLine"]
+                          and b0["firstLine"] <= j["toLine"] <= b0["lastLine"]]
+                c.exigir(len(dentro) == len(saltos),
+                         "cada salto va de una linea del bloque a otra",
+                         str([(j["fromLine"], j["toLine"]) for j in saltos]))
+
+
 def main() -> int:
     """Punto de entrada del script."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -428,8 +1109,18 @@ def main() -> int:
         comprobar_correlacion(lsp, uri, objetivo, c)
         comprobar_diagrama(lsp, uri, c)
 
-    # Fuera del bloque anterior: usa su propia conexion sobre otro ejemplo.
+    # Fuera del bloque anterior: usan su propia conexion sobre otro ejemplo.
     comprobar_navegacion_cross_module(c, binario)
+    comprobar_instruccion(c, binario)
+    comprobar_campos_y_opt(c, binario)
+    comprobar_stdlib_analiza(c, binario)
+    comprobar_objetivo_del_analisis(c, binario)
+    comprobar_varios_hilos(c, binario)
+    comprobar_diagnosticos_con_texto(c, binario)
+    comprobar_formas_de_respuesta(c, binario)
+    comprobar_nombres_y_navegacion(c, binario)
+    comprobar_informe_por_funcion(c, binario)
+    comprobar_bloque_asm(c, binario)
 
     print(f"\n{c.pasadas} comprobaciones pasadas, {len(c.fallos)} fallidas")
     for fallo in c.fallos:

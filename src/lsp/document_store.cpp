@@ -214,33 +214,52 @@ void byte_offset_to_lsp_position(const std::string &text, size_t byte_offset,
 
 void DocumentStore::open(const std::string &uri, std::string text) {
     // open y update comparten semantica (full sync): sobreescribir.
-    docs_[uri] = std::move(text);
+    // El texto nuevo se construye FUERA del cerrojo -- reservar y copiar es lo
+    // unico que cuesta aqui --; dentro solo se cambia un puntero.
+    auto nuevo = std::make_shared<const std::string>(std::move(text));
+    std::lock_guard<std::mutex> guard(m_);
+    docs_[uri] = std::move(nuevo);
 }
 
 void DocumentStore::update(const std::string &uri, std::string text) {
-    docs_[uri] = std::move(text);
+    auto nuevo = std::make_shared<const std::string>(std::move(text));
+    std::lock_guard<std::mutex> guard(m_);
+    docs_[uri] = std::move(nuevo);
 }
 
 void DocumentStore::close(const std::string &uri) {
+    std::lock_guard<std::mutex> guard(m_);
     docs_.erase(uri);
 }
 
 bool DocumentStore::has(const std::string &uri) const {
+    std::lock_guard<std::mutex> guard(m_);
     return docs_.find(uri) != docs_.end();
 }
 
-const std::string &DocumentStore::text(const std::string &uri) const {
-    // Cadena vacia persistente para devolver por referencia cuando falta.
-    static const std::string kEmpty;
-    auto it = docs_.find(uri);
-    return it == docs_.end() ? kEmpty : it->second;
+std::shared_ptr<const std::string>
+DocumentStore::text(const std::string &uri) const {
+    {
+        std::lock_guard<std::mutex> guard(m_);
+        auto it = docs_.find(uri);
+        if (it != docs_.end()) return it->second;
+    }
+    /* Documento no abierto.  Se devuelve una cadena vacia compartida y NO nula:
+     * quien pregunta va a leerla, y devolver nulo obligaria a comprobarlo en
+     * los veintiocho sitios que la piden -- y el que se olvidara reventaria. */
+    static const std::shared_ptr<const std::string> kVacia =
+        std::make_shared<const std::string>();
+    return kVacia;
 }
 
 std::string DocumentStore::line(const std::string &uri,
                                 uint32_t line_0based) const {
-    auto it = docs_.find(uri);
-    if (it == docs_.end()) return std::string();
-    const std::string &txt = it->second;
+    // Se toma la instantanea y se suelta el cerrojo: recorrer el texto para
+    // encontrar la linea puede ser largo en un fichero grande, y nadie tiene
+    // por que esperar a que termine para escribir otro documento.
+    const std::shared_ptr<const std::string> instantanea = text(uri);
+    const std::string &txt = *instantanea;
+    if (txt.empty()) return std::string();
     // Recorrer el texto contando saltos de linea hasta llegar a la linea
     // pedida; luego copiar hasta el siguiente salto.
     uint32_t cur = 0; // numero de linea actual.
@@ -260,6 +279,27 @@ std::string DocumentStore::line(const std::string &uri,
     }
     // Linea fuera de rango.
     return std::string();
+}
+
+uint32_t DocumentStore::line_count(const std::string &uri) const {
+    const std::shared_ptr<const std::string> instantanea = text(uri);
+    const std::string &txt = *instantanea;
+    if (txt.empty()) return 0;
+    uint32_t n = 1;
+    for (char c : txt)
+        if (c == '\n') ++n;
+    // Un salto al final no abre una linea mas.
+    if (txt.back() == '\n') --n;
+    return n;
+}
+
+std::vector<std::string> DocumentStore::open_uris() const {
+    std::lock_guard<std::mutex> guard(m_);
+    std::vector<std::string> uris;
+    uris.reserve(docs_.size());
+    for (const auto &kv : docs_)
+        uris.push_back(kv.first);
+    return uris;
 }
 
 } // namespace lsp

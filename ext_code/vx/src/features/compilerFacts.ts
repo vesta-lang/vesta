@@ -160,7 +160,13 @@ function componerEtiqueta(hechos: AsaFact[]): string {
             break;
         }
     }
-    return partes.length > 0 ? partes.join('  ') : '';
+    if (partes.length === 0) {
+        return '';
+    }
+    /* Cuantos quedan sin caber.  No es un adorno: sin el, lo que se ve parece
+     * ser todo lo que hay, y al posar el cursor aparecen otros diez. */
+    const restantes = vistos.size - partes.length;
+    return partes.join('  ') + (restantes > 0 ? `  +${restantes}` : '');
 }
 
 /**
@@ -185,32 +191,72 @@ function marcaDeAmbito(hecho: AsaFact): string {
 }
 
 /**
+ * @brief De QUE habla un hecho, dicho de la forma mas concreta que se pueda.
+ * @param hecho Hecho.
+ * @return La operacion que lo define, o lo que sea que se pueda decir.
+ */
+function deQue(hecho: AsaFact): string {
+    // El codigo primero: la operacion del IR identifica sin lugar a dudas y no
+    // dice nada a quien no lo tiene delante.
+    if (hecho.sourceText) {
+        return hecho.sourceText;
+    }
+    if (hecho.subjectText) {
+        return hecho.subjectText;
+    }
+    if (hecho.subject === 'funcion') {
+        return `la funcion ${hecho.functionDisplay || hecho.function || ''}`;
+    }
+    if (hecho.subject === 'modulo') {
+        return 'el modulo entero';
+    }
+    if (hecho.subject === 'bloque') {
+        return `el bloque #${hecho.subjectId}`;
+    }
+    if (hecho.subject === 'valor') {
+        return `el valor %${hecho.subjectId}`;
+    }
+    return hecho.subject ?? '';
+}
+
+/**
  * @brief Detalle que se ensena al posar el cursor sobre la anotacion.
  *
- * Lleva SIEMPRE el texto completo de cada hecho, sin recortar, y TODOS los de
- * la linea aunque al final solo se muestren unos pocos: lo que se ve es un
- * resumen, y un resumen sin forma de abrirlo esconde en vez de resumir.
+ * UN MENSAJE POR HECHO, que es como se lee: cada uno dice una cosa y se lee
+ * como una cosa.  Lo que se quito no fueron los mensajes, fueron los cuatro
+ * renglones de metadatos que cada uno arrastraba -- analisis, codigo interno,
+ * certeza y procedencia --, que en una linea con ocho hechos son treinta y dos
+ * renglones repitiendo lo mismo.
+ *
+ * Lo que se anadio es de QUE habla: sin eso, "constante 0" en una linea con
+ * ocho valores no dice de cual, que era el problema de fondo.
  *
  * @param hechos Hechos de esa linea, en el mismo orden en que se muestran.
- * @return Texto con lo que dice cada uno, quien lo afirma, con que certeza y de
- *         donde sale.
+ * @return Texto listo para el emergente.
  */
 function componerDetalle(hechos: AsaFact[]): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    hechos.forEach((hecho, indice) => {
-        // Marcar los que no caben en la linea, para que se entienda que el
-        // emergente no repite lo visible sino que lo completa.
-        const oculto = indice >= MAX_POR_LINEA;
-        md.appendMarkdown(`**${hecho.label}**${oculto ? '  _(no cabe en la linea)_' : ''}\n\n`);
-        md.appendMarkdown(`- analisis: \`${hecho.domain}\`\n`);
-        md.appendMarkdown(`- afirma: \`${hecho.code}\`\n`);
-        md.appendMarkdown(`- certeza: ${hecho.certainty}\n`);
-        md.appendMarkdown(`- procedencia: ${hecho.source}\n`);
+    for (const hecho of hechos) {
+        md.appendMarkdown(`**${hecho.label || hecho.code}**\n\n`);
+
+        const de = deQue(hecho);
+        if (de) {
+            md.appendMarkdown(`- de: \`${de}\`\n`);
+        }
+        // Solo lo que NO es lo de siempre.  Que algo este demostrado por
+        // analisis estatico es el caso normal y decirlo en cada mensaje es
+        // ruido; que sea inferido o desconocido es un aviso.
+        if (hecho.certainty && hecho.certainty !== 'demostrada') {
+            md.appendMarkdown(`- ${hecho.certainty}\n`);
+        }
         const ambito = [hecho.isa, hecho.os, hecho.backend].filter(p => p);
         if (ambito.length > 0) {
-            md.appendMarkdown(`- solo en: ${ambito.join(' / ')}\n`);
+            md.appendMarkdown(`- solo en ${ambito.join(' / ')}\n`);
+        }
+        if (hecho.rule) {
+            md.appendMarkdown(`- por ${hecho.rule}\n`);
         }
         md.appendMarkdown('\n');
-    });
+    }
     return md;
 }

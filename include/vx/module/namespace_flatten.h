@@ -59,6 +59,26 @@ struct FlattenedNamespace {
  */
 std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod);
 
+/**
+ * @brief El nombre que ESCRIBIO quien programa, a partir del nombre interno.
+ *
+ * El aplanado convierte @c std.windows.GetCurrentFiber en
+ * @c std__windows__GetCurrentFiber, y a partir de ahi ese es el nombre que
+ * viaja por el IR, por la tabla de simbolos y por todo lo que se ensena.  Es el
+ * correcto para IDENTIFICAR -- es unico y es el que entiende el compilador --
+ * y no es el correcto para MOSTRAR: quien lee no escribio eso en ninguna parte.
+ *
+ * Deshace lo que el aplanado hizo: el prefijo de seccion, la marca de cuerpo
+ * comptime y los separadores, que vuelven a ser puntos de modulo.
+ *
+ * Vive junto al aplanado a proposito: es su inversa, y separarlas es como se
+ * llega a que una sepa una regla que la otra no.
+ *
+ * @param mangled Nombre interno.
+ * @return El nombre tal y como se escribio.
+ */
+std::string demangle_symbol(const std::string &mangled);
+
 } // namespace vx
 
 #endif // VX_NAMESPACE_FLATTEN_H
