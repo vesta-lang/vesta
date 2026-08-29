@@ -300,8 +300,14 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
     for (const auto &in : cfg.insns)
         insns.push_back(in.text);
     if (insns.empty()) return lift_no("<bloque>", __LINE__);
-    // Ramas no resueltas / terminadores desconocidos -> no liftamos (opaco).
-    if (cfg.has_unresolved_target || !cfg.unknown_terminators.empty())
+    /* Ramas no resueltas / terminadores desconocidos -> no liftamos (opaco).
+     *
+     * Un salto que SALE del bloque hacia una funcion del modulo tampoco se
+     * eleva: el grafo local es correcto, pero el IR tendria que representar un
+     * salto a algo que no esta aqui.  Va aparte de `has_unresolved_target`
+     * porque no es un error del usuario -- solo un limite de esto. */
+    if (cfg.has_unresolved_target || cfg.has_external_target ||
+        !cfg.unknown_terminators.empty())
         return lift_no("<bloque>", __LINE__);
 
     // Estado SSA por registro: cur[canon] = valor ARQUITECToNICO COMPLETO de

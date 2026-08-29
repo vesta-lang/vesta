@@ -152,7 +152,8 @@ static uint32_t asm_loop_depth(const std::string &cuerpo, vx::instr_db::Isa isa,
      * o un terminador que no se supo clasificar.  Dar eso por "sin bucles"
      * seria afirmar O(1) de algo que puede dar vueltas, que es exactamente la
      * direccion en la que equivocarse hace dano. */
-    seguro = !cfg.has_indirect && !cfg.has_unresolved_target;
+    seguro = !cfg.has_indirect && !cfg.has_unresolved_target &&
+             !cfg.has_external_target;
     for (const vx::AsmBasicBlock &b : cfg.blocks) {
         if (b.term == vx::AsmTerm::Ret || b.term == vx::AsmTerm::Indirect ||
             b.term == vx::AsmTerm::Unknown || b.term == vx::AsmTerm::Call) {
@@ -160,12 +161,31 @@ static uint32_t asm_loop_depth(const std::string &cuerpo, vx::instr_db::Isa isa,
             break;
         }
     }
-    // Cada arista hacia atras es un bucle; su cuerpo es el tramo [cabecera,
-    // cola].
-    std::vector<std::pair<uint32_t, uint32_t>> tramos;
+    /* Un bucle por CABECERA, no por arista hacia atras.
+     *
+     * A la cabecera de un mismo bucle se vuelve por VARIOS sitios: un
+     * `continue`, dos ramas que reintentan, un `jne .loop` seguido de un
+     * `jmp .loop`.  Contando aristas, cada retorno de mas se veia como otro
+     * bucle -- y como todos empiezan en la misma cabecera, el rango de uno
+     * contiene al del otro y se contaban ANIDADOS --: un solo bucle con tres
+     * retornos salia O(n^3) sin que hubiera un solo anidamiento.
+     *
+     * El cuerpo del bucle llega hasta el retorno MAS LEJANO: es el tramo que
+     * de verdad puede repetirse. */
+    std::unordered_map<uint32_t, uint32_t> cola_de;
     for (uint32_t b = 0; b < cfg.blocks.size(); ++b)
         for (uint32_t s : cfg.blocks[b].succs)
-            if (s <= b) tramos.emplace_back(s, b);
+            if (s <= b) {
+                auto it = cola_de.find(s);
+                if (it == cola_de.end())
+                    cola_de.emplace(s, b);
+                else if (b > it->second)
+                    it->second = b;
+            }
+    std::vector<std::pair<uint32_t, uint32_t>> tramos;
+    tramos.reserve(cola_de.size());
+    for (const auto &kv : cola_de)
+        tramos.emplace_back(kv.first, kv.second);
     uint32_t max_prof = 0;
     for (const auto &t : tramos) {
         uint32_t prof = 1; // el suyo
@@ -449,6 +469,12 @@ CostResult analyze_function(const ir::IrFunction &fn) {
         }
     }
     if (asm_depth_total > max_depth) max_depth = asm_depth_total;
+    /* Y se vuelve a apuntar.  Se habia fijado ANTES de mirar dentro de los
+     * bloques `asm`, asi que el COSTE contaba esos bucles pero el numero que se
+     * informa se quedaba en el del IR: una funcion cuyo cuerpo entero es un
+     * bucle escrito a mano salia como "O(n)" y "0 bucles" a la vez, dos cifras
+     * que se contradicen en la misma linea. */
+    r.max_loop_depth = max_depth;
 
     // 2. Recursion + divide-y-venceras.
     uint32_t self_calls = 0;

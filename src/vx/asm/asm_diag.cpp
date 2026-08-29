@@ -56,6 +56,23 @@ bool is_exit_block(const AsmCfg &cfg, uint32_t b) {
     if (bb.term == AsmTerm::Ret || bb.term == AsmTerm::Indirect ||
         bb.term == AsmTerm::Unknown)
         return true;
+    /* Saltar a una funcion del MODULO es irse del bloque asm y no volver: una
+     * salida, igual que el `ret`.  Sin esto, un bloque que acaba en
+     * `jmp otra_funcion` no alcanzaba ninguna salida y se reportaba como bucle
+     * infinito -- justo sobre codigo que si sale --.  El destino no esta aqui,
+     * asi que tampoco hay arista que lo diga. */
+    if (bb.term == AsmTerm::UncondJump || bb.term == AsmTerm::CondBranch) {
+        const AsmInsn &t = cfg.insns[bb.last];
+        if (asm_is_external_symbol(t.target)) {
+            bool definida = false;
+            for (const AsmInsn &in : cfg.insns) {
+                for (const std::string &l : in.labels)
+                    if (l == t.target) definida = true;
+                if (definida) break;
+            }
+            if (!definida) return true;
+        }
+    }
     const bool fallthrough_possible =
         (bb.term == AsmTerm::Fallthrough || bb.term == AsmTerm::Call ||
          bb.term == AsmTerm::CondBranch);
@@ -118,7 +135,13 @@ std::vector<AsmDiag> asm_diagnose_cfg(const AsmCfg &cfg) {
                         found = true;
                         break;
                     }
-            if (!found) {
+            /* Que no este en el bloque no basta para avisar: en Vesta un
+             * `jmp`/`jCC` puede ir a una funcion del MODULO, que resuelve el
+             * enlazador.  Avisar de eso era un falso positivo sobre codigo
+             * correcto -- y el aviso apuntaba justo a la linea buena --.  Solo
+             * es un error si el nombre no puede venir de fuera, que es lo que
+             * pasa con una etiqueta local (`.algo`) sin definir. */
+            if (!found && !asm_is_external_symbol(in.target)) {
                 AsmDiag d;
                 d.severity = AsmDiagSeverity::Warning;
                 d.line_no = in.line_no;

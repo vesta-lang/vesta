@@ -103,8 +103,40 @@ struct AsmCfg {
     bool has_indirect =
         false; ///< algun salto/llamada indirecto -> CFG impreciso.
     bool has_unresolved_target =
-        false; ///< salto a etiqueta no definida en el bloque.
+        false; ///< salto a una etiqueta LOCAL que el bloque no define (error).
+    /// Algun salto sale del bloque hacia un simbolo del modulo.
+    ///
+    /// NO es lo mismo que @c has_unresolved_target y por eso va aparte: en
+    /// Vesta un bloque @c asm puede saltar a una funcion del modulo (lo
+    /// resuelve el enlazador, ver @c asmblk_assemble), y eso es codigo
+    /// correcto -- una salida del bloque, como un @c ret --, no una etiqueta
+    /// mal escrita.  Metiendolos en el mismo saco, un @c jmp legitimo sacaba
+    /// un aviso de etiqueta inexistente y ademas tumbaba el analisis del
+    /// bloque entero.
+    bool has_external_target = false;
 };
+
+/**
+ * @brief Indica si el operando de un salto nombra un simbolo de fuera.
+ *
+ * Mismo criterio que usa el ensamblador para decidir si emite una referencia a
+ * resolver (@c asmblk_assemble): un identificador desnudo que empieza por letra
+ * o @c _.  Un nombre que empieza por @c '.' es una etiqueta LOCAL por
+ * convencion de NASM, asi que no puede venir de fuera.
+ *
+ * Vive aqui, y no duplicado en cada sitio, porque quien ensambla y quien
+ * analiza tienen que estar de acuerdo en que es un simbolo externo: si no, uno
+ * emite la referencia y el otro avisa de que la etiqueta no existe.
+ *
+ * Solo mira la FORMA del nombre.  Lo que cada llamante sabe -- si el bloque lo
+ * define, si es un registro -- se comprueba fuera y ANTES: meterlo aqui
+ * obligaria a que todos compartieran tambien esa idea, y el ensamblador tiene
+ * la suya propia de que es un registro.
+ *
+ * @param name Operando del salto, ya recortado.
+ * @return Cierto si puede ser un simbolo de fuera del bloque.
+ */
+bool asm_is_external_symbol(const std::string &name);
 
 /**
  * @brief Construye el CFG de un bloque de asm.

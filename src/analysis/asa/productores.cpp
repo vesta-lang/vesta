@@ -385,6 +385,8 @@ void producir_asm_flujo(Produccion &p) {
                 if (cfg.has_indirect) o << ", con salto indirecto";
                 if (cfg.has_unresolved_target)
                     o << ", con destino sin resolver";
+                if (cfg.has_external_target)
+                    o << ", con salida a un simbolo del modulo";
                 if (!cfg.unknown_terminators.empty())
                     o << ", " << cfg.unknown_terminators.size()
                       << " terminador(es) sin clasificar";

@@ -531,12 +531,14 @@ bool asmblk_assemble(
             wl.push_back((char)std::tolower((unsigned char)c));
         if (sym_refs && (wl == "call" || wl == "jmp")) {
             std::string operand = asmblk_trim(rest.substr(w.size()));
-            const bool bare_ident =
-                !operand.empty() &&
-                (std::isalpha((unsigned char)operand[0]) ||
-                 operand[0] == '_') &&
-                operand.find_first_of(" \t[]+-*,") == std::string::npos &&
-                !asmblk_is_register(operand) && !local_labels.count(operand);
+            /* El criterio de "esto es un simbolo de fuera" vive en un solo
+             * sitio (@c asm_is_external_symbol): aqui se decide si se emite la
+             * referencia a resolver, y el analisis decide con el mismo si
+             * avisar de una etiqueta inexistente.  Con dos copias, una emitia
+             * la referencia y la otra avisaba de que no existia. */
+            const bool bare_ident = vx::asm_is_external_symbol(operand) &&
+                                    !asmblk_is_register(operand) &&
+                                    !local_labels.count(operand);
             if (bare_ident) {
                 if (!flush()) return false;
                 out.push_back(wl == "call" ? 0xE8 : 0xE9);

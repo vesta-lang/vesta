@@ -297,6 +297,17 @@ AsmTerm asm_classify_term(instr_db::Isa isa, const std::string &line,
     return AsmTerm::Fallthrough;
 }
 
+bool asm_is_external_symbol(const std::string &name) {
+    if (name.empty()) return false;
+    /* Letra o `_`.  Un `.` inicial es una etiqueta local de NASM: si el bloque
+     * no la define, esta mal escrita, y confundirla con un simbolo de fuera
+     * seria callarse un error de verdad. */
+    const unsigned char c0 = static_cast<unsigned char>(name[0]);
+    if (!std::isalpha(c0) && name[0] != '_') return false;
+    // Un identificador desnudo: nada de memoria, aritmetica ni listas.
+    return name.find_first_of(" \t[]+-*,") == std::string::npos;
+}
+
 AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
     AsmCfg cfg;
 
@@ -405,6 +416,37 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
             }
             return label_at.count(t) ? t : std::string();
         };
+        /* Que etiqueta lleva un operando FUENTE.
+         *
+         * Ademas de la escrita tal cual, la que ya lleva un registro: la
+         * direccion se suele montar en un registro y pasar a otro antes de
+         * saltar, y mirando solo el texto eso se perdia -- `mov r8, .chunk` +
+         * `mov rax, r8` + `jmp rax` quedaba como un agujero teniendo el destino
+         * delante --.
+         *
+         * `lea rax, [r8]` tambien vale: `lea` toma la DIRECCION, que es la
+         * misma.  `mov rax, [r8]` no, y esa es la diferencia que hay que
+         * respetar: eso LEE la memoria de la etiqueta, y lo que haya dentro no
+         * es la etiqueta.  Con desplazamiento (`[r8 + 16]`) se apunta DENTRO de
+         * la etiqueta, y a que instruccion cae no se sabe sin ensamblar: se
+         * prefiere no saber a senalar la linea equivocada. */
+        auto etiqueta_fuente = [&](const std::string &mn,
+                                   const std::string &src) -> std::string {
+            const std::string escrita = etiqueta_de(src);
+            if (!escrita.empty()) return escrita;
+            std::string t = trim(src);
+            if (!t.empty() && t.front() == '[' && t.back() == ']') {
+                if (mn != "lea") return std::string();
+                t = trim(t.substr(1, t.size() - 2));
+                // Cualquier aritmetica dentro deja de ser la etiqueta a secas.
+                if (t.find_first_of("+-*") != std::string::npos)
+                    return std::string();
+            }
+            const std::string r = asm_canonical_reg(t);
+            if (r.empty()) return std::string();
+            auto it = reg_etiqueta.find(r);
+            return it != reg_etiqueta.end() ? it->second : std::string();
+        };
         for (uint32_t i = 0; i < cfg.insns.size(); ++i) {
             AsmInsn &in = cfg.insns[i];
             const std::string mn = first_token(in.text);
@@ -414,7 +456,7 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
             const std::string r0 = asm_canonical_reg(op0);
 
             if (mn == "lea" || mn == "mov") {
-                const std::string et = etiqueta_de(op1);
+                const std::string et = etiqueta_fuente(mn, op1);
                 if (!r0.empty()) {
                     if (!et.empty())
                         reg_etiqueta[r0] = et;
@@ -424,12 +466,7 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
                 continue;
             }
             if (mn == "push") {
-                std::string et = etiqueta_de(op0);
-                if (et.empty() && !r0.empty()) {
-                    auto it = reg_etiqueta.find(r0);
-                    if (it != reg_etiqueta.end()) et = it->second;
-                }
-                pila.push_back(et);
+                pila.push_back(etiqueta_fuente(mn, op0));
                 continue;
             }
             if (mn == "pop") {
@@ -489,6 +526,12 @@ AsmCfg build_asm_cfg(instr_db::Isa isa, const std::string &body) {
             auto it = label_at.find(in.target);
             if (it != label_at.end())
                 leader[it->second] = true;
+            else if (asm_is_external_symbol(in.target))
+                /* Salta a una funcion del modulo: sale del bloque y no vuelve,
+                 * como un `ret`.  El grafo queda completo -- no hay arista
+                 * porque el destino no esta aqui --, asi que esto NO es un
+                 * agujero.  Se apunta para que quien mire el bloque lo sepa. */
+                cfg.has_external_target = true;
             else
                 cfg.has_unresolved_target = true;
         }
