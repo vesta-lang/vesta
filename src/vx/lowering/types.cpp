@@ -139,29 +139,51 @@ void Lowering::compute_type_intervals() {
 /**
  * @copydoc vx::Lowering::optional_layout
  */
-Lowering::OptionalLayout Lowering::optional_layout(const Type &t) const {
-    OptionalLayout lay;
-    // Payload escalar: 8 bytes, como toda la vida.  Struct por valor: su
-    // tamano real alineado a 8, para que quepa entero dentro del buffer.
-    uint32_t payload = 8;
-    if (t.pointee) {
-        const Type &p = *t.pointee;
-        if (p.kind == PrimitiveKind::STRUCT) {
-            const size_t sz = size_of_type(p);
-            if (sz > payload)
-                payload = static_cast<uint32_t>((sz + 7u) & ~size_t(7));
-        }
+ir::IrValueId Lowering::enforce_nonnull(ir::IrValueId v, int line) {
+    if (v == ir::IR_NO_VALUE || !fn_ || v >= fn_->values.size()) return v;
+    const ir::IrType t = fn_->values[v].type;
+    const ir::IrValueId v_new = fn_->new_value(t);
+    ir::IrInstr uw{};
+    uw.op = ir::IrOp::UNWRAP; // lanza FATAL_NULL_POINTER si vale cero
+    uw.type = t;
+    uw.dst = v_new;
+    uw.operands = {v};
+    uw.source_line = line;
+    emit(current_block_, std::move(uw));
+    // Lo que sale es el mismo puntero: conserva de que memoria es.
+    fn_->values[v_new].is_host_ptr = fn_->values[v].is_host_ptr;
+    fn_->values[v_new].pointee_is_host_ptr = fn_->values[v].pointee_is_host_ptr;
+    fn_->values[v_new].is_gc_object = fn_->values[v].is_gc_object;
+    return v_new;
+}
+
+void Lowering::mark_value_from_type(ir::IrValueId v, const Type &t) {
+    if (v == ir::IR_NO_VALUE || !fn_ || v >= fn_->values.size()) return;
+    if (t.kind == PrimitiveKind::CLASS) {
+        fn_->values[v].is_host_ptr = true;
+        fn_->values[v].is_gc_object = true;
+        return;
     }
-    /* AQUI ES DONDE ENTRA QUE OCUPE MENOS.  Hoy siempre hay marca aparte, que
-     * es lo que hacia antes y lo unico que todos los sitios saben leer.  Cuando
-     * el payload tenga un valor imposible que sirva de marca -- un puntero, que
-     * no puede ser nulo si el valor esta presente --, aqui se devolvera
-     * `{8, 0, false}` y el conjunto medira la mitad.  El resto del bajado ya no
-     * hay que tocarlo: pregunta. */
-    lay.has_tag = true;
-    lay.value_offset = 8;
-    lay.bytes = 8 + payload;
-    return lay;
+    if ((t.kind != PrimitiveKind::PTR && t.kind != PrimitiveKind::ARRAY) ||
+        t.is_virtual)
+        return;
+    fn_->values[v].is_host_ptr = true;
+    // `T**`: un deref intermedio tiene que conservar que lo de dentro tambien
+    // es del anfitrion.
+    if (t.pointee &&
+        (t.pointee->kind == PrimitiveKind::PTR ||
+         t.pointee->kind == PrimitiveKind::ARRAY) &&
+        !t.pointee->is_virtual) {
+        fn_->values[v].pointee_is_host_ptr = true;
+    }
+}
+
+OptionalLayout Lowering::optional_layout(const Type &t) const {
+    /* La disposicion la decide el comprobador de tipos, que es de quien es el
+     * dato: es una propiedad del TIPO, y ademas la preguntan el `match` y el
+     * calculo del tamano de un struct que lo lleve de campo, que no pasan por
+     * aqui.  Este metodo se queda como atajo para el bajado. */
+    return tc_.optional_layout(t);
 }
 
 size_t Lowering::optional_buf_bytes(const Type &t, size_t base) const {
@@ -207,6 +229,8 @@ size_t Lowering::size_of_type(const Type &t) const {
     // cfn (puntero a funcion crudo, fn_is_raw): SOLO la direccion -> 8 bytes.
     // Un lambda fn(...) es un fat-pointer de 16 bytes {fn_addr, env}.
     if (t.kind == PrimitiveKind::FUNCTION && t.fn_is_raw) return 8;
+    // Un `Optional` mide segun lo que lleve dentro; lo sabe su disposicion.
+    if (t.kind == PrimitiveKind::OPTIONAL) return optional_layout(t).bytes;
     return primitive_size_bytes(t.kind);
 }
 

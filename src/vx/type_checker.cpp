@@ -33,6 +33,8 @@
 #include "util/env_flags.h"
 #include "util/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
+
+#include "vx/diag/diag_catalog.h"
 #include "vx/ansi_names.h" // los nombres de color que el lenguaje conoce
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
@@ -1554,6 +1556,47 @@ bool TypeChecker::class_is_assignable(const Type &target,
 /**
  * @copydoc vx::TypeChecker::type_derives_from
  */
+/**
+ * @copydoc vx::TypeChecker::optional_layout
+ */
+OptionalLayout TypeChecker::optional_layout(const Type &t) const {
+    OptionalLayout lay;
+    /* El payload de un escalar ocupa una palabra; el de un struct por valor,
+     * su tamano real redondeado a palabra, para que quepa entero. */
+    uint32_t payload = 8;
+    if (t.pointee && t.pointee->kind == PrimitiveKind::STRUCT &&
+        !t.pointee->struct_name.empty()) {
+        const auto it = struct_layouts_.find(t.pointee->struct_name);
+        if (it != struct_layouts_.end() && it->second.size_bytes > payload)
+            payload = (it->second.size_bytes + 7u) & ~uint32_t(7);
+    }
+    /* AQUI ES DONDE OCUPA MENOS.  Cuando el payload no puede valer cero, el
+     * cero SOBRA como valor y sirve de marca: no hace falta una palabra aparte
+     * para decir si esta o no esta, y el conjunto mide ocho en vez de dieciseis.
+     *
+     * Solo donde el tipo lo PROMETE.  Un prestamo (`borrow<T>`) es la
+     * direccion de algo que existe -- solo se obtiene prestando algo vivo --,
+     * asi que no puede ser nulo.  Un `T*` crudo SI puede: ahi `Some(nulo)` y
+     * "no hay nada" serian el mismo valor, y un programa que guarda un puntero
+     * nulo a proposito dejaria de distinguirlos.  Por eso no entra.
+     *
+     * El resto del camino -- construir, leer, `match`, y el tamano de un struct
+     * que lo lleve de campo -- no hay que tocarlo: pregunta. */
+    const bool payload_no_puede_ser_nulo =
+        t.pointee && (t.pointee->kind == PrimitiveKind::BORROW ||
+                      t.pointee->kind == PrimitiveKind::BORROW_MUT);
+    if (payload_no_puede_ser_nulo) {
+        lay.has_tag = false;
+        lay.value_offset = 0;
+        lay.bytes = 8;
+        return lay;
+    }
+    lay.has_tag = true;
+    lay.value_offset = 8;
+    lay.bytes = 8 + payload;
+    return lay;
+}
+
 bool TypeChecker::type_derives_from(const std::string &sub,
                                     const std::string &super) const noexcept {
     if (sub.empty() || super.empty()) return false;
@@ -3727,6 +3770,11 @@ void TypeChecker::collect_globals() {
                 // si aun no se registro (forward ref dentro del mismo
                 // pase) emitimos error de orden de declaracion.
                 uint32_t fsize = (uint32_t)primitive_size_bytes(ft.kind);
+                /* Un `Optional` no siempre mide lo mismo: depende de lo que
+                 * lleve dentro.  `primitive_size_bytes` solo recibe la especie,
+                 * asi que no puede saberlo; hay que preguntarlo. */
+                if (ft.kind == PrimitiveKind::OPTIONAL)
+                    fsize = optional_layout(ft).bytes;
                 /* La alineacion NO es el tamano.  Un `Result` mide veinticuatro
                  * -- tres palabras -- y se alinea a ocho; tomarla igual al
                  * tamano daba veinticuatro, que ni siquiera es potencia de dos,
@@ -7722,9 +7770,19 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         t = maybe_promote_func_ref(vd->init.get(), s.type, t);
         // nonnull: si el tipo declarado lleva el modificador
         // nonnull, rechazar literal null como inicializador.
+        /* El consejo que daba antes -- "use !!x para forzar unwrap" -- dejo de
+         * valer.  Para empezar, sobre el literal `null` nunca valio: `!!null`
+         * es lanzar SIEMPRE, asi que cambiaba un error de compilacion por un
+         * fallo garantizado en ejecucion.  Y desde que asignar a un `nonnull`
+         * comprueba por si mismo, escribir `!!` ahi no anade nada: la
+         * comprobacion de mas la borra el optimizador (medido: dos antes de
+         * optimizar, una despues).  Lo que hay que decir es que las dos mitades
+         * -- el tipo y el valor -- no pueden ser las dos como estan. */
         if (vd->type && vd->type->is_nonnull && is_null_lit) {
-            diags_.error(vd->loc, "no se puede asignar null a una variable "
-                                  "'nonnull' (use !!x para forzar unwrap)");
+            diags_.error(vd->loc,
+                         "no se puede asignar null a una variable 'nonnull': "
+                         "el tipo promete que nunca lo es.  Quite 'nonnull' "
+                         "del tipo, o de un valor inicial que no sea null");
         }
         // Inferencia CTAD: `Caja c = expr;` con un nombre de template generico
         // SIN args de tipo y un init cuyo tipo es una monomorphizacion del
@@ -7808,64 +7866,33 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
         // emite warning.  Cubre IntLitExpr directo y UnaryExpr(Neg,
         // IntLitExpr) para literales negativos.
         bool has_int_lit_init = false;
-        int64_t lit_signed = 0;
-        uint64_t lit_unsigned = 0;
+        bool lit_negative = false;
+        uint64_t lit_magnitude = 0;
         if (vd->init->kind == ast::NodeKind::IntLitExpr) {
             has_int_lit_init = true;
-            lit_unsigned =
+            lit_magnitude =
                 static_cast<ast::IntLitExpr *>(vd->init.get())->value;
-            lit_signed = (int64_t)lit_unsigned;
         } else if (vd->init->kind == ast::NodeKind::UnaryExpr) {
             auto *u = static_cast<ast::UnaryExpr *>(vd->init.get());
             if (u->op == ast::UnOp::Neg && u->operand &&
                 u->operand->kind == ast::NodeKind::IntLitExpr) {
                 has_int_lit_init = true;
-                uint64_t raw =
+                lit_negative = true;
+                lit_magnitude =
                     static_cast<ast::IntLitExpr *>(u->operand.get())->value;
-                lit_signed = -(int64_t)raw;
-                lit_unsigned = (uint64_t)lit_signed;
             }
         }
-        if (has_int_lit_init && is_integral(s.type.kind)) {
-            const uint64_t v = lit_unsigned;
-            (void)v;
-            const int64_t sv = lit_signed;
-            bool overflow = false;
-            std::string range_msg;
-            switch (s.type.kind) {
-            case PrimitiveKind::I8:
-                if (sv > 127 || sv < -128) overflow = true;
-                range_msg = "i8 [-128, 127]";
-                break;
-            case PrimitiveKind::I16:
-                if (sv > 32767 || sv < -32768) overflow = true;
-                range_msg = "i16 [-32768, 32767]";
-                break;
-            case PrimitiveKind::I32:
-                if (sv > 2147483647LL || sv < -2147483648LL) overflow = true;
-                range_msg = "i32 [-2147483648, 2147483647]";
-                break;
-            case PrimitiveKind::U8:
-                if (sv < 0 || lit_unsigned > 255) overflow = true;
-                range_msg = "u8 [0, 255]";
-                break;
-            case PrimitiveKind::U16:
-                if (sv < 0 || lit_unsigned > 65535) overflow = true;
-                range_msg = "u16 [0, 65535]";
-                break;
-            case PrimitiveKind::U32:
-                if (sv < 0 || lit_unsigned > 4294967295ULL) overflow = true;
-                range_msg = "u32 [0, 4294967295]";
-                break;
-            default: break;
-            }
-            if (overflow) {
-                diags_.warning(vd->init ? vd->init->loc : vd->loc,
-                               std::string("literal ") + std::to_string(sv) +
-                                   " fuera del rango del tipo " +
-                                   type_to_string(s.type) + " (" + range_msg +
-                                   "); el valor se truncara");
-            }
+        // Un literal que no cabe en su destino es ERROR, no aviso: truncar es
+        // una decision, y una decision se escribe.  Quien la quiera tiene el
+        // cast (`(u8) 300`), que dice lo mismo pero a proposito.
+        if (has_int_lit_init && is_integral(s.type.kind) &&
+            !literal_fits(s.type.kind, lit_negative, lit_magnitude)) {
+            diags_.error(
+                vd->init ? vd->init->loc : vd->loc,
+                vx::diag::format("VXT001",
+                                 {literal_text(lit_negative, lit_magnitude),
+                                  type_to_string(s.type),
+                                  numeric_range_text(s.type.kind)}));
         }
         // Borrow checker: si el var-decl recibio un borrow, asociar
         // el nombre de la variable como borrower del owner correcto.
@@ -8272,12 +8299,34 @@ Type TypeChecker::check_expr(ast::Expr *e) {
     if (!e) return Type{};
     Type t;
     switch (e->kind) {
-    case ast::NodeKind::IntLitExpr:
+    case ast::NodeKind::IntLitExpr: {
         // Por defecto los literales enteros son i64.  La promocion
         // / truncacion a la variable destino la decide el lowering.
-        t = Type{PrimitiveKind::I64};
+        // Un sufijo (`42u8`) FIJA el tipo y desactiva esa inferencia.
+        const auto *lit = static_cast<const ast::IntLitExpr *>(e);
+        const PrimitiveKind sfx = lit->suffix;
+        t = Type{sfx == PrimitiveKind::VOID ? PrimitiveKind::I64 : sfx};
+        // Un literal que no cabe en SU PROPIO sufijo se contradice: no existe
+        // ningun u8 que valga 300.  Se comprueba aqui, y no solo en el
+        // var-decl, porque el sufijo tambien aparece donde no hay declaracion
+        // (`f(300u8)`, `return 300u8;`) y porque puede no coincidir con el
+        // tipo del destino (`i64 x = 300u8;` cabe en i64 pero no en u8).
+        if (sfx != PrimitiveKind::VOID &&
+            !literal_fits(sfx, lit->negated, lit->value)) {
+            diags_.error(e->loc,
+                         vx::diag::format(
+                             "VXT002", {literal_text(lit->negated, lit->value),
+                                        primitive_name(sfx),
+                                        numeric_range_text(sfx)}));
+        }
         break;
-    case ast::NodeKind::FloatLitExpr: t = Type{PrimitiveKind::F64}; break;
+    }
+    case ast::NodeKind::FloatLitExpr: {
+        const PrimitiveKind sfx =
+            static_cast<const ast::FloatLitExpr *>(e)->suffix;
+        t = Type{sfx == PrimitiveKind::VOID ? PrimitiveKind::F64 : sfx};
+        break;
+    }
     case ast::NodeKind::BoolLitExpr: t = Type{PrimitiveKind::BOOL}; break;
     case ast::NodeKind::CharLitExpr: t = Type{PrimitiveKind::CHAR}; break;
     case ast::NodeKind::StringLitExpr: {
@@ -9391,7 +9440,7 @@ Type TypeChecker::check_match(ast::MatchExpr *e) {
     const EnumLayout *elayp = nullptr;
     if (st.kind == PrimitiveKind::OPTIONAL ||
         st.kind == PrimitiveKind::RESULT) {
-        syn_optlike = build_optlike_enum_layout(st);
+        syn_optlike = build_optlike_enum_layout(st, optional_layout(st));
         elayp = &syn_optlike;
     } else {
         if (st.kind != PrimitiveKind::STRUCT) {
@@ -15368,6 +15417,62 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
         e->result_type = at;
         return at;
+    }
+    /* unwrap_or(x, def) : el valor si esta, y si no, `def`.  NO afirma nada,
+     *                     asi que no puede fallar y nunca mata el proceso.
+     * expect(x, "msg")  : lo mismo que `unwrap`, con un mensaje propio.  Desde
+     *                     que fallar es fatal, el mensaje es la unica pista que
+     *                     queda de que se dio por hecho y donde.
+     *
+     * Los dos van AQUI, pegados a `unwrap`, porque son la misma familia: la
+     * pregunta es siempre "puede que no haya nada", y lo que cambia es que se
+     * hace al respecto.  Sin `unwrap_or` la unica salida recuperable era
+     * escribir el `if` a mano, y eso empuja a afirmar por comodidad -- que es
+     * justo lo que no queremos incentivar. */
+    if (id->name == "unwrap_or" || id->name == "expect") {
+        const bool is_expect = (id->name == "expect");
+        const char *bn = id->name.c_str();
+        if (e->args.size() != 2) {
+            diags_.error(e->loc, std::string(bn) +
+                                     ": se esperaban 2 argumentos, recibidos " +
+                                     std::to_string(e->args.size()));
+            e->result_type = Type{};
+            return Type{};
+        }
+        Type at = check_expr(e->args[0].get());
+        Type second = check_expr(e->args[1].get());
+        // El tipo del valor: el payload si es un Optional, el propio tipo si
+        // es una referencia nullable.
+        Type rt = at;
+        if (at.kind == PrimitiveKind::OPTIONAL && at.pointee) rt = *at.pointee;
+        else if (at.kind != PrimitiveKind::CLASS &&
+                 at.kind != PrimitiveKind::PTR &&
+                 at.kind != PrimitiveKind::I64 &&
+                 at.kind != PrimitiveKind::COUNT &&
+                 !type_is_overlay_handle(struct_layouts_, at)) {
+            diags_.error(e->args[0]->loc,
+                         std::string(bn) +
+                             ": el primer argumento debe ser una referencia "
+                             "o Optional<T>, no '" +
+                             type_to_string(at) + "'");
+        }
+        if (is_expect) {
+            // El mensaje: una cadena, y del tiron -- tiene que estar en el
+            // binario, no calcularse.
+            if (e->args[1]->kind != ast::NodeKind::StringLitExpr) {
+                diags_.error(e->args[1]->loc,
+                             "expect: el segundo argumento debe ser una cadena "
+                             "escrita en el sitio, no '" +
+                                 type_to_string(second) + "'");
+            }
+        } else if (!types_assignable(rt, second)) {
+            diags_.error(e->args[1]->loc,
+                         "unwrap_or: el valor por defecto es '" +
+                             type_to_string(second) + "' y deberia ser '" +
+                             type_to_string(rt) + "'");
+        }
+        e->result_type = rt;
+        return rt;
     }
     // Builtins de Optional<T> (builtin del compilador).
     // Some(x) -> Optional<typeof(x)>: construye un Optional presente

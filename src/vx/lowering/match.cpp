@@ -482,7 +482,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     EnumLayout syn_optlike;
     const EnumLayout *elayp = nullptr;
     if (st_optlike) {
-        syn_optlike = build_optlike_enum_layout(st);
+        syn_optlike = build_optlike_enum_layout(st, optional_layout(st));
         elayp = &syn_optlike;
     } else {
         auto it = elays.find(st.struct_name);
@@ -519,6 +519,20 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
     // 2. LOAD i64 del tag en offset 0.
     ir::IrValueId tag_v =
         emit_load_typed(scrut_addr, ir::IrType::I64, e->loc.line);
+    /* Cuando el payload no puede valer cero, no hay marca aparte: lo que hay
+     * en el cero ES el valor, y lo que dice si hay algo es que no sea cero.
+     * Se normaliza aqui a cero-o-uno y todo el reparto de abajo -- lineal,
+     * arbol, tabla -- sigue comparando marcas como siempre, sin enterarse.
+     * La alternativa era ensenarle a cada una de las tres a comparar "distinto
+     * de cero", que es la misma cosa escrita tres veces. */
+    if (elay.tag_is_value) {
+        const ir::IrValueId v_es_cero = emit_ir_unop(
+            ir::IrOp::ISNULL, tag_v, ir::IrType::I64, e->loc.line);
+        const ir::IrValueId v_uno =
+            emit_const(ir::IrType::I64, 1, e->loc.line);
+        tag_v = emit_ir_binop(ir::IrOp::XOR, v_es_cero, v_uno,
+                              ir::IrType::I64, e->loc.line);
+    }
 
     // 3. Construir bloques: uno por arm + uno default + uno merge.
     // Estrategia simple O(N): para cada arm con variant concreto,

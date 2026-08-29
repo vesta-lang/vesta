@@ -537,6 +537,12 @@ struct EnumLayout {
     /// con como los construye @c Some/None/Ok/Err y los lee
     /// @c unwrap/value/error/isPresent/isOk.
     bool is_optlike = false;
+    /// La palabra del desplazamiento cero NO es una marca aparte: ES el valor,
+    /// y lo que dice si hay algo es que no sea cero.  Pasa cuando el payload no
+    /// puede valer cero y por eso no necesita marca (ver @c OptionalLayout).
+    /// Quien compare tiene que mirar "distinto de cero", no "igual a la marca
+    /// de la variante": el valor no vale uno, vale lo que valga.
+    bool tag_is_value = false;
 };
 
 /**
@@ -552,13 +558,48 @@ struct EnumLayout {
  * @param st Tipo del scrutinee (kind OPTIONAL o RESULT).
  * @return Layout con @c is_optlike=true, variantes ordenadas por tag.
  */
-inline EnumLayout build_optlike_enum_layout(const Type &st) {
+/**
+ * @struct OptionalLayout
+ * @brief Como esta puesto en memoria un `Optional<T>`.
+ *
+ * No solo cuanto ocupa: TAMBIEN donde esta el valor y si hace falta una marca
+ * aparte.  Ese tercer dato es el que permite que ocupe menos: un `Optional` de
+ * algo que ya tiene un valor imposible -- un puntero, que no puede ser nulo si
+ * el valor esta presente -- no necesita marca, porque el propio valor la lleva,
+ * y entonces mide ocho en vez de dieciseis.
+ *
+ * Vive con el TIPO y no con el bajado porque es una propiedad del tipo: la
+ * preguntan el que emite codigo, el que resuelve un `match` y el que calcula el
+ * tamano de un struct que lo lleva de campo.  Repartida, "aqui no hace falta
+ * marca" habria que escribirlo en los tres.
+ */
+struct OptionalLayout {
+    uint32_t bytes = 16;       ///< Lo que ocupa el conjunto.
+    uint32_t value_offset = 8; ///< Donde empieza el valor.
+    bool has_tag = true;       ///< Si la marca va aparte, en el cero.
+};
+
+/**
+ * @brief Presenta un `Optional`/`Result` como un enum de dos variantes, que es
+ *        lo que el `match` sabe recorrer.
+ *
+ * @param st  El tipo.
+ * @param opt Como esta puesto en memoria, cuando @p st es un `Optional`.  Lo
+ *            decide @c TypeChecker::optional_layout y se pasa hecho: esta
+ *            funcion vive en una cabecera y no alcanza los layouts de struct
+ *            que hacen falta para calcularlo.  Antes lo llevaba clavado --
+ *            tamano dieciseis, payload en el ocho --, que era el septimo sitio
+ *            que describia la misma disposicion por su cuenta.
+ */
+inline EnumLayout build_optlike_enum_layout(const Type &st,
+                                            const OptionalLayout &opt) {
     EnumLayout lay;
     lay.is_optlike = true;
     lay.max_payload_fields = 1;
     if (st.kind == PrimitiveKind::OPTIONAL) {
         lay.name = "Optional";
-        lay.size_bytes = 16;
+        lay.size_bytes = opt.bytes;
+        lay.tag_is_value = !opt.has_tag;
         // None (tag 0, sin payload).
         EnumVariantInfo vn;
         vn.name = "None";
@@ -570,7 +611,7 @@ inline EnumLayout build_optlike_enum_layout(const Type &st) {
         vs.tag = 1;
         vs.field_types.push_back(st.pointee ? *st.pointee
                                             : Type{PrimitiveKind::I64});
-        vs.field_offsets.push_back(8);
+        vs.field_offsets.push_back(opt.value_offset);
         lay.variants.push_back(std::move(vs));
     } else {
         // Result<V,E>.
@@ -1880,6 +1921,18 @@ class TypeChecker {
      */
     bool type_derives_from(const std::string &sub,
                            const std::string &super) const noexcept;
+
+    /**
+     * @brief Como esta puesto en memoria un `Optional<T>`.
+     *
+     * Unica respuesta a cuanto ocupa, donde tiene el valor y si lleva marca
+     * aparte.  La preguntan el bajado, el `match` y quien calcula el tamano de
+     * un struct que lo lleva de campo.
+     *
+     * @param t Tipo `OPTIONAL`.
+     * @return Su disposicion.
+     */
+    OptionalLayout optional_layout(const Type &t) const;
 
     /**
      * @brief tabla de constantes comptime declaradas con

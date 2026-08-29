@@ -50,6 +50,7 @@
 #ifndef VX_LOWERING_H
 #define VX_LOWERING_H
 
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -2768,34 +2769,145 @@ class Lowering {
     size_t optional_buf_bytes(const Type &t, size_t base = 8) const;
 
     /**
-     * @struct OptionalLayout
-     * @brief Como esta puesto en memoria un `Optional<T>`.
-     *
-     * No solo cuanto ocupa: TAMBIEN donde esta cada cosa y si hace falta una
-     * marca aparte.  Eso ultimo es lo que abre la puerta a que ocupe menos: un
-     * `Optional` de algo que ya tiene un valor imposible -- un puntero, que no
-     * puede ser nulo si esta presente -- no necesita marca, porque el propio
-     * valor la lleva; y entonces mide ocho en vez de dieciseis.
-     *
-     * Estaba repartido: el tamano se calculaba en seis sitios y la forma --
-     * marca en el cero, valor en el ocho -- venia clavada en cada lectura y en
-     * cada escritura.  Con eso, "aqui no hace falta marca" habria que
-     * escribirlo en todos ellos, y el primero que se olvidara leeria el valor
-     * donde no esta.
-     */
-    struct OptionalLayout {
-        uint32_t bytes = 16;        ///< Lo que ocupa el conjunto.
-        uint32_t value_offset = 8;  ///< Donde empieza el valor.
-        bool has_tag = true;        ///< Si la marca va aparte, en el cero.
-    };
-
-    /**
-     * @brief La disposicion en memoria de un `Optional<T>`.
+     * @brief Como esta puesto en memoria un `Optional<T>`: atajo al que lo
+     *        decide, que es el comprobador de tipos (@c vx::OptionalLayout).
      *
      * @param t Tipo `OPTIONAL`.
      * @return Su disposicion.
      */
     OptionalLayout optional_layout(const Type &t) const;
+
+    /**
+     * @struct SretInfo
+     * @brief Como devuelve una funcion algo que no cabe en un registro.
+     *
+     * Tres preguntas que van juntas y que quien llama y quien es llamado
+     * tienen que responder IGUAL: si hace falta reservar sitio, cuanto, y si
+     * ese sitio vive en memoria del anfitrion.  Si discrepan, el llamado
+     * escribe donde el que llama no reservo -- y con el tamano, escribe de
+     * mas: fuera del buffer, en el marco ajeno.
+     *
+     * Estaban contestadas por separado en CUATRO sitios (al registrar la
+     * funcion, al bajarla, y en los dos caminos de llamada), y ya habian
+     * chocado antes: la nota del bug 248 en @c lower_module cuenta uno de
+     * esos choques.  Los dos caminos de llamada, ademas, no listaban lo
+     * mismo: el de un metodo estatico se dejaba fuera devolver un lambda y
+     * devolver un puntero inteligente, asi que no reservaba nada y el metodo
+     * escribia sobre el primer argumento de verdad.
+     */
+    struct SretInfo {
+        bool uses_buffer = false; ///< Quien llama reserva sitio y lo pasa.
+        uint64_t bytes = 0;       ///< Cuanto, ya redondeado a palabra.
+        bool host_buffer = false; ///< Si vive en memoria del anfitrion.
+    };
+
+    /**
+     * @brief Responde las tres a la vez, a partir del tipo devuelto.
+     *
+     * @param ret Tipo que la funcion declara devolver, ya resuelto.
+     * @return Que hacer con el retorno.
+     */
+    SretInfo sret_info(const Type &ret) const;
+
+    /**
+     * @brief Lo mismo, para una funcion ya registrada, por su nombre.
+     *
+     * @param name Nombre de la funcion.
+     * @return Lo que se anoto al registrarla; todo a cero si no consta.
+     */
+    SretInfo sret_info_for(const std::string &name) const;
+
+    /**
+     * @brief Anota en un valor SSA lo que su tipo Vesta dice de su memoria.
+     *
+     * Un `T*` o un `T[]` que no sea `VirtualPtr` apunta a memoria del
+     * anfitrion; una referencia a clase, ademas, a un objeto del recolector.
+     * De ello depende que un deref se emita con la instruccion de memoria del
+     * anfitrion o con la de la maquina virtual: equivocarse no da un error,
+     * da un cero o un acceso invalido.
+     *
+     * La regla estaba escrita en cuatro sitios -- el resultado de una llamada
+     * suelta, el de un metodo, el de un metodo de struct y el de un campo --
+     * y solo la primera conservaba lo de dentro de un `T**`.  Ninguna cubria
+     * leer el valor de un `Optional`, que era la quinta que hacia falta.
+     *
+     * @param v Valor SSA a anotar.
+     * @param t Su tipo Vesta.
+     */
+    void mark_value_from_type(ir::IrValueId v, const Type &t);
+
+    /**
+     * @brief Hace cumplir un `nonnull`: devuelve el mismo valor, y si es nulo
+     *        lanza en el punto donde se escribio.
+     *
+     * Emite la MISMA operacion que `!!x`.  El pase que quita comprobaciones de
+     * nulo demostrables la borra sola cuando el valor no puede ser nulo -- la
+     * direccion de algo, un objeto recien creado, una constante distinta de
+     * cero --, asi que lo normal es que no cueste nada en ejecucion.
+     *
+     * @param v    Valor a comprobar.
+     * @param line Linea del fuente a la que apuntar si lanza.
+     * @return El valor ya comprobado; @p v tal cual si no habia nada que hacer.
+     */
+    ir::IrValueId enforce_nonnull(ir::IrValueId v, int line);
+
+    /**
+     * @brief Elige entre dos valores segun una condicion, calculando cada uno
+     *        en su propia rama.
+     *
+     * Monta los tres bloques -- una rama por lado y el punto donde se juntan --
+     * y el PHI que recoge el valor.  Cada lado se calcula DENTRO de su rama,
+     * que es lo que lo distingue de un `select`: lo que no se elige no se
+     * ejecuta.
+     *
+     * Es la forma del ternario, y la usan tanto el ternario como
+     * `unwrap_or`, que es exactamente eso mismo con la condicion y los lados
+     * puestos por el compilador en vez de escritos por el usuario.
+     *
+     * @param cond     Condicion ya bajada.
+     * @param on_true  Calcula el valor de la rama verdadera, dentro de ella.
+     * @param on_false Igual para la falsa.  Si difiere de tipo, se convierte.
+     * @param tag      Nombre para los bloques (sale en el volcado del IR).
+     * @param line     Linea del fuente.
+     * @return El valor elegido, o @c IR_NO_VALUE si algun lado no dio ninguno.
+     */
+    ir::IrValueId
+    emit_branching_select(ir::IrValueId cond,
+                          const std::function<ir::IrValueId()> &on_true,
+                          const std::function<ir::IrValueId()> &on_false,
+                          const char *tag, uint32_t line);
+
+    /**
+     * @brief ¿Hay algo? -- 1 o 0.
+     *
+     * Vale igual para un `Optional<T>` y para una referencia nullable, que son
+     * la misma pregunta sobre dos formas de guardarla.  Lo usan `isPresent`,
+     * `unwrap_or` y `expect`: la respuesta se escribe UNA vez.
+     *
+     * @param v_arg El valor (direccion del buffer, o el propio puntero).
+     * @param at    Su tipo Vesta.
+     * @param line  Linea del fuente.
+     */
+    ir::IrValueId emit_optional_present(ir::IrValueId v_arg, const Type &at,
+                                        int line);
+
+    /**
+     * @brief El valor que hay dentro.
+     *
+     * Donde esta lo dice la disposicion (@ref OptionalLayout), no este sitio.
+     * Un agregado devuelve su DIRECCION, porque el valor de un agregado es su
+     * direccion.
+     *
+     * @param v_arg   El valor (direccion del buffer, o el propio puntero).
+     * @param at      Su tipo Vesta.
+     * @param checked Si ademas se AFIRMA que hay algo: si no lo hay, el
+     *                proceso muere (ver @ref enforce_nonnull).  Con @c false
+     *                no comprueba nada y leer algo que no esta da basura --
+     *                es el `unwrap_unchecked`, la renuncia explicita.
+     * @param line    Linea del fuente.
+     */
+    ir::IrValueId emit_optional_value(ir::IrValueId v_arg, const Type &at,
+                                      bool checked, int line);
 
     /**
      * @brief ¿@p t es un `@overlay struct` (una VISTA sobre memoria ajena)?
@@ -3203,6 +3315,12 @@ class Lowering {
     /// y muere al RET.
     std::unordered_map<std::string, std::string> fn_ret_struct_name_;
 
+    /// Lo que se decidio sobre el retorno de cada funcion, por su nombre:
+    /// si usa buffer, cuanto mide y donde vive (ver @c SretInfo).  Lo escribe
+    /// @c register_fn_ret_info y lo leen los caminos de llamada, para que no
+    /// vuelvan a deducirlo cada uno por su cuenta.
+    std::unordered_map<std::string, SretInfo> fn_sret_;
+
     /// (gap O cerrado): conjunto de funciones que retornan un
     /// valor de tipo FUNCTION (function value).  Se trata como SRET
     /// con buf_size=16 (mismo layout que el slot de lambda: fn_addr
@@ -3365,15 +3483,18 @@ class Lowering {
      * lado dedujera el SRET por su cuenta, una divergencia haria que el
      * callee escribiese en un retbuf que el caller nunca paso.
      *
-     * @param name             Nombre por el que el caller invoca la funcion.
-     * @param kind             Kind semantico del tipo de retorno.
-     * @param enum_struct_name Nombre del tipo cuando @p kind es STRUCT (para
-     *                         distinguir un enum de usuario de un struct).
-     * @param is_async         La fn es @Async: el bytecode devuelve el handle
-     *                         i64 del Future, no el tipo logico T.
+     * Lo que decide queda anotado en @c fn_sret_ y se consulta con
+     * @c sret_info_for, para que quien llama no tenga que volver a deducirlo.
+     *
+     * @param name     Nombre por el que se invoca la funcion.
+     * @param ret      Tipo de retorno YA RESUELTO.  Entero, no solo su
+     *                 especie: el tamano de un `Optional` depende de lo que
+     *                 envuelva, y quedarse con la especie obligaba a quien
+     *                 llamaba a buscarlo por otro lado.
+     * @param is_async La fn es @Async: el bytecode devuelve el handle
+     *                 i64 del Future, no el tipo logico T.
      */
-    void register_fn_ret_info(const std::string &name, PrimitiveKind kind,
-                              const std::string &enum_struct_name,
+    void register_fn_ret_info(const std::string &name, const Type &ret,
                               bool is_async);
 
     /// Variables locales cuya direccion se ha tomado con '&' en alguna
