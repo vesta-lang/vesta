@@ -475,26 +475,10 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
                 ir::IrValueId v_rhs_at =
                     emit_ptr_add(rhs_addr, v_off2, e->loc.line);
                 // LOAD a y b
-                ir::IrValueId v_a = fn_->new_value(field_ir);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = field_ir;
-                    ld.dst = v_a;
-                    ld.operands = {v_lhs_at};
-                    ld.source_line = e->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
-                ir::IrValueId v_b = fn_->new_value(field_ir);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = field_ir;
-                    ld.dst = v_b;
-                    ld.operands = {v_rhs_at};
-                    ld.source_line = e->loc.line;
-                    emit(current_block_, std::move(ld));
-                }
+                ir::IrValueId v_a =
+                    emit_load_typed(v_lhs_at, field_ir, e->loc.line);
+                ir::IrValueId v_b =
+                    emit_load_typed(v_rhs_at, field_ir, e->loc.line);
                 // cmp_eq a, b -> v_field_eq
                 ir::IrValueId v_field_eq =
                     emit_ir_binop(ir::IrOp::CMP_EQ, v_a, v_b, ir::IrType::BOOL, e->loc.line);
@@ -1285,14 +1269,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             const ir::IrValueId addr = lower_index_addr(ix);
             if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             // LOAD valor actual.
-            const ir::IrValueId old_val = fn_->new_value(vt);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = vt;
-            ld.dst = old_val;
-            ld.operands = {addr};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
+            const ir::IrValueId old_val =
+                emit_load_typed(addr, vt, e->loc.line);
             const ir::IrValueId new_val = compute_new(old_val);
             emit_store_typed(addr, new_val, vt, e->loc.line);
             return is_pre ? new_val : old_val;
@@ -1303,14 +1281,8 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             if (un->op == ast::UnOp::Deref) {
                 const ir::IrValueId addr = lower_expr(un->operand.get());
                 if (addr == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                const ir::IrValueId old_val = fn_->new_value(vt);
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = vt;
-                ld.dst = old_val;
-                ld.operands = {addr};
-                ld.source_line = e->loc.line;
-                emit(current_block_, std::move(ld));
+                const ir::IrValueId old_val =
+                    emit_load_typed(addr, vt, e->loc.line);
                 const ir::IrValueId new_val = compute_new(old_val);
                 emit_store_typed(addr, new_val, vt, e->loc.line);
                 return is_pre ? new_val : old_val;
@@ -1489,14 +1461,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             fn_->values[p].pointee_is_host_ptr = false;
         }
         const ir::IrType ft = ir_type_from_primitive(e->result_type.kind);
-        const ir::IrValueId dst = fn_->new_value(ft);
-        ir::IrInstr ins{};
-        ins.op = ir::IrOp::LOAD;
-        ins.type = ft;
-        ins.dst = dst;
-        ins.operands = {p};
-        ins.source_line = e->loc.line;
-        emit(current_block_, std::move(ins));
+        const ir::IrValueId dst = emit_load_typed(p, ft, e->loc.line);
         // Limitacion A (cerrada) parte 2: si el puntero p apunta a un
         // slot VM cuyo CONTENIDO es un host_ptr (caso indirecto via
         // address-of: @c i32** pp = &p; *pp), propagar @c is_host_ptr

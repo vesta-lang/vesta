@@ -102,14 +102,7 @@ ir::IrValueId Lowering::read_local(const std::string &name, ir::IrType ir_ty,
     if (!address_taken_locals_.count(name)) return v;
     // Address-taken: el scope guarda la direccion de un ALLOCA;
     // emitimos un LOAD para obtener el valor actual.
-    const ir::IrValueId dst = fn_->new_value(ir_ty);
-    ir::IrInstr ins{};
-    ins.op = ir::IrOp::LOAD;
-    ins.type = ir_ty;
-    ins.dst = dst;
-    ins.operands = {v};
-    ins.source_line = source_line;
-    emit(current_block_, std::move(ins));
+    const ir::IrValueId dst = emit_load_typed(v, ir_ty, source_line);
     // Limitacion (cerrada): si el local fue marcado como host-bearing
     // (al menos un write_local le grabo un valor con is_host_ptr=true),
     // el LOAD reconstruye el bit en el SSA value resultante.  Sin esto
@@ -162,13 +155,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
             if (v < fn_->values.size()) {
                 st_ty = fn_->values[v].type;
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = st_ty;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v, it_slot->second};
-            st.source_line = source_line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(it_slot->second, v, st_ty, source_line);
         }
         return;
     }
@@ -178,13 +165,7 @@ void Lowering::write_local(const std::string &name, ir::IrValueId v,
         update_scope(name, v); // fallback defensivo
         return;
     }
-    ir::IrInstr st{};
-    st.op = ir::IrOp::STORE;
-    st.type = ir_ty;
-    st.dst = ir::IR_NO_VALUE;
-    st.operands = {v, addr}; // STORE: operands[0]=val, operands[1]=ptr
-    st.source_line = source_line;
-    emit(current_block_, std::move(st));
+    emit_store_typed(addr, v, ir_ty, source_line);
     // Limitacion (cerrada): registrar host-bearing si el valor escrito
     // proviene de heap host (malloc o aritmetica derivada).  read_local
     // consulta este set para propagar is_host_ptr al LOAD del slot.

@@ -451,14 +451,7 @@ ir::IrValueId Lowering::lower_field_addr(ast::FieldAccessExpr *e) {
                 emit(current_block_, std::move(a));
             }
             const ir::IrType st = ir_type_from_primitive(sib.type.kind);
-            ir::IrValueId sv = fn_->new_value(st);
-            ir::IrInstr l{};
-            l.op = ir::IrOp::LOAD;
-            l.type = st;
-            l.dst = sv;
-            l.operands = {saddr};
-            l.source_line = e->loc.line;
-            emit(current_block_, std::move(l));
+            ir::IrValueId sv = emit_load_typed(saddr, st, e->loc.line);
             bind(sib.name, sv);
         }
         const ir::IrValueId off_val = lower_expr(fifound->offset_expr);
@@ -531,14 +524,7 @@ ir::IrValueId Lowering::emit_overlay_endian_swap(ast::Expr *base_expr,
             emit(current_block_, std::move(a));
         }
         const ir::IrType st = ir_type_from_primitive(sib.type.kind);
-        ir::IrValueId sv = fn_->new_value(st);
-        ir::IrInstr l{};
-        l.op = ir::IrOp::LOAD;
-        l.type = st;
-        l.dst = sv;
-        l.operands = {saddr};
-        l.source_line = line;
-        emit(current_block_, std::move(l));
+        ir::IrValueId sv = emit_load_typed(saddr, st, line);
         bind(sib.name, sv);
     }
     const ir::IrValueId big = lower_expr(fi.endian_expr);
@@ -765,14 +751,7 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         return addr;
     }
     const ir::IrType ir_t = ir_type_from_primitive(ftyp.kind);
-    const ir::IrValueId dst = fn_->new_value(ir_t);
-    ir::IrInstr ld{};
-    ld.op = ir::IrOp::LOAD;
-    ld.type = ir_t;
-    ld.dst = dst;
-    ld.operands = {addr};
-    ld.source_line = e->loc.line;
-    emit(current_block_, std::move(ld));
+    const ir::IrValueId dst = emit_load_typed(addr, ir_t, e->loc.line);
     // fix: si el TIPO del campo es PTR (host pointer obtenido
     // via malloc o similar), propagar @c is_host_ptr=true al SSA value
     // resultante para que indexaciones / derefs posteriores emitan

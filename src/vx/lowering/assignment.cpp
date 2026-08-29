@@ -357,16 +357,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
 
             // Compound assign: load cur + combine.
             if (e->op != ast::AssignOp::Assign) {
-                ir::IrValueId v_cur = fn_->new_value(gty);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = gty;
-                    ld.dst = v_cur;
-                    ld.operands = {v_addr};
-                    ld.source_line = ln;
-                    emit(current_block_, std::move(ld));
-                }
+                ir::IrValueId v_cur = emit_load_typed(v_addr, gty, ln);
                 const ast::BinOp bop = compound_assign_op_to_binop(e->op);
                 rhs =
                     emit_binop_ir(bop, v_cur, rhs,
@@ -745,16 +736,8 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             for (const auto &f : it_l->second.fields) {
                 if (f.name == fa->field_name && f.bit_width > 0) {
                     // 1. LOAD storage word completo.
-                    ir::IrValueId v_old = fn_->new_value(ft);
-                    {
-                        ir::IrInstr ld{};
-                        ld.op = ir::IrOp::LOAD;
-                        ld.type = ft;
-                        ld.dst = v_old;
-                        ld.operands = {addr};
-                        ld.source_line = e->loc.line;
-                        emit(current_block_, std::move(ld));
-                    }
+                    ir::IrValueId v_old =
+                        emit_load_typed(addr, ft, e->loc.line);
                     // 2. mask = (1 << bit_width) - 1 (en el tipo
                     //    del storage; truncar a tamano del LOAD).
                     const uint64_t mask =
@@ -892,13 +875,7 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
         return true;
     }
     // Campo normal: STORE directo.
-    ir::IrInstr st{};
-    st.op = ir::IrOp::STORE;
-    st.type = ft;
-    st.dst = ir::IR_NO_VALUE;
-    st.operands = {rhs, addr}; // STORE: operands[0]=val, operands[1]=ptr
-    st.source_line = e->loc.line;
-    emit(current_block_, std::move(st));
+    emit_store_typed(addr, rhs, ft, e->loc.line);
     out = rhs;
     return true;
 }
@@ -1101,14 +1078,7 @@ bool Lowering::try_lower_assign_to_index(ast::AssignExpr *e,
     // misma direccion (calculada una sola vez).  Cubre +=, -= y
     // todos los compound enteros/float sobre arrays e indexados.
     if (e->op != ast::AssignOp::Assign) {
-        ir::IrValueId v_old = fn_->new_value(pt);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = pt;
-        ld.dst = v_old;
-        ld.operands = {addr};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        ir::IrValueId v_old = emit_load_typed(addr, pt, e->loc.line);
         const ast::BinOp bop = compound_assign_op_to_binop(e->op);
         rhs = emit_binop_ir(bop, v_old, rhs, ix->result_type.kind, e->loc);
     }
@@ -1263,14 +1233,7 @@ bool Lowering::try_lower_assign_to_deref(ast::AssignExpr *e,
         const ir::IrType pt = ir_type_from_primitive(un->result_type.kind);
         // Compound assign sobre '*p': LOAD valor actual, op, STORE.
         if (e->op != ast::AssignOp::Assign) {
-            ir::IrValueId v_old = fn_->new_value(pt);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = pt;
-            ld.dst = v_old;
-            ld.operands = {addr};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
+            ir::IrValueId v_old = emit_load_typed(addr, pt, e->loc.line);
             const ast::BinOp bop = compound_assign_op_to_binop(e->op);
             rhs = emit_binop_ir(bop, v_old, rhs, un->result_type.kind,
                                 e->loc);

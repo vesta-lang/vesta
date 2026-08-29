@@ -357,14 +357,8 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
         }
         // LOAD T from [v_b] para tipos escalares.
         const ir::IrType payload_t = ir_type_from_primitive(inner.kind);
-        const ir::IrValueId v_dst = fn_->new_value(payload_t);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = payload_t;
-        ld.dst = v_dst;
-        ld.operands = {v_b};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        const ir::IrValueId v_dst =
+            emit_load_typed(v_b, payload_t, e->loc.line);
         out_value = v_dst;
         return true;
     }

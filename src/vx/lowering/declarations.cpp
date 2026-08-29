@@ -1188,14 +1188,7 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
         // OR con (val<<offset), STORE.  Igual que en lower_assign
         // para bit fields.
         if (fi->bit_width > 0) {
-            ir::IrValueId v_old = fn_->new_value(ir_ft);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir_ft;
-            ld.dst = v_old;
-            ld.operands = {v_addr};
-            ld.source_line = vd->loc.line;
-            emit(current_block_, std::move(ld));
+            ir::IrValueId v_old = emit_load_typed(v_addr, ir_ft, vd->loc.line);
             const uint64_t mask =
                 (fi->bit_width == 64)
                     ? UINT64_MAX

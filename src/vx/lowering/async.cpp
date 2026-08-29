@@ -616,13 +616,7 @@ ir::IrValueId Lowering::lower_spawn_expr(ast::SpawnExpr *e) {
                     ad.source_line = e->loc.line;
                     emit(current_block_, std::move(ad));
                 }
-                ir::IrInstr st{};
-                st.op = ir::IrOp::STORE;
-                st.type = ir::IrType::I64;
-                st.dst = ir::IR_NO_VALUE;
-                st.operands = {caps[i], addr};
-                st.source_line = e->loc.line;
-                emit(current_block_, std::move(st));
+                emit_store_typed(addr, caps[i], ir::IrType::I64, e->loc.line);
             }
             v_arg = cap_ptr;
         }

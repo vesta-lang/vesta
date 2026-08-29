@@ -358,13 +358,7 @@ void Lowering::lower_try(ast::TryStmt *s) {
             if (it_e->second < fn_->values.size()) {
                 st_ty = fn_->values[it_e->second].type;
             }
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = st_ty;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {it_e->second, v_slot};
-            st.source_line = s->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(v_slot, it_e->second, st_ty, s->loc.line);
         }
         try_spill_slots_[name] = v_slot;
     }
@@ -1366,16 +1360,7 @@ ir::IrValueId Lowering::lower_try_expr(ast::TryExpr *e) {
     // leia 0/basura.  La rama err ya lo propagaba (de ahi que err funcione
     // y ok no).  Aplica al value extraction de la rama ok.
     fn_->values[v_at8].is_host_ptr = fn_->values[v_buf].is_host_ptr;
-    const ir::IrValueId v_dst = fn_->new_value(payload_t);
-    {
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = payload_t;
-        ld.dst = v_dst;
-        ld.operands = {v_at8};
-        ld.source_line = src_line;
-        emit(current_block_, std::move(ld));
-    }
+    const ir::IrValueId v_dst = emit_load_typed(v_at8, payload_t, src_line);
     return v_dst;
 }
 

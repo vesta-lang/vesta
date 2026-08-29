@@ -258,14 +258,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
         // BugFix sret-cross-mem (2026-06-04): propagar is_host_ptr de
         // v_buf al v_at para que el LOAD downstream emita `movh`/`loadzh`.
         fn_->values[v_at].is_host_ptr = fn_->values[v_buf].is_host_ptr;
-        const ir::IrValueId v_dst = fn_->new_value(payload_t);
-        ir::IrInstr ld{};
-        ld.op = ir::IrOp::LOAD;
-        ld.type = payload_t;
-        ld.dst = v_dst;
-        ld.operands = {v_at};
-        ld.source_line = e->loc.line;
-        emit(current_block_, std::move(ld));
+        const ir::IrValueId v_dst =
+            emit_load_typed(v_at, payload_t, e->loc.line);
         out_value = v_dst;
         return true;
     }
@@ -361,14 +355,8 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                 out_value = v_at;
                 return true;
             }
-            const ir::IrValueId v_dst = fn_->new_value(payload_t);
-            ir::IrInstr ldp{};
-            ldp.op = ir::IrOp::LOAD;
-            ldp.type = payload_t;
-            ldp.dst = v_dst;
-            ldp.operands = {v_at};
-            ldp.source_line = e->loc.line;
-            emit(current_block_, std::move(ldp));
+            const ir::IrValueId v_dst =
+                emit_load_typed(v_at, payload_t, e->loc.line);
             out_value = v_dst;
             return true;
         }

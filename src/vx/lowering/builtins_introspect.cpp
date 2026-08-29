@@ -699,14 +699,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
          * tocar el flag (heredamos el state del obj, que ya es lo
          * correcto). */
         if (is_get) {
-            const ir::IrValueId dst = fn_->new_value(ir_t);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = ir_t;
-            ld.dst = dst;
-            ld.operands = {addr};
-            ld.source_line = e->loc.line;
-            emit(current_block_, std::move(ld));
+            const ir::IrValueId dst = emit_load_typed(addr, ir_t, e->loc.line);
             /* Propagar is_host_ptr para campos PTR no virtuales (mismo
              * tratamiento que lower_class_field_load). */
             if (ftype.kind == PrimitiveKind::PTR && !ftype.is_virtual) {

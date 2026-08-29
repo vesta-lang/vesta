@@ -827,13 +827,7 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
          * mismo registro repetido.  Eso explicaba que fallara en Linux y no en
          * Windows, donde xmm6-15 si se preservan. */
         if (v0 != ir::IR_NO_VALUE) {
-            ir::IrInstr st{};
-            st.op = ir::IrOp::STORE;
-            st.type = vt;
-            st.dst = ir::IR_NO_VALUE;
-            st.operands = {v0, addr};
-            st.source_line = s->loc.line;
-            emit(current_block_, std::move(st));
+            emit_store_typed(addr, v0, vt, s->loc.line);
         }
         // Placeholder en el cuerpo: reg concreto -> su nombre; reg AUTO -> $N
         // (lo rellena el backend post-regalloc con el fisico que elija el RA).

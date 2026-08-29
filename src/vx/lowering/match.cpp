@@ -924,16 +924,7 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
                     bind(arm.bindings[bi], vh);
                     continue;
                 }
-                ir::IrValueId v = fn_->new_value(load_t);
-                {
-                    ir::IrInstr ld{};
-                    ld.op = ir::IrOp::LOAD;
-                    ld.type = load_t;
-                    ld.dst = v;
-                    ld.operands = {addr_i};
-                    ld.source_line = arm.loc.line;
-                    emit(current_block_, std::move(ld));
-                }
+                ir::IrValueId v = emit_load_typed(addr_i, load_t, arm.loc.line);
                 // optlike: el valor cargado ya es del tipo nativo del payload;
                 // sin recuperacion de bits (Some/Ok/Err guardan native).
                 if (elay.is_optlike) {

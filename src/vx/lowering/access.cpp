@@ -94,14 +94,7 @@ ir::IrValueId Lowering::lower_index_addr(ast::IndexExpr *e) {
         bind("base", ov_base);
         auto bind_sib_at = [&](const StructFieldInfo &sib, ir::IrValueId addr) {
             const ir::IrType stt = ir_type_from_primitive(sib.type.kind);
-            ir::IrValueId sv = fn_->new_value(stt);
-            ir::IrInstr l{};
-            l.op = ir::IrOp::LOAD;
-            l.type = stt;
-            l.dst = sv;
-            l.operands = {addr};
-            l.source_line = e->loc.line;
-            emit(current_block_, std::move(l));
+            ir::IrValueId sv = emit_load_typed(addr, stt, e->loc.line);
             bind(sib.name, sv);
         };
         auto add_off = [&](ir::IrValueId off_v) -> ir::IrValueId {
@@ -540,14 +533,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
                 fn_->values[addr].is_host_ptr = true;
             }
             if (sit->second.aggregate) return addr; // el valor ES la direccion
-            ir::IrValueId v = fn_->new_value(sit->second.ld_type);
-            ir::IrInstr ld{};
-            ld.op = ir::IrOp::LOAD;
-            ld.type = sit->second.ld_type;
-            ld.dst = v;
-            ld.operands = {addr};
-            ld.source_line = ln;
-            emit(current_block_, std::move(ld));
+            ir::IrValueId v = emit_load_typed(addr, sit->second.ld_type, ln);
             return v;
         }
     }
@@ -774,16 +760,7 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
             // Para STRING, LOAD i64 (GcHandle); para otros, LOAD con
             // ancho declarado.
             const ir::IrType load_t = is_string ? ir::IrType::I64 : t;
-            ir::IrValueId v_val = fn_->new_value(load_t);
-            {
-                ir::IrInstr ld{};
-                ld.op = ir::IrOp::LOAD;
-                ld.type = load_t;
-                ld.dst = v_val;
-                ld.operands = {v_addr};
-                ld.source_line = ln;
-                emit(current_block_, std::move(ld));
-            }
+            ir::IrValueId v_val = emit_load_typed(v_addr, load_t, ln);
             return v_val;
         }
     }
