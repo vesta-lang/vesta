@@ -39,6 +39,61 @@
 #include "lowering_internal.h" // la cocina compartida del lowering (no es su interfaz)
 
 namespace vx {
+namespace {
+
+/**
+ * @brief Un builtin que escribe UN escalar, y como se llama en cada camino.
+ *
+ * Los doce -- `print_int`, `print_hex`, `print_ptr`... -- hacen exactamente lo
+ * mismo: bajar el argumento, llevarlo a 64 bits y llamar a una primitiva.  Solo
+ * cambia CUAL.  Ese unico dato estaba repartido en cinco listas paralelas: una
+ * bandera por builtin, la cadena que decide si la familia es esta, la que
+ * decide si el builtin lleva un argumento, la de los nombres nativos y la de
+ * los de la maquina virtual.  Cinco sitios donde olvidarse de uno, y el
+ * olvido no se nota: la ultima cadena acababa en un @c else que mandaba el
+ * huerfano a imprimirse como cadena de C.
+ */
+struct ScalarPrinter {
+    Builtin b;         ///< Que builtin es.
+    const char *vm;    ///< La primitiva del runtime de la maquina virtual.
+    const char *bare;  ///< La del binario nativo; nulo si ahi todavia no hay.
+    /**
+     * @brief Si callar cuando el argumento no es lo que el nombre promete.
+     *
+     * Pasar un flotante a algo que escribe enteros trunca.  Once de los doce
+     * lo hacen en silencio y `print_int` avisa.  Esto NO es una decision de
+     * diseno: es lo que quedo de escribirlo en dos sitios distintos, y se
+     * conserva tal cual porque cambiarlo es cosa de quien disena el lenguaje,
+     * no de quien junta dos listas.
+     */
+    bool silent_on_lossy;
+};
+
+/// Los doce.  Un nulo en @c bare significa que ese camino aun no sabe hacerlo.
+constexpr ScalarPrinter kScalarPrinters[] = {
+    {Builtin::PrintInt, "vio_print_int", "__vx_print_i64", false},
+    {Builtin::PrintUint, "vio_print_uint", "__vx_print_u64", true},
+    {Builtin::PrintHex, "vio_print_hex", "__vx_print_hex", true},
+    {Builtin::PrintBin, "vio_print_bin", "__vx_print_bin", true},
+    {Builtin::PrintOct, "vio_print_oct", "__vx_print_oct", true},
+    {Builtin::PrintBool, "vio_print_bool", "__vx_print_bool", true},
+    {Builtin::PrintChar, "vio_print_char", "__vx_print_char", true},
+    {Builtin::PrintPtr, "vio_print_ptr", "__vx_print_ptr", true},
+    {Builtin::PrintCstr, "vio_print_cstr", "__vx_print_cstr", true},
+    {Builtin::PrintFloat, "vio_print_float", nullptr, true},
+    {Builtin::PrintColor, "vio_print_color", nullptr, true},
+    {Builtin::PrintGchandle, "vio_print_gchandle", nullptr, true},
+};
+
+/// @return La entrada de @p b, o nulo si @p b no escribe un escalar suelto.
+constexpr const ScalarPrinter *scalar_printer_for(Builtin b) {
+    for (const ScalarPrinter &sp : kScalarPrinters)
+        if (sp.b == b) return &sp;
+    return nullptr;
+}
+
+} // namespace
+
 /**
  * @brief Como se quiere ver un valor interpolado.
  *
@@ -171,22 +226,10 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         (b == Builtin::GcCollect); // fuerza GC + finalizadores
     const bool is_gc_finalize_all =
         (b == Builtin::GcFinalizeAll); // finaliza todo objeto GC con recurso
-    const bool is_print_int = (b == Builtin::PrintInt);
-    // builtins de I/O explicitos por tipo (sin newline; usar
-    // println o print + "\n" si lo necesitas).
-    const bool is_print_uint = (b == Builtin::PrintUint);
-    const bool is_print_hex = (b == Builtin::PrintHex);
-    const bool is_print_float = (b == Builtin::PrintFloat);
-    const bool is_print_bool = (b == Builtin::PrintBool);
-    const bool is_print_char = (b == Builtin::PrintChar);
-    const bool is_print_color = (b == Builtin::PrintColor);
-    const bool is_print_cstr = (b == Builtin::PrintCstr);
-    // formatos numericos alternativos (binario / octal) y impresion
-    // de punteros / handles de objetos GC + padding para alineacion.
-    const bool is_print_bin = (b == Builtin::PrintBin);
-    const bool is_print_oct = (b == Builtin::PrintOct);
-    const bool is_print_ptr = (b == Builtin::PrintPtr);
-    const bool is_print_gchandle = (b == Builtin::PrintGchandle);
+    /* Los que escriben UN escalar -- `print_int`, `print_hex`, `print_ptr`... --
+     * se preguntan de una vez: la tabla dice si @p b es de esos y, si lo es,
+     * como se llama la primitiva en cada camino.  Nulo es "no es de esos". */
+    const ScalarPrinter *const scalar = scalar_printer_for(b);
     const bool is_print_pad = (b == Builtin::PrintPad);
     // Secuencias de control del terminal (escapes VT100 fijos): sin valor que
     // formatear, pero salen por la misma primitiva que todo lo de arriba.
@@ -203,10 +246,7 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
      * Antes esto no hacia falta porque todo vivia en la misma funcion; ahora
      * evita construir los ayudantes para una llamada que no va a usarlos. */
     if (!(is_print || is_println || is_echo || is_flush || is_gc_collect ||
-          is_gc_finalize_all || is_print_int || is_print_uint || is_print_hex ||
-          is_print_float || is_print_bool || is_print_char || is_print_color ||
-          is_print_cstr || is_print_bin || is_print_oct || is_print_ptr ||
-          is_print_gchandle || is_print_pad || is_term_clear ||
+          is_gc_finalize_all || scalar || is_print_pad || is_term_clear ||
           is_term_clear_line || is_term_move || is_term_save_cursor ||
           is_term_restore_cursor || is_term_hide_cursor ||
           is_term_show_cursor || is_term_reset))
@@ -349,13 +389,15 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         return true;
     }
 
-    // ----- print_uint(n) / print_hex(n) / print_float(bits) /
-    //       print_bool(b) / print_char(cp) / print_color(code) -----
-    // Variantes explicitas por tipo: el caller fuerza el dispatch.
-    // print_int sigue funcionando (rama mas abajo) por compat.
-    if (is_print_uint || is_print_hex || is_print_float || is_print_bool ||
-        is_print_char || is_print_color || is_print_cstr || is_print_bin ||
-        is_print_oct || is_print_ptr || is_print_gchandle) {
+    /* ----- Los doce que escriben un escalar suelto -----
+     *
+     * `print_uint(n)`, `print_hex(n)`, `print_ptr(p)`, `print_int(n)`...  El
+     * nombre elige el formato; el trabajo es el mismo para todos, y por eso es
+     * UN camino y no doce.  `print_int` tenia el suyo aparte, identico salvo en
+     * si avisa cuando el argumento no es un entero -- eso se conserva, lo lleva
+     * la tabla -- y en el texto de un error, que era menos exacto que el comun:
+     * hoy ninguno de los doce exige un entero, todos convierten. */
+    if (scalar) {
         if (e->args.size() != 1) {
             return builtin_error(e->loc, std::string("'") + std::string(builtin_name(b)) +
                                              "' requiere exactamente un argumento", out_value);
@@ -369,67 +411,29 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
         // emitir la instruccion @c gchandle r_dst, r_src para
         // convertir el host_ptr al GcHandle (uint32) antes de
         // pasarlo al native como uint64 zero-extended.
-        if (is_print_gchandle &&
+        if (b == Builtin::PrintGchandle &&
             e->args[0]->result_type.kind == PrimitiveKind::CLASS) {
             v = emit_gc_handle_for_ptr(v, e->loc.line);
         }
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64, e->loc.line,
-                           /*is_explicit=*/true);
-        // AOT/bare: rutear a los formateadores nativos __vx_print_* (sin
-        // proc).  float/color/gchandle se difieren con warning.
+                           /*is_explicit=*/scalar->silent_on_lossy);
         if (native_poo_) {
-            std::string nf;
-            if (is_print_uint)
-                nf = "__vx_print_u64";
-            else if (is_print_hex)
-                nf = "__vx_print_hex";
-            else if (is_print_bool)
-                nf = "__vx_print_bool";
-            else if (is_print_char)
-                nf = "__vx_print_char";
-            else if (is_print_bin)
-                nf = "__vx_print_bin";
-            else if (is_print_oct)
-                nf = "__vx_print_oct";
-            else if (is_print_ptr)
-                nf = "__vx_print_ptr";
-            else if (is_print_cstr)
-                nf = "__vx_print_cstr";
-            if (nf.empty()) {
+            // Binario nativo: no hay proceso al que pasarle nada, se llama al
+            // formateador suelto.  Los que la tabla deja a nulo todavia no
+            // existen ahi, y eso se DICE en vez de escribir basura.
+            if (!scalar->bare) {
                 diags_.warning(e->loc, std::string("'") + std::string(builtin_name(b)) +
                                            "' en AOT nativo aun no soportado; "
                                            "se omite");
                 out_value = ir::IR_NO_VALUE;
                 return true;
             }
-            emit_io_prim(nf, {v}, e->loc.line);
+            emit_io_prim(scalar->bare, {v}, e->loc.line);
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        std::string func;
-        if (is_print_uint)
-            func = "vio_print_uint";
-        else if (is_print_hex)
-            func = "vio_print_hex";
-        else if (is_print_float)
-            func = "vio_print_float";
-        else if (is_print_bool)
-            func = "vio_print_bool";
-        else if (is_print_char)
-            func = "vio_print_char";
-        else if (is_print_color)
-            func = "vio_print_color";
-        else if (is_print_bin)
-            func = "vio_print_bin";
-        else if (is_print_oct)
-            func = "vio_print_oct";
-        else if (is_print_ptr)
-            func = "vio_print_ptr";
-        else if (is_print_gchandle)
-            func = "vio_print_gchandle";
-        else
-            func = "vio_print_cstr"; // host_ptr -> bytes hasta NUL
-        emit_native_call(kVestaIoLib, func, {v}, ir::IrType::VOID, e->loc.line);
+        emit_native_call(kVestaIoLib, scalar->vm, {v}, ir::IrType::VOID,
+                         e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -452,33 +456,6 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e,
                              e->loc.line, true);
         emit_native_call(kVestaIoLib, "vio_print_pad", {v_fill, v_w},
                          ir::IrType::VOID, e->loc.line);
-        out_value = ir::IR_NO_VALUE;
-        return true;
-    }
-
-    // ----- print_int(n) -----
-    // Imprime un entero con signo seguido de '\n'.  Pasa el valor
-    // numerico directamente, sin VAs.
-    if (is_print_int) {
-        if (e->args.size() != 1) {
-            return builtin_error(e->loc,
-                                 "'print_int' requiere exactamente un argumento entero", out_value);
-        }
-        ir::IrValueId v = lower_expr(e->args[0].get());
-        if (v == ir::IR_NO_VALUE) {
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        // Forzar i64 para coincidir con la firma C de vio_print_int.
-        v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64,
-                           e->loc.line);
-        if (native_poo_) {
-            emit_io_prim("__vx_print_i64", {v}, e->loc.line);
-            out_value = ir::IR_NO_VALUE;
-            return true;
-        }
-        emit_native_call(kVestaIoLib, "vio_print_int", {v}, ir::IrType::VOID,
-                         e->loc.line);
         out_value = ir::IR_NO_VALUE;
         return true;
     }
