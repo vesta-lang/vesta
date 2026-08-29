@@ -383,11 +383,8 @@ static std::string global_cache_path_(const std::string &source_path,
     if (dir.empty()) return std::string(); // no global cache
     // hash 64 del path canonico para que multiples sources con mismo
     // basename no colisionen.
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (char c : source_path) {
-        h ^= static_cast<uint64_t>(static_cast<uint8_t>(c));
-        h *= 0x100000001b3ULL;
-    }
+    const uint64_t h = util::fnv_bytes(util::kFnvOffset, source_path.data(),
+                                       source_path.size());
     std::string base = fs::path(source_path).stem().string();
     char hex[17];
     std::snprintf(hex, sizeof(hex), "%016llx",
@@ -2009,6 +2006,14 @@ CompileResult compile_vx_project(
         // forma de distinguirlo de un bug real.
         source_hash ^= compiler_fingerprint_() + 0x9E3779B97F4A7C15ULL +
                        (source_hash << 6) + (source_hash >> 2);
+        /* Y los mandos del entorno que cambian lo EMITIDO: el `.vxir` de un
+         * modulo compilado con un pase apagado no vale para uno compilado con
+         * el puesto.  Vale cero cuando no hay ninguno -- el caso normal --, asi
+         * que no invalida nada de lo ya guardado. */
+        if (const uint64_t env_fp = util::emitted_fingerprint()) {
+            source_hash ^= env_fp + 0x9E3779B97F4A7C15ULL +
+                           (source_hash << 6) + (source_hash >> 2);
+        }
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             const uint64_t instrument_hash = vxi_fnv1a(opts.instrument_mode);
             source_hash ^= instrument_hash + 0x9E3779B97F4A7C15ULL +

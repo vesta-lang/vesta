@@ -9,6 +9,8 @@
  * cacheado al output.
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
+#include "util/env_flags.h" // los mandos que cambian lo emitido
 #include "vx/project_cache.h"
 
 #include "analysis/asa/fact_file.h"
@@ -141,12 +143,8 @@ bool write_file_atomic_internal(const std::string &path,
 } // namespace
 
 uint64_t fnv1a64_bytes(const uint8_t *data, size_t size) noexcept {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    for (size_t i = 0; i < size; ++i) {
-        h ^= static_cast<uint64_t>(data[i]);
-        h *= 0x100000001b3ULL;
-    }
-    return h;
+    // La semilla y el primo viven en util/fnv.h, no aqui.
+    return util::fnv_bytes(util::kFnvOffset, data, size);
 }
 
 static uint32_t fnv1a32_str(const std::string &s) noexcept {
@@ -206,7 +204,17 @@ uint32_t project_cache_opts_hash(const ProjectCacheKey &key) {
        << "|aot=" << (key.aot ? 1 : 0) << "|arch=" << key.aot_arch
        << "|fmt=" << key.aot_format << "|emit=" << key.aot_emit
        << "|tgt=" << key.aot_target << "|tier=" << key.aot_tier
-       << "|perfil=" << key.aot_perfil;
+       << "|perfil=" << key.aot_perfil
+       /* Y los mandos del entorno que cambian lo EMITIDO.  Es la tercera lista
+        * escrita a mano de "que cambia el artefacto", y ninguna de las tres
+        * consultaba la huella que existe para justo eso.  Sin ella, compilar
+        * con `VESTA_NO_SPEC_DEVIRT=1` y despues sin el devolvia el artefacto de
+        * la primera vez, byte a byte: un binario que no corresponde a la
+        * configuracion con la que se pidio, y sin un aviso.
+        *
+        * Vale cero cuando no hay ninguno puesto -- el caso normal --, asi que
+        * no invalida nada de lo ya guardado. */
+       << "|env=" << util::emitted_fingerprint();
     return fnv1a32_str(os.str());
 }
 
@@ -228,7 +236,8 @@ uint32_t project_cache_diag_hash(const ProjectCacheKey &key) {
         * para proteger lo poco que de verdad es especifico.  El nivel de
         * runtime SI entra, porque cambia que codigo se baja, no donde vale lo
         * sabido. */
-       << "|tier=" << key.aot_tier;
+       << "|tier=" << key.aot_tier
+       << "|env=" << util::emitted_fingerprint();
     return fnv1a32_str(os.str());
 }
 

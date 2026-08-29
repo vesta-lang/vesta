@@ -63,6 +63,7 @@
  * Despreciable comparado con el lex+parse del .vx original (~3-5 ms).
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/module/vxi_format.h"
 
 #include <algorithm>
@@ -234,15 +235,8 @@ bool interfaz_menciona_tipo_ajeno(const VxiModule &mod) {
 } // namespace
 
 uint64_t vxi_fnv1a(const void *data, size_t len) noexcept {
-    constexpr uint64_t OFFSET = 0xCBF29CE484222325ULL;
-    constexpr uint64_t PRIME = 0x100000001B3ULL;
-    const auto *p = static_cast<const uint8_t *>(data);
-    uint64_t h = OFFSET;
-    for (size_t i = 0; i < len; ++i) {
-        h ^= static_cast<uint64_t>(p[i]);
-        h *= PRIME;
-    }
-    return h;
+    // La semilla y el primo viven en util/fnv.h, no aqui.
+    return util::fnv_bytes(util::kFnvOffset, data, len);
 }
 
 // ===========================================================================

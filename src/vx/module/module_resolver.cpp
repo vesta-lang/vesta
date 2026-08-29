@@ -13,6 +13,7 @@
  *   - Reserva anticipada de vectores (avoids realloc en hot paths).
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "vx/source_text.h"
 #include "util/env_flags.h"
 #include "vx/module/module_resolver.h"
@@ -155,11 +156,8 @@ std::string derive_package_id(const std::string &root_path,
     const std::string version = extract("version");
     const std::string ident = name + "@" + version;
     // FNV-1a 64 sobre name@version -> hex.  Mismo esquema que abi_hash.
-    uint64_t h = 0xCBF29CE484222325ull;
-    for (unsigned char c : ident) {
-        h ^= c;
-        h *= 0x100000001B3ull;
-    }
+    const uint64_t h =
+        util::fnv_bytes(util::kFnvOffset, ident.data(), ident.size());
     char buf[19];
     std::snprintf(buf, sizeof(buf), "pkg:%012llx",
                   (unsigned long long)(h & 0xFFFFFFFFFFFFull));

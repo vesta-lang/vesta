@@ -64,6 +64,20 @@ SELLO_TIEMPO = range(32, 40)
 N_MODULOS = 6
 
 
+# Fuente del caso "configuracion/mando": necesita DESPACHO VIRTUAL, que es lo
+# que apaga el mando con el que se comprueba la clave de la cache.
+FUENTE_DESPACHO = """class Base { public i64 f() { return 0; } }
+class A : Base { @Override public i64 f() { return 1; } }
+class B : Base { @Override public i64 f() { return 2; } }
+Base dame(i64 k) { if (k == 0) { return new A(); } return new B(); }
+i32 main() {
+    Base p = dame(0);
+    i64 acc = 0;
+    for (i64 i = 0; i < 100; i = i + 1) { acc = acc + p.f(); }
+    return (i32) acc;
+}
+"""
+
 def fuente_modulo(idx: int, funcs: int = 12) -> str:
     """Un modulo con `funcs` ayudantes internos y UNA funcion publica que los suma.
 
@@ -160,10 +174,16 @@ def artefacto(salida: Path) -> Path | None:
     return None
 
 
-def compilar(vm, proyecto, salida, modo, cache_dir, arch="x86-64", opt=None):
-    """Compila y devuelve la ruta del artefacto, o None si fallo."""
+def compilar(vm, proyecto, salida, modo, cache_dir, arch="x86-64", opt=None,
+             mandos=None):
+    """Compila y devuelve la ruta del artefacto, o None si fallo.
+
+    @param mandos Variables de entorno extra (los mandos del compilador).
+    """
     entorno = dict(os.environ, VX_CACHE_DIR=str(cache_dir),
                    VX_CAS_DIR=str(Path(cache_dir) / "cas"))
+    if mandos:
+        entorno.update(mandos)
     r = subprocess.run(orden(vm, proyecto, salida, modo, arch, opt),
                        capture_output=True, env=entorno, timeout=600,
                        cwd=str(RAIZ))
@@ -293,6 +313,71 @@ def caso_configuracion(vm, tmp, resultados):
             resultados.append(("configuracion/arch", not d,
                                "" if not d else
                                "volver a x86-64 != x86-64 original: " + informe(d)))
+
+    # Eje 3: un mando del entorno que cambia lo EMITIDO.
+    #
+    # Es el eje que faltaba, y el que menos se ve: los otros dos se piden en la
+    # linea de ordenes, este viaja en el entorno.  Su huella estaba escrita y
+    # probada en util/env_flags, pero NINGUNA de las claves de cache la
+    # llamaba, asi que compilar con el mando y despues sin el devolvia el
+    # artefacto de la primera vez -- byte a byte, sin un aviso.
+    #
+    # Va con fuente PROPIO: el proyecto de los demas casos son funciones
+    # planas, y sobre ellas ningun mando del optimizador cambia un solo byte
+    # -- el caso pasaria sin comprobar nada.  Aqui hace falta despacho
+    # virtual, que es lo que el mando elegido apaga.
+    proy_m = tmp / "cfg_mando"
+    proy_m.mkdir(parents=True, exist_ok=True)
+    (proy_m / "main.vx").write_text(FUENTE_DESPACHO, encoding="utf-8")
+    cache_m = tmp / "cache_mando"
+    MANDO = {"VESTA_NO_SPEC_DEVIRT": "1"}
+
+    def compilar_y_guardar(nombre, mandos=None):
+        """Compila y se lleva el artefacto APARTE.
+
+        Hace falta copiarlo: `purgar` borra tambien lo que queda junto al
+        fuente, asi que un artefacto dejado en el proyecto no sobrevive a la
+        siguiente purga y compararlo despues abre un fichero que ya no esta.
+        """
+        a, err = compilar(vm, proy_m, proy_m / nombre, "vm", cache_m,
+                          mandos=mandos)
+        if a is None:
+            return None, err
+        copia = tmp / ("mando_" + nombre + ".bin")
+        shutil.copyfile(a, copia)
+        return copia, ""
+
+    # Premisa: purgando entre las dos, el mando TIENE que cambiar el binario.
+    # Si no lo cambia, este caso no comprueba nada y hay que decirlo.
+    purgar(proy_m, cache_m)
+    base, e1 = compilar_y_guardar("a1")
+    purgar(proy_m, cache_m)
+    con_mando, e2 = compilar_y_guardar("a2", MANDO)
+    if base is None or con_mando is None:
+        resultados.append(("configuracion/mando", False,
+                           "no compila: " + (e1 or e2)))
+    elif not difieren(base, con_mando):
+        resultados.append(("configuracion/mando", False,
+                           "el mando no cambia el binario ni purgando: el "
+                           "caso no comprueba nada, hay que elegir otro"))
+    else:
+        # Lo que importa: la MISMA cache para las dos, y la vuelta.
+        purgar(proy_m, cache_m)
+        b1, _ = compilar_y_guardar("b1")
+        b2, _ = compilar_y_guardar("b2", MANDO)
+        b3, _ = compilar_y_guardar("b3")
+        if b1 is None or b2 is None or b3 is None:
+            resultados.append(("configuracion/mando", False, "no compila"))
+        elif not difieren(b1, b2):
+            resultados.append((
+                "configuracion/mando", False,
+                "con la misma cache, el mando dio el MISMO binario: no esta "
+                "en la clave"))
+        else:
+            d = difieren(b1, b3)
+            resultados.append(("configuracion/mando", not d,
+                               "" if not d else
+                               "volver sin el mando != original: " + informe(d)))
 
     # Eje 2: el nivel de optimizacion.
     purgar(proy, cache)

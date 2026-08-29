@@ -26,6 +26,7 @@
  *   ir_verify()      -- verificar forma SSA
  */
 
+#include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "ir/ssa_ir.h"
 
 #include <sstream>
@@ -438,12 +439,8 @@ namespace {
  *        Local al TU para no introducir dep circular con vx/.
  */
 inline uint64_t fnv1a_local_64(const uint8_t *p, size_t n) noexcept {
-    uint64_t h = 0xcbf29ce484222325ull;
-    for (size_t i = 0; i < n; ++i) {
-        h ^= static_cast<uint64_t>(p[i]);
-        h *= 0x100000001b3ull;
-    }
-    return h;
+    // La semilla y el primo viven en util/fnv.h, no aqui.
+    return util::fnv_bytes(util::kFnvOffset, p, n);
 }
 } // namespace
 
