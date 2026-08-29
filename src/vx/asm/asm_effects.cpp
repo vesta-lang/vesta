@@ -1411,7 +1411,35 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
     m.reserve(mnemonic.size());
     for (char c : mnemonic)
         m.push_back((char)std::tolower((unsigned char)c));
-    if (is_x86(arch)) m = x86_canonical_mnemonic(m);
+    /* El prefijo de repeticion SI cambia lo que se toca, en una cosa: el
+     * contador.  `movsb` copia un elemento y no mira `rcx`; `rep movsb` lo lee
+     * en cada vuelta y lo deja a cero.  Al quitar el prefijo para preguntar por
+     * la instruccion, eso se perdia -- y sin saber que `rcx` se lee, quien
+     * asigna registros da por muerta la ligadura `register("rcx")` y no llega a
+     * colocar el valor: `rep movsb` arrancaba con lo que hubiera en `rcx`.  Se
+     * veia como `memcpy_erms` copiando basura o sin terminar nunca.
+     *
+     * `rcx` se anota como leido Y escrito porque las dos cosas son ciertas, y
+     * la segunda importa igual: quien lea `rcx` despues del bloque no puede
+     * quedarse con el valor de antes. */
+    bool es_repeticion = false;
+    if (is_x86(arch)) {
+        for (const char *p :
+             {"rep_", "repe_", "repne_", "repz_", "repnz_", "rep ", "repe ",
+              "repne ", "repz ", "repnz "})
+            if (m.compare(0, std::strlen(p), p) == 0) {
+                es_repeticion = true;
+                break;
+            }
+        m = x86_canonical_mnemonic(m);
+    }
+    auto con_contador = [&](AsmEffects e) {
+        if (es_repeticion) {
+            e.implicit_read.emplace_back("rcx");
+            e.implicit_write.emplace_back("rcx");
+        }
+        return e;
+    };
 
     const bool x86 = is_x86(arch);
     const EffTable *tabla = table_for_arch(arch);
@@ -1440,7 +1468,7 @@ AsmEffects asm_effects_for(const std::string &mnemonic,
         return unknown;
     }
     auto it = table.find(m);
-    if (it != table.end()) return it->second;
+    if (it != table.end()) return con_contador(it->second);
 
     if (x86) {
         // setcc (sete/setne/...) y cmovcc se reconocen por prefijo: escriben
