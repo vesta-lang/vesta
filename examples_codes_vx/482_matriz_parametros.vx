@@ -87,10 +87,11 @@ i64 f_compartido(shared i64 x) { return x; }
 // Contexto 2: metodo de clase.  Contexto 3: su constructor, que lo parsea otra
 // rama y recibe las doce formas de golpe.
 // ---------------------------------------------------------------------------
-// Las doce formas en un constructor, repartidas en DOS.  No es por gusto: un
-// constructor con las doce a la vez trae basura -- once van bien y la doceava
-// lo rompe --, y hasta saber por que no se fija aqui un comportamiento que no
-// se entiende.  Reproductor y lo medido, en la memoria del proyecto.
+// Las doce formas en un constructor, repartidas en DOS.  No es por gusto: en la
+// maquina virtual no caben las doce mas `this` en los doce registros de
+// argumento, y desde que eso se DICE en vez de callarse, escribirlas juntas
+// aqui seria un error de compilacion.  En nativo si caben, y eso se prueba en
+// el 483 con `@Target`.
 class CtorA {
     public i64 suma;
     public CtorA(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
