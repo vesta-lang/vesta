@@ -811,6 +811,32 @@ class Lowering {
      * @param e   Expresion por la que empezar.
      * @param out Donde anñadir los nombres leidos.
      */
+    /**
+     * @brief Despacha un `match` de muchos casos por un arbol de busqueda.
+     *
+     * Con pocos casos se comparan uno a uno; con muchos, eso son muchas
+     * comparaciones en el peor caso.  El arbol parte por la mitad y baja: el
+     * doble de casos cuesta una comparacion mas, no el doble.
+     *
+     * Se corta en dos casos por hoja porque el arbol ahorra comparaciones
+     * pero cada nodo cuesta un bloque y un salto; por debajo de ahi no
+     * compensa.
+     *
+     * @param value       El valor que se despacha.
+     * @param cases       Los casos, ORDENADOS por su valor.
+     * @param lo,hi       El tramo de @p cases que toca a esta llamada.
+     * @param cur         Bloque donde emitir.
+     * @param default_bb  A donde ir si no encaja ninguno.
+     * @param prefix      Con que empiezan los nombres de los bloques nuevos.
+     * @param source_line Linea fuente, para la depuracion.
+     */
+    void emit_case_bst(ir::IrValueId value,
+                       const std::vector<std::pair<int64_t, ir::IrBlockId>>
+                           &cases,
+                       size_t lo, size_t hi, ir::IrBlockId cur,
+                       ir::IrBlockId default_bb, const char *prefix,
+                       uint32_t source_line);
+
     void scan_read_names_expr(const ast::Expr *e,
                               std::unordered_set<std::string> &out);
 

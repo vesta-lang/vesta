@@ -45,6 +45,46 @@ static int64_t eval_scalar_pattern(const ast::Expr *p) {
     return 0;
 }
 } // namespace
+/**
+ * @copydoc vx::Lowering::emit_case_bst
+ */
+void Lowering::emit_case_bst(
+    ir::IrValueId value,
+    const std::vector<std::pair<int64_t, ir::IrBlockId>> &cases, size_t lo,
+    size_t hi, ir::IrBlockId cur, ir::IrBlockId default_bb,
+    const char *prefix, uint32_t source_line) {
+    current_block_ = cur;
+    // Con dos o menos, comparar uno a uno sale mas barato que seguir
+    // partiendo: el arbol ahorra comparaciones, pero cada nodo cuesta un
+    // bloque y un salto.
+    if (hi - lo <= 2) {
+        for (size_t k = lo; k < hi; ++k) {
+            const ir::IrValueId tc = emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(cases[k].first),
+                source_line);
+            const ir::IrValueId eq = emit_ir_binop(
+                ir::IrOp::CMP_EQ, value, tc, ir::IrType::BOOL, source_line);
+            const ir::IrBlockId nb =
+                fn_->new_block(std::string(prefix) + "_next");
+            emit_br_cond(eq, cases[k].second, nb, source_line);
+            current_block_ = nb;
+        }
+        emit_br(default_bb, source_line);
+        return;
+    }
+    const size_t mid = lo + (hi - lo) / 2;
+    const ir::IrValueId tc = emit_const(
+        ir::IrType::I64, static_cast<uint64_t>(cases[mid].first), source_line);
+    // Con signo: los casos vienen ordenados como numeros, no como bits.
+    const ir::IrValueId lt = emit_ir_binop(ir::IrOp::CMP_LT, value, tc,
+                                           ir::IrType::BOOL, source_line);
+    const ir::IrBlockId lb = fn_->new_block(std::string(prefix) + "_lt");
+    const ir::IrBlockId rb = fn_->new_block(std::string(prefix) + "_ge");
+    emit_br_cond(lt, lb, rb, source_line);
+    emit_case_bst(value, cases, lo, mid, lb, default_bb, prefix, source_line);
+    emit_case_bst(value, cases, mid, hi, rb, default_bb, prefix, source_line);
+}
+
 
 ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     // 1. Valor del scrutinee (entero/char).  Se compara como i64.
@@ -117,48 +157,8 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
     const bool use_bst = !any_guard && !any_range && sw_cases.size() >= 5;
     if (use_bst) {
         // BST balanceado O(log N): cmp_lt en nodos, cmp_eq en hojas.
-        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
-            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
-                current_block_ = cur;
-                if (hi - lo <= 2) {
-                    for (size_t k = lo; k < hi; ++k) {
-                        ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
-                        ir::IrValueId tc = emit_const(
-                            ir::IrType::I64, (uint64_t)sw_cases[k].first,
-                            e->loc.line);
-                        ir::IrInstr cm{};
-                        cm.op = ir::IrOp::CMP_EQ;
-                        cm.type = ir::IrType::BOOL;
-                        cm.dst = cmp;
-                        cm.operands = {tag_v, tc};
-                        cm.source_line = e->loc.line;
-                        emit(current_block_, std::move(cm));
-                        ir::IrBlockId nb = fn_->new_block("s_next");
-                        emit_br_cond(cmp, sw_cases[k].second, nb, e->loc.line);
-                        current_block_ = nb;
-                    }
-                    emit_br(default_bb, e->loc.line);
-                    return;
-                }
-                const size_t mid = lo + (hi - lo) / 2;
-                ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
-                ir::IrValueId tc =
-                    emit_const(ir::IrType::I64, (uint64_t)sw_cases[mid].first,
-                               e->loc.line);
-                ir::IrInstr cm{};
-                cm.op = ir::IrOp::CMP_LT;
-                cm.type = ir::IrType::BOOL;
-                cm.dst = cmp;
-                cm.operands = {tag_v, tc};
-                cm.source_line = e->loc.line;
-                emit(current_block_, std::move(cm));
-                ir::IrBlockId lb = fn_->new_block("s_lt");
-                ir::IrBlockId rb = fn_->new_block("s_ge");
-                emit_br_cond(cmp, lb, rb, e->loc.line);
-                emit_bst(lo, mid, lb);
-                emit_bst(mid, hi, rb);
-            };
-        emit_bst(0, sw_cases.size(), current_block_);
+        emit_case_bst(tag_v, sw_cases, 0, sw_cases.size(), current_block_,
+                      default_bb, "s", e->loc.line);
     } else {
         // Cadena lineal en orden de arm (pocos casos, guards, o rangos).
         // Helper: emite BR_COND cmp -> target, else fall.
@@ -343,48 +343,8 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
     }
     const bool use_bst = sw_cases.size() >= 5;
     if (use_bst) {
-        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
-            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
-                current_block_ = cur;
-                if (hi - lo <= 2) {
-                    for (size_t k = lo; k < hi; ++k) {
-                        ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
-                        ir::IrValueId tc = emit_const(
-                            ir::IrType::I64, (uint64_t)sw_cases[k].first,
-                            e->loc.line);
-                        ir::IrInstr cm{};
-                        cm.op = ir::IrOp::CMP_EQ;
-                        cm.type = ir::IrType::BOOL;
-                        cm.dst = cmp;
-                        cm.operands = {h_v, tc};
-                        cm.source_line = e->loc.line;
-                        emit(current_block_, std::move(cm));
-                        ir::IrBlockId nb = fn_->new_block("h_next");
-                        emit_br_cond(cmp, sw_cases[k].second, nb, e->loc.line);
-                        current_block_ = nb;
-                    }
-                    emit_br(default_bb, e->loc.line);
-                    return;
-                }
-                const size_t mid = lo + (hi - lo) / 2;
-                ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
-                ir::IrValueId tc =
-                    emit_const(ir::IrType::I64, (uint64_t)sw_cases[mid].first,
-                               e->loc.line);
-                ir::IrInstr cm{};
-                cm.op = ir::IrOp::CMP_LT;
-                cm.type = ir::IrType::BOOL;
-                cm.dst = cmp;
-                cm.operands = {h_v, tc};
-                cm.source_line = e->loc.line;
-                emit(current_block_, std::move(cm));
-                ir::IrBlockId lb = fn_->new_block("h_lt");
-                ir::IrBlockId rb = fn_->new_block("h_ge");
-                emit_br_cond(cmp, lb, rb, e->loc.line);
-                emit_bst(lo, mid, lb);
-                emit_bst(mid, hi, rb);
-            };
-        emit_bst(0, sw_cases.size(), current_block_);
+        emit_case_bst(h_v, sw_cases, 0, sw_cases.size(), current_block_,
+                      default_bb, "h", e->loc.line);
     } else {
         for (const auto &c : sw_cases) {
             ir::IrValueId cmp = fn_->new_value(ir::IrType::BOOL);
@@ -663,50 +623,8 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         // cmp_lt tag < cases[mid] -> izquierda [lo,mid); else derecha
         // [mid,hi).  En hojas (<=2 casos): cmp_eq lineal -> arm; al final
         // br a default_bb.  O(log N) comparaciones.
-        std::function<void(size_t, size_t, ir::IrBlockId)> emit_bst =
-            [&](size_t lo, size_t hi, ir::IrBlockId cur) {
-                current_block_ = cur;
-                if (hi - lo <= 2) {
-                    for (size_t k = lo; k < hi; ++k) {
-                        ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
-                        ir::IrValueId tc =
-                            emit_const(ir::IrType::I64,
-                                       static_cast<uint64_t>(sw_cases[k].first),
-                                       e->loc.line);
-                        ir::IrInstr cm{};
-                        cm.op = ir::IrOp::CMP_EQ;
-                        cm.type = ir::IrType::BOOL;
-                        cm.dst = cmp_v;
-                        cm.operands = {tag_v, tc};
-                        cm.source_line = e->loc.line;
-                        emit(current_block_, std::move(cm));
-                        ir::IrBlockId nb = fn_->new_block("sw_next");
-                        emit_br_cond(cmp_v, sw_cases[k].second,
-                                     nb, e->loc.line);
-                        current_block_ = nb;
-                    }
-                    emit_br(default_bb, e->loc.line);
-                    return;
-                }
-                const size_t mid = lo + (hi - lo) / 2;
-                ir::IrValueId cmp_v = fn_->new_value(ir::IrType::BOOL);
-                ir::IrValueId tc = emit_const(
-                    ir::IrType::I64, static_cast<uint64_t>(sw_cases[mid].first),
-                    e->loc.line);
-                ir::IrInstr cm{};
-                cm.op = ir::IrOp::CMP_LT; // tag < cases[mid] (con signo)
-                cm.type = ir::IrType::BOOL;
-                cm.dst = cmp_v;
-                cm.operands = {tag_v, tc};
-                cm.source_line = e->loc.line;
-                emit(current_block_, std::move(cm));
-                ir::IrBlockId lb = fn_->new_block("sw_lt");
-                ir::IrBlockId rb = fn_->new_block("sw_ge");
-                emit_br_cond(cmp_v, lb, rb, e->loc.line);
-                emit_bst(lo, mid, lb);
-                emit_bst(mid, hi, rb);
-            };
-        emit_bst(0, sw_cases.size(), current_block_);
+        emit_case_bst(tag_v, sw_cases, 0, sw_cases.size(), current_block_,
+                      default_bb, "sw", e->loc.line);
     } else {
         // Cadena lineal O(N) (con guards, o pocos casos).
         for (size_t i = 0; i < e->arms.size(); ++i) {
