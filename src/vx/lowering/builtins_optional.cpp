@@ -282,11 +282,27 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
             out_value = ir::IR_NO_VALUE;
             return true;
         }
-        // Optional<T>: LOAD i32 (flag) directamente del buffer stack.
+        /* Optional<T>: la respuesta depende de como este puesto en memoria.
+         * Con marca aparte se lee la marca; sin ella, la lleva el propio valor
+         * -- un puntero presente no puede ser nulo -- y la pregunta es la misma
+         * que para un puntero crudo, que ya esta resuelta unas lineas mas
+         * abajo.  Preguntando aqui, el dia que la disposicion cambie este sitio
+         * no hay que tocarlo. */
         if (e->args[0]->result_type.kind == PrimitiveKind::OPTIONAL) {
-            const ir::IrValueId v_dst =
-                emit_load_typed(v_arg, ir::IrType::I32, e->loc.line);
-            out_value = v_dst;
+            const OptionalLayout lay = optional_layout(e->args[0]->result_type);
+            if (lay.has_tag) {
+                out_value =
+                    emit_load_typed(v_arg, ir::IrType::I32, e->loc.line);
+                return true;
+            }
+            const ir::IrValueId v_val =
+                emit_load_typed(v_arg, ir::IrType::I64, e->loc.line);
+            const ir::IrValueId v_nulo = emit_ir_unop(
+                ir::IrOp::ISNULL, v_val, ir::IrType::I32, e->loc.line);
+            const ir::IrValueId v_uno =
+                emit_const(ir::IrType::I32, 1, e->loc.line);
+            out_value = emit_ir_binop(ir::IrOp::XOR, v_nulo, v_uno,
+                                      ir::IrType::I32, e->loc.line);
             return true;
         }
         // raw_asm-elim 2026-05-28: isPresent(p) = (p != null) implementado
@@ -332,20 +348,26 @@ bool Lowering::try_lower_optional_builtins(ast::CallExpr *e, Builtin b,
                 at.pointee ? *at.pointee : Type{PrimitiveKind::I64};
             const ir::IrType payload_t =
                 ir_type_from_primitive(payload_st.kind);
+            /* Donde esta cada cosa lo dice la disposicion.  Sin marca aparte,
+             * lo que se comprueba es el propio valor -- que es lo que la lleva
+             * -- y esta en el desplazamiento cero. */
+            const OptionalLayout lay = optional_layout(at);
             if (is_unwrap) {
-                // Load flag (i64) from buf+0.
-                const ir::IrValueId v_flag =
+                /* Lo que hay en el desplazamiento cero es lo que decide si el
+                 * valor esta: la marca cuando va aparte, y el valor mismo
+                 * cuando no -- un puntero presente no es nulo --.  En los dos
+                 * casos la comprobacion es la misma: lanzar si es cero. */
+                const ir::IrValueId v_marca =
                     emit_load_typed(v_arg, ir::IrType::I64, e->loc.line);
-                // VM unwrap on flag: throws NPE if 0, returns 1 otherwise.
-                const ir::IrValueId v_chk =
-                    emit_ir_unop(ir::IrOp::UNWRAP, v_flag,
-                                 ir::IrType::I64, e->loc.line);
+                (void)emit_ir_unop(ir::IrOp::UNWRAP, v_marca, ir::IrType::I64,
+                                   e->loc.line);
             }
-            // Load payload from buf+8.
-            const ir::IrValueId v_eight =
-                emit_const(ir::IrType::I64, 8, e->loc.line);
+            // Y el valor, donde la disposicion diga.
+            const ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, static_cast<uint64_t>(lay.value_offset),
+                e->loc.line);
             const ir::IrValueId v_at =
-                emit_ptr_add(v_arg, v_eight, e->loc.line);
+                emit_ptr_add(v_arg, v_off, e->loc.line);
             // BugFix sret-cross-mem: propagar is_host_ptr del buffer al puntero
             // buf+8 para que el LOAD del payload emita `loadzh`/`movh` (host).
             // Sin esto, un Optional en buffer host (retornado por una fn SRET)
