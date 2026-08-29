@@ -3453,8 +3453,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // de r2.  Por eso colocamos obj en r1 y los demas operandos
         // en r2, r3, ...  El parallel-move resuelve cualquier
         // reordenamiento (ej. arg que ya esta en r1 por live ranges).
+        /* Los argumentos viajan en r1..r12 y AQUI el primero es `this`, asi
+         * que declarados caben ONCE, no doce: r2..r12.  El recorte decia doce
+         * -- el numero de registros, sin contar que uno ya esta ocupado -- y el
+         * doceavo acababa escrito en r13, que es scratch del propio emisor.  No
+         * fallaba al colocarlo: fallaba despues, en cuanto el cuerpo del metodo
+         * llamaba a algo y ese scratch se reusaba, y entonces el argumento
+         * llegaba con basura.  El comprobador de tipos rechaza pasar de once
+         * antes de llegar aqui; este recorte es la red por si algo lo esquiva. */
         const size_t nargs = ins.operands.size() > 1
-                                 ? std::min(ins.operands.size() - 1, (size_t)12)
+                                 ? std::min(ins.operands.size() - 1, (size_t)11)
                                  : 0;
         std::vector<std::pair<int, Reg>> moves;
         std::vector<std::pair<int, ir::IrValueId>> spilled_args;

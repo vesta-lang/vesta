@@ -263,27 +263,180 @@
     "Ensamblador en linea": {
         "prefix": "asm",
         "body": [
-            "register(\"${1:rax}\") ${2:i64} ${3:r} = ${4:0};",
+            "register(\"${1:rax}\") ${2:i64} ${3:r};",
             "asm volatile {",
             "\t$0",
-            "};"
+            "}"
         ],
         "description": "Bloque de ensamblador en linea; los valores entran y salen por variables con registro fijo."
     },
-    "Funcion en ensamblador": {
-        "prefix": "asmfn",
+    "Funcion sin prologo": {
+        "prefix": "naked",
         "body": [
-            "@Asm",
-            "${1:u64} ${2:nombre}(${3:u64 a}) {",
-            "\t$0",
-            "\tret",
+            "@Naked ${1:i64} ${2:nombre}(${3:i64 a}) {",
+            "\tasm volatile {",
+            "\t\t$0",
+            "\t\tret",
+            "\t}",
             "}"
         ],
-        "description": "Funcion cuyo cuerpo entero se escribe en ensamblador de la maquina virtual."
+        "description": "Funcion sin prologo ni epilogo: el cuerpo entero es ensamblador."
     },
     "Contrato de complejidad": {
         "prefix": "complexity",
         "body": ["@complexity(O(${1:n}), n = ${2:arg0})"],
         "description": "Contrato de coste que el compilador comprueba contra lo que infiere."
+    },
+    "Importacion selectiva": {
+        "prefix": "importonly",
+        "body": ["import ${1:std.memory} only ${2:memcpy, memset};"],
+        "description": "Importacion de simbolos concretos de un modulo."
+    },
+    "Objetivo de compilacion": {
+        "prefix": "target",
+        "body": ["@Target(${1|windows,linux|}, ${2|x86_64,x86_32,aarch64|})"],
+        "description": "Restringe la declaracion al sistema y la arquitectura indicados."
+    },
+    "Concepto": {
+        "prefix": "concept",
+        "body": ["concept ${1:Nombre}<${2:T}> = ${0:is_integer<${2:T}>()};"],
+        "description": "Predicado de tiempo de compilacion que restringe un parametro generico."
+    },
+    "Concepto con bloque": {
+        "prefix": "conceptblock",
+        "body": [
+            "concept ${1:Nombre}<${2:T}> {",
+            "\t$0",
+            "\treturn true;",
+            "}"
+        ],
+        "description": "Concepto cuyo predicado se calcula con logica de tiempo de compilacion."
+    },
+    "Generico con restriccion": {
+        "prefix": "fnwhere",
+        "body": [
+            "${1:T} ${2:nombre}<${3:T}>(${3:T} a, ${3:T} b) where ${3:T}: ${4:Numeric} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Funcion generica con una restriccion sobre su parametro de tipo."
+    },
+    "Bloque de extension": {
+        "prefix": "extension",
+        "body": [
+            "extension ${1:Tipo} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Metodos que se anaden a un tipo ya declarado."
+    },
+    "Implementacion de concepto": {
+        "prefix": "impl",
+        "body": [
+            "impl ${1:Concepto} for ${2:Tipo} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Implementacion de un concepto para un tipo."
+    },
+    "Funcion de tiempo de compilacion": {
+        "prefix": "comptimefn",
+        "body": [
+            "comptime ${1:i64} ${2:nombre}(${3}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Funcion que el compilador ejecuta y cuyo resultado se hornea en el binario."
+    },
+    "Macro": {
+        "prefix": "macro",
+        "body": [
+            "@Macro",
+            "comptime string ${1:nombre}(${2:string arg}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Macro que genera codigo Vesta en tiempo de compilacion."
+    },
+    "Vista superpuesta": {
+        "prefix": "overlay",
+        "body": [
+            "@overlay struct ${1:Nombre} {",
+            "\t@offset(${2:0}) ${3:u64} ${4:campo};",
+            "\t$0",
+            "}"
+        ],
+        "description": "Estructura que describe una disposicion de memoria ya existente, sin copiarla."
+    },
+    "Aspecto": {
+        "prefix": "aspect",
+        "body": [
+            "@Aspect class ${1:Nombre} {",
+            "\t@Before(\"${2:Servicio}.${3:*}\")",
+            "\tvoid ${4:antes}(Object self, Method m) {",
+            "\t\t$0",
+            "\t}",
+            "}"
+        ],
+        "description": "Aspecto con un consejo que se teje sobre los metodos que encajan con el patron."
+    },
+    "Resultado con propagacion": {
+        "prefix": "result",
+        "body": [
+            "Result<${1:i64}, ${2:i64}> ${3:nombre}(${4}) {",
+            "\t${5:i64} v = ${6:otra}(${7})?;",
+            "\t$0",
+            "\treturn Ok(v);",
+            "}"
+        ],
+        "description": "Funcion que devuelve Result y propaga el error con el operador ?."
+    },
+    "Proceso en el mismo planificador": {
+        "prefix": "spawnhere",
+        "body": ["spawn here {", "\t$0", "}"],
+        "description": "Proceso creado en el planificador del padre (ruta cooperativa)."
+    },
+    "Proceso en un planificador concreto": {
+        "prefix": "spawnon",
+        "body": ["spawn on(${1:0}) {", "\t$0", "}"],
+        "description": "Proceso fijado al planificador indicado."
+    },
+    "Espera de un futuro": {
+        "prefix": "await",
+        "body": ["${1:i32} ${2:r} = await ${3:fut};"],
+        "description": "Espera del resultado de una funcion asincrona."
+    },
+    "Monitor explicito": {
+        "prefix": "monitor",
+        "body": [
+            "monitor (${1:obj}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Monitor con espera y notificacion explicitas."
+    },
+    "Afirmacion de compilacion": {
+        "prefix": "assert",
+        "body": ["static_assert(${1:condicion}, \"${2:mensaje}\");"],
+        "description": "Comprobacion que se evalua al compilar."
+    },
+    "Union C-style": {
+        "prefix": "union",
+        "body": [
+            "union ${1:Nombre} {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Estructura con todos los campos en el desplazamiento cero."
+    },
+    "Alias de tipo": {
+        "prefix": "typedef",
+        "body": ["typedef ${1:u32} ${2:Nombre};"],
+        "description": "Alias de tipo al estilo de C."
+    },
+    "Alias de tipo moderno": {
+        "prefix": "using",
+        "body": ["using ${1:Nombre} = ${2:i64};"],
+        "description": "Alias de tipo al estilo de C++."
     }
 }

@@ -1,0 +1,30 @@
+namespace ejemplos.params_pasan_de_once_err;
+
+// NEGATIVO: un metodo o un constructor no puede declarar mas de ONCE
+// parametros.
+//
+// No es una cifra arbitraria.  Los argumentos viajan en doce registros, y en un
+// metodo el primero lo ocupa `this`: quedan once.  El recorte del emisor decia
+// DOCE -- el numero de registros, sin descontar el que ya esta ocupado -- y el
+// doceavo acababa escrito en un registro que el propio emisor usa de scratch.
+//
+// La forma de fallar era la peor posible.  No reventaba al colocarlo: el valor
+// sobrevivia mientras nadie reusara ese scratch, o sea hasta la primera llamada
+// dentro del metodo.  Un constructor con doce parametros que solo sumaba daba
+// el resultado correcto; el mismo con una llamada por medio devolvia
+// 2452207042606.  Compilaba, arrancaba, y daba numeros absurdos.
+//
+// Una funcion suelta si acepta doce: ahi no hay `this`.
+
+class Doce {
+    public i64 r;
+    public Doce(i64 a1, i64 a2, i64 a3, i64 a4, i64 a5, i64 a6,
+                i64 a7, i64 a8, i64 a9, i64 a10, i64 a11, i64 a12) {
+        this.r = a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12;
+    }
+}
+
+i32 main() {
+    Doce d = new Doce(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    return (i32) d.r;
+}

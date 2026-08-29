@@ -22,6 +22,39 @@ namespace ejemplos.matriz_parametros;
 //
 // El variadico va en el 481: necesita mas de una linea por casilla -- hay que
 // sumar lo que llegue -- y ahi se prueba con y sin parametros fijos delante.
+//
+// LA TABLA.  Filas = donde se declara; columnas = que forma tiene.  Todas las
+// casillas son SI: la gramatica es la misma en los siete sitios.  Lo unico que
+// cambia son dos limites, que no son de la gramatica sino de la maquina y del
+// momento en que se ejecuta.
+//
+//                      pla pun !!  (*) cfn fn  arr str st  cls reg shr | var
+//   funcion suelta      si  si  si  si  si  si  si  si  si  si  si  si |  si
+//   comptime            si  si  si  si  si  si  si  si  si  si  si  si |  si
+//   metodo de clase     si  si  si  si  si  si  si  si  si  si  si  si |  si
+//   constructor         si  si  si  si  si  si  si  si  si  si  si  si |  si
+//   metodo de struct    si  si  si  si  si  si  si  si  si  si  si  si |  si
+//   metodo de interfaz  si  si  si  si  si  si  si  si  si  si  si  si |  si
+//   lambda              si  si  si  si  si  si  si  si  si  si  si  si |  si
+//
+//   pla=plano  pun=puntero  !!=no-nulo  (*)=puntero a funcion al estilo de C
+//   cfn=puntero a funcion crudo  fn=lambda  arr=array  str=cadena
+//   st=struct por valor  cls=referencia a clase  reg=register(...)
+//   shr=shared  var=variadico
+//
+// Los dos limites:
+//
+//   - CUANTOS caben.  Los argumentos viajan en doce registros.  Una funcion
+//     suelta puede declarar doce; un metodo o un constructor, ONCE, porque el
+//     primero lo ocupa `this`.  Un variadico se lleva dos (la direccion del
+//     array y cuantos son).  Pasarse es un error de compilacion -- antes era
+//     un argumento con basura, que compilaba y arrancaba.
+//
+//   - QUE se le puede pasar a una `comptime`.  Las doce formas se DECLARAN
+//     igual, pero solo se pueden LLAMAR con lo que sea constante al compilar:
+//     una direccion de funcion, un array o un struct construidos en ejecucion
+//     no lo son, por definicion de lo que significa `comptime`.  Por eso su
+//     fila imprime cinco valores y no doce.
 
 struct Punto { i64 x; i64 y; }
 class Caja { public i64 v; public Caja(i64 n) { this.v = n; } }
