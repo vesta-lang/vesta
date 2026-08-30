@@ -143,8 +143,16 @@ add_library(vx_lib STATIC
     # offsets de cada token, asi que el compilador no paga un solo ciclo.
     fmt/trivia.cpp
     fmt/width.cpp
+    fmt/annotate.cpp
     fmt/spacing.cpp
     fmt/indent.cpp
+    fmt/align.cpp
+    fmt/literals.cpp
+    fmt/verbatim.cpp
+    fmt/rewrite.cpp
+    fmt/fmt_driver.cpp
+    fmt/fmt_cli.cpp
+    fmt/wrap.cpp
     fmt/fmt.cpp
     # Catalogo multi-idioma de diagnosticos (codigo estable VXNNNN -> mensaje por
     # idioma).  La tabla se genera desde catalog/diagnostics.toml con

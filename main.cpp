@@ -18,6 +18,9 @@
 #include <fstream>
 
 #include "disasm/disasm.h"
+#include "vx/fmt/fmt.h"
+#include "vx/fmt/fmt_cli.h"
+#include "vx/fmt/fmt_driver.h"
 #include <sstream>
 #include <thread>
 #include <atomic>
@@ -500,6 +503,51 @@ static bool annotate_write_source(
         size_t b = s.find_last_not_of(" \t");
         return s.substr(a, b - a + 1);
     };
+    /* Escribe una anotacion con su indentacion, repartiendola si no cabe.
+     *
+     * El reparto no se hace a mano: se pasa por el FORMATEADOR, que ya sabe
+     * como queda un contrato largo (`R112` -- uno por linea y los valores en
+     * columna).  Asi la forma se decide en un solo sitio, y anotar produce
+     * directamente codigo que `vesta fmt` deja igual.
+     *
+     * Solo se toca la anotacion, nunca el resto del fichero: quien pidio
+     * anotar no pidio reformatear su codigo. */
+    auto emitir_contrato = [](std::vector<std::string> &out,
+                              const std::string &ind, const std::string &a) {
+        // El ancho en COLUMNAS: un tabulador de la indentacion cuenta cuatro.
+        size_t ancho = a.size();
+        for (const char c : ind)
+            ancho += (c == '\t') ? 4 : 1;
+        if (ancho <= 80) {
+            out.push_back(ind + a);
+            return;
+        }
+        const vx::fmt::FormatResult r = vx::fmt::format(a + "\n", "<contrato>");
+        if (!r.ok) { // ante la duda, la linea larga antes que perderla
+            out.push_back(ind + a);
+            return;
+        }
+        /* El formateador indenta con tabuladores (`R1`), pero el fichero que
+         * se anota puede estar escrito con espacios.  Pegar un tabulador
+         * detras de la indentacion existente dejaria la linea a medias entre
+         * los dos estilos -- y eso `R2` no lo permite --, asi que los
+         * tabuladores del fragmento se traducen a lo que use el fichero. */
+        const bool ind_con_tabs = ind.find('\t') != std::string::npos;
+        std::istringstream ls(r.text);
+        std::string linea;
+        while (std::getline(ls, linea)) {
+            if (!linea.empty() && linea.back() == '\r') linea.pop_back();
+            if (linea.empty()) continue;
+            if (!ind_con_tabs) {
+                size_t t = 0;
+                while (t < linea.size() && linea[t] == '\t')
+                    ++t;
+                if (t > 0) linea = std::string(t * 4, ' ') + linea.substr(t);
+            }
+            out.push_back(ind + linea);
+        }
+    };
+
     auto indent_de = [](const std::string &s) {
         size_t a = s.find_first_not_of(" \t");
         return (a == std::string::npos) ? std::string() : s.substr(0, a);
@@ -515,6 +563,23 @@ static bool annotate_write_source(
             "total_pre:", "total_post:", "when:"};
         for (const char *p : pref)
             if (t.rfind(p, 0) == 0) return true;
+        return false;
+    };
+    /* El `)` que cierra un contrato REPARTIDO en varias lineas (`R112`).
+     *
+     * Un `)` suelto no dice por si mismo de quien es, asi que se mira hacia
+     * atras: si lo primero que aparece antes de el -- saltando los campos del
+     * contrato -- es una linea que empieza por `@`, es su cierre.  Sin esto,
+     * volver a anotar no reconocia el contrato anterior, no lo quitaba, y
+     * acababa habiendo dos. */
+    auto es_cierre_contrato = [&](const std::vector<std::string> &v) {
+        if (v.empty() || trim(v.back()) != ")") return false;
+        for (size_t k = v.size() - 1; k-- > 0;) {
+            const std::string t = trim(v[k]);
+            if (t.empty()) return false;
+            if (t[0] == '@') return true;
+            if (!es_contrato(v[k])) return false;
+        }
         return false;
     };
     // Nombre de un tipo-de-retorno plausible (primer token de una decl).  No
@@ -636,12 +701,14 @@ static bool annotate_write_source(
                     }
                 }
                 if (it != anot_por_clave.end()) {
-                    // Quitar los contratos ya emitidos (contiguos arriba).
-                    while (!out.empty() && es_contrato(out.back()))
+                    // Quitar los contratos ya emitidos (contiguos arriba),
+                    // repartidos en varias lineas incluidos.
+                    while (!out.empty() &&
+                           (es_contrato(out.back()) || es_cierre_contrato(out)))
                         out.pop_back();
                     const std::string ind = indent_de(l);
                     for (const auto &a : it->second)
-                        out.push_back(ind + a);
+                        emitir_contrato(out, ind, a);
                     ++reemplazos;
                 }
             }
@@ -762,6 +829,21 @@ int main(int argc, char *argv[]) {
         for (int i = 2; i < argc; ++i)
             sub.push_back(argv[i]);
         return pkg::cli::run(static_cast<int>(sub.size()), sub.data());
+    }
+
+    /* ------------------------------------------------------------------
+     * Subcomando: @c vesta fmt [check|print] <ficheros...>
+     *
+     * Va con `pkg` y `vxdbg` y no con las opciones porque dar formato no
+     * modifica una compilacion: es una herramienta aparte, con sus ordenes.
+     * Y va ANTES del parser de opciones para que sus argumentos sean suyos.
+     * ------------------------------------------------------------------ */
+    if (argc >= 2 && std::string(argv[1]) == "fmt") {
+        std::vector<char *> sub;
+        sub.push_back(argv[0]);
+        for (int i = 2; i < argc; ++i)
+            sub.push_back(argv[i]);
+        return vx::fmt::cli::run(static_cast<int>(sub.size()), sub.data());
     }
 
     // ------------------------------------------------------------------
