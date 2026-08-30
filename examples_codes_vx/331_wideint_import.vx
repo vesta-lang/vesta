@@ -15,7 +15,7 @@ i32 main() {
 	u128 q   = a / b; // 142
 	u128 r   = a % b; // 6
 	bool ord = (a > b) && (b < a) && (a != b) && (a >= b);
-	u128 z   = u128.min();                           // 0
+	u128 z   = u128.min();                          // 0
 	i32  acc = (i32)(q.to_u64() * 10 + r.to_u64()); // 1426
 	if (!ord) { acc = acc + 1000; }
 	if (z) { acc = acc + 1000; }  // __bool__ de cero -> false: no suma

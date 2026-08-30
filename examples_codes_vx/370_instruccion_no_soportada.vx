@@ -36,7 +36,7 @@ i32 main() {
 	bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
 
 	// 0 = no hubo fallo; si lo hubo, el tipo que dijo el runtime.
-	i64  visto  = 0;
+	i64 visto = 0_i64;
 	try {
 		std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0],
 			(usize) 96);
@@ -44,7 +44,7 @@ i32 main() {
 		visto = (i64) e.kind;
 	}
 
-	i64 hechas = 0;
+	i64 hechas = 0_i64;
 	if (avx512) {
 		// Con AVX-512 la instruccion existe: la copia tiene que pasar limpia.
 		if (visto == 0) hechas = 1;
@@ -55,8 +55,8 @@ i32 main() {
 	}
 
 	// Y se sigue: tras un fallo de este tipo el proceso queda utilizable.
-	i64 suma = 0;
-	i64 i    = 0;
+	i64 suma = 0_i64;
+	i64 i    = 0_i64;
 	while (i < 10) {
 		suma = suma + i;
 		i    = i + 1;

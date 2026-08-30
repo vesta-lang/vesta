@@ -17,7 +17,7 @@ namespace ejemplos.string_array_natural;
 //    -> codepoints: 72 33"
 
 extern "stdlib/native/io/vesta_io" {
-	fn vio_print_buf(u8 *buf, u64 len) -> i64;
+	fn vio_print_buf(u8* buf, u64 len) -> i64;
 }
 
 i32 main() {
@@ -28,7 +28,7 @@ i32 main() {
 
 	// (2) Mutacion in-place con char literals.  Convertimos a mayusculas
 	//     los chars alfabeticos (A-Z = a-z - 32).
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 12) {
 		u8 c = msg[i];
 		if (c >= 'a' && c <= 'z') {
@@ -40,12 +40,12 @@ i32 main() {
 	vio_print_buf(&msg[0], 12);
 
 	// (3) Verificar codepoints individuales.
-	u8 first = msg[0]; // 'H' = 72
+	u8 first = msg[0];  // 'H' = 72
 	u8 last  = msg[10]; // '!' = 33
 	println("-> codepoints: ${first} ${last}");
 
 	// (4) Validar.
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	if (msg[0] == 'H') { acc = acc + 10; }   // 'H' = 72
 	if (msg[5] == 'V') { acc = acc + 10; }   // 'V' = 86
 	if (msg[11] == '\n') { acc = acc + 10; } // '\n' = 10

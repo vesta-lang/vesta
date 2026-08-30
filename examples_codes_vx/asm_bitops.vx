@@ -5,17 +5,17 @@
 //     vm --vx asm_bitops.vx -o b && vm --run b.velb
 // @expect 42
 u64 main() {
-	u64                 ok = 1;
-	register("rax") u64 a  = 0xFF;
+	u64                 ok = 1_u64;
+	register("rax") u64 a  = 0xFF_u64;
 	asm { popcnt rax, rax };
 	if (a != 8)         ok = 0; // popcnt(0xFF) = 8
-	register("rsi") u64 s  = 1;
+	register("rsi") u64 s  = 1_u64;
 	asm { lzcnt rax, rsi };
 	if (a != 63)        ok = 0; // lzcnt(1) = 63 (64-bit)
-	register("rdi") u64 di = 0x0100;
+	register("rdi") u64 di = 0x0100_u64;
 	asm { tzcnt rax, rdi };
 	if (a != 8)         ok = 0; // tzcnt(0x100) = 8
-	register("rdx") u64 d  = 0x1122334455667788;
+	register("rdx") u64 d  = 0x1122334455667788_u64;
 	asm { bswap rdx };
 	if (d != 0x8877665544332211) ok = 0;
 	return (ok == 1) ? 42 : 0;

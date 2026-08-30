@@ -63,5 +63,5 @@ i32 main() {
 
 	// get_lado() (no virtual) sobre el Cuadrado: dispatch estatico, hereda de
 	// Figura -> 5.
-	return (i32)(total + c.get_lado());                     // 37 + 5 = 42
+	return (i32)(total + c.get_lado()); // 37 + 5 = 42
 }

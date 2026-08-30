@@ -7,13 +7,13 @@ import std.pool only pool_start, pool_submit, pool_join;
 import std.mutex only Mutex, mutex_new, mutex_lock, mutex_unlock,
 mutex_free;
 
-Mutex g_mtx; // handle tipado (overlay) como global
-      i64 g_counter = 0;
-const i64 NF        = 4; // fibras
-const i64 M         = 20_000; // incrementos por fibra
+Mutex     g_mtx; // handle tipado (overlay) como global
+i64       g_counter = 0_i64;
+const i64 NF = 4_i64; // fibras
+const i64 M = 20_000; // incrementos por fibra
 
 void worker(i64 a) {
-	for (i64 i = 0; i < M; i++) {
+	for (i64 i = 0_i64; i < M; i++) {
 		mutex_lock(g_mtx);
 		g_counter += 1; // seccion critica (RMW no atomico)
 		mutex_unlock(g_mtx);
@@ -22,7 +22,7 @@ void worker(i64 a) {
 i32 main() {
 	g_mtx = mutex_new();
 	pool_start(4);
-	for (i64 i = 0; i < NF; i++) {
+	for (i64 i = 0_i64; i < NF; i++) {
 		pool_submit((i64)(cfn(i64) -> void) worker, 0);
 	}
 	pool_join();

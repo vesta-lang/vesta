@@ -17,7 +17,7 @@
 import std.wideint only u128;
 
 /** Estado del xorshift64; misma semilla y secuencia que el oraculo. */
-u64 g_state = 0x243F6A8885A308D3;
+u64 g_state = 0x243F6A8885A308D3_u64;
 
 /**
  * @brief xorshift64.
@@ -33,8 +33,8 @@ u64 next_rand() {
 }
 
 i32 main() {
-	u64 h = 0xCBF29CE484222325;
-	u64 i = 0;
+	u64 h = 0xCBF29CE484222325_u64;
+	u64 i = 0_u64;
 	while (i < 20_000) {
 		u128 a;
 		a.lo64 = next_rand();

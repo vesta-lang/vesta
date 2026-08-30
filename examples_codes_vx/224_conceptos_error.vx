@@ -5,8 +5,10 @@
 // numero, asi que `sumar<Punto>(...)` debe producir un error de constraint
 // claro citando el tipo, el concepto y el parametro.  Cero codigo emitido.
 
-struct Punto { i64 x;
-	i64 y; }
+struct Punto {
+	i64 x;
+	i64 y;
+}
 
 T sumar < T : Numeric > (T a, T b) { return a + b; }
 

@@ -11,7 +11,7 @@
 import "serial";
 import "term";
 
-u64 g_boot_secs = 0; // segundos-del-dia en el arranque
+u64 g_boot_secs = 0_u64; // segundos-del-dia en el arranque
 
 // Lee un registro del CMOS (indice -> dato).
 u64 cmos_read(u64 reg) {

@@ -21,8 +21,10 @@
 class Tab {
 	public i32 id;
 	public Tab next;
-	public Tab(i32 i) { this.id = i;
-		this.next = null; }
+	public Tab(i32 i) {
+		this.id   = i;
+		this.next = null;
+	}
 }
 
 public i32 run() {
@@ -30,11 +32,11 @@ public i32 run() {
 	Tab t2 = new Tab(2);
 	t1.next = t2;
 	t2.next = t1;
-	i32 frame = 0;
-	i32 total = 0;
+	i32 frame = 0_i32;
+	i32 total = 0_i32;
 	while (frame < 3) {
 		Tab cur = t1;
-		i32 i   = 0;
+		i32 i   = 0_i32;
 		while (i < 2) {
 			string label = " ${cur.id} ";
 			print(label);

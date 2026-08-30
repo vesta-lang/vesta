@@ -7,13 +7,13 @@ i32 main() {
 	// Caso 1: dos variables.
 	string a = "ab";
 	string b = "cde";
-	string c = a + b;         // "abcde" -> length 5
+	string c = a + b; // "abcde" -> length 5
 
 	// Caso 2: variable + literal (operando literal temporal liberado).
-	string e = a + "XYZ";     // "abXYZ" -> length 5
+	string e = a + "XYZ"; // "abXYZ" -> length 5
 
 	// Caso 3: literal + variable.
-	string h = "WW" + b;      // "WWcde" -> length 5
+	string h = "WW" + b; // "WWcde" -> length 5
 
 	// Caso 4: str_concat builtin (mismo lowering que `+`).
 	string f = b.concat("Z"); // "cdeZ" -> length 4

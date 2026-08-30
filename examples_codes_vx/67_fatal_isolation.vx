@@ -12,7 +12,7 @@ class Box {
 i32 main() {
 	// Caso 1: body alcanza, catch no.
 	Box b  = new Box(100);
-	i32 v1 = 0;
+	i32 v1 = 0_i32;
 	try {
 		v1 = b.get();
 	} catch (FatalError e) {
@@ -22,7 +22,7 @@ i32 main() {
 
 	// Caso 2: body crashea, catch toma el control.
 	Box nul = null;
-	i32 v2  = 0;
+	i32 v2  = 0_i32;
 	try {
 		v2 = nul.get(); // FATAL_NULL_POINTER
 	} catch (FatalError e) {
@@ -31,7 +31,7 @@ i32 main() {
 	if (v2 != 1) return 2;
 
 	// Caso 3: panic + captura.
-	i32 v3 = 0;
+	i32 v3 = 0_i32;
 	try {
 		panic("usuario aborto");
 	} catch (FatalError e) {

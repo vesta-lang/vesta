@@ -6,14 +6,14 @@
 //     vm --vx asm_adc_sbb.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-	register("rax") u64 lo = 0xFFFFFFFFFFFFFFFF;
-	register("rcx") u64 hi = 0;
+	register("rax") u64 lo = 0xFFFFFFFFFFFFFFFF_u64;
+	register("rcx") u64 hi = 0_u64;
 
 	// Suma 128b: (0xFFFF...FF : 0) + (43 : 0).
 	//   add lo -> lo = 42, CF = 1 (wraparound).  adc hi -> hi = 0 + 0 + 1 = 1.
 	{
-		register("rbx") u64 alo = 43;
-		register("rdx") u64 ahi = 0;
+		register("rbx") u64 alo = 43_u64;
+		register("rdx") u64 ahi = 0_u64;
 		asm { add rax, rbx
 			adc rcx, rdx };
 	}
@@ -22,8 +22,8 @@ u64 main() {
 	// Resta 128b: (lo=42 : hi=1) - (0 : 1).
 	//   sub lo -> lo = 42, borrow = 0.  sbb hi -> hi = 1 - 1 - 0 = 0.
 	{
-		register("rbx") u64 blo = 0;
-		register("rdx") u64 bhi = 1;
+		register("rbx") u64 blo = 0_u64;
+		register("rdx") u64 bhi = 1_u64;
 		asm { sub rax, rbx
 			sbb rcx, rdx };
 	}

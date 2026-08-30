@@ -26,8 +26,10 @@ struct Atomic {
 	i64 v;
 
 	public i64 __deref__() { return atomic_load64(&this.v); }
-	public i64 __assign__(i64 n) { atomic_store64(&this.v, n);
-		return n; }
+	public i64 __assign__(i64 n) {
+		atomic_store64(&this.v, n);
+		return n;
+	}
 
 	// El incremento es UNA instruccion (lock xadd): ningun hilo cabe en medio.
 	public i64 __iadd__(i64 d) { return atomic_add64(&this.v, d) + d; }
@@ -40,20 +42,34 @@ struct Reg {
 	i64 v;
 
 	public i64 __deref__() { return this.v; }
-	public i64 __assign__(i64 n) { this.v = n;
-		return n; }
-	public i64 __imul__(i64 k) { this.v = this.v * k;
-		return this.v; }
-	public i64 __iand__(i64 m) { this.v = this.v & m;
-		return this.v; }
-	public i64 __ior__(i64 m) { this.v = this.v | m;
-		return this.v; }
-	public i64 __ixor__(i64 m) { this.v = this.v ^ m;
-		return this.v; }
-	public i64 __ilshift__(i64 k) { this.v = this.v << k;
-		return this.v; }
-	public i64 __irshift__(i64 k) { this.v = this.v >> k;
-		return this.v; }
+	public i64 __assign__(i64 n) {
+		this.v = n;
+		return n;
+	}
+	public i64 __imul__(i64 k) {
+		this.v = this.v * k;
+		return this.v;
+	}
+	public i64 __iand__(i64 m) {
+		this.v = this.v & m;
+		return this.v;
+	}
+	public i64 __ior__(i64 m) {
+		this.v = this.v | m;
+		return this.v;
+	}
+	public i64 __ixor__(i64 m) {
+		this.v = this.v ^ m;
+		return this.v;
+	}
+	public i64 __ilshift__(i64 k) {
+		this.v = this.v << k;
+		return this.v;
+	}
+	public i64 __irshift__(i64 k) {
+		this.v = this.v >> k;
+		return this.v;
+	}
 }
 
 i32 main() {
@@ -64,7 +80,7 @@ i32 main() {
 	g = g + 40; // forma larga    -> se funde en `g += 40`
 	g += 1;     // forma compuesta
 	g++;        // forma corta
-	g = g - 1;      // tambien la resta -> `g -= 1`
+	g = g - 1;  // tambien la resta -> `g -= 1`
 
 	i64 total = *g; // 40 + 1 + 1 - 1 = 41
 	println("atomico  = ${total}");
@@ -82,7 +98,7 @@ i32 main() {
 	println("registro = ${rv}");
 
 	// Los primitivos no se ven afectados por la fusion.
-	i64 p = 20;
+	i64 p = 20_i64;
 	p = p + 2; // aritmetica normal de siempre -> 22
 
 	// 41 - 3 + 22 - 18 = 42

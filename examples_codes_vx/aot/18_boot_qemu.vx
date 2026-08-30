@@ -2,7 +2,7 @@
 // BIOS (int 0x10), luego sale de QEMU via isa-debug-exit (0xF4, codigo 0x42).
 @bits(16)
 @section(".text", "rx")
-	asm boot {
+asm boot {
 	    cli
 	    xor ax, ax
 	    mov ds, ax

@@ -14,21 +14,21 @@ namespace ejemplos.string_array_ops;
 extern "stdlib/native/collections/vesta_collections" {
 	// String ops -- aceptan i8* (host buffer) + len (i64).  str_cstr
 	// devuelve i8* implicito (PTR generico que se asigna a i8*).
-	fn vstr_indexof(i8 *hp, i64 hl, i8 *np, i64 nl) -> i64;
-	fn vstr_starts_with(i8 *hp, i64 hl, i8 *np, i64 nl) -> i64;
-	fn vstr_ends_with(i8 *hp, i64 hl, i8 *np, i64 nl) -> i64;
-	fn vstr_contains(i8 *hp, i64 hl, i8 *np, i64 nl) -> i64;
-	fn vstr_lower_inplace(i8 *buf, i64 len) -> void;
-	fn vstr_upper_inplace(i8 *buf, i64 len) -> void;
+	fn vstr_indexof(i8* hp, i64 hl, i8* np, i64 nl) -> i64;
+	fn vstr_starts_with(i8* hp, i64 hl, i8* np, i64 nl) -> i64;
+	fn vstr_ends_with(i8* hp, i64 hl, i8* np, i64 nl) -> i64;
+	fn vstr_contains(i8* hp, i64 hl, i8* np, i64 nl) -> i64;
+	fn vstr_lower_inplace(i8* buf, i64 len) -> void;
+	fn vstr_upper_inplace(i8* buf, i64 len) -> void;
 	// Array ops -- aceptan i64* (host array de u64) + n.
-	fn varr_sort_u64(i64 *arr, i64 n) -> void;
-	fn varr_bsearch_u64(i64 *arr, i64 n, i64 key) -> i64;
-	fn varr_indexof_u64(i64 *arr, i64 n, i64 key) -> i64;
-	fn varr_reverse_u64(i64 *arr, i64 n) -> void;
+	fn varr_sort_u64(i64* arr, i64 n) -> void;
+	fn varr_bsearch_u64(i64* arr, i64 n, i64 key) -> i64;
+	fn varr_indexof_u64(i64* arr, i64 n, i64 key) -> i64;
+	fn varr_reverse_u64(i64* arr, i64 n) -> void;
 }
 
 i32 main() {
-	i32    acc       = 0;
+	i32 acc = 0_i32;
 
 	// ===== String ops =====
 	// Strings via tipo dedicado + str_cstr (host_ptr) + str_bytes (len).

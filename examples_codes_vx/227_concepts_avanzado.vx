@@ -10,8 +10,10 @@ namespace ejemplos.concepts_avanzado;
 //   METODOS genericos, ademas de en funciones/structs/clases.
 
 // Concepto estructural con firma: i64 area() + bool igual(i64).
-concept Figura { i64 area();
-	bool igual(i64 x); }
+concept Figura {
+	i64 area();
+	bool igual(i64 x);
+}
 
 concept MiNum<T> = is_numeric<T>();
 

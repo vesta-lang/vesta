@@ -14,17 +14,17 @@
 // merge, que el codegen vreg-native aun no soporta).  Conteo esperado = 14.
 
 i32 main() {
-	i64 n = 0;
+	i64 n = 0_i64;
 
 	// --- Literales: orden por primer byte distinto ---
-	n = n + (i64)("abc" < "abd");  // T: 'c'(99) < 'd'(100)
-	n = n + (i64)("abd" < "abc");  // F
-	n = n + (i64)("abd" > "abc");  // T
+	n = n + (i64)("abc" < "abd"); // T: 'c'(99) < 'd'(100)
+	n = n + (i64)("abd" < "abc"); // F
+	n = n + (i64)("abd" > "abc"); // T
 
 	// --- Prefijos: el mas corto es menor ---
-	n = n + (i64)("ab" < "abc");   // T: "ab" prefijo de "abc"
-	n = n + (i64)("abc" < "ab");   // F
-	n = n + (i64)("abc" > "ab");   // T
+	n = n + (i64)("ab" < "abc"); // T: "ab" prefijo de "abc"
+	n = n + (i64)("abc" < "ab"); // F
+	n = n + (i64)("abc" > "ab"); // T
 
 	// --- Iguales ---
 	n = n + (i64)("abc" < "abc");  // F

@@ -18,7 +18,7 @@ i32 count_in_range(
 	i64 lo,
 	i64 hi
 ) {
-	i32                       count = 0;
+	i32                       count = 0_i32;
 	i64                       va    = read_borrow(a);
 	i64                       vb    = read_borrow(b);
 	i64                       vc    = read_borrow(c);
@@ -65,16 +65,16 @@ i32 main() {
 
 	//   lectura concurrente con shared borrows.  count_in_range
 	// recibe 3 borrows shared simultaneos (R2).
-	borrow<i64> sa  = lend(a);
-	borrow<i64> sb  = lend(b);
-	borrow<i64> sc  = lend(c);
+	borrow<i64> sa = lend(a);
+	borrow<i64> sb = lend(b);
+	borrow<i64> sc = lend(c);
 
 	// F4: identity(sb) hereda owner_source = b.
 	borrow<i64> sb2 = identity(sb);
 
 	// count_in_range tipica: cuenta valores en [25, 35].
 	// a=32, b=20, c=30.  Solo a y c estan en [25,35] -> count=2.
-	i32         cnt = count_in_range(sa, sb2, sc, 25, 35);
+	i32 cnt = count_in_range(sa, sb2, sc, 25, 35);
 
 	if (cnt != 2) return 99;
 

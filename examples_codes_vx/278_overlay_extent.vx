@@ -11,8 +11,10 @@
 // el usuario mide el ultimo elemento con offsetof.  interp = JIT = AOT.
 
 @overlay
-struct Sec { u32 va @0x00;
-	u32 sz @0x04; }
+struct Sec {
+	u32 va @0x00;
+	u32 sz @0x04;
+}
 
 @overlay
 struct Img {
@@ -23,22 +25,22 @@ struct Img {
 }
 
 i32 main() {
-	u8* buf = (u8 *) malloc(256);
-	*(u32 *)(buf + 0) = 0xCAFE;
-	*(u16 *)(buf + 4) = 3; // count = 3
+	u8* buf = (u8*) malloc(256);
+	*(u32*)(buf + 0) = 0xCAFE;
+	*(u16*)(buf + 4) = 3; // count = 3
 
-	Img im  = Img(buf);
+	Img im = Img(buf);
 	// fin de cada campo:  magic 0+4=4 ; count 4+2=6 ; tail (3+8=11)+4=15 ;
 	//                     secs 0x10 + 3*8 = 40  <- el mayor -> extent = 40
 	u64 ext = extent(im);
-	println("extent=${ext}");                // 40
+	println("extent=${ext}"); // 40
 
 	//  estatico (solo campos de offset constante) vs extent runtime:
-	println("sizeof=${sizeof<Img>()}");      // huella estatica (< extent aqui)
+	println("sizeof=${sizeof<Img>()}"); // huella estatica (< extent aqui)
 
 	// uso: validar que la vista completa cabe en el fichero, en una linea.
 	println("fits256=${extent(im) <= 256}"); // true
-	println("fits32=${extent(im) <= 32}"); // false (40 > 32)
+	println("fits32=${extent(im) <= 32}");   // false (40 > 32)
 
 	free(buf);
 	return (i32) ext; // 40

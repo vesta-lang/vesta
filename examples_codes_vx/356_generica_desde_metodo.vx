@@ -17,14 +17,14 @@ void copia<T>(T x, T * out) { (*out) = x; }
 struct Caja {
 	u64 v;
 	public u64 desde_metodo() {
-		u64 r = 0;
+		u64 r = 0_u64;
 		copia(this.v, &r); // generica llamada DESDE UN METODO
 		return r;
 	}
 }
 i32 main() {
-	u64 src = 7;
-	u64 z   = 0;
+	u64 src = 7_u64;
+	u64 z   = 0_u64;
 	copia(src, &z); // generica llamada desde main
 	if (z != 7) { return 1; }
 	Caja c;

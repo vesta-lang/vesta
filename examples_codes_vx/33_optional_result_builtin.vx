@@ -43,7 +43,7 @@ i32 main() {
 	Optional<i32>    b = None();
 	Result<i32, i32> r = Ok(7);
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	acc = acc + dec_or(a, 999);  // 50 (a esta presente)
 	acc = acc + dec_or(b, 1000); // 1000 (b vacio -> default)
 	if (isOk(r) == 1) {

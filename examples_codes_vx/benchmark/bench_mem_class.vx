@@ -29,8 +29,8 @@ i32 helper(i32 i) {
 }
 
 i32 main() {
-	i64 sum = 0;
-	i64 i   = 0;
+	i64 sum = 0_i64;
+	i64 i   = 0_i64;
 	while (i < 1_000_000) {
 		sum = sum + helper(1);
 		i   = i + 1;

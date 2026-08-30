@@ -15,7 +15,7 @@ namespace ejemplos.destructor_escape_rules;
 // Esperado: R00 == 42.
 
 class DtorCounter {
-	public static i32 count = 0;
+	public static i32 count = 0_i32;
 }
 
 class Resource {
@@ -55,7 +55,7 @@ i32 main() {
 	// dtor de make_resource NO corre alli (escape via return);
 	// dtor de kept correra al exit de main.
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	if (DtorCounter.count == 1) { acc = acc + 20; } // solo el de use_local
 	if (kept.value == 99) { acc = acc + 22; }
 	return acc; // 20 + 22 = 42

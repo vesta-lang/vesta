@@ -3,7 +3,7 @@
 // Las constraints siguen siendo 100% compile-time (desaparecen del binario).
 namespace mat;
 
-concept Numerico<T> = is_numeric<T>();
+concept Numerico<T>  = is_numeric<T>();
 concept Ordenable<T> = Comparable<T>() && Sized<T>();
 
 // Genrico con bound INLINE al concepto cualificado del namespace.

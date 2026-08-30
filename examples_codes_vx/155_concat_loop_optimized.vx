@@ -29,7 +29,7 @@ namespace ejemplos.concat_loop_optimized;
 
 comptime u64 builder(i64 n) {
 	string s = "";
-	i64    i = 0;
+	i64    i = 0_i64;
 	while (i < n) {
 		s = s + "X"; // fast path -> O(1) amortizado
 		i = i + 1;
@@ -40,7 +40,7 @@ comptime u64 builder(i64 n) {
 // Variantes que tambien estan optimizadas:
 comptime u64 builder_prepend(i64 n) {
 	string s = "";
-	i64    i = 0;
+	i64    i = 0_i64;
 	while (i < n) {
 		s = "Y" + s; // fast path commutativo (insert al inicio)
 		i = i + 1;
@@ -50,7 +50,7 @@ comptime u64 builder_prepend(i64 n) {
 
 comptime u64 builder_compound(i64 n) {
 	string s = "";
-	i64    i = 0;
+	i64    i = 0_i64;
 	while (i < n) {
 		s += "Z"; // AddAssign directo, ya era O(1) desde antes
 		i = i + 1;

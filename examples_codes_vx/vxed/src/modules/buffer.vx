@@ -7,11 +7,11 @@
 // estresan al regalloc + GC dance.
 
 public class Buffer {
-	public u8* data;     // contenido en bytes
-	public i32 length;   // bytes usados
-	public i32 capacity; // bytes alocados
-	public i32 cursor;   // offset del cursor (0..length)
-	public i32 dirty;    // 1 si hubo modificacion desde load/save
+	public u8* data;       // contenido en bytes
+	public i32 length;     // bytes usados
+	public i32 capacity;   // bytes alocados
+	public i32 cursor;     // offset del cursor (0..length)
+	public i32 dirty;      // 1 si hubo modificacion desde load/save
 	public i32 sel_anchor; // -1 = sin seleccion; otro = ancla del rango
 
 	public Buffer() {
@@ -21,7 +21,7 @@ public class Buffer {
 		this.cursor     =  0;
 		this.dirty      =  0;
 		this.sel_anchor = -1;
-		this.data[0] = 0;
+		this.data[0]    = 0;
 	}
 
 	public ~Buffer() {
@@ -37,10 +37,10 @@ public class Buffer {
 			new_cap = new_cap * 2;
 		}
 		u8* nbuf = malloc(new_cap);
-		i32 i    = 0;
+		i32 i    = 0_i32;
 		while (i < this.length) {
 			nbuf[i] = this.data[i];
-			i = i + 1;
+			i       = i + 1;
 		}
 		nbuf[this.length] = 0;
 		free(this.data);
@@ -53,13 +53,13 @@ public class Buffer {
 		i32 i = this.length;
 		while (i > this.cursor) {
 			this.data[i] = this.data[i - 1];
-			i = i - 1;
+			i            = i - 1;
 		}
 		this.data[this.cursor] = c;
-		this.length = this.length + 1;
+		this.length            = this.length + 1;
 		this.data[this.length] = 0;
-		this.cursor = this.cursor + 1;
-		this.dirty  = 1;
+		this.cursor            = this.cursor + 1;
+		this.dirty             = 1;
 	}
 
 	public void newline() {
@@ -71,17 +71,17 @@ public class Buffer {
 		i32 i = this.cursor;
 		while (i < this.length) {
 			this.data[i - 1] = this.data[i];
-			i = i + 1;
+			i                = i + 1;
 		}
-		this.length = this.length - 1;
+		this.length            = this.length - 1;
 		this.data[this.length] = 0;
-		this.cursor = this.cursor - 1;
-		this.dirty  = 1;
+		this.cursor            = this.cursor - 1;
+		this.dirty             = 1;
 	}
 
 	public i32 line_count() {
-		i32 n = 1;
-		i32 i = 0;
+		i32 n = 1_i32;
+		i32 i = 0_i32;
 		while (i < this.length) {
 			if (this.data[i] == 10) { n = n + 1; }
 			i = i + 1;
@@ -91,8 +91,8 @@ public class Buffer {
 
 	// Devuelve (row, col) del cursor.
 	public i32 cursor_row() {
-		i32 r = 0;
-		i32 i = 0;
+		i32 r = 0_i32;
+		i32 i = 0_i32;
 		while (i < this.cursor) {
 			if (this.data[i] == 10) { r = r + 1; }
 			i = i + 1;
@@ -101,7 +101,7 @@ public class Buffer {
 	}
 
 	public i32 cursor_col() {
-		i32 col = 0;
+		i32 col = 0_i32;
 		i32 i   = this.cursor - 1;
 		while (i >= 0) {
 			if (this.data[i] == 10) { return col; }
@@ -115,8 +115,8 @@ public class Buffer {
 	// Si n >= line_count, devuelve length.
 	public i32 line_offset(i32 n) {
 		if (n == 0) return 0;
-		i32 cur_line = 0;
-		i32 i        = 0;
+		i32 cur_line = 0_i32;
+		i32 i        = 0_i32;
 		while (i < this.length) {
 			if (this.data[i] == 10) {
 				cur_line = cur_line + 1;
@@ -155,7 +155,7 @@ public class Buffer {
 		i32 row   = this.cursor_row();
 		i32 total = this.line_count();
 		if (row + 1 >= total) return;
-		i32 col        = this.cursor_col();
+		i32 col = this.cursor_col();
 		i32 next_start = this.line_offset(row + 1);
 		i32 next_end;
 		if (row + 2 < total) {
@@ -224,12 +224,12 @@ public class Buffer {
 		i32 i = to;
 		while (i < this.length) {
 			this.data[i - n] = this.data[i];
-			i = i + 1;
+			i                = i + 1;
 		}
-		this.length = this.length - n;
+		this.length            = this.length - n;
 		this.data[this.length] = 0;
-		this.cursor = from;
-		this.dirty  = 1;
+		this.cursor            = from;
+		this.dirty             = 1;
 		return n;
 	}
 
@@ -301,17 +301,17 @@ public class Buffer {
 		i32 i = this.length - 1;
 		while (i >= this.cursor) {
 			this.data[i + n] = this.data[i];
-			i = i - 1;
+			i                = i - 1;
 		}
 		// Copia bytes nuevos.
-		i32 j = 0;
+		i32 j = 0_i32;
 		while (j < n) {
 			this.data[this.cursor + j] = src[j];
-			j = j + 1;
+			j                          = j + 1;
 		}
-		this.length = this.length + n;
-		this.cursor = this.cursor + n;
+		this.length            = this.length + n;
+		this.cursor            = this.cursor + n;
 		this.data[this.length] = 0;
-		this.dirty = 1;
+		this.dirty             = 1;
 	}
 }

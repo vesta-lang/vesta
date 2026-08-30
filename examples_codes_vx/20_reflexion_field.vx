@@ -27,7 +27,7 @@ i32 main() {
 	i64 f_ok  = getField(cls, "edad");
 	i64 f_bad = getField(cls, "noexiste");
 
-	if (f_ok == 0) return 0; // campo existente no encontrado
+	if (f_ok == 0) return 0;  // campo existente no encontrado
 	if (f_bad != 0) return 0; // campo inexistente reportado como existente
 
 	return 1;

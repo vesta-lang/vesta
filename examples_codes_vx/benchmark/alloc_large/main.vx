@@ -7,15 +7,15 @@
 
 i32 main() {
 	u8*[16] anillo; // potencia de 2: el indice sale con AND
-	i32 acc = 0;
-	i32 i   = 0;
+	i32     acc = 0_i32;
+	i32     i = 0_i32;
 	while (i < 500_000) {
-		u8* p = (u8 *) malloc(262_144);
+		u8* p = (u8*) malloc(262_144);
 		u8  v = (u8)(i & 255);
-		i32 o = 0;
+		i32 o = 0_i32;
 		while (o < 262_144) { // un toque por pagina
 			p[o] = v;
-			o = o + 4096;
+			o    = o + 4096;
 		}
 		p[262_143] = v;
 		i32 k     = i & 15;
@@ -25,13 +25,15 @@ i32 main() {
 			free(viejo);
 		}
 		anillo[k] = p;
-		i = i + 1;
+		i         = i + 1;
 	}
-	i32 k2 = 0;
+	i32 k2 = 0_i32;
 	while (k2 < 16) { // vaciar la ventana
-		u8*               v2  = anillo[k2];
-		if (v2 != null) { acc = acc + (i32) v2[0];
-			free(v2); }
+		u8* v2 = anillo[k2];
+		if (v2 != null) {
+			acc = acc + (i32) v2[0];
+			free(v2);
+		}
 		k2 = k2 + 1;
 	}
 	return acc & 255;

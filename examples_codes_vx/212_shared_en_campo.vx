@@ -17,10 +17,10 @@ i64 trabajo() {
 	shared<i64> a = shared_box(40); // refcount = 1
 	Caja        c = new Caja();
 	c.s = a;                // inc -> refcount = 2 (a y c.s)
-	i64 uc  = use_count(a);  // 2
+	i64 uc  = use_count(a); // 2
 	i64 val = *ptr_of(c.s); // lee el campo como shared -> 40
 	return val + uc;        // 40 + 2 = 42
-} // ~Caja (dec c.s -> 1) ; ~a (dec -> 0 -> free)
+}                           // ~Caja (dec c.s -> 1) ; ~a (dec -> 0 -> free)
 
 i32 main() {
 	return (i32) trabajo();

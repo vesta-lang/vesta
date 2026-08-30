@@ -16,7 +16,7 @@ namespace ejemplos.callback_many_args;
 //
 // Esperado: R00 = 42.
 
-i64 g_total = 0;
+i64 g_total = 0_i64;
 
 i64 cb12(i64 a1, i64 a2, i64 a3, i64 a4, i64 a5, i64 a6,
 	i64 a7, i64 a8, i64 a9, i64 a10, i64 a11, i64 a12) {
@@ -41,7 +41,7 @@ i32 main() {
 	println("r1=${r1} r2=${r2} r3=${r3} g_total=${g_total}");
 
 	// Validar.  78 + 36 + 20 = 134.
-	i32 ok = 1;
+	i32 ok = 1_i32;
 	if (r1 != 78) { ok = 0; }
 	if (r2 != 36) { ok = 0; }
 	if (r3 != 20) { ok = 0; }

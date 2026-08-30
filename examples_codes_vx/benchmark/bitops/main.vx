@@ -1,9 +1,9 @@
 // Bench: bitops (and/or/xor/shl/shr/popcount-like via xor accumulate).
 // 30M iter x 8 bit ops = 240M ops.
 i32 main() {
-	u64 a = 0xDEADBEEFCAFEBABE;
-	u64 b = 0x1234567890ABCDEF;
-	i32 i = 0;
+	u64 a = 0xDEADBEEFCAFEBABE_u64;
+	u64 b = 0x1234567890ABCDEF_u64;
+	i32 i = 0_i32;
 	while (i < 30_000_000) {
 		a = a ^ (u64) i;
 		a = a & 0x0000FFFFFFFFFFFF;

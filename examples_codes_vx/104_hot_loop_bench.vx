@@ -12,8 +12,8 @@ namespace ejemplos.hot_loop_bench;
 // Resultado esperado: R0 = 42 (= 84/2 con i32 truncate).
 
 i32 main() {
-	i32 sum = 0;
-	i32 i   = 0;
+	i32 sum = 0_i32;
+	i32 i   = 0_i32;
 	// bound check `i < N` se baja a un solo cmpjmp.cc cuando no hay
 	// phi copies entre cmp y jmp.  Para este loop simple SI lo hay
 	// (i++ + sum += i son phi copies), pero el patrón sigue siendo

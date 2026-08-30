@@ -22,16 +22,18 @@ namespace ejemplos.vectorize_f32_scalar;
 // =============================================================================
 
 i64 main() {
-	f32*     c = malloc(100);
-	f32*     a = malloc(100);
-	f32*     b = malloc(100);
-	f32      k = 2.0;
+	f32* c = malloc(100);
+	f32* a = malloc(100);
+	f32* b = malloc(100);
+	f32  k = 2.0_f32;
 	// a[i]=i+1, b[i]=i (exactos en f32).
-	for (i32 i = 0; i < 25; i++) { a[i] = (f32)(i + 1);
-		b[i] = (f32)i; }
-	for (i32 i = 0; i < 25; i++) { c[i] = a[i] * k + b[i]; } // -> ADDPS/MULPS + bcast
-	f32 s = 0.0;
-	for (i32 i = 0; i < 25; i++) { s = s + c[i]; }
+	for (i32 i = 0_i32; i < 25; i++) {
+		a[i] = (f32)(i + 1);
+		b[i] = (f32)i;
+	}
+	for (i32 i = 0_i32; i < 25; i++) { c[i] = a[i] * k + b[i]; } // -> ADDPS/MULPS + bcast
+	f32 s = 0.0_f32;
+	for (i32 i = 0_i32; i < 25; i++) { s = s + c[i]; }
 	free(c);
 	free(a);
 	free(b);

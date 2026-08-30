@@ -22,7 +22,7 @@ namespace ejemplos.dtor_recursive_fields;
 // Esperado: R00 == 42.
 
 class DtorCounter {
-	public static i32 count = 0;
+	public static i32 count = 0_i32;
 }
 
 // Hoja: posee un "recurso" (aqui modelado como un contador que se incrementa
@@ -39,7 +39,7 @@ class Resource {
 // destruye this.res recursivamente.
 class Holder {
 	public Resource res;
-	public i32 tag;
+	public i32      tag;
 	public Holder(i32 v, i32 t) {
 		this.res = new Resource(v);
 		this.tag = t;
@@ -82,7 +82,7 @@ i32 main() {
 	if (DtorCounter.count != 2) return 14;
 
 	// 20 + 22 = 42 si ambas cadenas de destruccion corrieron exactamente una vez.
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	if (DtorCounter.count == 2) { acc = acc + 20; }
 	if (v1 + v2 == 22) { acc = acc + 22; }
 	return acc;

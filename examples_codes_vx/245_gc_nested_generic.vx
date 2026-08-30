@@ -40,7 +40,7 @@ i32 main() {
 	// (3) gc<unique<i64>>: cero fuga, del se invoca 1 vez.
 	Trace.frees = 0;
 	wrap_unique();
-	i64                      vc   = Trace.frees; // 1
+	i64 vc = Trace.frees; // 1
 
 	// (4) gc<shared<unique<i64>>>: anidamiento arbitrario, construye sin crash.
 	gc<shared<unique<i64>> > deep = gc_box(shared_box(unique_box(42)));

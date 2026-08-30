@@ -85,7 +85,7 @@ comptime string bf_emit(BfTok t) {
 // Compila un programa Brainfuck completo a un cuerpo de statements Vesta.
 comptime string bf_compile_body(string src) {
 	string body = "";
-	for (i64 i = 0; i < strlen(src); i++) {
+	for (i64 i = 0_i64; i < strlen(src); i++) {
 		body += bf_emit(bf_classify(src[i])); // char -> token -> codigo
 	}
 	return body;

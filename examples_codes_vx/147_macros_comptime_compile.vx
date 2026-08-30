@@ -21,16 +21,18 @@ const i64 R = comptime_compile("2 + 3 * 7");
 static_assert(R == 23, "macro: 2 + 3*7 = 23");
 
 // (2) Composicion: construir el codigo a partir de datos comptime.
-const i64    N = 5;
+const i64    N = 5_i64;
 const string E = comptime_concat("(",
 	comptime_concat(comptime_to_str(N), ") * 8"));
 const i64 R2 = comptime_compile(E);
 static_assert(R2 == 40, "macro composicion: 5 * 8 = 40");
 
 // (3) Codigo derivado de un tipo.
-struct Vec3 { f32 x;
+struct Vec3 {
+	f32 x;
 	f32 y;
-	f32 z; }
+	f32 z;
+}
 const string code_size =
 	comptime_concat("sizeof<", comptime_concat(typename<Vec3>(), ">()"));
 const i64 sz3 = comptime_compile(code_size);

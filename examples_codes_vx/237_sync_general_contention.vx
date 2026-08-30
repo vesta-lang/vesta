@@ -37,7 +37,7 @@ class Trigger {
 //  internamente en contienda.  r12 = obj (callee-saved: sobrevive el yield).
 // ===========================================================================
 @Target("!os:windows")
-	@Naked
+@Naked
 void race_task() {
 	asm volatile noinfer {
 		    mov r13, rdi
@@ -76,7 +76,7 @@ void race_task() {
 	}
 }
 @Target("os:windows")
-	@Naked
+@Naked
 void race_task() {
 	asm volatile noinfer {
 		    mov r13, rcx
@@ -119,7 +119,7 @@ i32 main() {
 
 	// Objeto compartido cuyo monitor (celda obj+16) se contiende.
 	u64  lock_obj = (u64)malloc(4 * 8);
-	u64* lo       = (u64 *)lock_obj;
+	u64* lo       = (u64*)lock_obj;
 	lo[0] = 0;
 	lo[1] = 0;
 	lo[2] = 0;
@@ -127,7 +127,7 @@ i32 main() {
 
 	// Contador compartido.
 	u64  cnt_cell = (u64)malloc(8);
-	u64* cc       = (u64 *)cnt_cell;
+	u64* cc       = (u64*)cnt_cell;
 	cc[0] = 0;
 
 	// 3 state blocks de 3 qwords: [iters, lock_obj, counter_ptr].
@@ -135,15 +135,15 @@ i32 main() {
 	u64  s1  = blk + 0 * 24;
 	u64  s2  = blk + 1 * 24;
 	u64  s3  = blk + 2 * 24;
-	u64* p1  = (u64 *)s1;
+	u64* p1  = (u64*)s1;
 	p1[0] = 7;
 	p1[1] = lock_obj;
 	p1[2] = cnt_cell;
-	u64* p2 = (u64 *)s2;
+	u64* p2 = (u64*)s2;
 	p2[0] = 7;
 	p2[1] = lock_obj;
 	p2[2] = cnt_cell;
-	u64* p3 = (u64 *)s3;
+	u64* p3 = (u64*)s3;
 	p3[0] = 7;
 	p3[1] = lock_obj;
 	p3[2] = cnt_cell;
@@ -155,8 +155,8 @@ i32 main() {
 	vasync_run();
 
 	u64 total = cc[0]; // 3 * 7 * 2 = 42
-	free((i64 *)blk);
-	free((i64 *)cnt_cell);
-	free((i64 *)lock_obj);
+	free((i64*)blk);
+	free((i64*)cnt_cell);
+	free((i64*)lock_obj);
 	return (i32)total; // 42
 }

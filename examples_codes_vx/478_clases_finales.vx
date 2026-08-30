@@ -21,7 +21,7 @@ final class Cerrada {
 }
 
 @Final
-	class TambienCerrada {
+class TambienCerrada {
 	public i32 v;
 	public TambienCerrada(i32 x) { this.v = x; }
 	public i32 triple() { return this.v * 3; }
@@ -38,20 +38,20 @@ class Abierta {
 final class HojaDeAbierta : Abierta {
 	public HojaDeAbierta(i32 x) { super(x); }
 	@Override
-		public i32 quien() { return 2; }
+	public i32 quien() { return 2; }
 }
 
 // Y el modificador combina con la visibilidad, en cualquier orden.
-public final class ConVisibilidad { public i32 v = 4; }
+public final class ConVisibilidad { public i32 v = 4_i32; }
 
 i32 main() {
-	Cerrada        a         = new Cerrada(6);
-	TambienCerrada b         = new TambienCerrada(4);
-	HojaDeAbierta  c         = new HojaDeAbierta(9);
-	ConVisibilidad d         = new ConVisibilidad();
+	Cerrada        a = new Cerrada(6);
+	TambienCerrada b = new TambienCerrada(4);
+	HojaDeAbierta  c = new HojaDeAbierta(9);
+	ConVisibilidad d = new ConVisibilidad();
 
 	// Por la super, `quien()` se despacha por tabla y devuelve el 2 de la hoja.
-	Abierta        como_base = c;
+	Abierta como_base = c;
 
 	println("doble=${a.doble()} triple=${b.triple()} quien=${como_base.quien()}");
 

@@ -10,7 +10,7 @@
 //     vm --vx asm_normal_stack_warn.vx -o s && vm --run s.velb
 // @expect 42
 u64 main() {
-	register("rax") u64 r = 42;
+	register("rax") u64 r = 42_u64;
 	asm volatile {
 		mov rcx, rsp
 		mov rsp, rcx // reasignar rsp (equilibrado) -> VXA010

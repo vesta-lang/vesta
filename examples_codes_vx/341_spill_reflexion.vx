@@ -7,7 +7,7 @@ namespace ejemplos.spill_reflexion;
 // Aqui el oraculo es el interprete y el JIT debe coincidir.
 
 class Animal {
-	public i32 edad = 0;
+	public i32 edad = 0_i32;
 	public Animal(i32 e) { this.edad = e; }
 	public i32 get() { return this.edad; }
 }
@@ -36,15 +36,15 @@ i64 presion(i64 s) {
 }
 
 i32 main() {
-	i32    fallos = 0;
+	i32    fallos = 0_i32;
 	Animal a      = new Animal(5);
 
 	// `cls` queda vivo a traves de la presion -> se derrama, y getMethod
 	// tiene que recargarlo en vez de leer el scratch.
-	i64    cls    = forName("Animal");
-	i64    p      = presion(150);
-	i64    m      = getMethod(cls, "get");
-	i64    f      = getField(cls, "edad");
+	i64 cls = forName("Animal");
+	i64 p   = presion(150);
+	i64 m   = getMethod(cls, "get");
+	i64 f   = getField(cls, "edad");
 
 	println("findclass=${cls != 0} findmethod=${m != 0} findfield=${f != 0}");
 	println("presion=${p} edad=${a.get()}");

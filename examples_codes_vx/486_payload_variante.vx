@@ -40,12 +40,12 @@ i32 main() {
 	Caja c1 = Caja.ConNewtype(3);
 	Caja c2 = Caja.ConFn(doblar);
 
-	i64 c = 0;
+	i64 c = 0_i64;
 	match (c1) {
 		case ConNewtype(m) => { c = (i64) m; }
 		case ConFn(f)      => { c = 0; }
 	}
-	i64 d = 0;
+	i64 d = 0_i64;
 	match (c2) {
 		case ConNewtype(m) => { d = 0; }
 		case ConFn(f)      => { d = f(21); }

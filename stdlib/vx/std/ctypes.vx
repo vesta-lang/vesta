@@ -15,12 +15,12 @@ namespace std.ctypes;
 
 /* --- enteros con signo (ancho fijo) --- */
 public typedef i32 int; // C `int` (32 bits)
-public typedef i8 signed_char;
+public typedef i8  signed_char;
 public typedef i16 short_int; // C `short` / `short int`
 public typedef i64 long_long; // C `long long` / `long long int`
 
 /* --- enteros sin signo (ancho fijo) --- */
-public typedef u8 unsigned_char;
+public typedef u8  unsigned_char;
 public typedef u16 unsigned_short_int; // C `unsigned short`
 public typedef u32 unsigned_int;       // C `unsigned` / `unsigned int`
 public typedef u64 unsigned_long_long; // C `unsigned long long`
@@ -28,14 +28,14 @@ public typedef u64 unsigned_long_long; // C `unsigned long long`
 /* --- `long` / `unsigned long`: ancho dependiente de plataforma --- */
 /*     Windows (LLP64): 32 bits.  Linux/macOS (LP64): 64 bits.            */
 @Target("os:windows")
-	public typedef i32 long_int;
+public typedef i32 long_int;
 @Target("!os:windows")
-	public typedef i64 long_int;
+public typedef i64 long_int;
 
 @Target("os:windows")
-	public typedef u32 unsigned_long_int;
+public typedef u32 unsigned_long_int;
 @Target("!os:windows")
-	public typedef u64 unsigned_long_int;
+public typedef u64 unsigned_long_int;
 
 /* --- punto flotante (alias por completitud; f32/f64 ya son Vesta) --- */
 

@@ -15,7 +15,7 @@
 //   - return type DEBE ser i64 (handle del Future); el valor real fluye via fulfill.
 
 @Async
-	i64 compute() {
+i64 compute() {
 	// "trabajo asincrono" trivial.  El return X dentro del body:
 	//   - se intercepta en lower_return,
 	//   - emite fulfill(my_future, X) + hlt,
@@ -25,6 +25,6 @@
 
 i32 main() {
 	i64 fut = compute(); // arranca el child + devuelve handle
-	i64 r   = await fut;   // bloquea hasta que child fulfill
+	i64 r   = await fut; // bloquea hasta que child fulfill
 	return r;            // 42
 }

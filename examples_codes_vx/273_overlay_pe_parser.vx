@@ -59,9 +59,9 @@ struct Thunk {
 // -- toda la traduccion, declarativa, dentro del overlay.
 @overlay
 struct ImportDesc {
-	u32 oft_rva  @0x00;  // OriginalFirstThunk (RVA a la ILT)
+	u32 oft_rva  @0x00; // OriginalFirstThunk (RVA a la ILT)
 	u32 name_rva @0x0C; // RVA al nombre de la DLL
-	u32 ft_rva   @0x10;   // FirstThunk (RVA a la IAT)
+	u32 ft_rva   @0x10; // FirstThunk (RVA a la IAT)
 	// ILT: tabla de thunks anclada en translate(oft_rva, o ft_rva si oft==0), sin
 	// count (fin en entrada nula).  El base lo traduce parent<PeImage>().Sections.
 	Thunk thunks[] @offset {
@@ -77,8 +77,8 @@ struct ImportDesc {
 
 @overlay
 struct PeImage {
-	u16 e_magic         @0x00; // 'MZ'
-	u32 e_lfanew        @0x3C;
+	u16 e_magic  @0x00; // 'MZ'
+	u32 e_lfanew @0x3C;
 
 	// --- IMAGE_NT_HEADERS64 en base + e_lfanew ---
 	u32 pe_sig          @offset(e_lfanew); // 'PE\0\0'
@@ -88,22 +88,22 @@ struct PeImage {
 	u16 opt_size        @offset(e_lfanew + 20); // SizeOfOptionalHeader
 	u16 characteristics @offset(e_lfanew + 22);
 	// IMAGE_OPTIONAL_HEADER64 (base + e_lfanew + 24).
-	u16 opt_magic       @offset(e_lfanew + 24); // 0x20B = PE32+
-	u32 size_code       @offset(e_lfanew + 24 + 4);
-	u32 size_idata      @offset(e_lfanew + 24 + 8);
-	u32 entry           @offset(e_lfanew + 24 + 16);
-	u32 base_code       @offset(e_lfanew + 24 + 20);
-	u64 image_base      @offset(e_lfanew + 24 + 24);
-	u32 sect_align      @offset(e_lfanew + 24 + 32);
-	u32 file_align      @offset(e_lfanew + 24 + 36);
-	u32 size_image      @offset(e_lfanew + 24 + 56);
-	u32 size_headers    @offset(e_lfanew + 24 + 60);
-	u32 checksum        @offset(e_lfanew + 24 + 64);
-	u16 subsystem       @offset(e_lfanew + 24 + 68);
-	u16 dll_chars       @offset(e_lfanew + 24 + 70);
-	u64 stack_reserve   @offset(e_lfanew + 24 + 72);
-	u64 heap_reserve    @offset(e_lfanew + 24 + 88);
-	u32 num_dirs        @offset(e_lfanew + 24 + 108);
+	u16 opt_magic     @offset(e_lfanew + 24); // 0x20B = PE32+
+	u32 size_code     @offset(e_lfanew + 24 + 4);
+	u32 size_idata    @offset(e_lfanew + 24 + 8);
+	u32 entry         @offset(e_lfanew + 24 + 16);
+	u32 base_code     @offset(e_lfanew + 24 + 20);
+	u64 image_base    @offset(e_lfanew + 24 + 24);
+	u32 sect_align    @offset(e_lfanew + 24 + 32);
+	u32 file_align    @offset(e_lfanew + 24 + 36);
+	u32 size_image    @offset(e_lfanew + 24 + 56);
+	u32 size_headers  @offset(e_lfanew + 24 + 60);
+	u32 checksum      @offset(e_lfanew + 24 + 64);
+	u16 subsystem     @offset(e_lfanew + 24 + 68);
+	u16 dll_chars     @offset(e_lfanew + 24 + 70);
+	u64 stack_reserve @offset(e_lfanew + 24 + 72);
+	u64 heap_reserve  @offset(e_lfanew + 24 + 88);
+	u32 num_dirs      @offset(e_lfanew + 24 + 108);
 
 	// Los 16 DATA DIRECTORIES.
 	DataDir Dirs[16] @offset(e_lfanew + 24 + 112) stride(8);
@@ -116,7 +116,7 @@ struct PeImage {
 	// -- una sola copia del algoritmo, no cinco.
 	public u64 translate(u32 rva) {
 		u64 rb = (u64) this;
-		i32 i  = 0;
+		i32 i  = 0_i32;
 		while ((u32)i < (u32)this.num_sections) {
 			u32 va = this.Sections[i].virt_addr;
 			u32 vs = this.Sections[i].virt_size;
@@ -140,7 +140,7 @@ struct PeImage {
 }
 
 // Contador global de accesos fuera de rango (POLITICA de este programa).
-i64 g_faults = 0;
+i64 g_faults = 0_i64;
 
 i32 main() {
 	string path  = "pe_target.bin";
@@ -150,11 +150,13 @@ i32 main() {
 		return 2;
 	}
 	u64 size = (u64) fsize;
-	u8* buf  = (u8 *) malloc(fsize);
+	u8* buf  = (u8*) malloc(fsize);
 	i64 n    = fileio.file_read_into(path, buf, fsize);
-	if (n != fsize) { println("error de lectura");
+	if (n != fsize) {
+		println("error de lectura");
 		free(buf);
-		return 3; }
+		return 3;
+	}
 
 	PeImage pe = PeImage(buf);
 	if (pe.e_magic != 0x5A4D || pe.pe_sig != 0x00004550) {
@@ -201,7 +203,7 @@ i32 main() {
 	println("IMPORT_DIR_OFF=${offsetof(pe.import_dir)}");
 
 	// --- data directories (cada acceso comprobado) ---
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 16) {
 		if (in_bounds(pe.Dirs[i].size, size)) {
 			println("DIR ${i} RVA=${pe.Dirs[i].rva} SIZE=${pe.Dirs[i].size}");
@@ -261,7 +263,7 @@ i32 main() {
 		print_cstr(&pe.Imports[i].dll_name);
 		print(":");
 		// funciones importadas: recorrer la ILT (nombres, saltando ordinales)
-		i32 k = 0;
+		i32 k = 0_i32;
 		while (pe.Imports[i].thunks[k].raw != 0 && k < 6) {
 			if (pe.Imports[i].thunks[k].raw < 0x8000000000000000) {
 				print(" ");

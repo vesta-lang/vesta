@@ -9,9 +9,11 @@ namespace ejemplos.metaprog_completa;
 // (5) `comptime T NAME(params) { body }` funciones compile-time recursivas
 
 @Introspect
-	struct Vec3 { f64 x;
+struct Vec3 {
+	f64 x;
 	f64 y;
-	f64 z; }
+	f64 z;
+}
 
 // --- (5) Funciones compile-time recursivas.
 comptime i64 fact(i64 n) {
@@ -30,15 +32,15 @@ comptime i64 pow_int(i64 base, i64 e) {
 }
 
 // --- (1) comptime global con builtins comptime.
-const string TYPE_NAME    = typename<Vec3>();
-const u64    TYPE_SZ      = sizeof<Vec3>();
-const u64    F10          = fact(10); // 3628800
-const u64    F15          = fib(15);  // 610
+const string TYPE_NAME = typename<Vec3>();
+const u64    TYPE_SZ   = sizeof<Vec3>();
+const u64    F10       = fact(10); // 3628800
+const u64    F15       = fib(15);  // 610
 
 // --- (4) Operadores string.
 const string PREFIX       = "vec_";
 const string COMBINED     = comptime_concat(PREFIX, TYPE_NAME); // "vec_Vec3"
-const u64    COMBINED_LEN = comptime_strlen(COMBINED);         // 8
+const u64    COMBINED_LEN = comptime_strlen(COMBINED);          // 8
 
 // --- static_assert sobre todos los anteriores.
 static_assert(F10 == 3_628_800, "fact(10)");
@@ -51,7 +53,7 @@ static_assert(TYPE_SZ == 24, "sizeof Vec3");
 
 i32 main() {
 	// --- (1) comptime local con builtins + fns recursivas.
-	comptime i64 LOCAL_F6 = fact(6);   // 720
+	comptime i64 LOCAL_F6 = fact(6);       // 720
 	comptime i64 SQ_5     = pow_int(5, 2); // 25
 
 	// --- (2) Bloque comptime con vars locales scoped y static_assert.
@@ -62,21 +64,21 @@ i32 main() {
 	}
 
 	// --- (3) comptime for desenrollado con index const.
-	i64 sum_facts = 0;
+	i64 sum_facts = 0_i64;
 	comptime for (k in 1..6) {
 		sum_facts = sum_facts + fact(k); // fact(k) inline como CONST cada iter
 	}
 	// sum_facts = 1+2+6+24+120 = 153
 
 	// comptime for + comptime dentro del body (cada iter es scope nuevo).
-	i64 product = 1;
+	i64 product = 1_i64;
 	comptime for (j in 2..=5) {
 		comptime i64 SQ = j * j; // j const en cada iter
 		product = product + SQ;  // 4+9+16+25 = 54
 	}
 
 	// Validar todo.
-	i32                    ok = 0;
+	i32                    ok = 0_i32;
 	if (LOCAL_F6 == 720)   ok = ok + 6;
 	if (SQ_5 == 25)        ok = ok + 6;
 	if (sum_facts == 153)  ok = ok + 6;

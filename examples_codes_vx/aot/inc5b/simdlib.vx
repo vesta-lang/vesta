@@ -14,22 +14,22 @@
 // Contador global en .ovrctr (writable).  lib_strcmp lo incrementa en cada
 // invocacion; el main del consumidor lo lee al final via section_start.
 @section(".ovrctr", "rw")
-	bytes g_calls {
+bytes g_calls {
 	dq 0
 }
 
 // Override del strcmp del build (declarado en ESTE modulo importado).  Firma
 // i64(u8*, i64, u8*, i64) como exige el helper.  Devuelve -1/0/1.
 @HelperOverride(strcmp)
-	public i64 lib_strcmp(u8 *a, i64 la, u8 *b, i64 lb) {
+public i64 lib_strcmp(u8* a, i64 la, u8* b, i64 lb) {
 	// Registrar la invocacion en el contador global cross-module.
-	u64* ctr = (u64 *) section_start(".ovrctr");
+	u64* ctr = (u64*) section_start(".ovrctr");
 	*    ctr = *ctr + 1;
 	// min = (la < lb) ? la : lb.
-	i64  min = la;
+	i64 min = la;
 	if (lb < la) { min = lb; }
 	// Comparar prefijo comun byte-a-byte (unsigned 0..255).
-	i64 i = 0;
+	i64 i = 0_i64;
 	while (i < min) {
 		i64 ca = (i64) a[i];
 		i64 cb = (i64) b[i];

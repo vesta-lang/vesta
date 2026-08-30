@@ -44,14 +44,14 @@ import std.types only usize, uintptr;
 // consumidor escribe `import std.memory` y recibe lo de su objetivo sin
 // mencionarlo.  Mismo reparto que en `std.syscall`.
 @Target("arch:x86_64")
-	public import std.memory.x86_64;
+public import std.memory.x86_64;
 @Target("arch:arm64")
-	public import std.memory.arm64;
+public import std.memory.arm64;
 
 /// Bytes de la palabra de la maquina.  Sale del propio tipo, no de un numero
 /// escrito a mano: en un objetivo de 32 bits vale 4 y en uno de 64 vale 8, sin
 /// que este fichero tenga que saber en cual esta.
-const usize ANCHO       = sizeof<usize>();
+const usize ANCHO = sizeof<usize>();
 
 /// A partir de cuantos bytes conviene `rep movsb` en un procesador que anuncia
 /// ERMS.  Por debajo, poner en marcha la instruccion cuesta mas que la copia
@@ -72,7 +72,7 @@ const usize UMBRAL_ERMS = 2048;
 ///
 /// 64 KiB es el punto de partida razonado, no medido en varias maquinas: esta
 /// aqui y con nombre para poder moverlo cuando se mida.
-const usize UMBRAL_NT   = 65_536;
+const usize UMBRAL_NT = 65_536;
 
 /// A partir de cuantos bytes se pone a cero con `dc zva` en arm64.
 ///
@@ -83,7 +83,7 @@ const usize UMBRAL_NT   = 65_536;
 /// Como todos los de este fichero, es un punto de partida razonado y no una
 /// verdad universal: el tamano de bloque y el coste relativo dependen de la
 /// microarquitectura, y el sitio para moverlo es este.
-const usize UMBRAL_ZVA  = 512;
+const usize UMBRAL_ZVA = 512;
 
 /**
  * @brief Copia @p n bytes con un bucle portable.  La version de referencia.
@@ -101,29 +101,29 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.
  */
 @NoIdiom
-	public void memcpy_c(u8 *dst, u8 *src, usize n) {
-	usize  total    = n;
-	usize  off      = 0;
+public void memcpy_c(u8* dst, u8* src, usize n) {
+	usize total = n;
+	usize off   = 0;
 	// Cuerpo: de palabra en palabra mientras quepa una entera.
 	usize  palabras = total / ANCHO;
-	usize* dw       = (usize *) dst;
-	usize* sw       = (usize *) src;
+	usize* dw       = (usize*) dst;
+	usize* sw       = (usize*) src;
 	for (usize i = 0; i < palabras; i++) {
 		dw[i] = sw[i];
 	}
 	off = palabras * ANCHO;
 	// Cola: menos de una palabra, en pasos descendentes.
 	if (off + 4 <= total) {
-		u32* d4 = (u32 *)(dst + off);
-		u32* s4 = (u32 *)(src + off);
+		u32* d4 = (u32*)(dst + off);
+		u32* s4 = (u32*)(src + off);
 		d4[0] = s4[0];
-		off = off + 4;
+		off   = off + 4;
 	}
 	if (off + 2 <= total) {
-		u16* d2 = (u16 *)(dst + off);
-		u16* s2 = (u16 *)(src + off);
+		u16* d2 = (u16*)(dst + off);
+		u16* s2 = (u16*)(src + off);
 		d2[0] = s2[0];
-		off = off + 2;
+		off   = off + 2;
 	}
 	if (off < total) {
 		dst[off] = src[off];
@@ -148,7 +148,7 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.  Pensada para <= 64; por encima delega.
  */
 @NoIdiom
-	public void memcpy_tiny(u8 *dst, u8 *src, usize n) {
+public void memcpy_tiny(u8* dst, u8* src, usize n) {
 	usize total = n;
 	if (total == 0) {
 		return;
@@ -158,14 +158,14 @@ const usize UMBRAL_ZVA  = 512;
 		return;
 	}
 	if (total >= 32) {
-		u64* d = (u64 *) dst;
-		u64* s = (u64 *) src;
+		u64* d = (u64*) dst;
+		u64* s = (u64*) src;
 		d[0] = s[0];
 		d[1] = s[1];
 		d[2] = s[2];
 		d[3] = s[3];
-		u64* dz = (u64 *)(dst + total - 32);
-		u64* sz = (u64 *)(src + total - 32);
+		u64* dz = (u64*)(dst + total - 32);
+		u64* sz = (u64*)(src + total - 32);
 		dz[0] = sz[0];
 		dz[1] = sz[1];
 		dz[2] = sz[2];
@@ -173,37 +173,37 @@ const usize UMBRAL_ZVA  = 512;
 		return;
 	}
 	if (total >= 16) {
-		u64* d = (u64 *) dst;
-		u64* s = (u64 *) src;
+		u64* d = (u64*) dst;
+		u64* s = (u64*) src;
 		d[0] = s[0];
 		d[1] = s[1];
-		u64* dz = (u64 *)(dst + total - 16);
-		u64* sz = (u64 *)(src + total - 16);
+		u64* dz = (u64*)(dst + total - 16);
+		u64* sz = (u64*)(src + total - 16);
 		dz[0] = sz[0];
 		dz[1] = sz[1];
 		return;
 	}
 	if (total >= 8) {
-		u64* d = (u64 *) dst;
-		u64* s = (u64 *) src;
+		u64* d = (u64*) dst;
+		u64* s = (u64*) src;
 		d[0] = s[0];
-		u64* dz = (u64 *)(dst + total - 8);
-		u64* sz = (u64 *)(src + total - 8);
+		u64* dz = (u64*)(dst + total - 8);
+		u64* sz = (u64*)(src + total - 8);
 		dz[0] = sz[0];
 		return;
 	}
 	if (total >= 4) {
-		u32* d = (u32 *) dst;
-		u32* s = (u32 *) src;
+		u32* d = (u32*) dst;
+		u32* s = (u32*) src;
 		d[0] = s[0];
-		u32* dz = (u32 *)(dst + total - 4);
-		u32* sz = (u32 *)(src + total - 4);
+		u32* dz = (u32*)(dst + total - 4);
+		u32* sz = (u32*)(src + total - 4);
 		dz[0] = sz[0];
 		return;
 	}
 	// 1..3 bytes: primero, medio y ultimo.  Con n < 3 el del medio repite uno
 	// de los otros, que es correcto y ahorra la rama.
-	dst[0] = src[0];
+	dst[0]         = src[0];
 	dst[total / 2] = src[total / 2];
 	dst[total - 1] = src[total - 1];
 }
@@ -222,7 +222,7 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.
  */
 @Target("mode:vm")
-	public void memcpy(u8 *dst, u8 *src, usize n) {
+public void memcpy(u8* dst, u8* src, usize n) {
 	for (usize i = 0; i < n; i++) {
 		dst[i] = src[i];
 	}
@@ -234,8 +234,8 @@ const usize UMBRAL_ZVA  = 512;
 /// En binario nativo no hay VM debajo ni instruccion que aprovechar, asi que
 /// vale el mismo reparto que con JIT.
 @Target("(mode:aot || mode:jit) && arch:x86_64")
-	@NoIdiom
-	public void memcpy(u8 *dst, u8 *src, usize n) {
+@NoIdiom
+public void memcpy(u8* dst, u8* src, usize n) {
 	usize total = n;
 	if (total <= 64) {
 		memcpy_tiny(dst, src, n);
@@ -321,8 +321,8 @@ const usize UMBRAL_ZVA  = 512;
 /// vectorial cubre todo el rango de arriba y el escalon de mas es el de las
 /// escrituras no temporales.
 @Target("(mode:aot || mode:jit) && arch:arm64")
-	@NoIdiom
-	public void memcpy(u8 *dst, u8 *src, usize n) {
+@NoIdiom
+public void memcpy(u8* dst, u8* src, usize n) {
 	usize total = n;
 	if (total <= 64) {
 		memcpy_tiny(dst, src, n);
@@ -353,8 +353,8 @@ const usize UMBRAL_ZVA  = 512;
 /// portable, que es correcto en todas.  Al anadir un `std/memory/<arch>.vx`
 /// basta con darle su propia variante aqui.
 @Target("(mode:aot || mode:jit) && !arch:x86_64 && !arch:arm64")
-	@NoIdiom
-	public void memcpy(u8 *dst, u8 *src, usize n) {
+@NoIdiom
+public void memcpy(u8* dst, u8* src, usize n) {
 	usize total = n;
 	if (total <= 64) {
 		memcpy_tiny(dst, src, n);
@@ -375,8 +375,8 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.
  */
 @NoIdiom
-	public void memset_c(u8 *dst, u8 val, usize n) {
-	usize total  = n;
+public void memset_c(u8* dst, u8 val, usize n) {
+	usize total = n;
 	// Replicar el byte a la palabra entera: 0x41 -> 0x4141414141414141.
 	usize patron = (usize) val;
 	patron = patron | (patron << 8);
@@ -388,20 +388,20 @@ const usize UMBRAL_ZVA  = 512;
 		patron = patron | (patron << 32);
 	}
 	usize  palabras = total / ANCHO;
-	usize* dw       = (usize *) dst;
+	usize* dw       = (usize*) dst;
 	for (usize i = 0; i < palabras; i++) {
 		dw[i] = patron;
 	}
 	usize off = palabras * ANCHO;
 	if (off + 4 <= total) {
-		u32* d4 = (u32 *)(dst + off);
+		u32* d4 = (u32*)(dst + off);
 		d4[0] = (u32) patron;
-		off = off + 4;
+		off   = off + 4;
 	}
 	if (off + 2 <= total) {
-		u16* d2 = (u16 *)(dst + off);
+		u16* d2 = (u16*)(dst + off);
 		d2[0] = (u16) patron;
-		off = off + 2;
+		off   = off + 2;
 	}
 	if (off < total) {
 		dst[off] = val;
@@ -430,7 +430,7 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.  Pensada para <= 64; por encima delega.
  */
 @NoIdiom
-	public void memset_tiny(u8 *dst, u8 val, usize n) {
+public void memset_tiny(u8* dst, u8 val, usize n) {
 	usize total = n;
 	if (total == 0) {
 		return;
@@ -442,12 +442,12 @@ const usize UMBRAL_ZVA  = 512;
 	// 0x0101010101010101: el byte replicado a los ocho de la palabra.
 	u64 pat = ((u64) val) * 72_340_172_838_076_673;
 	if (total >= 32) {
-		u64* d = (u64 *) dst;
+		u64* d = (u64*) dst;
 		d[0] = pat;
 		d[1] = pat;
 		d[2] = pat;
 		d[3] = pat;
-		u64* dz = (u64 *)(dst + total - 32);
+		u64* dz = (u64*)(dst + total - 32);
 		dz[0] = pat;
 		dz[1] = pat;
 		dz[2] = pat;
@@ -455,32 +455,32 @@ const usize UMBRAL_ZVA  = 512;
 		return;
 	}
 	if (total >= 16) {
-		u64* d = (u64 *) dst;
+		u64* d = (u64*) dst;
 		d[0] = pat;
 		d[1] = pat;
-		u64* dz = (u64 *)(dst + total - 16);
+		u64* dz = (u64*)(dst + total - 16);
 		dz[0] = pat;
 		dz[1] = pat;
 		return;
 	}
 	if (total >= 8) {
-		u64* d = (u64 *) dst;
+		u64* d = (u64*) dst;
 		d[0] = pat;
-		u64* dz = (u64 *)(dst + total - 8);
+		u64* dz = (u64*)(dst + total - 8);
 		dz[0] = pat;
 		return;
 	}
 	if (total >= 4) {
-		u32* d = (u32 *) dst;
+		u32* d = (u32*) dst;
 		d[0] = (u32) pat;
-		u32* dz = (u32 *)(dst + total - 4);
+		u32* dz = (u32*)(dst + total - 4);
 		dz[0] = (u32) pat;
 		return;
 	}
 	if (total >= 2) {
-		u16* d = (u16 *) dst;
+		u16* d = (u16*) dst;
 		d[0] = (u16) pat;
-		u16* dz = (u16 *)(dst + total - 2);
+		u16* dz = (u16*)(dst + total - 2);
 		dz[0] = (u16) pat;
 		return;
 	}
@@ -502,8 +502,8 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.
  */
 @Target("(mode:aot || mode:jit) && arch:x86_64")
-	@NoIdiom
-	public void memset(u8 *dst, u8 val, usize n) {
+@NoIdiom
+public void memset(u8* dst, u8 val, usize n) {
 	usize total = n;
 	// Hasta 64 bytes, sin bucle y sin registros anchos: montar uno y difundir
 	// el valor cuesta mas de lo que ahorra en un tramo tan corto.
@@ -511,14 +511,14 @@ const usize UMBRAL_ZVA  = 512;
 		memset_tiny(dst, val, n);
 		return;
 	}
-	u64     rasgos = init_cpuid();
+	u64 rasgos = init_cpuid();
 	// La alineacion del destino se comprueba UNA vez y sirve para todo el
 	// reparto: es un AND, y decide entre dos familias que emiten el mismo
 	// patron con la unica diferencia de si el acceso exige o no estar
 	// alineado.  Preguntarlo es mas barato que el acceso que ahorra, y
 	// adivinarlo no es una opcion: una instruccion alineada sobre una
 	// direccion que no lo esta no va mas lenta, hace caer el programa.
-	uintptr ad     = (uintptr) dst;
+	uintptr ad = (uintptr) dst;
 	/* Para una variante ALINEADA no basta con que lo este el destino: tambien
 	 * el TAMANO tiene que ser multiplo del ancho.  Esas funciones cubren el
 	 * tramo con dos mitades solapadas y la segunda arranca en `n - bytes`, asi
@@ -630,7 +630,7 @@ const usize UMBRAL_ZVA  = 512;
 /// idiomas convierte en ella, asi que va sin @c \@NoIdiom a proposito -- igual
 /// que su gemela de copia.
 @Target("mode:vm")
-	public void memset(u8 *dst, u8 val, usize n) {
+public void memset(u8* dst, u8 val, usize n) {
 	for (usize i = 0; i < n; i++) {
 		dst[i] = val;
 	}
@@ -644,8 +644,8 @@ const usize UMBRAL_ZVA  = 512;
 /// sin equivalente a `rep stosb`: el reparto es solo por tamano, con el
 /// escalon de arriba en las escrituras no temporales.
 @Target("(mode:aot || mode:jit) && arch:arm64")
-	@NoIdiom
-	public void memset(u8 *dst, u8 val, usize n) {
+@NoIdiom
+public void memset(u8* dst, u8 val, usize n) {
 	usize total = n;
 	if (total <= 64) {
 		memset_tiny(dst, val, n);
@@ -682,8 +682,8 @@ const usize UMBRAL_ZVA  = 512;
 /// por no tener registros anchos.  Al anadir un `std/memory/<arch>.vx` basta
 /// con darle su propia variante aqui.
 @Target("(mode:aot || mode:jit) && !arch:x86_64 && !arch:arm64")
-	@NoIdiom
-	public void memset(u8 *dst, u8 val, usize n) {
+@NoIdiom
+public void memset(u8* dst, u8 val, usize n) {
 	if (n <= 64) {
 		memset_tiny(dst, val, n);
 		return;
@@ -702,14 +702,14 @@ const usize UMBRAL_ZVA  = 512;
  * @param n Numero de bytes.
  */
 @NoIdiom
-	public void memmove(u8 *dst, u8 *src, usize n) {
+public void memmove(u8* dst, u8* src, usize n) {
 	usize   total = n;
 	uintptr d     = (uintptr) dst;
 	uintptr s     = (uintptr) src;
 	if (d > s && d < s + (uintptr) total) {
 		usize i = total;
 		while (i > 0) {
-			i = i - 1;
+			i      = i - 1;
 			dst[i] = src[i];
 		}
 		return;

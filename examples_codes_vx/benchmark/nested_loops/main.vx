@@ -1,11 +1,11 @@
 // Bench: nested loops (matrix-like).  500 x 500 x 200 = 50M ops.
 i32 main() {
-	i64 sum = 0;
-	i32 i   = 0;
+	i64 sum = 0_i64;
+	i32 i   = 0_i32;
 	while (i < 500) {
-		i32 j = 0;
+		i32 j = 0_i32;
 		while (j < 500) {
-			i32 k = 0;
+			i32 k = 0_i32;
 			while (k < 200) {
 				sum = sum + (i64)(i + j + k);
 				k   = k + 1;

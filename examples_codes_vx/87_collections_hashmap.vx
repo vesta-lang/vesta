@@ -32,13 +32,13 @@ i32 main() {
 
 	// Put 50 pares (k=i*7+1, v=i*100), forzando varios rehashes desde
 	// capacidad inicial 16.  Al final size debe ser 50.
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 50) {
 		vcol_map_put(m, i * 7 + 1, i * 100);
 		i = i + 1;
 	}
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// Validar size correcto tras los puts.
 	if (vcol_map_size(m) == 50) { acc = acc + 10; }

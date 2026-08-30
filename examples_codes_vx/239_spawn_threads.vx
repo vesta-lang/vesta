@@ -18,34 +18,34 @@ namespace ejemplos.spawn_threads;
 
 import "vx_sync" only vx_lock, vx_unlock;
 
-i64 g_lock    = 0; // objeto de lock (host_ptr; palabra de monitor en obj+16)
-i64 g_counter = 0; // contador compartido
+i64 g_lock    = 0_i64; // objeto de lock (host_ptr; palabra de monitor en obj+16)
+i64 g_counter = 0_i64; // contador compartido
 
 i32 main() {
 	g_lock = (i64)malloc(4 * 8);
-	i64* lo = (i64 *)g_lock;
-	lo[0] = 0;
-	lo[1] = 0;
-	lo[2] = 0;
-	lo[3] = 0;
+	i64* lo = (i64*)g_lock;
+	lo[0]     = 0;
+	lo[1]     = 0;
+	lo[2]     = 0;
+	lo[3]     = 0;
 	g_counter = 0;
 
 	// Cada `spawn { }` = un hilo del SO en paralelo.
 	spawn {
-		i64 i = 0;
+		i64 i = 0_i64;
 		while (i < 30_000) {
-			vx_lock((i64 *)g_lock);
+			vx_lock((i64*)g_lock);
 			g_counter = g_counter + 1;
-			vx_unlock((i64 *)g_lock);
+			vx_unlock((i64*)g_lock);
 			i = i + 1;
 		}
 	};
 	spawn {
-		i64 i = 0;
+		i64 i = 0_i64;
 		while (i < 30_000) {
-			vx_lock((i64 *)g_lock);
+			vx_lock((i64*)g_lock);
 			g_counter = g_counter + 1;
-			vx_unlock((i64 *)g_lock);
+			vx_unlock((i64*)g_lock);
 			i = i + 1;
 		}
 	};

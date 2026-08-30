@@ -22,8 +22,8 @@ i32 main() {
 		msgsend(from, 777);   // responde al padre con 777
 	};
 
-	msgsend(child, self); // envia el PID del padre al hijo
+	msgsend(child, self);  // envia el PID del padre al hijo
 	i64 reply = msgrecv(); // bloquea hasta que el hijo responda
 
-	return reply;          // 777
+	return reply; // 777
 }

@@ -11,12 +11,18 @@ namespace ejemplos.escape_scalar_repl;
 //
 // Resultado esperado: 5 + 7 + 10 + 20 = 42.
 
-class Foo { public i32 x;
-	public Foo(i32 v) { this.x = v; } }
-class Counter { public i32 x;
-	public Counter(i32 v) { this.x = v; } }
-class Item { public i32 v;
-	public Item(i32 x) { this.v = x; } }
+class Foo {
+	public i32 x;
+	public Foo(i32 v) { this.x = v; }
+}
+class Counter {
+	public i32 x;
+	public Counter(i32 v) { this.x = v; }
+}
+class Item {
+	public i32 v;
+	public Item(i32 x) { this.v = x; }
+}
 
 // (1) Read-only: el objeto solo se lee -> scalar-replaced a `return i`.
 i32 read_only(i32 i) {
@@ -46,9 +52,9 @@ Item pick(i32 cond) {
 i32 main() {
 	i32  a = read_only(5); // 5
 	i32  b = mutable(3);   // 2*3 + 1 = 7
-	Item x = pick(0);     // Item(10)
-	Item y = pick(1);     // Item(20)
+	Item x = pick(0);      // Item(10)
+	Item y = pick(1);      // Item(20)
 	i32  c = x.v;          // 10
 	i32  d = y.v;          // 20
-	return a + b + c + d; // 5 + 7 + 10 + 20 = 42
+	return a + b + c + d;  // 5 + 7 + 10 + 20 = 42
 }

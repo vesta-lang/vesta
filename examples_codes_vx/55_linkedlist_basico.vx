@@ -13,7 +13,7 @@ namespace ejemplos.linkedlist_basico;
 // Resultado esperado: R0 = 6  (1 + 2 + 3).
 
 class Node {
-	public i32 value;
+	public i32  value;
 	public Node next;
 
 	public Node(i32 v) {
@@ -24,7 +24,7 @@ class Node {
 
 class LinkedList {
 	public Node head;
-	public i32 length;
+	public i32  length;
 
 	public LinkedList() {
 		this.head   = null;
@@ -39,7 +39,7 @@ class LinkedList {
 	}
 
 	public i32 sum() {
-		i32  total = 0;
+		i32  total = 0_i32;
 		Node cur   = this.head;
 		while (cur != null) {
 			total = total + cur.value;

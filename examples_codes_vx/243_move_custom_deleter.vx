@@ -13,6 +13,8 @@ void run() {
 	unique<i64> a = unique_with(9, del);
 	unique<i64> b = move(a);
 }
-i32 main() { Counter.libs = 0;
+i32 main() {
+	Counter.libs = 0;
 	run();
-	return (i32) Counter.libs; }
+	return (i32) Counter.libs;
+}

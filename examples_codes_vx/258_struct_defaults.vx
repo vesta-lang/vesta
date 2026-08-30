@@ -16,15 +16,15 @@
 // con structs genericos (templates).
 
 struct Valores {
-	u8  a = 0x10;
-	u8  b = 0x20;
-	i32 c = 100; // los defaults pueden ser de cualquier tipo primitivo
+	u8  a = 0x10_u8;
+	u8  b = 0x20_u8;
+	i32 c = 100_i32; // los defaults pueden ser de cualquier tipo primitivo
 }
 
 // Struct generico: los defaults se conservan al monomorphizar `Caja<T>`.
 struct Caja<T> {
-	T val;         // sin default -> 0
-	u8 tag = 0x07; // default conservado en cada instanciacion
+	T  val;           // sin default -> 0
+	u8 tag = 0x07_u8; // default conservado en cada instanciacion
 }
 
 i32 sumar(Valores v) {

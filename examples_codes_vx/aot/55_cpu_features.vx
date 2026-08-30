@@ -10,7 +10,7 @@
 // es determinista: 42 si SSE2 se detecto (siempre), 0 si la deteccion fallo.
 
 i32 main() {
-	u64 f        = cpu_features();
+	u64 f = cpu_features();
 	// bit0 = SSE2: garantizado en cualquier x86-64.
 	i32 has_sse2 = (i32)((f & 1) != 0);
 	return 42 * has_sse2; // 42

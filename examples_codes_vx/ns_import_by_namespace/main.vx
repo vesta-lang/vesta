@@ -1,4 +1,4 @@
-import geo.shapes; // por-namespace (no por path de fichero)
+import geo.shapes;      // por-namespace (no por path de fichero)
 import geo.shapes as g; // alias del namespace
 
 i64 main() {

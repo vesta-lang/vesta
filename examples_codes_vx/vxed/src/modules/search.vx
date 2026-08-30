@@ -15,7 +15,7 @@ public i64 find_from(buffer.Buffer b, string needle, i32 from_offset) {
 	i32        i    = from_offset;
 	if (i < 0) i    = 0;
 	while (i < last) {
-		i32 j = 0;
+		i32 j = 0_i32;
 		while (j < nlen && b.data[i + j] == nbuf[j]) {
 			j = j + 1;
 		}

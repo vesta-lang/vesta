@@ -14,9 +14,9 @@ namespace ejemplos.borrow_state_machine;
 void apply_op(borrow_mut<i32> total, i32 op, i32 arg) {
 	i32                      cur = read_borrow(total);
 	i32                      nxt = cur;
-	if (op == 1)             nxt = cur + arg;             // OP_ADD
-	if (op == 2)             nxt = cur - arg;             // OP_SUB
-	if (op == 3)             nxt = cur * arg;             // OP_MUL
+	if (op == 1)             nxt = cur + arg; // OP_ADD
+	if (op == 2)             nxt = cur - arg; // OP_SUB
+	if (op == 3)             nxt = cur * arg; // OP_MUL
 	if (op == 4 && arg != 0) nxt = cur / arg; // OP_DIV
 	write_borrow(total, nxt);
 }

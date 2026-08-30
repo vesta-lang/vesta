@@ -60,20 +60,20 @@ i32 main() {
 	Caja c = {.v = 40};
 	i64  a = c.identidad<i64>(2); // explicito  -> 2
 	i32  b = c.identidad(3);      // inferido i32 -> 3
-	i64  d = c.leer_como<i64>(); // cast del campo -> 40
+	i64  d = c.leer_como<i64>();  // cast del campo -> 40
 
 	Contador k = new Contador(28);
 	i64      s = k.sumar<i64>(7); // 28 + 7 -> 35
 
 	Util u  = {.base = 0};
 	i64  p  = u.primero<i64, i32>(4, 999); // primer arg -> 4
-	i64  dd = u.doble<i64>(9); // 9 + 9 -> 18
+	i64  dd = u.doble<i64>(9);             // 9 + 9 -> 18
 
-	Par<i32> par   = {.v = 30};
-	i64      m     = par.mezcla<i64>(12); // 30 + 12 -> 42 (no usado en suma)
+	Par<i32> par = {.v = 30};
+	i64      m   = par.mezcla<i64>(12); // 30 + 12 -> 42 (no usado en suma)
 
 	// 2 + 3 + (40-40) + 35 + 4 + 18 - 20 = 42 ; ademas validamos m == 42.
-	i64      total = a + b + (d - 40) + s + p + dd - 20;
+	i64 total = a + b + (d - 40) + s + p + dd - 20;
 	if (m != 42) { return 0; }
 	return (i32) total; // 42
 }

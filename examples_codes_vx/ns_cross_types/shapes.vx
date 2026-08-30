@@ -9,8 +9,10 @@ public class Box {
 	public void set(i64 x) { this.v = x; }
 }
 
-public struct Vec2 { public i64 x;
-	public i64 y; }
+public struct Vec2 {
+	public i64 x;
+	public i64 y;
+}
 
 public enum Shape {
 	Circle(i64),

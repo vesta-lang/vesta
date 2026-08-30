@@ -15,16 +15,16 @@
 // Resultado esperado: R0 = 3 (length del resultado del override).
 
 @StringConcat
-	string my_concat(string a, string b) {
+string my_concat(string a, string b) {
 	return "OVR";
 }
 
 i32 main() {
-	string s  = "hola";
-	string t  = " mundo";
+	string s = "hola";
+	string t = " mundo";
 
 	// Operador `+` ruteado a my_concat -> resultado fijo "OVR" (len 3).
-	string c  = s + t;
+	string c = s + t;
 
 	// Builtin str_concat tambien ruteado a my_concat -> len 3.
 	string c2 = s.concat(t);

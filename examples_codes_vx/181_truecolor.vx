@@ -10,9 +10,9 @@ i32 main() {
 	// Fondo.
 	println("${bg_rgb(0,0,255)}fondo azul${RESET}");
 	// Runtime: r,g,b como variables.
-	i32 r = 10;
-	i32 g = 200;
-	i32 b = 30;
+	i32 r = 10_i32;
+	i32 g = 200_i32;
+	i32 b = 30_i32;
 	println("${fg_rgb(r,g,b)}rgb runtime${RESET}");
 	return 0;
 }

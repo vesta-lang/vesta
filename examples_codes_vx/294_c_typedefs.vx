@@ -10,23 +10,29 @@
 import std.ctypes only int, short_int, long_int, unsigned_int;
 
 // Alias basico + multi-declarador con punteros (`typedef LONG *PLONG, *LPLONG;`).
-typedef i32 LONG;
-typedef LONG * PLONG, *LPLONG;
+typedef i32           LONG;
+typedef LONG* PLONG, *LPLONG;
 
 // union C-style: todos los campos en offset 0.
-union U { i32 a;
+union U {
+	i32 a;
 	f64 b;
-	i16 c; }
+	i16 c;
+}
 
 // typedef struct con tag + alias de puntero.
-typedef struct _POINT { i32 x;
-	i32 y; } POINT, *PPOINT;
+typedef struct _POINT {
+	i32 x;
+	i32 y;
+} POINT, *PPOINT;
 
 // union + struct ANONIMOS aplanados (LARGE_INTEGER de Win32).
 typedef struct _LARGE {
 	union {
-		struct { u32 Low;
-			i32 High; };
+		struct {
+			u32 Low;
+			i32 High;
+		};
 		i64 Quad;
 	};
 } LARGE, *PLARGE;
@@ -40,8 +46,8 @@ typedef int DWORD_LIKE;
 i32 main() {
 	// Sufijos de tipo: nombran un tipo de Vesta, no uno de C.
 	u64      hexv = 0x10_u64; // 16
-	u32      uns  = 5_u32;     // 5
-	long_int lv   = 4;     // 4  (long_int en Windows = i32, LP64 = i64)
+	u32      uns  = 5_u32;    // 5
+	long_int lv   = 4;        // 4  (long_int en Windows = i32, LP64 = i64)
 
 	// union: escribir un campo, leer otro.
 	U u;

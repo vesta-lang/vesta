@@ -32,16 +32,16 @@ i32 main() {
 	print("\n");
 
 	// 2. Const entero, nombrado sin cualificar gracias al `only`: se inlinea.
-	i64 total = LIMITE;                     // 30
+	i64 total = LIMITE; // 30
 
 	// 3. Global mutable: el valor lo puso el `__module_init` de `config`.
-	total       = total + config.usos;            // 30 + 2 = 32
+	total = total + config.usos; // 30 + 2 = 32
 
 	// 4. El dep escribe SU global...
-	total       = total + config.registrar_uso(); // usos = 3 -> 32 + 3 = 35
+	total = total + config.registrar_uso(); // usos = 3 -> 32 + 3 = 35
 
 	// 5. ...y aqui se ve ese mismo storage, no una copia.
-	config.usos = config.usos + 4;          // 3 + 4 = 7
+	config.usos = config.usos + 4;     // 3 + 4 = 7
 	total       = total + config.usos; // 35 + 7 = 42
 
 	return (i32) total;

@@ -20,23 +20,23 @@ import "simd_string";
 // section_start(".name") da su direccion (char*).  Longitudes 0/5/16/17/33.
 // --------------------------------------------------------------------------
 @section(".s_len0", "rw")
-	bytes b_len0 {
+bytes b_len0 {
 	db 0 // longitud 0
 }
 @section(".s_len5", "rw")
-	bytes b_len5 {
+bytes b_len5 {
 	db 104, 101, 108, 108, 111, 0 // "hello\0" -> 5
 }
 @section(".s_len16", "rw")
-	bytes b_len16 {
+bytes b_len16 {
 	db 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 0 // 16 'A'..'P' -> 16
 }
 @section(".s_len17", "rw")
-	bytes b_len17 {
+bytes b_len17 {
 	db 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 0 // 17 -> 17
 }
 @section(".s_len33", "rw")
-	bytes b_len33 {
+bytes b_len33 {
 	// 33 chars 'a' (0x61) + nul.
 	times 33 db 0x61
 		db 0
@@ -51,8 +51,8 @@ i64 sign_of(string a, string b) {
 }
 
 i32 main() {
-	i64 ok    = 0;    // contador de casos correctos
-	i64 total = 0; // contador de casos probados
+	i64 ok    = 0_i64; // contador de casos correctos
+	i64 total = 0_i64; // contador de casos probados
 
 	// --- Tabla exhaustiva de strcmp (signo esperado) ---
 
@@ -148,14 +148,14 @@ i32 main() {
 	i32 cmp_ok = (i32)(ok == total);
 
 	// --- strlen_cstr() de la lib sobre char* de longitudes 0/5/16/17/33 ---
-	i64 lok    = 0;
-	i64 ltotal = 0;
+	i64 lok    = 0_i64;
+	i64 ltotal = 0_i64;
 
-	char* s0  = (char *) section_start(".s_len0");
-	char* s5  = (char *) section_start(".s_len5");
-	char* s16 = (char *) section_start(".s_len16");
-	char* s17 = (char *) section_start(".s_len17");
-	char* s33 = (char *) section_start(".s_len33");
+	char* s0  = (char*) section_start(".s_len0");
+	char* s5  = (char*) section_start(".s_len5");
+	char* s16 = (char*) section_start(".s_len16");
+	char* s17 = (char*) section_start(".s_len17");
+	char* s33 = (char*) section_start(".s_len33");
 
 	ltotal = ltotal + 1;
 	if (simd_string.strlen_cstr(s0) == 0) { lok = lok + 1; }

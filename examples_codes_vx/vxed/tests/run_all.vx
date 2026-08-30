@@ -6,43 +6,53 @@ import "cases/test_gc_stress";
 
 i32 main() {
 	println("=== vxed unit tests ===");
-	i32 fails = 0;
+	i32 fails = 0_i32;
 
 	println("");
 	print("[test_interpolation_loop ]   ");
 	i32 r1 = test_interpolation_loop.run();
-	if (r1 == 0) { println("PASS"); } else { print("FAIL r=");
+	if (r1 == 0) { println("PASS"); } else {
+		print("FAIL r=");
 		print_int(r1);
 		println("");
-		fails = fails + 1; }
+		fails = fails + 1;
+	}
 
 	print("[test_cross_module_string]   ");
 	i32 r2 = test_cross_module_string.run();
-	if (r2 == 0) { println("PASS"); } else { print("FAIL r=");
+	if (r2 == 0) { println("PASS"); } else {
+		print("FAIL r=");
 		print_int(r2);
 		println("");
-		fails = fails + 1; }
+		fails = fails + 1;
+	}
 
 	print("[test_nested_loop_repro  ]   ");
 	i32 r3 = test_nested_loop_repro.run();
-	if (r3 == 0) { println("PASS"); } else { print("FAIL r=");
+	if (r3 == 0) { println("PASS"); } else {
+		print("FAIL r=");
 		print_int(r3);
 		println("");
-		fails = fails + 1; }
+		fails = fails + 1;
+	}
 
 	print("[test_class_field_chain  ]   ");
 	i32 r4 = test_class_field_chain.run();
-	if (r4 == 0) { println("PASS"); } else { print("FAIL r=");
+	if (r4 == 0) { println("PASS"); } else {
+		print("FAIL r=");
 		print_int(r4);
 		println("");
-		fails = fails + 1; }
+		fails = fails + 1;
+	}
 
 	print("[test_gc_stress          ]   ");
 	i32 r5 = test_gc_stress.run();
-	if (r5 == 0) { println("PASS"); } else { print("FAIL r=");
+	if (r5 == 0) { println("PASS"); } else {
+		print("FAIL r=");
 		print_int(r5);
 		println("");
-		fails = fails + 1; }
+		fails = fails + 1;
+	}
 
 	println("");
 	if (fails == 0) {

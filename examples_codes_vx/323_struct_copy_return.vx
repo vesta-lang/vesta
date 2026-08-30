@@ -18,15 +18,17 @@ namespace struct_copy_return;
 struct Box {
 	u64 v;
 	// Copia `this`, cambia el campo y devuelve la copia; `this` queda intacto.
-	public Box with(u64 x) { Box r = this;
+	public Box with(u64 x) {
+		Box r = this;
 		r.v = x;
-		return r; }
+		return r;
+	}
 }
 
 i32 main() {
 	Box a;
 	a.v = 5;
-	Box b = a.with(42); // b = copia de a con v = 42; a sigue con v = 5
-	Box c = b.with(100); // c = copia de b con v = 100; b sigue con v = 42
+	Box b = a.with(42);            // b = copia de a con v = 42; a sigue con v = 5
+	Box c = b.with(100);           // c = copia de b con v = 100; b sigue con v = 42
 	return (i32)(a.v + b.v + c.v); // 5 + 42 + 100 = 147
 }

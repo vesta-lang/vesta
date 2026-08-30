@@ -24,7 +24,7 @@ i32 main() {
 	// siempre una secuencia de code points (UTF-8 por dentro).  Para hablar
 	// con una API nativa se pide el buffer en la codificacion que esa API
 	// espera -- cstr() para UTF-8, wstr() para UTF-16.
-	u8* w = (u8 *) c.wstr();
+	u8* w = (u8*) c.wstr();
 	// "hola mundo" en UTF-16LE: 'h' = 0x68 seguido de un byte alto 0.
 	if (w[0] != 104) return 4;
 	if (w[1] != 0) return 5;

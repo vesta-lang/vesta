@@ -109,7 +109,7 @@ struct PEB {
 	// build del PEB (this.OSBuildNumber) para elegir el offset.  Contexto interno.
 	u32 SessionId @offset {
 		if (this.OSBuildNumber >= 10_240) { return base + 0x02C0; } // Win10/11
-		return base + 0x02A0; // 8.1 y antes
+		return base + 0x02A0;                                       // 8.1 y antes
 	};
 	u64 AppCompatFlags                     @0x02C8;
 	u64 AppCompatFlagsUser                 @0x02D0;
@@ -126,13 +126,13 @@ struct PEB {
 	u32 TracingFlags                       @0x0378;
 	u64 CsrServerReadOnlySharedMemoryBase  @0x0380;
 	// --- campos version-dependientes (offsets validos donde EXISTEN) ---
-	u64 TelemetryCoverageHeader            @0x07A0;     // Win10 1703+
-	u32 CloudFileFlags                     @0x07A8;              // Win10 1709+
-	u32 CloudFileDiagFlags                 @0x07AC;          // Win10 1803+
-	u8  PlaceholderCompatibilityMode       @0x07B0; // Win10 1803+
-	u64 LeapSecondData                     @0x07B8;              // Win10 1809+
-	u32 LeapSecondFlags                    @0x07C0;             // Win10 1809+
-	u32 NtGlobalFlag2                      @0x07C4;               // Win10 1903+
+	u64 TelemetryCoverageHeader      @0x07A0; // Win10 1703+
+	u32 CloudFileFlags               @0x07A8; // Win10 1709+
+	u32 CloudFileDiagFlags           @0x07AC; // Win10 1803+
+	u8  PlaceholderCompatibilityMode @0x07B0; // Win10 1803+
+	u64 LeapSecondData               @0x07B8; // Win10 1809+
+	u32 LeapSecondFlags              @0x07C0; // Win10 1809+
+	u32 NtGlobalFlag2                @0x07C4; // Win10 1903+
 
 	// -------- el overlay se DISECCIONA a si mismo, discriminando por version ----
 	// Devuelve 42 si el PEB se parseo bien (MZ en ImageBase + OSPlatformId==2 +
@@ -202,19 +202,19 @@ struct PEB {
 
 		// --- modulos cargados: Ldr -> InLoadOrderModuleList (sub-overlays) ---
 		println("modulos cargados:");
-		LdrData ld    = LdrData((u8 *) this.Ldr);
+		LdrData ld    = LdrData((u8*) this.Ldr);
 		u64     head  = this.Ldr + 0x10;
 		u64     cur   = ld.InLoadOrderFlink;
-		i32     count = 0;
+		i32     count = 0_i32;
 		while (cur != head && cur != 0 && count < 64) {
-			LdrEntry m = LdrEntry((u8 *) cur);
+			LdrEntry m = LdrEntry((u8*) cur);
 			if (m.DllBase != 0 && m.NameLen > 0) {
 				print("  ");
-				u8* nb     = (u8 *) m.NameBuf; // BaseDllName UTF-16 -> byte bajo (ASCII)
-				i32 j      = 0;
+				u8* nb     = (u8*) m.NameBuf; // BaseDllName UTF-16 -> byte bajo (ASCII)
+				i32 j      = 0_i32;
 				i32 wchars = (i32)(m.NameLen / 2);
 				while (j < wchars && j < 128) {
-					print_char((char) * (u8 *)(nb + (u64)j * 2));
+					print_char((char) * (u8*)(nb + (u64)j * 2));
 					j = j + 1;
 				}
 				println("  (base=${m.DllBase:hex} size=${m.SizeOfImage:hex})");
@@ -225,8 +225,8 @@ struct PEB {
 		println("total_modulos=${count}");
 
 		// invariante: MZ en ImageBase + plataforma NT + al menos 1 modulo.
-		u8* ib = (u8 *) this.ImageBaseAddress;
-		if (*(u8 *)(ib + 0) == 0x4D && *(u8 *)(ib + 1) == 0x5A
+		u8* ib = (u8*) this.ImageBaseAddress;
+		if (*(u8*)(ib + 0) == 0x4D && *(u8*)(ib + 1) == 0x5A
 			&& this.OSPlatformId == 2 && count > 0) { return 42; }
 		return 0;
 	}
@@ -234,9 +234,11 @@ struct PEB {
 
 i32 main() {
 	u64 peb_ptr = get_peb();
-	if (peb_ptr == 0) { println("sin PEB (no Windows?)");
-		return 1; }
-	PEB p = PEB((u8 *) peb_ptr);
+	if (peb_ptr == 0) {
+		println("sin PEB (no Windows?)");
+		return 1;
+	}
+	PEB p = PEB((u8*) peb_ptr);
 	println("PEB @ ${peb_ptr:hex}");
 	return p.dump(); // el overlay se disecciona a si mismo; 42 si OK
 }

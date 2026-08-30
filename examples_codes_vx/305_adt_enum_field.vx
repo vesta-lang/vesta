@@ -16,15 +16,15 @@ enum Color {
 
 // enum ADT como campo en struct plano.
 struct Cell {
-	u8 x;
+	u8    x;
 	Color c;
-	u8 y;
+	u8    y;
 }
 
 // enum ADT como campo en typedef struct + agregado anonimo.
 typedef struct _NODE {
 	Color kind;
-	i32 val;
+	i32   val;
 } NODE;
 
 i32 main() {
@@ -33,7 +33,7 @@ i32 main() {
 	cell.c = Color.Blue;
 	cell.y = 20;
 
-	i32 tag = 0;
+	i32 tag = 0_i32;
 	match cell.c {
 		case Red   => { tag = 1; }
 		case Green => { tag = 2; }
@@ -43,7 +43,7 @@ i32 main() {
 	NODE n;
 	n.kind = Color.Green;
 	n.val  = 4;
-	i32 nk = 0;
+	i32 nk = 0_i32;
 	match n.kind {
 		case Red   => { nk = 0; }
 		case Green => { nk = 0; } // no suma

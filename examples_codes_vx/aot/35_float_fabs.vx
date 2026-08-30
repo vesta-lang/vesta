@@ -13,8 +13,8 @@ f64 myabs(f64 x) { return fabs(x); } // -> IrOp::FABS -> ANDPS
 
 i32 main() {
 	f64 neg = fsum(4, 0.0, -2.5); // -10.0 (runtime)
-	f64 a   = myabs(neg);           // |-10.0| = 10.0  (ANDPS)
+	f64 a   = myabs(neg);         // |-10.0| = 10.0  (ANDPS)
 	f64 pos = fsum(3, 0.0, 2.0);  // 6.0 (runtime)
-	f64 b   = myabs(pos);           // |6.0| = 6.0
+	f64 b   = myabs(pos);         // |6.0| = 6.0
 	return (i32)(a + b);          // 16
 }

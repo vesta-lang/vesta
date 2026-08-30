@@ -7,18 +7,18 @@
 // @expect 42
 u64 main() {
 	i64*                 p    = malloc(64);
-	register("rbx") i64 *base = p;
+	register("rbx") i64* base = p;
 
 	// store con desplazamiento: [base + 8] = 0x1000 + 42 (byte bajo = 42).
-	register("rax") u64  val  = 0x102A;
+	register("rax") u64 val = 0x102A_u64;
 	asm { mov [rbx + 8], rax };
 
 	// movzx de 1 byte con desplazamiento: carga el byte bajo (0x2A = 42).
-	register("rcx") u64 lo = 0;
+	register("rcx") u64 lo = 0_u64;
 	asm { movzx rcx, byte ptr [rbx + 8] }; // rcx = 0x2A
 
 	// load con desplazamiento (qword completo) para comprobar el store.
-	register("rdx") u64 full = 0;
+	register("rdx") u64 full = 0_u64;
 	asm { mov rdx, [rbx + 8] }; // rdx = 0x102A
 
 	free(p);

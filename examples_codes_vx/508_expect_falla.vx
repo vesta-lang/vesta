@@ -20,8 +20,8 @@ i64 leer_config(Optional<i64> valor) {
 }
 
 i32 main() {
-	      Optional<i64> sin_configurar = None();
-	const i64           v              = leer_config(sin_configurar);
+	Optional<i64> sin_configurar = None();
+	const i64     v              = leer_config(sin_configurar);
 	println("no se debe llegar aqui: ${v}");
 	return 0;
 }

@@ -14,18 +14,20 @@ namespace ejemplos.ternary_comptime_const;
 //     time.  Si cond es false (o no comptime-evaluable), error de
 //     compilacion con el mensaje.
 
-struct Token { i32 kind;
-	u64 payload; }
+struct Token {
+	i32 kind;
+	u64 payload;
+}
 
 // comptime con introspeccion.
-const u64 TOKEN_SZ     = sizeof<Token>();               // 16 (4+pad+8)
-const u64 TOKEN_K_OFF  = offsetof<Token>("kind");    // 0
-const u64 TOKEN_P_OFF  = offsetof<Token>("payload"); // 8
+const u64 TOKEN_SZ    = sizeof<Token>();            // 16 (4+pad+8)
+const u64 TOKEN_K_OFF = offsetof<Token>("kind");    // 0
+const u64 TOKEN_P_OFF = offsetof<Token>("payload"); // 8
 
 // comptime compuestas (usan otras comptime).
-const u64 BUFFER_CAP   = 256;
+const u64 BUFFER_CAP   = 256_u64;
 const u64 BUFFER_BYTES = TOKEN_SZ * BUFFER_CAP; // 4096
-const i32 MAX_DEPTH    = 32;
+const i32 MAX_DEPTH    = 32_i32;
 const i32 HALF_DEPTH   = MAX_DEPTH / 2; // 16
 
 // Static asserts: invariantes verificadas al compilar.  Si alguno
@@ -41,11 +43,11 @@ i32 main() {
 	i32 mode_score = (MAX_DEPTH >= 16) ? 14 : 0;
 
 	// Ternario anidado (right-associative).
-	i32 level      = 7;
-	i32 tier       = (level >= 10) ? 1 : (level >= 5) ? 2 : 3; // 2
+	i32 level = 7_i32;
+	i32 tier  = (level >= 10) ? 1 : (level >= 5) ? 2 : 3; // 2
 
 	// Comptime if con comptime + builtin.
-	i32 r          = 0;
+	i32 r = 0_i32;
 	comptime if (BUFFER_BYTES == 4096 && TOKEN_SZ * 256 == BUFFER_BYTES) {
 		r = 14;
 	}
@@ -53,5 +55,5 @@ i32 main() {
 	// Ternario sobre comptime + runtime value.
 	i32 step = (tier == 2) ? (HALF_DEPTH - 2) : MAX_DEPTH; // 14
 
-	return mode_score + r + step;                          // 14 + 14 + 14 = 42
+	return mode_score + r + step; // 14 + 14 + 14 = 42
 }

@@ -35,7 +35,7 @@ void tputc(u64 c) {
 }
 
 void tputs(char* s) {
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (s[i] != 0) {
 		tputc((u64) s[i]);
 		i = i + 1;
@@ -50,7 +50,7 @@ void tdec(i64 v) {
 	}
 	u8 b[24];
 	lib.itoa((u64) v, b);
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (b[i] != 0) {
 		tputc((u64) b[i]);
 		i = i + 1;
@@ -60,7 +60,7 @@ void tdec(i64 v) {
 // Lee una linea hasta Enter; eco a la terminal; maneja backspace.
 // Escribe la cadena nul-terminada en buf y devuelve su longitud.
 u64 read_line(u8* buf, u64 max) {
-	u64 n = 0;
+	u64 n = 0_u64;
 	while (true) {
 		u64 c = read_char();
 		if (c == 10 || c == 13) { // Enter
@@ -78,7 +78,7 @@ u64 read_line(u8* buf, u64 max) {
 		if (c >= 32 && c < 127) {
 			if (n < max - 1) {
 				buf[n] = (u8) c;
-				n = n + 1;
+				n      = n + 1;
 				tputc(c);
 			}
 		}

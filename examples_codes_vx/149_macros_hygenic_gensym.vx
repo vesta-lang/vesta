@@ -22,7 +22,7 @@ i32 main() {
 	// ============================================
 	// (1) Sugar `comptime X = ...` sin const+tipo.
 	// ============================================
-	comptime code_simple = "10 + 32";                    // string
+	comptime code_simple = "10 + 32";                     // string
 	comptime val_simple  = comptime_compile(code_simple); // i64
 	static_assert(val_simple == 42, "sugar comptime + eval");
 
@@ -51,8 +51,8 @@ i32 main() {
 	//     (Por el momento solo expresiones; statements
 	//     con let-binding requeririan stmt-level emit.)
 	// ============================================
-	i32      a       = 10;
-	i32      b       = 20;
+	i32 a = 10_i32;
+	i32 b = 20_i32;
 	// Macro "square_sum": emite (a*a + b*b) referenciando vars del caller.
 	comptime sq_expr = "a * a + b * b";
 	i32      sq_sum  = comptime_emit_expr(sq_expr); // 100 + 400 = 500

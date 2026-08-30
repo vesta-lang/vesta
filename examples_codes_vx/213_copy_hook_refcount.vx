@@ -8,13 +8,15 @@ struct Rc {
 	void __clone__() {*this.ctrl = *this.ctrl + 1; } // copia -> ++refcount
 	~Rc() {
 		*this.ctrl = *this.ctrl - 1;
-		if (*this.ctrl == 0) { free(this.ctrl);
-			Counter.vivos = Counter.vivos - 1; }
+		if (*this.ctrl == 0) {
+			free(this.ctrl);
+			Counter.vivos = Counter.vivos - 1;
+		}
 	}
 }
 Rc make() {
 	Rc r;
-	r.ctrl        = (i64 *) malloc(8);
+	r.ctrl        = (i64*) malloc(8);
 	*r.ctrl       = 1;
 	Counter.vivos = Counter.vivos + 1;
 	return r; // move (no clone)

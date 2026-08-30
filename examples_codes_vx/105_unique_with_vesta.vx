@@ -17,9 +17,9 @@ void my_release(i64 p) {
 }
 
 void make_and_drop() {
-	i64         raw = 0xDEADBEEF;
+	i64 raw = 0xDEADBEEF_i64;
 	// Adoptamos el valor en un unique<i64>; en scope exit -> my_release(raw).
-	unique<i64> p   = unique_with(raw, my_release);
+	unique<i64> p = unique_with(raw, my_release);
 // Sin uso explicito.  Al final de la funcion: cleanup automatico.
 }
 

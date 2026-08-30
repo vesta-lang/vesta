@@ -3,7 +3,7 @@
 
 // Firma de boot al estilo MBR (0x55 0xAA) en una seccion propia.
 @section(".sig", "r")
-	bytes boot_sig {
+bytes boot_sig {
 	db 0x55, 0xAA
 }
 

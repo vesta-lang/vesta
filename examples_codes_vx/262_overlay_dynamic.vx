@@ -26,7 +26,7 @@
 // (e_lfanew); la firma del NT header ('PE\0\0') esta en base + ese offset.
 @overlay
 struct PePeek {
-	u16 magic  @0x00;            // 'MZ' = 0x5A4D
+	u16 magic  @0x00;           // 'MZ' = 0x5A4D
 	i32 nt_off @0x3C;           // e_lfanew: offset (relativo a base) al NT hdr
 	u32 nt_sig @offset(nt_off); // DINAMICO: firma NT en base + nt_off
 }
@@ -39,11 +39,11 @@ i32 main() {
 	println("sizeof<PePeek>() = ${fixed}"); // 64
 
 	// --- CREAR (no parsear): rellenamos un buffer propio via la vista ---
-	u8*    buf = (u8 *) malloc(128);
+	u8*    buf = (u8*) malloc(128);
 	PePeek pe  = PePeek(buf);
 
 	// Orden topologico: primero el campo del que depende el offset dinamico.
-	pe.magic  = (u16)0x5A4D;      // STORE [base + 0x00]
+	pe.magic  = (u16)0x5A4D;     // STORE [base + 0x00]
 	pe.nt_off = 0x40;            // STORE [base + 0x3C]  (NT hdr tras lo fijo)
 	pe.nt_sig = (u32)0x00004550; // STORE [base + nt_off] = base+0x40 ('PE\0\0')
 
@@ -51,7 +51,7 @@ i32 main() {
 	println("magic=${pe.magic} nt_off=${pe.nt_off} nt_sig=${pe.nt_sig}");
 
 	// Comprobamos que nt_sig aterrizo REALMENTE en base + 0x40 (memoria cruda).
-	u32 raw = *(u32 *)(buf + 0x40);
+	u32 raw = *(u32*)(buf + 0x40);
 	println("en el buffer @0x40 = ${raw}"); // 17744 (0x4550)
 
 	// Retorno determinista (harness):

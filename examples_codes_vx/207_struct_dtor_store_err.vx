@@ -11,7 +11,7 @@ namespace ejemplos.struct_dtor_store_err;
 // del contenedor libera el recurso: un unico free, sin doble free.  Value-types
 // inline, sin GC.  Ver doc/VMdoc/teropC.md.
 
-i64 freed = 0;
+i64 freed = 0_i64;
 
 // Recurso hoja: posee memoria heap y la libera en su destructor.
 struct Recurso {
@@ -30,10 +30,10 @@ class Caja {
 
 i32 usar(i64 v) {
 	Recurso tmp;
-	tmp.p  = (i64 *) malloc(8);
+	tmp.p  = (i64*) malloc(8);
 	*tmp.p = v;
 	Caja c = new Caja();
-	c.r = tmp; // move-on-store: tmp invalidado, la Caja posee el recurso
+	c.r = tmp;            // move-on-store: tmp invalidado, la Caja posee el recurso
 	return (i32)(*c.r.p); // c destruida al exit -> ~Recurso -> free + freed++
 }
 

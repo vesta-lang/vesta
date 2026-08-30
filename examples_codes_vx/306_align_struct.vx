@@ -8,19 +8,23 @@
 // Resultado esperado: R0 == 42.
 
 // Sin align: 3 x u8 -> size 3, align 1.
-struct Small { u8 a;
+struct Small {
+	u8 a;
 	u8 b;
-	u8 c; }
+	u8 c;
+}
 
 // @align(16) sobre struct plano -> size padeado a 16, align 16.
 @align(16)
-	struct Aligned16 { u8 a;
+struct Aligned16 {
+	u8 a;
 	u8 b;
-	u8 c; }
+	u8 c;
+}
 
 // @align(8) sobre typedef struct -> size 1 padeado a 8, align 8.
 @align(8)
-	typedef struct _Cache { u8 x; } Cache;
+typedef struct _Cache { u8 x; } Cache;
 
 i32 main() {
 	// sizeof:  Small=3, Aligned16=16, Cache=8

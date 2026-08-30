@@ -11,13 +11,13 @@ namespace ejemplos.shared_refcount_nogc;
 // Ver doc/VMdoc//SmartPointers.md.
 
 i64 trabajo() {
-	shared<i64> a   = shared_box(10);    // refcount = 1
-	i64         uc1 = use_count(a);            // 1
-	shared<i64> b   = a;                 // copia -> refcount = 2
-	i64         uc2 = use_count(a);            // 2 (a y b)
-	i64         val = *ptr_of(b);              // 10
+	shared<i64> a   = shared_box(10);  // refcount = 1
+	i64         uc1 = use_count(a);    // 1
+	shared<i64> b   = a;               // copia -> refcount = 2
+	i64         uc2 = use_count(a);    // 2 (a y b)
+	i64         val = *ptr_of(b);      // 10
 	return val * 100 + uc1 * 10 + uc2; // 1000 + 10 + 2 = 1012
-} // ~b -> refcount=1 ; ~a -> refcount=0 -> free
+}                                      // ~b -> refcount=1 ; ~a -> refcount=0 -> free
 
 i32 main() {
 	i64 r = trabajo();     // 1012

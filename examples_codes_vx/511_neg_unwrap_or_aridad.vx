@@ -7,7 +7,7 @@ namespace ejemplos.neg_unwrap_or_aridad;
 // rechaza en vez de interpretarlo.
 
 i32 main() {
-	      Optional<i64> o = Some(7);
-	const i64           v = unwrap_or(o);
+	Optional<i64> o = Some(7);
+	const i64     v = unwrap_or(o);
 	return (i32) v;
 }

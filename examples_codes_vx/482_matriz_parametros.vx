@@ -60,12 +60,16 @@ namespace ejemplos.matriz_parametros;
 //     no lo son, por definicion de lo que significa `comptime`.  Por eso su
 //     fila imprime cinco valores y no doce.
 
-struct Punto { i64 x;
-	i64 y; }
-class Caja { public i64 v;
-	public Caja(i64 n) { this.v = n; } }
+struct Punto {
+	i64 x;
+	i64 y;
+}
+class Caja {
+	public i64 v;
+	public Caja(i64 n) { this.v = n; }
+}
 
-i64 g_valor = 5;
+i64 g_valor = 5_i64;
 i64 doblar(i64 x) { return x * 2; }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +100,7 @@ i64 f_compartido(shared i64 x) { return x; }
 // el 483 con `@Target`.
 class CtorA {
 	public i64 suma;
-	public CtorA(i64 a, i64 *p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
+	public CtorA(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
 		fn(i64) -> i64 lam) {
 		this.suma = a + *p + nn + cb(3) + cb2(4) + lam(5); // 1+5+2+6+8+6 = 28
 	}
@@ -113,7 +117,7 @@ class CtorB {
 class Clase {
 	public i64 delCtor;
 
-	public Clase(i64 a, i64 *p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
+	public Clase(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
 		fn(i64) -> i64 lam) {
 		this.delCtor = a + *p + nn + cb(3) + cb2(4) + lam(5);
 	}
@@ -172,29 +176,29 @@ interface Contrato {
 
 class Implementa : Contrato {
 	@Override
-		public i64 m_plano(i64 x) { return x; }
+	public i64 m_plano(i64 x) { return x; }
 	@Override
-		public i64 m_puntero(i64 *p) { return *p; }
+	public i64 m_puntero(i64* p) { return *p; }
 	@Override
-		public i64 m_nonulo(i64 !!x) { return x; }
+	public i64 m_nonulo(i64 !!x) { return x; }
 	@Override
-		public i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
+	public i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
 	@Override
-		public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
+	public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
 	@Override
-		public i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
+	public i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
 	@Override
-		public i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
+	public i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
 	@Override
-		public i64 m_cadena(string s) { return s.length(); }
+	public i64 m_cadena(string s) { return s.length(); }
 	@Override
-		public i64 m_struct(Punto pt) { return pt.x + pt.y; }
+	public i64 m_struct(Punto pt) { return pt.x + pt.y; }
 	@Override
-		public i64 m_clase(Caja k) { return k.v; }
+	public i64 m_clase(Caja k) { return k.v; }
 	@Override
-		public i64 m_registro(register("rax") i64 x) { return x; }
+	public i64 m_registro(register("rax") i64 x) { return x; }
 	@Override
-		public i64 m_compartido(shared i64 x) { return x; }
+	public i64 m_compartido(shared i64 x) { return x; }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +217,7 @@ comptime i64 c_fn(fn(i64) -> i64 cb, i64 v) { return v; }
 comptime i64 c_struct(Punto pt) { return pt.x + pt.y; }
 comptime i64 c_clase(Caja k) { return 7; }
 comptime i64 c_array(i64[] xs) { return xs[0] + xs[1]; }
-comptime i64 c_puntero(i64 *p) { return 5; }
+comptime i64 c_puntero(i64* p) { return 5; }
 
 // ---------------------------------------------------------------------------
 // El recorrido.  Todas las filas dan los MISMOS doce valores.
@@ -261,18 +265,18 @@ i64 fila_clase(
 
 i64 fila_struct(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
 	Estructura o;
-	i64 a = o.m_plano(1);
-	i64 b = o.m_puntero(&g_valor);
-	i64 c = o.m_nonulo(2);
-	i64 d = o.m_cstyle(&doblar, 3);
-	i64 e = o.m_cfn(&doblar, 4);
-	i64 f = o.m_fn(lam, 5);
-	i64 h = o.m_array(arr);
-	i64 i = o.m_cadena(s);
-	i64 j = o.m_struct(pt);
-	i64 l = o.m_clase(k);
-	i64 m = o.m_registro(9);
-	i64 n = o.m_compartido(8);
+	i64        a = o.m_plano(1);
+	i64        b = o.m_puntero(&g_valor);
+	i64        c = o.m_nonulo(2);
+	i64        d = o.m_cstyle(&doblar, 3);
+	i64        e = o.m_cfn(&doblar, 4);
+	i64        f = o.m_fn(lam, 5);
+	i64        h = o.m_array(arr);
+	i64        i = o.m_cadena(s);
+	i64        j = o.m_struct(pt);
+	i64        l = o.m_clase(k);
+	i64        m = o.m_registro(9);
+	i64        n = o.m_compartido(8);
 	println("struct:   ${a} ${b} ${c} ${d} ${e} ${f} ${h} ${i} ${j} ${l} ${m} ${n}");
 	return a + b + c + d + e + f + h + i + j + l + m + n;
 }
@@ -299,9 +303,9 @@ i64 fila_lambda(i64[] arr, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
 	// La lambda tiene una diferencia REAL: el tipo se puede omitir y se deduce
 	// del contexto.  Eso no justifica que las demas formas no valgan ahi, que
 	// era lo que pasaba.
-	fn(i64) -> i64   l_plano   = (x) => { return x; };
-	fn(i64 *) -> i64 l_puntero = (i64 *p) => { return *p; };
-	fn(i64) -> i64   l_nonulo  = (i64 !!x) => { return x; };
+	fn(i64) -> i64  l_plano   = (x) => { return x; };
+	fn(i64*) -> i64 l_puntero = (i64 *p) => { return *p; };
+	fn(i64) -> i64  l_nonulo  = (i64 !!x) => { return x; };
 	fn(i64 (*)(i64), i64) -> i64 l_cstyle =
 		(i64 (*cb)(i64), i64 v) => { return cb(v); };
 	fn(cfn(i64) -> i64, i64) -> i64 l_cfn =
@@ -350,14 +354,14 @@ i64 fila_comptime() {
 
 i32 main() {
 	i64[2] arr = {3, 4};
-	string s   = "hola";
-	Punto pt;
+	string s = "hola";
+	Punto  pt;
 	pt.x = 3;
 	pt.y = 4;
 	Caja           k   = new Caja(7);
 	fn(i64) -> i64 lam = (i64 v) => { return v + 1; };
 
-	Clase o  = new Clase(1, &g_valor, 2, &doblar, &doblar, lam);
+	Clase o = new Clase(1, &g_valor, 2, &doblar, &doblar, lam);
 
 	// El constructor como contexto, con las doce formas repartidas en dos.
 	CtorA ca = new CtorA(1, &g_valor, 2, &doblar, &doblar, lam);

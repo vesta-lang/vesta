@@ -4,10 +4,10 @@
 
 // Rellena n bytes de dst con val.
 void memset(u8* dst, u64 val, u64 n) {
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (i < n) {
 		dst[i] = (u8) val;
-		i = i + 1;
+		i      = i + 1;
 	}
 }
 
@@ -19,17 +19,17 @@ u64 itoa(u64 v, u8* buf) {
 		return 1;
 	}
 	u8 tmp[24];
-	u64 n = 0;
+	u64 n = 0_u64;
 	while (v > 0) {
 		tmp[n] = (u8)(48 + (v % 10));
-		v = v / 10;
-		n = n + 1;
+		v      = v / 10;
+		n      = n + 1;
 	}
 	// invertir tmp -> buf
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (i < n) {
 		buf[i] = tmp[n - 1 - i];
-		i = i + 1;
+		i      = i + 1;
 	}
 	buf[n] = 0;
 	return n;
@@ -45,7 +45,7 @@ u64 itoa_hex(u64 v, u8* buf) {
 		return 3;
 	}
 	u8 tmp[20];
-	u64 n = 0;
+	u64 n = 0_u64;
 	while (v > 0) {
 		u64 d = v & 0x0F;
 		if (d < 10) {
@@ -56,10 +56,10 @@ u64 itoa_hex(u64 v, u8* buf) {
 		v = v >> 4;
 		n = n + 1;
 	}
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (i < n) {
 		buf[2 + i] = tmp[n - 1 - i];
-		i = i + 1;
+		i          = i + 1;
 	}
 	buf[2 + n] = 0;
 	return n + 2;

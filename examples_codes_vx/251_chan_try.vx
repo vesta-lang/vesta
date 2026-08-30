@@ -9,15 +9,15 @@ i32 main() {
 
 	// Enviar hasta que el buffer se llene (try_send devuelve false al 5o intento).
 
-	for (i64 sent = 0; chan_try_send(ch, sent + 1); sent++) {
+	for (i64 sent = 0_i64; chan_try_send(ch, sent + 1); sent++) {
 	// envia 1,2,3,4 -> sent = 4
 	}
 
 	// Drenar hasta que el buffer se vacie (try_recv devuelve false).  `got` se
 	// declara FUERA del for (se usa despues del bucle, en el return).
-	i64 sum = 0;
-	i64 v   = 0;
-	i64 got = 0;
+	i64 sum = 0_i64;
+	i64 v   = 0_i64;
+	i64 got = 0_i64;
 	for (; chan_try_recv(ch, &v); got++) {
 		sum += v; // 1+2+3+4 = 10
 	// got = 4

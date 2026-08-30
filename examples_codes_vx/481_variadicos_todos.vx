@@ -14,8 +14,8 @@ namespace ejemplos.variadico_todos;
 // Ahora las cinco se dicen una vez y valen en los seis contextos.
 
 i64 suma(i64* xs, i64 n) {
-	i64 a = 0;
-	for (i64 i = 0; i < n; i = i + 1) { a = a + xs[i]; }
+	i64 a = 0_i64;
+	for (i64 i = 0_i64; i < n; i = i + 1) { a = a + xs[i]; }
 	return a;
 }
 
@@ -41,13 +41,13 @@ struct Estructura {
 interface Contrato { i64 total(i64... xs); }
 class Implementa : Contrato {
 	@Override
-		public i64 total(i64... xs) { return suma(xs, vacount()); }
+	public i64 total(i64... xs) { return suma(xs, vacount()); }
 }
 
 i32 main() {
-	Clase c = new Clase(1, 2, 3); // ctor -> 6
+	Clase      c = new Clase(1, 2, 3); // ctor -> 6
 	Estructura s;
-	Contrato          i   = new Implementa();
+	Contrato   i = new Implementa();
 
 	// 6. Lambda.  Su TIPO tiene que saber decirlo: `fn(T...) -> R`.
 	fn(i64...) -> i64 lam = (i64... xs) => { return suma(xs, vacount()); };
@@ -58,7 +58,7 @@ i32 main() {
 	i64 f = s.total(10);         // 10
 	i64 g = i.total(2, 3, 5);    // 10
 	i64 h = lam(6, 4);           // 10
-	i64 z = fn_var(); // ninguno: 0
+	i64 z = fn_var();            // ninguno: 0
 
 	println("funcion=${a} metodo=${b} conFijos=${d} struct=${f} interfaz=${g} lambda=${h} vacio=${z} ctor=${c.delCtor}");
 

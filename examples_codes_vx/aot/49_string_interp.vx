@@ -18,10 +18,12 @@
 i64 compute() {
 	// Suma 42 en un loop -> el optimizer NO foldea: el int interpolado es
 	// "runtime", probando el camino dinamico del itoa.
-	i64 acc = 0;
-	i64 i   = 0;
-	while (i < 42) { acc++;
-		i = i + 1; }
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
+	while (i < 42) {
+		acc++;
+		i = i + 1;
+	}
 	return acc;
 }
 
@@ -35,7 +37,7 @@ i32 main() {
 	if (p1[14] != 33) { return -2; }
 
 	// (2) int CONSTANTE: "n=42" -> 4, bytes 'n','=','4','2'.
-	i64    n  = 42;
+	i64    n  = 42_i64;
 	string m2 = "n=${n}";
 	char*  p2 = m2.cstr();
 	if (m2.length() != 4) { return -3; }
@@ -47,7 +49,7 @@ i32 main() {
 	if (m3.length() != 2) { return -6; }
 
 	// (4) int NEGATIVO: "-5" -> 2, bytes '-','5'.
-	i64    neg = -5;
+	i64    neg = -5_i64;
 	string m4  = "${neg}";
 	char*  p4  =  m4.cstr();
 	if (m4.length() != 2) { return -7; }
@@ -79,7 +81,7 @@ i32 main() {
 	if (m8.length() != 5) { return -15; }
 	if (p8[0] != 102) { return -16; } // 'f'
 
-	i64    a   = 7;
+	i64    a   = 7_i64;
 	string sb  = "X";
 	char   c   = '!';
 	string mix = "a=${a} b=${sb} c=${c}";

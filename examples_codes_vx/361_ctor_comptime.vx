@@ -46,7 +46,7 @@ i32 main() {
 	U128 p = U128(18446744073709551616);
 	println("lo=${p.lo} hi=${p.hi}");
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	if (m.lo == 0xFFFFFFFFFFFFFFFF) { acc++; }
 	if (m.hi == 0xFFFFFFFFFFFFFFFF) { acc++; }
 	if (p.lo == 0) { acc++; }

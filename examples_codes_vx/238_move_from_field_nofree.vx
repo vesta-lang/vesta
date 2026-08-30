@@ -22,7 +22,7 @@ void run() {
 	Cont c = new Cont();
 	c.h = unique_with(5, del);
 	unique<i64> robado = move(c.h); // saca el recurso del campo
-} // ~robado libera 1 vez; c.h con slot=0 no re-libera
+}                                   // ~robado libera 1 vez; c.h con slot=0 no re-libera
 
 i32 main() {
 	Counter.libs = 0;

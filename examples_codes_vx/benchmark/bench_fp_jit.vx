@@ -18,8 +18,8 @@
 
 class FpOps {
 	public f64 run_hot(i32 n) {
-		f64 acc = 0.0;
-		i32 i   = 1;
+		f64 acc = 0.0_f64;
+		i32 i   = 1_i32;
 		while (i < n) {
 			f64 x = (f64) i;
 			acc = acc + sqrt(x);

@@ -27,10 +27,10 @@ void rellena_16(u8* dst) {
 }
 
 i32 main() {
-	u8* base = (u8 *) malloc(64);
+	u8* base = (u8*) malloc(64);
 	// Desalineado a proposito: base + 1 no es multiplo de 16 pase lo que pase.
-	u8* p    = base + 1;
+	u8* p = base + 1;
 	rellena_16(p);
-	free((i64 *) base);
+	free((i64*) base);
 	return 42;
 }

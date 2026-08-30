@@ -5,15 +5,15 @@
 //     vm --vx asm_rotate.vx -o r && vm --run r.velb
 // @expect 42
 u64 main() {
-	u64                 ok = 1;
-	register("rax") u64 a  = 0x01;
+	u64                 ok = 1_u64;
+	register("rax") u64 a  = 0x01_u64;
 	asm { rol rax, 4 };
 	if (a != 0x10)      ok = 0; // rol constante
-	register("rsi") u64 s  = 0x8000000000000000;
+	register("rsi") u64 s  = 0x8000000000000000_u64;
 	asm { mov rax, rsi
 		rol rax, 1 };
 	if (a != 0x01)      ok = 0; // el bit alto rota al bit 0
-	register("rcx") u64 c  = 8;
+	register("rcx") u64 c  = 8_u64;
 	asm { mov rax, 0xFF
 		rol rax, cl }; // rol VARIABLE por cl=8
 	if (a != 0xFF00) ok = 0;

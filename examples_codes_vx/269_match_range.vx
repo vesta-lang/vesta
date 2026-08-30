@@ -14,11 +14,11 @@
 // Nota numerica -> categoria (0-100).
 i32 categoria(i32 nota) {
 	match (nota) {
-		case 0        => return 10;       // valor puntual (cero exacto)
-		case 1..=59   => return 1;   // inclusivo: suspenso (1..59)
-		case 60..70   => return 2;   // exclusivo: aprobado (60..69)
-		case 70..=100 => return 3; // inclusivo: notable (70..100)
-		case _        => return 0;        // fuera de [0,100]
+		case 0        => return 10; // valor puntual (cero exacto)
+		case 1..=59   => return 1;  // inclusivo: suspenso (1..59)
+		case 60..70   => return 2;  // exclusivo: aprobado (60..69)
+		case 70..=100 => return 3;  // inclusivo: notable (70..100)
+		case _        => return 0;  // fuera de [0,100]
 	}
 	return -1; // inalcanzable
 }
@@ -29,7 +29,7 @@ i32 clase(char c) {
 		case 'a'..='z' => return 1; // minuscula
 		case 'A'..='Z' => return 2; // mayuscula
 		case '0'..='9' => return 3; // digito
-		case _         => return 0;         // otro
+		case _         => return 0; // otro
 	}
 	return -1;
 }

@@ -5,13 +5,13 @@
 //     vm --vx asm_jc.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-	u64 acc = 0;
+	u64 acc = 0_u64;
 
 	// Suma que DESBORDA -> CF=1 -> jc tomado -> +40.
 	{
-		register("rax") u64 a = 0xFFFFFFFFFFFFFFFF;
-		register("rbx") u64 b = 5;
-		register("rcx") u64 r = 0;
+		register("rax") u64 a = 0xFFFFFFFFFFFFFFFF_u64;
+		register("rbx") u64 b = 5_u64;
+		register("rcx") u64 r = 0_u64;
 		asm { add rax, rbx
 			  jc .ov
 			  mov rcx, 0
@@ -24,9 +24,9 @@ u64 main() {
 
 	// Suma que NO desborda -> CF=0 -> jnc tomado -> +2.
 	{
-		register("rax") u64 a = 10;
-		register("rbx") u64 b = 20;
-		register("rcx") u64 r = 0;
+		register("rax") u64 a = 10_u64;
+		register("rbx") u64 b = 20_u64;
+		register("rcx") u64 r = 0_u64;
 		asm { add rax, rbx
 			  jnc .ok
 			  mov rcx, 0

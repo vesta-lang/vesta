@@ -13,7 +13,7 @@ namespace ejemplos.spill_opcodes;
 // derramarse y recargarse.  Si la recarga falta, el resultado cambia.
 
 class Animal {
-	public i32 edad = 0;
+	public i32 edad = 0_i32;
 	public Animal(i32 e) { this.edad = e; }
 	public i32 get() { return this.edad; }
 }
@@ -23,7 +23,7 @@ class Perro : Animal {
 }
 
 class Contador {
-	public static i64 total = 0;
+	public static i64 total = 0_i64;
 }
 
 // Presion: 18 valores vivos a traves de la operacion bajo prueba.
@@ -51,29 +51,29 @@ i64 presion(i64 s) {
 }
 
 i32 main() {
-	i32 fallos = 0;
+	i32 fallos = 0_i32;
 
 	// --- STRGETBYTES / STRLEN con la cadena derramada --------------------
 	{
-		const string s = "Hola";
-		i64 v0 = 1;
-		i64 v1 = 2;
-		i64 v2 = 3;
-		i64 v3 = 4;
-		i64 v4 = 5;
-		i64 v5 = 6;
-		i64 v6 = 7;
-		i64 v7 = 8;
-		i64 v8 = 9;
-		i64 v9 = 10;
-		i64 w0 = 11;
-		i64 w1 = 12;
-		i64 w2 = 13;
-		i64 w3 = 14;
-		i64 w4 = 15;
-		i64 w5 = 16;
-		i64 w6 = 17;
-		i64 w7 = 18;
+		const string s  = "Hola";
+		i64          v0 = 1_i64;
+		i64          v1 = 2_i64;
+		i64          v2 = 3_i64;
+		i64          v3 = 4_i64;
+		i64          v4 = 5_i64;
+		i64          v5 = 6_i64;
+		i64          v6 = 7_i64;
+		i64          v7 = 8_i64;
+		i64          v8 = 9_i64;
+		i64          v9 = 10_i64;
+		i64          w0 = 11_i64;
+		i64          w1 = 12_i64;
+		i64          w2 = 13_i64;
+		i64          w3 = 14_i64;
+		i64          w4 = 15_i64;
+		i64          w5 = 16_i64;
+		i64          w6 = 17_i64;
+		i64          w7 = 18_i64;
 		// `s` queda vivo a traves de todo esto -> se derrama.
 		i64 suma = v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + w0 + w1 + w2 + w3 + w4 + w5 + w6 + w7;
 		i64 nb = s.bytes();
@@ -118,7 +118,7 @@ i32 main() {
 	// --- TRYENTER / THROW con presion ------------------------------------
 	{
 		i64 p   = presion(400);
-		i32 cap = 0;
+		i32 cap = 0_i32;
 		try {
 			if (p > 0) { throw new Animal(1); }
 		} catch (Animal a) {
@@ -132,7 +132,7 @@ i32 main() {
 	{
 		Animal lock   = new Animal(9);
 		i64    p      = presion(500);
-		i32    dentro = 0;
+		i32    dentro = 0_i32;
 		synchronized (lock) {
 			dentro = lock.get();
 		}

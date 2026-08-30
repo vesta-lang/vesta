@@ -36,27 +36,27 @@ i32 tag < T : ValuedEnum > (T x) { return 4; }
 i32 as_num < T : Numeric > (T x) { return (i32) x; }
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// is_enum<T>() en compile-time sobre cada categoria de enum + un no-enum.
-	if (is_enum<Dir>()) { acc++; }              // valued int  -> 1
-	if (is_enum<Verb>()) { acc = acc + 2; }     // valued str  -> 3
-	if (is_enum<Shape>()) { acc = acc + 4; }    // ADT         -> 7
-	if (is_enum<i32>()) { acc = acc + 99; }     // no-enum     -> no suma
+	if (is_enum<Dir>()) { acc++; }           // valued int  -> 1
+	if (is_enum<Verb>()) { acc = acc + 2; }  // valued str  -> 3
+	if (is_enum<Shape>()) { acc = acc + 4; } // ADT         -> 7
+	if (is_enum<i32>()) { acc = acc + 99; }  // no-enum     -> no suma
 
 	// Concepto de usuario AnyEnum como bound (ADT y valued-string).
-	acc = acc + mark(Shape.Circle(5));          // 8
-	acc = acc + mark<Verb>(Verb.GET);           // 9
+	acc = acc + mark(Shape.Circle(5)); // 8
+	acc = acc + mark<Verb>(Verb.GET);  // 9
 
 	// Built-in Enum como bound.
 	acc = acc + count_enum<Dir>(Dir.EAST);      // 11
 	acc = acc + count_enum(Shape.Square(1, 2)); // 13
 
 	// ValuedEnum: Dir (C-style con valor) lo satisface.
-	acc = acc + tag(Dir.WEST);                  // 17
+	acc = acc + tag(Dir.WEST); // 17
 
 	// Un enum : u8 satisface Numeric y se usa como su backing.
-	acc = acc + as_num(Dir.SOUTH);              // 17 + 2 = 19
+	acc = acc + as_num(Dir.SOUTH); // 17 + 2 = 19
 
 	// Ajuste a 42 para la convencion de los tests e2e.
 	acc = acc + 23; // 42

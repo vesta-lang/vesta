@@ -37,5 +37,5 @@ i64 main() {
 	// 3. pasar la funcion por nombre a un HOF.
 	i64 r4 = apply(add, 5, 3); // 8
 
-	return r1 + r2 + r3 + r4;  // 21 + 7 + 6 + 8 = 42
+	return r1 + r2 + r3 + r4; // 21 + 7 + 6 + 8 = 42
 }

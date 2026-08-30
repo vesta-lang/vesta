@@ -12,7 +12,7 @@ namespace ejemplos.struct_composition;
 // inline (antes hacia un LOAD extra tratandolo como puntero -> SIGSEGV en AOT).
 // Ver doc/VMdoc//InteropC.md.
 
-i64 freed = 0;
+i64 freed = 0_i64;
 
 // Recurso hoja: posee memoria heap y la libera en su destructor.
 struct Inner {
@@ -27,7 +27,7 @@ struct Inner {
 // implicito que llama a ~Inner() automaticamente.
 struct Mid {
 	Inner inner;
-	i64 tag;
+	i64   tag;
 }
 
 // Composicion anidada (3 niveles): Outer -> Mid -> Inner.
@@ -37,7 +37,7 @@ struct Outer {
 
 i64 usar(i64 v) {
 	Outer o;
-	o.mid.inner.p  = (i64 *) malloc(8); // acceso a campo struct anidado
+	o.mid.inner.p  = (i64*) malloc(8); // acceso a campo struct anidado
 	*o.mid.inner.p = v;
 	o.mid.tag      = 0;
 	return *o.mid.inner.p; // o destruido al exit -> Mid -> Inner.free

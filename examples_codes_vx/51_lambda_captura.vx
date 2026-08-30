@@ -6,7 +6,7 @@ namespace ejemplos.lambda_captura;
 // Resultado esperado: R0 = 30 (5 + 25).
 
 i32 main() {
-	i32            y     = 25;
+	i32            y     = 25_i32;
 	fn(i32) -> i32 add_y = (i32 x) => x + y;
 	return add_y(5);
 }

@@ -12,23 +12,23 @@ import "simd_string";
 
 // Buffers de prueba en secciones rw.  Sin nul: pasamos longitud explicita.
 @section(".d_empty", "rw")
-	bytes d_empty { db 0 } // usable como puntero valido, len 0
+bytes d_empty { db 0 } // usable como puntero valido, len 0
 
 @section(".d_a", "rw")
-	bytes d_a { db 0x61 } // "a"
+bytes d_a { db 0x61 } // "a"
 @section(".d_b", "rw")
-	bytes d_b { db 0x62 } // "b"
+bytes d_b { db 0x62 } // "b"
 
 @section(".d_abc", "rw")
-	bytes d_abc { db 0x61, 0x62, 0x63 } // "abc"
+bytes d_abc { db 0x61, 0x62, 0x63 } // "abc"
 @section(".d_abd", "rw")
-	bytes d_abd { db 0x61, 0x62, 0x64 } // "abd"
+bytes d_abd { db 0x61, 0x62, 0x64 } // "abd"
 @section(".d_ab", "rw")
-	bytes d_ab { db 0x61, 0x62 } // "ab"
+bytes d_ab { db 0x61, 0x62 } // "ab"
 
 // 16 'x' + ultimo distinto (pos 15).
 @section(".d_x15A", "rw")
-	bytes d_x15A {
+bytes d_x15A {
 	db 0x78,
 	0x78,
 	0x78,
@@ -47,7 +47,7 @@ import "simd_string";
 	0x41
 }
 @section(".d_x15B", "rw")
-	bytes d_x15B {
+bytes d_x15B {
 	db 0x78,
 	0x78,
 	0x78,
@@ -68,25 +68,33 @@ import "simd_string";
 
 // 16 'x' + byte 16 distinto (pos 16, segundo chunk).  len 17.
 @section(".d_x16A", "rw")
-	bytes d_x16A { times 16 db 0x78
-		db 0x41 }
+bytes d_x16A {
+	times 16 db 0x78
+		db 0x41
+}
 @section(".d_x16B", "rw")
-	bytes d_x16B { times 16 db 0x78
-		db 0x42 }
+bytes d_x16B {
+	times 16 db 0x78
+		db 0x42
+}
 
 // 32 'q' con ultimo distinto (pos 31).  len 32.
 @section(".d_q31A", "rw")
-	bytes d_q31A { times 31 db 0x71
-		db 0x41 }
+bytes d_q31A {
+	times 31 db 0x71
+		db 0x41
+}
 @section(".d_q31B", "rw")
-	bytes d_q31B { times 31 db 0x71
-		db 0x42 }
+bytes d_q31B {
+	times 31 db 0x71
+		db 0x42
+}
 
 // 33 't' iguales.  len 33.
 @section(".d_t33a", "rw")
-	bytes d_t33a { times 33 db 0x74 }
+bytes d_t33a { times 33 db 0x74 }
 @section(".d_t33b", "rw")
-	bytes d_t33b { times 33 db 0x74 }
+bytes d_t33b { times 33 db 0x74 }
 
 // Compara el signo de un i64 -> -1/0/1.
 i64 sgn(i64 v) {
@@ -105,26 +113,26 @@ i64 avx_sgn(u8* a, i64 la, u8* b, i64 lb) {
 }
 
 i32 main() {
-	u8* p_empty = (u8 *) section_start(".d_empty");
-	u8* p_a     = (u8 *) section_start(".d_a");
-	u8* p_b     = (u8 *) section_start(".d_b");
-	u8* p_abc   = (u8 *) section_start(".d_abc");
-	u8* p_abd   = (u8 *) section_start(".d_abd");
-	u8* p_ab    = (u8 *) section_start(".d_ab");
-	u8* p_x15A  = (u8 *) section_start(".d_x15A");
-	u8* p_x15B  = (u8 *) section_start(".d_x15B");
-	u8* p_x16A  = (u8 *) section_start(".d_x16A");
-	u8* p_x16B  = (u8 *) section_start(".d_x16B");
-	u8* p_q31A  = (u8 *) section_start(".d_q31A");
-	u8* p_q31B  = (u8 *) section_start(".d_q31B");
-	u8* p_t33a  = (u8 *) section_start(".d_t33a");
-	u8* p_t33b  = (u8 *) section_start(".d_t33b");
+	u8* p_empty = (u8*) section_start(".d_empty");
+	u8* p_a     = (u8*) section_start(".d_a");
+	u8* p_b     = (u8*) section_start(".d_b");
+	u8* p_abc   = (u8*) section_start(".d_abc");
+	u8* p_abd   = (u8*) section_start(".d_abd");
+	u8* p_ab    = (u8*) section_start(".d_ab");
+	u8* p_x15A  = (u8*) section_start(".d_x15A");
+	u8* p_x15B  = (u8*) section_start(".d_x15B");
+	u8* p_x16A  = (u8*) section_start(".d_x16A");
+	u8* p_x16B  = (u8*) section_start(".d_x16B");
+	u8* p_q31A  = (u8*) section_start(".d_q31A");
+	u8* p_q31B  = (u8*) section_start(".d_q31B");
+	u8* p_t33a  = (u8*) section_start(".d_t33a");
+	u8* p_t33b  = (u8*) section_start(".d_t33b");
 
 	// Cada caso suma 2 al total (sse + avx) y suma 1 por cada variante que
 	// acierta el signo esperado.  ok == total <=> ambas variantes correctas
 	// en TODOS los casos.
-	i64 ok      = 0;
-	i64 total   = 0;
+	i64 ok    = 0_i64;
+	i64 total = 0_i64;
 
 	// "" vs "" -> 0
 	total = total + 2;

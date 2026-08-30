@@ -27,7 +27,7 @@ i32 main() {
 	string a = build_tag("GET", 1);  // "GET1"  via variable + interpolacion
 	string b = build_tag("POST", 2); // "POST2" (longitud 5)
 	string c = "PU" + "T3";          // "PUT3"  via concat de dos literales
-	string d = build_tag("HEAD", 9);        // "HEAD9" (longitud 5) -> default
+	string d = build_tag("HEAD", 9); // "HEAD9" (longitud 5) -> default
 
 	println("a=${a} b=${b} c=${c} d=${d}"); // GET1 POST2 PUT3 HEAD9
 

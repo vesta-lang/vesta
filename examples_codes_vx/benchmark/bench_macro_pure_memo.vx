@@ -4,9 +4,9 @@
 
 @Pure
 @Macro
-	comptime string heavy_macro(i64 n) {
+comptime string heavy_macro(i64 n) {
 	var string s = "";
-	var i64    i = 0;
+	var i64    i = 0_i64;
 	while (i < n) {
 		s = s + "X";
 		i = i + 1;
@@ -19,7 +19,7 @@ i32 main() {
 	// ejecuta el body completo, los siguientes 9 hit el cache memoization
 	// y retornan al instante.  N=100 -> string de "X" * 100 -> strlen=100.
 	// El macro retorna "(100)" que parsea como literal int = 100.
-	i32 r = 0;
+	i32 r = 0_i32;
 	r = r + heavy_macro(100);
 	r = r + heavy_macro(100);
 	r = r + heavy_macro(100);

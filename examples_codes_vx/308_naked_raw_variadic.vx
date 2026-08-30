@@ -14,8 +14,8 @@
 // Resultado esperado: R0 == 42.
 
 @Target("os:windows")
-	@Naked
-	u64 add_raw(u64 a,...) {
+@Naked
+u64 add_raw(u64 a,...) {
 	asm {
 		mov rax, rcx
 		add rax, rdx
@@ -24,8 +24,8 @@
 }
 
 @Target("!os:windows")
-	@Naked
-	u64 add_raw(u64 a,...) {
+@Naked
+u64 add_raw(u64 a,...) {
 	asm {
 		mov rax, rdi
 		add rax, rsi

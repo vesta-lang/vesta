@@ -4,8 +4,10 @@
 // los metodos.
 concept Sumable<T> { i64 suma(); }
 
-struct Par { i64 a;
-	i64 b; }
+struct Par {
+	i64 a;
+	i64 b;
+}
 impl Sumable for Par {
 	i64 suma() { return this.a + this.b; }
 }

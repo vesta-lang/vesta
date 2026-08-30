@@ -38,11 +38,11 @@ extern "stdlib/native/collections/vesta_collections" {
 }
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// ========= Queue =========
 	// FIFO: push 1,2,3,4,5 -> pop debe sacar 1,2,3,4,5 en orden.
-	i64 q   = vcol_queue_new(4); // empieza con cap 16 (forzado al min)
+	i64 q = vcol_queue_new(4); // empieza con cap 16 (forzado al min)
 	vcol_queue_push(q, 1);
 	vcol_queue_push(q, 2);
 	vcol_queue_push(q, 3);

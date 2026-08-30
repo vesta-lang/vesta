@@ -17,8 +17,8 @@ class Foo {
 
 i32 main() {
 	Foo[64] anillo; // potencia de 2: el indice sale con AND
-	i32 acc = 0;
-	i32 i   = 0;
+	i32     acc = 0_i32;
+	i32     i = 0_i32;
 	while (i < 1_000_000) {
 		Foo f     = new Foo(i & 255);
 		i32 k     = i & 63;
@@ -27,9 +27,9 @@ i32 main() {
 			acc = acc + viejo.x;
 		}
 		anillo[k] = f;
-		i = i + 1;
+		i         = i + 1;
 	}
-	i32 k2 = 0;
+	i32 k2 = 0_i32;
 	while (k2 < 64) { // vaciar la ventana
 		Foo v = anillo[k2];
 		if (v != null) { acc = acc + v.x; }

@@ -4,10 +4,12 @@
 // =============================================================================
 
 public class Node {
-	public i32 v;
+	public i32  v;
 	public Node next;
-	public Node(i32 x) { this.v = x;
-		this.next = null; }
+	public Node(i32 x) {
+		this.v    = x;
+		this.next = null;
+	}
 }
 
 i32 helper_strings(i32 n) {
@@ -21,7 +23,7 @@ public i32 run() {
 	// Crear 100 Nodes en cadena, luego iterar leyendo el field.
 	Node head = new Node(0);
 	Node cur  = head;
-	i32  i    = 1;
+	i32  i    = 1_i32;
 	while (i < 100) {
 		Node n = new Node(i);
 		cur.next = n;
@@ -33,9 +35,9 @@ public i32 run() {
 		i = i + 1;
 	}
 	// Iterar de vuelta sumando.
-	i32  sum   = 0;
+	i32  sum   = 0_i32;
 	Node walk  = head;
-	i32  count = 0;
+	i32  count = 0_i32;
 	while (walk != null && count < 100) {
 		sum   = sum + walk.v;
 		walk  = walk.next;

@@ -26,7 +26,7 @@ struct Fija {
 // Tabla estilo ELF: offset y stride LEIDOS de campos (runtime).
 @overlay
 struct ELFish {
-	u32 tab_off  @0x00;  // offset de la tabla
+	u32 tab_off  @0x00; // offset de la tabla
 	u32 ent_size @0x04; // stride RUNTIME (bytes por entrada)
 	u32 n        @0x08;
 	u32 entry[n] @offset(tab_off) stride(ent_size);
@@ -34,9 +34,9 @@ struct ELFish {
 
 i32 main() {
 	// --- stride constante ---
-	u8*  a = (u8 *) malloc(128);
+	u8*  a = (u8*) malloc(128);
 	Fija f = Fija(a);
-	f.count = (u32)3;
+	f.count   = (u32)3;
 	f.vals[0] = (u32)10; // 0x10
 	f.vals[1] = (u32)20; // 0x18
 	f.vals[2] = (u32)30; // 0x20
@@ -44,7 +44,7 @@ i32 main() {
 	println("fija: ${f.vals[0]} ${f.vals[1]} ${f.vals[2]}  raw@0x18=${*(u32*)(a + 0x18)}");
 
 	// --- stride runtime (leido de ent_size) ---
-	u8*    b = (u8 *) malloc(256);
+	u8*    b = (u8*) malloc(256);
 	ELFish e = ELFish(b);
 	e.tab_off  = (u32)0x20;
 	e.ent_size = (u32)12; // stride runtime

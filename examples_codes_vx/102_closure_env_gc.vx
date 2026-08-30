@@ -31,8 +31,8 @@ fn(i32) -> i32 make_adder(i32 n) {
 }
 
 i32 main() {
-	i32 total = 0;
-	i32 i     = 1;
+	i32 total = 0_i32;
+	i32 i     = 1_i32;
 	// 5000 iteraciones: en cada una creamos una closure (env de 8 bytes
 	// capturando n), la aplicamos UNA vez, y la descartamos.  Antes esto
 	// filtraba 5000 * (16 + 8) = 120 KB de heap raw.  Con GC_ALLOC el GC

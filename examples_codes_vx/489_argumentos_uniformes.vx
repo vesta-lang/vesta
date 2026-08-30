@@ -55,11 +55,11 @@ i32 main() {
 	fn(cfn(i64) -> i64) -> i64 lam = (cfn(i64) -> i64 cb) => { return cb(21); };
 
 	// 7. Variante de enum.
-	Caja                       c1  = Caja.ConNewtype(3);
-	Caja                       c2  = Caja.ConFn(doblar);
-	i64                        v1  = 0;
+	Caja c1 = Caja.ConNewtype(3);
+	Caja c2 = Caja.ConFn(doblar);
+	i64  v1 = 0_i64;
 	match (c1) { case ConNewtype(m) => { v1 = (i64) m; } case ConFn(f) => { v1 = 0; } }
-	i64 v2 = 0;
+	i64 v2 = 0_i64;
 	match (c2) { case ConNewtype(m) => { v2 = 0; } case ConFn(f) => { v2 = f(21); } }
 
 	const i64 newtypes = f_newtype(3) + k.m_newtype(3) + K.s_newtype(3) +

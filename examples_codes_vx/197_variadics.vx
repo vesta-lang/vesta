@@ -15,9 +15,9 @@ namespace ejemplos.variadics;
 
 // Solo variadico: suma todos los argumentos.
 i64 sum(i64... nums) {
-	i64 total = 0;
+	i64 total = 0_i64;
 	i64 n     = vacount();
-	i64 i     = 0;
+	i64 i     = 0_i64;
 	while (i < n) {
 		total = total + nums[i];
 		i     = i + 1;
@@ -29,7 +29,7 @@ i64 sum(i64... nums) {
 i64 sum_from(i64 base, i64... nums) {
 	i64 total = base;
 	i64 n     = vacount();
-	i64 i     = 0;
+	i64 i     = 0_i64;
 	while (i < n) {
 		total = total + nums[i];
 		i     = i + 1;

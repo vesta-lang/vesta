@@ -2,8 +2,8 @@
 // Mide LOAD throughput.  10M iter sobre array de 100K elementos.
 
 i32 sum_array(i32[] arr, i32 n) {
-	i32 sum = 0;
-	i32 i   = 0;
+	i32 sum = 0_i32;
+	i32 i   = 0_i32;
 	while (i < n) {
 		sum = sum + arr[i];
 		i   = i + 1;
@@ -14,14 +14,14 @@ i32 sum_array(i32[] arr, i32 n) {
 i32 main() {
 	i32[100_000] arr;
 	// Init: arr[i] = i (mod 1000 para evitar overflow).
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 100_000) {
 		arr[i] = i;
-		i = i + 1;
+		i      = i + 1;
 	}
 	// Sumar 100 veces (total: 10M loads).
-	i32 total = 0;
-	i32 k     = 0;
+	i32 total = 0_i32;
+	i32 k     = 0_i32;
 	while (k < 100) {
 		total = total + sum_array(arr, 100_000);
 		k     = k + 1;

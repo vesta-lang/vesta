@@ -16,8 +16,8 @@ class Counter {
 
 i32 main() {
 	Counter c   = new Counter();
-	i64     sum = 0;
-	i32     i   = 0;
+	i64     sum = 0_i64;
+	i32     i   = 0_i32;
 	while (i < 30_000_000) {
 		u32 t = ((u32) c.inc()) * 1_664_525 + 1_013_904_223;
 		c.value = (i32)(t & 255);

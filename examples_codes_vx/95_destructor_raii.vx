@@ -13,7 +13,7 @@ namespace ejemplos.destructor_raii;
 
 // Counter global (static field) para contar destructores ejecutados.
 class DtorCounter {
-	public static i32 count = 0;
+	public static i32 count = 0_i32;
 }
 
 // Clase con destructor.  El destructor incrementa el counter para que el
@@ -64,7 +64,7 @@ i32 main() {
 	//   c1 == 3        -> +20
 	//   c2 == 0        -> +12
 	//   kept.value=99  -> +10
-	i32      acc  = 0;
+	i32 acc = 0_i32;
 	if (c1 == 3) { acc = acc + 20; }
 	if (c2 == 0) { acc = acc + 12; }
 	if (kept.value == 99) { acc = acc + 10; }

@@ -25,7 +25,7 @@ i32 main() {
 	println("${RED}error${RESET}: ${BOLD}algo paso${RESET}");
 
 	// 2) Color + valor interpolado.
-	i32 count = 42;
+	i32 count = 42_i32;
 	println("${GREEN}OK${RESET} count=${count}");
 
 	// 3) Color + identificador con interpolacion.

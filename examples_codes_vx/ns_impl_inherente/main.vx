@@ -5,8 +5,10 @@
 //
 // Hubo una segunda palabra para esto, `extension Tipo { }`, y se retiro: hacia
 // lo mismo por otro camino, y ese camino se habia quedado corto.
-struct Punto { i64 x;
-	i64 y; }
+struct Punto {
+	i64 x;
+	i64 y;
+}
 impl Punto {
 	i64 suma() { return this.x + this.y; }
 	i64 escala(i64 k) { return (this.x + this.y) * k; }

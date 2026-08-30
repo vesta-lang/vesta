@@ -12,28 +12,28 @@
 @overlay
 struct BiHdr {
 	u32 magic   @0x00;
-	u8  ei_data @0x04;                        // 1 = little, 2 = big
+	u8  ei_data @0x04;                       // 1 = little, 2 = big
 	u16 version @endian(ei_data == 2) @0x06; // orden segun ei_data
-	u32 entry   @endian(ei_data == 2) @0x08;   // idem
+	u32 entry   @endian(ei_data == 2) @0x08; // idem
 }
 
 // Rellena una cabecera en el orden pedido (be=true -> big-endian) y devuelve la
 // suma de version+entry releidos (deben coincidir sea cual sea el orden).
 i64 build_and_read(u8* buf, bool be) {
 	BiHdr h = BiHdr(buf);
-	*(u32 *)(buf + 0) = 0x7F454C46; // "\x7FELF"
-	h.ei_data = be ? 2 : 1;
-	h.version = 0x0102; // se escribe en el orden que dicte ei_data
-	h.entry   = 0x0A0B0C0D;
+	*(u32*)(buf + 0) = 0x7F454C46; // "\x7FELF"
+	h.ei_data        = be ? 2 : 1;
+	h.version        = 0x0102; // se escribe en el orden que dicte ei_data
+	h.entry          = 0x0A0B0C0D;
 	// releer via la misma vista -> mismo valor logico en ambos ordenes
 	return (i64) h.version + (i64) h.entry;
 }
 
 i32 main() {
-	u8* be_buf = (u8 *) malloc(32);
-	u8* le_buf = (u8 *) malloc(32);
+	u8* be_buf = (u8*) malloc(32);
+	u8* le_buf = (u8*) malloc(32);
 
-	i64 be_sum = build_and_read(be_buf, true); // formato big-endian
+	i64 be_sum = build_and_read(be_buf, true);  // formato big-endian
 	i64 le_sum = build_and_read(le_buf, false); // formato little-endian
 
 	// los BYTES en memoria difieren segun el orden:

@@ -10,8 +10,8 @@ namespace ejemplos.comptime_imperativo;
 
 // comptime fn con loop while + acumulador (sin recursion).
 comptime i64 sum_iter(i64 n) {
-	i64 acc = 0;
-	i64 i   = 1;
+	i64 acc = 0_i64;
+	i64 i   = 1_i64;
 	while (i <= n) {
 		acc = acc + i;
 		i   = i + 1;
@@ -31,8 +31,8 @@ comptime i64 find_div(i64 start, i64 d) {
 
 // comptime fn con continue.
 comptime i64 sum_odd(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i <= n) {
 		if (i % 2 == 0) {
 			i = i + 1;
@@ -46,8 +46,8 @@ comptime i64 sum_odd(i64 n) {
 
 // comptime fn con while iterativo (factorial).
 comptime i64 prod(i64 n) {
-	i64 p = 1;
-	i64 i = 1;
+	i64 p = 1_i64;
+	i64 i = 1_i64;
 	while (i <= n) {
 		p = p * i;
 		i = i + 1;
@@ -59,7 +59,7 @@ comptime i64 prod(i64 n) {
 const i64 S100 = sum_iter(100);    // 5050
 const i64 D100 = find_div(100, 7); // 105 (105 = 15*7)
 const i64 ODD9 = sum_odd(9);       // 1+3+5+7+9 = 25
-const i64 P6   = prod(6); // 720
+const i64 P6   = prod(6);          // 720
 
 static_assert(S100 == 5050, "sum_iter(100)");
 static_assert(D100 == 105, "find_div(100, 7)");
@@ -69,8 +69,8 @@ static_assert(P6 == 720, "prod(6) = fact(6)");
 i32 main() {
 	// comptime block con locales mutables + while.
 	comptime {
-		u64 power = 1;
-		u64 e     = 0;
+		u64 power = 1_u64;
+		u64 e     = 0_u64;
 		while (e < 10) {
 			power = power * 2;
 			e     = e + 1;
@@ -80,7 +80,7 @@ i32 main() {
 
 	// comptime block con compound assignments.
 	comptime {
-		i64 x = 100;
+		i64 x = 100_i64;
 		x += 23;   // 123
 		x *= 2;    // 246
 		x -= 5;    // 241
@@ -96,8 +96,8 @@ i32 main() {
 
 	// comptime block con break en while.
 	comptime {
-		i64 i       = 0;
-		i64 stop_at = 0;
+		i64 i       = 0_i64;
+		i64 stop_at = 0_i64;
 		while (i < 1000) {
 			if (i * i > 100) {
 				stop_at = i;

@@ -27,7 +27,7 @@ class Animal {
 
 class Perro : Animal {
 	@Override
-		public i64 patas() { return 4; }
+	public i64 patas() { return 4; }
 }
 
 // El que cumple la interfaz va APARTE, sin superclase, a proposito: una clase
@@ -41,7 +41,7 @@ class Loro : Habla {
 
 class Jaula {
 	public Animal dentro;
-	public Habla quien;
+	public Habla  quien;
 
 	public Jaula(Animal a, Habla h) {
 		this.dentro = a; // argumento del constructor + guardar en campo
@@ -77,15 +77,15 @@ i32 main() {
 	h = new Loro();
 
 	// 3. Retorno.
-	      Animal r  = fabricar();
-	      Habla  rh = fabricar_habla();
+	Animal r  = fabricar();
+	Habla  rh = fabricar_habla();
 
 	// 4. Argumento.
-	const i64    p1 = patas_de(new Perro());
-	const i64    d1 = dice(new Loro());
+	const i64 p1 = patas_de(new Perro());
+	const i64 d1 = dice(new Loro());
 
 	// 5. Campo, por el constructor.
-	      Jaula  j  = new Jaula(new Perro(), new Loro());
+	Jaula j = new Jaula(new Perro(), new Loro());
 
 	// 6. Parametro de un `set`.
 	j.ocupante = new Perro();
@@ -93,7 +93,7 @@ i32 main() {
 	// El ascenso sirve para que la llamada acabe en el metodo de la subclase:
 	// si el despacho se quedara en la base, cada `patas()` daria 1 y no 4.
 	const i64 patas = a.patas() + r.patas() + p1 + j.dentro.patas(); // 16
-	const i64 voces = h.decir() + rh.decir() + d1; // 30
+	const i64 voces = h.decir() + rh.decir() + d1;                   // 30
 
 	println("patas=${patas} voces=${voces}");
 

@@ -29,8 +29,8 @@ string g() {
 }
 
 i32 main() {
-	string a  = "ab";
-	string b  = "cde";
+	string a = "ab";
+	string b = "cde";
 
 	// Caso 1: concat retornado por valor desde mk -> "abcde" (length 5).
 	string c  = mk(a, b);
@@ -44,7 +44,7 @@ i32 main() {
 	string x  = "cd";
 	string y  = "ef";
 	string r  = mk(mk(a, x), y); // "ab"+"cd"+"ef" = "abcdef" (length 6)
-	i64    n3 = r.length();        // 6
+	i64    n3 = r.length();      // 6
 
 	// 5 + 4 + 6 - 10 = 5.
 	return (i32)(n1 + n2 + n3 - 10);

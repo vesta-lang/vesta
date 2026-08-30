@@ -20,10 +20,12 @@ namespace ejemplos.result_payload_grande;
 // El struct se hace de treinta y dos bytes a proposito: uno que quepa en el
 // numero fijo de antes tapa el fallo.
 
-struct Grande { i64 a;
+struct Grande {
+	i64 a;
 	i64 b;
 	i64 c;
-	i64 d; }
+	i64 d;
+}
 
 Result<Grande, i64> hacer(i64 x) {
 	Grande g;
@@ -41,9 +43,9 @@ Result<Grande, i64> fallar() {
 i32 main() {
 	// Un centinela en la pila: si el conjunto se dimensionara corto, lo
 	// primero que se lleva por delante es esto.
-	const i64 centinela = 555;
+	const i64 centinela = 555_i64;
 
-	i64                 suma = 0;
+	i64                 suma = 0_i64;
 	Result<Grande, i64> r    = hacer(10);
 	if (isOk(r) != 0) {
 		Grande g = value(r);
@@ -52,14 +54,14 @@ i32 main() {
 
 	// La rama de error tiene que seguir distinguiendose, y su payload vive
 	// DETRAS del valor -- que ahora ocupa cuatro palabras, no una --.
-	i64                 err  = 0;
+	i64                 err  = 0_i64;
 	Result<Grande, i64> malo = fallar();
 	if (isOk(malo) == 0) {
 		err = error(malo); // 99
 	}
 
 	// Y el camino que mira la marca por su cuenta.
-	i64 porMatch = 0;
+	i64 porMatch = 0_i64;
 	match (r) {
 		case Ok(g)  => { porMatch = g.d; } // 13
 		case Err(e) => { porMatch = -1; }

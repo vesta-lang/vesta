@@ -23,15 +23,17 @@ namespace ejemplos.unwrap_fallido_es_fatal;
 // Este programa TIENE que morir: la suite comprueba el codigo del catalogo, la
 // cadena de llamadas y el codigo de salida.
 
-i64* dame_nulo() { i64* z = null;
-	return z; }
+i64* dame_nulo() {
+	i64* z = null;
+	return z;
+}
 
 i32 main() {
 	// El `try` esta puesto A PROPOSITO: la gracia es que NO captura.  Antes
 	// este mismo programa salia por el `catch` en interprete y JIT, y se moria
 	// al compilarlo a nativo.
 	try {
-		nonnull i64 *p = dame_nulo();
+		nonnull i64* p = dame_nulo();
 		println("no se debe llegar aqui: ${*p}");
 	} catch (FatalError e) {
 		println("tampoco aqui: capturar esto ya no es posible");

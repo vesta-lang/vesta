@@ -19,15 +19,15 @@ i32 mas_uno(i32 x) { return x + 1; }
 
 // (1) Macro recursivo: 100 niveles de mas_uno anidados.
 @Macro
-	comptime string M_chain(i64 n) {
+comptime string M_chain(i64 n) {
 	return (n <= 0) ? "x" : "mas_uno(" + M_chain(n - 1) + ")";
 }
 
 // (2) Macro con loop: emite tabla de 50 sumas.
 @Macro
-	comptime string M_table(i64 n) {
+comptime string M_table(i64 n) {
 	string code = "0";
-	i64    i    = 1;
+	i64    i    = 1_i64;
 	while (i <= n) {
 		code = code + " + doblar(" + to_str(i) + ")";
 		i    = i + 1;
@@ -37,21 +37,21 @@ i32 mas_uno(i32 x) { return x + 1; }
 
 // (3) Composicion: macro pirámide -- arbol binario 2^N leaves.
 @Macro
-	comptime string Pyramid(i64 n) {
+comptime string Pyramid(i64 n) {
 	return (n <= 0) ? "1" : "(" + Pyramid(n - 1) + "+" + Pyramid(n - 1) + ")";
 }
 
 // (4) Global mutable + macros que comparten estado.
-const i64 g_unique = 0;
+const i64 g_unique = 0_i64;
 
 @Macro
-	comptime string M_uniq() {
+comptime string M_uniq() {
 	g_unique = g_unique + 1;
 	return to_str(g_unique);
 }
 
 i32 main() {
-	i32 x  = 0;
+	i32 x = 0_i32;
 
 	// 100-deep nested macro: emite mas_uno(mas_uno(...x))
 	i32 r1 = M_chain(100);

@@ -11,4 +11,4 @@ public comptime WORD MK(u16 p, u16 s) {
 	return ((s << 10) | p);
 }
 
-public const u32 BASE = 40;
+public const u32 BASE = 40_u32;

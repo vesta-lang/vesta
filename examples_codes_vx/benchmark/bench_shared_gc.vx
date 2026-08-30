@@ -15,25 +15,27 @@ class Node {
 	public i64 a;
 	public i64 b;
 	public i64 c;
-	public Node() { this.a = 0;
+	public Node() {
+		this.a = 0;
 		this.b = 0;
-		this.c = 0; }
+		this.c = 0;
+	}
 }
 
 i32 main() {
-	i32 K           = 100;  // ciclos GC
-	i32 N           = 1000; // allocs por ciclo
-	i32 total_swept = 0;
-	i32 cycle       = 0;
+	i32 K           = 100_i32;  // ciclos GC
+	i32 N           = 1000_i32; // allocs por ciclo
+	i32 total_swept = 0_i32;
+	i32 cycle       = 0_i32;
 	while (cycle < K) {
 		// Aloc N shared, descartar inmediatamente (slot stack overwrite).
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i < N) {
 			shared Node n = new Node();
 			n.a = i;
 			// n queda en slot stack del while body; se sobreescribe en
 			// la proxima iter.  GC stack scan no encontrara ref tras exit.
-			i   = i + 1;
+			i = i + 1;
 		}
 		// Trigger GC.
 		u32 before = shared_heap_live_count();

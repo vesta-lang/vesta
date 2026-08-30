@@ -18,8 +18,8 @@ namespace ejemplos.arraylist;
 
 class IntArrayList {
 	public i32* buf;
-	public i32 len;
-	public i32 cap;
+	public i32  len;
+	public i32  cap;
 
 	public IntArrayList(i32 initial_cap) {
 		this.cap = initial_cap;
@@ -34,17 +34,17 @@ class IntArrayList {
 			// al nuevo buffer; liberar el viejo.
 			i32  new_cap = this.cap * 2;
 			i32* new_buf = malloc(4 * new_cap);
-			i32  i       = 0;
+			i32  i       = 0_i32;
 			while (i < this.len) {
 				new_buf[i] = this.buf[i];
-				i = i + 1;
+				i          = i + 1;
 			}
 			free(this.buf);
 			this.buf = new_buf;
 			this.cap = new_cap;
 		}
 		this.buf[this.len] = v;
-		this.len = this.len + 1;
+		this.len           = this.len + 1;
 	}
 
 	public i32 get(i32 i) {
@@ -71,7 +71,7 @@ i32 main() {
 
 	// Push 16 elementos (0, 1, 2, ..., 15).  Cap empieza en 4 -> grow
 	// a 8 -> grow a 16.
-	i32          i    = 0;
+	i32 i = 0_i32;
 	while (i < 16) {
 		list.push(i);
 		i = i + 1;
@@ -89,7 +89,7 @@ i32 main() {
 	}
 
 	// Validacion 3: suma == 0+1+...+15 == 120.
-	i32 sum = 0;
+	i32 sum = 0_i32;
 	i = 0;
 	while (i < 16) {
 		sum = sum + list.get(i);

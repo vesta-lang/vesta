@@ -7,9 +7,9 @@
 // @expect 42
 u64 main() {
 	// Parte ALTA sin signo: (42 * 2^32) * 2^32 = 42 * 2^64 -> RDX = 42, RAX = 0.
-	register("rax") u64 a  = 0x0000002A00000000; // 42 << 32
-	register("rbx") u64 b  = 0x0000000100000000; // 1  << 32
-	register("rdx") u64 hi = 0;
+	register("rax") u64 a  = 0x0000002A00000000_u64; // 42 << 32
+	register("rbx") u64 b  = 0x0000000100000000_u64; // 1  << 32
+	register("rdx") u64 hi = 0_u64;
 	asm { mul rbx };
 	return hi; // parte alta = 42
 }

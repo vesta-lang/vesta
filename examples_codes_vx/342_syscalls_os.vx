@@ -41,30 +41,30 @@ import std.types only nullptr, size_t, ssize_t, uintptr;
 // Las constantes de memoria (MEM_*, PAGE_*) son de la API Win32, no de la capa
 // NT, asi que viven en std.windows y se piden aparte.
 @Target("os:windows")
-	import std.windows only *;
+import std.windows only *;
 
 @Target("os:linux")
-	import std.unix only *;
+import std.unix only *;
 
 /// Pasos que debe completar la rama de Windows para considerarse correcta.
 @Target("os:windows")
-	const i32 PASOS_ESPERADOS = 6;
+const i32 PASOS_ESPERADOS = 6_i32;
 
 /// Pasos que debe completar la rama de Linux.  Es uno mas que en Windows
 /// porque alli reservar y confirmar la memoria es UNA sola syscall.
 @Target("os:linux")
-	const i32    PASOS_ESPERADOS = 7;
+const i32 PASOS_ESPERADOS = 7_i32;
 
 /// Valor que devuelve el programa cuando todos los pasos salieron bien.
-const     i32    EXITO           = 42;
+const i32 EXITO = 42_i32;
 
 /// Patron reconocible que se escribe y se relee en la pagina reservada.
-const     u64    PATRON          = 0xCAFEBABE;
+const u64 PATRON = 0xCAFEBABE_u64;
 
 /// Tamano de la region de memoria que se reserva en ambas ramas.  Es un
 /// TAMANO, no un entero cualquiera, y el tipo lo dice: `size_t` es el que
 /// piden las dos APIs (`SIZE_T` en NT, `size_t` en mmap).
-const     size_t PAGE_SIZE       = 4096;
+const size_t PAGE_SIZE = 4096;
 
 // ---------------------------------------------------------------------------
 // Windows: memoria virtual y consulta del proceso, todo por la capa NT.
@@ -75,11 +75,11 @@ const     size_t PAGE_SIZE       = 4096;
  * @return @c EXITO si los seis pasos salieron bien; si no, cuantos lo hicieron.
  */
 @Target("os:windows")
-	i32 corre() {
-	i32    puntos = 0;
+i32 corre() {
+	i32 puntos = 0_i32;
 
 	// (1) Pseudo-handle del proceso actual.
-	HANDLE proc   = NtCurrentProcess();
+	HANDLE proc = NtCurrentProcess();
 
 	if (proc != nullptr) {
 		puntos++;
@@ -163,11 +163,11 @@ const     size_t PAGE_SIZE       = 4096;
  * @return @c EXITO si los seis pasos salieron bien; si no, cuantos lo hicieron.
  */
 @Target("os:linux")
-	i32 corre() {
-	i32 puntos = 0;
+i32 corre() {
+	i32 puntos = 0_i32;
 
 	// (1) PID del proceso actual.
-	i32 pid    = getpid();
+	i32 pid = getpid();
 
 	if (pid > 0) {
 		puntos++;

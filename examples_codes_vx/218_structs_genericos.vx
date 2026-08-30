@@ -32,12 +32,12 @@ i32 main() {
 	p.valor = 7;
 
 	// Introspeccion comptime sobre los structs monomorfizados.
-	i64 sz  = sizeof<Caja<i64>>();               // 8 (un i64)
-	i64 nf  = field_count<Par<i32, i64>>();      // 2 campos
+	i64 sz  = sizeof<Caja<i64>>();              // 8 (un i64)
+	i64 nf  = field_count<Par<i32, i64>>();     // 2 campos
 	i64 off = offsetof<Par<i32, i64>>("valor"); // offset del 2o campo
 
 	// 20 + 8 + 7 = 35 ; + (sz==8 -> 1) + (nf==2 -> 1) + (off==8 -> 1) ... ajustado:
-	i64 ok  = 0;
+	i64 ok = 0_i64;
 	if (sz == 8) { ok = ok + 3; }
 	if (nf == 2) { ok = ok + 2; }
 	if (off == 8) { ok = ok + 2; }

@@ -8,7 +8,7 @@ namespace ejemplos.spawn_basico;
 
 i32 main() {
 	i64 pid = spawn {
-		i32 dummy = 42; // hijo: trabajo trivial, luego hlt automatico
+		i32 dummy = 42_i32; // hijo: trabajo trivial, luego hlt automatico
 	};
 	if (pid != 0) {
 		return 100; // OK: hijo creado

@@ -17,7 +17,7 @@ i32 main() {
 
 	// Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
 	// puntero; ver LIM-10): medir + reservar + leer.
-	i64    size = bmp.bmp_file_size(path);
+	i64 size = bmp.bmp_file_size(path);
 	if (size <= 0) {
 		println("El archivo ${path} no pudo encontrarse o no existe.");
 		return 1;

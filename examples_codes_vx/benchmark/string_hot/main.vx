@@ -2,8 +2,8 @@
 i32 main() {
 	string base   = "abc";
 	string suffix = "xyz";
-	i64    hits   = 0;
-	i32    i      = 0;
+	i64    hits   = 0_i64;
+	i32    i      = 0_i32;
 	while (i < 200_000) {
 		string combo = base + suffix;
 		u64    ln    = combo.length();

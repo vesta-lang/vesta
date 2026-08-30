@@ -29,7 +29,7 @@ concept Dibujable {
 // --- @Abstract: una base parcial.  Da estado (w, h) e implementacion (area).
 //     No se puede instanciar suelta: expresa "esto es solo una base".
 @Abstract
-	struct FormaBase {
+struct FormaBase {
 	i64 w;
 	i64 h;
 	// Implementacion REAL, heredable por los derivados.
@@ -59,7 +59,7 @@ i32 main() {
 	// Cuadrado escribe su propia `area` para cumplir el contrato Dibujable.
 	Cuadrado c;
 	c.lado = 5;
-	i64 a2 = c.area();     // 25, codigo propio exigido por la interfaz
+	i64 a2 = c.area(); // 25, codigo propio exigido por la interfaz
 
 	// FormaBase f;             // <- ERROR si se descomenta: es @Abstract.
 

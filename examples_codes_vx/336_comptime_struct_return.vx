@@ -40,12 +40,12 @@ struct Caja {
 
 
 i32 main() {
-	Punto p     = Punto.punto(10, 32); // struct plano materializado: x=10, y=32
-	Caja  c     = Caja.caja();                 // struct anidado materializado
+	Punto p = Punto.punto(10, 32); // struct plano materializado: x=10, y=32
+	Caja  c = Caja.caja();         // struct anidado materializado
 
 	// p.x + p.y = 42 ; area de la caja = (10-2) * (20-3) = 8 * 17 = 136
-	i64   ancho = c.max.x - c.min.x;        // 8
-	i64   alto  = c.max.y - c.min.y;         // 17
-	i64   area  = ancho * alto;              // 136
+	i64 ancho = c.max.x - c.min.x;        // 8
+	i64 alto  = c.max.y - c.min.y;        // 17
+	i64 area  = ancho * alto;             // 136
 	return (i32)(p.x + p.y + area - 136); // 42 + 136 - 136 = 42
 }

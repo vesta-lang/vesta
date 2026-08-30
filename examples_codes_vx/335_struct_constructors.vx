@@ -34,7 +34,7 @@ struct Vec {
 }
 
 i32 main() {
-	Vec p = Vec(10, 32); // overload 2-arg: x=10, y=32 -> sum=42
+	Vec p = Vec(10, 32);                  // overload 2-arg: x=10, y=32 -> sum=42
 	Vec q = Vec(21);                      // overload 1-arg: x=y=21    -> sum=42
 	return (i32)(p.sum() + q.sum() - 42); // 42 + 42 - 42 = 42
 }

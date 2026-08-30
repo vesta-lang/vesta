@@ -37,7 +37,7 @@ i32 partition(i32[] arr, i32 lo, i32 hi) {
 	// swap arr[i+1] y arr[hi] (pivote a su posicion final)
 	i32 tmp2 = arr[i + 1];
 	arr[i + 1] = arr[hi];
-	arr[hi] = tmp2;
+	arr[hi]    = tmp2;
 	return i + 1;
 }
 
@@ -50,8 +50,8 @@ void quicksort(i32[] arr, i32 lo, i32 hi) {
 }
 
 i32 sum_array(i32[] arr, i32 n) {
-	i32 s = 0;
-	i32 i = 0;
+	i32 s = 0_i32;
+	i32 i = 0_i32;
 	while (i < n) {
 		s = s + arr[i];
 		i = i + 1;
@@ -60,7 +60,7 @@ i32 sum_array(i32[] arr, i32 n) {
 }
 
 i32 is_sorted(i32[] arr, i32 n) {
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < n - 1) {
 		if (arr[i] > arr[i + 1]) return 0;
 		i = i + 1;
@@ -84,10 +84,10 @@ i32 main() {
 
 	quicksort(arr, 0, 8);
 
-	i32 sum_after = sum_array(arr, 9);      // debe ser 45 tambien
-	i32 sorted    = is_sorted(arr, 9);         // debe ser 1
-	i32 first_min = arr[0];                 // debe ser 1
-	i32 last_max  = arr[8];                  // debe ser 9
+	i32 sum_after = sum_array(arr, 9); // debe ser 45 tambien
+	i32 sorted    = is_sorted(arr, 9); // debe ser 1
+	i32 first_min = arr[0];            // debe ser 1
+	i32 last_max  = arr[8];            // debe ser 9
 
 	// Codigos de error distintos para que falla la validacion sea
 	// diagnosticable sin necesidad de prints.
@@ -95,7 +95,7 @@ i32 main() {
 	if (sum_after != sum_before) return 12; // sort perdio elementos
 	if (sorted == 0) return 13;             // sort no ordeno
 	if (first_min != 1) return 14;          // minimo incorrecto
-	if (last_max != 9) return 15; // maximo incorrecto
+	if (last_max != 9) return 15;           // maximo incorrecto
 
-	return 42;                    // todas las validaciones OK
+	return 42; // todas las validaciones OK
 }

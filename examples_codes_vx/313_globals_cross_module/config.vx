@@ -5,7 +5,7 @@ namespace config;
 
 /// Const con valor entero de compile time: el consumidor lo INLINEA (no hay
 /// storage; sale un inmediato en el codigo).
-public const i64    LIMITE   = 30;
+public const i64 LIMITE = 30_i64;
 
 /// Const string: tampoco tiene storage.  Cada uso -- aqui o en otro modulo --
 /// materializa el StringObject a partir del literal, que viaja en el .vxi.
@@ -14,7 +14,7 @@ public const string ETIQUETA = "cfg";
 /// Global MUTABLE: este SI tiene storage, y es UNO solo en todo el programa.
 /// Lo inicializa el `__module_init` de este modulo antes de que corra `main`,
 /// y quien lo escriba (aqui o el consumidor) lo escribe para todos.
-public       i64    usos     = 2;
+public i64 usos = 2_i64;
 
 /// Suma un uso y devuelve el total.  Escribe el mismo storage que ve el
 /// consumidor cuando lee `config.usos`.

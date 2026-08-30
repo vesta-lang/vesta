@@ -32,10 +32,10 @@ import std.fileio;
 // BITMAPFILEHEADER: los primeros 14 bytes del fichero.
 @overlay
 struct BmpFileHeader {
-	i16 magic  @0x00;  // firma 'BM' = 0x4D42
-	i32 size   @0x02;   // tamano total del fichero en bytes
-	i16 rsv1   @0x06;   // reservado (0)
-	i16 rsv2   @0x08;   // reservado (0)
+	i16 magic  @0x00; // firma 'BM' = 0x4D42
+	i32 size   @0x02; // tamano total del fichero en bytes
+	i16 rsv1   @0x06; // reservado (0)
+	i16 rsv2   @0x08; // reservado (0)
 	i32 offset @0x0A; // offset (desde el inicio) a los datos de pixel
 }
 
@@ -44,26 +44,26 @@ struct BmpFileHeader {
 // BmpInfoHeader(buf + 14).
 @overlay
 struct BmpInfoHeader {
-	i32 hdr_size    @0x00;    // tamano del info-header (40 = 0x28)
-	i32 width       @0x04;       // ancho en pixeles (con signo)
-	i32 height      @0x08;      // alto en pixeles (>0 = bottom-up)
-	i16 planes      @0x0C;      // planos de color (siempre 1)
-	i16 bpp         @0x0E;         // bits por pixel (24 = BGR, 32 = BGRA)
+	i32 hdr_size    @0x00; // tamano del info-header (40 = 0x28)
+	i32 width       @0x04; // ancho en pixeles (con signo)
+	i32 height      @0x08; // alto en pixeles (>0 = bottom-up)
+	i16 planes      @0x0C; // planos de color (siempre 1)
+	i16 bpp         @0x0E; // bits por pixel (24 = BGR, 32 = BGRA)
 	i32 compression @0x10; // metodo de compresion (0 = BI_RGB, sin comprimir)
-	i32 image_size  @0x14;  // tamano de los datos de pixel (0 valido si BI_RGB)
-	i32 res_h       @0x18;       // resolucion horizontal en pixeles/metro
-	i32 res_v       @0x1C;       // resolucion vertical en pixeles/metro
-	i32 palette     @0x20;     // numero de colores de la paleta (0 = 2^bpp)
-	i32 important   @0x24;   // colores importantes (0 = todos)
+	i32 image_size  @0x14; // tamano de los datos de pixel (0 valido si BI_RGB)
+	i32 res_h       @0x18; // resolucion horizontal en pixeles/metro
+	i32 res_v       @0x1C; // resolucion vertical en pixeles/metro
+	i32 palette     @0x20; // numero de colores de la paleta (0 = 2^bpp)
+	i32 important   @0x24; // colores importantes (0 = todos)
 }
 
 // ---------------------------------------------------------------------------
 // Constantes del formato.
 // ---------------------------------------------------------------------------
 
-comptime i32 BMP_FILE_HDR_SIZE = 14;
-comptime i32 BMP_INFO_HDR_SIZE = 40;
-comptime i32 BMP_HEADER_SIZE   = 54; // 14 + 40; offset por defecto a los pixeles
+comptime i32 BMP_FILE_HDR_SIZE = 14_i32;
+comptime i32 BMP_INFO_HDR_SIZE = 40_i32;
+comptime i32 BMP_HEADER_SIZE   = 54_i32; // 14 + 40; offset por defecto a los pixeles
 
 // ---------------------------------------------------------------------------
 // Utilidades de bajo nivel.
@@ -84,9 +84,9 @@ i32 bmp_row_padded(i32 width, i32 bit_pixel) {
 // cola de <8 bytes con stores de byte.  Deja el padding de fila y los pixeles
 // no escritos en un estado determinista (0).
 void bmp_zero(u8* buf, i64 n) {
-	u64* qp = (u64 *) buf;
+	u64* qp = (u64*) buf;
 	i64  nq = n / 8;
-	for (i64 i = 0; i < nq; i++) {
+	for (i64 i = 0_i64; i < nq; i++) {
 		qp[i] = (u64) 0;
 	}
 	for (i64 off = nq * 8; off < n; off++) {
@@ -241,7 +241,7 @@ void bmp_set_pixel(u8* buf, i32 x, i32 y, i32 r, i32 g, i32 b) {
 	if (index < 0) {
 		return;
 	}
-	buf[index] = (u8) b;
+	buf[index]     = (u8) b;
 	buf[index + 1] = (u8) g;
 	buf[index + 2] = (u8) r;
 	u8*           info_base = buf + BMP_FILE_HDR_SIZE;
@@ -360,7 +360,7 @@ public void bmp_dump_terminal(u8* buf) {
 	i32           base            = (i32) fh.offset;
 
 	for (i32 fila = height - 1; fila >= 0; fila--) {
-		for (i32 col = 0; col < width; col++) {
+		for (i32 col = 0_i32; col < width; col++) {
 			i32 index = base + fila * row_padded + col * bytes_per_pixel;
 			i32 b     = (i32) buf[index];
 			i32 g     = (i32) buf[index + 1];

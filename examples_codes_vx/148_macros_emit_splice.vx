@@ -29,7 +29,7 @@ i32 main() {
 	// (2) Splice referenciando variables del scope.  La variable `n`
 	// existe en runtime; el codigo emitido la usa directamente porque
 	// el type checker resuelve los nombres en el scope actual.
-	i32 n       = 20;
+	i32 n       = 20_i32;
 	i32 con_var = comptime_emit_expr("doblar(n) + 1");
 	if (con_var != 41) return 92;
 

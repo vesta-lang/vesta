@@ -68,7 +68,7 @@ i32 main() {
 	// Invocar dinamicamente: doblar(21) == 42.
 	i64 result = invoke(m, obj, 21);
 
-	for (i64 i = 0; i < 30_000_000; i++) {
+	for (i64 i = 0_i64; i < 30_000_000; i++) {
 		i32 val = pruebas();
 		if ((i % 10_000_000) == 0) {
 			println("pruebas() = ${i}");

@@ -13,9 +13,9 @@ namespace ejemplos.indice_variable;
 
 i64 mal(u64 n) {
 	u8[16] buf;
-	u8* p = &buf[0];
-	u64 i = 100 + (n & 7);
-	*(u64 *)(p + i) = 1;
+	u8*    p = &buf[0];
+	u64    i = 100 + (n & 7);
+	*(u64*)(p + i) = 1;
 	return (i64) buf[0];
 }
 

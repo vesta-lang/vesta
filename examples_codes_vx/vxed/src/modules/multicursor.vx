@@ -16,11 +16,11 @@
 
 import "modules/buffer";
 
-public const i32 MC_MAX = 16;
+public const i32 MC_MAX = 16_i32;
 
 public class MultiCursor {
 	public i32* offsets;
-	public i32 count;
+	public i32  count;
 
 	public MultiCursor() {
 		this.offsets = malloc(MC_MAX * 4);
@@ -38,7 +38,7 @@ public class MultiCursor {
 
 	// Devuelve la columna (offset desde inicio de linea) de `pos`.
 	public i32 col_of(buffer.Buffer b, i32 pos) {
-		i32 col = 0;
+		i32 col = 0_i32;
 		i32 i   = pos - 1;
 		while (i >= 0) {
 			if (b.data[i] == 10) return col;
@@ -51,8 +51,8 @@ public class MultiCursor {
 	// Encuentra el offset de inicio de la linea N (0-based).
 	public i32 line_start_of(buffer.Buffer b, i32 row) {
 		if (row == 0) return 0;
-		i32 cur = 0;
-		i32 i   = 0;
+		i32 cur = 0_i32;
+		i32 i   = 0_i32;
 		while (i < b.length) {
 			if (b.data[i] == 10) {
 				cur = cur + 1;
@@ -85,13 +85,13 @@ public class MultiCursor {
 		i32               new_off    = ls + col;
 		if (new_off > le) new_off    = le;
 		// Verificar que no este ya en el array.
-		i32               j          = 0;
+		i32 j = 0_i32;
 		while (j < this.count) {
 			if (this.offsets[j] == new_off) return;
 			j = j + 1;
 		}
 		this.offsets[this.count] = new_off;
-		this.count = this.count + 1;
+		this.count               = this.count + 1;
 	}
 
 	// Agrega un cursor extra una linea ABAJO.
@@ -106,19 +106,19 @@ public class MultiCursor {
 		i32               le         = this.line_end_of(b, ls);
 		i32               new_off    = ls + col;
 		if (new_off > le) new_off    = le;
-		i32               j          = 0;
+		i32               j          = 0_i32;
 		while (j < this.count) {
 			if (this.offsets[j] == new_off) return;
 			j = j + 1;
 		}
 		this.offsets[this.count] = new_off;
-		this.count = this.count + 1;
+		this.count               = this.count + 1;
 	}
 
 	// Ordena `offsets` descendente para que insertion/deletion aplique de
 	// mayor a menor (preservando los offsets menores).
 	public void sort_desc() {
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i < this.count) {
 			i32 j = i + 1;
 			while (j < this.count) {
@@ -142,21 +142,23 @@ public class MultiCursor {
 		}
 		// Construir lista combinada: primary + extras, sort desc.
 		i32* all = malloc((MC_MAX + 1) * 4);
-		i32  n   = 0;
+		i32  n   = 0_i32;
 		all[n] = b.cursor;
-		n = n + 1;
-		i32 j = 0;
-		while (j < this.count) { all[n] = this.offsets[j];
-			n = n + 1;
-			j = j + 1; }
+		n      = n + 1;
+		i32 j = 0_i32;
+		while (j < this.count) {
+			all[n] = this.offsets[j];
+			n      = n + 1;
+			j      = j + 1;
+		}
 		// Bubble sort desc (n <= 17, ok).
-		i32 a = 0;
+		i32 a = 0_i32;
 		while (a < n) {
 			i32 bb = a + 1;
 			while (bb < n) {
 				if (all[bb] > all[a]) {
 					i32 t = all[a];
-					all[a] = all[bb];
+					all[a]  = all[bb];
 					all[bb] = t;
 				}
 				bb = bb + 1;
@@ -164,7 +166,7 @@ public class MultiCursor {
 			a = a + 1;
 		}
 		// Aplicar insertion en cada (de mayor a menor).
-		i32 k = 0;
+		i32 k = 0_i32;
 		while (k < n) {
 			b.cursor = all[k];
 			b.insert_char(c);
@@ -199,27 +201,29 @@ public class MultiCursor {
 			return 1;
 		}
 		i32* all = malloc((MC_MAX + 1) * 4);
-		i32  n   = 0;
+		i32  n   = 0_i32;
 		all[n] = b.cursor;
-		n = n + 1;
-		i32 j = 0;
-		while (j < this.count) { all[n] = this.offsets[j];
-			n = n + 1;
-			j = j + 1; }
-		i32 a = 0;
+		n      = n + 1;
+		i32 j = 0_i32;
+		while (j < this.count) {
+			all[n] = this.offsets[j];
+			n      = n + 1;
+			j      = j + 1;
+		}
+		i32 a = 0_i32;
 		while (a < n) {
 			i32 bb = a + 1;
 			while (bb < n) {
 				if (all[bb] > all[a]) {
 					i32 t = all[a];
-					all[a] = all[bb];
+					all[a]  = all[bb];
 					all[bb] = t;
 				}
 				bb = bb + 1;
 			}
 			a = a + 1;
 		}
-		i32 k = 0;
+		i32 k = 0_i32;
 		while (k < n) {
 			b.cursor = all[k];
 			if (b.cursor > 0) b.backspace();

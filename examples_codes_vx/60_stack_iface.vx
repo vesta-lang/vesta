@@ -20,7 +20,7 @@ interface IStack {
 }
 
 class LinkedNode {
-	public i32 value;
+	public i32        value;
 	public LinkedNode next;
 	public LinkedNode(i32 v) {
 		this.value = v;
@@ -30,7 +30,7 @@ class LinkedNode {
 
 class LinkedListStack : IStack {
 	public LinkedNode top;
-	public i32 count;
+	public i32        count;
 
 	public LinkedListStack() {
 		this.top   = null;
@@ -58,7 +58,7 @@ class LinkedListStack : IStack {
 
 // Helper polimorfico: opera sobre cualquier IStack.
 i32 push_range(IStack s, i32 from, i32 to) {
-	i32 sum = 0;
+	i32 sum = 0_i32;
 	i32 v   = from;
 	while (v <= to) {
 		s.push(v);
@@ -69,8 +69,8 @@ i32 push_range(IStack s, i32 from, i32 to) {
 }
 
 i32 pop_n(IStack s, i32 n) {
-	i32 sum = 0;
-	i32 i   = 0;
+	i32 sum = 0_i32;
+	i32 i   = 0_i32;
 	while (i < n) {
 		sum = sum + s.pop();
 		i   = i + 1;

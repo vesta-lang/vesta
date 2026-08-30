@@ -17,5 +17,5 @@ i32 main() {
 	borrow<i64> bs = lend(s);
 	i64         vs = read_borrow(bs); // 22
 
-	return (i32)(vu + vs);    // 42
+	return (i32)(vu + vs); // 42
 }

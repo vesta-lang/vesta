@@ -48,7 +48,7 @@ i32 main() {
 	// Validaciones que NO alteran r (confirman los otros backings).
 	if ((i32)Color.Blue != 2) { r = 0; }         // auto-incremento bare enum
 	if ((u32)Flags.BIG != 0xFFFFFFFF) { r = 0; } // backing u32 inferido
-	if (!Names.OK.equals("ok")) { r = 0; } // backing string inferido
+	if (!Names.OK.equals("ok")) { r = 0; }       // backing string inferido
 
-	return r;                              // 42
+	return r; // 42
 }

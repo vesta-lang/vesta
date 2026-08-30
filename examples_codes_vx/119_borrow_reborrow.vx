@@ -12,8 +12,8 @@ i32 main() {
 	borrow<i32> r2 = lend(r1);    // reborrow shared (root: owner)
 
 	// Ambos shared coexisten OK (R2).
-	i32         v1 = read_borrow(r1);
-	i32         v2 = read_borrow(r2);
+	i32 v1 = read_borrow(r1);
+	i32 v2 = read_borrow(r2);
 
 	if (v1 != 42 || v2 != 42) return 99;
 	return 42;

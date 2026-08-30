@@ -12,7 +12,7 @@
 // Hooks del runtime del usuario (sin libc).  En un kernel real, k_free
 // liberaria al allocador del kernel; aqui es un demo no-op.
 @AllocatorOverride
-void k_free(i64 *p) { }
+void k_free(i64* p) { }
 
 class Box {
 	i32 v;

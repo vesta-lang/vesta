@@ -15,7 +15,7 @@ namespace ejemplos.str_split;
 // Esperado: R00 == 42.
 
 extern "stdlib/native/collections/vesta_collections" {
-	fn vstr_split_offsets(i8 *hp, i64 hl, i8 *dp, i64 dl) -> i64;
+	fn vstr_split_offsets(i8* hp, i64 hl, i8* dp, i64 dl) -> i64;
 	fn vcol_alist_size(i64 h) -> i64;
 	fn vcol_alist_get(i64 h, i64 i) -> i64;
 	fn vcol_alist_free(i64 h) -> void;
@@ -30,7 +30,7 @@ i32 main() {
 
 	i64 n = vcol_alist_size(list);
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// Esperamos 5 substrings.
 	if (n == 5) { acc = acc + 20; }

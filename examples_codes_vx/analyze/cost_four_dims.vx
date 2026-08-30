@@ -33,8 +33,8 @@
 	n = m
 )
 	i64 suma_lineal(i64 m) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < m) {
 		acc = acc + i;
 		i   = i + 1;
@@ -49,10 +49,10 @@
 //    Las cuatro dimensiones documentan exactamente esa diferencia.
 // -------------------------------------------------------------------------
 i64 cuadr_helper(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
-		i64 j = 0;
+		i64 j = 0_i64;
 		while (j < n) {
 			acc = acc + (i * j);
 			j   = j + 1;
@@ -69,8 +69,8 @@ i64 cuadr_helper(i64 n) {
 	total_post:   O(n^3)
 )
 	i64 usa_helper(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
 		acc = acc + cuadr_helper(n);
 		i   = i + 1;
@@ -84,11 +84,11 @@ i64 cuadr_helper(i64 n) {
 //    Aqui es CORRECTA: dos loops anidados -> O(n^2).
 // -------------------------------------------------------------------------
 @complexity(total_post: O(n^2))
-	i64 solo_total_post(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+i64 solo_total_post(i64 n) {
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
-		i64 j = 0;
+		i64 j = 0_i64;
 		while (j < n) {
 			acc++;
 			j = j + 1;
@@ -114,10 +114,10 @@ i64 cuadr_helper(i64 n) {
 	total_post:   O(n^2)
 )
 	i64 dim_incorrecta(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
-		i64 j = 0;
+		i64 j = 0_i64;
 		while (j < n) {
 			acc = acc + (i + j);
 			j   = j + 1;

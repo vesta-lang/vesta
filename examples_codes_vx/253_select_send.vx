@@ -8,20 +8,20 @@ import std.pool only pool_start, pool_submit, pool_join;
 import std.chan only Chan, chan_new, chan_recv, chan_close,
 chan_is_closed, chan_free, chan_select_send_block;
 
-Chan c0;
-Chan c1;
-      i64 g_s0 = 0; // suma recibida por el canal 0
-      i64 g_s1 = 0; // suma recibida por el canal 1
-      i64 g_n0 = 0; // conteo recibido por el canal 0
-      i64 g_n1 = 0; // conteo recibido por el canal 1
-const i64 M    = 300;
+Chan      c0;
+Chan      c1;
+i64       g_s0 = 0_i64; // suma recibida por el canal 0
+i64       g_s1 = 0_i64; // suma recibida por el canal 1
+i64       g_n0 = 0_i64; // conteo recibido por el canal 0
+i64       g_n1 = 0_i64; // conteo recibido por el canal 1
+const i64 M = 300_i64;
 
 void sender(i64 a) {
 	Chan[2] chans;
 	chans[0] = c0;
 	chans[1] = c1;
 	i64[2] vals;
-	for (i64 k = 0; k < M; k++) {
+	for (i64 k = 0_i64; k < M; k++) {
 		vals[0] = k + 1;
 		vals[1] = k + 1; // mismo valor, va a uno u otro canal
 		chan_select_send_block(&chans[0], &vals[0], 2);

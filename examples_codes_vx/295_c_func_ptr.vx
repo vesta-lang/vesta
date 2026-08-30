@@ -27,7 +27,7 @@ i32 apply1(i32 (*cb)(i32 x), i32 v) { return cb(v); }
 i32 main() {
 	// Variable local puntero a funcion C + promocion del nombre desnudo.
 	i32 (*op)(i32 a, i32 b) = c_add;
-	i32   r1 = op(10, 8); // 18
+	i32 r1 = op(10, 8); // 18
 
 	// typedef como tipo de variable.
 	BinOp m  = c_mul;
@@ -38,7 +38,7 @@ i32 main() {
 	ops.add = c_add;
 	ops.mul = c_mul;
 	ops.tag = 1;
-	i32 r3 = ops.add(2, 3);    // 5
+	i32 r3 = ops.add(2, 3); // 5
 
 	// Promocion de nombre de funcion a parametro cfn (callback).
 	i32 r4 = apply1(c_dbl, 2); // 4

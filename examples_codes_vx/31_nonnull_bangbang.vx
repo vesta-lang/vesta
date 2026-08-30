@@ -28,7 +28,7 @@ class Tag {
 
 i32 main() {
 	Tag         tag    = new Tag(11);
-	Tag         safe   = !!tag;               // unwrap; safe es no-null en runtime
+	Tag         safe   = !!tag;     // unwrap; safe es no-null en runtime
 	nonnull Tag forced = !!tag;     // nonnull declarado; init = !!tag, OK
 	return safe.v + forced.v + 200; // 11 + 11 + 200 = 222
 }

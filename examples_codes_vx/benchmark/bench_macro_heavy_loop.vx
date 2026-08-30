@@ -16,9 +16,9 @@
 // del JIT porque el linker es C++ nativo, no codigo VM.
 
 @Macro
-	comptime string heavy_loop(i64 n) {
-	i64 sum = 0;
-	i64 i   = 0;
+comptime string heavy_loop(i64 n) {
+	i64 sum = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
 		sum = sum + i;
 		i   = i + 1;

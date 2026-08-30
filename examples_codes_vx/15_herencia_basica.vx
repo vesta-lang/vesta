@@ -39,7 +39,7 @@ class Perro : Animal {
 	}
 
 	@Override
-		public i32 sonido() {
+	public i32 sonido() {
 		return 99;
 	}
 }

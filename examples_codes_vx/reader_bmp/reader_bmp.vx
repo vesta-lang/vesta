@@ -20,7 +20,7 @@
 @overlay
 struct BmpFileHeader {
 	i16 magic  @0x00; // firma 'BM' = 0x4D42
-	i32 size   @0x02;  // tamano total del fichero
+	i32 size   @0x02; // tamano total del fichero
 	i16 rsv1   @0x06;
 	i16 rsv2   @0x08;
 	i32 offset @0x0A; // offset a los datos de pixel
@@ -43,17 +43,17 @@ struct BmpInfoHeader {
 	i32 important   @0x24;
 }
 
-comptime i32 BMP_FILE_HDR_SIZE = 14;
+comptime i32 BMP_FILE_HDR_SIZE = 14_i32;
 
 // ---------------------------------------------------------------------------
 // FFI dinamico a msvcrt para I/O binario de fichero.
 // ---------------------------------------------------------------------------
-i64          g_msvcrt          = 0;
-i64          g_fopen           = 0;
-i64          g_fread           = 0;
-i64          g_fseek           = 0;
-i64          g_ftell           = 0;
-i64          g_fclose          = 0;
+i64 g_msvcrt = 0_i64;
+i64 g_fopen  = 0_i64;
+i64 g_fread  = 0_i64;
+i64 g_fseek  = 0_i64;
+i64 g_ftell  = 0_i64;
+i64 g_fclose = 0_i64;
 
 void ensure_loaded() {
 	if (g_msvcrt != 0) {
@@ -146,7 +146,7 @@ void dump_terminal(u8* buf) {
 
 	// BMP se almacena de abajo hacia arriba: fila height-1 primero.
 	for (i32 fila = height - 1; fila >= 0; fila--) {
-		for (i32 col = 0; col < width; col++) {
+		for (i32 col = 0_i32; col < width; col++) {
 			i32 index = base + fila * row_padded + col * 3;
 			i32 b     = (i32) buf[index];
 			i32 g     = (i32) buf[index + 1];
@@ -164,7 +164,7 @@ i32 main() {
 	string path = "Ejemplo60x3.bmp";
 
 	// Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host).
-	i64    len  = file_size(path);
+	i64 len = file_size(path);
 	if (len <= 0) {
 		println("Error: no se pudo medir ${path}");
 		return 1;

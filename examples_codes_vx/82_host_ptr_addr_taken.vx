@@ -20,7 +20,7 @@ namespace ejemplos.host_ptr_addr_taken;
 
 i32 main() {
 	// Reservar 4 i32 en heap host.
-	i32*  p  = malloc(16);
+	i32* p = malloc(16);
 
 	// Trigger de address-taken: &p hace que p sea promocionado a
 	// ALLOCA + STORE/LOAD por memoria.  Sin el fix, el LOAD posterior

@@ -6,9 +6,11 @@ namespace ejemplos.type_composable;
 //   error_type<T>()      -> E de Result<V,E>
 //   field_type_at<T>(i)  -> Type del campo i-esimo (vs field_type<T>("name") que da string)
 
-struct Vec3 { f64 x;
+struct Vec3 {
+	f64 x;
 	f64 y;
-	f64 z; }
+	f64 z;
+}
 
 class Animal {
 	public i32 age;

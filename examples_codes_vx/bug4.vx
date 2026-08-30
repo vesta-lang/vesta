@@ -11,8 +11,8 @@ enum JsonValue {
 
 class JsonArray {
 	public JsonValue[] items;
-	public i32 count;
-	public i32 capacity;
+	public i32         count;
+	public i32         capacity;
 
 	public JsonArray() {
 		this.capacity = 8;
@@ -23,8 +23,8 @@ class JsonArray {
 	public void push(JsonValue v) {
 		if (this.count == this.capacity) {
 			JsonValue[] nuevo = new JsonValue[this.capacity * 2];
-			for (i32    i = 0; i < this.count; i++) nuevo[i] = this.items[i];
-			this.items = nuevo;
+			for (i32 i = 0_i32; i < this.count; i++) nuevo[i] = this.items[i];
+			this.items                                        = nuevo;
 			this.capacity *= 2;
 		}
 		this.items[this.count] = v;
@@ -33,9 +33,9 @@ class JsonArray {
 }
 
 class JsonObject {
-	public string[] keys;
+	public string[]    keys;
 	public JsonValue[] values;
-	public i32 count;
+	public i32         count;
 
 	public JsonObject() {
 		this.keys   = new string[16];
@@ -44,7 +44,7 @@ class JsonObject {
 	}
 
 	public void put(string k, JsonValue v) {
-		this.keys[this.count] = k;
+		this.keys[this.count]   = k;
 		this.values[this.count] = v;
 		this.count++;
 	}

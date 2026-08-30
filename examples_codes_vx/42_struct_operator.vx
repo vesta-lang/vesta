@@ -57,16 +57,16 @@ i32 main() {
 	i32 eq_true = (i32)(a == a2); // a.__eq__(a2) -> true -> 1
 
 	// Operador `!=` (derivado de __eq__ negado): a != b -> verdadero.
-	i32 ne_true = (i32)(a != b);  // !(a.__eq__(b)) -> true -> 1
+	i32 ne_true = (i32)(a != b); // !(a.__eq__(b)) -> true -> 1
 
 	// FALLBACK INTACTO: aritmetica de int y comparacion de int siguen
 	// funcionando exactamente igual que sin overloading.
-	i32 i       = 3;
-	i32 j       = 3;
+	i32 i       = 3_i32;
+	i32 j       = 3_i32;
 	i32 int_eq  = (i32)(i == j); // comparacion de int clasica -> 1
-	i32 int_sum = 1 + 1; // suma de int clasica -> 2
+	i32 int_sum = 1 + 1;         // suma de int clasica -> 2
 
 	// 42 solo si TODO va bien.
-	i32 gate    = eq_true * ne_true * int_eq * (int_sum - 1); // 1*1*1*1 = 1
+	i32 gate = eq_true * ne_true * int_eq * (int_sum - 1); // 1*1*1*1 = 1
 	return total * gate;                                   // 42 * 1 = 42
 }

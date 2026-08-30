@@ -18,12 +18,12 @@ extern "kernel32.dll" {
 	fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
 }
 
-thread_local i64 t       = 11; // copia por-hilo
-i64              g_child = 0; // global compartido (lo escribe el hilo hijo)
+thread_local i64 t       = 11_i64; // copia por-hilo
+i64              g_child = 0_i64;  // global compartido (lo escribe el hilo hijo)
 
 i64 worker(u64 param) {
-	t       = 99;      // muta SOLO la copia de ESTE hilo
-	g_child = t; // publicar al global compartido
+	t       = 99; // muta SOLO la copia de ESTE hilo
+	g_child = t;  // publicar al global compartido
 	return 0;
 }
 

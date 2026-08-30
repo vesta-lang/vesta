@@ -16,16 +16,20 @@ class Circle : Shape {
 class Rect : Shape {
 	public i32 w;
 	public i32 h;
-	public Rect(i32 w, i32 h) { this.w = w;
-		this.h = h; }
+	public Rect(i32 w, i32 h) {
+		this.w = w;
+		this.h = h;
+	}
 	public i32 area() { return this.w * this.h; }
 }
 
 class Triangle : Shape {
 	public i32 b;
 	public i32 h;
-	public Triangle(i32 b, i32 h) { this.b = b;
-		this.h = h; }
+	public Triangle(i32 b, i32 h) {
+		this.b = b;
+		this.h = h;
+	}
 	public i32 area() { return (this.b * this.h) / 2; }
 }
 
@@ -34,8 +38,8 @@ i32 main() {
 	Shape r = new Rect(4, 6);
 	Shape t = new Triangle(3, 8);
 
-	i32 sum = 0;
-	i32 i   = 0;
+	i32 sum = 0_i32;
+	i32 i   = 0_i32;
 	while (i < 10_000_000) {
 		// Rotar entre las 3 (polimorfico real).
 		i32                mod = i % 3;

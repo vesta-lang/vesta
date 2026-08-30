@@ -19,8 +19,8 @@ i32 main() {
 	println("=== TEST FLOAT ARITHMETIC ===");
 
 	// --- 1. Aritmetica binaria sobre variables ---
-	f64 pi = 3.14;
-	f64 e  = 2.71;
+	f64 pi = 3.14_f64;
+	f64 e  = 2.71_f64;
 
 	f64 sum = pi + e; // FADD
 	f64 dif = pi - e; // FSUB
@@ -51,7 +51,7 @@ i32 main() {
 	println("pi==3.14=${eq}");
 
 	// --- 5. Comparaciones FCMP fusionadas (en if/else) ---
-	i32 dir = 0;
+	i32 dir = 0_i32;
 	if (pi > e) {
 		dir = 1;
 	} else {
@@ -60,20 +60,20 @@ i32 main() {
 	println("dir=${dir}");
 
 	// --- 6. Conversion int -> float (ITOF) ---
-	i32 n       = 7;
+	i32 n       = 7_i32;
 	f64 nf      = n; // ITOF: 7 -> 7.0
 	f64 doubled = nf + nf;
 	println("nf=${nf}");
 	println("doubled=${doubled}");
 
 	// --- 7. Conversion float -> int (FTOI) ---
-	f64 v = 3.95;
+	f64 v = 3.95_f64;
 	i32 t = v; // FTOI: 3.95 -> 3 (truncate)
 	println("trunc(3.95)=${t}");
 
 	// --- 8. Round-trip int -> float -> int ---
-	i32 a  = 42;
-	f64 fa = a; // 42 -> 42.0
+	i32 a  = 42_i32;
+	f64 fa = a;  // 42 -> 42.0
 	i32 b  = fa; // 42.0 -> 42
 	println("roundtrip=${b}");
 

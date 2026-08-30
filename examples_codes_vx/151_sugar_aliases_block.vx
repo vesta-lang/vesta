@@ -69,8 +69,8 @@ i32 main() {
 	comptime {
 		a    = to_str(5);      // "5"
 		b    = repeat("|", 3); // "|||"
-		sep  = chr(45);      // "-"  (codepoint 45)
-		line = a + sep + b; // "5-|||"
+		sep  = chr(45);        // "-"  (codepoint 45)
+		line = a + sep + b;    // "5-|||"
 		static_assert(line == "5-|||", "chr+repeat+to_str combinados");
 	}
 

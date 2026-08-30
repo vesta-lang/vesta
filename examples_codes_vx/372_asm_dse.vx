@@ -20,29 +20,29 @@
  */
 i32 main() {
 	// (1) `base` solo se lee desde el asm: su inicializacion no esta muerta.
-	i64  base   = 20;
-	i64  salida = 0;
+	i64  base   = 20_i64;
+	i64  salida = 0_i64;
 	i64* p      = &salida;
 
 	asm (reg b = base, reg d = p,) {
 		mov [d], b
 	}
-	i64                 uno    = salida; // 20
+	i64 uno = salida; // 20
 
 	// (2) el asm MODIFICA su variable ligada, sin tocar memoria.
-	register("rcx") i64 cuenta = 13;
+	register("rcx") i64 cuenta = 13_i64;
 	asm volatile {
 		inc rcx
 	};
-	i64                  dos   = cuenta; // 14
+	i64 dos = cuenta; // 14
 
 	// (3) escribe por el puntero: el valor anterior de `salida` ya no vale.
-	register("rdx") i64  nuevo = 8;
-	register("rsi") i64 *q     = &salida;
+	register("rdx") i64  nuevo = 8_i64;
+	register("rsi") i64* q     = &salida;
 	asm volatile {
 		mov [rsi], rdx
 	};
-	i64 tres = salida;              // 8
+	i64 tres = salida; // 8
 
 	return (i32)(uno + dos + tres); // 20 + 14 + 8 = 42
 }

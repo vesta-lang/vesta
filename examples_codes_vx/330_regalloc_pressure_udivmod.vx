@@ -15,16 +15,18 @@
 namespace regpress;
 
 @Abstract
-	struct Base {
+struct Base {
 	union {
-		struct { u64 lo64;
-			u64 hi64; };
+		struct {
+			u64 lo64;
+			u64 hi64;
+		};
 		u8 bytes[16];
 	};
 	public Self sub(Self o) {
 		Self r;
 		r.lo64 = this.lo64 - o.lo64;
-		u64 bw = 0;
+		u64 bw = 0_u64;
 		if (this.lo64 < o.lo64) { bw = 1; }
 		r.hi64 = this.hi64 - o.hi64 - bw;
 		return r;
@@ -46,12 +48,14 @@ namespace regpress;
 		q.lo64 = 0;
 		q.hi64 = 0;
 		Self rem;
-		rem.lo64                              = 0;
-		rem.hi64                              = 0;
-		if (divisor.zero()) { (*rem_out).lo64 = 0;
+		rem.lo64 = 0;
+		rem.hi64 = 0;
+		if (divisor.zero()) {
+			(*rem_out).lo64 = 0;
 			(*rem_out).hi64 = 0;
-			return q; }
-		i64 i = 63;
+			return q;
+		}
+		i64 i = 63_i64;
 		while (i >= 0) {
 			rem.hi64 = (rem.hi64 << 1) | (rem.lo64 >> 63);
 			rem.lo64 = rem.lo64 << 1;
@@ -72,10 +76,12 @@ namespace regpress;
 
 struct U : Base { }
 
-U mk(u64 lo) { U r;
+U mk(u64 lo) {
+	U r;
 	r.lo64 = lo;
 	r.hi64 = 0;
-	return r; }
+	return r;
+}
 
 i32 main() {
 	U rem;

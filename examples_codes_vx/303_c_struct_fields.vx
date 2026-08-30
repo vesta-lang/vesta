@@ -27,7 +27,7 @@ typedef struct _CAPS {
 // (2) struct C-tagless top-level con nombre al final + alias de puntero, y
 //     multi-declarador de campo.
 struct {
-	u8 request_type;
+	u8                request_type;
 	u16 value, index, length;
 } SETUP, *PSETUP;
 

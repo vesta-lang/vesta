@@ -4,8 +4,8 @@
 // Resultado esperado: el valor final acumulado, > 0.
 
 i32 main() {
-	i64 sum = 0;
-	i64 i   = 0;
+	i64 sum = 0_i64;
+	i64 i   = 0_i64;
 	while (i < 50_000_000) {
 		sum = sum + (i * 3);
 		sum = sum ^ 0x12345678;

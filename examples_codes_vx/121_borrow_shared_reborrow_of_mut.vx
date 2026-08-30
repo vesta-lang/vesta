@@ -12,9 +12,9 @@ i32 main() {
 	unique<i32> owner = unique_box(42);
 
 	borrow_mut<i32> m = lend_mut(owner); // owner -> Mut (por m)
-	borrow<i32>     r = lend(m); // m suspendido, shared activo
+	borrow<i32>     r = lend(m);         // m suspendido, shared activo
 
-	i32 v = read_borrow(r);  // lectura via shared
+	i32 v = read_borrow(r); // lectura via shared
 	if (v != 42) return 99;
 	return 42;
 }

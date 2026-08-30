@@ -16,7 +16,7 @@ namespace ejemplos.naked_call_from_normal;
 //   vm -m aot --vx 231_naked_call_from_normal.vx --format pe -o p.exe && ./p.exe  (exit 42)
 
 @Target("!os:windows")
-	@Naked
+@Naked
 u64 add_asm(u64 a, u64 b) {
 	asm volatile noinfer {
 		mov rax, rdi
@@ -25,7 +25,7 @@ u64 add_asm(u64 a, u64 b) {
 	}
 }
 @Target("os:windows")
-	@Naked
+@Naked
 u64 add_asm(u64 a, u64 b) {
 	asm volatile noinfer {
 		mov rax, rcx

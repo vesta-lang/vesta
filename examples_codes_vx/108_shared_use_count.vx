@@ -12,10 +12,10 @@ namespace ejemplos.shared_use_count;
 //   4. El control block sigue accesible tras moves dentro del mismo scope.
 
 i32 main() {
-	shared<i64> s   = shared_box(777);
+	shared<i64> s = shared_box(777);
 
 	// Verificar refcount inicial.
-	i64         rc0 = use_count(s);
+	i64 rc0 = use_count(s);
 	if (rc0 != 1) {
 		return 100 + rc0;
 	}

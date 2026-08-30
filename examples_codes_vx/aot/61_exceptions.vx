@@ -23,7 +23,7 @@ public i64 risky(i64 x) {
 
 // Camino con captura: risky(-1) lanza -> catch lee e.code (20) -> +1 = 21.
 public i64 caught_path() {
-	i64 r = 0;
+	i64 r = 0_i64;
 	try {
 		r = risky(-1);
 	} catch (Boom e) {
@@ -34,7 +34,7 @@ public i64 caught_path() {
 
 // Camino normal: risky(10) = 20, sin throw -> pop normal del frame.
 public i64 normal_path() {
-	i64 r = -1;
+	i64 r = -1_i64;
 	try {
 		r = risky(10);
 	} catch (Boom e) {

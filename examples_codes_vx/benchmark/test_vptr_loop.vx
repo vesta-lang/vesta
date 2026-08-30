@@ -1,7 +1,7 @@
 void main() {
 	println("start");
 	flush();
-	u64 j = 0;
+	u64 j = 0_u64;
 	println("j init=${j}");
 	flush();
 	while (j < 4) {

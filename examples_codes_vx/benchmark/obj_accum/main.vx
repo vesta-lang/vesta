@@ -33,7 +33,7 @@ class Stats {
 i64 main() {
 	Stats s    = new Stats();
 	i64   seed = 12_345;
-	i64   i    = 0;
+	i64   i    = 0_i64;
 	while (i < 20_000_000) {
 		seed = (seed * 1_103_515_245 + 12_345) & 2_147_483_647; // LCG deterministico
 		i64 v = seed % 1000;

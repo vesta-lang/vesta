@@ -39,27 +39,27 @@ extern "kernel32.dll" {
 
 /// EXCEPTION_POINTERS: lo que recibe el manejador de Windows.
 @overlay
-	struct ExcPointers {
-	uintptr record  @0x00;  // -> EXCEPTION_RECORD
+struct ExcPointers {
+	uintptr record  @0x00; // -> EXCEPTION_RECORD
 	uintptr context @0x08; // -> CONTEXT
 }
 
 /// EXCEPTION_RECORD: de el interesan el codigo y donde revento.
 @overlay
-	struct ExcRecord {
-	u32     code    @0x00;        // EXCEPTION_* del SO
+struct ExcRecord {
+	u32     code    @0x00; // EXCEPTION_* del SO
 	uintptr address @0x10; // instruccion que fallo
 }
 
 /// CONTEXT de x86-64: solo se mira el puntero de pila, para la cadena.
 @overlay
-	struct CtxX64 {
+struct CtxX64 {
 	uintptr rsp @0x98;
 }
 
 /// `struct sigaction` del NUCLEO (no la de libc, que lleva otro orden).
 @overlay
-	struct KSigAction {
+struct KSigAction {
 	uintptr handler  @0x00;
 	u64     flags    @0x08;
 	uintptr restorer @0x10;
@@ -69,7 +69,7 @@ extern "kernel32.dll" {
 /// `ucontext_t` de x86-64: los registros generales empiezan en el
 /// desplazamiento 40, y ahi RSP ocupa la posicion 15 y RIP la 16.
 @overlay
-	struct UCtxX64 {
+struct UCtxX64 {
 	uintptr rsp @0xA0; // 40 + 15*8
 	uintptr rip @0xA8; // 40 + 16*8
 }
@@ -101,7 +101,7 @@ enum Salida : u32 {
 }
 
 /// Lo que el manejador de Windows devuelve para no tratar una excepcion.
-const i32 SEGUIR_BUSCANDO = 0;
+const i32 SEGUIR_BUSCANDO = 0_i32;
 
 // =========================================================================
 //  La seccion .vxdbg, tal y como la escribe el driver AOT
@@ -111,14 +111,14 @@ const i32 SEGUIR_BUSCANDO = 0;
 // deja indescifrable y hace que cualquier cambio del formato haya que
 // perseguirlo por todo el fichero.
 
-const u32 DBG_MAGIC   = 0x42445856; // 'VXDB'
-const u32 DBG_VERSION = 5;
+const u32 DBG_MAGIC   = 0x42445856_u32; // 'VXDB'
+const u32 DBG_VERSION = 5_u32;
 /// Un campo de indice vacio: no hay entrada en la tabla de textos.
-const u32 SIN_INDICE  = 0xFFFFFFFF;
+const u32 SIN_INDICE = 0xFFFFFFFF_u32;
 
 /// Cabecera.  La ruta del fuente va justo detras, rellena a multiplo de 4.
 @overlay
-	struct DbgCabecera {
+struct DbgCabecera {
 	u32 magic     @0x00;
 	u32 version   @0x04;
 	u32 n_fn      @0x08;
@@ -130,7 +130,7 @@ const uintptr DBG_RUTA = 20; // donde empieza la ruta, tras la cabecera
 /// Una funcion.  Su nombre va detras, relleno a multiplo de 4, y tras el sus
 /// puntos.
 @overlay
-	struct DbgFuncion {
+struct DbgFuncion {
 	u32 off     @0x00; // desplazamiento en la seccion de codigo
 	u32 tam     @0x04;
 	u32 n_pts   @0x08;
@@ -140,19 +140,19 @@ const uintptr DBG_FN_NOMBRE = 16; // donde empieza el nombre, dentro de la entra
 
 /// Un punto: donde cambia el sitio del fuente dentro de una funcion.
 @overlay
-	struct DbgPunto {
+struct DbgPunto {
 	u32 off   @0x00; // desplazamiento dentro de la funcion
 	u32 linea @0x04;
 	u32 col   @0x08;
 	u32 tramo @0x0C; // cuanto ocupa la expresion (hoy no se usa aqui)
 	u32 venia @0x10; // texto: funcion de la que vino al inlinar
-	u32 ir    @0x14;    // texto: la instruccion del intermedio
+	u32 ir    @0x14; // texto: la instruccion del intermedio
 }
 const uintptr DBG_PUNTO_TAM = 24;
 
 /// Una entrada de la tabla de textos: longitud y detras los bytes.
 @overlay
-	struct DbgTexto {
+struct DbgTexto {
 	u32 len @0x00;
 }
 
@@ -165,7 +165,7 @@ const uintptr DBG_PUNTO_TAM = 24;
 /// solo acaba desbordando la pila -- miles de lineas en vez de una.  Con la
 /// guarda, el segundo fallo se deja pasar y el proceso muere como habria
 /// muerto sin nosotros.
-i64 __vxf_dentro = 0;
+i64 __vxf_dentro = 0_i64;
 
 /// Un tramo de texto dentro del ejecutable: donde empieza y cuanto ocupa.
 ///
@@ -174,18 +174,18 @@ i64 __vxf_dentro = 0;
 /// que revento.
 struct Tramo {
 	char* dir;
-	u32 len;
+	u32   len;
 }
 
 /// Lo que se sabe del punto donde ocurrio algo.
 struct Hallazgo {
-	i32 ok;        ///< 0 = no se pudo averiguar
+	i32   ok;      ///< 0 = no se pudo averiguar
 	Tramo funcion; ///< nombre de la funcion fisica
 	Tramo venia;   ///< de que funcion vino al inlinar (len 0 = de esta misma)
 	Tramo ir;      ///< la instruccion del intermedio (len 0 = no consta)
 	Tramo fichero;
-	u32 linea;
-	u32 col;
+	u32   linea;
+	u32   col;
 }
 
 // =========================================================================
@@ -204,13 +204,13 @@ uintptr __vxf_alinea4(uintptr v) {
 /// engordaria la seccion sin decir nada nuevo.
 Tramo __vxf_texto(uintptr tabla, u32 idx) {
 	uintptr e = tabla + 4; // tras la cuenta de entradas
-	for (u32 k = 0; k < idx; k++) {
-		DbgTexto t = DbgTexto((u8 *) e);
+	for (u32 k = 0_u32; k < idx; k++) {
+		DbgTexto t = DbgTexto((u8*) e);
 		e = __vxf_alinea4(e + 4 + t.len);
 	}
-	DbgTexto cab = DbgTexto((u8 *) e);
-	Tramo t;
-	t.dir = (char *)(e + 4);
+	DbgTexto cab = DbgTexto((u8*) e);
+	Tramo    t;
+	t.dir = (char*)(e + 4);
 	t.len = cab.len;
 	return t;
 }
@@ -233,7 +233,7 @@ void __vxf_num(u64 v) {
 /// Escribe un tramo de bytes de la seccion, caracter a caracter con el `print`
 /// de siempre.
 void __vxf_escribe(Tramo t) {
-	for (u32 i = 0; i < t.len; i++) {
+	for (u32 i = 0_u32; i < t.len; i++) {
 		print("${t.dir[i]}");
 	}
 }
@@ -249,20 +249,20 @@ Hallazgo __vxf_buscar(uintptr off) {
 	if (base == 0 || fin <= base + DBG_RUTA) {
 		return h;
 	}
-	DbgCabecera cab = DbgCabecera((u8 *) base);
+	DbgCabecera cab = DbgCabecera((u8*) base);
 	if (cab.magic != DBG_MAGIC) {
 		return h; // no es nuestra seccion
 	}
 	if (cab.version != DBG_VERSION) {
 		return h; // formato que no se sabe leer: mejor callarse
 	}
-	h.fichero.dir = (char *)(base + DBG_RUTA);
+	h.fichero.dir = (char*)(base + DBG_RUTA);
 	h.fichero.len = cab.ruta_len;
 	uintptr tabla = base + cab.off_tabla;
 
 	uintptr c = base + __vxf_alinea4(DBG_RUTA + cab.ruta_len);
-	for (u32 k = 0; k < cab.n_fn; k++) {
-		DbgFuncion ent    = DbgFuncion((u8 *) c);
+	for (u32 k = 0_u32; k < cab.n_fn; k++) {
+		DbgFuncion ent    = DbgFuncion((u8*) c);
 		uintptr    nombre = c + DBG_FN_NOMBRE;
 		uintptr    puntos = __vxf_alinea4(nombre + ent.nom_len);
 
@@ -274,12 +274,12 @@ Hallazgo __vxf_buscar(uintptr off) {
 		// Dentro de esta funcion vale el ULTIMO punto en o antes del fallo:
 		// entre dos puntos sigue rigiendo el primero.
 		uintptr rel   = off - ent.off;
-		u32     linea = 0;
-		u32     col   = 0;
+		u32     linea = 0_u32;
+		u32     col   = 0_u32;
 		u32     venia = SIN_INDICE;
 		u32     ir    = SIN_INDICE;
-		for (u32 i = 0; i < ent.n_pts; i++) {
-			DbgPunto pt = DbgPunto((u8 *)(puntos + i * DBG_PUNTO_TAM));
+		for (u32 i = 0_u32; i < ent.n_pts; i++) {
+			DbgPunto pt = DbgPunto((u8*)(puntos + i * DBG_PUNTO_TAM));
 			if (pt.off > rel) {
 				break;
 			}
@@ -292,7 +292,7 @@ Hallazgo __vxf_buscar(uintptr off) {
 			return h; // el prologo no viene de ninguna linea escrita
 		}
 
-		h.funcion.dir = (char *) nombre;
+		h.funcion.dir = (char*) nombre;
 		h.funcion.len = ent.nom_len;
 		h.linea       = linea;
 		h.col         = col;
@@ -369,7 +369,7 @@ void __vxf_donde(uintptr addr) {
 /// Cuantos marcos como mucho, y hasta donde mirar en la pila.  Recorrerla
 /// entera desde un manejador de fallo es pedir otro fallo, y lo que interesa
 /// esta cerca.
-const u32     CADENA_MAX_MARCOS = 16;
+const u32     CADENA_MAX_MARCOS = 16_u32;
 const uintptr CADENA_MAX_BYTES  = 2048;
 
 /// La cadena de llamadas: se recorre la pila NATIVA quedandose con los valores
@@ -386,10 +386,10 @@ void __vxf_cadena(uintptr sp) {
 		return;
 	}
 	char*   previo = nullptr;
-	u32     vistos = 0;
+	u32     vistos = 0_u32;
 	uintptr tope   = sp + CADENA_MAX_BYTES;
 	for (uintptr a = sp; a < tope && vistos < CADENA_MAX_MARCOS; a += 8) {
-		uintptr* ranura = (uintptr *) a;
+		uintptr* ranura = (uintptr*) a;
 		uintptr  v      = ranura[0];
 		if (v < texto || v >= fin_texto) {
 			continue;
@@ -414,18 +414,18 @@ void __vxf_cadena(uintptr sp) {
 /// Devuelve SEGUIR_BUSCANDO en lo que no es nuestro: tragarse un fallo ajeno
 /// para contarlo como propio es peor que no decir nada.
 @Target("os:windows")
-	i32 __vx_fault_handler(uintptr info) {
+i32 __vx_fault_handler(uintptr info) {
 	if (info == 0 || __vxf_dentro != 0) {
 		return SEGUIR_BUSCANDO;
 	}
 	__vxf_dentro = 1;
-	ExcPointers p = ExcPointers((u8 *) info);
+	ExcPointers p = ExcPointers((u8*) info);
 	if (p.record == 0) {
 		return SEGUIR_BUSCANDO;
 	}
-	ExcRecord r = ExcRecord((u8 *) p.record);
+	ExcRecord r = ExcRecord((u8*) p.record);
 
-	u32 salida = 0;
+	u32 salida = 0_u32;
 	if (r.code == Exc.DIVISION_CERO) {
 		println("error fatal: division entre cero [VX7002]");
 		salida = Salida.FPE;
@@ -447,7 +447,7 @@ void __vxf_cadena(uintptr sp) {
 
 	__vxf_donde(r.address);
 	if (p.context != 0) {
-		CtxX64 ctx = CtxX64((u8 *) p.context);
+		CtxX64 ctx = CtxX64((u8*) p.context);
 		__vxf_cadena(ctx.rsp);
 	}
 	flush(); // el proceso muere aqui: nadie vaciara el buffer despues
@@ -458,7 +458,7 @@ void __vxf_cadena(uintptr sp) {
 /// Lo instala `main` antes que nada: el driver AOT le prepende esta llamada.
 /// 1 = al principio de la cadena, para llegar antes que el manejador del SO.
 @Target("os:windows")
-	void __vx_fault_init() {
+void __vx_fault_init() {
 	AddVectoredExceptionHandler(1, &__vx_fault_handler);
 }
 
@@ -468,16 +468,16 @@ void __vxf_cadena(uintptr sp) {
 // El equivalente de la cadena de excepciones son las SENALES.  Se registran con
 // `rt_sigaction` y el binario no depende de libc.so.6, igual que vx_io.
 
-const i64 SYS_RT_SIGACTION = 13;
-const i64 SYS_EXIT_GROUP   = 231;
+const i64 SYS_RT_SIGACTION = 13_i64;
+const i64 SYS_EXIT_GROUP   = 231_i64;
 /// SA_SIGINFO para recibir el contexto -- sin el no hay puntero de instruccion
 /// y no se puede decir DONDE.  SA_RESTORER es obligatorio en x86-64.
 /// SA_NODEFER evita que un segundo fallo dentro del manejador se quede
 /// bloqueado en vez de matar el proceso.
-const u64 SA_FLAGS         = 0x44000004;
+const u64 SA_FLAGS = 0x44000004_u64;
 /// El nucleo comprueba el tamano del conjunto de senales: con otro valor
 /// devuelve EINVAL.
-const i64 SIGSET_TAM       = 8;
+const i64 SIGSET_TAM = 8_i64;
 
 /// Trampolin de retorno de senal.  Nunca se ejecuta -- el manejador termina el
 /// proceso --, pero x86-64 EXIGE un `sa_restorer` propio: sin libc no hay quien
@@ -485,8 +485,8 @@ const i64 SIGSET_TAM       = 8;
 /// que ser asm puro porque `rt_sigreturn` lee el marco a un desplazamiento fijo
 /// de rsp, y el prologo de una funcion normal lo habria movido.
 @Target("!os:windows && arch:x86_64")
-	@Naked
-	void __vxf_restorer() {
+@Naked
+void __vxf_restorer() {
 	asm volatile noinfer {
 		mov eax, 15
 		syscall
@@ -495,7 +495,7 @@ const i64 SIGSET_TAM       = 8;
 
 /// exit_group, que termina TODOS los hilos y no solo el que fallo.
 @Target("!os:windows && arch:x86_64")
-	void __vxf_exit(i64 code) {
+void __vxf_exit(i64 code) {
 	register("rdi") i64 a1 = code;
 	register("rax") i64 nr = SYS_EXIT_GROUP;
 	asm volatile { syscall };
@@ -507,7 +507,7 @@ const i64 SIGSET_TAM       = 8;
 /// direccion a la que se intento acceder -- el dato --, no la instruccion que
 /// lo intento.
 @Target("!os:windows && arch:x86_64")
-	void __vx_fault_signal(i32 sig, uintptr info, uintptr uc) {
+void __vx_fault_signal(i32 sig, uintptr info, uintptr uc) {
 	if (__vxf_dentro != 0) {
 		__vxf_exit(128 + (i64) sig); // el fallo viene de nosotros
 	}
@@ -525,7 +525,7 @@ const i64 SIGSET_TAM       = 8;
 		println("error fatal: abortado por el programa [VX7011]");
 	}
 	if (uc != 0) {
-		UCtxX64 ctx = UCtxX64((u8 *) uc);
+		UCtxX64 ctx = UCtxX64((u8*) uc);
 		__vxf_donde(ctx.rip);
 		__vxf_cadena(ctx.rsp);
 	}
@@ -535,18 +535,18 @@ const i64 SIGSET_TAM       = 8;
 
 /// rt_sigaction(sig, act, oact, tam_del_conjunto).
 @Target("!os:windows && arch:x86_64")
-	void __vxf_hook(i32 sig, uintptr act) {
+void __vxf_hook(i32 sig, uintptr act) {
 	register("rdi") i64     a1 = (i64) sig;
 	register("rsi") uintptr a2 = act;
-	register("rdx") i64     a3 = 0;
+	register("rdx") i64     a3 = 0_i64;
 	register("r10") i64     a4 = SIGSET_TAM;
 	register("rax") i64     nr = SYS_RT_SIGACTION;
 	asm volatile { syscall };
 }
 
 @Target("!os:windows && arch:x86_64")
-	void __vx_fault_init() {
-	u8[32] act;
+void __vx_fault_init() {
+	u8[32]     act;
 	KSigAction sa = KSigAction(&act[0]);
 	sa.handler  = (uintptr) & __vx_fault_signal;
 	sa.flags    = SA_FLAGS;

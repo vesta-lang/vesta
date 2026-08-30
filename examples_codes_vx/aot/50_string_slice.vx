@@ -52,8 +52,8 @@ i32 main() {
 	if (empty.length() != 0) { return -12; }
 
 	// (5) slice con indices runtime (no compile-time constantes).
-	i64 a = 0;
-	i64 b = 0;
+	i64 a = 0_i64;
+	i64 b = 0_i64;
 	while (b < 4) { b = b + 1; } // b = 4 runtime
 	string four = base[a..b];    // "hola" (len 4)
 	if (four.length() != 4) { return -13; }

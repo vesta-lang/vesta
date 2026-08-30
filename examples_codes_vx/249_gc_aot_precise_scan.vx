@@ -24,14 +24,16 @@ namespace ejemplos.gc_aot_precise_scan;
 //
 // R0 esperado = 42 en los 3 modos (vm/jit/aot).
 
-class Box { i64 v;
-	Box(i64 x) { this.v = x; } }
+class Box {
+	i64 v;
+	Box(i64 x) { this.v = x; }
+}
 
 // Crea n Box muertos (no escapan; el frame retorna antes del collect).  Suma
 // los campos para impedir que el optimizador elimine las alocaciones.
 i64 make_dead(i64 n) {
-	i64 i   = 0;
-	i64 acc = 0;
+	i64 i   = 0_i64;
+	i64 acc = 0_i64;
 	while (i < n) {
 		gc<Box> d = new Box(7);
 		acc = acc + d.v;
@@ -42,8 +44,8 @@ i64 make_dead(i64 n) {
 
 // Crea n Box nuevos con valor 99 -> reusa los slots liberados por el collect.
 i64 fill(i64 n) {
-	i64 i   = 0;
-	i64 acc = 0;
+	i64 i   = 0_i64;
+	i64 acc = 0_i64;
 	while (i < n) {
 		gc<Box> f = new Box(99);
 		acc = acc + f.v;
@@ -53,10 +55,10 @@ i64 fill(i64 n) {
 }
 
 i64 main() {
-	gc<Box> live = new Box(42); // raiz VIVA, retenida a traves del collect
-	i64     dsum = make_dead(200);  // 200 Box muertos
-	gc_collect(); // libera los muertos (y `live` si el walk falla)
-	i64 fsum  = fill(400);       // reusa TODOS los slots liberados con 99
+	gc<Box> live = new Box(42);    // raiz VIVA, retenida a traves del collect
+	i64     dsum = make_dead(200); // 200 Box muertos
+	gc_collect();                  // libera los muertos (y `live` si el walk falla)
+	i64 fsum = fill(400);          // reusa TODOS los slots liberados con 99
 	// Referenciar dsum/fsum para que no se eliminen las alocaciones anteriores;
 	// el resultado real es live.v (42 correcto / 99 si la raiz fue colectada).
 	i64 guard = (dsum - dsum) + (fsum - fsum);

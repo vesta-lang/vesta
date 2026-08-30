@@ -20,9 +20,9 @@ comptime string wrapped(expr code) { return "[" + src(code)+ "]"; }
 
 i32 main() {
 	string s1 = outer(hola + mundo); // "hola + mundo"
-	string s2 = wrapped(x * 2); // "[x * 2]"
+	string s2 = wrapped(x * 2);      // "[x * 2]"
 
-	i32 r = 0;
+	i32 r = 0_i32;
 	if (s1.equals("hola + mundo")) { r = r + 21; }
 	if (s2.equals("[x * 2]")) { r = r + 21; }
 	return r; // 42

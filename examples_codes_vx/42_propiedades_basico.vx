@@ -27,7 +27,7 @@ class Caja {
 	public set valor(i64 v) { this._valor = v; }
 
 	@Inline
-		public i64 dobla(i64 x) => x + x;
+	public i64 dobla(i64 x) => x + x;
 }
 
 i32 main() {

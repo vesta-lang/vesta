@@ -21,7 +21,7 @@
 typedef u64 Contador; // alias del usuario sobre un tipo SIN signo
 
 @Async
-	i64 clasifica(Contador grande) {
+i64 clasifica(Contador grande) {
 	// Sin signo: 2^63 > 1000 -> 1.  Con signo seria negativo -> 0.
 	if (grande > 1000) {
 		return 1;

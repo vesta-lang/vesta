@@ -46,7 +46,7 @@ import "vx_fiber" only fiber_switch, fiber_init, fiber_stack_alloc, fiber_stack_
 //  Layout del estado host (3 qwords): [base+0]=counter [+8]=self_ctx [+16]=main_ctx
 // ===========================================================================
 @Target("!os:windows")
-	@Naked
+@Naked
 void fiber_body() {
 	asm volatile noinfer {
 		mov r13, rdi
@@ -70,7 +70,7 @@ void fiber_body() {
 	}
 }
 @Target("os:windows")
-	@Naked
+@Naked
 void fiber_body() {
 	asm volatile noinfer {
 		mov r13, rcx
@@ -100,13 +100,13 @@ void fiber_body() {
 u64 run() {
 	// Bloque HOST: 2 celdas de contexto + estado de 3 qwords.
 	//   [0]=main_ctx  [1]=fib_ctx  [2]=counter  [3]=self_ctx  [4]=main_ctx(copia)
-	u64  blk      = (u64)malloc(5 * 8);
-	u64  main_ctx = blk + 0 * 8;
-	u64  fib_ctx  = blk + 1 * 8;
+	u64 blk      = (u64)malloc(5 * 8);
+	u64 main_ctx = blk + 0 * 8;
+	u64 fib_ctx  = blk + 1 * 8;
 
 	// Estado de la fibra (3 qwords desde el offset 2).
-	u64  st       = blk + 2 * 8;
-	u64* ps       = (u64 *)st;
+	u64  st = blk + 2 * 8;
+	u64* ps = (u64*)st;
 	ps[0] = 0;        // counter
 	ps[1] = fib_ctx;  // self_ctx  (la fibra cede con fiber_switch(self, main))
 	ps[2] = main_ctx; // main_ctx
@@ -129,7 +129,7 @@ u64 run() {
 
 	// Liberar la pila (via el modulo importado).
 	fiber_stack_free(stk, 65_536);
-	free((i64 *)blk);
+	free((i64*)blk);
 	return total;
 }
 

@@ -89,13 +89,13 @@ comptime string gen_bloque_neon(string mnl, string mne, i64 bytes, string d,
 		"de uno a ocho pares: mas no cabe en el banco sin gastar "
 		"los que hay que devolver como estaban");
 	string out = "";
-	for (i64 i = 0; i < pares; i++) {
+	for (i64 i = 0_i64; i < pares; i++) {
 		i64 o = i * 32;
 		i64 a = i * 2;
 		i64 b = a + 1;
 		out += "${mnl} q${a}, q${b}, [${s}, #${o}]\n";
 	}
-	for (i64 i = 0; i < pares; i++) {
+	for (i64 i = 0_i64; i < pares; i++) {
 		i64 o = i * 32;
 		i64 a = i * 2;
 		i64 b = a + 1;
@@ -146,13 +146,13 @@ comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
 	i64    mitad  = pares / 2;
 	string out    = "bucle:\n";
 	// Primera mitad: se lee y se escribe con los punteros donde estan.
-	for (i64 k = 0; k < mitad; k++) {
+	for (i64 k = 0_i64; k < mitad; k++) {
 		i64 o = k * 32;
 		i64 a = k * 2;
 		i64 b = a + 1;
 		out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
 	}
-	for (i64 k = 0; k < mitad; k++) {
+	for (i64 k = 0_i64; k < mitad; k++) {
 		i64 o = k * 32;
 		i64 a = k * 2;
 		i64 b = a + 1;
@@ -201,8 +201,8 @@ comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memcpy_small_neon(u8 *dst, u8 *src, usize n) {
+@NoIdiom
+public void memcpy_small_neon(u8* dst, u8* src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
 	asm (
@@ -227,8 +227,8 @@ comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memcpy_medium_neon(u8 *dst, u8 *src, usize n) {
+@NoIdiom
+public void memcpy_medium_neon(u8* dst, u8* src, usize n) {
 	u8* fin_d = dst + n - 256;
 	u8* fin_s = src + n - 256;
 	asm (
@@ -266,8 +266,8 @@ comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memcpy_streaming_neon(u8 *dst, u8 *src, usize n) {
+@NoIdiom
+public void memcpy_streaming_neon(u8* dst, u8* src, usize n) {
 	u8* fin_d = dst + n - 256;
 	u8* fin_s = src + n - 256;
 	asm (
@@ -300,7 +300,7 @@ comptime string gen_relleno_neon(string mne, i64 bytes, string d) {
 		"el bloque tiene que ser multiplo de 32 (un par de 16)");
 	i64    pares = bytes / 32;
 	string out   = "";
-	for (i64 i = 0; i < pares; i++) {
+	for (i64 i = 0_i64; i < pares; i++) {
 		i64 o = i * 32;
 		out += "${mne} q0, q1, [${d}, #${o}]\n";
 	}
@@ -330,7 +330,7 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
 	i64    bloque = pares * 32;
 	i64    mitad  = pares / 2;
 	string out    = "bucle:\n";
-	for (i64 k = 0; k < mitad; k++) {
+	for (i64 k = 0_i64; k < mitad; k++) {
 		i64 o = k * 32;
 		out += "${mne} q0, q1, [d, #${o}]\n";
 	}
@@ -364,8 +364,8 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memset_small_neon(u8 *dst, u8 val, usize n) {
+@NoIdiom
+public void memset_small_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
 	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1,) {
@@ -385,8 +385,8 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memset_medium_neon(u8 *dst, u8 val, usize n) {
+@NoIdiom
+public void memset_medium_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
 	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1,) {
@@ -418,9 +418,9 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
  * @return Bytes por bloque, o 0 si esta prohibida.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	u64 __zva_bloque_leer() {
-	register("x0") u64 v = 0;
+@NoIdiom
+u64 __zva_bloque_leer() {
+	register("x0") u64 v = 0_u64;
 	asm volatile { mrs x0, dczid_el0 };
 	// Bit 4 (DZP): prohibida.
 	if ((v & 16) != 0) return 0;
@@ -430,7 +430,7 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
 }
 
 /// Cache de @ref __zva_bloque_leer.  0 = sin preguntar todavia.
-u64  __zva_bloque = 0;
+u64 __zva_bloque = 0_u64;
 /// Si ya se pregunto (el resultado legitimo puede ser 0 = prohibida).
 bool __zva_sabido = false;
 
@@ -439,7 +439,7 @@ bool __zva_sabido = false;
  * @return Bytes por bloque, o 0 si no se puede usar.
  */
 @Target("arch:arm64")
-	public u64 zva_bloque() {
+public u64 zva_bloque() {
 	if (!__zva_sabido) {
 		__zva_bloque = __zva_bloque_leer();
 		__zva_sabido = true;
@@ -470,13 +470,13 @@ bool __zva_sabido = false;
  * @param n Numero de bytes.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memset_zva(u8 *dst, usize n) {
-	u64 blq  = zva_bloque();
-	u64 a    = (u64)((uintptr) dst);
-	u64 fin  = a + (u64) n;
+@NoIdiom
+public void memset_zva(u8* dst, usize n) {
+	u64 blq = zva_bloque();
+	u64 a   = (u64)((uintptr) dst);
+	u64 fin = a + (u64) n;
 	// Primer limite de bloque en o despues de `a`.
-	u64 ini  = (a + blq - 1) & ~(blq - 1);
+	u64 ini = (a + blq - 1) & ~(blq - 1);
 	// Ultimo limite de bloque en o antes de `fin`.
 	u64 tope = fin & ~(blq - 1);
 	if (ini >= tope) {
@@ -501,7 +501,7 @@ bool __zva_sabido = false;
 		}
 	}
 	if (fin > tope) {
-		memset_c((u8 *)((uintptr) tope), 0, (usize)(fin - tope));
+		memset_c((u8*)((uintptr) tope), 0, (usize)(fin - tope));
 	}
 }
 
@@ -518,8 +518,8 @@ bool __zva_sabido = false;
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:arm64")
-	@NoIdiom
-	public void memset_streaming_neon(u8 *dst, u8 val, usize n) {
+@NoIdiom
+public void memset_streaming_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
 	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1,) {

@@ -12,7 +12,7 @@ void outb(u64 port, u64 val) {
 // Lee un byte de un puerto (instruccion `in`).
 u64 inb(u64 port) {
 	register("rdx") u64 p = port;
-	register("rax") u64 r = 0;
+	register("rax") u64 r = 0_u64;
 	asm volatile { in al, dx }
 	return r & 0xFF;
 }
@@ -36,7 +36,7 @@ void serial_putc(u64 c) {
 
 // Envia una cadena nul-terminada.
 void serial_puts(char* s) {
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (s[i] != 0) {
 		serial_putc((u64) s[i]);
 		i = i + 1;

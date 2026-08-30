@@ -39,7 +39,7 @@ import "vx_async" only vasync_yield, vasync_task_done, vasync_spawn_fiber, vasyn
 //  Layout del state: [r13+0]=id  [r13+8]=trace_ptr.
 // ===========================================================================
 @Target("!os:windows")
-	@Naked
+@Naked
 void coop_task() {
 	asm volatile noinfer {
 		    mov r13, rdi
@@ -64,7 +64,7 @@ void coop_task() {
 	}
 }
 @Target("os:windows")
-	@Naked
+@Naked
 void coop_task() {
 	asm volatile noinfer {
 		    mov r13, rcx
@@ -92,18 +92,18 @@ i32 main() {
 	// Bloque host: trace(1 qword) + 3 state blocks de 2 qwords.
 	u64  blk   = (u64)malloc(7 * 8);
 	u64  trace = blk + 0 * 8;
-	u64* pt    = (u64 *)trace;
+	u64* pt    = (u64*)trace;
 	pt[0] = 0;
 	u64  st1 = blk + 1 * 8; // [1]=id  [2]=trace_ptr
 	u64  st2 = blk + 3 * 8; // [3]=id  [4]=trace_ptr
 	u64  st3 = blk + 5 * 8; // [5]=id  [6]=trace_ptr
-	u64* p1  = (u64 *)st1;
+	u64* p1  = (u64*)st1;
 	p1[0] = 1;
 	p1[1] = trace;
-	u64* p2 = (u64 *)st2;
+	u64* p2 = (u64*)st2;
 	p2[0] = 2;
 	p2[1] = trace;
-	u64* p3 = (u64 *)st3;
+	u64* p3 = (u64*)st3;
 	p3[0] = 3;
 	p3[1] = trace;
 
@@ -116,6 +116,6 @@ i32 main() {
 	vasync_run();
 
 	u64 t = pt[0];
-	free((i64 *)blk);
+	free((i64*)blk);
 	return (i32)t; // 123123
 }

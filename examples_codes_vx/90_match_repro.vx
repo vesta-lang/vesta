@@ -8,7 +8,7 @@ enum Color {
 
 i32 main() {
 	Color c  = Color.Green;
-	i32   ck = 99;
+	i32   ck = 99_i32;
 	match c {
 		case Red   => ck = 1;
 		case Green => ck = 2;

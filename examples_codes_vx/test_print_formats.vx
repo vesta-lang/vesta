@@ -41,7 +41,7 @@ void main() {
 	free(p);
 
 	// 6. VirtualPtr printing.
-	i64  v  = 77;
+	i64  v  = 77_i64;
 	i64* vp = &v;
 	print("virtual ptr vp = ");
 	print_ptr(vp);

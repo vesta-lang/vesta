@@ -26,7 +26,7 @@ class Box {
 
 i32 main() {
 	Box b   = null;
-	i32 res = 0;
+	i32 res = 0_i32;
 
 	// La forma de preguntar sin afirmar.  `isPresent` no desenvuelve nada:
 	// solo dice si hay.  Esta es la sustituta del `try/catch` de antes.

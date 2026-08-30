@@ -36,7 +36,7 @@ i32 main() {
 	i64   r1 = b.onClick(); // 20 * 2 = 40
 
 	// Struct: callback usado localmente (env en stack).
-	i64   r2 = con_struct(1); // 1 + 1 = 2
+	i64 r2 = con_struct(1); // 1 + 1 = 2
 
-	return (i32)(r1 + r2);  // 40 + 2 = 42
+	return (i32)(r1 + r2); // 40 + 2 = 42
 }

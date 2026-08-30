@@ -14,18 +14,20 @@ typedef struct _CTX * PCTX, *LPCTX;
 i64 as_handle(PCTX c) { return (i64)c; }
 
 // (3) COMPLETACION: definir el struct despues -> ahora es derefenciable.
-struct _CTX { i32 a;
-	i32 b; }
+struct _CTX {
+	i32 a;
+	i32 b;
+}
 
 i32 main() {
 	_CTX ctx;
 	ctx.a = 40;
 	ctx.b = 2;
-	PCTX  p   = &ctx;             // puntero al struct (ahora completo)
+	PCTX  p   = &ctx;            // puntero al struct (ahora completo)
 	LPCTX q   = p;               // segundo alias del mismo tipo puntero
 	i32   sum = (*q).a + (*q).b; // deref del completo: 40 + 2 = 42
 
 	// handle opaco: (PCTX)0 -> 0
-	i64   h   = as_handle((PCTX)0);
+	i64 h = as_handle((PCTX)0);
 	return sum + (i32)h; // 42 + 0 = 42
 }

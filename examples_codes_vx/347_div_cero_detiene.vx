@@ -18,10 +18,10 @@
  */
 
 /** Divisor opaco al optimizador. */
-u64 g_cero = 0;
+u64 g_cero = 0_u64;
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// Capturada: el FatalError llega al handler.
 	try {

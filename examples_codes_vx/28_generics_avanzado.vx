@@ -17,8 +17,10 @@ namespace ejemplos.generics_avanzado;
 class Pair<K, V> {
 	public K first;
 	public V second;
-	public Pair(K f, V s) { this.first = f;
-		this.second = s; }
+	public Pair(K f, V s) {
+		this.first  = f;
+		this.second = s;
+	}
 	public K getFirst() { return this.first; }
 	public V getSecond() { return this.second; }
 }

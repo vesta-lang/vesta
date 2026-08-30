@@ -37,7 +37,7 @@ i32 main() {
 
 	// (1) Circle(5.0) -> pi * 25 ~= 78.54.
 	//     Tolerancia +-0.01 para permitir pi=3.14159 vs 3.14159265.
-	f64   a1 = area(s1);
+	f64 a1 = area(s1);
 	if (a1 < 78.5 || a1 > 78.6) return 91;
 
 	// (2) Rectangle(3, 4) -> 12.0 exacto.

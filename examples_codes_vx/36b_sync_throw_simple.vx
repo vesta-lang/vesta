@@ -9,7 +9,7 @@ class Lock { public Lock() { } }
 
 i32 main() {
 	Lock m   = new Lock();
-	i32  acc = 0;
+	i32  acc = 0_i32;
 	try {
 		synchronized (m) {
 			throw new MyExc(7);

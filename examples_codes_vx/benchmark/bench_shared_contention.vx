@@ -25,27 +25,35 @@ i32 main() {
 	i64            parent_pid = pid();
 	// 4 workers concurrentes.  Cada uno tras N iter envia 1 mensaje al padre.
 	i64 w1 = spawn {
-		i32 i = 0;
-		while (i < 100_000) { c.add(1);
-			i = i + 1; }
+		i32 i = 0_i32;
+		while (i < 100_000) {
+			c.add(1);
+			i = i + 1;
+		}
 		msgsend(parent_pid, 1);
 	};
 	i64 w2 = spawn {
-		i32 i = 0;
-		while (i < 100_000) { c.add(1);
-			i = i + 1; }
+		i32 i = 0_i32;
+		while (i < 100_000) {
+			c.add(1);
+			i = i + 1;
+		}
 		msgsend(parent_pid, 2);
 	};
 	i64 w3 = spawn {
-		i32 i = 0;
-		while (i < 100_000) { c.add(1);
-			i = i + 1; }
+		i32 i = 0_i32;
+		while (i < 100_000) {
+			c.add(1);
+			i = i + 1;
+		}
 		msgsend(parent_pid, 3);
 	};
 	i64 w4 = spawn {
-		i32 i = 0;
-		while (i < 100_000) { c.add(1);
-			i = i + 1; }
+		i32 i = 0_i32;
+		while (i < 100_000) {
+			c.add(1);
+			i = i + 1;
+		}
 		msgsend(parent_pid, 4);
 	};
 	// Join sin busy-wait: 4 msgrecv bloqueantes.  El scheduler cede CPU

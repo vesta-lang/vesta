@@ -26,7 +26,7 @@ namespace ejemplos.contador;
 
 i32 main() {
 	println("== Contador Vesta-lang ==");
-	for (i32 i = 0; i < 5; i++) {
+	for (i32 i = 0_i32; i < 5; i++) {
 		println("iteracion");
 	}
 	println("== Fin ==");

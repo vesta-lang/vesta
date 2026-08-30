@@ -26,7 +26,7 @@ i32 main() {
 	xs = arraylist(8);
 	xs.push(100);
 	xs.push(200);
-	i64 sz2    = xs.size(); // 2
+	i64 sz2 = xs.size(); // 2
 
 	// sz1 + sz2 = 5 -> retorno 42 con math sencilla:
 	// (3 + 2) * 8 + 2 = 42.

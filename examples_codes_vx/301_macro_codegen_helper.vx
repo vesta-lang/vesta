@@ -20,9 +20,9 @@ public comptime string plus(u32 n) {
 }
 
 i32 main() {
-	i32 base = 2;
+	i32 base = 2_i32;
 	// plus(40) se expande (compile-time) a la expresion: base + 40
-	i32 r    = plus(40);
+	i32 r = plus(40);
 	println("r=${r}"); // 42
 	return r;
 }

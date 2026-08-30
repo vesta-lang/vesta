@@ -20,8 +20,8 @@ i32 main() {
 	b[2] = 30;
 	b[3] = 40;
 
-	register("rdi") i32 *pa = a;
-	register("rsi") i32 *pb = b;
+	register("rdi") i32* pa = a;
+	register("rsi") i32* pb = b;
 
 	asm volatile {
 		movdqu xmm0, [rdi]

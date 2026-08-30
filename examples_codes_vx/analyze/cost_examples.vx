@@ -23,8 +23,8 @@ i64 constante(i64 x) {
 
 // O(n): un solo loop sobre n.
 i64 lineal(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
 		acc = acc + i;
 		i   = i + 1;
@@ -34,10 +34,10 @@ i64 lineal(i64 n) {
 
 // O(n^2): dos loops anidados.
 i64 cuadratico(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
-		i64 j = 0;
+		i64 j = 0_i64;
 		while (j < n) {
 			acc = acc + (i * j);
 			j   = j + 1;
@@ -68,9 +68,9 @@ i64 suma_binaria(i64 lo, i64 hi) {
 
 // @complexity CORRECTA: el analizador infiere O(n) y coincide -> sin warning.
 @complexity(O(n))
-	i64 anotada_ok(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+i64 anotada_ok(i64 n) {
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
 		acc = acc + i;
 		i   = i + 1;
@@ -81,11 +81,11 @@ i64 suma_binaria(i64 lo, i64 hi) {
 // @complexity INCORRECTA: el usuario declara O(n) pero el cuerpo tiene dos
 // loops anidados -> el analizador infiere O(n^2) (confianza exacta) y avisa.
 @complexity(O(n))
-	i64 anotada_mal(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+i64 anotada_mal(i64 n) {
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
-		i64 j = 0;
+		i64 j = 0_i64;
 		while (j < n) {
 			acc++;
 			j = j + 1;

@@ -19,7 +19,7 @@
  */
 
 class Traza {
-	public static i32 pasos = 0;
+	public static i32 pasos = 0_i32;
 	public Traza() { }
 }
 

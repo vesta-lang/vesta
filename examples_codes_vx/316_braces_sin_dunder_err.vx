@@ -13,7 +13,7 @@ struct Punto {
 }
 
 i32 main() {
-	Punto a = {2, 3};    // init-list: correcto
+	Punto a = {2, 3};      // init-list: correcto
 	i64   q = a {3, 4, 5}; // error: Punto no declara __braces__
 	return (i32) q;
 }

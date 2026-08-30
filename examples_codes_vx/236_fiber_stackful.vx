@@ -25,10 +25,10 @@ extern "vrt" {
 }
 
 // Tres contextos + tres pilas + el contexto del scheduler.
-i64[19] __ctx_sched;
-i64[19] __ctx_a;
-i64[19] __ctx_b;
-i64[19] __ctx_c;
+i64[19]  __ctx_sched;
+i64[19]  __ctx_a;
+i64[19]  __ctx_b;
+i64[19]  __ctx_c;
 i64[512] __stk_a;
 i64[512] __stk_b;
 i64[512] __stk_c;
@@ -40,29 +40,29 @@ u64 __h_b;
 u64 __h_c;
 
 // Resultados escritos por cada fibra desde su acumulador LOCAL + banderas.
-i64 __res_a  = 0;
-i64 __res_b  = 0;
-i64 __res_c  = 0;
-i64 __done_a = 0;
-i64 __done_b = 0;
-i64 __done_c = 0;
+i64 __res_a  = 0_i64;
+i64 __res_b  = 0_i64;
+i64 __res_c  = 0_i64;
+i64 __done_a = 0_i64;
+i64 __done_b = 0_i64;
+i64 __done_c = 0_i64;
 
 // Cuerpo de la fibra A (id 1).  `acc` es LOCAL (vive en la pila de A) y debe
 // conservar su valor a traves de los dos yields intermedios.
 void fiber_a() {
-	i64 acc = 0;
+	i64 acc = 0_i64;
 	acc = acc * 10 + 1;
 	fiber_swapctx(__h_a, __h_sched); // cede (acc = 1)
 	acc = acc * 10 + 1;
 	fiber_swapctx(__h_a, __h_sched); // cede (acc = 11)
-	acc      = acc * 10 + 1;              // acc = 111
+	acc      = acc * 10 + 1;         // acc = 111
 	__res_a  = acc;
 	__done_a = 1;
 	fiber_swapctx(__h_a, __h_sched); // termina
 }
 
 void fiber_b() {
-	i64 acc = 0;
+	i64 acc = 0_i64;
 	acc = acc * 10 + 2;
 	fiber_swapctx(__h_b, __h_sched);
 	acc = acc * 10 + 2;
@@ -74,7 +74,7 @@ void fiber_b() {
 }
 
 void fiber_c() {
-	i64 acc = 0;
+	i64 acc = 0_i64;
 	acc = acc * 10 + 3;
 	fiber_swapctx(__h_c, __h_sched);
 	acc = acc * 10 + 3;
@@ -100,10 +100,10 @@ i32 main() {
 	__ctx_c[0] = (i64) fiber_entry(fiber_c);
 	__ctx_c[1] = top_c;
 	__ctx_c[2] = top_c;
-	__h_sched = (u64) & __ctx_sched[0];
-	__h_a     = (u64) & __ctx_a[0];
-	__h_b     = (u64) & __ctx_b[0];
-	__h_c     = (u64) & __ctx_c[0];
+	__h_sched  = (u64) & __ctx_sched[0];
+	__h_a      = (u64) & __ctx_a[0];
+	__h_b      = (u64) & __ctx_b[0];
+	__h_c      = (u64) & __ctx_c[0];
 
 	// Modelo JIT: override host + trampolin + proc.
 	if (jit_active()) {
@@ -114,9 +114,9 @@ i32 main() {
 	}
 
 	// Round-robin: dale un quantum a cada fibra viva hasta que las tres terminen.
-	i64 alive_a = 1;
-	i64 alive_b = 1;
-	i64 alive_c = 1;
+	i64 alive_a = 1_i64;
+	i64 alive_b = 1_i64;
+	i64 alive_c = 1_i64;
 	while (alive_a == 1 || alive_b == 1 || alive_c == 1) {
 		if (alive_a == 1) {
 			fiber_swapctx(__h_sched, __h_a);

@@ -19,16 +19,18 @@
 //   void* rt_alloc(unsigned long n){ void*p=malloc(n); if(p) memset(p,0,n); return p; }
 //   void  rt_free(void* p){ free(p); }
 
-extern "vmrt" { fn rt_alloc(u64 n) -> i64 *;
-	fn rt_free(i64 *p) -> void; }
+extern "vmrt" {
+	fn rt_alloc(u64 n) -> i64*;
+	fn rt_free(i64* p) -> void;
+}
 
 // El allocator debe ZERIFICAR (convencion kzalloc) para preservar el cero-init
 // de los campos no escritos por el constructor.
 @AllocatorOverride
-	i64 *my_alloc(u64 n) { return rt_alloc(n); }
+i64* my_alloc(u64 n) { return rt_alloc(n); }
 
 @AllocatorOverride
-	void my_free(i64 *p) { rt_free(p); }
+void my_free(i64* p) { rt_free(p); }
 
 class Box { i64 v; }
 

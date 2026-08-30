@@ -13,10 +13,12 @@
  * una sola vez en la base.
  */
 @Abstract
-	struct Base {
+struct Base {
 	u64 v;
-	public string texto() { u64 x = this.v;
-		return "val=${x:hex}"; }
+	public string texto() {
+		u64 x = this.v;
+		return "val=${x:hex}";
+	}
 }
 struct Der : Base {
 	public u64 doble() { return this.v * 2; }

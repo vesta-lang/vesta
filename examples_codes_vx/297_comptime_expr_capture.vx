@@ -25,8 +25,8 @@ private comptime string as_literal(expr code) {
 }
 
 i32 main() {
-	i32    x  = 5;
-	i32    y  = 20;
+	i32 x = 5_i32;
+	i32 y = 20_i32;
 
 	// comptime fn -> valor string con el texto exacto del argumento.
 	string s1 = stringify(x + y + 1);
@@ -40,7 +40,7 @@ i32 main() {
 	println("s3=[${s3}]"); // s3=[hola mundo]
 
 	// Comprobacion de igualdad exacta de los textos capturados.
-	i32 ok = 0;
+	i32 ok = 0_i32;
 	if (s1.equals("x + y + 1")) { ok = ok + 10; }
 	if (s2.equals("[x * y]")) { ok = ok + 15; }
 	if (s3.equals("hola mundo")) { ok = ok + 17; }

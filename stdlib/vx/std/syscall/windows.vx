@@ -5,10 +5,10 @@ import std.syscall.abi only invoke_syscall, syscall_id, resolve_syscall;
 import std.types only nullptr, usize;
 
 @Target("arch:x86_64 && os:windows")
-	public import std.syscall.windows.x86_64 only *;
+public import std.syscall.windows.x86_64 only *;
 
 @Target("arch:x86 && os:windows")
-	public import std.syscall.windows.x86_32 only *;
+public import std.syscall.windows.x86_32 only *;
 
 // Re-exporta los tipos de la NT API (ULONG, HANDLE, PROCESSOR_NUMBER, ...).
 // Viven en std.ntwindows (al nivel de std, junto a std.windows) porque son
@@ -41,7 +41,7 @@ public struct syscall_ctx_invoke {
 	 * pero el usuario puede reasignarlo a una implementacion alternativa
 	 * (p.ej. para hooking o para una convencion distinta).
 	 */
-	invoke_syscall  invoke_method  = invoke;
+	invoke_syscall invoke_method = invoke;
 
 	/**
 	 * Resolutor perezoso del objetivo.  En Windows nada es estable entre
@@ -57,7 +57,7 @@ public struct syscall_ctx_invoke {
 	 * Lo rellena un resolutor que trabaje a nivel de ISA (ejecutando la
 	 * instruccion de syscall); el resolutor por defecto no lo usa.
 	 */
-	syscall_id      id             = 0;
+	syscall_id id = 0;
 
 	/**
 	 * Direccion del objetivo resuelto de forma perezosa.  null = sin resolver.
@@ -67,7 +67,7 @@ public struct syscall_ctx_invoke {
 	 * mantiene aparte de `id` para que ambos esquemas -- llamada al export y
 	 * ejecucion directa por numero de servicio -- puedan coexistir.
 	 */
-	void*           target         = null;
+	void* target = null;
 
 	/**
 	 * Hash del nombre de la syscall, calculado en tiempo de compilacion.
@@ -75,14 +75,14 @@ public struct syscall_ctx_invoke {
 	 * de ntdll para localizar el numero de servicio sin llevar el nombre
 	 * en texto plano al binario.
 	 */
-	u64             hash           = 0;
+	u64 hash = 0_u64;
 
 	/**
 	 * Nombre de la syscall EN TIEMPO DE COMPILACION.  Campo `comptime`:
 	 * no ocupa espacio en la instancia runtime ni se serializa; solo lo
 	 * consume el constructor comptime para derivar `hash`.
 	 */
-	comptime char * name_syscall   = nullptr;
+	comptime char* name_syscall = nullptr;
 
 	/**
 	 * Constructor comptime: fija el nombre y deriva su hash.  El nombre solo
@@ -355,7 +355,7 @@ public void InitializeObjectAttributes(POBJECT_ATTRIBUTES InitializedAttributes,
 	(*InitializedAttributes).ObjectName = ObjectName;
 	(*InitializedAttributes).Attributes = Attributes;
 	(*InitializedAttributes).SecurityDescriptor = SecurityDescriptor;
-	(*InitializedAttributes).SecurityQualityOfService = (void *) 0;
+	(*InitializedAttributes).SecurityQualityOfService = (void*) 0;
 }
 
 /**

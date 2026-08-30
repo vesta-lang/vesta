@@ -12,58 +12,58 @@ public import std.ntwindows only ULONG, LONG, USHORT, UCHAR, PVOID, HANDLE,
 SIZE_T, PHANDLE, PULONG, ACCESS_MASK,
 PWSTR, PROCESSOR_NUMBER, PPROCESSOR_NUMBER;
 
-public const u16 PATH_MAX = 260;
+public const u16 PATH_MAX = 260_u16;
 
-typedef int BOOL;
-typedef char CHAR;
+typedef int       BOOL;
+typedef char      CHAR;
 typedef short_int SHORT;
-typedef int INT;
-typedef u32 UINT;
-typedef u8 BYTE;
-typedef u8 BOOLEAN; // Win32: un byte (0/1)
-typedef u16 WORD;
-typedef float FLOAT;
-typedef u32 DWORD;
+typedef int       INT;
+typedef u32       UINT;
+typedef u8        BYTE;
+typedef u8        BOOLEAN; // Win32: un byte (0/1)
+typedef u16       WORD;
+typedef float     FLOAT;
+typedef u32       DWORD;
 
 typedef u16 wchar_t;
 
-typedef wchar_t WCHAR;
-typedef wchar_t * PWCHAR;
-typedef WORD ATOM;
-typedef u32 ULONG32;
-typedef u64 DWORD64;
-typedef u64 ULONG64;
-typedef i32 INT32;
-typedef i64 INT64;
-typedef u64 DWORDLONG;
+typedef wchar_t  WCHAR;
+typedef wchar_t* PWCHAR;
+typedef WORD     ATOM;
+typedef u32      ULONG32;
+typedef u64      DWORD64;
+typedef u64      ULONG64;
+typedef i32      INT32;
+typedef i64      INT64;
+typedef u64      DWORDLONG;
 
-typedef CHAR * PCHAR;
-typedef ULONG64 * PULONG64;
-typedef DWORD64 * PDWORD64;
+typedef CHAR*    PCHAR;
+typedef ULONG64* PULONG64;
+typedef DWORD64* PDWORD64;
 
 typedef double LONGLONG;
 typedef double ULONGLONG;
 
-typedef void VOID;
-typedef void *LPVOID;
-typedef BOOL * PBOOL;
-typedef BOOL * LPBOOL;
-typedef WORD * PWORD;
-typedef LONG * PLONG;
-typedef LONG * LPLONG;
-typedef DWORD * PDWORD;
+typedef void   VOID;
+typedef void*  LPVOID;
+typedef BOOL*  PBOOL;
+typedef BOOL*  LPBOOL;
+typedef WORD*  PWORD;
+typedef LONG*  PLONG;
+typedef LONG*  LPLONG;
+typedef DWORD* PDWORD;
 
-typedef HANDLE HINSTANCE;
-typedef HANDLE HWND;
+typedef HANDLE    HINSTANCE;
+typedef HANDLE    HWND;
 typedef HINSTANCE HMODULE;
-typedef HANDLE HDC;
-typedef HANDLE HGLRC;
-typedef HANDLE HMENU;
-typedef HANDLE * LPHANDLE;
+typedef HANDLE    HDC;
+typedef HANDLE    HGLRC;
+typedef HANDLE    HMENU;
+typedef HANDLE*   LPHANDLE;
 
-typedef BYTE * LPBYTE;
-typedef DWORD * LPDWORD;
-typedef void *LPCVOID;
+typedef BYTE*  LPBYTE;
+typedef DWORD* LPDWORD;
+typedef void*  LPCVOID;
 
 // GUID (128 bits): identificador global de Windows.
 typedef struct _GUID {
@@ -85,21 +85,21 @@ typedef u64 ULONG_PTR;
 //typedef unsigned_long_int       ULONG_PTR;
 //#endif
 
-typedef ULONG_PTR DWORD_PTR;
-typedef DWORD_PTR * PDWORD_PTR;
+typedef ULONG_PTR  DWORD_PTR;
+typedef DWORD_PTR* PDWORD_PTR;
 
 typedef LONG_PTR SSIZE_T;
 
-typedef CHAR * LPSTR;
-typedef WCHAR * LPWSTR;
-typedef CHAR * LPCSTR;
-typedef WCHAR * LPCWSTR;
+typedef CHAR*  LPSTR;
+typedef WCHAR* LPWSTR;
+typedef CHAR*  LPCSTR;
+typedef WCHAR* LPCWSTR;
 
 //#ifdef UNICODE
-typedef WCHAR TCHAR;
-typedef WCHAR TBYTE;
+typedef WCHAR   TCHAR;
+typedef WCHAR   TBYTE;
 typedef LPCWSTR LPCTSTR;
-typedef LPWSTR LPTSTR;
+typedef LPWSTR  LPTSTR;
 //#else
 //typedef char                TCHAR;
 //typedef unsigned_char       TBYTE;
@@ -107,77 +107,77 @@ typedef LPWSTR LPTSTR;
 //typedef LPSTR               LPTSTR;
 //#endif
 
-typedef ACCESS_MASK * PACCESS_MASK;
+typedef ACCESS_MASK* PACCESS_MASK;
 
 typedef HANDLE HICON;
 typedef HANDLE HBRUSH;
-typedef HICON HCURSOR;
+typedef HICON  HCURSOR;
 
-typedef LONG HRESULT;
+typedef LONG     HRESULT;
 typedef LONG_PTR LRESULT;
 typedef LONG_PTR LPARAM;
 typedef UINT_PTR WPARAM;
 
-typedef void *HGDIOBJ;
+typedef void* HGDIOBJ;
 
-typedef HANDLE HKEY;
-typedef HKEY * PHKEY;
+typedef HANDLE      HKEY;
+typedef HKEY*       PHKEY;
 typedef ACCESS_MASK REGSAM;
 
-public const u32 MINCHAR                   = 0x80;
-public const u32 MAXCHAR                   = 0x7F;
-public const u32 MINSHORT                  = 0x8000;
-public const u32 MAXSHORT                  = 0x7FFF;
-public const u32 MINLONG                   = 0x80000000;
-public const u32 MAXLONG                   = 0x7FFFFFFF;
-public const u32 MAXBYTE                   = 0xFF;
-public const u32 MAXWORD                   = 0xFFFF;
-public const u32 MAXDWORD                  = 0xFFFFFFFF;
+public const u32 MINCHAR  = 0x80_u32;
+public const u32 MAXCHAR  = 0x7F_u32;
+public const u32 MINSHORT = 0x8000_u32;
+public const u32 MAXSHORT = 0x7FFF_u32;
+public const u32 MINLONG  = 0x80000000_u32;
+public const u32 MAXLONG  = 0x7FFFFFFF_u32;
+public const u32 MAXBYTE  = 0xFF_u32;
+public const u32 MAXWORD  = 0xFFFF_u32;
+public const u32 MAXDWORD = 0xFFFFFFFF_u32;
 
 
 /* ========================================================================== */
 /* Errors: */
 /* ========================================================================== */
-public const u32 ERROR_SUCCESS             = 0;
-public const u32 ERROR_FILE_NOT_FOUND      = 2;
-public const u32 ERROR_PATH_NOT_FOUND      = 3;
-public const u32 ERROR_TOO_MANY_OPEN_FILES = 4;
-public const u32 ERROR_ACCESS_DENIED       = 5;
-public const u32 ERROR_NO_MORE_FILES       = 18;
-public const u32 ERROR_SHARING_VIOLATION   = 32;
-public const u32 ERROR_FILE_EXISTS         = 80;
-public const u32 ERROR_INSUFFICIENT_BUFFER = 122;
-public const u32 ERROR_ALREADY_EXISTS      = 183;
-public const u32 ERROR_MORE_DATA           = 234;
+public const u32 ERROR_SUCCESS             = 0_u32;
+public const u32 ERROR_FILE_NOT_FOUND      = 2_u32;
+public const u32 ERROR_PATH_NOT_FOUND      = 3_u32;
+public const u32 ERROR_TOO_MANY_OPEN_FILES = 4_u32;
+public const u32 ERROR_ACCESS_DENIED       = 5_u32;
+public const u32 ERROR_NO_MORE_FILES       = 18_u32;
+public const u32 ERROR_SHARING_VIOLATION   = 32_u32;
+public const u32 ERROR_FILE_EXISTS         = 80_u32;
+public const u32 ERROR_INSUFFICIENT_BUFFER = 122_u32;
+public const u32 ERROR_ALREADY_EXISTS      = 183_u32;
+public const u32 ERROR_MORE_DATA           = 234_u32;
 
 
 /* ========================================================================== */
 /* Enums                                                                      */
 /* ========================================================================== */
 /* DllMain Reason: */
-public const u32 DLL_PROCESS_ATTACH        = (1);
-public const u32 DLL_PROCESS_DETACH        = (0);
-public const u32 DLL_THREAD_ATTACH         = (2);
-public const u32 DLL_THREAD_DETACH         = (3);
+public const u32 DLL_PROCESS_ATTACH = (1);
+public const u32 DLL_PROCESS_DETACH = (0);
+public const u32 DLL_THREAD_ATTACH  = (2);
+public const u32 DLL_THREAD_DETACH  = (3);
 
 
 /* ========================================================================== */
 /* Structures: */
 /* ========================================================================== */
 typedef struct _SECURITY_ATTRIBUTES {
-	DWORD nLength;
+	DWORD  nLength;
 	LPVOID lpSecurityDescriptor;
-	BOOL bInheritHandle;
+	BOOL   bInheritHandle;
 } SECURITY_ATTRIBUTES, *PSECURITY_ATTRIBUTES, *LPSECURITY_ATTRIBUTES;
 
 typedef union _LARGE_INTEGER {
 	struct {
 		DWORD LowPart;
-		LONG HighPart;
+		LONG  HighPart;
 	};
 	struct {
 		DWORD LowPart;
-		LONG HighPart;
+		LONG  HighPart;
 	} u;
 	LONGLONG QuadPart;
 } LARGE_INTEGER, *PLARGE_INTEGER;
@@ -202,42 +202,42 @@ typedef struct _FILETIME {
 
 
 /* Exceptions: */
-public const u32 EXCEPTION_MAXIMUM_PARAMETERS       = 15;
-public const u32 EXCEPTION_EXECUTE_HANDLER          = 0x01;
-public const u32 EXCEPTION_CONTINUE_EXECUTION       = 0xFFFFFFFF;
-public const u32 EXCEPTION_CONTINUE_SEARCH          = 0x00;
-public const u32 EXCEPTION_ACCESS_VIOLATION         = 0xC0000005;
-public const u32 EXCEPTION_DATATYPE_MISALIGNMENT    = 0x80000002;
-public const u32 EXCEPTION_BREAKPOINT               = 0x80000003;
-public const u32 EXCEPTION_SINGLE_STEP              = 0x80000004;
-public const u32 EXCEPTION_ARRAY_BOUNDS_EXCEEDED    = 0xC000008C;
-public const u32 EXCEPTION_FLT_DENORMAL_OPERAND     = 0xC000008D;
-public const u32 EXCEPTION_FLT_DIVIDE_BY_ZERO       = 0xC000008E;
-public const u32 EXCEPTION_FLT_INEXACT_RESULT       = 0xC000008F;
-public const u32 EXCEPTION_FLT_INVALID_OPERATION    = 0xC0000090;
-public const u32 EXCEPTION_FLT_OVERFLOW             = 0xC0000091;
-public const u32 EXCEPTION_FLT_STACK_CHECK          = 0xC0000092;
-public const u32 EXCEPTION_FLT_UNDERFLOW            = 0xC0000093;
-public const u32 EXCEPTION_INT_DIVIDE_BY_ZERO       = 0xC0000094;
-public const u32 EXCEPTION_INT_OVERFLOW             = 0xC0000095;
-public const u32 EXCEPTION_PRIV_INSTRUCTION         = 0xC0000096;
-public const u32 EXCEPTION_IN_PAGE_ERROR            = 0xC0000006;
-public const u32 EXCEPTION_STACK_OVERFLOW           = 0xC00000FD;
-public const u32 EXCEPTION_ILLEGAL_INSTRUCTION      = 0xC000001D;
-public const u32 EXCEPTION_NONCONTINUABLE_EXCEPTION = 0xC0000025;
-public const u32 EXCEPTION_INVALID_DISPOSITION      = 0xC0000026;
-public const u32 EXCEPTION_GUARD_PAGE               = 0x80000001;
-public const u32 EXCEPTION_INVALID_HANDLE           = 0xC0000008;
-public const u32 EXCEPTION_POSSIBLE_DEADLOCK        = 0xC0000194;
-public const u32 CONTROL_C_EXIT                     = 0xC000013A;
+public const u32 EXCEPTION_MAXIMUM_PARAMETERS       = 15_u32;
+public const u32 EXCEPTION_EXECUTE_HANDLER          = 0x01_u32;
+public const u32 EXCEPTION_CONTINUE_EXECUTION       = 0xFFFFFFFF_u32;
+public const u32 EXCEPTION_CONTINUE_SEARCH          = 0x00_u32;
+public const u32 EXCEPTION_ACCESS_VIOLATION         = 0xC0000005_u32;
+public const u32 EXCEPTION_DATATYPE_MISALIGNMENT    = 0x80000002_u32;
+public const u32 EXCEPTION_BREAKPOINT               = 0x80000003_u32;
+public const u32 EXCEPTION_SINGLE_STEP              = 0x80000004_u32;
+public const u32 EXCEPTION_ARRAY_BOUNDS_EXCEEDED    = 0xC000008C_u32;
+public const u32 EXCEPTION_FLT_DENORMAL_OPERAND     = 0xC000008D_u32;
+public const u32 EXCEPTION_FLT_DIVIDE_BY_ZERO       = 0xC000008E_u32;
+public const u32 EXCEPTION_FLT_INEXACT_RESULT       = 0xC000008F_u32;
+public const u32 EXCEPTION_FLT_INVALID_OPERATION    = 0xC0000090_u32;
+public const u32 EXCEPTION_FLT_OVERFLOW             = 0xC0000091_u32;
+public const u32 EXCEPTION_FLT_STACK_CHECK          = 0xC0000092_u32;
+public const u32 EXCEPTION_FLT_UNDERFLOW            = 0xC0000093_u32;
+public const u32 EXCEPTION_INT_DIVIDE_BY_ZERO       = 0xC0000094_u32;
+public const u32 EXCEPTION_INT_OVERFLOW             = 0xC0000095_u32;
+public const u32 EXCEPTION_PRIV_INSTRUCTION         = 0xC0000096_u32;
+public const u32 EXCEPTION_IN_PAGE_ERROR            = 0xC0000006_u32;
+public const u32 EXCEPTION_STACK_OVERFLOW           = 0xC00000FD_u32;
+public const u32 EXCEPTION_ILLEGAL_INSTRUCTION      = 0xC000001D_u32;
+public const u32 EXCEPTION_NONCONTINUABLE_EXCEPTION = 0xC0000025_u32;
+public const u32 EXCEPTION_INVALID_DISPOSITION      = 0xC0000026_u32;
+public const u32 EXCEPTION_GUARD_PAGE               = 0x80000001_u32;
+public const u32 EXCEPTION_INVALID_HANDLE           = 0xC0000008_u32;
+public const u32 EXCEPTION_POSSIBLE_DEADLOCK        = 0xC0000194_u32;
+public const u32 CONTROL_C_EXIT                     = 0xC000013A_u32;
 
-public const u32 EXCEPTION_ASSERTION      = 0x02;
+public const u32 EXCEPTION_ASSERTION = 0x02_u32;
 
 /* Snapshotting: */
-public const u32 TH32CS_SNAPTHREAD        = 0x00000004;
-public const u32 IMAGE_FILE_MACHINE_I386  = 0x014C;
-public const u32 IMAGE_FILE_MACHINE_AMD64 = 0x8664;
-public const u32 CONTEXT_AMD64            = 0x00100000;
+public const u32 TH32CS_SNAPTHREAD        = 0x00000004_u32;
+public const u32 IMAGE_FILE_MACHINE_I386  = 0x014C_u32;
+public const u32 IMAGE_FILE_MACHINE_AMD64 = 0x8664_u32;
+public const u32 CONTEXT_AMD64            = 0x00100000_u32;
 public const u32 CONTEXT_CONTROL          = (CONTEXT_AMD64 | 0x01);
 public const u32 CONTEXT_INTEGER          = (CONTEXT_AMD64 | 0x02);
 public const u32 CONTEXT_SEGMENTS         = (CONTEXT_AMD64 | 0x04);
@@ -247,45 +247,45 @@ public const u32 CONTEXT_DEBUG_REGISTERS  = (CONTEXT_AMD64 | 0x10);
 
 public const u32 CONTEXT_FULL = (
 	CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_FLOATING_POINT
-	);
+);
 
 public const u32 CONTEXT_ALL = (
-	CONTEXT_CONTROL |
-	CONTEXT_INTEGER |
-	CONTEXT_SEGMENTS |
+	CONTEXT_CONTROL        |
+	CONTEXT_INTEGER        |
+	CONTEXT_SEGMENTS       |
 	CONTEXT_FLOATING_POINT |
 	CONTEXT_DEBUG_REGISTERS
-	);
+);
 
 /* Symbol Options: */
-public const u32 SYMOPT_CASE_INSENSITIVE          = 0x00000001;
-public const u32 SYMOPT_UNDNAME                   = 0x00000002;
-public const u32 SYMOPT_DEFERRED_LOADS            = 0x00000004;
-public const u32 SYMOPT_NO_CPP                    = 0x00000008;
-public const u32 SYMOPT_LOAD_LINES                = 0x00000010;
-public const u32 SYMOPT_OMAP_FIND_NEAREST         = 0x00000020;
-public const u32 SYMOPT_LOAD_ANYTHING             = 0x00000040;
-public const u32 SYMOPT_IGNORE_CVREC              = 0x00000080;
-public const u32 SYMOPT_NO_UNQUALIFIED_LOADS      = 0x00000100;
-public const u32 SYMOPT_FAIL_CRITICAL_ERRORS      = 0x00000200;
-public const u32 SYMOPT_EXACT_SYMBOLS             = 0x00000400;
-public const u32 SYMOPT_ALLOW_ABSOLUTE_SYMBOLS    = 0x00000800;
-public const u32 SYMOPT_IGNORE_NT_SYMPATH         = 0x00001000;
-public const u32 SYMOPT_INCLUDE_32BIT_MODULES     = 0x00002000;
-public const u32 SYMOPT_PUBLICS_ONLY              = 0x00004000;
-public const u32 SYMOPT_NO_PUBLICS                = 0x00008000;
-public const u32 SYMOPT_AUTO_PUBLICS              = 0x00010000;
-public const u32 SYMOPT_NO_IMAGE_SEARCH           = 0x00020000;
-public const u32 SYMOPT_SECURE                    = 0x00040000;
-public const u32 SYMOPT_NO_PROMPTS                = 0x00080000;
-public const u32 SYMOPT_OVERWRITE                 = 0x00100000;
-public const u32 SYMOPT_IGNORE_IMAGEDIR           = 0x00200000;
-public const u32 SYMOPT_FLAT_DIRECTORY            = 0x00400000;
-public const u32 SYMOPT_FAVOR_COMPRESSED          = 0x00800000;
-public const u32 SYMOPT_ALLOW_ZERO_ADDRESS        = 0x01000000;
-public const u32 SYMOPT_DISABLE_SYMSRV_AUTODETECT = 0x02000000;
+public const u32 SYMOPT_CASE_INSENSITIVE          = 0x00000001_u32;
+public const u32 SYMOPT_UNDNAME                   = 0x00000002_u32;
+public const u32 SYMOPT_DEFERRED_LOADS            = 0x00000004_u32;
+public const u32 SYMOPT_NO_CPP                    = 0x00000008_u32;
+public const u32 SYMOPT_LOAD_LINES                = 0x00000010_u32;
+public const u32 SYMOPT_OMAP_FIND_NEAREST         = 0x00000020_u32;
+public const u32 SYMOPT_LOAD_ANYTHING             = 0x00000040_u32;
+public const u32 SYMOPT_IGNORE_CVREC              = 0x00000080_u32;
+public const u32 SYMOPT_NO_UNQUALIFIED_LOADS      = 0x00000100_u32;
+public const u32 SYMOPT_FAIL_CRITICAL_ERRORS      = 0x00000200_u32;
+public const u32 SYMOPT_EXACT_SYMBOLS             = 0x00000400_u32;
+public const u32 SYMOPT_ALLOW_ABSOLUTE_SYMBOLS    = 0x00000800_u32;
+public const u32 SYMOPT_IGNORE_NT_SYMPATH         = 0x00001000_u32;
+public const u32 SYMOPT_INCLUDE_32BIT_MODULES     = 0x00002000_u32;
+public const u32 SYMOPT_PUBLICS_ONLY              = 0x00004000_u32;
+public const u32 SYMOPT_NO_PUBLICS                = 0x00008000_u32;
+public const u32 SYMOPT_AUTO_PUBLICS              = 0x00010000_u32;
+public const u32 SYMOPT_NO_IMAGE_SEARCH           = 0x00020000_u32;
+public const u32 SYMOPT_SECURE                    = 0x00040000_u32;
+public const u32 SYMOPT_NO_PROMPTS                = 0x00080000_u32;
+public const u32 SYMOPT_OVERWRITE                 = 0x00100000_u32;
+public const u32 SYMOPT_IGNORE_IMAGEDIR           = 0x00200000_u32;
+public const u32 SYMOPT_FLAT_DIRECTORY            = 0x00400000_u32;
+public const u32 SYMOPT_FAVOR_COMPRESSED          = 0x00800000_u32;
+public const u32 SYMOPT_ALLOW_ZERO_ADDRESS        = 0x01000000_u32;
+public const u32 SYMOPT_DISABLE_SYMSRV_AUTODETECT = 0x02000000_u32;
 
-public const u32 SYMOPT_DEBUG = 0x80000000;
+public const u32 SYMOPT_DEBUG = 0x80000000_u32;
 
 
 enum SymTagEnum : u8 {
@@ -493,145 +493,145 @@ enum DXGI_FORMAT {
 
 
 /* Value for magic header */
-public const u32 FOURCC_DDS        = (0x20534444);
+public const u32 FOURCC_DDS = (0x20534444);
 
 /* Values for DDS_PIXELFORMAT.dwFlags */
-public const u32 DDPF_FOURCC       = (0x00000004);
+public const u32 DDPF_FOURCC = (0x00000004);
 
 
 /* CreateFile.dwShareMode Enums: */
-public const u32 FILE_SHARE_DELETE = 0x00000004;
-public const u32 FILE_SHARE_READ   = 0x00000001;
-public const u32 FILE_SHARE_WRITE  = 0x00000002;
+public const u32 FILE_SHARE_DELETE = 0x00000004_u32;
+public const u32 FILE_SHARE_READ   = 0x00000001_u32;
+public const u32 FILE_SHARE_WRITE  = 0x00000002_u32;
 
 /* Generic Access Rights: */
-public const u32 GENERIC_READ      = 0x80000000;
-public const u32 GENERIC_WRITE     = 0x40000000;
-public const u32 GENERIC_EXECUTE   = 0x20000000;
-public const u32 GENERIC_ALL       = 0x10000000;
+public const u32 GENERIC_READ    = 0x80000000_u32;
+public const u32 GENERIC_WRITE   = 0x40000000_u32;
+public const u32 GENERIC_EXECUTE = 0x20000000_u32;
+public const u32 GENERIC_ALL     = 0x10000000_u32;
 
 /* Standard Access Rights: */
-public const u32 DELETE            = 0x00010000;
-public const u32 READ_CONTROL      = 0x00020000;
-public const u32 WRITE_DAC         = 0x00040000;
-public const u32 WRITE_OWNER       = 0x00080000;
-public const u32 SYNCHRONIZE       = 0x00100000;
+public const u32 DELETE       = 0x00010000_u32;
+public const u32 READ_CONTROL = 0x00020000_u32;
+public const u32 WRITE_DAC    = 0x00040000_u32;
+public const u32 WRITE_OWNER  = 0x00080000_u32;
+public const u32 SYNCHRONIZE  = 0x00100000_u32;
 
-public const u32 STANDARD_RIGHTS_REQUIRED = 0x000F0000;
+public const u32 STANDARD_RIGHTS_REQUIRED = 0x000F0000_u32;
 
 public const u32 STANDARD_RIGHTS_READ    = READ_CONTROL;
 public const u32 STANDARD_RIGHTS_WRITE   = READ_CONTROL;
 public const u32 STANDARD_RIGHTS_EXECUTE = READ_CONTROL;
 
-public const u32 STANDARD_RIGHTS_ALL       = 0x001F0000;
-public const u32 SPECIFIC_RIGHTS_ALL       = 0x0000FFFF;
+public const u32 STANDARD_RIGHTS_ALL = 0x001F0000_u32;
+public const u32 SPECIFIC_RIGHTS_ALL = 0x0000FFFF_u32;
 
 /* Commulated Access Rights: */
-public const u32 FILE_READ_DATA            = 0x0001;
-public const u32 FILE_LIST_DIRECTORY       = 0x0001;
-public const u32 FILE_WRITE_DATA           = 0x0002;
-public const u32 FILE_ADD_FILE             = 0x0002;
-public const u32 FILE_APPEND_DATA          = 0x0004;
-public const u32 FILE_ADD_SUBDIRECTORY     = 0x0004;
-public const u32 FILE_CREATE_PIPE_INSTANCE = 0x0004;
-public const u32 FILE_READ_EA              = 0x0008;
-public const u32 FILE_WRITE_EA             = 0x0010;
-public const u32 FILE_EXECUTE              = 0x0020;
-public const u32 FILE_TRAVERSE             = 0x0020;
-public const u32 FILE_DELETE_CHILD         = 0x0040;
-public const u32 FILE_READ_ATTRIBUTES      = 0x0080;
-public const u32 FILE_WRITE_ATTRIBUTES     = 0x0100;
+public const u32 FILE_READ_DATA            = 0x0001_u32;
+public const u32 FILE_LIST_DIRECTORY       = 0x0001_u32;
+public const u32 FILE_WRITE_DATA           = 0x0002_u32;
+public const u32 FILE_ADD_FILE             = 0x0002_u32;
+public const u32 FILE_APPEND_DATA          = 0x0004_u32;
+public const u32 FILE_ADD_SUBDIRECTORY     = 0x0004_u32;
+public const u32 FILE_CREATE_PIPE_INSTANCE = 0x0004_u32;
+public const u32 FILE_READ_EA              = 0x0008_u32;
+public const u32 FILE_WRITE_EA             = 0x0010_u32;
+public const u32 FILE_EXECUTE              = 0x0020_u32;
+public const u32 FILE_TRAVERSE             = 0x0020_u32;
+public const u32 FILE_DELETE_CHILD         = 0x0040_u32;
+public const u32 FILE_READ_ATTRIBUTES      = 0x0080_u32;
+public const u32 FILE_WRITE_ATTRIBUTES     = 0x0100_u32;
 public const u32 FILE_ALL_ACCESS = (
 	STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x01FF
-	);
+);
 
 public const u32 FILE_GENERIC_READ = (
 	STANDARD_RIGHTS_READ |
-	FILE_READ_DATA |
+	FILE_READ_DATA       |
 	FILE_READ_ATTRIBUTES |
-	FILE_READ_EA |
+	FILE_READ_EA         |
 	SYNCHRONIZE
-	);
+);
 
 public const u32 FILE_GENERIC_WRITE = (
 	STANDARD_RIGHTS_WRITE |
-	FILE_WRITE_DATA |
+	FILE_WRITE_DATA       |
 	FILE_WRITE_ATTRIBUTES |
-	FILE_WRITE_EA |
-	FILE_APPEND_DATA |
+	FILE_WRITE_EA         |
+	FILE_APPEND_DATA      |
 	SYNCHRONIZE
-	);
+);
 
 public const u32 FILE_GENERIC_EXECUTE = (
 	STANDARD_RIGHTS_EXECUTE |
-	FILE_READ_ATTRIBUTES |
-	FILE_EXECUTE |
+	FILE_READ_ATTRIBUTES    |
+	FILE_EXECUTE            |
 	SYNCHRONIZE
-	);
+);
 
 /* Creation Disposition: */
-public const u32 CREATE_ALWAYS                = 2;
-public const u32 CREATE_NEW                   = 1;
-public const u32 OPEN_ALWAYS                  = 4;
-public const u32 OPEN_EXISTING                = 3;
-public const u32 TRUNCATE_EXISTING            = 5;
+public const u32 CREATE_ALWAYS     = 2_u32;
+public const u32 CREATE_NEW        = 1_u32;
+public const u32 OPEN_ALWAYS       = 4_u32;
+public const u32 OPEN_EXISTING     = 3_u32;
+public const u32 TRUNCATE_EXISTING = 5_u32;
 
 /* File Attributes: */
-public const u32 INVALID_FILE_ATTRIBUTES      = 0xFFFFFFFF;
-public const u32 FILE_ATTRIBUTE_HIDDEN        = 0x02;
-public const u32 FILE_ATTRIBUTE_NORMAL        = 0x80;
-public const u32 FILE_ATTRIBUTE_DIRECTORY     = 0x10;
-public const u32 FILE_ATTRIBUTE_TEMPORARY     = 0x0100;
-public const u32 FILE_ATTRIBUTE_REPARSE_POINT = 0x0400;
+public const u32 INVALID_FILE_ATTRIBUTES      = 0xFFFFFFFF_u32;
+public const u32 FILE_ATTRIBUTE_HIDDEN        = 0x02_u32;
+public const u32 FILE_ATTRIBUTE_NORMAL        = 0x80_u32;
+public const u32 FILE_ATTRIBUTE_DIRECTORY     = 0x10_u32;
+public const u32 FILE_ATTRIBUTE_TEMPORARY     = 0x0100_u32;
+public const u32 FILE_ATTRIBUTE_REPARSE_POINT = 0x0400_u32;
 
 /* File Offsets: */
-public const u32 FILE_BEGIN                   = 0;
-public const u32 FILE_CURRENT                 = 1;
-public const u32 FILE_END                     = 2;
+public const u32 FILE_BEGIN   = 0_u32;
+public const u32 FILE_CURRENT = 1_u32;
+public const u32 FILE_END     = 2_u32;
 
 /* File Mapping: */
-public const u32 SECTION_QUERY                = 0x0001;
-public const u32 SECTION_MAP_WRITE            = 0x0002;
-public const u32 SECTION_MAP_READ             = 0x0004;
-public const u32 SECTION_MAP_EXECUTE          = 0x0008;
-public const u32 SECTION_EXTEND_SIZE          = 0x0010;
-public const u32 SECTION_MAP_EXECUTE_EXPLICIT = 0x0020;
+public const u32 SECTION_QUERY                = 0x0001_u32;
+public const u32 SECTION_MAP_WRITE            = 0x0002_u32;
+public const u32 SECTION_MAP_READ             = 0x0004_u32;
+public const u32 SECTION_MAP_EXECUTE          = 0x0008_u32;
+public const u32 SECTION_EXTEND_SIZE          = 0x0010_u32;
+public const u32 SECTION_MAP_EXECUTE_EXPLICIT = 0x0020_u32;
 public const u32 SECTION_ALL_ACCESS = (
 	STANDARD_RIGHTS_REQUIRED |
-	SECTION_QUERY |
-	SECTION_MAP_WRITE |
-	SECTION_MAP_READ |
-	SECTION_MAP_EXECUTE |
+	SECTION_QUERY            |
+	SECTION_MAP_WRITE        |
+	SECTION_MAP_READ         |
+	SECTION_MAP_EXECUTE      |
 	SECTION_EXTEND_SIZE
-	);
+);
 
-public const u32 FILE_MAP_COPY                 = SECTION_QUERY;
-public const u32 FILE_MAP_WRITE                = SECTION_MAP_WRITE;
-public const u32 FILE_MAP_READ                 = SECTION_MAP_READ;
-public const u32 FILE_MAP_ALL_ACCESS           = SECTION_ALL_ACCESS;
-public const u32 FILE_MAP_EXECUTE              = SECTION_MAP_EXECUTE_EXPLICIT;
+public const u32 FILE_MAP_COPY       = SECTION_QUERY;
+public const u32 FILE_MAP_WRITE      = SECTION_MAP_WRITE;
+public const u32 FILE_MAP_READ       = SECTION_MAP_READ;
+public const u32 FILE_MAP_ALL_ACCESS = SECTION_ALL_ACCESS;
+public const u32 FILE_MAP_EXECUTE    = SECTION_MAP_EXECUTE_EXPLICIT;
 
 // (Las constantes PAGE_* de proteccion se definen mas abajo, en la seccion
 //  "VirtualAlloc.flProtect".)
 
 /* File Change Notifications: */
-public const u32 FILE_NOTIFY_CHANGE_FILE_NAME  = 0x00000001;
-public const u32 FILE_NOTIFY_CHANGE_DIR_NAME   = 0x00000002;
-public const u32 FILE_NOTIFY_CHANGE_ATTRIBUTES = 0x00000004;
-public const u32 FILE_NOTIFY_CHANGE_SIZE       = 0x00000008;
-public const u32 FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010;
-public const u32 FILE_NOTIFY_CHANGE_SECURITY   = 0x00000100;
+public const u32 FILE_NOTIFY_CHANGE_FILE_NAME  = 0x00000001_u32;
+public const u32 FILE_NOTIFY_CHANGE_DIR_NAME   = 0x00000002_u32;
+public const u32 FILE_NOTIFY_CHANGE_ATTRIBUTES = 0x00000004_u32;
+public const u32 FILE_NOTIFY_CHANGE_SIZE       = 0x00000008_u32;
+public const u32 FILE_NOTIFY_CHANGE_LAST_WRITE = 0x00000010_u32;
+public const u32 FILE_NOTIFY_CHANGE_SECURITY   = 0x00000100_u32;
 
 /* File Type: */
-public const u32 FILE_TYPE_UNKNOWN             = 0x0000;
-public const u32 FILE_TYPE_DISK                = 0x0001;
-public const u32 FILE_TYPE_CHAR                = 0x0002;
-public const u32 FILE_TYPE_PIPE                = 0x0003;
-public const u32 FILE_TYPE_REMOTE              = 0x8000;
+public const u32 FILE_TYPE_UNKNOWN = 0x0000_u32;
+public const u32 FILE_TYPE_DISK    = 0x0001_u32;
+public const u32 FILE_TYPE_CHAR    = 0x0002_u32;
+public const u32 FILE_TYPE_PIPE    = 0x0003_u32;
+public const u32 FILE_TYPE_REMOTE  = 0x8000_u32;
 
 /* Move Flags: */
-public const u32 MOVEFILE_COPY_ALLOWED         = 0x02;
-public const u32 MOVEFILE_REPLACE_EXISTING     = 0x01;
+public const u32 MOVEFILE_COPY_ALLOWED     = 0x02_u32;
+public const u32 MOVEFILE_REPLACE_EXISTING = 0x01_u32;
 
 
 /* ========================================================================== */
@@ -662,30 +662,30 @@ public const i32 STD_ERROR_HANDLE      = ((DWORD) - 12);
 public const i32 INVALID_HANDLE_VALUE  = ((HANDLE)(LONG_PTR) - 1);
 public const i32 ATTACH_PARENT_PROCESS = ((DWORD) - 1);
 
-public const i32 HANDLE_FLAG_INHERIT            = 0x00000001;
-public const i32 HANDLE_FLAG_PROTECT_FROM_CLOSE = 0x00000002;
+public const i32 HANDLE_FLAG_INHERIT            = 0x00000001_i32;
+public const i32 HANDLE_FLAG_PROTECT_FROM_CLOSE = 0x00000002_i32;
 
 /* Console Colors: */
-public const i32 FOREGROUND_BLUE                = 0x0001;
-public const i32 FOREGROUND_GREEN               = 0x0002;
-public const i32 FOREGROUND_RED                 = 0x0004;
-public const i32 FOREGROUND_INTENSITY           = 0x0008;
-public const i32 BACKGROUND_BLUE                = 0x0010;
-public const i32 BACKGROUND_GREEN               = 0x0020;
-public const i32 BACKGROUND_RED                 = 0x0040;
-public const i32 BACKGROUND_INTENSITY           = 0x0080;
+public const i32 FOREGROUND_BLUE      = 0x0001_i32;
+public const i32 FOREGROUND_GREEN     = 0x0002_i32;
+public const i32 FOREGROUND_RED       = 0x0004_i32;
+public const i32 FOREGROUND_INTENSITY = 0x0008_i32;
+public const i32 BACKGROUND_BLUE      = 0x0010_i32;
+public const i32 BACKGROUND_GREEN     = 0x0020_i32;
+public const i32 BACKGROUND_RED       = 0x0040_i32;
+public const i32 BACKGROUND_INTENSITY = 0x0080_i32;
 
 /* Console Handler */
-public const i32 CTRL_C_EVENT                   = 0x00;
-public const i32 CTRL_BREAK_EVENT               = 0x01;
-public const i32 CTRL_CLOSE_EVENT               = 0x02;
-public const i32 CTRL_LOGOFF_EVENT              = 0x05;
-public const i32 CTRL_SHUTDOWN_EVENT            = 0x06;
+public const i32 CTRL_C_EVENT        = 0x00_i32;
+public const i32 CTRL_BREAK_EVENT    = 0x01_i32;
+public const i32 CTRL_CLOSE_EVENT    = 0x02_i32;
+public const i32 CTRL_LOGOFF_EVENT   = 0x05_i32;
+public const i32 CTRL_SHUTDOWN_EVENT = 0x06_i32;
 
 /* HeapAlloc, HeapReAlloc, etc: */
-public const i32 HEAP_NO_SERIALIZE              = 0x00000001;
-public const i32 HEAP_ZERO_MEMORY               = 0x00000008;
-public const i32 HEAP_REALLOC_IN_PLACE_ONLY     = 0x00000010;
+public const i32 HEAP_NO_SERIALIZE          = 0x00000001_i32;
+public const i32 HEAP_ZERO_MEMORY           = 0x00000008_i32;
+public const i32 HEAP_REALLOC_IN_PLACE_ONLY = 0x00000010_i32;
 
 /* Heap / Memory: */
 enum HEAP_INFORMATION_CLASS {
@@ -695,39 +695,39 @@ enum HEAP_INFORMATION_CLASS {
 };
 
 /* VirtualAlloc.flAllocationType: */
-public const i32 MEM_COMMIT             = 0x00001000;
-public const i32 MEM_RESERVE            = 0x00002000;
-public const i32 MEM_RESET              = 0x00080000;
-public const i32 MEM_RESET_UNDO         = 0x01000000;
-public const i32 MEM_LARGE_PAGES        = 0x20000000;
-public const i32 MEM_PHYSICAL           = 0x00400000;
-public const i32 MEM_TOP_DOWN           = 0x00100000;
-public const i32 MEM_WRITE_WATCH        = 0x00200000;
+public const i32 MEM_COMMIT      = 0x00001000_i32;
+public const i32 MEM_RESERVE     = 0x00002000_i32;
+public const i32 MEM_RESET       = 0x00080000_i32;
+public const i32 MEM_RESET_UNDO  = 0x01000000_i32;
+public const i32 MEM_LARGE_PAGES = 0x20000000_i32;
+public const i32 MEM_PHYSICAL    = 0x00400000_i32;
+public const i32 MEM_TOP_DOWN    = 0x00100000_i32;
+public const i32 MEM_WRITE_WATCH = 0x00200000_i32;
 
 /* VirtualAlloc.flProtect: */
-public const i32 PAGE_EXECUTE           = 0x10;
-public const i32 PAGE_EXECUTE_READ      = 0x20;
-public const i32 PAGE_EXECUTE_READWRITE = 0x40;
-public const i32 PAGE_EXECUTE_WRITECOPY = 0x80;
-public const i32 PAGE_NOACCESS          = 0x01;
-public const i32 PAGE_READONLY          = 0x02;
-public const i32 PAGE_READWRITE         = 0x04;
-public const i32 PAGE_WRITECOPY         = 0x08;
-public const i32 PAGE_TARGETS_INVALID   = 0x40000000;
-public const i32 PAGE_TARGETS_NO_UPDATE = 0x40000000;
-public const i32 PAGE_GUARD             = 0x0100;
-public const i32 PAGE_NOCACHE           = 0x0200;
-public const i32 PAGE_WRITECOMBINE      = 0x0400;
+public const i32 PAGE_EXECUTE           = 0x10_i32;
+public const i32 PAGE_EXECUTE_READ      = 0x20_i32;
+public const i32 PAGE_EXECUTE_READWRITE = 0x40_i32;
+public const i32 PAGE_EXECUTE_WRITECOPY = 0x80_i32;
+public const i32 PAGE_NOACCESS          = 0x01_i32;
+public const i32 PAGE_READONLY          = 0x02_i32;
+public const i32 PAGE_READWRITE         = 0x04_i32;
+public const i32 PAGE_WRITECOPY         = 0x08_i32;
+public const i32 PAGE_TARGETS_INVALID   = 0x40000000_i32;
+public const i32 PAGE_TARGETS_NO_UPDATE = 0x40000000_i32;
+public const i32 PAGE_GUARD             = 0x0100_i32;
+public const i32 PAGE_NOCACHE           = 0x0200_i32;
+public const i32 PAGE_WRITECOMBINE      = 0x0400_i32;
 
 /* VirtualFree.dwFreeType: */
-public const i32 MEM_DECOMMIT           = 0x4000;
-public const i32 MEM_RELEASE            = 0x8000;
+public const i32 MEM_DECOMMIT = 0x4000_i32;
+public const i32 MEM_RELEASE  = 0x8000_i32;
 
 /* VirtualQuery State and Type: */
-public const i32 MEM_FREE               = 0x00010000;
-public const i32 MEM_IMAGE              = 0x01000000;
-public const i32 MEM_MAPPED             = 0x00040000;
-public const i32 MEM_PRIVATE            = 0x00020000;
+public const i32 MEM_FREE    = 0x00010000_i32;
+public const i32 MEM_IMAGE   = 0x01000000_i32;
+public const i32 MEM_MAPPED  = 0x00040000_i32;
+public const i32 MEM_PRIVATE = 0x00020000_i32;
 
 
 /* ========================================================================== */
@@ -745,11 +745,11 @@ typedef struct _SMALL_RECT {
 } SMALL_RECT;
 
 typedef struct _CONSOLE_SCREEN_BUFFER_INFO {
-	COORD dwSize;
-	COORD dwCursorPosition;
-	WORD wAttributes;
+	COORD      dwSize;
+	COORD      dwCursorPosition;
+	WORD       wAttributes;
 	SMALL_RECT srWindow;
-	COORD dwMaximumWindowSize;
+	COORD      dwMaximumWindowSize;
 } CONSOLE_SCREEN_BUFFER_INFO, *PCONSOLE_SCREEN_BUFFER_INFO;
 
 
@@ -764,16 +764,16 @@ typedef struct _MEMORY_BASIC_INFORMATION32 {
 } MEMORY_BASIC_INFORMATION32, *PMEMORY_BASIC_INFORMATION32;
 
 @align(16)
-	typedef struct _MEMORY_BASIC_INFORMATION64 {
+typedef struct _MEMORY_BASIC_INFORMATION64 {
 	ULONGLONG BaseAddress;
 	ULONGLONG AllocationBase;
-	DWORD AllocationProtect;
-	DWORD __alignment1;
+	DWORD     AllocationProtect;
+	DWORD     __alignment1;
 	ULONGLONG RegionSize;
-	DWORD State;
-	DWORD Protect;
-	DWORD Type;
-	DWORD __alignment2;
+	DWORD     State;
+	DWORD     Protect;
+	DWORD     Type;
+	DWORD     __alignment2;
 } MEMORY_BASIC_INFORMATION64, *PMEMORY_BASIC_INFORMATION64;
 // #if defined(_WIN64)
 // typedef MEMORY_BASIC_INFORMATION64  MEMORY_BASIC_INFORMATION;
@@ -785,30 +785,30 @@ typedef struct _MEMORY_BASIC_INFORMATION32 {
 
 
 /* MMRESULT: */
-typedef UINT MMRESULT;
-public const u32 TIMERR_BASE                    = 96;
-public const u32 TIMERR_NOERROR                 = 0;
-public const u32 TIMERR_NOCANDO                 = TIMERR_BASE + 1;
-public const u32 TIMERR_STRUCT                  = TIMERR_BASE + 33;
+typedef      UINT MMRESULT;
+public const u32  TIMERR_BASE = 96_u32;
+public const u32  TIMERR_NOERROR = 0_u32;
+public const u32  TIMERR_NOCANDO = TIMERR_BASE + 1;
+public const u32  TIMERR_STRUCT = TIMERR_BASE + 33;
 
 /* Code Pages: */
-public const u32 CP_INSTALLED                   = 0x00000001;
-public const u32 CP_SUPPORTED                   = 0x00000002;
-public const u32 CP_ACP                         = 0;
-public const u32 CP_OEMCP                       = 1;
-public const u32 CP_MACCP                       = 2;
-public const u32 CP_THREAD_ACP                  = 3;
-public const u32 CP_SYMBOL                      = 42;
-public const u32 CP_UTF7                        = 65_000;
-public const u32 CP_UTF8                        = 65_001;
+public const u32 CP_INSTALLED  = 0x00000001_u32;
+public const u32 CP_SUPPORTED  = 0x00000002_u32;
+public const u32 CP_ACP        = 0_u32;
+public const u32 CP_OEMCP      = 1_u32;
+public const u32 CP_MACCP      = 2_u32;
+public const u32 CP_THREAD_ACP = 3_u32;
+public const u32 CP_SYMBOL     = 42_u32;
+public const u32 CP_UTF7       = 65_000;
+public const u32 CP_UTF8       = 65_001;
 
 /* Format: */
-public const u32 FORMAT_MESSAGE_ALLOCATE_BUFFER = 0x00000100;
-public const u32 FORMAT_MESSAGE_ARGUMENT_ARRAY  = 0x00002000;
-public const u32 FORMAT_MESSAGE_FROM_SYSTEM     = 0x00001000;
-public const u32 FORMAT_MESSAGE_IGNORE_INSERTS  = 0x00000200;
-public const u32 FORMAT_MESSAGE_FROM_HMODULE    = 0x00000800;
-public const u32 FORMAT_MESSAGE_FROM_STRING     = 0x00000400;
+public const u32 FORMAT_MESSAGE_ALLOCATE_BUFFER = 0x00000100_u32;
+public const u32 FORMAT_MESSAGE_ARGUMENT_ARRAY  = 0x00002000_u32;
+public const u32 FORMAT_MESSAGE_FROM_SYSTEM     = 0x00001000_u32;
+public const u32 FORMAT_MESSAGE_IGNORE_INSERTS  = 0x00000200_u32;
+public const u32 FORMAT_MESSAGE_FROM_HMODULE    = 0x00000800_u32;
+public const u32 FORMAT_MESSAGE_FROM_STRING     = 0x00000400_u32;
 
 /* Language ID: */
 comptime WORD MAKELANGID(u16 p, u16 s) {
@@ -821,20 +821,20 @@ comptime WORD SUBLANGID(u16 lgid) {
 	return (lgid >> 10);
 }
 
-public const u32 LANG_NEUTRAL   = 0x00;
-public const u32 LANG_INVARIANT = 0x7F;
-public const u32 LANG_ENGLISH   = 0x09;
-public const u32 LANG_GERMAN    = 0x07;
+public const u32 LANG_NEUTRAL   = 0x00_u32;
+public const u32 LANG_INVARIANT = 0x7F_u32;
+public const u32 LANG_ENGLISH   = 0x09_u32;
+public const u32 LANG_GERMAN    = 0x07_u32;
 
-public const u32 SUBLANG_NEUTRAL            = 0x00;
-public const u32 SUBLANG_DEFAULT            = 0x01;
-public const u32 SUBLANG_SYS_DEFAULT        = 0x02;
-public const u32 SUBLANG_CUSTOM_DEFAULT     = 0x03;
-public const u32 SUBLANG_CUSTOM_UNSPECIFIED = 0x04;
-public const u32 SUBLANG_UI_CUSTOM_DEFAULT  = 0x05;
-public const u32 SUBLANG_ENGLISH_US         = 0x01;
-public const u32 SUBLANG_ENGLISH_UK         = 0x02;
-public const u32 SUBLANG_GERMAN             = 0x01;
+public const u32 SUBLANG_NEUTRAL            = 0x00_u32;
+public const u32 SUBLANG_DEFAULT            = 0x01_u32;
+public const u32 SUBLANG_SYS_DEFAULT        = 0x02_u32;
+public const u32 SUBLANG_CUSTOM_DEFAULT     = 0x03_u32;
+public const u32 SUBLANG_CUSTOM_UNSPECIFIED = 0x04_u32;
+public const u32 SUBLANG_UI_CUSTOM_DEFAULT  = 0x05_u32;
+public const u32 SUBLANG_ENGLISH_US         = 0x01_u32;
+public const u32 SUBLANG_ENGLISH_UK         = 0x02_u32;
+public const u32 SUBLANG_GERMAN             = 0x01_u32;
 
 
 /* ========================================================================== */
@@ -857,28 +857,28 @@ typedef struct _TIME_ZONE_INFORMATION {
 	LONG Bias;
 	WCHAR StandardName[32];
 	SYSTEMTIME StandardDate;
-	LONG StandardBias;
+	LONG       StandardBias;
 	WCHAR DaylightName[32];
 	SYSTEMTIME DaylightDate;
-	LONG DaylightBias;
+	LONG       DaylightBias;
 } TIME_ZONE_INFORMATION, *PTIME_ZONE_INFORMATION;
 typedef PTIME_ZONE_INFORMATION LPTIME_ZONE_INFORMATION;
 
 comptime u32 _byteswap_ulong(u32 x) {
-	return (((u32)(x) << 24) |
+	return (((u32)(x) << 24)           |
 		(((u32)(x) << 8) & 0x00FF0000) |
-		(((u32)(x) >> 8) & 0xFF00) |
+		(((u32)(x) >> 8) & 0xFF00)     |
 		((u32)(x) >> 24));
 }
 
 comptime u64 _byteswap_uint64(u64 x) {
-	return (((u64)(x) << 56) |
+	return (((u64)(x) << 56)                    |
 		(((u64)(x) << 40) & 0x00FF000000000000) |
 		(((u64)(x) << 24) & 0x0000FF0000000000) |
-		(((u64)(x) << 8) & 0x000000FF00000000) |
-		(((u64)(x) >> 8) & 0xFF000000) |
-		(((u64)(x) >> 24) & 0x00FF0000) |
-		(((u64)(x) >> 40) & 0xFF00) |
+		(((u64)(x) << 8) & 0x000000FF00000000)  |
+		(((u64)(x) >> 8) & 0xFF000000)          |
+		(((u64)(x) >> 24) & 0x00FF0000)         |
+		(((u64)(x) >> 40) & 0xFF00)             |
 		((u64)(x) >> 56));
 }
 
@@ -893,7 +893,7 @@ typedef struct timecaps_tag {
 
 /* Originally defined in threads.h */
 //#ifndef INFINITE
-public const u32 INFINITE                  = 0xFFFFFFFF;
+public const u32 INFINITE = 0xFFFFFFFF_u32;
 //#endif
 
 /* (STANDARD_RIGHTS_REQUIRED y SYNCHRONIZE ya se definen arriba.) */
@@ -906,9 +906,9 @@ public const u32 PROCESS_TERMINATE         = (0x0001);
 public const u32 PROCESS_VM_READ           = (0x0010);
 public const u32 PROCESS_ALL_ACCESS = (
 	STANDARD_RIGHTS_REQUIRED |
-	SYNCHRONIZE |
+	SYNCHRONIZE              |
 	0xFFFF
-	);
+);
 
 /* Tokens: */
 public const u32 TOKEN_ASSIGN_PRIMARY    = (0x0001);
@@ -923,44 +923,44 @@ public const u32 TOKEN_ADJUST_SESSIONID  = (0x0100);
 
 public const u32 TOKEN_ALL_ACCESS_P = (
 	STANDARD_RIGHTS_REQUIRED |
-	TOKEN_ASSIGN_PRIMARY |
-	TOKEN_DUPLICATE |
-	TOKEN_IMPERSONATE |
-	TOKEN_QUERY |
-	TOKEN_QUERY_SOURCE |
-	TOKEN_ADJUST_PRIVILEGES |
-	TOKEN_ADJUST_GROUPS |
+	TOKEN_ASSIGN_PRIMARY     |
+	TOKEN_DUPLICATE          |
+	TOKEN_IMPERSONATE        |
+	TOKEN_QUERY              |
+	TOKEN_QUERY_SOURCE       |
+	TOKEN_ADJUST_PRIVILEGES  |
+	TOKEN_ADJUST_GROUPS      |
 	TOKEN_ADJUST_DEFAULT
-	);
+);
 
-public const u32 SE_PRIVILEGE_ENABLED_BY_DEFAULT    = (0x00000001);
-public const u32 SE_PRIVILEGE_ENABLED               = (0x00000002);
-public const u32 SE_PRIVILEGE_REMOVED               = (0x00000004);
-public const u32 SE_PRIVILEGE_USED_FOR_ACCESS       = (0x80000000);
+public const u32 SE_PRIVILEGE_ENABLED_BY_DEFAULT = (0x00000001);
+public const u32 SE_PRIVILEGE_ENABLED            = (0x00000002);
+public const u32 SE_PRIVILEGE_REMOVED            = (0x00000004);
+public const u32 SE_PRIVILEGE_USED_FOR_ACCESS    = (0x80000000);
 
 /* Status */
-public const u32 STATUS_WAIT_0                      = ((DWORD)0x00000000);
-public const u32 STATUS_TIMEOUT                     = ((DWORD)0x00000102);
-public const u32 STATUS_PENDING                     = ((DWORD)0x00000103);
-public const u32 STILL_ACTIVE                       = STATUS_PENDING;
+public const u32 STATUS_WAIT_0  = ((DWORD)0x00000000);
+public const u32 STATUS_TIMEOUT = ((DWORD)0x00000102);
+public const u32 STATUS_PENDING = ((DWORD)0x00000103);
+public const u32 STILL_ACTIVE   = STATUS_PENDING;
 
 /* Startupinfo */
-public const u32 STARTF_USESHOWWINDOW               = 0x00000001;
-public const u32 STARTF_USESIZE                     = 0x00000002;
-public const u32 STARTF_USEPOSITION                 = 0x00000004;
-public const u32 STARTF_USECOUNTCHARS               = 0x00000008;
-public const u32 STARTF_USEFILLATTRIBUTE            = 0x00000010;
-public const u32 STARTF_RUNFULLSCREEN               = 0x00000020;
-public const u32 STARTF_FORCEONFEEDBACK             = 0x00000040;
-public const u32 STARTF_FORCEOFFFEEDBACK            = 0x00000080;
-public const u32 STARTF_USESTDHANDLES               = 0x00000100;
+public const u32 STARTF_USESHOWWINDOW    = 0x00000001_u32;
+public const u32 STARTF_USESIZE          = 0x00000002_u32;
+public const u32 STARTF_USEPOSITION      = 0x00000004_u32;
+public const u32 STARTF_USECOUNTCHARS    = 0x00000008_u32;
+public const u32 STARTF_USEFILLATTRIBUTE = 0x00000010_u32;
+public const u32 STARTF_RUNFULLSCREEN    = 0x00000020_u32;
+public const u32 STARTF_FORCEONFEEDBACK  = 0x00000040_u32;
+public const u32 STARTF_FORCEOFFFEEDBACK = 0x00000080_u32;
+public const u32 STARTF_USESTDHANDLES    = 0x00000100_u32;
 
 
 /* Priority Classes / CreateProcess: */
-public const u32 NORMAL_PRIORITY_CLASS              = 0x00000020;
+public const u32 NORMAL_PRIORITY_CLASS = 0x00000020_u32;
 
 /* Job Objects: */
-public const u32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+public const u32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000_u32;
 typedef enum _JOBOBJECTINFOCLASS {
 	JobObjectBasicAccountingInformation = 1,
 	JobObjectBasicLimitInformation,
@@ -993,40 +993,40 @@ typedef enum _JOBOBJECTINFOCLASS {
 
 /* Process: */
 typedef struct _STARTUPINFOA {
-	DWORD cb;
-	LPSTR lpReserved;
-	LPSTR lpDesktop;
-	LPSTR lpTitle;
-	DWORD dwX;
-	DWORD dwY;
-	DWORD dwXSize;
-	DWORD dwYSize;
-	DWORD dwXCountChars;
-	DWORD dwYCountChars;
-	DWORD dwFillAttribute;
-	DWORD dwFlags;
-	WORD wShowWindow;
-	WORD cbReserved2;
+	DWORD  cb;
+	LPSTR  lpReserved;
+	LPSTR  lpDesktop;
+	LPSTR  lpTitle;
+	DWORD  dwX;
+	DWORD  dwY;
+	DWORD  dwXSize;
+	DWORD  dwYSize;
+	DWORD  dwXCountChars;
+	DWORD  dwYCountChars;
+	DWORD  dwFillAttribute;
+	DWORD  dwFlags;
+	WORD   wShowWindow;
+	WORD   cbReserved2;
 	LPBYTE lpReserved2;
 	HANDLE hStdInput;
 	HANDLE hStdOutput;
 	HANDLE hStdError;
 } STARTUPINFOA, *LPSTARTUPINFOA;
 typedef struct _STARTUPINFOW {
-	DWORD cb;
+	DWORD  cb;
 	LPWSTR lpReserved;
 	LPWSTR lpDesktop;
 	LPWSTR lpTitle;
-	DWORD dwX;
-	DWORD dwY;
-	DWORD dwXSize;
-	DWORD dwYSize;
-	DWORD dwXCountChars;
-	DWORD dwYCountChars;
-	DWORD dwFillAttribute;
-	DWORD dwFlags;
-	WORD wShowWindow;
-	WORD cbReserved2;
+	DWORD  dwX;
+	DWORD  dwY;
+	DWORD  dwXSize;
+	DWORD  dwYSize;
+	DWORD  dwXCountChars;
+	DWORD  dwYCountChars;
+	DWORD  dwFillAttribute;
+	DWORD  dwFlags;
+	WORD   wShowWindow;
+	WORD   cbReserved2;
 	LPBYTE lpReserved2;
 	HANDLE hStdInput;
 	HANDLE hStdOutput;
@@ -1038,31 +1038,31 @@ typedef struct _STARTUPINFOW {
 typedef struct _PROC_THREAD_ATTRIBUTE_LIST
 	* PPROC_THREAD_ATTRIBUTE_LIST, *LPPROC_THREAD_ATTRIBUTE_LIST;
 typedef struct _STARTUPINFOEXA {
-	STARTUPINFOA StartupInfo;
+	STARTUPINFOA                StartupInfo;
 	PPROC_THREAD_ATTRIBUTE_LIST lpAttributeList;
 } STARTUPINFOEXA, *LPSTARTUPINFOEXA;
 typedef struct _STARTUPINFOEXW {
-	STARTUPINFOW StartupInfo;
+	STARTUPINFOW                StartupInfo;
 	PPROC_THREAD_ATTRIBUTE_LIST lpAttributeList;
 } STARTUPINFOEXW, *LPSTARTUPINFOEXW;
 typedef struct _PROCESS_INFORMATION {
 	HANDLE hProcess;
 	HANDLE hThread;
-	DWORD dwProcessId;
-	DWORD dwThreadId;
+	DWORD  dwProcessId;
+	DWORD  dwThreadId;
 } PROCESS_INFORMATION, *LPPROCESS_INFORMATION;
 
 /* Job Objects: */
 typedef struct _JOBOBJECT_BASIC_LIMIT_INFORMATION {
 	LARGE_INTEGER PerProcessUserTimeLimit;
 	LARGE_INTEGER PerJobUserTimeLimit;
-	DWORD LimitFlags;
-	SIZE_T MinimumWorkingSetSize;
-	SIZE_T MaximumWorkingSetSize;
-	DWORD ActiveProcessLimit;
-	ULONG_PTR Affinity;
-	DWORD PriorityClass;
-	DWORD SchedulingClass;
+	DWORD         LimitFlags;
+	SIZE_T        MinimumWorkingSetSize;
+	SIZE_T        MaximumWorkingSetSize;
+	DWORD         ActiveProcessLimit;
+	ULONG_PTR     Affinity;
+	DWORD         PriorityClass;
+	DWORD         SchedulingClass;
 } JOBOBJECT_BASIC_LIMIT_INFORMATION, *PJOBOBJECT_BASIC_LIMIT_INFORMATION;
 
 typedef struct _IO_COUNTERS {
@@ -1076,110 +1076,110 @@ typedef struct _IO_COUNTERS {
 
 typedef struct _JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
 	JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
-	IO_COUNTERS IoInfo;
-	SIZE_T ProcessMemoryLimit;
-	SIZE_T JobMemoryLimit;
-	SIZE_T PeakProcessMemoryUsed;
-	SIZE_T PeakJobMemoryUsed;
+	IO_COUNTERS                       IoInfo;
+	SIZE_T                            ProcessMemoryLimit;
+	SIZE_T                            JobMemoryLimit;
+	SIZE_T                            PeakProcessMemoryUsed;
+	SIZE_T                            PeakJobMemoryUsed;
 } JOBOBJECT_EXTENDED_LIMIT_INFORMATION, *PJOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 
 
 /* Display Devices: */
-public const u32 DISPLAY_DEVICE_ACTIVE         = 0x00000001;
-public const u32 DISPLAY_DEVICE_ATTACHED       = 0x00000002;
-public const u32 DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004;
+public const u32 DISPLAY_DEVICE_ACTIVE         = 0x00000001_u32;
+public const u32 DISPLAY_DEVICE_ATTACHED       = 0x00000002_u32;
+public const u32 DISPLAY_DEVICE_PRIMARY_DEVICE = 0x00000004_u32;
 
 /* System Metrics */
-public const u32 SM_CXSCREEN                   = 0;
-public const u32 SM_CYSCREEN                   = 1;
-public const u32 SM_CMONITORS                  = 80;
+public const u32 SM_CXSCREEN  = 0_u32;
+public const u32 SM_CYSCREEN  = 1_u32;
+public const u32 SM_CMONITORS = 80_u32;
 
 /* Versions */
-public const u32 VER_EQUAL                     = 1;
-public const u32 VER_GREATER                   = 2;
-public const u32 VER_GREATER_EQUAL             = 3;
-public const u32 VER_LESS                      = 4;
-public const u32 VER_LESS_EQUAL                = 5;
-public const u32 VER_AND                       = 6;
-public const u32 VER_OR                        = 7;
+public const u32 VER_EQUAL         = 1_u32;
+public const u32 VER_GREATER       = 2_u32;
+public const u32 VER_GREATER_EQUAL = 3_u32;
+public const u32 VER_LESS          = 4_u32;
+public const u32 VER_LESS_EQUAL    = 5_u32;
+public const u32 VER_AND           = 6_u32;
+public const u32 VER_OR            = 7_u32;
 
-public const u32 _WIN32_WINNT_WINXP = 0x0501;
-public const u32 _WIN32_WINNT_WS03  = 0x0502;
-public const u32 _WIN32_WINNT_VISTA = 0x0600;
-public const u32 _WIN32_WINNT_WS08  = 0x0600;
-public const u32 _WIN32_WINNT_WIN7  = 0x0601;
-public const u32 _WIN32_WINNT_WIN8  = 0x0602;
-public const u32 _WIN32_WINNT_WIN81 = 0x0603;
-public const u32 _WIN32_WINNT_WIN10 = 0x0A00;
+public const u32 _WIN32_WINNT_WINXP = 0x0501_u32;
+public const u32 _WIN32_WINNT_WS03  = 0x0502_u32;
+public const u32 _WIN32_WINNT_VISTA = 0x0600_u32;
+public const u32 _WIN32_WINNT_WS08  = 0x0600_u32;
+public const u32 _WIN32_WINNT_WIN7  = 0x0601_u32;
+public const u32 _WIN32_WINNT_WIN8  = 0x0602_u32;
+public const u32 _WIN32_WINNT_WIN81 = 0x0603_u32;
+public const u32 _WIN32_WINNT_WIN10 = 0x0A00_u32;
 
-public const u32 VER_MINORVERSION     = 0x00000001;
-public const u32 VER_MAJORVERSION     = 0x00000002;
-public const u32 VER_BUILDNUMBER      = 0x00000004;
-public const u32 VER_PLATFORMID       = 0x00000008;
-public const u32 VER_SERVICEPACKMINOR = 0x00000010;
-public const u32 VER_SERVICEPACKMAJOR = 0x00000020;
+public const u32 VER_MINORVERSION     = 0x00000001_u32;
+public const u32 VER_MAJORVERSION     = 0x00000002_u32;
+public const u32 VER_BUILDNUMBER      = 0x00000004_u32;
+public const u32 VER_PLATFORMID       = 0x00000008_u32;
+public const u32 VER_SERVICEPACKMINOR = 0x00000010_u32;
+public const u32 VER_SERVICEPACKMAJOR = 0x00000020_u32;
 
 /* Registry Key Classes */
-public const u32 HKEY_CLASSES_ROOT    = ((HKEY)(ULONG_PTR)((LONG)0x80000000));
-public const u32 HKEY_CURRENT_USER    = ((HKEY)(ULONG_PTR)((LONG)0x80000001));
-public const u32 HKEY_LOCAL_MACHINE   = ((HKEY)(ULONG_PTR)((LONG)0x80000002));
-public const u32 HKEY_USERS           = ((HKEY)(ULONG_PTR)((LONG)0x80000003));
+public const u32 HKEY_CLASSES_ROOT  = ((HKEY)(ULONG_PTR)((LONG)0x80000000));
+public const u32 HKEY_CURRENT_USER  = ((HKEY)(ULONG_PTR)((LONG)0x80000001));
+public const u32 HKEY_LOCAL_MACHINE = ((HKEY)(ULONG_PTR)((LONG)0x80000002));
+public const u32 HKEY_USERS         = ((HKEY)(ULONG_PTR)((LONG)0x80000003));
 
 /* Registry Types */
-public const u32 REG_NONE             = 0;
-public const u32 REG_SZ               = 1;
-public const u32 REG_EXPAND_SZ        = 2;
+public const u32 REG_NONE      = 0_u32;
+public const u32 REG_SZ        = 1_u32;
+public const u32 REG_EXPAND_SZ = 2_u32;
 
-public const u32 REG_BINARY                     = 3;
-public const u32 REG_DWORD                      = 4;
-public const u32 REG_DWORD_LITTLE_ENDIAN        = 4;
-public const u32 REG_DWORD_BIG_ENDIAN           = 5;
-public const u32 REG_LINK                       = 6;
-public const u32 REG_MULTI_SZ                   = 7;
-public const u32 REG_RESOURCE_LIST              = 8;
-public const u32 REG_FULL_RESOURCE_DESCRIPTOR   = 9;
-public const u32 REG_RESOURCE_REQUIREMENTS_LIST = 10;
-public const u32 REG_QWORD                      = 11;
-public const u32 REG_QWORD_LITTLE_ENDIAN        = 11;
+public const u32 REG_BINARY                     = 3_u32;
+public const u32 REG_DWORD                      = 4_u32;
+public const u32 REG_DWORD_LITTLE_ENDIAN        = 4_u32;
+public const u32 REG_DWORD_BIG_ENDIAN           = 5_u32;
+public const u32 REG_LINK                       = 6_u32;
+public const u32 REG_MULTI_SZ                   = 7_u32;
+public const u32 REG_RESOURCE_LIST              = 8_u32;
+public const u32 REG_FULL_RESOURCE_DESCRIPTOR   = 9_u32;
+public const u32 REG_RESOURCE_REQUIREMENTS_LIST = 10_u32;
+public const u32 REG_QWORD                      = 11_u32;
+public const u32 REG_QWORD_LITTLE_ENDIAN        = 11_u32;
 
 
 /* Registry Access Rights */
-public const u32 KEY_QUERY_VALUE                = 0x0001;
-public const u32 KEY_SET_VALUE                  = 0x0002;
-public const u32 KEY_CREATE_SUB_KEY             = 0x0004;
-public const u32 KEY_ENUMERATE_SUB_KEYS         = 0x0008;
-public const u32 KEY_NOTIFY                     = 0x0010;
-public const u32 KEY_CREATE_LINK                = 0x0020;
-public const u32 KEY_WOW64_32KEY                = 0x0200;
-public const u32 KEY_WOW64_64KEY                = 0x0100;
-public const u32 KEY_WOW64_RES                  = 0x0300;
+public const u32 KEY_QUERY_VALUE        = 0x0001_u32;
+public const u32 KEY_SET_VALUE          = 0x0002_u32;
+public const u32 KEY_CREATE_SUB_KEY     = 0x0004_u32;
+public const u32 KEY_ENUMERATE_SUB_KEYS = 0x0008_u32;
+public const u32 KEY_NOTIFY             = 0x0010_u32;
+public const u32 KEY_CREATE_LINK        = 0x0020_u32;
+public const u32 KEY_WOW64_32KEY        = 0x0200_u32;
+public const u32 KEY_WOW64_64KEY        = 0x0100_u32;
+public const u32 KEY_WOW64_RES          = 0x0300_u32;
 
 public const u32 KEY_READ = (
 	(
-		STANDARD_RIGHTS_READ |
-		KEY_QUERY_VALUE |
+		STANDARD_RIGHTS_READ   |
+		KEY_QUERY_VALUE        |
 		KEY_ENUMERATE_SUB_KEYS |
 		KEY_NOTIFY
 	) & (~SYNCHRONIZE)
-	);
+);
 
 public const u32 KEY_WRITE = (
 	(STANDARD_RIGHTS_WRITE | KEY_SET_VALUE | KEY_CREATE_SUB_KEY) & (~SYNCHRONIZE)
-	);
+);
 
 public const u32 KEY_EXECUTE = ((KEY_READ) & (~SYNCHRONIZE));
 
 public const u32 KEY_ALL_ACCESS = (
 	(
-		STANDARD_RIGHTS_ALL |
-		KEY_QUERY_VALUE |
-		KEY_SET_VALUE |
-		KEY_CREATE_SUB_KEY |
+		STANDARD_RIGHTS_ALL    |
+		KEY_QUERY_VALUE        |
+		KEY_SET_VALUE          |
+		KEY_CREATE_SUB_KEY     |
 		KEY_ENUMERATE_SUB_KEYS |
-		KEY_NOTIFY |
+		KEY_NOTIFY             |
 		KEY_CREATE_LINK
 	) & (~SYNCHRONIZE)
-	);
+);
 
 
 /* ========================================================================== */
@@ -1193,15 +1193,15 @@ typedef struct _SYSTEM_INFO {
 		};
 	};
 
-	DWORD dwPageSize;
-	LPVOID lpMinimumApplicationAddress;
-	LPVOID lpMaximumApplicationAddress;
+	DWORD     dwPageSize;
+	LPVOID    lpMinimumApplicationAddress;
+	LPVOID    lpMaximumApplicationAddress;
 	DWORD_PTR dwActiveProcessorMask;
-	DWORD dwNumberOfProcessors;
-	DWORD dwProcessorType;
-	DWORD dwAllocationGranularity;
-	WORD wProcessorLevel;
-	WORD wProcessorRevision;
+	DWORD     dwNumberOfProcessors;
+	DWORD     dwProcessorType;
+	DWORD     dwAllocationGranularity;
+	WORD      wProcessorLevel;
+	WORD      wProcessorRevision;
 } SYSTEM_INFO, *LPSYSTEM_INFO;
 
 /* Device Context: */
@@ -1268,15 +1268,15 @@ enum PROCESSOR_CACHE_TYPE : u32 {
 };
 
 typedef struct _CACHE_DESCRIPTOR {
-	BYTE Level;
-	BYTE Associativity;
-	WORD LineSize;
-	DWORD Size;
+	BYTE                 Level;
+	BYTE                 Associativity;
+	WORD                 LineSize;
+	DWORD                Size;
 	PROCESSOR_CACHE_TYPE Type;
 } CACHE_DESCRIPTOR, *PCACHE_DESCRIPTOR;
 
 typedef struct _SYSTEM_LOGICAL_PROCESSOR_INFORMATION {
-	ULONG_PTR ProcessorMask;
+	ULONG_PTR                      ProcessorMask;
 	LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
 
 	union {
@@ -1298,7 +1298,7 @@ typedef struct _SYSTEM_LOGICAL_PROCESSOR_INFORMATION {
 typedef ULONG_PTR KAFFINITY;
 typedef struct _GROUP_AFFINITY {
 	KAFFINITY Mask;
-	WORD Group;
+	WORD      Group;
 	WORD Reserved[3];
 } GROUP_AFFINITY, *PGROUP_AFFINITY;
 
@@ -1323,10 +1323,10 @@ typedef struct _GROUP_RELATIONSHIP {
 } GROUP_RELATIONSHIP, *PGROUP_RELATIONSHIP;
 
 typedef struct _CACHE_RELATIONSHIP {
-	BYTE Level;
-	BYTE Associativity;
-	WORD LineSize;
-	DWORD CacheSize;
+	BYTE                 Level;
+	BYTE                 Associativity;
+	WORD                 LineSize;
+	DWORD                CacheSize;
 	PROCESSOR_CACHE_TYPE Type;
 	BYTE Reserved[20];
 	GROUP_AFFINITY GroupMask;
@@ -1342,18 +1342,18 @@ typedef struct _PROCESSOR_RELATIONSHIP {
 
 typedef struct _SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX {
 	LOGICAL_PROCESSOR_RELATIONSHIP Relationship;
-	DWORD Size;
+	DWORD                          Size;
 	union {
 		PROCESSOR_RELATIONSHIP Processor;
 		NUMA_NODE_RELATIONSHIP NumaNode;
-		CACHE_RELATIONSHIP Cache;
-		GROUP_RELATIONSHIP Group;
+		CACHE_RELATIONSHIP     Cache;
+		GROUP_RELATIONSHIP     Group;
 	};
 } SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, *PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX;
 
 typedef struct _PROCESS_MEMORY_COUNTERS {
-	DWORD cb;
-	DWORD PageFaultCount;
+	DWORD  cb;
+	DWORD  PageFaultCount;
 	SIZE_T PeakWorkingSetSize;
 	SIZE_T WorkingSetSize;
 	SIZE_T QuotaPeakPagedPoolUsage;
@@ -1366,8 +1366,8 @@ typedef struct _PROCESS_MEMORY_COUNTERS {
 
 /* Memory: */
 typedef struct _MEMORYSTATUSEX {
-	DWORD dwLength;
-	DWORD dwMemoryLoad;
+	DWORD     dwLength;
+	DWORD     dwMemoryLoad;
 	DWORDLONG ullTotalPhys;
 	DWORDLONG ullAvailPhys;
 	DWORDLONG ullTotalPageFile;
@@ -1384,9 +1384,9 @@ typedef struct _MEMORYSTATUSEX {
  * std__ntwindows__PROCESSOR_NUMBER*" al pasar uno donde se espera el otro. */
 
 
-public const u16 ALL_PROCESSOR_GROUPS = 0xFFFF;
+public const u16 ALL_PROCESSOR_GROUPS = 0xFFFF_u16;
 
-public const u8  MAX_COMPUTERNAME_LENGTH  = 31;
+public const u8 MAX_COMPUTERNAME_LENGTH = 31_u8;
 
 // GetWindowsVersionCUSTOM se omite: en C detecta la version via macros de
 // preprocesador (_WIN32_WINNT_*, HIBYTE/LOBYTE) resueltos en tiempo de
@@ -1394,59 +1394,59 @@ public const u8  MAX_COMPUTERNAME_LENGTH  = 31;
 
 
 /* Thread creation flags: */
-public const u32 CREATE_NEW_CONSOLE       = 0x00000010;
-public const u32 CREATE_NO_WINDOW         = 0x08000000;
-public const u32 CREATE_SUSPENDED         = 0x00000004;
-public const u32 DETACHED_PROCESS         = 0x00000008;
+public const u32 CREATE_NEW_CONSOLE = 0x00000010_u32;
+public const u32 CREATE_NO_WINDOW   = 0x08000000_u32;
+public const u32 CREATE_SUSPENDED   = 0x00000004_u32;
+public const u32 DETACHED_PROCESS   = 0x00000008_u32;
 
 /* Thread Access Rights: */
-public const u32 THREAD_GET_CONTEXT       = 0x0008;
-public const u32 THREAD_QUERY_INFORMATION = 0x0040;
-public const u32 THREAD_SUSPEND_RESUME    = 0x0002;
-public const u32 THREAD_TERMINATE         = 0x0001;
+public const u32 THREAD_GET_CONTEXT       = 0x0008_u32;
+public const u32 THREAD_QUERY_INFORMATION = 0x0040_u32;
+public const u32 THREAD_SUSPEND_RESUME    = 0x0002_u32;
+public const u32 THREAD_TERMINATE         = 0x0001_u32;
 public const u32 THREAD_ALL_ACCESS = (
 	STANDARD_RIGHTS_REQUIRED |
-	SYNCHRONIZE |
+	SYNCHRONIZE              |
 	0xFFFF
-	);
+);
 
 /* Semaphore Access Rights: */
-public const u32 SEMAPHORE_ALL_ACCESS   = 0x001F0003;
-public const u32 SEMAPHORE_MODIFY_STATE = 0x0002;
-public const u32 EVENT_ALL_ACCESS       = 0x001F0003;
-public const u32 EVENT_MODIFY_STATE     = 0x0002;
+public const u32 SEMAPHORE_ALL_ACCESS   = 0x001F0003_u32;
+public const u32 SEMAPHORE_MODIFY_STATE = 0x0002_u32;
+public const u32 EVENT_ALL_ACCESS       = 0x001F0003_u32;
+public const u32 EVENT_MODIFY_STATE     = 0x0002_u32;
 
 
 /* Virtual Keys: */
-public const u32 VK_BACK                = 0x08;
-public const u32 VK_TAB                 = 0x09;
-public const u32 VK_SHIFT               = 0x10;
-public const u32 VK_CONTROL             = 0x11;
-public const u32 VK_MENU                = 0x12;
-public const u32 VK_RETURN              = 0x0D;
+public const u32 VK_BACK    = 0x08_u32;
+public const u32 VK_TAB     = 0x09_u32;
+public const u32 VK_SHIFT   = 0x10_u32;
+public const u32 VK_CONTROL = 0x11_u32;
+public const u32 VK_MENU    = 0x12_u32;
+public const u32 VK_RETURN  = 0x0D_u32;
 
-public const u32 VK_ESCAPE = 0x1B;
+public const u32 VK_ESCAPE = 0x1B_u32;
 
-public const u32 VK_SPACE    = 0x20;
-public const u32 VK_PRIOR    = 0x21;
-public const u32 VK_NEXT     = 0x22;
-public const u32 VK_END      = 0x23;
-public const u32 VK_HOME     = 0x24;
-public const u32 VK_LEFT     = 0x25;
-public const u32 VK_UP       = 0x26;
-public const u32 VK_RIGHT    = 0x27;
-public const u32 VK_DOWN     = 0x28;
-public const u32 VK_SELECT   = 0x29;
-public const u32 VK_PRINT    = 0x2A;
-public const u32 VK_EXECUTE  = 0x2B;
-public const u32 VK_SNAPSHOT = 0x2C;
-public const u32 VK_INSERT   = 0x2D;
-public const u32 VK_DELETE   = 0x2E;
-public const u32 VK_HELP     = 0x2F;
+public const u32 VK_SPACE    = 0x20_u32;
+public const u32 VK_PRIOR    = 0x21_u32;
+public const u32 VK_NEXT     = 0x22_u32;
+public const u32 VK_END      = 0x23_u32;
+public const u32 VK_HOME     = 0x24_u32;
+public const u32 VK_LEFT     = 0x25_u32;
+public const u32 VK_UP       = 0x26_u32;
+public const u32 VK_RIGHT    = 0x27_u32;
+public const u32 VK_DOWN     = 0x28_u32;
+public const u32 VK_SELECT   = 0x29_u32;
+public const u32 VK_PRINT    = 0x2A_u32;
+public const u32 VK_EXECUTE  = 0x2B_u32;
+public const u32 VK_SNAPSHOT = 0x2C_u32;
+public const u32 VK_INSERT   = 0x2D_u32;
+public const u32 VK_DELETE   = 0x2E_u32;
+public const u32 VK_HELP     = 0x2F_u32;
 
-public const u32 VK_LWIN       = 0x5B;
-public const u32 VK_RWIN       = 0x5C;
-public const u32 VK_PROCESSKEY = 0xE5;
+public const u32 VK_LWIN       = 0x5B_u32;
+public const u32 VK_RWIN       = 0x5C_u32;
+public const u32 VK_PROCESSKEY = 0xE5_u32;
 
 
 /* ========================================================================== */
@@ -1464,16 +1464,16 @@ typedef struct _RECT {
 // el puntero a funcion crudo de Vesta `cfn(...) -> R`.
 typedef cfn(HWND, UINT, WPARAM, LPARAM) -> LRESULT WNDPROC;
 typedef struct tagWNDCLASS {
-	UINT style;
-	WNDPROC lpfnWndProc;
-	int cbClsExtra;
-	int cbWndExtra;
+	UINT      style;
+	WNDPROC   lpfnWndProc;
+	int       cbClsExtra;
+	int       cbWndExtra;
 	HINSTANCE hInstance;
-	HICON hIcon;
-	HCURSOR hCursor;
-	HBRUSH hbrBackground;
-	LPCTSTR lpszMenuName;
-	LPCTSTR lpszClassName;
+	HICON     hIcon;
+	HCURSOR   hCursor;
+	HBRUSH    hbrBackground;
+	LPCTSTR   lpszMenuName;
+	LPCTSTR   lpszClassName;
 } WNDCLASS, *PWNDCLASS;
 
 /* Messages: */
@@ -1483,12 +1483,12 @@ typedef struct tagPOINT {
 } POINT, *PPOINT;
 
 typedef struct tagMSG {
-	HWND hwnd;
-	UINT message;
+	HWND   hwnd;
+	UINT   message;
 	WPARAM wParam;
 	LPARAM lParam;
-	DWORD time;
-	POINT pt;
+	DWORD  time;
+	POINT  pt;
 } MSG, *PMSG, *LPMSG;
 
 // GetCurrentFiber: el puntero al fibra actual vive en el TEB.  En x64 esta en
@@ -1496,7 +1496,7 @@ typedef struct tagMSG {
 // declaracion (la conmutacion condicional por arch es por-declaracion, no por
 // statement): se compila solo la definicion cuyo @Target casa con el objetivo.
 @Target("arch:x86_64")
-	PVOID GetCurrentFiber() {
+PVOID GetCurrentFiber() {
 	asm volatile {
 		mov rax, gs:[0x20]
 		ret
@@ -1504,7 +1504,7 @@ typedef struct tagMSG {
 }
 
 @Target("arch:x86")
-	PVOID GetCurrentFiber() {
+PVOID GetCurrentFiber() {
 	asm volatile {
 		mov rax, fs:[0x10]
 		ret
@@ -1512,151 +1512,151 @@ typedef struct tagMSG {
 }
 
 PVOID GetFiberData() {
-	return *(PVOID *)GetCurrentFiber();
+	return *(PVOID*)GetCurrentFiber();
 }
 
-public const u32 FLS_OUT_OF_INDEXES                 = ((DWORD)0xFFFFFFFF);
+public const u32 FLS_OUT_OF_INDEXES = ((DWORD)0xFFFFFFFF);
 
 
 /* Console Input Mode flags */
-public const u16 ENABLE_PROCESSED_INPUT             = 0x0001;
-public const u16 ENABLE_LINE_INPUT                  = 0x0002;
-public const u16 ENABLE_ECHO_INPUT                  = 0x0004;
-public const u16 ENABLE_WINDOW_INPUT                = 0x0008;
-public const u16 ENABLE_MOUSE_INPUT                 = 0x0010;
-public const u16 ENABLE_INSERT_MODE                 = 0x0020;
-public const u16 ENABLE_QUICK_EDIT_MODE             = 0x0040;
-public const u16 ENABLE_EXTENDED_FLAGS              = 0x0080;
-public const u16 ENABLE_AUTO_POSITION               = 0x0100;
-public const u16 ENABLE_VIRTUAL_TERMINAL_INPUT      = 0x0200;
+public const u16 ENABLE_PROCESSED_INPUT        = 0x0001_u16;
+public const u16 ENABLE_LINE_INPUT             = 0x0002_u16;
+public const u16 ENABLE_ECHO_INPUT             = 0x0004_u16;
+public const u16 ENABLE_WINDOW_INPUT           = 0x0008_u16;
+public const u16 ENABLE_MOUSE_INPUT            = 0x0010_u16;
+public const u16 ENABLE_INSERT_MODE            = 0x0020_u16;
+public const u16 ENABLE_QUICK_EDIT_MODE        = 0x0040_u16;
+public const u16 ENABLE_EXTENDED_FLAGS         = 0x0080_u16;
+public const u16 ENABLE_AUTO_POSITION          = 0x0100_u16;
+public const u16 ENABLE_VIRTUAL_TERMINAL_INPUT = 0x0200_u16;
 
 /* Console Output Mode flags */
-public const u16 ENABLE_PROCESSED_OUTPUT            = 0x0001;
-public const u16 ENABLE_WRAP_AT_EOL_OUTPUT          = 0x0002;
-public const u16 ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
-public const u16 DISABLE_NEWLINE_AUTO_RETURN        = 0x0008;
-public const u16 ENABLE_LVB_GRID_WORLDWIDE          = 0x0010;
+public const u16 ENABLE_PROCESSED_OUTPUT            = 0x0001_u16;
+public const u16 ENABLE_WRAP_AT_EOL_OUTPUT          = 0x0002_u16;
+public const u16 ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004_u16;
+public const u16 DISABLE_NEWLINE_AUTO_RETURN        = 0x0008_u16;
+public const u16 ENABLE_LVB_GRID_WORLDWIDE          = 0x0010_u16;
 
 /* HeapAlloc flags y HEAP_INFORMATION_CLASS ya se definen arriba. */
 
 /* ========================================================================== */
 /* Pipe Functions: */
-public const u32 PIPE_WAIT                          = 0x00000000;
-public const u32 PIPE_NOWAIT                        = 0x00000001;
-public const u32 PIPE_READMODE_BYTE                 = 0x00000000;
-public const u32 PIPE_READMODE_MESSAGE              = 0x00000002;
-public const u32 PIPE_TYPE_BYTE                     = 0x00000000;
-public const u32 PIPE_TYPE_MESSAGE                  = 0x00000004;
-public const u32 PIPE_ACCEPT_REMOTE_CLIENTS         = 0x00000000;
-public const u32 PIPE_REJECT_REMOTE_CLIENTS         = 0x00000008;
+public const u32 PIPE_WAIT                  = 0x00000000_u32;
+public const u32 PIPE_NOWAIT                = 0x00000001_u32;
+public const u32 PIPE_READMODE_BYTE         = 0x00000000_u32;
+public const u32 PIPE_READMODE_MESSAGE      = 0x00000002_u32;
+public const u32 PIPE_TYPE_BYTE             = 0x00000000_u32;
+public const u32 PIPE_TYPE_MESSAGE          = 0x00000004_u32;
+public const u32 PIPE_ACCEPT_REMOTE_CLIENTS = 0x00000000_u32;
+public const u32 PIPE_REJECT_REMOTE_CLIENTS = 0x00000008_u32;
 
-public const u32 PIPE_ACCESS_INBOUND  = 0x00000001;
-public const u32 PIPE_ACCESS_OUTBOUND = 0x00000002;
-public const u32 PIPE_ACCESS_DUPLEX   = 0x00000003;
+public const u32 PIPE_ACCESS_INBOUND  = 0x00000001_u32;
+public const u32 PIPE_ACCESS_OUTBOUND = 0x00000002_u32;
+public const u32 PIPE_ACCESS_DUPLEX   = 0x00000003_u32;
 
-public const u32 PIPE_UNLIMITED_INSTANCES = 255;
-public const u32 ERROR_PIPE_BUSY          = 231;
+public const u32 PIPE_UNLIMITED_INSTANCES = 255_u32;
+public const u32 ERROR_PIPE_BUSY          = 231_u32;
 
 
-public const u32 FILE_DEVICE_BEEP                 = 0x00000001;
-public const u32 FILE_DEVICE_CD_ROM               = 0x00000002;
-public const u32 FILE_DEVICE_CD_ROM_FILE_SYSTEM   = 0x00000003;
-public const u32 FILE_DEVICE_CONTROLLER           = 0x00000004;
-public const u32 FILE_DEVICE_DATALINK             = 0x00000005;
-public const u32 FILE_DEVICE_DFS                  = 0x00000006;
-public const u32 FILE_DEVICE_DISK                 = 0x00000007;
-public const u32 FILE_DEVICE_DISK_FILE_SYSTEM     = 0x00000008;
-public const u32 FILE_DEVICE_FILE_SYSTEM          = 0x00000009;
-public const u32 FILE_DEVICE_INPORT_PORT          = 0x0000000A;
-public const u32 FILE_DEVICE_KEYBOARD             = 0x0000000B;
-public const u32 FILE_DEVICE_MAILSLOT             = 0x0000000C;
-public const u32 FILE_DEVICE_MIDI_IN              = 0x0000000D;
-public const u32 FILE_DEVICE_MIDI_OUT             = 0x0000000E;
-public const u32 FILE_DEVICE_MOUSE                = 0x0000000F;
-public const u32 FILE_DEVICE_MULTI_UNC_PROVIDER   = 0x00000010;
-public const u32 FILE_DEVICE_NAMED_PIPE           = 0x00000011;
-public const u32 FILE_DEVICE_NETWORK              = 0x00000012;
-public const u32 FILE_DEVICE_NETWORK_BROWSER      = 0x00000013;
-public const u32 FILE_DEVICE_NETWORK_FILE_SYSTEM  = 0x00000014;
-public const u32 FILE_DEVICE_NULL                 = 0x00000015;
-public const u32 FILE_DEVICE_PARALLEL_PORT        = 0x00000016;
-public const u32 FILE_DEVICE_PHYSICAL_NETCARD     = 0x00000017;
-public const u32 FILE_DEVICE_PRINTER              = 0x00000018;
-public const u32 FILE_DEVICE_SCANNER              = 0x00000019;
-public const u32 FILE_DEVICE_SERIAL_MOUSE_PORT    = 0x0000001A;
-public const u32 FILE_DEVICE_SERIAL_PORT          = 0x0000001B;
-public const u32 FILE_DEVICE_SCREEN               = 0x0000001C;
-public const u32 FILE_DEVICE_SOUND                = 0x0000001D;
-public const u32 FILE_DEVICE_STREAMS              = 0x0000001E;
-public const u32 FILE_DEVICE_TAPE                 = 0x0000001F;
-public const u32 FILE_DEVICE_TAPE_FILE_SYSTEM     = 0x00000020;
-public const u32 FILE_DEVICE_TRANSPORT            = 0x00000021;
-public const u32 FILE_DEVICE_UNKNOWN              = 0x00000022;
-public const u32 FILE_DEVICE_VIDEO                = 0x00000023;
-public const u32 FILE_DEVICE_VIRTUAL_DISK         = 0x00000024;
-public const u32 FILE_DEVICE_WAVE_IN              = 0x00000025;
-public const u32 FILE_DEVICE_WAVE_OUT             = 0x00000026;
-public const u32 FILE_DEVICE_8042_PORT            = 0x00000027;
-public const u32 FILE_DEVICE_NETWORK_REDIRECTOR   = 0x00000028;
-public const u32 FILE_DEVICE_BATTERY              = 0x00000029;
-public const u32 FILE_DEVICE_BUS_EXTENDER         = 0x0000002A;
-public const u32 FILE_DEVICE_MODEM                = 0x0000002B;
-public const u32 FILE_DEVICE_VDM                  = 0x0000002C;
-public const u32 FILE_DEVICE_MASS_STORAGE         = 0x0000002D;
-public const u32 FILE_DEVICE_SMB                  = 0x0000002E;
-public const u32 FILE_DEVICE_KS                   = 0x0000002F;
-public const u32 FILE_DEVICE_CHANGER              = 0x00000030;
-public const u32 FILE_DEVICE_SMARTCARD            = 0x00000031;
-public const u32 FILE_DEVICE_ACPI                 = 0x00000032;
-public const u32 FILE_DEVICE_DVD                  = 0x00000033;
-public const u32 FILE_DEVICE_FULLSCREEN_VIDEO     = 0x00000034;
-public const u32 FILE_DEVICE_DFS_FILE_SYSTEM      = 0x00000035;
-public const u32 FILE_DEVICE_DFS_VOLUME           = 0x00000036;
-public const u32 FILE_DEVICE_SERENUM              = 0x00000037;
-public const u32 FILE_DEVICE_TERMSRV              = 0x00000038;
-public const u32 FILE_DEVICE_KSEC                 = 0x00000039;
-public const u32 FILE_DEVICE_FIPS                 = 0x0000003A;
-public const u32 FILE_DEVICE_INFINIBAND           = 0x0000003B;
-public const u32 FILE_DEVICE_VMBUS                = 0x0000003E;
-public const u32 FILE_DEVICE_CRYPT_PROVIDER       = 0x0000003F;
-public const u32 FILE_DEVICE_WPD                  = 0x00000040;
-public const u32 FILE_DEVICE_BLUETOOTH            = 0x00000041;
-public const u32 FILE_DEVICE_MT_COMPOSITE         = 0x00000042;
-public const u32 FILE_DEVICE_MT_TRANSPORT         = 0x00000043;
-public const u32 FILE_DEVICE_BIOMETRIC            = 0x00000044;
-public const u32 FILE_DEVICE_PMI                  = 0x00000045;
-public const u32 FILE_DEVICE_EHSTOR               = 0x00000046;
-public const u32 FILE_DEVICE_DEVAPI               = 0x00000047;
-public const u32 FILE_DEVICE_GPIO                 = 0x00000048;
-public const u32 FILE_DEVICE_USBEX                = 0x00000049;
-public const u32 FILE_DEVICE_CONSOLE              = 0x00000050;
-public const u32 FILE_DEVICE_NFP                  = 0x00000051;
-public const u32 FILE_DEVICE_SYSENV               = 0x00000052;
-public const u32 FILE_DEVICE_VIRTUAL_BLOCK        = 0x00000053;
-public const u32 FILE_DEVICE_POINT_OF_SERVICE     = 0x00000054;
-public const u32 FILE_DEVICE_STORAGE_REPLICATION  = 0x00000055;
-public const u32 FILE_DEVICE_TRUST_ENV            = 0x00000056;
-public const u32 FILE_DEVICE_UCM                  = 0x00000057;
-public const u32 FILE_DEVICE_UCMTCPCI             = 0x00000058;
-public const u32 FILE_DEVICE_PERSISTENT_MEMORY    = 0x00000059;
-public const u32 FILE_DEVICE_NVDIMM               = 0x0000005A;
-public const u32 FILE_DEVICE_HOLOGRAPHIC          = 0x0000005B;
-public const u32 FILE_DEVICE_SDFXHCI              = 0x0000005C;
-public const u32 FILE_DEVICE_UCMUCSI              = 0x0000005D;
-public const u32 FILE_DEVICE_PRM                  = 0x0000005E;
-public const u32 FILE_DEVICE_EVENT_COLLECTOR      = 0x0000005F;
-public const u32 FILE_DEVICE_USB4                 = 0x00000060;
-public const u32 FILE_DEVICE_SOUNDWIRE            = 0x00000061;
-public const u32 FILE_DEVICE_FABRIC_NVME          = 0x00000062;
-public const u32 FILE_DEVICE_SVM                  = 0x00000063;
-public const u32 FILE_DEVICE_HARDWARE_ACCELERATOR = 0x00000064;
-public const u32 FILE_DEVICE_I3C                  = 0x00000065;
+public const u32 FILE_DEVICE_BEEP                 = 0x00000001_u32;
+public const u32 FILE_DEVICE_CD_ROM               = 0x00000002_u32;
+public const u32 FILE_DEVICE_CD_ROM_FILE_SYSTEM   = 0x00000003_u32;
+public const u32 FILE_DEVICE_CONTROLLER           = 0x00000004_u32;
+public const u32 FILE_DEVICE_DATALINK             = 0x00000005_u32;
+public const u32 FILE_DEVICE_DFS                  = 0x00000006_u32;
+public const u32 FILE_DEVICE_DISK                 = 0x00000007_u32;
+public const u32 FILE_DEVICE_DISK_FILE_SYSTEM     = 0x00000008_u32;
+public const u32 FILE_DEVICE_FILE_SYSTEM          = 0x00000009_u32;
+public const u32 FILE_DEVICE_INPORT_PORT          = 0x0000000A_u32;
+public const u32 FILE_DEVICE_KEYBOARD             = 0x0000000B_u32;
+public const u32 FILE_DEVICE_MAILSLOT             = 0x0000000C_u32;
+public const u32 FILE_DEVICE_MIDI_IN              = 0x0000000D_u32;
+public const u32 FILE_DEVICE_MIDI_OUT             = 0x0000000E_u32;
+public const u32 FILE_DEVICE_MOUSE                = 0x0000000F_u32;
+public const u32 FILE_DEVICE_MULTI_UNC_PROVIDER   = 0x00000010_u32;
+public const u32 FILE_DEVICE_NAMED_PIPE           = 0x00000011_u32;
+public const u32 FILE_DEVICE_NETWORK              = 0x00000012_u32;
+public const u32 FILE_DEVICE_NETWORK_BROWSER      = 0x00000013_u32;
+public const u32 FILE_DEVICE_NETWORK_FILE_SYSTEM  = 0x00000014_u32;
+public const u32 FILE_DEVICE_NULL                 = 0x00000015_u32;
+public const u32 FILE_DEVICE_PARALLEL_PORT        = 0x00000016_u32;
+public const u32 FILE_DEVICE_PHYSICAL_NETCARD     = 0x00000017_u32;
+public const u32 FILE_DEVICE_PRINTER              = 0x00000018_u32;
+public const u32 FILE_DEVICE_SCANNER              = 0x00000019_u32;
+public const u32 FILE_DEVICE_SERIAL_MOUSE_PORT    = 0x0000001A_u32;
+public const u32 FILE_DEVICE_SERIAL_PORT          = 0x0000001B_u32;
+public const u32 FILE_DEVICE_SCREEN               = 0x0000001C_u32;
+public const u32 FILE_DEVICE_SOUND                = 0x0000001D_u32;
+public const u32 FILE_DEVICE_STREAMS              = 0x0000001E_u32;
+public const u32 FILE_DEVICE_TAPE                 = 0x0000001F_u32;
+public const u32 FILE_DEVICE_TAPE_FILE_SYSTEM     = 0x00000020_u32;
+public const u32 FILE_DEVICE_TRANSPORT            = 0x00000021_u32;
+public const u32 FILE_DEVICE_UNKNOWN              = 0x00000022_u32;
+public const u32 FILE_DEVICE_VIDEO                = 0x00000023_u32;
+public const u32 FILE_DEVICE_VIRTUAL_DISK         = 0x00000024_u32;
+public const u32 FILE_DEVICE_WAVE_IN              = 0x00000025_u32;
+public const u32 FILE_DEVICE_WAVE_OUT             = 0x00000026_u32;
+public const u32 FILE_DEVICE_8042_PORT            = 0x00000027_u32;
+public const u32 FILE_DEVICE_NETWORK_REDIRECTOR   = 0x00000028_u32;
+public const u32 FILE_DEVICE_BATTERY              = 0x00000029_u32;
+public const u32 FILE_DEVICE_BUS_EXTENDER         = 0x0000002A_u32;
+public const u32 FILE_DEVICE_MODEM                = 0x0000002B_u32;
+public const u32 FILE_DEVICE_VDM                  = 0x0000002C_u32;
+public const u32 FILE_DEVICE_MASS_STORAGE         = 0x0000002D_u32;
+public const u32 FILE_DEVICE_SMB                  = 0x0000002E_u32;
+public const u32 FILE_DEVICE_KS                   = 0x0000002F_u32;
+public const u32 FILE_DEVICE_CHANGER              = 0x00000030_u32;
+public const u32 FILE_DEVICE_SMARTCARD            = 0x00000031_u32;
+public const u32 FILE_DEVICE_ACPI                 = 0x00000032_u32;
+public const u32 FILE_DEVICE_DVD                  = 0x00000033_u32;
+public const u32 FILE_DEVICE_FULLSCREEN_VIDEO     = 0x00000034_u32;
+public const u32 FILE_DEVICE_DFS_FILE_SYSTEM      = 0x00000035_u32;
+public const u32 FILE_DEVICE_DFS_VOLUME           = 0x00000036_u32;
+public const u32 FILE_DEVICE_SERENUM              = 0x00000037_u32;
+public const u32 FILE_DEVICE_TERMSRV              = 0x00000038_u32;
+public const u32 FILE_DEVICE_KSEC                 = 0x00000039_u32;
+public const u32 FILE_DEVICE_FIPS                 = 0x0000003A_u32;
+public const u32 FILE_DEVICE_INFINIBAND           = 0x0000003B_u32;
+public const u32 FILE_DEVICE_VMBUS                = 0x0000003E_u32;
+public const u32 FILE_DEVICE_CRYPT_PROVIDER       = 0x0000003F_u32;
+public const u32 FILE_DEVICE_WPD                  = 0x00000040_u32;
+public const u32 FILE_DEVICE_BLUETOOTH            = 0x00000041_u32;
+public const u32 FILE_DEVICE_MT_COMPOSITE         = 0x00000042_u32;
+public const u32 FILE_DEVICE_MT_TRANSPORT         = 0x00000043_u32;
+public const u32 FILE_DEVICE_BIOMETRIC            = 0x00000044_u32;
+public const u32 FILE_DEVICE_PMI                  = 0x00000045_u32;
+public const u32 FILE_DEVICE_EHSTOR               = 0x00000046_u32;
+public const u32 FILE_DEVICE_DEVAPI               = 0x00000047_u32;
+public const u32 FILE_DEVICE_GPIO                 = 0x00000048_u32;
+public const u32 FILE_DEVICE_USBEX                = 0x00000049_u32;
+public const u32 FILE_DEVICE_CONSOLE              = 0x00000050_u32;
+public const u32 FILE_DEVICE_NFP                  = 0x00000051_u32;
+public const u32 FILE_DEVICE_SYSENV               = 0x00000052_u32;
+public const u32 FILE_DEVICE_VIRTUAL_BLOCK        = 0x00000053_u32;
+public const u32 FILE_DEVICE_POINT_OF_SERVICE     = 0x00000054_u32;
+public const u32 FILE_DEVICE_STORAGE_REPLICATION  = 0x00000055_u32;
+public const u32 FILE_DEVICE_TRUST_ENV            = 0x00000056_u32;
+public const u32 FILE_DEVICE_UCM                  = 0x00000057_u32;
+public const u32 FILE_DEVICE_UCMTCPCI             = 0x00000058_u32;
+public const u32 FILE_DEVICE_PERSISTENT_MEMORY    = 0x00000059_u32;
+public const u32 FILE_DEVICE_NVDIMM               = 0x0000005A_u32;
+public const u32 FILE_DEVICE_HOLOGRAPHIC          = 0x0000005B_u32;
+public const u32 FILE_DEVICE_SDFXHCI              = 0x0000005C_u32;
+public const u32 FILE_DEVICE_UCMUCSI              = 0x0000005D_u32;
+public const u32 FILE_DEVICE_PRM                  = 0x0000005E_u32;
+public const u32 FILE_DEVICE_EVENT_COLLECTOR      = 0x0000005F_u32;
+public const u32 FILE_DEVICE_USB4                 = 0x00000060_u32;
+public const u32 FILE_DEVICE_SOUNDWIRE            = 0x00000061_u32;
+public const u32 FILE_DEVICE_FABRIC_NVME          = 0x00000062_u32;
+public const u32 FILE_DEVICE_SVM                  = 0x00000063_u32;
+public const u32 FILE_DEVICE_HARDWARE_ACCELERATOR = 0x00000064_u32;
+public const u32 FILE_DEVICE_I3C                  = 0x00000065_u32;
 
 // (El descriptor HID de libusb y los helpers LIBUSB_REQ_* / LIBUSB_DT_* se
 //  omiten: son de libusb, no de la API Win32.)
-public const u16 HID_MAX_REPORT_SIZE              = 1024;
-public const u16 HID_IN_EP                        = 0x81;
-public const u16 HID_OUT_EP                       = 0x02;
+public const u16 HID_MAX_REPORT_SIZE = 1024_u16;
+public const u16 HID_IN_EP           = 0x81_u16;
+public const u16 HID_OUT_EP          = 0x02_u16;
 
 enum libusb_hid_request_type {
 	HID_REQ_GET_REPORT   = 0x01,
@@ -1675,43 +1675,43 @@ enum libusb_hid_report_type {
 /*
  * Multiple USB API backend support
  */
-public const u32    USB_API_UNSUPPORTED     =  0;
-public const u32    USB_API_HUB             =  1;
-public const u32    USB_API_COMPOSITE       =  2;
-public const u32    USB_API_WINUSBX         =  3;
-public const u32    USB_API_HID             =  4;
-public const u32    USB_API_MAX             =  5;
+public const u32 USB_API_UNSUPPORTED = 0_u32;
+public const u32 USB_API_HUB         = 1_u32;
+public const u32 USB_API_COMPOSITE   = 2_u32;
+public const u32 USB_API_WINUSBX     = 3_u32;
+public const u32 USB_API_HID         = 4_u32;
+public const u32 USB_API_MAX         = 5_u32;
 
 // The following is used to indicate if the HID or composite extra props have already been set.
-public const u32    USB_API_SET             =  (1 << USB_API_MAX);
+public const u32 USB_API_SET = (1 << USB_API_MAX);
 
 // Sub-APIs for WinUSB-like driver APIs (WinUSB, libusbK, libusb-win32 through the libusbK DLL)
 // Must have the same values as the KUSB_DRVID enum from libusbk.h
-public const u32    SUB_API_NOTSET          = -1;
-public const u32    SUB_API_LIBUSBK         =  0;
-public const u32    SUB_API_LIBUSB0         =  1;
-public const u32    SUB_API_WINUSB          =  2;
-public const u32    SUB_API_MAX             =  3;
-public const char** WINUSBX_DRV_NAMES       =  {"libusbK", "libusb0", "WinUSB"};
+public const u32    SUB_API_NOTSET    = -1;
+public const u32    SUB_API_LIBUSBK   =  0_u32;
+public const u32    SUB_API_LIBUSB0   =  1_u32;
+public const u32    SUB_API_WINUSB    =  2_u32;
+public const u32    SUB_API_MAX       =  3_u32;
+public const char** WINUSBX_DRV_NAMES =  {"libusbK", "libusb0", "WinUSB"};
 
 // El backend interno de libusb (struct windows_usb_api_backend con punteros
 // a funcion y tipos opacos struct libusb_context/device_handle/usbi_transfer)
 // se omite aqui: es interno de libusb, no parte de la API Win32.
 
 // Missing from MSVC6 setupapi.h
-public const u32    SPDRP_ADDRESS           =  28;
-public const u32    MAX_CTRL_BUFFER_LENGTH  =  4096;
-public const u32    MAX_USB_DEVICES         =  256;
-public const u32    MAX_USB_STRING_LENGTH   =  128;
-public const u32    MAX_HID_REPORT_SIZE     =  1024;
-public const u32    MAX_HID_DESCRIPTOR_SIZE =  256;
-public const u32    MAX_GUID_STRING_LENGTH  =  40;
-public const u32    MAX_PATH_LENGTH         =  128;
-public const u32    MAX_KEY_LENGTH          =  256;
-public const char   LIST_SEPARATOR          =  ';';
+public const u32  SPDRP_ADDRESS           = 28_u32;
+public const u32  MAX_CTRL_BUFFER_LENGTH  = 4096_u32;
+public const u32  MAX_USB_DEVICES         = 256_u32;
+public const u32  MAX_USB_STRING_LENGTH   = 128_u32;
+public const u32  MAX_HID_REPORT_SIZE     = 1024_u32;
+public const u32  MAX_HID_DESCRIPTOR_SIZE = 256_u32;
+public const u32  MAX_GUID_STRING_LENGTH  = 40_u32;
+public const u32  MAX_PATH_LENGTH         = 128_u32;
+public const u32  MAX_KEY_LENGTH          = 256_u32;
+public const char LIST_SEPARATOR          = ';';
 
 // Handle code for HID interface that have been claimed ("dibs")
-public const HANDLE INTERFACE_CLAIMED       =  ((HANDLE)0xD1B5);
+public const HANDLE INTERFACE_CLAIMED = ((HANDLE)0xD1B5);
 
 // (LIBUSB_COMPLETED se omite: es un codigo de retorno interno de libusb.)
 
@@ -1738,10 +1738,10 @@ public const GUID GUID_DEVINTERFACE_LIBUSB0_FILTER = {
 /*
  * Windows DDK API definitions. Most of it copied from MinGW's includes
  */
-typedef DWORD DEVNODE, DEVINST;
-typedef DEVNODE * PDEVNODE, *PDEVINST;
-typedef DWORD RETURN_TYPE;
-typedef RETURN_TYPE CONFIGRET;
+typedef DWORD DEVNODE,      DEVINST;
+typedef DEVNODE* PDEVNODE, *PDEVINST;
+typedef DWORD               RETURN_TYPE;
+typedef RETURN_TYPE         CONFIGRET;
 
 
 // https://github.com/tenderlove/libusb/blob/master/libusb/libusb.h
@@ -1752,13 +1752,13 @@ typedef RETURN_TYPE CONFIGRET;
  */
 enum libusb_endpoint_direction {
 	/** In: device-to-host */
-	LIBUSB_ENDPOINT_IN  = 0x80,
+	LIBUSB_ENDPOINT_IN = 0x80,
 
 	/** Out: host-to-device */
 	LIBUSB_ENDPOINT_OUT = 0x00
 };
 
-public const u32 LIBUSB_TRANSFER_TYPE_MASK = 0x03; /* in bmAttributes */
+public const u32 LIBUSB_TRANSFER_TYPE_MASK = 0x03_u32; /* in bmAttributes */
 
 /** \ingroup desc
  * Endpoint transfer type. Values for bits 0:1 of the
@@ -1766,42 +1766,42 @@ public const u32 LIBUSB_TRANSFER_TYPE_MASK = 0x03; /* in bmAttributes */
  */
 enum libusb_transfer_type {
 	/** Control endpoint */
-	LIBUSB_TRANSFER_TYPE_CONTROL     = 0,
+	LIBUSB_TRANSFER_TYPE_CONTROL = 0,
 
 	/** Isochronous endpoint */
 	LIBUSB_TRANSFER_TYPE_ISOCHRONOUS = 1,
 
 	/** Bulk endpoint */
-	LIBUSB_TRANSFER_TYPE_BULK        = 2,
+	LIBUSB_TRANSFER_TYPE_BULK = 2,
 
 	/** Interrupt endpoint */
-	LIBUSB_TRANSFER_TYPE_INTERRUPT   = 3
+	LIBUSB_TRANSFER_TYPE_INTERRUPT = 3
 };
 
 /** \ingroup misc
  * Standard requests, as defined in table 9-3 of the USB2 specifications */
 enum libusb_standard_request {
 	/** Request status of the specific recipient */
-	LIBUSB_REQUEST_GET_STATUS        = 0x00,
+	LIBUSB_REQUEST_GET_STATUS = 0x00,
 
 	/** Clear or disable a specific feature */
-	LIBUSB_REQUEST_CLEAR_FEATURE     = 0x01,
+	LIBUSB_REQUEST_CLEAR_FEATURE = 0x01,
 
 	/* 0x02 is reserved */
 
 	/** Set or enable a specific feature */
-	LIBUSB_REQUEST_SET_FEATURE       = 0x03,
+	LIBUSB_REQUEST_SET_FEATURE = 0x03,
 
 	/* 0x04 is reserved */
 
 	/** Set device address for all future accesses */
-	LIBUSB_REQUEST_SET_ADDRESS       = 0x05,
+	LIBUSB_REQUEST_SET_ADDRESS = 0x05,
 
 	/** Get the specified descriptor */
-	LIBUSB_REQUEST_GET_DESCRIPTOR    = 0x06,
+	LIBUSB_REQUEST_GET_DESCRIPTOR = 0x06,
 
 	/** Used to update existing descriptors or add new descriptors */
-	LIBUSB_REQUEST_SET_DESCRIPTOR    = 0x07,
+	LIBUSB_REQUEST_SET_DESCRIPTOR = 0x07,
 
 	/** Get the current device configuration value */
 	LIBUSB_REQUEST_GET_CONFIGURATION = 0x08,
@@ -1810,13 +1810,13 @@ enum libusb_standard_request {
 	LIBUSB_REQUEST_SET_CONFIGURATION = 0x09,
 
 	/** Return the selected alternate setting for the specified interface */
-	LIBUSB_REQUEST_GET_INTERFACE     = 0x0A,
+	LIBUSB_REQUEST_GET_INTERFACE = 0x0A,
 
 	/** Select an alternate interface for the specified interface */
-	LIBUSB_REQUEST_SET_INTERFACE     = 0x0B,
+	LIBUSB_REQUEST_SET_INTERFACE = 0x0B,
 
 	/** Set then report an endpoint's synchronization frame */
-	LIBUSB_REQUEST_SYNCH_FRAME       = 0x0C,
+	LIBUSB_REQUEST_SYNCH_FRAME = 0x0C,
 };
 
 /** \ingroup misc
@@ -1828,10 +1828,10 @@ enum libusb_request_type {
 	LIBUSB_REQUEST_TYPE_STANDARD = (0x00 << 5),
 
 	/** Class */
-	LIBUSB_REQUEST_TYPE_CLASS    = (0x01 << 5),
+	LIBUSB_REQUEST_TYPE_CLASS = (0x01 << 5),
 
 	/** Vendor */
-	LIBUSB_REQUEST_TYPE_VENDOR   = (0x02 << 5),
+	LIBUSB_REQUEST_TYPE_VENDOR = (0x02 << 5),
 
 	/** Reserved */
 	LIBUSB_REQUEST_TYPE_RESERVED = (0x03 << 5)
@@ -1843,19 +1843,19 @@ enum libusb_request_type {
  * transfers. Values 4 through 31 are reserved. */
 enum libusb_request_recipient {
 	/** Device */
-	LIBUSB_RECIPIENT_DEVICE    = 0x00,
+	LIBUSB_RECIPIENT_DEVICE = 0x00,
 
 	/** Interface */
 	LIBUSB_RECIPIENT_INTERFACE = 0x01,
 
 	/** Endpoint */
-	LIBUSB_RECIPIENT_ENDPOINT  = 0x02,
+	LIBUSB_RECIPIENT_ENDPOINT = 0x02,
 
 	/** Other */
-	LIBUSB_RECIPIENT_OTHER     = 0x03,
+	LIBUSB_RECIPIENT_OTHER = 0x03,
 };
 
-public const u32 LIBUSB_ISO_SYNC_TYPE_MASK = 0x0C;
+public const u32 LIBUSB_ISO_SYNC_TYPE_MASK = 0x0C_u32;
 
 /** \ingroup desc
  * Synchronization type for isochronous endpoints. Values for bits 2:3 of the
@@ -1864,57 +1864,57 @@ public const u32 LIBUSB_ISO_SYNC_TYPE_MASK = 0x0C;
  */
 enum libusb_iso_sync_type {
 	/** No synchronization */
-	LIBUSB_ISO_SYNC_TYPE_NONE     = 0,
+	LIBUSB_ISO_SYNC_TYPE_NONE = 0,
 
 	/** Asynchronous */
-	LIBUSB_ISO_SYNC_TYPE_ASYNC    = 1,
+	LIBUSB_ISO_SYNC_TYPE_ASYNC = 1,
 
 	/** Adaptive */
 	LIBUSB_ISO_SYNC_TYPE_ADAPTIVE = 2,
 
 	/** Synchronous */
-	LIBUSB_ISO_SYNC_TYPE_SYNC     = 3
+	LIBUSB_ISO_SYNC_TYPE_SYNC = 3
 };
 
-public const u32 LIBUSB_ISO_USAGE_TYPE_MASK = 0x30;
+public const u32 LIBUSB_ISO_USAGE_TYPE_MASK = 0x30_u32;
 
-public const u32 CR_SUCCESS = 0x00000000;
-public const u32 CR_NO_SUCH_DEVNODE = 0x0000000D;
+public const u32 CR_SUCCESS         = 0x00000000_u32;
+public const u32 CR_NO_SUCH_DEVNODE = 0x0000000D_u32;
 // Tipos de descriptor y peticiones USB estandar (usbspec.h); los valores son
 // los del estandar USB (identicos a los LIBUSB_DT_*/LIBUSB_REQUEST_* de libusb).
-public const u32 USB_DEVICE_DESCRIPTOR_TYPE = 0x01;
-public const u32 USB_CONFIGURATION_DESCRIPTOR_TYPE = 0x02;
-public const u32 USB_STRING_DESCRIPTOR_TYPE = 0x03;
-public const u32 USB_INTERFACE_DESCRIPTOR_TYPE = 0x04;
-public const u32 USB_ENDPOINT_DESCRIPTOR_TYPE = 0x05;
-public const u32 USB_REQUEST_GET_STATUS = 0x00;
-public const u32 USB_REQUEST_CLEAR_FEATURE = 0x01;
-public const u32 USB_REQUEST_SET_FEATURE = 0x03;
-public const u32 USB_REQUEST_SET_ADDRESS = 0x05;
-public const u32 USB_REQUEST_GET_DESCRIPTOR = 0x06;
-public const u32 USB_REQUEST_SET_DESCRIPTOR = 0x07;
-public const u32 USB_REQUEST_GET_CONFIGURATION = 0x08;
-public const u32 USB_REQUEST_SET_CONFIGURATION = 0x09;
-public const u32 USB_REQUEST_GET_INTERFACE = 0x0A;
-public const u32 USB_REQUEST_SET_INTERFACE = 0x0B;
-public const u32 USB_REQUEST_SYNC_FRAME = 0x0C;
-public const u32 USB_GET_NODE_INFORMATION = 258;
-public const u32 USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION = 260;
-public const u32 USB_GET_NODE_CONNECTION_NAME = 261;
-public const u32 USB_GET_HUB_CAPABILITIES = 271;
-public const u32 USB_GET_NODE_CONNECTION_INFORMATION_EX = 274;
-public const u32 USB_GET_HUB_CAPABILITIES_EX = 276;
-public const u32 USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 = 279;
-public const u32 USB_GET_NODE_CONNECTION_ATTRIBUTES = 272;
-public const u32 HCD_GET_ROOT_HUB_NAME = 258;
+public const u32 USB_DEVICE_DESCRIPTOR_TYPE                = 0x01_u32;
+public const u32 USB_CONFIGURATION_DESCRIPTOR_TYPE         = 0x02_u32;
+public const u32 USB_STRING_DESCRIPTOR_TYPE                = 0x03_u32;
+public const u32 USB_INTERFACE_DESCRIPTOR_TYPE             = 0x04_u32;
+public const u32 USB_ENDPOINT_DESCRIPTOR_TYPE              = 0x05_u32;
+public const u32 USB_REQUEST_GET_STATUS                    = 0x00_u32;
+public const u32 USB_REQUEST_CLEAR_FEATURE                 = 0x01_u32;
+public const u32 USB_REQUEST_SET_FEATURE                   = 0x03_u32;
+public const u32 USB_REQUEST_SET_ADDRESS                   = 0x05_u32;
+public const u32 USB_REQUEST_GET_DESCRIPTOR                = 0x06_u32;
+public const u32 USB_REQUEST_SET_DESCRIPTOR                = 0x07_u32;
+public const u32 USB_REQUEST_GET_CONFIGURATION             = 0x08_u32;
+public const u32 USB_REQUEST_SET_CONFIGURATION             = 0x09_u32;
+public const u32 USB_REQUEST_GET_INTERFACE                 = 0x0A_u32;
+public const u32 USB_REQUEST_SET_INTERFACE                 = 0x0B_u32;
+public const u32 USB_REQUEST_SYNC_FRAME                    = 0x0C_u32;
+public const u32 USB_GET_NODE_INFORMATION                  = 258_u32;
+public const u32 USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION   = 260_u32;
+public const u32 USB_GET_NODE_CONNECTION_NAME              = 261_u32;
+public const u32 USB_GET_HUB_CAPABILITIES                  = 271_u32;
+public const u32 USB_GET_NODE_CONNECTION_INFORMATION_EX    = 274_u32;
+public const u32 USB_GET_HUB_CAPABILITIES_EX               = 276_u32;
+public const u32 USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 = 279_u32;
+public const u32 USB_GET_NODE_CONNECTION_ATTRIBUTES        = 272_u32;
+public const u32 HCD_GET_ROOT_HUB_NAME                     = 258_u32;
 
 // winioctl.h: metodos de transferencia + acceso de DeviceIoControl.
-public const u32 METHOD_BUFFERED = 0;
-public const u32 METHOD_IN_DIRECT = 1;
-public const u32 METHOD_OUT_DIRECT = 2;
-public const u32 METHOD_NEITHER = 3;
-public const u32 FILE_ANY_ACCESS = 0x00000000;
-public const u32 FILE_DEVICE_USB = FILE_DEVICE_UNKNOWN;
+public const u32 METHOD_BUFFERED   = 0_u32;
+public const u32 METHOD_IN_DIRECT  = 1_u32;
+public const u32 METHOD_OUT_DIRECT = 2_u32;
+public const u32 METHOD_NEITHER    = 3_u32;
+public const u32 FILE_ANY_ACCESS   = 0x00000000_u32;
+public const u32 FILE_DEVICE_USB   = FILE_DEVICE_UNKNOWN;
 
 typedef enum USB_CONNECTION_STATUS {
 	NoDeviceConnected,
@@ -1952,55 +1952,55 @@ public const u64 IOCTL_USB_GET_HUB_CAPABILITIES_EX = CTL_CODE(
 	USB_GET_HUB_CAPABILITIES_EX,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_HUB_CAPABILITIES = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_HUB_CAPABILITIES,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_ROOT_HUB_NAME = CTL_CODE(
 	FILE_DEVICE_USB,
 	HCD_GET_ROOT_HUB_NAME,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_NODE_INFORMATION = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_NODE_INFORMATION,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_NODE_CONNECTION_INFORMATION_EX,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_NODE_CONNECTION_ATTRIBUTES = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_NODE_CONNECTION_ATTRIBUTES,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 public const u64 IOCTL_USB_GET_NODE_CONNECTION_NAME = CTL_CODE(
 	FILE_DEVICE_USB,
 	USB_GET_NODE_CONNECTION_NAME,
 	METHOD_BUFFERED,
 	FILE_ANY_ACCESS
-	);
+);
 
 // HID report IOCTLs: en C son macros parametrizados `HID_*_CTL_CODE(id)`; aqui
 // funciones comptime que se pliegan en cada uso.
@@ -2016,7 +2016,7 @@ comptime u64 HID_IN_CTL_CODE(u64 id) {
 		id,
 		METHOD_IN_DIRECT,
 		FILE_ANY_ACCESS
-		);
+	);
 }
 comptime u64 HID_OUT_CTL_CODE(u64 id) {
 	return CTL_CODE(
@@ -2024,69 +2024,69 @@ comptime u64 HID_OUT_CTL_CODE(u64 id) {
 		id,
 		METHOD_OUT_DIRECT,
 		FILE_ANY_ACCESS
-		);
+	);
 }
 
-public const u64 IOCTL_HID_GET_FEATURE              = HID_OUT_CTL_CODE(100);
-public const u64 IOCTL_HID_GET_INPUT_REPORT         = HID_OUT_CTL_CODE(104);
-public const u64 IOCTL_HID_SET_FEATURE              = HID_IN_CTL_CODE(100);
-public const u64 IOCTL_HID_SET_OUTPUT_REPORT        = HID_IN_CTL_CODE(101);
+public const u64 IOCTL_HID_GET_FEATURE       = HID_OUT_CTL_CODE(100);
+public const u64 IOCTL_HID_GET_INPUT_REPORT  = HID_OUT_CTL_CODE(104);
+public const u64 IOCTL_HID_SET_FEATURE       = HID_IN_CTL_CODE(100);
+public const u64 IOCTL_HID_SET_OUTPUT_REPORT = HID_IN_CTL_CODE(101);
 
 
 /* USN Reasons: */
-public const u32 USN_REASON_DATA_OVERWRITE          = 0x00000001;
-public const u32 USN_REASON_DATA_EXTEND             = 0x00000002;
-public const u32 USN_REASON_DATA_TRUNCATION         = 0x00000004;
-public const u32 USN_REASON_NAMED_DATA_OVERWRITE    = 0x00000010;
-public const u32 USN_REASON_NAMED_DATA_EXTEND       = 0x00000020;
-public const u32 USN_REASON_NAMED_DATA_TRUNCATION   = 0x00000040;
-public const u32 USN_REASON_FILE_CREATE             = 0x00000100;
-public const u32 USN_REASON_FILE_DELETE             = 0x00000200;
-public const u32 USN_REASON_EA_CHANGE               = 0x00000400;
-public const u32 USN_REASON_SECURITY_CHANGE         = 0x00000800;
-public const u32 USN_REASON_RENAME_OLD_NAME         = 0x00001000;
-public const u32 USN_REASON_RENAME_NEW_NAME         = 0x00002000;
-public const u32 USN_REASON_INDEXABLE_CHANGE        = 0x00004000;
-public const u32 USN_REASON_BASIC_INFO_CHANGE       = 0x00008000;
-public const u32 USN_REASON_HARD_LINK_CHANGE        = 0x00010000;
-public const u32 USN_REASON_COMPRESSION_CHANGE      = 0x00020000;
-public const u32 USN_REASON_ENCRYPTION_CHANGE       = 0x00040000;
-public const u32 USN_REASON_OBJECT_ID_CHANGE        = 0x00080000;
-public const u32 USN_REASON_REPARSE_POINT_CHANGE    = 0x00100000;
-public const u32 USN_REASON_STREAM_CHANGE           = 0x00200000;
-public const u32 USN_REASON_CLOSE                   = 0x80000000;
+public const u32 USN_REASON_DATA_OVERWRITE        = 0x00000001_u32;
+public const u32 USN_REASON_DATA_EXTEND           = 0x00000002_u32;
+public const u32 USN_REASON_DATA_TRUNCATION       = 0x00000004_u32;
+public const u32 USN_REASON_NAMED_DATA_OVERWRITE  = 0x00000010_u32;
+public const u32 USN_REASON_NAMED_DATA_EXTEND     = 0x00000020_u32;
+public const u32 USN_REASON_NAMED_DATA_TRUNCATION = 0x00000040_u32;
+public const u32 USN_REASON_FILE_CREATE           = 0x00000100_u32;
+public const u32 USN_REASON_FILE_DELETE           = 0x00000200_u32;
+public const u32 USN_REASON_EA_CHANGE             = 0x00000400_u32;
+public const u32 USN_REASON_SECURITY_CHANGE       = 0x00000800_u32;
+public const u32 USN_REASON_RENAME_OLD_NAME       = 0x00001000_u32;
+public const u32 USN_REASON_RENAME_NEW_NAME       = 0x00002000_u32;
+public const u32 USN_REASON_INDEXABLE_CHANGE      = 0x00004000_u32;
+public const u32 USN_REASON_BASIC_INFO_CHANGE     = 0x00008000_u32;
+public const u32 USN_REASON_HARD_LINK_CHANGE      = 0x00010000_u32;
+public const u32 USN_REASON_COMPRESSION_CHANGE    = 0x00020000_u32;
+public const u32 USN_REASON_ENCRYPTION_CHANGE     = 0x00040000_u32;
+public const u32 USN_REASON_OBJECT_ID_CHANGE      = 0x00080000_u32;
+public const u32 USN_REASON_REPARSE_POINT_CHANGE  = 0x00100000_u32;
+public const u32 USN_REASON_STREAM_CHANGE         = 0x00200000_u32;
+public const u32 USN_REASON_CLOSE                 = 0x80000000_u32;
 
 /* File Iterations Flags: */
-public const u32 FIND_FIRST_EX_CASE_SENSITIVE       = 0x00000001;
-public const u32 FIND_FIRST_EX_LARGE_FETCH          = 0x00000002;
-public const u32 FIND_FIRST_EX_ON_DISK_ENTRIES_ONLY = 0x00000004;
+public const u32 FIND_FIRST_EX_CASE_SENSITIVE       = 0x00000001_u32;
+public const u32 FIND_FIRST_EX_LARGE_FETCH          = 0x00000002_u32;
+public const u32 FIND_FIRST_EX_ON_DISK_ENTRIES_ONLY = 0x00000004_u32;
 
 typedef struct USB_DEVICE_DESCRIPTOR {
-	UCHAR bLength;
-	UCHAR bDescriptorType;
+	UCHAR  bLength;
+	UCHAR  bDescriptorType;
 	USHORT bcdUSB;
-	UCHAR bDeviceClass;
-	UCHAR bDeviceSubClass;
-	UCHAR bDeviceProtocol;
-	UCHAR bMaxPacketSize0;
+	UCHAR  bDeviceClass;
+	UCHAR  bDeviceSubClass;
+	UCHAR  bDeviceProtocol;
+	UCHAR  bMaxPacketSize0;
 	USHORT idVendor;
 	USHORT idProduct;
 	USHORT bcdDevice;
-	UCHAR iManufacturer;
-	UCHAR iProduct;
-	UCHAR iSerialNumber;
-	UCHAR bNumConfigurations;
+	UCHAR  iManufacturer;
+	UCHAR  iProduct;
+	UCHAR  iSerialNumber;
+	UCHAR  bNumConfigurations;
 } USB_DEVICE_DESCRIPTOR, *PUSB_DEVICE_DESCRIPTOR;
 
 typedef struct USB_CONFIGURATION_DESCRIPTOR {
-	UCHAR bLength;
-	UCHAR bDescriptorType;
+	UCHAR  bLength;
+	UCHAR  bDescriptorType;
 	USHORT wTotalLength;
-	UCHAR bNumInterfaces;
-	UCHAR bConfigurationValue;
-	UCHAR iConfiguration;
-	UCHAR bmAttributes;
-	UCHAR MaxPower;
+	UCHAR  bNumInterfaces;
+	UCHAR  bConfigurationValue;
+	UCHAR  iConfiguration;
+	UCHAR  bmAttributes;
+	UCHAR  MaxPower;
 } USB_CONFIGURATION_DESCRIPTOR, *PUSB_CONFIGURATION_DESCRIPTOR;
 
 typedef struct USB_INTERFACE_DESCRIPTOR {
@@ -2104,8 +2104,8 @@ typedef struct USB_CONFIGURATION_DESCRIPTOR_SHORT {
 	struct {
 		ULONG ConnectionIndex;
 		struct {
-			UCHAR bmRequest;
-			UCHAR bRequest;
+			UCHAR  bmRequest;
+			UCHAR  bRequest;
 			USHORT wValue;
 			USHORT wIndex;
 			USHORT wLength;
@@ -2114,18 +2114,18 @@ typedef struct USB_CONFIGURATION_DESCRIPTOR_SHORT {
 	USB_CONFIGURATION_DESCRIPTOR data;
 } USB_CONFIGURATION_DESCRIPTOR_SHORT;
 typedef struct USB_ENDPOINT_DESCRIPTOR {
-	UCHAR bLength;
-	UCHAR bDescriptorType;
-	UCHAR bEndpointAddress;
-	UCHAR bmAttributes;
+	UCHAR  bLength;
+	UCHAR  bDescriptorType;
+	UCHAR  bEndpointAddress;
+	UCHAR  bmAttributes;
 	USHORT wMaxPacketSize;
-	UCHAR bInterval;
+	UCHAR  bInterval;
 } USB_ENDPOINT_DESCRIPTOR, *PUSB_ENDPOINT_DESCRIPTOR;
 typedef struct USB_DESCRIPTOR_REQUEST {
 	ULONG ConnectionIndex;
 	struct {
-		UCHAR bmRequest;
-		UCHAR bRequest;
+		UCHAR  bmRequest;
+		UCHAR  bRequest;
 		USHORT wValue;
 		USHORT wIndex;
 		USHORT wLength;
@@ -2133,12 +2133,12 @@ typedef struct USB_DESCRIPTOR_REQUEST {
 //	UCHAR Data[0];
 } USB_DESCRIPTOR_REQUEST, *PUSB_DESCRIPTOR_REQUEST;
 typedef struct USB_HUB_DESCRIPTOR {
-	UCHAR bDescriptorLength;
-	UCHAR bDescriptorType;
-	UCHAR bNumberOfPorts;
+	UCHAR  bDescriptorLength;
+	UCHAR  bDescriptorType;
+	UCHAR  bNumberOfPorts;
 	USHORT wHubCharacteristics;
-	UCHAR bPowerOnToPowerGood;
-	UCHAR bHubControlCurrent;
+	UCHAR  bPowerOnToPowerGood;
+	UCHAR  bHubControlCurrent;
 	UCHAR bRemoveAndPowerMask[64];
 } USB_HUB_DESCRIPTOR, *PUSB_HUB_DESCRIPTOR;
 typedef struct USB_ROOT_HUB_NAME {
@@ -2161,13 +2161,13 @@ typedef struct USB_NODE_CONNECTION_NAME_FIXED {
 } USB_NODE_CONNECTION_NAME_FIXED;
 typedef struct USB_HUB_NAME_FIXED {
 	union {
-		USB_ROOT_HUB_NAME_FIXED root;
+		USB_ROOT_HUB_NAME_FIXED        root;
 		USB_NODE_CONNECTION_NAME_FIXED node;
 	} u;
 } USB_HUB_NAME_FIXED;
 typedef struct USB_HUB_INFORMATION {
 	USB_HUB_DESCRIPTOR HubDescriptor;
-	BOOLEAN HubIsBusPowered;
+	BOOLEAN            HubIsBusPowered;
 } USB_HUB_INFORMATION, *PUSB_HUB_INFORMATION;
 typedef struct USB_MI_PARENT_INFORMATION {
 	ULONG NumberOfInterfaces;
@@ -2175,22 +2175,22 @@ typedef struct USB_MI_PARENT_INFORMATION {
 typedef struct USB_NODE_INFORMATION {
 	USB_HUB_NODE NodeType;
 	union {
-		USB_HUB_INFORMATION HubInformation;
+		USB_HUB_INFORMATION       HubInformation;
 		USB_MI_PARENT_INFORMATION MiParentInformation;
 	} u;
 } USB_NODE_INFORMATION, *PUSB_NODE_INFORMATION;
 typedef struct USB_PIPE_INFO {
 	USB_ENDPOINT_DESCRIPTOR EndpointDescriptor;
-	ULONG ScheduleOffset;
+	ULONG                   ScheduleOffset;
 } USB_PIPE_INFO, *PUSB_PIPE_INFO;
 typedef struct USB_NODE_CONNECTION_INFORMATION_EX {
-	ULONG ConnectionIndex;
+	ULONG                 ConnectionIndex;
 	USB_DEVICE_DESCRIPTOR DeviceDescriptor;
-	UCHAR CurrentConfigurationValue;
-	UCHAR Speed;
-	BOOLEAN DeviceIsHub;
-	USHORT DeviceAddress;
-	ULONG NumberOfOpenPipes;
+	UCHAR                 CurrentConfigurationValue;
+	UCHAR                 Speed;
+	BOOLEAN               DeviceIsHub;
+	USHORT                DeviceAddress;
+	ULONG                 NumberOfOpenPipes;
 	USB_CONNECTION_STATUS ConnectionStatus;
 //	USB_PIPE_INFO PipeList[0];
 } USB_NODE_CONNECTION_INFORMATION_EX, *PUSB_NODE_CONNECTION_INFORMATION_EX;
@@ -2212,9 +2212,9 @@ typedef union _USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS {
 	};
 } USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS, *PUSB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS;
 typedef struct _USB_NODE_CONNECTION_INFORMATION_EX_V2 {
-	ULONG ConnectionIndex;
-	ULONG Length;
-	USB_PROTOCOLS SupportedUsbProtocols;
+	ULONG                                       ConnectionIndex;
+	ULONG                                       Length;
+	USB_PROTOCOLS                               SupportedUsbProtocols;
 	USB_NODE_CONNECTION_INFORMATION_EX_V2_FLAGS Flags;
 } USB_NODE_CONNECTION_INFORMATION_EX_V2, *PUSB_NODE_CONNECTION_INFORMATION_EX_V2;
 typedef struct USB_HUB_CAP_FLAGS {
@@ -2234,20 +2234,20 @@ typedef struct USB_HUB_CAPABILITIES_EX {
 } USB_HUB_CAPABILITIES_EX, *PUSB_HUB_CAPABILITIES_EX;
 
 /* winusb.dll interface */
-public const u8 SHORT_PACKET_TERMINATE = 0x01;
-public const u8 AUTO_CLEAR_STALL       = 0x02;
-public const u8 PIPE_TRANSFER_TIMEOUT  = 0x03;
-public const u8 IGNORE_SHORT_PACKETS   = 0x04;
-public const u8 ALLOW_PARTIAL_READS    = 0x05;
-public const u8 AUTO_FLUSH             = 0x06;
-public const u8 RAW_IO                 = 0x07;
-public const u8 MAXIMUM_TRANSFER_SIZE  = 0x08;
-public const u8 AUTO_SUSPEND           = 0x81;
-public const u8 SUSPEND_DELAY          = 0x83;
-public const u8 DEVICE_SPEED           = 0x01;
-public const u8 LowSpeed               = 0x01;
-public const u8 FullSpeed              = 0x02;
-public const u8 HighSpeed              = 0x03;
+public const u8 SHORT_PACKET_TERMINATE = 0x01_u8;
+public const u8 AUTO_CLEAR_STALL       = 0x02_u8;
+public const u8 PIPE_TRANSFER_TIMEOUT  = 0x03_u8;
+public const u8 IGNORE_SHORT_PACKETS   = 0x04_u8;
+public const u8 ALLOW_PARTIAL_READS    = 0x05_u8;
+public const u8 AUTO_FLUSH             = 0x06_u8;
+public const u8 RAW_IO                 = 0x07_u8;
+public const u8 MAXIMUM_TRANSFER_SIZE  = 0x08_u8;
+public const u8 AUTO_SUSPEND           = 0x81_u8;
+public const u8 SUSPEND_DELAY          = 0x83_u8;
+public const u8 DEVICE_SPEED           = 0x01_u8;
+public const u8 LowSpeed               = 0x01_u8;
+public const u8 FullSpeed              = 0x02_u8;
+public const u8 HighSpeed              = 0x03_u8;
 
 enum USBD_PIPE_TYPE : u32 {
 	UsbdPipeTypeControl,
@@ -2258,22 +2258,22 @@ enum USBD_PIPE_TYPE : u32 {
 
 typedef struct {
 	USBD_PIPE_TYPE PipeType;
-	UCHAR PipeId;
-	USHORT MaximumPacketSize;
-	UCHAR Interval;
+	UCHAR          PipeId;
+	USHORT         MaximumPacketSize;
+	UCHAR          Interval;
 } WINUSB_PIPE_INFORMATION, *PWINUSB_PIPE_INFORMATION;
 
 //#pragma pack(1)
 struct {
-	UCHAR request_type;
-	UCHAR request;
+	UCHAR  request_type;
+	UCHAR  request;
 	USHORT value;
 	USHORT index;
 	USHORT length;
 } WINUSB_SETUP_PACKET, *PWINUSB_SETUP_PACKET;
 //#pragma pack()
 
-typedef void *WINUSB_INTERFACE_HANDLE, *PWINUSB_INTERFACE_HANDLE;
+typedef void* WINUSB_INTERFACE_HANDLE, *PWINUSB_INTERFACE_HANDLE;
 
 /* /!\ These must match the ones from the official libusbk.h */
 enum _KUSB_FNID {
@@ -2320,13 +2320,13 @@ typedef struct _KLIB_VERSION {
 	INT Micro;
 	INT Nano;
 } KLIB_VERSION;
-typedef KLIB_VERSION * PKLIB_VERSION;
+typedef KLIB_VERSION* PKLIB_VERSION;
 
-public const u32 HIDP_STATUS_SUCCESS = 0x00110000;
-typedef void *PHIDP_PREPARSED_DATA;
+public const u32   HIDP_STATUS_SUCCESS = 0x00110000_u32;
+typedef      void* PHIDP_PREPARSED_DATA;
 
 typedef struct {
-	ULONG Size;
+	ULONG  Size;
 	USHORT VendorID;
 	USHORT ProductID;
 	USHORT VersionNumber;
@@ -2334,8 +2334,8 @@ typedef struct {
 
 typedef USHORT USAGE;
 typedef struct {
-	USAGE Usage;
-	USAGE UsagePage;
+	USAGE  Usage;
+	USAGE  UsagePage;
 	USHORT InputReportByteLength;
 	USHORT OutputReportByteLength;
 	USHORT FeatureReportByteLength;
@@ -2357,38 +2357,38 @@ typedef enum _HIDP_REPORT_TYPE {
 	HidP_Feature
 } HIDP_REPORT_TYPE;
 typedef struct _HIDP_VALUE_CAPS {
-	USAGE UsagePage;
-	UCHAR ReportID;
+	USAGE   UsagePage;
+	UCHAR   ReportID;
 	BOOLEAN IsAlias;
-	USHORT BitField;
-	USHORT LinkCollection;
-	USAGE LinkUsage;
-	USAGE LinkUsagePage;
+	USHORT  BitField;
+	USHORT  LinkCollection;
+	USAGE   LinkUsage;
+	USAGE   LinkUsagePage;
 	BOOLEAN IsRange;
 	BOOLEAN IsStringRange;
 	BOOLEAN IsDesignatorRange;
 	BOOLEAN IsAbsolute;
 	BOOLEAN HasNull;
-	UCHAR Reserved;
-	USHORT BitSize;
-	USHORT ReportCount;
+	UCHAR   Reserved;
+	USHORT  BitSize;
+	USHORT  ReportCount;
 	USHORT Reserved2[5];
-	ULONG UnitsExp;
-	ULONG Units;
-	LONG LogicalMin, LogicalMax;
+	ULONG             UnitsExp;
+	ULONG             Units;
+	LONG LogicalMin,  LogicalMax;
 	LONG PhysicalMin, PhysicalMax;
 	union {
 		struct {
-			USAGE UsageMin, UsageMax;
-			USHORT StringMin, StringMax;
+			USAGE UsageMin,       UsageMax;
+			USHORT StringMin,     StringMax;
 			USHORT DesignatorMin, DesignatorMax;
-			USHORT DataIndexMin, DataIndexMax;
+			USHORT DataIndexMin,  DataIndexMax;
 		} Range;
 		struct {
-			USAGE Usage, Reserved1;
-			USHORT StringIndex, Reserved2;
+			USAGE Usage,            Reserved1;
+			USHORT StringIndex,     Reserved2;
 			USHORT DesignatorIndex, Reserved3;
-			USHORT DataIndex, Reserved4;
+			USHORT DataIndex,       Reserved4;
 		} NotRange;
 	} u;
 } HIDP_VALUE_CAPS, *PHIDP_VALUE_CAPS;
@@ -2450,26 +2450,26 @@ typedef enum _FINDEX_SEARCH_OPS {
 
 /* File Iteration: */
 typedef struct _WIN32_FIND_DATAA {
-	DWORD dwFileAttributes;
+	DWORD    dwFileAttributes;
 	FILETIME ftCreationTime;
 	FILETIME ftLastAccessTime;
 	FILETIME ftLastWriteTime;
-	DWORD nFileSizeHigh;
-	DWORD nFileSizeLow;
-	DWORD dwReserved0;
-	DWORD dwReserved1;
+	DWORD    nFileSizeHigh;
+	DWORD    nFileSizeLow;
+	DWORD    dwReserved0;
+	DWORD    dwReserved1;
 	CHAR cFileName[MAX_PATH];
 	CHAR cAlternateFileName[14];
 } WIN32_FIND_DATAA, *PWIN32_FIND_DATAA, *LPWIN32_FIND_DATAA;
 typedef struct _WIN32_FIND_DATAW {
-	DWORD dwFileAttributes;
+	DWORD    dwFileAttributes;
 	FILETIME ftCreationTime;
 	FILETIME ftLastAccessTime;
 	FILETIME ftLastWriteTime;
-	DWORD nFileSizeHigh;
-	DWORD nFileSizeLow;
-	DWORD dwReserved0;
-	DWORD dwReserved1;
+	DWORD    nFileSizeHigh;
+	DWORD    nFileSizeLow;
+	DWORD    dwReserved0;
+	DWORD    dwReserved1;
 	WCHAR cFileName[MAX_PATH];
 	WCHAR cAlternateFileName[14];
 } WIN32_FIND_DATAW, *PWIN32_FIND_DATAW, *LPWIN32_FIND_DATAW;
@@ -2479,12 +2479,12 @@ typedef struct _FILE_ID_128 {
 } FILE_ID_128, *PFILE_ID_128;
 
 typedef struct FILE_ID_DESCRIPTOR {
-	DWORD dwSize;
+	DWORD        dwSize;
 	FILE_ID_TYPE Type;
 	union {
 		LARGE_INTEGER FileId;
-		GUID ObjectId;
-		FILE_ID_128 ExtendedFileId;
+		GUID          ObjectId;
+		FILE_ID_128   ExtendedFileId;
 	};
 } FILE_ID_DESCRIPTOR, *LPFILE_ID_DESCRIPTOR;
 
@@ -2493,7 +2493,7 @@ typedef struct _FILE_BASIC_INFO {
 	LARGE_INTEGER LastAccessTime;
 	LARGE_INTEGER LastWriteTime;
 	LARGE_INTEGER ChangeTime;
-	DWORD FileAttributes;
+	DWORD         FileAttributes;
 } FILE_BASIC_INFO, *PFILE_BASIC_INFO;
 
 typedef struct _FILE_NAME_INFO {
@@ -2502,118 +2502,118 @@ typedef struct _FILE_NAME_INFO {
 } FILE_NAME_INFO, *PFILE_NAME_INFO;
 
 typedef struct _FILE_ID_INFO {
-	ULONGLONG VolumeSerialNumber;
+	ULONGLONG   VolumeSerialNumber;
 	FILE_ID_128 FileId;
 } FILE_ID_INFO, *PFILE_ID_INFO;
 
 typedef struct _FILE_ID_EXTD_DIR_INFO {
-	ULONG NextEntryOffset;
-	ULONG FileIndex;
+	ULONG         NextEntryOffset;
+	ULONG         FileIndex;
 	LARGE_INTEGER CreationTime;
 	LARGE_INTEGER LastAccessTime;
 	LARGE_INTEGER LastWriteTime;
 	LARGE_INTEGER ChangeTime;
 	LARGE_INTEGER EndOfFile;
 	LARGE_INTEGER AllocationSize;
-	ULONG FileAttributes;
-	ULONG FileNameLength;
-	ULONG EaSize;
-	ULONG ReparsePointTag;
-	FILE_ID_128 FileId;
+	ULONG         FileAttributes;
+	ULONG         FileNameLength;
+	ULONG         EaSize;
+	ULONG         ReparsePointTag;
+	FILE_ID_128   FileId;
 	WCHAR FileName[1];
 } FILE_ID_EXTD_DIR_INFO, *PFILE_ID_EXTD_DIR_INFO;
 
 typedef LONGLONG USN;
 typedef struct {
 	DWORDLONG UsnJournalID;
-	USN FirstUsn;
-	USN NextUsn;
-	USN LowestValidUsn;
-	USN MaxUsn;
+	USN       FirstUsn;
+	USN       NextUsn;
+	USN       LowestValidUsn;
+	USN       MaxUsn;
 	DWORDLONG MaximumSize;
 	DWORDLONG AllocationDelta;
 } USN_JOURNAL_DATA_V0, *PUSN_JOURNAL_DATA_V0;
 
 typedef struct {
-	USN StartUsn;
-	DWORD ReasonMask;
-	DWORD ReturnOnlyOnClose;
+	USN       StartUsn;
+	DWORD     ReasonMask;
+	DWORD     ReturnOnlyOnClose;
 	DWORDLONG Timeout;
 	DWORDLONG BytesToWaitFor;
 	DWORDLONG UsnJournalID;
-	WORD MinMajorVersion;
-	WORD MaxMajorVersion;
+	WORD      MinMajorVersion;
+	WORD      MaxMajorVersion;
 } READ_USN_JOURNAL_DATA_V1, *PREAD_USN_JOURNAL_DATA_V1;
 
 typedef struct {
 	DWORD RecordLength;
-	WORD MajorVersion;
-	WORD MinorVersion;
+	WORD  MajorVersion;
+	WORD  MinorVersion;
 } USN_RECORD_COMMON_HEADER, *PUSN_RECORD_COMMON_HEADER;
 
 typedef struct {
-	DWORD RecordLength;
-	WORD MajorVersion;
-	WORD MinorVersion;
-	DWORDLONG FileReferenceNumber;
-	DWORDLONG ParentFileReferenceNumber;
-	USN Usn;
+	DWORD         RecordLength;
+	WORD          MajorVersion;
+	WORD          MinorVersion;
+	DWORDLONG     FileReferenceNumber;
+	DWORDLONG     ParentFileReferenceNumber;
+	USN           Usn;
 	LARGE_INTEGER TimeStamp;
-	DWORD Reason;
-	DWORD SourceInfo;
-	DWORD SecurityId;
-	DWORD FileAttributes;
-	WORD FileNameLength;
-	WORD FileNameOffset;
+	DWORD         Reason;
+	DWORD         SourceInfo;
+	DWORD         SecurityId;
+	DWORD         FileAttributes;
+	WORD          FileNameLength;
+	WORD          FileNameOffset;
 	WCHAR FileName[1];
 } USN_RECORD_V2, *PUSN_RECORD_V2;
 
 typedef struct {
-	DWORD RecordLength;
-	WORD MajorVersion;
-	WORD MinorVersion;
-	FILE_ID_128 FileReferenceNumber;
-	FILE_ID_128 ParentFileReferenceNumber;
-	USN Usn;
+	DWORD         RecordLength;
+	WORD          MajorVersion;
+	WORD          MinorVersion;
+	FILE_ID_128   FileReferenceNumber;
+	FILE_ID_128   ParentFileReferenceNumber;
+	USN           Usn;
 	LARGE_INTEGER TimeStamp;
-	DWORD Reason;
-	DWORD SourceInfo;
-	DWORD SecurityId;
-	DWORD FileAttributes;
-	WORD FileNameLength;
-	WORD FileNameOffset;
+	DWORD         Reason;
+	DWORD         SourceInfo;
+	DWORD         SecurityId;
+	DWORD         FileAttributes;
+	WORD          FileNameLength;
+	WORD          FileNameOffset;
 	WCHAR FileName[1];
 } USN_RECORD_V3, *PUSN_RECORD_V3;
 
 typedef struct _WIN32_FILE_ATTRIBUTE_DATA {
-	DWORD dwFileAttributes;
+	DWORD    dwFileAttributes;
 	FILETIME ftCreationTime;
 	FILETIME ftLastAccessTime;
 	FILETIME ftLastWriteTime;
-	DWORD nFileSizeHigh;
-	DWORD nFileSizeLow;
+	DWORD    nFileSizeHigh;
+	DWORD    nFileSizeLow;
 } WIN32_FILE_ATTRIBUTE_DATA, *LPWIN32_FILE_ATTRIBUTE_DATA;
 
 /* ========================================================================== */
 /* Directory Changes: */
-public const u32 FILE_ACTION_ADDED            = 0x00000001;
-public const u32 FILE_ACTION_REMOVED          = 0x00000002;
-public const u32 FILE_ACTION_MODIFIED         = 0x00000003;
-public const u32 FILE_ACTION_RENAMED_OLD_NAME = 0x00000004;
-public const u32 FILE_ACTION_RENAMED_NEW_NAME = 0x00000005;
+public const u32 FILE_ACTION_ADDED            = 0x00000001_u32;
+public const u32 FILE_ACTION_REMOVED          = 0x00000002_u32;
+public const u32 FILE_ACTION_MODIFIED         = 0x00000003_u32;
+public const u32 FILE_ACTION_RENAMED_OLD_NAME = 0x00000004_u32;
+public const u32 FILE_ACTION_RENAMED_NEW_NAME = 0x00000005_u32;
 
-public const u32 FILE_FLAG_WRITE_THROUGH       = 0x80000000;
-public const u32 FILE_FLAG_OVERLAPPED          = 0x40000000;
-public const u32 FILE_FLAG_NO_BUFFERING        = 0x20000000;
-public const u32 FILE_FLAG_RANDOM_ACCESS       = 0x10000000;
-public const u32 FILE_FLAG_SEQUENTIAL_SCAN     = 0x08000000;
-public const u32 FILE_FLAG_DELETE_ON_CLOSE     = 0x04000000;
-public const u32 FILE_FLAG_BACKUP_SEMANTICS    = 0x02000000;
-public const u32 FILE_FLAG_POSIX_SEMANTICS     = 0x01000000;
-public const u32 FILE_FLAG_SESSION_AWARE       = 0x00800000;
-public const u32 FILE_FLAG_OPEN_REPARSE_POINT  = 0x00200000;
-public const u32 FILE_FLAG_OPEN_NO_RECALL      = 0x00100000;
-public const u32 FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000;
+public const u32 FILE_FLAG_WRITE_THROUGH       = 0x80000000_u32;
+public const u32 FILE_FLAG_OVERLAPPED          = 0x40000000_u32;
+public const u32 FILE_FLAG_NO_BUFFERING        = 0x20000000_u32;
+public const u32 FILE_FLAG_RANDOM_ACCESS       = 0x10000000_u32;
+public const u32 FILE_FLAG_SEQUENTIAL_SCAN     = 0x08000000_u32;
+public const u32 FILE_FLAG_DELETE_ON_CLOSE     = 0x04000000_u32;
+public const u32 FILE_FLAG_BACKUP_SEMANTICS    = 0x02000000_u32;
+public const u32 FILE_FLAG_POSIX_SEMANTICS     = 0x01000000_u32;
+public const u32 FILE_FLAG_SESSION_AWARE       = 0x00800000_u32;
+public const u32 FILE_FLAG_OPEN_REPARSE_POINT  = 0x00200000_u32;
+public const u32 FILE_FLAG_OPEN_NO_RECALL      = 0x00100000_u32;
+public const u32 FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000_u32;
 
 bool HasOverlappedIoCompleted(LPOVERLAPPED lpOverlapped) {
 	return ((*lpOverlapped).Internal != (ULONG_PTR)STATUS_PENDING);

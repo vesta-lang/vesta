@@ -15,7 +15,7 @@
 namespace std.types;
 
 @Target("arch:x86_16")
-	public typedef u16 uintptr new {
+public typedef u16 uintptr new {
 	// Una direccion ES lo que un puntero guarda, asi que pasarla donde se
 	// espera un `T*` (o al reves) no es una conversion entero<->puntero que
 	// haya que justificar: es la razon de ser del tipo.  La barrera nominal
@@ -24,7 +24,7 @@ namespace std.types;
 	public implicit to void *;
 }; // entero SIN signo del ancho de un puntero
 @Target("arch:x86_16")
-	public typedef i16 intptr new {
+public typedef i16 intptr new {
 	// Una direccion ES lo que un puntero guarda, asi que pasarla donde se
 	// espera un `T*` (o al reves) no es una conversion entero<->puntero que
 	// haya que justificar: es la razon de ser del tipo.  La barrera nominal
@@ -33,14 +33,14 @@ namespace std.types;
 	public implicit to void *;
 }; // entero CON signo del ancho de un puntero
 @Target("arch:x86_16")
-	public typedef u16 usize new; // tamano/cuenta de objetos (C size_t)
+public typedef u16 usize new; // tamano/cuenta de objetos (C size_t)
 @Target("arch:x86_16")
-	public typedef i16 isize new; // tamano/diferencia CON signo (Rust isize / ptrdiff)
+public typedef i16 isize new; // tamano/diferencia CON signo (Rust isize / ptrdiff)
 @Target("arch:x86_16")
-	public typedef i16 ssize new; // POSIX ssize_t: tamano con signo (o -1 = error)
+public typedef i16 ssize new; // POSIX ssize_t: tamano con signo (o -1 = error)
 
 // Tipos de COMPATIBILIDAD con C: DEBILES a proposito (ver x86_64.vx).
 @Target("arch:x86_16")
-	public typedef u16 size_t;
+public typedef u16 size_t;
 @Target("arch:x86_16")
-	public typedef i16 ssize_t;
+public typedef i16 ssize_t;

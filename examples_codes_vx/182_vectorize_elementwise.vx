@@ -20,21 +20,21 @@ namespace ejemplos.vectorize_elementwise;
 
 // Suma el contenido de un array f64 y devuelve la suma como i64 truncado.
 i64 sum_f64(f64* p, i32 n) {
-	f64 acc = 0.0;
-	for (i32 i = 0; i < n; i++) {
+	f64 acc = 0.0_f64;
+	for (i32 i = 0_i32; i < n; i++) {
 		acc = acc + p[i];
 	}
 	return (i64) acc;
 }
 
 i32 main() {
-	i32  N = 64;
+	i32  N = 64_i32;
 	f64* a = malloc(N * 8); // f64 = 8 bytes
 	f64* b = malloc(N * 8);
 	f64* c = malloc(N * 8);
 
 	// Inicializacion (no es patron vectorizable: el valor depende de i).
-	for (i32 i = 0; i < N; i++) {
+	for (i32 i = 0_i32; i < N; i++) {
 		a[i] = (f64)(i + 1);     // 1, 2, 3, ...
 		b[i] = (f64)(2 * i + 1); // 1, 3, 5, ...
 	}
@@ -42,15 +42,15 @@ i32 main() {
 	// --- PATRONES VECTORIZABLES: c[i] = a[i] OP b[i] (HOST f64) ---
 
 	// suma:  c[i] = a[i] + b[i]
-	for (i32 i = 0; i < N; i++) { c[i] = a[i] + b[i]; }
+	for (i32 i = 0_i32; i < N; i++) { c[i] = a[i] + b[i]; }
 	i64 s_add = sum_f64(c, N); // sum (i+1)+(2i+1) = sum (3i+2), i=0..63
 
 	// resta: c[i] = a[i] - b[i]
-	for (i32 i = 0; i < N; i++) { c[i] = a[i] - b[i]; }
+	for (i32 i = 0_i32; i < N; i++) { c[i] = a[i] - b[i]; }
 	i64 s_sub = sum_f64(c, N); // sum (i+1)-(2i+1) = sum (-i)
 
 	// producto: c[i] = a[i] * b[i]
-	for (i32 i = 0; i < N; i++) { c[i] = a[i] * b[i]; }
+	for (i32 i = 0_i32; i < N; i++) { c[i] = a[i] * b[i]; }
 	i64 s_mul = sum_f64(c, N); // sum (i+1)*(2i+1)
 
 	free(a);

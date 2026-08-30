@@ -45,7 +45,7 @@ i32 main() {
 	port_num web_port = (port_num) 8080;
 
 	// OK: tipos coinciden.
-	u64      g1       = grant(alice, admins); // 101 + 7*1000 = 7101
+	u64 g1 = grant(alice, admins); // 101 + 7*1000 = 7101
 
 	// PROHIBIDO (descomentar para ver el error compile-time):
 	//   u64 bad = grant(admins, alice);  // group_id donde se espera user_id
@@ -54,7 +54,7 @@ i32 main() {
 	//   u64 mix = alice + admins;  // u64+u64 OK, pero user_id+group_id no
 
 	// OK: cast explicito para extraer bits.
-	u64      raw      = (u64) bob;
+	u64 raw = (u64) bob;
 	if (raw != 202) return 100;
 	if (g1 != 7101) return 200;
 	if ((u32) web_port != 8080) return 300;

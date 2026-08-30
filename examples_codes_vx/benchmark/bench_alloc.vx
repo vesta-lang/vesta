@@ -10,7 +10,7 @@ i32 helper() {
 }
 
 i32 main() {
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 5_000_000) {
 		helper();
 		i = i + 1;

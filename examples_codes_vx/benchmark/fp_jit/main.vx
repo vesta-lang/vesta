@@ -2,8 +2,8 @@
 // 5M iteraciones con 6 ops FP por iter (incluyendo math builtins).
 
 i32 main() {
-	f64 acc = 0.0;
-	i32 i   = 0;
+	f64 acc = 0.0_f64;
+	i32 i   = 0_i32;
 	while (i < 5_000_000) {
 		f64 x = (f64) i;
 		f64 s = sqrt(x);

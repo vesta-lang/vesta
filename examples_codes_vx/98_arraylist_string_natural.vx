@@ -19,9 +19,9 @@ i32 main() {
 
 	// Anadir 3 strings que el GC ya retiene como external roots
 	// gracias a la write-barrier de la variante *_gc.
-	string            s1 = "hola";
-	string            s2 = "mundo";
-	string            s3 = "gc-protected";
+	string s1 = "hola";
+	string s2 = "mundo";
+	string s3 = "gc-protected";
 	xs.push(s1);
 	xs.push(s2);
 	xs.push(s3);
@@ -29,7 +29,7 @@ i32 main() {
 	// Verificar el tamano + que get devuelva exactamente los mismos
 	// handles que metimos (igualdad i64).  Las comparaciones usan el
 	// cast implicito string -> i64 (el handle es opaco).
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	if (xs.size() == 3) { acc = acc + 10; }
 	i64 h0 = xs.get(0);
 	i64 h1 = xs.get(1);

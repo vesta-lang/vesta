@@ -4,10 +4,12 @@ namespace ejemplos.z_shared_memory;
 // Cubre: shared modifier, share/unshare/is_shared, synchronized+wait+notify
 // cross-process, atomic primitives, shared_malloc, introspect.
 class Counter {
-	public i64 value;
+	public i64  value;
 	public bool ready;
-	public Counter() { this.value = 0;
-		this.ready = false; }
+	public Counter() {
+		this.value = 0;
+		this.ready = false;
+	}
 	public i64 add(i64 d) {
 		synchronized (this) {
 			this.value = this.value + d;

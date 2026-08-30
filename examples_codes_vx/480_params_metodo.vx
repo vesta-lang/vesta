@@ -26,10 +26,10 @@ struct CalcS {
 
 i32 main() {
 	Calculadora c = new Calculadora();
-	CalcS s;
+	CalcS       s;
 
-	i64 a = c.aplicar(&doblar, 10); // 20
-	i64 b = c.sumar_uno(9);         // 10
+	i64 a = c.aplicar(&doblar, 10);     // 20
+	i64 b = c.sumar_uno(9);             // 10
 	i64 d = s.aplicar(&restar_uno, 13); // 12
 
 	println("aplicar=${a} sumar_uno=${b} struct=${d}");

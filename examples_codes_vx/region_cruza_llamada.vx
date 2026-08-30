@@ -18,8 +18,8 @@
 // @expect-error: VX3001
 
 @NoIdiom
-	public void rellena(u8 *p, u64 n) {
-	u64* q = (u64 *) p;
+public void rellena(u8* p, u64 n) {
+	u64* q = (u64*) p;
 	q[0] = 0;
 	q[1] = 0;
 	q[2] = 0;

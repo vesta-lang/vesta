@@ -8,7 +8,7 @@ namespace ejemplos.unique_wraps_rawptr;
 // puntero como si fuera una direccion de slot -> SIGSEGV en los 3 modos.
 // Esperado: R0 = 42 en los 3 modos.
 i32 main() {
-	i64*         raw = (i64 *) malloc(8);
+	i64*         raw = (i64*) malloc(8);
 	*            raw = 42;
 	unique<i64*> u   = unique_box(raw);
 	i64*         got = *ptr_of(u);

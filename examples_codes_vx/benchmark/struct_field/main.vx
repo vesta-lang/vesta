@@ -10,8 +10,8 @@ struct Vec3 {
 
 i32 main() {
 	Vec3 v   = {1, 2, 3};
-	i32  sum = 0;
-	i32  i   = 0;
+	i32  sum = 0_i32;
+	i32  i   = 0_i32;
 	while (i < 30_000_000) {
 		v.x = v.x + 1;
 		v.y = v.y + 2;

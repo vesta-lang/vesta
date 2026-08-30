@@ -23,10 +23,10 @@ void trabajar() {
 	Conexion c = new Conexion();
 	c.handle = unique_with(10, cerrar); // primer recurso
 	c.handle = unique_with(20, cerrar); // reasigna: libera el primero
-} // al salir de scope: ~Conexion() libera el segundo
+}                                       // al salir de scope: ~Conexion() libera el segundo
 
 i32 main() {
 	Counter.liberados = 0;
-	trabajar(); // 1 reasignacion + 1 destruccion = 2 cierres
+	trabajar();                           // 1 reasignacion + 1 destruccion = 2 cierres
 	return (i32)(40 + Counter.liberados); // 40 + 2 = 42
 }

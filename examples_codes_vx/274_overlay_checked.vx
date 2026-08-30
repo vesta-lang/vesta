@@ -37,18 +37,18 @@ i64 sec_size_checked(Hdr h, i32 i, u64 len) {
 }
 
 i32 main() {
-	u8* buf = (u8 *) malloc(64);
-	*(u32 *)(buf + 0) = 0xCAFE;
-	*(u16 *)(buf + 4) = 2;
-	*(u32 *)(buf + 8) = 100;
-	*(u32 *)(buf + 12) = 111;
-	*(u32 *)(buf + 16) = 200;
-	*(u32 *)(buf + 20) = 222;
+	u8* buf = (u8*) malloc(64);
+	*(u32*)(buf + 0)  = 0xCAFE;
+	*(u16*)(buf + 4)  = 2;
+	*(u32*)(buf + 8)  = 100;
+	*(u32*)(buf + 12) = 111;
+	*(u32*)(buf + 16) = 200;
+	*(u32*)(buf + 20) = 222;
 
 	Hdr h = Hdr(buf);
 
 	// offset resuelto de un campo de elemento de array (dinamico + stride)
-	println("OFF_S1_SZ=${offsetof(h.secs[1].sz)}");  // 20
+	println("OFF_S1_SZ=${offsetof(h.secs[1].sz)}"); // 20
 
 	// buffer REAL de 64 bytes: todo cabe
 	println("SZ0_64=${sec_size_checked(h, 0, 64)}"); // 111

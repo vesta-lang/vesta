@@ -7,7 +7,7 @@ namespace ejemplos.math_builtins;
 // CALLN al simbolo vmath_<name> con los bits IEEE 754 como uint64_t
 // (BITCAST evita FTOI que convertiria el VALOR).
 i32 main() {
-	f64 a = 16.0;
+	f64 a = 16.0_f64;
 	f64 r = sqrt(a); // 4.0
 	println("sqrt(16)=${r}");
 	if (r < 3.99 || r > 4.01) return 1;
@@ -43,8 +43,8 @@ i32 main() {
 	if (c < 0.99 || c > 1.01) return 9;
 	if (s < -0.01 || s > 0.01) return 10;
 
-	f64 lg  = log(2.71828);   // ~1.0
-	f64 l2  = log2(8.0);      // 3.0
+	f64 lg  = log(2.71828);  // ~1.0
+	f64 l2  = log2(8.0);     // 3.0
 	f64 l10 = log10(1000.0); // 3.0
 	println("log(e)=${lg} log2(8)=${l2} log10(1000)=${l10}");
 	if (lg < 0.99 || lg > 1.01) return 11;
@@ -53,8 +53,8 @@ i32 main() {
 
 	// int builtins
 	i64 av  = abs(-42);         // 42
-	i64 imx = imax(7, 13);     // 13
-	i64 imn = imin(7, 13);     // 7
+	i64 imx = imax(7, 13);      // 13
+	i64 imn = imin(7, 13);      // 7
 	i64 cl  = clamp(20, 5, 10); // 10
 	println("abs(-42)=${av} imax=${imx} imin=${imn} clamp=${cl}");
 	if (av != 42) return 14;

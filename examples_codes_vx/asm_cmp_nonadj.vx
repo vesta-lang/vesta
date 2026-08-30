@@ -7,11 +7,11 @@
 //     vm --vx asm_cmp_nonadj.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-	u64                 ok = 1;
-	register("rax") u64 r  = 0;
-	register("rsi") u64 s  = 5;
-	register("rdi") u64 d  = 10;
-	register("rbx") u64 t  = 0;
+	u64                 ok = 1_u64;
+	register("rax") u64 r  = 0_u64;
+	register("rsi") u64 s  = 5_u64;
+	register("rdi") u64 d  = 10_u64;
+	register("rbx") u64 t  = 0_u64;
 
 	// cmp seguido de un mov (flag-neutral) ANTES del setcc: no-adyacente.
 	asm { cmp rsi, rdi

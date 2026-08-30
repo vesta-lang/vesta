@@ -12,9 +12,11 @@
 // Cero helpers, cero `*(T*)`.  interp = JIT = AOT.
 
 @overlay
-struct Sec { u32 va @0x00;
-	u32 vsz @0x04;
-	u32 rptr @0x08; }
+struct Sec {
+	u32 va   @0x00;
+	u32 vsz  @0x04;
+	u32 rptr @0x08;
+}
 
 @overlay
 struct Desc {
@@ -24,7 +26,7 @@ struct Desc {
 	u8 name @offset {
 		u64 rb  = (u64) parent<Root>();
 		u32 rva = this.name_rva;
-		i32 i   = 0;
+		i32 i   = 0_i32;
 		while ((u32)i < (u32)parent<Root>().count) {
 			u32 va = parent<Root>().secs[i].va;
 			u32 vs = parent<Root>().secs[i].vsz;
@@ -46,7 +48,7 @@ struct Root {
 	Desc Descs[] @offset {
 		u64 rb  = (u64) base;
 		u32 rva = this.desc_rva;
-		i32 i   = 0;
+		i32 i   = 0_i32;
 		while ((u32)i < (u32)this.count) {
 			u32 va = this.secs[i].va;
 			u32 vs = this.secs[i].vsz;
@@ -60,39 +62,39 @@ struct Root {
 }
 
 i32 main() {
-	u8* buf = (u8 *) malloc(512);
-	*(u32 *)(buf + 0) = 1;      // count=1
-	*(u32 *)(buf + 4) = 0x1000; // desc_rva
+	u8* buf = (u8*) malloc(512);
+	*(u32*)(buf + 0) = 1;      // count=1
+	*(u32*)(buf + 4) = 0x1000; // desc_rva
 	// secs[0]: cubre todo el rango, va=0x1000 vsz=0x1000 rptr=0x40
-	*(u32 *)(buf + 8) = 0x1000;
-	*(u32 *)(buf + 12) = 0x1000;
-	*(u32 *)(buf + 16) = 0x40;
+	*(u32*)(buf + 8)  = 0x1000;
+	*(u32*)(buf + 12) = 0x1000;
+	*(u32*)(buf + 16) = 0x40;
 	// Descs en translate(0x1000)=buf+0x40.  3 descriptores (2 + nulo).
-	*(u32 *)(buf + 0x40) = 0x1080;
-	*(u32 *)(buf + 0x44) = 10; // Desc[0] name_rva, val
-	*(u32 *)(buf + 0x48) = 0x1090;
-	*(u32 *)(buf + 0x4C) = 20; // Desc[1]
-	*(u32 *)(buf + 0x50) = 0;
-	*(u32 *)(buf + 0x54) = 0; // Desc[2] fin
+	*(u32*)(buf + 0x40) = 0x1080;
+	*(u32*)(buf + 0x44) = 10; // Desc[0] name_rva, val
+	*(u32*)(buf + 0x48) = 0x1090;
+	*(u32*)(buf + 0x4C) = 20; // Desc[1]
+	*(u32*)(buf + 0x50) = 0;
+	*(u32*)(buf + 0x54) = 0; // Desc[2] fin
 	// nombres: "AB" en translate(0x1080)=buf+0xC0, "CD" en translate(0x1090)=buf+0xD0
-	*(u8 *)(buf + 0xC0) = 'A';
-	*(u8 *)(buf + 0xC1) = 'B';
-	*(u8 *)(buf + 0xC2) = 0;
-	*(u8 *)(buf + 0xD0) = 'C';
-	*(u8 *)(buf + 0xD1) = 'D';
-	*(u8 *)(buf + 0xD2) = 0;
+	*(u8*)(buf + 0xC0) = 'A';
+	*(u8*)(buf + 0xC1) = 'B';
+	*(u8*)(buf + 0xC2) = 0;
+	*(u8*)(buf + 0xD0) = 'C';
+	*(u8*)(buf + 0xD1) = 'D';
+	*(u8*)(buf + 0xD2) = 0;
 
 	Root r = Root(buf);
 
 	print("names:");
-	i32 count = 0;
-	i64 acc   = 0;
-	i32 i     = 0;
+	i32 count = 0_i32;
+	i64 acc   = 0_i64;
+	i32 i     = 0_i32;
 	while (r.Descs[i].name_rva != 0 && i < 16) {
 		print(" ");
 		print_cstr(&r.Descs[i].name);
 		// primer char del nombre + val, acumulado (verificable)
-		u8 c0 = *(u8 *)(&r.Descs[i].name);
+		u8 c0 = *(u8*)(&r.Descs[i].name);
 		acc   = acc + (i64)c0 + (i64)r.Descs[i].val;
 		count = count + 1;
 		i     = i + 1;

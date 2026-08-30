@@ -5,14 +5,14 @@
 import "modules/buffer";
 import "modules/history";
 
-i32 g_next_id = 1;
+i32 g_next_id = 1_i32;
 
 public class EditorTab {
-	public i32 id;
-	public buffer.Buffer buf;
-	public string title;
-	public i32 row_top;
-	public string last_needle;
+	public i32                   id;
+	public buffer.Buffer         buf;
+	public string                title;
+	public i32                   row_top;
+	public string                last_needle;
 	public history.SnapshotStack undo;
 	public history.SnapshotStack redo;
 
@@ -35,7 +35,7 @@ public class EditorTab {
 
 public class Workspace {
 	public EditorTab active;
-	public i32 count;
+	public i32       count;
 
 	public Workspace() {
 		this.active = null;

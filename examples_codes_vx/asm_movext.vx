@@ -5,14 +5,14 @@
 //     vm --vx asm_movext.vx -o m && vm --run m.velb
 // @expect 42
 u64 main() {
-	u64                 ok = 1;
-	register("rax") u64 a  = 0;
-	register("rsi") u64 s  = 0xFFFFFFFFFFFFFF85; // byte bajo = 0x85 (-123)
+	u64                 ok = 1_u64;
+	register("rax") u64 a  = 0_u64;
+	register("rsi") u64 s  = 0xFFFFFFFFFFFFFF85_u64; // byte bajo = 0x85 (-123)
 	asm { movzx rax, sil };
 	if (a != 0x85) ok = 0; // zero-extend del byte
 	asm { movsx rax, sil };
 	if (a != 0xFFFFFFFFFFFFFF85) ok = 0; // sign-extend del byte
-	register("rdi") u64          di = 0xFFFF1234;
+	register("rdi") u64          di = 0xFFFF1234_u64;
 	asm { movzx rax, di };   // di = word bajo de rdi
 	if (a != 0x1234) ok = 0; // zero-extend del word
 	return (ok == 1) ? 42 : 0;

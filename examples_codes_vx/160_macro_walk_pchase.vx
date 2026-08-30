@@ -29,16 +29,16 @@ namespace ejemplos.macro_walk_pchase;
 //   del AST evaluator; mantener todo inline permite VM-eval rapida).
 
 @Macro
-	comptime string walk(expr code) {
+comptime string walk(expr code) {
 	i64    n           = strlen(code);
-	i64    i           = 0;
-	i64    last_start  = 0;
+	i64    i           = 0_i64;
+	i64    last_start  = 0_i64;
 	string current     = "";
-	i64    token_count = 0;
+	i64    token_count = 0_i64;
 
 	while (i < n) {
 		// Buscar el separador "->".
-		i64 found = 0;
+		i64 found = 0_i64;
 		if (i + 1 < n) {
 			if (substr(code, i, 1) == "-") {
 				if (substr(code, i + 1, 1) == ">") {
@@ -92,7 +92,7 @@ i32 main() {
 	// del bloque.  Lo señalo el comprobador de limites de `--analyze`
 	// (`region [0,256) ; acceso [448,456)`); funcionaba por el margen que deja
 	// el allocador, que es justo lo que hace dificil de ver un fallo asi.
-	u64* root = (u64 *)malloc(512);
+	u64* root = (u64*)malloc(512);
 
 	// Nivel 0: root[0..3] son valores escalares.
 	root[0] = 111;
@@ -101,16 +101,16 @@ i32 main() {
 
 	// Nivel 1: en root + 0x40 guardamos una direccion (puntero) a
 	// root + 0x80.  En root + 0x80 guardamos un valor escalar.
-	u64* p_level1 = (u64 *)((u64)root + 0x80);
-	p_level1[0] = 999;
-	*(u64 *)((u64)root + 0x40) = (u64)p_level1;
+	u64* p_level1 = (u64*)((u64)root + 0x80);
+	p_level1[0]               = 999;
+	*(u64*)((u64)root + 0x40) = (u64)p_level1;
 
 	// Nivel 2: en root + 0x100 guardamos un puntero a root + 0x180.
 	// En root + 0x180 guardamos otro puntero a root + 0x1C0.
 	// En root + 0x1C0 guardamos el valor final.
-	*(u64 *)((u64)root + 0x01C0) = 42;
-	*(u64 *)((u64)root + 0x0180) = (u64)root + 0x01C0;
-	*(u64 *)((u64)root + 0x0100) = (u64)root + 0x0180;
+	*(u64*)((u64)root + 0x01C0) = 42;
+	*(u64*)((u64)root + 0x0180) = (u64)root + 0x01C0;
+	*(u64*)((u64)root + 0x0100) = (u64)root + 0x0180;
 
 	// Test 1: 1 nivel de deref.  Equivalente a *(u64*)(root + 0x40)
 	// pero sin acceso al campo guardado en root+0x80 -- aqui pedimos

@@ -37,7 +37,7 @@ i32 main() {
 	Optional<i32> opt = 100;
 	Optional<i32> emp = null; // implicit None()
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// Usar Optional con sintaxis natural.
 	if (isPresent(opt) == 1) {
@@ -52,9 +52,9 @@ i32 main() {
 	Result<i32, i32> r2 = divide(10, 0); // Err(1)
 	Result<i32, i32> r3 = divide(-1, 1); // Err(2)
 
-	acc = acc + to_default(r1, 0);       // +4
-	acc = acc + to_default(r2, 0);       // +1000 (Err(1) * 1000)
+	acc = acc + to_default(r1, 0); // +4
+	acc = acc + to_default(r2, 0); // +1000 (Err(1) * 1000)
 	acc = acc + to_default(r3, 0); // +2000 (Err(2) * 1000)
 
-	return acc;                    // 100 + 50 + 4 + 1000 + 2000 = 3154
+	return acc; // 100 + 50 + 4 + 1000 + 2000 = 3154
 }

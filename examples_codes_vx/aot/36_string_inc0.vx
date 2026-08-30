@@ -13,8 +13,8 @@ i32 main() {
 	i64    n = s.length(); // 10
 
 	string a     = "hola";
-	string b     = a;       // MOVE: a -> b (a queda con ptr=0)
-	char*  c     = b.cstr(); // buffer nul-terminado de b
+	string b     = a;          // MOVE: a -> b (a queda con ptr=0)
+	char*  c     = b.cstr();   // buffer nul-terminado de b
 	i64    first = (i64) c[0]; // 'h' = 104
 
 	return (i32)(n + first - 104);

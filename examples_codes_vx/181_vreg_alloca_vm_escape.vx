@@ -6,8 +6,10 @@ namespace ejemplos.vreg_alloca_vm_escape;
 // (mov [rbx+SP]; sub; mov [rbx+SP]) + el save/restore del VM-RSP en el
 // prologue/epilogue.  Sin el restore, el VM stack haria leak/overflow entre
 // las multiples llamadas del loop.  Esperado: 10 * (3+4) = 70.
-struct P { i64 x;
-	i64 y; }
+struct P {
+	i64 x;
+	i64 y;
+}
 
 i64 sink(P* p) {
 	return (*p).x + (*p).y; // p es un vaddr (escapo del caller) -> LOAD_VM
@@ -21,8 +23,8 @@ i64 use() {
 }
 
 i64 main() {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < 10) { // muchas llamadas -> el VM-RSP debe restaurarse en cada RET
 		acc = acc + use();
 		i   = i + 1;

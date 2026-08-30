@@ -1,6 +1,6 @@
 namespace ejemplos.atest;
-i64 g_counter = 0;
-i64 g_cell    = 100;
+i64 g_counter = 0_i64;
+i64 g_cell    = 100_i64;
 i32 main() {
 	// atomic_add: old = fetch_add(&g_counter, 5); g_counter debe ser 5, old 0
 	i64 old_add = atomic_add_i64(&g_counter, 5);

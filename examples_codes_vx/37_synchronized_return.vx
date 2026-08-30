@@ -31,10 +31,10 @@ class Counter {
 
 i32 main() {
 	Counter c  = new Counter();
-	i32     a  = c.inc_or_zero(0);  // 1: incrementa, retorna 1
-	i32     b  = c.inc_or_zero(1);  // 0: return temprano, NO incrementa
+	i32     a  = c.inc_or_zero(0); // 1: incrementa, retorna 1
+	i32     b  = c.inc_or_zero(1); // 0: return temprano, NO incrementa
 	i32     c2 = c.inc_or_zero(0); // 2: incrementa de nuevo
-	i32     d  = c.inc_or_zero(1);  // 0: return temprano
-	i32     e  = c.inc_or_zero(0);  // 3: incrementa
-	return a + b + c2 + d + e; // 1 + 0 + 2 + 0 + 3 = 6
+	i32     d  = c.inc_or_zero(1); // 0: return temprano
+	i32     e  = c.inc_or_zero(0); // 3: incrementa
+	return a + b + c2 + d + e;     // 1 + 0 + 2 + 0 + 3 = 6
 }

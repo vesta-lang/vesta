@@ -13,12 +13,12 @@ import std.types only uintptr;
 import "vx_thread" only vx_thread_spawn, vx_thread_join;
 import std.atomic only atomic_add64, atomic_load64, vx_spin_lock, vx_spin_unlock;
 
-i64 g_counter = 0; // contador atomico
-i64 g_locked  = 0;  // contador protegido por spinlock
-i64 g_lock    = 0; // palabra del spinlock
+i64 g_counter = 0_i64; // contador atomico
+i64 g_locked  = 0_i64; // contador protegido por spinlock
+i64 g_lock    = 0_i64; // palabra del spinlock
 
 void worker(u64 id) {
-	i64 i = 0;
+	i64 i = 0_i64;
 	while (i < 50_000) {
 		atomic_add64(&g_counter, 1); // RMW atomica
 		vx_spin_lock(&g_lock);
@@ -30,14 +30,16 @@ void worker(u64 id) {
 
 i32 main() {
 	uintptr[4] h;
-	i64 k = 0;
+	i64        k = 0_i64;
 	while (k < 4) {
 		h[k] = vx_thread_spawn((uintptr)(cfn(u64) -> void) worker, (uintptr)k);
-		k = k + 1;
+		k    = k + 1;
 	}
 	k = 0;
-	while (k < 4) { vx_thread_join(h[k]);
-		k = k + 1; }
+	while (k < 4) {
+		vx_thread_join(h[k]);
+		k = k + 1;
+	}
 
 	// Ambos deben ser 4*50000 = 200000 exactos.
 	i64 a = atomic_load64(&g_counter);

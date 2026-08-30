@@ -15,7 +15,7 @@
 namespace std.types;
 
 @Target("arch:x86_64")
-	public typedef u64 uintptr new {
+public typedef u64 uintptr new {
 	// Una direccion ES lo que un puntero guarda, asi que pasarla donde se
 	// espera un `T*` (o al reves) no es una conversion entero<->puntero que
 	// haya que justificar: es la razon de ser del tipo.  La barrera nominal
@@ -24,7 +24,7 @@ namespace std.types;
 	public implicit to void *;
 }; // entero SIN signo del ancho de un puntero
 @Target("arch:x86_64")
-	public typedef i64 intptr new {
+public typedef i64 intptr new {
 	// Una direccion ES lo que un puntero guarda, asi que pasarla donde se
 	// espera un `T*` (o al reves) no es una conversion entero<->puntero que
 	// haya que justificar: es la razon de ser del tipo.  La barrera nominal
@@ -33,11 +33,11 @@ namespace std.types;
 	public implicit to void *;
 }; // entero CON signo del ancho de un puntero
 @Target("arch:x86_64")
-	public typedef u64 usize new; // tamano/cuenta de objetos (C size_t)
+public typedef u64 usize new; // tamano/cuenta de objetos (C size_t)
 @Target("arch:x86_64")
-	public typedef i64 isize new; // tamano/diferencia CON signo (Rust isize / ptrdiff)
+public typedef i64 isize new; // tamano/diferencia CON signo (Rust isize / ptrdiff)
 @Target("arch:x86_64")
-	public typedef i64 ssize new; // POSIX ssize_t: tamano con signo (o -1 = error)
+public typedef i64 ssize new; // POSIX ssize_t: tamano con signo (o -1 = error)
 
 // Tipos de COMPATIBILIDAD con C.  DEBILES a proposito (sin `new`): en C
 // `size_t` no es un tipo distinto sino un typedef de un entero sin signo, y
@@ -49,6 +49,6 @@ namespace std.types;
 // como alias de `usize`/`ssize` les contagiaba la identidad FUERTE, que es
 // justo lo contrario de lo que un tipo de compatibilidad debe hacer.
 @Target("arch:x86_64")
-	public typedef u64 size_t;
+public typedef u64 size_t;
 @Target("arch:x86_64")
-	public typedef i64 ssize_t;
+public typedef i64 ssize_t;

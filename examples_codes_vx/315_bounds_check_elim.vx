@@ -25,8 +25,8 @@ namespace ejemplos.bounds_check_elim;
 // Resultado esperado: R00 == 55  (1+2+3+...+10)
 
 i64 sum_checked(i64[] xs, i64 len) {
-	i64 s = 0;
-	i64 i = 0;
+	i64 s = 0_i64;
+	i64 i = 0_i64;
 	while (i < len) {
 		// Bounds-check escrito a mano.  La guarda del bucle (`i < len`) domina
 		// este punto -> `i >= len` es provablemente false -> la rama del panic
@@ -42,10 +42,10 @@ i64 sum_checked(i64[] xs, i64 len) {
 
 i64 main() {
 	i64[10] arr;
-	i64 i = 0;
+	i64     i = 0_i64;
 	while (i < 10) {
 		arr[i] = i + 1;
-		i = i + 1;
+		i      = i + 1;
 	}
 	return sum_checked(arr, 10);
 }

@@ -15,16 +15,16 @@
 
 // Clase sin constructor declarado: los defaults se aplican igualmente.
 class Config {
-	i32  ancho = 80;
-	i32  alto  = 24;
+	i32  ancho = 80_i32;
+	i32  alto  = 24_i32;
 	bool color = true;
 }
 
 // El ctor con argumento sobrescribe SU campo; el resto queda en su default.
 class Ventana {
-	i32 x = 0;
-	i32 y = 0;
-	i32 z = 100; // profundidad por defecto
+	i32 x = 0_i32;
+	i32 y = 0_i32;
+	i32 z = 100_i32; // profundidad por defecto
 	public Ventana(i32 px, i32 py) {
 		this.x = px;
 		this.y = py;
@@ -35,19 +35,19 @@ class Ventana {
 
 // Herencia: Base aporta su default, Deriv el suyo.
 class Base {
-	i32 base_v = 7;
+	i32 base_v = 7_i32;
 	public Base() { }
 }
 class Panel : Base {
-	i32 panel_v = 30;
+	i32 panel_v = 30_i32;
 	public Panel() { super(); }
 	public i32 total() { return this.base_v + this.panel_v; }
 }
 
 // Generico: el default de `n` se conserva en cada instanciacion.
 class Contador<T> {
-	T valor;
-	i32 n = 42;
+	T   valor;
+	i32 n = 42_i32;
 	public Contador() { }
 	public i32 get_n() { return this.n; }
 }

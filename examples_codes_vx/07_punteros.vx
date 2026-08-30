@@ -40,8 +40,8 @@ i32 read_ptr(i32* p) {
 }
 
 i32 main() {
-	i32 a = 0;
-	i32 b = 0;
+	i32 a = 0_i32;
+	i32 b = 0_i32;
 	// `&a` es `i32*`: al tomar su direccion, el local se reserva en host.
 	set_to(&a, 100);
 	set_to(&b, 42);

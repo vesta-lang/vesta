@@ -31,7 +31,7 @@ enum Shape {
 i32 score_of(Shape s) {
 	match s {
 		case Empty             => return 0;
-		case Circle(r)         => return r * 3;             // circle factor 3
+		case Circle(r)         => return r * 3;       // circle factor 3
 		case Rectangle(w, h)   => return (w + h) * 2; // rect perimeter
 		case Triangle(a, b, c) => {
 			// f64 sides -> sum truncate to i32
@@ -85,18 +85,18 @@ i32 main() {
 	Shape s3 = Shape.Triangle(3.0, 4.0, 5.0); // suma = 12.0
 	Shape s4 = Shape.Labeled("widget", 9);
 
-	i32   sc0         = score_of(s0); // 0
-	i32   sc1         = score_of(s1); // 7*3 = 21
-	i32   sc2         = score_of(s2); // (3+5)*2 = 16
-	i32   sc3         = score_of(s3); // 12
-	i32   sc4         = score_of(s4); // 9*2 = 18
+	i32 sc0 = score_of(s0); // 0
+	i32 sc1 = score_of(s1); // 7*3 = 21
+	i32 sc2 = score_of(s2); // (3+5)*2 = 16
+	i32 sc3 = score_of(s3); // 12
+	i32 sc4 = score_of(s4); // 9*2 = 18
 
 	// Suma scores: 0 + 21 + 16 + 12 + 18 = 67.
-	i32   total_score = sc0 + sc1 + sc2 + sc3 + sc4;
+	i32 total_score = sc0 + sc1 + sc2 + sc3 + sc4;
 
 	// Convert s1 (Circle 7) a punto -> (7, 7), suma = 14.
-	Point p           = shape_to_point(s1);
-	i32   point_sum   = p.x + p.y;
+	Point p         = shape_to_point(s1);
+	i32   point_sum = p.x + p.y;
 
 	println("scores: ${sc0} ${sc1} ${sc2} ${sc3} ${sc4} = ${total_score}");
 	println("p.x=${p.x} p.y=${p.y} sum=${point_sum}");

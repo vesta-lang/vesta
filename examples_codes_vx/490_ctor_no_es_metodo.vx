@@ -20,7 +20,7 @@ struct S {
 }
 
 i32 main() {
-	S   s = S(1);
+	S s = S(1);
 	// El constructor NO se puede llamar como metodo de instancia.
 	i64 a = s.S(5);
 	return (i32) a;

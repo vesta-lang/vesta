@@ -55,9 +55,9 @@ u64 __h_a;
 u64 __h_b;
 
 // --- Estado compartido ---
-i64 __trace  = 0;  // traza acumulada (base 10)
-i64 __done_a = 0; // 1 cuando la fibra A termino
-i64 __done_b = 0; // 1 cuando la fibra B termino
+i64 __trace  = 0_i64; // traza acumulada (base 10)
+i64 __done_a = 0_i64; // 1 cuando la fibra A termino
+i64 __done_b = 0_i64; // 1 cuando la fibra B termino
 
 // Cuerpo de la fibra A: acumula su id (1), cede al scheduler, vuelve a acumular,
 // marca terminada y cede definitivo (no retorna: sin frame de retorno valido).
@@ -93,9 +93,9 @@ i32 main() {
 	__ctx_b[0] = (i64) fiber_entry(fiber_b);
 	__ctx_b[1] = top_b;
 	__ctx_b[2] = top_b;
-	__h_sched = (u64) & __ctx_sched[0];
-	__h_a     = (u64) & __ctx_a[0];
-	__h_b     = (u64) & __ctx_b[0];
+	__h_sched  = (u64) & __ctx_sched[0];
+	__h_a      = (u64) & __ctx_a[0];
+	__h_b      = (u64) & __ctx_b[0];
 
 	// Modelo JIT: override a contexto/pila HOST + trampolin + proc.  fiber_entry
 	// resuelve al jit_code nativo del cuerpo (compilado por el force-eager).
@@ -107,8 +107,8 @@ i32 main() {
 
 	// Mini round-robin: mientras alguna fibra viva, dale un quantum (swapctx
 	// hacia ella; al ceder/terminar vuelve aqui).
-	i64 alive_a = 1;
-	i64 alive_b = 1;
+	i64 alive_a = 1_i64;
+	i64 alive_b = 1_i64;
 	while (alive_a == 1 || alive_b == 1) {
 		if (alive_a == 1) {
 			fiber_swapctx(__h_sched, __h_a); // corre A

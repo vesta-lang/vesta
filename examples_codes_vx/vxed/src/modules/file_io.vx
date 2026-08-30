@@ -17,11 +17,11 @@ import "modules/buffer";
 
 // Codigos de error como comptime: cero overhead, el codigo emitido es
 // un literal i64 inline.
-public const i32 FE_OK         = 0;
-public const i32 FE_NOT_FOUND  = 1;
-public const i32 FE_READ_FAIL  = 2;
-public const i32 FE_WRITE_FAIL = 3;
-public const i32 FE_BAD_HANDLE = 4;
+public const i32 FE_OK         = 0_i32;
+public const i32 FE_NOT_FOUND  = 1_i32;
+public const i32 FE_READ_FAIL  = 2_i32;
+public const i32 FE_WRITE_FAIL = 3_i32;
+public const i32 FE_BAD_HANDLE = 4_i32;
 
 // Modos de apertura como strings inmutables.  Atributo `@cold` porque
 // solo se leen al abrir un archivo (no en el hot loop del editor).
@@ -37,17 +37,17 @@ public const string MODE_APPEND = "ab";
 // acceso cross-module a runtime globals via namespace -- solo
 // `comptime const`.  Los metodos de @c FileReader del mismo modulo si
 // los pueden leer/escribir libremente.
-             i64    g_msvcrt    = 0;
-             i64    g_fopen     = 0;
-             i64    g_fwrite    = 0;
-             i64    g_fclose    = 0;
-             i64    g_fread     = 0;
-             i64    g_fseek     = 0;
-             i64    g_ftell     = 0;
-             i64    g_findfirst = 0;
-             i64    g_findnext  = 0;
-             i64    g_findclose = 0;
-             i64    g_getcwd    = 0;
+i64 g_msvcrt    = 0_i64;
+i64 g_fopen     = 0_i64;
+i64 g_fwrite    = 0_i64;
+i64 g_fclose    = 0_i64;
+i64 g_fread     = 0_i64;
+i64 g_fseek     = 0_i64;
+i64 g_ftell     = 0_i64;
+i64 g_findfirst = 0_i64;
+i64 g_findnext  = 0_i64;
+i64 g_findclose = 0_i64;
+i64 g_getcwd    = 0_i64;
 
 void ensure_loaded() {
 	if (g_msvcrt != 0) {
@@ -82,19 +82,19 @@ void ensure_loaded() {
 
 // Abre la enumeracion de `path/*`.  Devuelve handle opaco i64 o -1.
 @cold
-	public i64 dir_open(u8 *spec, u8 *finddata) {
+public i64 dir_open(u8* spec, u8* finddata) {
 	ensure_loaded();
 	return ffi_call(g_findfirst, spec, finddata);
 }
 
 @cold
-	public i32 dir_next(i64 handle, u8 *finddata) {
+public i32 dir_next(i64 handle, u8* finddata) {
 	ensure_loaded();
 	return (i32) ffi_call(g_findnext, handle, finddata);
 }
 
 @cold
-	public void dir_close(i64 handle) {
+public void dir_close(i64 handle) {
 	ensure_loaded();
 	ffi_call(g_findclose, handle);
 }
@@ -102,11 +102,11 @@ void ensure_loaded() {
 // Obtiene el directorio de trabajo actual (max `cap` bytes).  Devuelve
 // el puntero al buffer (mismo que `out`) o null si falla.
 @cold
-	public u8 *getcwd_into(u8 *out, i32 cap) {
+public u8* getcwd_into(u8* out, i32 cap) {
 	ensure_loaded();
 	i64 r = ffi_call(g_getcwd, out, cap);
 	if (r == 0) return null;
-	return (u8 *) r;
+	return (u8*) r;
 }
 
 // =============================================================================
@@ -114,8 +114,8 @@ void ensure_loaded() {
 // =============================================================================
 
 public class FileReader {
-	public i64 fp;   // FILE* opaco
-	public u8* data; // contenido leido (heap-alloc)
+	public i64 fp;     // FILE* opaco
+	public u8* data;   // contenido leido (heap-alloc)
 	public i64 length; // bytes leidos
 
 	public FileReader() {
@@ -171,7 +171,7 @@ public class FileReader {
 			free(buf);
 			return Err(FE_READ_FAIL);
 		}
-		buf[size] = 0; // NUL terminator defensivo
+		buf[size]   = 0; // NUL terminator defensivo
 		this.fp     = 0;
 		this.data   = buf;
 		this.length = size;
@@ -185,7 +185,7 @@ public class FileReader {
 
 // Abre el archivo en modo `mode_str` y devuelve el FILE* opaco como i64.
 @hot
-	public Result<i64, i32> open_file(string path, string mode_str) {
+public Result<i64, i32> open_file(string path, string mode_str) {
 	ensure_loaded();
 	u8* path_c = path.cstr();
 	u8* mode_c = mode_str.cstr();
@@ -215,7 +215,7 @@ public i64 write_bytes(i64 fp, u8* buf, i32 n) {
 // =============================================================================
 
 @hot
-	public Result<i64, i32> save_buffer(string path, buffer.Buffer buf) {
+public Result<i64, i32> save_buffer(string path, buffer.Buffer buf) {
 	ensure_loaded();
 	u8* path_c = path.cstr();
 	u8* mode_c = MODE_WRITE.cstr();

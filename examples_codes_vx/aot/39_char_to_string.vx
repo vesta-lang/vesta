@@ -11,8 +11,8 @@
 
 i32 main() {
 	string s = (string)'a' + (string)'b'; // "ab"
-	char*  c = s.cstr();                   // buffer nul-terminado
+	char*  c = s.cstr();                  // buffer nul-terminado
 	// c[0] = 'a' = 97 ; length = 2.  Devolvemos length para el
 	// exit-code (el contenido se verifica aparte en los tests).
-	return (i32) s.length();              // 2
+	return (i32) s.length(); // 2
 }

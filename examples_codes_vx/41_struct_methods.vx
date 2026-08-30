@@ -43,13 +43,13 @@ i32 main() {
 	p.y = 22;
 
 	// sum() -> 20 + 22 = 42.
-	i32 s    = p.sum();
+	i32 s = p.sum();
 
 	// scaled_sum(2) -> (20 + 22) * 2 = 84.
-	i32 ss   = p.scaled_sum(2);
+	i32 ss = p.scaled_sum(2);
 
 	// prod() -> 20 * 22 = 440.
-	i32 pr   = p.prod();
+	i32 pr = p.prod();
 
 	// gate = 1 solo si todo cuadra:
 	//   s == 42, ss == 84, pr == 440.

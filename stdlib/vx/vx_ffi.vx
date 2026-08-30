@@ -17,32 +17,32 @@
 // dead-strip y NO se importa.
 
 extern "kernel32.dll" {
-	fn LoadLibraryA(u8 *path) -> u64;
-	fn GetProcAddress(u64 hModule, u8 *name) -> u64;
+	fn LoadLibraryA(u8* path) -> u64;
+	fn GetProcAddress(u64 hModule, u8* name) -> u64;
 }
 
 extern "dl" {
-	fn dlopen(u8 *path, i32 flags) -> u64;
-	fn dlsym(u64 handle, u8 *name) -> u64;
+	fn dlopen(u8* path, i32 flags) -> u64;
+	fn dlsym(u64 handle, u8* name) -> u64;
 }
 
 // --- dlopen: cargar una libreria por nombre/ruta -> handle (0 si falla) ------
 @Target("os:windows")
-	i64 __vx_dlopen(u8 *path) {
+i64 __vx_dlopen(u8* path) {
 	return (i64) LoadLibraryA(path);
 }
 @Target("!os:windows")
-	i64 __vx_dlopen(u8 *path) {
+i64 __vx_dlopen(u8* path) {
 	// RTLD_NOW = 2 (resolver todos los simbolos al cargar).
 	return (i64) dlopen(path, 2);
 }
 
 // --- dlsym: resolver un simbolo en una libreria cargada -> direccion ---------
 @Target("os:windows")
-	i64 __vx_dlsym(i64 handle, u8 *name) {
+i64 __vx_dlsym(i64 handle, u8* name) {
 	return (i64) GetProcAddress((u64) handle, name);
 }
 @Target("!os:windows")
-	i64 __vx_dlsym(i64 handle, u8 *name) {
+i64 __vx_dlsym(i64 handle, u8* name) {
 	return (i64) dlsym((u64) handle, name);
 }

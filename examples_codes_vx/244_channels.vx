@@ -4,19 +4,23 @@ import std.pool only pool_start, pool_submit, pool_join;
 import std.chan only Chan, chan_new, chan_send, chan_recv, chan_free;
 
 Chan g_ch;
-i64 g_sum = 0;
-i64 g_n   = 100;
+i64  g_sum = 0_i64;
+i64  g_n = 100_i64;
 
 void producer(i64 arg) {
-	i64 i = 0;
-	while (i < g_n) { chan_send(g_ch, i + 1);
-		i = i + 1; }
+	i64 i = 0_i64;
+	while (i < g_n) {
+		chan_send(g_ch, i + 1);
+		i = i + 1;
+	}
 }
 void consumer(i64 arg) {
-	i64               s = 0;
-	i64               i = 0;
-	while (i < g_n) { s = s + chan_recv(g_ch);
-		i = i + 1; }
+	i64 s = 0_i64;
+	i64 i = 0_i64;
+	while (i < g_n) {
+		s = s + chan_recv(g_ch);
+		i = i + 1;
+	}
 	g_sum = s;
 }
 i32 main() {

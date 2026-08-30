@@ -13,8 +13,8 @@ enum Op : u8 {
 
 i32 main() {
 	comptime {
-		i32 x = 5; // decl + init (sin `comptime` explicito)
-		x = x + 1; // reasignacion mutable
+		i32 x = 5_i32; // decl + init (sin `comptime` explicito)
+		x = x + 1;     // reasignacion mutable
 		static_assert(x == 6, "x == 6");
 
 		i32 op = (i32) Op.MOV; // valor desde un enum C-style
@@ -29,15 +29,17 @@ i32 main() {
 		bool flag = (x == 6) && (op == 0x89);
 		static_assert(flag, "flag true");
 
-		u64 mask = 0x0100; // otro tipo entero
+		u64 mask = 0x0100_u64; // otro tipo entero
 		mask = mask * 2;
 		static_assert(mask == 0x0200, "mask == 0x200");
 
 		// Control de flujo con contador mutable.
-		i32             i   = 0;
-		i32             acc = 0;
-		while (i < 4) { acc = acc + i;
-			i = i + 1; }
+		i32 i   = 0_i32;
+		i32 acc = 0_i32;
+		while (i < 4) {
+			acc = acc + i;
+			i   = i + 1;
+		}
 		static_assert(acc == 6, "0+1+2+3 == 6");
 	}
 	return 42;

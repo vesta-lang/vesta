@@ -15,10 +15,12 @@ namespace ejemplos.metodo_devuelve_struct;
 // El struct se hace de treinta y dos bytes a proposito: uno que quepa en el
 // numero fijo que se usaba antes puede tapar el fallo.
 
-struct Punto3 { i64 x;
+struct Punto3 {
+	i64 x;
 	i64 y;
 	i64 z;
-	i64 w; }
+	i64 w;
+}
 
 class Generador {
 	private i64 base;
@@ -51,16 +53,16 @@ struct GeneradorS {
 }
 
 i32 main() {
-	      Generador g  = new Generador(10);
-	const Punto3    a  = g.desplazado(3, 4);
+	Generador    g = new Generador(10);
+	const Punto3 a = g.desplazado(3, 4);
 	// 13 + 14 + 12 + 10 = 49
-	const i64       sa = a.x + a.y + a.z + a.w;
+	const i64 sa = a.x + a.y + a.z + a.w;
 
 	GeneradorS s;
 	s.base = 20;
-	const Punto3 b  = s.desplazado(1, 2);
+	const Punto3 b = s.desplazado(1, 2);
 	// 21 + 22 + 2 + 20 = 65
-	const i64    sb = b.x + b.y + b.z + b.w;
+	const i64 sb = b.x + b.y + b.z + b.w;
 
 	println("clase=${sa} struct=${sb}");
 

@@ -21,8 +21,8 @@ class Acc {
 }
 
 i32 hammer(Acc a) {
-	i32 last = 0;
-	i32 i    = 0;
+	i32 last = 0_i32;
+	i32 i    = 0_i32;
 	while (i < 10) {
 		last = a.add(3); // objeto `a` vivo loop-carried a traves del callvirt
 		i    = i + 1;

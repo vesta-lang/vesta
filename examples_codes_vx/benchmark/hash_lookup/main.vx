@@ -3,9 +3,9 @@
 // condicion que no se cumplia nunca y el borrado de la mezcla que provocaba.
 
 i32 main() {
-	u64 seed = 0xCAFEBABEDEADBEEF;
-	u64 acc  = 0;
-	i32 i    = 0;
+	u64 seed = 0xCAFEBABEDEADBEEF_u64;
+	u64 acc  = 0_u64;
+	i32 i    = 0_i32;
 	while (i < 50_000_000) {
 		seed = seed ^ (u64) i;
 		seed = seed * 1_099_511_628_211;

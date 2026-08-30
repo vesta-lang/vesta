@@ -25,7 +25,7 @@ class ExcB {
 }
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	try {
 		throw new ExcB(50);
 	} catch (ExcA a) {

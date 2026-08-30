@@ -32,12 +32,12 @@ Optional<Vista> mirar(u8* base, bool hay) {
 }
 
 i32 main() {
-	u8* buf = (u8 *) malloc(64);
-	*(i64 *)(buf + 0x00) = 111;
-	*(i64 *)(buf + 0x08) = 222;
-	*(i64 *)(buf + 0x10) = 333;
+	u8* buf = (u8*) malloc(64);
+	*(i64*)(buf + 0x00) = 111;
+	*(i64*)(buf + 0x08) = 222;
+	*(i64*)(buf + 0x10) = 333;
 
-	i64 acc = 0;
+	i64 acc = 0_i64;
 	match mirar(buf, true) {
 		case None    => { acc = -1; }
 		case Some(v) => { acc = v.a + v.b + v.c; }
@@ -50,11 +50,11 @@ i32 main() {
 		case None    => { }
 		case Some(v) => { v.b = 1000; }
 	}
-	i64 tras = *(i64 *)(buf + 0x08);
+	i64 tras = *(i64*)(buf + 0x08);
 	println("tras_escribir=${tras}");
 
 	// Y la rama vacia sigue siendo la rama vacia.
-	i64 vacio = 0;
+	i64 vacio = 0_i64;
 	match mirar(buf, false) {
 		case None    => { vacio = 7; }
 		case Some(v) => { vacio = v.a; }

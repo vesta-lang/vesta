@@ -10,8 +10,10 @@ namespace ejemplos.metodo_ligado;
 
 class Contador {
 	i64 n;
-	i64 inc() { this.n = this.n + 1;
-		return this.n; }
+	i64 inc() {
+		this.n = this.n + 1;
+		return this.n;
+	}
 	i64 suma(i64 x) { return this.n + x; }
 }
 
@@ -29,7 +31,7 @@ i64 aplicar(fn(i64) -> i64 f, i64 x) { return f(x); }
 class Widget { fn() -> i64 onTick; }
 
 i32 main() {
-	Contador    c    = new Contador();
+	Contador c = new Contador();
 
 	// 1. Ligado en variable: opera sobre el MISMO objeto c.
 	fn() -> i64 paso = &c.inc;
@@ -51,7 +53,7 @@ i32 main() {
 	// 4. Reasignar el campo closure: el env anterior se libera (sin fuga).
 	Contador c2 = new Contador();
 	c2.n     = 9;
-	w.onTick = &c2.inc; // libera el env de `&c.inc` antes de guardar
+	w.onTick = &c2.inc;                 // libera el env de `&c.inc` antes de guardar
 	if (w.onTick() != 10) { return 4; } // c2.inc() -> 10
 
 	// 5. Receptor STRUCT: captura una copia del struct.

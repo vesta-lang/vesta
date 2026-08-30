@@ -25,26 +25,26 @@ namespace ejemplos.async_args_typed;
 
 // Caso 1: dos args i32, retorno i32.
 @Async
-	i32 sum_i32(i32 a, i32 b) {
+i32 sum_i32(i32 a, i32 b) {
 	return a + b;
 }
 
 // Caso 2: tres args i64, retorno i64.
 @Async
-	i64 sum_three(i64 a, i64 b, i64 c) {
+i64 sum_three(i64 a, i64 b, i64 c) {
 	return a + b + c;
 }
 
 // Caso 3: arg con coercion (mezcla de tipos).
 @Async
-	i32 combine(i32 base, i32 mult) {
+i32 combine(i32 base, i32 mult) {
 	i32 r = base * mult;
 	return r + 1;
 }
 
 // Caso 4: retorno bool.
 @Async
-	bool is_even(i32 n) {
+bool is_even(i32 n) {
 	return n % 2 == 0;
 }
 
@@ -70,8 +70,8 @@ i32 main() {
 	if (!r4) return 400;
 
 	// 25 + 600 (cast a i32 = 600) + 13 + 1 (true) - 597 = 42
-	i32     total = r1 + 13 + 1;   // 25 + 13 + 1 = 39
-	if (r4) total = total + 3; // 39 + 3 = 42
+	i32     total = r1 + 13 + 1; // 25 + 13 + 1 = 39
+	if (r4) total = total + 3;   // 39 + 3 = 42
 	println("${total}");
 	return total;
 }

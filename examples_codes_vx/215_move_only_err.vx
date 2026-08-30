@@ -14,14 +14,14 @@ struct S {
 
 S mk() {
 	S r;
-	r.p  = (i64 *) malloc(8);
+	r.p  = (i64*) malloc(8);
 	*r.p = 7;
 	return r;
 }
 
 i32 main() {
 	S   a = mk();
-	S   b = a;      // move: `a` queda invalidado
+	S   b = a;    // move: `a` queda invalidado
 	i64 x = *a.p; // ERROR: use-after-move de `a`
 	return (i32)x;
 }

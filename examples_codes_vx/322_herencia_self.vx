@@ -17,7 +17,7 @@ namespace herencia_self;
 
 // Base abstracto: no se instancia por si mismo, solo sirve de base.
 @Abstract
-	struct Punto2D {
+struct Punto2D {
 	i64 x;
 	i64 y;
 

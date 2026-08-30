@@ -52,9 +52,9 @@ struct Elf64_Shdr {
 
 @overlay
 struct Elf64_Ehdr {
-	u32 magic       @0x00;   // 0x464C457F
+	u32 magic       @0x00; // 0x464C457F
 	u8  ei_class    @0x04; // 2 = ELF64
-	u8  ei_data     @0x05;  // 1 = little-endian
+	u8  ei_data     @0x05; // 1 = little-endian
 	u8  ei_osabi    @0x07;
 	u16 e_type      @0x10;
 	u16 e_machine   @0x12;
@@ -82,7 +82,7 @@ struct Elf64_Ehdr {
 	u8 strtab_base @offset { return base + this.strtab(); };
 }
 
-i64 g_faults = 0;
+i64 g_faults = 0_i64;
 
 i32 main() {
 	string path  = "elf_target.bin";
@@ -92,11 +92,13 @@ i32 main() {
 		return 2;
 	}
 	u64 size = (u64) fsize;
-	u8* buf  = (u8 *) malloc(fsize);
+	u8* buf  = (u8*) malloc(fsize);
 	i64 n    = fileio.file_read_into(path, buf, fsize);
-	if (n != fsize) { println("error de lectura");
+	if (n != fsize) {
+		println("error de lectura");
 		free(buf);
-		return 3; }
+		return 3;
+	}
 
 	Elf64_Ehdr eh = Elf64_Ehdr(buf);
 	if (eh.magic != 0x464C457F) {
@@ -126,7 +128,7 @@ i32 main() {
 	println("STRTAB_OFF=${offsetof(eh.strtab_base)}");
 
 	// --- program headers (cada acceso comprobado) ---
-	i32 i = 0;
+	i32 i = 0_i32;
 	while ((u32)i < (u32)eh.e_phnum) {
 		if (!in_bounds(eh.Phdrs[i].p_align, size)) {
 			g_faults = g_faults + 1;

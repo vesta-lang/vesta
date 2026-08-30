@@ -30,13 +30,13 @@ i32 main() {
 	string b = "bbb";
 	string c = a + b; // -> "aaabbb" al compilar, sin strcat
 
-	println(a);       // `a` se usa aqui -> sigue existiendo
-	println(c);       // `b` solo estaba en el concat -> desaparece
+	println(a); // `a` se usa aqui -> sigue existiendo
+	println(c); // `b` solo estaba en el concat -> desaparece
 
 	// ---- Lo que NO se puede plegar ---------------------------------------
 	// En cuanto una parte se conoce solo al ejecutar, el concat es real -- y
 	// debe serlo.
-	i64    n        = 7;
+	i64    n        = 7_i64;
 	string dinamico = "n=" + to_str(n) + "!";
 	println(dinamico);
 

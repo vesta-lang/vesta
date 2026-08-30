@@ -19,7 +19,7 @@
 //
 // Resultado esperado: exit code = 5.
 
-thread_local i32 c = 5;
+thread_local i32 c = 5_i32;
 
 i64 main() {
 	return c;

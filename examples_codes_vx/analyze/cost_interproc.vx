@@ -22,8 +22,8 @@
 
 // Hoja del call-graph: O(n) puro (un loop).
 i64 trabajo_lineal(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
 		acc = acc + i;
 		i   = i + 1;
@@ -35,8 +35,8 @@ i64 trabajo_lineal(i64 n) {
 // -> TOTAL O(n^2).  El call site esta a profundidad de loop 1, por lo que el
 // O(n) del callee se multiplica por n.
 i64 agregador(i64 n) {
-	i64 total = 0;
-	i64 i     = 0;
+	i64 total = 0_i64;
+	i64 i     = 0_i64;
 	while (i < n) {
 		total = total + trabajo_lineal(n);
 		i     = i + 1;
@@ -46,8 +46,8 @@ i64 agregador(i64 n) {
 
 // Cadena de transitividad: nivel_h es la hoja (O(n)).
 i64 nivel_h(i64 n) {
-	i64 acc = 0;
-	i64 i   = 0;
+	i64 acc = 0_i64;
+	i64 i   = 0_i64;
 	while (i < n) {
 		acc = acc + i;
 		i   = i + 1;
@@ -64,8 +64,8 @@ i64 nivel_g(i64 n) {
 // nivel_f: un loop propio (parcial O(n)) y dentro llama a nivel_g (TOTAL O(n))
 // -> TOTAL O(n^2) por transitividad (f -> g -> h compuesto).
 i64 nivel_f(i64 n) {
-	i64 s = 0;
-	i64 i = 0;
+	i64 s = 0_i64;
+	i64 i = 0_i64;
 	while (i < n) {
 		s = s + nivel_g(n);
 		i = i + 1;
@@ -79,8 +79,8 @@ i64 nivel_f(i64 n) {
 // el ejemplo documenta el comportamiento real y deja el caso listo para
 // cuando el optimizer gane esa capacidad.
 i64 loop_muerto(i64 n) {
-	i64 basura = 0;
-	i64 i      = 0;
+	i64 basura = 0_i64;
+	i64 i      = 0_i64;
 	while (i < n) {
 		basura = basura + i * 3;
 		i      = i + 1;

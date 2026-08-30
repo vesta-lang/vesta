@@ -7,7 +7,7 @@
 // @expect 42
 u64 main() {
 	// low32 = -42 (0xFFFFFFD6), high32 = 0.  cdqe sign-extiende a 64 bits.
-	register("rax") u64 a = 0x00000000FFFFFFD6;
+	register("rax") u64 a = 0x00000000FFFFFFD6_u64;
 	asm { cdqe }; // rax = 0xFFFFFFFFFFFFFFD6 (-42 en 64 bits)
 	register("rcx") u64 r = a;
 	asm { neg rcx }; // -(-42) = 42

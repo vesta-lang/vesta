@@ -5,15 +5,23 @@
 // catch matchea, se re-lanza al try externo (propagacion).  Todo sin GC/VM/libc
 // (runtime auto-hospedado vx_exc.vx, setjmp/longjmp).
 
-class EA { public i64 v;
-	public EA(i64 x) { this.v = x; } }
-class EB { public i64 v;
-	public EB(i64 x) { this.v = x; } }
-class Base { public i64 v;
-	public Base(i64 x) { this.v = x; } }
+class EA {
+	public i64 v;
+	public EA(i64 x) { this.v = x; }
+}
+class EB {
+	public i64 v;
+	public EB(i64 x) { this.v = x; }
+}
+class Base {
+	public i64 v;
+	public Base(i64 x) { this.v = x; }
+}
 class Derived : Base { public Derived(i64 x) { super(x); } }
-class Other { public i64 v;
-	public Other(i64 x) { this.v = x; } }
+class Other {
+	public i64 v;
+	public Other(i64 x) { this.v = x; }
+}
 
 // Multi-catch: el handler elegido depende del tipo LANZADO, no del orden.
 public i64 pick(i64 which) {
@@ -37,7 +45,7 @@ public i64 sub_catch() {
 public i64 propagate() {
 	try {
 		try { throw new Other(60); } catch (Base e) { return -2; } // NO matchea
-	} catch (Other e) { return e.v + 3; } // 63 (propagado)
+	} catch (Other e) { return e.v + 3; }                          // 63 (propagado)
 	return -3;
 }
 

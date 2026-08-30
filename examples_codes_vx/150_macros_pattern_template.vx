@@ -86,7 +86,7 @@ i32 main() {
 	// ============================================
 	comptime t_outer  = "mas_uno({inner})";
 	comptime t_inner  = "doblar({x})";
-	comptime inner    = comptime_replace(t_inner, "{x}", "10"); // "doblar(10)"
+	comptime inner    = comptime_replace(t_inner, "{x}", "10");      // "doblar(10)"
 	comptime combined = comptime_replace(t_outer, "{inner}", inner); // "mas_uno(doblar(10))"
 	static_assert(
 		comptime_streq(combined, "mas_uno(doblar(10))"),

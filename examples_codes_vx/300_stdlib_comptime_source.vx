@@ -11,8 +11,8 @@
 import std.comptime only source;
 
 i32 main() {
-	i32    a = 7;
-	i32    b = 6;
+	i32    a = 7_i32;
+	i32    b = 6_i32;
 	string s = source(a * b); // -> "a * b"  (texto crudo, sin comillas)
 	println("s=[${s}]");      // s=[a * b]
 	if (s == "a * b") { return 42; }

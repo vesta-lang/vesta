@@ -35,7 +35,7 @@ u64 k_getline(u8* buf, u64 max) {
 // escrituras se ignoran y las lecturas devuelven la ROM.
 // Indices: [0]=puts [1]=putc [2]=dec [3]=getline.
 u64 api_build() {
-	u64* t = (u64 *) 0x00070000;
+	u64* t = (u64*) 0x00070000;
 	t[0] = (u64) k_puts;
 	t[1] = (u64) k_putc;
 	t[2] = (u64) k_dec;
@@ -45,10 +45,10 @@ u64 api_build() {
 
 // Copia n bytes de src a dst (byte a byte; suficiente para cargar programas).
 void mcopy(u8* dst, u8* src, u64 n) {
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (i < n) {
 		dst[i] = src[i];
-		i = i + 1;
+		i      = i + 1;
 	}
 }
 
@@ -61,11 +61,11 @@ u64 prog_find(char* name) {
 // Carga y ejecuta el programa de la entrada `ent` con la cadena `args`.
 // Devuelve el codigo de retorno del programa, o -1 si falla.
 i64 prog_exec(u64 ent, char* args) {
-	u8* dst  = (u8 *) 0x00100000;       // EXEC_ADDR
+	u8* dst  = (u8*) 0x00100000;       // EXEC_ADDR
 	u64 size = fat.fat_load(ent, dst); // sigue la cadena de clusters
 	if (size == 0) { return -1; }
 	u64 api = api_build();
 	// Llamar al entry del programa: prog_main(api, args) en 0x100000.
-	i64 r   = ((cfn(u64, u64) -> i64) 0x00100000)(api, (u64) args);
+	i64 r = ((cfn(u64, u64) -> i64) 0x00100000)(api, (u64) args);
 	return r;
 }

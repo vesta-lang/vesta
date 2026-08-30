@@ -15,13 +15,17 @@
  */
 
 /** Dos limbs: 16 bytes exactos. */
-struct Par { u64 a;
-	u64 b; }
+struct Par {
+	u64 a;
+	u64 b;
+}
 
 /** Con relleno: 8 + 4 + 1 -> 16 bytes con alineacion. */
-struct Mixto { u64 a;
+struct Mixto {
+	u64 a;
 	u32 b;
-	u8 c; }
+	u8  c;
+}
 
 /** Un solo campo: cabe en el payload clasico de 8 bytes. */
 struct Uno { u64 a; }
@@ -51,7 +55,7 @@ Optional<Uno> mk_uno(u64 x) {
 }
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	Par p = unwrap(mk_par(21));
 	if (p.a == 21 && p.b == 42) { acc = acc + 10; }

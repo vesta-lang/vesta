@@ -52,9 +52,9 @@ i32 main() {
 	// --- CAS + swap sobre un entero. ---
 	atomic<i32> g;
 	g.store(5);
-	bool ok  = g.compare_exchange(5, 9); // true, g = 9
-	i32  old = g.swap(3);                // old = 9, g = 3
+	bool ok  = g.compare_exchange(5, 9);      // true, g = 9
+	i32  old = g.swap(3);                     // old = 9, g = 3
 	i32  rg  = (ok ? 1 : 0) + old + g.load(); // 1 + 9 + 3 = 13
 
-	return ra + rb + rc + rd + rf + rg;     // 127+6+2+12+1+13 = 161
+	return ra + rb + rc + rd + rf + rg; // 127+6+2+12+1+13 = 161
 }

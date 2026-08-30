@@ -25,8 +25,8 @@ i32 main() {
 	// dos VMs registradas, node 1 seria el otro nodo.
 	i64 fut = rspawn(0) {
 		// computacion remota trivial
-		i32 a = 21;
-		i32 b = 21;
+		i32 a = 21_i32;
+		i32 b = 21_i32;
 		return a + b; // -> mov r0, 42 + hlt; runtime envia R0 via VDP
 	};
 	// En modo no-distribuido fut es 0xFFFFFFFF (handle invalido).

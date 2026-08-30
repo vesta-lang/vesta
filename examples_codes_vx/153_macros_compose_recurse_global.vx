@@ -24,12 +24,12 @@ i32 sumar(i32 a, i32 b) { return a + b; }
 // (1) COMPOSICION
 // ============================================
 @Macro
-	comptime string M_inc(i64 n) {
+comptime string M_inc(i64 n) {
 	return "mas_uno(" + to_str(n) + ")";
 }
 
 @Macro
-	comptime string M_inc_double(i64 n) {
+comptime string M_inc_double(i64 n) {
 	// Llamada interna a OTRA @Macro: devuelve string.
 	string inner = M_inc(n);
 	return "doblar(" + inner + ")";
@@ -39,7 +39,7 @@ i32 sumar(i32 a, i32 b) { return a + b; }
 // (2) RECURSION
 // ============================================
 @Macro
-	comptime string M_chain(i64 n) {
+comptime string M_chain(i64 n) {
 	string body = (n <= 0)
 		? "x"
 		: "mas_uno(" + M_chain(n - 1) + ")";
@@ -52,14 +52,14 @@ i32 sumar(i32 a, i32 b) { return a + b; }
 comptime auto g_counter = 0;
 
 @Macro
-	comptime string M_next_double() {
+comptime string M_next_double() {
 	g_counter = g_counter + 1;
 	return "doblar(" + to_str(g_counter) + ")";
 }
 
 // Otra macro que tambien usa el global.
 @Macro
-	comptime string M_label() {
+comptime string M_label() {
 	g_counter = g_counter + 100;
 	return to_str(g_counter);
 }
@@ -70,7 +70,7 @@ i32 main() {
 	if (r1 != 16) return 91;
 
 	// (2) Recursion: M_chain(3) -> "mas_uno(mas_uno(mas_uno(x)))" con x=5 -> 8.
-	i32 x  = 5;
+	i32 x  = 5_i32;
 	i32 r2 = M_chain(3);
 	if (r2 != 8) return 92;
 

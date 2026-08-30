@@ -69,8 +69,10 @@ i64 aplicar_borrow(borrow < cfn(i64) -> i64 > b, i64 x) {
 
 // Para DECONSTRUIR un lambda: un struct de dos campos de 64 bits = 16 bytes,
 // el mismo layout que el slot {fn_addr, env}.
-struct LambdaRaw { i64 fn_addr;
-	i64 env; }
+struct LambdaRaw {
+	i64 fn_addr;
+	i64 env;
+}
 
 // --- 1. METODO: el codigo va con el TIPO (dispatch directo, inline-able) -----
 struct Calculadora {
@@ -96,11 +98,11 @@ i32 main() {
 	// === 2a. cfn FIELD -- puntero a funcion: indirecto y REASIGNABLE ===
 	Operacion o;
 	o.valor = 10;
-	o.op    = &doblar;           // guarda la DIRECCION de doblar (8 B)
+	o.op    = &doblar;        // guarda la DIRECCION de doblar (8 B)
 	i64 r2 = (o.op)(o.valor); // CALLIND -> doblar(10) = 20
 	if (r2 != 20) { return 2; }
 
-	o.op = triplicar;         // NOMBRE DESNUDO (sin &): se promociona
+	o.op = triplicar; // NOMBRE DESNUDO (sin &): se promociona
 	// a &triplicar automaticamente
 	i64 r3 = (o.op)(o.valor); // CALLIND -> triplicar(10) = 30
 	if (r3 != 30) { return 3; }
@@ -119,8 +121,8 @@ i32 main() {
 	tabla[0] = (u64) & doblar;
 	tabla[1] = (u64) & triplicar;
 	tabla[2] = (u64) & negar;
-	i64 suma = 0;
-	for (i64 i = 0; i < 3; i = i + 1) {
+	i64 suma = 0_i64;
+	for (i64 i = 0_i64; i < 3; i = i + 1) {
 		suma = suma + ((cfn(i64) -> i64) tabla[i])(10); // doblar+triplicar+negar
 	}
 	if (suma != 20 + 30 - 10) { return 6; } // 20 + 30 - 10 = 40
@@ -136,7 +138,7 @@ i32 main() {
 	// struct value-type; la referencia para una clase).  El cfn resultante NO
 	// lleva el objeto: hay que pasarlo en cada llamada.
 	cfn(Calculadora *, i64) -> i64 pm = &Calculadora.sumar;
-	Calculadora c2;
+	Calculadora                    c2;
 	c2.base = 37;
 	if (pm(&c2, 5) != 42) { return 13; } // sumar(c2, 5) = 37 + 5 = 42
 
@@ -149,27 +151,27 @@ i32 main() {
 	if (conocido(21) != 42) { return 12; } // inline + const-fold -> 42
 
 	// === 2i. &extern -- FFI nativo como cfn (via thunk automatico) ===
-	cfn(i32) -> i32 mayus = &toupper;      // genera __cfnthunk_toupper
-	if (mayus(97) != 65) { return 14; }    // toupper('a') = 'A' = 65
+	cfn(i32) -> i32 mayus = &toupper;   // genera __cfnthunk_toupper
+	if (mayus(97) != 65) { return 14; } // toupper('a') = 'A' = 65
 
 	// === 2f. cfn dentro de unique<> -- ownership + move + borrow ===
 	// Un cfn es un valor de 8 bytes, asi que entra en un unique<>/borrow<>
 	// como cualquier primitivo (NO se construye un slot de lambda).
 	cfn(i64) -> i64            cc     = &doblar;
 	unique < cfn(i64) -> i64 > up     = unique_box(cc); // toma posesion (8 B en heap)
-	unique < cfn(i64) -> i64 > uq     = move(up); // transfiere ownership
-	cfn(i64) -> i64            desbox = *ptr_of(uq); // recupera el cfn (1 LOAD)
+	unique < cfn(i64) -> i64 > uq     = move(up);          // transfiere ownership
+	cfn(i64) -> i64            desbox = *ptr_of(uq);       // recupera el cfn (1 LOAD)
 	if (desbox(21) != 42) { return 10; }                   // doblar(21) = 42
 	if (aplicar_borrow(lend(uq), 21) != 42) { return 11; } // prestamo -> 42
 
 	// === 3. LAMBDA -- closure con ENV (16 bytes), captura del entorno ===
-	i64            factor  = 7;
+	i64            factor  = 7_i64;
 	fn(i64) -> i64 escalar = (x) => x * factor; // CAPTURA `factor` (env != 0)
-	i64            r8      = escalar(6); // CALLCLOSURE (env = {factor}) -> 42
+	i64            r8      = escalar(6);        // CALLCLOSURE (env = {factor}) -> 42
 	if (r8 != 42) { return 8; }
 
 	// Reasignar el lambda a otra captura (sigue siendo 16 bytes con su env):
-	i64 delta = 40;
+	i64 delta = 40_i64;
 	escalar = (x) => x + delta;         // nuevo env = {delta}
 	if (escalar(2) != 42) { return 9; } // 2 + 40 = 42
 

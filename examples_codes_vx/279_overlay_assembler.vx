@@ -385,20 +385,20 @@ struct X86 {
 }
 
 i32 main() {
-	u8* code = (u8 *) malloc(96);
+	u8* code = (u8*) malloc(96);
 
 	// Buffer limpio: los resolvers leen el byte0 como candidato a REX antes de
 	// escribir el opcode; para instrucciones SIN REX (push/ret/...) ese byte
 	// debe empezar en 0 para que rex_len() de 0.
-	for (u64 z = 0; z < 96; z++) {
-		*(u8 *)(code + z) = 0;
+	for (u64 z = 0_u64; z < 96; z++) {
+		*(u8*)(code + z) = 0;
 	}
 
-	u64 pos = 0;
+	u64 pos = 0_u64;
 
 	// Una funcion tipica: prologo, calculos, syscall y epilogo.  Los operandos
 	// son ENUMS (Reg/Op/Ext), no numeros magicos.
-	X86 a   = X86(code + pos);
+	X86 a = X86(code + pos);
 	a.enc_push(Reg.RBP);
 	pos += a.len();
 
@@ -444,16 +444,16 @@ i32 main() {
 
 	// --- Bytes maquina (hex) + checksum ---
 	print("code:");
-	i64 sum = 0;
-	for (u64 bi = 0; bi < pos; bi++) {
-		u8 by = *(u8 *)(code + bi);
+	i64 sum = 0_i64;
+	for (u64 bi = 0_u64; bi < pos; bi++) {
+		u8 by = *(u8*)(code + bi);
 		print(" ${by:hex}");
 		sum = sum + (i64) by;
 	}
 	println("");
 
 	// --- DESENSAMBLAR caminando: la MISMA vista decodifica y len() avanza ---
-	u64 p = 0;
+	u64 p = 0_u64;
 	while (p < pos) {
 		X86 ins = X86(code + p);
 		println(ins); // to_string() se invoca sola

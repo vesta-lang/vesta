@@ -29,16 +29,18 @@ namespace ejemplos.gc_compact;
 // no-moving de siempre -> mismo resultado.
 
 class Node {
-	i64 v;
+	i64  v;
 	Node next;
-	Node(i64 x) { this.v = x;
-		this.next = null; }
+	Node(i64 x) {
+		this.v    = x;
+		this.next = null;
+	}
 }
 
 // Construye una lista de n nodos (valores 0..n-1); retorna la cabeza (ESCAPA).
 Node build(i64 n) {
 	Node head = null;
-	i64  i    = 0;
+	i64  i    = 0_i64;
 	while (i < n) {
 		Node m = new Node(i);
 		m.next = head;
@@ -50,7 +52,7 @@ Node build(i64 n) {
 
 // Cuenta los nodos alcanzables desde la cabeza.
 i64 count_list(Node h) {
-	i64  acc = 0;
+	i64  acc = 0_i64;
 	Node c   = h;
 	while (c != null) {
 		acc++;
@@ -63,7 +65,7 @@ i64 count_list(Node h) {
 // (basura en OldGen -> huecos que la compactacion elimina).
 void truncate_at(Node h, i64 k) {
 	Node c = h;
-	i64  i = 0;
+	i64  i = 0_i64;
 	while (i < k) {
 		c = c.next;
 		i = i + 1;
@@ -72,12 +74,12 @@ void truncate_at(Node h, i64 k) {
 }
 
 i32 main() {
-	Node keep = build(40_000); // lista viva -> promovida a OldGen
+	Node keep = build(40_000);    // lista viva -> promovida a OldGen
 	i64  pre  = count_list(keep); // 40000
 
 	truncate_at(keep, 19_999); // deja 20000 nodos; el resto es basura
 
-	gc_collect();               // colecta la basura; compacta los vivos
+	gc_collect(); // colecta la basura; compacta los vivos
 
 	i64 cnt = count_list(keep); // 20000 tras compactar (handles intactos)
 	if (cnt == 20_000 && pre == 40_000) {

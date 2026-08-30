@@ -23,7 +23,7 @@ namespace ejemplos.macro_comptime_data;
 // Macro 1: tabla de Fibonacci precomputada en compile-time.
 // El call site recibe el N-esimo fib como literal.
 @Macro
-	comptime string fib_at(i64 idx) {
+comptime string fib_at(i64 idx) {
 	i64 fibs[16] = {
 		0,
 		1,
@@ -50,7 +50,7 @@ namespace ejemplos.macro_comptime_data;
 // Macro 2: area de un rectangulo "modelado" via arrays paralelos.
 // width/height/etc. viven en compile time; el resultado es un literal.
 @Macro
-	comptime string rect_area() {
+comptime string rect_area() {
 	// dims[0] = width, dims[1] = height.  Patron de struct-via-array.
 	i64 dims[2] = {80, 24};
 	i64 area = dims[0] * dims[1];
@@ -60,10 +60,10 @@ namespace ejemplos.macro_comptime_data;
 // Macro 3: "diccionario" en compile-time via arrays paralelos.
 // keys[] y vals[] son arrays alineados.  Busqueda lineal.
 @Macro
-	comptime string lookup(i64 key) {
+comptime string lookup(i64 key) {
 	i64 keys[5] = {1, 2, 5, 10, 42};
 	i64 vals[5] = {100, 200, 555, 1000, 9999};
-	i64 i = 0;
+	i64 i = 0_i64;
 	while (i < 5) {
 		if (keys[i] == key) {
 			return to_str(vals[i]);
@@ -77,9 +77,9 @@ namespace ejemplos.macro_comptime_data;
 // El call site recibe "0 + 1 + 4 + 9 + 16" -- el constant folder
 // del IR optimizer lo pliega a 30.
 @Macro
-	comptime string sum_squares(i64 n) {
+comptime string sum_squares(i64 n) {
 	string result = "0";
-	i64    i      = 1;
+	i64    i      = 1_i64;
 	while (i <= n) {
 		result = result + " + " + to_str(i * i);
 		i      = i + 1;
@@ -90,7 +90,7 @@ namespace ejemplos.macro_comptime_data;
 // Macro 5: traza de una matriz 3x3 (suma de la diagonal).
 // Demuestra acceso a array 1D como matriz [row*N+col].
 @Macro
-	comptime string trace_3x3() {
+comptime string trace_3x3() {
 	i64 mat[9] = {
 		1, 2, 3,
 		4, 5, 6,
@@ -105,7 +105,7 @@ namespace ejemplos.macro_comptime_data;
 // Notar el match implicito via if-else chain (la AST evaluator NO
 // soporta `match` sobre strings; if-else con `==` SI).
 @Macro
-	comptime string http_status(string code) {
+comptime string http_status(string code) {
 	if (code == "OK") return "200";
 	if (code == "NOT_FOUND") return "404";
 	if (code == "ERROR") return "500";
@@ -119,12 +119,12 @@ namespace ejemplos.macro_comptime_data;
 // Resultado emitido (texto literal  que se re-parsea):
 //   ((x == 1) ? 10 : ((x == 2) ? 20 : ((x == 3) ? 30 : 0)))
 @Macro
-	comptime string switch_gen(i64 x_unused) {
+comptime string switch_gen(i64 x_unused) {
 	// Tablas que se "compilan" en una cadena de ternarios.
-	i64 cases[3] = {1, 2, 3};
+	i64 cases[3]   = {1, 2, 3};
 	i64 results[3] = {10, 20, 30};
 	string code = "0";
-	i64    i    = 2; // iterar inverso para anidar correctamente
+	i64    i    = 2_i64; // iterar inverso para anidar correctamente
 	while (i >= 0) {
 		code = "((x == " + to_str(cases[i]) + ") ? " + to_str(results[i]) + " : " + code + ")";
 		i = i - 1;
@@ -147,8 +147,8 @@ i32 main() {
 	if (area != 1920) return 94;
 
 	// Lookup en "diccionario" comptime.
-	i64 v1       = lookup(5);        // 555
-	i64 v2       = lookup(42);       // 9999
+	i64 v1       = lookup(5);  // 555
+	i64 v2       = lookup(42); // 9999
 	i64 vmissing = lookup(99); // -1
 	if (v1 != 555) return 95;
 	if (v2 != 9999) return 96;
@@ -171,7 +171,7 @@ i32 main() {
 	// El switch_gen emite un ternario anidado en compile time.
 	// En el call site se parsea como expresion  y se evalua a runtime
 	// sobre la variable `x`.  El optimizer puede plegar segun el valor.
-	i64 x  = 2;
+	i64 x  = 2_i64;
 	i64 sw = switch_gen(0); // arg unused -- la estructura interna decide
 	// sw vale: ((x==1)?10 : ((x==2)?20 : ((x==3)?30 : 0)))  con x=2 -> 20
 	if (sw != 20) return 82;

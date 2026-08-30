@@ -19,19 +19,25 @@ namespace ejemplos.nombres_de_registro;
 // Aqui hay nombres de registro en todos los sitios donde el usuario pone uno:
 // clase, campo, metodo, struct, funcion, parametro y variable local.
 
-class rax { public i64 rbx;
-	public rax(i64 n) { this.rbx = n; } public i64 f0() { return this.rbx; } }
-struct zmm1 { i64 rsp;
-	i64 cur0; }
+class rax {
+	public i64 rbx;
+	public rax(i64 n) { this.rbx = n; } public i64 f0() { return this.rbx; }
+}
+struct zmm1 {
+	i64 rsp;
+	i64 cur0;
+}
 i64 xmm3(i64 rdi) { return rdi; }
 i64 f11(i64 x) { return x; }
-i64 ymm7(i64 r15) { i64 rbp = r15 + 1;
-	return rbp; }
+i64 ymm7(i64 r15) {
+	i64 rbp = r15 + 1;
+	return rbp;
+}
 i32 main() {
-	rax k = new rax(10);
+	rax  k = new rax(10);
 	zmm1 s;
 	s.rsp  = 5;
 	s.cur0 = 6;
-	i64 r13 = 4;
+	i64 r13 = 4_i64;
 	return (i32)(k.f0() + xmm3(7) + f11(9) + ymm7(0) + s.rsp + s.cur0 + r13);
 }

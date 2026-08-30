@@ -7,9 +7,9 @@
 // camino sin tener esa otra maquina.
 // @expect 42
 i32 main() {
-	i32 r = 0;
+	i32 r = 0_i32;
 	try {
-		register("rax") i64 a = 40;
+		register("rax") i64 a = 40_i64;
 		asm volatile { add rax, 2 };
 		r = (i32) a;
 	} catch (FatalError e) {

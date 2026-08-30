@@ -14,8 +14,8 @@ namespace std.syscall.windows.ntdll;
  */
 
 extern "kernel32.dll" {
-	fn LoadLibraryA(u8 *path) -> u64;
-	fn GetProcAddress(u64 hModule, u8 *name) -> u64;
+	fn LoadLibraryA(u8* path) -> u64;
+	fn GetProcAddress(u64 hModule, u8* name) -> u64;
 }
 
 /**
@@ -47,8 +47,8 @@ public void* resolve_ntdll_export(string name) {
 	// a static_data, que ni esta NUL-terminado ni es una direccion host valida.
 	u64 ntdll = LoadLibraryA("ntdll.dll".cstr());
 	if (ntdll == 0) {
-		return (void *) 0; // ntdll no disponible: decide el caller.
+		return (void*) 0; // ntdll no disponible: decide el caller.
 	}
 	// null si el simbolo no existe en esta version de Windows.
-	return (void *) GetProcAddress(ntdll, name.cstr());
+	return (void*) GetProcAddress(ntdll, name.cstr());
 }

@@ -34,9 +34,11 @@ enum Verb : string {
 }
 
 // Struct: cada variante es un valor del struct.  Un Color ES un Rgb.
-struct Rgb { u8 r;
+struct Rgb {
+	u8 r;
 	u8 g;
-	u8 b; }
+	u8 b;
+}
 enum Color : Rgb {
 	RED   = (Rgb) {255, 0, 0},
 	GREEN = (Rgb) {0, 255, 0},
@@ -47,8 +49,10 @@ enum Color : Rgb {
 class Point {
 	public i32 x;
 	public i32 y;
-	public Point(i32 a, i32 b) { this.x = a;
-		this.y = b; }
+	public Point(i32 a, i32 b) {
+		this.x = a;
+		this.y = b;
+	}
 }
 enum Anchor : Point {
 	ORIGIN = new Point(0, 0),
@@ -60,19 +64,19 @@ const i32 MOV_OPCODE = (i32) Op.MOV; // 0x89
 
 i32 main() {
 	// Entero: aritmetica/comparacion directas (sin cast).
-	u8  opcode  = Op.MOV;                     // 0x89
-	u8  rbp_num = Reg.RBX;                   // 3
+	u8  opcode  = Op.MOV;                       // 0x89
+	u8  rbp_num = Reg.RBX;                      // 3
 	i64 acc     = (i64) opcode + (i64) rbp_num; // 0x89 + 3 = 140
 
 	// Float.
-	f64 half    = Angle.HALF;                  // 3.1415926
+	f64 half = Angle.HALF; // 3.1415926
 
 	// String: ==, +, interpolacion.
-	if (Verb.PUT == "PUT") { acc++; }       // 141
-	string msg = "verb=" + Verb.GET;        // "verb=GET"
+	if (Verb.PUT == "PUT") { acc++; } // 141
+	string msg = "verb=" + Verb.GET;  // "verb=GET"
 
 	// Struct: acceso a campos del valor de la variante.
-	Rgb    g   = Color.GREEN;
+	Rgb g = Color.GREEN;
 	acc = acc + (i64) g.g; // 141 + 255 = 396
 
 	// Clase: instancia de la variante.

@@ -23,6 +23,6 @@ i32 main() {
 
 	msgsend(child, fut); // pasar el handle al hijo
 
-	i64 r = await fut;   // bloquea hasta que el hijo fulfill
-	return r;            // 42
+	i64 r = await fut; // bloquea hasta que el hijo fulfill
+	return r;          // 42
 }

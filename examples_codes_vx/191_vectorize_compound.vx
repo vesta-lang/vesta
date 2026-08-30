@@ -14,22 +14,26 @@ namespace ejemplos.vectorize_compound;
 
 i64 main() {
 	// f64 +=
-	f64*     a = malloc(80);
-	f64*     c = malloc(80);
-	for (i32 i = 0; i < 10; i++) { a[i] = (f64)(i + 1);
-		c[i] = 100.0; }
-	for (i32 i = 0; i < 10; i++) { c[i] += a[i]; } // c[i] = 100 + (i+1)
-	f64 s = 0.0;
-	for (i32 i = 0; i < 10; i++) { s = s + c[i]; } // 10*100 + 55 = 1055
+	f64* a = malloc(80);
+	f64* c = malloc(80);
+	for (i32 i = 0_i32; i < 10; i++) {
+		a[i] = (f64)(i + 1);
+		c[i] = 100.0;
+	}
+	for (i32 i = 0_i32; i < 10; i++) { c[i] += a[i]; } // c[i] = 100 + (i+1)
+	f64 s = 0.0_f64;
+	for (i32 i = 0_i32; i < 10; i++) { s = s + c[i]; } // 10*100 + 55 = 1055
 
 	// i64 -=
-	i64*     x = malloc(80);
-	i64*     y = malloc(80);
-	for (i32 i = 0; i < 10; i++) { x[i] = (i64)(i + 1);
-		y[i] = 5; }
-	for (i32 i = 0; i < 10; i++) { y[i] -= x[i]; } // y[i] = 5 - (i+1)
-	i64 sy = 0;
-	for (i32 i = 0; i < 10; i++) { sy = sy + y[i]; } // 50 - 55 = -5
+	i64* x = malloc(80);
+	i64* y = malloc(80);
+	for (i32 i = 0_i32; i < 10; i++) {
+		x[i] = (i64)(i + 1);
+		y[i] = 5;
+	}
+	for (i32 i = 0_i32; i < 10; i++) { y[i] -= x[i]; } // y[i] = 5 - (i+1)
+	i64 sy = 0_i64;
+	for (i32 i = 0_i32; i < 10; i++) { sy = sy + y[i]; } // 50 - 55 = -5
 
 	free(a);
 	free(c);

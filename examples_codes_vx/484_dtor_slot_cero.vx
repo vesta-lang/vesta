@@ -93,6 +93,6 @@ i32 main() {
 	// Y el orden tiene que ser 321: de la derivada hacia la base.
 	const i64 total = Cuenta.sin_ctor + Cuenta.con_ctor + Cuenta.base_solo +
 		Cuenta.derivada;
-	const i64 orden_ok = (Cuenta.orden == 321) ? 1 : 0;
+	const i64  orden_ok = (Cuenta.orden == 321) ? 1 : 0;
 	return (i32)(total * 8 + orden_ok * 2); // 42
 }

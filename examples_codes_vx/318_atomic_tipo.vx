@@ -43,12 +43,12 @@ i32 main() {
 	// prefiere que la operacion atomica SE VEA.  Son los mismos metodos.
 	atomic<i64> head;
 	head.store(7);
-	i64 leido  = head.load();       // 7
+	i64 leido  = head.load();      // 7
 	i64 previo = head.exchange(9); // 7, deja 9
 	println("store/load/exchange: ${leido}, ${previo} -> ${head.load()}");
 
 	// ---- compare_exchange: como CAS pero dice SI triunfo -------------------
-	bool cambio    = head.compare_exchange(9, 3);    // true  -> 3
+	bool cambio    = head.compare_exchange(9, 3); // true  -> 3
 	bool no_cambio = head.compare_exchange(9, 8); // false -> sigue 3
 	println("cas: ${cambio} / ${no_cambio} -> ${head.load()}");
 

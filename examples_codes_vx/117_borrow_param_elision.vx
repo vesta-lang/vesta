@@ -26,7 +26,7 @@ i32 main() {
 
 	borrow<i32> r1 = lend(myvec);
 	borrow<i32> r2 = identity_borrow(r1); // F4: r2 hereda owner=myvec
-	i32         v1 = deref_borrow(r2); // OK: r2 es shared
+	i32         v1 = deref_borrow(r2);    // OK: r2 es shared
 
 	if (v1 != 77) return 100;
 

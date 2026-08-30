@@ -6,7 +6,7 @@
 //     vm --vx asm_branch.vx -o b && vm --run b.velb
 // @expect 42
 u64 max2(u64 x, u64 y) {
-	register("rax") u64 r = 0;
+	register("rax") u64 r = 0_u64;
 	register("rsi") u64 a = x;
 	register("rdi") u64 b = y;
 	asm {
@@ -19,7 +19,7 @@ u64 max2(u64 x, u64 y) {
 	return r;
 }
 u64 main() {
-	u64                    ok = 1;
+	u64                    ok = 1_u64;
 	if (max2(5, 10) != 10) ok = 0;
 	if (max2(20, 3) != 20) ok = 0;
 	if (max2(7, 7) != 7)   ok = 0;

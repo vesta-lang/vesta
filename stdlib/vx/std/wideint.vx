@@ -32,7 +32,7 @@ import std.comptime.literal only IntLit, parse_int_lit;
  * tiene consumidor; escribir su resultado aqui impide que el optimizador la
  * borre por inutil.
  */
-u64 g_wideint_sink = 0;
+u64 g_wideint_sink = 0_u64;
 
 /**
  * @brief Resultado de una comparacion de tres vias (estilo Rust `Ordering`).
@@ -48,7 +48,7 @@ void shl_halves<T>(
 	T zero,
 	T * out_lo,
 	T * out_hi
-	) {
+) {
 	if (n == 0) {
 		(*out_lo) = lo;
 		(*out_hi) = hi;
@@ -72,7 +72,7 @@ void shr_halves<T>(
 	T zero,
 	T * out_lo,
 	T * out_hi
-	) {
+) {
 	if (n == 0) {
 		(*out_lo) = lo;
 		(*out_hi) = hi;
@@ -107,7 +107,7 @@ public enum Ordering : i8 {
  * tipo concreto en cada instanciacion.
  */
 @Abstract
-	public struct Wide128 {
+public struct Wide128 {
 	union {
 		struct {
 			u64 lo64;
@@ -197,7 +197,7 @@ public enum Ordering : i8 {
 	public Self __add__(Self o) {
 		Self r;
 		r.lo64 = this.lo64 + o.lo64;
-		u64 carry = 0;
+		u64 carry = 0_u64;
 		if (r.lo64 < this.lo64) {
 			carry = 1;
 		}
@@ -214,7 +214,7 @@ public enum Ordering : i8 {
 	public Self __sub__(Self o) {
 		Self r;
 		r.lo64 = this.lo64 - o.lo64;
-		u64 borrow_out = 0;
+		u64 borrow_out = 0_u64;
 		if (this.lo64 < o.lo64) {
 			borrow_out = 1;
 		}
@@ -465,7 +465,7 @@ public enum Ordering : i8 {
 		Self rem;
 		rem.lo64 = 0;
 		rem.hi64 = 0;
-		i64 i = 127;
+		i64 i = 127_i64;
 		while (i >= 0) {
 			// rem = (rem << 1) | bit_i(this)
 			rem.hi64 = (rem.hi64 << 1) | (rem.lo64 >> 63);
@@ -634,7 +634,7 @@ public struct u128 : Wide128 {
 		u64 t10 = a1 * b0;
 		u64 t11 = a1 * b1;
 		// `mid` acumula tres sumandos de 32 bits: cabe de sobra en 64.
-		u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
+		u64  mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
 		u128 r;
 		r.lo64 = (t00 & 0xFFFFFFFF) | (mid << 32);
 		r.hi64 = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
@@ -777,7 +777,7 @@ public struct i128 : Wide128 {
 		r.lo64 = ~this.lo64;
 		r.hi64 = ~this.hi64;
 		u64 lo_plus_1 = r.lo64 + 1;
-		u64 carry     = 0;
+		u64 carry     = 0_u64;
 		if (lo_plus_1 < r.lo64) {
 			carry = 1;
 		}
@@ -802,7 +802,7 @@ public struct i128 : Wide128 {
 	 */
 	public i128 __rshift__(u64 n) {
 		i128 r;
-		u64 sign_fill = 0;
+		u64  sign_fill = 0_u64;
 		if (this.is_negative()) {
 			sign_fill = 0xFFFFFFFFFFFFFFFF;
 		}
@@ -974,7 +974,7 @@ public struct i128 : Wide128 {
  * para hablar con memoria ajena sin conversiones.
  */
 @Abstract
-	public struct Wide256 {
+public struct Wide256 {
 	union {
 		struct {
 			u128 lo128;
@@ -1289,11 +1289,11 @@ public struct i128 : Wide128 {
 		rem.lo128 = u128.zero();
 		rem.hi128 = u128.zero();
 
-		i64 i = 255;
+		i64 i = 255_i64;
 		while (i >= 0) {
 			// Baja un bit del dividendo al resto.
 			rem = rem << 1;
-			u64 bit = 0;
+			u64 bit = 0_u64;
 			if (i >= 128) {
 				bit = (this.hi128 >> ((u64)(i - 128))).lo64 & 1;
 			} else {
@@ -1796,7 +1796,7 @@ public struct i256 : Wide256 {
  * recibe.
  */
 @Abstract
-	public struct Wide512 {
+public struct Wide512 {
 	union {
 		struct {
 			u256 lo256;
@@ -2093,10 +2093,10 @@ public struct i256 : Wide256 {
 		rem.lo256 = u256.zero();
 		rem.hi256 = u256.zero();
 
-		i64 i = 511;
+		i64 i = 511_i64;
 		while (i >= 0) {
 			rem = rem << 1;
-			u64 bit = 0;
+			u64 bit = 0_u64;
 			if (i >= 256) {
 				bit = (this.hi256 >> ((u64)(i - 256))).lo128.lo64 & 1;
 			} else {

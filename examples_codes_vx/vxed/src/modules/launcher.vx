@@ -18,17 +18,17 @@ import "modules/keys";
 import "modules/input";
 import "modules/screen";
 
-const i32 LC_MAX_ENTRIES = 1024;
-const i32 LC_NAME_MAX    = 260;
-const i32 LC_FINDDATA    = 320;
+const i32 LC_MAX_ENTRIES = 1024_i32;
+const i32 LC_NAME_MAX    = 260_i32;
+const i32 LC_FINDDATA    = 320_i32;
 
-public const i32 LR_CANCEL  = 0;
-public const i32 LR_FILE    = 1;
-public const i32 LR_PROJECT = 2;
-public const i32 LR_NEW     = 3;
+public const i32 LR_CANCEL  = 0_i32;
+public const i32 LR_FILE    = 1_i32;
+public const i32 LR_PROJECT = 2_i32;
+public const i32 LR_NEW     = 3_i32;
 
 public class LauncherResult {
-	public i32 mode;
+	public i32    mode;
 	public string path;
 
 	public LauncherResult() {
@@ -39,19 +39,19 @@ public class LauncherResult {
 
 public class Launcher {
 	public string cwd;
-	public u8* names; // pool concatenado de nombres NUL-terminados
-	public i32 names_used;
-	public i32 names_cap;
-	public i32* offsets;      // offsets[i] dentro de names
-	public i32* lens;         // lens[i] bytes (sin NUL)
-	public i32* is_dirs;      // 1 = directorio
-	public i32* visible_idx; // mapeo entry_filtrada -> idx en pool (para search)
-	public i32 count;         // entries totales en pool
-	public i32 visible_count; // entries tras filtro de busqueda
-	public i32 sel;
-	public i32 scroll;
+	public u8*    names; // pool concatenado de nombres NUL-terminados
+	public i32    names_used;
+	public i32    names_cap;
+	public i32*   offsets;       // offsets[i] dentro de names
+	public i32*   lens;          // lens[i] bytes (sin NUL)
+	public i32*   is_dirs;       // 1 = directorio
+	public i32*   visible_idx; // mapeo entry_filtrada -> idx en pool (para search)
+	public i32    count;         // entries totales en pool
+	public i32    visible_count; // entries tras filtro de busqueda
+	public i32    sel;
+	public i32    scroll;
 	public string search_query;
-	public i32 search_active;
+	public i32    search_active;
 
 	public Launcher() {
 		u8* cwd_buf = malloc(512);
@@ -60,7 +60,7 @@ public class Launcher {
 			cwd_buf[0] = (u8) 46;
 			cwd_buf[1] = 0;
 		}
-		i32                           cwd_len = 0;
+		i32                           cwd_len = 0_i32;
 		while (cwd_buf[cwd_len] != 0) cwd_len = cwd_len + 1;
 		this.cwd = str_make(cwd_buf, cwd_len);
 		free(cwd_buf);
@@ -94,22 +94,24 @@ public class Launcher {
 		if (cwd_n > 3) {
 			if (this.names_used + 3 <= this.names_cap) {
 				i32 dst = this.names_used;
-				this.names[dst] = (u8) 46;
-				this.names[dst + 1] = (u8) 46;
-				this.names[dst + 2] = 0;
+				this.names[dst]          = (u8) 46;
+				this.names[dst + 1]      = (u8) 46;
+				this.names[dst + 2]      = 0;
 				this.offsets[this.count] = dst;
-				this.lens[this.count] = 2;
+				this.lens[this.count]    = 2;
 				this.is_dirs[this.count] = 1;
-				this.count      = this.count + 1;
-				this.names_used = dst + 3;
+				this.count               = this.count + 1;
+				this.names_used          = dst + 3;
 			}
 		}
 		u8* cwd_c = this.cwd.cstr();
 		u8* spec  = malloc(cwd_n + 8);
-		i32 i     = 0;
-		while (i < cwd_n) { spec[i] = cwd_c[i];
-			i = i + 1; }
-		spec[cwd_n] = (u8) 92;     // '\'
+		i32 i     = 0_i32;
+		while (i < cwd_n) {
+			spec[i] = cwd_c[i];
+			i       = i + 1;
+		}
+		spec[cwd_n]     = (u8) 92; // '\'
 		spec[cwd_n + 1] = (u8) 42; // '*'
 		spec[cwd_n + 2] = 0;
 		u8* finddata = malloc(LC_FINDDATA);
@@ -125,30 +127,30 @@ public class Launcher {
 		// para esquivar el bug latente LANG.fix-9 (3-way && + asignacion
 		// condicional dentro de funcion grande con muchos locales no escribe
 		// el resultado al slot del var-decl).  Cero overhead vs version &&.
-		i32 cont = 1;
+		i32 cont = 1_i32;
 		while (cont == 1 && this.count < LC_MAX_ENTRIES) {
 			i32 attrib = (i32) finddata[0];
-			i32 is_dir = 0;
+			i32 is_dir = 0_i32;
 			if ((attrib & 16) != 0) is_dir = 1;
 			u8* name_p = finddata + 40;
-			i32 nlen = 0;
+			i32 nlen = 0_i32;
 			while (nlen < LC_NAME_MAX && name_p[nlen] != 0) nlen = nlen + 1;
-			i32 skip = 0;
-			if (nlen == 1 && name_p[0] == (u8) 46) skip = 1; // "."
+			i32 skip = 0_i32;
+			if (nlen == 1 && name_p[0] == (u8) 46) skip = 1;                         // "."
 			if (nlen == 2 && name_p[0] == (u8) 46 && name_p[1] == (u8) 46) skip = 1; // ".."
 			if (skip == 0 && this.names_used + nlen + 1 <= this.names_cap) {
 				i32 dst = this.names_used;
-				i32 k   = 0;
+				i32 k   = 0_i32;
 				while (k < nlen) {
 					this.names[dst + k] = name_p[k];
-					k = k + 1;
+					k                   = k + 1;
 				}
-				this.names[dst + nlen] = 0;
+				this.names[dst + nlen]   = 0;
 				this.offsets[this.count] = dst;
-				this.lens[this.count] = nlen;
+				this.lens[this.count]    = nlen;
 				this.is_dirs[this.count] = is_dir;
-				this.count      = this.count + 1;
-				this.names_used = dst + nlen + 1;
+				this.count               = this.count + 1;
+				this.names_used          = dst + nlen + 1;
 			}
 			i32          rc   = file_io.dir_next(h, finddata);
 			if (rc != 0) cont = 0;
@@ -166,21 +168,21 @@ public class Launcher {
 		if (this.names_used + actual_len + 1 > this.names_cap) return;
 		i32 dst = this.names_used;
 		if (nlen == -1) {
-			this.names[dst] = (u8) 46;
+			this.names[dst]     = (u8) 46;
 			this.names[dst + 1] = (u8) 46;
 		} else {
-			i32 k = 0;
+			i32 k = 0_i32;
 			while (k < nlen) {
 				this.names[dst + k] = name_p[k];
-				k = k + 1;
+				k                   = k + 1;
 			}
 		}
 		this.names[dst + actual_len] = 0;
-		this.offsets[this.count] = dst;
-		this.lens[this.count] = actual_len;
-		this.is_dirs[this.count] = is_dir;
-		this.count      = this.count + 1;
-		this.names_used = dst + actual_len + 1;
+		this.offsets[this.count]     = dst;
+		this.lens[this.count]        = actual_len;
+		this.is_dirs[this.count]     = is_dir;
+		this.count                   = this.count + 1;
+		this.names_used              = dst + actual_len + 1;
 	}
 
 	// Repuebla visible_idx segun search_query.  Si query vacia, todas.
@@ -188,15 +190,15 @@ public class Launcher {
 		this.visible_count = 0;
 		i32 qn = (i32) this.search_query.bytes();
 		if (qn == 0) {
-			i32 i = 0;
+			i32 i = 0_i32;
 			while (i < this.count) {
 				this.visible_idx[this.visible_count] = i;
-				this.visible_count = this.visible_count + 1;
-				i                  = i + 1;
+				this.visible_count                   = this.visible_count + 1;
+				i                                    = i + 1;
 			}
 		} else {
 			u8* qc = this.search_query.cstr();
-			i32 i  = 0;
+			i32 i  = 0_i32;
 			while (i < this.count) {
 				u8* nm   = this.names + this.offsets[i];
 				i32 nlen = this.lens[i];
@@ -215,9 +217,9 @@ public class Launcher {
 	public i32 contains_ci(u8* hay, i32 hn, u8* needle, i32 nn) {
 		if (nn == 0) return 1;
 		if (nn > hn) return 0;
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i <= hn - nn) {
-			i32 j = 0;
+			i32 j = 0_i32;
 			while (j < nn) {
 				i32                     a = (i32) hay[i + j];
 				i32                     b = (i32) needle[j];
@@ -252,14 +254,18 @@ public class Launcher {
 		i32 en    = this.lens[idx];
 		u8* cwd_c = this.cwd.cstr();
 		u8* buf   = malloc(cwd_n + en + 2);
-		i32 k     = 0;
-		while (k < cwd_n) { buf[k] = cwd_c[k];
-			k = k + 1; }
+		i32 k     = 0_i32;
+		while (k < cwd_n) {
+			buf[k] = cwd_c[k];
+			k      = k + 1;
+		}
 		buf[cwd_n] = (u8) 92;
 		u8* nm = this.names + this.offsets[idx];
 		k = 0;
-		while (k < en) { buf[cwd_n + 1 + k] = nm[k];
-			k = k + 1; }
+		while (k < en) {
+			buf[cwd_n + 1 + k] = nm[k];
+			k                  = k + 1;
+		}
 		buf[cwd_n + 1 + en] = 0;
 		string s = str_make(buf, cwd_n + 1 + en);
 		free(buf);
@@ -289,9 +295,11 @@ public class Launcher {
 		print(screen.ATTR_BOLD);
 		print(" vxed - Selector ");
 		i32 pad = sc.cols - 18;
-		i32 p   = 0;
-		while (p < pad) { print(" ");
-			p = p + 1; }
+		i32 p   = 0_i32;
+		while (p < pad) {
+			print(" ");
+			p = p + 1;
+		}
 		print(screen.ATTR_RESET);
 
 		sc.move_cursor(2, 1);
@@ -302,7 +310,7 @@ public class Launcher {
 		sc.clear_eol();
 
 		// lista en filas 4..rows-3
-		i32             body_top = 4;
+		i32             body_top = 4_i32;
 		i32             body_bot = sc.rows - 3;
 		i32             list_h   = body_bot - body_top + 1;
 		if (list_h < 5) list_h   = 5;
@@ -310,12 +318,12 @@ public class Launcher {
 		if (this.sel >= this.scroll + list_h) this.scroll = this.sel - list_h + 1;
 		if (this.scroll < 0) this.scroll = 0;
 
-		i32 r = 0;
+		i32 r = 0_i32;
 		while (r < list_h) {
 			sc.move_cursor(body_top + r, 1);
 			i32 idx = this.scroll + r;
 			if (idx < this.visible_count) {
-				i32 is_sel = 0;
+				i32 is_sel = 0_i32;
 				if (idx == this.sel) is_sel = 1;
 				this.draw_entry(idx, is_sel, sc.cols);
 			}
@@ -360,7 +368,7 @@ public class Launcher {
 			print(screen.FG_GREEN);
 		}
 		print(prefix);
-		i32 k         = 0;
+		i32 k         = 0_i32;
 		i32 max_chars = cols - 6;
 		while (k < nlen && k < max_chars) {
 			i32 ch = (i32) nm[k];
@@ -384,7 +392,7 @@ public class Launcher {
 		flush();
 
 		u8* buf = malloc(256);
-		i32 n   = 0;
+		i32 n   = 0_i32;
 		while (1) {
 			i32 k = input.read_key_blocking();
 			if (k == keys.KEY_ENTER || k == keys.KEY_LF) {
@@ -411,7 +419,7 @@ public class Launcher {
 			}
 			if (k >= 32 && k < 127 && n < 250) {
 				buf[n] = (u8) k;
-				n = n + 1;
+				n      = n + 1;
 				sc.move_cursor(sc.rows - 1, 17 + n - 1);
 				print_char(k);
 				flush();
@@ -427,7 +435,7 @@ public class Launcher {
 		sc.hide_cursor();
 		LauncherResult res = new LauncherResult();
 
-		i32 done = 0;
+		i32 done = 0_i32;
 		while (done == 0) {
 			this.render(sc);
 			flush();
@@ -458,11 +466,13 @@ public class Launcher {
 					i32 qn = (i32) this.search_query.bytes();
 					u8* qc = this.search_query.cstr();
 					u8* nq = malloc(qn + 2);
-					i32 i  = 0;
-					while (i < qn) { nq[i] = qc[i];
-						i = i + 1; }
-					nq[qn] = (u8) k;
-					nq[qn + 1] = 0;
+					i32 i  = 0_i32;
+					while (i < qn) {
+						nq[i] = qc[i];
+						i     = i + 1;
+					}
+					nq[qn]            = (u8) k;
+					nq[qn + 1]        = 0;
 					this.search_query = str_make(nq, qn + 1);
 					free(nq);
 					this.apply_filter();
@@ -535,15 +545,19 @@ public class Launcher {
 					u8* cc  = this.cwd.cstr();
 					u8* nc  = nm.cstr();
 					u8* buf = malloc(cn + nn + 2);
-					i32 i   = 0;
-					while (i < cn) { buf[i] = cc[i];
-						i = i + 1; }
+					i32 i   = 0_i32;
+					while (i < cn) {
+						buf[i] = cc[i];
+						i      = i + 1;
+					}
 					buf[cn] = (u8) 92;
-					i = 0;
-					while (i < nn) { buf[cn + 1 + i] = nc[i];
-						i = i + 1; }
+					i       = 0;
+					while (i < nn) {
+						buf[cn + 1 + i] = nc[i];
+						i               = i + 1;
+					}
 					buf[cn + 1 + nn] = 0;
-					res.path = str_make(buf, cn + 1 + nn);
+					res.path         = str_make(buf, cn + 1 + nn);
 					free(buf);
 					res.mode = LR_NEW;
 					done     = 1;

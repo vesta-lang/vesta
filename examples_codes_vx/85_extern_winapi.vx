@@ -32,7 +32,7 @@ i32 main() {
 	i32 pid  = GetCurrentProcessId();
 	i32 tick = GetTickCount();
 
-	i32 acc = 40;
+	i32 acc = 40_i32;
 	if (pid != 0) { acc++; }
 	if (tick != 0) { acc++; }
 	return acc;

@@ -6,18 +6,18 @@
 // ===========================================================================
 import "lib";
 
-u64 g_row  = 0;     // fila del cursor (0..24)
-u64 g_col  = 0;     // columna del cursor (0..79)
-u64 g_attr = 0x1F; // atributo de color (blanco sobre azul por defecto)
+u64 g_row  = 0_u64;    // fila del cursor (0..24)
+u64 g_col  = 0_u64;    // columna del cursor (0..79)
+u64 g_attr = 0x1F_u64; // atributo de color (blanco sobre azul por defecto)
 
 // Limpia toda la pantalla con el atributo dado y resetea el cursor.
 void clear(u64 attr) {
-	u16* vga  = (u16 *) 0x000B8000;
+	u16* vga  = (u16*) 0x000B8000;
 	u64  cell = (attr << 8) | 0x20; // espacio
-	u64  i    = 0;
+	u64  i    = 0_u64;
 	while (i < 2000) {
 		vga[i] = (u16) cell;
-		i = i + 1;
+		i      = i + 1;
 	}
 	g_row  = 0;
 	g_col  = 0;
@@ -26,16 +26,16 @@ void clear(u64 attr) {
 
 // Sube todas las filas una posicion (scroll) y limpia la ultima.
 void scroll() {
-	u16* vga = (u16 *) 0x000B8000;
-	u64  i   = 0;
+	u16* vga = (u16*) 0x000B8000;
+	u64  i   = 0_u64;
 	while (i < 1920) { // 80*24
 		vga[i] = vga[i + 80];
-		i = i + 1;
+		i      = i + 1;
 	}
 	u64 cell = (g_attr << 8) | 0x20;
 	while (i < 2000) {
 		vga[i] = (u16) cell;
-		i = i + 1;
+		i      = i + 1;
 	}
 }
 
@@ -46,7 +46,7 @@ void set_color(u64 attr) {
 
 // Escribe un caracter avanzando el cursor (maneja '\n' y scroll).
 void putc(u64 c) {
-	u16* vga = (u16 *) 0x000B8000;
+	u16* vga = (u16*) 0x000B8000;
 	if (c == 8) { // backspace: borra el caracter previo
 		if (g_col > 0) {
 			g_col = g_col - 1;
@@ -61,7 +61,7 @@ void putc(u64 c) {
 	} else {
 		u64 pos = g_row * 80 + g_col;
 		vga[pos] = (u16)((g_attr << 8) | c);
-		g_col = g_col + 1;
+		g_col    = g_col + 1;
 		if (g_col >= 80) {
 			g_col = 0;
 			g_row = g_row + 1;
@@ -75,7 +75,7 @@ void putc(u64 c) {
 
 // Escribe una cadena nul-terminada.
 void puts(char* s) {
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (s[i] != 0) {
 		putc((u64) s[i]);
 		i = i + 1;
@@ -86,7 +86,7 @@ void puts(char* s) {
 void dec(u64 v) {
 	u8 buf[24];
 	lib.itoa(v, buf);
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (buf[i] != 0) {
 		putc((u64) buf[i]);
 		i = i + 1;
@@ -97,7 +97,7 @@ void dec(u64 v) {
 void hex(u64 v) {
 	u8 buf[20];
 	lib.itoa_hex(v, buf);
-	u64 i = 0;
+	u64 i = 0_u64;
 	while (buf[i] != 0) {
 		putc((u64) buf[i]);
 		i = i + 1;

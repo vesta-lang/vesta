@@ -16,7 +16,7 @@ final class Cerrada {
 class Hija : Cerrada {
 	public Hija(i32 x) { super(x); }
 	@Override
-		public i32 quien() { return 2; }
+	public i32 quien() { return 2; }
 }
 
 i32 main() {

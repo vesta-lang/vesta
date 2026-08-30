@@ -8,13 +8,13 @@ i32 main() {
 	i32* a = malloc(32); // 8 x i32
 	i32* b = malloc(32);
 
-	for (i32 i = 0; i < 8; i = i + 1) {
+	for (i32 i = 0_i32; i < 8; i = i + 1) {
 		a[i] = i + 1;
 		b[i] = (i + 1) * 10;
 	}
 
-	register("rdi") i32 *pa = a;
-	register("rsi") i32 *pb = b;
+	register("rdi") i32* pa = a;
+	register("rsi") i32* pb = b;
 
 	asm volatile {
 		vmovdqu ymm0, [rdi]
@@ -23,9 +23,9 @@ i32 main() {
 		vzeroupper
 	};
 
-	i32 s = 0;
+	i32 s = 0_i32;
 
-	for (i32 i = 0; i < 8; i = i + 1) s = s + a[i];
+	for (i32 i = 0_i32; i < 8; i = i + 1) s = s + a[i];
 
 	return s; // sum((i+1)+(i+1)*10) i=0..7 = 11*36 = 396
 }

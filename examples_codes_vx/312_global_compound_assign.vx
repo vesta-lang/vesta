@@ -10,10 +10,10 @@
 // Se comprueban tambien enteros (donde el bug no se veia) y varios operadores,
 // para que el arreglo no se limite al `+=`.
 
-f64 g_acc  = 0.0;   // acumulador float: el caso que estaba roto
-i64 g_n    = 0;       // contador entero: control
-i64 g_bits = 0xF0; // entero para los operadores bit a bit
-f32 g_f32  = 0.5; // f32: mismo razonamiento que f64, con otro ancho
+f64 g_acc  = 0.0_f64;  // acumulador float: el caso que estaba roto
+i64 g_n    = 0_i64;    // contador entero: control
+i64 g_bits = 0xF0_i64; // entero para los operadores bit a bit
+f32 g_f32  = 0.5_f32;  // f32: mismo razonamiento que f64, con otro ancho
 
 void acumular(f64 x) {
 	g_acc += x; // compound assign sobre global f64
@@ -21,7 +21,7 @@ void acumular(f64 x) {
 }
 
 i32 main() {
-	for (i64 i = 0; i < 3; i++) {
+	for (i64 i = 0_i64; i < 3; i++) {
 		acumular(1.5);
 	}
 	// 1.5 * 3 = 4.5 exacto en binario -> la comparacion es estable.
@@ -51,9 +51,9 @@ i32 main() {
 	if (g_bits != 0x44) { return 11; }
 
 	// Las dos formas de escribir lo mismo deben coincidir.
-	f64 a = 0.0;
+	f64 a = 0.0_f64;
 	g_acc = 0.0;
-	for (i64 i = 0; i < 4; i++) {
+	for (i64 i = 0_i64; i < 4; i++) {
 		g_acc += 0.25; // compound
 		a = a + 0.25;  // explicito
 	}

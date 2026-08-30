@@ -22,9 +22,9 @@
  */
 
 i32 main() {
-	i32 a = 1;
-	i32 b = 2;
-	i32 c = 3;
+	i32 a = 1_i32;
+	i32 b = 2_i32;
+	i32 c = 3_i32;
 
 	try {
 		// Forma 1: desnuda en el init.  Esta si se detectaba.

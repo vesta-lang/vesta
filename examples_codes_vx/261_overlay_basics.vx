@@ -19,15 +19,15 @@
 // padding implicito (no hace falta declarar toda la cabecera).
 @overlay
 struct DosHeader {
-	u16 e_magic  @0x00;  // 'MZ' = 0x5A4D
+	u16 e_magic  @0x00; // 'MZ' = 0x5A4D
 	i32 e_lfanew @0x3C; // offset (relativo al inicio) al PE header
 }
 
 i32 main() {
 	// Construimos un buffer que simula el inicio de un PE.
-	u8* buf = (u8 *) malloc(64);
-	*(u16 *)(buf + 0x00) = 0x5A4D;     // 'MZ'
-	*(i32 *)(buf + 0x3C) = 0x00000100; // e_lfanew = 256
+	u8* buf = (u8*) malloc(64);
+	*(u16*)(buf + 0x00) = 0x5A4D;     // 'MZ'
+	*(i32*)(buf + 0x3C) = 0x00000100; // e_lfanew = 256
 
 	// Overlay-eamos la cabecera sobre el buffer: cero aritmetica a mano.
 	DosHeader dos = DosHeader(buf);
@@ -44,8 +44,8 @@ i32 main() {
 	println("nuevo e_lfanew=${dos.e_lfanew}"); // 512
 
 	// El cambio se ve en el buffer subyacente (la vista NO copia).
-	i32 raw = *(i32 *)(buf + 0x3C);
-	println("en el buffer = ${raw}");                  // 512
+	i32 raw = *(i32*)(buf + 0x3C);
+	println("en el buffer = ${raw}"); // 512
 
 	// Valor de retorno determinista (para el harness): magic + e_lfanew.
 	i32 result = (i32)dos.e_magic + (i32)dos.e_lfanew; // 0x5A4D + 512 = 23629

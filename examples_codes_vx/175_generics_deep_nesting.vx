@@ -47,22 +47,22 @@ class Triple<X, Y, Z> {
 
 i32 main() {
 	// (1) Box<i32> y Box<i64> coexisten -- clases monomorfizadas distintas.
-	Box<i32> b_i32            = new Box<i32>(10);
-	Box<i64> b_i64            = new Box<i64>(20);
+	Box<i32> b_i32 = new Box<i32>(10);
+	Box<i64> b_i64 = new Box<i64>(20);
 
 	// (2) Box<Box<i32>> -- anidamiento de 2 niveles.
-	Box<Box<i32>> b_outer     = new Box<Box<i32>>(new Box<i32>(5));
-	Box<i32> b_inner          = b_outer.get();
+	Box<Box<i32>> b_outer = new Box<Box<i32>>(new Box<i32>(5));
+	Box<i32>      b_inner = b_outer.get();
 
 	// (3) Pair<i32, i64> -- 2 type params distintos.
-	Pair<i32, i64> p          = new Pair<i32, i64>(3, 4);
+	Pair<i32, i64> p = new Pair<i32, i64>(3, 4);
 
 	// (4) Pair<i32, Box<i64>> -- el segundo type-param es a su vez
 	// un generic instanciado.
 	Pair<i32, Box<i64>> p_box = new Pair<i32, Box<i64>>(7, new Box<i64>(100));
 
 	// (5) Triple<i32, i64, bool> -- 3 type params.
-	Triple<i32, i64, bool> t  = new Triple<i32, i64, bool>(1, 2, true);
+	Triple<i32, i64, bool> t = new Triple<i32, i64, bool>(1, 2, true);
 
 	// (6) Box<Pair<i32, i64>> -- pair envuelto en box.
 	Box<Pair<i32, i64>> b_p = new Box<Pair<i32, i64>>(
@@ -71,20 +71,20 @@ i32 main() {
 	);
 
 	// Acumular usando getters.
-	i64 acc = 0;
-	acc = acc + (i64)b_i32.get(); // +10
-	acc = acc + b_i64.get();      // +20
+	i64 acc = 0_i64;
+	acc = acc + (i64)b_i32.get();   // +10
+	acc = acc + b_i64.get();        // +20
 	acc = acc + (i64)b_inner.get(); // +5
 
-	i32 pf = p.get_first();         // 3
-	i64 ps = p.get_second();        // 4
-	acc = acc + (i64)pf + ps;    // +7
+	i32 pf = p.get_first();   // 3
+	i64 ps = p.get_second();  // 4
+	acc = acc + (i64)pf + ps; // +7
 
 	i32      pbf = p_box.get_first(); // 7
 	Box<i64> pbs = p_box.get_second();
 	acc = acc - (i64)pbf - pbs.get(); // -107
 
-	i32 tx = t.get_x();               // 1
+	i32 tx = t.get_x();  // 1
 	acc = acc + (i64)tx; // +1
 
 	Pair<i32, i64> inner_pair = b_p.get();

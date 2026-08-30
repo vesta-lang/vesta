@@ -12,15 +12,17 @@ namespace ejemplos.typename_completo;
 // construyen con el del tipo interior, los que llevan el nombre que les puso el
 // usuario, y las colecciones, que eran las que faltaban.
 
-struct Punto { i64 x;
-	i64 y; }
+struct Punto {
+	i64 x;
+	i64 y;
+}
 
 class Animal { public i64 patas() { return 4; } }
 
 i64 cuenta(string s, string esperado) { return s.equals(esperado) ? 1 : 0; }
 
 i32 main() {
-	i64 ok = 0;
+	i64 ok = 0_i64;
 
 	// 1. Nombre a secas.
 	ok = ok + cuenta(typename<i64>(), "i64");

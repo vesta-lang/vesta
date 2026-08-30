@@ -17,7 +17,7 @@ namespace ejemplos.inline_asm_symbols;
 
 i64 add(i64 a, i64 b) { return a + b; }
 
-i64 g_fp = 0;
+i64 g_fp = 0_i64;
 
 // (1) call DIRECTO a una funcion del modulo (rel32).
 @Naked
@@ -65,6 +65,6 @@ i32 main() {
 	g_fp = (i64)(cfn(i64, i64) -> i64) add; // guarda la direccion de add
 	// (cfn = puntero a funcion crudo de 8 bytes; un lambda fn(...) son 16 bytes
 	//  y NO se puede castear a i64 -- usa cfn o &funcion para la direccion)
-	i64 r4 = via_gfp(8, 8);                 // 16
-	return (i32)(r1 + r2 + r3 + r4);        // 7+11+8+16 = 42
+	i64 r4 = via_gfp(8, 8);          // 16
+	return (i32)(r1 + r2 + r3 + r4); // 7+11+8+16 = 42
 }

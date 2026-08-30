@@ -22,10 +22,12 @@ namespace ejemplos.estaticos_retorno_buffer;
 // resuelven por caminos distintos, y con payloads de tamanos distintos porque
 // el fallo del tamano solo aparece cuando el payload no cabe en el numero fijo.
 
-struct Grande { i64 a;
+struct Grande {
+	i64 a;
 	i64 b;
 	i64 c;
-	i64 d; } // 32 bytes
+	i64 d;
+} // 32 bytes
 
 class FabricaC {
 	public static string saluda() { return "hola"; }
@@ -56,19 +58,19 @@ struct FabricaS {
 i32 main() {
 	// Un centinela en la pila del llamante: si el metodo escribiera fuera de
 	// su buffer, lo primero que se lleva por delante es esto.
-	const i64    centinela = 777;
+	const i64 centinela = 777_i64;
 
 	// Cadena por valor: el caso que caia en el binario nativo.
-	const string c1        = FabricaC.saluda();
-	const string s1        = FabricaS.saluda();
+	const string c1 = FabricaC.saluda();
+	const string s1 = FabricaS.saluda();
 
 	// Payload que cabe en el tamano fijo de antes.
-	const i64    c2        = unwrap(FabricaC.escalar());
-	const i64    s2        = unwrap(FabricaS.escalar());
+	const i64 c2 = unwrap(FabricaC.escalar());
+	const i64 s2 = unwrap(FabricaS.escalar());
 
 	// Payload que NO cabe: aqui se veia el desbordamiento.
-	const Grande c3        = unwrap(FabricaC.grande());
-	const Grande s3        = unwrap(FabricaS.grande());
+	const Grande c3 = unwrap(FabricaC.grande());
+	const Grande s3 = unwrap(FabricaS.grande());
 
 	const i64 sumas = c3.a + c3.b + c3.c + c3.d + s3.a + s3.b + s3.c + s3.d;
 

@@ -46,21 +46,21 @@ namespace ejemplos.vectorizador_completo;
 // programa devuelve exactamente lo mismo, solo que recorriendo los elementos
 // de uno en uno.  Por eso lo que se comprueba es el IR.
 
-const i64 N = 64;
+const i64 N = 64_i64;
 
 // --- 1. La copia, en las dos formas de escribir el bucle. ------------------
 
 i64 copy_while(i64* dst, i64* src, i64 n) {
-	i64 i = 0;
+	i64 i = 0_i64;
 	while (i < n) {
 		dst[i] = src[i];
-		i = i + 1;
+		i      = i + 1;
 	}
 	return dst[0] + dst[n - 1];
 }
 
 i64 copy_for(i64* dst, i64* src, i64 n) {
-	for (i64 i = 0; i < n; i = i + 1) {
+	for (i64 i = 0_i64; i < n; i = i + 1) {
 		dst[i] = src[i];
 	}
 	return dst[0] + dst[n - 1];
@@ -75,7 +75,7 @@ i64 copy_for(i64* dst, i64* src, i64 n) {
 // deje de ser el que toca.
 
 i64 chain(i64* c, i64* a, i64* b, i64 n) {
-	for (i64 i = 0; i < n; i = i + 1) {
+	for (i64 i = 0_i64; i < n; i = i + 1) {
 		c[i] = a[i] + b[i] - a[i];
 	}
 	return c[0] + c[n - 1];
@@ -84,18 +84,18 @@ i64 chain(i64* c, i64* a, i64* b, i64 n) {
 // --- 3. Producto de 64 bits: no existe empaquetado. ------------------------
 
 i64 scalar_i64(i64* c, i64* a, i64 k, i64 n) {
-	for (i64 i = 0; i < n; i = i + 1) {
+	for (i64 i = 0_i64; i < n; i = i + 1) {
 		c[i] = a[i] * k;
 	}
 	return c[0] + c[n - 1];
 }
 
 i32 main() {
-	i64* a = (i64 *) malloc(N * 8);
-	i64* b = (i64 *) malloc(N * 8);
-	i64* c = (i64 *) malloc(N * 8);
+	i64* a = (i64*) malloc(N * 8);
+	i64* b = (i64*) malloc(N * 8);
+	i64* c = (i64*) malloc(N * 8);
 
-	for (i64 i = 0; i < N; i = i + 1) {
+	for (i64 i = 0_i64; i < N; i = i + 1) {
 		a[i] = i;
 		b[i] = 2;
 	}

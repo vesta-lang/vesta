@@ -18,28 +18,28 @@
 
 i32 main() {
 	// El sufijo FIJA el tipo; sin el, lo pone el contexto.
-	i64 con_sufijo    =  42_i8;
-	i64 sin_sufijo    =  42;
+	i64 con_sufijo = 42_i8;
+	i64 sin_sufijo = 42_i64;
 
 	// El separador `_` agrupa los millares, y tambien separa el sufijo.
-	i64 grande        =  1_000_000;
-	i64 grande_tipado =  1_000_000_i64;
+	i64 grande        = 1_000_000;
+	i64 grande_tipado = 1_000_000_i64;
 
 	// En cualquier base.  Los digitos hexadecimales van en mayuscula y
 	// rellenos hasta la anchura de un tipo: `0x0F` ocupa un byte.
-	u32 mascara       =  0xFF_u32;
-	u8  bits          =  0b0101_u8;
-	u16 permisos      =  0o755_u16;
+	u32 mascara  = 0xFF_u32;
+	u8  bits     = 0b0101_u8;
+	u16 permisos = 0o755_u16;
 
 	// Los limites de cada tipo se pueden escribir exactos.  `-128_i8` vale
 	// porque el minimo con signo tiene una unidad mas de magnitud que el
 	// maximo; `128_i8` seria un error.
-	i8  minimo        = -128_i8;
-	i8  maximo        =  127_i8;
+	i8 minimo = -128_i8;
+	i8 maximo =  127_i8;
 
 	// Un flotante tambien.
-	f64 razon         =  3.14_f64;
-	f32 corta         =  1.5_f32;
+	f64 razon = 3.14_f64;
+	f32 corta = 1.5_f32;
 
 	println("con sufijo   = ${con_sufijo}");
 	println("sin sufijo   = ${sin_sufijo}");
@@ -61,7 +61,7 @@ i32 main() {
 	// Y asi se trunca a proposito, que es la unica forma de truncar:
 	u8 truncado = (u8) 300;
 
-	i32 ok = 0;
+	i32 ok = 0_i32;
 	if (con_sufijo == 42) { ok = ok + 10; }
 	if (grande == grande_tipado) { ok = ok + 10; }
 	if (mascara == 255) { ok = ok + 10; }

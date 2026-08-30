@@ -34,11 +34,11 @@ u8 patron(i64 i) {
 i64 prueba_copia(i64 n) {
 	u8[600] origen;
 	u8[600] destino;
-	i64 i = 0;
+	i64     i = 0_i64;
 	while (i < 600) {
-		origen[i] = patron(i);
+		origen[i]  = patron(i);
 		destino[i] = 0;
-		i = i + 1;
+		i          = i + 1;
 	}
 	std.memory.memcpy(&destino[0], &origen[0], (usize) n);
 	i = 0;
@@ -53,10 +53,10 @@ i64 prueba_copia(i64 n) {
 // Lo mismo para el relleno: todos los bytes al valor pedido, ni uno mas.
 i64 prueba_relleno(i64 n) {
 	u8[600] buf;
-	i64 i = 0;
+	i64     i = 0_i64;
 	while (i < 600) {
 		buf[i] = 0;
-		i = i + 1;
+		i      = i + 1;
 	}
 	std.memory.memset(&buf[0], 0xA5, (usize) n);
 	i = 0;
@@ -73,16 +73,16 @@ i32 main() {
 	// de un registro, los bloques, y varios tamanos que NO son multiplo del
 	// ancho -- ahi es donde vive la cola solapada.
 	i64 tam[24];
-	tam[0] = 0;
-	tam[1] = 1;
-	tam[2] = 3;
-	tam[3] = 7;
-	tam[4] = 8;
-	tam[5] = 15;
-	tam[6] = 16;
-	tam[7] = 17;
-	tam[8] = 31;
-	tam[9] = 32;
+	tam[0]  = 0;
+	tam[1]  = 1;
+	tam[2]  = 3;
+	tam[3]  = 7;
+	tam[4]  = 8;
+	tam[5]  = 15;
+	tam[6]  = 16;
+	tam[7]  = 17;
+	tam[8]  = 31;
+	tam[9]  = 32;
 	tam[10] = 33;
 	tam[11] = 63;
 	tam[12] = 64;
@@ -98,8 +98,8 @@ i32 main() {
 	tam[22] = 384;
 	tam[23] = 512;
 
-	i64 ok = 0;
-	i64 k  = 0;
+	i64 ok = 0_i64;
+	i64 k  = 0_i64;
 	while (k < 24) {
 		ok = ok + prueba_copia(tam[k]);
 		ok = ok + prueba_relleno(tam[k]);

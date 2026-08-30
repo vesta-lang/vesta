@@ -35,7 +35,7 @@ i32 main() {
 	if (arr[0] != 1 || arr[1] != 12 || arr[2] != 15 || arr[3] != 3) return 2;
 
 	// 3. Compound sobre puntero deref
-	i32  x = 7;
+	i32  x = 7_i32;
 	i32* p = &x;
 	*p += 3; // x = 10
 	*p *= 2; // x = 20
@@ -53,7 +53,7 @@ i32 main() {
 	if (c.n != 20) return 4;
 
 	// 5. Compound bitwise
-	i32 bits = 0b1100;
+	i32 bits = 0b1100_i32;
 	bits |= 0b0011; // 0b1111 = 15
 	bits &= 0b1010; // 0b1010 = 10
 	bits ^= 0b1111; // 0b0101 = 5

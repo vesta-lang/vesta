@@ -20,7 +20,7 @@ namespace ejemplos.host_ptr_indirect;
 
 i32 main() {
 	// p apunta a heap host (4 i32).
-	i32*  p  = malloc(16);
+	i32* p = malloc(16);
 
 	// pp apunta al slot donde vive p: tomar su direccion reserva el local
 	// en memoria host.  Tipo: `i32**` = puntero host al slot que contiene un
@@ -33,7 +33,7 @@ i32 main() {
 	// *pp = LOAD desde pp -> recupera p original con is_host_ptr=true.
 	// Luego *pp[0] hace addr=*pp + 0*4 (host_ptr propagado por aritm)
 	// y STORE 100 -> emite movh (correcto).
-	i32*  q  = *pp;
+	i32* q = *pp;
 	q[0] = 100;
 	q[1] = 200;
 	q[2] = 50;

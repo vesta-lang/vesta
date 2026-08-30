@@ -15,7 +15,7 @@ struct Marco {
 }
 
 i32 main() {
-	i64 base = 41;
+	i64  base = 41_i64;
 	Caja c;
 	c.leer = () => base + 1; // closure CAPTURADOR (captura base)
 	Marco m;

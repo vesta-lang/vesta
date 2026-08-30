@@ -94,8 +94,8 @@ const string VX_LITERAL_DIGITO =
 
 public comptime IntLit parse_int_lit(string src) {
 	i64  n    = src.length();
-	i64  base = 10;
-	i64  i    = 0;
+	i64  base = 10_i64;
+	i64  i    = 0_i64;
 	bool neg  = false;
 	// Signo opcional.
 	if (n >= 1) {
@@ -132,16 +132,16 @@ public comptime IntLit parse_int_lit(string src) {
 		cap = 1;
 	}
 	unique<u64> buf = unique_with(malloc(cap * 8), free);
-	i64         z   = 0;
+	i64         z   = 0_i64;
 	while (z < cap) {
 		buf[z] = 0;
-		z = z + 1;
+		z      = z + 1;
 	}
-	i64 nw = 1;
+	i64 nw = 1_i64;
 	// Acumular digito a digito: buf = buf * base + d, con acarreo multi-word.
 	while (i < n) {
 		i64 c =  ord(substr(src, i, 1));
-		i64 d = -1;
+		i64 d = -1_i64;
 		if (c >= 48 && c <= 57) {
 			d = c - 48; // '0'..'9'
 		} else if (c >= 97 && c <= 102) {
@@ -161,20 +161,20 @@ public comptime IntLit parse_int_lit(string src) {
 		}
 		if (d >= 0 && c != 95) {
 			u64 carry = (u64) d;
-			i64 k     = 0;
+			i64 k     = 0_i64;
 			while (k < nw) {
 				// w * base + carry sin overflow: split en mitades de 32 bits.
 				u64 w  = buf[k];
 				u64 lo = (w & 0xFFFFFFFF) * (u64) base + (carry & 0xFFFFFFFF);
 				u64 hi = (w >> 32) * (u64) base + (lo >> 32) + (carry >> 32);
 				buf[k] = (lo & 0xFFFFFFFF) | (hi << 32);
-				carry = hi >> 32;
-				k     = k + 1;
+				carry  = hi >> 32;
+				k      = k + 1;
 			}
 			// El acarreo abre un word nuevo mientras quepa.
 			if (carry != 0 && nw < cap) {
 				buf[nw] = carry;
-				nw = nw + 1;
+				nw      = nw + 1;
 			}
 		}
 		i = i + 1;

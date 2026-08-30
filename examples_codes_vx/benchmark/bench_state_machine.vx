@@ -6,10 +6,10 @@
 // Workload: 10M bytes procesados con 1 transicion por byte.
 
 i32 main() {
-	i32 state  = 0;
-	i64 counts = 0;
-	u64 rng    = 7;
-	i32 i      = 0;
+	i32 state  = 0_i32;
+	i64 counts = 0_i64;
+	u64 rng    = 7_u64;
+	i32 i      = 0_i32;
 	while (i < 10_000_000) {
 		// Generar byte pseudo-aleatorio.
 		rng = rng * 6_364_136_223_846_793_005;

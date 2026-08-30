@@ -19,7 +19,7 @@ concept AnyEnum<T> = is_enum<T>();
 concept IntEnum<T> = is_enum<T>() && Numeric<T>();
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 
 	// Built-in Enum / ValuedEnum como predicado.
 	if (Enum<Shape>()) { acc++; }                // 1
@@ -28,19 +28,19 @@ i32 main() {
 	if (ValuedEnum<Shape>()) { acc = acc + 99; } // NO (ADT) -> 4
 
 	// Built-in Numeric sobre un enum:u8 (ES su backing).
-	if (Numeric<Op>()) { acc = acc + 4; }        // 8
+	if (Numeric<Op>()) { acc = acc + 4; } // 8
 
 	// Concepto de usuario como predicado.
-	if (AnyEnum<Shape>()) { acc = acc + 8; }     // 16
+	if (AnyEnum<Shape>()) { acc = acc + 8; } // 16
 
 	// Concepto de usuario que compone (is_enum && Numeric): Op cumple, Shape no.
-	if (IntEnum<Op>()) { acc = acc + 8; }        // 24
-	if (IntEnum<Shape>()) { acc = acc + 99; }    // NO (Shape ADT no es Numeric)
+	if (IntEnum<Op>()) { acc = acc + 8; }     // 24
+	if (IntEnum<Shape>()) { acc = acc + 99; } // NO (Shape ADT no es Numeric)
 
 	// Como valor bool en una variable.
 	bool b = AnyEnum<Op>();
 	if (b) { acc = acc + 2; } // 26
 
-	acc = acc + 16;           // 42
-	return acc;               // 42
+	acc = acc + 16; // 42
+	return acc;     // 42
 }

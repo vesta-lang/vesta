@@ -25,19 +25,19 @@ i32 main() {
 	string go     = "go";
 	string gopher = "gopher";
 
-	i64 n = 0;
+	i64 n = 0_i64;
 
 	// --- Orden por primer byte distinto ---
-	n = n + (i64)(abc < abd);    // T: 'c'(99) < 'd'(100)
-	n = n + (i64)(abd > abc);    // T
+	n = n + (i64)(abc < abd); // T: 'c'(99) < 'd'(100)
+	n = n + (i64)(abd > abc); // T
 
 	// --- Prefijos: el mas corto es menor ---
-	n = n + (i64)(ab < abc);     // T
-	n = n + (i64)(abc > ab);     // T
+	n = n + (i64)(ab < abc); // T
+	n = n + (i64)(abc > ab); // T
 
 	// --- Iguales ---
-	n = n + (i64)(abc <= abc);   // T
-	n = n + (i64)(abc == abc);   // T
+	n = n + (i64)(abc <= abc); // T
+	n = n + (i64)(abc == abc); // T
 
 	// --- alpha vs beta ---
 	n = n + (i64)(alpha < beta); // T
@@ -48,10 +48,10 @@ i32 main() {
 	n = n + (i64)(go <= gopher); // T
 
 	// 10 comparaciones, todas T -> n == 10.
-	i32  cmp_ok  = (i32)(n == 10);
+	i32 cmp_ok = (i32)(n == 10);
 
 	// El override de la lib (cross-module) SE invoco: g_calls > 0.
-	u64* ctr     = (u64 *) section_start(".ovrctr");
+	u64* ctr     = (u64*) section_start(".ovrctr");
 	i32  used_ok = (i32)(*ctr > 0);
 
 	// 42 solo si las comparaciones son correctas Y el override heredado se uso.

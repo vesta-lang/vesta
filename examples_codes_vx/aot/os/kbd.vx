@@ -6,7 +6,7 @@
 // teniendo en cuenta el estado de Shift.  Los break-codes (bit 7) y las
 // teclas modificadoras no producen caracter (devuelven 0).
 // ===========================================================================
-import "serial";      // reutiliza inb/outb
+import "serial"; // reutiliza inb/outb
 
 bool g_shift = false; // estado de Shift (izq o der)
 
@@ -46,7 +46,7 @@ u64 kbd_translate(u64 sc, bool shift) {
 	if (sc == 0x37) { return 42; }                            // numpad *
 
 	// Letras: a-z; con Shift -> mayuscula (resta 32).
-	u64 base = 0;
+	u64 base = 0_u64;
 	if (sc == 0x10) { base = 113; } // q
 	if (sc == 0x11) { base = 119; } // w
 	if (sc == 0x12) { base = 101; } // e
@@ -88,16 +88,24 @@ u64 kbd_poll() {
 	if (!kbd_has_scancode()) {
 		return 0;
 	}
-	u64               sc      = serial.inb(0x60) & 0xFF;
+	u64 sc = serial.inb(0x60) & 0xFF;
 	// Make/break de Shift (izq 0x2A/0xAA, der 0x36/0xB6).
-	if (sc == 0x2A) { g_shift = true;
-		return 0; }
-	if (sc == 0x36) { g_shift = true;
-		return 0; }
-	if (sc == 0xAA) { g_shift = false;
-		return 0; }
-	if (sc == 0xB6) { g_shift = false;
-		return 0; }
+	if (sc == 0x2A) {
+		g_shift = true;
+		return 0;
+	}
+	if (sc == 0x36) {
+		g_shift = true;
+		return 0;
+	}
+	if (sc == 0xAA) {
+		g_shift = false;
+		return 0;
+	}
+	if (sc == 0xB6) {
+		g_shift = false;
+		return 0;
+	}
 	if ((sc & 0x80) != 0) {
 		return 0; // cualquier otro break-code: ignorar
 	}

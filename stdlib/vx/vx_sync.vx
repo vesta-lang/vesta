@@ -55,7 +55,7 @@ extern "kernel32.dll" {
  * @return Id de hilo (kernel32 `GetCurrentThreadId`), nunca 0.
  */
 @Target("os:windows")
-	i64 __vsync_tid_raw() {
+i64 __vsync_tid_raw() {
 	return (i64)GetCurrentThreadId();
 }
 
@@ -64,8 +64,8 @@ extern "kernel32.dll" {
  * @return Id de hilo del kernel, nunca 0.
  */
 @Target("!os:windows")
-	i64 __vsync_tid_raw() {
-	register("rax") i64 rax_t = 186; // SYS_gettid (x86-64)
+i64 __vsync_tid_raw() {
+	register("rax") i64 rax_t = 186_i64; // SYS_gettid (x86-64)
 	asm volatile { syscall };
 	return rax_t;
 }
@@ -98,7 +98,7 @@ i64 __vsync_tid() {
  *       rax queda con el valor leido (old) tanto en exito como en fallo.
  */
 i64 __vsync_cas64(i64* addr, i64 expected, i64 desired) {
-	register("rsi") i64 *a  = addr;     // puntero destino
+	register("rsi") i64* a  = addr;     // puntero destino
 	register("rax") i64  ex = expected; // in: expected / out: old value
 	register("rdx") i64  de = desired;  // valor a escribir si coincide
 	asm volatile { lock cmpxchg [rsi], rdx };
@@ -190,7 +190,7 @@ i64 __vsync_self() {
  * no se alcanza.
  */
 void __vx_monenter(i64* obj) {
-	i64* word_addr = obj + 2;  // obj + 16 bytes
+	i64* word_addr = obj + 2;        // obj + 16 bytes
 	i64  self      = __vsync_self(); // fiber-id+1 (owner en el modelo cooperativo)
 	i64  want1     = __vsync_make(self, 1);
 	// Fast path optimista: monitor libre -> tomarlo con una unica CAS.

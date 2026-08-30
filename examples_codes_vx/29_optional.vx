@@ -29,15 +29,15 @@ class Box {
 
 i32 main() {
 	Box a = new Box(50);
-	Box b = null;             // null reference asignable a Box
+	Box b = null; // null reference asignable a Box
 
 	i32 has_b = isPresent(b); // 0
-	i32 res   = 0;
+	i32 res   = 0_i32;
 	if (has_b == 0) {
 		res = res + 1000;
 	}
 	Box ua = unwrap(a); // ua = a (no null), no excepcion
 	res = res + ua.val; // 50
 
-	return res;         // 1050
+	return res; // 1050
 }

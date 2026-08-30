@@ -15,13 +15,13 @@
 // Esperado: MIPS proporcional al cost de malloc/free + el loop counter.
 
 i32 main() {
-	i64 sum = 0;
-	i64 i   = 0;
+	i64 sum = 0_i64;
+	i64 i   = 0_i64;
 	while (i < 1_000_000) {
 		// RAW_ALLOC de 32 bytes en host heap.
 		i32* p = malloc(32);
 		// Write minimal: 1 STORE para que el optimizer no elimine el alloc.
-		*    p = 1;
+		*p = 1;
 		// Acumula el valor para evitar dead-store-elimination tambien.
 		sum = sum + (*p);
 		// RAW_FREE: devuelve el bloque al allocator.

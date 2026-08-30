@@ -15,19 +15,19 @@
 
 // Evaluador de expresiones (descenso recursivo).  Cursor en globals; cada
 // programa tiene su propio .data (cargado en 0x100000).
-u64 g_cs = 0;
-u64 g_cp = 0;
+u64 g_cs = 0_u64;
+u64 g_cp = 0_u64;
 
 i64 parse_expr();
 
 void skip_sp() {
-	char*                   s    = (char *) g_cs;
+	char*                   s    = (char*) g_cs;
 	while (s[g_cp] == 32) { g_cp = g_cp + 1; }
 }
 
 i64 parse_number() {
-	char* s = (char *) g_cs;
-	i64   v = 0;
+	char* s = (char*) g_cs;
+	i64   v = 0_i64;
 	while (s[g_cp] >= 48 && s[g_cp] <= 57) {
 		v    = v * 10 + (s[g_cp] - 48);
 		g_cp = g_cp + 1;
@@ -36,7 +36,7 @@ i64 parse_number() {
 }
 
 i64 parse_factor() {
-	char* s = (char *) g_cs;
+	char* s = (char*) g_cs;
 	skip_sp();
 	if (s[g_cp] == 40) { // '('
 		g_cp = g_cp + 1;
@@ -54,7 +54,7 @@ i64 parse_factor() {
 
 i64 parse_term() {
 	i64   v = parse_factor();
-	char* s = (char *) g_cs;
+	char* s = (char*) g_cs;
 	skip_sp();
 	while (s[g_cp] == 42 || s[g_cp] == 47 || s[g_cp] == 37) {
 		u64 op = (u64) s[g_cp];
@@ -68,7 +68,7 @@ i64 parse_term() {
 
 i64 parse_expr() {
 	i64   v = parse_term();
-	char* s = (char *) g_cs;
+	char* s = (char*) g_cs;
 	skip_sp();
 	while (s[g_cp] == 43 || s[g_cp] == 45) {
 		u64 op = (u64) s[g_cp];
@@ -83,11 +83,11 @@ i64 parse_expr() {
 // Entry del programa.  @at(0) -> primer byte del binario; el kernel salta aqui.
 @section(".entry")
 @at(0x0000)
-	i64 prog_main(u64 api, u64 args) {
-	u64* tbl    = (u64 *) api;
+i64 prog_main(u64 api, u64 args) {
+	u64* tbl = (u64*) api;
 	// Servicios del kernel via la tabla (function pointers).
-	u64  a_puts = tbl[0]; // void puts(char*)
-	u64  a_dec  = tbl[2]; // void dec(i64)
+	u64 a_puts = tbl[0]; // void puts(char*)
+	u64 a_dec  = tbl[2]; // void dec(i64)
 
 	((cfn(u64) -> void) a_puts)((u64) "= ");
 	g_cs = args;

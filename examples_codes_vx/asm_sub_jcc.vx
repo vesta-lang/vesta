@@ -6,13 +6,13 @@
 //     vm --vx asm_sub_jcc.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-	u64 acc = 0;
+	u64 acc = 0_u64;
 
 	// sub con signo: 5 - 10 = -5 -> jl tomado (5 < 10 signed) -> +10.
 	{
-		register("rax") u64 x  = 5;
-		register("rbx") u64 y  = 10;
-		register("rcx") u64 r1 = 0;
+		register("rax") u64 x  = 5_u64;
+		register("rbx") u64 y  = 10_u64;
+		register("rcx") u64 r1 = 0_u64;
 		asm { sub rax, rbx
 			  jl .lt
 			  mov rcx, 1
@@ -25,9 +25,9 @@ u64 main() {
 
 	// sub sin signo: 3 - 8 -> jb tomado (3 < 8 unsigned) -> +32.
 	{
-		register("rax") u64 p  = 3;
-		register("rbx") u64 q  = 8;
-		register("rcx") u64 r2 = 0;
+		register("rax") u64 p  = 3_u64;
+		register("rbx") u64 q  = 8_u64;
+		register("rcx") u64 r2 = 0_u64;
 		asm { sub rax, rbx
 			  jb .lo
 			  mov rcx, 1

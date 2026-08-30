@@ -13,11 +13,11 @@ import "bmp";
 
 i32 main() {
 	string path = "salida8x8.bmp";
-	i32    W    = 8;
-	i32    H    = 8;
+	i32    W    = 8_i32;
+	i32    H    = 8_i32;
 
 	// --- CREAR: reserva el buffer y rellena las cabeceras via overlays. ---
-	u8*    img  = bmp.bmp_create24(W, H);
+	u8* img = bmp.bmp_create24(W, H);
 	if (img == null) {
 		println("Error: no se pudo crear el BMP.");
 		return 1;
@@ -25,8 +25,8 @@ i32 main() {
 
 	// Gradiente determinista: r depende de x, g de y, b de (x + y).  Todos los
 	// valores caben en un byte (max 224).
-	for (i32 y = 0; y < H; y++) {
-		for (i32 x = 0; x < W; x++) {
+	for (i32 y = 0_i32; y < H; y++) {
+		for (i32 x = 0_i32; x < W; x++) {
 			i32 r = x * 32;
 			i32 g = y * 32;
 			i32 b = (x + y) * 16;
@@ -71,7 +71,7 @@ i32 main() {
 	i32 r_magic  = bmp.bmp_magic(back);
 	i32 r_offset = bmp.bmp_offset(back);
 
-	i32 ok = 1;
+	i32 ok = 1_i32;
 	if (r_width != W) {
 		ok = 0;
 	}

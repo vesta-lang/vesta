@@ -53,8 +53,8 @@ comptime IntLit parse_int_lit(string src) {
 	IntLit r;
 	r.w0 = 0;
 	i64 n    = src.length();
-	i64 base = 10;
-	i64 i    = 0;
+	i64 base = 10_i64;
+	i64 i    = 0_i64;
 	// Prefijo hexadecimal opcional.
 	if (n >= 2) {
 		string pfx = substr(src, 0, 2);
@@ -63,10 +63,10 @@ comptime IntLit parse_int_lit(string src) {
 			i    = 2;
 		}
 	}
-	u64 acc = 0;
+	u64 acc = 0_u64;
 	while (i < n) {
 		i64 c = ord(substr(src, i, 1));
-		i64 d = 0;
+		i64 d = 0_i64;
 		if (c >= 48 && c <= 57) {
 			d = c - 48; // '0'..'9'
 		} else if (c >= 97 && c <= 102) {

@@ -7,7 +7,7 @@ namespace ejemplos.neg_unwrap_or_tipo;
 // se declaro -- y el error saldria mucho mas tarde, o no saldria.
 
 i32 main() {
-	      Optional<i64> o = Some(7);
-	const i64           v = unwrap_or(o, "no es un numero");
+	Optional<i64> o = Some(7);
+	const i64     v = unwrap_or(o, "no es un numero");
 	return (i32) v;
 }

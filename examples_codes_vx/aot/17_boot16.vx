@@ -7,7 +7,7 @@
 
 @bits(16)
 @section(".text", "rx")
-	asm boot {
+asm boot {
 	    cli
 	    xor ax, ax
 	    mov ds, ax

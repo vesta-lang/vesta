@@ -15,7 +15,7 @@ void main() {
 	// Test 2: AV dentro de try anidado (try inside try).
 	try {
 		try {
-			i64* bad = (i64 *)0xCAFEBABE;
+			i64* bad = (i64*)0xCAFEBABE;
 			i64  v   = *bad;
 			println("nunca: ${v}");
 		} catch (FatalError inner) {
@@ -32,9 +32,9 @@ void main() {
 
 	// Test 3: AV despues de operaciones normales en el mismo try.
 	try {
-		i64 ok = 100;
+		i64 ok = 100_i64;
 		println("antes del AV: ${ok}");
-		i64* bad = (i64 *)0;
+		i64* bad = (i64*)0;
 		*    bad = 99; // write AV
 		println("nunca");
 	} catch (FatalError e) {

@@ -28,7 +28,7 @@ i32 categoria(i32 code) {
 		case 301 => return 3; // redirect
 		case 404 => return 4; // client error
 		case 500 => return 5; // server error
-		case _   => return 0;   // desconocido
+		case _   => return 0; // desconocido
 	}
 	return -1; // inalcanzable (el match cubre todo via `case _`)
 }
@@ -39,7 +39,7 @@ i32 clase_char(char c) {
 		case '0' => return 1; // digito (solo el '0' para el ejemplo)
 		case 'A' => return 2; // mayuscula
 		case ' ' => return 3; // espacio
-		case _   => return 9;   // otro
+		case _   => return 9; // otro
 	}
 	return -1;
 }
@@ -55,5 +55,5 @@ i32 main() {
 		+ clase_char(' ') * 100 + clase_char('x') * 1000;
 	println("clases char ${ch}"); // 9321
 
-	return sum + ch;              // 13 + 9321 = 9334
+	return sum + ch; // 13 + 9321 = 9334
 }

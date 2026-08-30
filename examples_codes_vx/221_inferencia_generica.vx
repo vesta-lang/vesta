@@ -34,7 +34,7 @@ i32 main() {
 	auto c2 = hacer_caja(15);
 
 	// CTAD con clase generica + constructor.
-	Box  b  = new Box<i64>(7);
+	Box b = new Box<i64>(7);
 
 	return (i32)(c1.leer() + c2.leer() + b.valor); // 20 + 15 + 7 = 42
 }

@@ -39,10 +39,10 @@ i32 parse_wxh(string spec, i32* out_w, i32* out_h) {
 	if (pc == null) {
 		return 0;
 	}
-	i32 total =  (i32) spec.bytes();
+	i32 total = (i32) spec.bytes();
 	// Buscar el separador 'x' (o 'X').
-	i32 xpos  = -1;
-	i32 i     =  0;
+	i32 xpos = -1_i32;
+	i32 i    =  0_i32;
 	while (i < total) {
 		i32 c = (i32) pc[i];
 		if (c == 120 || c == 88) { // 'x' = 120, 'X' = 88
@@ -83,13 +83,13 @@ i32 main(string[] args) {
 	}
 
 	// Barrido de flags posteriores.  Solo -r WxH esta soportado (parse-demo).
-	i32 a = 1;
+	i32 a = 1_i32;
 	while (a < argc) {
 		string flag = args_get(a);
 		if (flag.equals("-r") && a + 1 < argc) {
 			string spec = args_get(a + 1);
-			i32    rw   = 0;
-			i32    rh   = 0;
+			i32    rw   = 0_i32;
+			i32    rh   = 0_i32;
 			if (parse_wxh(spec, &rw, &rh) == 1) {
 				println("Resize solicitado: ${rw}x${rh} (no aplicado: LIM-9).");
 			} else {

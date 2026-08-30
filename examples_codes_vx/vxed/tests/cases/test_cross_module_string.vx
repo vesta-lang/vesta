@@ -8,7 +8,7 @@ import "strings_lib";
 public i32 run() {
 	// Imprimir el comptime string cross-module en loop (como el render
 	// del editor que llama print(ATTR_RESET) muchas veces).
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 50) {
 		print(strings_lib.MARKER_A);
 		print(strings_lib.MARKER_B);

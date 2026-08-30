@@ -32,13 +32,13 @@ i64 leer(Optional<i64*> o) {
 }
 
 i32 main() {
-	i64            a  = 10;
-	i64            b  = 32;
+	i64 a = 10_i64;
+	i64 b = 32_i64;
 
 	// Puntero a un local, sacado dentro de un bloque con una llamada nativa
 	// detras: la combinacion que lo destapaba.
 	Optional<i64*> o1 = Some(&a);
-	i64            s1 = 0;
+	i64            s1 = 0_i64;
 	if (isPresent(o1) != 0) {
 		i64* p = unwrap(o1);
 		s1 = *p;
@@ -46,19 +46,19 @@ i32 main() {
 	}
 
 	// El mismo `Optional` cruzando una frontera de funcion.
-	      Optional<i64*> o2    = Some(&b);
-	const i64            s2    = leer(o2);
+	Optional<i64*> o2 = Some(&b);
+	const i64      s2 = leer(o2);
 
 	// Y el caso vacio, que debe seguir distinguiendose.
-	      Optional<i64*> vacio = None();
-	const i64            s3    = leer(vacio); // -1
+	Optional<i64*> vacio = None();
+	const i64      s3    = leer(vacio); // -1
 
 	// Puntero a un campo de un struct, para que no sea siempre un escalar
 	// suelto en la pila.
 	Celda c;
 	c.valor = 1;
 	Optional<i64*> o3 = Some(&c.valor);
-	i64            s4 = 0;
+	i64            s4 = 0_i64;
 	if (isPresent(o3) != 0) {
 		i64* p = unwrap(o3);
 		s4 = *p;

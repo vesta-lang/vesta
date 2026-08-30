@@ -32,15 +32,19 @@ class Circle : Shape {
 class Rect : Shape {
 	public i32 w;
 	public i32 h;
-	public Rect(i32 ww, i32 hh) { this.w = ww;
-		this.h = hh; }
+	public Rect(i32 ww, i32 hh) {
+		this.w = ww;
+		this.h = hh;
+	}
 	public i32 area() { return this.w * this.h; }
 }
 
 class ColoredCircle : Circle {
 	public i32 color;
-	public ColoredCircle(i32 rr, i32 cc) { super(rr);
-		this.color = cc; }
+	public ColoredCircle(i32 rr, i32 cc) {
+		super(rr);
+		this.color = cc;
+	}
 }
 
 class Bench {
@@ -50,10 +54,12 @@ class Bench {
 		s[0] = new Circle(5);
 		s[1] = new Rect(4, 6);
 		s[2] = new ColoredCircle(7, 1);
-		i32             acc = 0;
-		i32             i   = 0;
-		while (i < 3) { acc = acc + s[i].area();
-			i = i + 1; }
+		i32 acc = 0_i32;
+		i32 i   = 0_i32;
+		while (i < 3) {
+			acc = acc + s[i].area();
+			i   = i + 1;
+		}
 		return acc;
 	}
 }

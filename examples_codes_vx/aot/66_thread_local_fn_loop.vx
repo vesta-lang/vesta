@@ -7,7 +7,7 @@
 //
 // Resultado esperado: 0+1+2+3+4 = exit code 10.
 
-thread_local i64 acc = 0;
+thread_local i64 acc = 0_i64;
 
 i64 bump(i64 x) {
 	acc = acc + x; // muta la copia por-hilo, compartida entre llamadas
@@ -15,7 +15,7 @@ i64 bump(i64 x) {
 }
 
 i64 main() {
-	i64 i = 0;
+	i64 i = 0_i64;
 	while (i < 5) {
 		bump(i);
 		i = i + 1;

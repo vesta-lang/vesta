@@ -22,12 +22,12 @@ void limpia_16(u8* dst) {
 i32 main() {
 	// Reserva grande: la entrega la arena del sistema tras una cabecera de 64,
 	// asi que su alineacion se conoce y es de sobra para lo que se le pide.
-	u8* base = (u8 *) malloc(8192);
+	u8* base = (u8*) malloc(8192);
 	base[0] = 7;
 	limpia_16(base);
 	// Los 16 primeros bytes quedaron a cero.
-	i32 r = 42;
+	i32 r = 42_i32;
 	if (base[0] != 0) { r = 1; }
-	free((i64 *) base);
+	free((i64*) base);
 	return r;
 }

@@ -42,9 +42,9 @@
 // son caller-saved -> el compilador los infiere clobber.  rbx NO se toca.
 // --------------------------------------------------------------------------
 public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
-	register("rdi") u8 *pa  = a;
+	register("rdi") u8* pa = a;
 	register("rsi") i64 rla = la;
-	register("rdx") u8 *pb  = b;
+	register("rdx") u8* pb = b;
 	register("rcx") i64 rlb = lb;
 	register("rax") i64 res;
 	asm volatile {
@@ -117,9 +117,9 @@ public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
 // penalizacion de transicion AVX<->SSE.  La cola < 32 cae a byte-a-byte.
 // --------------------------------------------------------------------------
 public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
-	register("rdi") u8 *pa  = a;
+	register("rdi") u8* pa = a;
 	register("rsi") i64 rla = la;
-	register("rdx") u8 *pb  = b;
+	register("rdx") u8* pb = b;
 	register("rcx") i64 rlb = lb;
 	register("rax") i64 res;
 	asm volatile {
@@ -186,7 +186,7 @@ public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
 // la usa.  Self-dispatch por features: AVX2 (bit4) si disponible, sino SSE2
 // (bit0, siempre presente en x86-64).
 @HelperOverride(strcmp)
-	public i64 lib_strcmp(u8 *a, i64 la, u8 *b, i64 lb) {
+public i64 lib_strcmp(u8* a, i64 la, u8* b, i64 lb) {
 	u64 f = cpu_features();
 	if ((f & 16) != 0) { // bit4 = AVX2
 		return strcmp_avx2(a, la, b, lb);
@@ -206,8 +206,8 @@ public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
 // (base original), eax/r10; xmm0/xmm1.
 // --------------------------------------------------------------------------
 public i64 strlen_sse2(char* s) {
-	register("rdi") char *ps = s;
-	register("rax") i64 res;
+	register("rdi") char* ps = s;
+	register("rax") i64   res;
 	asm volatile {
 		    mov     r9, rdi
 		    mov     r8, rdi

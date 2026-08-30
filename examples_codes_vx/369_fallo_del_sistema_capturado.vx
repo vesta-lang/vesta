@@ -16,11 +16,11 @@
 // procesador en excepcion, y pedirselo seria exigirle algo que aun no existe.
 
 i32 main() {
-	i64 hechas = 0;
+	i64 hechas = 0_i64;
 
 	// Puntero nulo.
 	try {
-		i64* p = (i64 *) 0;
+		i64* p = (i64*) 0;
 		i64  v = *p;
 		println("no deberia llegar: ${v}");
 	} catch (FatalError e) {
@@ -30,7 +30,7 @@ i32 main() {
 	// Una direccion que no esta mapeada.  Se hace DESPUES del primero: si la
 	// recuperacion dejase el proceso tocado, esta segunda no llegaria a correr.
 	try {
-		i64* malo = (i64 *) 0xDEADBEEF;
+		i64* malo = (i64*) 0xDEADBEEF;
 		i64  v    = *malo;
 		println("no deberia llegar: ${v}");
 	} catch (FatalError e) {
@@ -40,7 +40,7 @@ i32 main() {
 	// Escritura, no lectura: el sistema lo cuenta como otro tipo de acceso y la
 	// recuperacion tiene que valer igual.
 	try {
-		i64* p = (i64 *) 0;
+		i64* p = (i64*) 0;
 		*    p = 1;
 		println("no deberia llegar");
 	} catch (FatalError e) {
@@ -50,8 +50,8 @@ i32 main() {
 	// Y el programa sigue vivo despues de tres fallos seguidos: se llama a una
 	// funcion, se hace aritmetica y se devuelve.  Si la recuperacion cerrara el
 	// proceso, nada de esto correria y el caso terminaria en otro numero.
-	i64 suma = 0;
-	i64 i    = 0;
+	i64 suma = 0_i64;
+	i64 i    = 0_i64;
 	while (i < 10) {
 		suma = suma + i;
 		i    = i + 1;

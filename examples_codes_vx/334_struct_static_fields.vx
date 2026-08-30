@@ -11,7 +11,7 @@ namespace ssf;
 
 struct Counter {
 	static u64 count;
-	u64 id;
+	u64        id;
 	public static void inc() { Counter.count = Counter.count + 1; }
 	public static u64 get() { return Counter.count; }
 }

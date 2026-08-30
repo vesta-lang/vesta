@@ -11,10 +11,10 @@ namespace ejemplos.collections_primitive;
 // Esperado: R00 == 42.
 
 i32 main() {
-	i32       acc = 0;
+	i32 acc = 0_i32;
 
 	// ===== ArrayList =====
-	ArrayList xs  = arraylist(16);
+	ArrayList xs = arraylist(16);
 	xs.push(10);
 	xs.push(20);
 	xs.push(30);

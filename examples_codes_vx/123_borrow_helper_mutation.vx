@@ -32,7 +32,7 @@ i32 main() {
 	increment_by(bm, 3); // 7 -> 10
 	double_value(bm);    // 10 -> 20
 	increment_by(bm, 1); // 20 -> 21
-	double_value(bm); // 21 -> 42
+	double_value(bm);    // 21 -> 42
 
 	return read_borrow(bm);
 }

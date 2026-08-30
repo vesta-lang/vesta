@@ -16,6 +16,8 @@ void run() {
 	Cont        c     = new Cont();
 	c.h = move(local); // move local -> field
 }                      // solo el field libera (1 free)
-i32 main() { Counter.libs = 0;
+i32 main() {
+	Counter.libs = 0;
 	run();
-	return (i32) Counter.libs; }
+	return (i32) Counter.libs;
+}

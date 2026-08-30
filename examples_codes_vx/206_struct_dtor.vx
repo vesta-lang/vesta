@@ -17,7 +17,7 @@ namespace ejemplos.struct_dtor;
 //     dtor del contenedor recursara a sus campos struct).
 // Ver doc/VMdoc//InteropC.md.
 
-i64 freed = 0;
+i64 freed = 0_i64;
 
 // Struct que POSEE un recurso heap (un i64 alocado con malloc) y lo libera en
 // su destructor.  El programador decide como liberar.
@@ -33,7 +33,7 @@ struct Recurso {
 // aqui se suprime; el dueno pasa al caller).
 Recurso adquirir(i64 v) {
 	Recurso r;
-	r.p  = (i64 *) malloc(8);
+	r.p  = (i64*) malloc(8);
 	*r.p = v;
 	return r;
 }

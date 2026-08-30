@@ -7,11 +7,11 @@ i32 doblar(i32 x) { return x * 2; }
 i32 mas_uno(i32 x) { return x + 1; }
 
 // Contador global compartido entre N macros.
-const i64 g_n = 0;
+const i64 g_n = 0_i64;
 
 // Macro recursivo profundo: genera mas_uno(mas_uno(...x...)) con N niveles.
 @Macro
-	comptime string M_chain(i64 n) {
+comptime string M_chain(i64 n) {
 	return (n <= 0)
 		? "x"
 		: "mas_uno(" + M_chain(n - 1) + ")";
@@ -19,9 +19,9 @@ const i64 g_n = 0;
 
 // Macro de tabla: genera una expresion con N llamadas a doblar(i).
 @Macro
-	comptime string M_sum_doubles(i64 n) {
+comptime string M_sum_doubles(i64 n) {
 	string code = "0";
-	i64    i    = 1;
+	i64    i    = 1_i64;
 	while (i <= n) {
 		code = code + " + doblar(" + to_str(i) + ")";
 		i    = i + 1;
@@ -31,25 +31,25 @@ const i64 g_n = 0;
 
 // Macro que combina otros macros (composicion).
 @Macro
-	comptime string M_combo(i64 depth, i64 width) {
+comptime string M_combo(i64 depth, i64 width) {
 	return M_chain(depth) + " + (" + M_sum_doubles(width) + ")";
 }
 
 i32 main() {
-	i32 x   = 0;
+	i32 x = 0_i32;
 
 	// ============================================
 	// STRESS 1: macro recursivo profundo.  100 niveles
 	// de mas_uno anidados.
 	// ============================================
-	i32 r1  = M_chain(100); // mas_uno aplicado 100 veces a x=0 -> 100
+	i32 r1 = M_chain(100); // mas_uno aplicado 100 veces a x=0 -> 100
 
 	// ============================================
 	// STRESS 2: tabla de 100 sumas (loop comptime).
 	// 0 + doblar(1) + doblar(2) + ... + doblar(100)
 	// = 2 * (1 + 2 + ... + 100) = 10100
 	// ============================================
-	i32 r2  = M_sum_doubles(100);
+	i32 r2 = M_sum_doubles(100);
 
 	// ============================================
 	// STRESS 3: composicion de macros.
@@ -57,13 +57,13 @@ i32 main() {
 	// chain50 = 50, sum_doubles50 = 2 * (1+...+50) = 2550
 	// total = 2600
 	// ============================================
-	i32 r3  = M_combo(50, 50);
+	i32 r3 = M_combo(50, 50);
 
 	// ============================================
 	// STRESS 4: 20 sitios de llamada distintos al mismo macro.
 	// Cada uno se expande independientemente.
 	// ============================================
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	acc = acc + M_chain(10);
 	acc = acc + M_chain(10);
 	acc = acc + M_chain(10);

@@ -24,7 +24,7 @@ namespace ejemplos.local_to_calln_native;
 // FULFILL_HLT por cada ALLOCA promovida para evitar leaks.
 
 extern "stdlib/native/io/vesta_io" {
-	fn vio_print_buf(u8 *buf, u64 len) -> i64;
+	fn vio_print_buf(u8* buf, u64 len) -> i64;
 }
 
 i32 main() {

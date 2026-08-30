@@ -32,8 +32,8 @@ i32 main() {
 		msgsend(0, 400);
 	};
 
-	i64 total = 0;
-	i64 n     = 0;
+	i64 total = 0_i64;
+	i64 n     = 0_i64;
 	while (n < 4) {
 		total = total + msgrecv();
 		n     = n + 1;

@@ -1,11 +1,11 @@
 // Bench: branches no predecibles (xorshift) + 4 branches.
 i32 main() {
-	u64 rng = 1;
-	i64 a   = 0;
-	i64 b   = 0;
-	i64 c   = 0;
-	i64 d   = 0;
-	i32 i   = 0;
+	u64 rng = 1_u64;
+	i64 a   = 0_i64;
+	i64 b   = 0_i64;
+	i64 c   = 0_i64;
+	i64 d   = 0_i64;
+	i32 i   = 0_i32;
 	while (i < 10_000_000) {
 		rng = rng ^ (rng << 13);
 		rng = rng ^ (rng >> 7);

@@ -46,9 +46,9 @@ i32 main() {
 
 	// Pasar como argumento, que va por un tercero.
 	const i64 args = por_base(new Todo()) + por_media(new Todo()) +
-		por_alta(new Todo());                  // 1 + 2 + 4 = 7
+		por_alta(new Todo()); // 1 + 2 + 4 = 7
 
-	const i64  directo       = x.c() + y.b() + z.a(); // 4 + 2 + 1 = 7
+	const i64 directo = x.c() + y.b() + z.a(); // 4 + 2 + 1 = 7
 
 	// Lo que el compilador responde al preguntarle por la misma jerarquia:
 	// tiene que decir lo mismo que acaba de aceptar arriba.

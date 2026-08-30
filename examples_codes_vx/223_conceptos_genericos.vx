@@ -74,9 +74,9 @@ struct Acumulador {
 i32 main() {
 	i64 mx = maximo<i64>(10, 30); // built-in Comparable      -> 30
 	i64 sm = sumar<i64>(3, 4);    // user MiNumero (where)     -> 7
-	i64 el = elegir<i64>(2, 9); // Ordenable (composicion)   -> 9
+	i64 el = elegir<i64>(2, 9);   // Ordenable (composicion)   -> 9
 
-	Caja<i64> c  = {.v = 5};     // CabeEnReg (bloque)        -> v=5
+	Caja<i64> c  = {.v = 5}; // CabeEnReg (bloque)        -> v=5
 	i64       lv = c.leer(); // 5
 
 	Cuadrado sq = new Cuadrado(2);

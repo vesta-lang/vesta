@@ -29,7 +29,7 @@ i32 main() {
 	// como handle "no nulo" -- el plugin pasa
 	// a gc_addref que valida internamente.
 
-	i64    al = vcol_alist_new(8);
+	i64 al = vcol_alist_new(8);
 
 	// Crear una string GC y pusharla con write-barrier.  El handle
 	// se registra como external root en el GcHeap.
@@ -41,7 +41,7 @@ i32 main() {
 	// ademas del array.  Validar que el get devuelve el mismo handle.
 	i64 h_back    = vcol_alist_get(al, 0);
 	i64 s1_as_i64 = s1; // cast STRING -> i64 (handle plano)
-	i32 acc       = 0;
+	i32 acc       = 0_i32;
 	if (h_back == s1_as_i64) { acc = acc + 20; }
 	if (vcol_alist_size(al) == 1) { acc = acc + 22; }
 

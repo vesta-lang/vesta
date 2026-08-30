@@ -25,16 +25,16 @@ i32 sumar(i32 a, i32 b) { return a + b; }
 
 // Macro simple: doblar literal.
 @Macro
-	comptime string macro_double(i64 n) {
+comptime string macro_double(i64 n) {
 	return "doblar(" + to_str(n) + ")";
 }
 
 // Macro con LOOP que construye codigo iterativamente.
 //   make_inc_chain(N) -> "mas_uno(mas_uno(...mas_uno(x)...))" con N niveles
 @Macro
-	comptime string make_inc_chain(i64 depth) {
+comptime string make_inc_chain(i64 depth) {
 	string code = "x";
-	i64    i    = 0;
+	i64    i    = 0_i64;
 	while (i < depth) {
 		code = "mas_uno(" + code + ")";
 		i    = i + 1;
@@ -44,7 +44,7 @@ i32 sumar(i32 a, i32 b) { return a + b; }
 
 // Macro con template + replace declarativo.
 @Macro
-	comptime string make_sum(i64 a, i64 b) {
+comptime string make_sum(i64 a, i64 b) {
 	string tpl = "sumar({a}, {b})";
 	string t1  = replace(tpl, "{a}", to_str(a));
 	string t2  = replace(t1, "{b}", to_str(b));
@@ -59,7 +59,7 @@ i32 main() {
 	// (2) Macro con LOOP en compile-time:
 	//     make_inc_chain(3) -> "mas_uno(mas_uno(mas_uno(x)))"
 	//     Inyectado: codigo runtime ejecuta 3 mas_uno sobre x=10.
-	i32 x  = 10;
+	i32 x  = 10_i32;
 	i32 r2 = make_inc_chain(3); // 10 + 3 = 13
 	if (r2 != 13) return 92;
 

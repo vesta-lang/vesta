@@ -13,8 +13,8 @@ struct Punto {
 }
 
 struct Caja<T> {
-	T val;
-	u8 tag = 0x07; // default conservado en el compound literal
+	T  val;
+	u8 tag = 0x07_u8; // default conservado en el compound literal
 }
 
 i32 distancia_manhattan(Punto p) {

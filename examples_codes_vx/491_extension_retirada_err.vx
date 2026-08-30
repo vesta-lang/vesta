@@ -14,8 +14,10 @@ namespace ejemplos.extension_retirada_err;
 //
 // Se rechaza DICIENDO con que se sustituye, no con un error de sintaxis.
 
-struct Punto { i64 x;
-	i64 y; }
+struct Punto {
+	i64 x;
+	i64 y;
+}
 
 extension Punto {
 	i64 suma() { return this.x + this.y; }

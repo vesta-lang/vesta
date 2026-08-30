@@ -5,5 +5,7 @@
 namespace geo.shapes;
 
 public i64 area(i64 w, i64 h) { return w * h; }
-public struct Rect { i64 w;
-	i64 h; }
+public struct Rect {
+	i64 w;
+	i64 h;
+}

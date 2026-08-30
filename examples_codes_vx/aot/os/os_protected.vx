@@ -40,7 +40,7 @@
 @bits(16)
 @section(".boot", "rx")
 @at(0x0000)
-	asm boot16 {
+asm boot16 {
 	cli
 	xor ax, ax
 	mov ds, ax
@@ -70,7 +70,7 @@
 @bits(32)
 @section(".pm", "rx")
 @at(0x0080)
-	asm pm32 {
+asm pm32 {
 	    mov ax, 0x10
 	    mov ds, ax
 	    mov es, ax
@@ -99,12 +99,12 @@
 // --------------------------------------------------------------------------
 @section(".msg")
 @at(0x0120)
-	bytes msg { db "Protected mode OK!", 0x0A, 0 }
+bytes msg { db "Protected mode OK!", 0x0A, 0 }
 
 // GDTR: limite (3 descriptores * 8 - 1 = 0x17) + base SIMBOLICA del GDT.
 @section(".gdtr")
 @at(0x01C0)
-	bytes gdtr {
+bytes gdtr {
 	dw 0x0017
 		dd gdt_ents // base del GDT por SIMBOLO (resuelto cross-bloque)
 }
@@ -112,7 +112,7 @@
 // GDT: null, code32 (0x08), data32 (0x10).
 @section(".gdtents")
 @at(0x01C8)
-	bytes gdt_ents {
+bytes gdt_ents {
 	dq 0
 		db 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9A, 0xCF, 0x00 // code32: G=1 D=1
 		db 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x92, 0xCF, 0x00 // data32
@@ -121,4 +121,4 @@
 // Firma de boot MBR en el offset 510.
 @section(".sig")
 @at(0x01FE)
-	bytes sig { db 0x55, 0xAA }
+bytes sig { db 0x55, 0xAA }

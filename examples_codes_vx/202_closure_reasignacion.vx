@@ -9,8 +9,10 @@ namespace ejemplos.closure_reasignacion;
 
 class Contador {
 	i64 n;
-	i64 inc() { this.n = this.n + 1;
-		return this.n; }
+	i64 inc() {
+		this.n = this.n + 1;
+		return this.n;
+	}
 }
 
 class Widget {

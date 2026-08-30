@@ -7,9 +7,9 @@
 //
 // Resultado esperado: 5 + 7 + 100 = exit code 112.
 
-thread_local i32 a = 5; // plantilla inicializada
-thread_local i32 b;     // sin init -> cero por-hilo
-thread_local i64 c = 100; // tamano distinto (8 bytes)
+thread_local i32 a = 5_i32;   // plantilla inicializada
+thread_local i32 b;           // sin init -> cero por-hilo
+thread_local i64 c = 100_i64; // tamano distinto (8 bytes)
 
 i64 main() {
 	b = 7; // mutar la copia de ESTE hilo

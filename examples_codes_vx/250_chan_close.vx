@@ -7,12 +7,12 @@ import std.chan only Chan, chan_new, chan_send, chan_recv,
 chan_close, chan_is_closed, chan_free;
 
 Chan g_ch;
-i64 g_sum   = 0;
-i64 g_count = 0;
-i64 g_n     = 50;
+i64  g_sum = 0_i64;
+i64  g_count = 0_i64;
+i64  g_n = 50_i64;
 
 void producer(i64 arg) {
-	i64 i = 0;
+	i64 i = 0_i64;
 	while (i < g_n) {
 		chan_send(g_ch, i + 1); // envia 1..50
 		i = i + 1;
@@ -21,8 +21,8 @@ void producer(i64 arg) {
 }
 
 void consumer(i64 arg) {
-	i64 s = 0;
-	i64 c = 0;
+	i64 s = 0_i64;
+	i64 c = 0_i64;
 	// Recibir hasta que el canal este CERRADO y DRENADO.  Los valores enviados
 	// son 1..50 (nunca 0), asi que recv==0 solo ocurre en canal cerrado+vacio.
 	while (true) {

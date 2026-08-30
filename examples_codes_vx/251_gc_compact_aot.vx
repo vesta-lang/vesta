@@ -29,16 +29,18 @@ namespace ejemplos.gc_compact_aot;
 // GcHandles) la cubre 250_gc_compact.vx.
 
 class Node {
-	i64 v;
+	i64      v;
 	gc<Node> next;
-	Node(i64 x) { this.v = x;
-		this.next = null; }
+	Node(i64 x) {
+		this.v    = x;
+		this.next = null;
+	}
 }
 
 // Construye una lista de n nodos (valores 0..n-1); retorna la cabeza (ESCAPA).
 gc<Node> build(i64 n) {
 	gc<Node> head = null;
-	i64      i    = 0;
+	i64      i    = 0_i64;
 	while (i < n) {
 		gc<Node> m = new Node(i);
 		m.next = head;
@@ -50,7 +52,7 @@ gc<Node> build(i64 n) {
 
 // Cuenta los nodos alcanzables desde la cabeza.
 i64 count_list(gc<Node> h) {
-	i64      acc = 0;
+	i64      acc = 0_i64;
 	gc<Node> c   = h;
 	while (c != null) {
 		acc++;
@@ -62,7 +64,7 @@ i64 count_list(gc<Node> h) {
 // Suma los valores para forzar el uso de los campos tras compactar (detecta
 // punteros stale: un `next` no reescrito leeria basura o cascaria).
 i64 sum_list(gc<Node> h) {
-	i64      acc = 0;
+	i64      acc = 0_i64;
 	gc<Node> c   = h;
 	while (c != null) {
 		acc = acc + c.v;
@@ -74,7 +76,7 @@ i64 sum_list(gc<Node> h) {
 // Corta la lista tras el nodo k: los nodos posteriores quedan inalcanzables.
 void truncate_at(gc<Node> h, i64 k) {
 	gc<Node> c = h;
-	i64      i = 0;
+	i64      i = 0_i64;
 	while (i < k) {
 		c = c.next;
 		i = i + 1;
@@ -83,17 +85,17 @@ void truncate_at(gc<Node> h, i64 k) {
 }
 
 i32 main() {
-	gc<Node> keep = build(4000); // lista viva -> OldGen (alloc_pinned)
+	gc<Node> keep = build(4000);      // lista viva -> OldGen (alloc_pinned)
 	i64      pre  = count_list(keep); // 4000
 
 	truncate_at(keep, 1999); // deja 2000 nodos; el resto es basura
 
-	gc_collect();               // colecta basura; compacta (opt-in)
+	gc_collect(); // colecta basura; compacta (opt-in)
 
 	i64 cnt = count_list(keep); // 2000 tras compactar
 	// Kept: valores 2000..3999 -> sum = (2000+3999)*2000/2 = 5999000.
 	// Verifica que los `next` y `v` reescritos siguen validos tras el sliding.
-	i64 s   = sum_list(keep);
+	i64 s = sum_list(keep);
 	if (cnt == 2000 && pre == 4000 && s == 5_999_000) {
 		return 42; // exito
 	}

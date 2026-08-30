@@ -29,13 +29,13 @@ namespace ejemplos.string_op_override;
 
 // Override del concat: siempre devuelve un marcador fijo "OVR".
 @StringConcat
-	string my_concat(string a, string b) {
+string my_concat(string a, string b) {
 	return "OVR";
 }
 
 // Override del eq: invierte la semantica -- true si difieren.
 @StringEq
-	bool my_eq(string a, string b) {
+bool my_eq(string a, string b) {
 	// Comparamos byte a byte sin usar `==` de strings (que se rutearia
 	// de vuelta a este override -- aunque el lowering ya lo protege).
 	i64 la = a.length();

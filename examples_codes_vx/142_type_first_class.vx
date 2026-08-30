@@ -9,15 +9,21 @@ namespace ejemplos.type_first_class;
 // Cubre tambien `comptime fn` que devuelve Type (factory de tipos
 // parametrizado por valor entero compile-time).
 
-struct Vec2 { f32 x;
-	f32 y; }
-struct Vec3 { f32 x;
+struct Vec2 {
+	f32 x;
 	f32 y;
-	f32 z; }
-struct Vec4 { f32 x;
+}
+struct Vec3 {
+	f32 x;
 	f32 y;
 	f32 z;
-	f32 w; }
+}
+struct Vec4 {
+	f32 x;
+	f32 y;
+	f32 z;
+	f32 w;
+}
 
 // (1) Type-as-value: T es alias compile-time para Vec3.
 comptime Type T = comptime_type<Vec3>();

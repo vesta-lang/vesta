@@ -18,7 +18,7 @@
 // la unica que no envejece cuando el elevado aprenda casos nuevos: hoy sube dos
 // de estos bloques y manana quiza los cinco, y el caso sigue valiendo igual.
 
-i64 g_semilla = 5;
+i64 g_semilla = 5_i64;
 
 // Registros del banco ancho, sin memoria: el elevado ya los pasa a IR.
 i64 solo_vectorial(i64 x) {
@@ -30,7 +30,7 @@ i64 solo_vectorial(i64 x) {
 // Aritmetica de registros generales.
 i64 solo_generales(i64 x) {
 	register("rax") i64 a = x;
-	register("rcx") i64 b = 3;
+	register("rcx") i64 b = 3_i64;
 	asm { add rax, rcx }
 	return a;
 }
@@ -45,7 +45,7 @@ i64 con_memoria() {
 }
 
 i32 main() {
-	i64 t = 0;
+	i64 t = 0_i64;
 	t = t + solo_vectorial(10); // 11
 	t = t + solo_generales(20); // 23
 	t = t + con_memoria();      // 5

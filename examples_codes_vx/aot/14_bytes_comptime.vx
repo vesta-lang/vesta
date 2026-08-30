@@ -2,7 +2,7 @@
 // sintaxis: bloque NASM + arrays comptime tipados).  Un operando puede ser
 // un comptime const escalar, un comptime array (se expande) o una funcion.
 
-const u32  MAGIC   = 0xDEADBEEF;
+const u32  MAGIC   = 0xDEADBEEF_u32;
 const u8[] palette = {1, 2, 3, 4};
 
 bytes header {

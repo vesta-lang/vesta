@@ -3,6 +3,6 @@
 // llamada main -> boot_entry es CROSS-SECCION (la resuelve el ObjectWriter).
 // Una funcion con @section NO se inlinea (debe permanecer fisica en su seccion).
 @section(".boot", "rwx")
-	i32 boot_entry(i32 x) { return x + 7; }
+i32 boot_entry(i32 x) { return x + 7; }
 
 i32 main() { return boot_entry(35); }

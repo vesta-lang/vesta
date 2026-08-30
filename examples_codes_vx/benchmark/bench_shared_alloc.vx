@@ -28,10 +28,10 @@ i32 helper_shared() {
 }
 
 i32 main() {
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	i32 N   = 1_000_000;
 	//   1M iter LOCAL.
-	i32 i   = 0;
+	i32 i = 0_i32;
 	while (i < N) {
 		acc = acc + helper_local();
 		i   = i + 1;

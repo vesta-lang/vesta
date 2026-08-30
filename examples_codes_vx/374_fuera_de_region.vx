@@ -12,19 +12,21 @@ namespace ejemplos.fuera_de_region;
 
 i64 dentro_del_hueco() {
 	u8[16] buf;
-	u8*  base = &buf[0];
+	u8*    base = &buf[0];
 	// Ultimo qword que cabe: [8,16) sobre un objeto de 16.
-	i64* q    = (i64 *)(base + 8);
-	*    q    = 40;
+	i64* q = (i64*)(base + 8);
+	*    q = 40;
 	return *q;
 }
 
 // Un struct de 3 bytes ocupa 8 en el marco, y el compilador lo copia con un
 // movimiento de 8: ensanchar el acceso DENTRO del hueco es legitimo, y por eso
 // el limite que se compara es el hueco y no el tamano logico.
-struct Tres { u8 a;
+struct Tres {
+	u8 a;
 	u8 b;
-	u8 c; }
+	u8 c;
+}
 
 i64 agregado_pequeno() {
 	Tres t;

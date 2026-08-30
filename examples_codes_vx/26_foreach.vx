@@ -21,12 +21,12 @@ namespace ejemplos.foreach;
 
 i32 main() {
 	i32[10] arr;
-	i32 i = 0;
+	i32     i = 0_i32;
 	while (i < 10) {
 		arr[i] = i + 1;
-		i = i + 1;
+		i      = i + 1;
 	}
-	i32 sum = 0;
+	i32 sum = 0_i32;
 	for (i32 x : arr) {
 		sum = sum + x;
 	}

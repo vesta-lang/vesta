@@ -22,7 +22,7 @@ i32 main() {
 	Ordering x   = Ordering.Less;
 	Ordering y   = Ordering.Less;
 	Ordering z   = Ordering.Greater;
-	i32      acc = 0;
+	i32      acc = 0_i32;
 	if (x == y) { acc = acc + 20; }
 	if (x != z) { acc = acc + 22; }
 	println("sin cast: iguales=${x == y} distintos=${x != z}");

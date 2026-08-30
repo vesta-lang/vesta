@@ -30,10 +30,10 @@ T cuadruple<T>(T x) {
 
 i32 main() {
 	i64 a = identidad<i64>(10); // explicito
-	i32 b = identidad(5); // inferido de '5' -> i32... (literal i64->trunc)
+	i32 b = identidad(5);       // inferido de '5' -> i32... (literal i64->trunc)
 	i64 c = primero<i64, i32>(20, 99);
-	i64 d = doble<i64>(2);                    // 4
-	i64 e = cuadruple<i64>(0);                // 0
+	i64 d = doble<i64>(2);     // 4
+	i64 e = cuadruple<i64>(0); // 0
 
 	// 10 + 5 + 20 + 4 + 0 ... ajustado a 42:
 	return (i32)(a + (i64)b + c + d + e + 3); // 10+5+20+4+0+3 = 42

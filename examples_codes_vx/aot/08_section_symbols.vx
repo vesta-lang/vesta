@@ -4,9 +4,9 @@
 // section_size(".x") da el tamano en bytes (u64).  En -m vm/jit (sin secciones
 // nativas) estos builtins devuelven 0.
 @section(".boot", "rwx")
-	i32 boot_a(i32 x) { return x + 1; }
+i32 boot_a(i32 x) { return x + 1; }
 @section(".boot", "rwx")
-	i32 boot_b(i32 x) { return x + 2; }
+i32 boot_b(i32 x) { return x + 2; }
 
 i32 main() {
 	u64 start = (u64) section_start(".boot");

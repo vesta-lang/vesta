@@ -13,8 +13,8 @@ namespace ejemplos.paralelismo_heavy;
 
 i32 main() {
 	i64 c1 = spawn {
-		i64 acc = 0;
-		i64 i   = 1;
+		i64 acc = 0_i64;
+		i64 i   = 1_i64;
 		while (i <= 10_000_000) {
 			acc = acc + i;
 			i   = i + 1;
@@ -22,8 +22,8 @@ i32 main() {
 		msgsend(0, acc);
 	};
 	i64 c2 = spawn {
-		i64 acc = 0;
-		i64 i   = 1;
+		i64 acc = 0_i64;
+		i64 i   = 1_i64;
 		while (i <= 10_000_000) {
 			acc = acc + i;
 			i   = i + 1;
@@ -31,8 +31,8 @@ i32 main() {
 		msgsend(0, acc);
 	};
 	i64 c3 = spawn {
-		i64 acc = 0;
-		i64 i   = 1;
+		i64 acc = 0_i64;
+		i64 i   = 1_i64;
 		while (i <= 10_000_000) {
 			acc = acc + i;
 			i   = i + 1;
@@ -40,8 +40,8 @@ i32 main() {
 		msgsend(0, acc);
 	};
 	i64 c4 = spawn {
-		i64 acc = 0;
-		i64 i   = 1;
+		i64 acc = 0_i64;
+		i64 i   = 1_i64;
 		while (i <= 10_000_000) {
 			acc = acc + i;
 			i   = i + 1;
@@ -49,8 +49,8 @@ i32 main() {
 		msgsend(0, acc);
 	};
 
-	i64 total = 0;
-	i64 n     = 0;
+	i64 total = 0_i64;
+	i64 n     = 0_i64;
 	while (n < 4) {
 		i64 m = msgrecv();
 		total = total + m;

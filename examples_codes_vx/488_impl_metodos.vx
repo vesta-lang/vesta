@@ -28,8 +28,10 @@ namespace ejemplos.extension_impl;
 // con CERO, UNO, DOS y TRES parametros, sobre un struct y sobre una clase, y
 // las dos formas de `impl` sobre el mismo tipo.
 
-struct Punto { i64 x;
-	i64 y; }
+struct Punto {
+	i64 x;
+	i64 y;
+}
 
 class Caja {
 	public i64 v;
@@ -67,7 +69,7 @@ i32 main() {
 	i64 c = p.dos(5, 7);     // 42
 	i64 d = p.tres(1, 2, 3); // 16
 	i64 e = k.mas(2, 3, 4);  // 10
-	i64 f = p.total(3); // 33
+	i64 f = p.total(3);      // 33
 
 	println("cero=${a} uno=${b} dos=${c} tres=${d} clase=${e} impl=${f}");
 

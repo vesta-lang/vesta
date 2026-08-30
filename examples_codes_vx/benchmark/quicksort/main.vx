@@ -14,7 +14,7 @@ i32 partition(i32* arr, i32 lo, i32 hi) {
 	}
 	i32 t2 = arr[i + 1];
 	arr[i + 1] = arr[hi];
-	arr[hi] = t2;
+	arr[hi]    = t2;
 	return i + 1;
 }
 void qsort_rec(i32* arr, i32 lo, i32 hi) {
@@ -26,14 +26,14 @@ void qsort_rec(i32* arr, i32 lo, i32 hi) {
 }
 i32 main() {
 	i32  N    = 100_000;
-	i32* arr  = (i32 *) malloc(N * 4);
+	i32* arr  = (i32*) malloc(N * 4);
 	u64  seed = 12_345;
-	i32  i    = 0;
+	i32  i    = 0_i32;
 	while (i < N) {
-		seed = seed * 6_364_136_223_846_793_005;
-		seed = seed + 1_442_695_040_888_963_407;
+		seed   = seed * 6_364_136_223_846_793_005;
+		seed   = seed + 1_442_695_040_888_963_407;
 		arr[i] = (i32)((seed >> 33) & 0xFFFFFFFF);
-		i = i + 1;
+		i      = i + 1;
 	}
 	qsort_rec(arr, 0, N - 1);
 	i32 r = arr[N / 2] & 0xFF;

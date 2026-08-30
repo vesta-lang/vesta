@@ -43,7 +43,7 @@ class Worker {
 
 i32 main() {
 	Worker w   = new Worker();
-	i32    acc = 0;
+	i32    acc = 0_i32;
 
 	// 1. Primer doWork: throw -> capturado.  Debe haber liberado el monitor.
 	try {
@@ -56,10 +56,10 @@ i32 main() {
 	// 2. Segundo doWork: sin throw.  Si el monitor quedo locked o el frame
 	//    de excepcion colgado, esto fallaria/colgaria.  Si todo OK, retorna 2
 	//    (contador era 1 tras el primer call abortado).
-	i32 r  = w.doWork(0); // 2
+	i32 r = w.doWork(0); // 2
 
 	// 3. Tercero igual: confirma que multiples invocaciones siguen funcionando.
 	i32 r2 = w.doWork(0); // 3
 
-	return acc + r + r2;  // 99 + 2 + 3 = 104
+	return acc + r + r2; // 99 + 2 + 3 = 104
 }

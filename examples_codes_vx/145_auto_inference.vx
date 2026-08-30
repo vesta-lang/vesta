@@ -13,18 +13,18 @@ f64 half(f64 x) { return x / 2.0; }
 
 i32 main() {
 	// Primitivos inferidos.
-	auto a       = 7;            // i32 (literal entero)
-	var  b       = 35;            // i32
-	auto c       = suma(a, b);   // i32 (return type de suma)
-	auto big     = large(420); // i64 (return type de large)
+	auto a   = 7;          // i32 (literal entero)
+	var  b   = 35;         // i32
+	auto c   = suma(a, b); // i32 (return type de suma)
+	auto big = large(420); // i64 (return type de large)
 
 	// Cadenas aritmeticas.
-	auto sum2    = a + b;     // i32
-	var  doubled = c * 2;   // i32
+	auto sum2    = a + b; // i32
+	var  doubled = c * 2; // i32
 
 	// Inferencia con literal float.
-	auto pi      = 3.14;        // f64
-	auto h       = half(pi);     // f64
+	auto pi = 3.14;     // f64
+	auto h  = half(pi); // f64
 
 	// Validar valores.
 	if (a != 7) return 91;

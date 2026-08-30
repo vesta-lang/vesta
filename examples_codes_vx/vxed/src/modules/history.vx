@@ -16,12 +16,12 @@ public struct Snapshot {
 }
 
 @cold
-public comptime i32 MAX_UNDO = 64;
+public comptime i32 MAX_UNDO = 64_i32;
 
 public class SnapshotStack {
 	public Snapshot* slots;
-	public i32 count;
-	public i32 capacity;
+	public i32       count;
+	public i32       capacity;
 
 	public SnapshotStack() {
 		this.capacity = MAX_UNDO;
@@ -34,7 +34,7 @@ public class SnapshotStack {
 	// bytes huerfanos en el heap raw del proceso.
 	public ~SnapshotStack() {
 		if (this.slots != null) {
-			i32 i = 0;
+			i32 i = 0_i32;
 			while (i < this.count) {
 				if (this.slots[i].data != null) free(this.slots[i].data);
 				i = i + 1;
@@ -56,10 +56,10 @@ public void make_snapshot_into(buffer.Buffer b, VirtualPtr<Snapshot> out) {
 	(*out).cursor = b.cursor;
 	(*out).dirty  = b.dirty;
 	(*out).data   = malloc(b.length + 1);
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < b.length) {
 		(*out).data[i] = b.data[i];
-		i = i + 1;
+		i              = i + 1;
 	}
 	(*out).data[b.length] = 0;
 }
@@ -69,15 +69,15 @@ public void stack_push(SnapshotStack st, VirtualPtr<Snapshot> snap) {
 	if (st.count >= st.capacity) {
 		// Shift: descartar el mas viejo, free su data, mover el resto.
 		free(st.slots[0].data);
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i < st.count - 1) {
 			st.slots[i] = st.slots[i + 1];
-			i = i + 1;
+			i           = i + 1;
 		}
 		st.count = st.count - 1;
 	}
 	st.slots[st.count] = *snap;
-	st.count = st.count + 1;
+	st.count           = st.count + 1;
 }
 
 // Pop al final.  Devuelve 1 si OK, 0 si vacio.
@@ -103,7 +103,7 @@ public void restore(buffer.Buffer b, VirtualPtr<Snapshot> snap) {
 // stack en si.  Usado para limpiar el redo_stack cuando llega una nueva
 // edicion del usuario.
 public void stack_clear(SnapshotStack st) {
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < st.count) {
 		if (st.slots[i].data != null) free(st.slots[i].data);
 		i = i + 1;

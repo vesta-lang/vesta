@@ -22,7 +22,7 @@ namespace std.syscall;
 public import std.syscall.abi;
 
 @Target("!os:windows")
-	import std.syscall.linux;
+import std.syscall.linux;
 
 @Target("os:windows")
-	import std.syscall.windows;
+import std.syscall.windows;

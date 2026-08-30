@@ -20,38 +20,38 @@
 // Contador global en .data (writable).  El override lo incrementa cada vez
 // que se invoca; main lo lee al final para confirmar el uso.
 @section(".ovrctr", "rw")
-	bytes g_calls {
+bytes g_calls {
 	dq 0
 }
 
 // Override del memcpy del build: copia byte-a-byte (correcta para cualquier n)
 // + cuenta la invocacion.  Firma void(u8*, u8*, u64) como exige el helper.
 @HelperOverride(memcpy)
-	void my_memcpy(u8 *dst, u8 *src, u64 n) {
-	u64 i = 0;
+void my_memcpy(u8* dst, u8* src, u64 n) {
+	u64 i = 0_u64;
 	while (i < n) {
 		dst[i] = src[i];
-		i = i + 1;
+		i      = i + 1;
 	}
 	// Registrar la invocacion en el contador global.
-	u64* ctr = (u64 *) section_start(".ovrctr");
+	u64* ctr = (u64*) section_start(".ovrctr");
 	*    ctr = *ctr + 1;
 }
 
 i32 main() {
 	// Varios concats -> cada uno baja a `call [fp]` (CALLIND) -> my_memcpy.
-	string s1      = "ab" + "cde"; // "abcde"  -> 5
-	string d       = "0123456789";
-	string s2      = d + d;                                   // 20
-	string s3      = s2 + d;                                  // 30
+	string s1 = "ab" + "cde"; // "abcde"  -> 5
+	string d  = "0123456789";
+	string s2 = d + d;  // 20
+	string s3 = s2 + d; // 30
 
 	// (a) correctitud de los concats (longitudes byte-exactas).
-	u64    total   = s1.length() + s2.length() + s3.length(); // 5 + 20 + 30 = 55
-	i32    len_ok  = (i32)(total == 55);
+	u64 total  = s1.length() + s2.length() + s3.length(); // 5 + 20 + 30 = 55
+	i32 len_ok = (i32)(total == 55);
 
 	// (b) el override SE invoco: g_calls > 0.
-	u64*   ctr     = (u64 *) section_start(".ovrctr");
-	i32    used_ok = (i32)(*ctr > 0);
+	u64* ctr     = (u64*) section_start(".ovrctr");
+	i32  used_ok = (i32)(*ctr > 0);
 
 	// 42 solo si AMBAS condiciones se cumplen.
 	if (len_ok == 1 && used_ok == 1) {

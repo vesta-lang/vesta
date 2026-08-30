@@ -3,9 +3,11 @@
 // el clon monomorfizado por inferencia no se re-chequeaba.
 concept Sumable<T> { i64 suma(); }
 
-struct Par { i64 a;
+struct Par {
+	i64 a;
 	i64 b;
-	i64 suma() { return this.a + this.b; } }
+	i64 suma() { return this.a + this.b; }
+}
 
 i64 aplica < T : Sumable > (T v) { return v.suma(); }
 

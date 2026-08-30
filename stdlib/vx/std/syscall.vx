@@ -12,7 +12,7 @@ namespace std.syscall;
 // de compatibilidad por encima.  Lo que se unifica es de donde vienen.
 
 @Target("os:windows")
-	public import std.syscall.windows;
+public import std.syscall.windows;
 
 @Target("os:linux")
-	public import std.syscall.linux;
+public import std.syscall.linux;

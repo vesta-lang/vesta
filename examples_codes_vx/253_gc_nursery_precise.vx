@@ -28,10 +28,12 @@ namespace ejemplos.gc_nursery_precise;
 // por ser alcanzable via keep, escaneada preciso por el major via field-maps.)
 
 class Node {
-	i64 v;
+	i64      v;
 	gc<Node> next;
-	Node(i64 x) { this.v = x;
-		this.next = null; }
+	Node(i64 x) {
+		this.v    = x;
+		this.next = null;
+	}
 }
 
 // Append-a-la-cola: head fijo, tail avanza.  `tail.next = m` genera el edge
@@ -39,7 +41,7 @@ class Node {
 gc<Node> build(i64 n) {
 	gc<Node> head = new Node(0);
 	gc<Node> tail = head;
-	i64      i    = 1;
+	i64      i    = 1_i64;
 	while (i < n) {
 		gc<Node> m = new Node(i);
 		tail.next = m; // <-- store de campo-CLASS: emite gcwb (barrier)
@@ -51,7 +53,7 @@ gc<Node> build(i64 n) {
 
 // Cuenta los nodos alcanzables leyendo el campo gc `next`.
 i64 count_list(gc<Node> h) {
-	i64      acc = 0;
+	i64      acc = 0_i64;
 	gc<Node> c   = h;
 	while (c != null) {
 		acc++;
@@ -62,7 +64,7 @@ i64 count_list(gc<Node> h) {
 
 // Suma los valores `v` recorriendo la cadena via el campo gc `next`.
 i64 sum_list(gc<Node> h) {
-	i64      acc = 0;
+	i64      acc = 0_i64;
 	gc<Node> c   = h;
 	while (c != null) {
 		acc = acc + c.v;
@@ -74,7 +76,7 @@ i64 sum_list(gc<Node> h) {
 // Genera basura joven (no se retiene) para forzar varios minor_gc SIN mantener
 // nada vivo en locales: la unica lista viva es `keep` en main.
 void churn(i64 n) {
-	i64      i    = 0;
+	i64      i    = 0_i64;
 	gc<Node> junk = null;
 	while (i < n) {
 		junk = new Node(i); // se sobrescribe -> muere en el proximo minor

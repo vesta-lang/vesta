@@ -19,7 +19,7 @@
 import std.wideint only u128;
 
 /** Global del consumidor: es la que ocupa el slot que provocaba la colision. */
-u64 g_marca = 5;
+u64 g_marca = 5_u64;
 
 i32 main() {
 	u128 a;
@@ -29,7 +29,7 @@ i32 main() {
 	b.lo64 = 7;
 	b.hi64 = 0;
 
-	i32 acc = 0;
+	i32 acc = 0_i32;
 	if ((a / b).lo64 == 14) { acc = acc + 30; }
 	if ((a % b).lo64 == 2) { acc = acc + 12; }
 	return acc; // 42

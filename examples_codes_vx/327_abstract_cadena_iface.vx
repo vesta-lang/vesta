@@ -24,14 +24,14 @@ concept Medible {
 // Abstracto raiz: declara la interfaz Medible pero NO implementa medida().
 // Valido: la obligacion se transfiere al derivado concreto.
 @Abstract
-	struct Entidad : Medible {
+struct Entidad : Medible {
 	i64 id;
 	public i64 get_id() { return this.id; }
 }
 
 // Abstracto intermedio: hereda de otro abstracto (Entidad).
 @Abstract
-	struct Poligono : Entidad {
+struct Poligono : Entidad {
 	i64 lados;
 	public i64 num_lados() { return this.lados; }
 }

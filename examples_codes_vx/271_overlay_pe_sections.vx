@@ -22,9 +22,9 @@ struct SectionHeader {
 // Imagen PE: magic + numero de secciones + offset a la tabla + la tabla.
 @overlay
 struct PeImage {
-	u16 magic        @0x00;        // 'MZ' = 0x5A4D
+	u16 magic        @0x00; // 'MZ' = 0x5A4D
 	u32 num_sections @0x04; // count RUNTIME
-	u32 sec_off      @0x08;      // offset a la tabla RUNTIME
+	u32 sec_off      @0x08; // offset a la tabla RUNTIME
 	// Tabla de secciones (cada SectionHeader ocupa 40 bytes en un PE real).
 	SectionHeader Sections[num_sections] @offset(sec_off) stride(40);
 }
@@ -38,21 +38,21 @@ void escribe_seccion(PeImage pe, i32 i) {
 }
 
 i32 main() {
-	u8*     buf = (u8 *) malloc(512);
+	u8*     buf = (u8*) malloc(512);
 	PeImage pe  = PeImage(buf);
 	pe.magic        = (u16)0x5A4D; // 'MZ'
 	pe.num_sections = (u32)3;
 	pe.sec_off      = (u32)0x40; // tabla en 0x40 (secciones en 0x40, 0x68, 0x90)
 
 	// Crear la tabla escribiendo cada seccion a traves de la vista.
-	i32 i = 0;
+	i32 i = 0_i32;
 	while (i < 3) {
 		escribe_seccion(pe, i);
 		i = i + 1;
 	}
 
 	// Recorrer la tabla tipada con un bucle: sumar VirtualAddress + SizeOfRawData.
-	u32 total = 0;
+	u32 total = 0_u32;
 	i = 0;
 	while ((u32)i < pe.num_sections) {
 		u32 va = pe.Sections[i].VirtualAddress;
@@ -63,7 +63,7 @@ i32 main() {
 	}
 
 	// Verificacion cruda: la seccion 1 (0x40 + 1*40 = 0x68) VirtualAddress@+4.
-	u32 raw_va1 = *(u32 *)(buf + 0x68 + 0x04); // 0x2000 + 0x1000 = 0x3000
+	u32 raw_va1 = *(u32*)(buf + 0x68 + 0x04); // 0x2000 + 0x1000 = 0x3000
 	println("magic=${pe.magic:hex} raw VA[1]=${raw_va1:hex}");
 
 	free(buf);

@@ -18,21 +18,21 @@ import "modules/screen";
 import "modules/keys";
 import "modules/input";
 
-public const i32 AC_MAX_TOKENS = 1024;
-public const i32 AC_MAX_NAME   = 64;
+public const i32 AC_MAX_TOKENS = 1024_i32;
+public const i32 AC_MAX_NAME   = 64_i32;
 
 public class AutoComplete {
-	public u8* names;
-	public i32 names_used;
-	public i32 names_cap;
+	public u8*  names;
+	public i32  names_used;
+	public i32  names_cap;
 	public i32* offsets;
 	public i32* lens;
-	public i32 count;
+	public i32  count;
 	// Estado del popup activo.
-	public i32 popup_active;
-	public i32 popup_sel; // indice dentro de filtered.
+	public i32  popup_active;
+	public i32  popup_sel; // indice dentro de filtered.
 	public i32* filtered;
-	public i32 filt_count;
+	public i32  filt_count;
 	// Prefijo actual (lo que el usuario lleva escrito de su token).
 	public u8* prefix;
 	public i32 prefix_len;
@@ -72,7 +72,7 @@ public class AutoComplete {
 	public i32 token_equals(i32 i, u8* pat, i32 plen) {
 		if (this.lens[i] != plen) return 0;
 		u8* tok = this.names + this.offsets[i];
-		i32 k   = 0;
+		i32 k   = 0_i32;
 		while (k < plen) {
 			if (tok[k] != pat[k]) return 0;
 			k = k + 1;
@@ -85,27 +85,29 @@ public class AutoComplete {
 		if (this.count >= AC_MAX_TOKENS) return;
 		if (this.names_used + tlen + 1 > this.names_cap) return;
 		// Dedup: O(N).  Para buffers chicos esta bien.
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i < this.count) {
 			if (this.token_equals(i, tok, tlen) == 1) return;
 			i = i + 1;
 		}
 		i32 dst = this.names_used;
-		i32 k   = 0;
-		while (k < tlen) { this.names[dst + k] = tok[k];
-			k = k + 1; }
-		this.names[dst + tlen] = 0;
+		i32 k   = 0_i32;
+		while (k < tlen) {
+			this.names[dst + k] = tok[k];
+			k                   = k + 1;
+		}
+		this.names[dst + tlen]   = 0;
 		this.offsets[this.count] = dst;
-		this.lens[this.count] = tlen;
-		this.count      = this.count + 1;
-		this.names_used = dst + tlen + 1;
+		this.lens[this.count]    = tlen;
+		this.count               = this.count + 1;
+		this.names_used          = dst + tlen + 1;
 	}
 
 	// Re-indexa los tokens del buffer.  Usa un scan lineal.
 	public void rebuild(buffer.Buffer b) {
 		this.count      = 0;
 		this.names_used = 0;
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i < b.length) {
 			i32 c = (i32) b.data[i];
 			if (this.is_id_start(c) == 1) {
@@ -126,7 +128,7 @@ public class AutoComplete {
 	public i32 prefix_before_cursor(buffer.Buffer b) {
 		this.prefix_len = 0;
 		i32 i          = b.cursor - 1;
-		i32 chars_back = 0;
+		i32 chars_back = 0_i32;
 		while (i >= 0 && chars_back < AC_MAX_NAME - 1) {
 			i32 c = (i32) b.data[i];
 			if (this.is_id_char(c) == 0) break;
@@ -135,13 +137,13 @@ public class AutoComplete {
 		}
 		// Copiar [i+1, cursor) al prefix.
 		i32 src = i + 1;
-		i32 k   = 0;
+		i32 k   = 0_i32;
 		while (src < b.cursor && k < AC_MAX_NAME - 1) {
 			this.prefix[k] = b.data[src];
-			src = src + 1;
-			k   = k + 1;
+			src            = src + 1;
+			k              = k + 1;
 		}
-		this.prefix[k] = 0;
+		this.prefix[k]  = 0;
 		this.prefix_len = k;
 		return k;
 	}
@@ -150,23 +152,25 @@ public class AutoComplete {
 	public void recompute_filter() {
 		this.filt_count = 0;
 		if (this.prefix_len < 2) return;
-		i32 i = 0;
+		i32 i = 0_i32;
 		while (i < this.count) {
 			i32 tlen = this.lens[i];
 			if (tlen > this.prefix_len) {
 				u8* tok = this.names + this.offsets[i];
-				i32 ok  = 1;
-				i32 k   = 0;
+				i32 ok  = 1_i32;
+				i32 k   = 0_i32;
 				while (k < this.prefix_len) {
-					if (tok[k] != this.prefix[k]) { ok = 0;
-						k = this.prefix_len; } else k = k + 1;
+					if (tok[k] != this.prefix[k]) {
+						ok = 0;
+						k  = this.prefix_len;
+					} else k = k + 1;
 				}
 				if (ok == 1) {
 					// Tambien filtramos el propio prefix (token exacto = 0
 					// sugerencia).  Ya manejado por tlen > prefix_len.
 					this.filtered[this.filt_count] = i;
-					this.filt_count              = this.filt_count + 1;
-					if (this.filt_count >= 10) i = this.count;
+					this.filt_count                = this.filt_count + 1;
+					if (this.filt_count >= 10) i   = this.count;
 				}
 			}
 			i = i + 1;
@@ -177,15 +181,15 @@ public class AutoComplete {
 	// Renderiza el popup en (row, col) con max 10 entradas.
 	public void render_popup(screen.Screen sc, i32 anchor_row, i32 anchor_col) {
 		if (this.filt_count == 0) return;
-		i32         col_bord  = 0;
-		string      c_pink    = "\x1b[38;2;255;121;198m";
-		string      c_fg      = "\x1b[38;2;248;248;242m";
-		string      c_dim     = "\x1b[38;2;98;114;164m";
-		i32         max_width = 24;
+		i32    col_bord  = 0_i32;
+		string c_pink    = "\x1b[38;2;255;121;198m";
+		string c_fg      = "\x1b[38;2;248;248;242m";
+		string c_dim     = "\x1b[38;2;98;114;164m";
+		i32    max_width = 24_i32;
 		// Render hasta 10 entradas.
-		i32         n         = this.filt_count;
-		if (n > 10) n         = 10;
-		i32         r         = 0;
+		i32         n = this.filt_count;
+		if (n > 10) n = 10;
+		i32         r = 0_i32;
 		while (r < n) {
 			i32 row = anchor_row + 1 + r;
 			if (row > sc.rows - 1) r = n;
@@ -199,14 +203,16 @@ public class AutoComplete {
 				print(" ");
 				i32                   cap_w = max_width;
 				if (tlen > cap_w - 2) tlen  = cap_w - 2;
-				i32                   k     = 0;
+				i32                   k     = 0_i32;
 				while (k < tlen) {
 					print_char((i32) tok[k]);
 					k = k + 1;
 				}
 				i32 used = 1 + tlen;
-				while (used < cap_w) { print(" ");
-					used = used + 1; }
+				while (used < cap_w) {
+					print(" ");
+					used = used + 1;
+				}
 				print(screen.ATTR_RESET);
 				r = r + 1;
 			}
@@ -217,9 +223,9 @@ public class AutoComplete {
 	public void accept(buffer.Buffer b) {
 		if (this.filt_count == 0) return;
 		if (this.popup_sel < 0 || this.popup_sel >= this.filt_count) return;
-		i32 idx      = this.filtered[this.popup_sel];
-		i32 tlen     = this.lens[idx];
-		u8* tok      = this.names + this.offsets[idx];
+		i32 idx  = this.filtered[this.popup_sel];
+		i32 tlen = this.lens[idx];
+		u8* tok  = this.names + this.offsets[idx];
 		// Insertar bytes [prefix_len, tlen).
 		i32 insert_n = tlen - this.prefix_len;
 		if (insert_n <= 0) return;

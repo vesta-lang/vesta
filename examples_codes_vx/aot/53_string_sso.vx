@@ -30,14 +30,14 @@ i32 main() {
 	string s  = "hola";
 	char*  cs = s.cstr();
 	if (s.length() != 4) { return 1; }
-	if (cs[0] != 104) { return 2; }        // 'h'
-	if (cs[3] != 97) { return 3; }         // 'a'
+	if (cs[0] != 104) { return 2; } // 'h'
+	if (cs[3] != 97) { return 3; }  // 'a'
 
 	// (2) limite EXACTO 22 chars -> SSO, 0 malloc.
 	string s22 = "0123456789012345678901"; // 22 chars
 	if (s22.length() != 22) { return 4; }
 	char* c22 = s22.cstr();
-	if (c22[21] != 49) { return 5; }        // '1' (ultimo char)
+	if (c22[21] != 49) { return 5; } // '1' (ultimo char)
 
 	// (3) 23 chars -> HEAP (1 malloc), liberado por RAII.
 	string s23 = "01234567890123456789012"; // 23 chars
@@ -54,9 +54,9 @@ i32 main() {
 	if (csc[2] != 99) { return 9; } // 'c'
 
 	// (5) concat que da LARGO -> HEAP.  Dos strings de 12 = 24 (>22).
-	string la = "abcdefghijkl";     // 12 (SSO)
-	string lb = "mnopqrstuvwx";     // 12 (SSO)
-	string lc = la + lb;            // 24 -> HEAP
+	string la = "abcdefghijkl"; // 12 (SSO)
+	string lb = "mnopqrstuvwx"; // 12 (SSO)
+	string lc = la + lb;        // 24 -> HEAP
 	if (lc.length() != 24) { return 10; }
 	char* clc = lc.cstr();
 	if (clc[23] != 120) { return 11; } // 'x'
@@ -92,5 +92,5 @@ i32 main() {
 	char* csl = sl.cstr();
 	if (csl[0] != 98) { return 22; } // 'b'
 
-	return 77;                       // todos los casos pasaron
+	return 77; // todos los casos pasaron
 }

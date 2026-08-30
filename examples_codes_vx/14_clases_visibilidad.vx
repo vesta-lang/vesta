@@ -32,7 +32,7 @@ class Cuenta {
 	}
 
 	// Expression-bodied: lectura encapsulada de campo privado.
-	public i32 leerSaldo() => this.saldo;
+	public i32 leerSaldo() => this. saldo;
 	public i32 leerDeudas() => this.deudas;
 }
 
