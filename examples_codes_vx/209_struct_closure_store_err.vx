@@ -7,19 +7,18 @@
 // Ver doc/VMdoc//ClosuresEnCampos.md.
 
 struct Caja {
-    fn() -> i64 leer;
+	fn() -> i64 leer;
 }
 
 struct Marco {
-    Caja caja;
+	Caja caja;
 }
 
 i32 main() {
-    i64 base = 41;
-    Caja c;
-    c.leer = () => base + 1;   // closure CAPTURADOR (captura base)
-    Marco m;
-    m.caja = c;                // ERROR: el struct con closure escapa a un campo
-    return (i32) m.caja.leer();
+	i64 base = 41;
+	Caja c;
+	c.leer = () => base + 1; // closure CAPTURADOR (captura base)
+	Marco m;
+	m.caja = c; // ERROR: el struct con closure escapa a un campo
+	return (i32) m.caja.leer();
 }
-// @expect-compile-fail

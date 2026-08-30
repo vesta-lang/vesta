@@ -26,28 +26,28 @@ namespace ejemplos.closure_env_gc;
 //   - main devuelve 42
 
 fn(i32) -> i32 make_adder(i32 n) {
-    fn(i32) -> i32 f = (i32 x) => x + n;
-    return f;
+	fn(i32) -> i32 f = (i32 x) => x + n;
+	return f;
 }
 
 i32 main() {
-    i32 total = 0;
-    i32 i = 1;
-    // 5000 iteraciones: en cada una creamos una closure (env de 8 bytes
-    // capturando n), la aplicamos UNA vez, y la descartamos.  Antes esto
-    // filtraba 5000 * (16 + 8) = 120 KB de heap raw.  Con GC_ALLOC el GC
-    // libera los envs sin uso en cada major_gc, manteniendo la memoria
-    // acotada.
-    while (i <= 5000) {
-        fn(i32) -> i32 add_i = make_adder(i);
-        total = total + add_i(0);  // add_i(0) = 0 + i = i
-        i = i + 1;
-    }
-    // total = 1 + 2 + ... + 5000 = 5000 * 5001 / 2 = 12502500
-    if (total != 12502500) return 100;
+	i32 total = 0;
+	i32 i     = 1;
+	// 5000 iteraciones: en cada una creamos una closure (env de 8 bytes
+	// capturando n), la aplicamos UNA vez, y la descartamos.  Antes esto
+	// filtraba 5000 * (16 + 8) = 120 KB de heap raw.  Con GC_ALLOC el GC
+	// libera los envs sin uso en cada major_gc, manteniendo la memoria
+	// acotada.
+	while (i <= 5000) {
+		fn(i32) -> i32 add_i = make_adder(i);
+		total = total + add_i(0); // add_i(0) = 0 + i = i
+		i     = i + 1;
+	}
+	// total = 1 + 2 + ... + 5000 = 5000 * 5001 / 2 = 12502500
+	if (total != 12_502_500) return 100;
 
-    // Suma especifica para validar 42:
-    // make_adder(40) -> add40(2) = 42
-    fn(i32) -> i32 add40 = make_adder(40);
-    return add40(2);
+	// Suma especifica para validar 42:
+	// make_adder(40) -> add40(2) = 42
+	fn(i32) -> i32 add40 = make_adder(40);
+	return add40(2);
 }

@@ -17,22 +17,22 @@ namespace ejemplos.propiedades_basico;
 // CALLVIRT, sin overhead de salto + frame.
 
 class Caja {
-    private i64 _valor;
+	private i64 _valor;
 
-    public Caja(i64 v) {
-        this._valor = v;
-    }
+	public Caja(i64 v) {
+		this._valor = v;
+	}
 
-    public i64 get valor => this._valor;
-    public set valor(i64 v) { this._valor = v; }
+	public i64 get valor => this._valor;
+	public set valor(i64 v) { this._valor = v; }
 
-    @Inline
-    public i64 dobla(i64 x) => x + x;
+	@Inline
+		public i64 dobla(i64 x) => x + x;
 }
 
 i32 main() {
-    Caja c = new Caja(10);
-    c.valor = c.valor + 5;       // setter + getter
-    i64 d = c.dobla(c.valor);    // @Inline expande a (c.valor + c.valor) = 30
-    return d;                     // 30
+	Caja c = new Caja(10);
+	c.valor = c.valor + 5;    // setter + getter
+	i64 d = c.dobla(c.valor); // @Inline expande a (c.valor + c.valor) = 30
+	return d;                 // 30
 }

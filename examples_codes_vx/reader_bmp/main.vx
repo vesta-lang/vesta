@@ -20,107 +20,107 @@ import "bmp";
 
 // FFI a la stdlib nativa: parseo de entero desde string (host_ptr + len).
 extern "stdlib/native/io/vesta_io" {
-    fn vio_parse_int(u64 s, u64 len) -> i64;
-    fn vio_parse_ok() -> i64;
+	fn vio_parse_int(u64 s, u64 len) -> i64;
+	fn vio_parse_ok() -> i64;
 }
 
 void print_help() {
-    println("Uso: reader_bmp <archivo.bmp> [-r WxH]");
-    println("");
-    println("Lee un BMP de 24 bits (BGR, sin compresion), imprime sus");
-    println("atributos y vuelca los pixeles a la terminal en color truecolor.");
-    println("  -r WxH   parsea unas dimensiones de redimensionado (no aplicado).");
+	println("Uso: reader_bmp <archivo.bmp> [-r WxH]");
+	println("");
+	println("Lee un BMP de 24 bits (BGR, sin compresion), imprime sus");
+	println("atributos y vuelca los pixeles a la terminal en color truecolor.");
+	println("  -r WxH   parsea unas dimensiones de redimensionado (no aplicado).");
 }
 
 // Parsea "WxH" (p.ej. "32x24") en dos i32 via vio_parse_int.  Devuelve 1 si
 // ambos lados son enteros validos, 0 si el formato es invalido.
 i32 parse_wxh(string spec, i32* out_w, i32* out_h) {
-    u8* pc = spec.cstr();
-    if (pc == null) {
-        return 0;
-    }
-    i32 total = (i32) spec.bytes();
-    // Buscar el separador 'x' (o 'X').
-    i32 xpos = -1;
-    i32 i = 0;
-    while (i < total) {
-        i32 c = (i32) pc[i];
-        if (c == 120 || c == 88) {   // 'x' = 120, 'X' = 88
-            xpos = i;
-            i = total;   // corta el bucle
-        } else {
-            i = i + 1;
-        }
-    }
-    if (xpos <= 0 || xpos >= total - 1) {
-        return 0;
-    }
-    // Lado izquierdo: [0, xpos).  Lado derecho: [xpos+1, total).
-    i64 w = vio_parse_int((u64) pc, (u64) xpos);
-    if (vio_parse_ok() == 0) {
-        return 0;
-    }
-    i64 h = vio_parse_int((u64) (pc + xpos + 1), (u64) (total - xpos - 1));
-    if (vio_parse_ok() == 0) {
-        return 0;
-    }
-    *out_w = (i32) w;
-    *out_h = (i32) h;
-    return 1;
+	u8* pc = spec.cstr();
+	if (pc == null) {
+		return 0;
+	}
+	i32 total =  (i32) spec.bytes();
+	// Buscar el separador 'x' (o 'X').
+	i32 xpos  = -1;
+	i32 i     =  0;
+	while (i < total) {
+		i32 c = (i32) pc[i];
+		if (c == 120 || c == 88) { // 'x' = 120, 'X' = 88
+			xpos = i;
+			i    = total; // corta el bucle
+		} else {
+			i = i + 1;
+		}
+	}
+	if (xpos <= 0 || xpos >= total - 1) {
+		return 0;
+	}
+	// Lado izquierdo: [0, xpos).  Lado derecho: [xpos+1, total).
+	i64 w = vio_parse_int((u64) pc, (u64) xpos);
+	if (vio_parse_ok() == 0) {
+		return 0;
+	}
+	i64 h = vio_parse_int((u64)(pc + xpos + 1), (u64)(total - xpos - 1));
+	if (vio_parse_ok() == 0) {
+		return 0;
+	}
+	*out_w = (i32) w;
+	*out_h = (i32) h;
+	return 1;
 }
 
 i32 main(string[] args) {
-    i32 argc = args_count();
-    if (argc == 0) {
-        print_help();
-        return 0;
-    }
+	i32 argc = args_count();
+	if (argc == 0) {
+		print_help();
+		return 0;
+	}
 
-    string path = args_get(0);
-    if (path.equals("-h") || path.equals("--help")) {
-        print_help();
-        return 0;
-    }
+	string path = args_get(0);
+	if (path.equals("-h") || path.equals("--help")) {
+		print_help();
+		return 0;
+	}
 
-    // Barrido de flags posteriores.  Solo -r WxH esta soportado (parse-demo).
-    i32 a = 1;
-    while (a < argc) {
-        string flag = args_get(a);
-        if (flag.equals("-r") && a + 1 < argc) {
-            string spec = args_get(a + 1);
-            i32 rw = 0;
-            i32 rh = 0;
-            if (parse_wxh(spec, &rw, &rh) == 1) {
-                println("Resize solicitado: ${rw}x${rh} (no aplicado: LIM-9).");
-            } else {
-                println("Formato -r invalido: ${spec} (se esperaba WxH).");
-            }
-            a = a + 2;
-        } else {
-            a = a + 1;
-        }
-    }
+	// Barrido de flags posteriores.  Solo -r WxH esta soportado (parse-demo).
+	i32 a = 1;
+	while (a < argc) {
+		string flag = args_get(a);
+		if (flag.equals("-r") && a + 1 < argc) {
+			string spec = args_get(a + 1);
+			i32    rw   = 0;
+			i32    rh   = 0;
+			if (parse_wxh(spec, &rw, &rh) == 1) {
+				println("Resize solicitado: ${rw}x${rh} (no aplicado: LIM-9).");
+			} else {
+				println("Formato -r invalido: ${spec} (se esperaba WxH).");
+			}
+			a = a + 2;
+		} else {
+			a = a + 1;
+		}
+	}
 
-    // Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
-    // puntero; ver LIM-10): medir + reservar + leer.  El "objeto BMP" es un u8*
-    // parseado via los overlays y funciones libres de bmp.vx.
-    i64 size = bmp.bmp_file_size(path);
-    if (size <= 0) {
-        println("El archivo ${path} no pudo encontrarse o no existe.");
-        return 1;
-    }
-    u8* buf = malloc(size + 1);
-    if (bmp.bmp_read_into(path, buf, size) != size) {
-        println("El archivo ${path} no pudo leerse.");
-        free(buf);
-        return 1;
-    }
-    buf[size] = 0;
+	// Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
+	// puntero; ver LIM-10): medir + reservar + leer.  El "objeto BMP" es un u8*
+	// parseado via los overlays y funciones libres de bmp.vx.
+	i64 size = bmp.bmp_file_size(path);
+	if (size <= 0) {
+		println("El archivo ${path} no pudo encontrarse o no existe.");
+		return 1;
+	}
+	u8* buf = malloc(size + 1);
+	if (bmp.bmp_read_into(path, buf, size) != size) {
+		println("El archivo ${path} no pudo leerse.");
+		free(buf);
+		return 1;
+	}
+	buf[size] = 0;
 
-    bmp.bmp_print_attributes(buf);
-    println("");
-    bmp.bmp_dump_terminal(buf);
+	bmp.bmp_print_attributes(buf);
+	println("");
+	bmp.bmp_dump_terminal(buf);
 
-    free(buf);
-    return 0;
+	free(buf);
+	return 0;
 }

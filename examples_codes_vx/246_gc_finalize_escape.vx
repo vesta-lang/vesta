@@ -31,20 +31,20 @@ void del(i64 r) { C.libs = C.libs + 1; }
 // La FIRMA dice quien libera, tambien envuelto en un `gc<>`: quien recoja el
 // box tiene que saber a quien invocar.  Dentro no hace falta repetirlo.
 gc<unique<i64, del>> crea() {
-    gc<unique<i64>> g = gc_box(unique_with(7, del));
-    return g;
+	gc<unique<i64>> g = gc_box(unique_with(7, del));
+	return g;
 }
 
 i32 main() {
-    C.libs = 0;
-    // Cinco boxes escapados que mueren de inmediato (nadie los referencia tras
-    // el return).  gc_finalize_all() corre el deleter de cada uno exactamente
-    // una vez.
-    crea();
-    crea();
-    crea();
-    crea();
-    crea();
-    gc_finalize_all();      // finaliza los 5 boxes -> del() corre 5 veces
-    return (i32) C.libs;    // 5
+	C.libs = 0;
+	// Cinco boxes escapados que mueren de inmediato (nadie los referencia tras
+	// el return).  gc_finalize_all() corre el deleter de cada uno exactamente
+	// una vez.
+	crea();
+	crea();
+	crea();
+	crea();
+	crea();
+	gc_finalize_all();   // finaliza los 5 boxes -> del() corre 5 veces
+	return (i32) C.libs; // 5
 }

@@ -14,17 +14,20 @@
 // @expect-error: VX3001
 
 @NoIdiom
-public void hoja(u8* p) {
-    u64* q = (u64*) p;
-    q[0] = 0; q[1] = 0; q[2] = 0; q[3] = 0;
+	public void hoja(u8 *p) {
+	u64* q = (u64 *) p;
+	q[0] = 0;
+	q[1] = 0;
+	q[2] = 0;
+	q[3] = 0;
 }
 @NoIdiom
-public void medio(u8* p, u64 n) {
-    if (n > 1000) { medio(p, n - 1); }
-    hoja(p);
+	public void medio(u8 *p, u64 n) {
+	if (n > 1000) { medio(p, n - 1); }
+	hoja(p);
 }
 i32 main() {
-    u8 buf[16];
-    medio(&buf[0], 8);
-    return 42;
+	u8 buf[16];
+	medio(&buf[0], 8);
+	return 42;
 }

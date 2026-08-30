@@ -12,14 +12,14 @@
 //
 // @expect 42
 u64 barrier_then_answer() {
-    asm {
-        mfence
-        lfence
-        sfence
-    };
-    return 42;
+	asm {
+		mfence
+		lfence
+		sfence
+	};
+	return 42;
 }
 
 u64 main() {
-    return barrier_then_answer();
+	return barrier_then_answer();
 }

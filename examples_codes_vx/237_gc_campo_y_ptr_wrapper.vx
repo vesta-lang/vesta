@@ -10,16 +10,16 @@ namespace ejemplos.gc_campo_y_ptr_wrapper;
 // Esperado: R00 == 42.
 
 class Nodo {
-    public i64 v;
-    public Nodo(i64 x) { this.v = x; }
+	public i64 v;
+	public Nodo(i64 x) { this.v = x; }
 }
 
 class Wrap {
-    gc<Nodo> n;                    // campo GC dentro de clase RAII
+	gc<Nodo> n; // campo GC dentro de clase RAII
 }
 
 i32 main() {
-    Wrap w = new Wrap();
-    w.n = new Nodo(42);
-    return (i32) w.n.v;
+	Wrap w = new Wrap();
+	w.n = new Nodo(42);
+	return (i32) w.n.v;
 }

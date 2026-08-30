@@ -8,39 +8,40 @@
 //   [0] puts(char*)   [2] dec(i64)   [3] getline(u8*, u64) -> u64
 // ===========================================================================
 
-@section(".entry") @at(0x000)
-i64 prog_main(u64 api, u64 args) {
-    u64* tbl = (u64*) api;
-    u64 a_puts = tbl[0];
-    u64 a_dec = tbl[2];
-    u64 a_getline = tbl[3];
+@section(".entry")
+@at(0x0000)
+	i64 prog_main(u64 api, u64 args) {
+	u64* tbl       = (u64 *) api;
+	u64  a_puts    = tbl[0];
+	u64  a_dec     = tbl[2];
+	u64  a_getline = tbl[3];
 
-    u8* buf = (u8*) 0x120000;     // buffer de texto (encima del area de exec)
-    u8 line[256];
+	u8* buf = (u8 *) 0x00120000; // buffer de texto (encima del area de exec)
+	u8 line[256];
 
-    ((cfn(u64)->void) a_puts)((u64) "--- Notepad (programa de disco) --- '.' termina\n");
-    u64 total = 0;
-    u64 lines = 0;
-    while (true) {
-        ((cfn(u64)->void) a_puts)((u64) "| ");
-        u64 len = ((cfn(u64,u64)->u64) a_getline)((u64) line, 256);
-        if (len == 1 && line[0] == 46) {     // '.'
-            break;
-        }
-        u64 i = 0;
-        while (i < len) {
-            buf[total] = line[i];
-            total = total + 1;
-            i = i + 1;
-        }
-        buf[total] = 10;
-        total = total + 1;
-        lines = lines + 1;
-    }
-    buf[total] = 0;
-    ((cfn(u64)->void) a_puts)((u64) "--- guardado: lineas=");
-    ((cfn(i64)->void) a_dec)((i64) lines);
-    ((cfn(u64)->void) a_puts)((u64) " ---\n");
-    ((cfn(u64)->void) a_puts)((u64) buf);
-    return (i64) lines;
+	((cfn(u64) -> void) a_puts)((u64) "--- Notepad (programa de disco) --- '.' termina\n");
+	u64 total = 0;
+	u64 lines = 0;
+	while (true) {
+		((cfn(u64) -> void) a_puts)((u64) "| ");
+		u64 len = ((cfn(u64, u64) -> u64) a_getline)((u64) line, 256);
+		if (len == 1 && line[0] == 46) { // '.'
+			break;
+		}
+		u64 i = 0;
+		while (i < len) {
+			buf[total] = line[i];
+			total = total + 1;
+			i     = i + 1;
+		}
+		buf[total] = 10;
+		total = total + 1;
+		lines = lines + 1;
+	}
+	buf[total] = 0;
+	((cfn(u64) -> void) a_puts)((u64) "--- guardado: lineas=");
+	((cfn(i64) -> void) a_dec)((i64) lines);
+	((cfn(u64) -> void) a_puts)((u64) " ---\n");
+	((cfn(u64) -> void) a_puts)((u64) buf);
+	return (i64) lines;
 }

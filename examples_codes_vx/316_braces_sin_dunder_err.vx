@@ -8,13 +8,12 @@
 namespace neg_braces;
 
 struct Punto {
-    i64 x;
-    i64 y;
+	i64 x;
+	i64 y;
 }
 
 i32 main() {
-    Punto a = {2, 3};       // init-list: correcto
-    i64 q = a{3, 4, 5};     // error: Punto no declara __braces__
-    return (i32) q;
+	Punto a = {2, 3};    // init-list: correcto
+	i64   q = a {3, 4, 5}; // error: Punto no declara __braces__
+	return (i32) q;
 }
-// @expect-compile-fail

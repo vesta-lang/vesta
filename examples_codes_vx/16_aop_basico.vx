@@ -17,17 +17,20 @@ namespace ejemplos.aop_basico;
 //     side-effects de BEFORE (no solo del valor de retorno final).
 
 class Service {
-    public Service() { }
-    public i32 run() { return 1; }
+	public Service() { }
+	public i32 run() { return 1; }
 }
 
-@Aspect class Tracer {
-    public Tracer() { }
-    @Before("Service.run") public i32 pre()  { return 7; }
-    @After("Service.run")  public i32 post() { return 99; }
+@Aspect
+class Tracer {
+	public Tracer() { }
+	@Before("Service.run")
+	public i32 pre() { return 7; }
+	@After("Service.run")
+	public i32 post() { return 99; }
 }
 
 i32 main() {
-    Service s = new Service();
-    return s.run();
+	Service s = new Service();
+	return s.run();
 }

@@ -5,41 +5,41 @@ namespace ejemplos.vectorize_scalar;
 // f64 HOST -> VEC_BINOP_S (escalar difundido a todos los lanes).
 
 i64 main() {
-    i64 n = 100;
-    f64* a = (f64*) malloc(n * 8);
-    f64* c = (f64*) malloc(n * 8);
+	i64  n = 100;
+	f64* a = (f64 *) malloc(n * 8);
+	f64* c = (f64 *) malloc(n * 8);
 
-    i64 i = 0;
-    while (i < n) {
-        a[i] = (f64) i;          // a[i] = i
-        i = i + 1;
-    }
+	i64 i = 0;
+	while (i < n) {
+		a[i] = (f64) i; // a[i] = i
+		i = i + 1;
+	}
 
-    // c[i] = a[i] * 2.0  (scalar a la derecha, mul)
-    f64 k = 2.0;
-    for (i64 j = 0; j < n; j = j + 1) {
-        c[j] = a[j] * k;
-    }
+	// c[i] = a[i] * 2.0  (scalar a la derecha, mul)
+	f64 k = 2.0;
+	for (i64 j = 0; j < n; j = j + 1) {
+		c[j] = a[j] * k;
+	}
 
-    // c[i] = 10.0 + c[i]  (scalar a la izquierda, conmutativo add)
-    for (i64 j = 0; j < n; j = j + 1) {
-        c[j] = 10.0 + c[j];
-    }
+	// c[i] = 10.0 + c[i]  (scalar a la izquierda, conmutativo add)
+	for (i64 j = 0; j < n; j = j + 1) {
+		c[j] = 10.0 + c[j];
+	}
 
-    // c[i] -= 5.0  (compound)
-    for (i64 j = 0; j < n; j = j + 1) {
-        c[j] -= 5.0;
-    }
+	// c[i] -= 5.0  (compound)
+	for (i64 j = 0; j < n; j = j + 1) {
+		c[j] -= 5.0;
+	}
 
-    // c[i] = i*2 + 10 - 5 = 2i + 5.  Suma de c[0..99] = 2*4950 + 500 = 10400.
-    f64 sum = 0.0;
-    i = 0;
-    while (i < n) {
-        sum = sum + c[i];
-        i = i + 1;
-    }
+	// c[i] = i*2 + 10 - 5 = 2i + 5.  Suma de c[0..99] = 2*4950 + 500 = 10400.
+	f64 sum = 0.0;
+	i = 0;
+	while (i < n) {
+		sum = sum + c[i];
+		i   = i + 1;
+	}
 
-    free(a);
-    free(c);
-    return (i64) sum;   // 10400
+	free(a);
+	free(c);
+	return (i64) sum; // 10400
 }

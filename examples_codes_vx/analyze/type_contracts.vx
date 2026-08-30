@@ -22,42 +22,47 @@
 // o no; nunca "no verificable").
 
 // Un punto 2D: dos f64 contiguos.  Trivialmente copiable, sin recursos.
-@pod @no_heap @size(16)
-struct Punto {
-    f64 x;
-    f64 y;
+@pod
+@no_heap
+@size(16)
+	struct Punto {
+	f64 x;
+	f64 y;
 }
 
 // Un color RGBA empaquetado en 4 bytes.  Contrato de tamano exacto para ABI.
-@pod @no_heap @size(4)
-struct Color {
-    u8 r;
-    u8 g;
-    u8 b;
-    u8 a;
+@pod
+@no_heap
+@size(4)
+	struct Color {
+	u8 r;
+	u8 g;
+	u8 b;
+	u8 a;
 }
 
 // Un rectangulo compuesto de dos Puntos.  @pod se COMPONE sobre los campos:
 // como Punto es @pod, Rect tambien lo es.  32 bytes (2 x 16).
-@pod @size(32)
-struct Rect {
-    Punto min;
-    Punto max;
+@pod
+@size(32)
+	struct Rect {
+	Punto min;
+	Punto max;
 }
 
 f64 area(Rect r) {
-    f64 w = r.max.x - r.min.x;
-    f64 h = r.max.y - r.min.y;
-    return w * h;
+	f64 w = r.max.x - r.min.x;
+	f64 h = r.max.y - r.min.y;
+	return w * h;
 }
 
 i32 main() {
-    Rect r = {.min = {.x = 0.0, .y = 0.0}, .max = {.x = 4.0, .y = 3.0}};
-    Color c = {.r = 255, .g = 128, .b = 0, .a = 255};
-    // area = 4 * 3 = 12; + c.g (128) - c.b (0) = 140.
-    f64 a = area(r);
-    i32 ai = (i32) a;
-    i32 g = (i32) c.g;
-    i32 b = (i32) c.b;
-    return ai + g - b;
+	Rect  r  = {.min = {.x = 0.0,.y = 0.0},.max = {.x = 4.0,.y = 3.0}};
+	Color c  = {.r = 255,.g = 128,.b = 0,.a = 255};
+	// area = 4 * 3 = 12; + c.g (128) - c.b (0) = 140.
+	f64   a  = area(r);
+	i32   ai = (i32) a;
+	i32   g  = (i32) c.g;
+	i32   b  = (i32) c.b;
+	return ai + g - b;
 }

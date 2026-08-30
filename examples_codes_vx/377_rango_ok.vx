@@ -7,15 +7,15 @@ namespace ejemplos.rango_ok;
 // avisara aqui seria el que la gente acaba apagando.
 
 u64 leer(u16 n) {
-    u8* p = (u8*) malloc(1024 + (u64) n);   // al menos 1024 bytes
-    *(u64*)(p + 8) = 41;                    // [8,16) cabe siempre
-    u64 v = *(u64*)(p + 8);
-    free(p);
-    return v;
+	u8* p = (u8 *) malloc(1024 + (u64) n); // al menos 1024 bytes
+	*(u64 *)(p + 8) = 41;                  // [8,16) cabe siempre
+	u64 v = *(u64 *)(p + 8);
+	free(p);
+	return v;
 }
 
 i32 main() {
-    u64 r = leer(7) + 1;
-    println("r=${r}");
-    return (i32) r;
+	u64 r = leer(7) + 1;
+	println("r=${r}");
+	return (i32) r;
 }

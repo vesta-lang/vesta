@@ -5,14 +5,14 @@
 // numero, asi que `sumar<Punto>(...)` debe producir un error de constraint
 // claro citando el tipo, el concepto y el parametro.  Cero codigo emitido.
 
-struct Punto { i64 x; i64 y; }
+struct Punto { i64 x;
+	i64 y; }
 
-T sumar<T: Numeric>(T a, T b) { return a + b; }
+T sumar < T : Numeric > (T a, T b) { return a + b; }
 
 i32 main() {
-    Punto p = {.x = 1, .y = 2};
-    Punto q = {.x = 3, .y = 4};
-    Punto r = sumar<Punto>(p, q);   // ERROR: Punto no es Numeric
-    return 0;
+	Punto p = {.x = 1,.y = 2};
+	Punto q = {.x = 3,.y = 4};
+	Punto r = sumar<Punto>(p, q); // ERROR: Punto no es Numeric
+	return 0;
 }
-// @expect-compile-fail

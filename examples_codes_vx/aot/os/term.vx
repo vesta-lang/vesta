@@ -12,76 +12,76 @@ import "lib";
 
 // Lee un caracter (bloqueante): del teclado o del puerto serie.
 u64 read_char() {
-    while (true) {
-        u64 c = kbd.kbd_poll();
-        if (c != 0) {
-            return c;
-        }
-        if (serial.serial_haskey()) {
-            return serial.serial_getc();
-        }
-    }
-    return 0;
+	while (true) {
+		u64 c = kbd.kbd_poll();
+		if (c != 0) {
+			return c;
+		}
+		if (serial.serial_haskey()) {
+			return serial.serial_getc();
+		}
+	}
+	return 0;
 }
 
 // Escribe un caracter en los tres destinos.
 void tputc(u64 c) {
-    fb.fb_putc(c);
-    serial.outb(0xE9, c);     // debugcon (validacion)
-    if (c == 10) {
-        serial.serial_putc(13);   // CR para terminales serie
-    }
-    serial.serial_putc(c);
+	fb.fb_putc(c);
+	serial.outb(0xE9, c); // debugcon (validacion)
+	if (c == 10) {
+		serial.serial_putc(13); // CR para terminales serie
+	}
+	serial.serial_putc(c);
 }
 
 void tputs(char* s) {
-    u64 i = 0;
-    while (s[i] != 0) {
-        tputc((u64) s[i]);
-        i = i + 1;
-    }
+	u64 i = 0;
+	while (s[i] != 0) {
+		tputc((u64) s[i]);
+		i = i + 1;
+	}
 }
 
 // Escribe un entero con signo en decimal.
 void tdec(i64 v) {
-    if (v < 0) {
-        tputc(45);              // '-'
-        v = 0 - v;
-    }
-    u8 b[24];
-    lib.itoa((u64) v, b);
-    u64 i = 0;
-    while (b[i] != 0) {
-        tputc((u64) b[i]);
-        i = i + 1;
-    }
+	if (v < 0) {
+		tputc(45); // '-'
+		v = 0 - v;
+	}
+	u8 b[24];
+	lib.itoa((u64) v, b);
+	u64 i = 0;
+	while (b[i] != 0) {
+		tputc((u64) b[i]);
+		i = i + 1;
+	}
 }
 
 // Lee una linea hasta Enter; eco a la terminal; maneja backspace.
 // Escribe la cadena nul-terminada en buf y devuelve su longitud.
 u64 read_line(u8* buf, u64 max) {
-    u64 n = 0;
-    while (true) {
-        u64 c = read_char();
-        if (c == 10 || c == 13) {       // Enter
-            tputc(10);
-            buf[n] = 0;
-            return n;
-        }
-        if (c == 8 || c == 127) {       // Backspace / Del
-            if (n > 0) {
-                n = n - 1;
-                tputc(8);               // borra en pantalla
-            }
-            continue;
-        }
-        if (c >= 32 && c < 127) {
-            if (n < max - 1) {
-                buf[n] = (u8) c;
-                n = n + 1;
-                tputc(c);
-            }
-        }
-    }
-    return 0;
+	u64 n = 0;
+	while (true) {
+		u64 c = read_char();
+		if (c == 10 || c == 13) { // Enter
+			tputc(10);
+			buf[n] = 0;
+			return n;
+		}
+		if (c == 8 || c == 127) { // Backspace / Del
+			if (n > 0) {
+				n = n - 1;
+				tputc(8); // borra en pantalla
+			}
+			continue;
+		}
+		if (c >= 32 && c < 127) {
+			if (n < max - 1) {
+				buf[n] = (u8) c;
+				n = n + 1;
+				tputc(c);
+			}
+		}
+	}
+	return 0;
 }

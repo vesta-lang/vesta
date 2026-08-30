@@ -51,12 +51,12 @@ extern "libpthread.so.0" {
  * @return HANDLE del hilo (>0), o 0 si fallo.
  */
 @Target("os:windows")
-public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
+	public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
 	return CreateThread(0, 0, body, arg, 0, 0);
 }
 
 @Target("!os:windows")
-public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
+	public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
 	// pthread_t es un `unsigned long` (8 bytes) -> CABE en el u64 del HANDLE, sin
 	// heap.  pthread_create lo ESCRIBE en su 1er arg (out-ptr); pasamos la
 	// direccion de un local y devolvemos su valor; pthread_join lo recibe por
@@ -74,13 +74,13 @@ public uintptr vx_thread_spawn(uintptr body, uintptr arg) {
  * @param handle HANDLE devuelto por @ref vx_thread_spawn.
  */
 @Target("os:windows")
-public void vx_thread_join(uintptr handle) {
+	public void vx_thread_join(uintptr handle) {
 	WaitForSingleObject(handle, 0xFFFFFFFF); // INFINITE
 	CloseHandle(handle);
 }
 
 @Target("!os:windows")
-public void vx_thread_join(uintptr handle) {
+	public void vx_thread_join(uintptr handle) {
 	if (handle == 0) {
 		return;
 	}

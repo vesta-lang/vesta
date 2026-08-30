@@ -9,43 +9,44 @@
 // interp = JIT = AOT.
 
 // Cabecera tipo TCP (campos big-endian, como en la red).
-@overlay struct NetHdr {
-    u16 src_port @endian(true) @0x00;
-    u16 dst_port @endian(true) @0x02;
-    u32 seq      @endian(true) @0x04;
-    u32 ack      @endian(true) @0x08;
-    u16 window   @endian(true) @0x0C;
-    // un campo little-endian explicito (p.ej. un tag local del host).
-    u16 local    @endian(false) @0x0E;
+@overlay
+struct NetHdr {
+	u16 src_port @endian(true) @0x00;
+	u16 dst_port @endian(true) @0x02;
+	u32 seq      @endian(true) @0x04;
+	u32 ack      @endian(true) @0x08;
+	u16 window   @endian(true) @0x0C;
+	// un campo little-endian explicito (p.ej. un tag local del host).
+	u16 local    @endian(false) @0x0E;
 }
 
 i32 main() {
-    u8* buf = (u8*) malloc(32);
+	u8*    buf = (u8 *) malloc(32);
 
-    // --- CONSTRUIR: escribir en orden nativo; la memoria queda big-endian ---
-    NetHdr h = NetHdr(buf);
-    h.src_port = 43210;        // 0xA8CA
-    h.dst_port = 80;           // 0x0050  (http)
-    h.seq      = 0x11223344;
-    h.ack      = 0x55667788;
-    h.window   = 8192;         // 0x2000
-    h.local    = 0x0102;
+	// --- CONSTRUIR: escribir en orden nativo; la memoria queda big-endian ---
+	NetHdr h   = NetHdr(buf);
+	h.src_port = 43_210; // 0xA8CA
+	h.dst_port = 80;     // 0x0050  (http)
+	h.seq      = 0x11223344;
+	h.ack      = 0x55667788;
+	h.window   = 8192; // 0x2000
+	h.local    = 0x0102;
 
-    // los bytes en memoria estan en BIG-ENDIAN (dst_port 80 -> 00 50):
-    println("dst_bytes=${*(u8*)(buf+2):hex} ${*(u8*)(buf+3):hex}");   // 0 50
-    // el seq big-endian en memoria: 11 22 33 44
-    println("seq_b0=${*(u8*)(buf+4):hex} seq_b3=${*(u8*)(buf+7):hex}"); // 11 44
-    // el campo @le queda little-endian: 0x0102 -> 02 01
-    println("local_b0=${*(u8*)(buf+14):hex}");                          // 2
+	// los bytes en memoria estan en BIG-ENDIAN (dst_port 80 -> 00 50):
+	println("dst_bytes=${*(u8*)(buf+2):hex} ${*(u8*)(buf+3):hex}");     // 0 50
+	// el seq big-endian en memoria: 11 22 33 44
+	println("seq_b0=${*(u8*)(buf+4):hex} seq_b3=${*(u8*)(buf+7):hex}"); // 11 44
+	// el campo @le queda little-endian: 0x0102 -> 02 01
+	println("local_b0=${*(u8*)(buf+14):hex}");                          // 2
 
-    // --- PARSEAR: releer via la misma vista (round-trip, orden nativo) ---
-    println("src=${h.src_port} dst=${h.dst_port} win=${h.window}");
-    println("seq=${h.seq:hex} ack=${h.ack:hex} local=${h.local:hex}");
+	// --- PARSEAR: releer via la misma vista (round-trip, orden nativo) ---
+	println("src=${h.src_port} dst=${h.dst_port} win=${h.window}");
+	println("seq=${h.seq:hex} ack=${h.ack:hex} local=${h.local:hex}");
 
-    // suma verificable: src(43210) + dst(80) + window(8192) = 51482
-    i64 sum = (i64) h.src_port + (i64) h.dst_port + (i64) h.window;
-    println("sum=${sum}");
+	// suma verificable: src(43210) + dst(80) + window(8192) = 51482
+	i64 sum = (i64) h.src_port + (i64) h.dst_port + (i64) h.window;
+	println("sum=${sum}");
 
-    free(buf);
-    return (i32) sum;   // 51482
+	free(buf);
+	return (i32) sum; // 51482
 }

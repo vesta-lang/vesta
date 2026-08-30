@@ -12,42 +12,40 @@
 namespace ctsr;
 
 struct Punto {
-    i64 x;
-    i64 y;
+	i64 x;
+	i64 y;
 
-    /** @brief Construye un punto en tiempo de compilacion. */
-    comptime Punto punto(i64 x, i64 y) {
-        Punto p;
-        p.x = x;
-        p.y = y;
-        return p;
-    }
+	/** @brief Construye un punto en tiempo de compilacion. */
+	comptime Punto punto(i64 x, i64 y) {
+		Punto p;
+		p.x = x;
+		p.y = y;
+		return p;
+	}
 }
 
 struct Caja {
-    Punto min;
-    Punto max;
+	Punto min;
+	Punto max;
 
-    /** @brief Construye una caja anidando dos puntos, en tiempo de compilacion. */
-    comptime Caja caja() {
-        Caja c;
-        c.min = punto(2, 3);
-        c.max = punto(10, 20);
-        return c;
-    }
+	/** @brief Construye una caja anidando dos puntos, en tiempo de compilacion. */
+	comptime Caja caja() {
+		Caja c;
+		c.min = punto(2, 3);
+		c.max = punto(10, 20);
+		return c;
+	}
 
 }
 
 
-
-
 i32 main() {
-    Punto p = Punto.punto(10, 32); // struct plano materializado: x=10, y=32
-    Caja c = Caja.caja();         // struct anidado materializado
+	Punto p     = Punto.punto(10, 32); // struct plano materializado: x=10, y=32
+	Caja  c     = Caja.caja();                 // struct anidado materializado
 
-    // p.x + p.y = 42 ; area de la caja = (10-2) * (20-3) = 8 * 17 = 136
-    i64 ancho = c.max.x - c.min.x;      // 8
-    i64 alto = c.max.y - c.min.y;       // 17
-    i64 area = ancho * alto;            // 136
-    return (i32) (p.x + p.y + area - 136); // 42 + 136 - 136 = 42
+	// p.x + p.y = 42 ; area de la caja = (10-2) * (20-3) = 8 * 17 = 136
+	i64   ancho = c.max.x - c.min.x;        // 8
+	i64   alto  = c.max.y - c.min.y;         // 17
+	i64   area  = ancho * alto;              // 136
+	return (i32)(p.x + p.y + area - 136); // 42 + 136 - 136 = 42
 }

@@ -19,27 +19,27 @@ namespace ejemplos.iface_polimorfismo;
 // Resultado esperado: 30 (10 de ImplA + 20 de ImplB).
 
 interface IServicio {
-    i32 metodo();
+	i32 metodo();
 }
 
 class ImplA : IServicio {
-    public ImplA() { }
-    public i32 metodo() { return 10; }
+	public ImplA() { }
+	public i32 metodo() { return 10; }
 }
 
 class ImplB : IServicio {
-    public ImplB() { }
-    public i32 metodo() { return 20; }
+	public ImplB() { }
+	public i32 metodo() { return 20; }
 }
 
 i32 main() {
-    // Receptor tipado como interfaz; la instancia es ImplA -> dispatch a 10.
-    IServicio sa = new ImplA();
-    i32 va = sa.metodo();
+	// Receptor tipado como interfaz; la instancia es ImplA -> dispatch a 10.
+	IServicio sa = new ImplA();
+	i32       va = sa.metodo();
 
-    // Misma variable de tipo interfaz, pero ahora apunta a ImplB -> 20.
-    IServicio sb = new ImplB();
-    i32 vb = sb.metodo();
+	// Misma variable de tipo interfaz, pero ahora apunta a ImplB -> 20.
+	IServicio sb = new ImplB();
+	i32       vb = sb.metodo();
 
-    return va + vb;   // 10 + 20 = 30
+	return va + vb; // 10 + 20 = 30
 }

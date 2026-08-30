@@ -21,24 +21,24 @@ namespace ejemplos.io_colors;
 // (\x1b[) que confirman los codigos ANSI fueron emitidos.
 
 i32 main() {
-    // 1) Color simple aplicado a un string fijo.
-    println("${RED}error${RESET}: ${BOLD}algo paso${RESET}");
+	// 1) Color simple aplicado a un string fijo.
+	println("${RED}error${RESET}: ${BOLD}algo paso${RESET}");
 
-    // 2) Color + valor interpolado.
-    i32 count = 42;
-    println("${GREEN}OK${RESET} count=${count}");
+	// 2) Color + valor interpolado.
+	i32 count = 42;
+	println("${GREEN}OK${RESET} count=${count}");
 
-    // 3) Color + identificador con interpolacion.
-    println("${YELLOW}warning${RESET}: usuario=admin");
+	// 3) Color + identificador con interpolacion.
+	println("${YELLOW}warning${RESET}: usuario=admin");
 
-    // 4) Atributo de estilo (UNDERLINE).
-    println("${UNDERLINE}linea con underline${RESET}");
+	// 4) Atributo de estilo (UNDERLINE).
+	println("${UNDERLINE}linea con underline${RESET}");
 
-    // 5) Background + foreground combinados.
-    println("${BG_BLUE}${WHITE}azul de fondo, blanco de letra${RESET}");
+	// 5) Background + foreground combinados.
+	println("${BG_BLUE}${WHITE}azul de fondo, blanco de letra${RESET}");
 
-    // 6) flush explicito al final.
-    flush();
+	// 6) flush explicito al final.
+	flush();
 
-    return 42;
+	return 42;
 }

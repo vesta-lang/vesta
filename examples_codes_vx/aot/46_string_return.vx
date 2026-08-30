@@ -21,31 +21,31 @@
 // cada buffer lo libera UNA sola vez su poseedor).
 
 string mk(string a, string b) {
-    return a + b;
+	return a + b;
 }
 
 string g() {
-    return "hola";
+	return "hola";
 }
 
 i32 main() {
-    string a = "ab";
-    string b = "cde";
+	string a  = "ab";
+	string b  = "cde";
 
-    // Caso 1: concat retornado por valor desde mk -> "abcde" (length 5).
-    string c = mk(a, b);
-    i64 n1 = c.length();          // 5
+	// Caso 1: concat retornado por valor desde mk -> "abcde" (length 5).
+	string c  = mk(a, b);
+	i64    n1 = c.length(); // 5
 
-    // Caso 2: literal retornado por valor desde g -> "hola" (length 4).
-    string h = g();
-    i64 n2 = h.length();          // 4
+	// Caso 2: literal retornado por valor desde g -> "hola" (length 4).
+	string h  = g();
+	i64    n2 = h.length(); // 4
 
-    // Caso 3: llamada encadenada -- el resultado de mk se pasa como arg.
-    string x = "cd";
-    string y = "ef";
-    string r = mk(mk(a, x), y);   // "ab"+"cd"+"ef" = "abcdef" (length 6)
-    i64 n3 = r.length();          // 6
+	// Caso 3: llamada encadenada -- el resultado de mk se pasa como arg.
+	string x  = "cd";
+	string y  = "ef";
+	string r  = mk(mk(a, x), y); // "ab"+"cd"+"ef" = "abcdef" (length 6)
+	i64    n3 = r.length();        // 6
 
-    // 5 + 4 + 6 - 10 = 5.
-    return (i32)(n1 + n2 + n3 - 10);
+	// 5 + 4 + 6 - 10 = 5.
+	return (i32)(n1 + n2 + n3 - 10);
 }

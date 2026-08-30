@@ -3,86 +3,91 @@
 // =============================================================================
 
 // Codigos ASCII de control y especiales.
-public const i32 KEY_NONE      = 0;
-public const i32 KEY_CTRL_A    = 1;
-public const i32 KEY_CTRL_B    = 2;
-public const i32 KEY_CTRL_C    = 3;
-public const i32 KEY_CTRL_D    = 4;
-public const i32 KEY_CTRL_E    = 5;
-public const i32 KEY_CTRL_F    = 6;
-public const i32 KEY_CTRL_G    = 7;
-public const i32 KEY_BACKSPACE = 8;
-public const i32 KEY_TAB       = 9;
-public const i32 KEY_LF        = 10;
-public const i32 KEY_CTRL_K    = 11;
-public const i32 KEY_CTRL_L    = 12;
-public const i32 KEY_ENTER     = 13;
-public const i32 KEY_CTRL_N    = 14;
-public const i32 KEY_CTRL_O    = 15;
-public const i32 KEY_CTRL_P    = 16;
-public const i32 KEY_CTRL_Q    = 17;
-public const i32 KEY_CTRL_R    = 18;
-public const i32 KEY_CTRL_S    = 19;
-public const i32 KEY_CTRL_T    = 20;
-public const i32 KEY_CTRL_U    = 21;
-public const i32 KEY_CTRL_V    = 22;
-public const i32 KEY_CTRL_W    = 23;
-public const i32 KEY_CTRL_X    = 24;
-public const i32 KEY_CTRL_Y    = 25;
-public const i32 KEY_CTRL_Z    = 26;
-public const i32 KEY_ESC       = 27;
+public const i32 KEY_NONE          = 0;
+public const i32 KEY_CTRL_A        = 1;
+public const i32 KEY_CTRL_B        = 2;
+public const i32 KEY_CTRL_C        = 3;
+public const i32 KEY_CTRL_D        = 4;
+public const i32 KEY_CTRL_E        = 5;
+public const i32 KEY_CTRL_F        = 6;
+public const i32 KEY_CTRL_G        = 7;
+public const i32 KEY_BACKSPACE     = 8;
+public const i32 KEY_TAB           = 9;
+public const i32 KEY_LF            = 10;
+public const i32 KEY_CTRL_K        = 11;
+public const i32 KEY_CTRL_L        = 12;
+public const i32 KEY_ENTER         = 13;
+public const i32 KEY_CTRL_N        = 14;
+public const i32 KEY_CTRL_O        = 15;
+public const i32 KEY_CTRL_P        = 16;
+public const i32 KEY_CTRL_Q        = 17;
+public const i32 KEY_CTRL_R        = 18;
+public const i32 KEY_CTRL_S        = 19;
+public const i32 KEY_CTRL_T        = 20;
+public const i32 KEY_CTRL_U        = 21;
+public const i32 KEY_CTRL_V        = 22;
+public const i32 KEY_CTRL_W        = 23;
+public const i32 KEY_CTRL_X        = 24;
+public const i32 KEY_CTRL_Y        = 25;
+public const i32 KEY_CTRL_Z        = 26;
+public const i32 KEY_ESC           = 27;
 public const i32 KEY_BACKSPACE_WIN = 127;
 
 // Teclas virtuales (rango 1000+; valores arbitrarios fuera del rango ASCII).
-public const i32 VK_UP    = 1001;
-public const i32 VK_DOWN  = 1002;
-public const i32 VK_LEFT  = 1003;
-public const i32 VK_RIGHT = 1004;
-public const i32 VK_HOME  = 1005;
-public const i32 VK_END   = 1006;
-public const i32 VK_PGUP  = 1007;
-public const i32 VK_PGDN  = 1008;
-public const i32 VK_DEL   = 1009;
-public const i32 VK_INS   = 1010;
-public const i32 VK_F1    = 1101;
-public const i32 VK_F2    = 1102;
-public const i32 VK_F3    = 1103;
-public const i32 VK_F4    = 1104;
-public const i32 VK_F5    = 1105;
-public const i32 VK_F6    = 1106;
-public const i32 VK_F10   = 1110;
+public const i32 VK_UP             = 1001;
+public const i32 VK_DOWN           = 1002;
+public const i32 VK_LEFT           = 1003;
+public const i32 VK_RIGHT          = 1004;
+public const i32 VK_HOME           = 1005;
+public const i32 VK_END            = 1006;
+public const i32 VK_PGUP           = 1007;
+public const i32 VK_PGDN           = 1008;
+public const i32 VK_DEL            = 1009;
+public const i32 VK_INS            = 1010;
+public const i32 VK_F1             = 1101;
+public const i32 VK_F2             = 1102;
+public const i32 VK_F3             = 1103;
+public const i32 VK_F4             = 1104;
+public const i32 VK_F5             = 1105;
+public const i32 VK_F6             = 1106;
+public const i32 VK_F10            = 1110;
 
 // Variantes con modificadores (rango 2000+).
 // Shift: 2000  Ctrl: 3000  Ctrl+Shift: 4000
-public const i32 VK_SHIFT_UP    = 2001;
-public const i32 VK_SHIFT_DOWN  = 2002;
-public const i32 VK_SHIFT_LEFT  = 2003;
-public const i32 VK_SHIFT_RIGHT = 2004;
-public const i32 VK_SHIFT_HOME  = 2005;
-public const i32 VK_SHIFT_END   = 2006;
+public const i32 VK_SHIFT_UP       = 2001;
+public const i32 VK_SHIFT_DOWN     = 2002;
+public const i32 VK_SHIFT_LEFT     = 2003;
+public const i32 VK_SHIFT_RIGHT    = 2004;
+public const i32 VK_SHIFT_HOME     = 2005;
+public const i32 VK_SHIFT_END      = 2006;
 
-public const i32 VK_CTRL_UP     = 3001;
-public const i32 VK_CTRL_DOWN   = 3002;
-public const i32 VK_CTRL_LEFT   = 3003;
-public const i32 VK_CTRL_RIGHT  = 3004;
-public const i32 VK_CTRL_HOME   = 3005;
-public const i32 VK_CTRL_END    = 3006;
-public const i32 VK_CTRL_PGUP   = 3007;
-public const i32 VK_CTRL_PGDN   = 3008;
+public const i32 VK_CTRL_UP        = 3001;
+public const i32 VK_CTRL_DOWN      = 3002;
+public const i32 VK_CTRL_LEFT      = 3003;
+public const i32 VK_CTRL_RIGHT     = 3004;
+public const i32 VK_CTRL_HOME      = 3005;
+public const i32 VK_CTRL_END       = 3006;
+public const i32 VK_CTRL_PGUP      = 3007;
+public const i32 VK_CTRL_PGDN      = 3008;
 // Borrar palabras: Ctrl+Backspace (izquierda), Ctrl+Delete (derecha).
 public const i32 VK_CTRL_BACKSPACE = 3009;
 public const i32 VK_CTRL_DEL       = 3010;
 // Mover linea entera (Alt+Up / Alt+Down): patrones de IDE.
-public const i32 VK_ALT_UP    = 5001;
-public const i32 VK_ALT_DOWN  = 5002;
+public const i32 VK_ALT_UP         = 5001;
+public const i32 VK_ALT_DOWN       = 5002;
 
 // =============================================================================
 // Validacion compile-time: las constantes no pueden colisionar entre si.
 // =============================================================================
-static_assert(KEY_ESC != KEY_CTRL_Q,            "KEY_ESC colisiona con CTRL_Q");
-static_assert(KEY_BACKSPACE != KEY_TAB,         "KEY_BACKSPACE colisiona con TAB");
-static_assert(VK_UP > 127,                       "VK_UP debe estar fuera del rango ASCII");
-static_assert(VK_F1 > VK_END,                    "F-keys deben ir despues de las de movimiento");
-static_assert(VK_SHIFT_UP != VK_CTRL_UP,         "Shift y Ctrl arrows no deben colisionar");
-static_assert(VK_CTRL_LEFT != KEY_CTRL_L,        "VK_CTRL_LEFT (3003) no debe pisar KEY_CTRL_L");
-
+static_assert(KEY_ESC != KEY_CTRL_Q, "KEY_ESC colisiona con CTRL_Q");
+static_assert(KEY_BACKSPACE != KEY_TAB, "KEY_BACKSPACE colisiona con TAB");
+static_assert(VK_UP > 127, "VK_UP debe estar fuera del rango ASCII");
+static_assert(VK_F1 > VK_END, "F-keys deben ir despues de las de movimiento");
+static_assert(
+	VK_SHIFT_UP != VK_CTRL_UP,
+	"Shift y Ctrl arrows no deben colisionar"
+);
+static_assert(
+	VK_CTRL_LEFT != KEY_CTRL_L,
+	"VK_CTRL_LEFT (3003) no debe pisar KEY_CTRL_L"
+);

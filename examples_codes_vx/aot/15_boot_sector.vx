@@ -5,12 +5,12 @@
 // (codigo 16-bit real escrito a mano como db; el backend X86_16 llegara luego.)
 
 @section(".boot", "rx")
-bytes boot {
-    // Codigo 16-bit de ejemplo (cli; hlt; jmp $) -- placeholder hasta X86_16.
-    db 0xFA                     // cli
-    db 0xF4                     // hlt
-    db 0xEB, 0xFE              // jmp $ (bucle infinito)
+	bytes boot {
+	// Codigo 16-bit de ejemplo (cli; hlt; jmp $) -- placeholder hasta X86_16.
+	db 0xFA     // cli
+		db 0xF4 // hlt
+		db 0xEB, 0xFE            // jmp $ (bucle infinito)
 
-    times 510 - ($ - $$) db 0  // relleno con ceros hasta el offset 510
-    db 0x55, 0xAA              // firma MBR en 510..511
+		times 510 - ($ -$$) db 0 // relleno con ceros hasta el offset 510
+		db 0x55, 0xAA            // firma MBR en 510..511
 }

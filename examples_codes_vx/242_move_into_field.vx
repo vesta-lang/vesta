@@ -7,13 +7,15 @@ namespace ejemplos.move_into_field;
 // y el dtor liberaba una direccion de stack -> SIGSEGV en VM/JIT.  Como el move
 // deja `local` invalidado, solo el campo libera (1 free).  Esperado: R0 = 1.
 class Counter { public static i64 libs; }
-void del(i64 r){ Counter.libs = Counter.libs + 1; }
+void del(i64 r) { Counter.libs = Counter.libs + 1; }
 // El CAMPO dice quien libera: su tipo esta fijado aqui, asi que no puede
 // adoptarlo del inicializador como hace una variable local.
 class Cont { unique<i64, del> h; }
 void run() {
-    unique<i64> local = unique_with(9, del);
-    Cont c = new Cont();
-    c.h = move(local);    // move local -> field
-}   // solo el field libera (1 free)
-i32 main(){ Counter.libs = 0; run(); return (i32) Counter.libs; }
+	unique<i64> local = unique_with(9, del);
+	Cont        c     = new Cont();
+	c.h = move(local); // move local -> field
+}                      // solo el field libera (1 free)
+i32 main() { Counter.libs = 0;
+	run();
+	return (i32) Counter.libs; }

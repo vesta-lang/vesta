@@ -8,18 +8,18 @@
 // Esperado: ~20-40% mejora sobre el JIT pre-CCC.
 
 class C {
-    public i64 run(i32 n) {
-        i64 acc = 0;
-        i32 i = 0;
-        while (i < n) {
-            acc++;
-            i = i + 1;
-        }
-        return acc;
-    }
+	public i64 run(i32 n) {
+		i64 acc = 0;
+		i32 i   = 0;
+		while (i < n) {
+			acc++;
+			i = i + 1;
+		}
+		return acc;
+	}
 }
 
 i32 main() {
-    C c = new C();
-    return (i32) c.run(50000000);
+	C c = new C();
+	return (i32) c.run(50_000_000);
 }

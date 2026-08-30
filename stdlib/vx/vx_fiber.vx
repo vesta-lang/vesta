@@ -103,24 +103,24 @@
  *       callee-saved restaurados.
  */
 @Target("!os:windows")
-@Naked
-public void fiber_switch(u64 from_ctx, u64 to_ctx) {
+	@Naked
+	public void fiber_switch(u64 from_ctx, u64 to_ctx) {
 	asm volatile noinfer {
-        push rbp
-        push rbx
-        push r12
-        push r13
-        push r14
-        push r15
-        mov [rdi], rsp
-        mov rsp, [rsi]
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rbx
-        pop rbp
-        ret
+		push rbp
+		push rbx
+		push r12
+		push r13
+		push r14
+		push r15
+		mov [rdi], rsp
+		mov rsp, [rsi]
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rbx
+		pop rbp
+		ret
 	}
 }
 
@@ -131,28 +131,28 @@ public void fiber_switch(u64 from_ctx, u64 to_ctx) {
  *       rbx/rbp/r12-15 (8 qwords).  XMM6-15 y el TIB se difieren a v2.
  */
 @Target("os:windows")
-@Naked
-public void fiber_switch(u64 from_ctx, u64 to_ctx) {
+	@Naked
+	public void fiber_switch(u64 from_ctx, u64 to_ctx) {
 	asm volatile noinfer {
-        push rbp
-        push rbx
-        push rdi
-        push rsi
-        push r12
-        push r13
-        push r14
-        push r15
-        mov [rcx], rsp
-        mov rsp, [rdx]
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rsi
-        pop rdi
-        pop rbx
-        pop rbp
-        ret
+		push rbp
+		push rbx
+		push rdi
+		push rsi
+		push r12
+		push r13
+		push r14
+		push r15
+		mov [rcx], rsp
+		mov rsp, [rdx]
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rsi
+		pop rdi
+		pop rbx
+		pop rbp
+		ret
 	}
 }
 
@@ -201,28 +201,28 @@ public void fiber_switch(u64 from_ctx, u64 to_ctx) {
  * @param from_ctx (rsi) contexto donde GUARDAR el estado actual.
  */
 @Target("!os:windows")
-@Naked
-public void __vx_swapctx(u64 to_ctx, u64 from_ctx) {
+	@Naked
+	public void __vx_swapctx(u64 to_ctx, u64 from_ctx) {
 	asm volatile noinfer {
-        mov rax, [rsp]
-        mov [rsi], rax
-        lea rax, [rsp + 8]
-        mov [rsi + 8], rax
-        mov [rsi + 16], rbp
-        mov [rsi + 24], rbx
-        mov [rsi + 32], r12
-        mov [rsi + 40], r13
-        mov [rsi + 48], r14
-        mov [rsi + 56], r15
-        mov rax, [rdi]
-        mov rbp, [rdi + 16]
-        mov rbx, [rdi + 24]
-        mov r12, [rdi + 32]
-        mov r13, [rdi + 40]
-        mov r14, [rdi + 48]
-        mov r15, [rdi + 56]
-        mov rsp, [rdi + 8]
-        jmp rax
+		mov rax, [rsp]
+		mov [rsi], rax
+		lea rax, [rsp + 8]
+		mov [rsi + 8], rax
+		mov [rsi + 16], rbp
+		mov [rsi + 24], rbx
+		mov [rsi + 32], r12
+		mov [rsi + 40], r13
+		mov [rsi + 48], r14
+		mov [rsi + 56], r15
+		mov rax, [rdi]
+		mov rbp, [rdi + 16]
+		mov rbx, [rdi + 24]
+		mov r12, [rdi + 32]
+		mov r13, [rdi + 40]
+		mov r14, [rdi + 48]
+		mov r15, [rdi + 56]
+		mov rsp, [rdi + 8]
+		jmp rax
 	}
 }
 
@@ -232,32 +232,32 @@ public void __vx_swapctx(u64 to_ctx, u64 from_ctx) {
  * @note Win64: args en rcx(to)/rdx(from); callee-saved incluye rdi/rsi.
  */
 @Target("os:windows")
-@Naked
-public void __vx_swapctx(u64 to_ctx, u64 from_ctx) {
+	@Naked
+	public void __vx_swapctx(u64 to_ctx, u64 from_ctx) {
 	asm volatile noinfer {
-        mov rax, [rsp]
-        mov [rdx], rax
-        lea rax, [rsp + 8]
-        mov [rdx + 8], rax
-        mov [rdx + 16], rbp
-        mov [rdx + 24], rbx
-        mov [rdx + 32], r12
-        mov [rdx + 40], r13
-        mov [rdx + 48], r14
-        mov [rdx + 56], r15
-        mov [rdx + 64], rdi
-        mov [rdx + 72], rsi
-        mov rax, [rcx]
-        mov rbp, [rcx + 16]
-        mov rbx, [rcx + 24]
-        mov r12, [rcx + 32]
-        mov r13, [rcx + 40]
-        mov r14, [rcx + 48]
-        mov r15, [rcx + 56]
-        mov rdi, [rcx + 64]
-        mov rsi, [rcx + 72]
-        mov rsp, [rcx + 8]
-        jmp rax
+		mov rax, [rsp]
+		mov [rdx], rax
+		lea rax, [rsp + 8]
+		mov [rdx + 8], rax
+		mov [rdx + 16], rbp
+		mov [rdx + 24], rbx
+		mov [rdx + 32], r12
+		mov [rdx + 40], r13
+		mov [rdx + 48], r14
+		mov [rdx + 56], r15
+		mov [rdx + 64], rdi
+		mov [rdx + 72], rsi
+		mov rax, [rcx]
+		mov rbp, [rcx + 16]
+		mov rbx, [rcx + 24]
+		mov r12, [rcx + 32]
+		mov r13, [rcx + 40]
+		mov r14, [rcx + 48]
+		mov r15, [rcx + 56]
+		mov rdi, [rcx + 64]
+		mov rsi, [rcx + 72]
+		mov rsp, [rcx + 8]
+		jmp rax
 	}
 }
 
@@ -276,11 +276,11 @@ public void __vx_swapctx(u64 to_ctx, u64 from_ctx) {
  *       1er argumento del ABI SysV.
  */
 @Target("!os:windows")
-@Naked
-void __fiber_trampoline() {
+	@Naked
+	void __fiber_trampoline() {
 	asm volatile noinfer {
-        mov rdi, rbx
-        jmp r12
+		mov rdi, rbx
+		jmp r12
 	}
 }
 
@@ -291,12 +291,12 @@ void __fiber_trampoline() {
  *       @c entry, y se mantiene la pila 16-alineada.
  */
 @Target("os:windows")
-@Naked
-void __fiber_trampoline() {
+	@Naked
+	void __fiber_trampoline() {
 	asm volatile noinfer {
-        mov rcx, rbx
-        sub rsp, 32
-        jmp r12
+		mov rcx, rbx
+		sub rsp, 32
+		jmp r12
 	}
 }
 
@@ -309,21 +309,21 @@ void __fiber_trampoline() {
  * vez de ejecutar basura de la pila.
  */
 @Target("!os:windows")
-@Naked
-void __fiber_exit() {
+	@Naked
+	void __fiber_exit() {
 	asm volatile noinfer {
-    __fiber_exit_loop:
-        hlt
-        jmp __fiber_exit_loop
+		__fiber_exit_loop:
+		    hlt
+		    jmp __fiber_exit_loop
 	}
 }
 @Target("os:windows")
-@Naked
-void __fiber_exit() {
+	@Naked
+	void __fiber_exit() {
 	asm volatile noinfer {
-    __fiber_exit_loop:
-        hlt
-        jmp __fiber_exit_loop
+		__fiber_exit_loop:
+		    hlt
+		    jmp __fiber_exit_loop
 	}
 }
 
@@ -334,9 +334,9 @@ void __fiber_exit() {
 /// Numero de qwords de callee-saved que fiber_switch salva/restaura.
 /// SysV = 6 (rbp,rbx,r12,r13,r14,r15); Win64 = 8 (+rdi,rsi).
 @Target("!os:windows")
-comptime u64 FIBER_SAVED_QWORDS = 6;
+	comptime u64 FIBER_SAVED_QWORDS = 6;
 @Target("os:windows")
-comptime u64 FIBER_SAVED_QWORDS = 8;
+	comptime u64 FIBER_SAVED_QWORDS = 8;
 
 /**
  * @brief Prepara @p ctx para que el 1er @ref fiber_switch hacia el arranque
@@ -373,7 +373,7 @@ comptime u64 FIBER_SAVED_QWORDS = 8;
  * @param arg        Argumento que se pasa a @p entry.
  */
 @Target("!os:windows")
-public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
+	public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
 	// Alinear la cima a 16 (por si el llamante no lo hizo).
 	u64  top    = stack_top & ~((u64)15);
 	// Marco: SAVED callee-saved + retaddr(trampolin) + retaddr(exit) = SAVED+2.
@@ -403,7 +403,7 @@ public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
  *       entry -> r12, arg -> rbx (el trampolin mueve rbx -> rcx).
  */
 @Target("os:windows")
-public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
+	public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
 	u64  top    = stack_top & ~((u64)15);
 	u64  nslots = FIBER_SAVED_QWORDS + 2; // 8 + 2 = 10
 	u64  base   = top - nslots * 8;

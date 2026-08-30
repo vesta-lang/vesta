@@ -22,32 +22,32 @@ namespace ejemplos.dtor_slot_cero;
 // diferencia si alguno vuelve a romperse.
 
 class Cuenta {
-    public static i32 sin_ctor;
-    public static i32 con_ctor;
-    public static i32 base_solo;
-    public static i32 derivada;
-    public static i32 orden;
+	public static i32 sin_ctor;
+	public static i32 con_ctor;
+	public static i32 base_solo;
+	public static i32 derivada;
+	public static i32 orden;
 }
 
 // Sin constructor: su destructor es el PRIMER metodo, indice cero.
 class SinCtor {
-    public ~SinCtor() { Cuenta.sin_ctor = Cuenta.sin_ctor + 1; }
+	public ~SinCtor() { Cuenta.sin_ctor = Cuenta.sin_ctor + 1; }
 }
 
 // Con constructor: el destructor cae en el indice uno.  Este caso siempre
 // funciono, y por eso escondia al de arriba.
 class ConCtor {
-    public i64 v;
-    public ConCtor(i64 n) { this.v = n; }
-    public ~ConCtor() { Cuenta.con_ctor = Cuenta.con_ctor + 1; }
+	public i64 v;
+	public ConCtor(i64 n) { this.v = n; }
+	public ~ConCtor() { Cuenta.con_ctor = Cuenta.con_ctor + 1; }
 }
 
 // Herencia SIN destructor propio en la derivada: corre el heredado.
 class BaseA {
-    public ~BaseA() { Cuenta.base_solo = Cuenta.base_solo + 1; }
+	public ~BaseA() { Cuenta.base_solo = Cuenta.base_solo + 1; }
 }
 class DerivA : BaseA {
-    public i64 f() { return 1; }
+	public i64 f() { return 1; }
 }
 
 // Herencia CON destructor propio: corren LOS DOS, primero el de la derivada y
@@ -57,42 +57,42 @@ class DerivA : BaseA {
 // al de la base es DIRECTA, nunca por la tabla: por la tabla se volveria a
 // encontrar el de la derivada y se llamaria a si mismo sin fin.
 class BaseB {
-    public ~BaseB() { Cuenta.base_solo = Cuenta.base_solo + 1; }
+	public ~BaseB() { Cuenta.base_solo = Cuenta.base_solo + 1; }
 }
 class DerivB : BaseB {
-    public ~DerivB() { Cuenta.derivada = Cuenta.derivada + 1; }
+	public ~DerivB() { Cuenta.derivada = Cuenta.derivada + 1; }
 }
 
 // Y la cadena entera, para fijar el ORDEN y que un nivel sin destructor propio
 // no la corta.  Cada uno apunta su digito: de la derivada hacia la base, que es
 // el inverso al de construccion.
-class Abuela   { public ~Abuela() { Cuenta.orden = Cuenta.orden * 10 + 1; } }
+class Abuela { public ~Abuela() { Cuenta.orden = Cuenta.orden * 10 + 1; } }
 class Madre : Abuela { public ~Madre() { Cuenta.orden = Cuenta.orden * 10 + 2; } }
-class Hija  : Madre  { public ~Hija()  { Cuenta.orden = Cuenta.orden * 10 + 3; } }
+class Hija : Madre { public ~Hija() { Cuenta.orden = Cuenta.orden * 10 + 3; } }
 
 void usar() {
-    unique<SinCtor> a = unique_box(new SinCtor());
-    unique<ConCtor> b = unique_box(new ConCtor(1));
-    unique<DerivA> c = unique_box(new DerivA());
-    unique<DerivB> d = unique_box(new DerivB());
-    unique<Hija> h = unique_box(new Hija());
+	unique<SinCtor> a = unique_box(new SinCtor());
+	unique<ConCtor> b = unique_box(new ConCtor(1));
+	unique<DerivA>  c = unique_box(new DerivA());
+	unique<DerivB>  d = unique_box(new DerivB());
+	unique<Hija>    h = unique_box(new Hija());
 }
 
 i32 main() {
-    Cuenta.sin_ctor = 0;
-    Cuenta.con_ctor = 0;
-    Cuenta.base_solo = 0;
-    Cuenta.derivada = 0;
-    Cuenta.orden = 0;
+	Cuenta.sin_ctor  = 0;
+	Cuenta.con_ctor  = 0;
+	Cuenta.base_solo = 0;
+	Cuenta.derivada  = 0;
+	Cuenta.orden     = 0;
 
-    usar();
+	usar();
 
-    println("sin_ctor=${Cuenta.sin_ctor} con_ctor=${Cuenta.con_ctor} base_solo=${Cuenta.base_solo} derivada=${Cuenta.derivada} orden=${Cuenta.orden}");
+	println("sin_ctor=${Cuenta.sin_ctor} con_ctor=${Cuenta.con_ctor} base_solo=${Cuenta.base_solo} derivada=${Cuenta.derivada} orden=${Cuenta.orden}");
 
-    // 1 + 1 + 2 (el heredado de DerivA, y el de BaseB al encadenar) + 1 = 5.
-    // Y el orden tiene que ser 321: de la derivada hacia la base.
-    const i64 total = Cuenta.sin_ctor + Cuenta.con_ctor + Cuenta.base_solo +
-                      Cuenta.derivada;
-    const i64 orden_ok = (Cuenta.orden == 321) ? 1 : 0;
-    return (i32) (total * 8 + orden_ok * 2);   // 42
+	// 1 + 1 + 2 (el heredado de DerivA, y el de BaseB al encadenar) + 1 = 5.
+	// Y el orden tiene que ser 321: de la derivada hacia la base.
+	const i64 total = Cuenta.sin_ctor + Cuenta.con_ctor + Cuenta.base_solo +
+		Cuenta.derivada;
+	const i64 orden_ok = (Cuenta.orden == 321) ? 1 : 0;
+	return (i32)(total * 8 + orden_ok * 2); // 42
 }

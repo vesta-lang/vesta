@@ -1,8 +1,8 @@
 import lib;
 
 i64 main() {
-    i64 a = lib.publica(41);      // 42 (public)
-    i64 b = lib.interna(1);       // 101 (internal, MISMO paquete -> visible)
-    println("a=${a} b=${b}");
-    return a + b - 101;           // 42 + 101 - 101 = 42
+	i64 a = lib.publica(41); // 42 (public)
+	i64 b = lib.interna(1);  // 101 (internal, MISMO paquete -> visible)
+	println("a=${a} b=${b}");
+	return a + b - 101; // 42 + 101 - 101 = 42
 }

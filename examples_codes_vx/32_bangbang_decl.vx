@@ -18,15 +18,15 @@ namespace ejemplos.bangbang_decl;
 // Resultado esperado: 23.
 
 class Tag {
-    public i32 v;
-    public Tag(i32 x) { this.v = x; }
+	public i32 v;
+	public Tag(i32 x) { this.v = x; }
 }
 
 i32 addOne(Tag !!arg) {
-    return arg.v + 1;
+	return arg.v + 1;
 }
 
 i32 main() {
-    Tag !!tag = new Tag(11);    // nonnull + runtime check via !!
-    return tag.v + addOne(tag); // 11 + 12 = 23
+	Tag !!tag = new Tag(11);    // nonnull + runtime check via !!
+	return tag.v + addOne(tag); // 11 + 12 = 23
 }

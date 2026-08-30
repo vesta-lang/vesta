@@ -7,9 +7,9 @@ namespace ejemplos.unique_move;
 //   - El destino q se libera al exit del scope.
 
 i32 main() {
-    unique<i32> p = unique_box(100);
-    unique<i32> q = move(p);
-    i32* raw = ptr_of(q);
-    i32 v = *raw;
-    return v;  // R00 = 100
+	unique<i32> p   = unique_box(100);
+	unique<i32> q   = move(p);
+	i32*        raw = ptr_of(q);
+	i32         v   = *raw;
+	return v; // R00 = 100
 }

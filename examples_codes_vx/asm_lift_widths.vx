@@ -9,45 +9,45 @@
 
 // 32-bit: 0xFFFFFFFF + 1 = 0 (envuelve a 32 bits y pone a cero los 32 altos).
 u64 w32() {
-    register("rax") u64 a = 0xFFFFFFFF;
-    asm { add eax, 1 };
-    return a; // 0
+	register("rax") u64 a = 0xFFFFFFFF;
+	asm { add eax, 1 };
+	return a; // 0
 }
 
 // 8-bit: mov dl, 0xFF sobre 0x1122 -> 0x11FF (preserva los bits altos).
 u64 w8() {
-    register("rdx") u64 d = 0x1122;
-    asm { mov dl, 0xFF };
-    return d; // 0x11FF
+	register("rdx") u64 d = 0x1122;
+	asm { mov dl, 0xFF };
+	return d; // 0x11FF
 }
 
 // 16-bit: mov ax, 0xFFFF sobre 0x11223344 -> 0x1122FFFF.
 u64 w16() {
-    register("rax") u64 a = 0x11223344;
-    asm { mov ax, 0xFFFF };
-    return a; // 0x1122FFFF
+	register("rax") u64 a = 0x11223344;
+	asm { mov ax, 0xFFFF };
+	return a; // 0x1122FFFF
 }
 
 // SAR con signo a 32 bits: (i32)-16 >> 2 = -4 (0xFFFFFFFC), zero-extendido.
 u64 wsar() {
-    register("rax") u64 a = 0xFFFFFFF0; // (i32) -16
-    asm { sar eax, 2 };
-    return a; // 0xFFFFFFFC
+	register("rax") u64 a = 0xFFFFFFF0; // (i32) -16
+	asm { sar eax, 2 };
+	return a; // 0xFFFFFFFC
 }
 
 // 64-bit normal: 5 + 37 = 42.
 u64 w64() {
-    register("rcx") u64 c = 5;
-    asm { add rcx, 37 };
-    return c; // 42
+	register("rcx") u64 c = 5;
+	asm { add rcx, 37 };
+	return c; // 42
 }
 
 u64 main() {
-    u64 ok = 1;
-    if (w32() != 0) { ok = 0; }
-    if (w8() != 0x11FF) { ok = 0; }
-    if (w16() != 0x1122FFFF) { ok = 0; }
-    if (wsar() != 0xFFFFFFFC) { ok = 0; }
-    if (w64() != 42) { ok = 0; }
-    return (ok == 1) ? 42 : 0;
+	u64 ok = 1;
+	if (w32() != 0) { ok = 0; }
+	if (w8() != 0x11FF) { ok = 0; }
+	if (w16() != 0x1122FFFF) { ok = 0; }
+	if (wsar() != 0xFFFFFFFC) { ok = 0; }
+	if (w64() != 42) { ok = 0; }
+	return (ok == 1) ? 42 : 0;
 }

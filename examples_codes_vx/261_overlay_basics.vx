@@ -17,37 +17,38 @@
 // Una cabecera DOS de un PE (simplificada): 'MZ' al inicio y el offset al header
 // PE en 0x3C.  Solo declaramos los campos que nos interesan; los huecos son
 // padding implicito (no hace falta declarar toda la cabecera).
-@overlay struct DosHeader {
-    u16 e_magic  @0x00;   // 'MZ' = 0x5A4D
-    i32 e_lfanew @0x3C;   // offset (relativo al inicio) al PE header
+@overlay
+struct DosHeader {
+	u16 e_magic  @0x00;  // 'MZ' = 0x5A4D
+	i32 e_lfanew @0x3C; // offset (relativo al inicio) al PE header
 }
 
 i32 main() {
-    // Construimos un buffer que simula el inicio de un PE.
-    u8* buf = (u8*) malloc(64);
-    *(u16*)(buf + 0x00) = 0x5A4D;   // 'MZ'
-    *(i32*)(buf + 0x3C) = 0x00000100; // e_lfanew = 256
+	// Construimos un buffer que simula el inicio de un PE.
+	u8* buf = (u8 *) malloc(64);
+	*(u16 *)(buf + 0x00) = 0x5A4D;     // 'MZ'
+	*(i32 *)(buf + 0x3C) = 0x00000100; // e_lfanew = 256
 
-    // Overlay-eamos la cabecera sobre el buffer: cero aritmetica a mano.
-    DosHeader dos = DosHeader(buf);
+	// Overlay-eamos la cabecera sobre el buffer: cero aritmetica a mano.
+	DosHeader dos = DosHeader(buf);
 
-    if (dos.e_magic != 0x5A4D) {
-        println("no es un MZ");
-        free(buf);
-        return 1;
-    }
-    println("MZ ok, e_lfanew=${dos.e_lfanew}");   // 256
+	if (dos.e_magic != 0x5A4D) {
+		println("no es un MZ");
+		free(buf);
+		return 1;
+	}
+	println("MZ ok, e_lfanew=${dos.e_lfanew}"); // 256
 
-    // Escritura tipada a traves de la vista: modifica el buffer real.
-    dos.e_lfanew = 0x200;
-    println("nuevo e_lfanew=${dos.e_lfanew}");     // 512
+	// Escritura tipada a traves de la vista: modifica el buffer real.
+	dos.e_lfanew = 0x0200;
+	println("nuevo e_lfanew=${dos.e_lfanew}"); // 512
 
-    // El cambio se ve en el buffer subyacente (la vista NO copia).
-    i32 raw = *(i32*)(buf + 0x3C);
-    println("en el buffer = ${raw}");              // 512
+	// El cambio se ve en el buffer subyacente (la vista NO copia).
+	i32 raw = *(i32 *)(buf + 0x3C);
+	println("en el buffer = ${raw}");                  // 512
 
-    // Valor de retorno determinista (para el harness): magic + e_lfanew.
-    i32 result = (i32)dos.e_magic + (i32)dos.e_lfanew;  // 0x5A4D + 512 = 23629
-    free(buf);
-    return result;
+	// Valor de retorno determinista (para el harness): magic + e_lfanew.
+	i32 result = (i32)dos.e_magic + (i32)dos.e_lfanew; // 0x5A4D + 512 = 23629
+	free(buf);
+	return result;
 }

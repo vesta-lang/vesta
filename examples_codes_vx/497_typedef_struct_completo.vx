@@ -13,38 +13,38 @@ namespace ejemplos.typedef_struct_completo;
 // Se comprueba miembro a miembro que las dos dan el mismo resultado.
 
 struct Vesta {
-    private i64 valor;
-    static i64 cuantos = 0;
+	private i64 valor;
+	static i64 cuantos = 0;
 
-    public i64 doble() { return this.valor * 2; }
-    public void poner(i64 v) { this.valor = v; }
+	public i64 doble() { return this.valor * 2; }
+	public void poner(i64 v) { this.valor = v; }
 }
 
 typedef struct {
-    private i64 valor;
-    static i64 cuantos = 0;
+	private i64 valor;
+	static i64 cuantos = 0;
 
-    public i64 doble() { return this.valor * 2; }
-    public void poner(i64 v) { this.valor = v; }
+	public i64 doble() { return this.valor * 2; }
+	public void poner(i64 v) { this.valor = v; }
 } Ce;
 
 i32 main() {
-    Vesta a;
-    a.poner(21);
+	Vesta a;
+	a.poner(21);
 
-    Ce b;
-    b.poner(21);
+	Ce b;
+	b.poner(21);
 
-    // Metodo: las dos formas.
-    const i64 m = a.doble() + b.doble();          // 42 + 42 = 84
+	// Metodo: las dos formas.
+	const i64 m = a.doble() + b.doble(); // 42 + 42 = 84
 
-    // Miembro estatico: se declara y se usa igual en las dos.
-    Vesta.cuantos = 3;
-    Ce.cuantos = 4;
-    const i64 s = Vesta.cuantos + Ce.cuantos;     // 7
+	// Miembro estatico: se declara y se usa igual en las dos.
+	Vesta.cuantos = 3;
+	Ce.cuantos    = 4;
+	const i64 s = Vesta.cuantos + Ce.cuantos; // 7
 
-    println("metodos=${m} estaticos=${s}");
+	println("metodos=${m} estaticos=${s}");
 
-    // 84 + 7 = 91
-    return (i32) (m + s - 49); // 42
+	// 84 + 7 = 91
+	return (i32)(m + s - 49); // 42
 }

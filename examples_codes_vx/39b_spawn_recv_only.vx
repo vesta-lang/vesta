@@ -6,10 +6,10 @@ namespace ejemplos.e39b_spawn_recv_only;
 // proceso) en el scheduler[0].
 
 i32 main() {
-    i64 child = spawn {
-        // El padre es el proceso PID=0 (encoded) en single-scheduler.
-        msgsend(0, 555);
-    };
-    i64 reply = msgrecv();
-    return reply;   // 555
+	i64 child = spawn {
+		// El padre es el proceso PID=0 (encoded) en single-scheduler.
+		msgsend(0, 555);
+	};
+	i64 reply = msgrecv();
+	return reply; // 555
 }

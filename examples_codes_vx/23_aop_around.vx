@@ -15,22 +15,24 @@ namespace ejemplos.aop_around;
 // Resultado esperado: 1007.
 
 class Service {
-    public Service() { }
-    public i32 run() { 
-        return 7; 
-    }
+	public Service() { }
+	public i32 run() {
+		return 7;
+	}
 }
 
-@Aspect class Logger {
-    public Logger() { }
+@Aspect
+class Logger {
+	public Logger() { }
 
-    @Around("Service.run") public i32 wrap() {
-        i32 r = proceed();   // r = 7
-        return r + 1000;     // 1007
-    }
+	@Around("Service.run")
+	public i32 wrap() {
+		i32 r = proceed(); // r = 7
+		return r + 1000;   // 1007
+	}
 }
 
 i32 main() {
-    Service s = new Service();
-    return s.run();
+	Service s = new Service();
+	return s.run();
 }

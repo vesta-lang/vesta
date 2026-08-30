@@ -35,79 +35,112 @@ namespace ejemplos.operadores;
 
 /// Vector 2D: aritmetica, comparacion e indexado.
 struct Vec2 {
-    i64 x;
-    i64 y;
+	i64 x;
+	i64 y;
 
-    public Vec2 __add__(Vec2 o) { Vec2 r; r.x = this.x + o.x; r.y = this.y + o.y; return r; }
-    public Vec2 __sub__(Vec2 o) { Vec2 r; r.x = this.x - o.x; r.y = this.y - o.y; return r; }
-    public Vec2 __mul__(i64 k)  { Vec2 r; r.x = this.x * k;   r.y = this.y * k;   return r; }
-    public Vec2 __neg__()       { Vec2 r; r.x = -this.x;      r.y = -this.y;      return r; }
-    public bool __eq__(Vec2 o)  { return this.x == o.x && this.y == o.y; }
-    /// `v[0]` / `v[1]` -> componente.
-    public i64 __index__(i64 i) { if (i == 0) { return this.x; } return this.y; }
-    /// `v` es "verdad" si no es el vector cero.
-    public bool __bool__()      { return this.x != 0 || this.y != 0; }
+	public Vec2 __add__(Vec2 o) { Vec2 r;
+		r.x = this.x + o.x;
+		r.y = this.y + o.y;
+		return r; }
+	public Vec2 __sub__(Vec2 o) { Vec2 r;
+		r.x = this.x - o.x;
+		r.y = this.y - o.y;
+		return r; }
+	public Vec2 __mul__(i64 k) { Vec2 r;
+		r.x = this.x * k;
+		r.y = this.y * k;
+		return r; }
+	public Vec2 __neg__() { Vec2 r;
+		r.x = -this.x;
+		r.y = -this.y;
+		return r; }
+	public bool __eq__(Vec2 o) { return this.x == o.x && this.y == o.y; }
+	/// `v[0]` / `v[1]` -> componente.
+	public i64 __index__(i64 i) { if (i == 0) { return this.x; } return this.y; }
+	/// `v` es "verdad" si no es el vector cero.
+	public bool __bool__() { return this.x != 0 || this.y != 0; }
 }
 
 /// Mascara de bits: bitwise, shifts y el `+=` con dunder IN-PLACE.
 struct Mask {
-    i64 v;
+	i64 v;
 
-    public Mask __and__(i64 r)    { Mask m; m.v = this.v & r;  return m; }
-    public Mask __or__(i64 r)     { Mask m; m.v = this.v | r;  return m; }
-    public Mask __xor__(i64 r)    { Mask m; m.v = this.v ^ r;  return m; }
-    public Mask __lshift__(i64 r) { Mask m; m.v = this.v << r; return m; }
-    public Mask __rshift__(i64 r) { Mask m; m.v = this.v >> r; return m; }
-    public Mask __invert__()      { Mask m; m.v = ~this.v;     return m; }
-    public bool __bool__()        { return this.v != 0; }
+	public Mask __and__(i64 r) { Mask m;
+		m.v = this.v & r;
+		return m; }
+	public Mask __or__(i64 r) { Mask m;
+		m.v = this.v | r;
+		return m; }
+	public Mask __xor__(i64 r) { Mask m;
+		m.v = this.v ^ r;
+		return m; }
+	public Mask __lshift__(i64 r) { Mask m;
+		m.v = this.v << r;
+		return m; }
+	public Mask __rshift__(i64 r) { Mask m;
+		m.v = this.v >> r;
+		return m; }
+	public Mask __invert__() { Mask m;
+		m.v = ~this.v;
+		return m; }
+	public bool __bool__() { return this.v != 0; }
 
-    /// Dunder IN-PLACE: `m += 1` llama AQUI, en vez de a `__add__` + store.
-    /// Para un tipo normal da igual; para uno que promete atomicidad es la
-    /// diferencia entre una operacion y tres.
-    public void __iadd__(i64 r)   { this.v = this.v + r; }
+	/// Dunder IN-PLACE: `m += 1` llama AQUI, en vez de a `__add__` + store.
+	/// Para un tipo normal da igual; para uno que promete atomicidad es la
+	/// diferencia entre una operacion y tres.
+	public void __iadd__(i64 r) { this.v = this.v + r; }
 }
 
 i32 main() {
-    // 1. Aritmetica: `+`, `-` y `*` con un escalar.
-    Vec2 a; a.x = 3; a.y = 4;
-    Vec2 b; b.x = 1; b.y = 2;
-    Vec2 c = a + b;              // (4, 6)  -- __add__
-    Vec2 d = c - b;              // (3, 4)  -- __sub__
-    Vec2 e = d * 2;              // (6, 8)  -- __mul__
+	// 1. Aritmetica: `+`, `-` y `*` con un escalar.
+	Vec2 a;
+	a.x = 3;
+	a.y = 4;
+	Vec2 b;
+	b.x = 1;
+	b.y = 2;
+	Vec2 c = a + b; // (4, 6)  -- __add__
+	Vec2 d = c - b; // (3, 4)  -- __sub__
+	Vec2 e = d * 2; // (6, 8)  -- __mul__
 
-    // 2. Compuesto SIN declararlo: `+=` sale de `__add__`.
-    Vec2 f; f.x = 0; f.y = 0;
-    f += e;                      // (6, 8)
-    f += b;                      // (7, 10)
-    f -= b;                      // (6, 8)  -- via __sub__
+	// 2. Compuesto SIN declararlo: `+=` sale de `__add__`.
+	Vec2 f;
+	f.x = 0;
+	f.y = 0;
+	f += e;                         // (6, 8)
+	f += b;                         // (7, 10)
+	f -= b;                         // (6, 8)  -- via __sub__
 
-    // 3. Indexado y unario.
-    i64 sum = f[0] + f[1];       // 14      -- __index__
-    Vec2 neg = -a;               // (-3,-4) -- __neg__
-    sum = sum + (-neg[0]);       // 14 + 3 = 17
+	// 3. Indexado y unario.
+	i64  sum =  f[0] + f[1];          // 14      -- __index__
+	Vec2 neg = -a;                  // (-3,-4) -- __neg__
+	sum = sum + (-neg[0]);          // 14 + 3 = 17
 
-    // 4. Igualdad: `!=` se deriva negando `__eq__`.
-    if (a == d) { sum = sum + 10; }   // (3,4) == (3,4) -> 27
-    if (a != b) { sum = sum + 5; }    // -> 32
+	// 4. Igualdad: `!=` se deriva negando `__eq__`.
+	if (a == d) { sum = sum + 10; } // (3,4) == (3,4) -> 27
+	if (a != b) { sum = sum + 5; }  // -> 32
 
-    // 5. Verdad de un objeto: `if`, `!` y `&&` usan `__bool__`, y el
-    //    cortocircuito sigue intacto.
-    Vec2 zero; zero.x = 0; zero.y = 0;
-    if (a && !zero) { sum = sum + 4; }  // -> 36
+	// 5. Verdad de un objeto: `if`, `!` y `&&` usan `__bool__`, y el
+	//    cortocircuito sigue intacto.
+	Vec2 zero;
+	zero.x = 0;
+	zero.y = 0;
+	if (a && !zero) { sum = sum + 4; } // -> 36
 
-    // 6. Bitwise, shifts e in-place.
-    Mask m; m.v = 0b1010;
-    m = m | 0b0101;              // 0b1111 = 15
-    m = m & 0b1110;              // 0b1110 = 14
-    m = m ^ 0b0001;              // 0b1111 = 15
-    m <<= 1;                     // 30      -- via __lshift__
-    m >>= 1;                     // 15      -- via __rshift__
-    m += 1;                      // 16      -- __iadd__ (in-place)
-    m++;                         // 17      -- ++ es += 1 -> __iadd__
+	// 6. Bitwise, shifts e in-place.
+	Mask m;
+	m.v = 0b1010;
+	m   = m | 0b0101; // 0b1111 = 15
+	m   = m & 0b1110; // 0b1110 = 14
+	m   = m ^ 0b0001; // 0b1111 = 15
+	m <<= 1;        // 30      -- via __lshift__
+	m >>= 1;        // 15      -- via __rshift__
+	m += 1;         // 16      -- __iadd__ (in-place)
+	m++;                        // 17      -- ++ es += 1 -> __iadd__
 
-    Mask inv = ~m;               // __invert__
-    if (inv) { sum = sum + 1; }  // -18 != 0 -> 37
+	Mask inv = ~m;              // __invert__
+	if (inv) { sum = sum + 1; } // -18 != 0 -> 37
 
-    // 37 + (17 - 12) = 42
-    return (i32)(sum + (m.v - 12));
+	// 37 + (17 - 12) = 42
+	return (i32)(sum + (m.v - 12));
 }

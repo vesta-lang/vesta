@@ -18,48 +18,49 @@ namespace ejemplos.optional_overlay;
 // memoria que nadie habia escrito --, y esta suma daba 2451845201647 en vez de
 // 666.  Lo encontro el analisis de regiones de `--analyze`, no un test.
 
-@overlay struct Vista {
-    i64 a @0x00;
-    i64 b @0x08;
-    i64 c @0x10;
+@overlay
+struct Vista {
+	i64 a @0x00;
+	i64 b @0x08;
+	i64 c @0x10;
 }
 
 // El espacio lo reserva quien quiere; la vista solo lo interpreta.
 Optional<Vista> mirar(u8* base, bool hay) {
-    if (!hay) { return None(); }
-    return Some(Vista(base));
+	if (!hay) { return None(); }
+	return Some(Vista(base));
 }
 
 i32 main() {
-    u8* buf = (u8*) malloc(64);
-    *(i64*)(buf + 0x00) = 111;
-    *(i64*)(buf + 0x08) = 222;
-    *(i64*)(buf + 0x10) = 333;
+	u8* buf = (u8 *) malloc(64);
+	*(i64 *)(buf + 0x00) = 111;
+	*(i64 *)(buf + 0x08) = 222;
+	*(i64 *)(buf + 0x10) = 333;
 
-    i64 acc = 0;
-    match mirar(buf, true) {
-        case None => { acc = -1; }
-        case Some(v) => { acc = v.a + v.b + v.c; }
-    }
-    println("suma=${acc}");
+	i64 acc = 0;
+	match mirar(buf, true) {
+		case None    => { acc = -1; }
+		case Some(v) => { acc = v.a + v.b + v.c; }
+	}
+	println("suma=${acc}");
 
-    // La vista tambien ESCRIBE sobre el buffer original: si el `Some` hubiera
-    // copiado bytes, esto se perderia al salir del brazo.
-    match mirar(buf, true) {
-        case None => { }
-        case Some(v) => { v.b = 1000; }
-    }
-    i64 tras = *(i64*)(buf + 0x08);
-    println("tras_escribir=${tras}");
+	// La vista tambien ESCRIBE sobre el buffer original: si el `Some` hubiera
+	// copiado bytes, esto se perderia al salir del brazo.
+	match mirar(buf, true) {
+		case None    => { }
+		case Some(v) => { v.b = 1000; }
+	}
+	i64 tras = *(i64 *)(buf + 0x08);
+	println("tras_escribir=${tras}");
 
-    // Y la rama vacia sigue siendo la rama vacia.
-    i64 vacio = 0;
-    match mirar(buf, false) {
-        case None => { vacio = 7; }
-        case Some(v) => { vacio = v.a; }
-    }
-    println("vacio=${vacio}");
+	// Y la rama vacia sigue siendo la rama vacia.
+	i64 vacio = 0;
+	match mirar(buf, false) {
+		case None    => { vacio = 7; }
+		case Some(v) => { vacio = v.a; }
+	}
+	println("vacio=${vacio}");
 
-    free(buf);
-    return (i32) (acc + tras + vacio);
+	free(buf);
+	return (i32)(acc + tras + vacio);
 }

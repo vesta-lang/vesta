@@ -12,21 +12,21 @@
 // JIT deben producir EXACTAMENTE el mismo R0 (mismatch indica bug).
 
 class BitOps {
-    public u64 run_hot(i32 n) {
-        u64 acc = 0;
-        i32 i = 0;
-        while (i < n) {
-            acc = acc + popcount((u64) i);
-            acc = acc + clz((u64) i + 1);
-            acc = acc ^ bswap((u64) i);
-            i = i + 1;
-        }
-        return acc;
-    }
+	public u64 run_hot(i32 n) {
+		u64 acc = 0;
+		i32 i   = 0;
+		while (i < n) {
+			acc = acc + popcount((u64) i);
+			acc = acc + clz((u64) i + 1);
+			acc = acc ^ bswap((u64) i);
+			i   = i + 1;
+		}
+		return acc;
+	}
 }
 
 i32 main() {
-    BitOps b = new BitOps();
-    u64 r = b.run_hot(5000000);
-    return (i32)(r & 0xFFFF);
+	BitOps b = new BitOps();
+	u64    r = b.run_hot(5_000_000);
+	return (i32)(r & 0xFFFF);
 }

@@ -32,36 +32,36 @@ u8[256] g_origen;
 u8[256] g_destino;
 
 i32 main() {
-    u64 rasgos = cpu_features();
-    bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
+	u64  rasgos = cpu_features();
+	bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
 
-    // 0 = no hubo fallo; si lo hubo, el tipo que dijo el runtime.
-    i64 visto = 0;
-    try {
-        std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0],
-                                              (usize) 96);
-    } catch (FatalError e) {
-        visto = (i64) e.kind;
-    }
+	// 0 = no hubo fallo; si lo hubo, el tipo que dijo el runtime.
+	i64  visto  = 0;
+	try {
+		std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0],
+			(usize) 96);
+	} catch (FatalError e) {
+		visto = (i64) e.kind;
+	}
 
-    i64 hechas = 0;
-    if (avx512) {
-        // Con AVX-512 la instruccion existe: la copia tiene que pasar limpia.
-        if (visto == 0) hechas = 1;
-    } else {
-        // Sin AVX-512 tiene que haberse contado como instruccion que este
-        // procesador no sabe ejecutar (kind 5), no morir en silencio.
-        if (visto == 5) hechas = 1;
-    }
+	i64 hechas = 0;
+	if (avx512) {
+		// Con AVX-512 la instruccion existe: la copia tiene que pasar limpia.
+		if (visto == 0) hechas = 1;
+	} else {
+		// Sin AVX-512 tiene que haberse contado como instruccion que este
+		// procesador no sabe ejecutar (kind 5), no morir en silencio.
+		if (visto == 5) hechas = 1;
+	}
 
-    // Y se sigue: tras un fallo de este tipo el proceso queda utilizable.
-    i64 suma = 0;
-    i64 i = 0;
-    while (i < 10) {
-        suma = suma + i;
-        i = i + 1;
-    }
+	// Y se sigue: tras un fallo de este tipo el proceso queda utilizable.
+	i64 suma = 0;
+	i64 i    = 0;
+	while (i < 10) {
+		suma = suma + i;
+		i    = i + 1;
+	}
 
-    // 1 comprobada + 45 = 46, corra donde corra.
-    return (i32) (hechas + suma);
+	// 1 comprobada + 45 = 46, corra donde corra.
+	return (i32)(hechas + suma);
 }

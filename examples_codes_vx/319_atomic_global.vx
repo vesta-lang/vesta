@@ -13,35 +13,35 @@ atomic<i64> peticiones;
 
 // Un struct normal tambien puede ser global.
 struct Config {
-    i64 limite;
-    i64 reintentos;
+	i64 limite;
+	i64 reintentos;
 }
 Config cfg;
 
 void atender() {
-    peticiones += 1;        // lock xadd sobre el contador compartido
+	peticiones += 1; // lock xadd sobre el contador compartido
 }
 
 i64 total() {
-    return *peticiones;     // load atomico
+	return *peticiones; // load atomico
 }
 
 i32 main() {
-    peticiones = 0;
-    cfg.limite = 100;
-    cfg.reintentos = 3;
+	peticiones     = 0;
+	cfg.limite     = 100;
+	cfg.reintentos = 3;
 
-    atender();
-    atender();
-    atender();
-    println("peticiones = ${total()}");             // 3
+	atender();
+	atender();
+	atender();
+	println("peticiones = ${total()}"); // 3
 
-    // La forma larga tambien: el compilador la funde en el mismo incremento.
-    peticiones = peticiones + 36;
-    println("tras +36  = ${total()}");              // 39
+	// La forma larga tambien: el compilador la funde en el mismo incremento.
+	peticiones = peticiones + 36;
+	println("tras +36  = ${total()}"); // 39
 
-    println("config: limite=${cfg.limite} reintentos=${cfg.reintentos}");
+	println("config: limite=${cfg.limite} reintentos=${cfg.reintentos}");
 
-    // 39 + 3 = 42
-    return (i32)(total() + cfg.reintentos);
+	// 39 + 3 = 42
+	return (i32)(total() + cfg.reintentos);
 }

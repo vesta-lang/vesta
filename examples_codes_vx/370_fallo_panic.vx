@@ -16,8 +16,8 @@
  * @return Nada: no vuelve.
  */
 i64 nivel3(i64 x) {
-    panic("no se puede seguir");
-    return x;
+	panic("no se puede seguir");
+	return x;
 }
 
 /**
@@ -26,7 +26,7 @@ i64 nivel3(i64 x) {
  * @return Lo que devuelva el de abajo.
  */
 i64 nivel2(i64 x) {
-    return nivel3(x + 1);
+	return nivel3(x + 1);
 }
 
 /**
@@ -35,7 +35,7 @@ i64 nivel2(i64 x) {
  * @return Lo que devuelva el de abajo.
  */
 i64 nivel1(i64 x) {
-    return nivel2(x + 1);
+	return nivel2(x + 1);
 }
 
 /**
@@ -43,6 +43,6 @@ i64 nivel1(i64 x) {
  * @return No llega a devolver nada.
  */
 i32 main() {
-    println("antes del panic");
-    return (i32) nivel1(1);
+	println("antes del panic");
+	return (i32) nivel1(1);
 }

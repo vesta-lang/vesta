@@ -7,13 +7,13 @@
 // simbolo en el fichero ACTIVO del namespace, no fallar porque el primer
 // fichero lo tenga @Target-inactivo.
 // -----------------------------------------------------------------------------
-import std.types only uintptr;   // sin cualificar
+import std.types only uintptr; // sin cualificar
 
 i32 main() {
-    // uintptr es pointer-sized: 8 en x86_64/arm64, 4 en x86_32, 2 en x86_16.
-    u64 sz = sizeof<uintptr>();
-    println("uintptr size = ${sz}");
-    // El e2e corre en x86_64 -> uintptr = 8 -> devolvemos 42.
-    if (sz == 8) { return 42; }
-    return 0;
+	// uintptr es pointer-sized: 8 en x86_64/arm64, 4 en x86_32, 2 en x86_16.
+	u64 sz = sizeof<uintptr>();
+	println("uintptr size = ${sz}");
+	// El e2e corre en x86_64 -> uintptr = 8 -> devolvemos 42.
+	if (sz == 8) { return 42; }
+	return 0;
 }

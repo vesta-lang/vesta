@@ -16,18 +16,18 @@ namespace ejemplos.spawn_here_observable;
 //   con --schedulers 4: auto en 1 (round-robin), here en 0, diff=1, return 200.
 
 i32 main() {
-    i64 c_here = spawn here {
-        // hijo trivial.
-    };
-    i64 c_auto = spawn {
-        // hijo trivial.
-    };
+	i64 c_here = spawn here {
+	// hijo trivial.
+	};
+	i64 c_auto = spawn {
+	// hijo trivial.
+	};
 
-    i64 here_sched = c_here / 4294967296;
-    i64 auto_sched = c_auto / 4294967296;
+	i64 here_sched = c_here / 4_294_967_296;
+	i64 auto_sched = c_auto / 4_294_967_296;
 
-    if (here_sched == auto_sched) {
-        return 100;  // ambos en mismo scheduler (caso single-thread)
-    }
-    return 200;       // distintos schedulers (caso multi-thread)
+	if (here_sched == auto_sched) {
+		return 100; // ambos en mismo scheduler (caso single-thread)
+	}
+	return 200; // distintos schedulers (caso multi-thread)
 }

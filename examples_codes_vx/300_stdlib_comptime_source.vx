@@ -11,10 +11,10 @@
 import std.comptime only source;
 
 i32 main() {
-    i32 a = 7;
-    i32 b = 6;
-    string s = source(a * b);          // -> "a * b"  (texto crudo, sin comillas)
-    println("s=[${s}]");               // s=[a * b]
-    if (s == "a * b") { return 42; }
-    return 0;
+	i32    a = 7;
+	i32    b = 6;
+	string s = source(a * b); // -> "a * b"  (texto crudo, sin comillas)
+	println("s=[${s}]");      // s=[a * b]
+	if (s == "a * b") { return 42; }
+	return 0;
 }

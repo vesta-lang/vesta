@@ -18,13 +18,13 @@ namespace ejemplos.tco_basico;
 // frontend este organizado).
 
 i32 helper(i32 x) {
-    return x + x;
+	return x + x;
 }
 
 i32 wrapper(i32 n) {
-    return helper(n + 1);
+	return helper(n + 1);
 }
 
 i32 main() {
-    return wrapper(20);
+	return wrapper(20);
 }

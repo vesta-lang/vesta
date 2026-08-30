@@ -7,7 +7,7 @@
 //   gcc i.o -o i && ./i        # exit 42
 
 interface Speaker {
-    i32 speak();
+	i32 speak();
 }
 class Dog : Speaker { @Override i32 speak() { return 10; } }
 class Cat : Speaker { @Override i32 speak() { return 32; } }
@@ -16,7 +16,7 @@ class Cat : Speaker { @Override i32 speak() { return 32; } }
 i32 ask(Speaker s) { return s.speak(); }
 
 i32 main() {
-    Speaker a = new Dog();
-    Speaker b = new Cat();
-    return ask(a) + ask(b);   // 10 + 32 = 42
+	Speaker a = new Dog();
+	Speaker b = new Cat();
+	return ask(a) + ask(b); // 10 + 32 = 42
 }

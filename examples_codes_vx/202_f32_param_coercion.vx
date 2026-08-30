@@ -14,13 +14,13 @@ namespace ejemplos.f32_param_coercion;
 //   vm --run 202.velb --stats           # R00 == 60606
 // =============================================================================
 
-i32 mi(i32 x, i32 k) { return x * k; }   // 3*2 = 6
-f64 md(f64 x, f64 k) { return x * k; }   // 3*2 = 6
-f32 mf(f32 x, f32 k) { return x * k; }   // 3*2 = 6 (era 0 por el bug)
+i32 mi(i32 x, i32 k) { return x * k; } // 3*2 = 6
+f64 md(f64 x, f64 k) { return x * k; } // 3*2 = 6
+f32 mf(f32 x, f32 k) { return x * k; } // 3*2 = 6 (era 0 por el bug)
 
 i64 main() {
-    i64 a = (i64) mi(3, 2);
-    i64 b = (i64) md(3.0, 2.0);
-    i64 c = (i64) mf(3.0, 2.0);
-    return a * 10000 + b * 100 + c;   // 6*10000 + 6*100 + 6 = 60606
+	i64 a = (i64) mi(3, 2);
+	i64 b = (i64) md(3.0, 2.0);
+	i64 c = (i64) mf(3.0, 2.0);
+	return a * 10_000 + b * 100 + c; // 6*10000 + 6*100 + 6 = 60606
 }

@@ -22,32 +22,32 @@ i64 g_semilla = 5;
 
 // Registros del banco ancho, sin memoria: el elevado ya los pasa a IR.
 i64 solo_vectorial(i64 x) {
-    register("rax") i64 a = x;
-    asm { movdqa xmm1, xmm0 }
-    return a + 1;
+	register("rax") i64 a = x;
+	asm { movdqa xmm1, xmm0 }
+	return a + 1;
 }
 
 // Aritmetica de registros generales.
 i64 solo_generales(i64 x) {
-    register("rax") i64 a = x;
-    register("rcx") i64 b = 3;
-    asm { add rax, rcx }
-    return a;
+	register("rax") i64 a = x;
+	register("rcx") i64 b = 3;
+	asm { add rax, rcx }
+	return a;
 }
 
 // Un bloque que NO se eleva (toca memoria por un registro): tiene que dar lo
 // mismo por los dos caminos igualmente, que es justo lo que hay que vigilar
 // cuando el elevado aprenda a hacerlo.
 i64 con_memoria() {
-    asm { mov rdx, rsp
-          movdqu xmm0, [rdx + 16] }
-    return g_semilla;
+	asm { mov rdx, rsp
+		movdqu xmm0, [rdx + 16] }
+	return g_semilla;
 }
 
 i32 main() {
-    i64 t = 0;
-    t = t + solo_vectorial(10);   // 11
-    t = t + solo_generales(20);   // 23
-    t = t + con_memoria();        // 5
-    return (i32) t;               // 39
+	i64 t = 0;
+	t = t + solo_vectorial(10); // 11
+	t = t + solo_generales(20); // 23
+	t = t + con_memoria();      // 5
+	return (i32) t;             // 39
 }

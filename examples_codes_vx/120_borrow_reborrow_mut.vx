@@ -12,14 +12,14 @@ namespace ejemplos.borrow_reborrow_mut;
 // ultimo uso), m1 vuelve a ser el mut activo.
 
 i32 main() {
-    unique<i32> owner = unique_box(42);
+	unique<i32> owner = unique_box(42);
 
-    borrow_mut<i32> m1 = lend_mut(owner);    // owner -> Mut (por m1)
-    borrow_mut<i32> m2 = lend_mut(m1);       // m1 suspendido, owner -> Mut (por m2)
+	borrow_mut<i32> m1 = lend_mut(owner); // owner -> Mut (por m1)
+	borrow_mut<i32> m2 = lend_mut(m1); // m1 suspendido, owner -> Mut (por m2)
 
-    write_borrow(m2, 100);                   // muta a traves del reborrow
-    i32 v = read_borrow(m2);
+	write_borrow(m2, 100);             // muta a traves del reborrow
+	i32 v = read_borrow(m2);
 
-    if (v != 100) return 99;
-    return 42;
+	if (v != 100) return 99;
+	return 42;
 }

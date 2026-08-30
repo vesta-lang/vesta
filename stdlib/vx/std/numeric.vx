@@ -100,7 +100,7 @@ public concept PackedAdd<T> = is_numeric<T>();
 /// NEON.  Para multiplicar enteros de 64 bits hay que hacerlo de uno en uno, y
 /// entonces esta libreria no es lo que se busca.
 public concept PackedMul<T> =
-is_float<T>() || (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4));
+	is_float<T>() || (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4));
 
 /// Existe division empaquetada.  Solo flotantes: la division entera no la
 /// tiene ninguna de las dos maquinas.

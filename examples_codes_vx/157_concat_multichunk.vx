@@ -39,39 +39,39 @@ namespace ejemplos.concat_multichunk;
 i32 doblar(i32 x) { return x * 2; }
 
 comptime u64 build_csv(i64 n) {
-    string s = "";
-    i64 i = 0;
-    while (i < n) {
-        // 3 chunks: to_str(i) + "," + " "  -- todos en una sola asignacion.
-        s = s + to_str(i) + "," + " ";
-        i = i + 1;
-    }
-    return strlen(s);
+	string s = "";
+	i64    i = 0;
+	while (i < n) {
+		// 3 chunks: to_str(i) + "," + " "  -- todos en una sola asignacion.
+		s = s + to_str(i) + "," + " ";
+		i = i + 1;
+	}
+	return strlen(s);
 }
 
 comptime u64 build_lit3(i64 n) {
-    string s = "";
-    i64 i = 0;
-    while (i < n) {
-        s = s + "[" + "X" + "]";
-        i = i + 1;
-    }
-    return strlen(s);
+	string s = "";
+	i64    i = 0;
+	while (i < n) {
+		s = s + "[" + "X" + "]";
+		i = i + 1;
+	}
+	return strlen(s);
 }
 
 comptime u64 build_mixed(i64 n) {
-    string s = "";
-    i64 i = 0;
-    while (i < n) {
-        s = s + "row=" + to_str(i) + ";";
-        i = i + 1;
-    }
-    return strlen(s);
+	string s = "";
+	i64    i = 0;
+	while (i < n) {
+		s = s + "row=" + to_str(i) + ";";
+		i = i + 1;
+	}
+	return strlen(s);
 }
 
 i32 main() {
-    static_assert(build_csv(1000)  > 1000,    "csv 3-chunk linear");
-    static_assert(build_lit3(1000) == 3000,   "lit3 == 3*N");
-    static_assert(build_mixed(1000) > 1000,   "mixed");
-    return 42;
+	static_assert(build_csv(1000) > 1000, "csv 3-chunk linear");
+	static_assert(build_lit3(1000) == 3000, "lit3 == 3*N");
+	static_assert(build_mixed(1000) > 1000, "mixed");
+	return 42;
 }

@@ -9,13 +9,13 @@ namespace ejemplos.borrow_sobre_owned;
 // Esperado: R00 == 42 (20 del unique + 22 del shared).
 
 i32 main() {
-    unique<i64> u = unique_box(20);
-    borrow<i64> bu = lend(u);
-    i64 vu = read_borrow(bu);          // 20
+	unique<i64> u  = unique_box(20);
+	borrow<i64> bu = lend(u);
+	i64         vu = read_borrow(bu); // 20
 
-    shared<i64> s = shared_box(22);
-    borrow<i64> bs = lend(s);
-    i64 vs = read_borrow(bs);          // 22
+	shared<i64> s  = shared_box(22);
+	borrow<i64> bs = lend(s);
+	i64         vs = read_borrow(bs); // 22
 
-    return (i32)(vu + vs);             // 42
+	return (i32)(vu + vs);    // 42
 }

@@ -23,45 +23,45 @@ namespace iface_vs_abstract;
 
 // --- INTERFAZ: un contrato.  Solo dice "que forma" hace falta, sin dar codigo.
 concept Dibujable {
-    i64 area();
+	i64 area();
 }
 
 // --- @Abstract: una base parcial.  Da estado (w, h) e implementacion (area).
 //     No se puede instanciar suelta: expresa "esto es solo una base".
 @Abstract
-struct FormaBase {
-    i64 w;
-    i64 h;
-    // Implementacion REAL, heredable por los derivados.
-    public i64 area() { return this.w * this.h; }
+	struct FormaBase {
+	i64 w;
+	i64 h;
+	// Implementacion REAL, heredable por los derivados.
+	public i64 area() { return this.w * this.h; }
 }
 
 // --- Rect: hereda de FormaBase (recibe campos + area) Y satisface Dibujable
 //     (el compilador comprueba que expone `i64 area()`; ya lo hace, heredado).
 struct Rect : FormaBase, Dibujable {
-    // Sin campos ni metodos propios: todo viene de la base @Abstract.
+// Sin campos ni metodos propios: todo viene de la base @Abstract.
 }
 
 // --- Cuadrado: solo satisface la interfaz Dibujable, SIN heredar de nadie.
 //     Aqui NO hay codigo reutilizado; el contrato obliga a escribir `area`.
 struct Cuadrado : Dibujable {
-    i64 lado;
-    public i64 area() { return this.lado * this.lado; }
+	i64 lado;
+	public i64 area() { return this.lado * this.lado; }
 }
 
 i32 main() {
-    // Rect usa la implementacion HEREDADA del @Abstract.
-    Rect r;
-    r.w = 6;
-    r.h = 7;
-    i64 a1 = r.area();          // 42, codigo heredado de FormaBase
+	// Rect usa la implementacion HEREDADA del @Abstract.
+	Rect r;
+	r.w = 6;
+	r.h = 7;
+	i64 a1 = r.area(); // 42, codigo heredado de FormaBase
 
-    // Cuadrado escribe su propia `area` para cumplir el contrato Dibujable.
-    Cuadrado c;
-    c.lado = 5;
-    i64 a2 = c.area();          // 25, codigo propio exigido por la interfaz
+	// Cuadrado escribe su propia `area` para cumplir el contrato Dibujable.
+	Cuadrado c;
+	c.lado = 5;
+	i64 a2 = c.area();     // 25, codigo propio exigido por la interfaz
 
-    // FormaBase f;             // <- ERROR si se descomenta: es @Abstract.
+	// FormaBase f;             // <- ERROR si se descomenta: es @Abstract.
 
-    return (i32) (a1 + a2);     // 42 + 25 = 67
+	return (i32)(a1 + a2); // 42 + 25 = 67
 }

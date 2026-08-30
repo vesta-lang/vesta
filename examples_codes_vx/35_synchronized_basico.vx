@@ -13,27 +13,27 @@ namespace ejemplos.synchronized_basico;
 // semantica que queremos garantizar de cara a spawn).
 
 class Counter {
-    i32 value;
-    Counter() {
-        this.value = 0;
-    }
-    i32 increment() {
-        synchronized (this) {
-            this.value = this.value + 1;
-        }
-        return this.value;
-    }
-    i32 read() {
-        return this.value;
-    }
+	i32 value;
+	Counter() {
+		this.value = 0;
+	}
+	i32 increment() {
+		synchronized (this) {
+			this.value = this.value + 1;
+		}
+		return this.value;
+	}
+	i32 read() {
+		return this.value;
+	}
 }
 
 i32 main() {
-    Counter c = new Counter();
-    i32 i = 0;
-    while (i < 10) {
-        c.increment();
-        i = i + 1;
-    }
-    return c.read();   // 10
+	Counter c = new Counter();
+	i32     i = 0;
+	while (i < 10) {
+		c.increment();
+		i = i + 1;
+	}
+	return c.read(); // 10
 }

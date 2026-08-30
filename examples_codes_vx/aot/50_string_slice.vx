@@ -18,52 +18,52 @@
 // los 6 casos; el primero que falle devuelve un codigo negativo distinto.
 
 i32 main() {
-    // (1) indexado simple: s[1] = 'o' = 111.
-    string s = "hola";
-    char c = s[1];
-    if (c != 111) { return -1; }          // 'o'
-    char c0 = s[0];
-    if (c0 != 104) { return -2; }          // 'h'
-    char c3 = s[3];
-    if (c3 != 97) { return -3; }           // 'a'
+	// (1) indexado simple: s[1] = 'o' = 111.
+	string s = "hola";
+	char   c = s[1];
+	if (c != 111) { return -1; } // 'o'
+	char c0 = s[0];
+	if (c0 != 104) { return -2; } // 'h'
+	char c3 = s[3];
+	if (c3 != 97) { return -3; } // 'a'
 
-    // (2) slice exclusivo: "hola mundo"[5..10] = "mundo" (len 5).
-    string base = "hola mundo";
-    string sub = base[5..10];
-    if (sub.length() != 5) { return -4; }
-    char* ps = sub.cstr();
-    if (ps[0] != 109) { return -5; }       // 'm'
-    if (ps[4] != 111) { return -6; }       // 'o'
-    // El padre `base` queda intacto (no se mutó ni se liberó).
-    if (base.length() != 10) { return -7; }
-    char* pb = base.cstr();
-    if (pb[5] != 109) { return -8; }       // base[5] sigue siendo 'm'
+	// (2) slice exclusivo: "hola mundo"[5..10] = "mundo" (len 5).
+	string base = "hola mundo";
+	string sub  = base[5..10];
+	if (sub.length() != 5) { return -4; }
+	char* ps = sub.cstr();
+	if (ps[0] != 109) { return -5; } // 'm'
+	if (ps[4] != 111) { return -6; } // 'o'
+	// El padre `base` queda intacto (no se mutó ni se liberó).
+	if (base.length() != 10) { return -7; }
+	char* pb = base.cstr();
+	if (pb[5] != 109) { return -8; } // base[5] sigue siendo 'm'
 
-    // (3) slice inclusivo: "hola"[0..=3] = "hola" (len 4).
-    string s2 = "hola";
-    string sub2 = s2[0..=3];
-    if (sub2.length() != 4) { return -9; }
-    char* p2 = sub2.cstr();
-    if (p2[0] != 104) { return -10; }      // 'h'
-    if (p2[3] != 97) { return -11; }       // 'a'
+	// (3) slice inclusivo: "hola"[0..=3] = "hola" (len 4).
+	string s2   = "hola";
+	string sub2 = s2[0..=3];
+	if (sub2.length() != 4) { return -9; }
+	char* p2 = sub2.cstr();
+	if (p2[0] != 104) { return -10; } // 'h'
+	if (p2[3] != 97) { return -11; }  // 'a'
 
-    // (4) slice vacio: "hola"[2..2] = "" (len 0).
-    string empty = s2[2..2];
-    if (empty.length() != 0) { return -12; }
+	// (4) slice vacio: "hola"[2..2] = "" (len 0).
+	string empty = s2[2..2];
+	if (empty.length() != 0) { return -12; }
 
-    // (5) slice con indices runtime (no compile-time constantes).
-    i64 a = 0;
-    i64 b = 0;
-    while (b < 4) { b = b + 1; }            // b = 4 runtime
-    string four = base[a..b];               // "hola" (len 4)
-    if (four.length() != 4) { return -13; }
-    char* pf = four.cstr();
-    if (pf[0] != 104) { return -14; }       // 'h'
-    if (pf[3] != 97) { return -15; }        // 'a'
+	// (5) slice con indices runtime (no compile-time constantes).
+	i64 a = 0;
+	i64 b = 0;
+	while (b < 4) { b = b + 1; } // b = 4 runtime
+	string four = base[a..b];    // "hola" (len 4)
+	if (four.length() != 4) { return -13; }
+	char* pf = four.cstr();
+	if (pf[0] != 104) { return -14; } // 'h'
+	if (pf[3] != 97) { return -15; }  // 'a'
 
-    // (6) indexado sobre el slice resultante (encadenado).
-    char fc = four[1];
-    if (fc != 111) { return -16; }          // 'o'
+	// (6) indexado sobre el slice resultante (encadenado).
+	char fc = four[1];
+	if (fc != 111) { return -16; } // 'o'
 
-    return 77;
+	return 77;
 }

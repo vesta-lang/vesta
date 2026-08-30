@@ -8,16 +8,16 @@
 import strtools only src;
 
 i32 main() {
-    i32 a = 10;
-    i32 b = 3;
-    // El texto EXACTO del argumento se captura como string.
-    string s1 = src(a * b + 1);
-    string s2 = src(ptr -> 0x90 -> 0x10);   // DSL: ni siquiera es una expr Vesta valida
-    println("s1=[${s1}]");   // a * b + 1
-    println("s2=[${s2}]");   // ptr -> 0x90 -> 0x10
+	i32    a  = 10;
+	i32    b  = 3;
+	// El texto EXACTO del argumento se captura como string.
+	string s1 = src(a * b + 1);
+	string s2 = src(ptr -> 0x90 -> 0x10); // DSL: ni siquiera es una expr Vesta valida
+	println("s1=[${s1}]");                // a * b + 1
+	println("s2=[${s2}]"); // ptr -> 0x90 -> 0x10
 
-    i32 ok = 0;
-    if (s1.equals("a * b + 1"))        { ok = ok + 20; }
-    if (s2.equals("ptr -> 0x90 -> 0x10")) { ok = ok + 22; }
-    return ok;   // 42
+	i32 ok = 0;
+	if (s1.equals("a * b + 1")) { ok = ok + 20; }
+	if (s2.equals("ptr -> 0x90 -> 0x10")) { ok = ok + 22; }
+	return ok; // 42
 }

@@ -10,39 +10,40 @@ namespace ejemplos.concepts_avanzado;
 //   METODOS genericos, ademas de en funciones/structs/clases.
 
 // Concepto estructural con firma: i64 area() + bool igual(i64).
-concept Figura { i64 area(); bool igual(i64 x); }
+concept Figura { i64 area();
+	bool igual(i64 x); }
 
 concept MiNum<T> = is_numeric<T>();
 
 class Cuadrado {
-    i64 lado;
-    Cuadrado(i64 l) { this.lado = l; }
-    i64 area() { return this.lado * this.lado; }
-    bool igual(i64 x) { return this.lado == x; }
+	i64 lado;
+	Cuadrado(i64 l) { this.lado = l; }
+	i64 area() { return this.lado * this.lado; }
+	bool igual(i64 x) { return this.lado == x; }
 }
 
 // Bound estructural (firma) en funcion.
-i64 medir<T: Figura>(T f) { return f.area(); }
+i64 medir < T : Figura > (T f) { return f.area(); }
 
 struct Calc {
-    i64 base;
-    // bound inline en metodo generico
-    U sumar<U: Numeric>(U x) { return (U) this.base + x; }
-    // where con concepto de usuario
-    U mult<U>(U x) where U: MiNum { return (U) this.base * x; }
-    // multiples bounds en metodo
-    U combo<U>(U x) where U: Numeric + Comparable { return (U) this.base + x; }
+	i64 base;
+	// bound inline en metodo generico
+	U sumar < U : Numeric > (U x) { return (U) this.base + x; }
+	// where con concepto de usuario
+	U mult<U>(U x) where U: MiNum { return (U) this.base * x; }
+	// multiples bounds en metodo
+	U combo<U>(U x) where U: Numeric + Comparable { return (U) this.base + x; }
 }
 
 i32 main() {
-    Cuadrado q = new Cuadrado(5);
-    i64 ar = medir<Cuadrado>(q);   // firma estructural OK -> 25
+	Cuadrado q  = new Cuadrado(5);
+	i64      ar = medir<Cuadrado>(q); // firma estructural OK -> 25
 
-    Calc c = {.base = 3};
-    i64 s = c.sumar<i64>(2);        // inline Numeric -> 5
-    i64 m = c.mult<i64>(2);         // where MiNum    -> 6
-    i64 k = c.combo<i64>(3);        // Numeric+Comparable -> 6
+	Calc c = {.base = 3};
+	i64  s = c.sumar<i64>(2); // inline Numeric -> 5
+	i64  m = c.mult<i64>(2);  // where MiNum    -> 6
+	i64  k = c.combo<i64>(3); // Numeric+Comparable -> 6
 
-    println("ar=${ar} s=${s} m=${m} k=${k}");
-    return (i32)(ar + s + m + k);   // 25 + 5 + 6 + 6 = 42
+	println("ar=${ar} s=${s} m=${m} k=${k}");
+	return (i32)(ar + s + m + k); // 25 + 5 + 6 + 6 = 42
 }

@@ -11,74 +11,74 @@
 import "serial";
 import "term";
 
-u64 g_boot_secs = 0;             // segundos-del-dia en el arranque
+u64 g_boot_secs = 0; // segundos-del-dia en el arranque
 
 // Lee un registro del CMOS (indice -> dato).
 u64 cmos_read(u64 reg) {
-    serial.outb(0x70, reg);
-    return serial.inb(0x71);
+	serial.outb(0x70, reg);
+	return serial.inb(0x71);
 }
 
 // Convierte un valor BCD (p.ej. 0x59) a binario (59).
 u64 bcd2bin(u64 v) {
-    return (v & 0x0F) + ((v >> 4) * 10);
+	return (v & 0x0F) + ((v >> 4) * 10);
 }
 
 // Lee un registro de fecha/hora, esperando a que no haya actualizacion en
 // curso (status A bit 7) y convirtiendo de BCD a binario si procede.
 u64 rtc_reg(u64 reg) {
-    while ((cmos_read(0x0A) & 0x80) != 0) { }    // update-in-progress
-    u64 v = cmos_read(reg);
-    u64 stb = cmos_read(0x0B);
-    if ((stb & 0x04) == 0) {                       // bit 2 = 0 -> BCD
-        v = bcd2bin(v);
-    }
-    return v;
+	while ((cmos_read(0x0A) & 0x80) != 0) { } // update-in-progress
+	u64 v   = cmos_read(reg);
+	u64 stb = cmos_read(0x0B);
+	if ((stb & 0x04) == 0) { // bit 2 = 0 -> BCD
+		v = bcd2bin(v);
+	}
+	return v;
 }
 
-u64 rtc_sec()  { return rtc_reg(0x00); }
-u64 rtc_min()  { return rtc_reg(0x02); }
+u64 rtc_sec() { return rtc_reg(0x00); }
+u64 rtc_min() { return rtc_reg(0x02); }
 u64 rtc_hour() { return rtc_reg(0x04); }
-u64 rtc_day()  { return rtc_reg(0x07); }
-u64 rtc_mon()  { return rtc_reg(0x08); }
-u64 rtc_year() { return rtc_reg(0x09); }          // 0..99 -> +2000
+u64 rtc_day() { return rtc_reg(0x07); }
+u64 rtc_mon() { return rtc_reg(0x08); }
+u64 rtc_year() { return rtc_reg(0x09); } // 0..99 -> +2000
 
 // Segundos transcurridos del dia (para el calculo de uptime).
 u64 now_linear() {
-    return (rtc_hour() * 60 + rtc_min()) * 60 + rtc_sec();
+	return (rtc_hour() * 60 + rtc_min()) * 60 + rtc_sec();
 }
 
 void clock_init() {
-    g_boot_secs = now_linear();
+	g_boot_secs = now_linear();
 }
 
 // Segundos de uptime (maneja un cruce de medianoche).
 u64 uptime_secs() {
-    u64 n = now_linear();
-    if (n >= g_boot_secs) { return n - g_boot_secs; }
-    return n + 86400 - g_boot_secs;
+	u64 n = now_linear();
+	if (n >= g_boot_secs) { return n - g_boot_secs; }
+	return n + 86_400 - g_boot_secs;
 }
 
 // Imprime un numero de 2 digitos con cero a la izquierda.
 void print2(u64 v) {
-    term.tputc((u64) (48 + (v / 10) % 10));
-    term.tputc((u64) (48 + v % 10));
+	term.tputc((u64)(48 + (v / 10) % 10));
+	term.tputc((u64)(48 + v % 10));
 }
 
 // Imprime "AAAA-MM-DD".
 void clock_print_date() {
-    term.tdec((i64) (2000 + rtc_year()));
-    term.tputc(45);                                // '-'
-    print2(rtc_mon());
-    term.tputc(45);
-    print2(rtc_day());
+	term.tdec((i64)(2000 + rtc_year()));
+	term.tputc(45); // '-'
+	print2(rtc_mon());
+	term.tputc(45);
+	print2(rtc_day());
 }
 
 // Imprime "HH:MM:SS".
 void clock_print_time() {
-    print2(rtc_hour());
-    term.tputc(58);                                // ':'
-    print2(rtc_min());
-    term.tputc(58);
-    print2(rtc_sec());
+	print2(rtc_hour());
+	term.tputc(58); // ':'
+	print2(rtc_min());
+	term.tputc(58);
+	print2(rtc_sec());
 }

@@ -5,20 +5,20 @@
 //     vm --vx asm_divmod.vx -o d && vm --run d.velb
 // @expect 42
 u64 main() {
-    u64 ok = 1;
-    register("rax") u64 q = 0;
-    register("rdx") u64 r = 0;
-    register("rsi") u64 dsr = 7;
-    asm { mov rax, 100
-          xor rdx, rdx
-          div rsi };
-    if (q != 14) ok = 0;                    // 100 / 7 = 14 (sin signo)
-    if (r != 2) ok = 0;                     // 100 % 7 = 2
-    register("rdi") u64 d2 = 7;
-    asm { mov rax, -100
-          cqo
-          idiv rdi };
-    if (q != 0xFFFFFFFFFFFFFFF2) ok = 0;    // -100 / 7 = -14 (con signo)
-    if (r != 0xFFFFFFFFFFFFFFFE) ok = 0;    // -100 % 7 = -2
-    return (ok == 1) ? 42 : 0;
+	u64                 ok  = 1;
+	register("rax") u64 q   = 0;
+	register("rdx") u64 r   = 0;
+	register("rsi") u64 dsr = 7;
+	asm { mov rax, 100
+		xor rdx, rdx
+		div rsi };
+	if (q != 14)        ok = 0; // 100 / 7 = 14 (sin signo)
+	if (r != 2)         ok = 0;  // 100 % 7 = 2
+	register("rdi") u64 d2 = 7;
+	asm { mov rax, -100
+		cqo
+		idiv rdi };
+	if (q != 0xFFFFFFFFFFFFFFF2) ok = 0; // -100 / 7 = -14 (con signo)
+	if (r != 0xFFFFFFFFFFFFFFFE) ok = 0; // -100 % 7 = -2
+	return (ok == 1) ? 42 : 0;
 }

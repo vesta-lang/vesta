@@ -28,40 +28,40 @@ namespace ejemplos.concat_loop_optimized;
 // El loop es ahora O(N) puro: dobalr N solo dobla el tiempo.
 
 comptime u64 builder(i64 n) {
-    string s = "";
-    i64 i = 0;
-    while (i < n) {
-        s = s + "X";   // fast path -> O(1) amortizado
-        i = i + 1;
-    }
-    return strlen(s);
+	string s = "";
+	i64    i = 0;
+	while (i < n) {
+		s = s + "X"; // fast path -> O(1) amortizado
+		i = i + 1;
+	}
+	return strlen(s);
 }
 
 // Variantes que tambien estan optimizadas:
 comptime u64 builder_prepend(i64 n) {
-    string s = "";
-    i64 i = 0;
-    while (i < n) {
-        s = "Y" + s;   // fast path commutativo (insert al inicio)
-        i = i + 1;
-    }
-    return strlen(s);
+	string s = "";
+	i64    i = 0;
+	while (i < n) {
+		s = "Y" + s; // fast path commutativo (insert al inicio)
+		i = i + 1;
+	}
+	return strlen(s);
 }
 
 comptime u64 builder_compound(i64 n) {
-    string s = "";
-    i64 i = 0;
-    while (i < n) {
-        s += "Z";       // AddAssign directo, ya era O(1) desde antes
-        i = i + 1;
-    }
-    return strlen(s);
+	string s = "";
+	i64    i = 0;
+	while (i < n) {
+		s += "Z"; // AddAssign directo, ya era O(1) desde antes
+		i = i + 1;
+	}
+	return strlen(s);
 }
 
 i32 main() {
-    // 10K iteraciones cada uno -- antes hubiese tomado 70+ ms cada loop.
-    static_assert(builder(10000)           == 10000, "concat optimizado");
-    static_assert(builder_prepend(10000)   == 10000, "prepend optimizado");
-    static_assert(builder_compound(10000)  == 10000, "compound assign");
-    return 42;
+	// 10K iteraciones cada uno -- antes hubiese tomado 70+ ms cada loop.
+	static_assert(builder(10_000) == 10_000, "concat optimizado");
+	static_assert(builder_prepend(10_000) == 10_000, "prepend optimizado");
+	static_assert(builder_compound(10_000) == 10_000, "compound assign");
+	return 42;
 }

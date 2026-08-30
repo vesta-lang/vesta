@@ -11,29 +11,29 @@
 // reserva nada -- exactamente igual que gcc borraba el malloc del main.c.
 
 class Foo {
-    public i32 x;
-    public Foo(i32 v) { this.x = v; }
+	public i32 x;
+	public Foo(i32 v) { this.x = v; }
 }
 
 i32 main() {
-    Foo[64] anillo;                 // potencia de 2: el indice sale con AND
-    i32 acc = 0;
-    i32 i = 0;
-    while (i < 1000000) {
-        Foo f = new Foo(i & 255);
-        i32 k = i & 63;
-        Foo viejo = anillo[k];      // el mas viejo sale de la ventana
-        if (viejo != null) {
-            acc = acc + viejo.x;
-        }
-        anillo[k] = f;
-        i = i + 1;
-    }
-    i32 k2 = 0;
-    while (k2 < 64) {               // vaciar la ventana
-        Foo v = anillo[k2];
-        if (v != null) { acc = acc + v.x; }
-        k2 = k2 + 1;
-    }
-    return acc & 255;
+	Foo[64] anillo; // potencia de 2: el indice sale con AND
+	i32 acc = 0;
+	i32 i   = 0;
+	while (i < 1_000_000) {
+		Foo f     = new Foo(i & 255);
+		i32 k     = i & 63;
+		Foo viejo = anillo[k]; // el mas viejo sale de la ventana
+		if (viejo != null) {
+			acc = acc + viejo.x;
+		}
+		anillo[k] = f;
+		i = i + 1;
+	}
+	i32 k2 = 0;
+	while (k2 < 64) { // vaciar la ventana
+		Foo v = anillo[k2];
+		if (v != null) { acc = acc + v.x; }
+		k2 = k2 + 1;
+	}
+	return acc & 255;
 }

@@ -30,7 +30,7 @@ import std.memory only memset, memcpy, memmove;
 import std.types only usize, uintptr, size_t;
 // Solo fuera de Windows: alli las arenas salen de kernel32.
 @Target("!os:windows")
-import std.syscall.linux only mmap, munmap;
+	import std.syscall.linux only mmap, munmap;
 
 extern "kernel32.dll" {
 	fn VirtualAlloc(u64 addr, u64 size, u32 allocType, u32 protect) -> u64;
@@ -120,13 +120,13 @@ const u64 VMEM_CHUNK_BYTES = 1_048_576; // 1 MiB
  * @return Constante PAGE_* (READWRITE por defecto).
  */
 @Target("os:windows")
-u32 __vmem_prot_flags(MemProt p) {
+	u32 __vmem_prot_flags(MemProt p) {
 	match (p) {
-		case None => return 1;           // PAGE_NOACCESS
-		case Read => return 2;           // PAGE_READONLY
-		case ReadExec => return 32;      // PAGE_EXECUTE_READ
+		case None          => return 1;           // PAGE_NOACCESS
+		case Read          => return 2;           // PAGE_READONLY
+		case ReadExec      => return 32;      // PAGE_EXECUTE_READ
 		case ReadWriteExec => return 64; // PAGE_EXECUTE_READWRITE
-		case ReadWrite => return 4;      // PAGE_READWRITE
+		case ReadWrite     => return 4;      // PAGE_READWRITE
 	}
 	return 4;
 }
@@ -136,13 +136,13 @@ u32 __vmem_prot_flags(MemProt p) {
  * @return PROT_* combinado (READ|WRITE por defecto).
  */
 @Target("!os:windows")
-i32 __vmem_prot_flags(MemProt p) {
+	i32 __vmem_prot_flags(MemProt p) {
 	match (p) {
-		case None => return 0;          // PROT_NONE
-		case Read => return 1;          // PROT_READ
-		case ReadExec => return 5;      // READ|EXEC
+		case None          => return 0;          // PROT_NONE
+		case Read          => return 1;          // PROT_READ
+		case ReadExec      => return 5;      // READ|EXEC
 		case ReadWriteExec => return 7; // READ|WRITE|EXEC
-		case ReadWrite => return 3;     // READ|WRITE
+		case ReadWrite     => return 3;     // READ|WRITE
 	}
 	return 3;
 }
@@ -157,12 +157,12 @@ i32 __vmem_prot_flags(MemProt p) {
  * @return Direccion base, o 0 en fallo.
  */
 @Target("os:windows")
-u64 vmem_reserve(u64 size, MemProt prot) {
+	u64 vmem_reserve(u64 size, MemProt prot) {
 	// MEM_COMMIT|MEM_RESERVE = 0x3000 = 12288.
 	return VirtualAlloc(0, size, 12_288, __vmem_prot_flags(prot));
 }
 @Target("!os:windows")
-u64 vmem_reserve(u64 size, MemProt prot) {
+	u64 vmem_reserve(u64 size, MemProt prot) {
 	// MAP_PRIVATE|MAP_ANONYMOUS = 0x22 = 34, fd = -1, off = 0.
 	uintptr r = mmap((uintptr) 0, (size_t) size, __vmem_prot_flags(prot),
 		34, -1, 0);
@@ -179,11 +179,11 @@ u64 vmem_reserve(u64 size, MemProt prot) {
  * @param size Tamano original (necesario en POSIX; ignorado en Windows).
  */
 @Target("os:windows")
-void vmem_release(u64 addr, u64 size) {
+	void vmem_release(u64 addr, u64 size) {
 	VirtualFree(addr, 0, 32_768); // MEM_RELEASE=0x8000 (size DEBE ser 0)
 }
 @Target("!os:windows")
-void vmem_release(u64 addr, u64 size) {
+	void vmem_release(u64 addr, u64 size) {
 	munmap((uintptr) addr, (size_t) size);
 }
 
@@ -244,7 +244,7 @@ i32 __vmem_class_of(u64 size) {
 	if (size <= 1024) return 6;
 	if (size <= 2048) return 7;
 	if (size <= 4096) return 8;
-	return-1;
+	return -1;
 }
 
 /**
@@ -462,7 +462,7 @@ void __vmem_free_impl(u64 payload) {
  * @return Puntero al bloque.
  */
 @AllocatorOverride
-i64 *__vx_malloc(u64 size) {
+	i64 *__vx_malloc(u64 size) {
 	return (i64 *)__vmem_alloc(size);
 }
 
@@ -471,6 +471,6 @@ i64 *__vx_malloc(u64 size) {
  * @param p Puntero devuelto por @ref __vx_malloc.
  */
 @AllocatorOverride
-void __vx_free(i64 *p) {
+	void __vx_free(i64 *p) {
 	__vmem_free_impl((u64)p);
 }

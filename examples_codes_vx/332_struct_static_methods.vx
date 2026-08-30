@@ -10,18 +10,24 @@
 namespace ssm;
 
 struct Vec2 {
-    i64 x;
-    i64 y;
-    public static Vec2 zero()          { Vec2 r; r.x = 0; r.y = 0; return r; }
-    public static Vec2 of(i64 a, i64 b) { Vec2 r; r.x = a; r.y = b; return r; }
-    public static i64  dim()            { return 2; }
-    public i64 sum() { return this.x + this.y; }
+	i64 x;
+	i64 y;
+	public static Vec2 zero() { Vec2 r;
+		r.x = 0;
+		r.y = 0;
+		return r; }
+	public static Vec2 of(i64 a, i64 b) { Vec2 r;
+		r.x = a;
+		r.y = b;
+		return r; }
+	public static i64 dim() { return 2; }
+	public i64 sum() { return this.x + this.y; }
 }
 
 i32 main() {
-    Vec2 o = Vec2.zero();          // SRET, sin args
-    Vec2 p = Vec2.of(10, 32);      // SRET, con args
-    i64  d = Vec2.dim();           // escalar
-    // 0 + 42 + 2*... : o.sum()=0, p.sum()=42, d=2 -> 0 + 42 + 2 = 44... ajustamos
-    return (i32) (o.sum() + p.sum() + d - 2);   // 0 + 42 + 2 - 2 = 42
+	Vec2 o = Vec2.zero();                    // SRET, sin args
+	Vec2 p = Vec2.of(10, 32);                // SRET, con args
+	i64  d = Vec2.dim();                      // escalar
+	// 0 + 42 + 2*... : o.sum()=0, p.sum()=42, d=2 -> 0 + 42 + 2 = 44... ajustamos
+	return (i32)(o.sum() + p.sum() + d - 2); // 0 + 42 + 2 - 2 = 42
 }

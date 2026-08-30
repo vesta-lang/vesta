@@ -25,10 +25,10 @@ namespace ejemplos.contador;
 //   == Fin ==
 
 i32 main() {
-    println("== Contador Vesta-lang ==");
-    for (i32 i = 0; i < 5; i++) {
-        println("iteracion");
-    }
-    println("== Fin ==");
-    return 0;
+	println("== Contador Vesta-lang ==");
+	for (i32 i = 0; i < 5; i++) {
+		println("iteracion");
+	}
+	println("== Fin ==");
+	return 0;
 }

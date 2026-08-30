@@ -11,15 +11,16 @@
 
 // Hooks del runtime del usuario (sin libc).  En un kernel real, k_free
 // liberaria al allocador del kernel; aqui es un demo no-op.
-@AllocatorOverride void k_free(i64* p) { }
+@AllocatorOverride
+void k_free(i64 *p) { }
 
 class Box {
-    i32 v;
-    Box(i32 x) { this.v = x; }
-    i32 get() { return this.v; }
+	i32 v;
+	Box(i32 x) { this.v = x; }
+	i32 get() { return this.v; }
 }
 
 i32 main() {
-    Box b = new Box(42);   // calloc(obj) + ctor (calloc lo da el runtime)
-    return b.get();         // 42 ; al salir: k_free(obj) via RAII
+	Box b = new Box(42); // calloc(obj) + ctor (calloc lo da el runtime)
+	return b.get();      // 42 ; al salir: k_free(obj) via RAII
 }

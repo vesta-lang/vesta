@@ -23,13 +23,13 @@ namespace ejemplos.struct_punto;
 // Tras el fix, todos los casos multi-struct funcionan correctamente.
 
 struct Punto {
-    i32 x;
-    i32 y;
+	i32 x;
+	i32 y;
 }
 
 i32 main() {
-    Punto p;
-    p.x = 10;
-    p.y = 32;
-    return p.x + p.y;
+	Punto p;
+	p.x = 10;
+	p.y = 32;
+	return p.x + p.y;
 }

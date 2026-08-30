@@ -8,9 +8,11 @@ namespace ejemplos.move_custom_deleter;
 // invalidado (ptr=0) tras el move -> su cleanup se salta (guard de null).
 // Resultado: `del` se invoca EXACTAMENTE una vez.  Esperado: R0 = 1.
 class Counter { public static i64 libs; }
-void del(i64 r){ Counter.libs = Counter.libs + 1; }
+void del(i64 r) { Counter.libs = Counter.libs + 1; }
 void run() {
-    unique<i64> a = unique_with(9, del);
-    unique<i64> b = move(a);
+	unique<i64> a = unique_with(9, del);
+	unique<i64> b = move(a);
 }
-i32 main(){ Counter.libs = 0; run(); return (i32) Counter.libs; }
+i32 main() { Counter.libs = 0;
+	run();
+	return (i32) Counter.libs; }

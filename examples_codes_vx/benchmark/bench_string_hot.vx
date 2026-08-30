@@ -7,23 +7,23 @@
 // Workload: 200K iteraciones con 3 string ops por iter = 600K ops.
 
 i32 main() {
-    string base = "abc";
-    string suffix = "xyz";
-    i64 hits = 0;
-    i32 i = 0;
-    while (i < 200000) {
-        // STRCAT crea un ROPE O(1) -- cheap.
-        string combo = base + suffix;
-        // STRLEN materializa si es ROPE.
-        u64 ln = combo.length();
-        if (ln == 6) {
-            hits = hits + 1;
-        }
-        // STRCMP fuerza flatten + memcmp.
-        if (combo.equals("abcxyz")) {
-            hits = hits + 1;
-        }
-        i = i + 1;
-    }
-    return (i32) hits;
+	string base   = "abc";
+	string suffix = "xyz";
+	i64    hits   = 0;
+	i32    i      = 0;
+	while (i < 200_000) {
+		// STRCAT crea un ROPE O(1) -- cheap.
+		string combo = base + suffix;
+		// STRLEN materializa si es ROPE.
+		u64    ln    = combo.length();
+		if (ln == 6) {
+			hits = hits + 1;
+		}
+		// STRCMP fuerza flatten + memcmp.
+		if (combo.equals("abcxyz")) {
+			hits = hits + 1;
+		}
+		i = i + 1;
+	}
+	return (i32) hits;
 }

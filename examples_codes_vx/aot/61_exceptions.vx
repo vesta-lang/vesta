@@ -11,39 +11,39 @@
 // su campo.  main devuelve 42 si todo el flujo es correcto.
 
 class Boom {
-    public i64 code;
-    public Boom(i64 c) { this.code = c; }
+	public i64 code;
+	public Boom(i64 c) { this.code = c; }
 }
 
 // Lanza si x<0 (cruzando la frontera de funcion hacia el try del caller).
 public i64 risky(i64 x) {
-    if (x < 0) { throw new Boom(20); }
-    return x * 2;
+	if (x < 0) { throw new Boom(20); }
+	return x * 2;
 }
 
 // Camino con captura: risky(-1) lanza -> catch lee e.code (20) -> +1 = 21.
 public i64 caught_path() {
-    i64 r = 0;
-    try {
-        r = risky(-1);
-    } catch (Boom e) {
-        r = e.code + 1;
-    }
-    return r;
+	i64 r = 0;
+	try {
+		r = risky(-1);
+	} catch (Boom e) {
+		r = e.code + 1;
+	}
+	return r;
 }
 
 // Camino normal: risky(10) = 20, sin throw -> pop normal del frame.
 public i64 normal_path() {
-    i64 r = -1;
-    try {
-        r = risky(10);
-    } catch (Boom e) {
-        r = -99;
-    }
-    return r;
+	i64 r = -1;
+	try {
+		r = risky(10);
+	} catch (Boom e) {
+		r = -99;
+	}
+	return r;
 }
 
 public i64 main() {
-    // 21 (caught) + 20 (normal) + 1 = 42.
-    return caught_path() + normal_path() + 1;
+	// 21 (caught) + 20 (normal) + 1 = 42.
+	return caught_path() + normal_path() + 1;
 }

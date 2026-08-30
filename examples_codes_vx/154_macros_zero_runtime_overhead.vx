@@ -19,59 +19,59 @@ i32 mas_uno(i32 x) { return x + 1; }
 
 // (1) Macro recursivo: 100 niveles de mas_uno anidados.
 @Macro
-comptime string M_chain(i64 n) {
-    return (n <= 0) ? "x" : "mas_uno(" + M_chain(n - 1) + ")";
+	comptime string M_chain(i64 n) {
+	return (n <= 0) ? "x" : "mas_uno(" + M_chain(n - 1) + ")";
 }
 
 // (2) Macro con loop: emite tabla de 50 sumas.
 @Macro
-comptime string M_table(i64 n) {
-    string code = "0";
-    i64 i = 1;
-    while (i <= n) {
-        code = code + " + doblar(" + to_str(i) + ")";
-        i = i + 1;
-    }
-    return code;
+	comptime string M_table(i64 n) {
+	string code = "0";
+	i64    i    = 1;
+	while (i <= n) {
+		code = code + " + doblar(" + to_str(i) + ")";
+		i    = i + 1;
+	}
+	return code;
 }
 
 // (3) Composicion: macro pirámide -- arbol binario 2^N leaves.
 @Macro
-comptime string Pyramid(i64 n) {
-    return (n <= 0) ? "1" : "(" + Pyramid(n - 1) + "+" + Pyramid(n - 1) + ")";
+	comptime string Pyramid(i64 n) {
+	return (n <= 0) ? "1" : "(" + Pyramid(n - 1) + "+" + Pyramid(n - 1) + ")";
 }
 
 // (4) Global mutable + macros que comparten estado.
 const i64 g_unique = 0;
 
 @Macro
-comptime string M_uniq() {
-    g_unique = g_unique + 1;
-    return to_str(g_unique);
+	comptime string M_uniq() {
+	g_unique = g_unique + 1;
+	return to_str(g_unique);
 }
 
 i32 main() {
-    i32 x = 0;
+	i32 x  = 0;
 
-    // 100-deep nested macro: emite mas_uno(mas_uno(...x))
-    i32 r1 = M_chain(100);
-    if (r1 != 100) return 91;
+	// 100-deep nested macro: emite mas_uno(mas_uno(...x))
+	i32 r1 = M_chain(100);
+	if (r1 != 100) return 91;
 
-    // Tabla generada: 0 + doblar(1) + doblar(2) + ... + doblar(50)
-    // = 2 * (1+2+...+50) = 2550.
-    i32 r2 = M_table(50);
-    if (r2 != 2550) return 92;
+	// Tabla generada: 0 + doblar(1) + doblar(2) + ... + doblar(50)
+	// = 2 * (1+2+...+50) = 2550.
+	i32 r2 = M_table(50);
+	if (r2 != 2550) return 92;
 
-    // Pirámide 2^10 = 1024 leaves, cada uno = 1.
-    i32 r3 = Pyramid(10);
-    if (r3 != 1024) return 93;
+	// Pirámide 2^10 = 1024 leaves, cada uno = 1.
+	i32 r3 = Pyramid(10);
+	if (r3 != 1024) return 93;
 
-    // Globales mutables compartidos cross-macro.
-    i32 a = M_uniq();   // g_unique = 1 -> emite literal 1
-    i32 b = M_uniq();   // g_unique = 2
-    i32 c = M_uniq();   // g_unique = 3
-    if (a + b + c != 6) return 94;
-    static_assert(g_unique == 3, "globals compartidos por @Macro");
+	// Globales mutables compartidos cross-macro.
+	i32 a = M_uniq(); // g_unique = 1 -> emite literal 1
+	i32 b = M_uniq(); // g_unique = 2
+	i32 c = M_uniq(); // g_unique = 3
+	if (a + b + c != 6) return 94;
+	static_assert(g_unique == 3, "globals compartidos por @Macro");
 
-    return 42;
+	return 42;
 }

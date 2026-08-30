@@ -5,15 +5,15 @@
 //     vm --vx asm_imul3_xchg.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-    // imul 3-op: prod = base * 5 = 8 * 5 = 40.
-    register("rax") u64 prod = 0;
-    register("rbx") u64 base = 8;
-    asm { imul rax, rbx, 5 };   // rax = 8 * 5 = 40
+	// imul 3-op: prod = base * 5 = 8 * 5 = 40.
+	register("rax") u64 prod = 0;
+	register("rbx") u64 base = 8;
+	asm { imul rax, rbx, 5 }; // rax = 8 * 5 = 40
 
-    // xchg: cruza dos valores (2 <-> el 40 de prod) para verificar el swap.
-    register("rcx") u64 x = 2;
-    register("rdx") u64 y = prod;   // 40
-    asm { xchg rcx, rdx };          // rcx = 40, rdx = 2
-    // rcx=40 + rdx=2 = 42.
-    return x + y;
+	// xchg: cruza dos valores (2 <-> el 40 de prod) para verificar el swap.
+	register("rcx") u64 x = 2;
+	register("rdx") u64 y = prod; // 40
+	asm { xchg rcx, rdx };        // rcx = 40, rdx = 2
+	// rcx=40 + rdx=2 = 42.
+	return x + y;
 }

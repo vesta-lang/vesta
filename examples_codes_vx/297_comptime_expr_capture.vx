@@ -9,39 +9,40 @@
 
 // comptime fn: stringifica el codigo capturado y lo devuelve como VALOR string.
 private comptime string stringify(expr code) {
-    return code;
+	return code;
 }
 
 // comptime fn: envuelve el texto capturado entre comillas (valor string).
 private comptime string quoted(expr code) {
-    return "[" + code + "]";
+	return "[" + code + "]";
 }
 
 // @Macro: emite un string LITERAL que se inyecta como codigo.  El resultado
 // del splice es una expresion string en el call site.
-@Macro private comptime string as_literal(expr code) {
-    return "\"" + code + "\"";
+@Macro
+private comptime string as_literal(expr code) {
+	return "\"" + code + "\"";
 }
 
 i32 main() {
-    i32 x = 5;
-    i32 y = 20;
+	i32    x  = 5;
+	i32    y  = 20;
 
-    // comptime fn -> valor string con el texto exacto del argumento.
-    string s1 = stringify(x + y + 1);
-    string s2 = quoted(x * y);
+	// comptime fn -> valor string con el texto exacto del argumento.
+	string s1 = stringify(x + y + 1);
+	string s2 = quoted(x * y);
 
-    // @Macro -> codigo inyectado: `as_literal(hola)` se vuelve `"hola"`.
-    string s3 = as_literal(hola mundo);
+	// @Macro -> codigo inyectado: `as_literal(hola)` se vuelve `"hola"`.
+	string s3 = as_literal(hola mundo);
 
-    println("s1=[${s1}]");   // s1=[x + y + 1]
-    println("s2=[${s2}]");   // s2=[x * y]
-    println("s3=[${s3}]");   // s3=[hola mundo]
+	println("s1=[${s1}]"); // s1=[x + y + 1]
+	println("s2=[${s2}]"); // s2=[x * y]
+	println("s3=[${s3}]"); // s3=[hola mundo]
 
-    // Comprobacion de igualdad exacta de los textos capturados.
-    i32 ok = 0;
-    if (s1.equals("x + y + 1")) { ok = ok + 10; }
-    if (s2.equals("[x * y]"))   { ok = ok + 15; }
-    if (s3.equals("hola mundo")) { ok = ok + 17; }
-    return ok;   // 10 + 15 + 17 = 42
+	// Comprobacion de igualdad exacta de los textos capturados.
+	i32 ok = 0;
+	if (s1.equals("x + y + 1")) { ok = ok + 10; }
+	if (s2.equals("[x * y]")) { ok = ok + 15; }
+	if (s3.equals("hola mundo")) { ok = ok + 17; }
+	return ok; // 10 + 15 + 17 = 42
 }

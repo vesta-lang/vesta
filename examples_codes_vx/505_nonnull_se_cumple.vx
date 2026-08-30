@@ -12,48 +12,49 @@ namespace ejemplos.nonnull_se_cumple;
 // cuando el valor no puede ser nulo, y que `nonnull` y `!!` son la misma cosa.
 // Que romper la promesa mata el proceso lo comprueba el 506.
 
-class Cosa { public i64 v; public Cosa(i64 x) { this.v = x; } }
+class Cosa { public i64 v;
+	public Cosa(i64 x) { this.v = x; } }
 
 i32 main() {
-    i64 x = 40;
+	      i64          x  = 40;
 
-    // --- Lo que no cuesta nada: el valor no puede ser nulo. ---
-    //
-    // La direccion de algo y un objeto recien creado nunca son nulos, y el
-    // pase que quita comprobaciones demostrables lo sabe: de estas cuatro
-    // lineas no queda ni una comprobacion en el codigo final.
-    nonnull i64* p1 = &x;
-    const i64 a = *p1;                 // 40
+	// --- Lo que no cuesta nada: el valor no puede ser nulo. ---
+	//
+	// La direccion de algo y un objeto recien creado nunca son nulos, y el
+	// pase que quita comprobaciones demostrables lo sabe: de estas cuatro
+	// lineas no queda ni una comprobacion en el codigo final.
+	      nonnull i64 *p1 = &x;
+	const i64          a  = *p1; // 40
 
-    Cosa c = new Cosa(2);
-    nonnull Cosa p2 = c;
-    const i64 b = p2.v;                // 2
+	      Cosa         c = new Cosa(2);
+	      nonnull Cosa p2 = c;
+	const i64          b = p2.v;         // 2
 
-    // --- `nonnull` y `!!` son las dos mitades de una misma cosa. ---
-    //
-    // `nonnull` ENUNCIA la promesa, en el tipo, y se comprueba en cada
-    // asignacion.  `!!` es el ACTO de comprobar, en un sitio concreto, y su
-    // resultado vuelve a ser un puntero corriente: la promesa se gasta ahi.
-    //
-    // De ahi que escribir `!!` al asignar a un `nonnull` sea REDUNDANTE: la
-    // asignacion ya comprueba.  Y no cuesta nada escribirlo, porque la
-    // comprobacion de mas la borra el optimizador -- el resultado de una
-    // comprobacion es demostrablemente no nulo --.  Medido sobre un valor que
-    // el optimizador NO puede demostrar: sin `!!` se emite una, con `!!` se
-    // emiten dos, y en los dos casos queda una.
-    nonnull i64* p3 = !!&x;            // identico a `= &x`
-    const i64 redundante = *p3;        // 40
+	// --- `nonnull` y `!!` son las dos mitades de una misma cosa. ---
+	//
+	// `nonnull` ENUNCIA la promesa, en el tipo, y se comprueba en cada
+	// asignacion.  `!!` es el ACTO de comprobar, en un sitio concreto, y su
+	// resultado vuelve a ser un puntero corriente: la promesa se gasta ahi.
+	//
+	// De ahi que escribir `!!` al asignar a un `nonnull` sea REDUNDANTE: la
+	// asignacion ya comprueba.  Y no cuesta nada escribirlo, porque la
+	// comprobacion de mas la borra el optimizador -- el resultado de una
+	// comprobacion es demostrablemente no nulo --.  Medido sobre un valor que
+	// el optimizador NO puede demostrar: sin `!!` se emite una, con `!!` se
+	// emiten dos, y en los dos casos queda una.
+	      nonnull i64 *p3 = !! &x;    // identico a `= &x`
+	const i64          redundante = *p3; // 40
 
-    // Donde `!!` SI gana su sitio: cuando no hay ninguna declaracion `nonnull`
-    // de por medio y hace falta afirmarlo en la propia expresion.
-    i64* q = &x;
-    const i64 afirmado = *!!q;         // 40
+	// Donde `!!` SI gana su sitio: cuando no hay ninguna declaracion `nonnull`
+	// de por medio y hace falta afirmarlo en la propia expresion.
+	      i64*         q = &x;
+	const i64          afirmado = *!!q; // 40
 
-    // Suman cero si son lo que deben; si no, rompen el resultado a proposito.
-    const i64 desvio = (redundante == 40 && afirmado == 40) ? 0 : 100;
+	// Suman cero si son lo que deben; si no, rompen el resultado a proposito.
+	const i64          desvio = (redundante == 40 && afirmado == 40) ? 0 : 100;
 
-    println("a=${a} b=${b} redundante=${redundante} afirmado=${afirmado}");
+	println("a=${a} b=${b} redundante=${redundante} afirmado=${afirmado}");
 
-    // 40 + 2 + 0 = 42
-    return (i32) (a + b + desvio);
+	// 40 + 2 + 0 = 42
+	return (i32)(a + b + desvio);
 }

@@ -6,11 +6,11 @@
 // -----------------------------------------------------------------------------
 
 comptime i64 asm_v() {
-    register("rax") i64 out;
-    asm volatile {
-        mov rax, 42
-    }
-    return out;
+	register("rax") i64 out;
+	asm volatile {
+		mov rax, 42
+	}
+	return out;
 }
 
 const i64 V = asm_v();
@@ -19,6 +19,5 @@ const i64 V = asm_v();
 static_assert(V == 99, "V debe ser 99");
 
 i32 main() {
-    return (i32) V;
+	return (i32) V;
 }
-// @expect-compile-fail

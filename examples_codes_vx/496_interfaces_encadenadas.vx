@@ -13,53 +13,53 @@ namespace ejemplos.interfaces_encadenadas;
 // cumple `Alta`, y `Alta` extiende `Media`.
 
 interface Base {
-    i64 a();
+	i64 a();
 }
 
 interface Media : Base {
-    i64 b();
+	i64 b();
 }
 
 interface Alta : Media {
-    i64 c();
+	i64 c();
 }
 
 class Todo : Alta {
-    public i64 a() { return 1; }
-    public i64 b() { return 2; }
-    public i64 c() { return 4; }
+	public i64 a() { return 1; }
+	public i64 b() { return 2; }
+	public i64 c() { return 4; }
 }
 
 // Recibir por cada nivel de la cadena: los tres son el mismo objeto.
-i64 por_base(Base x)  { return x.a(); }
+i64 por_base(Base x) { return x.a(); }
 i64 por_media(Media x) { return x.b(); }
-i64 por_alta(Alta x)   { return x.c(); }
+i64 por_alta(Alta x) { return x.c(); }
 
 i32 main() {
-    // Asignar a cada nivel de la cadena.
-    Alta  x = new Todo();
-    Media y = new Todo();
-    Base  z = new Todo();
+	// Asignar a cada nivel de la cadena.
+	Alta  x = new Todo();
+	Media y = new Todo();
+	Base  z = new Todo();
 
-    // Y reasignar, que va por otro camino del comprobador.
-    z = new Todo();
+	// Y reasignar, que va por otro camino del comprobador.
+	z = new Todo();
 
-    // Pasar como argumento, que va por un tercero.
-    const i64 args = por_base(new Todo()) + por_media(new Todo()) +
-                     por_alta(new Todo());          // 1 + 2 + 4 = 7
+	// Pasar como argumento, que va por un tercero.
+	const i64 args = por_base(new Todo()) + por_media(new Todo()) +
+		por_alta(new Todo());                  // 1 + 2 + 4 = 7
 
-    const i64 directo = x.c() + y.b() + z.a();      // 4 + 2 + 1 = 7
+	const i64  directo       = x.c() + y.b() + z.a(); // 4 + 2 + 1 = 7
 
-    // Lo que el compilador responde al preguntarle por la misma jerarquia:
-    // tiene que decir lo mismo que acaba de aceptar arriba.
-    const bool alta_es_media = is_subtype<Alta, Media>();
-    const bool alta_es_base  = is_subtype<Alta, Base>();
-    const bool todo_es_base  = is_subtype<Todo, Base>();
-    const i64 comp = (alta_es_media ? 1 : 0) + (alta_es_base ? 1 : 0) +
-                     (todo_es_base ? 1 : 0);        // 3
+	// Lo que el compilador responde al preguntarle por la misma jerarquia:
+	// tiene que decir lo mismo que acaba de aceptar arriba.
+	const bool alta_es_media = is_subtype<Alta, Media>();
+	const bool alta_es_base  = is_subtype<Alta, Base>();
+	const bool todo_es_base  = is_subtype<Todo, Base>();
+	const i64 comp = (alta_es_media ? 1 : 0) + (alta_es_base ? 1 : 0) +
+		(todo_es_base ? 1 : 0); // 3
 
-    println("directo=${directo} args=${args} comptime=${comp}");
+	println("directo=${directo} args=${args} comptime=${comp}");
 
-    // 7 + 7 + 3 = 17
-    return (i32) (directo + args + comp + 25); // 42
+	// 7 + 7 + 3 = 17
+	return (i32)(directo + args + comp + 25); // 42
 }

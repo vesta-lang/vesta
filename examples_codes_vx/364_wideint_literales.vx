@@ -13,37 +13,37 @@
 import std.wideint only u128, i128, u256, i256, u512, i512;
 
 i32 main() {
-    // 2^128 - 1: los 128 bits a uno.
-    u128 maximo = u128(340282366920938463463374607431768211455);
-    if (maximo.lo64 != 18446744073709551615) { return 1; }
-    if (maximo.hi64 != 18446744073709551615) { return 2; }
+	// 2^128 - 1: los 128 bits a uno.
+	u128 maximo = u128(340_282_366_920_938_463_463_374_607_431_768_211_455);
+	if (maximo.lo64 != 18_446_744_073_709_551_615) { return 1; }
+	if (maximo.hi64 != 18_446_744_073_709_551_615) { return 2; }
 
-    // 10^30, que no cabe en 64 bits pero tampoco llena los 128.
-    u128 mil_cuatrillones = u128(1000000000000000000000000000000);
-    if (mil_cuatrillones.lo64 != 0x4674EDEA40000000) { return 3; }
-    if (mil_cuatrillones.hi64 != 0xC9F2C9CD0)        { return 4; }
+	// 10^30, que no cabe en 64 bits pero tampoco llena los 128.
+	u128 mil_cuatrillones = u128(1_000_000_000_000_000_000_000_000_000_000);
+	if (mil_cuatrillones.lo64 != 0x4674EDEA40000000) { return 3; }
+	if (mil_cuatrillones.hi64 != 0x0000000C9F2C9CD0) { return 4; }
 
-    // Negativo: el literal llega como magnitud y el constructor lo pasa a
-    // complemento a dos.
-    i128 menos_uno = i128(-1);
-    if (menos_uno.lo64 != 18446744073709551615) { return 5; }
-    if (menos_uno.hi64 != 18446744073709551615) { return 6; }
+	// Negativo: el literal llega como magnitud y el constructor lo pasa a
+	// complemento a dos.
+	i128 menos_uno = i128(-1);
+	if (menos_uno.lo64 != 18_446_744_073_709_551_615) { return 5; }
+	if (menos_uno.hi64 != 18_446_744_073_709_551_615) { return 6; }
 
-    i256 menos_tres = i256(-3);
-    if (menos_tres.lo128.lo64 != 18446744073709551613) { return 7; }
-    if (menos_tres.hi128.hi64 != 18446744073709551615) { return 8; }
+	i256 menos_tres = i256(-3);
+	if (menos_tres.lo128.lo64 != 18_446_744_073_709_551_613) { return 7; }
+	if (menos_tres.hi128.hi64 != 18_446_744_073_709_551_615) { return 8; }
 
-    // 2^256 - 1 y 2^512 - 1.
-    u256 max256 = u256(115792089237316195423570985008687907853269984665640564039457584007913129639935);
-    if (max256.hi128.hi64 != 18446744073709551615) { return 9; }
+	// 2^256 - 1 y 2^512 - 1.
+	u256 max256 = u256(115_792_089_237_316_195_423_570_985_008_687_907_853_269_984_665_640_564_039_457_584_007_913_129_639_935);
+	if (max256.hi128.hi64 != 18_446_744_073_709_551_615) { return 9; }
 
-    u512 max512 = u512(13407807929942597099574024998205846127479365820592393377723561443721764030073546976801874298166903427690031858186486050853753882811946569946433649006084095);
-    if (max512.hi256.hi128.hi64 != 18446744073709551615) { return 10; }
-    if (max512.lo256.lo128.lo64 != 18446744073709551615) { return 11; }
+	u512 max512 = u512(13_407_807_929_942_597_099_574_024_998_205_846_127_479_365_820_592_393_377_723_561_443_721_764_030_073_546_976_801_874_298_166_903_427_690_031_858_186_486_050_853_753_882_811_946_569_946_433_649_006_084_095);
+	if (max512.hi256.hi128.hi64 != 18_446_744_073_709_551_615) { return 10; }
+	if (max512.lo256.lo128.lo64 != 18_446_744_073_709_551_615) { return 11; }
 
-    i512 pequeno = i512(255);
-    if (pequeno.lo256.lo128.lo64 != 255) { return 12; }
-    if (pequeno.hi256.hi128.hi64 != 0)   { return 13; }
+	i512 pequeno = i512(255);
+	if (pequeno.lo256.lo128.lo64 != 255) { return 12; }
+	if (pequeno.hi256.hi128.hi64 != 0) { return 13; }
 
-    return 42;
+	return 42;
 }

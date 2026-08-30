@@ -20,6 +20,6 @@
 // 32-bit (EXEC standalone), i64 como par edx:eax y float son follow-ups.
 
 @section(".text")
-i32 sum(i32 a, i32 b) {
-    return a + b;
+	i32 sum(i32 a, i32 b) {
+	return a + b;
 }

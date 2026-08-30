@@ -20,20 +20,17 @@ import std.types only usize, uintptr;
 
 // Rellena 16 bytes con `movdqa`, que exige la direccion alineada a 16.
 void rellena_16(u8* dst) {
-    asm (
-        reg d = dst,
-        xmm v0,
-    ) {
-        pxor v0, v0
-        movdqa [d], v0
-    }
+	asm (reg d = dst, xmm v0,) {
+		pxor v0, v0
+		movdqa [d], v0
+	}
 }
 
 i32 main() {
-    u8* base = (u8*) malloc(64);
-    // Desalineado a proposito: base + 1 no es multiplo de 16 pase lo que pase.
-    u8* p = base + 1;
-    rellena_16(p);
-    free((i64*) base);
-    return 42;
+	u8* base = (u8 *) malloc(64);
+	// Desalineado a proposito: base + 1 no es multiplo de 16 pase lo que pase.
+	u8* p    = base + 1;
+	rellena_16(p);
+	free((i64 *) base);
+	return 42;
 }

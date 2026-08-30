@@ -7,18 +7,18 @@ concept Numerico<T> = is_numeric<T>();
 concept Ordenable<T> = Comparable<T>() && Sized<T>();
 
 // Genrico con bound INLINE al concepto cualificado del namespace.
-public T doble<T: mat.Numerico>(T x) { return x + x; }
+public T doble < T : mat.Numerico > (T x) { return x + x; }
 
 // Genrico con clausula WHERE al concepto cualificado.
 public T maxv<T>(T a, T b) where T: mat.Ordenable {
-    if (a < b) { return b; }
-    return a;
+	if (a < b) { return b; }
+	return a;
 }
 
 i64 main() {
-    i64 d = doble<i64>(20);        // 40  (i64 satisface mat.Numerico)
-    i64 m = maxv<i64>(2, 41);      // 41  (i64 satisface mat.Ordenable)
-    i64 r = d - m + 42;            // 40 - 41 + 42 = 41... +1
-    println("d=${d} m=${m} r=${r + 1}");
-    return r + 1;                   // 42
+	i64 d = doble<i64>(20);   // 40  (i64 satisface mat.Numerico)
+	i64 m = maxv<i64>(2, 41); // 41  (i64 satisface mat.Ordenable)
+	i64 r = d - m + 42;       // 40 - 41 + 42 = 41... +1
+	println("d=${d} m=${m} r=${r + 1}");
+	return r + 1; // 42
 }

@@ -5,17 +5,17 @@ namespace ejemplos.wait_inside_synchronized;
 // pasa el check estatico.  La negacion (146b) verifica el error.
 
 class Lock {
-    public Lock() {}
+	public Lock() { }
 }
 
 i32 main() {
-    Lock l = new Lock();
+	Lock l = new Lock();
 
-    synchronized (l) {
-        notify(l);       // OK: dentro del bloque synchronized
-        notifyAll(l);    // OK: idem
-        // No llamamos a wait(l) en single-thread porque bloquearia.
-    }
+	synchronized (l) {
+		notify(l);    // OK: dentro del bloque synchronized
+		notifyAll(l); // OK: idem
+	// No llamamos a wait(l) en single-thread porque bloquearia.
+	}
 
-    return 42;
+	return 42;
 }

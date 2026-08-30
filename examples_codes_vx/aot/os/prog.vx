@@ -18,16 +18,16 @@ import "fat";
 
 // --- Servicios del kernel expuestos a los programas (via la tabla de API) ---
 void k_puts(char* s) {
-    term.tputs(s);
+	term.tputs(s);
 }
 void k_putc(u64 c) {
-    term.tputc(c);
+	term.tputc(c);
 }
 void k_dec(i64 v) {
-    term.tdec(v);
+	term.tdec(v);
 }
 u64 k_getline(u8* buf, u64 max) {
-    return term.read_line(buf, max);
+	return term.read_line(buf, max);
 }
 
 // Construye la tabla de API en 0x70000 (RAM libre) y devuelve su direccion.
@@ -35,37 +35,37 @@ u64 k_getline(u8* buf, u64 max) {
 // escrituras se ignoran y las lecturas devuelven la ROM.
 // Indices: [0]=puts [1]=putc [2]=dec [3]=getline.
 u64 api_build() {
-    u64* t = (u64*) 0x70000;
-    t[0] = (u64) k_puts;
-    t[1] = (u64) k_putc;
-    t[2] = (u64) k_dec;
-    t[3] = (u64) k_getline;
-    return 0x70000;
+	u64* t = (u64 *) 0x00070000;
+	t[0] = (u64) k_puts;
+	t[1] = (u64) k_putc;
+	t[2] = (u64) k_dec;
+	t[3] = (u64) k_getline;
+	return 0x00070000;
 }
 
 // Copia n bytes de src a dst (byte a byte; suficiente para cargar programas).
 void mcopy(u8* dst, u8* src, u64 n) {
-    u64 i = 0;
-    while (i < n) {
-        dst[i] = src[i];
-        i = i + 1;
-    }
+	u64 i = 0;
+	while (i < n) {
+		dst[i] = src[i];
+		i = i + 1;
+	}
 }
 
 // Busca un programa por nombre en la FAT.  Devuelve la direccion (en RAM) de
 // su entrada de root dir (32 bytes), o 0 si no existe.
 u64 prog_find(char* name) {
-    return fat.fat_find(name);
+	return fat.fat_find(name);
 }
 
 // Carga y ejecuta el programa de la entrada `ent` con la cadena `args`.
 // Devuelve el codigo de retorno del programa, o -1 si falla.
 i64 prog_exec(u64 ent, char* args) {
-    u8* dst = (u8*) 0x100000;                // EXEC_ADDR
-    u64 size = fat.fat_load(ent, dst);       // sigue la cadena de clusters
-    if (size == 0) { return -1; }
-    u64 api = api_build();
-    // Llamar al entry del programa: prog_main(api, args) en 0x100000.
-    i64 r = ((cfn(u64,u64)->i64) 0x100000)(api, (u64) args);
-    return r;
+	u8* dst  = (u8 *) 0x00100000;       // EXEC_ADDR
+	u64 size = fat.fat_load(ent, dst); // sigue la cadena de clusters
+	if (size == 0) { return -1; }
+	u64 api = api_build();
+	// Llamar al entry del programa: prog_main(api, args) en 0x100000.
+	i64 r   = ((cfn(u64, u64) -> i64) 0x00100000)(api, (u64) args);
+	return r;
 }

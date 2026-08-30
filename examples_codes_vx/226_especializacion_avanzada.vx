@@ -12,49 +12,51 @@ struct Inner<T> { T v; }
 
 // ---- ESPECIALIZACION DE CLASE --------------------------------------------
 class Lista<T> {
-    T v;
-    Lista(T x) { this.v = x; }
-    i64 cual() { return 1; }   // primario
+	T v;
+	Lista(T x) { this.v = x; }
+	i64 cual() { return 1; } // primario
 }
 class Lista<i64> {
-    i64 v;
-    i64 doble;                 // campo extra de la especializacion
-    Lista(i64 x) { this.v = x; this.doble = x + x; }
-    i64 cual() { return 2; }   // total i64
+	i64 v;
+	i64 doble; // campo extra de la especializacion
+	Lista(i64 x) { this.v = x;
+		this.doble = x + x; }
+	i64 cual() { return 2; } // total i64
 }
 
 // ---- ESPECIALIZACION DE FUNCION ------------------------------------------
 i64 rango<T>(T x) { return 10; }     // primario
 i64 rango<i64>(i64 x) { return 20; } // total i64
-i64 rango<T*>(T* x) { return 30; }   // parcial puntero
+i64 rango<T*>(T * x) { return 30; }  // parcial puntero
 
 // ---- PATRON GENERICO ANIDADO ---------------------------------------------
-struct Caja<T> { T v; i64 forma() { return 1; } }
-struct Caja<Inner<T>> {              // T se liga al type-arg del Inner concreto
-    Inner<T> w;
-    i64 forma() { return 2; }
+struct Caja<T> { T v;
+	i64 forma() { return 1; } }
+struct Caja<Inner<T>> { // T se liga al type-arg del Inner concreto
+	Inner<T> w;
+	i64 forma() { return 2; }
 }
 
 i32 main() {
-    // Clase: primario vs total (con campo extra `doble`).
-    Lista<i32> la = new Lista<i32>(3);   // primario -> 1
-    Lista<i64> lb = new Lista<i64>(8);   // total    -> 2, doble=16
+	// Clase: primario vs total (con campo extra `doble`).
+	Lista<i32> la = new Lista<i32>(3); // primario -> 1
+	Lista<i64> lb = new Lista<i64>(8); // total    -> 2, doble=16
 
-    // Funcion: primario / total / parcial.
-    i64 r1 = rango<i32>(5);              // primario -> 10
-    i64 r2 = rango<i64>(6);              // total    -> 20
-    i64* p = (i64*) malloc(8);
-    i64 r3 = rango<i64*>(p);             // parcial  -> 30
-    free(p);
+	// Funcion: primario / total / parcial.
+	i64        r1 = rango<i32>(5);            // primario -> 10
+	i64        r2 = rango<i64>(6);            // total    -> 20
+	i64*       p  = (i64 *) malloc(8);
+	i64        r3 = rango<i64*>(p); // parcial  -> 30
+	free(p);
 
-    // Struct con patron anidado.
-    Caja<i64> ca = {.v = 0};                  // primario -> 1
-    Inner<i64> inner = {.v = 0};
-    Caja<Inner<i64>> cb = {.w = inner};       // anidada  -> 2
+	// Struct con patron anidado.
+	Caja<i64>        ca    = {.v = 0}; // primario -> 1
+	Inner<i64>       inner = {.v = 0};
+	Caja<Inner<i64>> cb    = {.w = inner}; // anidada  -> 2
 
-    i64 total = la.cual() + lb.cual() + lb.doble +
-                r1 + r2 + r3 + ca.forma() + cb.forma();
-    // 1 + 2 + 16 + 10 + 20 + 30 + 1 + 2 = 82
-    println("la=${la.cual()} lb=${lb.cual()} doble=${lb.doble} r=${r1},${r2},${r3} ca=${ca.forma()} cb=${cb.forma()}");
-    return (i32)(total - 40);            // 82 - 40 = 42
+	i64 total = la.cual() + lb.cual() + lb.doble +
+		r1 + r2 + r3 + ca.forma() + cb.forma();
+	// 1 + 2 + 16 + 10 + 20 + 30 + 1 + 2 = 82
+	println("la=${la.cual()} lb=${lb.cual()} doble=${lb.doble} r=${r1},${r2},${r3} ca=${ca.forma()} cb=${cb.forma()}");
+	return (i32)(total - 40); // 82 - 40 = 42
 }

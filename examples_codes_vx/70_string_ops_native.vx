@@ -3,31 +3,34 @@ namespace ejemplos.string_ops_native;
 // Operadores nativos + cstring + encoding.
 
 i32 main() {
-    string a = "hola";
-    string b = " mundo";
-    string c = a + b;          // operator + nativo
+	string a = "hola";
+	string b = " mundo";
+	string c = a + b; // operator + nativo
 
-    print_cstr(c.cstr()); print("\n");
-    if (c.length() != 10) return 1;
+	print_cstr(c.cstr());
+	print("\n");
+	if (c.length() != 10) return 1;
 
-    string d = "hola";
-    if (a != d) return 2;
-    if (a == b) return 3;
+	string d = "hola";
+	if (a != d) return 2;
+	if (a == b) return 3;
 
-    cstring p = c.cstr();
-    print("via cstring: "); print_cstr(p); print("\n");
+	cstring p = c.cstr();
+	print("via cstring: ");
+	print_cstr(p);
+	print("\n");
 
-    // La codificacion vive en la FRONTERA, no en el tipo: un `string` es
-    // siempre una secuencia de code points (UTF-8 por dentro).  Para hablar
-    // con una API nativa se pide el buffer en la codificacion que esa API
-    // espera -- cstr() para UTF-8, wstr() para UTF-16.
-    u8* w = (u8*) c.wstr();
-    // "hola mundo" en UTF-16LE: 'h' = 0x68 seguido de un byte alto 0.
-    if (w[0] != 104) return 4;
-    if (w[1] != 0) return 5;
-    // El numero de code points es del string, no de su codificacion.
-    if (c.length() != 10) return 6;
+	// La codificacion vive en la FRONTERA, no en el tipo: un `string` es
+	// siempre una secuencia de code points (UTF-8 por dentro).  Para hablar
+	// con una API nativa se pide el buffer en la codificacion que esa API
+	// espera -- cstr() para UTF-8, wstr() para UTF-16.
+	u8* w = (u8 *) c.wstr();
+	// "hola mundo" en UTF-16LE: 'h' = 0x68 seguido de un byte alto 0.
+	if (w[0] != 104) return 4;
+	if (w[1] != 0) return 5;
+	// El numero de code points es del string, no de su codificacion.
+	if (c.length() != 10) return 6;
 
-    flush();
-    return 42;
+	flush();
+	return 42;
 }

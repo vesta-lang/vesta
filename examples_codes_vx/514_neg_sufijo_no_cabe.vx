@@ -6,6 +6,6 @@ namespace ejemplos.neg_sufijo_no_cabe;
 // y una decision se escribe: para eso esta el cast, `(u8) 300`.
 
 i32 main() {
-    u8 no = 300_u8;
-    return (i32) no;
+	u8 no = 300_u8;
+	return (i32) no;
 }

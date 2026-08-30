@@ -17,18 +17,18 @@ namespace ejemplos.escape_detection;
 // Esperado: R00 == 42.
 
 ArrayList make_list() {
-    ArrayList xs = arraylist(8);
-    xs.push(10);
-    xs.push(20);
-    xs.push(12);
-    return xs;   // xs escapa: NO auto-free aqui.
+	ArrayList xs = arraylist(8);
+	xs.push(10);
+	xs.push(20);
+	xs.push(12);
+	return xs; // xs escapa: NO auto-free aqui.
 }
 
 i32 main() {
-    ArrayList result = make_list();
-    // result tiene los 3 elementos pushed dentro de make_list.
-    i64 sum = result.get(0) + result.get(1) + result.get(2);
-    i32 r = sum;   // 10 + 20 + 12 = 42
-    // Al exit de main, el cleanup automatico libera result.
-    return r;
+	ArrayList result = make_list();
+	// result tiene los 3 elementos pushed dentro de make_list.
+	i64       sum    = result.get(0) + result.get(1) + result.get(2);
+	i32       r      = sum; // 10 + 20 + 12 = 42
+	// Al exit de main, el cleanup automatico libera result.
+	return r;
 }

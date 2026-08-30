@@ -18,32 +18,32 @@
 namespace ejemplos.array_local_reduccion;
 
 /// Suma los `n` primeros elementos de un bloque cualquiera.
-i64 suma(i64* d, i64 n)
-{
-    i64 a = 0;
-    i64 i = 0;
-    while (i < n) { a += d[i]; i++; }
-    return a;
+i64 suma(i64* d, i64 n) {
+	i64 a = 0;
+	i64 i = 0;
+	while (i < n) { a += d[i];
+		i++; }
+	return a;
 }
 
-i32 main()
-{
-    // (1) Array LOCAL con lista de inicializacion: vive en la pila de la VM.
-    i64[4] local = {10, 20, 30, 40};
-    i64 sl = 0;
-    i64 i = 0;
-    while (i < 4) { sl += local[i]; i++; }
+i32 main() {
+	// (1) Array LOCAL con lista de inicializacion: vive en la pila de la VM.
+	i64[4] local = {10, 20, 30, 40};
+	i64    sl    = 0;
+	i64    i     = 0;
+	while (i < 4) { sl += local[i];
+		i++; }
 
-    // (2) El mismo contenido en memoria del HOST.
-    i64* heap = malloc(32);
-    heap[0] = 10;
-    heap[1] = 20;
-    heap[2] = 30;
-    heap[3] = 40;
-    i64 sh = suma(heap, 4);
-    free(heap);
+	// (2) El mismo contenido en memoria del HOST.
+	i64* heap = malloc(32);
+	heap[0] = 10;
+	heap[1] = 20;
+	heap[2] = 30;
+	heap[3] = 40;
+	i64 sh = suma(heap, 4);
+	free(heap);
 
-    if (sl != 100) { return 1; }
-    if (sh != 100) { return 2; }
-    return 42;
+	if (sl != 100) { return 1; }
+	if (sh != 100) { return 2; }
+	return 42;
 }

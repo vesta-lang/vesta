@@ -9,9 +9,9 @@
 //
 // @expect 0x8877665544332211
 u64 main() {
-    register("rax") u64 v = 0x1122334455667788;
-    asm volatile {
-        bswap rax                        // v = byteswap(v)
-    };                                   // sin clobbers: bswap no toca flags
-    return v;                            // -> 0x8877665544332211
+	register("rax") u64 v = 0x1122334455667788;
+	asm volatile {
+		bswap rax // v = byteswap(v)
+	};            // sin clobbers: bswap no toca flags
+	return v;     // -> 0x8877665544332211
 }

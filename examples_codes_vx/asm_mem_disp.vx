@@ -6,22 +6,22 @@
 //     vm --vx asm_mem_disp.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-    i64* p = malloc(64);
-    register("rbx") i64* base = p;
+	i64*                 p    = malloc(64);
+	register("rbx") i64 *base = p;
 
-    // store con desplazamiento: [base + 8] = 0x1000 + 42 (byte bajo = 42).
-    register("rax") u64 val = 0x102A;
-    asm { mov [rbx + 8], rax };
+	// store con desplazamiento: [base + 8] = 0x1000 + 42 (byte bajo = 42).
+	register("rax") u64  val  = 0x102A;
+	asm { mov [rbx + 8], rax };
 
-    // movzx de 1 byte con desplazamiento: carga el byte bajo (0x2A = 42).
-    register("rcx") u64 lo = 0;
-    asm { movzx rcx, byte ptr [rbx + 8] };   // rcx = 0x2A
+	// movzx de 1 byte con desplazamiento: carga el byte bajo (0x2A = 42).
+	register("rcx") u64 lo = 0;
+	asm { movzx rcx, byte ptr [rbx + 8] }; // rcx = 0x2A
 
-    // load con desplazamiento (qword completo) para comprobar el store.
-    register("rdx") u64 full = 0;
-    asm { mov rdx, [rbx + 8] };               // rdx = 0x102A
+	// load con desplazamiento (qword completo) para comprobar el store.
+	register("rdx") u64 full = 0;
+	asm { mov rdx, [rbx + 8] }; // rdx = 0x102A
 
-    free(p);
-    // lo = 42, full = 0x102A.  full - lo - 0x1000 = 0x102A - 0x2A - 0x1000 = 0.
-    return lo + (full - full);                // 42
+	free(p);
+	// lo = 42, full = 0x102A.  full - lo - 0x1000 = 0x102A - 0x2A - 0x1000 = 0.
+	return lo + (full - full); // 42
 }

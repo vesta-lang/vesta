@@ -14,34 +14,42 @@ namespace ejemplos.string_basico;
 // Resultado esperado: R0 = 42 (todas las validaciones pasan).
 
 i32 main() {
-    string s = "hola";
-    string t = " mundo";
+	string s = "hola";
+	string t = " mundo";
 
-    println("=== test strings ===");
+	println("=== test strings ===");
 
-    // length() en code points (4 ASCII = 4).
-    i64 n = s.length();
-    print("length: "); print_int(n); print("\n");
-    if (n != 4) return 1;
+	// length() en code points (4 ASCII = 4).
+	i64 n = s.length();
+	print("length: ");
+	print_int(n);
+	print("\n");
+	if (n != 4) return 1;
 
-    // bytes() raw (4 bytes para ASCII puro).
-    i64 b = s.bytes();
-    print("bytes:  "); print_int(b); print("\n");
-    if (b != 4) return 2;
+	// bytes() raw (4 bytes para ASCII puro).
+	i64 b = s.bytes();
+	print("bytes:  ");
+	print_int(b);
+	print("\n");
+	if (b != 4) return 2;
 
-    // cstr() host pointer + print_cstr.
-    print("cstr:   "); print_cstr(s.cstr()); print("\n");
+	// cstr() host pointer + print_cstr.
+	print("cstr:   ");
+	print_cstr(s.cstr());
+	print("\n");
 
-    // concat: "hola" + " mundo" = "hola mundo" (10 bytes).
-    string u = s.concat(t);
-    print("concat: "); print_cstr(u.cstr()); print("\n");
-    if (u.length() != 10) return 3;
+	// concat: "hola" + " mundo" = "hola mundo" (10 bytes).
+	string u = s.concat(t);
+	print("concat: ");
+	print_cstr(u.cstr());
+	print("\n");
+	if (u.length() != 10) return 3;
 
-    // equals: "hola" == "hola" via str_make recreando el buffer.
-    string s2 = "hola";
-    if (!s.equals(s2)) return 4;
-    if (s.equals(t)) return 5;
+	// equals: "hola" == "hola" via str_make recreando el buffer.
+	string s2 = "hola";
+	if (!s.equals(s2)) return 4;
+	if (s.equals(t)) return 5;
 
-    flush();
-    return 42;
+	flush();
+	return 42;
 }

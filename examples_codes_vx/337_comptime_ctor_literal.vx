@@ -21,36 +21,36 @@ namespace ctcl;
 
 /** @brief Par de enteros construido en tiempo de compilacion desde un `i64`. */
 struct Par {
-    i64 a;
-    i64 b;
+	i64 a;
+	i64 b;
 
-    /**
-     * @brief Constructor comptime: deriva ambos campos del argumento.
-     * @param x Semilla del par (a = x, b = 2*x).
-     */
-    comptime Par(i64 x) {
-        this.a = x;
-        this.b = x * 2;
-    }
+	/**
+	 * @brief Constructor comptime: deriva ambos campos del argumento.
+	 * @param x Semilla del par (a = x, b = 2*x).
+	 */
+	comptime Par(i64 x) {
+		this.a = x;
+		this.b = x * 2;
+	}
 }
 
 /** @brief Token que guarda la longitud del texto literal que lo construyo. */
 struct Tok {
-    i64 len;
+	i64 len;
 
-    /**
-     * @brief Constructor comptime: mide el texto crudo capturado.
-     * @param t Texto del literal del call site (parametro `expr`).
-     */
-    comptime Tok(expr t) {
-        this.len = t.length();
-    }
+	/**
+	 * @brief Constructor comptime: mide el texto crudo capturado.
+	 * @param t Texto del literal del call site (parametro `expr`).
+	 */
+	comptime Tok(expr t) {
+		this.len = t.length();
+	}
 }
 
 i32 main() {
-    Par p = Par(19);    // materializado: a = 19, b = 38
-    Tok k = Tok(hola);  // captura "hola" -> len = 4
+	Par p = Par(19);   // materializado: a = 19, b = 38
+	Tok k = Tok(hola); // captura "hola" -> len = 4
 
-    // 19 - 4 + 38 - 11 = 42
-    return (i32) (p.a - k.len + p.b - 11);
+	// 19 - 4 + 38 - 11 = 42
+	return (i32)(p.a - k.len + p.b - 11);
 }

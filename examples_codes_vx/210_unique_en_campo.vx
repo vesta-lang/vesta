@@ -13,26 +13,26 @@ class Counter { public static i64 liberados; }
 
 // Deleter personalizado: cuenta cada liberacion del recurso.
 void mi_deleter(i64 recurso) {
-    Counter.liberados = Counter.liberados + 1;
+	Counter.liberados = Counter.liberados + 1;
 }
 
 // Contenedor con un recurso de lifetime no-C, propiedad del objeto.
 class Conexion {
-    // El CAMPO dice quien libera.  Un campo no puede adoptarlo del
-    // inicializador como hace una variable local: su tipo esta fijado en la
-    // declaracion del contenedor, y el destructor tiene que saber a quien
-    // llamar mirando solo eso.
-    unique<i64, mi_deleter> handle;
+	// El CAMPO dice quien libera.  Un campo no puede adoptarlo del
+	// inicializador como hace una variable local: su tipo esta fijado en la
+	// declaracion del contenedor, y el destructor tiene que saber a quien
+	// llamar mirando solo eso.
+	unique<i64, mi_deleter> handle;
 }
 
 void abrir_y_cerrar(i64 fd) {
-    Conexion c = new Conexion();
-    c.handle = unique_with(fd, mi_deleter);
-}   // c sale de scope -> ~Conexion() -> mi_deleter(fd): un solo cierre
+	Conexion c = new Conexion();
+	c.handle = unique_with(fd, mi_deleter);
+} // c sale de scope -> ~Conexion() -> mi_deleter(fd): un solo cierre
 
 i32 main() {
-    Counter.liberados = 0;
-    abrir_y_cerrar(10);
-    abrir_y_cerrar(20);   // dos recursos adquiridos y liberados deterministicamente
-    return (i32)(40 + Counter.liberados);   // 40 + 2 = 42
+	Counter.liberados = 0;
+	abrir_y_cerrar(10);
+	abrir_y_cerrar(20); // dos recursos adquiridos y liberados deterministicamente
+	return (i32)(40 + Counter.liberados); // 40 + 2 = 42
 }

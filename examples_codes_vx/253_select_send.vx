@@ -6,63 +6,63 @@
 // salen cuando su canal esta cerrado y drenado (recv devuelve 0).
 import std.pool only pool_start, pool_submit, pool_join;
 import std.chan only Chan, chan_new, chan_recv, chan_close,
-                     chan_is_closed, chan_free, chan_select_send_block;
+chan_is_closed, chan_free, chan_select_send_block;
 
 Chan c0;
 Chan c1;
-i64 g_s0 = 0;   // suma recibida por el canal 0
-i64 g_s1 = 0;   // suma recibida por el canal 1
-i64 g_n0 = 0;   // conteo recibido por el canal 0
-i64 g_n1 = 0;   // conteo recibido por el canal 1
-const i64 M = 300;
+      i64 g_s0 = 0; // suma recibida por el canal 0
+      i64 g_s1 = 0; // suma recibida por el canal 1
+      i64 g_n0 = 0; // conteo recibido por el canal 0
+      i64 g_n1 = 0; // conteo recibido por el canal 1
+const i64 M    = 300;
 
 void sender(i64 a) {
-    Chan[2] chans;
-    chans[0] = c0;
-    chans[1] = c1;
-    i64[2] vals;
-    for (i64 k = 0; k < M; k++) {
-        vals[0] = k + 1;
-        vals[1] = k + 1;               // mismo valor, va a uno u otro canal
-        chan_select_send_block(&chans[0], &vals[0], 2);
-    }
-    chan_close(c0);
-    chan_close(c1);
+	Chan[2] chans;
+	chans[0] = c0;
+	chans[1] = c1;
+	i64[2] vals;
+	for (i64 k = 0; k < M; k++) {
+		vals[0] = k + 1;
+		vals[1] = k + 1; // mismo valor, va a uno u otro canal
+		chan_select_send_block(&chans[0], &vals[0], 2);
+	}
+	chan_close(c0);
+	chan_close(c1);
 }
 void recv0(i64 a) {
-    while (true) {
-        i64 v = chan_recv(c0);
-        if (v == 0 && chan_is_closed(c0)) {
-            break;                     // cerrado y drenado
-        }
-        g_s0 += v;
-        g_n0 += 1;
-    }
+	while (true) {
+		i64 v = chan_recv(c0);
+		if (v == 0 && chan_is_closed(c0)) {
+			break; // cerrado y drenado
+		}
+		g_s0 += v;
+		g_n0 += 1;
+	}
 }
 void recv1(i64 a) {
-    while (true) {
-        i64 v = chan_recv(c1);
-        if (v == 0 && chan_is_closed(c1)) {
-            break;
-        }
-        g_s1 += v;
-        g_n1 += 1;
-    }
+	while (true) {
+		i64 v = chan_recv(c1);
+		if (v == 0 && chan_is_closed(c1)) {
+			break;
+		}
+		g_s1 += v;
+		g_n1 += 1;
+	}
 }
 i32 main() {
-    c0 = chan_new(1);
-    c1 = chan_new(1);
-    pool_start(3);
-    pool_submit((i64)(cfn(i64) -> void) recv0, 0);
-    pool_submit((i64)(cfn(i64) -> void) recv1, 0);
-    pool_submit((i64)(cfn(i64) -> void) sender, 0);
-    pool_join();
-    chan_free(c0);
-    chan_free(c1);
-    // suma total = 1+2+...+M = M*(M+1)/2; conteo total = M.
-    i64 want_sum = M * (M + 1) / 2;
-    if ((g_s0 + g_s1) == want_sum && (g_n0 + g_n1) == M) {
-        return 42;
-    }
-    return 1;
+	c0 = chan_new(1);
+	c1 = chan_new(1);
+	pool_start(3);
+	pool_submit((i64)(cfn(i64) -> void) recv0, 0);
+	pool_submit((i64)(cfn(i64) -> void) recv1, 0);
+	pool_submit((i64)(cfn(i64) -> void) sender, 0);
+	pool_join();
+	chan_free(c0);
+	chan_free(c1);
+	// suma total = 1+2+...+M = M*(M+1)/2; conteo total = M.
+	i64 want_sum = M * (M + 1) / 2;
+	if ((g_s0 + g_s1) == want_sum && (g_n0 + g_n1) == M) {
+		return 42;
+	}
+	return 1;
 }

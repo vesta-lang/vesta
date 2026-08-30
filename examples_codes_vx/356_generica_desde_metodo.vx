@@ -13,21 +13,21 @@
  * El caso comprueba la misma llamada por los dos caminos: desde `main` y desde
  * un metodo.
  */
-void copia<T>(T x, T* out) { (*out) = x; }
+void copia<T>(T x, T * out) { (*out) = x; }
 struct Caja {
-    u64 v;
-    public u64 desde_metodo() {
-        u64 r = 0;
-        copia(this.v, &r);          // generica llamada DESDE UN METODO
-        return r;
-    }
+	u64 v;
+	public u64 desde_metodo() {
+		u64 r = 0;
+		copia(this.v, &r); // generica llamada DESDE UN METODO
+		return r;
+	}
 }
 i32 main() {
-    u64 src = 7;
-    u64 z = 0;
-    copia(src, &z);                  // generica llamada desde main
-    if (z != 7) { return 1; }
-    Caja c;
-    c.v = 35;
-    return (i32)(z + c.desde_metodo());   // 42
+	u64 src = 7;
+	u64 z   = 0;
+	copia(src, &z); // generica llamada desde main
+	if (z != 7) { return 1; }
+	Caja c;
+	c.v = 35;
+	return (i32)(z + c.desde_metodo()); // 42
 }

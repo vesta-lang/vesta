@@ -4,46 +4,46 @@
 // sobre el scheduler M:N de fibras.
 import std.pool only pool_start, pool_submit, pool_join;
 import std.chan only Chan, chan_new, chan_send, chan_recv,
-                     chan_close, chan_is_closed, chan_free;
+chan_close, chan_is_closed, chan_free;
 
 Chan g_ch;
-i64 g_sum = 0;
+i64 g_sum   = 0;
 i64 g_count = 0;
-i64 g_n = 50;
+i64 g_n     = 50;
 
 void producer(i64 arg) {
-    i64 i = 0;
-    while (i < g_n) {
-        chan_send(g_ch, i + 1);   // envia 1..50
-        i = i + 1;
-    }
-    chan_close(g_ch);             // senal de fin: no habra mas datos
+	i64 i = 0;
+	while (i < g_n) {
+		chan_send(g_ch, i + 1); // envia 1..50
+		i = i + 1;
+	}
+	chan_close(g_ch); // senal de fin: no habra mas datos
 }
 
 void consumer(i64 arg) {
-    i64 s = 0;
-    i64 c = 0;
-    // Recibir hasta que el canal este CERRADO y DRENADO.  Los valores enviados
-    // son 1..50 (nunca 0), asi que recv==0 solo ocurre en canal cerrado+vacio.
-    while (true) {
-        i64 v = chan_recv(g_ch);
-        if (v == 0 && chan_is_closed(g_ch)) {
-            break;                   // cerrado + drenado
-        }
-        s = s + v;
-        c = c + 1;
-    }
-    g_sum = s;
-    g_count = c;
+	i64 s = 0;
+	i64 c = 0;
+	// Recibir hasta que el canal este CERRADO y DRENADO.  Los valores enviados
+	// son 1..50 (nunca 0), asi que recv==0 solo ocurre en canal cerrado+vacio.
+	while (true) {
+		i64 v = chan_recv(g_ch);
+		if (v == 0 && chan_is_closed(g_ch)) {
+			break; // cerrado + drenado
+		}
+		s = s + v;
+		c = c + 1;
+	}
+	g_sum   = s;
+	g_count = c;
 }
 
 i32 main() {
-    g_ch = chan_new(4);           // buffer pequeno -> fuerza park/wake real
-    pool_start(2);
-    pool_submit((i64)(cfn(i64) -> void) consumer, 0);
-    pool_submit((i64)(cfn(i64) -> void) producer, 0);
-    pool_join();
-    chan_free(g_ch);
-    // sum(1..50) = 1275, count = 50 -> 42 si ambos correctos.
-    return (g_sum == 1275 && g_count == 50) ? 42 : (i32) g_sum;
+	g_ch = chan_new(4); // buffer pequeno -> fuerza park/wake real
+	pool_start(2);
+	pool_submit((i64)(cfn(i64) -> void) consumer, 0);
+	pool_submit((i64)(cfn(i64) -> void) producer, 0);
+	pool_join();
+	chan_free(g_ch);
+	// sum(1..50) = 1275, count = 50 -> 42 si ambos correctos.
+	return (g_sum == 1275 && g_count == 50) ? 42 : (i32) g_sum;
 }

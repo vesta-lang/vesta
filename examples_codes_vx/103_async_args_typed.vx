@@ -25,53 +25,53 @@ namespace ejemplos.async_args_typed;
 
 // Caso 1: dos args i32, retorno i32.
 @Async
-i32 sum_i32(i32 a, i32 b) {
-    return a + b;
+	i32 sum_i32(i32 a, i32 b) {
+	return a + b;
 }
 
 // Caso 2: tres args i64, retorno i64.
 @Async
-i64 sum_three(i64 a, i64 b, i64 c) {
-    return a + b + c;
+	i64 sum_three(i64 a, i64 b, i64 c) {
+	return a + b + c;
 }
 
 // Caso 3: arg con coercion (mezcla de tipos).
 @Async
-i32 combine(i32 base, i32 mult) {
-    i32 r = base * mult;
-    return r + 1;
+	i32 combine(i32 base, i32 mult) {
+	i32 r = base * mult;
+	return r + 1;
 }
 
 // Caso 4: retorno bool.
 @Async
-bool is_even(i32 n) {
-    return n % 2 == 0;
+	bool is_even(i32 n) {
+	return n % 2 == 0;
 }
 
 i32 main() {
-    // Caso 1: 10 + 15 = 25
-    Future<i32> f1 = sum_i32(10, 15);
-    i32 r1 = await f1;
-    if (r1 != 25) return 100 + r1;
+	// Caso 1: 10 + 15 = 25
+	Future<i32> f1 = sum_i32(10, 15);
+	i32         r1 = await f1;
+	if (r1 != 25) return 100 + r1;
 
-    // Caso 2: 100 + 200 + 300 = 600
-    Future<i64> f2 = sum_three(100, 200, 300);
-    i64 r2 = await f2;
-    if (r2 != 600) return 200;
+	// Caso 2: 100 + 200 + 300 = 600
+	Future<i64> f2 = sum_three(100, 200, 300);
+	i64         r2 = await f2;
+	if (r2 != 600) return 200;
 
-    // Caso 3: 4 * 3 + 1 = 13
-    Future<i32> f3 = combine(4, 3);
-    i32 r3 = await f3;
-    if (r3 != 13) return 300 + r3;
+	// Caso 3: 4 * 3 + 1 = 13
+	Future<i32> f3 = combine(4, 3);
+	i32         r3 = await f3;
+	if (r3 != 13) return 300 + r3;
 
-    // Caso 4: is_even(8) -> true
-    Future<bool> f4 = is_even(8);
-    bool r4 = await f4;
-    if (!r4) return 400;
+	// Caso 4: is_even(8) -> true
+	Future<bool> f4 = is_even(8);
+	bool         r4 = await f4;
+	if (!r4) return 400;
 
-    // 25 + 600 (cast a i32 = 600) + 13 + 1 (true) - 597 = 42
-    i32 total = r1 + 13 + 1;       // 25 + 13 + 1 = 39
-    if (r4) total = total + 3;     // 39 + 3 = 42
-    println("${total}");
-    return total;
+	// 25 + 600 (cast a i32 = 600) + 13 + 1 (true) - 597 = 42
+	i32     total = r1 + 13 + 1;   // 25 + 13 + 1 = 39
+	if (r4) total = total + 3; // 39 + 3 = 42
+	println("${total}");
+	return total;
 }

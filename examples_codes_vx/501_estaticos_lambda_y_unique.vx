@@ -20,59 +20,59 @@ namespace ejemplos.estaticos_lambda_y_unique;
 // mismo sitio que decide todo lo demas, y son ocho.
 
 class Fabrica {
-    // Devuelve un lambda: su ranura son dos palabras (la funcion y su entorno).
-    public static fn(i64) -> i64 doblador() {
-        return (i64 x) => x * 2;
-    }
+	// Devuelve un lambda: su ranura son dos palabras (la funcion y su entorno).
+	public static fn(i64) -> i64 doblador() {
+		return (i64 x) => x * 2;
+	}
 
-    // Devuelve un puntero inteligente: la ranura de un `unique` son dos
-    // palabras (el puntero y quien lo libera); la de un `shared`, una sola.
-    public static unique<i64> caja(i64 v) {
-        unique<i64> u = unique_box(v);
-        return u;
-    }
+	// Devuelve un puntero inteligente: la ranura de un `unique` son dos
+	// palabras (el puntero y quien lo libera); la de un `shared`, una sola.
+	public static unique<i64> caja(i64 v) {
+		unique<i64> u = unique_box(v);
+		return u;
+	}
 
-    public static shared<i64> compartida(i64 v) {
-        shared<i64> s = shared_box(v);
-        return s;
-    }
+	public static shared<i64> compartida(i64 v) {
+		shared<i64> s = shared_box(v);
+		return s;
+	}
 }
 
 struct FabricaS {
-    public static fn(i64) -> i64 triplicador() {
-        return (i64 x) => x * 3;
-    }
+	public static fn(i64) -> i64 triplicador() {
+		return (i64 x) => x * 3;
+	}
 
-    public static unique<i64> caja(i64 v) {
-        unique<i64> u = unique_box(v);
-        return u;
-    }
+	public static unique<i64> caja(i64 v) {
+		unique<i64> u = unique_box(v);
+		return u;
+	}
 }
 
 i32 main() {
-    // El argumento de verdad va detras del buffer oculto: si el buffer no se
-    // pasa, es lo primero que el metodo pisa.  Por eso se llama con valores
-    // distintos de cero y se comprueban.
-    const i64 centinela = 555;
+	// El argumento de verdad va detras del buffer oculto: si el buffer no se
+	// pasa, es lo primero que el metodo pisa.  Por eso se llama con valores
+	// distintos de cero y se comprueban.
+	const i64            centinela = 555;
 
-    // Lambda devuelto desde un metodo estatico, por los dos caminos.
-    fn(i64) -> i64 doble = Fabrica.doblador();
-    fn(i64) -> i64 triple = FabricaS.triplicador();
-    const i64 a = doble(10);  // 20
-    const i64 b = triple(10); // 30
+	// Lambda devuelto desde un metodo estatico, por los dos caminos.
+	      fn(i64) -> i64 doble     = Fabrica.doblador();
+	      fn(i64) -> i64 triple    = FabricaS.triplicador();
+	const i64            a         = doble(10);  // 20
+	const i64            b         = triple(10); // 30
 
-    // Punteros inteligentes devueltos desde un metodo estatico.
-    unique<i64> u1 = Fabrica.caja(11);
-    unique<i64> u2 = FabricaS.caja(12);
-    shared<i64> s1 = Fabrica.compartida(13);
+	// Punteros inteligentes devueltos desde un metodo estatico.
+	      unique<i64>    u1        = Fabrica.caja(11);
+	      unique<i64>    u2        = FabricaS.caja(12);
+	      shared<i64>    s1        = Fabrica.compartida(13);
 
-    const i64 c = *ptr_of(u1); // 11
-    const i64 d = *ptr_of(u2); // 12
-    const i64 e = *ptr_of(s1); // 13
+	const i64 c = *ptr_of(u1); // 11
+	const i64 d = *ptr_of(u2); // 12
+	const i64 e = *ptr_of(s1); // 13
 
-    println("lambda=${a},${b} unique=${c},${d} shared=${e} centinela=${centinela}");
+	println("lambda=${a},${b} unique=${c},${d} shared=${e} centinela=${centinela}");
 
-    // 20 + 30 + 11 + 12 + 13 + 555 = 641
-    const i64 total = a + b + c + d + e + centinela;
-    return (i32) (total - 599); // 42
+	// 20 + 30 + 11 + 12 + 13 + 555 = 641
+	const i64 total = a + b + c + d + e + centinela;
+	return (i32)(total - 599); // 42
 }

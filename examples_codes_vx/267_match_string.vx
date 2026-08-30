@@ -22,24 +22,24 @@
 // strcmp los desambigua.  "PATCH" (5) no coincide con ninguna longitud -> default
 // directo, sin strcmp.
 i32 metodo(string m) {
-    match (m) {
-        case "GET"     => return 1;
-        case "POST"    => return 2;
-        case "PUT"     => return 3;
-        case "DELETE"  => return 4;
-        case "OPTIONS" => return 5;
-        case _         => return 0;   // desconocido (obligatorio)
-    }
-    return -1;   // inalcanzable
+	match (m) {
+		case "GET"     => return 1;
+		case "POST"    => return 2;
+		case "PUT"     => return 3;
+		case "DELETE"  => return 4;
+		case "OPTIONS" => return 5;
+		case _         => return 0; // desconocido (obligatorio)
+	}
+	return -1; // inalcanzable
 }
 
 i32 main() {
-    println("GET=${metodo("GET")} PUT=${metodo("PUT")} POST=${metodo("POST")}");
-    println("DELETE=${metodo("DELETE")} OPTIONS=${metodo("OPTIONS")}");
-    println("PATCH=${metodo("PATCH")}");   // 0 (longitud 5 no listada como tal)
+	println("GET=${metodo("GET")} PUT=${metodo("PUT")} POST=${metodo("POST")}");
+	println("DELETE=${metodo("DELETE")} OPTIONS=${metodo("OPTIONS")}");
+	println("PATCH=${metodo("PATCH")}"); // 0 (longitud 5 no listada como tal)
 
-    // 1 + 30 + 200 + 4000 + 50000 + 0 = 54231
-    return metodo("GET") + metodo("PUT")*10 + metodo("POST")*100
-         + metodo("DELETE")*1000 + metodo("OPTIONS")*10000
-         + metodo("PATCH")*100000;
+	// 1 + 30 + 200 + 4000 + 50000 + 0 = 54231
+	return metodo("GET") + metodo("PUT") * 10 + metodo("POST") * 100
+		+ metodo("DELETE") * 1000 + metodo("OPTIONS") * 10_000
+		+ metodo("PATCH") * 100_000;
 }

@@ -16,29 +16,31 @@ namespace ejemplos.naked_call_from_normal;
 //   vm -m aot --vx 231_naked_call_from_normal.vx --format pe -o p.exe && ./p.exe  (exit 42)
 
 @Target("!os:windows")
-@Naked u64 add_asm(u64 a, u64 b) {
-    asm volatile noinfer {
-        mov rax, rdi
-        add rax, rsi
-        ret
-    }
+	@Naked
+u64 add_asm(u64 a, u64 b) {
+	asm volatile noinfer {
+		mov rax, rdi
+		add rax, rsi
+		ret
+	}
 }
 @Target("os:windows")
-@Naked u64 add_asm(u64 a, u64 b) {
-    asm volatile noinfer {
-        mov rax, rcx
-        add rax, rdx
-        ret
-    }
+	@Naked
+u64 add_asm(u64 a, u64 b) {
+	asm volatile noinfer {
+		mov rax, rcx
+		add rax, rdx
+		ret
+	}
 }
 
 // Funcion  NORMAL (con prologo/epilogo del compilador) que llama al @Naked.
 u64 compute(u64 x, u64 y) {
-    u64 r = add_asm(x, y);
-    return r;
+	u64 r = add_asm(x, y);
+	return r;
 }
 
 i32 main() {
-    u64 r = compute(19, 23);   // 42
-    return (i32)r;
+	u64 r = compute(19, 23); // 42
+	return (i32)r;
 }

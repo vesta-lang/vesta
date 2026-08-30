@@ -18,11 +18,11 @@ namespace ejemplos.vectorize_scalar_factor;
 // =============================================================================
 
 i64 main() {
-    f64* a = malloc(400);
-    f64 c = 3.0;
-    for (i32 i = 0; i < 50; i++) { a[i] = (f64)(i + 1); }
-    f64 acc = 0.0;
-    for (i32 i = 0; i < 50; i++) { acc = acc + a[i] * c; } // -> VFMADD con bcast
-    free(a);
-    return (i64) acc;   // c * sum(1..50) = 3 * 1275 = 3825
+	f64* a = malloc(400);
+	f64  c = 3.0;
+	for (i32 i = 0; i < 50; i++) { a[i] = (f64)(i + 1); }
+	f64 acc = 0.0;
+	for (i32 i = 0; i < 50; i++) { acc = acc + a[i] * c; } // -> VFMADD con bcast
+	free(a);
+	return (i64) acc; // c * sum(1..50) = 3 * 1275 = 3825
 }

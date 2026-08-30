@@ -15,15 +15,15 @@ namespace ejemplos.comptime_anchos;
 // bits para que se vea que tampoco se recorta de mas.
 
 comptime i16 c_i16(i16 x) { return x; }
-comptime u8  c_u8(u8 x)  { return x; }
+comptime u8 c_u8(u8 x) { return x; }
 comptime i32 c_i32(i32 x) { return x; }
 comptime i16 c_neg(i16 x) { return x; }
 i32 main() {
-    const i16 a = c_i16(30000);
-    const u8  b = c_u8(200);
-    const i32 c = c_i32(-70000);
-    const i16 d = c_neg(-30000);
-    println("i16=${a} u8=${b} i32=${c} neg=${d}");
-    // 30000 + 200 - 70000 + (-30000) = -69800
-    return (i32) (a + (i16) b + c + d + 69842);   // 42
+	const i16 a = c_i16(30_000);
+	const u8  b = c_u8(200);
+	const i32 c = c_i32(-70_000);
+	const i16 d = c_neg(-30_000);
+	println("i16=${a} u8=${b} i32=${c} neg=${d}");
+	// 30000 + 200 - 70000 + (-30000) = -69800
+	return (i32)(a + (i16) b + c + d + 69_842); // 42
 }

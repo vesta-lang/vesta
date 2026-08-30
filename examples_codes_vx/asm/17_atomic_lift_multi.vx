@@ -14,17 +14,17 @@
 namespace ejemplos.asmlift_multi;
 i64 g = 100;
 i64 main() {
-    // compare-and-swap con el esperado en un registro DISTINTO de rax: el asm
-    // lo mueve a rax justo antes del cmpxchg (patron habitual del codigo real).
-    register("rdi") u64* p = (u64*)&g;
-    register("rsi") u64 des = 200;
-    register("rdx") u64 exp = 100; // expected (explicito, via mov rax, rdx)
-    register("rax") u64 old = 0;    // out: old value
-    asm {
-        mov rax, rdx
-        lock cmpxchg [rdi], rsi
-    } clobbers("flags");
+	// compare-and-swap con el esperado en un registro DISTINTO de rax: el asm
+	// lo mueve a rax justo antes del cmpxchg (patron habitual del codigo real).
+	register("rdi") u64 *p   = (u64 *) & g;
+	register("rsi") u64  des = 200;
+	register("rdx") u64  exp = 100; // expected (explicito, via mov rax, rdx)
+	register("rax") u64  old = 0;   // out: old value
+	asm {
+		mov rax, rdx
+		lock cmpxchg [rdi], rsi
+	} clobbers("flags");
 
-    if (old == 100 && g == 200) { return 42; }
-    return old;
+	if (old == 100 && g == 200) { return 42; }
+	return old;
 }

@@ -28,47 +28,49 @@ namespace ejemplos.extension_impl;
 // con CERO, UNO, DOS y TRES parametros, sobre un struct y sobre una clase, y
 // las dos formas de `impl` sobre el mismo tipo.
 
-struct Punto { i64 x; i64 y; }
+struct Punto { i64 x;
+	i64 y; }
 
 class Caja {
-    public i64 v;
-    public Caja(i64 n) { this.v = n; }
+	public i64 v;
+	public Caja(i64 n) { this.v = n; }
 }
 
 concept Sumable<T> = true;
 
 // Sobre un struct: el numero de parametros es justo lo que se rompia.
 impl Punto {
-    i64 cero() { return this.y; }
-    i64 uno(i64 a) { return this.x + a; }
-    i64 dos(i64 a, i64 b) { return this.x + this.y + a + b; }
-    i64 tres(i64 a, i64 b, i64 c) { return this.x + a + b + c; }
+	i64 cero() { return this.y; }
+	i64 uno(i64 a) { return this.x + a; }
+	i64 dos(i64 a, i64 b) { return this.x + this.y + a + b; }
+	i64 tres(i64 a, i64 b, i64 c) { return this.x + a + b + c; }
 }
 
 // Sobre una CLASE: otra rama, mismo mecanismo.
 impl Caja {
-    i64 mas(i64 a, i64 b, i64 c) { return this.v + a + b + c; }
+	i64 mas(i64 a, i64 b, i64 c) { return this.v + a + b + c; }
 }
 
 // La otra forma de anadir metodos, atada a un concepto.
 impl Sumable for Punto {
-    i64 total(i64 k) { return this.x + this.y + k; }
+	i64 total(i64 k) { return this.x + this.y + k; }
 }
 
 i32 main() {
-    Punto p;
-    p.x = 10; p.y = 20;
-    Caja k = new Caja(1);
+	Punto p;
+	p.x = 10;
+	p.y = 20;
+	Caja k = new Caja(1);
 
-    i64 a = p.cero();          // 20
-    i64 b = p.uno(2);          // 12
-    i64 c = p.dos(5, 7);       // 42
-    i64 d = p.tres(1, 2, 3);   // 16
-    i64 e = k.mas(2, 3, 4);    // 10
-    i64 f = p.total(3);        // 33
+	i64 a = p.cero();        // 20
+	i64 b = p.uno(2);        // 12
+	i64 c = p.dos(5, 7);     // 42
+	i64 d = p.tres(1, 2, 3); // 16
+	i64 e = k.mas(2, 3, 4);  // 10
+	i64 f = p.total(3); // 33
 
-    println("cero=${a} uno=${b} dos=${c} tres=${d} clase=${e} impl=${f}");
+	println("cero=${a} uno=${b} dos=${c} tres=${d} clase=${e} impl=${f}");
 
-    // 20 + 12 + 42 + 16 + 10 + 33 = 133
-    return (i32) (a + b + c + d + e + f - 91);   // 42
+	// 20 + 12 + 42 + 16 + 10 + 33 = 133
+	return (i32)(a + b + c + d + e + f - 91); // 42
 }

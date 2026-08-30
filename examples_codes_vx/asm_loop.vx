@@ -5,21 +5,21 @@
 //     vm --vx asm_loop.vx -o l && vm --run l.velb
 // @expect 42
 u64 sum_to(u64 n) {
-    register("rax") u64 s = 0;
-    register("rcx") u64 i = n;
-    asm {
-    loop:
-        add rax, rcx
-        dec rcx
-        cmp rcx, 0
-        jg loop
-    };
-    return s;   // n + (n-1) + ... + 1
+	register("rax") u64 s = 0;
+	register("rcx") u64 i = n;
+	asm {
+		loop:
+		    add rax, rcx
+		    dec rcx
+		    cmp rcx, 0
+		    jg loop
+	};
+	return s; // n + (n-1) + ... + 1
 }
 u64 main() {
-    u64 ok = 1;
-    if (sum_to(5) != 15) ok = 0;    // 5+4+3+2+1
-    if (sum_to(10) != 55) ok = 0;
-    if (sum_to(1) != 1) ok = 0;
-    return (ok == 1) ? 42 : 0;
+	u64                   ok = 1;
+	if (sum_to(5) != 15)  ok = 0; // 5+4+3+2+1
+	if (sum_to(10) != 55) ok = 0;
+	if (sum_to(1) != 1)   ok = 0;
+	return (ok == 1) ? 42 : 0;
 }

@@ -11,24 +11,24 @@
 import std.wideint only u128;
 
 i32 main() {
-    // Hexadecimal con los dos limbs separados a ojo.
-    u128 h = u128(0xFFFFFFFFFFFFFFFF_FFFFFFFFFFFFFFFF);
-    if (h.lo64 != 18446744073709551615) { return 1; }
-    if (h.hi64 != 18446744073709551615) { return 2; }
+	// Hexadecimal con los dos limbs separados a ojo.
+	u128 h = u128(0xFFFFFFFFFFFFFFFF_FFFFFFFFFFFFFFFF);
+	if (h.lo64 != 18_446_744_073_709_551_615) { return 1; }
+	if (h.hi64 != 18_446_744_073_709_551_615) { return 2; }
 
-    // El prefijo tambien vale en mayuscula, y aqui el valor cruza los 64 bits.
-    u128 cruce = u128(0X10000000000000000);
-    if (cruce.lo64 != 0 || cruce.hi64 != 1) { return 3; }
+	// El prefijo tambien vale en mayuscula, y aqui el valor cruza los 64 bits.
+	u128 cruce = u128(0X10000000000000000);
+	if (cruce.lo64 != 0 || cruce.hi64 != 1) { return 3; }
 
-    u128 binario = u128(0b1010);
-    if (binario.lo64 != 10 || binario.hi64 != 0) { return 4; }
+	u128 binario = u128(0b1010);
+	if (binario.lo64 != 10 || binario.hi64 != 0) { return 4; }
 
-    u128 octal = u128(0o777);
-    if (octal.lo64 != 511) { return 5; }
+	u128 octal = u128(0o777);
+	if (octal.lo64 != 511) { return 5; }
 
-    // Sin prefijo, decimal; el separador tampoco estorba aqui.
-    u128 decimal = u128(1_000_000);
-    if (decimal.lo64 != 1000000) { return 6; }
+	// Sin prefijo, decimal; el separador tampoco estorba aqui.
+	u128 decimal = u128(1_000_000);
+	if (decimal.lo64 != 1_000_000) { return 6; }
 
-    return 42;
+	return 42;
 }

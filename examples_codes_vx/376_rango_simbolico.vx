@@ -11,11 +11,11 @@ namespace ejemplos.rango_simbolico;
 // PODRIA salirse --, y una sospecha no es un error.  Se usa la superior.
 
 i64 mal(u8 n) {
-    u8* p = (u8*) malloc((u64) n);
-    *(i64*)(p + 300) = 1;
-    i64 v = *(i64*)(p + 300);
-    free(p);
-    return v;
+	u8* p = (u8 *) malloc((u64) n);
+	*(i64 *)(p + 300) = 1;
+	i64 v = *(i64 *)(p + 300);
+	free(p);
+	return v;
 }
 
 i32 main() { return (i32) mal(200); }

@@ -14,23 +14,25 @@
  */
 
 class Service {
-    public Service() { }
-    public i32 run(i32 x) { return x * 100; }
+	public Service() { }
+	public i32 run(i32 x) { return x * 100; }
 }
 
-@Aspect class Observador {
-    public Observador() { }
+@Aspect
+class Observador {
+	public Observador() { }
 
-    /**
-     * @brief Recibe el resultado del metodo.
-     * @param resultado Lo que devolvio `run`, no lo que recibio.
-     */
-    @AfterReturning("Service.run") public i32 visto(i32 resultado) {
-        return resultado + 42; // 700 + 42; con los args seria 7 + 42 = 49
-    }
+	/**
+	 * @brief Recibe el resultado del metodo.
+	 * @param resultado Lo que devolvio `run`, no lo que recibio.
+	 */
+	@AfterReturning("Service.run")
+	public i32 visto(i32 resultado) {
+		return resultado + 42; // 700 + 42; con los args seria 7 + 42 = 49
+	}
 }
 
 i32 main() {
-    Service s = new Service();
-    return s.run(7); // 742
+	Service s = new Service();
+	return s.run(7); // 742
 }

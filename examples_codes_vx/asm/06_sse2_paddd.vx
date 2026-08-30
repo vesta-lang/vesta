@@ -8,19 +8,25 @@
 //
 // @expect 110
 i32 main() {
-    i32* a = malloc(16);                 // 4 x i32 (host)
-    i32* b = malloc(16);
+	i32* a = malloc(16); // 4 x i32 (host)
+	i32* b = malloc(16);
 
-    a[0] = 1;  a[1] = 2;  a[2] = 3;  a[3] = 4;
-    b[0] = 10; b[1] = 20; b[2] = 30; b[3] = 40;
+	a[0] = 1;
+	a[1] = 2;
+	a[2] = 3;
+	a[3] = 4;
+	b[0] = 10;
+	b[1] = 20;
+	b[2] = 30;
+	b[3] = 40;
 
-    register("rdi") i32* pa = a;
-    register("rsi") i32* pb = b;
-    
-    asm volatile {
-        movdqu xmm0, [rdi]               // xmm0 = a[0..3]
-        paddd  xmm0, [rsi]               // xmm0 += b[0..3] (4 sumas en 1 instr)
-        movdqu [rdi], xmm0               // a[0..3] = resultado
-    };
-    return a[0] + a[1] + a[2] + a[3];     // 11+22+33+44 = 110
+	register("rdi") i32 *pa = a;
+	register("rsi") i32 *pb = b;
+
+	asm volatile {
+		movdqu xmm0, [rdi]
+		paddd  xmm0, [rsi]
+		movdqu [rdi], xmm0 // a[0..3] = resultado
+	};
+	return a[0] + a[1] + a[2] + a[3]; // 11+22+33+44 = 110
 }

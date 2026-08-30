@@ -24,30 +24,30 @@ namespace ejemplos.gc_class_dtor_finalize;
 class Trace { public static i64 dtors; }
 
 class Recurso {
-    public i64 id;
-    public Recurso(i64 x) { this.id = x; }
-    // El dtor libera el recurso interno (aqui: cuenta la liberacion).
-    public ~Recurso() { Trace.dtors = Trace.dtors + 1; }
+	public i64 id;
+	public Recurso(i64 x) { this.id = x; }
+	// El dtor libera el recurso interno (aqui: cuenta la liberacion).
+	public ~Recurso() { Trace.dtors = Trace.dtors + 1; }
 }
 
 // El box gc<Recurso> escapa via return -> sin cleanup determinista; el
 // finalizador GC corre ~Recurso() al finalizar.
 gc<Recurso> crea() {
-    gc<Recurso> g = new Recurso(7);
-    return g;
+	gc<Recurso> g = new Recurso(7);
+	return g;
 }
 
 // El box gc<Recurso> NO escapa (muere en el scope); el GC lo colecta y su
 // finalizador corre ~Recurso() -- tambien exactamente una vez.
 void usar() {
-    gc<Recurso> g = new Recurso(9);
-    i64 x = g.id;
+	gc<Recurso> g = new Recurso(9);
+	i64         x = g.id;
 }
 
 i32 main() {
-    Trace.dtors = 0;
-    crea();               // objeto escapado
-    usar();               // objeto no-escape
-    gc_finalize_all();    // finaliza AMBOS (deterministico, sin polling)
-    return (i32) Trace.dtors;   // 2
+	Trace.dtors = 0;
+	crea();                   // objeto escapado
+	usar();                   // objeto no-escape
+	gc_finalize_all();        // finaliza AMBOS (deterministico, sin polling)
+	return (i32) Trace.dtors; // 2
 }

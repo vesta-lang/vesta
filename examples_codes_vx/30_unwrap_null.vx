@@ -20,29 +20,29 @@ namespace ejemplos.unwrap_null;
 // Resultado esperado: 999.
 
 class Box {
-    public i32 v;
-    public Box(i32 x) { this.v = x; }
+	public i32 v;
+	public Box(i32 x) { this.v = x; }
 }
 
 i32 main() {
-    Box b = null;
-    i32 res = 0;
+	Box b   = null;
+	i32 res = 0;
 
-    // La forma de preguntar sin afirmar.  `isPresent` no desenvuelve nada:
-    // solo dice si hay.  Esta es la sustituta del `try/catch` de antes.
-    if (isPresent(b) != 0) {
-        Box ok = unwrap(b);   // no se llega: no hay nada
-        res = 111;
-    } else {
-        res = 999;            // la rama de "no hay", sin morirse
-    }
+	// La forma de preguntar sin afirmar.  `isPresent` no desenvuelve nada:
+	// solo dice si hay.  Esta es la sustituta del `try/catch` de antes.
+	if (isPresent(b) != 0) {
+		Box ok = unwrap(b); // no se llega: no hay nada
+		res = 111;
+	} else {
+		res = 999; // la rama de "no hay", sin morirse
+	}
 
-    // Y sobre algo que SI esta, desenvolver es lo de siempre.
-    Box c = new Box(7);
-    if (isPresent(c) != 0) {
-        Box ok = unwrap(c);
-        res = res + ok.v - 7; // suma cero; solo comprueba que salio bien
-    }
+	// Y sobre algo que SI esta, desenvolver es lo de siempre.
+	Box c = new Box(7);
+	if (isPresent(c) != 0) {
+		Box ok = unwrap(c);
+		res = res + ok.v - 7; // suma cero; solo comprueba que salio bien
+	}
 
-    return res;
+	return res;
 }

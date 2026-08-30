@@ -25,29 +25,29 @@ namespace ejemplos.interfaces_basico;
 // El test devuelve 1 si TODAS las comprobaciones pasan.
 
 interface IServicio {
-    i32 metodo();
+	i32 metodo();
 }
 
 class Servicio : IServicio {
-    public Servicio() { }
-    public i32 metodo() { return 42; }
+	public Servicio() { }
+	public i32 metodo() { return 42; }
 }
 
 i32 main() {
-    // 1 Reflexion sobre la interfaz.
-    i64 i_cls = forName("IServicio");
-    if (i_cls == 0) return 0;        // interfaz no registrada
+	// 1 Reflexion sobre la interfaz.
+	i64 i_cls = forName("IServicio");
+	if (i_cls == 0) return 0; // interfaz no registrada
 
-    // 2 Reflexion sobre la implementacion.
-    i64 s_cls = forName("Servicio");
-    if (s_cls == 0) return 0;        // clase no registrada
+	// 2 Reflexion sobre la implementacion.
+	i64 s_cls = forName("Servicio");
+	if (s_cls == 0) return 0; // clase no registrada
 
-    // 3 Las dos deben ser ClassInfo* distintos.
-    if (i_cls == s_cls) return 0;
+	// 3 Las dos deben ser ClassInfo* distintos.
+	if (i_cls == s_cls) return 0;
 
-    // 4 Dispatch normal sobre la implementacion.
-    Servicio s = new Servicio();
-    if (s.metodo() != 42) return 0;
+	// 4 Dispatch normal sobre la implementacion.
+	Servicio s = new Servicio();
+	if (s.metodo() != 42) return 0;
 
-    return 1;
+	return 1;
 }

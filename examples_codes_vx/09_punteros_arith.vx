@@ -18,22 +18,22 @@ namespace ejemplos.punteros_arith;
 // Resultado esperado: R00 == 12  (1+2+3+6)
 
 struct Buf {
-    i32 a;
-    i32 b;
-    i32 c;
-    i32 d;
+	i32 a;
+	i32 b;
+	i32 c;
+	i32 d;
 }
 
 i32 main() {
-    Buf buf;
-    buf.a = 1;
-    buf.b = 2;
-    buf.c = 3;
-    buf.d = 0;
-    // p apunta a buf.a (offset 0).  El subscript p[3] equivale a buf.d.
-    // Al tomar la direccion de un campo del struct local, este se reserva en
-    // memoria host -> `&buf.a` es `i32*`.
-    i32* p = &buf.a;
-    p[3] = 6;
-    return p[0] + p[1] + p[2] + *(p + 3);
+	Buf buf;
+	buf.a = 1;
+	buf.b = 2;
+	buf.c = 3;
+	buf.d = 0;
+	// p apunta a buf.a (offset 0).  El subscript p[3] equivale a buf.d.
+	// Al tomar la direccion de un campo del struct local, este se reserva en
+	// memoria host -> `&buf.a` es `i32*`.
+	i32* p = &buf.a;
+	p[3] = 6;
+	return p[0] + p[1] + p[2] + *(p + 3);
 }

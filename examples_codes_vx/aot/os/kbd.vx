@@ -6,96 +6,100 @@
 // teniendo en cuenta el estado de Shift.  Los break-codes (bit 7) y las
 // teclas modificadoras no producen caracter (devuelven 0).
 // ===========================================================================
-import "serial";   // reutiliza inb/outb
+import "serial";      // reutiliza inb/outb
 
-bool g_shift = false;   // estado de Shift (izq o der)
+bool g_shift = false; // estado de Shift (izq o der)
 
 // true si el controlador tiene un scancode pendiente.
 bool kbd_has_scancode() {
-    return (serial.inb(0x64) & 0x01) != 0;
+	return (serial.inb(0x64) & 0x01) != 0;
 }
 
 // Traduce un make-code (scancode set 1) a ASCII segun Shift.  Devuelve 0 si
 // la tecla no produce caracter imprimible (modificador, desconocida).
 u64 kbd_translate(u64 sc, bool shift) {
-    // Digitos y sus simbolos shifted (fila superior).
-    if (sc == 0x02) { if (shift) { return 33; } return 49; }   // 1 !
-    if (sc == 0x03) { if (shift) { return 64; } return 50; }   // 2 @
-    if (sc == 0x04) { if (shift) { return 35; } return 51; }   // 3 #
-    if (sc == 0x05) { if (shift) { return 36; } return 52; }   // 4 $
-    if (sc == 0x06) { if (shift) { return 37; } return 53; }   // 5 %
-    if (sc == 0x07) { if (shift) { return 94; } return 54; }   // 6 ^
-    if (sc == 0x08) { if (shift) { return 38; } return 55; }   // 7 &
-    if (sc == 0x09) { if (shift) { return 42; } return 56; }   // 8 *
-    if (sc == 0x0A) { if (shift) { return 40; } return 57; }   // 9 (
-    if (sc == 0x0B) { if (shift) { return 41; } return 48; }   // 0 )
-    if (sc == 0x0C) { if (shift) { return 95; } return 45; }   // - _
-    if (sc == 0x0D) { if (shift) { return 43; } return 61; }   // = +
-    if (sc == 0x0E) { return 8; }                              // backspace
-    if (sc == 0x0F) { return 9; }                              // tab
-    if (sc == 0x1C) { return 10; }                             // enter -> '\n'
-    if (sc == 0x39) { return 32; }                             // espacio
-    if (sc == 0x1A) { if (shift) { return 123; } return 91; }  // [ {
-    if (sc == 0x1B) { if (shift) { return 125; } return 93; }  // ] }
-    if (sc == 0x27) { if (shift) { return 58; } return 59; }   // ; :
-    if (sc == 0x28) { if (shift) { return 34; } return 39; }   // ' "
-    if (sc == 0x33) { if (shift) { return 60; } return 44; }   // , <
-    if (sc == 0x34) { if (shift) { return 62; } return 46; }   // . >
-    if (sc == 0x35) { if (shift) { return 63; } return 47; }   // / ?
-    if (sc == 0x2B) { if (shift) { return 124; } return 92; }  // \ |
-    if (sc == 0x37) { return 42; }                             // numpad *
+	// Digitos y sus simbolos shifted (fila superior).
+	if (sc == 0x02) { if (shift) { return 33; } return 49; }  // 1 !
+	if (sc == 0x03) { if (shift) { return 64; } return 50; }  // 2 @
+	if (sc == 0x04) { if (shift) { return 35; } return 51; }  // 3 #
+	if (sc == 0x05) { if (shift) { return 36; } return 52; }  // 4 $
+	if (sc == 0x06) { if (shift) { return 37; } return 53; }  // 5 %
+	if (sc == 0x07) { if (shift) { return 94; } return 54; }  // 6 ^
+	if (sc == 0x08) { if (shift) { return 38; } return 55; }  // 7 &
+	if (sc == 0x09) { if (shift) { return 42; } return 56; }  // 8 *
+	if (sc == 0x0A) { if (shift) { return 40; } return 57; }  // 9 (
+	if (sc == 0x0B) { if (shift) { return 41; } return 48; }  // 0 )
+	if (sc == 0x0C) { if (shift) { return 95; } return 45; }  // - _
+	if (sc == 0x0D) { if (shift) { return 43; } return 61; }  // = +
+	if (sc == 0x0E) { return 8; }                             // backspace
+	if (sc == 0x0F) { return 9; }                             // tab
+	if (sc == 0x1C) { return 10; }                            // enter -> '\n'
+	if (sc == 0x39) { return 32; }                            // espacio
+	if (sc == 0x1A) { if (shift) { return 123; } return 91; } // [ {
+	if (sc == 0x1B) { if (shift) { return 125; } return 93; } // ] }
+	if (sc == 0x27) { if (shift) { return 58; } return 59; }  // ; :
+	if (sc == 0x28) { if (shift) { return 34; } return 39; }  // ' "
+	if (sc == 0x33) { if (shift) { return 60; } return 44; }  // , <
+	if (sc == 0x34) { if (shift) { return 62; } return 46; }  // . >
+	if (sc == 0x35) { if (shift) { return 63; } return 47; }  // / ?
+	if (sc == 0x2B) { if (shift) { return 124; } return 92; } // \ |
+	if (sc == 0x37) { return 42; }                            // numpad *
 
-    // Letras: a-z; con Shift -> mayuscula (resta 32).
-    u64 base = 0;
-    if (sc == 0x10) { base = 113; }   // q
-    if (sc == 0x11) { base = 119; }   // w
-    if (sc == 0x12) { base = 101; }   // e
-    if (sc == 0x13) { base = 114; }   // r
-    if (sc == 0x14) { base = 116; }   // t
-    if (sc == 0x15) { base = 121; }   // y
-    if (sc == 0x16) { base = 117; }   // u
-    if (sc == 0x17) { base = 105; }   // i
-    if (sc == 0x18) { base = 111; }   // o
-    if (sc == 0x19) { base = 112; }   // p
-    if (sc == 0x1E) { base = 97; }    // a
-    if (sc == 0x1F) { base = 115; }   // s
-    if (sc == 0x20) { base = 100; }   // d
-    if (sc == 0x21) { base = 102; }   // f
-    if (sc == 0x22) { base = 103; }   // g
-    if (sc == 0x23) { base = 104; }   // h
-    if (sc == 0x24) { base = 106; }   // j
-    if (sc == 0x25) { base = 107; }   // k
-    if (sc == 0x26) { base = 108; }   // l
-    if (sc == 0x2C) { base = 122; }   // z
-    if (sc == 0x2D) { base = 120; }   // x
-    if (sc == 0x2E) { base = 99; }    // c
-    if (sc == 0x2F) { base = 118; }   // v
-    if (sc == 0x30) { base = 98; }    // b
-    if (sc == 0x31) { base = 110; }   // n
-    if (sc == 0x32) { base = 109; }   // m
-    if (base != 0) {
-        if (shift) {
-            return base - 32;
-        }
-        return base;
-    }
-    return 0;
+	// Letras: a-z; con Shift -> mayuscula (resta 32).
+	u64 base = 0;
+	if (sc == 0x10) { base = 113; } // q
+	if (sc == 0x11) { base = 119; } // w
+	if (sc == 0x12) { base = 101; } // e
+	if (sc == 0x13) { base = 114; } // r
+	if (sc == 0x14) { base = 116; } // t
+	if (sc == 0x15) { base = 121; } // y
+	if (sc == 0x16) { base = 117; } // u
+	if (sc == 0x17) { base = 105; } // i
+	if (sc == 0x18) { base = 111; } // o
+	if (sc == 0x19) { base = 112; } // p
+	if (sc == 0x1E) { base = 97; }  // a
+	if (sc == 0x1F) { base = 115; } // s
+	if (sc == 0x20) { base = 100; } // d
+	if (sc == 0x21) { base = 102; } // f
+	if (sc == 0x22) { base = 103; } // g
+	if (sc == 0x23) { base = 104; } // h
+	if (sc == 0x24) { base = 106; } // j
+	if (sc == 0x25) { base = 107; } // k
+	if (sc == 0x26) { base = 108; } // l
+	if (sc == 0x2C) { base = 122; } // z
+	if (sc == 0x2D) { base = 120; } // x
+	if (sc == 0x2E) { base = 99; }  // c
+	if (sc == 0x2F) { base = 118; } // v
+	if (sc == 0x30) { base = 98; }  // b
+	if (sc == 0x31) { base = 110; } // n
+	if (sc == 0x32) { base = 109; } // m
+	if (base != 0) {
+		if (shift) {
+			return base - 32;
+		}
+		return base;
+	}
+	return 0;
 }
 
 // Sondea el teclado UNA vez.  Actualiza el estado de Shift y devuelve el
 // ASCII de la tecla pulsada, o 0 si no hay tecla imprimible lista.
 u64 kbd_poll() {
-    if (!kbd_has_scancode()) {
-        return 0;
-    }
-    u64 sc = serial.inb(0x60) & 0xFF;
-    // Make/break de Shift (izq 0x2A/0xAA, der 0x36/0xB6).
-    if (sc == 0x2A) { g_shift = true; return 0; }
-    if (sc == 0x36) { g_shift = true; return 0; }
-    if (sc == 0xAA) { g_shift = false; return 0; }
-    if (sc == 0xB6) { g_shift = false; return 0; }
-    if ((sc & 0x80) != 0) {
-        return 0;   // cualquier otro break-code: ignorar
-    }
-    return kbd_translate(sc, g_shift);
+	if (!kbd_has_scancode()) {
+		return 0;
+	}
+	u64               sc      = serial.inb(0x60) & 0xFF;
+	// Make/break de Shift (izq 0x2A/0xAA, der 0x36/0xB6).
+	if (sc == 0x2A) { g_shift = true;
+		return 0; }
+	if (sc == 0x36) { g_shift = true;
+		return 0; }
+	if (sc == 0xAA) { g_shift = false;
+		return 0; }
+	if (sc == 0xB6) { g_shift = false;
+		return 0; }
+	if ((sc & 0x80) != 0) {
+		return 0; // cualquier otro break-code: ignorar
+	}
+	return kbd_translate(sc, g_shift);
 }

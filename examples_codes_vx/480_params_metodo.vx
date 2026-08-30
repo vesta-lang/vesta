@@ -12,27 +12,27 @@ i64 doblar(i64 x) { return x * 2; }
 i64 restar_uno(i64 x) { return x - 1; }
 
 class Calculadora {
-    // Puntero a funcion al estilo de C, como parametro de un metodo.
-    public i64 aplicar(i64 (*op)(i64), i64 v) { return op(v); }
+	// Puntero a funcion al estilo de C, como parametro de un metodo.
+	public i64 aplicar(i64 (*op)(i64), i64 v) { return op(v); }
 
-    // Parametro no-nulo: el que llama no puede pasar nulo, y el cuerpo no
-    // tiene que comprobarlo.
-    public i64 sumar_uno(i64 !!x) { return x + 1; }
+	// Parametro no-nulo: el que llama no puede pasar nulo, y el cuerpo no
+	// tiene que comprobarlo.
+	public i64 sumar_uno(i64 !!x) { return x + 1; }
 }
 
 struct CalcS {
-    i64 aplicar(i64 (*op)(i64), i64 v) { return op(v); }
+	i64 aplicar(i64 (*op)(i64), i64 v) { return op(v); }
 }
 
 i32 main() {
-    Calculadora c = new Calculadora();
-    CalcS s;
+	Calculadora c = new Calculadora();
+	CalcS s;
 
-    i64 a = c.aplicar(&doblar, 10);      // 20
-    i64 b = c.sumar_uno(9);              // 10
-    i64 d = s.aplicar(&restar_uno, 13);  // 12
+	i64 a = c.aplicar(&doblar, 10); // 20
+	i64 b = c.sumar_uno(9);         // 10
+	i64 d = s.aplicar(&restar_uno, 13); // 12
 
-    println("aplicar=${a} sumar_uno=${b} struct=${d}");
+	println("aplicar=${a} sumar_uno=${b} struct=${d}");
 
-    return (i32) (a + b + d);            // 42
+	return (i32)(a + b + d); // 42
 }

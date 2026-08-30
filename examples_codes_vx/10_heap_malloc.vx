@@ -21,21 +21,21 @@ namespace ejemplos.heap_malloc;
 // Resultado esperado: R00 == 285  (1*1 + 2*2 + ... + 9*9)
 
 i32 main() {
-    // 10 i32 contiguos en heap host.
-    i32* arr = malloc(40);
+	// 10 i32 contiguos en heap host.
+	i32* arr = malloc(40);
 
-    i32 i = 0;
-    while (i < 10) {
-        arr[i] = i * i;
-        i = i + 1;
-    }
+	i32 i = 0;
+	while (i < 10) {
+		arr[i] = i * i;
+		i = i + 1;
+	}
 
-    i32 sum = 0;
-    i = 0;
-    while (i < 10) {
-        sum = sum + arr[i];
-        i = i + 1;
-    }
-    free(arr);
-    return sum;
+	i32 sum = 0;
+	i = 0;
+	while (i < 10) {
+		sum = sum + arr[i];
+		i   = i + 1;
+	}
+	free(arr);
+	return sum;
 }

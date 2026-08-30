@@ -9,8 +9,8 @@
 // Validado por ejecucion (PE host + ELF + interp).
 
 i32 main() {
-    char a = 'a';            // 97
-    char b = 'b';            // 98
-    char c = a + b;          // 195 (char, byte sin signo)
-    return (i32) c;          // zero-extend -> 195
+	char a = 'a';   // 97
+	char b = 'b';   // 98
+	char c = a + b; // 195 (char, byte sin signo)
+	return (i32) c; // zero-extend -> 195
 }

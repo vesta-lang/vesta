@@ -20,35 +20,35 @@ namespace ejemplos.vectorize_reduction;
 
 // Suma vectorizada de un array f64 (el bucle interior es el patron objetivo).
 f64 sum(f64* p, i32 n) {
-    f64 acc = 0.0;
-    for (i32 i = 0; i < n; i++) { acc = acc + p[i]; }   // REDUCCION
-    return acc;
+	f64 acc = 0.0;
+	for (i32 i = 0; i < n; i++) { acc = acc + p[i]; } // REDUCCION
+	return acc;
 }
 
 i32 main() {
-    i64 total = 0;
+	i64  total = 0;
 
-    // --- N par: sin cola ---
-    f64* a = malloc(80);   // 10 x f64
-    for (i32 i = 0; i < 10; i++) { a[i] = (f64)(i + 1); }
-    total = total + (i64) sum(a, 10);            // 1+2+...+10 = 55
+	// --- N par: sin cola ---
+	f64* a     = malloc(80); // 10 x f64
+	for (i32 i = 0; i < 10; i++) { a[i] = (f64)(i + 1); }
+	total = total + (i64) sum(a, 10); // 1+2+...+10 = 55
 
-    // --- N impar: ejercita la cola escalar ---
-    f64* b = malloc(56);   // 7 x f64
-    for (i32 i = 0; i < 7; i++) { b[i] = (f64)(2 * i + 1); }
-    total = total + (i64) sum(b, 7);             // 1+3+5+7+9+11+13 = 49
+	// --- N impar: ejercita la cola escalar ---
+	f64* b = malloc(56);              // 7 x f64
+	for (i32 i = 0; i < 7; i++) { b[i] = (f64)(2 * i + 1); }
+	total = total + (i64) sum(b, 7); // 1+3+5+7+9+11+13 = 49
 
-    // --- acumulador con valor inicial != 0 + N grande ---
-    f64* d = malloc(800);  // 100 x f64
-    for (i32 i = 0; i < 100; i++) { d[i] = 1.0; }
-    f64 acc = 1000.0;
-    for (i32 i = 0; i < 100; i++) { acc = acc + d[i]; }   // 1000 + 100*1 = 1100
-    total = total + (i64) acc;
+	// --- acumulador con valor inicial != 0 + N grande ---
+	f64* d = malloc(800);            // 100 x f64
+	for (i32 i = 0; i < 100; i++) { d[i] = 1.0; }
+	f64 acc = 1000.0;
+	for (i32 i = 0; i < 100; i++) { acc = acc + d[i]; } // 1000 + 100*1 = 1100
+	total = total + (i64) acc;
 
-    free(a);
-    free(b);
-    free(d);
+	free(a);
+	free(b);
+	free(d);
 
-    // total = 55 + 49 + 1100 = 1204
-    return (i32) total;
+	// total = 55 + 49 + 1100 = 1204
+	return (i32) total;
 }

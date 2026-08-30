@@ -13,24 +13,21 @@
 
 // Escribe 16 ceros en `dst` con la variante que EXIGE la direccion alineada.
 void limpia_16(u8* dst) {
-    asm (
-        reg d = dst,
-        xmm v0,
-    ) {
-        pxor v0, v0
-        movdqa [d], v0
-    }
+	asm (reg d = dst, xmm v0,) {
+		pxor v0, v0
+		movdqa [d], v0
+	}
 }
 
 i32 main() {
-    // Reserva grande: la entrega la arena del sistema tras una cabecera de 64,
-    // asi que su alineacion se conoce y es de sobra para lo que se le pide.
-    u8* base = (u8*) malloc(8192);
-    base[0] = 7;
-    limpia_16(base);
-    // Los 16 primeros bytes quedaron a cero.
-    i32 r = 42;
-    if (base[0] != 0) { r = 1; }
-    free((i64*) base);
-    return r;
+	// Reserva grande: la entrega la arena del sistema tras una cabecera de 64,
+	// asi que su alineacion se conoce y es de sobra para lo que se le pide.
+	u8* base = (u8 *) malloc(8192);
+	base[0] = 7;
+	limpia_16(base);
+	// Los 16 primeros bytes quedaron a cero.
+	i32 r = 42;
+	if (base[0] != 0) { r = 1; }
+	free((i64 *) base);
+	return r;
 }

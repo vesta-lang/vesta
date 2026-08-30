@@ -21,46 +21,46 @@
 // Configura ITER abajo segun tu CPU (5M default).
 
 struct Punto {
-    i32 x;
-    i32 y;
+	i32 x;
+	i32 y;
 }
 
 // Ruta 1: stack ALLOCA puro.  Cero alloc/free runtime.
 i32 stack_struct(i32 base) {
-    Punto p = {.x = base, .y = base + 1};
-    // Acceso via field access (slot vive en VM stack; emit `mov`).
-    return p.x + p.y;
+	Punto p = {.x = base,.y = base + 1};
+	// Acceso via field access (slot vive en VM stack; emit `mov`).
+	return p.x + p.y;
 }
 
 // Ruta 2: unique<Punto> en host heap.  RAW_ALLOC + RAW_FREE por iter.
 i32 unique_struct(i32 base) {
-    unique<Punto> p = {.x = base, .y = base + 1};
-    i32* raw = (i32*)ptr_of(p);
-    return *raw + *(raw + 1);
-    // Cleanup automatico aqui: RAW_FREE(host_ptr).
+	unique<Punto> p   = {.x = base,.y = base + 1};
+	i32*          raw = (i32 *)ptr_of(p);
+	return *raw + *(raw + 1);
+// Cleanup automatico aqui: RAW_FREE(host_ptr).
 }
 
 // Ruta 3: malloc + free manuales.
 i32 malloc_struct(i32 base) {
-    Punto* p = malloc(8);
-    (*p).x = base;
-    (*p).y = base + 1;
-    i32 r = (*p).x + (*p).y;
-    free(p);
-    return r;
+	Punto* p = malloc(8);
+	(*p).x = base;
+	(*p).y = base + 1;
+	i32 r = (*p).x + (*p).y;
+	free(p);
+	return r;
 }
 
 // 1M iter * 3 rutas = 3M operaciones medidas.  En interp es ~30 s; con
 // JIT debe bajar significativamente.  Reduzcase ITER si quieres ciclos
 // mas cortos durante desarrollo iterativo.
 i32 main() {
-    i64 sum = 0;
-    i64 i   = 0;
-    while (i < 1000000) {
-        sum = sum + stack_struct(1);
-        sum = sum + unique_struct(1);
-        sum = sum + malloc_struct(1);
-        i = i + 1;
-    }
-    return sum;
+	i64 sum = 0;
+	i64 i   = 0;
+	while (i < 1_000_000) {
+		sum = sum + stack_struct(1);
+		sum = sum + unique_struct(1);
+		sum = sum + malloc_struct(1);
+		i   = i + 1;
+	}
+	return sum;
 }

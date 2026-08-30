@@ -48,64 +48,63 @@ public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
 	register("rcx") i64 rlb = lb;
 	register("rax") i64 res;
 	asm volatile {
-        // min = (la < lb) ? la : lb  -> r9
-        mov     r9, rsi                  // r9 = la
-        cmp     rcx, rsi                 // lb < la ?
-        cmovl   r9, rcx                  // r9 = min
-        xor     r8, r8                   // i = 0
 
-    .chunk:
-        // while (i + 16 <= min) procesar 16 bytes alineados al rango.
-        lea     r10, [r8 + 16]           // r10 = i + 16
-        cmp     r10, r9                  // i + 16 <= min ?
-        jg      .tail                    // no -> cola byte-a-byte
-        movdqu  xmm0, [rdi + r8]         // a[i..i+15]
-        movdqu  xmm1, [rdx + r8]         // b[i..i+15]
-        pcmpeqb xmm0, xmm1               // 0xFF donde iguales
-        pmovmskb eax, xmm0               // bit j = 1 si a[i+j]==b[i+j]
-        cmp     eax, 0xFFFF              // todos iguales ?
-        jne     .diff_chunk              // hay diferencia en este chunk
-        add     r8, 16                   // i += 16
-        jmp     .chunk
+		    mov     r9, rsi
+		    cmp     rcx, rsi
+		    cmovl   r9, rcx
+		    xor     r8, r8
 
-    .diff_chunk:
-        // primer byte distinto = bsf de (~mask).  Como pcmpeqb pone 1 en
-        // iguales, invertimos para que el primer 0->1 sea el primer distinto.
-        not     eax                      // bit j = 1 si a[i+j]!=b[i+j]
-        bsf     eax, eax                 // eax = indice del primer distinto
-        add     r8, rax                  // i = i + indice -> posicion global
-        // comparar a[i] vs b[i] unsigned.
-        movzx   r10, byte [rdi + r8]     // ca
-        movzx   r11, byte [rdx + r8]     // cb
-        cmp     r10, r11
-        jb      .less                    // ca < cb
-        jmp     .greater                 // ca > cb (no pueden ser iguales aqui)
+		.chunk:
 
-    .tail:
-        // cola byte-a-byte mientras i < min.
-        cmp     r8, r9                   // i < min ?
-        jge     .eqpref                  // prefijo comun igual -> tie-break
-        movzx   r10, byte [rdi + r8]     // ca
-        movzx   r11, byte [rdx + r8]     // cb
-        cmp     r10, r11
-        jb      .less
-        ja      .greater
-        inc     r8                       // iguales -> siguiente
-        jmp     .tail
+		    lea     r10, [r8 + 16]
+		    cmp     r10, r9
+		    jg      .tail
+		    movdqu  xmm0, [rdi + r8]
+		    movdqu  xmm1, [rdx + r8]
+		    pcmpeqb xmm0, xmm1
+		    pmovmskb eax, xmm0
+		    cmp     eax, 0xFFFF
+		    jne     .diff_chunk
+		    add     r8, 16
+		    jmp     .chunk
 
-    .eqpref:
-        // prefijo comun igual: el mas corto es menor.
-        cmp     rsi, rcx                 // la vs lb
-        jl      .less                    // la < lb
-        jg      .greater                 // la > lb
-        xor     rax, rax                 // iguales -> 0
-        jmp     .done
-    .less:
-        mov     rax, -1
-        jmp     .done
-    .greater:
-        mov     rax, 1
-    .done:
+		.diff_chunk:
+
+		    not     eax
+		    bsf     eax, eax
+		    add     r8, rax
+
+		    movzx   r10, byte [rdi + r8]
+		    movzx   r11, byte [rdx + r8]
+		    cmp     r10, r11
+		    jb      .less
+		    jmp     .greater
+
+		.tail:
+
+		    cmp     r8, r9
+		    jge     .eqpref
+		    movzx   r10, byte [rdi + r8]
+		    movzx   r11, byte [rdx + r8]
+		    cmp     r10, r11
+		    jb      .less
+		    ja      .greater
+		    inc     r8
+		    jmp     .tail
+
+		.eqpref:
+
+		    cmp     rsi, rcx
+		    jl      .less
+		    jg      .greater
+		    xor     rax, rax
+		    jmp     .done
+		.less:
+		    mov     rax, -1
+		    jmp     .done
+		.greater:
+		    mov     rax, 1
+		.done:
 	};
 	return res;
 }
@@ -124,60 +123,60 @@ public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
 	register("rcx") i64 rlb = lb;
 	register("rax") i64 res;
 	asm volatile {
-        mov     r9, rsi                  // r9 = la
-        cmp     rcx, rsi
-        cmovl   r9, rcx                  // r9 = min
-        xor     r8, r8                   // i = 0
+		    mov     r9, rsi
+		    cmp     rcx, rsi
+		    cmovl   r9, rcx
+		    xor     r8, r8
 
-    .chunk32:
-        lea     r10, [r8 + 32]           // i + 32
-        cmp     r10, r9                  // i + 32 <= min ?
-        jg      .tail2
-        vmovdqu ymm0, [rdi + r8]         // a[i..i+31]
-        vmovdqu ymm1, [rdx + r8]         // b[i..i+31]
-        vpcmpeqb ymm0, ymm0, ymm1        // 0xFF donde iguales
-        vpmovmskb eax, ymm0              // 32 bits: bit j = 1 si iguales
-        cmp     eax, 0xFFFFFFFF          // todos iguales ?
-        jne     .diff32
-        add     r8, 32
-        jmp     .chunk32
+		.chunk32:
+		    lea     r10, [r8 + 32]
+		    cmp     r10, r9
+		    jg      .tail2
+		    vmovdqu ymm0, [rdi + r8]
+		    vmovdqu ymm1, [rdx + r8]
+		    vpcmpeqb ymm0, ymm0, ymm1
+		    vpmovmskb eax, ymm0
+		    cmp     eax, 0xFFFFFFFF
+		    jne     .diff32
+		    add     r8, 32
+		    jmp     .chunk32
 
-    .diff32:
-        not     eax                      // bit j = 1 si distintos
-        bsf     eax, eax                 // primer distinto
-        add     r8, rax
-        movzx   r10, byte [rdi + r8]
-        movzx   r11, byte [rdx + r8]
-        cmp     r10, r11
-        jb      .less2
-        jmp     .greater2
+		.diff32:
+		    not     eax
+		    bsf     eax, eax
+		    add     r8, rax
+		    movzx   r10, byte [rdi + r8]
+		    movzx   r11, byte [rdx + r8]
+		    cmp     r10, r11
+		    jb      .less2
+		    jmp     .greater2
 
-    .tail2:
-        vzeroupper                       // limpiar estado AVX antes de la cola
-        cmp     r8, r9
-        jge     .eqpref2
-        movzx   r10, byte [rdi + r8]
-        movzx   r11, byte [rdx + r8]
-        cmp     r10, r11
-        jb      .less2
-        ja      .greater2
-        inc     r8
-        jmp     .tail2
+		.tail2:
+		    vzeroupper
+		    cmp     r8, r9
+		    jge     .eqpref2
+		    movzx   r10, byte [rdi + r8]
+		    movzx   r11, byte [rdx + r8]
+		    cmp     r10, r11
+		    jb      .less2
+		    ja      .greater2
+		    inc     r8
+		    jmp     .tail2
 
-    .eqpref2:
-        cmp     rsi, rcx
-        jl      .less2
-        jg      .greater2
-        xor     rax, rax
-        jmp     .done2
-    .less2:
-        vzeroupper                       // tambien si salimos del path SIMD
-        mov     rax, -1
-        jmp     .done2
-    .greater2:
-        vzeroupper
-        mov     rax, 1
-    .done2:
+		.eqpref2:
+		    cmp     rsi, rcx
+		    jl      .less2
+		    jg      .greater2
+		    xor     rax, rax
+		    jmp     .done2
+		.less2:
+		    vzeroupper
+		    mov     rax, -1
+		    jmp     .done2
+		.greater2:
+		    vzeroupper
+		    mov     rax, 1
+		.done2:
 	};
 	return res;
 }
@@ -187,7 +186,7 @@ public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
 // la usa.  Self-dispatch por features: AVX2 (bit4) si disponible, sino SSE2
 // (bit0, siempre presente en x86-64).
 @HelperOverride(strcmp)
-public i64 lib_strcmp(u8 *a, i64 la, u8 *b, i64 lb) {
+	public i64 lib_strcmp(u8 *a, i64 la, u8 *b, i64 lb) {
 	u64 f = cpu_features();
 	if ((f & 16) != 0) { // bit4 = AVX2
 		return strcmp_avx2(a, la, b, lb);
@@ -210,36 +209,35 @@ public i64 strlen_sse2(char* s) {
 	register("rdi") char *ps = s;
 	register("rax") i64 res;
 	asm volatile {
-        mov     r9, rdi                  // r9 = base original
-        mov     r8, rdi                  // r8 = cursor
+		    mov     r9, rdi
+		    mov     r8, rdi
 
-        // prologo: avanzar byte-a-byte hasta que r8 quede 16-alineado.
-    .align_loop:
-        test    r8, 15                   // (r8 & 15) == 0 ?
-        jz      .aligned                 // ya alineado -> path SIMD
-        movzx   r10, byte [r8]           // *r8
-        test    r10, r10                 // == 0 ?
-        jz      .found_scalar            // nul encontrado en el prologo
-        inc     r8
-        jmp     .align_loop
+		.align_loop:
+		    test    r8, 15
+		    jz      .aligned
+		    movzx   r10, byte [r8]
+		    test    r10, r10
+		    jz      .found_scalar
+		    inc     r8
+		    jmp     .align_loop
 
-    .aligned:
-        pxor    xmm1, xmm1               // xmm1 = 0 (16 bytes cero)
-    .simd_loop:
-        movdqa  xmm0, [r8]               // 16 bytes alineados (no cruza pagina)
-        pcmpeqb xmm0, xmm1               // 0xFF donde byte == 0
-        pmovmskb eax, xmm0               // bit j = 1 si *(r8+j) == 0
-        test    eax, eax                 // algun nul en el chunk ?
-        jnz     .found_simd
-        add     r8, 16                   // siguiente chunk alineado
-        jmp     .simd_loop
+		.aligned:
+		    pxor    xmm1, xmm1
+		.simd_loop:
+		    movdqa  xmm0, [r8]
+		    pcmpeqb xmm0, xmm1
+		    pmovmskb eax, xmm0
+		    test    eax, eax
+		    jnz     .found_simd
+		    add     r8, 16
+		    jmp     .simd_loop
 
-    .found_simd:
-        bsf     eax, eax                 // indice del primer nul en el chunk
-        add     r8, rax                  // r8 -> direccion del nul
-    .found_scalar:
-        mov     rax, r8                  // longitud = (nul - base)
-        sub     rax, r9
+		.found_simd:
+		    bsf     eax, eax
+		    add     r8, rax
+		.found_scalar:
+		    mov     rax, r8
+		    sub     rax, r9
 	};
 	return res;
 }

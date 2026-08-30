@@ -16,33 +16,33 @@
  */
 import std.wideint only u512, u256, u128;
 i32 main() {
-    u512 a = u512.from_u64(100);
-    u512 b = u512.from_u64(58);
-    if ((a + b).to_u64() != 158)  { return 1; }
-    if ((a - b).to_u64() != 42)   { return 2; }
-    if (!(b < a))                 { return 3; }
-    if ((u512.from_u64(6) * u512.from_u64(7)) != u512.from_u64(42)) { return 4; }
-    if ((u512.from_u64(100) / u512.from_u64(7)) != u512.from_u64(14)) { return 5; }
-    if ((u512.from_u64(100) % u512.from_u64(7)) != u512.from_u64(2))  { return 6; }
-    // Acarreo cruzando la frontera de los 256 bits.
-    u512 casi;
-    casi.lo256 = u256.max();
-    casi.hi256 = u256.zero();
-    u512 desb = casi + u512.one();
-    if (desb.lo256)                    { return 7; }
-    if (desb.hi256 != u256.one())      { return 8; }
-    if ((desb - u512.one()) != casi)   { return 9; }
-    // Desplazamientos cruzando esa frontera.
-    u512 sh = u512.one() << 256;
-    if (sh.lo256)                      { return 10; }
-    if (sh.hi256 != u256.one())        { return 11; }
-    if ((sh >> 256) != u512.one())     { return 12; }
-    // Division contrastada con la multiplicacion, con valores grandes.
-    u512 x = u512.from_u64(0xDEADBEEF) << 130;
-    u512 y = u512.from_u64(0x1234567);
-    u512 pr = x * y;
-    if ((pr / y) != x)                 { return 13; }
-    if (pr % y)                        { return 14; }
-    if ((~u512.zero()) != u512.max())  { return 15; }
-    return 42;
+	u512 a = u512.from_u64(100);
+	u512 b = u512.from_u64(58);
+	if ((a + b).to_u64() != 158) { return 1; }
+	if ((a - b).to_u64() != 42) { return 2; }
+	if (!(b < a)) { return 3; }
+	if ((u512.from_u64(6) * u512.from_u64(7)) != u512.from_u64(42)) { return 4; }
+	if ((u512.from_u64(100) / u512.from_u64(7)) != u512.from_u64(14)) { return 5; }
+	if ((u512.from_u64(100) % u512.from_u64(7)) != u512.from_u64(2)) { return 6; }
+	// Acarreo cruzando la frontera de los 256 bits.
+	u512 casi;
+	casi.lo256 = u256.max();
+	casi.hi256 = u256.zero();
+	u512 desb = casi + u512.one();
+	if (desb.lo256) { return 7; }
+	if (desb.hi256 != u256.one()) { return 8; }
+	if ((desb - u512.one()) != casi) { return 9; }
+	// Desplazamientos cruzando esa frontera.
+	u512 sh = u512.one() << 256;
+	if (sh.lo256) { return 10; }
+	if (sh.hi256 != u256.one()) { return 11; }
+	if ((sh >> 256) != u512.one()) { return 12; }
+	// Division contrastada con la multiplicacion, con valores grandes.
+	u512 x  = u512.from_u64(0xDEADBEEF) << 130;
+	u512 y  = u512.from_u64(0x01234567);
+	u512 pr = x * y;
+	if ((pr / y) != x) { return 13; }
+	if (pr % y) { return 14; }
+	if ((~u512.zero()) != u512.max()) { return 15; }
+	return 42;
 }

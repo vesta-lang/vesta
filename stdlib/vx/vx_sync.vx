@@ -55,7 +55,7 @@ extern "kernel32.dll" {
  * @return Id de hilo (kernel32 `GetCurrentThreadId`), nunca 0.
  */
 @Target("os:windows")
-i64 __vsync_tid_raw() {
+	i64 __vsync_tid_raw() {
 	return (i64)GetCurrentThreadId();
 }
 
@@ -64,7 +64,7 @@ i64 __vsync_tid_raw() {
  * @return Id de hilo del kernel, nunca 0.
  */
 @Target("!os:windows")
-i64 __vsync_tid_raw() {
+	i64 __vsync_tid_raw() {
 	register("rax") i64 rax_t = 186; // SYS_gettid (x86-64)
 	asm volatile { syscall };
 	return rax_t;

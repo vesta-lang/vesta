@@ -5,14 +5,14 @@
 // -----------------------------------------------------------------------------
 
 comptime i64 asm_add(i64 a, i64 b) {
-    register("rdi") i64 x = a;
-    register("rsi") i64 y = b;
-    register("rax") i64 out;
-    asm volatile {
-        mov rax, rdi
-        add rax, rsi
-    }
-    return out;
+	register("rdi") i64 x = a;
+	register("rsi") i64 y = b;
+	register("rax") i64 out;
+	asm volatile {
+		mov rax, rdi
+		add rax, rsi
+	}
+	return out;
 }
 
 // La constante se computa por asm en compile-time.
@@ -23,5 +23,5 @@ const i64 SUM = asm_add(40, 2);
 static_assert(SUM == 42, "asm_add(40, 2) debe ser 42");
 
 i32 main() {
-    return (i32) SUM;   // 42
+	return (i32) SUM; // 42
 }

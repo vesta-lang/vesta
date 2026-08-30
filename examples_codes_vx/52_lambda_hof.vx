@@ -8,10 +8,10 @@ namespace ejemplos.lambda_hof;
 // Resultado esperado: R0 = 100 (10 * 10).
 
 i32 apply(fn(i32) -> i32 f, i32 x) {
-    return f(x);
+	return f(x);
 }
 
 i32 main() {
-    fn(i32) -> i32 sq = (i32 n) => n * n;
-    return apply(sq, 10);
+	fn(i32) -> i32 sq = (i32 n) => n * n;
+	return apply(sq, 10);
 }

@@ -17,34 +17,38 @@ namespace ejemplos.pool_workstealing;
 import std.pool only pool_start, pool_submit, pool_join;
 import "vx_sync" only vx_lock, vx_unlock;
 
-i64 g_lock = 0;     // objeto de lock (host_ptr; palabra de monitor en obj+16)
-i64 g_counter = 0;  // contador compartido (hojas del arbol)
+i64 g_lock    = 0;    // objeto de lock (host_ptr; palabra de monitor en obj+16)
+i64 g_counter = 0; // contador compartido (hojas del arbol)
 
 // Tarea del arbol.  depth>0: encola 2 hijos (depth-1) en la deque local del
 // worker.  depth==0: hoja -> incrementa el contador bajo el monitor.
 void fork_task(i64 depth) {
-    if (depth <= 0) {
-        vx_lock((i64*)g_lock);
-        g_counter = g_counter + 1;
-        vx_unlock((i64*)g_lock);
-        return;
-    }
-    pool_submit((i64)(cfn(i64) -> void) fork_task, depth - 1);
-    pool_submit((i64)(cfn(i64) -> void) fork_task, depth - 1);
+	if (depth <= 0) {
+		vx_lock((i64 *)g_lock);
+		g_counter = g_counter + 1;
+		vx_unlock((i64 *)g_lock);
+		return;
+	}
+	pool_submit((i64)(cfn(i64) -> void) fork_task, depth - 1);
+	pool_submit((i64)(cfn(i64) -> void) fork_task, depth - 1);
 }
 
 i32 main() {
-    g_lock = (i64)malloc(4 * 8);
-    i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
-    g_counter = 0;
+	g_lock = (i64)malloc(4 * 8);
+	i64* lo = (i64 *)g_lock;
+	lo[0] = 0;
+	lo[1] = 0;
+	lo[2] = 0;
+	lo[3] = 0;
+	g_counter = 0;
 
-    pool_start(4);   // 4 hilos worker
+	pool_start(4); // 4 hilos worker
 
-    // Una raiz de profundidad 14 -> 16384 hojas repartidas por robo.
-    pool_submit((i64)(cfn(i64) -> void) fork_task, 14);
+	// Una raiz de profundidad 14 -> 16384 hojas repartidas por robo.
+	pool_submit((i64)(cfn(i64) -> void) fork_task, 14);
 
-    pool_join();     // espera a que se drene todo el arbol + para los workers
+	pool_join(); // espera a que se drene todo el arbol + para los workers
 
-    // 2^14 hojas = 16384.
-    return (g_counter == 16384) ? 42 : (i32)(g_counter % 1000);
+	// 2^14 hojas = 16384.
+	return (g_counter == 16_384) ? 42 : (i32)(g_counter % 1000);
 }

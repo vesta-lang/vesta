@@ -13,28 +13,28 @@
 import "bmp";
 
 i32 main() {
-    string path = "Ejemplo60x3.bmp";
+	string path = "Ejemplo60x3.bmp";
 
-    // Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
-    // puntero; ver LIM-10): medir + reservar + leer.
-    i64 size = bmp.bmp_file_size(path);
-    if (size <= 0) {
-        println("El archivo ${path} no pudo encontrarse o no existe.");
-        return 1;
-    }
-    u8* buf = malloc(size + 1);
-    if (bmp.bmp_read_into(path, buf, size) != size) {
-        println("El archivo ${path} no pudo leerse.");
-        free(buf);
-        return 1;
-    }
-    buf[size] = 0;
+	// Patron de DOS PASOS con malloc LOCAL (conserva la naturaleza host del
+	// puntero; ver LIM-10): medir + reservar + leer.
+	i64    size = bmp.bmp_file_size(path);
+	if (size <= 0) {
+		println("El archivo ${path} no pudo encontrarse o no existe.");
+		return 1;
+	}
+	u8* buf = malloc(size + 1);
+	if (bmp.bmp_read_into(path, buf, size) != size) {
+		println("El archivo ${path} no pudo leerse.");
+		free(buf);
+		return 1;
+	}
+	buf[size] = 0;
 
-    // Parsear + volcar via los overlays y las funciones libres.
-    bmp.bmp_print_attributes(buf);
-    println("");
-    bmp.bmp_dump_terminal(buf);
+	// Parsear + volcar via los overlays y las funciones libres.
+	bmp.bmp_print_attributes(buf);
+	println("");
+	bmp.bmp_dump_terminal(buf);
 
-    free(buf);
-    return 0;
+	free(buf);
+	return 0;
 }

@@ -8,18 +8,18 @@ namespace ejemplos.final_hereda_err;
 // solo aviso.
 
 final class Cerrada {
-    public i32 v;
-    public Cerrada(i32 x) { this.v = x; }
-    public i32 quien() { return 1; }
+	public i32 v;
+	public Cerrada(i32 x) { this.v = x; }
+	public i32 quien() { return 1; }
 }
 
 class Hija : Cerrada {
-    public Hija(i32 x) { super(x); }
-    @Override
-    public i32 quien() { return 2; }
+	public Hija(i32 x) { super(x); }
+	@Override
+		public i32 quien() { return 2; }
 }
 
 i32 main() {
-    Hija h = new Hija(1);
-    return h.quien();
+	Hija h = new Hija(1);
+	return h.quien();
 }

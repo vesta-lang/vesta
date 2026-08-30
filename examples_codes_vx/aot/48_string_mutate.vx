@@ -8,13 +8,13 @@
 // Sugar syntax: el usuario escribe `+=`, no metodos.
 
 i32 main() {
-    string s = "ab";     // len 2
-    s += "cd";           // "abcd" -> len 4
-    s += "ef";           // "abcdef" -> len 6
-    s += 'x';            // "abcdefx" -> len 7
+	string s = "ab"; // len 2
+	s += "cd";       // "abcd" -> len 4
+	s += "ef";       // "abcdef" -> len 6
+	s += 'x';        // "abcdefx" -> len 7
 
-    // Verificar el contenido via cstr: s[0]='a'(97), s[6]='x'(120).
-    char* p = s.cstr();
-    // Devolvemos la length (7) como exit-code principal.
-    return (i32) s.length();   // 7
+	// Verificar el contenido via cstr: s[0]='a'(97), s[6]='x'(120).
+	char* p = s.cstr();
+	// Devolvemos la length (7) como exit-code principal.
+	return (i32) s.length(); // 7
 }

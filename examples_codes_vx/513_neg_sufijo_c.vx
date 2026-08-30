@@ -7,6 +7,6 @@ namespace ejemplos.neg_sufijo_c;
 // quien viniera de C y nadie se enteraba.
 
 i32 main() {
-    i64 c = 100L;
-    return (i32) c;
+	i64 c = 100_L;
+	return (i32) c;
 }

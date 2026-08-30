@@ -29,58 +29,59 @@ namespace ejemplos.gc_compact;
 // no-moving de siempre -> mismo resultado.
 
 class Node {
-    i64 v;
-    Node next;
-    Node(i64 x) { this.v = x; this.next = null; }
+	i64 v;
+	Node next;
+	Node(i64 x) { this.v = x;
+		this.next = null; }
 }
 
 // Construye una lista de n nodos (valores 0..n-1); retorna la cabeza (ESCAPA).
 Node build(i64 n) {
-    Node head = null;
-    i64 i = 0;
-    while (i < n) {
-        Node m = new Node(i);
-        m.next = head;
-        head = m;
-        i = i + 1;
-    }
-    return head;
+	Node head = null;
+	i64  i    = 0;
+	while (i < n) {
+		Node m = new Node(i);
+		m.next = head;
+		head   = m;
+		i      = i + 1;
+	}
+	return head;
 }
 
 // Cuenta los nodos alcanzables desde la cabeza.
 i64 count_list(Node h) {
-    i64 acc = 0;
-    Node c = h;
-    while (c != null) {
-        acc++;
-        c = c.next;
-    }
-    return acc;
+	i64  acc = 0;
+	Node c   = h;
+	while (c != null) {
+		acc++;
+		c = c.next;
+	}
+	return acc;
 }
 
 // Corta la lista tras el nodo k: los nodos posteriores quedan inalcanzables
 // (basura en OldGen -> huecos que la compactacion elimina).
 void truncate_at(Node h, i64 k) {
-    Node c = h;
-    i64 i = 0;
-    while (i < k) {
-        c = c.next;
-        i = i + 1;
-    }
-    c.next = null;
+	Node c = h;
+	i64  i = 0;
+	while (i < k) {
+		c = c.next;
+		i = i + 1;
+	}
+	c.next = null;
 }
 
 i32 main() {
-    Node keep = build(40000);       // lista viva -> promovida a OldGen
-    i64 pre = count_list(keep);     // 40000
+	Node keep = build(40_000); // lista viva -> promovida a OldGen
+	i64  pre  = count_list(keep); // 40000
 
-    truncate_at(keep, 19999);        // deja 20000 nodos; el resto es basura
+	truncate_at(keep, 19_999); // deja 20000 nodos; el resto es basura
 
-    gc_collect();                     // colecta la basura; compacta los vivos
+	gc_collect();               // colecta la basura; compacta los vivos
 
-    i64 cnt = count_list(keep);      // 20000 tras compactar (handles intactos)
-    if (cnt == 20000 && pre == 40000) {
-        return 42;                   // exito
-    }
-    return 0;
+	i64 cnt = count_list(keep); // 20000 tras compactar (handles intactos)
+	if (cnt == 20_000 && pre == 40_000) {
+		return 42; // exito
+	}
+	return 0;
 }

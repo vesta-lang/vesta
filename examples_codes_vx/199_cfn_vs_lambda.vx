@@ -53,128 +53,129 @@ namespace ejemplos.cfn_vs_lambda;
 extern "msvcrt.dll" { fn toupper(i32 c) -> i32; }
 
 // Funciones libres normales (su direccion es un puntero a funcion crudo).
-i64 doblar(i64 x)    { return x * 2; }
+i64 doblar(i64 x) { return x * 2; }
 i64 triplicar(i64 x) { return x * 3; }
-i64 negar(i64 x)     { return 0 - x; }
+i64 negar(i64 x) { return 0 - x; }
 
 // callback: recibe un cfn y lo aplica.  El cfn se decide en el call site.
 i64 aplicar(cfn(i64) -> i64 f, i64 x) { return f(x); }
 
 // callback recibido por BORROW (prestamo): el cfn lo posee un unique<> del
 // caller; aqui solo lo leemos sin tomar ownership.
-i64 aplicar_borrow(borrow<cfn(i64) -> i64> b, i64 x) {
-    cfn(i64) -> i64 f = read_borrow(b);   // recupera el cfn (8 bytes) del prestamo
-    return f(x);
+i64 aplicar_borrow(borrow < cfn(i64) -> i64 > b, i64 x) {
+	cfn(i64) -> i64 f = read_borrow(b); // recupera el cfn (8 bytes) del prestamo
+	return f(x);
 }
 
 // Para DECONSTRUIR un lambda: un struct de dos campos de 64 bits = 16 bytes,
 // el mismo layout que el slot {fn_addr, env}.
-struct LambdaRaw { i64 fn_addr; i64 env; }
+struct LambdaRaw { i64 fn_addr;
+	i64 env; }
 
 // --- 1. METODO: el codigo va con el TIPO (dispatch directo, inline-able) -----
 struct Calculadora {
-    i64 base;
-    // Miembro funcion (metodo).  No ocupa bytes en la instancia; el lowering
-    // emite CALL directo a Calculadora_sumar(Calculadora*, i64) -- inline-able.
-    i64 sumar(i64 x) { return this.base + x; }
+	i64 base;
+	// Miembro funcion (metodo).  No ocupa bytes en la instancia; el lowering
+	// emite CALL directo a Calculadora_sumar(Calculadora*, i64) -- inline-able.
+	i64 sumar(i64 x) { return this.base + x; }
 }
 
 // --- 2. cfn FIELD: ATRIBUTO puntero a funcion crudo (8 bytes, CALLIND) -------
 struct Operacion {
-    i64 valor;
-    cfn(i64) -> i64 op;   // puntero a funcion estilo C; reasignable en runtime
+	i64 valor;
+	cfn(i64) -> i64 op; // puntero a funcion estilo C; reasignable en runtime
 }
 
 i32 main() {
-    // === 1. METODO -- dispatch DIRECTO (inline-able) ===
-    Calculadora c;
-    c.base = 100;
-    i64 r1 = c.sumar(5);                 // CALL directo -> 100 + 5 = 105
-    if (r1 != 105) { return 1; }
+	// === 1. METODO -- dispatch DIRECTO (inline-able) ===
+	Calculadora c;
+	c.base = 100;
+	i64 r1 = c.sumar(5); // CALL directo -> 100 + 5 = 105
+	if (r1 != 105) { return 1; }
 
-    // === 2a. cfn FIELD -- puntero a funcion: indirecto y REASIGNABLE ===
-    Operacion o;
-    o.valor = 10;
-    o.op = &doblar;                      // guarda la DIRECCION de doblar (8 B)
-    i64 r2 = (o.op)(o.valor);            // CALLIND -> doblar(10) = 20
-    if (r2 != 20) { return 2; }
+	// === 2a. cfn FIELD -- puntero a funcion: indirecto y REASIGNABLE ===
+	Operacion o;
+	o.valor = 10;
+	o.op    = &doblar;           // guarda la DIRECCION de doblar (8 B)
+	i64 r2 = (o.op)(o.valor); // CALLIND -> doblar(10) = 20
+	if (r2 != 20) { return 2; }
 
-    o.op = triplicar;                    // NOMBRE DESNUDO (sin &): se promociona
-                                         // a &triplicar automaticamente
-    i64 r3 = (o.op)(o.valor);            // CALLIND -> triplicar(10) = 30
-    if (r3 != 30) { return 3; }
+	o.op = triplicar;         // NOMBRE DESNUDO (sin &): se promociona
+	// a &triplicar automaticamente
+	i64 r3 = (o.op)(o.valor); // CALLIND -> triplicar(10) = 30
+	if (r3 != 30) { return 3; }
 
-    // === 2b. cfn por CAST de una direccion cruda (tablas, FFI, kernel) ===
-    cfn(i64) -> i64 g = (cfn(i64) -> i64) ((u64) &doblar);
-    if (g(21) != 42) { return 4; }       // CALLIND -> doblar(21) = 42
+	// === 2b. cfn por CAST de una direccion cruda (tablas, FFI, kernel) ===
+	cfn(i64) -> i64 g = (cfn(i64) -> i64)((u64) & doblar);
+	if (g(21) != 42) { return 4; } // CALLIND -> doblar(21) = 42
 
-    // === 2c. cfn como PARAMETRO (callback) ===
-    if (aplicar(&triplicar, 14) != 42) { return 5; } // triplicar(14) = 42
+	// === 2c. cfn como PARAMETRO (callback) ===
+	if (aplicar(&triplicar, 14) != 42) { return 5; } // triplicar(14) = 42
 
-    // === 2d. TABLA de punteros a funcion (dispatch por indice) ===
-    // La tabla guarda las DIRECCIONES como u64 (igual que una api-table de C o
-    // de un kernel); cada entrada se castea a cfn al invocarla.
-    u64[3] tabla;
-    tabla[0] = (u64) &doblar;
-    tabla[1] = (u64) &triplicar;
-    tabla[2] = (u64) &negar;
-    i64 suma = 0;
-    for (i64 i = 0; i < 3; i = i + 1) {
-        suma = suma + ((cfn(i64) -> i64) tabla[i])(10); // doblar+triplicar+negar
-    }
-    if (suma != 20 + 30 - 10) { return 6; }   // 20 + 30 - 10 = 40
+	// === 2d. TABLA de punteros a funcion (dispatch por indice) ===
+	// La tabla guarda las DIRECCIONES como u64 (igual que una api-table de C o
+	// de un kernel); cada entrada se castea a cfn al invocarla.
+	u64[3] tabla;
+	tabla[0] = (u64) & doblar;
+	tabla[1] = (u64) & triplicar;
+	tabla[2] = (u64) & negar;
+	i64 suma = 0;
+	for (i64 i = 0; i < 3; i = i + 1) {
+		suma = suma + ((cfn(i64) -> i64) tabla[i])(10); // doblar+triplicar+negar
+	}
+	if (suma != 20 + 30 - 10) { return 6; } // 20 + 30 - 10 = 40
 
-    // === 2e. CAST entre firmas distintas (la firma es solo compile-time) ===
-    cfn(i64) -> i64  ci = &doblar;
-    cfn(u64) -> u64  cu = (cfn(u64) -> u64) ci;
-    if (cu(21) != 42) { return 7; }
+	// === 2e. CAST entre firmas distintas (la firma es solo compile-time) ===
+	cfn(i64) -> i64 ci = &doblar;
+	cfn(u64) -> u64 cu = (cfn(u64) -> u64) ci;
+	if (cu(21) != 42) { return 7; }
 
-    // === 2h. &Tipo.metodo -- puntero a metodo NO LIGADO (estilo C) ===
-    // La direccion de un metodo es la de su funcion libre `Tipo__metodo`, que
-    // toma el receptor como PRIMER parametro explicito (`Calculadora*` para un
-    // struct value-type; la referencia para una clase).  El cfn resultante NO
-    // lleva el objeto: hay que pasarlo en cada llamada.
-    cfn(Calculadora*, i64) -> i64 pm = &Calculadora.sumar;
-    Calculadora c2;
-    c2.base = 37;
-    if (pm(&c2, 5) != 42) { return 13; }    // sumar(c2, 5) = 37 + 5 = 42
+	// === 2h. &Tipo.metodo -- puntero a metodo NO LIGADO (estilo C) ===
+	// La direccion de un metodo es la de su funcion libre `Tipo__metodo`, que
+	// toma el receptor como PRIMER parametro explicito (`Calculadora*` para un
+	// struct value-type; la referencia para una clase).  El cfn resultante NO
+	// lleva el objeto: hay que pasarlo en cada llamada.
+	cfn(Calculadora *, i64) -> i64 pm = &Calculadora.sumar;
+	Calculadora c2;
+	c2.base = 37;
+	if (pm(&c2, 5) != 42) { return 13; } // sumar(c2, 5) = 37 + 5 = 42
 
-    // === 2g. INLINE del callback CONOCIDO -- optimizacion ===
-    // Cuando el cfn es una constante conocida en compile-time, el optimizador
-    // reescribe la llamada indirecta (CALLIND) a un CALL directo a `doblar`,
-    // y el inliner puede ABSORBER su cuerpo (aqui, `(21)*2` se pliega a 42 en
-    // compile-time -- cero llamada en runtime).
-    cfn(i64) -> i64 conocido = &doblar;
-    if (conocido(21) != 42) { return 12; }   // inline + const-fold -> 42
+	// === 2g. INLINE del callback CONOCIDO -- optimizacion ===
+	// Cuando el cfn es una constante conocida en compile-time, el optimizador
+	// reescribe la llamada indirecta (CALLIND) a un CALL directo a `doblar`,
+	// y el inliner puede ABSORBER su cuerpo (aqui, `(21)*2` se pliega a 42 en
+	// compile-time -- cero llamada en runtime).
+	cfn(i64) -> i64 conocido = &doblar;
+	if (conocido(21) != 42) { return 12; } // inline + const-fold -> 42
 
-    // === 2i. &extern -- FFI nativo como cfn (via thunk automatico) ===
-    cfn(i32) -> i32 mayus = &toupper;         // genera __cfnthunk_toupper
-    if (mayus(97) != 65) { return 14; }       // toupper('a') = 'A' = 65
+	// === 2i. &extern -- FFI nativo como cfn (via thunk automatico) ===
+	cfn(i32) -> i32 mayus = &toupper;      // genera __cfnthunk_toupper
+	if (mayus(97) != 65) { return 14; }    // toupper('a') = 'A' = 65
 
-    // === 2f. cfn dentro de unique<> -- ownership + move + borrow ===
-    // Un cfn es un valor de 8 bytes, asi que entra en un unique<>/borrow<>
-    // como cualquier primitivo (NO se construye un slot de lambda).
-    cfn(i64) -> i64 cc = &doblar;
-    unique<cfn(i64) -> i64> up = unique_box(cc);   // toma posesion (8 B en heap)
-    unique<cfn(i64) -> i64> uq = move(up);          // transfiere ownership
-    cfn(i64) -> i64 desbox = *ptr_of(uq);           // recupera el cfn (1 LOAD)
-    if (desbox(21) != 42) { return 10; }            // doblar(21) = 42
-    if (aplicar_borrow(lend(uq), 21) != 42) { return 11; } // prestamo -> 42
+	// === 2f. cfn dentro de unique<> -- ownership + move + borrow ===
+	// Un cfn es un valor de 8 bytes, asi que entra en un unique<>/borrow<>
+	// como cualquier primitivo (NO se construye un slot de lambda).
+	cfn(i64) -> i64            cc     = &doblar;
+	unique < cfn(i64) -> i64 > up     = unique_box(cc); // toma posesion (8 B en heap)
+	unique < cfn(i64) -> i64 > uq     = move(up); // transfiere ownership
+	cfn(i64) -> i64            desbox = *ptr_of(uq); // recupera el cfn (1 LOAD)
+	if (desbox(21) != 42) { return 10; }                   // doblar(21) = 42
+	if (aplicar_borrow(lend(uq), 21) != 42) { return 11; } // prestamo -> 42
 
-    // === 3. LAMBDA -- closure con ENV (16 bytes), captura del entorno ===
-    i64 factor = 7;
-    fn(i64) -> i64 escalar = (x) => x * factor;  // CAPTURA `factor` (env != 0)
-    i64 r8 = escalar(6);                 // CALLCLOSURE (env = {factor}) -> 42
-    if (r8 != 42) { return 8; }
+	// === 3. LAMBDA -- closure con ENV (16 bytes), captura del entorno ===
+	i64            factor  = 7;
+	fn(i64) -> i64 escalar = (x) => x * factor; // CAPTURA `factor` (env != 0)
+	i64            r8      = escalar(6); // CALLCLOSURE (env = {factor}) -> 42
+	if (r8 != 42) { return 8; }
 
-    // Reasignar el lambda a otra captura (sigue siendo 16 bytes con su env):
-    i64 delta = 40;
-    escalar = (x) => x + delta;          // nuevo env = {delta}
-    if (escalar(2) != 42) { return 9; }  // 2 + 40 = 42
+	// Reasignar el lambda a otra captura (sigue siendo 16 bytes con su env):
+	i64 delta = 40;
+	escalar = (x) => x + delta;         // nuevo env = {delta}
+	if (escalar(2) != 42) { return 9; } // 2 + 40 = 42
 
-    // NOTA: `(i64) escalar` seria ERROR -- un lambda son 16 bytes.  Para la
-    // direccion cruda se usa cfn/&; para deconstruirlo, un struct de 16 bytes.
+	// NOTA: `(i64) escalar` seria ERROR -- un lambda son 16 bytes.  Para la
+	// direccion cruda se usa cfn/&; para deconstruirlo, un struct de 16 bytes.
 
-    // Todo OK.  Devolvemos 42.
-    return 42;
+	// Todo OK.  Devolvemos 42.
+	return 42;
 }

@@ -13,17 +13,18 @@
  * una sola vez en la base.
  */
 @Abstract
-struct Base {
-    u64 v;
-    public string texto() { u64 x = this.v; return "val=${x:hex}"; }
+	struct Base {
+	u64 v;
+	public string texto() { u64 x = this.v;
+		return "val=${x:hex}"; }
 }
 struct Der : Base {
-    public u64 doble() { return this.v * 2; }
+	public u64 doble() { return this.v * 2; }
 }
 i32 main() {
-    Der d;
-    d.v = 42;
-    println("heredado: ${d.texto()}");
-    println("propio  : ${d.doble()}");
-    return 42;
+	Der d;
+	d.v = 42;
+	println("heredado: ${d.texto()}");
+	println("propio  : ${d.doble()}");
+	return 42;
 }

@@ -16,47 +16,47 @@
 import "simdlib";
 
 i32 main() {
-    // Comparaciones de strings via variables (no literales-en-comparacion).
-    string abc = "abc";
-    string abd = "abd";
-    string ab  = "ab";
-    string alpha = "alpha";
-    string beta  = "beta";
-    string go = "go";
-    string gopher = "gopher";
+	// Comparaciones de strings via variables (no literales-en-comparacion).
+	string abc    = "abc";
+	string abd    = "abd";
+	string ab     = "ab";
+	string alpha  = "alpha";
+	string beta   = "beta";
+	string go     = "go";
+	string gopher = "gopher";
 
-    i64 n = 0;
+	i64 n = 0;
 
-    // --- Orden por primer byte distinto ---
-    n = n + (i64)(abc < abd);    // T: 'c'(99) < 'd'(100)
-    n = n + (i64)(abd > abc);    // T
+	// --- Orden por primer byte distinto ---
+	n = n + (i64)(abc < abd);    // T: 'c'(99) < 'd'(100)
+	n = n + (i64)(abd > abc);    // T
 
-    // --- Prefijos: el mas corto es menor ---
-    n = n + (i64)(ab < abc);     // T
-    n = n + (i64)(abc > ab);     // T
+	// --- Prefijos: el mas corto es menor ---
+	n = n + (i64)(ab < abc);     // T
+	n = n + (i64)(abc > ab);     // T
 
-    // --- Iguales ---
-    n = n + (i64)(abc <= abc);   // T
-    n = n + (i64)(abc == abc);   // T
+	// --- Iguales ---
+	n = n + (i64)(abc <= abc);   // T
+	n = n + (i64)(abc == abc);   // T
 
-    // --- alpha vs beta ---
-    n = n + (i64)(alpha < beta); // T
-    n = n + (i64)(beta > alpha); // T
+	// --- alpha vs beta ---
+	n = n + (i64)(alpha < beta); // T
+	n = n + (i64)(beta > alpha); // T
 
-    // --- go vs gopher (prefijo comun) ---
-    n = n + (i64)(go < gopher);  // T
-    n = n + (i64)(go <= gopher); // T
+	// --- go vs gopher (prefijo comun) ---
+	n = n + (i64)(go < gopher);  // T
+	n = n + (i64)(go <= gopher); // T
 
-    // 10 comparaciones, todas T -> n == 10.
-    i32 cmp_ok = (i32)(n == 10);
+	// 10 comparaciones, todas T -> n == 10.
+	i32  cmp_ok  = (i32)(n == 10);
 
-    // El override de la lib (cross-module) SE invoco: g_calls > 0.
-    u64* ctr = (u64*) section_start(".ovrctr");
-    i32 used_ok = (i32)(*ctr > 0);
+	// El override de la lib (cross-module) SE invoco: g_calls > 0.
+	u64* ctr     = (u64 *) section_start(".ovrctr");
+	i32  used_ok = (i32)(*ctr > 0);
 
-    // 42 solo si las comparaciones son correctas Y el override heredado se uso.
-    if (cmp_ok == 1 && used_ok == 1) {
-        return 42;
-    }
-    return 1;
+	// 42 solo si las comparaciones son correctas Y el override heredado se uso.
+	if (cmp_ok == 1 && used_ok == 1) {
+		return 42;
+	}
+	return 1;
 }

@@ -18,23 +18,23 @@
 // enteras + deterministicas).
 
 class IntOps {
-    public i64 run_hot(i32 n) {
-        i64 acc = 0;
-        i32 i = 1;
-        while (i < n) {
-            i64 a = (i64) i;
-            i64 b = (i64) (i + 7);
-            acc = acc + imin(a, b);
-            acc = acc + imax(a, b);
-            acc = acc + abs(a - 5000);
-            i = i + 1;
-        }
-        return acc;
-    }
+	public i64 run_hot(i32 n) {
+		i64 acc = 0;
+		i32 i   = 1;
+		while (i < n) {
+			i64 a = (i64) i;
+			i64 b = (i64)(i + 7);
+			acc = acc + imin(a, b);
+			acc = acc + imax(a, b);
+			acc = acc + abs(a - 5000);
+			i   = i + 1;
+		}
+		return acc;
+	}
 }
 
 i32 main() {
-    IntOps op = new IntOps();
-    i64 r = op.run_hot(5000000);
-    return (i32)(r & 0xFFFF);
+	IntOps op = new IntOps();
+	i64    r  = op.run_hot(5_000_000);
+	return (i32)(r & 0xFFFF);
 }

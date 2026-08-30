@@ -22,15 +22,15 @@ import std.wideint only u128;
 u64 g_marca = 5;
 
 i32 main() {
-    u128 a;
-    a.lo64 = g_marca * 20;      // 100
-    a.hi64 = 0;
-    u128 b;
-    b.lo64 = 7;
-    b.hi64 = 0;
+	u128 a;
+	a.lo64 = g_marca * 20; // 100
+	a.hi64 = 0;
+	u128 b;
+	b.lo64 = 7;
+	b.hi64 = 0;
 
-    i32 acc = 0;
-    if ((a / b).lo64 == 14) { acc = acc + 30; }
-    if ((a % b).lo64 == 2)  { acc = acc + 12; }
-    return acc;   // 42
+	i32 acc = 0;
+	if ((a / b).lo64 == 14) { acc = acc + 30; }
+	if ((a % b).lo64 == 2) { acc = acc + 12; }
+	return acc; // 42
 }

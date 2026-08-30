@@ -17,25 +17,25 @@
 // R0/R1 deben ser identicos en interp y JIT (determinista IEEE 754).
 
 class FpOps {
-    public f64 run_hot(i32 n) {
-        f64 acc = 0.0;
-        i32 i = 1;
-        while (i < n) {
-            f64 x = (f64) i;
-            acc = acc + sqrt(x);
-            acc = acc + fabs(x - 1000.0);
-            acc = acc + floor(x * 0.7);
-            acc = acc + ceil(x * 0.3);
-            acc = acc + fmin(x, 500000.0);
-            acc = acc + fmax(x, 100.0);
-            i = i + 1;
-        }
-        return acc;
-    }
+	public f64 run_hot(i32 n) {
+		f64 acc = 0.0;
+		i32 i   = 1;
+		while (i < n) {
+			f64 x = (f64) i;
+			acc = acc + sqrt(x);
+			acc = acc + fabs(x - 1000.0);
+			acc = acc + floor(x * 0.7);
+			acc = acc + ceil(x * 0.3);
+			acc = acc + fmin(x, 500_000.0);
+			acc = acc + fmax(x, 100.0);
+			i   = i + 1;
+		}
+		return acc;
+	}
 }
 
 i32 main() {
-    FpOps f = new FpOps();
-    f64 r = f.run_hot(5000000);
-    return (i32)(r * 0.000001);
+	FpOps f = new FpOps();
+	f64   r = f.run_hot(5_000_000);
+	return (i32)(r * 0.000001);
 }

@@ -21,22 +21,22 @@ namespace ejemplos.ffi_runtime;
 //   - Verifica pid != 0 (1) + tick != 0 (1) + 40 = 42.
 
 i32 main() {
-    // Carga DLL.  Devuelve handle host (i64 opaco).
-    i64 lib = ffi_open("kernel32.dll");
+	// Carga DLL.  Devuelve handle host (i64 opaco).
+	i64 lib     = ffi_open("kernel32.dll");
 
-    // Resuelve simbolos.  Cada uno cachea via GetProcAddress.
-    i64 fn_pid  = ffi_sym(lib, "GetCurrentProcessId");
-    i64 fn_tick = ffi_sym(lib, "GetTickCount");
+	// Resuelve simbolos.  Cada uno cachea via GetProcAddress.
+	i64 fn_pid  = ffi_sym(lib, "GetCurrentProcessId");
+	i64 fn_tick = ffi_sym(lib, "GetTickCount");
 
-    // Invocacion variadic.  Ambas son 0-args + retorno i32 (lo capturamos
-    // como i64 -- el upper 32 es basura predecible para esta API que solo
-    // escribe RAX bytes bajos; truncate implicito al asignar a i32 si
-    // necesario).
-    i64 pid  = ffi_call(fn_pid);
-    i64 tick = ffi_call(fn_tick);
+	// Invocacion variadic.  Ambas son 0-args + retorno i32 (lo capturamos
+	// como i64 -- el upper 32 es basura predecible para esta API que solo
+	// escribe RAX bytes bajos; truncate implicito al asignar a i32 si
+	// necesario).
+	i64 pid     = ffi_call(fn_pid);
+	i64 tick    = ffi_call(fn_tick);
 
-    i32 acc = 40;
-    if (pid  != 0) { acc++; }
-    if (tick != 0) { acc++; }
-    return acc;
+	i32 acc = 40;
+	if (pid != 0) { acc++; }
+	if (tick != 0) { acc++; }
+	return acc;
 }

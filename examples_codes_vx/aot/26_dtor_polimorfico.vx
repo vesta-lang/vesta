@@ -18,16 +18,18 @@
 // CALLIND -> se ejecuta ~Dog (note(2)), no ~Animal (note(1)).  Luego free.  Sin
 // leaks (valgrind limpio).
 
-extern "h" { fn note(i64 x) -> void; fn get_note() -> i64; }
+extern "h" { fn note(i64 x) -> void;
+	fn get_note() -> i64; }
 
-class Animal { i64 v; ~Animal() { note(1); } }
+class Animal { i64 v;
+	~Animal() { note(1); } }
 class Dog : Animal { ~Dog() { note(2); } }
 
 void run() {
-    Animal a = new Dog();   // ref base, instancia derivada
-}                           // ~ aqui: dispatch virtual -> ~Dog
+	Animal a = new Dog(); // ref base, instancia derivada
+} // ~ aqui: dispatch virtual -> ~Dog
 
 i64 main() {
-    run();
-    return get_note();      // 2 (se ejecuto ~Dog, no ~Animal)
+	run();
+	return get_note(); // 2 (se ejecuto ~Dog, no ~Animal)
 }

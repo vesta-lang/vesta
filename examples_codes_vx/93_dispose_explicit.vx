@@ -13,25 +13,28 @@ namespace ejemplos.dispose_explicit;
 // Esperado: R00 == 42.
 
 i32 main() {
-    ArrayList xs = arraylist(16);
-    xs.push(1); xs.push(2); xs.push(3);
-    i64 sz1 = xs.size();              // 3
+	ArrayList xs = arraylist(16);
+	xs.push(1);
+	xs.push(2);
+	xs.push(3);
+	i64 sz1 = xs.size(); // 3
 
-    // Liberacion explicita: el handle queda a 0.
-    dispose(xs);
+	// Liberacion explicita: el handle queda a 0.
+	dispose(xs);
 
-    // Crear nueva coleccion con el mismo nombre.
-    xs = arraylist(8);
-    xs.push(100); xs.push(200);
-    i64 sz2 = xs.size();              // 2
+	// Crear nueva coleccion con el mismo nombre.
+	xs = arraylist(8);
+	xs.push(100);
+	xs.push(200);
+	i64 sz2    = xs.size(); // 2
 
-    // sz1 + sz2 = 5 -> retorno 42 con math sencilla:
-    // (3 + 2) * 8 + 2 = 42.
-    i64 result = (sz1 + sz2) * 8 + 2;
-    i32 r32 = result;
-    return r32;
+	// sz1 + sz2 = 5 -> retorno 42 con math sencilla:
+	// (3 + 2) * 8 + 2 = 42.
+	i64 result = (sz1 + sz2) * 8 + 2;
+	i32 r32    = result;
+	return r32;
 
-    // Al exit del scope, el cleanup automatico llama free(xs).
-    // El binding actual de xs es la 2a coleccion (no la 1a, que ya fue
-    // disposed).  free no-op si xs hubiera sido disposed tambien.
+// Al exit del scope, el cleanup automatico llama free(xs).
+// El binding actual de xs es la 2a coleccion (no la 1a, que ya fue
+// disposed).  free no-op si xs hubiera sido disposed tambien.
 }

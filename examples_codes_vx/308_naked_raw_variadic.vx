@@ -14,26 +14,26 @@
 // Resultado esperado: R0 == 42.
 
 @Target("os:windows")
-@Naked
-u64 add_raw(u64 a, ...) {
-    asm {
-        mov rax, rcx      // arg fijo a
-        add rax, rdx      // primer arg variadico crudo
-        ret
-    }
+	@Naked
+	u64 add_raw(u64 a,...) {
+	asm {
+		mov rax, rcx
+		add rax, rdx
+		ret
+	}
 }
 
 @Target("!os:windows")
-@Naked
-u64 add_raw(u64 a, ...) {
-    asm {
-        mov rax, rdi      // arg fijo a
-        add rax, rsi      // primer arg variadico crudo
-        ret
-    }
+	@Naked
+	u64 add_raw(u64 a,...) {
+	asm {
+		mov rax, rdi
+		add rax, rsi
+		ret
+	}
 }
 
 i32 main() {
-    u64 r = add_raw(40, 2);   // 40 + 2 = 42
-    return (i32)r;
+	u64 r = add_raw(40, 2); // 40 + 2 = 42
+	return (i32)r;
 }

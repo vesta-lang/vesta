@@ -25,25 +25,25 @@ void del(i64 r) { Trace.frees = Trace.frees + 1; }
 // gc<unique<i64>> con deleter custom: al salir de scope, el cleanup del box
 // invoca el deleter EXACTAMENTE una vez (CALL directo, sin dispatch dinamico).
 void wrap_unique() {
-    gc<unique<i64>> g = gc_box(unique_with(9, del));
+	gc<unique<i64>> g = gc_box(unique_with(9, del));
 }
 
 i32 main() {
-    // (1) gc<i64>: box de un primitivo, leido con *g.
-    gc<i64> a = gc_box(40);
-    i64 va = *a;                       // 40
+	// (1) gc<i64>: box de un primitivo, leido con *g.
+	gc<i64> a  = gc_box(40);
+	i64     va = *a; // 40
 
-    // (2) gc<f64>: box de un float.
-    gc<f64> b = gc_box(2.0);
-    i64 vb = (i64) *b;                 // 2
+	// (2) gc<f64>: box de un float.
+	gc<f64> b  = gc_box(2.0);
+	i64     vb = (i64) * b; // 2
 
-    // (3) gc<unique<i64>>: cero fuga, del se invoca 1 vez.
-    Trace.frees = 0;
-    wrap_unique();
-    i64 vc = Trace.frees;              // 1
+	// (3) gc<unique<i64>>: cero fuga, del se invoca 1 vez.
+	Trace.frees = 0;
+	wrap_unique();
+	i64                      vc   = Trace.frees; // 1
 
-    // (4) gc<shared<unique<i64>>>: anidamiento arbitrario, construye sin crash.
-    gc<shared<unique<i64>>> deep = gc_box(shared_box(unique_box(42)));
+	// (4) gc<shared<unique<i64>>>: anidamiento arbitrario, construye sin crash.
+	gc<shared<unique<i64>> > deep = gc_box(shared_box(unique_box(42)));
 
-    return (i32)(va + vb + vc);        // 40 + 2 + 1 = 43
+	return (i32)(va + vb + vc); // 40 + 2 + 1 = 43
 }

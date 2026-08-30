@@ -20,14 +20,14 @@
 //
 // @expect 42
 u64 bitops_then_answer() {
-    asm {
-        popcnt rax, rbx
-        tzcnt  rcx, rdx
-        bswap  rsi
-    };
-    return 42;
+	asm {
+		popcnt rax, rbx
+		tzcnt  rcx, rdx
+		bswap  rsi
+	};
+	return 42;
 }
 
 u64 main() {
-    return bitops_then_answer();
+	return bitops_then_answer();
 }

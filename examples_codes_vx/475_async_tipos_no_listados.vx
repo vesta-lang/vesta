@@ -18,21 +18,21 @@
  * `grande` vale 2^63, que sin signo es enorme y con signo es negativo.
  */
 
-typedef u64 Contador;  // alias del usuario sobre un tipo SIN signo
+typedef u64 Contador; // alias del usuario sobre un tipo SIN signo
 
 @Async
-i64 clasifica(Contador grande) {
-    // Sin signo: 2^63 > 1000 -> 1.  Con signo seria negativo -> 0.
-    if (grande > 1000) {
-        return 1;
-    }
-    return 0;
+	i64 clasifica(Contador grande) {
+	// Sin signo: 2^63 > 1000 -> 1.  Con signo seria negativo -> 0.
+	if (grande > 1000) {
+		return 1;
+	}
+	return 0;
 }
 
 i32 main() {
-    Contador enorme = 9223372036854775808;  // 2^63
-    Future<i64> f = clasifica(enorme);
-    i64 r = await f;
-    println("r = ${r}");
-    return (i32) (41 + r);
+	Contador    enorme = 9_223_372_036_854_775_808; // 2^63
+	Future<i64> f      = clasifica(enorme);
+	i64         r      = await f;
+	println("r = ${r}");
+	return (i32)(41 + r);
 }

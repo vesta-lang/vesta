@@ -6,24 +6,24 @@
 //     vm --vx asm_cmp_cmov.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-    u64 ok = 1;
-    register("rax") u64 a = 0;
-    register("rsi") u64 s = 5;
-    register("rdi") u64 d = 10;
-    // max(s,d): rax=s; si s<d, rax=d
-    asm { mov rax, rsi
-          cmp rsi, rdi
-          cmovl rax, rdi };
-    if (a != 10) ok = 0;                 // max(5,10)=10 (taken)
-    register("rcx") u64 c = 20;
-    asm { mov rax, rsi
-          cmp rsi, rcx
-          cmovg rax, rcx };              // 5>20 falso -> rax=s=5
-    if (a != 5) ok = 0;
-    // not-taken preserva TODO el registro (aunque el mov previo es un imm)
-    asm { mov rax, 0x1122
-          cmp rsi, rdi
-          cmovg rax, rcx };              // 5>10 falso -> rax preserva 0x1122
-    if (a != 0x1122) ok = 0;
-    return (ok == 1) ? 42 : 0;
+	u64                 ok = 1;
+	register("rax") u64 a  = 0;
+	register("rsi") u64 s  = 5;
+	register("rdi") u64 d  = 10;
+	// max(s,d): rax=s; si s<d, rax=d
+	asm { mov rax, rsi
+		cmp rsi, rdi
+		cmovl rax, rdi };
+	if (a != 10)        ok = 0; // max(5,10)=10 (taken)
+	register("rcx") u64 c  = 20;
+	asm { mov rax, rsi
+		cmp rsi, rcx
+		cmovg rax, rcx }; // 5>20 falso -> rax=s=5
+	if (a != 5) ok = 0;
+	// not-taken preserva TODO el registro (aunque el mov previo es un imm)
+	asm { mov rax, 0x1122
+		cmp rsi, rdi
+		cmovg rax, rcx }; // 5>10 falso -> rax preserva 0x1122
+	if (a != 0x1122) ok = 0;
+	return (ok == 1) ? 42 : 0;
 }

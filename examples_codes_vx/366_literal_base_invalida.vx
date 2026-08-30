@@ -12,6 +12,6 @@
 import std.wideint only u128;
 
 i32 main() {
-    u128 v = u128(0b1210);
-    return (i32) v.lo64;
+	u128 v = u128(0b0001 210);
+	return (i32) v.lo64;
 }

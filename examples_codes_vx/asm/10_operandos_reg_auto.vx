@@ -10,13 +10,13 @@
 //     vm --vx 10_operandos_reg_auto.vx -o out && vm --run out.velb
 // @expect 42
 u64 main() {
-    asm volatile (
-        reg x = 15,     // in: el compilador elige el registro
-        reg y = 27,     // in
-        reg s,          // scratch/salida (sin init): el compilador lo reserva
-    ) {
-        mov s, x
-        add s, y
-    }
-    return s;           // read-back: s = 15 + 27 = 42
+	asm volatile(
+		reg x = 15, // in: el compilador elige el registro
+		reg y = 27, // in
+		reg s,      // scratch/salida (sin init): el compilador lo reserva
+	) {
+		mov s, x
+		add s, y
+	}
+	return s; // read-back: s = 15 + 27 = 42
 }

@@ -8,72 +8,80 @@
 // Entero: valor explicito o auto-incremento (0,1,2...).  Usable sin cast en
 // aritmetica/comparacion con su tipo base.
 enum Op : u8 {
-    ADD = 0x01,
-    SUB = 0x29,
-    MOV = 0x89
+	ADD = 0x01,
+	SUB = 0x29,
+	MOV = 0x89
 }
-enum Reg : u8 { RAX, RCX, RDX, RBX }   // auto: 0,1,2,3
+enum Reg : u8 {
+	RAX,
+	RCX,
+	RDX,
+	RBX
+} // auto: 0,1,2,3
 
 // Float: cada variante es una constante f64.
 enum Angle : f64 {
-    ZERO = 0.0,
-    QUARTER = 1.5707963,
-    HALF = 3.1415926
+	ZERO    = 0.0,
+	QUARTER = 1.5707963,
+	HALF    = 3.1415926
 }
 
 // String: cada variante es un StringObject.
 enum Verb : string {
-    GET = "GET",
-    POST = "POST",
-    PUT = "PUT"
+	GET  = "GET",
+	POST = "POST",
+	PUT  = "PUT"
 }
 
 // Struct: cada variante es un valor del struct.  Un Color ES un Rgb.
-struct Rgb { u8 r; u8 g; u8 b; }
+struct Rgb { u8 r;
+	u8 g;
+	u8 b; }
 enum Color : Rgb {
-    RED = (Rgb){255, 0, 0},
-    GREEN = (Rgb){0, 255, 0},
-    BLUE = (Rgb){0, 0, 255}
+	RED   = (Rgb) {255, 0, 0},
+	GREEN = (Rgb) {0, 255, 0},
+	BLUE  = (Rgb) {0, 0, 255}
 }
 
 // Clase: cada variante es una instancia.  Un Anchor ES un Point.
 class Point {
-    public i32 x;
-    public i32 y;
-    public Point(i32 a, i32 b) { this.x = a; this.y = b; }
+	public i32 x;
+	public i32 y;
+	public Point(i32 a, i32 b) { this.x = a;
+		this.y = b; }
 }
 enum Anchor : Point {
-    ORIGIN = new Point(0, 0),
-    CORNER = new Point(10, 20)
+	ORIGIN = new Point(0, 0),
+	CORNER = new Point(10, 20)
 }
 
 // Comptime: el valor de una variante es una constante compile-time.
-const i32 MOV_OPCODE = (i32) Op.MOV;   // 0x89
+const i32 MOV_OPCODE = (i32) Op.MOV; // 0x89
 
 i32 main() {
-    // Entero: aritmetica/comparacion directas (sin cast).
-    u8 opcode = Op.MOV;                      // 0x89
-    u8 rbp_num = Reg.RBX;                    // 3
-    i64 acc = (i64) opcode + (i64) rbp_num;  // 0x89 + 3 = 140
+	// Entero: aritmetica/comparacion directas (sin cast).
+	u8  opcode  = Op.MOV;                     // 0x89
+	u8  rbp_num = Reg.RBX;                   // 3
+	i64 acc     = (i64) opcode + (i64) rbp_num; // 0x89 + 3 = 140
 
-    // Float.
-    f64 half = Angle.HALF;                   // 3.1415926
+	// Float.
+	f64 half    = Angle.HALF;                  // 3.1415926
 
-    // String: ==, +, interpolacion.
-    if (Verb.PUT == "PUT") { acc++; }        // 141
-    string msg = "verb=" + Verb.GET;                  // "verb=GET"
+	// String: ==, +, interpolacion.
+	if (Verb.PUT == "PUT") { acc++; }       // 141
+	string msg = "verb=" + Verb.GET;        // "verb=GET"
 
-    // Struct: acceso a campos del valor de la variante.
-    Rgb g = Color.GREEN;
-    acc = acc + (i64) g.g;                            // 141 + 255 = 396
+	// Struct: acceso a campos del valor de la variante.
+	Rgb    g   = Color.GREEN;
+	acc = acc + (i64) g.g; // 141 + 255 = 396
 
-    // Clase: instancia de la variante.
-    Point c = Anchor.CORNER;
-    acc = acc + (i64)(c.x + c.y);                     // 396 + 30 = 426
+	// Clase: instancia de la variante.
+	Point c = Anchor.CORNER;
+	acc = acc + (i64)(c.x + c.y); // 396 + 30 = 426
 
-    // Comptime.
-    acc = acc + (i64) MOV_OPCODE;                     // 426 + 137 = 563
+	// Comptime.
+	acc = acc + (i64) MOV_OPCODE; // 426 + 137 = 563
 
-    println("opcode=${opcode:hex} half=${half} ${msg} acc=${acc}");
-    return (i32) acc;                                  // 563
+	println("opcode=${opcode:hex} half=${half} ${msg} acc=${acc}");
+	return (i32) acc; // 563
 }

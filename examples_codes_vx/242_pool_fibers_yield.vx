@@ -18,51 +18,55 @@ namespace ejemplos.pool_fibers_yield;
 import std.pool only pool_start, pool_submit, pool_join, vx_yield;
 import "vx_sync" only vx_lock, vx_unlock;
 
-i64 g_lock = 0;
+i64 g_lock    = 0;
 i64 g_counter = 0;
 
 // Fibra cooperativa: 10 iteraciones, cada una suma 1 y CEDE al scheduler.
 void coop_fiber(i64 arg) {
-    i64 i = 0;
-    while (i < 10) {
-        vx_lock((i64*)g_lock);
-        g_counter = g_counter + 1;
-        vx_unlock((i64*)g_lock);
-        vx_yield();          // cede: el worker corre otra fibra y luego reanuda
-        i = i + 1;
-    }
+	i64 i = 0;
+	while (i < 10) {
+		vx_lock((i64 *)g_lock);
+		g_counter = g_counter + 1;
+		vx_unlock((i64 *)g_lock);
+		vx_yield(); // cede: el worker corre otra fibra y luego reanuda
+		i = i + 1;
+	}
 }
 
 // Tarea run-to-completion (fibra que nunca cede): suma 10 de golpe.
 void plain_task(i64 arg) {
-    i64 i = 0;
-    while (i < 10) {
-        vx_lock((i64*)g_lock);
-        g_counter = g_counter + 1;
-        vx_unlock((i64*)g_lock);
-        i = i + 1;
-    }
+	i64 i = 0;
+	while (i < 10) {
+		vx_lock((i64 *)g_lock);
+		g_counter = g_counter + 1;
+		vx_unlock((i64 *)g_lock);
+		i = i + 1;
+	}
 }
 
 i32 main() {
-    g_lock = (i64)malloc(4 * 8);
-    i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
-    g_counter = 0;
+	g_lock = (i64)malloc(4 * 8);
+	i64* lo = (i64 *)g_lock;
+	lo[0] = 0;
+	lo[1] = 0;
+	lo[2] = 0;
+	lo[3] = 0;
+	g_counter = 0;
 
-    pool_start(4);
+	pool_start(4);
 
-    i64 k = 0;
-    while (k < 40) {
-        pool_submit((i64)(cfn(i64) -> void) coop_fiber, 0);  // ceden
-        k = k + 1;
-    }
-    k = 0;
-    while (k < 60) {
-        pool_submit((i64)(cfn(i64) -> void) plain_task, 0);  // no ceden
-        k = k + 1;
-    }
+	i64 k = 0;
+	while (k < 40) {
+		pool_submit((i64)(cfn(i64) -> void) coop_fiber, 0); // ceden
+		k = k + 1;
+	}
+	k = 0;
+	while (k < 60) {
+		pool_submit((i64)(cfn(i64) -> void) plain_task, 0); // no ceden
+		k = k + 1;
+	}
 
-    pool_join();
+	pool_join();
 
-    return (g_counter == 1000) ? 42 : (i32)(g_counter % 1000);
+	return (g_counter == 1000) ? 42 : (i32)(g_counter % 1000);
 }

@@ -46,92 +46,94 @@ import "vx_fiber" only fiber_switch, fiber_init, fiber_stack_alloc, fiber_stack_
 //  Layout del estado host (3 qwords): [base+0]=counter [+8]=self_ctx [+16]=main_ctx
 // ===========================================================================
 @Target("!os:windows")
-@Naked void fiber_body() {
-    asm volatile noinfer {
-        mov r13, rdi
-        // ---   incrementar (counter -> 1) ---
-        mov rax, [r13 + 0]
-        add rax, 1
-        mov [r13 + 0], rax
-        // ceder a main (fiber_switch(self, main))
-        mov rdi, [r13 + 8]
-        mov rsi, [r13 + 16]
-        call fiber_switch
-        // --- fase 2 (tras reanudar): incrementar (counter -> 2) ---
-        mov rax, [r13 + 0]
-        add rax, 1
-        mov [r13 + 0], rax
-        // terminar: ceder definitivo a main (no retorna)
-        mov rdi, [r13 + 8]
-        mov rsi, [r13 + 16]
-        call fiber_switch
-        ret
-    }
+	@Naked
+void fiber_body() {
+	asm volatile noinfer {
+		mov r13, rdi
+
+		mov rax, [r13 + 0]
+		add rax, 1
+		mov [r13 + 0], rax
+
+		mov rdi, [r13 + 8]
+		mov rsi, [r13 + 16]
+		call fiber_switch
+
+		mov rax, [r13 + 0]
+		add rax, 1
+		mov [r13 + 0], rax
+
+		mov rdi, [r13 + 8]
+		mov rsi, [r13 + 16]
+		call fiber_switch
+		ret
+	}
 }
 @Target("os:windows")
-@Naked void fiber_body() {
-    asm volatile noinfer {
-        mov r13, rcx
-        // ---   incrementar (counter -> 1) ---
-        mov rax, [r13 + 0]
-        add rax, 1
-        mov [r13 + 0], rax
-        // ceder a main (fiber_switch(self, main))
-        mov rcx, [r13 + 8]
-        mov rdx, [r13 + 16]
-        call fiber_switch
-        // --- fase 2 (tras reanudar): incrementar (counter -> 2) ---
-        mov rax, [r13 + 0]
-        add rax, 1
-        mov [r13 + 0], rax
-        // terminar: ceder definitivo a main (no retorna)
-        mov rcx, [r13 + 8]
-        mov rdx, [r13 + 16]
-        call fiber_switch
-        ret
-    }
+	@Naked
+void fiber_body() {
+	asm volatile noinfer {
+		mov r13, rcx
+
+		mov rax, [r13 + 0]
+		add rax, 1
+		mov [r13 + 0], rax
+
+		mov rcx, [r13 + 8]
+		mov rdx, [r13 + 16]
+		call fiber_switch
+
+		mov rax, [r13 + 0]
+		add rax, 1
+		mov [r13 + 0], rax
+
+		mov rcx, [r13 + 8]
+		mov rdx, [r13 + 16]
+		call fiber_switch
+		ret
+	}
 }
 
 // ===========================================================================
 //  Orquestacion del ciclo de vida.
 // ===========================================================================
 u64 run() {
-    // Bloque HOST: 2 celdas de contexto + estado de 3 qwords.
-    //   [0]=main_ctx  [1]=fib_ctx  [2]=counter  [3]=self_ctx  [4]=main_ctx(copia)
-    u64 blk = (u64)malloc(5 * 8);
-    u64 main_ctx = blk + 0 * 8;
-    u64 fib_ctx  = blk + 1 * 8;
+	// Bloque HOST: 2 celdas de contexto + estado de 3 qwords.
+	//   [0]=main_ctx  [1]=fib_ctx  [2]=counter  [3]=self_ctx  [4]=main_ctx(copia)
+	u64  blk      = (u64)malloc(5 * 8);
+	u64  main_ctx = blk + 0 * 8;
+	u64  fib_ctx  = blk + 1 * 8;
 
-    // Estado de la fibra (3 qwords desde el offset 2).
-    u64 st = blk + 2 * 8;
-    u64* ps = (u64*)st;
-    ps[0] = 0;         // counter
-    ps[1] = fib_ctx;   // self_ctx  (la fibra cede con fiber_switch(self, main))
-    ps[2] = main_ctx;  // main_ctx
+	// Estado de la fibra (3 qwords desde el offset 2).
+	u64  st       = blk + 2 * 8;
+	u64* ps       = (u64 *)st;
+	ps[0] = 0;        // counter
+	ps[1] = fib_ctx;  // self_ctx  (la fibra cede con fiber_switch(self, main))
+	ps[2] = main_ctx; // main_ctx
 
-    // Pila de la fibra (64 KiB) en memoria host, via el modulo importado.
-    u64 stk = fiber_stack_alloc(65536);
+	// Pila de la fibra (64 KiB) en memoria host, via el modulo importado.
+	u64 stk = fiber_stack_alloc(65_536);
 
-    // Crear la fibra: 1er switch arrancara fiber_body(st) sobre stk.
-    fiber_init(fib_ctx, stk, (u64)(cfn() -> void) fiber_body, st);
+	// Crear la fibra: 1er switch arrancara fiber_body(st) sobre stk.
+	fiber_init(fib_ctx, stk, (u64)(cfn() -> void) fiber_body, st);
 
-    // Paso 1: arrancar (main -> fibra).  La fibra incrementa (counter=1) y cede.
-    fiber_switch(main_ctx, fib_ctx);
-    // Aqui counter == 1.
+	// Paso 1: arrancar (main -> fibra).  La fibra incrementa (counter=1) y cede.
+	fiber_switch(main_ctx, fib_ctx);
+	// Aqui counter == 1.
 
-    // Paso 2: reanudar (main -> fibra).  La fibra incrementa (counter=2) y termina.
-    fiber_switch(main_ctx, fib_ctx);
-    // Aqui counter == 2 y la fibra ya cedio definitivo.
+	// Paso 2: reanudar (main -> fibra).  La fibra incrementa (counter=2) y termina.
+	fiber_switch(main_ctx, fib_ctx);
+	// Aqui counter == 2 y la fibra ya cedio definitivo.
 
-    u64 total = ps[0];   // 2
+	u64 total = ps[0]; // 2
 
-    // Liberar la pila (via el modulo importado).
-    fiber_stack_free(stk, 65536);
-    free((i64*)blk);
-    return total;
+	// Liberar la pila (via el modulo importado).
+	fiber_stack_free(stk, 65_536);
+	free((i64 *)blk);
+	return total;
 }
 
 i32 main() {
-    u64 r = run();
-    return (i32)r;   // 2
+	u64 r = run();
+	return (i32)r; // 2
 }

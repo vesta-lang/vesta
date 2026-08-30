@@ -18,86 +18,86 @@
 
 // O(1): operaciones constantes, sin loops.
 i64 constante(i64 x) {
-    return x + 7;
+	return x + 7;
 }
 
 // O(n): un solo loop sobre n.
 i64 lineal(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        acc = acc + i;
-        i = i + 1;
-    }
-    return acc;
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		acc = acc + i;
+		i   = i + 1;
+	}
+	return acc;
 }
 
 // O(n^2): dos loops anidados.
 i64 cuadratico(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        i64 j = 0;
-        while (j < n) {
-            acc = acc + (i * j);
-            j = j + 1;
-        }
-        i = i + 1;
-    }
-    return acc;
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		i64 j = 0;
+		while (j < n) {
+			acc = acc + (i * j);
+			j   = j + 1;
+		}
+		i = i + 1;
+	}
+	return acc;
 }
 
 // O(n): recursion lineal (una sola llamada recursiva).
 i64 factorial(i64 n) {
-    if (n <= 1) {
-        return 1;
-    }
-    return n * factorial(n - 1);
+	if (n <= 1) {
+		return 1;
+	}
+	return n * factorial(n - 1);
 }
 
 // O(n log n): divide-y-venceras (dos self-calls + reduccion a la mitad).
 i64 suma_binaria(i64 lo, i64 hi) {
-    if (lo >= hi) {
-        return lo;
-    }
-    i64 mid = (lo + hi) / 2;
-    i64 izq = suma_binaria(lo, mid);
-    i64 der = suma_binaria(mid + 1, hi);
-    return izq + der;
+	if (lo >= hi) {
+		return lo;
+	}
+	i64 mid = (lo + hi) / 2;
+	i64 izq = suma_binaria(lo, mid);
+	i64 der = suma_binaria(mid + 1, hi);
+	return izq + der;
 }
 
 // @complexity CORRECTA: el analizador infiere O(n) y coincide -> sin warning.
 @complexity(O(n))
-i64 anotada_ok(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        acc = acc + i;
-        i = i + 1;
-    }
-    return acc;
+	i64 anotada_ok(i64 n) {
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		acc = acc + i;
+		i   = i + 1;
+	}
+	return acc;
 }
 
 // @complexity INCORRECTA: el usuario declara O(n) pero el cuerpo tiene dos
 // loops anidados -> el analizador infiere O(n^2) (confianza exacta) y avisa.
 @complexity(O(n))
-i64 anotada_mal(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        i64 j = 0;
-        while (j < n) {
-            acc++;
-            j = j + 1;
-        }
-        i = i + 1;
-    }
-    return acc;
+	i64 anotada_mal(i64 n) {
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		i64 j = 0;
+		while (j < n) {
+			acc++;
+			j = j + 1;
+		}
+		i = i + 1;
+	}
+	return acc;
 }
 
 i32 main() {
-    i64 r = constante(3) + lineal(10) + cuadratico(4);
-    r = r + factorial(5) + suma_binaria(0, 8);
-    r = r + anotada_ok(10) + anotada_mal(5);
-    return 0;
+	i64 r = constante(3) + lineal(10) + cuadratico(4);
+	r = r + factorial(5) + suma_binaria(0, 8);
+	r = r + anotada_ok(10) + anotada_mal(5);
+	return 0;
 }

@@ -14,7 +14,7 @@
 import wtypes only MK, BASE;
 
 i32 main() {
-    // MK(2, 0) = (0 << 10) | 2 = 2.  2 + BASE(40) = 42.
-    i32 r = (i32)MK(2, 0) + (i32)BASE;
-    return r;   // 42
+	// MK(2, 0) = (0 << 10) | 2 = 2.  2 + BASE(40) = 42.
+	i32 r = (i32)MK(2, 0) + (i32)BASE;
+	return r; // 42
 }

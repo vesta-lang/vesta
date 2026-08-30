@@ -32,9 +32,12 @@
 // 1. Funcion PURA y sin efectos: no aloca, no lanza, no hace panic.
 //    El compilador PRUEBA las cuatro propiedades a la vez.
 // --------------------------------------------------------------------------
-@pure @nothrow @nopanic @alloc(0)
-i64 cuadrado(i64 x) {
-    return x * x;
+@pure
+@nothrow
+@nopanic
+@alloc(0)
+	i64 cuadrado(i64 x) {
+	return x * x;
 }
 
 // --------------------------------------------------------------------------
@@ -43,9 +46,11 @@ i64 cuadrado(i64 x) {
 //    Cambiar 'cuadrado' para que tenga efectos invalidaria este contrato
 //    automaticamente (el efecto se propaga por el call-graph).
 // --------------------------------------------------------------------------
-@pure @alloc(0) @nothrow
-i64 combina(i64 a, i64 b) {
-    return cuadrado(a) + cuadrado(b);
+@pure
+@alloc(0)
+@nothrow
+	i64 combina(i64 a, i64 b) {
+	return cuadrado(a) + cuadrado(b);
 }
 
 // --------------------------------------------------------------------------
@@ -53,15 +58,17 @@ i64 combina(i64 a, i64 b) {
 //    reserva memoria de heap (util para hot paths / codigo sin GC).  El
 //    acumulador y el indice viven en registros/stack, no en heap.
 // --------------------------------------------------------------------------
-@alloc(0) @nothrow @nopanic
-i64 suma_hasta(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        acc = acc + i;
-        i = i + 1;
-    }
-    return acc;
+@alloc(0)
+@nothrow
+@nopanic
+	i64 suma_hasta(i64 n) {
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		acc = acc + i;
+		i   = i + 1;
+	}
+	return acc;
 }
 
 // --------------------------------------------------------------------------
@@ -69,9 +76,10 @@ i64 suma_hasta(i64 n) {
 //    funcion de aritmetica pura no reserva stack explicito -> encaja en
 //    cualquier cota.
 // --------------------------------------------------------------------------
-@stack(256) @alloc(0)
-i64 poligono(i64 lado, i64 n) {
-    return lado * lado * n;
+@stack(256)
+@alloc(0)
+	i64 poligono(i64 lado, i64 n) {
+	return lado * lado * n;
 }
 
 // --------------------------------------------------------------------------
@@ -102,16 +110,20 @@ i64 poligono(i64 lado, i64 n) {
 // --------------------------------------------------------------------------
 
 struct Contador {
-    i64 n;
+	i64 n;
 
-    @pure
-    @nothrow
-    @nopanic
-    @alloc(0)
-    @stack(0)
-    @complexity(partial_pre: O(1), partial_post: O(1),
-                total_pre: O(1), total_post: O(1))
-    public i64 leer() { return this.n; }
+	@pure
+		@nothrow
+		@nopanic
+		@alloc(0)
+		@stack(0)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public i64 leer() { return this.n; }
 }
 
 // --------------------------------------------------------------------------
@@ -134,25 +146,26 @@ struct Contador {
 // --------------------------------------------------------------------------
 
 struct Caja<T> {
-    T v;
+	T v;
 
-    // Con enteros, una suma y ya.  Con floats, el cuerpo entra en un bucle
-    // (sumar dos patrones IEEE 754 como enteros no da la suma de los numeros),
-    // asi que el coste NO es el mismo -- y el contrato lo dice.
-    @nothrow
-    @nopanic
-    @alloc(0)
-    @complexity(total_post: O(1), when: is_integer<T>())
-    @complexity(total_post: O(n), when: is_float<T>())
-    public T sumar(T d) {
-        if (is_float<T>()) {
-            T acc = this.v;
-            i64 i = 0;
-            while (i < 3) { acc = acc + d; i = i + 1; }
-            return acc;
-        }
-        return this.v + d;
-    }
+	// Con enteros, una suma y ya.  Con floats, el cuerpo entra en un bucle
+	// (sumar dos patrones IEEE 754 como enteros no da la suma de los numeros),
+	// asi que el coste NO es el mismo -- y el contrato lo dice.
+	@nothrow
+		@nopanic
+		@alloc(0)
+		@complexity(total_post: O(1), when: is_integer<T>())
+		@complexity(total_post: O(n), when: is_float<T>())
+		public T sumar(T d) {
+		if (is_float<T>()) {
+			T               acc = this.v;
+			i64             i   = 0;
+			while (i < 3) { acc = acc + d;
+				i = i + 1; }
+			return acc;
+		}
+		return this.v + d;
+	}
 }
 
 // El `when:` de target se escribe igual, y los dos ejes se combinan en la
@@ -167,20 +180,20 @@ struct Caja<T> {
 // arm64 es el LL/SC nativo -> una operacion, O(1).
 
 i32 main() {
-    i64 r = combina(3, 4) + suma_hasta(10) + poligono(2, 5);
-    // combina(3,4) = 9 + 16 = 25 ; suma_hasta(10) = 45 ; poligono(2,5) = 20
+	i64 r = combina(3, 4) + suma_hasta(10) + poligono(2, 5);
+	// combina(3,4) = 9 + 16 = 25 ; suma_hasta(10) = 45 ; poligono(2,5) = 20
 
-    Contador c;
-    c.n = 7;
-    r = r + c.leer(); // 90 + 7 = 97
+	Contador c;
+	c.n = 7;
+	r   = r + c.leer(); // 90 + 7 = 97
 
-    Caja<i64> ci;
-    ci.v = 1;
-    r = r + ci.sumar(2); // 97 + 3 = 100
+	Caja<i64> ci;
+	ci.v = 1;
+	r    = r + ci.sumar(2); // 97 + 3 = 100
 
-    Caja<f64> cf;
-    cf.v = 1.0;
-    r = r + (i64) cf.sumar(3.0); // 1 + 3*3 = 10 -> 100 + 10 = 110
+	Caja<f64> cf;
+	cf.v = 1.0;
+	r    = r + (i64) cf.sumar(3.0); // 1 + 3*3 = 10 -> 100 + 10 = 110
 
-    return (i32) r;
+	return (i32) r;
 }

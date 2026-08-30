@@ -22,48 +22,48 @@ namespace ejemplos.operator_overload;
 // Resultado esperado: 42.
 
 class Vec2 {
-    i32 x;
-    i32 y;
+	i32 x;
+	i32 y;
 
-    public Vec2(i32 ax, i32 ay) {
-        this.x = ax;
-        this.y = ay;
-    }
+	public Vec2(i32 ax, i32 ay) {
+		this.x = ax;
+		this.y = ay;
+	}
 
-    // Sobrecarga de `+`: devuelve la suma de todas las componentes.
-    public i32 __add__(Vec2 o) {
-        return this.x + o.x + this.y + o.y;
-    }
+	// Sobrecarga de `+`: devuelve la suma de todas las componentes.
+	public i32 __add__(Vec2 o) {
+		return this.x + o.x + this.y + o.y;
+	}
 
-    // Sobrecarga de `==`: igualdad componente a componente.
-    public bool __eq__(Vec2 o) {
-        return this.x == o.x && this.y == o.y;
-    }
+	// Sobrecarga de `==`: igualdad componente a componente.
+	public bool __eq__(Vec2 o) {
+		return this.x == o.x && this.y == o.y;
+	}
 }
 
 i32 main() {
-    Vec2 a = new Vec2(10, 20);
-    Vec2 b = new Vec2(5, 7);
+	Vec2 a       = new Vec2(10, 20);
+	Vec2 b       = new Vec2(5, 7);
 
-    // Operador `+` sobrecargado: 10+5+20+7 = 42.
-    i32 total = a + b;             // despacha a a.__add__(b)
+	// Operador `+` sobrecargado: 10+5+20+7 = 42.
+	i32  total   = a + b; // despacha a a.__add__(b)
 
-    // Operador `==` sobrecargado (verdadero): a == a2 -> 1.
-    Vec2 a2 = new Vec2(10, 20);
-    i32 eq_true = (i32)(a == a2);  // a.__eq__(a2) -> true -> 1
+	// Operador `==` sobrecargado (verdadero): a == a2 -> 1.
+	Vec2 a2      = new Vec2(10, 20);
+	i32  eq_true = (i32)(a == a2); // a.__eq__(a2) -> true -> 1
 
-    // Operador `!=` (derivado de __eq__ negado): a != b -> verdadero.
-    i32 ne_true = (i32)(a != b);   // !(a.__eq__(b)) -> true -> 1
+	// Operador `!=` (derivado de __eq__ negado): a != b -> verdadero.
+	i32  ne_true = (i32)(a != b);  // !(a.__eq__(b)) -> true -> 1
 
-    // FALLBACK INTACTO: aritmetica de int y comparacion de int siguen
-    // funcionando exactamente igual que sin overloading.
-    i32 i = 3;
-    i32 j = 3;
-    i32 int_eq = (i32)(i == j);    // comparacion de int clasica -> 1
-    i32 int_sum = 1 + 1;           // suma de int clasica -> 2
+	// FALLBACK INTACTO: aritmetica de int y comparacion de int siguen
+	// funcionando exactamente igual que sin overloading.
+	i32  i       = 3;
+	i32  j       = 3;
+	i32  int_eq  = (i32)(i == j); // comparacion de int clasica -> 1
+	i32  int_sum = 1 + 1; // suma de int clasica -> 2
 
-    // 42 solo si TODO va bien:
-    //   total(42) si eq_true && ne_true && int_eq son 1 y int_sum es 2.
-    i32 gate = eq_true * ne_true * int_eq * (int_sum - 1);  // 1*1*1*1 = 1
-    return total * gate;           // 42 * 1 = 42
+	// 42 solo si TODO va bien:
+	//   total(42) si eq_true && ne_true && int_eq son 1 y int_sum es 2.
+	i32  gate    = eq_true * ne_true * int_eq * (int_sum - 1); // 1*1*1*1 = 1
+	return total * gate;                                   // 42 * 1 = 42
 }

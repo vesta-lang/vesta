@@ -6,6 +6,6 @@ namespace ejemplos.neg_sufijo_entero_en_float;
 // decimal tambien es una decision y tambien se escribe.
 
 i32 main() {
-    f64 mal = 3.14_i32;
-    return (i32) mal;
+	f64 mal = 3.14_i32;
+	return (i32) mal;
 }

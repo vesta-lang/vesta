@@ -13,21 +13,21 @@
  */
 import std.wideint only i512, u256;
 i32 main() {
-    i512 n = i512.from_i64(-100);
-    i512 s = i512.from_i64(7);
-    if (!n.is_negative())                { return 1; }
-    if (s.is_negative())                 { return 2; }
-    if (!(n < s))                        { return 3; }
-    if (-n != i512.from_i64(100))        { return 4; }
-    if ((n + s) != i512.from_i64(-93))   { return 5; }
-    if ((n / s) != i512.from_i64(-14))   { return 6; }
-    if ((n % s) != i512.from_i64(-2))    { return 7; }
-    i512 mu = i512.from_i64(-1);
-    if ((mu >> 7) != mu)                 { return 8; }
-    if ((i512.from_i64(-64) >> 3) != i512.from_i64(-8)) { return 9; }
-    if (!i512.min().is_negative())       { return 10; }
-    if (i512.max().is_negative())        { return 11; }
-    if (!(i512.min() < i512.max()))      { return 12; }
-    if ((i512.from_i64(100) / i512.from_i64(-7)) != i512.from_i64(-14)) { return 13; }
-    return 42;
+	i512 n = i512.from_i64(-100);
+	i512 s = i512.from_i64(7);
+	if (!n.is_negative()) { return 1; }
+	if (s.is_negative()) { return 2; }
+	if (!(n < s)) { return 3; }
+	if (-n != i512.from_i64(100)) { return 4; }
+	if ((n + s) != i512.from_i64(-93)) { return 5; }
+	if ((n / s) != i512.from_i64(-14)) { return 6; }
+	if ((n % s) != i512.from_i64(-2)) { return 7; }
+	i512 mu = i512.from_i64(-1);
+	if ((mu >> 7) != mu) { return 8; }
+	if ((i512.from_i64(-64) >> 3) != i512.from_i64(-8)) { return 9; }
+	if (!i512.min().is_negative()) { return 10; }
+	if (i512.max().is_negative()) { return 11; }
+	if (!(i512.min() < i512.max())) { return 12; }
+	if ((i512.from_i64(100) / i512.from_i64(-7)) != i512.from_i64(-14)) { return 13; }
+	return 42;
 }

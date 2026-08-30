@@ -11,4 +11,4 @@
 // tests/aot/avx_scalar_elf_test.sh.
 
 public f64 fma2(f64 a, f64 b, f64 c) { return a * b + c; } // VMULSD + VADDSD
-public f64 poly(f64 x) { return x * x - x; }               // VMULSD + VSUBSD
+public f64 poly(f64 x) { return x * x - x; }

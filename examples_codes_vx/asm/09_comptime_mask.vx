@@ -4,11 +4,11 @@
 // ANTES de ensamblar.
 //
 // @expect 0x340078
-const u32 MASK = 0x00FF00FF;          // mascara de bytes (cabe en imm32)
+const u32 MASK = 0x00FF00FF; // mascara de bytes (cabe en imm32)
 u64 main() {
-    register("rax") u64 v = 0x12345678;
-    asm volatile {
-        and rax, MASK                    // MASK -> 0xff00ff (comptime)
-    };
-    return v;                            // 0x12345678 & 0x00FF00FF = 0x340078
+	register("rax") u64 v = 0x12345678;
+	asm volatile {
+		and rax, MASK // MASK -> 0xff00ff (comptime)
+	};
+	return v; // 0x12345678 & 0x00FF00FF = 0x340078
 }

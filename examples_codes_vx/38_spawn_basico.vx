@@ -7,11 +7,11 @@ namespace ejemplos.spawn_basico;
 // el padre comprueba que la PID es valida y devuelve un valor positivo.
 
 i32 main() {
-    i64 pid = spawn {
-        i32 dummy = 42;  // hijo: trabajo trivial, luego hlt automatico
-    };
-    if (pid != 0) {
-        return 100;       // OK: hijo creado
-    }
-    return 0;             // FAIL: spawn no produjo PID
+	i64 pid = spawn {
+		i32 dummy = 42; // hijo: trabajo trivial, luego hlt automatico
+	};
+	if (pid != 0) {
+		return 100; // OK: hijo creado
+	}
+	return 0; // FAIL: spawn no produjo PID
 }

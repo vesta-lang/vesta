@@ -17,40 +17,40 @@ namespace ejemplos.vectorize_axpy;
 // =============================================================================
 
 i64 main() {
-    i64 N = 100;
-    f64* a = malloc(N * 8);
-    f64* b = malloc(N * 8);
-    f64* c = malloc(N * 8);
-    f64* d = malloc(N * 8);
+	i64  N = 100;
+	f64* a = malloc(N * 8);
+	f64* b = malloc(N * 8);
+	f64* c = malloc(N * 8);
+	f64* d = malloc(N * 8);
 
-    // Init (no vectorizable: depende de i).
-    for (i64 i = 0; i < N; i = i + 1) {
-        a[i] = (f64) i;          // 0, 1, 2, ...
-        b[i] = (f64)(i + 1);     // 1, 2, 3, ...
-        d[i] = 2.0;              // factor por-elemento (array)
-    }
+	// Init (no vectorizable: depende de i).
+	for (i64 i = 0; i < N; i = i + 1) {
+		a[i] = (f64) i;      // 0, 1, 2, ...
+		b[i] = (f64)(i + 1); // 1, 2, 3, ...
+		d[i] = 2.0;          // factor por-elemento (array)
+	}
 
-    // --- left-leaning: c[i] = a[i]*2.0 + b[i] = 2i + (i+1) = 3i+1 ---
-    for (i64 i = 0; i < N; i = i + 1) { c[i] = a[i] * 2.0 + b[i]; }
-    f64 s1 = 0.0;
-    for (i64 i = 0; i < N; i = i + 1) { s1 = s1 + c[i]; }
+	// --- left-leaning: c[i] = a[i]*2.0 + b[i] = 2i + (i+1) = 3i+1 ---
+	for (i64 i = 0; i < N; i = i + 1) { c[i] = a[i] * 2.0 + b[i]; }
+	f64 s1 = 0.0;
+	for (i64 i = 0; i < N; i = i + 1) { s1 = s1 + c[i]; }
 
-    // --- right-leaning: c[i] = b[i] + a[i]*2.0 (mismo valor que s1) ---
-    for (i64 i = 0; i < N; i = i + 1) { c[i] = b[i] + a[i] * 2.0; }
-    f64 s2 = 0.0;
-    for (i64 i = 0; i < N; i = i + 1) { s2 = s2 + c[i]; }
+	// --- right-leaning: c[i] = b[i] + a[i]*2.0 (mismo valor que s1) ---
+	for (i64 i = 0; i < N; i = i + 1) { c[i] = b[i] + a[i] * 2.0; }
+	f64 s2 = 0.0;
+	for (i64 i = 0; i < N; i = i + 1) { s2 = s2 + c[i]; }
 
-    // --- 3-array: c[i] = a[i]*d[i] + b[i] = 2i + (i+1) (mismo valor) ---
-    for (i64 i = 0; i < N; i = i + 1) { c[i] = a[i] * d[i] + b[i]; }
-    f64 s3 = 0.0;
-    for (i64 i = 0; i < N; i = i + 1) { s3 = s3 + c[i]; }
+	// --- 3-array: c[i] = a[i]*d[i] + b[i] = 2i + (i+1) (mismo valor) ---
+	for (i64 i = 0; i < N; i = i + 1) { c[i] = a[i] * d[i] + b[i]; }
+	f64 s3 = 0.0;
+	for (i64 i = 0; i < N; i = i + 1) { s3 = s3 + c[i]; }
 
-    free(a);
-    free(b);
-    free(c);
-    free(d);
+	free(a);
+	free(b);
+	free(c);
+	free(d);
 
-    // s1 = s2 = s3 = sum_{i=0}^{99} (3i+1) = 3*4950 + 100 = 14950.
-    // total = 3 * 14950 = 44850.
-    return (i64)(s1 + s2 + s3);
+	// s1 = s2 = s3 = sum_{i=0}^{99} (3i+1) = 3*4950 + 100 = 14950.
+	// total = 3 * 14950 = 44850.
+	return (i64)(s1 + s2 + s3);
 }

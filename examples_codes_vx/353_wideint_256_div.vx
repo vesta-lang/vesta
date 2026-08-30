@@ -19,30 +19,30 @@
  */
 import std.wideint only u256, i256, u128;
 i32 main() {
-    // Division exacta y con resto.
-    if ((u256.from_u64(100) / u256.from_u64(7)) != u256.from_u64(14)) { return 1; }
-    if ((u256.from_u64(100) % u256.from_u64(7)) != u256.from_u64(2))  { return 2; }
-    // Neutros.
-    u256 a = u256.from_u64(123456789);
-    if ((a / u256.one()) != a)          { return 3; }
-    if (a % u256.one())                 { return 4; }
-    // Validada contra la multiplicacion: (a*b)/b == a, con valores grandes.
-    u256 x = u256.from_u64(0xDEADBEEF) << 61;
-    u256 y = u256.from_u64(0x1234567);
-    u256 pr = x * y;
-    if ((pr / y) != x)                  { return 5; }
-    if (pr % y)                         { return 6; }
-    // Cruzando la frontera de 128.
-    u256 big = u256.one() << 200;
-    if ((big / (u256.one() << 100)) != (u256.one() << 100)) { return 7; }
-    // checked_*
-    match a.checked_div(u256.zero()) { case Some(q) => { return 8; } case None => {} }
-    match a.checked_div(u256.from_u64(3)) { case Some(q) => { if (q != a / u256.from_u64(3)) { return 9; } } case None => { return 10; } }
-    // Con signo: trunca hacia cero, resto con el signo del dividendo.
-    i256 n = i256.from_i64(-100);
-    i256 s = i256.from_i64(7);
-    if ((n / s) != i256.from_i64(-14))  { return 11; }
-    if ((n % s) != i256.from_i64(-2))   { return 12; }
-    if ((i256.from_i64(100) / i256.from_i64(-7)) != i256.from_i64(-14)) { return 13; }
-    return 42;
+	// Division exacta y con resto.
+	if ((u256.from_u64(100) / u256.from_u64(7)) != u256.from_u64(14)) { return 1; }
+	if ((u256.from_u64(100) % u256.from_u64(7)) != u256.from_u64(2)) { return 2; }
+	// Neutros.
+	u256 a = u256.from_u64(123_456_789);
+	if ((a / u256.one()) != a) { return 3; }
+	if (a % u256.one()) { return 4; }
+	// Validada contra la multiplicacion: (a*b)/b == a, con valores grandes.
+	u256 x  = u256.from_u64(0xDEADBEEF) << 61;
+	u256 y  = u256.from_u64(0x01234567);
+	u256 pr = x * y;
+	if ((pr / y) != x) { return 5; }
+	if (pr % y) { return 6; }
+	// Cruzando la frontera de 128.
+	u256 big = u256.one() << 200;
+	if ((big / (u256.one() << 100)) != (u256.one() << 100)) { return 7; }
+	// checked_*
+	match a.checked_div(u256.zero()) { case Some(q) => { return 8; } case None => { } }
+	match a.checked_div(u256.from_u64(3)) { case Some(q) => { if (q != a / u256.from_u64(3)) { return 9; } } case None => { return 10; } }
+	// Con signo: trunca hacia cero, resto con el signo del dividendo.
+	i256 n = i256.from_i64(-100);
+	i256 s = i256.from_i64(7);
+	if ((n / s) != i256.from_i64(-14)) { return 11; }
+	if ((n % s) != i256.from_i64(-2)) { return 12; }
+	if ((i256.from_i64(100) / i256.from_i64(-7)) != i256.from_i64(-14)) { return 13; }
+	return 42;
 }

@@ -12,16 +12,16 @@
 namespace iface_err;
 
 concept Dibujable {
-    i64 area();
+	i64 area();
 }
 
 // No implementa `area()` -> incumple el contrato Dibujable.
 struct Vacio : Dibujable {
-    i64 x;
+	i64 x;
 }
 
 i32 main() {
-    Vacio v;
-    v.x = 1;
-    return (i32) v.x;
+	Vacio v;
+	v.x = 1;
+	return (i32) v.x;
 }

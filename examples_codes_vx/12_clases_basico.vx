@@ -25,18 +25,18 @@ namespace ejemplos.clases_basico;
 // Resultado esperado: R00 == 7  (3 + 4)
 
 class Punto {
-    i32 x;
-    i32 y;
-    Punto(i32 a, i32 b) {
-        this.x = a;
-        this.y = b;
-    }
-    i32 sum() {
-        return this.x + this.y;
-    }
+	i32 x;
+	i32 y;
+	Punto(i32 a, i32 b) {
+		this.x = a;
+		this.y = b;
+	}
+	i32 sum() {
+		return this.x + this.y;
+	}
 }
 
 i32 main() {
-    Punto p = new Punto(3, 4);
-    return p.sum();
+	Punto p = new Punto(3, 4);
+	return p.sum();
 }

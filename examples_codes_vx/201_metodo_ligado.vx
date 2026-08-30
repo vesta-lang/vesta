@@ -9,16 +9,17 @@ namespace ejemplos.metodo_ligado;
 // Reusa el modelo de ownership sin GC de la Fase 1 (env owned por el campo).
 
 class Contador {
-    i64 n;
-    i64 inc()        { this.n = this.n + 1; return this.n; }
-    i64 suma(i64 x)  { return this.n + x; }
+	i64 n;
+	i64 inc() { this.n = this.n + 1;
+		return this.n; }
+	i64 suma(i64 x) { return this.n + x; }
 }
 
 // Receptor STRUCT (value-type): el metodo ligado captura una COPIA del struct
 // (snapshot al momento de `&p.metodo`); opera sobre esa copia.
 struct Punto {
-    i64 v;
-    i64 escala(i64 k) { return this.v * k; }
+	i64 v;
+	i64 escala(i64 k) { return this.v * k; }
 }
 
 // callback: recibe un metodo ligado (lambda) y lo aplica.
@@ -28,35 +29,36 @@ i64 aplicar(fn(i64) -> i64 f, i64 x) { return f(x); }
 class Widget { fn() -> i64 onTick; }
 
 i32 main() {
-    Contador c = new Contador();
+	Contador    c    = new Contador();
 
-    // 1. Ligado en variable: opera sobre el MISMO objeto c.
-    fn() -> i64 paso = &c.inc;
-    paso();
-    paso();                          // c.n = 2
-    if (c.n != 2) { return 1; }
+	// 1. Ligado en variable: opera sobre el MISMO objeto c.
+	fn() -> i64 paso = &c.inc;
+	paso();
+	paso(); // c.n = 2
+	if (c.n != 2) { return 1; }
 
-    // 2. Ligado con args, pasado como callback.
-    c.n = 30;
-    if (aplicar(&c.suma, 5) != 35) { return 2; }   // c.suma(5) = 30 + 5
+	// 2. Ligado con args, pasado como callback.
+	c.n = 30;
+	if (aplicar(&c.suma, 5) != 35) { return 2; } // c.suma(5) = 30 + 5
 
-    // 3. Ligado GUARDADO en un campo: el env (que captura c) es propiedad
-    //    del Widget y lo libera su destructor (sin GC).
-    Widget w = new Widget();
-    w.onTick = &c.inc;
-    i64 r = w.onTick();              // c.inc() -> c.n = 31
-    if (r != 31) { return 3; }
+	// 3. Ligado GUARDADO en un campo: el env (que captura c) es propiedad
+	//    del Widget y lo libera su destructor (sin GC).
+	Widget w = new Widget();
+	w.onTick = &c.inc;
+	i64 r = w.onTick(); // c.inc() -> c.n = 31
+	if (r != 31) { return 3; }
 
-    // 4. Reasignar el campo closure: el env anterior se libera (sin fuga).
-    Contador c2 = new Contador();
-    c2.n = 9;
-    w.onTick = &c2.inc;             // libera el env de `&c.inc` antes de guardar
-    if (w.onTick() != 10) { return 4; }   // c2.inc() -> 10
+	// 4. Reasignar el campo closure: el env anterior se libera (sin fuga).
+	Contador c2 = new Contador();
+	c2.n     = 9;
+	w.onTick = &c2.inc; // libera el env de `&c.inc` antes de guardar
+	if (w.onTick() != 10) { return 4; } // c2.inc() -> 10
 
-    // 5. Receptor STRUCT: captura una copia del struct.
-    Punto p; p.v = 6;
-    fn(i64) -> i64 g = &p.escala;
-    if (g(7) != 42) { return 5; }   // 6 * 7 = 42 (sobre la copia)
+	// 5. Receptor STRUCT: captura una copia del struct.
+	Punto p;
+	p.v = 6;
+	fn(i64) -> i64 g = &p.escala;
+	if (g(7) != 42) { return 5; } // 6 * 7 = 42 (sobre la copia)
 
-    return 42;
+	return 42;
 }

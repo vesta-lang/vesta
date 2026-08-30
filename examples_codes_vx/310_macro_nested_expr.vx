@@ -16,15 +16,16 @@
 comptime string source(expr code) { return code; }
 
 // @Macro que genera codigo, forwardeando su `expr` param al helper anidado:
-@Macro comptime string twice(expr e) {
-    return "(" + source(e) + ") + (" + source(e) + ")";
+@Macro
+comptime string twice(expr e) {
+	return "(" + source(e)+ ") + (" + source(e)+ ")";
 }
 
 i32 main() {
-    i32 a = 20;
-    i32 b = 1;
-    // twice(a + b) se expande al codigo:  (a + b) + (a + b)  ->  21 + 21 = 42
-    i32 r = twice(a + b);
-    println("r=${r}");
-    return r;
+	i32 a = 20;
+	i32 b = 1;
+	// twice(a + b) se expande al codigo:  (a + b) + (a + b)  ->  21 + 21 = 42
+	i32 r = twice(a + b);
+	println("r=${r}");
+	return r;
 }

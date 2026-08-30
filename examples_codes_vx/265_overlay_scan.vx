@@ -15,44 +15,45 @@
 // Registro con un array de `count` ranuras de 8 bytes empezando en 0x10.  El
 // campo `tail` vive JUSTO tras la ultima ranura: su direccion depende de
 // `count` (dato en runtime), y el resolver la halla recorriendo en un bucle.
-@overlay struct SlotRec {
-    u32 count @0x00;                 // numero de ranuras de 8 bytes
-    u32 tail @offset {
-        u64 addr = base + 0x10;      // primera ranura
-        u64 i = 0;
-        while (i < count) {          // recorre las `count` ranuras  <-- BUCLE
-            addr = addr + 8;         // cada ranura ocupa 8 bytes
-            i = i + 1;
-        }
-        return addr;                 // la direccion del tail: tras la ultima
-    };
+@overlay
+struct SlotRec {
+	u32 count @0x00; // numero de ranuras de 8 bytes
+	u32 tail @offset {
+		u64 addr = base + 0x10; // primera ranura
+		u64 i    = 0;
+		while (i < count) {  // recorre las `count` ranuras  <-- BUCLE
+			addr = addr + 8; // cada ranura ocupa 8 bytes
+			i    = i + 1;
+		}
+		return addr; // la direccion del tail: tras la ultima
+	};
 }
 
 i32 main() {
-    u8* a = (u8*) malloc(128);
-    u8* b = (u8*) malloc(128);
+	u8*     a  = (u8 *) malloc(128);
+	u8*     b  = (u8 *) malloc(128);
 
-    // Registro A: 2 ranuras -> tail en 0x10 + 2*8 = 0x20.
-    SlotRec ra = SlotRec(a);
-    ra.count = (u32)2;
-    ra.tail  = (u32)100;   // STORE en la direccion que halla el bucle (a+0x20)
+	// Registro A: 2 ranuras -> tail en 0x10 + 2*8 = 0x20.
+	SlotRec ra = SlotRec(a);
+	ra.count = (u32)2;
+	ra.tail  = (u32)100; // STORE en la direccion que halla el bucle (a+0x20)
 
-    // Registro B: 4 ranuras -> tail en 0x10 + 4*8 = 0x30.
-    SlotRec rb = SlotRec(b);
-    rb.count = (u32)4;
-    rb.tail  = (u32)40;    // STORE en b+0x30
+	// Registro B: 4 ranuras -> tail en 0x10 + 4*8 = 0x30.
+	SlotRec rb = SlotRec(b);
+	rb.count = (u32)4;
+	rb.tail  = (u32)40; // STORE en b+0x30
 
-    u32 ta = ra.tail;      // relee recorriendo las ranuras (bucle)
-    u32 tb = rb.tail;
-    println("tail_a=${ta} tail_b=${tb}");           // 100 40
+	u32 ta = ra.tail;  // relee recorriendo las ranuras (bucle)
+	u32 tb = rb.tail;
+	println("tail_a=${ta} tail_b=${tb}"); // 100 40
 
-    // Verificacion cruda: cada tail aterrizo donde el bucle lo situa.
-    u32 raw_a = *(u32*)(a + 0x20);
-    u32 raw_b = *(u32*)(b + 0x30);
-    println("crudo a@0x20=${raw_a} b@0x30=${raw_b}");  // 100 40
+	// Verificacion cruda: cada tail aterrizo donde el bucle lo situa.
+	u32 raw_a = *(u32 *)(a + 0x20);
+	u32 raw_b = *(u32 *)(b + 0x30);
+	println("crudo a@0x20=${raw_a} b@0x30=${raw_b}"); // 100 40
 
-    i32 result = (i32)ta + (i32)tb;   // 100 + 40 = 140
-    free(a);
-    free(b);
-    return result;   // 140 (el bucle del resolver recorrio ambos arrays)
+	i32 result = (i32)ta + (i32)tb;                   // 100 + 40 = 140
+	free(a);
+	free(b);
+	return result; // 140 (el bucle del resolver recorrio ambos arrays)
 }

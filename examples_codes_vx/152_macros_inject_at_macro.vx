@@ -25,52 +25,52 @@ i32 sumar(i32 a, i32 b) { return a + b; }
 
 // Macro simple: doblar literal.
 @Macro
-comptime string macro_double(i64 n) {
-    return "doblar(" + to_str(n) + ")";
+	comptime string macro_double(i64 n) {
+	return "doblar(" + to_str(n) + ")";
 }
 
 // Macro con LOOP que construye codigo iterativamente.
 //   make_inc_chain(N) -> "mas_uno(mas_uno(...mas_uno(x)...))" con N niveles
 @Macro
-comptime string make_inc_chain(i64 depth) {
-    string code = "x";
-    i64 i = 0;
-    while (i < depth) {
-        code = "mas_uno(" + code + ")";
-        i = i + 1;
-    }
-    return code;
+	comptime string make_inc_chain(i64 depth) {
+	string code = "x";
+	i64    i    = 0;
+	while (i < depth) {
+		code = "mas_uno(" + code + ")";
+		i    = i + 1;
+	}
+	return code;
 }
 
 // Macro con template + replace declarativo.
 @Macro
-comptime string make_sum(i64 a, i64 b) {
-    string tpl = "sumar({a}, {b})";
-    string t1  = replace(tpl, "{a}", to_str(a));
-    string t2  = replace(t1,  "{b}", to_str(b));
-    return t2;
+	comptime string make_sum(i64 a, i64 b) {
+	string tpl = "sumar({a}, {b})";
+	string t1  = replace(tpl, "{a}", to_str(a));
+	string t2  = replace(t1, "{b}", to_str(b));
+	return t2;
 }
 
 i32 main() {
-    // (1) Macro simple: el codigo "doblar(21)" se inyecta al AST.
-    i32 r1 = macro_double(21);   // doblar(21) = 42
-    if (r1 != 42) return 91;
+	// (1) Macro simple: el codigo "doblar(21)" se inyecta al AST.
+	i32 r1 = macro_double(21); // doblar(21) = 42
+	if (r1 != 42) return 91;
 
-    // (2) Macro con LOOP en compile-time:
-    //     make_inc_chain(3) -> "mas_uno(mas_uno(mas_uno(x)))"
-    //     Inyectado: codigo runtime ejecuta 3 mas_uno sobre x=10.
-    i32 x = 10;
-    i32 r2 = make_inc_chain(3);   // 10 + 3 = 13
-    if (r2 != 13) return 92;
+	// (2) Macro con LOOP en compile-time:
+	//     make_inc_chain(3) -> "mas_uno(mas_uno(mas_uno(x)))"
+	//     Inyectado: codigo runtime ejecuta 3 mas_uno sobre x=10.
+	i32 x  = 10;
+	i32 r2 = make_inc_chain(3); // 10 + 3 = 13
+	if (r2 != 13) return 92;
 
-    // (3) Macro con template + replace.
-    i32 r3 = make_sum(15, 27);    // sumar(15, 27) = 42
-    if (r3 != 42) return 93;
+	// (3) Macro con template + replace.
+	i32 r3 = make_sum(15, 27); // sumar(15, 27) = 42
+	if (r3 != 42) return 93;
 
-    // (4) Macros COMPOSABLES: usar el output de un macro en otro.
-    //     macro_double(make_sum(...))... lo aplicariamos asi:
-    //     i32 r4 = macro_double(21);   // ya cubierto en (1)
-    //     (Macros mas profundos siguen el mismo patron textual.)
+	// (4) Macros COMPOSABLES: usar el output de un macro en otro.
+	//     macro_double(make_sum(...))... lo aplicariamos asi:
+	//     i32 r4 = macro_double(21);   // ya cubierto en (1)
+	//     (Macros mas profundos siguen el mismo patron textual.)
 
-    return 42;
+	return 42;
 }

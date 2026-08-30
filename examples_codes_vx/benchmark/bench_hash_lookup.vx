@@ -6,19 +6,19 @@
 // Workload: 50M iters con 6 int ops + 1 branch = 350M ops totales.
 
 i32 main() {
-    u64 seed = 0xCAFEBABE_DEADBEEF;
-    u64 acc = 0;
-    i32 i = 0;
-    while (i < 50000000) {
-        // FNV-1a step inline (xor + mul) + shift + and.
-        seed = seed ^ (u64) i;
-        seed = seed * 1099511628211;  // FNV prime
-        seed = seed >> 7;
-        seed = seed | 1;  // ensure odd
-        if ((seed & 7) == 0) {
-            acc++;
-        }
-        i = i + 1;
-    }
-    return (i32) acc;
+	u64 seed = 0xCAFEBABE_DEADBEEF;
+	u64 acc  = 0;
+	i32 i    = 0;
+	while (i < 50_000_000) {
+		// FNV-1a step inline (xor + mul) + shift + and.
+		seed = seed ^ (u64) i;
+		seed = seed * 1_099_511_628_211; // FNV prime
+		seed = seed >> 7;
+		seed = seed | 1; // ensure odd
+		if ((seed & 7) == 0) {
+			acc++;
+		}
+		i = i + 1;
+	}
+	return (i32) acc;
 }

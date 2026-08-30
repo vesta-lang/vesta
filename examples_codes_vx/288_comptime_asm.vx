@@ -7,18 +7,18 @@
 
 // Suma via inline asm x86-64, evaluada en compile-time.
 comptime i64 asm_add(i64 a, i64 b) {
-    register("rdi") i64 x = a;
-    register("rsi") i64 y = b;
-    register("rax") i64 out;
-    asm volatile {
-        mov rax, rdi
-        add rax, rsi
-    }
-    return out;
+	register("rdi") i64 x = a;
+	register("rsi") i64 y = b;
+	register("rax") i64 out;
+	asm volatile {
+		mov rax, rdi
+		add rax, rsi
+	}
+	return out;
 }
 
 i32 main() {
-    // asm_add(40, 2) corre en el ComptimeVM durante la compilacion; el 42 queda
-    // plegado como constante en main.
-    return (i32) asm_add(40, 2);   // 42
+	// asm_add(40, 2) corre en el ComptimeVM durante la compilacion; el 42 queda
+	// plegado como constante en main.
+	return (i32) asm_add(40, 2); // 42
 }

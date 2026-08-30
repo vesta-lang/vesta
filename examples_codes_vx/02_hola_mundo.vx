@@ -17,6 +17,6 @@ namespace ejemplos.hola_mundo;
 //   Hola Mundo desde Vesta-lang!
 
 i32 main() {
-    println("Hola Mundo desde Vesta-lang!");
-    return 0;
+	println("Hola Mundo desde Vesta-lang!");
+	return 0;
 }

@@ -29,40 +29,40 @@ namespace ejemplos.curry_returning_closures;
 //   total     = 15 + 25 + 40 + 21 + 48 - 107 = 42
 
 fn(i32) -> i32 make_adder(i32 n) {
-    fn(i32) -> i32 f = (i32 x) => x + n;
-    return f;
+	fn(i32) -> i32 f = (i32 x) => x + n;
+	return f;
 }
 
 fn(i32) -> i32 make_multiplier(i32 n) {
-    fn(i32) -> i32 g = (i32 x) => x * n;
-    return g;
+	fn(i32) -> i32 g = (i32 x) => x * n;
+	return g;
 }
 
 fn(i32) -> i32 make_subtractor(i32 n) {
-    fn(i32) -> i32 h = (i32 x) => x - n;
-    return h;
+	fn(i32) -> i32 h = (i32 x) => x - n;
+	return h;
 }
 
 i32 main() {
-    fn(i32) -> i32 add5  = make_adder(5);
-    fn(i32) -> i32 add10 = make_adder(10);
-    fn(i32) -> i32 mul3  = make_multiplier(3);
-    fn(i32) -> i32 sub2  = make_subtractor(2);
+	fn(i32) -> i32 add5  = make_adder(5);
+	fn(i32) -> i32 add10 = make_adder(10);
+	fn(i32) -> i32 mul3  = make_multiplier(3);
+	fn(i32) -> i32 sub2  = make_subtractor(2);
 
-    i32 r1 = add5(10);                 // 15
-    if (r1 != 15) return 11;
+	i32 r1 = add5(10); // 15
+	if (r1 != 15) return 11;
 
-    i32 r2 = add5(20);                 // 25  (misma closure, dos invocaciones)
-    if (r2 != 25) return 12;
+	i32 r2 = add5(20); // 25  (misma closure, dos invocaciones)
+	if (r2 != 25) return 12;
 
-    i32 r3 = add10(30);                // 40  (closure distinta, captura distinta)
-    if (r3 != 40) return 13;
+	i32 r3 = add10(30); // 40  (closure distinta, captura distinta)
+	if (r3 != 40) return 13;
 
-    i32 r4 = mul3(7);                  // 21
-    if (r4 != 21) return 14;
+	i32 r4 = mul3(7); // 21
+	if (r4 != 21) return 14;
 
-    i32 r5 = sub2(50);                 // 48
-    if (r5 != 48) return 15;
+	i32 r5 = sub2(50); // 48
+	if (r5 != 48) return 15;
 
-    return r1 + r2 + r3 + r4 + r5 - 107;  // 15 + 25 + 40 + 21 + 48 - 107 = 42
+	return r1 + r2 + r3 + r4 + r5 - 107; // 15 + 25 + 40 + 21 + 48 - 107 = 42
 }

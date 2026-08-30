@@ -4,8 +4,14 @@
 // (Enum, ValuedEnum, Numeric, ...) y de usuario.  Cero runtime (se dobla a CONST).
 // -----------------------------------------------------------------------------
 
-enum Shape { Circle(i32), Square(i32, i32) }   // ADT
-enum Op : u8 { ADD = 0x01, MOV = 0x89 }        // C-style con valor
+enum Shape {
+	Circle(i32),
+	Square(i32, i32)
+} // ADT
+enum Op : u8 {
+	ADD = 0x01,
+	MOV = 0x89
+} // C-style con valor
 
 // Concepto de usuario apoyado en la introspeccion.
 concept AnyEnum<T> = is_enum<T>();
@@ -13,28 +19,28 @@ concept AnyEnum<T> = is_enum<T>();
 concept IntEnum<T> = is_enum<T>() && Numeric<T>();
 
 i32 main() {
-    i32 acc = 0;
+	i32 acc = 0;
 
-    // Built-in Enum / ValuedEnum como predicado.
-    if (Enum<Shape>())       { acc++; }   // 1
-    if (Enum<Op>())          { acc++; }   // 2
-    if (ValuedEnum<Op>())    { acc = acc + 2; }   // 4
-    if (ValuedEnum<Shape>()) { acc = acc + 99; }  // NO (ADT) -> 4
+	// Built-in Enum / ValuedEnum como predicado.
+	if (Enum<Shape>()) { acc++; }                // 1
+	if (Enum<Op>()) { acc++; }                   // 2
+	if (ValuedEnum<Op>()) { acc = acc + 2; }     // 4
+	if (ValuedEnum<Shape>()) { acc = acc + 99; } // NO (ADT) -> 4
 
-    // Built-in Numeric sobre un enum:u8 (ES su backing).
-    if (Numeric<Op>())       { acc = acc + 4; }   // 8
+	// Built-in Numeric sobre un enum:u8 (ES su backing).
+	if (Numeric<Op>()) { acc = acc + 4; }        // 8
 
-    // Concepto de usuario como predicado.
-    if (AnyEnum<Shape>())    { acc = acc + 8; }   // 16
+	// Concepto de usuario como predicado.
+	if (AnyEnum<Shape>()) { acc = acc + 8; }     // 16
 
-    // Concepto de usuario que compone (is_enum && Numeric): Op cumple, Shape no.
-    if (IntEnum<Op>())       { acc = acc + 8; }   // 24
-    if (IntEnum<Shape>())    { acc = acc + 99; }  // NO (Shape ADT no es Numeric)
+	// Concepto de usuario que compone (is_enum && Numeric): Op cumple, Shape no.
+	if (IntEnum<Op>()) { acc = acc + 8; }        // 24
+	if (IntEnum<Shape>()) { acc = acc + 99; }    // NO (Shape ADT no es Numeric)
 
-    // Como valor bool en una variable.
-    bool b = AnyEnum<Op>();
-    if (b) { acc = acc + 2; }                     // 26
+	// Como valor bool en una variable.
+	bool b = AnyEnum<Op>();
+	if (b) { acc = acc + 2; } // 26
 
-    acc = acc + 16;                               // 42
-    return acc;                                   // 42
+	acc = acc + 16;           // 42
+	return acc;               // 42
 }

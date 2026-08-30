@@ -15,51 +15,54 @@ namespace ejemplos.metodo_devuelve_struct;
 // El struct se hace de treinta y dos bytes a proposito: uno que quepa en el
 // numero fijo que se usaba antes puede tapar el fallo.
 
-struct Punto3 { i64 x; i64 y; i64 z; i64 w; }
+struct Punto3 { i64 x;
+	i64 y;
+	i64 z;
+	i64 w; }
 
 class Generador {
-    private i64 base;
+	private i64 base;
 
-    public Generador(i64 b) { this.base = b; }
+	public Generador(i64 b) { this.base = b; }
 
-    // Devuelve por buffer, y ademas recibe argumentos: si el buffer no se
-    // pasa, lo primero que el metodo pisa es `dx`.
-    public Punto3 desplazado(i64 dx, i64 dy) {
-        Punto3 p;
-        p.x = this.base + dx;
-        p.y = this.base + dy;
-        p.z = dx * dy;
-        p.w = this.base;
-        return p;
-    }
+	// Devuelve por buffer, y ademas recibe argumentos: si el buffer no se
+	// pasa, lo primero que el metodo pisa es `dx`.
+	public Punto3 desplazado(i64 dx, i64 dy) {
+		Punto3 p;
+		p.x = this.base + dx;
+		p.y = this.base + dy;
+		p.z = dx * dy;
+		p.w = this.base;
+		return p;
+	}
 }
 
 struct GeneradorS {
-    i64 base;
+	i64 base;
 
-    public Punto3 desplazado(i64 dx, i64 dy) {
-        Punto3 p;
-        p.x = this.base + dx;
-        p.y = this.base + dy;
-        p.z = dx * dy;
-        p.w = this.base;
-        return p;
-    }
+	public Punto3 desplazado(i64 dx, i64 dy) {
+		Punto3 p;
+		p.x = this.base + dx;
+		p.y = this.base + dy;
+		p.z = dx * dy;
+		p.w = this.base;
+		return p;
+	}
 }
 
 i32 main() {
-    Generador g = new Generador(10);
-    const Punto3 a = g.desplazado(3, 4);
-    // 13 + 14 + 12 + 10 = 49
-    const i64 sa = a.x + a.y + a.z + a.w;
+	      Generador g  = new Generador(10);
+	const Punto3    a  = g.desplazado(3, 4);
+	// 13 + 14 + 12 + 10 = 49
+	const i64       sa = a.x + a.y + a.z + a.w;
 
-    GeneradorS s;
-    s.base = 20;
-    const Punto3 b = s.desplazado(1, 2);
-    // 21 + 22 + 2 + 20 = 65
-    const i64 sb = b.x + b.y + b.z + b.w;
+	GeneradorS s;
+	s.base = 20;
+	const Punto3 b  = s.desplazado(1, 2);
+	// 21 + 22 + 2 + 20 = 65
+	const i64    sb = b.x + b.y + b.z + b.w;
 
-    println("clase=${sa} struct=${sb}");
+	println("clase=${sa} struct=${sb}");
 
-    return (i32) (sa + sb - 72); // 49 + 65 - 72 = 42
+	return (i32)(sa + sb - 72); // 49 + 65 - 72 = 42
 }

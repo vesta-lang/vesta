@@ -23,60 +23,68 @@ import std.atomic only atomic_load64, atomic_store64, atomic_add64;
 
 // Contador atomico: lectura, escritura e incremento indivisibles.
 struct Atomic {
-    i64 v;
+	i64 v;
 
-    public i64 __deref__()       { return atomic_load64(&this.v); }
-    public i64 __assign__(i64 n) { atomic_store64(&this.v, n); return n; }
+	public i64 __deref__() { return atomic_load64(&this.v); }
+	public i64 __assign__(i64 n) { atomic_store64(&this.v, n);
+		return n; }
 
-    // El incremento es UNA instruccion (lock xadd): ningun hilo cabe en medio.
-    public i64 __iadd__(i64 d)   { return atomic_add64(&this.v, d) + d; }
-    public i64 __isub__(i64 d)   { return atomic_add64(&this.v, 0 - d) - d; }
+	// El incremento es UNA instruccion (lock xadd): ningun hilo cabe en medio.
+	public i64 __iadd__(i64 d) { return atomic_add64(&this.v, d) + d; }
+	public i64 __isub__(i64 d) { return atomic_add64(&this.v, 0 - d) - d; }
 }
 
 // Tipo no atomico que solo declara operaciones in-place, para ver la fusion en
 // el resto de operadores.
 struct Reg {
-    i64 v;
+	i64 v;
 
-    public i64 __deref__()          { return this.v; }
-    public i64 __assign__(i64 n)    { this.v = n; return n; }
-    public i64 __imul__(i64 k)      { this.v = this.v * k;  return this.v; }
-    public i64 __iand__(i64 m)      { this.v = this.v & m;  return this.v; }
-    public i64 __ior__(i64 m)       { this.v = this.v | m;  return this.v; }
-    public i64 __ixor__(i64 m)      { this.v = this.v ^ m;  return this.v; }
-    public i64 __ilshift__(i64 k)   { this.v = this.v << k; return this.v; }
-    public i64 __irshift__(i64 k)   { this.v = this.v >> k; return this.v; }
+	public i64 __deref__() { return this.v; }
+	public i64 __assign__(i64 n) { this.v = n;
+		return n; }
+	public i64 __imul__(i64 k) { this.v = this.v * k;
+		return this.v; }
+	public i64 __iand__(i64 m) { this.v = this.v & m;
+		return this.v; }
+	public i64 __ior__(i64 m) { this.v = this.v | m;
+		return this.v; }
+	public i64 __ixor__(i64 m) { this.v = this.v ^ m;
+		return this.v; }
+	public i64 __ilshift__(i64 k) { this.v = this.v << k;
+		return this.v; }
+	public i64 __irshift__(i64 k) { this.v = this.v >> k;
+		return this.v; }
 }
 
 i32 main() {
-    Atomic g;
-    g = 0;
+	Atomic g;
+	g = 0;
 
-    // Las tres formas del incremento atomico bajan al MISMO atomicadd.
-    g = g + 40;     // forma larga    -> se funde en `g += 40`
-    g += 1;         // forma compuesta
-    g++;            // forma corta
-    g = g - 1;      // tambien la resta -> `g -= 1`
+	// Las tres formas del incremento atomico bajan al MISMO atomicadd.
+	g = g + 40; // forma larga    -> se funde en `g += 40`
+	g += 1;     // forma compuesta
+	g++;        // forma corta
+	g = g - 1;      // tambien la resta -> `g -= 1`
 
-    i64 total = *g; // 40 + 1 + 1 - 1 = 41
-    println("atomico  = ${total}");
+	i64 total = *g; // 40 + 1 + 1 - 1 = 41
+	println("atomico  = ${total}");
 
-    // El resto de operadores se funden igual.
-    Reg r;
-    r = 3;
-    r = r * 4;      // -> r *= 4    -> 12
-    r = r << 2;     // -> r <<= 2   -> 48
-    r = r | 3;      // -> r |= 3    -> 51
-    r = r & 62;     // -> r &= 62   -> 50
-    r = r ^ 2;      // -> r ^= 2    -> 48
-    r = r >> 4;     // -> r >>= 4   -> 3
-    i64 rv = *r;
-    println("registro = ${rv}");
+	// El resto de operadores se funden igual.
+	Reg r;
+	r = 3;
+	r = r * 4;  // -> r *= 4    -> 12
+	r = r << 2; // -> r <<= 2   -> 48
+	r = r | 3;  // -> r |= 3    -> 51
+	r = r & 62; // -> r &= 62   -> 50
+	r = r ^ 2;  // -> r ^= 2    -> 48
+	r = r >> 4; // -> r >>= 4   -> 3
+	i64 rv = *r;
+	println("registro = ${rv}");
 
-    // Los primitivos no se ven afectados por la fusion.
-    i64 p = 20;
-    p = p + 2;      // aritmetica normal de siempre -> 22
+	// Los primitivos no se ven afectados por la fusion.
+	i64 p = 20;
+	p = p + 2; // aritmetica normal de siempre -> 22
 
-    // 41 - 3 + 22 - 18 = 42
-    return (i32)(total - rv + p - 18);
+	// 41 - 3 + 22 - 18 = 42
+	return (i32)(total - rv + p - 18);
 }

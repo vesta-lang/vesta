@@ -7,11 +7,11 @@ namespace ejemplos.unique_wraps_owned;
 // original decrementa/libera).  Antes: RAW_FREE de una direccion de stack ->
 // SIGSEGV en VM/JIT.  Esperado: R0 = 42 en los 3 modos.
 i32 main() {
-    shared<i64> s = shared_box(42);
-    unique<shared<i64>> us = unique_box(s);
+	shared<i64>         s  = shared_box(42);
+	unique<shared<i64>> us = unique_box(s);
 
-    unique<i64> a = unique_box(7);
-    unique<unique<i64>> uu = unique_box(a);
+	unique<i64>         a  = unique_box(7);
+	unique<unique<i64>> uu = unique_box(a);
 
-    return 42;
+	return 42;
 }

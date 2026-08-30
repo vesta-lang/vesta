@@ -18,33 +18,33 @@ namespace ejemplos.unique_dtor;
 // de `usar()` el contador debe ser 2 (uno por cada Recurso).
 
 class Counter {
-    public static i32 ctor_count;
-    public static i32 dtor_count;
+	public static i32 ctor_count;
+	public static i32 dtor_count;
 }
 
 class Recurso {
-    public i32 id;
-    public Recurso(i32 i) {
-        this.id = i;
-        Counter.ctor_count = Counter.ctor_count + 1;
-    }
-    public ~Recurso() {
-        Counter.dtor_count = Counter.dtor_count + 1;
-    }
+	public i32 id;
+	public Recurso(i32 i) {
+		this.id            = i;
+		Counter.ctor_count = Counter.ctor_count + 1;
+	}
+	public ~Recurso() {
+		Counter.dtor_count = Counter.dtor_count + 1;
+	}
 }
 
 void usar() {
-    unique<Recurso> r1 = unique_box(new Recurso(1));
-    unique<Recurso> r2 = unique_box(new Recurso(2));
-    // r1, r2 destruidos LIFO al exit del scope
+	unique<Recurso> r1 = unique_box(new Recurso(1));
+	unique<Recurso> r2 = unique_box(new Recurso(2));
+// r1, r2 destruidos LIFO al exit del scope
 }
 
 i32 main() {
-    Counter.ctor_count = 0;
-    Counter.dtor_count = 0;
-    usar();
-    // Verificar que ambos ctors corrieron y ambos dtors corrieron.
-    if (Counter.ctor_count != 2) return 91;
-    if (Counter.dtor_count != 2) return 92;
-    return 42;
+	Counter.ctor_count = 0;
+	Counter.dtor_count = 0;
+	usar();
+	// Verificar que ambos ctors corrieron y ambos dtors corrieron.
+	if (Counter.ctor_count != 2) return 91;
+	if (Counter.dtor_count != 2) return 92;
+	return 42;
 }

@@ -25,80 +25,80 @@
 // Tamano del jmp_buf:  SysV = 8 regs*8 = 64;  Win64 = 10 regs*8 = 80;
 // x86-32 = 6 regs*4 = 24.
 @Target("arch:x86_64 && os:windows")
-comptime i64 VX_BUF_SIZE = 80;
+	comptime i64 VX_BUF_SIZE = 80;
 @Target("arch:x86_64 && !os:windows")
-comptime i64 VX_BUF_SIZE = 64;
+	comptime i64 VX_BUF_SIZE = 64;
 @Target("arch:x86")
-comptime i64 VX_BUF_SIZE = 24;
+	comptime i64 VX_BUF_SIZE = 24;
 
 // Tamano de puntero del target.
 @Target("arch:x86_64")
-comptime i64 VX_PTR = 8;
+	comptime i64 VX_PTR = 8;
 @Target("arch:x86")
-comptime i64 VX_PTR = 4;
+	comptime i64 VX_PTR = 4;
 
 // Offsets de los campos prev/type tras el jmp_buf.
 @Target("arch:x86_64 && os:windows")
-comptime i64 VX_PREV_OFF = 80;
+	comptime i64 VX_PREV_OFF = 80;
 @Target("arch:x86_64 && !os:windows")
-comptime i64 VX_PREV_OFF = 64;
+	comptime i64 VX_PREV_OFF = 64;
 @Target("arch:x86")
-comptime i64 VX_PREV_OFF = 24;
+	comptime i64 VX_PREV_OFF = 24;
 
 @Target("arch:x86_64 && os:windows")
-comptime i64 VX_TYPE_OFF = 88;
+	comptime i64 VX_TYPE_OFF = 88;
 @Target("arch:x86_64 && !os:windows")
-comptime i64 VX_TYPE_OFF = 72;
+	comptime i64 VX_TYPE_OFF = 72;
 @Target("arch:x86")
-comptime i64 VX_TYPE_OFF = 28;
+	comptime i64 VX_TYPE_OFF = 28;
 
 // Estado global: [0]=puntero al frame top, [VX_PTR]=valor de la excepcion,
 // [2*VX_PTR]=type-id de la excepcion activa (encoding por intervalos para el
 // type matching del catch; ver lower_try).  24 bytes cubre 3 slots en 64-bit
 // (8+8+8) y de sobra en 32-bit (4+4+4).
 @section(".vxexc", "rw")
-bytes vx_exc_state { times 24 db 0 }
+	bytes vx_exc_state { times 24 db 0 }
 
 // ===========================================================================
 // setjmp/longjmp -- variante SysV x86-64 (ELF Linux/BSD).
 // rdi = buf.  En la entrada (Naked): [rsp]=retaddr, [rsp+8]=rsp del caller.
 // ===========================================================================
 @Target("arch:x86_64 && !os:windows")
-@Naked
-public i64 __vx_setjmp(i64 buf) {
+	@Naked
+	public i64 __vx_setjmp(i64 buf) {
 	asm volatile {
-        mov     [rdi], rbx
-        mov     [rdi+8], rbp
-        mov     [rdi+16], r12
-        mov     [rdi+24], r13
-        mov     [rdi+32], r14
-        mov     [rdi+40], r15
-        lea     rax, [rsp+8]
-        mov     [rdi+48], rax
-        mov     rax, [rsp]
-        mov     [rdi+56], rax
-        xor     eax, eax
-        ret
+		mov     [rdi], rbx
+		mov     [rdi+8], rbp
+		mov     [rdi+16], r12
+		mov     [rdi+24], r13
+		mov     [rdi+32], r14
+		mov     [rdi+40], r15
+		lea     rax, [rsp+8]
+		mov     [rdi+48], rax
+		mov     rax, [rsp]
+		mov     [rdi+56], rax
+		xor     eax, eax
+		ret
 	}
 }
 
 @Target("arch:x86_64 && !os:windows")
-@Naked
-public void __vx_longjmp(i64 buf, i64 val) {
+	@Naked
+	public void __vx_longjmp(i64 buf, i64 val) {
 	asm volatile {
-        mov     rbx, [rdi]
-        mov     rbp, [rdi+8]
-        mov     r12, [rdi+16]
-        mov     r13, [rdi+24]
-        mov     r14, [rdi+32]
-        mov     r15, [rdi+40]
-        mov     rsp, [rdi+48]
-        mov     rax, rsi
-        test    rax, rax
-        jnz     .nz
-        inc     rax
-    .nz:
-        jmp     [rdi+56]
+		    mov     rbx, [rdi]
+		    mov     rbp, [rdi+8]
+		    mov     r12, [rdi+16]
+		    mov     r13, [rdi+24]
+		    mov     r14, [rdi+32]
+		    mov     r15, [rdi+40]
+		    mov     rsp, [rdi+48]
+		    mov     rax, rsi
+		    test    rax, rax
+		    jnz     .nz
+		    inc     rax
+		.nz:
+		    jmp     [rdi+56]
 	}
 }
 
@@ -108,45 +108,45 @@ public void __vx_longjmp(i64 buf, i64 val) {
 // (xmm6-15 callee-saved se salvan en v2 si hace falta float cross-jump.)
 // ===========================================================================
 @Target("arch:x86_64 && os:windows")
-@Naked
-public i64 __vx_setjmp(i64 buf) {
+	@Naked
+	public i64 __vx_setjmp(i64 buf) {
 	asm volatile {
-        mov     [rcx], rbx
-        mov     [rcx+8], rbp
-        mov     [rcx+16], rdi
-        mov     [rcx+24], rsi
-        mov     [rcx+32], r12
-        mov     [rcx+40], r13
-        mov     [rcx+48], r14
-        mov     [rcx+56], r15
-        lea     rax, [rsp+8]
-        mov     [rcx+64], rax
-        mov     rax, [rsp]
-        mov     [rcx+72], rax
-        xor     eax, eax
-        ret
+		mov     [rcx], rbx
+		mov     [rcx+8], rbp
+		mov     [rcx+16], rdi
+		mov     [rcx+24], rsi
+		mov     [rcx+32], r12
+		mov     [rcx+40], r13
+		mov     [rcx+48], r14
+		mov     [rcx+56], r15
+		lea     rax, [rsp+8]
+		mov     [rcx+64], rax
+		mov     rax, [rsp]
+		mov     [rcx+72], rax
+		xor     eax, eax
+		ret
 	}
 }
 
 @Target("arch:x86_64 && os:windows")
-@Naked
-public void __vx_longjmp(i64 buf, i64 val) {
+	@Naked
+	public void __vx_longjmp(i64 buf, i64 val) {
 	asm volatile {
-        mov     rbx, [rcx]
-        mov     rbp, [rcx+8]
-        mov     rdi, [rcx+16]
-        mov     rsi, [rcx+24]
-        mov     r12, [rcx+32]
-        mov     r13, [rcx+40]
-        mov     r14, [rcx+48]
-        mov     r15, [rcx+56]
-        mov     rsp, [rcx+64]
-        mov     rax, rdx
-        test    rax, rax
-        jnz     .nz
-        inc     rax
-    .nz:
-        jmp     [rcx+72]
+		    mov     rbx, [rcx]
+		    mov     rbp, [rcx+8]
+		    mov     rdi, [rcx+16]
+		    mov     rsi, [rcx+24]
+		    mov     r12, [rcx+32]
+		    mov     r13, [rcx+40]
+		    mov     r14, [rcx+48]
+		    mov     r15, [rcx+56]
+		    mov     rsp, [rcx+64]
+		    mov     rax, rdx
+		    test    rax, rax
+		    jnz     .nz
+		    inc     rax
+		.nz:
+		    jmp     [rcx+72]
 	}
 }
 
@@ -156,41 +156,41 @@ public void __vx_longjmp(i64 buf, i64 val) {
 // Callee-saved cdecl: ebx,esi,edi,ebp (4) + esp + eip.
 // ===========================================================================
 @Target("arch:x86")
-@Naked
-public i64 __vx_setjmp(i64 buf) {
+	@Naked
+	public i64 __vx_setjmp(i64 buf) {
 	asm volatile {
-        mov     eax, [esp+4]
-        mov     [eax], ebx
-        mov     [eax+4], esi
-        mov     [eax+8], edi
-        mov     [eax+12], ebp
-        lea     ecx, [esp+4]
-        mov     [eax+16], ecx
-        mov     ecx, [esp]
-        mov     [eax+20], ecx
-        xor     eax, eax
-        ret
+		mov     eax, [esp+4]
+		mov     [eax], ebx
+		mov     [eax+4], esi
+		mov     [eax+8], edi
+		mov     [eax+12], ebp
+		lea     ecx, [esp+4]
+		mov     [eax+16], ecx
+		mov     ecx, [esp]
+		mov     [eax+20], ecx
+		xor     eax, eax
+		ret
 	}
 }
 
 @Target("arch:x86")
-@Naked
-public void __vx_longjmp(i64 buf, i64 val) {
+	@Naked
+	public void __vx_longjmp(i64 buf, i64 val) {
 	asm volatile {
-        mov     eax, [esp+4]
-        mov     edx, [esp+8]
-        mov     ecx, [eax+20]
-        mov     ebx, [eax]
-        mov     esi, [eax+4]
-        mov     edi, [eax+8]
-        mov     ebp, [eax+12]
-        mov     esp, [eax+16]
-        mov     eax, edx
-        test    eax, eax
-        jnz     .nz
-        inc     eax
-    .nz:
-        jmp     ecx
+		    mov     eax, [esp+4]
+		    mov     edx, [esp+8]
+		    mov     ecx, [eax+20]
+		    mov     ebx, [eax]
+		    mov     esi, [eax+4]
+		    mov     edi, [eax+8]
+		    mov     ebp, [eax+12]
+		    mov     esp, [eax+16]
+		    mov     eax, edx
+		    test    eax, eax
+		    jnz     .nz
+		    inc     eax
+		.nz:
+		    jmp     ecx
 	}
 }
 

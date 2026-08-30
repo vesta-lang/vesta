@@ -5,25 +5,25 @@
 //     vm --vx asm_cmp_setcc.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-    u64 ok = 1;
-    register("rax") u64 r = 0;
-    register("rsi") u64 s = 5;
-    register("rdi") u64 d = 10;
-    asm { cmp rsi, rdi
-          setl al };            // 5 < 10 (con signo) -> 1
-    if ((r & 0xFF) != 1) ok = 0;
-    asm { cmp rsi, rdi
-          setg al };            // 5 > 10 -> 0
-    if ((r & 0xFF) != 0) ok = 0;
-    register("rcx") u64 c = 0xFFFFFFFFFFFFFFFF; // -1 con signo / grande sin signo
-    asm { cmp rcx, rsi
-          setl al };            // -1 < 5 con signo -> 1
-    if ((r & 0xFF) != 1) ok = 0;
-    asm { cmp rcx, rsi
-          setb al };            // 0xFFF... < 5 sin signo -> 0
-    if ((r & 0xFF) != 0) ok = 0;
-    asm { cmp rsi, rsi
-          sete al };            // 5 == 5 -> 1
-    if ((r & 0xFF) != 1) ok = 0;
-    return (ok == 1) ? 42 : 0;
+	u64                 ok = 1;
+	register("rax") u64 r  = 0;
+	register("rsi") u64 s  = 5;
+	register("rdi") u64 d  = 10;
+	asm { cmp rsi, rdi
+		setl al }; // 5 < 10 (con signo) -> 1
+	if ((r & 0xFF) != 1) ok = 0;
+	asm { cmp rsi, rdi
+		setg al }; // 5 > 10 -> 0
+	if ((r & 0xFF) != 0) ok = 0;
+	register("rcx") u64  c  = 0xFFFFFFFFFFFFFFFF; // -1 con signo / grande sin signo
+	asm { cmp rcx, rsi
+		setl al }; // -1 < 5 con signo -> 1
+	if ((r & 0xFF) != 1) ok = 0;
+	asm { cmp rcx, rsi
+		setb al }; // 0xFFF... < 5 sin signo -> 0
+	if ((r & 0xFF) != 0) ok = 0;
+	asm { cmp rsi, rsi
+		sete al }; // 5 == 5 -> 1
+	if ((r & 0xFF) != 1) ok = 0;
+	return (ok == 1) ? 42 : 0;
 }

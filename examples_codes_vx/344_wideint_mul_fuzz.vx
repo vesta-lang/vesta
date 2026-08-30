@@ -24,35 +24,35 @@ u64 g_state = 0x243F6A8885A308D3;
  * @return Siguiente valor de la secuencia.
  */
 u64 next_rand() {
-    u64 s = g_state;
-    s = s ^ (s << 13);
-    s = s ^ (s >> 7);
-    s = s ^ (s << 17);
-    g_state = s;
-    return s;
+	u64 s = g_state;
+	s       = s ^ (s << 13);
+	s       = s ^ (s >> 7);
+	s       = s ^ (s << 17);
+	g_state = s;
+	return s;
 }
 
 i32 main() {
-    u64 h = 0xCBF29CE484222325;
-    u64 i = 0;
-    while (i < 20000) {
-        u128 a;
-        a.lo64 = next_rand();
-        a.hi64 = next_rand();
-        u128 b;
-        b.lo64 = next_rand();
-        b.hi64 = next_rand();
+	u64 h = 0xCBF29CE484222325;
+	u64 i = 0;
+	while (i < 20_000) {
+		u128 a;
+		a.lo64 = next_rand();
+		a.hi64 = next_rand();
+		u128 b;
+		b.lo64 = next_rand();
+		b.hi64 = next_rand();
 
-        u128 p = a * b;
+		u128 p = a * b;
 
-        h = h ^ p.lo64;
-        h = h * 1099511628211;
-        h = h ^ p.hi64;
-        h = h * 1099511628211;
-        i = i + 1;
-    }
-    if (h != 0xE5F4C02E8920B25A) {
-        return 1;
-    }
-    return 42;
+		h = h ^ p.lo64;
+		h = h * 1_099_511_628_211;
+		h = h ^ p.hi64;
+		h = h * 1_099_511_628_211;
+		i = i + 1;
+	}
+	if (h != 0xE5F4C02E8920B25A) {
+		return 1;
+	}
+	return 42;
 }

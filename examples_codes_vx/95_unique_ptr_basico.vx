@@ -6,8 +6,8 @@ namespace ejemplos.unique_ptr_basico;
 //   - Cleanup automatico al exit del scope (libera la memoria host)
 
 i32 main() {
-    unique<i32> p = unique_box(42);
-    i32* raw = ptr_of(p);
-    i32 v = *raw;
-    return v;
+	unique<i32> p   = unique_box(42);
+	i32*        raw = ptr_of(p);
+	i32         v   = *raw;
+	return v;
 }

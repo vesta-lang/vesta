@@ -7,36 +7,36 @@ namespace ejemplos.closure_en_campo;
 
 // --- Holder CLASE: el env es owned; el destructor (sintetico) lo libera ---
 class Boton {
-    fn() -> i64 onClick;   // campo lambda
+	fn() -> i64 onClick; // campo lambda
 }
 
 // Devuelve una Boton con un callback que captura `id` por valor.  La Boton
 // escapa por return; su env vive en heap (RAW_ALLOC) y lo libera el dtor del
 // local que la recibe (transferencia de ownership), sin GC.
 Boton crear(i64 id) {
-    Boton b = new Boton();
-    b.onClick = () => id * 2;   // captura `id` por valor
-    return b;
+	Boton b = new Boton();
+	b.onClick = () => id * 2; // captura `id` por valor
+	return b;
 }
 
 // --- Holder STRUCT: el env vive en stack (zero-cost), muere con el scope ---
 struct Caja {
-    fn() -> i64 leer;
+	fn() -> i64 leer;
 }
 
 i64 con_struct(i64 v) {
-    Caja c;
-    c.leer = () => v + 1;       // env en stack del scope de con_struct
-    return c.leer();
+	Caja c;
+	c.leer = () => v + 1; // env en stack del scope de con_struct
+	return c.leer();
 }
 
 i32 main() {
-    // Clase: el callback sobrevive a `crear` (env owned en heap).
-    Boton b = crear(20);
-    i64 r1 = b.onClick();        // 20 * 2 = 40
+	// Clase: el callback sobrevive a `crear` (env owned en heap).
+	Boton b  = crear(20);
+	i64   r1 = b.onClick(); // 20 * 2 = 40
 
-    // Struct: callback usado localmente (env en stack).
-    i64 r2 = con_struct(1);      // 1 + 1 = 2
+	// Struct: callback usado localmente (env en stack).
+	i64   r2 = con_struct(1); // 1 + 1 = 2
 
-    return (i32)(r1 + r2);       // 40 + 2 = 42
+	return (i32)(r1 + r2);  // 40 + 2 = 42
 }

@@ -16,12 +16,12 @@ namespace ejemplos.expect_falla;
 // propio, el codigo del catalogo y la cadena de llamadas.
 
 i64 leer_config(Optional<i64> valor) {
-    return expect(valor, "el limite de reintentos venia de la configuracion");
+	return expect(valor, "el limite de reintentos venia de la configuracion");
 }
 
 i32 main() {
-    Optional<i64> sin_configurar = None();
-    const i64 v = leer_config(sin_configurar);
-    println("no se debe llegar aqui: ${v}");
-    return 0;
+	      Optional<i64> sin_configurar = None();
+	const i64           v              = leer_config(sin_configurar);
+	println("no se debe llegar aqui: ${v}");
+	return 0;
 }

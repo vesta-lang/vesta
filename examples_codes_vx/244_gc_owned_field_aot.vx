@@ -15,9 +15,9 @@ namespace ejemplos.gc_owned_field_aot;
 class Caja { shared<i64> s; }
 
 i32 main() {
-    shared<i64> a = shared_box(100);      // rc = 1
-    gc<Caja> c = new Caja();
-    c.s = a;                               // copia -> rc = 2
-    i64 uc = use_count(a);                 // esperado uc = 2
-    return (i32)(uc * 10 + 22);            // 2*10 + 22 = 42
+	shared<i64> a = shared_box(100); // rc = 1
+	gc<Caja>    c = new Caja();
+	c.s = a;                    // copia -> rc = 2
+	i64 uc = use_count(a);      // esperado uc = 2
+	return (i32)(uc * 10 + 22); // 2*10 + 22 = 42
 }

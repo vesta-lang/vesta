@@ -6,8 +6,8 @@ u64 fact(u64 n) { if (n < 2) { return n; } return n * fact(n - 1); }
 i64 doble(i64 x) { return x * 2; }
 
 i64 main() {
-    // fact() y doble() son hermanos del namespace; se llaman por nombre
-    // desnudo incluso DENTRO de la interpolacion ${...}.
-    println("fact(5)=${fact(5)} doble(21)=${doble(21)}");
-    return doble(21);      // 42
+	// fact() y doble() son hermanos del namespace; se llaman por nombre
+	// desnudo incluso DENTRO de la interpolacion ${...}.
+	println("fact(5)=${fact(5)} doble(21)=${doble(21)}");
+	return doble(21); // 42
 }

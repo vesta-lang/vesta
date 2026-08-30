@@ -18,18 +18,18 @@
  * campo y recorrer una lista reasignando el propio puntero.
  */
 struct Inner {
-    i32 v;
+	i32 v;
 }
 
 struct Punto {
-    i32 x;
-    Inner dentro;
-    i32 doble() { return this.x * 2; }
+	i32 x;
+	Inner dentro;
+	i32 doble() { return this.x * 2; }
 }
 
 struct Nodo {
-    i32 valor;
-    Nodo* siguiente;
+	i32 valor;
+	Nodo* siguiente;
 }
 
 /**
@@ -39,37 +39,37 @@ struct Nodo {
  * @return La suma de los valores.
  */
 i32 suma(Nodo* n) {
-    i32 acc = 0;
-    while (n != null) {
-        acc = acc + n.valor;
-        n = n.siguiente;
-    }
-    return acc;
+	i32 acc = 0;
+	while (n != null) {
+		acc = acc + n.valor;
+		n   = n.siguiente;
+	}
+	return acc;
 }
 
 i32 main() {
-    Punto p;
-    p.x = 5;
-    p.dentro.v = 3;
-    Punto* q = &p;
+	Punto p;
+	p.x        = 5;
+	p.dentro.v = 3;
+	Punto* q = &p;
 
-    i32 acc = 0;
-    acc = acc + q.x;         // leer                      5
-    q.x = q.x + 1;           // escribir
-    acc = acc + q.x;         //                          11
-    q.x++;                   // incrementar
-    acc = acc + q.x;         //                          18
-    acc = acc + q.doble();   // metodo por puntero       32
-    acc = acc + q.dentro.v;  // campo encadenado         35
-    i32* dir = &q.x;         // direccion de un campo
-    acc = acc + *dir;        //                          42
+	i32 acc = 0;
+	acc = acc + q.x;        // leer                      5
+	q.x = q.x + 1;          // escribir
+	acc = acc + q.x;        //                          11
+	q.x++;                  // incrementar
+	acc = acc + q.x;        //                          18
+	acc = acc + q.doble();  // metodo por puntero       32
+	acc = acc + q.dentro.v; // campo encadenado         35
+	i32* dir = &q.x;        // direccion de un campo
+	acc = acc + *dir; //                          42
 
-    Nodo a;
-    Nodo b;
-    a.valor = 20;
-    a.siguiente = &b;
-    b.valor = 22;
-    b.siguiente = null;
-    // La lista suma 42; se resta para que el total siga siendo 42.
-    return acc + suma(&a) - 42;
+	Nodo a;
+	Nodo b;
+	a.valor     = 20;
+	a.siguiente = &b;
+	b.valor     = 22;
+	b.siguiente = null;
+	// La lista suma 42; se resta para que el total siga siendo 42.
+	return acc + suma(&a) - 42;
 }

@@ -22,31 +22,31 @@
  */
 
 i32 main() {
-    i32 a = 1;
-    i32 b = 2;
-    i32 c = 3;
+	i32 a = 1;
+	i32 b = 2;
+	i32 c = 3;
 
-    try {
-        // Forma 1: desnuda en el init.  Esta si se detectaba.
-        i32 u = (a = 10);
-        // Forma 2: dentro de una suma.
-        i32 v = (b = 20) + 1;
-        // Forma 3: como argumento de una llamada.
-        i32 w = suma(c = 30, 0);
-        println("dentro: u=${u} v=${v} w=${w}");
-        lanza();
-    } catch (FatalError e) {
-        println("fuera: a=${a} b=${b} c=${c}");
-    }
+	try {
+		// Forma 1: desnuda en el init.  Esta si se detectaba.
+		i32 u = (a = 10);
+		// Forma 2: dentro de una suma.
+		i32 v = (b = 20) + 1;
+		// Forma 3: como argumento de una llamada.
+		i32 w = suma(c = 30, 0);
+		println("dentro: u=${u} v=${v} w=${w}");
+		lanza();
+	} catch (FatalError e) {
+		println("fuera: a=${a} b=${b} c=${c}");
+	}
 
-    // 10 + 20 + 30 = 60 si los tres sobrevivieron al salto.
-    return a + b + c;
+	// 10 + 20 + 30 = 60 si los tres sobrevivieron al salto.
+	return a + b + c;
 }
 
 i32 suma(i32 x, i32 y) {
-    return x + y;
+	return x + y;
 }
 
 void lanza() {
-    panic("corta aqui");
+	panic("corta aqui");
 }

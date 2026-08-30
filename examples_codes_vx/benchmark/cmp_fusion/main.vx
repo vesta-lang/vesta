@@ -12,13 +12,13 @@
 // optimiza cada uno.  Lo que no vale es que el trabajo desaparezca.
 
 i32 main() {
-    u32 s = 12345;
-    i32 acc = 0;
-    i32 i = 0;
-    while (i < 50000000) {
-        s = s * 1664525 + 1013904223;
-        if ((s >> 31) == 0) { acc = acc + 1; }
-        i = i + 1;
-    }
-    return acc & 255;
+	u32 s   = 12_345;
+	i32 acc = 0;
+	i32 i   = 0;
+	while (i < 50_000_000) {
+		s = s * 1_664_525 + 1_013_904_223;
+		if ((s >> 31) == 0) { acc = acc + 1; }
+		i = i + 1;
+	}
+	return acc & 255;
 }

@@ -15,64 +15,67 @@
  */
 
 /** Dos limbs: 16 bytes exactos. */
-struct Par { u64 a; u64 b; }
+struct Par { u64 a;
+	u64 b; }
 
 /** Con relleno: 8 + 4 + 1 -> 16 bytes con alineacion. */
-struct Mixto { u64 a; u32 b; u8 c; }
+struct Mixto { u64 a;
+	u32 b;
+	u8 c; }
 
 /** Un solo campo: cabe en el payload clasico de 8 bytes. */
 struct Uno { u64 a; }
 
 /** @brief Devuelve un `Par` envuelto (ruta SRET). */
 Optional<Par> mk_par(u64 x) {
-    Par p;
-    p.a = x;
-    p.b = x * 2;
-    return Some(p);
+	Par p;
+	p.a = x;
+	p.b = x * 2;
+	return Some(p);
 }
 
 /** @brief Devuelve un struct con relleno (ruta SRET). */
 Optional<Mixto> mk_mixto(u64 x) {
-    Mixto m;
-    m.a = x;
-    m.b = 7;
-    m.c = 9;
-    return Some(m);
+	Mixto m;
+	m.a = x;
+	m.b = 7;
+	m.c = 9;
+	return Some(m);
 }
 
 /** @brief Struct de un solo campo: el payload clasico. */
 Optional<Uno> mk_uno(u64 x) {
-    Uno u;
-    u.a = x;
-    return Some(u);
+	Uno u;
+	u.a = x;
+	return Some(u);
 }
 
 i32 main() {
-    i32 acc = 0;
+	i32 acc = 0;
 
-    Par p = unwrap(mk_par(21));
-    if (p.a == 21 && p.b == 42) { acc = acc + 10; }
+	Par p = unwrap(mk_par(21));
+	if (p.a == 21 && p.b == 42) { acc = acc + 10; }
 
-    Mixto m = unwrap(mk_mixto(100));
-    if (m.a == 100 && m.b == 7 && m.c == 9) { acc = acc + 10; }
+	Mixto m = unwrap(mk_mixto(100));
+	if (m.a == 100 && m.b == 7 && m.c == 9) { acc = acc + 10; }
 
-    Uno u = unwrap(mk_uno(5));
-    if (u.a == 5) { acc = acc + 10; }
+	Uno u = unwrap(mk_uno(5));
+	if (u.a == 5) { acc = acc + 10; }
 
-    // Ruta sin funcion de por medio: `Some` sobre una variable local.
-    Par local;
-    local.a = 3;
-    local.b = 4;
-    Optional<Par> o = Some(local);
-    Par q = unwrap(o);
-    if (q.a == 3 && q.b == 4) { acc = acc + 12; }
+	// Ruta sin funcion de por medio: `Some` sobre una variable local.
+	Par local;
+	local.a = 3;
+	local.b = 4;
+	Optional<Par> o = Some(local);
+	Par           q = unwrap(o);
+	if (q.a == 3 && q.b == 4) { acc = acc + 12; }
 
-    // Y ligado por `match`, no solo por `unwrap`: el brazo recibe el struct
-    // entero, no sus primeros ocho bytes leidos como un entero.
-    match mk_par(7) {
-        case Some(m) => { if (m.a == 7 && m.b == 14) { acc = acc + 10; } }
-        case None    => { acc++; }
-    }
+	// Y ligado por `match`, no solo por `unwrap`: el brazo recibe el struct
+	// entero, no sus primeros ocho bytes leidos como un entero.
+	match mk_par(7) {
+		case Some(m) => { if (m.a == 7 && m.b == 14) { acc = acc + 10; } }
+		case None    => { acc++; }
+	}
 
-    return acc;   // 52
+	return acc; // 52
 }

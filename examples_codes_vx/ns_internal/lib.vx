@@ -3,5 +3,5 @@
 // que consumidor y dep comparten el paquete (anonimo) y `internal` es visible.
 namespace lib;
 
-public   i64 publica(i64 x) { return x + 1; }
-internal i64 interna(i64 x) { return x + 100; }   // package-scoped
+public i64 publica(i64 x) { return x + 1; }
+internal i64 interna(i64 x) { return x + 100; }

@@ -15,16 +15,17 @@ namespace ejemplos.generics_avanzado;
 // Resultado esperado: 3 + 4 + 10 + 20 = 37.
 
 class Pair<K, V> {
-    public K first;
-    public V second;
-    public Pair(K f, V s) { this.first = f; this.second = s; }
-    public K getFirst()  { return this.first;  }
-    public V getSecond() { return this.second; }
+	public K first;
+	public V second;
+	public Pair(K f, V s) { this.first = f;
+		this.second = s; }
+	public K getFirst() { return this.first; }
+	public V getSecond() { return this.second; }
 }
 
 i32 main() {
-    Pair<i32, i32> p1 = new Pair<i32, i32>(3, 4);
-    Pair<i64, i64> p2 = new Pair<i64, i64>(10, 20);
-    return p1.getFirst() + p1.getSecond()
-         + p2.getFirst() + p2.getSecond();
+	Pair<i32, i32> p1 = new Pair<i32, i32>(3, 4);
+	Pair<i64, i64> p2 = new Pair<i64, i64>(10, 20);
+	return p1.getFirst() + p1.getSecond()
+		+ p2.getFirst() + p2.getSecond();
 }

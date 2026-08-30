@@ -15,31 +15,31 @@
 namespace strings_comptime;
 
 i32 main() {
-    // ---- 1: literales adyacentes -> UN literal ---------------------------
-    // Para partir un mensaje largo sin pasarse de ancho ni meter operadores.
-    string aviso = "esto es una sola cadena, "
-                   "aunque este escrita en dos lineas";
-    println(aviso);
+	// ---- 1: literales adyacentes -> UN literal ---------------------------
+	// Para partir un mensaje largo sin pasarse de ancho ni meter operadores.
+	string aviso = "esto es una sola cadena, "
+		"aunque este escrita en dos lineas";
+	println(aviso);
 
-    // ---- 2: "a" + "b" -> UN literal --------------------------------------
-    string saludo = "hola" + " " + "mundo";     // 0 strcat: se pliega entero
-    println(saludo);
+	// ---- 2: "a" + "b" -> UN literal --------------------------------------
+	string saludo = "hola" + " " + "mundo"; // 0 strcat: se pliega entero
+	println(saludo);
 
-    // ---- 3: ...y tambien a traves de variables ---------------------------
-    string a = "aaa";
-    string b = "bbb";
-    string c = a + b;          // -> "aaabbb" al compilar, sin strcat
+	// ---- 3: ...y tambien a traves de variables ---------------------------
+	string a = "aaa";
+	string b = "bbb";
+	string c = a + b; // -> "aaabbb" al compilar, sin strcat
 
-    println(a);                // `a` se usa aqui -> sigue existiendo
-    println(c);                // `b` solo estaba en el concat -> desaparece
+	println(a);       // `a` se usa aqui -> sigue existiendo
+	println(c);       // `b` solo estaba en el concat -> desaparece
 
-    // ---- Lo que NO se puede plegar ---------------------------------------
-    // En cuanto una parte se conoce solo al ejecutar, el concat es real -- y
-    // debe serlo.
-    i64 n = 7;
-    string dinamico = "n=" + to_str(n) + "!";
-    println(dinamico);
+	// ---- Lo que NO se puede plegar ---------------------------------------
+	// En cuanto una parte se conoce solo al ejecutar, el concat es real -- y
+	// debe serlo.
+	i64    n        = 7;
+	string dinamico = "n=" + to_str(n) + "!";
+	println(dinamico);
 
-    // len("aaabbb") = 6;  6 + 36 = 42
-    return (i32)(c.length() + 36);
+	// len("aaabbb") = 6;  6 + 36 = 42
+	return (i32)(c.length() + 36);
 }

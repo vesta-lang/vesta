@@ -24,58 +24,58 @@ namespace ejemplos.interfaz_y_herencia;
 // --- 1. Sin constructor declarado -----------------------------------------
 
 interface Habla {
-    i64 decir();
+	i64 decir();
 }
 
 class Animal {
-    public i64 patas() { return 1; }
+	public i64 patas() { return 1; }
 }
 
 class Perro : Animal, Habla {
-    @Override
-    public i64 patas() { return 4; }
-    public i64 decir() { return 10; }
+	@Override
+		public i64 patas() { return 4; }
+	public i64 decir() { return 10; }
 }
 
 Animal fabricar_animal() { return new Perro(); }
-Habla  fabricar_habla()  { return new Perro(); }
+Habla fabricar_habla() { return new Perro(); }
 
 // --- 2. Con constructor, y una interfaz de dos metodos ---------------------
 
 interface Ruido {
-    i64 uno();
-    i64 dos();
+	i64 uno();
+	i64 dos();
 }
 
 class Base {
-    public Base() {}
-    public i64 valor() { return 5; }
+	public Base() { }
+	public i64 valor() { return 5; }
 }
 
 class Derivada : Base, Ruido {
-    public Derivada() {}
-    @Override
-    public i64 valor() { return 7; }
-    public i64 uno() { return 100; }
-    public i64 dos() { return 200; }
+	public Derivada() { }
+	@Override
+		public i64 valor() { return 7; }
+	public i64 uno() { return 100; }
+	public i64 dos() { return 200; }
 }
 
-Base  fabricar_base()  { return new Derivada(); }
+Base fabricar_base() { return new Derivada(); }
 Ruido fabricar_ruido() { return new Derivada(); }
 
 i32 main() {
-    // Por la clase: tiene que dar el metodo de la clase.
-    const i64 a = fabricar_animal().patas();   // 4, no 10
-    const i64 b = fabricar_base().valor();     // 7, no 200
+	// Por la clase: tiene que dar el metodo de la clase.
+	const i64   a = fabricar_animal().patas(); // 4, no 10
+	const i64   b = fabricar_base().valor();   // 7, no 200
 
-    // Por la interfaz: tiene que seguir dando el de la interfaz.
-    const i64 c = fabricar_habla().decir();    // 10
-    Ruido r = fabricar_ruido();
-    const i64 d = r.uno() + r.dos();           // 300
+	// Por la interfaz: tiene que seguir dando el de la interfaz.
+	const i64   c = fabricar_habla().decir();  // 10
+	      Ruido r = fabricar_ruido();
+	const i64   d = r.uno() + r.dos(); // 300
 
-    println("clase=${a},${b} interfaz=${c},${d}");
+	println("clase=${a},${b} interfaz=${c},${d}");
 
-    // 4 + 7 + 10 + 300 = 321
-    const i64 total = a + b + c + d;
-    return (i32) (total - 279); // 42
+	// 4 + 7 + 10 + 300 = 321
+	const i64 total = a + b + c + d;
+	return (i32)(total - 279); // 42
 }

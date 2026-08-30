@@ -21,16 +21,16 @@ namespace ejemplos.rspawn_basico;
 // que es un test de integracion separado (manual).
 
 i32 main() {
-    // node 0 = nodo local (en NodeRegistry); en una corrida real con
-    // dos VMs registradas, node 1 seria el otro nodo.
-    i64 fut = rspawn(0) {
-        // computacion remota trivial
-        i32 a = 21;
-        i32 b = 21;
-        return a + b;  // -> mov r0, 42 + hlt; runtime envia R0 via VDP
-    };
-    // En modo no-distribuido fut es 0xFFFFFFFF (handle invalido).
-    // Devolvemos fut como i32 (truncacion implicita) -> R0 = -1.
-    i32 r = fut;
-    return r;
+	// node 0 = nodo local (en NodeRegistry); en una corrida real con
+	// dos VMs registradas, node 1 seria el otro nodo.
+	i64 fut = rspawn(0) {
+		// computacion remota trivial
+		i32 a = 21;
+		i32 b = 21;
+		return a + b; // -> mov r0, 42 + hlt; runtime envia R0 via VDP
+	};
+	// En modo no-distribuido fut es 0xFFFFFFFF (handle invalido).
+	// Devolvemos fut como i32 (truncacion implicita) -> R0 = -1.
+	i32 r = fut;
+	return r;
 }

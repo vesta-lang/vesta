@@ -4,4 +4,4 @@ namespace geo;
 
 public concept Numerico<T> = is_numeric<T>();
 
-public T doble<T: geo.Numerico>(T x) { return x + x; }
+public T doble < T : geo.Numerico > (T x) { return x + x; }

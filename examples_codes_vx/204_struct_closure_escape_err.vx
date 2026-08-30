@@ -11,16 +11,16 @@ namespace ejemplos.struct_closure_escape_err;
 // GC.  Ver doc/VMdoc//ClosuresEnCampos.md.
 
 struct Caja {
-    fn() -> i64 leer;
+	fn() -> i64 leer;
 }
 
 Caja crear(i64 v) {
-    Caja c;
-    c.leer = () => v + 1;   // closure capturador; al escapar, env en heap
-    return c;               // move-on-return: el env se transfiere al caller
+	Caja c;
+	c.leer = () => v + 1; // closure capturador; al escapar, env en heap
+	return c;             // move-on-return: el env se transfiere al caller
 }
 
 i32 main() {
-    Caja c = crear(41);     // c posee el env; lo libera al exit del scope
-    return (i32) c.leer();  // 42
+	Caja c = crear(41);    // c posee el env; lo libera al exit del scope
+	return (i32) c.leer(); // 42
 }

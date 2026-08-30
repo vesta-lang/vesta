@@ -18,30 +18,30 @@
 // Ejecuta: vm --run obj_accum.velb --stats [-m jit]
 
 class Stats {
-    public i64 sum;
-    public i64 cnt;
-    public i64 mn;
-    public i64 mx;
-    public Stats() {
-        this.sum = 0;
-        this.cnt = 0;
-        this.mn = 2000000000;
-        this.mx = -2000000000;
-    }
+	public i64 sum;
+	public i64 cnt;
+	public i64 mn;
+	public i64 mx;
+	public Stats() {
+		this.sum =  0;
+		this.cnt =  0;
+		this.mn  =  2_000_000_000;
+		this.mx  = -2_000_000_000;
+	}
 }
 
 i64 main() {
-    Stats s = new Stats();
-    i64 seed = 12345;
-    i64 i = 0;
-    while (i < 20000000) {
-        seed = (seed * 1103515245 + 12345) & 2147483647;   // LCG deterministico
-        i64 v = seed % 1000;
-        s.sum = s.sum + v;
-        s.cnt = s.cnt + 1;
-        if (v < s.mn) { s.mn = v; }      // escritura condicional del campo (cross-block)
-        if (v > s.mx) { s.mx = v; }      // escritura condicional del campo (cross-block)
-        i = i + 1;
-    }
-    return (s.sum + s.cnt + s.mn + s.mx) % 1000000;
+	Stats s    = new Stats();
+	i64   seed = 12_345;
+	i64   i    = 0;
+	while (i < 20_000_000) {
+		seed = (seed * 1_103_515_245 + 12_345) & 2_147_483_647; // LCG deterministico
+		i64 v = seed % 1000;
+		s.sum = s.sum + v;
+		s.cnt = s.cnt + 1;
+		if (v < s.mn) { s.mn = v; } // escritura condicional del campo (cross-block)
+		if (v > s.mx) { s.mx = v; } // escritura condicional del campo (cross-block)
+		i = i + 1;
+	}
+	return (s.sum + s.cnt + s.mn + s.mx) % 1_000_000;
 }

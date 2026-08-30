@@ -13,22 +13,22 @@
 // `return` tiene que volver a quien la llamo, no parar el proceso.
 
 i64 con_return_pronto(i64 umbral) {
-    i64 base = 7;
+	i64 base = 7;
 
-    i64 hijo = spawn {
-        fn(i64) -> i64 doble = (i64 x) => { return x * 2; };
-        i64 r = doble(base);
-        if (r > umbral) {
-            return;             // termina el proceso aqui
-        }
-        i64 nunca = r + 1000;   // no se llega
-    };
+	i64 hijo = spawn {
+		fn(i64) -> i64 doble = (i64 x) => { return x * 2; };
+		i64            r     = doble(base);
+		if (r > umbral) {
+			return; // termina el proceso aqui
+		}
+		i64 nunca = r + 1000; // no se llega
+	};
 
-    return base * 6;
+	return base * 6;
 }
 
 i32 main() {
-    i64 v = con_return_pronto(3);
-    println("${v}");
-    return (i32) v;
+	i64 v = con_return_pronto(3);
+	println("${v}");
+	return (i32) v;
 }

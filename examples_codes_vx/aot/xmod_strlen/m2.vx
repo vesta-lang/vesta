@@ -1,5 +1,5 @@
 import "slib2";
 i32 main() {
-    string m = "hello";
-    return slib2.slen2(m);
+	string m = "hello";
+	return slib2.slen2(m);
 }

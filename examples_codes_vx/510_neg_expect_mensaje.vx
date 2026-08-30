@@ -8,8 +8,8 @@ namespace ejemplos.neg_expect_mensaje;
 // exigiria lo contrario.
 
 i32 main() {
-    Optional<i64> o = Some(7);
-    string s = "calculado";
-    const i64 v = expect(o, s);
-    return (i32) v;
+	      Optional<i64> o = Some(7);
+	      string        s = "calculado";
+	const i64           v = expect(o, s);
+	return (i32) v;
 }

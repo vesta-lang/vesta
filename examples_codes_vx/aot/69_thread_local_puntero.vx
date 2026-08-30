@@ -10,11 +10,11 @@
 // lee `v` via un thread_local puntero `p = &v` -> 33 -> exit code 33.
 
 thread_local i64 v = 77;
-thread_local i64* p;   // puntero por-hilo (8 bytes)
+thread_local i64 *p; // puntero por-hilo (8 bytes)
 
 i64 main() {
-    i64* q = &v;       // direccion de la copia de v de este hilo
-    *q = 33;           // escribir 33 en v via el puntero local
-    p = &v;            // guardar la direccion tambien en un thread_local ptr
-    return *p;         // leer v (=33) via el thread_local puntero
+	i64* q = &v; // direccion de la copia de v de este hilo
+	*    q = 33;     // escribir 33 en v via el puntero local
+	p = &v;      // guardar la direccion tambien en un thread_local ptr
+	return *p;   // leer v (=33) via el thread_local puntero
 }

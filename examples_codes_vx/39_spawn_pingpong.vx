@@ -15,15 +15,15 @@ namespace ejemplos.spawn_pingpong;
 // Esperado: hijo responde 777 (constante), padre lo recibe y devuelve 777.
 
 i32 main() {
-    i64 self = pid();             // PID del padre
+	i64 self = pid(); // PID del padre
 
-    i64 child = spawn {
-        i64 from = msgrecv();     // bloquea hasta que el padre envie su PID
-        msgsend(from, 777);       // responde al padre con 777
-    };
+	i64 child = spawn {
+		i64 from = msgrecv(); // bloquea hasta que el padre envie su PID
+		msgsend(from, 777);   // responde al padre con 777
+	};
 
-    msgsend(child, self);         // envia el PID del padre al hijo
-    i64 reply = msgrecv();        // bloquea hasta que el hijo responda
+	msgsend(child, self); // envia el PID del padre al hijo
+	i64 reply = msgrecv(); // bloquea hasta que el hijo responda
 
-    return reply;                  // 777
+	return reply;          // 777
 }

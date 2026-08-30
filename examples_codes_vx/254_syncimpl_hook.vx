@@ -17,41 +17,41 @@ namespace ejemplos.syncimpl_hook;
 
 // Contadores de invocacion del monitor custom (host globals).
 i64 __sync_enter_count = 0;
-i64 __sync_exit_count = 0;
+i64 __sync_exit_count  = 0;
 
 // Override de la primitiva de adquisicion.  El nombre convenido (monitor_enter)
 // selecciona el rol.  Firma: void(<ptr> obj) -- obj es el host_ptr al objeto.
 @SyncImpl
-void monitor_enter(i64* obj) {
-    __sync_enter_count = __sync_enter_count + 1;
+	void monitor_enter(i64 *obj) {
+	__sync_enter_count = __sync_enter_count + 1;
 }
 
 // Override de la primitiva de liberacion.
 @SyncImpl
-void monitor_exit(i64* obj) {
-    __sync_exit_count = __sync_exit_count + 1;
+	void monitor_exit(i64 *obj) {
+	__sync_exit_count = __sync_exit_count + 1;
 }
 
 class Box {
-    i32 value;
-    Box() { this.value = 0; }
-    i32 bump() {
-        synchronized (this) {
-            this.value = this.value + 1;
-        }
-        return this.value;
-    }
+	i32 value;
+	Box() { this.value = 0; }
+	i32 bump() {
+		synchronized (this) {
+			this.value = this.value + 1;
+		}
+		return this.value;
+	}
 }
 
 i32 main() {
-    Box b = new Box();
-    i32 i = 0;
-    while (i < 21) {
-        b.bump();
-        i = i + 1;
-    }
-    // 21 enters + 21 exits = 42.  Confirma que AMBOS hooks se invocaron una vez
-    // por cada synchronized (entrada y salida).
-    i64 total = __sync_enter_count + __sync_exit_count;
-    return (i32)total;   // 42
+	Box b = new Box();
+	i32 i = 0;
+	while (i < 21) {
+		b.bump();
+		i = i + 1;
+	}
+	// 21 enters + 21 exits = 42.  Confirma que AMBOS hooks se invocaron una vez
+	// por cada synchronized (entrada y salida).
+	i64 total = __sync_enter_count + __sync_exit_count;
+	return (i32)total; // 42
 }

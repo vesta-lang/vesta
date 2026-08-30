@@ -20,19 +20,19 @@ namespace ejemplos.clases_modificadores;
 // Resultado esperado: R00 == 25 (5 * 5)
 
 class Vec {
-    private i32 x;
-    public  i32 y;
+	private i32 x;
+	public i32 y;
 
-    public Vec(i32 a) {
-        this.x = a;
-        this.y = a;
-    }
+	public Vec(i32 a) {
+		this.x = a;
+		this.y = a;
+	}
 
-    // Expression-bodied + final.
-    public final i32 dot() => this.x * this.y;
+	// Expression-bodied + final.
+	public final i32 dot() => this.x * this.y;
 }
 
 i32 main() {
-    Vec v = new Vec(5);
-    return v.dot();
+	Vec v = new Vec(5);
+	return v.dot();
 }

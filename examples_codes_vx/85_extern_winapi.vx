@@ -24,16 +24,16 @@ namespace ejemplos.extern_winapi;
 //   Validamos: pid != 0 (1) + tick != 0 (1) + 40 = 42.
 
 extern "kernel32.dll" {
-    fn GetCurrentProcessId() -> i32;
-    fn GetTickCount() -> i32;
+	fn GetCurrentProcessId() -> i32;
+	fn GetTickCount() -> i32;
 }
 
 i32 main() {
-    i32 pid  = GetCurrentProcessId();
-    i32 tick = GetTickCount();
+	i32 pid  = GetCurrentProcessId();
+	i32 tick = GetTickCount();
 
-    i32 acc = 40;
-    if (pid != 0)  { acc++; }
-    if (tick != 0) { acc++; }
-    return acc;
+	i32 acc = 40;
+	if (pid != 0) { acc++; }
+	if (tick != 0) { acc++; }
+	return acc;
 }

@@ -11,20 +11,20 @@
 //
 // @expect 42
 u64 main() {
-    u64 total = 0;
-    {
-        register("rax") u64 a = 20;
-        asm volatile {
-            inc rax
-        };
-        total = total + a;      // 21
-    }
-    {
-        register("rax") u64 b = 20;
-        asm volatile {
-            inc rax
-        };
-        total = total + b;      // 21 -> 42
-    }
-    return total;
+	u64 total = 0;
+	{
+		register("rax") u64 a = 20;
+		asm volatile {
+			inc rax
+		};
+		total = total + a; // 21
+	}
+	{
+		register("rax") u64 b = 20;
+		asm volatile {
+			inc rax
+		};
+		total = total + b; // 21 -> 42
+	}
+	return total;
 }

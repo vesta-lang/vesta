@@ -9,13 +9,13 @@
 import std.wideint only i128;
 
 i32 main() {
-    i128 a = i128.from_i64(-100);
-    i128 b = i128.from_i64(7);
-    i32 acc = 0;
-    if ((a / b) == i128.from_i64(-14)) { acc = acc + 10; }   // trunca a cero
-    if ((a % b) == i128.from_i64(-2))  { acc = acc + 20; }   // signo del dividendo
-    if (a.__neg__() == i128.from_i64(100)) { acc = acc + 12; }
-    if (a.is_negative()) { acc = acc + 100; }
-    if (a < b) { acc = acc + 500; }
-    return acc;   // 642
+	i128 a   = i128.from_i64(-100);
+	i128 b   = i128.from_i64(7);
+	i32  acc = 0;
+	if ((a / b) == i128.from_i64(-14)) { acc = acc + 10; } // trunca a cero
+	if ((a % b) == i128.from_i64(-2)) { acc = acc + 20; } // signo del dividendo
+	if (a.__neg__() == i128.from_i64(100)) { acc = acc + 12; }
+	if (a.is_negative()) { acc = acc + 100; }
+	if (a < b) { acc = acc + 500; }
+	return acc; // 642
 }

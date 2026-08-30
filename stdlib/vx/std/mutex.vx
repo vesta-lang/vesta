@@ -56,7 +56,7 @@ import std.pool only fiber, vx_park, vx_wake, vx_cur_fiber, vx_wq_push, vx_wq_po
 // bajo el spinlock interno.
 // ---------------------------------------------------------------------------
 @overlay
-public struct Mutex {
+	public struct Mutex {
 	i64 held @0x00; // 0 = mutex libre, 1 = mutex tomado (palabra atomica).
 	i64 spin @0x08; // spinlock que protege la cola (solo bajo contienda).
 	i64 wq_h @0x10; // cola de fibras en espera: cabeza (fiber-nodo).

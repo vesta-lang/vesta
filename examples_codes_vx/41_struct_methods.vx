@@ -20,39 +20,39 @@ namespace ejemplos.struct_methods;
 // Resultado esperado: 42.
 
 struct Punto {
-    i32 x;
-    i32 y;
+	i32 x;
+	i32 y;
 
-    // Metodo de bloque: suma de las dos componentes.
-    i32 sum() {
-        return this.x + this.y;
-    }
+	// Metodo de bloque: suma de las dos componentes.
+	i32 sum() {
+		return this.x + this.y;
+	}
 
-    // Metodo con parametro: escala ambas componentes y devuelve la suma.
-    i32 scaled_sum(i32 k) {
-        return (this.x + this.y) * k;
-    }
+	// Metodo con parametro: escala ambas componentes y devuelve la suma.
+	i32 scaled_sum(i32 k) {
+		return (this.x + this.y) * k;
+	}
 
-    // Metodo expression-bodied (=> expr): producto de las componentes.
-    i32 prod() => this.x * this.y;
+	// Metodo expression-bodied (=> expr): producto de las componentes.
+	i32 prod() => this.x * this.y;
 }
 
 i32 main() {
-    Punto p;
-    p.x = 20;
-    p.y = 22;
+	Punto p;
+	p.x = 20;
+	p.y = 22;
 
-    // sum() -> 20 + 22 = 42.
-    i32 s = p.sum();
+	// sum() -> 20 + 22 = 42.
+	i32 s    = p.sum();
 
-    // scaled_sum(2) -> (20 + 22) * 2 = 84.
-    i32 ss = p.scaled_sum(2);
+	// scaled_sum(2) -> (20 + 22) * 2 = 84.
+	i32 ss   = p.scaled_sum(2);
 
-    // prod() -> 20 * 22 = 440.
-    i32 pr = p.prod();
+	// prod() -> 20 * 22 = 440.
+	i32 pr   = p.prod();
 
-    // gate = 1 solo si todo cuadra:
-    //   s == 42, ss == 84, pr == 440.
-    i32 gate = (i32)(s == 42) * (i32)(ss == 84) * (i32)(pr == 440);
-    return s * gate;   // 42 * 1 = 42
+	// gate = 1 solo si todo cuadra:
+	//   s == 42, ss == 84, pr == 440.
+	i32 gate = (i32)(s == 42) * (i32)(ss == 84) * (i32)(pr == 440);
+	return s * gate; // 42 * 1 = 42
 }

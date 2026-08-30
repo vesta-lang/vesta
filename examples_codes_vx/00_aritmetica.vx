@@ -10,5 +10,5 @@ namespace ejemplos.aritmetica;
 //   exit code / R00 == 7
 
 i32 main() {
-    return 1 + 2 * 3;
+	return 1 + 2 * 3;
 }

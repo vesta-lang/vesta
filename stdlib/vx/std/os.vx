@@ -38,17 +38,17 @@ import std.types only size_t, ssize_t;
 // del sistema, y el que se ofrece desde aqui es el portable de mas abajo.  El
 // import deja ademas el modulo cargado para poder llamarlo cualificado.
 @Target("os:windows")
-import std.os.windows;
+	import std.os.windows;
 @Target("os:windows")
-public import std.os.windows only exit, Stream;
+	public import std.os.windows only exit, Stream;
 
 @Target("os:linux")
-import std.os.linux;
+	import std.os.linux;
 @Target("os:linux")
-public import std.os.linux only exit, Stream;
+	public import std.os.linux only exit, Stream;
 
 @Target("os:windows")
-import std.windows only DWORD, HANDLE, LPOVERLAPPED, STD_INPUT_HANDLE;
+	import std.windows only DWORD, HANDLE, LPOVERLAPPED, STD_INPUT_HANDLE;
 
 // Los tres manejadores estandar no cambian en toda la vida del proceso, y
 // obtenerlos requiere llamar a la API de Windows.  Se piden una vez y se
@@ -80,18 +80,18 @@ u8[3] __os_manejador_pedido;
  * @return Bytes escritos, o -1 si fallo.
  */
 @Target("os:windows")
-public ssize_t write(Stream cual, const char *buf, size_t count) {
+	public ssize_t write(Stream cual, const char *buf, size_t count) {
 	// El indice sale de la propia constante, sin ramas: los tres valores son
 	// consecutivos (-10, -11, -12), asi que restarlos del primero da 0, 1 y 2.
 	DWORD idx = ((DWORD) STD_INPUT_HANDLE) - ((DWORD) cual);
 	if (__os_manejador_pedido[idx] == 0) {
 		__os_manejador[idx] =
-		(u64) std.os.windows.get_std_handle((DWORD) cual);
+			(u64) std.os.windows.get_std_handle((DWORD) cual);
 		__os_manejador_pedido[idx] = 1;
 	}
 	HANDLE h        = (HANDLE) __os_manejador[idx];
 	DWORD  escritos = 0;
-	if (std.os.windows.write(h, buf, (DWORD) count,&escritos,
+	if (std.os.windows.write(h, buf, (DWORD) count, &escritos,
 			(LPOVERLAPPED) nullptr) == 0) {
 		return (ssize_t) - 1;
 	}
@@ -105,6 +105,6 @@ public ssize_t write(Stream cual, const char *buf, size_t count) {
  * igualar: se pasa tal cual.
  */
 @Target("os:linux")
-public ssize_t write(Stream cual, const char *buf, size_t count) {
+	public ssize_t write(Stream cual, const char *buf, size_t count) {
 	return std.os.linux.write((u32) cual, buf, count);
 }

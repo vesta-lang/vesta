@@ -16,27 +16,27 @@ namespace ejemplos.borrow_reborrow_helper;
 // mutable concurrente: outer suspende durante la duracion de inner.
 
 void inner(borrow_mut<i64> q) {
-    i64 v = read_borrow(q);
-    write_borrow(q, v + 1);
+	i64 v = read_borrow(q);
+	write_borrow(q, v + 1);
 }
 
-void outer(borrow_mut<i64> p) {
-    // Reborrow mut: p queda suspendido mientras viva el reborrow.
-    borrow_mut<i64> rb = lend_mut(p);
-    inner(rb);                          // muta a traves del reborrow (+1)
-    // <- rb dropea aqui (NLL); p vuelve a ser activo.
-    // Podemos seguir usando p directamente sin error:
-    i64 cur = read_borrow(p);
-    write_borrow(p, cur + 10);          // p directo (+10)
+void outer(borrow_mut<i64> p){
+	// Reborrow mut: p queda suspendido mientras viva el reborrow.
+	borrow_mut<i64> rb = lend_mut(p);
+	inner(rb); // muta a traves del reborrow (+1)
+	// <- rb dropea aqui (NLL); p vuelve a ser activo.
+	// Podemos seguir usando p directamente sin error:
+	i64 cur = read_borrow(p);
+	write_borrow(p, cur + 10); // p directo (+10)
 }
 
 i32 main() {
-    unique<i64> total = unique_box(20);
-    borrow_mut<i64> bm = lend_mut(total);
+	unique<i64>     total = unique_box(20);
+	borrow_mut<i64> bm    = lend_mut(total);
 
-    // Cada outer suma 11 (1 via inner reborrow + 10 directo).
-    outer(bm);          // 20 -> 31
-    outer(bm);          // 31 -> 42
+	// Cada outer suma 11 (1 via inner reborrow + 10 directo).
+	outer(bm); // 20 -> 31
+	outer(bm); // 31 -> 42
 
-    return (i32)read_borrow(bm);
+	return (i32)read_borrow(bm);
 }

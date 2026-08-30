@@ -5,37 +5,37 @@
 
 // Cuenta cuantos pasos hasta que acc supera limit (FCMP_GE en el branch).
 i64 count_until(f64 acc, f64 step, f64 limit) {
-    if (acc >= limit) { return 0; }
-    return 1 + count_until(acc + step, step, limit);
+	if (acc >= limit) { return 0; }
+	return 1 + count_until(acc + step, step, limit);
 }
 
 // Suma recursiva de (f64)i por cada i de n..1: ejerce ITOF (CVTSI2SD) y FADD
 // con un entero runtime (no plegable).  Devuelve (i64) del acumulado (FTOI).
 f64 sum_as_float(i64 n, f64 acc) {
-    if (n == 0) { return acc; }
-    return sum_as_float(n - 1, acc + (f64) n);   // ITOF de n runtime + FADD
+	if (n == 0) { return acc; }
+	return sum_as_float(n - 1, acc + (f64) n); // ITOF de n runtime + FADD
 }
 
 // Recursion en f32: acumula (f32)i en precision simple, ensancha a f64 al
 // final.  Ejerce CVTSI2SS + ADDSS + CVTSS2SD con datos runtime.
 f32 sum_f32(i64 n, f32 acc) {
-    if (n == 0) { return acc; }
-    return sum_f32(n - 1, acc + (f32) n);   // CVTSI2SS de n runtime + ADDSS
+	if (n == 0) { return acc; }
+	return sum_f32(n - 1, acc + (f32) n); // CVTSI2SS de n runtime + ADDSS
 }
 
 i32 main() {
-    // count_until(0, 2.5, 11.0): 0,2.5,5,7.5,10,12.5 -> 5 pasos (>=11 en el 5o)
-    i64 c = count_until(0.0, 2.5, 11.0);   // 5
+	// count_until(0, 2.5, 11.0): 0,2.5,5,7.5,10,12.5 -> 5 pasos (>=11 en el 5o)
+	i64 c  = count_until(0.0, 2.5, 11.0); // 5
 
-    // sum_as_float(5,0) = 1+2+3+4+5 = 15.0 -> (i64) 15
-    f64 s = sum_as_float(5, 0.0);
-    i64 si = (i64) s;                       // FTOI -> 15
+	// sum_as_float(5,0) = 1+2+3+4+5 = 15.0 -> (i64) 15
+	f64 s  = sum_as_float(5, 0.0);
+	i64 si = (i64) s; // FTOI -> 15
 
-    // sum_f32(4,0) = 1+2+3+4 = 10.0 (f32) -> ensanchar a f64 -> (i64) 10
-    f32 ff = sum_f32(4, 0.0);
-    f64 fd = (f64) ff;                      // CVTSS2SD
-    i64 fi = (i64) fd;                      // CVTTSD2SI -> 10
+	// sum_f32(4,0) = 1+2+3+4 = 10.0 (f32) -> ensanchar a f64 -> (i64) 10
+	f32 ff = sum_f32(4, 0.0);
+	f64 fd = (f64) ff; // CVTSS2SD
+	i64 fi = (i64) fd; // CVTTSD2SI -> 10
 
-    // 5 + 15 + 10 = 30
-    return (i32) (c + si + fi);
+	// 5 + 15 + 10 = 30
+	return (i32)(c + si + fi);
 }

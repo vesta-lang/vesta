@@ -3,15 +3,15 @@
 // El emisor AOT parchea cada `dq main` con la direccion real del simbolo.
 
 bytes jump_table {
-    dq main                    // -> VA de main
-    dq helper                  // -> VA de helper
-    dq 0xDEADBEEFCAFEBABE     // literal, sin reloc
+	dq main                   // -> VA de main
+		dq helper             // -> VA de helper
+		dq 0xDEADBEEFCAFEBABE // literal, sin reloc
 }
 
 i32 helper() {
-    return 7;
+	return 7;
 }
 
 i32 main() {
-    return 0x42;
+	return 0x42;
 }

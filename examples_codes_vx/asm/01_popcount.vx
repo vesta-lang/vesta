@@ -10,10 +10,10 @@
 //
 // @expect 8
 u64 main() {
-    register("rdi") u64 valor = 0xFF;   // 8 bits a 1
-    register("rax") u64 cuenta;          // output-only (sin init)
-    asm volatile {
-        popcnt rax, rdi                  // cuenta = popcount(valor)
-    };                                   // clobbers ("cc") inferidos
-    return cuenta;                        // -> 8
+	register("rdi") u64 valor = 0xFF; // 8 bits a 1
+	register("rax") u64 cuenta;       // output-only (sin init)
+	asm volatile {
+		popcnt rax, rdi // cuenta = popcount(valor)
+	};                  // clobbers ("cc") inferidos
+	return cuenta;      // -> 8
 }

@@ -9,29 +9,29 @@
 // Funciona en interprete, JIT y AOT (donde el string es value-type sin GC).
 
 string build_tag(string base, i32 n) {
-    // string RUNTIME: `base` (variable) concatenado con un literal INTERPOLADO.
-    return base + "${n}";
+	// string RUNTIME: `base` (variable) concatenado con un literal INTERPOLADO.
+	return base + "${n}";
 }
 
 i32 clasifica(string s) {
-    match (s) {
-        case "GET1"  => return 1;
-        case "POST2" => return 2;
-        case "PUT3"  => return 3;
-        case _       => return 0;   // desconocido
-    }
-    return -1;
+	match (s) {
+		case "GET1"  => return 1;
+		case "POST2" => return 2;
+		case "PUT3"  => return 3;
+		case _       => return 0; // desconocido
+	}
+	return -1;
 }
 
 i32 main() {
-    string a = build_tag("GET", 1);    // "GET1"  via variable + interpolacion
-    string b = build_tag("POST", 2);   // "POST2" (longitud 5)
-    string c = "PU" + "T3";            // "PUT3"  via concat de dos literales
-    string d = build_tag("HEAD", 9);   // "HEAD9" (longitud 5) -> default
+	string a = build_tag("GET", 1);  // "GET1"  via variable + interpolacion
+	string b = build_tag("POST", 2); // "POST2" (longitud 5)
+	string c = "PU" + "T3";          // "PUT3"  via concat de dos literales
+	string d = build_tag("HEAD", 9);        // "HEAD9" (longitud 5) -> default
 
-    println("a=${a} b=${b} c=${c} d=${d}");   // GET1 POST2 PUT3 HEAD9
+	println("a=${a} b=${b} c=${c} d=${d}"); // GET1 POST2 PUT3 HEAD9
 
-    // b y d comparten longitud (5): el mismo grupo, el strcmp los desambigua.
-    // 1 + 20 + 300 + 0 = 321
-    return clasifica(a) + clasifica(b)*10 + clasifica(c)*100 + clasifica(d)*1000;
+	// b y d comparten longitud (5): el mismo grupo, el strcmp los desambigua.
+	// 1 + 20 + 300 + 0 = 321
+	return clasifica(a) + clasifica(b) * 10 + clasifica(c) * 100 + clasifica(d) * 1000;
 }

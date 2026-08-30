@@ -20,47 +20,53 @@ namespace ejemplos.result_payload_grande;
 // El struct se hace de treinta y dos bytes a proposito: uno que quepa en el
 // numero fijo de antes tapa el fallo.
 
-struct Grande { i64 a; i64 b; i64 c; i64 d; }
+struct Grande { i64 a;
+	i64 b;
+	i64 c;
+	i64 d; }
 
 Result<Grande, i64> hacer(i64 x) {
-    Grande g;
-    g.a = x; g.b = x + 1; g.c = x + 2; g.d = x + 3;
-    return Ok(g);
+	Grande g;
+	g.a = x;
+	g.b = x + 1;
+	g.c = x + 2;
+	g.d = x + 3;
+	return Ok(g);
 }
 
 Result<Grande, i64> fallar() {
-    return Err(99);
+	return Err(99);
 }
 
 i32 main() {
-    // Un centinela en la pila: si el conjunto se dimensionara corto, lo
-    // primero que se lleva por delante es esto.
-    const i64 centinela = 555;
+	// Un centinela en la pila: si el conjunto se dimensionara corto, lo
+	// primero que se lleva por delante es esto.
+	const i64 centinela = 555;
 
-    i64 suma = 0;
-    Result<Grande, i64> r = hacer(10);
-    if (isOk(r) != 0) {
-        Grande g = value(r);
-        suma = g.a + g.b + g.c + g.d;      // 10+11+12+13 = 46
-    }
+	i64                 suma = 0;
+	Result<Grande, i64> r    = hacer(10);
+	if (isOk(r) != 0) {
+		Grande g = value(r);
+		suma = g.a + g.b + g.c + g.d; // 10+11+12+13 = 46
+	}
 
-    // La rama de error tiene que seguir distinguiendose, y su payload vive
-    // DETRAS del valor -- que ahora ocupa cuatro palabras, no una --.
-    i64 err = 0;
-    Result<Grande, i64> malo = fallar();
-    if (isOk(malo) == 0) {
-        err = error(malo);                 // 99
-    }
+	// La rama de error tiene que seguir distinguiendose, y su payload vive
+	// DETRAS del valor -- que ahora ocupa cuatro palabras, no una --.
+	i64                 err  = 0;
+	Result<Grande, i64> malo = fallar();
+	if (isOk(malo) == 0) {
+		err = error(malo); // 99
+	}
 
-    // Y el camino que mira la marca por su cuenta.
-    i64 porMatch = 0;
-    match (r) {
-        case Ok(g)  => { porMatch = g.d; } // 13
-        case Err(e) => { porMatch = -1; }
-    }
+	// Y el camino que mira la marca por su cuenta.
+	i64 porMatch = 0;
+	match (r) {
+		case Ok(g)  => { porMatch = g.d; } // 13
+		case Err(e) => { porMatch = -1; }
+	}
 
-    println("suma=${suma} err=${err} match=${porMatch} centinela=${centinela}");
+	println("suma=${suma} err=${err} match=${porMatch} centinela=${centinela}");
 
-    // 46 + 99 + 13 + 555 = 713
-    return (i32) (suma + err + porMatch + centinela - 671);
+	// 46 + 99 + 13 + 555 = 713
+	return (i32)(suma + err + porMatch + centinela - 671);
 }

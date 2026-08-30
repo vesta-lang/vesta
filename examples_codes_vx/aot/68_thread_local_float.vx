@@ -9,9 +9,9 @@
 
 const i64 BASE = 32;      // constante de compilacion
 
-thread_local f64 x = 2.5;    // plantilla float (bits IEEE en .tdata/.tls)
+thread_local f64 x    = 2.5; // plantilla float (bits IEEE en .tdata/.tls)
 thread_local i64 base = BASE; // plantilla desde un comptime const
 
 i64 main() {
-    return (i64)(x * 4.0) + base; // 10 + 32
+	return (i64)(x * 4.0) + base; // 10 + 32
 }

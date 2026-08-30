@@ -31,256 +31,312 @@ import std.types only usize;
 // Marca reconocible por posicion: si un byte no llega, o llega de otro sitio,
 // la comprobacion cae.
 u8 pattern(i64 i) {
-    return (u8) ((i * 31 + 7) % 251);
+	return (u8)((i * 31 + 7) % 251);
 }
 
 // Buffers estaticos grandes: las variantes `big`/`streaming` piden 1 KiB.
 // Se reservan de sobra para poder alinear dentro sin salirse.
-u8[16384] g_src;
-u8[16384] g_dst;
+u8[16_384] g_src;
+u8[16_384] g_dst;
 
 // Prepara origen con el pattern y destino a cero, y devuelve el desplazamiento
 // que deja `&g_dst[off]` alineado a `alin` bytes.
 i64 align_offset(u8* base, i64 alin) {
-    i64 dir = (i64) base;
-    i64 resto = dir % alin;
-    if (resto == 0) return 0;
-    return alin - resto;
+	i64 dir   = (i64) base;
+	i64 resto = dir % alin;
+	if (resto == 0) return 0;
+	return alin - resto;
 }
 
 void reset_buffers() {
-    i64 i = 0;
-    while (i < 16384) {
-        g_src[i] = pattern(i);
-        g_dst[i] = 0;
-        i = i + 1;
-    }
+	i64 i = 0;
+	while (i < 16_384) {
+		g_src[i] = pattern(i);
+		g_dst[i] = 0;
+		i = i + 1;
+	}
 }
 
 // Comprueba que [0, n) del destino tiene el pattern y que el byte n sigue a cero.
 i64 copy_ok(i64 od, i64 os, i64 n) {
-    i64 i = 0;
-    while (i < n) {
-        if (g_dst[od + i] != pattern(os + i)) return 0;
-        i = i + 1;
-    }
-    if (g_dst[od + n] != 0) return 0;
-    return 1;
+	i64 i = 0;
+	while (i < n) {
+		if (g_dst[od + i] != pattern(os + i)) return 0;
+		i = i + 1;
+	}
+	if (g_dst[od + n] != 0) return 0;
+	return 1;
 }
 
 i64 fill_ok(i64 od, i64 n, u8 v) {
-    i64 i = 0;
-    while (i < n) {
-        if (g_dst[od + i] != v) return 0;
-        i = i + 1;
-    }
-    if (g_dst[od + n] != 0) return 0;
-    return 1;
+	i64 i = 0;
+	while (i < n) {
+		if (g_dst[od + i] != v) return 0;
+		i = i + 1;
+	}
+	if (g_dst[od + n] != 0) return 0;
+	return 1;
 }
 
 i32 main() {
-    u64 rasgos = std.memory.x86_64.init_cpuid();
-    bool avx2 = (rasgos & std.memory.x86_64.BIT_AVX2) != 0;
-    bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
-    bool erms = (rasgos & std.memory.x86_64.BIT_ERMS) != 0;
+	u64  rasgos = std.memory.x86_64.init_cpuid();
+	bool avx2   = (rasgos & std.memory.x86_64.BIT_AVX2) != 0;
+	bool avx512 = (rasgos & std.memory.x86_64.BIT_AVX512F) != 0;
+	bool erms   = (rasgos & std.memory.x86_64.BIT_ERMS) != 0;
 
-    i64 ok = 0;
-    // Cuantas comprobaciones LLEGAN a ejecutarse en esta maquina.
-    i64 expected = 0;
+	i64 ok       = 0;
+	// Cuantas comprobaciones LLEGAN a ejecutarse en esta maquina.
+	i64 expected = 0;
 
-    // --- copia, tamano pequeno (65..128) --------------------------------
-    reset_buffers();
-    std.memory.x86_64.memcpy_small_sse2(&g_dst[0], &g_src[0], (usize) 96);
-    expected ++;
-    ok = ok + copy_ok(0, 0, 96);
-    if (avx2) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_small_avx2(&g_dst[0], &g_src[0], (usize) 96);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 96);
-    }
-    if (avx512) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_small_avx512(&g_dst[0], &g_src[0], (usize) 96);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 96);
-    }
+	// --- copia, tamano pequeno (65..128) --------------------------------
+	reset_buffers();
+	std.memory.x86_64.memcpy_small_sse2(&g_dst[0], &g_src[0], (usize) 96);
+	expected ++;
+	ok = ok + copy_ok(0, 0, 96);
+	if (avx2) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_small_avx2(&g_dst[0], &g_src[0], (usize) 96);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 96);
+	}
+	if (avx512) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_small_avx512(&g_dst[0], &g_src[0], (usize) 96);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 96);
+	}
 
-    // --- copia, tamano medio --------------------------------------------
-    reset_buffers();
-    std.memory.x86_64.memcpy_medium_sse2(&g_dst[0], &g_src[0], (usize) 200);
-    expected ++;
-    ok = ok + copy_ok(0, 0, 200);
-    if (avx2) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_medium_avx2(&g_dst[0], &g_src[0], (usize) 300);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 300);
-    }
-    if (avx512) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_medium_avx512(&g_dst[0], &g_src[0], (usize) 600);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 600);
-    }
+	// --- copia, tamano medio --------------------------------------------
+	reset_buffers();
+	std.memory.x86_64.memcpy_medium_sse2(&g_dst[0], &g_src[0], (usize) 200);
+	expected ++;
+	ok = ok + copy_ok(0, 0, 200);
+	if (avx2) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_medium_avx2(&g_dst[0], &g_src[0], (usize) 300);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 300);
+	}
+	if (avx512) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_medium_avx512(
+			&g_dst[0],
+			&g_src[0],
+			(usize) 600
+		);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 600);
+	}
 
-    // --- copia, tamano grande y streaming --------------------------------
-    reset_buffers();
-    std.memory.x86_64.memcpy_big_sse2(&g_dst[0], &g_src[0], (usize) 1024);
-    expected ++;
-    ok = ok + copy_ok(0, 0, 1024);
-    if (avx2) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_big_avx2(&g_dst[0], &g_src[0], (usize) 2048);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 2048);
-        /* STREAMING exige el destino ALINEADO al ancho del acceso -- lo pide
-         * `vmovntdq` --, aunque no lo lleve en el nombre como las `_aligned`.
-         * Pasarle el buffer en crudo funcionaba o no segun donde cayera en
-         * memoria: un fallo INTERMITENTE, de los que aparecen una vez de cada
-         * varias y se atribuyen a cualquier otra cosa. */
-        i64 cs_d = align_offset(&g_dst[0], 64);
-        i64 cs_s = align_offset(&g_src[0], 64);
-        reset_buffers();
-        std.memory.x86_64.memcpy_streaming_avx2(&g_dst[cs_d], &g_src[cs_s], (usize) 4096);
-        expected ++;
-        ok = ok + copy_ok(cs_d, cs_s, 4096);
-    }
-    if (avx512) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_big_avx512(&g_dst[0], &g_src[0], (usize) 4096);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 4096);
-    }
-    if (erms) {
-        reset_buffers();
-        std.memory.x86_64.memcpy_erms(&g_dst[0], &g_src[0], (usize) 777);
-        expected ++;
-        ok = ok + copy_ok(0, 0, 777);
-    }
+	// --- copia, tamano grande y streaming --------------------------------
+	reset_buffers();
+	std.memory.x86_64.memcpy_big_sse2(&g_dst[0], &g_src[0], (usize) 1024);
+	expected ++;
+	ok = ok + copy_ok(0, 0, 1024);
+	if (avx2) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_big_avx2(&g_dst[0], &g_src[0], (usize) 2048);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 2048);
+		/* STREAMING exige el destino ALINEADO al ancho del acceso -- lo pide
+		 * `vmovntdq` --, aunque no lo lleve en el nombre como las `_aligned`.
+		 * Pasarle el buffer en crudo funcionaba o no segun donde cayera en
+		 * memoria: un fallo INTERMITENTE, de los que aparecen una vez de cada
+		 * varias y se atribuyen a cualquier otra cosa. */
+		i64 cs_d = align_offset(&g_dst[0], 64);
+		i64 cs_s = align_offset(&g_src[0], 64);
+		reset_buffers();
+		std.memory.x86_64.memcpy_streaming_avx2(
+			&g_dst[cs_d],
+			&g_src[cs_s],
+			(usize) 4096
+		);
+		expected ++;
+		ok = ok + copy_ok(cs_d, cs_s, 4096);
+	}
+	if (avx512) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_big_avx512(&g_dst[0], &g_src[0], (usize) 4096);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 4096);
+	}
+	if (erms) {
+		reset_buffers();
+		std.memory.x86_64.memcpy_erms(&g_dst[0], &g_src[0], (usize) 777);
+		expected ++;
+		ok = ok + copy_ok(0, 0, 777);
+	}
 
-    // --- copia ALINEADA: su asm falla con una direccion torcida ----------
-    {
-        i64 od = align_offset(&g_dst[0], 64);
-        i64 os = align_offset(&g_src[0], 64);
-        reset_buffers();
-        std.memory.x86_64.memcpy_small_sse2_aligned(&g_dst[od], &g_src[os], (usize) 96);
-        expected ++;
-        ok = ok + copy_ok(od, os, 96);
-        reset_buffers();
-        std.memory.x86_64.memcpy_medium_sse2_aligned(&g_dst[od], &g_src[os], (usize) 256);
-        expected ++;
-        ok = ok + copy_ok(od, os, 256);
-        if (avx2) {
-            reset_buffers();
-            std.memory.x86_64.memcpy_medium_avx2_aligned(&g_dst[od], &g_src[os], (usize) 320);
-            expected ++;
-            ok = ok + copy_ok(od, os, 320);
-        }
-        if (avx512) {
-            reset_buffers();
-            std.memory.x86_64.memcpy_medium_avx512_aligned(&g_dst[od], &g_src[os], (usize) 512);
-            expected ++;
-            ok = ok + copy_ok(od, os, 512);
-        }
-    }
+	// --- copia ALINEADA: su asm falla con una direccion torcida ----------
+	{
+		i64 od = align_offset(&g_dst[0], 64);
+		i64 os = align_offset(&g_src[0], 64);
+		reset_buffers();
+		std.memory.x86_64.memcpy_small_sse2_aligned(
+			&g_dst[od],
+			&g_src[os],
+			(usize) 96
+		);
+		expected ++;
+		ok = ok + copy_ok(od, os, 96);
+		reset_buffers();
+		std.memory.x86_64.memcpy_medium_sse2_aligned(
+			&g_dst[od],
+			&g_src[os],
+			(usize) 256
+		);
+		expected ++;
+		ok = ok + copy_ok(od, os, 256);
+		if (avx2) {
+			reset_buffers();
+			std.memory.x86_64.memcpy_medium_avx2_aligned(
+				&g_dst[od],
+				&g_src[os],
+				(usize) 320
+			);
+			expected ++;
+			ok = ok + copy_ok(od, os, 320);
+		}
+		if (avx512) {
+			reset_buffers();
+			std.memory.x86_64.memcpy_medium_avx512_aligned(
+				&g_dst[od],
+				&g_src[os],
+				(usize) 512
+			);
+			expected ++;
+			ok = ok + copy_ok(od, os, 512);
+		}
+	}
 
-    // --- relleno, los mismos tres tamanos --------------------------------
-    reset_buffers();
-    std.memory.x86_64.memset_small_sse2(&g_dst[0], 0xA5, (usize) 96);
-    expected ++;
-    ok = ok + fill_ok(0, 96, 0xA5);
-    reset_buffers();
-    std.memory.x86_64.memset_medium_sse2(&g_dst[0], 0xA5, (usize) 200);
-    expected ++;
-    ok = ok + fill_ok(0, 200, 0xA5);
-    reset_buffers();
-    std.memory.x86_64.memset_big_sse2(&g_dst[0], 0xA5, (usize) 1024);
-    expected ++;
-    ok = ok + fill_ok(0, 1024, 0xA5);
-    if (avx2) {
-        reset_buffers();
-        std.memory.x86_64.memset_small_avx2(&g_dst[0], 0xA5, (usize) 96);
-        expected ++;
-        ok = ok + fill_ok(0, 96, 0xA5);
-        reset_buffers();
-        std.memory.x86_64.memset_medium_avx2(&g_dst[0], 0xA5, (usize) 300);
-        expected ++;
-        ok = ok + fill_ok(0, 300, 0xA5);
-        reset_buffers();
-        std.memory.x86_64.memset_big_avx2(&g_dst[0], 0xA5, (usize) 2048);
-        expected ++;
-        ok = ok + fill_ok(0, 2048, 0xA5);
-        reset_buffers();
-        i64 ms2_d = align_offset(&g_dst[0], 64); // ver la nota del memcpy streaming
-        std.memory.x86_64.memset_streaming_avx2(&g_dst[ms2_d], 0xA5, (usize) 4096);
-        expected ++;
-        ok = ok + fill_ok(ms2_d, 4096, 0xA5);
-    }
-    if (avx512) {
-        reset_buffers();
-        std.memory.x86_64.memset_small_avx512(&g_dst[0], 0xA5, (usize) 96);
-        expected ++;
-        ok = ok + fill_ok(0, 96, 0xA5);
-        reset_buffers();
-        std.memory.x86_64.memset_medium_avx512(&g_dst[0], 0xA5, (usize) 600);
-        expected ++;
-        ok = ok + fill_ok(0, 600, 0xA5);
-        reset_buffers();
-        std.memory.x86_64.memset_big_avx512(&g_dst[0], 0xA5, (usize) 4096);
-        expected ++;
-        ok = ok + fill_ok(0, 4096, 0xA5);
-        reset_buffers();
-        i64 ms5_d = align_offset(&g_dst[0], 64); // ver la nota del memcpy streaming
-        std.memory.x86_64.memset_streaming_avx512(&g_dst[ms5_d], 0xA5, (usize) 4096);
-        expected ++;
-        ok = ok + fill_ok(ms5_d, 4096, 0xA5);
-    }
-    if (erms) {
-        reset_buffers();
-        std.memory.x86_64.memset_erms(&g_dst[0], 0xA5, (usize) 777);
-        expected ++;
-        ok = ok + fill_ok(0, 777, 0xA5);
-    }
+	// --- relleno, los mismos tres tamanos --------------------------------
+	reset_buffers();
+	std.memory.x86_64.memset_small_sse2(&g_dst[0], 0xA5, (usize) 96);
+	expected ++;
+	ok = ok + fill_ok(0, 96, 0xA5);
+	reset_buffers();
+	std.memory.x86_64.memset_medium_sse2(&g_dst[0], 0xA5, (usize) 200);
+	expected ++;
+	ok = ok + fill_ok(0, 200, 0xA5);
+	reset_buffers();
+	std.memory.x86_64.memset_big_sse2(&g_dst[0], 0xA5, (usize) 1024);
+	expected ++;
+	ok = ok + fill_ok(0, 1024, 0xA5);
+	if (avx2) {
+		reset_buffers();
+		std.memory.x86_64.memset_small_avx2(&g_dst[0], 0xA5, (usize) 96);
+		expected ++;
+		ok = ok + fill_ok(0, 96, 0xA5);
+		reset_buffers();
+		std.memory.x86_64.memset_medium_avx2(&g_dst[0], 0xA5, (usize) 300);
+		expected ++;
+		ok = ok + fill_ok(0, 300, 0xA5);
+		reset_buffers();
+		std.memory.x86_64.memset_big_avx2(&g_dst[0], 0xA5, (usize) 2048);
+		expected ++;
+		ok = ok + fill_ok(0, 2048, 0xA5);
+		reset_buffers();
+		i64 ms2_d = align_offset(&g_dst[0], 64); // ver la nota del memcpy streaming
+		std.memory.x86_64.memset_streaming_avx2(
+			&g_dst[ms2_d],
+			0xA5,
+			(usize) 4096
+		);
+		expected ++;
+		ok = ok + fill_ok(ms2_d, 4096, 0xA5);
+	}
+	if (avx512) {
+		reset_buffers();
+		std.memory.x86_64.memset_small_avx512(&g_dst[0], 0xA5, (usize) 96);
+		expected ++;
+		ok = ok + fill_ok(0, 96, 0xA5);
+		reset_buffers();
+		std.memory.x86_64.memset_medium_avx512(&g_dst[0], 0xA5, (usize) 600);
+		expected ++;
+		ok = ok + fill_ok(0, 600, 0xA5);
+		reset_buffers();
+		std.memory.x86_64.memset_big_avx512(&g_dst[0], 0xA5, (usize) 4096);
+		expected ++;
+		ok = ok + fill_ok(0, 4096, 0xA5);
+		reset_buffers();
+		i64 ms5_d = align_offset(&g_dst[0], 64); // ver la nota del memcpy streaming
+		std.memory.x86_64.memset_streaming_avx512(
+			&g_dst[ms5_d],
+			0xA5,
+			(usize) 4096
+		);
+		expected ++;
+		ok = ok + fill_ok(ms5_d, 4096, 0xA5);
+	}
+	if (erms) {
+		reset_buffers();
+		std.memory.x86_64.memset_erms(&g_dst[0], 0xA5, (usize) 777);
+		expected ++;
+		ok = ok + fill_ok(0, 777, 0xA5);
+	}
 
-    // --- relleno ALINEADO -------------------------------------------------
-    {
-        i64 od = align_offset(&g_dst[0], 64);
-        reset_buffers();
-        std.memory.x86_64.memset_small_sse2_aligned(&g_dst[od], 0xA5, (usize) 96);
-        expected ++;
-        ok = ok + fill_ok(od, 96, 0xA5);
-        reset_buffers();
-        std.memory.x86_64.memset_medium_sse2_aligned(&g_dst[od], 0xA5, (usize) 200);
-        expected ++;
-        ok = ok + fill_ok(od, 200, 0xA5);
-        if (avx2) {
-            reset_buffers();
-            std.memory.x86_64.memset_small_avx2_aligned(&g_dst[od], 0xA5, (usize) 96);
-            expected ++;
-            ok = ok + fill_ok(od, 96, 0xA5);
-            reset_buffers();
-            std.memory.x86_64.memset_medium_avx2_aligned(&g_dst[od], 0xA5, (usize) 300);
-            expected ++;
-            ok = ok + fill_ok(od, 300, 0xA5);
-        }
-        if (avx512) {
-            reset_buffers();
-            std.memory.x86_64.memset_small_avx512_aligned(&g_dst[od], 0xA5, (usize) 96);
-            expected ++;
-            ok = ok + fill_ok(od, 96, 0xA5);
-            reset_buffers();
-            std.memory.x86_64.memset_medium_avx512_aligned(&g_dst[od], 0xA5, (usize) 600);
-            expected ++;
-            ok = ok + fill_ok(od, 600, 0xA5);
-        }
-    }
+	// --- relleno ALINEADO -------------------------------------------------
+	{
+		i64 od = align_offset(&g_dst[0], 64);
+		reset_buffers();
+		std.memory.x86_64.memset_small_sse2_aligned(
+			&g_dst[od],
+			0xA5,
+			(usize) 96
+		);
+		expected ++;
+		ok = ok + fill_ok(od, 96, 0xA5);
+		reset_buffers();
+		std.memory.x86_64.memset_medium_sse2_aligned(
+			&g_dst[od],
+			0xA5,
+			(usize) 200
+		);
+		expected ++;
+		ok = ok + fill_ok(od, 200, 0xA5);
+		if (avx2) {
+			reset_buffers();
+			std.memory.x86_64.memset_small_avx2_aligned(
+				&g_dst[od],
+				0xA5,
+				(usize) 96
+			);
+			expected ++;
+			ok = ok + fill_ok(od, 96, 0xA5);
+			reset_buffers();
+			std.memory.x86_64.memset_medium_avx2_aligned(
+				&g_dst[od],
+				0xA5,
+				(usize) 300
+			);
+			expected ++;
+			ok = ok + fill_ok(od, 300, 0xA5);
+		}
+		if (avx512) {
+			reset_buffers();
+			std.memory.x86_64.memset_small_avx512_aligned(
+				&g_dst[od],
+				0xA5,
+				(usize) 96
+			);
+			expected ++;
+			ok = ok + fill_ok(od, 96, 0xA5);
+			reset_buffers();
+			std.memory.x86_64.memset_medium_avx512_aligned(
+				&g_dst[od],
+				0xA5,
+				(usize) 600
+			);
+			expected ++;
+			ok = ok + fill_ok(od, 600, 0xA5);
+		}
+	}
 
-    // Devuelve 42 si TODAS las comprobaciones que esta maquina puede ejecutar
-    // salieron bien.  El NUMERO de comprobaciones depende del procesador -- una
-    // sin AVX-512 corre menos --, asi que compararlo contra una constante haria
-    // que el caso pasara o fallara segun donde corriera.  Lo que no depende de
-    // la maquina es que ninguna de las que corrio fallara.
-    if (ok == expected) return 42;
-    return (i32) (ok - expected);
+	// Devuelve 42 si TODAS las comprobaciones que esta maquina puede ejecutar
+	// salieron bien.  El NUMERO de comprobaciones depende del procesador -- una
+	// sin AVX-512 corre menos --, asi que compararlo contra una constante haria
+	// que el caso pasara o fallara segun donde corriera.  Lo que no depende de
+	// la maquina es que ninguna de las que corrio fallara.
+	if (ok == expected) return 42;
+	return (i32)(ok - expected);
 }

@@ -9,9 +9,9 @@
 //   align_up(u64 v, u64 a)    redondeo a multiplo
 //   debug_build()             true con --link-debug
 void link() {
-    u64 load = 0x100000;          // 1 MB: base tipica de kernel
-    if (debug_build()) { load = 0x200000; }
-    base(load);
-    entry("_kstart");             // entry propio (sin stub _start->main)
-    stack_size(align_up(64 * 1024, 4096));
+	u64 load = 0x00100000; // 1 MB: base tipica de kernel
+	if (debug_build()) { load = 0x00200000; }
+	base(load);
+	entry("_kstart"); // entry propio (sin stub _start->main)
+	stack_size(align_up(64 * 1024, 4096));
 }

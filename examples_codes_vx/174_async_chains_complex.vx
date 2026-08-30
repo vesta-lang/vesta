@@ -39,73 +39,73 @@ namespace ejemplos.async_chains_complex;
 
 // Suma inclusiva-exclusiva [a, b).
 @Async
-i64 compute_chunk(i64 a, i64 b) {
-    i64 sum = 0;
-    i64 i = a;
-    while (i < b) {
-        sum = sum + i;
-        i = i + 1;
-    }
-    return sum;
+	i64 compute_chunk(i64 a, i64 b) {
+	i64 sum = 0;
+	i64 i   = a;
+	while (i < b) {
+		sum = sum + i;
+		i   = i + 1;
+	}
+	return sum;
 }
 
 // Validador: retorna true si el total es divisible por 4.
 @Async
-bool validate(i64 total) {
-    return total % 4 == 0;
+	bool validate(i64 total) {
+	return total % 4 == 0;
 }
 
 // Generador de "decoracion" independiente, corre en paralelo.
 @Async
-i32 format_decoration() {
-    i32 d = 1;
-    i32 k = 0;
-    while (k < 10) {
-        d = d * 3;
-        k = k + 1;
-    }
-    // d = 3^10 = 59049. Retornamos 59049 - 59788 = -739 para que el
-    // calculo final caiga en R0=42.
-    return d - 59788;
+	i32 format_decoration() {
+	i32 d = 1;
+	i32 k = 0;
+	while (k < 10) {
+		d = d * 3;
+		k = k + 1;
+	}
+	// d = 3^10 = 59049. Retornamos 59049 - 59788 = -739 para que el
+	// calculo final caiga en R0=42.
+	return d - 59_788;
 }
 
 i32 main() {
-    //   fan-out de 4 workers.  Cada @Async devuelve un Future<T>
-    // que el scheduler administra en otro proceso VM.
-    Future<i64> f0 = compute_chunk(0, 10);
-    Future<i64> f1 = compute_chunk(10, 20);
-    Future<i64> f2 = compute_chunk(20, 30);
-    Future<i64> f3 = compute_chunk(30, 40);
+	//   fan-out de 4 workers.  Cada @Async devuelve un Future<T>
+	// que el scheduler administra en otro proceso VM.
+	Future<i64>  f0     = compute_chunk(0, 10);
+	Future<i64>  f1     = compute_chunk(10, 20);
+	Future<i64>  f2     = compute_chunk(20, 30);
+	Future<i64>  f3     = compute_chunk(30, 40);
 
-    // Worker independiente (no depende del total).  Se lanza ya para
-    // maximizar paralelismo: corre concurrentemente con los 4 chunks.
-    Future<i32> f_deco = format_decoration();
+	// Worker independiente (no depende del total).  Se lanza ya para
+	// maximizar paralelismo: corre concurrentemente con los 4 chunks.
+	Future<i32>  f_deco = format_decoration();
 
-    //   fan-in.  await bloquea hasta que el worker resuelve.
-    // Los 4 awaits pueden completarse en cualquier orden segun el
-    // scheduler; el TOTAL es deterministico.
-    i64 r0 = await f0;
-    i64 r1 = await f1;
-    i64 r2 = await f2;
-    i64 r3 = await f3;
-    i64 total = r0 + r1 + r2 + r3;
-    // total = (0..9)+(10..19)+(20..29)+(30..39) = 45+145+245+345 = 780.
+	//   fan-in.  await bloquea hasta que el worker resuelve.
+	// Los 4 awaits pueden completarse en cualquier orden segun el
+	// scheduler; el TOTAL es deterministico.
+	i64          r0     = await f0;
+	i64          r1     = await f1;
+	i64          r2     = await f2;
+	i64          r3     = await f3;
+	i64          total  = r0 + r1 + r2 + r3;
+	// total = (0..9)+(10..19)+(20..29)+(30..39) = 45+145+245+345 = 780.
 
-    //   encadenamiento.  Lanzar validator que depende del total.
-    Future<bool> f_ok = validate(total);
-    bool ok = await f_ok;
+	//   encadenamiento.  Lanzar validator que depende del total.
+	Future<bool> f_ok   = validate(total);
+	bool         ok     = await f_ok;
 
-    //   combinar con el worker decorativo.
-    i32 deco = await f_deco;
-    // deco = -739.
+	//   combinar con el worker decorativo.
+	i32          deco   = await f_deco;
+	// deco = -739.
 
-    // Sanity: el helper imprime los valores para diagnostico.
-    println("chunks: ${r0} ${r1} ${r2} ${r3} = ${total}");
-    println("validate(${total}) = ${ok}, deco = ${deco}");
+	// Sanity: el helper imprime los valores para diagnostico.
+	println("chunks: ${r0} ${r1} ${r2} ${r3} = ${total}");
+	println("validate(${total}) = ${ok}, deco = ${deco}");
 
-    i32 acc = 0;
-    if (total == 780) { acc = acc + (i32)total; }   // +780
-    if (ok)           { acc++; }             // +1
-    acc = acc + deco;                                  // -739
-    return acc;  // 780 + 1 - 739 = 42
+	i32 acc = 0;
+	if (total == 780) { acc = acc + (i32)total; } // +780
+	if (ok) { acc++; }                            // +1
+	acc = acc + deco;                             // -739
+	return acc;                                   // 780 + 1 - 739 = 42
 }

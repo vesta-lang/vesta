@@ -19,30 +19,30 @@ namespace ejemplos.host_ptr_addr_taken;
 // Esperado: R00 == 42.
 
 i32 main() {
-    // Reservar 4 i32 en heap host.
-    i32* p = malloc(16);
+	// Reservar 4 i32 en heap host.
+	i32*  p  = malloc(16);
 
-    // Trigger de address-taken: &p hace que p sea promocionado a
-    // ALLOCA + STORE/LOAD por memoria.  Sin el fix, el LOAD posterior
-    // de p para evaluar p[i] pierde is_host_ptr.
-    //
-    // `i32**` = "direccion host que contiene un puntero host": un local
-    // address-taken se reserva en host, asi que tanto la direccion
-    // exterior como el host_ptr de malloc que contiene son host.
-    i32** pp = &p;
+	// Trigger de address-taken: &p hace que p sea promocionado a
+	// ALLOCA + STORE/LOAD por memoria.  Sin el fix, el LOAD posterior
+	// de p para evaluar p[i] pierde is_host_ptr.
+	//
+	// `i32**` = "direccion host que contiene un puntero host": un local
+	// address-taken se reserva en host, asi que tanto la direccion
+	// exterior como el host_ptr de malloc que contiene son host.
+	i32** pp = &p;
 
-    // Estos stores DEBEN ir a memoria HOST (movh).  Sin el fix
-    // emiten mov y corrompen memoria VM.
-    p[0] = 100;
-    p[1] = 200;
-    p[2] = 50;
-    p[3] = 32;
+	// Estos stores DEBEN ir a memoria HOST (movh).  Sin el fix
+	// emiten mov y corrompen memoria VM.
+	p[0] = 100;
+	p[1] = 200;
+	p[2] = 50;
+	p[3] = 32;
 
-    // Estos loads DEBEN venir de memoria HOST (movh).
-    i32 sum = p[0] + p[1] + p[2] + p[3];   // 382
+	// Estos loads DEBEN venir de memoria HOST (movh).
+	i32 sum = p[0] + p[1] + p[2] + p[3]; // 382
 
-    free(p);
+	free(p);
 
-    // 382 - 340 == 42
-    return sum - 340;
+	// 382 - 340 == 42
+	return sum - 340;
 }

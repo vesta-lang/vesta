@@ -23,35 +23,35 @@ typedef i64 Metros new;
 i64 doblar(i64 x) { return x * 2; }
 
 enum Caja {
-    ConNewtype(Metros),
-    ConFn(cfn(i64) -> i64)
+	ConNewtype(Metros),
+	ConFn(cfn(i64) -> i64)
 }
 
 i64 usa_newtype(Metros m) { return (i64) m; }
 i64 usa_fn(cfn(i64) -> i64 cb) { return cb(21); }
 
 i32 main() {
-    // Como argumento de una funcion.
-    i64 a = usa_newtype(3);      // 3
-    i64 b = usa_fn(doblar);      // 42
-    println("funcion:  newtype=${a} fn=${b}");
+	// Como argumento de una funcion.
+	i64 a = usa_newtype(3); // 3
+	i64 b = usa_fn(doblar); // 42
+	println("funcion:  newtype=${a} fn=${b}");
 
-    // Como carga de una variante: la MISMA expresion.
-    Caja c1 = Caja.ConNewtype(3);
-    Caja c2 = Caja.ConFn(doblar);
+	// Como carga de una variante: la MISMA expresion.
+	Caja c1 = Caja.ConNewtype(3);
+	Caja c2 = Caja.ConFn(doblar);
 
-    i64 c = 0;
-    match (c1) {
-        case ConNewtype(m) => { c = (i64) m; }
-        case ConFn(f) => { c = 0; }
-    }
-    i64 d = 0;
-    match (c2) {
-        case ConNewtype(m) => { d = 0; }
-        case ConFn(f) => { d = f(21); }
-    }
-    println("variante: newtype=${c} fn=${d}");
+	i64 c = 0;
+	match (c1) {
+		case ConNewtype(m) => { c = (i64) m; }
+		case ConFn(f)      => { c = 0; }
+	}
+	i64 d = 0;
+	match (c2) {
+		case ConNewtype(m) => { d = 0; }
+		case ConFn(f)      => { d = f(21); }
+	}
+	println("variante: newtype=${c} fn=${d}");
 
-    // 3 + 42 + 3 + 42 = 90
-    return (i32) (a + b + c + d - 48);   // 42
+	// 3 + 42 + 3 + 42 = 90
+	return (i32)(a + b + c + d - 48); // 42
 }

@@ -14,14 +14,14 @@ namespace ejemplos.ctor_no_es_metodo;
 // el primero era el constructor.
 
 struct S {
-    i64 v;
-    S(i64 n) { this.v = n; }
-    i64 dame() { return this.v; }
+	i64 v;
+	S(i64 n) { this.v = n; }
+	i64 dame() { return this.v; }
 }
 
 i32 main() {
-    S s = S(1);
-    // El constructor NO se puede llamar como metodo de instancia.
-    i64 a = s.S(5);
-    return (i32) a;
+	S   s = S(1);
+	// El constructor NO se puede llamar como metodo de instancia.
+	i64 a = s.S(5);
+	return (i32) a;
 }

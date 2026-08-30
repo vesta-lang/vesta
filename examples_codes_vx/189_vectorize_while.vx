@@ -15,32 +15,41 @@ namespace ejemplos.vectorize_while;
 // =============================================================================
 
 i64 main() {
-    f64* a = malloc(80);   // 10 x f64
-    f64* b = malloc(80);
-    f64* c = malloc(80);
+	f64* a = malloc(80); // 10 x f64
+	f64* b = malloc(80);
+	f64* c = malloc(80);
 
-    i32 i = 0;
-    while (i < 10) { a[i] = (f64)(i + 1); b[i] = (f64)(i * 2); i = i + 1; }
+	i32 i = 0;
+	while (i < 10) { a[i] = (f64)(i + 1);
+		b[i] = (f64)(i * 2);
+		i = i + 1; }
 
-    // element-wise via while: c[i] = a[i] + b[i] = 3i+1
-    i = 0;
-    while (i < 10) { c[i] = a[i] + b[i]; i = i + 1; }
+	// element-wise via while: c[i] = a[i] + b[i] = 3i+1
+	i = 0;
+	while (i < 10) { c[i] = a[i] + b[i];
+		i = i + 1; }
 
-    // reduccion via while: acc = sum(c) = 145
-    f64 acc = 0.0;
-    i = 0;
-    while (i < 10) { acc = acc + c[i]; i = i + 1; }
+	// reduccion via while: acc = sum(c) = 145
+	f64 acc = 0.0;
+	i = 0;
+	while (i < 10) { acc = acc + c[i];
+		i = i + 1; }
 
-    // unaria via while: d[i] = -a[i] ; sum(d) = -55
-    f64* d = malloc(80);
-    i = 0;
-    while (i < 10) { d[i] = -a[i]; i = i + 1; }
-    f64 sneg = 0.0;
-    i = 0;
-    while (i < 10) { sneg = sneg + d[i]; i = i + 1; }
+	// unaria via while: d[i] = -a[i] ; sum(d) = -55
+	f64* d = malloc(80);
+	i = 0;
+	while (i < 10) { d[i] = -a[i];
+		i = i + 1; }
+	f64 sneg = 0.0;
+	i = 0;
+	while (i < 10) { sneg = sneg + d[i];
+		i = i + 1; }
 
-    free(a); free(b); free(c); free(d);
+	free(a);
+	free(b);
+	free(c);
+	free(d);
 
-    // 145 + (-55) = 90
-    return (i64)(acc + sneg);
+	// 145 + (-55) = 90
+	return (i64)(acc + sneg);
 }

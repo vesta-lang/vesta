@@ -41,6 +41,6 @@ namespace std.comptime.basics;
 /// A diferencia de `source` (que CAPTURA el texto de su argumento), `inject`
 /// EVALUA su argumento a un string y lo inyecta como codigo.
 @Macro
-public comptime string inject(string code) {
+	public comptime string inject(string code) {
 	return code;
 }

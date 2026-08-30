@@ -15,28 +15,32 @@ namespace ejemplos.vectorize_f32;
 
 // Suma vectorizada de un array f32 (reduccion).
 f32 sumf(f32* p, i32 n) {
-    f32 acc = 0.0;
-    for (i32 i = 0; i < n; i++) { acc = acc + p[i]; }   // REDUCCION f32
-    return acc;
+	f32 acc = 0.0;
+	for (i32 i = 0; i < n; i++) { acc = acc + p[i]; } // REDUCCION f32
+	return acc;
 }
 
 i64 main() {
-    f32* a = malloc(40);   // 10 x f32
-    f32* b = malloc(40);
-    f32* c = malloc(40);
-    for (i32 i = 0; i < 10; i++) { a[i] = (f32)(i + 1); b[i] = (f32)(i * 2); }
+	f32*     a = malloc(40); // 10 x f32
+	f32*     b = malloc(40);
+	f32*     c = malloc(40);
+	for (i32 i = 0; i < 10; i++) { a[i] = (f32)(i + 1);
+		b[i] = (f32)(i * 2); }
 
-    // element-wise: c[i] = a[i] + b[i] = 3i+1 ; suma = 145
-    for (i32 i = 0; i < 10; i++) { c[i] = a[i] + b[i]; }
-    f32 s1 = sumf(c, 10);
+	// element-wise: c[i] = a[i] + b[i] = 3i+1 ; suma = 145
+	for (i32 i = 0; i < 10; i++) { c[i] = a[i] + b[i]; }
+	f32  s1 = sumf(c, 10);
 
-    // reduccion con N impar (cola escalar)
-    f32* d = malloc(28);   // 7 x f32
-    for (i32 i = 0; i < 7; i++) { d[i] = (f32)(2 * i + 1); }
-    f32 s2 = sumf(d, 7);   // 49
+	// reduccion con N impar (cola escalar)
+	f32* d  = malloc(28); // 7 x f32
+	for (i32 i = 0; i < 7; i++) { d[i] = (f32)(2 * i + 1); }
+	f32 s2 = sumf(d, 7); // 49
 
-    free(a); free(b); free(c); free(d);
+	free(a);
+	free(b);
+	free(c);
+	free(d);
 
-    // 145 + 49 = 194
-    return (i64)(s1 + s2);
+	// 145 + 49 = 194
+	return (i64)(s1 + s2);
 }

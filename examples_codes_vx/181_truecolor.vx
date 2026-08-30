@@ -5,14 +5,14 @@ namespace ejemplos.truecolor;
 // print/println emiten las secuencias SGR de 24 bits.  Funcionan
 // identico en interp/JIT/AOT y con r,g,b literales o de runtime.
 i32 main() {
-    // Literales.
-    println("${fg_rgb(255,128,0)}naranja${RESET}");
-    // Fondo.
-    println("${bg_rgb(0,0,255)}fondo azul${RESET}");
-    // Runtime: r,g,b como variables.
-    i32 r = 10;
-    i32 g = 200;
-    i32 b = 30;
-    println("${fg_rgb(r,g,b)}rgb runtime${RESET}");
-    return 0;
+	// Literales.
+	println("${fg_rgb(255,128,0)}naranja${RESET}");
+	// Fondo.
+	println("${bg_rgb(0,0,255)}fondo azul${RESET}");
+	// Runtime: r,g,b como variables.
+	i32 r = 10;
+	i32 g = 200;
+	i32 b = 30;
+	println("${fg_rgb(r,g,b)}rgb runtime${RESET}");
+	return 0;
 }

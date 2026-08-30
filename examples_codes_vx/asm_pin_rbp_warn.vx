@@ -9,15 +9,15 @@
 //
 // @expect-warn: VXA008
 @Naked
-u64 get_val() {
-    register("rbp") u64 x = 5;   // pin a rbp -> VXA008 WARN (permitido)
-    asm volatile {
-        mov rax, 42              // valor de retorno independiente de rbp
-        ret                      // @Naked: el cuerpo retorna
-    };
-    return x;
+	u64 get_val() {
+	register("rbp") u64 x = 5; // pin a rbp -> VXA008 WARN (permitido)
+	asm volatile {
+		mov rax, 42
+		ret // @Naked: el cuerpo retorna
+	};
+	return x;
 }
 
 u64 main() {
-    return get_val();
+	return get_val();
 }

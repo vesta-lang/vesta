@@ -22,13 +22,13 @@ namespace ejemplos.nonnull_bangbang;
 // Resultado esperado: 222.
 
 class Tag {
-    public i32 v;
-    public Tag(i32 x) { this.v = x; }
+	public i32 v;
+	public Tag(i32 x) { this.v = x; }
 }
 
 i32 main() {
-    Tag tag = new Tag(11);
-    Tag safe = !!tag;          // unwrap; safe es no-null en runtime
-    nonnull Tag forced = !!tag; // nonnull declarado; init = !!tag, OK
-    return safe.v + forced.v + 200;  // 11 + 11 + 200 = 222
+	Tag         tag    = new Tag(11);
+	Tag         safe   = !!tag;               // unwrap; safe es no-null en runtime
+	nonnull Tag forced = !!tag;     // nonnull declarado; init = !!tag, OK
+	return safe.v + forced.v + 200; // 11 + 11 + 200 = 222
 }

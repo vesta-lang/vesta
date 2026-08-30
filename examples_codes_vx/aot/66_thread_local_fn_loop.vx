@@ -10,15 +10,15 @@
 thread_local i64 acc = 0;
 
 i64 bump(i64 x) {
-    acc = acc + x;   // muta la copia por-hilo, compartida entre llamadas
-    return acc;
+	acc = acc + x; // muta la copia por-hilo, compartida entre llamadas
+	return acc;
 }
 
 i64 main() {
-    i64 i = 0;
-    while (i < 5) {
-        bump(i);
-        i = i + 1;
-    }
-    return acc;
+	i64 i = 0;
+	while (i < 5) {
+		bump(i);
+		i = i + 1;
+	}
+	return acc;
 }

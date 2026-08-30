@@ -3,23 +3,23 @@ namespace ejemplos.check_with_return;
 // Test: factory que usa unique_with con tracking deleter.
 
 class C {
-    public static i64 releases;
+	public static i64 releases;
 }
 
 void track_release(i64 p) {
-    C.releases = C.releases + 1;
+	C.releases = C.releases + 1;
 }
 
 // La FIRMA dice quien libera: sin eso, quien llama no sabria a quien invocar
 // al limpiar.  Dentro no hace falta repetirlo -- una declaracion local adopta
 // el liberador de su inicializador.
 unique<i64, track_release> make_tracked(i64 v) {
-    unique<i64> p = unique_with(v, track_release);
-    return p;
+	unique<i64> p = unique_with(v, track_release);
+	return p;
 }
 
 i32 main() {
-    C.releases = 0;
-    unique<i64> a = make_tracked(111);
-    return 42;
+	C.releases = 0;
+	unique<i64> a = make_tracked(111);
+	return 42;
 }

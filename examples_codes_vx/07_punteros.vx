@@ -32,20 +32,20 @@ namespace ejemplos.punteros;
 // Resultado esperado: R00 == 142  (100 + 42)
 
 void set_to(i32* out, i32 v) {
-    *out = v;
+	*out = v;
 }
 
 i32 read_ptr(i32* p) {
-    return *p;
+	return *p;
 }
 
 i32 main() {
-    i32 a = 0;
-    i32 b = 0;
-    // `&a` es `i32*`: al tomar su direccion, el local se reserva en host.
-    set_to(&a, 100);
-    set_to(&b, 42);
-    // Lectura via puntero local.
-    i32* pa = &a;
-    return read_ptr(pa) + read_ptr(&b);
+	i32 a = 0;
+	i32 b = 0;
+	// `&a` es `i32*`: al tomar su direccion, el local se reserva en host.
+	set_to(&a, 100);
+	set_to(&b, 42);
+	// Lectura via puntero local.
+	i32* pa = &a;
+	return read_ptr(pa) + read_ptr(&b);
 }

@@ -8,6 +8,6 @@ namespace ejemplos.e50b_lambda_no_capture;
 // Solo verifica que el call indirecto al helper sintetico funcione.
 
 i32 main() {
-    fn(i32) -> i32 sq = (i32 x) => x + x + x + x + x + x + x;
-    return sq(6);
+	fn(i32) -> i32 sq = (i32 x) => x + x + x + x + x + x + x;
+	return sq(6);
 }

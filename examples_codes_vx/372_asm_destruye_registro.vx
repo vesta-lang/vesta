@@ -22,30 +22,30 @@
 // correcto, sale el mismo siempre.
 
 i64 suma_con_asm_en_medio(i64 s) {
-    i64 a = s + 1;
-    i64 b = s + 2;
-    i64 c = s + 3;
-    i64 d = s + 4;
-    i64 e = s + 5;
-    i64 f = s + 6;
-    i64 g = s + 7;
-    i64 h = s + 8;
+	i64 a = s + 1;
+	i64 b = s + 2;
+	i64 c = s + 3;
+	i64 d = s + 4;
+	i64 e = s + 5;
+	i64 f = s + 6;
+	i64 g = s + 7;
+	i64 h = s + 8;
 
-    // Destruye rbx.  No lee ni escribe nada del programa: lo unico que puede
-    // cambiar el resultado es que el asignador tuviera ahi un sumando.
-    asm { mov rbx, rsp }
+	// Destruye rbx.  No lee ni escribe nada del programa: lo unico que puede
+	// cambiar el resultado es que el asignador tuviera ahi un sumando.
+	asm { mov rbx, rsp }
 
-    return a + b + c + d + e + f + g + h;
+	return a + b + c + d + e + f + g + h;
 }
 
 i32 main() {
-    // 8 sumandos, s=0: 1+2+3+4+5+6+7+8 = 36.
-    i64 t = suma_con_asm_en_medio(0);
-    if (t != 36) return 1;
+	// 8 sumandos, s=0: 1+2+3+4+5+6+7+8 = 36.
+	i64 t = suma_con_asm_en_medio(0);
+	if (t != 36) return 1;
 
-    // Otra vez con s=10: (11..18) = 116.
-    i64 u = suma_con_asm_en_medio(10);
-    if (u != 116) return 2;
+	// Otra vez con s=10: (11..18) = 116.
+	i64 u = suma_con_asm_en_medio(10);
+	if (u != 116) return 2;
 
-    return 42;
+	return 42;
 }

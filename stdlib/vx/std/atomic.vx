@@ -84,25 +84,33 @@ namespace std.atomic;
 /// CAS de 64 bits: si `*addr == expected` escribe `desired`.  Devuelve el valor
 /// ANTIGUO (== expected si triunfo).  Barrera completa (lock cmpxchg).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_cas64(i64 *addr, i64 expected, i64 desired) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_cas64(i64 *addr, i64 expected, i64 desired) {
 	return atomic_cas_i64(addr, expected, desired);
 }
 
 /// fetch-and-add de 64 bits.  Devuelve el valor ANTIGUO (lock xadd).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_add64(i64 *addr, i64 delta) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_add64(i64 *addr, i64 delta) {
 	return atomic_add_i64(addr, delta);
 }
 
@@ -110,13 +118,17 @@ public i64 atomic_add64(i64 *addr, i64 delta) {
 /// builtin de swap): bucle CAS hasta triunfar.  La n son los REINTENTOS: sin
 /// contencion el CAS triunfa a la primera (O(1) amortizado).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-public i64 atomic_swap64(i64 *addr, i64 v) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(n),
+	partial_post: O(n),
+	total_pre:    O(n),
+	total_post:   O(n)
+)
+	public i64 atomic_swap64(i64 *addr, i64 v) {
 	i64 old = atomic_load_i64(addr);
 	while (atomic_cas_i64(addr, old, v) != old) {
 		old = atomic_load_i64(addr);
@@ -126,49 +138,65 @@ public i64 atomic_swap64(i64 *addr, i64 v) {
 
 /// Load atomico de 64 bits (mov alineado ya es atomico; acquire gratis en TSO).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_load64(i64 *addr) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_load64(i64 *addr) {
 	return atomic_load_i64(addr);
 }
 
 /// Store atomico de 64 bits (mov alineado; release en x86-TSO).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void atomic_store64(i64 *addr, i64 v) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void atomic_store64(i64 *addr, i64 v) {
 	atomic_store_i64(addr, v);
 }
 
 /// Barrera de memoria COMPLETA (StoreLoad; x86 solo reordena Store->Load).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void atomic_fence() {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void atomic_fence() {
 	asm { mfence };
 }
 
 /// Hint de spin para un bucle de espera activa (`pause`).
 @Target("arch:x86_64 || arch:x86")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void vx_cpu_relax() {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void vx_cpu_relax() {
 	asm { pause };
 }
 
@@ -182,49 +210,57 @@ public void vx_cpu_relax() {
 /// CAS de 64 bits.  El `cbnz` reintenta solo si el store-exclusive fallo por
 /// interferencia -- es el LL/SC nativo, la operacion sigue siendo una: O(1).
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-// Frame propio: los register("x0".."x3") + el asm ldaxr/stlxr gastan pila que
-// la variante x86-64 (builtins puros) no.  Medido por --analyze en arm64.
-@stack(partial: 32, total: 32)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_cas64(i64 *addr, i64 expected, i64 desired) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	// Frame propio: los register("x0".."x3") + el asm ldaxr/stlxr gastan pila que
+	// la variante x86-64 (builtins puros) no.  Medido por --analyze en arm64.
+	@stack(partial: 32, total: 32)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_cas64(i64 *addr, i64 expected, i64 desired) {
 	register("x0") i64 *a   = addr;
 	register("x1") i64  ex  = expected;
 	register("x2") i64  de  = desired;
 	register("x3") i64  out = 0;
 	asm volatile {
-    __vxat_cas_retry:
-        ldaxr x3, [x0]
-        cmp x3, x1
-        b.ne __vxat_cas_done
-        stlxr w4, x2, [x0]
-        cbnz w4, __vxat_cas_retry
-    __vxat_cas_done:
+		__vxat_cas_retry:
+		    ldaxr x3, [x0]
+		    cmp x3, x1
+		    b.ne __vxat_cas_done
+		    stlxr w4, x2, [x0]
+		    cbnz w4, __vxat_cas_retry
+		__vxat_cas_done:
 	};
 	return out; // x3 = old
 }
 
 /// fetch-and-add.  LL/SC nativo (ver cas64): O(1).
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_add64(i64 *addr, i64 delta) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_add64(i64 *addr, i64 delta) {
 	register("x0") i64 *a   = addr;
 	register("x1") i64  d   = delta;
 	register("x3") i64  out = 0;
 	asm volatile {
-    __vxat_add_retry:
-        ldaxr x3, [x0]
-        add x5, x3, x1
-        stlxr w4, x5, [x0]
-        cbnz w4, __vxat_add_retry
+		__vxat_add_retry:
+		    ldaxr x3, [x0]
+		    add x5, x3, x1
+		    stlxr w4, x5, [x0]
+		    cbnz w4, __vxat_add_retry
 	};
 	return out; // x3 = old
 }
@@ -232,63 +268,83 @@ public i64 atomic_add64(i64 *addr, i64 delta) {
 /// exchange.  A diferencia de la de x86 (bucle CAS escrito en Vesta), aqui es
 /// el LL/SC nativo (ver cas64): O(1).
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_swap64(i64 *addr, i64 v) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 24, total: 24) // los register + asm gastan frame que la variante x86-64 no
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_swap64(i64 *addr, i64 v) {
 	register("x0") i64 *a   = addr;
 	register("x1") i64  nv  = v;
 	register("x3") i64  out = 0;
 	asm volatile {
-    __vxat_swap_retry:
-        ldaxr x3, [x0]
-        stlxr w4, x1, [x0]
-        cbnz w4, __vxat_swap_retry
+		__vxat_swap_retry:
+		    ldaxr x3, [x0]
+		    stlxr w4, x1, [x0]
+		    cbnz w4, __vxat_swap_retry
 	};
 	return out; // x3 = old
 }
 
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_load64(i64 *addr) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_load64(i64 *addr) {
 	return *addr;
 }
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void atomic_store64(i64 *addr, i64 v) {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void atomic_store64(i64 *addr, i64 v) {
 	*addr = v;
 }
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void atomic_fence() {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void atomic_fence() {
 	asm volatile { dmb ish };
 }
 @Target("arch:arm64")
-@nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void vx_cpu_relax() {
+	@nothrow
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void vx_cpu_relax() {
 	asm volatile { yield };
 }
 
@@ -300,24 +356,32 @@ public void vx_cpu_relax() {
 /// Un solo cuerpo, pero la primitiva que llama difiere por arch (x86: builtins;
 /// arm64: register+asm), asi que su frame propio tambien -> `when:`.
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 atomic_sub64(i64 *addr, i64 delta) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 atomic_sub64(i64 *addr, i64 delta) {
 	return atomic_add64(addr, -delta);
 }
 
 /// fetch-and-or: `*addr |= mask`; devuelve el OLD.  Bucle CAS -> O(n) sobre los
 /// REINTENTOS: sin contencion el CAS triunfa a la primera (O(1) amortizado).
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-public i64 atomic_or64(i64 *addr, i64 mask) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(n),
+	partial_post: O(n),
+	total_pre:    O(n),
+	total_post:   O(n)
+)
+	public i64 atomic_or64(i64 *addr, i64 mask) {
 	while (true) {
 		i64 old = atomic_load64(addr);
 		if (atomic_cas64(addr, old, old | mask) == old) {
@@ -330,12 +394,16 @@ public i64 atomic_or64(i64 *addr, i64 mask) {
 /// fetch-and-and: `*addr &= mask`; devuelve el OLD.  Bucle CAS -> O(n) sobre los
 /// REINTENTOS: sin contencion el CAS triunfa a la primera (O(1) amortizado).
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-public i64 atomic_and64(i64 *addr, i64 mask) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(n),
+	partial_post: O(n),
+	total_pre:    O(n),
+	total_post:   O(n)
+)
+	public i64 atomic_and64(i64 *addr, i64 mask) {
 	while (true) {
 		i64 old = atomic_load64(addr);
 		if (atomic_cas64(addr, old, old & mask) == old) {
@@ -350,12 +418,16 @@ public i64 atomic_and64(i64 *addr, i64 mask) {
 /// de bits habia que escribirlo a mano.  O(n) sobre los REINTENTOS: sin
 /// contencion el CAS triunfa a la primera (O(1) amortizado).
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-public i64 atomic_xor64(i64 *addr, i64 mask) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(n),
+	partial_post: O(n),
+	total_pre:    O(n),
+	total_post:   O(n)
+)
+	public i64 atomic_xor64(i64 *addr, i64 mask) {
 	while (true) {
 		i64 old = atomic_load64(addr);
 		if (atomic_cas64(addr, old, old ^ mask) == old) {
@@ -374,12 +446,16 @@ public i64 atomic_xor64(i64 *addr, i64 mask) {
 /// VUELTAS de espera: depende de cuanto lo retenga el que lo tiene, no de una
 /// entrada.  Sin competencia entra a la primera (O(1) amortizado).
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-public void vx_spin_lock(i64 *lock) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(n),
+	partial_post: O(n),
+	total_pre:    O(n),
+	total_post:   O(n)
+)
+	public void vx_spin_lock(i64 *lock) {
 	while (atomic_cas64(lock, 0, 1) != 0) {
 		vx_cpu_relax();
 	}
@@ -387,23 +463,31 @@ public void vx_spin_lock(i64 *lock) {
 
 /// Libera el spinlock (`*lock = 0`, release).
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public void vx_spin_unlock(i64 *lock) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public void vx_spin_unlock(i64 *lock) {
 	atomic_store64(lock, 0);
 }
 
 /// Intenta tomar el spinlock sin bloquear.  1 = tomado, 0 = estaba ocupado.
 @nothrow
-@nopanic
-@alloc(partial: 0, total: 0)
-@stack(partial: 0, total: 0)
-@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-public i64 vx_spin_trylock(i64 *lock) {
+	@nopanic
+	@alloc(partial: 0, total: 0)
+	@stack(partial: 0, total: 0)
+	@complexity(
+	partial_pre:  O(1),
+	partial_post: O(1),
+	total_pre:    O(1),
+	total_post:   O(1)
+)
+	public i64 vx_spin_trylock(i64 *lock) {
 	if (atomic_cas64(lock, 0, 1) == 0) {
 		return 1;
 	}
@@ -494,9 +578,9 @@ public i64 vx_spin_trylock(i64 *lock) {
 /// Mensaje del guard de ancho.  En un sitio: lo comparten todos los metodos.
 /// Es lo UNICO que hay que tocar cuando aterrice el ancho de 16 (cmpxchg16b).
 comptime string VX_ATOMIC_ANCHO =
-"atomic<T>: no hay operacion atomica para el ancho de T. " +
-"La hay para tipos de 1, 2, 4 u 8 bytes. " +
-"Para 16 bytes usa dos celdas o protege el valor con 'synchronized'.";
+	"atomic<T>: no hay operacion atomica para el ancho de T. " +
+	"La hay para tipos de 1, 2, 4 u 8 bytes. " +
+	"Para 16 bytes usa dos celdas o protege el valor con 'synchronized'.";
 
 struct atomic < T : Scalar > {
 	T cell;
@@ -510,12 +594,16 @@ struct atomic < T : Scalar > {
 
 	/// `*g` -- load atomico (acquire en x86-TSO).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(partial: 0, total: 0)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-	public T __deref__() {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(partial: 0, total: 0)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public T __deref__() {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -524,12 +612,16 @@ struct atomic < T : Scalar > {
 
 	/// `g = v` -- store atomico (release en x86-TSO).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(partial: 0, total: 0)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-	public T __assign__(T v) {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(partial: 0, total: 0)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public T __assign__(T v) {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -560,16 +652,26 @@ struct atomic < T : Scalar > {
 	/// tambien: en arm64 el entero (una op nativa) gasta 24B y el float (bucle
 	/// CAS) 32B -- se declara cada uno, no el maximo, para no perder el dato.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1), when: is_integer<T>())
-	@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n), when: is_float<T>())
-	public T fetch_add(T d) where T: Numeric {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+		@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1),
+		when:         is_integer<T>()
+	)
+		@complexity(
+		partial_pre:  O(n),
+		partial_post: O(n),
+		total_pre:    O(n),
+		total_post:   O(n),
+		when:         is_float<T>()
+	)
+		public T fetch_add(T d) where T: Numeric {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -585,16 +687,26 @@ struct atomic < T : Scalar > {
 
 	/// Resta @p d y devuelve el valor ANTERIOR.  Ver @ref fetch_add.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1), when: is_integer<T>())
-	@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n), when: is_float<T>())
-	public T fetch_sub(T d) where T: Numeric {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+		@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1),
+		when:         is_integer<T>()
+	)
+		@complexity(
+		partial_pre:  O(n),
+		partial_post: O(n),
+		total_pre:    O(n),
+		total_post:   O(n),
+		when:         is_float<T>()
+	)
+		public T fetch_sub(T d) where T: Numeric {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -616,13 +728,17 @@ struct atomic < T : Scalar > {
 	/// `|= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n) sobre los
 	/// reintentos.  Solo enteros (`where T: Integer`).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n))
-	public T fetch_or(T mask) where T: Integer {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T fetch_or(T mask) where T: Integer {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -635,13 +751,17 @@ struct atomic < T : Scalar > {
 
 	/// `&= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n))
-	public T fetch_and(T mask) where T: Integer {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T fetch_and(T mask) where T: Integer {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -655,13 +775,17 @@ struct atomic < T : Scalar > {
 	/// `^= mask`; devuelve el valor ANTERIOR.  Bucle CAS -> O(n).  Util para
 	/// toggles.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n))
-	public T fetch_xor(T mask) where T: Integer {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T fetch_xor(T mask) where T: Integer {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -683,60 +807,92 @@ struct atomic < T : Scalar > {
 	/// coste de fetch_add: O(1) entero, O(n) float.  Frame propio 0 (solo
 	/// llama).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1), when: is_integer<T>())
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n), when: is_float<T>())
-	public T __iadd__(T d) where T: Numeric { return this.fetch_add(d) + d; }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+		@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1),
+		when:         is_integer<T>()
+	)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n),
+		when:         is_float<T>()
+	)
+		public T __iadd__(T d) where T: Numeric { return this.fetch_add(d) + d; }
 
 	/// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.  Ver __iadd__.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1), when: is_integer<T>())
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n), when: is_float<T>())
-	public T __isub__(T d) where T: Numeric { return this.fetch_sub(d) - d; }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
+		@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1),
+		when:         is_integer<T>()
+	)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n),
+		when:         is_float<T>()
+	)
+		public T __isub__(T d) where T: Numeric { return this.fetch_sub(d) - d; }
 
 	/// `g |= m` / `g = g | m`.  Devuelve el valor NUEVO.  Bucle CAS en la
 	/// primitiva: cuerpo O(1) (una llamada), total O(n) (reintentos).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n))
-	public T __ior__(T m) where T: Integer { return this.fetch_or(m) | m; }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T __ior__(T m) where T: Integer { return this.fetch_or(m) | m; }
 
 	/// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.  Ver __ior__.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n))
-	public T __iand__(T m) where T: Integer { return this.fetch_and(m) & m; }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T __iand__(T m) where T: Integer { return this.fetch_and(m) & m; }
 
 	/// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.  Ver __ior__.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n))
-	public T __ixor__(T m) where T: Integer { return this.fetch_xor(m) ^ m; }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T __ixor__(T m) where T: Integer { return this.fetch_xor(m) ^ m; }
 
 	// -----------------------------------------------------------------------
 	//  CAS y exchange.
@@ -747,13 +903,17 @@ struct atomic < T : Scalar > {
 	/// construye cualquier read-modify-write que no tenga instruccion propia
 	/// (multiplicar, saturar, maximo, ...): bucle hasta triunfar.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-	public T compare_swap(T expected, T desired) {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public T compare_swap(T expected, T desired) {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -766,15 +926,25 @@ struct atomic < T : Scalar > {
 	/// escrito en Vesta (la n son los reintentos), mientras que arm64 lo hace
 	/// con el LL/SC nativo, que es una operacion y ya.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n), when: arch:x86_64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1), when: arch:arm64)
-	public T swap(T v) {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 24, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n),
+		when:         arch:x86_64
+	)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1),
+		when:         arch:arm64
+	)
+		public T swap(T v) {
 		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
 			sizeof<T>() == 4 || sizeof<T>() == 8,
 			VX_ATOMIC_ANCHO);
@@ -790,13 +960,17 @@ struct atomic < T : Scalar > {
 	/// saber casi siempre, y evita repetir `if (a.compare_swap(v, n) == v)` en
 	/// cada sitio.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-	public bool compare_exchange(T expected, T desired) {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public bool compare_exchange(T expected, T desired) {
 		return this.compare_swap(expected, desired) == expected;
 	}
 
@@ -813,36 +987,54 @@ struct atomic < T : Scalar > {
 
 	/// Load atomico.  Igual que `*g`.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(partial: 0, total: 0)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-	public T load() { return this.__deref__(); }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(partial: 0, total: 0)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public T load() { return this.__deref__(); }
 
 	/// Store atomico.  Igual que `g = v`.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(partial: 0, total: 0)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1))
-	public T store(T v) { return this.__assign__(v); }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(partial: 0, total: 0)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1)
+	)
+		public T store(T v) { return this.__assign__(v); }
 
 	/// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.  Su cuerpo es
 	/// solo una llamada -> parcial O(1) (el analizador NO cuenta el inline en el
 	/// parcial); el total hereda el coste de swap (x86 bucle CAS O(n), arm64
 	/// LL/SC O(1)).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(n), total_post: O(n), when: arch:x86_64)
-	@complexity(partial_pre: O(1), partial_post: O(1),
-	total_pre: O(1), total_post: O(1), when: arch:arm64)
-	public T exchange(T v) { return this.swap(v); }
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 24, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(n),
+		total_post:   O(n),
+		when:         arch:x86_64
+	)
+		@complexity(
+		partial_pre:  O(1),
+		partial_post: O(1),
+		total_pre:    O(1),
+		total_post:   O(1),
+		when:         arch:arm64
+	)
+		public T exchange(T v) { return this.swap(v); }
 
 	// -----------------------------------------------------------------------
 	//  RMW compuestos sobre CAS.
@@ -852,13 +1044,17 @@ struct atomic < T : Scalar > {
 	/// Sin esto hay que escribir el bucle CAS a mano en cada sitio.  El bucle
 	/// esta en el propio cuerpo -> O(n) tambien en la parte parcial.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-	public T fetch_max(T v) where T: Comparable {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(n),
+		partial_post: O(n),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T fetch_max(T v) where T: Comparable {
 		while (true) {
 			T viejo = this.load();
 			if (viejo >= v) { return viejo; }
@@ -869,13 +1065,17 @@ struct atomic < T : Scalar > {
 
 	/// Deja el minimo entre el valor actual y @p v; devuelve el ANTERIOR.
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-	public T fetch_min(T v) where T: Comparable {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(n),
+		partial_post: O(n),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T fetch_min(T v) where T: Comparable {
 		while (true) {
 			T viejo = this.load();
 			if (viejo <= v) { return viejo; }
@@ -908,13 +1108,17 @@ struct atomic < T : Scalar > {
 	///         if (a.compare_exchange(viejo, nuevo)) { break; }
 	///     }
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-	public T fetch_update(fn(T) -> T f) {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(n),
+		partial_post: O(n),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T fetch_update(fn(T) -> T f) {
 		while (true) {
 			T viejo = this.load();
 			if (this.compare_exchange(viejo, f(viejo))) {
@@ -930,13 +1134,17 @@ struct atomic < T : Scalar > {
 	/// `nuevo = contador.update((x) => x + 1);`, y con el fetch_ hay que
 	/// recalcularlo fuera.  Mismas condiciones sobre @p f (pura y barata).
 	@nothrow
-	@nopanic
-	@alloc(partial: 0, total: 0)
-	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 32, when: arch:arm64)
-	@complexity(partial_pre: O(n), partial_post: O(n),
-	total_pre: O(n), total_post: O(n))
-	public T update(fn(T) -> T f) {
+		@nopanic
+		@alloc(partial: 0, total: 0)
+		@stack(0, when: arch:x86_64)
+		@stack(partial: 0, total: 32, when: arch:arm64)
+		@complexity(
+		partial_pre:  O(n),
+		partial_post: O(n),
+		total_pre:    O(n),
+		total_post:   O(n)
+	)
+		public T update(fn(T) -> T f) {
 		while (true) {
 			T viejo = this.load();
 			T nuevo = f(viejo);

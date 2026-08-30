@@ -9,11 +9,11 @@ u64 shr(u64 x, u64 n) { return x >> n; }
 i64 sar(i64 x, i64 n) { return x >> n; } // aritmetico (con signo)
 
 u64 main() {
-    u64 ok = 1;
-    if (shl(1, 10) != 1024) ok = 0;
-    if (shr(1024, 3) != 128) ok = 0;
-    if (sar(-64, 2) != -16) ok = 0;   // preserva el signo
-    if (shl(0xFF, 0) != 0xFF) ok = 0; // cuenta 0
-    if (shr(0xFF00, 8) != 0xFF) ok = 0;
-    return (ok == 1) ? 42 : 0;
+	u64                         ok = 1;
+	if (shl(1, 10) != 1024)     ok = 0;
+	if (shr(1024, 3) != 128)    ok = 0;
+	if (sar(-64, 2) != -16)     ok = 0;   // preserva el signo
+	if (shl(0xFF, 0) != 0xFF)   ok = 0; // cuenta 0
+	if (shr(0xFF00, 8) != 0xFF) ok = 0;
+	return (ok == 1) ? 42 : 0;
 }

@@ -10,14 +10,14 @@
 //
 // @expect 13
 u64 main() {
-    register("rdi") u64 a = 3;
-    register("rsi") u64 b = 4;
-    register("rax") u64 r;
-    asm {
-        mov rax, rdi
-        imul rax, rax
-        mov rcx, rsi
-        add rax, rcx
-    } clobbers("rcx");
-    return r;
+	register("rdi") u64 a = 3;
+	register("rsi") u64 b = 4;
+	register("rax") u64 r;
+	asm {
+		mov rax, rdi
+		imul rax, rax
+		mov rcx, rsi
+		add rax, rcx
+	} clobbers("rcx");
+	return r;
 }

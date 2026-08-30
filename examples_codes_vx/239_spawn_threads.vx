@@ -18,35 +18,39 @@ namespace ejemplos.spawn_threads;
 
 import "vx_sync" only vx_lock, vx_unlock;
 
-i64 g_lock = 0;     // objeto de lock (host_ptr; palabra de monitor en obj+16)
-i64 g_counter = 0;  // contador compartido
+i64 g_lock    = 0; // objeto de lock (host_ptr; palabra de monitor en obj+16)
+i64 g_counter = 0; // contador compartido
 
 i32 main() {
-    g_lock = (i64)malloc(4 * 8);
-    i64* lo = (i64*)g_lock; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
-    g_counter = 0;
+	g_lock = (i64)malloc(4 * 8);
+	i64* lo = (i64 *)g_lock;
+	lo[0] = 0;
+	lo[1] = 0;
+	lo[2] = 0;
+	lo[3] = 0;
+	g_counter = 0;
 
-    // Cada `spawn { }` = un hilo del SO en paralelo.
-    spawn {
-        i64 i = 0;
-        while (i < 30000) {
-            vx_lock((i64*)g_lock);
-            g_counter = g_counter + 1;
-            vx_unlock((i64*)g_lock);
-            i = i + 1;
-        }
-    };
-    spawn {
-        i64 i = 0;
-        while (i < 30000) {
-            vx_lock((i64*)g_lock);
-            g_counter = g_counter + 1;
-            vx_unlock((i64*)g_lock);
-            i = i + 1;
-        }
-    };
+	// Cada `spawn { }` = un hilo del SO en paralelo.
+	spawn {
+		i64 i = 0;
+		while (i < 30_000) {
+			vx_lock((i64 *)g_lock);
+			g_counter = g_counter + 1;
+			vx_unlock((i64 *)g_lock);
+			i = i + 1;
+		}
+	};
+	spawn {
+		i64 i = 0;
+		while (i < 30_000) {
+			vx_lock((i64 *)g_lock);
+			g_counter = g_counter + 1;
+			vx_unlock((i64 *)g_lock);
+			i = i + 1;
+		}
+	};
 
-    // El join-all implicito (antes del RET) espera a ambos hilos; el valor de
-    // retorno ya ve g_counter unido: 60000 si la exclusion mutua fue correcta.
-    return (g_counter == 60000) ? 42 : (i32)(g_counter % 1000);
+	// El join-all implicito (antes del RET) espera a ambos hilos; el valor de
+	// retorno ya ve g_counter unido: 60000 si la exclusion mutua fue correcta.
+	return (g_counter == 60_000) ? 42 : (i32)(g_counter % 1000);
 }

@@ -8,7 +8,7 @@ public typedef u16 WORD;
 
 // comptime fn con retorno = typedef del modulo.
 public comptime WORD MK(u16 p, u16 s) {
-    return ((s << 10) | p);
+	return ((s << 10) | p);
 }
 
 public const u32 BASE = 40;

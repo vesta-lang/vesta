@@ -12,17 +12,17 @@ namespace ejemplos.future_basico;
 // Esperado: parent obtiene 42 (constante computada por el hijo).
 
 i32 main() {
-    i64 fut = future_alloc();   // crear Future en estado PENDING
+	i64 fut = future_alloc(); // crear Future en estado PENDING
 
-    i64 child = spawn {
-        i64 my_fut = msgrecv();  // recibir el handle del Future
-        // "trabajo asincrono" trivial: una computacion local.
-        i32 result = 21 * 2;
-        fulfill(my_fut, result); // resolver con 42
-    };
+	i64 child = spawn {
+		i64 my_fut = msgrecv(); // recibir el handle del Future
+		// "trabajo asincrono" trivial: una computacion local.
+		i32 result = 21 * 2;
+		fulfill(my_fut, result); // resolver con 42
+	};
 
-    msgsend(child, fut);        // pasar el handle al hijo
+	msgsend(child, fut); // pasar el handle al hijo
 
-    i64 r = await fut;          // bloquea hasta que el hijo fulfill
-    return r;                    // 42
+	i64 r = await fut;   // bloquea hasta que el hijo fulfill
+	return r;            // 42
 }

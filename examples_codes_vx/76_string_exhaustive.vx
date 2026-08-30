@@ -40,160 +40,160 @@ namespace ejemplos.string_exhaustive;
 //   emoji wave:     \xF0\x9F\x91\x8B  (U+1F44B)
 
 i32 main() {
-    println("=== TEST EXHAUSTIVO STRINGS + I/O ===");
+	println("=== TEST EXHAUSTIVO STRINGS + I/O ===");
 
-    // -----------------------------------------------------------------
-    // 1. Interpolacion con tipos escalares.
-    // -----------------------------------------------------------------
-    println("--- 1. tipos escalares en interp ---");
+	// -----------------------------------------------------------------
+	// 1. Interpolacion con tipos escalares.
+	// -----------------------------------------------------------------
+	println("--- 1. tipos escalares en interp ---");
 
-    i8  i8v   = -1;
-    i16 i16v  = -32000;
-    i32 i32v  = -2147000000;
-    i64 i64v  = -9000000000;
-    u8  u8v   = 255;
-    u16 u16v  = 65000;
-    u32 u32v  = 4000000000;
-    u64 u64v  = 18000000000000000000;
-    bool bv   = true;
-    char cv   = 'A';
+	i8   i8v  = -1;
+	i16  i16v = -32_000;
+	i32  i32v = -2_147_000_000;
+	i64  i64v = -9_000_000_000;
+	u8   u8v  =  255;
+	u16  u16v =  65_000;
+	u32  u32v =  4_000_000_000;
+	u64  u64v =  18_000_000_000_000_000_000;
+	bool bv   =  true;
+	char cv   =  'A';
 
-    println("i8=${i8v}");
-    println("i16=${i16v}");
-    println("i32=${i32v}");
-    println("i64=${i64v}");
-    println("u8=${u8v}");
-    println("u16=${u16v}");
-    println("u32=${u32v}");
-    println("u64=${u64v}");
-    println("bool=${bv}");
-    println("char_code=${cv}");
+	println("i8=${i8v}");
+	println("i16=${i16v}");
+	println("i32=${i32v}");
+	println("i64=${i64v}");
+	println("u8=${u8v}");
+	println("u16=${u16v}");
+	println("u32=${u32v}");
+	println("u64=${u64v}");
+	println("bool=${bv}");
+	println("char_code=${cv}");
 
-    // -----------------------------------------------------------------
-    // 2. Variables string + concatenacion.
-    // -----------------------------------------------------------------
-    println("--- 2. strings en interp ---");
+	// -----------------------------------------------------------------
+	// 2. Variables string + concatenacion.
+	// -----------------------------------------------------------------
+	println("--- 2. strings en interp ---");
 
-    string a = "Hola";
-    string b = " mundo";
-    string c = a + b;
+	string a = "Hola";
+	string b = " mundo";
+	string c = a + b;
 
-    println("a=${a}");
-    println("b=${b}");
-    println("c=${c}");
+	println("a=${a}");
+	println("b=${b}");
+	println("c=${c}");
 
-    // String literal directo dentro de print/println (sin interp).
-    print("frase plana: ");
-    println(" es genial");
+	// String literal directo dentro de print/println (sin interp).
+	print("frase plana: ");
+	println(" es genial");
 
-    // -----------------------------------------------------------------
-    // 3. Multi-alfabeto: latin/griego/cirilico/arabe/CJK/emoji.
-    // -----------------------------------------------------------------
-    println("--- 3. multi-alfabeto ---");
+	// -----------------------------------------------------------------
+	// 3. Multi-alfabeto: latin/griego/cirilico/arabe/CJK/emoji.
+	// -----------------------------------------------------------------
+	println("--- 3. multi-alfabeto ---");
 
-    string latin    = "caf\xC3\xA9 ma\xC3\xB1ana";
-    string griego   = "\xCE\xB1\xCE\xB2\xCE\xB3";
-    string cirilico = "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82";
-    string cjk      = "\xE4\xB8\xAD\xE5\x9B\xBD";
-    string emoji    = "\xF0\x9F\x98\x80\xF0\x9F\x91\x8B";
+	string latin    = "caf\xC3\xA9 ma\xC3\xB1ana";
+	string griego   = "\xCE\xB1\xCE\xB2\xCE\xB3";
+	string cirilico = "\xD0\x9F\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82";
+	string cjk      = "\xE4\xB8\xAD\xE5\x9B\xBD";
+	string emoji    = "\xF0\x9F\x98\x80\xF0\x9F\x91\x8B";
 
-    println("latin=${latin}");
-    println("griego=${griego}");
-    println("cirilico=${cirilico}");
-    println("cjk=${cjk}");
-    println("emoji=${emoji}");
+	println("latin=${latin}");
+	println("griego=${griego}");
+	println("cirilico=${cirilico}");
+	println("cjk=${cjk}");
+	println("emoji=${emoji}");
 
-    // -----------------------------------------------------------------
-    // 4. Metricas por encoding (bytes vs code points).
-    //
-    //   "caf\xC3\xA9 ma\xC3\xB1ana" -> 12 bytes (4+1+5+2 multibyte) /
-    //                                  10 code points
-    //   "\xCE\xB1\xCE\xB2\xCE\xB3" -> 6 bytes / 3 code points
-    //   "\xE4\xB8\xAD\xE5\x9B\xBD" -> 6 bytes / 2 code points
-    //   "\xF0\x9F\x98\x80\xF0\x9F\x91\x8B" -> 8 bytes / 2 code points
-    //
-    //   Las metricas las leemos con builtins libres (str_bytes/str_length)
-    //   pero las imprimimos via ${} para no romper la regla "solo print".
-    // -----------------------------------------------------------------
-    println("--- 4. metricas multi-byte ---");
+	// -----------------------------------------------------------------
+	// 4. Metricas por encoding (bytes vs code points).
+	//
+	//   "caf\xC3\xA9 ma\xC3\xB1ana" -> 12 bytes (4+1+5+2 multibyte) /
+	//                                  10 code points
+	//   "\xCE\xB1\xCE\xB2\xCE\xB3" -> 6 bytes / 3 code points
+	//   "\xE4\xB8\xAD\xE5\x9B\xBD" -> 6 bytes / 2 code points
+	//   "\xF0\x9F\x98\x80\xF0\x9F\x91\x8B" -> 8 bytes / 2 code points
+	//
+	//   Las metricas las leemos con builtins libres (str_bytes/str_length)
+	//   pero las imprimimos via ${} para no romper la regla "solo print".
+	// -----------------------------------------------------------------
+	println("--- 4. metricas multi-byte ---");
 
-    println("latin: bytes=${latin.bytes()} cps=${latin.length()}");
-    println("griego: bytes=${griego.bytes()} cps=${griego.length()}");
-    println("cjk: bytes=${cjk.bytes()} cps=${cjk.length()}");
-    println("emoji: bytes=${emoji.bytes()} cps=${emoji.length()}");
+	println("latin: bytes=${latin.bytes()} cps=${latin.length()}");
+	println("griego: bytes=${griego.bytes()} cps=${griego.length()}");
+	println("cjk: bytes=${cjk.bytes()} cps=${cjk.length()}");
+	println("emoji: bytes=${emoji.bytes()} cps=${emoji.length()}");
 
-    // -----------------------------------------------------------------
-    // 5. Concatenacion heterogenea.
-    // -----------------------------------------------------------------
-    println("--- 5. concat heterogeneo ---");
+	// -----------------------------------------------------------------
+	// 5. Concatenacion heterogenea.
+	// -----------------------------------------------------------------
+	println("--- 5. concat heterogeneo ---");
 
-    string mix = "ASCII " + griego + " " + emoji;
-    println("mix=${mix}");
-    println("mix.bytes=${mix.bytes()}");
+	string mix = "ASCII " + griego + " " + emoji;
+	println("mix=${mix}");
+	println("mix.bytes=${mix.bytes()}");
 
-    // -----------------------------------------------------------------
-    // 6. Comparaciones == / != entre strings.
-    // -----------------------------------------------------------------
-    println("--- 6. comparaciones ---");
+	// -----------------------------------------------------------------
+	// 6. Comparaciones == / != entre strings.
+	// -----------------------------------------------------------------
+	println("--- 6. comparaciones ---");
 
-    string s1 = "abc";
-    string s2 = "abc";
-    string s3 = "abd";
+	string s1 = "abc";
+	string s2 = "abc";
+	string s3 = "abd";
 
-    println("s1==s2: ${s1 == s2}");
-    println("s1==s3: ${s1 == s3}");
-    println("s1!=s3: ${s1 != s3}");
+	println("s1==s2: ${s1 == s2}");
+	println("s1==s3: ${s1 == s3}");
+	println("s1!=s3: ${s1 != s3}");
 
-    // -----------------------------------------------------------------
-    // 7. Escapes y secuencias de control.
-    // -----------------------------------------------------------------
-    println("--- 7. escapes ---");
+	// -----------------------------------------------------------------
+	// 7. Escapes y secuencias de control.
+	// -----------------------------------------------------------------
+	println("--- 7. escapes ---");
 
-    println("tab[A\tB] nl_inline[X\nY]");
-    println("comilla=\" backslash=\\");
+	println("tab[A\tB] nl_inline[X\nY]");
+	println("comilla=\" backslash=\\");
 
-    // -----------------------------------------------------------------
-    // 8. Casos limite: cadena vacia y de un solo caracter.
-    // -----------------------------------------------------------------
-    println("--- 8. casos limite ---");
+	// -----------------------------------------------------------------
+	// 8. Casos limite: cadena vacia y de un solo caracter.
+	// -----------------------------------------------------------------
+	println("--- 8. casos limite ---");
 
-    string empty = "";
-    string one   = "Z";
+	string empty = "";
+	string one   = "Z";
 
-    println("empty[${empty}] bytes=${empty.bytes()} cps=${empty.length()}");
-    println("one[${one}] bytes=${one.bytes()} cps=${one.length()}");
+	println("empty[${empty}] bytes=${empty.bytes()} cps=${empty.length()}");
+	println("one[${one}] bytes=${one.bytes()} cps=${one.length()}");
 
-    // -----------------------------------------------------------------
-    // 9. Expresiones complejas dentro de ${}.
-    // -----------------------------------------------------------------
-    println("--- 9. expresiones en interp ---");
+	// -----------------------------------------------------------------
+	// 9. Expresiones complejas dentro de ${}.
+	// -----------------------------------------------------------------
+	println("--- 9. expresiones en interp ---");
 
-    i32 x = 10;
-    i32 y = 20;
+	i32 x = 10;
+	i32 y = 20;
 
-    println("suma=${x + y} producto=${x * y} resto=${y % 3}");
-    println("triple=${x + y + 12}");
-    println("anidado=${x + y * 2}");
+	println("suma=${x + y} producto=${x * y} resto=${y % 3}");
+	println("triple=${x + y + 12}");
+	println("anidado=${x + y * 2}");
 
-    // -----------------------------------------------------------------
-    // 10. Floats en interpolacion.
-    // -----------------------------------------------------------------
-    println("--- 10. floats ---");
+	// -----------------------------------------------------------------
+	// 10. Floats en interpolacion.
+	// -----------------------------------------------------------------
+	println("--- 10. floats ---");
 
-    f64 pi = 3.14;
-    f64 e  = 2.71;
+	f64 pi = 3.14;
+	f64 e  = 2.71;
 
-    println("pi=${pi}");
-    println("e=${e}");
-    println("pi+e=${pi + e}");
-    println("pi*2=${pi + pi}");
-    println("pi-e=${pi - e}");
-    println("pi*e=${pi * e}");
-    println("pi/e=${pi / e}");
+	println("pi=${pi}");
+	println("e=${e}");
+	println("pi+e=${pi + e}");
+	println("pi*2=${pi + pi}");
+	println("pi-e=${pi - e}");
+	println("pi*e=${pi * e}");
+	println("pi/e=${pi / e}");
 
-    // -----------------------------------------------------------------
-    // 11. Flush antes de salir para que el buffer global purgue todo.
-    // -----------------------------------------------------------------
-    flush();
-    return 42;
+	// -----------------------------------------------------------------
+	// 11. Flush antes de salir para que el buffer global purgue todo.
+	// -----------------------------------------------------------------
+	flush();
+	return 42;
 }

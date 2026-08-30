@@ -14,85 +14,85 @@ namespace ejemplos.stack_iface;
 // validation_code = 42 si todo OK).
 
 interface IStack {
-    void push(i32 v);
-    i32  pop();
-    i32  size();
+	void push(i32 v);
+	i32 pop();
+	i32 size();
 }
 
 class LinkedNode {
-    public i32 value;
-    public LinkedNode next;
-    public LinkedNode(i32 v) {
-        this.value = v;
-        this.next = null;
-    }
+	public i32 value;
+	public LinkedNode next;
+	public LinkedNode(i32 v) {
+		this.value = v;
+		this.next  = null;
+	}
 }
 
 class LinkedListStack : IStack {
-    public LinkedNode top;
-    public i32        count;
+	public LinkedNode top;
+	public i32 count;
 
-    public LinkedListStack() {
-        this.top   = null;
-        this.count = 0;
-    }
+	public LinkedListStack() {
+		this.top   = null;
+		this.count = 0;
+	}
 
-    public void push(i32 v) {
-        LinkedNode n = new LinkedNode(v);
-        n.next = this.top;
-        this.top = n;
-        this.count = this.count + 1;
-    }
+	public void push(i32 v) {
+		LinkedNode n = new LinkedNode(v);
+		n.next     = this.top;
+		this.top   = n;
+		this.count = this.count + 1;
+	}
 
-    public i32 pop() {
-        i32 v = this.top.value;
-        this.top = this.top.next;
-        this.count = this.count - 1;
-        return v;
-    }
+	public i32 pop() {
+		i32 v = this.top.value;
+		this.top   = this.top.next;
+		this.count = this.count - 1;
+		return v;
+	}
 
-    public i32 size() {
-        return this.count;
-    }
+	public i32 size() {
+		return this.count;
+	}
 }
 
 // Helper polimorfico: opera sobre cualquier IStack.
 i32 push_range(IStack s, i32 from, i32 to) {
-    i32 sum = 0;
-    i32 v = from;
-    while (v <= to) {
-        s.push(v);
-        sum = sum + v;
-        v = v + 1;
-    }
-    return sum;
+	i32 sum = 0;
+	i32 v   = from;
+	while (v <= to) {
+		s.push(v);
+		sum = sum + v;
+		v   = v + 1;
+	}
+	return sum;
 }
 
 i32 pop_n(IStack s, i32 n) {
-    i32 sum = 0;
-    i32 i = 0;
-    while (i < n) {
-        sum = sum + s.pop();
-        i = i + 1;
-    }
-    return sum;
+	i32 sum = 0;
+	i32 i   = 0;
+	while (i < n) {
+		sum = sum + s.pop();
+		i   = i + 1;
+	}
+	return sum;
 }
 
 i32 main() {
-    IStack s = new LinkedListStack();
+	IStack s = new LinkedListStack();
 
-    i32 sum_pushed = push_range(s, 1, 10);  // 1..10 = 55
-    if (sum_pushed != 55) return 11;
-    if (s.size() != 10)   return 12;
+	i32 sum_pushed = push_range(s, 1, 10); // 1..10 = 55
+	if (sum_pushed != 55) return 11;
+	if (s.size() != 10) return 12;
 
-    i32 sum_popped = pop_n(s, 5);            // 10+9+8+7+6 = 40
-    if (sum_popped != 40) return 13;
-    if (s.size() != 5)    return 14;
+	i32 sum_popped = pop_n(s, 5); // 10+9+8+7+6 = 40
+	if (sum_popped != 40) return 13;
+	if (s.size() != 5) return 14;
 
-    // Pop el resto: 5+4+3+2+1 = 15
-    i32 sum_rest = pop_n(s, 5);
-    if (sum_rest != 15)   return 15;
-    if (s.size() != 0)    return 16;
+	// Pop el resto: 5+4+3+2+1 = 15
+	i32 sum_rest = pop_n(s, 5);
+	if (sum_rest != 15) return 15;
+	if (s.size() != 0) return 16;
 
-    return 42;
+	return 42;
 }

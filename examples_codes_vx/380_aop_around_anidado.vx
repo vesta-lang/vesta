@@ -21,25 +21,28 @@
  */
 
 class Service {
-    public Service() { }
-    public i32 run(i32 x) { return x; }
+	public Service() { }
+	public i32 run(i32 x) { return x; }
 }
 
-@Aspect class Envoltura {
-    public Envoltura() { }
+@Aspect
+class Envoltura {
+	public Envoltura() { }
 
-    /** @brief Declarado el primero: es el mas EXTERNO, envuelve al de abajo. */
-    @Around("Service.run") public i32 externo(i32 x) {
-        return proceed() * 2 + 1;
-    }
+	/** @brief Declarado el primero: es el mas EXTERNO, envuelve al de abajo. */
+	@Around("Service.run")
+	public i32 externo(i32 x) {
+		return proceed() * 2 + 1;
+	}
 
-    /** @brief Declarado el segundo: es el mas INTERNO, envuelve al metodo. */
-    @Around("Service.run") public i32 interno(i32 x) {
-        return proceed() * 10 + 3;
-    }
+	/** @brief Declarado el segundo: es el mas INTERNO, envuelve al metodo. */
+	@Around("Service.run")
+	public i32 interno(i32 x) {
+		return proceed() * 10 + 3;
+	}
 }
 
 i32 main() {
-    Service s = new Service();
-    return s.run(7); // externo(interno(7)) = (7 * 10 + 3) * 2 + 1 = 147
+	Service s = new Service();
+	return s.run(7); // externo(interno(7)) = (7 * 10 + 3) * 2 + 1 = 147
 }

@@ -1,5 +1,8 @@
 namespace ejemplos.str_build_char_fmt;
 
 // BUG-3: el format spec :char debe aplicarse al CONSTRUIR string, no solo en print.
-string mk() { i32 e = 27; return "${e:char}X"; }
-i32 main() { print(mk()); println(""); return 0; }
+string mk() { i32 e = 27;
+	return "${e:char}X"; }
+i32 main() { print(mk());
+	println("");
+	return 0; }

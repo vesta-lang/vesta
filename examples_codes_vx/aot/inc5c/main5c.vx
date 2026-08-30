@@ -20,144 +20,158 @@ import "simd_string";
 // section_start(".name") da su direccion (char*).  Longitudes 0/5/16/17/33.
 // --------------------------------------------------------------------------
 @section(".s_len0", "rw")
-bytes b_len0 {
-    db 0                                  // longitud 0
+	bytes b_len0 {
+	db 0 // longitud 0
 }
 @section(".s_len5", "rw")
-bytes b_len5 {
-    db 104, 101, 108, 108, 111, 0         // "hello\0" -> 5
+	bytes b_len5 {
+	db 104, 101, 108, 108, 111, 0 // "hello\0" -> 5
 }
 @section(".s_len16", "rw")
-bytes b_len16 {
-    db 65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80, 0   // 16 'A'..'P' -> 16
+	bytes b_len16 {
+	db 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 0 // 16 'A'..'P' -> 16
 }
 @section(".s_len17", "rw")
-bytes b_len17 {
-    db 65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81, 0  // 17 -> 17
+	bytes b_len17 {
+	db 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 0 // 17 -> 17
 }
 @section(".s_len33", "rw")
-bytes b_len33 {
-    // 33 chars 'a' (0x61) + nul.
-    times 33 db 0x61
-    db 0
+	bytes b_len33 {
+	// 33 chars 'a' (0x61) + nul.
+	times 33 db 0x61
+		db 0
 }
 
 // Compara dos value-strings y devuelve el SIGNO (-1/0/1) derivado de los
 // operadores ==/</>.  Esto ejercita el override de strcmp en las 3 direcciones.
 i64 sign_of(string a, string b) {
-    if (a < b) { return -1; }
-    if (a > b) { return 1; }
-    return 0;
+	if (a < b) { return -1; }
+	if (a > b) { return 1; }
+	return 0;
 }
 
 i32 main() {
-    i64 ok = 0;       // contador de casos correctos
-    i64 total = 0;    // contador de casos probados
+	i64 ok    = 0;    // contador de casos correctos
+	i64 total = 0; // contador de casos probados
 
-    // --- Tabla exhaustiva de strcmp (signo esperado) ---
+	// --- Tabla exhaustiva de strcmp (signo esperado) ---
 
-    // "" vs "" -> 0
-    total = total + 1; if (sign_of("", "") == 0) { ok = ok + 1; }
-    // "a" vs "a" -> 0
-    total = total + 1; if (sign_of("a", "a") == 0) { ok = ok + 1; }
-    // "a" vs "b" -> -1
-    total = total + 1; if (sign_of("a", "b") == -1) { ok = ok + 1; }
-    // "b" vs "a" -> 1
-    total = total + 1; if (sign_of("b", "a") == 1) { ok = ok + 1; }
-    // "abc" vs "abc" -> 0
-    total = total + 1; if (sign_of("abc", "abc") == 0) { ok = ok + 1; }
-    // "abc" vs "abd" -> -1 (difiere en pos 2)
-    total = total + 1; if (sign_of("abc", "abd") == -1) { ok = ok + 1; }
-    // "abd" vs "abc" -> 1
-    total = total + 1; if (sign_of("abd", "abc") == 1) { ok = ok + 1; }
-    // "abc" vs "ab" (prefijo) -> 1
-    total = total + 1; if (sign_of("abc", "ab") == 1) { ok = ok + 1; }
-    // "ab" vs "abc" -> -1
-    total = total + 1; if (sign_of("ab", "abc") == -1) { ok = ok + 1; }
+	// "" vs "" -> 0
+	total = total + 1;
+	if (sign_of("", "") == 0) { ok = ok + 1; }
+	// "a" vs "a" -> 0
+	total = total + 1;
+	if (sign_of("a", "a") == 0) { ok = ok + 1; }
+	// "a" vs "b" -> -1
+	total = total + 1;
+	if (sign_of("a", "b") == -1) { ok = ok + 1; }
+	// "b" vs "a" -> 1
+	total = total + 1;
+	if (sign_of("b", "a") == 1) { ok = ok + 1; }
+	// "abc" vs "abc" -> 0
+	total = total + 1;
+	if (sign_of("abc", "abc") == 0) { ok = ok + 1; }
+	// "abc" vs "abd" -> -1 (difiere en pos 2)
+	total = total + 1;
+	if (sign_of("abc", "abd") == -1) { ok = ok + 1; }
+	// "abd" vs "abc" -> 1
+	total = total + 1;
+	if (sign_of("abd", "abc") == 1) { ok = ok + 1; }
+	// "abc" vs "ab" (prefijo) -> 1
+	total = total + 1;
+	if (sign_of("abc", "ab") == 1) { ok = ok + 1; }
+	// "ab" vs "abc" -> -1
+	total = total + 1;
+	if (sign_of("ab", "abc") == -1) { ok = ok + 1; }
 
-    // Difiere en posicion 0, longitud 16.
-    // "Annnnnnnnnnnnnnn" (16) vs "Bnnnnnnnnnnnnnnn" (16) -> -1
-    total = total + 1;
-    if (sign_of("Axxxxxxxxxxxxxxx", "Bxxxxxxxxxxxxxxx") == -1) { ok = ok + 1; }
+	// Difiere en posicion 0, longitud 16.
+	// "Annnnnnnnnnnnnnn" (16) vs "Bnnnnnnnnnnnnnnn" (16) -> -1
+	total = total + 1;
+	if (sign_of("Axxxxxxxxxxxxxxx", "Bxxxxxxxxxxxxxxx") == -1) { ok = ok + 1; }
 
-    // Difiere en posicion 15 (ultimo byte del primer chunk de 16), longitud 16.
-    // 15 iguales + ultimo distinto.
-    total = total + 1;
-    if (sign_of("xxxxxxxxxxxxxxxA", "xxxxxxxxxxxxxxxB") == -1) { ok = ok + 1; }
-    total = total + 1;
-    if (sign_of("xxxxxxxxxxxxxxxB", "xxxxxxxxxxxxxxxA") == 1) { ok = ok + 1; }
+	// Difiere en posicion 15 (ultimo byte del primer chunk de 16), longitud 16.
+	// 15 iguales + ultimo distinto.
+	total = total + 1;
+	if (sign_of("xxxxxxxxxxxxxxxA", "xxxxxxxxxxxxxxxB") == -1) { ok = ok + 1; }
+	total = total + 1;
+	if (sign_of("xxxxxxxxxxxxxxxB", "xxxxxxxxxxxxxxxA") == 1) { ok = ok + 1; }
 
-    // Difiere en posicion 16 (primer byte del segundo chunk), longitud 17.
-    // 16 iguales + byte 16 distinto.
-    total = total + 1;
-    if (sign_of("xxxxxxxxxxxxxxxxA", "xxxxxxxxxxxxxxxxB") == -1) { ok = ok + 1; }
-    total = total + 1;
-    if (sign_of("xxxxxxxxxxxxxxxxB", "xxxxxxxxxxxxxxxxA") == 1) { ok = ok + 1; }
+	// Difiere en posicion 16 (primer byte del segundo chunk), longitud 17.
+	// 16 iguales + byte 16 distinto.
+	total = total + 1;
+	if (sign_of("xxxxxxxxxxxxxxxxA", "xxxxxxxxxxxxxxxxB") == -1) { ok = ok + 1; }
+	total = total + 1;
+	if (sign_of("xxxxxxxxxxxxxxxxB", "xxxxxxxxxxxxxxxxA") == 1) { ok = ok + 1; }
 
-    // Longitudes 15 iguales -> 0.
-    total = total + 1;
-    if (sign_of("yyyyyyyyyyyyyyy", "yyyyyyyyyyyyyyy") == 0) { ok = ok + 1; }
-    // Longitudes 16 iguales -> 0.
-    total = total + 1;
-    if (sign_of("zzzzzzzzzzzzzzzz", "zzzzzzzzzzzzzzzz") == 0) { ok = ok + 1; }
-    // Longitudes 17 iguales -> 0.
-    total = total + 1;
-    if (sign_of("zzzzzzzzzzzzzzzzz", "zzzzzzzzzzzzzzzzz") == 0) { ok = ok + 1; }
+	// Longitudes 15 iguales -> 0.
+	total = total + 1;
+	if (sign_of("yyyyyyyyyyyyyyy", "yyyyyyyyyyyyyyy") == 0) { ok = ok + 1; }
+	// Longitudes 16 iguales -> 0.
+	total = total + 1;
+	if (sign_of("zzzzzzzzzzzzzzzz", "zzzzzzzzzzzzzzzz") == 0) { ok = ok + 1; }
+	// Longitudes 17 iguales -> 0.
+	total = total + 1;
+	if (sign_of("zzzzzzzzzzzzzzzzz", "zzzzzzzzzzzzzzzzz") == 0) { ok = ok + 1; }
 
-    // Difiere en posicion 31 (ultimo byte del segundo chunk de 16), longitud 32.
-    // 31 iguales + ultimo distinto.
-    total = total + 1;
-    if (sign_of("qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqA",
-                "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqB") == -1) { ok = ok + 1; }
+	// Difiere en posicion 31 (ultimo byte del segundo chunk de 16), longitud 32.
+	// 31 iguales + ultimo distinto.
+	total = total + 1;
+	if (sign_of("qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqA",
+			"qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqB") == -1) { ok = ok + 1; }
 
-    // Longitud 31 iguales -> 0 (un chunk de 16 + cola de 15).
-    total = total + 1;
-    if (sign_of("rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
-                "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr") == 0) { ok = ok + 1; }
-    // Longitud 32 iguales -> 0 (dos chunks de 16 exactos).
-    total = total + 1;
-    if (sign_of("ssssssssssssssssssssssssssssssss",
-                "ssssssssssssssssssssssssssssssss") == 0) { ok = ok + 1; }
-    // Longitud 33 iguales -> 0 (dos chunks + cola de 1).
-    total = total + 1;
-    if (sign_of("ttttttttttttttttttttttttttttttttt",
-                "ttttttttttttttttttttttttttttttttt") == 0) { ok = ok + 1; }
+	// Longitud 31 iguales -> 0 (un chunk de 16 + cola de 15).
+	total = total + 1;
+	if (sign_of("rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+			"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr") == 0) { ok = ok + 1; }
+	// Longitud 32 iguales -> 0 (dos chunks de 16 exactos).
+	total = total + 1;
+	if (sign_of("ssssssssssssssssssssssssssssssss",
+			"ssssssssssssssssssssssssssssssss") == 0) { ok = ok + 1; }
+	// Longitud 33 iguales -> 0 (dos chunks + cola de 1).
+	total = total + 1;
+	if (sign_of("ttttttttttttttttttttttttttttttttt",
+			"ttttttttttttttttttttttttttttttttt") == 0) { ok = ok + 1; }
 
-    // Prefijo largo: 20 iguales + uno mas largo (difieren por longitud).
-    total = total + 1;
-    if (sign_of("uuuuuuuuuuuuuuuuuuuu",
-                "uuuuuuuuuuuuuuuuuuuuu") == -1) { ok = ok + 1; }
-    total = total + 1;
-    if (sign_of("uuuuuuuuuuuuuuuuuuuuu",
-                "uuuuuuuuuuuuuuuuuuuu") == 1) { ok = ok + 1; }
+	// Prefijo largo: 20 iguales + uno mas largo (difieren por longitud).
+	total = total + 1;
+	if (sign_of("uuuuuuuuuuuuuuuuuuuu",
+			"uuuuuuuuuuuuuuuuuuuuu") == -1) { ok = ok + 1; }
+	total = total + 1;
+	if (sign_of("uuuuuuuuuuuuuuuuuuuuu",
+			"uuuuuuuuuuuuuuuuuuuu") == 1) { ok = ok + 1; }
 
-    // Difiere en byte 20 (dentro del segundo chunk), ambos len 25.
-    total = total + 1;
-    if (sign_of("wwwwwwwwwwwwwwwwwwwwAwwww",
-                "wwwwwwwwwwwwwwwwwwwwBwwww") == -1) { ok = ok + 1; }
+	// Difiere en byte 20 (dentro del segundo chunk), ambos len 25.
+	total = total + 1;
+	if (sign_of("wwwwwwwwwwwwwwwwwwwwAwwww",
+			"wwwwwwwwwwwwwwwwwwwwBwwww") == -1) { ok = ok + 1; }
 
-    i32 cmp_ok = (i32)(ok == total);
+	i32 cmp_ok = (i32)(ok == total);
 
-    // --- strlen_cstr() de la lib sobre char* de longitudes 0/5/16/17/33 ---
-    i64 lok = 0;
-    i64 ltotal = 0;
+	// --- strlen_cstr() de la lib sobre char* de longitudes 0/5/16/17/33 ---
+	i64 lok    = 0;
+	i64 ltotal = 0;
 
-    char* s0  = (char*) section_start(".s_len0");
-    char* s5  = (char*) section_start(".s_len5");
-    char* s16 = (char*) section_start(".s_len16");
-    char* s17 = (char*) section_start(".s_len17");
-    char* s33 = (char*) section_start(".s_len33");
+	char* s0  = (char *) section_start(".s_len0");
+	char* s5  = (char *) section_start(".s_len5");
+	char* s16 = (char *) section_start(".s_len16");
+	char* s17 = (char *) section_start(".s_len17");
+	char* s33 = (char *) section_start(".s_len33");
 
-    ltotal = ltotal + 1; if (simd_string.strlen_cstr(s0)  == 0)  { lok = lok + 1; }
-    ltotal = ltotal + 1; if (simd_string.strlen_cstr(s5)  == 5)  { lok = lok + 1; }
-    ltotal = ltotal + 1; if (simd_string.strlen_cstr(s16) == 16) { lok = lok + 1; }
-    ltotal = ltotal + 1; if (simd_string.strlen_cstr(s17) == 17) { lok = lok + 1; }
-    ltotal = ltotal + 1; if (simd_string.strlen_cstr(s33) == 33) { lok = lok + 1; }
+	ltotal = ltotal + 1;
+	if (simd_string.strlen_cstr(s0) == 0) { lok = lok + 1; }
+	ltotal = ltotal + 1;
+	if (simd_string.strlen_cstr(s5) == 5) { lok = lok + 1; }
+	ltotal = ltotal + 1;
+	if (simd_string.strlen_cstr(s16) == 16) { lok = lok + 1; }
+	ltotal = ltotal + 1;
+	if (simd_string.strlen_cstr(s17) == 17) { lok = lok + 1; }
+	ltotal = ltotal + 1;
+	if (simd_string.strlen_cstr(s33) == 33) { lok = lok + 1; }
 
-    i32 len_ok = (i32)(lok == ltotal);
+	i32 len_ok = (i32)(lok == ltotal);
 
-    if (cmp_ok == 1 && len_ok == 1) {
-        return 42;
-    }
-    return 1;
+	if (cmp_ok == 1 && len_ok == 1) {
+		return 42;
+	}
+	return 1;
 }

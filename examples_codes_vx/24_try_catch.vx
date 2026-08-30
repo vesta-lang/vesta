@@ -16,17 +16,17 @@ namespace ejemplos.try_catch;
 // Resultado esperado: 1007 (1000 + 7 del valor capturado).
 
 class MyExc {
-    public i32 valor;
-    public MyExc(i32 v) { this.valor = v; }
+	public i32 valor;
+	public MyExc(i32 v) { this.valor = v; }
 }
 
 i32 main() {
-    i32 r = 0;
-    try {
-        throw new MyExc(7);
-        r = 999;     // dead code: no se ejecuta tras throw
-    } catch (MyExc e) {
-        r = 1000 + e.valor;
-    }
-    return r;        // 1007
+	i32 r = 0;
+	try {
+		throw new MyExc(7);
+		r = 999; // dead code: no se ejecuta tras throw
+	} catch (MyExc e) {
+		r = 1000 + e.valor;
+	}
+	return r; // 1007
 }

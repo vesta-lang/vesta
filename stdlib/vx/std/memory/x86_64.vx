@@ -61,7 +61,7 @@ public const u64 BIT_ERMS    = 1 << 8;
  * Windows lo que desaprovecha en Linux.  Por eso el presupuesto es del
  * OBJETIVO y no del gusto de quien escribe. */
 @Target("!os:windows")
-public enum Budget : i64 {
+	public enum Budget : i64 {
 	small  = 8,
 	medium = 10,
 	big    = 14,
@@ -69,7 +69,7 @@ public enum Budget : i64 {
 
 /// @copydoc Budget
 @Target("os:windows")
-public enum Budget : i64 {
+	public enum Budget : i64 {
 	small  = 6,
 	medium = 6,
 	big    = 8,
@@ -136,7 +136,7 @@ comptime string gen_solapada(string mn, i64 ancho, i64 bytes, i64 regs) {
 	// accesos como cualquier otro bloque: cargas primero, y en tandas si no
 	// caben en el presupuesto.
 	return gen_bloque(mn, mn, ancho, bytes, "d", "s", regs) +
-	gen_bloque(mn, mn, ancho, bytes, "fd", "fs", regs);
+		gen_bloque(mn, mn, ancho, bytes, "fd", "fs", regs);
 }
 
 /**
@@ -174,8 +174,8 @@ comptime string gen_solapada(string mn, i64 ancho, i64 bytes, i64 regs) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_small_sse2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_small_sse2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
 	asm (
@@ -188,7 +188,7 @@ public void memcpy_small_sse2(u8 *dst, u8 *src, usize n) {
 		xmm v2,
 		xmm v3,
 	) {
-        inject(gen_solapada("movdqu", 16, 64, 4))
+		inject(gen_solapada("movdqu", 16, 64, 4))
 	}
 }
 
@@ -210,8 +210,8 @@ public void memcpy_small_sse2(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_small_avx2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_small_avx2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
 	asm (
@@ -222,7 +222,7 @@ public void memcpy_small_avx2(u8 *dst, u8 *src, usize n) {
 		ymm v0,
 		ymm v1,
 	) {
-        inject(gen_solapada("vmovdqu", 32, 64, 2))
+		inject(gen_solapada("vmovdqu", 32, 64, 2))
 	}
 }
 
@@ -244,18 +244,12 @@ public void memcpy_small_avx2(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_small_avx512(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_small_avx512(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
-	asm (
-		reg d  = dst,
-		reg s  = src,
-		reg fd = fin_d,
-		reg fs = fin_s,
-		zmm v0,
-	) {
-        inject(gen_solapada("vmovdqu64", 64, 64, 1))
+	asm (reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s, zmm v0,) {
+		inject(gen_solapada("vmovdqu64", 64, 64, 1))
 	}
 }
 
@@ -289,8 +283,8 @@ public void memcpy_small_avx512(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, multiplo de 16, entre 80 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_small_sse2_aligned(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_small_sse2_aligned(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
 	asm (
@@ -303,7 +297,7 @@ public void memcpy_small_sse2_aligned(u8 *dst, u8 *src, usize n) {
 		xmm v2,
 		xmm v3,
 	) {
-        inject(gen_solapada("movdqa", 16, 64, 4))
+		inject(gen_solapada("movdqa", 16, 64, 4))
 	}
 }
 
@@ -314,8 +308,8 @@ public void memcpy_small_sse2_aligned(u8 *dst, u8 *src, usize n) {
  * @copydetails memcpy_small_sse2_aligned
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_small_avx2_aligned(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_small_avx2_aligned(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
 	asm (
@@ -326,7 +320,7 @@ public void memcpy_small_avx2_aligned(u8 *dst, u8 *src, usize n) {
 		ymm v0,
 		ymm v1,
 	) {
-        inject(gen_solapada("vmovdqa", 32, 64, 2))
+		inject(gen_solapada("vmovdqa", 32, 64, 2))
 	}
 }
 
@@ -337,18 +331,12 @@ public void memcpy_small_avx2_aligned(u8 *dst, u8 *src, usize n) {
  * @copydetails memcpy_small_sse2_aligned
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_small_avx512_aligned(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_small_avx512_aligned(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
-	asm (
-		reg d  = dst,
-		reg s  = src,
-		reg fd = fin_d,
-		reg fs = fin_s,
-		zmm v0,
-	) {
-        inject(gen_solapada("vmovdqa64", 64, 64, 1))
+	asm (reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s, zmm v0,) {
+		inject(gen_solapada("vmovdqa64", 64, 64, 1))
 	}
 }
 
@@ -555,7 +543,7 @@ comptime string gen_relleno(string mne, i64 ancho, i64 bytes, string d) {
  */
 comptime string gen_relleno_solapado(string mne, i64 ancho, i64 bytes) {
 	return gen_relleno(mne, ancho, bytes, "d") +
-	gen_relleno(mne, ancho, bytes, "fd");
+		gen_relleno(mne, ancho, bytes, "fd");
 }
 
 /**
@@ -634,8 +622,8 @@ comptime string gen_relleno_grande(string mne, string mne_cola, i64 ancho,
  * @param n Numero de bytes, 128 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_medium_sse2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_medium_sse2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 128;
 	u8* fin_s = src + n - 128;
 	asm (
@@ -652,7 +640,7 @@ public void memcpy_medium_sse2(u8 *dst, u8 *src, usize n) {
 		xmm v6,
 		xmm v7,
 	) {
-        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 8, 0, ""))
+		inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 8, 0, ""))
 	}
 }
 
@@ -685,8 +673,8 @@ public void memcpy_medium_sse2(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_medium_avx2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_medium_avx2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 256;
 	u8* fin_s = src + n - 256;
 	asm (
@@ -703,7 +691,7 @@ public void memcpy_medium_avx2(u8 *dst, u8 *src, usize n) {
 		ymm v6,
 		ymm v7,
 	) {
-        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 8, 0, "vzeroupper"))
+		inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 8, 0, "vzeroupper"))
 	}
 }
 
@@ -735,8 +723,8 @@ public void memcpy_medium_avx2(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_medium_avx512(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_medium_avx512(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 512;
 	u8* fin_s = src + n - 512;
 	asm (
@@ -753,7 +741,7 @@ public void memcpy_medium_avx512(u8 *dst, u8 *src, usize n) {
 		zmm v6,
 		zmm v7,
 	) {
-        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 8, 0, "vzeroupper"))
+		inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 8, 0, "vzeroupper"))
 	}
 }
 
@@ -775,10 +763,10 @@ public void memcpy_medium_avx512(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_erms(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_erms(u8 *dst, u8 *src, usize n) {
 	asm (rdi d = dst, rsi s = src, rcx c = n,) {
-        rep movsb
+		rep movsb
 	}
 }
 
@@ -810,19 +798,14 @@ public void memcpy_erms(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_small_sse2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_small_sse2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm v0,
-	) {
-        movq v0, p
-        punpcklqdq v0, v0
-        inject(gen_relleno_solapado("movdqu", 16, 64))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+		movq v0, p
+		punpcklqdq v0, v0
+		inject(gen_relleno_solapado("movdqu", 16, 64))
 	}
 }
 
@@ -839,24 +822,16 @@ public void memset_small_sse2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_small_avx2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_small_avx2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm sem,
-		ymm v0,
-	) {
-        // La semilla va en un registro de 128 bits porque `vmovq` escribe la
-        // mitad baja de un `xmm`: no admite un `ymm` como destino.  De ahi
-        // `vpbroadcastq` la difunde a los cuatro cuartos del de 256.
-        vmovq sem, p
-        vpbroadcastq v0, sem
-        inject(gen_relleno_solapado("vmovdqu", 32, 64))
-        vzeroupper
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+
+		vmovq sem, p
+		vpbroadcastq v0, sem
+		inject(gen_relleno_solapado("vmovdqu", 32, 64))
+		vzeroupper
 	}
 }
 
@@ -870,19 +845,14 @@ public void memset_small_avx2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_small_avx512(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_small_avx512(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		zmm v0,
-	) {
-        vpbroadcastq v0, p
-        inject(gen_relleno_solapado("vmovdqu64", 64, 64))
-        vzeroupper
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+		vpbroadcastq v0, p
+		inject(gen_relleno_solapado("vmovdqu64", 64, 64))
+		vzeroupper
 	}
 }
 
@@ -898,19 +868,14 @@ public void memset_small_avx512(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 128 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_medium_sse2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_medium_sse2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 128;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm v0,
-	) {
-        movq v0, p
-        punpcklqdq v0, v0
-        inject(gen_relleno_grande("movdqu", "movdqu", 16, 8, ""))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+		movq v0, p
+		punpcklqdq v0, v0
+		inject(gen_relleno_grande("movdqu", "movdqu", 16, 8, ""))
 	}
 }
 
@@ -924,21 +889,15 @@ public void memset_medium_sse2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_medium_avx2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_medium_avx2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm sem,
-		ymm v0,
-	) {
-        // Igual que en @ref memset_small_avx2: `vmovq` solo escribe un `xmm`.
-        vmovq sem, p
-        vpbroadcastq v0, sem
-        inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 8, "vzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+
+		vmovq sem, p
+		vpbroadcastq v0, sem
+		inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 8, "vzeroupper"))
 	}
 }
 
@@ -952,18 +911,13 @@ public void memset_medium_avx2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_medium_avx512(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_medium_avx512(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		zmm v0,
-	) {
-        vpbroadcastq v0, p
-        inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 8, "vzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+		vpbroadcastq v0, p
+		inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 8, "vzeroupper"))
 	}
 }
 
@@ -986,19 +940,14 @@ public void memset_medium_avx512(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_big_sse2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_big_sse2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm v0,
-	) {
-        movq v0, p
-        punpcklqdq v0, v0
-        inject(gen_relleno_grande("movdqu", "movdqu", 16, 16, ""))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+		movq v0, p
+		punpcklqdq v0, v0
+		inject(gen_relleno_grande("movdqu", "movdqu", 16, 16, ""))
 	}
 }
 
@@ -1013,20 +962,14 @@ public void memset_big_sse2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_big_avx2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_big_avx2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm sem,
-		ymm v0,
-	) {
-        vmovq sem, p
-        vpbroadcastq v0, sem
-        inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 16, "vzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+		vmovq sem, p
+		vpbroadcastq v0, sem
+		inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 16, "vzeroupper"))
 	}
 }
 
@@ -1041,18 +984,13 @@ public void memset_big_avx2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 1024 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_big_avx512(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_big_avx512(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 1024;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		zmm v0,
-	) {
-        vpbroadcastq v0, p
-        inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 16, "vzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+		vpbroadcastq v0, p
+		inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 16, "vzeroupper"))
 	}
 }
 
@@ -1079,21 +1017,15 @@ public void memset_big_avx512(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_streaming_avx2(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_streaming_avx2(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm sem,
-		ymm v0,
-	) {
-        vmovq sem, p
-        vpbroadcastq v0, sem
-        inject(gen_relleno_grande("vmovntdq", "vmovdqu", 32, 16,
-                                  "sfence\nvzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+		vmovq sem, p
+		vpbroadcastq v0, sem
+		inject(gen_relleno_grande("vmovntdq", "vmovdqu", 32, 16,
+		                          "sfence\nvzeroupper"))
 	}
 }
 
@@ -1108,19 +1040,14 @@ public void memset_streaming_avx2(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 1024 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_streaming_avx512(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_streaming_avx512(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 1024;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		zmm v0,
-	) {
-        vpbroadcastq v0, p
-        inject(gen_relleno_grande("vmovntdq", "vmovdqu64", 64, 16,
-                                  "sfence\nvzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+		vpbroadcastq v0, p
+		inject(gen_relleno_grande("vmovntdq", "vmovdqu64", 64, 16,
+		                          "sfence\nvzeroupper"))
 	}
 }
 
@@ -1146,19 +1073,14 @@ public void memset_streaming_avx512(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_small_sse2_aligned(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_small_sse2_aligned(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm v0,
-	) {
-        movq v0, p
-        punpcklqdq v0, v0
-        inject(gen_relleno_solapado("movdqa", 16, 64))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+		movq v0, p
+		punpcklqdq v0, v0
+		inject(gen_relleno_solapado("movdqa", 16, 64))
 	}
 }
 
@@ -1169,21 +1091,15 @@ public void memset_small_sse2_aligned(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_small_avx2_aligned(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_small_avx2_aligned(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm sem,
-		ymm v0,
-	) {
-        vmovq sem, p
-        vpbroadcastq v0, sem
-        inject(gen_relleno_solapado("vmovdqa", 32, 64))
-        vzeroupper
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+		vmovq sem, p
+		vpbroadcastq v0, sem
+		inject(gen_relleno_solapado("vmovdqa", 32, 64))
+		vzeroupper
 	}
 }
 
@@ -1194,19 +1110,14 @@ public void memset_small_avx2_aligned(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, entre 65 y 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_small_avx512_aligned(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_small_avx512_aligned(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		zmm v0,
-	) {
-        vpbroadcastq v0, p
-        inject(gen_relleno_solapado("vmovdqa64", 64, 64))
-        vzeroupper
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+		vpbroadcastq v0, p
+		inject(gen_relleno_solapado("vmovdqa64", 64, 64))
+		vzeroupper
 	}
 }
 
@@ -1222,19 +1133,14 @@ public void memset_small_avx512_aligned(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 128 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_medium_sse2_aligned(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_medium_sse2_aligned(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 128;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm v0,
-	) {
-        movq v0, p
-        punpcklqdq v0, v0
-        inject(gen_relleno_grande("movdqa", "movdqu", 16, 8, ""))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+		movq v0, p
+		punpcklqdq v0, v0
+		inject(gen_relleno_grande("movdqa", "movdqu", 16, 8, ""))
 	}
 }
 
@@ -1246,20 +1152,14 @@ public void memset_medium_sse2_aligned(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_medium_avx2_aligned(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_medium_avx2_aligned(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		xmm sem,
-		ymm v0,
-	) {
-        vmovq sem, p
-        vpbroadcastq v0, sem
-        inject(gen_relleno_grande("vmovdqa", "vmovdqu", 32, 8, "vzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+		vmovq sem, p
+		vpbroadcastq v0, sem
+		inject(gen_relleno_grande("vmovdqa", "vmovdqu", 32, 8, "vzeroupper"))
 	}
 }
 
@@ -1271,27 +1171,22 @@ public void memset_medium_avx2_aligned(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_medium_avx512_aligned(u8 *dst, u8 val, usize n) {
+	@NoIdiom
+	public void memset_medium_avx512_aligned(u8 *dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (
-		reg d  = dst,
-		reg fd = fin_d,
-		reg p  = pat,
-		zmm v0,
-	) {
-        vpbroadcastq v0, p
-        inject(gen_relleno_grande("vmovdqa64", "vmovdqu64", 64, 8, "vzeroupper"))
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+		vpbroadcastq v0, p
+		inject(gen_relleno_grande("vmovdqa64", "vmovdqu64", 64, 8, "vzeroupper"))
 	}
 }
 
 @Target("arch:x86_64")
-@NoIdiom
-public void memset_erms(u8 *dst, u8 val, usize n) {
-	u64      v = (u64) val;
+	@NoIdiom
+	public void memset_erms(u8 *dst, u8 val, usize n) {
+	u64 v = (u64) val;
 	asm (rdi d = dst, rax a = v, rcx c = n,) {
-        rep stosb
+		rep stosb
 	}
 }
 
@@ -1334,8 +1229,8 @@ public void memset_erms(u8 *dst, u8 val, usize n) {
  * @param n Numero de bytes, multiplo de 16 y al menos 128.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_medium_sse2_aligned(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_medium_sse2_aligned(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 128;
 	u8* fin_s = src + n - 128;
 	asm (
@@ -1352,7 +1247,7 @@ public void memcpy_medium_sse2_aligned(u8 *dst, u8 *src, usize n) {
 		xmm v6,
 		xmm v7,
 	) {
-        inject(gen_grande("movdqa", "movdqa", "movdqa", 16, 8, 0, ""))
+		inject(gen_grande("movdqa", "movdqa", "movdqa", 16, 8, 0, ""))
 	}
 }
 
@@ -1377,8 +1272,8 @@ public void memcpy_medium_sse2_aligned(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, multiplo de 32 y al menos 256.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_medium_avx2_aligned(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_medium_avx2_aligned(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 256;
 	u8* fin_s = src + n - 256;
 	asm (
@@ -1395,7 +1290,7 @@ public void memcpy_medium_avx2_aligned(u8 *dst, u8 *src, usize n) {
 		ymm v6,
 		ymm v7,
 	) {
-        inject(gen_grande("vmovdqa", "vmovdqa", "vmovdqa", 32, 8, 0, "vzeroupper"))
+		inject(gen_grande("vmovdqa", "vmovdqa", "vmovdqa", 32, 8, 0, "vzeroupper"))
 	}
 }
 
@@ -1420,8 +1315,8 @@ public void memcpy_medium_avx2_aligned(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, multiplo de 64 y al menos 512.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_medium_avx512_aligned(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_medium_avx512_aligned(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 512;
 	u8* fin_s = src + n - 512;
 	asm (
@@ -1438,7 +1333,7 @@ public void memcpy_medium_avx512_aligned(u8 *dst, u8 *src, usize n) {
 		zmm v6,
 		zmm v7,
 	) {
-        inject(gen_grande("vmovdqa64", "vmovdqa64", "vmovdqa64", 64, 8, 0, "vzeroupper"))
+		inject(gen_grande("vmovdqa64", "vmovdqa64", "vmovdqa64", 64, 8, 0, "vzeroupper"))
 	}
 }
 
@@ -1463,8 +1358,8 @@ public void memcpy_medium_avx512_aligned(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, 256 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_big_sse2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_big_sse2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 256;
 	u8* fin_s = src + n - 256;
 	asm (
@@ -1472,7 +1367,7 @@ public void memcpy_big_sse2(u8 *dst, u8 *src, usize n) {
 		xmm v0, xmm v1, xmm v2, xmm v3, xmm v4, xmm v5, xmm v6, xmm v7,
 		xmm v8, xmm v9, xmm v10, xmm v11, xmm v12, xmm v13, xmm v14, xmm v15,
 	) {
-        inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 16, 0, ""))
+		inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 16, 0, ""))
 	}
 }
 
@@ -1487,8 +1382,8 @@ public void memcpy_big_sse2(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_big_avx2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_big_avx2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 512;
 	u8* fin_s = src + n - 512;
 	asm (
@@ -1496,8 +1391,8 @@ public void memcpy_big_avx2(u8 *dst, u8 *src, usize n) {
 		ymm v0, ymm v1, ymm v2, ymm v3, ymm v4, ymm v5, ymm v6, ymm v7,
 		ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
 	) {
-        inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 16, 0,
-                          "vzeroupper"))
+		inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 16, 0,
+		                  "vzeroupper"))
 	}
 }
 
@@ -1512,8 +1407,8 @@ public void memcpy_big_avx2(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, 1024 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_big_avx512(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_big_avx512(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 1024;
 	u8* fin_s = src + n - 1024;
 	asm (
@@ -1521,7 +1416,7 @@ public void memcpy_big_avx512(u8 *dst, u8 *src, usize n) {
 		zmm v0, zmm v1, zmm v2, zmm v3, zmm v4, zmm v5, zmm v6, zmm v7,
 		zmm v8, zmm v9, zmm v10, zmm v11, zmm v12, zmm v13, zmm v14, zmm v15,
 	) {
-        inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 16, 0, "vzeroupper"))
+		inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 16, 0, "vzeroupper"))
 	}
 }
 
@@ -1551,8 +1446,8 @@ public void memcpy_big_avx512(u8 *dst, u8 *src, usize n) {
  * @param n Numero de bytes, 512 o mas.
  */
 @Target("arch:x86_64")
-@NoIdiom
-public void memcpy_streaming_avx2(u8 *dst, u8 *src, usize n) {
+	@NoIdiom
+	public void memcpy_streaming_avx2(u8 *dst, u8 *src, usize n) {
 	u8* fin_d = dst + n - 512;
 	u8* fin_s = src + n - 512;
 	asm (
@@ -1560,7 +1455,7 @@ public void memcpy_streaming_avx2(u8 *dst, u8 *src, usize n) {
 		ymm v0, ymm v1, ymm v2, ymm v3, ymm v4, ymm v5, ymm v6, ymm v7,
 		ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
 	) {
-        inject(gen_grande("vmovdqu", "vmovntdq", "vmovdqu", 32, 16, 1024,
-                          "sfence\nvzeroupper"))
+		inject(gen_grande("vmovdqu", "vmovntdq", "vmovdqu", 32, 16, 1024,
+		                  "sfence\nvzeroupper"))
 	}
 }

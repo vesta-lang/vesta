@@ -10,23 +10,23 @@ namespace ejemplos.unique_reassign;
 class Counter { public static i64 liberados; }
 
 void cerrar(i64 recurso) {
-    Counter.liberados = Counter.liberados + 1;
+	Counter.liberados = Counter.liberados + 1;
 }
 
 class Conexion {
-    // El CAMPO dice quien libera: su tipo esta fijado en la declaracion del
-    // contenedor, asi que no puede adoptarlo del inicializador.
-    unique<i64, cerrar> handle;
+	// El CAMPO dice quien libera: su tipo esta fijado en la declaracion del
+	// contenedor, asi que no puede adoptarlo del inicializador.
+	unique<i64, cerrar> handle;
 }
 
 void trabajar() {
-    Conexion c = new Conexion();
-    c.handle = unique_with(10, cerrar);   // primer recurso
-    c.handle = unique_with(20, cerrar);   // reasigna: libera el primero
-}   // al salir de scope: ~Conexion() libera el segundo
+	Conexion c = new Conexion();
+	c.handle = unique_with(10, cerrar); // primer recurso
+	c.handle = unique_with(20, cerrar); // reasigna: libera el primero
+} // al salir de scope: ~Conexion() libera el segundo
 
 i32 main() {
-    Counter.liberados = 0;
-    trabajar();                 // 1 reasignacion + 1 destruccion = 2 cierres
-    return (i32)(40 + Counter.liberados);   // 40 + 2 = 42
+	Counter.liberados = 0;
+	trabajar(); // 1 reasignacion + 1 destruccion = 2 cierres
+	return (i32)(40 + Counter.liberados); // 40 + 2 = 42
 }

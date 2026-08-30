@@ -17,51 +17,52 @@
 //   tag==1 -> el dato esta en una ranura corta:   base + 0x10
 //   tag==2 -> el dato esta tras una cabecera var:  base + hdr_len
 //   otro   -> el dato esta al final:               base + 0x30
-@overlay struct MultiRec {
-    u8  tag     @0x00;   // 1, 2, o cualquier otro
-    u32 hdr_len @0x04;   // longitud de cabecera (solo relevante en tag==2)
-    u32 value @offset {
-        // Logica con if/else y multiples return (no solo un ternario).
-        if (tag == 1) {
-            return base + 0x10;          // ranura corta
-        }
-        if (tag == 2) {
-            u64 h = base + hdr_len;      // intermedio nombrado
-            return h;                    // tras la cabecera variable
-        }
-        return base + 0x30;              // por defecto: al final
-    };
+@overlay
+struct MultiRec {
+	u8  tag     @0x00;      // 1, 2, o cualquier otro
+	u32 hdr_len @0x04; // longitud de cabecera (solo relevante en tag==2)
+	u32 value @offset {
+		// Logica con if/else y multiples return (no solo un ternario).
+		if (tag == 1) {
+			return base + 0x10; // ranura corta
+		}
+		if (tag == 2) {
+			u64 h = base + hdr_len; // intermedio nombrado
+			return h;               // tras la cabecera variable
+		}
+		return base + 0x30; // por defecto: al final
+	};
 }
 
 // Crea un registro de la variante `tag` y escribe/relee `value` a traves del
 // resolver.  Devuelve el valor releido para verificar.
 u32 build(u8* buf, u8 tag, u32 hdr_len, u32 val) {
-    MultiRec r = MultiRec(buf);
-    r.tag     = tag;
-    r.hdr_len = hdr_len;
-    r.value   = val;      // STORE en la direccion que decide el resolver
-    return r.value;       // relee por el mismo camino
+	MultiRec r = MultiRec(buf);
+	r.tag     = tag;
+	r.hdr_len = hdr_len;
+	r.value   = val;  // STORE en la direccion que decide el resolver
+	return r.value; // relee por el mismo camino
 }
 
 i32 main() {
-    u8* a = (u8*) malloc(128);
-    u8* b = (u8*) malloc(128);
-    u8* c = (u8*) malloc(128);
+	u8* a = (u8 *) malloc(128);
+	u8* b = (u8 *) malloc(128);
+	u8* c = (u8 *) malloc(128);
 
-    u32 va = build(a, (u8)1, (u32)0,  (u32)111);   // tag 1 -> a + 0x10
-    u32 vb = build(b, (u8)2, (u32)0x20, (u32)222);  // tag 2 -> b + 0x20 (hdr_len)
-    u32 vc = build(c, (u8)9, (u32)0,  (u32)333);   // otro  -> c + 0x30
-    println("va=${va} vb=${vb} vc=${vc}");          // 111 222 333
+	u32 va = build(a, (u8)1, (u32)0, (u32)111);    // tag 1 -> a + 0x10
+	u32 vb = build(b, (u8)2, (u32)0x20, (u32)222); // tag 2 -> b + 0x20 (hdr_len)
+	u32 vc = build(c, (u8)9, (u32)0, (u32)333);    // otro  -> c + 0x30
+	println("va=${va} vb=${vb} vc=${vc}");         // 111 222 333
 
-    // Cada valor aterrizo en la direccion CORRECTA (memoria cruda):
-    u32 ra = *(u32*)(a + 0x10);
-    u32 rb = *(u32*)(b + 0x20);
-    u32 rc = *(u32*)(c + 0x30);
-    println("crudo a@0x10=${ra} b@0x20=${rb} c@0x30=${rc}");  // 111 222 333
+	// Cada valor aterrizo en la direccion CORRECTA (memoria cruda):
+	u32 ra = *(u32 *)(a + 0x10);
+	u32 rb = *(u32 *)(b + 0x20);
+	u32 rc = *(u32 *)(c + 0x30);
+	println("crudo a@0x10=${ra} b@0x20=${rb} c@0x30=${rc}"); // 111 222 333
 
-    i32 result = (i32)va + (i32)vb + (i32)vc;   // 111 + 222 + 333 = 666
-    free(a);
-    free(b);
-    free(c);
-    return result;   // 666 (las 3 ramas del if/else resueltas)
+	i32 result = (i32)va + (i32)vb + (i32)vc; // 111 + 222 + 333 = 666
+	free(a);
+	free(b);
+	free(c);
+	return result; // 666 (las 3 ramas del if/else resueltas)
 }

@@ -2,16 +2,17 @@ import "shapes";
 
 // Clase, struct y enum namespaced consumidos por `geo.<Tipo>` cross-modulo.
 i64 main() {
-    geo.Box b = new geo.Box();
-    b.set(32);                              // clase namespaced: new + metodos
+	geo.Box b = new geo.Box();
+	b.set(32);                          // clase namespaced: new + metodos
 
-    geo.Shape sq = geo.Shape.Square(3);     // enum namespaced: constructor
-    i64 a = geo.area_hint(sq);              // 9
+	geo.Shape sq = geo.Shape.Square(3); // enum namespaced: constructor
+	i64 a = geo.area_hint(sq); // 9
 
-    geo.Vec2 v;                             // struct namespaced: campos
-    v.x = 1; v.y = 0;
+	geo.Vec2 v;                // struct namespaced: campos
+	v.x = 1;
+	v.y = 0;
 
-    i64 r = b.get() + a + v.x + v.y;        // 32 + 9 + 1 + 0 = 42
-    println("resultado = ${r}");
-    return r;
+	i64 r = b.get() + a + v.x + v.y; // 32 + 9 + 1 + 0 = 42
+	println("resultado = ${r}");
+	return r;
 }

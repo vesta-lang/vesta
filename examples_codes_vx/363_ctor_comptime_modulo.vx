@@ -13,10 +13,10 @@
 import t.uu only U;
 
 i32 main() {
-    // 2^128 - 1: los 128 bits a uno.  No cabe en ningun tipo nativo.
-    U m = U(340282366920938463463374607431768211455);
-    if (m.lo == 18446744073709551615 && m.hi == 18446744073709551615) {
-        return 42;
-    }
-    return 1;
+	// 2^128 - 1: los 128 bits a uno.  No cabe en ningun tipo nativo.
+	U m = U(340282366920938463463374607431768211455);
+	if (m.lo == 18_446_744_073_709_551_615 && m.hi == 18_446_744_073_709_551_615) {
+		return 42;
+	}
+	return 1;
 }

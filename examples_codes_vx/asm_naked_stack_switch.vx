@@ -11,18 +11,19 @@
 //
 //     vm --vx asm_naked_stack_switch.vx -o s && vm --run s.velb
 // @expect 42
-@Naked u64 scratch_stack() {
-    asm volatile {
-        mov rax, rsp         // guardar la pila real (rax = caller-saved)
-        sub rsp, 64          // reservar area scratch (bajar rsp)
-        mov qword [rsp], 42  // usar la pila conmutada
-        mov rcx, [rsp]       // rcx = 42
-        mov rsp, rax         // RESTAURAR rsp (stack switch de vuelta)
-        mov rax, rcx         // valor de retorno
-        ret
-    }
+@Naked
+u64 scratch_stack() {
+	asm volatile {
+		mov rax, rsp
+		sub rsp, 64
+		mov qword [rsp], 42
+		mov rcx, [rsp]
+		mov rsp, rax
+		mov rax, rcx
+		ret
+	}
 }
 
 u64 main() {
-    return scratch_stack();   // 42
+	return scratch_stack(); // 42
 }

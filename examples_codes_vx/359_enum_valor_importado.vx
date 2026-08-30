@@ -19,12 +19,12 @@
  */
 import std.wideint only Ordering;
 i32 main() {
-    Ordering x = Ordering.Less;
-    Ordering y = Ordering.Less;
-    Ordering z = Ordering.Greater;
-    i32 acc = 0;
-    if (x == y) { acc = acc + 20; }
-    if (x != z) { acc = acc + 22; }
-    println("sin cast: iguales=${x == y} distintos=${x != z}");
-    return acc;   // 42
+	Ordering x   = Ordering.Less;
+	Ordering y   = Ordering.Less;
+	Ordering z   = Ordering.Greater;
+	i32      acc = 0;
+	if (x == y) { acc = acc + 20; }
+	if (x != z) { acc = acc + 22; }
+	println("sin cast: iguales=${x == y} distintos=${x != z}");
+	return acc; // 42
 }

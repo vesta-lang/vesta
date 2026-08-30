@@ -184,7 +184,7 @@ i64 __vx_spawn_argv(i64 body, i64 argc, i64* argv) {
  * @return pid de la tarea (>0), o 0 si la cola esta llena.
  */
 i64 __vx_spawn(i64 body) {
-	return __vx_spawn_argv(body, 0,&__vasync_q_args[0]); // argv no se lee
+	return __vx_spawn_argv(body, 0, &__vasync_q_args[0]); // argv no se lee
 }
 
 // ---------------------------------------------------------------------------
@@ -261,8 +261,8 @@ i64 __vasync_pump_one() {
 	// Llamada indirecta al body (CALLCLOSURE).  El cast (fn) construye el
 	// function value {body, env=0}.
 	fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64 fp =
-	(fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64)
-	body;
+		(fn(i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) -> i64)
+		body;
 	fp(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11); // corre la tarea
 	__vasync_current_pid = saved_pid; // restaurar (main = 0)
 	return 1;
@@ -346,84 +346,84 @@ i64 __vx_pid() {
 // fiber_switch: salva el contexto actual en *from, carga el de *to.
 // SysV: args rdi/rsi.  Win64: rcx/rdx.  noinfer: primitivo HOST_LEAF puro.
 @Target("!os:windows")
-@Naked
-void __vasync_fiber_switch(u64 from_ctx, u64 to_ctx) {
+	@Naked
+	void __vasync_fiber_switch(u64 from_ctx, u64 to_ctx) {
 	asm volatile noinfer {
-        push rbp
-        push rbx
-        push r12
-        push r13
-        push r14
-        push r15
-        mov [rdi], rsp
-        mov rsp, [rsi]
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rbx
-        pop rbp
-        ret
+		push rbp
+		push rbx
+		push r12
+		push r13
+		push r14
+		push r15
+		mov [rdi], rsp
+		mov rsp, [rsi]
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rbx
+		pop rbp
+		ret
 	}
 }
 @Target("os:windows")
-@Naked
-void __vasync_fiber_switch(u64 from_ctx, u64 to_ctx) {
+	@Naked
+	void __vasync_fiber_switch(u64 from_ctx, u64 to_ctx) {
 	asm volatile noinfer {
-        push rbp
-        push rbx
-        push rdi
-        push rsi
-        push r12
-        push r13
-        push r14
-        push r15
-        mov [rcx], rsp
-        mov rsp, [rdx]
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rsi
-        pop rdi
-        pop rbx
-        pop rbp
-        ret
+		push rbp
+		push rbx
+		push rdi
+		push rsi
+		push r12
+		push r13
+		push r14
+		push r15
+		mov [rcx], rsp
+		mov rsp, [rdx]
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rsi
+		pop rdi
+		pop rbx
+		pop rbp
+		ret
 	}
 }
 
 // Trampolin de arranque: arg (rbx) -> 1er argumento del ABI; jmp entry (r12).
 @Target("!os:windows")
-@Naked
-void __vasync_fiber_trampoline() {
+	@Naked
+	void __vasync_fiber_trampoline() {
 	asm volatile noinfer {
-        mov rdi, rbx
-        jmp r12
+		mov rdi, rbx
+		jmp r12
 	}
 }
 @Target("os:windows")
-@Naked
-void __vasync_fiber_trampoline() {
+	@Naked
+	void __vasync_fiber_trampoline() {
 	asm volatile noinfer {
-        mov rcx, rbx
-        sub rsp, 32
-        jmp r12
+		mov rcx, rbx
+		sub rsp, 32
+		jmp r12
 	}
 }
 
 // Trampa por si un cuerpo de tarea retornara (no ocurre: usan vasync_task_done).
 @Naked
-void __vasync_fiber_exit() {
+	void __vasync_fiber_exit() {
 	asm volatile noinfer {
-    __vasync_fexit_loop:
-        hlt
-        jmp __vasync_fexit_loop
+		__vasync_fexit_loop:
+		    hlt
+		    jmp __vasync_fexit_loop
 	}
 }
 
 // fiber_init: prepara la pila para que el 1er switch arranque entry(arg).
 @Target("!os:windows")
-void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
+	void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 8 * 8; // 6 saved + 2 retaddr
 	u64* s    = (u64 *)base;
 	s[0] = 0;     // r15
@@ -438,7 +438,7 @@ void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	c[0] = base;
 }
 @Target("os:windows")
-void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
+	void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 10 * 8; // 8 saved + 2 retaddr
 	u64* s    = (u64 *)base;
 	s[0] = 0;     // r15
@@ -486,21 +486,21 @@ void __vasync_fiber_stack_free(u64 top, u64 size) {
  * SysV: args de fiber_switch en rdi/rsi.  Win64: rcx/rdx.
  */
 @Target("!os:windows")
-@Naked
-public void vasync_yield() {
+	@Naked
+	public void vasync_yield() {
 	asm volatile noinfer {
-        mov rdi, [__vasync_cur_ctx]
-        mov rsi, [__vasync_sched_ctx]
-        jmp __vasync_fiber_switch
+		mov rdi, [__vasync_cur_ctx]
+		mov rsi, [__vasync_sched_ctx]
+		jmp __vasync_fiber_switch
 	}
 }
 @Target("os:windows")
-@Naked
-public void vasync_yield() {
+	@Naked
+	public void vasync_yield() {
 	asm volatile noinfer {
-        mov rcx, [__vasync_cur_ctx]
-        mov rdx, [__vasync_sched_ctx]
-        jmp __vasync_fiber_switch
+		mov rcx, [__vasync_cur_ctx]
+		mov rdx, [__vasync_sched_ctx]
+		jmp __vasync_fiber_switch
 	}
 }
 
@@ -521,23 +521,23 @@ public void vasync_yield() {
  *       compensa los bytes del imm).
  */
 @Target("!os:windows")
-@Naked
-public void vasync_task_done() {
+	@Naked
+	public void vasync_task_done() {
 	asm volatile noinfer {
-        mov qword [__vasync_cur_done], 1
-        mov rdi, [__vasync_cur_ctx]
-        mov rsi, [__vasync_sched_ctx]
-        jmp __vasync_fiber_switch
+		mov qword [__vasync_cur_done], 1
+		mov rdi, [__vasync_cur_ctx]
+		mov rsi, [__vasync_sched_ctx]
+		jmp __vasync_fiber_switch
 	}
 }
 @Target("os:windows")
-@Naked
-public void vasync_task_done() {
+	@Naked
+	public void vasync_task_done() {
 	asm volatile noinfer {
-        mov qword [__vasync_cur_done], 1
-        mov rcx, [__vasync_cur_ctx]
-        mov rdx, [__vasync_sched_ctx]
-        jmp __vasync_fiber_switch
+		mov qword [__vasync_cur_done], 1
+		mov rcx, [__vasync_cur_ctx]
+		mov rdx, [__vasync_sched_ctx]
+		jmp __vasync_fiber_switch
 	}
 }
 
@@ -556,18 +556,18 @@ public void vasync_task_done() {
 public i64 vasync_spawn_fiber(i64 body, i64 arg) {
 	i64 idx = __vasync_fib_n;
 	if (idx >= VASYNC_FIBCAP) {
-		return-1; // sin slots
+		return -1; // sin slots
 	}
 	u64 top = __vasync_fiber_stack_alloc(VASYNC_FIBSTK);
 	if (top == 0) {
-		return-1; // sin memoria de pila
+		return -1; // sin memoria de pila
 	}
 	// FiberCtx = 1 qword host.  Lo alocamos con malloc (host_ptr valido en los 3
 	// modos, igual que las pilas).
 	u64 ctx = (u64)malloc(8);
 	if (ctx == 0) {
 		__vasync_fiber_stack_free(top, VASYNC_FIBSTK);
-		return-1;
+		return -1;
 	}
 	__vasync_fiber_init(ctx, top, (u64)body, (u64)arg);
 	__vasync_fib_ctx[idx] = ctx;
@@ -630,7 +630,7 @@ public i64 vasync_run() {
 					__vasync_fiber_stack_free(
 						__vasync_fib_stk[i],
 						VASYNC_FIBSTK
-					);
+						);
 					free((i64 *)__vasync_fib_ctx[i]);
 					live = live - 1;
 				}

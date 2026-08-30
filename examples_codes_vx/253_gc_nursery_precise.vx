@@ -28,73 +28,74 @@ namespace ejemplos.gc_nursery_precise;
 // por ser alcanzable via keep, escaneada preciso por el major via field-maps.)
 
 class Node {
-    i64 v;
-    gc<Node> next;
-    Node(i64 x) { this.v = x; this.next = null; }
+	i64 v;
+	gc<Node> next;
+	Node(i64 x) { this.v = x;
+		this.next = null; }
 }
 
 // Append-a-la-cola: head fijo, tail avanza.  `tail.next = m` genera el edge
 // old->young cuando tail ya se promovio -> ejercita el write-barrier.
 gc<Node> build(i64 n) {
-    gc<Node> head = new Node(0);
-    gc<Node> tail = head;
-    i64 i = 1;
-    while (i < n) {
-        gc<Node> m = new Node(i);
-        tail.next = m;     // <-- store de campo-CLASS: emite gcwb (barrier)
-        tail = m;
-        i = i + 1;
-    }
-    return head;
+	gc<Node> head = new Node(0);
+	gc<Node> tail = head;
+	i64      i    = 1;
+	while (i < n) {
+		gc<Node> m = new Node(i);
+		tail.next = m; // <-- store de campo-CLASS: emite gcwb (barrier)
+		tail      = m;
+		i         = i + 1;
+	}
+	return head;
 }
 
 // Cuenta los nodos alcanzables leyendo el campo gc `next`.
 i64 count_list(gc<Node> h) {
-    i64 acc = 0;
-    gc<Node> c = h;
-    while (c != null) {
-        acc++;
-        c = c.next;
-    }
-    return acc;
+	i64      acc = 0;
+	gc<Node> c   = h;
+	while (c != null) {
+		acc++;
+		c = c.next;
+	}
+	return acc;
 }
 
 // Suma los valores `v` recorriendo la cadena via el campo gc `next`.
 i64 sum_list(gc<Node> h) {
-    i64 acc = 0;
-    gc<Node> c = h;
-    while (c != null) {
-        acc = acc + c.v;
-        c = c.next;
-    }
-    return acc;
+	i64      acc = 0;
+	gc<Node> c   = h;
+	while (c != null) {
+		acc = acc + c.v;
+		c   = c.next;
+	}
+	return acc;
 }
 
 // Genera basura joven (no se retiene) para forzar varios minor_gc SIN mantener
 // nada vivo en locales: la unica lista viva es `keep` en main.
 void churn(i64 n) {
-    i64 i = 0;
-    gc<Node> junk = null;
-    while (i < n) {
-        junk = new Node(i);   // se sobrescribe -> muere en el proximo minor
-        i = i + 1;
-    }
+	i64      i    = 0;
+	gc<Node> junk = null;
+	while (i < n) {
+		junk = new Node(i); // se sobrescribe -> muere en el proximo minor
+		i    = i + 1;
+	}
 }
 
 i32 main() {
-    i64 N = 120000;
-    gc<Node> keep = build(N);   // cabeza OLD, cola YOUNG; barrier en tail.next
+	i64      N    = 120_000;
+	gc<Node> keep = build(N); // cabeza OLD, cola YOUNG; barrier en tail.next
 
-    // Forzar 2+ minor_gc.  La cola young de `keep` solo es alcanzable via el
-    // edge old->young -> depende del remembered_set + nursery preciso.
-    churn(120000);
-    churn(120000);
+	// Forzar 2+ minor_gc.  La cola young de `keep` solo es alcanzable via el
+	// edge old->young -> depende del remembered_set + nursery preciso.
+	churn(120_000);
+	churn(120_000);
 
-    i64 cnt = count_list(keep);
-    i64 s = sum_list(keep);
+	i64 cnt = count_list(keep);
+	i64 s   = sum_list(keep);
 
-    if (cnt == N && s == 7199940000) {
-        return 42;
-    }
-    return 0;
+	if (cnt == N && s == 7_199_940_000) {
+		return 42;
+	}
+	return 0;
 }

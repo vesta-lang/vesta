@@ -23,21 +23,21 @@ namespace ejemplos.optional;
 //   - main devuelve unwrap(a).val + (1 - isPresent(b)) * 1000 = 50 + 1000 = 1050.
 
 class Box {
-    public i32 val;
-    public Box(i32 v) { this.val = v; }
+	public i32 val;
+	public Box(i32 v) { this.val = v; }
 }
 
 i32 main() {
-    Box a = new Box(50);
-    Box b = null;          // null reference asignable a Box
+	Box a = new Box(50);
+	Box b = null;             // null reference asignable a Box
 
-    i32 has_b = isPresent(b);   // 0
-    i32 res = 0;
-    if (has_b == 0) {
-        res = res + 1000;
-    }
-    Box ua = unwrap(a);          // ua = a (no null), no excepcion
-    res = res + ua.val;          // 50
+	i32 has_b = isPresent(b); // 0
+	i32 res   = 0;
+	if (has_b == 0) {
+		res = res + 1000;
+	}
+	Box ua = unwrap(a); // ua = a (no null), no excepcion
+	res = res + ua.val; // 50
 
-    return res;                  // 1050
+	return res;         // 1050
 }

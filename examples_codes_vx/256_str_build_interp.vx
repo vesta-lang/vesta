@@ -2,6 +2,8 @@ namespace ejemplos.str_build_interp;
 
 // BUG-2: interpolacion que CONSTRUYE un string no debe emitir bytes NUL en JIT.
 string bg(i32 r, i32 g, i32 b) {
-    return "${chr(27)}[48;2;${r};${g};${b}m";
+	return "${chr(27)}[48;2;${r};${g};${b}m";
 }
-i32 main() { print(bg(0,75,125)); println(""); return 0; }
+i32 main() { print(bg(0, 75, 125));
+	println("");
+	return 0; }

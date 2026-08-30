@@ -5,4 +5,4 @@ namespace mat;
 public comptime i64 sq(i64 n) { return n * n; }
 
 @Macro
-public comptime string veces7(i64 n) { return to_str(n * 7); }
+	public comptime string veces7(i64 n) { return to_str(n * 7); }

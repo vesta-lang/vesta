@@ -6,19 +6,18 @@
 // puntero raw (no hay scope owner que invoque el dtor).
 
 class Resource {
-    public i32 value;
-    public Resource(i32 v) { this.value = v; }
-    public ~Resource() {
-        // dtor body
-    }
+	public i32 value;
+	public Resource(i32 v) { this.value = v; }
+	public ~Resource() {
+	// dtor body
+	}
 }
 
 i32 main() {
-    i64* slot = malloc(8);
-    Resource r = new Resource(7);
-    *slot = r;     // <-- ERROR: Resource tiene destructor; un deref
-                    // a memoria raw no participa del cleanup_stack_.
-    free(slot);
-    return r.value;
+	i64*     slot = malloc(8);
+	Resource r    = new Resource(7);
+	*        slot = r; // <-- ERROR: Resource tiene destructor; un deref
+	// a memoria raw no participa del cleanup_stack_.
+	free(slot);
+	return r.value;
 }
-// @expect-compile-fail

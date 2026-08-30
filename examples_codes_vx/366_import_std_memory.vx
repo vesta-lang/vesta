@@ -25,71 +25,89 @@ import std.types only usize;
 
 // Marca reconocible: si un byte no llega, o llega de otra copia, la suma cambia.
 u8 patron(i64 i) {
-    return (u8) ((i * 7 + 13) % 251);
+	return (u8)((i * 7 + 13) % 251);
 }
 
 // Copia `n` bytes y comprueba que llegaron TODOS y solo esos.  Devuelve 1 si
 // esta bien.  Se comprueba tambien el byte de despues: una copia que se pasa de
 // largo es tan fallo como una que se queda corta.
 i64 prueba_copia(i64 n) {
-    u8[600] origen;
-    u8[600] destino;
-    i64 i = 0;
-    while (i < 600) {
-        origen[i] = patron(i);
-        destino[i] = 0;
-        i = i + 1;
-    }
-    std.memory.memcpy(&destino[0], &origen[0], (usize) n);
-    i = 0;
-    while (i < n) {
-        if (destino[i] != patron(i)) return 0;
-        i = i + 1;
-    }
-    if (n < 600 && destino[n] != 0) return 0; // se paso de largo
-    return 1;
+	u8[600] origen;
+	u8[600] destino;
+	i64 i = 0;
+	while (i < 600) {
+		origen[i] = patron(i);
+		destino[i] = 0;
+		i = i + 1;
+	}
+	std.memory.memcpy(&destino[0], &origen[0], (usize) n);
+	i = 0;
+	while (i < n) {
+		if (destino[i] != patron(i)) return 0;
+		i = i + 1;
+	}
+	if (n < 600 && destino[n] != 0) return 0; // se paso de largo
+	return 1;
 }
 
 // Lo mismo para el relleno: todos los bytes al valor pedido, ni uno mas.
 i64 prueba_relleno(i64 n) {
-    u8[600] buf;
-    i64 i = 0;
-    while (i < 600) {
-        buf[i] = 0;
-        i = i + 1;
-    }
-    std.memory.memset(&buf[0], 0xA5, (usize) n);
-    i = 0;
-    while (i < n) {
-        if (buf[i] != 0xA5) return 0;
-        i = i + 1;
-    }
-    if (n < 600 && buf[n] != 0) return 0;
-    return 1;
+	u8[600] buf;
+	i64 i = 0;
+	while (i < 600) {
+		buf[i] = 0;
+		i = i + 1;
+	}
+	std.memory.memset(&buf[0], 0xA5, (usize) n);
+	i = 0;
+	while (i < n) {
+		if (buf[i] != 0xA5) return 0;
+		i = i + 1;
+	}
+	if (n < 600 && buf[n] != 0) return 0;
+	return 1;
 }
 
 i32 main() {
-    // Tramos que caen en implementaciones distintas: los pocos bytes, el limite
-    // de un registro, los bloques, y varios tamanos que NO son multiplo del
-    // ancho -- ahi es donde vive la cola solapada.
-    i64 tam[24];
-    tam[0] = 0;    tam[1] = 1;    tam[2] = 3;    tam[3] = 7;
-    tam[4] = 8;    tam[5] = 15;   tam[6] = 16;   tam[7] = 17;
-    tam[8] = 31;   tam[9] = 32;   tam[10] = 33;  tam[11] = 63;
-    tam[12] = 64;  tam[13] = 65;  tam[14] = 96;  tam[15] = 127;
-    tam[16] = 128; tam[17] = 129; tam[18] = 191; tam[19] = 192;
-    tam[20] = 256; tam[21] = 257; tam[22] = 384; tam[23] = 512;
+	// Tramos que caen en implementaciones distintas: los pocos bytes, el limite
+	// de un registro, los bloques, y varios tamanos que NO son multiplo del
+	// ancho -- ahi es donde vive la cola solapada.
+	i64 tam[24];
+	tam[0] = 0;
+	tam[1] = 1;
+	tam[2] = 3;
+	tam[3] = 7;
+	tam[4] = 8;
+	tam[5] = 15;
+	tam[6] = 16;
+	tam[7] = 17;
+	tam[8] = 31;
+	tam[9] = 32;
+	tam[10] = 33;
+	tam[11] = 63;
+	tam[12] = 64;
+	tam[13] = 65;
+	tam[14] = 96;
+	tam[15] = 127;
+	tam[16] = 128;
+	tam[17] = 129;
+	tam[18] = 191;
+	tam[19] = 192;
+	tam[20] = 256;
+	tam[21] = 257;
+	tam[22] = 384;
+	tam[23] = 512;
 
-    i64 ok = 0;
-    i64 k = 0;
-    while (k < 24) {
-        ok = ok + prueba_copia(tam[k]);
-        ok = ok + prueba_relleno(tam[k]);
-        k = k + 1;
-    }
+	i64 ok = 0;
+	i64 k  = 0;
+	while (k < 24) {
+		ok = ok + prueba_copia(tam[k]);
+		ok = ok + prueba_relleno(tam[k]);
+		k  = k + 1;
+	}
 
-    // 24 tamanos x 2 operaciones = 48 comprobaciones.  Cualquier variante que
-    // se deje un byte, se pase, o no llegue a compilarse desde fuera baja el
-    // numero, y el caso falla con un valor distinto de 48.
-    return (i32) ok;
+	// 24 tamanos x 2 operaciones = 48 comprobaciones.  Cualquier variante que
+	// se deje un byte, se pase, o no llegue a compilarse desde fuera baja el
+	// numero, y el caso falla con un valor distinto de 48.
+	return (i32) ok;
 }

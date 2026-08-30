@@ -19,57 +19,56 @@ i32 doblar(i32 x) { return x * 2; }
 i32 sumar(i32 a, i32 b) { return a + b; }
 
 i32 main() {
-    // ============================================
-    // (1) Sugar `comptime X = ...` sin const+tipo.
-    // ============================================
-    comptime code_simple = "10 + 32";              // string
-    comptime val_simple  = comptime_compile(code_simple);  // i64
-    static_assert(val_simple == 42, "sugar comptime + eval");
+	// ============================================
+	// (1) Sugar `comptime X = ...` sin const+tipo.
+	// ============================================
+	comptime code_simple = "10 + 32";                    // string
+	comptime val_simple  = comptime_compile(code_simple); // i64
+	static_assert(val_simple == 42, "sugar comptime + eval");
 
-    // Cadena tipica de metaprogramacion ahora limpia:
-    comptime n        = 7;
-    comptime n_str    = comptime_to_str(n);
-    comptime expr_str = comptime_concat("doblar(", comptime_concat(n_str, ")"));
-    i32 r1 = comptime_emit_expr(expr_str);   // doblar(7) = 14
-    if (r1 != 14) return 91;
+	// Cadena tipica de metaprogramacion ahora limpia:
+	comptime n        = 7;
+	comptime n_str    = comptime_to_str(n);
+	comptime expr_str = comptime_concat("doblar(", comptime_concat(n_str, ")"));
+	i32      r1       = comptime_emit_expr(expr_str); // doblar(7) = 14
+	if (r1 != 14) return 91;
 
-    // ============================================
-    // (2) gensym: identifiers frescos.
-    // ============================================
-    comptime f1 = gensym("var");
-    comptime f2 = gensym("var");
-    comptime f3 = gensym("var");
-    // Cada llamada genera un nombre distinto.
-    static_assert(!comptime_streq(f1, f2), "gensym: distinct 1-2");
-    static_assert(!comptime_streq(f2, f3), "gensym: distinct 2-3");
-    static_assert(!comptime_streq(f1, f3), "gensym: distinct 1-3");
+	// ============================================
+	// (2) gensym: identifiers frescos.
+	// ============================================
+	comptime f1 = gensym("var");
+	comptime f2 = gensym("var");
+	comptime f3 = gensym("var");
+	// Cada llamada genera un nombre distinto.
+	static_assert(!comptime_streq(f1, f2), "gensym: distinct 1-2");
+	static_assert(!comptime_streq(f2, f3), "gensym: distinct 2-3");
+	static_assert(!comptime_streq(f1, f3), "gensym: distinct 1-3");
 
-    // ============================================
-    // (3) Hygenic macro: emit codigo que SI accede al
-    //     scope del caller, pero usando gensym para
-    //     nombres internos NO accesibles desde afuera.
-    //     (Por el momento solo expresiones; statements
-    //     con let-binding requeririan stmt-level emit.)
-    // ============================================
-    i32 a = 10;
-    i32 b = 20;
-    // Macro "square_sum": emite (a*a + b*b) referenciando vars del caller.
-    comptime sq_expr = "a * a + b * b";
-    i32 sq_sum = comptime_emit_expr(sq_expr);  // 100 + 400 = 500
-    if (sq_sum != 500) return 92;
+	// ============================================
+	// (3) Hygenic macro: emit codigo que SI accede al
+	//     scope del caller, pero usando gensym para
+	//     nombres internos NO accesibles desde afuera.
+	//     (Por el momento solo expresiones; statements
+	//     con let-binding requeririan stmt-level emit.)
+	// ============================================
+	i32      a       = 10;
+	i32      b       = 20;
+	// Macro "square_sum": emite (a*a + b*b) referenciando vars del caller.
+	comptime sq_expr = "a * a + b * b";
+	i32      sq_sum  = comptime_emit_expr(sq_expr); // 100 + 400 = 500
+	if (sq_sum != 500) return 92;
 
-    // ============================================
-    // (4) Composicion: macros encadenados con sugar.
-    // ============================================
-    comptime base   = "sumar(";
-    comptime arg_a  = "5";
-    comptime arg_b  = "8";
-    comptime composed = comptime_concat(base,
-                          comptime_concat(arg_a,
-                            comptime_concat(", ",
-                              comptime_concat(arg_b, ")"))));
-    i32 r4 = comptime_emit_expr(composed);   // sumar(5, 8) = 13
-    if (r4 != 13) return 93;
+	// ============================================
+	// (4) Composicion: macros encadenados con sugar.
+	// ============================================
+	comptime base     = "sumar(";
+	comptime arg_a    = "5";
+	comptime arg_b    = "8";
+	comptime composed = comptime_concat(base,
+		comptime_concat(arg_a,
+			comptime_concat(", ", comptime_concat(arg_b, ")"))));
+	i32 r4 = comptime_emit_expr(composed); // sumar(5, 8) = 13
+	if (r4 != 13) return 93;
 
-    return 42;
+	return 42;
 }

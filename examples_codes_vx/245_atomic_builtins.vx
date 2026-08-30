@@ -1,17 +1,17 @@
 namespace ejemplos.atest;
 i64 g_counter = 0;
-i64 g_cell = 100;
+i64 g_cell    = 100;
 i32 main() {
-    // atomic_add: old = fetch_add(&g_counter, 5); g_counter debe ser 5, old 0
-    i64 old_add = atomic_add_i64(&g_counter, 5);
-    // atomic_cas: si g_cell==100 -> 200; devuelve viejo (100)
-    i64 old_cas = atomic_cas_i64(&g_cell, 100, 200);
-    // atomic_load / store
-    atomic_store_i64(&g_counter, 42);
-    i64 ld = atomic_load_i64(&g_counter);
-    // check: old_add=0, g_counter(via ld tras store)=42, old_cas=100, g_cell=200
-    if (old_add == 0 && old_cas == 100 && g_cell == 200 && ld == 42) {
-        return 42;
-    }
-    return (i32)(old_add * 1000 + old_cas);
+	// atomic_add: old = fetch_add(&g_counter, 5); g_counter debe ser 5, old 0
+	i64 old_add = atomic_add_i64(&g_counter, 5);
+	// atomic_cas: si g_cell==100 -> 200; devuelve viejo (100)
+	i64 old_cas = atomic_cas_i64(&g_cell, 100, 200);
+	// atomic_load / store
+	atomic_store_i64(&g_counter, 42);
+	i64 ld = atomic_load_i64(&g_counter);
+	// check: old_add=0, g_counter(via ld tras store)=42, old_cas=100, g_cell=200
+	if (old_add == 0 && old_cas == 100 && g_cell == 200 && ld == 42) {
+		return 42;
+	}
+	return (i32)(old_add * 1000 + old_cas);
 }

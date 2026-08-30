@@ -6,100 +6,100 @@
 // ===========================================================================
 import "lib";
 
-u64 g_row = 0;       // fila del cursor (0..24)
-u64 g_col = 0;       // columna del cursor (0..79)
-u64 g_attr = 0x1F;   // atributo de color (blanco sobre azul por defecto)
+u64 g_row  = 0;     // fila del cursor (0..24)
+u64 g_col  = 0;     // columna del cursor (0..79)
+u64 g_attr = 0x1F; // atributo de color (blanco sobre azul por defecto)
 
 // Limpia toda la pantalla con el atributo dado y resetea el cursor.
 void clear(u64 attr) {
-    u16* vga = (u16*) 0xB8000;
-    u64 cell = (attr << 8) | 0x20;     // espacio
-    u64 i = 0;
-    while (i < 2000) {
-        vga[i] = (u16) cell;
-        i = i + 1;
-    }
-    g_row = 0;
-    g_col = 0;
-    g_attr = attr;
+	u16* vga  = (u16 *) 0x000B8000;
+	u64  cell = (attr << 8) | 0x20; // espacio
+	u64  i    = 0;
+	while (i < 2000) {
+		vga[i] = (u16) cell;
+		i = i + 1;
+	}
+	g_row  = 0;
+	g_col  = 0;
+	g_attr = attr;
 }
 
 // Sube todas las filas una posicion (scroll) y limpia la ultima.
 void scroll() {
-    u16* vga = (u16*) 0xB8000;
-    u64 i = 0;
-    while (i < 1920) {                  // 80*24
-        vga[i] = vga[i + 80];
-        i = i + 1;
-    }
-    u64 cell = (g_attr << 8) | 0x20;
-    while (i < 2000) {
-        vga[i] = (u16) cell;
-        i = i + 1;
-    }
+	u16* vga = (u16 *) 0x000B8000;
+	u64  i   = 0;
+	while (i < 1920) { // 80*24
+		vga[i] = vga[i + 80];
+		i = i + 1;
+	}
+	u64 cell = (g_attr << 8) | 0x20;
+	while (i < 2000) {
+		vga[i] = (u16) cell;
+		i = i + 1;
+	}
 }
 
 // Cambia el color de las siguientes escrituras.
 void set_color(u64 attr) {
-    g_attr = attr;
+	g_attr = attr;
 }
 
 // Escribe un caracter avanzando el cursor (maneja '\n' y scroll).
 void putc(u64 c) {
-    u16* vga = (u16*) 0xB8000;
-    if (c == 8) {                       // backspace: borra el caracter previo
-        if (g_col > 0) {
-            g_col = g_col - 1;
-            u64 pos = g_row * 80 + g_col;
-            vga[pos] = (u16) ((g_attr << 8) | 0x20);
-        }
-        return;
-    }
-    if (c == 10) {                      // '\n'
-        g_col = 0;
-        g_row = g_row + 1;
-    } else {
-        u64 pos = g_row * 80 + g_col;
-        vga[pos] = (u16) ((g_attr << 8) | c);
-        g_col = g_col + 1;
-        if (g_col >= 80) {
-            g_col = 0;
-            g_row = g_row + 1;
-        }
-    }
-    if (g_row >= 25) {
-        scroll();
-        g_row = 24;
-    }
+	u16* vga = (u16 *) 0x000B8000;
+	if (c == 8) { // backspace: borra el caracter previo
+		if (g_col > 0) {
+			g_col = g_col - 1;
+			u64 pos = g_row * 80 + g_col;
+			vga[pos] = (u16)((g_attr << 8) | 0x20);
+		}
+		return;
+	}
+	if (c == 10) { // '\n'
+		g_col = 0;
+		g_row = g_row + 1;
+	} else {
+		u64 pos = g_row * 80 + g_col;
+		vga[pos] = (u16)((g_attr << 8) | c);
+		g_col = g_col + 1;
+		if (g_col >= 80) {
+			g_col = 0;
+			g_row = g_row + 1;
+		}
+	}
+	if (g_row >= 25) {
+		scroll();
+		g_row = 24;
+	}
 }
 
 // Escribe una cadena nul-terminada.
 void puts(char* s) {
-    u64 i = 0;
-    while (s[i] != 0) {
-        putc((u64) s[i]);
-        i = i + 1;
-    }
+	u64 i = 0;
+	while (s[i] != 0) {
+		putc((u64) s[i]);
+		i = i + 1;
+	}
 }
 
 // Escribe un entero en decimal.
 void dec(u64 v) {
-    u8 buf[24];
-    lib.itoa(v, buf);
-    u64 i = 0;
-    while (buf[i] != 0) {
-        putc((u64) buf[i]);
-        i = i + 1;
-    }
+	u8 buf[24];
+	lib.itoa(v, buf);
+	u64 i = 0;
+	while (buf[i] != 0) {
+		putc((u64) buf[i]);
+		i = i + 1;
+	}
 }
 
 // Escribe un entero en hexadecimal ("0x...").
 void hex(u64 v) {
-    u8 buf[20];
-    lib.itoa_hex(v, buf);
-    u64 i = 0;
-    while (buf[i] != 0) {
-        putc((u64) buf[i]);
-        i = i + 1;
-    }
+	u8 buf[20];
+	lib.itoa_hex(v, buf);
+	u64 i = 0;
+	while (buf[i] != 0) {
+		putc((u64) buf[i]);
+		i = i + 1;
+	}
 }

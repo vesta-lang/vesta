@@ -15,15 +15,13 @@
 
 // Escribe ocho bytes DETRAS de lo que le den.
 void escribe_detras(u8* p) {
-    asm (
-        reg d = p,
-    ) {
-        mov [d+16], rax
-    }
+	asm (reg d = p,) {
+		mov [d+16], rax
+	}
 }
 
 i32 main() {
-    u8 buf[16];
-    escribe_detras(&buf[0]);
-    return 42;
+	u8 buf[16];
+	escribe_detras(&buf[0]);
+	return 42;
 }

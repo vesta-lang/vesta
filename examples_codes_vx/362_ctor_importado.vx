@@ -15,8 +15,8 @@
 import t.p only P;
 
 i32 main() {
-    P p = P(35);
-    P q = P(7);
-    if (p.a + q.a == 42) { return 42; }
-    return 1;
+	P p = P(35);
+	P q = P(7);
+	if (p.a + q.a == 42) { return 42; }
+	return 1;
 }

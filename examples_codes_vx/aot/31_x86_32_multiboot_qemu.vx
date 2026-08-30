@@ -16,33 +16,38 @@
 // Multiboot header: QEMU -kernel carga en modo protegido 32-bit + salta a entry_addr.
 // _kstart va solo en .text (offset fijo 0x20, justo tras el header de 32B);
 // compute() en .ktext aparte -> entry_addr estable sin importar el tamano de compute.
-@section(".mb") @order(0)
-bytes mbheader {
-    dd 0x1BADB002        // MULTIBOOT_MAGIC
-    dd 0x00010000        // flags: address fields
-    dd 0xE4514FFE        // checksum = -(magic+flags)
-    dd 0x00100000        // header_addr (base)
-    dd 0x00100000        // load_addr
-    dd 0x00000000        // load_end_addr (0 = todo)
-    dd 0x00000000        // bss_end_addr
-    dd 0x00100020        // entry_addr = _kstart (base + 0x20)
+@section(".mb")
+@order(0)
+	bytes mbheader {
+	dd 0x1BADB002     // MULTIBOOT_MAGIC
+		dd 0x00010000 // flags: address fields
+		dd 0xE4514FFE // checksum = -(magic+flags)
+		dd 0x00100000 // header_addr (base)
+		dd 0x00100000 // load_addr
+		dd 0x00000000 // load_end_addr (0 = todo)
+		dd 0x00000000 // bss_end_addr
+		dd 0x00100020 // entry_addr = _kstart (base + 0x20)
 }
 
-@bits(32) @section(".text") @order(1)
-asm _kstart {
-    mov esp, 0x200000
-    call compute
-    mov dx, 0xE9
-    out dx, al
-    mov dx, 0xF4
-    out dx, al
-    hlt
+@bits(32)
+@section(".text")
+@order(1)
+	asm _kstart {
+	mov esp, 0x00200000
+	call compute
+	mov dx, 0xE9
+	out dx, al
+	mov dx, 0xF4
+	out dx, al
+	hlt
 }
 
-@section(".ktext") @order(2)
-i32 compute() {
-    i32 sum = 0;
-    i32 i = 1;
-    while (i <= 9) { sum = sum + i; i = i + 1; }
-    return sum;          // 45 = 0x2D
+@section(".ktext")
+@order(2)
+	i32 compute() {
+	i32              sum = 0;
+	i32              i   = 1;
+	while (i <= 9) { sum = sum + i;
+		i = i + 1; }
+	return sum; // 45 = 0x2D
 }

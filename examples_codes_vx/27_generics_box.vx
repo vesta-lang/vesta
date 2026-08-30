@@ -20,13 +20,13 @@ namespace ejemplos.generics_box;
 // Resultado esperado: 42 + 99 = 141.
 
 class Box<T> {
-    public T value;
-    public Box(T v) { this.value = v; }
-    public T read() { return this.value; }
+	public T value;
+	public Box(T v) { this.value = v; }
+	public T read() { return this.value; }
 }
 
 i32 main() {
-    Box<i32> b32 = new Box<i32>(42);
-    Box<i64> b64 = new Box<i64>(99);
-    return b32.read() + b64.read();
+	Box<i32> b32 = new Box<i32>(42);
+	Box<i64> b64 = new Box<i64>(99);
+	return b32.read() + b64.read();
 }

@@ -5,10 +5,10 @@ import std.syscall.abi only invoke_syscall, syscall_id, resolve_syscall;
 import std.types only nullptr, usize;
 
 @Target("arch:x86_64 && os:windows")
-public import std.syscall.windows.x86_64 only *;
+	public import std.syscall.windows.x86_64 only *;
 
 @Target("arch:x86 && os:windows")
-public import std.syscall.windows.x86_32 only *;
+	public import std.syscall.windows.x86_32 only *;
 
 // Re-exporta los tipos de la NT API (ULONG, HANDLE, PROCESSOR_NUMBER, ...).
 // Viven en std.ntwindows (al nivel de std, junto a std.windows) porque son
@@ -101,10 +101,10 @@ public struct syscall_ctx_invoke {
  */
 public ULONG KeGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
 	static syscall_ctx_invoke ctx =
-	syscall_ctx_invoke("NtGetCurrentProcessorNumberEx");
+		syscall_ctx_invoke("NtGetCurrentProcessorNumberEx");
 	if (ctx.target == null) {
 		ctx.target =
-		ctx.resolve_method("NtGetCurrentProcessorNumberEx"); // 1 sola vez.
+			ctx.resolve_method("NtGetCurrentProcessorNumberEx"); // 1 sola vez.
 	}
 	return ((cfn(PPROCESSOR_NUMBER) -> ULONG)(ctx.target))(ProcNumber);
 }
@@ -159,7 +159,7 @@ public NTSTATUS NtAllocateVirtualMemory(HANDLE ProcessHandle,
 	PSIZE_T RegionSize,
 	ULONG AllocationType, ULONG Protect) {
 	static syscall_ctx_invoke ctx =
-	syscall_ctx_invoke("NtAllocateVirtualMemory");
+		syscall_ctx_invoke("NtAllocateVirtualMemory");
 	if (ctx.target == null) {
 		ctx.target = ctx.resolve_method("NtAllocateVirtualMemory");
 	}
@@ -206,7 +206,7 @@ public NTSTATUS NtProtectVirtualMemory(HANDLE ProcessHandle,
 	PPVOID BaseAddress, PSIZE_T RegionSize,
 	ULONG NewProtect, PULONG OldProtect) {
 	static syscall_ctx_invoke ctx =
-	syscall_ctx_invoke("NtProtectVirtualMemory");
+		syscall_ctx_invoke("NtProtectVirtualMemory");
 	if (ctx.target == null) {
 		ctx.target = ctx.resolve_method("NtProtectVirtualMemory");
 	}

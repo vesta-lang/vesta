@@ -22,55 +22,55 @@
 
 // Hoja del call-graph: O(n) puro (un loop).
 i64 trabajo_lineal(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        acc = acc + i;
-        i = i + 1;
-    }
-    return acc;
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		acc = acc + i;
+		i   = i + 1;
+	}
+	return acc;
 }
 
 // PARCIAL O(n) (su unico loop), llama a trabajo_lineal (O(n)) DENTRO del loop
 // -> TOTAL O(n^2).  El call site esta a profundidad de loop 1, por lo que el
 // O(n) del callee se multiplica por n.
 i64 agregador(i64 n) {
-    i64 total = 0;
-    i64 i = 0;
-    while (i < n) {
-        total = total + trabajo_lineal(n);
-        i = i + 1;
-    }
-    return total;
+	i64 total = 0;
+	i64 i     = 0;
+	while (i < n) {
+		total = total + trabajo_lineal(n);
+		i     = i + 1;
+	}
+	return total;
 }
 
 // Cadena de transitividad: nivel_h es la hoja (O(n)).
 i64 nivel_h(i64 n) {
-    i64 acc = 0;
-    i64 i = 0;
-    while (i < n) {
-        acc = acc + i;
-        i = i + 1;
-    }
-    return acc;
+	i64 acc = 0;
+	i64 i   = 0;
+	while (i < n) {
+		acc = acc + i;
+		i   = i + 1;
+	}
+	return acc;
 }
 
 // nivel_g: sin loops propios (parcial O(1)), pero llama a nivel_h (O(n))
 // fuera de cualquier loop -> TOTAL O(n).
 i64 nivel_g(i64 n) {
-    return nivel_h(n) + 1;
+	return nivel_h(n) + 1;
 }
 
 // nivel_f: un loop propio (parcial O(n)) y dentro llama a nivel_g (TOTAL O(n))
 // -> TOTAL O(n^2) por transitividad (f -> g -> h compuesto).
 i64 nivel_f(i64 n) {
-    i64 s = 0;
-    i64 i = 0;
-    while (i < n) {
-        s = s + nivel_g(n);
-        i = i + 1;
-    }
-    return s;
+	i64 s = 0;
+	i64 i = 0;
+	while (i < n) {
+		s = s + nivel_g(n);
+		i = i + 1;
+	}
+	return s;
 }
 
 // Candidato a PRE != POST: el loop calcula 'basura' que NO se usa (resultado
@@ -79,17 +79,17 @@ i64 nivel_f(i64 n) {
 // el ejemplo documenta el comportamiento real y deja el caso listo para
 // cuando el optimizer gane esa capacidad.
 i64 loop_muerto(i64 n) {
-    i64 basura = 0;
-    i64 i = 0;
-    while (i < n) {
-        basura = basura + i * 3;
-        i = i + 1;
-    }
-    // 'basura' nunca se usa: el loop es codigo muerto.
-    return 42;
+	i64 basura = 0;
+	i64 i      = 0;
+	while (i < n) {
+		basura = basura + i * 3;
+		i      = i + 1;
+	}
+	// 'basura' nunca se usa: el loop es codigo muerto.
+	return 42;
 }
 
 i32 main() {
-    i64 r = agregador(4) + nivel_f(4) + loop_muerto(10);
-    return 0;
+	i64 r = agregador(4) + nivel_f(4) + loop_muerto(10);
+	return 0;
 }

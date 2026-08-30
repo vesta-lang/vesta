@@ -16,24 +16,24 @@ namespace ejemplos.try_multi_finally;
 // Acumulador final esperado: 1000 (handler) + 50 (e.valor) + 7 (finally) = 1057.
 
 class ExcA {
-    public ExcA() { }
+	public ExcA() { }
 }
 
 class ExcB {
-    public i32 valor;
-    public ExcB(i32 v) { this.valor = v; }
+	public i32 valor;
+	public ExcB(i32 v) { this.valor = v; }
 }
 
 i32 main() {
-    i32 acc = 0;
-    try {
-        throw new ExcB(50);
-    } catch (ExcA a) {
-        acc = 999;            // dead code: ExcA no coincide
-    } catch (ExcB b) {
-        acc = 1000 + b.valor; // handler activo: 1050
-    } finally {
-        acc = acc + 7;        // siempre: +7
-    }
-    return acc;               // 1057
+	i32 acc = 0;
+	try {
+		throw new ExcB(50);
+	} catch (ExcA a) {
+		acc = 999; // dead code: ExcA no coincide
+	} catch (ExcB b) {
+		acc = 1000 + b.valor; // handler activo: 1050
+	} finally {
+		acc = acc + 7; // siempre: +7
+	}
+	return acc; // 1057
 }

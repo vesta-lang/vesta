@@ -20,7 +20,7 @@
 class Box { i64 v; }
 
 i64 main() {
-    Box b = new Box();   // calloc (msvcrt.dll); RAII -> free al salir de scope
-    b.v = 42;
-    return b.v;          // 42
+	Box b = new Box(); // calloc (msvcrt.dll); RAII -> free al salir de scope
+	b.v = 42;
+	return b.v; // 42
 }

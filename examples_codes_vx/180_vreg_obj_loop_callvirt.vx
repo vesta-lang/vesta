@@ -12,25 +12,25 @@ namespace ejemplos.vreg_obj_loop_callvirt;
 // Esperado: 4 + (10 * 3) = 34.
 
 class Acc {
-    public i32 n;
-    public Acc() { this.n = 4; }
-    public i32 add(i32 d) {
-        this.n = this.n + d;
-        return this.n;
-    }
+	public i32 n;
+	public Acc() { this.n = 4; }
+	public i32 add(i32 d) {
+		this.n = this.n + d;
+		return this.n;
+	}
 }
 
 i32 hammer(Acc a) {
-    i32 last = 0;
-    i32 i = 0;
-    while (i < 10) {
-        last = a.add(3);   // objeto `a` vivo loop-carried a traves del callvirt
-        i = i + 1;
-    }
-    return last;
+	i32 last = 0;
+	i32 i    = 0;
+	while (i < 10) {
+		last = a.add(3); // objeto `a` vivo loop-carried a traves del callvirt
+		i    = i + 1;
+	}
+	return last;
 }
 
 i32 main() {
-    Acc a = new Acc();
-    return hammer(a);
+	Acc a = new Acc();
+	return hammer(a);
 }

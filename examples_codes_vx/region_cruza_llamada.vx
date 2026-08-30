@@ -18,15 +18,21 @@
 // @expect-error: VX3001
 
 @NoIdiom
-public void rellena(u8* p, u64 n) {
-    u64* q = (u64*) p;
-    q[0] = 0; q[1] = 0; q[2] = 0; q[3] = 0;
-    q[4] = 0; q[5] = 0; q[6] = 0; q[7] = 0;
-    if (n > 100) { rellena(p, n - 1); }
+	public void rellena(u8 *p, u64 n) {
+	u64* q = (u64 *) p;
+	q[0] = 0;
+	q[1] = 0;
+	q[2] = 0;
+	q[3] = 0;
+	q[4] = 0;
+	q[5] = 0;
+	q[6] = 0;
+	q[7] = 0;
+	if (n > 100) { rellena(p, n - 1); }
 }
 
 i32 main() {
-    u8 buf[16];   // dieciseis, y ahi caben dos de las ocho palabras
-    rellena(&buf[0], 8);
-    return 42;
+	u8 buf[16]; // dieciseis, y ahi caben dos de las ocho palabras
+	rellena(&buf[0], 8);
+	return 42;
 }

@@ -13,12 +13,12 @@ namespace ejemplos.unique_wraps_gc;
 // Esperado: R00 == 42.
 
 class Nodo {
-    public i64 v;
-    public Nodo(i64 x) { this.v = x; }
+	public i64 v;
+	public Nodo(i64 x) { this.v = x; }
 }
 
 i32 main() {
-    gc<Nodo> g = new Nodo(42);
-    unique<gc<Nodo>> u = unique_box(g);
-    return (i32) g.v;              // 42; el GC recoge el Nodo, u no lo libera
+	gc<Nodo>         g = new Nodo(42);
+	unique<gc<Nodo>> u = unique_box(g);
+	return (i32) g.v; // 42; el GC recoge el Nodo, u no lo libera
 }

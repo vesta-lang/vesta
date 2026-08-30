@@ -32,22 +32,22 @@ namespace ejemplos.optional_result_builtin;
 // Escrito a mano aqui porque no existe `unwrap_or`; seria justo esto.
 
 i32 dec_or(Optional<i32> o, i32 def) {
-    if (isPresent(o) == 1) {
-        return unwrap(o);
-    }
-    return def;
+	if (isPresent(o) == 1) {
+		return unwrap(o);
+	}
+	return def;
 }
 
 i32 main() {
-    Optional<i32> a = Some(50);
-    Optional<i32> b = None();
-    Result<i32, i32> r = Ok(7);
+	Optional<i32>    a = Some(50);
+	Optional<i32>    b = None();
+	Result<i32, i32> r = Ok(7);
 
-    i32 acc = 0;
-    acc = acc + dec_or(a, 999);   // 50 (a esta presente)
-    acc = acc + dec_or(b, 1000);  // 1000 (b vacio -> default)
-    if (isOk(r) == 1) {
-        acc = acc + value(r);     // 7
-    }
-    return acc;                    // 50 + 1000 + 7 = 1057
+	i32 acc = 0;
+	acc = acc + dec_or(a, 999);  // 50 (a esta presente)
+	acc = acc + dec_or(b, 1000); // 1000 (b vacio -> default)
+	if (isOk(r) == 1) {
+		acc = acc + value(r); // 7
+	}
+	return acc; // 50 + 1000 + 7 = 1057
 }

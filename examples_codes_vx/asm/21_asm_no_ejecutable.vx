@@ -7,13 +7,13 @@
 // camino sin tener esa otra maquina.
 // @expect 42
 i32 main() {
-    i32 r = 0;
-    try {
-        register("rax") i64 a = 40;
-        asm volatile { add rax, 2 };
-        r = (i32) a;
-    } catch (FatalError e) {
-        r = 7; // sin ensamblador: se captura y el programa DECIDE, no se arrastra
-    }
-    return r;
+	i32 r = 0;
+	try {
+		register("rax") i64 a = 40;
+		asm volatile { add rax, 2 };
+		r = (i32) a;
+	} catch (FatalError e) {
+		r = 7; // sin ensamblador: se captura y el programa DECIDE, no se arrastra
+	}
+	return r;
 }

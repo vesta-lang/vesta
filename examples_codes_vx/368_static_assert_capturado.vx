@@ -14,20 +14,20 @@
 
 /** @brief Comprueba el rango; incumplirlo aborta la ejecucion comptime. */
 comptime u64 comprueba(u64 n) {
-    static_assert(n < 10, "n se paso del rango admitido");
-    return n;
+	static_assert(n < 10, "n se paso del rango admitido");
+	return n;
 }
 
 /** @brief Envuelve la comprobacion y se queda con un valor de reserva. */
 comptime u64 tolerante(u64 n) {
-    try {
-        return comprueba(n);
-    } catch (FatalError e) {
-        return 42;
-    }
+	try {
+		return comprueba(n);
+	} catch (FatalError e) {
+		return 42;
+	}
 }
 
 i32 main() {
-    // 99 incumple la asercion; el `catch` la recoge y devuelve el de reserva.
-    return (i32) tolerante(99);
+	// 99 incumple la asercion; el `catch` la recoge y devuelve el de reserva.
+	return (i32) tolerante(99);
 }

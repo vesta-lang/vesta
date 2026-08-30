@@ -10,17 +10,17 @@
 namespace ssf;
 
 struct Counter {
-    static u64 count;
-    u64 id;
-    public static void inc()  { Counter.count = Counter.count + 1; }
-    public static u64  get()  { return Counter.count; }
+	static u64 count;
+	u64 id;
+	public static void inc() { Counter.count = Counter.count + 1; }
+	public static u64 get() { return Counter.count; }
 }
 
 i32 main() {
-    Counter.count = 0;
-    Counter.inc();
-    Counter.inc();
-    Counter.inc();
-    Counter.count = Counter.count + 39;   // 3 + 39 = 42
-    return (i32) Counter.get();
+	Counter.count = 0;
+	Counter.inc();
+	Counter.inc();
+	Counter.inc();
+	Counter.count = Counter.count + 39; // 3 + 39 = 42
+	return (i32) Counter.get();
 }

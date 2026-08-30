@@ -19,14 +19,14 @@
 //   Primera llamada en el hilo principal: 7 + 5 = 12.
 //   Cada hilo nuevo empieza de nuevo en 7 (aislamiento por-hilo).
 
-thread_local i64 t = 7;          // copia por-hilo, plantilla = 7
+thread_local i64 t = 7; // copia por-hilo, plantilla = 7
 
-i64 get_t() {                    // exportada via GetProcAddress
-    t = t + 5;
-    return t;
+i64 get_t() {           // exportada via GetProcAddress
+	t = t + 5;
+	return t;
 }
 
-i64 reset_t() {                  // exportada: vuelve la copia de ESTE hilo a 7
-    t = 7;
-    return t;
+i64 reset_t() { // exportada: vuelve la copia de ESTE hilo a 7
+	t = 7;
+	return t;
 }

@@ -20,11 +20,11 @@
 // Los imports van con @Target porque en Windows estos nombres no existen: alli
 // la superficie del sistema es la de NT.
 @Target("os:linux")
-import std.syscall.linux only open, read, close, write;
+	import std.syscall.linux only open, read, close, write;
 @Target("os:linux")
-import std.unix only O_RDONLY, STDOUT_FILENO;
+	import std.unix only O_RDONLY, STDOUT_FILENO;
 @Target("os:linux")
-import std.types only ssize_t;
+	import std.types only ssize_t;
 
 // Terminar el proceso SI es igual en los dos sistemas, asi que no lleva
 // @Target: std.os ya elige por dentro con que llamada se hace.
@@ -50,7 +50,7 @@ extern "kernel32.dll" {
 		u32 n,
 		u32 *nwritten,
 		u64 overlapped
-	) -> i32;
+		) -> i32;
 	fn WriteConsoleW(u64 hConsole, u16 *buf, u32 nchars, u32 *nwritten,
 		u64 reserved) -> i32;
 	fn MultiByteToWideChar(u32 codePage, u32 flags, u8 *mbStr, i32 cbMb,
@@ -76,14 +76,14 @@ i32 __vio_is_console = 0; // 0=sin-detectar, 1=consola, 2=fichero/pipe
 u16[4096] __vio_wbuf; // buffer UTF-16 (max VIO_BUF_BYTES code units: ASCII)
 
 @Target("os:windows")
-void __vio_raw(u8 *buf, u64 len) {
+	void __vio_raw(u8 *buf, u64 len) {
 	if (len == 0) return;
 	if (__vio_is_console == 0) {
 		// STD_OUTPUT_HANDLE = (DWORD)-11 = 0xFFFFFFF5 = 4294967285.
 		__vio_handle = GetStdHandle(4_294_967_285);
 		u32 mode = 0;
 		// GetConsoleMode != 0 <=> el handle es una consola (no pipe/fichero).
-		if (GetConsoleMode(__vio_handle,&mode) != 0) {
+		if (GetConsoleMode(__vio_handle, &mode) != 0) {
 			__vio_is_console = 1;
 		} else {
 			__vio_is_console = 2;
@@ -93,19 +93,19 @@ void __vio_raw(u8 *buf, u64 len) {
 	if (__vio_is_console == 1) {
 		// Consola: UTF-8 (CP_UTF8=65001) -> UTF-16 -> WriteConsoleW.  len <=
 		// VIO_BUF_BYTES (4096) -> a lo sumo 4096 code units (caso ASCII).
-		i32 ncw = MultiByteToWideChar(65_001, 0, buf, (i32)len,&__vio_wbuf[0],
+		i32 ncw = MultiByteToWideChar(65_001, 0, buf, (i32)len, &__vio_wbuf[0],
 			4096);
 		if (ncw > 0) {
-			WriteConsoleW(__vio_handle,&__vio_wbuf[0], (u32)ncw,&nw, 0);
+			WriteConsoleW(__vio_handle, &__vio_wbuf[0], (u32)ncw, &nw, 0);
 			return;
 		}
 	// Conversion fallida -> caer a bytes crudos.
 	}
 	// Pipe/redir (o fallback): WriteFile de bytes directo.
-	WriteFile(__vio_handle, buf, (u32)len,&nw, 0);
+	WriteFile(__vio_handle, buf, (u32)len, &nw, 0);
 }
 @Target("!os:windows")
-void __vio_raw(u8 *buf, u64 len) {
+	void __vio_raw(u8 *buf, u64 len) {
 	if (len > 0) write(STDOUT_FILENO, (char *) buf, len);
 }
 
@@ -159,7 +159,7 @@ void __vx_write(u8* buf, u64 len) {
  * @return 1 si hay depurador, 0 si no o si no se pudo averiguar.
  */
 @Target("os:windows")
-i32 __vio_trazado() { return IsDebuggerPresent(); }
+	i32 __vio_trazado() { return IsDebuggerPresent(); }
 
 /**
  * @brief Version de Linux: no hay llamada que lo diga.
@@ -171,11 +171,11 @@ i32 __vio_trazado() { return IsDebuggerPresent(); }
  * @return 1 si hay depurador, 0 si no o si el fichero no se pudo leer.
  */
 @Target("os:linux")
-i32 __vio_trazado() {
+	i32 __vio_trazado() {
 	char[512] buf;
 	i32 fd = open("/proc/self/status", O_RDONLY, 0);
 	if (fd < 0) return 0;
-	ssize_t n = read(fd,&buf[0], 512);
+	ssize_t n = read(fd, &buf[0], 512);
 	close(fd);
 	if (n <= 0) return 0;
 	// Basta con mirar el primer caracter del numero: interesa si es cero, no
@@ -196,7 +196,7 @@ i32 __vio_trazado() {
 
 /// En un target sin sistema operativo no hay a quien preguntar.
 @Target("!os:windows && !os:linux")
-i32 __vio_trazado() { return 0; }
+	i32 __vio_trazado() { return 0; }
 
 /**
  * @brief Hook por defecto de `panic(msg)`.

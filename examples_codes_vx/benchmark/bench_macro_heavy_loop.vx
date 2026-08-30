@@ -16,19 +16,19 @@
 // del JIT porque el linker es C++ nativo, no codigo VM.
 
 @Macro
-comptime string heavy_loop(i64 n) {
-    i64 sum = 0;
-    i64 i = 0;
-    while (i < n) {
-        sum = sum + i;
-        i = i + 1;
-    }
-    return comptime_to_str(sum);
+	comptime string heavy_loop(i64 n) {
+	i64 sum = 0;
+	i64 i   = 0;
+	while (i < n) {
+		sum = sum + i;
+		i   = i + 1;
+	}
+	return comptime_to_str(sum);
 }
 
 i32 main() {
-    // N=10000 -> sum(0..10000) = 49995000 (fits in i32, no truncation).
-    i32 r = heavy_loop(10000);
-    if (r != 49995000) return 91;
-    return 42;
+	// N=10000 -> sum(0..10000) = 49995000 (fits in i32, no truncation).
+	i32 r = heavy_loop(10_000);
+	if (r != 49_995_000) return 91;
+	return 42;
 }

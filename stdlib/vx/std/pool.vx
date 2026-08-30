@@ -77,11 +77,11 @@ extern "libpthread.so.0" {
 }
 
 @Target("os:windows")
-uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
+	uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
 	return CreateThread(0, 0, body, arg, 0, 0);
 }
 @Target("!os:windows")
-uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
+	uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
 	uintptr th = 0;
 	i32     rc = pthread_create(&th, 0, body, arg);
 	if (rc != 0) {
@@ -91,23 +91,23 @@ uintptr __vxp_os_spawn(uintptr body, uintptr arg) {
 }
 
 @Target("os:windows")
-void __vxp_os_join(uintptr handle) {
+	void __vxp_os_join(uintptr handle) {
 	WaitForSingleObject(handle, 0xFFFFFFFF);
 	CloseHandle(handle);
 }
 @Target("!os:windows")
-void __vxp_os_join(uintptr handle) {
+	void __vxp_os_join(uintptr handle) {
 	if (handle != 0) {
 		pthread_join(handle, 0);
 	}
 }
 
 @Target("os:windows")
-void __vxp_os_yield() {
+	void __vxp_os_yield() {
 	SwitchToThread();
 }
 @Target("!os:windows")
-void __vxp_os_yield() {
+	void __vxp_os_yield() {
 	register("rax") i64 nr = 24; // SYS_sched_yield (x86-64), RAW sin libc
 	asm volatile { syscall };
 }
@@ -149,49 +149,49 @@ void __vxp_pause() {
 // fiber_switch: salva callee-saved + rsp en *from, carga de *to.
 // SysV: args rdi/rsi.  Win64: rcx/rdx.
 @Target("!os:windows")
-@Naked
-void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
+	@Naked
+	void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
 	asm volatile noinfer {
-        push rbp
-        push rbx
-        push r12
-        push r13
-        push r14
-        push r15
-        mov [rdi], rsp
-        mov rsp, [rsi]
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rbx
-        pop rbp
-        ret
+		push rbp
+		push rbx
+		push r12
+		push r13
+		push r14
+		push r15
+		mov [rdi], rsp
+		mov rsp, [rsi]
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rbx
+		pop rbp
+		ret
 	}
 }
 @Target("os:windows")
-@Naked
-void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
+	@Naked
+	void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
 	asm volatile noinfer {
-        push rbp
-        push rbx
-        push rdi
-        push rsi
-        push r12
-        push r13
-        push r14
-        push r15
-        mov [rcx], rsp
-        mov rsp, [rdx]
-        pop r15
-        pop r14
-        pop r13
-        pop r12
-        pop rsi
-        pop rdi
-        pop rbx
-        pop rbp
-        ret
+		push rbp
+		push rbx
+		push rdi
+		push rsi
+		push r12
+		push r13
+		push r14
+		push r15
+		mov [rcx], rsp
+		mov rsp, [rdx]
+		pop r15
+		pop r14
+		pop r13
+		pop r12
+		pop rsi
+		pop rdi
+		pop rbx
+		pop rbp
+		ret
 	}
 }
 
@@ -201,24 +201,24 @@ void __vxp_fiber_switch(u64 from_ctx, u64 to_ctx) {
 // call (ABI Win64/SysV).  Asi el retorno de body NO depende de colocar fiber_exit
 // en un slot magico del frame (el bug del jmp+shadow-space).
 @Target("!os:windows")
-@Naked
-void __vxp_fiber_trampoline() {
+	@Naked
+	void __vxp_fiber_trampoline() {
 	asm volatile noinfer {
-        mov rdi, rbx
-        and rsp, -16
-        call r12
-        jmp __vxp_fiber_exit
+		mov rdi, rbx
+		and rsp, -16
+		call r12
+		jmp __vxp_fiber_exit
 	}
 }
 @Target("os:windows")
-@Naked
-void __vxp_fiber_trampoline() {
+	@Naked
+	void __vxp_fiber_trampoline() {
 	asm volatile noinfer {
-        mov rcx, rbx
-        and rsp, -16
-        sub rsp, 32
-        call r12
-        jmp __vxp_fiber_exit
+		mov rcx, rbx
+		and rsp, -16
+		sub rsp, 32
+		call r12
+		jmp __vxp_fiber_exit
 	}
 }
 
@@ -239,7 +239,7 @@ void __vxp_fiber_trampoline() {
 // Hoy caben en 64 B (VXP_FIB_HDR) y un solo overlay es mas simple; el split se
 // hara cuando los campos del scheduler empiecen a dominar.
 @overlay
-struct Fiber {
+	struct Fiber {
 	i64   ctx     @0x00;     // rsp salvado (fiber_switch lo lee/escribe).
 	i64   state   @0x08;   // FiberState.
 	i64   arg     @0x10;     // argumento del body.
@@ -267,7 +267,7 @@ enum FiberState : i64 {
 // fiber_init: prepara la pila para que el 1er switch arranque body(arg), con el
 // TRAMPOLIN DE SALIDA como direccion de retorno (cuando body retorna, cae ahi).
 @Target("!os:windows")
-void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
+	void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 8 * 8; // 6 saved + 2 retaddr
 	u64* s    = (u64 *)base;
 	s[0] = 0;    // r15
@@ -281,7 +281,7 @@ void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
 	Fiber((i64)fib).ctx = (i64)base;
 }
 @Target("os:windows")
-void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
+	void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 10 * 8; // 8 saved + 2 retaddr
 	u64* s    = (u64 *)base;
 	s[0] = 0;    // r15
@@ -362,7 +362,7 @@ fiber __vxp_fiber_alloc() {
 }
 void __vxp_fiber_free(fiber f) {
 	while (__vxp_cas64(&__vxp_pool_lock, 0, 1) != 0) { __vxp_pause(); }
-	Fiber(f).next = __vxp_pool_head;
+	Fiber(f).next   = __vxp_pool_head;
 	__vxp_pool_head = f;
 	__vxp_store64(&__vxp_pool_lock, 0);
 }
@@ -462,7 +462,7 @@ i64 __vxp_rand_victim(i64 n) {
 // ---------------------------------------------------------------------------
 void __vxp_sched_enqueue(fiber fib) {
 	Fiber(fib).state = FiberState.VXP_READY;
-	i64        s     = __vxp_tls_wid1;
+	i64 s = __vxp_tls_wid1;
 	if (s > 0) {
 		if (__vxp_push(s - 1, fib) == 0) {
 			__vxp_gq_push(fib); // deque llena: fallback global
@@ -515,7 +515,7 @@ public void vx_wq_push(uintptr head_ptr, uintptr tail_ptr, fiber fib) {
 	Fiber(fib).next = 0;
 	// tl/hd son valores de fibra guardados en los slots de la cola (i64 en el
 	// canal); el load/store atomico habla i64 -> cast solo en esa frontera.
-	fiber      tl   = (fiber) __vxp_load64((i64 *)(i64) tail_ptr);
+	fiber tl = (fiber) __vxp_load64((i64 *)(i64) tail_ptr);
 	if (tl == 0) {
 		__vxp_store64((i64 *)(i64) head_ptr, (i64) fib);
 	} else {
@@ -543,7 +543,7 @@ public fiber vx_wq_pop(uintptr head_ptr, uintptr tail_ptr) {
 /// El worker entra en la fibra.  Vuelve aqui cuando la fibra cede/bloquea/muere.
 /// El worker inspecciona f.state despues (resume no devuelve nada).
 void __vxp_resume(fiber fib) {
-	__vxp_cur_fiber = fib;
+	__vxp_cur_fiber  = fib;
 	Fiber(fib).state = FiberState.VXP_RUNNING;
 	// Salva el ctx del worker en su celda sched_ctx, carga el de la fibra.
 	__vxp_fiber_switch((u64)__vxp_my_sched(), (u64) & Fiber(fib).ctx);
@@ -585,7 +585,7 @@ public void vx_park(i64 parkfn, i64 parkarg) {
 /// retornar (fiber_init lo puso como direccion de retorno).  Marca TERMINATED y
 /// switchea al scheduler; NUNCA retorna.
 void __vxp_fiber_exit() {
-	fiber    f     = __vxp_cur_fiber;
+	fiber f = __vxp_cur_fiber;
 	Fiber(f).state = FiberState.VXP_TERMINATED;
 	__vxp_fiber_switch((u64) & Fiber(f).ctx, (u64)__vxp_my_sched());
 // inalcanzable (el scheduler no reanuda una fibra TERMINATED).
@@ -648,7 +648,7 @@ void __vxp_worker(u64 wid) {
 				i64 pf = Fiber(fib).parkfn;
 				if (pf != 0) {
 					Fiber(fib).parkfn = 0; // una vez
-					i64        pa     = Fiber(fib).parkarg;
+					i64 pa = Fiber(fib).parkarg;
 					((cfn(i64, i64) -> void) pf)(pa, (i64) fib);
 				}
 			}
@@ -683,7 +683,7 @@ public i64 pool_start(i64 nworkers) {
 		uintptr h = __vxp_os_spawn(
 			(uintptr)(cfn(u64) -> void) __vxp_worker,
 			(uintptr)i
-		);
+			);
 		__vxp_handle[i] = h;
 		if (h != 0) { started++; }
 	}

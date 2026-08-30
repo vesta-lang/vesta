@@ -14,77 +14,77 @@
 // sobre SelCase en stdlib/vx/chan.vx).
 import std.pool only pool_start, pool_submit, pool_join;
 import std.chan only Chan, chan_new, chan_send, chan_recv,
-                     chan_free, chan_select;
+chan_free, chan_select;
 
 Chan src;
 Chan dst;
-i64 g_sum = 0;
-const i64 M = 200;
+      i64 g_sum     = 0;
+const i64 M         = 200;
 const i64 CASE_RECV = 0;
 const i64 CASE_SEND = 1;
 
 void producer(i64 a) {
-    for (i64 k = 0; k < M; k++) {
-        chan_send(src, k + 1);          // 1, 2, ..., M
-    }
+	for (i64 k = 0; k < M; k++) {
+		chan_send(src, k + 1); // 1, 2, ..., M
+	}
 }
 void consumer(i64 a) {
-    for (i64 k = 0; k < M; k++) {
-        g_sum += chan_recv(dst);
-    }
+	for (i64 k = 0; k < M; k++) {
+		g_sum += chan_recv(dst);
+	}
 }
 void pump(i64 a) {
-    i64[2] buf;                            // buffer interno de 2 huecos
-    i64 head = 0;
-    i64 tail = 0;
-    i64 cnt = 0;
-    i64 got = 0;
-    i64 sent = 0;
-    while (sent < M) {
-        i64[6] cases;                      // hasta 2 casos * 3 qwords [chan, dir, val]
-        i64 nc = 0;
-        i64 recv_case = -1;
-        i64 send_case = -1;
-        if (got < M && cnt < 2) {          // ofrece RECIBIR si quedan y hay hueco
-            cases[nc * 3 + 0] = (i64) src;
-            cases[nc * 3 + 1] = CASE_RECV;
-            cases[nc * 3 + 2] = 0;
-            recv_case = nc;
-            nc += 1;
-        }
-        if (cnt > 0) {                      // ofrece ENVIAR si tiene pendiente
-            cases[nc * 3 + 0] = (i64) dst;
-            cases[nc * 3 + 1] = CASE_SEND;
-            cases[nc * 3 + 2] = buf[head];
-            send_case = nc;
-            nc += 1;
-        }
-        i64 idx = chan_select((i64)&cases[0], nc);
-        if (idx == recv_case) {
-            buf[tail] = cases[recv_case * 3 + 2];   // valor recibido (escrito por el select)
-            tail = (tail + 1) % 2;
-            cnt += 1;
-            got += 1;
-        } else {
-            head = (head + 1) % 2;          // el pendiente ofrecido se envio
-            cnt -= 1;
-            sent += 1;
-        }
-    }
+	i64[2] buf; // buffer interno de 2 huecos
+	i64 head = 0;
+	i64 tail = 0;
+	i64 cnt  = 0;
+	i64 got  = 0;
+	i64 sent = 0;
+	while (sent < M) {
+		i64[6] cases; // hasta 2 casos * 3 qwords [chan, dir, val]
+		i64 nc        =  0;
+		i64 recv_case = -1;
+		i64 send_case = -1;
+		if (got < M && cnt < 2) { // ofrece RECIBIR si quedan y hay hueco
+			cases[nc * 3 + 0] = (i64) src;
+			cases[nc * 3 + 1] = CASE_RECV;
+			cases[nc * 3 + 2] = 0;
+			recv_case = nc;
+			nc += 1;
+		}
+		if (cnt > 0) { // ofrece ENVIAR si tiene pendiente
+			cases[nc * 3 + 0] = (i64) dst;
+			cases[nc * 3 + 1] = CASE_SEND;
+			cases[nc * 3 + 2] = buf[head];
+			send_case = nc;
+			nc += 1;
+		}
+		i64 idx = chan_select((i64) & cases[0], nc);
+		if (idx == recv_case) {
+			buf[tail] = cases[recv_case * 3 + 2]; // valor recibido (escrito por el select)
+			tail = (tail + 1) % 2;
+			cnt += 1;
+			got += 1;
+		} else {
+			head = (head + 1) % 2; // el pendiente ofrecido se envio
+			cnt -= 1;
+			sent += 1;
+		}
+	}
 }
 i32 main() {
-    src = chan_new(2);
-    dst = chan_new(2);
-    pool_start(4);
-    pool_submit((i64)(cfn(i64) -> void) consumer, 0);
-    pool_submit((i64)(cfn(i64) -> void) pump, 0);
-    pool_submit((i64)(cfn(i64) -> void) producer, 0);
-    pool_join();
-    chan_free(src);
-    chan_free(dst);
-    // suma transferida = 1+2+...+M = M*(M+1)/2.
-    if (g_sum == M * (M + 1) / 2) {
-        return 42;
-    }
-    return 1;
+	src = chan_new(2);
+	dst = chan_new(2);
+	pool_start(4);
+	pool_submit((i64)(cfn(i64) -> void) consumer, 0);
+	pool_submit((i64)(cfn(i64) -> void) pump, 0);
+	pool_submit((i64)(cfn(i64) -> void) producer, 0);
+	pool_join();
+	chan_free(src);
+	chan_free(dst);
+	// suma transferida = 1+2+...+M = M*(M+1)/2.
+	if (g_sum == M * (M + 1) / 2) {
+		return 42;
+	}
+	return 1;
 }

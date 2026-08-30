@@ -14,233 +14,229 @@
 
 // El PEB del proceso via INLINE ASM (en x64 vive en gs:[0x60]).
 u64 get_peb() {
-    register("rax") u64 r;
-    asm { mov rax, gs:[0x60] };
-    return r;
+	register("rax") u64 r;
+	asm { mov rax, gs:[0x60] };
+	return r;
 }
 
 // _PEB_LDR_DATA (x64): cabeza de las listas de modulos.
-@overlay struct LdrData {
-    u32 Length             @0x000;
-    u8  Initialized        @0x004;
-    u64 SsHandle           @0x008;
-    u64 InLoadOrderFlink   @0x010;   // LIST_ENTRY.Flink (primer modulo)
+@overlay
+struct LdrData {
+	u32 Length           @0x0000;
+	u8  Initialized      @0x0004;
+	u64 SsHandle         @0x0008;
+	u64 InLoadOrderFlink @0x0010; // LIST_ENTRY.Flink (primer modulo)
 }
 
 // _LDR_DATA_TABLE_ENTRY (x64): un modulo cargado.  InLoadOrderLinks @+0.
-@overlay struct LdrEntry {
-    u64 InLoadFlink   @0x000;
-    u64 DllBase       @0x030;
-    u32 SizeOfImage   @0x040;
-    u16 NameLen       @0x058;   // BaseDllName : UNICODE_STRING
-    u64 NameBuf       @0x060;   // PWSTR (UTF-16)
+@overlay
+struct LdrEntry {
+	u64 InLoadFlink @0x0000;
+	u64 DllBase     @0x0030;
+	u32 SizeOfImage @0x0040;
+	u16 NameLen     @0x0058; // BaseDllName : UNICODE_STRING
+	u64 NameBuf     @0x0060; // PWSTR (UTF-16)
 }
 
 // _PEB (x64).
-@overlay struct PEB {
-    u8  InheritedAddressSpace          @0x000;
-    u8  ReadImageFileExecOptions       @0x001;
-    u8  BeingDebugged                  @0x002;   // flag anti-debug clasico
-    u8  BitField                       @0x003;
-    u8  ImageUsesLargePages        : 1 @0x003;
-    u8  IsProtectedProcess         : 1 @0x003;
-    u8  IsImageDynamicallyReloc    : 1 @0x003;
-    u8  SkipPatchingUser32Fwd      : 1 @0x003;
-    u8  IsPackagedProcess          : 1 @0x003;
-    u8  IsAppContainer             : 1 @0x003;
-    u8  IsProtectedProcessLight    : 1 @0x003;
-    u8  IsLongPathAwareProcess     : 1 @0x003;
-    u64 Mutant                         @0x008;
-    u64 ImageBaseAddress               @0x010;
-    u64 Ldr                            @0x018;
-    u64 ProcessParameters              @0x020;
-    u64 SubSystemData                  @0x028;
-    u64 ProcessHeap                    @0x030;
-    u64 FastPebLock                    @0x038;
-    u64 AtlThunkSListPtr               @0x040;
-    u64 IFEOKey                        @0x048;
-    u32 CrossProcessFlags              @0x050;
-    u32 ProcessInJob               : 1 @0x050;
-    u32 ProcessInitializing        : 1 @0x050;
-    u32 ProcessUsingVEH            : 1 @0x050;
-    u32 ProcessUsingVCH            : 1 @0x050;
-    u32 ProcessUsingFTH            : 1 @0x050;
-    u64 KernelCallbackTable            @0x058;
-    u32 SystemReserved                 @0x060;
-    u32 AtlThunkSListPtr32             @0x064;
-    u64 ApiSetMap                      @0x068;
-    u32 TlsExpansionCounter            @0x070;
-    u64 TlsBitmap                      @0x078;
-    u64 ReadOnlySharedMemoryBase       @0x088;
-    u64 SharedData                     @0x090;
-    u64 ReadOnlyStaticServerData       @0x098;
-    u64 AnsiCodePageData               @0x0A0;
-    u64 OemCodePageData                @0x0A8;
-    u64 UnicodeCaseTableData           @0x0B0;
-    u32 NumberOfProcessors             @0x0B8;
-    u32 NtGlobalFlag                   @0x0BC;
-    u64 CriticalSectionTimeout         @0x0C0;
-    u64 HeapSegmentReserve             @0x0C8;
-    u64 HeapSegmentCommit              @0x0D0;
-    u64 HeapDeCommitTotalFreeThreshold @0x0D8;
-    u64 HeapDeCommitFreeBlockThreshold @0x0E0;
-    u32 NumberOfHeaps                  @0x0E8;
-    u32 MaximumNumberOfHeaps           @0x0EC;
-    u64 ProcessHeaps                   @0x0F0;
-    u64 GdiSharedHandleTable           @0x0F8;
-    u64 ProcessStarterHelper           @0x100;
-    u32 GdiDCAttributeList             @0x108;
-    u64 LoaderLock                     @0x110;
-    u32 OSMajorVersion                 @0x118;
-    u32 OSMinorVersion                 @0x11C;
-    u16 OSBuildNumber                  @0x120;   // <- el CONTEXTO de version
-    u16 OSCSDVersion                   @0x122;
-    u32 OSPlatformId                   @0x124;
-    u32 ImageSubsystem                 @0x128;
-    u32 ImageSubsystemMajorVersion     @0x12C;
-    u32 ImageSubsystemMinorVersion     @0x130;
-    u64 ActiveProcessAffinityMask      @0x138;
-    u64 PostProcessInitRoutine         @0x230;
-    u64 TlsExpansionBitmap             @0x238;
-    // SessionId: su OFFSET cambia entre versiones -> resolver que lee el propio
-    // build del PEB (this.OSBuildNumber) para elegir el offset.  Contexto interno.
-    u32 SessionId @offset {
-        if (this.OSBuildNumber >= 10240) { return base + 0x2C0; }   // Win10/11
-        return base + 0x2A0;                                         // 8.1 y antes
-    };
-    u64 AppCompatFlags                 @0x2C8;
-    u64 AppCompatFlagsUser             @0x2D0;
-    u64 pShimData                      @0x2D8;
-    u64 AppCompatInfo                  @0x2E0;
-    u64 ActivationContextData          @0x2F8;
-    u64 SystemDefaultActivationContextData @0x308;
-    u64 MinimumStackCommit             @0x318;
-    u64 FlsBitmap                      @0x338;
-    u32 FlsHighIndex                   @0x350;
-    u64 WerRegistrationData            @0x358;
-    u64 WerShipAssertPtr               @0x360;
-    u64 pImageHeaderHash               @0x370;
-    u32 TracingFlags                   @0x378;
-    u64 CsrServerReadOnlySharedMemoryBase @0x380;
-    // --- campos version-dependientes (offsets validos donde EXISTEN) ---
-    u64 TelemetryCoverageHeader        @0x7A0;   // Win10 1703+
-    u32 CloudFileFlags                 @0x7A8;   // Win10 1709+
-    u32 CloudFileDiagFlags             @0x7AC;   // Win10 1803+
-    u8  PlaceholderCompatibilityMode   @0x7B0;   // Win10 1803+
-    u64 LeapSecondData                 @0x7B8;   // Win10 1809+
-    u32 LeapSecondFlags                @0x7C0;   // Win10 1809+
-    u32 NtGlobalFlag2                  @0x7C4;   // Win10 1903+
+@overlay
+struct PEB {
+	u8 InheritedAddressSpace    @0x0000;
+	u8 ReadImageFileExecOptions @0x0001;
+	u8 BeingDebugged            @0x0002; // flag anti-debug clasico
+	u8 BitField                 @0x0003;
+	u8 ImageUsesLargePages : 1 @0x0003;
+	u8 IsProtectedProcess : 1 @0x0003;
+	u8 IsImageDynamicallyReloc : 1 @0x0003;
+	u8 SkipPatchingUser32Fwd : 1 @0x0003;
+	u8 IsPackagedProcess : 1 @0x0003;
+	u8 IsAppContainer : 1 @0x0003;
+	u8 IsProtectedProcessLight : 1 @0x0003;
+	u8 IsLongPathAwareProcess : 1 @0x0003;
+	u64 Mutant            @0x0008;
+	u64 ImageBaseAddress  @0x0010;
+	u64 Ldr               @0x0018;
+	u64 ProcessParameters @0x0020;
+	u64 SubSystemData     @0x0028;
+	u64 ProcessHeap       @0x0030;
+	u64 FastPebLock       @0x0038;
+	u64 AtlThunkSListPtr  @0x0040;
+	u64 IFEOKey           @0x0048;
+	u32 CrossProcessFlags @0x0050;
+	u32 ProcessInJob : 1 @0x0050;
+	u32 ProcessInitializing : 1 @0x0050;
+	u32 ProcessUsingVEH : 1 @0x0050;
+	u32 ProcessUsingVCH : 1 @0x0050;
+	u32 ProcessUsingFTH : 1 @0x0050;
+	u64 KernelCallbackTable            @0x0058;
+	u32 SystemReserved                 @0x0060;
+	u32 AtlThunkSListPtr32             @0x0064;
+	u64 ApiSetMap                      @0x0068;
+	u32 TlsExpansionCounter            @0x0070;
+	u64 TlsBitmap                      @0x0078;
+	u64 ReadOnlySharedMemoryBase       @0x0088;
+	u64 SharedData                     @0x0090;
+	u64 ReadOnlyStaticServerData       @0x0098;
+	u64 AnsiCodePageData               @0x00A0;
+	u64 OemCodePageData                @0x00A8;
+	u64 UnicodeCaseTableData           @0x00B0;
+	u32 NumberOfProcessors             @0x00B8;
+	u32 NtGlobalFlag                   @0x00BC;
+	u64 CriticalSectionTimeout         @0x00C0;
+	u64 HeapSegmentReserve             @0x00C8;
+	u64 HeapSegmentCommit              @0x00D0;
+	u64 HeapDeCommitTotalFreeThreshold @0x00D8;
+	u64 HeapDeCommitFreeBlockThreshold @0x00E0;
+	u32 NumberOfHeaps                  @0x00E8;
+	u32 MaximumNumberOfHeaps           @0x00EC;
+	u64 ProcessHeaps                   @0x00F0;
+	u64 GdiSharedHandleTable           @0x00F8;
+	u64 ProcessStarterHelper           @0x0100;
+	u32 GdiDCAttributeList             @0x0108;
+	u64 LoaderLock                     @0x0110;
+	u32 OSMajorVersion                 @0x0118;
+	u32 OSMinorVersion                 @0x011C;
+	u16 OSBuildNumber                  @0x0120; // <- el CONTEXTO de version
+	u16 OSCSDVersion                   @0x0122;
+	u32 OSPlatformId                   @0x0124;
+	u32 ImageSubsystem                 @0x0128;
+	u32 ImageSubsystemMajorVersion     @0x012C;
+	u32 ImageSubsystemMinorVersion     @0x0130;
+	u64 ActiveProcessAffinityMask      @0x0138;
+	u64 PostProcessInitRoutine         @0x0230;
+	u64 TlsExpansionBitmap             @0x0238;
+	// SessionId: su OFFSET cambia entre versiones -> resolver que lee el propio
+	// build del PEB (this.OSBuildNumber) para elegir el offset.  Contexto interno.
+	u32 SessionId @offset {
+		if (this.OSBuildNumber >= 10_240) { return base + 0x02C0; } // Win10/11
+		return base + 0x02A0; // 8.1 y antes
+	};
+	u64 AppCompatFlags                     @0x02C8;
+	u64 AppCompatFlagsUser                 @0x02D0;
+	u64 pShimData                          @0x02D8;
+	u64 AppCompatInfo                      @0x02E0;
+	u64 ActivationContextData              @0x02F8;
+	u64 SystemDefaultActivationContextData @0x0308;
+	u64 MinimumStackCommit                 @0x0318;
+	u64 FlsBitmap                          @0x0338;
+	u32 FlsHighIndex                       @0x0350;
+	u64 WerRegistrationData                @0x0358;
+	u64 WerShipAssertPtr                   @0x0360;
+	u64 pImageHeaderHash                   @0x0370;
+	u32 TracingFlags                       @0x0378;
+	u64 CsrServerReadOnlySharedMemoryBase  @0x0380;
+	// --- campos version-dependientes (offsets validos donde EXISTEN) ---
+	u64 TelemetryCoverageHeader            @0x07A0;     // Win10 1703+
+	u32 CloudFileFlags                     @0x07A8;              // Win10 1709+
+	u32 CloudFileDiagFlags                 @0x07AC;          // Win10 1803+
+	u8  PlaceholderCompatibilityMode       @0x07B0; // Win10 1803+
+	u64 LeapSecondData                     @0x07B8;              // Win10 1809+
+	u32 LeapSecondFlags                    @0x07C0;             // Win10 1809+
+	u32 NtGlobalFlag2                      @0x07C4;               // Win10 1903+
 
-    // -------- el overlay se DISECCIONA a si mismo, discriminando por version ----
-    // Devuelve 42 si el PEB se parseo bien (MZ en ImageBase + OSPlatformId==2 +
-    // al menos 1 modulo).
-    public i32 dump() {
-        u16 b = this.OSBuildNumber;   // el CONTEXTO, leido de si mismo
-        print("Windows ");
-        if (b >= 26100)      { println("11 24H2 (${b})"); }
-        else if (b >= 22000) { println("11 (${b})"); }
-        else if (b >= 19041) { println("10 20H1+ (${b})"); }
-        else if (b >= 10240) { println("10 (${b})"); }
-        else if (b >= 9600)  { println("8.1 (${b})"); }
-        else                 { println("<= 8 (${b})"); }
+	// -------- el overlay se DISECCIONA a si mismo, discriminando por version ----
+	// Devuelve 42 si el PEB se parseo bien (MZ en ImageBase + OSPlatformId==2 +
+	// al menos 1 modulo).
+	public i32 dump() {
+		u16 b = this.OSBuildNumber; // el CONTEXTO, leido de si mismo
+		print("Windows ");
+		if (b >= 26_100) { println("11 24H2 (${b})"); } else if (b >= 22_000) { println("11 (${b})"); } else if (b >= 19_041) { println("10 20H1+ (${b})"); } else if (b >= 10_240) { println("10 (${b})"); } else if (b >= 9600) { println("8.1 (${b})"); } else { println("<= 8 (${b})"); }
 
-        println("BeingDebugged=${this.BeingDebugged}");
-        println("BitField=${this.BitField:hex}  [LargePages=${this.ImageUsesLargePages} ProtProc=${this.IsProtectedProcess} DynReloc=${this.IsImageDynamicallyReloc} AppContainer=${this.IsAppContainer} LongPathAware=${this.IsLongPathAwareProcess}]");
-        println("Mutant=${this.Mutant:hex}");
-        println("ImageBaseAddress=${this.ImageBaseAddress:hex}");
-        println("Ldr=${this.Ldr:hex}");
-        println("ProcessParameters=${this.ProcessParameters:hex}");
-        println("ProcessHeap=${this.ProcessHeap:hex}");
-        println("FastPebLock=${this.FastPebLock:hex}");
-        println("AtlThunkSListPtr=${this.AtlThunkSListPtr:hex}");
-        println("IFEOKey=${this.IFEOKey:hex}");
-        println("CrossProcessFlags=${this.CrossProcessFlags:hex}  [InJob=${this.ProcessInJob} Init=${this.ProcessInitializing} VEH=${this.ProcessUsingVEH} VCH=${this.ProcessUsingVCH} FTH=${this.ProcessUsingFTH}]");
-        println("KernelCallbackTable=${this.KernelCallbackTable:hex}");
-        println("ApiSetMap=${this.ApiSetMap:hex}");
-        println("TlsExpansionCounter=${this.TlsExpansionCounter}");
-        println("ReadOnlySharedMemoryBase=${this.ReadOnlySharedMemoryBase:hex}");
-        println("AnsiCodePageData=${this.AnsiCodePageData:hex}");
-        println("OemCodePageData=${this.OemCodePageData:hex}");
-        println("UnicodeCaseTableData=${this.UnicodeCaseTableData:hex}");
-        println("NumberOfProcessors=${this.NumberOfProcessors}");
-        println("NtGlobalFlag=${this.NtGlobalFlag:hex}");
-        println("HeapSegmentReserve=${this.HeapSegmentReserve:hex}");
-        println("HeapSegmentCommit=${this.HeapSegmentCommit:hex}");
-        println("NumberOfHeaps=${this.NumberOfHeaps}");
-        println("MaximumNumberOfHeaps=${this.MaximumNumberOfHeaps}");
-        println("ProcessHeaps=${this.ProcessHeaps:hex}");
-        println("GdiSharedHandleTable=${this.GdiSharedHandleTable:hex}");
-        println("LoaderLock=${this.LoaderLock:hex}");
-        println("OSVersion=${this.OSMajorVersion}.${this.OSMinorVersion} build ${this.OSBuildNumber}");
-        println("OSPlatformId=${this.OSPlatformId}");
-        println("ImageSubsystem=${this.ImageSubsystem}.${this.ImageSubsystemMajorVersion}.${this.ImageSubsystemMinorVersion}");
-        println("ActiveProcessAffinityMask=${this.ActiveProcessAffinityMask:hex}");
-        println("SessionId=${this.SessionId}");   // offset segun version (resolver)
-        println("AppCompatFlags=${this.AppCompatFlags:hex}");
-        println("pShimData=${this.pShimData:hex}");
-        println("ActivationContextData=${this.ActivationContextData:hex}");
-        println("MinimumStackCommit=${this.MinimumStackCommit:hex}");
-        println("FlsBitmap=${this.FlsBitmap:hex}");
-        println("FlsHighIndex=${this.FlsHighIndex}");
-        println("WerRegistrationData=${this.WerRegistrationData:hex}");
-        println("pImageHeaderHash=${this.pImageHeaderHash:hex}");
-        println("TracingFlags=${this.TracingFlags:hex}");
-        println("CsrServerReadOnlySharedMemoryBase=${this.CsrServerReadOnlySharedMemoryBase:hex}");
+		println("BeingDebugged=${this.BeingDebugged}");
+		println("BitField=${this.BitField:hex}  [LargePages=${this.ImageUsesLargePages} ProtProc=${this.IsProtectedProcess} DynReloc=${this.IsImageDynamicallyReloc} AppContainer=${this.IsAppContainer} LongPathAware=${this.IsLongPathAwareProcess}]");
+		println("Mutant=${this.Mutant:hex}");
+		println("ImageBaseAddress=${this.ImageBaseAddress:hex}");
+		println("Ldr=${this.Ldr:hex}");
+		println("ProcessParameters=${this.ProcessParameters:hex}");
+		println("ProcessHeap=${this.ProcessHeap:hex}");
+		println("FastPebLock=${this.FastPebLock:hex}");
+		println("AtlThunkSListPtr=${this.AtlThunkSListPtr:hex}");
+		println("IFEOKey=${this.IFEOKey:hex}");
+		println("CrossProcessFlags=${this.CrossProcessFlags:hex}  [InJob=${this.ProcessInJob} Init=${this.ProcessInitializing} VEH=${this.ProcessUsingVEH} VCH=${this.ProcessUsingVCH} FTH=${this.ProcessUsingFTH}]");
+		println("KernelCallbackTable=${this.KernelCallbackTable:hex}");
+		println("ApiSetMap=${this.ApiSetMap:hex}");
+		println("TlsExpansionCounter=${this.TlsExpansionCounter}");
+		println("ReadOnlySharedMemoryBase=${this.ReadOnlySharedMemoryBase:hex}");
+		println("AnsiCodePageData=${this.AnsiCodePageData:hex}");
+		println("OemCodePageData=${this.OemCodePageData:hex}");
+		println("UnicodeCaseTableData=${this.UnicodeCaseTableData:hex}");
+		println("NumberOfProcessors=${this.NumberOfProcessors}");
+		println("NtGlobalFlag=${this.NtGlobalFlag:hex}");
+		println("HeapSegmentReserve=${this.HeapSegmentReserve:hex}");
+		println("HeapSegmentCommit=${this.HeapSegmentCommit:hex}");
+		println("NumberOfHeaps=${this.NumberOfHeaps}");
+		println("MaximumNumberOfHeaps=${this.MaximumNumberOfHeaps}");
+		println("ProcessHeaps=${this.ProcessHeaps:hex}");
+		println("GdiSharedHandleTable=${this.GdiSharedHandleTable:hex}");
+		println("LoaderLock=${this.LoaderLock:hex}");
+		println("OSVersion=${this.OSMajorVersion}.${this.OSMinorVersion} build ${this.OSBuildNumber}");
+		println("OSPlatformId=${this.OSPlatformId}");
+		println("ImageSubsystem=${this.ImageSubsystem}.${this.ImageSubsystemMajorVersion}.${this.ImageSubsystemMinorVersion}");
+		println("ActiveProcessAffinityMask=${this.ActiveProcessAffinityMask:hex}");
+		println("SessionId=${this.SessionId}"); // offset segun version (resolver)
+		println("AppCompatFlags=${this.AppCompatFlags:hex}");
+		println("pShimData=${this.pShimData:hex}");
+		println("ActivationContextData=${this.ActivationContextData:hex}");
+		println("MinimumStackCommit=${this.MinimumStackCommit:hex}");
+		println("FlsBitmap=${this.FlsBitmap:hex}");
+		println("FlsHighIndex=${this.FlsHighIndex}");
+		println("WerRegistrationData=${this.WerRegistrationData:hex}");
+		println("pImageHeaderHash=${this.pImageHeaderHash:hex}");
+		println("TracingFlags=${this.TracingFlags:hex}");
+		println("CsrServerReadOnlySharedMemoryBase=${this.CsrServerReadOnlySharedMemoryBase:hex}");
 
-        // --- campos version-dependientes: la DISCRIMINACION vive aqui dentro; en
-        //     un Windows viejo NO se leen (esos offsets no existen -> serian basura).
-        println("-- campos version-dependientes --");
-        if (b >= 15063) { println("TelemetryCoverageHeader=${this.TelemetryCoverageHeader:hex}"); }
-        else { println("TelemetryCoverageHeader: (no existe < 1703)"); }
-        if (b >= 16299) { println("CloudFileFlags=${this.CloudFileFlags:hex}"); }
-        else { println("CloudFileFlags: (no existe < 1709)"); }
-        if (b >= 17134) {
-            println("CloudFileDiagFlags=${this.CloudFileDiagFlags:hex}");
-            println("PlaceholderCompatibilityMode=${this.PlaceholderCompatibilityMode}");
-        } else { println("CloudFileDiag/Placeholder: (no existe < 1803)"); }
-        if (b >= 17763) {
-            println("LeapSecondData=${this.LeapSecondData:hex}");
-            println("LeapSecondFlags=${this.LeapSecondFlags:hex}");
-        } else { println("LeapSecond: (no existe < 1809)"); }
-        if (b >= 18362) { println("NtGlobalFlag2=${this.NtGlobalFlag2:hex}"); }
-        else { println("NtGlobalFlag2: (no existe < 1903)"); }
+		// --- campos version-dependientes: la DISCRIMINACION vive aqui dentro; en
+		//     un Windows viejo NO se leen (esos offsets no existen -> serian basura).
+		println("-- campos version-dependientes --");
+		if (b >= 15_063) { println("TelemetryCoverageHeader=${this.TelemetryCoverageHeader:hex}"); } else { println("TelemetryCoverageHeader: (no existe < 1703)"); }
+		if (b >= 16_299) { println("CloudFileFlags=${this.CloudFileFlags:hex}"); } else { println("CloudFileFlags: (no existe < 1709)"); }
+		if (b >= 17_134) {
+			println("CloudFileDiagFlags=${this.CloudFileDiagFlags:hex}");
+			println("PlaceholderCompatibilityMode=${this.PlaceholderCompatibilityMode}");
+		} else { println("CloudFileDiag/Placeholder: (no existe < 1803)"); }
+		if (b >= 17_763) {
+			println("LeapSecondData=${this.LeapSecondData:hex}");
+			println("LeapSecondFlags=${this.LeapSecondFlags:hex}");
+		} else { println("LeapSecond: (no existe < 1809)"); }
+		if (b >= 18_362) { println("NtGlobalFlag2=${this.NtGlobalFlag2:hex}"); } else { println("NtGlobalFlag2: (no existe < 1903)"); }
 
-        // --- modulos cargados: Ldr -> InLoadOrderModuleList (sub-overlays) ---
-        println("modulos cargados:");
-        LdrData ld = LdrData((u8*) this.Ldr);
-        u64 head = this.Ldr + 0x10;
-        u64 cur  = ld.InLoadOrderFlink;
-        i32 count = 0;
-        while (cur != head && cur != 0 && count < 64) {
-            LdrEntry m = LdrEntry((u8*) cur);
-            if (m.DllBase != 0 && m.NameLen > 0) {
-                print("  ");
-                u8* nb = (u8*) m.NameBuf;   // BaseDllName UTF-16 -> byte bajo (ASCII)
-                i32 j = 0;
-                i32 wchars = (i32)(m.NameLen / 2);
-                while (j < wchars && j < 128) {
-                    print_char((char) *(u8*)(nb + (u64)j * 2));
-                    j = j + 1;
-                }
-                println("  (base=${m.DllBase:hex} size=${m.SizeOfImage:hex})");
-            }
-            cur = m.InLoadFlink;
-            count = count + 1;
-        }
-        println("total_modulos=${count}");
+		// --- modulos cargados: Ldr -> InLoadOrderModuleList (sub-overlays) ---
+		println("modulos cargados:");
+		LdrData ld    = LdrData((u8 *) this.Ldr);
+		u64     head  = this.Ldr + 0x10;
+		u64     cur   = ld.InLoadOrderFlink;
+		i32     count = 0;
+		while (cur != head && cur != 0 && count < 64) {
+			LdrEntry m = LdrEntry((u8 *) cur);
+			if (m.DllBase != 0 && m.NameLen > 0) {
+				print("  ");
+				u8* nb     = (u8 *) m.NameBuf; // BaseDllName UTF-16 -> byte bajo (ASCII)
+				i32 j      = 0;
+				i32 wchars = (i32)(m.NameLen / 2);
+				while (j < wchars && j < 128) {
+					print_char((char) * (u8 *)(nb + (u64)j * 2));
+					j = j + 1;
+				}
+				println("  (base=${m.DllBase:hex} size=${m.SizeOfImage:hex})");
+			}
+			cur   = m.InLoadFlink;
+			count = count + 1;
+		}
+		println("total_modulos=${count}");
 
-        // invariante: MZ en ImageBase + plataforma NT + al menos 1 modulo.
-        u8* ib = (u8*) this.ImageBaseAddress;
-        if (*(u8*)(ib+0) == 0x4D && *(u8*)(ib+1) == 0x5A
-            && this.OSPlatformId == 2 && count > 0) { return 42; }
-        return 0;
-    }
+		// invariante: MZ en ImageBase + plataforma NT + al menos 1 modulo.
+		u8* ib = (u8 *) this.ImageBaseAddress;
+		if (*(u8 *)(ib + 0) == 0x4D && *(u8 *)(ib + 1) == 0x5A
+			&& this.OSPlatformId == 2 && count > 0) { return 42; }
+		return 0;
+	}
 }
 
 i32 main() {
-    u64 peb_ptr = get_peb();
-    if (peb_ptr == 0) { println("sin PEB (no Windows?)"); return 1; }
-    PEB p = PEB((u8*) peb_ptr);
-    println("PEB @ ${peb_ptr:hex}");
-    return p.dump();   // el overlay se disecciona a si mismo; 42 si OK
+	u64 peb_ptr = get_peb();
+	if (peb_ptr == 0) { println("sin PEB (no Windows?)");
+		return 1; }
+	PEB p = PEB((u8 *) peb_ptr);
+	println("PEB @ ${peb_ptr:hex}");
+	return p.dump(); // el overlay se disecciona a si mismo; 42 si OK
 }

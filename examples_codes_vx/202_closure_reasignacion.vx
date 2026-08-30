@@ -8,32 +8,33 @@ namespace ejemplos.closure_reasignacion;
 // Ver doc/VMdoc//ClosuresEnCampos.md.
 
 class Contador {
-    i64 n;
-    i64 inc() { this.n = this.n + 1; return this.n; }
+	i64 n;
+	i64 inc() { this.n = this.n + 1;
+		return this.n; }
 }
 
 class Widget {
-    fn() -> i64 onTick;   // campo lambda (closure capturando una clase)
+	fn() -> i64 onTick; // campo lambda (closure capturando una clase)
 }
 
 i32 main() {
-    Contador c1 = new Contador();
-    Contador c2 = new Contador();
-    c2.n = 40;
+	Contador c1 = new Contador();
+	Contador c2 = new Contador();
+	c2.n = 40;
 
-    Widget w = new Widget();
+	Widget w = new Widget();
 
-    // Primera asignacion: closure que captura c1 (env+slot en heap owned).
-    w.onTick = () => c1.inc();
+	// Primera asignacion: closure que captura c1 (env+slot en heap owned).
+	w.onTick = () => c1.inc();
 
-    // Reasignacion: libera el slot+env de la PRIMERA closure antes de guardar
-    // la segunda (que captura c2).  Tambien funciona con metodo ligado.
-    w.onTick = &c2.inc;
+	// Reasignacion: libera el slot+env de la PRIMERA closure antes de guardar
+	// la segunda (que captura c2).  Tambien funciona con metodo ligado.
+	w.onTick = &c2.inc;
 
-    // Llama a la closure vigente -> c2.inc() = 41.
-    i64 r = w.onTick();
+	// Llama a la closure vigente -> c2.inc() = 41.
+	i64 r = w.onTick();
 
-    // Al salir de scope, el dtor de `w` libera el slot+env de la segunda
-    // closure (RAII).  Sin fugas ni double-free.
-    return (i32)(r + 1);   // 41 + 1 = 42
+	// Al salir de scope, el dtor de `w` libera el slot+env de la segunda
+	// closure (RAII).  Sin fugas ni double-free.
+	return (i32)(r + 1); // 41 + 1 = 42
 }

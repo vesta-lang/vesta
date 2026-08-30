@@ -12,49 +12,49 @@ namespace ejemplos.paralelismo_heavy;
 // Esperado: speedup cercano a 4x con --schedulers 4 vs --schedulers 1.
 
 i32 main() {
-    i64 c1 = spawn {
-        i64 acc = 0;
-        i64 i = 1;
-        while (i <= 10000000) {
-            acc = acc + i;
-            i = i + 1;
-        }
-        msgsend(0, acc);
-    };
-    i64 c2 = spawn {
-        i64 acc = 0;
-        i64 i = 1;
-        while (i <= 10000000) {
-            acc = acc + i;
-            i = i + 1;
-        }
-        msgsend(0, acc);
-    };
-    i64 c3 = spawn {
-        i64 acc = 0;
-        i64 i = 1;
-        while (i <= 10000000) {
-            acc = acc + i;
-            i = i + 1;
-        }
-        msgsend(0, acc);
-    };
-    i64 c4 = spawn {
-        i64 acc = 0;
-        i64 i = 1;
-        while (i <= 10000000) {
-            acc = acc + i;
-            i = i + 1;
-        }
-        msgsend(0, acc);
-    };
+	i64 c1 = spawn {
+		i64 acc = 0;
+		i64 i   = 1;
+		while (i <= 10_000_000) {
+			acc = acc + i;
+			i   = i + 1;
+		}
+		msgsend(0, acc);
+	};
+	i64 c2 = spawn {
+		i64 acc = 0;
+		i64 i   = 1;
+		while (i <= 10_000_000) {
+			acc = acc + i;
+			i   = i + 1;
+		}
+		msgsend(0, acc);
+	};
+	i64 c3 = spawn {
+		i64 acc = 0;
+		i64 i   = 1;
+		while (i <= 10_000_000) {
+			acc = acc + i;
+			i   = i + 1;
+		}
+		msgsend(0, acc);
+	};
+	i64 c4 = spawn {
+		i64 acc = 0;
+		i64 i   = 1;
+		while (i <= 10_000_000) {
+			acc = acc + i;
+			i   = i + 1;
+		}
+		msgsend(0, acc);
+	};
 
-    i64 total = 0;
-    i64 n = 0;
-    while (n < 4) {
-        i64 m = msgrecv();
-        total = total + m;
-        n = n + 1;
-    }
-    return total;
+	i64 total = 0;
+	i64 n     = 0;
+	while (n < 4) {
+		i64 m = msgrecv();
+		total = total + m;
+		n     = n + 1;
+	}
+	return total;
 }

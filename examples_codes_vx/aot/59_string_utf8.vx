@@ -3,11 +3,11 @@
 // devuelve UTF-16LE NUL-terminado (Win32 *W, con pares suplentes).
 // "héllo" = 5 code-points, 6 bytes (é ocupa 2 bytes en UTF-8).
 i32 main() {
-    string s = "héllo";
-    u16* w = s.wstr();          // UTF-16LE
-    i32 ok = 1;
-    if (s.length() != 5) { ok = 0; }   // code-points
-    if (s.bytes() != 6)  { ok = 0; }   // bytes
-    if ((i32) w[1] != 233) { ok = 0; } // w[1] = U+00E9 = 0xE9
-    return ok ? 42 : 0;
+	string s  = "héllo";
+	u16*   w  = s.wstr(); // UTF-16LE
+	i32    ok = 1;
+	if (s.length() != 5) { ok = 0; }   // code-points
+	if (s.bytes() != 6) { ok = 0; }    // bytes
+	if ((i32) w[1] != 233) { ok = 0; } // w[1] = U+00E9 = 0xE9
+	return ok ? 42 : 0;
 }

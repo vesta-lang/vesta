@@ -8,21 +8,20 @@
 // reusar `a`, reasignale un valor nuevo.  Ver doc/VMdoc//SmartPointers.md.
 
 struct S {
-    i64* p;
-    ~S() { free(this.p); }                 // recurso -> move-only sin __clone__
+	i64* p;
+	~S() { free(this.p); } // recurso -> move-only sin __clone__
 }
 
 S mk() {
-    S r;
-    r.p = (i64*) malloc(8);
-    *r.p = 7;
-    return r;
+	S r;
+	r.p  = (i64 *) malloc(8);
+	*r.p = 7;
+	return r;
 }
 
 i32 main() {
-    S a = mk();
-    S b = a;                               // move: `a` queda invalidado
-    i64 x = *a.p;                          // ERROR: use-after-move de `a`
-    return (i32)x;
+	S   a = mk();
+	S   b = a;      // move: `a` queda invalidado
+	i64 x = *a.p; // ERROR: use-after-move de `a`
+	return (i32)x;
 }
-// @expect-compile-fail

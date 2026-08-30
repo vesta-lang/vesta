@@ -3,17 +3,17 @@
 // compilador.  Clobbers (flags) inferidos.
 // @expect 55
 u64 main() {
-    asm volatile (
-        reg n = 10,     // in
-        reg acc,        // scratch (acumulador) -> read-back
-        reg i,          // scratch (contador)
-    ) {
-        xor acc, acc
-        mov i, n
-    .loop:
-        add acc, i
-        dec i
-        jnz .loop
-    }
-    return acc;         // read-back: 1+2+...+10 = 55
+	asm volatile(
+		reg n = 10, // in
+		reg acc,    // scratch (acumulador) -> read-back
+		reg i,      // scratch (contador)
+	) {
+		    xor acc, acc
+		    mov i, n
+		.loop:
+		    add acc, i
+		    dec i
+		    jnz .loop
+	}
+	return acc; // read-back: 1+2+...+10 = 55
 }

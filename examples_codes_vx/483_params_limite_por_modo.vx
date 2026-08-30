@@ -24,8 +24,10 @@ namespace ejemplos.params_limite_por_modo;
 // argumentos a 1 no se veia nada: por eso aqui cada uno tiene un valor
 // distinto y se lee por separado.
 
-struct Punto { i64 x; i64 y; }
-class Caja { public i64 v; public Caja(i64 n) { this.v = n; } }
+struct Punto { i64 x;
+	i64 y; }
+class Caja { public i64 v;
+	public Caja(i64 n) { this.v = n; } }
 
 i64 g_valor = 5;
 i64 doblar(i64 x) { return x * 2; }
@@ -34,21 +36,21 @@ i64 doblar(i64 x) { return x * 2; }
 // NATIVO: las doce formas de golpe, en un solo constructor.
 // ---------------------------------------------------------------------------
 @Target("mode:aot")
-class Doce {
-    public i64 total;
-    public Doce(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
-                fn(i64) -> i64 lam, i64[] xs, string s, Punto pt, Caja k,
-                i64 rr, i64 c) {
-        this.total = a + *p + nn + cb(3) + cb2(4) + lam(5) + xs[0] +
-                     s.length() + pt.x + k.v + rr + c;
-    }
+	class Doce {
+	public i64 total;
+	public Doce(i64 a, i64 *p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
+		fn(i64) -> i64 lam, i64[] xs, string s, Punto pt, Caja k,
+		i64 rr, i64 c) {
+		this.total = a + *p + nn + cb(3) + cb2(4) + lam(5) + xs[0] +
+			s.length() + pt.x + k.v + rr + c;
+	}
 }
 
 @Target("mode:aot")
-i64 doce_huecos(i64[] xs, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
-    Doce d = new Doce(1, &g_valor, 2, &doblar, &doblar, lam, xs, s, pt, k,
-                      9, 8);
-    return d.total;
+	i64 doce_huecos(i64[] xs, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
+	Doce d = new Doce(1, &g_valor, 2, &doblar, &doblar, lam, xs, s, pt, k,
+		9, 8);
+	return d.total;
 }
 
 // ---------------------------------------------------------------------------
@@ -56,40 +58,41 @@ i64 doce_huecos(i64[] xs, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
 // constructores de seis, porque doce mas `this` no caben en los registros.
 // ---------------------------------------------------------------------------
 @Target("mode:bytecode")
-class SeisA {
-    public i64 total;
-    public SeisA(i64 a, i64* p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
-                 fn(i64) -> i64 lam) {
-        this.total = a + *p + nn + cb(3) + cb2(4) + lam(5);
-    }
+	class SeisA {
+	public i64 total;
+	public SeisA(i64 a, i64 *p, i64 !!nn, i64 (*cb)(i64), cfn(i64) -> i64 cb2,
+		fn(i64) -> i64 lam) {
+		this.total = a + *p + nn + cb(3) + cb2(4) + lam(5);
+	}
 }
 
 @Target("mode:bytecode")
-class SeisB {
-    public i64 total;
-    public SeisB(i64[] xs, string s, Punto pt, Caja k, i64 rr, i64 c) {
-        this.total = xs[0] + s.length() + pt.x + k.v + rr + c;
-    }
+	class SeisB {
+	public i64 total;
+	public SeisB(i64[] xs, string s, Punto pt, Caja k, i64 rr, i64 c) {
+		this.total = xs[0] + s.length() + pt.x + k.v + rr + c;
+	}
 }
 
 @Target("mode:bytecode")
-i64 doce_huecos(i64[] xs, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
-    SeisA a = new SeisA(1, &g_valor, 2, &doblar, &doblar, lam);
-    SeisB b = new SeisB(xs, s, pt, k, 9, 8);
-    return a.total + b.total;
+	i64 doce_huecos(i64[] xs, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
+	SeisA a = new SeisA(1, &g_valor, 2, &doblar, &doblar, lam);
+	SeisB b = new SeisB(xs, s, pt, k, 9, 8);
+	return a.total + b.total;
 }
 
 i32 main() {
-    i64[2] arr = {3, 4};
-    string s = "hola";
-    Punto pt;
-    pt.x = 3; pt.y = 4;
-    Caja k = new Caja(7);
-    fn(i64) -> i64 lam = (i64 v) => { return v + 1; };
+	i64[2] arr = {3, 4};
+	string s   = "hola";
+	Punto pt;
+	pt.x = 3;
+	pt.y = 4;
+	      Caja           k     = new Caja(7);
+	      fn(i64) -> i64 lam   = (i64 v) => { return v + 1; };
 
-    // 1 + 5 + 2 + 6 + 8 + 6 + 3 + 4 + 3 + 7 + 9 + 8 = 62
-    const i64 total = doce_huecos(arr, s, pt, k, lam);
-    println("total=${total}");
+	// 1 + 5 + 2 + 6 + 8 + 6 + 3 + 4 + 3 + 7 + 9 + 8 = 62
+	const i64            total = doce_huecos(arr, s, pt, k, lam);
+	println("total=${total}");
 
-    return (i32) (total - 20);   // 42
+	return (i32)(total - 20); // 42
 }

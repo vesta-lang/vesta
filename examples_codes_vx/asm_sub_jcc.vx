@@ -6,37 +6,37 @@
 //     vm --vx asm_sub_jcc.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-    u64 acc = 0;
+	u64 acc = 0;
 
-    // sub con signo: 5 - 10 = -5 -> jl tomado (5 < 10 signed) -> +10.
-    {
-        register("rax") u64 x = 5;
-        register("rbx") u64 y = 10;
-        register("rcx") u64 r1 = 0;
-        asm { sub rax, rbx
-              jl .lt
-              mov rcx, 1
-              jmp .e1
-            .lt:
-              mov rcx, 10
-            .e1: };
-        acc = acc + r1;   // +10
-    }
+	// sub con signo: 5 - 10 = -5 -> jl tomado (5 < 10 signed) -> +10.
+	{
+		register("rax") u64 x  = 5;
+		register("rbx") u64 y  = 10;
+		register("rcx") u64 r1 = 0;
+		asm { sub rax, rbx
+			  jl .lt
+			  mov rcx, 1
+			  jmp .e1
+			.lt:
+			  mov rcx, 10
+			.e1: };
+		acc = acc + r1; // +10
+	}
 
-    // sub sin signo: 3 - 8 -> jb tomado (3 < 8 unsigned) -> +32.
-    {
-        register("rax") u64 p = 3;
-        register("rbx") u64 q = 8;
-        register("rcx") u64 r2 = 0;
-        asm { sub rax, rbx
-              jb .lo
-              mov rcx, 1
-              jmp .e2
-            .lo:
-              mov rcx, 32
-            .e2: };
-        acc = acc + r2;   // +32
-    }
+	// sub sin signo: 3 - 8 -> jb tomado (3 < 8 unsigned) -> +32.
+	{
+		register("rax") u64 p  = 3;
+		register("rbx") u64 q  = 8;
+		register("rcx") u64 r2 = 0;
+		asm { sub rax, rbx
+			  jb .lo
+			  mov rcx, 1
+			  jmp .e2
+			.lo:
+			  mov rcx, 32
+			.e2: };
+		acc = acc + r2; // +32
+	}
 
-    return acc;           // 10 + 32 = 42
+	return acc; // 10 + 32 = 42
 }

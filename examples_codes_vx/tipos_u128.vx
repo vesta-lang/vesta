@@ -1,11 +1,11 @@
 namespace t.uu;
 import std.comptime.literal only IntLit, parse_int_lit;
 public struct U {
-    u64 lo;
-    u64 hi;
-    public comptime U(expr e) {
-        IntLit v = parse_int_lit(e);
-        this.lo = v.word(0);
-        this.hi = v.word(1);
-    }
+	u64 lo;
+	u64 hi;
+	public comptime U(expr e) {
+		IntLit v = parse_int_lit(e);
+		this.lo = v.word(0);
+		this.hi = v.word(1);
+	}
 }

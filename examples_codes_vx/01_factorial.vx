@@ -21,14 +21,12 @@ namespace ejemplos.factorial;
 //   vm --run factorial.velb --stats
 
 i64 factorial(i64 n) {
-    if (n <= 1) {
-        return 1;
-    }
-    return n * factorial(
-        n - 1
-    );
+	if (n <= 1) {
+		return 1;
+	}
+	return n * factorial(n - 1);
 }
 
 i32 main() {
-    return factorial(10);
+	return factorial(10);
 }

@@ -25,7 +25,7 @@ import "vx_async" only vasync_yield, vasync_task_done, vasync_spawn_fiber, vasyn
 // Clase trivial: su unico proposito es que `synchronized` en main emita
 // CALL __vx_monenter y dispare el auto-bundle multi-modulo (vx_sync+vx_async).
 class Trigger {
-    i32 x;
+	i32 x;
 }
 
 // ===========================================================================
@@ -37,110 +37,126 @@ class Trigger {
 //  internamente en contienda.  r12 = obj (callee-saved: sobrevive el yield).
 // ===========================================================================
 @Target("!os:windows")
-@Naked void race_task() {
-    asm volatile noinfer {
-        mov r13, rdi
-    race_loop:
-        mov rax, [r13 + 0]          // iters
-        test rax, rax
-        jz race_end
-        mov r12, [r13 + 8]          // obj (callee-saved)
-        // acquire: __vx_monenter(obj)  -- cede internamente si esta ocupado
-        mov rdi, r12
-        call __vx_monenter
-        // counter += 1  (protegido por el monitor)
-        mov rax, [r13 + 16]
-        mov rcx, [rax]
-        add rcx, 1
-        mov [rax], rcx
-        // yield MIENTRAS SE TIENE EL MONITOR -> fuerza contienda en las demas
-        call vasync_yield
-        // counter += 1  (aun protegido)
-        mov rax, [r13 + 16]
-        mov rcx, [rax]
-        add rcx, 1
-        mov [rax], rcx
-        // release: __vx_monexit(obj)
-        mov rdi, r12
-        call __vx_monexit
-        // iters -= 1
-        mov rax, [r13 + 0]
-        sub rax, 1
-        mov [r13 + 0], rax
-        jmp race_loop
-    race_end:
-        call vasync_task_done       // marca terminada + cede definitivo (no retorna)
-    race_hang:
-        jmp race_hang
-    }
+	@Naked
+void race_task() {
+	asm volatile noinfer {
+		    mov r13, rdi
+		race_loop:
+		    mov rax, [r13 + 0]
+		    test rax, rax
+		    jz race_end
+		    mov r12, [r13 + 8]
+
+		    mov rdi, r12
+		    call __vx_monenter
+
+		    mov rax, [r13 + 16]
+		    mov rcx, [rax]
+		    add rcx, 1
+		    mov [rax], rcx
+
+		    call vasync_yield
+
+		    mov rax, [r13 + 16]
+		    mov rcx, [rax]
+		    add rcx, 1
+		    mov [rax], rcx
+
+		    mov rdi, r12
+		    call __vx_monexit
+
+		    mov rax, [r13 + 0]
+		    sub rax, 1
+		    mov [r13 + 0], rax
+		    jmp race_loop
+		race_end:
+		    call vasync_task_done
+		race_hang:
+		    jmp race_hang
+	}
 }
 @Target("os:windows")
-@Naked void race_task() {
-    asm volatile noinfer {
-        mov r13, rcx
-        sub rsp, 32                 // shadow space Win64 para los call
-    race_loop:
-        mov rax, [r13 + 0]
-        test rax, rax
-        jz race_end
-        mov r12, [r13 + 8]
-        mov rcx, r12
-        call __vx_monenter
-        mov rax, [r13 + 16]
-        mov rcx, [rax]
-        add rcx, 1
-        mov [rax], rcx
-        call vasync_yield
-        mov rax, [r13 + 16]
-        mov rcx, [rax]
-        add rcx, 1
-        mov [rax], rcx
-        mov rcx, r12
-        call __vx_monexit
-        mov rax, [r13 + 0]
-        sub rax, 1
-        mov [r13 + 0], rax
-        jmp race_loop
-    race_end:
-        call vasync_task_done
-    race_hang:
-        jmp race_hang
-    }
+	@Naked
+void race_task() {
+	asm volatile noinfer {
+		    mov r13, rcx
+		    sub rsp, 32
+		race_loop:
+		    mov rax, [r13 + 0]
+		    test rax, rax
+		    jz race_end
+		    mov r12, [r13 + 8]
+		    mov rcx, r12
+		    call __vx_monenter
+		    mov rax, [r13 + 16]
+		    mov rcx, [rax]
+		    add rcx, 1
+		    mov [rax], rcx
+		    call vasync_yield
+		    mov rax, [r13 + 16]
+		    mov rcx, [rax]
+		    add rcx, 1
+		    mov [rax], rcx
+		    mov rcx, r12
+		    call __vx_monexit
+		    mov rax, [r13 + 0]
+		    sub rax, 1
+		    mov [r13 + 0], rax
+		    jmp race_loop
+		race_end:
+		    call vasync_task_done
+		race_hang:
+		    jmp race_hang
+	}
 }
 
 i32 main() {
-    // Dispara el auto-bundle de vx_sync (synchronized -> CALL __vx_monenter).
-    Trigger t = new Trigger();
-    synchronized (t) {
-        t.x = 1;
-    }
+	// Dispara el auto-bundle de vx_sync (synchronized -> CALL __vx_monenter).
+	Trigger t = new Trigger();
+	synchronized (t) {
+		t.x = 1;
+	}
 
-    // Objeto compartido cuyo monitor (celda obj+16) se contiende.
-    u64 lock_obj = (u64)malloc(4 * 8);
-    u64* lo = (u64*)lock_obj; lo[0] = 0; lo[1] = 0; lo[2] = 0; lo[3] = 0;
+	// Objeto compartido cuyo monitor (celda obj+16) se contiende.
+	u64  lock_obj = (u64)malloc(4 * 8);
+	u64* lo       = (u64 *)lock_obj;
+	lo[0] = 0;
+	lo[1] = 0;
+	lo[2] = 0;
+	lo[3] = 0;
 
-    // Contador compartido.
-    u64 cnt_cell = (u64)malloc(8);
-    u64* cc = (u64*)cnt_cell; cc[0] = 0;
+	// Contador compartido.
+	u64  cnt_cell = (u64)malloc(8);
+	u64* cc       = (u64 *)cnt_cell;
+	cc[0] = 0;
 
-    // 3 state blocks de 3 qwords: [iters, lock_obj, counter_ptr].
-    u64 blk = (u64)malloc(3 * 3 * 8);
-    u64 s1 = blk + 0 * 24;
-    u64 s2 = blk + 1 * 24;
-    u64 s3 = blk + 2 * 24;
-    u64* p1 = (u64*)s1; p1[0] = 7; p1[1] = lock_obj; p1[2] = cnt_cell;
-    u64* p2 = (u64*)s2; p2[0] = 7; p2[1] = lock_obj; p2[2] = cnt_cell;
-    u64* p3 = (u64*)s3; p3[0] = 7; p3[1] = lock_obj; p3[2] = cnt_cell;
+	// 3 state blocks de 3 qwords: [iters, lock_obj, counter_ptr].
+	u64  blk = (u64)malloc(3 * 3 * 8);
+	u64  s1  = blk + 0 * 24;
+	u64  s2  = blk + 1 * 24;
+	u64  s3  = blk + 2 * 24;
+	u64* p1  = (u64 *)s1;
+	p1[0] = 7;
+	p1[1] = lock_obj;
+	p1[2] = cnt_cell;
+	u64* p2 = (u64 *)s2;
+	p2[0] = 7;
+	p2[1] = lock_obj;
+	p2[2] = cnt_cell;
+	u64* p3 = (u64 *)s3;
+	p3[0] = 7;
+	p3[1] = lock_obj;
+	p3[2] = cnt_cell;
 
-    vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s1);
-    vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s2);
-    vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s3);
+	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s1);
+	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s2);
+	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s3);
 
-    vasync_run();
+	vasync_run();
 
-    u64 total = cc[0];               // 3 * 7 * 2 = 42
-    free((i64*)blk);
-    free((i64*)cnt_cell);
-    free((i64*)lock_obj);
-    return (i32)total;               // 42
+	u64 total = cc[0]; // 3 * 7 * 2 = 42
+	free((i64 *)blk);
+	free((i64 *)cnt_cell);
+	free((i64 *)lock_obj);
+	return (i32)total; // 42
 }

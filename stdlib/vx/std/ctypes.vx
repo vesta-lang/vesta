@@ -28,14 +28,14 @@ public typedef u64 unsigned_long_long; // C `unsigned long long`
 /* --- `long` / `unsigned long`: ancho dependiente de plataforma --- */
 /*     Windows (LLP64): 32 bits.  Linux/macOS (LP64): 64 bits.            */
 @Target("os:windows")
-public typedef i32 long_int;
+	public typedef i32 long_int;
 @Target("!os:windows")
-public typedef i64 long_int;
+	public typedef i64 long_int;
 
 @Target("os:windows")
-public typedef u32 unsigned_long_int;
+	public typedef u32 unsigned_long_int;
 @Target("!os:windows")
-public typedef u64 unsigned_long_int;
+	public typedef u64 unsigned_long_int;
 
 /* --- punto flotante (alias por completitud; f32/f64 ya son Vesta) --- */
 

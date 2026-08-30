@@ -13,23 +13,23 @@
 // (Windows preserva el exit code completo, no lo trunca a 8 bits).
 
 extern "kernel32.dll" {
-    fn CreateThread(u64 attr, u64 stack, u64 proc, u64 param,
-                    u32 flags, u64 idout) -> u64;
-    fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
+	fn CreateThread(u64 attr, u64 stack, u64 proc, u64 param,
+		u32 flags, u64 idout) -> u64;
+	fn WaitForSingleObject(u64 handle, u32 ms) -> u32;
 }
 
-thread_local i64 t = 11; // copia por-hilo
-i64 g_child = 0;         // global compartido (lo escribe el hilo hijo)
+thread_local i64 t       = 11; // copia por-hilo
+i64              g_child = 0; // global compartido (lo escribe el hilo hijo)
 
 i64 worker(u64 param) {
-    t = 99;        // muta SOLO la copia de ESTE hilo
-    g_child = t;   // publicar al global compartido
-    return 0;
+	t       = 99;      // muta SOLO la copia de ESTE hilo
+	g_child = t; // publicar al global compartido
+	return 0;
 }
 
 i64 main() {
-    fn(u64) -> i64 fp = worker;
-    u64 h = CreateThread(0, 0, (u64)fp, 0, 0, 0);
-    WaitForSingleObject(h, 4294967295); // INFINITE
-    return t * 1000 + g_child;          // 11 (aislado) * 1000 + 99
+	fn(u64) -> i64 fp = worker;
+	u64            h  = CreateThread(0, 0, (u64)fp, 0, 0, 0);
+	WaitForSingleObject(h, 4_294_967_295); // INFINITE
+	return t * 1000 + g_child;             // 11 (aislado) * 1000 + 99
 }

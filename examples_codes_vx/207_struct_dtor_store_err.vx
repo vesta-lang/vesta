@@ -15,29 +15,29 @@ i64 freed = 0;
 
 // Recurso hoja: posee memoria heap y la libera en su destructor.
 struct Recurso {
-    i64* p;
-    ~Recurso() {
-        free(this.p);
-        freed = freed + 1;
-    }
+	i64* p;
+	~Recurso() {
+		free(this.p);
+		freed = freed + 1;
+	}
 }
 
 // Contenedor de clase: tiene un campo struct destructible -> gana un destructor
 // implicito que llama a ~Recurso() automaticamente al destruirse la Caja.
 class Caja {
-    Recurso r;
+	Recurso r;
 }
 
 i32 usar(i64 v) {
-    Recurso tmp;
-    tmp.p = (i64*) malloc(8);
-    *tmp.p = v;
-    Caja c = new Caja();
-    c.r = tmp;             // move-on-store: tmp invalidado, la Caja posee el recurso
-    return (i32)(*c.r.p);  // c destruida al exit -> ~Recurso -> free + freed++
+	Recurso tmp;
+	tmp.p  = (i64 *) malloc(8);
+	*tmp.p = v;
+	Caja c = new Caja();
+	c.r = tmp; // move-on-store: tmp invalidado, la Caja posee el recurso
+	return (i32)(*c.r.p); // c destruida al exit -> ~Recurso -> free + freed++
 }
 
 i32 main() {
-    i32 s = usar(20) + usar(20);   // 40; cada usar libera su Recurso -> freed=2
-    return (i32)(s + freed);        // 40 + 2 = 42
+	i32 s = usar(20) + usar(20); // 40; cada usar libera su Recurso -> freed=2
+	return (i32)(s + freed);     // 40 + 2 = 42
 }

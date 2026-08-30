@@ -1,10 +1,10 @@
-import geo.shapes;                 // por-namespace (no por path de fichero)
-import geo.shapes as g;            // alias del namespace
+import geo.shapes; // por-namespace (no por path de fichero)
+import geo.shapes as g; // alias del namespace
 
 i64 main() {
-    i64 a = geo.shapes.area(6, 7);      // 42 (cualificado completo)
-    i64 b = g.area(1, 8);               // 8  (via alias)
-    geo.shapes.Rect r = { .w = 3, .h = 0 };
-    println("a=${a} b=${b} rw=${r.w}");
-    return a + b - r.w - 5;             // 42 + 8 - 3 - 5 = 42
+	i64 a = geo.shapes.area(6, 7); // 42 (cualificado completo)
+	i64 b = g.area(1, 8);          // 8  (via alias)
+	geo.shapes.Rect r = {.w = 3,.h = 0 };
+	println("a=${a} b=${b} rw=${r.w}");
+	return a + b - r.w - 5; // 42 + 8 - 3 - 5 = 42
 }

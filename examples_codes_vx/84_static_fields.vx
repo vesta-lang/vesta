@@ -25,24 +25,24 @@ namespace ejemplos.static_fields;
 //   - count + total = 5 + 37 = 42.
 
 class Counter {
-    public static i32 count = 0;
+	public static i32 count = 0;
 }
 
 class Logger {
-    public static i32 total = 0;
+	public static i32 total = 0;
 }
 
 void increment_counter() {
-    Counter.count = Counter.count + 1;
+	Counter.count = Counter.count + 1;
 }
 
 i32 main() {
-    Counter.count = 0;
-    increment_counter();
-    increment_counter();
-    increment_counter();
-    increment_counter();
-    increment_counter();
-    Logger.total = 37;
-    return Counter.count + Logger.total;
+	Counter.count = 0;
+	increment_counter();
+	increment_counter();
+	increment_counter();
+	increment_counter();
+	increment_counter();
+	Logger.total = 37;
+	return Counter.count + Logger.total;
 }

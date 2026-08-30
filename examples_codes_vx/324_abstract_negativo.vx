@@ -10,13 +10,13 @@
 namespace abstract_neg;
 
 @Abstract
-struct Forma {
-    i64 lados;
-    public i64 num_lados() { return this.lados; }
+	struct Forma {
+	i64 lados;
+	public i64 num_lados() { return this.lados; }
 }
 
 i32 main() {
-    Forma f;              // ERROR: 'Forma' es @Abstract, no instanciable
-    f.lados = 3;
-    return (i32) f.num_lados();
+	Forma f; // ERROR: 'Forma' es @Abstract, no instanciable
+	f.lados = 3;
+	return (i32) f.num_lados();
 }

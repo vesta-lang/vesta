@@ -9,49 +9,55 @@
 // recursion se resuelve como un CALL runtime (guardado por `if (index==0)`).
 // Cero helpers, cero `*(T*)` en la logica de direccionamiento.  interp=JIT=AOT.
 
-@overlay struct Rec {
-    u8 tag @0x00;
-    u8 len @0x01;   // longitud del payload (el record ocupa 2 + len bytes)
+@overlay
+struct Rec {
+	u8 tag @0x00;
+	u8 len @0x01; // longitud del payload (el record ocupa 2 + len bytes)
 }
 
-@overlay struct Doc {
-    u32 count @0x00;
-    // Cada record va justo tras el anterior; el primero en base+8.  El paso NO
-    // es constante: depende del `len` del record previo.
-    Rec Recs[count] @element {
-        if (index == 0) { return base + 8; }
-        u64 prev = (u64) this.Recs[index - 1];   // direccion del anterior
-        u8  plen = this.Recs[index - 1].len;      // su longitud
-        return prev + 2 + (u64)plen;              // stride VARIABLE
-    };
+@overlay
+struct Doc {
+	u32 count @0x00;
+	// Cada record va justo tras el anterior; el primero en base+8.  El paso NO
+	// es constante: depende del `len` del record previo.
+	Rec Recs[count] @element {
+		if (index == 0) { return base + 8; }
+		u64 prev = (u64) this.Recs[index - 1]; // direccion del anterior
+		u8  plen = this.Recs[index - 1].len;    // su longitud
+		return prev + 2 + (u64)plen;           // stride VARIABLE
+	};
 }
 
 i32 main() {
-    u8* buf = (u8*) malloc(128);
-    *(u32*)(buf + 0) = 4;   // count = 4
+	u8* buf = (u8 *) malloc(128);
+	*(u32 *)(buf + 0) = 4; // count = 4
 
-    // 4 records de longitudes distintas, empaquetados desde base+8:
-    //   Rec0 @8:  tag=0x10 len=3   (ocupa 5) -> siguiente @13
-    //   Rec1 @13: tag=0x20 len=0   (ocupa 2) -> siguiente @15
-    //   Rec2 @15: tag=0x30 len=6   (ocupa 8) -> siguiente @23
-    //   Rec3 @23: tag=0x40 len=1
-    *(u8*)(buf + 8)  = 0x10; *(u8*)(buf + 9)  = 3;
-    *(u8*)(buf + 13) = 0x20; *(u8*)(buf + 14) = 0;
-    *(u8*)(buf + 15) = 0x30; *(u8*)(buf + 16) = 6;
-    *(u8*)(buf + 23) = 0x40; *(u8*)(buf + 24) = 1;
+	// 4 records de longitudes distintas, empaquetados desde base+8:
+	//   Rec0 @8:  tag=0x10 len=3   (ocupa 5) -> siguiente @13
+	//   Rec1 @13: tag=0x20 len=0   (ocupa 2) -> siguiente @15
+	//   Rec2 @15: tag=0x30 len=6   (ocupa 8) -> siguiente @23
+	//   Rec3 @23: tag=0x40 len=1
+	*(u8 *)(buf + 8) = 0x10;
+	*(u8 *)(buf + 9) = 3;
+	*(u8 *)(buf + 13) = 0x20;
+	*(u8 *)(buf + 14) = 0;
+	*(u8 *)(buf + 15) = 0x30;
+	*(u8 *)(buf + 16) = 6;
+	*(u8 *)(buf + 23) = 0x40;
+	*(u8 *)(buf + 24) = 1;
 
-    Doc d = Doc(buf);
-    i64 acc = 0;
-    i32 i = 0;
-    while (i < (i32) d.count) {
-        u8 t = d.Recs[i].tag;
-        u8 l = d.Recs[i].len;
-        println("rec ${i}: tag=${t:hex} len=${l}");
-        acc = acc + (i64) t + (i64) l;   // suma verificable
-        i = i + 1;
-    }
-    // acc = (0x10+3)+(0x20+0)+(0x30+6)+(0x40+1) = 19+32+54+65 = 170
-    println("acc=${acc}");
-    free(buf);
-    return (i32) acc;   // 170
+	Doc d   = Doc(buf);
+	i64 acc = 0;
+	i32 i   = 0;
+	while (i < (i32) d.count) {
+		u8 t = d.Recs[i].tag;
+		u8 l = d.Recs[i].len;
+		println("rec ${i}: tag=${t:hex} len=${l}");
+		acc = acc + (i64) t + (i64) l; // suma verificable
+		i   = i + 1;
+	}
+	// acc = (0x10+3)+(0x20+0)+(0x30+6)+(0x40+1) = 19+32+54+65 = 170
+	println("acc=${acc}");
+	free(buf);
+	return (i32) acc; // 170
 }

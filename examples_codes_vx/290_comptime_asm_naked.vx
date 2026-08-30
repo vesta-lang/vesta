@@ -6,11 +6,12 @@
 // -----------------------------------------------------------------------------
 
 // Helper @Naked: cuerpo asm nativo puro (sin prologo/epilogo), devuelve 42.
-@Naked i64 fortytwo() {
-    asm volatile {
-        mov rax, 42
-        ret
-    }
+@Naked
+i64 fortytwo() {
+	asm volatile {
+		mov rax, 42
+		ret
+	}
 }
 
 // comptime fn que llama al helper @Naked -> ejecutado en el ComptimeVM.
@@ -21,5 +22,5 @@ const i64 V = c_get();
 static_assert(V == 42, "fortytwo() debe ser 42");
 
 i32 main() {
-    return (i32) V;   // 42
+	return (i32) V; // 42
 }

@@ -5,37 +5,37 @@
 //     vm --vx asm_jc.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-    u64 acc = 0;
+	u64 acc = 0;
 
-    // Suma que DESBORDA -> CF=1 -> jc tomado -> +40.
-    {
-        register("rax") u64 a = 0xFFFFFFFFFFFFFFFF;
-        register("rbx") u64 b = 5;
-        register("rcx") u64 r = 0;
-        asm { add rax, rbx
-              jc .ov
-              mov rcx, 0
-              jmp .e
-            .ov:
-              mov rcx, 40
-            .e: };
-        acc = acc + r;   // +40
-    }
+	// Suma que DESBORDA -> CF=1 -> jc tomado -> +40.
+	{
+		register("rax") u64 a = 0xFFFFFFFFFFFFFFFF;
+		register("rbx") u64 b = 5;
+		register("rcx") u64 r = 0;
+		asm { add rax, rbx
+			  jc .ov
+			  mov rcx, 0
+			  jmp .e
+			.ov:
+			  mov rcx, 40
+			.e: };
+		acc = acc + r; // +40
+	}
 
-    // Suma que NO desborda -> CF=0 -> jnc tomado -> +2.
-    {
-        register("rax") u64 a = 10;
-        register("rbx") u64 b = 20;
-        register("rcx") u64 r = 0;
-        asm { add rax, rbx
-              jnc .ok
-              mov rcx, 0
-              jmp .e2
-            .ok:
-              mov rcx, 2
-            .e2: };
-        acc = acc + r;   // +2
-    }
+	// Suma que NO desborda -> CF=0 -> jnc tomado -> +2.
+	{
+		register("rax") u64 a = 10;
+		register("rbx") u64 b = 20;
+		register("rcx") u64 r = 0;
+		asm { add rax, rbx
+			  jnc .ok
+			  mov rcx, 0
+			  jmp .e2
+			.ok:
+			  mov rcx, 2
+			.e2: };
+		acc = acc + r; // +2
+	}
 
-    return acc;          // 40 + 2 = 42
+	return acc; // 40 + 2 = 42
 }

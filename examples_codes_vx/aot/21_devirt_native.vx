@@ -8,10 +8,11 @@
 //  vtable/itable estaticas y llega en el siguiente slice de 2.c.)
 
 class Rect {
-    i32 w;
-    i32 h;
-    Rect(i32 a, i32 b) { this.w = a; this.h = b; }
-    i32 area() { return this.w * this.h; }
+	i32 w;
+	i32 h;
+	Rect(i32 a, i32 b) { this.w = a;
+		this.h = b; }
+	i32 area() { return this.w * this.h; }
 }
 
 // `r` es un parametro: el optimizer no sabe su tipo concreto, pero el frontend
@@ -19,6 +20,6 @@ class Rect {
 i32 use(Rect r) { return r.area(); }
 
 i32 main() {
-    Rect r = new Rect(6, 7);   // heap: calloc + ctor + free al exit (RAII)
-    return use(r);             // 6 * 7 = 42
+	Rect r = new Rect(6, 7); // heap: calloc + ctor + free al exit (RAII)
+	return use(r);           // 6 * 7 = 42
 }

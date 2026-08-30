@@ -19,13 +19,13 @@
 // usuario) deja en F:/C/VM/_test_plugin.velb.
 
 i32 main() {
-    i64 lm = loadmodule("F:/C/VM/_test_plugin.velb");
-    if (lm == 0) {
-        return 0; // load failure
-    }
-    i64 cls = forName("PluginGreeter");
-    if (cls == 0) {
-        return 50; // cargado pero clase no registrada
-    }
-    return 100;     // exito cross-module
+	i64 lm = loadmodule("F:/C/VM/_test_plugin.velb");
+	if (lm == 0) {
+		return 0; // load failure
+	}
+	i64 cls = forName("PluginGreeter");
+	if (cls == 0) {
+		return 50; // cargado pero clase no registrada
+	}
+	return 100; // exito cross-module
 }

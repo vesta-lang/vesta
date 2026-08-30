@@ -86,11 +86,11 @@ public struct IntLit {
 /// Mensaje del digito que no pertenece a la base declarada.
 /// Mensaje del literal sin digitos (`0x` a secas, o cadena vacia).
 const string VX_LITERAL_VACIO =
-"literal entero sin digitos: falta el numero tras el prefijo de base";
+	"literal entero sin digitos: falta el numero tras el prefijo de base";
 /// Mensaje del digito que no pertenece a la base declarada.
 const string VX_LITERAL_DIGITO =
-"digito que no pertenece a la base del literal (0b binario, 0o octal, "
-"0x hexadecimal, sin prefijo decimal)";
+	"digito que no pertenece a la base del literal (0b binario, 0o octal, "
+	"0x hexadecimal, sin prefijo decimal)";
 
 public comptime IntLit parse_int_lit(string src) {
 	i64  n    = src.length();

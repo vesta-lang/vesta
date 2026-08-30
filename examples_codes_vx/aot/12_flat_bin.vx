@@ -4,11 +4,11 @@
 
 // Datos crudos al final de la imagen (p.ej. una firma o tabla).
 bytes firma {
-    db "VX", 0x00            // 56 45 58 00
-    dw 0xCAFE                  // FE CA
-    dd 0x12345678             // 78 56 34 12
+	db "VX", 0x00     // 56 45 58 00
+		dw 0xCAFE     // FE CA
+		dd 0x12345678 // 78 56 34 12
 }
 
 i32 main() {
-    return 0x42;              // 66
+	return 0x42; // 66
 }

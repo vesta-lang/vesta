@@ -5,56 +5,70 @@ namespace ejemplos.vectorize_int_widths;
 //   i32 mul (PMULLD, SSE4.1/AVX2).  add/sub/mul donde hay packed.
 
 i64 main() {
-    i64 n = 40;
+	i64  n   = 40;
 
-    // --- i16: add + mul element-wise ---
-    i16* a16 = (i16*) malloc(n * 2);
-    i16* b16 = (i16*) malloc(n * 2);
-    i16* c16 = (i16*) malloc(n * 2);
-    i64 i = 0;
-    while (i < n) {
-        a16[i] = (i16) i;
-        b16[i] = (i16)(i + 1);
-        i = i + 1;
-    }
-    // c = a + b = 2i+1.  sum(2i+1, i=0..39) = 2*780 + 40 = 1600.
-    for (i64 j = 0; j < n; j = j + 1) { c16[j] = a16[j] + b16[j]; }
-    i64 sum16 = 0;
-    i = 0;
-    while (i < n) { sum16 = sum16 + (i64) c16[i]; i = i + 1; }   // 1600
+	// --- i16: add + mul element-wise ---
+	i16* a16 = (i16 *) malloc(n * 2);
+	i16* b16 = (i16 *) malloc(n * 2);
+	i16* c16 = (i16 *) malloc(n * 2);
+	i64  i   = 0;
+	while (i < n) {
+		a16[i] = (i16) i;
+		b16[i] = (i16)(i + 1);
+		i = i + 1;
+	}
+	// c = a + b = 2i+1.  sum(2i+1, i=0..39) = 2*780 + 40 = 1600.
+	for (i64 j = 0; j < n; j = j + 1) { c16[j] = a16[j] + b16[j]; }
+	i64 sum16 = 0;
+	i = 0;
+	while (i < n) { sum16 = sum16 + (i64) c16[i];
+		i = i + 1; } // 1600
 
-    // c = a * b = i*(i+1).  sum(i*(i+1), i=0..39) = 41 + ... = 21320.
-    for (i64 j = 0; j < n; j = j + 1) { c16[j] = a16[j] * b16[j]; }
-    i64 sumMul = 0;
-    i = 0;
-    while (i < n) { sumMul = sumMul + (i64) c16[i]; i = i + 1; }  // 21320
+	// c = a * b = i*(i+1).  sum(i*(i+1), i=0..39) = 41 + ... = 21320.
+	for (i64 j = 0; j < n; j = j + 1) { c16[j] = a16[j] * b16[j]; }
+	i64 sumMul = 0;
+	i = 0;
+	while (i < n) { sumMul = sumMul + (i64) c16[i];
+		i = i + 1; } // 21320
 
-    // --- i8: add element-wise (sin mul byte packed) ---
-    i8* a8 = (i8*) malloc(n);
-    i8* b8 = (i8*) malloc(n);
-    i8* c8 = (i8*) malloc(n);
-    i = 0;
-    while (i < n) { a8[i] = (i8) 2; b8[i] = (i8) 3; i = i + 1; }
-    for (i64 j = 0; j < n; j = j + 1) { c8[j] = a8[j] + b8[j]; } // =5
-    i64 sum8 = 0;
-    i = 0;
-    while (i < n) { sum8 = sum8 + (i64) c8[i]; i = i + 1; }       // 40*5=200
+	// --- i8: add element-wise (sin mul byte packed) ---
+	i8* a8 = (i8 *) malloc(n);
+	i8* b8 = (i8 *) malloc(n);
+	i8* c8 = (i8 *) malloc(n);
+	i = 0;
+	while (i < n) { a8[i] = (i8) 2;
+		b8[i] = (i8) 3;
+		i = i + 1; }
+	for (i64 j = 0; j < n; j = j + 1) { c8[j] = a8[j] + b8[j]; } // =5
+	i64 sum8 = 0;
+	i = 0;
+	while (i < n) { sum8 = sum8 + (i64) c8[i];
+		i = i + 1; } // 40*5=200
 
-    // --- i32: mul element-wise (PMULLD) ---
-    i32* a32 = (i32*) malloc(n * 4);
-    i32* b32 = (i32*) malloc(n * 4);
-    i32* c32 = (i32*) malloc(n * 4);
-    i = 0;
-    while (i < n) { a32[i] = (i32) i; b32[i] = (i32) 3; i = i + 1; }
-    for (i64 j = 0; j < n; j = j + 1) { c32[j] = a32[j] * b32[j]; } // 3i
-    i64 sum32 = 0;
-    i = 0;
-    while (i < n) { sum32 = sum32 + (i64) c32[i]; i = i + 1; }    // 3*780=2340
+	// --- i32: mul element-wise (PMULLD) ---
+	i32* a32 = (i32 *) malloc(n * 4);
+	i32* b32 = (i32 *) malloc(n * 4);
+	i32* c32 = (i32 *) malloc(n * 4);
+	i = 0;
+	while (i < n) { a32[i] = (i32) i;
+		b32[i] = (i32) 3;
+		i = i + 1; }
+	for (i64 j = 0; j < n; j = j + 1) { c32[j] = a32[j] * b32[j]; } // 3i
+	i64 sum32 = 0;
+	i = 0;
+	while (i < n) { sum32 = sum32 + (i64) c32[i];
+		i = i + 1; } // 3*780=2340
 
-    free(a16); free(b16); free(c16);
-    free(a8);  free(b8);  free(c8);
-    free(a32); free(b32); free(c32);
+	free(a16);
+	free(b16);
+	free(c16);
+	free(a8);
+	free(b8);
+	free(c8);
+	free(a32);
+	free(b32);
+	free(c32);
 
-    // 1600 + 21320 + 200 + 2340 = 25460
-    return sum16 + sumMul + sum8 + sum32;
+	// 1600 + 21320 + 200 + 2340 = 25460
+	return sum16 + sumMul + sum8 + sum32;
 }

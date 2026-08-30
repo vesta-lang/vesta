@@ -21,6 +21,6 @@
 import std.comptime.literal only IntLit, parse_int_lit;
 comptime u64 w0_of(string s) { return parse_int_lit(s).word(0); }
 i32 main() {
-    comptime const u64 W = w0_of("42");
-    return (i32) W;
+	comptime const u64 W = w0_of("42");
+	return (i32) W;
 }

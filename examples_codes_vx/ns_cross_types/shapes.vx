@@ -3,21 +3,26 @@
 namespace geo;
 
 public class Box {
-    public i64 v;
-    public Box() { this.v = 0; }
-    public i64 get() { return this.v; }
-    public void set(i64 x) { this.v = x; }
+	public i64 v;
+	public Box() { this.v = 0; }
+	public i64 get() { return this.v; }
+	public void set(i64 x) { this.v = x; }
 }
 
-public struct Vec2 { public i64 x; public i64 y; }
+public struct Vec2 { public i64 x;
+	public i64 y; }
 
-public enum Shape { Circle(i64), Square(i64), Point }
+public enum Shape {
+	Circle(i64),
+	Square(i64),
+	Point
+}
 
 public i64 area_hint(geo.Shape s) {
-    match (s) {
-        case Circle(r) => { return r * 3; }
-        case Square(l) => { return l * l; }
-        case Point     => { return 0; }
-    }
-    return -1;
+	match (s) {
+		case Circle(r) => { return r * 3; }
+		case Square(l) => { return l * l; }
+		case Point     => { return 0; }
+	}
+	return -1;
 }

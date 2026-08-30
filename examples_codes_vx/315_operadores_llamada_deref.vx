@@ -21,54 +21,54 @@ namespace ops_acceso;
 
 // Caja con semantica propia de lectura y escritura.
 struct Caja {
-    i64 v;
+	i64 v;
 
-    // `*c` lee el valor guardado.
-    public i64 __deref__() { return this.v; }
+	// `*c` lee el valor guardado.
+	public i64 __deref__() { return this.v; }
 
-    // `c = n` NO copia la caja: delega en este metodo, que decide que hacer.
-    // Aqui duplica lo que se le asigna.
-    public i64 __assign__(i64 n) {
-        this.v = n * 2;
-        return this.v;
-    }
+	// `c = n` NO copia la caja: delega en este metodo, que decide que hacer.
+	// Aqui duplica lo que se le asigna.
+	public i64 __assign__(i64 n) {
+		this.v = n * 2;
+		return this.v;
+	}
 }
 
 // Tipo invocable con las dos sintaxis, cada una con su significado.
 struct Mezclador {
-    i64 base;
+	i64 base;
 
-    // `m(a, b)` suma sobre la base.
-    public i64 __call__(i64 a, i64 b) { return this.base + a + b; }
+	// `m(a, b)` suma sobre la base.
+	public i64 __call__(i64 a, i64 b) { return this.base + a + b; }
 
-    // `m{a, b, c}` escala por la base.  Nada obliga a que se parezca a `()`.
-    public i64 __braces__(i64 a, i64 b, i64 c) { return this.base * a + b + c; }
+	// `m{a, b, c}` escala por la base.  Nada obliga a que se parezca a `()`.
+	public i64 __braces__(i64 a, i64 b, i64 c) { return this.base * a + b + c; }
 }
 
 i32 main() {
-    Caja c;
-    c.v = 5;
+	Caja c;
+	c.v = 5;
 
-    i64 leido = *c;             // __deref__  -> 5
-    println("*c        = ${leido}");
+	i64 leido = *c; // __deref__  -> 5
+	println("*c        = ${leido}");
 
-    c = 10;                     // __assign__ -> v = 20 (no es una copia)
-    i64 tras = *c;              // 20
-    println("tras c=10 = ${tras}");
+	c = 10;        // __assign__ -> v = 20 (no es una copia)
+	i64 tras = *c; // 20
+	println("tras c=10 = ${tras}");
 
-    Mezclador m;
-    m.base = 3;
+	Mezclador m;
+	m.base = 3;
 
-    i64 p = m(5, 7);            // __call__   -> 3 + 5 + 7   = 15
-    i64 q = m{3, 4, 5};         // __braces__ -> 3 * 3 + 4 + 5 = 18
-    println("m(5,7)    = ${p}");
-    println("m{3,4,5}  = ${q}");
+	i64 p = m(5, 7);     // __call__   -> 3 + 5 + 7   = 15
+	i64 q = m {3, 4, 5}; // __braces__ -> 3 * 3 + 4 + 5 = 18
+	println("m(5,7)    = ${p}");
+	println("m{3,4,5}  = ${q}");
 
-    // Un struct que no declara __assign__ conserva la copia de siempre.
-    Caja d;
-    d.v = 99;
-    i64 dv = *d;                // 99
+	// Un struct que no declara __assign__ conserva la copia de siempre.
+	Caja d;
+	d.v = 99;
+	i64 dv = *d; // 99
 
-    // 5 + 20 + 15 + 18 = 58;  58 - 99 = -41;  -41 + 83 = 42
-    return (i32)(leido + tras + p + q - dv + 83);
+	// 5 + 20 + 15 + 18 = 58;  58 - 99 = -41;  -41 + 83 = 42
+	return (i32)(leido + tras + p + q - dv + 83);
 }

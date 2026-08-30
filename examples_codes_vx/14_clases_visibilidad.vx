@@ -18,26 +18,26 @@ namespace ejemplos.clases_visibilidad;
 // Resultado esperado: R00 == 100  (10 + 90)
 
 class Cuenta {
-    private i32 saldo;
-    private i32 deudas;
+	private i32 saldo;
+	private i32 deudas;
 
-    public Cuenta(i32 inicial) {
-        this.saldo  = inicial;
-        this.deudas = 0;
-    }
+	public Cuenta(i32 inicial) {
+		this.saldo  = inicial;
+		this.deudas = 0;
+	}
 
-    public final i32 abonar(i32 cantidad) {
-        this.saldo = this.saldo + cantidad;
-        return this.saldo;
-    }
+	public final i32 abonar(i32 cantidad) {
+		this.saldo = this.saldo + cantidad;
+		return this.saldo;
+	}
 
-    // Expression-bodied: lectura encapsulada de campo privado.
-    public i32 leerSaldo() => this.saldo;
-    public i32 leerDeudas() => this.deudas;
+	// Expression-bodied: lectura encapsulada de campo privado.
+	public i32 leerSaldo() => this.saldo;
+	public i32 leerDeudas() => this.deudas;
 }
 
 i32 main() {
-    Cuenta c = new Cuenta(10);
-    c.abonar(90);
-    return c.leerSaldo();
+	Cuenta c = new Cuenta(10);
+	c.abonar(90);
+	return c.leerSaldo();
 }

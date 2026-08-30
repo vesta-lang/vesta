@@ -17,21 +17,21 @@
 // Esperado: exit 42.
 
 i32 main() {
-    // ArrayList<i64>: nucleo VM-free (vcol_alist_*).
-    ArrayList xs = arraylist(8);
-    xs.push(10);
-    xs.push(20);
-    xs.push(12);
-    i32 suma = 0;
-    suma = suma + (i32) xs.get(0);   // 10
-    suma = suma + (i32) xs.get(1);   // 20
-    suma = suma + (i32) xs.get(2);   // 12
+	// ArrayList<i64>: nucleo VM-free (vcol_alist_*).
+	ArrayList xs = arraylist(8);
+	xs.push(10);
+	xs.push(20);
+	xs.push(12);
+	i32 suma = 0;
+	suma = suma + (i32) xs.get(0); // 10
+	suma = suma + (i32) xs.get(1); // 20
+	suma = suma + (i32) xs.get(2); // 12
 
-    // HashMap<i64,i64>: nucleo VM-free (vcol_map_*).
-    HashMap m = hashmap(16);
-    m.put(1, 100);
-    m.put(2, 200);
-    if (m.get(2) == 200) { suma = suma + 0; }   // (no-op, valida lookup)
+	// HashMap<i64,i64>: nucleo VM-free (vcol_map_*).
+	HashMap m = hashmap(16);
+	m.put(1, 100);
+	m.put(2, 200);
+	if (m.get(2) == 200) { suma = suma + 0; } // (no-op, valida lookup)
 
-    return suma;   // 10 + 20 + 12 = 42
+	return suma;                              // 10 + 20 + 12 = 42
 }

@@ -7,31 +7,32 @@ namespace ejemplos.genericos_tipos_usuario;
 // Cada combinacion produce su propia monomorphizacion concreta.  Ver tambien
 // 218_structs_genericos.vx.
 
-struct Punto { i64 x; i64 y; }
+struct Punto { i64 x;
+	i64 y; }
 class Obj { public i64 v; }
 
 struct Caja<T> { T contenido; }
 
 i32 main() {
-    // 1. Generico con un STRUCT de usuario como argumento.
-    Caja<Punto> cp;
-    cp.contenido.x = 10;
-    cp.contenido.y = 5;
+	// 1. Generico con un STRUCT de usuario como argumento.
+	Caja<Punto> cp;
+	cp.contenido.x = 10;
+	cp.contenido.y = 5;
 
-    // 2. Generico con una CLASE de usuario como argumento.
-    Caja<Obj> co;
-    co.contenido = new Obj();
-    co.contenido.v = 20;
+	// 2. Generico con una CLASE de usuario como argumento.
+	Caja<Obj> co;
+	co.contenido   = new Obj();
+	co.contenido.v = 20;
 
-    // 3. Generico con un puntero (`T*`) como argumento.
-    i64* hp = (i64*) malloc(8);
-    *hp = 7;
-    Caja<i64*> ch;
-    ch.contenido = hp;
+	// 3. Generico con un puntero (`T*`) como argumento.
+	i64* hp = (i64 *) malloc(8);
+	*    hp = 7;
+	Caja<i64*> ch;
+	ch.contenido = hp;
 
-    i64 total = cp.contenido.x + cp.contenido.y   // 15
-              + co.contenido.v                     // 20
-              + (*ch.contenido);                   // 7
-    free(ch.contenido);
-    return (i32) total;                            // 15 + 20 + 7 = 42
+	i64 total = cp.contenido.x + cp.contenido.y // 15
+		+ co.contenido.v                        // 20
+		+ (*ch.contenido);                      // 7
+	free(ch.contenido);
+	return (i32) total; // 15 + 20 + 7 = 42
 }

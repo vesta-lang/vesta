@@ -11,13 +11,14 @@
 // la reserva; el GC seria opt-in enlazando el runtime de la VM.
 
 class Rect {
-    i32 w;
-    i32 h;
-    Rect(i32 a, i32 b) { this.w = a; this.h = b; }
-    i32 area() { return this.w * this.h; }
+	i32 w;
+	i32 h;
+	Rect(i32 a, i32 b) { this.w = a;
+		this.h = b; }
+	i32 area() { return this.w * this.h; }
 }
 
 i32 main() {
-    Rect r = new Rect(6, 7);   // calloc + ctor; free automatico al salir
-    return r.area();            // 6 * 7 = 42
+	Rect r = new Rect(6, 7); // calloc + ctor; free automatico al salir
+	return r.area();         // 6 * 7 = 42
 }

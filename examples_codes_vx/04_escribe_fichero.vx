@@ -23,19 +23,22 @@ namespace ejemplos.escribe_fichero;
 //   "Hola desde Vesta-lang! Este fichero fue escrito por la VM."
 
 i32 main() {
-    println("== Escritura de fichero Vesta-lang ==");
+	println("== Escritura de fichero Vesta-lang ==");
 
-    i64 fp = fopen("salida_vx.txt", "w");
-    if (fp == 0) {
-        println("ERROR: no se pudo abrir el fichero");
-        return 1;
-    }
+	i64 fp = fopen("salida_vx.txt", "w");
+	if (fp == 0) {
+		println("ERROR: no se pudo abrir el fichero");
+		return 1;
+	}
 
-    i64 bytes_written = fwrite(fp, "Hola desde Vesta-lang! Este fichero fue escrito por la VM.\n");
-    println("bytes escritos:");
-    print_int(bytes_written);
+	i64 bytes_written = fwrite(
+		fp,
+		"Hola desde Vesta-lang! Este fichero fue escrito por la VM.\n"
+	);
+	println("bytes escritos:");
+	print_int(bytes_written);
 
-    fclose(fp);
-    println("== Hecho ==");
-    return 0;
+	fclose(fp);
+	println("== Hecho ==");
+	return 0;
 }

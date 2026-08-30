@@ -10,34 +10,34 @@
 //
 // @expect 24
 u64 analyzable(u64 x) {
-    register("rdi") u64 v = x;
-    register("rax") u64 c;
-    asm {                        // nivel analizable (default)
-        popcnt rax, rdi
-    };
-    return c;
+	register("rdi") u64 v = x;
+	register("rax") u64 c;
+	asm {
+		popcnt rax, rdi
+	};
+	return c;
 }
 
 u64 vol(u64 x) {
-    register("rdi") u64 v = x;
-    register("rax") u64 c;
-    asm volatile {               // nivel volatile: verbatim
-        popcnt rax, rdi
-    };
-    return c;
+	register("rdi") u64 v = x;
+	register("rax") u64 c;
+	asm volatile {
+		popcnt rax, rdi
+	};
+	return c;
 }
 
 u64 raw_(u64 x) {
-    register("rdi") u64 v = x;
-    register("rax") u64 c;
-    asm raw {                    // nivel raw: cero analisis, clobbers a mano
-        popcnt rax, rdi
-    } clobbers("cc");
-    return c;
+	register("rdi") u64 v = x;
+	register("rax") u64 c;
+	asm raw {
+		popcnt rax, rdi
+	} clobbers("cc");
+	return c;
 }
 
 u64 main() {
-    // 0xFF=8, 0xFFFF=16 -> nope; usamos valores que sumen 24:
-    // popcount(0xFF)=8, popcount(0xFFFF)=16, popcount(0x0)=0 -> 8+16+0=24.
-    return analyzable(0xFF) + vol(0xFFFF) + raw_(0x0);
+	// 0xFF=8, 0xFFFF=16 -> nope; usamos valores que sumen 24:
+	// popcount(0xFF)=8, popcount(0xFFFF)=16, popcount(0x0)=0 -> 8+16+0=24.
+	return analyzable(0xFF) + vol(0xFFFF) + raw_(0x00);
 }

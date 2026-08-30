@@ -17,35 +17,39 @@ namespace herencia_self;
 
 // Base abstracto: no se instancia por si mismo, solo sirve de base.
 @Abstract
-struct Punto2D {
-    i64 x;
-    i64 y;
+	struct Punto2D {
+	i64 x;
+	i64 y;
 
-    // `Self` covariante: en `Nombrado` esto es `Nombrado sumar(Nombrado)`.
-    public Self sumar(Self o) {
-        Self r;
-        r.x = this.x + o.x;
-        r.y = this.y + o.y;
-        return r;
-    }
+	// `Self` covariante: en `Nombrado` esto es `Nombrado sumar(Nombrado)`.
+	public Self sumar(Self o) {
+		Self r;
+		r.x = this.x + o.x;
+		r.y = this.y + o.y;
+		return r;
+	}
 
-    // Metodo comun heredado.
-    public i64 norma1() { return this.x + this.y; }
+	// Metodo comun heredado.
+	public i64 norma1() { return this.x + this.y; }
 
-    // Fluent: `this` es del tipo del derivado, asi `return this` conserva el tipo.
-    public Self self_ref() { return this; }
+	// Fluent: `this` es del tipo del derivado, asi `return this` conserva el tipo.
+	public Self self_ref() { return this; }
 }
 
 // Derivado: hereda los campos (x, y) y los metodos (sumar/norma1/self_ref) con
 // `Self = Nombrado`, y anyade uno propio que usa un metodo heredado.
 struct Nombrado : Punto2D {
-    public i64 doble() { return this.norma1() * 2; }
+	public i64 doble() { return this.norma1() * 2; }
 }
 
 i32 main() {
-    Nombrado a; a.x = 10; a.y = 5;
-    Nombrado b; b.x = 20; b.y = 7;
-    Nombrado c = a.sumar(b);     // Self = Nombrado -> c = (30, 12)
-    Nombrado d = c.self_ref();   // fluent, sigue siendo Nombrado
-    return (i32) d.doble();      // (30 + 12) * 2 = 84
+	Nombrado a;
+	a.x = 10;
+	a.y = 5;
+	Nombrado b;
+	b.x = 20;
+	b.y = 7;
+	Nombrado c = a.sumar(b);   // Self = Nombrado -> c = (30, 12)
+	Nombrado d = c.self_ref(); // fluent, sigue siendo Nombrado
+	return (i32) d.doble();    // (30 + 12) * 2 = 84
 }
