@@ -545,23 +545,17 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 // 4. STORE host_ptr al slot+0 del unique<T>.
                 emit_store_typed(v_slot, v_host,
                                  ir::IrType::I64, e->loc.line);
-                // 5. STORE deleter=0 (sentinel RAW_FREE) al slot+8.
+                // 5. Y un cero en la palabra de al lado (liberador "por
+                //    defecto"), que solo lee el helper compartido sin tipo.
                 {
                     const ir::IrValueId v_eight =
                         emit_const(ir::IrType::I64, 8, e->loc.line);
                     const ir::IrValueId v_slot8 =
-                        fn_->new_value(ir::IrType::PTR);
-                    ir::IrInstr ad{};
-                    ad.op = ir::IrOp::ADD;
-                    ad.type = ir::IrType::I64;
-                    ad.dst = v_slot8;
-                    ad.operands = {v_slot, v_eight};
-                    ad.source_line = e->loc.line;
-                    emit(current_block_, std::move(ad));
+                        emit_ptr_add(v_slot, v_eight, e->loc.line);
                     const ir::IrValueId v_zero =
                         emit_const(ir::IrType::I64, 0, e->loc.line);
-                    emit_store_typed(v_slot8, v_zero,
-                                     ir::IrType::I64, e->loc.line);
+                    emit_store_typed(v_slot8, v_zero, ir::IrType::I64,
+                                     e->loc.line);
                 }
                 out_value = v_slot;
                 return true;
@@ -756,7 +750,11 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         //                            cleanup hace CALLVIRT dtor + skip
         //                            free.
         emit_store_typed(v_slot, v_to_store, ir::IrType::I64, e->loc.line);
-        // STORE deleter=0 at [v_slot+8] (sentinel = RAW_FREE).
+        /* Y un cero en la palabra de al lado: "el liberador de por defecto".
+         * Solo lo lee el helper compartido que libera un slot sin saber su
+         * tipo -- el del recolector y el de reasignar un campo --; el resto
+         * del camino ya lo saca del tipo.  Cuando ese helper se genere por
+         * liberador, esta palabra sobra y la ranura baja a una. */
         {
             const ir::IrValueId v_eight =
                 emit_const(ir::IrType::I64, 8, e->loc.line);
@@ -867,72 +865,57 @@ bool Lowering::lower_owner_box_with(ast::CallExpr *e, Builtin b,
         // el cleanup emitira CALLVM @Absolute("code.<name>").
         deleter_label = deleter_id->name;
     } // else: ya viene con prefijo "@extern:kVestaIoLib:fn".
-    // Tier 1: slot 16 + STORE value@+0 + STORE deleter_addr@+8.  HEAP si
-    // el unique va a un campo (unique_slot_buf), si no STACK.
+    /* UNA palabra: el manejador y nada mas.
+     *
+     * Aqui se escribia ademas la DIRECCION del liberador en la palabra de al
+     * lado, y con ella venia todo lo demas: materializarla con un `label_addr`,
+     * un centinela cero para los liberadores que no son funciones Vesta
+     * -- `free` y los `extern` no tienen direccion que apuntar --, y cuidar de
+     * que la escritura usara la misma memoria que la del manejador.
+     *
+     * Nada de eso hace falta ya: quien libera va en el TIPO, asi que quien
+     * limpia lo sabe al compilar y lo llama por su nombre.  Y de paso
+     * desaparece la limitacion que estaba escrita aqui -- que un liberador
+     * `extern` no sobrevivia a cruzar una funcion, porque no habia direccion
+     * que guardar --: el tipo lo dice igual, sea Vesta o extern. */
     const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
     emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
-    // STORE deleter address en slot+8.  Materializamos la
-    // direccion via RAW_ASM: `mov {dst}, @Absolute("code.<fn>")`.
-    // El assembler resuelve la direccion al linker time.
-    //
-    // Limitacion: para deleters extern no podemos obtener una
-    // direccion vesta-callable, por lo que usamos 0 (sentinel)
-    // y el cleanup local conoce el deleter por compile-time via
-    // literal_deleter.  SRET return con extern deleter no
-    // preserva la info (futuro: añadir tabla de deleter ids).
+    /* Y la DIRECCION de quien libera en la palabra de al lado.  Ya no la lee
+     * casi nadie -- quien limpia lo saca del TIPO --, solo el helper compartido
+     * que libera un slot sin saber de que tipo es: el del recolector al
+     * finalizar y el de reasignar un campo.  Un liberador que no sea una
+     * funcion Vesta (`free`, un `extern`) no tiene direccion que apuntar, y
+     * ahi va un cero; ese caso el helper lo resuelve como liberacion normal.
+     *
+     * Cuando ese helper se genere por liberador, esto entero desaparece. */
     const ir::IrValueId v_deleter_addr = fn_->new_value(ir::IrType::I64);
-    if (deleter_label == "free" ||
-        deleter_label.rfind("@extern:", 0) == 0) {
-        // Deleter "free" (builtin, no una fn Vesta): NO hay `code.free`
-        // que direccionar -> se almacena 0, el sentinel que el dtor del
-        // slot (emit_free_unique_slot) interpreta como RAW_FREE (== free
-        // null-safe).  Sin esto un unique_with(malloc(..), free) que va a
-        // un CAMPO (SRET) emitiria `@Absolute("code.free")` -> el linker
-        // no resuelve el simbolo (RelocationError code.free).
-        // Extern (`@extern:kVestaIoLib:fn`): tampoco es direccionable como fn
-        // Vesta; mismo sentinel 0 + literal_deleter local para el call.
-        const ir::IrValueId v_zero =
-            emit_const(ir::IrType::I64, 0, e->loc.line);
+    {
+        ir::IrValueId v_src;
+        if (deleter_label == "free" ||
+            deleter_label.rfind("@extern:", 0) == 0) {
+            v_src = emit_const(ir::IrType::I64, 0, e->loc.line);
+        } else {
+            v_src = emit_label_addr(deleter_label, e->loc.line);
+        }
         ir::IrInstr mov{};
         mov.op = ir::IrOp::MOV;
         mov.type = ir::IrType::I64;
         mov.dst = v_deleter_addr;
-        mov.operands = {v_zero};
-        mov.source_line = e->loc.line;
-        emit(current_block_, std::move(mov));
-    } else {
-        // Vesta: emitir LABEL_ADDR -> v_deleter_addr.
-        ir::IrValueId v_label = emit_label_addr(deleter_label, e->loc.line);
-        ir::IrInstr mov{};
-        mov.op = ir::IrOp::MOV;
-        mov.type = ir::IrType::I64;
-        mov.dst = v_deleter_addr;
-        mov.operands = {v_label};
+        mov.operands = {v_src};
         mov.source_line = e->loc.line;
         emit(current_block_, std::move(mov));
     }
-    // STORE deleter_addr en slot+8.  v_slot8 HEREDA la host-ness de v_slot
-    // (heap -> movh, stack -> mov) para que sea consistente con la store de
-    // slot+0 y con las lecturas del dtor; sin esto el deleter se escribiria
-    // en vm_mem con un slot heap -> el dtor leeria 0 -> RAW_FREE en vez de
-    // invocar el deleter.
     {
         const ir::IrValueId v_eight =
             emit_const(ir::IrType::I64, 8, e->loc.line);
         const ir::IrValueId v_slot8 =
             emit_ptr_add(v_slot, v_eight, e->loc.line);
-        emit_store_typed(v_slot8, v_deleter_addr,
-                         ir::IrType::I64, e->loc.line);
+        emit_store_typed(v_slot8, v_deleter_addr, ir::IrType::I64,
+                         e->loc.line);
     }
     // El slot contiene un valor con semantica de host_ptr / handle.
     fn_->values[v_slot].pointee_is_host_ptr = true;
-    // Anotamos la accion de cleanup pendiente para que el cleanup
-    // local pueda usar el deleter por compile-time (cero overhead).
-    // El cleanup dinamico via slot+8 solo se activa cuando se
-    // accede al smart pointer tras SRET (no tenemos info compile-time).
-    pending_smartptr_deleter_ = deleter_label;
     out_value = v_slot;
-    return true;
     return true;
 }
 
@@ -959,11 +942,12 @@ bool Lowering::lower_owner_move(ast::CallExpr *e, ir::IrValueId &out_value) {
         out_value = ir::IR_NO_VALUE;
         return true;
     }
-    // unique<T> Tier 1: slot = 16 bytes (ptr + deleter).
-    // shared<T>: slot = 8 bytes (ctrl_block_ptr).
+    // La ranura de los dos es UNA palabra: el manejador (unique) o el bloque
+    // de control (shared).  Quien libera va en el tipo, no aqui.
     const bool is_unique =
         (e->args[0]->result_type.kind == PrimitiveKind::UNIQUE_PTR);
-    const uint32_t slot_bytes = is_unique ? 16 : 8;
+    const uint32_t slot_bytes = static_cast<uint32_t>(smart_ptr_slot_bytes(
+        is_unique ? PrimitiveKind::UNIQUE_PTR : PrimitiveKind::SHARED_PTR));
     // bug3: si el resultado del move aterriza en un CAMPO owned
     // (unique_slot_to_heap_ set por lower_assign), el slot destino debe
     // vivir en HEAP (RAW_ALLOC) para sobrevivir al scope y ser liberado por

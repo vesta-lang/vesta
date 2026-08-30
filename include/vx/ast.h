@@ -1299,6 +1299,11 @@ struct VarDeclStmt : Stmt {
     /// setea @c infer_type=true; el type checker computa el tipo del
     /// @c init y lo aplica al binding sin requerir TypeNode en el AST.
     bool infer_type = false;
+    /// Liberador ADOPTADO del inicializador cuando el tipo se escribio sin el
+    /// (`unique<T> p = unique_with(h, del);`).  Lo pone el comprobador de
+    /// tipos y lo lee el bajado, que resuelve el tipo desde el nodo y por si
+    /// solo no veria la adopcion.  Vacio = el de por defecto.
+    std::string declared_deleter;
     /// Z.6: marca `shared T name = new T()` -- el storage class
     /// dispatcha al SharedHeap en lugar del gc_heap local.  El handle
     /// resultante tiene bit 31 (SHARED_HANDLE_BIT) set.  Stdlib clases

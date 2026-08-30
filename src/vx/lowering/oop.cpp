@@ -307,7 +307,10 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
                     // deleter del slot (default free o custom).  El dtor del
                     // contenedor es el unico dueno -> un solo free.
                     if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
-                        emit_free_unique_field(this_vid, f.offset, m->loc.line);
+                        // Quien libera lo dice el TIPO del campo.
+                        emit_free_unique_field(this_vid, f.offset,
+                                               f.type.deleter_name,
+                                               m->loc.line);
                         continue;
                     }
                     // Campo shared<T> (H5): decrementar el refcount del bloque

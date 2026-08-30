@@ -12,7 +12,10 @@ void track_release(i64 p) {
     C.releases = C.releases + 1;
 }
 
-unique<i64> make_tracked(i64 v) {
+// La FIRMA dice quien libera: sin eso, quien llama no sabria a quien invocar
+// al limpiar.  Dentro no hace falta repetirlo -- una declaracion local adopta
+// el liberador de su inicializador.
+unique<i64, track_release> make_tracked(i64 v) {
     unique<i64> p = unique_with(v, track_release);
     return p;
 }

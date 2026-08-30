@@ -14,7 +14,9 @@ class Counter { public static i64 libs; }
 
 void del(i64 r) { Counter.libs = Counter.libs + 1; }
 
-class Cont { unique<i64> h; }
+// El CAMPO dice quien libera: su tipo esta fijado aqui, asi que no puede
+// adoptarlo del inicializador como hace una variable local.
+class Cont { unique<i64, del> h; }
 
 void run() {
     Cont c = new Cont();

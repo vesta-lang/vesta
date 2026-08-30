@@ -2497,8 +2497,11 @@ class Lowering {
     /// @param this_vid  SSA value del receptor (host_ptr al contenedor).
     /// @param field_offset  Offset del campo @c unique<T> (8B, guarda el slot).
     /// @param line  Linea fuente.
+    /// @param deleter  Nombre de quien libera, sacado del TIPO del campo.  Es
+    ///                 lo que permite emitir una llamada DIRECTA en vez de
+    ///                 leer una direccion de la ranura y saltar a ella.
     void emit_free_unique_field(ir::IrValueId this_vid, uint32_t field_offset,
-                                uint32_t line);
+                                const std::string &deleter, uint32_t line);
     /// Invoca un metodo de struct (`<Struct>__<m>`) sobre un struct que vive en
     /// un campo HOST (p.ej. campo struct de una clase, cuyo payload es host).
     /// Los metodos de struct se compilan asumiendo `this` en memoria VM
@@ -2667,7 +2670,12 @@ class Lowering {
     /// campo): null-guard, dispatch del deleter (slot+8) + RAW_FREE(slot).  Lo
     /// usa @c emit_free_unique_field tras cargar el slot, y el reassign-free de
     /// un campo unique (que captura el slot viejo antes de sobreescribir).
-    void emit_free_unique_slot(ir::IrValueId slot, uint32_t line);
+    /// @param deleter  Nombre de quien libera (del TIPO).  Vacio = leerlo de
+    ///                 la ranura en ejecucion, que es lo que hace falta cuando
+    ///                 quien libera no se sabe al compilar: el finalizador del
+    ///                 recolector, que corre sin tipos.
+    void emit_free_unique_slot(ir::IrValueId slot, const std::string &deleter,
+                               uint32_t line);
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);

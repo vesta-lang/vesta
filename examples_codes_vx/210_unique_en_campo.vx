@@ -18,7 +18,11 @@ void mi_deleter(i64 recurso) {
 
 // Contenedor con un recurso de lifetime no-C, propiedad del objeto.
 class Conexion {
-    unique<i64> handle;
+    // El CAMPO dice quien libera.  Un campo no puede adoptarlo del
+    // inicializador como hace una variable local: su tipo esta fijado en la
+    // declaracion del contenedor, y el destructor tiene que saber a quien
+    // llamar mirando solo eso.
+    unique<i64, mi_deleter> handle;
 }
 
 void abrir_y_cerrar(i64 fd) {

@@ -28,7 +28,9 @@ void del(i64 r) { C.libs = C.libs + 1; }
 
 // El box gc<unique<i64>> escapa via return -> sin cleanup determinista; el
 // finalizador GC libera el recurso interno cuando el box se finaliza.
-gc<unique<i64>> crea() {
+// La FIRMA dice quien libera, tambien envuelto en un `gc<>`: quien recoja el
+// box tiene que saber a quien invocar.  Dentro no hace falta repetirlo.
+gc<unique<i64, del>> crea() {
     gc<unique<i64>> g = gc_box(unique_with(7, del));
     return g;
 }

@@ -24,7 +24,8 @@ class Trace { public static i64 frees; }
 void del(i64 r) { Trace.frees = Trace.frees + 1; }
 
 // El box gc<unique<i64>> escapa via return -> el finalizador GC corre `del`.
-gc<unique<i64>> crea_unique() {
+// La FIRMA dice quien libera, tambien envuelto en un `gc<>`.
+gc<unique<i64, del>> crea_unique() {
     gc<unique<i64>> g = gc_box(unique_with(7, del));
     return g;
 }

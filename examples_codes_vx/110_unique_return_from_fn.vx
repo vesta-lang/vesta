@@ -26,9 +26,15 @@ unique<i32> make_int(i32 v) {
     return p;
 }
 
-// Factory con deleter custom (Vesta).  El deleter se almacena en slot+8
-// y sobrevive al SRET; el caller lo invoca dinamicamente al cleanup.
-unique<i64> make_tracked(i64 v) {
+// Factory con liberador propio.  La FIRMA dice cual es -- `unique<i64,
+// track_release>` --, y por eso quien llama sabe al compilar a quien invocar
+// al limpiar.  Antes no lo decia y habia que guardar el liberador dentro del
+// puntero para leerlo en ejecucion, que es lo que hacia que ocupara dos
+// palabras en vez de una.
+//
+// Dentro de la funcion no hace falta repetirlo: una declaracion local adopta
+// el liberador de su inicializador.
+unique<i64, track_release> make_tracked(i64 v) {
     unique<i64> p = unique_with(v, track_release);
     return p;
 }

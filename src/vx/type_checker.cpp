@@ -2794,6 +2794,23 @@ Type TypeChecker::type_from_node_impl(const ast::TypeNode *tn) const {
                                        pt->prim == PrimitiveKind::BORROW_MUT)) {
             t.pointee =
                 std::make_shared<Type>(type_from_node(pt->type_args[0].get()));
+            /* `unique<T, liberador>`: el segundo argumento NO es un tipo, es
+             * el NOMBRE de la funcion que libera.  Va en el tipo y no en la
+             * ranura -- ver @c Type::deleter_name --, que es lo que permite
+             * que un puntero inteligente ocupe una sola palabra.
+             *
+             * Se escribe donde el tipo esta fijado de antemano: un campo o una
+             * firma.  En una declaracion local se puede omitir, y la variable
+             * adopta el del inicializador. */
+            if (pt->type_args.size() >= 2 &&
+                (pt->prim == PrimitiveKind::UNIQUE_PTR ||
+                 pt->prim == PrimitiveKind::SHARED_PTR) &&
+                pt->type_args[1] &&
+                pt->type_args[1]->kind == ast::NodeKind::NamedTypeNode) {
+                t.deleter_name = static_cast<const ast::NamedTypeNode *>(
+                                     pt->type_args[1].get())
+                                     ->name;
+            }
         }
         return t;
     }
@@ -7753,6 +7770,33 @@ void TypeChecker::check_var_decl(ast::VarDeclStmt *vd) {
                     id_arg->result_type = fnv;
                 }
             }
+        }
+        /* `unique<T> p = unique_with(h, del);` -- la variable ADOPTA el
+         * liberador de su inicializador.
+         *
+         * Quien libera es parte del tipo, asi que en rigor lo declarado y lo
+         * asignado son tipos distintos.  Pero en una declaracion LOCAL el
+         * tipo declarado se lee como "un unique de T, liberador el que traiga
+         * el inicializador": es la unica lectura util, y ademas es la que
+         * mantiene escribible lo que ya estaba escrito.  Donde el tipo esta
+         * fijado de antemano -- un campo, una firma -- no se puede adoptar
+         * nada y hay que escribirlo (`unique<T, del>`), porque quien limpie
+         * del otro lado tiene que saber a quien llamar. */
+        if ((s.type.kind == PrimitiveKind::UNIQUE_PTR ||
+             s.type.kind == PrimitiveKind::SHARED_PTR) &&
+            s.type.deleter_name.empty() && t.kind == s.type.kind &&
+            !t.deleter_name.empty()) {
+            s.type.deleter_name = t.deleter_name;
+            if (vd->type) vd->declared_deleter = t.deleter_name;
+            /* Y en el simbolo YA REGISTRADO: `declare()` lo metio en el ambito
+             * antes de mirar el inicializador, asi que mutar la copia de aqui
+             * no alcanza.  Sin esto, un `move(a)` posterior lee el tipo de `a`
+             * SIN liberador y el recurso se libera con el que no es -- o no se
+             * libera. */
+            auto &top = scopes_.back();
+            auto it_sym = top.find(vd->name);
+            if (it_sym != top.end())
+                it_sym->second.type.deleter_name = t.deleter_name;
         }
         // implicit Some: si el tipo declarado es Optional<T> y el
         // init es de tipo T (o asignable a T), envolvemos el init
@@ -15851,6 +15895,13 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             Type::make_function(sig.param_types, sig.return_type);
         Type rt = (id->name == "unique_with") ? Type::make_unique(vt)
                                               : Type::make_shared(vt);
+        /* QUIEN LIBERA va en el TIPO.  Antes viajaba por un canal lateral del
+         * bajado (`pending_smartptr_deleter_`), que solo alcanzaba a la
+         * declaracion de al lado: en cuanto el puntero cruzaba una funcion
+         * habia que leer el liberador de la ranura EN EJECUCION, y por eso la
+         * ranura media dos palabras.  Dicho en el tipo, quien limpia lo sabe
+         * al compilar en todos los casos. */
+        rt.deleter_name = deleter_id->name;
         e->result_type = rt;
         return rt;
     }

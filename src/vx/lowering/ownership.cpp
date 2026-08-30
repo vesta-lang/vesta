@@ -628,7 +628,11 @@ void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
     fn_ = &fn;
     current_block_ = entry;
     block_terminated_ = false;
-    emit_free_unique_slot(slot, 0);
+    /* El finalizador del recolector corre SIN tipos -- le llega una direccion y
+     * nada mas --, asi que aqui es donde de verdad hace falta leer quien libera
+     * de la propia ranura.  Es el unico sitio, y por eso es lo que impide de
+     * momento que la ranura sea de una sola palabra. */
+    emit_free_unique_slot(slot, std::string(), 0);
     // RET void al final (emit_free_unique_slot deja current_block_ en su skip).
     {
         ir::IrInstr ret{};
@@ -824,7 +828,10 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     block_terminated_ = false;
 }
 
-void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
+void Lowering::emit_free_unique_slot(ir::IrValueId slot,
+                                     const std::string &deleter,
+                                     uint32_t line) {
+    (void)deleter;
     const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
     // if (slot == 0) -> skip  (slot nulo / unique movido).
@@ -838,6 +845,44 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
     // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
     const ir::IrValueId ptr =
         emit_load_typed(slot, ir::IrType::I64, line, /*host_ptr=*/true);
+    /* Cuando se sabe QUIEN libera -- porque lo dice el tipo --, se le llama
+     * directamente y se acabo: nada de leer una direccion de la ranura y
+     * saltar a ella.  Eso es lo que permite que la ranura sea de una palabra. */
+    if (!deleter.empty()) {
+        if (deleter == "free") {
+            ir::IrInstr rf{};
+            rf.op = ir::IrOp::RAW_FREE;
+            rf.type = ir::IrType::VOID;
+            rf.dst = ir::IR_NO_VALUE;
+            rf.operands = {ptr};
+            rf.source_line = line;
+            emit(current_block_, std::move(rf));
+        } else {
+            ir::IrInstr cv{};
+            cv.op = ir::IrOp::CALL;
+            cv.type = ir::IrType::VOID;
+            cv.dst = ir::IR_NO_VALUE;
+            cv.func_name = deleter;
+            cv.operands = {ptr};
+            cv.source_line = line;
+            cv.is_call_site = true;
+            emit(current_block_, std::move(cv));
+        }
+        // Y liberar la ranura, que vive en el monton cuando es de un campo.
+        {
+            ir::IrInstr rf{};
+            rf.op = ir::IrOp::RAW_FREE;
+            rf.type = ir::IrType::VOID;
+            rf.dst = ir::IR_NO_VALUE;
+            rf.operands = {slot};
+            rf.source_line = line;
+            emit(current_block_, std::move(rf));
+        }
+        emit_br(skip_bb, line);
+        current_block_ = skip_bb;
+        block_terminated_ = false;
+        return;
+    }
     // deleter = LOAD [slot + 8].
     const ir::IrValueId del_addr = fn_->new_value(ir::IrType::PTR);
     fn_->values[del_addr].is_host_ptr = true;
@@ -851,14 +896,15 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ad.source_line = line;
         emit(current_block_, std::move(ad));
     }
-    const ir::IrValueId deleter =
+    const ir::IrValueId v_deleter =
         emit_load_typed(del_addr, ir::IrType::I64, line, /*host_ptr=*/true);
     // if (deleter != 0) -> CALLIND deleter(ptr); else RAW_FREE(ptr).
     const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
     const ir::IrBlockId free_bb = fn_->new_block("free_uniq_raw");
     {
         const ir::IrValueId has_del =
-            emit_ir_binop(ir::IrOp::CMP_NE, deleter, zero, ir::IrType::BOOL, line);
+            emit_ir_binop(ir::IrOp::CMP_NE, v_deleter, zero, ir::IrType::BOOL,
+                          line);
         emit_br_cond(has_del, call_bb, free_bb, line);
     }
     // Bloque que SIEMPRE libera el slot heap (16B), tras liberar el inner.
@@ -870,7 +916,7 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot, uint32_t line) {
         ci.op = ir::IrOp::CALLIND;
         ci.type = ir::IrType::VOID;
         ci.dst = ir::IR_NO_VALUE;
-        ci.func_ptr = deleter;
+        ci.func_ptr = v_deleter;
         ci.operands = {ptr};
         ci.source_line = line;
         ci.is_call_site = true;

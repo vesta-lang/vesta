@@ -14,7 +14,9 @@ void cerrar(i64 recurso) {
 }
 
 class Conexion {
-    unique<i64> handle;
+    // El CAMPO dice quien libera: su tipo esta fijado en la declaracion del
+    // contenedor, asi que no puede adoptarlo del inicializador.
+    unique<i64, cerrar> handle;
 }
 
 void trabajar() {

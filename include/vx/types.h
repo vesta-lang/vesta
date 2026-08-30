@@ -378,6 +378,24 @@ struct Type {
     /// introspeccion).  Vacio si no es newtype.
     std::string nominal_name;
 
+    /// Nombre de la funcion que libera el recurso, cuando @c kind es
+    /// @c UNIQUE_PTR o @c SHARED_PTR.  Vacio = el de por defecto.
+    ///
+    /// Va en el TIPO, no guardado en la ranura, y por eso un puntero
+    /// inteligente ocupa OCHO bytes y no dieciseis: quien limpia sabe al
+    /// COMPILAR a quien llamar, asi que no hay nada que guardar.  Es lo mismo
+    /// que hace C++ -- ahi el liberador es un parametro de plantilla y
+    /// `default_delete` es una clase vacia --, salvo que aqui tambien sale
+    /// gratis el liberador propio, que en C++ cuesta ocho bytes cuando es un
+    /// puntero a funcion.
+    ///
+    /// Dos `unique<T>` con liberador distinto son tipos DISTINTOS: mezclarlos
+    /// significaria liberar con el que no es.  Un `unique<T>` escrito sin
+    /// liberador en una DECLARACION LOCAL adopta el de su inicializador; donde
+    /// el tipo esta fijado de antemano -- un campo, una firma -- hay que
+    /// escribirlo, porque quien limpie del otro lado tiene que saberlo.
+    std::string deleter_name;
+
     /// Alineacion forzada en bytes (sintaxis @c "@align(N)").  0 = sin
     /// override (usar alineacion natural del kind).  Debe ser potencia
     /// de 2 en [1, 4096].  Aplica cuando el tipo se usa como campo de
@@ -436,6 +454,15 @@ struct Type {
         // son tipos distintos (al menos para evitar mezcla accidental).
         if (align_override != o.align_override) return false;
         if (kind != o.kind || struct_name != o.struct_name) return false;
+        /* Para un puntero inteligente, QUIEN LIBERA es parte de la identidad:
+         * mezclar dos con liberador distinto significaria liberar con el que
+         * no es.  Es lo mismo que en C++, donde el liberador es un parametro
+         * de la plantilla y `unique_ptr<T>` y `unique_ptr<T,D>` son tipos
+         * distintos. */
+        if ((kind == PrimitiveKind::UNIQUE_PTR ||
+             kind == PrimitiveKind::SHARED_PTR) &&
+            deleter_name != o.deleter_name)
+            return false;
         // Para PTR/ARRAY la naturaleza host vs virtual ES parte de la
         // identidad de tipo: `T*` y `VirtualPtr<T>` son tipos distintos.
         if ((kind == PrimitiveKind::PTR || kind == PrimitiveKind::ARRAY) &&
@@ -708,6 +735,32 @@ constexpr bool is_numeric(PrimitiveKind k) noexcept {
  * @return Bytes de la ranura.
  */
 constexpr size_t smart_ptr_slot_bytes(PrimitiveKind k) noexcept {
+    /* OCHO, los dos: la ranura guarda SOLO el puntero al recurso.
+     *
+     * Quien libera va en el TIPO (@c Type::deleter_name), asi que quien limpia
+     * sabe al COMPILAR a quien llamar y no hay nada que guardar.  Antes un
+     * `unique<T>` media dos palabras porque llevaba el liberador al lado, y
+     * hacia falta porque no habia forma de decirlo en una firma: cuando el
+     * puntero venia de una funcion, el liberador se leia de la ranura EN
+     * EJECUCION.
+     *
+     * Lo que se gana: con el liberador de por defecto esa segunda palabra era
+     * SIEMPRE un cero -- ocho bytes por una constante, en el caso mas
+     * frecuente --.  Y en un CAMPO no cabia, asi que obligaba a un bloque
+     * aparte en el monton: treinta y dos bytes y DOS reservas para guardar un
+     * entero, contra dieciseis y una.
+     *
+     * C++ llega a ocho por el mismo camino (el liberador es un parametro de
+     * plantilla y `default_delete` es una clase vacia); alli un liberador
+     * propio vuelve a costar ocho porque guarda el puntero a funcion, y aqui
+     * es gratis tambien. */
+    /* PENDIENTE bajarlo a ocho.  Ya no lo impide el lenguaje: quien libera va
+     * en el tipo y quien limpia lo llama por su nombre en el caso normal.  Lo
+     * que queda es UN helper compartido -- el que libera un slot cuando se
+     * reasigna un campo, y el que el recolector usa al finalizar -- que recibe
+     * SOLO una direccion, sin tipo, y por eso lee el liberador de la ranura.
+     * Se cierra generando un helper por liberador y llamando al que toque desde
+     * cada sitio, que si conoce el tipo. */
     return (k == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
 }
 
@@ -839,6 +892,24 @@ inline std::string type_to_string(const Type &t) {
     // en lugar de "incompatible con u64").
     if (t.nominal_id != 0 && !t.nominal_name.empty()) {
         return t.nominal_name;
+    }
+    /* Un puntero inteligente ENSENA quien libera, porque forma parte de su
+     * identidad: sin esto, decir que `unique<i64>` no es compatible con
+     * `unique<i64>` era un mensaje que no decia nada -- los dos lados se
+     * imprimian igual y la diferencia estaba justo en lo que no se veia. */
+    if ((t.kind == PrimitiveKind::UNIQUE_PTR ||
+         t.kind == PrimitiveKind::SHARED_PTR) &&
+        !t.deleter_name.empty()) {
+        const char *n =
+            (t.kind == PrimitiveKind::UNIQUE_PTR) ? "unique<" : "shared<";
+        /* El nombre CORTO, que es el que el usuario escribio: por dentro lleva
+         * el del espacio de nombres pegado delante -- dos `cerrar` de sitios
+         * distintos son liberadores distintos -- pero ensenarselo en un
+         * mensaje solo estorba. */
+        const std::string &d = t.deleter_name;
+        const size_t sep = d.rfind("__");
+        return n + (t.pointee ? type_to_string(*t.pointee) : "?") + ", " +
+               (sep == std::string::npos ? d : d.substr(sep + 2)) + ">";
     }
     if (t.kind == PrimitiveKind::PTR) {
         // T* (host por defecto) vs VirtualPtr<T> (direccion VM).

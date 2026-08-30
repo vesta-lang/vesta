@@ -1549,7 +1549,9 @@ uint64_t intern_class_cache_slot(ir::IrModule &mod,
  */
 
 void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
-                                      uint32_t field_offset, uint32_t line) {
+                                      uint32_t field_offset,
+                                      const std::string &deleter,
+                                      uint32_t line) {
     // El CAMPO vive en la memoria del CONTENEDOR: VM (struct en VM stack) o
     // host (clase, o cualquiera en native_poo/AOT).  La carga del campo hereda
     // la host-ness de @c this_vid (NO emit_field_addr, que la fuerza a host).
@@ -1581,7 +1583,8 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         ld.source_line = line;
         emit(current_block_, std::move(ld));
     }
-    emit_free_unique_slot(slot, line);
+    emit_free_unique_slot(slot, deleter.empty() ? std::string("free") : deleter,
+                          line);
 }
 
 void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,

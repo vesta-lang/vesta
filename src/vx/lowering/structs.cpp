@@ -897,7 +897,9 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
                     // Campo unique<T> (ownership): liberar el inner via el
                     // deleter del slot.  fn_ == &fn aqui (set en el setup).
                     if (f.type.kind == PrimitiveKind::UNIQUE_PTR) {
+                        // Quien libera lo dice el TIPO del campo.
                         emit_free_unique_field(this_dtor, f.offset,
+                                               f.type.deleter_name,
                                                m->loc.line);
                         continue;
                     }

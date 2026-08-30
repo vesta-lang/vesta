@@ -62,6 +62,11 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // re-evaluar el init.
     Type sem_type = vd->type ? tc_.resolve_type_node(vd->type.get())
                              : (vd->init ? vd->init->result_type : Type{});
+    /* El liberador que la variable adopto de su inicializador: resolver el
+     * tipo desde el nodo no lo ve, porque en el nodo no esta escrito.  Lo
+     * anoto el comprobador, que es quien decidio la adopcion. */
+    if (!vd->declared_deleter.empty() && sem_type.deleter_name.empty())
+        sem_type.deleter_name = vd->declared_deleter;
 
     // `static T x = init;` local: duracion estatica (gdata) + init-once.
     // Se desvia por completo del camino ALLOCA (stack).
@@ -543,74 +548,24 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         act.refresh_name = vd->name;
         if (sem_type.kind == PrimitiveKind::UNIQUE_PTR) {
             act.kind = CleanupAction::Kind::SMARTPTR_FREE;
-            // Decision del literal_deleter (cleanup mas eficiente
-            // posible segun la info compile-time disponible):
-            //
-            //   pending_smartptr_deleter_ no vacio
-            //     -> init fue unique_with(_, deleter) -> usar ese deleter.
-            //
-            //   init es CallExpr (factory que devuelve unique<T>)
-            //     -> dejar literal_deleter vacio -> dispatch dinamico
-            //        via slot+8 al runtime (lee deleter del slot).
-            //
-            //   otro (init es unique_box, IdentExpr, etc.)
-            //     -> usar "free" (Tier 1 con sentinel; el slot[+8]=0).
-            if (!pending_smartptr_deleter_.empty()) {
-                act.literal_deleter = pending_smartptr_deleter_;
-            } else if (vd->init && vd->init->kind == ast::NodeKind::CallExpr) {
-                auto *ce = static_cast<ast::CallExpr *>(vd->init.get());
-                bool is_factory_call = false;
-                bool is_move_call = false;
-                std::string move_src_name;
-                if (ce->callee &&
-                    ce->callee->kind == ast::NodeKind::IdentExpr) {
-                    auto *cid = static_cast<ast::IdentExpr *>(ce->callee.get());
-                    // Si el callee no es un builtin de smart pointer
-                    // (unique_box/unique_with/shared_box/shared_with/move),
-                    // asumimos factory de usuario y usamos dispatch dinamico.
-                    const std::string &n = cid->name;
-                    is_factory_call =
-                        (n != "unique_box" && n != "unique_with" &&
-                         n != "shared_box" && n != "shared_with" &&
-                         n != "move");
-                    is_move_call = (n == "move");
-                    if (is_move_call && !ce->args.empty() &&
-                        ce->args[0]->kind == ast::NodeKind::IdentExpr) {
-                        move_src_name =
-                            static_cast<ast::IdentExpr *>(ce->args[0].get())
-                                ->name;
-                    }
-                }
-                if (is_move_call) {
-                    // bug4: `unique<T> b = move(a)`.  El move copia el deleter
-                    // de `a` al slot `b[+8]`.  Resolvemos el deleter
-                    // ESTATICAMENTE por el tipo/origen conocido de `a` (caso
-                    // comun: `a` es una variable local con deleter conocido en
-                    // compile-time) para emitir un cleanup DIRECTO (free / CALL
-                    // <fn> / CALLN extern) sin dispatch dinamico ni lectura de
-                    // slot+8 en runtime. Solo si `a` es opaca (deleter
-                    // desconocido) caemos al dispatch dinamico ("").
-                    auto it_del = unique_var_deleter_.find(move_src_name);
-                    if (!move_src_name.empty() &&
-                        it_del != unique_var_deleter_.end()) {
-                        act.literal_deleter = it_del->second; // estatico
-                    } else {
-                        act.literal_deleter = ""; // dispatch dinamico (opaco)
-                    }
-                } else if (is_factory_call) {
-                    act.literal_deleter = ""; // dispatch dinamico
-                } else {
-                    act.literal_deleter = "free";
-                }
-            } else {
-                act.literal_deleter = "free"; // Tier 1 con sentinel
-            }
-            act.slot_size = 16; // Tier 1
-            // Registrar el deleter estatico de esta variable para que un
-            // futuro `move(<esta var>)` lo resuelva sin dispatch dinamico.
-            // Solo cuando es conocido (no vacio -> no opaco).
-            if (!act.literal_deleter.empty())
-                unique_var_deleter_[vd->name] = act.literal_deleter;
+            /* QUIEN LIBERA LO DICE EL TIPO.
+             *
+             * Aqui habia sesenta lineas de heuristica para adivinarlo desde el
+             * sitio de la declaracion: un estado pendiente que ponia
+             * `unique_with`, un mapa de nombre a liberador para resolver un
+             * `move`, deteccion de "esto parece una fabrica" y, cuando nada de
+             * eso alcanzaba, un despacho DINAMICO que leia el liberador de la
+             * ranura EN EJECUCION -- que es la razon de que la ranura midiera
+             * dos palabras en vez de una.
+             *
+             * Con el liberador en el tipo (@c Type::deleter_name) no hay nada
+             * que adivinar: un `move` devuelve el tipo de su argumento y una
+             * fabrica el que declara su firma, asi que los dos lo traen
+             * puesto.  Vacio = el de por defecto. */
+            act.literal_deleter = sem_type.deleter_name.empty()
+                                      ? std::string("free")
+                                      : sem_type.deleter_name;
+            act.slot_size = smart_ptr_slot_bytes(PrimitiveKind::UNIQUE_PTR);
 
             // Bug fix bug2: si el inner T es una CLASS Vesta con destructor,
             // registrar el vtable_index para que el cleanup invoque
