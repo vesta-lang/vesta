@@ -22,9 +22,9 @@ import std.unix only STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO;
  * suyos para que la capa portable no tenga que preguntar cual es cual.
  */
 public enum Stream : u32 {
-    stdin  = STDIN_FILENO,
-    stdout = STDOUT_FILENO,
-    stderr = STDERR_FILENO
+	stdin  = STDIN_FILENO,
+	stdout = STDOUT_FILENO,
+	stderr = STDERR_FILENO
 }
 
 /**
@@ -37,5 +37,5 @@ public enum Stream : u32 {
  * @param code Codigo de salida.
  */
 public void exit(i32 code) {
-    exit_group(code);
+	exit_group(code);
 }

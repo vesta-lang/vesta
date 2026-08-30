@@ -42,15 +42,21 @@ import std.os only exit;
 // Linux: `write` de libc (thin syscall stub; el raw `syscall` necesitaria
 // inline-asm AOT,  AS).
 extern "kernel32.dll" {
-    fn GetStdHandle(u32 nStdHandle) -> u64;
-    fn GetConsoleMode(u64 hConsole, u32* lpMode) -> i32;
-    fn WriteFile(u64 hFile, u8* buf, u32 n, u32* nwritten, u64 overlapped) -> i32;
-    fn WriteConsoleW(u64 hConsole, u16* buf, u32 nchars, u32* nwritten,
-                     u64 reserved) -> i32;
-    fn MultiByteToWideChar(u32 codePage, u32 flags, u8* mbStr, i32 cbMb,
-                           u16* wStr, i32 cchWide) -> i32;
-    fn ExitProcess(u32 code) -> void;
-    fn IsDebuggerPresent() -> i32;
+	fn GetStdHandle(u32 nStdHandle) -> u64;
+	fn GetConsoleMode(u64 hConsole, u32 *lpMode) -> i32;
+	fn WriteFile(
+		u64 hFile,
+		u8 *buf,
+		u32 n,
+		u32 *nwritten,
+		u64 overlapped
+	) -> i32;
+	fn WriteConsoleW(u64 hConsole, u16 *buf, u32 nchars, u32 *nwritten,
+		u64 reserved) -> i32;
+	fn MultiByteToWideChar(u32 codePage, u32 flags, u8 *mbStr, i32 cbMb,
+		u16 *wStr, i32 cchWide) -> i32;
+	fn ExitProcess(u32 code) -> void;
+	fn IsDebuggerPresent() -> i32;
 }
 
 // Linux: las llamadas al sistema vienen de std.syscall, que es donde vive la
@@ -65,42 +71,42 @@ extern "kernel32.dll" {
 // __vio_raw: escritura cruda al SO (la unica parte platform-specific).  Recibe
 // como mucho VIO_BUF_BYTES (el flush nunca pasa mas), asi la conversion a
 // UTF-16 cabe en __vio_wbuf sin malloc.
-u64 __vio_handle = 0;
+u64 __vio_handle     = 0;
 i32 __vio_is_console = 0; // 0=sin-detectar, 1=consola, 2=fichero/pipe
-u16[4096] __vio_wbuf;     // buffer UTF-16 (max VIO_BUF_BYTES code units: ASCII)
+u16[4096] __vio_wbuf; // buffer UTF-16 (max VIO_BUF_BYTES code units: ASCII)
 
 @Target("os:windows")
-void __vio_raw(u8* buf, u64 len) {
-    if (len == 0) return;
-    if (__vio_is_console == 0) {
-        // STD_OUTPUT_HANDLE = (DWORD)-11 = 0xFFFFFFF5 = 4294967285.
-        __vio_handle = GetStdHandle(4294967285);
-        u32 mode = 0;
-        // GetConsoleMode != 0 <=> el handle es una consola (no pipe/fichero).
-        if (GetConsoleMode(__vio_handle, &mode) != 0) {
-            __vio_is_console = 1;
-        } else {
-            __vio_is_console = 2;
-        }
-    }
-    u32 nw = 0;
-    if (__vio_is_console == 1) {
-        // Consola: UTF-8 (CP_UTF8=65001) -> UTF-16 -> WriteConsoleW.  len <=
-        // VIO_BUF_BYTES (4096) -> a lo sumo 4096 code units (caso ASCII).
-        i32 ncw = MultiByteToWideChar(65001, 0, buf, (i32)len, &__vio_wbuf[0],
-                                      4096);
-        if (ncw > 0) {
-            WriteConsoleW(__vio_handle, &__vio_wbuf[0], (u32)ncw, &nw, 0);
-            return;
-        }
-        // Conversion fallida -> caer a bytes crudos.
-    }
-    // Pipe/redir (o fallback): WriteFile de bytes directo.
-    WriteFile(__vio_handle, buf, (u32)len, &nw, 0);
+void __vio_raw(u8 *buf, u64 len) {
+	if (len == 0) return;
+	if (__vio_is_console == 0) {
+		// STD_OUTPUT_HANDLE = (DWORD)-11 = 0xFFFFFFF5 = 4294967285.
+		__vio_handle = GetStdHandle(4_294_967_285);
+		u32 mode = 0;
+		// GetConsoleMode != 0 <=> el handle es una consola (no pipe/fichero).
+		if (GetConsoleMode(__vio_handle,&mode) != 0) {
+			__vio_is_console = 1;
+		} else {
+			__vio_is_console = 2;
+		}
+	}
+	u32 nw = 0;
+	if (__vio_is_console == 1) {
+		// Consola: UTF-8 (CP_UTF8=65001) -> UTF-16 -> WriteConsoleW.  len <=
+		// VIO_BUF_BYTES (4096) -> a lo sumo 4096 code units (caso ASCII).
+		i32 ncw = MultiByteToWideChar(65_001, 0, buf, (i32)len,&__vio_wbuf[0],
+			4096);
+		if (ncw > 0) {
+			WriteConsoleW(__vio_handle,&__vio_wbuf[0], (u32)ncw,&nw, 0);
+			return;
+		}
+	// Conversion fallida -> caer a bytes crudos.
+	}
+	// Pipe/redir (o fallback): WriteFile de bytes directo.
+	WriteFile(__vio_handle, buf, (u32)len,&nw, 0);
 }
 @Target("!os:windows")
-void __vio_raw(u8* buf, u64 len) {
-    if (len > 0) write(STDOUT_FILENO, (char*) buf, len);
+void __vio_raw(u8 *buf, u64 len) {
+	if (len > 0) write(STDOUT_FILENO, (char *) buf, len);
 }
 
 // Buffer de salida (block-buffered): acumula y vuelca en UN syscall.  Bate a
@@ -113,27 +119,27 @@ u8[4096] __vio_buf;
 u64 __vio_pos = 0;
 
 void __vx_flush() {
-    if (__vio_pos > 0) {
-        __vio_raw(&__vio_buf[0], __vio_pos);
-        __vio_pos = 0;
-    }
+	if (__vio_pos > 0) {
+		__vio_raw(&__vio_buf[0], __vio_pos);
+		__vio_pos = 0;
+	}
 }
 
 void __vx_write(u8* buf, u64 len) {
-    u64 off = 0;
-    while (off < len) {
-        if (__vio_pos >= 4096) __vx_flush();
-        u64 space = 4096 - __vio_pos;
-        u64 take = len - off;
-        if (take > space) take = space;
-        u64 k = 0;
-        while (k < take) {
-            __vio_buf[__vio_pos + k] = buf[off + k];
-            k = k + 1;
-        }
-        __vio_pos = __vio_pos + take;
-        off = off + take;
-    }
+	u64 off = 0;
+	while (off < len) {
+		if (__vio_pos >= 4096) __vx_flush();
+		u64               space = 4096 - __vio_pos;
+		u64               take  = len - off;
+		if (take > space) take  = space;
+		u64               k     = 0;
+		while (k < take) {
+			__vio_buf[__vio_pos + k] = buf[off + k];
+			k = k + 1;
+		}
+		__vio_pos = __vio_pos + take;
+		off       = off + take;
+	}
 }
 
 // --- panic ------------------------------------------------------------------
@@ -166,26 +172,26 @@ i32 __vio_trazado() { return IsDebuggerPresent(); }
  */
 @Target("os:linux")
 i32 __vio_trazado() {
-    char[512] buf;
-    i32 fd = open("/proc/self/status", O_RDONLY, 0);
-    if (fd < 0) return 0;
-    ssize_t n = read(fd, &buf[0], 512);
-    close(fd);
-    if (n <= 0) return 0;
-    // Basta con mirar el primer caracter del numero: interesa si es cero, no
-    // cuanto vale.
-    ssize_t tope = n - 10;
-    for (ssize_t i = 0; i < tope; i++) {
-        if (buf[i] != 'T') continue;
-        if (buf[i + 1] != 'r') continue;
-        if (buf[i + 6] != 'P') continue;
-        if (buf[i + 9] != ':') continue;
-        ssize_t j = i + 10;
-        while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
-        if (j < n && buf[j] != '0') return 1;
-        return 0;
-    }
-    return 0;
+	char[512] buf;
+	i32 fd = open("/proc/self/status", O_RDONLY, 0);
+	if (fd < 0) return 0;
+	ssize_t n = read(fd,&buf[0], 512);
+	close(fd);
+	if (n <= 0) return 0;
+	// Basta con mirar el primer caracter del numero: interesa si es cero, no
+	// cuanto vale.
+	ssize_t tope = n - 10;
+	for (ssize_t i = 0; i < tope; i++) {
+		if (buf[i] != 'T') continue;
+		if (buf[i + 1] != 'r') continue;
+		if (buf[i + 6] != 'P') continue;
+		if (buf[i + 9] != ':') continue;
+		ssize_t j = i + 10;
+		while (j < n && (buf[j] == ' ' || buf[j] == '\t')) j++;
+		if (j < n && buf[j] != '0') return 1;
+		return 0;
+	}
+	return 0;
 }
 
 /// En un target sin sistema operativo no hay a quien preguntar.
@@ -206,152 +212,152 @@ i32 __vio_trazado() { return 0; }
  * @param len Cuantos bytes tiene el mensaje.
  */
 void __vio_panic_di(u8* msg, u64 len) {
-    __vx_write("panic: ", 7);
-    __vx_write(msg, len);
-    __vx_write("\n", 1);
-    __vx_flush();   // el mensaje sale antes de parar o de morir.
-    if (__vio_trazado() != 0) {
-        asm volatile { int3 };
-    }
+	__vx_write("panic: ", 7);
+	__vx_write(msg, len);
+	__vx_write("\n", 1);
+	__vx_flush(); // el mensaje sale antes de parar o de morir.
+	if (__vio_trazado() != 0) {
+		asm volatile { int3 };
+	}
 }
 
 /// Hook por defecto de `panic(msg)`.  Sale con 134 (128+6, SIGABRT), el mismo
 /// codigo con que salen el interprete y el JIT.
 void __panic(u8* msg, u64 len) {
-    __vio_panic_di(msg, len);
-    exit(134);
+	__vio_panic_di(msg, len);
+	exit(134);
 }
 
 /// Hook de fallo de `unwrap` sobre null (Optional/nonnull vacios).  Es un
 /// panic como cualquier otro, solo que el mensaje lo pone el lenguaje.
 void __vx_panic_null() {
-    // La longitud la cuenta el compilador (se pliega a una constante), no yo:
-    // este mismo mensaje llevaba 54 escrito a mano donde mide 56, asi que
-    // salia cortado y sin el salto de linea.
-    __vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)",
-                   "unwrap de un valor null (Optional/nonnull vacio)".bytes());
-    exit(134);
+	// La longitud la cuenta el compilador (se pliega a una constante), no yo:
+	// este mismo mensaje llevaba 54 escrito a mano donde mide 56, asi que
+	// salia cortado y sin el salto de linea.
+	__vio_panic_di("unwrap de un valor null (Optional/nonnull vacio)",
+		"unwrap de un valor null (Optional/nonnull vacio)".bytes());
+	exit(134);
 }
 
 // --- Formateadores numericos ( puro sobre __vx_write) -------------------
 
 // Emite `v` en decimal sin signo.  Buffer de 20 digitos (u64 max = 20).
 void __vio_dec_u64(u64 v) {
-    u8[24] buf;
-    if (v == 0) {
-        buf[0] = 48; // '0'
-        __vx_write(&buf[0], 1);
-        return;
-    }
-    i32 i = 24;
-    while (v > 0) {
-        i = i - 1;
-        buf[i] = (u8)(48 + (v % 10)); // '0' + digito
-        v = v / 10;
-    }
-    u64 n = (u64)(24 - i);
-    __vx_write(&buf[i], n);
+	u8[24] buf;
+	if (v == 0) {
+		buf[0] = 48; // '0'
+		__vx_write(&buf[0], 1);
+		return;
+	}
+	i32 i = 24;
+	while (v > 0) {
+		i = i - 1;
+		buf[i] = (u8)(48 + (v % 10)); // '0' + digito
+		v = v / 10;
+	}
+	u64 n = (u64)(24 - i);
+	__vx_write(&buf[i], n);
 }
 
 void __vx_print_u64(u64 v) { __vio_dec_u64(v); }
 
 void __vx_print_i64(i64 v) {
-    if (v < 0) {
-        __vx_write("-", 1);
-        // -v puede desbordar en INT64_MIN; en u64 el complemento es correcto.
-        u64 mag = (u64)(0 - v);
-        __vio_dec_u64(mag);
-    } else {
-        __vio_dec_u64((u64)v);
-    }
+	if (v < 0) {
+		__vx_write("-", 1);
+		// -v puede desbordar en INT64_MIN; en u64 el complemento es correcto.
+		u64 mag = (u64)(0 - v);
+		__vio_dec_u64(mag);
+	} else {
+		__vio_dec_u64((u64)v);
+	}
 }
 
 // Emite `v` en base `radix` (8/16) sin prefijo.  Digitos 0-9a-f.
 void __vio_base_u64(u64 v, u64 radix) {
-    u8[68] buf;
-    if (v == 0) {
-        buf[0] = 48; // '0'
-        __vx_write(&buf[0], 1);
-        return;
-    }
-    i32 i = 68;
-    while (v > 0) {
-        u64 d = v % radix;
-        i = i - 1;
-        if (d < 10) {
-            buf[i] = (u8)(48 + d); // '0'+d
-        } else {
-            buf[i] = (u8)(87 + d); // 'a'-10 + d = 87 + d
-        }
-        v = v / radix;
-    }
-    u64 n = (u64)(68 - i);
-    __vx_write(&buf[i], n);
+	u8[68] buf;
+	if (v == 0) {
+		buf[0] = 48; // '0'
+		__vx_write(&buf[0], 1);
+		return;
+	}
+	i32 i = 68;
+	while (v > 0) {
+		u64 d = v % radix;
+		i = i - 1;
+		if (d < 10) {
+			buf[i] = (u8)(48 + d); // '0'+d
+		} else {
+			buf[i] = (u8)(87 + d); // 'a'-10 + d = 87 + d
+		}
+		v = v / radix;
+	}
+	u64 n = (u64)(68 - i);
+	__vx_write(&buf[i], n);
 }
 
 void __vx_print_hex(u64 v) {
-    __vx_write("0x", 2);
-    __vio_base_u64(v, 16);
+	__vx_write("0x", 2);
+	__vio_base_u64(v, 16);
 }
 
 void __vx_print_oct(u64 v) {
-    __vx_write("0o", 2);
-    __vio_base_u64(v, 8);
+	__vx_write("0o", 2);
+	__vio_base_u64(v, 8);
 }
 
 void __vx_print_ptr(u64 v) {
-    __vx_write("0x", 2);
-    __vio_base_u64(v, 16);
+	__vx_write("0x", 2);
+	__vio_base_u64(v, 16);
 }
 
 void __vx_print_bin(u64 v) {
-    __vx_write("0b", 2);
-    u8[68] buf;
-    if (v == 0) {
-        buf[0] = 48; // '0'
-        __vx_write(&buf[0], 1);
-        return;
-    }
-    i32 i = 68;
-    while (v > 0) {
-        i = i - 1;
-        buf[i] = (u8)(48 + (v & 1)); // '0' o '1'
-        v = v >> 1;
-    }
-    u64 n = (u64)(68 - i);
-    __vx_write(&buf[i], n);
+	__vx_write("0b", 2);
+	u8[68] buf;
+	if (v == 0) {
+		buf[0] = 48; // '0'
+		__vx_write(&buf[0], 1);
+		return;
+	}
+	i32 i = 68;
+	while (v > 0) {
+		i = i - 1;
+		buf[i] = (u8)(48 + (v & 1)); // '0' o '1'
+		v = v >> 1;
+	}
+	u64 n = (u64)(68 - i);
+	__vx_write(&buf[i], n);
 }
 
 void __vx_print_bool(u64 v) {
-    if (v != 0) {
-        __vx_write("true", 4);
-    } else {
-        __vx_write("false", 5);
-    }
+	if (v != 0) {
+		__vx_write("true", 4);
+	} else {
+		__vx_write("false", 5);
+	}
 }
 
 // Codepoint Unicode -> UTF-8 (1..4 bytes).
 void __vx_print_char(u64 cp) {
-    u8[4] b;
-    if (cp < 128) {
-        b[0] = (u8)cp;
-        __vx_write(&b[0], 1);
-    } else if (cp < 2048) {
-        b[0] = (u8)(192 | (cp >> 6));
-        b[1] = (u8)(128 | (cp & 63));
-        __vx_write(&b[0], 2);
-    } else if (cp < 65536) {
-        b[0] = (u8)(224 | (cp >> 12));
-        b[1] = (u8)(128 | ((cp >> 6) & 63));
-        b[2] = (u8)(128 | (cp & 63));
-        __vx_write(&b[0], 3);
-    } else {
-        b[0] = (u8)(240 | (cp >> 18));
-        b[1] = (u8)(128 | ((cp >> 12) & 63));
-        b[2] = (u8)(128 | ((cp >> 6) & 63));
-        b[3] = (u8)(128 | (cp & 63));
-        __vx_write(&b[0], 4);
-    }
+	u8[4] b;
+	if (cp < 128) {
+		b[0] = (u8)cp;
+		__vx_write(&b[0], 1);
+	} else if (cp < 2048) {
+		b[0] = (u8)(192 | (cp >> 6));
+		b[1] = (u8)(128 | (cp & 63));
+		__vx_write(&b[0], 2);
+	} else if (cp < 65_536) {
+		b[0] = (u8)(224 | (cp >> 12));
+		b[1] = (u8)(128 | ((cp >> 6) & 63));
+		b[2] = (u8)(128 | (cp & 63));
+		__vx_write(&b[0], 3);
+	} else {
+		b[0] = (u8)(240 | (cp >> 18));
+		b[1] = (u8)(128 | ((cp >> 12) & 63));
+		b[2] = (u8)(128 | ((cp >> 6) & 63));
+		b[3] = (u8)(128 | (cp & 63));
+		__vx_write(&b[0], 4);
+	}
 }
 
 // Float f64 en formato aproximado a "%g": signo, parte entera, hasta 6
@@ -361,70 +367,70 @@ void __vx_print_char(u64 cp) {
 // explicitos.  Iguala la salida de vesta_io.c (%g) para los magnitudes
 // tipicas de la stdlib de math (sqrt/pow/log/...).
 void __vx_print_float(f64 v) {
-    // NaN: v != v solo es cierto para NaN.
-    if (v != v) {
-        __vx_write("nan", 3);
-        return;
-    }
-    if (v < 0.0) {
-        __vx_write("-", 1);
-        v = 0.0 - v;
-    }
-    // Infinito: mayor que el mayor finito representable aprox.
-    if (v > 1.7976931348623157e308) {
-        __vx_write("inf", 3);
-        return;
-    }
-    if (v == 0.0) {
-        __vx_write("0", 1);
-        return;
-    }
-    // Rango fuera de u64 (|v| >= 2^63): decimal sin fraccion (best-effort).
-    if (v >= 9223372036854775808.0) {
-        // Dividir en bloques no es trivial sin u128; emitimos el entero
-        // truncado por mantissa (suficiente para no perder el orden de
-        // magnitud).  %g usaria %e aqui (limitacion conocida).
-        u64 big = (u64)v;
-        __vio_dec_u64(big);
-        return;
-    }
-    u64 ip = (u64)v;
-    f64 frac = v - (f64)ip;
-    __vio_dec_u64(ip);
-    if (frac > 0.0) {
-        u8[8] fb;
-        i32 n = 0;
-        while (n < 6) {
-            frac = frac * 10.0;
-            u64 d = (u64)frac;
-            if (d > 9) d = 9;
-            fb[n] = (u8)(48 + d); // '0' + digito
-            frac = frac - (f64)d;
-            n = n + 1;
-        }
-        // Recortar ceros finales (estilo %g).
-        while (n > 0 && fb[n - 1] == 48) n = n - 1;
-        if (n > 0) {
-            __vx_write(".", 1);
-            __vx_write(&fb[0], (u64)n);
-        }
-    }
+	// NaN: v != v solo es cierto para NaN.
+	if (v != v) {
+		__vx_write("nan", 3);
+		return;
+	}
+	if (v < 0.0) {
+		__vx_write("-", 1);
+		v = 0.0 - v;
+	}
+	// Infinito: mayor que el mayor finito representable aprox.
+	if (v > 1.7976931348623157e308) {
+		__vx_write("inf", 3);
+		return;
+	}
+	if (v == 0.0) {
+		__vx_write("0", 1);
+		return;
+	}
+	// Rango fuera de u64 (|v| >= 2^63): decimal sin fraccion (best-effort).
+	if (v >= 9_223_372_036_854_775_808.0) {
+		// Dividir en bloques no es trivial sin u128; emitimos el entero
+		// truncado por mantissa (suficiente para no perder el orden de
+		// magnitud).  %g usaria %e aqui (limitacion conocida).
+		u64 big = (u64)v;
+		__vio_dec_u64(big);
+		return;
+	}
+	u64 ip   = (u64)v;
+	f64 frac = v - (f64)ip;
+	__vio_dec_u64(ip);
+	if (frac > 0.0) {
+		u8[8] fb;
+		i32 n = 0;
+		while (n < 6) {
+			frac = frac * 10.0;
+			u64        d = (u64)frac;
+			if (d > 9) d = 9;
+			fb[n] = (u8)(48 + d); // '0' + digito
+			frac = frac - (f64)d;
+			n    = n + 1;
+		}
+		// Recortar ceros finales (estilo %g).
+		while (n > 0 && fb[n - 1] == 48) n = n - 1;
+		if (n > 0) {
+			__vx_write(".", 1);
+			__vx_write(&fb[0], (u64)n);
+		}
+	}
 }
 
 // Padding: escribe `count` copias del codepoint `fill_cp` (alineacion de
 // columnas en ${s:>W} / ${s:<W}).  fill_cp suele ser ' ' (32) o '.'.
 void __vx_pad(u64 fill_cp, u64 count) {
-    u64 k = 0;
-    while (k < count) {
-        __vx_print_char(fill_cp);
-        k = k + 1;
-    }
+	u64 k = 0;
+	while (k < count) {
+		__vx_print_char(fill_cp);
+		k = k + 1;
+	}
 }
 
 // Cadena C nul-terminada (host_ptr): mide la longitud y escribe.
 void __vx_print_cstr(u8* s) {
-    if (s == null) return;
-    u64 n = 0;
-    while (s[n] != 0) n = n + 1;
-    if (n > 0) __vx_write(s, n);
+	if (s == null) return;
+	u64               n = 0;
+	while (s[n] != 0) n = n + 1;
+	if (n > 0) __vx_write(s, n);
 }

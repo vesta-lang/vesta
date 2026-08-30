@@ -73,25 +73,26 @@ import std.pool only fiber, vx_park, vx_wake, vx_cur_fiber;
 // Un test que solo compare VALORES no distingue las dos semanticas (leer `h.ch.v`
 // da lo mismo con ambas).  TODO: tipar estos campos cuando el campo de tipo
 // overlay guarde el handle.
-@overlay public struct Chan {
-    i64  lock   @0x00;  // spinlock (0=libre, 1=tomado).  Tambien marca la BASE.
-    i64  cap    @0x08;  // capacidad del ring (0=rendezvous; si >=1, pot. de 2).
-    i64  mask   @0x10;  // cap - 1 (indexado del ring; 0 si cap 0).
-    i64  head   @0x18;  // indice de lectura (monotono, enmascarado).
-    i64  tail   @0x20;  // indice de escritura.
-    i64  count  @0x28;  // items en el buffer.
-    i64  rwq_h  @0x30;  // recv wait-queue: cabeza (Waiter).
-    i64  rwq_t  @0x38;  // recv wait-queue: cola.
-    i64  swq_h  @0x40;  // send wait-queue: cabeza.
-    i64  swq_t  @0x48;  // send wait-queue: cola.
-    bool closed @0x50;  // true si el canal esta cerrado.
+@overlay
+public struct Chan {
+	i64  lock   @0x00;    // spinlock (0=libre, 1=tomado).  Tambien marca la BASE.
+	i64  cap    @0x08;     // capacidad del ring (0=rendezvous; si >=1, pot. de 2).
+	i64  mask   @0x10;    // cap - 1 (indexado del ring; 0 si cap 0).
+	i64  head   @0x18;    // indice de lectura (monotono, enmascarado).
+	i64  tail   @0x20;    // indice de escritura.
+	i64  count  @0x28;   // items en el buffer.
+	i64  rwq_h  @0x30;   // recv wait-queue: cabeza (Waiter).
+	i64  rwq_t  @0x38;   // recv wait-queue: cola.
+	i64  swq_h  @0x40;   // send wait-queue: cabeza.
+	i64  swq_t  @0x48;   // send wait-queue: cola.
+	bool closed @0x50; // true si el canal esta cerrado.
 }
-const i64 CH_HDR = 88;  // el ring empieza aqui: cap*8 bytes inline.
+const i64 CH_HDR = 88; // el ring empieza aqui: cap*8 bytes inline.
 
 /// Direccion base del bloque host del canal (el handle ES el puntero).  Uso
 /// interno: aritmetica del ring y orden de lock del select.
 i64 __vxch_base(Chan c) {
-    return (i64) c;
+	return (i64) c;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,114 +113,115 @@ i64 __vxch_base(Chan c) {
 // local de la fibra que espera (`&local` = puntero VM): no admiten `i64*` (host) y
 // un Optional no cabe en un layout fijo (16 B, tag+valor) -> quedan como direccion
 // cruda + helper con nombre (__vxch_is_select_waiter), sin comparar `== 0` a pelo.
-@overlay struct Waiter {
-    i64   next @0x00;  // Waiter siguiente en la cola.
-    fiber fib  @0x08;  // fibra que espera.
-    i64   elem @0x10;  // valor: recv lo LEE del sender; send lo pone; sender lo LEE.
-    i64   sel  @0x18;  // 0 = espera NORMAL (siempre entregable, sin CAS).  !=0 =
-                       // direccion de la PALABRA de select compartida (CAS 0->1).
-    i64   win  @0x20;  // si es de select: direccion del slot donde publicar el indice.
-    i64   idx  @0x28;  // indice del caso de select (se escribe en *win al ganar).
+@overlay
+struct Waiter {
+	i64   next @0x00;  // Waiter siguiente en la cola.
+	fiber fib  @0x08; // fibra que espera.
+	i64   elem @0x10; // valor: recv lo LEE del sender; send lo pone; sender lo LEE.
+	i64   sel  @0x18;   // 0 = espera NORMAL (siempre entregable, sin CAS).  !=0 =
+	// direccion de la PALABRA de select compartida (CAS 0->1).
+	i64   win  @0x20; // si es de select: direccion del slot donde publicar el indice.
+	i64   idx  @0x28;   // indice del caso de select (se escribe en *win al ganar).
 }
-const i64 WAITER_QW = 6;         // qwords por Waiter (48 bytes).
-const i64 VXCH_SEL_MAX = 32;     // maximo de canales por select (cota de pila).
+const i64 WAITER_QW    = 6;     // qwords por Waiter (48 bytes).
+const i64 VXCH_SEL_MAX = 32; // maximo de canales por select (cota de pila).
 
 /// @return true si el Waiter espera por un SELECT (comparte una palabra de
 ///         reclamacion con los Waiter hermanos); false si es una espera NORMAL.
 bool __vxch_is_select_waiter(Waiter w) {
-    return w.sel != 0;
+	return w.sel != 0;
 }
 
 /// Despierta a la fibra @p f si hay alguna.  Encapsula en UN solo sitio el
 /// "no hay nadie a quien despertar" de los helpers bajo-el-lock (el out-param no
 /// puede ser `Optional<fiber>`: hoy un Optional por puntero no round-trippea).
 void __vxch_wake_if_any(fiber f) {
-    if (f != 0) {
-        vx_wake(f);
-    }
+	if (f != 0) {
+		vx_wake(f);
+	}
 }
 
 /// Accion diferida de park (un canal): el WORKER la ejecuta tras el switch ->
 /// suelta el lock del canal cuando la fibra ya esta fuera de CPU (hand-off).
 void __vxch_unlock_after_park(i64 lock_addr, i64 fib) {
-    vx_spin_unlock((i64*)lock_addr);
+	vx_spin_unlock((i64 *)lock_addr);
 }
 
 /// Accion diferida de park (SELECT): suelta TODOS los locks unicos que el select
 /// tomo (selctx = {n_uniq, &uniq[0]}), post-switch.  El orden de unlock es libre.
 void __vxch_sel_unlock_all(i64 selctx_addr, i64 fib) {
-    i64* sc = (i64*)selctx_addr;
-    i64 nu = sc[0];
-    i64 base = sc[1];
-    for (i64 i = 0; i < nu; i++) {
-        Chan c = Chan(*(i64*)(base + i * 8));
-        vx_spin_unlock(&c.lock);
-    }
+	i64* sc   = (i64 *)selctx_addr;
+	i64  nu   = sc[0];
+	i64  base = sc[1];
+	for (i64 i = 0; i < nu; i++) {
+		Chan c = Chan(*(i64 *)(base + i * 8));
+		vx_spin_unlock(&c.lock);
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Wait-queue de Waiter (bajo el lock del canal; sin atomicos: el lock basta).
 // ---------------------------------------------------------------------------
 void __vxch_wq_push(i64 head_addr, i64 tail_addr, i64 w) {
-    Waiter(w).next = 0;
-    i64 tl = *(i64*)tail_addr;
-    if (tl == 0) {
-        *(i64*)head_addr = w;
-    } else {
-        Waiter(tl).next = w;
-    }
-    *(i64*)tail_addr = w;
+	Waiter(w).next = 0;
+	i64       tl   = *(i64 *)tail_addr;
+	if (tl == 0) {
+		*(i64 *)head_addr = w;
+	} else {
+		Waiter(tl).next = w;
+	}
+	*(i64 *)tail_addr = w;
 }
 /// Saca el primer Waiter de la cola.
 /// @return Some(Waiter) si habia alguno; None si la cola esta vacia.
 Optional<Waiter> __vxch_wq_pop(i64 head_addr, i64 tail_addr) {
-    i64 hd = *(i64*)head_addr;
-    if (hd == 0) {
-        return None();
-    }
-    i64 nx = Waiter(hd).next;
-    *(i64*)head_addr = nx;
-    if (nx == 0) {
-        *(i64*)tail_addr = 0;
-    }
-    return Some(Waiter(hd));
+	i64 hd = *(i64 *)head_addr;
+	if (hd == 0) {
+		return None();
+	}
+	i64     nx        = Waiter(hd).next;
+	*(i64 *)head_addr = nx;
+	if (nx == 0) {
+		*(i64 *)tail_addr = 0;
+	}
+	return Some(Waiter(hd));
 }
 /// Desenlaza un Waiter CONCRETO de la cola (limpieza de los perdedores del
 /// select).  @return true si estaba y se quito, false si no (ya lo saco un waker).
 bool __vxch_wq_remove(i64 head_addr, i64 tail_addr, i64 target) {
-    i64 prev = 0;
-    i64 cur = *(i64*)head_addr;
-    while (cur != 0) {
-        i64 nx = Waiter(cur).next;
-        if (cur == target) {
-            if (prev == 0) {
-                *(i64*)head_addr = nx;
-            } else {
-                Waiter(prev).next = nx;
-            }
-            if (nx == 0) {
-                *(i64*)tail_addr = prev;
-            }
-            return true;
-        }
-        prev = cur;
-        cur = nx;
-    }
-    return false;
+	i64 prev = 0;
+	i64 cur  = *(i64 *)head_addr;
+	while (cur != 0) {
+		i64 nx = Waiter(cur).next;
+		if (cur == target) {
+			if (prev == 0) {
+				*(i64 *)head_addr = nx;
+			} else {
+				Waiter(prev).next = nx;
+			}
+			if (nx == 0) {
+				*(i64 *)tail_addr = prev;
+			}
+			return true;
+		}
+		prev = cur;
+		cur  = nx;
+	}
+	return false;
 }
 
 /// Reclama un Waiter para entrega.  Espera NORMAL (sel==0): siempre true, sin
 /// CAS.  Espera de SELECT: CAS(palabra, 0->1); si gana publica el indice y da
 /// true; si otro canal ya la reclamo, da false (el waker SALTA este Waiter).
 bool __vxch_claim(Waiter w) {
-    if (!__vxch_is_select_waiter(w)) {
-        return true;
-    }
-    if (atomic_cas64((i64*)w.sel, 0, 1) == 0) {
-        *(i64*)(w.win) = w.idx;      // publica el indice ganador
-        return true;
-    }
-    return false;
+	if (!__vxch_is_select_waiter(w)) {
+		return true;
+	}
+	if (atomic_cas64((i64 *)w.sel, 0, 1) == 0) {
+		*(i64 *)(w.win) = w.idx; // publica el indice ganador
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -230,47 +232,47 @@ bool __vxch_claim(Waiter w) {
  *         puede comprobarlo con chan_is_null antes de usarlo).
  */
 public Chan chan_new(i64 cap) {
-    i64 c = 0;
-    i64 mask = 0;
-    if (cap >= 1) {
-        c = 1;
-        while (c < cap) {
-            c = c * 2;
-        }
-        mask = c - 1;
-    }
-    Chan ch = Chan((i64) malloc(CH_HDR + c * 8));
-    if (!chan_is_null(ch)) {
-        ch.lock = 0;
-        ch.cap = c;
-        ch.mask = mask;
-        ch.head = 0;
-        ch.tail = 0;
-        ch.count = 0;
-        ch.rwq_h = 0;
-        ch.rwq_t = 0;
-        ch.swq_h = 0;
-        ch.swq_t = 0;
-        ch.closed = false;
-    }
-    return ch;
+	i64 c    = 0;
+	i64 mask = 0;
+	if (cap >= 1) {
+		c = 1;
+		while (c < cap) {
+			c = c * 2;
+		}
+		mask = c - 1;
+	}
+	Chan ch = Chan((i64) malloc(CH_HDR + c * 8));
+	if (!chan_is_null(ch)) {
+		ch.lock   = 0;
+		ch.cap    = c;
+		ch.mask   = mask;
+		ch.head   = 0;
+		ch.tail   = 0;
+		ch.count  = 0;
+		ch.rwq_h  = 0;
+		ch.rwq_t  = 0;
+		ch.swq_h  = 0;
+		ch.swq_t  = 0;
+		ch.closed = false;
+	}
+	return ch;
 }
 
 /// @return true si el handle no apunta a ningun bloque (OOM en chan_new).
 public bool chan_is_null(Chan ch) {
-    return __vxch_base(ch) == 0;
+	return __vxch_base(ch) == 0;
 }
 
 /// Libera el canal (nadie debe estar bloqueado en el).
 public void chan_free(Chan ch) {
-    if (!chan_is_null(ch)) {
-        free((u8*) __vxch_base(ch));
-    }
+	if (!chan_is_null(ch)) {
+		free((u8 *) __vxch_base(ch));
+	}
 }
 
 /// Direccion del slot i-esimo del ring (host).
 i64 __vxch_slot(Chan c, i64 idx, i64 mask) {
-    return __vxch_base(c) + CH_HDR + (idx & mask) * 8;
+	return __vxch_base(c) + CH_HDR + (idx & mask) * 8;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,76 +287,76 @@ i64 __vxch_slot(Chan c, i64 idx, i64 mask) {
 /// lo maneja: recv devuelve 0, try_recv da false, select lo trata como listo).
 /// @return true si hubo valor (en *pval), false si no habia nada disponible.
 bool __vxch_recv_locked(Chan c, i64* pval, fiber* pwake) {
-    *pwake = (fiber) 0;
-    // (1) Dato en el buffer (moviendo un emisor en espera al hueco liberado).
-    if (c.count > 0) {
-        i64* rs = (i64*)__vxch_slot(c, c.head, c.mask);
-        i64 val = *rs;
-        c.head = c.head + 1;
-        // Mueve un emisor en espera al hueco liberado (saltando los Waiter de un
-        // select que otro canal ya reclamo).
-        while (true) {
-            match __vxch_wq_pop((i64)&c.swq_h, (i64)&c.swq_t) {
-                case None => { break; }        // no hay emisores en espera
-                case Some(s) => {
-                    if (__vxch_claim(s)) {
-                        i64* ws = (i64*)__vxch_slot(c, c.tail, c.mask);
-                        *ws = s.elem;          // valor del emisor -> hueco liberado
-                        c.tail = c.tail + 1;   // count: -1 (lei) +1 (meti) = igual
-                        *pwake = s.fib;
-                        *pval = val;
-                        return true;
-                    }
-                }
-            }
-        }
-        c.count = c.count - 1;
-        *pval = val;
-        return true;
-    }
-    // (2) Buffer vacio + emisor en espera (rendezvous cap 0) -> entrega directa.
-    while (true) {
-        match __vxch_wq_pop((i64)&c.swq_h, (i64)&c.swq_t) {
-            case None => { break; }
-            case Some(s) => {
-                if (__vxch_claim(s)) {
-                    *pval = s.elem;
-                    *pwake = s.fib;
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
+	*pwake = (fiber) 0;
+	// (1) Dato en el buffer (moviendo un emisor en espera al hueco liberado).
+	if (c.count > 0) {
+		i64* rs   = (i64 *)__vxch_slot(c, c.head, c.mask);
+		i64  val  = *rs;
+		c.   head = c.head + 1;
+		// Mueve un emisor en espera al hueco liberado (saltando los Waiter de un
+		// select que otro canal ya reclamo).
+		while (true) {
+			match __vxch_wq_pop((i64) & c.swq_h, (i64) & c.swq_t) {
+				case None => { break; } // no hay emisores en espera
+				case Some(s) => {
+					if (__vxch_claim(s)) {
+						i64* ws    = (i64 *)__vxch_slot(c, c.tail, c.mask);
+						*    ws    = s.elem; // valor del emisor -> hueco liberado
+						c.   tail  = c.tail + 1; // count: -1 (lei) +1 (meti) = igual
+						*    pwake = s.fib;
+						*    pval  = val;
+						return true;
+					}
+				}
+			}
+		}
+		c.count = c.count - 1;
+		* pval  = val;
+		return true;
+	}
+	// (2) Buffer vacio + emisor en espera (rendezvous cap 0) -> entrega directa.
+	while (true) {
+		match __vxch_wq_pop((i64) & c.swq_h, (i64) & c.swq_t) {
+			case None => { break; }
+			case Some(s) => {
+				if (__vxch_claim(s)) {
+					*pval  = s.elem;
+					*pwake = s.fib;
+					return true;
+				}
+			}
+		}
+	}
+	return false;
 }
 
 /// Intenta ENVIAR `v` a `c` (lock tomado).  NO trata el canal cerrado (el caller
 /// lo maneja).  @return true si se entrego a un receptor o se encolo en el
 /// buffer; false si enviar bloquearia (sin receptor ni hueco).
 bool __vxch_send_locked(Chan c, i64 v, fiber* pwake) {
-    *pwake = (fiber) 0;
-    // (1) Receptor(es) en espera -> entrega directa (saltando select ya ganados).
-    while (true) {
-        match __vxch_wq_pop((i64)&c.rwq_h, (i64)&c.rwq_t) {
-            case None => { break; }            // no hay receptores en espera
-            case Some(r) => {
-                if (__vxch_claim(r)) {
-                    r.elem = v;
-                    *pwake = r.fib;
-                    return true;
-                }
-            }
-        }
-    }
-    // (2) Hueco en el buffer.
-    if (c.count < c.cap) {
-        i64* slot = (i64*)__vxch_slot(c, c.tail, c.mask);
-        *slot = v;
-        c.tail = c.tail + 1;
-        c.count = c.count + 1;
-        return true;
-    }
-    return false;
+	*pwake = (fiber) 0;
+	// (1) Receptor(es) en espera -> entrega directa (saltando select ya ganados).
+	while (true) {
+		match __vxch_wq_pop((i64) & c.rwq_h, (i64) & c.rwq_t) {
+			case None => { break; } // no hay receptores en espera
+			case Some(r) => {
+				if (__vxch_claim(r)) {
+					r.elem  = v;
+					* pwake = r.fib;
+					return true;
+				}
+			}
+		}
+	}
+	// (2) Hueco en el buffer.
+	if (c.count < c.cap) {
+		i64* slot  = (i64 *)__vxch_slot(c, c.tail, c.mask);
+		*    slot  = v;
+		c.   tail  = c.tail + 1;
+		c.   count = c.count + 1;
+		return true;
+	}
+	return false;
 }
 
 /**
@@ -362,40 +364,40 @@ bool __vxch_send_locked(Chan c, i64 v, fiber* pwake) {
  *        directa; (2) hueco en el buffer -> encolar; (3) bloquear en la sendq.
  */
 public void chan_send(Chan ch, i64 v) {
-    vx_spin_lock(&ch.lock);
-    // Enviar por un canal CERRADO descarta el valor y vuelve (no bloquea ni
-    // corrompe el buffer): el productor debe dejar de enviar tras cerrar.
-    if (ch.closed) {
-        vx_spin_unlock(&ch.lock);
-        return;
-    }
-    fiber wake = 0;
-    if (__vxch_send_locked(ch, v, &wake)) {
-        vx_spin_unlock(&ch.lock);
-        __vxch_wake_if_any(wake);    // wake FUERA del lock
-        return;
-    }
-    // (3) Lleno (o rendezvous sin receptor) -> me encolo en la sendq y bloqueo.
-    // Solo una FIBRA puede suspenderse; main (None) no puede bloquearse en un
-    // canal (coordina con pool_join) -> suelta el lock y vuelve sin bloquear.
-    match vx_cur_fiber() {
-        case None => {
-            vx_spin_unlock(&ch.lock);
-        }
-        case Some(self) => {
-            // El Waiter vive en mi pila (estable mientras la fibra esta parkeada).
-            i64[6] wbuf;
-            i64 w = (i64)&wbuf[0];
-            Waiter(w).fib = self;
-            Waiter(w).elem = v;
-            Waiter(w).sel = 0;
-            Waiter(w).next = 0;
-            __vxch_wq_push((i64)&ch.swq_h, (i64)&ch.swq_t, w);
-            vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park,
-                    (i64)&ch.lock);
-            // Reanudada: un receptor tomo mi elem directamente.  Nada que hacer.
-        }
-    }
+	vx_spin_lock(&ch.lock);
+	// Enviar por un canal CERRADO descarta el valor y vuelve (no bloquea ni
+	// corrompe el buffer): el productor debe dejar de enviar tras cerrar.
+	if (ch.closed) {
+		vx_spin_unlock(&ch.lock);
+		return;
+	}
+	fiber wake = 0;
+	if (__vxch_send_locked(ch, v,&wake)) {
+		vx_spin_unlock(&ch.lock);
+		__vxch_wake_if_any(wake); // wake FUERA del lock
+		return;
+	}
+	// (3) Lleno (o rendezvous sin receptor) -> me encolo en la sendq y bloqueo.
+	// Solo una FIBRA puede suspenderse; main (None) no puede bloquearse en un
+	// canal (coordina con pool_join) -> suelta el lock y vuelve sin bloquear.
+	match vx_cur_fiber() {
+		case None => {
+			vx_spin_unlock(&ch.lock);
+		}
+		case Some(self) => {
+			// El Waiter vive en mi pila (estable mientras la fibra esta parkeada).
+			i64[6] wbuf;
+			i64       w    = (i64) & wbuf[0];
+			Waiter(w).fib  = self;
+			Waiter(w).elem = v;
+			Waiter(w).sel  = 0;
+			Waiter(w).next = 0;
+			__vxch_wq_push((i64) & ch.swq_h, (i64) & ch.swq_t, w);
+			vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park,
+				(i64) & ch.lock);
+		// Reanudada: un receptor tomo mi elem directamente.  Nada que hacer.
+		}
+	}
 }
 
 /**
@@ -406,41 +408,41 @@ public void chan_send(Chan ch, i64 v) {
  * @return el valor recibido.
  */
 public i64 chan_recv(Chan ch) {
-    vx_spin_lock(&ch.lock);
-    i64 val = 0;
-    fiber wake = 0;
-    if (__vxch_recv_locked(ch, &val, &wake)) {
-        vx_spin_unlock(&ch.lock);
-        __vxch_wake_if_any(wake);
-        return val;
-    }
-    // Cerrado y drenado -> devolver 0 sin bloquear.  El consumidor distingue
-    // "cerrado" via chan_is_closed en su condicion de bucle.
-    if (ch.closed) {
-        vx_spin_unlock(&ch.lock);
-        return 0;
-    }
-    // (3) Nada -> me encolo (Waiter en mi pila) y bloqueo; el sender pondra mi elem.
-    // Solo una FIBRA puede suspenderse; main (None) no puede bloquearse -> 0.
-    match vx_cur_fiber() {
-        case None => {
-            vx_spin_unlock(&ch.lock);
-            return 0;
-        }
-        case Some(self) => {
-            i64[6] wbuf;
-            i64 w = (i64)&wbuf[0];
-            Waiter(w).fib = self;
-            Waiter(w).elem = 0;
-            Waiter(w).sel = 0;
-            Waiter(w).next = 0;
-            __vxch_wq_push((i64)&ch.rwq_h, (i64)&ch.rwq_t, w);
-            vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park,
-                    (i64)&ch.lock);
-            return Waiter(w).elem;
-        }
-    }
-    return 0;   // inalcanzable (match exhaustivo); satisface el retorno de la fn
+	vx_spin_lock(&ch.lock);
+	i64   val  = 0;
+	fiber wake = 0;
+	if (__vxch_recv_locked(ch,&val,&wake)) {
+		vx_spin_unlock(&ch.lock);
+		__vxch_wake_if_any(wake);
+		return val;
+	}
+	// Cerrado y drenado -> devolver 0 sin bloquear.  El consumidor distingue
+	// "cerrado" via chan_is_closed en su condicion de bucle.
+	if (ch.closed) {
+		vx_spin_unlock(&ch.lock);
+		return 0;
+	}
+	// (3) Nada -> me encolo (Waiter en mi pila) y bloqueo; el sender pondra mi elem.
+	// Solo una FIBRA puede suspenderse; main (None) no puede bloquearse -> 0.
+	match vx_cur_fiber() {
+		case None => {
+			vx_spin_unlock(&ch.lock);
+			return 0;
+		}
+		case Some(self) => {
+			i64[6] wbuf;
+			i64       w    = (i64) & wbuf[0];
+			Waiter(w).fib  = self;
+			Waiter(w).elem = 0;
+			Waiter(w).sel  = 0;
+			Waiter(w).next = 0;
+			__vxch_wq_push((i64) & ch.rwq_h, (i64) & ch.rwq_t, w);
+			vx_park((i64)(cfn(i64, i64) -> void) __vxch_unlock_after_park,
+				(i64) & ch.lock);
+			return Waiter(w).elem;
+		}
+	}
+	return 0; // inalcanzable (match exhaustivo); satisface el retorno de la fn
 }
 
 /**
@@ -450,38 +452,38 @@ public i64 chan_recv(Chan ch) {
  *        Tras close, recv de un canal vacio devuelve 0 al instante (no bloquea).
  */
 public void chan_close(Chan ch) {
-    vx_spin_lock(&ch.lock);
-    ch.closed = true;
-    // Receptores en espera -> reciben 0 (o disparan su select con su indice).  El
-    // wake solo encola en el scheduler (no re-toma este lock) -> seguro aqui.
-    while (true) {
-        match __vxch_wq_pop((i64)&ch.rwq_h, (i64)&ch.rwq_t) {
-            case None => { break; }
-            case Some(r) => {
-                if (__vxch_claim(r)) {
-                    r.elem = 0;
-                    vx_wake(r.fib);
-                }
-            }
-        }
-    }
-    // Emisores bloqueados (su valor se descarta).
-    while (true) {
-        match __vxch_wq_pop((i64)&ch.swq_h, (i64)&ch.swq_t) {
-            case None => { break; }
-            case Some(s) => {
-                if (__vxch_claim(s)) {
-                    vx_wake(s.fib);
-                }
-            }
-        }
-    }
-    vx_spin_unlock(&ch.lock);
+	vx_spin_lock(&ch.lock);
+	ch.closed = true;
+	// Receptores en espera -> reciben 0 (o disparan su select con su indice).  El
+	// wake solo encola en el scheduler (no re-toma este lock) -> seguro aqui.
+	while (true) {
+		match __vxch_wq_pop((i64) & ch.rwq_h, (i64) & ch.rwq_t) {
+			case None => { break; }
+			case Some(r) => {
+				if (__vxch_claim(r)) {
+					r.elem = 0;
+					vx_wake(r.fib);
+				}
+			}
+		}
+	}
+	// Emisores bloqueados (su valor se descarta).
+	while (true) {
+		match __vxch_wq_pop((i64) & ch.swq_h, (i64) & ch.swq_t) {
+			case None => { break; }
+			case Some(s) => {
+				if (__vxch_claim(s)) {
+					vx_wake(s.fib);
+				}
+			}
+		}
+	}
+	vx_spin_unlock(&ch.lock);
 }
 
 /// @return true si el canal esta cerrado.
 public bool chan_is_closed(Chan ch) {
-    return ch.closed;
+	return ch.closed;
 }
 
 /**
@@ -491,19 +493,19 @@ public bool chan_is_closed(Chan ch) {
  *         el canal esta cerrado).
  */
 public bool chan_try_send(Chan ch, i64 v) {
-    vx_spin_lock(&ch.lock);
-    if (ch.closed) {
-        vx_spin_unlock(&ch.lock);
-        return false;
-    }
-    fiber wake = 0;
-    if (__vxch_send_locked(ch, v, &wake)) {
-        vx_spin_unlock(&ch.lock);
-        __vxch_wake_if_any(wake);
-        return true;
-    }
-    vx_spin_unlock(&ch.lock);
-    return false;
+	vx_spin_lock(&ch.lock);
+	if (ch.closed) {
+		vx_spin_unlock(&ch.lock);
+		return false;
+	}
+	fiber wake = 0;
+	if (__vxch_send_locked(ch, v,&wake)) {
+		vx_spin_unlock(&ch.lock);
+		__vxch_wake_if_any(wake);
+		return true;
+	}
+	vx_spin_unlock(&ch.lock);
+	return false;
 }
 
 /**
@@ -515,17 +517,17 @@ public bool chan_try_send(Chan ch, i64 v) {
  * @return true si se recibio un valor (escrito en @p out); false si no habia nada.
  */
 public bool chan_try_recv(Chan ch, i64* out) {
-    vx_spin_lock(&ch.lock);
-    i64 val = 0;
-    fiber wake = 0;
-    if (__vxch_recv_locked(ch, &val, &wake)) {
-        vx_spin_unlock(&ch.lock);
-        __vxch_wake_if_any(wake);
-        *out = val;
-        return true;
-    }
-    vx_spin_unlock(&ch.lock);
-    return false;
+	vx_spin_lock(&ch.lock);
+	i64   val  = 0;
+	fiber wake = 0;
+	if (__vxch_recv_locked(ch,&val,&wake)) {
+		vx_spin_unlock(&ch.lock);
+		__vxch_wake_if_any(wake);
+		*out = val;
+		return true;
+	}
+	vx_spin_unlock(&ch.lock);
+	return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -553,23 +555,23 @@ thread_local i64 __vxch_sel_rot = 0;
  * @return indice [0,n) del canal que entrego, o -1 si ninguno tenia nada.
  */
 public i64 chan_select_recv(Chan* chans, i64 n, i64* out) {
-    if (n <= 0) {
-        return -1;
-    }
-    i64 start = __vxch_sel_rot;
-    __vxch_sel_rot = start + 1;
-    for (i64 k = 0; k < n; k++) {
-        i64 i = (start + k) % n;      // barrido rotado -> justo
-        Chan ch = chans[i];
-        if (chan_try_recv(ch, out)) {
-            return i;                 // valor disponible -> gana este
-        }
-        if (chan_is_closed(ch)) {
-            *out = 0;                 // cerrado -> listo con 0 (Go: ok=false)
-            return i;
-        }
-    }
-    return -1;                        // ninguno listo (el caller hace su default)
+	if (n <= 0) {
+		return-1;
+	}
+	i64 start = __vxch_sel_rot;
+	__vxch_sel_rot = start + 1;
+	for (i64 k = 0; k < n; k++) {
+		i64  i  = (start + k) % n; // barrido rotado -> justo
+		Chan ch = chans[i];
+		if (chan_try_recv(ch, out)) {
+			return i; // valor disponible -> gana este
+		}
+		if (chan_is_closed(ch)) {
+			*out = 0; // cerrado -> listo con 0 (Go: ok=false)
+			return i;
+		}
+	}
+	return-1; // ninguno listo (el caller hace su default)
 }
 
 /**
@@ -598,133 +600,136 @@ public i64 chan_select_recv(Chan* chans, i64 n, i64* out) {
  * @return indice [0,n) del canal que entrego.
  */
 public i64 chan_select_recv_block(Chan* chans, i64 n, i64* out) {
-    if (n <= 0) {
-        return -1;
-    }
-    // Solo una FIBRA puede parkear; sin fibra (main) degrada a poll no-bloqueante.
-    match vx_cur_fiber() {
-        case None => {
-            while (true) {
-                i64 idx = chan_select_recv(chans, n, out);
-                if (idx >= 0) {
-                    return idx;
-                }
-            }
-        }
-        case Some(self) => {
-            return __vxch_sel_recv_parked(self, chans, n, out);
-        }
-    }
-    return -1;   // inalcanzable (match exhaustivo)
+	if (n <= 0) {
+		return-1;
+	}
+	// Solo una FIBRA puede parkear; sin fibra (main) degrada a poll no-bloqueante.
+	match vx_cur_fiber() {
+		case None => {
+			while (true) {
+				i64 idx = chan_select_recv(chans, n, out);
+				if (idx >= 0) {
+					return idx;
+				}
+			}
+		}
+		case Some(self) => {
+			return __vxch_sel_recv_parked(self, chans, n, out);
+		}
+	}
+	return-1; // inalcanzable (match exhaustivo)
 }
 
 /// Cuerpo parkeado del select de recepcion, ya resuelta la fibra actual @p self.
 i64 __vxch_sel_recv_parked(fiber self, Chan* chans, i64 n, i64* out) {
-    if (n > VXCH_SEL_MAX) {
-        n = VXCH_SEL_MAX;   // cota de pila (VXCH_SEL_MAX Waiter + orden de lock)
-    }
+	if (n > VXCH_SEL_MAX) {
+		n = VXCH_SEL_MAX; // cota de pila (VXCH_SEL_MAX Waiter + orden de lock)
+	}
 
-    i64 sel_word = 0;          // 0 = esperando, 1 = ya reclamado (claim CAS)
-    i64 win_slot = -1;         // indice del caso ganador (lo escribe el claimer)
-    i64[192] wbufs;            // VXCH_SEL_MAX (32) Waiter * WAITER_QW (6) qwords
-    i64[32] uniq;              // canales UNICOS ordenados (orden de lock estable)
-    i64[2] selctx;             // {n_uniq, &uniq[0]} para el parkfn (unlock all)
+	i64 sel_word =  0;  // 0 = esperando, 1 = ya reclamado (claim CAS)
+	i64 win_slot = -1; // indice del caso ganador (lo escribe el claimer)
+	i64[192] wbufs;    // VXCH_SEL_MAX (32) Waiter * WAITER_QW (6) qwords
+	i64[32] uniq;      // canales UNICOS ordenados (orden de lock estable)
+	i64[2] selctx;     // {n_uniq, &uniq[0]} para el parkfn (unlock all)
 
-    // Orden de lock estable por DIRECCION + dedup -> sin deadlock ni doble-lock.
-    i64 nu = 0;
-    for (i64 i = 0; i < n; i++) {
-        i64 a = __vxch_base(chans[i]);
-        i64 j = nu;
-        while (j > 0 && uniq[j - 1] > a) {
-            j = j - 1;
-        }
-        i64 dup = 0;
-        if (j < nu && uniq[j] == a) {
-            dup = 1;            // ya presente en esa posicion
-        }
-        if (dup == 0) {
-            for (i64 k = nu; k > j; k--) {
-                uniq[k] = uniq[k - 1];
-            }
-            uniq[j] = a;
-            nu = nu + 1;
-        }
-    }
+	// Orden de lock estable por DIRECCION + dedup -> sin deadlock ni doble-lock.
+	i64 nu = 0;
+	for (i64 i = 0; i < n; i++) {
+		i64 a = __vxch_base(chans[i]);
+		i64 j = nu;
+		while (j > 0 && uniq[j - 1] > a) {
+			j = j - 1;
+		}
+		i64 dup = 0;
+		if (j < nu && uniq[j] == a) {
+			dup = 1; // ya presente en esa posicion
+		}
+		if (dup == 0) {
+			for (i64 k = nu; k > j; k--) {
+				uniq[k] = uniq[k - 1];
+			}
+			uniq[j] = a;
+			nu = nu + 1;
+		}
+	}
 
-    // Tomar TODOS los locks unicos (en orden) -> pass-1 + registro son atomicos
-    // respecto a los otros lados (nada entra/sale de las colas entremedias).
-    for (i64 i = 0; i < nu; i++) {
-        Chan c = Chan(uniq[i]);
-        vx_spin_lock(&c.lock);
-    }
+	// Tomar TODOS los locks unicos (en orden) -> pass-1 + registro son atomicos
+	// respecto a los otros lados (nada entra/sale de las colas entremedias).
+	for (i64 i = 0; i < nu; i++) {
+		Chan c = Chan(uniq[i]);
+		vx_spin_lock(&c.lock);
+	}
 
-    // Pass-1: alguno listo YA (bajo todos los locks)?  Barrido rotado (justo).
-    i64 rot = __vxch_sel_rot;
-    __vxch_sel_rot = rot + 1;
-    i64 found = -1;
-    i64 fval = 0;
-    fiber fwake = 0;
-    for (i64 kk = 0; kk < n; kk++) {
-        i64 i = (rot + kk) % n;
-        Chan c = chans[i];
-        i64 val = 0;
-        fiber wk = 0;
-        if (__vxch_recv_locked(c, &val, &wk)) {
-            found = i;
-            fval = val;
-            fwake = wk;
-            break;
-        }
-        if (c.closed) {
-            found = i;         // cerrado -> listo con 0
-            fval = 0;
-            fwake = 0;
-            break;
-        }
-    }
-    if (found >= 0) {
-        for (i64 i = 0; i < nu; i++) {
-            Chan c = Chan(uniq[i]);
-            vx_spin_unlock(&c.lock);
-        }
-        __vxch_wake_if_any(fwake);
-        *out = fval;
-        return found;
-    }
+	// Pass-1: alguno listo YA (bajo todos los locks)?  Barrido rotado (justo).
+	i64 rot = __vxch_sel_rot;
+	__vxch_sel_rot = rot + 1;
+	i64   found = -1;
+	i64   fval  =  0;
+	fiber fwake =  0;
+	for (i64 kk = 0; kk < n; kk++) {
+		i64   i   = (rot + kk) % n;
+		Chan  c   = chans[i];
+		i64   val = 0;
+		fiber wk  = 0;
+		if (__vxch_recv_locked(c,&val,&wk)) {
+			found = i;
+			fval  = val;
+			fwake = wk;
+			break;
+		}
+		if (c.closed) {
+			found = i; // cerrado -> listo con 0
+			fval  = 0;
+			fwake = 0;
+			break;
+		}
+	}
+	if (found >= 0) {
+		for (i64 i = 0; i < nu; i++) {
+			Chan c = Chan(uniq[i]);
+			vx_spin_unlock(&c.lock);
+		}
+		__vxch_wake_if_any(fwake);
+		*out = fval;
+		return found;
+	}
 
-    // Nada listo: registrar un Waiter por canal (bajo los locks) + parkear.  Los
-    // Waiter comparten sel_word/win_slot; cada uno lleva su indice `idx`.
-    for (i64 i = 0; i < n; i++) {
-        i64 w = (i64)&wbufs[i * WAITER_QW];
-        Waiter(w).fib = self;
-        Waiter(w).elem = 0;
-        Waiter(w).sel = (i64)&sel_word;
-        Waiter(w).win = (i64)&win_slot;
-        Waiter(w).idx = i;
-        Waiter(w).next = 0;
-        Chan c = chans[i];
-        __vxch_wq_push((i64)&c.rwq_h, (i64)&c.rwq_t, w);
-    }
-    selctx[0] = nu;
-    selctx[1] = (i64)&uniq[0];
-    // El hand-off suelta todos los locks POST-switch: hasta entonces ningun canal
-    // puede reclamar un Waiter -> imposible "wake antes de park".
-    vx_park((i64)(cfn(i64, i64) -> void) __vxch_sel_unlock_all, (i64)&selctx[0]);
+	// Nada listo: registrar un Waiter por canal (bajo los locks) + parkear.  Los
+	// Waiter comparten sel_word/win_slot; cada uno lleva su indice `idx`.
+	for (i64 i = 0; i < n; i++) {
+		i64       w    = (i64) & wbufs[i * WAITER_QW];
+		Waiter(w).fib  = self;
+		Waiter(w).elem = 0;
+		Waiter(w).sel  = (i64) & sel_word;
+		Waiter(w).win  = (i64) & win_slot;
+		Waiter(w).idx  = i;
+		Waiter(w).next = 0;
+		Chan      c    = chans[i];
+		__vxch_wq_push((i64) & c.rwq_h, (i64) & c.rwq_t, w);
+	}
+	selctx[0] = nu;
+	selctx[1] = (i64) & uniq[0];
+	// El hand-off suelta todos los locks POST-switch: hasta entonces ningun canal
+	// puede reclamar un Waiter -> imposible "wake antes de park".
+	vx_park(
+		(i64)(cfn(i64, i64) -> void) __vxch_sel_unlock_all,
+		(i64) & selctx[0]
+	);
 
-    // Reanudada: el canal ganador reclamo sel_word (CAS) y publico win_slot; su
-    // Waiter ya lo saco el claimer.  Limpiar los Waiter de los OTROS canales (uno
-    // a uno bajo su lock; sin locks simultaneos -> sin deadlock) y devolver.
-    for (i64 i = 0; i < n; i++) {
-        if (i != win_slot) {
-            i64 w = (i64)&wbufs[i * WAITER_QW];
-            Chan c = chans[i];
-            vx_spin_lock(&c.lock);
-            __vxch_wq_remove((i64)&c.rwq_h, (i64)&c.rwq_t, w);
-            vx_spin_unlock(&c.lock);
-        }
-    }
-    *out = Waiter((i64)&wbufs[win_slot * WAITER_QW]).elem;
-    return win_slot;
+	// Reanudada: el canal ganador reclamo sel_word (CAS) y publico win_slot; su
+	// Waiter ya lo saco el claimer.  Limpiar los Waiter de los OTROS canales (uno
+	// a uno bajo su lock; sin locks simultaneos -> sin deadlock) y devolver.
+	for (i64 i = 0; i < n; i++) {
+		if (i != win_slot) {
+			i64  w = (i64) & wbufs[i * WAITER_QW];
+			Chan c = chans[i];
+			vx_spin_lock(&c.lock);
+			__vxch_wq_remove((i64) & c.rwq_h, (i64) & c.rwq_t, w);
+			vx_spin_unlock(&c.lock);
+		}
+	}
+	*out = Waiter((i64) & wbufs[win_slot * WAITER_QW]).elem;
+	return win_slot;
 }
 
 /**
@@ -740,22 +745,22 @@ i64 __vxch_sel_recv_parked(fiber self, Chan* chans, i64 n, i64* out) {
  * @return indice [0,n) del canal que acepto el envio, o -1 si ninguno pudo.
  */
 public i64 chan_select_send(Chan* chans, i64* vals, i64 n) {
-    if (n <= 0) {
-        return -1;
-    }
-    i64 start = __vxch_sel_rot;
-    __vxch_sel_rot = start + 1;
-    for (i64 k = 0; k < n; k++) {
-        i64 i = (start + k) % n;
-        Chan ch = chans[i];
-        if (chan_try_send(ch, vals[i])) {
-            return i;                 // aceptado (receptor o buffer)
-        }
-        if (chan_is_closed(ch)) {
-            return i;                 // cerrado -> el envio se descarta
-        }
-    }
-    return -1;
+	if (n <= 0) {
+		return-1;
+	}
+	i64 start = __vxch_sel_rot;
+	__vxch_sel_rot = start + 1;
+	for (i64 k = 0; k < n; k++) {
+		i64  i  = (start + k) % n;
+		Chan ch = chans[i];
+		if (chan_try_send(ch, vals[i])) {
+			return i; // aceptado (receptor o buffer)
+		}
+		if (chan_is_closed(ch)) {
+			return i; // cerrado -> el envio se descarta
+		}
+	}
+	return-1;
 }
 
 /**
@@ -778,121 +783,124 @@ public i64 chan_select_send(Chan* chans, i64* vals, i64 n) {
  * @return indice [0,n) del canal que acepto el envio.
  */
 public i64 chan_select_send_block(Chan* chans, i64* vals, i64 n) {
-    if (n <= 0) {
-        return -1;
-    }
-    // Solo una FIBRA puede parkear; main (None) degrada a poll no-bloqueante.
-    match vx_cur_fiber() {
-        case None => {
-            while (true) {
-                i64 idx = chan_select_send(chans, vals, n);
-                if (idx >= 0) {
-                    return idx;
-                }
-            }
-        }
-        case Some(self) => {
-            return __vxch_sel_send_parked(self, chans, vals, n);
-        }
-    }
-    return -1;   // inalcanzable (match exhaustivo)
+	if (n <= 0) {
+		return-1;
+	}
+	// Solo una FIBRA puede parkear; main (None) degrada a poll no-bloqueante.
+	match vx_cur_fiber() {
+		case None => {
+			while (true) {
+				i64 idx = chan_select_send(chans, vals, n);
+				if (idx >= 0) {
+					return idx;
+				}
+			}
+		}
+		case Some(self) => {
+			return __vxch_sel_send_parked(self, chans, vals, n);
+		}
+	}
+	return-1; // inalcanzable (match exhaustivo)
 }
 
 /// Cuerpo parkeado del select de envio, ya resuelta la fibra actual @p self.
 i64 __vxch_sel_send_parked(fiber self, Chan* chans, i64* vals, i64 n) {
-    if (n > VXCH_SEL_MAX) {
-        n = VXCH_SEL_MAX;
-    }
+	if (n > VXCH_SEL_MAX) {
+		n = VXCH_SEL_MAX;
+	}
 
-    i64 sel_word = 0;
-    i64 win_slot = -1;
-    i64[192] wbufs;
-    i64[32] uniq;
-    i64[2] selctx;
+	i64 sel_word =  0;
+	i64 win_slot = -1;
+	i64[192] wbufs;
+	i64[32] uniq;
+	i64[2] selctx;
 
-    // Orden de lock estable por direccion + dedup (identico al de recepcion).
-    i64 nu = 0;
-    for (i64 i = 0; i < n; i++) {
-        i64 a = __vxch_base(chans[i]);
-        i64 j = nu;
-        while (j > 0 && uniq[j - 1] > a) {
-            j = j - 1;
-        }
-        i64 dup = 0;
-        if (j < nu && uniq[j] == a) {
-            dup = 1;
-        }
-        if (dup == 0) {
-            for (i64 k = nu; k > j; k--) {
-                uniq[k] = uniq[k - 1];
-            }
-            uniq[j] = a;
-            nu = nu + 1;
-        }
-    }
+	// Orden de lock estable por direccion + dedup (identico al de recepcion).
+	i64 nu = 0;
+	for (i64 i = 0; i < n; i++) {
+		i64 a = __vxch_base(chans[i]);
+		i64 j = nu;
+		while (j > 0 && uniq[j - 1] > a) {
+			j = j - 1;
+		}
+		i64 dup = 0;
+		if (j < nu && uniq[j] == a) {
+			dup = 1;
+		}
+		if (dup == 0) {
+			for (i64 k = nu; k > j; k--) {
+				uniq[k] = uniq[k - 1];
+			}
+			uniq[j] = a;
+			nu = nu + 1;
+		}
+	}
 
-    for (i64 i = 0; i < nu; i++) {
-        Chan c = Chan(uniq[i]);
-        vx_spin_lock(&c.lock);
-    }
+	for (i64 i = 0; i < nu; i++) {
+		Chan c = Chan(uniq[i]);
+		vx_spin_lock(&c.lock);
+	}
 
-    // Pass-1: algun canal acepta el envio (o esta cerrado)?  Barrido rotado.
-    i64 rot = __vxch_sel_rot;
-    __vxch_sel_rot = rot + 1;
-    i64 found = -1;
-    fiber fwake = 0;
-    for (i64 kk = 0; kk < n; kk++) {
-        i64 i = (rot + kk) % n;
-        Chan c = chans[i];
-        if (c.closed) {
-            found = i;         // cerrado -> el envio se descarta
-            fwake = 0;
-            break;
-        }
-        fiber wk = 0;
-        if (__vxch_send_locked(c, vals[i], &wk)) {
-            found = i;
-            fwake = wk;
-            break;
-        }
-    }
-    if (found >= 0) {
-        for (i64 i = 0; i < nu; i++) {
-            Chan c = Chan(uniq[i]);
-            vx_spin_unlock(&c.lock);
-        }
-        __vxch_wake_if_any(fwake);
-        return found;
-    }
+	// Pass-1: algun canal acepta el envio (o esta cerrado)?  Barrido rotado.
+	i64 rot = __vxch_sel_rot;
+	__vxch_sel_rot = rot + 1;
+	i64   found = -1;
+	fiber fwake =  0;
+	for (i64 kk = 0; kk < n; kk++) {
+		i64  i = (rot + kk) % n;
+		Chan c = chans[i];
+		if (c.closed) {
+			found = i; // cerrado -> el envio se descarta
+			fwake = 0;
+			break;
+		}
+		fiber wk = 0;
+		if (__vxch_send_locked(c, vals[i],&wk)) {
+			found = i;
+			fwake = wk;
+			break;
+		}
+	}
+	if (found >= 0) {
+		for (i64 i = 0; i < nu; i++) {
+			Chan c = Chan(uniq[i]);
+			vx_spin_unlock(&c.lock);
+		}
+		__vxch_wake_if_any(fwake);
+		return found;
+	}
 
-    // Nada acepta: registrar un nodo de espera con su valor en cada cola de envio.
-    for (i64 i = 0; i < n; i++) {
-        i64 w = (i64)&wbufs[i * WAITER_QW];
-        Waiter(w).fib = self;
-        Waiter(w).elem = vals[i];      // valor a enviar por este canal
-        Waiter(w).sel = (i64)&sel_word;
-        Waiter(w).win = (i64)&win_slot;
-        Waiter(w).idx = i;
-        Waiter(w).next = 0;
-        Chan c = chans[i];
-        __vxch_wq_push((i64)&c.swq_h, (i64)&c.swq_t, w);
-    }
-    selctx[0] = nu;
-    selctx[1] = (i64)&uniq[0];
-    vx_park((i64)(cfn(i64, i64) -> void) __vxch_sel_unlock_all, (i64)&selctx[0]);
+	// Nada acepta: registrar un nodo de espera con su valor en cada cola de envio.
+	for (i64 i = 0; i < n; i++) {
+		i64       w    = (i64) & wbufs[i * WAITER_QW];
+		Waiter(w).fib  = self;
+		Waiter(w).elem = vals[i]; // valor a enviar por este canal
+		Waiter(w).sel  = (i64) & sel_word;
+		Waiter(w).win  = (i64) & win_slot;
+		Waiter(w).idx  = i;
+		Waiter(w).next = 0;
+		Chan      c    = chans[i];
+		__vxch_wq_push((i64) & c.swq_h, (i64) & c.swq_t, w);
+	}
+	selctx[0] = nu;
+	selctx[1] = (i64) & uniq[0];
+	vx_park(
+		(i64)(cfn(i64, i64) -> void) __vxch_sel_unlock_all,
+		(i64) & selctx[0]
+	);
 
-    // Reanudada: un receptor reclamo un nodo y publico win_slot.  Limpiar los
-    // nodos de las colas de envio de los OTROS canales y devolver el ganador.
-    for (i64 i = 0; i < n; i++) {
-        if (i != win_slot) {
-            i64 w = (i64)&wbufs[i * WAITER_QW];
-            Chan c = chans[i];
-            vx_spin_lock(&c.lock);
-            __vxch_wq_remove((i64)&c.swq_h, (i64)&c.swq_t, w);
-            vx_spin_unlock(&c.lock);
-        }
-    }
-    return win_slot;
+	// Reanudada: un receptor reclamo un nodo y publico win_slot.  Limpiar los
+	// nodos de las colas de envio de los OTROS canales y devolver el ganador.
+	for (i64 i = 0; i < n; i++) {
+		if (i != win_slot) {
+			i64  w = (i64) & wbufs[i * WAITER_QW];
+			Chan c = chans[i];
+			vx_spin_lock(&c.lock);
+			__vxch_wq_remove((i64) & c.swq_h, (i64) & c.swq_t, w);
+			vx_spin_unlock(&c.lock);
+		}
+	}
+	return win_slot;
 }
 
 // ---------------------------------------------------------------------------
@@ -901,8 +909,8 @@ i64 __vxch_sel_send_parked(fiber self, Chan* chans, i64* vals, i64 n) {
 // llamante.  chan_select_recv/_send[_block] son atajos ergonomicos para una
 // sola direccion; este es el primitivo general (multiplexa ambas).
 // ---------------------------------------------------------------------------
-const i64 VXCH_RECV = 0;   // caso de recepcion
-const i64 VXCH_SEND = 1;   // caso de envio
+const i64 VXCH_RECV = 0; // caso de recepcion
+const i64 VXCH_SEND = 1; // caso de envio
 
 // Vista tipada de un caso.  El llamante construye el array como i64 crudos segun
 // este layout: por cada caso, 3 qwords consecutivos [chan, dir, val], con
@@ -916,12 +924,13 @@ const i64 VXCH_SEND = 1;   // caso de envio
 // tres formas: campo de struct de valor, campo de overlay, y overlay
 // auto-referencial.  Cuando el campo de tipo overlay guarde el handle, migrar a
 // `public struct SelCase { Chan ch; i64 dir; i64 val; }` + `chan_select(SelCase*, n)`.
-@overlay struct SelCase {
-    i64 chan @0x00;   // canal del caso (Chan; i64 por la limitacion de arriba).
-    i64 dir  @0x08;   // VXCH_RECV (0) o VXCH_SEND (1).
-    i64 val  @0x10;   // envio: valor a enviar; recepcion: valor recibido (se escribe).
+@overlay
+struct SelCase {
+	i64 chan @0x00; // canal del caso (Chan; i64 por la limitacion de arriba).
+	i64 dir  @0x08;  // VXCH_RECV (0) o VXCH_SEND (1).
+	i64 val  @0x10; // envio: valor a enviar; recepcion: valor recibido (se escribe).
 }
-const i64 SELCASE_QW = 3;  // qwords por SelCase (24 bytes).
+const i64 SELCASE_QW = 3; // qwords por SelCase (24 bytes).
 
 /**
  * @brief Sondea una vez un conjunto de casos de recepcion/envio y ejecuta el
@@ -937,35 +946,35 @@ const i64 SELCASE_QW = 3;  // qwords por SelCase (24 bytes).
  * @return indice [0,n) del caso que disparo, o -1 si ninguno estaba listo.
  */
 public i64 chan_select_try(i64 cases, i64 n) {
-    if (n <= 0) {
-        return -1;
-    }
-    i64 start = __vxch_sel_rot;
-    __vxch_sel_rot = start + 1;
-    for (i64 k = 0; k < n; k++) {
-        i64 i = (start + k) % n;
-        i64 cs = cases + i * SELCASE_QW * 8;
-        Chan ch = Chan(SelCase(cs).chan);
-        if (SelCase(cs).dir == VXCH_RECV) {
-            i64 v = 0;
-            if (chan_try_recv(ch, &v)) {
-                SelCase(cs).val = v;
-                return i;
-            }
-            if (chan_is_closed(ch)) {
-                SelCase(cs).val = 0;
-                return i;
-            }
-        } else {
-            if (chan_try_send(ch, SelCase(cs).val)) {
-                return i;
-            }
-            if (chan_is_closed(ch)) {
-                return i;              // envio a cerrado: se descarta
-            }
-        }
-    }
-    return -1;
+	if (n <= 0) {
+		return-1;
+	}
+	i64 start = __vxch_sel_rot;
+	__vxch_sel_rot = start + 1;
+	for (i64 k = 0; k < n; k++) {
+		i64  i  = (start + k) % n;
+		i64  cs = cases + i * SELCASE_QW * 8;
+		Chan ch = Chan(SelCase(cs).chan);
+		if (SelCase(cs).dir == VXCH_RECV) {
+			i64 v = 0;
+			if (chan_try_recv(ch,&v)) {
+				SelCase(cs).val = v;
+				return i;
+			}
+			if (chan_is_closed(ch)) {
+				SelCase(cs).val = 0;
+				return i;
+			}
+		} else {
+			if (chan_try_send(ch, SelCase(cs).val)) {
+				return i;
+			}
+			if (chan_is_closed(ch)) {
+				return i; // envio a cerrado: se descarta
+			}
+		}
+	}
+	return-1;
 }
 
 /**
@@ -989,160 +998,163 @@ public i64 chan_select_try(i64 cases, i64 n) {
  * @return indice [0,n) del caso ejecutado.
  */
 public i64 chan_select(i64 cases, i64 n) {
-    if (n <= 0) {
-        return -1;
-    }
-    // Solo una FIBRA puede parkear; main (None) degrada a poll no-bloqueante.
-    match vx_cur_fiber() {
-        case None => {
-            while (true) {
-                i64 idx = chan_select_try(cases, n);
-                if (idx >= 0) {
-                    return idx;
-                }
-            }
-        }
-        case Some(self) => {
-            return __vxch_select_parked(self, cases, n);
-        }
-    }
-    return -1;   // inalcanzable (match exhaustivo)
+	if (n <= 0) {
+		return-1;
+	}
+	// Solo una FIBRA puede parkear; main (None) degrada a poll no-bloqueante.
+	match vx_cur_fiber() {
+		case None => {
+			while (true) {
+				i64 idx = chan_select_try(cases, n);
+				if (idx >= 0) {
+					return idx;
+				}
+			}
+		}
+		case Some(self) => {
+			return __vxch_select_parked(self, cases, n);
+		}
+	}
+	return-1; // inalcanzable (match exhaustivo)
 }
 
 /// Cuerpo parkeado del select mixto, ya resuelta la fibra actual @p self.
 i64 __vxch_select_parked(fiber self, i64 cases, i64 n) {
-    if (n > VXCH_SEL_MAX) {
-        n = VXCH_SEL_MAX;
-    }
+	if (n > VXCH_SEL_MAX) {
+		n = VXCH_SEL_MAX;
+	}
 
-    i64 sel_word = 0;
-    i64 win_slot = -1;
-    i64[192] wbufs;
-    i64[32] uniq;
-    i64[2] selctx;
+	i64 sel_word =  0;
+	i64 win_slot = -1;
+	i64[192] wbufs;
+	i64[32] uniq;
+	i64[2] selctx;
 
-    // Orden de lock estable por direccion del canal + dedup.
-    i64 nu = 0;
-    for (i64 i = 0; i < n; i++) {
-        i64 a = SelCase(cases + i * SELCASE_QW * 8).chan;
-        i64 j = nu;
-        while (j > 0 && uniq[j - 1] > a) {
-            j = j - 1;
-        }
-        i64 dup = 0;
-        if (j < nu && uniq[j] == a) {
-            dup = 1;
-        }
-        if (dup == 0) {
-            for (i64 k = nu; k > j; k--) {
-                uniq[k] = uniq[k - 1];
-            }
-            uniq[j] = a;
-            nu = nu + 1;
-        }
-    }
+	// Orden de lock estable por direccion del canal + dedup.
+	i64 nu = 0;
+	for (i64 i = 0; i < n; i++) {
+		i64 a = SelCase(cases + i * SELCASE_QW * 8).chan;
+		i64 j = nu;
+		while (j > 0 && uniq[j - 1] > a) {
+			j = j - 1;
+		}
+		i64 dup = 0;
+		if (j < nu && uniq[j] == a) {
+			dup = 1;
+		}
+		if (dup == 0) {
+			for (i64 k = nu; k > j; k--) {
+				uniq[k] = uniq[k - 1];
+			}
+			uniq[j] = a;
+			nu = nu + 1;
+		}
+	}
 
-    for (i64 i = 0; i < nu; i++) {
-        Chan c = Chan(uniq[i]);
-        vx_spin_lock(&c.lock);
-    }
+	for (i64 i = 0; i < nu; i++) {
+		Chan c = Chan(uniq[i]);
+		vx_spin_lock(&c.lock);
+	}
 
-    // Pass-1: algun caso listo YA (bajo todos los locks)?  Barrido rotado.
-    i64 rot = __vxch_sel_rot;
-    __vxch_sel_rot = rot + 1;
-    i64 found = -1;
-    i64 fval = 0;
-    fiber fwake = 0;
-    for (i64 kk = 0; kk < n; kk++) {
-        i64 i = (rot + kk) % n;
-        i64 cs = cases + i * SELCASE_QW * 8;
-        Chan c = Chan(SelCase(cs).chan);
-        if (SelCase(cs).dir == VXCH_RECV) {
-            i64 val = 0;
-            fiber wk = 0;
-            if (__vxch_recv_locked(c, &val, &wk)) {
-                found = i;
-                fval = val;
-                fwake = wk;
-                break;
-            }
-            if (c.closed) {
-                found = i;
-                fval = 0;
-                fwake = 0;
-                break;
-            }
-        } else {
-            if (c.closed) {
-                found = i;             // envio a cerrado: descarta
-                fval = 0;
-                fwake = 0;
-                break;
-            }
-            fiber wk = 0;
-            if (__vxch_send_locked(c, SelCase(cs).val, &wk)) {
-                found = i;
-                fval = 0;
-                fwake = wk;
-                break;
-            }
-        }
-    }
-    if (found >= 0) {
-        for (i64 i = 0; i < nu; i++) {
-            Chan c = Chan(uniq[i]);
-            vx_spin_unlock(&c.lock);
-        }
-        __vxch_wake_if_any(fwake);
-        i64 cs = cases + found * SELCASE_QW * 8;
-        if (SelCase(cs).dir == VXCH_RECV) {
-            SelCase(cs).val = fval;    // publica el valor recibido en el caso
-        }
-        return found;
-    }
+	// Pass-1: algun caso listo YA (bajo todos los locks)?  Barrido rotado.
+	i64 rot = __vxch_sel_rot;
+	__vxch_sel_rot = rot + 1;
+	i64   found = -1;
+	i64   fval  =  0;
+	fiber fwake =  0;
+	for (i64 kk = 0; kk < n; kk++) {
+		i64  i  = (rot + kk) % n;
+		i64  cs = cases + i * SELCASE_QW * 8;
+		Chan c  = Chan(SelCase(cs).chan);
+		if (SelCase(cs).dir == VXCH_RECV) {
+			i64   val = 0;
+			fiber wk  = 0;
+			if (__vxch_recv_locked(c,&val,&wk)) {
+				found = i;
+				fval  = val;
+				fwake = wk;
+				break;
+			}
+			if (c.closed) {
+				found = i;
+				fval  = 0;
+				fwake = 0;
+				break;
+			}
+		} else {
+			if (c.closed) {
+				found = i; // envio a cerrado: descarta
+				fval  = 0;
+				fwake = 0;
+				break;
+			}
+			fiber wk = 0;
+			if (__vxch_send_locked(c, SelCase(cs).val,&wk)) {
+				found = i;
+				fval  = 0;
+				fwake = wk;
+				break;
+			}
+		}
+	}
+	if (found >= 0) {
+		for (i64 i = 0; i < nu; i++) {
+			Chan c = Chan(uniq[i]);
+			vx_spin_unlock(&c.lock);
+		}
+		__vxch_wake_if_any(fwake);
+		i64 cs = cases + found * SELCASE_QW * 8;
+		if (SelCase(cs).dir == VXCH_RECV) {
+			SelCase(cs).val = fval; // publica el valor recibido en el caso
+		}
+		return found;
+	}
 
-    // Nada listo: registrar un nodo de espera por caso en la cola que corresponda
-    // a su direccion (recepcion -> rwq, envio -> swq); todos comparten sel_word.
-    for (i64 i = 0; i < n; i++) {
-        i64 cs = cases + i * SELCASE_QW * 8;
-        i64 w = (i64)&wbufs[i * WAITER_QW];
-        Waiter(w).fib = self;
-        Waiter(w).sel = (i64)&sel_word;
-        Waiter(w).win = (i64)&win_slot;
-        Waiter(w).idx = i;
-        Waiter(w).next = 0;
-        Chan c = Chan(SelCase(cs).chan);
-        if (SelCase(cs).dir == VXCH_RECV) {
-            Waiter(w).elem = 0;
-            __vxch_wq_push((i64)&c.rwq_h, (i64)&c.rwq_t, w);
-        } else {
-            Waiter(w).elem = SelCase(cs).val;
-            __vxch_wq_push((i64)&c.swq_h, (i64)&c.swq_t, w);
-        }
-    }
-    selctx[0] = nu;
-    selctx[1] = (i64)&uniq[0];
-    vx_park((i64)(cfn(i64, i64) -> void) __vxch_sel_unlock_all, (i64)&selctx[0]);
+	// Nada listo: registrar un nodo de espera por caso en la cola que corresponda
+	// a su direccion (recepcion -> rwq, envio -> swq); todos comparten sel_word.
+	for (i64 i = 0; i < n; i++) {
+		i64       cs   = cases + i * SELCASE_QW * 8;
+		i64       w    = (i64) & wbufs[i * WAITER_QW];
+		Waiter(w).fib  = self;
+		Waiter(w).sel  = (i64) & sel_word;
+		Waiter(w).win  = (i64) & win_slot;
+		Waiter(w).idx  = i;
+		Waiter(w).next = 0;
+		Chan      c    = Chan(SelCase(cs).chan);
+		if (SelCase(cs).dir == VXCH_RECV) {
+			Waiter(w).elem = 0;
+			__vxch_wq_push((i64) & c.rwq_h, (i64) & c.rwq_t, w);
+		} else {
+			Waiter(w).elem = SelCase(cs).val;
+			__vxch_wq_push((i64) & c.swq_h, (i64) & c.swq_t, w);
+		}
+	}
+	selctx[0] = nu;
+	selctx[1] = (i64) & uniq[0];
+	vx_park(
+		(i64)(cfn(i64, i64) -> void) __vxch_sel_unlock_all,
+		(i64) & selctx[0]
+	);
 
-    // Reanudada: retirar los nodos de los casos NO ganadores de su cola (segun
-    // direccion) y, si el ganador es de recepcion, publicar el valor recibido.
-    for (i64 i = 0; i < n; i++) {
-        if (i != win_slot) {
-            i64 cs = cases + i * SELCASE_QW * 8;
-            i64 w = (i64)&wbufs[i * WAITER_QW];
-            Chan c = Chan(SelCase(cs).chan);
-            vx_spin_lock(&c.lock);
-            if (SelCase(cs).dir == VXCH_RECV) {
-                __vxch_wq_remove((i64)&c.rwq_h, (i64)&c.rwq_t, w);
-            } else {
-                __vxch_wq_remove((i64)&c.swq_h, (i64)&c.swq_t, w);
-            }
-            vx_spin_unlock(&c.lock);
-        }
-    }
-    i64 cs = cases + win_slot * SELCASE_QW * 8;
-    if (SelCase(cs).dir == VXCH_RECV) {
-        SelCase(cs).val = Waiter((i64)&wbufs[win_slot * WAITER_QW]).elem;
-    }
-    return win_slot;
+	// Reanudada: retirar los nodos de los casos NO ganadores de su cola (segun
+	// direccion) y, si el ganador es de recepcion, publicar el valor recibido.
+	for (i64 i = 0; i < n; i++) {
+		if (i != win_slot) {
+			i64  cs = cases + i * SELCASE_QW * 8;
+			i64  w  = (i64) & wbufs[i * WAITER_QW];
+			Chan c  = Chan(SelCase(cs).chan);
+			vx_spin_lock(&c.lock);
+			if (SelCase(cs).dir == VXCH_RECV) {
+				__vxch_wq_remove((i64) & c.rwq_h, (i64) & c.rwq_t, w);
+			} else {
+				__vxch_wq_remove((i64) & c.swq_h, (i64) & c.swq_t, w);
+			}
+			vx_spin_unlock(&c.lock);
+		}
+	}
+	i64 cs = cases + win_slot * SELCASE_QW * 8;
+	if (SelCase(cs).dir == VXCH_RECV) {
+		SelCase(cs).val = Waiter((i64) & wbufs[win_slot * WAITER_QW]).elem;
+	}
+	return win_slot;
 }

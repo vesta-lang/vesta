@@ -3,21 +3,21 @@
 namespace std.text;
 
 /// Longitud en code-points de un string.
-public i64 len(string s) { 
-    return (i64)s.length(); 
+public i64 len(string s) {
+	return (i64)s.length();
 }
 
 /// true si dos strings son iguales.
-public bool same(string a, string b) { 
-    return a.equals(b); 
+public bool same(string a, string b) {
+	return a.equals(b);
 }
 
 /// Concatena dos strings.
-public string join(string a, string b) { 
-    return a.concat(b); 
+public string join(string a, string b) {
+	return a.concat(b);
 }
 
 /// true si el string esta vacio.
-public bool empty(string s) { 
-    return s.length() == 0; 
+public bool empty(string s) {
+	return s.length() == 0;
 }

@@ -81,27 +81,27 @@ import std.comptime only inject;
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_bloque_neon(string mnl, string mne, i64 bytes, string d,
-                                string s) {
-    static_assert(bytes % 32 == 0,
-                  "el bloque tiene que ser multiplo de 32 (un par de 16)");
-    i64 pares = bytes / 32;
-    static_assert(pares >= 1 && pares <= 8,
-                  "de uno a ocho pares: mas no cabe en el banco sin gastar "
-                  "los que hay que devolver como estaban");
-    string out = "";
-    for (i64 i = 0; i < pares; i++) {
-        i64 o = i * 32;
-        i64 a = i * 2;
-        i64 b = a + 1;
-        out += "${mnl} q${a}, q${b}, [${s}, #${o}]\n";
-    }
-    for (i64 i = 0; i < pares; i++) {
-        i64 o = i * 32;
-        i64 a = i * 2;
-        i64 b = a + 1;
-        out += "${mne} q${a}, q${b}, [${d}, #${o}]\n";
-    }
-    return out;
+	string s) {
+	static_assert(bytes % 32 == 0,
+		"el bloque tiene que ser multiplo de 32 (un par de 16)");
+	i64 pares = bytes / 32;
+	static_assert(pares >= 1 && pares <= 8,
+		"de uno a ocho pares: mas no cabe en el banco sin gastar "
+		"los que hay que devolver como estaban");
+	string out = "";
+	for (i64 i = 0; i < pares; i++) {
+		i64 o = i * 32;
+		i64 a = i * 2;
+		i64 b = a + 1;
+		out += "${mnl} q${a}, q${b}, [${s}, #${o}]\n";
+	}
+	for (i64 i = 0; i < pares; i++) {
+		i64 o = i * 32;
+		i64 a = i * 2;
+		i64 b = a + 1;
+		out += "${mne} q${a}, q${b}, [${d}, #${o}]\n";
+	}
+	return out;
 }
 
 /**
@@ -116,11 +116,11 @@ comptime string gen_bloque_neon(string mnl, string mne, i64 bytes, string d,
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_solapada_neon(i64 bytes) {
-    // Aqui las dos mitades usan el mismo mnemonico porque `ldp`/`stp` no
-    // exigen alineacion; en x86-64 la forma alineada obliga a que el segundo
-    // tramo lleve otra, porque empieza donde caiga.
-    return gen_bloque_neon("ldp", "stp", bytes, "d", "s") +
-           gen_bloque_neon("ldp", "stp", bytes, "fd", "fs");
+	// Aqui las dos mitades usan el mismo mnemonico porque `ldp`/`stp` no
+	// exigen alineacion; en x86-64 la forma alineada obliga a que el segundo
+	// tramo lleve otra, porque empieza donde caiga.
+	return gen_bloque_neon("ldp", "stp", bytes, "d", "s") +
+	gen_bloque_neon("ldp", "stp", bytes, "fd", "fs");
 }
 
 /**
@@ -141,52 +141,52 @@ comptime string gen_solapada_neon(i64 bytes) {
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
-                                i64 pares, string cierre) {
-    i64 bloque = pares * 32;
-    i64 mitad = pares / 2;
-    string out = "bucle:\n";
-    // Primera mitad: se lee y se escribe con los punteros donde estan.
-    for (i64 k = 0; k < mitad; k++) {
-        i64 o = k * 32;
-        i64 a = k * 2;
-        i64 b = a + 1;
-        out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
-    }
-    for (i64 k = 0; k < mitad; k++) {
-        i64 o = k * 32;
-        i64 a = k * 2;
-        i64 b = a + 1;
-        out += "${mne} q${a}, q${b}, [d, #${o}]\n";
-    }
-    // Los punteros avanzan un bloque COMPLETO, y se hace aqui -- a mitad de
-    // la vuelta -- para que el calculo de las direcciones de la siguiente
-    // arranque antes y se solape con lo que queda de esta.  La segunda mitad
-    // accede entonces con desplazamientos NEGATIVOS, que la devuelven al
-    // tramo del bloque original que le faltaba: toca exactamente los mismos
-    // bytes que si no se hubiera movido nada.
-    out += "add s, s, #${bloque}\n";
-    out += "add d, d, #${bloque}\n";
-    for (i64 k = mitad; k < pares; k++) {
-        i64 o = k * 32 - bloque;
-        i64 a = k * 2;
-        i64 b = a + 1;
-        out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
-    }
-    for (i64 k = mitad; k < pares; k++) {
-        i64 o = k * 32 - bloque;
-        i64 a = k * 2;
-        i64 b = a + 1;
-        out += "${mne} q${a}, q${b}, [d, #${o}]\n";
-    }
-    out += "cmp s, fs\n";
-    out += "b.lo bucle\n";
-    // Cola: un bloque igual que termina en el final del rango.  Lleva su
-    // propio mnemonico de escritura porque arranca donde caiga.
-    out += gen_bloque_neon(mnl, mne_cola, bloque, "fd", "fs");
-    if (cierre != "") {
-        out += "${cierre}\n";
-    }
-    return out;
+	i64 pares, string cierre) {
+	i64    bloque = pares * 32;
+	i64    mitad  = pares / 2;
+	string out    = "bucle:\n";
+	// Primera mitad: se lee y se escribe con los punteros donde estan.
+	for (i64 k = 0; k < mitad; k++) {
+		i64 o = k * 32;
+		i64 a = k * 2;
+		i64 b = a + 1;
+		out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
+	}
+	for (i64 k = 0; k < mitad; k++) {
+		i64 o = k * 32;
+		i64 a = k * 2;
+		i64 b = a + 1;
+		out += "${mne} q${a}, q${b}, [d, #${o}]\n";
+	}
+	// Los punteros avanzan un bloque COMPLETO, y se hace aqui -- a mitad de
+	// la vuelta -- para que el calculo de las direcciones de la siguiente
+	// arranque antes y se solape con lo que queda de esta.  La segunda mitad
+	// accede entonces con desplazamientos NEGATIVOS, que la devuelven al
+	// tramo del bloque original que le faltaba: toca exactamente los mismos
+	// bytes que si no se hubiera movido nada.
+	out += "add s, s, #${bloque}\n";
+	out += "add d, d, #${bloque}\n";
+	for (i64 k = mitad; k < pares; k++) {
+		i64 o = k * 32 - bloque;
+		i64 a = k * 2;
+		i64 b = a + 1;
+		out += "${mnl} q${a}, q${b}, [s, #${o}]\n";
+	}
+	for (i64 k = mitad; k < pares; k++) {
+		i64 o = k * 32 - bloque;
+		i64 a = k * 2;
+		i64 b = a + 1;
+		out += "${mne} q${a}, q${b}, [d, #${o}]\n";
+	}
+	out += "cmp s, fs\n";
+	out += "b.lo bucle\n";
+	// Cola: un bloque igual que termina en el final del rango.  Lleva su
+	// propio mnemonico de escritura porque arranca donde caiga.
+	out += gen_bloque_neon(mnl, mne_cola, bloque, "fd", "fs");
+	if (cierre != "") {
+		out += "${cierre}\n";
+	}
+	return out;
 }
 
 /**
@@ -202,19 +202,19 @@ comptime string gen_grande_neon(string mnl, string mne, string mne_cola,
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memcpy_small_neon(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        vec q0, vec q1, vec q2, vec q3,
-        vec q4, vec q5, vec q6, vec q7,
-    ) {
+public void memcpy_small_neon(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		vec q0, vec q1, vec q2, vec q3,
+		vec q4, vec q5, vec q6, vec q7,
+	) {
         inject(gen_solapada_neon(64))
-    }
+	}
 }
 
 /**
@@ -228,19 +228,19 @@ public void memcpy_small_neon(u8* dst, u8* src, usize n) {
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memcpy_medium_neon(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 256;
-    u8* fin_s = src + n - 256;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        vec q0, vec q1, vec q2,  vec q3,  vec q4,  vec q5,  vec q6,  vec q7,
-        vec q8, vec q9, vec q10, vec q11, vec q12, vec q13, vec q14, vec q15,
-    ) {
+public void memcpy_medium_neon(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 256;
+	u8* fin_s = src + n - 256;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		vec q0, vec q1, vec q2, vec q3, vec q4, vec q5, vec q6, vec q7,
+		vec q8, vec q9, vec q10, vec q11, vec q12, vec q13, vec q14, vec q15,
+	) {
         inject(gen_grande_neon("ldp", "stp", "stp", 8, ""))
-    }
+	}
 }
 
 /**
@@ -267,19 +267,19 @@ public void memcpy_medium_neon(u8* dst, u8* src, usize n) {
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memcpy_streaming_neon(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 256;
-    u8* fin_s = src + n - 256;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        vec q0, vec q1, vec q2,  vec q3,  vec q4,  vec q5,  vec q6,  vec q7,
-        vec q8, vec q9, vec q10, vec q11, vec q12, vec q13, vec q14, vec q15,
-    ) {
+public void memcpy_streaming_neon(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 256;
+	u8* fin_s = src + n - 256;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		vec q0, vec q1, vec q2, vec q3, vec q4, vec q5, vec q6, vec q7,
+		vec q8, vec q9, vec q10, vec q11, vec q12, vec q13, vec q14, vec q15,
+	) {
         inject(gen_grande_neon("ldnp", "stnp", "stp", 8, ""))
-    }
+	}
 }
 
 /**
@@ -296,15 +296,15 @@ public void memcpy_streaming_neon(u8* dst, u8* src, usize n) {
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_relleno_neon(string mne, i64 bytes, string d) {
-    static_assert(bytes % 32 == 0,
-                  "el bloque tiene que ser multiplo de 32 (un par de 16)");
-    i64 pares = bytes / 32;
-    string out = "";
-    for (i64 i = 0; i < pares; i++) {
-        i64 o = i * 32;
-        out += "${mne} q0, q1, [${d}, #${o}]\n";
-    }
-    return out;
+	static_assert(bytes % 32 == 0,
+		"el bloque tiene que ser multiplo de 32 (un par de 16)");
+	i64    pares = bytes / 32;
+	string out   = "";
+	for (i64 i = 0; i < pares; i++) {
+		i64 o = i * 32;
+		out += "${mne} q0, q1, [${d}, #${o}]\n";
+	}
+	return out;
 }
 
 /**
@@ -313,8 +313,8 @@ comptime string gen_relleno_neon(string mne, i64 bytes, string d) {
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_relleno_solapado_neon(i64 bytes) {
-    return gen_relleno_neon("stp", bytes, "d") +
-           gen_relleno_neon("stp", bytes, "fd");
+	return gen_relleno_neon("stp", bytes, "d") +
+	gen_relleno_neon("stp", bytes, "fd");
 }
 
 /**
@@ -326,26 +326,26 @@ comptime string gen_relleno_solapado_neon(i64 bytes) {
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
-                                        string cierre) {
-    i64 bloque = pares * 32;
-    i64 mitad = pares / 2;
-    string out = "bucle:\n";
-    for (i64 k = 0; k < mitad; k++) {
-        i64 o = k * 32;
-        out += "${mne} q0, q1, [d, #${o}]\n";
-    }
-    out += "add d, d, #${bloque}\n";
-    for (i64 k = mitad; k < pares; k++) {
-        i64 o = k * 32 - bloque;
-        out += "${mne} q0, q1, [d, #${o}]\n";
-    }
-    out += "cmp d, fd\n";
-    out += "b.lo bucle\n";
-    out += gen_relleno_neon(mne_cola, bloque, "fd");
-    if (cierre != "") {
-        out += "${cierre}\n";
-    }
-    return out;
+	string cierre) {
+	i64    bloque = pares * 32;
+	i64    mitad  = pares / 2;
+	string out    = "bucle:\n";
+	for (i64 k = 0; k < mitad; k++) {
+		i64 o = k * 32;
+		out += "${mne} q0, q1, [d, #${o}]\n";
+	}
+	out += "add d, d, #${bloque}\n";
+	for (i64 k = mitad; k < pares; k++) {
+		i64 o = k * 32 - bloque;
+		out += "${mne} q0, q1, [d, #${o}]\n";
+	}
+	out += "cmp d, fd\n";
+	out += "b.lo bucle\n";
+	out += gen_relleno_neon(mne_cola, bloque, "fd");
+	if (cierre != "") {
+		out += "${cierre}\n";
+	}
+	return out;
 }
 
 /**
@@ -365,19 +365,19 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memset_small_neon(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        vec q0, vec q1,
-    ) {
-        dup q0.2d, p
-        mov q1.16b, q0.16b
+public void memset_small_neon(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		vec q0, vec q1,
+	) {
+        dup q0.2_d, p
+        mov q1.16_b, q0.16_b
         inject(gen_relleno_solapado_neon(64))
-    }
+	}
 }
 
 /**
@@ -391,19 +391,19 @@ public void memset_small_neon(u8* dst, u8 val, usize n) {
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memset_medium_neon(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 256;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        vec q0, vec q1,
-    ) {
-        dup q0.2d, p
-        mov q1.16b, q0.16b
+public void memset_medium_neon(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 256;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		vec q0, vec q1,
+	) {
+        dup q0.2_d, p
+        mov q1.16_b, q0.16_b
         inject(gen_relleno_grande_neon("stp", "stp", 8, ""))
-    }
+	}
 }
 
 /**
@@ -430,17 +430,17 @@ public void memset_medium_neon(u8* dst, u8 val, usize n) {
 @Target("arch:arm64")
 @NoIdiom
 u64 __zva_bloque_leer() {
-    register("x0") u64 v = 0;
-    asm volatile { mrs x0, dczid_el0 };
-    // Bit 4 (DZP): prohibida.
-    if ((v & 16) != 0) return 0;
-    // Bits 3:0: log2 del bloque en palabras de 4 bytes.
-    u64 log2_palabras = v & 15;
-    return ((u64) 4) << log2_palabras;
+	register("x0") u64 v = 0;
+	asm volatile { mrs x0, dczid_el0 };
+	// Bit 4 (DZP): prohibida.
+	if ((v & 16) != 0) return 0;
+	// Bits 3:0: log2 del bloque en palabras de 4 bytes.
+	u64 log2_palabras = v & 15;
+	return ((u64) 4) << log2_palabras;
 }
 
 /// Cache de @ref __zva_bloque_leer.  0 = sin preguntar todavia.
-u64 __zva_bloque = 0;
+u64  __zva_bloque = 0;
 /// Si ya se pregunto (el resultado legitimo puede ser 0 = prohibida).
 bool __zva_sabido = false;
 
@@ -450,11 +450,11 @@ bool __zva_sabido = false;
  */
 @Target("arch:arm64")
 public u64 zva_bloque() {
-    if (!__zva_sabido) {
-        __zva_bloque = __zva_bloque_leer();
-        __zva_sabido = true;
-    }
-    return __zva_bloque;
+	if (!__zva_sabido) {
+		__zva_bloque = __zva_bloque_leer();
+		__zva_sabido = true;
+	}
+	return __zva_bloque;
 }
 
 /**
@@ -481,38 +481,38 @@ public u64 zva_bloque() {
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memset_zva(u8* dst, usize n) {
-    u64 blq = zva_bloque();
-    u64 a = (u64) ((uintptr) dst);
-    u64 fin = a + (u64) n;
-    // Primer limite de bloque en o despues de `a`.
-    u64 ini = (a + blq - 1) & ~(blq - 1);
-    // Ultimo limite de bloque en o antes de `fin`.
-    u64 tope = fin & ~(blq - 1);
-    if (ini >= tope) {
-        // No cabe ni un bloque entero: no hay nada que ganar aqui.
-        memset_c(dst, 0, n);
-        return;
-    }
-    // Cabeza y cola con el relleno normal; el cuerpo con la instruccion.
-    if (ini > a) {
-        memset_c(dst, 0, (usize) (ini - a));
-    }
-    {
-        register("x0") u64 p = ini;
-        register("x1") u64 t = tope;
-        register("x2") u64 b = blq;
-        asm volatile {
+public void memset_zva(u8 *dst, usize n) {
+	u64 blq  = zva_bloque();
+	u64 a    = (u64)((uintptr) dst);
+	u64 fin  = a + (u64) n;
+	// Primer limite de bloque en o despues de `a`.
+	u64 ini  = (a + blq - 1) & ~(blq - 1);
+	// Ultimo limite de bloque en o antes de `fin`.
+	u64 tope = fin & ~(blq - 1);
+	if (ini >= tope) {
+		// No cabe ni un bloque entero: no hay nada que ganar aqui.
+		memset_c(dst, 0, n);
+		return;
+	}
+	// Cabeza y cola con el relleno normal; el cuerpo con la instruccion.
+	if (ini > a) {
+		memset_c(dst, 0, (usize)(ini - a));
+	}
+	{
+		register("x0") u64 p = ini;
+		register("x1") u64 t = tope;
+		register("x2") u64 b = blq;
+		asm volatile {
             zva_bucle:
             dc zva, x0
             add x0, x0, x2
             cmp x0, x1
             b.lo zva_bucle
-        }
-    }
-    if (fin > tope) {
-        memset_c((u8*) ((uintptr) tope), 0, (usize) (fin - tope));
-    }
+		}
+	}
+	if (fin > tope) {
+		memset_c((u8 *)((uintptr) tope), 0, (usize)(fin - tope));
+	}
 }
 
 /**
@@ -529,17 +529,17 @@ public void memset_zva(u8* dst, usize n) {
  */
 @Target("arch:arm64")
 @NoIdiom
-public void memset_streaming_neon(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 256;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        vec q0, vec q1,
-    ) {
-        dup q0.2d, p
-        mov q1.16b, q0.16b
+public void memset_streaming_neon(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 256;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		vec q0, vec q1,
+	) {
+        dup q0.2_d, p
+        mov q1.16_b, q0.16_b
         inject(gen_relleno_grande_neon("stnp", "stp", 8, ""))
-    }
+	}
 }

@@ -36,84 +36,84 @@ public import std.syscall.windows.ntdll only resolve_ntdll_export;
 // ===================================================================
 
 public struct syscall_ctx_invoke {
-    /**
-     * Metodo de invocacion de la syscall.  Lo administra la libreria,
-     * pero el usuario puede reasignarlo a una implementacion alternativa
-     * (p.ej. para hooking o para una convencion distinta).
-     */
-    invoke_syscall invoke_method = invoke;
+	/**
+	 * Metodo de invocacion de la syscall.  Lo administra la libreria,
+	 * pero el usuario puede reasignarlo a una implementacion alternativa
+	 * (p.ej. para hooking o para una convencion distinta).
+	 */
+	invoke_syscall  invoke_method  = invoke;
 
-    /**
-     * Resolutor perezoso del objetivo.  En Windows nada es estable entre
-     * versiones del SO -- ni los numeros de servicio ni la forma de los
-     * stubs -- asi que cada contexto se resuelve por separado.  Recibe el
-     * nombre del export (como usize) y devuelve el objetivo; el envoltorio lo
-     * cachea.  Reasignable: quien necesite otro esquema enchufa el suyo.
-     */
-    resolve_syscall resolve_method = resolve_ntdll_export;
+	/**
+	 * Resolutor perezoso del objetivo.  En Windows nada es estable entre
+	 * versiones del SO -- ni los numeros de servicio ni la forma de los
+	 * stubs -- asi que cada contexto se resuelve por separado.  Recibe el
+	 * nombre del export (como usize) y devuelve el objetivo; el envoltorio lo
+	 * cachea.  Reasignable: quien necesite otro esquema enchufa el suyo.
+	 */
+	resolve_syscall resolve_method = resolve_ntdll_export;
 
-    /**
-     * Numero de servicio resuelto de forma perezosa.  0 = sin resolver.
-     * Lo rellena un resolutor que trabaje a nivel de ISA (ejecutando la
-     * instruccion de syscall); el resolutor por defecto no lo usa.
-     */
-    syscall_id id = 0;
+	/**
+	 * Numero de servicio resuelto de forma perezosa.  0 = sin resolver.
+	 * Lo rellena un resolutor que trabaje a nivel de ISA (ejecutando la
+	 * instruccion de syscall); el resolutor por defecto no lo usa.
+	 */
+	syscall_id      id             = 0;
 
-    /**
-     * Direccion del objetivo resuelto de forma perezosa.  null = sin resolver.
-     *
-     * Con el par por defecto guarda la DIRECCION del export de ntdll: el
-     * envoltorio la castea al `cfn` de su firma concreta y la llama.  Se
-     * mantiene aparte de `id` para que ambos esquemas -- llamada al export y
-     * ejecucion directa por numero de servicio -- puedan coexistir.
-     */
-    void* target = null;
+	/**
+	 * Direccion del objetivo resuelto de forma perezosa.  null = sin resolver.
+	 *
+	 * Con el par por defecto guarda la DIRECCION del export de ntdll: el
+	 * envoltorio la castea al `cfn` de su firma concreta y la llama.  Se
+	 * mantiene aparte de `id` para que ambos esquemas -- llamada al export y
+	 * ejecucion directa por numero de servicio -- puedan coexistir.
+	 */
+	void*           target         = null;
 
-    /**
-     * Hash del nombre de la syscall, calculado en tiempo de compilacion.
-     * El resolutor lo compara contra el hash de cada export `Nt*`/`Zw*`
-     * de ntdll para localizar el numero de servicio sin llevar el nombre
-     * en texto plano al binario.
-     */
-    u64 hash = 0;
+	/**
+	 * Hash del nombre de la syscall, calculado en tiempo de compilacion.
+	 * El resolutor lo compara contra el hash de cada export `Nt*`/`Zw*`
+	 * de ntdll para localizar el numero de servicio sin llevar el nombre
+	 * en texto plano al binario.
+	 */
+	u64             hash           = 0;
 
-    /**
-     * Nombre de la syscall EN TIEMPO DE COMPILACION.  Campo `comptime`:
-     * no ocupa espacio en la instancia runtime ni se serializa; solo lo
-     * consume el constructor comptime para derivar `hash`.
-     */
-    comptime char* name_syscall = nullptr;
+	/**
+	 * Nombre de la syscall EN TIEMPO DE COMPILACION.  Campo `comptime`:
+	 * no ocupa espacio en la instancia runtime ni se serializa; solo lo
+	 * consume el constructor comptime para derivar `hash`.
+	 */
+	comptime char * name_syscall   = nullptr;
 
-    /**
-     * Constructor comptime: fija el nombre y deriva su hash.  El nombre solo
-     * vive en compile-time; el resolutor por defecto recibe el suyo en el punto
-     * de resolucion (un literal en contexto `string`, que si materializa un
-     * cstring host valido para la API nativa).
-     */
-    public comptime syscall_ctx_invoke(char* name_syscall) {
-        this.name_syscall = name_syscall;
-        this.hash = 0; // TODO: hash comptime del nombre (fnv1a)
-    }
+	/**
+	 * Constructor comptime: fija el nombre y deriva su hash.  El nombre solo
+	 * vive en compile-time; el resolutor por defecto recibe el suyo en el punto
+	 * de resolucion (un literal en contexto `string`, que si materializa un
+	 * cstring host valido para la API nativa).
+	 */
+	public comptime syscall_ctx_invoke(char* name_syscall) {
+		this.name_syscall = name_syscall;
+		this.hash         = 0; // TODO: hash comptime del nombre (fnv1a)
+	}
 };
 
 /**
  * Numero del procesador logico actual.
  */
 public ULONG KeGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
-    static syscall_ctx_invoke ctx =
-        syscall_ctx_invoke("NtGetCurrentProcessorNumberEx");
-    if (ctx.target == null) {
-        ctx.target =
-            ctx.resolve_method("NtGetCurrentProcessorNumberEx"); // 1 sola vez.
-    }
-    return ((cfn(PPROCESSOR_NUMBER) -> ULONG)(ctx.target))(ProcNumber);
+	static syscall_ctx_invoke ctx =
+	syscall_ctx_invoke("NtGetCurrentProcessorNumberEx");
+	if (ctx.target == null) {
+		ctx.target =
+		ctx.resolve_method("NtGetCurrentProcessorNumberEx"); // 1 sola vez.
+	}
+	return ((cfn(PPROCESSOR_NUMBER) -> ULONG)(ctx.target))(ProcNumber);
 }
 
 /**
  * Alias Nt* de la syscall anterior.
  */
 public ULONG NtGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
-    return KeGetCurrentProcessorNumberEx(ProcNumber);
+	return KeGetCurrentProcessorNumberEx(ProcNumber);
 }
 
 // ===================================================================
@@ -127,10 +127,10 @@ public ULONG NtGetCurrentProcessorNumberEx(PPROCESSOR_NUMBER ProcNumber) {
  * @return Handle valido para las syscalls de memoria de este proceso.
  */
 public HANDLE NtCurrentProcess() {
-    // -1 como valor centinela que el kernel reconoce, no como direccion que
-    // nadie vaya a dereferenciar.  Sin cast: un literal entero no tiene tipo
-    // propio y toma el del contexto.
-    return 0xFFFFFFFFFFFFFFFF;
+	// -1 como valor centinela que el kernel reconoce, no como direccion que
+	// nadie vaya a dereferenciar.  Sin cast: un literal entero no tiene tipo
+	// propio y toma el del contexto.
+	return 0xFFFFFFFFFFFFFFFF;
 }
 
 // ===================================================================
@@ -155,17 +155,17 @@ public HANDLE NtCurrentProcess() {
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtAllocateVirtualMemory(HANDLE ProcessHandle,
-                                        PPVOID BaseAddress, SIZE_T ZeroBits,
-                                        PSIZE_T RegionSize,
-                                        ULONG AllocationType, ULONG Protect) {
-    static syscall_ctx_invoke ctx =
-        syscall_ctx_invoke("NtAllocateVirtualMemory");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtAllocateVirtualMemory");
-    }
-    return ((cfn(HANDLE, PPVOID, SIZE_T, PSIZE_T, ULONG, ULONG)
-                 -> NTSTATUS)(ctx.target))(ProcessHandle, BaseAddress, ZeroBits,
-                                           RegionSize, AllocationType, Protect);
+	PPVOID BaseAddress, SIZE_T ZeroBits,
+	PSIZE_T RegionSize,
+	ULONG AllocationType, ULONG Protect) {
+	static syscall_ctx_invoke ctx =
+	syscall_ctx_invoke("NtAllocateVirtualMemory");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtAllocateVirtualMemory");
+	}
+	return ((cfn(HANDLE, PPVOID, SIZE_T, PSIZE_T, ULONG, ULONG)
+			-> NTSTATUS)(ctx.target))(ProcessHandle, BaseAddress, ZeroBits,
+		RegionSize, AllocationType, Protect);
 }
 
 /**
@@ -181,13 +181,13 @@ public NTSTATUS NtAllocateVirtualMemory(HANDLE ProcessHandle,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtFreeVirtualMemory(HANDLE ProcessHandle, PPVOID BaseAddress,
-                                    PSIZE_T RegionSize, ULONG FreeType) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtFreeVirtualMemory");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtFreeVirtualMemory");
-    }
-    return ((cfn(HANDLE, PPVOID, PSIZE_T, ULONG) -> NTSTATUS)(ctx.target))(
-        ProcessHandle, BaseAddress, RegionSize, FreeType);
+	PSIZE_T RegionSize, ULONG FreeType) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtFreeVirtualMemory");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtFreeVirtualMemory");
+	}
+	return ((cfn(HANDLE, PPVOID, PSIZE_T, ULONG) -> NTSTATUS)(ctx.target))(
+		ProcessHandle, BaseAddress, RegionSize, FreeType);
 }
 
 /**
@@ -203,16 +203,16 @@ public NTSTATUS NtFreeVirtualMemory(HANDLE ProcessHandle, PPVOID BaseAddress,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtProtectVirtualMemory(HANDLE ProcessHandle,
-                                       PPVOID BaseAddress, PSIZE_T RegionSize,
-                                       ULONG NewProtect, PULONG OldProtect) {
-    static syscall_ctx_invoke ctx =
-        syscall_ctx_invoke("NtProtectVirtualMemory");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtProtectVirtualMemory");
-    }
-    return ((cfn(HANDLE, PPVOID, PSIZE_T, ULONG, PULONG) -> NTSTATUS)(
-        ctx.target))(ProcessHandle, BaseAddress, RegionSize, NewProtect,
-                     OldProtect);
+	PPVOID BaseAddress, PSIZE_T RegionSize,
+	ULONG NewProtect, PULONG OldProtect) {
+	static syscall_ctx_invoke ctx =
+	syscall_ctx_invoke("NtProtectVirtualMemory");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtProtectVirtualMemory");
+	}
+	return ((cfn(HANDLE, PPVOID, PSIZE_T, ULONG, PULONG) -> NTSTATUS)(
+			ctx.target))(ProcessHandle, BaseAddress, RegionSize, NewProtect,
+		OldProtect);
 }
 
 // ===================================================================
@@ -227,11 +227,11 @@ public NTSTATUS NtProtectVirtualMemory(HANDLE ProcessHandle,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtClose(HANDLE Handle) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtClose");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtClose");
-    }
-    return ((cfn(HANDLE) -> NTSTATUS)(ctx.target))(Handle);
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtClose");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtClose");
+	}
+	return ((cfn(HANDLE) -> NTSTATUS)(ctx.target))(Handle);
 }
 
 /**
@@ -253,17 +253,17 @@ public NTSTATUS NtClose(HANDLE Handle) {
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
-                            PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
-                            PVOID Buffer, ULONG Length,
-                            PLARGE_INTEGER ByteOffset, PULONG Key) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtWriteFile");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtWriteFile");
-    }
-    return ((cfn(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG,
-                 PLARGE_INTEGER, PULONG) -> NTSTATUS)(ctx.target))(
-        FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer,
-        Length, ByteOffset, Key);
+	PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
+	PVOID Buffer, ULONG Length,
+	PLARGE_INTEGER ByteOffset, PULONG Key) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtWriteFile");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtWriteFile");
+	}
+	return ((cfn(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG,
+				PLARGE_INTEGER, PULONG) -> NTSTATUS)(ctx.target))(
+		FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer,
+		Length, ByteOffset, Key);
 }
 
 /**
@@ -282,17 +282,17 @@ public NTSTATUS NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtReadFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
-                           PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
-                           PVOID Buffer, ULONG Length,
-                           PLARGE_INTEGER ByteOffset, PULONG Key) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtReadFile");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtReadFile");
-    }
-    return ((cfn(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG,
-                 PLARGE_INTEGER, PULONG) -> NTSTATUS)(ctx.target))(
-        FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer,
-        Length, ByteOffset, Key);
+	PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
+	PVOID Buffer, ULONG Length,
+	PLARGE_INTEGER ByteOffset, PULONG Key) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtReadFile");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtReadFile");
+	}
+	return ((cfn(HANDLE, HANDLE, PVOID, PVOID, PIO_STATUS_BLOCK, PVOID, ULONG,
+				PLARGE_INTEGER, PULONG) -> NTSTATUS)(ctx.target))(
+		FileHandle, Event, ApcRoutine, ApcContext, IoStatusBlock, Buffer,
+		Length, ByteOffset, Key);
 }
 
 /**
@@ -303,13 +303,13 @@ public NTSTATUS NtReadFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtFlushBuffersFile(HANDLE FileHandle,
-                                   PIO_STATUS_BLOCK IoStatusBlock) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtFlushBuffersFile");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtFlushBuffersFile");
-    }
-    return ((cfn(HANDLE, PIO_STATUS_BLOCK) -> NTSTATUS)(ctx.target))(
-        FileHandle, IoStatusBlock);
+	PIO_STATUS_BLOCK IoStatusBlock) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtFlushBuffersFile");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtFlushBuffersFile");
+	}
+	return ((cfn(HANDLE, PIO_STATUS_BLOCK) -> NTSTATUS)(ctx.target))(
+		FileHandle, IoStatusBlock);
 }
 
 // ===================================================================
@@ -325,13 +325,13 @@ public NTSTATUS NtFlushBuffersFile(HANDLE FileHandle,
  * @param SourceString      Cadena UTF-16 NUL-terminada, o null.
  */
 public void RtlInitUnicodeString(PUNICODE_STRING DestinationString,
-                                 PWSTR SourceString) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("RtlInitUnicodeString");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("RtlInitUnicodeString");
-    }
-    ((cfn(PUNICODE_STRING, PWSTR) -> void)(ctx.target))(DestinationString,
-                                                        SourceString);
+	PWSTR SourceString) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("RtlInitUnicodeString");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("RtlInitUnicodeString");
+	}
+	((cfn(PUNICODE_STRING, PWSTR) -> void)(ctx.target))(DestinationString,
+		SourceString);
 }
 
 /**
@@ -345,17 +345,17 @@ public void RtlInitUnicodeString(PUNICODE_STRING DestinationString,
  * @param SecurityDescriptor    Descriptor de seguridad, o null.
  */
 public void InitializeObjectAttributes(POBJECT_ATTRIBUTES InitializedAttributes,
-                                       PUNICODE_STRING ObjectName,
-                                       ULONG Attributes, HANDLE RootDirectory,
-                                       PVOID SecurityDescriptor) {
-    // `Length` debe valer el tamano real de la estructura: la syscall lo usa
-    // para validar la version del descriptor.  Se toma con sizeof, no a mano.
-    (*InitializedAttributes).Length = (u32) sizeof<OBJECT_ATTRIBUTES>();
-    (*InitializedAttributes).RootDirectory = RootDirectory;
-    (*InitializedAttributes).ObjectName = ObjectName;
-    (*InitializedAttributes).Attributes = Attributes;
-    (*InitializedAttributes).SecurityDescriptor = SecurityDescriptor;
-    (*InitializedAttributes).SecurityQualityOfService = (void*) 0;
+	PUNICODE_STRING ObjectName,
+	ULONG Attributes, HANDLE RootDirectory,
+	PVOID SecurityDescriptor) {
+	// `Length` debe valer el tamano real de la estructura: la syscall lo usa
+	// para validar la version del descriptor.  Se toma con sizeof, no a mano.
+	(*InitializedAttributes).Length = (u32) sizeof<OBJECT_ATTRIBUTES>();
+	(*InitializedAttributes).RootDirectory = RootDirectory;
+	(*InitializedAttributes).ObjectName = ObjectName;
+	(*InitializedAttributes).Attributes = Attributes;
+	(*InitializedAttributes).SecurityDescriptor = SecurityDescriptor;
+	(*InitializedAttributes).SecurityQualityOfService = (void *) 0;
 }
 
 /**
@@ -378,22 +378,22 @@ public void InitializeObjectAttributes(POBJECT_ATTRIBUTES InitializedAttributes,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
-                             POBJECT_ATTRIBUTES ObjectAttributes,
-                             PIO_STATUS_BLOCK IoStatusBlock,
-                             PLARGE_INTEGER AllocationSize,
-                             ULONG FileAttributes, ULONG ShareAccess,
-                             ULONG CreateDisposition, ULONG CreateOptions,
-                             PVOID EaBuffer, ULONG EaLength) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtCreateFile");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtCreateFile");
-    }
-    return ((cfn(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
-                 PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG)
-                 -> NTSTATUS)(ctx.target))(
-        FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock,
-        AllocationSize, FileAttributes, ShareAccess, CreateDisposition,
-        CreateOptions, EaBuffer, EaLength);
+	POBJECT_ATTRIBUTES ObjectAttributes,
+	PIO_STATUS_BLOCK IoStatusBlock,
+	PLARGE_INTEGER AllocationSize,
+	ULONG FileAttributes, ULONG ShareAccess,
+	ULONG CreateDisposition, ULONG CreateOptions,
+	PVOID EaBuffer, ULONG EaLength) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtCreateFile");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtCreateFile");
+	}
+	return ((cfn(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+				PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG)
+			-> NTSTATUS)(ctx.target))(
+		FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock,
+		AllocationSize, FileAttributes, ShareAccess, CreateDisposition,
+		CreateOptions, EaBuffer, EaLength);
 }
 
 /**
@@ -409,15 +409,15 @@ public NTSTATUS NtCreateFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
  * @return STATUS_SUCCESS (0), o un NTSTATUS negativo.
  */
 public NTSTATUS NtOpenFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
-                           POBJECT_ATTRIBUTES ObjectAttributes,
-                           PIO_STATUS_BLOCK IoStatusBlock, ULONG ShareAccess,
-                           ULONG OpenOptions) {
-    static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtOpenFile");
-    if (ctx.target == null) {
-        ctx.target = ctx.resolve_method("NtOpenFile");
-    }
-    return ((cfn(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
-                 ULONG, ULONG) -> NTSTATUS)(ctx.target))(
-        FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, ShareAccess,
-        OpenOptions);
+	POBJECT_ATTRIBUTES ObjectAttributes,
+	PIO_STATUS_BLOCK IoStatusBlock, ULONG ShareAccess,
+	ULONG OpenOptions) {
+	static syscall_ctx_invoke ctx = syscall_ctx_invoke("NtOpenFile");
+	if (ctx.target == null) {
+		ctx.target = ctx.resolve_method("NtOpenFile");
+	}
+	return ((cfn(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+				ULONG, ULONG) -> NTSTATUS)(ctx.target))(
+		FileHandle, DesiredAccess, ObjectAttributes, IoStatusBlock, ShareAccess,
+		OpenOptions);
 }

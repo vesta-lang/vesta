@@ -19,8 +19,8 @@ namespace std.os.windows;
  */
 
 import std.windows only BOOL, DWORD, UINT, HANDLE, LPCVOID, LPDWORD,
-                        LPOVERLAPPED, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
-                        STD_ERROR_HANDLE;
+LPOVERLAPPED, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+STD_ERROR_HANDLE;
 
 /**
  * @brief Los tres flujos estandar, con el valor que les da Windows.
@@ -29,18 +29,18 @@ import std.windows only BOOL, DWORD, UINT, HANDLE, LPCVOID, LPDWORD,
  * suyos para que la capa portable no tenga que preguntar cual es cual.
  */
 public enum Stream : DWORD {
-    stdin  = STD_INPUT_HANDLE,
-    stdout = STD_OUTPUT_HANDLE,
-    stderr = STD_ERROR_HANDLE
+	stdin  = STD_INPUT_HANDLE,
+	stdout = STD_OUTPUT_HANDLE,
+	stderr = STD_ERROR_HANDLE
 }
 
 extern "kernel32.dll" {
-    fn ExitProcess(UINT uExitCode) -> VOID;
-    fn GetStdHandle(DWORD nStdHandle) -> HANDLE;
-    fn WriteFile(HANDLE hFile, LPCVOID lpBuffer,
-                 DWORD nNumberOfBytesToWrite,
-                 LPDWORD lpNumberOfBytesWritten,
-                 LPOVERLAPPED lpOverlapped) -> BOOL;
+	fn ExitProcess(UINT uExitCode) -> VOID;
+	fn GetStdHandle(DWORD nStdHandle) -> HANDLE;
+	fn WriteFile(HANDLE hFile, LPCVOID lpBuffer,
+		DWORD nNumberOfBytesToWrite,
+		LPDWORD lpNumberOfBytesWritten,
+		LPOVERLAPPED lpOverlapped) -> BOOL;
 }
 
 /**
@@ -48,7 +48,7 @@ extern "kernel32.dll" {
  * @param uExitCode Codigo de salida.
  */
 public void exit(UINT uExitCode) {
-    ExitProcess(uExitCode);
+	ExitProcess(uExitCode);
 }
 
 /**
@@ -57,7 +57,7 @@ public void exit(UINT uExitCode) {
  * @return El manejador.
  */
 public HANDLE get_std_handle(DWORD nStdHandle) {
-    return GetStdHandle(nStdHandle);
+	return GetStdHandle(nStdHandle);
 }
 
 /**
@@ -76,9 +76,9 @@ public HANDLE get_std_handle(DWORD nStdHandle) {
  * @return Distinto de cero si fue bien.
  */
 public BOOL write(HANDLE hFile, LPCVOID lpBuffer,
-                  DWORD nNumberOfBytesToWrite,
-                  LPDWORD lpNumberOfBytesWritten,
-                  LPOVERLAPPED lpOverlapped) {
-    return WriteFile(hFile, lpBuffer, nNumberOfBytesToWrite,
-                     lpNumberOfBytesWritten, lpOverlapped);
+	DWORD nNumberOfBytesToWrite,
+	LPDWORD lpNumberOfBytesWritten,
+	LPOVERLAPPED lpOverlapped) {
+	return WriteFile(hFile, lpBuffer, nNumberOfBytesToWrite,
+		lpNumberOfBytesWritten, lpOverlapped);
 }

@@ -100,7 +100,7 @@ public concept PackedAdd<T> = is_numeric<T>();
 /// NEON.  Para multiplicar enteros de 64 bits hay que hacerlo de uno en uno, y
 /// entonces esta libreria no es lo que se busca.
 public concept PackedMul<T> =
-    is_float<T>() || (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4));
+is_float<T>() || (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4));
 
 /// Existe division empaquetada.  Solo flotantes: la division entera no la
 /// tiene ninguna de las dos maquinas.
@@ -149,12 +149,12 @@ public concept PackedSum<T> = is_numeric<T>() && sizeof<T>() >= 4;
  * @param b Segundo sumando.
  * @param n Numero de ELEMENTOS, no de bytes.
  */
-public void add<T: PackedAdd>(T* dst, T* a, T* b, usize n) {
-    // Un solo enunciado en el cuerpo y una sola operacion: es la forma exacta
-    // que el reconocedor busca.  Partirlo en dos lineas lo dejaria fuera.
-    for (usize i = 0; i < n; i++) {
-        dst[i] = a[i] + b[i];
-    }
+public void add < T : PackedAdd > (T * dst, T * a, T * b, usize n) {
+	// Un solo enunciado en el cuerpo y una sola operacion: es la forma exacta
+	// que el reconocedor busca.  Partirlo en dos lineas lo dejaria fuera.
+	for (usize i = 0; i < n; i++) {
+		dst[i] = a[i] + b[i];
+	}
 }
 
 /**
@@ -165,10 +165,10 @@ public void add<T: PackedAdd>(T* dst, T* a, T* b, usize n) {
  * @param b Sustraendo.
  * @param n Numero de elementos.
  */
-public void sub<T: PackedAdd>(T* dst, T* a, T* b, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] = a[i] - b[i];
-    }
+public void sub < T : PackedAdd > (T * dst, T * a, T * b, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] = a[i] - b[i];
+	}
 }
 
 /**
@@ -179,10 +179,10 @@ public void sub<T: PackedAdd>(T* dst, T* a, T* b, usize n) {
  * @param b Segundo factor.
  * @param n Numero de elementos.
  */
-public void mul<T: PackedMul>(T* dst, T* a, T* b, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] = a[i] * b[i];
-    }
+public void mul < T : PackedMul > (T * dst, T * a, T * b, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] = a[i] * b[i];
+	}
 }
 
 /**
@@ -198,10 +198,10 @@ public void mul<T: PackedMul>(T* dst, T* a, T* b, usize n) {
  * @param b Divisor.
  * @param n Numero de elementos.
  */
-public void div<T: PackedDiv>(T* dst, T* a, T* b, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] = a[i] / b[i];
-    }
+public void div < T : PackedDiv > (T * dst, T * a, T * b, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] = a[i] / b[i];
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -216,12 +216,12 @@ public void div<T: PackedDiv>(T* dst, T* a, T* b, usize n) {
  * @param k El mismo sumando para todos los elementos.
  * @param n Numero de elementos.
  */
-public void add_scalar<T: PackedScalarAdd>(T* dst, T* a, T k, usize n) {
-    // `k` no depende del indice, asi que se reparte a todos los carriles UNA
-    // vez, fuera del bucle; dentro solo queda la suma.
-    for (usize i = 0; i < n; i++) {
-        dst[i] = a[i] + k;
-    }
+public void add_scalar < T : PackedScalarAdd > (T * dst, T * a, T k, usize n) {
+	// `k` no depende del indice, asi que se reparte a todos los carriles UNA
+	// vez, fuera del bucle; dentro solo queda la suma.
+	for (usize i = 0; i < n; i++) {
+		dst[i] = a[i] + k;
+	}
 }
 
 /**
@@ -232,10 +232,10 @@ public void add_scalar<T: PackedScalarAdd>(T* dst, T* a, T k, usize n) {
  * @param k El mismo factor para todos los elementos.
  * @param n Numero de elementos.
  */
-public void mul_scalar<T: PackedScalarMul>(T* dst, T* a, T k, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] = a[i] * k;
-    }
+public void mul_scalar < T : PackedScalarMul > (T * dst, T * a, T k, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] = a[i] * k;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -249,10 +249,10 @@ public void mul_scalar<T: PackedScalarMul>(T* dst, T* a, T k, usize n) {
  * @param a Segundo sumando.
  * @param n Numero de elementos.
  */
-public void add_into<T: PackedAdd>(T* dst, T* a, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] += a[i];
-    }
+public void add_into < T : PackedAdd > (T * dst, T * a, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] += a[i];
+	}
 }
 
 /**
@@ -262,10 +262,10 @@ public void add_into<T: PackedAdd>(T* dst, T* a, usize n) {
  * @param a Sustraendo.
  * @param n Numero de elementos.
  */
-public void sub_into<T: PackedAdd>(T* dst, T* a, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] -= a[i];
-    }
+public void sub_into < T : PackedAdd > (T * dst, T * a, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] -= a[i];
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -279,10 +279,10 @@ public void sub_into<T: PackedAdd>(T* dst, T* a, usize n) {
  * @param a Origen.
  * @param n Numero de elementos.
  */
-public void negate<T: PackedNegate>(T* dst, T* a, usize n) {
-    for (usize i = 0; i < n; i++) {
-        dst[i] = -a[i];
-    }
+public void negate < T : PackedNegate > (T * dst, T * a, usize n) {
+	for (usize i = 0; i < n; i++) {
+		dst[i] = -a[i];
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -307,10 +307,10 @@ public void negate<T: PackedNegate>(T* dst, T* a, usize n) {
  * @param n Numero de elementos.
  * @return La suma de los @p n elementos.
  */
-public T sum<T: PackedSum>(T* a, usize n) {
-    T acc = 0;
-    for (usize i = 0; i < n; i++) {
-        acc = acc + a[i];
-    }
-    return acc;
+public T sum < T : PackedSum > (T * a, usize n) {
+	T acc = 0;
+	for (usize i = 0; i < n; i++) {
+		acc = acc + a[i];
+	}
+	return acc;
 }

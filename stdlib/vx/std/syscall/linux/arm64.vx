@@ -11,14 +11,14 @@ import std.types only size_t;
  * primeros N registros de esta firma e INLINA la llamada.
  */
 public size_t invoke(register("x8") syscall_id id,
-                     register("x0") size_t a1,
-                     register("x1") size_t a2,
-                     register("x2") size_t a3,
-                     register("x3") size_t a4,
-                     register("x4") size_t a5,
-                     register("x5") size_t a6) {
-    asm { svc 0 }
-    return (size_t) a1;   // X0 tras el trap = resultado
+	register("x0") size_t a1,
+	register("x1") size_t a2,
+	register("x2") size_t a3,
+	register("x3") size_t a4,
+	register("x4") size_t a5,
+	register("x5") size_t a6) {
+	asm { svc 0 }
+	return (size_t) a1; // X0 tras el trap = resultado
 }
 
 public const syscall_id _NR_io_setup               = 0;

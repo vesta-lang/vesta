@@ -17,7 +17,7 @@ public i64 imin3(i64 a, i64 b, i64 c) { return imin(imin(a, b), c); }
 
 /// Restringe x al rango [lo, hi] (enteros).
 public i64 iclamp(i64 x, i64 lo, i64 hi) {
-    if (x < lo) { return lo; }
-    if (x > hi) { return hi; }
-    return x;
+	if (x < lo) { return lo; }
+	if (x > hi) { return hi; }
+	return x;
 }

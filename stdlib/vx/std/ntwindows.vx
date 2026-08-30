@@ -27,7 +27,7 @@ public typedef u16 USHORT;
 /// Octeto sin signo.
 public typedef u8 UCHAR;
 /// Puntero generico (void *).
-public typedef void* PVOID;
+public typedef void *PVOID;
 /// Handle opaco del kernel.  No es un puntero a datos que nadie vaya a
 /// dereferenciar: es un valor que solo el kernel interpreta, y
 /// `NtCurrentProcess` devuelve un pseudo-handle (-1) que ni siquiera es una
@@ -40,13 +40,13 @@ public typedef uintptr HANDLE;
  * dentro del grupo.  Lo rellena NtGetCurrentProcessorNumberEx.
  */
 public struct PROCESSOR_NUMBER {
-    USHORT Group;
-    UCHAR  Number;
-    UCHAR  Reserved;
+	USHORT Group;
+	UCHAR Number;
+	UCHAR Reserved;
 };
 
 /// Puntero a PROCESSOR_NUMBER (parametro [out] de las syscalls).
-public typedef PROCESSOR_NUMBER* PPROCESSOR_NUMBER;
+public typedef PROCESSOR_NUMBER * PPROCESSOR_NUMBER;
 
 /**
  * Entero sin signo del ancho de un puntero (SIZE_T de winnt.h).
@@ -57,23 +57,23 @@ public typedef PROCESSOR_NUMBER* PPROCESSOR_NUMBER;
  */
 public typedef size_t SIZE_T;
 /// Puntero a SIZE_T (parametro in/out de las syscalls de memoria).
-public typedef SIZE_T* PSIZE_T;
+public typedef SIZE_T * PSIZE_T;
 /// Direccion de entrada/salida (`PVOID *` del API): el kernel la lee como
 /// sugerencia y la reescribe con la que concede.  Es una DIRECCION, no un
 /// puntero a datos, asi que se expresa con el tipo de direcciones del
 /// lenguaje.  Los headers de C no distinguen los dos usos porque solo tienen
 /// UN tipo de puntero; Vesta si, y la stdlib absorbe la diferencia para que el
 /// codigo de usuario no tenga que castear en cada llamada.
-public typedef uintptr* PPVOID;
+public typedef uintptr * PPVOID;
 /// Puntero a HANDLE (parametro [out] de las syscalls que abren objetos).
-public typedef HANDLE* PHANDLE;
+public typedef HANDLE * PHANDLE;
 /// Puntero a ULONG (p.ej. el `OldProtect` de NtProtectVirtualMemory).
-public typedef ULONG* PULONG;
+public typedef ULONG * PULONG;
 /// Entero con signo de 64 bits (LARGE_INTEGER: offsets de fichero).
 public typedef i64 LARGE_INTEGER;
 /// Puntero a LARGE_INTEGER.  Opcional en las syscalls de I/O (null = posicion
 /// actual del fichero).
-public typedef LARGE_INTEGER* PLARGE_INTEGER;
+public typedef LARGE_INTEGER * PLARGE_INTEGER;
 
 /**
  * Resultado de una operacion de I/O de la NT API.
@@ -83,12 +83,12 @@ public typedef LARGE_INTEGER* PLARGE_INTEGER;
  * (16 bytes en x86-64).  El codigo de estado son sus 32 bits bajos.
  */
 public struct IO_STATUS_BLOCK {
-    PVOID  Status;
-    SIZE_T Information;   ///< Bytes transferidos por la operacion.
+	PVOID Status;
+	SIZE_T Information; ///< Bytes transferidos por la operacion.
 };
 
 /// Puntero a IO_STATUS_BLOCK (parametro [out] de las syscalls de I/O).
-public typedef IO_STATUS_BLOCK* PIO_STATUS_BLOCK;
+public typedef IO_STATUS_BLOCK * PIO_STATUS_BLOCK;
 
 /// Codigo de exito de la NT API.  Un NTSTATUS < 0 es error.
 public const NTSTATUS STATUS_SUCCESS = 0;
@@ -107,7 +107,7 @@ public const NTSTATUS STATUS_SUCCESS = 0;
 public typedef u32 ACCESS_MASK;
 
 /// Puntero a cadena UTF-16 (PWSTR de ntdef.h).
-public typedef u16* PWSTR;
+public typedef u16 *PWSTR;
 
 /**
  * Cadena CONTADA UTF-16 de la NT API.
@@ -117,13 +117,13 @@ public typedef u16* PWSTR;
  * caracteres, y `Length` NO incluye el terminador.
  */
 public struct UNICODE_STRING {
-    USHORT Length;
-    USHORT MaximumLength;
-    PWSTR  Buffer;
+	USHORT Length;
+	USHORT MaximumLength;
+	PWSTR Buffer;
 };
 
 /// Puntero a UNICODE_STRING.
-public typedef UNICODE_STRING* PUNICODE_STRING;
+public typedef UNICODE_STRING * PUNICODE_STRING;
 
 /**
  * Descriptor del objeto sobre el que actua una syscall que abre o crea
@@ -131,16 +131,16 @@ public typedef UNICODE_STRING* PUNICODE_STRING;
  * -- lo rellena InitializeObjectAttributes.
  */
 public struct OBJECT_ATTRIBUTES {
-    ULONG           Length;
-    HANDLE          RootDirectory;
-    PUNICODE_STRING ObjectName;
-    ULONG           Attributes;
-    PVOID           SecurityDescriptor;
-    PVOID           SecurityQualityOfService;
+	ULONG Length;
+	HANDLE RootDirectory;
+	PUNICODE_STRING ObjectName;
+	ULONG Attributes;
+	PVOID SecurityDescriptor;
+	PVOID SecurityQualityOfService;
 };
 
 /// Puntero a OBJECT_ATTRIBUTES.
-public typedef OBJECT_ATTRIBUTES* POBJECT_ATTRIBUTES;
+public typedef OBJECT_ATTRIBUTES * POBJECT_ATTRIBUTES;
 
 // -------------------------------------------------------------------
 // Constantes propias de la NT API (ntifs.h).  Las de winnt.h que estas
@@ -149,25 +149,25 @@ public typedef OBJECT_ATTRIBUTES* POBJECT_ATTRIBUTES;
 // -------------------------------------------------------------------
 
 /// Comparar el nombre del objeto sin distinguir mayusculas.
-public const ULONG OBJ_CASE_INSENSITIVE = 0x40;
+public const ULONG OBJ_CASE_INSENSITIVE         = 0x40;
 
 /// CreateDisposition: reemplazar si existe, crear si no.
-public const ULONG FILE_SUPERSEDE = 0;
+public const ULONG FILE_SUPERSEDE               = 0;
 /// CreateDisposition: abrir; falla si no existe.
-public const ULONG FILE_OPEN = 1;
+public const ULONG FILE_OPEN                    = 1;
 /// CreateDisposition: crear; falla si ya existe.
-public const ULONG FILE_CREATE = 2;
+public const ULONG FILE_CREATE                  = 2;
 /// CreateDisposition: abrir si existe, crear si no.
-public const ULONG FILE_OPEN_IF = 3;
+public const ULONG FILE_OPEN_IF                 = 3;
 /// CreateDisposition: abrir y truncar; falla si no existe.
-public const ULONG FILE_OVERWRITE = 4;
+public const ULONG FILE_OVERWRITE               = 4;
 /// CreateDisposition: abrir y truncar si existe, crear si no.
-public const ULONG FILE_OVERWRITE_IF = 5;
+public const ULONG FILE_OVERWRITE_IF            = 5;
 
 /// CreateOptions: el objeto es un directorio.
-public const ULONG FILE_DIRECTORY_FILE = 0x00000001;
+public const ULONG FILE_DIRECTORY_FILE          = 0x00000001;
 /// CreateOptions: I/O sincrona.  Con ella, NtReadFile/NtWriteFile admiten
 /// ByteOffset null (usan la posicion del fichero) y no hay que esperar evento.
 public const ULONG FILE_SYNCHRONOUS_IO_NONALERT = 0x00000020;
 /// CreateOptions: el objeto NO es un directorio.
-public const ULONG FILE_NON_DIRECTORY_FILE = 0x00000040;
+public const ULONG FILE_NON_DIRECTORY_FILE      = 0x00000040;

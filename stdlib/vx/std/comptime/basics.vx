@@ -20,14 +20,14 @@ namespace std.comptime.basics;
 /// @note The captured text is not parsed or evaluated by the compiler before
 /// being passed to the macro.
 /* @Macro */ public comptime string source(expr code) {
-    // no usamos @Macro por que esto provoca que el codigo retornado
-    // se inyecte lo cual no nos interesa, solo queremos string-ficar el
-    // codigo o contenido pasado a esta funcion para que otras las procesen.
-    // Devuelve el texto CRUDO (sin comillas): asi el resultado puede
-    // spliceearse como codigo Vesta real (p.ej. construir el cuerpo de un
-    // lambda), no como un string literal.  El IDE resalta el argumento como
-    // codigo en lugar de un string opaco.
-    return code;
+	// no usamos @Macro por que esto provoca que el codigo retornado
+	// se inyecte lo cual no nos interesa, solo queremos string-ficar el
+	// codigo o contenido pasado a esta funcion para que otras las procesen.
+	// Devuelve el texto CRUDO (sin comillas): asi el resultado puede
+	// spliceearse como codigo Vesta real (p.ej. construir el cuerpo de un
+	// lambda), no como un string literal.  El IDE resalta el argumento como
+	// codigo en lugar de un string opaco.
+	return code;
 }
 
 /// @brief Inyecta un string de codigo Vesta como una expresion.
@@ -40,6 +40,7 @@ namespace std.comptime.basics;
 ///
 /// A diferencia de `source` (que CAPTURA el texto de su argumento), `inject`
 /// EVALUA su argumento a un string y lo inyecta como codigo.
-@Macro public comptime string inject(string code) {
-    return code;
+@Macro
+public comptime string inject(string code) {
+	return code;
 }

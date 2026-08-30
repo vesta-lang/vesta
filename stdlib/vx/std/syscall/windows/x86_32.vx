@@ -16,7 +16,7 @@ import std.types only size_t, usize;
  * @Target("arch:x86 && os:windows"), que no es el target activo.
  */
 public size_t invoke(syscall_id id) {
-    return 0;
+	return 0;
 }
 
 /**
@@ -30,5 +30,5 @@ public size_t invoke(syscall_id id) {
  * TODO: implementar el paseo real de ntdll de 32 bits (stub passthrough).
  */
 public usize resolve(usize ctx) {
-    return 0;
+	return 0;
 }

@@ -1,15 +1,3 @@
 namespace std.comptime;
 
 public import std.comptime.basics;
-// std.comptime.literal se importa por PATH DIRECTO, con la lista de simbolos:
-//
-//     import std.comptime.literal only IntLit, parse_int_lit;
-//
-// Dos razones, ambas comprobadas (2026-08-02):
-//   - un `import` de namespace completo no inyecta los METODOS de los structs
-//     del modulo: el tipo llega, pero usarlo da "IntLit no tiene un metodo
-//     word".  Con la lista de simbolos si funciona.
-//   - re-exportarlo desde aqui (`public import ... only ...`) no propaga los
-//     simbolos a quien importe `std.comptime`.
-// Al cerrarse la ruta de import por namespace, esto pasa a ser un
-// `public import std.comptime.literal;` normal.

@@ -47,7 +47,7 @@ import "vx_async" only vasync_yield, vasync_cur_fiber;
 // helper @Target'd de Windows lo llama -> el dead-strip elimina el extern en
 // los binarios que no son Windows.
 extern "kernel32.dll" {
-    fn GetCurrentThreadId() -> u32;
+	fn GetCurrentThreadId() -> u32;
 }
 
 /**
@@ -56,7 +56,7 @@ extern "kernel32.dll" {
  */
 @Target("os:windows")
 i64 __vsync_tid_raw() {
-    return (i64)GetCurrentThreadId();
+	return (i64)GetCurrentThreadId();
 }
 
 /**
@@ -65,9 +65,9 @@ i64 __vsync_tid_raw() {
  */
 @Target("!os:windows")
 i64 __vsync_tid_raw() {
-    register("rax") i64 rax_t = 186; // SYS_gettid (x86-64)
-    asm volatile { syscall };
-    return rax_t;
+	register("rax") i64 rax_t = 186; // SYS_gettid (x86-64)
+	asm volatile { syscall };
+	return rax_t;
 }
 
 /**
@@ -81,7 +81,7 @@ i64 __vsync_tid_raw() {
  *       thread-local (thread_local emite TLS nativo en AOT).
  */
 i64 __vsync_tid() {
-    return __vsync_tid_raw();
+	return __vsync_tid_raw();
 }
 
 // ---------------------------------------------------------------------------
@@ -98,11 +98,11 @@ i64 __vsync_tid() {
  *       rax queda con el valor leido (old) tanto en exito como en fallo.
  */
 i64 __vsync_cas64(i64* addr, i64 expected, i64 desired) {
-    register("rsi") i64* a = addr;     // puntero destino
-    register("rax") i64 ex = expected; // in: expected / out: old value
-    register("rdx") i64 de = desired;  // valor a escribir si coincide
-    asm volatile { lock cmpxchg [rsi], rdx };
-    return ex; // rax = valor antiguo
+	register("rsi") i64 *a  = addr;     // puntero destino
+	register("rax") i64  ex = expected; // in: expected / out: old value
+	register("rdx") i64  de = desired;  // valor a escribir si coincide
+	asm volatile { lock cmpxchg [rsi], rdx };
+	return ex; // rax = valor antiguo
 }
 
 /**
@@ -112,7 +112,7 @@ i64 __vsync_cas64(i64* addr, i64 expected, i64 desired) {
  * @note En x86-64 un `mov` alineado de 8 bytes ya es atomico.
  */
 i64 __vsync_load64(i64* addr) {
-    return *addr;
+	return *addr;
 }
 
 /**
@@ -121,7 +121,7 @@ i64 __vsync_load64(i64* addr) {
  *       En el modelo cooperativo este camino no se alcanza.
  */
 void __vsync_pause() {
-    asm volatile { pause };
+	asm volatile { pause };
 }
 
 // ---------------------------------------------------------------------------
@@ -135,7 +135,7 @@ void __vsync_pause() {
  * @return `(owner << 16) | (depth & 0xFFFF)`.
  */
 i64 __vsync_make(i64 owner, i64 depth) {
-    return (owner << 16) | (depth & 0xFFFF);
+	return (owner << 16) | (depth & 0xFFFF);
 }
 
 /**
@@ -144,7 +144,7 @@ i64 __vsync_make(i64 owner, i64 depth) {
  * @return owner_tid (0 = libre).
  */
 i64 __vsync_owner(i64 word) {
-    return ((u64)word) >> 16; // shift logico (u64 zero-extiende)
+	return ((u64)word) >> 16; // shift logico (u64 zero-extiende)
 }
 
 /**
@@ -153,7 +153,7 @@ i64 __vsync_owner(i64 word) {
  * @return lock_depth (0 = libre).
  */
 i64 __vsync_depth(i64 word) {
-    return word & 0xFFFF;
+	return word & 0xFFFF;
 }
 
 /**
@@ -170,7 +170,7 @@ i64 __vsync_depth(i64 word) {
  *       caso en __vx_monenter.
  */
 i64 __vsync_self() {
-    return (__vsync_tid() << 16) | vasync_cur_fiber();
+	return (__vsync_tid() << 16) | vasync_cur_fiber();
 }
 
 // ---------------------------------------------------------------------------
@@ -190,41 +190,41 @@ i64 __vsync_self() {
  * no se alcanza.
  */
 void __vx_monenter(i64* obj) {
-    i64* word_addr = obj + 2; // obj + 16 bytes
-    i64 self = __vsync_self(); // fiber-id+1 (owner en el modelo cooperativo)
-    i64 want1 = __vsync_make(self, 1);
-    // Fast path optimista: monitor libre -> tomarlo con una unica CAS.
-    if (__vsync_cas64(word_addr, 0, want1) == 0) {
-        return; // adquirido sin contienda
-    }
-    // Slow path: reentrada o contienda.
-    while (true) {
-        i64 cur = __vsync_load64(word_addr);
-        i64 depth = __vsync_depth(cur);
-        if (depth == 0) {
-            // Quedo libre entre el fast path y ahora: reintentar tomarlo.
-            if (__vsync_cas64(word_addr, 0, want1) == 0) {
-                return;
-            }
-        } else if (__vsync_owner(cur) == self) {
-            // Reentrante (misma fibra): incrementar la profundidad.
-            i64 want = __vsync_make(self, depth + 1);
-            if (__vsync_cas64(word_addr, cur, want) == cur) {
-                return;
-            }
-        } else {
-            // Contienda REAL: otra fibra posee el monitor.  En el scheduler
-            // cooperativo hay que CEDER (no spin): la fibra duenña solo puede
-            // liberar si el scheduler la corre.  Si estamos en una fibra
-            // (__vasync_current_fiber != 0) cedemos al scheduler; si no (main
-            // sin scheduler) no hay contienda posible -> pause defensivo.
-            if (vasync_cur_fiber() != 0) {
-                vasync_yield();
-            } else {
-                __vsync_pause();
-            }
-        }
-    }
+	i64* word_addr = obj + 2;  // obj + 16 bytes
+	i64  self      = __vsync_self(); // fiber-id+1 (owner en el modelo cooperativo)
+	i64  want1     = __vsync_make(self, 1);
+	// Fast path optimista: monitor libre -> tomarlo con una unica CAS.
+	if (__vsync_cas64(word_addr, 0, want1) == 0) {
+		return; // adquirido sin contienda
+	}
+	// Slow path: reentrada o contienda.
+	while (true) {
+		i64 cur   = __vsync_load64(word_addr);
+		i64 depth = __vsync_depth(cur);
+		if (depth == 0) {
+			// Quedo libre entre el fast path y ahora: reintentar tomarlo.
+			if (__vsync_cas64(word_addr, 0, want1) == 0) {
+				return;
+			}
+		} else if (__vsync_owner(cur) == self) {
+			// Reentrante (misma fibra): incrementar la profundidad.
+			i64 want = __vsync_make(self, depth + 1);
+			if (__vsync_cas64(word_addr, cur, want) == cur) {
+				return;
+			}
+		} else {
+			// Contienda REAL: otra fibra posee el monitor.  En el scheduler
+			// cooperativo hay que CEDER (no spin): la fibra duenña solo puede
+			// liberar si el scheduler la corre.  Si estamos en una fibra
+			// (__vasync_current_fiber != 0) cedemos al scheduler; si no (main
+			// sin scheduler) no hay contienda posible -> pause defensivo.
+			if (vasync_cur_fiber() != 0) {
+				vasync_yield();
+			} else {
+				__vsync_pause();
+			}
+		}
+	}
 }
 
 /**
@@ -235,15 +235,15 @@ void __vx_monenter(i64* obj) {
  * mayor, decrementa la profundidad manteniendo el duenño.
  */
 void __vx_monexit(i64* obj) {
-    i64* word_addr = obj + 2; // obj + 16 bytes
-    i64 cur = __vsync_load64(word_addr);
-    i64 depth = __vsync_depth(cur);
-    if (depth <= 1) {
-        *word_addr = 0; // ultima salida: liberar (release)
-    } else {
-        // Todavia reentrante: decrementar manteniendo el duenño.
-        *word_addr = __vsync_make(__vsync_owner(cur), depth - 1);
-    }
+	i64* word_addr = obj + 2; // obj + 16 bytes
+	i64  cur       = __vsync_load64(word_addr);
+	i64  depth     = __vsync_depth(cur);
+	if (depth <= 1) {
+		*word_addr = 0; // ultima salida: liberar (release)
+	} else {
+		// Todavia reentrante: decrementar manteniendo el duenño.
+		*word_addr = __vsync_make(__vsync_owner(cur), depth - 1);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,7 @@ void __vx_monexit(i64* obj) {
  * @param obj host_ptr al ObjectHeader (palabra de monitor en obj+16).
  */
 public void vx_lock(i64* obj) {
-    __vx_monenter(obj);
+	__vx_monenter(obj);
 }
 
 /**
@@ -266,5 +266,5 @@ public void vx_lock(i64* obj) {
  * @param obj host_ptr al ObjectHeader.
  */
 public void vx_unlock(i64* obj) {
-    __vx_monexit(obj);
+	__vx_monexit(obj);
 }

@@ -35,4 +35,4 @@ public typedef cfn(syscall_id) -> usize invoke_syscall;
  * lo que hace que la llamada indirecta posterior se despache por la via NATIVA
  * en lugar de la de la VM.  Quien lo invoca se encarga de cachear el resultado.
  */
-public typedef cfn(string) -> void* resolve_syscall;
+public typedef cfn(string) -> void *resolve_syscall;

@@ -34,7 +34,7 @@ import std.comptime only inject;
 /// Bits del bitmask que devuelve `cpu_features()`.  Los consulta `memcpy` una
 /// vez por copia; la rama la predice el procesador sin fallar, porque en una
 /// misma maquina siempre sale la misma.
-public const u64 BIT_AVX2 = 1 << 4;
+public const u64 BIT_AVX2    = 1 << 4;
 /// @copydoc BIT_AVX2
 public const u64 BIT_AVX512F = 1 << 7;
 /// @copydoc BIT_AVX2
@@ -42,7 +42,7 @@ public const u64 BIT_AVX512F = 1 << 7;
 /// ERMS: el procesador declara que su `rep movsb` va por lineas de cache.  Sin
 /// este bit, `rep movsb` sigue estando -- es de siempre -- pero es lento en los
 /// tamanos que no son enormes, asi que la diferencia importa.
-public const u64 BIT_ERMS = 1 << 8;
+public const u64 BIT_ERMS    = 1 << 8;
 
 /* --- Presupuesto de registros anchos, por ABI ---------------------------
  *
@@ -62,22 +62,22 @@ public const u64 BIT_ERMS = 1 << 8;
  * OBJETIVO y no del gusto de quien escribe. */
 @Target("!os:windows")
 public enum Budget : i64 {
-    small = 8,
-    medium = 10,
-    big = 14,
+	small  = 8,
+	medium = 10,
+	big    = 14,
 }
 
 /// @copydoc Budget
 @Target("os:windows")
 public enum Budget : i64 {
-    small = 6,
-    medium = 6,
-    big = 8,
+	small  = 6,
+	medium = 6,
+	big    = 8,
 }
 
 /// Lo que el procesador ha dicho que sabe hacer, o 0 si aun no se le ha
 /// preguntado.  Ese 0 no significa "no sabe nada": significa "sin averiguar".
-u64 __rasgos = 0;
+u64  __rasgos         = 0;
 /// Si ya se le pregunto.  Va aparte del valor porque un procesador podria
 /// contestar 0 legitimamente, y entonces el valor no distinguiria los dos
 /// casos.
@@ -96,11 +96,11 @@ bool __rasgos_sabidos = false;
  * @return El bitmask con los BIT_* de arriba.
  */
 public u64 init_cpuid() {
-    if (!__rasgos_sabidos) {
-        __rasgos = cpu_features();
-        __rasgos_sabidos = true;
-    }
-    return __rasgos;
+	if (!__rasgos_sabidos) {
+		__rasgos         = cpu_features();
+		__rasgos_sabidos = true;
+	}
+	return __rasgos;
 }
 
 /**
@@ -131,12 +131,12 @@ public u64 init_cpuid() {
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_solapada(string mn, i64 ancho, i64 bytes, i64 regs) {
-    // Un tramo desde el principio y otro que termina en el final; se solapan
-    // por el medio, que es lo que ahorra la cola.  Cada tramo reparte sus
-    // accesos como cualquier otro bloque: cargas primero, y en tandas si no
-    // caben en el presupuesto.
-    return gen_bloque(mn, mn, ancho, bytes, "d", "s", regs) +
-           gen_bloque(mn, mn, ancho, bytes, "fd", "fs", regs);
+	// Un tramo desde el principio y otro que termina en el final; se solapan
+	// por el medio, que es lo que ahorra la cola.  Cada tramo reparte sus
+	// accesos como cualquier otro bloque: cargas primero, y en tandas si no
+	// caben en el presupuesto.
+	return gen_bloque(mn, mn, ancho, bytes, "d", "s", regs) +
+	gen_bloque(mn, mn, ancho, bytes, "fd", "fs", regs);
 }
 
 /**
@@ -175,21 +175,21 @@ comptime string gen_solapada(string mn, i64 ancho, i64 bytes, i64 regs) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_small_sse2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        xmm v0,
-        xmm v1,
-        xmm v2,
-        xmm v3,
-    ) {
+public void memcpy_small_sse2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		xmm v0,
+		xmm v1,
+		xmm v2,
+		xmm v3,
+	) {
         inject(gen_solapada("movdqu", 16, 64, 4))
-    }
+	}
 }
 
 /**
@@ -211,19 +211,19 @@ public void memcpy_small_sse2(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_small_avx2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        ymm v0,
-        ymm v1,
-    ) {
+public void memcpy_small_avx2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		ymm v0,
+		ymm v1,
+	) {
         inject(gen_solapada("vmovdqu", 32, 64, 2))
-    }
+	}
 }
 
 /**
@@ -245,18 +245,18 @@ public void memcpy_small_avx2(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_small_avx512(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        zmm v0,
-    ) {
+public void memcpy_small_avx512(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		zmm v0,
+	) {
         inject(gen_solapada("vmovdqu64", 64, 64, 1))
-    }
+	}
 }
 
 /**
@@ -290,21 +290,21 @@ public void memcpy_small_avx512(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_small_sse2_aligned(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        xmm v0,
-        xmm v1,
-        xmm v2,
-        xmm v3,
-    ) {
+public void memcpy_small_sse2_aligned(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		xmm v0,
+		xmm v1,
+		xmm v2,
+		xmm v3,
+	) {
         inject(gen_solapada("movdqa", 16, 64, 4))
-    }
+	}
 }
 
 /**
@@ -315,19 +315,19 @@ public void memcpy_small_sse2_aligned(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_small_avx2_aligned(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        ymm v0,
-        ymm v1,
-    ) {
+public void memcpy_small_avx2_aligned(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		ymm v0,
+		ymm v1,
+	) {
         inject(gen_solapada("vmovdqa", 32, 64, 2))
-    }
+	}
 }
 
 /**
@@ -338,18 +338,18 @@ public void memcpy_small_avx2_aligned(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 64;
-    u8* fin_s = src + n - 64;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        zmm v0,
-    ) {
+public void memcpy_small_avx512_aligned(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 64;
+	u8* fin_s = src + n - 64;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		zmm v0,
+	) {
         inject(gen_solapada("vmovdqa64", 64, 64, 1))
-    }
+	}
 }
 
 /**
@@ -379,43 +379,43 @@ public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_bloque(string mnl, string mne, i64 ancho, i64 bytes,
-                           string d, string s, i64 regs) {
-    static_assert(ancho == 16 || ancho == 32 || ancho == 64,
-                  "el ancho tiene que ser el de un registro real: 16, 32 o 64");
-    static_assert(bytes % ancho == 0,
-                  "el bloque tiene que ser multiplo del ancho del registro");
-    static_assert(regs >= 1 && regs <= 16,
-                  "el presupuesto de registros del banco ancho va de 1 a 16");
-    i64 accesos = bytes / ancho;
-    string out = "";
-    // TODAS las cargas primero y TODAS las escrituras despues, cada acceso en
-    // su propio registro.  Alternar carga y escritura sobre un mismo registro
-    // encadenaria cada acceso con el anterior por una dependencia que el
-    // algoritmo no tiene: la copia no necesita haber escrito el bloque 0 para
-    // leer el 1.  Separadas, el procesador puede tener varias lecturas en
-    // vuelo a la vez y las escrituras llegan cuando llegan.
-    //
-    // Si el bloque pide mas accesos que registros hay de presupuesto, se parte
-    // en tandas que quepan.  Dentro de cada tanda se mantiene el reparto
-    // cargas-primero; entre tandas se vuelve a empezar por el registro 0,
-    // porque los de la anterior ya se escribieron.
-    i64 k = 0;
-    while (k < accesos) {
-        i64 n = accesos - k;
-        if (n > regs) {
-            n = regs;
-        }
-        for (i64 i = 0; i < n; i++) {
-            i64 o = (k + i) * ancho;
-            out += "${mnl} v${i}, [${s} + ${o}]\n";
-        }
-        for (i64 i = 0; i < n; i++) {
-            i64 o = (k + i) * ancho;
-            out += "${mne} [${d} + ${o}], v${i}\n";
-        }
-        k += n;
-    }
-    return out;
+	string d, string s, i64 regs) {
+	static_assert(ancho == 16 || ancho == 32 || ancho == 64,
+		"el ancho tiene que ser el de un registro real: 16, 32 o 64");
+	static_assert(bytes % ancho == 0,
+		"el bloque tiene que ser multiplo del ancho del registro");
+	static_assert(regs >= 1 && regs <= 16,
+		"el presupuesto de registros del banco ancho va de 1 a 16");
+	i64    accesos = bytes / ancho;
+	string out     = "";
+	// TODAS las cargas primero y TODAS las escrituras despues, cada acceso en
+	// su propio registro.  Alternar carga y escritura sobre un mismo registro
+	// encadenaria cada acceso con el anterior por una dependencia que el
+	// algoritmo no tiene: la copia no necesita haber escrito el bloque 0 para
+	// leer el 1.  Separadas, el procesador puede tener varias lecturas en
+	// vuelo a la vez y las escrituras llegan cuando llegan.
+	//
+	// Si el bloque pide mas accesos que registros hay de presupuesto, se parte
+	// en tandas que quepan.  Dentro de cada tanda se mantiene el reparto
+	// cargas-primero; entre tandas se vuelve a empezar por el registro 0,
+	// porque los de la anterior ya se escribieron.
+	i64    k       = 0;
+	while (k < accesos) {
+		i64 n = accesos - k;
+		if (n > regs) {
+			n = regs;
+		}
+		for (i64 i = 0; i < n; i++) {
+			i64 o = (k + i) * ancho;
+			out += "${mnl} v${i}, [${s} + ${o}]\n";
+		}
+		for (i64 i = 0; i < n; i++) {
+			i64 o = (k + i) * ancho;
+			out += "${mne} [${d} + ${o}], v${i}\n";
+		}
+		k += n;
+	}
+	return out;
 }
 
 /**
@@ -453,62 +453,62 @@ comptime string gen_bloque(string mnl, string mne, i64 ancho, i64 bytes,
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
-                           i64 regs, i64 adelanto, string cierre) {
-    // El bloque de cada vuelta es justo lo que cabe en el presupuesto: un
-    // acceso por registro.  Asi el tamano de la vuelta no es un numero suelto
-    // que haya que mantener a mano, sale de cuantos registros se pueden gastar.
-    i64 bloque = regs * ancho;
-    i64 accesos = regs;
-    i64 mitad = accesos / 2;
-    string out = "bucle:\n";
-    // Pedir con antelacion lo de vueltas siguientes, si se pide.  Con memoria
-    // FRiA -- una copia de varios MB no cabe en cache -- el procesador va a
-    // buscar cada linea cuando la necesita y espera; pedirla antes solapa esa
-    // espera con el trabajo de esta vuelta.  Con datos ya calientes no aporta
-    // nada, de ahi que sea un parametro y no algo fijo.
-    if (adelanto > 0) {
-        out += "prefetcht0 [s + ${adelanto}]\n";
-    }
-    for (i64 k = 0; k < mitad; k++) {
-        i64 o = k * ancho;
-        out += "${mnl} v${k}, [s + ${o}]\n";
-    }
-    for (i64 k = 0; k < mitad; k++) {
-        i64 o = k * ancho;
-        out += "${mne} [d + ${o}], v${k}\n";
-    }
-    // Los punteros avanzan AQUi, a mitad del bloque, y no al final: asi el
-    // calculo de las direcciones de la vuelta siguiente arranca antes y se
-    // solapa con lo que queda de esta.  Lo que avanza es un bloque COMPLETO
-    // -- no medio, aunque se haga a mitad de la vuelta --, y por eso la
-    // segunda mitad accede con desplazamientos NEGATIVOS: la devuelven al
-    // tramo del bloque original que le faltaba, tocando exactamente los mismos
-    // bytes que si no se hubiera movido nada.
-    out += "add s, ${bloque}\n";
-    out += "add d, ${bloque}\n";
-    for (i64 k = mitad; k < accesos; k++) {
-        i64 o = k * ancho - bloque;
-        out += "${mnl} v${k}, [s + ${o}]\n";
-    }
-    for (i64 k = mitad; k < accesos; k++) {
-        i64 o = k * ancho - bloque;
-        out += "${mne} [d + ${o}], v${k}\n";
-    }
-    out += "cmp s, fs\n";
-    out += "jb bucle\n";
-    // Cola: un bloque igual que termina en el final del rango.
-    /* La cola arranca en `n - bloque`, o sea donde caiga: su alineacion
-     * depende de `n` y no la controla nadie.  Por eso lleva su propio
-     * mnemonico de escritura -- una instruccion que EXIJA alineacion no puede
-     * usarse aqui salvo que el llamante garantice tambien el tamano. */
-    out += gen_bloque(mnl, mne_cola, ancho, bloque, "fd", "fs", regs);
-    // Cierre: `vzeroupper` cuando se han usado registros anchos, `sfence`
-    // cuando las escrituras han sido no temporales.  Va aqui y no en cada
-    // funcion porque es parte del patron, no del cuerpo.
-    if (cierre != "") {
-        out += "${cierre}\n";
-    }
-    return out;
+	i64 regs, i64 adelanto, string cierre) {
+	// El bloque de cada vuelta es justo lo que cabe en el presupuesto: un
+	// acceso por registro.  Asi el tamano de la vuelta no es un numero suelto
+	// que haya que mantener a mano, sale de cuantos registros se pueden gastar.
+	i64    bloque  = regs * ancho;
+	i64    accesos = regs;
+	i64    mitad   = accesos / 2;
+	string out     = "bucle:\n";
+	// Pedir con antelacion lo de vueltas siguientes, si se pide.  Con memoria
+	// FRiA -- una copia de varios MB no cabe en cache -- el procesador va a
+	// buscar cada linea cuando la necesita y espera; pedirla antes solapa esa
+	// espera con el trabajo de esta vuelta.  Con datos ya calientes no aporta
+	// nada, de ahi que sea un parametro y no algo fijo.
+	if (adelanto > 0) {
+		out += "prefetcht0 [s + ${adelanto}]\n";
+	}
+	for (i64 k = 0; k < mitad; k++) {
+		i64 o = k * ancho;
+		out += "${mnl} v${k}, [s + ${o}]\n";
+	}
+	for (i64 k = 0; k < mitad; k++) {
+		i64 o = k * ancho;
+		out += "${mne} [d + ${o}], v${k}\n";
+	}
+	// Los punteros avanzan AQUi, a mitad del bloque, y no al final: asi el
+	// calculo de las direcciones de la vuelta siguiente arranca antes y se
+	// solapa con lo que queda de esta.  Lo que avanza es un bloque COMPLETO
+	// -- no medio, aunque se haga a mitad de la vuelta --, y por eso la
+	// segunda mitad accede con desplazamientos NEGATIVOS: la devuelven al
+	// tramo del bloque original que le faltaba, tocando exactamente los mismos
+	// bytes que si no se hubiera movido nada.
+	out += "add s, ${bloque}\n";
+	out += "add d, ${bloque}\n";
+	for (i64 k = mitad; k < accesos; k++) {
+		i64 o = k * ancho - bloque;
+		out += "${mnl} v${k}, [s + ${o}]\n";
+	}
+	for (i64 k = mitad; k < accesos; k++) {
+		i64 o = k * ancho - bloque;
+		out += "${mne} [d + ${o}], v${k}\n";
+	}
+	out += "cmp s, fs\n";
+	out += "jb bucle\n";
+	// Cola: un bloque igual que termina en el final del rango.
+	/* La cola arranca en `n - bloque`, o sea donde caiga: su alineacion
+	 * depende de `n` y no la controla nadie.  Por eso lleva su propio
+	 * mnemonico de escritura -- una instruccion que EXIJA alineacion no puede
+	 * usarse aqui salvo que el llamante garantice tambien el tamano. */
+	out += gen_bloque(mnl, mne_cola, ancho, bloque, "fd", "fs", regs);
+	// Cierre: `vzeroupper` cuando se han usado registros anchos, `sfence`
+	// cuando las escrituras han sido no temporales.  Va aqui y no en cada
+	// funcion porque es parte del patron, no del cuerpo.
+	if (cierre != "") {
+		out += "${cierre}\n";
+	}
+	return out;
 }
 
 /**
@@ -527,17 +527,17 @@ comptime string gen_grande(string mnl, string mne, string mne_cola, i64 ancho,
  * @return El cuerpo del bloque asm, listo para empalmar.
  */
 comptime string gen_relleno(string mne, i64 ancho, i64 bytes, string d) {
-    static_assert(ancho == 16 || ancho == 32 || ancho == 64,
-                  "el ancho tiene que ser el de un registro real: 16, 32 o 64");
-    static_assert(bytes % ancho == 0,
-                  "el bloque tiene que ser multiplo del ancho del registro");
-    i64 accesos = bytes / ancho;
-    string out = "";
-    for (i64 i = 0; i < accesos; i++) {
-        i64 o = i * ancho;
-        out += "${mne} [${d} + ${o}], v0\n";
-    }
-    return out;
+	static_assert(ancho == 16 || ancho == 32 || ancho == 64,
+		"el ancho tiene que ser el de un registro real: 16, 32 o 64");
+	static_assert(bytes % ancho == 0,
+		"el bloque tiene que ser multiplo del ancho del registro");
+	i64    accesos = bytes / ancho;
+	string out     = "";
+	for (i64 i = 0; i < accesos; i++) {
+		i64 o = i * ancho;
+		out += "${mne} [${d} + ${o}], v0\n";
+	}
+	return out;
 }
 
 /**
@@ -554,8 +554,8 @@ comptime string gen_relleno(string mne, i64 ancho, i64 bytes, string d) {
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_relleno_solapado(string mne, i64 ancho, i64 bytes) {
-    return gen_relleno(mne, ancho, bytes, "d") +
-           gen_relleno(mne, ancho, bytes, "fd");
+	return gen_relleno(mne, ancho, bytes, "d") +
+	gen_relleno(mne, ancho, bytes, "fd");
 }
 
 /**
@@ -575,26 +575,26 @@ comptime string gen_relleno_solapado(string mne, i64 ancho, i64 bytes) {
  * @return El cuerpo del bloque asm.
  */
 comptime string gen_relleno_grande(string mne, string mne_cola, i64 ancho,
-                                   i64 regs, string cierre) {
-    i64 bloque = regs * ancho;
-    i64 mitad = regs / 2;
-    string out = "bucle:\n";
-    for (i64 k = 0; k < mitad; k++) {
-        i64 o = k * ancho;
-        out += "${mne} [d + ${o}], v0\n";
-    }
-    out += "add d, ${bloque}\n";
-    for (i64 k = mitad; k < regs; k++) {
-        i64 o = k * ancho - bloque;
-        out += "${mne} [d + ${o}], v0\n";
-    }
-    out += "cmp d, fd\n";
-    out += "jb bucle\n";
-    out += gen_relleno(mne_cola, ancho, bloque, "fd");
-    if (cierre != "") {
-        out += "${cierre}\n";
-    }
-    return out;
+	i64 regs, string cierre) {
+	i64    bloque = regs * ancho;
+	i64    mitad  = regs / 2;
+	string out    = "bucle:\n";
+	for (i64 k = 0; k < mitad; k++) {
+		i64 o = k * ancho;
+		out += "${mne} [d + ${o}], v0\n";
+	}
+	out += "add d, ${bloque}\n";
+	for (i64 k = mitad; k < regs; k++) {
+		i64 o = k * ancho - bloque;
+		out += "${mne} [d + ${o}], v0\n";
+	}
+	out += "cmp d, fd\n";
+	out += "jb bucle\n";
+	out += gen_relleno(mne_cola, ancho, bloque, "fd");
+	if (cierre != "") {
+		out += "${cierre}\n";
+	}
+	return out;
 }
 
 /**
@@ -635,25 +635,25 @@ comptime string gen_relleno_grande(string mne, string mne_cola, i64 ancho,
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_medium_sse2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 128;
-    u8* fin_s = src + n - 128;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        xmm v0,
-        xmm v1,
-        xmm v2,
-        xmm v3,
-        xmm v4,
-        xmm v5,
-        xmm v6,
-        xmm v7,
-    ) {
+public void memcpy_medium_sse2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 128;
+	u8* fin_s = src + n - 128;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		xmm v0,
+		xmm v1,
+		xmm v2,
+		xmm v3,
+		xmm v4,
+		xmm v5,
+		xmm v6,
+		xmm v7,
+	) {
         inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 8, 0, ""))
-    }
+	}
 }
 
 /**
@@ -686,25 +686,25 @@ public void memcpy_medium_sse2(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_medium_avx2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 256;
-    u8* fin_s = src + n - 256;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        ymm v0,
-        ymm v1,
-        ymm v2,
-        ymm v3,
-        ymm v4,
-        ymm v5,
-        ymm v6,
-        ymm v7,
-    ) {
+public void memcpy_medium_avx2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 256;
+	u8* fin_s = src + n - 256;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		ymm v0,
+		ymm v1,
+		ymm v2,
+		ymm v3,
+		ymm v4,
+		ymm v5,
+		ymm v6,
+		ymm v7,
+	) {
         inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 8, 0, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -736,25 +736,25 @@ public void memcpy_medium_avx2(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_medium_avx512(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 512;
-    u8* fin_s = src + n - 512;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        zmm v0,
-        zmm v1,
-        zmm v2,
-        zmm v3,
-        zmm v4,
-        zmm v5,
-        zmm v6,
-        zmm v7,
-    ) {
+public void memcpy_medium_avx512(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 512;
+	u8* fin_s = src + n - 512;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		zmm v0,
+		zmm v1,
+		zmm v2,
+		zmm v3,
+		zmm v4,
+		zmm v5,
+		zmm v6,
+		zmm v7,
+	) {
         inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 8, 0, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -776,10 +776,10 @@ public void memcpy_medium_avx512(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_erms(u8* dst, u8* src, usize n) {
-    asm ( rdi d = dst, rsi s = src, rcx c = n, ) {
+public void memcpy_erms(u8 *dst, u8 *src, usize n) {
+	asm (rdi d = dst, rsi s = src, rcx c = n,) {
         rep movsb
-    }
+	}
 }
 
 /**
@@ -811,19 +811,19 @@ public void memcpy_erms(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_small_sse2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm v0,
-    ) {
+public void memset_small_sse2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm v0,
+	) {
         movq v0, p
         punpcklqdq v0, v0
         inject(gen_relleno_solapado("movdqu", 16, 64))
-    }
+	}
 }
 
 /**
@@ -840,16 +840,16 @@ public void memset_small_sse2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_small_avx2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm sem,
-        ymm v0,
-    ) {
+public void memset_small_avx2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm sem,
+		ymm v0,
+	) {
         // La semilla va en un registro de 128 bits porque `vmovq` escribe la
         // mitad baja de un `xmm`: no admite un `ymm` como destino.  De ahi
         // `vpbroadcastq` la difunde a los cuatro cuartos del de 256.
@@ -857,7 +857,7 @@ public void memset_small_avx2(u8* dst, u8 val, usize n) {
         vpbroadcastq v0, sem
         inject(gen_relleno_solapado("vmovdqu", 32, 64))
         vzeroupper
-    }
+	}
 }
 
 /**
@@ -871,19 +871,19 @@ public void memset_small_avx2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_small_avx512(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        zmm v0,
-    ) {
+public void memset_small_avx512(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		zmm v0,
+	) {
         vpbroadcastq v0, p
         inject(gen_relleno_solapado("vmovdqu64", 64, 64))
         vzeroupper
-    }
+	}
 }
 
 /**
@@ -899,19 +899,19 @@ public void memset_small_avx512(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_medium_sse2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 128;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm v0,
-    ) {
+public void memset_medium_sse2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 128;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm v0,
+	) {
         movq v0, p
         punpcklqdq v0, v0
         inject(gen_relleno_grande("movdqu", "movdqu", 16, 8, ""))
-    }
+	}
 }
 
 /**
@@ -925,21 +925,21 @@ public void memset_medium_sse2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_medium_avx2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 256;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm sem,
-        ymm v0,
-    ) {
+public void memset_medium_avx2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 256;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm sem,
+		ymm v0,
+	) {
         // Igual que en @ref memset_small_avx2: `vmovq` solo escribe un `xmm`.
         vmovq sem, p
         vpbroadcastq v0, sem
         inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 8, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -953,18 +953,18 @@ public void memset_medium_avx2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_medium_avx512(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 512;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        zmm v0,
-    ) {
+public void memset_medium_avx512(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 512;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		zmm v0,
+	) {
         vpbroadcastq v0, p
         inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 8, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -987,19 +987,19 @@ public void memset_medium_avx512(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_big_sse2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 256;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm v0,
-    ) {
+public void memset_big_sse2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 256;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm v0,
+	) {
         movq v0, p
         punpcklqdq v0, v0
         inject(gen_relleno_grande("movdqu", "movdqu", 16, 16, ""))
-    }
+	}
 }
 
 /**
@@ -1014,20 +1014,20 @@ public void memset_big_sse2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_big_avx2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 512;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm sem,
-        ymm v0,
-    ) {
+public void memset_big_avx2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 512;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm sem,
+		ymm v0,
+	) {
         vmovq sem, p
         vpbroadcastq v0, sem
         inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 16, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1042,18 +1042,18 @@ public void memset_big_avx2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_big_avx512(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 1024;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        zmm v0,
-    ) {
+public void memset_big_avx512(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 1024;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		zmm v0,
+	) {
         vpbroadcastq v0, p
         inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 16, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1080,21 +1080,21 @@ public void memset_big_avx512(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_streaming_avx2(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 512;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm sem,
-        ymm v0,
-    ) {
+public void memset_streaming_avx2(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 512;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm sem,
+		ymm v0,
+	) {
         vmovq sem, p
         vpbroadcastq v0, sem
         inject(gen_relleno_grande("vmovntdq", "vmovdqu", 32, 16,
                                   "sfence\nvzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1109,19 +1109,19 @@ public void memset_streaming_avx2(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_streaming_avx512(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 1024;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        zmm v0,
-    ) {
+public void memset_streaming_avx512(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 1024;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		zmm v0,
+	) {
         vpbroadcastq v0, p
         inject(gen_relleno_grande("vmovntdq", "vmovdqu64", 64, 16,
                                   "sfence\nvzeroupper"))
-    }
+	}
 }
 
 /* --- Variantes ALINEADAS del relleno --------------------------------------
@@ -1147,19 +1147,19 @@ public void memset_streaming_avx512(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_small_sse2_aligned(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm v0,
-    ) {
+public void memset_small_sse2_aligned(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm v0,
+	) {
         movq v0, p
         punpcklqdq v0, v0
         inject(gen_relleno_solapado("movdqa", 16, 64))
-    }
+	}
 }
 
 /**
@@ -1170,21 +1170,21 @@ public void memset_small_sse2_aligned(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_small_avx2_aligned(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm sem,
-        ymm v0,
-    ) {
+public void memset_small_avx2_aligned(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm sem,
+		ymm v0,
+	) {
         vmovq sem, p
         vpbroadcastq v0, sem
         inject(gen_relleno_solapado("vmovdqa", 32, 64))
         vzeroupper
-    }
+	}
 }
 
 /**
@@ -1195,19 +1195,19 @@ public void memset_small_avx2_aligned(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_small_avx512_aligned(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 64;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        zmm v0,
-    ) {
+public void memset_small_avx512_aligned(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 64;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		zmm v0,
+	) {
         vpbroadcastq v0, p
         inject(gen_relleno_solapado("vmovdqa64", 64, 64))
         vzeroupper
-    }
+	}
 }
 
 /**
@@ -1223,19 +1223,19 @@ public void memset_small_avx512_aligned(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_medium_sse2_aligned(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 128;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm v0,
-    ) {
+public void memset_medium_sse2_aligned(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 128;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm v0,
+	) {
         movq v0, p
         punpcklqdq v0, v0
         inject(gen_relleno_grande("movdqa", "movdqu", 16, 8, ""))
-    }
+	}
 }
 
 /**
@@ -1247,20 +1247,20 @@ public void memset_medium_sse2_aligned(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_medium_avx2_aligned(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 256;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        xmm sem,
-        ymm v0,
-    ) {
+public void memset_medium_avx2_aligned(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 256;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		xmm sem,
+		ymm v0,
+	) {
         vmovq sem, p
         vpbroadcastq v0, sem
         inject(gen_relleno_grande("vmovdqa", "vmovdqu", 32, 8, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1272,27 +1272,27 @@ public void memset_medium_avx2_aligned(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_medium_avx512_aligned(u8* dst, u8 val, usize n) {
-    u8* fin_d = dst + n - 512;
-    u64 pat = ((u64) val) * 72340172838076673;
-    asm (
-        reg d = dst,
-        reg fd = fin_d,
-        reg p = pat,
-        zmm v0,
-    ) {
+public void memset_medium_avx512_aligned(u8 *dst, u8 val, usize n) {
+	u8* fin_d = dst + n - 512;
+	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	asm (
+		reg d  = dst,
+		reg fd = fin_d,
+		reg p  = pat,
+		zmm v0,
+	) {
         vpbroadcastq v0, p
         inject(gen_relleno_grande("vmovdqa64", "vmovdqu64", 64, 8, "vzeroupper"))
-    }
+	}
 }
 
 @Target("arch:x86_64")
 @NoIdiom
-public void memset_erms(u8* dst, u8 val, usize n) {
-    u64 v = (u64) val;
-    asm ( rdi d = dst, rax a = v, rcx c = n, ) {
+public void memset_erms(u8 *dst, u8 val, usize n) {
+	u64      v = (u64) val;
+	asm (rdi d = dst, rax a = v, rcx c = n,) {
         rep stosb
-    }
+	}
 }
 
 /**
@@ -1335,25 +1335,25 @@ public void memset_erms(u8* dst, u8 val, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_medium_sse2_aligned(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 128;
-    u8* fin_s = src + n - 128;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        xmm v0,
-        xmm v1,
-        xmm v2,
-        xmm v3,
-        xmm v4,
-        xmm v5,
-        xmm v6,
-        xmm v7,
-    ) {
+public void memcpy_medium_sse2_aligned(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 128;
+	u8* fin_s = src + n - 128;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		xmm v0,
+		xmm v1,
+		xmm v2,
+		xmm v3,
+		xmm v4,
+		xmm v5,
+		xmm v6,
+		xmm v7,
+	) {
         inject(gen_grande("movdqa", "movdqa", "movdqa", 16, 8, 0, ""))
-    }
+	}
 }
 
 /**
@@ -1378,25 +1378,25 @@ public void memcpy_medium_sse2_aligned(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_medium_avx2_aligned(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 256;
-    u8* fin_s = src + n - 256;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        ymm v0,
-        ymm v1,
-        ymm v2,
-        ymm v3,
-        ymm v4,
-        ymm v5,
-        ymm v6,
-        ymm v7,
-    ) {
+public void memcpy_medium_avx2_aligned(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 256;
+	u8* fin_s = src + n - 256;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		ymm v0,
+		ymm v1,
+		ymm v2,
+		ymm v3,
+		ymm v4,
+		ymm v5,
+		ymm v6,
+		ymm v7,
+	) {
         inject(gen_grande("vmovdqa", "vmovdqa", "vmovdqa", 32, 8, 0, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1421,25 +1421,25 @@ public void memcpy_medium_avx2_aligned(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_medium_avx512_aligned(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 512;
-    u8* fin_s = src + n - 512;
-    asm (
-        reg d = dst,
-        reg s = src,
-        reg fd = fin_d,
-        reg fs = fin_s,
-        zmm v0,
-        zmm v1,
-        zmm v2,
-        zmm v3,
-        zmm v4,
-        zmm v5,
-        zmm v6,
-        zmm v7,
-    ) {
+public void memcpy_medium_avx512_aligned(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 512;
+	u8* fin_s = src + n - 512;
+	asm (
+		reg d  = dst,
+		reg s  = src,
+		reg fd = fin_d,
+		reg fs = fin_s,
+		zmm v0,
+		zmm v1,
+		zmm v2,
+		zmm v3,
+		zmm v4,
+		zmm v5,
+		zmm v6,
+		zmm v7,
+	) {
         inject(gen_grande("vmovdqa64", "vmovdqa64", "vmovdqa64", 64, 8, 0, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1464,16 +1464,16 @@ public void memcpy_medium_avx512_aligned(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_big_sse2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 256;
-    u8* fin_s = src + n - 256;
-    asm (
-        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
-        xmm v0, xmm v1, xmm v2,  xmm v3,  xmm v4,  xmm v5,  xmm v6,  xmm v7,
-        xmm v8, xmm v9, xmm v10, xmm v11, xmm v12, xmm v13, xmm v14, xmm v15,
-    ) {
+public void memcpy_big_sse2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 256;
+	u8* fin_s = src + n - 256;
+	asm (
+		reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+		xmm v0, xmm v1, xmm v2, xmm v3, xmm v4, xmm v5, xmm v6, xmm v7,
+		xmm v8, xmm v9, xmm v10, xmm v11, xmm v12, xmm v13, xmm v14, xmm v15,
+	) {
         inject(gen_grande("movdqu", "movdqu", "movdqu", 16, 16, 0, ""))
-    }
+	}
 }
 
 /**
@@ -1488,17 +1488,17 @@ public void memcpy_big_sse2(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_big_avx2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 512;
-    u8* fin_s = src + n - 512;
-    asm (
-        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
-        ymm v0, ymm v1, ymm v2,  ymm v3,  ymm v4,  ymm v5,  ymm v6,  ymm v7,
-        ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
-    ) {
+public void memcpy_big_avx2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 512;
+	u8* fin_s = src + n - 512;
+	asm (
+		reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+		ymm v0, ymm v1, ymm v2, ymm v3, ymm v4, ymm v5, ymm v6, ymm v7,
+		ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
+	) {
         inject(gen_grande("vmovdqu", "vmovdqu", "vmovdqu", 32, 16, 0,
                           "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1513,16 +1513,16 @@ public void memcpy_big_avx2(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_big_avx512(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 1024;
-    u8* fin_s = src + n - 1024;
-    asm (
-        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
-        zmm v0, zmm v1, zmm v2,  zmm v3,  zmm v4,  zmm v5,  zmm v6,  zmm v7,
-        zmm v8, zmm v9, zmm v10, zmm v11, zmm v12, zmm v13, zmm v14, zmm v15,
-    ) {
+public void memcpy_big_avx512(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 1024;
+	u8* fin_s = src + n - 1024;
+	asm (
+		reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+		zmm v0, zmm v1, zmm v2, zmm v3, zmm v4, zmm v5, zmm v6, zmm v7,
+		zmm v8, zmm v9, zmm v10, zmm v11, zmm v12, zmm v13, zmm v14, zmm v15,
+	) {
         inject(gen_grande("vmovdqu64", "vmovdqu64", "vmovdqu64", 64, 16, 0, "vzeroupper"))
-    }
+	}
 }
 
 /**
@@ -1552,15 +1552,15 @@ public void memcpy_big_avx512(u8* dst, u8* src, usize n) {
  */
 @Target("arch:x86_64")
 @NoIdiom
-public void memcpy_streaming_avx2(u8* dst, u8* src, usize n) {
-    u8* fin_d = dst + n - 512;
-    u8* fin_s = src + n - 512;
-    asm (
-        reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
-        ymm v0, ymm v1, ymm v2,  ymm v3,  ymm v4,  ymm v5,  ymm v6,  ymm v7,
-        ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
-    ) {
+public void memcpy_streaming_avx2(u8 *dst, u8 *src, usize n) {
+	u8* fin_d = dst + n - 512;
+	u8* fin_s = src + n - 512;
+	asm (
+		reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s,
+		ymm v0, ymm v1, ymm v2, ymm v3, ymm v4, ymm v5, ymm v6, ymm v7,
+		ymm v8, ymm v9, ymm v10, ymm v11, ymm v12, ymm v13, ymm v14, ymm v15,
+	) {
         inject(gen_grande("vmovdqu", "vmovntdq", "vmovdqu", 32, 16, 1024,
                           "sfence\nvzeroupper"))
-    }
+	}
 }

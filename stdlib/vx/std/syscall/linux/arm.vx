@@ -11,14 +11,14 @@ import std.types only size_t;
  * primeros N registros de esta firma e INLINA la llamada.
  */
 public size_t invoke(register("r7") syscall_id id,
-                     register("r0") size_t a1,
-                     register("r1") size_t a2,
-                     register("r2") size_t a3,
-                     register("r3") size_t a4,
-                     register("r4") size_t a5,
-                     register("r5") size_t a6) {
-    asm { svc 0 }
-    return (size_t) a1;   // R0 tras el trap = resultado
+	register("r0") size_t a1,
+	register("r1") size_t a2,
+	register("r2") size_t a3,
+	register("r3") size_t a4,
+	register("r4") size_t a5,
+	register("r5") size_t a6) {
+	asm { svc 0 }
+	return (size_t) a1; // R0 tras el trap = resultado
 }
 
 public const syscall_id _NR_restart_syscall        = 0;
@@ -375,8 +375,8 @@ public const syscall_id _NR_pkey_mprotect          = 394;
 public const syscall_id _NR_pkey_alloc             = 395;
 public const syscall_id _NR_pkey_free              = 396;
 public const syscall_id _NR_statx                  = 397;
-public const syscall_id _NR_ARM_breakpoint         = 983041;
-public const syscall_id _NR_ARM_cacheflush         = 983042;
-public const syscall_id _NR_ARM_usr26              = 983043;
-public const syscall_id _NR_ARM_usr32              = 983044;
-public const syscall_id _NR_ARM_set_tls            = 983045;
+public const syscall_id _NR_ARM_breakpoint         = 983_041;
+public const syscall_id _NR_ARM_cacheflush         = 983_042;
+public const syscall_id _NR_ARM_usr26              = 983_043;
+public const syscall_id _NR_ARM_usr32              = 983_044;
+public const syscall_id _NR_ARM_set_tls            = 983_045;

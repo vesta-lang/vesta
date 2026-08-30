@@ -16,10 +16,10 @@ import std.types only size_t, usize;
  * inline.
  */
 public size_t invoke(register("rax") syscall_id id,
-                     register("r10") size_t a1, register("rdx") size_t a2,
-                     register("r8")  size_t a3, register("r9")  size_t a4) {
-    asm { syscall }
-    return (size_t) id;   // RAX tras el syscall = resultado
+	register("r10") size_t a1, register("rdx") size_t a2,
+	register("r8") size_t a3, register("r9") size_t a4) {
+	asm { syscall }
+	return (size_t) id; // RAX tras el syscall = resultado
 }
 
 /**
@@ -39,5 +39,5 @@ public size_t invoke(register("rax") syscall_id id,
  * enchufar el suyo sin tocar la libreria.
  */
 public usize resolve(usize ctx) {
-    return 0;
+	return 0;
 }

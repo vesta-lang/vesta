@@ -28,7 +28,7 @@ public typedef u8 byte new;
  * ancho del objetivo (64 bits en x86-64 y arm64, 32 en x86, 16 en x86_16). */
 
 /**
- * Puntero nulo. Constante para no tener que escribir `0` en 
+ * Puntero nulo. Constante para no tener que escribir `0` en
  * el codigo.
  */
 public const uintptr nullptr = 0;

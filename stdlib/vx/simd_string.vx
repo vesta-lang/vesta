@@ -42,12 +42,12 @@
 // son caller-saved -> el compilador los infiere clobber.  rbx NO se toca.
 // --------------------------------------------------------------------------
 public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
-    register("rdi") u8*  pa  = a;
-    register("rsi") i64  rla = la;
-    register("rdx") u8*  pb  = b;
-    register("rcx") i64  rlb = lb;
-    register("rax") i64  res;
-    asm volatile {
+	register("rdi") u8 *pa  = a;
+	register("rsi") i64 rla = la;
+	register("rdx") u8 *pb  = b;
+	register("rcx") i64 rlb = lb;
+	register("rax") i64 res;
+	asm volatile {
         // min = (la < lb) ? la : lb  -> r9
         mov     r9, rsi                  // r9 = la
         cmp     rcx, rsi                 // lb < la ?
@@ -106,8 +106,8 @@ public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
     .greater:
         mov     rax, 1
     .done:
-    };
-    return res;
+	};
+	return res;
 }
 
 // --------------------------------------------------------------------------
@@ -118,12 +118,12 @@ public i64 strcmp_sse2(u8* a, i64 la, u8* b, i64 lb) {
 // penalizacion de transicion AVX<->SSE.  La cola < 32 cae a byte-a-byte.
 // --------------------------------------------------------------------------
 public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
-    register("rdi") u8*  pa  = a;
-    register("rsi") i64  rla = la;
-    register("rdx") u8*  pb  = b;
-    register("rcx") i64  rlb = lb;
-    register("rax") i64  res;
-    asm volatile {
+	register("rdi") u8 *pa  = a;
+	register("rsi") i64 rla = la;
+	register("rdx") u8 *pb  = b;
+	register("rcx") i64 rlb = lb;
+	register("rax") i64 res;
+	asm volatile {
         mov     r9, rsi                  // r9 = la
         cmp     rcx, rsi
         cmovl   r9, rcx                  // r9 = min
@@ -178,8 +178,8 @@ public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
         vzeroupper
         mov     rax, 1
     .done2:
-    };
-    return res;
+	};
+	return res;
 }
 
 // Dispatcher del override.  El compilador apunta el fp __vx_strcmp_fp a esta
@@ -187,12 +187,12 @@ public i64 strcmp_avx2(u8* a, i64 la, u8* b, i64 lb) {
 // la usa.  Self-dispatch por features: AVX2 (bit4) si disponible, sino SSE2
 // (bit0, siempre presente en x86-64).
 @HelperOverride(strcmp)
-public i64 lib_strcmp(u8* a, i64 la, u8* b, i64 lb) {
-    u64 f = cpu_features();
-    if ((f & 16) != 0) {            // bit4 = AVX2
-        return strcmp_avx2(a, la, b, lb);
-    }
-    return strcmp_sse2(a, la, b, lb);  // bit0 = SSE2 (fallback universal)
+public i64 lib_strcmp(u8 *a, i64 la, u8 *b, i64 lb) {
+	u64 f = cpu_features();
+	if ((f & 16) != 0) { // bit4 = AVX2
+		return strcmp_avx2(a, la, b, lb);
+	}
+	return strcmp_sse2(a, la, b, lb); // bit0 = SSE2 (fallback universal)
 }
 
 // --------------------------------------------------------------------------
@@ -207,9 +207,9 @@ public i64 lib_strcmp(u8* a, i64 la, u8* b, i64 lb) {
 // (base original), eax/r10; xmm0/xmm1.
 // --------------------------------------------------------------------------
 public i64 strlen_sse2(char* s) {
-    register("rdi") char* ps = s;
-    register("rax") i64   res;
-    asm volatile {
+	register("rdi") char *ps = s;
+	register("rax") i64 res;
+	asm volatile {
         mov     r9, rdi                  // r9 = base original
         mov     r8, rdi                  // r8 = cursor
 
@@ -240,17 +240,17 @@ public i64 strlen_sse2(char* s) {
     .found_scalar:
         mov     rax, r8                  // longitud = (nul - base)
         sub     rax, r9
-    };
-    return res;
+	};
+	return res;
 }
 
 // Dispatcher de strlen_cstr.  Self-dispatch (hoy solo SSE2; el nul-scan no
 // gana lo suficiente con AVX2 para justificar el riesgo de page-cross extra).
 public i64 strlen_cstr(char* s) {
-    u64 f = cpu_features();
-    // bit0 = SSE2 garantizado; reservamos el if para futura variante AVX2.
-    if ((f & 1) != 0) {
-        return strlen_sse2(s);
-    }
-    return strlen_sse2(s);
+	u64 f = cpu_features();
+	// bit0 = SSE2 garantizado; reservamos el if para futura variante AVX2.
+	if ((f & 1) != 0) {
+		return strlen_sse2(s);
+	}
+	return strlen_sse2(s);
 }

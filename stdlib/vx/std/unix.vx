@@ -41,35 +41,35 @@ public const i32 STDERR_FILENO = 2;
 // no se combinan con OR entre ellos, solo con las banderas de arriba.
 // ===================================================================
 
-public const i32 O_RDONLY   = 0x0;
-public const i32 O_WRONLY   = 0x1;
-public const i32 O_RDWR     = 0x2;
+public const i32 O_RDONLY = 0x00;
+public const i32 O_WRONLY = 0x01;
+public const i32 O_RDWR   = 0x02;
 
-public const i32 O_CREAT    = 0x40;    ///< Crear si no existe.
-public const i32 O_EXCL     = 0x80;    ///< Con O_CREAT: fallar si ya existe.
-public const i32 O_TRUNC    = 0x200;   ///< Truncar a cero al abrir.
-public const i32 O_APPEND   = 0x400;   ///< Escribir siempre al final.
-public const i32 O_NONBLOCK = 0x800;   ///< No bloquear en las operaciones.
-public const i32 O_DIRECTORY = 0x10000; ///< Fallar si no es un directorio.
-public const i32 O_CLOEXEC  = 0x80000; ///< Cerrar al hacer exec.
+public const i32 O_CREAT     = 0x40;           ///< Crear si no existe.
+public const i32 O_EXCL      = 0x80; ///< Con O_CREAT: fallar si ya existe.
+public const i32 O_TRUNC     = 0x0200;         ///< Truncar a cero al abrir.
+public const i32 O_APPEND    = 0x0400;        ///< Escribir siempre al final.
+public const i32 O_NONBLOCK  = 0x0800;      ///< No bloquear en las operaciones.
+public const i32 O_DIRECTORY = 0x00010000; ///< Fallar si no es un directorio.
+public const i32 O_CLOEXEC   = 0x00080000; ///< Cerrar al hacer exec.
 
 // ===================================================================
 // Protecciones de pagina para `mmap` / `mprotect`.  Se combinan con OR.
 // ===================================================================
 
-public const i32 PROT_NONE  = 0x0;
-public const i32 PROT_READ  = 0x1;
-public const i32 PROT_WRITE = 0x2;
-public const i32 PROT_EXEC  = 0x4;
+public const i32 PROT_NONE  = 0x00;
+public const i32 PROT_READ  = 0x01;
+public const i32 PROT_WRITE = 0x02;
+public const i32 PROT_EXEC  = 0x04;
 
 // ===================================================================
 // Banderas de `mmap`.  MAP_SHARED y MAP_PRIVATE son excluyentes.
 // ===================================================================
 
-public const i32 MAP_SHARED    = 0x01;
-public const i32 MAP_PRIVATE   = 0x02;
-public const i32 MAP_FIXED     = 0x10;  ///< Exigir la direccion pedida.
-public const i32 MAP_ANONYMOUS = 0x20;  ///< Sin fichero detras; memoria a cero.
+public const i32     MAP_SHARED    =  0x01;
+public const i32     MAP_PRIVATE   =  0x02;
+public const i32     MAP_FIXED     =  0x10;     ///< Exigir la direccion pedida.
+public const i32     MAP_ANONYMOUS =  0x20; ///< Sin fichero detras; memoria a cero.
 
 /**
  * Valor de error de `mmap`.  Es -1 como PUNTERO, no como entero, y por eso no
@@ -80,7 +80,7 @@ public const i32 MAP_ANONYMOUS = 0x20;  ///< Sin fichero detras; memoria a cero.
  * uso, que es la clase de friccion que empuja a la gente a escribir el numero
  * magico a mano.
  */
-public const uintptr MAP_FAILED = -1;
+public const uintptr MAP_FAILED    = -1;
 
 // ===================================================================
 // Origen del desplazamiento en `lseek`.
