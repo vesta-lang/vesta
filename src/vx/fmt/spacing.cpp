@@ -270,7 +270,13 @@ Spacing space_between(const Piece *before, const Piece &prev, const Piece &cur,
          * mirarlo salia `p =&x`.  Antes lo tapaba una salvaguarda que separaba
          * cualquier par de signos; al hacerla precisa -- para que `i64**` se
          * pegara -- este caso quedo al aire. */
-        const bool needs = ends_value(a) || is_word_char(left) || is_sign(left);
+        /* Se separa de lo de antes cuando eso ya pedia un espacio detras: un
+         * valor, una palabra, un operador... o un SEPARADOR.  La coma es el
+         * caso que se colaba: `f(a, &b)` salia `f(a,&b)`, porque el papel del
+         * `&` decidia aqui antes de que `R35` llegara a decir lo suyo. */
+        const bool needs = ends_value(a) || is_word_char(left) ||
+                           is_sign(left) || a == TokenKind::COMMA ||
+                           a == TokenKind::SEMICOLON;
         return needs ? Spacing::Space : Spacing::None;
     }
     if (prev_role == Role::TightRight) return Spacing::None; // `*p`, `&x`
@@ -320,8 +326,21 @@ Spacing space_between(const Piece *before, const Piece &prev, const Piece &cur,
 
     /* `+` y `-`: como no son ambiguos en su forma -- solo en si son signo u
      * operacion --, se deciden aqui con la misma regla del valor. */
-    if (b == TokenKind::PLUS || b == TokenKind::MINUS)
-        return ends_value(a) ? Spacing::Space : Spacing::None;
+    if (b == TokenKind::PLUS || b == TokenKind::MINUS) {
+        /* Espacio SIEMPRE, sea resta (`x - y`) o signo (`return -1`).
+         *
+         * Lo que de verdad va pegado por delante -- detras de un `(`, un `[`,
+         * una `.` o un prefijo como `!` -- ya se resolvio mas arriba, asi que
+         * a esta rama solo llega lo que necesita separarse.
+         *
+         * Aqui habia una condicion que solo daba espacio si lo de antes
+         * acababa en caracter de PALABRA.  Dejaba dos casos pegados: detras de
+         * otro signo salia `a +-1` -- y `+-` juntos se leen como un operador
+         * que no existe -- y, comprobado formateando el corpus, tampoco
+         * separaba `return -1`, que salia `return-1` en 21 ejemplos pese a que
+         * el comentario de esta misma rama decia estar cubriendo ese caso. */
+        return Spacing::Space;
+    }
     if (a == TokenKind::PLUS || a == TokenKind::MINUS) {
         /* Para saber si lleva espacio DETRAS hay que saber que era, y eso lo
          * dice el token de antes: `x - y` resta, `(-y)` niega.  Por eso hace

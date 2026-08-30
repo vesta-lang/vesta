@@ -73,7 +73,8 @@ enum class Shape : uint8_t {
     Overlay,  ///< `TIPO NOMBRE @offset;` -- campo de una vista
     BitField, ///< `TIPO NOMBRE : bits;` -- campo de bits
     TableRow, ///< una FILA de valores dentro de un `{ ... }` de inicializacion
-    Label     ///< `etiqueta: valor,` dentro de una anotacion (`R112`)
+    Label,    ///< `etiqueta: valor,` dentro de una anotacion (`R112`)
+    Case      ///< `case <patron> => <cuerpo>` de un `match` (`R113`)
 };
 
 /// Una linea reducida a lo que hace falta para alinearla.
@@ -210,6 +211,29 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         }
     }
 
+    /* `R113`: las ramas de un `match` se alinean por su `=>`.
+     *
+     * Un `match` es una TABLA: a la izquierda lo que se reconoce, a la derecha
+     * lo que se hace.  Con las flechas en columna las dos mitades se leen por
+     * separado, y un patron mas corto que los demas -- el `_` del final suele
+     * serlo -- deja de romper la vertical.
+     *
+     * Se busca el `=>` del nivel exterior: el de una lambda dentro del cuerpo
+     * de la rama esta mas adentro y no cuenta. */
+    if (kind_of(pieces[from]) == TokenKind::KW_CASE) {
+        int d = 0;
+        for (size_t k = from + 1; k <= to; ++k) {
+            const TokenKind kk = kind_of(pieces[k]);
+            if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET) ++d;
+            else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET) --d;
+            else if (d == 0 && kk == TokenKind::FAT_ARROW) {
+                line.shape = Shape::Case;
+                line.anchors = {k}; // el `=>`
+                return line;
+            }
+        }
+    }
+
     /* `R112`: `etiqueta: valor` dentro de una anotacion.
      *
      * Un contrato repartido es una tabla de dos columnas, y se lee como tal:
@@ -312,12 +336,28 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
     const size_t name = assign - 1;
     if (kind_of(pieces[name]) != TokenKind::IDENTIFIER) return line;
 
-    if (name > i) {
+    /* Salvo que haya un PUNTO de por medio: entonces la izquierda es un acceso
+     * a campo -- `c.handle = ...` -- y no un `TIPO NOMBRE`.
+     *
+     * Sin mirarlo, `c` pasaba por tipo y `handle` por nombre, y alinearlos como
+     * dos columnas PARTIA el acceso: `c.          handle      = ...`, que ya no
+     * se lee como el campo de nada.  Comprobado formateando el corpus: salia en
+     * 147 sitios. */
+    bool qualified = false;
+    for (size_t k = i; k < assign; ++k) {
+        if (kind_of(pieces[k]) == TokenKind::DOT) {
+            qualified = true;
+            break;
+        }
+    }
+
+    if (name > i && !qualified) {
         line.shape = Shape::Decl;
         line.anchors = {i, name, assign}; // tipo, nombre, `=`
     } else {
         line.shape = Shape::Assign;
-        line.anchors = {name, assign}; // nombre, `=`
+        // Toda la izquierda cuenta como UN campo: `c.handle` no se parte.
+        line.anchors = {i, assign};
     }
 
     /* `R111`: reservar la columna del SIGNO.

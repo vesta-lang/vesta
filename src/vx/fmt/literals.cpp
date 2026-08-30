@@ -253,7 +253,19 @@ std::string canonical_decimal(std::string_view text) {
 std::string canonical_literal(std::string_view text) {
     if (text.empty()) return {};
     std::string out;
-    if (text.size() > 2 && text[0] == '0' &&
+    /* Un literal que empieza por un prefijo de base ES de esa base, mida lo que
+     * mida.  Pidiendo mas de dos caracteres, un `0x` pelado -- que es un
+     * literal ROTO, sin digitos -- se colaba al camino decimal, que veia el
+     * `0` y tomaba la `x` por un sufijo de tipo: lo reescribia como `0_x`, que
+     * SI parsea y significa OTRA COSA.
+     *
+     * Se vio formateando el corpus: `367_literal_sin_digitos.vx` comprueba que
+     * `0x` se rechaza, y tras formatearlo fallaba con otro error -- el test
+     * habia dejado de comprobar lo que decia.
+     *
+     * El formateador no arregla ni cambia lo que no parsea.  Lo deja como esta
+     * y que lo diga el compilador, que es quien tiene que decirlo. */
+    if (text.size() >= 2 && text[0] == '0' &&
         (std::isalpha((unsigned char)text[1]) != 0) && text[1] != 'e' &&
         text[1] != 'E')
         out = canonical_based(text);
