@@ -33,9 +33,10 @@
 #     vesta.dll + lib/ + include/ffi/ + cmake/  <- [sdk] embeber / plugins
 #     libssl-3-x64.dll, libcrypto-3-x64.dll     <- [core] SOLO si OpenSSL no se embebio
 
-if (NOT WIN32)
-    return()  # de momento el empaquetado grafico es Windows-only
-endif()
+# Las rutas de instalacion (VESTA_INSTALL_*) las fija VestaInstallDirs, que el
+# CMakeLists raiz incluye ANTES que los plugins: `add_vesta_plugin` las necesita
+# para saber donde va cada .dll/.so de la stdlib.
+include(VestaInstallDirs)
 
 # ---------------------------------------------------------------------------
 # Reglas de instalacion (fuente de verdad) organizadas por COMPONENTE.
@@ -51,44 +52,51 @@ endif()
 # <prefix>/bin/vesta.exe y `vesta` funciona desde cualquier shell.
 # Ejecutable principal instalado como vesta.exe (no vm.exe).
 install(PROGRAMS "$<TARGET_FILE:vm>"
-        DESTINATION bin RENAME vesta.exe COMPONENT core)
+        DESTINATION "${VESTA_INSTALL_BINDIR}" RENAME "${VESTA_EXE_NAME}"
+        COMPONENT core)
 # stdlib del preprocesador VPP (fuente, NO binario): va en la RAIZ; el
 # ejecutable en bin/ la resuelve relativo a su padre (exe_dir/../include_lib).
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/preprocessor/include_lib"
-        DESTINATION . COMPONENT core)
+        DESTINATION "${VESTA_INSTALL_PRIVDIR}" COMPONENT core)
 # Documentacion (LICENSE en texto plano para que el asistente lo muestre bien).
 install(FILES
         "${CMAKE_SOURCE_DIR}/README.md"
         "${CMAKE_SOURCE_DIR}/LICENSE"
-        DESTINATION . COMPONENT core)
+        DESTINATION "${VESTA_INSTALL_DOCDIR}" COMPONENT core)
 # OpenSSL: si NO se embebio (fallback FireDaemon), enviar sus DLLs.  Con enlace
 # estatico (VESTA_OPENSSL_STATIC) no se envia nada -- el .exe es standalone.
-if (NOT VESTA_OPENSSL_STATIC)
+# Solo en Windows: en Linux OpenSSL viene de la distribucion, la dependencia la
+# deduce `dpkg-shlibdeps` leyendo el binario, y no hay nada que copiar.  Sin la
+# condicion, instalar el componente `core` en Linux moria buscando un .dll.
+if (WIN32 AND NOT VESTA_OPENSSL_STATIC)
     install(FILES
             "$<TARGET_FILE_DIR:vm>/libssl-3-x64.dll"
             "$<TARGET_FILE_DIR:vm>/libcrypto-3-x64.dll"
-            DESTINATION bin COMPONENT core)
+            DESTINATION "${VESTA_INSTALL_BINDIR}" COMPONENT core)
 endif()
 # GC estatico para AOT: al compilar un programa con `gc<T>` en modo AOT, el
 # enlazador interno busca libvesta_gc.a JUNTO a vesta.exe.  Sin esto, gc<T> en
 # AOT falla con "no se encontro libvesta_gc.a".
 if (TARGET vesta_gc)
-    install(FILES "$<TARGET_FILE:vesta_gc>" DESTINATION bin COMPONENT core)
+    install(FILES "$<TARGET_FILE:vesta_gc>"
+            DESTINATION "${VESTA_INSTALL_BINDIR}" COMPONENT core)
 endif()
 # Icono del lenguaje (para las asociaciones de ficheros .vx / .vsh).
-if (EXISTS "${CMAKE_SOURCE_DIR}/icono.ico")
+if (WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/icono.ico")
     install(FILES "${CMAKE_SOURCE_DIR}/icono.ico"
-            DESTINATION bin RENAME vesta.ico COMPONENT core)
+            DESTINATION "${VESTA_INSTALL_BINDIR}" RENAME vesta.ico
+            COMPONENT core)
 endif()
 # Variantes ESTATICAS de los plugins de stdlib (colecciones / math): el AOT las
 # auto-enlaza JUNTO a vesta.exe cuando el programa las usa -> .exe standalone sin
 # DLLs.  Se instalan en core (parte del toolchain AOT).
 if (TARGET vesta_collections_a)
     install(FILES "$<TARGET_FILE:vesta_collections_a>"
-            DESTINATION bin COMPONENT core)
+            DESTINATION "${VESTA_INSTALL_BINDIR}" COMPONENT core)
 endif()
 if (TARGET vesta_math_a)
-    install(FILES "$<TARGET_FILE:vesta_math_a>" DESTINATION bin COMPONENT core)
+    install(FILES "$<TARGET_FILE:vesta_math_a>"
+            DESTINATION "${VESTA_INSTALL_BINDIR}" COMPONENT core)
 endif()
 
 # === stdlib (opcional): biblioteca estandar del lenguaje ===================
@@ -99,24 +107,26 @@ install(DIRECTORY
         "${CMAKE_SOURCE_DIR}/stdlib/vel"
         "${CMAKE_SOURCE_DIR}/stdlib/port"
         "${CMAKE_SOURCE_DIR}/stdlib/vsh"
-        DESTINATION "stdlib" COMPONENT stdlib
+        DESTINATION "${VESTA_INSTALL_PRIVDIR}/stdlib" COMPONENT stdlib
         PATTERN ".gitignore" EXCLUDE)
 
 # === lsp (opcional): servidor de lenguaje para editores ====================
 if (TARGET vesta_lsp)
-    install(PROGRAMS "$<TARGET_FILE:vesta_lsp>" DESTINATION bin COMPONENT lsp)
+    install(PROGRAMS "$<TARGET_FILE:vesta_lsp>"
+            DESTINATION "${VESTA_INSTALL_BINDIR}" RENAME "${VESTA_LSP_EXE_NAME}"
+            COMPONENT lsp)
 endif()
 
 # === examples (opcional): programas de ejemplo de AMBOS lenguajes ==========
 # Vesta trae dos lenguajes: Vex (compilado) y VSH (scripting).
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vx/"
-        DESTINATION "examples/vx" COMPONENT examples
+        DESTINATION "${VESTA_INSTALL_DATADIR}/examples/vx" COMPONENT examples
         FILES_MATCHING
             PATTERN "*.vx"
             PATTERN "*.md"
             PATTERN "*.toml")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vsh/"
-        DESTINATION "examples/vsh" COMPONENT examples
+        DESTINATION "${VESTA_INSTALL_DATADIR}/examples/vsh" COMPONENT examples
         FILES_MATCHING
             PATTERN "*.vsh"
             PATTERN "*.md")
@@ -125,28 +135,70 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/examples_codes_vsh/"
 # Scripts (cobertura AOT/JIT, benchmarks, cliente de depuracion VSH).  Se
 # excluyen los artefactos de build (.velb/.vel/.vx de scratch).
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/tools/"
-        DESTINATION "tools" COMPONENT tools
+        DESTINATION "${VESTA_INSTALL_DATADIR}/tools" COMPONENT tools
         FILES_MATCHING
             PATTERN "*.py"
             PATTERN "*.vsh"
             PATTERN "*.sh"
             PATTERN "*.md")
 
-# === sdk (opcional): embeber Vesta o escribir plugins nativos ==============
+# === sdk (opcional): escribir plugins nativos ==============================
+# La biblioteca embebible NO esta aqui: va en `core`, por lo que se explica
+# abajo.  Aqui queda lo que solo hace falta para COMPILAR contra Vesta.
 # libvesta.dll (FFI, OpenSSL + libstdc++ estaticos -> autocontenida) + header
 # C + helper CMake.
 if (TARGET vesta_ffi)
-    # El DLL embebible (libvesta.dll) va en CORE, junto a vesta.exe y el LSP en
-    # <prefix>/bin -- se instala siempre (no solo con el componente SDK).  La
-    # import-lib (libvesta.dll.a, para enlazar) queda en el componente SDK.
+    # La biblioteca embebible va en CORE, y no por donde cae en el disco: es
+    # PARTE DEL LENGUAJE.
+    #
+    # Es el compilador entero detras de una API en C, y de ahi salen dos cosas
+    # que no son "desarrollo": que un programa Vesta pueda compilar Vesta
+    # llamandola por FFI, y que otro lenguaje pueda compilar Vesta sin mas que
+    # enlazarla.  Quitarla del paquete principal cerraria las dos.
+    #
+    # Lo que SI es de desarrollo -- y queda en el componente SDK -- es la
+    # import library de Windows, que solo sirve para enlazar contra el DLL.
     install(TARGETS vesta_ffi
-            RUNTIME DESTINATION bin  COMPONENT core
-            ARCHIVE DESTINATION lib  COMPONENT sdk)
+            RUNTIME DESTINATION "${VESTA_INSTALL_BINDIR}" COMPONENT core
+            LIBRARY DESTINATION "${VESTA_INSTALL_BINDIR}" COMPONENT core
+            ARCHIVE DESTINATION "${VESTA_INSTALL_LIBDIR}" COMPONENT sdk)
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/include/ffi/vesta_plugin.h"
-        DESTINATION "include/ffi" COMPONENT sdk)
+        DESTINATION "${VESTA_INSTALL_INCDIR}/ffi" COMPONENT sdk)
 install(FILES "${CMAKE_SOURCE_DIR}/cmake/VestaPlugin.cmake"
-        DESTINATION "cmake" COMPONENT sdk)
+        DESTINATION "${VESTA_INSTALL_CMAKEDIR}" COMPONENT sdk)
+
+# === enlaces en el PATH (solo fuera de Windows) ============================
+# El binario de verdad vive en el arbol privado; lo que va en `/usr/bin` es un
+# enlace simbolico.  `/proc/self/exe` lo RESUELVE, asi que el ejecutable se
+# sigue viendo dentro de su arbol y encuentra la stdlib -- que es justo lo que
+# permite no tener que compilarle ninguna ruta dentro.
+#
+# El enlace se crea en el arbol de instalacion (no en un script de postinst)
+# para que sea el gestor de paquetes quien lo ponga y quien lo quite: un enlace
+# creado a mano sobrevive a la desinstalacion y deja un `vesta` que apunta a
+# nada.
+if (NOT WIN32)
+    # `../..` desde `bin/` remonta hasta el prefijo, y de ahi se baja al arbol
+    # privado.  Relativo y no absoluto: asi el enlace sigue valiendo si alguien
+    # instala con otro prefijo o mueve el arbol entero.
+    install(CODE "
+        set(_dst \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/bin\")
+        file(MAKE_DIRECTORY \"\${_dst}\")
+        file(CREATE_LINK \"../${VESTA_INSTALL_BINDIR}/${VESTA_EXE_NAME}\"
+             \"\${_dst}/vesta\" SYMBOLIC)
+    " COMPONENT core)
+    if (TARGET vesta_lsp)
+        # Con guion, que es como Debian nombra los ejecutables; el fichero real
+        # conserva el guion bajo del target.
+        install(CODE "
+            set(_dst \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/bin\")
+            file(MAKE_DIRECTORY \"\${_dst}\")
+            file(CREATE_LINK \"../${VESTA_INSTALL_BINDIR}/${VESTA_LSP_EXE_NAME}\"
+                 \"\${_dst}/vesta-lsp\" SYMBOLIC)
+        " COMPONENT lsp)
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # Metadatos CPack (comunes a todos los generadores)
@@ -166,7 +218,12 @@ set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
 set(CPACK_PACKAGE_DESCRIPTION
         "VestaVM: el compilador y la maquina virtual de los lenguajes Vex (compilado: bytecode/JIT/AOT nativo) y VSH (scripting), con su biblioteca estandar, servidor LSP, ejemplos y herramientas.")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "VestaVM")
-set(CPACK_PACKAGE_FILE_NAME        "VestaVM-${PROJECT_VERSION}-win64")
+if (WIN32)
+    set(CPACK_PACKAGE_FILE_NAME "VestaVM-${PROJECT_VERSION}-win64")
+else()
+    set(CPACK_PACKAGE_FILE_NAME
+        "VestaVM-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+endif()
 
 # Empaquetar SOLO nuestros componentes.  CPack instala CADA componente de
 # CPACK_COMPONENTS_ALL por separado (con CMAKE_INSTALL_COMPONENT definido), de
@@ -325,11 +382,89 @@ if (EXISTS "${_vesta_icon}")
 endif()
 
 # ---------------------------------------------------------------------------
-# Generador por defecto: ZIP (no requiere herramientas externas).  NSIS / WIX
-# se eligen con `cpack -G NSIS` / `cpack -G WIX`.
+# DEB / RPM  -- paquetes nativos de una distribucion de Linux
+# ---------------------------------------------------------------------------
+if (UNIX AND NOT APPLE)
+    # Una distribucion no instala "un programa con sus opciones": instala
+    # PAQUETES, y quien decide cuales es el usuario con su gestor.  Los
+    # componentes se agrupan para que salgan tres, que es la division que de
+    # verdad se corresponde con tres publicos distintos:
+    #
+    #   vesta      -- el lenguaje.  Compilador, stdlib, servidor LSP,
+    #                 herramientas y ejemplos: lo mismo que instala por defecto
+    #                 el asistente de Windows.  El editor no es un extra que se
+    #                 anade luego, es parte de usar el lenguaje.
+    #   vesta-dev  -- escribir plugins nativos: la cabecera C y el helper de
+    #                 CMake.  `libvesta.so` NO esta aqui: es parte del lenguaje
+    #                 y viaja en `vesta` (ver la regla que la instala).
+    set(CPACK_COMPONENT_CORE_GROUP     runtime)
+    set(CPACK_COMPONENT_STDLIB_GROUP   runtime)
+    set(CPACK_COMPONENT_TOOLS_GROUP    runtime)
+    set(CPACK_COMPONENT_EXAMPLES_GROUP runtime)
+    set(CPACK_COMPONENT_LSP_GROUP      runtime)
+    set(CPACK_COMPONENT_SDK_GROUP      dev)
+
+    set(CPACK_COMPONENT_GROUP_RUNTIME_DISPLAY_NAME "vesta")
+    set(CPACK_COMPONENT_GROUP_DEV_DISPLAY_NAME     "vesta-dev")
+
+    # Sin esto los generadores DEB y RPM IGNORAN los componentes y sueltan un
+    # unico paquete monolitico, por muchos grupos que se declaren.
+    set(CPACK_DEB_COMPONENT_INSTALL ON)
+    set(CPACK_RPM_COMPONENT_INSTALL ON)
+
+    # El prefijo de una distribucion.  Las rutas de las reglas install() son
+    # relativas a el: `lib/vesta/bin/vesta` acaba en `/usr/lib/vesta/bin/vesta`.
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER
+        "David Lopez T. (DesmonHak) <anonimus.hak1.1@gmail.com>")
+    set(CPACK_DEBIAN_PACKAGE_SECTION  "devel")
+    set(CPACK_DEBIAN_PACKAGE_HOMEPAGE "https://github.com/vesta-lang")
+    # DEB-DEFAULT da el nombre canonico: vesta_1.0.0_amd64.deb.
+    set(CPACK_DEBIAN_FILE_NAME "DEB-DEFAULT")
+
+    set(CPACK_DEBIAN_RUNTIME_PACKAGE_NAME "vesta")
+    set(CPACK_DEBIAN_DEV_PACKAGE_NAME     "vesta-dev")
+    # Los dos de arriba no valen para nada sin el compilador, y ademas de la
+    # MISMA version: una cabecera de otra version describiria una biblioteca
+    # distinta de la instalada.
+    set(CPACK_DEBIAN_DEV_PACKAGE_DEPENDS "vesta (= ${PROJECT_VERSION})")
+
+    # `dpkg-shlibdeps` LEE los binarios y deduce contra que hay que depender
+    # (libc, libstdc++, libssl3).  Una lista escrita a mano envejece en silencio:
+    # el dia que se enlace una biblioteca mas, el paquete se instala y falla al
+    # ejecutarse.
+    find_program(VESTA_DPKG_SHLIBDEPS dpkg-shlibdeps)
+    if (VESTA_DPKG_SHLIBDEPS)
+        set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    endif()
+
+    # RPM-DEFAULT deja que rpmbuild aplique su nomenclatura
+    # (vesta-1.0.0-1.x86_64.rpm).
+    set(CPACK_RPM_FILE_NAME "RPM-DEFAULT")
+    set(CPACK_RPM_PACKAGE_LICENSE "GPLv2 with runtime exception")
+    set(CPACK_RPM_PACKAGE_GROUP   "Development/Languages")
+    set(CPACK_RPM_RUNTIME_PACKAGE_NAME "vesta")
+    set(CPACK_RPM_DEV_PACKAGE_NAME     "vesta-devel")
+    set(CPACK_RPM_DEV_PACKAGE_REQUIRES "vesta = ${PROJECT_VERSION}")
+    # `/usr`, `/usr/bin`, `/usr/lib` y compania los aporta el sistema base: un
+    # paquete que dice ser su dueno choca con filesystem al instalarse.
+    set(CPACK_RPM_EXCLUDE_FROM_AUTO_FILELIST_ADDITION
+        "/usr" "/usr/bin" "/usr/lib" "/usr/include" "/usr/share"
+        "/usr/share/doc")
+endif()
+
+# ---------------------------------------------------------------------------
+# Generador por defecto: ZIP en Windows, TGZ en el resto -- ninguno de los dos
+# necesita herramientas externas.  NSIS / WIX / DEB / RPM se eligen con
+# `cpack -G <generador>` o con los targets de mas abajo.
 # ---------------------------------------------------------------------------
 if (NOT CPACK_GENERATOR)
-    set(CPACK_GENERATOR "ZIP")
+    if (WIN32)
+        set(CPACK_GENERATOR "ZIP")
+    else()
+        set(CPACK_GENERATOR "TGZ")
+    endif()
 endif()
 
 # Plantilla NSIS PROPIA (override de la de CPack) para habilitar instalacion
@@ -359,22 +494,95 @@ foreach(_t vesta_lsp vesta_ffi vesta_gc vesta_collections_a vesta_math_a
     endif()
 endforeach()
 
-# .exe NSIS (con auto-descarga de NSIS si falta).
-add_custom_target(installer
-        COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR}
-                -P "${CMAKE_SOURCE_DIR}/cmake/MakeInstallerNSIS.cmake"
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        VERBATIM
-        COMMENT "Generando instalador .exe (NSIS auto-descargado si no esta)")
-add_dependencies(installer ${_vesta_pkg_targets})
+if (WIN32)
+    # .exe NSIS (con auto-descarga de NSIS si falta).
+    add_custom_target(installer
+            COMMAND ${CMAKE_COMMAND} -DBUILD_DIR=${CMAKE_BINARY_DIR}
+                    -P "${CMAKE_SOURCE_DIR}/cmake/MakeInstallerNSIS.cmake"
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            VERBATIM
+            COMMENT "Generando instalador .exe (NSIS auto-descargado si no esta)")
+    add_dependencies(installer ${_vesta_pkg_targets})
 
-# .zip portable (no requiere herramientas externas).
-add_custom_target(installer-zip
-        COMMAND ${CMAKE_CPACK_COMMAND} -G ZIP --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        VERBATIM
-        COMMENT "Generando paquete .zip portable")
-add_dependencies(installer-zip ${_vesta_pkg_targets})
+    # .zip portable (no requiere herramientas externas).
+    add_custom_target(installer-zip
+            COMMAND ${CMAKE_CPACK_COMMAND} -G ZIP
+                    --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            VERBATIM
+            COMMENT "Generando paquete .zip portable")
+    add_dependencies(installer-zip ${_vesta_pkg_targets})
+
+    # --- los paquetes de Linux, desde Windows ------------------------------
+    # No compila cruzado: conduce una construccion NATIVA dentro de WSL y trae
+    # los paquetes de vuelta.  Compilar cruzado de verdad necesitaria un sysroot
+    # completo de Linux, y ademas daria binarios enlazados contra una version de
+    # glibc elegida a ojo; construyendo dentro de la distribucion,
+    # `dpkg-shlibdeps` lee los binarios y deduce las dependencias REALES.
+    #
+    # Los objetivos de aqui NO existen en Linux: alli se usan directamente
+    # `installer-deb`, `installer-rpm` e `installer-tgz`.
+    #
+    # No dependen de `_vesta_pkg_targets`: lo que se empaqueta lo construye WSL,
+    # y hacerles construir antes los binarios de Windows seria compilar el
+    # proyecto entero dos veces para no usar la mitad.
+    set(VESTA_WSL_DISTRO "" CACHE STRING
+        "Distribucion de WSL con la que generar los paquetes de Linux (vacio = la predeterminada)")
+    set(VESTA_LINUX_CMAKE_ARGS "" CACHE STRING
+        "Argumentos extra para el cmake que corre dentro de WSL")
+
+    foreach(_fmt DEB RPM TGZ)
+        string(TOLOWER "${_fmt}" _fmt_low)
+        add_custom_target(installer-linux-${_fmt_low}
+                COMMAND ${CMAKE_COMMAND}
+                        -DSRC_DIR=${CMAKE_SOURCE_DIR}
+                        -DOUT_DIR=${CMAKE_BINARY_DIR}
+                        -DDISTRO=${VESTA_WSL_DISTRO}
+                        -DFORMATOS=${_fmt}
+                        -DEXTRA_ARGS=${VESTA_LINUX_CMAKE_ARGS}
+                        -P "${CMAKE_SOURCE_DIR}/cmake/MakeInstallerLinux.cmake"
+                WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+                VERBATIM
+                COMMENT "Generando paquetes ${_fmt} de Linux dentro de WSL")
+    endforeach()
+
+    # Y el atajo: los tres de una vez.  Se apoya en los de arriba en vez de
+    # pasar una lista de formatos, que al cruzar de `add_custom_target` al
+    # script habria que escapar (`$<SEMICOLON>`) y es justo la clase de detalle
+    # que se rompe sin avisar.  Las tres pasadas comparten el arbol de
+    # construccion dentro de WSL, asi que solo la primera compila.
+    add_custom_target(installer-linux
+            COMMENT "Generando los paquetes de Linux (.deb + .rpm + .tar.gz) dentro de WSL")
+    add_dependencies(installer-linux
+            installer-linux-deb installer-linux-rpm installer-linux-tgz)
+else()
+    # .tar.gz portable: no necesita herramientas externas y sirve en cualquier
+    # distribucion, incluidas las que no usan dpkg ni rpm.
+    add_custom_target(installer-tgz
+            COMMAND ${CMAKE_CPACK_COMMAND} -G TGZ
+                    --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            VERBATIM
+            COMMENT "Generando paquete .tar.gz portable")
+    add_dependencies(installer-tgz ${_vesta_pkg_targets})
+
+    # Paquetes nativos: dos .deb (vesta, vesta-dev).
+    add_custom_target(installer-deb
+            COMMAND ${CMAKE_CPACK_COMMAND} -G DEB
+                    --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            VERBATIM
+            COMMENT "Generando paquetes .deb (vesta + vesta-dev)")
+    add_dependencies(installer-deb ${_vesta_pkg_targets})
+
+    add_custom_target(installer-rpm
+            COMMAND ${CMAKE_CPACK_COMMAND} -G RPM
+                    --config "${CMAKE_BINARY_DIR}/CPackConfig.cmake"
+            WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+            VERBATIM
+            COMMENT "Generando paquetes .rpm (necesita rpmbuild)")
+    add_dependencies(installer-rpm ${_vesta_pkg_targets})
+endif()
 
 # El target estandar `package` (creado por include(CPack)) tambien debe construir
 # los binarios antes de empaquetar -- vesta_lsp/vesta_gc/vesta_ffi NO estan en el

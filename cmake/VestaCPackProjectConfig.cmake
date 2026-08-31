@@ -15,6 +15,21 @@
 #     (`...\VestaVM\VestaVM-<ver>-win64\`), que es justo el bug reportado.
 # ---------------------------------------------------------------------------
 
+# Y como se AGRUPAN los componentes:
+#   DEB / RPM -- un paquete POR GRUPO (vesta, vesta-dev, vesta-lsp).  Es la
+#     forma de una distribucion: el usuario elige con su gestor, no con un
+#     asistente.
+#   NSIS / WIX / ZIP -- todo en UN artefacto, y quien elige es la pagina de
+#     componentes del asistente.
+if(CPACK_GENERATOR STREQUAL "DEB" OR CPACK_GENERATOR STREQUAL "RPM")
+    set(CPACK_COMPONENTS_GROUPING ONE_PER_GROUP)
+    # Ningun paquete de distribucion lleva una carpeta contenedora dentro: sus
+    # rutas cuelgan de `/`.
+    set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY 0)
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY 0)
+    return()
+endif()
+
 if(CPACK_GENERATOR STREQUAL "NSIS" OR CPACK_GENERATOR STREQUAL "WIX")
     set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY 0)
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY 0)

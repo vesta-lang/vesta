@@ -149,6 +149,7 @@ VESTA_ENV_FLAG(NoSsaCoalesce,     "VESTA_NO_SSA_COALESCE",    Emitted, RegAlloc,
 VESTA_ENV_FLAG(Arm64Vreg,         "VESTA_ARM64_VREG",         Emitted, RegAlloc, BoolOn, Any)
 VESTA_ENV_FLAG(C2Vreg,            "VESTA_C2_VREG",            Emitted, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(RematMeasure,      "VESTA_REMAT_MEASURE",      Report,  RegAlloc, Bool, Any)
+VESTA_ENV_FLAG(DeadDefReport,     "VESTA_DEAD_DEF_REPORT",    Report,  RegAlloc, Text, Any)
 VESTA_ENV_FLAG(VregDump,          "VESTA_VREG_DUMP",          Report,  RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(VregsDebug,        "VESTA_JIT_VREGS_DEBUG",    Report,  RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(SsaCoalDbg,        "VESTA_SSA_COAL_DBG",       Report,  RegAlloc, Bool, Any)

@@ -669,6 +669,15 @@ void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
          * para liveness --: sin esto, la escritura que pone un argumento en su
          * registro no la lee nadie y se borra.  Cuales, tambien por ISA. */
         abi_reads(isa, /*retorno=*/false, e);
+        /* Y sus PROPIOS operandos, que en una llamada INDIRECTA son a donde se
+         * salta.  Una direccion de 64 bits no cabe como operando inmediato, asi
+         * que se materializa en un registro de apoyo y se llama a traves de el;
+         * sin contarlo como lectura, esa materializacion parece muerta.  Se vio
+         * en `__new_...` y en un `build`: media docena de `mov r10, <imm64>`
+         * seguidas dadas por muertas, todas justo antes de su llamada. */
+        add(e.reads, reg_key(mi.dst));
+        add(e.reads, reg_key(mi.src1));
+        add(e.reads, reg_key(mi.src2));
         e.is_barrier = true;
         break;
     case MOp::SAFEPOINT:

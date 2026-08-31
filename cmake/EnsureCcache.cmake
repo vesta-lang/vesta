@@ -42,8 +42,18 @@ function(vesta_ensure_ccache _dir _out)
     endif()
 
     # -- 2. Una ya descargada por otro directorio de build. ----------------
-    file(GLOB _prev "${_dir}/*/ccache" "${_dir}/*/ccache.exe" "${_dir}/ccache"
-                    "${_dir}/ccache.exe")
+    #  Solo la de ESTA plataforma.  El directorio `.deps/` se comparte entre
+    #  builds, y en este arbol se comparte ademas entre Windows y Linux (WSL ve
+    #  el mismo disco): sin filtrar, un build de Linux cogia el `ccache.exe` que
+    #  habia dejado el de Windows.  WSL lo EJECUTA -- hay interoperabilidad --,
+    #  asi que no fallaba al elegirlo sino al usarlo, y cada compilacion moria
+    #  con "execute_noreturn of /usr/bin/cc failed: Invalid argument".  El build
+    #  entero se caia por una cache que solo pretendia ir mas rapido.
+    if (CMAKE_HOST_WIN32)
+        file(GLOB _prev "${_dir}/*/ccache.exe" "${_dir}/ccache.exe")
+    else()
+        file(GLOB _prev "${_dir}/*/ccache" "${_dir}/ccache")
+    endif()
     if (_prev)
         list(GET _prev 0 _p)
         set(${_out} "${_p}" PARENT_SCOPE)
@@ -123,6 +133,12 @@ endfunction()
 # no cambia ni una opcion de compilacion.
 function(vesta_setup_ccache)
     if (NOT VESTA_USE_CCACHE)
+        # Y se QUITA la que hubiera puesto una configuracion anterior.  El
+        # lanzador se guarda en la cache de CMake con FORCE, asi que volver a
+        # configurar con el interruptor apagado lo dejaba puesto igual: el
+        # apagado no apagaba nada, que es peor que no tener interruptor.
+        unset(CMAKE_C_COMPILER_LAUNCHER   CACHE)
+        unset(CMAKE_CXX_COMPILER_LAUNCHER CACHE)
         return()
     endif()
     vesta_ensure_ccache("${CMAKE_SOURCE_DIR}/.deps/ccache" _cc)

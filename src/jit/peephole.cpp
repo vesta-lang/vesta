@@ -12,6 +12,10 @@
 
 #include "util/env_flags.h"
 #include "jit/peephole.h"
+#include "analysis/facts/phys_liveness.h" // diagnostico: ver el hecho en accion
+
+#include <cstdio>
+#include <string>
 
 #include <cstdlib>
 #include <vector>
@@ -23,6 +27,18 @@ namespace {
 bool peephole_disabled() noexcept {
     static const bool off = util::flag_on(util::FlagId::NoPeephole);
     return off;
+}
+
+/// Solo DICE que escrituras borraria la regla que no esta puesta, sin borrar
+/// nada.  Es el instrumento para cerrarla: cada linea que imprime sobre un
+/// programa que funciona es una escritura que el hecho da por muerta, y basta
+/// con mirar UNA que no lo este para saber que fuente de liveness falta.
+///
+/// Filtra por NOMBRE de funcion, como @c VESTA_VREG_DUMP: sin filtro esto
+/// imprime miles de lineas y no se lee.
+bool deaddef_report(const std::string &fn) noexcept {
+    const std::string &want = util::flag_text(util::FlagId::DeadDefReport);
+    return !want.empty() && fn.find(want) != std::string::npos;
 }
 
 /// Desactiva SOLO el idiom xor-zeroing (bisection), dejando el resto activo.
@@ -173,9 +189,43 @@ uint32_t peephole_physical(MFunction &pf) {
      * la memoria de la maquina), que un bloque de `asm` diga los registros que
      * lee su cuerpo, y el hecho con sus pruebas.
      *
-     * Para retomarlo: el hecho ya esta, con sus pruebas en
-     * tests/jit/test_phys_liveness.cpp.  Lo que falta es completar de que mas
-     * depende un registro para seguir vivo. */
+     * COMO SE RETOMA, que es lo util: `VESTA_DEAD_DEF_REPORT=<parte del nombre
+     * de una funcion>` imprime que escrituras BORRARIA sin borrar ninguna.
+     * Cada linea sobre un programa que funciona es una escritura que el hecho
+     * da por muerta; basta con mirar UNA que no lo este para saber que fuente
+     * de liveness falta.  Asi salieron las tres que ya estan cerradas -- lo
+     * que lee un `ret`, lo que lee una llamada por convencion, y sus propios
+     * operandos cuando la llamada es indirecta --: en `252_gc_ref_field` el
+     * informe paso de diez lineas a una.
+     *
+     * Lo que queda por encontrar no es poco: con la regla puesta, la suite
+     * ENTERA se cae -- POO, herencia, interfaces, polimorfismo, colas --, todo
+     * devolviendo 0.  El grupo del recolector solo, en cambio, pasa 22 de 23;
+     * mirar un subconjunto engana. */
+    if (deaddef_report(pf.name)) {
+        const analysis::facts::PhysLivenessFacts vivos =
+            analysis::facts::compute_phys_liveness(pf);
+        for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
+            const MBlock &b = pf.blocks[bi];
+            for (size_t i = 0; i < b.instrs.size(); ++i) {
+                const MInstr &in = b.instrs[i];
+                if (in.op != MOp::MOV) continue;
+                if (in.dst.kind != MOperandKind::REG || in.dst.width != 8)
+                    continue;
+                if (in.src2.kind != MOperandKind::NONE) continue;
+                if (vivos.is_live_after(static_cast<uint32_t>(bi),
+                                        static_cast<uint32_t>(i), in.dst.reg))
+                    continue;
+                std::fprintf(stderr,
+                             "[deaddef] %s bloque %zu instr %zu: mov r%u <- "
+                             "(fuente kind %d) parece MUERTA%s\n",
+                             pf.name.c_str(), bi, i,
+                             static_cast<unsigned>(in.dst.reg),
+                             static_cast<int>(in.src1.kind),
+                             vivos.opaco ? " [hay puntos sin saber]" : "");
+            }
+        }
+    }
     for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
         MBlock &b = pf.blocks[bi];
         std::vector<MInstr> kept;

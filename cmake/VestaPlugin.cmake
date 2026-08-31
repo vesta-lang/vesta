@@ -57,6 +57,18 @@ endif()
 #     [EXTRA_LINK_OPTIONS    <opts...>]         -- flags adicionales de enlace
 # )
 
+# Las rutas de `install()` se normalizan (`CMP0177`).
+#
+# Se fija AQUI, y no solo en el CMakeLists raiz, porque cada plugin de la stdlib
+# empieza su fichero con `cmake_minimum_required(VERSION 3.15)`, y eso REINICIA
+# las politicas a las de aquella version.  Una funcion recuerda las politicas de
+# donde se DEFINIO, asi que basta con que esten puestas al leer este fichero:
+# la regla `install()` de dentro las hereda aunque quien la llame las tenga sin
+# fijar.
+if (POLICY CMP0177)
+    cmake_policy(SET CMP0177 NEW)
+endif ()
+
 function(add_vesta_plugin TARGET)
     cmake_parse_arguments(
         _P                          # prefijo de variables locales
@@ -208,9 +220,15 @@ function(add_vesta_plugin TARGET)
             # Los plugins nativos viven en el arbol de la stdlib (stdlib/native/..),
             # que va en la RAIZ del prefijo (no en bin/).  El runtime en bin/ los
             # resuelve relativo a su padre (exe_dir/../stdlib/native/..).
+            # `VESTA_INSTALL_PRIVDIR` es la raiz del arbol privado: la del
+            # prefijo en Windows y `lib/vesta` en una distribucion.  Sin el, el
+            # plugin caia en `<prefix>/stdlib/...`, que en un .deb seria
+            # `/usr/stdlib` -- fuera de sitio y donde el ejecutable no mira.
             install(TARGETS ${TARGET}
-                RUNTIME DESTINATION "${_vp_rel}" COMPONENT stdlib
-                LIBRARY DESTINATION "${_vp_rel}" COMPONENT stdlib)
+                RUNTIME DESTINATION "${VESTA_INSTALL_PRIVDIR}/${_vp_rel}"
+                        COMPONENT stdlib
+                LIBRARY DESTINATION "${VESTA_INSTALL_PRIVDIR}/${_vp_rel}"
+                        COMPONENT stdlib)
         endif()
     endif()
 
