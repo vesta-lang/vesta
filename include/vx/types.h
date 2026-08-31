@@ -754,14 +754,22 @@ constexpr size_t smart_ptr_slot_bytes(PrimitiveKind k) noexcept {
      * plantilla y `default_delete` es una clase vacia); alli un liberador
      * propio vuelve a costar ocho porque guarda el puntero a funcion, y aqui
      * es gratis tambien. */
-    /* PENDIENTE bajarlo a ocho.  Ya no lo impide el lenguaje: quien libera va
-     * en el tipo y quien limpia lo llama por su nombre en el caso normal.  Lo
-     * que queda es UN helper compartido -- el que libera un slot cuando se
-     * reasigna un campo, y el que el recolector usa al finalizar -- que recibe
-     * SOLO una direccion, sin tipo, y por eso lee el liberador de la ranura.
-     * Se cierra generando un helper por liberador y llamando al que toque desde
-     * cada sitio, que si conoce el tipo. */
-    return (k == PrimitiveKind::UNIQUE_PTR) ? 16u : 8u;
+    /* OCHO los dos: la ranura guarda SOLO el puntero al recurso.
+     *
+     * Quien libera va en el TIPO (@c Type::deleter_name), asi que quien limpia
+     * sabe al COMPILAR a quien llamar y no hay nada que guardar.  Antes un
+     * `unique<T>` media dos palabras porque llevaba el liberador al lado, y con
+     * el de por defecto esa segunda palabra era SIEMPRE un cero: ocho bytes por
+     * una constante, en el caso mas frecuente.  Peor en un CAMPO, donde no
+     * cabia y obligaba a un bloque aparte en el monton -- treinta y dos bytes y
+     * DOS reservas para guardar un entero, contra dieciseis y una --.
+     *
+     * C++ llega a ocho por el mismo camino (el liberador es un parametro de
+     * plantilla y `default_delete` es una clase vacia); alli un liberador
+     * propio vuelve a costar ocho porque guarda el puntero a funcion, y aqui es
+     * gratis tambien. */
+    (void)k;
+    return 8u;
 }
 
 /**

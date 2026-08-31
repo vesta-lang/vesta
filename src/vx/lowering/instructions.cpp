@@ -106,13 +106,14 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
         // AOT: CALL vx_gc_register_finalizer(payload, kind, aux) de
         // libvesta_gc.  El runner nativo ejecuta el deleter/dtor por CALL
         // directo cuando el sweep colecte el objeto (o el shutdown lo
-        // finalice). aux = vaddr/func_ptr del <Clase>____dtor (kind==3), 0 para
-        // UNIQUE/ SHARED (su deleter vive dentro del box).  El auto-link de
-        // libvesta_gc.a se dispara al detectar el simbolo vx_gc_*.
+        // finalice).  aux = a quien llamar: el `<Clase>____dtor` (kind 3) o el
+        // liberador del `unique` (kind 1); cero cuando es el de por defecto o
+        // el box lo resuelve solo (SHARED).  El auto-link de libvesta_gc.a se
+        // dispara al detectar el simbolo vx_gc_*.
         const ir::IrValueId v_kind = emit_const(
             ir::IrType::I64, static_cast<int64_t>(kind), source_line);
         const ir::IrValueId v_aux =
-            (kind == 3 && v_dtor_addr != ir::IR_NO_VALUE)
+            ((kind == 3 || kind == 1) && v_dtor_addr != ir::IR_NO_VALUE)
                 ? v_dtor_addr
                 : emit_const(ir::IrType::I64, 0, source_line);
         ir::IrInstr ins{};
@@ -126,12 +127,14 @@ void Lowering::emit_gc_set_finalizer(ir::IrValueId v_box, uint32_t kind,
         emit(current_block_, std::move(ins));
         return;
     }
-    // interp/JIT: opcode gcfinal (1/2) o gcfinalc (3 = CLASS_DTOR).
+    // interp/JIT: la variante con destino cuando se sabe A QUIEN llamar -- el
+    // destructor de una clase (kind 3) o el liberador de un `unique` (kind 1);
+    // la simple cuando no hay que decirlo.
     ir::IrInstr ins{};
     ins.op = ir::IrOp::GC_SET_FINALIZER;
     ins.type = ir::IrType::VOID;
     ins.dst = ir::IR_NO_VALUE;
-    if (kind == 3 && v_dtor_addr != ir::IR_NO_VALUE)
+    if ((kind == 3 || kind == 1) && v_dtor_addr != ir::IR_NO_VALUE)
         ins.operands = {v_box, v_dtor_addr};
     else
         ins.operands = {v_box};

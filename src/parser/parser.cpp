@@ -510,6 +510,10 @@ static const std::unordered_map<std::string, InstructionPattern>
         {"gcfinal", {"gcfinal", OpArity::TWO}},
         /* --- gcfinalc r_box, r_dtor: CLASS_DTOR con vaddr del dtor concreto */
         {"gcfinalc", {"gcfinalc", OpArity::TWO}},
+        // Mismo opcode que `gcfinalc`; lo que cambia es a quien se llama al
+        // finalizar (el liberador de un `unique` en vez del destructor de una
+        // clase), y eso viaja en el byte de control.
+        {"gcfinalu", {"gcfinalu", OpArity::TWO}},
 
         /* --- gccollect: fuerza minor+major GC + drena finalizadores --- */
         {"gccollect", {"gccollect", OpArity::ZERO}},

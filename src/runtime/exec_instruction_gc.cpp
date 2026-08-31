@@ -416,8 +416,14 @@ void exec_instr_gcfinalc(ProcessVM *vm, const DecodedInstr &instr) {
     if (box == 0) return;
     const uint64_t dtor_vaddr = vm->registers.regs[r_dtor].qword();
     auto *payload = reinterpret_cast<uint8_t *>(box);
-    vm->gc_heap.register_finalizer(payload, gc::GcFinalizerKind::CLASS_DTOR,
-                                   dtor_vaddr);
+    /* A QUIEN se llama al finalizar lo dicen los dos bits altos del byte de
+     * control: el destructor de la clase, o el liberador de un `unique`.  El
+     * cero es el destructor porque es lo que ese byte significaba cuando no se
+     * usaba, asi que el bytecode anterior sigue diciendo lo mismo. */
+    const gc::GcFinalizerKind kind = (instr.flags_info.mode == 1)
+                                         ? gc::GcFinalizerKind::UNIQUE
+                                         : gc::GcFinalizerKind::CLASS_DTOR;
+    vm->gc_heap.register_finalizer(payload, kind, dtor_vaddr);
 }
 
 /**

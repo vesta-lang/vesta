@@ -562,9 +562,9 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
              * que adivinar: un `move` devuelve el tipo de su argumento y una
              * fabrica el que declara su firma, asi que los dos lo traen
              * puesto.  Vacio = el de por defecto. */
-            act.literal_deleter = sem_type.deleter_name.empty()
-                                      ? std::string("free")
-                                      : sem_type.deleter_name;
+            // Tal cual lo dice el tipo: que vacio signifique el de por defecto
+            // lo sabe quien emite la liberacion, y se dice en un solo sitio.
+            act.literal_deleter = sem_type.deleter_name;
             act.slot_size = smart_ptr_slot_bytes(PrimitiveKind::UNIQUE_PTR);
 
             // Bug fix bug2: si el inner T es una CLASS Vesta con destructor,

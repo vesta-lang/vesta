@@ -640,8 +640,15 @@ static const std::unordered_map<std::string, std::vector<InstrInfo>>
          {{0x00, 0x7F, InstrSizeMode::FIXED_4, AddressingMode::INMED,
            emit_gcfinal}}},
 
-        /* --- gcfinalc r_box, r_dtor (FIXED_4, dos regs): CLASS_DTOR --- */
+        /* --- gcfinalc / gcfinalu r_box, r_target (FIXED_4, dos regs):
+               registran un finalizador diciendo A QUIEN llamar -- el destructor
+               de la clase, o el liberador del `unique` --.  Mismo opcode, se
+               distinguen por los dos bits altos del byte de control (igual que
+               `mods` y `modu`). --- */
         {"gcfinalc",
+         {{0x00, 0x8D, InstrSizeMode::FIXED_4, AddressingMode::REG,
+           emit_gcfinalc}}},
+        {"gcfinalu",
          {{0x00, 0x8D, InstrSizeMode::FIXED_4, AddressingMode::REG,
            emit_gcfinalc}}},
 

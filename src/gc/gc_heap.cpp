@@ -1504,10 +1504,15 @@ void GcHeap::register_finalizer(uint8_t *payload, GcFinalizerKind kind,
     // Freestanding -safe (U64U64Map hash open-addressing): mismo camino en
     // interp/JIT/AOT, cierra la fuga de gc<Clase> con ~Clase() en AOT.  O(1)
     // amortizado.
-    if (kind == GcFinalizerKind::CLASS_DTOR) {
+    // Y UNIQUE igual: quien libera lo dice el TIPO del box, asi que quien lo
+    // registra lo sabe al COMPILAR y lo pasa aqui.  Antes se leia del propio
+    // box (la palabra de al lado del puntero), que es la unica razon por la
+    // que un `unique<T>` media dos palabras en vez de una.
+    if (kind == GcFinalizerKind::CLASS_DTOR ||
+        kind == GcFinalizerKind::UNIQUE) {
         const uint64_t key = reinterpret_cast<uint64_t>(payload);
         // set() sobrescribe si ya existe (re-registro del mismo host_ptr).
-        class_dtor_vaddr_.set(key, dtor_vaddr);
+        finalizer_target_.set(key, dtor_vaddr);
     }
 }
 
@@ -1516,10 +1521,9 @@ void GcHeap::unregister_finalizer(uint8_t *payload) {
     auto *hdr = reinterpret_cast<GcHeader *>(payload - sizeof(GcHeader));
     hdr->has_finalizer = 0;
     hdr->finalizer_kind = 0;
-    // Quitar la entrada de la side-table CLASS_DTOR (hash erase, O(1)
-    // amortizado).
+    // Quitar la entrada de la tabla lateral (hash erase, O(1) amortizado).
     const uint64_t key = reinterpret_cast<uint64_t>(payload);
-    class_dtor_vaddr_.erase(key);
+    finalizer_target_.erase(key);
 }
 
 void GcHeap::stage_finalizer(GcHeader *hdr, uint8_t *payload) {
@@ -1535,16 +1539,20 @@ void GcHeap::stage_finalizer(GcHeader *hdr, uint8_t *payload) {
         // take() = lookup + borrado en una sola pasada (hash, O(1) amortizado).
         const uint64_t key = reinterpret_cast<uint64_t>(payload);
         f.a0 = 0;
-        class_dtor_vaddr_.take(key, f.a0);
+        finalizer_target_.take(key, f.a0);
         f.a1 = reinterpret_cast<uint64_t>(payload);
     } else {
-        // UNIQUE: box = [inner_ptr@0, deleter_vaddr@8].  SHARED: box =
-        // [ctrl@0].
+        // El box guarda UNA palabra: el puntero al recurso (UNIQUE) o al
+        // bloque de control (SHARED).
         std::memcpy(&f.a0, payload, sizeof(uint64_t));
-        if (kind == GcFinalizerKind::UNIQUE)
-            std::memcpy(&f.a1, payload + 8, sizeof(uint64_t));
-        else
-            f.a1 = 0;
+        f.a1 = 0;
+        // Y quien libera un UNIQUE sale de la tabla lateral, no del box: lo
+        // dejo puesto quien registro el finalizador, que conocia el TIPO.
+        // Leerlo del box obligaba a que el box llevara una palabra de mas.
+        if (kind == GcFinalizerKind::UNIQUE) {
+            const uint64_t key = reinterpret_cast<uint64_t>(payload);
+            finalizer_target_.take(key, f.a1);
+        }
     }
     pending_finalizers_.push_back(f);
     hdr->has_finalizer = 0;

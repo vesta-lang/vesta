@@ -5503,13 +5503,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
             // kind==3 (CLASS_DTOR): lleva un 2o operando = vaddr del dtor
             // concreto (dispatch estatico).  Se emite con el opcode dedicado
             // `gcfinalc r_box, r_dtor` (registra CLASS_DTOR + guarda el vaddr).
-            if (ins.imm == 3 && ins.operands.size() >= 2) {
+            if ((ins.imm == 3 || ins.imm == 1) && ins.operands.size() >= 2) {
                 // Recarga previa de AMBOS operandos, cada uno en su scratch:
                 // reg_of solo consulta y devolveria el mismo registro para los
                 // dos.
                 (void)ctx.load_src(ins.operands[0], 0);
                 (void)ctx.load_src(ins.operands[1], 1);
-                ctx.out.emit(emmit::Mnemonic::GCFINALC,
+                // El mnemonico dice A QUIEN se llama: el destructor de la clase
+                // o el liberador del `unique`.  Mismo opcode.
+                ctx.out.emit(ins.imm == 1 ? emmit::Mnemonic::GCFINALU
+                                          : emmit::Mnemonic::GCFINALC,
                              ctx.reg_at(ins.operands[0], 0),
                              ctx.reg_at(ins.operands[1], 1));
             } else {

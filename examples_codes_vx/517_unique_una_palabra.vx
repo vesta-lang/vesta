@@ -1,0 +1,77 @@
+namespace ejemplos.unique_una_palabra;
+
+// Un `unique<T>` mide UNA palabra.
+//
+// Guarda el puntero al recurso y nada mas.  Quien libera va en el TIPO, asi que
+// quien limpia sabe al compilar a quien llamar y no hay nada que guardar.
+//
+// Antes median dos.  La segunda era quien libera, y con el de por defecto era
+// SIEMPRE un cero: ocho bytes por una constante, en el caso mas frecuente.  Hacia
+// falta porque no habia forma de decirlo en una firma -- cuando el puntero venia
+// de una funcion, quien libera se leia de esa palabra EN EJECUCION --, y eso
+// obligaba a llevarla siempre.
+//
+// C++ llega a ocho por el mismo camino: alli quien libera es un parametro de
+// plantilla y `default_delete` es una clase vacia.  La diferencia es que en C++
+// un liberador PROPIO vuelve a costar ocho, porque guarda el puntero a funcion;
+// aqui tambien es gratis.
+//
+// Lo que se comprueba es que el cambio de tamano no se nota desde fuera: los dos
+// liberadores, adoptar y empaquetar, mover, guardarlo en un campo, reasignarlo,
+// devolverlo desde una funcion, y que cada recurso se libere EXACTAMENTE una vez.
+
+class Cuenta {
+	public static i64 propios;
+	public static i64 total;
+}
+
+void cerrar(i64 h) {
+	Cuenta.propios = Cuenta.propios + 1;
+	Cuenta.total   = Cuenta.total + h;
+}
+
+// El CAMPO dice quien libera: su tipo esta fijado en la declaracion del
+// contenedor, asi que no puede adoptarlo del inicializador como hace un local.
+class Recurso {
+	unique<i64, cerrar> asa;
+}
+
+// La FIRMA tambien, porque quien recibe el puntero es quien lo va a liberar.
+unique<i64, cerrar> abrir(i64 h) {
+	unique<i64> u = unique_with(h, cerrar); // el local SI lo adopta
+	return u;
+}
+
+i32 main() {
+	Cuenta.propios = 0;
+	Cuenta.total   = 0;
+
+	// Un centinela pegado a los punteros en la pila: si alguno midiera de mas,
+	// lo primero que se lleva por delante es esto.
+	const i64 centinela = 300_i64;
+
+	// Empaquetar un valor: reserva y libera con el de por defecto.
+	unique<i64> caja  = unique_box(11);
+	const i64   leido = *ptr_of(caja);
+
+	// Adoptar un recurso con liberador propio, y moverlo.  Tras el move el
+	// origen queda invalidado, asi que se libera UNA vez y no dos.
+	unique<i64> a = unique_with(7, cerrar);
+	unique<i64> b = move(a);
+
+	// Devuelto desde una funcion: quien llama lo libera, y sabe con que porque
+	// lo dice la firma.
+	unique<i64> c = abrir(20);
+
+	// En un campo, y reasignado: al reasignar se libera el anterior.
+	Recurso r = new Recurso();
+	r.asa = unique_with(30, cerrar);
+	r.asa = unique_with(40, cerrar); // libera el 30
+
+	println("leido=${leido} propios=${Cuenta.propios} centinela=${centinela}");
+
+	// Al salir se liberan los que quedan vivos: b(7), c(20) y el 40 del campo.
+	// Con el 30 que ya se libero al reasignar, son cuatro liberaciones propias
+	// y 7+20+40+30 = 97 sumado.
+	return (i32)(leido + centinela - 280); // 11 + 300 - 280 = 31
+}

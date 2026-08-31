@@ -173,7 +173,20 @@ bool Lowering::try_lower_ownership_builtins(ast::CallExpr *e, Builtin b,
             // cleanup de scope (anti-doble-free).  Cero coste para
             // gc<primitivo> (no es smart-wrapper -> no lleva finalizador).
             if (sem_payload.kind == PrimitiveKind::UNIQUE_PTR) {
-                emit_gc_set_finalizer(v_box, /*UNIQUE*/ 1, e->loc.line);
+                /* Y se le dice A QUIEN llamar, que lo sabemos por el TIPO del
+                 * puntero.  Antes se registraba con un cero y el recolector lo
+                 * leia del propio box, que es la unica razon por la que un
+                 * `unique<T>` tenia que medir dos palabras.  Vacio = el
+                 * liberador de por defecto, y ahi el cero sigue valiendo. */
+                ir::IrValueId v_del = ir::IR_NO_VALUE;
+                if (!sem_payload.deleter_name.empty() &&
+                    sem_payload.deleter_name != "free" &&
+                    tc_.lookup_extern_qualified(sem_payload.deleter_name)
+                        .empty()) {
+                    v_del =
+                        emit_label_addr(sem_payload.deleter_name, e->loc.line);
+                }
+                emit_gc_set_finalizer(v_box, /*UNIQUE*/ 1, e->loc.line, v_del);
             } else if (sem_payload.kind == PrimitiveKind::SHARED_PTR) {
                 emit_gc_set_finalizer(v_box, /*SHARED*/ 2, e->loc.line);
             }
@@ -545,18 +558,9 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
                 // 4. STORE host_ptr al slot+0 del unique<T>.
                 emit_store_typed(v_slot, v_host,
                                  ir::IrType::I64, e->loc.line);
-                // 5. Y un cero en la palabra de al lado (liberador "por
-                //    defecto"), que solo lee el helper compartido sin tipo.
-                {
-                    const ir::IrValueId v_eight =
-                        emit_const(ir::IrType::I64, 8, e->loc.line);
-                    const ir::IrValueId v_slot8 =
-                        emit_ptr_add(v_slot, v_eight, e->loc.line);
-                    const ir::IrValueId v_zero =
-                        emit_const(ir::IrType::I64, 0, e->loc.line);
-                    emit_store_typed(v_slot8, v_zero, ir::IrType::I64,
-                                     e->loc.line);
-                }
+                // 5. Y nada mas: la ranura es UNA palabra.  Aqui se escribia
+                //    ademas un cero en la de al lado -- el liberador "por
+                //    defecto" --, que ahora vive en el tipo.
                 out_value = v_slot;
                 return true;
             }
@@ -750,20 +754,10 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         //                            cleanup hace CALLVIRT dtor + skip
         //                            free.
         emit_store_typed(v_slot, v_to_store, ir::IrType::I64, e->loc.line);
-        /* Y un cero en la palabra de al lado: "el liberador de por defecto".
-         * Solo lo lee el helper compartido que libera un slot sin saber su
-         * tipo -- el del recolector y el de reasignar un campo --; el resto
-         * del camino ya lo saca del tipo.  Cuando ese helper se genere por
-         * liberador, esta palabra sobra y la ranura baja a una. */
-        {
-            const ir::IrValueId v_eight =
-                emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_slot8 =
-                emit_ptr_add(v_slot, v_eight, e->loc.line);
-            const ir::IrValueId v_zero =
-                emit_const(ir::IrType::I64, 0, e->loc.line);
-            emit_store_typed(v_slot8, v_zero, ir::IrType::I64, e->loc.line);
-        }
+        /* Y nada mas: la ranura es UNA palabra.  Aqui se escribia ademas un
+         * cero en la de al lado -- el liberador "de por defecto" --, ocho bytes
+         * por una constante en el caso mas frecuente.  Quien libera vive ahora
+         * en el TIPO y quien limpia lo llama por su nombre. */
         fn_->values[v_slot].pointee_is_host_ptr = true;
         out_value = v_slot;
         return true;
@@ -880,39 +874,15 @@ bool Lowering::lower_owner_box_with(ast::CallExpr *e, Builtin b,
      * que guardar --: el tipo lo dice igual, sea Vesta o extern. */
     const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
     emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
-    /* Y la DIRECCION de quien libera en la palabra de al lado.  Ya no la lee
-     * casi nadie -- quien limpia lo saca del TIPO --, solo el helper compartido
-     * que libera un slot sin saber de que tipo es: el del recolector al
-     * finalizar y el de reasignar un campo.  Un liberador que no sea una
-     * funcion Vesta (`free`, un `extern`) no tiene direccion que apuntar, y
-     * ahi va un cero; ese caso el helper lo resuelve como liberacion normal.
+    /* Y nada mas: la ranura es UNA palabra, el manejador.
      *
-     * Cuando ese helper se genere por liberador, esto entero desaparece. */
-    const ir::IrValueId v_deleter_addr = fn_->new_value(ir::IrType::I64);
-    {
-        ir::IrValueId v_src;
-        if (deleter_label == "free" ||
-            deleter_label.rfind("@extern:", 0) == 0) {
-            v_src = emit_const(ir::IrType::I64, 0, e->loc.line);
-        } else {
-            v_src = emit_label_addr(deleter_label, e->loc.line);
-        }
-        ir::IrInstr mov{};
-        mov.op = ir::IrOp::MOV;
-        mov.type = ir::IrType::I64;
-        mov.dst = v_deleter_addr;
-        mov.operands = {v_src};
-        mov.source_line = e->loc.line;
-        emit(current_block_, std::move(mov));
-    }
-    {
-        const ir::IrValueId v_eight =
-            emit_const(ir::IrType::I64, 8, e->loc.line);
-        const ir::IrValueId v_slot8 =
-            emit_ptr_add(v_slot, v_eight, e->loc.line);
-        emit_store_typed(v_slot8, v_deleter_addr, ir::IrType::I64,
-                         e->loc.line);
-    }
+     * Aqui se escribia ademas la DIRECCION de quien libera en la de al lado, y
+     * con ella todo lo que hacia falta para ponerla: materializarla, y un cero
+     * para los liberadores que no son funciones Vesta -- `free` y los `extern`
+     * no tienen direccion que apuntar --.  Quien limpia lo saca del TIPO, asi
+     * que no hay nada que guardar; y de paso desaparece esa limitacion, porque
+     * el tipo lo dice igual sea Vesta o extern. */
+    (void)deleter_label;
     // El slot contiene un valor con semantica de host_ptr / handle.
     fn_->values[v_slot].pointee_is_host_ptr = true;
     out_value = v_slot;

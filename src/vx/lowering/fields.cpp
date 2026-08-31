@@ -921,9 +921,11 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         emit_field_addr(fn_, current_block_, obj, off, loc.line);
     // Reasignar un campo unique<T>: capturamos el slot ANTERIOR (el campo aun
     // lo guarda) ANTES de sobreescribirlo; tras el store del nuevo lo liberamos
-    // via CALL al helper __vx_free_uniq (NO inline, para no pegar el diamante
-    // del free al tailcall del dtor en este call site -> evita el bucle).  El
-    // nuevo slot ya se aloco -> distinto del viejo, sin double-free.
+    // llamando al ayudante que libera con SU liberador -- el que dice el tipo
+    // del campo --.  Va como una llamada y no en linea para que el rombo del
+    // camino de liberar no se cruce con el salto final del destructor aqui
+    // mismo, que hacia un bucle.  El slot nuevo ya se reservo, asi que es
+    // distinto del viejo y no hay doble liberacion.
     ir::IrValueId uniq_old_slot = ir::IR_NO_VALUE;
     if (ftyp.kind == PrimitiveKind::UNIQUE_PTR) {
         uniq_old_slot = fn_->new_value(ir::IrType::I64);
@@ -1056,12 +1058,13 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
     // diamante en el call site).  El helper hace null-guard internamente -> el
     // primer store (campo == 0) es un no-op.
     if (uniq_old_slot != ir::IR_NO_VALUE) {
-        needs_free_uniq_helper_ = true;
         ir::IrInstr ci{};
         ci.op = ir::IrOp::CALL;
         ci.type = ir::IrType::VOID;
         ci.dst = ir::IR_NO_VALUE;
-        ci.func_name = "__vx_free_uniq";
+        // Quien libera lo dice el TIPO del campo, asi que se llama al ayudante
+        // que le toca en vez de a uno generico que tuviera que averiguarlo.
+        ci.func_name = free_uniq_helper_for(ftyp.deleter_name);
         ci.operands = {uniq_old_slot};
         ci.source_line = loc.line;
         ci.is_call_site = true;

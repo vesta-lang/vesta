@@ -1583,8 +1583,7 @@ void Lowering::emit_free_unique_field(ir::IrValueId this_vid,
         ld.source_line = line;
         emit(current_block_, std::move(ld));
     }
-    emit_free_unique_slot(slot, deleter.empty() ? std::string("free") : deleter,
-                          line);
+    emit_free_unique_slot(slot, deleter, line);
 }
 
 void Lowering::emit_memberwise_copy(ir::IrValueId dst_addr,

@@ -52,6 +52,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -2679,16 +2680,35 @@ class Lowering {
     /// Genera los thunks Vesta `__cfnthunk_<fn>` para los externs cuya
     /// direccion se tomo como cfn (ver @c extern_cfn_thunks_).
     void generate_extern_cfn_thunks(ir::IrModule &out);
-    /// Sintetiza, si @c needs_free_uniq_helper_, la funcion runtime
-    /// `__vx_free_uniq(i64 slot)` que libera un slot Tier 1 de unique<T>
-    /// (null-guard + dispatch del deleter + RAW_FREE del slot, reusando
-    /// @c emit_free_unique_slot).  La usa el reassign-free de un campo unique
-    /// como una sola CALL (el diamante del free vive DENTRO del helper,
-    /// evitando la interaccion del diamante con el tailcall del dtor en el call
-    /// site).
+    /// Sintetiza UNO POR LIBERADOR de los ayudantes que liberan la ranura de un
+    /// `unique<T>` (comprobar nulo + llamar a quien libera + soltar la ranura,
+    /// reusando @c emit_free_unique_slot).  Lo usa la reasignacion de un campo
+    /// como una sola llamada: el rombo del camino de liberar vive DENTRO del
+    /// ayudante y no se cruza con el salto final del destructor en el sitio de
+    /// la llamada.
+    ///
+    /// Uno por liberador y no uno compartido porque quien libera va en el TIPO
+    /// del campo: asi el ayudante lo llama por su nombre en vez de leerlo de la
+    /// ranura en ejecucion, que es lo que obligaba a que la ranura midiera dos
+    /// palabras.
     void generate_free_uniq_helper(ir::IrModule &out);
-    /// @c true si algun reassign de campo unique<T> requiere el helper.
-    bool needs_free_uniq_helper_ = false;
+    /// @c true si @p deleter es el liberador de POR DEFECTO.
+    ///
+    /// Vacio quiere decir "el de por defecto" -- es lo que trae un tipo que no
+    /// nombra ninguno --, y el de por defecto es `free`.  Ese criterio se dice
+    /// AQUI y en ningun otro sitio: estaba escrito en cinco, y con eso basta
+    /// para que uno se quede atras y trate un caso comun como si fuera raro.
+    static bool is_default_deleter(const std::string &deleter) {
+        return deleter.empty() || deleter == "free";
+    }
+    /// Como se llama el ayudante que libera con @p deleter (vacio = el de por
+    /// defecto).  Solo nombra: no anota nada.
+    static std::string free_uniq_helper_name(const std::string &deleter);
+    /// Igual, pero ademas lo anota para que se sintetice.  Lo llama quien va a
+    /// emitir la llamada.
+    std::string free_uniq_helper_for(const std::string &deleter);
+    /// Los liberadores para los que hace falta un ayudante.  Vacio = ninguno.
+    std::set<std::string> free_uniq_helpers_;
     /// Devuelve el label a usar para `&fn` / promocion a cfn.  Si @c name es
     /// un extern, registra el thunk y devuelve `__cfnthunk_<fn>`; si no, el
     /// label mangled (o el nombre).

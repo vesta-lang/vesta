@@ -294,8 +294,9 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             // SMARTPTR_FREE mas abajo.
             if (native_poo_) {
                 const uint32_t ln = it->source_line;
-                // "free" es null-safe (RAW_FREE(0)=no-op) -> sin guard.
-                if (it->literal_deleter == "free") {
+                // El de por defecto es null-safe (RAW_FREE(0)=no-op) -> sin
+                // guarda.
+                if (is_default_deleter(it->literal_deleter)) {
                     ir::IrInstr fr{};
                     fr.op = ir::IrOp::RAW_FREE;
                     fr.type = ir::IrType::VOID;
@@ -328,61 +329,6 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                     cn.source_line = ln;
                     cn.is_call_site = true;
                     emit(current_block_, std::move(cn));
-                } else if (it->literal_deleter.empty()) {
-                    // SRET: deleter dinamico en slot+8.  Si !=0 -> CALLIND;
-                    // si ==0 -> RAW_FREE.  Nested guard.
-                    const ir::IrValueId v_eight =
-                        emit_const(ir::IrType::I64, 8, ln);
-                    const ir::IrValueId v_slot8 =
-                        fn_->new_value(ir::IrType::PTR);
-                    fn_->values[v_slot8].is_host_ptr = true;
-                    {
-                        ir::IrInstr ad{};
-                        ad.op = ir::IrOp::ADD;
-                        ad.type = ir::IrType::PTR;
-                        ad.dst = v_slot8;
-                        ad.operands = {opnds[0], v_eight};
-                        ad.source_line = ln;
-                        emit(current_block_, std::move(ad));
-                    }
-                    const ir::IrValueId v_del = emit_load_host_ptr(v_slot8, ln);
-                    const ir::IrBlockId bb_call = fn_->new_block("sp_call");
-                    const ir::IrBlockId bb_free = fn_->new_block("sp_free");
-                    const ir::IrValueId v_z2 =
-                        emit_const(ir::IrType::I64, 0, ln);
-                    const ir::IrValueId v_c2 =
-                        emit_ir_binop(ir::IrOp::CMP_NE, v_del, v_z2, ir::IrType::BOOL, ln);
-                    {
-                        emit_br_cond(v_c2, bb_call, bb_free, ln);
-                    }
-                    // bb_call: CALLIND deleter(ptr) -> bb_skip.
-                    current_block_ = bb_call;
-                    {
-                        ir::IrInstr ci{};
-                        ci.op = ir::IrOp::CALLIND;
-                        ci.type = ir::IrType::VOID;
-                        ci.dst = ir::IR_NO_VALUE;
-                        ci.func_ptr = v_del;
-                        ci.operands = {v_ptr};
-                        ci.source_line = ln;
-                        ci.is_call_site = true;
-                        emit(current_block_, std::move(ci));
-                        emit_br(bb_skip, ln);
-                    }
-                    // bb_free: RAW_FREE(ptr) -> bb_skip.
-                    current_block_ = bb_free;
-                    {
-                        ir::IrInstr fr{};
-                        fr.op = ir::IrOp::RAW_FREE;
-                        fr.type = ir::IrType::VOID;
-                        fr.dst = ir::IR_NO_VALUE;
-                        fr.operands = {v_ptr};
-                        fr.source_line = ln;
-                        emit(current_block_, std::move(fr));
-                        emit_br(bb_skip, ln);
-                    }
-                    current_block_ = bb_skip;
-                    break;
                 } else {
                     // deleter Vesta (fn por nombre) -> CALL directo.
                     ir::IrInstr ca{};
@@ -403,52 +349,11 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
                 break;
             }
 
-            if (it->literal_deleter.empty()) {
-                // SRET case: el smart pointer vino de una funcion
-                // (factory).  No tenemos info compile-time del
-                // deleter; lo leemos dinamicamente del slot+8.
-                // Si deleter_addr == 0 -> RAW_FREE; si != 0 ->
-                // callvmr al puntero (deleter Vesta).
-                const ir::IrValueId v_eight =
-                    emit_const(ir::IrType::I64, 8, it->source_line);
-                const ir::IrValueId v_slot8 = fn_->new_value(ir::IrType::PTR);
-                {
-                    ir::IrInstr add{};
-                    add.op = ir::IrOp::ADD;
-                    add.type = ir::IrType::I64;
-                    add.dst = v_slot8;
-                    add.operands = {opnds[0], v_eight};
-                    add.source_line = it->source_line;
-                    emit(current_block_, std::move(add));
-                }
-                const ir::IrValueId v_del =
-                    emit_load_typed(v_slot8, ir::IrType::I64, it->source_line);
-                const uint32_t lbl = ++cleanup_label_seq_;
-                const std::string default_lbl =
-                    "__sp_def_" + std::to_string(lbl);
-                const std::string skip_lbl = "__sp_skip_" + std::to_string(lbl);
-                const std::string done_lbl = "__sp_done_" + std::to_string(lbl);
-                // cmpu ptr, 0; jmp.je done  (skip si moved)
-                // cmpu deleter, 0; jmp.je default  (deleter=0 -> RAW_FREE)
-                // mov r1, ptr; mov r15, 1; callvmr deleter; jmp done
-                // default: mov r1, ptr; (RAW_FREE inline)
-                // raw_asm-elim wave 2: SMARTPTR_FREE kind=0 (SRET_DISPATCH).
-                // El emitter expande a la secuencia equivalente con
-                // labels unicos via contador thread-local; mismo
-                // bytecode emitido.  Eliminamos done_lbl/default_lbl
-                // ya que el emitter los genera internamente.
-                ir::IrInstr sf{};
-                sf.op = ir::IrOp::SMARTPTR_FREE;
-                sf.type = ir::IrType::VOID;
-                sf.dst = ir::IR_NO_VALUE;
-                sf.operands = {v_ptr, v_del};
-                sf.imm = 0; /* SRET_DISPATCH */
-                sf.source_line = it->source_line;
-                sf.is_call_site = true;
-                emit(current_block_, std::move(sf));
-                (void)done_lbl;
-                (void)default_lbl; /* labels no usadas (emitter las genera) */
-            } else if (it->literal_deleter == "free") {
+            /* Aqui habia un tercer camino DINAMICO -- leer quien libera de la
+             * palabra de al lado de la ranura y saltar a el -- para cuando el
+             * puntero venia de una funcion y no se sabia.  Ahora se sabe
+             * siempre: viaja en el TIPO, y una firma lo dice. */
+            if (is_default_deleter(it->literal_deleter)) {
                 // Deleter por defecto: RAW_FREE (null-safe).
                 ir::IrInstr fr{};
                 fr.op = ir::IrOp::RAW_FREE;
@@ -607,41 +512,57 @@ void Lowering::scan_escaping_locals(ast::Stmt *body) {
     }
 }
 
-void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
-    if (!needs_free_uniq_helper_) return;
-    // void __vx_free_uniq(i64 slot) { <emit_free_unique_slot(slot)>; ret; }
-    // El cuerpo reusa emit_free_unique_slot (null-guard + deleter dispatch +
-    // RAW_FREE del slot).  Como es una funcion normal, su diamante interno no
-    // colisiona con el tailcall del dtor en el call site del reassign-free.
-    ir::IrFunction fn;
-    fn.name = "__vx_free_uniq";
-    fn.ret_type = ir::IrType::VOID;
-    const ir::IrValueId slot = fn.new_value(ir::IrType::I64, "%slot");
-    fn.values[slot].is_param = true;
-    fn.values[slot].is_host_ptr = true; // el slot es heap host
-    fn.params.push_back(slot);
-    const ir::IrBlockId entry = fn.new_block("entry");
+std::string Lowering::free_uniq_helper_name(const std::string &deleter) {
+    // El de por defecto no lleva sufijo; el resto, el nombre de quien libera.
+    return deleter.empty() ? std::string("__free_uniq")
+                           : ("__free_uniq__" + deleter);
+}
 
-    // Activar el contexto del lowering para reusar emit_free_unique_slot.
-    /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
-    ChildFunctionScope parent(*this);
-    fn_ = &fn;
-    current_block_ = entry;
-    block_terminated_ = false;
-    /* El finalizador del recolector corre SIN tipos -- le llega una direccion y
-     * nada mas --, asi que aqui es donde de verdad hace falta leer quien libera
-     * de la propia ranura.  Es el unico sitio, y por eso es lo que impide de
-     * momento que la ranura sea de una sola palabra. */
-    emit_free_unique_slot(slot, std::string(), 0);
-    // RET void al final (emit_free_unique_slot deja current_block_ en su skip).
-    {
-        ir::IrInstr ret{};
-        ret.op = ir::IrOp::RET;
-        ret.type = ir::IrType::VOID;
-        ret.source_line = 0;
-        fn.append(current_block_, std::move(ret));
+std::string Lowering::free_uniq_helper_for(const std::string &deleter) {
+    free_uniq_helpers_.insert(deleter);
+    return free_uniq_helper_name(deleter);
+}
+
+void Lowering::generate_free_uniq_helper(ir::IrModule &out) {
+    /* UNO POR LIBERADOR.  El cuerpo reusa @ref emit_free_unique_slot
+     * (comprobar nulo + llamar a quien libera + soltar la ranura); como es una
+     * funcion normal, el rombo de su camino interno no se cruza con el salto
+     * final del destructor en el sitio que la llama.
+     *
+     * Antes habia UNO solo que recibia una direccion y nada mas, sin tipo, y
+     * por eso tenia que leer quien libera de la propia ranura -- que es lo que
+     * obligaba a que la ranura midiera dos palabras --.  Ahora cada sitio llama
+     * al que le toca, porque su campo lo dice en el tipo. */
+    for (const std::string &deleter : free_uniq_helpers_) {
+        ir::IrFunction fn;
+        // El nombre se PREGUNTA, no se vuelve a componer aqui: dos sitios
+        // construyendo el mismo nombre es un sitio de mas donde separarse.
+        fn.name = free_uniq_helper_name(deleter);
+        fn.ret_type = ir::IrType::VOID;
+        const ir::IrValueId slot = fn.new_value(ir::IrType::I64, "%slot");
+        fn.values[slot].is_param = true;
+        fn.values[slot].is_host_ptr = true; // el slot es heap host
+        fn.params.push_back(slot);
+        const ir::IrBlockId entry = fn.new_block("entry");
+
+        // Activar el contexto del lowering para reusar emit_free_unique_slot.
+        /* El guarda se lleva el contexto del padre y lo devuelve al salir. */
+        ChildFunctionScope parent(*this);
+        fn_ = &fn;
+        current_block_ = entry;
+        block_terminated_ = false;
+        emit_free_unique_slot(slot, deleter, 0);
+        // RET void al final (emit_free_unique_slot deja current_block_ en su
+        // bloque de salida).
+        {
+            ir::IrInstr ret{};
+            ret.op = ir::IrOp::RET;
+            ret.type = ir::IrType::VOID;
+            ret.source_line = 0;
+            fn.append(current_block_, std::move(ret));
+        }
+        out.add_function(std::move(fn));
     }
-    out.add_function(std::move(fn));
 }
 
 void Lowering::store_slot_fields_prestado(ir::IrValueId v_slot,
@@ -831,7 +752,6 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
 void Lowering::emit_free_unique_slot(ir::IrValueId slot,
                                      const std::string &deleter,
                                      uint32_t line) {
-    (void)deleter;
     const ir::IrBlockId skip_bb = fn_->new_block("free_uniq_skip");
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
     // if (slot == 0) -> skip  (slot nulo / unique movido).
@@ -845,87 +765,17 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
     // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
     const ir::IrValueId ptr =
         emit_load_typed(slot, ir::IrType::I64, line, /*host_ptr=*/true);
-    /* Cuando se sabe QUIEN libera -- porque lo dice el tipo --, se le llama
-     * directamente y se acabo: nada de leer una direccion de la ranura y
-     * saltar a ella.  Eso es lo que permite que la ranura sea de una palabra. */
-    if (!deleter.empty()) {
-        if (deleter == "free") {
-            ir::IrInstr rf{};
-            rf.op = ir::IrOp::RAW_FREE;
-            rf.type = ir::IrType::VOID;
-            rf.dst = ir::IR_NO_VALUE;
-            rf.operands = {ptr};
-            rf.source_line = line;
-            emit(current_block_, std::move(rf));
-        } else {
-            ir::IrInstr cv{};
-            cv.op = ir::IrOp::CALL;
-            cv.type = ir::IrType::VOID;
-            cv.dst = ir::IR_NO_VALUE;
-            cv.func_name = deleter;
-            cv.operands = {ptr};
-            cv.source_line = line;
-            cv.is_call_site = true;
-            emit(current_block_, std::move(cv));
-        }
-        // Y liberar la ranura, que vive en el monton cuando es de un campo.
-        {
-            ir::IrInstr rf{};
-            rf.op = ir::IrOp::RAW_FREE;
-            rf.type = ir::IrType::VOID;
-            rf.dst = ir::IR_NO_VALUE;
-            rf.operands = {slot};
-            rf.source_line = line;
-            emit(current_block_, std::move(rf));
-        }
-        emit_br(skip_bb, line);
-        current_block_ = skip_bb;
-        block_terminated_ = false;
-        return;
-    }
-    // deleter = LOAD [slot + 8].
-    const ir::IrValueId del_addr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[del_addr].is_host_ptr = true;
-    {
-        const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
-        ir::IrInstr ad{};
-        ad.op = ir::IrOp::ADD;
-        ad.type = ir::IrType::I64;
-        ad.dst = del_addr;
-        ad.operands = {slot, eight};
-        ad.source_line = line;
-        emit(current_block_, std::move(ad));
-    }
-    const ir::IrValueId v_deleter =
-        emit_load_typed(del_addr, ir::IrType::I64, line, /*host_ptr=*/true);
-    // if (deleter != 0) -> CALLIND deleter(ptr); else RAW_FREE(ptr).
-    const ir::IrBlockId call_bb = fn_->new_block("free_uniq_call");
-    const ir::IrBlockId free_bb = fn_->new_block("free_uniq_raw");
-    {
-        const ir::IrValueId has_del =
-            emit_ir_binop(ir::IrOp::CMP_NE, v_deleter, zero, ir::IrType::BOOL,
-                          line);
-        emit_br_cond(has_del, call_bb, free_bb, line);
-    }
-    // Bloque que SIEMPRE libera el slot heap (16B), tras liberar el inner.
-    const ir::IrBlockId free_slot_bb = fn_->new_block("free_uniq_slot");
-    // call_bb: CALLIND deleter(ptr) -> free_slot.
-    current_block_ = call_bb;
-    {
-        ir::IrInstr ci{};
-        ci.op = ir::IrOp::CALLIND;
-        ci.type = ir::IrType::VOID;
-        ci.dst = ir::IR_NO_VALUE;
-        ci.func_ptr = v_deleter;
-        ci.operands = {ptr};
-        ci.source_line = line;
-        ci.is_call_site = true;
-        emit(current_block_, std::move(ci));
-        emit_br(free_slot_bb, line);
-    }
-    // free_bb: RAW_FREE(ptr) -> free_slot  (deleter por defecto; null-safe).
-    current_block_ = free_bb;
-    {
+    /* Y se llama a QUIEN LIBERA, que lo dice el tipo: una liberacion normal
+     * cuando es el de por defecto, y una llamada directa por su nombre cuando
+     * es propio.  Vacio quiere decir el de por defecto, y ese criterio vive
+     * AQUI y en ningun otro sitio.
+     *
+     * Debajo habia otro camino, de sesenta y siete lineas, para cuando no se
+     * sabia: leia la direccion de la palabra de al lado de la ranura y saltaba
+     * a ella.  Eso es lo que obligaba a que un `unique<T>` midiera dos palabras
+     * en vez de una.  Ya no lo usa nadie -- todos los sitios conocen el tipo --
+     * asi que se va entero.  */
+    if (is_default_deleter(deleter)) {
         ir::IrInstr rf{};
         rf.op = ir::IrOp::RAW_FREE;
         rf.type = ir::IrType::VOID;
@@ -933,10 +783,18 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
         rf.operands = {ptr};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
-        emit_br(free_slot_bb, line);
+    } else {
+        ir::IrInstr cv{};
+        cv.op = ir::IrOp::CALL;
+        cv.type = ir::IrType::VOID;
+        cv.dst = ir::IR_NO_VALUE;
+        cv.func_name = deleter;
+        cv.operands = {ptr};
+        cv.source_line = line;
+        cv.is_call_site = true;
+        emit(current_block_, std::move(cv));
     }
-    // free_slot_bb: RAW_FREE(slot heap) -> skip.
-    current_block_ = free_slot_bb;
+    // Y soltar la ranura, que vive en el monton cuando es la de un campo.
     {
         ir::IrInstr rf{};
         rf.op = ir::IrOp::RAW_FREE;
@@ -945,8 +803,8 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
         rf.operands = {slot};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
-        emit_br(skip_bb, line);
     }
+    emit_br(skip_bb, line);
     current_block_ = skip_bb;
     block_terminated_ = false;
 }

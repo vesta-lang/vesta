@@ -2241,7 +2241,11 @@ class GcHeap {
     /// con ~Clase() en AOT).  register/unregister/stage son O(1) amortizado
     /// (antes O(n) con busqueda lineal -> O(n^2) agregado con muchos
     /// gc<Clase>).
-    U64U64Map class_dtor_vaddr_;
+    /// A QUIEN llamar al finalizar, por objeto: el destructor de una clase o
+    /// el liberador de un `unique`.  Los dos lo saben al COMPILAR -- uno por la
+    /// clase y el otro por el TIPO del puntero --, asi que lo dejan puesto al
+    /// registrar en vez de que el box tenga que llevarlo dentro.
+    U64U64Map finalizer_target_;
 
     // --- Tabla de referencias debiles ---
     std::vector<WeakEntry>

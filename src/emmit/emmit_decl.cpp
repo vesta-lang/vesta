@@ -3227,10 +3227,17 @@ void emit_gcfinal(const vm::Instruction *instruction_parser,
         static_cast<uint8_t>((kind_val << 4) | (idx1 & 0x0F))); // b3
 }
 
-// emit_gcfinalc: gcfinalc r_box, r_dtor.  b2=0, b3=(r_dtor<<4)|r_box.
-// Mismo empaquetado que decode_instr_two_op_reg (reg1=r_box nibble bajo,
-// reg2=r_dtor nibble alto).  El exec registra un finalizador CLASS_DTOR con el
-// vaddr del dtor concreto leido de r_dtor (dispatch estatico).
+// emit_gcfinalc: `gcfinalc` / `gcfinalu` r_box, r_target.
+//
+// Registra un finalizador diciendo A QUIEN llamar: el destructor concreto de
+// una clase (`gcfinalc`) o el liberador de un `unique` (`gcfinalu`).  Los dos
+// comparten opcode y se distinguen por los dos bits altos del byte de control,
+// igual que `mods` y `modu`: cero es el destructor de clase, que es lo que ese
+// byte significaba cuando estaba sin usar, asi que el bytecode que ya existe
+// sigue diciendo lo mismo.
+//
+// b2 = kind<<6, b3 = (r_target<<4)|r_box -- el mismo empaquetado que
+// decode_instr_two_op_reg (reg1 nibble bajo, reg2 alto).
 void emit_gcfinalc(const vm::Instruction *instruction_parser,
                    ByteWriter &code_final, const InstrInfo *now_instr,
                    Assembler *assembly_ctx) {
@@ -3242,10 +3249,13 @@ void emit_gcfinalc(const vm::Instruction *instruction_parser,
         instruction_parser->operands[1].get());
     if (!r1 || !r2)
         throw std::runtime_error(instruction_parser->opcode +
-                                 ": requiere r_box, r_dtor");
+                                 ": requiere r_box, r_target");
     uint8_t idx1 = encode_reg_general(r1->name.c_str()); // r_box
-    uint8_t idx2 = encode_reg_general(r2->name.c_str()); // r_dtor
-    code_final.emit8(0x00);                              // b2 ctrl
+    uint8_t idx2 = encode_reg_general(r2->name.c_str()); // r_target
+    // El mnemonico elige a quien se llama; ver arriba por que el cero es el
+    // destructor de clase.
+    const uint8_t kind = (instruction_parser->opcode == "gcfinalu") ? 1u : 0u;
+    code_final.emit8(static_cast<uint8_t>(kind << 6));                  // b2
     code_final.emit8(static_cast<uint8_t>((idx2 << 4) | (idx1 & 0x0F))); // b3
 }
 
