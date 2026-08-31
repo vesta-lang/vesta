@@ -765,6 +765,25 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
     // ptr = LOAD [slot + 0]  (el valor/host_ptr a liberar).
     const ir::IrValueId ptr =
         emit_load_typed(slot, ir::IrType::I64, line, /*host_ptr=*/true);
+    /* Y si lo que hay DENTRO es cero, no se libera: solo se suelta la ranura.
+     *
+     * Comprobar que la ranura no es nula NO basta.  Al mover un `unique` fuera
+     * de un CAMPO, lo que se vacia es el contenido de la ranura, no el campo:
+     * el campo sigue apuntando a una ranura que existe y esta a cero.  El
+     * destructor del contenedor la encontraba, cargaba el cero y llamaba al
+     * liberador CON EL CERO -- una segunda liberacion del mismo recurso --.
+     *
+     * Se vio al ejecutar `238_move_from_field_nofree` en nativo: daba dos
+     * liberaciones donde tenia que dar una.  No se veia porque ese caso solo
+     * se probaba en UN modo. */
+    const ir::IrBlockId ptr_ok = fn_->new_block("free_uniq_ptr_ok");
+    const ir::IrBlockId solo_ranura = fn_->new_block("free_uniq_solo_ranura");
+    {
+        const ir::IrValueId sin_valor =
+            emit_ir_binop(ir::IrOp::CMP_EQ, ptr, zero, ir::IrType::BOOL, line);
+        emit_br_cond(sin_valor, solo_ranura, ptr_ok, line);
+        current_block_ = ptr_ok;
+    }
     /* Y se llama a QUIEN LIBERA, que lo dice el tipo: una liberacion normal
      * cuando es el de por defecto, y una llamada directa por su nombre cuando
      * es propio.  Vacio quiere decir el de por defecto, y ese criterio vive
@@ -794,7 +813,11 @@ void Lowering::emit_free_unique_slot(ir::IrValueId slot,
         cv.is_call_site = true;
         emit(current_block_, std::move(cv));
     }
-    // Y soltar la ranura, que vive en el monton cuando es la de un campo.
+    emit_br(solo_ranura, line);
+    /* Los dos caminos -- con recurso y sin el -- acaban soltando la ranura, que
+     * vive en el monton cuando es la de un campo.  Lo que cambia es si antes se
+     * llamo a quien libera. */
+    current_block_ = solo_ranura;
     {
         ir::IrInstr rf{};
         rf.op = ir::IrOp::RAW_FREE;
