@@ -1558,6 +1558,27 @@ struct IrFunction {
     std::vector<std::vector<std::string>> asm_clobber_lists;
 
     /**
+     * @brief Lo que el cuerpo de cada bloque de `asm` LEE, por el mismo asm-id.
+     *
+     * El gemelo de @c asm_clobber_lists.  Hacia falta porque un cuerpo puede
+     * nombrar un registro DIRECTAMENTE sin declararlo como operando -- `asm
+     * { div rsi }` lee rsi, y ademas RDX:RAX, que ni siquiera se escriben en
+     * la linea --, y quien razone despues sobre lo que sigue vivo no tiene de
+     * donde sacarlo: en los operandos no esta.
+     *
+     * Sin esto, una escritura que alimenta al bloque parece muerta.
+     *
+     * Lo llena la MISMA inferencia que los clobbers y de la misma fuente (lo
+     * que la base de instrucciones dice de cada linea); antes se calculaba y
+     * se tiraba.  @c asm_reads_completos dice si la lista lo cubre todo.
+     */
+    std::vector<std::vector<std::string>> asm_read_lists;
+    /// Por asm-id: @c false si alguna linea del cuerpo no se pudo emparejar, y
+    /// entonces su lista de lecturas esta INCOMPLETA.  Se dice aparte para no
+    /// confundir "no lee nada mas" con "no se sabe si lee algo mas".
+    std::vector<uint8_t> asm_reads_completos;
+
+    /**
      * @brief Instrucciones @c ASM_MICRO de esta funcion (asm opaco liftado).
      *
      * Indexadas por el @c imm de cada @c IrInstr con @c op==ASM_MICRO.  Tabla

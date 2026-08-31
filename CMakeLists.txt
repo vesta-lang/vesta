@@ -5,6 +5,25 @@ if (POLICY CMP0063)
     cmake_policy(SET CMP0063 NEW)
 endif ()
 
+# Las rutas de `install()` se NORMALIZAN (`CMP0177`).
+#
+# La raiz del arbol privado es `.` en Windows, asi que al componer los destinos
+# salen `./stdlib`, `./examples/vx` y compania.  Es la misma ruta que `stdlib`,
+# pero mientras no se decide explicitamente CMake suelta un aviso por cada
+# `install()` -- veinticuatro en una configuracion limpia --, y ese ruido tapa
+# los avisos que si importan.
+#
+# NEW porque normalizar es lo que se quiere: `./stdlib` y `stdlib` tienen que
+# producir la MISMA instalacion, y sin normalizar el `./` viaja dentro de la
+# ruta hasta el paquete.
+#
+# Va AQUI y no en `VestaInstallDirs.cmake`, que seria su sitio natural: los
+# ficheros que se traen con `include()` abren su propio ambito de politicas y lo
+# cierran al volver, asi que fijarla alli no llegaba a las reglas `install()`.
+if (POLICY CMP0177)
+    cmake_policy(SET CMP0177 NEW)
+endif ()
+
 #if (WIN32)
 #    message(STATUS "Compilando en Windows: activando linkado estático")
 #
@@ -436,6 +455,33 @@ add_subdirectory(libs/SourceCode/capstone)
 # terceros -- pero el paso previo de CPack construye el objetivo completo, asi
 # que generar el instalador fallaba por una herramienta que no llega a el.
 set(BUILD_LIBS_ONLY ON CACHE BOOL "" FORCE)
+
+# Los scripts de shell de keystone, con saltos de linea de Unix.
+#
+# Keystone averigua la arquitectura del anfitrion ejecutando `sh config.guess`,
+# y en Linux eso moria con "Syntax error: word unexpected": el repo se trabaja
+# desde Windows con `core.autocrlf=true`, que deja el fichero con CRLF, y el
+# retorno de carro se cuela dentro de la ultima palabra de cada linea.  CMake
+# abortaba antes de compilar nada, con un mensaje que no menciona los saltos.
+#
+# Se normaliza aqui y no con `.gitattributes` porque keystone es un SUBMODULO:
+# los atributos de la raiz no gobiernan lo que hay dentro, asi que un clon
+# limpio volveria a traerlo con CRLF.  Reescribir solo cuando hace falta deja
+# el arbol del submodulo sin tocar en el caso normal.
+foreach(_ks_sh "libs/SourceCode/keystone/llvm/cmake/config.guess"
+               "libs/SourceCode/keystone/llvm/cmake/config.sub")
+    set(_ks_path "${CMAKE_SOURCE_DIR}/${_ks_sh}")
+    if (EXISTS "${_ks_path}")
+        file(READ "${_ks_path}" _ks_txt)
+        string(FIND "${_ks_txt}" "\r\n" _ks_crlf)
+        if (NOT _ks_crlf EQUAL -1)
+            string(REPLACE "\r\n" "\n" _ks_txt "${_ks_txt}")
+            file(WRITE "${_ks_path}" "${_ks_txt}")
+            message(STATUS "[keystone] ${_ks_sh}: saltos de linea normalizados a Unix")
+        endif()
+    endif()
+endforeach()
+
 add_subdirectory(libs/SourceCode/keystone)
 
 # LibPEparse (emisor/parser de PE/COFF/ELF, C puro generico) -- usado por el
@@ -469,10 +515,24 @@ target_link_libraries(aot_emit PUBLIC LibPEparse)
 # vez de tener cada uno su copia (dos copias acaban divergiendo, y entonces el
 # perfil describe un programa que no es el que se ejecuta).  Lo unico que
 # cambia entre ambas es el marco de pila y los simbolos.
+# Para QUE procesador se afina.
+#
+# `-march` se queda en la linea base `x86-64`: no se emite ni una instruccion
+# fuera de ella, asi que el binario arranca en cualquier x86-64.  `-mtune` NO
+# cambia que instrucciones son legales, solo como se ordenan dentro de ese
+# conjunto -- afinar para otra CPU nunca impide ejecutar --.
+#
+# Por eso el valor por defecto es `native`: en desarrollo interesa el codigo
+# mejor ordenado para TU maquina.  Pero un paquete que se publica no debe salir
+# afinado para quien lo construyo, ni depender de quien lo construyo para dar el
+# mismo binario, asi que el empaquetado configura con `generic`.
+set(VESTA_TUNE "native" CACHE STRING
+    "Para que microarquitectura se afina (-mtune).  `generic` al publicar.")
+
 set(VESTA_OPTS_CODIGO_RELEASE
         -O3
         -march=x86-64
-        -mtune=native
+        -mtune=${VESTA_TUNE}
         -ffast-math
         -fstrict-aliasing
         -fno-plt
@@ -610,12 +670,36 @@ add_custom_target(vm_build_info ALL
 # es un fallo que no rompe el build, solo miente en la salida.
 add_dependencies(vmcore vm_build_info)
 
-# Sprint edge-bugs (2026-06-02): exec_instruction_float.cpp implementa
-# semantica IEEE 754 estricta (NaN, Inf).  -ffast-math global asume no
-# NaN/Inf, lo que folda isnan(x) a false y rompe FCMP con NaN.
-# Override por-archivo: -fno-fast-math + -fno-finite-math-only.
+# Los ficheros que calculan la aritmetica DEL LENGUAJE, con semantica IEEE 754.
+#
+# `-ffast-math` es una relajacion de SEMANTICA, no un conjunto de
+# instrucciones: no necesita nada de la CPU y no se emite nada especial.  Lo que
+# permite es suponer que no hay NaN ni Inf, ignorar el signo del cero y
+# reasociar.  Para el grueso del compilador -- mover punteros, tablas, cadenas
+# -- eso es gratis y se queda.  Pero donde se calcula el resultado que va a ver
+# un programa Vesta, la semantica IEEE es la especificacion, y suponer que no
+# hay NaN la incumple.
+#
+# Medido con los flags exactos del proyecto:
+#
+#     0.0/0.0      isnan = 1  ->  isnan = 0     (la comprobacion MIENTE)
+#     -0.0 + 0.0   +0.0       ->  -0.0          (no es IEEE)
+#
+# `exec_instruction_float.cpp` ya estaba eximido desde el 2026-06-02.  Faltaba
+# `ir_optimizer.cpp`, que pliega las constantes flotantes del lenguaje y lleva
+# esta guarda:
+#
+#     if (std::isnan(a) || std::isnan(b)) break;  // sound: no foldear NaN
+#
+# Con `-ffast-math` esa guarda es CoDIGO MUERTO -- `isnan` devuelve 0 con un NaN
+# de verdad --, asi que el optimizador plegaba comparaciones con NaN y daba un
+# resultado distinto del que da el interprete para el MISMO programa.
+#
+# Eximir no cuesta rendimiento donde lo habria: el plegado corre unas pocas
+# veces al compilar, no en ningun bucle caliente.
 set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/exec_instruction_float.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ir/ir_optimizer.cpp
     PROPERTIES COMPILE_FLAGS "-fno-fast-math -fno-finite-math-only"
 )
 
@@ -1246,9 +1330,16 @@ target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
 # Serializacion y almacen por contenido: el mismo juego de pruebas se pasa al
 # almacen de memoria y al de disco, porque si no se comportaran igual, probar
 # contra uno no diria nada del otro.
+# `file_read` y `env_flags` no estaban, y en Windows no se notaba: alli el
+# almacen en disco toma otro camino y no llega a referenciar `DirectoryReader`
+# ni `read_whole_file`.  En Linux si, y el test no enlazaba -- rompiendo el
+# objetivo `all`, del que cuelga el paso previo de CPack: el instalador no se
+# podia ni generar por culpa de un test.
 add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/ids.cpp
                                 src/util/serialize.cpp
+                                src/util/file_read.cpp
+                                src/util/env_flags.cpp
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
@@ -1623,9 +1714,12 @@ add_executable(test_locset_indice tests/analysis/test_locset_indice.cpp
                                   src/analysis/effects/effects.cpp)
 target_include_directories(test_locset_indice PRIVATE ${VM_INCLUDES})
 
+# `env_flags` da `flag_text`, que el fichero de hechos usa para nombrar cada
+# bandera.  Faltaba, y como el otro test del almacen, solo se notaba en Linux.
 add_executable(test_asa_fact_file_lnx tests/analysis/test_asa_fact_file_lnx.cpp
                                       src/analysis/asa/fact_file.cpp
                                       src/analysis/asa/fact_store.cpp
+                                      src/util/env_flags.cpp
                                       src/util/serialize.cpp)
 target_include_directories(test_asa_fact_file_lnx PRIVATE ${VM_INCLUDES})
 
@@ -1640,6 +1734,13 @@ if (WIN32)
 else ()
     target_link_libraries(test_asa_fact_file_robusto PRIVATE OpenSSL::SSL OpenSSL::Crypto dl)
 endif ()
+
+# Liveness por registro FISICO: que sigue vivo tras cada instruccion del
+# MachineIR ya repartido.  Comprueba lo que NO se ve en los operandos (el
+# RDX:RAX de una division, la base de una direccion, los registros de un asm).
+add_executable(test_jit_phys_liveness tests/jit/test_phys_liveness.cpp)
+target_include_directories(test_jit_phys_liveness PRIVATE ${VM_INCLUDES})
+target_link_libraries(test_jit_phys_liveness PRIVATE vx_lib vmcore sqlite3 capstone keystone aot_emit)
 
 add_executable(test_jit_facts tests/jit/test_jit_facts.cpp)
 target_include_directories(test_jit_facts PRIVATE ${VM_INCLUDES})
@@ -1906,14 +2007,26 @@ endif ()
 target_compile_options(vesta_rt PRIVATE
         -D__STDC_LIMIT_MACROS
         -D__STDC_CONSTANT_MACROS
-        $<$<CONFIG:Release>:-O3 -march=x86-64 -mtune=native -ffast-math
+        $<$<CONFIG:Release>:-O3 -march=x86-64 -mtune=${VESTA_TUNE} -ffast-math
                             -fstrict-aliasing -fno-plt -fomit-frame-pointer
                             -fvisibility=hidden -ffunction-sections
                             -fdata-sections -DNDEBUG>
 )
 
-# Anadir subdirectorio de tests
-add_subdirectory(tests)
+# Los tests.
+#
+# Se pueden dejar fuera, y hace falta poder: el paso previo de CPack construye
+# el objetivo `all`, asi que con los tests dentro, EMPAQUETAR exige que compilen
+# TODOS -- y un test roto impide publicar una version, que es una dependencia
+# que no deberia existir.  Por defecto se construyen, como hasta ahora; el
+# empaquetado configura con esto en OFF.
+#
+# Es la misma convencion que ya usa el preprocesador (`VPP_BUILD_TESTS`), al
+# que este mismo fichero se lo pone en OFF unas lineas mas arriba.
+option(VESTA_BUILD_TESTS "Compilar los tests unitarios de C++" ON)
+if (VESTA_BUILD_TESTS)
+    add_subdirectory(tests)
+endif()
 
 # ---------------------------------------------------------------------------
 # Configuracion global del SDK de plugins nativos
@@ -1924,6 +2037,11 @@ add_subdirectory(tests)
 set(VESTA_SDK_DIR "${CMAKE_SOURCE_DIR}" CACHE PATH
     "Raiz del SDK VestaVM (directorio con include/ffi/vesta_plugin.h)")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+# Donde va cada cosa de una instalacion.  Va ANTES de los plugins porque
+# `add_vesta_plugin` coloca su .dll/.so dentro del arbol de la stdlib y necesita
+# saber donde esta ese arbol; el empaquetado lo vuelve a incluir mas abajo.
+include(VestaInstallDirs)
 
 # Libreria estandar nativa (vesta_io, vesta_math, ...)
 option(VESTA_BUILD_STDLIB   "Compilar la libreria estandar nativa de Vesta" ON)
@@ -1949,3 +2067,27 @@ include(VestaPackaging)
 add_executable(test_util_env_flags tests/util/test_env_flags.cpp)
 target_include_directories(test_util_env_flags PRIVATE ${VM_INCLUDES})
 target_link_libraries(test_util_env_flags PRIVATE vmcore sqlite3 capstone keystone)
+
+# ---------------------------------------------------------------------------
+# Los tests, fuera del objetivo `all` cuando no se piden.
+# ---------------------------------------------------------------------------
+# `VESTA_BUILD_TESTS` ya decide si se anade el subdirectorio `tests/`, pero
+# aqui mismo hay otros sesenta y cinco ejecutables de prueba declarados sueltos,
+# repartidos por todo el fichero.  Envolverlos en un `if()` significaria un
+# bloque de mil lineas que ademas contiene codigo que no es de tests, asi que se
+# les quita la marca de una vez, al final, cuando ya estan todos declarados.
+#
+# Importa porque el paso previo de CPack construye `all`: mientras un solo test
+# no compile, no se puede generar el instalador.  Que publicar una version
+# dependa de que compilen los tests es una dependencia que no deberia existir.
+#
+# Siguen construyendose por su nombre (`cmake --build . --target test_x`); lo
+# unico que cambia es que no entran en la construccion por defecto.
+if (NOT VESTA_BUILD_TESTS)
+    get_property(_vesta_dir_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_t IN LISTS _vesta_dir_targets)
+        if (_t MATCHES "^test_")
+            set_target_properties(${_t} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+        endif()
+    endforeach()
+endif()

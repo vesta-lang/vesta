@@ -507,6 +507,33 @@ struct AsmInferResult {
     std::vector<std::string> clobber_regs; ///< nombres GCC-ready (rax.., xmmN)
     bool clobber_memory = false;
     bool clobber_flags = false;
+    /**
+     * @brief Registros que el cuerpo LEE, canonicos.
+     *
+     * El gemelo de @c clobber_regs, y hacia falta: quien razone sobre lo que
+     * sigue vivo necesita saber que un bloque de `asm` lee un registro aunque
+     * ese registro no aparezca en ningun operando declarado -- el cuerpo puede
+     * nombrarlo directamente (`asm { div rsi }`), o la instruccion puede leerlo
+     * sin nombrarlo (el RDX:RAX de esa misma division) --.
+     *
+     * Sin esto, una escritura que alimenta al bloque parece muerta y se borra.
+     * Es el mismo agujero que ya avisaba @c AsmEffects::implicit_read para el
+     * reparto de registros, una capa mas abajo.
+     *
+     * Sale de la MISMA pasada que los clobbers y de la MISMA fuente -- lo que
+     * la base de instrucciones dice de cada linea emparejada --; antes se
+     * calculaba y se tiraba.
+     */
+    std::vector<std::string> read_regs;
+    /**
+     * @brief @c true si TODAS las lineas del cuerpo se pudieron emparejar.
+     *
+     * Con una sola sin emparejar, @c read_regs esta INCOMPLETA y quien la use
+     * para decidir si algo sobra tiene que suponer lo peor.  Se dice aparte en
+     * vez de dejar que una lista corta pase por una lista completa, que es la
+     * diferencia entre "no lee nada mas" y "no se sabe si lee algo mas".
+     */
+    bool reads_completos = true;
     std::vector<std::string> unknown_mnemonics; ///< para emitir warning
     /// Instrucciones que exigen alineacion.  Vacio = ninguna la pide.
     std::vector<AsmAlignReq> align_reqs;

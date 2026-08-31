@@ -1302,8 +1302,15 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     std::vector<std::string> final_clobbers = s->clobbers; // explicitos primero
     bool final_mem = s->clobbers_memory;
     bool final_flags = s->clobbers_flags;
+    /* Lo que el cuerpo LEE, que sale de la misma inferencia.  Con `noinfer` no
+     * se infiere nada, asi que la lista queda vacia Y marcada como incompleta:
+     * "no se sabe", que no es lo mismo que "no lee nada". */
+    std::vector<std::string> final_reads;
+    bool final_reads_ok = !s->q_noinfer;
     if (!s->q_noinfer) {
         vx::AsmInferResult inf = vx::asm_infer_clobbers(body_sub, bound_canon);
+        final_reads = inf.read_regs;
+        final_reads_ok = inf.reads_completos;
         // Union de regs (dedup simple: skip si ya esta).
         for (const auto &c : inf.clobber_regs) {
             bool dup = false;
@@ -1389,6 +1396,11 @@ void Lowering::lower_asm(ast::AsmStmt *s) {
     // recuperar la lista de clobbers (explicitos + inferidos) de ESTE bloque.
     const uint64_t asm_id = (uint64_t)fn_->asm_clobber_lists.size();
     fn_->asm_clobber_lists.push_back(std::move(final_clobbers));
+    /* Y lo que el cuerpo LEE, por el mismo id.  Va en paralelo a los clobbers
+     * porque es la otra mitad de la misma pregunta, y quien razone despues
+     * sobre lo que sigue vivo la necesita: en los operandos no esta. */
+    fn_->asm_read_lists.push_back(std::move(final_reads));
+    fn_->asm_reads_completos.push_back(final_reads_ok ? 1u : 0u);
     q |= (asm_id & 0xFFFFFFull) << 8;
     ia.imm = q;
 

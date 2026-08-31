@@ -45,11 +45,6 @@ namespace vx {
 namespace fmt {
 namespace {
 
-/// @brief Convierte el campo @c kind de una pieza a su enum.
-inline TokenKind kind_of(const Piece &p) {
-    return static_cast<TokenKind>(p.kind);
-}
-
 /// @brief Indica si el token abre una lista repartible.
 inline bool opens_list(TokenKind k) {
     return k == TokenKind::LPAREN || k == TokenKind::LBRACKET ||
@@ -244,6 +239,91 @@ void join_single_statement(const std::vector<Piece> &pieces,
     }
 }
 
+/**
+ * @brief `R12`/`R95`: una lista partida A MEDIAS se reparte del todo.
+ *
+ * El reparto normal solo mira las lineas que NO caben, y ahi se le escapa este
+ * caso: una lista que alguien dejo con dos elementos arriba y el resto abajo.
+ * Ninguna de sus lineas se pasa de ochenta -- por eso el reparto no entra -- y
+ * juntarla tampoco cabe -- por eso `try_join` no la toca --, asi que se
+ * quedaba en el estado intermedio para siempre.
+ *
+ * Y es justo el estado que `R12` prohibe: es el que produce diffs ilegibles,
+ * porque anadir un elemento reordena las lineas de alrededor.  O todo junto, o
+ * uno por linea.
+ *
+ * @param pieces  Piezas del fuente.
+ * @param layout  Donde cayo cada una.
+ * @param breaks  [in,out] donde se anotan los cortes.
+ */
+void split_half_wrapped(const std::vector<Piece> &pieces, const Layout &layout,
+                        std::vector<Break> &breaks) {
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        /* Solo los parentesis de una ANOTACION.
+         *
+         * En una lista corriente, donde partio quien escribe puede tener un
+         * motivo (`R15`), y rehacerlo empeoraba mas de lo que arreglaba: una
+         * llamada partida a mano acababa con los argumentos peor repartidos
+         * que como estaban.  Un contrato no: lo que lleva dentro son pares
+         * `etiqueta: valor` que se leen en columna (`R112`), y ahi el estado
+         * intermedio no ayuda a nadie. */
+        const TokenKind k = kind_of(pieces[i]);
+        if (k != TokenKind::LPAREN) continue;
+        if (i < 2 || kind_of(pieces[i - 1]) != TokenKind::IDENTIFIER ||
+            kind_of(pieces[i - 2]) != TokenKind::AT)
+            continue;
+
+        // Buscar el cierre de esta lista.
+        int depth = 0;
+        size_t close = 0;
+        for (size_t j = i; j < pieces.size(); ++j) {
+            const TokenKind kj = kind_of(pieces[j]);
+            if (kj == TokenKind::LPAREN || kj == TokenKind::LBRACKET) ++depth;
+            else if (kj == TokenKind::RPAREN || kj == TokenKind::RBRACKET) {
+                if (--depth == 0) {
+                    close = j;
+                    break;
+                }
+            }
+        }
+        if (close == 0) continue;
+        // Solo las que YA estan repartidas: si cabe en una linea, de eso se
+        // encarga `try_join`.
+        if (layout.line[close] == layout.line[i]) continue;
+
+        /* Donde empieza cada elemento, y si dos comparten linea.  Un elemento
+         * empieza tras la apertura y tras cada coma del nivel exterior. */
+        std::vector<size_t> starts;
+        starts.push_back(i + 1);
+        int d = 0;
+        for (size_t j = i + 1; j < close; ++j) {
+            const TokenKind kj = kind_of(pieces[j]);
+            if (opens_list(kj)) ++d;
+            else if (closes_list(kj)) --d;
+            else if (d == 0 && kj == TokenKind::COMMA && j + 1 < close)
+                starts.push_back(j + 1);
+        }
+        if (starts.size() < 2) continue;
+
+        bool a_medias = false;
+        for (size_t e = 1; e < starts.size() && !a_medias; ++e)
+            a_medias = layout.line[starts[e]] == layout.line[starts[e - 1]];
+        if (!a_medias) continue;
+
+        /* Repartida a medias: se JUNTA, y del reparto se encarga el camino
+         * normal en la vuelta siguiente.
+         *
+         * Repartirla aqui seria tener dos caminos que producen la misma forma,
+         * y no la producian igual: la indentacion salia de un sitio distinto y
+         * el fichero cambiaba entre dos pasadas.  Juntando, la lista pasa a no
+         * caber -- que es lo que era -- y la reparte quien ya sabe hacerlo.
+         * Por eso el reparto corre en punto fijo. */
+        for (size_t j = i + 1; j <= close; ++j)
+            if (layout.line[j] != layout.line[j - 1]) breaks[j].join = true;
+        i = close;
+    }
+}
+
 } // namespace
 
 std::vector<Break> compute_breaks(const std::vector<Piece> &pieces,
@@ -253,6 +333,7 @@ std::vector<Break> compute_breaks(const std::vector<Piece> &pieces,
     if (pieces.empty() || layout.line.size() != pieces.size()) return breaks;
 
     join_single_statement(pieces, layout, options, breaks);
+    split_half_wrapped(pieces, layout, breaks);
 
     // Partir las piezas en lineas logicas, como hace la alineacion.
     for (size_t i = 0; i < pieces.size();) {

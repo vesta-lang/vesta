@@ -99,6 +99,7 @@ add_library(vx_lib STATIC
     # un valor), y lo comparten el modelo de efectos, el eliminador de
     # escrituras muertas y la comprobacion de precondiciones.
     ${CMAKE_SOURCE_DIR}/src/analysis/facts/asm_bindings.cpp
+    ${CMAKE_SOURCE_DIR}/src/analysis/facts/phys_liveness.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/points_to.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/memory/memory_access.cpp
     ${CMAKE_SOURCE_DIR}/src/analysis/escape/escape.cpp

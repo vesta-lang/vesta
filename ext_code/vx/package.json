@@ -590,6 +590,13 @@
                     "description": "Dibuja sobre el codigo las flechas de los saltos dentro de los bloques asm. Las calcula el compilador, que ya construye el grafo de flujo de cada bloque; el fichero no se toca."
                 }
             }
+        },
+        "configurationDefaults": {
+            "[vesta]": {
+                "editor.formatOnSave": true,
+                "editor.insertSpaces": false,
+                "editor.tabSize": 4
+            }
         }
     },
     "scripts": {

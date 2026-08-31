@@ -156,7 +156,28 @@ uint32_t peephole_physical(MFunction &pf) {
     if (peephole_disabled()) return 0;
     const bool no_xz = xorzero_disabled();
     uint32_t removed = 0;
-    for (MBlock &b : pf.blocks) {
+    /* NO hay aqui una regla que borre ESCRITURAS QUE NADIE LEE, y no por no
+     * haberlo intentado: se probaron tres versiones y las tres rompieron algo.
+     *
+     * La ultima ya preguntaba a @c analysis::facts::compute_phys_liveness --
+     * el hecho que dice que sigue vivo tras cada instruccion, sacado de la
+     * base -- y aun asi fallaban seis casos del recolector.  El modelo de "que
+     * hace VIVO a un registro" en este backend tiene mas fuentes de las que el
+     * hecho conoce hoy; mientras falte una, la regla borra algo que hacia
+     * falta.
+     *
+     * Lo que SI quedo de esos intentos, y vale por su cuenta: que un `ret` y
+     * una llamada DIGAN los registros que leen por convencion (estaban solo
+     * como "barrera", que basta para no reordenar y no para liveness -- una
+     * funcion que devolvia 42 empezaba a devolver 0, y un bucle se comia toda
+     * la memoria de la maquina), que un bloque de `asm` diga los registros que
+     * lee su cuerpo, y el hecho con sus pruebas.
+     *
+     * Para retomarlo: el hecho ya esta, con sus pruebas en
+     * tests/jit/test_phys_liveness.cpp.  Lo que falta es completar de que mas
+     * depende un registro para seguir vivo. */
+    for (size_t bi = 0; bi < pf.blocks.size(); ++bi) {
+        MBlock &b = pf.blocks[bi];
         std::vector<MInstr> kept;
         kept.reserve(b.instrs.size());
         bool changed = false;

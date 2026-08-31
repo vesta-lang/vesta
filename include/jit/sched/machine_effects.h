@@ -94,6 +94,28 @@ struct MEffects {
 MEffects machine_effects(const MInstr &mi, EffIsa isa);
 
 /**
+ * @brief Igual, pero pudiendo llegar al bloque de `asm`.
+ *
+ * Un `asm` NO es opaco.  Solo el `asm volatile` llega hasta aqui como
+ * @c INLINE_ASM_RAW -- un `asm` normal se ELEVA a IR y se optimiza como
+ * cualquier otro codigo --, y aun ese conoce sus registros: viven en su
+ * @c AsmBlob -- @c in_vregs / @c out_vregs antes de repartir, @c in_phys /
+ * @c out_phys despues, mas @c clobbers --.  Lo que pasa es que no estan en los
+ * operandos de la instruccion, asi que la version que solo recibe la @c MInstr
+ * no puede alcanzarlos y lo degrada a BARRERA: suficiente para no reordenar a
+ * traves, insuficiente para saber que sigue vivo.
+ *
+ * Quien pregunte por liveness necesita esta.  El unico caso que sigue siendo
+ * una barrera sin detalle es un bloque al que no se le infirieron los clobbers
+ * (@c clobbers_conocidos a false, lo que activa `noinfer`).
+ *
+ * @param mf  Funcion a la que pertenece @p mi (para llegar a @c asm_blobs).
+ * @param mi  Instruccion.
+ * @param isa ISA de la DB a consultar.
+ */
+MEffects machine_effects(const MFunction &mf, const MInstr &mi, EffIsa isa);
+
+/**
  * @brief Mnemonico de la ISA para un @c MOp REAL (o @c nullptr si es un pseudo
  *        de VestaVM sin instruccion equivalente).  Solo el NOMBRE: los efectos
  *        salen de la DB, no de aqui.  @p isa selecciona x86 vs arm64.

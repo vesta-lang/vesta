@@ -135,13 +135,14 @@ std::vector<TriviaChunk> split_trivia(std::string_view trivia, bool &opaque) {
  * @param out    [in,out] salida.
  * @param text   Texto completo del comentario.
  * @param levels Niveles de indentacion de la linea donde empieza.
+ * @return Cuantos saltos de linea se escribieron (0 si es de una sola).
  */
-void append_comment(std::string &out, std::string_view text, int levels) {
+uint32_t append_comment(std::string &out, std::string_view text, int levels) {
     const size_t nl = text.find('\n');
     if (nl == std::string_view::npos || text.size() < 2 || text[0] != '/' ||
         text[1] != '*') {
         out.append(text); // de una linea, o no es de bloque
-        return;
+        return 0;
     }
     // Todas las lineas de continuacion tienen que empezar por `*`.
     std::vector<std::string_view> lineas;
@@ -159,7 +160,7 @@ void append_comment(std::string &out, std::string_view text, int levels) {
             l.remove_prefix(1);
         if (l.empty() || l.front() != '*') {
             out.append(text); // `R21b`: no sigue el patron, no se toca
-            return;
+            return static_cast<uint32_t>(lineas.size() - 1);
         }
     }
     out.append(lineas[0]);
@@ -174,6 +175,7 @@ void append_comment(std::string &out, std::string_view text, int levels) {
         out.push_back(' ');
         out.append(l);
     }
+    return static_cast<uint32_t>(lineas.size() - 1);
 }
 
 } // namespace
@@ -193,8 +195,10 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
     if (out != nullptr) {
         out->column.assign(pieces.size(), 0);
         out->comment_column.assign(pieces.size(), 0);
+        out->comment_line.assign(pieces.size(), 0);
         out->line.assign(pieces.size(), 0);
         out->level.assign(pieces.size(), 0);
+        out->cont.assign(pieces.size(), 0);
     }
     bool cerro_do = false; // la llave anterior cerraba un bloque de `do`
     uint32_t cur_line = 0; // linea logica en curso
@@ -204,6 +208,9 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
     int asm_depth = 0;     // profundidad de llaves dentro de un `asm`
     bool in_asm = false;   // dentro de un bloque `asm`
     bool asm_next = false; // el proximo `{` abre un bloque `asm`
+    /// Indentacion de la PRIMERA linea del cuerpo de un `asm`, en columnas.
+    /// Es la referencia contra la que se mide el resto (`R78`).
+    uint32_t asm_base = UINT32_MAX;
     /* Que bloques abrio un `do`.  Hace falta para `R53`: el `while` de un
      * `do` continua su llave y va pegado, pero uno corriente empieza una
      * sentencia nueva y no.  Los dos se escriben igual, asi que la unica forma
@@ -248,12 +255,23 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
      * Se reconoce por la forma -- un nombre y unos dos puntos que el anotador
      * marco como etiqueta -- y no adivinando. */
     const auto is_label = [&pieces, &roles](size_t idx) {
-        return idx + 1 < pieces.size() &&
-               static_cast<TokenKind>(pieces[idx].kind) ==
-                   TokenKind::IDENTIFIER &&
-               static_cast<TokenKind>(pieces[idx + 1].kind) ==
-                   TokenKind::COLON &&
-               roles[idx + 1] == Role::TightLeft;
+        if (idx + 1 >= pieces.size()) return false;
+        if (static_cast<TokenKind>(pieces[idx].kind) != TokenKind::IDENTIFIER)
+            return false;
+        if (static_cast<TokenKind>(pieces[idx + 1].kind) != TokenKind::COLON)
+            return false;
+        if (roles[idx + 1] != Role::TightLeft) return false;
+        /* Y va SOLA en su linea.
+         *
+         * Un `nombre:` con algo detras no es una etiqueta: es la etiqueta de un
+         * contrato (`partial_pre: O(n)`), que lleva su valor al lado y se
+         * indenta como cualquier otra linea.  Sin esta comprobacion se le
+         * restaba un nivel y el contenido de un `@complexity` repartido salia
+         * a la altura de la anotacion en vez de dentro. */
+        if (idx + 2 < pieces.size() &&
+            pieces[idx + 2].trivia.find('\n') == std::string_view::npos)
+            return false;
+        return true;
     };
 
     /* Indice de la pieza que se emitio por ULTIMA vez.  No es siempre `idx-1`:
@@ -281,11 +299,47 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
         if (out == nullptr) return;
         out->line[idx] = cur_line;
         out->level[idx] = static_cast<uint32_t>(level < 0 ? 0 : level);
+        out->cont[idx] = static_cast<uint32_t>(open_lists.size());
         // En COLUMNAS DE PANTALLA: un ideograma ocupa dos y un tabulador salta
         // a su parada.
         out->column[idx] = display_width(
             std::string_view(text).substr(line_start), options.tab_width);
     };
+
+    // El salto de linea, sin escapes en el fuente (que este fichero se edita
+    // con guiones y los escapes no siempre sobreviven).
+    constexpr char kSalto = 0x0A;
+
+    /* `R5`: en un bloque repartido en varias lineas, la llave de cierre va
+     * SOLA y la de apertura no se lleva nada detras.
+     *
+     * Lo que se veia era el reparto a medias -- `struct Grande { i64 a;` y el
+     * `} ` colgando del ultimo campo, o un `i32 main() { print(x);` --: la
+     * llave deja de marcar donde empieza y donde acaba el cuerpo, que es para
+     * lo que esta.  Un bloque que SI cabe entero en una linea se queda como
+     * esta; el reparto a medias es el que no vale.
+     *
+     * Se marcan las dos llaves de cada pareja que abarca mas de una linea. */
+    std::vector<uint8_t> llave_partida(pieces.size(), 0);
+    {
+        std::vector<size_t> abiertas;
+        for (size_t k = 0; k < pieces.size(); ++k) {
+            if (is(pieces[k], TokenKind::LBRACE)) {
+                abiertas.push_back(k);
+            } else if (is(pieces[k], TokenKind::RBRACE) && !abiertas.empty()) {
+                const size_t open = abiertas.back();
+                abiertas.pop_back();
+                bool multilinea = false;
+                for (size_t j = open + 1; j <= k && !multilinea; ++j)
+                    multilinea = pieces[j].trivia.find(kSalto) !=
+                                 std::string_view::npos;
+                if (multilinea) {
+                    llave_partida[open] = 1;
+                    llave_partida[k] = 1;
+                }
+            }
+        }
+    }
 
     for (size_t idx = 0; idx < pieces.size(); ++idx) {
         const Piece &p = pieces[idx];
@@ -353,7 +407,7 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 put_indent(nivel_cuerpo);
                 text.push_back('}');
                 if (added != nullptr)
-                    added->push_back({RewriteKind::AddBraces, idx});
+                    added->push_back({RewriteKind::AddBraces, pieces[idx].offset});
                 at_line_start = false;
             }
         }
@@ -364,7 +418,35 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
          * columnas (`R90`) es trabajo de un modulo aparte, que conoce la forma
          * de una instruccion. */
         if (in_asm && !closes) {
-            text.append(p.trivia);
+            /* `R78`: el bloque se reindenta COMO UN TODO, conservando la forma
+             * relativa de dentro.
+             *
+             * Copiar la trivia tal cual dejaba el cuerpo con la indentacion
+             * que tuviera el fichero antes -- espacios, mientras el resto pasa
+             * a tabuladores --, y entonces el bloque se quedaba flotando a una
+             * altura que ya no era la suya.  Lo que es del autor es la forma
+             * RELATIVA (`R77`): que una linea vaya mas adentro que otra.  Eso
+             * se conserva midiendo cada una contra la primera del cuerpo. */
+            const size_t nl_pos = p.trivia.rfind('\n');
+            if (nl_pos != std::string_view::npos) {
+                const std::string_view sangria = p.trivia.substr(nl_pos + 1);
+                const uint32_t col = display_width(sangria, options.tab_width);
+                if (asm_base == UINT32_MAX) asm_base = col;
+                if (col < asm_base) asm_base = col; // por si acaso
+                // Los saltos que hubiera, con el tope de lineas en blanco.
+                uint32_t saltos = 0;
+                for (const char c : p.trivia)
+                    if (c == '\n') ++saltos;
+                cur_line += emit_newlines(text, saltos, options.blank_lines_inside);
+                put_indent(level);
+                // Lo que esta linea iba MAS adentro que la primera del cuerpo.
+                for (uint32_t k = asm_base; k < col; ++k)
+                    text.push_back(' ');
+                const size_t nl2 = text.rfind('\n');
+                line_start = (nl2 == std::string::npos) ? 0 : nl2 + 1;
+            } else {
+                text.append(p.trivia);
+            }
             mark(idx);
             text.append(p.glued.empty() ? p.text : p.glued);
             at_line_start = false;
@@ -425,6 +507,73 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
              (is(pieces[idx - 1], TokenKind::LBRACE) &&
               !is(p, TokenKind::RBRACE)));
 
+        /* Una linea que CONTINUA la sentencia anterior va un nivel adentro.
+         *
+         * `R15` dice que donde partiste una expresion no se toca -- ahi esta
+         * tu articulacion --, pero eso es DONDE, no a que altura: sin sangrar,
+         * la continuacion queda al mismo nivel que la sentencia y se lee como
+         * una sentencia nueva.
+         *
+         * Se reconoce por lo que hay DETRAS: si el token anterior no cierra
+         * nada -- no es `;`, `{`, `}` ni `,` --, lo que viene es continuacion.
+         * Sale de la estructura y no de quien puso el salto, que es lo que la
+         * hace idempotente. */
+        constexpr char kNewline = 0x0A; // '\n', sin escapes en el fuente
+
+        /* La linea a la que pertenece una pieza, empieza por `@`?
+         *
+         * Se retrocede hasta el salto de linea anterior; la primera pieza tras
+         * el es la que abre la linea. */
+        const auto linea_es_anotacion = [&](size_t fin) {
+            size_t k = fin;
+            while (k > 0 &&
+                   pieces[k].trivia.find(kSalto) == std::string_view::npos)
+                --k;
+            return is(pieces[k], TokenKind::AT);
+        };
+
+        int continuacion = 0;
+        if (idx > 0 && cont == 0 && p.trivia.find('\n') != std::string_view::npos) {
+            const TokenKind ant = static_cast<TokenKind>(pieces[idx - 1].kind);
+            const bool cierra = ant == TokenKind::SEMICOLON ||
+                                ant == TokenKind::LBRACE ||
+                                ant == TokenKind::RBRACE ||
+                                ant == TokenKind::COMMA ||
+                                ant == TokenKind::COLON;
+            /* Una ANOTACION es una unidad entera, no media sentencia.
+             *
+             * `@Target("...")` acaba en `)`, que no cierra sentencia, asi que
+             * todo lo que venia detras -- las demas anotaciones y la propia
+             * firma de la funcion -- se tomaba por continuacion y entraba un
+             * nivel, y ya no salia.  Ni una anotacion continua lo de arriba ni
+             * lo de abajo continua una anotacion. */
+            const bool tras_anotacion = linea_es_anotacion(idx - 1);
+
+            // Ni una llave, ni una etiqueta, ni lo que ya lleva su propio
+            // nivel: eso se indenta por su cuenta.
+            /* Un CIERRE tampoco continua nada: vuelve a la altura de quien
+             * abrio, y de eso ya se ocupa la pila de listas.  Sin excluirlo,
+             * el `);` de una expresion repartida en varias lineas se iba un
+             * tabulador a la derecha de la sentencia que cerraba. */
+            const bool es_cierre = is(p, TokenKind::RPAREN) ||
+                                   is(p, TokenKind::RBRACKET) ||
+                                   is(p, TokenKind::RBRACE);
+
+            if (!cierra && !tras_anotacion && !es_cierre &&
+                !is(p, TokenKind::AT) && !is(p, TokenKind::LBRACE) &&
+                !is_label(idx))
+                continuacion = 1;
+
+            /* Salvo que sea el cuerpo suelto de un `if`/`for`/`while`.
+             *
+             * Ahi el `)` de la cabecera tampoco cierra sentencia, asi que la
+             * primera linea del cuerpo cumplia las dos cosas y entraba DOS
+             * niveles: uno por ser cuerpo y otro por parecer continuacion.  Es
+             * el mismo hecho contado dos veces, y lo cuenta `cuerpo_suelto`,
+             * que ademas sabe cuando deshacerlo. */
+            if (ctrl_close == idx - 1) continuacion = 0;
+        }
+
         const bool parte_sentencia =
             idx > 0 && is(pieces[idx - 1], TokenKind::SEMICOLON) && cont == 0 &&
             !is(p, TokenKind::RBRACE) && !is(p, TokenKind::RPAREN) &&
@@ -432,7 +581,16 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
 
         const bool trivia_breaks =
             p.trivia.find('\n') != std::string_view::npos;
+        /* `R5`: en un bloque de varias lineas, la de apertura no arrastra el
+         * primer enunciado y la de cierre empieza linea.  Dentro de un `asm`
+         * no se toca: ahi el reparto es del autor. */
+        const bool parte_llave =
+            !in_asm && ((idx > 0 && is(pieces[idx - 1], TokenKind::LBRACE) &&
+                         llave_partida[idx - 1]) ||
+                        (is(p, TokenKind::RBRACE) && llave_partida[idx]));
+
         const bool corta_aqui = parte_sentencia || parte_valor_enum ||
+                                parte_llave ||
                                 (cierra_enum && idx > 0 &&
                                  !is(pieces[idx - 1], TokenKind::LBRACE)) ||
                                 (breaks != nullptr && idx < breaks->size() &&
@@ -449,7 +607,7 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 (breaks != nullptr && idx < breaks->size())
                     ? static_cast<int>((*breaks)[idx].extra_indent)
                     : 0;
-            put_indent(level + cont + cuerpo_suelto + extra);
+            put_indent(level + cont + cuerpo_suelto + continuacion + extra);
             at_line_start = true;
         }
 
@@ -474,17 +632,27 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                  * comentarios de lineas seguidas queden alineados entre si. */
                 if (cpad != nullptr && idx < cpad->size())
                     text.append((*cpad)[idx], ' ');
+                if (out != nullptr) out->comment_line[idx] = cur_line;
                 if (out != nullptr)
                     out->comment_column[idx] =
                         display_width(std::string_view(text).substr(line_start),
                                       options.tab_width);
             } else {
-                emit_newlines(text, chunk.newlines_before,
-                              level == 0 ? options.blank_lines_between
-                                         : options.blank_lines_inside);
-                put_indent(level + cont + cuerpo_suelto);
+                /* Los saltos CUENTAN.  Sin sumarlos, la linea que se apunta
+                 * para cada pieza no avanzaba al pasar un comentario, y el
+                 * alineado -- que corta el bloque cuando dos lineas no son
+                 * seguidas (`R83`) -- veia pegado lo que tenia un comentario
+                 * en medio: una declaracion de mas abajo se metia en un bloque
+                 * al que no pertenece y le robaba una columna a las que si. */
+                cur_line += emit_newlines(text, chunk.newlines_before,
+                                          level == 0
+                                              ? options.blank_lines_between
+                                              : options.blank_lines_inside);
+                put_indent(level + cont + cuerpo_suelto + continuacion);
             }
-            append_comment(text, chunk.text, level + cont + cuerpo_suelto);
+            // Y las que ocupe el comentario mismo, si es de varias lineas.
+            cur_line +=
+                append_comment(text, chunk.text, level + cont + cuerpo_suelto);
             at_line_start = false;
         }
 
@@ -533,7 +701,7 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                                       level == 0 ? options.blank_lines_between
                                                  : options.blank_lines_inside);
             put_indent((is_label(idx) && level > 0 ? level - 1 : level) + cont +
-                       cuerpo_suelto);
+                       cuerpo_suelto + continuacion);
             at_line_start = true;
             // Donde empieza la linea nueva, para medir columnas desde ahi.
             const size_t nl = text.rfind('\n');
@@ -577,7 +745,7 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                     text.insert(nl, " {");
                     line_start += 2;
                     if (added != nullptr)
-                        added->push_back({RewriteKind::AddBraces, idx});
+                        added->push_back({RewriteKind::AddBraces, pieces[idx].offset});
                     cierra_cuerpo = true;
                     nivel_cuerpo = level + cont + cuerpo_suelto - 1;
                 }
@@ -624,6 +792,25 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
                 in_asm = true;
                 asm_depth = 1;
                 asm_next = false;
+                /* La referencia es la linea MENOS indentada del cuerpo, no la
+                 * primera: una etiqueta suele ir mas a la izquierda que las
+                 * instrucciones, y tomando la primera como base esa etiqueta
+                 * se quedaba sin sitio hacia donde salir -- la sangria de un
+                 * bloque son tabuladores y no se puede restar de ellos. */
+                asm_base = UINT32_MAX;
+                int d = 0;
+                for (size_t k = idx; k < pieces.size(); ++k) {
+                    if (is(pieces[k], TokenKind::LBRACE)) ++d;
+                    else if (is(pieces[k], TokenKind::RBRACE)) {
+                        if (--d == 0) break;
+                    }
+                    if (k == idx) continue;
+                    const size_t nl = pieces[k].trivia.rfind('\n');
+                    if (nl == std::string_view::npos) continue;
+                    const uint32_t c = display_width(
+                        pieces[k].trivia.substr(nl + 1), options.tab_width);
+                    if (c < asm_base) asm_base = c;
+                }
             }
         }
         if (closes && in_asm) {

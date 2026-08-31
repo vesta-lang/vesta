@@ -45,11 +45,6 @@ namespace vx {
 namespace fmt {
 namespace {
 
-/// @brief Convierte el campo @c kind de una pieza a su enum.
-inline TokenKind kind_of(const Piece &p) {
-    return static_cast<TokenKind>(p.kind);
-}
-
 /**
  * @brief Indica si el token puede TERMINAR un valor.
  *
@@ -78,26 +73,6 @@ bool ends_value(TokenKind k) {
     case TokenKind::KW_SUPER: return true;
     default: return false;
     }
-}
-
-/**
- * @brief Indica si el token nombra un TIPO del lenguaje.
- *
- * Son todas las palabras clave de tipo, y en Vesta esas incluyen las
- * COLECCIONES: `ArrayList`, `HashMap`, `Queue` y compania no son
- * identificadores de una libreria, son tipos primitivos del lenguaje.
- * Tratarlos como nombres corrientes hacia que `HashMap<string, i64>` no se
- * reconociera como generico y saliera formateado `HashMap < string, i64>`.
- *
- * Se usa el RANGO del enum, que va seguido desde `void` hasta `borrow_mut`, en
- * vez de enumerarlas: una lista escrita a mano se queda corta en cuanto el
- * lenguaje gana un tipo, y se queda corta EN SILENCIO.
- *
- * @param k Categoria del token.
- * @return Cierto si nombra un tipo.
- */
-bool is_type_keyword(TokenKind k) {
-    return k >= TokenKind::KW_VOID && k <= TokenKind::KW_BORROW_MUT;
 }
 
 /**
@@ -138,23 +113,6 @@ bool fits_in_type(TokenKind k) {
 bool starts_statement(TokenKind k) {
     return k == TokenKind::SEMICOLON || k == TokenKind::LBRACE ||
            k == TokenKind::RBRACE || k == TokenKind::COLON;
-}
-
-/**
- * @brief Indica si el token es un modificador que precede a un tipo.
- * @param k Categoria del token.
- * @return Cierto si es `public`, `const`, `static` y compania.
- */
-bool is_modifier(TokenKind k) {
-    switch (k) {
-    case TokenKind::KW_PUBLIC:
-    case TokenKind::KW_PRIVATE:
-    case TokenKind::KW_PROTECTED:
-    case TokenKind::KW_STATIC:
-    case TokenKind::KW_FINAL:
-    case TokenKind::KW_CONST: return true;
-    default: return false;
-    }
 }
 
 /**
@@ -206,6 +164,53 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
 
 } // namespace
 
+/**
+ * @brief Indica si el token nombra un TIPO del lenguaje.
+ *
+ * Son todas las palabras clave de tipo, y en Vesta esas incluyen las
+ * COLECCIONES: `ArrayList`, `HashMap`, `Queue` y compania no son
+ * identificadores de una libreria, son tipos primitivos del lenguaje.
+ * Tratarlos como nombres corrientes hacia que `HashMap<string, i64>` no se
+ * reconociera como generico y saliera formateado `HashMap < string, i64>`.
+ *
+ * Se usa el RANGO del enum, que va seguido desde `void` hasta `borrow_mut`, en
+ * vez de enumerarlas: una lista escrita a mano se queda corta en cuanto el
+ * lenguaje gana un tipo, y se queda corta EN SILENCIO.
+ *
+ * @param k Categoria del token.
+ * @return Cierto si nombra un tipo.
+ */
+bool is_modifier(TokenKind k) {
+    switch (k) {
+    case TokenKind::KW_PUBLIC:
+    case TokenKind::KW_PRIVATE:
+    case TokenKind::KW_PROTECTED:
+    case TokenKind::KW_STATIC:
+    case TokenKind::KW_FINAL:
+    case TokenKind::KW_CONST: return true;
+    default: return false;
+    }
+}
+
+bool precedes_type(TokenKind k) {
+    if (is_modifier(k)) return true;
+    switch (k) {
+    case TokenKind::KW_TYPEDEF:
+    case TokenKind::KW_USING:
+    /* Calificadores que van delante del tipo sin ser modificadores de `R42`:
+     * no dicen quien ve la declaracion, dicen algo del valor o de donde vive.
+     * Sin saltarlos, `nonnull i64* p` no se leia como declaracion y su `*`
+     * salia pegado al nombre. */
+    case TokenKind::KW_NONNULL:
+    case TokenKind::KW_THREAD_LOCAL: return true;
+    default: return false;
+    }
+}
+
+bool is_type_keyword(TokenKind k) {
+    return k >= TokenKind::KW_VOID && k <= TokenKind::KW_BORROW_MUT;
+}
+
 std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
     std::vector<Role> roles(pieces.size(), Role::Plain);
 
@@ -224,6 +229,14 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
     int param_paren = -1;
     int depth_paren = 0;
     bool stmt_start = true;
+    /* Una ANOTACION es una unidad completa, y lo que viene detras empieza
+     * sentencia.  Sin esto, `@alloc(...)` acababa en `)` -- que no abre
+     * sentencia -- y la firma de la funcion que decoraba no se leia como
+     * declaracion: el `*` de sus parametros salia `i64 *addr` en vez de
+     * `i64* addr`, contra la misma regla que la funcion de al lado si cumple.
+     *
+     * `anot_hasta` es el indice del ultimo token de la anotacion en curso. */
+    size_t anot_hasta = 0;
 
     /* Contexto para los DOS PUNTOS, que en Vesta son seis cosas distintas:
      *
@@ -253,15 +266,167 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
          * DECLARACION: `[modificadores] TIPO [*|[]|<>] NOMBRE` seguido de `=`,
          * `;`, `,`, `)` o `(`.  Es el unico sitio donde hace falta mirar
          * adelante, y basta con unos pocos tokens. */
+        /* En un alias, lo que hay DETRAS del `=` es un tipo entero.
+         *
+         * `using MyPtr = i64*;` salia `i64 *` porque pasado el `=` ya se
+         * estaba leyendo un valor, y ahi un `*` es producto.  El alias es el
+         * unico sitio donde una declaracion sigue nombrando tipo despues del
+         * `=`, asi que se marca hasta el `;`. */
+        /* Y detras de `->` viene el tipo de RETORNO.
+         *
+         * `fn memcpy(...) -> u8*;` acababa en `u8 *` porque pasado el
+         * parentesis ya no se estaba leyendo ninguna declaracion. */
+        if (k == TokenKind::ARROW) {
+            size_t t = i + 1;
+            while (t < pieces.size()) {
+                const TokenKind tk = kind_of(pieces[t]);
+                if (is_type_keyword(tk) || tk == TokenKind::IDENTIFIER ||
+                    tk == TokenKind::STAR || tk == TokenKind::AMP ||
+                    tk == TokenKind::LBRACKET || tk == TokenKind::RBRACKET ||
+                    tk == TokenKind::QUESTION || tk == TokenKind::INT_LIT ||
+                    tk == TokenKind::DOT) {
+                    ++t;
+                    continue;
+                }
+                if (tk == TokenKind::LT) {
+                    size_t close = 0;
+                    if (!closes_as_type_args(pieces, t, close)) break;
+                    t = close + 1;
+                    continue;
+                }
+                break;
+            }
+            // Una pieza MAS ALLA del ultimo token del tipo: el caso `STAR`
+            // pregunta `i < decl_until`, asi que la ultima estrella tiene que
+            // quedar dentro.
+            if (t > i + 1 && t > decl_until) decl_until = t;
+        }
+
+        if (k == TokenKind::KW_USING && stmt_start) {
+            size_t t = i + 1;
+            while (t < pieces.size() &&
+                   kind_of(pieces[t]) != TokenKind::SEMICOLON)
+                ++t;
+            if (t < pieces.size() && t > decl_until) decl_until = t;
+        }
+
+        if (k == TokenKind::AT && i + 1 < pieces.size()) {
+            size_t t = i + 1; // el nombre de la anotacion
+            if (t + 1 < pieces.size() &&
+                kind_of(pieces[t + 1]) == TokenKind::LPAREN) {
+                int prof = 0;
+                for (size_t j = t + 1; j < pieces.size(); ++j) {
+                    const TokenKind jk = kind_of(pieces[j]);
+                    if (jk == TokenKind::LPAREN) ++prof;
+                    else if (jk == TokenKind::RPAREN && --prof == 0) {
+                        t = j;
+                        break;
+                    }
+                }
+            }
+            anot_hasta = t;
+        }
+
+        /* Un CAST tambien nombra un tipo: `(u8*) p`.
+         *
+         * `decl_until` solo se pone al empezar una sentencia, asi que dentro
+         * del parentesis de un cast el `*` no era parte de ningun tipo y salia
+         * `(u8 *)`, contra la misma regla que fuera cumple.  Se reconoce por
+         * la forma -- `( TIPO *... )` --, y se exige al menos un `*`: sin el,
+         * `(x)` es un parentesis normal y no hay nada que decidir. */
+        if (k == TokenKind::LPAREN && i + 2 < pieces.size()) {
+            const TokenKind tipo = kind_of(pieces[i + 1]);
+            if (is_type_keyword(tipo) || tipo == TokenKind::IDENTIFIER) {
+                size_t t = i + 2;
+                size_t estrellas = 0;
+                while (t < pieces.size()) {
+                    const TokenKind tk = kind_of(pieces[t]);
+                    if (tk == TokenKind::STAR) {
+                        ++estrellas;
+                        ++t;
+                        continue;
+                    }
+                    if (tk == TokenKind::LBRACKET || tk == TokenKind::RBRACKET) {
+                        ++t;
+                        continue;
+                    }
+                    break;
+                }
+                if (estrellas > 0 && t < pieces.size() &&
+                    kind_of(pieces[t]) == TokenKind::RPAREN && t > decl_until)
+                    decl_until = t;
+            }
+        }
+
         if (stmt_start && i >= decl_until) {
             size_t j = i;
-            while (j < pieces.size() && is_modifier(kind_of(pieces[j])))
+            while (j < pieces.size() && precedes_type(kind_of(pieces[j])))
                 ++j;
+            /* Un calificador que el lexer entrega como NOMBRE.
+             *
+             * `comptime` no tiene token propio, asi que `comptime char* cn` no
+             * se leia como declaracion.  Se reconoce por la FORMA y no por el
+             * nombre -- un nombre seguido de un TIPO solo puede ser un
+             * calificador --, que ademas cubre a los que vengan despues sin
+             * tener que enumerarlos. */
+            if (j + 1 < pieces.size() &&
+                kind_of(pieces[j]) == TokenKind::IDENTIFIER &&
+                is_type_keyword(kind_of(pieces[j + 1])))
+                ++j;
+
+            /* Una clase de almacenamiento con argumento -- `register("rsi")`,
+             * y cualquiera que venga despues con la misma forma -- tambien va
+             * delante del tipo.  Se reconoce por la FORMA: un nombre, sus
+             * parentesis, y detras un tipo. */
+            if (j + 1 < pieces.size() &&
+                kind_of(pieces[j]) == TokenKind::IDENTIFIER &&
+                kind_of(pieces[j + 1]) == TokenKind::LPAREN) {
+                int prof = 0;
+                size_t t = j + 1;
+                for (; t < pieces.size(); ++t) {
+                    const TokenKind tk = kind_of(pieces[t]);
+                    if (tk == TokenKind::LPAREN) ++prof;
+                    else if (tk == TokenKind::RPAREN && --prof == 0) break;
+                }
+                if (t + 1 < pieces.size() &&
+                    (is_type_keyword(kind_of(pieces[t + 1])) ||
+                     precedes_type(kind_of(pieces[t + 1]))))
+                    j = t + 1;
+            }
+            /* `fn` esta fuera del rango de los tipos porque nombra una
+             * FORMA de tipo y no un tipo, pero en una declaracion ocupa su
+             * sitio: `fn memcpy(u8* dst, ...)`.  Sin contarlo, ninguna
+             * declaracion de un bloque `extern` se leia como tal y sus
+             * punteros salian pegados al nombre. */
             const bool named_type =
                 j < pieces.size() &&
                 (is_type_keyword(kind_of(pieces[j])) ||
+                 kind_of(pieces[j]) == TokenKind::KW_FN ||
                  kind_of(pieces[j]) == TokenKind::IDENTIFIER);
             if (named_type) {
+                /* Un CONSTRUCTOR no tiene tipo de retorno: su nombre ocupa el
+                 * sitio donde los demas ponen el tipo, asi que el patron
+                 * `TIPO nombre (` no lo reconoce y los punteros de sus
+                 * parametros salian pegados al nombre.
+                 *
+                 * Se distingue de una LLAMADA por lo que hay tras el `)`: un
+                 * cuerpo (`{`) o una expresion (`=>`).  Una llamada lleva ahi
+                 * un `;` o un operador. */
+                if (j + 1 < pieces.size() &&
+                    kind_of(pieces[j + 1]) == TokenKind::LPAREN) {
+                    int prof = 0;
+                    size_t c = j + 1;
+                    for (; c < pieces.size(); ++c) {
+                        const TokenKind ck = kind_of(pieces[c]);
+                        if (ck == TokenKind::LPAREN) ++prof;
+                        else if (ck == TokenKind::RPAREN && --prof == 0) break;
+                    }
+                    if (c + 1 < pieces.size() &&
+                        (kind_of(pieces[c + 1]) == TokenKind::LBRACE ||
+                         kind_of(pieces[c + 1]) == TokenKind::FAT_ARROW))
+                        decl_name = j;
+                }
+
                 size_t t = j + 1;
                 // Saltar lo que decora un tipo: punteros, arrays, genericos.
                 while (t < pieces.size()) {
@@ -269,7 +434,10 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                     if (tk == TokenKind::STAR || tk == TokenKind::AMP ||
                         tk == TokenKind::LBRACKET ||
                         tk == TokenKind::RBRACKET ||
-                        tk == TokenKind::QUESTION || tk == TokenKind::INT_LIT) {
+                        tk == TokenKind::QUESTION || tk == TokenKind::INT_LIT ||
+                        /* `i32 *const q`: el `const` de un puntero constante
+                         * va DETRAS de la estrella y sigue siendo tipo. */
+                        is_modifier(tk)) {
                         ++t;
                         continue;
                     }
@@ -283,9 +451,26 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 }
                 // Tras el tipo tiene que venir un nombre, y tras el nombre algo
                 // que solo aparece en una declaracion.
-                const bool has_name =
-                    t < pieces.size() &&
-                    kind_of(pieces[t]) == TokenKind::IDENTIFIER && t > j;
+                /* El nombre puede ser una palabra clave SENSIBLE AL CONTEXTO.
+                 *
+                 * `set` y `get` solo son palabras clave donde declaran una
+                 * propiedad; en cualquier otro sitio son nombres corrientes, y
+                 * uno de la stdlib se llama asi (`rt_sigprocmask(..., void*
+                 * set, void* oset, ...)`).  Pidiendo un IDENTIFIER, esa
+                 * declaracion no se reconocia y su `*` salia pegado al nombre
+                 * -- con el detalle delator de que en la MISMA linea `oset` si
+                 * salia bien --.
+                 *
+                 * Se acepta cualquier palabra que no nombre un tipo ni
+                 * preceda a uno: lo que va delante del `,` o del `)` de un
+                 * parametro solo puede ser su nombre. */
+                const TokenKind nk =
+                    t < pieces.size() ? kind_of(pieces[t]) : TokenKind::LPAREN;
+                const bool nombrable =
+                    nk == TokenKind::IDENTIFIER ||
+                    (nk > TokenKind::IDENTIFIER && !is_type_keyword(nk) &&
+                     !precedes_type(nk) && nk != TokenKind::KW_FN);
+                const bool has_name = t < pieces.size() && nombrable && t > j;
                 if (has_name && t + 1 < pieces.size()) {
                     switch (kind_of(pieces[t + 1])) {
                     case TokenKind::ASSIGN:
@@ -406,6 +591,26 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             if (param_paren < 0 && i > 0 && decl_name == i - 1 &&
                 kind_of(pieces[i - 1]) == TokenKind::IDENTIFIER)
                 param_paren = depth_paren;
+
+            /* Y el de una LAMBDA, que no lleva nombre delante.
+             *
+             * `(i64* p) => { ... }` empieza por el parentesis, asi que no hay
+             * declaracion que lo anuncie y sus punteros salian pegados al
+             * nombre.  Lo que lo delata es el `=>` que viene tras el cierre:
+             * ningun otro parentesis lo tiene detras salvo el patron de un
+             * `case`, y ahi dentro no hay `TIPO nombre` que confundir. */
+            if (param_paren < 0) {
+                int prof = 0;
+                size_t c = i;
+                for (; c < pieces.size(); ++c) {
+                    const TokenKind ck = kind_of(pieces[c]);
+                    if (ck == TokenKind::LPAREN) ++prof;
+                    else if (ck == TokenKind::RPAREN && --prof == 0) break;
+                }
+                if (c + 1 < pieces.size() &&
+                    kind_of(pieces[c + 1]) == TokenKind::FAT_ARROW)
+                    param_paren = depth_paren;
+            }
             ++paren_depth;
             if (i > 0 && kind_of(pieces[i - 1]) == TokenKind::KW_FOR) {
                 in_for = true;
@@ -448,6 +653,7 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
         // Una etiqueta es un NOMBRE al principio de sentencia, y nada mas.
         stmt_start_prev = stmt_start && k == TokenKind::IDENTIFIER;
         stmt_start = starts_statement(k) ||
+                     (anot_hasta != 0 && i == anot_hasta) ||
                      (param_paren >= 0 &&
                       (k == TokenKind::LPAREN || k == TokenKind::COMMA));
         if (i >= decl_until) decl_until = 0;

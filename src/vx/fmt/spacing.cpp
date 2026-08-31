@@ -34,11 +34,6 @@ namespace vx {
 namespace fmt {
 namespace {
 
-/// @brief Convierte el campo @c kind de una pieza a su enum.
-inline TokenKind kind_of(const Piece &p) {
-    return static_cast<TokenKind>(p.kind);
-}
-
 /**
  * @brief Indica si un token puede TERMINAR un valor.
  *

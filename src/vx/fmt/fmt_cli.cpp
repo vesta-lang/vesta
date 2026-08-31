@@ -21,6 +21,7 @@
 #include "vx/diag/diag_catalog.h"
 #include "vx/fmt/fmt_driver.h"
 
+#include <algorithm> // std::sort, que libstdc++ no arrastra sola
 #include <atomic>
 #include <cstdio>
 #include <filesystem>

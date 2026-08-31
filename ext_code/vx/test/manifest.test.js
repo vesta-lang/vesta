@@ -110,6 +110,23 @@ exigir(iconos.every(i => /^[a-z0-9-]+$/.test(i)),
        'los iconos tienen forma de codicon',
        iconos.filter(i => !/^[a-z0-9-]+$/.test(i)).join(', '));
 
+// --- Formatear al guardar --------------------------------------------------
+// El servidor sabe dar formato (`documentFormattingProvider`), pero eso solo
+// pone la orden en el menu: para que se aplique AL GUARDAR hay que pedirlo, y
+// se pide solo para Vesta -- tocar el ajuste global de quien instale la
+// extension seria meterse donde no llaman.
+const cfgDef = contribuye.configurationDefaults || {};
+const porLenguaje = cfgDef['[vesta]'] || {};
+exigir(porLenguaje['editor.formatOnSave'] === true,
+       'se formatea al guardar un .vx');
+exigir(porLenguaje['editor.insertSpaces'] === false,
+       'y el editor inserta TABULADORES, como manda R1');
+exigir(porLenguaje['editor.tabSize'] === 4,
+       'con la anchura que el estandar mide (R3)');
+exigir(Object.keys(cfgDef).every(k => k.startsWith('[')),
+       'los ajustes por defecto son SOLO por lenguaje',
+       Object.keys(cfgDef).filter(k => !k.startsWith('[')).join(', '));
+
 console.log('\n' + pasadas + ' comprobaciones pasadas, ' + fallos.length +
             ' fallidas');
 for (const f of fallos) {

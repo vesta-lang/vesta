@@ -116,7 +116,7 @@ void check_file(const std::string &path) {
      *    funcion que la salvaguarda de `format` -- no una propia --: cuando el
      *    test tenia su version, era mas debil y daba por bueno lo que el codigo
      *    rechazaba. */
-    check(vx::fmt::same_program(source, one.text),
+    check(vx::fmt::same_program(source, one.text, one.rewrites),
           "formatear no cambia el programa", path);
 }
 
@@ -346,9 +346,9 @@ void check_alignment() {
                                    "i32 total = 0;\n"
                                    "unique<Buffer> datos = b();\n"
                                    "}\n");
-    check(bloque.find("u8             contador = 0;") != std::string::npos,
+    check(bloque.find("u8             contador = 0_u8;") != std::string::npos,
           "el tipo se estira hasta el mas largo del bloque");
-    check(bloque.find("i32            total    = 0;") != std::string::npos,
+    check(bloque.find("i32            total    = 0_i32;") != std::string::npos,
           "y el nombre tambien, para que el = quede en columna");
 
     /* `R83`: una linea en blanco ROMPE el bloque.  Es lo que le da el control a
@@ -359,11 +359,11 @@ void check_alignment() {
                                  "\n"
                                  "i32 n = 1;\n"
                                  "}\n");
-    check(roto.find("i32 n = 1;") != std::string::npos,
+    check(roto.find("i32 n = 1_i32;") != std::string::npos,
           "tras una linea en blanco empieza otro bloque");
 
     // Una linea suelta no se alinea con nadie.
-    check(fmt("i32 f() { i64 x = 1; }\n").find("i64 x = 1;") !=
+    check(fmt("i32 f() { i64 x = 1; }\n").find("i64 x = 1_i64;") !=
               std::string::npos,
           "una sola declaracion no se estira");
 
@@ -513,12 +513,15 @@ void check_handwritten() {
  * autor marco.
  */
 void check_numbers() {
+    /* El literal va como ARGUMENTO y no como valor de una declaracion, para
+     * que aqui se vea solo la forma canonica: en una declaracion `R108` le
+     * pondria ademas el sufijo del tipo, y eso se comprueba aparte. */
     const auto one = [](const std::string &lit) {
-        const std::string src = "i32 main() { i64 v = " + lit + "; }\n";
+        const std::string src = "i32 main() { g(" + lit + "); }\n";
         const std::string out = vx::fmt::format(src, "<num>").text;
-        const size_t a = out.find("= ");
+        const size_t a = out.find("g(");
         if (a == std::string::npos) return std::string{};
-        const size_t b = out.find(';', a);
+        const size_t b = out.find(')', a);
         return out.substr(a + 2, b - a - 2);
     };
 
@@ -613,9 +616,9 @@ void check_sign_column() {
                                   "i8 minimo = -128;\n"
                                   "i8 maximo = 127;\n"
                                   "}\n");
-    check(mixto.find("minimo = -128;") != std::string::npos,
+    check(mixto.find("minimo = -128_i8;") != std::string::npos,
           "el valor con signo se queda donde estaba");
-    check(mixto.find("maximo =  127;") != std::string::npos,
+    check(mixto.find("maximo =  127_i8;") != std::string::npos,
           "el que no lo lleva reserva su columna");
 
     // `+` cuenta igual que `-`: los dos ocupan una columna.
@@ -623,7 +626,7 @@ void check_sign_column() {
                                 "i64 a = +600;\n"
                                 "i64 b = 40;\n"
                                 "}\n");
-    check(mas.find("b =  40;") != std::string::npos,
+    check(mas.find("b =  40_i64;") != std::string::npos,
           "un `+` tambien abre la columna del signo");
 
     // Sin ningun signo no hay nada que reservar.
@@ -631,7 +634,7 @@ void check_sign_column() {
                                 "i64 a = 1;\n"
                                 "i64 b = 40;\n"
                                 "}\n");
-    check(sin.find("a = 1;") != std::string::npos,
+    check(sin.find("a = 1_i64;") != std::string::npos,
           "sin signos los valores no se mueven");
 
     // Una llamada tambien recibe la columna: lo que devuelve se puede negar
@@ -641,7 +644,7 @@ void check_sign_column() {
                                  "i64 b = 40;\n"
                                  "i64 c = suma(1, 2);\n"
                                  "}\n");
-    check(call.find("b =  40;") != std::string::npos,
+    check(call.find("b =  40_i64;") != std::string::npos,
           "una llamada en medio no bloquea la columna del signo");
     check(call.find("c =  suma(1, 2);") != std::string::npos,
           "y la llamada tambien la recibe");
@@ -746,7 +749,7 @@ void check_spacing_lote() {
     // `R54`: el `;` de la cabecera de un `for` lleva espacio detras.
     const std::string bucle =
         fmt("i32 f() {\nfor (i32 i = 0;i < n;i = i + 1) {\ng();\n}\n}\n");
-    check(bucle.find("for (i32 i = 0; i < n; i = i + 1)") != std::string::npos,
+    check(bucle.find("for (i32 i = 0_i32; i < n; i = i + 1)") != std::string::npos,
           "el `;` del `for` lleva espacio detras");
     check(fmt("i32 f() {\nfor (;;) {\ng();\n}\n}\n").find("for (;;)") !=
               std::string::npos,
@@ -799,7 +802,7 @@ void check_una_por_linea() {
 
     // `R26`: una declaracion por linea.
     check(
-        fmt("i32 f() {\ni32 a = 1; i32 b = 2;\n}\n").find("a = 1;\n\ti32 b") !=
+        fmt("i32 f() {\ni32 a = 1; i32 b = 2;\n}\n").find("a = 1_i32;\n\ti32 b") !=
             std::string::npos,
         "dos sentencias en una linea se separan");
 
@@ -811,7 +814,7 @@ void check_una_por_linea() {
     /* Pero el `;` de la cabecera de un `for` NO cierra sentencia: los de en
      * medio van dentro de parentesis y el ultimo lo delata su cierre. */
     check(fmt("i32 f() {\nfor (i32 i = 0; i < n; i = i + 1) {\ng();\n}\n}\n")
-                  .find("for (i32 i = 0; i < n; i = i + 1)") !=
+                  .find("for (i32 i = 0_i32; i < n; i = i + 1)") !=
               std::string::npos,
           "la cabecera de un `for` no se parte");
     check(fmt("i32 f() {\nfor (;;) {\ng();\n}\n}\n").find("for (;;)") !=

@@ -4500,6 +4500,24 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 bool save_rbx = false, save_rbp = false;
                 {
                     const uint64_t asm_id = (in.imm >> 8) & 0xFFFFFFull;
+                    /* Lo que el CUERPO lee, por el mismo id.  Va aqui y no en
+                     * `in_vregs` porque no son operandos declarados: son
+                     * registros que el texto nombra, o que la instruccion lee
+                     * sin nombrar.  Quien mire lo que sigue vivo los necesita.
+                     */
+                    if (asm_id < fn.asm_read_lists.size()) {
+                        for (const auto &rn : fn.asm_read_lists[asm_id]) {
+                            const std::string c = vx::asm_canonical_reg(rn);
+                            int phys = canon_gp_to_mreg(c);
+                            if (phys < 0) phys = canon_vec_to_mreg(c);
+                            if (phys >= 0)
+                                blob.body_reads.push_back(
+                                    static_cast<uint8_t>(phys));
+                        }
+                        blob.reads_conocidos =
+                            asm_id < fn.asm_reads_completos.size() &&
+                            fn.asm_reads_completos[asm_id] != 0;
+                    }
                     if (asm_id < fn.asm_clobber_lists.size()) {
                         for (const auto &cn : fn.asm_clobber_lists[asm_id]) {
                             const std::string c = vx::asm_canonical_reg(cn);

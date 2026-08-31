@@ -132,7 +132,8 @@ def comprobar_capacidades(lsp: VestaLspClient, c: Comprobaciones) -> None:
     )
     for tipo in TIPOS_PROPIOS:
         c.exigir(tipo in leyenda, f"la leyenda incluye el tipo propio '{tipo}'")
-    for capacidad in ("hoverProvider", "definitionProvider", "referencesProvider"):
+    for capacidad in ("hoverProvider", "definitionProvider", "referencesProvider",
+                      "documentFormattingProvider"):
         c.exigir(bool(capacidades.get(capacidad)), f"anuncia {capacidad}")
     c.exigir(
         "completionProvider" in capacidades,
@@ -141,6 +142,35 @@ def comprobar_capacidades(lsp: VestaLspClient, c: Comprobaciones) -> None:
     anunciados = capacidades.get("experimental", {}).get("vestaMethods", [])
     for metodo in METODOS_ESPERADOS:
         c.exigir(metodo in anunciados, f"anuncia el metodo propio {metodo}")
+
+
+def comprobar_formato(lsp: VestaLspClient, c: Comprobaciones) -> None:
+    """Comprueba que el servidor da formato de verdad, no solo que lo anuncia.
+
+    Es lo que hace `editor.formatOnSave` cada vez que se guarda un `.vx`, asi
+    que un fallo aqui se nota en cada guardado.  Se manda un fichero SUCIO a
+    proposito y se mira que vuelva puesto: anunciar la capacidad y devolver una
+    lista vacia seria un fallo silencioso.
+    """
+    print("\n[formato]")
+    sucio = "i32  f( )  {\ni32 a=1;\ni32 bb=2;\nreturn a+bb;\n}\n"
+    uri = lsp.open("file:///smoke_formato.vx", text=sucio)
+    try:
+        ediciones = lsp.request(
+            "textDocument/formatting",
+            {"textDocument": {"uri": uri},
+             "options": {"tabSize": 4, "insertSpaces": False}},
+        )
+    except Exception as e:  # noqa: BLE001 -- el motivo se cuenta, no se traga
+        c.exigir(False, "el servidor responde a textDocument/formatting", str(e))
+        return
+    c.exigir(bool(ediciones), "devuelve alguna edicion para un fichero sucio")
+    if not ediciones:
+        return
+    texto = ediciones[0].get("newText", "")
+    c.exigir("i32 f() {" in texto, "quita el espacio de mas en la firma")
+    c.exigir("	i32 a  = 1;" in texto, "indenta con tabulador y alinea el `=`")
+    c.exigir("return a + bb;" in texto, "separa los operadores")
 
 
 def comprobar_navegacion(lsp: VestaLspClient, uri: str, texto: str,
@@ -956,9 +986,20 @@ def comprobar_informe_por_funcion(c: Comprobaciones, binario: str) -> None:
                  "las funciones traen lo que el compilador mide de ellas")
         if con_medida:
             m = con_medida[0]["measured"]
-            for clave in ("allocTotal", "stackTotal", "throws", "panics",
+            for clave in ("allocTotal", "stackBounded", "throws", "panics",
                           "pure", "effectsKnown"):
                 c.exigir(clave in m, f"lo medido trae '{clave}'", campos(m))
+            # `stackTotal` solo aparece cuando el marco se CONOCE.  Antes salia
+            # siempre, y cuando no se sabia traia el centinela -- que en la
+            # vista se leia como un marco de 18 trillones de bytes.  Ahora lo
+            # que siempre esta es `stackBounded`, que dice si hay cifra.
+            if m.get("stackBounded"):
+                c.exigir("stackTotal" in m,
+                         "si el marco esta acotado, viene su tamano", campos(m))
+            else:
+                c.exigir("stackTotal" not in m,
+                         "y si no se conoce, NO se inventa una cifra",
+                         campos(m))
 
         # Y si el modo nativo puede con cada una, que es la otra pregunta que
         # se hace mirando esto.
@@ -1093,6 +1134,7 @@ def main() -> int:
 
     with VestaLspClient(binario, root_uri=os.path.dirname(fuente)) as lsp:
         comprobar_capacidades(lsp, c)
+        comprobar_formato(lsp, c)
         uri = lsp.open(fuente, text=texto)
 
         print("\n[diagnosticos]")

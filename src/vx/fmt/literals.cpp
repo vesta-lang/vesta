@@ -242,6 +242,109 @@ std::string canonical_decimal(std::string_view text) {
     return out;
 }
 
+/**
+ * @brief El nombre de tipo vale como sufijo de literal?
+ *
+ * Solo los nombres CORTOS de Vesta -- `i8`..`i64`, `u8`..`u64`, `f32`, `f64`
+ * --.  Los alias largos (`int32_t`, `double`) nombran el mismo tipo pero no
+ * son sufijos validos, y ponerlos dejaria el fichero sin compilar.
+ *
+ * Se comprueba por la FORMA y no contra una lista: la letra y la anchura.  Una
+ * lista escrita a mano se queda corta en cuanto el lenguaje gana un tipo, y se
+ * queda corta en silencio.
+ *
+ * @param nombre Texto del token de tipo.
+ * @param flotante [out] cierto si es un tipo de coma flotante.
+ * @return Cierto si sirve de sufijo.
+ */
+/**
+ * @brief Lleva ya el literal un sufijo de tipo?
+ *
+ * Un sufijo empieza por letra, y la unica letra que puede aparecer en un
+ * numero sin serlo es la del prefijo de base (`0x`), la de un digito
+ * hexadecimal o la `e` del exponente.  Se mira desde el final: si el ultimo
+ * caracter es una letra y antes hay un `_`, es un sufijo.
+ *
+ * @param text Lexema completo.
+ * @return Cierto si ya trae sufijo.
+ */
+bool has_suffix(std::string_view text) {
+    for (size_t i = text.size(); i > 0; --i) {
+        const char c = text[i - 1];
+        if (c == '_') return i < text.size(); // `123_i64`
+        if (!std::isalnum((unsigned char)c)) return false;
+    }
+    return false;
+}
+
+/**
+ * @brief Lee el valor de un literal entero, sea cual sea su base.
+ *
+ * @param text Lexema sin sufijo, con o sin `_` de agrupacion.
+ * @param valor [out] el numero.
+ * @return Cierto si se pudo leer entero y sin desbordar 64 bits.
+ */
+bool int_value(std::string_view text, unsigned long long &valor) {
+    int base = 10;
+    size_t i = 0;
+    if (text.size() > 2 && text[0] == '0') {
+        const char b = text[1];
+        if (b == 'x' || b == 'X') { base = 16; i = 2; }
+        else if (b == 'b' || b == 'B') { base = 2; i = 2; }
+        else if (b == 'o' || b == 'O') { base = 8; i = 2; }
+    }
+    valor = 0;
+    bool alguno = false;
+    for (; i < text.size(); ++i) {
+        const char c = text[i];
+        if (c == '_') continue;
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else return false;
+        if (d >= base) return false;
+        const unsigned long long antes = valor;
+        valor = valor * (unsigned long long)base + (unsigned long long)d;
+        if (valor < antes) return false; // desbordo los 64 bits
+        alguno = true;
+    }
+    return alguno;
+}
+
+/**
+ * @brief Cabe @p valor en un tipo entero de @p ancho bits?
+ *
+ * Sin esto, `u8 x = 300;` se convertia en `300_u8`, que no compila: el
+ * formateador habria roto el fichero al ponerle un sufijo que el numero no
+ * admite.  Un valor que no cabe es un error del programa, pero es del AUTOR
+ * -- se dice al compilar --, y el formateador no tiene por que empeorarlo.
+ *
+ * @param valor Magnitud escrita.
+ * @param ancho Bits del tipo.
+ * @param con_signo Cierto si el tipo lleva signo.
+ * @param negativo Cierto si delante del literal hay un `-`.
+ * @return Cierto si cabe.
+ */
+bool fits(unsigned long long valor, unsigned ancho, bool con_signo,
+          bool negativo) {
+    if (ancho >= 64) return !negativo || valor <= (1ULL << 63);
+    if (!con_signo) return !negativo && valor < (1ULL << ancho);
+    const unsigned long long tope = 1ULL << (ancho - 1);
+    // Un tipo con signo llega a -2^(n-1) por abajo y a 2^(n-1)-1 por arriba.
+    return negativo ? valor <= tope : valor < tope;
+}
+
+bool suffix_name(std::string_view nombre, bool &flotante) {
+    if (nombre.size() < 2 || nombre.size() > 3) return false;
+    const char letra = nombre.front();
+    if (letra != 'i' && letra != 'u' && letra != 'f') return false;
+    const std::string_view ancho = nombre.substr(1);
+    flotante = letra == 'f';
+    if (flotante) return ancho == "32" || ancho == "64";
+    return ancho == "8" || ancho == "16" || ancho == "32" || ancho == "64";
+}
+
 } // namespace
 
 /**
@@ -272,6 +375,108 @@ std::string canonical_literal(std::string_view text) {
     else if (std::isdigit((unsigned char)text[0]))
         out = canonical_decimal(text);
     return out == text ? std::string{} : out;
+}
+
+/**
+ * @brief Anade a cada literal el sufijo de tipo de su declaracion (`R108`).
+ *
+ * `R108` decia como se ESCRIBE un sufijo, pero no que hubiera que ponerlo, asi
+ * que un `public const u32 PIPE_WAIT = 0x00000000;` se quedaba sin el: el
+ * numero no dice de que tipo es y hay que ir a buscar la declaracion, que es
+ * justo lo que el sufijo existe para evitar.  Es lo que hace C con `L` y `F`,
+ * con los nombres de Vesta.
+ *
+ * El tipo sale de la propia declaracion -- `TIPO nombre = <literal>;` --, que
+ * es el unico sitio donde el formateador lo sabe SIN compilar.  Donde no se
+ * puede saber (un argumento, una expresion) no se inventa nada.
+ *
+ * Dos cosas que NO se tocan, y las dos cambiarian el programa:
+ *
+ *   - un entero que NO CABE en el tipo declarado: `u8 x = 300;` no puede
+ *     decir `300_u8`.  Es un error del autor, pero es suyo y lo dice el
+ *     compilador; el formateador no lo empeora dejando el fichero sin
+ *     compilar por otro sitio.
+ *   - un entero declarado de tipo flotante (`f64 x = 1;`): el sufijo tiene que
+ *     ser de la misma familia que el literal.
+ *
+ * @param pieces [in,out] las piezas; se reescribe el texto de los literales.
+ * @param textos [in,out] almacen de los textos nuevos, que las piezas apuntan.
+ * @return Las reescrituras hechas, para que `P2` sepa que diferencia esperar.
+ */
+std::vector<Rewrite> add_type_suffixes(std::vector<Piece> &pieces,
+                                      std::vector<std::string> &textos) {
+    std::vector<Rewrite> hechas;
+    /* Dentro de un bloque `asm` no se toca NADA.
+     *
+     * Ahi los numeros son operandos de instrucciones de la maquina, no valores
+     * de Vesta: `mov rax, 42` no admite un sufijo de tipo, y ponerselo deja el
+     * bloque sin ensamblar.  Es la misma linea que `R77` traza para la
+     * indentacion -- lo de dentro del `asm` es del autor --, aplicada aqui. */
+    int asm_prof = 0;
+    bool asm_viene = false;
+    for (size_t i = 0; i + 1 < pieces.size(); ++i) {
+        const TokenKind aqui = kind_of(pieces[i]);
+        if (aqui == TokenKind::KW_ASM) asm_viene = true;
+        if (aqui == TokenKind::LBRACE) {
+            if (asm_prof > 0) ++asm_prof;
+            else if (asm_viene) asm_prof = 1;
+            asm_viene = false;
+        } else if (aqui == TokenKind::RBRACE && asm_prof > 0) {
+            --asm_prof;
+        }
+        if (asm_prof > 0) continue;
+
+        /* La forma: `TIPO nombre = [-|+] <literal> ;`, con el literal solo.
+         *
+         * El signo es un token aparte -- no forma parte del numero --, asi que
+         * el literal puede estar una pieza mas alla.  Es lo que decide si
+         * `128` cabe en un `i8`: con el `-` delante si, sin el no. */
+        if (kind_of(pieces[i]) != TokenKind::ASSIGN) continue;
+        const TokenKind signo = kind_of(pieces[i + 1]);
+        const bool negativo = signo == TokenKind::MINUS;
+        const size_t n = (negativo || signo == TokenKind::PLUS) ? i + 2 : i + 1;
+        if (n + 1 >= pieces.size()) continue;
+        if (kind_of(pieces[n + 1]) != TokenKind::SEMICOLON) continue;
+
+        Piece &lit = pieces[n];
+        const bool entero = kind_of(lit) == TokenKind::INT_LIT;
+        const bool real = kind_of(lit) == TokenKind::FLOAT_LIT;
+        if (!entero && !real) continue;
+        if (lit.in_string || lit.verbatim) continue;
+        if (has_suffix(lit.text)) continue;
+
+        // El nombre del tipo esta dos piezas antes del `=`: `TIPO nombre =`.
+        if (i < 2) continue;
+        if (kind_of(pieces[i - 1]) != TokenKind::IDENTIFIER) continue;
+        const TokenKind tk = kind_of(pieces[i - 2]);
+        if (!is_type_keyword(tk)) continue;
+
+        bool flotante = false;
+        if (!suffix_name(pieces[i - 2].text, flotante)) continue;
+        if (flotante != real) continue; // la familia tiene que coincidir
+
+        /* Un entero tiene que CABER en el tipo antes de decir que es de ese
+         * tipo.  El signo va aparte del literal, asi que hay que mirarlo: la
+         * misma cifra cabe en `i8` con `-` delante (`-128`) y no sin el. */
+        if (entero) {
+            const std::string_view ancho = pieces[i - 2].text.substr(1);
+            unsigned bits = 0;
+            for (const char c : ancho)
+                bits = bits * 10 + (unsigned)(c - '0');
+            const bool con_signo = pieces[i - 2].text.front() == 'i';
+            unsigned long long valor = 0;
+            if (!int_value(lit.text, valor)) continue;
+            if (!fits(valor, bits, con_signo, negativo)) continue;
+        }
+
+        std::string nuevo(lit.text);
+        nuevo += '_';
+        nuevo += pieces[i - 2].text;
+        textos.push_back(std::move(nuevo));
+        lit.text = textos.back();
+        hechas.push_back({RewriteKind::AddTypeSuffix, lit.offset});
+    }
+    return hechas;
 }
 
 } // namespace fmt

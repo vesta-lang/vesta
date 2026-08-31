@@ -23,24 +23,6 @@ namespace vx {
 namespace fmt {
 namespace {
 
-/// @brief Convierte el campo @c kind de una pieza a su enum.
-inline TokenKind kind_of(const Piece &p) {
-    return static_cast<TokenKind>(p.kind);
-}
-
-/// @brief Indica si el token es un modificador de declaracion.
-bool is_modifier(TokenKind k) {
-    switch (k) {
-    case TokenKind::KW_PUBLIC:
-    case TokenKind::KW_PRIVATE:
-    case TokenKind::KW_PROTECTED:
-    case TokenKind::KW_STATIC:
-    case TokenKind::KW_FINAL:
-    case TokenKind::KW_CONST: return true;
-    default: return false;
-    }
-}
-
 /**
  * @brief Orden canonico de un modificador (`R42`): acceso, `static`, `final`.
  *
@@ -87,7 +69,7 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
             kind_of(pieces[i - 2]) == TokenKind::AT) {
             pieces[i].drop = true;
             pieces[i + 1].drop = true;
-            hechas.push_back({RewriteKind::DropEmptyParens, i});
+            hechas.push_back({RewriteKind::DropEmptyParens, pieces[i].offset});
             ++i;
             continue;
         }
@@ -103,7 +85,7 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
             roles[i] == Role::TightLeft && roles[i + 1] == Role::TightLeft) {
             pieces[i].glued = ">>";
             pieces[i + 1].drop = true;
-            hechas.push_back({RewriteKind::GlueGenericClose, i});
+            hechas.push_back({RewriteKind::GlueGenericClose, pieces[i].offset});
             ++i;
             continue;
         }
@@ -122,7 +104,7 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
                 // que las precede pertenece a la linea, no a la palabra.
                 std::swap(pieces[i].kind, pieces[i + 1].kind);
                 std::swap(pieces[i].text, pieces[i + 1].text);
-                hechas.push_back({RewriteKind::SwapModifiers, i});
+                hechas.push_back({RewriteKind::SwapModifiers, pieces[i].offset});
             }
         }
     }

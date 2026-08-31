@@ -53,11 +53,6 @@ namespace vx {
 namespace fmt {
 namespace {
 
-/// @brief Convierte el campo @c kind de una pieza a su enum.
-inline TokenKind kind_of(const Piece &p) {
-    return static_cast<TokenKind>(p.kind);
-}
-
 /**
  * @brief La forma de una linea, para saber con cuales se puede alinear.
  *
@@ -74,7 +69,8 @@ enum class Shape : uint8_t {
     BitField, ///< `TIPO NOMBRE : bits;` -- campo de bits
     TableRow, ///< una FILA de valores dentro de un `{ ... }` de inicializacion
     Label,    ///< `etiqueta: valor,` dentro de una anotacion (`R112`)
-    Case      ///< `case <patron> => <cuerpo>` de un `match` (`R113`)
+    Case,     ///< `case <patron> => <cuerpo>` de un `match` (`R113`)
+    Trailing  ///< una expresion partida cuyas lineas ACABAN en el operador
 };
 
 /// Una linea reducida a lo que hace falta para alinearla.
@@ -99,23 +95,6 @@ struct Line {
     /// Cierto si ese valor lleva un `-` delante.
     bool value_signed = false;
 };
-
-/**
- * @brief Indica si el token es un modificador que precede a un tipo.
- * @param k Categoria del token.
- * @return Cierto si es `public`, `const`, `static` y compania.
- */
-bool is_modifier(TokenKind k) {
-    switch (k) {
-    case TokenKind::KW_PUBLIC:
-    case TokenKind::KW_PRIVATE:
-    case TokenKind::KW_PROTECTED:
-    case TokenKind::KW_STATIC:
-    case TokenKind::KW_FINAL:
-    case TokenKind::KW_CONST: return true;
-    default: return false;
-    }
-}
 
 /**
  * @brief Reduce una linea a su forma y sus puntos de alineacion.
@@ -266,6 +245,38 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
      * se quedaba fuera de la columna que compartian sus hermanos -- y era
      * justo el que mas cantaba, por ser el que cierra el bloque. */
     const TokenKind end = kind_of(pieces[to]);
+
+    /* Una expresion partida DEJANDO el operador al final de cada linea.
+     *
+     * Es como se escribe una mascara de bits larga, y los operadores puestos
+     * en columna son lo que deja ver que la lista esta completa -- falta uno y
+     * salta a la vista --.  Sin alinearlos, cada `|` queda pegado a su operando
+     * y la lista se convierte en un parrafo.
+     *
+     * Se reconoce por la forma: la linea acaba en un operador, asi que lo que
+     * hay es media expresion y la otra mitad viene debajo. */
+    switch (end) {
+    case TokenKind::PIPE:
+    case TokenKind::AMP:
+    case TokenKind::CARET:
+    case TokenKind::PLUS:
+    case TokenKind::MINUS:
+    case TokenKind::STAR:
+    case TokenKind::SLASH:
+    case TokenKind::PERCENT:
+    case TokenKind::OR_OR:
+    case TokenKind::AND_AND:
+    case TokenKind::SHL:
+    case TokenKind::SHR:
+        if (to > from) {
+            line.shape = Shape::Trailing;
+            line.anchors = {to}; // el operador, que es lo que va en columna
+            return line;
+        }
+        break;
+    default: break;
+    }
+
     const bool cierra_lista = to + 1 < pieces.size() &&
                               (kind_of(pieces[to + 1]) == TokenKind::RBRACE ||
                                kind_of(pieces[to + 1]) == TokenKind::RPAREN ||
@@ -275,7 +286,7 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
 
     // Saltar los modificadores: son un campo aparte que puede faltar (`R84`).
     size_t i = from;
-    while (i <= to && is_modifier(kind_of(pieces[i])))
+    while (i <= to && precedes_type(kind_of(pieces[i])))
         ++i;
 
     /* Un campo de BITS lleva su anchura tras dos puntos:
@@ -317,24 +328,66 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         return line;
     }
 
-    // Buscar el `=` de la linea, que es el ancla principal.
+    /* Buscar el `=` de la linea, que es el ancla principal.
+     *
+     * Tiene que ser el de la SENTENCIA: uno dentro de parentesis o corchetes
+     * pertenece a otra cosa (`f(a = 1)`), y anclar ahi alinearia por un sitio
+     * que no significa nada. */
     size_t assign = 0;
     bool found = false;
+    int prof = 0;
     for (size_t k = i; k <= to; ++k) {
-        if (kind_of(pieces[k]) == TokenKind::ASSIGN) {
+        const TokenKind kk = kind_of(pieces[k]);
+        if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET) ++prof;
+        else if (kk == TokenKind::RPAREN || kk == TokenKind::RBRACKET) --prof;
+        else if (kk == TokenKind::ASSIGN && prof == 0) {
             assign = k;
             found = true;
             break;
         }
     }
-    if (!found) return line;
+    /* Una declaracion SIN valor inicial sigue siendo una declaracion.
+     *
+     * `T val;` no tiene `=`, asi que se caia del reparto y no se alineaba con
+     * el `u8 tag = 0x07;` de al lado, aunque los dos son campos del mismo
+     * struct y sus dos primeras columnas son las mismas.  Se le dan sus dos
+     * anclas -- tipo y nombre -- y el bloque alinea lo que tengan en comun. */
+    if (!found) {
+        if (to < i + 1) return line;
+        if (kind_of(pieces[to]) != TokenKind::SEMICOLON) return line;
+        const size_t solo = to - 1;
+        if (solo <= i) return line; // `x;` no declara nada
+        if (kind_of(pieces[solo]) != TokenKind::IDENTIFIER) return line;
+        /* Y lo de delante tiene que poder ser un TIPO.  `return *local;` tiene
+         * la misma forma -- palabra, nombre, `;` -- y se colaba como
+         * declaracion: entonces `return` hacia de tipo y se alineaba en
+         * columna con los `i64*` de al lado, separando el `return` de lo que
+         * devuelve. */
+        const TokenKind primero = kind_of(pieces[i]);
+        if (primero != TokenKind::IDENTIFIER && !is_type_keyword(primero))
+            return line;
+        line.shape = Shape::Decl;
+        line.anchors = {i, solo}; // tipo, nombre
+        return line;
+    }
 
     /* El NOMBRE es la pieza justo antes del `=`.  Si entre el principio y el
      * nombre hay algo mas, eso es el TIPO y la linea es una declaracion; si no,
      * es una asignacion a secas. */
     if (assign == 0 || assign - 1 < i) return line;
     const size_t name = assign - 1;
-    if (kind_of(pieces[name]) != TokenKind::IDENTIFIER) return line;
+    /* Si lo de delante del `=` no es un nombre, sigue siendo una asignacion:
+     * `*(u32*)(buf + 0) = 0xCAFE;` acaba en `)`.  Lo que hay a la izquierda es
+     * un lvalue entero y se alinea por donde EMPIEZA, no partido en columnas.
+     *
+     * Antes se descartaba la linea entera, asi que un bloque de escrituras por
+     * puntero -- que es justo donde importa ver los desplazamientos en
+     * columna -- no se alineaba nunca. */
+    if (kind_of(pieces[name]) != TokenKind::IDENTIFIER) {
+        line.shape = Shape::Assign;
+        line.anchors = {i, assign};
+        return line;
+    }
 
     /* Salvo que haya un PUNTO de por medio: entonces la izquierda es un acceso
      * a campo -- `c.handle = ...` -- y no un `TIPO NOMBRE`.
@@ -465,7 +518,11 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
         while (end + 1 < lines.size() &&
                lines[end + 1].shape == lines[start].shape &&
                lines[end + 1].level == lines[start].level &&
-               lines[end + 1].anchors.size() == lines[start].anchors.size() &&
+               /* Mismo numero de columnas... salvo entre declaraciones, donde
+                * la que no tiene valor inicial trae una menos y se alinea
+                * igual por las que comparten (`T val;` con `u8 tag = 0;`). */
+               (lines[end + 1].anchors.size() == lines[start].anchors.size() ||
+                lines[start].shape == Shape::Decl) &&
                /* Consecutivas de verdad: si el emisor dejo una linea en blanco
                 * o un comentario entre medias, el bloque se rompe (`R83`).
                 * Eso es lo que le da el control a quien escribe. */
@@ -480,8 +537,35 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
              * sobre columnas que ya no son las que van a salir. */
             std::vector<uint32_t> shift(end - start + 1, 0);
 
-            const size_t n = lines[start].anchors.size();
+            // Solo se alinean las columnas que TODAS tienen.
+            size_t n = lines[start].anchors.size();
+            for (size_t l = start; l <= end; ++l)
+                if (lines[l].anchors.size() < n) n = lines[l].anchors.size();
             for (size_t k = 0; k < n; ++k) {
+                /* El PRIMER campo no se estira si alguna linea del bloque lo
+                 * tiene pegado al margen.
+                 *
+                 * `R84` le da columna propia a los modificadores para que los
+                 * tipos cuadren aunque solo algunas lineas lleven `const`.
+                 * Pero cuando la que no lo lleva es la que manda, estirar ese
+                 * campo mete espacios DELANTE del primer token, y entonces la
+                 * linea ya no empieza donde dice su sangria:
+                 *
+                 *           i64          x  = 40;
+                 *           nonnull i64 *p1 = &x;
+                 *     const i64          a  = *p1;
+                 *
+                 * La sangria es lo que dice el nivel de anidamiento, y eso
+                 * pesa mas que cuadrar una columna.  Los demas campos se
+                 * siguen alineando: los nombres y el `=` quedan igual. */
+                if (k == 0) {
+                    bool alguna_al_margen = false;
+                    for (size_t l = start; l <= end && !alguna_al_margen; ++l)
+                        alguna_al_margen =
+                            lines[l].anchors[0] == spans[l].first;
+                    if (alguna_al_margen) continue;
+                }
+
                 /* La columna del campo = la mayor de las que salen por si
                  * solas.  Alineando por la DERECHA, lo que se iguala es donde
                  * ACABA cada valor, no donde empieza: es como se leen los
@@ -572,7 +656,9 @@ std::vector<uint32_t>
 compute_comment_alignment(const std::vector<Piece> &pieces,
                           const Layout &layout, const FormatOptions &options) {
     std::vector<uint32_t> cpad(pieces.size(), 0);
-    if (layout.comment_column.size() != pieces.size()) return cpad;
+    if (layout.comment_column.size() != pieces.size() ||
+        layout.comment_line.size() != pieces.size())
+        return cpad;
 
     /* Un comentario de fin de linea "pertenece" a la linea del token ANTERIOR,
      * porque vive en la trivia del siguiente.  Se agrupan los de lineas
@@ -592,8 +678,8 @@ compute_comment_alignment(const std::vector<Piece> &pieces,
     for (size_t a = 0; a < con_comentario.size();) {
         size_t b = a;
         while (b + 1 < con_comentario.size() &&
-               layout.line[con_comentario[b + 1]] ==
-                   layout.line[con_comentario[b]] + 1)
+               layout.comment_line[con_comentario[b + 1]] ==
+                   layout.comment_line[con_comentario[b]] + 1)
             ++b;
 
         if (b > a) { // un comentario suelto no se alinea con nadie
@@ -634,7 +720,19 @@ compute_comment_alignment(const std::vector<Piece> &pieces,
                     layout.comment_column[idx] + comment_width;
                 if (end_col > options.width)
                     continue; // ya se salia: no se toca
-                if (end_col + extra <= options.width) cpad[idx] = extra;
+                /* Y si es ESTIRARLO lo que lo saca de las 80, se estira igual.
+                 *
+                 * Aqui `R20` pesa mas que `R86`: la columna es lo que hace que
+                 * ocho comentarios de campo se lean como una tabla, y basta
+                 * que UNO se quede atras para que deje de haber tabla -- no se
+                 * gana la linea corta y se pierde la columna --.  El limite de
+                 * ancho protege el CODIGO, y detras del comentario ya no viene
+                 * codigo.
+                 *
+                 * Se veia en `vx_async.vx`: siete campos en columna y el
+                 * primero pegado a su `;`, que era justo el que mas cantaba
+                 * por ir arriba. */
+                cpad[idx] = extra;
             }
         }
         a = b + 1;

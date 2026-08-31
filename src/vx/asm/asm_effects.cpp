@@ -1976,7 +1976,29 @@ AsmInferResult asm_infer_clobbers(
             // Conservador: marcar memoria + flags para no perder un efecto.
             res.clobber_memory = true;
             res.clobber_flags = true;
+            /* Y la lista de LECTURAS queda incompleta: de esta linea no se sabe
+             * que lee.  Se dice, en vez de dejar que una lista corta pase por
+             * una lista completa. */
+            res.reads_completos = false;
             continue;
+        }
+
+        /* Lo que la linea LEE.  Sale de la misma fuente que lo que escribe --
+         * la base, para una linea emparejada -- y hasta ahora se calculaba y se
+         * tiraba: solo se acumulaban los clobbers.  Se acumula TAL CUAL, sin
+         * excluir los ligados por `register()`: un operando ligado que el
+         * cuerpo lee es precisamente una lectura, al reves que en los clobbers
+         * (donde se excluye porque es un operando y no un destrozo). */
+        for (const std::string &r : eff.implicit_read) {
+            const std::string canon = asm_canonical_reg(r);
+            if (canon.empty()) continue;
+            bool dup = false;
+            for (const std::string &e : res.read_regs)
+                if (e == canon) {
+                    dup = true;
+                    break;
+                }
+            if (!dup) res.read_regs.push_back(canon);
         }
 
         // Registros escritos implicitamente.

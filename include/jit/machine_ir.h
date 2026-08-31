@@ -1498,6 +1498,46 @@ struct AsmBlob {
     std::vector<uint32_t> out_vregs; ///< vregs escritos por el asm
     std::vector<uint8_t> clobbers;   ///< MReg ids clobbered (no bindings)
     /**
+     * @brief Los mismos que @c in_vregs / @c out_vregs, pero ya en registros
+     *        FISICOS: que lee y que escribe este asm una vez repartidos.
+     *
+     * Los llena @c rewrite_to_physical, que es quien tiene el reparto.  Sin
+     * ellos el MachineIR fisico NO SE DESCRIBE A SI MISMO en este punto: los
+     * blobs se copian tal cual y sus listas siguen hablando de registros
+     * VIRTUALES, mientras que el mapa a fisicos se queda en la asignacion y no
+     * viaja.  Cualquiera que mire el codigo ya repartido -- una mirilla, un
+     * planificador, el codificador -- ve un `asm` que aparentemente no lee
+     * nada, porque sus lecturas no estan en los operandos.
+     *
+     * Se descubrio asi: una regla de mirilla que quitaba escrituras muertas
+     * borro un `mov` que alimentaba a un bloque de asm.
+     *
+     * Vacias cuando el asm no liga ningun registro; ver @c clobbers_conocidos
+     * para lo que NO son bindings.
+     */
+    std::vector<uint8_t> in_phys;  ///< MReg ids leidos (tras repartir)
+    std::vector<uint8_t> out_phys; ///< MReg ids escritos (tras repartir)
+    /**
+     * @brief Lo que el CUERPO lee, aunque no lo declare como operando.
+     *
+     * El gemelo de @c clobbers.  Un cuerpo puede nombrar un registro
+     * directamente (`asm { div rsi }` lee rsi) o leerlo sin nombrarlo (el
+     * RDX:RAX de esa misma division), y ninguno de los dos casos aparece en
+     * @c in_vregs ni en los operandos de la instruccion.
+     *
+     * Sale de la inferencia sobre el TEXTO -- la misma que deduce los
+     * clobbers, preguntandole a la base de instrucciones por cada linea --, y
+     * llega hasta aqui por @c IrFunction::asm_read_lists.
+     *
+     * Sin esto, quien razone sobre lo que sigue vivo ve un `asm` que
+     * aparentemente no lee nada y borra la escritura que lo alimenta.
+     */
+    std::vector<uint8_t> body_reads;
+    /// @c false si la inferencia no pudo con alguna linea del cuerpo: entonces
+    /// @c body_reads esta INCOMPLETA y hay que suponer lo peor.  Distinto de
+    /// una lista vacia, que significa "no lee nada mas".
+    bool reads_conocidos = false;
+    /**
      * @brief ¿La lista @c clobbers es AUTORITATIVA (se sabe que destruye)?
      *
      * Distingue "no destruye nada mas que sus operandos" de "no se sabe que

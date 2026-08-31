@@ -27,6 +27,8 @@
 
 #include "vx/fmt/fmt_internal.h"
 
+#include <algorithm>
+
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"
 
@@ -179,7 +181,7 @@ bool same_program(std::string_view before, std::string_view after,
          * que al final sobraba una y el fichero se rechazaba entero. */
         RewriteKind kind;
         size_t cual = 0;
-        const bool hay = declarada(ia, &kind, &cual);
+        const bool hay = declarada(A[ia].loc.offset, &kind, &cual);
         if (!hay && igual(A[ia], B[ib])) {
             if (A[ia].kind == TokenKind::END_OF_FILE) return true;
             ++ia;
@@ -217,6 +219,19 @@ bool same_program(std::string_view before, std::string_view after,
             ia += 2;
             ib += 2;
             break;
+        case RewriteKind::AddTypeSuffix: {
+            /* `R108`: el literal es el mismo numero, y ahora dice de que tipo
+             * es.  Se exige que el VALOR no cambie: si el sufijo no cupiera,
+             * el numero seria otro y esto lo caza. */
+            if (A[ia].kind != B[ib].kind) return false;
+            if (A[ia].suffix != TokenKind::END_OF_FILE) return false;
+            if (B[ib].suffix == TokenKind::END_OF_FILE) return false;
+            if (A[ia].int_val != B[ib].int_val) return false;
+            if (A[ia].flt_val != B[ib].flt_val) return false;
+            ia += 1;
+            ib += 1;
+            break;
+        }
         case RewriteKind::AddBraces:
             // `R6`: aparece una llave que en el original no estaba.
             if (B[ib].kind != TokenKind::LBRACE &&
@@ -280,7 +295,11 @@ FormatResult format(const std::string &source, const std::string &filename,
      * una vez para que los `string_view` de las piezas no se queden colgando
      * al crecer el vector. */
     std::vector<std::string> literals;
-    literals.reserve(pieces.size());
+    literals.reserve(pieces.size() * 2);
+    /* Primero se PONE el sufijo que falta, y luego se canoniza todo junto: asi
+     * el literal recien sufijado pasa por el mismo agrupado y el mismo `_` de
+     * separacion que el que ya lo traia. */
+    std::vector<Rewrite> sufijos = add_type_suffixes(pieces, literals);
     for (Piece &p : pieces) {
         if (p.kind != (int)TokenKind::INT_LIT &&
             p.kind != (int)TokenKind::FLOAT_LIT)
@@ -346,9 +365,18 @@ FormatResult format(const std::string &source, const std::string &filename,
 
     /* 5) Alinear los comentarios de fin de linea (`R20`).  Van aparte porque un
      *    comentario no es un token: vive en la trivia y necesita su propio
-     *    relleno.  Se mide sobre el layout ya repartido. */
+     *    relleno.
+     *
+     *    Y se miden sobre el layout que YA lleva el relleno de columnas.  Antes
+     *    se median sobre el de repartir, donde el codigo aun no estaba en
+     *    columna: cada linea crecia despues por su cuenta y la columna del
+     *    comentario salia corrida -- una linea sin relleno propio se quedaba
+     *    un caracter a la izquierda de sus hermanas --. */
+    Layout con_columnas;
+    reindent(pieces, tail, options, &pad, &con_columnas,
+             breaks.empty() ? nullptr : &breaks);
     const std::vector<uint32_t> cpad =
-        compute_comment_alignment(pieces, wrapped, options);
+        compute_comment_alignment(pieces, con_columnas, options);
 
     // 6) Y emitir ya con todo.
     const std::string indented =
@@ -376,8 +404,14 @@ FormatResult format(const std::string &source, const std::string &filename,
      * codigo del catalogo que dice exactamente que ha pasado.  Cuesta una
      * tokenizacion mas, que es lineal y barata al lado de escribir el fichero.
      */
-    // Las llaves de `R6` cuentan igual que el resto de reescrituras.
+    // Las llaves de `R6` y los sufijos de `R108` cuentan igual que el resto.
     rewrites.insert(rewrites.end(), llaves.begin(), llaves.end());
+    rewrites.insert(rewrites.end(), sufijos.begin(), sufijos.end());
+    /* Ordenadas por donde ocurren: `same_program` recorre las dos tiras a la
+     * vez y busca la reescritura que toca en cada posicion. */
+    std::sort(rewrites.begin(), rewrites.end(),
+              [](const Rewrite &a, const Rewrite &b) { return a.at < b.at; });
+    r.rewrites = rewrites; // el test comprueba contra lo declarado, como aqui
     if (!same_program(text, out, rewrites)) {
         r.ok = false;
         r.code = "VXF004";

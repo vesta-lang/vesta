@@ -19,6 +19,7 @@
  */
 
 #include "jit/sched/machine_effects.h"
+#include "jit/target_reginfo.h" // los registros del ABI: se PREGUNTAN, por ISA
 
 #include <string>
 
@@ -460,7 +461,40 @@ void real_effects(const MInstr &mi, const char *mnem, Isa isa, MEffects &e) {
  * @brief Modela los efectos de un PSEUDO de VestaVM (no existe en la ISA).
  *        Cada pseudo tiene una semantica fija y conocida por construccion.
  */
-void pseudo_effects(const MInstr &mi, MEffects &e) {
+/**
+ * @brief Anade a @p e lo que el ABI de @p isa hace VIVO en un `ret` o en una
+ *        llamada.
+ *
+ * @param isa     ISA del objetivo: de ella depende QUE registros son.
+ * @param retorno true = un `ret` (valor de retorno + los que hay que devolver
+ *                intactos); false = una llamada (los de argumentos).
+ * @param e       Se le anaden las lecturas.
+ *
+ * Los registros se PREGUNTAN al descriptor del objetivo, que es quien los sabe
+ * por ISA.  Escribirlos aqui a mano daria los de x86 tambien en arm64, que es
+ * justo el fallo que este modulo existe para evitar.
+ */
+void abi_reads(EffIsa isa, bool retorno, MEffects &e) {
+    const TargetRegInfo &t =
+        (isa == EffIsa::ARM64)
+            ? target_arm64()
+            : target_x86_64_vm_abi(/*vec_acc=*/false, /*fp_scratch=*/false);
+    const auto anade = [&e](uint8_t r) { add(e.reads, static_cast<uint32_t>(r)); };
+    for (size_t c = 0; c < TargetRegInfo::NCLASS; ++c) {
+        if (retorno) {
+            anade(t.ret_reg[c]);
+            for (const uint8_t r : t.callee_saved[c]) anade(r);
+        } else {
+            for (const uint8_t r : t.arg_regs[c]) anade(r);
+        }
+    }
+    /* Y la pila, que la leen los dos en cualquier ISA.  No esta en el
+     * descriptor -- no es asignable, asi que no aparece en ninguna de sus
+     * listas -- y por eso se nombra aqui, por ISA. */
+    anade(static_cast<uint8_t>(isa == EffIsa::ARM64 ? 31 : (int)MReg::RSP));
+}
+
+void pseudo_effects(const MInstr &mi, EffIsa isa, MEffects &e) {
     switch (mi.op) {
     /* Sin efecto de datos y movibles libremente. */
     case MOp::NOP:
@@ -606,12 +640,37 @@ void pseudo_effects(const MInstr &mi, MEffects &e) {
         e.reads_flags = true;
         e.is_barrier = true;
         break;
+    case MOp::RET:
+        /* Un `ret` LEE.  Es barrera -- eso ya estaba --, pero ademas lo que la
+         * convencion de llamada dice que el llamante puede seguir usando: el
+         * registro del VALOR DE RETORNO y los que hay que devolver intactos.
+         *
+         * Decir solo "barrera" basta para no reordenar a traves, y por eso
+         * nadie lo habia echado en falta.  Para LIVENESS no basta: sin esas
+         * lecturas, al llegar al `ret` no hay nada vivo, y quien busque
+         * escrituras que nadie lee borra la que pone el resultado.  Se vio
+         * asi: una funcion que devolvia 42 empezo a devolver 0.
+         *
+         * CUALES son se le PREGUNTA al descriptor del objetivo, que es quien
+         * lo sabe por ISA.  Escribirlos aqui seria dar los de x86 tambien en
+         * arm64 -- exactamente el fallo que este modulo existe para evitar, y
+         * por el que su ISA es obligatoria. */
+        abi_reads(isa, /*retorno=*/true, e);
+        e.is_barrier = true;
+        break;
     case MOp::CALL:
     case MOp::CALL_ABS:
     case MOp::CALL_SYM:
     case MOp::JMP_SYM:
     case MOp::TAILCALL:
-    case MOp::RET:
+        /* Una llamada LEE sus argumentos, y estos no aparecen en sus
+         * operandos: los coloco un pseudo-ARG antes.  Mismo caso que el `ret`
+         * de arriba -- decir solo "barrera" vale para no reordenar y no vale
+         * para liveness --: sin esto, la escritura que pone un argumento en su
+         * registro no la lee nadie y se borra.  Cuales, tambien por ISA. */
+        abi_reads(isa, /*retorno=*/false, e);
+        e.is_barrier = true;
+        break;
     case MOp::SAFEPOINT:
     case MOp::INT3:
     case MOp::INLINE_ASM_RAW: e.is_barrier = true; break;
@@ -802,7 +861,43 @@ MEffects machine_effects(const MInstr &mi, EffIsa isa) {
         real_effects(mi, mnem, db_isa, e);
         return e;
     }
-    pseudo_effects(mi, e);
+    pseudo_effects(mi, isa, e);
+    return e;
+}
+
+MEffects machine_effects(const MFunction &mf, const MInstr &mi, EffIsa isa) {
+    MEffects e = machine_effects(mi, isa);
+    if (mi.op != MOp::INLINE_ASM_RAW) return e;
+    /* Un `asm` no es opaco: sus registros estan en su bloque, no en los
+     * operandos.  Con la funcion delante ya se pueden leer, asi que se dicen en
+     * vez de degradar a "barrera y no se sabe mas".
+     *
+     * Se dan los FISICOS si estan (despues de repartir) y si no los virtuales,
+     * en el mismo espacio de ids uniforme que usa el resto de la estructura. */
+    const uint32_t idx = static_cast<uint32_t>(mi.src1.value);
+    if (idx >= mf.asm_blobs.size()) return e;
+    const AsmBlob &b = mf.asm_blobs[idx];
+    const auto anade = [](std::vector<uint32_t> &v, uint32_t id) {
+        for (const uint32_t x : v)
+            if (x == id) return;
+        v.push_back(id);
+    };
+    if (!b.in_phys.empty() || !b.out_phys.empty()) {
+        for (const uint8_t r : b.in_phys) anade(e.reads, r);
+        for (const uint8_t r : b.out_phys) anade(e.writes, r);
+    } else {
+        for (const uint32_t v : b.in_vregs) anade(e.reads, MEffects::VREG_BASE + v);
+        for (const uint32_t v : b.out_vregs)
+            anade(e.writes, MEffects::VREG_BASE + v);
+    }
+    for (const uint8_t r : b.clobbers) anade(e.writes, r);
+    e.reads_flags = e.reads_flags || b.clobbers_flags;
+    e.writes_flags = e.writes_flags || b.clobbers_flags;
+    e.reads_mem = e.reads_mem || b.clobbers_mem;
+    e.writes_mem = e.writes_mem || b.clobbers_mem;
+    /* Sigue siendo barrera para REORDENAR -- eso no cambia --, pero ahora
+     * ademas se sabe que toca.  Lo unico que queda sin detalle es un bloque al
+     * que no se le infirieron los clobbers. */
     return e;
 }
 

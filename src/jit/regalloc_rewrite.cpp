@@ -2486,6 +2486,42 @@ MFunction rewrite_to_physical(const MFunction &vf,
      * (@c vreg_fixed NO se copia: lo consume @c build_intervals, que corre
      * sobre @c vf ANTES del rewrite.) */
     pf.asm_blobs = vf.asm_blobs;
+    /* Y de paso se DEJA DICHO que registros fisicos lee y escribe cada bloque.
+     *
+     * Sus listas hablan de registros VIRTUALES, y el mapa a fisicos se queda
+     * aqui: sin escribirlo, el MachineIR ya repartido no se describe a si mismo
+     * y quien lo mire despues ve un `asm` que aparentemente no lee nada --
+     * porque sus lecturas no estan en los operandos --.  Se descubrio cuando
+     * una regla de mirilla borro un `mov` que alimentaba a un asm.
+     *
+     * Los operandos de un asm van PINEADOS, asi que su sitio no cambia y basta
+     * con preguntar donde le toco.  Si a alguno no le toco registro, se deja
+     * fuera: el propio ensamblado diferido lo cuenta como fallo mas abajo. */
+    for (AsmBlob &b : pf.asm_blobs) {
+        const auto a_fisico = [&alloc, &vf](const std::vector<uint32_t> &vregs,
+                                            std::vector<uint8_t> &out) {
+            out.clear();
+            out.reserve(vregs.size());
+            for (const uint32_t v : vregs) {
+                /* El PIN manda, y se mira primero: un `register("rax") u64 q`
+                 * tiene su registro decidido antes de repartir, y preguntarselo
+                 * al reparto puede no contestar.  Es el mismo orden que sigue
+                 * el ensamblado diferido con @c fixed_phys. */
+                const int pin = (v < vf.vreg_fixed.size())
+                                    ? static_cast<int>(vf.vreg_fixed[v])
+                                    : -1;
+                if (pin >= 0) {
+                    out.push_back(static_cast<uint8_t>(pin));
+                    continue;
+                }
+                const auto loc = alloc.timeline.first_location(v);
+                if (loc.is_register())
+                    out.push_back(static_cast<uint8_t>(loc.register_id()));
+            }
+        };
+        a_fisico(b.in_vregs, b.in_phys);
+        a_fisico(b.out_vregs, b.out_phys);
+    }
     /* ENSAMBLADO DIFERIDO.  Los blobs de un `asm ( reg x )` con
      * operandos AUTO llegan sin bytes: su plantilla lleva $N y el fisico de
      * cada operando lo acaba de elegir el asignador.  Sustituimos $N por el
