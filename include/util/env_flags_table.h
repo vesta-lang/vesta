@@ -80,6 +80,7 @@ VESTA_ENV_FLAG(NoEscapeScalar,    "VESTA_NO_ESCAPE_SCALAR",   Emitted, Escape, B
 VESTA_ENV_FLAG(NoEscapeMem2Reg,   "VESTA_NO_ESCAPE_MEM2REG",  Emitted, Escape, Bool, Any)
 VESTA_ENV_FLAG(EscapeMem2RegForce,"VESTA_ESCAPE_MEM2REG_FORCE", Emitted, Escape, Bool, Any)
 VESTA_ENV_FLAG(NoSroaStack,       "VESTA_NO_SROA_STACK",      Emitted, Escape, Bool, Any)
+VESTA_ENV_FLAG(NoDeadStackSlot,   "VESTA_NO_DEAD_STACK_SLOT", Emitted, Escape, Bool, Any)
 VESTA_ENV_FLAG(NoPromoteLocalAllocas, "VESTA_NO_PROMOTE_LOCAL_ALLOCAS", Emitted, Escape, Bool, Any)
 VESTA_ENV_FLAG(NoPromoteRawAlloc, "VESTA_NO_PROMOTE_RAW_ALLOC", Emitted, Escape, Bool, Any)
 VESTA_ENV_FLAG(NoSlab,            "VESTA_NO_SLAB",            Emitted, Escape, Bool, Any)

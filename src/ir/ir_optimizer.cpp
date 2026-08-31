@@ -482,8 +482,22 @@ static bool is_pure_allocator_name(const std::string &name) {
      * de 6).  Debe ir ANTES del check __new_. */
     if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_shared") == 0)
         return false;
-    /* Frontend Vesta emite @c __new_<ClassName> para cada @c new X(). */
-    if (name.size() > 6 && name.rfind("__new_", 0) == 0) return true;
+    /* Y `__new_<Clase>` TAMPOCO es puro, aunque el frontend lo emita para cada
+     * `new X()`: dentro corre el CONSTRUCTOR, que puede hacer cualquier cosa --
+     * llevar una cuenta, escribir, abrir un fichero --.  Aqui se daba por hecho
+     * que lo unico observable era el puntero, y con eso un `new X()` cuyo
+     * resultado no se usa se borraba CON su constructor dentro.
+     *
+     * Ya habia mordido una vez: la excepcion de `_shared` de arriba se anadio
+     * por eso mismo, pero tapando el caso concreto en vez del supuesto.  Salio
+     * otra vez al quitar los huecos de pila muertos: al quedarse el objeto sin
+     * usuarios, esta regla se llevaba por delante un constructor que contaba
+     * cuantos se creaban (`165_unique_dtor`).
+     *
+     * Para volver a quitarlos hace falta PREGUNTAR si ese constructor escribe
+     * fuera del objeto, y eso lo sabe el analisis de efectos
+     * (@c MemEffect::Kind::Global), que hoy no llega hasta aqui. */
+    (void)0;
     /* Runtime entries de alloc puros. */
     if (name == "vrt_newobj") return true;
     if (name == "vrt_newobj_handle") return true;
@@ -532,6 +546,107 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn) {
             }
         }
         instrs.resize(write);
+    }
+    return changed;
+}
+
+bool ir_pass_dead_stack_slot_elim(IrFunction &fn) {
+    /* Huecos de pila que nadie LEE: se van, y con ellos lo que se escribia
+     * dentro.
+     *
+     * Lo destapo comparar un bucle con C++.  Al promover una reserva del monton
+     * a la pila, el valor se queda en un hueco y su direccion en otro; si
+     * despues nadie los lee -- porque la lectura ya se resolvio en el sitio --,
+     * lo unico que queda son dos escrituras que no las ve nadie.  C++ las borra
+     * y aqui se quedaban: once instrucciones por vuelta donde el hacia cuatro.
+     *
+     * Lo que las mantenia vivas era la LIBERACION.  Al promover se conserva a
+     * proposito -- sin ella un hueco dentro de un bucle acumulaba punteros sin
+     * soltar en el interprete --, los backends la quitan porque soltar pila no
+     * es nada, pero en el IR sigue contando como usar el hueco.  Asi que aqui
+     * NO cuenta: soltar un hueco de pila no es leerlo.
+     *
+     * Tampoco cuenta escribir DENTRO de el.  Si cuenta guardar su DIRECCION en
+     * otro sitio, pero solo si ese otro sitio esta vivo -- y de ahi el punto
+     * fijo: al morir un hueco, el de al lado puede quedarse sin lectores. */
+    const size_t NV = fn.values.size();
+    std::vector<bool> es_hueco(NV, false);
+    std::vector<bool> vivo(NV, false);
+    bool hay = false;
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            if (ins.op == IrOp::ALLOCA && ins.dst != IR_NO_VALUE &&
+                ins.dst < NV && !ins.preserve) {
+                es_hueco[ins.dst] = true;
+                hay = true;
+            }
+        }
+    }
+    if (!hay) return false;
+
+    // Guardar la direccion de un hueco DENTRO de otro: si el de fuera vive, el
+    // de dentro tambien.
+    std::vector<std::vector<IrValueId>> arrastra(NV);
+    std::vector<IrValueId> pendientes;
+    const auto marcar = [&](IrValueId v) {
+        if (v != IR_NO_VALUE && v < NV && es_hueco[v] && !vivo[v]) {
+            vivo[v] = true;
+            pendientes.push_back(v);
+        }
+    };
+
+    for (const auto &bb : fn.blocks) {
+        for (const auto &ins : bb.instrs) {
+            const bool es_store = (ins.op == IrOp::STORE);
+            const bool es_free = (ins.op == IrOp::RAW_FREE);
+            for (size_t k = 0; k < ins.operands.size(); ++k) {
+                const IrValueId v = ins.operands[k];
+                if (v == IR_NO_VALUE || v >= NV || !es_hueco[v]) continue;
+                // Escribir DENTRO (`store val, hueco`) no es leerlo.
+                if (es_store && k == 1) continue;
+                // Soltarlo tampoco: es pila.
+                if (es_free && k == 0) continue;
+                // Guardar su direccion en otro hueco: depende de aquel.
+                if (es_store && k == 0 && ins.operands.size() >= 2) {
+                    const IrValueId dest = ins.operands[1];
+                    if (dest != IR_NO_VALUE && dest < NV && es_hueco[dest]) {
+                        arrastra[dest].push_back(v);
+                        continue;
+                    }
+                }
+                marcar(v);
+            }
+            for (const auto &pa : ins.phi_args) marcar(pa.value);
+            marcar(ins.func_ptr);
+        }
+    }
+    // Punto fijo: lo que arrastra un hueco vivo, vive.
+    while (!pendientes.empty()) {
+        const IrValueId v = pendientes.back();
+        pendientes.pop_back();
+        for (const IrValueId d : arrastra[v]) marcar(d);
+    }
+
+    const auto muerto = [&](IrValueId v) {
+        return v != IR_NO_VALUE && v < NV && es_hueco[v] && !vivo[v];
+    };
+    bool changed = false;
+    for (auto &bb : fn.blocks) {
+        auto &is = bb.instrs;
+        const size_t antes = is.size();
+        is.erase(std::remove_if(
+                     is.begin(), is.end(),
+                     [&](const IrInstr &i) {
+                         if (i.op == IrOp::ALLOCA) return muerto(i.dst);
+                         // Escribir en un hueco muerto, y soltarlo.
+                         if (i.op == IrOp::STORE && i.operands.size() >= 2)
+                             return muerto(i.operands[1]);
+                         if (i.op == IrOp::RAW_FREE && !i.operands.empty())
+                             return muerto(i.operands[0]);
+                         return false;
+                     }),
+                 is.end());
+        if (is.size() != antes) changed = true;
     }
     return changed;
 }
@@ -13142,6 +13257,7 @@ const bool g_no_promote_local_allocas =
 const bool g_no_promote_raw_alloc = util::flag_on(util::FlagId::NoPromoteRawAlloc);
 const bool g_no_spec_devirt = util::flag_on(util::FlagId::NoSpecDevirt);
 const bool g_no_escape_scalar = util::flag_on(util::FlagId::NoEscapeScalar);
+const bool g_no_dead_stack_slot = util::flag_on(util::FlagId::NoDeadStackSlot);
 
 } // namespace
 
@@ -13453,6 +13569,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline) {
                 APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
             }
             APLICA(ir_pass_dead_alloc_elim(fn));
+            /* Y detras, los huecos de PILA que nadie lee.  Va aqui y no antes
+             * porque necesita que la promocion a pila y el reenvio de lecturas
+             * ya hayan corrido: hasta entonces el hueco TIENE lectores.
+             * Se apaga con VESTA_NO_DEAD_STACK_SLOT=1 para poder comparar. */
+            if (!g_no_dead_stack_slot) APLICA(ir_pass_dead_stack_slot_elim(fn));
             /* Si algo toco la funcion desde el ultimo calculo, lo guardado del
              * modelo ya no describe estas instrucciones.  Hay que mirarlo AQUI
              * y no solo en `pt_invalidate`: esa senal se emite antes de LICM y

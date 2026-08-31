@@ -305,6 +305,23 @@ bool ir_pass_elide_unwrap(IrFunction &fn);
 bool ir_pass_dead_alloc_elim(IrFunction &fn);
 
 /**
+ * @brief Quita los huecos de PILA que nadie lee, y lo que se escribia dentro.
+ *
+ * Tras promover una reserva del monton a la pila, el valor queda en un hueco y
+ * su direccion en otro.  Si nadie los lee -- porque la lectura ya se resolvio
+ * en el sitio -- solo quedan escrituras que no ve nadie.
+ *
+ * Lo que las mantenia vivas era la LIBERACION, que se conserva a proposito al
+ * promover y los backends quitan porque soltar pila no es nada; aqui no cuenta
+ * como leer.  Tampoco cuenta escribir DENTRO.  Si cuenta guardar la DIRECCION
+ * de un hueco en otro, y solo si aquel vive: de ahi el punto fijo.
+ *
+ * @param fn Funcion a limpiar (se modifica en el sitio).
+ * @return true si se quito algo.
+ */
+bool ir_pass_dead_stack_slot_elim(IrFunction &fn);
+
+/**
  * @brief Promueve ALLOCAs cuyo ptr fluye a CALLN a host stack.
  *
  *  D.jit-mem-model AUTO-PROMOTE: detecta `&local` que llega a
