@@ -149,9 +149,17 @@ std::vector<uint8_t> Assembler::assemble(NodeStream &nodes) {
     ctx.get_space("MetaSpace")->add_section("strings", 0x0, 0x0);
 
     // 1 Primera pasada
+    flat_labels_ = nodes.labels_are_flat();
+    label_open_ = false;
+
     nodes.rewind();
     while (const vm::ASTNode *node = nodes.next())
         first_pass(node, offset);
+
+    /* La ultima etiqueta del programa no la cierra ninguna siguiente: la cierra
+     * el final.  Y va ANTES de cerrar el tramo de la seccion, que es el mismo
+     * orden que tenia el recorrido del arbol. */
+    close_open_label(offset);
 
     // cerrar el tramo de la ultima seccion activa: su tamano son los bytes
     // emitidos hasta el final del flujo.
@@ -279,6 +287,14 @@ void Assembler::begin_section_layout(uint64_t &offset) {
     current_section->size_real = 0;
 }
 
+void Assembler::close_open_label(uint64_t offset) {
+    if (!label_open_) return;
+    label_open_ = false;
+    if (open_label_section_ != nullptr)
+        open_label_section_->update_label_size(open_label_name_,
+                                               offset - open_label_start_);
+}
+
 void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
     // --- LABELS ---
     if (auto lab = vm::node_as<vm::LabelNode>(node)) {
@@ -304,6 +320,20 @@ void Assembler::first_pass(const vm::ASTNode *node, uint64_t &offset) {
         // Guardar seccion actual, al usar first_pass puede cambiar
         // si hay un label vacio con una notacion section despues
         Section *saved_section = current_section;
+
+        if (flat_labels_) {
+            /* Flujo PLANO: el cuerpo no viene dentro, viene detras.  Se deja
+             * abierta y la cierra la etiqueta siguiente -- o el final de la
+             * pasada --, que es cuando se sabe hasta donde llego.  Y antes hay
+             * que cerrar la que estuviera abierta: su final es donde empieza
+             * esta. */
+            close_open_label(start);
+            label_open_ = true;
+            open_label_name_ = lab->name;
+            open_label_start_ = start;
+            open_label_section_ = saved_section;
+            return;
+        }
 
         // procesar el cuerpo de la label
         for (auto &child : lab->body)

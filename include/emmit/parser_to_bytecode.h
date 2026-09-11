@@ -1586,6 +1586,31 @@ class Assembler {
     Label *current_label = nullptr;
 
     /**
+     * @name La etiqueta abierta, cuando el flujo es PLANO
+     *
+     * Con el arbol, el tamano de una etiqueta sale de recorrer su cuerpo y
+     * mirar cuanto avanzo el flujo.  Con un flujo plano no hay cuerpo: la
+     * etiqueta queda ABIERTA y se cierra cuando llega la siguiente, o al
+     * acabar la pasada.  Es lo mismo medido de otra forma, y vale porque las
+     * etiquetas no anidan.
+     *
+     * Solo se usa si la fuente lo declara (@c NodeStream::labels_are_flat).
+     */
+    ///@{
+    bool flat_labels_ = false;        ///< Modo declarado por la fuente.
+    bool label_open_ = false;         ///< Hay una etiqueta sin cerrar.
+    std::string open_label_name_;     ///< Cual.
+    uint64_t open_label_start_ = 0;   ///< Donde empezo, en el flujo.
+    Section *open_label_section_ = nullptr; ///< En que seccion se registro.
+    ///@}
+
+    /**
+     * @brief Cierra la etiqueta abierta, si la hay, con @p offset como final.
+     * @param offset Donde va el flujo ahora.
+     */
+    void close_open_label(uint64_t offset);
+
+    /**
      * @brief Constructor del ensamblador.
      *
      * Inicializa las estructuras internas, vacia el buffer de salida y
@@ -1648,6 +1673,26 @@ class Assembler {
         virtual void rewind() = 0;
         /// El siguiente nodo raiz, o `nullptr` si se acabo.
         virtual const vm::ASTNode *next() = 0;
+
+        /**
+         * @brief Las instrucciones de una etiqueta llegan SUELTAS detras de
+         *        ella, en vez de dentro de su @c body.
+         *
+         * Una fuente que fabrica nodos de uno en uno no puede meterlos dentro
+         * de la etiqueta: para eso tendria que tener a la vez la etiqueta y
+         * todo su cuerpo, que es justo lo que se viene a evitar.  Los entrega
+         * en orden y planos, y el ensamblador cierra cada etiqueta cuando
+         * llega la siguiente.
+         *
+         * SE DECLARA, no se adivina.  La tentacion es deducirlo de que el
+         * cuerpo venga vacio, y esta mal: una etiqueta VACIA seguida de una
+         * anotacion `@Section` es un caso real -- el propio `first_pass` lo
+         * contempla --, y confundirla con el modo plano le daria el tamano de
+         * todo lo que viene detras.
+         *
+         * @return true si el flujo es plano.  Por defecto no.
+         */
+        virtual bool labels_are_flat() const { return false; }
     };
 
     /**
