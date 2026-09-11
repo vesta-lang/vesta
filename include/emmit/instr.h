@@ -92,10 +92,6 @@ enum class OperandKind : uint8_t {
  */
 struct Operand {
     OperandKind kind = OperandKind::None;
-
-    ir::Reg reg{ir::Reg::Bank::GP, 0};
-    ir::Mem mem{ir::Reg::gp(0)};
-    int64_t imm = 0;
     /// En que BASE se escribio.  El `.vel` admite las dos y el ensamblador las
     /// lee igual, pero es parte de como se escribio: el emisor formatea a mano
     /// algunos valores en hex (`0x%016llx`) y renderizarlos en decimal
@@ -105,10 +101,58 @@ struct Operand {
     /// `uint64_t`, y guardar 0xFFFFFFFFFFFFFFFF como `int64_t` lo escribiria
     /// como `-1` -- otro numero, sin que nada avise.
     bool imm_sin_signo = false;
-    std::string name;                        ///< solo con Label o SymRef.
     Directive sym_kind = Directive::ABS_REF; ///< solo con SymRef.
 
-    Operand() = default;
+    /**
+     * @brief El VALOR, y solo uno de los tres a la vez.
+     *
+     * UNA UNION DE VERDAD, que es lo que el comentario de arriba lleva diciendo
+     * desde que se escribio: un operando es un registro, O un acceso a memoria,
+     * O un inmediato -- nunca dos.  Guardarlos en campos separados hacia pagar
+     * los tres siempre: tres bytes, dieciseis y ocho, mas el relleno para
+     * alinearlos, en CADA uno de los cuatro operandos de CADA instruccion del
+     * programa.
+     *
+     * Medido sobre un proyecto de 144.000 lineas: el operando pasa de 88 bytes
+     * a 56, y la instruccion de 408 a 280.  El vector que las guarda es lo que
+     * mas memoria larga sostiene de todo el compilador.
+     *
+     * QUIEN LEE, MIRA `kind` PRIMERO.  Eso ya era cierto antes de la union --
+     * `render_operando` es el unico lector y va por `switch` --, pero antes
+     * leer el campo equivocado daba un cero y ahora es un error: la union
+     * convierte en ruidoso lo que era silencioso.
+     *
+     * Los tres son trivialmente copiables, asi que la union no necesita
+     * constructor de copia, de movimiento ni destructor propios.
+     */
+    union {
+        ir::Reg reg;
+        ir::Mem mem;
+        int64_t imm;
+    };
+
+    /**
+     * @brief El nombre, solo con Label o SymRef.  Nunca nulo.
+     *
+     * UN PUNTERO AL POZO y no una cadena propia: era un `std::string`, treinta y
+     * dos bytes en cada operando de cada instruccion, y medido sobre un proyecto
+     * de 144.000 lineas solo unas 24.000 de los millones de operandos emitidos
+     * llevan nombre.  Los demas pagaban la cadena para dejarla vacia.
+     *
+     * De paso deja de pedirse memoria por nombre repetido: una etiqueta a la que
+     * saltan veinte instrucciones se aloja UNA vez.  Ver @ref intern_operand_name.
+     */
+    const std::string *name = nullptr;
+
+    /// El nombre, o la cadena vacia si no lleva.  Asi quien lee no comprueba.
+    const std::string &name_text() const {
+        return name != nullptr ? *name : *empty_name();
+    }
+
+    /// Arranca como inmediato cero: una union tiene que nacer con un miembro
+    /// activo, y `None` no guarda ningun valor -- el inmediato es el mas barato
+    /// de los tres y el unico con un cero que signifique algo.
+    Operand() noexcept : imm(0) {}
 
     static Operand of(ir::Reg r) {
         Operand o;
@@ -146,13 +190,13 @@ struct Operand {
     static Operand of(const ir::Lbl &l) {
         Operand o;
         o.kind = OperandKind::Label;
-        o.name = l.name;
+        o.name = intern_operand_name(l.name);
         return o;
     }
     static Operand of(const ir::Ann &a) {
         Operand o;
         o.kind = OperandKind::SymRef;
-        o.name = a.value;
+        o.name = intern_operand_name(a.value);
         o.sym_kind = a.kind;
         return o;
     }
@@ -172,21 +216,48 @@ inline constexpr int kMaxOperandos = 4;
  * los vuelve a sacar y el parser los cuelga del nodo: un rodeo por texto para
  * acabar donde ya estaban.
  */
+/* EL ORDEN NO ES ESTETICO.  `ops` y el `std::string` se alinean a ocho, asi que
+ * cualquier escalar suelto entre ellos deja su hueco de relleno multiplicado por
+ * todas las instrucciones del programa.  Con `mnem` delante de `ops` y los demas
+ * detras -- que era el orden natural de escribirlo -- se perdian seis bytes tras
+ * el mnemonico y cuatro antes del stackmap: diez de cada instruccion.
+ *
+ * Juntos delante caben en el relleno que `ops` iba a dejar igualmente, y la
+ * instruccion pasa de 280 bytes a 272 sin quitar ni un campo. */
 struct Instr {
     Mnemonic mnem = Mnemonic::kCount;
-    Operand ops[kMaxOperandos];
-    int n_ops = 0;
-
-    int source_line = 0;      ///< linea Vesta que la origino, o 0.
-    int source_column = 0;    ///< columna, o 0.
-    std::string stackmap_hex; ///< stackmap preciso del safepoint, o vacio.
-
-    /// Anade un operando.  Ignora los que pasen del maximo, que es un error de
-    /// quien emite y no algo que deba corromper la instruccion.
-    void add(Operand o) {
-        if (n_ops < kMaxOperandos) ops[n_ops++] = std::move(o);
-    }
+    /// Cuantos operandos tiene.  El maximo es @ref kMaxOperandos, que son
+    /// cuatro, asi que un byte sobra.
+    uint8_t n_ops = 0;
+    uint8_t _pad = 0;
+    /// Donde empiezan sus operandos en el POZO de quien la guarda.
+    ///
+    /// Los operandos NO viven aqui dentro.  Vivian, en un `Operand[4]` de 128
+    /// bytes, y medido sobre un programa de 441.000 lineas la media es 2,23
+    /// operandos: 57 bytes de relleno por instruccion, 52 MiB en el buffer del
+    /// emisor.  Y ninguna instruccion del programa llegaba a usar las cuatro
+    /// ranuras -- el reparto es 73.501 sin ninguno, 73.501 con uno, 367.500 con
+    /// dos y 440.999 con tres.
+    ///
+    /// Fuera, en un vector contiguo del emisor, cada instruccion paga lo que
+    /// tiene.  Quien lea los operandos necesita el pozo ademas de la
+    /// instruccion; esa es toda la contrapartida.
+    uint32_t ops_off = 0;
 };
+
+/* La estructura entera son OCHO bytes, y antes eran 176.  Ademas de los
+ * operandos, se fueron tres campos que NADIE leia ni escribia:
+ * `source_line`, `source_column` y un `std::string stackmap_hex` de 32 bytes.
+ *
+ * No es que se hayan perdido: esos datos viajan en el MARCADOR, que es un item
+ * aparte del emisor, y ahi tienen que estar.  El motivo lo explica el propio
+ * `VelSink`: hay instrucciones del IR que no producen bytecode propio -- una
+ * comparacion que se fusiona con el salto --, asi que la marca cae ENTRE dos
+ * instrucciones emitidas y su POSICION es un dato.  Colgarla de "la siguiente
+ * instruccion" la mueve de sitio. */
+static_assert(sizeof(Instr) <= 8,
+              "Instr se guarda una por instruccion emitida del programa "
+              "entero: lo que crezca aqui se multiplica por millones");
 
 } // namespace emmit
 

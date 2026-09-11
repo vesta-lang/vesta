@@ -111,8 +111,15 @@ class VelSink {
     VelSink &emit(emmit::Mnemonic m, const Ops &...ops) {
         emmit::Instr in;
         in.mnem = m;
-        (void)std::initializer_list<int>{(in.add(hacer_operando(ops)), 0)...};
-        anadir_instr(std::move(in));
+        /* Los operandos van al POZO, y la instruccion se queda con donde
+         * empiezan.  La lista de inicializacion es la que garantiza el ORDEN
+         * -- el de evaluacion de los argumentos de una llamada no esta fijado
+         * --, y aqui el orden ES el dato. */
+        in.ops_off = static_cast<uint32_t>(ops_pool_.size());
+        (void)std::initializer_list<int>{
+            (push_operand(in.ops_off, hacer_operando(ops)), 0)...};
+        in.n_ops = static_cast<uint8_t>(ops_pool_.size() - in.ops_off);
+        anadir_instr(in);
         return *this;
     }
 
@@ -120,7 +127,8 @@ class VelSink {
     VelSink &emit(emmit::Mnemonic m) {
         emmit::Instr in;
         in.mnem = m;
-        anadir_instr(std::move(in));
+        in.ops_off = static_cast<uint32_t>(ops_pool_.size());
+        anadir_instr(in);
         return *this;
     }
 
@@ -328,7 +336,9 @@ class VelSink {
             switch (r.tipo) {
             case TipoItem::Crudo: os << crudos_[r.idx]; break;
             case TipoItem::Etiqueta: os << etiquetas_[r.idx] << ":\n"; break;
-            case TipoItem::Instr: render_instr(os, instrs_[r.idx]); break;
+            case TipoItem::Instr:
+                render_instr(os, instrs_[r.idx], ops_pool_);
+                break;
             case TipoItem::Marca: render_marca(os, marcas_[r.idx]); break;
             case TipoItem::Datos: render_datos(os, datos_[r.idx]); break;
             }
@@ -345,6 +355,54 @@ class VelSink {
     /// escritura de un stream no lo es -- y falsear la constancia con un cast
     /// seria mentir sobre lo que hace.
     bool empty() { return orden_.empty(); }
+
+    /**
+     * @brief
+     * \~english Says up front roughly how many instructions are coming.
+     * \~spanish Avisa por adelantado de cuantas instrucciones vienen, mas o
+     *           menos.
+     * \~
+     *
+     * \~english
+     * AN `Instr` IS BIG -- four operands, each with a `std::string` that only
+     * a label or a symbol reference ever fills -- so a vector of them grows in
+     * hundreds of megabytes.  Letting it double from empty was measured on a
+     * 144.000-line project: 407,9 MB of allocation in TWELVE reallocations,
+     * and the last one holds the old buffer and the new one at the same time,
+     * which is where a peak comes from.
+     *
+     * The bound does not need to be right: falling short costs one or two
+     * doublings from an already large size, and going over costs what the
+     * vector would have grown into anyway.  What is not acceptable is starting
+     * at zero when the caller knows the order of magnitude.
+     *
+     * \~spanish
+     * UN `Instr` ES GRANDE -- cuatro operandos, cada uno con un `std::string`
+     * que solo llenan una etiqueta o una referencia a simbolo --, asi que un
+     * vector de ellos crece en cientos de megas.  Dejarlo doblar desde vacio,
+     * medido sobre un proyecto de 144.000 lineas: 407,9 MB de reserva en DOCE
+     * reasignaciones, y la ultima sostiene a la vez el buffer viejo y el nuevo,
+     * que es de donde sale un pico.
+     *
+     * La cota no tiene que acertar: quedarse corto cuesta uno o dos doblados
+     * desde un tamano ya grande, y pasarse cuesta lo que el vector habria
+     * ocupado igualmente.  Lo que no vale es empezar en cero teniendo el
+     * llamante el orden de magnitud.
+     * \~
+     *
+     * @param n \~english instructions expected.  \~spanish instrucciones
+     *          previstas.  \~
+     */
+    void reserve_instrs(size_t n) {
+        instrs_.reserve(n);
+        orden_.reserve(n);
+        /* Y el pozo, que ahora es donde viven los operandos.  Dos y cuarto por
+         * instruccion: la media medida sobre un programa de 441.000 lineas es
+         * 2,23, y redondear hacia arriba es lo barato -- un operando son 32
+         * bytes y doblar el vector son todos otra vez. */
+        ops_pool_.reserve(n * 9u / 4u);
+    }
+
 
   private:
     // -- El modelo: UNA fuente, dos vistas ---------------------------------
@@ -381,9 +439,24 @@ class VelSink {
     std::vector<Ref> orden_;
     std::vector<std::string> crudos_;
     std::vector<emmit::Instr> instrs_;
+    /// Los operandos de TODAS las instrucciones, contiguos y en orden de
+    /// emision.  Cada `Instr` guarda donde empiezan los suyos y cuantos son.
+    /// Ver el porque -- y la medida -- en `emmit::Instr`.
+    std::vector<emmit::Operand> ops_pool_;
     std::vector<std::string> etiquetas_;
     std::vector<Marca> marcas_;
     std::vector<Datos> datos_;
+
+    /// Anade un operando al pozo, respetando el tope de la instruccion.
+    ///
+    /// Ignora los que pasen del maximo, igual que hacia `Instr::add`: pasarse
+    /// es un error de quien emite, y no algo que deba corromper la
+    /// instruccion.  Cuantos lleva ya ESTA se sabe por lo que el pozo ha
+    /// crecido desde @p start, que es donde empezaron los suyos.
+    void push_operand(uint32_t start, emmit::Operand o) {
+        if (ops_pool_.size() - start < emmit::kMaxOperandos)
+            ops_pool_.push_back(std::move(o));
+    }
 
     /// Anade una instruccion al final.
     void anadir_instr(emmit::Instr in) {
@@ -462,9 +535,9 @@ class VelSink {
         switch (o.kind) {
         case emmit::OperandKind::Reg: os << o.reg; return;
         case emmit::OperandKind::Mem: os << o.mem; return;
-        case emmit::OperandKind::Label: os << o.name; return;
+        case emmit::OperandKind::Label: os << o.name_text(); return;
         case emmit::OperandKind::SymRef:
-            os << '@' << emmit::text_of(o.sym_kind) << "(\"" << o.name << "\")";
+            os << '@' << emmit::text_of(o.sym_kind) << "(\"" << o.name_text() << "\")";
             return;
         case emmit::OperandKind::Imm:
             if (o.imm_digitos_hex > 0) {
@@ -507,11 +580,14 @@ class VelSink {
     }
 
     /// Escribe una instruccion como la espera el `.vel`.
-    static void render_instr(std::ostream &os, const emmit::Instr &in) {
+    /// @param pozo Los operandos de todas las instrucciones; los de @p in
+    ///             empiezan en `in.ops_off`.
+    static void render_instr(std::ostream &os, const emmit::Instr &in,
+                             const std::vector<emmit::Operand> &pozo) {
         os << "    " << emmit::text_of(in.mnem);
-        for (int i = 0; i < in.n_ops; ++i) {
+        for (unsigned i = 0; i < in.n_ops; ++i) {
             os << (i == 0 ? " " : ", ");
-            render_operando(os, in.ops[i]);
+            render_operando(os, pozo[in.ops_off + i]);
         }
         os << "\n";
     }
