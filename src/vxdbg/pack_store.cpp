@@ -33,6 +33,20 @@ namespace vxdbg {
 
 namespace {
 
+/**
+ * @brief Ordena dos huellas de menor a mayor.
+ *
+ * Existe para que el orden de los nodos DENTRO de un paquete no dependa de como
+ * los reparta una tabla hash: el mismo fuente tiene que dar el mismo fichero.
+ *
+ * @param a Una huella.
+ * @param b La otra.
+ * @return true si @p a va antes.
+ */
+bool hash_lower_first(const ContentHash *a, const ContentHash *b) {
+    return *a < *b;
+}
+
 /// Un nodo dentro del cuerpo del paquete: el mismo formato que en el almacen
 /// suelto, para que empaquetar no invente una segunda forma de escribir un
 /// nodo.  Dos formatos para lo mismo acaban divergiendo.
@@ -157,14 +171,24 @@ bool PackNodeStore::put(const StoredNode &node) {
      * memoria; no hay que leer ni comparar el cuerpo. */
     cargar_indices_();
     if (indice_.count(node.header.hash) != 0) return true;
-    if (suelto_ && suelto_->contains(node.header.hash)) return true;
-    /* Si ya esta pendiente con OTRO contenido, algo va mal de verdad: o la
+    /* Lo PENDIENTE se mira antes de tocar el disco, y el orden es el arreglo.
+     *
+     * Estaba despues, asi que un nodo que ESTA COMPILACION ya tenia en la mano
+     * provocaba igualmente una llamada al sistema.  Medido con VTune sobre
+     * 441.000 lineas, `wstat64` bajo este camino era **2,24 s, el 13,4 % del CPU
+     * del compilador** y su mayor coste individual.
+     *
+     * Y si ya esta pendiente con OTRO contenido, algo va mal de verdad: o la
      * huella se calculo sobre otra cosa o se guardo bajo la clave equivocada.
      * Callarlo dejaria el almacen sirviendo un nodo por otro. */
     auto it = pendientes_.find(node.header.hash);
     if (it != pendientes_.end())
         return it->second.payload == node.payload &&
                it->second.header.kind == node.header.kind;
+    /* Y solo ahora el disco, para ver lo que dejo OTRA compilacion.  Esto no se
+     * puede cachear por ruta: la clave es el contenido, asi que cada ruta se
+     * pregunta UNA vez y una cache no llegaria a acertar nunca. */
+    if (suelto_ && suelto_->contains(node.header.hash)) return true;
     pendientes_.emplace(node.header.hash, node);
     if (pendientes_.size() >= tope_) {
         // Volcado parcial: una compilacion enorme no puede llevarse toda su
@@ -178,7 +202,8 @@ bool PackNodeStore::put(const StoredNode &node) {
 }
 
 bool PackNodeStore::write_pack_(
-    const std::map<ContentHash, StoredNode> &lote, std::string &out_path,
+    const std::unordered_map<ContentHash, StoredNode> &lote,
+    std::string &out_path,
     std::vector<std::pair<ContentHash, Sitio>> &out_sites) {
     /* El UNICO sitio donde se escribe el formato del paquete.  Lo usan el
      * volcado normal y la compactacion: dos codigos que escriben el mismo
@@ -186,18 +211,32 @@ bool PackNodeStore::write_pack_(
      * escrito por uno no lo sabe leer el otro. */
     util::ByteWriter w;
     w.u32(VXDBG_PACK_MAGIC);
+    /* @see hash_lower_first */
     w.u32(VXDBG_PACK_VERSION);
     w.u32(static_cast<uint32_t>(lote.size()));
     w.u32(0); // relleno, deja el cuerpo alineado a 8
 
+    /* ORDENADO por huella antes de escribir, y no es cosmetica: este bucle
+     * decide el orden de los nodos DENTRO del fichero, o sea sus bytes.
+     *
+     * El lote es una tabla hash -- buscar e insertar un nodo es el camino
+     * caliente, y con un arbol ordenado las comparaciones de huella salian en
+     * el perfil --, y el recorrido de una tabla hash no promete ningun orden.
+     * Sin ordenar aqui, el mismo fuente daria paquetes distintos entre
+     * compilaciones, que es justo lo que no puede pasar. */
+    std::vector<const ContentHash *> keys;
+    keys.reserve(lote.size());
+    for (const auto &kv : lote)
+        keys.push_back(&kv.first);
+    std::sort(keys.begin(), keys.end(), hash_lower_first);
+
     // Cuerpo, y de paso donde queda cada nodo.
     std::vector<std::pair<ContentHash, std::pair<uint64_t, uint32_t>>> sitios;
     sitios.reserve(lote.size());
-    for (const auto &kv : lote) {
+    for (const ContentHash *k : keys) {
         const uint64_t off = static_cast<uint64_t>(w.size());
-        escribir_cuerpo(w, kv.second);
-        sitios.push_back(
-            {kv.first, {off, static_cast<uint32_t>(w.size() - off)}});
+        escribir_cuerpo(w, lote.find(*k)->second);
+        sitios.push_back({*k, {off, static_cast<uint32_t>(w.size() - off)}});
     }
 
     // Indice al final: hasta aqui no se sabian los desplazamientos.
@@ -232,7 +271,7 @@ bool PackNodeStore::write_pack_(
 }
 
 bool PackNodeStore::volcar() {
-    std::map<ContentHash, StoredNode> lote;
+    std::unordered_map<ContentHash, StoredNode> lote;
     {
         std::lock_guard<std::mutex> g(mx_);
         if (pendientes_.empty()) return true;
@@ -346,7 +385,7 @@ PackNodeStore::preview_reclaim(const std::set<ContentHash> &vivas) const {
     cargar_indices_();
 
     ReclaimPreview preview;
-    std::map<std::string, size_t> total, vivos;
+    std::unordered_map<std::string, size_t> total, vivos;
     for (const auto &kv : indice_) {
         ++total[kv.second.ruta];
         if (vivas.count(kv.first) != 0) ++vivos[kv.second.ruta];
@@ -373,7 +412,7 @@ size_t PackNodeStore::reclamar(const std::set<ContentHash> &vivas,
     cargar_indices_();
 
     // Que entradas tiene cada paquete, y cuantas de ellas siguen vivas.
-    std::map<std::string, size_t> total, vivos;
+    std::unordered_map<std::string, size_t> total, vivos;
     for (const auto &kv : indice_) {
         ++total[kv.second.ruta];
         if (vivas.count(kv.first) != 0) ++vivos[kv.second.ruta];
@@ -430,7 +469,7 @@ PackNodeStore::compact(const std::set<ContentHash> &vivas,
      * paquete UNA vez: ir entrada por entrada llamando a `get` releeria el
      * fichero entero por cada nodo -- 14.685 lecturas de los mismos 1.454
      * ficheros. */
-    std::map<std::string, std::vector<std::pair<ContentHash, Sitio>>>
+    std::unordered_map<std::string, std::vector<std::pair<ContentHash, Sitio>>>
         por_paquete;
     for (const auto &kv : indice_) {
         if (vivas.count(kv.first) != 0)
@@ -464,12 +503,12 @@ PackNodeStore::compact(const std::set<ContentHash> &vivas,
     if (por_paquete.empty()) return result; // nada vivo que reescribir
 
     const util::DirectoryReader lector(root_ + "/packs");
-    std::map<ContentHash, StoredNode> lote;
+    std::unordered_map<ContentHash, StoredNode> lote;
     std::vector<std::string> nuevos;
     /* El indice NUEVO se va construyendo aqui.  `write_pack_` ya dice donde
      * quedo cada nodo, asi que tirarlo y releer los paquetes despues seria
      * rehacer un trabajo que ya esta hecho. */
-    std::map<ContentHash, Sitio> indice_nuevo;
+    std::unordered_map<ContentHash, Sitio> indice_nuevo;
 
     // Vuelca el lote acumulado y lo deja listo para el siguiente.
     const auto volcar_lote = [&]() -> bool {

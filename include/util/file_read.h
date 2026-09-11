@@ -148,6 +148,26 @@ class DirectoryReader {
     bool read_file(const std::string &leaf_name,
                    std::vector<uint8_t> &out) const;
 
+    /**
+     * @brief Los nombres que hay en este directorio, de una sola vez.
+     *
+     * Para quien tiene que preguntar por MUCHOS ficheros de la misma carpeta:
+     * una lectura del directorio contesta a todos, y una llamada al sistema por
+     * fichero no.  Medido con VTune sobre 441.000 lineas, preguntar uno a uno
+     * -- `std::filesystem::exists`, que en el CRT acaba en `_wstat64` -- era
+     * **2,24 s, el 13,4 % del CPU del compilador** y su mayor coste individual.
+     *
+     * Va por la MISMA via que leer un fichero (`NtQueryDirectoryFile`, con la
+     * clase que trae solo los nombres), no por el CRT ni por
+     * `std::filesystem::directory_iterator`.
+     *
+     * No trae `.` ni `..`, y no entra en subcarpetas: es un nivel.
+     *
+     * @param out Destino; se vacia primero.
+     * @return false si no se pudo recorrer.
+     */
+    bool names(std::vector<std::string> &out) const;
+
   private:
 #if defined(_WIN32)
     void *handle_; ///< HANDLE, sin arrastrar windows.h hasta aqui.

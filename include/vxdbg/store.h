@@ -34,8 +34,10 @@
 #include "vxdbg/node.h"
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace vxdbg {
@@ -192,6 +194,32 @@ class FileNodeStore : public NodeStore {
   private:
     std::string root_;
     bool verify_ = false;
+
+    /**
+     * @brief Que nodos hay en cada subcarpeta, leido UNA vez por subcarpeta.
+     *
+     * `contains` preguntaba al sistema por CADA nodo, y la clave es la huella
+     * del contenido: cada ruta se pregunta una sola vez, asi que una cache por
+     * RUTA no llegaria a acertar nunca.  Medido con VTune sobre 441.000 lineas,
+     * ese `stat` por nodo era **2,24 s, el 13,4 % del CPU del compilador** y su
+     * mayor coste individual.
+     *
+     * Donde SI se repite es en la subcarpeta: los nodos se reparten por los dos
+     * primeros digitos, asi que miles de huellas comparten 256 prefijos.  Leer
+     * el directorio una vez y contestar de memoria cambia N llamadas al sistema
+     * por 256 como mucho, y solo de los prefijos que alguien pregunte.
+     *
+     * Se mantiene al dia en `put`: tras escribir un nodo, su nombre entra aqui,
+     * de modo que preguntar despues de guardar sigue diciendo la verdad.
+     */
+    mutable std::mutex cache_mx_;
+    mutable std::unordered_map<std::string, std::unordered_set<std::string>>
+        by_prefix_;
+
+    /// Los nombres que hay en la subcarpeta @p prefix, leyendola si hace falta.
+    /// Se llama con @ref cache_mx_ puesto.
+    const std::unordered_set<std::string> &
+    names_in_(const std::string &prefix) const;
 };
 
 /**

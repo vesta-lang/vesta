@@ -67,7 +67,7 @@
 
 #include "vxdbg/store.h"
 
-#include <map>
+#include <unordered_map>
 #include <set>
 #include <memory>
 #include <mutex>
@@ -269,7 +269,7 @@ class PackNodeStore : public NodeStore {
      * @param out_path  Recibe la ruta del paquete escrito.
      * @param out_sites Recibe donde quedo cada nodo.
      */
-    bool write_pack_(const std::map<ContentHash, StoredNode> &lote,
+    bool write_pack_(const std::unordered_map<ContentHash, StoredNode> &lote,
                      std::string &out_path,
                      std::vector<std::pair<ContentHash, Sitio>> &out_sites);
 
@@ -278,8 +278,19 @@ class PackNodeStore : public NodeStore {
     size_t tope_;
 
     mutable std::mutex mx_;
-    std::map<ContentHash, StoredNode> pendientes_; ///< aun sin escribir
-    mutable std::map<ContentHash, Sitio> indice_;  ///< ya en algun paquete
+    /* Tablas HASH, no arboles ordenados.  Buscar e insertar un nodo es el
+     * camino caliente del almacen -- una compilacion grande escribe cientos de
+     * nodos y consulta muchos mas --, y con arbol cada operacion son varias
+     * comparaciones de huella: medido con VTune sobre 441.000 lineas,
+     * `ContentHash::operator<` salia con 0,97 s, el 5,6 % del CPU del
+     * compilador, y era la funcion mas cara de todo `vxdbg`.
+     *
+     * El orden no se pierde donde importa: lo unico que dependia de el era el
+     * orden de los nodos DENTRO del paquete, y eso se ordena explicitamente al
+     * escribirlo (@see hash_lower_first).  El resto de recorridos solo cuentan
+     * por fichero, asi que les da igual. */
+    std::unordered_map<ContentHash, StoredNode> pendientes_; ///< sin escribir
+    mutable std::unordered_map<ContentHash, Sitio> indice_;  ///< ya empaquetado
     mutable bool indices_leidos_ = false;
     uint32_t n_volcados_ = 0;
 };

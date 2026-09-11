@@ -19,12 +19,16 @@
 #include <windows.h>
 #include <winternl.h>
 #else
+#include <dirent.h> // listar un directorio ya abierto
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 
+#include "util/thread_owned.h" // un buffer por hilo, sin `thread_local`
+
 #include <cerrno>
+#include <cstddef> // offsetof, para leer lo que devuelve el nucleo
 
 namespace util {
 
@@ -68,6 +72,15 @@ NTSTATUS NTAPI NtWriteFile(HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine,
                            PVOID ApcContext, PIO_STATUS_BLOCK IoStatusBlock,
                            PVOID Buffer, ULONG Length,
                            PLARGE_INTEGER ByteOffset, PULONG Key);
+/* Listar una carpeta por la misma via que leer un fichero.  Con la clase
+ * `FileNamesInformation` trae SOLO los nombres -- ni tamanos, ni fechas, ni
+ * atributos --, que es lo unico que hace falta cuando el nombre del fichero ES
+ * la clave, y de paso es lo mas barato que sabe devolver. */
+NTSTATUS NTAPI NtQueryDirectoryFile(
+    HANDLE FileHandle, HANDLE Event, PVOID ApcRoutine, PVOID ApcContext,
+    PIO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation, ULONG Length,
+    FILE_INFORMATION_CLASS FileInformationClass, BOOLEAN ReturnSingleEntry,
+    PUNICODE_STRING FileName, BOOLEAN RestartScan);
 }
 
 namespace {
@@ -77,6 +90,19 @@ constexpr ULONG kSynchronousIoNonAlert = 0x0020;
 constexpr ULONG kNonDirectoryFile = 0x0040;
 constexpr ULONG kDirectoryFile = 0x0001;
 constexpr int kFileStandardInformation = 5;
+/// La clase que trae SOLO los nombres de un directorio: ni tamanos, ni fechas,
+/// ni atributos.  Es lo unico que hace falta cuando el nombre ES la clave.
+constexpr int kFileNamesInformation = 12;
+
+/// Lo que devuelve @c NtQueryDirectoryFile con @ref kFileNamesInformation .
+/// Descrito aqui porque `winternl.h` no lo trae; el orden y el relleno son los
+/// del nucleo y no se pueden cambiar.
+struct NamesInformation {
+    ULONG next_entry_offset; ///< 0 en la ultima entrada del bloque.
+    ULONG file_index;
+    ULONG file_name_length; ///< en BYTES, no en caracteres.
+    wchar_t file_name[1];   ///< sigue aqui mismo, tan largo como diga arriba.
+};
 constexpr ULONG kFileWriteData = 0x0002;
 /// Crea el fichero, o lo trunca si ya estaba.
 constexpr ULONG kFileOverwriteIf = 0x00000005;
@@ -385,6 +411,65 @@ bool DirectoryReader::ok() const {
     return handle_ != nullptr;
 }
 
+bool DirectoryReader::names(std::vector<std::string> &out) const {
+    out.clear();
+    if (handle_ == nullptr) return false;
+
+    /* Un bloque grande y pocas vueltas: el nucleo rellena cuantas entradas
+     * caben, asi que 64 KiB traen una carpeta normal de una sola llamada.  Con
+     * un bloque pequenyo se pagaria una llamada por punyado de nombres, que es
+     * justo lo que se viene a evitar.
+     *
+     * Y se REUSA entre llamadas en vez de reservarlo cada vez: quien usa esto
+     * recorre muchas carpetas -- cientos --, y 64 KiB por llamada seria cambiar
+     * llamadas al sistema por reservas, que es el otro coste que se esta
+     * persiguiendo.
+     *
+     * Por RANURA DE HILO y no un `static` a secas, porque esto se llama desde
+     * varios hilos: un buffer compartido seria una carrera sobre los bytes que
+     * el nucleo acaba de escribir.  Y nunca `thread_local`: en MinGW la TLS es
+     * emulada y cuelga con hilos que nacen y mueren, que es lo que hace el
+     * reparto del compilador. */
+    static ThreadOwned<std::vector<uint8_t>> buffers;
+    std::vector<uint8_t> &buf = buffers.get();
+    if (buf.size() < 64 * 1024) buf.resize(64 * 1024);
+    IO_STATUS_BLOCK io;
+    bool primera = true;
+    for (;;) {
+        const NTSTATUS st = NtQueryDirectoryFile(
+            static_cast<HANDLE>(handle_), nullptr, nullptr, nullptr, &io,
+            buf.data(), static_cast<ULONG>(buf.size()),
+            static_cast<FILE_INFORMATION_CLASS>(kFileNamesInformation),
+            FALSE, nullptr, primera ? TRUE : FALSE);
+        primera = false;
+        if (st < 0) break; // incluido STATUS_NO_MORE_FILES: ya no queda nada
+        const uint8_t *p = buf.data();
+        for (;;) {
+            const NamesInformation *e =
+                reinterpret_cast<const NamesInformation *>(p);
+            const size_t chars = e->file_name_length / sizeof(wchar_t);
+            const wchar_t *w = reinterpret_cast<const wchar_t *>(
+                p + offsetof(NamesInformation, file_name));
+            /* `.` y `..` no son ficheros de nadie.  Y el nombre se pasa a bytes
+             * directamente: quien usa esto son nombres en hexadecimal, que son
+             * ASCII; una ruta con caracteres fuera de ASCII se veria distinta y
+             * simplemente no encontraria su entrada, que es fallar del lado
+             * seguro -- se vuelve a escribir el nodo -- y no servir otro. */
+            if (!(chars == 1 && w[0] == L'.') &&
+                !(chars == 2 && w[0] == L'.' && w[1] == L'.')) {
+                std::string name;
+                name.reserve(chars);
+                for (size_t i = 0; i < chars; ++i)
+                    name.push_back(static_cast<char>(w[i]));
+                out.push_back(std::move(name));
+            }
+            if (e->next_entry_offset == 0) break;
+            p += e->next_entry_offset;
+        }
+    }
+    return true;
+}
+
 bool DirectoryReader::read_file(const std::string &leaf_name,
                                 std::vector<uint8_t> &out) const {
     out.clear();
@@ -516,6 +601,28 @@ DirectoryReader::~DirectoryReader() {
 
 bool DirectoryReader::ok() const {
     return fd_ >= 0;
+}
+
+bool DirectoryReader::names(std::vector<std::string> &out) const {
+    out.clear();
+    if (fd_ < 0) return false;
+    /* Se DUPLICA el descriptor: `fdopendir` se queda con el que le dan y lo
+     * cierra al terminar, y este lo sigue usando `read_file`. */
+    const int dup_fd = ::dup(fd_);
+    if (dup_fd < 0) return false;
+    DIR *d = ::fdopendir(dup_fd);
+    if (d == nullptr) {
+        ::close(dup_fd);
+        return false;
+    }
+    while (const dirent *e = ::readdir(d)) {
+        const char *n = e->d_name;
+        if (n[0] == '.' && (n[1] == '\0' || (n[1] == '.' && n[2] == '\0')))
+            continue; // `.` y `..` no son ficheros de nadie
+        out.push_back(n);
+    }
+    ::closedir(d);
+    return true;
 }
 
 bool DirectoryReader::read_file(const std::string &leaf_name,

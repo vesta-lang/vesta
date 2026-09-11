@@ -12,6 +12,7 @@
 
 #include "vxdbg/store.h"
 
+#include "util/file_read.h" // NUESTRA E/S: listar por NtQueryDirectoryFile
 #include "vxdbg/serialize.h"
 
 #include <filesystem>
@@ -153,7 +154,18 @@ bool FileNodeStore::put(const StoredNode &node) {
         // Otro proceso pudo crearlo entre medias; con el mismo contenido, da
         // igual quien gane.
         fs::remove(tmp, ec);
-        return fs::exists(path);
+        if (!fs::exists(path)) return false;
+    }
+    /* El nodo ya esta en disco, asi que entra en lo que sabemos de su
+     * subcarpeta.  Sin esto, preguntar por el DESPUES de guardarlo diria que no
+     * esta -- y se guardaria otra vez --: la cache dejaria de describir el disco
+     * en el momento en que nosotros mismos lo cambiamos. */
+    {
+        const std::string hex = node.header.hash.to_hex();
+        const std::string prefix = hex.substr(0, 2);
+        std::lock_guard<std::mutex> g(cache_mx_);
+        auto it = by_prefix_.find(prefix);
+        if (it != by_prefix_.end()) it->second.insert(hex);
     }
     return true;
 }
@@ -194,9 +206,33 @@ bool FileNodeStore::get(ContentHash hash, StoredNode &out) const {
     return true;
 }
 
+const std::unordered_set<std::string> &
+FileNodeStore::names_in_(const std::string &prefix) const {
+    auto it = by_prefix_.find(prefix);
+    if (it != by_prefix_.end()) return it->second;
+    /* Primera pregunta de este prefijo: se lee el directorio ENTERO y se guarda.
+     * Un recorrido de directorio cuesta parecido a un `stat`, asi que cambiar N
+     * consultas por una es la diferencia completa. */
+    std::unordered_set<std::string> names;
+    /* Por NUESTRA via, no por `std::filesystem::directory_iterator`: la de la
+     * biblioteca pasa por el CRT y acaba preguntando de mas.  @see
+     * util::DirectoryReader::names */
+    util::DirectoryReader dir(root_ + "/" + prefix);
+    if (dir.ok()) {
+        std::vector<std::string> lista;
+        if (dir.names(lista))
+            for (std::string &n : lista)
+                names.insert(std::move(n));
+    }
+    // Si la subcarpeta no existe todavia queda vacio, que es la respuesta
+    // correcta: ahi no hay ningun nodo.
+    return by_prefix_.emplace(prefix, std::move(names)).first->second;
+}
+
 bool FileNodeStore::contains(ContentHash hash) const {
-    std::error_code ec;
-    return std::filesystem::exists(path_for(hash), ec);
+    const std::string hex = hash.to_hex();
+    std::lock_guard<std::mutex> g(cache_mx_);
+    return names_in_(hex.substr(0, 2)).count(hex) != 0;
 }
 
 } // namespace vxdbg
