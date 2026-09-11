@@ -110,8 +110,37 @@ void Assembler::compute_label_sizes() {
     }
 }
 
+namespace {
+
+/**
+ * @brief Fuente respaldada por un arbol que ya existe entero.
+ *
+ * Es lo que hacia el ensamblador antes de que hubiera fuentes, escrito como
+ * fuente: recorrer un vector y devolver punteros.  No copia nada.
+ */
+class AstNodeStream final : public Assembler::NodeStream {
+  public:
+    explicit AstNodeStream(const std::vector<std::unique_ptr<vm::ASTNode>> &ast)
+        : ast_(ast) {}
+    void rewind() override { i_ = 0; }
+    const vm::ASTNode *next() override {
+        return i_ < ast_.size() ? ast_[i_++].get() : nullptr;
+    }
+
+  private:
+    const std::vector<std::unique_ptr<vm::ASTNode>> &ast_;
+    size_t i_ = 0;
+};
+
+} // namespace
+
 std::vector<uint8_t>
 Assembler::assemble(const std::vector<std::unique_ptr<vm::ASTNode>> &ast) {
+    AstNodeStream stream(ast);
+    return assemble(stream);
+}
+
+std::vector<uint8_t> Assembler::assemble(NodeStream &nodes) {
     uint64_t offset = 0;
 
     // por ahora esta seccion y espacio contendra la meta informacion y la anade
@@ -120,8 +149,9 @@ Assembler::assemble(const std::vector<std::unique_ptr<vm::ASTNode>> &ast) {
     ctx.get_space("MetaSpace")->add_section("strings", 0x0, 0x0);
 
     // 1 Primera pasada
-    for (auto &node : ast)
-        first_pass(node.get(), offset);
+    nodes.rewind();
+    while (const vm::ASTNode *node = nodes.next())
+        first_pass(node, offset);
 
     // cerrar el tramo de la ultima seccion activa: su tamano son los bytes
     // emitidos hasta el final del flujo.
@@ -134,8 +164,9 @@ Assembler::assemble(const std::vector<std::unique_ptr<vm::ASTNode>> &ast) {
     // calcular el tamano de cada label
     // compute_label_sizes();
 
-    for (auto &node : ast)
-        emit_pass(node.get());
+    nodes.rewind();
+    while (const vm::ASTNode *node = nodes.next())
+        emit_pass(node);
 
     // 2 Segunda pasada (datos)
     /*for (auto &node: ast)

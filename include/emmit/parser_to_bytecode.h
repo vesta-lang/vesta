@@ -1616,6 +1616,49 @@ class Assembler {
     assemble(const std::vector<std::unique_ptr<vm::ASTNode>> &ast);
 
     /**
+     * @brief De donde salen los nodos que el ensamblador recorre.
+     *
+     * @par Por que existe
+     * El ensamblador recorre el programa DOS veces -- una para colocar
+     * secciones y etiquetas, otra para emitir bytes --, y para eso pedia el
+     * arbol entero de una pieza.  Eso obliga a que exista el arbol entero, y
+     * el arbol entero es la mitad del pico de memoria del compilador: 2,5
+     * millones de nodos y 1,7 millones de operandos en el monton, construidos
+     * a partir de un texto que el propio compilador acababa de escribir.
+     *
+     * Con una fuente, lo que el ensamblador necesita no es tener los nodos:
+     * es poder RECORRERLOS EN ORDEN, dos veces.  Quien los tenga ya hechos los
+     * entrega; quien los pueda fabricar los fabrica de uno en uno y reutiliza
+     * el sitio.
+     *
+     * @par El contrato
+     * `rewind()` vuelve al principio y `next()` da el siguiente o `nullptr` al
+     * acabar.  **Las dos vueltas tienen que dar la MISMA secuencia**: el
+     * ensamblador calcula desplazamientos en la primera y los usa en la
+     * segunda, asi que una diferencia entre pasadas no da un error -- da otro
+     * programa.
+     *
+     * El nodo devuelto tiene que seguir siendo valido hasta la siguiente
+     * llamada a `next()`, no mas: quien fabrique puede tener UN nodo vivo.
+     */
+    class NodeStream {
+      public:
+        virtual ~NodeStream() = default;
+        /// Vuelve al principio.  Se llama antes de cada pasada.
+        virtual void rewind() = 0;
+        /// El siguiente nodo raiz, o `nullptr` si se acabo.
+        virtual const vm::ASTNode *next() = 0;
+    };
+
+    /**
+     * @brief Igual que @ref assemble, pero tomando los nodos de una fuente.
+     *
+     * @param nodes La fuente.  Se recorre dos veces (ver @ref NodeStream).
+     * @return El bytecode.
+     */
+    std::vector<uint8_t> assemble(NodeStream &nodes);
+
+    /**
      * @brief Segunda+tercera pasada: emite datos e instrucciones en el buffer.
      *
      * La segunda y tercera fase estan fusionadas porque, una vez que todos los
