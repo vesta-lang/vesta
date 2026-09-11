@@ -393,13 +393,26 @@ Token Lexer::peek_token() const {
     const int save_line = self->line;
     const int save_column = self->column;
     const int save_src_line = self->last_src_line;
-    const std::string save_src_file = self->last_src_file;
+    /* El fichero fuente se guarda con un BOOLEANO, no con una copia de la
+     * cadena, y eso es correcto porque `last_src_file` se escribe UNA sola vez:
+     * su unica asignacion esta dentro de `if (last_src_file.empty())`.  De ahi
+     * salen los dos casos, y no hay mas:
+     *
+     *   - ya tenia valor -> `next_token()` NO puede cambiarlo, asi que copiarlo
+     *     y volver a escribirlo ponia el mismo texto que ya estaba;
+     *   - estaba vacio   -> `next_token()` pudo rellenarlo, y deshacerlo es
+     *     vaciarlo otra vez.
+     *
+     * Costaba 4.704.030 copias de una RUTA (118 bytes de media) al compilar
+     * 441.089 lineas: el mayor sitio de reserva del compilador entero, y todas
+     * para reescribir lo que ya estaba. */
+    const bool had_src_file = !self->last_src_file.empty();
     Token peeked = self->next_token();
     self->pos = save_pos;
     self->line = save_line;
     self->column = save_column;
     self->last_src_line = save_src_line;
-    self->last_src_file = save_src_file;
+    if (!had_src_file) self->last_src_file.clear();
     return peeked;
 }
 
