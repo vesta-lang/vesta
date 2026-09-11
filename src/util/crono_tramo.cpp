@@ -146,7 +146,7 @@ Calibracion medir_calibracion() {
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kN; ++i) {
         const auto a = std::chrono::steady_clock::now();
-        acumular_tramo_ns("  <calibracion>",
+        acumular_tramo_ns("  <calibration>",
                           std::chrono::duration_cast<std::chrono::nanoseconds>(
                               std::chrono::steady_clock::now() - a)
                               .count());

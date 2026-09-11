@@ -146,6 +146,7 @@
 #ifndef VESTA_ANALYSIS_MANAGER_H
 #define VESTA_ANALYSIS_MANAGER_H
 
+#include "util/crono_tramo.h"  // el tramo de soltar las tablas
 #include "util/env_flags.h"    // medir la espera del cerrojo es OPCIONAL
 #include "util/shared_mutex.h" // lector/escritor SIN la emulacion de pthreads
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
@@ -274,6 +275,29 @@ template <class T> struct AnalysisResultModel final : AnalysisResultConcept {
 // ===========================================================================
 class AnalysisManager {
   public:
+    /**
+     * @brief Suelta las tablas, y lo CRONOMETRA.
+     *
+     * No es ceremonia: en una compilacion grande el gestor llega al final con
+     * cientos de miles de resultados vivos -- cada uno con sus vectores --, y
+     * liberarlos todos de golpe al salir del optimizador no lo medía nadie.  Se
+     * vacia aqui DENTRO del tramo porque los destructores de los miembros
+     * corren DESPUES del cuerpo: sin vaciar a mano, el cronometro cerraria
+     * antes de que se libere nada y marcaria cero.
+     *
+     * Que ese coste exista es en si un sintoma: un analisis solo hace falta
+     * mientras se trabaja su funcion, y aqui sobreviven todos hasta el final.
+     */
+    ~AnalysisManager() {
+        util::CronoTramo t_("asa:release_manager",
+                            util::flag_on(util::FlagId::Times));
+        for (Shard &s : shards_) {
+            s.results.clear();
+            s.rev_deps.clear();
+            s.keys_by_unit.clear();
+        }
+    }
+
     /**
      * @brief Que analisis, de que unidad.
      *

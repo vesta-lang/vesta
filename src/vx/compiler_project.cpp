@@ -4644,7 +4644,7 @@ CompileResult compile_vx_project(
     {
         // Medir es decision de QUIEN mide: el cronometro es una utilidad y no sabe
     // bajo que bandera vive cada uno de sus usuarios.
-    util::CronoTramo t_("fase-opt:asa-volcar-formas",
+    util::CronoTramo t_("phase:asa_dump_shapes",
                         util::flag_on(util::FlagId::Times));
         analysis::asa::volcar_formas(merged, "pre-opt");
     }
@@ -4658,7 +4658,7 @@ CompileResult compile_vx_project(
         /* Una SEGUNDA optimizacion completa, sobre la copia con inline.  Cae
          * en la misma ventana que la de verdad, asi que sin tramo propio se
          * suma al coste del optimizador sin que nadie sepa que son dos. */
-        util::CronoTramo t_("fase-opt:ir_optimize (copia con inline)",
+        util::CronoTramo t_("phase:ir_optimize (inlined copy)",
                             util::flag_on(util::FlagId::Times));
         ir::ir_optimize(para_inline, opt_level_from_int_(opts.opt_level),
                         /*allow_inline=*/true);
@@ -4670,7 +4670,7 @@ CompileResult compile_vx_project(
      * reservas): asi el selector del JIT puede llamarlo y compartir mecanismo
      * con el binario nativo, que es lo que permite depurar aquel desde aqui. */
     {
-        util::CronoTramo t_("fase-opt:asignador-del-lenguaje",
+        util::CronoTramo t_("phase:language_allocator",
                         util::flag_on(util::FlagId::Times));
         traer_asignador_del_lenguaje(merged, opts, root_path);
     }
@@ -4688,7 +4688,7 @@ CompileResult compile_vx_project(
      * no si se mira: saltarse la comprobacion entera dejaba a `--analyze` sin
      * nada que ensenar, que es lo contrario de para lo que existe. */
     {
-        util::CronoTramo t_borrow_("fase-opt:borrow_across_calls",
+        util::CronoTramo t_borrow_("phase:borrow_across_calls",
                                    util::flag_on(util::FlagId::Times));
         analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
         vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
@@ -4699,7 +4699,7 @@ CompileResult compile_vx_project(
     }
 
     {
-        util::CronoTramo t_("fase-opt:ir_optimize",
+        util::CronoTramo t_("phase:ir_optimize",
                         util::flag_on(util::FlagId::Times));
         /* Con el almacen si se pidio el momento de EN MEDIO.  Ver la nota en
          * el camino de fichero suelto. */
@@ -4738,7 +4738,7 @@ CompileResult compile_vx_project(
             break;
         }
     {
-        util::CronoTramo t_("fase-opt:asm-precondiciones",
+        util::CronoTramo t_("phase:asm_preconditions",
                         util::flag_on(util::FlagId::Times));
         /* Antes de preguntar, que este lo que se va a preguntar -- venga de la
          * compilacion anterior o de producirlo ahora.  El consumidor no
@@ -4773,7 +4773,7 @@ CompileResult compile_vx_project(
         /* Producir los hechos y sellarlos en disco corre DENTRO de la ventana
          * que el informe llama "optimizar", asi que sin medirlo se le atribuia
          * al optimizador un trabajo que no es suyo. */
-        util::CronoTramo t_hechos_("fase-opt:facts_store",
+        util::CronoTramo t_hechos_("phase:facts_store",
                                    util::flag_on(util::FlagId::Times));
         const auto s = ensure_facts_impl_(
             merged, facts, wanted,

@@ -5117,6 +5117,18 @@ struct PassTimer : util::CronoTramo {
         : util::CronoTramo(etiqueta, timing_on()) {}
 };
 
+/**
+ * @brief Lo declarado de las nativas del modulo, cronometrandolo.
+ *
+ * Funcion con NOMBRE y no un ambito suelto porque el resultado es `const`: se
+ * inicializa con lo que esto devuelve.  Recorre el modulo entero y no llevaba
+ * cronometro, asi que su coste caia en el saco sin atribuir del optimizador.
+ */
+static analysis::effects::NativeDecls collect_native_decls_timed(IrModule &mod) {
+    PassTimer c__("opt:collect_native_decls");
+    return analysis::effects::collect_native_decls({&mod});
+}
+
 /// Donde una instruccion queda definida: bloque y posicion dentro de el.
 struct DefInfo {
     IrBlockId bb;
@@ -8243,7 +8255,7 @@ static bool model_removable(const IrFunction &fn,
                             const analysis::PointsTo &pt, const IrInstr &ins,
                             const analysis::effects::EffectEnv &env,
                             const analysis::effects::LocSet &leidas) {
-    PassTimer crono__("  dce:efectos-por-instr");
+    PassTimer crono__("  dce:effects per instr");
     const analysis::effects::EffectAnalysisResult r =
         analysis::effects::effects_of_instr(fn, facts, pt, ins, env);
     if (r.completeness != analysis::effects::AnalysisCompleteness::Complete)
@@ -8321,7 +8333,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
     analysis::effects::LocSet fx_leidas;
     fx_leidas.is_top = true; // sin modelo, se supone que todo se lee
     if (g_dce_effects) {
-        PassTimer crono__("  dce:hechos");
+        PassTimer crono__("  dce:facts");
         /* Los hechos y el points-to los PRESTA quien llama.  El pase corre una
          * vez por funcion y por vuelta del punto fijo, y el orquestador ya
          * tiene los de esa misma funcion y esa misma version, asi que
@@ -8386,7 +8398,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
     {
         /* Cada tramo en SU bloque: un cronometro de ambito mide hasta que
          * termina el suyo, y suelto acaba midiendo el resto de la funcion. */
-        PassTimer crono_usados__("  dce:usados");
+        PassTimer crono_usados__("  dce:used values");
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
                 for (IrValueId op : ins.operands) {
@@ -8455,7 +8467,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
 
     bool changed = false;
     {
-        PassTimer crono_barrer__("  dce:barrer");
+        PassTimer crono_barrer__("  dce:sweep");
         for (auto &bb : fn.blocks) {
             auto &instrs = bb.instrs;
             size_t write = 0;
@@ -8596,10 +8608,10 @@ static bool copy_prop_impl(IrFunction &fn) {
     }
     // Eliminar los MOV que ahora son copias triviales (%a = mov %a)
     /* Etiquetado: el DCE tambien se llama DESDE otros pases para limpiar lo
-     * que acaban de generar.  Sin contarlo, su tramo interno (`dce:hechos`)
+     * que acaban de generar.  Sin contarlo, su tramo interno (`dce:facts`)
      * salia con mas tomas que el propio pase y el reparto no cuadraba. */
     if (changed) {
-        PassTimer crono__("  dce:limpieza-en-pase");
+        PassTimer crono__("  dce:in-pass cleanup");
         ir_pass_dce(fn);
     }
     return changed;
@@ -9220,7 +9232,7 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                 hechos_usar = hechos_asm->estructura;
                 rangos_usar = hechos_asm->rangos;
             } else {
-                PassTimer crono__("  dse:hechos(calculados aqui)");
+                PassTimer crono__("  dse:facts (built here)");
                 lig_asm_fn = analysis::compute_asm_bindings(fn);
                 hechos_fn = analysis::build_ir_facts(fn);
                 const analysis::RangeRequester mark(
@@ -9726,7 +9738,7 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
     // y copy_prop para resolver los MOVs generados por SLF.
     if (changed) {
         ir_pass_copy_prop(fn);
-        PassTimer crono__("  dce:limpieza-en-pase");
+        PassTimer crono__("  dce:in-pass cleanup");
         ir_pass_dce(fn);
     }
     return changed;
@@ -14913,7 +14925,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * toda CALLN como opaca aunque el modulo dijera exactamente lo que hace, y
      * la declaracion solo servia para el informe. */
     const analysis::effects::NativeDecls decls_nativas =
-        analysis::effects::collect_native_decls({&mod});
+        collect_native_decls_timed(mod);
 
     /*  D.7.opt: inline a nivel modulo ANTES del fix-point loop.
      * Despues del inline, los passes per-function se re-aplican sobre
@@ -14926,13 +14938,13 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * del inyectado, asi que para analizar se optimiza sin inline; el coste
      * interprocedural (TOTAL) lo compone el analizador via el callgraph. */
     if (level >= OptLevel::O1 && allow_inline) {
-        PassTimer crono__("opt:inline-prologo (pared)");
+        PassTimer crono__("opt:inline prologue (wall)");
         (void)applied(ir_pass_inline(mod));
         /* Tras inlinar las factorias, la closure se construye y se invoca
          * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
          * el CALLCLOSURE (elimina el call indirecto + el env; el DCE limpia
          * las stores/allocs muertas).  Cross-backend: interp, JIT y AOT. */
-        ir_pass_inline_closures(mod);
+        (void)applied(ir_pass_inline_closures(mod));
     }
 
     /*  D.jit-mem-model AUTO-PROMOTE: marca ALLOCAs que fluyen a
@@ -15260,7 +15272,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * pase de mas abajo suman CPU de TODOS los hilos.  Restar unos de
              * otros no significa nada, y confundirlos ya llevo a buscar 330 ms
              * que no existian. */
-            PassTimer crono_fn__("opt:bucle-por-funcion (pared)");
+            PassTimer crono_fn__("opt:per-function loop (wall)");
             for_each_function(mod, [&](IrFunction &fn) {
                 if (fn.is_native) return; // no optimizar stubs nativos
 
@@ -15452,7 +15464,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             });
         } // fin del ambito del cronometro del bucle
 
-        PassTimer crono_cross__("opt:cross-modulo devirt+inline (pared)");
+        PassTimer crono_cross__("opt:cross-module devirt+inline (wall)");
         /* Devirt + inline @ O2 al final de cada iteracion del fix-point.
          * Importante hacerlo despues de las per-function passes para que
          * la inline pass vea las callees OPTIMIZADAS (e.g. Counter.inc
@@ -15581,6 +15593,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * Skippable con el mismo VESTA_NO_PROMOTE_RAW_ALLOC. */
     if (level >= OptLevel::O1) {
         if (!g_no_promote_raw_alloc) {
+            PassTimer c__("post:promote_local_raw_alloc (per fn)");
             bool any2 = false;
             for (auto &fn : mod.functions) {
                 if (!fn.is_native)
@@ -15591,7 +15604,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             if (any2) {
                 for (auto &fn : mod.functions) {
                     if (fn.is_native) continue;
-                    PassTimer crono__("  dce:limpieza-orquestada");
+                    PassTimer crono__("  dce:orchestrated cleanup");
                     ir_pass_dce(fn, &decls_nativas);
                 }
             }
@@ -15603,9 +15616,14 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * escape es visible: el alloc + los field-access estan en la misma fn).
      * No transforma el IR; solo loguea bajo VESTA_ESCAPE_DEBUG. */
     if (level >= OptLevel::O2) {
+        /* Las etapas de DESPUES del punto fijo recorren el modulo entero y no
+         * llevaban cronometro NINGUNO, asi que su coste caia en el saco sin
+         * atribuir de la ventana "optimizar" -- que medido era el 64 % de ella,
+         * y lo que no tiene nombre no se puede atacar. */
+        PassTimer c__("post:escape_detect_gc (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            ir_pass_escape_detect_gc(fn);
+            (void)applied(ir_pass_escape_detect_gc(fn));
         }
     }
 
@@ -15623,11 +15641,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * arreglo: desenrollar primero multiplica el codigo de un bucle que iba a
      * desaparecer entero. */
     if (level >= OptLevel::O1) {
+        PassTimer c__("post:bulk_memory_lower (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
             if (applied(ir_pass_bulk_memory_lower(fn, facts))) {
                 (void)applied(ir_pass_unreachable(fn));
-                PassTimer crono__("  dce:limpieza-orquestada");
+                PassTimer crono__("  dce:orchestrated cleanup");
                 (void)applied(ir_pass_dce(fn));
             }
         }
@@ -15643,6 +15662,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * gestor puede ser de una forma que ya no existe -- se comprobo, y la
      * compilacion se caia. */
     if (level >= OptLevel::O1) {
+        /* Con su tramo, y aqui importa mas que en los demas: construye los
+         * hechos y pide los rangos POR FUNCION, o sea el trabajo caro del ASA,
+         * y todo eso caia sin nombre. */
+        PassTimer c__("post:elide_narrow_norm (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native || fn.blocks.empty()) continue;
             const analysis::IrFacts fx = analysis::build_ir_facts(fn);
@@ -15664,13 +15687,14 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     }
 
     if (level >= OptLevel::O2) {
+        PassTimer c__("post:unroll (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
             if (applied(ir_pass_unroll(fn, /*factor=*/0, facts))) {
                 (void)applied(ir_pass_copy_prop(fn));
                 (void)applied(ir_pass_cse(fn));
                 (void)applied(ir_pass_const_fold(fn));
-                PassTimer crono__("  dce:limpieza-orquestada");
+                PassTimer crono__("  dce:orchestrated cleanup");
                 (void)applied(ir_pass_dce(fn, &decls_nativas));
             }
         }
@@ -15681,6 +15705,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * optimizacion (es semanticamente neutro -- mismo DAG, distinto orden).
      * Solo aplica @ O2+ por seguridad. */
     if (level >= OptLevel::O2) {
+        PassTimer c__("post:schedule (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
             // El scheduler RECIBE la tabla points-to del manager (no la
@@ -15688,9 +15713,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             // activo.
             if (g_sched_alias) {
                 pt_invalidate(fn); // fresca: el fix-point muto el IR
-                ir_pass_schedule(fn, &pt_of(fn), &pure_callees);
+                (void)applied(ir_pass_schedule(fn, &pt_of(fn), &pure_callees));
             } else {
-                ir_pass_schedule(fn, nullptr, &pure_callees);
+                (void)applied(ir_pass_schedule(fn, nullptr, &pure_callees));
             }
         }
     }
