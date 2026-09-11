@@ -5080,10 +5080,26 @@ CompileResult compile_vx_project(
      * salir al compilar, que es cuando se lee. */
     /* La base de hechos de ESTA compilacion, una sola: ver la nota del camino
      * de fichero suelto.  Los dos entran por el mismo sitio a proposito. */
-    analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
-    vx_report_bounds(merged, res.diagnostics, root_path, fact_base,
-                     opts.violations_are_errors ? DiagLevel::ERR
-                                                : DiagLevel::WARN);
+    /* EN SU BLOQUE, como la de antes de optimizar.  Sin las llaves la base
+     * vivia hasta el final de la funcion -- o sea durante emitir y enlazar --
+     * aunque su unico consumidor sea la linea de abajo.
+     *
+     * Y no es poca cosa: dentro lleva el gestor de analisis, que guarda lo
+     * calculado de las 73.501 funciones.  Medido con el eje del tiempo del
+     * comprobador, en el instante de mayor memoria sostiene 81 MiB de tablas
+     * points-to mas 64 de la contabilidad que las indexa.  El propio
+     * destructor del gestor ya lo decia: "un analisis solo hace falta mientras
+     * se trabaja su funcion, y aqui sobreviven todos hasta el final".
+     *
+     * No se pierde conocimiento: los dominios que se cachean en disco vuelven
+     * de ahi, y los que no, se derivan otra vez si alguien pregunta.  Lo que
+     * se suelta es la COPIA en memoria. */
+    {
+        analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
+        vx_report_bounds(merged, res.diagnostics, root_path, fact_base,
+                         opts.violations_are_errors ? DiagLevel::ERR
+                                                    : DiagLevel::WARN);
+    }
     /* La exclusividad de los prestamos NO se comprueba aqui: se hizo ANTES de
      * optimizar, que es donde todavia existen las llamadas que la demuestran.
      * Ver el comentario de alli. */
