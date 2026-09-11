@@ -7182,13 +7182,19 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // vida sobre el IR YA hundido (base vive hasta el add adyacente).  Se
     // fusiona en un unico `mld/mst [base + disp]`, eliminando el ADD.
     if (!interp_fuse_disabled()) {
-        std::unordered_map<IrValueId, int> use_count;
+        /* Cuantas veces se usa cada valor.  Un vector indexado por el id, que
+         * es denso: el `unordered_map` que habia aqui cobraba un nodo en el
+         * monton por valor usado -- 808.499 reservas al compilar 441.089
+         * lineas -- para guardar un contador. */
+        std::vector<uint32_t> use_count(fn.values.size(), 0);
         for (const IrBlock &bb : fn.blocks) {
             for (const IrInstr &in : bb.instrs) {
                 for (IrValueId op : in.operands)
-                    if (op != IR_NO_VALUE) use_count[op]++;
+                    if (op != IR_NO_VALUE && op < use_count.size())
+                        ++use_count[op];
                 for (const auto &pa : in.phi_args)
-                    if (pa.value != IR_NO_VALUE) use_count[pa.value]++;
+                    if (pa.value != IR_NO_VALUE && pa.value < use_count.size())
+                        ++use_count[pa.value];
             }
         }
         for (const IrBlock &bb : fn.blocks) {
@@ -7210,8 +7216,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                     continue;
                 // addr single-use (solo este load/store): si no, no podemos
                 // eliminar el add.
-                auto uc = use_count.find(addr);
-                if (uc == use_count.end() || uc->second != 1) continue;
+                if (addr >= use_count.size() || use_count[addr] != 1) continue;
                 const IrValueId base = prev.operands[0];
                 const IrValueId off = prev.operands[1];
                 if (base >= fn.values.size() || off >= fn.values.size())
@@ -7243,9 +7248,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                     const IrInstr &mul = bb.instrs[i - 2];
                     if (mul.op == IrOp::MUL && mul.dst == off &&
                         mul.operands.size() >= 2) {
-                        auto ucm = use_count.find(off);
                         const IrValueId sc = mul.operands[1];
-                        if (ucm != use_count.end() && ucm->second == 1 &&
+                        if (off < use_count.size() && use_count[off] == 1 &&
                             sc < fn.values.size() && fn.values[sc].is_const) {
                             const uint64_t k = fn.values[sc].const_val;
                             if (k && (k & (k - 1)) == 0 && k <= 128) {
@@ -7372,13 +7376,17 @@ static bool interp_fuse_disabled() {
 
 static void interp_sink_addr_adds(IrFunction &fn) {
     // Conteo de usos global (solo se hunde lo que es single-use).
-    std::unordered_map<IrValueId, int> use_count;
+    /* Igual que en el fusionador de arriba: un vector indexado por el id, no
+     * un nodo de hash por valor usado. */
+    std::vector<uint32_t> use_count(fn.values.size(), 0);
     for (auto &bb : fn.blocks) {
         for (auto &in : bb.instrs) {
             for (IrValueId op : in.operands)
-                if (op != IR_NO_VALUE) use_count[op]++;
+                if (op != IR_NO_VALUE && op < use_count.size())
+                    ++use_count[op];
             for (auto &pa : in.phi_args)
-                if (pa.value != IR_NO_VALUE) use_count[pa.value]++;
+                if (pa.value != IR_NO_VALUE && pa.value < use_count.size())
+                    ++use_count[pa.value];
         }
     }
     for (auto &bb : fn.blocks) {
@@ -7389,8 +7397,7 @@ static void interp_sink_addr_adds(IrFunction &fn) {
         for (size_t j = 0; j < bb.instrs.size(); ++j) {
             const IrInstr &in = bb.instrs[j];
             if (in.dst == IR_NO_VALUE || in.operands.size() < 2) continue;
-            auto uc = use_count.find(in.dst);
-            if (uc == use_count.end() || uc->second != 1) continue;
+            if (in.dst >= use_count.size() || use_count[in.dst] != 1) continue;
             if (in.op == IrOp::ADD) {
                 add_at[in.dst] = j;
             } else if (in.op == IrOp::MUL) {
@@ -7601,6 +7608,28 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     }
 
     VelSink out;
+
+    /* CUANTAS VAN A SER, ANTES DE EMPEZAR.  El destino es un `vector<Instr>` y
+     * un `Instr` no es pequeno, asi que dejarlo doblar desde vacio reserva
+     * cientos de megas en copias sucesivas -- medido sobre un proyecto de
+     * 144.000 lineas: 407,9 MB en doce reasignaciones, con el buffer viejo y el
+     * nuevo vivos a la vez en la ultima.
+     *
+     * La cota sale de lo unico que la determina: cuantas instrucciones trae el
+     * IR.  Una instruccion del IR baja a varias del `.vel` -- una llamada, un
+     * acceso a memoria con desplazamiento, un flotante que va y vuelve por la
+     * pila --, y el factor se queda CORTO a proposito: pasarse reserva memoria
+     * que quiza no se use, y quedarse corto solo cuesta uno o dos doblados
+     * desde un tamano que ya es el bueno.  Lo que no vale es empezar en cero
+     * teniendo el modulo delante. */
+    {
+        size_t ir_instrs = 0;
+        for (const IrFunction &fn : mod.functions) {
+            if (fn.is_native) continue;
+            for (const IrBlock &b : fn.blocks) ir_instrs += b.instrs.size();
+        }
+        if (ir_instrs != 0) out.reserve_instrs(ir_instrs * 2u + 64u);
+    }
 
     // Cabecera del modulo
     out.comment_top("Emitido por ir_emitter - VestaVM");
