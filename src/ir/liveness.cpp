@@ -44,25 +44,33 @@ LivenessResult compute_liveness(const IrFunction &fn) {
 
     const uint32_t UNDEF = result.num_instrs; // sentinel: valor no definido aun
 
-    // --- Paso 2: inicializar un intervalo por valor ---
-    // Usamos un mapa temporal; al final lo convertimos a vector.
-    std::unordered_map<IrValueId, LiveInterval> imap;
-    imap.reserve(fn.values.size());
+    /* --- Paso 2: inicializar un intervalo por valor ---
+     *
+     * Un VECTOR indexado por el id, no un mapa.  `new_value` da
+     * `id = values.size()`, asi que el id de un valor ES su posicion: el mapa
+     * que habia aqui era un vector escrito con un hash delante, y cobraba un
+     * nodo en el monton por valor -- 882.298 reservas al compilar 441.089
+     * lineas -- para acabar volcandose a un vector de todas formas.
+     *
+     * Y de paso deja de ser una fuente de INDETERMINACION: el volcado del
+     * paso 5 recorria el mapa, cuyo orden es arbitrario, y `operator<` solo
+     * compara `def`, asi que dos intervalos que empatan salian en un orden
+     * distinto en cada compilacion.  Por el vector salen por id, siempre
+     * igual. */
+    std::vector<LiveInterval> ivs(fn.values.size());
     for (const auto &v : fn.values) {
-        LiveInterval li;
+        if (v.id >= ivs.size()) continue;
+        LiveInterval &li = ivs[v.id];
         li.id = v.id;
         li.def = UNDEF; // no definido aun
         li.end = 0;
-        imap[v.id] = li;
     }
 
     // Los parametros de la funcion estan vivos desde el inicio (posicion 0).
     for (IrValueId pid : fn.params) {
-        auto it = imap.find(pid);
-        if (it != imap.end()) {
-            it->second.def = 0;
-            it->second.end = 0; // se actualizara con los usos reales
-        }
+        if (pid >= ivs.size()) continue;
+        ivs[pid].def = 0;
+        ivs[pid].end = 0; // se actualizara con los usos reales
     }
 
     // Marca un valor como "usado" en la posicion pos.
@@ -78,18 +86,14 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     // a la vez (el bug observado del while: sum_next y i_phi compartian r4).
     //
     auto mark_use = [&](IrValueId vid, uint32_t use_pos) {
-        if (vid == IR_NO_VALUE) return;
-        auto it = imap.find(vid);
-        if (it == imap.end()) return;
-        if (use_pos > it->second.end) it->second.end = use_pos;
+        if (vid == IR_NO_VALUE || vid >= ivs.size()) return;
+        if (use_pos > ivs[vid].end) ivs[vid].end = use_pos;
     };
 
     // Marca la definicion de un valor en la posicion pos.
     auto mark_def = [&](IrValueId vid, uint32_t def_pos) {
-        if (vid == IR_NO_VALUE) return;
-        auto it = imap.find(vid);
-        if (it == imap.end()) return;
-        if (it->second.def == UNDEF) it->second.def = def_pos;
+        if (vid == IR_NO_VALUE || vid >= ivs.size()) return;
+        if (ivs[vid].def == UNDEF) ivs[vid].def = def_pos;
         // en SSA la definicion ocurre exactamente una vez; ignoramos
         // redefiniciones
     };
@@ -107,11 +111,9 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     // deja el host_ptr stale en el reg, y al cruzar la siguiente
     // iteracion del loop se dereferencia memoria liberada.
     auto mark_def_extend_earlier = [&](IrValueId vid, uint32_t def_pos) {
-        if (vid == IR_NO_VALUE) return;
-        auto it = imap.find(vid);
-        if (it == imap.end()) return;
-        if (it->second.def == UNDEF || def_pos < it->second.def) {
-            it->second.def = def_pos;
+        if (vid == IR_NO_VALUE || vid >= ivs.size()) return;
+        if (ivs[vid].def == UNDEF || def_pos < ivs[vid].def) {
+            ivs[vid].def = def_pos;
         }
     };
 
@@ -260,9 +262,8 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     for (size_t b = 0; b < nblocks; ++b) {
         const uint32_t end_pos = result.block_end[b];
         for (IrValueId v : live_out[b]) {
-            auto it = imap.find(v);
-            if (it == imap.end()) continue;
-            if (end_pos > it->second.end) it->second.end = end_pos;
+            if (v >= ivs.size()) continue;
+            if (end_pos > ivs[v].end) ivs[v].end = end_pos;
         }
     }
 
@@ -281,16 +282,14 @@ LivenessResult compute_liveness(const IrFunction &fn) {
     // --- Paso 4: asegurar coherencia en los parametros ---
     // Si un parametro nunca se uso, su end quedaria a 0 < def=0.
     for (IrValueId pid : fn.params) {
-        auto it = imap.find(pid);
-        if (it != imap.end() && it->second.def == 0 &&
-            it->second.end < it->second.def) {
-            it->second.end = it->second.def;
-        }
+        if (pid >= ivs.size()) continue;
+        if (ivs[pid].def == 0 && ivs[pid].end < ivs[pid].def)
+            ivs[pid].end = ivs[pid].def;
     }
 
     // --- Paso 5: recopilar solo los valores con definicion conocida ---
-    result.intervals.reserve(imap.size());
-    for (auto &[id, li] : imap) {
+    result.intervals.reserve(ivs.size());
+    for (LiveInterval &li : ivs) {
         if (li.def < UNDEF) {
             // Garantizar end >= def (un valor usado exactamente en su def tiene
             // end==def)
