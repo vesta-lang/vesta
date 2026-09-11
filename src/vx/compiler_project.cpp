@@ -64,6 +64,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "ir/parallel_for.h"
 #include "util/env_flags.h"
 #include <climits>
+#include "util/alloc/host_allocator.h" // devolver al reparto comun entre fases
 #include "util/alloc/sanitizer.h" // marcar las fases en el eje del comprobador
 #include "util/crono_tramo.h"
 #include "analysis/asa/aggregate_facts.h"
@@ -4204,6 +4205,22 @@ CompileResult compile_vx_project(
                 // antes de que el siguiente nivel intente cache hit.
                 for (auto &t : threads)
                     t.join();
+                /* Y lo que dejaron los hilos que acaban de morir, de vuelta al
+                 * reparto comun.
+                 *
+                 * Al morir, un hilo hace lo MINIMO -- devuelve su identificador
+                 * y nada mas --, porque el desmontaje de un hilo es donde el
+                 * asignador ya se colgo una vez.  Sus listas libres y los
+                 * bloques que otros hilos le soltaron se quedan esperando a que
+                 * alguien vuelva a pedir ese identificador Y esa clase de
+                 * tamano.  Medido sobre 21 modulos: 5,4 millones de bloques
+                 * liberados desde un hilo distinto del que los pidio.
+                 *
+                 * La barrera es el momento exacto: aqui no queda ningun hilo
+                 * del lote trabajando, y es lo que el propio asignador
+                 * documenta como uso de esta llamada -- entre fases, nunca en
+                 * un bucle caliente. */
+                (void)util::host_span_trim();
                 /* El techo se aplica AQUI y no dentro del hilo: desalojar mira
                  * el estado de los OTROS modulos, y dentro del lote los hay
                  * compilandose.  Tras la barrera no queda nadie trabajando,
