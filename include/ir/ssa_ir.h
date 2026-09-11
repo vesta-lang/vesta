@@ -2971,6 +2971,20 @@ void ir_correr_indices_de_datos(std::vector<IrFunction> &fns,
 /// Sobre UNA funcion, para quien las trae de una en una.
 void ir_correr_indices_de_datos(IrFunction &fn, uint64_t desplazamiento);
 
+/**
+ * @brief Es @p name un ayudante de construccion, `__new_<Clase>`?
+ * @param name      Nombre de la funcion.
+ * @param out_class Si no es nulo y lo es, recibe el nombre de la clase.
+ * @return true si lo es.
+ *
+ * Aqui y no escondido en el optimizador porque es una CONVENCION DE NOMBRES
+ * del intermedio, y quien la pregunta ya no es solo el que la puso: el hecho
+ * de inlineabilidad (@c analysis/facts/inline_facts.h) la necesita para
+ * responder sin abrir el cuerpo.  Dos copias del prefijo serian dos fuentes de
+ * verdad, y la que se quedara atras no daria un error: daria otra decision.
+ */
+bool is_new_helper_name(const std::string &name, std::string *out_class);
+
 } // namespace ir
 
 // Restaurar las macros de Windows que anulamos al principio del header.

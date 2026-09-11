@@ -45,6 +45,7 @@
 #include "analysis/facts/alignment.h"  // de cuanto es multiplo un valor
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
 #include "analysis/facts/ir_facts.h" // hechos (def-use) para el modelo de efectos
+#include "analysis/facts/inline_facts.h" // se puede inlinar, y cuanto mide
 #include "analysis/effects/ir_effects.h" // modelo unico de efectos (consumidor DCE, A/B)
 #include "analysis/effects/effect_analysis.h" // cierre interproc: callees puros (DSE Fase 4)
 #include "analysis/memory/memory_access.h" // vocabulario UNICO de acceso a memoria
@@ -2546,21 +2547,11 @@ struct GcAllocSite {
     bool escapes = true;         ///< veredicto del analisis (conservador: true)
 };
 
-/**
- * @brief Devuelve true si @p name tiene la forma "__new_<ClassName>".
- *        Si lo es, escribe el ClassName en @p out_class.
- */
-bool is_new_helper_name(const std::string &name, std::string *out_class) {
-    if (name.size() <= 6) return false;
-    if (name.rfind("__new_", 0) != 0) return false;
-    /* Excluir variantes shared (`__new_X_shared`) que registran el objeto en
-     * la SharedHandleTable -- eliminar ese alloc cambia shared_heap_live_count
-     * (efecto observable), igual que en is_pure_allocator_name. */
-    if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_shared") == 0)
-        return false;
-    if (out_class) *out_class = name.substr(6);
-    return true;
-}
+/* `is_new_helper_name` vivia AQUI, dentro del namespace anonimo.  Se mudo a
+ * `ssa_ir.cpp` y se declara en `ssa_ir.h`: es una convencion de nombres del
+ * intermedio, y desde que el hecho de inlineabilidad tambien la pregunta, dos
+ * copias del prefijo serian dos fuentes de verdad -- y la que se quedara atras
+ * no daria un error, daria otra decision. */
 
 /**
  * @brief Analisis de escape para los objetos `new X()` de una funcion.
@@ -10890,86 +10881,11 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
         name_to_idx[mod.functions[i].name] = i;
     }
 
-    /* Funciones que NUNCA se deben inlinear (entry points alternativos
-     * o sintetic functions con calling conventions especiales). */
-    auto is_blacklisted = [](const std::string &name) -> bool {
-        /* __module_init: el Loader lo invoca via init_pc, no es un CALL
-         * normal.  Inlinearlo en main duplica el defclass + deffield
-         * + defmethod del bytecode. */
-        /* Por PREFIJO, no por igualdad: ademas de la propia hay dos familias
-         * mas -- las tandas en que se parte (`__module_init_partN`) y la de
-         * cada dependencia al fusionar modulos (`__module_init_<modulo>`).
-         * Inlinear las tandas las devolveria a una sola funcion gigante, que
-         * es justo lo que se parte para evitar. */
-        if (name.rfind("__module_init", 0) == 0) return true;
-        /* Lambda helpers: invocados via function pointer en CALLCLOSURE.
-         * Sus IR son single-block + RET pero el calling convention es
-         * distinta (env_addr en r14, etc). */
-        if (name.rfind("__lambda_", 0) == 0) return true;
-        /* Spawn helpers: invocados por SPAWN op, no por CALL. */
-        if (name.rfind("__spawn_", 0) == 0) return true;
-        /* Async helpers: invocados por @Async machinery. */
-        if (name.rfind("__async_", 0) == 0) return true;
-        /* rspawn body helpers. */
-        if (name.rfind("__rspawn_", 0) == 0) return true;
-        /* Helpers de string value-type (Vesta Embed): __vx_strlen,
-         * __vx_strdata,
-         * __vx_strcmp.  Se mantienen como funciones APARTE: cada accesor de
-         * longitud/data inline expandia ~10 instrs (AND-mask select heap/SSO);
-         * sumar varias en una funcion reventaba el regalloc SysV (4
-         * callee-saved vs 6 en Win64) -> resultado erroneo en ELF.  Una sola
-         * CALL por uso elimina la presion y unifica el codegen PE/ELF. */
-        if (name.rfind("__vx_str", 0) == 0) return true;
-        /* `__uncaught`: es un GANCHO.  Existe para que el usuario lo pueda
-         * sustituir y para que el driver lo pueda completar -- ahi le antepone
-         * el volcado del buffer de salida cuando hay runtime de I/O, para que
-         * un programa que se rinde no se lleve por delante lo que llevaba
-         * impreso.  Un gancho inlinado dentro de su unico llamante deja de ser
-         * las dos cosas: ya no hay funcion a la que apuntar. */
-        if (name == "__uncaught") return true;
-        return false;
-    };
-
-    /* Pre-classify cada function: es inlineable? */
-    // ¿El cuerpo de una funcion tiene una SALIDA MANUAL en su inline asm
-    // (`ret`/`iret`/`iretq`)?  Esas instrucciones retornan al caller por si
-    // mismas, asi que inlinar el cuerpo cambiaria la semantica (retornaria en
-    // medio del caller).  Una funcion asi NO se inlina; si por lo demas seria
-    // inlinable, el usuario debe QUITAR el `ret` (se avisa con un warning en el
-    // frontend).  Los args con register() SI se inlinan cuando no hay salida
-    // manual: cada arg del cast va a su registro y los params no pasados se
-    // eliminan (ver aridad reducida arriba) -> se emite solo el asm justo.
-    auto asm_has_manual_return = [](const IrFunction &fn) -> bool {
-        for (const auto &blk : fn.blocks)
-            for (const auto &in : blk.instrs) {
-                if (in.op != IrOp::INLINE_ASM) continue;
-                const std::string &body = in.func_name;
-                size_t p = 0;
-                while (p <= body.size()) {
-                    size_t nl = body.find('\n', p);
-                    std::string ln = body.substr(p, nl == std::string::npos
-                                                        ? std::string::npos
-                                                        : nl - p);
-                    size_t cm = ln.find(';');
-                    if (cm != std::string::npos) ln.resize(cm);
-                    cm = ln.find("//");
-                    if (cm != std::string::npos) ln.resize(cm);
-                    size_t a = ln.find_first_not_of(" \t");
-                    if (a != std::string::npos) {
-                        size_t e = ln.find_first_of(" \t", a);
-                        std::string tok = ln.substr(a, e == std::string::npos
-                                                           ? std::string::npos
-                                                           : e - a);
-                        if (tok == "ret" || tok == "iret" || tok == "iretq" ||
-                            tok == "retf" || tok == "sysret")
-                            return true;
-                    }
-                    if (nl == std::string::npos) break;
-                    p = nl + 1;
-                }
-            }
-        return false;
-    };
+    /* La lista negra de nombres, la salida manual del asm y el resto de la
+     * clasificacion vivian AQUI, en tres lambdas que recorrian el cuerpo de
+     * cada funcion del modulo.  Ahora salen del HECHO: ver
+     * `include/analysis/facts/inline_facts.h`, que explica por que la decision
+     * recibe solo el hecho y no la funcion. */
     /* Cierto si el modulo trae una variante para otro motor de esta funcion.
      * Se reconoce por el nombre: la del interprete conserva el desnudo y la
      * del JIT lleva el sufijo, que es el mismo contrato que usa el JIT al
@@ -11003,99 +10919,14 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
     auto has_engine_variant = [&](const std::string &name) -> bool {
         return names_with_engine_variant.count(name) != 0;
     };
-    auto is_inlineable = [&](const IrFunction &fn) -> bool {
-        if (fn.is_native) return false;
-        if (fn.is_naked) return false; // @Naked: standalone, no inlinable
-        /* Con variantes por motor (@Target("mode:jit")), la eleccion de cual
-         * usar la hace el JIT al compilar la funcion.  Si el inliner la expande
-         * antes, esa eleccion queda COCIDA en el llamante y ya no hay funcion
-         * que sustituir -- el codigo del interprete acaba corriendo tambien en
-         * JIT.  Por eso una funcion con variante no se inlina: se cambia una
-         * llamada por poder elegir, que es justo lo que el usuario pidio al
-         * escribir dos versiones. */
-        if (has_engine_variant(fn.name)) return false;
-        // Salida manual (`ret`/`iret`) en el asm -> no inlinable (ver helper).
-        if (asm_has_manual_return(fn)) return false;
-        if (is_blacklisted(fn.name)) return false;
-        /* AOT 2b (dev OS): una funcion con @section explicito debe permanecer
-         * como funcion REAL en esa seccion (el usuario la quiere fisicamente
-         * ahi: trampoline de boot, handler en .text.isr, etc.).  Inlinearla
-         * borraria su presencia en la seccion -> NO inlinear. */
-        if (!fn.section.empty()) return false;
-        /*  C2.13 fix (2026-06-16): NO inlinear los helpers __new_X cuando
-         * el scalar-replacement de objetos GC esta activo.  El pase siembra en
-         * `call __new_X` (is_new_helper_name); si el inliner lo expande antes a
-         * `newobj` + `callvirt ctor`, el seed desaparece y el objeto ademas
-         * escapa via el callvirt -> scalar_replace queda INERTE (regresion del
-         * feature C2.13: 178_escape_scalar_repl no transformaba nada). Mantener
-         * __new_X como una call preserva el seed: el propio scalar_replace
-         * elimina la call de los objetos NO-escapantes; los escapantes
-         * conservan una call barata a un helper trivial (coste despreciable vs
-         * habilitar la eliminacion completa del alloc para los no-escapantes).
-         * Gated por VESTA_NO_ESCAPE_SCALAR para A/B testing limpio (con el pase
-         * OFF, el comportamiento de inline previo se mantiene). */
-        static const bool sr_on = !util::flag_on(util::FlagId::NoEscapeScalar);
-        if (sr_on && is_new_helper_name(fn.name, nullptr)) return false;
-        /* Resolvedores de overlay `__ovl_resolve_<S>_<f>(self)`: devuelven la
-         * DIRECCION (host) de un campo de una vista.  El marcado is_host_ptr
-         * del resultado vive en el CALL del caller; si se inlinan, el valor de
-         * la direccion pierde is_host_ptr y el STORE/LOAD del campo emite `mov`
-         * (VM) en vez de `movh` (host) -> lee/escribe la memoria equivocada.
-         * Mantenerlos como CALL preserva la naturaleza host del acceso. */
-        if (fn.name.rfind("__ovl_resolve_", 0) == 0) return false;
-        if (fn.blocks.size() != 1) return false;
-        if (fn.blocks[0].instrs.empty()) return false;
-        /* Ultima instr debe ser RET. */
-        const auto &last = fn.blocks[0].instrs.back();
-        if (last.op != IrOp::RET) return false;
-        /* Factoria de closures (construye una closure, tipicamente para
-         * devolverla): inlinar con threshold MAYOR.  Inlinar la factoria en
-         * el caller hace que el env nazca en el frame del caller -> si la
-         * closure no escapa de ahi, un pase posterior promueve el env de
-         * heap a stack (cero alocacion, cero leak).  Es la base de las
-         * lambdas capturantes que escapan SIN heap (opcion 3). */
-        size_t eff_threshold = INLINE_THRESHOLD;
-        for (const auto &ins : fn.blocks[0].instrs)
-            if (ins.op == IrOp::MAKE_CLOSURE) {
-                eff_threshold = INLINE_THRESHOLD * 3 + 8; // holgura p/ factoria
-                break;
-            }
-        // El desugar de register() (un ALLOCA + un STORE por binding) es
-        // boilerplate: al inlinar se coalesce (mov reg,reg no-op) o se elimina
-        // (aridad reducida).  No debe contar para el limite de tamano, o un
-        // wrapper de asm minimo (`{ syscall }`) con 6 params-register pareceria
-        // "grande" (14 instrs de puro boilerplate) y no se inlinaria.
-        size_t body_size = fn.blocks[0].instrs.size();
-        const size_t desugar = 2 * fn.asm_reg_bindings.size();
-        body_size -= (desugar < body_size ? desugar : 0);
-        if (body_size > eff_threshold) return false;
-        /* No inlinear funciones que contengan CALLs recursivas a si mismas. */
-        for (const auto &ins : fn.blocks[0].instrs) {
-            if ((ins.op == IrOp::CALL || ins.op == IrOp::TAILCALL) &&
-                ins.func_name == fn.name) {
-                return false;
-            }
-        }
-        /* No inlinear funciones que tengan @c RAW_ASM en su body cuando
-         * el RAW_ASM podria depender del calling convention especifico
-         * de la callee.  Conservadoramente: skip si hay raw_asm.
-         *  AS inc.5: idem INLINE_ASM -- sus @c asm_reg_bindings viven
-         * en @c IrFunction::asm_reg_bindings (per-funcion); el inliner copia
-         * el op pero NO los bindings, dejando el INLINE_ASM sin pin de
-         * registros en el caller -> el JIT no podria compilarlo.  Mantener la
-         * funcion separada (cada una conserva sus bindings + se eager-compila).
-         */
-        for (const auto &ins : fn.blocks[0].instrs) {
-            // RAW_ASM (@Asm verbatim) asume la calling convention VM -> no
-            // inlinable.  INLINE_ASM (asm{} con register-bindings) SI: el copy
-            // logic remapea asm_reg_bindings + clobber-lists al caller, asi el
-            // helper asm caliente (popcnt/rdtsc/...) se inlinea sin perder el
-            // pin de registros.  La unica restriccion es que el helper no
-            // recurse ni tenga RAW_ASM (ya cubierto arriba).
-            if (ins.op == IrOp::RAW_ASM) return false;
-        }
-        return true;
-    };
+    /* Con variantes por motor (@Target("mode:jit")), la eleccion de cual usar
+     * la hace el JIT al compilar la funcion.  Si el inliner la expande antes,
+     * esa eleccion queda COCIDA en el llamante y ya no hay funcion que
+     * sustituir -- el codigo del interprete acaba corriendo tambien en JIT.
+     * Por eso una funcion con variante no se inlina: se cambia una llamada por
+     * poder elegir, que es justo lo que el usuario pidio al escribir dos
+     * versiones.  Y por eso NO es propiedad del hecho: no se responde mirando
+     * la funcion, sino mirando si el modulo trae una hermana con sufijo. */
 
     /* NOTA (barrido stack-first): se intento un scalar-replace-driven inlining
      * (inlinar metodos this-field-only sobre objetos frescos ELIMINABLES para
@@ -11112,10 +10943,17 @@ static bool inline_impl(IrModule &mod, size_t threshold) {
      * real necesita inline MULTI-bloque + analisis de eliminabilidad robusto
      * frente a dtor/reflexion; queda como feature dedicada documentada. */
 
-    /* Cache de classification. */
+    /* Clasificacion.  Sale del HECHO (ver `analysis/facts/inline_facts.h`),
+     * salvo la variante por motor, que NO es propiedad de la funcion sino del
+     * modulo: depende de que exista una hermana con sufijo. */
+    static const bool sr_on = !util::flag_on(util::FlagId::NoEscapeScalar);
     std::vector<bool> can_inline(mod.functions.size(), false);
     for (size_t i = 0; i < mod.functions.size(); ++i) {
-        can_inline[i] = is_inlineable(mod.functions[i]);
+        const IrFunction &fn = mod.functions[i];
+        if (has_engine_variant(fn.name)) continue;
+        const analysis::InlineFacts f = analysis::compute_inline_facts(fn);
+        can_inline[i] =
+            analysis::inlineable_single_block(f, INLINE_THRESHOLD, sr_on);
     }
 
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {
@@ -12625,92 +12463,16 @@ static void inline_one_multiblock(IrFunction &caller, size_t bi, size_t ii,
     recompute_preds_succs(caller);
 }
 
-// true si el callee multi-bloque es seguro de inlinar.
-static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
-    if (fn.is_native) return false;
-    if (fn.is_naked)
-        return false; // @Naked: sin prologo/epilogo/ret, standalone
-    if (!fn.section.empty()) return false;
-    if (fn.blocks.empty()) return false;
-    // Por prefijo: cubre tambien las tandas y las de las dependencias (ver
-    // @c is_blacklisted).
-    if (fn.name.rfind("__module_init", 0) == 0) return false;
-    if (fn.name.rfind("__lambda", 0) == 0) return false;
-    if (is_new_helper_name(fn.name, nullptr)) return false;
-    /* Resolvedores de overlay: inlinarlos pierde la naturaleza host de la
-     * direccion del campo -> `mov`/`loadz` (VM) en vez de `movh`/`loadzh`
-     * (host).  Mantener como CALL (mismo motivo que en @c is_inlineable). */
-    if (fn.name.rfind("__ovl_resolve_", 0) == 0) return false;
-    size_t total = 0;
-    bool has_ret = false;
-    for (size_t k = 0; k < fn.blocks.size(); ++k) {
-        const IrBlock &b = fn.blocks[k];
-        if (b.instrs.empty()) return false;
-        total += b.instrs.size();
-        const IrInstr &last = b.instrs.back();
-        if (last.op != IrOp::BR && last.op != IrOp::BR_COND &&
-            last.op != IrOp::RET)
-            return false; // bloque sin terminador limpio
-        if (last.op == IrOp::RET) has_ret = true;
-        for (const auto &in : b.instrs) {
-            if ((in.op == IrOp::CALL || in.op == IrOp::TAILCALL) &&
-                in.func_name == fn.name)
-                return false; // recursion
-            if (in.op == IrOp::RAW_ASM || in.op == IrOp::INLINE_ASM)
-                return false;
-            if (in.op == IrOp::SWITCH_DENSE || !in.jump_targets.empty())
-                return false; // jump tables: no soportado v1
-            // ALLOCA: inlinar una fn con ALLOCA dentro de un loop del caller
-            // crece la pila monotonicamente (bug P0.6).  El single-block
-            // inliner ya lo rechaza; replicamos aqui.
-            if (in.op == IrOp::ALLOCA) return false;
-            // Cleanup RAII / liberacion explicita: inlinar una fn que libera
-            // recursos (dtor via CALLVIRT, free) puede duplicar/reordenar el
-            // cleanup respecto al modelo de scope del caller -> resultado
-            // incorrecto (visto en 101_raii).  Conservador: no inlinar.
-            if (in.op == IrOp::RAW_FREE || in.op == IrOp::SMARTPTR_FREE)
-                return false;
-            // Ops con semantica de FRAME/scope/runtime que inlinar puede
-            // romper (anidamiento de exception frames, save_live_regs del GC,
-            // registros de reflexion ligados al scope, dispatch dinamico):
-            // conservador, no inlinar el callee que las contenga.  En
-            // particular la CREACION de objetos (NEWOBJ/__new_X) + dtor
-            // (CALLVIRT) DENTRO de un callee con loop rompia el save_live_regs
-            // del GC al inlinarse (101_raii caso_6).  Esto sigue permitiendo
-            // inlinar metodos PUROS (getters/setters/operadores field-only) que
-            // es el objetivo del bucket method-call.
-            switch (in.op) {
-            case IrOp::THROW:
-            case IrOp::TRYENTER:
-            case IrOp::TRYLEAVE:
-            case IrOp::RETHROW:
-            case IrOp::FINDCLASS:
-            case IrOp::REFLECT_COUNT:
-            case IrOp::REFLECT_AT:
-            case IrOp::NEWOBJ:
-            case IrOp::NEWOBJS:
-            case IrOp::GC_ALLOC:
-            case IrOp::GC_ALLOCP:
-            case IrOp::CALLVIRT:
-            case IrOp::CALLM:
-            case IrOp::CALLITF: return false;
-            default: break;
-            }
-            // CALL a un helper __new_X (constructor de objeto): misma razon.
-            if (in.op == IrOp::CALL &&
-                is_new_helper_name(in.func_name, nullptr))
-                return false;
-            if (k == 0 && in.op == IrOp::PHI) return false; // entry con PHI
-        }
-    }
-    if (!has_ret) return false;
-    // Single-block <=12: ya lo cubre el inliner single-block (threshold 12).
-    // El MB inliner rellena el GAP: single-block 13..threshold (metodos puros
-    // que el single-block rechaza por tamano, p.ej. operadores `__add__`) +
-    // cualquier multi-bloque <=threshold.
-    if (fn.blocks.size() == 1 && total <= 12) return false;
-    return total <= threshold;
-}
+/* `is_inlineable_mb` vivia AQUI y recorria el cuerpo entero de CADA funcion
+ * del modulo solo para clasificarla -- el programa entero, una vez por pasada.
+ * Se mudo a `analysis/facts/inline_facts.h`, que es ahora el UNICO sitio que
+ * abre un cuerpo para decidir inlineabilidad.
+ *
+ * Y la decision recibe el HECHO, no la funcion, a proposito: el dia que un
+ * pase necesite mirar algo que el hecho no lleva, NO COMPILA, y tiene que
+ * anadir su propiedad al productor.  Un resumen que se puede puentear deja de
+ * ser la fuente de verdad en cuanto alguien tenga prisa, y ese fallo no da un
+ * error: da otra decision. */
 
 /* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
 static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
@@ -12732,10 +12494,16 @@ static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
     auto tiene_variante_por_motor = [&](const std::string &nombre) -> bool {
         return name_to_idx.count(nombre + "__jit") != 0;
     };
+    /* La clasificacion sale del HECHO, no de recorrer el cuerpo: ver
+     * `analysis/facts/inline_facts.h`.  Esto era un recorrido del programa
+     * entero por pasada, y ademas obligaba a tener todos los cuerpos a mano. */
     std::vector<bool> ok(mod.functions.size(), false);
-    for (size_t i = 0; i < mod.functions.size(); ++i)
-        ok[i] = is_inlineable_mb(mod.functions[i], threshold) &&
+    for (size_t i = 0; i < mod.functions.size(); ++i) {
+        const analysis::InlineFacts f =
+            analysis::compute_inline_facts(mod.functions[i]);
+        ok[i] = analysis::inlineable_multi_block(f, threshold) &&
                 !tiene_variante_por_motor(mod.functions[i].name);
+    }
 
     bool any = false;
     for (size_t fi = 0; fi < mod.functions.size(); ++fi) {

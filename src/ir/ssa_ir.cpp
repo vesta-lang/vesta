@@ -2261,4 +2261,16 @@ void ir_correr_indices_de_datos(std::vector<IrFunction> &fns,
             }
 }
 
+bool is_new_helper_name(const std::string &name, std::string *out_class) {
+    if (name.size() <= 6) return false;
+    if (name.rfind("__new_", 0) != 0) return false;
+    /* Excluir variantes shared (`__new_X_shared`) que registran el objeto en
+     * la SharedHandleTable -- eliminar ese alloc cambia shared_heap_live_count
+     * (efecto observable), igual que en is_pure_allocator_name. */
+    if (name.size() >= 7 && name.compare(name.size() - 7, 7, "_shared") == 0)
+        return false;
+    if (out_class) *out_class = name.substr(6);
+    return true;
+}
+
 } // namespace ir
