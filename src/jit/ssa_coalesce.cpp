@@ -300,7 +300,20 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
         }
         return x;
     };
-    std::vector<LiveInterval> merged = iv; // clusters (valido en el rep)
+    /* Que valores tenian ALGUN rango vivo ANTES de fundir.  La decision de mas
+     * abajo mira eso -- "este valor no vive en ningun sitio, no hay nada que
+     * coalescer" -- y tiene que ser del intervalo ORIGINAL: fundir solo ANADE
+     * rangos, asi que un valor vacio deja de estarlo en cuanto recibe los de
+     * otro, y preguntarselo a `merged` contestaria que si a destiempo. */
+    std::vector<uint8_t> had_range(NV, 0);
+    for (uint32_t v = 0; v < NV; ++v)
+        had_range[v] = iv[v].empty() ? 0u : 1u;
+
+    /* Los clusters (valido en el rep).  Se LLEVA `iv`, no lo copia: copiarlo
+     * duplicaba el `vector<LiveRange>` de cada valor -- 808.499 reservas al
+     * compilar 441.089 lineas -- y con `had_range` ya no hace falta el
+     * original. */
+    std::vector<LiveInterval> merged = std::move(iv);
     std::vector<std::vector<uint32_t>> members(NV);
     for (uint32_t v = 0; v < NV; ++v)
         members[v].push_back(v);
@@ -602,7 +615,7 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                     !back_edges.count(((uint64_t)a.block << 32) | (uint64_t)b))
                     continue;
                 if (d >= NV || s >= NV || d == s) continue;
-                if (iv[d].empty() || iv[s].empty()) continue;
+                if (!had_range[d] || !had_range[s]) continue;
                 if (is_phi_dst[s]) continue; // no cadenas de phis (cross-merge)
                 /* NO coalescer con un arg CONSTANTE ni con un phi cuyo dst sea
                  * const: una const tiene valor FIJO (rematerializable), no
