@@ -2215,28 +2215,32 @@ static bool fold_strcat_impl(IrModule &mod) {
     bool changed = false;
     for (auto &fn : mod.functions) {
         // Definicion de cada SSA value, para reconocer `%a = strmake(lit, N)`.
-        // Una sola pasada: el IR es SSA, cada value se define una vez.
-        std::unordered_map<IrValueId, const IrInstr *> def;
+        // Una sola pasada: el IR es SSA, cada value se define una vez.  Y un
+        // vector plano indexado por el id, que es denso: el `unordered_map`
+        // que habia cobraba un nodo en el monton por valor definido.
+        util::NamedVector<const IrInstr *, scratch::FoldStrcatDef> def(
+            fn.values.size(), nullptr);
         for (const auto &bb : fn.blocks)
             for (const auto &in : bb.instrs)
-                if (in.dst != IR_NO_VALUE) def.emplace(in.dst, &in);
+                if (in.dst != IR_NO_VALUE && in.dst < def.size())
+                    def[in.dst] = &in;
 
         // Si @p v es un STRMAKE sobre un literal de tamano constante, devuelve
         // el indice de su entrada en static_data y su longitud.
         auto literal_de = [&](IrValueId v, uint64_t &slot,
                               uint64_t &len) -> bool {
-            auto it = def.find(v);
-            if (it == def.end() || it->second->op != IrOp::STRMAKE)
-                return false;
-            const IrInstr &mk = *it->second;
+            const IrInstr *d = v < def.size() ? def[v] : nullptr;
+            if (d == nullptr || d->op != IrOp::STRMAKE) return false;
+            const IrInstr &mk = *d;
             if (mk.operands.size() != 2) return false;
-            auto ia = def.find(mk.operands[0]);
-            auto il = def.find(mk.operands[1]);
-            if (ia == def.end() || il == def.end()) return false;
-            if (ia->second->op != IrOp::STR_LIT_ADDR) return false;
-            if (il->second->op != IrOp::CONST) return false;
-            slot = ia->second->imm;
-            len = il->second->imm;
+            const IrValueId va = mk.operands[0], vl = mk.operands[1];
+            const IrInstr *a = va < def.size() ? def[va] : nullptr;
+            const IrInstr *l = vl < def.size() ? def[vl] : nullptr;
+            if (a == nullptr || l == nullptr) return false;
+            if (a->op != IrOp::STR_LIT_ADDR) return false;
+            if (l->op != IrOp::CONST) return false;
+            slot = a->imm;
+            len = l->imm;
             if (slot >= mod.static_data.size()) return false;
             // La longitud tiene que ser la del literal: si el codigo pide otra
             // (una vista parcial), no es "la cadena entera" y no se pliega.
@@ -8069,21 +8073,28 @@ static bool reassoc_impl(IrFunction &fn) {
 //      los merges; los hechos se generan en las aristas de BR_COND cuyo
 //      cond es CMP_NE/CMP_EQ contra 0 o ISNULL.  Captura tambien loops.
 static bool elide_unwrap_impl(IrFunction &fn) {
-    std::unordered_map<IrValueId, IrOp> def_op;
-    std::unordered_map<IrValueId, const IrInstr *> def_instr;
+    /* Que instruccion define cada valor, indexado por su id.  Los ids son
+     * DENSOS, asi que un vector plano contesta con un indice y en UNA reserva;
+     * es lo que ya hacen `fold_null_checks` y el scratch de pase en este mismo
+     * fichero.
+     *
+     * Aqui habia DOS `unordered_map`, o sea un nodo en el monton por valor
+     * definido y por partida doble -- 3.087.258 reservas al compilar 441.089
+     * lineas --.  Y el segundo sobraba entero: la operacion que define un
+     * valor no es un dato aparte, es el `op` de esa misma instruccion. */
+    util::NamedVector<const IrInstr *, scratch::ElideUnwrapDefIns> def_instr(
+        fn.values.size(), nullptr);
     for (const auto &bb : fn.blocks)
         for (const auto &in : bb.instrs)
-            if (in.dst != IR_NO_VALUE) {
-                def_op[in.dst] = in.op;
+            if (in.dst != IR_NO_VALUE && in.dst < def_instr.size())
                 def_instr[in.dst] = &in;
-            }
 
     auto globally_nonnull = [&](IrValueId v) -> bool {
         if (v < fn.values.size() && fn.values[v].is_const &&
             fn.values[v].const_val != 0)
             return true;
-        auto it = def_op.find(v);
-        if (it == def_op.end()) return false;
+        const IrInstr *d = v < def_instr.size() ? def_instr[v] : nullptr;
+        if (d == nullptr) return false;
         // Allocaciones de OBJETO (clase) NUNCA devuelven null por contrato del
         // lenguaje: OOM lanza un fatal, no un null (`new X()` es non-null,
         // nunca se null-chequea).  Asi el unwrap del `!!`/nonnull sobre un
@@ -8091,17 +8102,13 @@ static bool elide_unwrap_impl(IrFunction &fn) {
         // desbloquea el scalar-replacement (sin elidir, el UNWRAP cuenta como
         // escape).  NOTA: RAW_ALLOC (malloc) SI puede devolver null en OOM ->
         // NO se incluye (su null-check debe preservarse).
-        if (it->second == IrOp::NEWOBJ || it->second == IrOp::NEWOBJS ||
-            it->second == IrOp::GC_ALLOC || it->second == IrOp::GC_ALLOCP)
+        if (d->op == IrOp::NEWOBJ || d->op == IrOp::NEWOBJS ||
+            d->op == IrOp::GC_ALLOC || d->op == IrOp::GC_ALLOCP)
             return true;
-        if (it->second == IrOp::CALL) {
-            auto di = def_instr.find(v);
-            if (di != def_instr.end() &&
-                is_new_helper_name(di->second->func_name, nullptr))
-                return true;
-        }
-        return it->second == IrOp::ALLOCA || it->second == IrOp::STR_LIT_ADDR ||
-               it->second == IrOp::LABEL_ADDR || it->second == IrOp::UNWRAP;
+        if (d->op == IrOp::CALL)
+            return is_new_helper_name(d->func_name, nullptr);
+        return d->op == IrOp::ALLOCA || d->op == IrOp::STR_LIT_ADDR ||
+               d->op == IrOp::LABEL_ADDR || d->op == IrOp::UNWRAP;
     };
 
     auto is_zero = [&](IrValueId v) -> bool {
@@ -8115,9 +8122,9 @@ static bool elide_unwrap_impl(IrFunction &fn) {
     // `maybe` directo -> hay que normalizar ambos a la misma raiz.
     auto resolve_alias = [&](IrValueId v) -> IrValueId {
         for (int g = 0; g < 64; ++g) {
-            auto it = def_instr.find(v);
-            if (it == def_instr.end()) break;
-            const IrInstr *d = it->second;
+            if (v >= def_instr.size()) break;
+            const IrInstr *d = def_instr[v];
+            if (d == nullptr) break;
             if ((d->op == IrOp::BITCAST || d->op == IrOp::MOV) &&
                 !d->operands.empty())
                 v = d->operands[0];
@@ -8133,9 +8140,9 @@ static bool elide_unwrap_impl(IrFunction &fn) {
     auto edge_fact = [&](const IrInstr &term, IrValueId &tested,
                          bool &true_nonnull) -> bool {
         if (term.op != IrOp::BR_COND || term.operands.empty()) return false;
-        auto it = def_instr.find(term.operands[0]);
-        if (it == def_instr.end()) return false;
-        const IrInstr *c = it->second;
+        const IrValueId cv = term.operands[0];
+        const IrInstr *c = cv < def_instr.size() ? def_instr[cv] : nullptr;
+        if (c == nullptr) return false;
         if (c->op == IrOp::ISNULL && !c->operands.empty()) {
             tested = resolve_alias(c->operands[0]); // isnull true => ES null
             true_nonnull = false;
