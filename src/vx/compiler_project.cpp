@@ -1957,6 +1957,16 @@ CompileResult compile_vx_project(
                        ahora - marca)
                        .count();
         marca = ahora;
+        /* Y lo que la fase que termina solto, de vuelta al reparto comun antes
+         * de que empiece la siguiente.
+         *
+         * Es EL sitio: el asignador documenta esta llamada como "de entre
+         * fases y no algo para un bucle caliente", y una frontera de fase es
+         * exactamente eso -- ya estaba puesto el corchete para cronometrar --.
+         * Lo que recupera son los tramos que quedaron aparcados: una fase que
+         * suelta mucho de un tamano que la siguiente no pide dejaba esa memoria
+         * fuera de circulacion hasta el final. */
+        (void)util::host_span_trim();
         if (siguiente != nullptr) util::san_mark(siguiente);
     };
     util::san_mark("vx.phase.resolve");
@@ -4123,6 +4133,11 @@ CompileResult compile_vx_project(
             release_compiled_module(work[i], i + 1 == work.size());
             account_and_spill(work, i, ir_ram_live, res.diagnostics,
                               verbose_compile);
+            /* Un modulo terminado es una frontera tan buena como una fase: su
+             * AST y su comprobador de tipos acaban de irse, y son megabytes de
+             * un tamano que el modulo siguiente no tiene por que volver a
+             * pedir.  Una vez por modulo no es un bucle caliente. */
+            (void)util::host_span_trim();
         }
     } else {
         // Path paralelo: agrupar modulos por nivel topologico.
