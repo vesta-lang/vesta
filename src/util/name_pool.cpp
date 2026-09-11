@@ -15,6 +15,8 @@
 
 #include "util/name_pool.h"
 
+#include "util/thread_owned.h" // una ranura por hilo, sin `thread_local`
+
 #include <mutex>
 #include <unordered_set>
 
@@ -45,8 +47,37 @@ std::mutex &pool_mutex() {
 } // namespace
 
 const std::string *intern_name(const std::string &name) {
+    /* Lo ULTIMO que pidio este hilo, para no tomar el cerrojo global cuando la
+     * respuesta es la misma que la vez anterior -- que es lo normal --.
+     *
+     * El bajado pide el nombre del fichero una vez por CONVERSION (desde
+     * `SourceLoc::set_file`, que llama `cast_if_needed`), o sea decenas de miles
+     * de veces seguidas, y siempre el mismo: un hilo baja un fichero cada vez.
+     * Medido con VTune sobre 441.000 lineas, ese mutex era el **10,8 % del CPU
+     * del compilador** y el **72 % de la fase de bajado**, con todos los hilos
+     * haciendo cola en el.
+     *
+     * Comparar la cadena es mas barato que tomar un mutex, y ademas casi siempre
+     * corta en el primer paso (`std::string::operator==` mira el tamano antes
+     * que los bytes).
+     *
+     * El puntero se puede guardar porque el pozo es un `unordered_set`: sus
+     * nodos no se mueven al crecer, asi que lo internado vive lo que el proceso.
+     *
+     * Por RANURA de hilo y NUNCA `thread_local`: en MinGW la TLS es emulada y
+     * cuelga con hilos que nacen y mueren, que es justo lo que hace el reparto
+     * del compilador. */
+    struct Ultimo {
+        const std::string *ptr = nullptr;
+    };
+    static util::ThreadOwned<Ultimo> ultimo;
+    Ultimo &u = ultimo.get();
+    if (u.ptr != nullptr && *u.ptr == name) return u.ptr;
+
     std::lock_guard<std::mutex> guard(pool_mutex());
-    return &*pool().insert(name).first;
+    const std::string *p = &*pool().insert(name).first;
+    u.ptr = p;
+    return p;
 }
 
 // Definido en la cabecera (variable en linea): ver `empty_name`.
