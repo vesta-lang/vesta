@@ -7390,9 +7390,17 @@ static void interp_sink_addr_adds(IrFunction &fn) {
         }
     }
     for (auto &bb : fn.blocks) {
-        // add_at[dst] = indice de un `add A, B` single-use en ESTE bloque.
-        // mul_at[dst] = indice de un `mul idx, pow2(<=128)` single-use.  La
-        // fusion posterior decide disp (const) vs index (reg) vs index<<scale.
+        /* add_at[dst] = indice de un `add A, B` single-use en ESTE bloque.
+         * mul_at[dst] = indice de un `mul idx, pow2(<=128)` single-use.  La
+         * fusion posterior decide disp (const) vs index (reg) vs index<<scale.
+         *
+         * Y se quedan como MAPAS, aunque la clave sea un id denso.  Se probo
+         * el vector plano con lista de tocados -- que es lo que paga en los
+         * demas sitios -- y sale PEOR: +106.489 reservas.  Estos dos son POR
+         * BLOQUE y casi siempre estan vacios, y un `unordered_map` vacio no
+         * reserva nada; las entradas reales son ~73.500 en toda la carga, una
+         * por funcion.  Cambiarlos es sustituir un mapa gratis por tres
+         * vectores en el monton. */
         std::unordered_map<IrValueId, size_t> add_at, mul_at;
         for (size_t j = 0; j < bb.instrs.size(); ++j) {
             const IrInstr &in = bb.instrs[j];

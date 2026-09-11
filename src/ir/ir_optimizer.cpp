@@ -2975,18 +2975,31 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
         return -1;
     };
 
-    /* Mapa fieldaddr_vid -> offset (direcciones `this + const`). */
-    std::unordered_map<IrValueId, uint32_t> field_addr;
+    /* Dos tablas indexadas por el id del valor, que en una funcion va de cero
+     * a `values.size()`.  El "si lo hay" va en un vector aparte y no en un
+     * valor centinela: un desplazamiento de campo CERO es legitimo, y una
+     * marca que se confunde con un dato no da un error, da otro resultado.
+     *
+     * Eran dos `unordered_map`, o sea un nodo en el monton por entrada --
+     * 808.499 reservas al compilar 441.089 lineas solo el de constantes --
+     * sobre un espacio de ids denso. */
+    const size_t n_ctor_values = ctor->values.size();
+    /* fieldaddr_vid -> offset (direcciones `this + const`). */
+    std::vector<uint32_t> field_off(n_ctor_values, 0);
+    std::vector<uint8_t> is_field_addr(n_ctor_values, 0);
     /* CONST values definidos en el ctor (para resolver offsets y store-vals).
      */
-    std::unordered_map<IrValueId, uint64_t> const_vals;
+    std::vector<uint64_t> const_val_of(n_ctor_values, 0);
+    std::vector<uint8_t> is_const_val(n_ctor_values, 0);
 
     const auto &blk = ctor->blocks[0];
 
     /* Pasada 1: recolectar consts. */
     for (const auto &ins : blk.instrs) {
-        if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
-            const_vals[ins.dst] = ins.imm;
+        if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE &&
+            ins.dst < n_ctor_values) {
+            const_val_of[ins.dst] = ins.imm;
+            is_const_val[ins.dst] = 1;
         }
     }
 
@@ -2999,7 +3012,8 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
         case IrOp::RET:
             /* ret.void: no debe retornar `this` ni un derivado. */
             for (auto v : ins.operands) {
-                if (v == this_vid || field_addr.count(v))
+                if (v == this_vid ||
+                    (v < n_ctor_values && is_field_addr[v]))
                     return bail("ctor retorna this/field-addr");
             }
             break;
@@ -3024,15 +3038,17 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
                 offv = a;
             }
             if (base == this_vid) {
-                auto it = const_vals.find(offv);
-                if (it == const_vals.end())
+                if (offv >= n_ctor_values || !is_const_val[offv])
                     return bail("offset de campo no const");
-                if (ins.dst == IR_NO_VALUE) return bail("field-addr sin dst");
-                field_addr[ins.dst] = static_cast<uint32_t>(it->second);
+                if (ins.dst == IR_NO_VALUE || ins.dst >= n_ctor_values)
+                    return bail("field-addr sin dst");
+                field_off[ins.dst] = static_cast<uint32_t>(const_val_of[offv]);
+                is_field_addr[ins.dst] = 1;
             } else {
                 /* ADD sin this; pero si algun operando es una field-addr
                  * derivada, no lo soportamos. */
-                if (field_addr.count(a) || field_addr.count(b))
+                if ((a < n_ctor_values && is_field_addr[a]) ||
+                    (b < n_ctor_values && is_field_addr[b]))
                     return bail("aritmetica sobre field-addr");
             }
             break;
@@ -3047,10 +3063,9 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             if (addr == this_vid) {
                 off = 0;
             } else {
-                auto it = field_addr.find(addr);
-                if (it == field_addr.end())
+                if (addr >= n_ctor_values || !is_field_addr[addr])
                     return bail("STORE a addr no-campo");
-                off = it->second;
+                off = field_off[addr];
             }
             /* val debe ser un param (>=1) o un const. */
             SrFieldInit fi;
@@ -3065,11 +3080,10 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
                     return bail("param fuera de rango");
                 fi.field_type = ctor->values[val].type;
             } else {
-                auto cit = const_vals.find(val);
-                if (cit == const_vals.end())
+                if (val >= n_ctor_values || !is_const_val[val])
                     return bail("store-val no es param ni const (cast/expr)");
                 fi.kind = SrFieldInit::CONST;
-                fi.const_val = cit->second;
+                fi.const_val = const_val_of[val];
                 fi.field_type = (val < ctor->values.size())
                                     ? ctor->values[val].type
                                     : IrType::I64;
