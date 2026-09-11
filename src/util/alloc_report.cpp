@@ -1055,6 +1055,28 @@ const char *format_name(const char *raw) {
 void report_alloc_sites() {
     if (!flag_on(FlagId::HostAllocSites)) return;
 
+    /* LO PRIMERO DE TODO, antes de que este informe reserve un solo byte.
+     *
+     * El asignador saca SU volcado desde otro manejador de salida, y el orden
+     * los pone detras de este: lo que se lea ahi incluye todo lo que se haya
+     * reservado AQUI.  Y no es poco -- construir la tabla de simbolos copia
+     * ciento treinta y dos mil nombres, y dar formato a cada sitio desmangla,
+     * reescribe plantillas y ajusta al ancho de la consola, todo con cadenas
+     * que crecen --, asi que el sitio que encabeza la lista de "sin declarar"
+     * del asignador acaba siendo el propio instrumento de medida.
+     *
+     * La correccion no es DECLARAR esas reservas para que desaparezcan de esa
+     * lista: eso es lo contrario de lo que se arreglo aqui en su dia, cuando el
+     * informe tomaba la foto antes de construir la tabla y se dejaba fuera su
+     * propio coste -- el sitio que mas reservaba del proceso entero no salia --.
+     * Quien mide tiene que APARECER entre lo medido.
+     *
+     * Lo que faltaba es poder RESTARLO, y para eso hay que saber cuanto es.  Se
+     * lee al entrar, se lee al salir, y la diferencia se dice al final con las
+     * cifras del asignador todavia por imprimir.  Dos numeros y una resta, en
+     * un camino que corre una vez por proceso. */
+    const HostAllocStats st_on_entry = host_alloc_stats();
+
     /* Todo lo que sigue se acumula aqui y sale de una sola escritura.  Ver
      * `Sink`: con la cadena de inline debajo de cada sitio esto son miles de
      * lineas, y `stderr` escribe cada una al sistema por separado. */
@@ -1506,6 +1528,31 @@ void report_alloc_sites() {
                      "va DESCONTADO de las cifras de arriba, asi que son lo que "
                      "cada sitio se gano y no una cota superior\n",
                      (unsigned long long)evicted);
+
+    /* LO QUE HA COSTADO MIRAR, dicho antes de que se lea nada suyo.
+     *
+     * El volcado del asignador sale despues de este informe, desde su propio
+     * manejador de salida, asi que sus cifras llevan dentro todo lo que se
+     * acaba de reservar aqui.  Sin este renglon eso no se ve, y lo que se lee
+     * es una cuenta del programa con la del instrumento sumada: el sitio que
+     * encabeza su lista de "sin declarar" resulta ser el formateador de esta
+     * misma pagina, y nadie tiene con que restarlo.
+     *
+     * Se lee ANTES del vaciado a proposito, para que salga pegado al informe
+     * que lo explica y no suelto entre dos volcados.  Ver `st_on_entry`. */
+    const HostAllocStats st_on_exit = host_alloc_stats();
+    const uint64_t own_small = st_on_exit.small_allocs - st_on_entry.small_allocs;
+    const uint64_t own_large = st_on_exit.large_allocs - st_on_entry.large_allocs;
+    if (own_small != 0 || own_large != 0)
+        out.add(
+                     "[reservas] MIRAR COSTO %llu reservas pequenas y %llu "
+                     "grandes: leer los simbolos y dar formato a esta pagina.  "
+                     "Las cifras del asignador que salen a continuacion las "
+                     "llevan dentro, porque su volcado corre despues de este.  "
+                     "Restalas antes de compararlas con una corrida sin "
+                     "`VESTA_HOST_ALLOC_SITES`.\n",
+                     (unsigned long long)own_small,
+                     (unsigned long long)own_large);
 
     /* Y AQUI sale todo, de una vez.  Vaciar antes de volver importa: esto corre
      * desde un manejador de salida y detras de el ya no queda nadie que lo
