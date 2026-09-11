@@ -60,8 +60,41 @@ class EffectAnalysis {
   public:
     EffectAnalysis() = default;
 
-    /// Efecto LOCAL de un nodo IR (intrinseco al opcode + operandos). Cacheado.
-    /// Fase 1 rellena el mapeo real; Fase 0 devuelve el neutro Complete.
+    /**
+     * @brief Efecto LOCAL de un nodo del IR: lo intrinseco a su opcode y sus
+     *        operandos.
+     *
+     * @par Por que NO se memoriza
+     * Lo estaba, en un mapa con la DIRECCION de la instruccion como clave, y
+     * eso tenia dos problemas de distinto tipo.
+     *
+     * El primero es que una direccion no es una identidad: es una POSICION.
+     * Si el vector de instrucciones de un bloque se reasigna, las claves
+     * viejas o cuelgan o -- peor -- coinciden con otra instruccion que cayo en
+     * esa direccion, y entonces se contesta con el efecto de OTRO nodo.  Hoy
+     * no pasa porque nadie pregunta despues de mutar, pero eso es una
+     * propiedad del orden en que corren los pases, no una garantia.  Y por lo
+     * mismo no se podia bajar al almacen del ASA como los demas dominios: una
+     * direccion no significa nada fuera de esta corrida.
+     *
+     * El segundo es que no servia para nada.  Sus DOS consumidores -- la
+     * comprobacion de regiones y el informe de efectos -- recorren la funcion
+     * en linea recta, una visita por instruccion, asi que cada consulta era un
+     * fallo.  Medido sobre 21 modulos y 441.000 lineas: 808.500 inserciones,
+     * cero aciertos, y 173 MiB de nodos de hash vivos hasta el final de la
+     * compilacion -- el nueve por ciento del pico -- por no recalcular algo
+     * que sale del opcode.
+     *
+     * Quitar el memo no quita conocimiento: la respuesta es la misma, solo que
+     * se deriva cuando se pide.  El dia que aparezca un consumidor que
+     * pregunte dos veces por el mismo nodo, la cache vuelve -- con la clave
+     * que usan los demas dominios, la funcion y la POSICION ORDINAL dentro de
+     * ella, que si es cacheable y si sobrevive a una reasignacion.
+     *
+     * @param fn  La funcion a la que pertenece.
+     * @param ins La instruccion.
+     * @return Su efecto local.
+     */
     EffectAnalysisResult local(const ir::IrFunction &fn,
                                const ir::IrInstr &ins);
 
@@ -152,7 +185,8 @@ class EffectAnalysis {
     void set_backend(Backend b) {
         if (env_.backend == b) return;
         env_.backend = b;
-        local_cache_.clear();
+        /* El efecto local no se guarda, asi que no hay nada suyo que tirar:
+         * la proxima consulta ya lo deriva con el backend nuevo. */
         summary_cache_.clear();
         dirty_.clear();
         module_dirty_ = true;
@@ -199,7 +233,6 @@ class EffectAnalysis {
     /// Resumenes de frontera con los que calcular rangos, si alguien los dio.
     /// Nulo = se calculan sin ellos, que es lo que valia antes de tenerlos.
     const analysis::RangeSummaries *resumenes_ = nullptr;
-    std::unordered_map<const void *, EffectAnalysisResult> local_cache_;
     std::unordered_map<std::string, FunctionSummary> summary_cache_;
     std::unordered_map<std::string, bool> dirty_; // fn -> sucio
     ModuleSummary module_cache_;

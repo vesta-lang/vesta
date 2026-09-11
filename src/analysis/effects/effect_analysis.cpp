@@ -83,13 +83,10 @@ const PointsTo &EffectAnalysis::points_to_of(const ir::IrFunction &fn) {
 
 EffectAnalysisResult EffectAnalysis::local(const ir::IrFunction &fn,
                                            const ir::IrInstr &ins) {
-    const void *key = static_cast<const void *>(&ins);
-    auto it = local_cache_.find(key);
-    if (it != local_cache_.end()) return it->second;
-    EffectAnalysisResult r =
-        effects_of_instr(fn, facts_of(fn), points_to_of(fn), ins, env_);
-    local_cache_.emplace(key, r);
-    return r;
+    /* Se deriva, no se memoriza.  El porque -- y la medida -- estan en la
+     * cabecera: el memo que habia aqui iba con la DIRECCION de la instruccion
+     * por clave, o sea con su posicion, y ademas nunca acertaba. */
+    return effects_of_instr(fn, facts_of(fn), points_to_of(fn), ins, env_);
 }
 
 EfectoEnLlamada EffectAnalysis::at_call_site(const ir::IrFunction &caller,
@@ -673,7 +670,10 @@ EffectAnalysis::program_summary(const std::vector<const ir::IrModule *> &mods) {
 
 void EffectAnalysis::invalidate_node(const ir::IrFunction &fn,
                                      const ir::IrInstr &ins) {
-    local_cache_.erase(static_cast<const void *>(&ins));
+    /* Del nodo ya no hay nada que borrar: su efecto local se deriva cuando se
+     * pide.  Lo que si caduca es el resumen de la funcion, que si esta
+     * cacheado. */
+    (void)ins;
     invalidate_function(fn.name);
 }
 
@@ -691,7 +691,6 @@ void EffectAnalysis::invalidate_function(const std::string &fn_name) {
 }
 
 void EffectAnalysis::clear() {
-    local_cache_.clear();
     summary_cache_.clear();
     dirty_.clear();
     module_cache_.fns.clear();
