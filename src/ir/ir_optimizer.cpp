@@ -13014,17 +13014,43 @@ static bool load_narrow_impl(IrFunction &fn) {
         size_t bi;
         size_t ii;
     };
-    std::unordered_map<IrValueId, std::vector<UseRef>> uses;
+    /* Quien usa cada valor, en formato COMPACTO: dos vectores y nada mas.
+     *
+     * El `unordered_map<IrValueId, vector<UseRef>>` que habia aqui cobraba DOS
+     * reservas por valor usado -- el nodo del hash y el vector de dentro --
+     * sobre un espacio de ids que es denso: 1.616.989 reservas al compilar
+     * 441.089 lineas.  Un vector de vectores solo quitaria la primera.
+     *
+     * Dos pasadas, contar y llenar, que es lo que ya hace @c UseDefFacts.  El
+     * truco del final: al llenar con `use_end[v]++`, cada entrada acaba
+     * apuntando al FINAL de su valor, asi que el principio de `v` es el final
+     * del anterior.  De ahi que se llame `use_end` y que el primero sea cero. */
+    const size_t n_values = fn.values.size();
+    util::NamedVector<uint32_t, scratch::LoadNarrowUses> use_end(n_values + 1,
+                                                                 0);
+    for (const auto &bb : fn.blocks)
+        for (const auto &ins : bb.instrs) {
+            for (IrValueId op : ins.operands)
+                if (op != IR_NO_VALUE && op < n_values) ++use_end[op + 1];
+            for (const auto &pa : ins.phi_args)
+                if (pa.value != IR_NO_VALUE && pa.value < n_values)
+                    ++use_end[pa.value + 1];
+        }
+    for (size_t i = 1; i < use_end.size(); ++i)
+        use_end[i] += use_end[i - 1];
+
+    util::NamedVector<UseRef, scratch::LoadNarrowUseRefs> use_ref(
+        use_end.empty() ? 0 : use_end.back());
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const auto &bb = fn.blocks[bi];
         for (size_t ii = 0; ii < bb.instrs.size(); ++ii) {
             const auto &ins = bb.instrs[ii];
-            for (IrValueId op : ins.operands) {
-                if (op != IR_NO_VALUE) uses[op].push_back({bi, ii});
-            }
-            for (const auto &pa : ins.phi_args) {
-                if (pa.value != IR_NO_VALUE) uses[pa.value].push_back({bi, ii});
-            }
+            for (IrValueId op : ins.operands)
+                if (op != IR_NO_VALUE && op < n_values)
+                    use_ref[use_end[op]++] = {bi, ii};
+            for (const auto &pa : ins.phi_args)
+                if (pa.value != IR_NO_VALUE && pa.value < n_values)
+                    use_ref[use_end[pa.value]++] = {bi, ii};
         }
     }
 
@@ -13057,10 +13083,20 @@ static bool load_narrow_impl(IrFunction &fn) {
                 IrValueId v = worklist.back();
                 worklist.pop_back();
 
-                auto it = uses.find(v);
-                if (it == uses.end()) continue; // no uses -> trivially safe
+                /* Fuera del pool no hay tabla que mirar, y eso NO es "no tiene
+                 * usos": es no saber.  Estrechar una carga hay que probarlo,
+                 * asi que se renuncia. */
+                if (v >= n_values) {
+                    safe = false;
+                    break;
+                }
+                /* Los usos de `v` son `[fin del anterior, fin de v)`; ver el
+                 * comentario de `use_end` donde se llena. */
+                const uint32_t desde = v == 0 ? 0u : use_end[v - 1];
+                const uint32_t hasta = use_end[v];
 
-                for (const UseRef &u : it->second) {
+                for (uint32_t ui = desde; ui < hasta; ++ui) {
+                    const UseRef &u = use_ref[ui];
                     const IrInstr &user = fn.blocks[u.bi].instrs[u.ii];
 
                     /* STORE del mismo tipo: el valor solo se usa como
