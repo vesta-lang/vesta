@@ -4376,6 +4376,13 @@ CompileResult compile_vx_project(
     for (const auto &fn : merged.functions)
         merged_fn_names.insert(fn.name);
 
+    /* SE PROBO A RESERVAR `merged.functions` aqui -- el total se sabe sumando
+     * lo que trae cada modulo -- y NO PAGA: pico 2.848 -> 2.849 MiB y tiempo
+     * 1.660 -> 1.675 ms, las dos cosas dentro del ruido.  Las diecisiete
+     * reasignaciones son trafico que el asignador recicla, no memoria
+     * residente, y el pico esta en otra fase.  Se deja dicho para que no se
+     * vuelva a intentar a ciegas. */
+
     for (size_t i = 0; i + 1 < work.size(); ++i) {
         if (shaken_indices.count(i)) continue; // L.25: skip dep no usado
         /* Y si sus cuerpos estaban en disco, vuelven AHORA -- justo antes de
