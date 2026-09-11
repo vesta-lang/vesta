@@ -6382,7 +6382,10 @@ static void compute_value_facts_into(const IrFunction &fn, FactsTable &facts) {
     auto have = [&](IrValueId v) -> bool { return facts.have(v); };
 
     // --- Semilla: constantes + variables de induccion acotadas. ---
-    std::unordered_map<IrValueId, int64_t> const_vids;
+    /* @c ConstMap y no un `unordered_map`: es la misma tabla, indexada por el
+     * id en vez de por un hash, y ya la usa el plegado de constantes de este
+     * mismo fichero.  El mapa cobraba un nodo en el monton por constante. */
+    ConstMap const_vids(fn.values.size());
     for (const auto &bb : fn.blocks)
         for (const auto &ins : bb.instrs)
             if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
@@ -6397,10 +6400,7 @@ static void compute_value_facts_into(const IrFunction &fn, FactsTable &facts) {
                 facts.set(ins.dst, f);
             }
     auto cst_of = [&](IrValueId v, int64_t &o) -> bool {
-        auto it = const_vids.find(v);
-        if (it == const_vids.end()) return false;
-        o = it->second;
-        return true;
+        return const_vids.get(v, o);
     };
     struct AddDef {
         IrValueId base;
@@ -6692,17 +6692,15 @@ elim_casts_with_facts(IrFunction &fn,
         return type_is_signed(t) ? static_cast<int>(type_narrow_bits(t)) : 0;
     };
     auto facts_of = [&](IrValueId v) -> ValueFacts { return facts.get(v); };
-    // Valor CONST de un vid (para la mascara del AND).
-    std::unordered_map<IrValueId, int64_t> const_vids;
+    // Valor CONST de un vid (para la mascara del AND).  @c ConstMap: indexada
+    // por el id, no por un hash; ver el plegado de constantes de este fichero.
+    ConstMap const_vids(fn.values.size());
     for (const auto &bb : fn.blocks)
         for (const auto &ins : bb.instrs)
             if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE)
                 const_vids[ins.dst] = static_cast<int64_t>(ins.imm);
     auto cst_of = [&](IrValueId v, int64_t &o) -> bool {
-        auto it = const_vids.find(v);
-        if (it == const_vids.end()) return false;
-        o = it->second;
-        return true;
+        return const_vids.get(v, o);
     };
 
     // Cada cast/mascara cuya redundancia PRUEBAN los KnownBits se reescribe a
@@ -7724,8 +7722,9 @@ static bool strength_reduce_with_facts(
         return (f.kz & SR_SIGN) || (f.has_range() && f.lo >= 0);
     };
 
-    /* Pre-build vid -> CONST imm. */
-    std::unordered_map<IrValueId, int64_t> const_vids;
+    /* Pre-build vid -> CONST imm.  @c ConstMap: indexada por el id, y crece
+     * sola si el pase crea valores nuevos, que es lo que hace mas abajo. */
+    ConstMap const_vids(fn.values.size());
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             if (ins.op == IrOp::CONST && ins.dst != IR_NO_VALUE) {
@@ -7735,10 +7734,10 @@ static bool strength_reduce_with_facts(
     }
     auto get_const_pos = [&](IrValueId v, uint64_t &out) -> bool {
         if (v == IR_NO_VALUE) return false;
-        auto it = const_vids.find(v);
-        if (it == const_vids.end()) return false;
-        if (it->second <= 0) return false; /* solo positivos para SR */
-        out = static_cast<uint64_t>(it->second);
+        int64_t c = 0;
+        if (!const_vids.get(v, c)) return false;
+        if (c <= 0) return false; /* solo positivos para SR */
+        out = static_cast<uint64_t>(c);
         return true;
     };
 
