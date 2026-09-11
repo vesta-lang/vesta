@@ -405,6 +405,13 @@ class VelSink {
 
 
   private:
+    /* LA SEGUNDA VISTA, por fin enchufada.  Fabrica los nodos que el
+     * ensamblador espera a partir de estos items, de uno en uno y sin pasar por
+     * texto.  Es amiga y no publica porque lo que necesita es el modelo de
+     * items, que es interno: sacarlo en la interfaz lo congelaria.
+     * Ver `ir/vel_node_stream.h`. */
+    friend class VelNodeStream;
+
     // -- El modelo: UNA fuente, dos vistas ---------------------------------
     //
     // Lo emitido se guarda como una secuencia de ITEMS: instrucciones tipadas
