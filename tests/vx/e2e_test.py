@@ -61,6 +61,23 @@ AOT_FMT = "pe" if sys.platform.startswith("win") else "elf"
 VM_EXE = None      # se rellena en main()
 TMP_ROOT = None    # se rellena en main()
 
+# El IDIOMA de los diagnosticos se FIJA, y no es un detalle de estilo.
+#
+# Los tests negativos comprueban QUE error sale buscando un trozo de su texto,
+# y el texto sale del catalogo multi-idioma en el idioma del ENTORNO
+# (VESTA_LANG > LC_ALL > LANG).  Sin fijarlo, el mismo arbol y el mismo binario
+# dan verde o rojo segun desde que terminal se lance: Git Bash exporta
+# LANG=es_ES.UTF-8 y PowerShell no, asi que seis casos (`neg_sufijo_*`,
+# `region37*`) pasaban en una y fallaban en la otra.
+#
+# Se pone aqui, en el entorno del PROCESO, para que lo hereden todos los
+# subprocesos -- tambien los que construyen su `env` copiando `os.environ`.
+#
+# Lo de fondo sigue abierto: un test que busca PROSA depende de como este
+# redactada.  Buscar el CoDIGO del diagnostico (`VXL001`) seria independiente
+# del idioma y de la redaccion; esto solo quita la dependencia del terminal.
+os.environ["VESTA_LANG"] = "en"
+
 
 def _pico_memoria(proc):
     """@brief Lo que llego a ocupar un proceso ya terminado, en bytes.
