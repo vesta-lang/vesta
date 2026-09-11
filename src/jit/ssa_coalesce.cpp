@@ -244,7 +244,13 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                 b_used[u] = 1;
                 b_last_use[u] = use_pos;
                 if (use_pos < b_first[u]) b_first[u] = use_pos;
-                iv[u].uses.push_back(use_pos);
+                /* OJO: aqui NO se rellena `iv[u].uses`.  El coalescing solo
+                 * mira RANGOS (`interfere`, `start`, `end`, `add_range`); las
+                 * posiciones de uso las quiere el derrame del asignador, que
+                 * construye SUS intervalos aparte (`build_intervals`).
+                 * Rellenarlas aqui era un vector en el monton por valor que
+                 * nadie leia, y la copia `merged = iv` lo duplicaba: 1.732.250
+                 * reservas al compilar 441.089 lineas, el 1,5% del total. */
             });
             if (in.dst != ir::IR_NO_VALUE && in.dst < NV) {
                 mark(in.dst);
