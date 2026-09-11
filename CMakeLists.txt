@@ -1383,7 +1383,15 @@ add_executable(test_analysis_manager tests/analysis/test_manager.cpp
                                      ${VESTA_ALLOC_THREAD_SLOT_SRC}
                                      # Y el cerrojo del gestor es el nuestro,
                                      # no el de la emulacion de pthreads.
-                                     src/util/shared_mutex.cpp)
+                                     src/util/shared_mutex.cpp
+                                     # El gestor se mide a si mismo: la espera
+                                     # del cerrojo y el tramo de su destructor.
+                                     # Eso son tres piezas CON cuerpo -- el
+                                     # reloj, los tramos y la tabla de banderas
+                                     # --, asi que "solo cabecera" ya no basta.
+                                     src/util/reloj.cpp
+                                     src/util/crono_tramo.cpp
+                                     src/util/env_flags.cpp)
 target_include_directories(test_analysis_manager PRIVATE ${VM_INCLUDES})
 
 # Coste por opcode derivado del codigo maquina de los handlers.  ENLAZA la VM
@@ -1804,28 +1812,38 @@ target_include_directories(test_vxdbg_core PRIVATE ${VM_INCLUDES})
 # ni `read_whole_file`.  En Linux si, y el test no enlazaba -- rompiendo el
 # objetivo `all`, del que cuelga el paso previo de CPack: el instalador no se
 # podia ni generar por culpa de un test.
+# Lo que `src/vxdbg/store.cpp` arrastra, nombrado UNA vez.
+#
+# Lo traian TRES listas escritas a mano y solo una estaba completa: las otras
+# dos compilaban el mismo `store.cpp` sin sus dependencias y rompian el enlace
+# -- y con el `all`, del que cuelga el instalador --.  Dos listas de lo mismo
+# acaban separandose siempre; el sintoma es este.
+set(VESTA_VXDBG_STORE_DEPS
+        src/util/file_read.cpp
+        src/util/env_flags.cpp
+        # La escritura atomica deja sus temporales en el cajon `tmp` de la
+        # cache, y quien dice donde esta ese cajon es esto.
+        src/util/cache_paths.cpp
+        # `env_flags` guarda su buffer relido en una ranura por hilo (nada de
+        # `thread_local`).
+        ${VESTA_ALLOC_THREAD_SLOT_SRC})
+
+# Y por la misma razon hace falta ntdll en Windows: `read_whole_file` abre por
+# NtOpenFile, asi que quien compile ese fichero tiene que enlazarlo.
+function(vesta_vxdbg_store_link objetivo)
+    if (WIN32)
+        target_link_libraries(${objetivo} PRIVATE ntdll)
+    endif ()
+endfunction()
+
 add_executable(test_vxdbg_store tests/vxdbg/test_vxdbg_store.cpp
                                 src/vxdbg/ids.cpp
                                 src/util/serialize.cpp
-                                src/util/file_read.cpp
-                                src/util/env_flags.cpp
-                                # La escritura atomica deja sus temporales en
-                                # el cajon `tmp` de la cache, y quien dice
-                                # donde esta ese cajon es esto.
-                                src/util/cache_paths.cpp
-                                # `env_flags` guarda su buffer relido en una
-                                # ranura por hilo (nada de `thread_local`).
-                                ${VESTA_ALLOC_THREAD_SLOT_SRC}
+                                ${VESTA_VXDBG_STORE_DEPS}
                                 src/vxdbg/store.cpp
                                 src/vxdbg/pack_store.cpp)
 target_include_directories(test_vxdbg_store PRIVATE ${VM_INCLUDES})
-if (WIN32)
-    # Y por la MISMA razon de arriba hace falta ntdll: `read_whole_file` abre
-    # por NtOpenFile, asi que quien compile ese fichero tiene que enlazarlo.
-    # El objetivo principal ya lo hacia; este se quedo fuera y volvia a romper
-    # `all` -- con ello el instalador -- por un test.
-    target_link_libraries(test_vxdbg_store PRIVATE ntdll)
-endif ()
+vesta_vxdbg_store_link(test_vxdbg_store)
 
 # Serializacion de cada nodo.  Comprueba, sobre todo, que la identidad de un
 # nodo ES su serializacion: si dos iguales dieran huellas distintas no se
@@ -1834,6 +1852,7 @@ endif ()
 add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/ids.cpp
                                 src/util/serialize.cpp
+                                ${VESTA_VXDBG_STORE_DEPS}
                                 src/vxdbg/store.cpp
                                 src/vxdbg/lowering_map.cpp
                                 src/vxdbg/codec_source.cpp
@@ -1841,6 +1860,7 @@ add_executable(test_vxdbg_codec tests/vxdbg/test_vxdbg_codec.cpp
                                 src/vxdbg/semantic_resolve.cpp
                                 src/vxdbg/roots.cpp)
 target_include_directories(test_vxdbg_codec PRIVATE ${VM_INCLUDES} src/vxdbg)
+vesta_vxdbg_store_link(test_vxdbg_codec)
 
 # El recorrido completo: de una direccion a una explicacion.  Cada capa esta
 # probada por su cuenta, pero eso no dice si el camino entero funciona -- es
@@ -1862,6 +1882,7 @@ set_target_properties(test_vxdbg_frontend PROPERTIES
 add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/ids.cpp
                                   src/util/serialize.cpp
+                                  ${VESTA_VXDBG_STORE_DEPS}
                                   src/vxdbg/store.cpp
                                   src/vxdbg/lowering_map.cpp
                                   src/vxdbg/backend_meta.cpp
@@ -1873,6 +1894,7 @@ add_executable(test_vxdbg_resolve tests/vxdbg/test_vxdbg_resolve.cpp
                                   src/vxdbg/roots.cpp
                                   src/vxdbg/resolver.cpp)
 target_include_directories(test_vxdbg_resolve PRIVATE ${VM_INCLUDES} src/vxdbg)
+vesta_vxdbg_store_link(test_vxdbg_resolve)
 
 add_executable(test_rbank_physical tests/jit/test_rbank_physical.cpp)
 target_include_directories(test_rbank_physical PRIVATE ${VM_INCLUDES})
