@@ -57,7 +57,7 @@ ir::IrFunction one_block(bool con_store) {
     const ir::IrValueId p = fn.new_value(ir::IrType::PTR, "%p");
     fn.values[p].is_param = true;
     fn.params.push_back(p);
-    const uint32_t b = fn.new_block("entry");
+    const ir::IrBlockId b = fn.new_block("entry");
     if (con_store) {
         ir::IrInstr st{};
         st.op = ir::IrOp::STORE;
@@ -112,9 +112,9 @@ static void one_branch_is_not_enough() {
     const ir::IrValueId p = fn.new_value(ir::IrType::PTR, "%p");
     fn.values[p].is_param = true;
     fn.params.push_back(p);
-    const uint32_t entry = fn.new_block("entry");
-    const uint32_t then_ = fn.new_block("then");
-    const uint32_t merge = fn.new_block("merge");
+    const ir::IrBlockId entry = fn.new_block("entry");
+    const ir::IrBlockId then_ = fn.new_block("then");
+    const ir::IrBlockId merge = fn.new_block("merge");
 
     ir::IrInstr br{};
     br.op = ir::IrOp::BR_COND;
@@ -162,7 +162,7 @@ static void an_escape_means_unknown_not_missing() {
     const ir::IrValueId p = fn.new_value(ir::IrType::PTR, "%p");
     fn.values[p].is_param = true;
     fn.params.push_back(p);
-    const uint32_t b = fn.new_block("entry");
+    const ir::IrBlockId b = fn.new_block("entry");
     ir::IrInstr call{};
     call.op = ir::IrOp::CALL;
     call.dst = ir::IR_NO_VALUE;

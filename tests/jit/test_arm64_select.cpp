@@ -5,6 +5,8 @@
  */
 #include "jit/arm64/arm64_select.h"
 
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -47,7 +49,7 @@ static std::string emit_add_fn(bool &uns) {
     fn.params.push_back(b);
     const ir::IrValueId s = fn.new_value(ir::IrType::I64);
     ir::IrBlock e;
-    e.id = 0;
+    e.id = blk(0);
     e.name = "entry";
     ir::IrInstr add = mk(ir::IrOp::ADD, ir::IrType::I64, s);
     add.operands = {a, b};
@@ -68,7 +70,7 @@ static std::string emit_caller_fn(bool &uns) {
     const ir::IrValueId c4 = fn.new_value(ir::IrType::I64);
     const ir::IrValueId r = fn.new_value(ir::IrType::I64);
     ir::IrBlock e;
-    e.id = 0;
+    e.id = blk(0);
     e.name = "entry";
     ir::IrInstr k3 = mk(ir::IrOp::CONST, ir::IrType::I64, c3);
     k3.imm = 3;
@@ -105,7 +107,7 @@ static std::string emit_sum_fn(bool &uns) {
     const ir::IrValueId i2 = fn.new_value(ir::IrType::I64);
 
     ir::IrBlock b0;
-    b0.id = 0;
+    b0.id = blk(0);
     b0.name = "entry";
     ir::IrInstr c0 = mk(ir::IrOp::CONST, ir::IrType::I64, s0);
     c0.imm = 0;
@@ -114,29 +116,29 @@ static std::string emit_sum_fn(bool &uns) {
     c1.imm = 1;
     b0.instrs.push_back(c1);
     ir::IrInstr br0 = mk(ir::IrOp::BR, ir::IrType::VOID, ir::IR_NO_VALUE);
-    br0.target_block = 1;
+    br0.target_block = blk(1);
     b0.instrs.push_back(br0);
 
     ir::IrBlock b1;
-    b1.id = 1;
+    b1.id = blk(1);
     b1.name = "header";
     ir::IrInstr ps = mk(ir::IrOp::PHI, ir::IrType::I64, s);
-    ps.phi_args = {{s0, 0}, {s2, 2}};
+    ps.phi_args = {{s0, blk(0)}, {s2, blk(2)}};
     b1.instrs.push_back(ps);
     ir::IrInstr pi = mk(ir::IrOp::PHI, ir::IrType::I64, i);
-    pi.phi_args = {{i0, 0}, {i2, 2}};
+    pi.phi_args = {{i0, blk(0)}, {i2, blk(2)}};
     b1.instrs.push_back(pi);
     ir::IrInstr cm = mk(ir::IrOp::CMP_ULE, ir::IrType::BOOL, cond);
     cm.operands = {i, n};
     b1.instrs.push_back(cm);
     ir::IrInstr brc = mk(ir::IrOp::BR_COND, ir::IrType::VOID, ir::IR_NO_VALUE);
     brc.operands = {cond};
-    brc.target_block = 2;
-    brc.false_block = 3;
+    brc.target_block = blk(2);
+    brc.false_block = blk(3);
     b1.instrs.push_back(brc);
 
     ir::IrBlock b2;
-    b2.id = 2;
+    b2.id = blk(2);
     b2.name = "body";
     ir::IrInstr as = mk(ir::IrOp::ADD, ir::IrType::I64, s2);
     as.operands = {s, i};
@@ -148,11 +150,11 @@ static std::string emit_sum_fn(bool &uns) {
     ai.operands = {i, one};
     b2.instrs.push_back(ai);
     ir::IrInstr br1 = mk(ir::IrOp::BR, ir::IrType::VOID, ir::IR_NO_VALUE);
-    br1.target_block = 1;
+    br1.target_block = blk(1);
     b2.instrs.push_back(br1);
 
     ir::IrBlock b3;
-    b3.id = 3;
+    b3.id = blk(3);
     b3.name = "exit";
     ir::IrInstr r = mk(ir::IrOp::RET, ir::IrType::I64, ir::IR_NO_VALUE);
     r.operands.push_back(s);
@@ -181,7 +183,7 @@ static std::string emit_atomics_fn(bool &uns) {
     const ir::IrValueId b = fn.new_value(ir::IrType::I64);
     const ir::IrValueId c = fn.new_value(ir::IrType::I64);
     ir::IrBlock e;
-    e.id = 0;
+    e.id = blk(0);
     e.name = "entry";
     auto konst = [&](ir::IrValueId d, uint64_t v) {
         ir::IrInstr k = mk(ir::IrOp::CONST, ir::IrType::I64, d);
@@ -329,7 +331,7 @@ int main(int argc, char **argv) {
         fn.ret_type = ir::IrType::I64;
         const ir::IrValueId v = fn.new_value(ir::IrType::I64);
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr c = mk(ir::IrOp::CONST, ir::IrType::I64, v);
         c.imm = 42;
@@ -360,7 +362,7 @@ int main(int argc, char **argv) {
         fn.params.push_back(b);
         const ir::IrValueId s = fn.new_value(ir::IrType::I64);
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr add = mk(ir::IrOp::ADD, ir::IrType::I64, s);
         add.operands = {a, b};
@@ -438,7 +440,7 @@ int main(int argc, char **argv) {
         fn.params.push_back(p);
         const ir::IrValueId v = fn.new_value(ir::IrType::I64);
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr ld = mk(ir::IrOp::LOAD, ir::IrType::I64, v);
         ld.operands.push_back(p);

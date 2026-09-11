@@ -25,6 +25,7 @@
 #include "codegen/vm_problem.h"
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -72,7 +73,7 @@ LivenessResult make_live(size_t n,
     l.num_instrs = static_cast<uint32_t>(n);
     l.block_start = {0};
     l.block_end = {static_cast<uint32_t>(n ? n - 1 : 0)};
-    IrValueId id = 0;
+    IrValueId id = vid(0);
     for (const auto &pr : iv)
         l.intervals.push_back({id++, pr.first, pr.second});
     return l;
@@ -95,7 +96,8 @@ int main() {
             codegen::liveness_to_problem(fn, live);
 
         CHECK(p.values.size() == 3);
-        const auto *a = find(p, 0), *b = find(p, 1), *c = find(p, 2);
+        const auto *a = find(p, vid(0)), *b = find(p, vid(1)),
+                   *c = find(p, vid(2));
         CHECK(a && a->start == 2 && a->end == 7); // tal cual, sin *2 ni +1
         CHECK(b && b->start == 0 && b->end == 3);
         CHECK(c && c->start == 5 &&
@@ -114,8 +116,8 @@ int main() {
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 
-        const auto *cross = find(p, 0), *before = find(p, 1),
-                   *after = find(p, 2), *exact = find(p, 3);
+        const auto *cross = find(p, vid(0)), *before = find(p, vid(1)),
+                   *after = find(p, vid(2)), *exact = find(p, vid(3));
         CHECK(cross && cross->req.crosses_call);
         CHECK(before && !before->req.crosses_call);
         CHECK(after && !after->req.crosses_call);
@@ -161,11 +163,11 @@ int main() {
         const IrFunction fn = make_fn(4, SIZE_MAX);
         LivenessResult live = make_live(4, {{1, 2}});
         live.intervals.push_back(
-            {99, 3, 2}); // end < def -> no es un valor vivo
+            {vid(99), 3, 2}); // end < def -> no es un valor vivo
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
         CHECK(p.values.size() == 1);
-        CHECK(find(p, 99) == nullptr);
+        CHECK(find(p, vid(99)) == nullptr);
     }
 
     /* --- 6. Pines de la convencion de llamada -----------------------------
@@ -176,19 +178,23 @@ int main() {
      * en 12 funciones del corpus antes de anyadirlos). */
     {
         IrFunction fn = make_fn(4, SIZE_MAX);
-        fn.params = {10, 11, 12};
+        fn.params = {vid(10), vid(11), vid(12)};
         LivenessResult live = make_live(4, {});
-        live.intervals = {{10, 0, 3}, {11, 0, 3}, {12, 0, 3}, {50, 1, 2}};
+        live.intervals = {{vid(10), 0, 3},
+                          {vid(11), 0, 3},
+                          {vid(12), 0, 3},
+                          {vid(50), 1, 2}};
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 
-        const auto *p0 = find(p, 10), *p1 = find(p, 11), *p2 = find(p, 12);
+        const auto *p0 = find(p, vid(10)), *p1 = find(p, vid(11)),
+                   *p2 = find(p, vid(12));
         CHECK(p0 && p0->req.fixed_reg == 1); // params[0] -> r1
         CHECK(p1 && p1->req.fixed_reg == 2);
         CHECK(p2 && p2->req.fixed_reg == 3);
         CHECK(p0 && p0->req.has_fixed_reg());
         // Un valor que NO es parametro no lleva pin.
-        const auto *v = find(p, 50);
+        const auto *v = find(p, vid(50));
         CHECK(v && v->req.fixed_reg == -1);
         CHECK(v && !v->req.must_be_memory());
     }
@@ -198,20 +204,20 @@ int main() {
     {
         IrFunction fn = make_fn(4, SIZE_MAX);
         LivenessResult live = make_live(4, {});
-        for (IrValueId i = 0; i < 14; ++i) {
+        for (IrValueId i = vid(0); i < 14; ++i) {
             fn.params.push_back(i);
             live.intervals.push_back({i, 0, 3});
         }
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 
-        for (IrValueId i = 0; i < 12; ++i) {
+        for (IrValueId i = vid(0); i < 12; ++i) {
             const auto *v = find(p, i);
             CHECK(v && v->req.fixed_reg == static_cast<int16_t>(i + 1));
             CHECK(v && !v->req.must_be_memory());
         }
         // El 13o y el 14o no caben en r1-r12: memoria, sin pin.
-        for (IrValueId i = 12; i < 14; ++i) {
+        for (IrValueId i = vid(12); i < 14; ++i) {
             const auto *v = find(p, i);
             CHECK(v && v->req.fixed_reg == -1);
             CHECK(v && v->req.must_be_memory());
@@ -239,8 +245,8 @@ int main() {
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 
-        const auto *cross = find(p, 0), *before = find(p, 1),
-                   *after = find(p, 2), *exact = find(p, 3);
+        const auto *cross = find(p, vid(0)), *before = find(p, vid(1)),
+                   *after = find(p, vid(2)), *exact = find(p, vid(3));
         CHECK(cross && cross->req.crosses_call);
         CHECK(before && !before->req.crosses_call);
         CHECK(after && !after->req.crosses_call);

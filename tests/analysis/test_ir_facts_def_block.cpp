@@ -19,6 +19,7 @@
 
 #include "analysis/facts/ir_facts.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -87,13 +88,13 @@ int main() {
 
         IrBlock entry, middle, exit_b;
         entry.name = "entry";
-        entry.instrs.push_back(make_def(0, 10));
-        entry.instrs.push_back(make_br(1));
+        entry.instrs.push_back(make_def(vid(0), 10));
+        entry.instrs.push_back(make_br(blk(1)));
         middle.name = "middle";
-        middle.instrs.push_back(make_def(1, 20));
-        middle.instrs.push_back(make_br(2));
+        middle.instrs.push_back(make_def(vid(1), 20));
+        middle.instrs.push_back(make_br(blk(2)));
         exit_b.name = "exit";
-        exit_b.instrs.push_back(make_def(2, 30));
+        exit_b.instrs.push_back(make_def(vid(2), 30));
         exit_b.instrs.push_back(make_ret());
         fn.blocks = {entry, middle, exit_b};
 
@@ -109,7 +110,7 @@ int main() {
          * que existe una instruccion definidora, `def_block` tiene que decir
          * en que bloque esta, y al reves.  Discrepar aqui es exactamente el
          * fallo que un consumidor con su propio recorrido no podia detectar. */
-        for (IrValueId v = 0; v < fn.values.size(); ++v) {
+        for (IrValueId v = vid(0); v < fn.values.size(); ++v) {
             const bool has_instr = f.def(v) != nullptr;
             const bool has_block = f.def_block[v] >= 0;
             CHECK(has_instr == has_block,
@@ -133,19 +134,21 @@ int main() {
         IrFunction fn;
         fn.name = "undefined_value";
         with_values(fn, 2);
-        fn.params = {0}; // %0 es parametro: no lo define ninguna instruccion.
+        // %0 es parametro: no lo define ninguna instruccion.
+        fn.params = {vid(0)};
 
         IrBlock entry;
         entry.name = "entry";
-        entry.instrs.push_back(make_def(1, 7));
+        entry.instrs.push_back(make_def(vid(1), 7));
         entry.instrs.push_back(make_ret());
         fn.blocks = {entry};
 
         const IrFacts f = build_ir_facts(fn);
         CHECK(f.def_block[0] == -1,
               "un parametro no puede tener bloque de def");
-        CHECK(f.def(0) == nullptr, "un parametro no puede tener instr de def");
-        CHECK(f.param_index(0) == 0, "%0 deberia ser el parametro 0");
+        CHECK(f.def(vid(0)) == nullptr,
+              "un parametro no puede tener instr de def");
+        CHECK(f.param_index(vid(0)) == 0, "%0 deberia ser el parametro 0");
         CHECK(f.def_block[1] == 0, "%1 no se define en el bloque 0");
     }
 
@@ -160,7 +163,7 @@ int main() {
 
         const IrFacts f = build_ir_facts(fn);
         CHECK(f.def_block.size() == 4, "def_block sin dimensionar");
-        for (IrValueId v = 0; v < 4; ++v)
+        for (IrValueId v = vid(0); v < 4; ++v)
             CHECK(f.def_block[v] == -1, "valor sin definicion no vale -1");
     }
 

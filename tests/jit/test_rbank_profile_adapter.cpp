@@ -15,6 +15,7 @@
 #include "analysis/derived/profile_facts.h"
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 #include "codegen/rbank/adapters/profile_adapter.h"
 #include "codegen/rbank/optimization_context.h"
 #include "codegen/rbank/value_requirements.h"
@@ -54,7 +55,7 @@ static IrInstr brcond(IrBlockId tt, IrBlockId ff, uint32_t line) {
     i.op = IrOp::BR_COND;
     i.type = IrType::VOID;
     i.dst = ir::IR_NO_VALUE;
-    i.operands = {0};
+    i.operands = {vid(0)};
     i.target_block = tt;
     i.false_block = ff;
     i.source_line = line;
@@ -80,10 +81,11 @@ int main() {
 
     ir::IrFunction fn;
     fn.name = "loop1";
-    fn.blocks.push_back(block(0, "entry", br(1)));
-    fn.blocks.push_back(block(1, "header", brcond(2, 3, /*line=*/50)));
-    fn.blocks.push_back(block(2, "body", br(1)));
-    fn.blocks.push_back(block(3, "exit", ret()));
+    fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
+    fn.blocks.push_back(
+        block(blk(1), "header", brcond(blk(2), blk(3), /*line=*/50)));
+    fn.blocks.push_back(block(blk(2), "body", br(blk(1))));
+    fn.blocks.push_back(block(blk(3), "exit", ret()));
     analysis::LoopFacts loops = analysis::compute_loop_facts(fn);
     analysis::BranchProfile prof;
     prof.set(50, 700, 100); // trip = 7
@@ -96,7 +98,7 @@ int main() {
         // Valor definido en el body (bloque 2), peso = trip = 7.
         ValueRequirements r;
         r.loop_depth = 1;
-        populate_profile_requirements(r, pf, /*def_block=*/2);
+        populate_profile_requirements(r, pf, /*def_block=*/blk(2));
         CHECK(r.execution_weight == 7.0, "execution_weight del body != 7");
     }
 
@@ -112,7 +114,8 @@ int main() {
 
         ValueRequirements measured;
         measured.loop_depth = 1;
-        populate_profile_requirements(measured, pf, 2); // execution_weight = 7
+        populate_profile_requirements(measured, pf,
+                                      blk(2)); // execution_weight = 7
         // Con perfil -> usa 7 (no el estatico 10^1 = 10).
         CHECK(ctx.execution_weight(measured) == 7.0,
               "el contexto no prefirio el peso medido");
@@ -131,7 +134,7 @@ int main() {
         r.crosses_call = true;
         r.loop_depth = 1;
         r.cls = ResourceClass::FP_VECTOR;
-        populate_profile_requirements(r, pf, 2);
+        populate_profile_requirements(r, pf, blk(2));
         CHECK(r.execution_weight == 7.0, "no actualizo execution_weight");
         CHECK(r.value_id == 3 && r.crosses_call && r.loop_depth == 1 &&
                   r.cls == ResourceClass::FP_VECTOR,

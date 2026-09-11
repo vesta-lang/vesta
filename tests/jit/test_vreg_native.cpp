@@ -18,6 +18,7 @@
  */
 
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 #include "jit/code_cache.h"
 #include "jit/vreg_pipeline.h"
 
@@ -80,7 +81,7 @@ void test_ret42() {
 
     const ir::IrValueId v = mk_value(fn, ir::IrType::I64);
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr c = mk_instr(ir::IrOp::CONST, ir::IrType::I64, v);
     c.imm = 42;
@@ -117,7 +118,7 @@ void test_add() {
     const ir::IrValueId b = mk_value(fn, ir::IrType::I64);
     const ir::IrValueId t = mk_value(fn, ir::IrType::I64);
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr ca = mk_instr(ir::IrOp::CONST, ir::IrType::I64, a);
     ca.imm = 40;
@@ -162,7 +163,7 @@ void test_param_add2() {
     const ir::IrValueId t = mk_value(fn, ir::IrType::I64);
 
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr add = mk_instr(ir::IrOp::ADD, ir::IrType::I64, t);
     add.operands.push_back(a);
@@ -207,7 +208,7 @@ void test_param_combine4() {
     const ir::IrValueId res = mk_value(fn, ir::IrType::I64); // ab + cd
 
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr sub = mk_instr(ir::IrOp::SUB, ir::IrType::I64, ab);
     sub.operands.push_back(a);
@@ -306,7 +307,7 @@ void test_call_reloc() {
     const ir::IrValueId at = mk_value(addee, ir::IrType::I64);
     {
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr s = mk_instr(ir::IrOp::ADD, ir::IrType::I64, at);
         s.operands = {aa, ab};
@@ -326,7 +327,7 @@ void test_call_reloc() {
     const ir::IrValueId cr = mk_value(caller, ir::IrType::I64);
     {
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr k1 = mk_instr(ir::IrOp::CONST, ir::IrType::I64, c40);
         k1.imm = 40;
@@ -375,7 +376,7 @@ void test_tailcall_reloc() {
     const ir::IrValueId at = mk_value(addee, ir::IrType::I64);
     {
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr s = mk_instr(ir::IrOp::ADD, ir::IrType::I64, at);
         s.operands = {aa, ab};
@@ -393,7 +394,7 @@ void test_tailcall_reloc() {
     const ir::IrValueId c2 = mk_value(tc, ir::IrType::I64);
     {
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr k1 = mk_instr(ir::IrOp::CONST, ir::IrType::I64, c40);
         k1.imm = 40;

@@ -15,6 +15,7 @@
 #include "codegen/rbank/physical_bank.h"
 #include "codegen/rbank/snapshot_builder.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -67,32 +68,33 @@ static ir::IrFunction make_loop_fn() {
     ir::IrFunction fn;
     fn.name = "loopfp";
     fn.ret_type = IrType::F64;
-    fn.values = {mkval(0, IrType::I64, false, true),
-                 mkval(1, IrType::F64, true), mkval(2, IrType::F64)};
-    fn.params = {0};
+    fn.values = {mkval(vid(0), IrType::I64, false, true),
+                 mkval(vid(1), IrType::F64, true), mkval(vid(2), IrType::F64)};
+    fn.params = {vid(0)};
     IrBlock b0;
-    b0.id = 0;
+    b0.id = blk(0);
     b0.name = "entry";
     b0.instrs.push_back(
-        mk(IrOp::CONST, IrType::F64, 1, {}, 0x3FF8000000000000ull));
+        mk(IrOp::CONST, IrType::F64, vid(1), {}, 0x3FF8000000000000ull));
     b0.instrs.push_back(mk(IrOp::BR, IrType::VOID, ir::IR_NO_VALUE));
-    b0.instrs.back().target_block = 1;
+    b0.instrs.back().target_block = blk(1);
     IrBlock b1;
-    b1.id = 1;
+    b1.id = blk(1);
     b1.name = "header";
-    b1.instrs.push_back(mk(IrOp::ADD, IrType::F64, 2, {1, 1}));
-    b1.instrs.push_back(mk(IrOp::BR_COND, IrType::VOID, ir::IR_NO_VALUE, {0}));
-    b1.instrs.back().target_block = 2;
-    b1.instrs.back().false_block = 3;
+    b1.instrs.push_back(mk(IrOp::ADD, IrType::F64, vid(2), {vid(1), vid(1)}));
+    b1.instrs.push_back(
+        mk(IrOp::BR_COND, IrType::VOID, ir::IR_NO_VALUE, {vid(0)}));
+    b1.instrs.back().target_block = blk(2);
+    b1.instrs.back().false_block = blk(3);
     IrBlock b2;
-    b2.id = 2;
+    b2.id = blk(2);
     b2.name = "body";
     b2.instrs.push_back(mk(IrOp::BR, IrType::VOID, ir::IR_NO_VALUE));
-    b2.instrs.back().target_block = 1;
+    b2.instrs.back().target_block = blk(1);
     IrBlock b3;
-    b3.id = 3;
+    b3.id = blk(3);
     b3.name = "exit";
-    b3.instrs.push_back(mk(IrOp::RET, IrType::F64, ir::IR_NO_VALUE, {2}));
+    b3.instrs.push_back(mk(IrOp::RET, IrType::F64, ir::IR_NO_VALUE, {vid(2)}));
     fn.blocks = {std::move(b0), std::move(b1), std::move(b2), std::move(b3)};
     return fn;
 }

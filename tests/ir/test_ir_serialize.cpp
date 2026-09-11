@@ -21,6 +21,7 @@
  */
 
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 #include "ir/ssa_ir_serialize.h"
 
 #include <cstdint>
@@ -132,7 +133,7 @@ void test_trivial_function() {
 
     const auto v = mk_value(fn, ir::IrType::I64);
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
 
     ir::IrInstr c;
@@ -186,7 +187,7 @@ void test_complexity_dimensions() {
     // Un bloque trivial para que la funcion sea valida.
     const auto v = mk_const(fn, ir::IrType::I64, 7);
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr r;
     r.op = ir::IrOp::RET;
@@ -222,34 +223,34 @@ void test_value_flags() {
     fn.ret_type = ir::IrType::HANDLE;
 
     ir::IrValue v0;
-    v0.id = 0;
+    v0.id = vid(0);
     v0.type = ir::IrType::HANDLE;
     v0.is_param = true;
     v0.is_gc_object = true;
     fn.values.push_back(v0);
-    fn.params.push_back(0);
+    fn.params.push_back(vid(0));
 
     ir::IrValue v1;
-    v1.id = 1;
+    v1.id = vid(1);
     v1.type = ir::IrType::PTR;
     v1.is_host_ptr = true;
     v1.pointee_is_host_ptr = true;
     fn.values.push_back(v1);
 
     ir::IrValue v2;
-    v2.id = 2;
+    v2.id = vid(2);
     v2.type = ir::IrType::I64;
     v2.is_const = true;
     v2.const_val = 0xDEADBEEFCAFE1234ULL;
     fn.values.push_back(v2);
 
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr ret;
     ret.op = ir::IrOp::RET;
     ret.type = ir::IrType::HANDLE;
-    ret.operands.push_back(0);
+    ret.operands.push_back(vid(0));
     entry.instrs.push_back(ret);
     fn.blocks.push_back(entry);
 
@@ -278,7 +279,7 @@ void test_multi_block_branches() {
     fn.params = {a, b};
 
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr cmp;
     cmp.op = ir::IrOp::CMP_LT;
@@ -292,30 +293,30 @@ void test_multi_block_branches() {
     br.type = ir::IrType::VOID;
     br.dst = ir::IR_NO_VALUE;
     br.operands.push_back(cond);
-    br.target_block = 1;
-    br.false_block = 2;
+    br.target_block = blk(1);
+    br.false_block = blk(2);
     entry.instrs.push_back(br);
-    entry.succs = {1, 2};
+    entry.succs = {blk(1), blk(2)};
 
     ir::IrBlock then_bb;
-    then_bb.id = 1;
+    then_bb.id = blk(1);
     then_bb.name = "then";
     ir::IrInstr ret_a;
     ret_a.op = ir::IrOp::RET;
     ret_a.type = ir::IrType::I64;
     ret_a.operands.push_back(a);
     then_bb.instrs.push_back(ret_a);
-    then_bb.preds = {0};
+    then_bb.preds = {blk(0)};
 
     ir::IrBlock else_bb;
-    else_bb.id = 2;
+    else_bb.id = blk(2);
     else_bb.name = "else";
     ir::IrInstr ret_b;
     ret_b.op = ir::IrOp::RET;
     ret_b.type = ir::IrType::I64;
     ret_b.operands.push_back(b);
     else_bb.instrs.push_back(ret_b);
-    else_bb.preds = {0};
+    else_bb.preds = {blk(0)};
 
     fn.blocks = {entry, then_bb, else_bb};
 
@@ -344,13 +345,13 @@ void test_phi_nodes() {
     const auto phi = mk_value(fn, ir::IrType::I64);
 
     ir::IrBlock merge;
-    merge.id = 0;
+    merge.id = blk(0);
     merge.name = "merge";
     ir::IrInstr phi_instr;
     phi_instr.op = ir::IrOp::PHI;
     phi_instr.type = ir::IrType::I64;
     phi_instr.dst = phi;
-    phi_instr.phi_args = {{p0, 1}, {p1, 2}};
+    phi_instr.phi_args = {{p0, blk(1)}, {p1, blk(2)}};
     merge.instrs.push_back(phi_instr);
 
     ir::IrInstr ret;
@@ -387,7 +388,7 @@ void test_call_with_func_name() {
     fn.params = {a, b};
 
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr call;
     call.op = ir::IrOp::CALL;
@@ -430,7 +431,7 @@ void test_generic_metadata() {
     fn.generic_type_args = {"i32"};
 
     ir::IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     ir::IrInstr ret;
     ret.op = ir::IrOp::RET;
@@ -457,7 +458,7 @@ void test_multiple_functions() {
     fn1.name = "f1";
     fn1.ret_type = ir::IrType::I64;
     ir::IrBlock e1;
-    e1.id = 0;
+    e1.id = blk(0);
     e1.name = "entry";
     ir::IrInstr i1;
     i1.op = ir::IrOp::RET;
@@ -469,7 +470,7 @@ void test_multiple_functions() {
     fn2.name = "f2";
     fn2.ret_type = ir::IrType::I32;
     ir::IrBlock e2;
-    e2.id = 0;
+    e2.id = blk(0);
     e2.name = "entry";
     ir::IrInstr i2;
     i2.op = ir::IrOp::RET;
@@ -481,13 +482,13 @@ void test_multiple_functions() {
     fn3.name = "f3_with_loop";
     fn3.ret_type = ir::IrType::I64;
     ir::IrBlock e3;
-    e3.id = 0;
+    e3.id = blk(0);
     e3.name = "loop";
     ir::IrInstr br;
     br.op = ir::IrOp::BR;
-    br.target_block = 0;
+    br.target_block = blk(0);
     e3.instrs.push_back(br);
-    e3.succs = {0};
+    e3.succs = {blk(0)};
     fn3.blocks.push_back(e3);
 
     /* Serializar las 3 al mismo buffer. */
@@ -532,7 +533,7 @@ void test_ir_section_round_trip() {
         const auto v =
             mk_const(fn, ir::IrType::I64, static_cast<uint64_t>(i * 100));
         ir::IrBlock e;
-        e.id = 0;
+        e.id = blk(0);
         e.name = "entry";
         ir::IrInstr c;
         c.op = ir::IrOp::CONST;
@@ -600,7 +601,7 @@ void test_ir_section_truncated() {
     fn.name = "single";
     fn.ret_type = ir::IrType::I64;
     ir::IrBlock e;
-    e.id = 0;
+    e.id = blk(0);
     e.name = "entry";
     ir::IrInstr r;
     r.op = ir::IrOp::RET;
@@ -628,7 +629,7 @@ void test_ir_section_offset() {
     fn.name = "embedded";
     fn.ret_type = ir::IrType::I32;
     ir::IrBlock e;
-    e.id = 0;
+    e.id = blk(0);
     e.name = "entry";
     ir::IrInstr r;
     r.op = ir::IrOp::RET;
@@ -662,7 +663,7 @@ void test_truncated_buffer() {
     fn.name = "trunc_test";
     fn.ret_type = ir::IrType::I64;
     ir::IrBlock e;
-    e.id = 0;
+    e.id = blk(0);
     e.name = "entry";
     ir::IrInstr ret;
     ret.op = ir::IrOp::RET;

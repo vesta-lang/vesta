@@ -16,6 +16,7 @@
 
 #include "ir/liveness.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 #include "codegen/rbank/adapters/liveness_adapter.h"
 #include "codegen/rbank/value_requirements.h"
 
@@ -65,7 +66,7 @@ int main() {
     // --- interval_covers (canonico: def <= p <= end) ---
     std::printf("\n[interval_covers inclusivo]\n");
     {
-        ir::LiveInterval iv{0, 2, 8};
+        ir::LiveInterval iv{vid(0), 2, 8};
         CHECK(interval_covers(iv, 2) && interval_covers(iv, 5) &&
                   interval_covers(iv, 8),
               "covers de borde/interior falla");
@@ -76,7 +77,7 @@ int main() {
     // --- populate: traduccion pura ---
     std::printf("\n[crosses_call: traduccion pura]\n");
     {
-        ir::LiveInterval iv{0, 2, 8};
+        ir::LiveInterval iv{vid(0), 2, 8};
         ValueRequirements r;
         r.loop_depth = 9;
         r.is_gc = true; // otros campos
@@ -101,23 +102,23 @@ int main() {
         fn.ret_type = IrType::I64;
         fn.values.resize(3);
         for (uint32_t i = 0; i < 3; ++i) {
-            fn.values[i].id = i;
+            fn.values[i].id = vid(i);
             fn.values[i].type = IrType::I64;
         }
-        ir::IrBlock blk;
-        blk.id = 0;
-        blk.name = "entry";
-        blk.instrs.push_back(
-            mk(IrOp::CONST, IrType::I64, 0, {}, 5)); // pos 0: def v0
-        blk.instrs.push_back(mk(IrOp::CALL, IrType::VOID, ir::IR_NO_VALUE, {},
-                                0, "foo")); // pos 1: call
-        blk.instrs.push_back(mk(IrOp::CONST, IrType::I64, 1, {},
-                                7)); // pos 2: def v1 (tras call)
-        blk.instrs.push_back(
-            mk(IrOp::ADD, IrType::I64, 2, {0, 1})); // pos 3: usa v0 y v1
-        blk.instrs.push_back(
-            mk(IrOp::RET, IrType::I64, ir::IR_NO_VALUE, {2})); // pos 4: usa v2
-        fn.blocks.push_back(std::move(blk));
+        ir::IrBlock b;
+        b.id = blk(0);
+        b.name = "entry";
+        b.instrs.push_back(
+            mk(IrOp::CONST, IrType::I64, vid(0), {}, 5)); // pos 0: def v0
+        b.instrs.push_back(mk(IrOp::CALL, IrType::VOID, ir::IR_NO_VALUE, {}, 0,
+                              "foo")); // pos 1: call
+        b.instrs.push_back(mk(IrOp::CONST, IrType::I64, vid(1), {},
+                              7)); // pos 2: def v1 (tras call)
+        b.instrs.push_back(mk(IrOp::ADD, IrType::I64, vid(2),
+                              {vid(0), vid(1)})); // pos 3: usa v0 y v1
+        b.instrs.push_back(mk(IrOp::RET, IrType::I64, ir::IR_NO_VALUE,
+                              {vid(2)})); // pos 4: usa v2
+        fn.blocks.push_back(std::move(b));
 
         ir::LivenessResult live = ir::compute_liveness(fn);
         std::vector<uint32_t> calls = collect_call_positions(fn, live);
