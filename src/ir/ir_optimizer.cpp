@@ -144,6 +144,40 @@ struct IsConstDef;        ///< La definicion del valor es una constante.
 struct Unreachable;       ///< Bloque al que no se llega desde la entrada.
 } // namespace scratch
 
+/**
+ * @brief "Alguien usa este valor?", una marca de un byte por valor SSA.
+ *
+ * Los identificadores de valor de una funcion son DENSOS: van de cero a
+ * @c fn.values.size().  Sobre eso, un `unordered_set` cobraba un nodo en el
+ * monton POR CADA VALOR USADO -- el sitio que mas reservaba de TODO el
+ * compilador, 3.307.771 reservas de dieciseis bytes al compilar 441.089
+ * lineas -- y encima consultaba con hash y salto de puntero.  Una marca por id
+ * es UNA reserva y se lee con un indice.
+ *
+ * @tparam Tag Quien pregunta.  Va en el tipo para que el perfil distinga un
+ *             consumidor de otro; sin el, los dos comparten simbolo y no hay
+ *             forma de saber cual pesa.
+ */
+template <typename Tag> using UsedMarks = util::NamedVector<uint8_t, Tag>;
+
+/// @brief Apunta que @p v se usa.  Fuera del pool no hay nada que apuntar.
+template <typename Tag> static void mark_used(UsedMarks<Tag> &used, IrValueId v) {
+    if (v < used.size()) used[v] = 1;
+}
+
+/**
+ * @brief @return true si NADIE usa @p v, que es lo unico que deja borrar.
+ *
+ * Un id fuera del pool contesta FALSE -- "no consta que este muerto" --, no
+ * true.  Un pase que borra solo puede quitar lo que sabe muerto, y no saber no
+ * es saber que no: contestar al reves convertiria un id raro en una
+ * instruccion borrada.
+ */
+template <typename Tag>
+static bool is_unused(const UsedMarks<Tag> &used, IrValueId v) {
+    return v < used.size() && used[v] == 0;
+}
+
 /* Helpers locales para constant folding de math IR ops (Math-IR-promote
  * v2.2c).  Preservan bits IEEE 754 via memcpy para no perder precision
  * en el round-trip uint64 <-> double que el IR usa. */
@@ -587,19 +621,20 @@ static bool is_pure_allocator_name(const std::string &name) {
 }
 
 static bool dead_alloc_elim_impl(IrFunction &fn) {
-    /* Pasada 1: encontrar valores usados (mismo que DCE). */
-    util::NamedSet<IrValueId, scratch::DeadAllocUsed> used;
+    /* Pasada 1: encontrar valores usados (mismo que DCE, y con la misma marca
+     * de un byte por id: ver @ref UsedMarks). */
+    UsedMarks<scratch::DeadAllocUsed> used(fn.values.size(), 0);
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             for (IrValueId op : ins.operands) {
-                if (op != IR_NO_VALUE) used.insert(op);
+                if (op != IR_NO_VALUE) mark_used(used, op);
             }
             if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE) &&
                 ins.func_ptr != IR_NO_VALUE) {
-                used.insert(ins.func_ptr);
+                mark_used(used, ins.func_ptr);
             }
             for (const auto &pa : ins.phi_args) {
-                if (pa.value != IR_NO_VALUE) used.insert(pa.value);
+                if (pa.value != IR_NO_VALUE) mark_used(used, pa.value);
             }
         }
     }
@@ -613,7 +648,7 @@ static bool dead_alloc_elim_impl(IrFunction &fn) {
             const IrInstr &ins = instrs[i];
             bool keep = true;
             if (ins.op == IrOp::CALL && ins.dst != IR_NO_VALUE &&
-                !used.count(ins.dst) && !ins.preserve &&
+                is_unused(used, ins.dst) && !ins.preserve &&
                 is_pure_allocator_name(ins.func_name)) {
                 /* CALL a allocator puro, resultado no usado -> eliminar.
                  * El frontend Vesta no espera efectos secundarios visibles
@@ -8403,34 +8438,6 @@ static bool model_removable(const IrFunction &fn,
     return !e.mem.writes.locs.empty();
 }
 
-/**
- * @brief "Alguien usa este valor?", una marca de un byte por valor SSA.
- *
- * Los identificadores de valor de una funcion son DENSOS: van de cero a
- * @c fn.values.size().  Sobre eso, un `unordered_set` cobraba un nodo en el
- * monton POR CADA VALOR USADO -- 3.307.771 reservas de dieciseis bytes al
- * compilar 441.089 lineas, el sitio que mas reservaba de TODO el compilador --
- * y encima consultaba con hash y salto de puntero.  Una marca por id es UNA
- * reserva y se lee con un indice.
- */
-using UsedMarks = util::NamedVector<uint8_t, scratch::DceUsed>;
-
-/// @brief Apunta que @p v se usa.  Fuera del pool no hay nada que apuntar.
-static void mark_used(UsedMarks &used, IrValueId v) {
-    if (v < used.size()) used[v] = 1;
-}
-
-/**
- * @brief @return true si NADIE usa @p v, que es lo unico que deja borrar.
- *
- * Un id fuera del pool contesta FALSE -- "no consta que este muerto" --, no
- * true.  DCE solo puede quitar lo que sabe muerto, y no saber no es saber que
- * no: contestar al reves convertiria un id raro en una instruccion borrada.
- */
-static bool is_unused(const UsedMarks &used, IrValueId v) {
-    return v < used.size() && used[v] == 0;
-}
-
 static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                      const analysis::AsmBindingFacts *asm_bindings,
                      DceEffectsCache *cache, const analysis::IrFacts *facts,
@@ -8518,7 +8525,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
     }
 
     // Construir conjunto de valores que son usados en algun operando
-    UsedMarks used(fn.values.size(), 0);
+    UsedMarks<scratch::DceUsed> used(fn.values.size(), 0);
     {
         /* Cada tramo en SU bloque: un cronometro de ambito mide hasta que
          * termina el suyo, y suelto acaba midiendo el resto de la funcion. */
