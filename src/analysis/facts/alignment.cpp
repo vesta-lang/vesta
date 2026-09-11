@@ -12,6 +12,8 @@
 
 #include "analysis/facts/alignment.h"
 
+#include "util/named_alloc.h" // que el perfil diga QUE es cada marca
+
 #include <algorithm>
 
 namespace analysis {
@@ -106,7 +108,10 @@ AlignmentFacts compute_alignment(const ir::IrFunction &fn,
     std::vector<ir::IrValueId> unico_guardado(fn.values.size(),
                                               ir::IR_NO_VALUE);
     {
-        std::vector<uint8_t> veces(fn.values.size(), 0);
+        /// Cuantas veces se guarda en cada hueco; con nombre, porque suelto es
+        /// un `vector<unsigned char>` mas entre cientos.
+        struct StoreCount;
+        util::NamedVector<uint8_t, StoreCount> veces(fn.values.size(), 0);
         for (const ir::IrBlock &b : fn.blocks)
             for (const ir::IrInstr &in : b.instrs) {
                 if (in.op != ir::IrOp::STORE || in.operands.size() < 2)

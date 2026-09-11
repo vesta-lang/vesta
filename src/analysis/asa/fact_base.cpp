@@ -139,10 +139,10 @@ struct MemoryAnalysis {
     static char ID;
     static constexpr const char *kName = "memory";
 };
-struct LoopsAnalysis {
-    static char ID;
-    static constexpr const char *kName = "loops";
-};
+/* `LoopsAnalysis` ya NO esta aqui: vive en `analysis/facts/loop_facts.h`, junto
+ * a su dominio y como los demas.  Escondido en esta unidad dejaba al gestor
+ * fuera del alcance de los seis consumidores de bucles, que por eso llamaban al
+ * productor a pelo. */
 struct IvBoundsAnalysis {
     static char ID;
     static constexpr const char *kName = "iv_bounds";
@@ -168,7 +168,7 @@ struct EscapeAnalysisId {
     static constexpr const char *kName = "escape";
 };
 char MemoryAnalysis::ID = 0;
-char LoopsAnalysis::ID = 0;
+/* `LoopsAnalysis::ID` se define en `loop_facts.cpp`, con su dominio. */
 char IvBoundsAnalysis::ID = 0;
 char BoundaryAnalysis::ID = 0;
 char EffectsSummaryAnalysis::ID = 0;

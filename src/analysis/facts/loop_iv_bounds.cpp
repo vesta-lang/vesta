@@ -79,7 +79,7 @@ void report_giveups(const LoopIvBounds &out) {
  * rangos, y rangos otra vez con las cotas.  Cada etapa solo estrecha, asi que
  * el resultado sigue conteniendo al punto fijo real.
  */
-bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool const_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
               IrValueId v, int64_t &out, const RangeFacts *ranges) {
     if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
     const int db = (v < (IrValueId)def_block.size()) ? def_block[v] : -1;

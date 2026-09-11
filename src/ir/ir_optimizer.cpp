@@ -21,6 +21,7 @@
 #include "vx/diag/diag_catalog.h" // los motivos, en todos los idiomas
 #include "util/fnv.h"         // dispersion de las claves de la CSE
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
+#include "util/named_alloc.h" // que el perfil diga QUE es cada estructura auxiliar
 #include "util/os/thread_slot.h"  // los vectores de trabajo, uno por hilo
 
 #include "util/reloj.h"
@@ -70,6 +71,79 @@
 #include <algorithm>
 
 namespace ir {
+
+/**
+ * @namespace ir::scratch
+ * @brief Etiquetas que dan NOMBRE a la estructura auxiliar de cada pase.
+ *
+ * No se definen porque no hacen falta: solo sirven de parametro de plantilla
+ * para @ref util::NamedAlloc, y su unico trabajo es aparecer en el simbolo.
+ * Sin ellas, el perfil de reservas dice `std::unordered_set<unsigned int>` y no
+ * hay forma de saber cual de las decenas que hay es -- que fue exactamente lo
+ * que paso al medir: el 60% de 116 millones de reservas sin poder atribuir.
+ */
+namespace scratch {
+struct DceUsed;           ///< DCE: valores que alguien usa.
+struct DeadAllocUsed;     ///< Reserva muerta: lo mismo, por su cuenta.
+struct ElideUnwrapDefOp;  ///< Quitar afirmaciones: operacion que define cada valor.
+struct ElideUnwrapDefIns; ///< ... y la instruccion que lo define.
+struct FoldStrcatDef;     ///< Plegado de concatenaciones: definicion de cada valor.
+struct LoadNarrowUses;    ///< Estrechar cargas: quien usa cada valor.
+struct LoadNarrowUseRefs; ///< ... la lista de usos de UN valor.
+
+/* Marcas de UN BYTE, una por valor SSA o por bloque.  Son las mas numerosas y
+ * las mas pequenas -- medidas a SEIS bytes de media --, asi que lo que cuestan
+ * no es el tamano sino el viaje al monton, una vez por funcion y por pasada.
+ * Sin nombre, las catorce de este fichero y las doscientas y pico del resto
+ * comparten simbolo (`std::vector<unsigned char>`) y no hay forma de saber
+ * cual pesa. */
+struct EscapeCandidates;  ///< Analisis de escape: candidato que se escapa.
+struct EscapeSites;       ///< ... lo mismo, por sitio de reserva.
+struct SlotLoaded;        ///< Promocion de reservas: del hueco se ha leido.
+struct SlotEscapes;       ///< ... el hueco se escapa.
+struct SlotOffZero;       ///< ... se accede siempre con desplazamiento cero.
+struct SlotLoadsOff0;     ///< ... y todas sus lecturas.
+struct BoxCarrier;        ///< ... el valor lleva una caja dentro.
+struct CarrierAlias;      ///< ... y quien es su alias.
+struct BlockVisited;      ///< Recorrido de bloques: ya visitado.
+struct LoopHeader;        ///< Bucles: el bloque es cabecera.
+struct InLoop;            ///< ... el bloque esta dentro de uno.
+struct ExtKind;           ///< Normalizar extensiones: 1=SEXT, 2=ZEXT.
+struct ExtIsConst;        ///< ... el valor es constante.
+
+/* Las que crecen a base de `push_back` sobre un vector diminuto: el perfil las
+ * ve como `_M_realloc_insert` de cinco a diecinueve bytes, cincuenta veces por
+ * funcion, y sin etiqueta no hay forma de saber cual es cual. */
+struct Reachable;         ///< Bloques alcanzables desde la entrada.
+struct RpoPos;            ///< Bloque -> su posicion en el orden inverso.
+struct StrcatOffsets;     ///< Concatenar cadenas: donde empieza cada trozo.
+struct ConstOfValue;      ///< Valor -> la constante que lleva.
+struct SiteOfValue;       ///< Valor -> el sitio de reserva del que sale.
+struct FieldSiteOf;       ///< ... lo mismo, por campo.
+struct FieldOffsetOf;     ///< ... y su desplazamiento.
+struct ValueIsConst;      ///< Valor -> se sabe constante.
+struct RangeKnown;        ///< Rangos: del valor se sabe algo.
+struct FactPresent;       ///< El hecho esta en la tabla.
+struct CallPathLen;       ///< Largo del camino de llamadas.
+struct DirtyOf;           ///< Funcion -> sus hechos caducaron.
+struct EffectsDirtyOf;    ///< ... y sus efectos.
+struct JointBytes;        ///< Trozos de cadena ya unidos.
+struct SlotAlive;         ///< Hueco de pila -> alguien lo usa todavia.
+struct FmaUseCount;       ///< Fusion multiplicar-sumar: cuantos usos tiene.
+struct NarrowCmpConst;    ///< Estrechar comparaciones: la constante del valor.
+struct ConstMapValue;     ///< Mapa de constantes: el valor de cada una.
+struct IsSlot;            ///< El valor es un hueco de pila.
+struct ReachesCalln;      ///< El valor llega a una llamada nativa.
+struct AmbiguousAlias;    ///< No se pudo demostrar de quien es la direccion.
+struct DerivedFrom;       ///< El valor se deriva de otro que se persigue.
+struct Tainted;           ///< El valor quedo contaminado por lo de arriba.
+struct CreatesEnv;        ///< La funcion crea un entorno de closure.
+struct IsYielder;         ///< ... y la que cede el paso.
+struct Ownable;           ///< ... y de la que se puede tomar propiedad.
+struct IsConstDef;        ///< La definicion del valor es una constante.
+struct Unreachable;       ///< Bloque al que no se llega desde la entrada.
+} // namespace scratch
+
 /* Helpers locales para constant folding de math IR ops (Math-IR-promote
  * v2.2c).  Preservan bits IEEE 754 via memcpy para no perder precision
  * en el round-trip uint64 <-> double que el IR usa. */
@@ -514,7 +588,7 @@ static bool is_pure_allocator_name(const std::string &name) {
 
 static bool dead_alloc_elim_impl(IrFunction &fn) {
     /* Pasada 1: encontrar valores usados (mismo que DCE). */
-    std::unordered_set<IrValueId> used;
+    util::NamedSet<IrValueId, scratch::DeadAllocUsed> used;
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
             for (IrValueId op : ins.operands) {
@@ -577,8 +651,8 @@ static bool dead_stack_slot_elim_impl(IrFunction &fn) {
      * otro sitio, pero solo si ese otro sitio esta vivo -- y de ahi el punto
      * fijo: al morir un hueco, el de al lado puede quedarse sin lectores. */
     const size_t NV = fn.values.size();
-    std::vector<bool> es_hueco(NV, false);
-    std::vector<bool> vivo(NV, false);
+    util::NamedVector<bool, scratch::IsSlot> es_hueco(NV, false);
+    util::NamedVector<bool, scratch::SlotAlive> vivo(NV, false);
     bool hay = false;
     for (const auto &bb : fn.blocks) {
         for (const auto &ins : bb.instrs) {
@@ -695,7 +769,8 @@ static bool promote_callned_allocas_impl(IrFunction &fn) {
     if (fn.values.empty()) return false;
 
     /* Step 1: detectar valores que llegan a args de CALLN. */
-    std::vector<bool> reaches_calln(fn.values.size(), false);
+    util::NamedVector<bool, scratch::ReachesCalln> reaches_calln(
+        fn.values.size(), false);
     bool found_any_calln = false;
     for (const auto &blk : fn.blocks) {
         for (const auto &ins : blk.instrs) {
@@ -908,8 +983,8 @@ static bool promote_local_allocas_impl(IrFunction &fn, bool force_all) {
      * candidates), conservativo: marcamos AMBOS como unsafe. */
     std::vector<int8_t> derived_from(fn.values.size(),
                                      -1); /* -1 = no, >=0 = idx en candidates */
-    std::vector<bool> ambiguous(fn.values.size(),
-                                false); /* derivado de >1 candidate */
+    util::NamedVector<bool, scratch::AmbiguousAlias> ambiguous(
+        fn.values.size(), false); /* derivado de >1 candidate */
 
     auto set_derived = [&](IrValueId v, int8_t origin) {
         if (v >= fn.values.size()) return false;
@@ -994,7 +1069,8 @@ static bool promote_local_allocas_impl(IrFunction &fn, bool force_all) {
      *   - ALLOCA itself: el propio seed.
      */
     /* uint8_t en lugar de bool para evitar std::vector<bool>::reference. */
-    std::vector<uint8_t> escapes(candidates.size(), 0u);
+    util::NamedVector<uint8_t, scratch::EscapeCandidates> escapes(
+        candidates.size(), 0u);
     auto mark_escape = [&](IrValueId v) {
         if (v == IR_NO_VALUE || v >= derived_from.size()) return;
         if (derived_from[v] < 0) return;
@@ -1370,7 +1446,8 @@ static bool promote_local_raw_alloc_impl(IrFunction &fn) {
     // slot_loaded[S]=1 si S es la raiz del addr de algun LOAD.
     // slot_escapes[S]=1 si la direccion de S sale del frame (operand de
     // CALL*/RET/THROW/... o STORE-as-val).
-    std::vector<uint8_t> slot_loaded(NV, 0u), slot_escapes(NV, 0u);
+    util::NamedVector<uint8_t, scratch::SlotLoaded> slot_loaded(NV, 0u);
+    util::NamedVector<uint8_t, scratch::SlotEscapes> slot_escapes(NV, 0u);
     {
         auto root_of = [&](IrValueId v) -> IrValueId {
             return (v != IR_NO_VALUE && v < NV) ? slot_root[v] : IR_NO_VALUE;
@@ -1460,7 +1537,7 @@ static bool promote_local_raw_alloc_impl(IrFunction &fn) {
     //
     // slot_off_zero[v]: v es alias de offset-0 de su slot raiz (ALLOCA o
     // MOV/cast de el; NUNCA un ADD con desplazamiento).
-    std::vector<uint8_t> slot_off_zero(NV, 0u);
+    util::NamedVector<uint8_t, scratch::SlotOffZero> slot_off_zero(NV, 0u);
     {
         for (const auto &blk : fn.blocks)
             for (const auto &ins : blk.instrs)
@@ -1495,7 +1572,7 @@ static bool promote_local_raw_alloc_impl(IrFunction &fn) {
     }
     // slot_loads_off0[S]=1 si TODOS los loads que enraizan en S son offset-0.
     // slot_store0_count[S]=numero de STOREs offset-0 que enraizan en S.
-    std::vector<uint8_t> slot_loads_off0(NV, 1u);
+    util::NamedVector<uint8_t, scratch::SlotLoadsOff0> slot_loads_off0(NV, 1u);
     std::vector<uint32_t> slot_store0_count(NV, 0u);
     {
         auto root_of = [&](IrValueId v) -> IrValueId {
@@ -1541,13 +1618,15 @@ static bool promote_local_raw_alloc_impl(IrFunction &fn) {
         // derivados[v] = true si v puede ser un alias del dst (forward
         // flow desde el RAW_ALLOC dst a traves de ADD/SUB/BITCAST/MOV/
         // CAST/*EXT/TRUNC/PHI).
-        std::vector<bool> derivados(fn.values.size(), false);
+        util::NamedVector<bool, scratch::DerivedFrom> derivados(
+            fn.values.size(), false);
         derivados[c.dst] = true;
         // box_carrier[S]=1: el slot S guarda ESTE box en offset 0 (carrier
         // limpio) -> sus loads off-0 son alias del box.
         // carrier_alias[v]=1: v es un load off-0 desde un carrier -> su free
         // debe reescribirse al ALLOCA del box (NOP-able por aot_lower/JIT).
-        std::vector<uint8_t> box_carrier(NV, 0u), carrier_alias(NV, 0u);
+        util::NamedVector<uint8_t, scratch::BoxCarrier> box_carrier(NV, 0u);
+        util::NamedVector<uint8_t, scratch::CarrierAlias> carrier_alias(NV, 0u);
         bool prop = true;
         int iters = 0;
         while (prop && iters++ < 32) {
@@ -1870,7 +1949,8 @@ static bool promote_closure_env_impl(IrFunction &fn) {
 
             // Fixpoint: tinta = {R, derivados, loads desde slots tintados};
             // tainted_slots = ALLOCAs locales donde se guarda un valor tintado.
-            std::vector<bool> taint(fn.values.size(), false);
+            util::NamedVector<bool, scratch::Tainted> taint(fn.values.size(),
+                                                            false);
             std::unordered_set<IrValueId> tainted_slots;
             taint[A.dst] = true;
             auto is_t = [&](IrValueId v) -> bool {
@@ -2139,7 +2219,10 @@ static bool fold_strcat_impl(IrModule &mod) {
                 // dedupea, asi que dos `"aaa" + "bbb"` comparten entrada.
                 auto [pa, na] = mod.static_data.bytes_at(sa);
                 auto [pb, nb] = mod.static_data.bytes_at(sb);
-                std::vector<uint8_t> junto;
+                /* Sin etiqueta a proposito: esto NO es estructura auxiliar, es el bufer que
+     * se ENTREGA a `intern_static_data`, y ese es un `std::vector<uint8_t>` de
+     * la API del modulo. */
+    std::vector<uint8_t> junto;
                 junto.reserve(na + nb);
                 junto.insert(junto.end(), pa, pa + na);
                 junto.insert(junto.end(), pb, pb + nb);
@@ -2204,7 +2287,8 @@ static bool own_closure_envs_impl(IrModule &mod) {
     /* 1. yielders: funciones que CREAN un env etiquetado o que REENVIAN el
      *    resultado de una CALL a otra yielder.  Fixpoint. */
     const size_t NF = mod.functions.size();
-    std::vector<bool> creates_env(NF, false), yielder(NF, false);
+    util::NamedVector<bool, scratch::CreatesEnv> creates_env(NF, false);
+    util::NamedVector<bool, scratch::IsYielder> yielder(NF, false);
     for (size_t i = 0; i < NF; ++i) {
         for (const auto &bb : mod.functions[i].blocks)
             for (const auto &in : bb.instrs)
@@ -2237,7 +2321,7 @@ static bool own_closure_envs_impl(IrModule &mod) {
 
     /* 2. ownable[F] (solo yielders): cada call-site que provee buffer es un
      *    forward-a-ownable o un dueno-limpio.  Fixpoint (true -> false). */
-    std::vector<bool> ownable(NF, true);
+    util::NamedVector<bool, scratch::Ownable> ownable(NF, true);
     grew = true;
     while (grew) {
         grew = false;
@@ -2493,7 +2577,8 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
     /* Step 2: forward-flow del set derivado.  derived_from[v] = idx del
      * candidato del que v deriva (-1 = ninguno); ambiguous[v] si >1. */
     std::vector<int8_t> derived_from(fn.values.size(), -1);
-    std::vector<bool> ambiguous(fn.values.size(), false);
+    util::NamedVector<bool, scratch::AmbiguousAlias> ambiguous(fn.values.size(),
+                                                               false);
 
     auto set_derived = [&](IrValueId v, int8_t origin) -> bool {
         if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
@@ -2558,7 +2643,7 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
 
     /* Step 3: clasificar usos.  escapes[i]=1 si algun uso de un derivado del
      * candidato i es UNSAFE. */
-    std::vector<uint8_t> escapes(sites.size(), 0u);
+    util::NamedVector<uint8_t, scratch::EscapeSites> escapes(sites.size(), 0u);
 
     auto mark_escape = [&](IrValueId v) {
         if (v == IR_NO_VALUE || v >= derived_from.size()) return;
@@ -3120,12 +3205,12 @@ bool sr_rewrite_load_zero(IrInstr &ld, IrFunction &fn, bool apply) {
 
 struct SrDom {
     size_t N = 0;
-    IrBlockId UNDEF = 0;
+    IrBlockId UNDEF = IrBlockId(0);
     std::vector<std::vector<IrBlockId>> preds, succs;
     std::vector<IrBlockId> idom;                      ///< inmediato dominador
     std::vector<std::vector<IrBlockId>> df;           ///< dominance frontier
     std::vector<std::vector<IrBlockId>> dom_children; ///< hijos en el dom-tree
-    std::vector<uint8_t> reachable; ///< alcanzable desde entry
+    util::NamedVector<uint8_t, scratch::Reachable> reachable; ///< desde entry
 
     bool dominates(IrBlockId T, IrBlockId B) const {
         if (T == B) return true;
@@ -3178,12 +3263,12 @@ SrDom sr_compute_dom(const IrFunction &fn) {
         }
     }
 
-    const IrBlockId entry = 0;
+    const IrBlockId entry = IrBlockId(0);
     /* Reverse postorder via DFS iterativo (evita stack overflow en CFGs
      * grandes). */
     std::vector<IrBlockId> rpo;
     {
-        std::vector<uint8_t> vis(N, 0);
+        util::NamedVector<uint8_t, scratch::BlockVisited> vis(N, 0);
         std::vector<std::pair<IrBlockId, size_t>> st; /* (bloque, idx_succ) */
         st.push_back({entry, 0});
         vis[entry] = 1;
@@ -3205,7 +3290,7 @@ SrDom sr_compute_dom(const IrFunction &fn) {
         }
         rpo.assign(post.rbegin(), post.rend());
     }
-    std::vector<uint32_t> rpo_pos(N, UINT32_MAX);
+    util::NamedVector<uint32_t, scratch::RpoPos> rpo_pos(N, UINT32_MAX);
     for (size_t i = 0; i < rpo.size(); ++i)
         rpo_pos[rpo[i]] = (uint32_t)i;
 
@@ -3240,14 +3325,14 @@ SrDom sr_compute_dom(const IrFunction &fn) {
     }
 
     /* Dom-tree children. */
-    for (IrBlockId b = 0; b < N; ++b) {
+    for (IrBlockId b = IrBlockId(0); b < N; ++b) {
         if (b != entry && d.idom[b] != d.UNDEF)
             d.dom_children[d.idom[b]].push_back(b);
     }
 
     /* Dominance frontier (Cytron): por cada bloque b con >=2 preds, por cada
      * pred p, sube en el dom-tree desde p hasta idom[b] añadiendo b al DF. */
-    for (IrBlockId b = 0; b < N; ++b) {
+    for (IrBlockId b = IrBlockId(0); b < N; ++b) {
         if (d.preds[b].size() < 2) continue;
         for (IrBlockId p : d.preds[b]) {
             IrBlockId runner = p;
@@ -3338,7 +3423,7 @@ bool sr_mem2reg_object(
     /* 1) Recolectar offsets accedidos + tipo por offset + bloques con store. */
     std::unordered_map<uint32_t, IrType> field_type; /* offset -> tipo */
     std::unordered_map<uint32_t, std::vector<IrBlockId>> store_blocks;
-    std::vector<uint32_t> offsets;
+    util::NamedVector<uint32_t, scratch::StrcatOffsets> offsets;
     for (size_t bi = 0; bi < N; ++bi) {
         for (const auto &in : fn.blocks[bi].instrs) {
             uint32_t off;
@@ -3499,8 +3584,9 @@ bool sr_mem2reg_object(
      * registros VM -> presion + copies).  Los PHIs de loop-header (acumuladores
      * incondicionales) y los if-merge FUERA de loops (coste unico) SI son win.
      */
-    std::vector<uint8_t> is_loop_header(N, 0), in_loop(N, 0);
-    for (IrBlockId b = 0; b < N; ++b) {
+    util::NamedVector<uint8_t, scratch::LoopHeader> is_loop_header(N, 0);
+    util::NamedVector<uint8_t, scratch::InLoop> in_loop(N, 0);
+    for (IrBlockId b = IrBlockId(0); b < N; ++b) {
         for (IrBlockId h : dom.succs[b]) {
             if (!dom.dominates(h, b)) continue; /* back-edge b->h */
             is_loop_header[h] = 1;
@@ -3694,7 +3780,7 @@ bool sr_mem2reg_object(
         for (auto it = pushed.rbegin(); it != pushed.rend(); ++it)
             stack[*it].pop_back();
     };
-    rename(0, 0);
+    rename(IrBlockId(0), IrBlockId(0));
     if (!rename_ok) {
         reason = rfail ? rfail : "rename fallo";
         return false;
@@ -3734,7 +3820,7 @@ bool sr_mem2reg_object(
         uint32_t off = kv.second;
         /* Localizar el bloque (clave inversa: buscar en phi_value). */
         IrBlockId blk = dom.UNDEF;
-        for (IrBlockId b = 0; b < N; ++b) {
+        for (IrBlockId b = IrBlockId(0); b < N; ++b) {
             auto it = phi_value.find(pkey(off, b));
             if (it != phi_value.end() && it->second == phidst) {
                 blk = b;
@@ -3854,8 +3940,10 @@ done_call:;
  * @param is_const_def  Recibe si ese identificador lo define un @c CONST.
  */
 static void build_const_index(const IrFunction &fn,
-                              std::vector<uint64_t> &const_of,
-                              std::vector<char> &is_const_def) {
+                              util::NamedVector<uint64_t, scratch::ConstOfValue>
+                                  &const_of,
+                              util::NamedVector<char, scratch::IsConstDef>
+                                  &is_const_def) {
     const_of.assign(fn.values.size(), 0);
     is_const_def.assign(fn.values.size(), 0);
     for (const auto &b : fn.blocks)
@@ -3881,8 +3969,12 @@ static void build_const_index(const IrFunction &fn,
  * @return true si @p v es constante.
  */
 static bool const_value_indexed(const IrFunction &fn,
-                                const std::vector<uint64_t> &const_of,
-                                const std::vector<char> &is_const_def,
+                                const util::NamedVector<uint64_t,
+                                                        scratch::ConstOfValue>
+                                    &const_of,
+                                const util::NamedVector<char,
+                                                        scratch::IsConstDef>
+                                    &is_const_def,
                                 IrValueId v, uint64_t &out_k) {
     if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
     if (fn.values[v].is_const) {
@@ -3945,8 +4037,8 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
 
     /* El indice, FUERA del bucle por sitio: la busqueda estaba dentro, asi que
      * recorria la funcion entera una vez por cada consulta de cada sitio. */
-    std::vector<uint64_t> const_of;
-    std::vector<char> is_const_def;
+    util::NamedVector<uint64_t, scratch::ConstOfValue> const_of;
+    util::NamedVector<char, scratch::IsConstDef> is_const_def;
     build_const_index(fn, const_of, is_const_def);
 
     for (const auto &site : sites) {
@@ -4500,8 +4592,8 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
     if (sites.empty()) return false;
 
     /* El indice de constantes, UNA vez por funcion.  @see build_const_index */
-    std::vector<uint64_t> const_of;
-    std::vector<char> is_const_def;
+    util::NamedVector<uint64_t, scratch::ConstOfValue> const_of;
+    util::NamedVector<char, scratch::IsConstDef> is_const_def;
     build_const_index(fn, const_of, is_const_def);
 
     /* --- Whitelist de usos, para TODOS los sitios en DOS recorridos ---
@@ -4522,7 +4614,7 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
      * tablas hash: son del tamano de la funcion y se consultan una vez por
      * operando, que es el camino caliente de este pase. */
     constexpr int32_t kNoSite = -1;
-    std::vector<int32_t> site_of(fn.values.size(), kNoSite);
+    util::NamedVector<int32_t, scratch::SiteOfValue> site_of(fn.values.size(), kNoSite);
     for (size_t si = 0; si < sites.size(); ++si)
         if (sites[si].base < site_of.size())
             site_of[sites[si].base] = static_cast<int32_t>(si);
@@ -4535,8 +4627,8 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
      * no la frase deja esto en un puntero por sitio. */
     std::vector<const char *> why(sites.size(), "VXA087");
     /* Que sitio posee cada field-addr, y con que desplazamiento. */
-    std::vector<int32_t> fa_site(fn.values.size(), kNoSite);
-    std::vector<uint32_t> fa_off(fn.values.size(), 0);
+    util::NamedVector<int32_t, scratch::FieldSiteOf> fa_site(fn.values.size(), kNoSite);
+    util::NamedVector<uint32_t, scratch::FieldOffsetOf> fa_off(fn.values.size(), 0);
     /* Y la lista por sitio, para poder armar su mapa sin recorrer la funcion
      * otra vez al final. */
     std::vector<std::vector<std::pair<IrValueId, uint32_t>>> fa_by_site(
@@ -4818,7 +4910,7 @@ static bool fuse_fma_impl(IrFunction &fn) {
         return false;
     const size_t nv = fn.values.size();
     if (nv == 0) return false;
-    std::vector<int> uc(nv, 0);
+    util::NamedVector<int, scratch::FmaUseCount> uc(nv, 0);
     std::vector<IrInstr *> def_fmul(nv, nullptr);
     for (auto &bb : fn.blocks) {
         for (auto &in : bb.instrs) {
@@ -4921,10 +5013,10 @@ static bool narrow_cmp_impl(IrFunction &fn) {
     // Mapa de definiciones: por cada value, si es SEXT/ZEXT (con su fuente +
     // ancho) o CONST (con su valor).
     std::vector<IrValueId> ext_src(nv, IR_NO_VALUE);
-    std::vector<uint8_t> ext_kind(nv, 0); // 1=SEXT, 2=ZEXT
+    util::NamedVector<uint8_t, scratch::ExtKind> ext_kind(nv, 0); // 1=SEXT, 2=ZEXT
     std::vector<IrType> src_type(nv, IrType::I64);
-    std::vector<int64_t> cval(nv, 0);
-    std::vector<uint8_t> is_c(nv, 0);
+    util::NamedVector<int64_t, scratch::NarrowCmpConst> cval(nv, 0);
+    util::NamedVector<uint8_t, scratch::ExtIsConst> is_c(nv, 0);
     for (auto &bb : fn.blocks) {
         for (auto &in : bb.instrs) {
             if (in.dst == IR_NO_VALUE || static_cast<size_t>(in.dst) >= nv)
@@ -5131,8 +5223,8 @@ static analysis::effects::NativeDecls collect_native_decls_timed(IrModule &mod) 
 
 /// Donde una instruccion queda definida: bloque y posicion dentro de el.
 struct DefInfo {
-    IrBlockId bb;
-    size_t idx;
+    IrBlockId bb = IrBlockId(0);
+    size_t idx = 0;
 };
 
 /// Una instruccion que `reassoc` quiere intercalar, y donde.
@@ -5159,7 +5251,7 @@ constexpr size_t kNoDef = static_cast<size_t>(-1);
 struct PassScratch {
     std::vector<DefInfo> defs;
     std::vector<int64_t> const_val;
-    std::vector<uint8_t> value_is_const;
+    util::NamedVector<uint8_t, scratch::ValueIsConst> value_is_const;
     std::vector<IrInstr *> def_of;
     std::vector<ReassocInsert> pending;
     /// El bloque que se esta tejiendo.  Tras el intercambio se queda con el
@@ -5244,8 +5336,8 @@ class ConstMap {
     }
 
   private:
-    std::vector<int64_t> val_;
-    std::vector<uint8_t> known_;
+    util::NamedVector<int64_t, scratch::ConstMapValue> val_;
+    util::NamedVector<uint8_t, scratch::RangeKnown> known_;
 };
 
 } // namespace
@@ -6157,7 +6249,7 @@ class FactsTable {
 
   private:
     std::vector<ValueFacts> v_;
-    std::vector<uint8_t> present_;
+    util::NamedVector<uint8_t, scratch::FactPresent> present_;
 };
 
 /* La tabla de ESTE hilo, reutilizada entre llamadas.
@@ -6983,7 +7075,7 @@ static bool fold_guarded_compares(IrFunction &fn) {
 
     // Plegar cada CMP usando los predicados activos de su bloque.
     bool changed = false;
-    for (IrBlockId bi = 0; bi < N; ++bi) {
+    for (IrBlockId bi = IrBlockId(0); bi < N; ++bi) {
         if (active[bi].empty()) continue;
         for (auto &ins : fn.blocks[bi].instrs) {
             if (ins.dst == IR_NO_VALUE || ins.operands.size() != 2) continue;
@@ -7272,7 +7364,7 @@ elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
                 uint32_t block = 0;
                 uint32_t idx = 0;
                 uint32_t slot = 0;
-                IrValueId value = 0;
+                IrValueId value = IrValueId(0);
             };
             std::vector<Punto> frontera;
             bool imposible = false;
@@ -7420,7 +7512,8 @@ static void seed_facts_from_asa(const IrFunction &fn, FactsTable &facts) {
      * por bloque.  La consulta contesta por la definicion, que es lo que aqui
      * se necesita, sin estado y sin iterar. */
     analysis::RangeQuery asa(fn, ir_facts);
-    for (IrValueId v = 0; v < static_cast<IrValueId>(fn.values.size()); ++v) {
+    for (IrValueId v = IrValueId(0);
+         v < static_cast<IrValueId>(fn.values.size()); ++v) {
         const analysis::ValueRange &r = asa.of(v);
         if (!r.acotada() || r.es_todo()) continue;
         if (r.t.sin_signo) continue; // otro convenio de extremos
@@ -7490,8 +7583,8 @@ static bool valuefacts_consumers_impl(IrFunction &fn) {
         analysis::asa::FactBase asa_base(analysis::asa::kStageDuringOpt);
         const analysis::IrFacts &ir_facts = asa_base.structure(fn);
         const analysis::RangeFacts &asa_ranges = asa_base.ranges(fn);
-        for (IrValueId v = 0; v < static_cast<IrValueId>(fn.values.size());
-             ++v) {
+        for (IrValueId v = IrValueId(0);
+             v < static_cast<IrValueId>(fn.values.size()); ++v) {
             g_rc_values.fetch_add(1, std::memory_order_relaxed);
             const ValueFacts f = facts.get(v);
             const bool opt_bounds = facts.have(v) && f.has_range();
@@ -7763,7 +7856,7 @@ static bool reassoc_impl(IrFunction &fn) {
     // @ref PassScratch.
     PassScratch &scratch = pass_scratch();
     std::vector<DefInfo> &defs = scratch.defs;
-    defs.assign(fn.values.size(), DefInfo{0, kNoDef});
+    defs.assign(fn.values.size(), DefInfo{IrBlockId(0), kNoDef});
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         const auto &bb = fn.blocks[bi];
         for (size_t i = 0; i < bb.instrs.size(); ++i) {
@@ -7777,7 +7870,8 @@ static bool reassoc_impl(IrFunction &fn) {
     /* El valor de cada constante, y aparte SI lo es: sin la marca no se
      * distingue "vale cero" de "no es constante". */
     std::vector<int64_t> &const_val = scratch.const_val;
-    std::vector<uint8_t> &value_is_const = scratch.value_is_const;
+    util::NamedVector<uint8_t, scratch::ValueIsConst> &value_is_const =
+        scratch.value_is_const;
     const_val.assign(fn.values.size(), 0);
     value_is_const.assign(fn.values.size(), 0);
     for (const auto &bb : fn.blocks) {
@@ -7816,7 +7910,7 @@ static bool reassoc_impl(IrFunction &fn) {
          * valor de OTRA constante. */
         const_val.push_back(static_cast<int64_t>(imm));
         value_is_const.push_back(1);
-        defs.push_back(DefInfo{0, kNoDef});
+        defs.push_back(DefInfo{IrBlockId(0), kNoDef});
 
         IrInstr ci{};
         ci.op = IrOp::CONST;
@@ -8312,7 +8406,8 @@ static bool model_removable(const IrFunction &fn,
 static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                      const analysis::AsmBindingFacts *asm_bindings,
                      DceEffectsCache *cache, const analysis::IrFacts *facts,
-                     const analysis::PointsTo *pt) {
+                     const analysis::PointsTo *pt,
+                     analysis::LoopsOracle loops) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
@@ -8380,7 +8475,8 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
             const uint64_t t_r = util::reloj::ahora();
             const analysis::RangeRequester mark(
                 analysis::RangeAsker::OptimizerAsm);
-            fx_rangos = analysis::compute_ranges_ptr(fn, hechos);
+            fx_rangos = analysis::compute_ranges_ptr(
+                fn, hechos, analysis::RangeOptions{}, nullptr, nullptr, loops);
             fx_env.rangos = fx_rangos.get();
             fx_env.rangos_de = &fn;
             ns_peticiones += util::reloj::a_ns(util::reloj::ahora() - t_r);
@@ -8918,7 +9014,8 @@ static bool const_fold_impl(IrFunction &fn) {
 static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                      const std::unordered_set<std::string> *pure_callees,
                      const HechosDeAsmParaDse *hechos_asm,
-                     const analysis::IrFacts *facts) {
+                     const analysis::IrFacts *facts,
+                     analysis::LoopsOracle loops) {
     bool changed = false;
     /* Def-use de la funcion: los necesita el modelo de efectos para contestar
      * por instruccion.
@@ -8990,12 +9087,15 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
         // resto (Global/ArgDerived/Unknown/inexacto) no tiene entrada ->
         // barrera.
         analysis::PointsTo local_pt;
+        /* Con `ir_facts`, que ya esta arriba: reconstruirlos aqui era el mismo
+         * recorrido por segunda vez dentro de la misma llamada al pase. */
         const analysis::PointsTo &upt =
             pt ? *pt
-               : (local_pt = analysis::compute_points_to(
-                      fn, analysis::build_ir_facts(fn)));
+               : (local_pt = analysis::compute_points_to(fn, ir_facts, nullptr,
+                                                         loops));
         using MK = analysis::effects::AbstractLoc::Kind;
-        for (IrValueId v = 0; v < static_cast<IrValueId>(upt.loc.size()); ++v) {
+        for (IrValueId v = IrValueId(0);
+             v < static_cast<IrValueId>(upt.loc.size()); ++v) {
             const analysis::PointsToEntry &e = upt.loc[v];
             if (!e.off_exact) continue; // whole-root/inexact -> barrera
             RootKind k = RootKind::NONE;
@@ -9023,8 +9123,12 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
                 k = RootKind::GLOBAL;
             else
                 continue; // ArgDerived/Unknown/global sin simbolo -> barrera
-            addr_of[v] = AddrInfo{e.root, e.off};
-            root_kind[e.root] = k; // la raiz misma se resuelve a off 0 exacto
+            /* `PointsToEntry::root` guarda un value-id O un indice de
+             * parametro, asi que la conversion se escribe: aqui sabemos que es
+             * lo primero porque el `kind` ya lo ha decidido arriba. */
+            const IrValueId raiz = static_cast<IrValueId>(e.root);
+            addr_of[v] = AddrInfo{raiz, e.off};
+            root_kind[raiz] = k; // la raiz misma se resuelve a off 0 exacto
         }
     } else {
         for (auto &bb : fn.blocks)
@@ -9206,7 +9310,6 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
          * Perezosos: un programa sin un solo bloque de asm no paga nada. */
         bool hechos_asm_listos = false;
         analysis::AsmBindingFacts lig_asm_fn;
-        analysis::IrFacts hechos_fn;
         /* Compartido y no por valor: copiar un `RangeFacts` copia el estado de
          * entrada de CADA bloque, y aqui se pide una vez por funcion con asm.
          * Es la misma copia que costo 16 s de una compilacion de 26. */
@@ -9234,12 +9337,18 @@ static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
             } else {
                 PassTimer crono__("  dse:facts (built here)");
                 lig_asm_fn = analysis::compute_asm_bindings(fn);
-                hechos_fn = analysis::build_ir_facts(fn);
+                /* Los de ARRIBA, no unos nuevos: `ir_facts` ya describe esta
+                 * funcion al entrar al pase -- que es justo lo que este bloque
+                 * necesita -- y este lambda corre antes de tocar nada.  Eran
+                 * los MISMOS hechos calculados dos veces dentro de la misma
+                 * llamada. */
                 const analysis::RangeRequester mark(
                     analysis::RangeAsker::OptimizerAsm);
-                rangos_fn = analysis::compute_ranges_ptr(fn, hechos_fn);
+                rangos_fn = analysis::compute_ranges_ptr(
+                    fn, ir_facts, analysis::RangeOptions{}, nullptr, nullptr,
+                    loops);
                 lig_usar = &lig_asm_fn;
-                hechos_usar = &hechos_fn;
+                hechos_usar = &ir_facts;
                 rangos_usar = rangos_fn.get();
             }
             clases_asm_fn.reserve(lig_usar->ligaduras.size());
@@ -9829,14 +9938,14 @@ static bool unreachable_impl(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
 
     const size_t nblocks = fn.blocks.size();
-    std::vector<bool> reachable(nblocks, false);
+    util::NamedVector<bool, scratch::Unreachable> reachable(nblocks, false);
 
     // BFS desde el bloque de entrada (bloque 0)
     const std::unordered_map<std::string, IrBlockId> name2id =
         bloques_por_nombre(fn);
     std::vector<IrBlockId> succs;
     std::queue<IrBlockId> worklist;
-    worklist.push(0);
+    worklist.push(IrBlockId(0));
     reachable[0] = true;
 
     while (!worklist.empty()) {
@@ -9876,7 +9985,7 @@ static bool unreachable_impl(IrFunction &fn) {
 
     // Construir mapa de reindexacion: viejo_id -> nuevo_id
     std::vector<IrBlockId> remap(nblocks, IR_NO_BLOCK);
-    IrBlockId new_id = 0;
+    IrBlockId new_id = IrBlockId(0);
     for (size_t b = 0; b < nblocks; ++b) {
         if (reachable[b]) remap[b] = new_id++;
     }
@@ -9921,7 +10030,7 @@ static bool unreachable_impl(IrFunction &fn) {
             // jump_targets) igual que target_block.  Sin esto, tras la
             // renumeracion la jump table apunta a ids viejos -> dispatch
             // permutado.
-            for (uint32_t &t : ins.jump_targets)
+            for (IrBlockId &t : ins.jump_targets)
                 if (t < nblocks && remap[t] != IR_NO_BLOCK) t = remap[t];
         }
         new_blocks.push_back(std::move(bb));
@@ -11352,7 +11461,7 @@ static bool licm_impl(IrFunction &fn, const analysis::PointsTo *pt,
      * hasta punto fijo.  intersect(b1, b2) sube en el dom-tree hasta
      * encontrar el ancestro comun mas cercano. */
     const IrBlockId UNDEF = static_cast<IrBlockId>(N);
-    const IrBlockId entry = 0; /* convencion: bloque 0 es entry */
+    const IrBlockId entry = IrBlockId(0); /* convencion: bloque 0 es entry */
 
     /* DFS para reverse postorder. */
     std::vector<IrBlockId> rpo;
@@ -11371,7 +11480,7 @@ static bool licm_impl(IrFunction &fn, const analysis::PointsTo *pt,
     }
     /* rpo_pos[b] = posicion de b en rpo (mayor = mas adelante = mas alto).
      * Usado por intersect_dom.  Bloques no alcanzables tienen UNDEF rpo_pos. */
-    std::vector<uint32_t> rpo_pos(N, UINT32_MAX);
+    util::NamedVector<uint32_t, scratch::RpoPos> rpo_pos(N, UINT32_MAX);
     for (size_t i = 0; i < rpo.size(); ++i)
         rpo_pos[rpo[i]] = static_cast<uint32_t>(i);
 
@@ -13575,7 +13684,7 @@ static bool schedule_impl(IrFunction &fn, const analysis::PointsTo *pt,
         if (topo.size() != M)
             continue; // ciclo detectado (no deberia pasar en SSA + DAG)
 
-        std::vector<uint32_t> cpl(M, 0);
+        util::NamedVector<uint32_t, scratch::CallPathLen> cpl(M, 0);
         for (auto it = topo.rbegin(); it != topo.rend(); ++it) {
             size_t n = *it;
             uint32_t best = 0;
@@ -13891,10 +14000,14 @@ static bool loop_memcpy_idiom_impl(IrFunction &fn) {
             continue;
 
         // Identificar el predecessor (entry) y el body en los phi_args.
+        /* Un bloque se marca con IR_NO_BLOCK, no con IR_NO_VALUE: aqui estaba
+         * el centinela de un VALOR puesto en dos identificadores de BLOQUE.
+         * Funcionaba de milagro -- los dos son 0xFFFFFFFF --, y lo destapo el
+         * tipo, no una prueba. */
         IrValueId v_init = IR_NO_VALUE;
-        IrBlockId pred_id = IR_NO_VALUE;
+        IrBlockId pred_id = IR_NO_BLOCK;
         IrValueId v_next = IR_NO_VALUE;
-        IrBlockId loop_pred = IR_NO_VALUE;
+        IrBlockId loop_pred = IR_NO_BLOCK;
         for (const auto &pa : phi.phi_args) {
             if (pa.block == body_id) {
                 v_next = pa.value;
@@ -14747,9 +14860,10 @@ PassResult ir_pass_dce(IrFunction &fn,
                        const analysis::effects::NativeDecls *decls,
                        const analysis::AsmBindingFacts *asm_bindings,
                        DceEffectsCache *cache, const analysis::IrFacts *facts,
-                       const analysis::PointsTo *pt) {
+                       const analysis::PointsTo *pt,
+                       analysis::LoopsOracle loops) {
     return PassResult::of(
-        fn, dce_impl(fn, decls, asm_bindings, cache, facts, pt));
+        fn, dce_impl(fn, decls, asm_bindings, cache, facts, pt, loops));
 }
 
 PassResult ir_pass_copy_prop(IrFunction &fn) {
@@ -14763,9 +14877,10 @@ PassResult ir_pass_const_fold(IrFunction &fn) {
 PassResult ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
                        const std::unordered_set<std::string> *pure_callees,
                        const HechosDeAsmParaDse *hechos_asm,
-                       const analysis::IrFacts *facts) {
-    return PassResult::of(fn,
-                          dse_impl(fn, pt, pure_callees, hechos_asm, facts));
+                       const analysis::IrFacts *facts,
+                       analysis::LoopsOracle loops) {
+    return PassResult::of(
+        fn, dse_impl(fn, pt, pure_callees, hechos_asm, facts, loops));
 }
 
 PassResult ir_pass_unreachable(IrFunction &fn) {
@@ -14915,6 +15030,26 @@ const bool g_no_escape_scalar = util::flag_on(util::FlagId::NoEscapeScalar);
 const bool g_no_dead_stack_slot = util::flag_on(util::FlagId::NoDeadStackSlot);
 
 } // namespace
+
+/**
+ * @brief Contesta por los bucles de @p fn desde el gestor del optimizador.
+ *
+ * Es el otro extremo de @ref analysis::LoopsOracle: los analisis preguntan
+ * SOLO cuando lo necesitan y esto responde sin recalcular mientras la version
+ * de la funcion no cambie.  Antes cada uno se los construia por su cuenta --
+ * siete recorridos del CFG por funcion, medidos.
+ *
+ * @param ctx El @c AnalysisManager del optimizador.
+ * @param fn  La funcion por la que se pregunta.
+ * @return Sus hechos de bucle, del gestor.
+ */
+static const analysis::LoopFacts &answer_loops(void *ctx,
+                                               const ir::IrFunction &fn) {
+    auto *am = static_cast<analysis::AnalysisManager *>(ctx);
+    return am->get_or_compute_v<analysis::LoopsAnalysis, analysis::LoopFacts>(
+        fn.name_key(), fn.version,
+        [&fn]() { return analysis::compute_loop_facts(fn); });
+}
 
 void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                  analysis::asa::FactStore *facts) {
@@ -15068,6 +15203,16 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     // caducan); asi cada uno recibe una tabla FRESCA.  El manager cachea la
     // construccion en UN sitio y prepara la incrementalidad futura.
     analysis::AnalysisManager am;
+    /* A quien preguntan los analisis por los bucles.  El oraculo se pasa a
+     * `compute_points_to` y a los rangos, que preguntan SOLO si lo necesitan
+     * (pereza) y reciben la respuesta del gestor sin recalcular mientras la
+     * version no cambie (cache).  Las dos a la vez, que es el requisito.
+     *
+     * Con NOMBRE y no un lambda: quien contesta sale en el perfil. */
+    analysis::LoopsOracle loops_oracle;
+    loops_oracle.ask = &answer_loops;
+    loops_oracle.ctx = &am;
+
     auto pt_of = [&](IrFunction &fn) -> const analysis::PointsTo & {
         return am
             .get_or_compute_v<analysis::PointsToAnalysis, analysis::PointsTo>(
@@ -15077,7 +15222,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                                             analysis::IrFacts>(
                             fn.name_key(), fn.version,
                             [&]() { return analysis::build_ir_facts(fn); });
-                    return analysis::compute_points_to(fn, f);
+                    return analysis::compute_points_to(fn, f, nullptr,
+                                                       loops_oracle);
                 });
     };
     /* Sucia = tocada DESDE que se calcularon sus analisis.  Vive entre vueltas
@@ -15096,7 +15242,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * Con un vector por indice no hay hash ni busqueda, y cada hilo escribe en
      * su propia posicion.  Las funciones viven en un `std::vector`, asi que el
      * indice sale de la direccion. */
-    std::vector<uint8_t> dirty_of;
+    util::NamedVector<uint8_t, scratch::DirtyOf> dirty_of;
     /* Las ligaduras del asm, cacheadas como todo lo demas.  Marcador propio
      * para que el gestor no las mezcle con otro analisis de la misma unidad. */
     auto asm_of = [&](IrFunction &fn) -> const analysis::AsmBindingFacts & {
@@ -15144,7 +15290,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
             [&]() {
                 const analysis::RangeRequester mark(
                     analysis::RangeAsker::Optimizer);
-                return analysis::compute_ranges_ptr(fn, facts_of(fn));
+                return analysis::compute_ranges_ptr(
+                    fn, facts_of(fn), analysis::RangeOptions{}, nullptr,
+                    nullptr, loops_oracle);
             });
     };
     auto hechos_asm_de = [&](IrFunction &fn) {
@@ -15182,7 +15330,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * funcion sin tocarlos, y con una sola bandera cada consumidor acaba
      * tirando lo suyo por lo que le hizo otro. */
     /// Por INDICE, por lo mismo que @c dirty_of: se toca dentro del reparto.
-    std::vector<uint8_t> effects_dirty_of;
+    util::NamedVector<uint8_t, scratch::EffectsDirtyOf> effects_dirty_of;
     auto pt_invalidate = [&](IrFunction &fn) {
         /* Lo que el modelo dijo de sus instrucciones se apoya en estos mismos
          * hechos, asi que cae con ellos.  Una sola senal de invalidacion para
@@ -15355,7 +15503,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                  * vuelta del punto fijo. */
                 APLICA_PRESERVA_EFECTOS(ir_pass_dce(
                     fn, &decls_nativas, &asm_of(fn), &effects_cache[fi],
-                    &facts_of(fn), &pt_of(fn)));
+                    &facts_of(fn), &pt_of(fn), loops_oracle));
                 /* Punto seguro: terminado con esta funcion, ya no se va a usar
                  * ninguna referencia que diera el gestor.  Sin soltarlas, el
                  * respaldo que las mantiene vivas frente a una invalidacion
@@ -15401,7 +15549,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                              * recorrido por tercera vez -- `pt_of` ya sale de
                              * ellos --. */
                             APLICA(ir_pass_dse(fn, &pt_of(fn), &pure_callees,
-                                               &h__, &facts_of(fn)));
+                                               &h__, &facts_of(fn),
+                                               loops_oracle));
                         }
                     } else {
                         {
@@ -15454,8 +15603,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                         effects_dirty = false;
                     }
                     APLICA_PRESERVA_EFECTOS(ir_pass_dce(
-                        fn, &decls_nativas, &asm_of(fn),
-                        &effects_cache[fi], &facts_of(fn), &pt_of(fn)));
+                        fn, &decls_nativas, &asm_of(fn), &effects_cache[fi],
+                        &facts_of(fn), &pt_of(fn), loops_oracle));
                 }
 
                 if (level >= OptLevel::O3) {
@@ -15668,7 +15817,11 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         PassTimer c__("post:elide_narrow_norm (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native || fn.blocks.empty()) continue;
-            const analysis::IrFacts fx = analysis::build_ir_facts(fn);
+            /* Por el gestor, no construidos aqui: misma funcion y misma
+             * version, asi que o ya estaban o se calculan UNA vez y quedan para
+             * el resto.  Construirlos suelto era saltarse la puerta del ASA en
+             * el bucle que mas veces la cruza. */
+            const analysis::IrFacts &fx = facts_of(fn);
             /* BAJO DEMANDA: este pase pregunta por los valores de las
              * normalizaciones que mira, no por todos. */
             analysis::RangeQuery rx(fn, fx);

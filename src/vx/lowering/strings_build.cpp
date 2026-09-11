@@ -502,9 +502,9 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
     // Bloques: bb_neg (val<0), bb_setmag (mag = val o -val), join.
     if (is_signed) {
         ir::IrValueId is_neg = cmp(ir::IrOp::CMP_LT, v_val, v_zero); // signed <
-        uint32_t bb_neg = new_block();
-        uint32_t bb_pos = new_block();
-        uint32_t bb_after_sign = new_block();
+        ir::IrBlockId bb_neg = new_block();
+        ir::IrBlockId bb_pos = new_block();
+        ir::IrBlockId bb_after_sign = new_block();
         emit_br_cond(is_neg, bb_neg, bb_pos, source_line);
         // bb_neg: escribir '-' en v_buf[0], pos=1, mag = 0 - val.
         current_block_ = bb_neg;
@@ -530,9 +530,9 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
     // Bloques: bb_zero ('0', di=1), bb_digits (loop de extraccion), bb_inv.
     ir::IrValueId v_mag0 = load_i64(s_mag);
     ir::IrValueId is_zero = cmp(ir::IrOp::CMP_EQ, v_mag0, v_zero);
-    uint32_t bb_zero = new_block();
-    uint32_t bb_loop_hdr = new_block();
-    uint32_t bb_after_digits = new_block();
+    ir::IrBlockId bb_zero = new_block();
+    ir::IrBlockId bb_loop_hdr = new_block();
+    ir::IrBlockId bb_after_digits = new_block();
     emit_br_cond(is_zero, bb_zero, bb_loop_hdr, source_line);
 
     // bb_zero: tmp[0]='0', di=1.
@@ -548,7 +548,7 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
     {
         ir::IrValueId v_mag = load_i64(s_mag);
         ir::IrValueId cont = cmp(ir::IrOp::CMP_NE, v_mag, v_zero);
-        uint32_t bb_body = new_block();
+        ir::IrBlockId bb_body = new_block();
         emit_br_cond(cont, bb_body, bb_after_digits, source_line);
         // bb_body.
         current_block_ = bb_body;
@@ -605,15 +605,15 @@ ir::IrValueId Lowering::emit_native_itoa_to_buf(ir::IrValueId v_buf,
         ir::IrValueId v_src0 =
             bin(ir::IrOp::SUB, v_di_final, v_one_helper(source_line));
         store_i64(s_src, v_src0);
-        uint32_t bb_inv_hdr = new_block();
+        ir::IrBlockId bb_inv_hdr = new_block();
         emit_br(bb_inv_hdr, source_line);
         // bb_inv_hdr: while (src >= 0) { v_buf[pos++] = tmp[src]; src--; }
         current_block_ = bb_inv_hdr;
         {
             ir::IrValueId v_src = load_i64(s_src);
             ir::IrValueId cont = cmp(ir::IrOp::CMP_GE, v_src, v_zero); // signed
-            uint32_t bb_inv_body = new_block();
-            uint32_t bb_done = new_block();
+            ir::IrBlockId bb_inv_body = new_block();
+            ir::IrBlockId bb_done = new_block();
             emit_br_cond(cont, bb_inv_body, bb_done, source_line);
             // body.
             current_block_ = bb_inv_body;

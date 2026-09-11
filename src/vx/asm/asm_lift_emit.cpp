@@ -24,7 +24,7 @@ namespace {
 /// Emite un LOAD i64 del slot @p slot y devuelve el valor.  Si @p host, marca
 /// el resultado como host_ptr (una direccion @c [reg] del asm es una direccion
 /// del proceso host, no del espacio VM).
-ir::IrValueId load_slot(ir::IrFunction &fn, uint32_t block, ir::IrValueId slot,
+ir::IrValueId load_slot(ir::IrFunction &fn, ir::IrBlockId block, ir::IrValueId slot,
                         bool host, uint32_t line) {
     const ir::IrValueId v = fn.new_value(ir::IrType::I64);
     ir::IrInstr ld{};
@@ -39,7 +39,7 @@ ir::IrValueId load_slot(ir::IrFunction &fn, uint32_t block, ir::IrValueId slot,
 }
 
 /// Emite un STORE i64 de @p val al slot @p slot.
-void store_slot(ir::IrFunction &fn, uint32_t block, ir::IrValueId slot,
+void store_slot(ir::IrFunction &fn, ir::IrBlockId block, ir::IrValueId slot,
                 ir::IrValueId val, uint32_t line) {
     ir::IrInstr st{};
     st.op = ir::IrOp::STORE;
@@ -51,7 +51,7 @@ void store_slot(ir::IrFunction &fn, uint32_t block, ir::IrValueId slot,
 
 /// Emite un op atomico tipado (@p op con @p operands) y devuelve el valor
 /// viejo.
-ir::IrValueId emit_atomic(ir::IrFunction &fn, uint32_t block, ir::IrOp op,
+ir::IrValueId emit_atomic(ir::IrFunction &fn, ir::IrBlockId block, ir::IrOp op,
                           std::vector<ir::IrValueId> operands, uint32_t line) {
     const ir::IrValueId v = fn.new_value(ir::IrType::I64);
     ir::IrInstr ins{};
@@ -67,7 +67,7 @@ ir::IrValueId emit_atomic(ir::IrFunction &fn, uint32_t block, ir::IrOp op,
 } // namespace
 
 bool asm_lift_emit(
-    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+    ir::IrFunction &fn, ir::IrBlockId block, instr_db::Isa isa,
     const std::string &body,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
     uint32_t line) {

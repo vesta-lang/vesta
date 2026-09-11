@@ -77,7 +77,13 @@ struct LiveInterval {
     uint32_t vreg = UINT32_MAX;    ///< id del registro virtual
     RegClass cls = RegClass::GP;   ///< clase (GP/FP)
     std::vector<LiveRange> ranges; ///< rangos vivos, ordenados/disjuntos
-    std::vector<uint32_t> uses;    ///< posiciones de uso (ascendente)
+    /// Posiciones de uso (ascendente).  Con NOMBRE porque suelto era un
+    /// `vector<unsigned int>` mas entre ciento sesenta, y no es pequeno: son
+    /// 808.499 reservas al compilar 441.089 lineas, once por funcion y de
+    /// CUATRO bytes de media -- o sea, un vector en el monton para guardar UN
+    /// entero.  Candidato claro a almacenamiento en linea.
+    struct UsePositionsTag;
+    util::NamedVector<uint32_t, UsePositionsTag> uses;
     ///  D.7 commit 6: categoria GC.  0 = no GC; 1+ = StackmapGcKind+1
     /// (1=HANDLE, 2=HOSTPTR, 3=STRING).  Si != 0 y el intervalo cruza un
     /// call, el allocator lo FUERZA a un slot (enfoque A) para que el GC

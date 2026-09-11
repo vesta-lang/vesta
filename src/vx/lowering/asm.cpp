@@ -1687,7 +1687,7 @@ bool Lowering::try_lift_asm_block(ast::AsmStmt *s, const std::string &asm_name,
                         bound["$" + std::to_string(b.ph_index)] =
                             vx::AsmBoundReg{b.alloca_value, wbits};
                 }
-            uint32_t asm_exit = current_block_;
+            ir::IrBlockId asm_exit = current_block_;
             if (vx::asm_lift_general(*fn_, current_block_,
                                      vx::instr_db::Isa::X86, asm_name, bound,
                                      s->loc.line, &asm_exit)) {

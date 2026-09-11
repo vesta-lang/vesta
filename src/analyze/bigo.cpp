@@ -515,7 +515,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
     //      para multiplicar el coste del callee por n^loop_depth.  Se ignoran
     //      las self-calls (ya las modela la deteccion de recursion) y las
     //      llamadas sin func_name (indirectas: closures/virtuales).
-    for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
+    for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
         /* Para componer con el callee cuenta el TOTAL: un bucle logaritmico
          * repite la llamada menos veces, pero la repite -- afinar eso pide un
          * modelo de composicion que no es este, y suponer que no multiplica
@@ -542,7 +542,7 @@ CostResult analyze_function(const ir::IrFunction &fn,
      * constante, no la clase. */
     uint32_t asm_depth_total = 0;
     bool asm_forma_segura = true;
-    for (ir::IrBlockId bi = 0; bi < fn.blocks.size(); ++bi) {
+    for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
         const uint32_t depth_ir = effective_depth(lf, bounded, bi).total();
         for (const auto &ins : fn.blocks[bi].instrs) {
             /* El cuerpo NO esta siempre en el mismo sitio: un `asm` con

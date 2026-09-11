@@ -22,7 +22,7 @@ using ir::IrValueId;
 namespace {
 
 // Resuelve el valor CONSTANTE de @p v (la CONST que lo define en su bloque).
-bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool const_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
               IrValueId v, int64_t &out) {
     if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
     const int db = (v < def_block.size()) ? def_block[v] : -1;
@@ -108,7 +108,7 @@ static int64_t trips_between(int64_t init, int64_t bound, int64_t cmp_offset,
 }
 
 LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
-                                const std::vector<int> &def_block,
+                                const DefBlockVec &def_block,
                                 const LoopIV &iv, const RangeFacts *ranges) {
     LoopTripInfo info;
     int64_t init_v = 0, bound_v = 0;

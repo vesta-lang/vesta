@@ -100,7 +100,7 @@ void produce_demanded_bits(Production &p) {
         if (!p.is_interesting(fn)) continue;
         const DemandedBits &db = p.base.demanded(fn);
         const Seal s = p.base.seal(kProducerDemandedBits, fn);
-        for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
+        for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size(); ++v) {
             const uint8_t leidos = db.at(v);
             const uint8_t promete = type_promised_bits(fn.values[v].type);
 

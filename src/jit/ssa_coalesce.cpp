@@ -77,11 +77,11 @@ bool is_two_addr_ir(ir::IrOp op, DstKind dst) noexcept {
 
 } // namespace
 
-std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
-                                             DstKind dst) {
+std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
+                                                  DstKind dst) {
     const uint32_t NV = static_cast<uint32_t>(fn.values.size());
     const uint32_t NB = static_cast<uint32_t>(fn.blocks.size());
-    std::vector<uint32_t> remap; // vacio = nada que coalescer
+    std::vector<ir::IrValueId> remap; // vacio = nada que coalescer
     if (NV == 0 || NB == 0) return remap;
 
     /* ---- 1) Posiciones lineales por instruccion (use=2gi, def=2gi+1) ----
@@ -694,7 +694,7 @@ std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
     if (!any) return remap; // vacio
     remap.resize(NV);
     for (uint32_t v = 0; v < NV; ++v)
-        remap[v] = find(v);
+        remap[v] = ir::IrValueId(find(v));
     return remap;
 }
 
@@ -715,7 +715,7 @@ bool apply_ssa_coalesce(MFunction &mf, const ir::IrFunction &fn, DstKind dst) {
      * interp-vs-jit). */
     static const bool off = util::flag_on(util::FlagId::NoSsaCoalesce);
     if (off) return false;
-    const std::vector<uint32_t> remap = ssa_phi_coalesce_remap(fn, dst);
+    const std::vector<ir::IrValueId> remap = ssa_phi_coalesce_remap(fn, dst);
     if (remap.empty()) return false;
     const uint32_t NVAL = static_cast<uint32_t>(remap.size());
     bool changed = false;

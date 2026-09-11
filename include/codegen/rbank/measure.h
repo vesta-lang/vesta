@@ -81,7 +81,9 @@ struct RematMeasure {
 inline RematMeasure measure_remat(const codegen::RegAlloc &ra,
                                   const analysis::RematFacts &remat) {
     RematMeasure m;
-    for (uint32_t v = 0; v < ra.assign.size(); ++v) {
+    /* El indice ES un identificador SSA, y desde que el tipo lo dice hay que
+     * escribirlo: `remat` pregunta por valores, no por numeros. */
+    for (ir::IrValueId v = ir::IrValueId(0); v < ra.assign.size(); ++v) {
         if (ra.assign[v].loc != codegen::RegAlloc::Loc::SPILL) continue;
         ++m.spills_total;
         if (!remat.is_rematerializable(v)) continue;
@@ -136,7 +138,7 @@ measure_remat_detail(const codegen::RegAlloc &ra,
                      const analysis::RematFacts &remat,
                      const std::vector<ValueRequirements> &reqs) {
     RematDetail d;
-    for (uint32_t v = 0; v < ra.assign.size(); ++v) {
+    for (ir::IrValueId v = ir::IrValueId(0); v < ra.assign.size(); ++v) {
         if (ra.assign[v].loc != codegen::RegAlloc::Loc::SPILL) continue;
         const bool hot =
             v < reqs.size() && reqs[v].loop_depth > 0; // Fact consultado.

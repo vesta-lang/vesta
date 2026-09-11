@@ -398,9 +398,11 @@ class Lowering {
      * o una entrada de phi que apunta al bloque equivocado.
      */
     struct VecLoopFrame {
-        ir::IrBlockId hdr = 0;   ///< La cabecera: phi, condicion y salto.
-        ir::IrBlockId body = 0;  ///< El cuerpo.
-        ir::IrBlockId after = 0; ///< Donde sigue cuando ya no se entra.
+        ir::IrBlockId hdr = ir::IrBlockId(0);  ///< La cabecera: phi, condicion
+                                               ///< y salto.
+        ir::IrBlockId body = ir::IrBlockId(0);  ///< El cuerpo.
+        ir::IrBlockId after = ir::IrBlockId(0); ///< Donde sigue cuando ya no se
+                                                ///< entra.
         ir::IrValueId phi_idx = ir::IR_NO_VALUE; ///< El indice.
         /// Lo que ademas viaja de una vuelta a la siguiente, en el mismo orden
         /// en que se paso al abrirlo.
@@ -430,12 +432,15 @@ class Lowering {
      * pieza pero en otra figura.
      */
     struct VecSkeleton {
-        ir::IrBlockId entry = 0; ///< De donde se viene.
-        ir::IrBlockId mhdr = 0;  ///< Cabecera del bucle ancho.
-        ir::IrBlockId mbody = 0; ///< Su cuerpo: el idioma, de W en W.
-        ir::IrBlockId thdr = 0;  ///< Cabecera del que recoge los que sobran.
-        ir::IrBlockId tbody = 0; ///< Su cuerpo: lo mismo, de uno en uno.
-        ir::IrBlockId exit = 0;  ///< Donde sigue el programa.
+        ir::IrBlockId entry = ir::IrBlockId(0); ///< De donde se viene.
+        ir::IrBlockId mhdr = ir::IrBlockId(0);  ///< Cabecera del bucle ancho.
+        ir::IrBlockId mbody = ir::IrBlockId(0); ///< Su cuerpo: el idioma, de W
+                                                ///< en W.
+        ir::IrBlockId thdr = ir::IrBlockId(0);  ///< Cabecera del que recoge los
+                                                ///< que sobran.
+        ir::IrBlockId tbody = ir::IrBlockId(0); ///< Su cuerpo: lo mismo, de uno
+                                                ///< en uno.
+        ir::IrBlockId exit = ir::IrBlockId(0);  ///< Donde sigue el programa.
         ir::IrValueId phi_main = ir::IR_NO_VALUE; ///< El indice en el ancho.
         ir::IrValueId phi_tail = ir::IR_NO_VALUE; ///< El indice en el de uno.
         ir::IrValueId v_W = ir::IR_NO_VALUE;      ///< Los carriles, como valor.
@@ -475,7 +480,8 @@ class Lowering {
                        ir::IrValueId bound, ir::IrValueId step,
                        uint64_t step_imm, VecLoopGuard guard,
                        const std::vector<ir::IrValueId> &carried_init,
-                       uint32_t ln, ir::IrBlockId from_hint = 0);
+                       uint32_t ln,
+                       ir::IrBlockId from_hint = ir::IrBlockId(0));
 
     /**
      * @brief Cierra el cuerpo de un bucle contado y sale a su bloque de salida.
@@ -3344,7 +3350,7 @@ class Lowering {
      * @param block Bloque destino.
      * @param ins Instruccion.
      */
-    void emit(uint32_t block, ir::IrInstr ins) {
+    void emit(ir::IrBlockId block, ir::IrInstr ins) {
         if (!fn_) return;
         // La columna de lo que se esta bajando, si quien la puso no traia ya
         // una mas precisa.
@@ -4823,7 +4829,7 @@ private:
         // --- SMARTPTR_FREE / SHAREDPTR_REL ---
         /// SSA value del PTR al slot del smart pointer (donde vive el ptr).
         /// Usado para LOAD del valor actual y CMP_EQ 0 (skip si moved).
-        ir::IrValueId slot_addr = 0;
+        ir::IrValueId slot_addr = ir::IrValueId(0);
         /// Nombre del deleter.  Tres formatos:
         ///   "free"                  -> emite IrOp::RAW_FREE directo
         ///                              (deleter por defecto de unique_box).

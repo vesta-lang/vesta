@@ -76,8 +76,11 @@ enum class DstKind : uint8_t {
 /// @brief Como trata @p isa el destino de un binop ALU.
 DstKind dst_kind_of_isa(sched::EffIsa isa) noexcept;
 
-std::vector<uint32_t> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
-                                             DstKind dst);
+/* Devuelve identificadores SSA, no enteros sueltos, y el tipo lo dice: asi el
+ * perfil de reservas lo distingue de las otras decenas de vectores de cuatro
+ * bytes del compilador en vez de llamarlos a todos `vector<unsigned int>`. */
+std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
+                                                  DstKind dst);
 
 /**
  * @brief Aplica el coalescing SSA a la MachineIR @p mf de la funcion @p fn.

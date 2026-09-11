@@ -66,7 +66,7 @@ void produce_use_def(Production &p) {
                           kProducerUseDef, "", Scope::everywhere());
             continue;
         }
-        for (ir::IrValueId v = 0; v < u.num_values(); ++v) {
+        for (ir::IrValueId v = ir::IrValueId(0); v < u.num_values(); ++v) {
             const uint32_t n = u.off[v + 1] - u.off[v];
             Fact f;
             f.what.domain = kProducerUseDef;

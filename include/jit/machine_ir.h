@@ -63,6 +63,8 @@
 #ifndef VESTA_JIT_MACHINE_IR_H
 #define VESTA_JIT_MACHINE_IR_H
 
+#include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -1816,7 +1818,10 @@ struct MFunction {
     /// stackmaps todavia) funciones donde un valor GC esta VIVO a traves
     /// de un call -> el GC no veria esa raiz si esta en un registro.
     /// @c vreg_is_gc.size() == @c vreg_count cuando esta poblado.
-    std::vector<uint8_t> vreg_is_gc;
+    /* Con nombre: una marca por vreg, y sin el compartia simbolo con las otras
+     * doscientas tablas de bytes del arbol en el perfil de reservas. */
+    struct VregIsGcTag;
+    util::NamedVector<uint8_t, VregIsGcTag> vreg_is_gc;
     ///  AS inc.5: registro fisico FORZADO (precoloreo) de un vreg, o
     /// -1 si libre.  SPARSE: no se mantiene paralelo a @c vreg_count; el
     /// selector solo lo redimensiona/poblea para los vregs register-bound de

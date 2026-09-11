@@ -26,6 +26,7 @@
 #include "analysis/asa/fact.h"          // UnknownReason: por que no se supo
 #include "analysis/effects/effects.h"   // AbstractLoc
 #include "analysis/facts/ir_facts.h"    // IrFacts (def_of, param_of)
+#include "analysis/facts/loop_facts.h"  // LoopsOracle: a quien preguntar
 #include "analysis/facts/value_range.h" // acotar el desplazamiento variable
 #include "ir/ssa_ir.h" // IrValueList: una lista de valores solo para leer
 
@@ -58,7 +59,7 @@ struct PointsToEntry {
      * @c IR_NO_VALUE (0xFFFFFFFF) = el desplazamiento no viene de un solo
      * valor.
      */
-    ir::IrValueId off_sym = 0xFFFFFFFFu;
+    ir::IrValueId off_sym = ir::IrValueId(0xFFFFFFFFu);
     /**
      * @brief ENTRE QUE DOS desplazamientos esta, cuando no es constante.
      *
@@ -195,8 +196,8 @@ struct RegionExtent {
      * siendo un fallo real en cualquier caso.
      */
     int64_t reservado = -1;
-    ir::IrValueId sym =
-        0xFFFFFFFFu; ///< value-id que da el tamano (IR_NO_VALUE si no).
+    ir::IrValueId sym = ir::IrValueId(
+        0xFFFFFFFFu); ///< value-id que da el tamano (IR_NO_VALUE si no).
     bool constante() const { return bytes >= 0; }
     bool simbolica() const { return bytes < 0 && sym != 0xFFFFFFFFu; }
     bool conocida() const { return constante() || simbolica(); }
@@ -227,8 +228,11 @@ struct PointsTo {
 /// constante: sin ellos un `buf[i]` solo puede decir "en algun sitio de buf";
 /// con ellos dice entre que dos posiciones.  Es informacion, no otra politica:
 /// sin rangos la tabla sale exactamente igual que antes.
+/// @param loops A quien preguntar por los bucles.  Sin oraculo se calculan
+///        aqui, como antes: la pereza es la misma, lo que falta es la cache.
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
-                           const RangeFacts *rangos = nullptr);
+                           const RangeFacts *rangos = nullptr,
+                           LoopsOracle loops = {});
 
 // ===========================================================================
 //  Guardarla y recuperarla entre compilaciones

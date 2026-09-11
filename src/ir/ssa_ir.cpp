@@ -1775,10 +1775,10 @@ bool ir_parse(const std::string &text, IrModule &out, std::string &error) {
             // (para que los lambdas get_or_create_val/blk funcionen)
             out.functions.push_back(std::move(fn));
             cur_fn_idx = static_cast<int>(out.functions.size()) - 1;
-            cur_bb = 0; // bloque "entry" = id 0
+            cur_bb = IrBlockId(0); // bloque "entry" = id 0
             val_map.clear();
             blk_map.clear();
-            blk_map["entry"] = 0;
+            blk_map["entry"] = IrBlockId(0);
 
             // parsear parametros: nombre: tipo, ...
             size_t close_paren = line.find(')', paren);

@@ -31,7 +31,7 @@ struct IrFunction;
 struct IrInstr;
 struct IrModule;
 struct IrNativeEffects;
-using IrValueId = uint32_t; // igual que la definicion en ssa_ir.h
+enum IrValueId : uint32_t; // declaracion opaca; la define ssa_ir.h
 } // namespace ir
 
 namespace analysis {

@@ -90,11 +90,26 @@ struct LoopFacts {
     uint32_t parent_of(uint32_t loop) const noexcept {
         return loop < parent_loop.size() ? parent_loop[loop] : NO_LOOP;
     }
-    uint32_t header_block_of(uint32_t loop) const noexcept {
+    ir::IrBlockId header_block_of(uint32_t loop) const noexcept {
         return loop < loop_header.size()
-                   ? loop_header[loop]
-                   : static_cast<uint32_t>(ir::IR_NO_BLOCK);
+                   ? static_cast<ir::IrBlockId>(loop_header[loop])
+                   : ir::IR_NO_BLOCK;
     }
+};
+
+/**
+ * @brief Marcador del analisis de bucles (identidad para el AnalysisManager).
+ *
+ * AQUI y no escondido en `fact_base.cpp`, que es donde estaba: un marcador
+ * privado a una unidad de traduccion deja al gestor fuera del alcance de todos
+ * los demas, y por eso los seis consumidores de bucles llamaban al productor a
+ * pelo.  Los otros dominios lo declaran en su propia cabecera -- @c
+ * IRFactsAnalysis esta en `ir_facts.h` --; este era el unico raro.
+ */
+struct LoopsAnalysis {
+    static char ID;
+    /// Como se llama al medirlo.  Lo exige la puerta del gestor.
+    static constexpr const char *kName = "loops";
 };
 
 /**
@@ -103,6 +118,34 @@ struct LoopFacts {
  * @return    hechos por bloque; vectores dimensionados a @c fn.blocks.size().
  */
 LoopFacts compute_loop_facts(const ir::IrFunction &fn);
+
+/**
+ * @brief A QUIEN preguntar por los bucles de una funcion.
+ *
+ * Perezoso Y cacheado, que son las dos a la vez y no una u otra.  El analisis
+ * pregunta SOLO cuando de verdad necesita los bucles -- una funcion que no
+ * llega a pedirlos no paga ninguno -- y quien contesta lo hace desde el gestor,
+ * que no recalcula si la version de la funcion no ha cambiado.
+ *
+ * Las dos salidas obvias fallan cada una por un lado, y por eso no vale
+ * elegir:
+ *
+ *   - pasar el HECHO ya calculado da cache y MATA la pereza: el llamante tiene
+ *     que computarlo aunque el analisis no llegue a mirarlo nunca;
+ *   - calcularlo dentro da pereza y NINGUNA cache: es lo que se hacia, y son
+ *     siete recorridos del CFG por funcion al compilar 441.089 lineas.
+ *
+ * Puntero a funcion con contexto, no un objeto con metodos virtuales ni un
+ * `std::function`: quien contesta tiene NOMBRE y sale en el perfil.
+ */
+struct LoopsOracle {
+    /// Contesta por @p fn.  Nulo = no hay a quien preguntar.
+    const LoopFacts &(*ask)(void *ctx, const ir::IrFunction &fn) = nullptr;
+    /// De quien lo instalo; se le devuelve tal cual.
+    void *ctx = nullptr;
+    /// @return true si hay a quien preguntar.
+    bool valid() const { return ask != nullptr; }
+};
 
 /**
  * @brief AUTOCERTIFICACION: comprueba los invariantes internos de @p f.

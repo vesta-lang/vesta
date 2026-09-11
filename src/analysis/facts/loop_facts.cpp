@@ -16,15 +16,39 @@
 
 #include "analysis/facts/loop_facts.h"
 
+#include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
+
 #include <cstdint>
 #include <vector>
 
 namespace analysis {
 
+/// La identidad del analisis para el gestor.  Aqui, con su dominio, como los
+/// demas; estaba escondida en `fact_base.cpp`.
+char LoopsAnalysis::ID = 0;
+
 using ir::IrBlockId;
 using ir::IrFunction;
 
 namespace {
+
+/**
+ * @name Las tablas de este analisis, con NOMBRE
+ *
+ * Este fichero era, el solo, SEIS sitios de medio millon de reservas cada uno
+ * -- siete por funcion --, y los seis compartian simbolo con las otras ciento
+ * sesenta tablas de cuatro bytes del arbol.  Las de bloques las nombra ya el
+ * `enum IrBlockId`; estas tres no son bloques, asi que llevan etiqueta.
+ * @{
+ */
+struct PostorderNumTag;  ///< bloque -> su numero de postorden.
+struct LoopOfHeaderTag;  ///< cabecera -> indice de su bucle.
+struct LoopBodyTag;      ///< que bloques forman el cuerpo de un bucle.
+
+using PostorderNums = util::NamedVector<uint32_t, PostorderNumTag>;
+using LoopOfHeader = util::NamedVector<int32_t, LoopOfHeaderTag>;
+using LoopBody = util::NamedVector<uint8_t, LoopBodyTag>;
+/// @}
 
 /** @brief Sucesores de cada bloque, tomados de los terminadores. */
 std::vector<std::vector<IrBlockId>> build_succs(const IrFunction &fn) {
@@ -64,11 +88,13 @@ build_preds(const std::vector<std::vector<IrBlockId>> &succs) {
  * @param rpo     salida: bloques en reverse-postorden (solo alcanzables).
  */
 void compute_rpo(const std::vector<std::vector<IrBlockId>> &succs,
-                 IrBlockId entry, std::vector<uint32_t> &po,
+                 IrBlockId entry, PostorderNums &po,
                  std::vector<IrBlockId> &rpo) {
     const size_t N = succs.size();
     po.assign(N, UINT32_MAX);
-    std::vector<uint8_t> visited(N, 0);
+    /// Bloques ya vistos por el recorrido en profundidad.
+    struct RpoVisited;
+    util::NamedVector<uint8_t, RpoVisited> visited(N, 0);
     std::vector<IrBlockId> order; // postorden
     // DFS iterativo con pila de (nodo, indice de sucesor).
     std::vector<std::pair<IrBlockId, size_t>> stk;
@@ -98,7 +124,7 @@ void compute_rpo(const std::vector<std::vector<IrBlockId>> &succs,
 /** @brief idom via CHK.  idom[b] = IR_NO_BLOCK si inalcanzable. */
 std::vector<IrBlockId>
 compute_idom(const std::vector<std::vector<IrBlockId>> &preds,
-             const std::vector<uint32_t> &po, const std::vector<IrBlockId> &rpo,
+             const PostorderNums &po, const std::vector<IrBlockId> &rpo,
              IrBlockId entry) {
     const size_t N = preds.size();
     std::vector<IrBlockId> idom(N, ir::IR_NO_BLOCK);
@@ -160,10 +186,10 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     f.loop_id.assign(N, LoopFacts::NO_LOOP);
     if (N == 0) return f;
 
-    const IrBlockId entry = 0;
+    const IrBlockId entry = IrBlockId(0);
     auto succs = build_succs(fn);
     auto preds = build_preds(succs);
-    std::vector<uint32_t> po;
+    PostorderNums po;
     std::vector<IrBlockId> rpo;
     compute_rpo(succs, entry, po, rpo);
     auto idom = compute_idom(preds, po, rpo, entry);
@@ -171,11 +197,11 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     // Back-edges (b -> h con h dominando b), agrupados por cabecera = 1 bucle.
     struct Loop {
         IrBlockId header;
-        std::vector<uint8_t> body;
+        LoopBody body;
         size_t size = 0;
     };
     std::vector<Loop> loops;
-    std::vector<int32_t> loop_of_header(N, -1); // header -> indice en loops
+    LoopOfHeader loop_of_header(N, -1); // header -> indice en loops
 
     for (size_t b = 0; b < N; ++b) {
         for (IrBlockId h : succs[b]) {
@@ -183,7 +209,7 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
             // Back-edge b->h.  Obtener/crear el bucle de cabecera h.
             int32_t li = loop_of_header[h];
             if (li < 0) {
-                loops.push_back(Loop{h, std::vector<uint8_t>(N, 0), 0});
+                loops.push_back(Loop{h, LoopBody(N, 0), 0});
                 li = static_cast<int32_t>(loops.size()) - 1;
                 loop_of_header[h] = li;
                 loops[li].body[h] = 1;

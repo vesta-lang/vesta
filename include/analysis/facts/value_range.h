@@ -56,6 +56,7 @@
 
 #include "analysis/asa/fact.h" // UnknownReason: por que no se pudo afirmar mas
 #include "analysis/facts/ir_facts.h"
+#include "analysis/facts/loop_facts.h" // LoopsOracle: a quien preguntar
 #include "util/fnv.h"          // huella de las opciones, campo a campo
 #include "util/alloc/small_vector.h" // el estado de un punto casi siempre es diminuto
 
@@ -67,7 +68,7 @@
 namespace ir {
 struct IrFunction;
 /// Identificador de bloque: lo necesita @c RangeWalk, que pregunta por uno.
-using IrBlockId = uint32_t;
+enum IrBlockId : uint32_t; // declaracion opaca; la define ssa_ir.h
 enum class IrType : uint8_t;
 } // namespace ir
 
@@ -535,7 +536,7 @@ struct RangeStats {
  * que el relleno que se ahorra.
  */
 struct RangeEntry {
-    ir::IrValueId id = 0;            ///< el valor refinado
+    ir::IrValueId id = ir::IrValueId(0); ///< el valor refinado
     RangeKind kind = RangeKind::Top; ///< los tres campos de ValueRange,
     RangeType t{};                   ///< aplanados para que no haya relleno
     uint8_t _pad = 0;
@@ -708,7 +709,8 @@ std::shared_ptr<const RangeFacts>
 compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
                    const RangeOptions &op = RangeOptions{},
                    const RangeSummaries *sum = nullptr,
-                   const LoopIvBounds *ivb = nullptr);
+                   const LoopIvBounds *ivb = nullptr,
+                   LoopsOracle loops = {});
 
 struct RangeFacts {
     std::vector<ValueRange> r;
@@ -777,7 +779,7 @@ struct RangeFacts {
      * que no cabe --.
      */
     struct Wrap {
-        ir::IrValueId dst = 0;  ///< el resultado que sale envuelto.
+        ir::IrValueId dst = ir::IrValueId(0); ///< el resultado que sale envuelto.
         int64_t exacto = 0;     ///< lo que daria la cuenta sin envolver.
         int64_t lo = 0, hi = 0; ///< lo que el tipo del destino admite.
         uint32_t line = 0;      ///< linea fuente de la operacion.
@@ -876,7 +878,8 @@ bool deserialize_range_facts(const uint8_t *data, size_t n, uint64_t ir_key,
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op = RangeOptions{},
                           const struct RangeSummaries *sum = nullptr,
-                          const LoopIvBounds *ivb = nullptr);
+                          const LoopIvBounds *ivb = nullptr,
+                          LoopsOracle loops = {});
 
 /**
  * @brief Recorre un bloque entregando el rango de un valor EN CADA PUNTO.

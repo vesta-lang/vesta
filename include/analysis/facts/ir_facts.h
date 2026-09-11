@@ -23,6 +23,8 @@
 #ifndef VESTA_ANALYSIS_IR_FACTS_H
 #define VESTA_ANALYSIS_IR_FACTS_H
 
+#include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -30,10 +32,36 @@
 namespace ir {
 struct IrFunction;
 struct IrInstr;
-using IrValueId = uint32_t;
+enum IrValueId : uint32_t; // declaracion opaca; la define ssa_ir.h
 } // namespace ir
 
 namespace analysis {
+
+/**
+ * @name Las cuatro tablas de estos hechos, con NOMBRE
+ *
+ * Las cuatro son un valor por identificador SSA, y las cuatro eran
+ * `std::vector<int32_t>` o `std::vector<uint8_t>` -- o sea, indistinguibles en
+ * el perfil de reservas de las otras doscientas y pico que hay por el arbol.
+ * Y pesan: `used` sola son 1,1 millones de reservas de DOCE bytes al compilar
+ * 441.089 lineas, quince por funcion.
+ *
+ * Con la etiqueta en el asignador, cada una sale por su nombre y se puede
+ * decidir cual merece almacenamiento en linea.  No cuesta nada: @ref
+ * util::NamedAlloc no tiene estado y reserva por `::operator new`, igual que
+ * `std::allocator`.
+ * @{
+ */
+struct DefIdxTag;   ///< value id -> indice de la instruccion que lo define.
+struct DefBlockTag; ///< value id -> bloque donde se define.
+struct ParamOfTag;  ///< value id -> indice de parametro.
+struct UsedTag;     ///< value id -> alguien lo lee.
+
+using DefIdxVec = util::NamedVector<int32_t, DefIdxTag>;
+using DefBlockVec = util::NamedVector<int32_t, DefBlockTag>;
+using ParamOfVec = util::NamedVector<int32_t, ParamOfTag>;
+using UsedVec = util::NamedVector<uint8_t, UsedTag>;
+/// @}
 
 /// Marcador del analisis de hechos IR (identidad para el AnalysisManager).
 struct IRFactsAnalysis {
@@ -71,7 +99,7 @@ struct IrFacts {
      * ya se invalidan con cualquier mutacion (lo dice la nota de arriba y lo
      * hace cumplir la version de la funcion).  Lo que cambia es COMO fallan.
      */
-    std::vector<int32_t> def_idx;
+    DefIdxVec def_idx;
     /**
      * @brief La funcion que estos hechos describen.  NO la posee.
      *
@@ -101,9 +129,8 @@ struct IrFacts {
      * cuenta con el mismo doble bucle.  Tres recorridos por funcion para el
      * mismo hecho, que es justo lo que el ASA existe para no hacer.
      */
-    std::vector<int32_t> def_block;
-    std::vector<int32_t>
-        param_of; ///< value id -> indice de parametro, -1 si no.
+    DefBlockVec def_block;
+    ParamOfVec param_of; ///< value id -> indice de parametro, -1 si no.
 
     // --- call-sites (sintacticos; el callgraph resuelto es otro analisis) ---
     std::vector<std::string>
@@ -120,7 +147,7 @@ struct IrFacts {
     /// Con la def y el parametro completa la unica pregunta que importa antes
     /// de analizar nada: @ref exists.  Sale del mismo recorrido, asi que no
     /// cuesta una pasada mas.
-    std::vector<uint8_t> used;
+    UsedVec used;
 
     /// Cuantos valores describen estos hechos.
     size_t value_count() const { return def_idx.size(); }

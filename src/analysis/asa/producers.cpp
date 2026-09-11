@@ -441,7 +441,7 @@ void produce_ranges(Production &p) {
         if (!p.is_interesting(fn)) continue;
         const RangeFacts &rf = p.base.ranges(fn);
         const Seal s = p.base.seal(kProducerRanges, fn);
-        for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
+        for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size(); ++v) {
             const ValueRange &r = rf.at(v);
             if (r.es_bottom()) {
                 Fact f;
@@ -898,7 +898,7 @@ void produce_memory(Production &p) {
          * operacion es la que decide en que modos vale lo que se afirma. */
         const IrFacts &facts_of_fn = p.base.structure(fn);
         const Seal s = p.base.seal(kProducerMemory, fn);
-        for (ir::IrValueId v = 0; v < fn.values.size(); ++v) {
+        for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size(); ++v) {
             const effects::AbstractLoc l = loc_of(pt, v, 0);
             if (l.kind == effects::AbstractLoc::Kind::None ||
                 l.kind == effects::AbstractLoc::Kind::Unknown) {
@@ -1058,7 +1058,7 @@ void produce_loops(Production &p) {
         const LoopFacts &lf = p.base.loops(fn);
         const Seal s = p.base.seal(kProducerLoops, fn);
         uint32_t seen = 0;
-        for (ir::IrBlockId b = 0; b < fn.blocks.size(); ++b) {
+        for (ir::IrBlockId b = ir::IrBlockId(0); b < fn.blocks.size(); ++b) {
             if (!lf.header_of(b)) continue;
             ++seen;
             Fact f;
@@ -1230,7 +1230,10 @@ void produce_loops(Production &p) {
              * constructores bastaria que uno se quedara atras para que el mismo
              * bucle se contara distinto segun quien lo mirara. */
             Fact f;
-            if (!loop_trip_fact(p.store, fn, about.id, tc, p.stage,
+            /* `Subject::id` vale para un valor, un bloque o una instruccion
+             * segun el `kind`; aqui el `kind` ya dijo que es un bloque. */
+            if (!loop_trip_fact(p.store, fn, ir::IrBlockId(about.id), tc,
+                                p.stage,
                                 Source::Static, f))
                 continue; // no habia nada que afirmar (ya se dijo por que)
             /* El apoyo CONCRETO -- no solo el nombre del productor -- para que

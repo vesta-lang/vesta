@@ -307,7 +307,8 @@ PassResult ir_pass_dce(IrFunction &fn,
                        const analysis::AsmBindingFacts *asm_bindings = nullptr,
                        DceEffectsCache *cache = nullptr,
                        const analysis::IrFacts *facts = nullptr,
-                       const analysis::PointsTo *pt = nullptr);
+                       const analysis::PointsTo *pt = nullptr,
+                       analysis::LoopsOracle loops = {});
 
 /**
  * @brief Elision comptime de UNWRAP cuando el operando es provably non-null
@@ -926,7 +927,8 @@ PassResult
 ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
             const std::unordered_set<std::string> *pure_callees = nullptr,
             const HechosDeAsmParaDse *hechos_asm = nullptr,
-            const analysis::IrFacts *facts = nullptr);
+            const analysis::IrFacts *facts = nullptr,
+            analysis::LoopsOracle loops = {});
 
 /**
  * @brief Pase Const CSE Entry: deduplicacion global de constantes.

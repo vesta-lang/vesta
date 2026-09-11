@@ -162,7 +162,7 @@ struct StraightLineBulkFact {
     /// Que hace el grupo.  MISMO vocabulario que el de bucles.
     BulkMemoryFact::Kind kind = BulkMemoryFact::Kind::Fill;
     /// Bloque en el que estan todas las instrucciones del grupo.
-    ir::IrBlockId block = 0;
+    ir::IrBlockId block = ir::IrBlockId(0);
     /// Puntero base del tramo que se ESCRIBE.
     ir::IrValueId dst_base = ir::IR_NO_VALUE;
     /// Puntero base del tramo que se LEE.  Solo en @c Copy.

@@ -6800,7 +6800,7 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
     };
     // comp_ok[root] = todos los miembros float del componente son elegibles.
     std::unordered_map<int, bool> comp_ok;
-    for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
+    for (IrValueId v = IrValueId(0); static_cast<size_t>(v) < nv; ++v) {
         const IrType t = fn.values[v].type;
         if (t != IrType::F64 && t != IrType::F32) continue;
         const int r = uf_find(static_cast<int>(v));
@@ -6809,7 +6809,7 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
         if (!indiv_ok(v)) comp_ok[r] = false;
     }
     std::vector<IrValueId> cands;
-    for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
+    for (IrValueId v = IrValueId(0); static_cast<size_t>(v) < nv; ++v) {
         const IrType t = fn.values[v].type;
         if (t != IrType::F64 && t != IrType::F32) continue;
         if (!indiv_ok(v)) continue;
@@ -6863,7 +6863,7 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
     // ZMM<->ZMM (nunca mixtas), que es lo que emit_phi_copies sabe resolver.
     {
         std::unordered_map<int, int> total, in_bank;
-        for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v) {
+        for (IrValueId v = IrValueId(0); static_cast<size_t>(v) < nv; ++v) {
             const IrType t = fn.values[v].type;
             if (t != IrType::F64 && t != IrType::F32) continue;
             if (!indiv_ok(v)) continue;
@@ -6876,7 +6876,7 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
         for (const auto &kv : total)
             if (kv.second > 1 && in_bank[kv.first] != kv.second) {
                 const int r = kv.first;
-                for (IrValueId v = 0; static_cast<size_t>(v) < nv; ++v)
+                for (IrValueId v = IrValueId(0); static_cast<size_t>(v) < nv; ++v)
                     if (uf_find(static_cast<int>(v)) == r) zmm_map.erase(v);
             }
     }
@@ -6897,7 +6897,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     // sea el root de su clase para que la pre-asignacion de params encaje con
     // los valores canonicos.  Escape: VESTA_NO_IR_COALESCE=1 lo desactiva.
     LivenessResult liveness = compute_liveness(fn);
-    std::vector<uint32_t> coal_remap;
+    std::vector<IrValueId> coal_remap;
     {
         static const bool coal_off = util::flag_on(util::FlagId::NoIrCoalesce);
         if (!coal_off && !fn.is_native) {
@@ -6924,7 +6924,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                         continue;
                     IrValueId old_root = coal_remap[pid];
                     if (old_root == pid) continue;
-                    for (IrValueId v = 0; v < coal_remap.size(); ++v)
+                    for (IrValueId v = IrValueId(0); v < coal_remap.size(); ++v)
                         if (coal_remap[v] == old_root) coal_remap[v] = pid;
                 }
             }
@@ -6949,7 +6949,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
      * valores coalescidos comparten registro: se pregunta por el canonico. */
     if (value_regs) {
         value_regs->assign(fn.values.size(), IR_NO_REG);
-        for (IrValueId v = 0; v < fn.values.size(); ++v) {
+        for (IrValueId v = IrValueId(0); v < fn.values.size(); ++v) {
             const IrValueId root = (v < coal_remap.size()) ? coal_remap[v] : v;
             if (alloc.in_reg(root)) (*value_regs)[v] = alloc.reg_of(root);
         }

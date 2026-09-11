@@ -16,6 +16,7 @@
 #ifndef ANALYSIS_FACTS_LOOP_IV_H
 #define ANALYSIS_FACTS_LOOP_IV_H
 
+#include "analysis/facts/ir_facts.h" // DefBlockVec: la tabla, con su nombre
 #include "ir/ssa_ir.h"
 
 #include <cstdint>
@@ -84,7 +85,7 @@ struct LoopIV {
  *
  * @return true si hay un IV canonico creciente con cota reconocible.
  */
-bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool detect_loop_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
                     ir::IrBlockId header, ir::IrBlockId preheader,
                     ir::IrBlockId latch, LoopIV &out);
 
@@ -104,7 +105,7 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
  * quiere CONTAR pide este.
  */
 bool detect_counted_iv(const ir::IrFunction &fn,
-                       const std::vector<int> &def_block, ir::IrBlockId header,
+                       const DefBlockVec &def_block, ir::IrBlockId header,
                        ir::IrBlockId preheader, ir::IrBlockId latch,
                        LoopIV &out);
 
@@ -145,7 +146,7 @@ struct GeoIV {
  *         eso lo mira quien lo use, igual que con @c detect_loop_iv.
  */
 bool detect_geometric_iv(const ir::IrFunction &fn,
-                         const std::vector<int> &def_block,
+                         const DefBlockVec &def_block,
                          ir::IrBlockId header, ir::IrBlockId preheader,
                          ir::IrBlockId latch, GeoIV &out);
 

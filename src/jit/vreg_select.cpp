@@ -390,7 +390,7 @@ inline bool split_critical_edges(ir::IrFunction &fn) {
             for (ir::IrPhiArg &a : in.phi_args)
                 a.block = rm(a.block);
             // SWITCH_DENSE: remapear la tabla de bloques destino.
-            for (uint32_t &t : in.jump_targets)
+            for (ir::IrBlockId &t : in.jump_targets)
                 t = rm(t);
         }
     }
@@ -1319,7 +1319,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     /* Crea un vreg temporal nuevo (GP, no-GC) para secuencias inline
      * (p.ej. el inline de vmath_abs). */
     auto new_tmp = [&]() -> ir::IrValueId {
-        const ir::IrValueId id = out.vreg_count++;
+        const ir::IrValueId id = ir::IrValueId(out.vreg_count++);
         out.vreg_class.push_back(RegClass::GP);
         out.vreg_is_gc.push_back(0);
         return static_cast<ir::IrValueId>(id);
@@ -1348,7 +1348,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     /* Crea un vreg temporal FP nuevo (XMM) para secuencias float (p.ej. el
      * MOVQ del float CONST a XMM, o el bitcast). */
     auto new_ftmp = [&]() -> ir::IrValueId {
-        const ir::IrValueId id = out.vreg_count++;
+        const ir::IrValueId id = ir::IrValueId(out.vreg_count++);
         out.vreg_class.push_back(RegClass::FP);
         out.vreg_is_gc.push_back(0);
         return static_cast<ir::IrValueId>(id);
@@ -1476,8 +1476,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * byte (ver donde viaja), sin el en cuatro.
      */
     struct FoldedAddr {
-        uint32_t base = 0;
-        uint32_t index = 0;
+        /* Base e indice SON valores SSA, y el tipo lo dice: asi el perfil
+         * distingue este vector del resto de los de cuatro bytes. */
+        ir::IrValueId base = ir::IrValueId(0);
+        ir::IrValueId index = ir::IrValueId(0);
         int64_t disp = 0;
         bool has_index = false;
         /// 1/2/4/8.  Un array de vistas se indexa por su PASO, y cuando ese
@@ -1534,7 +1536,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
              * Cuando no es ninguna de las dos, el indice se usa tal cual con
              * escala 1 -- que es correcto y es lo que habia --.
              */
-            auto split_scale = [&](uint32_t idx, uint8_t &scale) -> uint32_t {
+            auto split_scale = [&](ir::IrValueId idx,
+                                   uint8_t &scale) -> ir::IrValueId {
                 auto d = def_of.find(idx);
                 if (d == def_of.end() || d->second->operands.size() != 2)
                     return idx;
@@ -1569,7 +1572,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     /* solo HOST ptr (VM -> LOAD_VM, no se fusiona). */
                     if (in.dst >= NVAL || !fn.values[in.dst].is_host_ptr)
                         continue;
-                    const uint32_t o0 = in.operands[0], o1 = in.operands[1];
+                    const ir::IrValueId o0 = in.operands[0],
+                                        o1 = in.operands[1];
                     auto c0 = const_val.find(o0), c1 = const_val.find(o1);
                     const bool k0 = c0 != const_val.end();
                     const bool k1 = c1 != const_val.end();
@@ -1580,7 +1584,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                          * direccion fusionada, se acumula sobre ella en vez de
                          * empezar de cero: es lo que junta el indice del array
                          * con el desplazamiento del campo. */
-                        const uint32_t sum = k0 ? o1 : o0;
+                        const ir::IrValueId sum = k0 ? o1 : o0;
                         const int64_t disp = k0 ? c0->second : c1->second;
                         auto prev = cand.find(sum);
                         if (prev != cand.end()) {
@@ -1595,7 +1599,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                          * del propio acceso; sin esto se pagaba una suma por
                          * cada campo, con el MISMO indice las cuatro veces. */
                         uint8_t sc = 1;
-                        const uint32_t idx = split_scale(o1, sc);
+                        const ir::IrValueId idx = split_scale(o1, sc);
                         auto prev = cand.find(o0);
                         if (prev != cand.end() && !prev->second.has_index) {
                             f = prev->second;
@@ -2106,7 +2110,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
         /* CMP diferido para fusionar compare-and-branch. */
         bool has_pend = false;
         MCond pend_cc = MCond::E;
-        ir::IrValueId pend_dst = ir::IR_NO_VALUE, pend_a = 0, pend_b = 0;
+        ir::IrValueId pend_dst = ir::IR_NO_VALUE, pend_a = ir::IrValueId(0),
+                      pend_b = ir::IrValueId(0);
         auto flush_pending = [&]() {
             if (!has_pend) return;
             O.push_back(mk_cmp(pend_a, pend_b));
@@ -2288,7 +2293,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     // Tabla: entradas self-relative de 4 bytes.
                     O.push_back(MInstr::make_label_def(table_lbl));
                     for (size_t k = 0; k < range; ++k) {
-                        const uint32_t tb = in.jump_targets[k];
+                        const ir::IrBlockId tb = in.jump_targets[k];
                         const ir::IrBlockId arm =
                             (tb < blbl.size()) ? tb : def_blk;
                         O.push_back(MInstr::make_data_rel32_label(blbl[arm],
@@ -2304,7 +2309,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     O.push_back(j);
                     O.push_back(MInstr::make_label_def(table_lbl));
                     for (size_t k = 0; k < range; ++k) {
-                        const uint32_t tb = in.jump_targets[k];
+                        const ir::IrBlockId tb = in.jump_targets[k];
                         const ir::IrBlockId arm =
                             (tb < blbl.size()) ? tb : def_blk;
                         O.push_back(MInstr::make_data_ptr_label(blbl[arm]));
@@ -2405,7 +2410,7 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  * cualquier lado salvo SUB (solo `x - const`; `const - x`
                  * necesitaria NEG -> no se fusiona). */
                 {
-                    const uint32_t a = in.operands[0], b = in.operands[1];
+                    const ir::IrValueId a = in.operands[0], b = in.operands[1];
                     auto cst = [&](uint32_t v, int64_t &c) -> bool {
                         if (v < v_is_const.size() && v_is_const[v]) {
                             const int64_t cc = v_const[v];

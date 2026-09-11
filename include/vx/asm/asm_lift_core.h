@@ -105,7 +105,7 @@ inline bool parse_imm(const std::string &op, int64_t &out) {
 }
 
 /// Emisores IR minimos.
-inline ir::IrValueId emit_const(ir::IrFunction &fn, uint32_t blk, int64_t v,
+inline ir::IrValueId emit_const(ir::IrFunction &fn, ir::IrBlockId blk, int64_t v,
                                 uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
@@ -118,7 +118,7 @@ inline ir::IrValueId emit_const(ir::IrFunction &fn, uint32_t blk, int64_t v,
     return d;
 }
 
-inline ir::IrValueId emit_bin(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+inline ir::IrValueId emit_bin(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                               ir::IrValueId a, ir::IrValueId b, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
@@ -133,7 +133,7 @@ inline ir::IrValueId emit_bin(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
 
 /** @brief Como @ref emit_bin pero con TIPO explicito (para DIV/MOD, donde el
  *  tipo -- I64 vs U64 -- decide con signo / sin signo). */
-inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                                  ir::IrValueId a, ir::IrValueId b,
                                  ir::IrType ty, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ty);
@@ -147,7 +147,7 @@ inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
     return d;
 }
 
-inline ir::IrValueId emit_un(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+inline ir::IrValueId emit_un(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                              ir::IrValueId a, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
@@ -176,7 +176,7 @@ inline ir::IrType mem_ty(int w, bool is_load) {
 /// direccion apunta a memoria HOST (el IR emite @c movh/loadzh); un operando de
 /// memoria de un asm inline es SIEMPRE host, un slot de variable (ALLOCA) es
 /// VM.
-inline ir::IrValueId emit_load(ir::IrFunction &fn, uint32_t blk,
+inline ir::IrValueId emit_load(ir::IrFunction &fn, ir::IrBlockId blk,
                                ir::IrValueId addr, int w, bool host,
                                uint32_t line) {
     if (host) fn.values[addr].is_host_ptr = true; // el emitter mira el operando
@@ -195,7 +195,7 @@ inline ir::IrValueId emit_load(ir::IrFunction &fn, uint32_t blk,
 
 /// STORE de los @p w bits bajos de @p val en @p addr.  @p host: ver @c
 /// emit_load.
-inline void emit_store(ir::IrFunction &fn, uint32_t blk, ir::IrValueId val,
+inline void emit_store(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrValueId val,
                        ir::IrValueId addr, int w, bool host, uint32_t line) {
     if (host) fn.values[addr].is_host_ptr = true;
     ir::IrInstr in{};
@@ -218,7 +218,7 @@ inline uint64_t width_mask(int w) {
  *  (mutable: cambia por bloque basico). */
 struct LiftCtx {
     ir::IrFunction &fn;
-    uint32_t &block; ///< alias al bloque IR actual del lifter (mutable)
+    ir::IrBlockId &block; ///< alias al bloque IR actual del lifter (mutable)
     uint32_t line;
     const std::unordered_map<std::string, AsmBoundReg> &bound;
     std::unordered_map<std::string, ir::IrValueId> &cur;
@@ -241,7 +241,7 @@ inline void cfg_flush_block(LiftCtx &c) {
 }
 
 /** @brief NEUTRO.  BR incondicional a @p target. */
-inline void cfg_emit_br(LiftCtx &c, uint32_t target) {
+inline void cfg_emit_br(LiftCtx &c, ir::IrBlockId target) {
     ir::IrInstr br{};
     br.op = ir::IrOp::BR;
     br.target_block = target;
@@ -250,8 +250,8 @@ inline void cfg_emit_br(LiftCtx &c, uint32_t target) {
 }
 
 /** @brief NEUTRO.  BR_COND(@p cond) -> @p taken (cond!=0) / @p fallthrough. */
-inline void cfg_emit_br_cond(LiftCtx &c, ir::IrValueId cond, uint32_t taken,
-                             uint32_t fallthrough) {
+inline void cfg_emit_br_cond(LiftCtx &c, ir::IrValueId cond,
+                             ir::IrBlockId taken, ir::IrBlockId fallthrough) {
     ir::IrInstr br{};
     br.op = ir::IrOp::BR_COND;
     br.operands = {cond};
@@ -293,17 +293,18 @@ inline bool cfg_give_up(const vx::AsmBasicBlock *bb, const char *why) {
 }
 
 inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg,
-                             const CfgHooks &hooks, uint32_t &out_exit) {
+                             const CfgHooks &hooks,
+                             ir::IrBlockId &out_exit) {
     const size_t nb = cfg.blocks.size();
     if (nb == 0) return cfg_give_up(nullptr, "el asm no tiene ni un bloque");
     // Un bloque IR NUEVO por bloque basico.  El bloque de entrada actual NO se
     // reusa como BB0: si el asm tiene un back-edge al inicio (loop), reusar la
     // entrada re-ejecutaria el codigo previo (p.ej. la init de las variables)
     // en cada iteracion -> bucle infinito.  La entrada solo SALTA al primer BB.
-    std::vector<uint32_t> irb(nb);
+    std::vector<ir::IrBlockId> irb(nb);
     for (size_t i = 0; i < nb; ++i)
         irb[i] = c.fn.new_block("asmbb" + std::to_string(i));
-    const uint32_t cont = c.fn.new_block("asmcont");
+    const ir::IrBlockId cont = c.fn.new_block("asmcont");
     cfg_emit_br(c, irb[0]); // c.block (entrada) -> primer BB del asm
 
     for (size_t i = 0; i < nb; ++i) {

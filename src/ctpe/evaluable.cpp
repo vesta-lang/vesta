@@ -96,7 +96,7 @@ Evaluability compute_evaluability(const ir::IrModule &mod) {
             continue;
         }
         bool blocked = false;
-        for (ir::IrBlockId b = 0; b < fn.blocks.size() && !blocked; ++b) {
+        for (ir::IrBlockId b = ir::IrBlockId(0); b < fn.blocks.size() && !blocked; ++b) {
             const auto &blk = fn.blocks[b];
             for (size_t i = 0; i < blk.instrs.size(); ++i) {
                 const ir::IrInstr &in = blk.instrs[i];
@@ -126,7 +126,7 @@ Evaluability compute_evaluability(const ir::IrModule &mod) {
             const ir::IrFunction *fn = by_name[*it];
             bool ok = true;
             BlockReason bad;
-            for (ir::IrBlockId b = 0; b < fn->blocks.size() && ok; ++b) {
+            for (ir::IrBlockId b = ir::IrBlockId(0); b < fn->blocks.size() && ok; ++b) {
                 const auto &blk = fn->blocks[b];
                 for (size_t i = 0; i < blk.instrs.size(); ++i) {
                     const ir::IrInstr &in = blk.instrs[i];

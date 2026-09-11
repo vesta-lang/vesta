@@ -109,7 +109,7 @@ void rebuild_cfg(IrFunction &fn) {
 // Ensambla los HECHOS de un bucle innermost en @p out.  Toda la logica de
 // analisis vive en analysis/facts; aqui solo se piden los hechos y se agregan.
 bool analyze_loop(const IrFunction &fn, const analysis::LoopFacts &lf,
-                  const std::vector<int> &def_block, uint32_t L,
+                  const analysis::DefBlockVec &def_block, uint32_t L,
                   LoopInfo &out) {
     // 1) Estructura del CFG: reducible, 1 latch, 1 salida, header limpio,
     // LCSSA.
@@ -368,7 +368,7 @@ static bool unroll_impl(IrFunction &fn, int factor,
      * doble bucle que ya hace `build_ir_facts`, y lo repetian ademas el
      * resolvedor de punteros y el reconocedor de memoria por lotes. */
     const analysis::IrFacts ir_facts = analysis::build_ir_facts(fn);
-    const std::vector<int32_t> &def_block = ir_facts.def_block;
+    const analysis::DefBlockVec &def_block = ir_facts.def_block;
 
     // Solo bucles INNERMOST (sin hijos): los que tienen cuerpo cloneable
     // simple.

@@ -248,7 +248,7 @@ static void print_regiones(std::ostream &os, EffectAnalysis &ea,
                            const ir::IrFunction &fn) {
     const analysis::PointsTo &pt = ea.points_to_publico(fn);
     std::string out;
-    for (uint32_t v = 0; v < pt.extent.size(); ++v) {
+    for (ir::IrValueId v = ir::IrValueId(0); v < pt.extent.size(); ++v) {
         const analysis::RegionExtent &ex = pt.extent[v];
         if (!ex.conocida()) continue;
         const PointsToEntry &e = pt.at(v);

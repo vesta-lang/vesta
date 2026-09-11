@@ -1749,7 +1749,7 @@ bool split_module_init_into_chunks(ir::IrFunction &init, ir::IrModule &out) {
         f.name = base + "_part" + std::to_string(c);
         f.ret_type = ir::IrType::VOID;
 
-        std::vector<ir::IrBlockId> newid(nblocks, 0);
+        std::vector<ir::IrBlockId> newid(nblocks, ir::IrBlockId(0));
         for (size_t i = first; i < limit; ++i)
             newid[i] = f.new_block(init.blocks[i].name);
 

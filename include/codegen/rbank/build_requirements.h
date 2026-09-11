@@ -95,7 +95,7 @@ inline std::vector<ValueRequirements> assemble_value_requirements(
     // value_id -> bloque de definicion (params se definen en la entrada).
     std::unordered_map<ir::IrValueId, ir::IrBlockId> def_block;
     for (ir::IrValueId p : fn.params)
-        def_block[p] = 0;
+        def_block[p] = ir::IrBlockId(0);
     for (size_t b = 0; b < fn.blocks.size(); ++b)
         for (const ir::IrInstr &ins : fn.blocks[b].instrs)
             if (ins.dst != ir::IR_NO_VALUE)

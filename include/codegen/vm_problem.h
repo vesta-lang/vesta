@@ -85,7 +85,7 @@ namespace codegen {
  */
 inline rbank::AbstractProblem
 liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
-                    const std::vector<uint32_t> *coalesce_remap = nullptr) {
+                    const std::vector<ir::IrValueId> *coalesce_remap = nullptr) {
     /* CANONICALIZACION por congruencia de PHI.  Cuando hay remap, los valores
      * de una misma clase COMPARTEN registro, asi que el problema real tiene un
      * unico valor por clase con el intervalo UNIDO (def = min, end = max).  Si
@@ -94,7 +94,7 @@ liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
      * funciones, todas con bucles (que es donde hay PHIs).  No es una decision
      * del asignador: es que dos valores congruentes SON el mismo valor. */
     if (coalesce_remap && !coalesce_remap->empty()) {
-        const std::vector<uint32_t> &remap = *coalesce_remap;
+        const std::vector<ir::IrValueId> &remap = *coalesce_remap;
         auto root = [&](ir::IrValueId v) -> ir::IrValueId {
             return (v != ir::IR_NO_VALUE && v < remap.size()) ? remap[v] : v;
         };

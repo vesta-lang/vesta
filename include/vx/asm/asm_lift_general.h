@@ -36,7 +36,8 @@
 
 namespace ir {
 struct IrFunction;
-using IrValueId = uint32_t;
+enum IrValueId : uint32_t; // declaracion opaca; la define ssa_ir.h
+enum IrBlockId : uint32_t; // idem
 enum class IrType : uint8_t;
 } // namespace ir
 
@@ -65,10 +66,11 @@ struct AsmBoundReg {
  * @return true si TODO el bloque se lifto (0 INLINE_ASM); false si aparece una
  *         instruccion/forma fuera del subset -> el llamador emite INLINE_ASM.
  */
-bool asm_lift_general(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+bool asm_lift_general(ir::IrFunction &fn, ir::IrBlockId block,
+                      instr_db::Isa isa,
                       const std::string &body,
                       const std::unordered_map<std::string, AsmBoundReg> &bound,
-                      uint32_t line, uint32_t *out_exit = nullptr);
+                      uint32_t line, ir::IrBlockId *out_exit = nullptr);
 
 } // namespace vx
 

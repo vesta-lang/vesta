@@ -163,8 +163,10 @@ const IrInstr *terminator(const IrBlock &b) {
  */
 struct BranchChain {
     bool ok = false;
-    IrBlockId mergeId = IR_NO_VALUE;
-    IrBlockId lastPred = IR_NO_VALUE;
+    /* IR_NO_BLOCK, no IR_NO_VALUE: son BLOQUES.  Estaba puesto el centinela de
+     * un valor, y colaba porque los dos valen 0xFFFFFFFF. */
+    IrBlockId mergeId = IR_NO_BLOCK;
+    IrBlockId lastPred = IR_NO_BLOCK;
     std::vector<IrBlock *> hoist;
     int ninstr = 0;
 };
@@ -215,7 +217,7 @@ BranchChain trace_branch(IrFunction &fn, const BlockIndex &idx,
         }
         r.hoist.push_back(cur);
         const IrBlockId succId =
-            cur->succs.empty() ? IR_NO_VALUE : cur->succs[0];
+            cur->succs.empty() ? IR_NO_BLOCK : cur->succs[0];
         IrBlock *succ = blk(succId);
         if (!succ) return r;
         if (succ->preds.size() >= 2) { // el sucesor es el join -> merge
@@ -424,7 +426,7 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
     cterm.op = IrOp::BR;
     cterm.operands.clear();
     cterm.target_block = mergeId;
-    cterm.false_block = IR_NO_VALUE;
+    cterm.false_block = IR_NO_BLOCK;
 
     // 4. Actualizar el CFG: C sucede solo a M; M solo desde C.
     Cref.succs.clear();

@@ -229,7 +229,7 @@ struct AccesoComponente {
     bool offset_sabido = false; ///< false = indice variable.
     bool escribe = false;
     RelacionAcceso relacion = RelacionAcceso::Ninguna;
-    ir::IrValueId puntero = 0;
+    ir::IrValueId puntero = ir::IrValueId(0);
     /**
      * @brief Lo que este acceso toca, ¿lo produce o lo consume una operacion?
      *
@@ -284,7 +284,7 @@ struct Frontera {
     SitioIr sitio; ///< donde esta.  Su `universo` es redundante con @c desde.
     UniversoId desde = 0;
     UniversoId hacia = kUniversoDesconocido;
-    ir::IrValueId valor = 0;
+    ir::IrValueId valor = ir::IrValueId(0);
 };
 
 /// Que impidio OBSERVAR mas.  Conocimiento sobre el alcance del analisis:
@@ -303,7 +303,7 @@ struct Limitacion {
     SitioIr sitio;
     std::string destino;
     uint32_t profundidad = 0;
-    ir::IrValueId valor = 0;
+    ir::IrValueId valor = ir::IrValueId(0);
     /**
      * @brief De que CLASE es la limitacion, en el vocabulario comun del ASA.
      *
@@ -400,7 +400,7 @@ struct AggregateFacts {
      * global o del monton, y el dia que se sigan tambien esos, esta identidad
      * cambia sin que cambie el dominio.
      */
-    ir::IrValueId ancla = 0;
+    ir::IrValueId ancla = ir::IrValueId(0);
     /**
      * @brief IDENTIDAD que sobrevive al pipeline: donde se DECLARO el valor.
      *

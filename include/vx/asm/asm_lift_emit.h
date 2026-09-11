@@ -50,7 +50,7 @@ namespace vx {
  *         ningun patron o falta algun registro del patron en @p slot_of.
  */
 bool asm_lift_emit(
-    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+    ir::IrFunction &fn, ir::IrBlockId block, instr_db::Isa isa,
     const std::string &body,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
     uint32_t line);

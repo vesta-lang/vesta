@@ -159,7 +159,7 @@ static StructuralSummary structural_of(const ir::IrFunction &fn) {
     // Back-edge = arista a un bloque de indice <= el actual (aproximacion de
     // bucle sobre el orden de bloques).  Recursion directa = se llama a si
     // misma.
-    for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
+    for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
         for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
             auto is_back = [&](ir::IrBlockId t) {
                 return t != ir::IR_NO_BLOCK && t <= bi;
@@ -171,7 +171,7 @@ static StructuralSummary structural_of(const ir::IrFunction &fn) {
                     ++st.loop_count;
             } else if (in.op == ir::IrOp::SWITCH_DENSE ||
                        in.op == ir::IrOp::MATCH_VARIANT) {
-                for (uint32_t t : in.jump_targets)
+                for (ir::IrBlockId t : in.jump_targets)
                     if (is_back(t)) {
                         ++st.loop_count;
                         break;

@@ -349,7 +349,7 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     for (uint32_t k = 0; k < jtc; ++k) {
         uint32_t t = 0;
         if (!read_u32(in, off, t)) return false;
-        i.jump_targets.push_back(t);
+        i.jump_targets.push_back(ir::IrBlockId(t));
     }
     /* call_abi_regs (ABI custom del CALLIND) -- formato v7. */
     uint32_t abc = 0;

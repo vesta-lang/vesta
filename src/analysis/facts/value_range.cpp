@@ -21,6 +21,7 @@
  * lo unico que puede fallar aqui es el recorrido, y el recorrido es pequeno.
  */
 #include "util/env_flags.h"
+#include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
 #include "analysis/facts/value_range.h"
 #include "analysis/facts/loop_iv_bounds.h"
 
@@ -332,7 +333,7 @@ struct Estado {
  * saber el valor del tag, que es justo lo unico que ahi se sabe seguro.
  */
 struct Arista {
-    ir::IrBlockId desde = 0, hasta = 0;
+    ir::IrBlockId desde = ir::IrBlockId(0), hasta = ir::IrBlockId(0);
     // Afirmacion por comparacion.
     ir::IrValueId cond = ir::IR_NO_VALUE;
     bool rama = true;
@@ -419,7 +420,7 @@ struct Contexto {
         : fn(f), facts(fc), sum(s) {
         const size_t n = fc.value_count();
         suelo.assign(n, ValueRange::top());
-        for (ir::IrValueId v = 0; v < fn.values.size() && v < n; ++v) {
+        for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size() && v < n; ++v) {
             suelo[v] = del_tipo(fn.values[v].type);
             if (fn.values[v].is_const && suelo[v].acotada())
                 suelo[v] = suelo[v].cortar(
@@ -500,7 +501,9 @@ struct Contexto {
 
     /// Ultimo bloque donde se USA cada valor.  Lo rellena @c Motor; se declara
     /// aqui porque quien transfiere es quien puede no anotar lo ya muerto.
-    std::vector<uint32_t> ultimo_uso;
+    /// Valor -> ultimo bloque donde se usa.
+    struct LastUseTag;
+    util::NamedVector<uint32_t, LastUseTag> ultimo_uso;
 
     /// Si @p v sigue teniendo algun uso en @p bi o despues.
     bool is_live(ir::IrValueId v, ir::IrBlockId bi) const {
@@ -546,8 +549,12 @@ struct Motor : Contexto {
     mutable Estado narrow_scratch_; ///< destino del estrechamiento en curso
     mutable Estado in_scratch_;     ///< entrada recien calculada de un bloque
     std::vector<std::vector<uint32_t>> entrantes, salientes;
-    std::vector<uint32_t>
-        vueltas_ciclo; ///< veces que el IN de un bloque cambio
+    /// Veces que el IN de un bloque cambio.  Un `uint32_t` por BLOQUE, y hay
+    /// unos seis por funcion: veinte bytes al monton, veintiseis veces por
+    /// funcion, indistinguibles de las otras ciento sesenta tablas de cuatro
+    /// bytes mientras no llevaran nombre.
+    struct LoopTurnsTag;
+    util::NamedVector<uint32_t, LoopTurnsTag> vueltas_ciclo;
     /**
      * @brief Ultimo bloque donde se USA cada valor.
      *
@@ -567,7 +574,7 @@ struct Motor : Contexto {
 
     void calcular_ultimo_uso() {
         ultimo_uso.assign(suelo.size(), 0);
-        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
+        for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi)
             for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
                 for (ir::IrValueId v : in.operands)
                     if (v < ultimo_uso.size() && bi > ultimo_uso[v])
@@ -580,9 +587,12 @@ struct Motor : Contexto {
     }
     RangeStats stats;
 
+    /// A quien preguntar por los bucles; nulo = calcularlos aqui, como antes.
+    LoopsOracle loops_;
+
     Motor(const ir::IrFunction &f, const IrFacts &fc, const RangeOptions &o,
-          const RangeSummaries *s)
-        : Contexto(f, fc, s), op(o) {
+          const RangeSummaries *s, LoopsOracle lo = {})
+        : Contexto(f, fc, s), loops_(lo), op(o) {
         const size_t nb = fn.blocks.size();
         in_bloque.assign(nb, Estado{});
         entrantes.assign(nb, {});
@@ -595,7 +605,7 @@ struct Motor : Contexto {
     // --- construccion del grafo ------------------------------------------
     void construir_aristas() {
         const size_t nb = fn.blocks.size();
-        for (uint32_t bi = 0; bi < nb; ++bi) {
+        for (ir::IrBlockId bi = ir::IrBlockId(0); bi < nb; ++bi) {
             if (fn.blocks[bi].instrs.empty()) continue;
             const ir::IrInstr &t = fn.blocks[bi].instrs.back();
             auto anadir_arista = [&](Arista a) {
@@ -652,7 +662,7 @@ struct Motor : Contexto {
                 /* Marcador: el dispatch de verdad es la cadena de comparaciones
                  * que viene detras, y esa ya la lee la guarda.  Aqui solo hay
                  * que no perder los sucesores si acaba cerrando el bloque. */
-                for (uint32_t d : t.jump_targets)
+                for (ir::IrBlockId d : t.jump_targets)
                     anadir(d, ir::IR_NO_VALUE, true);
                 anadir(t.target_block, ir::IR_NO_VALUE, true);
             }
@@ -669,7 +679,14 @@ struct Motor : Contexto {
      * hacer crecer un intervalo sin fin.
      */
     void marcar_retrocesos() {
-        const LoopFacts lf = compute_loop_facts(fn);
+        /* Con oraculo, el gestor contesta sin recalcular si la version no ha
+         * cambiado; sin el, lo mismo que antes.  Este sitio NO es perezoso --
+         * se llega siempre al armar el motor --, asi que aqui la cache es
+         * ganancia limpia. */
+        LoopFacts own;
+        if (!loops_.valid()) own = compute_loop_facts(fn);
+        const LoopFacts &lf =
+            loops_.valid() ? loops_.ask(loops_.ctx, fn) : own;
         auto dentro_de = [&](ir::IrBlockId b, uint32_t lid) {
             if (lid == LoopFacts::NO_LOOP) return false;
             uint32_t l =
@@ -1334,7 +1351,7 @@ struct Motor : Contexto {
         calcular_ultimo_uso();
         std::deque<ir::IrBlockId> cola;
         queued_.assign(fn.blocks.size(), 0);
-        enqueue(0, cola);
+        enqueue(ir::IrBlockId(0), cola);
         int pasos = 0;
         while (!cola.empty()) {
             if (++pasos > presupuesto) return false;
@@ -1402,7 +1419,7 @@ struct Motor : Contexto {
         fase_de_estrechar = true;
         std::deque<ir::IrBlockId> cola;
         queued_.assign(fn.blocks.size(), 0);
-        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi)
+        for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi)
             cola.push_back(bi);
         int pasos = 0;
         while (!cola.empty()) {
@@ -1459,7 +1476,7 @@ struct Motor : Contexto {
     /// Proyeccion final: el rango de cada valor en SU PUNTO DE DEFINICION.
     std::vector<ValueRange> en_definicion() const {
         std::vector<ValueRange> out = suelo;
-        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
             if (!in_bloque[bi].reachable) continue;
             Estado e = in_bloque[bi];
             for (const ir::IrInstr &in : fn.blocks[bi].instrs) {
@@ -1745,7 +1762,8 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                                        const IrFacts &facts,
                                        const RangeOptions &op,
                                        const RangeSummaries *sum,
-                                       const LoopIvBounds *ivb);
+                                       const LoopIvBounds *ivb,
+                                       LoopsOracle loops);
 
 /* Quien pidio el analisis que se esta haciendo.  Sin esto el recuento total no
  * es accionable: dice cuantos hay, no de quien son ni cuales sobran.
@@ -1801,7 +1819,7 @@ const char *range_asker_name(RangeAsker a) {
 static RangeFacts calcular_rangos(const ir::IrFunction &fn,
                                   const IrFacts &facts, const RangeOptions &op,
                                   const RangeSummaries *sum,
-                                  const LoopIvBounds *ivb) {
+                                  const LoopIvBounds *ivb, LoopsOracle loops) {
     if (g_measure_cost)
         g_by_asker[static_cast<size_t>(g_asker())].fetch_add(
             1, std::memory_order_relaxed);
@@ -1830,8 +1848,12 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
     LoopFacts loops_propios;
     LoopIvBounds ivb_propias;
     if (ivb == nullptr) {
-        loops_propios = compute_loop_facts(fn);
-        ivb_propias = compute_loop_iv_bounds(fn, facts, loops_propios);
+        /* Perezoso igual -- solo si quien pregunta no trajo las cotas -- y
+         * cacheado cuando hay oraculo. */
+        if (!loops.valid()) loops_propios = compute_loop_facts(fn);
+        const LoopFacts &lf_iv =
+            loops.valid() ? loops.ask(loops.ctx, fn) : loops_propios;
+        ivb_propias = compute_loop_iv_bounds(fn, facts, lf_iv);
         /* Y si alguna cota se quedo sin despejar por no ser CONSTANTE ESCRITA,
          * se vuelve a intentar CON RANGOS.  Ese es el escalon que rompe el
          * circulo sin renunciar:
@@ -1856,9 +1878,9 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
             // Que se vea de quien es esta pasada de mas.
             const RangeRequester mark(RangeAsker::IvStaging);
             const RangeFacts sin_cotas =
-                calcular_rangos_impl(fn, facts, op, sum, nullptr);
+                calcular_rangos_impl(fn, facts, op, sum, nullptr, loops);
             LoopIvBounds mejores =
-                compute_loop_iv_bounds(fn, facts, loops_propios, &sin_cotas);
+                compute_loop_iv_bounds(fn, facts, lf_iv, &sin_cotas);
             /* Solo si de verdad acota MAS.  Si no, se queda la primera:
              * `const_of` con rangos nunca devuelve menos, pero el despeje de
              * despues si puede caerse por otro sitio. */
@@ -1868,7 +1890,7 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
         ivb = &ivb_propias;
     }
     const uint64_t t = util::reloj::ahora();
-    RangeFacts r = calcular_rangos_impl(fn, facts, op, sum, ivb);
+    RangeFacts r = calcular_rangos_impl(fn, facts, op, sum, ivb, loops);
     g_ns_motor += util::reloj::a_ns(util::reloj::ahora() - t);
     if (g_measure_cost && (++g_n_motor % 100) == 0) {
         std::fprintf(stderr, "[motor-rangos] %lld analisis | %lld ms\n",
@@ -1888,7 +1910,8 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
                                        const IrFacts &facts,
                                        const RangeOptions &op,
                                        const RangeSummaries *sum,
-                                       const LoopIvBounds *ivb) {
+                                       const LoopIvBounds *ivb,
+                                       LoopsOracle loops) {
     /* --------------------------------------------------------------- reuso
      *
      * Siete sitios distintos piden rangos de la misma funcion, y medido sobre
@@ -1906,7 +1929,7 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
      * pisa mientras vale, y varios hilos pueden leer la misma. */
     RangeFacts out;
     g_cost() = CostCounters{}; // el coste que se mide es el de ESTA funcion
-    Motor m(fn, facts, op, sum);
+    Motor m(fn, facts, op, sum, loops);
     /* Las cotas de induccion entran como SUELO, igual que lo que dicen los
      * resumenes de un parametro: no son una fase mas del motor, son lo que ya
      * se sabia del valor antes de empezar a iterar.
@@ -2130,11 +2153,9 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
  * Se devuelve un puntero COMPARTIDO, no una referencia al cajon: asi la entrada
  * puede desalojarse sin dejar colgado a quien la estaba mirando.
  */
-static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
-                                                   const IrFacts &facts,
-                                                   const RangeOptions &op,
-                                                   const RangeSummaries *sum,
-                                                   const LoopIvBounds *ivb) {
+static std::shared_ptr<const RangeFacts> rangos_de(
+    const ir::IrFunction &fn, const IrFacts &facts, const RangeOptions &op,
+    const RangeSummaries *sum, const LoopIvBounds *ivb, LoopsOracle loops) {
     struct EntradaCache {
         DependenciasRango deps;
         std::shared_ptr<const RangeFacts> hechos;
@@ -2144,7 +2165,7 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
 
     if (g_no_range_cache)
         return std::make_shared<const RangeFacts>(
-            calcular_rangos(fn, facts, op, sum, ivb));
+            calcular_rangos(fn, facts, op, sum, ivb, loops));
 
     /* El indice va por la parte de la clave que se puede calcular SIN correr el
      * analisis (funcion + opciones); lo que solo se sabe despues -- que
@@ -2164,7 +2185,7 @@ static std::shared_ptr<const RangeFacts> rangos_de(const ir::IrFunction &fn,
     }
 
     auto nuevos = std::make_shared<const RangeFacts>(
-        calcular_rangos(fn, facts, op, sum, ivb));
+        calcular_rangos(fn, facts, op, sum, ivb, loops));
     {
         std::lock_guard<std::mutex> g(mx_cache);
         std::vector<EntradaCache> &cajon = cache[clave];
@@ -2180,17 +2201,18 @@ std::shared_ptr<const RangeFacts> compute_ranges_ptr(const ir::IrFunction &fn,
                                                      const IrFacts &facts,
                                                      const RangeOptions &op,
                                                      const RangeSummaries *sum,
-                                                     const LoopIvBounds *ivb) {
-    return rangos_de(fn, facts, op, sum, ivb);
+                                                     const LoopIvBounds *ivb,
+                                                     LoopsOracle loops) {
+    return rangos_de(fn, facts, op, sum, ivb, loops);
 }
 
 
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op, const RangeSummaries *sum,
-                          const LoopIvBounds *ivb) {
+                          const LoopIvBounds *ivb, LoopsOracle loops) {
     // Quien solo va a LEERLOS deberia usar `compute_ranges_ptr` y ahorrarse
     // esta copia; esta forma se mantiene para quien necesite los suyos propios.
-    return *rangos_de(fn, facts, op, sum, ivb);
+    return *rangos_de(fn, facts, op, sum, ivb, loops);
 }
 
 // ===========================================================================
@@ -2286,7 +2308,8 @@ struct RangeQuery::Impl {
     const LoopIvBounds *ivb;
     std::vector<ValueRange> memo;
     /// 0 = sin mirar, 1 = evaluandose ahora, 2 = ya resuelto.
-    std::vector<uint8_t> state;
+    struct QueryStateTag;
+    util::NamedVector<uint8_t, QueryStateTag> state;
     uint64_t evaluated_count = 0;
 
     Impl(const ir::IrFunction &fn, const IrFacts &facts,
@@ -2500,7 +2523,7 @@ bool deserialize_range_facts(const uint8_t *data, size_t n, uint64_t ir_key,
             return false;
         for (uint32_t k = 0; k < n_refs && r.ok(); ++k) {
             RangeEntry e;
-            e.id = r.u32();
+            e.id = ir::IrValueId(r.u32());
             e.set_range(read_range(r));
             f.block_entry[b].refinements.push_back(e);
         }
@@ -2520,7 +2543,7 @@ bool deserialize_range_facts(const uint8_t *data, size_t n, uint64_t ir_key,
     f.wraps.resize(n_wraps);
     for (uint32_t i = 0; i < n_wraps && r.ok(); ++i) {
         RangeFacts::Wrap &x = f.wraps[i];
-        x.dst = r.u32();
+        x.dst = ir::IrValueId(r.u32());
         x.exacto = r.i64();
         x.lo = r.i64();
         x.hi = r.i64();

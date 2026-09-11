@@ -285,9 +285,10 @@ int reg_info(const std::string &tok, std::string &canon, bool &is_high) {
  *  (lift de instrucciones + condicion de rama).  reg_info/binop_of/parse_mem/
  *  mem_hint_width/setcc_to_cmp son la parte x86.  @p out_exit (si != null)
  * queda con el bloque de continuacion (donde sigue el codigo tras el asm). */
-bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
+bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block,
+              const std::string &body,
               const std::unordered_map<std::string, AsmBoundReg> &bound,
-              uint32_t line, uint32_t *out_exit) {
+              uint32_t line, ir::IrBlockId *out_exit) {
     // El CFG (por-ISA) trocea el body en bloques basicos + aristas.  Usamos su
     // lista de instrucciones (mismo troceo que instructions()) para indexar los
     // bloques de forma consistente.  Anadimos un `nop` centinela al final: una
@@ -348,7 +349,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
         auto b = bound.find(canon);
         if (b == bound.end()) {
             ok = false;
-            return 0;
+            return ir::IrValueId(0);
         }
         // El slot del var register-bound conserva su naturaleza (host/VM) en el
         // flag del valor del ALLOCA: lo respetamos (los register() suelen vivir
@@ -364,7 +365,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
     auto read_reg = [&](const std::string &canon, int w, bool is_high, bool sgn,
                         bool &ok) -> ir::IrValueId {
         ir::IrValueId full = get_full(canon, ok);
-        if (!ok) return 0;
+        if (!ok) return ir::IrValueId(0);
         ir::IrValueId v = is_high ? BIN(ir::IrOp::SHR, full, K(8)) : full;
         if (w >= 64) return v;
         return sgn ? sext_low(v, w) : and_mask(v, w);
@@ -382,7 +383,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
         const int rw = reg_info(op, canon, is_high);
         if (rw == 0) {
             ok = false;
-            return 0;
+            return ir::IrValueId(0);
         }
         return read_reg(canon, w, is_high, sgn, ok);
     };
@@ -433,16 +434,16 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
     // es GP.
     auto mem_addr_of = [&](const MemAddr &ma, bool &okr) -> ir::IrValueId {
         okr = true;
-        ir::IrValueId acc = 0;
+        ir::IrValueId acc = ir::IrValueId(0);
         bool have = false;
         if (!ma.base.empty()) {
             acc = get_full(ma.base, okr);
-            if (!okr) return 0;
+            if (!okr) return ir::IrValueId(0);
             have = true;
         }
         if (!ma.index.empty()) {
             ir::IrValueId idx = get_full(ma.index, okr);
-            if (!okr) return 0;
+            if (!okr) return ir::IrValueId(0);
             if (ma.scale != 1) idx = BIN(ir::IrOp::MUL, idx, K(ma.scale));
             acc = have ? BIN(ir::IrOp::ADD, acc, idx) : idx;
             have = true;
@@ -465,8 +466,8 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
         bool valid = false;
         bool is_test = false;     // flags de un `test` (a&b vs 0)
         bool from_result = false; // flags de una ALU: solo ZF (result==0)
-        ir::IrValueId a = 0,
-                      b = 0; // valores FULL 64b capturados en el cmp/test
+        // valores FULL 64b capturados en el cmp/test
+        ir::IrValueId a = ir::IrValueId(0), b = ir::IrValueId(0);
         int width = 64;
         bool a_high = false, b_high = false;
         // Carry-flag (CF) modelado APARTE, para adc/sbb (aritmetica
@@ -474,7 +475,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
         // dejo un add/sub/ adc/sbb de 64 bits inmediatamente antes en la
         // cadena.
         bool has_cf = false;
-        ir::IrValueId cf = 0;
+        ir::IrValueId cf = ir::IrValueId(0);
     };
     FlagsInfo flags;
 
@@ -530,7 +531,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
         flags.is_test = false;
         flags.from_result = true;
         flags.a = res;
-        flags.b = 0;
+        flags.b = ir::IrValueId(0);
         flags.width = w;
         flags.a_high = false;
         flags.b_high = false;
@@ -819,7 +820,8 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
                 // jz/jnz). Capturamos los operandos FULL AQUi (antes de pisar
                 // el dst).
                 const bool is_sub = (bop == ir::IrOp::SUB);
-                ir::IrValueId sub_a = 0, sub_b = 0;
+                ir::IrValueId sub_a = ir::IrValueId(0),
+                              sub_b = ir::IrValueId(0);
                 bool sub_bh = false;
                 if (is_sub) {
                     sub_a = get_full(rc, ok);
@@ -1207,7 +1209,7 @@ bool lift_x86(ir::IrFunction &fn, uint32_t block, const std::string &body,
         if (jm.size() < 2 || jm[0] != 'j') return ir::IR_NO_VALUE;
         return cc_cond(jm.substr(1)); // lee las flags dejadas por el cuerpo
     };
-    uint32_t exit_blk = block;
+    ir::IrBlockId exit_blk = block;
     if (!lift_cfg_neutral(ctx, cfg, hooks, exit_blk))
         return lift_no("<bloque>", __LINE__);
     if (out_exit) *out_exit = exit_blk;

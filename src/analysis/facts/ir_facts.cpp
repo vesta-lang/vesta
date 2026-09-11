@@ -28,7 +28,7 @@ namespace {
 /// ya se paso.  Funcion con nombre y no una lambda dentro del bucle -- se prueba
 /// sola, sale con su nombre en un perfil, y no captura nada cuya vida haya que
 /// razonar.
-bool is_back_edge(ir::IrBlockId target, uint32_t from) {
+bool is_back_edge(ir::IrBlockId target, ir::IrBlockId from) {
     return target != ir::IR_NO_BLOCK && target <= from;
 }
 
@@ -50,7 +50,7 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
     }
     f.block_count = static_cast<uint32_t>(fn.blocks.size());
 
-    for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
+    for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
         const ir::IrBlock &b = fn.blocks[bi];
         for (size_t ii = 0; ii < b.instrs.size(); ++ii) {
             const ir::IrInstr &in = b.instrs[ii];
@@ -95,7 +95,7 @@ IrFacts build_ir_facts(const ir::IrFunction &fn) {
                     ++f.loop_count;
             } else if (in.op == ir::IrOp::SWITCH_DENSE ||
                        in.op == ir::IrOp::MATCH_VARIANT) {
-                for (uint32_t t : in.jump_targets)
+                for (ir::IrBlockId t : in.jump_targets)
                     if (is_back_edge(t, bi)) {
                         ++f.loop_count;
                         break;

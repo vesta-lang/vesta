@@ -520,7 +520,8 @@ struct Observado {
         fronteras.push_back(std::move(f));
     }
     void limitar(CodigoLimitacion c, SitioIr s, const std::string &destino = {},
-                 uint32_t profundidad = 0, ir::IrValueId valor = 0,
+                 uint32_t profundidad = 0,
+                 ir::IrValueId valor = ir::IrValueId(0),
                  UnknownReason reason = UnknownReason::NotAsked,
                  const char *reason_code = "") {
         abrir_hacia_arriba(s.universo);

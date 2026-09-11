@@ -40,8 +40,8 @@
 
 namespace ir {
 struct IrFunction;
-using IrValueId =
-    uint32_t; // == ir/ssa_ir.h (typedef, no se puede fwd-declarar)
+enum IrValueId : uint32_t; // declaracion opaca; la define ssa_ir.h
+enum IrBlockId : uint32_t; // idem
 } // namespace ir
 
 namespace vx {
@@ -80,10 +80,11 @@ namespace vx {
  * el paso siguiente sin tocar a los llamantes.
  */
 bool asm_lift_micro(
-    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+    ir::IrFunction &fn, ir::IrBlockId block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of = {},
-    AsmMotivoOpaco *motivo = nullptr, uint32_t *bloque_salida = nullptr);
+    AsmMotivoOpaco *motivo = nullptr,
+    ir::IrBlockId *bloque_salida = nullptr);
 
 /**
  * @brief Instrucciones que la base de datos no supo resolver en lo que va de

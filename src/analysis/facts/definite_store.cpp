@@ -21,6 +21,8 @@
 
 #include "analysis/facts/definite_store.h"
 
+#include "util/named_alloc.h" // que el perfil diga QUE es cada marca
+
 #include <vector>
 
 namespace analysis {
@@ -70,7 +72,9 @@ DefiniteStoreFacts compute_definite_store(const ir::IrFunction &fn,
      * `store v, %a` escribe donde apunta `%x`.  Solo copias EXACTAS: `%x + 8`
      * es otra direccion, y contarla como si fuera esta convertiria el analisis
      * en una fuente de respuestas falsas. */
-    std::vector<uint8_t> is_alias(fn.values.size(), 0u);
+    /// Quien es copia EXACTA del puntero que se persigue.
+    struct IsAlias;
+    util::NamedVector<uint8_t, IsAlias> is_alias(fn.values.size(), 0u);
     if (target < is_alias.size()) is_alias[target] = 1u;
     for (bool changed = true; changed;) {
         changed = false;

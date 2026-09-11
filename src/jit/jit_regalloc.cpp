@@ -49,7 +49,7 @@ constexpr size_t POOL_SIZE =
  * @brief Info recolectada por VID durante el analisis.
  */
 struct VidInfo {
-    ir::IrValueId vid = 0;
+    ir::IrValueId vid = ir::IrValueId(0);
     uint32_t use_count = 0;
     uint32_t def_pos = UINT32_MAX; ///< posicion lineal del def
     uint32_t last_use_pos = 0;     ///< posicion lineal del ultimo uso

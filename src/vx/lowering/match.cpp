@@ -138,9 +138,10 @@ ir::IrValueId Lowering::lower_match_scalar(ast::MatchExpr *e) {
         const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
         const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
         if (lo >= 0 && range >= n && range <= 2 * n && range <= 256) {
-            std::vector<uint32_t> table((size_t)range, (uint32_t)default_bb);
+            std::vector<ir::IrBlockId> table((size_t)range,
+                                             (ir::IrBlockId)default_bb);
             for (const auto &c : sw_cases)
-                table[(size_t)(c.first - lo)] = (uint32_t)c.second;
+                table[(size_t)(c.first - lo)] = (ir::IrBlockId)c.second;
             ir::IrInstr sd{};
             sd.op = ir::IrOp::SWITCH_DENSE;
             sd.type = ir::IrType::VOID;
@@ -326,9 +327,10 @@ ir::IrValueId Lowering::lower_match_string(ast::MatchExpr *e) {
         const int64_t lo = sw_cases.front().first, hi = sw_cases.back().first;
         const int64_t range = hi - lo + 1, n = (int64_t)sw_cases.size();
         if (lo >= 0 && n >= 4 && range >= n && range <= 2 * n && range <= 256) {
-            std::vector<uint32_t> table((size_t)range, (uint32_t)default_bb);
+            std::vector<ir::IrBlockId> table((size_t)range,
+                                             (ir::IrBlockId)default_bb);
             for (const auto &c : sw_cases)
-                table[(size_t)(c.first - lo)] = (uint32_t)c.second;
+                table[(size_t)(c.first - lo)] = (ir::IrBlockId)c.second;
             ir::IrInstr sd{};
             sd.op = ir::IrOp::SWITCH_DENSE;
             sd.type = ir::IrType::VOID;
@@ -604,11 +606,12 @@ ir::IrValueId Lowering::lower_match_expr(ast::MatchExpr *e) {
         // Densidad: rango no mucho mayor que N (evita tablas con muchos
         // huecos) + cap a 256 entradas (island compacto) + base no-negativa.
         if (lo_tag >= 0 && range >= n && range <= 2 * n && range <= 256) {
-            std::vector<uint32_t> table(static_cast<size_t>(range),
-                                        static_cast<uint32_t>(default_bb));
+            std::vector<ir::IrBlockId> table(
+                static_cast<size_t>(range),
+                static_cast<ir::IrBlockId>(default_bb));
             for (const auto &c : sw_cases)
                 table[static_cast<size_t>(c.first - lo_tag)] =
-                    static_cast<uint32_t>(c.second);
+                    static_cast<ir::IrBlockId>(c.second);
             ir::IrInstr sd{};
             sd.op = ir::IrOp::SWITCH_DENSE;
             sd.type = ir::IrType::VOID;

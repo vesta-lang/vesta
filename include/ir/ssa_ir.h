@@ -913,9 +913,51 @@ bool ir_op_parse(const char *name, IrOp &out);
  *
  * Un IrValueId es un indice en el pool de valores de la funcion.
  * El valor 0xFFFFFFFF indica "sin valor" (instrucciones void).
+ *
+ * ES UN `enum`, NO UN ALIAS, y la razon no es el sistema de tipos sino poder
+ * MIRAR.  Un `using IrValueId = uint32_t` es transparente al mangling, asi que
+ * `std::vector<IrValueId>` se llama `std::vector<unsigned int>` -- igual que
+ * las otras decenas de estructuras auxiliares de cuatro bytes que hay por el
+ * compilador.  Midiendo las reservas de compilar 441.089 lineas eso dejo **el
+ * 60% de 116 millones de reservas sin poder atribuir**: el informe sabia el
+ * tamano y no sabia QUE era.  Con el enum, cada contenedor de identificadores
+ * SSA sale con su nombre en el simbolo y se distingue solo.
+ *
+ * Sin `class` a proposito: convierte HACIA `uint32_t`, asi que indexar
+ * (`vec[id]`) y comparar con un tamano siguen escribiendose igual; lo que deja
+ * de ser implicito es lo contrario, construir uno desde un entero cualquiera,
+ * que es justo donde conviene que se vea.
  */
-using IrValueId = uint32_t;
-static constexpr IrValueId IR_NO_VALUE = 0xFFFFFFFFu;
+enum IrValueId : uint32_t {};
+static constexpr IrValueId IR_NO_VALUE = IrValueId(0xFFFFFFFFu);
+
+/**
+ * @brief Avanza al siguiente identificador.
+ *
+ * Existe porque recorrer todos los valores de una funcion (`for (IrValueId v =
+ * IrValueId(0); v < n; ++v)`) es el bucle mas repetido del optimizador, y sin
+ * esto habria que sacarlo y volverlo a meter en cada vuelta.  Es lo UNICO que
+ * se le da: no hay suma, ni resta, ni multiplicacion, porque sobre un
+ * identificador no significan nada.
+ *
+ * @param v El identificador, que se modifica.
+ * @return El identificador ya avanzado.
+ */
+inline IrValueId &operator++(IrValueId &v) noexcept {
+    v = static_cast<IrValueId>(static_cast<uint32_t>(v) + 1u);
+    return v;
+}
+
+/**
+ * @brief Avanza al siguiente identificador, devolviendo el anterior.
+ * @param v El identificador, que se modifica.
+ * @return El valor que tenia antes de avanzar.
+ */
+inline IrValueId operator++(IrValueId &v, int) noexcept {
+    const IrValueId before = v;
+    ++v;
+    return before;
+}
 
 /**
  * @brief Los operandos de una instruccion.
@@ -974,9 +1016,37 @@ class IrValueList {
 
 /**
  * @brief Identificador de un bloque basico.
+ *
+ * `enum` por lo mismo que @ref IrValueId, y ahi esta el razonamiento entero:
+ * un alias no se distingue en el simbolo, asi que `std::vector<IrBlockId>` se
+ * llamaba `std::vector<unsigned int>` y se confundia con todo lo demas.  Solo
+ * en `loop_facts.cpp` eso son CUATRO sitios de medio millon de reservas cada
+ * uno -- sucesores, predecesores, orden inverso y dominadores -- que compartian
+ * nombre con las otras ciento sesenta tablas de cuatro bytes del arbol.
  */
-using IrBlockId = uint32_t;
-static constexpr IrBlockId IR_NO_BLOCK = 0xFFFFFFFFu;
+enum IrBlockId : uint32_t {};
+static constexpr IrBlockId IR_NO_BLOCK = IrBlockId(0xFFFFFFFFu);
+
+/**
+ * @brief Avanza al siguiente bloque.
+ * @param b El identificador, que se modifica.
+ * @return El identificador ya avanzado.
+ */
+inline IrBlockId &operator++(IrBlockId &b) noexcept {
+    b = static_cast<IrBlockId>(static_cast<uint32_t>(b) + 1u);
+    return b;
+}
+
+/**
+ * @brief Avanza al siguiente bloque, devolviendo el anterior.
+ * @param b El identificador, que se modifica.
+ * @return El valor que tenia antes de avanzar.
+ */
+inline IrBlockId operator++(IrBlockId &b, int) noexcept {
+    const IrBlockId before = b;
+    ++b;
+    return before;
+}
 
 /// El valor no vive en ningun registro fisico (murio o se derramo).
 static constexpr uint8_t IR_NO_REG = 0xFFu;
@@ -1203,7 +1273,7 @@ struct IrInstr {
     /// rango -> target_block (default).  Vacio para el resto de ops.  El
     /// backend JIT (vreg) lo baja a un island nativo (computed-goto); el
     /// interp usa el BST que el frontend emite junto al marker.
-    std::vector<uint32_t> jump_targets;
+    std::vector<IrBlockId> jump_targets;
 
     uint32_t
         source_line; ///< numero de linea del fuente original (0 = desconocido)
@@ -1503,8 +1573,8 @@ struct AsmMicroOperand {
     uint16_t width =
         0; ///< ancho en BITS del operando (de la forma DB); nombra el reg
     int16_t fixed_phys = -1; ///< reg fisico fijo (-1 = libre, lo asigna el RA)
-    IrValueId value =
-        0;           ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
+    IrValueId value = IrValueId(
+        0);          ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
     int64_t imm = 0; ///< inmediato (solo @c kind==IMM)
 
     bool reads() const { return (flags & ASM_OP_READ) != 0; }

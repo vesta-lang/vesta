@@ -25,10 +25,11 @@
 
 namespace vx {
 
-bool asm_lift_general(ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+bool asm_lift_general(ir::IrFunction &fn, ir::IrBlockId block,
+                      instr_db::Isa isa,
                       const std::string &body,
                       const std::unordered_map<std::string, AsmBoundReg> &bound,
-                      uint32_t line, uint32_t *out_exit) {
+                      uint32_t line, ir::IrBlockId *out_exit) {
     switch (isa) {
     case instr_db::Isa::X86:
         return lift_x86(fn, block, body, bound, line, out_exit);

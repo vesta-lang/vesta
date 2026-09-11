@@ -607,10 +607,10 @@ bool anotar_implicitos(const std::string &arch, const std::string &insn,
 } // namespace
 
 bool asm_lift_micro(
-    ir::IrFunction &fn, uint32_t block, instr_db::Isa isa,
+    ir::IrFunction &fn, ir::IrBlockId block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of,
-    AsmMotivoOpaco *motivo, uint32_t *bloque_salida) {
+    AsmMotivoOpaco *motivo, ir::IrBlockId *bloque_salida) {
     /* Por donde sigue la ejecucion.  Hoy, el mismo bloque en el que se emite:
      * un asm sin saltos empieza y acaba donde estaba.  Se contesta ANTES de
      * cualquier salida para que quien pregunte tenga respuesta tambien cuando

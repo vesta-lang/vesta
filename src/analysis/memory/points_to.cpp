@@ -14,6 +14,8 @@
  *        afirma un offset no probado).
  */
 #include "analysis/memory/points_to.h"
+
+#include "util/named_alloc.h" // que el perfil diga QUE es cada marca
 #include "analysis/manager/analysis_codec.h" // lo COMUN de guardar un analisis
 #include "analysis/memory/memory_access.h" // tamano de un tipo (UNICA verdad)
 #include "analysis/facts/loop_facts.h"
@@ -94,11 +96,15 @@ struct Resolver {
      * memoiza donde se devuelve.
      */
     std::vector<PointsToEntry> &memo;
-    std::vector<uint8_t> state; // 0=nuevo, 1=en-curso, 2=hecho
+    /// 0=nuevo, 1=en-curso, 2=hecho.  Con nombre: una marca por valor SSA, y
+    /// hay seis por funcion, asi que el perfil la veia como un
+    /// `vector<unsigned char>` de SEIS bytes entre otros doscientos.
+    struct ResolveState;
+    util::NamedVector<uint8_t, ResolveState> state;
 
     Resolver(const ir::IrFunction &f, const IrFacts &fc, const RangeFacts *rg,
-             std::vector<PointsToEntry> &dst)
-        : fn(f), facts(fc), rangos(rg), memo(dst) {
+             std::vector<PointsToEntry> &dst, LoopsOracle lo)
+        : fn(f), facts(fc), rangos(rg), memo(dst), loops_(lo) {
         const size_t n = facts.value_count();
         memo.assign(n, PointsToEntry{});
         state.assign(n, 0);
@@ -281,17 +287,30 @@ struct Resolver {
 
     // --- Hechos de bucle, calculados SOLO si aparece un puntero inducido ---
     bool bucles_listos = false;
-    LoopFacts lf;
+    /* A quien preguntar, si lo hay.  Y los PROPIOS solo para el caso en que no
+     * lo haya: asi el que llega por el gestor no copia nada y el que llega
+     * suelto se comporta igual que antes. */
+    LoopsOracle loops_;
+    LoopFacts lf_own_;
+    const LoopFacts *lf_ = nullptr;
     /* Donde se define cada valor lo trae `facts`, que ya lo tenemos delante:
      * era el mismo doble bucle que hizo `build_ir_facts`, repetido aqui. */
-    const std::vector<int32_t> &def_block = facts.def_block;
+    const DefBlockVec &def_block = facts.def_block;
 
     void preparar_bucles() {
         if (bucles_listos) return;
         bucles_listos = true;
-        lf = compute_loop_facts(fn);
-        shape_.assign(lf.loop_count, LoopShape{});
-        shape_ready_.assign(lf.loop_count, 0);
+        /* PEREZOSO igual que antes -- aqui solo se llega si aparecio un puntero
+         * inducido --, pero ahora ademas CACHEADO cuando hay a quien preguntar:
+         * el gestor contesta sin recalcular si la version no cambio. */
+        if (loops_.valid()) {
+            lf_ = &loops_.ask(loops_.ctx, fn);
+        } else {
+            lf_own_ = compute_loop_facts(fn);
+            lf_ = &lf_own_;
+        }
+        shape_.assign(lf_->loop_count, LoopShape{});
+        shape_ready_.assign(lf_->loop_count, 0);
     }
 
     /**
@@ -310,7 +329,9 @@ struct Resolver {
         bool usable = false;
     };
     std::vector<LoopShape> shape_;
-    std::vector<uint8_t> shape_ready_;
+    /// La forma del bucle ya esta calculada.
+    struct ShapeReady;
+    util::NamedVector<uint8_t, ShapeReady> shape_ready_;
 
     /**
      * @brief La forma del bucle @p lid, calculada la primera vez que se pide.
@@ -327,7 +348,7 @@ struct Resolver {
         if (shape_ready_[lid]) return shape_[lid];
         shape_ready_[lid] = 1;
         LoopShape &s = shape_[lid];
-        s.st = detect_loop_structure(fn, lf, lid);
+        s.st = detect_loop_structure(fn, *lf_, lid);
         if (!s.st.valid) return s;
         if (!detect_loop_iv(fn, def_block, s.st.header, s.st.preheader,
                             s.st.latch, s.iv))
@@ -357,9 +378,9 @@ struct Resolver {
         preparar_bucles();
         if (phi >= def_block.size() || def_block[phi] < 0) return false;
         const uint32_t bh = static_cast<uint32_t>(def_block[phi]);
-        if (bh >= lf.is_loop_header.size() || !lf.is_loop_header[bh])
+        if (bh >= lf_->is_loop_header.size() || !lf_->is_loop_header[bh])
             return false;
-        const uint32_t lid = lf.loop_id[bh];
+        const uint32_t lid = lf_->loop_id[bh];
         if (lid == LoopFacts::NO_LOOP) return false;
         /* La forma del bucle, ya calculada si otro puntero del mismo bucle
          * pregunto antes.  Trae la estructura, la induccion y las vueltas. */
@@ -836,16 +857,17 @@ static RegionExtent extension_de(const ir::IrInstr &d, const IrFacts &facts) {
 }
 
 PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
-                           const RangeFacts *rangos) {
+                           const RangeFacts *rangos, LoopsOracle loops) {
     PointsTo out;
     const size_t n = facts.value_count();
     // El resolvedor memoiza DENTRO de `out.loc`: la deja del tamano que toca y
     // va escribiendo ahi.  Antes se llenaba un array aparte y se copiaba
     // entrada a entrada, o sea el doble de memoria y el doble de trabajo para
     // acabar con lo mismo dos veces.
-    Resolver r(fn, facts, rangos, out.loc);
+    Resolver r(fn, facts, rangos, out.loc, loops);
     out.extent.assign(n, RegionExtent{});
-    for (ir::IrValueId v = 0; v < static_cast<ir::IrValueId>(n); ++v) {
+    for (ir::IrValueId v = ir::IrValueId(0);
+         v < static_cast<ir::IrValueId>(n); ++v) {
         r.resolve(v); // deja la respuesta en `out.loc[v]`
         // La extension se guarda en la RAIZ, que es de quien es propiedad.
         if (const ir::IrInstr *d = facts.def(v))
@@ -947,7 +969,7 @@ PointsToEntry read_entry(util::ByteReader &r,
     e.root = r.u32();
     e.off = r.i64();
     e.off_exact = r.u8() != 0;
-    e.off_sym = r.u32();
+    e.off_sym = ir::IrValueId(r.u32());
     e.off_lo = r.i64();
     e.off_hi = r.i64();
     e.off_rango = r.u8() != 0;

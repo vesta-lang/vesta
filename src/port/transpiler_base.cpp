@@ -416,7 +416,8 @@ void Transpiler::emit_function(EmitContext &ctx, const ir::IrFunction &fn) {
     // Bloques no estructurables se emiten en estilo goto como fallback.
     if (!fn.blocks.empty()) {
         std::vector<bool> visited(fn.blocks.size(), false);
-        emit_region(ctx, fn, /*start=*/0, /*stop=*/ir::IR_NO_BLOCK, visited);
+        emit_region(ctx, fn, /*start=*/ir::IrBlockId(0),
+                    /*stop=*/ir::IR_NO_BLOCK, visited);
 
         // Defensa: bloques no alcanzados por la emision estructurada
         // (CFG con regiones desconectadas).  No deberia ocurrir en IR

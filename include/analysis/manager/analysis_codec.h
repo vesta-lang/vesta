@@ -98,8 +98,11 @@ bool read_analysis_header(util::ByteReader &r, const char *name,
  * hechos, que es un artefacto que viaja entre maquinas --.  Si algun dia se
  * comparte entre maquinas, esto tiene que volverse portable.
  */
-template <class T>
-void write_pod_vector(util::ByteWriter &w, const std::vector<T> &v) {
+/* Plantilla tambien sobre el ASIGNADOR: un vector con asignador etiquetado
+ * -- los que llevan nombre para que el perfil de reservas diga que son -- es
+ * otro tipo, y sin esto no entraria por esta puerta. */
+template <class T, class A>
+void write_pod_vector(util::ByteWriter &w, const std::vector<T, A> &v) {
     w.u32(static_cast<uint32_t>(v.size()));
     if (!v.empty()) w.raw(v.data(), v.size() * sizeof(T));
 }
@@ -114,8 +117,8 @@ void write_pod_vector(util::ByteWriter &w, const std::vector<T> &v) {
  * @return @c false si no cuadra; @p out queda en un estado cualquiera y quien
  *         llama tiene que descartar la estructura entera, no entregarla.
  */
-template <class T>
-bool read_pod_vector(util::ByteReader &r, std::vector<T> &out) {
+template <class T, class A>
+bool read_pod_vector(util::ByteReader &r, std::vector<T, A> &out) {
     const uint32_t n = r.u32();
     if (!r.ok()) return false;
     if (static_cast<size_t>(n) * sizeof(T) > r.remaining()) return false;

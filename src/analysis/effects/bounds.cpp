@@ -163,8 +163,8 @@ std::vector<BoundsViolation> check_region_bounds(const ir::IrModule &mod,
          * valor de la funcion -- lo que impone su tipo, y su valor si es
          * constante --, que no depende del bloque.  O sea que una funcion con B
          * bloques y V valores hacia B*V veces un trabajo que es V. */
-        analysis::RangeWalk paso(fn, hechos, rangos, 0);
-        for (uint32_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        analysis::RangeWalk paso(fn, hechos, rangos, ir::IrBlockId(0));
+        for (ir::IrBlockId bi = ir::IrBlockId(0); bi < fn.blocks.size(); ++bi) {
             const ir::IrBlock &b = fn.blocks[bi];
             /* Se recorre el bloque con el estado del analisis, no se consulta
              * por valor: el rango de un indice EN EL PUNTO DEL ACCESO es el que

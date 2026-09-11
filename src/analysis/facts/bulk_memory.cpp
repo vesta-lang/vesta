@@ -153,7 +153,7 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
     /* Donde se define cada valor lo trae `hechos`: es el mismo recorrido que
      * ya hizo `build_ir_facts` tres lineas mas arriba.  Se construia aqui a
      * mano por delante -- el mismo doble bucle, el mismo resultado. */
-    const std::vector<int32_t> &def_block = hechos.def_block;
+    const DefBlockVec &def_block = hechos.def_block;
 
     for (uint32_t L = 0; L < lf.loop_count; ++L) {
         BulkMemoryFact f;

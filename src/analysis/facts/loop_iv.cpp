@@ -52,7 +52,7 @@ bool is_ne_cmp(IrOp op) {
 }
 
 // Resuelve el valor CONSTANTE de @p v (la CONST que lo define en su bloque).
-bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool const_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
               IrValueId v, int64_t &out) {
     if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
     const int db = (v < def_block.size()) ? def_block[v] : -1;
@@ -79,7 +79,7 @@ bool const_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
  * sino por si el IR llega roto: un analisis no debe colgar el compilador.
  */
 IrValueId skip_copies(const ir::IrFunction &fn,
-                      const std::vector<int> &def_block, IrValueId v) {
+                      const DefBlockVec &def_block, IrValueId v) {
     for (int hops = 0; hops < 16; ++hops) {
         if (v == IR_NO_VALUE || v >= fn.values.size()) return v;
         const int db = (v < def_block.size()) ? def_block[v] : -1;
@@ -97,7 +97,7 @@ IrValueId skip_copies(const ir::IrFunction &fn,
 }
 
 // Descompone @p v = ADD(base, const) (en cualquier orden).  Devuelve base y c.
-bool add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool add_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
             IrValueId v, IrValueId &base, int64_t &c) {
     const int db =
         (v < def_block.size() && v != IR_NO_VALUE) ? def_block[v] : -1;
@@ -138,7 +138,7 @@ bool add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
  * @param total suma de las constantes, o sea el paso REAL de cada vuelta.
  * @return true si @p v se alcanza desde @p base sumando constantes.
  */
-bool chain_add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool chain_add_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
                   IrValueId v, IrValueId base, int64_t &total) {
     total = 0;
     IrValueId cur = v;
@@ -155,7 +155,7 @@ bool chain_add_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
 
 /// Descompone @p v = SUB(base, const).  El orden importa: `K - x` no es una
 /// induccion decreciente, es otra cosa -- se alterna en vez de bajar.
-bool sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool sub_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
             IrValueId v, IrValueId &base, int64_t &c) {
     const int db =
         (v < def_block.size() && v != IR_NO_VALUE) ? def_block[v] : -1;
@@ -175,7 +175,7 @@ bool sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
 
 /// Igual que @c chain_add_of pero restando.  Tambien encadena, y por el mismo
 /// motivo: al desenrollar, lo que vuelve por el latch son U restas de `-1`.
-bool chain_sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool chain_sub_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
                   IrValueId v, IrValueId base, int64_t &total) {
     total = 0;
     IrValueId cur = v;
@@ -201,7 +201,7 @@ bool chain_sub_of(const ir::IrFunction &fn, const std::vector<int> &def_block,
  * una mitad arreglada y la otra no.
  */
 static bool detect_iv_impl(const ir::IrFunction &fn,
-                           const std::vector<int> &def_block, IrBlockId header,
+                           const DefBlockVec &def_block, IrBlockId header,
                            IrBlockId preheader, IrBlockId latch,
                            bool admite_baja, LoopIV &out) {
     out.phi_index = -1;
@@ -346,7 +346,7 @@ static bool detect_iv_impl(const ir::IrFunction &fn,
     return false;
 }
 
-bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
+bool detect_loop_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
                     IrBlockId header, IrBlockId preheader, IrBlockId latch,
                     LoopIV &out) {
     /* SOLO los que suben, y eso no es comodidad: quien pide esto desenrolla,
@@ -358,14 +358,14 @@ bool detect_loop_iv(const ir::IrFunction &fn, const std::vector<int> &def_block,
 }
 
 bool detect_counted_iv(const ir::IrFunction &fn,
-                       const std::vector<int> &def_block, IrBlockId header,
+                       const DefBlockVec &def_block, IrBlockId header,
                        IrBlockId preheader, IrBlockId latch, LoopIV &out) {
     return detect_iv_impl(fn, def_block, header, preheader, latch,
                           /*admite_baja=*/true, out);
 }
 
 bool detect_geometric_iv(const ir::IrFunction &fn,
-                         const std::vector<int> &def_block, IrBlockId header,
+                         const DefBlockVec &def_block, IrBlockId header,
                          IrBlockId preheader, IrBlockId latch, GeoIV &out) {
     if (header == (IrBlockId)IR_NO_BLOCK || header >= fn.blocks.size())
         return false;

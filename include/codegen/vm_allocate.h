@@ -53,7 +53,7 @@ namespace codegen {
  */
 inline codegen::RegAlloc
 vm_allocate(const ir::IrFunction &fn, const ir::LivenessResult &live,
-            const std::vector<uint32_t> *coalesce_remap) {
+            const std::vector<ir::IrValueId> *coalesce_remap) {
     const rbank::AbstractProblem p =
         liveness_to_problem(fn, live, coalesce_remap);
     const uint32_t n = static_cast<uint32_t>(fn.values.size());
@@ -73,7 +73,7 @@ vm_allocate(const ir::IrFunction &fn, const ir::LivenessResult &live,
      * problema tenia UN valor por clase (fundido en el adaptador), asi que sin
      * esto los miembros no-root quedarian sin ubicacion. */
     if (coalesce_remap && !coalesce_remap->empty()) {
-        const std::vector<uint32_t> &remap = *coalesce_remap;
+        const std::vector<ir::IrValueId> &remap = *coalesce_remap;
         ra.assign.resize(n);
         for (uint32_t v = 0; v < n; ++v) {
             const uint32_t rt = (v < remap.size()) ? remap[v] : v;

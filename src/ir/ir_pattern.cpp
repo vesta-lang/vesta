@@ -18,7 +18,7 @@ bool ir_apply_patterns(IrFunction &fn, const std::vector<Pattern> &patterns) {
     if (fn.is_native || patterns.empty()) return false;
     bool changed = false;
 
-    for (IrBlockId b = 0; b < fn.blocks.size(); ++b) {
+    for (IrBlockId b = IrBlockId(0); b < fn.blocks.size(); ++b) {
         for (size_t i = 0; i < fn.blocks[b].instrs.size(); ++i) {
             // De todos los patrones que reclaman este sitio se queda el que
             // mas gana.  A igualdad se queda el primero, para que el resultado
