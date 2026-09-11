@@ -133,7 +133,10 @@ struct EmitResult {
  *   3. Generar prologo de modulo (@Module, @native_lib, @import)
  *   4. Para cada funcion: emitir cuerpo .vel con todos sus bloques
  *
- * @param mod  Modulo IR a emitir (se trabaja sobre una copia interna).
+ * @param mod  Modulo IR a emitir.  El emisor lo MODIFICA -- optimiza, reordena,
+ *             asigna registros --, asi que trabaja sobre una copia interna y
+ *             el de quien llama queda intacto.  Esa copia CUESTA: ver el
+ *             comentario de la definicion, con la medida.
  * @param opts Opciones de emision y nivel de optimizacion.
  * @return Resultado con el texto .vel o el error.
  */

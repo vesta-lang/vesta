@@ -6883,6 +6883,82 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
     return zmm_map;
 }
 
+/**
+ * @brief Ops del IR que el bytecode no tiene, y la nativa que las cubre.
+ *
+ * Existen como ops del IR para que el optimizador pueda plegarlas cuando los
+ * operandos son literales y para que el JIT emita la instruccion de hardware
+ * (sqrtsd/popcnt/lzcnt...) sin analizar un nombre.  El interprete no las tiene,
+ * asi que al emitir se convierten en una llamada a la libreria de math.
+ *
+ * En ambito de FICHERO y no dentro del emisor porque la usan dos: el barrido
+ * que decide QUE imports declara el prologo, y la reescritura de cada funcion.
+ */
+struct VmathMap {
+    IrOp op;            ///< la op del IR.
+    const char *fn;     ///< la nativa que hace lo mismo.
+    ir::IrType ret_ir;  ///< que devuelve.
+};
+
+/// La libreria donde viven.
+static const char *const kVmathLib = "stdlib/native/math/vesta_math";
+
+static const VmathMap kVmathTable[] = {
+    // Sprint string-perf-5 (2026-06-02): FMIN/FMAX/FFLOOR/FCEIL/FROUND/FTRUNC
+    // ganaron opcodes de bytecode (0x80-0x85) y se emiten como mnemonico en el
+    // switch.  Fuera del pre-pase para no pagar la CALLN (~150 ns -> ~5 ns por
+    // op en el interprete).
+    //
+    // { IrOp::FFLOOR,   "vmath_floor",    ir::IrType::F64 },
+    // { IrOp::FCEIL,    "vmath_ceil",     ir::IrType::F64 },
+    // { IrOp::FROUND,   "vmath_round",    ir::IrType::F64 },
+    // { IrOp::FTRUNC,   "vmath_trunc",    ir::IrType::F64 },
+    // { IrOp::FMIN,     "vmath_fmin",     ir::IrType::F64 },
+    // { IrOp::FMAX,     "vmath_fmax",     ir::IrType::F64 },
+    // Enteros (con y sin signo).
+    {IrOp::IABS, "vmath_abs", ir::IrType::I64},
+    {IrOp::IMIN, "vmath_min", ir::IrType::I64},
+    {IrOp::IMAX, "vmath_max", ir::IrType::I64},
+    {IrOp::IMINU, "vmath_minu", ir::IrType::I64},
+    {IrOp::IMAXU, "vmath_maxu", ir::IrType::I64},
+    {IrOp::ILOG2, "vmath_ilog2", ir::IrType::I64},
+    // Bits.
+    {IrOp::CLZ, "vmath_clz", ir::IrType::I64},
+    {IrOp::CTZ, "vmath_ctz", ir::IrType::I64},
+    {IrOp::POPCNT, "vmath_popcount", ir::IrType::I64},
+    {IrOp::BYTESWAP, "vmath_bswap", ir::IrType::I64},
+    {IrOp::ROTL, "vmath_rotl", ir::IrType::I64},
+    {IrOp::ROTR, "vmath_rotr", ir::IrType::I64},
+};
+
+/// Cuantas hay.  Detras de la tabla, para que no se puedan separar.
+static constexpr size_t kVmathCount =
+    sizeof(kVmathTable) / sizeof(kVmathTable[0]);
+
+/**
+ * @brief Convierte en @p fn las ops de math sin opcode en su CALLN.
+ *
+ * Se aplica a la COPIA de una funcion, dentro del bucle de emision, y no al
+ * modulo entero: tener las 73.501 funciones duplicadas a la vez sostenia 154
+ * MiB en el momento de mayor memoria de todo el compilador.
+ *
+ * El tipo del destino se conserva -- el emisor de CALLN ya sabe pasar los
+ * argumentos por R1..RN --.
+ *
+ * @param fn La funcion, que se modifica.
+ */
+static void promote_math_ops(IrFunction &fn) {
+    for (auto &bb : fn.blocks)
+        for (auto &ins : bb.instrs)
+            for (size_t k = 0; k < kVmathCount; ++k) {
+                if (ins.op != kVmathTable[k].op) continue;
+                ins.op = IrOp::CALLN;
+                ins.func_name =
+                    std::string(kVmathLib) + ":" + kVmathTable[k].fn;
+                break;
+            }
+}
+
 static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
                                  VelSink &out, bool is_entry_point = false,
                                  const IrModule *mod = nullptr,
@@ -7477,8 +7553,37 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     EmitResult result;
     result.ok = true;
 
-    // Trabajar sobre una copia para no modificar el modulo original
-    IrModule mod = mod_in;
+    /* EL MODULO NO SE COPIA, y eso costaba 154 MiB en el peor momento.
+     *
+     * Aqui habia un `IrModule mod = mod_in;` con el motivo "para no modificar
+     * el original", que es cierto y sigue siendo obligatorio: quien compila un
+     * proyecto SIGUE USANDO el suyo despues de emitir -- para el artefacto
+     * comptime, para los bytes del `.vxir` y para los diagramas -- y lo quiere
+     * sin los pases que el emisor le mete encima.
+     *
+     * Pero duplicar el modulo ENTERO para eso es pagar de mas.  Medido con el
+     * eje del tiempo del comprobador sobre 21 modulos y 441.000 lineas: el
+     * maximo de memoria del compilador cae en la fase de emision, y esa copia
+     * sostenia ahi 154 MiB de los 1.937 -- el ocho por ciento del pico --
+     * duplicando 73.501 funciones para tocar UNA a la vez.
+     *
+     * Lo que el emisor modifica de verdad es cada FUNCION, justo antes de
+     * emitirla, y eso cabe en una copia de una funcion que muere al acabar su
+     * vuelta.  Del modulo solo lee.
+     *
+     * La copia se conserva SOLO cuando el emisor optimiza el mismo o ejecuta
+     * CTPE -- ahi si transforma el modulo entero --, que es lo que pide quien
+     * le pasa un modulo sin optimizar.  Por el camino del proyecto,
+     * `ya_optimizado` viene puesto y no se copia nada.
+     *
+     * NO se escribe "todo menos las funciones" campo a campo: una copia
+     * parcial escrita a mano se queda corta en silencio el dia que alguien
+     * anada un campo al modulo.  O se copia entero, o no se copia. */
+    const bool emitter_transforms_module =
+        !opts.ya_optimizado || opts.ctpe_runtime != nullptr;
+    IrModule own_module;
+    if (emitter_transforms_module) own_module = mod_in;
+    const IrModule &mod = emitter_transforms_module ? own_module : mod_in;
 
     /* ASA observa ANTES de optimizar.  Es el punto por el que pasan de verdad
      * todas las rutas -- el emisor trabaja sobre una copia --, y es otra verdad
@@ -7490,7 +7595,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // Aplicar optimizaciones IR, salvo que quien llama ya las haya aplicado.
     if (!opts.ya_optimizado) {
         const auto t_opt = std::chrono::steady_clock::now();
-        ir_optimize(mod, opts.opt_level);
+        ir_optimize(own_module, opts.opt_level);
         if (util::flag_on(util::FlagId::Times))
             std::cerr << "[emisor] optimizar (dentro del emisor) "
                       << std::chrono::duration_cast<std::chrono::microseconds>(
@@ -7504,7 +7609,7 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // el caller paso un runtime (fase 2 del CTPE); nullptr = comportamiento
     // normal.
     if (opts.ctpe_runtime) {
-        ctpe::fold(mod,
+        ctpe::fold(own_module,
                    *reinterpret_cast<vx::ComptimeRuntime *>(opts.ctpe_runtime));
     }
 
@@ -7516,12 +7621,21 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // que habilita la fusion posterior a `mld/mst [base + disp]`.  Opera sobre
     // la COPIA del modulo del emitter -> no afecta al `.vexir` (JIT/AOT hacen
     // su propio reordenamiento con su contexto de ISA).
-    if (!interp_fuse_disabled()) {
-        for (auto &fn : mod.functions) {
-            if (fn.is_native) continue;
-            interp_sink_addr_adds(fn);
-        }
-    }
+    /* Ya NO se hace aqui sobre todo el modulo: se hace sobre la copia de UNA
+     * funcion, dentro del bucle de emision, para no tener las 73.501 a la vez.
+     * Ver `emitter_transforms_module` arriba. */
+    const bool sink_addr_adds = !interp_fuse_disabled();
+
+    /* Los imports de math que el prologo tiene que declarar ADEMAS de los del
+     * modulo.  Van aparte porque el modulo ya no se copia y no se le puede
+     * anadir nada: se descubren leyendo, se declaran al emitir el prologo, y la
+     * reescritura que los hace ciertos ocurre funcion a funcion mas abajo.
+     *
+     * Del MISMO tipo que los del modulo, no de un par: una biblioteca y un
+     * nombre son dos cadenas, y en un par nada dice cual es cual -- ni al
+     * escribirlo ni, sobre todo, al leerlo tres meses despues.  Ademas asi el
+     * prologo los trata igual que a los otros. */
+    std::vector<IrNativeImport> math_imports;
 
     // ===================================================================
     // Math-IR-promote: pre-pase que convierte IR ops sin bytecode opcode
@@ -7539,80 +7653,42 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // Cuando el runtime gane opcodes nativos (futuro sprint), este
     // pre-pase ignora los ops correspondientes.
     {
-        struct VmathMap {
-            IrOp op;
-            const char *fn;
-            ir::IrType ret_ir;
-        };
-        static const VmathMap vmath_table[] = {
-            // Sprint string-perf-5 (2026-06-02): FMIN/FMAX/FFLOOR/FCEIL/
-            // FROUND/FTRUNC ahora tienen opcodes bytecode nativos
-            // (0x80-0x85) y se emiten directamente como mnemonicos en el
-            // switch.  Removidos del pre-pase para evitar CALLN overhead
-            // (~150ns -> ~5ns por op en interp).
-            //
-            // { IrOp::FFLOOR,   "vmath_floor",    ir::IrType::F64 },
-            // { IrOp::FCEIL,    "vmath_ceil",     ir::IrType::F64 },
-            // { IrOp::FROUND,   "vmath_round",    ir::IrType::F64 },
-            // { IrOp::FTRUNC,   "vmath_trunc",    ir::IrType::F64 },
-            // { IrOp::FMIN,     "vmath_fmin",     ir::IrType::F64 },
-            // { IrOp::FMAX,     "vmath_fmax",     ir::IrType::F64 },
-            // Int (signed/unsigned).
-            {IrOp::IABS, "vmath_abs", ir::IrType::I64},
-            {IrOp::IMIN, "vmath_min", ir::IrType::I64},
-            {IrOp::IMAX, "vmath_max", ir::IrType::I64},
-            {IrOp::IMINU, "vmath_minu", ir::IrType::I64},
-            {IrOp::IMAXU, "vmath_maxu", ir::IrType::I64},
-            {IrOp::ILOG2, "vmath_ilog2", ir::IrType::I64},
-            // Bit ops.
-            {IrOp::CLZ, "vmath_clz", ir::IrType::I64},
-            {IrOp::CTZ, "vmath_ctz", ir::IrType::I64},
-            {IrOp::POPCNT, "vmath_popcount", ir::IrType::I64},
-            {IrOp::BYTESWAP, "vmath_bswap", ir::IrType::I64},
-            {IrOp::ROTL, "vmath_rotl", ir::IrType::I64},
-            {IrOp::ROTR, "vmath_rotr", ir::IrType::I64},
-        };
-        const std::string lib_math = "stdlib/native/math/vesta_math";
+        /* UN BARRIDO DE SOLO LECTURA, y la reescritura despues por funcion.
+         *
+         * Antes esto reescribia el modulo entero aqui y luego lo volvia a
+         * recorrer M veces para ver que imports habian aparecido -- O(N*M)
+         * sobre el programa completo.  Ahora una sola pasada dice QUE ops
+         * aparecen, que es lo unico que el prologo necesita saber, y el cambio
+         * de cada instruccion se hace sobre la copia de su funcion, justo
+         * antes de emitirla.
+         *
+         * Se mira tambien el CALLN ya escrito con ese nombre: si alguien lo
+         * llamo a mano, su import se declara igual que antes. */
+        const std::string lib_math(kVmathLib);
+        std::vector<uint8_t> math_used(kVmathCount, 0);
         bool any_used = false;
-        for (auto &fn : mod.functions) {
-            for (auto &bb : fn.blocks) {
-                for (auto &ins : bb.instrs) {
-                    for (const auto &m : vmath_table) {
-                        if (ins.op != m.op) continue;
-                        ins.op = IrOp::CALLN;
-                        ins.func_name = lib_math + ":" + m.fn;
-                        // Mantener type del dst original.  El emitter de
-                        // CALLN ya sabe pasar args via R1..RN.
-                        any_used = true;
+        for (const auto &fn : mod.functions)
+            for (const auto &bb : fn.blocks)
+                for (const auto &ins : bb.instrs)
+                    for (size_t k = 0; k < kVmathCount; ++k) {
+                        const VmathMap &m = kVmathTable[k];
+                        const bool to_promote = ins.op == m.op;
+                        const bool already_written =
+                            ins.op == IrOp::CALLN &&
+                            ins.func_name == lib_math + ":" + m.fn;
+                        if (!to_promote && !already_written) continue;
+                        math_used[k] = 1;
+                        any_used = any_used || to_promote;
                         break;
                     }
+        if (any_used)
+            for (size_t k = 0; k < kVmathCount; ++k)
+                if (math_used[k]) {
+                    IrNativeImport ni;
+                    ni.lib = lib_math;
+                    ni.name = kVmathTable[k].fn;
+                    math_imports.push_back(std::move(ni));
                 }
-            }
-        }
-        if (any_used) {
-            // Registrar los imports usados.  Re-iteramos solo los que
-            // aparecieron (any_used=true).  Es O(N*M) pero solo corre 1
-            // vez por modulo + M es chico (~18 entries).
-            for (const auto &m : vmath_table) {
-                bool used_here = false;
-                for (const auto &fn : mod.functions) {
-                    for (const auto &bb : fn.blocks) {
-                        for (const auto &ins : bb.instrs) {
-                            if (ins.op == IrOp::CALLN &&
-                                ins.func_name == lib_math + ":" + m.fn) {
-                                used_here = true;
-                                break;
-                            }
-                        }
-                        if (used_here) break;
-                    }
-                    if (used_here) break;
-                }
-                if (used_here) {
-                    mod.register_native_import(lib_math, m.fn);
-                }
-            }
-        }
     }
 
     VelSink out;
@@ -7738,13 +7814,19 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
     // Bloque @Import { @Method { @Lib(...) @Name(...) } } para CALLN.
     // El ensamblador .vel exige esta declaracion antes del primer uso de
     // la funcion nativa correspondiente (calln @Method("lib:name")).
-    if (!mod.native_imports.empty()) {
+    if (!mod.native_imports.empty() || !math_imports.empty()) {
         out << "@Import {\n";
         for (const auto &ni : mod.native_imports) {
             if (omit_comptime_bodies && ni.lib == "vesta_comptime") continue;
             out << "    @Method { @Lib(\"" << ni.lib << "\")"
                 << " @Name(\"" << ni.name << "\") }\n";
         }
+        /* Y los de math, que no estan en el modulo porque el modulo no se
+         * toca.  Se declaran aqui, antes del primer uso, que es lo unico que
+         * el ensamblador exige. */
+        for (const IrNativeImport &mi : math_imports)
+            out << "    @Method { @Lib(\"" << mi.lib << "\")"
+                << " @Name(\"" << mi.name << "\") }\n";
         out << "}\n\n";
     }
 
@@ -7773,9 +7855,16 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
         // emite las copias de PHI en las aristas; el interp inline), no
         // duplicacion gratuita.  El pase compartido `split_critical_edges` lo
         // consume solo el vreg.
+        /* LA COPIA ES DE UNA FUNCION, no del modulo: nace aqui, la tocan los
+         * dos pases que el emisor necesita, y muere al acabar la vuelta.  Era
+         * el modulo entero duplicado, y sostenia 154 MiB en el pico. */
+        IrFunction fn_emit = fn;
+        if (sink_addr_adds) interp_sink_addr_adds(fn_emit);
+        if (!math_imports.empty()) promote_math_ops(fn_emit);
+
         std::vector<uint8_t> regs_fn;
         std::string err =
-            emit_function(fn, opts, out, first_func, &mod, &regs_fn);
+            emit_function(fn_emit, opts, out, first_func, &mod, &regs_fn);
         if (!regs_fn.empty()) result.value_regs[fn.name] = std::move(regs_fn);
         first_func = false;
         if (!err.empty()) {
