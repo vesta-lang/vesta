@@ -33,8 +33,39 @@ namespace {
  * Con uno por hilo, medir cuesta dos lecturas de reloj y una busqueda en una
  * tabla que nadie mas toca.  Los hilos se suman al consultar, que ocurre una
  * vez. */
+/// Un tramo se identifica por (donde estaba, quien es): el MISMO pase cuesta
+/// cosas distintas segun quien lo llame, y sumarlos en una sola casilla vuelve
+/// a perder justo lo que el padre viene a decir.
+struct SpanKey {
+    const char *parent;
+    const char *name;
+    bool operator==(const SpanKey &o) const {
+        return parent == o.parent && name == o.name;
+    }
+};
+
+/// Mezcla las dos direcciones.  Son punteros a literales, o sea estables.
+struct SpanKeyHash {
+    size_t operator()(const SpanKey &k) const {
+        const size_t a = reinterpret_cast<size_t>(k.parent);
+        const size_t b = reinterpret_cast<size_t>(k.name);
+        return a * 0x9E3779B97F4A7C15ull ^ b;
+    }
+};
+
 struct Acumulador {
-    std::unordered_map<const char *, std::pair<long long, long long>> t;
+    std::unordered_map<SpanKey, std::pair<long long, long long>, SpanKeyHash>
+        t;
+    /**
+     * @brief Los tramos ABIERTOS ahora mismo, del mas externo al mas interno.
+     *
+     * Es lo que permite saber quien contiene a quien sin que cada sitio tenga
+     * que decirlo: al abrir uno, su padre es el que estuviera arriba.  Va en el
+     * acumulador por hilo y no en una variable de hilo por el mismo motivo que
+     * el resto -- en MinGW la TLS emulada CUELGA con hilos que nacen y mueren,
+     * y el reparto del compilador hace justo eso.
+     */
+    std::vector<const char *> open_spans;
 };
 
 /* Los de todos los hilos, para poder sumarlos.  El cerrojo se toma SOLO al
@@ -52,9 +83,39 @@ Acumulador &mio() { return g_accumulators.get(); }
 } // namespace
 
 void acumular_tramo_ns(const char *etiqueta, long long ns) {
-    auto &e = mio().t[etiqueta];
+    /* Sin decir padre: se cuelga del que este abierto, que es lo que hace que
+     * quien no sepa de arboles siga apareciendo en el sitio correcto. */
+    Acumulador &a = mio();
+    const char *parent = a.open_spans.empty() ? nullptr : a.open_spans.back();
+    auto &e = a.t[SpanKey{parent, etiqueta}];
     e.first += ns;
     e.second += 1;
+}
+
+const char *enter_span(const char *label) {
+    Acumulador &a = mio();
+    const char *parent = a.open_spans.empty() ? nullptr : a.open_spans.back();
+    a.open_spans.push_back(label);
+    return parent;
+}
+
+void leave_span(const char *label, const char *parent, long long ns) {
+    Acumulador &a = mio();
+    /* Se saca el propio y no "el ultimo" a ciegas: si alguien cerrara en otro
+     * orden, desapilar a ciegas dejaria la pila corrida y TODOS los tramos
+     * siguientes colgarian del padre equivocado -- un informe que miente sin
+     * dar ningun error.  Asi, en el peor caso se pierde este y los demas
+     * siguen bien. */
+    if (!a.open_spans.empty() && a.open_spans.back() == label)
+        a.open_spans.pop_back();
+    auto &e = a.t[SpanKey{parent, label}];
+    e.first += ns;
+    e.second += 1;
+}
+
+const char *current_span() {
+    Acumulador &a = mio();
+    return a.open_spans.empty() ? nullptr : a.open_spans.back();
 }
 
 namespace {
@@ -124,7 +185,21 @@ Calibracion_ calibracion_del_cronometro() {
     return c;
 }
 
-std::vector<Tramo> tramos_medidos() {
+/**
+ * @brief Ordena dos tramos por lo que costaron, el mas caro primero.
+ *
+ * Con NOMBRE y no una lambda: una lambda no sale con el suyo en un perfil, que
+ * es donde se mira cuando algo cuesta.
+ *
+ * @param x Un tramo.
+ * @param y El otro.
+ * @return true si @p x costo mas.
+ */
+static bool span_costlier_first(const Span &x, const Span &y) {
+    return x.us > y.us;
+}
+
+std::vector<Span> measured_spans() {
     /* La calibracion se pide ANTES del cerrojo, nunca dentro.
      *
      * Medirla recorre la ruta REAL -- acumular_tramo_ns() -> mio() -- y, si
@@ -138,15 +213,25 @@ std::vector<Tramo> tramos_medidos() {
      * quien anota son los workers y el principal llega virgen al informe. */
     const long long coste = calibracion().coste_ns;
 
-    std::unordered_map<const char *, std::pair<long long, long long>> total;
+    /* ns, tomas y CUANTOS HILOS aportaron.  Lo tercero se cuenta aqui porque
+     * es el unico sitio donde se ven los acumuladores por separado: una vez
+     * sumados ya no hay forma de saber si un numero es de pared o de ocho
+     * hilos a la vez.  @see Span::threads */
+    struct Merged {
+        long long ns = 0;
+        long long runs = 0;
+        long long threads = 0;
+    };
+    std::unordered_map<SpanKey, Merged, SpanKeyHash> total;
     g_accumulators.for_each([&total](const Acumulador &a) {
         for (const auto &kv : a.t) {
-            auto &e = total[kv.first];
-            e.first += kv.second.first;
-            e.second += kv.second.second;
+            Merged &e = total[kv.first];
+            e.ns += kv.second.first;
+            e.runs += kv.second.second;
+            ++e.threads; // este hilo aporto a este tramo
         }
     });
-    std::vector<Tramo> v;
+    std::vector<Span> v;
     v.reserve(total.size());
     for (const auto &kv : total) {
         /* Se acumula en NANOSEGUNDOS para que un tramo corto y repetido no se
@@ -158,12 +243,12 @@ std::vector<Tramo> tramos_medidos() {
          * y muy repetido parece caro cuando lo caro era mirarlo.  Nunca por
          * debajo de cero: si el descuento se lo come, es que ahi no habia
          * nada. */
-        long long ns = kv.second.first - kv.second.second * coste;
+        long long ns = kv.second.ns - kv.second.runs * coste;
         if (ns < 0) ns = 0;
-        v.push_back({kv.first, ns / 1000, kv.second.second});
+        v.push_back(Span{kv.first.name, kv.first.parent, ns / 1000,
+                         kv.second.runs, kv.second.threads});
     }
-    std::sort(v.begin(), v.end(),
-              [](const Tramo &x, const Tramo &y) { return x.us > y.us; });
+    std::sort(v.begin(), v.end(), span_costlier_first);
     return v;
 }
 

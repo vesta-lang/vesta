@@ -18,6 +18,7 @@
 
 #include "util/env_flags.h"
 #include "util/crono_tramo.h"
+#include "vx/diag/diag_catalog.h" // los motivos, en todos los idiomas
 #include "util/fnv.h"         // dispersion de las claves de la CSE
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
 #include "util/os/thread_slot.h"  // los vectores de trabajo, uno por hilo
@@ -511,7 +512,7 @@ static bool is_pure_allocator_name(const std::string &name) {
     return false;
 }
 
-bool ir_pass_dead_alloc_elim(IrFunction &fn) {
+static bool dead_alloc_elim_impl(IrFunction &fn) {
     /* Pasada 1: encontrar valores usados (mismo que DCE). */
     std::unordered_set<IrValueId> used;
     for (const auto &bb : fn.blocks) {
@@ -556,7 +557,7 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn) {
     return changed;
 }
 
-bool ir_pass_dead_stack_slot_elim(IrFunction &fn) {
+static bool dead_stack_slot_elim_impl(IrFunction &fn) {
     /* Huecos de pila que nadie LEE: se van, y con ellos lo que se escribia
      * dentro.
      *
@@ -689,7 +690,7 @@ bool ir_pass_dead_stack_slot_elim(IrFunction &fn) {
 //       que LOAD/STORE de pointers derivados emita native mov.
 // =========================================================================
 
-bool ir_pass_promote_callned_allocas(IrFunction &fn) {
+static bool promote_callned_allocas_impl(IrFunction &fn) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
@@ -880,7 +881,7 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn) {
 //      que NO escapan a ningun sitio.
 //==============================================================================
 
-bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all) {
+static bool promote_local_allocas_impl(IrFunction &fn, bool force_all) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
@@ -1211,7 +1212,7 @@ bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all) {
 //  puede correr las veces que haga falta.
 //==============================================================================
 
-bool ir_pass_propagate_host_ptr(IrFunction &fn) {
+static bool propagate_host_ptr_impl(IrFunction &fn) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
@@ -1267,7 +1268,8 @@ bool ir_pass_propagate_host_ptr(IrFunction &fn) {
     return any;
 }
 
-bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static bool promote_local_raw_alloc_impl(IrFunction &fn) {
     if (fn.is_native) return false;
     if (fn.values.empty()) return false;
 
@@ -1793,6 +1795,10 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
     return changed;
 }
 
+PassResult ir_pass_promote_local_raw_alloc(IrFunction &fn) {
+    return PassResult::of(fn, promote_local_raw_alloc_impl(fn));
+}
+
 //==============================================================================
 //  Pase ir_pass_promote_closure_env  (AOT / native_poo)
 //
@@ -1808,7 +1814,7 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn) {
 //  bare se rechaza limpio; NUNCA se deja un heap sin liberar -> sin leak, y al
 //  ser conservador el peor caso es no-promover, jamas un use-after-free).
 //==============================================================================
-bool ir_pass_promote_closure_env(IrFunction &fn) {
+static bool promote_closure_env_impl(IrFunction &fn) {
     if (fn.is_native || fn.values.empty()) return false;
 
     // value -> instruccion definidora (para resolver bases de direcciones).
@@ -2089,7 +2095,8 @@ bool ic_clean_owner_buf(const IrFunction &C, IrValueId buf,
 }
 } // namespace
 
-bool ir_pass_fold_strcat(IrModule &mod) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
+static bool fold_strcat_impl(IrModule &mod) {
     bool changed = false;
     for (auto &fn : mod.functions) {
         // Definicion de cada SSA value, para reconocer `%a = strmake(lit, N)`.
@@ -2185,7 +2192,11 @@ bool ir_pass_fold_strcat(IrModule &mod) {
     return changed;
 }
 
-bool ir_pass_own_closure_envs(IrModule &mod) {
+ModulePassResult ir_pass_fold_strcat(IrModule &mod) {
+    return ModulePassResult::of(mod, fold_strcat_impl(mod));
+}
+
+static bool own_closure_envs_impl(IrModule &mod) {
     std::unordered_map<std::string, size_t> name_to_idx;
     for (size_t i = 0; i < mod.functions.size(); ++i)
         name_to_idx[mod.functions[i].name] = i;
@@ -2691,7 +2702,7 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
  * el IR: siempre devuelve false.  Sirve para validar el analisis con cero
  * riesgo antes de habilitar la transformacion (scalar replacement).
  */
-bool ir_pass_escape_detect_gc(IrFunction &fn) {
+static bool escape_detect_gc_impl(IrFunction &fn) {
     static const bool dbg_det = util::flag_on(util::FlagId::EscapeDebug);
     if (!dbg_det) return false;
     auto sites = analyze_gc_escape(fn);
@@ -3825,6 +3836,65 @@ done_call:;
 } // namespace
 
 /**
+ * @brief Indexa que valor constante define cada @c CONST de la funcion.
+ *
+ * Existe porque dos pases lo preguntaban RECORRIENDO LA FUNCION ENTERA en cada
+ * consulta, y la consulta vive dentro de dos bucles anidados -- por sitio y por
+ * instruccion --, asi que el coste era sitios x instrucciones^2.  Con funciones
+ * pequenas no se veia; con el inline juntando codigo, si: MEDIDO, al pasar de
+ * 350 a 1400 funciones `sroa_stack_structs` iba de 19 ms a 419 ms -- veintidos
+ * veces por cuatro veces la entrada -- y era el 65 % de la etapa de modulo.
+ *
+ * Va en una funcion con NOMBRE y no en una lambda por cada pase: una lambda no
+ * aparece con su nombre en un perfil, que es justo donde hacia falta verla.  Y
+ * asi la tabla se construye de una sola forma para los dos.
+ *
+ * @param fn            Funcion a indexar.
+ * @param const_of      Recibe, por identificador de valor, el inmediato.
+ * @param is_const_def  Recibe si ese identificador lo define un @c CONST.
+ */
+static void build_const_index(const IrFunction &fn,
+                              std::vector<uint64_t> &const_of,
+                              std::vector<char> &is_const_def) {
+    const_of.assign(fn.values.size(), 0);
+    is_const_def.assign(fn.values.size(), 0);
+    for (const auto &b : fn.blocks)
+        for (const auto &in : b.instrs)
+            if (in.op == IrOp::CONST && in.dst != IR_NO_VALUE &&
+                in.dst < const_of.size() && !is_const_def[in.dst]) {
+                /* La PRIMERA definicion, que es la que devolvia el recorrido al
+                 * parar en cuanto la encontraba.  En SSA no deberia haber dos,
+                 * pero si las hubiera el resultado no cambia por esto. */
+                const_of[in.dst] = in.imm;
+                is_const_def[in.dst] = 1;
+            }
+}
+
+/**
+ * @brief El valor constante de @p v, mirando el indice en vez de buscarlo.
+ *
+ * @param fn            Funcion a la que pertenece @p v .
+ * @param const_of      Tabla de @ref build_const_index .
+ * @param is_const_def  Tabla de @ref build_const_index .
+ * @param v             Valor a consultar.
+ * @param out_k         Recibe el inmediato si lo hay.
+ * @return true si @p v es constante.
+ */
+static bool const_value_indexed(const IrFunction &fn,
+                                const std::vector<uint64_t> &const_of,
+                                const std::vector<char> &is_const_def,
+                                IrValueId v, uint64_t &out_k) {
+    if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
+    if (fn.values[v].is_const) {
+        out_k = fn.values[v].const_val;
+        return true;
+    }
+    if (v >= is_const_def.size() || !is_const_def[v]) return false;
+    out_k = const_of[v];
+    return true;
+}
+
+/**
  * @brief  C2.13: Scalar Replacement de objetos GC no-escapantes.
  *
  * Elimina los `new X()` que no escapan y cuyo ctor es un inicializador
@@ -3837,7 +3907,7 @@ done_call:;
  *
  * @return true si se transformo algun sitio.
  */
-bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
+static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
     if (fn.is_native || fn.values.empty()) return false;
 
     auto sites = analyze_gc_escape(fn);
@@ -3872,6 +3942,12 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
     };
 
     bool changed = false;
+
+    /* El indice, FUERA del bucle por sitio: la busqueda estaba dentro, asi que
+     * recorria la funcion entera una vez por cada consulta de cada sitio. */
+    std::vector<uint64_t> const_of;
+    std::vector<char> is_const_def;
+    build_const_index(fn, const_of, is_const_def);
 
     for (const auto &site : sites) {
         if (site.escapes) continue;
@@ -3917,23 +3993,6 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
         bool has_writes = false;  /* algun STORE a un campo del objeto */
         const char *use_reason = "uso no soportado de obj";
 
-        /* Helper: lee el offset const de un `add.ptr obj, K`. */
-        auto const_value_of = [&](IrValueId v, uint64_t &out_k) -> bool {
-            if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
-            if (fn.values[v].is_const) {
-                out_k = fn.values[v].const_val;
-                return true;
-            }
-            /* Buscar la CONST que produjo v. */
-            for (const auto &b : fn.blocks)
-                for (const auto &in : b.instrs)
-                    if (in.dst == v && in.op == IrOp::CONST) {
-                        out_k = in.imm;
-                        return true;
-                    }
-            return false;
-        };
-
         /* Pasada A: localizar field-addrs derivadas de obj + loads/stores
          * directos (offset 0).  Trackea single_block + has_writes. */
         for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
@@ -3977,7 +4036,8 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
                     IrValueId other = (in.operands[0] == obj) ? in.operands[1]
                                                               : in.operands[0];
                     uint64_t k;
-                    if (!const_value_of(other, k)) {
+                    if (!const_value_indexed(fn, const_of, is_const_def, other,
+                                             k)) {
                         ok = false;
                         use_reason = "field-addr con offset no-const";
                         break;
@@ -4366,6 +4426,10 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
     return changed;
 }
 
+PassResult ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
+    return PassResult::of(fn, scalar_replace_gc_impl(fn, mod));
+}
+
 // =========================================================================
 //  Pase ir_pass_sroa_stack_structs -- SROA/mem2reg de structs value-type en
 //  PILA (ALLOCA), analogo a ir_pass_scalar_replace_gc pero sembrado en un
@@ -4388,7 +4452,11 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod) {
 //  existe aqui; el codegen maquina ya no sabe que el struct no escapa).
 //  Reusa toda la maquina de sr_mem2reg_object (stack_mode=true).
 // =========================================================================
-bool ir_pass_sroa_stack_structs(IrFunction &fn) {
+/* El cuerpo devuelve un `bool` y NO es la puerta publica: la de fuera envuelve
+ * este resultado en @c PassResult , que es lo que obliga a avanzar la version.
+ * Partirlo asi evita tocar cada `return` del cuerpo -- son muchos -- sin perder
+ * la garantia, que vive en la firma que ve quien llama. */
+static bool sroa_stack_structs_impl(IrFunction &fn) {
     if (fn.is_native || fn.values.empty()) return false;
     static const bool sroa_off = util::flag_on(util::FlagId::NoSroaStack);
     if (sroa_off) return false;
@@ -4431,125 +4499,166 @@ bool ir_pass_sroa_stack_structs(IrFunction &fn) {
     }
     if (sites.empty()) return false;
 
-    // Helper: lee el offset const de `add base, K` (o `add K, base`).
-    auto const_value_of = [&](IrValueId v, uint64_t &out_k) -> bool {
-        if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
-        if (fn.values[v].is_const) {
-            out_k = fn.values[v].const_val;
-            return true;
-        }
-        for (const auto &b : fn.blocks)
-            for (const auto &in : b.instrs)
-                if (in.dst == v && in.op == IrOp::CONST) {
-                    out_k = in.imm;
-                    return true;
+    /* El indice de constantes, UNA vez por funcion.  @see build_const_index */
+    std::vector<uint64_t> const_of;
+    std::vector<char> is_const_def;
+    build_const_index(fn, const_of, is_const_def);
+
+    /* --- Whitelist de usos, para TODOS los sitios en DOS recorridos ---
+     *
+     * Antes esto eran dos recorridos completos de la funcion POR CADA ALLOCA,
+     * o sea sitios x instrucciones.  Con funciones pequenas no se notaba;
+     * juntando codigo con el inline crecen las dos cosas a la vez y sale
+     * cuadratico: MEDIDO, al pasar de 350 a 1400 funciones este pase iba de
+     * 19 ms a 419 ms -- veintidos veces por cuatro veces la entrada -- y era el
+     * 65 % de toda la etapa de modulo.
+     *
+     * Se invierte: se recorre la funcion dos veces en total y cada instruccion
+     * actualiza el estado del sitio al que toca.  El coste pasa a ser
+     * instrucciones, no sitios x instrucciones.  Lo que se comprueba y lo que
+     * se rechaza es exactamente lo mismo; solo cambia el orden de los bucles.
+     *
+     * Las tablas van por identificador de valor en vectores planos y no en
+     * tablas hash: son del tamano de la funcion y se consultan una vez por
+     * operando, que es el camino caliente de este pase. */
+    constexpr int32_t kNoSite = -1;
+    std::vector<int32_t> site_of(fn.values.size(), kNoSite);
+    for (size_t si = 0; si < sites.size(); ++si)
+        if (sites[si].base < site_of.size())
+            site_of[sites[si].base] = static_cast<int32_t>(si);
+
+    std::vector<char> ok(sites.size(), 1);
+    std::vector<char> has_writes(sites.size(), 0);
+    /* El CODIGO del motivo, no su texto: un analisis que renuncia tiene que
+     * decir por que -- si calla, parece que funciona --, y ese "por que" lo lee
+     * una persona, asi que sale del catalogo en su idioma.  Guardar el codigo y
+     * no la frase deja esto en un puntero por sitio. */
+    std::vector<const char *> why(sites.size(), "VXA087");
+    /* Que sitio posee cada field-addr, y con que desplazamiento. */
+    std::vector<int32_t> fa_site(fn.values.size(), kNoSite);
+    std::vector<uint32_t> fa_off(fn.values.size(), 0);
+    /* Y la lista por sitio, para poder armar su mapa sin recorrer la funcion
+     * otra vez al final. */
+    std::vector<std::vector<std::pair<IrValueId, uint32_t>>> fa_by_site(
+        sites.size());
+
+    // Pasada A: field-addrs + load/store directos sobre cada base.
+    for (const auto &b : fn.blocks) {
+        for (const auto &in : b.instrs) {
+            /* Una base en phi_args o en func_ptr es una captura que este pase
+             * no sabe modelar.  Se mira por VALOR, asi que una instruccion que
+             * toque varias bases las descarta todas -- igual que antes, cuando
+             * cada sitio hacia su propia pasada. */
+            for (const auto &pa : in.phi_args) {
+                if (pa.value >= site_of.size()) continue;
+                const int32_t s = site_of[pa.value];
+                if (s != kNoSite && ok[s]) {
+                    ok[s] = 0;
+                    why[s] = "VXA088";
                 }
-        return false;
-    };
-
-    for (const auto &site : sites) {
-        const IrValueId base = site.base;
-
-        // --- Whitelist de usos (identico en espiritu al de scalar_replace_gc):
-        // field-addr (`add base, Kconst`) o load/store directo (offset 0);
-        // cada field-addr solo en load/store-addr.  Cualquier otro uso -> bail.
-        std::unordered_map<IrValueId, uint32_t> fieldaddr_off;
-        bool ok = true, has_writes = false;
-        const char *why = "uso no soportado";
-
-        // Pasada A: field-addrs + load/store directos sobre `base`.
-        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
-            const auto &b = fn.blocks[bi];
-            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
-                const auto &in = b.instrs[ii];
-                // base en phi_args / func_ptr -> captura no modelable.
-                for (const auto &pa : in.phi_args)
-                    if (pa.value == base) {
-                        ok = false;
-                        why = "base en PHI";
-                    }
-                if (in.func_ptr == base) {
-                    ok = false;
-                    why = "base en func_ptr";
+            }
+            if (in.func_ptr != IR_NO_VALUE && in.func_ptr < site_of.size()) {
+                const int32_t s = site_of[in.func_ptr];
+                if (s != kNoSite && ok[s]) {
+                    ok[s] = 0;
+                    why[s] = "VXA089";
                 }
-                if (!ok) break;
-                bool uses_base = false;
-                for (auto v : in.operands)
-                    if (v == base) {
-                        uses_base = true;
-                        break;
-                    }
-                if (!uses_base) continue;
+            }
+            for (IrValueId v : in.operands) {
+                if (v >= site_of.size()) continue;
+                const int32_t s = site_of[v];
+                if (s == kNoSite || !ok[s]) continue;
+                const IrValueId base = v;
                 if (in.op == IrOp::ADD && in.operands.size() == 2 &&
-                    in.dst != IR_NO_VALUE && in.operands[0] != in.operands[1]) {
-                    IrValueId other = (in.operands[0] == base) ? in.operands[1]
-                                                               : in.operands[0];
-                    uint64_t k;
-                    if (!const_value_of(other, k)) {
-                        ok = false;
-                        why = "field-addr offset no-const";
-                        break;
+                    in.dst != IR_NO_VALUE &&
+                    in.operands[0] != in.operands[1]) {
+                    const IrValueId other = (in.operands[0] == base)
+                                                ? in.operands[1]
+                                                : in.operands[0];
+                    uint64_t k = 0;
+                    if (!const_value_indexed(fn, const_of, is_const_def, other,
+                                             k)) {
+                        ok[s] = 0;
+                        why[s] = "VXA090";
+                        continue;
                     }
-                    fieldaddr_off[in.dst] = (uint32_t)k;
+                    if (in.dst < fa_site.size()) {
+                        fa_site[in.dst] = s;
+                        fa_off[in.dst] = static_cast<uint32_t>(k);
+                    }
+                    fa_by_site[s].emplace_back(in.dst,
+                                               static_cast<uint32_t>(k));
                 } else if (in.op == IrOp::LOAD && !in.operands.empty() &&
                            in.operands[0] == base) {
                     // load directo (offset 0) -- ok.
                 } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
                            in.operands[1] == base && in.operands[0] != base) {
-                    has_writes = true; // store directo (offset 0)
+                    has_writes[s] = 1; // store directo (offset 0)
                 } else {
-                    ok = false;
-                    why = "base fuera de field-access (CALL/CMP/store-val/...)";
-                    break;
+                    ok[s] = 0;
+                    why[s] = "VXA091";
                 }
             }
         }
-        // Pasada B: cada field-addr solo en LOAD o STORE-addr.
-        for (size_t bi = 0; bi < fn.blocks.size() && ok; ++bi) {
-            const auto &b = fn.blocks[bi];
-            for (size_t ii = 0; ii < b.instrs.size() && ok; ++ii) {
-                const auto &in = b.instrs[ii];
-                for (const auto &pa : in.phi_args)
-                    if (fieldaddr_off.count(pa.value)) {
-                        ok = false;
-                    }
-                if (in.func_ptr != IR_NO_VALUE &&
-                    fieldaddr_off.count(in.func_ptr))
-                    ok = false;
-                if (!ok) {
-                    why = "field-addr en PHI/func_ptr";
-                    break;
+    }
+
+    // Pasada B: cada field-addr solo en LOAD o STORE-addr.
+    for (const auto &b : fn.blocks) {
+        for (const auto &in : b.instrs) {
+            for (const auto &pa : in.phi_args) {
+                if (pa.value >= fa_site.size()) continue;
+                const int32_t s = fa_site[pa.value];
+                if (s != kNoSite && ok[s]) {
+                    ok[s] = 0;
+                    why[s] = "VXA092";
                 }
-                IrValueId fav = IR_NO_VALUE;
-                for (auto v : in.operands)
-                    if (fieldaddr_off.count(v)) {
-                        fav = v;
-                        break;
-                    }
-                if (fav == IR_NO_VALUE) continue;
+            }
+            if (in.func_ptr != IR_NO_VALUE && in.func_ptr < fa_site.size()) {
+                const int32_t s = fa_site[in.func_ptr];
+                if (s != kNoSite && ok[s]) {
+                    ok[s] = 0;
+                    why[s] = "VXA092";
+                }
+            }
+            for (IrValueId v : in.operands) {
+                if (v >= fa_site.size()) continue;
+                const int32_t s = fa_site[v];
+                if (s == kNoSite || !ok[s]) continue;
+                const IrValueId fav = v;
                 if (in.op == IrOp::LOAD && !in.operands.empty() &&
                     in.operands[0] == fav) {
                     // ok
                 } else if (in.op == IrOp::STORE && in.operands.size() >= 2 &&
                            in.operands[1] == fav && in.operands[0] != fav) {
-                    has_writes = true;
+                    has_writes[s] = 1;
                 } else {
-                    ok = false;
-                    why = "field-addr en op no-LOAD/STORE (o como valor)";
+                    ok[s] = 0;
+                    why[s] = "VXA093";
                 }
             }
         }
-        if (!ok) {
-            if (dbg)
-                std::fprintf(stderr,
-                             "[sroa-stack] fn '%s': ALLOCA %%%u NO: %s\n",
-                             fn.name.c_str(), (unsigned)base, why);
+    }
+
+    for (size_t si = 0; si < sites.size(); ++si) {
+        const auto &site = sites[si];
+        const IrValueId base = site.base;
+        if (!ok[si]) {
+            if (dbg) {
+                const std::string motivo = vx::diag::format(why[si], {});
+                const std::string msg = vx::diag::format(
+                    "VXA094", {fn.name, std::to_string((unsigned)base), motivo});
+                std::fprintf(stderr, "%s\n", msg.c_str());
+            }
             continue;
         }
         // Sin escrituras => struct de pila leido sin inicializar (undef) O
         // escalar que promote_local_allocas ya cubre -> nada que ganar.
-        if (!has_writes) continue;
+        if (!has_writes[si]) continue;
 
+        std::unordered_map<IrValueId, uint32_t> fieldaddr_off;
+        fieldaddr_off.reserve(fa_by_site[si].size() * 2 + 1);
+        for (const auto &fa : fa_by_site[si])
+            fieldaddr_off.emplace(fa.first, fa.second);
         std::string mr;
         // args vacio (stack_mode ignora el modelo/args); model = nullptr.
         if (sr_mem2reg_object(fn, /*model=*/nullptr, site.bi, site.ii, base,
@@ -4563,6 +4672,10 @@ bool ir_pass_sroa_stack_structs(IrFunction &fn) {
         }
     }
     return changed;
+}
+
+PassResult ir_pass_sroa_stack_structs(IrFunction &fn) {
+    return PassResult::of(fn, sroa_stack_structs_impl(fn));
 }
 
 // =========================================================================
@@ -4700,7 +4813,7 @@ bool ir_fma_contract_allowed() {
     return g_fma_contract_allowed;
 }
 
-bool ir_pass_fuse_fma(IrFunction &fn) {
+static bool fuse_fma_impl(IrFunction &fn) {
     if (!fn.fp_contract || !g_fma_contract_allowed || fn.is_native)
         return false;
     const size_t nv = fn.values.size();
@@ -4801,7 +4914,7 @@ make_new_narrow_const(IrFunction &fn, IrType type, uint64_t imm) {
 //     K cabe en [0, 2^W-1].
 //   - cmp(ext(x), ext(y)) con el MISMO kind y ancho -> cmp(x, y) al ancho W.
 //   Cualquier caso que no encaje se deja intacto (conservador).
-bool ir_pass_narrow_cmp(IrFunction &fn) {
+static bool narrow_cmp_impl(IrFunction &fn) {
     const size_t nv = fn.values.size();
     if (nv == 0) return false;
 
@@ -5125,7 +5238,7 @@ class ConstMap {
 
 } // namespace
 
-bool ir_pass_simplify(IrFunction &fn) {
+static bool simplify_impl(IrFunction &fn) {
     bool changed = false;
 
     /* Pre-build: vid -> CONST imm (si lo es).  Evita el escaneo lineal
@@ -6894,20 +7007,20 @@ static bool fold_guarded_compares(IrFunction &fn) {
 }
 
 // --- Wrappers publicos (uso standalone): computan los ValueFacts al vuelo. ---
-bool ir_pass_fold_guarded_compares(IrFunction &fn) {
-    return fold_guarded_compares(fn);
+PassResult ir_pass_fold_guarded_compares(IrFunction &fn) {
+    return PassResult::of(fn, fold_guarded_compares(fn));
 }
 
-bool ir_pass_elim_redundant_casts(IrFunction &fn) {
+PassResult ir_pass_elim_redundant_casts(IrFunction &fn) {
     FactsTable facts;
     compute_value_facts_into(fn, facts);
-    return elim_casts_with_facts(fn, facts);
+    return PassResult::of(fn, elim_casts_with_facts(fn, facts));
 }
 
-bool ir_pass_fold_compares(IrFunction &fn) {
+PassResult ir_pass_fold_compares(IrFunction &fn) {
     FactsTable facts;
     compute_value_facts_into(fn, facts);
-    return fold_compares_with_facts(fn, facts);
+    return PassResult::of(fn, fold_compares_with_facts(fn, facts));
 }
 
 // Fwd: strength reduction que consume ValueFacts (definida mas abajo).
@@ -6944,8 +7057,8 @@ static bool strength_reduce_with_facts(
 // queda.  Quitar de menos solo cuesta velocidad; no hay forma de que
 // produzca un resultado equivocado.
 static bool
-ir_pass_elide_narrow_norm(IrFunction &fn, analysis::RangeQuery &ranges,
-                          const analysis::DemandedBits &demanded) {
+elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
+                       const analysis::DemandedBits &demanded) {
     if (fn.blocks.empty()) return false;
 
     /* Quien define cada valor, para llegar de la normalizacion a la cuenta
@@ -7343,7 +7456,7 @@ static void seed_facts_from_asa(const IrFunction &fn, FactsTable &facts) {
     }
 }
 
-bool ir_pass_valuefacts_consumers(IrFunction &fn) {
+static bool valuefacts_consumers_impl(IrFunction &fn) {
     // La tabla se REUTILIZA entre los tres consumidores y entre llamadas: es lo
     // que mas reservaba de todo el compilador.
     FactsTable &facts = facts_scratch();
@@ -7602,7 +7715,7 @@ static bool strength_reduce_with_facts(
 }
 
 // Wrapper publico (uso standalone): computa los ValueFacts al vuelo.
-bool ir_pass_strength_reduction(IrFunction &fn) {
+static bool strength_reduction_impl(IrFunction &fn) {
     FactsTable facts;
     compute_value_facts_into(fn, facts);
     return strength_reduce_with_facts(fn, facts);
@@ -7623,7 +7736,7 @@ bool ir_pass_strength_reduction(IrFunction &fn) {
 // Implementacion: para cada binop con rhs CONST, mira si el lhs es la
 // MISMA op con un CONST rhs.  Si si, fusiona y deja la nueva instr.
 
-bool ir_pass_reassoc(IrFunction &fn) {
+static bool reassoc_impl(IrFunction &fn) {
     bool changed = false;
 
     /* Quien define cada valor, y cuales son constantes.
@@ -7814,7 +7927,7 @@ bool ir_pass_reassoc(IrFunction &fn) {
 //      greatest fixpoint con init TOP (todo non-null) e interseccion en
 //      los merges; los hechos se generan en las aristas de BR_COND cuyo
 //      cond es CMP_NE/CMP_EQ contra 0 o ISNULL.  Captura tambien loops.
-bool ir_pass_elide_unwrap(IrFunction &fn) {
+static bool elide_unwrap_impl(IrFunction &fn) {
     std::unordered_map<IrValueId, IrOp> def_op;
     std::unordered_map<IrValueId, const IrInstr *> def_instr;
     for (const auto &bb : fn.blocks)
@@ -8184,10 +8297,10 @@ static bool model_removable(const IrFunction &fn,
     return !e.mem.writes.locs.empty();
 }
 
-bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
-                 const analysis::AsmBindingFacts *asm_bindings,
-                 DceEffectsCache *cache, const analysis::IrFacts *facts,
-                 const analysis::PointsTo *pt) {
+static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls,
+                     const analysis::AsmBindingFacts *asm_bindings,
+                     DceEffectsCache *cache, const analysis::IrFacts *facts,
+                     const analysis::PointsTo *pt) {
     // Modelo de efectos: hechos + points-to por-funcion para el consumidor del
     // DCE (el mismo resolvedor de direcciones que usa todo el tooling).
     analysis::IrFacts fx_facts;
@@ -8433,7 +8546,7 @@ bool ir_pass_dce(IrFunction &fn, const analysis::effects::NativeDecls *decls,
 //  Pase de propagacion de copias
 // =========================================================================
 
-bool ir_pass_copy_prop(IrFunction &fn) {
+static bool copy_prop_impl(IrFunction &fn) {
     // Construir mapa de sustituciones: %b -> %a para cada "%b = mov %a"
     std::unordered_map<IrValueId, IrValueId> subst;
     for (const auto &bb : fn.blocks) {
@@ -8506,7 +8619,7 @@ static bool get_const(const IrFunction &fn, IrValueId id, uint64_t &val) {
     return true;
 }
 
-bool ir_pass_const_fold(IrFunction &fn) {
+static bool const_fold_impl(IrFunction &fn) {
     bool changed = false;
 
     /* Alineacion demostrable de cada valor.  Sirve para plegar `p & (k-1)`
@@ -8790,10 +8903,10 @@ bool ir_pass_const_fold(IrFunction &fn) {
 //
 // Ahorro: en codigo generado por frontend Vesta se ven STOREs de zero seguidos
 // de STOREs reales (init list, alloca cleared, etc).  ~10-15% reduccion.
-bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
-                 const std::unordered_set<std::string> *pure_callees,
-                 const HechosDeAsmParaDse *hechos_asm,
-                 const analysis::IrFacts *facts) {
+static bool dse_impl(IrFunction &fn, const analysis::PointsTo *pt,
+                     const std::unordered_set<std::string> *pure_callees,
+                     const HechosDeAsmParaDse *hechos_asm,
+                     const analysis::IrFacts *facts) {
     bool changed = false;
     /* Def-use de la funcion: los necesita el modelo de efectos para contestar
      * por instruccion.
@@ -9700,7 +9813,7 @@ sucesores_de(const IrFunction &fn,
     }
 }
 
-bool ir_pass_unreachable(IrFunction &fn) {
+static bool unreachable_impl(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
 
     const size_t nblocks = fn.blocks.size();
@@ -9903,7 +10016,7 @@ struct KeyBuilder {
 
 } // namespace
 
-bool ir_pass_const_cse_entry(IrFunction &fn) {
+static bool const_cse_entry_impl(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
     /* Pase 1: en entry, recolectar el PRIMER vid por (type,imm) y registrar
      * duplicados subsiguientes -> subst (apuntan al primer vid). */
@@ -9989,7 +10102,7 @@ bool ir_pass_const_cse_entry(IrFunction &fn) {
     return changed;
 }
 
-bool ir_pass_cse(IrFunction &fn) {
+static bool cse_impl(IrFunction &fn) {
     bool changed = false;
 
     /* ============================================================
@@ -10252,7 +10365,7 @@ static bool collect_alloca_derived(const IrFunction &fn,
     return true;
 }
 
-bool ir_pass_tailcall(IrFunction &fn) {
+static bool tailcall_impl(IrFunction &fn) {
     // Detecta el patron: CALL @f(args) seguido inmediatamente de RET %resultado
     // y convierte el CALL en TAILCALL (elimina la RET subsiguiente).
     // Tambien maneja RET void inmediatamente despues de CALL void.
@@ -10348,7 +10461,7 @@ bool ir_pass_tailcall(IrFunction &fn) {
  *
  * @return true si se hizo al menos una fusion (puede dispararse otro DCE).
  */
-bool ir_pass_inline_loop_header(IrFunction &fn) {
+static bool inline_loop_header_impl(IrFunction &fn) {
     bool changed = false;
     for (size_t bi = 0; bi < fn.blocks.size(); ++bi) {
         IrBlock &B = fn.blocks[bi];
@@ -10570,7 +10683,8 @@ static inline uint32_t inline_map_site(uint32_t original, uint32_t site,
     return (original == IR_NO_INLINE_SITE) ? site : (base + original);
 }
 
-bool ir_pass_inline(IrModule &mod, size_t threshold) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
+static bool inline_impl(IrModule &mod, size_t threshold) {
     /* Threshold de tamano del body del callee para inlinar.
      *
      * Por que 12 por defecto (en lugar de 8 o 16): el overhead del CALLVM (push
@@ -11146,6 +11260,10 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
     return changed;
 }
 
+ModulePassResult ir_pass_inline(IrModule &mod, size_t threshold) {
+    return ModulePassResult::of(mod, inline_impl(mod, threshold));
+}
+
 // =========================================================================
 //  Pase ir_pass_licm
 // =========================================================================
@@ -11175,8 +11293,8 @@ bool ir_pass_inline(IrModule &mod, size_t threshold) {
 // v1 conservativo: solo loops simples con UN solo back-edge y UN pre-
 // header (case clasico while/for).
 
-bool ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
-                  const std::unordered_set<std::string> *pure_callees) {
+static bool licm_impl(IrFunction &fn, const analysis::PointsTo *pt,
+                      const std::unordered_set<std::string> *pure_callees) {
     if (fn.blocks.size() < 3)
         return false; /* necesita pre-header + body + header */
     const size_t N = fn.blocks.size();
@@ -11573,7 +11691,8 @@ static bool module_has_unattributed_aop(const IrModule &mod) {
 // a traves de MOV por robustez.  La firma del cfn es solo compile-time; la
 // convencion de llamada de CALL y CALLIND es identica (args en R1.., ret R0),
 // asi que el rewrite preserva la semantica.
-bool ir_pass_devirt_cfn(IrFunction &fn) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static bool devirt_cfn_impl(IrFunction &fn) {
     if (fn.is_native || fn.blocks.empty()) return false;
     // vid -> label de funcion (desde LABEL_ADDR, propagado por MOV).
     std::unordered_map<IrValueId, std::string> label_of;
@@ -11607,7 +11726,12 @@ bool ir_pass_devirt_cfn(IrFunction &fn) {
     return changed;
 }
 
-bool ir_pass_devirt_monomorphic(IrModule &mod) {
+PassResult ir_pass_devirt_cfn(IrFunction &fn) {
+    return PassResult::of(fn, devirt_cfn_impl(fn));
+}
+
+/* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
+static bool devirt_monomorphic_impl(IrModule &mod) {
     /* Solo se renuncia al pase ENTERO cuando hay aspectos que no se pueden
      * atribuir a un metodo concreto -- hoy, un `addadvice` escrito a mano en
      * ensamblador, que no dice a quien apunta.  Cuando todos estan atribuidos,
@@ -11862,12 +11986,16 @@ bool ir_pass_devirt_monomorphic(IrModule &mod) {
     return changed;
 }
 
+ModulePassResult ir_pass_devirt_monomorphic(IrModule &mod) {
+    return ModulePassResult::of(mod, devirt_monomorphic_impl(mod));
+}
+
 // =========================================================================
 //  Pase ir_pass_speculative_devirt (C2): devirt especulativa guiada por IC
 // =========================================================================
 
-bool ir_pass_speculative_devirt(IrFunction &fn,
-                                const std::vector<SpecDevirtSite> &sites) {
+static bool speculative_devirt_impl(IrFunction &fn,
+                                    const std::vector<SpecDevirtSite> &sites) {
     if (fn.blocks.empty() || sites.empty()) return false;
     bool changed = false;
 
@@ -12408,7 +12536,8 @@ static bool is_inlineable_mb(const IrFunction &fn, size_t threshold) {
     return total <= threshold;
 }
 
-bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see ModulePassResult */
+static bool inline_multiblock_impl(IrModule &mod, size_t threshold) {
     // Activo por defecto.  Desactivable con VESTA_NO_MB_INLINE=1 (A/B).
     // El guard de is_inlineable_mb rechaza callees con NEWOBJ/__new_X/CALLVIRT
     // (creacion de objetos + dtor en loop rompia el save_live_regs del GC) +
@@ -12464,7 +12593,12 @@ bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
     return any;
 }
 
-bool ir_pass_spec_devirt(IrFunction &fn) {
+ModulePassResult ir_pass_inline_multiblock(IrModule &mod, size_t threshold) {
+    return ModulePassResult::of(mod, inline_multiblock_impl(mod, threshold));
+}
+
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static bool spec_devirt_impl(IrFunction &fn) {
     if (fn.blocks.empty() || fn.spec_devirt_sites.empty()) return false;
     bool changed = false;
 
@@ -12684,11 +12818,15 @@ bool ir_pass_spec_devirt(IrFunction &fn) {
     return changed;
 }
 
+PassResult ir_pass_spec_devirt(IrFunction &fn) {
+    return PassResult::of(fn, spec_devirt_impl(fn));
+}
+
 // =========================================================================
 //  Pase Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
 // =========================================================================
 
-bool ir_pass_load_narrow(IrFunction &fn) {
+static bool load_narrow_impl(IrFunction &fn) {
     if (fn.blocks.empty()) return false;
 
     /* Ops "narrow-safe": dado inputs con bits bajos correctos (sin importar
@@ -13023,8 +13161,8 @@ static bool is_sched_terminator(IrOp op) {
            op == IrOp::THROW;
 }
 
-bool ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
-                      const std::unordered_set<std::string> *pure_callees) {
+static bool schedule_impl(IrFunction &fn, const analysis::PointsTo *pt,
+                          const std::unordered_set<std::string> *pure_callees) {
     bool changed = false;
 
     // Pure-call advance (SCHEDULER SEMANTICO): una CALL/TAILCALL a un callee
@@ -13701,7 +13839,7 @@ static Pattern carry_idiom_pattern() {
     return p;
 }
 
-bool ir_pass_carry_idiom(IrFunction &fn) {
+static bool carry_idiom_impl(IrFunction &fn) {
     /* Valvula para aislar el pase al depurar.  Se lee UNA vez: esto corre una
      * vez por funcion y por ronda del punto fijo -- decenas de miles de veces
      * en un modulo grande --, y consultar el entorno recorre el bloque entero
@@ -13713,7 +13851,7 @@ bool ir_pass_carry_idiom(IrFunction &fn) {
     return ir_apply_patterns(fn, pats);
 }
 
-bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
+static bool loop_memcpy_idiom_impl(IrFunction &fn) {
     bool changed = false;
     if (fn.is_native) return false;
     // @NoIdiom: quien IMPLEMENTA la copia no puede ver su bucle reescrito a
@@ -13905,7 +14043,7 @@ bool ir_pass_loop_memcpy_idiom(IrFunction &fn) {
 // bloque, capturas by-value, helper single-block terminado en RET.  El
 // emparejamiento es trivial (solo hay una closure) -> sin alias analysis.
 
-bool ir_pass_inline_closures(IrModule &mod) {
+static bool inline_closures_impl(IrModule &mod) {
     bool changed = false;
 
     std::unordered_map<std::string, size_t> name_to_idx;
@@ -14212,13 +14350,21 @@ util::ThreadOwned<AcumuladorPases> g_pass_accumulators;
 AcumuladorPases &acumulador_pases() { return g_pass_accumulators.get(); }
 
 /// Suma de todos los hilos, para quien pregunte por el total.
+/* Cuantos HILOS aportaron a cada pase.  Se cuenta al sumar porque es el unico
+ * momento en que los acumuladores se ven por separado: una vez sumados, un
+ * numero de ocho hilos y uno de pared son indistinguibles.
+ * @see util::Span::threads */
+static std::unordered_map<const char *, long long> g_pass_threads;
+
 AcumuladorPases merge_pass_times() {
     AcumuladorPases total;
+    g_pass_threads.clear();
     g_pass_accumulators.for_each([&total](const AcumuladorPases &a) {
         for (const auto &kv : a.t) {
             auto &d = total.t[kv.first];
             d.first += kv.second.first;
             d.second += kv.second.second;
+            ++g_pass_threads[kv.first]; // este hilo corrio este pase
         }
         for (const auto &kv : a.por_fn) {
             EntradaFn &d = total.por_fn[kv.first];
@@ -14296,13 +14442,86 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
  * sustituye a "acordarse de invalidar", que es una obligacion que no se puede
  * comprobar y que ya fallaba: hay caminos donde el IR se modifica sin aviso y
  * el cache servia punteros a instrucciones borradas. */
+/**
+ * @brief Los pases locales que se pueden saltar, cada uno con su marca.
+ *
+ * El orden no significa nada; solo hace falta que cada sitio tenga su ranura
+ * propia.  Anadir un `APLICA_LOCAL` sin ranura NO COMPILA, que es como debe
+ * ser: compartir ranura con otro pase reintroduce exactamente el fallo que
+ * esto arregla.
+ */
+enum class LocalPassSlot : uint8_t {
+    CopyProp,
+    FuseFma,
+    DeadAllocElim,
+    DeadStackSlotElim,
+    ConstFold,
+    IfConversion,
+    SelectSimplify,
+    Unreachable,
+    TailCall,
+    InlineLoopHeader,
+    ConstCseEntry,
+    Cse,
+    LoadNarrow,
+    ElideUnwrap,
+    CarryIdiom,
+    Count
+};
+
+/// Una marca por pase local, para una funcion.
+using LocalSeen =
+    std::array<uint64_t, static_cast<size_t>(LocalPassSlot::Count)>;
+
+/* La version la avanza @c applied , que es lo unico que abre el resultado del
+ * pase.  Antes la subia esta macro, y por eso la subian SOLO los pases que
+ * pasaban por ella. */
 #define APLICA(llamada)                                                        \
     do {                                                                       \
-        const bool cambio__ = PASE(llamada);                                   \
+        const bool cambio__ = applied(PASE(llamada));                          \
         if (cambio__) any.store(true, std::memory_order_relaxed);              \
         dirty = dirty || cambio__;                                             \
         effects_dirty = effects_dirty || cambio__;                           \
-        if (cambio__) ++fn.version;                                            \
+    } while (0)
+
+/**
+ * Igual que @c APLICA , pero para un pase que solo lee SU funcion.
+ *
+ * Se salta cuando ESTE pase ya dijo, sobre ESTA MISMA version de la funcion,
+ * que no habia nada que hacer.  No es una heuristica: un pase es una funcion
+ * determinista de lo que lee, asi que sobre la misma entrada vuelve a decir lo
+ * mismo -- lo unico que desaparece es el trabajo repetido.
+ *
+ * @par La marca es POR PASE, y esa es toda la historia
+ * Antes era UNA marca por funcion, puesta al terminar la vuelta.  Pero los
+ * pases locales no corren al terminar la vuelta: corren repartidos DENTRO de
+ * ella, cada uno en su sitio.  Si `copy_prop` corria primero sin cambiar nada y
+ * `simplify` mutaba la funcion despues, la marca del final decia "estable" y a
+ * la vuelta siguiente `copy_prop` se saltaba sin haber visto NUNCA el codigo
+ * que `simplify` dejo.
+ *
+ * Y no salia como "codigo un poco peor": el intermedio se quedaba sin
+ * canonicalizar y el selector de registros virtuales del nativo lo rechazaba
+ * -- 146 rojos, todos "no soporta la funcion todavia" --.
+ *
+ * @par Y solo se marca al NO cambiar
+ * Si el pase cambio algo, no se marca: la version ya es otra y volvera a
+ * correr.  Marcar la version de SALIDA daria por hecho que el pase es
+ * idempotente, y eso no lo promete ninguno.
+ *
+ * Se usa SOLO donde la llamada es `ir_pass_X(fn)` y nada mas: en cuanto un pase
+ * recibe efectos, callees o punteros de fuera, lo de fuera pudo cambiar sin que
+ * la version de esta funcion se moviera, y saltarselo dejaria de optimizar algo
+ * que si se podia.  Eso no da un error: da codigo peor en silencio.
+ */
+#define APLICA_LOCAL(slot, llamada)                                            \
+    do {                                                                       \
+        uint64_t &visto__ =                                                    \
+            local_seen[static_cast<size_t>(LocalPassSlot::slot)];              \
+        if (!g_no_local_skip && visto__ == fn.version) break;                  \
+        const uint64_t antes__ = fn.version;                                   \
+        APLICA(llamada);                                                       \
+        if (fn.version == antes__) visto__ = fn.version;                       \
     } while (0)
 
 /**
@@ -14320,21 +14539,9 @@ auto cronometrar_pase(const char *nombre, const IrFunction &fn, F &&f)
  */
 #define APLICA_PRESERVA_EFECTOS(llamada)                                       \
     do {                                                                       \
-        const bool cambio__ = PASE(llamada);                                   \
+        const bool cambio__ = applied(PASE(llamada));                          \
         if (cambio__) any.store(true, std::memory_order_relaxed);              \
         dirty = dirty || cambio__;                                             \
-        if (cambio__) ++fn.version;                                            \
-    } while (0)
-
-/* Igual, para los pases que devuelven cuantos cambios hicieron en vez de un
- * si/no. */
-#define APLICA_N(llamada)                                                      \
-    do {                                                                       \
-        const bool cambio__ = (PASE(llamada) > 0);                             \
-        if (cambio__) any.store(true, std::memory_order_relaxed);              \
-        dirty = dirty || cambio__;                                             \
-        effects_dirty = effects_dirty || cambio__;                           \
-        if (cambio__) ++fn.version;                                            \
     } while (0)
 
 /* Cronometra un pase sin repetir su nombre: `PASE(ir_pass_dse(fn))` mide y
@@ -14430,21 +14637,206 @@ void ranges_compared_report() {
     }
 }
 
+bool applied(PassResult r) {
+    /* Avanzar la version ES abrir el resultado.  No hay forma de leer el `bool`
+     * por otro sitio, asi que no hay forma de olvidarse. */
+    if (r.changed_) ++r.fn_->version;
+    return r.changed_;
+}
+
+bool applied(ModulePassResult r) {
+    if (!r.changed_) return false;
+    /* Un pase de modulo no dice a quien toco: se dan por cambiadas todas. */
+    for (IrFunction &fn : r.mod_->functions)
+        ++fn.version;
+    return true;
+}
+
+/* =========================================================================
+ *  Las puertas publicas de los pases
+ * =========================================================================
+ *
+ * Un pase es un `..._impl` privado que devuelve un si/no, y una puerta publica
+ * que envuelve ese si/no en @ref PassResult.  La puerta no es ceremonia: el
+ * resultado solo lo abre @ref applied , y abrirlo ES avanzar la version.  Asi
+ * un pase que cambia algo no puede dejar la version quieta -- no porque haya
+ * que acordarse, sino porque no hay forma de escribirlo.
+ *
+ * Por que importa: lo que la version protege son los analisis CACHEADOS, y lo
+ * que esos guardan son PUNTEROS a instrucciones.  Servir uno rancio no da una
+ * respuesta imprecisa, da una lectura de memoria liberada.
+ *
+ * Al anadir un pase se sigue el mismo molde.  Y si alguien lo olvida y devuelve
+ * `bool`, el pase sigue funcionando pero se sale de la garantia: la puerta es
+ * lo unico que la da.
+ */
+
+PassResult ir_pass_dead_alloc_elim(IrFunction &fn) {
+    return PassResult::of(fn, dead_alloc_elim_impl(fn));
+}
+
+PassResult ir_pass_dead_stack_slot_elim(IrFunction &fn) {
+    return PassResult::of(fn, dead_stack_slot_elim_impl(fn));
+}
+
+PassResult ir_pass_promote_callned_allocas(IrFunction &fn) {
+    return PassResult::of(fn, promote_callned_allocas_impl(fn));
+}
+
+PassResult ir_pass_promote_local_allocas(IrFunction &fn, bool force_all) {
+    return PassResult::of(fn, promote_local_allocas_impl(fn, force_all));
+}
+
+PassResult ir_pass_propagate_host_ptr(IrFunction &fn) {
+    return PassResult::of(fn, propagate_host_ptr_impl(fn));
+}
+
+PassResult ir_pass_promote_closure_env(IrFunction &fn) {
+    return PassResult::of(fn, promote_closure_env_impl(fn));
+}
+
+ModulePassResult ir_pass_own_closure_envs(IrModule &mod) {
+    return ModulePassResult::of(mod, own_closure_envs_impl(mod));
+}
+
+PassResult ir_pass_escape_detect_gc(IrFunction &fn) {
+    return PassResult::of(fn, escape_detect_gc_impl(fn));
+}
+
+PassResult ir_pass_fuse_fma(IrFunction &fn) {
+    return PassResult::of(fn, fuse_fma_impl(fn));
+}
+
+PassResult ir_pass_narrow_cmp(IrFunction &fn) {
+    return PassResult::of(fn, narrow_cmp_impl(fn));
+}
+
+PassResult ir_pass_simplify(IrFunction &fn) {
+    return PassResult::of(fn, simplify_impl(fn));
+}
+
+PassResult ir_pass_valuefacts_consumers(IrFunction &fn) {
+    return PassResult::of(fn, valuefacts_consumers_impl(fn));
+}
+
+PassResult ir_pass_strength_reduction(IrFunction &fn) {
+    return PassResult::of(fn, strength_reduction_impl(fn));
+}
+
+PassResult ir_pass_reassoc(IrFunction &fn) {
+    return PassResult::of(fn, reassoc_impl(fn));
+}
+
+PassResult ir_pass_elide_unwrap(IrFunction &fn) {
+    return PassResult::of(fn, elide_unwrap_impl(fn));
+}
+
+PassResult ir_pass_dce(IrFunction &fn,
+                       const analysis::effects::NativeDecls *decls,
+                       const analysis::AsmBindingFacts *asm_bindings,
+                       DceEffectsCache *cache, const analysis::IrFacts *facts,
+                       const analysis::PointsTo *pt) {
+    return PassResult::of(
+        fn, dce_impl(fn, decls, asm_bindings, cache, facts, pt));
+}
+
+PassResult ir_pass_copy_prop(IrFunction &fn) {
+    return PassResult::of(fn, copy_prop_impl(fn));
+}
+
+PassResult ir_pass_const_fold(IrFunction &fn) {
+    return PassResult::of(fn, const_fold_impl(fn));
+}
+
+PassResult ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt,
+                       const std::unordered_set<std::string> *pure_callees,
+                       const HechosDeAsmParaDse *hechos_asm,
+                       const analysis::IrFacts *facts) {
+    return PassResult::of(fn,
+                          dse_impl(fn, pt, pure_callees, hechos_asm, facts));
+}
+
+PassResult ir_pass_unreachable(IrFunction &fn) {
+    return PassResult::of(fn, unreachable_impl(fn));
+}
+
+PassResult ir_pass_const_cse_entry(IrFunction &fn) {
+    return PassResult::of(fn, const_cse_entry_impl(fn));
+}
+
+PassResult ir_pass_cse(IrFunction &fn) {
+    return PassResult::of(fn, cse_impl(fn));
+}
+
+PassResult ir_pass_tailcall(IrFunction &fn) {
+    return PassResult::of(fn, tailcall_impl(fn));
+}
+
+PassResult ir_pass_inline_loop_header(IrFunction &fn) {
+    return PassResult::of(fn, inline_loop_header_impl(fn));
+}
+
+PassResult ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
+                        const std::unordered_set<std::string> *pure_callees) {
+    return PassResult::of(fn, licm_impl(fn, pt, pure_callees));
+}
+
+PassResult ir_pass_speculative_devirt(IrFunction &fn,
+                                      const std::vector<SpecDevirtSite> &sites) {
+    return PassResult::of(fn, speculative_devirt_impl(fn, sites));
+}
+
+PassResult ir_pass_load_narrow(IrFunction &fn) {
+    return PassResult::of(fn, load_narrow_impl(fn));
+}
+
+PassResult
+ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt,
+                 const std::unordered_set<std::string> *pure_callees) {
+    return PassResult::of(fn, schedule_impl(fn, pt, pure_callees));
+}
+
+PassResult ir_pass_carry_idiom(IrFunction &fn) {
+    return PassResult::of(fn, carry_idiom_impl(fn));
+}
+
+PassResult ir_pass_loop_memcpy_idiom(IrFunction &fn) {
+    return PassResult::of(fn, loop_memcpy_idiom_impl(fn));
+}
+
+ModulePassResult ir_pass_inline_closures(IrModule &mod) {
+    return ModulePassResult::of(mod, inline_closures_impl(mod));
+}
+
+/* Este no sale de la cabecera -- solo lo usa el propio orquestador --, pero
+ * pasa por la misma puerta: la garantia no depende de quien pueda llamarlo. */
+static PassResult
+ir_pass_elide_narrow_norm(IrFunction &fn, analysis::RangeQuery &ranges,
+                          const analysis::DemandedBits &demanded) {
+    return PassResult::of(fn, elide_narrow_norm_impl(fn, ranges, demanded));
+}
+
+/// Ordena de mas caro a mas barato, que es como se lee un reparto de tiempos.
+static bool pass_costlier_first(const TiempoPase &a, const TiempoPase &b) {
+    return a.us > b.us;
+}
+
 std::vector<TiempoPase> tiempos_de_pases() {
     const AcumuladorPases a = merge_pass_times();
     std::vector<TiempoPase> v;
     v.reserve(a.t.size());
-    for (const auto &kv : a.t)
-        v.push_back({kv.first, kv.second.first, kv.second.second});
+    for (const auto &kv : a.t) {
+        const auto h = g_pass_threads.find(kv.first);
+        v.push_back({kv.first, nullptr, kv.second.first, kv.second.second,
+                     h != g_pass_threads.end() ? h->second : 1});
+    }
     /* Y los tramos medidos FUERA del optimizador -- el modelo de efectos, por
      * ejemplo --, que van a su propio acumulador porque no son un pase.  Se
      * juntan aqui para que el reparto salga completo en un solo sitio: quien
      * lee un tiempo quiere ver donde se va, no en que libreria vive. */
-    for (const util::Tramo &t : util::tramos_medidos())
-        v.push_back({t.nombre, t.us, t.veces});
-    std::sort(v.begin(), v.end(), [](const TiempoPase &a, const TiempoPase &b) {
-        return a.us > b.us;
-    });
+    for (const util::Span &t : util::measured_spans())
+        v.push_back({t.name, t.parent, t.us, t.runs, t.threads});
+    std::sort(v.begin(), v.end(), pass_costlier_first);
     return v;
 }
 
@@ -14503,6 +14895,10 @@ const bool g_no_promote_local_allocas =
 const bool g_no_promote_raw_alloc =
     util::flag_on(util::FlagId::NoPromoteRawAlloc);
 const bool g_no_spec_devirt = util::flag_on(util::FlagId::NoSpecDevirt);
+/* Apaga el salto de pases locales sobre una funcion que no cambio.  Es un
+ * interruptor de A/B como los demas de este nivel: sin el, comparar "con" y
+ * "sin" exige reconstruir, y entonces la comparacion mide dos binarios. */
+const bool g_no_local_skip = util::flag_on(util::FlagId::NoLocalSkip);
 const bool g_no_escape_scalar = util::flag_on(util::FlagId::NoEscapeScalar);
 const bool g_no_dead_stack_slot = util::flag_on(util::FlagId::NoDeadStackSlot);
 
@@ -14531,7 +14927,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * interprocedural (TOTAL) lo compone el analizador via el callgraph. */
     if (level >= OptLevel::O1 && allow_inline) {
         PassTimer crono__("opt:inline-prologo (pared)");
-        ir_pass_inline(mod);
+        (void)applied(ir_pass_inline(mod));
         /* Tras inlinar las factorias, la closure se construye y se invoca
          * en el mismo bloque -> inlinar tambien el CUERPO de la lambda en
          * el CALLCLOSURE (elimina el call indirecto + el env; el DCE limpia
@@ -14595,7 +14991,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     if (level >= OptLevel::O1) {
         if (!g_no_promote_raw_alloc) {
             for_each_function(mod, [](IrFunction &fn) {
-                if (!fn.is_native) ir_pass_promote_local_raw_alloc(fn);
+                if (!fn.is_native)
+                    (void)applied(ir_pass_promote_local_raw_alloc(fn));
             });
         }
     }
@@ -14801,6 +15198,31 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * nombre; ahora la posicion ES el nombre. */
     dirty_of.assign(mod.functions.size(), 1);
     effects_dirty_of.assign(mod.functions.size(), 1);
+    /* Con que version dijo CADA pase local, sobre CADA funcion, que no habia
+     * nada que hacer.
+     *
+     * El punto fijo recorria el modulo entero en cada vuelta -- nueve vueltas
+     * sobre dos mil funciones son diecinueve mil visitas -- y volvia a pasar
+     * todos los pases por funciones que nadie habia tocado.  Eso es trabajo
+     * repetido sobre exactamente las mismas instrucciones.
+     *
+     * La regla que se aplica es la unica que se puede DEMOSTRAR: un pase es una
+     * funcion determinista de lo que lee, asi que si ya dijo "nada que hacer"
+     * sobre esta misma version, vuelve a decir lo mismo.  Los que leen fuera
+     * (el codigo muerto y el almacenamiento muerto consultan efectos y callees)
+     * NO entran: ahi lo de fuera si pudo cambiar.
+     *
+     * Por pase y no por funcion: los pases locales corren repartidos DENTRO de
+     * la vuelta, no al final, asi que una marca comun los daria por estables
+     * frente a cambios que ocurrieron DESPUES de que ellos pasaran.  @see
+     * APLICA_LOCAL
+     *
+     * Marca inicial al centinela: cero contra una version que empieza en cero
+     * saltaria la primera vuelta entera. */
+    std::vector<LocalSeen> local_seen_of;
+    LocalSeen sin_ver;
+    sin_ver.fill(std::numeric_limits<uint64_t>::max());
+    local_seen_of.assign(mod.functions.size(), sin_ver);
     effects_cache.resize(mod.functions.size());
 
     /* Tope ANTI-CUELGUE, no un mando de cuanto optimizar.
@@ -14854,9 +15276,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     static_cast<size_t>(&fn - mod.functions.data());
                 uint8_t &dirty = dirty_of[fi];
                 uint8_t &effects_dirty = effects_dirty_of[fi];
+                /* Las marcas de los pases locales de ESTA funcion.  @see
+                 * APLICA_LOCAL */
+                LocalSeen &local_seen = local_seen_of[fi];
 
                 // O1: copy + simplify + SR + reassoc + dead-alloc + DCE
-                APLICA(ir_pass_copy_prop(fn));
+                APLICA_LOCAL(CopyProp, ir_pass_copy_prop(fn));
                 APLICA(ir_pass_simplify(
                     fn)); /* algebraic + cast fold + phi simp */
                 APLICA(
@@ -14865,7 +15290,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                 // ya quito a*0/a*1/+0.  Gated por @fp(fast) (fn.fp_contract).
                 // Decision unica en el IR -> interp/JIT/AOT consistentes (1
                 // redondeo).
-                APLICA(ir_pass_fuse_fma(fn));
+                APLICA_LOCAL(FuseFma, ir_pass_fuse_fma(fn));
                 /* Consumidores de ValueFacts: computan el analisis UNA vez y lo
                  * comparten -- elim SEXT/ZEXT/AND-mask + fold de CMP probado +
                  * strength reduction (MUL/DIV/MOD por 2^k -> shift/and,
@@ -14893,14 +15318,15 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                 } else {
                     APLICA(ir_pass_licm(fn)); /* LICM con dominators reales */
                 }
-                APLICA(ir_pass_dead_alloc_elim(fn));
+                APLICA_LOCAL(DeadAllocElim, ir_pass_dead_alloc_elim(fn));
                 /* Y detras, los huecos de PILA que nadie lee.  Va aqui y no
                  * antes porque necesita que la promocion a pila y el reenvio de
                  * lecturas ya hayan corrido: hasta entonces el hueco TIENE
                  * lectores. Se apaga con VESTA_NO_DEAD_STACK_SLOT=1 para poder
                  * comparar. */
                 if (!g_no_dead_stack_slot)
-                    APLICA(ir_pass_dead_stack_slot_elim(fn));
+                    APLICA_LOCAL(DeadStackSlotElim,
+                                 ir_pass_dead_stack_slot_elim(fn));
                 /* Si algo toco la funcion desde el ultimo calculo, lo guardado
                  * del modelo ya no describe estas instrucciones.  Hay que
                  * mirarlo AQUI y no solo en `pt_invalidate`: esa senal se emite
@@ -14926,7 +15352,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
 
                 if (level >= OptLevel::O2) {
                     // O2: plegado de constantes + bloques inalcanzables + TCO.
-                    APLICA(ir_pass_const_fold(fn));
+                    APLICA_LOCAL(ConstFold, ir_pass_const_fold(fn));
                     // If-conversion: diamante/if-anidado/ternario -> SELECT
                     // (solo legalidad; la rentabilidad la decide el pase de
                     // coste cercano al backend).  Debe preceder a `unreachable`
@@ -14934,16 +15360,17 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     // vacios.  El SELECT es una primitiva SEMANTICA: el JIT/AOT
                     // lo bajan a cmov, y el INTERPRETE a la super-instruccion
                     // `csel` (1 despacho).
-                    APLICA_N(ir_pass_if_conversion(fn));
+                    APLICA_LOCAL(IfConversion, ir_pass_if_conversion(fn));
                     // Canonicalizacion algebraica de los SELECT recien creados
                     // (select(c,x,x)->x, ->imin/imax, anidados, ...) antes de
                     // que el resto de pases (DCE/CSE) los vean.
-                    APLICA_N(ir_pass_select_simplify(fn));
-                    APLICA(ir_pass_unreachable(fn));
-                    APLICA(ir_pass_tailcall(fn));
+                    APLICA_LOCAL(SelectSimplify, ir_pass_select_simplify(fn));
+                    APLICA_LOCAL(Unreachable, ir_pass_unreachable(fn));
+                    APLICA_LOCAL(TailCall, ir_pass_tailcall(fn));
                     // Inline de header trivial de loop -> habilita decjnz
                     // fusion.
-                    APLICA(ir_pass_inline_loop_header(fn));
+                    APLICA_LOCAL(InlineLoopHeader,
+                                 ir_pass_inline_loop_header(fn));
                     // Dead store elimination: limpia STOREs muertos
                     // consecutivos. Con Fase 4, las CALL a callees puros no
                     // cortan el forwarding. Recibe la tabla points-to del
@@ -14979,32 +15406,32 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     // stale en fn.values causando fallos no-deterministicos en
                     // test 110 (smart pointers SRET).  Esta version sustituye
                     // operandos directamente y elimina las CONSTs duplicadas.
-                    APLICA(ir_pass_const_cse_entry(fn));
+                    APLICA_LOCAL(ConstCseEntry, ir_pass_const_cse_entry(fn));
                     // CSE local de aritmetica pura (ADD/SUB/MUL/etc.) --
                     // dedupea `add.ptr this, off` triplicados en
                     // getters/setters.  Tiene invalidacion correcta para LOAD
                     // via side-effects.  Habilita store-to-load forwarding al
                     // unificar punteros equivalentes.
-                    APLICA(ir_pass_cse(fn));
+                    APLICA_LOCAL(Cse, ir_pass_cse(fn));
                     // Load Narrow: elide SEXT redundante tras LOAD i8/i16/i32
                     // cuando todos los usos son arith narrow-safe (ADD/SUB/MUL/
                     // AND/OR/XOR) + STORE/RET del mismo ancho.  Ahorra 3 instr
                     // VM por LOAD elidido.  Bench struct_field: ~270M instr
                     // ahorradas.
-                    APLICA(ir_pass_load_narrow(fn));
+                    APLICA_LOCAL(LoadNarrow, ir_pass_load_narrow(fn));
                     // Elision COMPTIME de unwrap: si el valor es provably
                     // non-null (CONST!=0, &local/ALLOCA, STR_LIT_ADDR,
                     // LABEL_ADDR, Some(const) tras const-prop/SLF) el UNWRAP se
                     // vuelve MOV -> copy_prop/DCE lo borran -> cero overhead.
                     // Beneficia VM/JIT/AOT.
-                    APLICA(ir_pass_elide_unwrap(fn));
+                    APLICA_LOCAL(ElideUnwrap, ir_pass_elide_unwrap(fn));
                     // Suma/resta cuyo acarreo se deduce comparando el resultado
                     // con un sumando: la maquina ya dejo esa respuesta en un
                     // flag, asi que se marca el par para leerla en vez de
                     // recalcularla. Va despues del CSE porque este unifica los
                     // operandos y deja la comparacion pegada a su suma, que es
                     // lo que el patron necesita.
-                    APLICA(ir_pass_carry_idiom(fn));
+                    APLICA_LOCAL(CarryIdiom, ir_pass_carry_idiom(fn));
                     // Segunda ronda de DCE tras plegado/TCO/loop header
                     // inline/CSE.
                     /* Misma razon que arriba: entre medias han corrido pases
@@ -15033,10 +15460,22 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         if (level >= OptLevel::O2) {
             // Devirt de cfn constante (CALLIND a LABEL_ADDR -> CALL directo),
             // antes del inline para que el callback conocido se pueda inlinar.
-            for (auto &fn : mod.functions) {
-                if (ir_pass_devirt_cfn(fn)) any = true;
+            /* Un cronometro por pase de MODULO, y no solo el de la etapa.
+             * Con la etapa entera medida de una pieza se ve que crece, pero no
+             * QUIEN: aqui dentro conviven pases por funcion y pases que
+             * recorren el modulo, y son las dos formas de crecer -- con las
+             * veces que se llaman, o con el tamano de lo que miran -- que se
+             * arreglan de manera opuesta. */
+            {
+                PassTimer c__("  x-mod:devirt_cfn (per fn)");
+                for (auto &fn : mod.functions) {
+                    if (applied(ir_pass_devirt_cfn(fn))) any = true;
+                }
             }
-            if (ir_pass_devirt_monomorphic(mod)) any = true;
+            {
+                PassTimer c__("  x-mod:devirt_monomorphic (module)");
+                if (applied(ir_pass_devirt_monomorphic(mod))) any = true;
+            }
 
             /* (C2): devirt especulativa ESTATICA via guard-chain.
              * Corre tras el devirt monomorfico (que ya resolvio los sites
@@ -15046,14 +15485,18 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * Skippable via VESTA_NO_SPEC_DEVIRT=1 para A/B testing. */
             {
                 if (!g_no_spec_devirt) {
+                    PassTimer c__("  x-mod:spec_devirt (per fn)");
                     for (auto &fn : mod.functions) {
                         if (fn.is_native) continue;
-                        if (ir_pass_spec_devirt(fn)) any = true;
+                        if (applied(ir_pass_spec_devirt(fn))) any = true;
                     }
                 }
             }
 
-            if (allow_inline && ir_pass_inline(mod)) any = true;
+            {
+                PassTimer c__("  x-mod:inline (module)");
+                if (allow_inline && applied(ir_pass_inline(mod))) any = true;
+            }
 
             /* Plegado de `a + b` cuando las dos son literales conocidos.  En el
              * fix-point y DESPUES del inline: asi ve tambien las cadenas que
@@ -15061,13 +15504,20 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * STRMAKE) o desde otra funcion ya inlineada.  Y como el resultado
              * es otro STRMAKE de literal, `a + b + c` se pliega en dos vueltas.
              * El DCE de mas abajo se lleva los STRMAKE que queden sin usar. */
-            if (ir_pass_fold_strcat(mod)) any = true;
+            {
+                PassTimer c__("  x-mod:fold_strcat (module)");
+                if (applied(ir_pass_fold_strcat(mod))) any = true;
+            }
 
             /* Inline MULTI-bloque: tras el single-block, inlinar callees con
              * ramas (`if`, etc.) pequenos.  Junta mas codigo en la misma fn
              * (habilita const-fold/CSE/scalar-replace cross-call de funciones
              * con control de flujo).  Semantica-preservante. */
-            if (allow_inline && ir_pass_inline_multiblock(mod)) any = true;
+            {
+                PassTimer c__("  x-mod:inline_multiblock (module)");
+                if (allow_inline && applied(ir_pass_inline_multiblock(mod)))
+                    any = true;
+            }
 
             /*  C2.13: Scalar Replacement de objetos GC no-escapantes.
              * Corre DESPUES del inline (que junta el alloc + los field-access
@@ -15077,9 +15527,14 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * Skippable via VESTA_NO_ESCAPE_SCALAR=1 para A/B testing. */
             {
                 if (!g_no_escape_scalar) {
+                    /* Sospechoso principal: corre POR FUNCION y recibe el
+                     * MODULO entero.  Si mira mas alla de `fn`, el coste es
+                     * funciones x modulo, o sea cuadratico. */
+                    PassTimer c__("  x-mod:scalar_replace_gc (per fn, sees module)");
                     for (auto &fn : mod.functions) {
                         if (fn.is_native) continue;
-                        if (ir_pass_scalar_replace_gc(fn, mod)) any = true;
+                        if (applied(ir_pass_scalar_replace_gc(fn, mod)))
+                            any = true;
                     }
                 }
             }
@@ -15088,12 +15543,16 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
              * escalariza campos a registros, quita load/store del hot loop.
              * Beneficia AOT (sin GC) y JIT por igual.  Kill:
              * VESTA_NO_SROA_STACK. */
-            for (auto &fn : mod.functions) {
-                if (fn.is_native) continue;
-                if (ir_pass_sroa_stack_structs(fn)) any = true;
+            {
+                PassTimer c__("  x-mod:sroa_stack_structs (per fn)");
+                for (auto &fn : mod.functions) {
+                    if (fn.is_native) continue;
+                    /* `applied` es la unica puerta, y avanzar la version es
+                     * abrirla: no hay forma de leer el resultado sin ella. */
+                    if (applied(ir_pass_sroa_stack_structs(fn))) any = true;
+                }
             }
         }
-
         /* Cuantas vueltas se dieron de verdad, y sobre cuantas funciones.  Sin
          * estos dos numeros el coste por pase no se puede interpretar: mil
          * llamadas pueden ser muchas funciones baratas o pocas carisimas
@@ -15124,7 +15583,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         if (!g_no_promote_raw_alloc) {
             bool any2 = false;
             for (auto &fn : mod.functions) {
-                if (!fn.is_native) any2 |= ir_pass_promote_local_raw_alloc(fn);
+                if (!fn.is_native)
+                    any2 |= applied(ir_pass_promote_local_raw_alloc(fn));
             }
             /* Si promovio algo, una limpieza DCE para barrer valores muertos
              * (size const del malloc, etc.). */
@@ -15165,10 +15625,10 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     if (level >= OptLevel::O1) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            if (ir_pass_bulk_memory_lower(fn, facts)) {
-                ir_pass_unreachable(fn);
+            if (applied(ir_pass_bulk_memory_lower(fn, facts))) {
+                (void)applied(ir_pass_unreachable(fn));
                 PassTimer crono__("  dce:limpieza-orquestada");
-                ir_pass_dce(fn);
+                (void)applied(ir_pass_dce(fn));
             }
         }
     }
@@ -15206,12 +15666,12 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     if (level >= OptLevel::O2) {
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            if (ir_pass_unroll(fn, /*factor=*/0, facts)) {
-                ir_pass_copy_prop(fn);
-                ir_pass_cse(fn);
-                ir_pass_const_fold(fn);
+            if (applied(ir_pass_unroll(fn, /*factor=*/0, facts))) {
+                (void)applied(ir_pass_copy_prop(fn));
+                (void)applied(ir_pass_cse(fn));
+                (void)applied(ir_pass_const_fold(fn));
                 PassTimer crono__("  dce:limpieza-orquestada");
-                ir_pass_dce(fn, &decls_nativas);
+                (void)applied(ir_pass_dce(fn, &decls_nativas));
             }
         }
     }
@@ -15301,14 +15761,24 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
      * funcion puede servir de algo aqui: si casi todo sale CADUCADO, la funcion
      * cambia entre consultas y no hay reuso posible por mucho que se afine. */
     if (util::flag_on(util::FlagId::Times)) {
-        const auto c = am.cuentas();
-        const long long total = c.aciertos + c.caducados + c.nuevos;
+        const auto c = am.counts();
+        const long long total = c.hits + c.stale + c.fresh;
+        /* Y lo que se ESPERO por entrar, separado por cerrojo.  Las cuentas de
+         * arriba dicen si cachear sirve; estas dos dicen si el mecanismo se come
+         * la ganancia haciendo cola -- y con VEINTICUATRO hilos preguntando por
+         * su funcion, medido, era mas de la mitad del CPU --.
+         *
+         * En milisegundos y SUMADAS sobre los hilos, que es lo que son: si un
+         * numero aqui pasa del tiempo de pared de la fase, no es un error, es
+         * que N hilos esperaron a la vez.  @see util::Span::threads */
         std::fprintf(stderr,
                      "[gestor] consultas=%lld aciertos=%lld (%.0f %%) "
-                     "caducados=%lld nuevos=%lld\n",
-                     total, c.aciertos,
-                     total ? 100.0 * double(c.aciertos) / double(total) : 0.0,
-                     c.caducados, c.nuevos);
+                     "caducados=%lld nuevos=%lld | espera compartido=%lld ms "
+                     "exclusivo=%lld ms (sumada sobre los hilos)\n",
+                     total, c.hits,
+                     total ? 100.0 * double(c.hits) / double(total) : 0.0,
+                     c.stale, c.fresh, c.shared_wait_ns / 1000000,
+                     c.exclusive_wait_ns / 1000000);
     }
 }
 

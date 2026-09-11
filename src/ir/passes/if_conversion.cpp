@@ -436,7 +436,8 @@ bool try_convert(IrFunction &fn, const BlockIndex &idx, size_t ci) {
 
 } // namespace
 
-int ir_pass_if_conversion(IrFunction &fn) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static int if_conversion_impl(IrFunction &fn) {
     // Escape de emergencia (diagnostico / bisecar regresiones).
     static const bool disabled = util::flag_on(util::FlagId::NoIfConversion);
     if (disabled) return 0;
@@ -458,6 +459,10 @@ int ir_pass_if_conversion(IrFunction &fn) {
         }
     }
     return total;
+}
+
+PassResult ir_pass_if_conversion(IrFunction &fn) {
+    return PassResult::of(fn, if_conversion_impl(fn) > 0);
 }
 
 } // namespace ir

@@ -71,6 +71,7 @@
 #include "analysis/facts/asm_bindings.h"
 #include "analysis/facts/ir_facts.h"
 #include "analysis/facts/value_range.h"
+#include "ir/pass_result.h"
 #include "ir/ssa_ir.h"
 
 #include <atomic> // los contadores los suman varios modulos a la vez
@@ -144,9 +145,20 @@ inline OptLevel opt_level_from_int(int n) {
  * consulta quien vaya a ensenarlo.
  */
 struct TiempoPase {
-    const char *nombre = "?";
-    long long us = 0;    ///< tiempo acumulado.
-    long long veces = 0; ///< llamadas (el punto fijo repite pasadas).
+    const char *name = "?";
+    /// Dentro de que otro tramo corrio, o nulo.  Sin esto el informe es una
+    /// lista PLANA de numeros que se solapan, y quien la lee no puede saber si
+    /// dos cifras se suman o una esta dentro de la otra.
+    const char *parent = nullptr;
+    long long us = 0;   ///< tiempo acumulado.
+    long long runs = 0; ///< llamadas (el punto fijo repite pasadas).
+    /**
+     * @brief En cuantos HILOS se midio.  @see util::Span::threads
+     *
+     * Uno = tiempo de PARED.  Mas de uno = SUMA de los hilos, y entonces
+     * dividirlo por el total de una fase no significa nada.
+     */
+    long long threads = 0;
 };
 
 /// Vueltas del punto fijo, SUMADAS sobre todos los modulos.  El bucle corta
@@ -290,19 +302,19 @@ struct DceEffectsCache {
  *       orquestador ya tiene cacheados; es SEGURO desde el sello de version
  *       (@c IrFunction::version).  El detalle esta en el cuerpo del pase.
  */
-bool ir_pass_dce(IrFunction &fn,
-                 const analysis::effects::NativeDecls *decls = nullptr,
-                 const analysis::AsmBindingFacts *asm_bindings = nullptr,
-                 DceEffectsCache *cache = nullptr,
-                 const analysis::IrFacts *facts = nullptr,
-                 const analysis::PointsTo *pt = nullptr);
+PassResult ir_pass_dce(IrFunction &fn,
+                       const analysis::effects::NativeDecls *decls = nullptr,
+                       const analysis::AsmBindingFacts *asm_bindings = nullptr,
+                       DceEffectsCache *cache = nullptr,
+                       const analysis::IrFacts *facts = nullptr,
+                       const analysis::PointsTo *pt = nullptr);
 
 /**
  * @brief Elision comptime de UNWRAP cuando el operando es provably non-null
  *        (CONST!=0, ALLOCA, STR_LIT_ADDR, LABEL_ADDR, o resultado de UNWRAP).
  *        Convierte el UNWRAP en MOV -> copy_prop/DCE lo eliminan (cero codigo).
  */
-bool ir_pass_elide_unwrap(IrFunction &fn);
+PassResult ir_pass_elide_unwrap(IrFunction &fn);
 
 /**
  * @brief Pase Dead Alloc Elimination.
@@ -325,7 +337,7 @@ bool ir_pass_elide_unwrap(IrFunction &fn);
  * @param fn Funcion a optimizar.
  * @return true si se elimino al menos una CALL.
  */
-bool ir_pass_dead_alloc_elim(IrFunction &fn);
+PassResult ir_pass_dead_alloc_elim(IrFunction &fn);
 
 /**
  * @brief Quita los huecos de PILA que nadie lee, y lo que se escribia dentro.
@@ -342,7 +354,7 @@ bool ir_pass_dead_alloc_elim(IrFunction &fn);
  * @param fn Funcion a limpiar (se modifica en el sitio).
  * @return true si se quito algo.
  */
-bool ir_pass_dead_stack_slot_elim(IrFunction &fn);
+PassResult ir_pass_dead_stack_slot_elim(IrFunction &fn);
 
 /**
  * @brief Promueve ALLOCAs cuyo ptr fluye a CALLN a host stack.
@@ -360,7 +372,7 @@ bool ir_pass_dead_stack_slot_elim(IrFunction &fn);
  *
  * @return true si se promociono alguna ALLOCA.
  */
-bool ir_pass_promote_callned_allocas(IrFunction &fn);
+PassResult ir_pass_promote_callned_allocas(IrFunction &fn);
 
 /**
  * @brief Sprint string-perf-8: promueve ALLOCAs LOCALES (no escapan a
@@ -378,7 +390,8 @@ bool ir_pass_promote_callned_allocas(IrFunction &fn);
 // escapen o no.  En bare nativo no hay VM stack (rbx no es un ProcessVM*),
 // asi que un ALLOCA_VM ([rbx+off]) corrompe.  Cualquier local debe vivir en
 // la pila nativa.  Default (false): solo promueve las que no escapan (JIT/VM).
-bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
+PassResult ir_pass_promote_local_allocas(IrFunction &fn,
+                                         bool force_all = false);
 
 /**
  * @brief SROA/mem2reg de los locales de pila: de memoria a REGISTRO (SSA).
@@ -395,7 +408,7 @@ bool ir_pass_promote_local_allocas(IrFunction &fn, bool force_all = false);
  *
  * @return true si promociono algo.
  */
-bool ir_pass_sroa_stack_structs(IrFunction &fn);
+PassResult ir_pass_sroa_stack_structs(IrFunction &fn);
 
 /**
  * @brief Propaga @c is_host_ptr por las cadenas de aritmetica de punteros.
@@ -412,7 +425,7 @@ bool ir_pass_sroa_stack_structs(IrFunction &fn);
  * @param fn Funcion IR a procesar (se ignora si es nativa).
  * @return true si marco algun value nuevo.
  */
-bool ir_pass_propagate_host_ptr(IrFunction &fn);
+PassResult ir_pass_propagate_host_ptr(IrFunction &fn);
 
 /**
  * @brief Promociona patrones `malloc(N) + ... + free(p)` locales sin
@@ -432,7 +445,7 @@ bool ir_pass_propagate_host_ptr(IrFunction &fn);
  *
  * @return true si se promociono algun RAW_ALLOC.
  */
-bool ir_pass_promote_local_raw_alloc(IrFunction &fn);
+PassResult ir_pass_promote_local_raw_alloc(IrFunction &fn);
 
 /**
  * @brief AOT/native_poo: promueve el env de una closure de HEAP
@@ -445,7 +458,7 @@ bool ir_pass_promote_local_raw_alloc(IrFunction &fn);
  * capturantes que escapan (p.ej. tras inlinar la factoria) SIN heap ni leak.
  * @return true si promociono algun env.
  */
-bool ir_pass_promote_closure_env(IrFunction &fn);
+PassResult ir_pass_promote_closure_env(IrFunction &fn);
 
 /**
  * @brief Inserta el RAW_FREE del env de una closure que escapa cross-function
@@ -468,7 +481,7 @@ bool ir_pass_promote_closure_env(IrFunction &fn);
  * @param mod Modulo a transformar in-place.
  * @return true si inserto algun free o revirtio algun alloc.
  */
-bool ir_pass_own_closure_envs(IrModule &mod);
+ModulePassResult ir_pass_own_closure_envs(IrModule &mod);
 
 /**
  * @brief Pliega los @c STRCAT cuyas dos partes se conocen al compilar.
@@ -495,7 +508,7 @@ bool ir_pass_own_closure_envs(IrModule &mod);
  * @param mod Modulo a transformar in-place (necesita internar la cadena nueva).
  * @return true si plego algun STRCAT.
  */
-bool ir_pass_fold_strcat(IrModule &mod);
+ModulePassResult ir_pass_fold_strcat(IrModule &mod);
 
 /**
  * @brief  C2.13: DETECCION (log-only) de objetos GC no-escapantes.
@@ -509,7 +522,7 @@ bool ir_pass_fold_strcat(IrModule &mod);
  *
  * @return siempre false (no modifica el IR).
  */
-bool ir_pass_escape_detect_gc(IrFunction &fn);
+PassResult ir_pass_escape_detect_gc(IrFunction &fn);
 
 /**
  * @brief  C2.13: Scalar Replacement de objetos GC no-escapantes.
@@ -522,7 +535,7 @@ bool ir_pass_escape_detect_gc(IrFunction &fn);
  *
  * @return true si se transformo algun sitio.
  */
-bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
+PassResult ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
 
 /**
  * @brief Pase de simplificacion algebraica + folding de cast constantes
@@ -550,7 +563,7 @@ bool ir_pass_scalar_replace_gc(IrFunction &fn, const IrModule &mod);
  * @param fn Funcion a optimizar.
  * @return true si se realizo al menos una transformacion.
  */
-bool ir_pass_simplify(IrFunction &fn);
+PassResult ir_pass_simplify(IrFunction &fn);
 
 /**
  * @brief Estrecha comparaciones extendidas: @c cmp(sext/zext(x), const) ->
@@ -558,14 +571,14 @@ bool ir_pass_simplify(IrFunction &fn);
  * @c cmp(ext(x), ext(y)) -> @c cmp(x, y).  Elimina el SEXT/ZEXT y el const.i64
  * (los mata el DCE).  El backend compara al ancho de los operandos.
  */
-bool ir_pass_narrow_cmp(IrFunction &fn);
+PassResult ir_pass_narrow_cmp(IrFunction &fn);
 
 /**
  * @brief Contrae @c fmul+fadd single-use en un @c FMA (round(a*b+c), 1
  * redondeo).  Solo en funciones @c \@fp(fast) (fn.fp_contract).  Corre DESPUES
  * de @c ir_pass_simplify.  Ver la nota en el .cpp.
  */
-bool ir_pass_fuse_fma(IrFunction &fn);
+PassResult ir_pass_fuse_fma(IrFunction &fn);
 
 /**
  * @brief Gate global del driver para @c ir_pass_fuse_fma.  velb = true; el AOT
@@ -589,19 +602,19 @@ bool ir_fma_contract_allowed();
  *
  * @return true si transformo al menos una instr.
  */
-bool ir_pass_strength_reduction(IrFunction &fn);
+PassResult ir_pass_strength_reduction(IrFunction &fn);
 
 /**
  * @brief Elimina SEXT redundante de variables de induccion no-negativas
  *        acotadas por el test de salida de su loop (ver ir_optimizer.cpp).
  */
-bool ir_pass_elim_redundant_casts(IrFunction &fn);
+PassResult ir_pass_elim_redundant_casts(IrFunction &fn);
 
 /**
  * @brief Pliega un CMP a CONST 0/1 cuando el RANGE (ValueFacts) prueba el
  *        resultado (siempre true/false).  Habilita poda de ramas muertas.
  */
-bool ir_pass_fold_compares(IrFunction &fn);
+PassResult ir_pass_fold_compares(IrFunction &fn);
 
 /**
  * @brief Pliega un CMP a CONST cuando una GUARDA DOMINANTE ya establece una
@@ -609,14 +622,14 @@ bool ir_pass_fold_compares(IrFunction &fn);
  *        simbolico / predicate propagation).  Cierra los bounds-checks de
  *        longitud VARIABLE (`if (i >= len) panic` dentro de `for i in 0..len`).
  */
-bool ir_pass_fold_guarded_compares(IrFunction &fn);
+PassResult ir_pass_fold_guarded_compares(IrFunction &fn);
 
 /**
  * @brief Runner de los consumidores de ValueFacts: computa el analisis UNA vez
  *        y lo comparte entre todos (elim casts + fold compares), recomputando
  *        solo si un consumidor muto el IR.  AnalysisCache minimo.
  */
-bool ir_pass_valuefacts_consumers(IrFunction &fn);
+PassResult ir_pass_valuefacts_consumers(IrFunction &fn);
 
 /**
  * @brief Pase Reassociation.
@@ -631,7 +644,7 @@ bool ir_pass_valuefacts_consumers(IrFunction &fn);
  *
  * @return true si reasocio al menos una expresion.
  */
-bool ir_pass_reassoc(IrFunction &fn);
+PassResult ir_pass_reassoc(IrFunction &fn);
 
 /**
  * @brief Function inlining a nivel modulo.
@@ -663,7 +676,7 @@ bool ir_pass_reassoc(IrFunction &fn);
  *        conservadora.
  * @return true si inline al menos una CALL.
  */
-bool ir_pass_inline(IrModule &mod, size_t threshold = 12);
+ModulePassResult ir_pass_inline(IrModule &mod, size_t threshold = 12);
 
 /**
  * @brief Inline de callees MULTI-bloque (con ramas) que el inliner single-block
@@ -673,7 +686,8 @@ bool ir_pass_inline(IrModule &mod, size_t threshold = 12);
  *        Semantica-preservante.  @p threshold = max instrucciones TOTALES del
  *        callee.  Gated por VESTA_NO_MB_INLINE.
  */
-bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold = 24);
+ModulePassResult ir_pass_inline_multiblock(IrModule &mod,
+                                           size_t threshold = 24);
 
 /**
  * @brief Inline del CUERPO de una lambda en el CALLCLOSURE (cross-backend).
@@ -696,7 +710,7 @@ bool ir_pass_inline_multiblock(IrModule &mod, size_t threshold = 24);
  * @param mod Modulo a transformar in-place.
  * @return true si inlino al menos una closure.
  */
-bool ir_pass_inline_closures(IrModule &mod);
+ModulePassResult ir_pass_inline_closures(IrModule &mod);
 
 /**
  * @brief Loop-Invariant Code Motion.
@@ -714,7 +728,7 @@ bool ir_pass_inline_closures(IrModule &mod);
  *
  * @return true si movio al menos una instr.
  */
-bool ir_pass_licm(
+PassResult ir_pass_licm(
     IrFunction &fn, const analysis::PointsTo *pt = nullptr,
     const std::unordered_set<std::string> *pure_callees = nullptr);
 
@@ -738,7 +752,7 @@ bool ir_pass_licm(
  * @param mod Modulo a optimizar.
  * @return true si convirtio al menos un CALLVIRT.
  */
-bool ir_pass_devirt_monomorphic(IrModule &mod);
+ModulePassResult ir_pass_devirt_monomorphic(IrModule &mod);
 
 /**
  * @brief Devirtualizacion de CALLIND a puntero a funcion crudo (cfn) constante.
@@ -750,7 +764,7 @@ bool ir_pass_devirt_monomorphic(IrModule &mod);
  * @param fn Funcion a transformar.
  * @return true si reescribio al menos un CALLIND.
  */
-bool ir_pass_devirt_cfn(IrFunction &fn);
+PassResult ir_pass_devirt_cfn(IrFunction &fn);
 
 /**
  * @brief Devirtualizacion ESPECULATIVA guiada por perfil/IC (C2).
@@ -783,8 +797,8 @@ struct SpecDevirtSite {
     uint64_t class_ptr;         ///< ClassInfo* observado (embebido como CONST)
     std::string callee_ir_name; ///< ir_fn_name del metodo resuelto (a inlinar)
 };
-bool ir_pass_speculative_devirt(IrFunction &fn,
-                                const std::vector<SpecDevirtSite> &sites);
+PassResult ir_pass_speculative_devirt(IrFunction &fn,
+                                      const std::vector<SpecDevirtSite> &sites);
 
 /**
  * @brief Devirtualizacion especulativa ESTATICA via guard-chain (TAREA 2, C2).
@@ -819,7 +833,7 @@ bool ir_pass_speculative_devirt(IrFunction &fn,
  * @param fn Funcion a transformar (lee @c fn.spec_devirt_sites).
  * @return true si transformo al menos un site.
  */
-bool ir_pass_spec_devirt(IrFunction &fn);
+PassResult ir_pass_spec_devirt(IrFunction &fn);
 
 /**
  * @brief Pase de propagacion de copias.
@@ -830,7 +844,7 @@ bool ir_pass_spec_devirt(IrFunction &fn);
  * @param fn Funcion a optimizar.
  * @return true si se realizo al menos una sustitucion.
  */
-bool ir_pass_copy_prop(IrFunction &fn);
+PassResult ir_pass_copy_prop(IrFunction &fn);
 
 /**
  * @brief Pase de plegado de constantes.
@@ -842,7 +856,7 @@ bool ir_pass_copy_prop(IrFunction &fn);
  * @param fn Funcion a optimizar.
  * @return true si se plego al menos una instruccion.
  */
-bool ir_pass_const_fold(IrFunction &fn);
+PassResult ir_pass_const_fold(IrFunction &fn);
 
 /**
  * @brief Pase de eliminacion de bloques inalcanzables.
@@ -854,7 +868,7 @@ bool ir_pass_const_fold(IrFunction &fn);
  * @param fn Funcion a optimizar.
  * @return true si se elimino al menos un bloque.
  */
-bool ir_pass_unreachable(IrFunction &fn);
+PassResult ir_pass_unreachable(IrFunction &fn);
 
 /**
  * @brief Pase CSE: eliminacion de subexpresiones comunes.
@@ -866,7 +880,7 @@ bool ir_pass_unreachable(IrFunction &fn);
  * @param fn Funcion a optimizar.
  * @return true si se elimino al menos una instruccion.
  */
-bool ir_pass_cse(IrFunction &fn);
+PassResult ir_pass_cse(IrFunction &fn);
 
 /**
  * @brief Pase Dead Store Elimination.
@@ -908,10 +922,11 @@ struct HechosDeAsmParaDse {
 ///        modelo de efectos, que es quien contesta si una instruccion SUSPENDE
 ///        -- y eso decide si la memoria compartida sigue valiendo despues --.
 ///        Null = se construyen aqui, que es el mismo recorrido otra vez.
-bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
-                 const std::unordered_set<std::string> *pure_callees = nullptr,
-                 const HechosDeAsmParaDse *hechos_asm = nullptr,
-                 const analysis::IrFacts *facts = nullptr);
+PassResult
+ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+            const std::unordered_set<std::string> *pure_callees = nullptr,
+            const HechosDeAsmParaDse *hechos_asm = nullptr,
+            const analysis::IrFacts *facts = nullptr);
 
 /**
  * @brief Pase Const CSE Entry: deduplicacion global de constantes.
@@ -923,7 +938,7 @@ bool ir_pass_dse(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
  *
  * @return true si dedupeo al menos un CONST.
  */
-bool ir_pass_const_cse_entry(IrFunction &fn);
+PassResult ir_pass_const_cse_entry(IrFunction &fn);
 
 /**
  * @brief Pase TCO: optimizacion de llamadas en cola (Tail Call Optimization).
@@ -937,7 +952,7 @@ bool ir_pass_const_cse_entry(IrFunction &fn);
  * @param fn Funcion a optimizar.
  * @return true si se convirtio al menos una llamada en cola.
  */
-bool ir_pass_tailcall(IrFunction &fn);
+PassResult ir_pass_tailcall(IrFunction &fn);
 
 /**
  * @brief Pase Load Narrow: elide sign-extension redundante tras LOAD
@@ -962,7 +977,7 @@ bool ir_pass_tailcall(IrFunction &fn);
  *
  * @return true si marco al menos un LOAD como narrow_only.
  */
-bool ir_pass_load_narrow(IrFunction &fn);
+PassResult ir_pass_load_narrow(IrFunction &fn);
 
 /**
  * @brief Pase List Scheduling: reordena instrucciones dentro de cada
@@ -995,7 +1010,7 @@ bool ir_pass_load_narrow(IrFunction &fn);
  *
  * @return true si reordeno al menos un basic block.
  */
-bool ir_pass_schedule(
+PassResult ir_pass_schedule(
     IrFunction &fn, const analysis::PointsTo *pt = nullptr,
     const std::unordered_set<std::string> *pure_callees = nullptr);
 

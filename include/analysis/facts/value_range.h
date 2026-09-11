@@ -1054,6 +1054,8 @@ ValueRange rango_del_tipo(ir::IrType t);
 struct RangeAnalysis {
     using Result = RangeFacts;
     static char ID;
+    /// Como se llama al medirlo.  @see FactBase::memoized
+    static constexpr const char *kName = "ranges";
 };
 
 

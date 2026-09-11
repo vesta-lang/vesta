@@ -136,7 +136,7 @@ int main() {
     };
 
     /* --- Ejecutar el pase. --- */
-    const bool changed = ir_pass_spec_devirt(fn);
+    const bool changed = applied(ir_pass_spec_devirt(fn));
 
     check(changed, "el pase reporta cambio");
     /* B(entry) + 3 fast + 2 guard nuevos + 1 fallback + 1 merge = 8 bloques. */
@@ -214,7 +214,7 @@ int main() {
     /* Re-ejecutar: el site ya no apunta a un CALLITF (r es ahora el PHI) ->
      * sin transformacion. */
     const size_t after = fn.blocks.size();
-    const bool changed2 = ir_pass_spec_devirt(fn);
+    const bool changed2 = applied(ir_pass_spec_devirt(fn));
     check(!changed2,
           "re-ejecutar no re-transforma (r ya no es un call dinamico)");
     check(fn.blocks.size() == after, "no se crean bloques de mas");
@@ -265,7 +265,7 @@ int main() {
             g.blocks[e].instrs.push_back(rt);
         }
         g.spec_devirt_sites[rr] = {DevirtCandidate{c0, "Circle__area"}};
-        const bool ch = ir_pass_spec_devirt(g);
+        const bool ch = applied(ir_pass_spec_devirt(g));
         check(ch, "K=1: el pase transforma");
         /* entry + 1 fast + 0 guard nuevos + fallback + merge = 4 bloques. */
         check(g.blocks.size() == 4,

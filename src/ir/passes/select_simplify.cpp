@@ -186,7 +186,8 @@ bool simplify_one(IrFunction &fn, const DefIndex &di, IrInstr &sel) {
 
 } // namespace
 
-int ir_pass_select_simplify(IrFunction &fn) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static int select_simplify_impl(IrFunction &fn) {
     int total = 0;
     bool changed = true;
     // Punto fijo: una simplificacion (p.ej. colapsar un anidado) puede
@@ -203,6 +204,10 @@ int ir_pass_select_simplify(IrFunction &fn) {
                 }
     }
     return total;
+}
+
+PassResult ir_pass_select_simplify(IrFunction &fn) {
+    return PassResult::of(fn, select_simplify_impl(fn) > 0);
 }
 
 } // namespace ir

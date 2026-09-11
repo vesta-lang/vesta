@@ -117,6 +117,21 @@ void set_aot_condcomp_target(const std::string &os,
 #include "preprocessor/preprocessor.h"
 #endif
 
+/**
+ * @brief Ordena dos dominios del ASA por lo que costaron, el mas caro primero.
+ *
+ * Con NOMBRE y no una lambda: una lambda no aparece con el suyo en un perfil,
+ * que es justo donde se mira cuando algo cuesta.
+ *
+ * @param a Un resumen de produccion.
+ * @param b El otro.
+ * @return true si @p a costo mas que @p b .
+ */
+static bool asa_costlier_first(const analysis::asa::ProductionSummary *a,
+                               const analysis::asa::ProductionSummary *b) {
+    return a->micros > b->micros;
+}
+
 // flag global para el modo --dist-server; SIGINT lo pone a false
 static std::atomic<bool> g_server_running{true};
 static void on_dist_sigint(int) {
@@ -4347,7 +4362,17 @@ int main(int argc, char *argv[]) {
             util::cache_dir(util::CacheKind::Bytecode);
         const std::string cache_prefix = cache_dir + "/" + cache_key_hex;
         const std::string cache_path = cache_prefix + ".velb";
-        const bool cache_hit = std::filesystem::exists(cache_path);
+        /* Con `VX_NO_CACHE` no se REUSA lo de otra compilacion.  Faltaba, y por
+         * eso la bandera no daba una medida en frio: la primera corrida poblaba
+         * este cajon y la segunda lo encontraba, con lo que dos compilaciones
+         * que se creian iguales daban 40 s y 8,5 s.
+         *
+         * Se corta la LECTURA y no la escritura porque esto no es una copia de
+         * cache: `cache_path` es donde el artefacto del comptime se CONSTRUYE, y
+         * esta compilacion lo necesita para ejecutar codigo al compilar.  Lo que
+         * sobra al medir es heredar el de antes, no producir el propio. */
+        const bool cache_hit =
+            !util::cache_disabled() && std::filesystem::exists(cache_path);
         const bool user_already_set_prebuilt =
             !util::flag_text(util::FlagId::McPrebuilt).empty();
         const bool verbose_mc = util::flag_on(util::FlagId::McVerbose);
@@ -4384,7 +4409,11 @@ int main(int argc, char *argv[]) {
         // de root + deps recursivos coinciden con los cacheados, copiar
         // el @c .velb cacheado al output y SALTAR todo el compile +
         // link.  Desactivable via @c VX_NO_PROJECT_CACHE=1.
+        /* `VX_NO_CACHE` es el paraguas: "sin cache" incluye esta.  Sin eso, la
+         * bandera general dejaba viva la de proyecto -- que ademas SALTA todo el
+         * compilado -- y una medida "en frio" podia no compilar nada. */
         const bool project_cache_enabled =
+            !util::cache_disabled() &&
             !util::flag_on(util::FlagId::NoProjectCache);
         const bool project_cache_verbose =
             util::flag_on(util::FlagId::VerboseProjectCache);
@@ -5284,21 +5313,27 @@ int main(int argc, char *argv[]) {
             {
                 auto linea = vesta::scout();
                 if (tf.resolver_us > 0 || tf.modulos_us > 0) {
-                    linea << "[vx] frontend: resolver " << tf.resolver_us
-                          << " us"
-                          << " | modulos " << tf.modulos_us << " us"
-                          << " | optimizar " << tf.optimizar_us << " us"
-                          << " | emitir " << tf.emitir_us << " us"
-                          << "   (total " << tf.total_us() << " us)\n";
+                    linea << "[vx] "
+                          << vx::diag::format(
+                                 "VXA082",
+                                 {std::to_string(tf.resolver_us),
+                                  std::to_string(tf.modulos_us),
+                                  std::to_string(tf.optimizar_us),
+                                  std::to_string(tf.emitir_us),
+                                  std::to_string(tf.total_us())})
+                          << "\n";
                 } else {
-                    linea << "[vx] frontend: analisis " << tf.analisis_us
-                          << " us"
-                          << " | tipos " << tf.tipos_us << " us"
-                          << " | bajada " << tf.bajada_us << " us"
-                          << " | optimizar " << tf.optimizar_us << " us"
-                          << " | emitir " << tf.emitir_us << " us"
-                          << "   (comprobar " << tf.comprobar_us()
-                          << " us, total " << tf.total_us() << " us)\n";
+                    linea << "[vx] "
+                          << vx::diag::format(
+                                 "VXA081",
+                                 {std::to_string(tf.analisis_us),
+                                  std::to_string(tf.tipos_us),
+                                  std::to_string(tf.bajada_us),
+                                  std::to_string(tf.optimizar_us),
+                                  std::to_string(tf.emitir_us),
+                                  std::to_string(tf.comprobar_us()),
+                                  std::to_string(tf.total_us())})
+                          << "\n";
                 }
             }
             /* Y el reparto DENTRO de optimizar.  Un solo numero de "optimizar"
@@ -5311,9 +5346,19 @@ int main(int argc, char *argv[]) {
             // Callado si no se pide.
             ir::ranges_compared_report();
             const auto pases = ir::tiempos_de_pases();
+            /* Quien tiene hijos NO se suma: su tiempo ya esta dentro de ellos.
+             *
+             * Al dar padre a los tramos, el total pasaba a incluir contenedor y
+             * contenido a la vez y salia 1.040.590 us para un frontend de
+             * 427.692 -- mas del doble del tiempo que existio --.  Un numero
+             * imposible es lo mejor que podia pasar; lo peligroso habria sido
+             * uno solo un poco alto, que nadie mira dos veces. */
+            std::set<const char *> has_children;
+            for (const auto &q : pases)
+                if (q.parent != nullptr) has_children.insert(q.parent);
             long long total_pases = 0;
             for (const auto &q : pases)
-                total_pases += q.us;
+                if (has_children.count(q.name) == 0) total_pases += q.us;
             if (total_pases > 0) {
                 /* La calibracion, a la vista: se descuenta el coste de medir, y
                  * una cifra mas fina que la resolucion del reloj no significa
@@ -5321,25 +5366,50 @@ int main(int argc, char *argv[]) {
                  * no puede dar. */
                 const auto cal = util::calibracion_del_cronometro();
                 auto lp = vesta::scout();
-                lp << "[vx] optimizar por pase:";
+                lp << "[vx] " << vx::diag::format("VXA083", {});
                 int mostrados = 0;
                 for (const auto &q : pases) {
+                    /* Los contenedores, fuera de esta linea: su tiempo ya sale
+                     * en el reparto por fases de arriba, y aqui solo taparian a
+                     * los pases -- que es de lo que la linea habla -- porque
+                     * siempre pesan mas que cualquiera de sus hijos. */
+                    if (has_children.count(q.name) != 0) continue;
                     /* Lo que no llega al 1 % del reparto no explica nada y solo
                      * alarga la linea. */
                     if (q.us * 100 < total_pases || mostrados >= 6) break;
-                    lp << " " << q.nombre << " " << q.us << " us x" << q.veces
-                       << (++mostrados < 6 ? " |" : "");
+                    /* CON su padre.  Sin el, la lista es plana y dos cifras que
+                     * se solapan -- una dentro de la otra -- se leen como si se
+                     * sumaran: es lo que hizo pasar por coste del emisor 1810 ms
+                     * que eran de comprobar limites, y por coste de estos 190 ms
+                     * que estaban dentro de aquellos. */
+                    lp << " " << q.name;
+                    if (q.parent != nullptr) lp << "<" << q.parent;
+                    lp << " " << q.us << " us";
+                    /* `/N` = esto se midio en N HILOS y es la SUMA de los N,
+                     * no tiempo de pared.  Sin esa marca, un pase repartido
+                     * entre ocho hilos se lee como si tardara ocho veces mas y
+                     * se compara con el total de una fase -- que si es de
+                     * pared --, que es como el eliminador de codigo muerto
+                     * paso por ser el 85 % del optimizador midiendo el 10 %. */
+                    if (q.threads > 1) lp << "/" << q.threads;
+                    lp << " x" << q.runs << (++mostrados < 6 ? " |" : "");
                 }
-                lp << "   (" << pases.size() << " pases, " << total_pases
-                   << " us, " << ir::vueltas_punto_fijo() << " vueltas, ";
+                lp << "   ";
                 /* Solo si paso: rendirse a medias es una averia, y una averia
                  * que no ocurre no tiene por que ocupar sitio en la linea. */
                 if (ir::fixpoint_truncations() > 0)
-                    lp << ir::fixpoint_truncations()
-                       << " SIN CONVERGER (codigo peor), ";
-                lp << ir::visitas_a_funcion() << " visitas; reloj "
-                   << cal.fuente << " de " << cal.resolucion_ns
-                   << " ns, medir cuesta " << cal.coste_ns << " ns)\n";
+                    lp << vx::diag::format(
+                        "VXA085",
+                        {std::to_string(ir::fixpoint_truncations())});
+                lp << vx::diag::format(
+                          "VXA084",
+                          {std::to_string(pases.size()),
+                           std::to_string(total_pases),
+                           std::to_string(ir::vueltas_punto_fijo()),
+                           std::to_string(ir::visitas_a_funcion()),
+                           cal.fuente, std::to_string(cal.resolucion_ns),
+                           std::to_string(cal.coste_ns)})
+                   << "\n";
             }
             /* Y donde se concentra: el reparto por pase dice cual es caro, este
              * dice si lo es por igual en todas las funciones o por una sola.
@@ -5349,7 +5419,7 @@ int main(int argc, char *argv[]) {
             const auto porfn = ir::tiempos_por_funcion();
             if (!porfn.empty() && total_pases > 0) {
                 auto lf = vesta::scout();
-                lf << "[vx] optimizar, donde se concentra:";
+                lf << "[vx] " << vx::diag::format("VXA086", {});
                 for (size_t i = 0; i < porfn.size() && i < 4; ++i) {
                     if (porfn[i].us * 100 < total_pases) break;
                     lf << " " << porfn[i].pase << "@" << porfn[i].funcion << " "
@@ -5359,24 +5429,113 @@ int main(int argc, char *argv[]) {
                 }
                 lf << "\n";
             }
+            /* El reparto DENTRO de leer el fuente.  Callado si no hubo tokens
+             * -- el camino de proyecto no pasa por aqui --. */
+            if (tf.tokens > 0) {
+                auto ls = vesta::scout();
+                ls << "[vx] "
+                   << vx::diag::format(
+                          "VXA080",
+                          {std::to_string(tf.lexing_us_est),
+                           std::to_string(tf.analisis_us - tf.lexing_us_est),
+                           std::to_string(tf.tokens),
+                           std::to_string(tf.lexing_samples),
+                           std::to_string(vx::Lexer::kSampleEvery),
+                           std::to_string(tf.ast_decls)})
+                   << "\n";
+            }
+
+            /* Y LO QUE CUESTA SABER: el reparto del ASA por dominio.
+             *
+             * `produce()` ya cronometraba cada uno, pero el numero solo salia
+             * en el volcado `--asa`, que es otra pregunta.  Quien pedia tiempos
+             * no veia el ASA por ningun lado, con lo que su coste se leia
+             * dentro de la fase que lo hubiera disparado y parecia de otro --
+             * que es exactamente lo que acaba de pasar con los limites de
+             * region, contados como si fueran del emisor.
+             *
+             * De mas caro a menos, y con lo mirado al lado de lo afirmado: un
+             * dominio que mira mucho y afirma poco no es caro, es que no esta
+             * sirviendo para nada. */
+            if (!cr.asa_summaries.empty()) {
+                std::vector<const analysis::asa::ProductionSummary *> by_cost;
+                by_cost.reserve(cr.asa_summaries.size());
+                long long asa_us = 0, asa_facts = 0, asa_reused = 0,
+                          asa_silent = 0;
+                for (const auto &r : cr.asa_summaries) {
+                    by_cost.push_back(&r);
+                    asa_us += r.micros;
+                    asa_facts += r.facts;
+                    asa_reused += r.reused;
+                    asa_silent += r.silent;
+                }
+                std::sort(by_cost.begin(), by_cost.end(), asa_costlier_first);
+                auto line = vesta::scout();
+                line << "[asa] "
+                     << vx::diag::format(
+                            "VXA077",
+                            {std::to_string(by_cost.size()),
+                             std::to_string(asa_us), std::to_string(asa_facts),
+                             std::to_string(asa_reused),
+                             std::to_string(asa_silent)})
+                     << "\n";
+                for (const auto *r : by_cost) {
+                    /* Los que no costaron nada NI dijeron nada no ocupan sitio:
+                     * la lista sirve para decidir donde mirar. */
+                    if (r->micros == 0 && r->facts == 0) continue;
+                    line << "[asa] "
+                         << vx::diag::format(
+                                "VXA078",
+                                {r->domain != nullptr ? r->domain : "?",
+                                 std::to_string(r->micros),
+                                 std::to_string(r->facts),
+                                 std::to_string(r->looked_at),
+                                 std::to_string(r->silent),
+                                 std::to_string(r->skipped),
+                                 std::to_string(r->reused)})
+                         << "\n";
+                }
+            }
+
             nlohmann::json jf;
             if (!pases.empty()) {
                 /* En el volcado de maquina van TODOS, que ahi no molesta la
                  * longitud y es lo que permite comparar dos compilaciones. */
                 nlohmann::json jp = nlohmann::json::object();
                 for (const auto &q : pases)
-                    jp[q.nombre] = {{"us", q.us}, {"veces", q.veces}};
-                jf["pases"] = jp;
+                    /* Con el PADRE: el volcado de maquina es lo que permite
+                     * comparar dos compilaciones, y sin saber quien contiene a
+                     * quien no se pueden sumar sin contar dos veces. */
+                    jp[q.name] = {
+                        {"us", q.us},
+                        {"runs", q.runs},
+                        /* En cuantos hilos se midio.  1 = tiempo de pared; mas
+                         * de 1 = suma de los hilos, y entonces dividirlo por el
+                         * total de una fase no significa nada.  Va en el
+                         * volcado de maquina porque es justo ahi donde alguien
+                         * calcula porcentajes. */
+                        {"threads", q.threads},
+                        {"parent", q.parent != nullptr ? q.parent : ""}};
+                jf["passes"] = jp;
             }
-            jf["analisis_us"] = tf.analisis_us;
-            jf["tipos_us"] = tf.tipos_us;
-            jf["bajada_us"] = tf.bajada_us;
-            jf["emitir_us"] = tf.emitir_us;
-            jf["resolver_us"] = tf.resolver_us;
-            jf["modulos_us"] = tf.modulos_us;
-            jf["optimizar_us"] = tf.optimizar_us;
-            jf["comprobar_us"] = tf.comprobar_us();
+            /* Las claves van en INGLES: esto no es prosa que lea una persona en
+             * su idioma -- para eso esta el catalogo -- sino un INTERFAZ que
+             * leen herramientas, o sea identificadores.  Y siguen acabando en
+             * `_us`, que es por lo que el banco las filtra: cambiar el nombre no
+             * puede cambiar lo que otro sabe leer. */
+            jf["analysis_us"] = tf.analisis_us;
+            jf["types_us"] = tf.tipos_us;
+            jf["lowering_us"] = tf.bajada_us;
+            jf["emit_us"] = tf.emitir_us;
+            jf["resolve_us"] = tf.resolver_us;
+            jf["modules_us"] = tf.modulos_us;
+            jf["optimize_us"] = tf.optimizar_us;
+            jf["frontcheck_us"] = tf.comprobar_us();
             jf["frontend_total_us"] = tf.total_us();
+            jf["lexing_us_est"] = tf.lexing_us_est;
+            jf["tokens"] = tf.tokens;
+            jf["lexing_samples"] = tf.lexing_samples;
+            jf["ast_decls"] = tf.ast_decls;
             std::cout << "\n__VESTA_TIMES_FRONTEND__ " << jf.dump() << "\n";
         }
 

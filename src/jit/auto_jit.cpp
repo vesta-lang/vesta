@@ -1045,8 +1045,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
         /* Tier-2: g_branch_profile ya lo poblo maybe_tier2 desde los contadores
          * NATIVOS por linea (g_jit_line_ctrs).  Solo re-if-convertimos. */
         pgo_clone = *ir_fn;
-        bool any = ir::ir_pass_if_conversion(pgo_clone);
-        any = ir::ir_pass_select_simplify(pgo_clone) || any;
+        bool any = ir::applied(ir::ir_pass_if_conversion(pgo_clone));
+        any = ir::applied(ir::ir_pass_select_simplify(pgo_clone)) || any;
         if (any) compile_ir = &pgo_clone;
         if (g_jit_warn_unsupported)
             std::fprintf(stderr,
@@ -1067,8 +1067,8 @@ void maybe_compile_method(runtime::ProcessVM *vm,
                 return 0;
             });
         pgo_clone = *ir_fn;
-        bool any = ir::ir_pass_if_conversion(pgo_clone);
-        any = ir::ir_pass_select_simplify(pgo_clone) || any;
+        bool any = ir::applied(ir::ir_pass_if_conversion(pgo_clone));
+        any = ir::applied(ir::ir_pass_select_simplify(pgo_clone)) || any;
         if (any) compile_ir = &pgo_clone;
         if (g_jit_warn_unsupported && applied > 0)
             std::fprintf(stderr,
@@ -1417,12 +1417,15 @@ CompileResult eager_compile_function(
             for (size_t idx : cuerpos)
                 tmp.functions.push_back((*ir_functions)[idx]);
             for (int it3 = 0; it3 < 5; ++it3) {
-                bool any = ir::ir_pass_inline_multiblock(tmp, 256);
-                any = ir::ir_pass_inline(tmp, 256) || any;
-                any = ir::ir_pass_const_fold(tmp.functions[0]) || any;
-                any = ir::ir_pass_copy_prop(tmp.functions[0]) || any;
-                any = ir::ir_pass_simplify(tmp.functions[0]) || any;
-                any = ir::ir_pass_dce(tmp.functions[0]) || any;
+                bool any = ir::applied(ir::ir_pass_inline_multiblock(tmp, 256));
+                any = ir::applied(ir::ir_pass_inline(tmp, 256)) || any;
+                any = ir::applied(ir::ir_pass_const_fold(tmp.functions[0])) ||
+                      any;
+                any = ir::applied(ir::ir_pass_copy_prop(tmp.functions[0])) ||
+                      any;
+                any =
+                    ir::applied(ir::ir_pass_simplify(tmp.functions[0])) || any;
+                any = ir::applied(ir::ir_pass_dce(tmp.functions[0])) || any;
                 if (!any) break;
             }
             esp_clone = std::move(tmp.functions[0]);
@@ -1685,13 +1688,19 @@ CompileResult eager_compile_function(
                         /* Inline agresivo + limpieza a fixpoint. */
                         bool any_opt = false;
                         for (int it = 0; it < 5; ++it) {
-                            bool any = ir::ir_pass_inline(tmp, 256);
+                            bool any = ir::applied(ir::ir_pass_inline(tmp, 256));
+                            any = ir::applied(ir::ir_pass_const_fold(
+                                      tmp.functions[0])) ||
+                                  any;
+                            any = ir::applied(ir::ir_pass_copy_prop(
+                                      tmp.functions[0])) ||
+                                  any;
+                            any = ir::applied(
+                                      ir::ir_pass_simplify(tmp.functions[0])) ||
+                                  any;
                             any =
-                                ir::ir_pass_const_fold(tmp.functions[0]) || any;
-                            any =
-                                ir::ir_pass_copy_prop(tmp.functions[0]) || any;
-                            any = ir::ir_pass_simplify(tmp.functions[0]) || any;
-                            any = ir::ir_pass_dce(tmp.functions[0]) || any;
+                                ir::applied(ir::ir_pass_dce(tmp.functions[0])) ||
+                                any;
                             any_opt = any_opt || any;
                             if (!any) break;
                         }
@@ -2847,7 +2856,8 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
 
             if (!sites.empty()) {
                 spec_clone = *ir_fn; /* clon mutable */
-                if (ir::ir_pass_speculative_devirt(spec_clone, sites)) {
+                if (ir::applied(
+                        ir::ir_pass_speculative_devirt(spec_clone, sites))) {
                     ir::IrModule tmp;
                     tmp.functions.push_back(spec_clone);
                     for (const auto &cn : callee_names) {
@@ -2859,11 +2869,19 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
                     }
                     /* inline del CALL fast-path + limpieza a fixpoint. */
                     for (int it = 0; it < 5; ++it) {
-                        bool any = ir::ir_pass_inline(tmp);
-                        any = ir::ir_pass_const_fold(tmp.functions[0]) || any;
-                        any = ir::ir_pass_copy_prop(tmp.functions[0]) || any;
-                        any = ir::ir_pass_simplify(tmp.functions[0]) || any;
-                        any = ir::ir_pass_dce(tmp.functions[0]) || any;
+                        bool any = ir::applied(ir::ir_pass_inline(tmp));
+                        any =
+                            ir::applied(ir::ir_pass_const_fold(
+                                tmp.functions[0])) ||
+                            any;
+                        any = ir::applied(
+                                  ir::ir_pass_copy_prop(tmp.functions[0])) ||
+                              any;
+                        any = ir::applied(
+                                  ir::ir_pass_simplify(tmp.functions[0])) ||
+                              any;
+                        any = ir::applied(ir::ir_pass_dce(tmp.functions[0])) ||
+                              any;
                         if (!any) break;
                     }
                     spec_clone = std::move(tmp.functions[0]);

@@ -63,6 +63,8 @@ VESTA_ENV_FLAG(NoStrengthReduce, "VESTA_NO_SR", Emitted, Optimizer, Bool, Any)
 VESTA_ENV_FLAG(NoMbInline, "VESTA_NO_MB_INLINE", Emitted, Optimizer, Bool, Any)
 VESTA_ENV_FLAG(NoSpecDevirt, "VESTA_NO_SPEC_DEVIRT", Emitted, Optimizer, Bool,
                Any)
+VESTA_ENV_FLAG(NoLocalSkip, "VESTA_NO_LOCAL_SKIP", Emitted, Optimizer, Bool,
+               Any)
 VESTA_ENV_FLAG(ModuleInitChunk, "VESTA_MODULE_INIT_CHUNK", Emitted, Optimizer,
                Int, Any)
 VESTA_ENV_FLAG(TreeShake, "VX_TREE_SHAKE", Emitted, Optimizer, Bool, Any)

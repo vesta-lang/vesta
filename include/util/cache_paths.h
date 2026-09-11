@@ -199,6 +199,28 @@ const std::string &cache_dir(CacheKind kind);
  */
 std::string cache_dir_under(const std::string &root, CacheKind kind);
 
+/**
+ * @brief Si el usuario pidio NO usar la cache (`VX_NO_CACHE`).
+ *
+ * Vive aqui, con el reparto, porque la respuesta tiene que ser la MISMA para
+ * todos los cajones.  Estaba escrita dentro del camino de proyecto y solo la
+ * consultaba el suyo, asi que con la bandera puesta seguian escribiendose el
+ * `.velb` del comptime y el grafo de depuracion -- medido: 79 y 522 ficheros --.
+ *
+ * Eso no es un detalle de limpieza: una bandera que dice "sin cache" y deja
+ * cajones vivos hace que una medicion PAREZCA en frio sin serlo, y de ahi
+ * salieron 40 segundos en la primera corrida contra 8,5 en la segunda dando por
+ * hecho que las dos eran frias.  El modo de fallar es el peor: da el numero que
+ * hace parecer buena la medida.
+ *
+ * "Sin cache" significa las dos cosas: no se LEE y no se ESCRIBE.  Leer sin
+ * escribir dejaria la primera compilacion mas lenta y todas las demas rapidas,
+ * que es justo lo que se quiere evitar al medir.
+ *
+ * @return true si no hay que leer ni escribir NADA de la cache.
+ */
+bool cache_disabled();
+
 } // namespace util
 
 #endif // VESTA_UTIL_CACHE_PATHS_H

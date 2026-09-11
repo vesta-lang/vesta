@@ -164,6 +164,7 @@
 #include "analysis/facts/demanded_bits.h"
 #include "analysis/facts/value_range.h"
 #include "analysis/manager/analysis_manager.h"
+#include "util/reloj.h" // NUESTRO reloj, calibrado y barato de leer
 #include "analysis/manager/analysis_store.h" // el nivel [1] a DISCO, entre compilaciones
 #include "analysis/effects/effect_analysis.h" // el motor de efectos, compartido
 #include "analysis/effects/param_aliasing.h"  // que le llega a cada parametro
@@ -634,7 +635,101 @@ class FactBase {
     /// cache).
     size_t computations() const { return computations_; }
 
+    /// Lo que costo un analisis, y cuantas veces se pidio y se ejecuto.
+    struct AnalysisStats {
+        const char *name = nullptr; ///< como se llama, para poder decirlo.
+        long long micros = 0;       ///< tiempo dentro del calculo.
+        size_t queries = 0;         ///< veces que se pidio.
+        size_t computes = 0;        ///< de esas, las que hubo que calcular.
+    };
+
+    /**
+     * @brief El reparto POR ANALISIS, para quien lo quiera ensenar.
+     *
+     * Vacio si no se pidieron tiempos: medir tiene que costar solo cuando se
+     * mide.  @see memoized
+     */
+    const std::vector<AnalysisStats> &analysis_stats() const {
+        return analysis_stats_;
+    }
+
   private:
+    /**
+     * @brief La UNICA puerta de la base al gestor de analisis.
+     *
+     * Todo lo que la base memoiza pasa por aqui, y por eso aqui es donde se
+     * cuenta y se cronometra.  Los dos motivos del diseno:
+     *
+     * **Que no se pueda olvidar.**  Antes cada accesor escribia a mano su
+     * contador y su cronometro, y olvidarse no daba error: el analisis salia
+     * con cero y eso se lee como "es gratis", no como "no se midio" -- que es
+     * la clase de fallo mudo que este proyecto no admite.  Y ya habia pasado:
+     * el primer intento enumeraba CINCO analisis a mano cuando la base tiene
+     * once, asi que seis quedaban sin medir sin que nada lo dijera.  Ahora la
+     * ranura se deriva de la IDENTIDAD DEL TIPO (@c A::ID), asi que un analisis
+     * nuevo entra medido por el hecho de existir; y su nombre sale de
+     * @c A::kName, de modo que uno que no lo declare NO COMPILA.
+     *
+     * **Que no cueste cuando no se mide.**  Todo lo de medir vive detras de una
+     * sola rama sobre una bandera que se lee UNA vez por proceso.  Apagado no
+     * se lee el reloj, no se toca ningun contador y no se busca ninguna ranura:
+     * queda la rama, que el predictor acierta siempre.  Es el mismo patron que
+     * el proyecto ya usa para el perfilado de la capa 3.
+     *
+     * @tparam A       Tipo del analisis; necesita @c ID y @c kName .
+     * @tparam T       Tipo del resultado.
+     * @tparam Factory Como calcularlo si no esta.
+     * @param fresh    Si NO estaba cacheado.  Lo pasa el accesor, que ya lo
+     *                 pregunto para decidir si sellar: preguntarlo aqui otra vez
+     *                 seria una segunda busqueda por consulta, y hay decenas de
+     *                 miles.  Va como parametro OBLIGATORIO, no como algo que
+     *                 se pueda dejar de pasar.
+     * @param unit     Clave de la unidad (funcion o modulo), ya internada.
+     * @param version  Version con la que vale el resultado.
+     * @param factory  Se invoca solo si hay que calcular.
+     * @return El resultado, de la cache o recien calculado.
+     */
+    template <class A, class T, class Factory>
+    const T &memoized(bool fresh, const std::string *unit, uint64_t version,
+                      Factory &&factory) {
+        ++queries_;
+        if (fresh) ++computations_;
+        if (!telemetry_on()) {
+            return manager_.template get_or_compute_v<A, T>(
+                unit, version, std::forward<Factory>(factory));
+        }
+        /* `A::kName` no es decorativo: es lo que obliga a que un analisis nuevo
+         * diga como se llama antes de poder memoizarse. */
+        AnalysisStats &st = stats_slot(analysis_id<A>(), A::kName);
+        ++st.queries;
+        if (fresh) ++st.computes;
+        /* NUESTRO reloj, no el de la biblioteca: se lee mas barato y su
+         * resolucion esta CALIBRADA y a la vista, que es lo que permite saber
+         * si una cifra significa algo.  @see util/reloj.h */
+        const uint64_t t0 = util::reloj::ahora();
+        const T &out = manager_.template get_or_compute_v<A, T>(
+            unit, version, std::forward<Factory>(factory));
+        st.micros += util::reloj::a_ns(util::reloj::ahora() - t0) / 1000;
+        return out;
+    }
+
+    /// Si se han pedido tiempos.  Se resuelve UNA vez por proceso.
+    static bool telemetry_on() noexcept;
+
+    /**
+     * @brief La ranura de @p id, creandola la primera vez.
+     * @param id   Identidad del analisis.
+     * @param name Como se llama.
+     * @return Su ranura.
+     */
+    AnalysisStats &stats_slot(AnalysisID id, const char *name);
+
+    /// El reparto por analisis.  Solo se llena si @ref telemetry_on .
+    std::vector<AnalysisStats> analysis_stats_;
+    /// Paralelo a @ref analysis_stats_ : la identidad de cada ranura.  Son un
+    /// punado, asi que un vector plano gana a cualquier tabla hash.
+    std::vector<AnalysisID> analysis_ids_;
+
     /// Identidad de @p fn dentro del modulo.  Sin nombre no hay identidad
     /// estable, y entonces vale su direccion: es unica mientras la funcion
     /// viva, que es lo que dura la base.

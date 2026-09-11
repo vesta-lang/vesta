@@ -38,6 +38,10 @@ namespace analysis {
 /// Marcador del analisis de hechos IR (identidad para el AnalysisManager).
 struct IRFactsAnalysis {
     static char ID;
+    /// Como se llama al medirlo.  Lo exige @c FactBase::memoized , que es la
+    /// unica puerta de la base al gestor: asi un analisis nuevo no puede
+    /// quedarse sin medir por olvido -- sin nombre no compila.
+    static constexpr const char *kName = "structure";
 };
 
 /// Hechos de una funcion.  Resultado value-type (sin gancho survives -> por

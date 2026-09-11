@@ -56,6 +56,8 @@
 #ifndef IR_PASSES_UNROLL_H
 #define IR_PASSES_UNROLL_H
 
+#include "ir/pass_result.h"
+
 namespace analysis {
 namespace asa {
 class FactStore;
@@ -84,8 +86,8 @@ struct IrFunction;
  * habia AQUI, ni antes ni despues.  Y como el almacen viaja a disco, la
  * proxima compilacion puede reutilizarlos en vez de volver a deducirlos.
  */
-bool ir_pass_unroll(IrFunction &fn, int factor = 0,
-                    analysis::asa::FactStore *facts = nullptr);
+PassResult ir_pass_unroll(IrFunction &fn, int factor = 0,
+                          analysis::asa::FactStore *facts = nullptr);
 
 } // namespace ir
 

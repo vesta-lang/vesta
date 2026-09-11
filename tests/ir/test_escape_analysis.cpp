@@ -227,7 +227,7 @@ int main() {
         IrFunction caller = make_readonly_caller();
         check(count_new_calls(caller) == 1,
               "read_only: 1 call __new_Foo antes");
-        bool changed = ir_pass_scalar_replace_gc(caller, mod);
+        bool changed = applied(ir_pass_scalar_replace_gc(caller, mod));
         check(changed, "read_only: el pase reporta cambio");
         check(count_new_calls(caller) == 0,
               "read_only: el alloc se elimino (scalar replacement)");
@@ -238,7 +238,7 @@ int main() {
         IrModule mod = make_module_with_foo();
         IrFunction caller = make_mutable_caller();
         check(count_new_calls(caller) == 1, "mutable: 1 call __new_Foo antes");
-        bool changed = ir_pass_scalar_replace_gc(caller, mod);
+        bool changed = applied(ir_pass_scalar_replace_gc(caller, mod));
         check(changed, "mutable: el pase reporta cambio");
         check(count_new_calls(caller) == 0,
               "mutable: el alloc se elimino (field versioning)");
@@ -249,7 +249,7 @@ int main() {
         IrModule mod = make_module_with_foo();
         IrFunction caller = make_phi_caller();
         check(count_new_calls(caller) == 2, "phi: 2 call __new_Foo antes");
-        ir_pass_scalar_replace_gc(caller, mod);
+        (void)applied(ir_pass_scalar_replace_gc(caller, mod));
         check(count_new_calls(caller) == 2,
               "phi: los allocs se preservan (bail por uso en PHI)");
     }
@@ -259,7 +259,7 @@ int main() {
         IrModule mod = make_module_with_foo();
         IrFunction caller = make_escaping_caller();
         check(count_new_calls(caller) == 1, "escaping: 1 call __new_Foo antes");
-        ir_pass_scalar_replace_gc(caller, mod);
+        (void)applied(ir_pass_scalar_replace_gc(caller, mod));
         check(count_new_calls(caller) == 1,
               "escaping: el alloc se preserva (objeto retornado)");
     }
@@ -270,7 +270,7 @@ int main() {
         IrModule mod = make_module_with_foo();
         IrFunction caller = make_crossblock_caller();
         check(count_new_calls(caller) == 1, "crossb: 1 call __new_Foo antes");
-        bool changed = ir_pass_scalar_replace_gc(caller, mod);
+        bool changed = applied(ir_pass_scalar_replace_gc(caller, mod));
         check(changed, "crossb: el pase reporta cambio");
         check(count_new_calls(caller) == 0,
               "crossb: el alloc se elimino (mem2reg cross-block)");

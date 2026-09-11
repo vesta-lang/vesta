@@ -135,8 +135,9 @@ bool lower_straight_line_runs(IrFunction &fn, analysis::asa::FactStore *facts) {
 
 } // namespace
 
-bool ir_pass_bulk_memory_lower(IrFunction &fn,
-                               analysis::asa::FactStore *facts) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static bool bulk_memory_lower_impl(IrFunction &fn,
+                                   analysis::asa::FactStore *facts) {
     if (fn.is_native || fn.blocks.empty()) return false;
     /* Quien IMPLEMENTA el movimiento de memoria no puede ver su bucle
      * reducido a un movimiento de memoria: seria una llamada a si mismo.  Es
@@ -271,6 +272,11 @@ bool ir_pass_bulk_memory_lower(IrFunction &fn,
         cambiado = true;
     }
     return cambiado;
+}
+
+PassResult ir_pass_bulk_memory_lower(IrFunction &fn,
+                                     analysis::asa::FactStore *facts) {
+    return PassResult::of(fn, bulk_memory_lower_impl(fn, facts));
 }
 
 } // namespace ir

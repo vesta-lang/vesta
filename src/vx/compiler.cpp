@@ -15,6 +15,7 @@
  * @brief Implementacion del facade del compilador Vesta.
  */
 
+#include "util/crono_tramo.h" // partir la fase de emitir en lo que de verdad es
 #include "util/env_flags.h"
 #include "vx/compiler.h"
 #include "vx/source_text.h"  // un solo fin de linea para todo el pipeline
@@ -76,6 +77,60 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include <vector>
 
 namespace vx {
+
+namespace {
+
+/**
+ * @brief Las fases del frontend, encadenadas como TRAMOS y no como restas.
+ *
+ * Una fase medida restando marcas no es un ambito: lo que corre dentro no sabe
+ * en cual esta, y entonces el informe es una lista plana donde no se distingue
+ * lo que se suma de lo que esta contenido.  Abriendo un tramo por fase, todo lo
+ * que se cronometre dentro cuelga de ella sola.
+ *
+ * Va en una clase y no en llamadas sueltas porque abrir y cerrar a mano se
+ * despareja: una fase que se abre y no se cierra deja la pila corrida y a
+ * partir de ahi TODOS los tramos cuelgan del padre equivocado -- un informe que
+ * miente sin dar ningun error.  Aqui el destructor cierra lo que quede abierto,
+ * asi que ni siquiera un `return` a media funcion lo rompe.
+ */
+class PhaseChain {
+  public:
+    /// @param on Si se pidieron tiempos.  Apagado, no hace absolutamente nada.
+    explicit PhaseChain(bool on) : on_(on) {}
+    ~PhaseChain() { close(0); }
+
+    /**
+     * @brief Cierra la fase abierta, si la hay, y abre @p name .
+     * @param name Etiqueta estable de la fase que empieza.
+     */
+    void open(const char *name) {
+        if (!on_) return;
+        close(0);
+        name_ = name;
+        parent_ = util::enter_span(name);
+    }
+
+    /**
+     * @brief Cierra la fase abierta y le atribuye @p us .
+     * @param us Lo que duro, en microsegundos (lo dice la resta de siempre).
+     */
+    void close(long us) {
+        if (!on_ || name_ == nullptr) return;
+        util::leave_span(name_, parent_, static_cast<long long>(us) * 1000);
+        name_ = nullptr;
+    }
+
+    PhaseChain(const PhaseChain &) = delete;
+    PhaseChain &operator=(const PhaseChain &) = delete;
+
+  private:
+    bool on_;
+    const char *name_ = nullptr;
+    const char *parent_ = nullptr;
+};
+
+} // namespace
 
 /**
  * @brief Convierte un entero 0..3 al enum ir::OptLevel.
@@ -308,6 +363,20 @@ CompileResult compile_vx_source(const std::string &source,
     // una medida que hay que pedir con una opcion es una medida que nadie
     // mira.  De aqui sale ademas el "cuanto tardo en ver el error", que es la
     // suma de analisis y tipos.
+    /* Y ADEMAS como tramos, para que lo de dentro pueda colgar de ellas.
+     *
+     * Las fases se median restando marcas, y una resta no es un ambito: nada
+     * de lo que corre dentro sabe en cual esta, asi que el informe salia PLANO
+     * -- una lista de numeros que se solapan sin decir cual contiene a cual --.
+     * Ahi se escondieron las tres atribuciones equivocadas de esta sesion:
+     * `emitir` no emitia (1810 de sus 2386 ms eran comprobar limites), `bajada`
+     * no bajaba, y el analisis de escape parecia del emisor.
+     *
+     * Se mantiene la resta porque es la que rellena los campos que ya publica
+     * el compilador; el tramo se abre y se cierra a la par, y lo unico que
+     * anade es el PADRE de lo que corra dentro. */
+    PhaseChain phases(util::flag_on(util::FlagId::Times));
+    phases.open("frontend:analysis");
     using RelojFase = std::chrono::steady_clock;
     auto marca = RelojFase::now();
     auto cerrar_fase = [&marca]() -> long {
@@ -429,6 +498,17 @@ CompileResult compile_vx_source(const std::string &source,
     }
 
     res.tiempos.analisis_us = cerrar_fase();
+    phases.close(res.tiempos.analisis_us);
+    phases.open("frontend:types");
+    /* El reparto DENTRO de esa fase.  Lexer y parser no son dos bloques -- el
+     * parser tira de tokens bajo demanda --, asi que el lexico se muestrea y lo
+     * que queda es la sintaxis.  Y los tamanos al lado: lo caro de un lexer se
+     * juzga por token, no por fichero, y sin el denominador el numero no dice
+     * si el fuente era grande o el codigo lento. */
+    res.tiempos.lexing_us_est = static_cast<long>(lx.estimated_micros());
+    res.tiempos.tokens = static_cast<long long>(lx.tokens());
+    res.tiempos.lexing_samples = static_cast<long long>(lx.samples());
+    res.tiempos.ast_decls = static_cast<long long>(mod->decls.size());
 
     // 2. TypeChecker: rellena result_type y valida semantica.
     TypeChecker tc(*mod, res.diagnostics);
@@ -594,6 +674,8 @@ CompileResult compile_vx_source(const std::string &source,
     }
 
     res.tiempos.tipos_us = cerrar_fase();
+    phases.close(res.tiempos.tipos_us);
+    phases.open("frontend:lowering");
 
     // 3. Lowering: AST -> ir::IrModule.  Pasamos el TypeChecker para
     // que el lowering pueda consultar StructLayout (offsets/tamanos)
@@ -789,9 +871,20 @@ CompileResult compile_vx_source(const std::string &source,
     }
     const std::string mod_name =
         opts.module_name.empty() ? std::string("main") : opts.module_name;
-    if (!lo.run(irmod, mod_name)) {
-        res.ok = false;
-        return res;
+    {
+        /* La bajada DE VERDAD, con su propio cronometro.  La fase `bajada` se
+         * cierra trescientas lineas mas abajo, asi que se traga tambien la
+         * emision de la informacion de depuracion y los volcados de diagramas.
+         * Es el mismo vicio que tenia `emitir` -- una fase medida como "lo que
+         * queda hasta aqui" acusa de su coste a lo primero que lleve dentro --,
+         * y sin separarlo quien quisiera optimizar la bajada miraria donde no
+         * esta. */
+        util::CronoTramo t_("lower:run",
+                            util::flag_on(util::FlagId::Times));
+        if (!lo.run(irmod, mod_name)) {
+            res.ok = false;
+            return res;
+        }
     }
 
     /* Comprobar que el IR recien construido cumple sus propias reglas: cada
@@ -1158,6 +1251,12 @@ CompileResult compile_vx_source(const std::string &source,
     // mientras el asignador solo sabia del banco entero.
 
     res.tiempos.bajada_us = cerrar_fase();
+    phases.close(res.tiempos.bajada_us);
+    /* De aqui al final conviven optimizar y emitir, y sus tiempos se reparten
+     * por resta al cerrar.  El tramo se llama por lo que de verdad envuelve --
+     * las dos -- en vez de mentir llamandose `emit`, que es lo que hacia que el
+     * coste de comprobar limites pareciera del emisor. */
+    phases.open("frontend:optimize+emit");
 
     // 4. Emitir IR -> texto .vel.  Aqui es donde el optimizador IR
     // hace DCE / copy prop / etc segun opt_level y el regalloc lineal
@@ -1203,8 +1302,10 @@ CompileResult compile_vx_source(const std::string &source,
                 bool changed = true;
                 while (changed) {
                     changed = false;
-                    if (ir::ir_pass_const_fold(fn)) changed = true;
-                    if (ir::ir_pass_unreachable(fn)) changed = true;
+                    if (ir::applied(ir::ir_pass_const_fold(fn)))
+                        changed = true;
+                    if (ir::applied(ir::ir_pass_unreachable(fn)))
+                        changed = true;
                 }
             }
             res.ir_module_cache_bytes_preopt =
@@ -1499,10 +1600,21 @@ CompileResult compile_vx_source(const std::string &source,
          * queda aqui para el siguiente que lo necesite en el mismo momento, en
          * vez de que cada uno se lo calcule entero. */
         analysis::asa::FactBase fact_base(analysis::asa::kStagePostOpt);
-        vx_report_bounds(irmod_for_section, res.diagnostics, filename,
-                         fact_base,
-                         opts.violations_are_errors ? DiagLevel::ERR
-                                                    : DiagLevel::WARN);
+        {
+            /* Con su propio cronometro, porque esto NO es emitir.  La fase
+             * `emitir` se mide como "lo que queda desde el final de la bajada",
+             * asi que se traga tambien las comprobaciones que corren aqui --
+             * los limites de region arrastran el analisis de escape del modulo
+             * entero, que por si solo son cientos de milisegundos --.  Sin
+             * separarlo, el numero acusa al emisor de un coste que no es suyo,
+             * y quien fuera a optimizarlo miraria donde no esta. */
+            util::CronoTramo t_("emit:report_bounds",
+                                util::flag_on(util::FlagId::Times));
+            vx_report_bounds(irmod_for_section, res.diagnostics, filename,
+                             fact_base,
+                             opts.violations_are_errors ? DiagLevel::ERR
+                                                        : DiagLevel::WARN);
+        }
         /* La exclusividad de los prestamos NO se comprueba aqui: se hizo antes
          * de optimizar, que es donde todavia existen las llamadas que la
          * demuestran.  Ver el comentario de alli. */
@@ -1588,8 +1700,14 @@ CompileResult compile_vx_source(const std::string &source,
     emit_opts.ya_optimizado = emitir_desde_optimizado;
     ir::EmitResult eres;
     if (!opts.ir_only) {
-        eres = ir::ir_emit_module(
-            emitir_desde_optimizado ? mod_para_seccion : irmod, emit_opts);
+        {
+            /* El emisor DE VERDAD, separado de lo que le rodea.  @see el
+             * cronometro de `emit:report_bounds`. */
+            util::CronoTramo t_("emit:ir_emit_module",
+                                util::flag_on(util::FlagId::Times));
+            eres = ir::ir_emit_module(
+                emitir_desde_optimizado ? mod_para_seccion : irmod, emit_opts);
+        }
 
         /* PRUEBA: el artefacto comptime, FILTRANDO EL IR en vez de recortar el
          * fuente.
@@ -1691,6 +1809,7 @@ CompileResult compile_vx_source(const std::string &source,
      * responder si `--analyze` -- que necesita el IR optimizado pero NO el
      * texto `.vel` -- se puede ahorrar la emision. */
     res.tiempos.emitir_us = cerrar_fase() - res.tiempos.optimizar_us;
+    phases.close(res.tiempos.emitir_us + res.tiempos.optimizar_us);
 
     res.ok = !res.diagnostics.has_errors();
     return res;

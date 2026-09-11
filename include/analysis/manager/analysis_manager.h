@@ -146,6 +146,7 @@
 #ifndef VESTA_ANALYSIS_MANAGER_H
 #define VESTA_ANALYSIS_MANAGER_H
 
+#include "util/env_flags.h"    // medir la espera del cerrojo es OPCIONAL
 #include "util/shared_mutex.h" // lector/escritor SIN la emulacion de pthreads
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
 
@@ -153,7 +154,8 @@
 #include <memory>
 #include <atomic> // los aciertos se cuentan desde el camino compartido
 #include <mutex>
-#include <shared_mutex> // `std::shared_lock`, el RAII de lectura
+// Los RAII del cerrojo son los de `detail` de este mismo fichero: toman igual
+// que los de la biblioteca y ademas apuntan cuanto costo ENTRAR.
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -339,21 +341,31 @@ class AnalysisManager {
          * variante sin version: si la pila esta vacia nadie depende de esto y
          * la consulta solo LEE.  Es el caso normal dentro del bucle repartido,
          * y con cerrojo exclusivo era donde los hilos hacian cola. */
+        Shard &sh = shard_of(unit);
+        /* Si ya se miro arriba no se vuelve a mirar: para una consulta caduca de
+         * nivel superior eran DOS busquedas y dos tomas del cerrojo para saber
+         * lo mismo. */
+        bool stale_now = false;
+        bool already_looked = false;
         if (stack().empty()) {
             bool was_absent = false;
             {
-                std::shared_lock<util::SharedMutex> rl(m_);
-                auto hit = results_.find(k);
-                if (hit != results_.end() && hit->second->version == version) {
-                    aciertos_.fetch_add(1, std::memory_order_relaxed);
+                util::TimedSharedLock rl(sh.m, shared_wait_slot());
+                auto hit = sh.results.find(k);
+                stale_now = (hit != sh.results.end() &&
+                             hit->second->version != version);
+                if (hit != sh.results.end() &&
+                    hit->second->version == version) {
+                    hits_.fetch_add(1, std::memory_order_relaxed);
                     // Respaldar antes de entregar: ver la nota de abajo.
                     retained().push_back(hit->second);
                     return static_cast<AnalysisResultModel<T> *>(
                                hit->second.get())
                         ->result;
                 }
-                was_absent = (hit == results_.end());
+                was_absent = (hit == sh.results.end());
             }
+            already_looked = true;
             /* NO ESTABA: se calcula y se guarda con UNA sola toma del
              * exclusivo, en vez de dos.
              *
@@ -374,35 +386,57 @@ class AnalysisManager {
                 stack().push_back(k);
                 T value = factory();
                 stack().pop_back();
-                std::unique_lock<util::SharedMutex> lk(m_);
                 /* Pudo aparecer mientras se calculaba -- otro hilo, o una
-                 * consulta anidada de la propia fabrica --.  Si lo que hay es
-                 * de OTRA version, hay que sacarlo con lo que dependia de el,
-                 * igual que hace el camino de abajo. */
-                auto existing = results_.find(k);
-                if (existing != results_.end() &&
-                    existing->second->version != version) {
-                    ++caducados_;
-                    invalidate_key(k);
-                } else if (existing == results_.end()) {
-                    ++nuevos_;
+                 * consulta anidada de la propia fabrica --.  Si lo que hay es de
+                 * OTRA version, hay que sacarlo con lo que dependia de el.
+                 *
+                 * Se MIRA con el compartido y se saca por `drop_key`, ANTES de
+                 * tomar el exclusivo de la franja: sacarlo cascadea, y una
+                 * cascada toma el cerrojo de cascada primero.  Hacerlo con la
+                 * franja ya puesta invertiria ese orden, que es lo unico que
+                 * podria bloquear. */
+                bool stale_now = false;
+                {
+                    util::TimedSharedLock rl(sh.m, shared_wait_slot());
+                    auto existing = sh.results.find(k);
+                    if (existing == sh.results.end())
+                        fresh_.fetch_add(1, std::memory_order_relaxed);
+                    else if (existing->second->version != version)
+                        stale_now = true;
                 }
+                if (stale_now) {
+                    stale_.fetch_add(1, std::memory_order_relaxed);
+                    drop_key(k);
+                }
+                util::TimedUniqueLock lk(sh.m, exclusive_wait_slot());
                 auto model =
                     std::make_shared<AnalysisResultModel<T>>(std::move(value));
                 model->version = version;
                 T &ref = model->result;
                 retained().push_back(model); // ver el caso de acierto
-                results_[k] = std::move(model);
-                index_add(k);
+                sh.results[k] = std::move(model);
+                index_add(sh, k);
                 return ref;
             }
         }
-        std::unique_lock<util::SharedMutex> lk(m_);
-        if (!stack().empty()) rev_deps_[k].insert(stack().back());
-        auto it = results_.find(k);
-        if (it != results_.end()) {
+        /* Caduco, si lo esta: se saca ANTES de tomar la franja, por el mismo
+         * motivo que arriba -- sacarlo cascadea, y la cascada va primero --. */
+        if (!already_looked) {
+            util::TimedSharedLock rl(sh.m, shared_wait_slot());
+            auto pre = sh.results.find(k);
+            stale_now =
+                (pre != sh.results.end() && pre->second->version != version);
+        }
+        if (stale_now) {
+            stale_.fetch_add(1, std::memory_order_relaxed);
+            drop_key(k);
+        }
+        util::TimedUniqueLock lk(sh.m, exclusive_wait_slot());
+        if (!stack().empty()) sh.rev_deps[k].insert(stack().back());
+        auto it = sh.results.find(k);
+        if (it != sh.results.end()) {
             if (it->second->version == version) {
-                aciertos_.fetch_add(1, std::memory_order_relaxed);
+                hits_.fetch_add(1, std::memory_order_relaxed);
                 // Respaldar antes de entregar: si otro hilo invalida esta
                 // unidad -- o una de la que depende --, el mapa suelta su
                 // referencia pero el objeto sigue vivo mientras el llamante lo
@@ -411,10 +445,19 @@ class AnalysisManager {
                 return static_cast<AnalysisResultModel<T> *>(it->second.get())
                     ->result;
             }
-            ++caducados_;
-            invalidate_key(k); // caduco: fuera, y con el lo que dependia de el
-        } else {
-            ++nuevos_;
+            /* Reapareci caduco entre el mirar de arriba y esta toma: otro hilo
+             * lo guardo.  Se deja estar y se recalcula encima -- sacarlo aqui
+             * invertiria el orden de cerrojos --, que es lo que hace el `[k] =`
+             * de abajo de todas formas. */
+            stale_.fetch_add(1, std::memory_order_relaxed);
+        } else if (!stale_now) {
+            /* Ausente porque NUNCA estuvo.  Si lo acabamos de sacar por caduco,
+             * esta consulta ya se conto como caducada arriba: contarla tambien
+             * como nueva la cuenta DOS veces, y eso hundia la tasa de acierto
+             * del informe sin que hubiera cambiado nada -- del 47 % al 30 % por
+             * un denominador inflado, que es como una medida se vuelve una
+             * mentira que encima parece un hallazgo. */
+            fresh_.fetch_add(1, std::memory_order_relaxed);
         }
         stack().push_back(k);
         lk.unlock(); // la fabrica, sin el cerrojo puesto
@@ -425,8 +468,8 @@ class AnalysisManager {
         model->version = version;
         T &ref = model->result;
         retained().push_back(model); // ver el caso de acierto
-        results_[k] = std::move(model);
-        index_add(k);
+        sh.results[k] = std::move(model);
+        index_add(sh, k);
         return ref;
     }
 
@@ -446,10 +489,11 @@ class AnalysisManager {
          *
          * Con cerrojo compartido los lectores no se estorban.  El calculo y la
          * invalidacion siguen siendo exclusivos, que es lo unico que muta. */
+        Shard &sh = shard_of(unit);
         if (stack().empty()) {
-            std::shared_lock<util::SharedMutex> rl(m_);
-            auto hit = results_.find(k);
-            if (hit != results_.end()) {
+            util::TimedSharedLock rl(sh.m, shared_wait_slot());
+            auto hit = sh.results.find(k);
+            if (hit != sh.results.end()) {
                 // Respaldar antes de entregar, igual que la variante con
                 // version: el cerrojo compartido protege la TABLA mientras se
                 // busca, no el objeto despues de soltarlo.  Sin esto, otro
@@ -461,10 +505,10 @@ class AnalysisManager {
             }
         }
         // Dependencia: el computo en curso (tope de la pila) depende de k.
-        std::unique_lock<util::SharedMutex> lk(m_);
-        if (!stack().empty()) rev_deps_[k].insert(stack().back());
-        auto it = results_.find(k);
-        if (it != results_.end()) {
+        util::TimedUniqueLock lk(sh.m, exclusive_wait_slot());
+        if (!stack().empty()) sh.rev_deps[k].insert(stack().back());
+        auto it = sh.results.find(k);
+        if (it != sh.results.end()) {
             retained().push_back(it->second); // ver el caso de arriba
             return static_cast<AnalysisResultModel<T> *>(it->second.get())
                 ->result;
@@ -482,8 +526,8 @@ class AnalysisManager {
         auto model = std::make_shared<AnalysisResultModel<T>>(std::move(value));
         T &ref = model->result;
         retained().push_back(model); // ver el caso de acierto
-        results_[k] = std::move(model);
-        index_add(k);
+        sh.results[k] = std::move(model);
+        index_add(sh, k);
         return ref;
     }
 
@@ -496,9 +540,10 @@ class AnalysisManager {
     /// tiene que usar @ref cached_v -- preguntarlo con esta cuenta de menos los
     /// recomputos, y con ellos se pierden los sellos que dependan de saberlo.
     template <class A> bool cached(const std::string *unit) const {
-        // Solo LEE: cerrojo compartido.
-        std::shared_lock<util::SharedMutex> lk(m_);
-        return results_.count(Key{analysis_id<A>(), unit}) != 0;
+        // Solo LEE, y solo su franja: cerrojo compartido de una sola.
+        const Shard &s = shard_of(unit);
+        util::TimedSharedLock lk(s.m, shared_wait_slot());
+        return s.results.count(Key{analysis_id<A>(), unit}) != 0;
     }
 
     /**
@@ -513,16 +558,16 @@ class AnalysisManager {
      */
     template <class A>
     bool cached_v(const std::string *unit, uint64_t version) const {
-        std::shared_lock<util::SharedMutex> lk(m_);
-        const auto it = results_.find(Key{analysis_id<A>(), unit});
-        return it != results_.end() && it->second->version == version;
+        const Shard &s = shard_of(unit);
+        util::TimedSharedLock lk(s.m, shared_wait_slot());
+        const auto it = s.results.find(Key{analysis_id<A>(), unit});
+        return it != s.results.end() && it->second->version == version;
     }
 
     /// Invalida el resultado @c A de @p unit y, transitivamente, todo lo que
     /// dependia de el (ambos ejes).
     template <class A> void invalidate(const std::string *unit) {
-        std::lock_guard<util::SharedMutex> lk(m_);
-        invalidate_key(Key{analysis_id<A>(), unit});
+        drop_key(Key{analysis_id<A>(), unit});
     }
 
     /// Invalida los resultados de @p unit que NO sobreviven a @p preserved
@@ -537,17 +582,45 @@ class AnalysisManager {
          * se nota (0,06 s en el perfil), pero el coste crece con el producto de
          * unidades por invalidaciones: es de orden equivocado, y eso se
          * descubre tarde y caro cuando alguien compila un modulo grande. */
-        std::lock_guard<util::SharedMutex> lk(m_);
-        auto u = keys_by_unit_.find(unit);
-        if (u == keys_by_unit_.end()) return;
-        std::vector<Key> dead;
-        for (const Key &k : u->second) {
-            auto it = results_.find(k);
-            if (it != results_.end() && !it->second->survives(preserved))
-                dead.push_back(k);
+        /* Cascada: el de cascada PRIMERO y el de la franja despues, que es el
+         * orden fijo que descarta el bloqueo mutuo.  @see cascade_m_ */
+        util::TimedUniqueLock cl(cascade_m_, exclusive_wait_slot());
+        std::vector<Key> con_dependientes;
+        {
+            /* EXCLUSIVO, y sin soltarlo entre mirar y sacar.
+             *
+             * Con el compartido habia una VENTANA: otro hilo podia guardar una
+             * entrada RECIEN calculada entre las dos cosas, y se invalidaba
+             * acto seguido.  Medido, eso recalculaba 220.000 analisis de mas --
+             * tres por funcion -- y dejaba la compilacion mas lenta que con un
+             * solo cerrojo.  Lo delato la cuenta de `nuevos`, no el reloj. */
+            Shard &s = shard_of(unit);
+            util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
+            auto u = s.keys_by_unit.find(unit);
+            if (u == s.keys_by_unit.end()) return;
+            std::vector<Key> dead;
+            for (const Key &k : u->second) {
+                auto it = s.results.find(k);
+                if (it != s.results.end() && !it->second->survives(preserved))
+                    dead.push_back(k);
+            }
+            for (const Key &k : dead) {
+                /* Sin dependientes no hay cascada: se saca aqui mismo, con el
+                 * cerrojo puesto, y no hay ventana ninguna.  Es el caso comun,
+                 * porque las dependencias solo se apuntan en consultas
+                 * anidadas. */
+                if (s.rev_deps.find(k) == s.rev_deps.end()) {
+                    s.results.erase(k);
+                    index_remove(s, k);
+                } else {
+                    con_dependientes.push_back(k);
+                }
+            }
         }
-        for (const Key &k : dead)
-            invalidate_key(k);
+        /* Y los que arrastran cascada, que puede cruzar de franja: ya se tiene
+         * el cerrojo de cascada desde arriba. */
+        for (const Key &k : con_dependientes)
+            invalidate_key_locked(k);
     }
 
     /**
@@ -565,14 +638,29 @@ class AnalysisManager {
 
     /// Borra TODO (reconstruccion completa).
     void clear() {
-        std::lock_guard<util::SharedMutex> lk(m_);
-        results_.clear();
-        rev_deps_.clear();
-        keys_by_unit_.clear();
+        /* Toca TODAS las franjas, asi que va por el camino de cascada: con su
+         * cerrojo puesto nadie mas esta recorriendo franjas. */
+        util::TimedUniqueLock cl(cascade_m_, exclusive_wait_slot());
+        for (Shard &s : shards_) {
+            util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
+            s.results.clear();
+            s.rev_deps.clear();
+            s.keys_by_unit.clear();
+        }
         stack().clear();
     }
 
-    size_t size() const { return results_.size(); }
+    /// Cuantos resultados hay guardados, sumando las franjas.  Cada una con su
+    /// cerrojo compartido: no hace falta una foto coherente del conjunto para
+    /// contestar "cuantos hay", y pedirla serializaria a todo el mundo.
+    size_t size() const {
+        size_t n = 0;
+        for (const Shard &s : shards_) {
+            util::TimedSharedLock lk(s.m, shared_wait_slot());
+            n += s.results.size();
+        }
+        return n;
+    }
 
     /**
      * @brief Cuantas consultas se sirvieron del cache, cuantas encontraron el
@@ -583,14 +671,28 @@ class AnalysisManager {
      * mucho que se afine el mecanismo.  Sin este dato, "vamos a cachearlo" es
      * una apuesta.
      */
-    struct Cuentas {
-        long long aciertos = 0;
-        long long caducados = 0;
-        long long nuevos = 0;
+    struct Counts {
+        long long hits = 0;  ///< servidas del cache, con la version buena.
+        long long stale = 0; ///< habia algo guardado, de otra version.
+        long long fresh = 0; ///< no habia nada guardado.
+        /**
+         * @brief Cuanto se ESPERO por el cerrojo, y en cual.
+         *
+         * Cero cuando no se pidio medirlo.  Separados porque el compartido y el
+         * exclusivo se arreglan de formas OPUESTAS: el compartido cuesta por
+         * pelearse N hilos por una linea de cache (se trocea), el exclusivo
+         * porque hay fallos que obligan a escribir (se reduce el churn de
+         * versiones).  Juntos en un solo numero no distinguen las dos averias.
+         */
+        long long shared_wait_ns = 0;
+        long long exclusive_wait_ns = 0;
     };
-    Cuentas cuentas() const {
-        return Cuentas{aciertos_.load(std::memory_order_relaxed), caducados_,
-                       nuevos_};
+    Counts counts() const {
+        return Counts{hits_.load(std::memory_order_relaxed),
+                      stale_.load(std::memory_order_relaxed),
+                      fresh_.load(std::memory_order_relaxed),
+                      shared_wait_ns_.load(std::memory_order_relaxed),
+                      exclusive_wait_ns_.load(std::memory_order_relaxed)};
     }
 
   private:
@@ -598,56 +700,163 @@ class AnalysisManager {
      * corre bajo cerrojo COMPARTIDO -- varios hilos a la vez --.  Un contador
      * normal ahi seria una carrera, y ademas una que no falla: da un numero
      * ligeramente bajo y nadie se entera. */
-    mutable std::atomic<long long> aciertos_{0};
-    long long caducados_ = 0, nuevos_ = 0;
+    /* ATOMICOS los TRES.  Antes `stale_` y `fresh_` eran enteros normales y
+     * bastaba, porque solo se tocaban con el cerrojo unico puesto.  Al trocear
+     * las tablas dos hilos de franjas distintas los suman a la vez, asi que sin
+     * esto habria una carrera -- y de las que no fallan: da un numero
+     * ligeramente bajo y nadie se entera. */
+    mutable std::atomic<long long> hits_{0};
+    mutable std::atomic<long long> stale_{0};
+    mutable std::atomic<long long> fresh_{0};
 
-    /// OJO: NO bloquea.  Se la llama desde dentro del cerrojo -- tanto desde
-    /// `get_or_compute_v` cuando encuentra un resultado caduco como desde los
-    /// `invalidate` publicos --, y volver a pedirlo aqui se autobloquearia.
-    void invalidate_key(const Key &k) {
-        auto it = results_.find(k);
-        if (it == results_.end()) return;
-        results_.erase(it);
-        index_remove(k);
-        auto d = rev_deps_.find(k);
-        if (d == rev_deps_.end()) return;
-        std::vector<Key> deps(d->second.begin(), d->second.end());
-        rev_deps_.erase(d);
-        for (const Key &dep : deps)
-            invalidate_key(dep); // cascada
+    /* Lo que se espero por entrar, en nanosegundos.  ATOMICOS por lo mismo que
+     * los aciertos: se suman desde varios hilos a la vez. */
+    mutable std::atomic<long long> shared_wait_ns_{0};
+    mutable std::atomic<long long> exclusive_wait_ns_{0};
+
+    /**
+     * @brief A donde apuntar la espera, o NULO si nadie la pidio.
+     *
+     * La bandera se pregunta UNA vez por proceso y se guarda: preguntarla en
+     * cada toma del cerrojo -- que son mas de un millon en una compilacion
+     * grande -- costaria mas que lo que se mide.  Con la bandera apagada esto
+     * devuelve nulo y la guarda no llega a leer el reloj.
+     */
+    static std::atomic<long long> *wait_slot(std::atomic<long long> *dst) {
+        static const bool measuring = util::flag_on(util::FlagId::Times);
+        return measuring ? dst : nullptr;
+    }
+    std::atomic<long long> *shared_wait_slot() const {
+        return wait_slot(&shared_wait_ns_);
+    }
+    std::atomic<long long> *exclusive_wait_slot() const {
+        return wait_slot(&exclusive_wait_ns_);
     }
 
-    /// Protege las tablas de abajo.  NO se tiene puesto mientras corre una
-    /// fabrica: ver `get_or_compute_v`.
-    ///
-    /// `mutable` porque hay consultas de solo lectura declaradas `const` que
-    /// tambien tienen que tomarlo: mirar una tabla mientras otro hilo la muta
-    /// no es seguro aunque no se escriba nada.
-    /* COMPARTIDO para leer, exclusivo para escribir.  Los aciertos -- que son
-     * la inmensa mayoria dentro del bucle repartido -- solo leen, y con un
-     * mutex normal hacian cola todos en el mismo sitio.
+    /**
+     * @brief Saca @p k y, transitivamente, lo que dependia de el.
      *
-     * Y es el NUESTRO, no `std::shared_mutex`: en MinGW ese se apoya en la
-     * emulacion de pthreads, que SE ROMPE con hilos que nacen y mueren -- el
-     * lote de hilos por nivel de modulos --.  Se vio aqui, con los 23 hilos
-     * parados y la seccion critica VACIA, y se reprodujo fuera del compilador
-     * en una sonda de sesenta lineas: cambiando solo el tipo del cerrojo,
-     * `std::shared_mutex` moria 5 de 5 y `std::mutex` pasaba 5 de 5.  Un mutex
-     * normal seria el apano -- correcto, pero serializando justo lo que se
-     * quiere repartir --; `util::SharedMutex` usa el `SRWLOCK` del sistema y da
-     * las dos cosas.  Ver `util/shared_mutex.h`. */
-    mutable util::SharedMutex m_;
+     * OJO: NO bloquea NADA por su cuenta.  Se la llama con @ref cascade_m_ ya
+     * puesto, porque la cascada puede CRUZAR de franja -- las dependencias
+     * cruzan funciones, y dos funciones distintas caen en franjas distintas --
+     * y entonces hay que tomar el cerrojo de mas de una.
+     *
+     * Ese es todo el motivo de que exista un cerrojo de cascada: con el puesto
+     * solo hay UNA cascada a la vez, asi que tomar varias franjas seguidas no
+     * puede cruzarse con otra que las tome en otro orden.  Y como nadie toma
+     * nunca una franja y DESPUES la de cascada, el orden es fijo y el bloqueo
+     * mutuo es imposible por construccion, no por cuidado.
+     */
+    void invalidate_key_locked(const Key &k) {
+        std::vector<Key> deps;
+        {
+            Shard &s = shard_of(k.unit);
+            util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
+            auto it = s.results.find(k);
+            if (it == s.results.end()) return;
+            s.results.erase(it);
+            index_remove(s, k);
+            auto d = s.rev_deps.find(k);
+            if (d == s.rev_deps.end()) return;
+            deps.assign(d->second.begin(), d->second.end());
+            s.rev_deps.erase(d);
+        }
+        /* La cascada, con la franja de @p k ya SOLTADA: un dependiente puede
+         * vivir en la misma, y volver a pedir su cerrojo se autobloquearia
+         * (`SharedMutex` no es reentrante).  Soltar antes es seguro porque quien
+         * llama sigue teniendo el de cascada: nadie mas esta cascadeando. */
+        for (const Key &dep : deps)
+            invalidate_key_locked(dep);
+    }
 
-    /// Que claves tiene cada unidad.  Existe para que invalidar una unidad no
-    /// obligue a recorrer el gestor entero: sin esto, invalidar es O(todo) y se
-    /// hace muchas veces por vuelta del punto fijo.
-    /// Por unidad, que analisis tiene.  Indexado por el nombre INTERNADO, como
-    /// la clave: asi ni este indice copia cadenas.
-    std::unordered_map<const std::string *, std::vector<Key>> keys_by_unit_;
+    /**
+     * @brief Una FRANJA de las tablas, con su propio cerrojo.
+     *
+     * Habia UNA tabla y UN cerrojo, y era el cuello de botella de compilar:
+     * medido sobre 441.000 lineas, 1,25 millones de consultas de veinticuatro
+     * hilos dejaban 35,6 segundos de espera acumulada -- el 52 % del CPU en las
+     * primitivas de espera del sistema -- para un frontend de 8,5 segundos de
+     * pared, con la maquina al 14 %.  No se esperaba por calcular nada: se
+     * esperaba por ENTRAR.
+     *
+     * Con franjas, dos hilos que preguntan por funciones distintas no se ven ni
+     * se pelean por la misma linea de cache.
+     */
+    struct Shard {
+        /* COMPARTIDO para leer, exclusivo para escribir.  Los aciertos -- la
+         * mayoria dentro del bucle repartido -- solo leen.
+         *
+         * Y es el NUESTRO, no `std::shared_mutex`: en MinGW ese se apoya en la
+         * emulacion de pthreads, que SE ROMPE con hilos que nacen y mueren -- el
+         * lote de hilos por nivel de modulos --.  Se vio aqui, con los 23 hilos
+         * parados y la seccion critica VACIA, y se reprodujo fuera del
+         * compilador en una sonda de sesenta lineas: cambiando solo el tipo del
+         * cerrojo, `std::shared_mutex` moria 5 de 5 y `std::mutex` pasaba 5 de
+         * 5.  Ver `util/shared_mutex.h`. */
+        mutable util::SharedMutex m;
 
-    /// Apunta @p k en el indice de su unidad, si no estaba.
-    void index_add(const Key &k) {
-        auto &v = keys_by_unit_[k.unit];
+        /* `shared_ptr` y no `unique_ptr`, y no es un detalle: el gestor entrega
+         * REFERENCIAS a lo que guarda, y la invalidacion cascadea por
+         * dependencias que CRUZAN funciones -- calcular points-to de `f` pide
+         * rangos de `g`, asi que invalidar `g` puede borrar entradas de `f`.
+         * Con varios hilos, uno puede borrar justo lo que otro esta leyendo.
+         *
+         * Con `shared_ptr`, borrar del mapa solo suelta LA referencia del mapa:
+         * el objeto sigue vivo mientras alguien lo tenga cogido (ver
+         * `retained_`). */
+        std::unordered_map<Key, std::shared_ptr<AnalysisResultConcept>, KeyHash>
+            results;
+        std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>
+            rev_deps;
+        /// Que analisis tiene cada unidad, para que invalidarla no obligue a
+        /// recorrer el gestor entero.  Indexado por el nombre INTERNADO, como la
+        /// clave: asi ni este indice copia cadenas.
+        std::unordered_map<const std::string *, std::vector<Key>> keys_by_unit;
+    };
+
+    /// Cuantas franjas.  Potencia de dos para repartir con una mascara.
+    static constexpr size_t kShards = 64;
+
+    /**
+     * @brief En que franja cae @p unit.
+     *
+     * Por la UNIDAD y no por la clave entera, a proposito: asi TODOS los
+     * analisis de una misma funcion caen juntos, y el indice por unidad y su
+     * invalidacion nunca cruzan de franja -- que es el caso comun --.  Cruzar
+     * solo pasa siguiendo una dependencia entre funciones distintas.
+     *
+     * Se descartan los bits bajos: las unidades son punteros a nombres
+     * internados y los bajos apenas varian entre reservas contiguas.
+     */
+    static size_t shard_index(const std::string *unit) {
+        return (std::hash<const void *>()(unit) >> 4) & (kShards - 1);
+    }
+    Shard &shard_of(const std::string *unit) {
+        return shards_[shard_index(unit)];
+    }
+    const Shard &shard_of(const std::string *unit) const {
+        return shards_[shard_index(unit)];
+    }
+
+    mutable Shard shards_[kShards];
+
+    /**
+     * @brief El cerrojo de las CASCADAS.  Se toma SIEMPRE antes que el de una
+     *        franja, y NUNCA despues.
+     *
+     * Una cascada puede tener que tocar varias franjas (las dependencias cruzan
+     * funciones).  Con este puesto solo hay una cascada a la vez, asi que no
+     * pueden cruzarse dos tomando franjas en ordenes distintos; y como nadie
+     * toma una franja y luego esta, el orden global es fijo.  El bloqueo mutuo
+     * queda descartado por CONSTRUCCION, no por revisar cada sitio.
+     *
+     * El camino caliente -- preguntar por lo propio -- no lo toca.
+     */
+    mutable util::SharedMutex cascade_m_;
+
+    /// Apunta @p k en el indice de su franja, si no estaba.
+    static void index_add(Shard &s, const Key &k) {
+        auto &v = s.keys_by_unit[k.unit];
         for (const Key &x : v)
             if (x.id == k.id) return;
         v.push_back(k);
@@ -656,9 +865,9 @@ class AnalysisManager {
     /// Quita @p k del indice.  La lista de una unidad son unas pocas entradas
     /// -- un analisis por tipo --, asi que buscar linealmente es mas rapido
     /// que cualquier estructura con indireccion.
-    void index_remove(const Key &k) {
-        auto u = keys_by_unit_.find(k.unit);
-        if (u == keys_by_unit_.end()) return;
+    static void index_remove(Shard &s, const Key &k) {
+        auto u = s.keys_by_unit.find(k.unit);
+        if (u == s.keys_by_unit.end()) return;
         auto &v = u->second;
         for (size_t i = 0; i < v.size(); ++i)
             if (v[i].id == k.id) {
@@ -666,20 +875,44 @@ class AnalysisManager {
                 v.pop_back();
                 break;
             }
-        if (v.empty()) keys_by_unit_.erase(u);
+        if (v.empty()) s.keys_by_unit.erase(u);
     }
 
-    /* `shared_ptr` y no `unique_ptr`, y no es un detalle: el gestor entrega
-     * REFERENCIAS a lo que guarda, y la invalidacion cascadea por dependencias
-     * que CRUZAN funciones -- calcular points-to de `f` pide rangos de `g`, asi
-     * que invalidar `g` puede borrar entradas de `f`.  Con varios hilos, uno
-     * puede borrar justo lo que otro esta leyendo.
+    /**
+     * @brief Saca @p k y lo que dependiera de el.  Puerta para quien NO tiene
+     *        ningun cerrojo de franja puesto.
      *
-     * Con `shared_ptr`, borrar del mapa solo suelta LA referencia del mapa: el
-     * objeto sigue vivo mientras alguien lo tenga cogido (ver `retained_`).  Es
-     * el mismo remedio que ya usa `rangos_de` en el motor de rangos. */
-    std::unordered_map<Key, std::shared_ptr<AnalysisResultConcept>, KeyHash>
-        results_;
+     * Intenta primero el camino CORTO, que es el comun: si la clave no tiene
+     * dependientes no hay cascada, y sacarla es cosa de su franja y de nadie
+     * mas.  Solo se pasa por el cerrojo global cuando de verdad hay que seguir
+     * dependencias, que es lo unico capaz de cruzar de franja.
+     *
+     * Importa porque el camino de "caduco" es el 23 % de las consultas: tomar el
+     * cerrojo global en todas ellas cambia un cuello de botella por otro --
+     * medido, eso solo dejaba la compilacion mas lenta que antes de trocear --.
+     * Y las dependencias se apuntan SOLO en consultas anidadas, asi que la
+     * inmensa mayoria de las claves no tiene ninguna.
+     *
+     * Sin ventanas: cuando hay dependientes no se toca nada por el camino corto,
+     * se abandona y se hace TODO bajo el cerrojo de cascada.  Asi la cascada
+     * sigue siendo atomica, que es lo que evita servir un analisis que debia
+     * haberse invalidado.
+     */
+    void drop_key(const Key &k) {
+        {
+            Shard &s = shard_of(k.unit);
+            util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
+            auto it = s.results.find(k);
+            if (it == s.results.end()) return; // no habia nada que sacar
+            if (s.rev_deps.find(k) == s.rev_deps.end()) {
+                s.results.erase(it);
+                index_remove(s, k);
+                return; // sin dependientes: no hay cascada que dar
+            }
+        }
+        util::TimedUniqueLock cl(cascade_m_, exclusive_wait_slot());
+        invalidate_key_locked(k);
+    }
 
     /* Lo que ESTE hilo tiene cogido.  Cada referencia entregada se respalda
      * aqui para que una cascada de otro hilo no pueda destruirla debajo.  Se
@@ -698,8 +931,6 @@ class AnalysisManager {
     }
     util::ThreadOwned<std::vector<std::shared_ptr<AnalysisResultConcept>>>
         retained_;
-    std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>
-        rev_deps_;
     /* Por hilo: una pila de computos en curso describe lo que ESTE hilo esta
      * calculando.  Compartida, dos hilos registrarian sus dependencias contra
      * el computo del otro. */

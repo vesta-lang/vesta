@@ -117,6 +117,8 @@ DemandedBits compute_demanded_bits(const ir::IrFunction &fn);
 struct DemandedBitsAnalysis {
     using Result = DemandedBits;
     static char ID;
+    /// Como se llama al medirlo.  @see FactBase::memoized
+    static constexpr const char *kName = "demanded_bits";
 };
 
 } // namespace analysis

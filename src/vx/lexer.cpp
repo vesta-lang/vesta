@@ -29,6 +29,9 @@
 
 #include "vx/diag/diag_catalog.h"
 
+#include "util/env_flags.h" // si se piden tiempos, y solo entonces, se muestrea
+#include "util/reloj.h"     // NUESTRO reloj, no el de la biblioteca
+
 #include <cctype>
 #include <cstring>
 #include <string>
@@ -1647,7 +1650,37 @@ Token Lexer::lex_one_raw_inner() {
     return lex_symbol();
 }
 
+uint64_t Lexer::estimated_micros() const noexcept {
+    if (samples_ == 0) return 0;
+    /* Se extrapola con la razon REAL entre tokens y muestras, no con la
+     * constante: la ultima ventana casi nunca esta completa, y usar 256 a pelo
+     * inventaria tiempo que no se midio.  Y se pasa a microsegundos AL FINAL,
+     * despues de extrapolar, para no perder la resolucion por el camino. */
+    return (sampled_nanos_ * tokens_ / samples_) / 1000u;
+}
+
 Token Lexer::next() {
+    /* UNO DE CADA `kSampleEvery`.  Cronometrar todos serian dos lecturas de
+     * reloj por token; asi el coste de medir queda dividido por 256 y no
+     * perturba lo que mide.  Apagado no se lee el reloj en absoluto: queda la
+     * rama sobre un booleano ya resuelto. */
+    static const bool timing = util::flag_on(util::FlagId::Times);
+    ++tokens_;
+    if (!timing || (tokens_ & (kSampleEvery - 1)) != 0) return next_impl();
+    /* Por NUESTRO reloj y no por el de la biblioteca.  Aqui no es un detalle de
+     * estilo: `steady_clock` en Windows salta de a 100 ns, y un token tarda
+     * decenas -- casi todas las muestras saldrian 0 o 100, que no es medir sino
+     * redondear --.  El contador de ciclos da del orden de 0,3 ns por tick y
+     * ademas se lee mas barato, que es justo lo que importa al muestrear. */
+    const uint64_t t0 = util::reloj::ahora();
+    Token out = next_impl();
+    sampled_nanos_ +=
+        static_cast<uint64_t>(util::reloj::a_ns(util::reloj::ahora() - t0));
+    ++samples_;
+    return out;
+}
+
+Token Lexer::next_impl() {
     if (has_peeked_) {
         // Devolver peeked_ y promover el primer extra al hueco para que
         // peek() siga devolviendo el "siguiente" token de forma consistente.

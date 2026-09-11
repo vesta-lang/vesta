@@ -96,15 +96,15 @@ static void esperar_ns(long long ns) {
 
 /// Lo acumulado bajo @p etiqueta, en microsegundos.
 static long long leer(const char *etiqueta) {
-    for (const util::Tramo &t : util::tramos_medidos())
-        if (std::string(t.nombre) == etiqueta) return t.us;
+    for (const util::Span &s : util::measured_spans())
+        if (std::string(s.name) == etiqueta) return s.us;
     return -1;
 }
 
 /// Cuantas tomas se anotaron bajo @p etiqueta.
 static long long veces(const char *etiqueta) {
-    for (const util::Tramo &t : util::tramos_medidos())
-        if (std::string(t.nombre) == etiqueta) return t.veces;
+    for (const util::Span &s : util::measured_spans())
+        if (std::string(s.name) == etiqueta) return s.runs;
     return -1;
 }
 

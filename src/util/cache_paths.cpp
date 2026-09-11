@@ -204,4 +204,11 @@ std::string cache_dir_under(const std::string &root, CacheKind kind) {
     return (fs::path(root) / cache_root_name() / cache_kind_dir(kind)).string();
 }
 
+bool cache_disabled() {
+    /* Una sola vez: esto se pregunta en caminos calientes -- por fuente y por
+     * modulo -- y la respuesta no cambia durante el proceso. */
+    static const bool off = flag_on(FlagId::NoCache);
+    return off;
+}
+
 } // namespace util

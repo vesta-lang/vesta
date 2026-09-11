@@ -129,30 +129,43 @@ void register_asa_canonical_names() {
 
 /// Marcadores de identidad para el gestor.  Uno por dominio: la cache va por
 /// (analisis, unidad), asi que dos dominios distintos no se pisan.
+///
+/// Cada uno declara ademas @c kName , y no es decorativo: @ref FactBase::memoized
+/// lo exige, asi que un analisis nuevo que se olvide de ponerlo NO COMPILA en
+/// vez de aparecer sin medir.  El nombre va en INGLES, como el resto del
+/// vocabulario que sale impreso.
 namespace {
 struct MemoryAnalysis {
     static char ID;
+    static constexpr const char *kName = "memory";
 };
 struct LoopsAnalysis {
     static char ID;
+    static constexpr const char *kName = "loops";
 };
 struct IvBoundsAnalysis {
     static char ID;
+    static constexpr const char *kName = "iv_bounds";
 };
 struct BoundaryAnalysis {
     static char ID;
+    static constexpr const char *kName = "boundary";
 };
 struct EffectsSummaryAnalysis {
     static char ID;
+    static constexpr const char *kName = "effects";
 };
 struct ParamAliasingAnalysis {
     static char ID;
+    static constexpr const char *kName = "param_aliasing";
 };
 struct ModuleWalkAnalysis {
     static char ID;
+    static constexpr const char *kName = "module_walk";
 };
 struct EscapeAnalysisId {
     static char ID;
+    static constexpr const char *kName = "escape";
 };
 char MemoryAnalysis::ID = 0;
 char LoopsAnalysis::ID = 0;
@@ -163,6 +176,43 @@ char ParamAliasingAnalysis::ID = 0;
 char ModuleWalkAnalysis::ID = 0;
 char EscapeAnalysisId::ID = 0;
 } // namespace
+
+/**
+ * @brief Ordena dos analisis por lo que costaron, el mas caro primero.
+ *
+ * Con NOMBRE y no una lambda: una lambda no sale con el suyo en un perfil, que
+ * es donde se mira cuando algo cuesta.
+ *
+ * @param a Un reparto.
+ * @param b El otro.
+ * @return true si @p a costo mas.
+ */
+static bool analysis_costlier_first(const FactBase::AnalysisStats *a,
+                                    const FactBase::AnalysisStats *b) {
+    return a->micros > b->micros;
+}
+
+bool FactBase::telemetry_on() noexcept {
+    /* UNA vez por proceso.  Es lo que hace que medir sea gratis cuando no se
+     * mide: apagado queda una rama sobre un booleano ya resuelto, que el
+     * predictor acierta siempre, y ni se lee el reloj ni se toca contador
+     * alguno. */
+    static const bool on = util::flag_on(util::FlagId::Times);
+    return on;
+}
+
+FactBase::AnalysisStats &FactBase::stats_slot(AnalysisID id,
+                                              const char *name) {
+    /* Busqueda lineal sobre un vector plano: son un punado de analisis -- once
+     * hoy -- y a esa escala recorrerlos gana a cualquier tabla hash, que ademas
+     * reservaria.  Y solo se llega aqui con la telemetria encendida. */
+    for (size_t i = 0; i < analysis_ids_.size(); ++i)
+        if (analysis_ids_[i] == id) return analysis_stats_[i];
+    analysis_ids_.push_back(id);
+    analysis_stats_.push_back(AnalysisStats{});
+    analysis_stats_.back().name = name;
+    return analysis_stats_.back();
+}
 
 FactBase::FactBase() {
     register_asa_canonical_names();
@@ -177,6 +227,24 @@ FactBase::FactBase(const char *stage) {
 }
 
 FactBase::~FactBase() {
+    /* El reparto POR ANALISIS, si se pidieron tiempos.  Va aqui y no en quien
+     * usa la base porque las bases nacen y mueren en varios sitios -- una por
+     * momento, otra corta solo para los prestamos -- y ninguno de ellos las ve
+     * todas: dejarselo a cada uno significaba que la mayoria no se contaba. */
+    if (telemetry_on() && !analysis_stats_.empty()) {
+        std::vector<const AnalysisStats *> by_cost;
+        by_cost.reserve(analysis_stats_.size());
+        for (const AnalysisStats &s : analysis_stats_) by_cost.push_back(&s);
+        std::sort(by_cost.begin(), by_cost.end(), analysis_costlier_first);
+        for (const AnalysisStats *s : by_cost) {
+            const std::string msg = vx::diag::format(
+                "VXA079", vx::diag::current_language(),
+                {s->name != nullptr ? s->name : "?",
+                 std::to_string(s->micros), std::to_string(s->computes),
+                 std::to_string(s->queries), default_stage_});
+            std::fprintf(stderr, "[asa] %s\n", msg.c_str());
+        }
+    }
     static const bool log_it = util::flag_on(util::FlagId::AsaFactsDebug);
     if (!log_it || queries_ == 0) return;
     dump_facts(dump(), stderr);
@@ -242,13 +310,12 @@ void FactBase::mark(const char *producer, const std::string &key, Certainty c,
 
 const IrFacts &FactBase::structure(const ir::IrFunction &fn,
                                    const char *stage) {
-    ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
     /* Con la VERSION: `cached` a secas dice "hay algo guardado", que no es lo
      * mismo que "se va a reutilizar".  Preguntarlo sin ella contaba de menos los
      * recomputos y, peor, se saltaba el sello -- lo destapo el test de reuso. */
-    if (!manager_.cached_v<IRFactsAnalysis>(key, fn.version)) {
-        ++computations_;
+    const bool fresh = !manager_.cached_v<IRFactsAnalysis>(key, fn.version);
+    if (fresh) {
         /* Un recorrido, sin reticulo ni punto fijo: lo que sale de aqui esta
          * DEMOSTRADO, no inferido.  Los def-use y el CFG son lo que el IR dice,
          * no una aproximacion de lo que podria pasar. */
@@ -259,8 +326,8 @@ const IrFacts &FactBase::structure(const ir::IrFunction &fn,
      * memoria liberada.  La version la sube el optimizador en un solo sitio, y
      * el gestor recalcula si no coincide -- lo que sustituye a "acordarse de
      * invalidar", que es una obligacion que no se puede comprobar. */
-    return manager_.get_or_compute_v<IRFactsAnalysis, IrFacts>(
-        key, fn.version,
+    return memoized<IRFactsAnalysis, IrFacts>(
+        fresh, key, fn.version,
         [this, &fn, stage]() { return structure_from_store_(fn, stage); });
 }
 
@@ -349,15 +416,14 @@ const DemandedBits &FactBase::demanded(const ir::IrFunction &fn,
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
     const bool fresh = !manager_.cached_v<DemandedBitsAnalysis>(key, fn.version);
-    if (fresh) ++computations_;
     /* Por el gestor, como los rangos: los tres que preguntan -- el pase que
      * quita normalizaciones, el productor del dominio y quien venga -- acaban
      * en la MISMA instancia en vez de recalcularla cada uno.  Esa es la unica
      * forma de que anadir un consumidor no cueste otro analisis. */
     const DemandedBits &db =
-        *manager_.get_or_compute_v<DemandedBitsAnalysis,
-                                   std::shared_ptr<const DemandedBits>>(
-            key, fn.version, [&fn]() {
+        *memoized<DemandedBitsAnalysis,
+                  std::shared_ptr<const DemandedBits>>(
+            fresh, key, fn.version, [&fn]() {
                 return std::make_shared<const DemandedBits>(
                     compute_demanded_bits(fn));
             });
@@ -376,7 +442,6 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn,
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
     const bool fresh = !manager_.cached_v<RangeAnalysis>(key, fn.version);
-    if (fresh) ++computations_;
     /* La factoria pide la estructura POR LA BASE, no por su cuenta: asi el
      * gestor anota que los rangos dependen de ella y una invalidacion arrastra
      * a los dos.  Pedirla aparte dejaria rangos vivos sobre hechos muertos. */
@@ -386,10 +451,8 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn,
      * dependencias.  Los otros dos gestores que piden rangos -- el del
      * optimizador y el de efectos -- apuntan a la MISMA. */
     const RangeFacts &rf =
-        *manager_
-             .get_or_compute_v<RangeAnalysis,
-                               std::shared_ptr<const RangeFacts>>(
-                 key, fn.version, [this, &fn, stage]() {
+        *memoized<RangeAnalysis, std::shared_ptr<const RangeFacts>>(
+                 fresh, key, fn.version, [this, &fn, stage]() {
                      /* Con las cotas de induccion, que las saca el PROPIO
                       * motor de rangos.  Es conocimiento que los rangos no
                       * pueden deducir solos -- la guarda de un bucle
@@ -423,8 +486,8 @@ const PointsTo &FactBase::memory(const ir::IrFunction &fn,
                                  const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
-    if (!manager_.cached_v<MemoryAnalysis>(key, fn.version)) {
-        ++computations_;
+    const bool fresh = !manager_.cached_v<MemoryAnalysis>(key, fn.version);
+    if (fresh) {
         /* El conjunto de sitios a los que un puntero PUEDE referirse es una
          * sobre-aproximacion COMPLETA: nada que no este dentro puede ocurrir.
          * Que un puntero concreto quede en "cualquier cosa" no rebaja el hecho
@@ -433,8 +496,8 @@ const PointsTo &FactBase::memory(const ir::IrFunction &fn,
     }
     /* Versionado, y aqui es donde mas importa: `PointsTo` se apoya en los
      * hechos de estructura, que guardan punteros a instrucciones. */
-    return manager_.get_or_compute_v<MemoryAnalysis, PointsTo>(
-        key, fn.version,
+    return memoized<MemoryAnalysis, PointsTo>(
+        fresh, key, fn.version,
         [this, &fn, stage]() { return memory_from_store_(fn, stage); });
 }
 
@@ -465,28 +528,28 @@ const LoopFacts &FactBase::loops(const ir::IrFunction &fn,
                                  const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
-    if (!manager_.cached_v<LoopsAnalysis>(key, fn.version)) {
-        ++computations_;
+    const bool fresh = !manager_.cached_v<LoopsAnalysis>(key, fn.version);
+    if (fresh) {
         mark(kProducerLoops, *key, Certainty::Proven);
     }
-    return manager_.get_or_compute_v<LoopsAnalysis, LoopFacts>(
-        key, fn.version, [&fn]() { return compute_loop_facts(fn); });
+    return memoized<LoopsAnalysis, LoopFacts>(
+        fresh, key, fn.version, [&fn]() { return compute_loop_facts(fn); });
 }
 
 const LoopIvBounds &FactBase::iv_bounds(const ir::IrFunction &fn,
                                         const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
-    if (!manager_.cached_v<IvBoundsAnalysis>(key, fn.version)) {
-        ++computations_;
+    const bool fresh = !manager_.cached_v<IvBoundsAnalysis>(key, fn.version);
+    if (fresh) {
         /* Demostrado: sale de la FORMA del bucle y de constantes escritas, sin
          * punto fijo que pueda pararse por presupuesto ni aproximacion que
          * pueda quedarse corta.  Por eso puede alimentar a los rangos y no al
          * reves -- si preguntara, se morderian la cola. */
         mark(kProducerLoops, *key, Certainty::Proven, kProducerStructure);
     }
-    return manager_.get_or_compute_v<IvBoundsAnalysis, LoopIvBounds>(
-        key, fn.version, [this, &fn, stage]() {
+    return memoized<IvBoundsAnalysis, LoopIvBounds>(
+        fresh, key, fn.version, [this, &fn, stage]() {
             return compute_loop_iv_bounds(fn, structure(fn, stage),
                                           loops(fn, stage));
         });
@@ -500,10 +563,10 @@ const RangeSummaries &FactBase::boundary(const ir::IrModule &mod,
     const std::string *key = module_key(stage_or_default(stage));
     const bool fresh =
         !manager_.cached_v<BoundaryAnalysis>(key, module_version(mod));
-    if (fresh) ++computations_;
     const RangeSummaries &rs =
-        manager_.get_or_compute_v<BoundaryAnalysis, RangeSummaries>(
-            key, module_version(mod), [&mod]() { return compute_range_summaries(mod); });
+        memoized<BoundaryAnalysis, RangeSummaries>(
+            fresh, key, module_version(mod),
+            [&mod]() { return compute_range_summaries(mod); });
     if (fresh) {
         /* Sin punto fijo del grafo de llamadas los resumenes se abren solos, y
          * entonces lo que se sabe es nada -- no algo menos preciso. */
@@ -519,11 +582,11 @@ const ModuleWalk &FactBase::walk(const ir::IrModule &mod, const char *stage) {
     const std::string *key = module_key(stage_or_default(stage));
     const bool fresh =
         !manager_.cached_v<ModuleWalkAnalysis>(key, module_version(mod));
-    if (fresh) ++computations_;
     /* Y con la version del MoDULO plegada: el recorrido dice quien llama a
      * quien, asi que cambiar cualquier funcion puede cambiarlo. */
-    return manager_.get_or_compute_v<ModuleWalkAnalysis, ModuleWalk>(
-        key, module_version(mod), [&mod]() { return ModuleWalk::of(mod); });
+    return memoized<ModuleWalkAnalysis, ModuleWalk>(
+        fresh, key, module_version(mod),
+        [&mod]() { return ModuleWalk::of(mod); });
 }
 
 const effects::ParamAliasing &FactBase::param_aliasing(const ir::IrModule &mod,
@@ -535,14 +598,13 @@ const effects::ParamAliasing &FactBase::param_aliasing(const ir::IrModule &mod,
     const std::string *key = module_key(stage_or_default(stage));
     const bool fresh =
         !manager_.cached_v<ParamAliasingAnalysis>(key, module_version(mod));
-    if (fresh) ++computations_;
     /* Fuera de la lambda: pedir el recorrido tambien es una consulta a la base,
      * y meterla dentro la ataria a que la lambda se ejecute -- que es justo lo
      * que no pasa cuando ya esta cacheado. */
     const ModuleWalk &w = walk(mod);
     const effects::ParamAliasing &pa =
-        manager_.get_or_compute_v<ParamAliasingAnalysis, effects::ParamAliasing>(
-            key, module_version(mod), [&mod, &w, stage, this]() {
+        memoized<ParamAliasingAnalysis, effects::ParamAliasing>(
+            fresh, key, module_version(mod), [&mod, &w, stage, this]() {
                 return effects::ParamAliasing(mod, w, *this, stage);
             });
     if (fresh) {
@@ -565,14 +627,13 @@ effects::EffectAnalysis &FactBase::effects(const ir::IrModule &mod,
     const std::string *key = module_key(stage_or_default(stage));
     const bool fresh =
         !manager_.cached_v<EffectsSummaryAnalysis>(key, module_version(mod));
-    if (fresh) ++computations_;
     /* Se guarda por PUNTERO: el motor lleva dentro sus tablas y el resumen
      * guarda referencias a ellas, asi que copiarlo al meterlo en la cache
      * dejaria el resumen apuntando a las tablas de la copia vieja. */
     const std::shared_ptr<effects::EffectAnalysis> &engine =
-        manager_.get_or_compute_v<EffectsSummaryAnalysis,
-                                  std::shared_ptr<effects::EffectAnalysis>>(
-            key, module_version(mod), [&mod]() {
+        memoized<EffectsSummaryAnalysis,
+                 std::shared_ptr<effects::EffectAnalysis>>(
+            fresh, key, module_version(mod), [&mod]() {
                 auto e = std::make_shared<effects::EffectAnalysis>();
                 e->module_summary(mod); // deja el motor con sus tablas listas
                 return e;
@@ -595,14 +656,13 @@ FactBase::escape(const ir::IrModule &mod) {
     const std::string *key = util::intern_name(kModuleUnit);
     const bool fresh =
         !manager_.cached_v<EscapeAnalysisId>(key, module_version(mod));
-    if (fresh) ++computations_;
     /* La estructura y la memoria de cada funcion se piden POR LA BASE, no
      * aparte: asi el punto fijo del escape reusa lo que ya haya y una
      * invalidacion arrastra a los dos. */
     const auto &res =
-        manager_.get_or_compute_v<EscapeAnalysisId,
-                                  std::unordered_map<std::string, EscapeInfo>>(
-            key, module_version(mod), [this, &mod]() {
+        memoized<EscapeAnalysisId,
+                 std::unordered_map<std::string, EscapeInfo>>(
+            fresh, key, module_version(mod), [this, &mod]() {
                 auto facts_of =
                     [this](const ir::IrFunction &f) -> const IrFacts & {
                     return structure(f);

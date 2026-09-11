@@ -87,6 +87,43 @@ class Lexer {
     Token next();
 
     /**
+     * @brief Cuantos tokens ha entregado.
+     *
+     * Es EXACTO y no cuesta: un incremento por token.  Sirve de denominador --
+     * lo caro de un lexer se juzga por token, no por fichero -- y es lo que da
+     * sentido a la estimacion de abajo.
+     *
+     * @return Numero de tokens.
+     */
+    uint64_t tokens() const noexcept { return tokens_; }
+
+    /**
+     * @brief Lo que se ESTIMA que se ha ido en tokenizar, en microsegundos.
+     *
+     * **Es una estimacion, no una medida.**  Cronometrar cada token serian dos
+     * lecturas de reloj por token, y con cien mil tokens eso son milisegundos
+     * sobre una fase que dura seis: la medida se comeria a si misma.  Asi que
+     * se cronometra UNO DE CADA @ref kSampleEvery -- el mismo truco que usa el
+     * motor para no perturbar lo que mide -- y se extrapola.
+     *
+     * Se dice que es estimada en el sitio donde se imprime, y no por
+     * escrupulo: en este mismo proyecto un contador que decia muestrear "cada
+     * 256" y no lo hacia dejo a sus consumidores multiplicando por 256, con lo
+     * que los MIPS salian 256 veces mas altos que los reales.  El numero era
+     * absurdo pero PLAUSIBLE, y sin nada con que compararlo sobrevivio.
+     *
+     * @return Microsegundos estimados, o 0 si no se pidieron tiempos.
+     */
+    uint64_t estimated_micros() const noexcept;
+
+    /// Cuantas muestras se tomaron.  Con pocas, la estimacion no vale.
+    uint64_t samples() const noexcept { return samples_; }
+
+    /// Uno de cada cuantos tokens se cronometra.  Potencia de dos: la cuenta
+    /// se hace con una mascara, no con un modulo.
+    static constexpr uint64_t kSampleEvery = 256;
+
+    /**
      * @brief Devuelve una referencia al siguiente token sin consumirlo.
      *
      * El primer peek() despues de un next() llena el buffer interno;
@@ -253,6 +290,18 @@ class Lexer {
     /// drena este buffer antes de tocar @c source_, asi cada @c next()
     /// recibe los tokens en orden sin re-parsing.
     std::deque<Token> string_emit_queue_;
+
+    /// El cuerpo de @ref next .  Existe para que el envoltorio pueda
+    /// cronometrarlo sin tocar sus muchas salidas.
+    Token next_impl();
+
+    uint64_t tokens_ = 0;  ///< tokens entregados.  Exacto.
+    uint64_t samples_ = 0; ///< cuantos se cronometraron.
+    /// Suma de lo que tardaron esos, en NANOsegundos.  Un token tarda decenas
+    /// de nanosegundos: acumularlo en microsegundos redondearia cada muestra a
+    /// cero y la estimacion saldria siempre 0, que es peor que no medir --
+    /// parece un dato y dice que el lexer es gratis.
+    uint64_t sampled_nanos_ = 0;
 };
 
 /**

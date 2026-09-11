@@ -45,6 +45,14 @@
 #ifndef VESTA_UTIL_SHARED_MUTEX_H
 #define VESTA_UTIL_SHARED_MUTEX_H
 
+/* Fuera del `#if`: las guardas MEDIDAS de abajo son iguales en los dos sistemas
+ * y las necesitan siempre.  Lo que depende del sistema es el estado del cerrojo,
+ * no quien lo cronometra. */
+#include "util/reloj.h" // el reloj del proyecto, no el de la biblioteca
+
+#include <atomic>
+#include <cstdint>
+
 #if !defined(_WIN32)
 #include <shared_mutex>
 #endif
@@ -94,6 +102,86 @@ class SharedMutex {
 #else
     std::shared_mutex impl_;
 #endif
+};
+
+/**
+ * @brief Toma el cerrojo COMPARTIDO apuntando cuanto costo ENTRAR.
+ *
+ * Contar cuantas veces se toma un cerrojo dice si se usa; medir la ESPERA dice
+ * si se pelea.  Son preguntas distintas: un millon de tomas con buen reparto no
+ * cuesta nada, y las mismas con veinticuatro hilos encima pueden ser la mitad
+ * del CPU.  Sin medir la entrada no se distingue una cosa de la otra.
+ *
+ * Medir es OPCIONAL: con @p ns nulo no se lee el reloj ni una vez, asi que el
+ * camino normal no paga nada.  Quien mide lo decide; el cerrojo no sabe de
+ * banderas.
+ */
+class TimedSharedLock {
+  public:
+    /**
+     * @param m  El cerrojo.
+     * @param ns Donde sumar los nanosegundos de espera, o nulo para no medir.
+     */
+    TimedSharedLock(SharedMutex &m, std::atomic<long long> *ns) : m_(m) {
+        if (ns == nullptr) {
+            m_.lock_shared();
+            return;
+        }
+        const uint64_t t0 = reloj::ahora();
+        m_.lock_shared();
+        ns->fetch_add(static_cast<long long>(reloj::a_ns(reloj::ahora() - t0)),
+                      std::memory_order_relaxed);
+    }
+    ~TimedSharedLock() { m_.unlock_shared(); }
+    TimedSharedLock(const TimedSharedLock &) = delete;
+    TimedSharedLock &operator=(const TimedSharedLock &) = delete;
+
+  private:
+    SharedMutex &m_;
+};
+
+/**
+ * @brief Igual, en EXCLUSIVA, y con soltar/volver a tomar a mano.
+ *
+ * Las dos cosas hacen falta porque hay trabajo que NO se puede hacer con el
+ * cerrojo puesto -- el caso que lo motiva es una fabrica de analisis que pide
+ * otros analisis, y reentrar se autobloquearia --, asi que la secuencia real es
+ * tomar, soltar, calcular y volver a tomar.  La SEGUNDA toma se mide igual que
+ * la primera: es la mitad del coste en ese patron.
+ */
+class TimedUniqueLock {
+  public:
+    TimedUniqueLock(SharedMutex &m, std::atomic<long long> *ns)
+        : m_(m), ns_(ns) {
+        lock();
+    }
+    ~TimedUniqueLock() {
+        if (held_) m_.unlock();
+    }
+    TimedUniqueLock(const TimedUniqueLock &) = delete;
+    TimedUniqueLock &operator=(const TimedUniqueLock &) = delete;
+
+    void lock() {
+        if (ns_ == nullptr) {
+            m_.lock();
+            held_ = true;
+            return;
+        }
+        const uint64_t t0 = reloj::ahora();
+        m_.lock();
+        held_ = true;
+        ns_->fetch_add(static_cast<long long>(reloj::a_ns(reloj::ahora() - t0)),
+                       std::memory_order_relaxed);
+    }
+    void unlock() {
+        m_.unlock();
+        held_ = false;
+    }
+
+  private:
+    SharedMutex &m_;
+    std::atomic<long long> *ns_;
+    bool held_ = false;
 };
 
 } // namespace util

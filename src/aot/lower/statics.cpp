@@ -153,7 +153,7 @@ void clean_after_static_lowering(ir::IrFunction &fn) {
      * son valores que ya no usa nadie, que es justo la pregunta que sabe
      * responder.  Escribirla otra vez aqui seria tener dos respuestas para lo
      * mismo. */
-    while (ir::ir_pass_dce(fn)) {
+    while (ir::applied(ir::ir_pass_dce(fn))) {
     }
 }
 

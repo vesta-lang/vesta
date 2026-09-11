@@ -345,8 +345,9 @@ void do_unroll(IrFunction &fn, const LoopInfo &li, int U) {
 
 } // namespace
 
-bool ir_pass_unroll(IrFunction &fn, int factor,
-                    analysis::asa::FactStore *facts) {
+/* Cuerpo interno; la puerta publica lo envuelve.  @see PassResult */
+static bool unroll_impl(IrFunction &fn, int factor,
+                        analysis::asa::FactStore *facts) {
     if (unroll_disabled()) return false;
     if (fn.blocks.size() < 3) return false;
 
@@ -518,6 +519,11 @@ bool ir_pass_unroll(IrFunction &fn, int factor,
     }
     if (changed) rebuild_cfg(fn);
     return changed;
+}
+
+PassResult ir_pass_unroll(IrFunction &fn, int factor,
+                          analysis::asa::FactStore *facts) {
+    return PassResult::of(fn, unroll_impl(fn, factor, facts));
 }
 
 } // namespace ir

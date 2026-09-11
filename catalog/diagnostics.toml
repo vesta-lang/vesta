@@ -992,6 +992,144 @@ es = "almacen de analisis: {0} aciertos, {1} fallos, {2} guardados, {3} rechazad
 en = "fact base: {0} queries answered, {1} analyses actually run"
 es = "base de hechos: {0} preguntas atendidas, {1} analisis ejecutados"
 
+# --- LO QUE CUESTA SABER: el reparto del ASA por dominio (VXA077, VXA078) ---
+#
+# El ASA es donde vive todo lo que el compilador sabe, y hasta ahora no decia lo
+# que cuesta saberlo: `produce()` YA cronometraba cada dominio, pero el numero
+# solo salia en el volcado `--asa`, que es otra pregunta.  Quien pedia TIEMPOS
+# no veia el ASA por ningun lado, asi que su coste se leia dentro de la fase que
+# lo hubiera disparado y parecia de otro.
+#
+# Con el reparto delante se distingue lo que no se distinguia: un dominio caro
+# por lento y otro caro por mirar muchas entidades se arreglan de formas
+# opuestas, y uno que mira mucho y afirma poco no es que sea caro -- es que no
+# esta sirviendo para nada.
+# {0} dominios  {1} us en total  {2} hechos  {3} reutilizados  {4} callados
+[VXA077]
+en = "ASA: {0} domains, {1} us | {2} facts, {3} reused, {4} silent"
+es = "ASA: {0} dominios, {1} us | {2} hechos, {3} reutilizados, {4} callados"
+
+# Una fila por dominio, de mas caro a menos.
+# {0} dominio  {1} us  {2} hechos  {3} mirados  {4} callados  {5} saltados
+# {6} reutilizados
+[VXA078]
+en = "  {0}: {1} us | {2} facts of {3} looked at ({4} silent, {5} skipped, {6} reused)"
+es = "  {0}: {1} us | {2} hechos de {3} mirados ({4} callados, {5} saltados, {6} reutilizados)"
+
+# --- LO QUE CUESTA CADA ANALISIS de la base de hechos (VXA079) ---
+#
+# El nivel [1] de las tres caches: los analisis EN MEMORIA de una compilacion.
+# Con un solo par de numeros para todos -- preguntas y ejecuciones -- se sabe si
+# la base ahorra, pero no cual de los once es el que pesa; y son cosas que se
+# arreglan de formas opuestas: uno caro por lento se optimiza, uno caro por
+# pedirse mucho se cachea mejor.
+# {0} analisis  {1} us  {2} ejecuciones  {3} preguntas  {4} momento
+[VXA079]
+en = "  {0}: {1} us | {2} runs of {3} queries, at stage {4}"
+es = "  {0}: {1} us | {2} ejecuciones de {3} preguntas, en el momento {4}"
+
+# --- El reparto DENTRO de leer el fuente (VXA080) ---
+#
+# El lexer y el parser no son dos bloques que se puedan cronometrar por
+# separado: el parser tira de tokens bajo demanda, asi que uno corre DENTRO del
+# otro.  El lexico se muestrea -- uno de cada N tokens -- y lo que queda de la
+# fase es la sintaxis.
+#
+# Se dice ESTIMADO donde se imprime, y no por escrupulo: en este proyecto un
+# contador que decia muestrear y no lo hacia dejo a sus consumidores
+# multiplicando, y la cifra salia 256 veces mas alta.  Era absurda pero
+# PLAUSIBLE, y sin nada con que compararla sobrevivio.
+# {0} us del lexico (estimado)  {1} us de sintaxis  {2} tokens
+# {3} muestras  {4} uno de cada  {5} declaraciones del AST
+[VXA080]
+en = "source: ~{0} us lexing (ESTIMATED from {3} samples, 1 in {4}) | {1} us parsing | {2} tokens, {5} top-level decls"
+es = "fuente: ~{0} us de lexico (ESTIMADO de {3} muestras, 1 de cada {4}) | {1} us de sintaxis | {2} tokens, {5} declaraciones"
+
+# --- El reparto de tiempos, POR CATALOGO (VXA081..VXA085) ---
+#
+# Estas lineas las lee una persona, asi que van en su idioma como el resto de lo
+# que el compilador dice.  Estaban escritas a mano en el sitio y por tanto solo
+# en espanol -- "vueltas", "visitas", "pases" --, que es la misma regla que ya
+# obliga a que los diagnosticos salgan de aqui.
+#
+# Lo que NO va aqui son las CLAVES del volcado de maquina (`__VESTA_TIMES__`):
+# eso es un interfaz que leen herramientas, o sea identificadores, y van en
+# ingles siempre.
+# {0} analisis  {1} tipos  {2} bajada  {3} optimizar  {4} emitir
+# {5} comprobar  {6} total
+[VXA081]
+en = "frontend: analysis {0} us | types {1} us | lowering {2} us | optimize {3} us | emit {4} us   (front-end check {5} us, total {6} us)"
+es = "frontend: analisis {0} us | tipos {1} us | bajada {2} us | optimizar {3} us | emitir {4} us   (comprobar {5} us, total {6} us)"
+
+# {0} resolver  {1} modulos  {2} optimizar  {3} emitir  {4} total
+[VXA082]
+en = "frontend: resolve {0} us | modules {1} us | optimize {2} us | emit {3} us   (total {4} us)"
+es = "frontend: resolver {0} us | modulos {1} us | optimizar {2} us | emitir {3} us   (total {4} us)"
+
+[VXA083]
+en = "optimize, by pass:"
+es = "optimizar por pase:"
+
+# La calibracion va DENTRO a proposito: una cifra mas fina que la resolucion del
+# reloj no significa nada, y sin verla nadie puede saberlo.
+# {0} pases  {1} us  {2} vueltas del punto fijo  {3} visitas a funcion
+# {4} reloj  {5} resolucion ns  {6} coste de una lectura ns
+[VXA084]
+en = "({0} passes, {1} us, {2} fixpoint rounds, {3} function visits; clock {4} at {5} ns, a read costs {6} ns)"
+es = "({0} pases, {1} us, {2} vueltas del punto fijo, {3} visitas a funcion; reloj {4} de {5} ns, medir cuesta {6} ns)"
+
+# Rendirse a medias es una averia, asi que se dice; y una averia que no ocurre
+# no ocupa sitio en la linea.
+# {0} cuantas veces se agoto el tope sin converger
+[VXA085]
+en = "{0} DID NOT CONVERGE (worse code), "
+es = "{0} SIN CONVERGER (codigo peor), "
+
+# El reparto por pase dice cual es caro; este dice si lo es POR IGUAL en todas
+# las funciones o por una sola.  Son dos averias distintas -- una se arregla
+# haciendo el pase mas barato, la otra mirando como crece con el tamano.
+[VXA086]
+en = "optimize, where it concentrates:"
+es = "optimizar, donde se concentra:"
+
+# --- POR QUE el SROA de pila no toca una reserva (VXA087..VXA093) ---
+#
+# Un analisis que renuncia tiene que decir POR QUE: si calla, parece que
+# funciona.  Estos motivos salian escritos a mano en el sitio y por tanto solo
+# en un idioma, que es justo lo que el catalogo viene a evitar.
+[VXA087]
+en = "unsupported use"
+es = "uso no soportado"
+
+[VXA088]
+en = "base reaches a PHI"
+es = "la base llega a un PHI"
+
+[VXA089]
+en = "base used as a function pointer"
+es = "la base se usa como puntero a funcion"
+
+[VXA090]
+en = "field address with a non-constant offset"
+es = "direccion de campo con desplazamiento no constante"
+
+[VXA091]
+en = "base used outside a field access (call, compare, stored as a value...)"
+es = "la base se usa fuera de un acceso a campo (llamada, comparacion, guardada como valor...)"
+
+[VXA092]
+en = "field address reaches a PHI or a function pointer"
+es = "una direccion de campo llega a un PHI o a un puntero a funcion"
+
+[VXA093]
+en = "field address used somewhere other than a load or a store address"
+es = "una direccion de campo se usa en algo que no es una carga ni la direccion de un almacenamiento"
+
+# {0} funcion  {1} identificador de la reserva  {2} el motivo
+[VXA094]
+en = "stack SROA: in '{0}', ALLOCA %{1} left alone: {2}"
+es = "SROA de pila: en '{0}', la reserva %{1} se deja como esta: {2}"
+
 # ===========================================================================
 # HECHOS DEL ASA -- el texto de lo que se sabe
 # ===========================================================================

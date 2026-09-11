@@ -26,15 +26,17 @@
 #ifndef IR_PASSES_SELECT_SIMPLIFY_H
 #define IR_PASSES_SELECT_SIMPLIFY_H
 
+#include "ir/pass_result.h"
+
 namespace ir {
 
 struct IrFunction;
 
 /**
  * @brief Aplica las simplificaciones algebraicas de SELECT a @p fn.
- * @return Numero de SELECT simplificados/reescritos.
+ * @return Si simplifico o reescribio algun SELECT.
  */
-int ir_pass_select_simplify(IrFunction &fn);
+PassResult ir_pass_select_simplify(IrFunction &fn);
 
 } // namespace ir
 

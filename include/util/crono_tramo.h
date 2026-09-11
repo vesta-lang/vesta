@@ -57,12 +57,60 @@ inline void acumular_tramo(const char *etiqueta, long long us) {
     acumular_tramo_ns(etiqueta, us * 1000);
 }
 
-/// Un tramo medido: cuanto se llevo y cuantas veces se entro en el.
-struct Tramo {
-    const char *nombre = "?";
+/**
+ * @brief Un tramo medido: cuanto se llevo, cuantas veces, y DENTRO DE QUE.
+ *
+ * El padre no es un adorno.  Sin el, el informe es una lista PLANA de numeros
+ * que se solapan: `emitir` 2386 ms, `report_bounds` 1810 y `effects` 190, y
+ * quien lo lee no puede saber si eso suma 4386 o 2386 -- ni, por tanto, donde
+ * esta el cuello de botella.  Ya costo tres atribuciones equivocadas en un solo
+ * dia: `emitir` no emitia, `bajada` no bajaba, y el analisis de escape parecia
+ * del emisor.
+ *
+ * Con el padre, el mismo dato se lee como lo que es -- 190 DENTRO de 1810
+ * DENTRO de 2386 -- y ademas aparece lo que ningun hijo explica, que es donde
+ * suele esconderse lo que nadie ha medido todavia.
+ */
+struct Span {
+    const char *name = "?";
+    /// El tramo que estaba abierto al entrar en este, o nulo si ninguno.
+    const char *parent = nullptr;
     long long us = 0; ///< microsegundos (se acumula en ns y se divide al leer).
-    long long veces = 0;
+    long long runs = 0;
+    /**
+     * @brief En cuantos HILOS se midio este tramo.
+     *
+     * Uno significa que @ref us es tiempo de PARED.  Mas de uno significa que
+     * es la SUMA de lo que midio cada hilo, y entonces no se puede dividir por
+     * el total de una fase -- que si es de pared -- sin obtener un disparate.
+     *
+     * No es un adorno del informe: sin este numero, un pase repartido entre
+     * ocho hilos se lee como si costara ocho veces mas de lo que tarda, y eso
+     * ya hizo perseguir un cuello de botella que no existia (el eliminador de
+     * codigo muerto parecia el 85 % del optimizador; medido en un solo hilo es
+     * el 10 %).
+     */
+    long long threads = 0;
 };
+
+/**
+ * @brief Abre un tramo: lo apila y dice quien lo contiene.
+ * @param label El que se abre.
+ * @return El que estaba abierto, o nulo.
+ */
+const char *enter_span(const char *label);
+
+/**
+ * @brief Cierra el tramo abierto y le suma lo que costo.
+ * @param label  El que se cierra.
+ * @param parent El que devolvio @ref enter_span .
+ * @param ns     Lo que tardo.
+ */
+void leave_span(const char *label, const char *parent, long long ns);
+
+/// El tramo abierto ahora mismo en este hilo, o nulo.  Lo usa quien lleva su
+/// propia contabilidad y quiere colgarla del arbol igualmente.
+const char *current_span();
 
 /// Lo que cuesta medir y lo fino que es el reloj, en nanosegundos.  Se
 /// descuenta el coste al informar; la resolucion se ensena para que nadie se
@@ -76,7 +124,7 @@ Calibracion_ calibracion_del_cronometro();
 
 /// Los tramos medidos, del mas caro al mas barato.  Ya descontado el coste de
 /// medir (que es proporcional a las tomas y siempre hacia arriba).
-std::vector<Tramo> tramos_medidos();
+std::vector<Span> measured_spans();
 
 /// Pone el acumulador a cero.
 void reiniciar_tramos();
@@ -104,15 +152,19 @@ struct CronoTramo {
      * @param etiqueta Bajo que nombre se suma.
      * @param medir    Si hay que medir; falso no cuesta nada.
      */
+    const char *parent; ///< el tramo que lo contiene, para poder anidarlo.
+
     CronoTramo(const char *etiqueta, bool medir)
-        : n(etiqueta), t0(0), on(medir) {
-        if (on) t0 = reloj::ahora();
+        : n(etiqueta), t0(0), on(medir), parent(nullptr) {
+        if (!on) return;
+        parent = enter_span(etiqueta);
+        t0 = reloj::ahora();
     }
     ~CronoTramo() {
         if (!on) return;
         /* Se convierte a tiempo AQUI y no al informar porque el acumulador es
          * uno solo y mezclar unidades seria peor que una multiplicacion. */
-        acumular_tramo_ns(n, reloj::a_ns(reloj::ahora() - t0));
+        leave_span(n, parent, reloj::a_ns(reloj::ahora() - t0));
     }
     CronoTramo(const CronoTramo &) = delete;
     CronoTramo &operator=(const CronoTramo &) = delete;

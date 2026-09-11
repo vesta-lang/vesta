@@ -519,6 +519,20 @@ struct CompileResult {
      */
     struct TiemposFrontend {
         long analisis_us = 0;  ///< Lexico + sintaxis: fuente -> AST.
+        /**
+         * @brief De @c analisis_us , lo que se ESTIMA del lexico.
+         *
+         * Estimado y no medido: el lexer y el parser estan entrelazados -- el
+         * parser tira de tokens bajo demanda --, asi que no son dos bloques que
+         * se puedan cronometrar por separado.  Se muestrea uno de cada 256
+         * tokens y se extrapola.  @see Lexer::estimated_micros
+         *
+         * Lo que queda -- @c analisis_us menos esto -- es la sintaxis.
+         */
+        long lexing_us_est = 0;
+        long long tokens = 0;         ///< Tokens entregados.  EXACTO.
+        long long lexing_samples = 0; ///< Muestras que sostienen la estimacion.
+        long long ast_decls = 0;      ///< Declaraciones de primer nivel.
         long tipos_us = 0;     ///< Comprobacion de tipos sobre el AST.
         long bajada_us = 0;    ///< AST -> IR.
         long optimizar_us = 0; ///< Pases sobre el IR.

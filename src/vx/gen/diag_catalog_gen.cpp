@@ -293,6 +293,24 @@ const CatEntry kEntries[] = {
     {"VXA074", {"facts cache: {0} at stage {1} {2} | {3} facts, {4} domains, {5} stale, {6} skipped, {7} corrupt | per function: {8} domains partially loaded, {9} facts dropped, {10} functions reused", "cache de hechos: {0} en el momento {1} {2} | {3} hechos, {4} dominios, {5} caducos, {6} saltados, {7} corruptos | por funcion: {8} dominios a medias, {9} hechos tirados, {10} funciones reutilizadas"}},
     {"VXA075", {"analysis store: {0} hits, {1} misses, {2} stored, {3} rejected | {4} bytes read, {5} written", "almacen de analisis: {0} aciertos, {1} fallos, {2} guardados, {3} rechazados | {4} bytes leidos, {5} escritos"}},
     {"VXA076", {"fact base: {0} queries answered, {1} analyses actually run", "base de hechos: {0} preguntas atendidas, {1} analisis ejecutados"}},
+    {"VXA077", {"ASA: {0} domains, {1} us | {2} facts, {3} reused, {4} silent", "ASA: {0} dominios, {1} us | {2} hechos, {3} reutilizados, {4} callados"}},
+    {"VXA078", {"  {0}: {1} us | {2} facts of {3} looked at ({4} silent, {5} skipped, {6} reused)", "  {0}: {1} us | {2} hechos de {3} mirados ({4} callados, {5} saltados, {6} reutilizados)"}},
+    {"VXA079", {"  {0}: {1} us | {2} runs of {3} queries, at stage {4}", "  {0}: {1} us | {2} ejecuciones de {3} preguntas, en el momento {4}"}},
+    {"VXA080", {"source: ~{0} us lexing (ESTIMATED from {3} samples, 1 in {4}) | {1} us parsing | {2} tokens, {5} top-level decls", "fuente: ~{0} us de lexico (ESTIMADO de {3} muestras, 1 de cada {4}) | {1} us de sintaxis | {2} tokens, {5} declaraciones"}},
+    {"VXA081", {"frontend: analysis {0} us | types {1} us | lowering {2} us | optimize {3} us | emit {4} us   (front-end check {5} us, total {6} us)", "frontend: analisis {0} us | tipos {1} us | bajada {2} us | optimizar {3} us | emitir {4} us   (comprobar {5} us, total {6} us)"}},
+    {"VXA082", {"frontend: resolve {0} us | modules {1} us | optimize {2} us | emit {3} us   (total {4} us)", "frontend: resolver {0} us | modulos {1} us | optimizar {2} us | emitir {3} us   (total {4} us)"}},
+    {"VXA083", {"optimize, by pass:", "optimizar por pase:"}},
+    {"VXA084", {"({0} passes, {1} us, {2} fixpoint rounds, {3} function visits; clock {4} at {5} ns, a read costs {6} ns)", "({0} pases, {1} us, {2} vueltas del punto fijo, {3} visitas a funcion; reloj {4} de {5} ns, medir cuesta {6} ns)"}},
+    {"VXA085", {"{0} DID NOT CONVERGE (worse code), ", "{0} SIN CONVERGER (codigo peor), "}},
+    {"VXA086", {"optimize, where it concentrates:", "optimizar, donde se concentra:"}},
+    {"VXA087", {"unsupported use", "uso no soportado"}},
+    {"VXA088", {"base reaches a PHI", "la base llega a un PHI"}},
+    {"VXA089", {"base used as a function pointer", "la base se usa como puntero a funcion"}},
+    {"VXA090", {"field address with a non-constant offset", "direccion de campo con desplazamiento no constante"}},
+    {"VXA091", {"base used outside a field access (call, compare, stored as a value...)", "la base se usa fuera de un acceso a campo (llamada, comparacion, guardada como valor...)"}},
+    {"VXA092", {"field address reaches a PHI or a function pointer", "una direccion de campo llega a un PHI o a un puntero a funcion"}},
+    {"VXA093", {"field address used somewhere other than a load or a store address", "una direccion de campo se usa en algo que no es una carga ni la direccion de un almacenamiento"}},
+    {"VXA094", {"stack SROA: in '{0}', ALLOCA %{1} left alone: {2}", "SROA de pila: en '{0}', la reserva %{1} se deja como esta: {2}"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -556,7 +574,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 535;
+const int kEntryCount = 553;
 
 } // namespace
 

@@ -37,6 +37,8 @@
 #ifndef IR_PASSES_IF_CONVERSION_H
 #define IR_PASSES_IF_CONVERSION_H
 
+#include "ir/pass_result.h"
+
 namespace ir {
 
 struct IrFunction;
@@ -50,9 +52,9 @@ struct IrFunction;
  * vacios/inalcanzables (los limpia el pase de bloques inalcanzables).
  *
  * @param fn Funcion SSA a transformar.
- * @return Numero de diamantes/triangulos convertidos a SELECT.
+ * @return Si convirtio algun diamante/triangulo a SELECT.
  */
-int ir_pass_if_conversion(IrFunction &fn);
+PassResult ir_pass_if_conversion(IrFunction &fn);
 
 } // namespace ir
 

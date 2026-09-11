@@ -138,12 +138,10 @@ ir::OptLevel opt_level_from_int_(int n) noexcept {
     }
 }
 
-/// Verifica si la cache esta deshabilitada via env var.  Por defecto
-/// activa (escribe + lee de disco).  El usuario puede setear
-/// `VX_NO_CACHE=1` para forzar rebuild completo (util en CI / debug).
-bool vxi_cache_disabled_() noexcept {
-    return util::flag_on(util::FlagId::NoCache);
-}
+/// Si la cache esta apagada.  La respuesta la da `cache_paths.h`, que es quien
+/// conoce los cajones: antes se contestaba aqui y solo valia para el de este
+/// camino, asi que la bandera dejaba vivos los otros.  @see util::cache_disabled
+bool vxi_cache_disabled_() noexcept { return util::cache_disabled(); }
 
 /// Escribe @p bytes al fichero @p path (binary).  Devuelve true si OK.
 /// Crea el directorio padre si no existe.
@@ -4533,8 +4531,8 @@ CompileResult compile_vx_project(
             bool changed = true;
             while (changed) {
                 changed = false;
-                if (ir::ir_pass_const_fold(fn)) changed = true;
-                if (ir::ir_pass_unreachable(fn)) changed = true;
+                if (ir::applied(ir::ir_pass_const_fold(fn))) changed = true;
+                if (ir::applied(ir::ir_pass_unreachable(fn))) changed = true;
             }
         }
     }
@@ -4568,7 +4566,12 @@ CompileResult compile_vx_project(
          * generase codigo distinto SEGUN SI LE PIDES ANaLISIS. */
         ir::IrModule pre_snapshot = merged;
         for (auto &fn : pre_snapshot.functions)
-            ir::ir_pass_sroa_stack_structs(fn);
+            /* Por `applied`, que es la unica puerta: aqui se estaba MUTANDO el
+             * IR y tirando el resultado, con lo que la version no se movia y un
+             * analisis cacheado de esta copia podia servirse despues -- y lo
+             * que guarda son punteros a instrucciones.  Nadie lo habria visto:
+             * lo saca la firma, no una revision. */
+            (void)ir::applied(ir::ir_pass_sroa_stack_structs(fn));
         res.ir_module_cache_bytes_preopt =
             ir::emit_ir_module_cache(pre_snapshot);
 
@@ -4652,6 +4655,11 @@ CompileResult compile_vx_project(
      * el inline puesto.  Aqui y no antes, porque la ISA del objetivo ya esta
      * fijada y el optimizador decide con ella. */
     if (quiere_inline) {
+        /* Una SEGUNDA optimizacion completa, sobre la copia con inline.  Cae
+         * en la misma ventana que la de verdad, asi que sin tramo propio se
+         * suma al coste del optimizador sin que nadie sepa que son dos. */
+        util::CronoTramo t_("fase-opt:ir_optimize (copia con inline)",
+                            util::flag_on(util::FlagId::Times));
         ir::ir_optimize(para_inline, opt_level_from_int_(opts.opt_level),
                         /*allow_inline=*/true);
         res.ir_module_cache_bytes_inlined =
@@ -4680,6 +4688,8 @@ CompileResult compile_vx_project(
      * no si se mira: saltarse la comprobacion entera dejaba a `--analyze` sin
      * nada que ensenar, que es lo contrario de para lo que existe. */
     {
+        util::CronoTramo t_borrow_("fase-opt:borrow_across_calls",
+                                   util::flag_on(util::FlagId::Times));
         analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
         vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
                                       pre_opt_base,
@@ -4760,6 +4770,11 @@ CompileResult compile_vx_project(
         else if (wants_stage_(opts, analysis::asa::kStagePostOpt))
             for (const char *d : opts.asa_domains)
                 if (d != nullptr) wanted.push_back(d);
+        /* Producir los hechos y sellarlos en disco corre DENTRO de la ventana
+         * que el informe llama "optimizar", asi que sin medirlo se le atribuia
+         * al optimizador un trabajo que no es suyo. */
+        util::CronoTramo t_hechos_("fase-opt:facts_store",
+                                   util::flag_on(util::FlagId::Times));
         const auto s = ensure_facts_impl_(
             merged, facts, wanted,
             root_facts_key != 0
