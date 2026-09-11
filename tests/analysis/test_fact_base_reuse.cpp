@@ -62,23 +62,23 @@ static ir::IrModule make_module(const char *fn_name) {
     ir::IrInstr k;
     k.op = ir::IrOp::CONST;
     k.type = ir::IrType::I32;
-    k.dst = 0;
+    k.dst = ir::IrValueId(0);
     k.imm = 7;
     b.instrs.push_back(k);
 
     ir::IrInstr add;
     add.op = ir::IrOp::ADD;
     add.type = ir::IrType::I32;
-    add.dst = 1;
-    add.operands.push_back(0);
-    add.operands.push_back(0);
+    add.dst = ir::IrValueId(1);
+    add.operands.push_back(ir::IrValueId(0));
+    add.operands.push_back(ir::IrValueId(0));
     b.instrs.push_back(add);
 
     ir::IrInstr ret;
     ret.op = ir::IrOp::RET;
     ret.type = ir::IrType::I32;
     ret.dst = ir::IR_NO_VALUE;
-    ret.operands.push_back(1);
+    ret.operands.push_back(ir::IrValueId(1));
     b.instrs.push_back(ret);
 
     fn.blocks.push_back(std::move(b));

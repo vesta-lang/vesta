@@ -103,8 +103,12 @@ static ir::IrFunction build_loop() {
         phi.op = ir::IrOp::PHI;
         phi.type = ir::IrType::I64;
         phi.dst = v1;
-        phi.phi_args.push_back({bb0, v0});
-        phi.phi_args.push_back({bb1, v2});
+        /* OJO al orden: `IrPhiArg` es {valor, bloque}, no al reves.  Aqui
+         * estaba invertido y colaba porque los dos campos eran `uint32_t`;
+         * el par de bb0 ademas coincidia (0,0) y tapaba el del back-edge,
+         * que llegaba como valor=1 / bloque=2 en vez de valor=%2 / bb1. */
+        phi.phi_args.push_back({v0, bb0});
+        phi.phi_args.push_back({v2, bb1});
         fn.blocks[bb1].instrs.push_back(phi);
         ir::IrInstr add{};
         add.op = ir::IrOp::ADD;
@@ -133,11 +137,11 @@ static ir::IrFunction build_loop() {
 // --------------------------------------------------------------------------
 static void test_answer_depends_on_target() {
     const ir::IrFunction fn = build_loop();
-    const ir::IrValueId v1 = 1, v2 = 2;
+    const ir::IrValueId v1 = ir::IrValueId(1), v2 = ir::IrValueId(2);
 
-    const std::vector<uint32_t> destructive =
+    const std::vector<ir::IrValueId> destructive =
         jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Destructive);
-    const std::vector<uint32_t> preserving =
+    const std::vector<ir::IrValueId> preserving =
         jit::ssa_phi_coalesce_remap(fn, jit::DstKind::Preserving);
 
     // Donde el destino se destruye, %2 y %1 NO pueden acabar en el mismo

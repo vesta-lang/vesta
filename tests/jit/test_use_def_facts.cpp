@@ -19,6 +19,7 @@
 #include "codegen/rbank/function_snapshot.h"
 #include "ir/linear_pos.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -73,11 +74,13 @@ int main() {
         IrFunction fn;
         fn.values.resize(5);
         fn.blocks.resize(1);
-        fn.blocks[0].id = 0;
+        fn.blocks[0].id = blk(0);
         fn.blocks[0].instrs = {
-            mk(IrOp::CONST, 1, {}, 5),       mk(IrOp::CONST, 2, {}, 7),
-            mk(IrOp::ADD, 3, {1, 2}),        mk(IrOp::ADD, 4, {3, 1}),
-            mk(IrOp::RET, IR_NO_VALUE, {4}),
+            mk(IrOp::CONST, vid(1), {}, 5),
+            mk(IrOp::CONST, vid(2), {}, 7),
+            mk(IrOp::ADD, vid(3), {vid(1), vid(2)}),
+            mk(IrOp::ADD, vid(4), {vid(3), vid(1)}),
+            mk(IrOp::RET, IR_NO_VALUE, {vid(4)}),
         };
 
         const UseDefFacts f = analysis::compute_use_def(fn);
@@ -85,28 +88,28 @@ int main() {
         CHECK(f.num_values() == 5, "num_values deberia ser 5");
 
         // v1 se usa en 2 y 3.
-        CHECK(f.next_use_after(1, P(0)) == P(2),
+        CHECK(f.next_use_after(vid(1), P(0)) == P(2),
               "next_use(v1,0) deberia ser 2");
-        CHECK(f.next_use_after(1, P(2)) == P(3),
+        CHECK(f.next_use_after(vid(1), P(2)) == P(3),
               "next_use(v1,2) deberia ser 3");
-        CHECK(f.next_use_after(1, P(3)) == UseDefFacts::NO_NEXT_USE,
+        CHECK(f.next_use_after(vid(1), P(3)) == UseDefFacts::NO_NEXT_USE,
               "next_use(v1,3) deberia ser NO_NEXT_USE (ya no se usa)");
-        CHECK(f.distance_to_next_use(1, P(0)) == 2u,
+        CHECK(f.distance_to_next_use(vid(1), P(0)) == 2u,
               "distancia(v1,0) deberia ser 2");
 
         // v2 muere en 2: mejor victima que v1 en el punto 2.
-        CHECK(f.next_use_after(2, P(2)) == UseDefFacts::NO_NEXT_USE,
+        CHECK(f.next_use_after(vid(2), P(2)) == UseDefFacts::NO_NEXT_USE,
               "v2 no deberia tener uso tras su unico uso en 2");
-        CHECK(f.distance_to_next_use(2, P(2)) == 0xFFFFFFFFu,
+        CHECK(f.distance_to_next_use(vid(2), P(2)) == 0xFFFFFFFFu,
               "v2 muerto en 2 -> distancia infinita (victima ideal)");
-        CHECK(f.distance_to_next_use(1, P(2)) == 1u,
+        CHECK(f.distance_to_next_use(vid(1), P(2)) == 1u,
               "v1 se reusa en 3 -> distancia 1 (peor victima que v2)");
 
         // Sin usos: valor 0 (nunca definido ni usado) y consultas fuera de
         // rango.
-        CHECK(!f.has_uses(0), "v0 no tiene usos");
-        CHECK(f.has_uses(1), "v1 tiene usos");
-        CHECK(f.next_use_after(0, P(0)) == UseDefFacts::NO_NEXT_USE,
+        CHECK(!f.has_uses(vid(0)), "v0 no tiene usos");
+        CHECK(f.has_uses(vid(1)), "v1 tiene usos");
+        CHECK(f.next_use_after(vid(0), P(0)) == UseDefFacts::NO_NEXT_USE,
               "v0 sin usos -> NO_NEXT_USE");
         CHECK(f.next_use_after(IR_NO_VALUE, P(0)) == UseDefFacts::NO_NEXT_USE,
               "IR_NO_VALUE fuera de rango -> NO_NEXT_USE (sin crash)");
@@ -127,16 +130,16 @@ int main() {
         IrFunction fn;
         fn.values.resize(4);
         fn.blocks.resize(2);
-        fn.blocks[0].id = 0;
-        fn.blocks[0].succs = {1};
-        fn.blocks[0].instrs = {mk(IrOp::CONST, 1, {}, 0)};
+        fn.blocks[0].id = blk(0);
+        fn.blocks[0].succs = {blk(1)};
+        fn.blocks[0].instrs = {mk(IrOp::CONST, vid(1), {}, 0)};
 
-        IrInstr phi = mk(IrOp::PHI, 2);
-        phi.phi_args = {IrPhiArg{1, 0}, IrPhiArg{3, 1}};
-        fn.blocks[1].id = 1;
-        fn.blocks[1].preds = {0, 1};
-        fn.blocks[1].succs = {1};
-        fn.blocks[1].instrs = {phi, mk(IrOp::ADD, 3, {2, 2})};
+        IrInstr phi = mk(IrOp::PHI, vid(2));
+        phi.phi_args = {IrPhiArg{vid(1), blk(0)}, IrPhiArg{vid(3), blk(1)}};
+        fn.blocks[1].id = blk(1);
+        fn.blocks[1].preds = {blk(0), blk(1)};
+        fn.blocks[1].succs = {blk(1)};
+        fn.blocks[1].instrs = {phi, mk(IrOp::ADD, vid(3), {vid(2), vid(2)})};
 
         const UseDefFacts f = analysis::compute_use_def(fn);
         CHECK(f.num_instrs == 3, "num_instrs deberia ser 3 (1 + 2)");
@@ -149,7 +152,8 @@ int main() {
         CHECK(f.off[4] - f.off[3] == 1 && f.use_pos[f.off[3]] == 2,
               "el arg PHI v3 (back-edge) debe contar en block_end[b1]=2");
         // v2 se usa como operando del ADD en la posicion 2.
-        CHECK(f.next_use_after(2, P(1)) == P(2), "v2 se usa en el ADD @2");
+        CHECK(f.next_use_after(vid(2), P(1)) == P(2),
+              "v2 se usa en el ADD @2");
     }
 
     // -----------------------------------------------------------------------
@@ -162,14 +166,14 @@ int main() {
         IrFunction fn;
         fn.values.resize(3);
         fn.blocks.resize(1);
-        fn.blocks[0].id = 0;
-        IrInstr call = mk(IrOp::CALLIND, 2);
-        call.func_ptr = 1;
-        fn.blocks[0].instrs = {mk(IrOp::CONST, 1, {}, 0x1000), call};
+        fn.blocks[0].id = blk(0);
+        IrInstr call = mk(IrOp::CALLIND, vid(2));
+        call.func_ptr = vid(1);
+        fn.blocks[0].instrs = {mk(IrOp::CONST, vid(1), {}, 0x1000), call};
 
         const UseDefFacts f = analysis::compute_use_def(fn);
-        CHECK(f.has_uses(1), "v1 (func_ptr) deberia contar como usado");
-        CHECK(f.next_use_after(1, P(0)) == P(1),
+        CHECK(f.has_uses(vid(1)), "v1 (func_ptr) deberia contar como usado");
+        CHECK(f.next_use_after(vid(1), P(0)) == P(1),
               "el func_ptr v1 se usa en el CALLIND @1");
     }
 
@@ -181,19 +185,19 @@ int main() {
         IrFunction fn;
         fn.values.resize(3);
         fn.blocks.resize(1);
-        fn.blocks[0].id = 0;
+        fn.blocks[0].id = blk(0);
         fn.blocks[0].instrs = {
-            mk(IrOp::CONST, 1, {}, 9),
-            mk(IrOp::CONST, 2, {}, 3),
-            mk(IrOp::ADD, IR_NO_VALUE, {1, 2}),
+            mk(IrOp::CONST, vid(1), {}, 9),
+            mk(IrOp::CONST, vid(2), {}, 3),
+            mk(IrOp::ADD, IR_NO_VALUE, {vid(1), vid(2)}),
         };
 
         codegen::rbank::FunctionSnapshot s;
         s.fn = &fn;
         const UseDefFacts &q =
             s.use_def_facts(); // azucar de query<UseDefFacts>()
-        CHECK(q.next_use_after(1, P(0)) == P(2) &&
-                  q.next_use_after(2, P(0)) == P(2),
+        CHECK(q.next_use_after(vid(1), P(0)) == P(2) &&
+                  q.next_use_after(vid(2), P(0)) == P(2),
               "query<UseDefFacts> no coincide con compute_use_def");
         CHECK(s.is_computed(codegen::rbank::Fact::UseDef),
               "el Fact UseDef no quedo materializado tras la query");

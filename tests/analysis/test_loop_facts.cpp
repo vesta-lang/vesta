@@ -21,6 +21,7 @@
 #include "analysis/facts/loop_structure.h"
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -56,7 +57,7 @@ static IrInstr brcond(IrBlockId tt, IrBlockId ff) {
     i.op = IrOp::BR_COND;
     i.type = IrType::VOID;
     i.dst = ir::IR_NO_VALUE;
-    i.operands = {0};
+    i.operands = {vid(0)};
     i.target_block = tt;
     i.false_block = ff;
     return i;
@@ -74,6 +75,20 @@ static IrBlock block(IrBlockId id, const char *name, IrInstr term) {
     b.name = name;
     b.instrs.push_back(term);
     return b;
+}
+
+/**
+ * @brief Una instruccion que DEFINE el valor @p dst.
+ *
+ * Estaba repetida once veces como lambda dentro de cada prueba, identica en
+ * las once.  Una funcion con nombre: se arregla en un sitio.
+ */
+static IrInstr val(IrOp op, ir::IrValueId dst, IrType t) {
+    IrInstr in;
+    in.op = op;
+    in.dst = dst;
+    in.type = t;
+    return in;
 }
 
 /**
@@ -101,64 +116,56 @@ static void counted_loop_before_optimizing() {
     for (int i = 0; i < 7; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
-
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     {
-        IrInstr c = val(IrOp::CONST, 0, IrType::I64);
+        IrInstr c = val(IrOp::CONST, vid(0), IrType::I64);
         c.imm = 0;
         entry.instrs.push_back(c);
     }
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
-    header.id = 1;
+    header.id = blk(1);
     header.name = "header";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0}); // init, preheader
-        phi.phi_args.push_back({/*value=*/5, /*block=*/2}); // iv+1, latch
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)}); // init, preheader
+        phi.phi_args.push_back({vid(5), blk(2)}); // iv+1, latch
         header.instrs.push_back(phi);
         // La COPIA que deja la construccion de SSA.
-        IrInstr mv = val(IrOp::MOV, 2, IrType::I64);
-        mv.operands.push_back(1);
+        IrInstr mv = val(IrOp::MOV, vid(2), IrType::I64);
+        mv.operands.push_back(vid(1));
         header.instrs.push_back(mv);
         // El limite, materializado DENTRO de la cabecera.
-        IrInstr lim = val(IrOp::CONST, 3, IrType::I64);
+        IrInstr lim = val(IrOp::CONST, vid(3), IrType::I64);
         lim.imm = 64;
         header.instrs.push_back(lim);
-        IrInstr cmp = val(IrOp::CMP_LT, 4, IrType::BOOL);
-        cmp.operands.push_back(2); // compara la COPIA, no el PHI
-        cmp.operands.push_back(3);
+        IrInstr cmp = val(IrOp::CMP_LT, vid(4), IrType::BOOL);
+        cmp.operands.push_back(vid(2)); // compara la COPIA, no el PHI
+        cmp.operands.push_back(vid(3));
         header.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 3);
-        t.operands[0] = 4;
+        IrInstr t = brcond(blk(2), blk(3));
+        t.operands[0] = vid(4);
         header.instrs.push_back(t);
     }
 
     IrBlock body;
-    body.id = 2;
+    body.id = blk(2);
     body.name = "body";
     {
-        IrInstr one = val(IrOp::CONST, 6, IrType::I64);
+        IrInstr one = val(IrOp::CONST, vid(6), IrType::I64);
         one.imm = 1;
         body.instrs.push_back(one);
-        IrInstr add = val(IrOp::ADD, 5, IrType::I64);
-        add.operands.push_back(2); // sobre la COPIA
-        add.operands.push_back(6);
+        IrInstr add = val(IrOp::ADD, vid(5), IrType::I64);
+        add.operands.push_back(vid(2)); // sobre la COPIA
+        add.operands.push_back(vid(6));
         body.instrs.push_back(add);
-        body.instrs.push_back(br(1)); // back-edge
+        body.instrs.push_back(br(blk(1))); // back-edge
     }
 
-    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+    fn.blocks = {entry, header, body, block(blk(3), "exit", ret())};
 
     const analysis::IrFacts facts = analysis::build_ir_facts(fn);
     const LoopFacts lf = compute_loop_facts(fn);
@@ -208,65 +215,58 @@ static void constant_trip_loop_is_not_linear() {
     for (int i = 0; i < 7; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     {
-        IrInstr c = val(IrOp::CONST, 0, IrType::I64);
+        IrInstr c = val(IrOp::CONST, vid(0), IrType::I64);
         c.imm = 0;
         entry.instrs.push_back(c);
     }
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
-    header.id = 1;
+    header.id = blk(1);
     header.name = "header";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/5, /*block=*/2});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(5), blk(2)});
         header.instrs.push_back(phi);
-        IrInstr lim = val(IrOp::CONST, 3, IrType::I64);
+        IrInstr lim = val(IrOp::CONST, vid(3), IrType::I64);
         lim.imm = 64;
         header.instrs.push_back(lim);
-        IrInstr cmp = val(IrOp::CMP_LT, 4, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(3);
+        IrInstr cmp = val(IrOp::CMP_LT, vid(4), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(3));
         header.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 3);
-        t.operands[0] = 4;
+        IrInstr t = brcond(blk(2), blk(3));
+        t.operands[0] = vid(4);
         header.instrs.push_back(t);
     }
     IrBlock body;
-    body.id = 2;
+    body.id = blk(2);
     body.name = "body";
     {
-        IrInstr one = val(IrOp::CONST, 6, IrType::I64);
+        IrInstr one = val(IrOp::CONST, vid(6), IrType::I64);
         one.imm = 1;
         body.instrs.push_back(one);
-        IrInstr add = val(IrOp::ADD, 5, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(6);
+        IrInstr add = val(IrOp::ADD, vid(5), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(6));
         body.instrs.push_back(add);
-        body.instrs.push_back(br(1));
+        body.instrs.push_back(br(blk(1)));
     }
-    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+    fn.blocks = {entry, header, body, block(blk(3), "exit", ret())};
     /* El coste recorre `succs`, no los terminadores: sin esto no ve el
      * back-edge y no hay bucle que contar -- el test pasaria sin probar
      * nada. */
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2, 3};
-    fn.blocks[2].succs = {1};
-    fn.blocks[1].preds = {0, 2};
-    fn.blocks[2].preds = {1};
-    fn.blocks[3].preds = {1};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2), blk(3)};
+    fn.blocks[2].succs = {blk(1)};
+    fn.blocks[1].preds = {blk(0), blk(2)};
+    fn.blocks[2].preds = {blk(1)};
+    fn.blocks[3].preds = {blk(1)};
 
     /* SIN hechos: el anidamiento manda, como siempre.  Se compara con el otro
      * caso en vez de fijar un numero: lo que se prueba es que el hecho CAMBIA
@@ -283,7 +283,7 @@ static void constant_trip_loop_is_not_linear() {
     analysis::LoopTripInfo trip;
     trip.trip = 64;
     analysis::asa::Fact f;
-    CHECK(analysis::asa::loop_trip_fact(store, fn, /*header=*/1, trip,
+    CHECK(analysis::asa::loop_trip_fact(store, fn, blk(1), trip,
                                         analysis::asa::kStagePreOpt,
                                         analysis::asa::Source::Static, f),
           "hay hecho que publicar");
@@ -323,69 +323,62 @@ static void an_accumulator_does_not_hide_the_iv() {
     for (int i = 0; i < 10; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
     {
-        IrInstr c0 = val(IrOp::CONST, 0, IrType::I64); // i = 0
+        IrInstr c0 = val(IrOp::CONST, vid(0), IrType::I64); // i = 0
         c0.imm = 0;
         entry.instrs.push_back(c0);
-        IrInstr c1 = val(IrOp::CONST, 7, IrType::I64); // t = 0
+        IrInstr c1 = val(IrOp::CONST, vid(7), IrType::I64); // t = 0
         c1.imm = 0;
         entry.instrs.push_back(c1);
     }
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
-    header.id = 1;
+    header.id = blk(1);
     header.name = "header";
     {
         /* El ACUMULADOR va PRIMERO, que es lo que destapaba el fallo: se
          * probaba antes que el contador. */
-        IrInstr acc = val(IrOp::PHI, 8, IrType::I64);
-        acc.phi_args.push_back({/*value=*/7, /*block=*/0});
-        acc.phi_args.push_back({/*value=*/9, /*block=*/2});
+        IrInstr acc = val(IrOp::PHI, vid(8), IrType::I64);
+        acc.phi_args.push_back({vid(7), blk(0)});
+        acc.phi_args.push_back({vid(9), blk(2)});
         header.instrs.push_back(acc);
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/5, /*block=*/2});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(5), blk(2)});
         header.instrs.push_back(phi);
-        IrInstr lim = val(IrOp::CONST, 3, IrType::I64);
+        IrInstr lim = val(IrOp::CONST, vid(3), IrType::I64);
         lim.imm = 64;
         header.instrs.push_back(lim);
-        IrInstr cmp = val(IrOp::CMP_LT, 4, IrType::BOOL);
-        cmp.operands.push_back(1); // compara el CONTADOR, no el acumulador
-        cmp.operands.push_back(3);
+        IrInstr cmp = val(IrOp::CMP_LT, vid(4), IrType::BOOL);
+        cmp.operands.push_back(vid(1)); // compara el CONTADOR, no el acumulador
+        cmp.operands.push_back(vid(3));
         header.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 3);
-        t.operands[0] = 4;
+        IrInstr t = brcond(blk(2), blk(3));
+        t.operands[0] = vid(4);
         header.instrs.push_back(t);
     }
     IrBlock body;
-    body.id = 2;
+    body.id = blk(2);
     body.name = "body";
     {
-        IrInstr one = val(IrOp::CONST, 6, IrType::I64);
+        IrInstr one = val(IrOp::CONST, vid(6), IrType::I64);
         one.imm = 1;
         body.instrs.push_back(one);
-        IrInstr inc = val(IrOp::ADD, 5, IrType::I64); // i + 1
-        inc.operands.push_back(1);
-        inc.operands.push_back(6);
+        IrInstr inc = val(IrOp::ADD, vid(5), IrType::I64); // i + 1
+        inc.operands.push_back(vid(1));
+        inc.operands.push_back(vid(6));
         body.instrs.push_back(inc);
-        IrInstr acc_add = val(IrOp::ADD, 9, IrType::I64); // t + 1
-        acc_add.operands.push_back(8);
-        acc_add.operands.push_back(6);
+        IrInstr acc_add = val(IrOp::ADD, vid(9), IrType::I64); // t + 1
+        acc_add.operands.push_back(vid(8));
+        acc_add.operands.push_back(vid(6));
         body.instrs.push_back(acc_add);
-        body.instrs.push_back(br(1));
+        body.instrs.push_back(br(blk(1)));
     }
-    fn.blocks = {entry, header, body, block(3, "exit", ret())};
+    fn.blocks = {entry, header, body, block(blk(3), "exit", ret())};
 
     const analysis::IrFacts facts = analysis::build_ir_facts(fn);
     const LoopFacts lf = compute_loop_facts(fn);
@@ -435,13 +428,6 @@ static void an_outer_loop_is_recognized_too() {
     for (int i = 0; i < 11; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     auto cte = [&](ir::IrValueId dst, uint64_t v) {
         IrInstr c = val(IrOp::CONST, dst, IrType::I64);
         c.imm = v;
@@ -449,91 +435,91 @@ static void an_outer_loop_is_recognized_too() {
     };
 
     IrBlock entry; // b0
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
+    entry.instrs.push_back(cte(vid(0),0));
     /* El arranque de `j` y el paso viven en el preheader del de fuera, que es
      * donde los deja el frontend. */
-    entry.instrs.push_back(cte(6, 0));
-    entry.instrs.push_back(cte(5, 1));
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(cte(vid(6),0));
+    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock outer; // b1: for (i = 0; i < 32; i++)
-    outer.id = 1;
+    outer.id = blk(1);
     outer.name = "outer";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/4, /*block=*/4});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(4), blk(4)});
         outer.instrs.push_back(phi);
-        outer.instrs.push_back(cte(2, 32));
-        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(2);
+        outer.instrs.push_back(cte(vid(2),32));
+        IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(2));
         outer.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 5);
-        t.operands[0] = 3;
+        IrInstr t = brcond(blk(2), blk(5));
+        t.operands[0] = vid(3);
         outer.instrs.push_back(t);
     }
 
     IrBlock inner; // b2: for (j = 0; j < 16; j++)
-    inner.id = 2;
+    inner.id = blk(2);
     inner.name = "inner";
     {
-        IrInstr phi = val(IrOp::PHI, 7, IrType::I64);
-        phi.phi_args.push_back({/*value=*/6, /*block=*/1});
-        phi.phi_args.push_back({/*value=*/10, /*block=*/3});
+        IrInstr phi = val(IrOp::PHI, vid(7), IrType::I64);
+        phi.phi_args.push_back({vid(6), blk(1)});
+        phi.phi_args.push_back({vid(10), blk(3)});
         inner.instrs.push_back(phi);
-        inner.instrs.push_back(cte(8, 16));
-        IrInstr cmp = val(IrOp::CMP_LT, 9, IrType::BOOL);
-        cmp.operands.push_back(7);
-        cmp.operands.push_back(8);
+        inner.instrs.push_back(cte(vid(8),16));
+        IrInstr cmp = val(IrOp::CMP_LT, vid(9), IrType::BOOL);
+        cmp.operands.push_back(vid(7));
+        cmp.operands.push_back(vid(8));
         inner.instrs.push_back(cmp);
-        IrInstr t = brcond(3, 4);
-        t.operands[0] = 9;
+        IrInstr t = brcond(blk(3), blk(4));
+        t.operands[0] = vid(9);
         inner.instrs.push_back(t);
     }
 
     IrBlock inner_body; // b3: j++
-    inner_body.id = 3;
+    inner_body.id = blk(3);
     inner_body.name = "inner_body";
     {
-        IrInstr add = val(IrOp::ADD, 10, IrType::I64);
-        add.operands.push_back(7);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(10), IrType::I64);
+        add.operands.push_back(vid(7));
+        add.operands.push_back(vid(5));
         inner_body.instrs.push_back(add);
-        inner_body.instrs.push_back(br(2));
+        inner_body.instrs.push_back(br(blk(2)));
     }
 
     IrBlock outer_latch; // b4: i++
-    outer_latch.id = 4;
+    outer_latch.id = blk(4);
     outer_latch.name = "outer_latch";
     {
-        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(4), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(5));
         outer_latch.instrs.push_back(add);
-        outer_latch.instrs.push_back(br(1));
+        outer_latch.instrs.push_back(br(blk(1)));
     }
 
     fn.blocks = {entry,      outer,       inner,
-                 inner_body, outer_latch, block(5, "exit", ret())};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2, 5};
-    fn.blocks[2].succs = {3, 4};
-    fn.blocks[3].succs = {2};
-    fn.blocks[4].succs = {1};
-    fn.blocks[1].preds = {0, 4};
-    fn.blocks[2].preds = {1, 3};
-    fn.blocks[3].preds = {2};
-    fn.blocks[4].preds = {2};
-    fn.blocks[5].preds = {1};
+                 inner_body, outer_latch, block(blk(5), "exit", ret())};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2), blk(5)};
+    fn.blocks[2].succs = {blk(3), blk(4)};
+    fn.blocks[3].succs = {blk(2)};
+    fn.blocks[4].succs = {blk(1)};
+    fn.blocks[1].preds = {blk(0), blk(4)};
+    fn.blocks[2].preds = {blk(1), blk(3)};
+    fn.blocks[3].preds = {blk(2)};
+    fn.blocks[4].preds = {blk(2)};
+    fn.blocks[5].preds = {blk(1)};
 
     const LoopFacts lf = compute_loop_facts(fn);
     CHECK(lf.loop_count == 2, "hay dos bucles");
 
-    const uint32_t outer_id = lf.innermost(1);
-    const uint32_t inner_id = lf.innermost(2);
+    const uint32_t outer_id = lf.innermost(blk(1));
+    const uint32_t inner_id = lf.innermost(blk(2));
     CHECK(lf.parent_of(inner_id) == outer_id,
           "el de dentro cuelga del de fuera");
 
@@ -542,7 +528,7 @@ static void an_outer_loop_is_recognized_too() {
     CHECK(so.valid, "el bucle externo tiene forma de bucle contado");
     CHECK(so.inner_loops == 1 && !so.flat(),
           "y se dice que lleva otro dentro: quien clone tiene que mirarlo");
-    CHECK(so.contains(3),
+    CHECK(so.contains(blk(3)),
           "un bloque del bucle de DENTRO esta dentro del de fuera");
 
     const LoopStructure si = detect_loop_structure(fn, lf, inner_id);
@@ -614,15 +600,8 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
     fn.name = "mixto";
     for (int i = 0; i < 11; ++i)
         fn.values.push_back({});
-    fn.params.push_back(8);
+    fn.params.push_back(vid(8));
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     auto cte = [&](ir::IrValueId dst, uint64_t v) {
         IrInstr c = val(IrOp::CONST, dst, IrType::I64);
         c.imm = v;
@@ -630,82 +609,82 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
     };
 
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
-    entry.instrs.push_back(cte(6, 0));
-    entry.instrs.push_back(cte(5, 1));
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(cte(vid(0),0));
+    entry.instrs.push_back(cte(vid(6),0));
+    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock outer;
-    outer.id = 1;
+    outer.id = blk(1);
     outer.name = "outer";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({0, 0});
-        phi.phi_args.push_back({4, 4});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(4), blk(4)});
         outer.instrs.push_back(phi);
-        outer.instrs.push_back(cte(2, 64));
-        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(2);
+        outer.instrs.push_back(cte(vid(2),64));
+        IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(2));
         outer.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 5);
-        t.operands[0] = 3;
+        IrInstr t = brcond(blk(2), blk(5));
+        t.operands[0] = vid(3);
         outer.instrs.push_back(t);
     }
 
     IrBlock inner;
-    inner.id = 2;
+    inner.id = blk(2);
     inner.name = "inner";
     {
-        IrInstr phi = val(IrOp::PHI, 7, IrType::I64);
-        phi.phi_args.push_back({6, 1});
-        phi.phi_args.push_back({10, 3});
+        IrInstr phi = val(IrOp::PHI, vid(7), IrType::I64);
+        phi.phi_args.push_back({vid(6), blk(1)});
+        phi.phi_args.push_back({vid(10), blk(3)});
         inner.instrs.push_back(phi);
-        IrInstr cmp = val(IrOp::CMP_LT, 9, IrType::BOOL);
-        cmp.operands.push_back(7);
-        cmp.operands.push_back(8); // el PARAMETRO: no se sabe cuanto vale
+        IrInstr cmp = val(IrOp::CMP_LT, vid(9), IrType::BOOL);
+        cmp.operands.push_back(vid(7));
+        cmp.operands.push_back(vid(8)); // el PARAMETRO: no se sabe cuanto vale
         inner.instrs.push_back(cmp);
-        IrInstr t = brcond(3, 4);
-        t.operands[0] = 9;
+        IrInstr t = brcond(blk(3), blk(4));
+        t.operands[0] = vid(9);
         inner.instrs.push_back(t);
     }
 
     IrBlock inner_body;
-    inner_body.id = 3;
+    inner_body.id = blk(3);
     inner_body.name = "inner_body";
     {
-        IrInstr add = val(IrOp::ADD, 10, IrType::I64);
-        add.operands.push_back(7);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(10), IrType::I64);
+        add.operands.push_back(vid(7));
+        add.operands.push_back(vid(5));
         inner_body.instrs.push_back(add);
-        inner_body.instrs.push_back(br(2));
+        inner_body.instrs.push_back(br(blk(2)));
     }
 
     IrBlock outer_latch;
-    outer_latch.id = 4;
+    outer_latch.id = blk(4);
     outer_latch.name = "outer_latch";
     {
-        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(4), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(5));
         outer_latch.instrs.push_back(add);
-        outer_latch.instrs.push_back(br(1));
+        outer_latch.instrs.push_back(br(blk(1)));
     }
 
     fn.blocks = {entry,      outer,       inner,
-                 inner_body, outer_latch, block(5, "exit", ret())};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2, 5};
-    fn.blocks[2].succs = {3, 4};
-    fn.blocks[3].succs = {2};
-    fn.blocks[4].succs = {1};
-    fn.blocks[1].preds = {0, 4};
-    fn.blocks[2].preds = {1, 3};
-    fn.blocks[3].preds = {2};
-    fn.blocks[4].preds = {2};
-    fn.blocks[5].preds = {1};
+                 inner_body, outer_latch, block(blk(5), "exit", ret())};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2), blk(5)};
+    fn.blocks[2].succs = {blk(3), blk(4)};
+    fn.blocks[3].succs = {blk(2)};
+    fn.blocks[4].succs = {blk(1)};
+    fn.blocks[1].preds = {blk(0), blk(4)};
+    fn.blocks[2].preds = {blk(1), blk(3)};
+    fn.blocks[3].preds = {blk(2)};
+    fn.blocks[4].preds = {blk(2)};
+    fn.blocks[5].preds = {blk(1)};
 
     const LoopFacts lf = compute_loop_facts(fn);
     const analyze::CostResult sin_hechos = analyze::analyze_function(fn);
@@ -718,7 +697,7 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
     trip.trip = 64;
     analysis::asa::Fact f;
     CHECK(analysis::asa::loop_trip_fact(
-              store, fn, (ir::IrBlockId)lf.header_block_of(lf.innermost(1)),
+              store, fn, lf.header_block_of(lf.innermost(blk(1))),
               trip, analysis::asa::kStagePreOpt, analysis::asa::Source::Static,
               f),
           "hay hecho que publicar");
@@ -756,15 +735,8 @@ static void a_multiplying_loop_is_logarithmic() {
         fn.name = "geo";
         for (int i = 0; i < 6; ++i)
             fn.values.push_back({});
-        fn.params.push_back(2);
+        fn.params.push_back(vid(2));
 
-        auto val = [](IrOp o, ir::IrValueId dst, IrType t) {
-            IrInstr in;
-            in.op = o;
-            in.dst = dst;
-            in.type = t;
-            return in;
-        };
         auto cte = [&](ir::IrValueId dst, uint64_t v) {
             IrInstr c = val(IrOp::CONST, dst, IrType::I64);
             c.imm = v;
@@ -772,47 +744,47 @@ static void a_multiplying_loop_is_logarithmic() {
         };
 
         IrBlock entry;
-        entry.id = 0;
+        entry.id = blk(0);
         entry.name = "entry";
-        entry.instrs.push_back(cte(0, 1));
-        entry.instrs.push_back(cte(5, k));
-        entry.instrs.push_back(br(1));
+        entry.instrs.push_back(cte(vid(0),1));
+        entry.instrs.push_back(cte(vid(5),k));
+        entry.instrs.push_back(br(blk(1)));
 
         IrBlock header;
-        header.id = 1;
+        header.id = blk(1);
         header.name = "header";
         {
-            IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-            phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-            phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+            IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+            phi.phi_args.push_back({vid(0), blk(0)});
+            phi.phi_args.push_back({vid(4), blk(2)});
             header.instrs.push_back(phi);
-            IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
-            cmp.operands.push_back(1);
-            cmp.operands.push_back(2);
+            IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
+            cmp.operands.push_back(vid(1));
+            cmp.operands.push_back(vid(2));
             header.instrs.push_back(cmp);
-            IrInstr t = brcond(2, 3);
-            t.operands[0] = 3;
+            IrInstr t = brcond(blk(2), blk(3));
+            t.operands[0] = vid(3);
             header.instrs.push_back(t);
         }
 
         IrBlock body;
-        body.id = 2;
+        body.id = blk(2);
         body.name = "body";
         {
-            IrInstr adv = val(op, 4, IrType::I64);
-            adv.operands.push_back(1);
-            adv.operands.push_back(5);
+            IrInstr adv = val(op, vid(4), IrType::I64);
+            adv.operands.push_back(vid(1));
+            adv.operands.push_back(vid(5));
             body.instrs.push_back(adv);
-            body.instrs.push_back(br(1));
+            body.instrs.push_back(br(blk(1)));
         }
 
-        fn.blocks = {entry, header, body, block(3, "exit", ret())};
-        fn.blocks[0].succs = {1};
-        fn.blocks[1].succs = {2, 3};
-        fn.blocks[2].succs = {1};
-        fn.blocks[1].preds = {0, 2};
-        fn.blocks[2].preds = {1};
-        fn.blocks[3].preds = {1};
+        fn.blocks = {entry, header, body, block(blk(3), "exit", ret())};
+        fn.blocks[0].succs = {blk(1)};
+        fn.blocks[1].succs = {blk(2), blk(3)};
+        fn.blocks[2].succs = {blk(1)};
+        fn.blocks[1].preds = {blk(0), blk(2)};
+        fn.blocks[2].preds = {blk(1)};
+        fn.blocks[3].preds = {blk(1)};
         return fn;
     };
 
@@ -896,13 +868,6 @@ static void a_counting_down_loop_is_counted_too() {
         for (int i = 0; i < 6; ++i)
             fn.values.push_back({});
 
-        auto val = [](IrOp o, ir::IrValueId dst, IrType t) {
-            IrInstr in;
-            in.op = o;
-            in.dst = dst;
-            in.type = t;
-            return in;
-        };
         auto cte = [&](ir::IrValueId dst, uint64_t v) {
             IrInstr c = val(IrOp::CONST, dst, IrType::I64);
             c.imm = v;
@@ -910,48 +875,48 @@ static void a_counting_down_loop_is_counted_too() {
         };
 
         IrBlock entry;
-        entry.id = 0;
+        entry.id = blk(0);
         entry.name = "entry";
-        entry.instrs.push_back(cte(0, (uint64_t)I));
-        entry.instrs.push_back(cte(5, S));
-        entry.instrs.push_back(br(1));
+        entry.instrs.push_back(cte(vid(0),(uint64_t)I));
+        entry.instrs.push_back(cte(vid(5),S));
+        entry.instrs.push_back(br(blk(1)));
 
         IrBlock header;
-        header.id = 1;
+        header.id = blk(1);
         header.name = "header";
         {
-            IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-            phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-            phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+            IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+            phi.phi_args.push_back({vid(0), blk(0)});
+            phi.phi_args.push_back({vid(4), blk(2)});
             header.instrs.push_back(phi);
-            header.instrs.push_back(cte(2, 0));
-            IrInstr cmp = val(cmp_op, 3, IrType::BOOL);
-            cmp.operands.push_back(1);
-            cmp.operands.push_back(2);
+            header.instrs.push_back(cte(vid(2),0));
+            IrInstr cmp = val(cmp_op, vid(3), IrType::BOOL);
+            cmp.operands.push_back(vid(1));
+            cmp.operands.push_back(vid(2));
             header.instrs.push_back(cmp);
-            IrInstr t = brcond(2, 3);
-            t.operands[0] = 3;
+            IrInstr t = brcond(blk(2), blk(3));
+            t.operands[0] = vid(3);
             header.instrs.push_back(t);
         }
 
         IrBlock body;
-        body.id = 2;
+        body.id = blk(2);
         body.name = "body";
         {
-            IrInstr sub = val(IrOp::SUB, 4, IrType::I64);
-            sub.operands.push_back(1);
-            sub.operands.push_back(5);
+            IrInstr sub = val(IrOp::SUB, vid(4), IrType::I64);
+            sub.operands.push_back(vid(1));
+            sub.operands.push_back(vid(5));
             body.instrs.push_back(sub);
-            body.instrs.push_back(br(1));
+            body.instrs.push_back(br(blk(1)));
         }
 
-        fn.blocks = {entry, header, body, block(3, "exit", ret())};
-        fn.blocks[0].succs = {1};
-        fn.blocks[1].succs = {2, 3};
-        fn.blocks[2].succs = {1};
-        fn.blocks[1].preds = {0, 2};
-        fn.blocks[2].preds = {1};
-        fn.blocks[3].preds = {1};
+        fn.blocks = {entry, header, body, block(blk(3), "exit", ret())};
+        fn.blocks[0].succs = {blk(1)};
+        fn.blocks[1].succs = {blk(2), blk(3)};
+        fn.blocks[2].succs = {blk(1)};
+        fn.blocks[1].preds = {blk(0), blk(2)};
+        fn.blocks[2].preds = {blk(1)};
+        fn.blocks[3].preds = {blk(1)};
         return fn;
     };
 
@@ -1049,13 +1014,6 @@ static void the_cost_asks_for_the_reason_not_the_code() {
     for (int i = 0; i < 6; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     auto cte = [&](ir::IrValueId dst, uint64_t v) {
         IrInstr c = val(IrOp::CONST, dst, IrType::I64);
         c.imm = v;
@@ -1063,52 +1021,51 @@ static void the_cost_asks_for_the_reason_not_the_code() {
     };
 
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
-    entry.instrs.push_back(cte(5, 1));
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(cte(vid(0),0));
+    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
-    header.id = 1;
+    header.id = blk(1);
     header.name = "header";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(4), blk(2)});
         header.instrs.push_back(phi);
-        header.instrs.push_back(cte(2, 8));
-        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(2);
+        header.instrs.push_back(cte(vid(2),8));
+        IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(2));
         header.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 3);
-        t.operands[0] = 3;
+        IrInstr t = brcond(blk(2), blk(3));
+        t.operands[0] = vid(3);
         header.instrs.push_back(t);
     }
 
     IrBlock body;
-    body.id = 2;
+    body.id = blk(2);
     body.name = "body";
     {
-        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(4), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(5));
         body.instrs.push_back(add);
-        body.instrs.push_back(br(1));
+        body.instrs.push_back(br(blk(1)));
     }
 
-    fn.blocks = {entry, header, body, block(3, "exit", ret())};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2, 3};
-    fn.blocks[2].succs = {1};
-    fn.blocks[1].preds = {0, 2};
-    fn.blocks[2].preds = {1};
-    fn.blocks[3].preds = {1};
+    fn.blocks = {entry, header, body, block(blk(3), "exit", ret())};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2), blk(3)};
+    fn.blocks[2].succs = {blk(1)};
+    fn.blocks[1].preds = {blk(0), blk(2)};
+    fn.blocks[2].preds = {blk(1)};
+    fn.blocks[3].preds = {blk(1)};
 
     const LoopFacts lf = compute_loop_facts(fn);
-    const ir::IrBlockId h =
-        static_cast<ir::IrBlockId>(lf.header_block_of(lf.innermost(1)));
+    const ir::IrBlockId h = lf.header_block_of(lf.innermost(blk(1)));
 
     /* El dominio dice que no supo leer la FORMA de este bucle, con un codigo
      * que el coste no ha visto nunca.  Lo que tiene que leer es el motivo. */
@@ -1181,13 +1138,6 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
     for (int i = 0; i < 8; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     auto cte = [&](ir::IrValueId dst, uint64_t v) {
         fn.values[dst].is_const = true;
         fn.values[dst].const_val = v;
@@ -1197,65 +1147,65 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
     };
 
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
-    entry.instrs.push_back(cte(5, 1));
-    entry.instrs.push_back(cte(6, 7));
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(cte(vid(0),0));
+    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(cte(vid(6),7));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
-    header.id = 1;
+    header.id = blk(1);
     header.name = "header";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/4, /*block=*/3});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(4), blk(3)});
         header.instrs.push_back(phi);
-        header.instrs.push_back(cte(2, 32));
-        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(2);
+        header.instrs.push_back(cte(vid(2),32));
+        IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(2));
         header.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 4);
-        t.operands[0] = 3;
+        IrInstr t = brcond(blk(2), blk(4));
+        t.operands[0] = vid(3);
         header.instrs.push_back(t);
     }
 
     // b2: la SEGUNDA salida.  Es lo que el reconocedor rechazaba.
     IrBlock body;
-    body.id = 2;
+    body.id = blk(2);
     body.name = "body";
     {
-        IrInstr cmp = val(IrOp::CMP_EQ, 7, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(6);
+        IrInstr cmp = val(IrOp::CMP_EQ, vid(7), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(6));
         body.instrs.push_back(cmp);
-        IrInstr t = brcond(4, 3); // si i == 7, fuera
-        t.operands[0] = 7;
+        IrInstr t = brcond(blk(4), blk(3)); // si i == 7, fuera
+        t.operands[0] = vid(7);
         body.instrs.push_back(t);
     }
 
     IrBlock step;
-    step.id = 3;
+    step.id = blk(3);
     step.name = "step";
     {
-        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(4), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(5));
         step.instrs.push_back(add);
-        step.instrs.push_back(br(1));
+        step.instrs.push_back(br(blk(1)));
     }
 
-    fn.blocks = {entry, header, body, step, block(4, "exit", ret())};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2, 4};
-    fn.blocks[2].succs = {4, 3};
-    fn.blocks[3].succs = {1};
-    fn.blocks[1].preds = {0, 3};
-    fn.blocks[2].preds = {1};
-    fn.blocks[3].preds = {2};
-    fn.blocks[4].preds = {1, 2};
+    fn.blocks = {entry, header, body, step, block(blk(4), "exit", ret())};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2), blk(4)};
+    fn.blocks[2].succs = {blk(4), blk(3)};
+    fn.blocks[3].succs = {blk(1)};
+    fn.blocks[1].preds = {blk(0), blk(3)};
+    fn.blocks[2].preds = {blk(1)};
+    fn.blocks[3].preds = {blk(2)};
+    fn.blocks[4].preds = {blk(1), blk(2)};
 
     const LoopFacts lf = compute_loop_facts(fn);
     const IrFacts hechos = build_ir_facts(fn);
@@ -1323,13 +1273,6 @@ static void a_do_while_is_counted_with_one_more_turn() {
     for (int i = 0; i < 6; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     auto cte = [&](ir::IrValueId dst, uint64_t v) {
         fn.values[dst].is_const = true;
         fn.values[dst].const_val = v;
@@ -1339,50 +1282,50 @@ static void a_do_while_is_counted_with_one_more_turn() {
     };
 
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
-    entry.instrs.push_back(cte(2, 1));
-    entry.instrs.push_back(cte(4, 24));
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(cte(vid(0),0));
+    entry.instrs.push_back(cte(vid(2),1));
+    entry.instrs.push_back(cte(vid(4),24));
+    entry.instrs.push_back(br(blk(1)));
 
     // b1 es la CABECERA -- tiene las PHIs -- y termina en salto incondicional.
     IrBlock body;
-    body.id = 1;
+    body.id = blk(1);
     body.name = "dowhile_body";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/3, /*block=*/2});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(3), blk(2)});
         body.instrs.push_back(phi);
-        IrInstr add = val(IrOp::ADD, 3, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(2);
+        IrInstr add = val(IrOp::ADD, vid(3), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(2));
         body.instrs.push_back(add);
-        body.instrs.push_back(br(2));
+        body.instrs.push_back(br(blk(2)));
     }
 
     // b2 es el LATCH, y ahi esta la guarda.
     IrBlock latch;
-    latch.id = 2;
+    latch.id = blk(2);
     latch.name = "dowhile_header";
     {
-        IrInstr cmp = val(IrOp::CMP_LT, 5, IrType::BOOL);
-        cmp.operands.push_back(3); // i + 1
-        cmp.operands.push_back(4); // 24
+        IrInstr cmp = val(IrOp::CMP_LT, vid(5), IrType::BOOL);
+        cmp.operands.push_back(vid(3)); // i + 1
+        cmp.operands.push_back(vid(4)); // 24
         latch.instrs.push_back(cmp);
-        IrInstr t = brcond(1, 3);
-        t.operands[0] = 5;
+        IrInstr t = brcond(blk(1), blk(3));
+        t.operands[0] = vid(5);
         latch.instrs.push_back(t);
     }
 
-    fn.blocks = {entry, body, latch, block(3, "exit", ret())};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2};
-    fn.blocks[2].succs = {1, 3};
-    fn.blocks[1].preds = {0, 2};
-    fn.blocks[2].preds = {1};
-    fn.blocks[3].preds = {2};
+    fn.blocks = {entry, body, latch, block(blk(3), "exit", ret())};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2)};
+    fn.blocks[2].succs = {blk(1), blk(3)};
+    fn.blocks[1].preds = {blk(0), blk(2)};
+    fn.blocks[2].preds = {blk(1)};
+    fn.blocks[3].preds = {blk(2)};
 
     const LoopFacts lf = compute_loop_facts(fn);
     const IrFacts hechos = build_ir_facts(fn);
@@ -1426,13 +1369,6 @@ static void a_self_loop_is_counted_too() {
     for (int i = 0; i < 8; ++i)
         fn.values.push_back({});
 
-    auto val = [](IrOp op, ir::IrValueId dst, IrType t) {
-        IrInstr in;
-        in.op = op;
-        in.dst = dst;
-        in.type = t;
-        return in;
-    };
     auto cte = [&](ir::IrValueId dst, uint64_t v) {
         fn.values[dst].is_const = true;
         fn.values[dst].const_val = v;
@@ -1442,48 +1378,48 @@ static void a_self_loop_is_counted_too() {
     };
 
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
-    entry.instrs.push_back(cte(3, 1));
-    entry.instrs.push_back(cte(6, 24));
-    entry.instrs.push_back(br(1));
+    entry.instrs.push_back(cte(vid(0),0));
+    entry.instrs.push_back(cte(vid(3),1));
+    entry.instrs.push_back(cte(vid(6),24));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock solo;
-    solo.id = 1;
+    solo.id = blk(1);
     solo.name = "dowhile_body";
     {
-        IrInstr phi_i = val(IrOp::PHI, 1, IrType::I64);
-        phi_i.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi_i.phi_args.push_back({/*value=*/4, /*block=*/1});
+        IrInstr phi_i = val(IrOp::PHI, vid(1), IrType::I64);
+        phi_i.phi_args.push_back({vid(0), blk(0)});
+        phi_i.phi_args.push_back({vid(4), blk(1)});
         solo.instrs.push_back(phi_i);
-        IrInstr phi_t = val(IrOp::PHI, 2, IrType::I64);
-        phi_t.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi_t.phi_args.push_back({/*value=*/5, /*block=*/1});
+        IrInstr phi_t = val(IrOp::PHI, vid(2), IrType::I64);
+        phi_t.phi_args.push_back({vid(0), blk(0)});
+        phi_t.phi_args.push_back({vid(5), blk(1)});
         solo.instrs.push_back(phi_t);
-        IrInstr inc = val(IrOp::ADD, 4, IrType::I64);
-        inc.operands.push_back(1);
-        inc.operands.push_back(3);
+        IrInstr inc = val(IrOp::ADD, vid(4), IrType::I64);
+        inc.operands.push_back(vid(1));
+        inc.operands.push_back(vid(3));
         solo.instrs.push_back(inc);
         // El ACUMULADOR, que es lo que hacia decir "la cabecera hace de mas".
-        IrInstr acc = val(IrOp::ADD, 5, IrType::I64);
-        acc.operands.push_back(2);
-        acc.operands.push_back(1);
+        IrInstr acc = val(IrOp::ADD, vid(5), IrType::I64);
+        acc.operands.push_back(vid(2));
+        acc.operands.push_back(vid(1));
         solo.instrs.push_back(acc);
-        IrInstr cmp = val(IrOp::CMP_LT, 7, IrType::BOOL);
-        cmp.operands.push_back(4);
-        cmp.operands.push_back(6);
+        IrInstr cmp = val(IrOp::CMP_LT, vid(7), IrType::BOOL);
+        cmp.operands.push_back(vid(4));
+        cmp.operands.push_back(vid(6));
         solo.instrs.push_back(cmp);
-        IrInstr t = brcond(1, 2); // a si mismo, o fuera
-        t.operands[0] = 7;
+        IrInstr t = brcond(blk(1), blk(2)); // a si mismo, o fuera
+        t.operands[0] = vid(7);
         solo.instrs.push_back(t);
     }
 
-    fn.blocks = {entry, solo, block(2, "exit", ret())};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {1, 2};
-    fn.blocks[1].preds = {0, 1};
-    fn.blocks[2].preds = {1};
+    fn.blocks = {entry, solo, block(blk(2), "exit", ret())};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(1), blk(2)};
+    fn.blocks[1].preds = {blk(0), blk(1)};
+    fn.blocks[2].preds = {blk(1)};
 
     const LoopFacts lf = compute_loop_facts(fn);
     const IrFacts hechos = build_ir_facts(fn);
@@ -1509,13 +1445,14 @@ int main() {
     {
         ir::IrFunction fn;
         fn.name = "noloop";
-        fn.blocks.push_back(block(0, "entry", br(1)));
-        fn.blocks.push_back(block(1, "exit", ret()));
+        fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
+        fn.blocks.push_back(block(blk(1), "exit", ret()));
         LoopFacts f = compute_loop_facts(fn);
         CHECK(f.loop_count == 0, "loop_count != 0");
-        CHECK(!f.inside(0) && !f.inside(1),
+        CHECK(!f.inside(blk(0)) && !f.inside(blk(1)),
               "bloques marcados in_loop sin bucle");
-        CHECK(f.depth_of(0) == 0 && f.depth_of(1) == 0, "profundidad != 0");
+        CHECK(f.depth_of(blk(0)) == 0 && f.depth_of(blk(1)) == 0,
+              "profundidad != 0");
     }
 
     // --- Un bucle: entry -> header <-> body, header -> exit ---
@@ -1523,18 +1460,19 @@ int main() {
     {
         ir::IrFunction fn;
         fn.name = "oneloop";
-        fn.blocks.push_back(block(0, "entry", br(1)));
-        fn.blocks.push_back(block(1, "header", brcond(2, 3)));
-        fn.blocks.push_back(block(2, "body", br(1))); // back-edge 2->1
-        fn.blocks.push_back(block(3, "exit", ret()));
+        fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
+        fn.blocks.push_back(block(blk(1), "header", brcond(blk(2), blk(3))));
+        fn.blocks.push_back(block(blk(2), "body", br(blk(1)))); // back-edge 2->1
+        fn.blocks.push_back(block(blk(3), "exit", ret()));
         LoopFacts f = compute_loop_facts(fn);
         CHECK(f.loop_count == 1, "loop_count != 1");
-        CHECK(f.header_of(1), "header no detectado");
-        CHECK(f.depth_of(1) == 1 && f.depth_of(2) == 1, "cuerpo no depth 1");
-        CHECK(f.inside(1) && f.inside(2), "header/body no in_loop");
-        CHECK(f.depth_of(0) == 0 && f.depth_of(3) == 0,
+        CHECK(f.header_of(blk(1)), "header no detectado");
+        CHECK(f.depth_of(blk(1)) == 1 && f.depth_of(blk(2)) == 1,
+              "cuerpo no depth 1");
+        CHECK(f.inside(blk(1)) && f.inside(blk(2)), "header/body no in_loop");
+        CHECK(f.depth_of(blk(0)) == 0 && f.depth_of(blk(3)) == 0,
               "entry/exit no depth 0");
-        CHECK(!f.header_of(2), "body marcado header");
+        CHECK(!f.header_of(blk(2)), "body marcado header");
     }
 
     // --- Bucles anidados ---
@@ -1548,30 +1486,31 @@ int main() {
         // 5 exit ret
         ir::IrFunction fn;
         fn.name = "nested";
-        fn.blocks.push_back(block(0, "entry", br(1)));
-        fn.blocks.push_back(block(1, "outer_h", brcond(2, 5)));
-        fn.blocks.push_back(block(2, "inner_h", brcond(3, 4)));
-        fn.blocks.push_back(block(3, "inner_b", br(2)));
-        fn.blocks.push_back(block(4, "outer_latch", br(1)));
-        fn.blocks.push_back(block(5, "exit", ret()));
+        fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
+        fn.blocks.push_back(block(blk(1), "outer_h", brcond(blk(2), blk(5))));
+        fn.blocks.push_back(block(blk(2), "inner_h", brcond(blk(3), blk(4))));
+        fn.blocks.push_back(block(blk(3), "inner_b", br(blk(2))));
+        fn.blocks.push_back(block(blk(4), "outer_latch", br(blk(1))));
+        fn.blocks.push_back(block(blk(5), "exit", ret()));
         LoopFacts f = compute_loop_facts(fn);
         CHECK(f.loop_count == 2, "loop_count != 2");
-        CHECK(f.depth_of(0) == 0, "entry no depth 0");
-        CHECK(f.depth_of(1) == 1, "outer_h no depth 1");
-        CHECK(f.depth_of(2) == 2, "inner_h no depth 2");
-        CHECK(f.depth_of(3) == 2, "inner_b no depth 2");
-        CHECK(f.depth_of(4) == 1, "outer_latch no depth 1");
-        CHECK(f.depth_of(5) == 0, "exit no depth 0");
-        CHECK(f.header_of(1) && f.header_of(2), "headers no detectados");
+        CHECK(f.depth_of(blk(0)) == 0, "entry no depth 0");
+        CHECK(f.depth_of(blk(1)) == 1, "outer_h no depth 1");
+        CHECK(f.depth_of(blk(2)) == 2, "inner_h no depth 2");
+        CHECK(f.depth_of(blk(3)) == 2, "inner_b no depth 2");
+        CHECK(f.depth_of(blk(4)) == 1, "outer_latch no depth 1");
+        CHECK(f.depth_of(blk(5)) == 0, "exit no depth 0");
+        CHECK(f.header_of(blk(1)) && f.header_of(blk(2)),
+              "headers no detectados");
         // loop_id: el bloque mas interno apunta al bucle mas pequeno.
-        CHECK(f.innermost(3) == f.innermost(2),
+        CHECK(f.innermost(blk(3)) == f.innermost(blk(2)),
               "inner_b/inner_h distinto bucle interno");
-        CHECK(f.innermost(3) != f.innermost(4),
+        CHECK(f.innermost(blk(3)) != f.innermost(blk(4)),
               "inner y outer comparten id interno");
         // parent_loop: el bucle interno tiene como padre al externo; el externo
         // no.
-        const uint32_t inner_id = f.innermost(3);
-        const uint32_t outer_id = f.innermost(1);
+        const uint32_t inner_id = f.innermost(blk(3));
+        const uint32_t outer_id = f.innermost(blk(1));
         CHECK(f.parent_of(inner_id) == outer_id,
               "padre del bucle interno no es el externo");
         CHECK(f.parent_of(outer_id) == LoopFacts::NO_LOOP,

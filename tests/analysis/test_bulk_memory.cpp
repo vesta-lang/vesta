@@ -25,6 +25,7 @@
 #include "analysis/asa/observed.h"
 #include "analysis/facts/bulk_memory.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 #include <string>
@@ -95,9 +96,9 @@ ir::IrFunction hacer_relleno(int64_t paso, int64_t n_constante) {
     fn.values[6].is_host_ptr = true;
     fn.values[7].type = IrType::PTR;
     fn.values[7].is_host_ptr = true;
-    fn.params.push_back(6);
+    fn.params.push_back(vid(6));
     if (n_constante == 0) {
-        fn.params.push_back(2);
+        fn.params.push_back(vid(2));
     } else {
         fn.values[2].is_const = true;
         fn.values[2].const_val = static_cast<uint64_t>(n_constante);
@@ -117,56 +118,56 @@ ir::IrFunction hacer_relleno(int64_t paso, int64_t n_constante) {
     };
 
     IrBlock entry;
-    entry.id = 0;
+    entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(0, 0));
-    entry.instrs.push_back(cte(5, static_cast<uint64_t>(paso)));
-    entry.instrs.push_back(cte(8, 0));
+    entry.instrs.push_back(cte(vid(0), 0));
+    entry.instrs.push_back(cte(vid(5), static_cast<uint64_t>(paso)));
+    entry.instrs.push_back(cte(vid(8), 0));
     if (n_constante != 0)
-        entry.instrs.push_back(cte(2, static_cast<uint64_t>(n_constante)));
-    entry.instrs.push_back(br(1));
+        entry.instrs.push_back(cte(vid(2), static_cast<uint64_t>(n_constante)));
+    entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
-    header.id = 1;
+    header.id = blk(1);
     header.name = "header";
     {
-        IrInstr phi = val(IrOp::PHI, 1, IrType::I64);
-        phi.phi_args.push_back({/*value=*/0, /*block=*/0});
-        phi.phi_args.push_back({/*value=*/4, /*block=*/2});
+        IrInstr phi = val(IrOp::PHI, vid(1), IrType::I64);
+        phi.phi_args.push_back({vid(0), blk(0)});
+        phi.phi_args.push_back({vid(4), blk(2)});
         header.instrs.push_back(phi);
-        IrInstr cmp = val(IrOp::CMP_LT, 3, IrType::BOOL);
-        cmp.operands.push_back(1);
-        cmp.operands.push_back(2);
+        IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
+        cmp.operands.push_back(vid(1));
+        cmp.operands.push_back(vid(2));
         header.instrs.push_back(cmp);
-        IrInstr t = brcond(2, 3);
-        t.operands[0] = 3;
+        IrInstr t = brcond(blk(2), blk(3));
+        t.operands[0] = vid(3);
         header.instrs.push_back(t);
     }
 
     IrBlock body;
-    body.id = 2;
+    body.id = blk(2);
     body.name = "body";
     {
         // La direccion: base + indice, que es lo que el reconocedor despeja.
-        IrInstr adr = val(IrOp::ADD, 7, IrType::PTR);
-        adr.operands.push_back(6);
-        adr.operands.push_back(1);
+        IrInstr adr = val(IrOp::ADD, vid(7), IrType::PTR);
+        adr.operands.push_back(vid(6));
+        adr.operands.push_back(vid(1));
         body.instrs.push_back(adr);
         IrInstr st{};
         st.op = IrOp::STORE;
         st.type = IrType::I8;
-        st.operands.push_back(8); // el valor
-        st.operands.push_back(7); // la direccion
+        st.operands.push_back(vid(8)); // el valor
+        st.operands.push_back(vid(7)); // la direccion
         body.instrs.push_back(st);
-        IrInstr add = val(IrOp::ADD, 4, IrType::I64);
-        add.operands.push_back(1);
-        add.operands.push_back(5);
+        IrInstr add = val(IrOp::ADD, vid(4), IrType::I64);
+        add.operands.push_back(vid(1));
+        add.operands.push_back(vid(5));
         body.instrs.push_back(add);
-        body.instrs.push_back(br(1));
+        body.instrs.push_back(br(blk(1)));
     }
 
     IrBlock exit;
-    exit.id = 3;
+    exit.id = blk(3);
     exit.name = "exit";
     {
         IrInstr r{};
@@ -175,12 +176,12 @@ ir::IrFunction hacer_relleno(int64_t paso, int64_t n_constante) {
     }
 
     fn.blocks = {entry, header, body, exit};
-    fn.blocks[0].succs = {1};
-    fn.blocks[1].succs = {2, 3};
-    fn.blocks[2].succs = {1};
-    fn.blocks[1].preds = {0, 2};
-    fn.blocks[2].preds = {1};
-    fn.blocks[3].preds = {1};
+    fn.blocks[0].succs = {blk(1)};
+    fn.blocks[1].succs = {blk(2), blk(3)};
+    fn.blocks[2].succs = {blk(1)};
+    fn.blocks[1].preds = {blk(0), blk(2)};
+    fn.blocks[2].preds = {blk(1)};
+    fn.blocks[3].preds = {blk(1)};
     return fn;
 }
 
@@ -273,7 +274,7 @@ int main() {
         ir::IrFunction fn;
         fn.name = "pelada";
         IrBlock b0;
-        b0.id = 0;
+        b0.id = blk(0);
         b0.name = "entry";
         IrInstr r{};
         r.op = IrOp::RET;
@@ -305,22 +306,22 @@ int main() {
                 fn.values.push_back({});
             fn.values[0].type = IrType::PTR;
             fn.values[0].is_host_ptr = true;
-            fn.params.push_back(0);
+            fn.params.push_back(vid(0));
 
             IrBlock b0;
-            b0.id = 0;
+            b0.id = blk(0);
             b0.name = "entry";
             IrInstr zero{};
             zero.op = IrOp::CONST;
-            zero.dst = 1;
+            zero.dst = vid(1);
             zero.type = IrType::I64;
             zero.imm = 0;
             b0.instrs.push_back(zero);
 
             for (size_t k = 0; k < offsets.size(); ++k) {
-                const IrValueId c = static_cast<IrValueId>(2 + 2 * k);
-                const IrValueId a = static_cast<IrValueId>(3 + 2 * k);
-                IrValueId addr = 0; // la base misma cuando el offset es cero
+                const IrValueId c = vid(static_cast<uint32_t>(2 + 2 * k));
+                const IrValueId a = vid(static_cast<uint32_t>(3 + 2 * k));
+                IrValueId addr = vid(0); // la base, si el offset es cero
                 if (offsets[k] != 0) {
                     IrInstr kc{};
                     kc.op = IrOp::CONST;
@@ -331,7 +332,7 @@ int main() {
                     fn.values[a].type = IrType::PTR;
                     fn.values[a].is_host_ptr = true;
                     IrInstr ad = val(IrOp::ADD, a, IrType::PTR);
-                    ad.operands.push_back(0);
+                    ad.operands.push_back(vid(0));
                     ad.operands.push_back(c);
                     b0.instrs.push_back(ad);
                     addr = a;
@@ -339,8 +340,8 @@ int main() {
                 IrInstr st{};
                 st.op = IrOp::STORE;
                 st.type = IrType::I64;
-                st.operands.push_back(1);    // el valor
-                st.operands.push_back(addr); // la direccion
+                st.operands.push_back(vid(1)); // el valor
+                st.operands.push_back(addr);   // la direccion
                 b0.instrs.push_back(st);
             }
             IrInstr r{};

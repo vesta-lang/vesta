@@ -74,7 +74,7 @@ static ir::IrFunction make_function(const char *name, uint32_t n_instr) {
     ir::IrInstr constant;
     constant.op = ir::IrOp::CONST;
     constant.type = ir::IrType::I32;
-    constant.dst = 0;
+    constant.dst = ir::IrValueId(0);
     constant.imm = 1;
     block.instrs.push_back(constant);
 
@@ -82,9 +82,9 @@ static ir::IrFunction make_function(const char *name, uint32_t n_instr) {
         ir::IrInstr add;
         add.op = ir::IrOp::ADD;
         add.type = ir::IrType::I32;
-        add.dst = i;
-        add.operands.push_back(i - 1);
-        add.operands.push_back(0);
+        add.dst = ir::IrValueId(i);
+        add.operands.push_back(ir::IrValueId(i - 1));
+        add.operands.push_back(ir::IrValueId(0));
         add.source_line = 10 + i;
         block.instrs.push_back(add);
     }
@@ -93,7 +93,7 @@ static ir::IrFunction make_function(const char *name, uint32_t n_instr) {
     ret.op = ir::IrOp::RET;
     ret.type = ir::IrType::I32;
     ret.dst = ir::IR_NO_VALUE;
-    ret.operands.push_back(n_instr);
+    ret.operands.push_back(ir::IrValueId(n_instr));
     block.instrs.push_back(ret);
 
     fn.blocks.push_back(std::move(block));
@@ -145,7 +145,7 @@ static void test_round_trip() {
      * of the deserializer and not something set afterwards. */
     CHECK(back.owner == &fn, "the owner is set");
     bool defs_ok = true;
-    for (ir::IrValueId v = 0; v < fn.values.size(); ++v)
+    for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size(); ++v)
         if (back.def(v) != original.def(v)) defs_ok = false;
     CHECK(defs_ok, "and `def` resolves to the SAME instruction as before");
 }
