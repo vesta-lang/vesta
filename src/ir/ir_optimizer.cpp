@@ -8403,6 +8403,34 @@ static bool model_removable(const IrFunction &fn,
     return !e.mem.writes.locs.empty();
 }
 
+/**
+ * @brief "Alguien usa este valor?", una marca de un byte por valor SSA.
+ *
+ * Los identificadores de valor de una funcion son DENSOS: van de cero a
+ * @c fn.values.size().  Sobre eso, un `unordered_set` cobraba un nodo en el
+ * monton POR CADA VALOR USADO -- 3.307.771 reservas de dieciseis bytes al
+ * compilar 441.089 lineas, el sitio que mas reservaba de TODO el compilador --
+ * y encima consultaba con hash y salto de puntero.  Una marca por id es UNA
+ * reserva y se lee con un indice.
+ */
+using UsedMarks = util::NamedVector<uint8_t, scratch::DceUsed>;
+
+/// @brief Apunta que @p v se usa.  Fuera del pool no hay nada que apuntar.
+static void mark_used(UsedMarks &used, IrValueId v) {
+    if (v < used.size()) used[v] = 1;
+}
+
+/**
+ * @brief @return true si NADIE usa @p v, que es lo unico que deja borrar.
+ *
+ * Un id fuera del pool contesta FALSE -- "no consta que este muerto" --, no
+ * true.  DCE solo puede quitar lo que sabe muerto, y no saber no es saber que
+ * no: contestar al reves convertiria un id raro en una instruccion borrada.
+ */
+static bool is_unused(const UsedMarks &used, IrValueId v) {
+    return v < used.size() && used[v] == 0;
+}
+
 static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls,
                      const analysis::AsmBindingFacts *asm_bindings,
                      DceEffectsCache *cache, const analysis::IrFacts *facts,
@@ -8490,7 +8518,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
     }
 
     // Construir conjunto de valores que son usados en algun operando
-    std::unordered_set<IrValueId> used;
+    UsedMarks used(fn.values.size(), 0);
     {
         /* Cada tramo en SU bloque: un cronometro de ambito mide hasta que
          * termina el suyo, y suelto acaba midiendo el resto de la funcion. */
@@ -8498,7 +8526,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
         for (const auto &bb : fn.blocks) {
             for (const auto &ins : bb.instrs) {
                 for (IrValueId op : ins.operands) {
-                    if (op != IR_NO_VALUE) used.insert(op);
+                    if (op != IR_NO_VALUE) mark_used(used, op);
                 }
                 // CALLIND y CALLCLOSURE referencian el callee via func_ptr (no
                 // via operands), asi que DCE debe contarlo como uso para que el
@@ -8510,10 +8538,10 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
                 // crash.
                 if ((ins.op == IrOp::CALLIND || ins.op == IrOp::CALLCLOSURE) &&
                     ins.func_ptr != IR_NO_VALUE) {
-                    used.insert(ins.func_ptr);
+                    mark_used(used, ins.func_ptr);
                 }
                 for (const auto &pa : ins.phi_args) {
-                    if (pa.value != IR_NO_VALUE) used.insert(pa.value);
+                    if (pa.value != IR_NO_VALUE) mark_used(used, pa.value);
                 }
             }
         }
@@ -8535,7 +8563,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
          * `bench_pic_real` tardaba un 77% mas que sin el pase. */
         for (const auto &kv : fn.spec_devirt_sites)
             for (const DevirtCandidate &c : kv.second)
-                if (c.cls_value != IR_NO_VALUE) used.insert(c.cls_value);
+                if (c.cls_value != IR_NO_VALUE) mark_used(used, c.cls_value);
     }
     /* La cache se valida por TAMANO: si la funcion tiene otras instrucciones
      * que cuando se lleno, las posiciones ya no significan lo mismo y se tira
@@ -8615,7 +8643,7 @@ static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls
                  * clases. */
                 const bool sin_resultado_util =
                     ins.dst != IR_NO_VALUE
-                        ? used.count(ins.dst) == 0
+                        ? is_unused(used, ins.dst)
                         : (g_dce_effects && ins.op == IrOp::CALLN);
                 if (sin_resultado_util && no_effect && !ins.preserve) {
                     keep = false;
