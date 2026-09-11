@@ -276,11 +276,15 @@ const vm::ASTNode *VelNodeStream::next() {
             node->source_line = impl_->pending_line;
             node->source_column = impl_->pending_column;
             node->stackmap_hex = impl_->pending_stackmap;
-            /* La marca vale para UNA instruccion.  Si no se consumiera, una
-             * instruccion sin linea heredaria la de la anterior y la tabla de
-             * depuracion senalaria a otro sitio. */
-            impl_->pending_line = 0;
-            impl_->pending_column = 0;
+            /* LA LINEA NO SE CONSUME, el stackmap SI.  No es una eleccion:
+             * es lo que hace el parser, que lee `lexer.last_src_line` sin
+             * borrarlo y solo limpia `last_src_stackmap`.  O sea que una linea
+             * vale para todas las instrucciones hasta el marcador siguiente.
+             *
+             * Consumirla parecia lo correcto -- y costo 16 entradas de 25 en
+             * la tabla de depuracion del primer ejemplo que lo destapo --.
+             * Aqui no se trata de decidir que esta bien, sino de dar lo MISMO
+             * que el texto: el dia que se cambie, se cambia en los dos. */
             impl_->pending_stackmap.clear();
 
             impl_->current = std::move(node);

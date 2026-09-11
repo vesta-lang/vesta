@@ -43,6 +43,7 @@
 #include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
+#include "ir/vel_node_stream.h" // ensamblar sin pasar por texto
 #include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
 #include "ir/ssa_ir_serialize.h" //  AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h"     //  analisis de compatibilidad nativa
@@ -5547,12 +5548,35 @@ int main(int argc, char *argv[]) {
          *
          * Opcion W: el IR pre-serializado va al linker para que se embeba en
          * la seccion @c @ir del `.velb` v3. */
+        /* SIN PASAR POR TEXTO, si se puede.  El emisor tiene cada instruccion
+         * tipada; escribirla y que un lexer la vuelva a leer son 930 ms de los
+         * 1.873 que cuesta compilar un proyecto de 441.000 lineas.  Con la
+         * fuente, el ensamblador toma los nodos de donde ya estaban.
+         *
+         * Si no lo puede cubrir todo -- lo dice ella, no se adivina -- se
+         * ensambla el texto como siempre.  Renunciar es correcto; entregar un
+         * programa al que le falta algo, no.
+         *
+         * El `.vel` se sigue escribiendo si lo pidieron: es un artefacto que
+         * se pide, no la via por la que se compila. */
+        std::unique_ptr<ir::VelNodeStream> vel_nodos;
+        if (cr.vel_sink && !util::flag_on(util::FlagId::VelText)) {
+            vel_nodos = std::make_unique<ir::VelNodeStream>(*cr.vel_sink);
+            if (!vel_nodos->ok()) {
+                vesta::scout() << "[vx] no se puede ensamblar sin texto ("
+                               << vel_nodos->why_not() << "); se usa el .vel\n";
+                vel_nodos.reset();
+            }
+        }
+        if (vel_nodos != nullptr) std::string().swap(vel_texto);
+
         int rc = asm_multi_process::run_worker_from_source(
             std::move(vel_texto), vel_path, out_prefix,
             /*skip_preprocessor=*/true,
             /*keep_labels=*/(result.count("keep-labels") > 0),
             /*ir_section_bytes=*/&cr.ir_section_bytes,
-            /*emit_map=*/(result.count("emit-map") > 0));
+            /*emit_map=*/(result.count("emit-map") > 0), vel_nodos.get(),
+            /*debug_source_file=*/copts.emit_debug ? vx_path : std::string());
 
         // Se deja constancia de que grafo explica ESTE artefacto, bajo un
         // identificador sacado de su contenido.  Es el ultimo eslabon: sin el,

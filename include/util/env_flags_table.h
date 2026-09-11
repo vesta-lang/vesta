@@ -422,6 +422,18 @@ VESTA_ENV_FLAG(DepVel, "VESTA_DEP_VEL", Speed, Cache, Bool, Any)
  * MISMO, y eso es una afirmacion comprobable -- el viaje por disco es el que ya
  * hace un modulo servido de cache. */
 VESTA_ENV_FLAG(IrRamMaxMib, "VX_IR_RAM_MAX_MIB", Speed, Cache, Int, Any)
+/* Ensamblar el TEXTO `.vel`, como se hacia siempre, en vez de darle al
+ * ensamblador los nodos que el emisor ya tenia.
+ *
+ * El camino nuevo se salta escribir el texto, lexarlo y parsearlo -- medido,
+ * 921 ms de los 1.873 que cuesta compilar un proyecto de 441.000 lineas --.
+ * Este mando existe para poder comparar los dos y para tener salida si algun
+ * dia estorba: los dos tienen que producir el MISMO `.velb`, y una bandera que
+ * permita ponerlos uno al lado del otro es lo que hace esa frase comprobable.
+ *
+ * Es `Speed` y no `Emitted` justamente por eso: si entrara en la huella
+ * estaria admitiendo que el programa puede cambiar. */
+VESTA_ENV_FLAG(VelText, "VESTA_VEL_TEXT", Speed, Cache, Bool, Any)
 VESTA_ENV_FLAG(CacheFingerprint, "VX_CACHE_FINGERPRINT", Location, Cache, Text,
                Any)
 VESTA_ENV_FLAG(McCacheTtlDays, "VESTA_MC_CACHE_TTL_DAYS", Location, Cache, Int,

@@ -50,6 +50,7 @@
 #include <iostream>
 
 #include "json.hpp"
+#include "emmit/node_stream.h" // nodos ya hechos, sin pasar por texto
 #include "emmit/parser_to_bytecode.h"
 #include "cli/sync_io.h"
 #include "util/ThreadPool.h"
@@ -195,11 +196,26 @@ int run_driver(const std::string &folder, int threads,
  * @param file_name Nombre con el que referirse a el en diagnosticos y para
  *        resolver los `#include` relativos.  No hace falta que exista en disco.
  */
+/**
+ * @param nodes Los nodos YA HECHOS, si quien llama los tiene.  Con esto no se
+ *        preprocesa, no se lexa, no se parsea y no se resuelven `@import`: se
+ *        ensambla directamente lo que se entrega.
+ *
+ *        Es para el compilador, que tiene cada instruccion tipada y la venia
+ *        escribiendo como texto para que el lexer la volviera a leer -- 930 ms
+ *        de los 1.873 que cuesta compilar un proyecto de 441.000 lineas --.
+ *        Quien compile un `.vel` escrito a mano no pasa por aqui: ahi el texto
+ *        ES la entrada.
+ * @param debug_source_file El fuente Vesta que lo origino.  Con texto lo saca
+ *        el lexer del marcador `// @file`; con nodos hechos no hay quien lo
+ *        lea, asi que lo dice quien los trae.
+ */
 int run_worker_from_source(
     std::string code, const std::string &file_name,
     const std::string &output_prefix, bool skip_preprocessor, bool keep_labels,
     const std::vector<uint8_t> *ir_section_bytes = nullptr,
-    bool emit_map = false);
+    bool emit_map = false, emmit::NodeStream *nodes = nullptr,
+    const std::string &debug_source_file = std::string());
 
 int run_worker(const std::string &file_name, const std::string &output_prefix,
                bool skip_preprocessor = false, bool keep_labels = false,

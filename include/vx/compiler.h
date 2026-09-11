@@ -28,6 +28,7 @@
 #define VX_COMPILER_H
 
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <string>
 #include <vector>
@@ -50,6 +51,9 @@ class FactStore;
 
 namespace ir {
 struct IrModule;
+/// El emisor que guarda lo escrito como items tipados.  Adelantado: quien
+/// incluya esto no tiene por que ver su modelo interno.
+class VelSink;
 }
 
 namespace vx {
@@ -447,6 +451,16 @@ struct CompileResult {
     /// cualquier reformateo mientras que el de simbolos no.
     vxdbg::ContentHash vxdbg_span_map;
     std::string vel_text; ///< Texto .vel generado a partir del IR.
+    /**
+     * @brief El emisor con sus items, de donde salio @c vel_text.
+     *
+     * Quien ensamble puede pedirle los nodos directamente en vez de darle el
+     * texto a un lexer que lo vuelva a leer.  Medido sobre 21 modulos y
+     * 441.000 lineas, ese rodeo son 930 ms de los 1.873 que cuesta compilar.
+     * Vacio = no hay, y entonces se ensambla el texto como siempre.
+     * Ver `ir/vel_node_stream.h`.
+     */
+    std::shared_ptr<ir::VelSink> vel_sink;
     std::string
         ir_text; ///< dump del IrModule (solo si CompileOptions::dump_ir).
     /// AOT.2.d: simbolos de override (@AllocatorOverride / @PanicHandler).

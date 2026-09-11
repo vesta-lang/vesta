@@ -53,10 +53,13 @@ int run_worker_from_source(std::string code, const std::string &file_name,
                            const std::string &output_prefix,
                            bool skip_preprocessor, bool keep_labels,
                            const std::vector<uint8_t> *ir_section_bytes,
-                           bool emit_map) {
+                           bool emit_map, emmit::NodeStream *nodes,
+                           const std::string &debug_source_file) {
     Timer global;
 
-    if (code.empty()) {
+    /* Con una fuente ya hecha no hay texto que mirar: los nodos vienen de
+     * quien los fabrico, y el `.vel` no llega a escribirse. */
+    if (nodes == nullptr && code.empty()) {
         std::cerr << "ERROR: fuente vacio: " << file_name << "\n";
         return 1;
     }
@@ -123,16 +126,22 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 
     // Lexer + Parser
 
-    vm::Lexer lexer(code);
-    vm::Parser parser(lexer);
-
     std::vector<std::unique_ptr<vm::ASTNode>> program;
+    /* El fichero Vesta que origino esto.  Con texto lo captura el lexer del
+     * marcador `// @file`; con una fuente ya hecha lo dice quien la trae. */
+    std::string debug_src = debug_source_file;
     Timer t_parser;
-    try {
-        program = parser.parse();
-    } catch (const vm::ParseError &e) {
-        std::cerr << "Parse error: " << e.what() << "\n";
-        return 1;
+
+    if (nodes == nullptr) {
+        vm::Lexer lexer(code);
+        vm::Parser parser(lexer);
+        try {
+            program = parser.parse();
+        } catch (const vm::ParseError &e) {
+            std::cerr << "Parse error: " << e.what() << "\n";
+            return 1;
+        }
+        debug_src = lexer.last_src_file;
     }
     vesta::scout() << "[Tiempo parser] " << t_parser.us() << " us "
                    << t_parser.ms() << " ms\n";
@@ -150,8 +159,12 @@ int run_worker_from_source(std::string code, const std::string &file_name,
         std::filesystem::current_path().string(),
         std::filesystem::path(fs::get_executable_path()).parent_path().string(),
     };
-    Assembly::Bytecode::resolve_imports(program, imported_files, source_base,
-                                        import_search_paths);
+    /* Solo con texto.  Esto resuelve los `@import "otro.vel"`, que solo puede
+     * haber escrito una persona: lo que sale del compilador es autocontenido y
+     * no trae ninguno.  Con una fuente ya hecha no hay vector que ampliar. */
+    if (nodes == nullptr)
+        Assembly::Bytecode::resolve_imports(program, imported_files,
+                                            source_base, import_search_paths);
 
     // Ensamblar
     Assembler asmblr;
@@ -160,13 +173,14 @@ int run_worker_from_source(std::string code, const std::string &file_name,
     // Context para que el linker lo emita en la seccion debug del
     // .velb.  Si no hay marcador (compilacion sin --vx-debug),
     // queda vacio y el linker simplemente no emite la seccion.
-    if (!lexer.last_src_file.empty()) {
-        asmblr.ctx.debug_source_file = lexer.last_src_file;
+    if (!debug_src.empty()) {
+        asmblr.ctx.debug_source_file = debug_src;
     }
     Timer t_asm;
     std::vector<uint8_t> bytecode;
     try {
-        bytecode = asmblr.assemble(program);
+        bytecode = nodes != nullptr ? asmblr.assemble(*nodes)
+                                    : asmblr.assemble(program);
     } catch (const std::exception &e) {
         std::cerr << "Assembler error: " << e.what() << "\n";
         return EXIT_FAILURE;

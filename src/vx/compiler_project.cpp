@@ -33,12 +33,16 @@
 /* El ensamblador, DECLARADO y no incluido.  Su cabecera arrastra `windows.h`,
  * que define `VOID` como macro y hace que el `void` del enum de tipos de Vesta
  * deje de compilar.  Se declara lo que se usa y punto. */
+namespace emmit {
+class NodeStream;
+}
 namespace asm_multi_process {
 int run_worker_from_source(std::string code, const std::string &file_name,
                            const std::string &output_prefix,
                            bool skip_preprocessor, bool keep_labels,
                            const std::vector<uint8_t> *ir_section_bytes,
-                           bool emit_map);
+                           bool emit_map, emmit::NodeStream *nodes,
+                           const std::string &debug_source_file);
 } // namespace asm_multi_process
 #include "vx/comptime/comptime_collect.h"
 #include "vx/borrow/borrow_ir_check.h" // la exclusividad, cruzando la llamada
@@ -2236,7 +2240,8 @@ CompileResult compile_vx_project(
                         std::string(cr_ct.vel_text), pref + ".vel.tmp", pref,
                         /*skip_preprocessor=*/true, /*keep_labels=*/false,
                         &cr_ct.ir_section_bytes,
-                        /*emit_map=*/false) == EXIT_SUCCESS) {
+                        /*emit_map=*/false, /*nodes=*/nullptr,
+                        /*debug_source_file=*/std::string()) == EXIT_SUCCESS) {
                     if (util::read_whole_file(pref + ".velb",
                                               artefacto_comptime) &&
                         !artefacto_comptime.empty()) {
@@ -5376,6 +5381,8 @@ CompileResult compile_vx_project(
         }
     }
     res.vel_text = std::move(eres.vel_text);
+    /* Y de donde salio, para quien pueda ensamblar sin releerlo. */
+    res.vel_sink = eres.sink;
 
     // Mapa del artefacto: uno solo con los simbolos de TODOS los modulos.  El
     // ejecutable los contiene a todos, asi que una direccion suya puede caer en

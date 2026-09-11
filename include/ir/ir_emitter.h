@@ -42,11 +42,16 @@
 
 #include "ir/ssa_ir.h"
 #include "ir/ir_optimizer.h"
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace ir {
+
+/// El emisor que guarda lo escrito como items tipados.  Adelantado: quien use
+/// el resultado no tiene por que ver su modelo interno.
+class VelSink;
 
 /**
  * @brief Opciones de emision del emisor IR -> .vel.
@@ -122,6 +127,19 @@ struct EmitResult {
     /// orquesta lo estampa en @c IrValue::reg antes de guardar el intermedio,
     /// que es donde tiene sentido: un registro es propiedad del VALOR.
     std::unordered_map<std::string, std::vector<uint8_t>> value_regs;
+
+    /**
+     * @brief El emisor con sus items, vivo, para quien pueda usarlos.
+     *
+     * `vel_text` es el programa RENDERIZADO; esto es de donde salio.  Quien lo
+     * tenga puede darle los nodos al ensamblador sin escribir el texto y sin
+     * que nadie lo vuelva a lexar -- que es la mitad del tiempo de compilar --.
+     * Ver `ir/vel_node_stream.h`.
+     *
+     * Compartido y no propio porque el resultado viaja por varias capas hasta
+     * quien ensambla, y ninguna de ellas tiene por que ser su duena.
+     */
+    std::shared_ptr<ir::VelSink> sink;
 };
 
 /**

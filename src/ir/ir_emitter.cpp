@@ -7420,7 +7420,11 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
         // porque la etiqueta de la funcion ya apunta ahi, pero la emitimos
         // igualmente para que los saltos desde otros bloques puedan apuntar al
         // entry).
-        out << ctx.block_label(static_cast<IrBlockId>(b)) << ":\n";
+        /* Por la entrada TIPADA y no cosiendo `nombre` con `":\n"`.  Sale el
+         * mismo texto, pero ademas queda como item: una etiqueta suelta en un
+         * crudo no tiene nodo del que fabricarse, y entonces la via que
+         * ensambla sin pasar por texto tiene que renunciar entera. */
+        out.label(ctx.block_label(static_cast<IrBlockId>(b)));
         // Invalidar caches de scratch al cruzar un boundary de bloque:
         // el control flow puede llegar aqui desde cualquier predecesor,
         // asi que no podemos asumir nada sobre el contenido de r14/r13.
@@ -7457,7 +7461,7 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     }
 
     // Epilogo comun de retorno
-    out << ctx.fn_lbl << "_ret:\n";
+    out.label(ctx.fn_lbl + "_ret");
     // Epilogo callee-saved del banco ancho: restaura cada ZMM guardado (mld-FP)
     // ANTES de `leave` (que desmonta el frame donde viven los slots).
     emit_zmm_callee_restore(ctx);
@@ -7468,7 +7472,8 @@ static std::string emit_function(const IrFunction &fn, const EmitOptions &opts,
     }
     // La funcion de entrada usa hlt para terminar la maquina explicitamente;
     // las demas funciones usan ret para retornar al llamador via callvm.
-    out << (is_entry_point ? "    hlt\n\n" : "    ret\n\n");
+    out.emit(is_entry_point ? emmit::Mnemonic::HLT : emmit::Mnemonic::RET);
+    out.blank();
 
     if (!(alloc.num_spill_slots == 0) && opts.emit_comments) {
         out << "    // INFO: " << alloc.num_spill_slots
@@ -7753,7 +7758,12 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
                 }
     }
 
-    VelSink out;
+    /* El emisor sobrevive al resultado: sus items son de donde el ensamblador
+     * puede sacar los nodos sin pasar por texto.  Por eso se construye en el
+     * monton y se comparte, en vez de morir aqui. */
+    auto out_owned = std::make_shared<VelSink>();
+    VelSink &out = *out_owned;
+    result.sink = out_owned;
 
     /* CUANTAS VAN A SER, ANTES DE EMPEZAR.  El destino es un `vector<Instr>` y
      * un `Instr` no es pequeno, asi que dejarlo doblar desde vacio reserva

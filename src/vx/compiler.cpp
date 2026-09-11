@@ -1787,6 +1787,8 @@ CompileResult compile_vx_source(const std::string &source,
     }
 
     res.vel_text = std::move(eres.vel_text);
+    /* Y de donde salio, para quien pueda ensamblar sin releerlo. */
+    res.vel_sink = eres.sink;
 
     // 5. (opcional) Diagrama Mermaid del bytecode .vel final.  Independiente
     // de las opciones IR/AST: parsea el texto del .vel para detectar labels

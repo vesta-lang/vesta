@@ -31,6 +31,7 @@
 #define VESTA_NULLDEV "/dev/null"
 #endif
 
+#include "ir/vel_node_stream.h"          // ensamblar sin pasar por texto
 #include "toolchain/aot_build.h"         // vesta::tc::compile_aot
 #include "util/assembler_multiprocess.h" // asm_multi_process::run_worker
 #include "vx/compiler.h"                 // vx::compile_vx_source / _project
@@ -231,15 +232,40 @@ CompileResponse compile(const CompileRequest &req) {
      * El prologo `// @file` que se escribe al fichero cuando hay info de
      * depuracion tiene que ir tambien en lo que se ensambla, o la seccion de
      * depuracion del `.velb` se queda sin el nombre del fuente. */
+    /* SIN PASAR POR TEXTO, si se puede.  El emisor tiene cada instruccion
+     * tipada; escribirla y que un lexer la vuelva a leer son 930 ms de los
+     * 1.873 que cuesta compilar un proyecto de 441.000 lineas.  Con la fuente,
+     * el ensamblador toma los nodos de donde ya estaban.
+     *
+     * Si la fuente no puede cubrirlo todo -- lo dice ella, no se adivina -- se
+     * ensambla el texto como siempre.  Renunciar es correcto; entregar un
+     * programa al que le falta algo, no. */
+    std::unique_ptr<ir::VelNodeStream> nodes;
+    if (cr.vel_sink) {
+        nodes = std::make_unique<ir::VelNodeStream>(*cr.vel_sink);
+        if (!nodes->ok()) {
+            vesta::scout() << "[vel] no se puede ensamblar sin texto ("
+                           << nodes->why_not() << "); se usa el .vel\n";
+            nodes.reset();
+        }
+    }
+
     std::string vel_src;
-    if (opts.emit_debug) vel_src = "// @file " + req.input + "\n";
-    vel_src += cr.vel_text;
+    if (nodes == nullptr) {
+        /* El prologo `// @file` que se escribe al fichero cuando hay info de
+         * depuracion tiene que ir tambien en lo que se ensambla, o la seccion
+         * de depuracion del `.velb` se queda sin el nombre del fuente.  Por la
+         * otra via viaja como argumento. */
+        if (opts.emit_debug) vel_src = "// @file " + req.input + "\n";
+        vel_src += cr.vel_text;
+    }
     const int rc = asm_multi_process::run_worker_from_source(
         std::move(vel_src), vel_path, out_prefix,
         /*skip_preprocessor=*/true,
         /*keep_labels=*/req.keep_labels,
         /*ir_section_bytes=*/&cr.ir_section_bytes,
-        /*emit_map=*/req.emit_map);
+        /*emit_map=*/req.emit_map, nodes.get(),
+        /*debug_source_file=*/opts.emit_debug ? req.input : std::string());
     if (rc != 0) {
         resp.message = "el ensamblado/linkado del .velb fallo (run_worker)";
         return resp;
