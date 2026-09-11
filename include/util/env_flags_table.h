@@ -401,6 +401,27 @@ VESTA_ENV_FLAG(NoProjectCache, "VX_NO_PROJECT_CACHE", Speed, Cache, Bool, Any)
  * asignarle registros otra vez, y eso es la mayor parte del coste del frontend.
  * Va apagado: quien reparta modulos sueltos lo enciende. */
 VESTA_ENV_FLAG(DepVel, "VESTA_DEP_VEL", Speed, Cache, Bool, Any)
+/* CUANTOS MEBIBYTES de intermedio se mantienen vivos a la vez, en MiB.
+ *
+ * El pico del compilador es el conjunto de trabajo de UN modulo por CUANTOS
+ * modulos hay -- medido: 180 MiB x 21 + 24 = 3.804, observados 3.815 --, y de
+ * eso la parte gorda son los CUERPOS de los modulos ya compilados, que nadie
+ * vuelve a mirar hasta que se funden al final.  Con un techo puesto, un modulo
+ * que ya dio todo lo que tenia que dar baja a disco y su RAM se suelta; al
+ * fundir, vuelve.
+ *
+ * DESALOJAR NO ES BORRAR: los bytes estan en disco antes de que la memoria se
+ * libere, en el mismo formato que ya lleva el `.vxir`.  Un modulo desalojado
+ * sabe lo mismo que uno residente y solo tarda mas en contestar.
+ *
+ * Sin poner, o 0, NO SE DESALOJA NADA: es el comportamiento de siempre.  El
+ * numero es una cota INFERIOR de lo que se mide (ver `functions_footprint`),
+ * asi que el proceso ocupara algo mas que lo que se ponga aqui.
+ *
+ * Es `Speed` y no `Emitted` a proposito: el programa que sale tiene que ser el
+ * MISMO, y eso es una afirmacion comprobable -- el viaje por disco es el que ya
+ * hace un modulo servido de cache. */
+VESTA_ENV_FLAG(IrRamMaxMib, "VX_IR_RAM_MAX_MIB", Speed, Cache, Int, Any)
 VESTA_ENV_FLAG(CacheFingerprint, "VX_CACHE_FINGERPRINT", Location, Cache, Text,
                Any)
 VESTA_ENV_FLAG(McCacheTtlDays, "VESTA_MC_CACHE_TTL_DAYS", Location, Cache, Int,

@@ -60,9 +60,11 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 
 #include "ir/ir_emitter.h"
 #include "ir/ir_optimizer.h"
+#include "ir/module_spill.h" // bajar los cuerpos a disco mientras no hablan
 #include "ir/parallel_for.h"
 #include "util/env_flags.h"
 #include <climits>
+#include "util/alloc/sanitizer.h" // marcar las fases en el eje del comprobador
 #include "util/crono_tramo.h"
 #include "analysis/asa/aggregate_facts.h"
 #include "analysis/effects/bounds.h" // accesos fuera de region -> diagnostico
@@ -794,7 +796,262 @@ struct ProjectModuleWork {
     /// usa este diags propio en lugar del res.diagnostics compartido,
     /// evitando race conditions.  Post-join se mergean al global.
     Diagnostics diags;
+
+    /**
+     * @name Lo que de este modulo hace falta DESPUES de compilarlo
+     *
+     * CUATRO CONSUMIDORES TARDIOS TENIAN EN PIE EL AST ENTERO, y ninguno de
+     * los cuatro necesitaba un AST: el tree-shake pregunta si el modulo
+     * declara clases (un bit), los contratos son un mapa de nombre a siete
+     * banderas, y la inyeccion diferida son un bit y dos cadenas.  Medido en
+     * el pico de una compilacion de 144.000 lineas: 276 MB de frontend vivos
+     * MIENTRAS SE EMITE el `.vel`, o sea sostenidos por preguntas que ya
+     * estaban contestadas.
+     *
+     * Es la regla del ASA aplicada a la memoria y no al conocimiento: el hecho
+     * se produce UNA vez, donde se sabe, y lo que se guarda es el hecho -- no
+     * la estructura de la que salio.  Ver @c release_compiled_module.
+     */
+    ///@{
+    /// Si declara alguna clase.  Lo mira el tree-shake: un dep con clases no
+    /// se puede eliminar aunque sus simbolos importados no se usen.
+    bool has_classes = false;
+    /// Si le quedo codigo por inyectar, y cual.
+    bool inject_pending = false;
+    std::string inject_code;
+    std::string inject_arg;
+    /// Los contratos de huella declarados en su fuente, ya con la clave con la
+    /// que el analizador vera la funcion.
+    std::unordered_map<std::string, analyze::FunctionContracts> contracts;
+    ///@}
+
+    /**
+     * @name El intermedio, cuando esta en disco y no en la RAM
+     *
+     * Un modulo ya compilado no vuelve a hablar hasta que se funden todos, asi
+     * que sus cuerpos pueden bajar a disco mientras tanto.  DESALOJAR NO ES
+     * BORRAR: los bytes estan escritos antes de soltar la memoria y volver a
+     * traerlos reconstruye lo que habia.  Ver @c ir/module_spill.h.
+     */
+    ///@{
+    /// Donde dejo la cache el `.vxir` de este modulo, si lo dejo.  Es el mismo
+    /// fichero que sirve para recuperarlo, asi que un proyecto con cache no
+    /// escribe nada extra por desalojar.
+    std::string ir_cache_path;
+    /// De donde se recupera.  Vacio = el intermedio esta en la RAM.
+    std::string ir_spill_path;
+    /// Cuantas funciones bajaron.  Si vuelven otras tantas, se grita.
+    size_t ir_spilled_fns = 0;
+    /// Cuanta RAM ocupaban, para descontarla del techo al soltarlas.
+    size_t ir_footprint = 0;
+    ///@}
 };
+
+/**
+ * @brief El techo de intermedio vivo, en bytes.  0 = sin techo.
+ *
+ * Se pregunta UNA vez: es una variable de entorno y no cambia a mitad de una
+ * compilacion.
+ *
+ * @return Bytes, o 0 si no se puso.
+ */
+size_t ir_ram_ceiling_bytes() {
+    static const size_t ceiling = [] {
+        const long mib = util::flag_int(util::FlagId::IrRamMaxMib, 0);
+        if (mib <= 0) return size_t{0};
+        return static_cast<size_t>(mib) * 1024u * 1024u;
+    }();
+    return ceiling;
+}
+
+/**
+ * @brief Baja a disco los cuerpos de modulos ya compilados hasta caber.
+ *
+ * Se llama donde NO hay nadie compilando -- el camino secuencial entre modulo
+ * y modulo, y el paralelo tras la barrera de cada lote --, asi que lee el
+ * estado de los otros modulos sin candado y sin carrera.
+ *
+ * A quien desaloja: al que lleva mas tiempo quieto, que en orden topologico es
+ * el de indice menor.  Nunca al raiz -- sus cuerpos los sigue mirando la
+ * emision -- ni a uno que no llego a compilar.
+ *
+ * Y no desaloja porque si: solo mientras lo vivo pase del techo.  Un proyecto
+ * que cabe no paga ni una escritura ni una lectura.
+ *
+ * @param work    Todos los modulos.
+ * @param live    Bytes de intermedio residentes.  Se actualiza.
+ * @param diags   Donde avisar si un modulo no se pudo bajar.
+ * @param verbose Si contar lo que se baja.
+ */
+void spill_until_under_ceiling(std::vector<ProjectModuleWork> &work,
+                               size_t &live, Diagnostics &diags, bool verbose) {
+    const size_t ceiling = ir_ram_ceiling_bytes();
+    if (ceiling == 0 || live <= ceiling) return;
+
+    for (size_t i = 0; i + 1 < work.size() && live > ceiling; ++i) {
+        ProjectModuleWork &pm = work[i];
+        if (!pm.ok) continue;                    // no llego a compilar
+        if (!pm.ir_spill_path.empty()) continue; // ya esta fuera
+        if (pm.ir.functions.empty()) continue;   // no hay nada que bajar
+
+        /* Si la cache ya publico su `.vxir`, ESE es el fichero: desalojar no
+         * cuesta ni una escritura.  Si no (cache apagada, o un modulo que no
+         * se cachea), se escribe en el area de TRABAJO -- que no es una cache:
+         * son bytes de esta compilacion y de ninguna otra. */
+        const bool already_written = !pm.ir_cache_path.empty();
+        const std::string dest =
+            already_written ? pm.ir_cache_path
+                            : (util::cache_dir(util::CacheKind::Work) + "/ir_" +
+                               std::to_string(pm.module_id) + ".vxir");
+
+        const size_t count = pm.ir.functions.size();
+        const size_t held = pm.ir_footprint;
+        if (!ir::spill_functions(pm.ir, dest, already_written)) {
+            /* No se pudo dejar a salvo, asi que no se suelta -- la compilacion
+             * sigue siendo CORRECTA, solo que el techo no se cumple.  Y se
+             * DICE: sin esto, el techo parece que no funciona y nadie sabe por
+             * que.  Avisa UNA vez por modulo: el bucle no vuelve a intentarlo
+             * porque `ir_spill_path` se queda vacio y el siguiente barrido
+             * pasa al siguiente candidato. */
+            SourceLoc loc;
+            loc.set_file(pm.canonical_path);
+            diags.diag(std::move(loc), DiagLevel::WARN, "VX4007",
+                       {pm.module_name, dest,
+                        util::flag_info(util::FlagId::IrRamMaxMib).name});
+            continue;
+        }
+        pm.ir_spill_path = dest;
+        pm.ir_spilled_fns = count;
+        live -= (held < live ? held : live);
+        if (verbose)
+            std::cerr << "[ir] " << pm.module_name << ": " << count
+                      << " funciones a disco, " << (held / 1024u / 1024u)
+                      << " MiB libres\n";
+    }
+}
+
+/**
+ * @brief Apunta lo que ocupa el modulo recien compilado y aplica el techo.
+ *
+ * Con el techo sin poner no hace NADA -- ni siquiera mide --, que es lo que
+ * tiene que pasar: quien no pidio un techo no paga por tenerlo.
+ *
+ * @param work    Todos los modulos.
+ * @param idx     El que acaba de compilarse.
+ * @param live    Bytes de intermedio residentes.  Se actualiza.
+ * @param diags   Donde avisar si un modulo no se pudo bajar.
+ * @param verbose Si contar lo que se baja.
+ */
+void account_and_spill(std::vector<ProjectModuleWork> &work, size_t idx,
+                       size_t &live, Diagnostics &diags, bool verbose) {
+    if (ir_ram_ceiling_bytes() == 0) return;
+    ProjectModuleWork &pm = work[idx];
+    pm.ir_footprint = ir::functions_footprint(pm.ir.functions);
+    live += pm.ir_footprint;
+    spill_until_under_ceiling(work, live, diags, verbose);
+}
+
+/**
+ * @brief Devuelve a la RAM los cuerpos de @p pm si estaban en disco.
+ *
+ * @param pm  El modulo.
+ * @param err Que paso, si fallo.
+ * @return true si el modulo quedo utilizable -- lo que incluye que nunca
+ *         hubiera salido de la RAM.
+ */
+bool restore_module_ir(ProjectModuleWork &pm, std::string &err) {
+    if (pm.ir_spill_path.empty()) return true;
+    if (!ir::restore_functions(pm.ir, pm.ir_spill_path, pm.ir_spilled_fns, err))
+        return false;
+    pm.ir_spill_path.clear();
+    pm.ir_spilled_fns = 0;
+    return true;
+}
+
+/**
+ * @brief Recoge en @p out los contratos de huella declarados en @p decls.
+ *
+ * FUNCION CON NOMBRE y no la `std::function` recursiva que habia: una lambda
+ * que se llama a si misma necesita el envoltorio -- que reserva -- y se lee
+ * peor, y esta ademas tenia que vivir donde estaban todos los AST a la vez.
+ * Con nombre se llama desde donde se compila cada modulo, que es donde su AST
+ * existe y donde puede dejar de existir justo despues.
+ *
+ * @param decls Las declaraciones de un modulo o de un namespace suyo.
+ * @param out   Mapa destino; la clave es la que tendra la @c IrFunction.
+ */
+void collect_contracts(
+    const std::vector<std::unique_ptr<ast::Node>> &decls,
+    std::unordered_map<std::string, analyze::FunctionContracts> &out) {
+    for (const auto &d : decls) {
+        if (!d) continue;
+        if (d->kind == ast::NodeKind::NamespaceDecl) {
+            collect_contracts(
+                static_cast<const ast::NamespaceDecl *>(d.get())->decls, out);
+            continue;
+        }
+        if (d->kind == ast::NodeKind::FunctionDecl) {
+            const auto *fd = static_cast<const ast::FunctionDecl *>(d.get());
+            analyze::FunctionContracts c;
+            c.pure = fd->contract_pure;
+            c.nothrow = fd->contract_nothrow;
+            c.nopanic = fd->contract_nopanic;
+            c.alloc_total = fd->contract_alloc;
+            c.alloc_partial = fd->contract_alloc_partial;
+            c.stack_total = fd->contract_stack;
+            c.stack_partial = fd->contract_stack_partial;
+            if (c.any()) out[fd->name] = c;
+        }
+        /* Los TEMPLATES genericos se saltan: no producen IR (solo sus
+         * instanciaciones), y su clave casaria por sufijo con la de la
+         * instanciacion, duplicando cada incumplimiento.  La monomorfizacion
+         * copia los contratos. */
+        const std::vector<std::unique_ptr<ast::ClassMethodDecl>> *ms = nullptr;
+        const std::string *tipo = nullptr;
+        if (d->kind == ast::NodeKind::StructDecl) {
+            const auto *sd = static_cast<const ast::StructDecl *>(d.get());
+            if (sd->type_params.empty() && !sd->is_specialization) {
+                ms = &sd->methods;
+                tipo = &sd->name;
+            }
+        } else if (d->kind == ast::NodeKind::ClassDecl) {
+            const auto *cd = static_cast<const ast::ClassDecl *>(d.get());
+            if (cd->type_params.empty()) {
+                ms = &cd->methods;
+                tipo = &cd->name;
+            }
+        }
+        if (ms == nullptr) continue;
+        /* Un metodo baja a una `IrFunction` llamada `Tipo__metodo`, asi que se
+         * registra con ESA clave -- la que vera el analizador. */
+        for (const auto &m : *ms) {
+            if (!m) continue;
+            analyze::FunctionContracts c;
+            c.pure = m->contract_pure;
+            c.nothrow = m->contract_nothrow;
+            c.nopanic = m->contract_nopanic;
+            c.alloc_total = m->contract_alloc;
+            c.alloc_partial = m->contract_alloc_partial;
+            c.stack_total = m->contract_stack;
+            c.stack_partial = m->contract_stack_partial;
+            if (c.any()) out[*tipo + "__" + m->name] = c;
+        }
+    }
+}
+
+/**
+ * @brief Si @p decls declara alguna clase.
+ *
+ * AL NIVEL DE ARRIBA Y NO RECURSIVA, que es exactamente lo que miraba el
+ * tree-shake cuando recorria el AST a mano.  Se conserva el criterio a
+ * proposito: cambiarlo aqui cambiaria QUE modulos se eliminan, y eso es una
+ * decision aparte de dejar de sostener un AST para contestarlo.
+ */
+bool declares_classes(const std::vector<std::unique_ptr<ast::Node>> &decls) {
+    for (const auto &d : decls)
+        if (d && d->kind == ast::NodeKind::ClassDecl) return true;
+    return false;
+}
 
 /// Extrae los ImportDecl del AST en orden de declaracion.  Util para
 /// procesar los `only` imports tras tener las VxiModule de los deps.
@@ -1679,13 +1936,29 @@ CompileResult compile_vx_project(
      * grafo -- que crece con el numero de modulos -- de compilarlos. */
     using RelojProyecto = std::chrono::steady_clock;
     auto marca = RelojProyecto::now();
-    auto cerrar_fase = [&marca](long &destino) {
+    /* El segundo parametro nombra la fase que EMPIEZA aqui, para el eje del
+     * tiempo del comprobador de memoria: una curva sin nombres dice "el pico
+     * esta en la muestra 251 de 289", y quien la mira necesita saber que la 251
+     * era el emisor.  El unico que lo sabe es esto, y lo sabe gratis porque ya
+     * tenia el corchete puesto para cronometrar.
+     *
+     * VA UNA CLAVE, NO UNA FRASE.  Escribir aqui el texto seria texto de cara
+     * al usuario puesto a mano, que es justo lo que el catalogo multi-idioma
+     * viene a impedir -- y ademas acabaria dentro de un informe de OTRO
+     * proyecto, que no tiene por que llevar nuestras palabras ni nuestro
+     * idioma.  La clave es estable y la traduce quien ENSENA la curva.
+     *
+     * NO CUESTA NADA sin comprobador: fuera de ese build `san_mark` es un
+     * cuerpo vacio en linea.  Ver `util::san_mark`. */
+    auto cerrar_fase = [&marca](long &destino, const char *siguiente = nullptr) {
         const auto ahora = RelojProyecto::now();
         destino += (long)std::chrono::duration_cast<std::chrono::microseconds>(
                        ahora - marca)
                        .count();
         marca = ahora;
+        if (siguiente != nullptr) util::san_mark(siguiente);
     };
+    util::san_mark("vx.phase.resolve");
 
     // 1. Construir el dep graph + topo sort.
     ModuleGraph graph(res.diagnostics);
@@ -1785,7 +2058,7 @@ CompileResult compile_vx_project(
         return res;
     }
 
-    cerrar_fase(res.tiempos.resolver_us);
+    cerrar_fase(res.tiempos.resolver_us, "vx.phase.modules");
 
     // 2. Mover los AST parseados del graph a estructuras de trabajo.
     std::vector<ProjectModuleWork> work(topo.size());
@@ -2611,6 +2884,13 @@ CompileResult compile_vx_project(
                             }
                         }
                         pm.vxi = std::move(pr.module_);
+                        /* v20: y si declaraba clases, que el
+                         * tree-shake lo preguntara despues y aqui no
+                         * hay AST al que preguntarselo.  Los DOS
+                         * caminos de acierto tienen que ponerlo, o el
+                         * dep se elimina o no segun por cual se
+                         * entre. */
+                        pm.has_classes = pm.vxi.declares_classes;
                         /* v18: el conjunto comptime tambien por AQUi.  Hay dos
                          * caminos de cache-hit -- el del almacen global y el de
                          * los ficheros junto al fuente -- y los dos tienen que
@@ -2786,6 +3066,8 @@ CompileResult compile_vx_project(
                             if (par_coherente &&
                                 ir::parse_ir_module_cache(ibytes, dep_mod)) {
                                 pm.vxi = std::move(pr.module_);
+                                /* v20: ver el otro camino de acierto. */
+                                pm.has_classes = pm.vxi.declares_classes;
                                 /* v18: el conjunto comptime, del `.vxi`.  Un
                                  * modulo servido del cache NO se parsea, asi
                                  * que aqui no hay AST del que extraerlo: sin
@@ -3656,6 +3938,16 @@ CompileResult compile_vx_project(
             auto ibytes = ir::emit_ir_module_cache(pm.ir);
             (void)write_file_atomic_(ip, ibytes);
             (void)write_file_atomic_(vp, vbytes);
+            /* Y queda apuntado que el intermedio de este modulo, TAL COMO ESTA
+             * AHORA, ya esta en disco.  Es lo que permite que desalojarlo mas
+             * tarde no cueste ni una escritura mas: el fichero que la cache
+             * acaba de publicar es el mismo del que se recupera.
+             *
+             * Se apunta AQUI, en la linea siguiente a escribirlo, y no en otro
+             * sitio: la afirmacion vale mientras nadie toque `pm.ir` entre las
+             * dos cosas.  Quien anada una modificacion despues tiene que
+             * limpiar esto. */
+            pm.ir_cache_path = ip;
             // Poblar el CAS global (content-addressed) con el mismo par
             // (interfaz, IR).  Idempotente: la clave es el contenido.  Asi el
             // siguiente proyecto/maquina con esta misma stdlib hace hit sin
@@ -3727,8 +4019,52 @@ CompileResult compile_vx_project(
             }
         }
 
+        /* LO QUE ESTE MODULO SABE DE SI MISMO, apuntado aqui porque aqui es
+         * donde su AST existe -- y apuntarlo es lo que permite que deje de
+         * existir.  Los tres consumidores estan a dos mil lineas de aqui y
+         * ninguno quiere un AST: quieren estas respuestas.  Ver
+         * `release_compiled_module`. */
+        if (pm.ast) {
+            pm.has_classes = declares_classes(pm.ast->decls);
+            /* Y AL ARTEFACTO, que es lo que lo hace util: quien sirva este
+             * modulo del cache no lo parseara, asi que esta es la unica
+             * ocasion de averiguarlo.  Ver `VxiHeader::module_flags`. */
+            pm.vxi.declares_classes = pm.has_classes;
+            collect_contracts(pm.ast->decls, pm.contracts);
+        }
+        if (pm.tc && pm.tc->inject_diferido()) {
+            pm.inject_pending = true;
+            pm.inject_code = pm.tc->asm_body_pending_code();
+            pm.inject_arg = pm.tc->asm_body_pending_arg();
+        }
+
         pm.ok = true;
     }; // end of compile_one_module lambda
+
+    /**
+     * Suelta de un modulo YA COMPILADO lo que nadie va a volver a mirar.
+     *
+     * POR QUE AQUI Y NO AL FINAL DE `compile_one_module`: ahi sigue vivo el
+     * objeto `Lowering`, que guarda REFERENCIAS al AST y al comprobador de
+     * tipos.  Destruirlos con una referencia viva encima es un fallo que no da
+     * la cara hasta que alguien anada algo al destructor de `Lowering`.  Al
+     * volver la funcion, ese objeto ya no esta.
+     *
+     * EL ROOT NO SE SUELTA: su AST lo siguen mirando los diagramas y la
+     * inyeccion diferida, y es UNO de veintiun modulos.
+     *
+     * @param pm      El modulo, ya compilado.
+     * @param is_root Si es el modulo raiz.
+     */
+    auto release_compiled_module = [](ProjectModuleWork &pm, bool is_root) {
+        if (is_root) return;
+        pm.ast.reset();
+        pm.tc.reset();
+        /* Y el fuente, que tampoco lo lee nadie mas: son megabytes por
+         * proyecto y no hay ninguna pregunta pendiente sobre el texto.  Con
+         * `swap` y no con `clear`, que conserva la reserva. */
+        std::string().swap(pm.source);
+    };
 
     //  M8: dispatch.  Por defecto secuencial (preserve cache hit
     // determinism y el orden de @c verbose_compile output).  Activado via
@@ -3774,10 +4110,18 @@ CompileResult compile_vx_project(
         const unsigned half = (cores + 1u) / 2u;
         parallel_threads = static_cast<int>(cores < half ? half : cores);
     }
+    /* Cuanto intermedio hay vivo.  Con `VX_IR_RAM_MAX_MIB` puesto, lo que pase
+     * del techo baja a disco -- ver `spill_until_under_ceiling` --.  Sin el,
+     * este contador se queda en cero y nadie lo mira. */
+    size_t ir_ram_live = 0;
+
     if (parallel_threads <= 1) {
         // Path secuencial: identico al comportamiento pre-M8.
         for (size_t i = 0; i < work.size(); ++i) {
             compile_one_module(i);
+            release_compiled_module(work[i], i + 1 == work.size());
+            account_and_spill(work, i, ir_ram_live, res.diagnostics,
+                              verbose_compile);
         }
     } else {
         // Path paralelo: agrupar modulos por nivel topologico.
@@ -3795,6 +4139,10 @@ CompileResult compile_vx_project(
             // Si el nivel tiene 1 solo modulo, no merece thread.
             if (mods.size() == 1) {
                 compile_one_module(mods[0]);
+                release_compiled_module(work[mods[0]],
+                                        mods[0] + 1 == work.size());
+                account_and_spill(work, mods[0], ir_ram_live, res.diagnostics,
+                                  verbose_compile);
                 continue;
             }
             // Particionar @c mods en lotes de tamano @c parallel_threads .
@@ -3824,9 +4172,10 @@ CompileResult compile_vx_project(
                     std::string cc_tier;
                     bool cc_sin_libc = false;
                     vx::get_aot_condcomp_tier(cc_tier, cc_sin_libc);
-                    threads.emplace_back([&compile_one_module, idx = mods[k],
-                                          cc_tgt_os, cc_tgt_arch, cc_modo,
-                                          cc_tier, cc_sin_libc]() {
+                    threads.emplace_back([&compile_one_module,
+                                          &release_compiled_module, &work,
+                                          idx = mods[k], cc_tgt_os, cc_tgt_arch,
+                                          cc_modo, cc_tier, cc_sin_libc]() {
                         // HALLAZGO-2: re-aplicar el target de @Target en
                         // este worker antes de parsear (el thread_local del
                         // parser arranca vacio en un thread nuevo).
@@ -3843,6 +4192,10 @@ CompileResult compile_vx_project(
                         if (!cc_tier.empty())
                             vx::set_aot_condcomp_tier(cc_tier, cc_sin_libc);
                         compile_one_module(idx);
+                        /* Cada hilo suelta LO SUYO: el modulo es de este hilo
+                         * hasta la barrera, asi que no hace falta cerrojo. */
+                        release_compiled_module(work[idx],
+                                                idx + 1 == work.size());
                     });
                 }
                 // Barrier: esperar todos los threads del lote antes de
@@ -3851,6 +4204,13 @@ CompileResult compile_vx_project(
                 // antes de que el siguiente nivel intente cache hit.
                 for (auto &t : threads)
                     t.join();
+                /* El techo se aplica AQUI y no dentro del hilo: desalojar mira
+                 * el estado de los OTROS modulos, y dentro del lote los hay
+                 * compilandose.  Tras la barrera no queda nadie trabajando,
+                 * asi que se lee sin candado y sin carrera. */
+                for (size_t k = base; k < end_idx; ++k)
+                    account_and_spill(work, mods[k], ir_ram_live,
+                                      res.diagnostics, verbose_compile);
             }
         }
     }
@@ -3937,16 +4297,16 @@ CompileResult compile_vx_project(
             if (itd == by_name.end()) continue;
             // Verificar si el dep declara clases (no shake-able).
             const auto &dep_pm = work[itd->second];
-            bool dep_has_classes = false;
-            if (dep_pm.ast) {
-                for (const auto &d : dep_pm.ast->decls) {
-                    if (d && d->kind == ast::NodeKind::ClassDecl) {
-                        dep_has_classes = true;
-                        break;
-                    }
-                }
-            }
-            if (dep_has_classes) continue;
+            /* DEL RESUMEN DEL DEP, no de su AST, que para cuando se llega aqui
+             * ya se solto.  Mismo criterio y mismo resultado que mirarlo a
+             * mano: lo apunta quien compila el modulo, en su propio AST.
+             *
+             * SIGUE ABIERTO -- y no lo abre esto -- el caso del dep SERVIDO DEL
+             * CACHE: no se parsea nunca, asi que nadie le pone el bit y aqui
+             * cuenta como "no declara clases".  Antes pasaba igual, por la via
+             * de un `ast` nulo.  Cerrarlo pide guardar el bit en el `.vxi`, que
+             * es tocar el formato del artefacto. */
+            if (dep_pm.has_classes) continue;
             // Verificar si TODOS los only simbolos estan sin usar.
             bool all_unused = true;
             for (const auto &os : req.only_symbols) {
@@ -3981,6 +4341,25 @@ CompileResult compile_vx_project(
 
     for (size_t i = 0; i + 1 < work.size(); ++i) {
         if (shaken_indices.count(i)) continue; // L.25: skip dep no usado
+        /* Y si sus cuerpos estaban en disco, vuelven AHORA -- justo antes de
+         * que alguien pregunte, que es el momento en que hacen falta.  Se
+         * restaura DESPUES del tree-shake: un dep que no entra al programa no
+         * se lee de vuelta para nada.
+         *
+         * Fallar aqui no se puede tragar: sin los cuerpos el modulo aporta
+         * cero funciones y el programa sale sin ellas -- no un error, otro
+         * programa --.  Asi que se dice y se aborta. */
+        {
+            std::string spill_err;
+            if (!restore_module_ir(work[i], spill_err)) {
+                SourceLoc loc;
+                loc.set_file(work[i].canonical_path);
+                res.diagnostics.diag(std::move(loc), DiagLevel::ERR, "VX4006",
+                                     {work[i].module_name, spill_err});
+                res.ok = false;
+                return res;
+            }
+        }
         auto &dep_ir = work[i].ir;
         // BugFix M.sd: remapeo de STR_LIT_ADDR.imm al mergear static_data.
         // Cada modulo usa indices locales 0..N-1 para sus literales.  Al
@@ -4403,71 +4782,13 @@ CompileResult compile_vx_project(
     // Solo ERROR cuando la violacion es DEMOSTRABLE.  Parte del sistema de
     // tipos.
     {
-        // Recoger los contratos declarados en los AST de los modulos (root +
-        // deps), guardarlos en el resultado (para --analyze) y verificar.
-        std::function<void(const std::vector<std::unique_ptr<ast::Node>> &)>
-            collect = [&](const std::vector<std::unique_ptr<ast::Node>>
-                              &decls) {
-                for (const auto &d : decls) {
-                    if (!d) continue;
-                    if (d->kind == ast::NodeKind::NamespaceDecl) {
-                        collect(static_cast<const ast::NamespaceDecl *>(d.get())
-                                    ->decls);
-                        continue;
-                    }
-                    if (d->kind == ast::NodeKind::FunctionDecl) {
-                        const auto *fd =
-                            static_cast<const ast::FunctionDecl *>(d.get());
-                        analyze::FunctionContracts c;
-                        c.pure = fd->contract_pure;
-                        c.nothrow = fd->contract_nothrow;
-                        c.nopanic = fd->contract_nopanic;
-                        c.alloc_total = fd->contract_alloc;
-                        c.alloc_partial = fd->contract_alloc_partial;
-                        c.stack_total = fd->contract_stack;
-                        c.stack_partial = fd->contract_stack_partial;
-                        if (c.any()) res.contracts[fd->name] = c;
-                    }
-                    // Metodos de struct/clase: mismo contrato sobre lo mismo.
-                    // Un metodo baja a una IrFunction `Tipo__metodo`, asi que
-                    // se registra con esa clave -- la que vera el analizador.
-                    auto tomar_metodos =
-                        [&](const std::string &tipo,
-                            const std::vector<
-                                std::unique_ptr<ast::ClassMethodDecl>> &ms) {
-                            for (const auto &m : ms) {
-                                if (!m) continue;
-                                analyze::FunctionContracts c;
-                                c.pure = m->contract_pure;
-                                c.nothrow = m->contract_nothrow;
-                                c.nopanic = m->contract_nopanic;
-                                c.alloc_total = m->contract_alloc;
-                                c.alloc_partial = m->contract_alloc_partial;
-                                c.stack_total = m->contract_stack;
-                                c.stack_partial = m->contract_stack_partial;
-                                if (c.any())
-                                    res.contracts[tipo + "__" + m->name] = c;
-                            }
-                        };
-                    // Los TEMPLATES genericos se saltan: no producen IR (solo
-                    // sus instanciaciones), y su clave casaria por sufijo con
-                    // la instanciacion, duplicando cada incumplimiento.  La
-                    // monomorphizacion copia los contratos.
-                    if (d->kind == ast::NodeKind::StructDecl) {
-                        const auto *sd =
-                            static_cast<const ast::StructDecl *>(d.get());
-                        if (sd->type_params.empty() && !sd->is_specialization)
-                            tomar_metodos(sd->name, sd->methods);
-                    } else if (d->kind == ast::NodeKind::ClassDecl) {
-                        const auto *cd =
-                            static_cast<const ast::ClassDecl *>(d.get());
-                        if (cd->type_params.empty())
-                            tomar_metodos(cd->name, cd->methods);
-                    }
-                }
-            };
-        for (auto &pm : work)
-            if (pm.ast) collect(pm.ast->decls);
+        /* Los contratos ya estan recogidos: cada modulo los apunto al
+         * compilarse, en `collect_contracts`, que es donde su AST existia.
+         * Aqui solo se juntan, en el mismo orden en que se recorrian los
+         * modulos -- que es lo que decide quien gana si dos declaran el mismo
+         * nombre. */
+        for (const auto &pm : work)
+            for (const auto &kv : pm.contracts) res.contracts[kv.first] = kv.second;
 
         /* Aqui es donde MAS aparece: `merged` es la fusion de los modulos del
          * proyecto, asi que la misma nativa declarada en dos de ellos llega
@@ -4613,7 +4934,7 @@ CompileResult compile_vx_project(
     ir::IrModule ir_pre_dump;
     if (opts.dump_ir) ir_pre_dump = merged;
 
-    cerrar_fase(res.tiempos.modulos_us);
+    cerrar_fase(res.tiempos.modulos_us, "vx.phase.optimize");
 
     // 5. Optimizar el IR mergeado.  En modo --analyze SIN inline: el coste
     //    PARCIAL es propiedad del cuerpo escrito -- si el inline lo alterase,
@@ -4814,7 +5135,7 @@ CompileResult compile_vx_project(
         res.ir_text = ir_oss.str();
     }
 
-    cerrar_fase(res.tiempos.optimizar_us);
+    cerrar_fase(res.tiempos.optimizar_us, "vx.phase.emit");
 
     // 6. Emitir .vel desde el IR mergeado.
     ir::EmitOptions emit_opts;
@@ -5080,7 +5401,7 @@ CompileResult compile_vx_project(
     // el modulo mergeado de todos los .vx del proyecto.
     res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
 
-    cerrar_fase(res.tiempos.emitir_us);
+    cerrar_fase(res.tiempos.emitir_us, "vx.phase.link");
 
     // AOT.2.d: detectar @AllocatorOverride / @PanicHandler en el modulo ROOT,
     // igual que hace compile_vx_source.  Sin esto, un .vx que declara el
@@ -5169,12 +5490,15 @@ CompileResult compile_vx_project(
                         "mods.vx");
         if (f) f << res.comptime_unit_source;
     }
+    /* Del resumen, no del comprobador de tipos: se le pregunto al acabar cada
+     * modulo, que es cuando existia.  Lo que se guardaba para poder hacer esta
+     * pregunta era un objeto de decenas de megabytes por modulo. */
     for (const auto &pm : work) {
-        if (pm.tc && pm.tc->inject_diferido()) {
+        if (pm.inject_pending) {
             res.has_lowerable_macros = true;
             res.unresolved_inject = true;
-            res.unresolved_inject_code = pm.tc->asm_body_pending_code();
-            res.unresolved_inject_arg = pm.tc->asm_body_pending_arg();
+            res.unresolved_inject_code = pm.inject_code;
+            res.unresolved_inject_arg = pm.inject_arg;
             break;
         }
     }

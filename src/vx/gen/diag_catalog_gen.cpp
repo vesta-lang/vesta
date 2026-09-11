@@ -77,6 +77,8 @@ const CatEntry kEntries[] = {
     {"VX4003", {"the namespace '{0}' is offered by two different places; the one in '{1}' is used and the one in '{2}' is ignored ({3} namespaces in total)", "el namespace '{0}' lo ofrecen dos sitios distintos; se usa el de '{1}' y se ignora el de '{2}' ({3} namespaces en total)"}},
     {"VX4004", {"they are two copies of the same library, so mixing them would make its types fight over one identity", "son dos copias de la misma libreria, asi que mezclarlas haria que sus tipos se peleen por una sola identidad"}},
     {"VX4005", {"they are two different packages ('{0}' and '{1}') offering the same namespace -- declare which one you want in the manifest, giving it a name of its own if both are needed", "son dos paquetes distintos ('{0}' y '{1}') que ofrecen el mismo namespace -- declara en el manifiesto cual quieres, dandole un nombre propio si hacen falta los dos"}},
+    {"VX4006", {"the IR of module '{0}' was moved to disk to stay under the memory ceiling and could not be read back ({1}) -- the program cannot be built without it", "el intermedio del modulo '{0}' se bajo a disco para respetar el techo de memoria y no se ha podido recuperar ({1}) -- sin el no se puede construir el programa"}},
+    {"VX4007", {"module '{0}' could not be moved to disk ('{1}'), so it stays in memory: the ceiling set by {2} is not being honoured", "no se ha podido bajar a disco el modulo '{0}' ('{1}'), asi que se queda en memoria: el techo puesto con {2} no se esta respetando"}},
     {"VX7001", {"fatal error: null pointer", "error fatal: puntero nulo"}},
     {"VX7002", {"fatal error: division by zero", "error fatal: division entre cero"}},
     {"VX7003", {"fatal error: stack overflow", "error fatal: desbordamiento de pila"}},
@@ -574,7 +576,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 553;
+const int kEntryCount = 555;
 
 } // namespace
 
