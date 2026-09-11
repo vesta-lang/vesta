@@ -47,7 +47,7 @@ static void check(bool cond, const std::string &que) {
 // ---------------------------------------------------------------------------
 // Construccion del IR
 // ---------------------------------------------------------------------------
-static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+static ir::IrInstr &emitir(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                            ir::IrValueId dst, std::vector<ir::IrValueId> ops) {
     ir::IrInstr in{};
     in.op = op;
@@ -57,7 +57,7 @@ static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
     return fn.blocks[blk].instrs.back();
 }
 
-static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, int64_t v) {
+static ir::IrValueId cte(ir::IrFunction &fn, ir::IrBlockId blk, int64_t v) {
     const ir::IrValueId id = fn.new_value(ir::IrType::I64);
     fn.values[id].is_const = true;
     fn.values[id].const_val = static_cast<uint64_t>(v);
@@ -66,7 +66,7 @@ static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, int64_t v) {
 }
 
 /// Direccion de un componente: `base + off`.  Es como el IR habla de campos.
-static ir::IrValueId componente(ir::IrFunction &fn, uint32_t blk,
+static ir::IrValueId componente(ir::IrFunction &fn, ir::IrBlockId blk,
                                 ir::IrValueId base, int64_t off) {
     if (off == 0) return base;
     const ir::IrValueId k = cte(fn, blk, off);
@@ -75,13 +75,13 @@ static ir::IrValueId componente(ir::IrFunction &fn, uint32_t blk,
     return p;
 }
 
-static void leer(ir::IrFunction &fn, uint32_t blk, ir::IrValueId base,
+static void leer(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrValueId base,
                  int64_t off) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     emitir(fn, blk, ir::IrOp::LOAD, d, {componente(fn, blk, base, off)});
 }
 
-static void escribir(ir::IrFunction &fn, uint32_t blk, ir::IrValueId base,
+static void escribir(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrValueId base,
                      int64_t off, int64_t valor) {
     const ir::IrValueId v = cte(fn, blk, valor);
     emitir(fn, blk, ir::IrOp::STORE, ir::IR_NO_VALUE,
@@ -95,7 +95,7 @@ static ir::IrFunction operacion(const std::string &nombre,
                                 const std::vector<int64_t> &lee_offs) {
     ir::IrFunction fn;
     fn.name = nombre;
-    const uint32_t b0 = fn.new_block("entry");
+    const ir::IrBlockId b0 = fn.new_block("entry");
     const ir::IrValueId p = fn.new_value(ir::IrType::PTR);
     fn.params.push_back(p);
     for (int64_t o : lee_offs)
@@ -109,7 +109,7 @@ static ir::IrFunction operacion(const std::string &nombre,
 /// El caso: un valor de 16 bytes en `main`, con el esqueleto de uso que toque.
 struct Caso {
     ir::IrModule mod;
-    ir::IrValueId ancla = 0;
+    ir::IrValueId ancla = ir::IrValueId(0);
 
     AggregateFacts hechos() {
         const ir::IrFunction &fn = mod.functions.back();
@@ -130,7 +130,7 @@ static Caso montar(const std::vector<int64_t> &toca_en_main,
         c.mod.functions.push_back(operacion(op, op_escribe, op_lee));
     ir::IrFunction fn;
     fn.name = "main";
-    const uint32_t b0 = fn.new_block("entry");
+    const ir::IrBlockId b0 = fn.new_block("entry");
     const ir::IrValueId a = fn.new_value(ir::IrType::PTR);
     emitir(fn, b0, ir::IrOp::ALLOCA, a, {}).imm = 16;
     c.ancla = a;
@@ -233,7 +233,7 @@ static void caso_universo() {
     {
         ir::IrFunction fn;
         fn.name = "op";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId p = fn.new_value(ir::IrType::PTR);
         fn.params.push_back(p);
         // Se lleva la direccion del componente 8: frontera hacia `otra`.
@@ -246,7 +246,7 @@ static void caso_universo() {
     {
         ir::IrFunction fn;
         fn.name = "main";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId a = fn.new_value(ir::IrType::PTR);
         emitir(fn, b0, ir::IrOp::ALLOCA, a, {}).imm = 16;
         emitir(fn, b0, ir::IrOp::CALL, ir::IR_NO_VALUE, {a}).func_name = "op";

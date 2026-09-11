@@ -107,7 +107,7 @@ Scenario make_scenario(uint32_t hole_from, uint32_t hole_to, uint32_t life_to,
         s.ivs.intervals[i].vreg = i;
     s.ivs.intervals[0].ranges.push_back(
         {1, life_to + 1}); // [from,to) semiabierto.
-    s.ivs.intervals[0].uses = uses;
+    s.ivs.intervals[0].uses.assign(uses.begin(), uses.end());
     s.ivs.max_pos = 402;
     s.ivs.block_starts = block_starts;
     return s;

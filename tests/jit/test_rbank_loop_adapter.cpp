@@ -13,6 +13,7 @@
 
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 #include "codegen/rbank/adapters/loop_adapter.h"
 #include "codegen/rbank/value_requirements.h"
 
@@ -51,7 +52,7 @@ static IrInstr brcond(IrBlockId tt, IrBlockId ff) {
     i.op = IrOp::BR_COND;
     i.type = IrType::VOID;
     i.dst = ir::IR_NO_VALUE;
-    i.operands = {0};
+    i.operands = {vid(0)};
     i.target_block = tt;
     i.false_block = ff;
     return i;
@@ -78,31 +79,31 @@ int main() {
     // exit.
     ir::IrFunction fn;
     fn.name = "nested";
-    fn.blocks.push_back(block(0, "entry", br(1)));
-    fn.blocks.push_back(block(1, "outer_h", brcond(2, 5)));
-    fn.blocks.push_back(block(2, "inner_h", brcond(3, 4)));
-    fn.blocks.push_back(block(3, "inner_b", br(2)));
-    fn.blocks.push_back(block(4, "outer_latch", br(1)));
-    fn.blocks.push_back(block(5, "exit", ret()));
+    fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
+    fn.blocks.push_back(block(blk(1), "outer_h", brcond(blk(2), blk(5))));
+    fn.blocks.push_back(block(blk(2), "inner_h", brcond(blk(3), blk(4))));
+    fn.blocks.push_back(block(blk(3), "inner_b", br(blk(2))));
+    fn.blocks.push_back(block(blk(4), "outer_latch", br(blk(1))));
+    fn.blocks.push_back(block(blk(5), "exit", ret()));
     analysis::LoopFacts f = analysis::compute_loop_facts(fn);
 
     std::printf("\n[LoopAdapter: loop_depth del bloque de definicion]\n");
     {
         // Un valor definido en inner_b (bloque 3, depth 2).
         ValueRequirements r;
-        populate_loop_requirements(r, f, /*def_block=*/3);
+        populate_loop_requirements(r, f, /*def_block=*/blk(3));
         CHECK(r.loop_depth == 2, "valor en inner_b no tiene loop_depth 2");
     }
     {
         // Un valor definido en outer_h (bloque 1, depth 1).
         ValueRequirements r;
-        populate_loop_requirements(r, f, /*def_block=*/1);
+        populate_loop_requirements(r, f, /*def_block=*/blk(1));
         CHECK(r.loop_depth == 1, "valor en outer_h no tiene loop_depth 1");
     }
     {
         // Un valor definido en entry (bloque 0, fuera de bucle).
         ValueRequirements r;
-        populate_loop_requirements(r, f, /*def_block=*/0);
+        populate_loop_requirements(r, f, /*def_block=*/blk(0));
         CHECK(r.loop_depth == 0, "valor en entry no tiene loop_depth 0");
     }
 
@@ -113,7 +114,7 @@ int main() {
         r.crosses_call = true;
         r.rematerializable = true;
         r.cls = ResourceClass::FP_VECTOR;
-        populate_loop_requirements(r, f, 2);
+        populate_loop_requirements(r, f, blk(2));
         CHECK(r.loop_depth == 2, "no actualizo loop_depth");
         CHECK(r.value_id == 7 && r.crosses_call && r.rematerializable &&
                   r.cls == ResourceClass::FP_VECTOR,

@@ -259,7 +259,7 @@ int main() {
     // =====================================================================
     //   motor IR -> SemanticEffects (construimos IrFunctions a mano).
     // =====================================================================
-    auto add_instr = [](ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+    auto add_instr = [](ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                         ir::IrValueId dst,
                         std::vector<ir::IrValueId> ops) -> ir::IrInstr & {
         ir::IrInstr in{};
@@ -274,7 +274,7 @@ int main() {
         // Funcion PURA: const + add + ret.
         ir::IrFunction fn;
         fn.name = "puro";
-        uint32_t b0 = fn.new_block("entry");
+        ir::IrBlockId b0 = fn.new_block("entry");
         ir::IrValueId a = fn.new_value(ir::IrType::I64);
         ir::IrValueId c = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::CONST, a, {});
@@ -292,7 +292,7 @@ int main() {
         // STORE a un ALLOCA -> escribe Stack.
         ir::IrFunction fn;
         fn.name = "st";
-        uint32_t b0 = fn.new_block("entry");
+        ir::IrBlockId b0 = fn.new_block("entry");
         ir::IrValueId slot = fn.new_value(ir::IrType::I64);
         ir::IrValueId v = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::ALLOCA, slot, {});
@@ -316,7 +316,7 @@ int main() {
         // GC_ALLOC -> may_allocate; THROW -> may_throw; CALLN -> conservative.
         ir::IrFunction fn;
         fn.name = "alloc";
-        uint32_t b0 = fn.new_block("entry");
+        ir::IrBlockId b0 = fn.new_block("entry");
         ir::IrValueId o = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::GC_ALLOC, o, {});
         EffectAnalysisResult r = function_local_effects(fn);
@@ -324,14 +324,14 @@ int main() {
 
         ir::IrFunction ft;
         ft.name = "thr";
-        uint32_t bt = ft.new_block("entry");
+        ir::IrBlockId bt = ft.new_block("entry");
         add_instr(ft, bt, ir::IrOp::THROW, ir::IR_NO_VALUE, {});
         check(function_local_effects(ft).effects.may_throw,
               "IR: THROW -> may_throw");
 
         ir::IrFunction fc;
         fc.name = "ffi";
-        uint32_t bc = fc.new_block("entry");
+        ir::IrBlockId bc = fc.new_block("entry");
         add_instr(fc, bc, ir::IrOp::CALLN, ir::IR_NO_VALUE, {});
         EffectAnalysisResult rc = function_local_effects(fc);
         check(rc.effects.may_io &&
@@ -346,7 +346,7 @@ int main() {
          * mas arriba lo recogeria --, de ahi que abortar sea senal aparte. */
         ir::IrFunction fp;
         fp.name = "revienta";
-        uint32_t bp = fp.new_block("entry");
+        ir::IrBlockId bp = fp.new_block("entry");
         add_instr(fp, bp, ir::IrOp::PANIC, ir::IR_NO_VALUE, {});
 
         EffectEnv vm;
@@ -370,7 +370,7 @@ int main() {
          * barrera para todo lo que hubiera alrededor. */
         ir::IrFunction ff;
         ff.name = "libera";
-        uint32_t bf = ff.new_block("entry");
+        ir::IrBlockId bf = ff.new_block("entry");
         ir::IrValueId h = ff.new_value(ir::IrType::PTR);
         add_instr(ff, bf, ir::IrOp::RAW_ALLOC, h, {});
         add_instr(ff, bf, ir::IrOp::RAW_FREE, ir::IR_NO_VALUE, {h});
@@ -385,7 +385,7 @@ int main() {
         // Dos ALLOCAs distintos NO aliasan (sites distintos).
         ir::IrFunction fn;
         fn.name = "twoslots";
-        uint32_t b0 = fn.new_block("entry");
+        ir::IrBlockId b0 = fn.new_block("entry");
         ir::IrValueId s1 = fn.new_value(ir::IrType::I64);
         ir::IrValueId s2 = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::ALLOCA, s1, {});
@@ -403,7 +403,7 @@ int main() {
         fn.name = "argptr";
         ir::IrValueId p = fn.new_value(ir::IrType::I64);
         fn.params.push_back(p);
-        uint32_t b0 = fn.new_block("entry");
+        ir::IrBlockId b0 = fn.new_block("entry");
         ir::IrValueId v = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::LOAD, v, {p});
         analysis::IrFacts defs = analysis::build_ir_facts(fn);
@@ -422,7 +422,7 @@ int main() {
         {
             ir::IrFunction callee;
             callee.name = "callee";
-            uint32_t b = callee.new_block("entry");
+            ir::IrBlockId b = callee.new_block("entry");
             ir::IrValueId o = callee.new_value(ir::IrType::I64);
             add_instr(callee, b, ir::IrOp::GC_ALLOC, o, {});
             add_instr(callee, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
@@ -431,7 +431,7 @@ int main() {
         {
             ir::IrFunction caller;
             caller.name = "caller";
-            uint32_t b = caller.new_block("entry");
+            ir::IrBlockId b = caller.new_block("entry");
             ir::IrInstr call{};
             call.op = ir::IrOp::CALL;
             call.func_name = "callee";
@@ -472,7 +472,7 @@ int main() {
         for (int i = 0; i < 3; ++i) {
             ir::IrFunction f;
             f.name = names[i];
-            uint32_t b = f.new_block("entry");
+            ir::IrBlockId b = f.new_block("entry");
             if (i < 2) {
                 ir::IrInstr call{};
                 call.op = ir::IrOp::CALL;
@@ -501,7 +501,7 @@ int main() {
         ir::IrModule mod;
         ir::IrFunction f;
         f.name = "ffi_caller";
-        uint32_t b = f.new_block("entry");
+        ir::IrBlockId b = f.new_block("entry");
         add_instr(f, b, ir::IrOp::CALLN, ir::IR_NO_VALUE, {});
         add_instr(f, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
         mod.functions.push_back(std::move(f));
@@ -528,7 +528,7 @@ int main() {
         {
             ir::IrFunction f;
             f.name = "allocA";
-            uint32_t b = f.new_block("entry");
+            ir::IrBlockId b = f.new_block("entry");
             ir::IrValueId o = f.new_value(ir::IrType::I64);
             add_instr(f, b, ir::IrOp::GC_ALLOC, o, {});
             add_instr(f, b, ir::IrOp::RET, ir::IR_NO_VALUE, {});
@@ -538,7 +538,7 @@ int main() {
         {
             ir::IrFunction f;
             f.name = "callB";
-            uint32_t b = f.new_block("entry");
+            ir::IrBlockId b = f.new_block("entry");
             ir::IrInstr call{};
             call.op = ir::IrOp::CALL;
             call.func_name = "allocA";
@@ -578,7 +578,7 @@ int main() {
         fn.name = "facts_fn";
         ir::IrValueId p = fn.new_value(ir::IrType::I64);
         fn.params.push_back(p);
-        uint32_t b0 = fn.new_block("entry");
+        ir::IrBlockId b0 = fn.new_block("entry");
         ir::IrValueId v = fn.new_value(ir::IrType::I64);
         add_instr(fn, b0, ir::IrOp::LOAD, v, {p});
         ir::IrInstr call{};

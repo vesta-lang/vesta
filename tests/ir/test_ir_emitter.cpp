@@ -387,7 +387,7 @@ static void test_optimizer_dce() {
     }
 
     size_t before = fn.blocks[0].instrs.size();
-    bool changed = ir::ir_pass_dce(fn);
+    bool changed = ir::applied(ir::ir_pass_dce(fn));
 
     check(changed, "DCE: detecto instruccion muerta");
     check(fn.blocks[0].instrs.size() < before,
@@ -457,7 +457,7 @@ static void test_optimizer_const_fold() {
     }
 
     mod.add_function(std::move(fn));
-    bool changed = ir::ir_pass_const_fold(mod.functions[0]);
+    bool changed = ir::applied(ir::ir_pass_const_fold(mod.functions[0]));
 
     check(changed, "const_fold: detecto expresion plegable");
     // La instruccion add debe haberse convertido en const
@@ -705,7 +705,7 @@ static void test_optimizer_unreachable() {
 
     size_t before = fn.blocks.size();
     mod.add_function(std::move(fn));
-    bool changed = ir::ir_pass_unreachable(mod.functions[0]);
+    bool changed = ir::applied(ir::ir_pass_unreachable(mod.functions[0]));
 
     check(changed, "unreachable: elimino bloque inalcanzable");
     check(mod.functions[0].blocks.size() < before,
@@ -1104,10 +1104,11 @@ entry:
     }
 
     // Aplicar el pase TCO directamente
-    bool changed1 = ir_pass_tailcall(mod.functions[0]); // fact
-    bool changed2 = ir_pass_tailcall(mod.functions[1]); // void_tail
-    bool changed3 =
-        ir_pass_tailcall(mod.functions[2]); // no_tail (no debe cambiar)
+    bool changed1 = ir::applied(ir_pass_tailcall(mod.functions[0])); // fact
+    bool changed2 =
+        ir::applied(ir_pass_tailcall(mod.functions[1])); // void_tail
+    bool changed3 = ir::applied(
+        ir_pass_tailcall(mod.functions[2])); // no_tail (no debe cambiar)
 
     check(changed1, "TCO: fact tail call convertida");
     check(changed2, "TCO: void_tail convertida");

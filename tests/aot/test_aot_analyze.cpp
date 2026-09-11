@@ -45,7 +45,7 @@ static ir::IrFunction make_fn(const std::string &name,
     fn.name = name;
     fn.ret_type = IrType::VOID;
     ir::IrBlock blk;
-    blk.id = 0;
+    blk.id = ir::IrBlockId(0);
     blk.name = "entry";
     uint32_t line = base_line;
     for (IrOp op : ops) {

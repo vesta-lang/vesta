@@ -17,6 +17,7 @@
 #include "analysis/facts/remat_facts.h"
 #include "codegen/rbank/function_snapshot.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -58,33 +59,37 @@ int main() {
     IrFunction fn;
     fn.values.resize(6);
     fn.blocks.resize(1);
-    fn.blocks[0].id = 0;
+    fn.blocks[0].id = blk(0);
     fn.blocks[0].instrs = {
-        mk(IrOp::CONST, 1, {}, 42), mk(IrOp::LOAD, 2, {10}),
-        mk(IrOp::ADD, 3, {1, 2}),   mk(IrOp::CALL, 4, {}),
-        mk(IrOp::DIV, 5, {1, 2}),
+        mk(IrOp::CONST, vid(1), {}, 42),
+        mk(IrOp::LOAD, vid(2), {vid(10)}),
+        mk(IrOp::ADD, vid(3), {vid(1), vid(2)}),
+        mk(IrOp::CALL, vid(4), {}),
+        mk(IrOp::DIV, vid(5), {vid(1), vid(2)}),
     };
 
     std::printf("\n[criterio value-only]\n");
     const RematFacts f = analysis::compute_remat_facts(fn);
     CHECK(f.recipe.size() == 6, "recipe no dimensionado a fn.values.size()");
-    CHECK(f.is_rematerializable(1), "CONST deberia ser recomputable");
-    CHECK(!f.is_rematerializable(2), "LOAD NO deberia ser recomputable");
-    CHECK(f.is_rematerializable(3), "ADD value-only deberia ser recomputable");
-    CHECK(!f.is_rematerializable(4), "CALL NO deberia ser recomputable");
-    CHECK(!f.is_rematerializable(5), "DIV (trap) NO deberia ser recomputable");
-    CHECK(!f.is_rematerializable(0), "valor 0 sin def NO recomputable");
+    CHECK(f.is_rematerializable(vid(1)), "CONST deberia ser recomputable");
+    CHECK(!f.is_rematerializable(vid(2)), "LOAD NO deberia ser recomputable");
+    CHECK(f.is_rematerializable(vid(3)),
+          "ADD value-only deberia ser recomputable");
+    CHECK(!f.is_rematerializable(vid(4)), "CALL NO deberia ser recomputable");
+    CHECK(!f.is_rematerializable(vid(5)),
+          "DIV (trap) NO deberia ser recomputable");
+    CHECK(!f.is_rematerializable(vid(0)), "valor 0 sin def NO recomputable");
 
     std::printf("\n[forma de receta: op / imm / operands]\n");
-    const analysis::RematRecipe &r1 = f.recipe_of(1);
+    const analysis::RematRecipe &r1 = f.recipe_of(vid(1));
     CHECK(r1.valid && r1.op == IrOp::CONST && r1.imm == 42 &&
               r1.operands.empty(),
           "receta del CONST mal (op/imm/operands)");
-    const analysis::RematRecipe &r3 = f.recipe_of(3);
+    const analysis::RematRecipe &r3 = f.recipe_of(vid(3));
     CHECK(r3.valid && r3.op == IrOp::ADD && r3.operands.size() == 2 &&
-              r3.operands[0] == 1 && r3.operands[1] == 2,
+              r3.operands[0] == vid(1) && r3.operands[1] == vid(2),
           "receta del ADD mal (operands que la receta necesita)");
-    const analysis::RematRecipe &r2 = f.recipe_of(2);
+    const analysis::RematRecipe &r2 = f.recipe_of(vid(2));
     CHECK(!r2.valid, "receta del LOAD deberia ser invalida");
 
     std::printf("\n[query system: query<RematFacts>() == compute]\n");
@@ -92,8 +97,8 @@ int main() {
         codegen::rbank::FunctionSnapshot s;
         s.fn = &fn;
         const RematFacts &q = s.remat_facts(); // azucar de query<RematFacts>()
-        CHECK(q.is_rematerializable(1) && q.is_rematerializable(3) &&
-                  !q.is_rematerializable(2),
+        CHECK(q.is_rematerializable(vid(1)) && q.is_rematerializable(vid(3)) &&
+                  !q.is_rematerializable(vid(2)),
               "query<RematFacts> no coincide con compute_remat_facts");
         CHECK(s.is_computed(codegen::rbank::Fact::Remat),
               "el Fact Remat no quedo materializado tras la query");

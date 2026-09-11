@@ -14,6 +14,7 @@
 #include "analysis/derived/profile_facts.h"
 #include "analysis/facts/loop_facts.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 
@@ -49,7 +50,7 @@ static IrInstr brcond(IrBlockId tt, IrBlockId ff, uint32_t line) {
     i.op = IrOp::BR_COND;
     i.type = IrType::VOID;
     i.dst = ir::IR_NO_VALUE;
-    i.operands = {0};
+    i.operands = {vid(0)};
     i.target_block = tt;
     i.false_block = ff;
     i.source_line = line;
@@ -76,12 +77,14 @@ int main() {
     // CFG anidado (mismo que LoopFacts) con lineas en los branches de cabecera.
     ir::IrFunction fn;
     fn.name = "nested";
-    fn.blocks.push_back(block(0, "entry", br(1)));
-    fn.blocks.push_back(block(1, "outer_h", brcond(2, 5, /*line=*/100)));
-    fn.blocks.push_back(block(2, "inner_h", brcond(3, 4, /*line=*/200)));
-    fn.blocks.push_back(block(3, "inner_b", br(2)));
-    fn.blocks.push_back(block(4, "outer_latch", br(1)));
-    fn.blocks.push_back(block(5, "exit", ret()));
+    fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
+    fn.blocks.push_back(
+        block(blk(1), "outer_h", brcond(blk(2), blk(5), /*line=*/100)));
+    fn.blocks.push_back(
+        block(blk(2), "inner_h", brcond(blk(3), blk(4), /*line=*/200)));
+    fn.blocks.push_back(block(blk(3), "inner_b", br(blk(2))));
+    fn.blocks.push_back(block(blk(4), "outer_latch", br(blk(1))));
+    fn.blocks.push_back(block(blk(5), "exit", ret()));
     LoopFacts loops = compute_loop_facts(fn);
 
     // --- Sin perfil -> has_profile=false, pesos 0 (fallback estatico) ---
@@ -90,7 +93,7 @@ int main() {
         BranchProfile empty;
         ProfileFacts pf = compute_profile_facts(fn, loops, empty);
         CHECK(!pf.has_profile, "has_profile true sin perfil");
-        CHECK(pf.weight_of(3) == 0.0,
+        CHECK(pf.weight_of(blk(3)) == 0.0,
               "peso != 0 sin perfil (deberia caer al estatico)");
     }
 
@@ -103,19 +106,20 @@ int main() {
         ProfileFacts pf = compute_profile_facts(fn, loops, prof);
         CHECK(pf.has_profile, "has_profile false con perfil");
 
-        const uint32_t outer_id = loops.innermost(1); // bloque 1 solo en outer
-        const uint32_t inner_id = loops.innermost(3); // bloque 3 en inner
+        // bloque 1 solo en outer; bloque 3 en inner
+        const uint32_t outer_id = loops.innermost(blk(1));
+        const uint32_t inner_id = loops.innermost(blk(3));
         CHECK(pf.trip_of(outer_id) == 10.0, "trip outer != 10");
         CHECK(pf.trip_of(inner_id) == 5.0, "trip inner != 5");
 
         // Pesos: entry/exit fuera de bucle = 1; outer_h = 10; inner_h/inner_b =
         // 10*5 = 50; outer_latch = 10.
-        CHECK(pf.weight_of(0) == 1.0, "entry no peso 1");
-        CHECK(pf.weight_of(1) == 10.0, "outer_h no peso 10");
-        CHECK(pf.weight_of(2) == 50.0, "inner_h no peso 50 (10*5)");
-        CHECK(pf.weight_of(3) == 50.0, "inner_b no peso 50");
-        CHECK(pf.weight_of(4) == 10.0, "outer_latch no peso 10");
-        CHECK(pf.weight_of(5) == 1.0, "exit no peso 1");
+        CHECK(pf.weight_of(blk(0)) == 1.0, "entry no peso 1");
+        CHECK(pf.weight_of(blk(1)) == 10.0, "outer_h no peso 10");
+        CHECK(pf.weight_of(blk(2)) == 50.0, "inner_h no peso 50 (10*5)");
+        CHECK(pf.weight_of(blk(3)) == 50.0, "inner_b no peso 50");
+        CHECK(pf.weight_of(blk(4)) == 10.0, "outer_latch no peso 10");
+        CHECK(pf.weight_of(blk(5)) == 1.0, "exit no peso 1");
     }
 
     // --- Rama de salida nunca vista -> trip saturado, no cero ---
@@ -125,7 +129,7 @@ int main() {
         prof.set(100, 1000000, 0); // nunca salio -> trip = kMaxTrip
         prof.set(200, 3, 1);
         ProfileFacts pf = compute_profile_facts(fn, loops, prof);
-        const uint32_t outer_id = loops.innermost(1);
+        const uint32_t outer_id = loops.innermost(blk(1));
         CHECK(pf.trip_of(outer_id) > 1000.0,
               "trip con salida-0 no saturo alto");
     }

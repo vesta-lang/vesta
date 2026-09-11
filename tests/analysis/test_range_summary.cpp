@@ -52,7 +52,7 @@ static bool es(const ValueRange &r, RangeType t, int64_t lo, int64_t hi) {
 // ---------------------------------------------------------------------------
 // Helpers de construccion.
 // ---------------------------------------------------------------------------
-static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+static ir::IrInstr &emitir(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                            ir::IrValueId dst, std::vector<ir::IrValueId> ops) {
     ir::IrInstr in{};
     in.op = op;
@@ -62,7 +62,7 @@ static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
     return fn.blocks[blk].instrs.back();
 }
 
-static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, int64_t v) {
+static ir::IrValueId cte(ir::IrFunction &fn, ir::IrBlockId blk, int64_t v) {
     const ir::IrValueId id = fn.new_value(ir::IrType::I32);
     fn.values[id].is_const = true;
     fn.values[id].const_val = static_cast<uint64_t>(v);
@@ -75,7 +75,7 @@ static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, int64_t v) {
 static ir::IrFunction hacer_destino(const std::string &nombre) {
     ir::IrFunction fn;
     fn.name = nombre;
-    const uint32_t b0 = fn.new_block("entry");
+    const ir::IrBlockId b0 = fn.new_block("entry");
     const ir::IrValueId p = fn.new_value(ir::IrType::I32);
     fn.params.push_back(p);
     emitir(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {p});
@@ -99,7 +99,7 @@ static void probar_llamadas_directas() {
     {
         ir::IrFunction fn;
         fn.name = "main";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId tres = cte(fn, b0, 3);
         const ir::IrValueId siete = cte(fn, b0, 7);
         const ir::IrValueId r1 = fn.new_value(ir::IrType::I32);
@@ -142,7 +142,7 @@ static void probar_mundo_abierto() {
     {
         ir::IrFunction fn;
         fn.name = "main";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId dir = fn.new_value(ir::IrType::PTR);
         emitir(fn, b0, ir::IrOp::LABEL_ADDR, dir, {}).func_name = "destino";
         const ir::IrValueId hueco = fn.new_value(ir::IrType::PTR);
@@ -176,7 +176,7 @@ static void probar_indirecta_resuelta() {
     {
         ir::IrFunction fn;
         fn.name = "main";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId dir = fn.new_value(ir::IrType::PTR);
         emitir(fn, b0, ir::IrOp::LABEL_ADDR, dir, {}).func_name = "destino";
         const ir::IrValueId cinco = cte(fn, b0, 5);
@@ -225,9 +225,9 @@ static void probar_recursion() {
     {
         ir::IrFunction fn;
         fn.name = "baja";
-        const uint32_t b0 = fn.new_block("entry");
-        const uint32_t bfin = fn.new_block("fin");
-        const uint32_t bsig = fn.new_block("sigue");
+        const ir::IrBlockId b0 = fn.new_block("entry");
+        const ir::IrBlockId bfin = fn.new_block("fin");
+        const ir::IrBlockId bsig = fn.new_block("sigue");
         const ir::IrValueId n = fn.new_value(ir::IrType::I32);
         fn.params.push_back(n);
         const ir::IrValueId cero = cte(fn, b0, 0);
@@ -252,7 +252,7 @@ static void probar_recursion() {
     {
         ir::IrFunction fn;
         fn.name = "main";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId diez = cte(fn, b0, 10);
         const ir::IrValueId r = fn.new_value(ir::IrType::I32);
         emitir(fn, b0, ir::IrOp::CALL, r, {diez}).func_name = "baja";
@@ -285,7 +285,7 @@ static void probar_retorno_en_abierta() {
         // i32 fija() { return 5; }  -- con la direccion tomada y perdida.
         ir::IrFunction fn;
         fn.name = "fija";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId cinco = cte(fn, b0, 5);
         emitir(fn, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {cinco});
         mod.functions.push_back(std::move(fn));
@@ -293,7 +293,7 @@ static void probar_retorno_en_abierta() {
     {
         ir::IrFunction fn;
         fn.name = "main";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId dir = fn.new_value(ir::IrType::PTR);
         emitir(fn, b0, ir::IrOp::LABEL_ADDR, dir, {}).func_name = "fija";
         const ir::IrValueId hueco = fn.new_value(ir::IrType::PTR);

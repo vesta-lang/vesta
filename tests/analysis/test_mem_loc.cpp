@@ -161,7 +161,7 @@ static void test_points_to() {
     ir::IrValueId b = add_val(false, 0); // 3: bitcast dst
 
     ir::IrBlock bb;
-    bb.id = 0;
+    bb.id = ir::IrBlockId(0);
     {
         ir::IrInstr i;
         i.op = ir::IrOp::ALLOCA;
@@ -291,7 +291,7 @@ static void test_memset_escribe() {
     const ir::IrValueId len = add_val(true, 256); // bytes
 
     ir::IrBlock bb;
-    bb.id = 0;
+    bb.id = ir::IrBlockId(0);
     {
         ir::IrInstr i;
         i.op = ir::IrOp::ALLOCA;

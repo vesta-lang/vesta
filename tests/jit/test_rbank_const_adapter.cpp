@@ -37,7 +37,7 @@ int main() {
     std::printf("\n[is_const -> rematerializable]\n");
     {
         ir::IrValue v;
-        v.id = 0;
+        v.id = ir::IrValueId(0);
         v.type = ir::IrType::I64;
         v.is_const = true;
         ValueRequirements r;
@@ -46,7 +46,7 @@ int main() {
     }
     {
         ir::IrValue v;
-        v.id = 1;
+        v.id = ir::IrValueId(1);
         v.type = ir::IrType::I64;
         v.is_const = false;
         ValueRequirements r;

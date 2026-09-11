@@ -38,7 +38,7 @@ static int g_fail = 0;
 // ---------------------------------------------------------------------------
 // Helpers de construccion.
 // ---------------------------------------------------------------------------
-static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+static ir::IrInstr &emitir(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
                            ir::IrValueId dst, std::vector<ir::IrValueId> ops) {
     ir::IrInstr in{};
     in.op = op;
@@ -48,7 +48,7 @@ static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
     return fn.blocks[blk].instrs.back();
 }
 
-static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, int64_t v) {
+static ir::IrValueId cte(ir::IrFunction &fn, ir::IrBlockId blk, int64_t v) {
     const ir::IrValueId id = fn.new_value(ir::IrType::I64);
     fn.values[id].is_const = true;
     fn.values[id].const_val = static_cast<uint64_t>(v);
@@ -61,7 +61,7 @@ static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, int64_t v) {
 static ir::IrFunction hacer_con_cota(const std::string &nombre) {
     ir::IrFunction fn;
     fn.name = nombre;
-    const uint32_t b0 = fn.new_block("entry");
+    const ir::IrBlockId b0 = fn.new_block("entry");
     const ir::IrValueId n = cte(fn, b0, 64);
     const ir::IrValueId r = fn.new_value(ir::IrType::I64);
     emitir(fn, b0, ir::IrOp::CALL, r, {n}).func_name = "copiar";
@@ -74,7 +74,7 @@ static ir::IrFunction hacer_con_cota(const std::string &nombre) {
 static ir::IrFunction hacer_sin_cota(const std::string &nombre) {
     ir::IrFunction fn;
     fn.name = nombre;
-    const uint32_t b0 = fn.new_block("entry");
+    const ir::IrBlockId b0 = fn.new_block("entry");
     const ir::IrValueId p = fn.new_value(ir::IrType::I64);
     fn.params.push_back(p);
     const ir::IrValueId r = fn.new_value(ir::IrType::I64);
@@ -100,7 +100,7 @@ static void probar_pregunta() {
     // Sin llamadas ni reservas no hay sitio donde aprovechar nada.
     ir::IrFunction pelada;
     pelada.name = "pelada";
-    const uint32_t b0 = pelada.new_block("entry");
+    const ir::IrBlockId b0 = pelada.new_block("entry");
     const ir::IrValueId k = cte(pelada, b0, 7);
     emitir(pelada, b0, ir::IrOp::RET, ir::IR_NO_VALUE, {k});
     CHECK(!jit::hay_argumento_acotado(pelada, base.ranges(pelada)),

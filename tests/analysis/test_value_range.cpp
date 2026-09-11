@@ -78,24 +78,24 @@ static ValueRange cte_de(RangeType t, int64_t v) {
 // ---------------------------------------------------------------------------
 // Helpers para montar una funcion IR minima.
 // ---------------------------------------------------------------------------
-static ir::IrInstr &emitir(ir::IrFunction &fn, uint32_t blk, ir::IrOp op,
+static ir::IrInstr &emitir(ir::IrFunction &fn, ir::IrBlockId block, ir::IrOp op,
                            ir::IrValueId dst, std::vector<ir::IrValueId> ops) {
     ir::IrInstr in{};
     in.op = op;
     in.dst = dst;
     in.operands = std::move(ops);
-    fn.append(blk, std::move(in));
-    return fn.blocks[blk].instrs.back();
+    fn.append(block, std::move(in));
+    return fn.blocks[block].instrs.back();
 }
 
 /// Constante: en el IR una CONST lleva su valor en `imm` y el valor se marca
 /// como constante, que es de donde el motor lo lee.
-static ir::IrValueId cte(ir::IrFunction &fn, uint32_t blk, ir::IrType t,
+static ir::IrValueId cte(ir::IrFunction &fn, ir::IrBlockId block, ir::IrType t,
                          int64_t v) {
     const ir::IrValueId id = fn.new_value(t);
     fn.values[id].is_const = true;
     fn.values[id].const_val = static_cast<uint64_t>(v);
-    emitir(fn, blk, ir::IrOp::CONST, id, {}).imm = static_cast<uint64_t>(v);
+    emitir(fn, block, ir::IrOp::CONST, id, {}).imm = static_cast<uint64_t>(v);
     return id;
 }
 
@@ -477,9 +477,9 @@ static void probar_ensanchamiento() {
 static void probar_guarda() {
     ir::IrFunction fn;
     fn.name = "guarda";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t bt = fn.new_block("si");
-    const uint32_t bf = fn.new_block("no");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId bt = fn.new_block("si");
+    const ir::IrBlockId bf = fn.new_block("no");
 
     const ir::IrValueId x = fn.new_value(ir::IrType::U32);
     fn.params.push_back(x);
@@ -511,9 +511,9 @@ static void probar_guarda() {
 static void probar_rama_imposible() {
     ir::IrFunction fn;
     fn.name = "imposible";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t bt = fn.new_block("nunca");
-    const uint32_t bf = fn.new_block("siempre");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId bt = fn.new_block("nunca");
+    const ir::IrBlockId bf = fn.new_block("siempre");
 
     const ir::IrValueId x = cte(fn, b0, ir::IrType::I64, 20);
     const ir::IrValueId diez = cte(fn, b0, ir::IrType::I64, 10);
@@ -547,10 +547,10 @@ static void probar_rama_imposible() {
 static void probar_phi() {
     ir::IrFunction fn;
     fn.name = "phi";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t bt = fn.new_block("si");
-    const uint32_t bf = fn.new_block("no");
-    const uint32_t bm = fn.new_block("merge");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId bt = fn.new_block("si");
+    const ir::IrBlockId bf = fn.new_block("no");
+    const ir::IrBlockId bm = fn.new_block("merge");
 
     const ir::IrValueId x = fn.new_value(ir::IrType::U32);
     fn.params.push_back(x);
@@ -597,9 +597,9 @@ static void probar_phi() {
 static void probar_consulta_por_punto() {
     ir::IrFunction fn;
     fn.name = "punto";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t bt = fn.new_block("si");
-    const uint32_t bf = fn.new_block("no");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId bt = fn.new_block("si");
+    const ir::IrBlockId bf = fn.new_block("no");
 
     const ir::IrValueId x = fn.new_value(ir::IrType::U32);
     fn.params.push_back(x);
@@ -654,11 +654,11 @@ static void probar_consulta_por_punto() {
 static void probar_switch(uint64_t min, bool defecto_acotado) {
     ir::IrFunction fn;
     fn.name = "sw";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t b1 = fn.new_block("caso0");
-    const uint32_t b2 = fn.new_block("caso1");
-    const uint32_t b3 = fn.new_block("caso2");
-    const uint32_t bd = fn.new_block("defecto");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId b1 = fn.new_block("caso0");
+    const ir::IrBlockId b2 = fn.new_block("caso1");
+    const ir::IrBlockId b3 = fn.new_block("caso2");
+    const ir::IrBlockId bd = fn.new_block("defecto");
 
     const ir::IrValueId tag = fn.new_value(ir::IrType::U32);
     fn.params.push_back(tag);
@@ -673,7 +673,7 @@ static void probar_switch(uint64_t min, bool defecto_acotado) {
         fn.append(b0, std::move(sd));
     }
     ir::IrValueId vistos[4];
-    const uint32_t bloques[4] = {b1, b2, b3, bd};
+    const ir::IrBlockId bloques[4] = {b1, b2, b3, bd};
     for (int i = 0; i < 4; ++i) {
         vistos[i] = fn.new_value(ir::IrType::U32);
         emitir(fn, bloques[i], ir::IrOp::MOV, vistos[i], {tag});
@@ -701,10 +701,10 @@ static void probar_switch(uint64_t min, bool defecto_acotado) {
 static void probar_bucle(ir::IrType tipo, RangeType rt, const char *etiqueta) {
     ir::IrFunction fn;
     fn.name = "bucle";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t bh = fn.new_block("header");
-    const uint32_t bb = fn.new_block("body");
-    const uint32_t bx = fn.new_block("exit");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId bh = fn.new_block("header");
+    const ir::IrBlockId bb = fn.new_block("body");
+    const ir::IrBlockId bx = fn.new_block("exit");
 
     const ir::IrValueId cero = cte(fn, b0, tipo, 0);
     const ir::IrValueId doscientos = cte(fn, b0, tipo, 200);
@@ -772,10 +772,10 @@ static void probar_bucle(ir::IrType tipo, RangeType rt, const char *etiqueta) {
 static void probar_tope_de_presupuesto() {
     ir::IrFunction fn;
     fn.name = "sin_presupuesto";
-    const uint32_t b0 = fn.new_block("entry");
-    const uint32_t cabecera = fn.new_block("cabecera");
-    const uint32_t cuerpo = fn.new_block("cuerpo");
-    const uint32_t salida = fn.new_block("salida");
+    const ir::IrBlockId b0 = fn.new_block("entry");
+    const ir::IrBlockId cabecera = fn.new_block("cabecera");
+    const ir::IrBlockId cuerpo = fn.new_block("cuerpo");
+    const ir::IrBlockId salida = fn.new_block("salida");
 
     // Una constante en la entrada: lo mas sabido que hay.
     const ir::IrValueId siete = cte(fn, b0, ir::IrType::I64, 7);
@@ -851,7 +851,7 @@ static void comparar_con_demanda(const ir::IrFunction &fn,
     const RangeFacts completo = compute_ranges(fn, f);
     RangeQuery bajo_demanda(fn, f);
     int mas_estrechos = 0, contestados = 0;
-    for (ir::IrValueId v = 0; v < (ir::IrValueId)fn.values.size(); ++v) {
+    for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size(); ++v) {
         const ValueRange &e = completo.at(v);
         const ValueRange &d = bajo_demanda.of(v);
         if (!e.acotada() || !d.acotada()) continue;
@@ -873,9 +873,9 @@ static void probar_bajo_demanda() {
     {   // guardas: `if (x < 10)`
         ir::IrFunction fn;
         fn.name = "demanda_guarda";
-        const uint32_t b0 = fn.new_block("entry");
-        const uint32_t bt = fn.new_block("si");
-        const uint32_t bf = fn.new_block("no");
+        const ir::IrBlockId b0 = fn.new_block("entry");
+        const ir::IrBlockId bt = fn.new_block("si");
+        const ir::IrBlockId bf = fn.new_block("no");
         const ir::IrValueId x = fn.new_value(ir::IrType::U32);
         fn.params.push_back(x);
         const ir::IrValueId diez = cte(fn, b0, ir::IrType::U32, 10);
@@ -898,7 +898,7 @@ static void probar_bajo_demanda() {
     {   // aritmetica encadenada: es lo que la recursion tiene que resolver
         ir::IrFunction fn;
         fn.name = "demanda_cadena";
-        const uint32_t b0 = fn.new_block("entry");
+        const ir::IrBlockId b0 = fn.new_block("entry");
         const ir::IrValueId a = cte(fn, b0, ir::IrType::I64, 7);
         const ir::IrValueId b = cte(fn, b0, ir::IrType::I64, 5);
         const ir::IrValueId s = fn.new_value(ir::IrType::I64);

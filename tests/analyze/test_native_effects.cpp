@@ -53,7 +53,7 @@ static ir::IrModule module_calling(const std::string &lib_fn) {
     ir::IrModule mod;
     ir::IrFunction fn;
     fn.name = "caller";
-    const uint32_t b0 = fn.new_block("entry");
+    const ir::IrBlockId b0 = fn.new_block("entry");
     ir::IrInstr call{};
     call.op = ir::IrOp::CALLN;
     call.dst = fn.new_value(ir::IrType::I64);

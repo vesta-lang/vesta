@@ -31,6 +31,7 @@
 #include "analysis/asa/observed.h" // el hecho del bucle, armado en UN sitio
 #include "analysis/facts/loop_trip_count.h"
 #include "ir/ssa_ir.h"
+#include "../ir_ids.h" // blk()/vid(): como se nombra un bloque o un valor
 
 #include <cstdio>
 #include <string>
@@ -57,7 +58,7 @@ using analysis::asa::UnknownReason;
 /// clasificacion, no el recorrido del CFG.
 struct Harness {
     ir::IrFunction fn;
-    std::vector<int> def_block;
+    analysis::DefBlockVec def_block;
 
     Harness() {
         fn.name = "prueba";
@@ -86,8 +87,8 @@ struct Harness {
 static analysis::LoopIV rising_iv() {
     analysis::LoopIV iv;
     iv.stride = 1;
-    iv.init = 1;
-    iv.bound = 2;
+    iv.init = vid(1);
+    iv.bound = vid(2);
     iv.cmp_op = ir::IrOp::CMP_LT;
     iv.cmp_offset = 0;
     return iv;
@@ -99,8 +100,8 @@ static analysis::LoopIV rising_iv() {
 static void known_has_no_reason() {
     std::printf("-- cuando se sabe, se sabe\n");
     Harness h;
-    h.constant(1, 0);  // init = 0
-    h.constant(2, 10); // bound = 10
+    h.constant(vid(1), 0);  // init = 0
+    h.constant(vid(2), 10); // bound = 10
     const analysis::LoopTripInfo t =
         analysis::compute_trip_count(h.fn, h.def_block, rising_iv());
     CHECK(t.known(), "un bucle de 0 a 10 con paso 1 esta contado");
@@ -116,7 +117,7 @@ static void known_has_no_reason() {
 static void runtime_bound_says_so() {
     std::printf("-- un limite de ejecucion se dice como tal\n");
     Harness h;
-    h.constant(1, 0); // init constante; el bound no se define
+    h.constant(vid(1), 0); // init constante; el bound no se define
     const analysis::LoopTripInfo t =
         analysis::compute_trip_count(h.fn, h.def_block, rising_iv());
     CHECK(!t.known(), "no se puede contar");
@@ -135,7 +136,7 @@ static void runtime_bound_says_so() {
 static void runtime_init_has_its_own_code() {
     std::printf("-- el inicio y el limite son casos distintos\n");
     Harness h;
-    h.constant(2, 10); // bound constante; el init no se define
+    h.constant(vid(2), 10); // bound constante; el init no se define
     const analysis::LoopTripInfo t =
         analysis::compute_trip_count(h.fn, h.def_block, rising_iv());
     CHECK(t.reason == UnknownReason::RuntimeDependent, "misma clase");
@@ -152,8 +153,8 @@ static void runtime_init_has_its_own_code() {
 static void decreasing_loop_is_a_shape_we_dont_cover() {
     std::printf("-- un bucle decreciente es una forma no cubierta\n");
     Harness h;
-    h.constant(1, 10);
-    h.constant(2, 0);
+    h.constant(vid(1), 10);
+    h.constant(vid(2), 0);
     analysis::LoopIV iv = rising_iv();
     iv.stride = -1;
     const analysis::LoopTripInfo t =
@@ -176,8 +177,8 @@ static void decreasing_loop_is_a_shape_we_dont_cover() {
 static void unsupported_guard_is_a_shape_too() {
     std::printf("-- una guarda no soportada tambien es forma, no ejecucion\n");
     Harness h;
-    h.constant(1, 0);
-    h.constant(2, 10);
+    h.constant(vid(1), 0);
+    h.constant(vid(2), 10);
     analysis::LoopIV iv = rising_iv();
     iv.cmp_op = ir::IrOp::CMP_EQ;
     const analysis::LoopTripInfo t =
@@ -198,8 +199,8 @@ static void unsupported_guard_is_a_shape_too() {
 static void a_not_equal_guard_that_lands_is_counted() {
     std::printf("-- `!=` que cae justo se cuenta\n");
     Harness h;
-    h.constant(1, 0);
-    h.constant(2, 10);
+    h.constant(vid(1), 0);
+    h.constant(vid(2), 10);
     analysis::LoopIV iv = rising_iv();
     iv.cmp_op = ir::IrOp::CMP_NE;
     const analysis::LoopTripInfo t =
@@ -220,8 +221,8 @@ static void a_not_equal_guard_that_lands_is_counted() {
 static void a_not_equal_guard_that_never_lands_says_so() {
     std::printf("-- `!=` que no cae justo NO termina, y se dice\n");
     Harness h;
-    h.constant(1, 0);
-    h.constant(2, 10);
+    h.constant(vid(1), 0);
+    h.constant(vid(2), 10);
     analysis::LoopIV iv = rising_iv();
     iv.cmp_op = ir::IrOp::CMP_NE;
     iv.stride = 3; // 0, 3, 6, 9, 12...: nunca es 10
@@ -242,7 +243,7 @@ static void a_not_equal_guard_that_never_lands_says_so() {
 static void the_two_classes_stay_apart() {
     std::printf("-- las dos clases no se confunden\n");
     Harness h;
-    h.constant(1, 0);
+    h.constant(vid(1), 0);
     analysis::LoopIV bajada = rising_iv();
     bajada.stride = -1;
     const analysis::LoopTripInfo por_ejecucion =
@@ -267,7 +268,7 @@ static void the_two_classes_stay_apart() {
 static void a_single_point_range_is_a_value() {
     std::printf("-- un rango de un solo punto es un valor\n");
     Harness h;
-    h.constant(1, 0); // init escrito; el bound NO se define en el IR.
+    h.constant(vid(1), 0); // init escrito; el bound NO se define en el IR.
 
     analysis::RangeFacts rg;
     rg.r.assign(h.fn.values.size(), analysis::ValueRange{});
@@ -292,7 +293,7 @@ static void a_single_point_range_is_a_value() {
 static void a_bounded_limit_bounds_the_loop() {
     std::printf("-- un limite acotado acota el bucle\n");
     Harness h;
-    h.constant(1, 0);
+    h.constant(vid(1), 0);
 
     analysis::RangeFacts rg;
     rg.r.assign(h.fn.values.size(), analysis::ValueRange{});
@@ -320,7 +321,7 @@ static void a_bounded_limit_bounds_the_loop() {
 static void without_ranges_nothing_changes() {
     std::printf("-- sin rangos, la respuesta es la de siempre\n");
     Harness h;
-    h.constant(1, 0);
+    h.constant(vid(1), 0);
     const analysis::LoopTripInfo t =
         analysis::compute_trip_count(h.fn, h.def_block, rising_iv());
     CHECK(!t.known() && !t.bounded(), "sin rangos no hay ni cota");
@@ -340,8 +341,8 @@ static void without_ranges_nothing_changes() {
 static void written_constants_win() {
     std::printf("-- lo escrito gana al rango\n");
     Harness h;
-    h.constant(1, 0);
-    h.constant(2, 10);
+    h.constant(vid(1), 0);
+    h.constant(vid(2), 10);
 
     analysis::RangeFacts rg;
     rg.r.assign(h.fn.values.size(), analysis::ValueRange{});
@@ -375,7 +376,7 @@ static void the_loop_fact_is_built_in_one_place() {
     analysis::LoopTripInfo exact;
     exact.trip = 10;
     analysis::asa::Fact fe;
-    CHECK(analysis::asa::loop_trip_fact(store, fn, /*header=*/3, exact,
+    CHECK(analysis::asa::loop_trip_fact(store, fn, blk(3), exact,
                                         analysis::asa::kStageDuringOpt,
                                         analysis::asa::Source::Static, fe),
           "con un numero exacto SI hay hecho");
@@ -396,7 +397,7 @@ static void the_loop_fact_is_built_in_one_place() {
     bound.trip_max = 16;
     bound.certainty = analysis::asa::Certainty::Inferred;
     analysis::asa::Fact fb;
-    CHECK(analysis::asa::loop_trip_fact(store, fn, 3, bound,
+    CHECK(analysis::asa::loop_trip_fact(store, fn, blk(3), bound,
                                         analysis::asa::kStagePreOpt,
                                         analysis::asa::Source::Static, fb),
           "con una cota tambien hay hecho");
@@ -411,7 +412,7 @@ static void the_loop_fact_is_built_in_one_place() {
      * su motivo, en vez de colarse como ruido que ademas se cuenta. */
     const analysis::LoopTripInfo nothing;
     analysis::asa::Fact empty;
-    CHECK(!analysis::asa::loop_trip_fact(store, fn, 3, nothing,
+    CHECK(!analysis::asa::loop_trip_fact(store, fn, blk(3), nothing,
                                          analysis::asa::kStagePostOpt,
                                          analysis::asa::Source::Static, empty),
           "sin cota NO hay hecho");

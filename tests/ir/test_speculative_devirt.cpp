@@ -92,7 +92,7 @@ int main() {
     /* --- Ejecutar el pase. --- */
     std::vector<SpecDevirtSite> sites = {
         SpecDevirtSite{r, /*class_ptr=*/0x1000ULL, /*callee=*/"Impl__val"}};
-    const bool changed = ir_pass_speculative_devirt(fn, sites);
+    const bool changed = applied(ir_pass_speculative_devirt(fn, sites));
 
     check(changed, "el pase reporta cambio");
     check(fn.blocks.size() == 4,
@@ -149,7 +149,7 @@ int main() {
         SpecDevirtSite{r, 0x1000ULL, "Impl__val"}
         /* r ahora es el PHI, no un CALLVIRT */
     };
-    const bool changed2 = ir_pass_speculative_devirt(fn, none);
+    const bool changed2 = applied(ir_pass_speculative_devirt(fn, none));
     check(!changed2,
           "re-ejecutar con un dst que ya no es CALLVIRT no transforma");
     check(fn.blocks.size() == blocks_after_first, "no se crean bloques de mas");
