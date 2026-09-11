@@ -6884,6 +6884,68 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
 }
 
 /**
+ * @brief A cuantas instrucciones de la maquina baja una del IR, aproximado.
+ *
+ * Solo sirve para RESERVAR el buffer de salida antes de empezar, asi que no
+ * tiene que acertar: tiene que no quedarse corta y no pasarse mucho.  Las dos
+ * mitades de esa frase cuestan lo mismo y en direcciones opuestas -- pasarse
+ * reserva memoria que no se usa, y quedarse corto hace DOBLAR el vector, con
+ * el viejo y el nuevo vivos a la vez durante la copia --, y por eso la
+ * estimacion sale de la MEZCLA de la funcion y no de un factor plano.
+ *
+ * Habia un `* 2` para todo, y medido sobre 21 modulos y 441.000 lineas el
+ * factor real es 1,18: se reservaban 1.617.000 huecos para 955.501 usados, o
+ * sea 111 MiB reservados y no tocados JUSTO en la fase donde esta el pico de
+ * memoria del compilador.
+ *
+ * Devuelve DECIMAS y no unidades porque el caso comun no es un numero entero:
+ * la mayoria de las ops bajan a poco mas de una, y redondear a dos era
+ * exactamente el `* 2` que se venia a quitar.
+ *
+ * @param op La operacion.
+ * @return Decimas de instruccion del `.vel` que se esperan de ella.
+ */
+static unsigned estimated_vel_instrs(IrOp op) {
+    switch (op) {
+    /* Coma flotante: el asignador de registros solo conoce el banco entero, asi
+     * que cada operando va y vuelve por la pila.  El propio proyecto lo tiene
+     * medido: "~10 instrucciones VM por op binaria escalar". */
+    case IrOp::FADD:
+    case IrOp::FSUB:
+    case IrOp::FMUL:
+    case IrOp::FDIV:
+    case IrOp::FNEG:
+    case IrOp::FABS:
+    case IrOp::FSQRT:
+    case IrOp::FMIN:
+    case IrOp::FMAX:
+    case IrOp::FFLOOR:
+    case IrOp::FCEIL:
+    case IrOp::FROUND:
+    case IrOp::FTRUNC:
+    case IrOp::FMA:
+    case IrOp::ITOF:
+    case IrOp::UITOF:
+    case IrOp::FTOI:
+    case IrOp::FTOUI:
+    case IrOp::F32TOF64:
+    case IrOp::F64TOF32: return 120;
+    /* Una llamada son los argumentos a sus registros, la llamada y recoger el
+     * resultado. */
+    case IrOp::CALL:
+    case IrOp::CALLN:
+    case IrOp::CALLVIRT:
+    case IrOp::CALLIND:
+    case IrOp::TAILCALL: return 40;
+    /* El resto: poco mas de una.  El margen va aqui, repartido entre todas, y
+     * no en un factor aparte que habria que acordarse de mantener.  Medido:
+     * el conjunto sale a 1,18, asi que 1,3 deja un diez por ciento de holgura
+     * sin reservar de mas. */
+    default: return 13;
+    }
+}
+
+/**
  * @brief Ops del IR que el bytecode no tiene, y la nativa que las cubre.
  *
  * Existen como ops del IR para que el optimizador pueda plegarlas cuando los
@@ -7707,12 +7769,14 @@ EmitResult ir_emit_module(const IrModule &mod_in, const EmitOptions &opts) {
      * desde un tamano que ya es el bueno.  Lo que no vale es empezar en cero
      * teniendo el modulo delante. */
     {
-        size_t ir_instrs = 0;
+        size_t tenths = 0;
         for (const IrFunction &fn : mod.functions) {
             if (fn.is_native) continue;
-            for (const IrBlock &b : fn.blocks) ir_instrs += b.instrs.size();
+            for (const IrBlock &b : fn.blocks)
+                for (const IrInstr &in : b.instrs)
+                    tenths += estimated_vel_instrs(in.op);
         }
-        if (ir_instrs != 0) out.reserve_instrs(ir_instrs * 2u + 64u);
+        if (tenths != 0) out.reserve_instrs(tenths / 10u + 64u);
     }
 
     // Cabecera del modulo
