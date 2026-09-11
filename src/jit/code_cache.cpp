@@ -54,6 +54,10 @@
 
 #include "jit/code_cache.h"
 
+// Declarar QUE es esta memoria, no solo pedirla.  `AllocScope` vive aqui, no en
+// `alloc_tag.h`: ahi esta la etiqueta, y el ambito que la pone es del asignador.
+#include "util/alloc/host_allocator.h"
+
 #include <cstring>
 #include <cstdlib>
 
@@ -147,6 +151,21 @@ bool CodeCache::reserve_chunk() {
      * de un generador de codigo, y ahi ademas se elige el hueco MAS CERCANO en
      * vez del primero -- esto se quedaba en el borde de la ventana, a 1.920 MiB,
      * y ahi no queda margen para los datos que no son el ancla exacta. */
+    /* QUE ES ESTA MEMORIA, declarado donde se pide.
+     *
+     * Los trozos del cache de codigo viven lo que el proceso -- el codigo
+     * compilado no se retira -- y no se mudan nunca: una direccion entregada
+     * tiene que seguir valiendo, porque hay saltos apuntando a ella.  Eso es
+     * `Long` y `Fixed`, y no es una estimacion: es la propiedad que el cache
+     * PROMETE y sin la cual no funcionaria.
+     *
+     * Sin esta linea la reserva mas visible del JIT engordaba el "no se" del
+     * informe, que es la lista de lo que queda por declarar -- o sea que el
+     * sitio aparecia justo donde uno lo busca para migrarlo, sin que nadie
+     * hubiera podido migrarlo porque nadie sabia que era. */
+    const util::AllocScope tagged(
+        util::AllocTag(util::AllocUse::Long, util::AllocShape::Fixed));
+
     if (arena_ == nullptr) {
         /* Casi lo que alcanza un rel32, no la mitad: el desplazamiento se mide
          * entre el CODIGO y CADA dato, y el ancla es una direccion

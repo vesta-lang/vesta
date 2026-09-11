@@ -12,6 +12,7 @@
  *        naked_native.h.
  */
 
+#include "util/alloc/host_allocator.h" // AllocScope: declarar QUE es la memoria
 #include "util/alloc/host_allocator_layout.h" // in_region: de quien es el dato
 #include "util/env_flags.h"
 #include "jit/naked_native.h"
@@ -155,6 +156,10 @@ uint64_t resolve_naked_symbol(runtime::ProcessVM *vm, const std::string &sym,
                          sym.c_str(), slot_str.c_str(), slot_str.c_str());
         return 0;
     }
+    /* Un nombre por llamada, que muere en la llamada: `Instant`, y `Fixed`
+     * porque es una cadena que se construye una vez y no se redimensiona. */
+    const util::AllocScope naming(
+        util::AllocTag(util::AllocUse::Instant, util::AllocShape::Fixed));
     // Referencia a la DIRECCION de una funcion (fnsym:) o CALL directo (bare).
     std::string fn = sym;
     if (fn.rfind("fnsym:", 0) == 0) fn = fn.substr(6);
@@ -228,7 +233,21 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
     // direccion absoluta (ABS64), que apunta al slot en vm_mem.  Sin embargo
     // el selector emite `[rel sym]` (DATA_REL32) por defecto; lo resolvemos
     // rip-relativo tras colocar el codigo.
+    /* LO QUE SE EMITE, y lo que se emite para emitirlo.
+     *
+     * El vector de bytes crece mientras se genera el codigo y se abandona en
+     * cuanto se copia al cache, igual que los temporales del generador: todo lo
+     * que se reserva dentro de esta llamada muere al volver de ella.  Eso es
+     * `Instant`, y `Growing` es la forma del que manda -- un buffer que se
+     * redimensiona segun sale el codigo.
+     *
+     * El ambito cubre la llamada entera y no solo la declaracion del vector,
+     * porque la etiqueta es AMBIENTAL: lo que reserve el generador por dentro
+     * tiene la misma vida que esto y merece la misma casilla.  Ponerla solo
+     * alrededor del vector dejaria el grueso en "no se". */
     std::vector<NativeReloc> relocs;
+    const util::AllocScope emitting(
+        util::AllocTag(util::AllocUse::Instant, util::AllocShape::Growing));
     std::vector<uint8_t> bytes = jit::vreg_compile_native(
         fn, /*resolve_call=*/{}, /*ent=*/{}, /*resolve_native=*/{},
         /*resolve_symbol=*/{}, &relocs, /*pic=*/true,
@@ -494,6 +513,9 @@ extern "C" uint64_t vrt_naked_fnaddr(uint64_t proc, uint64_t name_hash) {
     auto *vm = reinterpret_cast<runtime::ProcessVM *>(proc);
     if (vm == nullptr) return 0;
     static const bool debug = util::flag_on(util::FlagId::NakedDebug);
+    /* Lo mismo que en el otro sitio: una cadena por llamada que muere aqui. */
+    const util::AllocScope naming(
+        util::AllocTag(util::AllocUse::Instant, util::AllocShape::Fixed));
     // Localizar el nombre por hash (igual que el dispatcher).
     std::string target_name;
     {
