@@ -68,6 +68,12 @@ VESTA_ENV_FLAG(NoLocalSkip, "VESTA_NO_LOCAL_SKIP", Emitted, Optimizer, Bool,
 VESTA_ENV_FLAG(ModuleInitChunk, "VESTA_MODULE_INIT_CHUNK", Emitted, Optimizer,
                Int, Any)
 VESTA_ENV_FLAG(TreeShake, "VX_TREE_SHAKE", Emitted, Optimizer, Bool, Any)
+/* TEMPORAL: cuenta cuantas funciones del modulo fundido no puede alcanzar
+   nadie, y cuanto pesan.  NO borra ninguna -- borrar codigo es de las cosas que
+   no se pueden equivocar a medias, asi que primero se mide el premio.  Saca
+   ademas la cuenta sin sembrar las publicas, que es lo que vale distinguir
+   `internal` de `public` en el intermedio. */
+VESTA_ENV_FLAG(DeadFnCount, "VX_DEAD_FN_COUNT", Report, Optimizer, Bool, Any)
 
 /* -- Rangos de valor ------------------------------------------------------ */
 VESTA_ENV_FLAG(NoRangeCache, "VESTA_NO_RANGE_CACHE", Emitted, Range, Bool, Any)

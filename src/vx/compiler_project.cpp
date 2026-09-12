@@ -890,6 +890,163 @@ size_t ir_ram_ceiling_bytes() {
  * @param diags   Donde avisar si un modulo no se pudo bajar.
  * @param verbose Si contar lo que se baja.
  */
+/**
+ * @brief TEMPORAL: cuenta lo que tiraria un barrido de alcanzabilidad.
+ *
+ * NO BORRA NADA.  Borrar codigo es de las cosas que no se pueden equivocar a
+ * medias, asi que primero se mide el premio y despues se decide si merece el
+ * riesgo.  Esta funcion es el "primero".
+ *
+ * COMO CUENTA UNA REFERENCIA, y es lo unico delicado.  No mira QUE opcode es:
+ * cualquier instruccion cuyo `func_name` nombre a una funcion definida cuenta
+ * como que la alcanza.  Enumerar los opcodes de llamada seria mas fino y
+ * dejaria fuera las formas de nombrar una funcion que no son una llamada -- la
+ * direccion tomada, la entrada de una tabla de metodos, lo que registra
+ * `__module_init` --, y olvidarse de una convertiria a una funcion VIVA en
+ * "inalcanzable".  Para contar, pasarse por conservador solo hace el numero mas
+ * pequeno; quedarse corto lo hace mentiroso.
+ *
+ * LAS SEMILLAS: alcanzables por definicion y no porque alguien las llame.
+ *   - el punto de entrada;
+ *   - todo lo `public` -- y con ello lo `internal`, porque el intermedio NO
+ *     distingue las dos (ver `IrFunction::is_public`).  De ahi que se cuenten
+ *     aparte: la diferencia entre los dos numeros es exactamente lo que se
+ *     ganaria trayendo `is_internal` hasta aqui;
+ *   - `__module_init`, que es por donde se registran las clases;
+ *   - los stubs nativos, y lo que tiene seccion fija o no lleva prologo, que se
+ *     referencian desde una tabla y no desde una llamada.
+ *
+ * @param mod El modulo fundido, ya optimizado.
+ */
+/// Un recuento del barrido: cuantas funciones quedan fuera y cuanto pesan.
+struct ReachTally {
+    size_t seeds = 0;      ///< Cuantas se dieron por alcanzables de entrada.
+    size_t dead = 0;       ///< Cuantas no alcanzo nadie.
+    size_t dead_instrs = 0;///< Y cuantas instrucciones suman.
+    size_t all_instrs = 0; ///< De cuantas en total.
+    /// Unas cuantas por su nombre, para poder MIRAR si el cierre se dejo una
+    /// via de alcanzar.  Un porcentaje no delata eso; un nombre si.
+    std::vector<std::string> names;
+};
+
+/**
+ * @brief El cierre desde las semillas, y lo que queda fuera.
+ *
+ * @param seed_public Si las `public` (y con ellas las `internal`, que el
+ *                    intermedio no distingue) cuentan como semilla.  Correrlo
+ *                    con y sin es lo que mide QUE aportaria distinguirlas: con
+ *                    el paquete entero delante las llamadas de una `internal`
+ *                    se ven TODAS, asi que no tendria por que ser semilla.
+ */
+ReachTally reach_from_seeds(const ir::IrModule &mod,
+                            const std::unordered_map<std::string, size_t> &by_name,
+                            bool seed_public) {
+    ReachTally t;
+    std::vector<uint8_t> reached(mod.functions.size(), 0);
+    std::vector<size_t> pending;
+
+    for (size_t i = 0; i < mod.functions.size(); ++i) {
+        const ir::IrFunction &fn = mod.functions[i];
+        const bool is_init = fn.name.find("__module_init") != std::string::npos;
+        const bool is_seed = fn.name == "main" || is_init || fn.is_native ||
+                             fn.is_naked || (seed_public && fn.is_public);
+        if (!is_seed) continue;
+        ++t.seeds;
+        reached[i] = 1;
+        pending.push_back(i);
+    }
+
+    /* LO QUE EL MODULO NOMBRA FUERA DE UNA INSTRUCCION, que es donde se
+     * escondia el error: mirar solo el codigo daba por muerto al ASIGNADOR del
+     * programa, que es de lo mas vivo que hay -- se referencia por una cadena
+     * del modulo, no por una llamada --.  Lo mismo valdria para un metodo, que
+     * se registra por su nombre cualificado.  Si esto se olvida, el barrido no
+     * se equivoca "un poco": borra algo que nadie llama y todo el mundo usa. */
+    const std::string *const module_syms[] = {&mod.alloc_sym, &mod.free_sym};
+    for (const std::string *s : module_syms) {
+        if (s->empty()) continue;
+        const auto it = by_name.find(*s);
+        if (it == by_name.end() || reached[it->second]) continue;
+        ++t.seeds;
+        reached[it->second] = 1;
+        pending.push_back(it->second);
+    }
+    for (const ir::IrClass &c : mod.classes)
+        for (const ir::IrMethod &m : c.methods) {
+            if (m.ir_fn_name.empty()) continue; // abstracto: no hay cuerpo
+            const auto it = by_name.find(m.ir_fn_name);
+            if (it == by_name.end() || reached[it->second]) continue;
+            ++t.seeds;
+            reached[it->second] = 1;
+            pending.push_back(it->second);
+        }
+
+    /* Una funcion alcanzada alcanza a todas las que NOMBRA, sea como sea que
+     * las nombre. */
+    while (!pending.empty()) {
+        const ir::IrFunction &fn = mod.functions[pending.back()];
+        pending.pop_back();
+        for (const ir::IrBlock &b : fn.blocks)
+            for (const ir::IrInstr &in : b.instrs) {
+                if (in.func_name.empty()) continue;
+                const auto it = by_name.find(in.func_name);
+                if (it == by_name.end() || reached[it->second]) continue;
+                reached[it->second] = 1;
+                pending.push_back(it->second);
+            }
+    }
+
+    for (size_t i = 0; i < mod.functions.size(); ++i) {
+        size_t n = 0;
+        for (const ir::IrBlock &b : mod.functions[i].blocks)
+            n += b.instrs.size();
+        t.all_instrs += n;
+        if (reached[i]) continue;
+        ++t.dead;
+        t.dead_instrs += n;
+        /* LOS NOMBRES, y no por curiosidad: la unica forma de saber si el
+         * cierre se dejo una via de alcanzar -- un metodo que `__module_init`
+         * registra por etiqueta, algo cuya direccion se toma -- es MIRAR que
+         * salio muerto.  Un porcentaje no lo dice; un nombre que resulta ser
+         * un metodo vivo, si. */
+        if (t.names.size() < 12) t.names.push_back(mod.functions[i].name);
+    }
+    return t;
+}
+
+void count_unreachable_functions(const ir::IrModule &mod) {
+    std::unordered_map<std::string, size_t> by_name;
+    by_name.reserve(mod.functions.size() * 2);
+    for (size_t i = 0; i < mod.functions.size(); ++i)
+        by_name.emplace(mod.functions[i].name, i);
+
+    const ReachTally hoy = reach_from_seeds(mod, by_name, true);
+    const ReachTally sin_publicas = reach_from_seeds(mod, by_name, false);
+
+    const double pct = mod.functions.empty()
+                           ? 0.0
+                           : 100.0 * double(hoy.dead) /
+                                 double(mod.functions.size());
+    const double pct_i =
+        hoy.all_instrs == 0
+            ? 0.0
+            : 100.0 * double(hoy.dead_instrs) / double(hoy.all_instrs);
+    std::fprintf(stderr,
+                 "[dead-fn] %zu funciones, %zu semillas\n"
+                 "[dead-fn] no alcanzables: %zu (%.1f%%), con %zu de %zu "
+                 "instrucciones (%.1f%%)\n",
+                 mod.functions.size(), hoy.seeds, hoy.dead, pct,
+                 hoy.dead_instrs, hoy.all_instrs, pct_i);
+    /* Y lo que se ganaria si `internal` se distinguiera de `public`: las que
+     * hoy se salvan SOLO por ser semilla publica. */
+    for (const std::string &n : hoy.names)
+        std::fprintf(stderr, "[dead-fn]   %s\n", n.c_str());
+    std::fprintf(stderr,
+                 "[dead-fn] sin sembrar las publicas serian %zu (%zu mas): eso "
+                 "es lo que vale distinguir `internal` de `public`\n",
+                 sin_publicas.dead, sin_publicas.dead - hoy.dead);
+}
+
 void spill_until_under_ceiling(std::vector<ProjectModuleWork> &work,
                                size_t &live, Diagnostics &diags, bool verbose) {
     const size_t ceiling = ir_ram_ceiling_bytes();
@@ -5196,6 +5353,20 @@ CompileResult compile_vx_project(
         ir::ir_print(merged, ir_oss);
         res.ir_text = ir_oss.str();
     }
+
+    /* TEMPORAL: cuanto tiraria un barrido de alcanzabilidad, SIN tirar nada.
+     *
+     * Nada en el compilador borra hoy una funcion que ya no puede alcanzar
+     * nadie -- ni un pase, ni el emisor, ni el enlazador --, y eso no es solo
+     * codigo que el fuente no usaba: inlinear una funcion en TODAS sus llamadas
+     * la deja sin llamadores, y su cuerpo se queda, se vuelve a optimizar en la
+     * ronda siguiente y se emite.
+     *
+     * Antes de escribir el barrido hay que saber cuanto vale, porque borrar
+     * codigo es de las cosas que no se pueden equivocar a medias.  Esto solo
+     * CUENTA.  Con `VX_DEAD_FN_COUNT=1`. */
+    if (util::flag_on(util::FlagId::DeadFnCount))
+        count_unreachable_functions(merged);
 
     /* LA MEMOIZACION DE RANGOS SE SUELTA AQUI, y el sitio es el punto.
      *

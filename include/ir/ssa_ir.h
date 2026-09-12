@@ -1932,8 +1932,14 @@ struct IrFunction {
     bool is_native = false;   ///< true si es stub para funcion nativa
     bool is_variadic = false; ///< true si acepta argc variable
     /**
-     * @brief Alcanzable desde FUERA del modulo (lo que el fuente declara como
-     *        publico; sin palabra clave, en Vesta lo es).
+     * @brief Alcanzable desde FUERA del modulo.
+     *
+     * EN VESTA, SIN PALABRA CLAVE UNA FUNCION ES PRIVADA.  Hay que escribir
+     * `public` -- o `internal` -- a proposito para que otro la pueda usar; el
+     * defecto del AST es `is_public = false` y el analizador solo lo cambia si
+     * se escribio algo.  (Aqui arriba ponia lo contrario, y no es un matiz: de
+     * ese comentario sale directamente la respuesta a "que puedo tirar", y con
+     * el al reves la respuesta es "nada".)
      *
      * Decide hasta donde llega lo que se puede afirmar de ella.  Un resumen
      * interprocedural -- de que valores recibe un parametro, que rango tienen,
@@ -1941,6 +1947,14 @@ struct IrFunction {
      * VEN, y eso solo vale si no hay otros.  Con una funcion privada, el modulo
      * los tiene todos; con una publica, cualquiera puede llamarla desde otro
      * lado y "no he visto llamadas" deja de significar "no las hay".
+     *
+     * SON TRES VISIBILIDADES Y ESTE CAMPO SOLO DISTINGUE DOS.  `internal` es
+     * visible en todo el PAQUETE y no fuera, asi que pone esto a true igual que
+     * `public` -- ver `Parser::apply_pending_visibility` --, y a partir de aqui
+     * las dos son la misma cosa.  Importa para cualquiera que quiera saber si
+     * ve TODAS las llamadas: con el paquete entero delante, las de una
+     * `internal` se ven todas y las de una `public` no.  Hoy eso no se puede
+     * preguntar aqui; haria falta traer tambien `is_internal`.
      *
      * Sin este dato la unica salida era suponer, y la suposicion se rompe justo
      * donde mas duele: al compilar por modulos con cache, el mismo fichero
