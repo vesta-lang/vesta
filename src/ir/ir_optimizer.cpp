@@ -20,6 +20,7 @@
 #include "util/crono_tramo.h"
 #include "vx/diag/diag_catalog.h" // los motivos, en todos los idiomas
 #include "util/fnv.h"         // dispersion de las claves de la CSE
+#include "util/phase_memory.h" // la frontera al cerrar una vuelta del punto fijo
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
 #include "util/named_alloc.h" // que el perfil diga QUE es cada estructura auxiliar
 #include "util/os/thread_slot.h"  // los vectores de trabajo, uno por hilo
@@ -15599,6 +15600,17 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
          * cuadra con lo que mide es peor que no tenerlo. */
         vueltas_punto_fijo() += 1;
         visitas_a_funcion() += static_cast<long long>(mod.functions.size());
+        /* UNA VUELTA DEL PUNTO FIJO ES UNA FRONTERA, y de las buenas: aqui no
+         * queda ningun hilo del reparto trabajando y lo que la vuelta uso --
+         * los analisis por funcion, las tablas de cada pase -- acaba de morir.
+         * Sin esto, el tramo entre optimizar y emitir eran noventa y ocho
+         * cortes sin una sola frontera, con caidas de 120, 78, 63 y 58 MiB por
+         * el camino que no las recogia nadie.
+         *
+         * Y NO ES UN BUCLE CALIENTE.  Son unas pocas vueltas sobre el programa
+         * entero -- el tope son 64 y el punto fijo llega mucho antes --, no una
+         * por funcion. */
+        util::release_between_phases();
         if (!any.load(std::memory_order_relaxed)) break; // punto fijo
         /* Se agoto el tope y algo seguia cambiando: el optimizador se rinde a
          * medias.  Queda anotado porque un binario peor sin ninguna senal es

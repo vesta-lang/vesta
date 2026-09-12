@@ -5598,6 +5598,18 @@ int main(int argc, char *argv[]) {
             /*emit_map=*/(result.count("emit-map") > 0), vel_nodos.get(),
             /*debug_source_file=*/copts.emit_debug ? vx_path : std::string());
 
+        /* AQUI ESTA LA CAIDA MAS GRANDE DE TODA LA CORRIDA: 530 MiB de golpe
+         * -- lo vivo pasa de 269 a 120 MiB en un solo corte -- cuando el
+         * ensamblador y el enlazador mueren al volver de ahi arriba y con ellos
+         * las secciones, las tablas de simbolos y el programa entero por
+         * duplicado.  Era la unica bajada del grafico que no tenia nombre, y
+         * tampoco la recogia nadie.
+         *
+         * Y VA AQUI Y NO DENTRO: dentro, el enlazador todavia esta vivo -- su
+         * informe se lee hasta la ultima linea de la funcion --, asi que una
+         * frontera ahi cae un corte ANTES de la bajada que dice nombrar. */
+        util::release_between_phases("vx.phase.output");
+
         // Se deja constancia de que grafo explica ESTE artefacto, bajo un
         // identificador sacado de su contenido.  Es el ultimo eslabon: sin el,
         // el grafo esta emitido pero nadie puede pedirlo a partir del programa

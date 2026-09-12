@@ -260,6 +260,11 @@ int run_worker_from_source(std::string code, const std::string &file_name,
     if (prof_link)
         vesta::scout() << "[linker-prof-outer] write_to_file (build+disk) "
                        << t_link_write.us() << " us\n";
+    /* Construido y en disco: el buffer del ejecutable entero acaba de morir --
+     * medido, 70 MiB --.  SIN MARCA a proposito: lo gordo del enlazador no se
+     * va aqui sino cuando el enlazador mismo muere, y esa es la marca; poner
+     * el nombre aqui lo dejaria un corte antes de la caida que dice nombrar. */
+    util::release_between_phases();
 
     // Generar map file
     if (opts.generate_map_file) {

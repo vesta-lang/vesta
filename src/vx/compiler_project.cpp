@@ -4290,6 +4290,12 @@ CompileResult compile_vx_project(
         return res;
     }
 
+    /* Y aqui acaba de compilar modulos, que es una fase y no se llamaba de
+     * ninguna forma: en la curva se veia como una caida de 231 MiB sin nombre
+     * -- las estructuras de cada modulo muriendo segun se funden en el root --
+     * cuatro cortes antes de la marca de optimizar. */
+    cerrar_fase(res.tiempos.modulos_us, "vx.phase.merge");
+
     // 4. Merge IR de todos los modulos en uno solo.
     //
     // Estrategia: el modulo ROOT (work.back() en topo order, ya que el
