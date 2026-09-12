@@ -37,6 +37,7 @@
 #include "util/os/os_memory.h"
 #include "util/symbols/self_dwarf.h" // la cadena de inline: quien LLAMO, no quien reserva
 #include "util/symbols/self_symbols.h"
+#include "util/symbols/link_map.h" // de que objeto es cada tramo, sin simbolos
 #include "util/mem/vesta_memcpy.h"
 
 #include <algorithm>
@@ -753,6 +754,61 @@ std::string component_before(const std::string &s, const char *marker) {
     return s.substr(start, at - start);
 }
 
+/// Una ruta con barras normales y en minusculas, para comparar dos que vienen
+/// de sitios distintos.  El compilador escribe `F:/C/VM/...` y una consola
+/// puede haber dejado `F:\C\VM\...`; son la misma ruta y tienen que casar.
+std::string comparable_path(const std::string &s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char c = s[i];
+        if (c == '\\') {
+            out.push_back('/');
+        } else if (c >= 'A' && c <= 'Z') {
+            out.push_back(char(c - 'A' + 'a'));
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+/// La raiz del arbol: `__FILE__` de ESTE fichero menos el sitio que ocupa en
+/// el.  La cuenta la hace la libreria -- normaliza las barras, que en Windows
+/// es donde esto se rompe --, pero la macro se escribe AQUI: `__FILE__` solo
+/// significa algo donde esta puesto.  Vacia si no cuadra, y entonces nadie es
+/// "de casa"; ver `project_root`.
+std::string compute_project_root() {
+    const char *const root = VESTA_ALLOC_ROOT_HERE("src/util/alloc_report.cpp");
+    return root != nullptr ? comparable_path(root) : std::string();
+}
+
+/**
+ * @brief Donde vive NUESTRO arbol, deducido al COMPILAR.
+ *
+ * POR QUE `__FILE__` Y NO UNA RUTA ESCRITA.  Porque la ruta que lleva la
+ * informacion de depuracion es la que vio el compilador, y esa es exactamente
+ * la forma de `__FILE__` en este mismo fichero: comparar contra ella acierta
+ * venga el arbol de donde venga -- otra maquina, otro disco, un directorio de
+ * construccion distinto -- sin que nadie tenga que actualizar una constante.
+ *
+ * Y ADEMAS ES LO QUE HACE FIABLE LA CLASIFICACION.  Sin raiz, "lo nuestro" se
+ * reconocia buscando `/src/` en cualquier parte de la ruta, y eso casa con
+ * cosas que no son nuestras: `emutls.c` del propio GCC llega como
+ * `../../../../../src/gcc-git-10.3.0/libgcc/emutls.c` y salia en un modulo
+ * llamado "..".  Con la raiz por delante, una ruta que no empiece por ella no
+ * se mira siquiera con las reglas de casa.
+ *
+ * El sufijo se escribe aqui porque es la posicion de ESTE fichero en el arbol,
+ * que es justo lo que no se puede deducir; si alguien lo mueve, la raiz sale
+ * vacia y todo cae a las reglas de fuera -- menos respuesta, nunca una
+ * equivocada.
+ */
+const std::string &project_root() {
+    static const std::string root = compute_project_root();
+    return root;
+}
+
 /**
  * @brief De QUE es este codigo: de la libreria estandar, del arranque, de una
  *        libreria de terceros o de que modulo nuestro.
@@ -789,8 +845,26 @@ std::string module_of(const char *file, const char *fn) {
             p.find("crossdev") != std::string::npos ||
             p.find("/sysdeps/") != std::string::npos ||
             p.find("/glibc") != std::string::npos ||
-            p.find("/csu/") != std::string::npos)
+            p.find("/csu/") != std::string::npos ||
+            /* Y la del propio COMPILADOR, que no es la del sistema pero se
+             * agrupa con ella: es runtime que nadie escribio aqui.  Sin esto
+             * `emutls.c` -- la emulacion de TLS de GCC -- salia en un modulo
+             * llamado "..", porque su ruta viene RELATIVA en la informacion de
+             * depuracion (`../../../../../src/gcc-git-10.3.0/libgcc/...`) y la
+             * regla de abajo, al ver un `/src/` seguido de algo con puntos, se
+             * queda con el componente anterior, que ahi es "..".  Un modulo
+             * llamado ".." no es una clasificacion, es una pista de que la ruta
+             * no encajo en ninguna regla. */
+            p.find("/libgcc/") != std::string::npos)
             return "CRT del sistema";
+        /* LO DE CASA SE RECONOCE POR LA RAIZ, no por llevar un `/src/` dentro.
+         * Ver `project_root`: la raiz sale de `__FILE__`, asi que una ruta que
+         * no empiece por ella no es nuestra por mucho que se le parezca -- y
+         * las reglas de abajo solo se aplican a lo que si lo es. */
+        const std::string &root = project_root();
+        if (!root.empty() &&
+            comparable_path(p).compare(0, root.size(), root) != 0)
+            return "sin clasificar";
         /* Las que vienen de fuera se agrupan por su nombre, que es el
          * directorio que las contiene. */
         const std::string vendor = segment_after(p, "libs/SourceCode/");
@@ -816,6 +890,12 @@ std::string module_of(const char *file, const char *fn) {
                        : component_before(p, "/include/");
         const std::string tst = segment_after(p, "/tests/");
         if (!tst.empty()) return "tests/" + tst;
+        /* Y LO QUE CUELGA DE LA RAIZ A PELO, que aqui es `main.cpp`.  Sin esta
+         * linea caia en "sin clasificar" y ahi se mezclaba con los marcos que
+         * NO TIENEN RUTA, que es otra cosa: de aquellos no se sabe de quien
+         * son, y de este se sabe perfectamente.  Medido: 6.088 marcos del
+         * programa escondidos entre 14.089 sin informacion de depuracion. */
+        if (!root.empty()) return "(raiz del proyecto)";
     }
     /* Sin ruta queda el nombre, que solo separa lo evidente.  Y se marca como
      * lo que es -- una suposicion por el nombre -- para que no se lea igual que
@@ -848,32 +928,6 @@ void add_to_module(std::vector<ModuleTotal> &tot, const std::string &name,
     tot.push_back(ModuleTotal{name, allocs, bytes});
 }
 
-/**
- * @brief El modulo de un marco, en almacenamiento que sobrevive a la llamada.
- *
- * POR QUE UNA REJILLA FIJA Y NO UNA CADENA.  Porque el exportador lee estos
- * punteros DESPUES de que el gancho vuelva -- resuelve la cadena entera y luego
- * escribe las filas --, asi que devolver el `c_str()` de un temporal daria un
- * puntero a memoria ya liberada.  Y sin destructor a proposito: esto corre
- * desde un manejador de salida, y un estatico ya destruido en ese momento es
- * exactamente el fallo que costo una tarde con el almacen de nombres.
- *
- * Una ranura por PROFUNDIDAD, no una por sitio: solo tienen que sobrevivir los
- * marcos del sitio que se esta escribiendo.
- */
-const char *module_text(unsigned depth, const char *file, const char *fn) {
-    static char pool[64][64];
-    if (depth >= 64) return nullptr;
-    const std::string name = module_of(file, fn);
-    /* Acotado en el sitio de la copia, que es lo que le falta al compilador
-     * para no avisar: sabe que `pool[depth]` mide 64 y no puede saber cuanto
-     * mide `name` sin esto. */
-    const size_t room = sizeof(pool[0]) - 1;
-    const size_t n = name.size() < room ? name.size() : room;
-    vesta_memcpy(pool[depth], name.c_str(), n);
-    pool[depth][n] = '\0';
-    return pool[depth];
-}
 
 /**
  * @brief Un marco para una direccion que NO es de nuestra imagen.
@@ -982,8 +1036,17 @@ unsigned resolve_frames(const void *pc, AllocFrame *out, unsigned max) {
             out[i].file = frames[i].file;
             out[i].line = frames[i].line;
             out[i].inlined = frames[i].inlined;
-            out[i].module = module_text(i, frames[i].file,
-                                        frames[i].function);
+            /* EL MODULO NO LO PONE ESTE RESOLUTOR, y quitarlo es lo que
+             * hace que la cadena funcione.  Lo que este campo trae cuenta como
+             * "ya se sabe" -- es lo que dice de que BINARIO es una direccion --
+             * asi que rellenarlo aqui cortaba la busqueda en el primer paso: lo
+             * declarado no llegaba a mirarse, y un marco que esta regla no sabe
+             * clasificar salia como "sin clasificar" en vez de caer al mapa del
+             * enlazador, que para ese si sabe de que objeto es.
+             *
+             * La regla sigue estando -- se instala como clasificador, en
+             * `classify_module` -- y contesta en su turno. */
+            out[i].module = nullptr;
         }
         return got;
     }
@@ -996,10 +1059,11 @@ unsigned resolve_frames(const void *pc, AllocFrame *out, unsigned max) {
         out[0].file = nullptr;
         out[0].line = 0;
         out[0].inlined = false;
-        /* Sin ruta, `module_of` solo separa lo evidente por el nombre -- y lo
-         * marca como suposicion.  Que devuelva poco no es razon para no
-         * preguntar: agrupar la libreria estandar ya es la mitad del reparto. */
-        out[0].module = module_text(0, nullptr, name);
+        /* Y el modulo, por la cadena: ver el marco de arriba.  Sin ruta, la
+         * regla solo separa lo evidente por el nombre, y despues de ella queda
+         * el mapa del enlazador -- que es justo el caso de una construccion sin
+         * simbolos, donde nunca hay ruta. */
+        out[0].module = nullptr;
         return 1;
     }
 
@@ -1049,6 +1113,30 @@ const char *format_name(const char *raw) {
     if (raw == nullptr) return nullptr;
     static std::string held;
     held = readable(raw);
+    return held.c_str();
+}
+
+/**
+ * @brief El gancho de modulos del asignador, servido por NUESTRAS reglas.
+ *
+ * De que va: "de que modulo es esto" es una propiedad de NUESTRO arbol, no del
+ * asignador, asi que la libreria no lleva ninguna regla dentro -- pregunta, y
+ * quien contesta es esto.  Cualquier otro proyecto que la enlace instala el
+ * suyo y obtiene sus modulos sin tocar la libreria; el que no instale ninguno
+ * se queda sin la columna, que es una respuesta mas corta y nunca una
+ * equivocada.
+ *
+ * Mismo almacen estatico que `format_name`, y por el mismo contrato: lo
+ * devuelto vale hasta la llamada siguiente.
+ */
+const char *classify_module(const char *file, const char *function) {
+    static std::string held;
+    held = module_of(file, function);
+    /* "SIN CLASIFICAR" NO ES UNA RESPUESTA, es la ausencia de una -- y
+     * devolverla como si lo fuera cortaba la cadena: el asignador se quedaba
+     * con ella y no llegaba a preguntarle al mapa del enlazador, que para esos
+     * marcos SI sabe de que objeto son.  Nulo es lo que deja seguir buscando. */
+    if (held.empty() || held == "sin clasificar") return nullptr;
     return held.c_str();
 }
 
@@ -1106,6 +1194,30 @@ void report_alloc_sites() {
      * de construir tres lineas arriba, que era lo unico caro. */
     alloc_set_symbol_resolver(&resolve_frames);
     alloc_set_name_formatter(&format_name);
+    /* Y DE QUIEN ES CADA MARCO.  Sin esto, los volcados solo llevaban modulo
+     * donde el resolutor lo sabia -- o sea en el codigo AJENO, que trae el suyo
+     * -- y todo lo nuestro salia vacio: agrupar por modulo contestaba "(?)"
+     * para el 100% de las pilas del comprobador.  Las reglas viven aqui porque
+     * hablan de nuestro arbol; la libreria solo pregunta. */
+    alloc_set_module_classifier(&classify_module);
+    /* Y EL MAPA DEL ENLAZADOR, que es lo unico que contesta en Release: ahi no
+     * hay ni ruta ni nombre -- medido, 1.174 marcos y ninguno con fichero -- y
+     * todo lo de arriba se queda mudo.  Si no esta el mapa no pasa nada: se
+     * sigue con lo que haya, que es menos respuesta y no una equivocada. */
+    const unsigned mapped = alloc_load_link_map();
+    /* Y SE DICE LO QUE SE CARGO.  Un mapa que no esta y un mapa que se leyo
+     * entero dan el mismo informe a simple vista -- con los modulos deducidos
+     * de rutas en un caso y medidos en el otro --, asi que la diferencia se
+     * cuenta en vez de dejarla adivinar. */
+    if (mapped != 0)
+        std::fprintf(stderr,
+                     "[reservas] mapa del enlazador: %u tramos de codigo, con "
+                     "su fichero y su objetivo\n",
+                     mapped);
+    else
+        std::fprintf(stderr,
+                     "[reservas] sin mapa del enlazador: los modulos salen de "
+                     "las rutas, y en Release no hay rutas\n");
 
     /* En la PILA y de tamano fijo: esto corre al final, cuando lo que interesa
      * es que salga el informe, no darle mas trabajo al asignador que se esta

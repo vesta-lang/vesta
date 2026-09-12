@@ -1971,6 +1971,35 @@ CompileResult compile_vx_project(
          * suelta mucho de un tamano que la siguiente no pide dejaba esa memoria
          * fuera de circulacion hasta el final. */
         (void)util::host_span_trim();
+        /* Y LOS TROZOS QUE SE QUEDARON VACIOS, que son la mitad mayor.  Un
+         * trozo entregado a una clase de tamano no vuelve nunca por su cuenta,
+         * asi que una fase que llena 400 MiB de un tamano y lo suelta deja esos
+         * trozos siendo de una clase que la fase siguiente puede no pedir.
+         * Medido aqui mismo: 386 MiB en trozos con todos sus bloques muertos.
+         *
+         * Se pide, no pasa sola: solo aqui se sabe que una fase ha terminado
+         * con su conjunto de trabajo.  Ver `host_chunk_reclaim`. */
+        (void)util::host_chunk_reclaim();
+        /* TEMPORAL: ponerle precio al barrido de trozos antes de construirlo.
+         * Solo mide -- cuenta los trozos que se podrian devolver y cuanto tarda
+         * en contarlos --, no devuelve nada.  Con `VESTA_ALLOC_SCAN=1`. */
+        if (util::flag_on(util::FlagId::HostAllocScan)) {
+            uint64_t bloques = 0, trozos = 0;
+            const auto t0 = std::chrono::steady_clock::now();
+            const size_t bytes =
+                util::host_chunk_scan(util::kReclaimFromClass, &bloques,
+                                      &trozos);
+            const auto us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+            std::fprintf(stderr,
+                         "[scan] %-18s %8llu bloques  %6llu trozos  %6.1f MiB"
+                         "  %7lld us\n",
+                         siguiente != nullptr ? siguiente : "(fin)",
+                         (unsigned long long)bloques,
+                         (unsigned long long)trozos,
+                         double(bytes) / (1024.0 * 1024.0), (long long)us);
+        }
         if (siguiente != nullptr) util::san_mark(siguiente);
     };
     util::san_mark("vx.phase.resolve");
@@ -4143,6 +4172,7 @@ CompileResult compile_vx_project(
              * un tamano que el modulo siguiente no tiene por que volver a
              * pedir.  Una vez por modulo no es un bucle caliente. */
             (void)util::host_span_trim();
+            (void)util::host_chunk_reclaim();
         }
     } else {
         // Path paralelo: agrupar modulos por nivel topologico.
@@ -4241,6 +4271,7 @@ CompileResult compile_vx_project(
                  * documenta como uso de esta llamada -- entre fases, nunca en
                  * un bucle caliente. */
                 (void)util::host_span_trim();
+                (void)util::host_chunk_reclaim();
                 /* El techo se aplica AQUI y no dentro del hilo: desalojar mira
                  * el estado de los OTROS modulos, y dentro del lote los hay
                  * compilandose.  Tras la barrera no queda nadie trabajando,

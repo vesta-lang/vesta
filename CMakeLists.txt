@@ -455,6 +455,11 @@ add_library(vxdbg_lib STATIC
 target_include_directories(vxdbg_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # Los codecs comparten un header interno que no es parte de su API publica.
 target_include_directories(vxdbg_lib PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/vxdbg)
+# Y las cabeceras del asignador, para la linea que declara de que modulo es
+# este directorio.  Solo las CABECERAS: esta libreria no enlaza el asignador --
+# lo hace quien la use --, y la declaracion es una llamada que se resuelve ahi.
+target_include_directories(vxdbg_lib PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/SourceCode/vesta_alloc/include)
 target_compile_features(vxdbg_lib PUBLIC cxx_std_17)
 
 # ---------------------------------------------------------------------------
@@ -571,6 +576,46 @@ set(VESTA_ALLOC_BUILD_EXAMPLES ON CACHE BOOL
 set(VESTA_ALLOC_BUILD_BENCH ON CACHE BOOL
         "Compilar los bancos del asignador" FORCE)
 add_subdirectory(libs/SourceCode/vesta_alloc)
+
+# DE QUE MODULO ES CADA OBJETIVO, declarado donde ya esta decidido.
+#
+# El mapa del enlazador contesta antes que esto y con mas detalle -- da el
+# fichero, no solo el modulo --, asi que en una construccion normal esta linea
+# no cambia nada.  Esta para cuando no hay mapa: otro generador, un binario
+# copiado sin su `.map` al lado, alguien que compile a mano.  Entonces es la
+# unica atribucion que queda, y no cuesta nada tenerla puesta.
+#
+# `vx_lib` y no los demas porque es el unico objetivo cuyo directorio ES un
+# modulo: `vmcore` junta fuentes de medio arbol, asi que declarar su directorio
+# diria que TODO es "vmcore", que es peor que no decir nada.
+if (COMMAND vesta_alloc_module)
+    vesta_alloc_module(vx_lib "vx")
+endif ()
+
+# QUE CADA FICHERO DIGA CUAL ES: PROBADO Y RETIRADO.  No funciona en ESTE
+# build, y conviene que quede escrito para que nadie lo vuelva a intentar.
+#
+# La idea era `vesta_alloc_declare_files(<objetivo>)`: forzar una cabecera en
+# todas las unidades para que cada una plante un ancla -- una funcion vacia -- y
+# atribuir cada direccion al ancla anterior mas cercana.  Compila, corre, y
+# atribuye MAL.
+#
+# POR QUE.  Con `-ffunction-sections` cada funcion va a su propia seccion y el
+# enlazador las agrupa POR NOMBRE.  Todas las anclas se llaman igual, asi que
+# acaban una detras de otra en un solo bloque:
+#
+#     0x140731490  lexer.cpp
+#     0x1407314a0  parser.cpp          <- 16 bytes
+#     0x1407314b0  effects_report.cpp
+#
+# Ninguna queda cerca del codigo de su fichero, y una unidad de compilacion no
+# tiene una region contigua que un ancla pueda marcar.  Medido: 414 anclas y
+# 1.091 marcos atribuidos todos al mismo fichero.
+#
+# Lo que SI contesta esa pregunta es el mapa del enlazador -- exacto, por objeto
+# y sin vecindades --, y esta puesto mas abajo.  El mecanismo sigue en la
+# libreria para quien compile sin `-ffunction-sections`, donde el codigo de una
+# unidad si es contiguo.
 
 # Capstone (desensamblador)
 add_subdirectory(libs/SourceCode/capstone)
@@ -1008,6 +1053,19 @@ if (WIN32)
             $<$<CONFIG:Profile>:-static -static-libgcc -static-libstdc++>
     )
 endif ()
+
+# EL MAPA DEL ENLAZADOR, en todas las configuraciones.
+#
+# PARA QUE.  Es lo unico que dice de que OBJETO sale cada tramo de codigo, y en
+# Release es lo unico que queda: medido, un binario de Release da 1.174 marcos
+# de reserva y NI UNO lleva fichero -- sin esto, "quien reservo" no tiene
+# respuesta en la unica configuracion que se distribuye.
+#
+# No cambia el binario ni cuesta nada en ejecucion: es un fichero de texto al
+# lado, que lee `util/alloc_code_map.cpp` solo cuando se pide el informe.  Se
+# genera siempre porque un mapa que hay que acordarse de pedir es un mapa que no
+# esta el dia que hace falta.
+target_link_options(vm PRIVATE "-Wl,-Map=$<TARGET_FILE:vm>.map")
 
 # Enlace estático solo en Windows + Release
 target_link_options(vm PRIVATE

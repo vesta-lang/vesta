@@ -355,6 +355,10 @@ VESTA_ENV_FLAG(HostAllocSites, "VESTA_HOST_ALLOC_SITES", Report, Gc, Bool, Any)
  * Lo lee `tools/alloc_tree.py`, que arma el arbol de donde nacen las reservas.
  */
 VESTA_ENV_FLAG(HostAllocCsv, "VESTA_HOST_ALLOC_CSV", Report, Gc, Text, Any)
+/* TEMPORAL: le pone precio al barrido de trozos del asignador -- cuantos se
+   podrian devolver y cuanto cuesta contarlos -- antes de decidir si se
+   construye la devolucion.  Solo mide; no devuelve nada. */
+VESTA_ENV_FLAG(HostAllocScan, "VESTA_ALLOC_SCAN", Report, Gc, Bool, Any)
 
 /* Provocar una caida A PROPOSITO, para poder comprobar que el informe de caidas
  * funciona.  Un informe que solo se ve cuando algo se rompe de verdad no se
