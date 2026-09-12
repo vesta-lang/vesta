@@ -1980,6 +1980,11 @@ CompileResult compile_vx_project(
          * Se pide, no pasa sola: solo aqui se sabe que una fase ha terminado
          * con su conjunto de trabajo.  Ver `host_chunk_reclaim`. */
         (void)util::host_chunk_reclaim();
+        /* Y LAS PAGINAS AL SISTEMA.  Las tres de arriba hacen reutilizable la
+         * memoria dentro del asignador; esta es la unica que hace que baje lo
+         * que ve el sistema operativo, y por eso va la ultima: suelta lo que
+         * las otras acaban de dejar libre. */
+        (void)util::host_span_release();
         /* TEMPORAL: ponerle precio al barrido de trozos antes de construirlo.
          * Solo mide -- cuenta los trozos que se podrian devolver y cuanto tarda
          * en contarlos --, no devuelve nada.  Con `VESTA_ALLOC_SCAN=1`. */
@@ -4173,6 +4178,11 @@ CompileResult compile_vx_project(
              * pedir.  Una vez por modulo no es un bucle caliente. */
             (void)util::host_span_trim();
             (void)util::host_chunk_reclaim();
+        /* Y LAS PAGINAS AL SISTEMA.  Las tres de arriba hacen reutilizable la
+         * memoria dentro del asignador; esta es la unica que hace que baje lo
+         * que ve el sistema operativo, y por eso va la ultima: suelta lo que
+         * las otras acaban de dejar libre. */
+        (void)util::host_span_release();
         }
     } else {
         // Path paralelo: agrupar modulos por nivel topologico.
@@ -4272,6 +4282,11 @@ CompileResult compile_vx_project(
                  * un bucle caliente. */
                 (void)util::host_span_trim();
                 (void)util::host_chunk_reclaim();
+        /* Y LAS PAGINAS AL SISTEMA.  Las tres de arriba hacen reutilizable la
+         * memoria dentro del asignador; esta es la unica que hace que baje lo
+         * que ve el sistema operativo, y por eso va la ultima: suelta lo que
+         * las otras acaban de dejar libre. */
+        (void)util::host_span_release();
                 /* El techo se aplica AQUI y no dentro del hilo: desalojar mira
                  * el estado de los OTROS modulos, y dentro del lote los hay
                  * compilandose.  Tras la barrera no queda nadie trabajando,
