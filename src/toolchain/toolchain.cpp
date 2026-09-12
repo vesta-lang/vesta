@@ -34,6 +34,7 @@
 #include "ir/vel_node_stream.h"          // ensamblar sin pasar por texto
 #include "toolchain/aot_build.h"         // vesta::tc::compile_aot
 #include "util/assembler_multiprocess.h" // asm_multi_process::run_worker
+#include "util/phase_memory.h"           // la frontera entre frontend y asm
 #include "vx/compiler.h"                 // vx::compile_vx_source / _project
 
 // Algunos headers arrastrados (windows.h y utilidades vendored) definen ERROR
@@ -185,6 +186,23 @@ CompileResponse compile(const CompileRequest &req) {
     const auto t1 = std::chrono::steady_clock::now();
     resp.frontend_us = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
+
+    /* LA FRONTERA QUE FALTABA, y es la que tiene el pico detras.
+     *
+     * El compilador cierra sus fases por dentro, pero la ultima -- la que
+     * llamaba `link` -- se abria al acabar el emisor y no la cerraba nadie:
+     * cubria la cola del frontend Y todo el ensamblado, que es donde el pico
+     * esta.  Medido sobre 144.000 lineas: del corte 181 al 222 la region pasa
+     * de 602 a 821 MiB teniendo entre 280 y 490 MiB recuperables todo el rato.
+     * No crecia por hacer falta, crecia porque nadie los pedia.
+     *
+     * Y ES JUSTO AQUI.  El frontend acaba de devolver: sus arboles, su
+     * comprobador de tipos y sus hechos estan muertos -- 335 MiB vivos pasan a
+     * 152 en un solo corte --, y lo que viene detras, ensamblar y enlazar, pide
+     * tamanos que no son los suyos.  Sin esto, esos trozos siguen siendo de una
+     * clase que ya no pide nadie y el ensamblador se lleva territorio nuevo
+     * teniendolos al lado. */
+    util::release_between_phases("vx.phase.assemble");
 
     // 4) Recolectar diagnosticos; abortar si hubo errores.
     if (collect_diags(cr, resp.diagnostics)) {

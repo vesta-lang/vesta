@@ -68,7 +68,8 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "ir/parallel_for.h"
 #include "util/env_flags.h"
 #include <climits>
-#include "util/alloc/host_allocator.h" // devolver al reparto comun entre fases
+#include "util/alloc/host_allocator.h" // san_mark, para nombrar la primera fase
+#include "util/phase_memory.h"         // la frontera entre fases
 #include "util/alloc/sanitizer.h" // marcar las fases en el eje del comprobador
 #include "util/crono_tramo.h"
 #include "analysis/asa/aggregate_facts.h"
@@ -1962,50 +1963,10 @@ CompileResult compile_vx_project(
                        .count();
         marca = ahora;
         /* Y lo que la fase que termina solto, de vuelta al reparto comun antes
-         * de que empiece la siguiente.
-         *
-         * Es EL sitio: el asignador documenta esta llamada como "de entre
-         * fases y no algo para un bucle caliente", y una frontera de fase es
-         * exactamente eso -- ya estaba puesto el corchete para cronometrar --.
-         * Lo que recupera son los tramos que quedaron aparcados: una fase que
-         * suelta mucho de un tamano que la siguiente no pide dejaba esa memoria
-         * fuera de circulacion hasta el final. */
-        (void)util::host_span_trim();
-        /* Y LOS TROZOS QUE SE QUEDARON VACIOS, que son la mitad mayor.  Un
-         * trozo entregado a una clase de tamano no vuelve nunca por su cuenta,
-         * asi que una fase que llena 400 MiB de un tamano y lo suelta deja esos
-         * trozos siendo de una clase que la fase siguiente puede no pedir.
-         * Medido aqui mismo: 386 MiB en trozos con todos sus bloques muertos.
-         *
-         * Se pide, no pasa sola: solo aqui se sabe que una fase ha terminado
-         * con su conjunto de trabajo.  Ver `host_chunk_reclaim`. */
-        (void)util::host_chunk_reclaim();
-        /* Y LAS PAGINAS AL SISTEMA.  Las tres de arriba hacen reutilizable la
-         * memoria dentro del asignador; esta es la unica que hace que baje lo
-         * que ve el sistema operativo, y por eso va la ultima: suelta lo que
-         * las otras acaban de dejar libre. */
-        (void)util::host_span_release();
-        /* TEMPORAL: ponerle precio al barrido de trozos antes de construirlo.
-         * Solo mide -- cuenta los trozos que se podrian devolver y cuanto tarda
-         * en contarlos --, no devuelve nada.  Con `VESTA_ALLOC_SCAN=1`. */
-        if (util::flag_on(util::FlagId::HostAllocScan)) {
-            uint64_t bloques = 0, trozos = 0;
-            const auto t0 = std::chrono::steady_clock::now();
-            const size_t bytes =
-                util::host_chunk_scan(util::kReclaimFromClass, &bloques,
-                                      &trozos);
-            const auto us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - t0).count();
-            std::fprintf(stderr,
-                         "[scan] %-18s %8llu bloques  %6llu trozos  %6.1f MiB"
-                         "  %7lld us\n",
-                         siguiente != nullptr ? siguiente : "(fin)",
-                         (unsigned long long)bloques,
-                         (unsigned long long)trozos,
-                         double(bytes) / (1024.0 * 1024.0), (long long)us);
-        }
-        if (siguiente != nullptr) util::san_mark(siguiente);
+         * de que empiece la siguiente.  Ya estaba puesto el corchete para
+         * cronometrar, asi que la frontera no cuesta ni una linea de mas: el
+         * QUE devuelve y en que orden, en `release_between_phases`. */
+        util::release_between_phases(siguiente);
     };
     util::san_mark("vx.phase.resolve");
 
@@ -4176,13 +4137,7 @@ CompileResult compile_vx_project(
              * AST y su comprobador de tipos acaban de irse, y son megabytes de
              * un tamano que el modulo siguiente no tiene por que volver a
              * pedir.  Una vez por modulo no es un bucle caliente. */
-            (void)util::host_span_trim();
-            (void)util::host_chunk_reclaim();
-        /* Y LAS PAGINAS AL SISTEMA.  Las tres de arriba hacen reutilizable la
-         * memoria dentro del asignador; esta es la unica que hace que baje lo
-         * que ve el sistema operativo, y por eso va la ultima: suelta lo que
-         * las otras acaban de dejar libre. */
-        (void)util::host_span_release();
+            util::release_between_phases();
         }
     } else {
         // Path paralelo: agrupar modulos por nivel topologico.
@@ -4280,13 +4235,7 @@ CompileResult compile_vx_project(
                  * del lote trabajando, y es lo que el propio asignador
                  * documenta como uso de esta llamada -- entre fases, nunca en
                  * un bucle caliente. */
-                (void)util::host_span_trim();
-                (void)util::host_chunk_reclaim();
-        /* Y LAS PAGINAS AL SISTEMA.  Las tres de arriba hacen reutilizable la
-         * memoria dentro del asignador; esta es la unica que hace que baje lo
-         * que ve el sistema operativo, y por eso va la ultima: suelta lo que
-         * las otras acaban de dejar libre. */
-        (void)util::host_span_release();
+                util::release_between_phases();
                 /* El techo se aplica AQUI y no dentro del hilo: desalojar mira
                  * el estado de los OTROS modulos, y dentro del lote los hay
                  * compilandose.  Tras la barrera no queda nadie trabajando,
@@ -5509,7 +5458,11 @@ CompileResult compile_vx_project(
     // el modulo mergeado de todos los .vx del proyecto.
     res.ir_module_cache_bytes = ir::emit_ir_module_cache(merged);
 
-    cerrar_fase(res.tiempos.emitir_us, "vx.phase.link");
+    /* Lo que queda del frontend, que NO es enlazar: se llamaba asi porque era
+     * la ultima marca y se comia todo lo que viniera detras -- la cola de esta
+     * funcion Y el ensamblado entero --.  Ahora el ensamblado abre la suya en
+     * cuanto el frontend devuelve, y esta se queda con lo que de verdad cubre. */
+    cerrar_fase(res.tiempos.emitir_us, "vx.phase.finish");
 
     // AOT.2.d: detectar @AllocatorOverride / @PanicHandler en el modulo ROOT,
     // igual que hace compile_vx_source.  Sin esto, un .vx que declara el

@@ -21,6 +21,7 @@
  * .cpp.
  */
 #include "util/env_flags.h"
+#include "util/phase_memory.h" // la frontera entre ensamblar y enlazar
 #include "util/assembler_multiprocess.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "profiler/timer.h"
@@ -145,6 +146,13 @@ int run_worker_from_source(std::string code, const std::string &file_name,
     }
     vesta::scout() << "[Tiempo parser] " << t_parser.us() << " us "
                    << t_parser.ms() << " ms\n";
+    /* Y EL TEXTO SE SUELTA AQUI, que es donde deja de hacer falta.  Es el
+     * `.vel` entero -- de un proyecto de 144.000 lineas son cientos de MiB --
+     * y viaja por valor, asi que sin esto vive hasta que la funcion vuelve:
+     * todo el ensamblado y todo el enlazado con el al lado sin que nadie lo
+     * lea.  Vaciar no basta, hay que soltar la capacidad. */
+    code.clear();
+    code.shrink_to_fit();
 
     // Resolver imports con orden de busqueda:
     //   1. Directorio del archivo fuente (relativo al .vel que se compila)
@@ -187,6 +195,18 @@ int run_worker_from_source(std::string code, const std::string &file_name,
     }
     vesta::scout() << "[Tiempo Assembler] " << t_asm.us() << " us "
                    << t_asm.ms() << " ms\n";
+    /* EL ARBOL DEL `.vel` YA NO SE MIRA.  Igual que el texto: vive en una
+     * variable local, asi que sin soltarlo dura hasta que la funcion vuelve --
+     * o sea, todo el enlazado --.  Con la fuente ya hecha esto esta vacio y no
+     * cuesta nada. */
+    program.clear();
+    program.shrink_to_fit();
+    /* Y LA FRONTERA: lo que el ensamblador acaba de soltar, de vuelta al
+     * reparto antes de que el enlazador empiece a pedir.  Son dos conjuntos de
+     * trabajo distintos -- nodos y cadenas por un lado, tablas de simbolos y
+     * bufferes de seccion por otro -- y sin frontera los trozos del primero se
+     * quedan siendo de una clase que el segundo no pide. */
+    util::release_between_phases("vx.phase.link");
 
     // LINKER
     Assembly::Bytecode::Linker::LinkerOptions opts;
@@ -217,6 +237,11 @@ int run_worker_from_source(std::string code, const std::string &file_name,
     if (prof_link)
         vesta::scout() << "[linker-prof-outer] add_assembly_unit     "
                        << t_link_addunit.us() << " us\n";
+    /* El enlazador se lo COPIA (`m.bytecode = bytecode`), asi que a partir de
+     * aqui hay dos.  Soltar el nuestro no es una optimizacion fina: es no
+     * tener el ensamblado entero por duplicado durante todo el enlazado. */
+    bytecode.clear();
+    bytecode.shrink_to_fit();
 
     // anadir objetos externos
     // linker.add_object_file("libmath.velo");

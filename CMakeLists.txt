@@ -2607,6 +2607,11 @@ set(VESTA_RT_SOURCES
         # proyecto: como se escribe un nombre de C++ para que lo lea una
         # persona, y de que modulo nuestro es cada fichero.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/util/alloc_report.cpp
+        # Y CUANDO se le devuelve al reparto lo que una fase dejo de usar.  Es
+        # politica de quien consume el asignador, no del asignador: el unico
+        # que sabe que una fase termino con su conjunto de trabajo es quien la
+        # cierra.
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/util/phase_memory.cpp
         # Que hace el PROCESO al caerse: contarlo entero antes de morir.  No es
         # el manejador del programa Vesta (ese se aparta cuando no hay proceso
         # corriendo, o sea justo mientras se compila).

@@ -11,6 +11,7 @@
  */
 
 #include "util/alloc_report.h"
+#include "util/phase_memory.h" // la frontera entre el frontend y el ensamblado
 #include "util/crash_report.h" // contar una caida del proceso antes de morir
 #include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
 #include "util/env_flags.h"
@@ -5569,6 +5570,25 @@ int main(int argc, char *argv[]) {
             }
         }
         if (vel_nodos != nullptr) std::string().swap(vel_texto);
+
+        /* LA FRONTERA ENTRE EL FRONTEND Y EL ENSAMBLADO, que es la que tiene
+         * el pico detras.
+         *
+         * El compilador cierra sus fases por dentro, pero la ultima se abria al
+         * acabar el emisor y no la cerraba nadie: cubria la cola del frontend Y
+         * todo el ensamblado.  Medido sobre 144.000 lineas: en ese tramo la
+         * region pasa de 602 a 821 MiB teniendo entre 280 y 490 MiB
+         * recuperables TODO el rato.  No crecia por hacer falta; crecia porque
+         * nadie los pedia.
+         *
+         * Y ES JUSTO AQUI.  El frontend ya devolvio -- sus arboles, su
+         * comprobador de tipos y sus hechos estan muertos, 335 MiB vivos pasan
+         * a 152 en un solo corte -- y el texto del `.vel` acaba de soltarse en
+         * la linea de arriba.  Lo que viene detras pide tamanos que no son los
+         * suyos, asi que sin esto sus trozos siguen siendo de una clase que ya
+         * no pide nadie y el ensamblador se lleva territorio nuevo teniendolos
+         * al lado. */
+        util::release_between_phases("vx.phase.assemble");
 
         int rc = asm_multi_process::run_worker_from_source(
             std::move(vel_texto), vel_path, out_prefix,
