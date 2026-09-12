@@ -19,6 +19,11 @@
  * de codigo muerto estan pendientes de implementacion (marcadas con TODO).
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("optimizer");
+
 #include "optimizer/optimizer.h"
 
 namespace Assembly::Bytecode::Optimizer {

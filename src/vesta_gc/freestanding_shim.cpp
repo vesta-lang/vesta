@@ -15,6 +15,13 @@
  */
 #if defined(VESTA_GC_FREESTANDING)
 
+// De que modulo es este directorio.  Ver `src/arena/TLB.cpp`: tambien aqui, que
+// es EL archivo que solo puede depender de libc -- la declaracion es debil y no
+// le anade ninguna dependencia.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("vesta_gc");
+
 #include <cstddef>
 #include <cstdlib>
 

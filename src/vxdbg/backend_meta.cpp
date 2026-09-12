@@ -10,6 +10,11 @@
  * @brief Consulta del codigo generado y de donde quedo colocado.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("vxdbg");
+
 #include "vxdbg/backend_meta.h"
 #include "vxdbg/source_meta.h"
 

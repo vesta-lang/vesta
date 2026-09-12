@@ -20,6 +20,11 @@
  * Las subclases (@c TLSConnection) sobreescriben @c read_data() y @c
  * write_data().
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("net");
+
 #include "net/connection.h"
 #include <iostream>
 

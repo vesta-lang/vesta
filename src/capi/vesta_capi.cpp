@@ -24,6 +24,11 @@
  * llamante (que podria no tener manejo de excepciones C++).
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("capi");
+
 #include "capi/vesta.h"
 
 // IMPORTANTE: parsear los tipos Vesta (PrimitiveKind::VOID/CONST/...) ANTES que

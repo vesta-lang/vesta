@@ -28,6 +28,11 @@
  * incompatibility latente que puede corromper memoria silenciosamente.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("vesta_rt");
+
 #include "vesta_rt/abi.h"
 
 #include "arena/VirtualMemory.h"

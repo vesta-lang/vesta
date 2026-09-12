@@ -18,6 +18,11 @@
  * .velb in-memory que contenga los `__macro_*` lowered).
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("runtime");
+
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "util/env_flags.h"
 #include "vx/comptime/comptime_vm.h"

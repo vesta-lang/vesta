@@ -24,6 +24,11 @@
  * descripcion y handler. No se necesita modificar el bucle principal de @c
  * VestaViewManager::run().
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("cli");
+
 #include "cli/cli.h"
 #include <algorithm> // UCRT64: no transitivo
 #include "cli/vsh.h"

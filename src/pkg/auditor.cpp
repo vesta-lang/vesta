@@ -2,6 +2,11 @@
  * @file auditor.cpp
  * @brief Implementacion de la auditoria comparativa del lockfile.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("pkg");
+
 #include "pkg/auditor.h"
 #include "pkg/ui.h"
 

@@ -20,6 +20,11 @@
  * del mapa @c annotation_handlers.  Tambien implementa @c print_context() y
  * @c print_context_with_bytes() para depuracion del contexto del ensamblador.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("emmit");
+
 #include "emmit/annotations.h"
 
 #include "cli/sync_io.h"

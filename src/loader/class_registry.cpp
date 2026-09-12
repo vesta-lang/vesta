@@ -15,6 +15,11 @@
  * @brief Implementacion del registro global de clases con lookup hash y AOP.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("loader");
+
 #include "loader/class_registry.h"
 
 #include <algorithm>

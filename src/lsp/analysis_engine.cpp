@@ -22,6 +22,11 @@
  * que el frontend reporta errores via diagnosticos y no aborta.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("lsp");
+
 #include "util/fnv.h" // la semilla y el primo, en UN sitio
 #include "lsp/analysis_engine.h"
 

@@ -10,6 +10,11 @@
  * @brief Implementacion del cargador de snippets de @c stdlib/port/c.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("port");
+
 #include "port/snippet_loader.h"
 
 #include "util/fs_utils.h" // fs::get_executable_path

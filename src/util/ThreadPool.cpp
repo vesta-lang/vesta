@@ -18,6 +18,11 @@
  * de la clase @c ThreadPool.  La notificacion de tareas usa futex en Linux
  * y WaitOnAddress/WakeByAddressAll en Windows.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("util");
+
 #include "util/ThreadPool.h"
 #include <algorithm> // UCRT64: no transitivo
 

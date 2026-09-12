@@ -22,6 +22,11 @@
  * BLOB en SQLite.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("debug");
+
 #include "debug/auth.h"
 
 #include <sqlite3.h>

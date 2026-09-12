@@ -10,6 +10,11 @@
  * @brief Implementacion del ensamblado diferido.  Ver jit/asm_deferred.h.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("jit");
+
 #include "util/env_flags.h"
 #include "jit/asm_deferred.h"
 

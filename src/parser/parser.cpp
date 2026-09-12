@@ -19,6 +19,11 @@
  * metodos de produccion.  Tambien implementa @c is_valid_number() y @c
  * parse_number().
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("parser");
+
 #include "parser/parser.h"
 #include "emmit/mnemonic.h" // consulta por indice, no por hash de cadena
 

@@ -19,6 +19,11 @@
  * y la resolucion de simbolos y aplicacion de patches en el bytecode
  * (resolve_native_symbol, resolve_all).
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("ffi");
+
 #include "ffi/native_ffi.h"
 #include "ffi/virtual_lib_registry.h" //  MC.20: lookup_virtual_fn
 

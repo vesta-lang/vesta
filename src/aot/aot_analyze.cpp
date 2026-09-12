@@ -30,6 +30,11 @@
  *   mini-runtime, BARE las rechaza hasta que AOT.2 provea la re-bajada raw.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("aot");
+
 #include "aot/aot_analyze.h"
 
 #include <sstream>

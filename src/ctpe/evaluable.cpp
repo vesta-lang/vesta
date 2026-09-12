@@ -16,6 +16,11 @@
  * programa.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("ctpe");
+
 #include "ctpe/evaluable.h"
 
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType

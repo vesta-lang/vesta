@@ -17,6 +17,11 @@
  * Adler-32 se computa de forma directa sin dependencias externas.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("distrib");
+
 #include "distrib/dirty_tracker.h"
 
 #include <cstring>

@@ -17,6 +17,13 @@
  * ciclos de recoleccion mayor/menor, write-barrier y las fases del algoritmo
  * tri-color mark-and-sweep (blanco/gris/negro).
  */
+// De que modulo es este directorio.  Ver `src/arena/TLB.cpp`: se declara aunque
+// este fichero entre en `libvesta_gc.a`, porque la declaracion es DEBIL y no
+// ata el archivo a nada.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("gc");
+
 #include "gc/gc_heap.h"
 
 #include "jit/jit_registry.h"

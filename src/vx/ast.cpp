@@ -24,6 +24,14 @@
  * facilitar inlining cuando el llamador y el callee comparten TU.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.  Aqui hay
+// ademas la declaracion POR OBJETIVO -- `vesta_alloc_module(vx_lib "vx")` en el
+// CMakeLists --, y las dos dicen lo mismo a proposito: la del build desaparece
+// si alguien compila sin CMake, y esta viaja con el codigo.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("vx");
+
 #include "vx/ast.h"
 
 namespace vx::ast {

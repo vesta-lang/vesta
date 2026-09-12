@@ -10,6 +10,11 @@
  * @brief Implementacion del resolvedor de punteros a funcion (ver
  * fn_targets.h).
  */
+// De que modulo es este directorio.  Ver `src/analysis/asa/aggregate_facts.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("analysis");
+
 #include "analysis/memory/fn_targets.h"
 
 #include "analysis/memory/points_to.h"

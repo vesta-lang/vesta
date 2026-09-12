@@ -25,6 +25,15 @@
 #include "util/os/thread_slot.h"  // los vectores de trabajo, uno por hilo
 
 #include "util/reloj.h"
+// DE QUE MODULO ES ESTE DIRECTORIO, dicho por el codigo y no deducido de su
+// ruta.  Una linea en un fichero cualquiera del modulo: `__FILE__` dice donde
+// esta, asi que mover el arbol no la rompe y no hay ninguna ruta escrita.
+//
+// El mapa del enlazador contesta antes y con mas detalle, asi que en una
+// construccion normal esto no cambia el informe.  Esta para cuando no hay mapa
+// -- y, sobre todo, para que la via exista en el arbol y no solo en la
+// documentacion de la libreria.
+#include "util/report/alloc_csv_c.h"
 
 #include "loader/oop_types.h" // ADVICE_*: los tipos de la cadena de aspectos
 
@@ -70,6 +79,11 @@
 #include <functional>
 #include <sstream>
 #include <algorithm>
+
+VESTA_ALLOC_MODULE_HERE("ir");
+// El FICHERO no se declara aqui: lo hace el build en TODAS las unidades a la
+// vez -- ver `alloc_declare_tu.h` --, porque una linea por fichero se olvida en
+// alguno y ese acaba atribuido al marcador del vecino.
 
 namespace ir {
 

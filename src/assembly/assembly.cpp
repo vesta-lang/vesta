@@ -24,6 +24,11 @@
  *  - @c disassemble_file() : lee un binario, lo desensambla con Capstone y
  * muestra o guarda el texto desmontado.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("assembly");
+
 #include "assembly/assembly.h"
 #include <algorithm> // UCRT64: no transitivo
 #include <sstream>  // STL de MSVC: no transitivo

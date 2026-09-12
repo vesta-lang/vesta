@@ -23,6 +23,19 @@
  * se publica para que un segundo hilo pueda leer sin candados -- esta en la
  * cabecera de la clase.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+//
+// SE DECLARA AUNQUE ESTE FICHERO NO USE EL ASIGNADOR, y aunque entre en
+// `libvesta_gc.a`, que solo puede depender de libc: la declaracion es
+// documentacion sobre el codigo, no una dependencia.  Las tres funciones de
+// declarar son DEBILES, asi que donde la libreria no esta el simbolo vale cero
+// y no se llama -- `nm -u` lo imprime como `w` y el guardian del GC, que mira
+// los `U`, ni lo ve.  Lo contrario seria decidir hoy que este fichero nunca
+// reservara, que no es de hoy.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("arena");
+
 #include "arena/TLB.h"
 
 #include "arena/arena.h"

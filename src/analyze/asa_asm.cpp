@@ -28,6 +28,13 @@
  * vivir en su capa y aun asi aparecer en el almacen y en el volcado.
  */
 
+// DE QUE MODULO ES ESTE DIRECTORIO, dicho por el codigo.  Ver la nota completa
+// en `src/ir/ir_optimizer.cpp`: `__FILE__` dice donde esta esto, asi que no hay
+// ninguna ruta escrita y mover el arbol no lo rompe.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("analyze");
+
 #include "analyze/asm_report.h"
 
 #include "vx/asm/asm_lift_registro.h"

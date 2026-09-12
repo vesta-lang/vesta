@@ -18,4 +18,9 @@
  * Los opcodes se definen en bytecode.h como enumerado @c bytecode::Opcodes.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("bytecode");
+
 #include "bytecode/bytecode.h"

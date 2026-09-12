@@ -15,6 +15,16 @@
  * concluye nada; anota lo que ve, por donde se le escapa el valor, y que no ha
  * podido seguir.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+//
+// `analysis` no tiene ningun .cpp colgando de el: todo esta en subcarpetas, y
+// lo que se declara es el DIRECTORIO del fichero donde se escribe esto.  Asi
+// que hay una linea igual en cada subcarpeta, todas diciendo "analysis" -- que
+// sigue sin ser una ruta escrita a mano, que es lo que importa.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("analysis");
+
 #include "util/env_flags.h"
 #include "analysis/asa/aggregate_facts.h"
 

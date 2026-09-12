@@ -21,6 +21,11 @@
  * y
  * @c token_type_to_string().
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("lexer");
+
 #include <utility>
 
 #include "lexer/lexer.h"

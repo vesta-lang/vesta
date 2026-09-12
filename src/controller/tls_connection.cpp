@@ -18,6 +18,11 @@
  * usar @c SSL_read() / @c SSL_write() en lugar de @c recv() / @c send().
  * El handshake TLS se realiza antes de crear el objeto @c TLSConnection.
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("controller");
+
 #include "controller/tls_connection.h"
 #include <iostream>
 

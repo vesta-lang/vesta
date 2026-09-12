@@ -21,6 +21,11 @@
  * y construccion del ejecutable final VELB (@c build_executable, @c
  * write_to_file).
  */
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("linker");
+
 #include "util/env_flags.h"
 #include "linker/velb_linker_bytecode.h"
 #include <algorithm> // UCRT64: no transitivo

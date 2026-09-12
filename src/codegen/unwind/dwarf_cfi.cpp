@@ -10,6 +10,13 @@
  * @brief Implementacion del codificador de CFI (ver la cabecera).
  */
 
+// De que modulo es este directorio.  Como en `analysis`, el codigo de `codegen`
+// cuelga de una subcarpeta, asi que la linea va aqui y dice el modulo de
+// arriba.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("codegen");
+
 #include "codegen/unwind/dwarf_cfi.h"
 
 #include <cstddef>

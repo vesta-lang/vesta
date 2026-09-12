@@ -23,6 +23,11 @@
  *       para que consumidores sin cxxopts (el LSP) tambien puedan invocarlo.
  */
 
+// De que modulo es este directorio.  Ver `src/ir/ir_optimizer.cpp`.
+#include "util/report/alloc_csv_c.h"
+
+VESTA_ALLOC_MODULE_HERE("toolchain");
+
 #include "util/env_flags.h"
 #include "toolchain/aot_build.h"
 
