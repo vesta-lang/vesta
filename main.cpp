@@ -5587,7 +5587,22 @@ int main(int argc, char *argv[]) {
          * la linea de arriba.  Lo que viene detras pide tamanos que no son los
          * suyos, asi que sin esto sus trozos siguen siendo de una clase que ya
          * no pide nadie y el ensamblador se lleva territorio nuevo teniendolos
-         * al lado. */
+         * al lado.
+         *
+         * Y ANTES, LO QUE YA NO VA A LEER NADIE: los hechos del ASA.  Salen de
+         * la compilacion a proposito -- que el conocimiento sobreviva a quien
+         * lo produjo es la diferencia entre una capa de conocimiento y un
+         * analisis de usar y tirar, y por eso el linter y el editor los
+         * consultan sin volver a calcularlos --, pero POR AQUI no los pide
+         * nadie: `--asa` vuelve mucho antes, y de esta rama en adelante solo se
+         * mira `asa_summaries`, que es el resumen por dominio y no el almacen.
+         * Medido en el corte del pico: 60 MiB sujetos mientras se ensambla y se
+         * enlaza para que los lea nadie.
+         *
+         * Lo decide el CONSUMIDOR y no el compilador, igual que la frontera:
+         * quien sabe si alguien va a preguntar es quien llama, no quien
+         * produce. */
+        cr.facts = analysis::asa::FactStore{};
         util::release_between_phases("vx.phase.assemble");
 
         int rc = asm_multi_process::run_worker_from_source(
