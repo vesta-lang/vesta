@@ -75,6 +75,27 @@ class NodeStream {
      * @return true si el flujo es plano.  Por defecto no.
      */
     virtual bool labels_are_flat() const { return false; }
+
+    /**
+     * @brief He terminado de leerte: suelta lo que te respalda.
+     *
+     * POR QUE HACE FALTA DECIRLO.  Un flujo es una VISTA sobre algo que posee
+     * otro -- el emisor guarda lo emitido y esto lo recorre --, asi que el
+     * unico que sabe que ya no se va a leer es QUIEN LEE, y el unico que puede
+     * soltarlo es la vista, que es la que conoce su fuente.  Sin esta linea,
+     * ese almacen vive hasta que muere su dueno: medido en una compilacion de
+     * 144.000 lineas, 85,6 MiB enteros durante todo el enlazado, sin que nadie
+     * volviera a mirarlos.
+     *
+     * NO ES UN DESTRUCTOR NI UN `rewind`.  Despues de esto el flujo esta
+     * AGOTADO: `next()` no devuelve nada y `rewind()` no lo resucita.  Se llama
+     * cuando el consumidor ha dado todas las pasadas que necesitaba, nunca
+     * entre una y otra.
+     *
+     * Por defecto no hace nada, que es lo correcto para una fuente que se
+     * posee a si misma o que no ocupa nada.
+     */
+    virtual void release_source() {}
 };
 
 } // namespace emmit

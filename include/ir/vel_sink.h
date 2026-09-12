@@ -351,6 +351,40 @@ class VelSink {
     /// para un programa grande son megabytes.
     std::string take_text() { return text(); }
 
+    /**
+     * @brief Suelta lo emitido.  Despues de esto el sumidero esta VACIO.
+     *
+     * Lo pide quien haya terminado de leerlo -- hoy, el ensamblador cuando ya
+     * ha dado todas sus pasadas --, y lo pide a traves de su vista: ver
+     * `emmit::NodeStream::release_source`.  El sumidero no puede decidirlo solo
+     * porque no sabe cuantas veces lo van a recorrer.
+     *
+     * SON SIETE VECTORES Y SE INTERCAMBIAN, no se vacian: `clear` deja la
+     * capacidad puesta, que es justo lo que se viene a devolver.  Para un
+     * programa de 144.000 lineas son 85,6 MiB que, sin esto, siguen ahi durante
+     * todo el enlazado sin que nadie vuelva a mirarlos.
+     *
+     * No es lo mismo que destruirlo: el sumidero sigue siendo valido y se le
+     * puede volver a emitir encima.  Lo que no se puede es leer lo de antes,
+     * porque ya no esta.
+     */
+    void release() {
+        std::vector<Ref>().swap(orden_);
+        std::vector<std::string>().swap(crudos_);
+        std::vector<emmit::Instr>().swap(instrs_);
+        std::vector<emmit::Operand>().swap(ops_pool_);
+        std::vector<std::string>().swap(etiquetas_);
+        std::vector<Marca>().swap(marcas_);
+        std::vector<Datos>().swap(datos_);
+        /* Y el trozo a medio escribir, que es una corriente y no un vector:
+         * dejarlo seria conservar justo lo ultimo que se emitio. */
+        crudo_.str(std::string());
+        crudo_.clear();
+        /* Y la marca de que habia uno abierto: sin esto, el sumidero queda
+         * diciendo que tiene un trozo a medias que ya no existe. */
+        crudo_abierto_ = false;
+    }
+
     /// Si no se ha emitido nada.  No es `const` porque preguntar la posicion de
     /// escritura de un stream no lo es -- y falsear la constancia con un cast
     /// seria mentir sobre lo que hace.

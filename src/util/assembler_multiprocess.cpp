@@ -201,6 +201,13 @@ int run_worker_from_source(std::string code, const std::string &file_name,
      * cuesta nada. */
     program.clear();
     program.shrink_to_fit();
+    /* Y LO QUE HAY DETRAS DEL FLUJO DE NODOS, que es lo mismo con otro dueno:
+     * el ensamblador ya ha dado TODAS sus pasadas -- por eso va aqui y no entre
+     * una y otra --, y lo que estaba leyendo son 85,6 MiB del emisor que, sin
+     * esta linea, siguen vivos durante todo el enlazado sin que nadie vuelva a
+     * mirarlos.  El flujo no es nuestro, asi que no se destruye: se le dice que
+     * hemos terminado y el suelta lo suyo.  Ver `emmit::NodeStream`. */
+    if (nodes != nullptr) nodes->release_source();
     /* Y LA FRONTERA: lo que el ensamblador acaba de soltar, de vuelta al
      * reparto antes de que el enlazador empiece a pedir.  Son dos conjuntos de
      * trabajo distintos -- nodos y cadenas por un lado, tablas de simbolos y

@@ -67,14 +67,30 @@ class VelNodeStream final : public emmit::NodeStream {
     /**
      * @param sink El emisor con los items ya escritos.  Tiene que seguir vivo
      *             mientras esta fuente se use.
+     *
+     * NO ES `const`, y antes lo era.  Leer no modifica nada -- y todo el
+     * recorrido de ahi dentro sigue siendo por referencia constante --, pero
+     * esta vista ademas puede SOLTAR lo que lee cuando se lo piden, y eso si lo
+     * modifica.  Declararlo es lo honesto: quitar la constancia con un cast
+     * seria mentir sobre lo que hace.  Ver @c release_source.
      */
-    explicit VelNodeStream(const VelSink &sink);
+    explicit VelNodeStream(VelSink &sink);
     ~VelNodeStream() override;
 
     void rewind() override;
     const vm::ASTNode *next() override;
     /// Las instrucciones llegan detras de su etiqueta, no dentro.
     bool labels_are_flat() const override { return true; }
+
+    /**
+     * @brief Suelta los items del emisor: 85,6 MiB que si no viven hasta el
+     *        final del enlazado sin que nadie los mire.
+     *
+     * Lo pide el ensamblador cuando ya ha dado todas sus pasadas.  Despues de
+     * esto el flujo esta AGOTADO -- ver @c emmit::NodeStream::release_source --,
+     * asi que no se llama entre pasada y pasada.
+     */
+    void release_source() override;
 
     /// Si se pudo cubrir TODO lo emitido.  Con falso, hay que usar el texto.
     bool ok() const { return ok_; }

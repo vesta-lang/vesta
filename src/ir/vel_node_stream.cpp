@@ -144,7 +144,10 @@ std::unique_ptr<vm::ASTNode> make_memory(const ir::Mem &m) {
  * modelo de items: quien la incluya no arrastra ninguno de los dos.
  */
 struct VelNodeStream::Impl {
-    const VelSink &sink;
+    /* NO es `const` porque esta vista puede SOLTAR lo que lee cuando el
+     * consumidor termina; todo el recorrido de aqui abajo sigue leyendolo por
+     * referencia constante.  Ver `release_source`. */
+    VelSink &sink;
     /// Los nodos de la cabecera (`@Format`, `@Section`...), parseados UNA vez:
     /// son quince lineas y no tienen item del que fabricarlos.
     std::vector<std::unique_ptr<vm::ASTNode>> header;
@@ -159,10 +162,10 @@ struct VelNodeStream::Impl {
     int pending_column = 0;
     std::string pending_stackmap;
 
-    explicit Impl(const VelSink &s) : sink(s) {}
+    explicit Impl(VelSink &s) : sink(s) {}
 };
 
-VelNodeStream::VelNodeStream(const VelSink &sink)
+VelNodeStream::VelNodeStream(VelSink &sink)
     : impl_(new Impl(sink)) {
     /* La cabecera: los crudos que van ANTES del primer item tipado.  Se juntan
      * y se parsean de una vez.  Lo que venga despues tiene que ser comentario
@@ -216,6 +219,21 @@ VelNodeStream::VelNodeStream(const VelSink &sink)
 }
 
 VelNodeStream::~VelNodeStream() = default;
+
+void VelNodeStream::release_source() {
+    /* Lo del emisor, que es lo que pesa.  Y AL DEJAR EL RECORRIDO AL FINAL:
+     * sin eso, un `rewind()` posterior empezaria a andar sobre unos vectores
+     * que ya no tienen nada y entregaria la cabecera como si fuera el programa.
+     * El contrato dice que despues de esto el flujo esta agotado, y esto es lo
+     * que lo hace cierto en vez de dejarlo escrito. */
+    impl_->sink.release();
+    /* La cabecera tambien: son quince lineas, pero sus nodos ya no van a salir
+     * y quedarse con ellos es quedarse con un arbol que no sirve. */
+    std::vector<std::unique_ptr<vm::ASTNode>>().swap(impl_->header);
+    impl_->current.reset();
+    impl_->at_header = 0;
+    impl_->at_item = 0;
+}
 
 void VelNodeStream::rewind() {
     impl_->at_header = 0;
