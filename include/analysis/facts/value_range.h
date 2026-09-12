@@ -712,6 +712,34 @@ compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
                    const LoopIvBounds *ivb = nullptr,
                    LoopsOracle loops = {});
 
+/**
+ * @brief Suelta lo que la memoizacion de rangos tiene guardado.
+ *
+ * POR QUE HACE FALTA PEDIRLO.  La memoizacion es un `static` de funcion, o sea
+ * que vive hasta que muere el PROCESO.  Eso es lo correcto mientras se optimiza
+ * -- los rangos se piden muchas veces por funcion y calcularlos es el 41% del
+ * tiempo de compilar --, pero en cuanto el `.vel` esta emitido nadie vuelve a
+ * preguntar y siguen ahi: medido en una compilacion de 144.000 lineas, 52 MiB
+ * vivos desde el optimizador hasta el final, enteros durante el ensamblado y el
+ * enlazado, que es justo donde esta el pico.
+ *
+ * NO ES UNA INVALIDACION.  No dice que lo guardado sea falso -- lo sigue siendo
+ * --, dice que ya no se va a usar.  Quien llame despues no obtiene un resultado
+ * distinto: obtiene el mismo, calculado otra vez.  Por eso lo pide el consumidor
+ * y no lo decide el analisis: el unico que sabe que no va a volver a preguntar
+ * es quien dirige la compilacion.
+ *
+ * @return
+ * \~english how many memoized analyses it let go.  A COUNT and not bytes,
+ *          because bytes would have to be estimated -- each result carries
+ *          vectors of its own -- and a figure that is estimated reads as
+ *          measured.
+ * \~spanish cuantos analisis memoizados solto.  Una CUENTA y no bytes, porque
+ *          los bytes habria que estimarlos -- cada resultado lleva vectores
+ *          propios -- y una cifra estimada se lee como medida.  \~
+ */
+size_t release_range_memo() noexcept;
+
 struct RangeFacts {
     std::vector<ValueRange> r;
     /**

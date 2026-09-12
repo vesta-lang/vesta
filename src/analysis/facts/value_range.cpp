@@ -20,6 +20,7 @@
  * Esa division es la que permite creerse el resultado: si el dominio no miente,
  * lo unico que puede fallar aqui es el recorrido, y el recorrido es pequeno.
  */
+#include "util/crono_tramo.h" // ponerle precio a soltar la memoizacion
 #include "util/env_flags.h"
 #include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
 #include "analysis/facts/value_range.h"
@@ -2143,6 +2144,45 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
 // ===========================================================================
 
 /**
+ * @brief Lo memoizado, y por que ya no vive DENTRO de `rangos_de`.
+ *
+ * Estaba ahi como `static` de funcion, que es lo natural para una memoizacion:
+ * nace en la primera llamada y no la ve nadie mas.  El problema es lo otro que
+ * significa `static`: vive hasta que muere el PROCESO.  Mientras se optimiza
+ * eso es lo correcto -- los rangos se piden muchisimas veces por funcion --,
+ * pero en cuanto el `.vel` esta emitido nadie vuelve a preguntar y siguen ahi:
+ * 52 MiB medidos, enteros durante el ensamblado y el enlazado, que es donde
+ * esta el pico.
+ *
+ * Aqui fuera es lo mismo con un dueno al que se le puede pedir que suelte.  Ver
+ * @c release_range_memo, que es lo unico que cambia respecto a antes.
+ */
+struct EntradaCache {
+    DependenciasRango deps;
+    std::shared_ptr<const RangeFacts> hechos;
+};
+static std::mutex mx_cache;
+static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
+
+size_t release_range_memo() noexcept {
+    /* CRONOMETRADO, como el gestor de analisis y por lo mismo: soltar cientos
+     * de miles de resultados -- cada uno con sus vectores -- no es gratis, y
+     * hasta que se pide nadie lo pagaba porque el proceso moria con ellos
+     * dentro y las devolvia el sistema de una vez.  Un coste que aparece al
+     * cambiar quien libera tiene que poder verse. */
+    util::CronoTramo t_("asa:release_range_memo",
+                        util::flag_on(util::FlagId::Times));
+    std::lock_guard<std::mutex> g(mx_cache);
+    size_t sueltos = 0;
+    for (const auto &cajon : cache) sueltos += cajon.second.size();
+    /* VACIAR NO BASTA: un `unordered_map` vaciado conserva sus cubos, que en
+     * una compilacion grande son decenas de miles.  Intercambiar con uno recien
+     * hecho es lo que devuelve tambien esa tabla. */
+    std::unordered_map<uint64_t, std::vector<EntradaCache>>().swap(cache);
+    return sueltos;
+}
+
+/**
  * @brief Los rangos de una funcion, calculados o reusados, SIN copiarlos.
  *
  * Devolver por valor era el problema: `RangeFacts` lleva dentro el estado de
@@ -2156,13 +2196,6 @@ static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
 static std::shared_ptr<const RangeFacts> rangos_de(
     const ir::IrFunction &fn, const IrFacts &facts, const RangeOptions &op,
     const RangeSummaries *sum, const LoopIvBounds *ivb, LoopsOracle loops) {
-    struct EntradaCache {
-        DependenciasRango deps;
-        std::shared_ptr<const RangeFacts> hechos;
-    };
-    static std::mutex mx_cache;
-    static std::unordered_map<uint64_t, std::vector<EntradaCache>> cache;
-
     if (g_no_range_cache)
         return std::make_shared<const RangeFacts>(
             calcular_rangos(fn, facts, op, sum, ivb, loops));

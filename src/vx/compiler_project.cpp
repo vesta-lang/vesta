@@ -98,6 +98,7 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/source_hash.h" // la identidad de un fuente son sus tokens
 #include "analysis/asa/fact_file.h"
 #include "analysis/asa/producers.h" // produce() + FactStore::find
+#include "analysis/facts/value_range.h" // soltar la memoizacion de rangos
 #include "util/fs_utils.h"          // fs::get_executable_path()
 
 #include <atomic>
@@ -5195,6 +5196,16 @@ CompileResult compile_vx_project(
         ir::ir_print(merged, ir_oss);
         res.ir_text = ir_oss.str();
     }
+
+    /* LA MEMOIZACION DE RANGOS SE SUELTA AQUI, y el sitio es el punto.
+     *
+     * Quien la usa es el optimizador, y acaba de terminar; emitir no pregunta
+     * rangos.  Soltarla mas tarde -- probado en la frontera del ensamblado --
+     * no baja el pico: para entonces las paginas que se querian ahorrar ya
+     * estan tocadas, y devolver memoria despues de eso no las devuelve.  Un
+     * pico es paginas TOCADAS, asi que lo que cuenta es soltar ANTES de que
+     * alguien vaya a pedir, no antes de acabar. */
+    (void)analysis::release_range_memo();
 
     cerrar_fase(res.tiempos.optimizar_us, "vx.phase.emit");
 
