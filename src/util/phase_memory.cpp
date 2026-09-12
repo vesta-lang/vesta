@@ -33,6 +33,13 @@ void release_between_phases(const char *next_mark) {
      * eso.  El porque de cada una y el porque del orden, en la cabecera. */
     (void)host_span_trim();
     (void)host_chunk_reclaim();
+    /* Y LAS CACHES QUE YA NO TIENEN DUENO, que aqui son la mayoria: el
+     * compilador reparte los modulos entre un lote de hilos y esos hilos
+     * MUEREN, dejando cada uno su cache con sus trozos.  El barrido de arriba
+     * solo mira la del hilo que cruza la frontera -- el principal --, asi que
+     * sin esto lo de los trabajadores no lo recoge nadie.  Medido: 185 MiB
+     * quietos durante todo el pico, y la mitad de eso con un solo hilo. */
+    (void)host_chunk_reclaim_idle();
     (void)host_span_release();
 
     /* PONERLE PRECIO AL BARRIDO, sin cambiar nada: cuenta los trozos que se
