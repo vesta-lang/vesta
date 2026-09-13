@@ -27,19 +27,26 @@
 
 namespace util {
 
-void release_between_phases(const char *next_mark) {
+/**
+ * @brief El cuerpo de la frontera, con la clase por la que empieza a barrer.
+ *
+ * Las dos entradas publicas se diferencian SOLO en ese numero, asi que va aqui
+ * una vez: dos copias de esto se separarian en cuanto alguien anadiera un paso
+ * a una, y la que se quedara corta no fallaria -- devolveria menos, callando.
+ */
+static void release_impl(const char *next_mark, uint32_t from_class) {
     /* Es EL sitio: el asignador documenta estas llamadas como "de entre fases
      * y no algo para un bucle caliente", y una frontera de fase es exactamente
      * eso.  El porque de cada una y el porque del orden, en la cabecera. */
     (void)host_span_trim();
-    (void)host_chunk_reclaim();
+    (void)host_chunk_reclaim(from_class);
     /* Y LAS CACHES QUE YA NO TIENEN DUENO, que aqui son la mayoria: el
      * compilador reparte los modulos entre un lote de hilos y esos hilos
      * MUEREN, dejando cada uno su cache con sus trozos.  El barrido de arriba
      * solo mira la del hilo que cruza la frontera -- el principal --, asi que
      * sin esto lo de los trabajadores no lo recoge nadie.  Medido: 185 MiB
      * quietos durante todo el pico, y la mitad de eso con un solo hilo. */
-    (void)host_chunk_reclaim_idle();
+    (void)host_chunk_reclaim_idle(from_class);
     (void)host_span_release();
 
     /* PONERLE PRECIO AL BARRIDO, sin cambiar nada: cuenta los trozos que se
@@ -62,6 +69,35 @@ void release_between_phases(const char *next_mark) {
     }
 
     if (next_mark != nullptr) san_mark(next_mark);
+}
+
+/**
+ * @brief Por que clase empieza a barrer ESTE consumidor.
+ *
+ * El asignador trae 8 por defecto y dice que quien tenga otro perfil de
+ * tamanos pase el suyo.  El del compilador es mas pequeno -- 114 bytes de
+ * media, la mayoria por debajo de esa clase --, asi que 8 se deja fuera casi
+ * todo lo suyo.
+ *
+ * MEDIDO SOBRE 144.000 LINEAS, 12 corridas intercaladas por punto:
+ *
+ *     desde clase  8   621,7 MiB   3.057 ms      (el defecto del asignador)
+ *     desde clase  4   595,2 MiB   3.232 ms      -26 MiB por +4,4%
+ *     desde clase  0   572,9 MiB   3.951 ms      -49 MiB por +29%
+ *
+ * El cuatro es donde gira la curva: el 55% de la memoria por el 15% del coste.
+ * El cero no compensa porque el barrido cuesta por BLOQUE y devuelve por TROZO,
+ * y en una clase de 16 bytes hay 4.096 bloques que tienen que estar TODOS
+ * libres para que el trozo valga algo.
+ *
+ * No es un numero que se pueda dejar puesto y olvidar: depende del perfil de
+ * tamanos de quien reserva.  Si el compilador cambia como reserva, esta tabla
+ * caduca y hay que rehacerla -- son tres builds.
+ */
+constexpr uint32_t kCompilerReclaimFrom = 4;
+
+void release_between_phases(const char *next_mark) {
+    release_impl(next_mark, kCompilerReclaimFrom);
 }
 
 } // namespace util

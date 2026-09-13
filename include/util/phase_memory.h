@@ -60,6 +60,21 @@ namespace util {
  */
 void release_between_phases(const char *next_mark = nullptr);
 
+/**
+ * @par Por que clase se barre, y por que no es la que trae el asignador
+ * El asignador empieza por la 8 y dice que quien tenga otro perfil de tamanos
+ * pase el suyo; el del compilador es mas pequeno.  El numero, la tabla de
+ * medidas y la advertencia de que CADUCA si cambia como reserva el compilador
+ * estan en @c kCompilerReclaimFrom, en el `.cpp`.
+ *
+ * @par Y por que no hay una variante "a fondo" para el sitio del pico
+ * Se probo barrer hasta la clase mas pequena SOLO en la frontera de antes de
+ * montar la imagen del ejecutable, que es donde la curva senala el salto mas
+ * grande.  No sirve: 625,7 MiB contra 621,7 sin ella, o sea nada, y +8% de
+ * tiempo.  Lo que baja el pico es barrer PRONTO -- antes de que las paginas se
+ * cojan --, no barrer fuerte al final.
+ */
+
 } // namespace util
 
 #endif // VESTA_UTIL_PHASE_MEMORY_H
