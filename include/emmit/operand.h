@@ -37,6 +37,26 @@
 #include <string>
 #include <utility>
 
+namespace emmit {
+/**
+ * @brief Interna el nombre de un operando y devuelve su puntero estable.
+ *
+ * Un operando con nombre -- etiqueta o referencia a simbolo -- guarda un
+ * PUNTERO aqui en vez de una cadena propia.  Ver `emmit/operand_name.cpp`
+ * para por que: de los millones de operandos que emite una compilacion solo
+ * decenas de miles llevan nombre, y guardar un `std::string` en todos costaba
+ * treinta y dos bytes por operando para dejarlos vacios.
+ *
+ * @param name El texto.  Vacio devuelve @ref empty_name.
+ * @return Puntero valido hasta el final del proceso; nunca nulo.
+ */
+const std::string *intern_operand_name(const std::string &name);
+
+/// El nombre vacio compartido, para un operando que no lleva ninguno.  Nunca
+/// nulo, asi que quien lo lee no tiene que comprobar.
+const std::string *empty_name();
+} // namespace emmit
+
 namespace ir {
 
 /**
@@ -257,7 +277,16 @@ struct Mem {
     Reg base;       ///< registro base.
     Reg index;      ///< registro indice; solo cuenta si @c hay_index.
     bool hay_index; ///< si el acceso lleva indice.
-    unsigned scale; ///< 1/2/4/8; solo cuenta con @c hay_index.
+    /**
+     * @brief La escala: 1, 2, 4 u 8.  Solo cuenta con @c hay_index.
+     *
+     * UN BYTE Y NO UN `unsigned`, que es lo que era.  Cuatro valores posibles
+     * no necesitan treinta y dos bits, y aqui el ancho no se paga una vez: un
+     * `Mem` va dentro de cada operando y cada instruccion lleva cuatro, asi que
+     * los tres bytes de relleno se multiplican por todas las instrucciones del
+     * programa.  Medido: el tipo pasa de 24 bytes a 16.
+     */
+    uint8_t scale;
     long long disp; ///< desplazamiento, con signo.
 
     constexpr explicit Mem(Reg b) noexcept
@@ -265,7 +294,8 @@ struct Mem {
     constexpr Mem(Reg b, long long off) noexcept
         : base(b), index(Reg::gp(0)), hay_index(false), scale(1), disp(off) {}
     constexpr Mem(Reg b, Reg idx, unsigned sc) noexcept
-        : base(b), index(idx), hay_index(true), scale(sc), disp(0) {}
+        : base(b), index(idx), hay_index(true),
+          scale(static_cast<uint8_t>(sc)), disp(0) {}
 };
 
 /**
