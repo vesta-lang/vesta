@@ -13275,8 +13275,12 @@ static bool schedule_impl(IrFunction &fn, const analysis::PointsTo *pt,
         /* Construir DAG de dependencias.  Nodos = indices [0..M) en el
          * rango movible.  Edges: pred[i] = lista de nodos que i depende.
          * succ[i] = lista de nodos que dependen de i. */
-        std::vector<std::vector<size_t>> preds(M);
-        std::vector<std::vector<size_t>> succs(M);
+        /* EN LINEA: una instruccion depende de una o dos, no de veinte.  El
+         * comprobador lo dice con numeros -- 264.001 reservas en cada una de
+         * las dos y ninguna paso de 16 bytes, o sea dos `size_t` --, asi que
+         * con dos dentro del objeto no queda ninguna. */
+        std::vector<util::SmallVector<size_t, 2>> preds(M);
+        std::vector<util::SmallVector<size_t, 2>> succs(M);
         std::vector<size_t> in_degree(M, 0);
 
         /* Map: def_vid -> index dentro de [0..M) que lo define. */

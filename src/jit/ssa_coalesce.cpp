@@ -18,6 +18,7 @@
  * predecesor).
  */
 
+#include "util/alloc/small_vector.h" // las listas por valor son de dos o tres
 #include "util/env_flags.h"
 #include "jit/ssa_coalesce.h"
 
@@ -314,7 +315,10 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
      * compilar 441.089 lineas -- y con `had_range` ya no hace falta el
      * original. */
     std::vector<LiveInterval> merged = std::move(iv);
-    std::vector<std::vector<uint32_t>> members(NV);
+    /* EN LINEA, y la capacidad sale de la MEDIDA, no del ojo: el comprobador
+     * dice que este sitio nunca paso de 4 bytes en 288.312 reservas, o sea un
+     * `uint32_t`.  Con dos dentro del propio objeto no queda ninguna. */
+    std::vector<util::SmallVector<uint32_t, 2>> members(NV);
     for (uint32_t v = 0; v < NV; ++v)
         members[v].push_back(v);
 
@@ -332,7 +336,8 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                 in.dst < NV)
                 is_phi_dst[in.dst] = 1;
 
-    std::vector<std::vector<uint32_t>> forbidden(NV);
+    /* Idem: 144.000 reservas y ninguna paso de 8 bytes -- dos valores. */
+    std::vector<util::SmallVector<uint32_t, 2>> forbidden(NV);
     for (uint32_t b = 0; b < NB; ++b) {
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
             if (!is_two_addr_ir(in.op, dst)) continue;
@@ -376,7 +381,9 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
      * instrucciones por valores; ahora es instrucciones por vivos, que es lo
      * que de verdad hay que mirar.  Las aristas que salen son exactamente las
      * mismas. */
-    std::vector<std::vector<uint32_t>> adj(NV);
+    /* Este es el unico de los cuatro que llega a 32 bytes -- ocho vecinos --,
+     * asi que ocho: 479.995 reservas entre sus dos sitios y ninguna mayor. */
+    std::vector<util::SmallVector<uint32_t, 8>> adj(NV);
     {
         std::vector<char> liveset(NV, 0);
         std::vector<uint32_t> vivos;        // los que estan vivos, sin repetir
@@ -549,7 +556,9 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
 
     /* Operandos del def (no-phi) de cada valor -- para la regla del diamante.
      */
-    std::vector<std::vector<ir::IrValueId>> def_operands(NV);
+    /* Los operandos que definen un valor: 288.001 reservas, maximo 8 bytes.
+     * Es el mismo dos-o-tres que llevo a `IrOperands` a ser un SmallVector. */
+    std::vector<util::SmallVector<ir::IrValueId, 2>> def_operands(NV);
     for (uint32_t b = 0; b < NB; ++b)
         for (const ir::IrInstr &in : fn.blocks[b].instrs) {
             if (in.op == ir::IrOp::PHI) continue;
@@ -702,8 +711,13 @@ std::vector<ir::IrValueId> ssa_phi_coalesce_remap(const ir::IrFunction &fn,
                                  fn.name.c_str(), d, s);
                 for (const LiveRange &r : merged[rs].ranges)
                     merged[rd].add_range(r.from, r.to);
-                members[rd].insert(members[rd].end(), members[rs].begin(),
-                                   members[rs].end());
+                /* A mano y no con `insert` de rango: `SmallVector` no lo
+                 * tiene, y su cabecera dice por que -- solo lleva lo que sus
+                 * consumidores usan --.  Con la reserva por delante son las
+                 * mismas dos operaciones que hacia el `insert`. */
+                members[rd].reserve(members[rd].size() + members[rs].size());
+                for (uint32_t m : members[rs])
+                    members[rd].push_back(m);
                 parent[rs] = rd;
                 any = true;
             }
