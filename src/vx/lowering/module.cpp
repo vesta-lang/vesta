@@ -818,6 +818,11 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     // Ya se sabe a que llego cada `@Hook`: uno que no alcanzo nada se dice
     // AQUI, no al recogerlo -- al recogerlo todavia no hay a que compararlo.
     warn_unreached_hooks();
+    /* Y el modulo ya no crece, asi que devuelve lo que sus tablas reservaron de
+     * mas.  Aqui y no en quien llama: por esta funcion pasan las DOS vias -- el
+     * fichero suelto y el proyecto --, y una compactacion que solo hiciera una
+     * de ellas seria de las que nadie nota que falta. */
+    out_module.compact();
     return diags_.error_count() == initial_errors;
 }
 

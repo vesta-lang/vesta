@@ -2616,6 +2616,21 @@ struct IrModule {
     std::vector<IrOverlay> overlays;
 
     /**
+     * @brief Devuelve el sitio que las tablas del modulo reservaron de mas.
+     *
+     * Se llama UNA vez, cuando el modulo esta montado y ya no va a crecer.
+     * Un vector que crece doblando acaba con entre la mitad y el total de
+     * sitio sin usar, y aqui eso pesa: una @ref IrFunction son setecientos
+     * veinte bytes, y el intermedio de un modulo vive hasta que se funden
+     * todos -- o sea, justo encima del pico de memoria del compilador --.
+     *
+     * NO toca lo de dentro de cada funcion: eso lo ajusta @ref add_function,
+     * que es el momento en que una funcion deja de crecer.  Aqui se ajusta lo
+     * del MODULO, que es lo que deja de crecer mas tarde.
+     */
+    void compact();
+
+    /**
      * @brief La CADENA de aspectos de cada metodo, por su nombre IR.
      *
      * A un metodo con aspectos NO se le puede llamar directo tal cual: el

@@ -420,6 +420,18 @@ void IrFunction::append(IrBlockId block_id, IrInstr instr) {
  * IrModule
  * ===================================================================== */
 
+void IrModule::compact() {
+    /* La que pesa es `functions`: setecientos veinte bytes por entrada, y son
+     * miles.  Las otras se ajustan porque el argumento es el mismo y no cuesta
+     * nada; `globals` no, que es un mapa disperso y no tiene sitio de mas que
+     * devolver por este camino. */
+    functions.shrink_to_fit();
+    imports.shrink_to_fit();
+    native_libs.shrink_to_fit();
+    classes.shrink_to_fit();
+    overlays.shrink_to_fit();
+}
+
 size_t IrModule::add_function(IrFunction fn) {
     /* AJUSTAR LA FUNCION ANTES DE GUARDARLA, que es el unico momento en que se
      * sabe su tamano definitivo: aqui quien la construyo ya la solto.
