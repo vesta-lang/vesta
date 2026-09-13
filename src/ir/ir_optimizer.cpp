@@ -15087,6 +15087,25 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
     loops_oracle.ask = &answer_loops;
     loops_oracle.ctx = &am;
 
+    /* EL HECHO DE INLINE NO SE PIDE AL GESTOR, Y ESTA MEDIDO.
+     *
+     * Se probo: los dos inliners clasifican de una tirada y EN SERIE, asi que
+     * son ~24.000 consultas por pasada, y entre el cerrojo y la tabla salen a
+     * ~1 us -- mientras que `compute_inline_facts` sobre una funcion de once
+     * instrucciones no cuesta casi nada.  Medido dentro del proceso, que es
+     * donde no hay ruido de reloj: `x-mod:inline` pasaba de 30,6 a 54,0 ms
+     * (+70%) y volvia a 32 al quitarlo.  El pico, igual con y sin.
+     *
+     * Es la MISMA leccion que ya esta escrita mas abajo sobre el points-to --
+     * "se pagaban dos consultas al gestor por llamada para ahorrar algo que
+     * entonces era barato" --, y se volvio a tropezar con ella.
+     *
+     * Lo que se venia a comprar NO era tiempo: era clasificar SIN MIRAR
+     * CUERPOS, que es lo que permitiria que un cuerpo pueda no estar en
+     * memoria.  Sigue haciendo falta, pero con el hecho viviendo en un sitio
+     * mas barato que el gestor -- al lado de la funcion, no detras de un
+     * cerrojo --. */
+
     auto pt_of = [&](IrFunction &fn) -> const analysis::PointsTo & {
         return am
             .get_or_compute_v<analysis::PointsToAnalysis, analysis::PointsTo>(

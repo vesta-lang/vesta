@@ -123,6 +123,22 @@ struct InlineAnalysis {
 };
 
 /**
+ * @par Cachearlo en el gestor NO sale a cuenta, y esta medido
+ * Se probo lo que esta cabecera sugiere -- pedirselo al @c AnalysisManager con
+ * la clave `(name_key, version)` en vez de calcularlo -- y cuesta MAS: los dos
+ * inliners clasifican de una tirada y EN SERIE, o sea ~24.000 consultas por
+ * pasada a ~1 us cada una entre el cerrojo y la tabla, mientras que calcular
+ * este hecho sobre una funcion de once instrucciones no cuesta casi nada.
+ * Medido dentro del proceso, que es donde no hay ruido de reloj:
+ * `x-mod:inline` pasaba de 30,6 a 54,0 ms y volvia a 32 al quitarlo.
+ *
+ * Lo que se buscaba NO era tiempo: era clasificar SIN MIRAR CUERPOS, que es lo
+ * que permitiria que un cuerpo pueda no estar en memoria.  Eso sigue haciendo
+ * falta, pero con el hecho viviendo AL LADO de la funcion y no detras de un
+ * cerrojo.
+ */
+
+/**
  * @brief Mira @p fn UNA vez y resume lo que los inliners necesitan.
  * @param fn Funcion a resumir.
  * @return El hecho.  Describe la version de @p fn que se le paso.
