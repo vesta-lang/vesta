@@ -16,7 +16,8 @@
 
 #include "analysis/facts/loop_facts.h"
 
-#include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
+#include "util/alloc/small_vector.h" // los vecinos de un bloque, sin reservar
+#include "util/named_alloc.h"        // que el perfil diga QUE es cada tabla
 
 #include <cstdint>
 #include <vector>
@@ -33,51 +34,144 @@ using ir::IrFunction;
 namespace {
 
 /**
- * @name Las tablas de este analisis, con NOMBRE
+ * @name Las tablas de este analisis, EN LA PILA
  *
- * Este fichero era, el solo, SEIS sitios de medio millon de reservas cada uno
- * -- siete por funcion --, y los seis compartian simbolo con las otras ciento
- * sesenta tablas de cuatro bytes del arbol.  Las de bloques las nombra ya el
- * `enum IrBlockId`; estas tres no son bloques, asi que llevan etiqueta.
+ * Este fichero era, el solo, OCHO sitios de 168.007 reservas cada uno -- una
+ * por tabla y siete visitas por funcion --: 1,34 millones, el 5% de todo lo
+ * que reserva compilar.  Y ninguna era grande: casi todas de uno a veinticuatro
+ * bytes, porque todas se dimensionan al numero de BLOQUES y una funcion normal
+ * tiene unos pocos.
+ *
+ * Son estructuras de trabajo que nacen y mueren dentro de una llamada, asi que
+ * ahora viven en la PILA mientras quepan.  @c kInlineBlocks es cuantos bloques
+ * caben antes de tocar el monton; pasado eso crecen como cualquier vector y
+ * todo sigue igual.
+ *
+ * LO QUE SE PIERDE, y se dice: tres de ellas llevaban etiqueta
+ * (@c util::NamedVector) para que el perfil supiera cual era cual, porque
+ * byte a byte son identicas a las otras ciento sesenta tablas de cuatro bytes
+ * del arbol.  La etiqueta estaba para ENCONTRARLAS; encontradas y quitadas, lo
+ * que queda es el resto de las funciones grandes.  Si ese resto llega a pesar,
+ * la etiqueta vuelve.
  * @{
  */
-struct PostorderNumTag;  ///< bloque -> su numero de postorden.
-struct LoopOfHeaderTag;  ///< cabecera -> indice de su bucle.
-struct LoopBodyTag;      ///< que bloques forman el cuerpo de un bucle.
 
-using PostorderNums = util::NamedVector<uint32_t, PostorderNumTag>;
-using LoopOfHeader = util::NamedVector<int32_t, LoopOfHeaderTag>;
-using LoopBody = util::NamedVector<uint8_t, LoopBodyTag>;
+/// Bloques que caben en la pila antes de que una tabla toque el monton.
+/// Ocho cubre la funcion normal; el `main` de un programa de verdad no, y por
+/// eso las tablas siguen sabiendo crecer.
+constexpr size_t kInlineBlocks = 8;
+
+/**
+ * @brief Los vecinos de UN bloque, con los dos primeros dentro de la tabla.
+ *
+ * Dos, porque eso es lo que tiene un bloque: el que sigue y el del salto.
+ */
+using Neighbors = util::SmallVector<IrBlockId, 2>;
+/// Bloque -> su numero de postorden.
+using PostorderNums = util::SmallVector<uint32_t, kInlineBlocks>;
+/// Cabecera -> indice de su bucle.
+using LoopOfHeader = util::SmallVector<int32_t, kInlineBlocks>;
+/// Que bloques forman el cuerpo de un bucle.
+using LoopBody = util::SmallVector<uint8_t, kInlineBlocks>;
+/// Una lista de bloques: el postorden, su inverso, una pila de recorrido.
+using BlockList = util::SmallVector<IrBlockId, kInlineBlocks>;
 /// @}
 
-/** @brief Sucesores de cada bloque, tomados de los terminadores. */
-std::vector<std::vector<IrBlockId>> build_succs(const IrFunction &fn) {
-    const size_t N = fn.blocks.size();
-    std::vector<std::vector<IrBlockId>> succs(N);
-    auto add = [&](std::vector<IrBlockId> &v, IrBlockId t) {
-        if (t == ir::IR_NO_BLOCK || static_cast<size_t>(t) >= N) return;
-        for (IrBlockId x : v)
-            if (x == t) return; // dedup
-        v.push_back(t);
-    };
-    for (size_t b = 0; b < N; ++b) {
-        for (const ir::IrInstr &ins : fn.blocks[b].instrs) {
-            add(succs[b], ins.target_block);
-            add(succs[b], ins.false_block);
-            for (uint32_t jt : ins.jump_targets)
-                add(succs[b], static_cast<IrBlockId>(jt));
+/**
+ * @brief El grafo de bloques, en DOS tablas contiguas en vez de una por
+ *        bloque.
+ *
+ * Los vecinos del bloque `b` son `edges[offs[b] .. offs[b+1])`.  Antes esto
+ * era un vector de vectores, y ahi cada bloque pagaba SU reserva la primera
+ * vez que se le anadia un vecino: el grafo de una funcion costaba tantas
+ * reservas como bloques, dos veces -- sucesores y predecesores --.
+ *
+ * Ademas de no reservar, se recorre en orden: los vecinos de todos los bloques
+ * estan seguidos en memoria, que es lo que pide la regla de estructuras del
+ * proyecto para un camino que se pasa la vida mirando tablas.
+ */
+struct Graph {
+    /// Donde empieza cada bloque dentro de @c edges.  Tiene N+1 entradas.
+    util::SmallVector<uint32_t, kInlineBlocks + 1> offs;
+    /// Los vecinos de todos los bloques, seguidos.
+    util::SmallVector<IrBlockId, kInlineBlocks * 2> edges;
+
+    /// Cuantos bloques hay.
+    size_t size() const noexcept {
+        return offs.empty() ? 0 : offs.size() - 1;
+    }
+
+    /// Los vecinos de UN bloque, como algo que se puede recorrer e indexar.
+    struct Row {
+        const IrBlockId *first;
+        const IrBlockId *last;
+        const IrBlockId *begin() const noexcept { return first; }
+        const IrBlockId *end() const noexcept { return last; }
+        size_t size() const noexcept {
+            return static_cast<size_t>(last - first);
         }
+        IrBlockId operator[](size_t i) const noexcept { return first[i]; }
+    };
+
+    Row operator[](size_t b) const noexcept {
+        const IrBlockId *base = edges.begin();
+        return Row{base + offs[b], base + offs[b + 1]};
+    }
+};
+
+/** @brief Anade @p t a @p v si es un bloque valido y no estaba ya. */
+void add_neighbor(Neighbors &v, IrBlockId t, size_t N) {
+    if (t == ir::IR_NO_BLOCK || static_cast<size_t>(t) >= N) return;
+    for (IrBlockId x : v)
+        if (x == t) return; // dedup
+    v.push_back(t);
+}
+
+/** @brief Sucesores de cada bloque, tomados de los terminadores. */
+Graph build_succs(const IrFunction &fn) {
+    const size_t N = fn.blocks.size();
+    Graph succs;
+    succs.offs.assign(N + 1, 0);
+    // Los vecinos del bloque en curso se juntan aqui -- hace falta para
+    // deduplicar -- y esta fila se REUSA entre bloques, asi que el
+    // almacenamiento en linea se paga una vez y no una por bloque.
+    Neighbors row;
+    for (size_t b = 0; b < N; ++b) {
+        row.clear();
+        for (const ir::IrInstr &ins : fn.blocks[b].instrs) {
+            add_neighbor(row, ins.target_block, N);
+            add_neighbor(row, ins.false_block, N);
+            for (uint32_t jt : ins.jump_targets)
+                add_neighbor(row, static_cast<IrBlockId>(jt), N);
+        }
+        for (IrBlockId s : row)
+            succs.edges.push_back(s);
+        succs.offs[b + 1] = static_cast<uint32_t>(succs.edges.size());
     }
     return succs;
 }
 
 /** @brief Predecesores = inversa de los sucesores. */
-std::vector<std::vector<IrBlockId>>
-build_preds(const std::vector<std::vector<IrBlockId>> &succs) {
-    std::vector<std::vector<IrBlockId>> preds(succs.size());
-    for (size_t b = 0; b < succs.size(); ++b)
+Graph build_preds(const Graph &succs) {
+    const size_t N = succs.size();
+    Graph preds;
+    // Contar cuantos predecesores tiene cada bloque, en offs[b+1]...
+    preds.offs.assign(N + 1, 0);
+    for (size_t b = 0; b < N; ++b)
         for (IrBlockId s : succs[b])
-            preds[s].push_back(static_cast<IrBlockId>(b));
+            preds.offs[static_cast<size_t>(s) + 1]++;
+    // ...y convertir las cuentas en donde empieza cada uno.
+    for (size_t b = 0; b < N; ++b)
+        preds.offs[b + 1] += preds.offs[b];
+    preds.edges.resize(preds.offs[N], IrBlockId(0));
+    // Cursor por bloque: cuantos lleva colocados ya.
+    util::SmallVector<uint32_t, kInlineBlocks> placed(N, 0);
+    for (size_t b = 0; b < N; ++b)
+        for (IrBlockId s : succs[b]) {
+            const size_t si = static_cast<size_t>(s);
+            preds.edges[preds.offs[si] + placed[si]++] =
+                static_cast<IrBlockId>(b);
+        }
     return preds;
 }
 
@@ -87,47 +181,53 @@ build_preds(const std::vector<std::vector<IrBlockId>> &succs) {
  * inalcanzable.
  * @param rpo     salida: bloques en reverse-postorden (solo alcanzables).
  */
-void compute_rpo(const std::vector<std::vector<IrBlockId>> &succs,
-                 IrBlockId entry, PostorderNums &po,
-                 std::vector<IrBlockId> &rpo) {
+void compute_rpo(const Graph &succs, IrBlockId entry, PostorderNums &po,
+                 BlockList &rpo) {
     const size_t N = succs.size();
     po.assign(N, UINT32_MAX);
-    /// Bloques ya vistos por el recorrido en profundidad.
-    struct RpoVisited;
-    util::NamedVector<uint8_t, RpoVisited> visited(N, 0);
-    std::vector<IrBlockId> order; // postorden
-    // DFS iterativo con pila de (nodo, indice de sucesor).
-    std::vector<std::pair<IrBlockId, size_t>> stk;
+    // Bloques ya vistos por el recorrido en profundidad.
+    util::SmallVector<uint8_t, kInlineBlocks> visited(N, 0);
+    BlockList order; // postorden
+    // DFS iterativo con pila de (nodo, indice de sucesor).  Un struct propio y
+    // no un `std::pair`, que no es trivialmente copiable y esta tabla se mueve
+    // con `memcpy`.
+    struct Visit {
+        IrBlockId block; ///< donde esta el recorrido.
+        uint32_t next;   ///< por que sucesor suyo va.
+    };
+    util::SmallVector<Visit, kInlineBlocks> stk;
     if (static_cast<size_t>(entry) >= N) return;
     visited[entry] = 1;
     stk.push_back({entry, 0});
     while (!stk.empty()) {
-        auto &top = stk.back();
-        if (top.second < succs[top.first].size()) {
-            IrBlockId s = succs[top.first][top.second++];
+        Visit &top = stk.back();
+        if (top.next < succs[top.block].size()) {
+            IrBlockId s = succs[top.block][top.next++];
             if (!visited[s]) {
                 visited[s] = 1;
                 stk.push_back({s, 0});
             }
         } else {
-            order.push_back(top.first);
+            order.push_back(top.block);
             stk.pop_back();
         }
     }
     uint32_t n = 0;
     for (IrBlockId b : order)
         po[b] = n++;
-    // RPO = orden inverso del postorden.
-    rpo.assign(order.rbegin(), order.rend());
+    // RPO = orden inverso del postorden.  A mano y no con iteradores inversos,
+    // que esta tabla no tiene: copiar del final al principio es lo mismo.
+    rpo.clear();
+    rpo.reserve(order.size());
+    for (size_t i = order.size(); i-- > 0;)
+        rpo.push_back(order[i]);
 }
 
 /** @brief idom via CHK.  idom[b] = IR_NO_BLOCK si inalcanzable. */
-std::vector<IrBlockId>
-compute_idom(const std::vector<std::vector<IrBlockId>> &preds,
-             const PostorderNums &po, const std::vector<IrBlockId> &rpo,
-             IrBlockId entry) {
+BlockList compute_idom(const Graph &preds, const PostorderNums &po,
+                       const BlockList &rpo, IrBlockId entry) {
     const size_t N = preds.size();
-    std::vector<IrBlockId> idom(N, ir::IR_NO_BLOCK);
+    BlockList idom(N, ir::IR_NO_BLOCK);
     if (rpo.empty()) return idom;
     idom[entry] = entry;
 
@@ -164,7 +264,7 @@ compute_idom(const std::vector<std::vector<IrBlockId>> &preds,
 }
 
 /** @brief True si @p a domina a @p b (recorre la cadena idom de @p b). */
-bool dominates(const std::vector<IrBlockId> &idom, IrBlockId a, IrBlockId b) {
+bool dominates(const BlockList &idom, IrBlockId a, IrBlockId b) {
     if (idom[b] == ir::IR_NO_BLOCK) return false; // b inalcanzable
     IrBlockId cur = b;
     while (true) {
@@ -190,7 +290,7 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
     auto succs = build_succs(fn);
     auto preds = build_preds(succs);
     PostorderNums po;
-    std::vector<IrBlockId> rpo;
+    BlockList rpo;
     compute_rpo(succs, entry, po, rpo);
     auto idom = compute_idom(preds, po, rpo, entry);
 
@@ -216,7 +316,7 @@ LoopFacts compute_loop_facts(const IrFunction &fn) {
             }
             Loop &lp = loops[li];
             // Cuerpo: BFS inverso desde b por preds, sin pasar de h.
-            std::vector<IrBlockId> stk;
+            BlockList stk;
             if (!lp.body[b]) {
                 lp.body[b] = 1;
                 stk.push_back(static_cast<IrBlockId>(b));
