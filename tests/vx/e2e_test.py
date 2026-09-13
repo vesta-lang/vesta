@@ -3784,6 +3784,7 @@ modes3_case("overlay_element_tlv", "elementos tipo-longitud-valor sobre una vist
 modes3_case("overlay_extent", "extension de una vista calculada de sus propios campos", "278_overlay_extent.vx", 40)
 modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de una vez", "543_overlay_campos_anchos.vx", 136)
 modes3_case("params_alias", "dos punteros parametro pueden ser la misma memoria", "544_params_alias.vx", 111)
+modes3_case("sobrecarga545", "sobrecarga de funciones libres: por aridad, por tipo, gana la exacta, y el retorno sale de la elegida en los dos ordenes de declaracion", "545_sobrecarga_funciones.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)

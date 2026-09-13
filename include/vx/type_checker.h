@@ -158,6 +158,20 @@ struct FunctionSig {
     /// al label mangled mientras que el resolver de nombres sigue
     /// usando el nombre publico (`foo`).  Cierra la limitacion L.4.
     std::string mangled_label;
+    /**
+     * @brief Este nombre lo comparten VARIAS funciones.
+     *
+     * Una bandera y no una consulta, y ahi esta el asunto: sin ella, resolver
+     * cualquier llamada obligaria a hashear su nombre contra la tabla de
+     * sobrecargas para descubrir que no hay ninguna.  Serian decenas de
+     * millones de hashes por compilacion para que el 99,99% de las veces la
+     * respuesta sea "no".  Asi es un acceso a un vector que ya se hace.
+     *
+     * Vive en la FIRMA y no en el simbolo porque las firmas se crean UNA vez y
+     * no se rehacen, mientras que los simbolos se declaran por ambito -- y una
+     * marca puesta en uno que luego se vuelve a declarar se pierde.
+     */
+    bool is_overloaded = false;
     /// Variadicos: si @c true, el ULTIMO param es un rest `T... name`.  En
     /// @c param_types el ultimo entry es @c T* (puntero al elemento) y
     /// @c variadic_elem guarda el tipo del ELEMENTO T (para validar los args
@@ -2518,6 +2532,48 @@ class TypeChecker {
     GenericInstanceRegistry *generic_instances_ = nullptr;
     /// @copydoc set_generic_instances
     size_t generic_module_index_ = 0;
+
+    /**
+     * @brief Las funciones que comparten nombre, y sus firmas.
+     *
+     * SOLO tiene entrada un nombre que de verdad este sobrecargado: mientras
+     * hay una sola funcion con ese nombre, la lleva @c sig_by_name_ y aqui no
+     * aparece.  Es lo que hace que esto no cueste un vector por funcion del
+     * programa -- serian decenas de miles --, sino uno por nombre repetido.
+     *
+     * Los indices son a @c function_sigs_, y estan en el orden en que se
+     * declararon.
+     */
+    std::unordered_map<std::string, std::vector<uint32_t>> overloads_;
+
+    /**
+     * @brief Apunta @p fn como sobrecarga y le da su simbolo propio.
+     *
+     * @param fn        La declaracion que acaba de chocar de nombre.
+     * @param sig_index Su firma, ya metida en @c function_sigs_.
+     * @return @c true si de verdad es una sobrecarga -- parametros distintos
+     *         de todas las que ya habia --.  @c false si repite una firma ya
+     *         declarada, que sigue siendo una redefinicion y la dice quien
+     *         llama.
+     */
+    bool register_overload(ast::FunctionDecl *fn, uint32_t sig_index);
+
+  public:
+    /**
+     * @brief La firma numero @p index.
+     *
+     * Un acceso a un vector: es como el bajado llega a la sobrecarga que el
+     * comprobador eligio (@c ast::CallExpr::resolved_sig) sin hashear nada.
+     *
+     * @param index Indice en la tabla de firmas.
+     * @return La firma, o @c nullptr si el indice no vale.
+     */
+    const FunctionSig *function_sig_at(uint32_t index) const {
+        if (index >= function_sigs_.size()) return nullptr;
+        return &function_sigs_[index];
+    }
+
+  private:
 
   public:
     uint64_t next_gensym_id() noexcept { return gensym_counter_++; }

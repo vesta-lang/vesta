@@ -940,6 +940,20 @@ struct CallExpr : Expr {
     /// lowering emite los valores por defecto de los campos (o cero) en vez
     /// de una llamada.
     bool is_default_struct_ctor = false;
+    /**
+     * @brief La firma a la que resolvio esta llamada, cuando hay sobrecarga.
+     *
+     * @c kNoSig en el caso normal.  Lo rellena el comprobador solo cuando el
+     * nombre lo comparten varias funciones: ahi el bajado no podria saber a
+     * cual ir, y ademas necesita la firma BUENA para el tipo de retorno y para
+     * empaquetar los argumentos.
+     *
+     * Es un INDICE y no un nombre a proposito: cuesta cuatro bytes, no reserva
+     * nada y llega a la firma con un acceso a un vector.  Guardar la etiqueta
+     * seria una cadena por sitio de llamada y un hash para resolverla.
+     */
+    static constexpr uint32_t kNoSig = 0xFFFFFFFFu;
+    uint32_t resolved_sig = kNoSig;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -1849,6 +1863,20 @@ struct FunctionDecl : Node {
     /// registra la firma sin requerir body; otra FunctionDecl con el
     /// mismo nombre debe aparecer despues con body, o error.
     bool is_forward_decl = false;
+    /**
+     * @brief El nombre con el que esta funcion se EMITE, si no es el suyo.
+     *
+     * Vacio en el caso normal: el simbolo se llama como la funcion.  Lo rellena
+     * el comprobador cuando varias funciones comparten nombre -- sobrecarga --,
+     * porque entonces el nombre publico ya no puede identificar al simbolo y
+     * hay que distinguirlos por sus parametros.
+     *
+     * SOLO se rellena cuando de verdad hay mas de una: una funcion sin
+     * sobrecargar conserva su simbolo EXACTO, que es lo que permite que sigan
+     * valiendo los `@Export`, el FFI y todo lo que referencia un nombre desde
+     * fuera del lenguaje.
+     */
+    std::string mangled_label;
     /// @fp(strict|fast): politica de contraccion de coma flotante de ESTA
     /// funcion.  true (default) = fast (se permite contraer a*b+c en FMA, 1
     /// redondeo).  false = strict (IEEE, 2 redondeos, sin FMA).  Se propaga a

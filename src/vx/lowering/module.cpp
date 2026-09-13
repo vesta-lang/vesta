@@ -261,7 +261,14 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             // El registro (incluida la decision del buffer de retorno) vive en
             // un unico sitio, compartido con las funciones importadas -- ver
             // register_fn_ret_info.
-            register_fn_ret_info(fd->name, ret_sem, fd->is_async);
+            /* Bajo el SIMBOLO que se va a emitir, no bajo el nombre: estas
+             * tablas describen una funcion CONCRETA, y con sobrecarga varias
+             * comparten nombre -- la segunda pisaria a la primera y quien
+             * llamara a cualquiera de ellas recibiria el tipo de retorno de la
+             * ultima declarada --. */
+            register_fn_ret_info(fd->mangled_label.empty() ? fd->name
+                                                           : fd->mangled_label,
+                                 ret_sem, fd->is_async);
         } else if (decl->kind == ast::NodeKind::ExternFnDecl) {
             // FFI declarativo: registrar tipo de retorno y
             // mapeo nombre -> libreria nativa para que @c lower_call
@@ -974,7 +981,11 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
         const_cast<TypeChecker &>(tc_).comptime_runtime().register_macro(
             fn.name, ComptimeRuntime::kPcUnresolved);
     } else {
-        fn.name = fd->name;
+        /* El nombre del SIMBOLO, que no siempre es el de la funcion: con
+         * sobrecarga varias comparten nombre y el comprobador les pone una
+         * etiqueta con sus parametros.  Vacia -- el caso normal -- quiere
+         * decir que el simbolo se llama igual que la funcion. */
+        fn.name = fd->mangled_label.empty() ? fd->name : fd->mangled_label;
     }
     // Igual que con los metodos: el vinculo se anota donde se crea el nombre.
     // Sin esto, un fallo dentro de una funcion libre salia con el nombre a

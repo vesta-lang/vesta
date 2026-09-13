@@ -1,0 +1,64 @@
+namespace ejemplos.sobrecarga;
+
+// SOBRECARGA de funciones libres: varias con el mismo nombre, distinguidas por
+// sus parametros.
+//
+// Hasta ahora el lenguaje no la tenia en ninguna parte salvo un caso: los
+// constructores de STRUCT, y solo por ARIDAD, quedandose con el primero que
+// encajara (`225`/`335`).  Escribir dos funciones con el mismo nombre daba
+// "redefinicion de simbolo a nivel global", y dos metodos, "metodo duplicado".
+//
+// Lo que se prueba aqui, que es lo que de verdad se rompe:
+//
+//   1. Por ARIDAD: el mismo nombre con uno y con dos parametros.
+//   2. Por TIPO: `i64` contra `f64` con la misma aridad.
+//   3. Que gana la EXACTA y no la primera compatible.  Es el caso que mas
+//      facil se cuela: un `f64` es asignable a un `i64`, asi que una
+//      resolucion que se quede con la primera candidata que "encaja" mandaria
+//      `f(2.0)` a `f(i64)` y nunca llegaria a la que el usuario escribio.
+//   4. Que el TIPO DE RETORNO sale de la sobrecarga elegida, no de otra.  Con
+//      dos que devuelven lo mismo el fallo no se ve: hay que declararlas con
+//      retornos DISTINTOS para que se note, porque el sintoma es que el valor
+//      se convierte como si fuera del otro tipo y sale basura.
+//   5. Y que el orden de DECLARACION no cambia el resultado.  Por eso cada
+//      pareja aparece dos veces, en los dos ordenes: un fallo de "gana la
+//      ultima declarada" pasa desapercibido si todas las parejas se escriben
+//      igual.
+//
+// Resultado esperado: 42.
+
+// --- 1. por aridad ---------------------------------------------------------
+i64 suma(i64 a) { return a; }
+i64 suma(i64 a, i64 b) { return a + b; }
+
+// --- 2 y 3. por tipo, y gana la exacta -------------------------------------
+i64 cual(i64 x) { return 1; }
+i64 cual(f64 x) { return 2; }
+
+// --- 4. retornos DISTINTOS, en los dos ordenes ------------------------------
+i64 ent_primero(i64 x) { return 10; }
+f64 ent_primero(f64 x) { return 20.0; }
+
+f64 flot_primero(f64 x) { return 20.0; }
+i64 flot_primero(i64 x) { return 10; }
+
+i32 main() {
+	i64 n = 5_i64;
+	f64 d = 5.0_f64;
+
+	// 1. aridad
+	i64 a = suma(7);    // 7
+	i64 b = suma(3, 4); // 7
+
+	// 2 y 3. tipo, y la exacta gana a la compatible
+	i64 c = cual(n); // 1
+	i64 e = cual(d); // 2
+
+	// 4 y 5. el retorno sale de la elegida, en los dos ordenes de declaracion
+	i64 f = ent_primero(n);  // 10  (si se colara la de f64, saldria basura)
+	i64 g = flot_primero(n); // 10
+
+	i64 total = a + b + c + e + f + g; // 7+7+1+2+10+10 = 37
+	println("suma=${a},${b} cual=${c},${e} retorno=${f},${g} total=${total}");
+	return (i32)(total + 5); // 42
+}

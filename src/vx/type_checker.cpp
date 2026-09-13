@@ -657,6 +657,56 @@ static bool method_body_is_ours(vx::GenericInstanceRegistry *reg, size_t index,
     return reg->claim(mangled + "::" + m->name, index);
 }
 
+bool TypeChecker::register_overload(ast::FunctionDecl *fn,
+                                    uint32_t sig_index) {
+    /* La PRIMERA sale del simbolo del ambito, no de `sig_by_name_`: ese ya se
+     * sobrescribio con la firma de esta, que se apunta antes de intentar
+     * declararla.  El simbolo, en cambio, sigue siendo el de la primera --
+     * justo porque declararla fallo --. */
+    const Symbol *prev = lookup(fn->name);
+    if (prev == nullptr || prev->kind != SymbolKind::Function) return false;
+
+    auto &candidates = overloads_[fn->name];
+    if (candidates.empty()) candidates.push_back(prev->sig_index);
+
+    const FunctionSig &added = function_sigs_[sig_index];
+    for (uint32_t idx : candidates) {
+        if (function_sigs_[idx].param_types == added.param_types)
+            return false; // misma firma: es una redefinicion de verdad
+    }
+    candidates.push_back(sig_index);
+
+    /* El simbolo de cada una lleva sus parametros, con el mismo mangleado que
+     * ya usan los genericos: una sola forma de nombrar, no dos.  Se le pone
+     * tambien a la PRIMERA, que hasta ahora no lo necesitaba -- se puede
+     * porque esto corre en `collect_globals`, antes de comprobar ningun
+     * cuerpo, asi que no hay ninguna llamada resuelta apuntando al nombre
+     * pelado. */
+    for (uint32_t idx : candidates) {
+        FunctionSig &s = function_sigs_[idx];
+        if (s.mangled_label.empty())
+            s.mangled_label = fn->name + "_" + mangle_args(s.param_types);
+        /* La marca va en la FIRMA: es lo que hace que una llamada corriente no
+         * pague ninguna consulta para descubrir que su nombre no esta
+         * sobrecargado, y a diferencia del simbolo no se rehace por ambito. */
+        s.is_overloaded = true;
+    }
+
+    /* Y la etiqueta tambien al AST, que es de donde el bajado saca el nombre
+     * del simbolo que emite.  Se emparejan por ORDEN: las candidatas estan en
+     * el orden en que se declararon, igual que las declaraciones del modulo. */
+    size_t k = 0;
+    for (auto &d : mod_.decls) {
+        if (!d || d->kind != ast::NodeKind::FunctionDecl) continue;
+        auto *other = static_cast<ast::FunctionDecl *>(d.get());
+        if (other->name != fn->name) continue;
+        if (k < candidates.size())
+            other->mangled_label = function_sigs_[candidates[k]].mangled_label;
+        ++k;
+    }
+    return true;
+}
+
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
                                             const std::vector<Type> &args,
                                             const SourceLoc &loc) {
@@ -5845,6 +5895,19 @@ void TypeChecker::collect_globals() {
                             }
                         }
                     }
+                    /* NO es una redefinicion si los parametros difieren: es
+                     * una SOBRECARGA.  Quien la resuelve es @c check_call
+                     * mirando los argumentos; aqui solo hay que apuntar las
+                     * candidatas y darles un simbolo distinto a cada una,
+                     * porque el nombre publico ya no las identifica.
+                     *
+                     * La etiqueta se le pone tambien a la PRIMERA, que hasta
+                     * ahora no la necesitaba.  Se puede porque esto corre en
+                     * `collect_globals`, antes de comprobar ningun cuerpo: no
+                     * hay todavia ninguna llamada resuelta que apunte al
+                     * nombre viejo. */
+                    if (!prev_is_forward && register_overload(fn, s.sig_index))
+                        continue;
                     if (!prev_is_forward) {
                         diags_.error(
                             fn->loc,
@@ -17675,7 +17738,63 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             (void)check_expr(a.get());
         return Type{};
     }
-    const FunctionSig &sig = function_sigs_[s->sig_index];
+    /* SOBRECARGA: con varias funciones del mismo nombre, quien decide son los
+     * argumentos.
+     *
+     * TODO ESTO CUELGA DE UNA RAMA sobre el simbolo que ya se tenia.  Una
+     * llamada corriente -- que son casi todas -- no paga NADA: ni una consulta
+     * a la tabla de sobrecargas, ni un hash de su nombre, ni comprobar sus
+     * argumentos dos veces.  Solo entran aqui los nombres que de verdad
+     * comparten varias funciones. */
+    uint32_t chosen_sig = s->sig_index;
+    if (function_sigs_[s->sig_index].is_overloaded) {
+        auto ov = overloads_.find(id->name);
+        if (ov != overloads_.end() && ov->second.size() > 1) {
+            std::vector<Type> arg_types;
+            arg_types.reserve(e->args.size());
+            for (auto &a : e->args)
+                arg_types.push_back(check_expr(a.get()));
+            /* DOS PASADAS, y el orden importa: primero la que encaja EXACTA,
+             * y solo si no hay ninguna, la primera que admita conversion.
+             * Con una sola pasada `doble(2.0)` se iria a `doble(i64)` -- un
+             * f64 es asignable a un i64 -- y nunca llegaria a la de f64, que
+             * es la que el usuario escribio.  Es el mismo orden que el
+             * lenguaje ya usa al especializar: exacta antes que compatible.
+             *
+             * El centinela es PROPIO y no "sigue siendo la del simbolo": la
+             * primera candidata ES esa, asi que elegirla pareceria no haber
+             * elegido y la segunda pasada la pisaria. */
+            bool picked = false;
+            for (int pass = 0; pass < 2 && !picked; ++pass) {
+                for (uint32_t idx : ov->second) {
+                    const FunctionSig &c = function_sigs_[idx];
+                    if (c.param_types.size() != arg_types.size()) continue;
+                    bool fits = true;
+                    for (size_t i = 0; i < arg_types.size() && fits; ++i) {
+                        const Type &tp = c.param_types[i];
+                        const Type &ta = arg_types[i];
+                        if (ta.kind == PrimitiveKind::COUNT) continue;
+                        fits = (pass == 0)
+                                   ? (tp == ta)
+                                   : (types_assignable(tp, ta) ||
+                                      class_is_assignable(tp, ta) ||
+                                      value_assignable_to_interface(tp, ta) ||
+                                      struct_ptr_upcast_ok(tp, ta));
+                    }
+                    if (fits) {
+                        chosen_sig = idx;
+                        picked = true;
+                        break;
+                    }
+                }
+            }
+            /* Y se apunta CUAL, por indice: el bajado necesita ESA firma -- el
+             * nombre publico lo comparten varias -- y llega a ella con un
+             * acceso a un vector, sin hashear ni copiar cadenas. */
+            e->resolved_sig = chosen_sig;
+        }
+    }
+    const FunctionSig &sig = function_sigs_[chosen_sig];
 
     // dispose(xs) acepta cualquier tipo coleccion (no solo I64).
     // Validamos que el arg es un IdentExpr (necesario en el lowering

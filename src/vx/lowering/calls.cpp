@@ -500,9 +500,33 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         return dst;
     }
 
+    /* Con SOBRECARGA, buscar por nombre devuelve una cualquiera de las que lo
+     * comparten -- y de esta firma salen el tipo de retorno y como se
+     * empaquetan los argumentos --.  Manda la que el comprobador resolvio. */
+    const FunctionSig *callee_sig =
+        e->resolved_sig == ast::CallExpr::kNoSig
+            ? tc_.function_sig_by_name(id->name)
+            : tc_.function_sig_at(e->resolved_sig);
+    if (callee_sig == nullptr) callee_sig = tc_.function_sig_by_name(id->name);
+
+    /* El SIMBOLO al que va esta llamada, que no siempre es el nombre escrito:
+     * con sobrecarga varias lo comparten y las tablas de abajo describen una
+     * funcion CONCRETA.  Se calcula una vez y se usa en todas.
+     *
+     * SOLO cuando de verdad esta sobrecargada, y ese detalle costo seis rojos:
+     * `mangled_label` tiene OTRO uso anterior -- una funcion importada de otro
+     * modulo lleva ahi su label (`lib__foo`) --, pero esas se registran en las
+     * tablas por su nombre PUBLICO.  Sin la condicion, buscarlas por su label
+     * no encontraba nada y se les daba el tipo de retorno por defecto. */
+    const std::string &callee_sym =
+        callee_sig != nullptr && callee_sig->is_overloaded &&
+                !callee_sig->mangled_label.empty()
+            ? callee_sig->mangled_label
+            : id->name;
+
     // Resolver tipo de retorno.
     ir::IrType ret_ir = ir::IrType::I64;
-    auto it = fn_return_types_.find(id->name);
+    auto it = fn_return_types_.find(callee_sym);
     if (it != fn_return_types_.end()) ret_ir = it->second;
 
     // sret: si el callee declara devolver Optional<T>, Result<V,E> o
@@ -513,7 +537,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     // del retbuf, que el caller bindea a la variable del var-decl o
     // pasa como argumento a otras funciones.
     PrimitiveKind callee_kind = PrimitiveKind::VOID;
-    auto it_kind = fn_ret_kind_.find(id->name);
+    auto it_kind = fn_ret_kind_.find(callee_sym);
     if (it_kind != fn_ret_kind_.end()) callee_kind = it_kind->second;
     /* Si hace falta buffer, cuanto mide y donde vive: lo que se anoto al
      * registrar la funcion.  Deducirlo aqui de nuevo era la tercera copia del
@@ -521,7 +545,7 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * inteligente es `unique` o `shared`, asi que se reservaban dieciseis
      * siempre; y el tamano de un `Optional` salia del tipo del sitio de la
      * llamada en vez de lo que la funcion declara devolver. */
-    const SretInfo si = sret_info_for(id->name);
+    const SretInfo si = sret_info_for(callee_sym);
     const bool callee_is_sret = si.uses_buffer;
     ir::IrValueId v_call_retbuf = ir::IR_NO_VALUE;
     if (callee_is_sret) {
@@ -553,7 +577,6 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     // `void helper(string s)` empuja la direccion del literal en
     // memoria VM (PTR) en vez del GcHandle al StringObject, y el
     // callee crashea al hacer `strraw s` con un puntero invalido.
-    const FunctionSig *callee_sig = tc_.function_sig_by_name(id->name);
     std::vector<ir::IrValueId> arg_ids;
     arg_ids.reserve(e->args.size() + (callee_is_sret ? 1 : 0));
     if (callee_is_sret) arg_ids.push_back(v_call_retbuf);
@@ -776,6 +799,14 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
         if (fs && !fs->mangled_label.empty()) {
             callee_name = fs->mangled_label;
         }
+    }
+    /* Y si la llamada fue a una funcion SOBRECARGADA, manda lo que el
+     * comprobador resolvio: buscar por nombre devuelve una cualquiera de las
+     * que lo comparten, que casi nunca es la que toca. */
+    if (e->resolved_sig != ast::CallExpr::kNoSig) {
+        const FunctionSig *rs = tc_.function_sig_at(e->resolved_sig);
+        if (rs != nullptr && !rs->mangled_label.empty())
+            callee_name = rs->mangled_label;
     }
     ins.func_name = std::move(callee_name);
     ins.operands = std::move(arg_ids);
