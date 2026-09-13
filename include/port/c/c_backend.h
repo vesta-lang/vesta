@@ -290,6 +290,26 @@ class CBackend : public IPortBackend {
      */
     std::unordered_map<std::string, const ir::IrClass *> class_by_name_;
 
+    /**
+     * @brief Simbolo de un ayudante `__new_...` -> la clase que construye.
+     *
+     * Se resuelve UNA vez por modulo y luego se consulta.  Antes cada uno de
+     * los cinco sitios que lo necesitan cortaba el nombre por el prefijo, y en
+     * cuanto una clase tiene dos constructores el ayudante lleva detras lo que
+     * separa a uno de otro: el trozo deja de ser un nombre de clase y el sitio
+     * se quedaba sin reconocerlo.
+     */
+    std::unordered_map<std::string, const ir::IrClass *> helper_class_;
+
+    /**
+     * @brief La clase que construye el ayudante @p sym, o nulo si no lo es.
+     * @param sym Simbolo de la funcion llamada.
+     */
+    const ir::IrClass *new_helper_target(const std::string &sym) const {
+        const auto it = helper_class_.find(sym);
+        return it == helper_class_.end() ? nullptr : it->second;
+    }
+
     // -------- Estado per-funcion (set al entrar a cada IrFunction) --------
 
     /**

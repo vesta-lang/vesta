@@ -672,6 +672,38 @@ constexpr uint64_t EAGER_IN_PROGRESS = 1;
 std::unordered_map<std::string, uint64_t> g_eager_cache;
 } // namespace
 
+/// No hay intermedio para ese metodo en ese ejecutable.
+constexpr size_t kNoIrFunction = static_cast<size_t>(-1);
+
+size_t ir_index_of_method(const loader::Executable &exe,
+                          const loader::MethodInfo *method) noexcept {
+    if (method == nullptr || method->code_vaddr == 0) return kNoIrFunction;
+
+    /* La DIRECCION del codigo, que es lo que identifica al metodo sin lugar a
+     * dudas.  El enlazador dejo `code.<simbolo>` apuntando ahi, asi que basta
+     * con darle la vuelta: el simbolo que valga esa direccion Y tenga
+     * intermedio es su funcion.
+     *
+     * Antes la clave se ARMABA -- `<Clase>__<metodo>`, con un apanyo aparte
+     * para el constructor, porque su nombre es el de la clase --, y eso fallaba
+     * en dos casos que no dan error sino que dejan el metodo SIN compilar y sin
+     * decirlo: el sobrecargado, cuyo simbolo lleva detras lo que lo separa de
+     * su hermano, y el HEREDADO sin sobrescribir, cuyo cuerpo es el de la base
+     * y por tanto nunca se llamo `<Derivada>__<metodo>`.
+     *
+     * Se paga una pasada por la tabla de simbolos, y se paga UNA vez por
+     * metodo: aqui se llega cuando un metodo cruza el umbral, no en cada
+     * llamada. */
+    for (const auto &sym : exe.symbol_table) {
+        if (sym.second != method->code_vaddr) continue;
+        if (sym.first.rfind("code.", 0) != 0) continue;
+        const auto it = exe.ir_lookup.find(sym.first.substr(5));
+        if (it != exe.ir_lookup.end() && it->second < exe.ir_functions.size())
+            return it->second;
+    }
+    return kNoIrFunction;
+}
+
 void set_jit_threshold(uint32_t threshold) noexcept {
     g_jit_threshold = threshold;
 }
@@ -734,10 +766,9 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     /* Slow path: el counter cruzo el threshold y el metodo NO
      * tiene jit_code aun.  Intentar compilar. */
 
-    /* Construir lookup key: "<ClassName>__<methodName>".
-     * stringx es un struct {uint8_t* data, uint32_t size}; lo
-     * convertimos a string via reinterpret_cast (los bytes son
-     * UTF-8/ASCII puro segun el frontend). */
+    /* Como se LLAMA el metodo, para los mensajes.  No es un simbolo ni se usa
+     * para buscar nada: el simbolo sale del intermedio que se localiza abajo, y
+     * aqui hace falta algo que decir tambien cuando no se encuentra. */
     auto stringx_to_str = [](const loader::stringx &sx) -> std::string {
         if (!sx.data || sx.size == 0) return {};
         return std::string(reinterpret_cast<const char *>(sx.data), sx.size);
@@ -745,10 +776,7 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     std::string key;
     if (method->owner_class) {
         const std::string cls = stringx_to_str(method->owner_class->name);
-        if (!cls.empty()) {
-            key += cls;
-            key += "__";
-        }
+        if (!cls.empty()) key += cls + ".";
     }
     key += stringx_to_str(method->name);
 
@@ -761,34 +789,14 @@ void maybe_compile_method(runtime::ProcessVM *vm,
     const std::vector<ir::IrFunction> *owning_funcs = nullptr;
     runtime::VM &owning_vm = vm->scheduler.vm_reference;
 
-    /* Construir lista de claves alternativas a probar (en orden de
-     * preferencia).  Los constructores en Vesta se mangleean como
-     * "ClassName__ctor" en IR, pero MethodInfo::name == ClassName
-     * para constructores -> el key naive "ClassName__ClassName"
-     * no funciona.  Detectamos el caso y agregamos fallback. */
-    std::vector<std::string> candidate_keys{key};
-    if (method->owner_class) {
-        const std::string cls = stringx_to_str(method->owner_class->name);
-        const std::string mtd = stringx_to_str(method->name);
-        if (!cls.empty() && cls == mtd) {
-            /* Es ctor: probar "ClassName__ctor". */
-            candidate_keys.push_back(cls + "__ctor");
-        }
-    }
-
     for (const auto &exe : owning_vm.loader_public.executables) {
-        for (const auto &k : candidate_keys) {
-            auto it = exe->ir_lookup.find(k);
-            if (it != exe->ir_lookup.end() &&
-                it->second < exe->ir_functions.size()) {
-                ir_fn = &exe->ir_functions[it->second];
-                owning_symtab = &exe->symbol_table;
-                owning_lookup = &exe->ir_lookup;
-                owning_funcs = &exe->ir_functions;
-                break;
-            }
-        }
-        if (ir_fn) break;
+        const size_t idx = ir_index_of_method(*exe, method);
+        if (idx == kNoIrFunction) continue;
+        ir_fn = &exe->ir_functions[idx];
+        owning_symtab = &exe->symbol_table;
+        owning_lookup = &exe->ir_lookup;
+        owning_funcs = &exe->ir_functions;
+        break;
     }
 
     if (!ir_fn) {
@@ -1177,35 +1185,16 @@ void maybe_tier2_method(runtime::ProcessVM *vm,
         g_tier2_done.insert(method);
     }
 
-    /* Localizar el IR del metodo (mismo mangling que maybe_compile_method). */
-    auto sx = [](const loader::stringx &s) -> std::string {
-        if (!s.data || s.size == 0) return {};
-        return std::string(reinterpret_cast<const char *>(s.data), s.size);
-    };
-    std::string key;
-    if (method->owner_class) {
-        const std::string cls = sx(method->owner_class->name);
-        if (!cls.empty()) key += cls + "__";
-    }
-    key += sx(method->name);
-    std::vector<std::string> keys{key};
-    if (method->owner_class) {
-        const std::string cls = sx(method->owner_class->name);
-        if (!cls.empty() && cls == sx(method->name))
-            keys.push_back(cls + "__ctor");
-    }
+    /* Localizar el IR del metodo: por la DIRECCION de su codigo, igual que
+     * maybe_compile_method.  Armar la clave con el nombre dejaba fuera al
+     * sobrecargado y al heredado. */
     runtime::VM &owning_vm = vm->scheduler.vm_reference;
     const ir::IrFunction *ir_fn = nullptr;
     for (const auto &exe : owning_vm.loader_public.executables) {
-        for (const auto &k : keys) {
-            auto it = exe->ir_lookup.find(k);
-            if (it != exe->ir_lookup.end() &&
-                it->second < exe->ir_functions.size()) {
-                ir_fn = &exe->ir_functions[it->second];
-                break;
-            }
-        }
-        if (ir_fn) break;
+        const size_t idx = ir_index_of_method(*exe, method);
+        if (idx == kNoIrFunction) continue;
+        ir_fn = &exe->ir_functions[idx];
+        break;
     }
     if (!ir_fn) return; // sin IR -> no se puede re-optimizar
 
@@ -2828,24 +2817,17 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
                         reinterpret_cast<loader::ClassInfo *>(cptr);
                     if (!cls->vtable || vtbl_idx >= cls->vtable_size) continue;
                     loader::MethodInfo *m = cls->vtable[vtbl_idx];
-                    if (!m || !m->name.data || m->name.size == 0) continue;
-                    std::string cn =
-                        (cls->name.data && cls->name.size)
-                            ? std::string(reinterpret_cast<const char *>(
-                                              cls->name.data),
-                                          cls->name.size)
-                            : std::string();
-                    std::string mn(reinterpret_cast<const char *>(m->name.data),
-                                   m->name.size);
-                    std::string callee = cn + "__" + mn;
-                    /* callee debe existir y ser inlineable (1 bloque, RET):
-                     * si no, el CALL del fast-path quedaria sin resolver. */
-                    auto cl = owning_exe->ir_lookup.find(callee);
-                    if (cl == owning_exe->ir_lookup.end() ||
-                        cl->second >= owning_exe->ir_functions.size())
-                        continue;
-                    const ir::IrFunction &cf =
-                        owning_exe->ir_functions[cl->second];
+                    if (!m) continue;
+                    /* A QUIEN se especula: por la direccion de su codigo.
+                     * Armar `<Clase>__<metodo>` no encontraba al sobrecargado
+                     * -- su simbolo lleva discriminante -- ni al heredado sin
+                     * sobrescribir, cuyo cuerpo es el de la base. */
+                    const size_t ci = ir_index_of_method(*owning_exe, m);
+                    if (ci == kNoIrFunction) continue;
+                    const ir::IrFunction &cf = owning_exe->ir_functions[ci];
+                    const std::string &callee = cf.name;
+                    /* Y debe ser inlineable (1 bloque, RET): si no, el CALL del
+                     * fast-path quedaria sin resolver. */
                     if (cf.blocks.size() != 1 || cf.blocks[0].instrs.empty() ||
                         cf.blocks[0].instrs.back().op != ir::IrOp::RET)
                         continue;

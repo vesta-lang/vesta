@@ -3014,6 +3014,28 @@ void ir_correr_indices_de_datos(IrFunction &fn, uint64_t desplazamiento);
  */
 bool is_new_helper_name(const std::string &name, std::string *out_class);
 
+/**
+ * @brief QUE clase construye el ayudante @p sym.
+ *
+ * No se saca RAJANDO el nombre.  `__new_` va seguido de la clase, si, pero
+ * detras puede llevar lo que separa a un constructor de sus hermanos y la
+ * variante de donde sale la memoria, asi que el trozo de despues del prefijo no
+ * es un nombre de clase en cuanto la clase tiene dos constructores.  Cortar por
+ * ahi no fallaba: devolvia `Obrero_i64`, ninguna clase se llamaba asi y el
+ * optimizador daba el objeto por desconocido -- ni lo sustituia por escalares,
+ * ni devirtualizaba sus llamadas --.  Perder una optimizacion sin que nadie lo
+ * diga es exactamente lo que no puede pasar.
+ *
+ * Asi que se MIRA: primero las clases del modulo por su nombre, que resuelve el
+ * caso corriente sin abrir nada; y si el ayudante lleva discriminante, se abre
+ * su cuerpo y se busca a que constructor llama, que es el dato de verdad.
+ *
+ * @param mod El modulo donde viven las clases y los cuerpos.
+ * @param sym El simbolo del ayudante.
+ * @return La clase, o nulo si @p sym no es un ayudante o no se puede atribuir.
+ */
+const IrClass *new_helper_class(const IrModule &mod, const std::string &sym);
+
 } // namespace ir
 
 // Restaurar las macros de Windows que anulamos al principio del header.

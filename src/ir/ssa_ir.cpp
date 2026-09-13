@@ -2302,4 +2302,39 @@ bool is_new_helper_name(const std::string &name, std::string *out_class) {
     return true;
 }
 
+const IrClass *new_helper_class(const IrModule &mod, const std::string &sym) {
+    std::string suffix;
+    if (!is_new_helper_name(sym, &suffix)) return nullptr;
+
+    /* 1) El caso corriente: una clase con un constructor, cuyo ayudante se
+     * llama como ella y nada mas.  Se contesta sin abrir ningun cuerpo. */
+    for (const IrClass &c : mod.classes)
+        if (c.name == suffix) return &c;
+
+    /* 2) El ayudante lleva discriminante, asi que el trozo del nombre no
+     * identifica a nadie.  Lo que SI lo hace es a quien llama: el ayudante
+     * reserva y construye, y el constructor que invoca dice de quien es.
+     *
+     * Se busca su cuerpo y, dentro, la llamada cuyo simbolo coincida con el de
+     * algun constructor.  Es lineal sobre un cuerpo de un punyado de
+     * instrucciones, y solo se llega aqui con una clase sobrecargada. */
+    const IrFunction *helper = nullptr;
+    for (const IrFunction &f : mod.functions)
+        if (f.name == sym) {
+            helper = &f;
+            break;
+        }
+    if (helper == nullptr) return nullptr;
+    for (const IrBlock &b : helper->blocks)
+        for (const IrInstr &in : b.instrs) {
+            if (in.op != IrOp::CALL && in.op != IrOp::CALLVIRT) continue;
+            if (in.func_name.empty()) continue;
+            for (const IrClass &c : mod.classes)
+                for (const IrMethod &m : c.methods)
+                    if (m.is_constructor && m.ir_fn_name == in.func_name)
+                        return &c;
+        }
+    return nullptr;
+}
+
 } // namespace ir

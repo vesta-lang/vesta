@@ -510,11 +510,8 @@ void CBackend::analyze_escapes(const ir::IrFunction &fn) {
         for (const auto &ins : bb.instrs) {
             if (ins.op != ir::IrOp::CALL) continue;
             if (ins.dst == ir::IR_NO_VALUE) continue;
-            if (ins.func_name.rfind("__new_", 0) != 0) continue;
-            std::string cls_name = ins.func_name.substr(6);
-            if (lookup_class(cls_name)) {
+            if (new_helper_target(ins.func_name) != nullptr)
                 candidates.push_back(ins.dst);
-            }
         }
     }
     if (candidates.empty()) return;
@@ -618,9 +615,10 @@ void CBackend::infer_concrete_types(const ir::IrFunction &fn) {
                 std::string new_type;
 
                 if (ins.op == ir::IrOp::CALL && !ins.func_name.empty()) {
-                    // Si la funcion es @c __new_<X>, el resultado es X*.
-                    if (ins.func_name.rfind("__new_", 0) == 0) {
-                        new_type = ins.func_name.substr(6);
+                    // Si es un ayudante de construccion, el resultado es X*.
+                    if (const ir::IrClass *c =
+                            new_helper_target(ins.func_name)) {
+                        new_type = c->name;
                     } else {
                         // Si la funcion es @c <Class>__<method> y el
                         // return type es PTR, no podemos inferir con
@@ -679,6 +677,16 @@ void CBackend::emit_class_decls(EmitContext &ctx, const ir::IrModule &mod) {
     class_by_name_.clear();
     for (const auto &cls : mod.classes) {
         class_by_name_[cls.name] = &cls;
+    }
+
+    /* Y de quien es cada ayudante de construccion, resuelto AQUI y consultado
+     * despues: son cinco los sitios que lo preguntan y no tiene sentido que
+     * cada uno vuelva a averiguarlo. */
+    helper_class_.clear();
+    for (const auto &fn : mod.functions) {
+        if (!ir::is_new_helper_name(fn.name, nullptr)) continue;
+        if (const ir::IrClass *c = ir::new_helper_class(mod, fn.name))
+            helper_class_[fn.name] = c;
     }
 
     // 2. Topological sort: emit super-clases antes que sub-clases.
@@ -2228,10 +2236,8 @@ void CBackend::emit_prelude(EmitContext &ctx, const ir::IrModule &mod) {
         // Por prefijo: cubre las tandas (`__module_init_partN`) y las de las
         // dependencias, que son la misma maquinaria.
         if (n.rfind("__module_init", 0) == 0) continue;
-        // Skip @c __new_<X>: emitido por @c emit_class_bodies.
-        if (n.rfind("__new_", 0) == 0 && lookup_class(n.substr(6))) {
-            continue;
-        }
+        // Skip el ayudante de construccion: lo emite @c emit_class_bodies.
+        if (new_helper_target(n) != nullptr) continue;
         bool is_lambda = (fn.name.rfind("__lambda_", 0) == 0);
         ctx.out << type_for(fn.ret_type, false) << " " << sanitize_name(fn.name)
                 << "(";
@@ -2268,14 +2274,10 @@ bool CBackend::should_skip_function(const ir::IrFunction &fn,
     //    clases dinamicamente.  En C standalone con structs estaticos
     //    no se necesita -- las clases son literales.  Skip.
     if (n.rfind("__module_init", 0) == 0) return true;
-    // 2. @c __new_<X>: reemplazado por @c X__new del backend (definido
-    //    en emit_class_bodies).  El user code que llamaba a __new_<X>
-    //    se redirige a X__new en emit_call.
-    if (n.rfind("__new_", 0) == 0) {
-        std::string class_name = n.substr(6);
-        if (lookup_class(class_name)) return true;
-    }
-    return false;
+    // 2. El ayudante de construccion: lo reemplaza @c X__new del backend
+    //    (definido en emit_class_bodies).  El codigo que lo llamaba se
+    //    redirige a X__new en emit_call.
+    return new_helper_target(n) != nullptr;
 }
 
 void CBackend::emit_postamble(EmitContext &ctx, const ir::IrModule &mod) {
@@ -3148,14 +3150,9 @@ void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
     // Si si, emitir STACK ALLOC en lugar de heap.  Tiene que decidirse
     // ANTES de emit_assign_lhs para evitar @c "v0 = Counter __stk..." rota.
     std::string new_class_name;
-    if (func_name.rfind("__new_", 0) == 0) {
-        std::string class_name = func_name.substr(6);
-        if (lookup_class(class_name)) {
-            new_class_name = class_name;
-            if (dst != ir::IR_NO_VALUE) {
-                concrete_type_[dst] = class_name;
-            }
-        }
+    if (const ir::IrClass *c = new_helper_target(func_name)) {
+        new_class_name = c->name;
+        if (dst != ir::IR_NO_VALUE) concrete_type_[dst] = c->name;
     }
 
     if (!new_class_name.empty() && dst != ir::IR_NO_VALUE &&

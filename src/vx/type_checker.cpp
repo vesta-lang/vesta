@@ -5635,11 +5635,7 @@ void TypeChecker::collect_globals() {
                 }
             }
             if (collision) {
-                diags_.error(m->loc, "el metodo '" + m->name + "' (aridad " +
-                                         std::to_string(m->params.size()) +
-                                         ") ya existe en el tipo '" + key +
-                                         "'; una extension/impl no puede "
-                                         "redefinirlo");
+                diags_.diag(m->loc, DiagLevel::ERR, "VX2063", {m->name, key});
                 continue;
             }
             ClassMethodInfo mi = make_method_info(*m, key);
@@ -17915,9 +17911,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                         e->result_type = rtc;
                         return rtc;
                     }
-                    diags_.error(e->loc,
-                                 "ningun constructor de '" + id->name +
-                                     "' coincide con los argumentos dados");
+                    diags_.diag(e->loc, DiagLevel::ERR, "VX2064", {id->name});
                     return Type{};
                 }
                 // La identidad es el nombre del LAYOUT, no la clave por la

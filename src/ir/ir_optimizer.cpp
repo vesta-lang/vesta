@@ -2590,9 +2590,13 @@ struct GcAllocSite {
  *        - CMP/BR: read-only, no escapa.
  *        - Cualquier OTRA op con un operand derivado: ESCAPA (conservador).
  *
+ * @param fn  La funcion que se mira.
+ * @param mod Su modulo: de ahi sale DE QUE CLASE es cada objeto, que no se
+ *            puede sacar del nombre del ayudante.
  * @return vector de @c GcAllocSite con el campo @c escapes resuelto.
  */
-std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
+std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn,
+                                           const IrModule &mod) {
     std::vector<GcAllocSite> sites;
     if (fn.is_native || fn.values.empty()) return sites;
 
@@ -2603,13 +2607,17 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
             const auto &ins = blk.instrs[ii];
             if (ins.op != IrOp::CALL) continue;
             if (ins.dst == IR_NO_VALUE || ins.dst >= fn.values.size()) continue;
-            std::string cls;
-            if (!is_new_helper_name(ins.func_name, &cls)) continue;
+            /* De QUE clase es el objeto: se pregunta al modulo, no se raja el
+             * nombre del ayudante.  Con dos constructores el trozo de detras
+             * del prefijo no es una clase, y el sitio se quedaba sin atribuir
+             * -- o sea, sin sustituir por escalares -- sin que nadie lo dijera. */
+            const IrClass *cls = new_helper_class(mod, ins.func_name);
+            if (cls == nullptr) continue;
             GcAllocSite s;
             s.block_idx = bi;
             s.ins_idx = ii;
             s.dst = ins.dst;
-            s.class_name = std::move(cls);
+            s.class_name = cls->name;
             s.escapes = true; /* default conservador */
             sites.push_back(std::move(s));
         }
@@ -2758,9 +2766,8 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
             /* El propio CALL seed NO escapa su dst (es el alloc); pero sus
              * operands (args del ctor) PUEDEN escapar OTROS candidatos. */
             if (ins.op == IrOp::CALL) {
-                std::string cls;
                 if (ins.dst != IR_NO_VALUE &&
-                    is_new_helper_name(ins.func_name, &cls)) {
+                    is_new_helper_name(ins.func_name, nullptr)) {
                     for (auto opv : ins.operands)
                         mark_escape(opv);
                     continue;
@@ -2832,16 +2839,18 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn) {
  * el IR: siempre devuelve false.  Sirve para validar el analisis con cero
  * riesgo antes de habilitar la transformacion (scalar replacement).
  */
-static bool escape_detect_gc_impl(IrFunction &fn) {
+static bool escape_detect_gc_impl(IrFunction &fn, const IrModule &mod) {
     static const bool dbg_det = util::flag_on(util::FlagId::EscapeDebug);
     if (!dbg_det) return false;
-    auto sites = analyze_gc_escape(fn);
+    auto sites = analyze_gc_escape(fn, mod);
     if (sites.empty()) return false;
     for (const auto &s : sites) {
-        std::fprintf(
-            stderr, "[escape] fn '%s': new %s() (dst %%%u) -> %s\n",
-            fn.name.c_str(), s.class_name.c_str(), static_cast<unsigned>(s.dst),
-            s.escapes ? "ESCAPA" : "NO-ESCAPA (candidato scalar-replace)");
+        // Por el catalogo: el veredicto tambien lo lee una persona.
+        const std::string msg = vx::diag::format(
+            s.escapes ? "VXA120" : "VXA121",
+            {fn.name, s.class_name,
+             std::to_string(static_cast<unsigned>(s.dst))});
+        std::fprintf(stderr, "%s\n", msg.c_str());
     }
     return false;
 }
@@ -2905,8 +2914,11 @@ const IrFunction *sr_find_fn(const IrModule &mod, const std::string &name) {
  *     usarse como base de esas direcciones.  Cualquier otra op -> invalido.
  */
 bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
-                         SrCtorModel &out, std::string *reason = nullptr) {
+                         SrCtorModel &out, const char **reason = nullptr) {
     out = SrCtorModel{};
+    /* El CODIGO del motivo, no su texto: el "por que" lo lee una persona, asi
+     * que sale del catalogo en su idioma, y guardar el codigo deja la renuncia
+     * en un puntero.  Igual que su vecino de la SROA de pila. */
     auto bail = [&](const char *r) -> bool {
         if (reason) *reason = r;
         return false;
@@ -2920,11 +2932,10 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             break;
         }
     }
-    if (!cls) return bail("clase no encontrada en mod.classes");
-    if (cls->has_destructor) return bail("clase con destructor");
-    if (cls->has_destructible_field)
-        return bail("clase con campo destructible");
-    if (cls->is_aspect) return bail("clase es @Aspect");
+    if (!cls) return bail("VXA096");
+    if (cls->has_destructor) return bail("VXA097");
+    if (cls->has_destructible_field) return bail("VXA098");
+    if (cls->is_aspect) return bail("VXA099");
 
     /* Solo importa si algun metodo de ESTA clase lleva aspectos: sustituirla
      * por escalares elimina su constructor, y con el la cadena que se hubiera
@@ -2937,10 +2948,10 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
      * objetos dejaban de plegarse a constantes.  Y no se veia como lo que era
      * -- se leia como si el coste viniera del despacho -- porque el numero de
      * `callvirt` emitidos era exactamente el mismo con aspecto y sin el. */
-    if (!mod.all_advices_attributed) return bail("hay aspectos sin atribuir");
+    if (!mod.all_advices_attributed) return bail("VXA100");
     for (const auto &m : cls->methods) {
         if (!m.ir_fn_name.empty() && mod.advice_chains.count(m.ir_fn_name) != 0)
-            return bail("un metodo de la clase lleva aspectos");
+            return bail("VXA101");
     }
 
     /* 2) Un unico constructor DEFINIDO en esta clase (los heredados tienen
@@ -2962,16 +2973,13 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
         ctor_m = &m;
         ++ctor_count;
     }
-    if (ctor_count != 1) return bail("0 o >1 constructores propios");
-    if (!ctor_m || ctor_m->ir_fn_name.empty())
-        return bail("ctor sin ir_fn_name");
+    if (ctor_count != 1) return bail("VXA102");
+    if (!ctor_m || ctor_m->ir_fn_name.empty()) return bail("VXA103");
 
     const IrFunction *ctor = sr_find_fn(mod, ctor_m->ir_fn_name);
-    if (!ctor || ctor->is_native)
-        return bail("ctor IrFunction no hallada/native");
-    if (ctor->blocks.size() != 1)
-        return bail("ctor con control de flujo (>1 bloque)");
-    if (ctor->params.empty()) return bail("ctor sin param this");
+    if (!ctor || ctor->is_native) return bail("VXA104");
+    if (ctor->blocks.size() != 1) return bail("VXA105");
+    if (ctor->params.empty()) return bail("VXA106");
 
     const IrValueId this_vid = ctor->params[0];
     out.num_new_args = static_cast<uint32_t>(ctor->params.size() - 1);
@@ -3023,7 +3031,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             for (auto v : ins.operands) {
                 if (v == this_vid ||
                     (v < n_ctor_values && is_field_addr[v]))
-                    return bail("ctor retorna this/field-addr");
+                    return bail("VXA107");
             }
             break;
 
@@ -3033,7 +3041,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             if (ins.operands.size() != 2) {
                 /* ADD que no toca this es inocuo; si toca this, invalido. */
                 for (auto v : ins.operands)
-                    if (v == this_vid) return bail("ADD raro sobre this");
+                    if (v == this_vid) return bail("VXA108");
                 break;
             }
             const IrValueId a = ins.operands[0];
@@ -3048,9 +3056,9 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             }
             if (base == this_vid) {
                 if (offv >= n_ctor_values || !is_const_val[offv])
-                    return bail("offset de campo no const");
+                    return bail("VXA109");
                 if (ins.dst == IR_NO_VALUE || ins.dst >= n_ctor_values)
-                    return bail("field-addr sin dst");
+                    return bail("VXA110");
                 field_off[ins.dst] = static_cast<uint32_t>(const_val_of[offv]);
                 is_field_addr[ins.dst] = 1;
             } else {
@@ -3058,14 +3066,14 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
                  * derivada, no lo soportamos. */
                 if ((a < n_ctor_values && is_field_addr[a]) ||
                     (b < n_ctor_values && is_field_addr[b]))
-                    return bail("aritmetica sobre field-addr");
+                    return bail("VXA111");
             }
             break;
         }
 
         case IrOp::STORE: {
             /* store val=operands[0], addr=operands[1]. */
-            if (ins.operands.size() < 2) return bail("STORE mal formado");
+            if (ins.operands.size() < 2) return bail("VXA112");
             const IrValueId val = ins.operands[0];
             const IrValueId addr = ins.operands[1];
             uint32_t off;
@@ -3073,7 +3081,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
                 off = 0;
             } else {
                 if (addr >= n_ctor_values || !is_field_addr[addr])
-                    return bail("STORE a addr no-campo");
+                    return bail("VXA113");
                 off = field_off[addr];
             }
             /* val debe ser un param (>=1) o un const. */
@@ -3081,16 +3089,16 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             fi.offset = off;
             int pidx = param_index_of(val);
             if (pidx == 0) {
-                return bail("ctor guarda this en un campo (self-ref)");
+                return bail("VXA114");
             } else if (pidx >= 1) {
                 fi.kind = SrFieldInit::PARAM;
                 fi.new_arg_index = pidx - 1;
                 if (val >= ctor->values.size())
-                    return bail("param fuera de rango");
+                    return bail("VXA115");
                 fi.field_type = ctor->values[val].type;
             } else {
                 if (val >= n_ctor_values || !is_const_val[val])
-                    return bail("store-val no es param ni const (cast/expr)");
+                    return bail("VXA116");
                 fi.kind = SrFieldInit::CONST;
                 fi.const_val = const_val_of[val];
                 fi.field_type = (val < ctor->values.size())
@@ -3098,7 +3106,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
                                     : IrType::I64;
             }
             /* No permitir dos stores al mismo offset (ambiguo). */
-            if (out.find(off)) return bail("dos stores al mismo campo");
+            if (out.find(off)) return bail("VXA117");
             out.inits.push_back(fi);
             break;
         }
@@ -3106,7 +3114,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
         default:
             /* Cualquier otra op (CALL, LOAD, NEWOBJ, GC*, RAW_ASM, MOV,
              * casts, super-ctor, ...) invalida el modelo trivial. */
-            return bail("ctor con op no-trivial (CALL/LOAD/cast/super/...)");
+            return bail("VXA118");
         }
     }
 
@@ -3438,10 +3446,10 @@ bool sr_mem2reg_object(
     IrFunction &fn, const SrCtorModel *model, size_t call_bi, size_t call_ii,
     IrValueId obj, IrValueList args,
     const std::unordered_map<IrValueId, uint32_t> &fieldaddr_off,
-    std::string &reason, bool stack_mode = false) {
+    const char *&reason, bool stack_mode = false) {
     const size_t N = fn.blocks.size();
     if (N == 0) {
-        reason = "fn vacia";
+        reason = "VXA133";
         return false;
     }
 
@@ -3498,7 +3506,7 @@ bool sr_mem2reg_object(
                 ld ? in.type
                    : (sv < fn.values.size() ? fn.values[sv].type : IrType::I64);
             if (!type_is_integer(t)) {
-                reason = "campo no-entero en mem2reg";
+                reason = "VXA134";
                 return false;
             }
             auto fit = field_type.find(off);
@@ -3506,14 +3514,14 @@ bool sr_mem2reg_object(
                 field_type[off] = t;
                 offsets.push_back(off);
             } else if (fit->second != t) {
-                reason = "tipo inconsistente del campo";
+                reason = "VXA135";
                 return false;
             }
             if (st) store_blocks[off].push_back((IrBlockId)bi);
         }
     }
     if (offsets.empty()) {
-        reason = "sin accesos a campos";
+        reason = "VXA136";
         return false;
     }
 
@@ -3531,14 +3539,13 @@ bool sr_mem2reg_object(
              * class_ptr, etc.) NO es default-0 -> bail (identidad/reflexion).
              */
             if (off < SR_OBJ_HEADER_SIZE) {
-                reason =
-                    "lectura de cabecera no inicializada (identidad/class_ptr)";
+                reason = "VXA128";
                 return false;
             }
             continue; /* default-0 permitido para campo de usuario */
         }
         if (fi->field_type != field_type[off]) {
-            reason = "tipo ctor/acceso difiere";
+            reason = "VXA137";
             return false;
         }
     }
@@ -3546,7 +3553,7 @@ bool sr_mem2reg_object(
     SrDom dom = sr_compute_dom(fn);
     /* El bloque del alloc debe ser alcanzable (lo es: contiene el call). */
     if (call_bi >= N || !dom.reachable[call_bi]) {
-        reason = "call_bi inalcanzable";
+        reason = "VXA138";
         return false;
     }
     /* Todos los bloques con acceso a campos deben ser alcanzables + dominados
@@ -3603,12 +3610,12 @@ bool sr_mem2reg_object(
             /* PARAM. */
             if (fi->new_arg_index < 0 ||
                 (size_t)fi->new_arg_index >= args.size()) {
-                reason = "arg index fuera de rango";
+                reason = "VXA139";
                 return false;
             }
             IrValueId arg = args[fi->new_arg_index];
             if (arg == IR_NO_VALUE || arg >= fn.values.size()) {
-                reason = "arg invalido";
+                reason = "VXA139";
                 return false;
             }
             IrType Ta = fn.values[arg].type;
@@ -4064,27 +4071,30 @@ static bool const_value_indexed(const IrFunction &fn,
 static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
     if (fn.is_native || fn.values.empty()) return false;
 
-    auto sites = analyze_gc_escape(fn);
+    auto sites = analyze_gc_escape(fn, mod);
     if (sites.empty()) return false;
 
     static const bool dbg = util::flag_on(util::FlagId::EscapeDebug);
-    auto diag = [&](const GcAllocSite &s, const std::string &why) {
-        if (dbg)
-            std::fprintf(
-                stderr,
-                "[escape] fn '%s': new %s() (dst %%%u) NO transformado: %s\n",
-                fn.name.c_str(), s.class_name.c_str(),
-                static_cast<unsigned>(s.dst), why.c_str());
+    /* El motivo entra como CODIGO y el texto se saca aqui: quien lo lee es una
+     * persona, y lo lee en su idioma.  Mientras no se pida el informe no se
+     * arma ninguna cadena. */
+    auto diag = [&](const GcAllocSite &s, const char *why) {
+        if (!dbg) return;
+        const std::string msg = vx::diag::format(
+            "VXA119", {fn.name, s.class_name,
+                       std::to_string(static_cast<unsigned>(s.dst)),
+                       vx::diag::format(why, {})});
+        std::fprintf(stderr, "%s\n", msg.c_str());
     };
 
     /* Cache de modelos de ctor por clase (validos e invalidos) + razon. */
     struct CachedModel {
         SrCtorModel m;
-        std::string reason;
+        const char *reason = nullptr;
     };
     std::unordered_map<std::string, CachedModel> model_cache;
     auto get_model = [&](const std::string &cls,
-                         std::string &out_reason) -> const SrCtorModel * {
+                         const char *&out_reason) -> const SrCtorModel * {
         auto it = model_cache.find(cls);
         if (it == model_cache.end()) {
             CachedModel cm;
@@ -4107,10 +4117,10 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
         if (site.escapes) continue;
         const IrValueId obj = site.dst;
 
-        std::string mreason;
+        const char *mreason = nullptr;
         const SrCtorModel *model = get_model(site.class_name, mreason);
         if (!model) {
-            diag(site, "ctor: " + mreason);
+            diag(site, mreason);
             continue;
         }
 
@@ -4145,7 +4155,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
         bool ok = true;
         bool single_block = true; /* todos los usos en el bloque del call */
         bool has_writes = false;  /* algun STORE a un campo del objeto */
-        const char *use_reason = "uso no soportado de obj";
+        const char *use_reason = "VXA125";
 
         /* Pasada A: localizar field-addrs derivadas de obj + loads/stores
          * directos (offset 0).  Trackea single_block + has_writes. */
@@ -4167,8 +4177,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                 if (in.func_ptr == obj) bad_use = true;
                 if (bad_use) {
                     ok = false;
-                    use_reason =
-                        "obj usado en PHI/func_ptr (necesita SROA con PHI)";
+                    use_reason = "VXA122";
                     break;
                 }
                 bool uses_obj = false;
@@ -4184,7 +4193,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                     /* `add obj, Kconst` o `add Kconst, obj`. */
                     if (in.operands[0] == obj && in.operands[1] == obj) {
                         ok = false;
-                        use_reason = "obj en ambos operandos de add";
+                        use_reason = "VXA123";
                         break;
                     }
                     IrValueId other = (in.operands[0] == obj) ? in.operands[1]
@@ -4193,7 +4202,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                     if (!const_value_indexed(fn, const_of, is_const_def, other,
                                              k)) {
                         ok = false;
-                        use_reason = "field-addr con offset no-const";
+                        use_reason = "VXA124";
                         break;
                     }
                     fieldaddr_off[in.dst] = static_cast<uint32_t>(k);
@@ -4217,8 +4226,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                     dead_free.push_back({bi, ii});
                 } else {
                     ok = false;
-                    use_reason = "obj usado fuera de field-access "
-                                 "(CMP/callvirt/store-val/GEP/...)";
+                    use_reason = "VXA125";
                     break;
                 }
             }
@@ -4244,7 +4252,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                     fieldaddr_off.count(in.func_ptr))
                     ok = false;
                 if (!ok) {
-                    use_reason = "field-addr usada en PHI/func_ptr";
+                    use_reason = "VXA126";
                     break;
                 }
                 /* Es field-addr operando de esta instr? */
@@ -4275,8 +4283,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                     if (bi != site.block_idx) single_block = false;
                 } else {
                     ok = false;
-                    use_reason =
-                        "field-addr usado por op no-LOAD/STORE (o como valor)";
+                    use_reason = "VXA127";
                 }
             }
         }
@@ -4305,16 +4312,14 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                      * offset 0). */
                     if (lr.off < SR_OBJ_HEADER_SIZE) {
                         ok = false;
-                        use_reason = "lectura de cabecera del objeto no "
-                                     "inicializada (identidad/class_ptr)";
+                        use_reason = "VXA128";
                         break;
                     }
                     /* Campo de usuario no inicializado por el ctor -> default-0
                      * (el objeto GC se zero-inicializa al alocar). */
                     if (!sr_rewrite_load_zero(probe, fn, /*apply=*/false)) {
                         ok = false;
-                        use_reason =
-                            "default-0 de tipo no soportado (float/ptr/handle)";
+                        use_reason = "VXA129";
                         break;
                     }
                     pending.push_back({lr.bi, lr.ii, nullptr});
@@ -4322,8 +4327,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                 }
                 if (!sr_rewrite_load(probe, *fi, args, fn, /*apply=*/false)) {
                     ok = false;
-                    use_reason = "tipo de campo no soportado "
-                                 "(float/ptr/handle/widening)";
+                    use_reason = "VXA130";
                     break;
                 }
                 pending.push_back({lr.bi, lr.ii, fi});
@@ -4383,15 +4387,15 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
             static const bool mem2reg_off =
                 util::flag_on(util::FlagId::NoEscapeMem2Reg);
             if (!mem2reg_off) {
-                std::string mr;
+                const char *mr = nullptr;
                 if (sr_mem2reg_object(fn, model, site.block_idx, site.ins_idx,
                                       obj, args, fieldaddr_off, mr)) {
                     changed = true;
                     continue;
                 }
-                diag(site, "mem2reg: " + mr);
+                diag(site, mr);
             } else {
-                diag(site, "field-write cross-block (mem2reg off)");
+                diag(site, "VXA132");
             }
             continue;
         }
@@ -4409,7 +4413,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
             std::vector<size_t> store_iis;
             std::unordered_map<uint32_t, IrValueId>
                 sim; /* offset -> ultimo valor escrito */
-            const char *vreason = "versioning";
+            const char *vreason = "VXA132";
             bool vok = true;
 
             for (size_t ii = 0; ii < blkv.size() && vok; ++ii) {
@@ -4450,8 +4454,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                      * Consistente con el path read-only (int-only). */
                     if (!type_is_integer(in.type)) {
                         vok = false;
-                        vreason = "campo no-entero con field-write "
-                                  "(float/ptr/handle)";
+                        vreason = "VXA134";
                         break;
                     }
                     auto sit = sim.find(off);
@@ -4462,7 +4465,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                         if (v == IR_NO_VALUE || v >= fn.values.size() ||
                             fn.values[v].type != in.type) {
                             vok = false;
-                            vreason = "tipo store/load no coincide";
+                            vreason = "VXA131";
                             break;
                         }
                         ld_plan.push_back({ii, true, v, nullptr, false});
@@ -4475,8 +4478,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                              */
                             if (off < SR_OBJ_HEADER_SIZE) {
                                 vok = false;
-                                vreason = "lectura de cabecera no inicializada "
-                                          "(identidad/class_ptr)";
+                                vreason = "VXA128";
                                 break;
                             }
                             /* campo de usuario no inicializado -> default-0
@@ -4486,8 +4488,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                             if (!sr_rewrite_load_zero(probe, fn,
                                                       /*apply=*/false)) {
                                 vok = false;
-                                vreason = "default-0 de tipo no soportado "
-                                          "(float/ptr/handle)";
+                                vreason = "VXA129";
                                 break;
                             }
                             ld_plan.push_back(
@@ -4498,8 +4499,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
                             if (!sr_rewrite_load(probe, *fi, args, fn,
                                                  /*apply=*/false)) {
                                 vok = false;
-                                vreason = "tipo de campo no soportado "
-                                          "(float/ptr/handle/widening)";
+                                vreason = "VXA130";
                                 break;
                             }
                             ld_plan.push_back(
@@ -4813,16 +4813,18 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
         fieldaddr_off.reserve(fa_by_site[si].size() * 2 + 1);
         for (const auto &fa : fa_by_site[si])
             fieldaddr_off.emplace(fa.first, fa.second);
-        std::string mr;
+        const char *mr = nullptr;
         // args vacio (stack_mode ignora el modelo/args); model = nullptr.
         if (sr_mem2reg_object(fn, /*model=*/nullptr, site.bi, site.ii, base,
                               /*args=*/{}, fieldaddr_off, mr,
                               /*stack_mode=*/true)) {
             changed = true;
         } else if (dbg) {
-            std::fprintf(stderr,
-                         "[sroa-stack] fn '%s': ALLOCA %%%u mem2reg: %s\n",
-                         fn.name.c_str(), (unsigned)base, mr.c_str());
+            // El mismo envoltorio que el resto de motivos de este pase.
+            const std::string msg = vx::diag::format(
+                "VXA094", {fn.name, std::to_string((unsigned)base),
+                           vx::diag::format(mr, {})});
+            std::fprintf(stderr, "%s\n", msg.c_str());
         }
     }
     return changed;
@@ -11811,15 +11813,18 @@ static bool devirt_monomorphic_impl(IrModule &mod) {
                     if (ins.dst == IR_NO_VALUE) continue;
                     if (class_of.count(ins.dst)) continue;
 
-                    /* Origen: call @__new_<X> */
-                    if (ins.op == IrOp::CALL &&
-                        ins.func_name.rfind("__new_", 0) == 0) {
-                        std::string cn = ins.func_name.substr(6);
-                        if (class_by_name.count(cn)) {
-                            class_of[ins.dst] = cn;
+                    /* Origen: el ayudante de construccion.  De QUE clase es se
+                     * PREGUNTA: cortando el nombre por el prefijo, uno con
+                     * discriminante daba un trozo que no es ninguna clase y el
+                     * valor se quedaba sin tipo conocido -- o sea, sin
+                     * devirtualizar -- sin decirlo. */
+                    if (ins.op == IrOp::CALL) {
+                        if (const IrClass *c =
+                                new_helper_class(mod, ins.func_name)) {
+                            class_of[ins.dst] = c->name;
                             grew = true;
+                            continue;
                         }
-                        continue;
                     }
                     /* NEWOBJ no carga class_name directamente; ignorar. */
                     /* MOV: hereda clase del source */
@@ -14705,8 +14710,8 @@ ModulePassResult ir_pass_own_closure_envs(IrModule &mod) {
     return ModulePassResult::of(mod, own_closure_envs_impl(mod));
 }
 
-PassResult ir_pass_escape_detect_gc(IrFunction &fn) {
-    return PassResult::of(fn, escape_detect_gc_impl(fn));
+PassResult ir_pass_escape_detect_gc(IrFunction &fn, const IrModule &mod) {
+    return PassResult::of(fn, escape_detect_gc_impl(fn, mod));
 }
 
 PassResult ir_pass_fuse_fma(IrFunction &fn) {
@@ -15683,7 +15688,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         PassTimer c__("post:escape_detect_gc (per fn)");
         for (auto &fn : mod.functions) {
             if (fn.is_native) continue;
-            (void)applied(ir_pass_escape_detect_gc(fn));
+            (void)applied(ir_pass_escape_detect_gc(fn, mod));
         }
     }
 

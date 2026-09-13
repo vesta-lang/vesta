@@ -1165,6 +1165,196 @@ es = "SROA de pila: en '{0}', la reserva %{1} se deja como esta: {2}"
 en = "the symbol of '{1}.{0}' was never computed: its type did not go through closing its method list"
 es = "el simbolo de '{1}.{0}' no se llego a calcular: su tipo no paso por el cierre de su lista de metodos"
 
+# --- por que un `new X()` no se sustituye por escalares (VXA096-VXA117) ---
+#
+# Sustituir un objeto por sus campos exige entender su constructor ENTERO y
+# todos los usos del objeto.  Cuando no se puede, se dice POR QUE: un analisis
+# que renuncia callando parece que funciona.  Igual que sus vecinos VXA087-094,
+# aqui se guarda el CODIGO y el texto se saca al imprimir -- quien lo lee es
+# una persona y lo lee en su idioma --, asi que el motivo cuesta un puntero.
+
+[VXA096]
+en = "the class is not in the module"
+es = "la clase no esta en el modulo"
+
+[VXA097]
+en = "the class has a destructor: deleting the object would skip it"
+es = "la clase tiene destructor: quitar el objeto se lo saltaria"
+
+[VXA098]
+en = "the class has a field that must be destroyed"
+es = "la clase tiene un campo que hay que destruir"
+
+[VXA099]
+en = "the class is an aspect"
+es = "la clase es un aspecto"
+
+[VXA100]
+en = "there are aspects that could not be attributed to a method"
+es = "hay aspectos que no se han podido atribuir a ningun metodo"
+
+[VXA101]
+en = "a method of the class carries aspects"
+es = "un metodo de la clase lleva aspectos"
+
+[VXA102]
+en = "the class does not declare exactly one constructor of its own"
+es = "la clase no declara exactamente un constructor propio"
+
+[VXA103]
+en = "the constructor does not say which symbol it is emitted under"
+es = "el constructor no dice con que simbolo se emite"
+
+[VXA104]
+en = "the constructor has no body in the module, or it is native"
+es = "el constructor no tiene cuerpo en el modulo, o es nativo"
+
+[VXA105]
+en = "the constructor has control flow: more than one block"
+es = "el constructor tiene flujo de control: mas de un bloque"
+
+[VXA106]
+en = "the constructor does not take the object as its first parameter"
+es = "el constructor no recibe el objeto como primer parametro"
+
+[VXA107]
+en = "the constructor returns the object, or the address of one of its fields"
+es = "el constructor devuelve el objeto, o la direccion de uno de sus campos"
+
+[VXA108]
+en = "the constructor does arithmetic on the object beyond addressing a field"
+es = "el constructor hace cuentas con el objeto mas alla de direccionar un campo"
+
+[VXA109]
+en = "the field offset is not known at compile time"
+es = "el desplazamiento del campo no se sabe al compilar"
+
+[VXA110]
+en = "the field address goes nowhere"
+es = "la direccion del campo no va a ningun sitio"
+
+[VXA111]
+en = "the constructor does arithmetic on a field address"
+es = "el constructor hace cuentas con la direccion de un campo"
+
+[VXA112]
+en = "a store without a value and an address"
+es = "un almacenamiento sin valor y sin direccion"
+
+[VXA113]
+en = "the constructor writes to an address that is not one of its fields"
+es = "el constructor escribe en una direccion que no es un campo suyo"
+
+[VXA114]
+en = "the constructor stores the object inside one of its own fields"
+es = "el constructor guarda el objeto dentro de un campo suyo"
+
+[VXA115]
+en = "the value stored is a parameter that the constructor does not have"
+es = "el valor que se guarda es un parametro que el constructor no tiene"
+
+[VXA116]
+en = "the value stored is neither a parameter nor a constant"
+es = "el valor que se guarda no es ni un parametro ni una constante"
+
+[VXA117]
+en = "two writes to the same field: which one counts is ambiguous"
+es = "dos escrituras al mismo campo: cual vale es ambiguo"
+
+[VXA118]
+en = "the constructor does something other than write its fields"
+es = "el constructor hace algo mas que escribir sus campos"
+
+# El envoltorio del informe: {0} funcion  {1} clase  {2} valor  {3} el motivo.
+[VXA119]
+en = "escape: in '{0}', the 'new {1}()' at %{2} was left alone: {3}"
+es = "escape: en '{0}', el `new {1}()` de %{2} se deja como esta: {3}"
+
+# Y el veredicto del analisis, que es lo que se pidio mirar.
+[VXA120]
+en = "escape: in '{0}', the 'new {1}()' at %{2} ESCAPES"
+es = "escape: en '{0}', el `new {1}()` de %{2} ESCAPA"
+
+[VXA121]
+en = "escape: in '{0}', the 'new {1}()' at %{2} does not escape: it can become its fields"
+es = "escape: en '{0}', el `new {1}()` de %{2} no escapa: puede pasar a ser sus campos"
+
+# --- y por que no se pudo con los USOS del objeto (VXA122-VXA132) ---
+
+[VXA122]
+en = "the object reaches a merge of two paths, or a function pointer"
+es = "el objeto llega a un cruce de dos caminos, o a un puntero a funcion"
+
+[VXA123]
+en = "the object is on both sides of the same sum"
+es = "el objeto esta en los dos lados de la misma suma"
+
+[VXA124]
+en = "the field offset is not known at compile time"
+es = "el desplazamiento del campo no se sabe al compilar"
+
+[VXA125]
+en = "the object is used for something other than reaching one of its fields"
+es = "el objeto se usa para algo que no es llegar a uno de sus campos"
+
+[VXA126]
+en = "a field address reaches a merge of two paths, or a function pointer"
+es = "la direccion de un campo llega a un cruce de dos caminos, o a un puntero a funcion"
+
+[VXA127]
+en = "a field address is used for something other than reading or writing there"
+es = "la direccion de un campo se usa para algo que no es leer o escribir ahi"
+
+[VXA128]
+en = "it reads the object header, which the constructor does not write"
+es = "se lee la cabecera del objeto, que el constructor no escribe"
+
+[VXA129]
+en = "a field with no value written has a type whose default is not a plain zero"
+es = "un campo sin valor escrito es de un tipo cuyo defecto no es un cero a secas"
+
+[VXA130]
+en = "the type of the field is not one this pass knows how to keep in a register"
+es = "el tipo del campo no es de los que este pase sabe llevar en un registro"
+
+[VXA131]
+en = "what is written and what is read from the field are not the same type"
+es = "lo que se escribe y lo que se lee del campo no son del mismo tipo"
+
+[VXA132]
+en = "fields are written from more than one block, and keeping them in registers is off"
+es = "los campos se escriben desde mas de un bloque, y llevarlos en registros esta apagado"
+
+# --- y por que no se pudo llevarlos en REGISTROS (VXA133-VXA139) ---
+
+[VXA133]
+en = "the function is empty"
+es = "la funcion esta vacia"
+
+[VXA134]
+en = "a field of a type that cannot live in a register"
+es = "un campo de un tipo que no puede vivir en un registro"
+
+[VXA135]
+en = "the same field is read and written with different types"
+es = "el mismo campo se lee y se escribe con tipos distintos"
+
+[VXA136]
+en = "the object's fields are never touched"
+es = "no se toca ningun campo del objeto"
+
+[VXA137]
+en = "the type the constructor writes and the one that is read do not match"
+es = "el tipo que escribe el constructor y el que se lee no coinciden"
+
+[VXA138]
+en = "the construction is in a block nothing reaches"
+es = "la construccion esta en un bloque al que no se llega"
+
+[VXA139]
+en = "an argument of the construction that is not there, or is not valid"
+es = "un argumento de la construccion que no esta, o que no vale"
+
 # ===========================================================================
 # HECHOS DEL ASA -- el texto de lo que se sabe
 # ===========================================================================
@@ -2529,6 +2719,16 @@ es = "'{0}' ya declara un metodo '{1}' con esos mismos parametros"
 ["VX2061"]
 en = "'{0}' already declares a constructor with those same parameters"
 es = "'{0}' ya declara un constructor con esos mismos parametros"
+# Un `impl` AnyADE metodos, no los sustituye: el tipo ya tiene uno que se llama
+# igual y toma lo mismo.  {0} el metodo, {1} el tipo.
+["VX2063"]
+en = "'{1}' already has a method '{0}' with those parameters; an 'impl' adds methods, it cannot redefine one"
+es = "'{1}' ya tiene un metodo '{0}' con esos parametros; un 'impl' anyade metodos, no puede redefinir uno"
+# Y al construir: se escribio una llamada que ningun constructor acepta.  El
+# nombre del tipo entra como dato; la lista de los que hay la da el editor.
+["VX2064"]
+en = "no constructor of '{0}' takes those arguments"
+es = "ningun constructor de '{0}' admite esos argumentos"
 # Un nombre de tipo es UNO.  {1} es la palabra clave con la que se declaro el
 # que ya lo tenia -- `struct`, `class` o `enum` --, y como es palabra clave del
 # lenguaje NO se traduce: entra como dato.

@@ -523,7 +523,9 @@ ModulePassResult ir_pass_fold_strcat(IrModule &mod);
  *
  * @return siempre false (no modifica el IR).
  */
-PassResult ir_pass_escape_detect_gc(IrFunction &fn);
+/// @param fn  La funcion.
+/// @param mod Su modulo: de ahi sale de QUE clase es cada objeto.
+PassResult ir_pass_escape_detect_gc(IrFunction &fn, const IrModule &mod);
 
 /**
  * @brief  C2.13: Scalar Replacement de objetos GC no-escapantes.
