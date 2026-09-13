@@ -846,7 +846,11 @@ void CBackend::emit_class_bodies(EmitContext &ctx, const ir::IrModule &mod) {
         ctx.out << "    if (!o) return (" << cls.name << "*)0;\n";
         // Invocar el constructor del usuario (si existe).
         if (ctor) {
-            ctx.out << "    " << cls.name << "__ctor(o";
+            /* Se LLAMA por el simbolo con el que se EMITE, que lo trae la
+             * ficha: armarlo aqui como `<Clase>__ctor` era el nombre de cuando
+             * una clase solo podia tener uno, y con dos llamaba a una funcion
+             * que no existe. */
+            ctx.out << "    " << sanitize_name(ctor->ir_fn_name) << "(o";
             for (size_t i = 0; i < ctor->param_types.size(); ++i) {
                 ctx.out << ", p" << i;
             }
@@ -3172,9 +3176,11 @@ void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
         if (has_any_field) ctx.out << " = {0}";
         ctx.out << ";\n";
         bool has_ctor = false;
+        const ir::IrMethod *ctor = nullptr;
         if (cls) {
             for (const auto &m : cls->methods) {
                 if (m.is_constructor) {
+                    ctor = &m;
                     has_ctor = true;
                     break;
                 }
@@ -3182,7 +3188,8 @@ void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
         }
         if (has_ctor) {
             ctx.indent();
-            ctx.out << new_class_name << "__ctor(&__stk_" << dst;
+            // Por el simbolo de la ficha, no por `<Clase>__ctor` armado aqui.
+            ctx.out << sanitize_name(ctor->ir_fn_name) << "(&__stk_" << dst;
             for (auto a : args) {
                 ctx.out << ", " << value_expr(ctx, a);
             }

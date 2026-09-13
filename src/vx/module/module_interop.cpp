@@ -909,7 +909,13 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             // constructor corriente y la llamada se rechaza con "ninguna
             // sobrecarga coincide".
             if (m.is_comptime) mi.flags |= 0x08;
-            mi.mangled_label = name + "__" + m.name;
+            /* La etiqueta se LEE de la ficha.  Armarla aqui como
+             * `<Tipo>__<metodo>` daba, para un constructor -- que se llama como
+             * el tipo --, `t__p__P__P`: un simbolo que el modulo de origen no
+             * emitio nunca.  No se notaba porque quien lo importaba lo tiraba y
+             * se lo rearmaba a su manera; en cuanto empezo a creerselo, el
+             * enlazador se quedo sin resolver. */
+            mi.mangled_label = method_symbol_of(m);
             mi.param_types.reserve(m.param_types.size());
             for (const auto &pt : m.param_types)
                 mi.param_types.push_back(canonical_typename_of(pt));
@@ -976,11 +982,12 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             // Todos los metodos de instancia son virtuales por defecto
             // en Vesta (mismo despacho que Java).
             if (!m.is_static) mi.flags |= 0x04;
-            // El label real en el .vel: si la clase fue mangled (deps en
-            // compile_vx_project), el method label tiene el mismo
-            // prefix.  Aqui usamos `<ClassName>__<MethodName>` que es
-            // como el lowering lo emite.
-            mi.mangled_label = name + "__" + m.name;
+            // El label real en el .vel, LEIDO de la ficha: lo calculo el
+            // comprobador al cerrar el layout, con el mangleado de la clase
+            // dentro y -- si el nombre esta sobrecargado -- su discriminante.
+            // Armarlo aqui como `<Clase>__<metodo>` acertaba solo mientras
+            // ninguna de las dos cosas ocurriera.
+            mi.mangled_label = method_symbol_of(m);
             mi.param_types.reserve(m.param_types.size());
             for (const auto &pt : m.param_types) {
                 mi.param_types.push_back(canonical_typename_of(pt));

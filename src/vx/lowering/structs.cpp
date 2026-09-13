@@ -475,14 +475,13 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     ins.op = ir::IrOp::CALL;
     ins.type = ret_ir;
     ins.dst = dst;
-    // Metodo IMPORTADO cross-module: usar el simbolo real del .velb origen
-    // (link_name, p.ej. "std__wideint__u128____div__"); reconstruir
-    // "<struct_local>__<metodo>" llevaria el mangling del consumidor y el
-    // linker no lo resolveria.  Metodos del propio modulo: link_name vacio ->
-    // el label clasico.
-    ins.func_name = mtd->link_name.empty()
-                        ? method_symbol_of(*mtd, bt.struct_name.str())
-                        : mtd->link_name;
+    /* Un solo campo para las dos procedencias: al cerrar el layout, el metodo
+     * IMPORTADO recibe ahi el simbolo real de su modulo de origen
+     * (`std__wideint__u128____div__`) y el de casa el suyo.  Elegir aqui entre
+     * dos campos era la ocasion de rearmar el nombre en la rama equivocada, y
+     * reconstruirlo para uno importado le pondria el mangleado del consumidor:
+     * el enlazador no lo resolveria. */
+    ins.func_name = method_symbol_of(*mtd);
     ins.operands = std::move(operands);
     ins.source_line = e->loc.line;
     emit(current_block_, std::move(ins));
@@ -491,8 +490,8 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
 }
 
 uint64_t Lowering::get_or_emit_struct_vtable(const StructLayout &lay) {
-    auto cit = struct_vtable_didx_.find(lay.name);
-    if (cit != struct_vtable_didx_.end()) return cit->second;
+    TypeStaticBlobs &blobs = struct_blobs_[lay.name];
+    if (blobs.vtable != UINT64_MAX) return blobs.vtable;
 
     // Numero de slots = max(vtable_index)+1 sobre los metodos virtuales.
     uint32_t nslots = 0;
@@ -521,7 +520,7 @@ uint64_t Lowering::get_or_emit_struct_vtable(const StructLayout &lay) {
         sr.is_rel = 0;
         vm.sym_refs.push_back(std::move(sr));
     }
-    struct_vtable_didx_[lay.name] = idx;
+    struct_blobs_[lay.name].vtable = idx;
     return idx;
 }
 
@@ -603,14 +602,17 @@ ir::IrValueId Lowering::lower_super_call_expr(ast::SuperCallExpr *e) {
     // DIRECTO a <super>__ctor(this, args).  Evita findclass + callsuper
     // (ambos runtime, no compilables en bare).  Habilita herencia en AOT.
     if (native_poo_) {
-        const std::string sname = super_ctor->defining_class.empty()
-                                      ? super_name
-                                      : super_ctor->defining_class;
         ir::IrInstr ca{};
         ca.op = ir::IrOp::CALL;
         ca.type = ir::IrType::VOID;
         ca.dst = ir::IR_NO_VALUE;
-        ca.func_name = sname + "__ctor";
+        /* El simbolo se LEE del constructor elegido.  Armarlo aqui como
+         * `<Super>__ctor` daba el nombre de cuando una clase solo podia tener
+         * uno: con dos, el de verdad lleva su discriminante y esa etiqueta no
+         * existe.  Y como este camino es SOLO el nativo, no fallaba al
+         * compilar ni al interpretar -- el enlazador lo daba por externo y lo
+         * metia en la tabla de importaciones, asi que el binario ni cargaba. */
+        ca.func_name = method_symbol_of(*super_ctor);
         ca.operands.push_back(v_this);
         for (auto av : arg_vals)
             ca.operands.push_back(av);
@@ -664,30 +666,17 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         if (!m->method_type_params.empty()) continue;
 
         ir::IrFunction fn;
-        // El constructor baja a `<Struct>__ctor_<aridad>` (la aridad discrimina
-        // los OVERLOADS, que compartirian `__ctor` y colisionarian); el
-        // destructor a `<Struct>____dtor`; el resto a `<Struct>__<metodo>`.
-        const std::string suffix =
-            m->is_destructor    ? std::string("__dtor")
-            : m->is_constructor ? ("ctor_" + std::to_string(m->params.size()))
-                                : m->name;
         /* El simbolo NO se arma aqui: lo calculo el comprobador al cerrar el
-         * layout y esta internado en su ficha, que se alcanza por el hueco que
-         * el mismo dejo apuntado.  Vale igual para el constructor, cuyo nombre
-         * lleva la aridad y, si la comparte con otro, su discriminante.  El
-         * DESTRUCTOR no: no pasa por el layout con ese nombre. */
-        fn.name = sd->name + "__" + suffix;
-        if (!m->is_destructor) {
-            auto it_lay = tc_.struct_layouts().find(sd->name);
-            if (it_lay != tc_.struct_layouts().end()) {
-                const ClassMethodInfo *mi =
-                    picked_method(it_lay->second, m->layout_slot);
-                // Vacio solo en un layout que no paso por su cierre -- el que
-                // llega por el import --; ahi vale el nombre de siempre.
-                if (mi != nullptr && !mi->ir_symbol.empty())
-                    fn.name = mi->ir_symbol.str();
-            }
-        }
+         * layout y esta internado en la ficha del metodo, que se alcanza por el
+         * hueco que el mismo dejo apuntado.  Vale para los tres casos -- el
+         * constructor lleva la aridad dentro y, si la comparte con otro, su
+         * discriminante; el destructor es `__dtor` como cualquier otro nombre
+         * de metodo --, y por eso ya no hay tres formas de escribirlo aqui:
+         * cada una era una ocasion de emitir el cuerpo bajo una etiqueta y
+         * llamarlo por otra. */
+        const ClassMethodInfo *mi = layout_method(sd->name, m->layout_slot);
+        if (mi == nullptr) method_symbol_missing(m->name, sd->name);
+        fn.name = method_symbol_of(*mi);
 
         // F1b: un ctor `comptime T(expr)` se ejecuta en la ComptimeVM.  Se baja
         // con el prefijo `__macro_` (lo identifica como codigo comptime) y se

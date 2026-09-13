@@ -627,6 +627,53 @@ inline const ClassMethodInfo *find_method(const Layout &lay,
 }
 
 /**
+ * @enum NewHelperKind
+ * @brief De donde sale la memoria del objeto que construye un ayudante `__new_`.
+ */
+enum class NewHelperKind : uint8_t {
+    Normal, ///< el monton de siempre (o `calloc` en un binario nativo).
+    Shared, ///< el monton COMPARTIDO entre procesos (`newobjs`).
+    Gc,     ///< el recolector opcional (`gc<T>`).
+};
+
+/**
+ * @brief El SIMBOLO del ayudante que construye una instancia de @p cls.
+ *
+ * `__new_<Clase>`, mas lo que separe al constructor elegido de sus hermanos si
+ * la clase tiene varios, mas la variante.
+ *
+ * Se forma en UN sitio porque se escribe en CINCO: el que emite el ayudante --
+ * dos veces en el camino nativo y dos en el de la maquina virtual, que no bajan
+ * igual -- y el que emite la llamada.  Que una de las cinco copias se quede
+ * atras no da un error: da una etiqueta que nadie emitio.
+ *
+ * Y se devuelve INTERNADO: el nombre de un ayudante lo repiten todos los `new`
+ * de esa clase, y el pozo reparte uno solo en vez de una cadena por sitio.
+ *
+ * (Lo que si se arma en cada llamada es la CLAVE con la que se busca en el
+ * pozo.  Aqui se acepta porque esto corre una vez por `new` ESCRITO, no por
+ * llamada bajada; el simbolo de un metodo, que se pedia decenas de miles de
+ * veces, por eso vive ya hecho en @c ClassMethodInfo::ir_symbol.)
+ *
+ * @param ctor El constructor elegido, o nulo si la clase no declara ninguno.
+ * @param cls  Nombre de la clase.
+ * @param kind La variante.
+ */
+inline const std::string &new_helper_symbol(const ClassMethodInfo *ctor,
+                                            const std::string &cls,
+                                            NewHelperKind kind) {
+    std::string s = "__new_" + cls;
+    /* El discriminante solo cuando de verdad hay con quien confundirse: con un
+     * constructor unico -- que es lo normal -- el ayudante conserva el nombre
+     * que siempre tuvo. */
+    if (ctor != nullptr && ctor->is_overloaded)
+        s += "_" + overload::discriminator(ctor->param_types);
+    if (kind == NewHelperKind::Shared) s += "_shared";
+    else if (kind == NewHelperKind::Gc) s += "_gc";
+    return *util::intern_name(s);
+}
+
+/**
  * @brief El metodo del hueco que el comprobador ya dejo apuntado.
  *
  * Con sobrecarga, buscar por nombre en el layout deja de identificar a nadie:
@@ -678,33 +725,75 @@ inline std::string method_symbol(const std::string &owner,
 }
 
 /**
+ * @brief Cierra UN metodo: lo empareja con sus homonimos y le pone el simbolo.
+ *
+ * Es la puerta para los que llegan TARDE, despues de que su tipo se cerrara --
+ * la instancia de un metodo generico, un `impl`, el destructor sintetizado --.
+ * Cerrar el layout entero por cada uno costaria el cuadrado de sus metodos
+ * CADA VEZ; esto mira la lista una sola pasada, que es lo unico que hace falta:
+ * la marca no tiene grados, y quien llegue despues se emparejara al mirarse el.
+ *
+ * @param methods    La lista del layout.
+ * @param i          Cual de ella se cierra.
+ * @param owner      De quien es el layout.
+ * @param ctor_arity Si el simbolo del constructor lleva la aridad dentro
+ *                   (`<T>__ctor_2`, un struct) o no (`<Clase>__ctor`).
+ */
+void close_method(std::vector<ClassMethodInfo> &methods, size_t i,
+                  const std::string &owner, bool ctor_arity);
+
+/**
+ * @brief Cierra la lista ENTERA, cuando el tipo acaba de montarse.
+ *
+ * Despues de esto nadie vuelve a formar el nombre de un metodo: se lee de
+ * @c ClassMethodInfo::ir_symbol.
+ *
+ * @param methods    La lista del layout, ya completa.
+ * @param owner      De quien es el layout que se cierra.
+ * @param ctor_arity Como en @c close_method.
+ */
+void close_layout_methods(std::vector<ClassMethodInfo> &methods,
+                          const std::string &owner, bool ctor_arity);
+
+/**
+ * @brief Nadie cerro el tipo de este metodo: se dice y se para.
+ *
+ * Fuera de la cabecera porque el texto sale del CATALOGO, y eso arrastraria el
+ * modulo de diagnosticos a todo el que incluya esto.
+ *
+ * Se llega con el tipo ya comprobado -- el bajado no corre si el comprobador
+ * puso una sola queja --, asi que aqui no hay un programa mal escrito que
+ * explicar: hay un tipo que alguien monto sin cerrar.
+ *
+ * @param method Como se llama el metodo por el que se preguntaba.
+ * @param owner  De quien es.
+ */
+[[noreturn]] void method_symbol_missing(const std::string &method,
+                                        const std::string &owner);
+
+/**
  * @brief El simbolo de un metodo, LEIDO -- no armado.
  *
- * Lo normal es que ya este calculado e internado en @c ir_symbol: entonces esto
- * no reserva nada y no puede diferir de lo que se emitio.  El @p fallback solo
- * cubre el caso en que no lo este -- un metodo que no paso por el cierre de su
- * layout --, y ahi si se arma, como se armaba antes en los seis sitios.
+ * El cierre del layout lo dejo calculado e internado en @c ir_symbol, venga el
+ * metodo de este modulo o de un import.  Aqui solo se recoge: no se reserva
+ * nada y no puede diferir de lo que se emitio.
  *
- * @param m        El metodo.
- * @param fallback A quien atribuirlo si no consta ni el simbolo ni quien lo
- *                 define.
+ * @par Por que no hay respaldo
+ * Lo hubo: cuando el simbolo no constaba, se armaba aqui `Duenyo__metodo`.  Y
+ * era una forma silenciosa de equivocarse -- el constructor de un struct lleva
+ * la aridad dentro y el de una clase no, asi que desde aqui no habia con que
+ * acertar --: la etiqueta salia distinta de la emitida, el enlazador la daba
+ * por externa y el binario no cargaba.  Lo que un respaldo asi arregla es
+ * precisamente lo que no hay que tapar: que alguien pregunte por un metodo
+ * cuyo layout nadie cerro.
+ *
+ * @param m El metodo.
  */
-inline const std::string &method_symbol_of(const ClassMethodInfo &m,
-                                           const std::string &fallback) {
-    if (!m.ir_symbol.empty()) return m.ir_symbol.str();
-    /* Sin simbolo calculado hay que armarlo, y se INTERNA -- pero no se guarda
-     * en la ficha: esto se lee desde el bajado, que va por modulos en paralelo,
-     * y escribir en un dato ya compartido es una carrera aunque las dos manos
-     * escriban lo mismo.  El pozo reparte el mismo puntero a todos, asi que no
-     * se duplica nada y la referencia vive lo que el proceso.
-     *
-     * Un constructor no se llama por su nombre -- que es el del tipo --, asi
-     * que armarlo igual que un metodo daria `Clase__Clase`. */
-    const std::string &owner =
-        m.defining_class.empty() ? fallback : m.defining_class;
-    return *util::intern_name(
-        m.is_constructor ? method_symbol(owner, "ctor")
-                         : method_symbol(owner, m.name));
+inline const std::string &method_symbol_of(const ClassMethodInfo &m) {
+    if (m.ir_symbol.empty())
+        method_symbol_missing(m.is_constructor ? std::string("ctor") : m.name,
+                              m.defining_class);
+    return m.ir_symbol.str();
 }
 
 /**
@@ -2153,6 +2242,43 @@ class TypeChecker {
      */
     static bool overload_accepts(void *ctx, const Type &param, const Type &arg);
 
+    /**
+     * @brief Con que PALABRA CLAVE se declaro el tipo que ya tiene ese nombre.
+     *
+     * Un nombre de tipo es uno: si lo tiene un `struct`, no lo puede tener una
+     * `class` ni un `enum`.  Suena obvio y no lo era -- `struct X` y `class X`
+     * convivian sin un solo diagnostico, y `X` resolvia a uno o a otro segun
+     * donde se mirara --, porque la comprobacion estaba escrita TRES veces y
+     * solo la del enum miraba las tres familias: la del struct solo miraba
+     * structs y la de la clase solo clases.
+     *
+     * En Vesta esto pica mas que en otros lenguajes: un struct puede casi lo
+     * mismo que una clase -- campos, metodos, constructores, virtuales --, asi
+     * que las dos se escribieron como mundos paralelos y nadie noto que dos de
+     * los tres guardianes miraban solo su mitad.
+     *
+     * "Completo" quiere decir que ya tiene contenido: la pre-pasada crea
+     * entradas VACIAS para que los tipos se puedan referenciar entre si antes
+     * de construirse, y esas no cuentan.
+     *
+     * @par Devuelve la palabra, no una familia
+     * La primera version devolvia un `enum {None, Struct, Class, Enum}` y otra
+     * funcion lo traducia a su palabra con un `switch` que tenia un `default`
+     * devolviendo la cadena vacia.  Eso es justo lo que este proyecto no hace:
+     * un caso que no se sabe contestar tiene que GRITAR, y ahi habria puesto un
+     * mensaje diciendo que el nombre lo tiene un `''`.
+     *
+     * Devolviendo la palabra directamente el caso imposible deja de existir --
+     * no hay valor del enum al que no se sepa contestar -- en vez de quedar
+     * guardado por un panic que solo salta si se pasa por ahi.
+     *
+     * @param name El nombre a comprobar.
+     * @return La palabra clave (`struct`, `class` o `enum`), o @c nullptr si el
+     *         nombre esta libre.  Es palabra CLAVE del lenguaje, asi que no se
+     *         traduce: entra como dato en el mensaje.
+     */
+    const char *declared_type_keyword(const std::string &name) const;
+
 
     /**
      * @brief Construye la ficha de un metodo a partir de su declaracion.
@@ -3507,12 +3633,23 @@ class TypeChecker {
         newtype_info_.emplace(name, std::move(ni));
     }
     void register_imported_struct(const std::string &name, StructLayout L) {
+        /* Se cierra igual que uno declarado aqui: marca las sobrecargas -- que
+         * una llamada no mire los tipos por venir el tipo de fuera seria elegir
+         * por nombre entre varios que se llaman igual -- y deja el simbolo en
+         * la ficha, copiado del que trae cada metodo de su modulo.  Sin esto
+         * los importados llegaban con la ficha a medias, y cada consumidor
+         * tenia que rehacer el nombre por su cuenta. */
+        close_layout_methods(L.methods, L.name.empty() ? name : L.name,
+                             /*ctor_arity=*/true);
         //  M.fix-classfield: overwrite (no emplace) para soportar
         // pre-registro de skeleton seguido de fill cross-type within
         // mismo dep modulo.
         struct_layouts_[name] = std::move(L);
     }
     void register_imported_class(const std::string &name, ClassLayout L) {
+        /// @copydoc register_imported_struct
+        close_layout_methods(L.methods, L.name.empty() ? name : L.name,
+                             /*ctor_arity=*/false);
         class_layouts_[name] = std::move(L);
     }
     /**

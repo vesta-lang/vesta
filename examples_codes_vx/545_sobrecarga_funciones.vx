@@ -72,7 +72,19 @@ struct Medidor {
 class Obrero {
 	private i64 turno;
 
+	// 12. CONSTRUCTORES de la clase.  Su simbolo era `<Clase>__ctor` a secas
+	// -- sin nada que separara a uno de otro, ni siquiera la aridad, a
+	// diferencia del struct --, asi que declarar dos emitia dos etiquetas
+	// iguales y la llamada se iba a una cualquiera.  Y ademas se genera un
+	// ayudante `__new_` POR CONSTRUCTOR, que NO baja igual en los tres modos:
+	// el interprete y el JIT construyen por el registro de clases y el binario
+	// nativo con una llamada directa.  Esta clase ademas la EXTIENDE otra, y
+	// ahi estaba el ultimo agujero: el `super(...)` del camino nativo se
+	// armaba el nombre `Obrero__ctor` a mano -- el de cuando solo podia haber
+	// uno --, asi que con dos pedia una etiqueta que ya no existe, el
+	// enlazador la daba por externa y el binario NI CARGABA.
 	public Obrero(i64 t) { this.turno = t; }
+	public Obrero(f64 t) { this.turno = 99; }
 
 	public i64 hace(i64 x) { return this.turno + x; }
 	public i64 hace(f64 x) { return this.turno + 1000; }
@@ -149,10 +161,15 @@ i32 main() {
 	i64     i = m.mide(2.0_f64);      // 1 + 100     = 101
 	i64     j = m.mide(2_i64, 3_i64); // 1 + 2 + 3   = 6
 
+	// 12. constructores de CLASE: un ayudante `__new_` por cada uno
 	// 7. metodos de clase: la primera NO la borra la segunda
 	Obrero o = new Obrero(7);
 	i64    k = o.hace(3_i64);   // 7 + 3    = 10
 	i64    l = o.hace(3.0_f64); // 7 + 1000 = 1007
+
+	// Y el SEGUNDO constructor de la clase, elegido por el tipo.
+	Obrero of = new Obrero(7.0_f64);
+	i64    z  = of.hace(3_i64); // 99 + 3 = 102
 
 	// Y el override sigue funcionando: misma firma, sustituye.
 	Ayudante y = new Ayudante(7);
@@ -170,13 +187,13 @@ i32 main() {
 	i64    u = t.corre(2_i64);   // 2 + 1 = 3
 	i64    v = t.corre(2.0_f64); // 5000
 
-	i64 total = a + b + c + e + f + g;             // 7+7+1+2+10+10 = 37
-	i64 met   = h + i + j + k + l + p + q + r + s; // 1135+20+300+1007 = 2462
-	i64 ifz   = u + v + w;                         // 3 + 5000 + 8 = 5011
+	i64 total = a + b + c + e + f + g;                 // 7+7+1+2+10+10 = 37
+	i64 met   = h + i + j + k + l + z + p + q + r + s; // 2462 + 102 = 2564
+	i64 ifz   = u + v + w;                             // 3 + 5000 + 8 = 5011
 	println("suma=${a},${b} cual=${c},${e} retorno=${f},${g} total=${total}");
-	println("struct=${h},${i},${j} clase=${k},${l} override=${p}");
+	println("struct=${h},${i},${j} clase=${k},${l},${z} override=${p}");
 	println("static=${q},${r} super=${s} met=${met}");
 	println("interfaz=${u},${v} ctor=${w} ifz=${ifz}");
-	// 37 + 2462 + 5011 = 7510; 7510 - 7468 = 42
-	return (i32)(total + met + ifz - 7468); // 42
+	// 37 + 2564 + 5011 = 7612; 7612 - 7570 = 42
+	return (i32)(total + met + ifz - 7570); // 42
 }

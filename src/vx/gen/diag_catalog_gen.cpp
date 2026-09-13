@@ -68,6 +68,7 @@ const CatEntry kEntries[] = {
     {"VX2059", {"the borrow that gets in the way is of '{0}', which covers '{1}'", "el prestamo que estorba es de '{0}', que abarca a '{1}'"}},
     {"VX2060", {"'{0}' already declares a method '{1}' with those same parameters", "'{0}' ya declara un metodo '{1}' con esos mismos parametros"}},
     {"VX2061", {"'{0}' already declares a constructor with those same parameters", "'{0}' ya declara un constructor con esos mismos parametros"}},
+    {"VX2062", {"the type name '{0}' is already taken by a '{1}' declared earlier", "el nombre de tipo '{0}' ya lo tiene un '{1}' declarado antes"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -318,6 +319,7 @@ const CatEntry kEntries[] = {
     {"VXA092", {"field address reaches a PHI or a function pointer", "una direccion de campo llega a un PHI o a un puntero a funcion"}},
     {"VXA093", {"field address used somewhere other than a load or a store address", "una direccion de campo se usa en algo que no es una carga ni la direccion de un almacenamiento"}},
     {"VXA094", {"stack SROA: in '{0}', ALLOCA %{1} left alone: {2}", "SROA de pila: en '{0}', la reserva %{1} se deja como esta: {2}"}},
+    {"VXA095", {"the symbol of '{1}.{0}' was never computed: its type did not go through closing its method list", "el simbolo de '{1}.{0}' no se llego a calcular: su tipo no paso por el cierre de su lista de metodos"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -581,7 +583,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 560;
+const int kEntryCount = 562;
 
 } // namespace
 

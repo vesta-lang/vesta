@@ -99,6 +99,47 @@ static uint64_t vx_global_array_bytes(const ast::TypeNode *tn,
     if (esz == 0 || count == 0) return 0;
     return count * esz;
 }
+/**
+ * @brief El metodo al que apunta un pointcut `Duenyo.metodo`, o nulo.
+ *
+ * Un pointcut nombra al objetivo por su NOMBRE, y con sobrecarga un nombre deja
+ * de senyalar a uno: `Servicio.calcula` son dos metodos distintos.  Antes esto
+ * no se preguntaba -- se armaba `Servicio__calcula` y se daba por hecho que ese
+ * simbolo existia --, y cuando esta sobrecargado no existe ninguno con ese
+ * nombre: la cadena de aspectos quedaba apuntada a una etiqueta que nadie
+ * emite.  Eso NO es una optimizacion perdida: el optimizador consulta esa
+ * cadena para saber si un metodo lleva aspectos, y al no encontrarla lo daria
+ * por limpio y lo INLINEARIA, que es justo lo que la regla prohibe.
+ *
+ * Devolver nulo cuando el nombre no senyala a uno solo es lo prudente: quien
+ * llama apunta que no pudo atribuirlo y el optimizador se vuelve conservador.
+ *
+ * @param tc     De donde salen los layouts.
+ * @param owner  La parte de delante del punto.
+ * @param method La de detras.
+ * @return El metodo si hay exactamente uno con ese nombre; nulo si no lo hay o
+ *         si hay varios.
+ */
+static const ClassMethodInfo *pointcut_target(const TypeChecker &tc,
+                                              const std::string &owner,
+                                              const std::string &method) {
+    const std::vector<ClassMethodInfo> *methods = nullptr;
+    const auto it_c = tc.class_layouts().find(owner);
+    if (it_c != tc.class_layouts().end()) {
+        methods = &it_c->second.methods;
+    } else {
+        const auto it_s = tc.struct_layouts().find(owner);
+        if (it_s == tc.struct_layouts().end()) return nullptr;
+        methods = &it_s->second.methods;
+    }
+    const ClassMethodInfo *found = nullptr;
+    for (const ClassMethodInfo &m : *methods) {
+        if (m.is_constructor || m.name != method) continue;
+        if (found != nullptr) return nullptr; // sobrecargado: no senyala a uno
+        found = &m;
+    }
+    return found;
+}
 } // namespace
 bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
     /* Reparto del coste de la bajada.  Es la fase mas cara del frontend en un
@@ -145,11 +186,24 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
                 all_advices_attributed_ = false;
                 continue;
             }
-            const std::string target = t.substr(0, p) + "__" + t.substr(p + 1);
+            /* A QUIEN envuelve y QUIEN envuelve: los dos simbolos se LEEN de
+             * la ficha del metodo, no se arman aqui.  El objetivo, ademas, solo
+             * cuenta si el nombre del pointcut senyala a uno solo. */
+            const ClassMethodInfo *target_m =
+                pointcut_target(tc_, t.substr(0, p), t.substr(p + 1));
+            const ClassMethodInfo *advice_m = nullptr;
+            const auto it_asp = tc_.class_layouts().find(cd_asp->name);
+            if (it_asp != tc_.class_layouts().end())
+                advice_m = picked_method(it_asp->second, m->layout_slot);
+            if (target_m == nullptr || advice_m == nullptr) {
+                all_advices_attributed_ = false;
+                continue;
+            }
             ir::IrModule::ChainedAdvice entry;
             entry.kind = static_cast<uint8_t>(m->advice_kind - 1);
-            entry.method_ir_name = method_symbol(cd_asp->name, m->name);
-            advice_chains_[target].push_back(std::move(entry));
+            entry.method_ir_name = method_symbol_of(*advice_m);
+            advice_chains_[method_symbol_of(*target_m)].push_back(
+                std::move(entry));
         }
     }
     /* A que llama el `proceed()` de cada `@Around`.

@@ -2662,7 +2662,7 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
         ca.op = ir::IrOp::CALL;
         ca.type = ret_ir;
         ca.dst = dst;
-        ca.func_name = method_symbol_of(*found, owner);
+        ca.func_name = method_symbol_of(*found);
         ca.operands.push_back(v_this);
         for (auto av : arg_vals)
             ca.operands.push_back(av);

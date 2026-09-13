@@ -2507,6 +2507,29 @@ class Lowering {
     void lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out);
 
     /**
+     * @brief La ficha del metodo que ocupa @p slot en el layout de @p owner.
+     *
+     * En los DOS mapas, porque quien pregunta no siempre sabe en cual esta: los
+     * metodos de un `impl` se bajan por el camino del struct aunque el tipo sea
+     * una clase.  Buscar solo en uno dejaba sin ficha al de la clase, y de ahi
+     * salia el respaldo que rearmaba el nombre.
+     *
+     * @param owner Clave del layout.
+     * @param slot  El hueco que el comprobador dejo apuntado.
+     * @return La ficha, o nulo si no hay layout o el hueco no lleva a nadie.
+     */
+    const ClassMethodInfo *layout_method(const std::string &owner,
+                                         uint32_t slot) const {
+        const auto it_s = tc_.struct_layouts().find(owner);
+        if (it_s != tc_.struct_layouts().end())
+            return picked_method(it_s->second, slot);
+        const auto it_c = tc_.class_layouts().find(owner);
+        if (it_c != tc_.class_layouts().end())
+            return picked_method(it_c->second, slot);
+        return nullptr;
+    }
+
+    /**
      * @brief NS.6-ext: baja los metodos de @c "extension Tipo { ... }" e
      * @c "impl Concept for Tipo { ... }" como funciones libres
      * @c <clave_layout>__<metodo> (dispatch estatico).  Reusa la emision de
@@ -2839,8 +2862,35 @@ class Lowering {
     void emit_struct_vptr_init(ir::IrValueId struct_addr,
                                const StructLayout &lay, uint32_t line);
 
-    /// Cache nombre-de-struct -> indice del blob de su vtable en static_data.
-    std::unordered_map<std::string, uint64_t> struct_vtable_didx_;
+    /**
+     * @struct TypeStaticBlobs
+     * @brief Lo que un TIPO emite en datos estaticos una sola vez.
+     *
+     * Su tabla de metodos y su descriptor de tipo pertenecen al TIPO, no a lo
+     * que se construya con el.  Importa desde que hay un ayudante `__new_` por
+     * CONSTRUCTOR: sin esto los dos blobs se emitirian una vez por cada uno --
+     * dos tablas para la misma clase, y objetos construidos por un constructor
+     * mirando a otra --.
+     *
+     * @c UINT64_MAX = todavia no se emitio.
+     */
+    struct TypeStaticBlobs {
+        uint64_t vtable = UINT64_MAX;
+        uint64_t descriptor = UINT64_MAX;
+    };
+    /**
+     * @name Lo que ya emitio cada tipo
+     *
+     * Structs y clases van en mapas SEPARADOS, y no es redundancia: hoy el
+     * lenguaje deja declarar `struct X` y `class X` en el mismo fichero sin un
+     * solo diagnostico -- son dos tipos con un nombre --, asi que una sola
+     * clave los confundiria.  El dia que eso se rechace, los dos mapas se
+     * funden en uno.
+     * @{
+     */
+    std::unordered_map<std::string, TypeStaticBlobs> struct_blobs_;
+    std::unordered_map<std::string, TypeStaticBlobs> class_blobs_;
+    /** @} */
 
     /**
      * @brief Calcula el puntero al elemento indexado (base + i*sizeof(*base)).

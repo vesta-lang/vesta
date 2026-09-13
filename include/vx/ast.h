@@ -1087,6 +1087,15 @@ struct NewExpr : Expr {
     /// en host heap (via malloc).  El resultado es un host_ptr al
     /// buffer de N * sizeof(T) bytes.  args queda vacio en este caso.
     std::unique_ptr<Expr> array_size;
+    /**
+     * @brief El CONSTRUCTOR al que resolvio, cuando la clase tiene varios.
+     *
+     * El bajado necesita ESE -- de el salen el ayudante `__new_` al que llama y
+     * como viaja cada argumento --, y buscarlo por aridad se quedaria con el
+     * primero.  @c ast::kNoMethodSlot mientras la clase tenga uno solo, que es
+     * lo normal.
+     */
+    uint32_t resolved_method = kNoMethodSlot;
     /// Z.6: marca que esta instancia debe alocarse en el SharedHeap
     /// (cross-process visible).  Lo setea @c lower_var_decl cuando el
     /// var-decl padre tiene @c is_shared=true.  El lowering despacha

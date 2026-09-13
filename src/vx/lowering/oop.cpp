@@ -66,18 +66,18 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         if (!m->method_type_params.empty()) continue;
 
         ir::IrFunction fn;
-        // Mangling: ClassName__methodName; constructor usa "ctor".
         /* El simbolo NO se arma aqui: lo calculo el comprobador al cerrar el
          * layout y esta internado en la ficha, que se alcanza por el hueco que
-         * el mismo dejo apuntado.  Vale igual para el constructor. */
-        const ClassMethodInfo *mi = nullptr;
-        auto it_lay = tc_.class_layouts().find(cd->name);
-        if (it_lay != tc_.class_layouts().end())
-            mi = picked_method(it_lay->second, m->layout_slot);
-        fn.name = mi != nullptr ? mi->ir_symbol.str()
-                  : m->is_constructor
-                      ? method_symbol(cd->name, "ctor")
-                      : method_symbol(cd->name, m->name);
+         * el mismo dejo apuntado.  Vale igual para el constructor -- que no se
+         * llama por su nombre sino `ctor`, y si comparte parametros con ningun
+         * hermano, con su discriminante detras --.
+         *
+         * Habia un respaldo que lo armaba cuando el hueco no llevaba a nadie, y
+         * daba el nombre de cuando una clase solo podia tener un constructor:
+         * con dos, el cuerpo salia bajo una etiqueta y la llamada pedia otra. */
+        const ClassMethodInfo *mi = layout_method(cd->name, m->layout_slot);
+        if (mi == nullptr) method_symbol_missing(m->name, cd->name);
+        fn.name = method_symbol_of(*mi);
 
         // @complexity del metodo al IR, igual que en una funcion libre (ver
         // lower_function): metadata pura que solo consume el analizador.
@@ -580,41 +580,61 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
     // Para cada clase declarada en el modulo, generamos una funcion
     // __new_<Class>(arg1, ..., argN) -> handle (GcHandle).  El cuerpo
     // es RAW_ASM que hace findclass + newobj + callvirt al ctor.
+    /* UN AYUDANTE POR CONSTRUCTOR, no uno por clase.
+     *
+     * Una clase puede declarar varios -- `K(i64)` y `K(f64)` -- y cada uno
+     * necesita el suyo, porque el ayudante lleva dentro la llamada al
+     * constructor y su lista de parametros.
+     *
+     * Se recorre (clase, constructor) en vez de anidar un bucle dentro del
+     * cuerpo: asi lo que sigue no cambia ni una linea de sitio.  Lo que SI hay
+     * que emitir una sola vez por clase son sus blobs estaticos -- la tabla de
+     * metodos, el mapa de campos y el descriptor de tipo --, y de eso se
+     * encarga @c class_blobs_. */
+    struct NewHelperJob {
+        ast::ClassDecl *cd = nullptr;
+        const ClassMethodInfo *ctor = nullptr;
+    };
+    util::SmallVector<NewHelperJob, 16> jobs;
     for (auto &decl : mod_.decls) {
         if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
-        auto *cd = static_cast<ast::ClassDecl *>(decl.get());
+        auto *cd_j = static_cast<ast::ClassDecl *>(decl.get());
         // No se genera helper para interfaces: no son instanciables.
-        if (cd->is_interface) continue;
+        if (cd_j->is_interface) continue;
         // Templates genericos y especializaciones (#7): no instanciables tal
         // cual; solo sus monomorphizaciones concretas.
-        if (!cd->type_params.empty() || cd->is_specialization) continue;
-        auto it = tc_.class_layouts().find(cd->name);
-        if (it == tc_.class_layouts().end()) continue;
-        const ClassLayout &lay = it->second;
+        if (!cd_j->type_params.empty() || cd_j->is_specialization) continue;
+        auto it_j = tc_.class_layouts().find(cd_j->name);
+        if (it_j == tc_.class_layouts().end()) continue;
 
-        // Localizar el constructor PROPIO (no heredado del super).
-        // BugFix R1: si la clase deriva de un Base con ctor, los
-        // methods incluyen Base.__ctor copiado al inicio (inherited).
-        // Sin priorizar el ctor cuyo defining_class == cd->name, el
-        // helper __new_<Derived> usaria los params del Base.__ctor
-        // -> faltarian args en la llamada -> los campos propios del
-        // Derived quedaban a 0.
-        const ClassMethodInfo *ctor = nullptr;
-        for (const auto &m : lay.methods) {
-            if (m.is_constructor && m.defining_class == cd->name) {
-                ctor = &m;
+        /* Los constructores PROPIOS (no los heredados del super).
+         * BugFix R1: si la clase deriva de un Base con ctor, sus metodos
+         * incluyen el del Base copiado al inicio; sin quedarse con los que
+         * DEFINE esta clase, `__new_<Derivada>` usaria los parametros del
+         * constructor del Base -- faltarian args y los campos propios de la
+         * derivada quedaban a 0 --. */
+        size_t own = 0;
+        for (const auto &m : it_j->second.methods) {
+            if (!m.is_constructor || m.defining_class != cd_j->name) continue;
+            jobs.push_back(NewHelperJob{cd_j, &m});
+            ++own;
+        }
+        if (own > 0) continue;
+        // Sin constructor propio: el primero heredado, o ninguno.
+        const ClassMethodInfo *inherited = nullptr;
+        for (const auto &m : it_j->second.methods) {
+            if (m.is_constructor) {
+                inherited = &m;
                 break;
             }
         }
-        // Fallback: si no hay ctor propio, usar el primero inherited.
-        if (!ctor) {
-            for (const auto &m : lay.methods) {
-                if (m.is_constructor) {
-                    ctor = &m;
-                    break;
-                }
-            }
-        }
+        jobs.push_back(NewHelperJob{cd_j, inherited});
+    }
+
+    for (const NewHelperJob &job : jobs) {
+        ast::ClassDecl *cd = job.cd;
+        const ClassLayout &lay = tc_.class_layouts().find(cd->name)->second;
+        const ClassMethodInfo *ctor = job.ctor;
         // fix12 - si el ctor es zero-init trivial (solo asigna
         // campos a 0/null/false), saltarlo: el `gc_heap.alloc` ya
         // memset el payload a 0.  Solo aplica si el ctor existe Y
@@ -650,8 +670,19 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // (tiene super o es extendida) -> dispatch virtual nativo.  La
             // vtable = blob en .rodata con sym_refs a <owner>__<metodo> por
             // vtable_index (mismo mecanismo que `dq func` del bloque bytes).
+            /* Los blobs son de la CLASE, no del constructor: con varios
+             * ayudantes se emitirian una vez por cada uno.  Si ya estan, se
+             * reusan y no se vuelve a montar nada. */
+            /* OJO: lo que se guarda es la EMISION del blob, no su CALCULO.
+             * Apagar aqui `needs_vtable` en la segunda pasada dejaba sin
+             * calcular el numero de ranuras y la tabla ranura->simbolo, que el
+             * cuerpo del ayudante necesita para montar la cabecera del objeto:
+             * los campos acababan en otro sitio y los valores salian
+             * desplazados, sin que nadie dijera nada.  Se calcula siempre; lo
+             * que no se repite es el `push_back`. */
+            TypeStaticBlobs &blobs = class_blobs_[cd->name];
             bool needs_vtable = class_has_vtable(cd->name);
-            uint64_t vtable_idx = UINT64_MAX;
+            uint64_t vtable_idx = blobs.vtable;
             // Hoisted fuera del bloque needs_vtable: el DESCRIPTOR DE TIPO de
             // una clase gc<X> (ver mas abajo) reusa el numero de slots y la
             // tabla slot->simbolo aunque la clase no requiera vtable propia.
@@ -758,16 +789,22 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         const uint32_t slot =
                             native_iface_slot(iname, im.vtable_index);
                         iface_slots.push_back(
-                            {slot, method_symbol_of(*impl, impl_owner)});
+                            {slot, method_symbol_of(*impl)});
                         if (slot + 1u > nslots) nslots = slot + 1u;
                     }
                 }
                 if (nslots == 0) {
                     needs_vtable = false;
+                } else if (blobs.vtable != UINT64_MAX) {
+                    // Ya la emitio otro ayudante de esta misma clase: se reusa
+                    // el blob.  El CALCULO de arriba se ha hecho igual, porque
+                    // el cuerpo del ayudante lo necesita.
+                    vtable_idx = blobs.vtable;
                 } else {
                     std::vector<uint8_t> vt(static_cast<size_t>(nslots) * 8u,
                                             0);
                     vtable_idx = out.static_data.push_back(std::move(vt));
+                    blobs.vtable = vtable_idx; // de la CLASE: una sola vez
                     auto &vm = out.static_data.meta_at(vtable_idx);
                     // .data.rel.ro: seccion de la vtable (punteros absolutos
                     // a metodos -> relocs ABS64).  Es read-only TRAS la
@@ -788,7 +825,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                          * constructor tambien --, o apuntaria a una etiqueta
                          * que nadie emitio. */
                         slot_sym[native_class_slot(mi.vtable_index) * 8u] =
-                            method_symbol_of(mi, owner);
+                            method_symbol_of(mi);
                     }
                     for (const auto &is : iface_slots)
                         slot_sym[is.slot * 8u] = is.sym;
@@ -828,8 +865,9 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // el ObjectHeader de 24 bytes).  Solo se listan campos con
             // Type.gc_managed == true (NUNCA
             // unique/shared/raw/RAII/primitivos).
-            uint64_t desc_idx = UINT64_MAX;
-            if (classes_used_gc_.count(cd->name) > 0) {
+            uint64_t desc_idx = blobs.descriptor;
+            if (classes_used_gc_.count(cd->name) > 0 &&
+                desc_idx == UINT64_MAX) {
                 // 1. Field-map: recolectar offsets de campos-referencia gc.
                 std::vector<uint32_t> gc_field_offsets;
                 for (const auto &f : lay.fields)
@@ -861,6 +899,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 const uint32_t magic = 0x44545856u;       // 'VXTD' LE
                 std::memcpy(desc.data() + 24, &magic, 4); // magic @24
                 desc_idx = out.static_data.push_back(std::move(desc));
+                blobs.descriptor = desc_idx; // de la CLASE: una sola vez
                 auto &dm = out.static_data.meta_at(desc_idx);
                 dm.section_name = ".data.rel.ro";
                 dm.symbol_name = "__vx_tdesc_" + cd->name;
@@ -889,7 +928,8 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             }
 
             ir::IrFunction nf;
-            nf.name = "__new_" + cd->name;
+            nf.name = new_helper_symbol(effective_ctor, cd->name,
+                                        NewHelperKind::Normal);
             nf.ret_type = ir::IrType::PTR;
             for (size_t i = 0; i < nargs; ++i) {
                 const ir::IrType pt =
@@ -963,7 +1003,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 cc.op = ir::IrOp::CALL;
                 cc.type = ir::IrType::VOID;
                 cc.dst = ir::IR_NO_VALUE;
-                cc.func_name = method_symbol_of(*effective_ctor, cd->name);
+                cc.func_name = method_symbol_of(*effective_ctor);
                 cc.operands.reserve(nargs + 1);
                 cc.operands.push_back(v_obj);
                 for (size_t i = 0; i < nargs; ++i)
@@ -987,7 +1027,8 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
             // colecta el objeto cuando deja de ser alcanzable via stackmaps.
             if (classes_used_gc_.count(cd->name) > 0) {
                 ir::IrFunction gf;
-                gf.name = "__new_" + cd->name + "_gc";
+                gf.name = new_helper_symbol(effective_ctor, cd->name,
+                                            NewHelperKind::Gc);
                 gf.ret_type = ir::IrType::PTR;
                 for (size_t i = 0; i < nargs; ++i) {
                     const ir::IrType pt = ir_type_from_primitive(
@@ -1077,7 +1118,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     cc.op = ir::IrOp::CALL;
                     cc.type = ir::IrType::VOID;
                     cc.dst = ir::IR_NO_VALUE;
-                    cc.func_name = method_symbol_of(*effective_ctor, cd->name);
+                    cc.func_name = method_symbol_of(*effective_ctor);
                     cc.operands.reserve(nargs + 1);
                     cc.operands.push_back(g_obj);
                     for (size_t i = 0; i < nargs; ++i)
@@ -1121,8 +1162,10 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
 
             // Construir IrFunction __new_<Class>[_shared].
             ir::IrFunction fn;
-            fn.name = is_shared_variant ? ("__new_" + cd->name + "_shared")
-                                        : ("__new_" + cd->name);
+            fn.name = new_helper_symbol(effective_ctor, cd->name,
+                                        is_shared_variant
+                                            ? NewHelperKind::Shared
+                                            : NewHelperKind::Normal);
             fn.ret_type = ir::IrType::PTR;
 
             // Params: replicar tipos del ctor (si existe).  El ultimo puede ser
@@ -1604,7 +1647,7 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             /* El simbolo se LEE, el constructor tambien: si se rearmara aqui,
              * la ficha de la clase podria apuntar a una etiqueta que nadie
              * emitio. */
-            const std::string method_label = method_symbol_of(m, owner_class);
+            const std::string method_label = method_symbol_of(m);
             const uint64_t mname_idx = intern_class_name(out, m.name);
             const uint32_t mname_len = static_cast<uint32_t>(m.name.size());
             /* El DESCRIPTOR: sus parametros, con el mismo mangleado que usan
@@ -1989,7 +2032,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         ca.op = ir::IrOp::CALL;
         ca.type = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
         ca.dst = method_call_sret ? ir::IR_NO_VALUE : dst;
-        ca.func_name = method_symbol_of(*mtd, mtd->defining_class);
+        ca.func_name = method_symbol_of(*mtd);
         ca.operands.push_back(obj);
         if (method_call_sret) ca.operands.push_back(v_method_call_retbuf);
         for (const ir::IrValueId av : arg_vals)
@@ -2064,7 +2107,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                                         it_ol->second.imported_helper_suffix;
                             }
                             const std::string callee =
-                                method_symbol_of(cm, owner_class);
+                                method_symbol_of(cm);
                             ir::IrInstr ca{};
                             ca.op = ir::IrOp::CALL;
                             ca.type = ret_ir;
@@ -2316,7 +2359,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             dc.op = ir::IrOp::CALL;
             dc.type = ret_ir;
             dc.dst = dst;
-            dc.func_name = method_symbol_of(*mtd, bt.struct_name.str());
+            dc.func_name = method_symbol_of(*mtd);
             dc.operands.push_back(obj);
             if (method_call_sret) dc.operands.push_back(v_method_call_retbuf);
             for (auto av : arg_vals)
@@ -2569,7 +2612,7 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
              * `Clase__metodo` que no existe.  El transpilador a C usa este
              * nombre como etiqueta de funcion.  El constructor va por el mismo
              * sitio: su simbolo tambien lo calculo el comprobador. */
-            imeth.ir_fn_name = method_symbol_of(m, cl.name);
+            imeth.ir_fn_name = method_symbol_of(m);
             imeth.return_type = ir_type_from_primitive(m.return_type.kind);
             imeth.param_types.reserve(m.param_types.size());
             for (const auto &pt : m.param_types) {
@@ -2709,11 +2752,9 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
         ins.op = ir::IrOp::CALL;
         ins.type = ret_ir;
         ins.dst = dst;
-        // Metodo static IMPORTADO cross-module: usar el simbolo real del .velb
-        // origen (link_name); si no, "<Name>__<metodo>".
-        ins.func_name = static_mtd->link_name.empty()
-                            ? method_symbol_of(*static_mtd, class_name)
-                            : static_mtd->link_name;
+        /* Un solo campo para las dos procedencias: el cierre del layout deja
+         * ahi el simbolo de origen si el metodo viene de otro modulo. */
+        ins.func_name = method_symbol_of(*static_mtd);
         ins.operands = arg_vals;
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -2778,7 +2819,7 @@ Lowering::spec_devirt_impls(const std::string &static_class,
         }
         if (impl == nullptr) continue;
 
-        const std::string callee = method_symbol_of(*impl, cl.name);
+        const std::string callee = method_symbol_of(*impl);
         if (advice_chains_.count(callee) != 0) continue; // lleva aspectos
         impls.emplace_back(cl.name, callee);
         if (impls.size() > K_MAX) return {}; // demasiados: no compensa

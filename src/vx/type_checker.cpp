@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <utility>
 #include <cctype>   // tolower/isdigit para canonical_x86_reg ( AS)
+#include <cstdio>   // fprintf al parar por un fallo del propio compilador
 #include <cstdlib>  // getenv para VESTA_MC_VMONLY/PREBUILT
 #include <cstring>  // memcpy para bitcast f64 -> u64
 #include <fstream>  // cargar prebuilt .velb desde disco
@@ -656,6 +657,28 @@ static bool method_body_is_ours(vx::GenericInstanceRegistry *reg, size_t index,
     if (reg == nullptr) return true;
     if (m->is_inline || m->is_comptime || m->is_destructor) return true;
     return reg->claim(mangled + "::" + m->name, index);
+}
+
+const char *TypeChecker::declared_type_keyword(const std::string &name) const {
+    /* "Completo" = ya tiene contenido.  La pre-pasada crea entradas VACIAS para
+     * que los tipos se puedan referenciar entre si antes de construirse, y esas
+     * no cuentan: si contaran, todo tipo chocaria consigo mismo.
+     *
+     * Un struct se mira por campos Y POR METODOS, no solo por campos: en Vesta
+     * un struct puede no tener ni un campo y tener metodos, y mirando solo los
+     * campos ese pasaria por vacio. */
+    auto it_s = struct_layouts_.find(name);
+    if (it_s != struct_layouts_.end() &&
+        (!it_s->second.fields.empty() || !it_s->second.methods.empty()))
+        return "struct";
+    auto it_c = class_layouts_.find(name);
+    if (it_c != class_layouts_.end() && it_c->second.name == name &&
+        (!it_c->second.fields.empty() || !it_c->second.methods.empty()))
+        return "class";
+    auto it_e = enum_layouts_.find(name);
+    if (it_e != enum_layouts_.end() && !it_e->second.variants.empty())
+        return "enum";
+    return nullptr;
 }
 
 bool TypeChecker::add_overload_candidate(const std::string &name, uint32_t prev,
@@ -3552,10 +3575,16 @@ std::string TypeChecker::first_unresolved_type(const ast::TypeNode *tn) const {
  * ARIDAD (`<T>__ctor_2`), que es como se emitio siempre.  Igual que el resto,
  * solo reciben discriminante si de verdad hay con quien confundirse.
  *
- * Quedan fuera, a proposito:
- * - los HEREDADOS, que ya tienen el simbolo que puso su clase -- y es el que
- *   ella emitio; renombrarlo aqui apuntaria a una etiqueta que no existe --;
- * - los IMPORTADOS, que traen el suyo en @c link_name.
+ * Quedan fuera, a proposito, los HEREDADOS: ya tienen el simbolo que puso su
+ * clase -- y es el que ella emitio; renombrarlo aqui apuntaria a una etiqueta
+ * que no existe --.
+ *
+ * Los IMPORTADOS tampoco se nombran, pero SI se rellenan: su simbolo lo trae
+ * hecho el modulo que los exporto (@c link_name) y se copia al mismo campo que
+ * los demas.  Asi @c ir_symbol es la UNICA respuesta a "como se llama este
+ * metodo", venga de donde venga, y ningun consumidor tiene que elegir entre dos
+ * campos ni rehacer el nombre cuando uno de los dos esta vacio -- que es de
+ * donde salian los simbolos armados a mano, y con ellos los que no coincidian.
  *
  * @param methods    La lista del layout, ya completa.
  * @param owner      De quien es el layout que se cierra.
@@ -3563,27 +3592,48 @@ std::string TypeChecker::first_unresolved_type(const ast::TypeNode *tn) const {
  *                   es lo que distingue a un struct (`<T>__ctor_2`) de una
  *                   clase (`<Clase>__ctor`).
  */
-static void name_layout_methods(std::vector<ClassMethodInfo> &methods,
-                                const std::string &owner, bool ctor_arity) {
-    const size_t n = methods.size();
+[[noreturn]] void method_symbol_missing(const std::string &method,
+                                        const std::string &owner) {
+    /* Por el CATALOGO, como cualquier otro diagnostico: el texto vive alli en
+     * todos los idiomas y aqui solo se dan los DATOS.  Que sea un fallo del
+     * compilador y no del programa no lo saca de esa regla. */
+    const std::string msg =
+        vx::diag::format("VXA095", vx::diag::current_language(),
+                         {method, owner.empty() ? std::string("?") : owner});
+    std::fprintf(stderr, "\n%s\n\n", msg.c_str());
+    std::fflush(stderr);
+    std::abort();
+}
 
-    /* Quien comparte nombre.  Se marcan TODOS -- heredados e importados
-     * incluidos --, porque la marca es lo que hace que una llamada mire los
-     * tipos: si el primero con ese nombre viniera de la base y no estuviera
-     * marcado, la llamada elegiria por nombre y se iria a cualquiera.
+void close_method(std::vector<ClassMethodInfo> &methods, size_t i,
+                  const std::string &owner, bool ctor_arity) {
+    const size_t n = methods.size();
+    ClassMethodInfo &m = methods[i];
+
+    /* 1) Con quien comparte nombre.  Se marcan LOS DOS -- heredados e
+     * importados incluidos --, porque la marca es lo que hace que una llamada
+     * mire los tipos: si el primero con ese nombre viniera de la base y no
+     * estuviera marcado, la llamada elegiria por nombre y se iria a cualquiera.
      *
      * Dos constructores comparten "nombre" por serlo los dos; en un struct
      * ademas tienen que compartir ARIDAD, porque ahi la aridad ya esta dentro
-     * del simbolo y por si sola los separa. */
-    for (size_t i = 0; i < n; ++i) {
-        ClassMethodInfo &m = methods[i];
-        if (m.is_overloaded) continue;
-        for (size_t j = i + 1; j < n; ++j) {
+     * del simbolo y por si sola los separa.
+     *
+     * Se miran TODOS los demas, no solo los de delante.  Los heredados llegan
+     * al layout de la derivada con la marca ya puesta por su clase, y el propio
+     * de la derivada se anyade al final: mirando solo hacia adelante no le
+     * quedaba nadie con quien emparejarse y se quedaba sin marcar.  Entonces su
+     * ayudante `__new_` se emitia con un nombre y la llamada pedia otro.
+     *
+     * Ya marcado no hace falta volver a mirar: la marca no tiene grados, y
+     * quien llegue despues se emparejara solo al mirarse el. */
+    if (!m.is_overloaded)
+        for (size_t j = 0; j < n; ++j) {
+            if (j == i) continue;
             ClassMethodInfo &o = methods[j];
             if (o.is_constructor != m.is_constructor) continue;
             if (m.is_constructor) {
-                if (ctor_arity &&
-                    o.param_types.size() != m.param_types.size())
+                if (ctor_arity && o.param_types.size() != m.param_types.size())
                     continue;
             } else if (o.name != m.name) {
                 continue;
@@ -3591,28 +3641,37 @@ static void name_layout_methods(std::vector<ClassMethodInfo> &methods,
             m.is_overloaded = true;
             o.is_overloaded = true;
         }
-    }
 
-    // Y el simbolo, solo a los que este layout emite.
-    for (ClassMethodInfo &m : methods) {
-        if (!m.link_name.empty()) continue;
-        if (!m.defining_class.empty() && m.defining_class != owner) continue;
-        if (!m.ir_symbol.empty()) continue;
-        /* El discriminante solo se construye si de verdad hay con quien
-         * confundirse: en el caso normal no se arma ninguna cadena de mas. */
-        const std::string tag =
-            m.is_overloaded ? overload::discriminator(m.param_types)
-                            : std::string();
-        if (!m.is_constructor) {
-            m.ir_symbol = method_symbol(owner, m.name, tag);
-            continue;
-        }
-        /* El constructor no se llama por su nombre -- que es el del tipo --
-         * sino `ctor`, y en un struct con la aridad detras. */
-        std::string base = "ctor";
-        if (ctor_arity) base += "_" + std::to_string(m.param_types.size());
-        m.ir_symbol = method_symbol(owner, base, tag);
+    /* 2) Y el simbolo.  El importado no se nombra: se COPIA el que trae de su
+     * modulo, para que quien lo lea no tenga que mirar dos campos. */
+    if (!m.link_name.empty()) {
+        if (m.ir_symbol.empty()) m.ir_symbol = m.link_name;
+        return;
     }
+    // Solo los que este layout EMITE: el heredado ya tiene el de su clase, y
+    // renombrarlo aqui apuntaria a una etiqueta que no existe.
+    if (!m.defining_class.empty() && m.defining_class != owner) return;
+    if (!m.ir_symbol.empty()) return;
+    /* El discriminante solo se construye si de verdad hay con quien
+     * confundirse: en el caso normal no se arma ninguna cadena de mas. */
+    const std::string tag = m.is_overloaded
+                                ? overload::discriminator(m.param_types)
+                                : std::string();
+    if (!m.is_constructor) {
+        m.ir_symbol = method_symbol(owner, m.name, tag);
+        return;
+    }
+    /* El constructor no se llama por su nombre -- que es el del tipo -- sino
+     * `ctor`, y en un struct con la aridad detras. */
+    std::string base = "ctor";
+    if (ctor_arity) base += "_" + std::to_string(m.param_types.size());
+    m.ir_symbol = method_symbol(owner, base, tag);
+}
+
+void close_layout_methods(std::vector<ClassMethodInfo> &methods,
+                          const std::string &owner, bool ctor_arity) {
+    for (size_t i = 0; i < methods.size(); ++i)
+        close_method(methods, i, owner, ctor_arity);
 }
 
 // ---------------------------------------------------------------------
@@ -4179,12 +4238,12 @@ void TypeChecker::collect_globals() {
             // StructDecl concreto (sin type_params) que SI llega aqui.  Las
             // especializaciones (#7) tampoco se procesan como concretos.
             if (!s->type_params.empty() || s->is_specialization) continue;
-            // Pre-pasada (mas arriba) ya creo una entrada vacia.  Si
-            // size_bytes > 0 (ya completada) -> redeclaracion real.
-            auto it_pre = struct_layouts_.find(s->name);
-            if (it_pre != struct_layouts_.end() &&
-                !it_pre->second.fields.empty()) {
-                diags_.error(s->loc, "struct redeclarado: '" + s->name + "'");
+            /* El nombre no lo puede tener ya NINGUN tipo -- ni otro struct, ni
+             * una clase, ni un enum --.  Antes esto solo miraba los structs,
+             * asi que `struct X` y `class X` convivian sin decir nada. */
+            if (const char *taken = declared_type_keyword(s->name)) {
+                diags_.diag(s->loc, DiagLevel::ERR, "VX2062",
+                            {s->name, taken});
                 continue;
             }
 
@@ -4816,8 +4875,8 @@ void TypeChecker::collect_globals() {
                 layout.methods.push_back(std::move(mi));
             }
             // Con la lista cerrada, cada metodo recibe su simbolo definitivo.
-            name_layout_methods(layout.methods, s->name,
-                                /*ctor_arity=*/true);
+            close_layout_methods(layout.methods, s->name,
+                                 /*ctor_arity=*/true);
 
             // Sobrescribir la entrada vacia pre-registrada con el layout
             // ya completo.  Usar operator[] = porque la entrada existe.
@@ -4833,28 +4892,17 @@ void TypeChecker::collect_globals() {
             // enum es "ya registrado" si tiene variantes.  Para
             // colisiones cross-tipo, struct/class no deberian
             // existir con el mismo nombre.
-            auto it_pre_e = enum_layouts_.find(en->name);
-            const bool already_done = (it_pre_e != enum_layouts_.end() &&
-                                       !it_pre_e->second.variants.empty());
-            auto it_struct_done = struct_layouts_.find(en->name);
-            auto it_class_done = class_layouts_.find(en->name);
-            const bool struct_collision =
-                (it_struct_done != struct_layouts_.end() &&
-                 !it_struct_done->second.fields.empty());
-            const bool class_collision =
-                (it_class_done != class_layouts_.end() &&
-                 !it_class_done->second.name.empty() &&
-                 it_class_done->second.name == en->name &&
-                 (!it_class_done->second.fields.empty() ||
-                  !it_class_done->second.methods.empty()));
             // L2.3: enums monomorphizados ya tienen su layout completo
             // (lo construye monomorphize_enum); skip silente sin error.
             if (monomorphized_.count(en->name)) {
                 continue;
             }
-            if (already_done || struct_collision || class_collision) {
-                diags_.error(en->loc, "tipo redeclarado: '" + en->name +
-                                          "' (colision con struct/class/enum)");
+            /* Este era el UNICO de los tres que miraba las tres familias, y por
+             * eso el hueco se veia solo desde aqui.  Ahora la pregunta es la
+             * misma para los tres. */
+            if (const char *taken = declared_type_keyword(en->name)) {
+                diags_.diag(en->loc, DiagLevel::ERR, "VX2062",
+                            {en->name, taken});
                 continue;
             }
             EnumLayout elay;
@@ -5095,13 +5143,11 @@ void TypeChecker::collect_globals() {
             // no son clases concretas.  Solo se procesa la version
             // monomorphizada (que tiene type_params vacio y no es spec).
             if (!c->type_params.empty() || c->is_specialization) continue;
-            // Pre-pasada creo entradas vacias en class_layouts_; un
-            // class es "ya completada" si tiene fields o methods.
-            auto it_pre_c = class_layouts_.find(c->name);
-            if (it_pre_c != class_layouts_.end() &&
-                (!it_pre_c->second.fields.empty() ||
-                 !it_pre_c->second.methods.empty())) {
-                diags_.error(c->loc, "clase redeclarada: '" + c->name + "'");
+            /* Igual que el struct: el nombre no lo puede tener ya ningun tipo.
+             * Esto solo miraba las clases. */
+            if (const char *taken = declared_type_keyword(c->name)) {
+                diags_.diag(c->loc, DiagLevel::ERR, "VX2062",
+                            {c->name, taken});
                 continue;
             }
 
@@ -5373,32 +5419,31 @@ void TypeChecker::collect_globals() {
                  * constructores, que no entran en aquel recorrido porque su
                  * simbolo no se forma igual.
                  *
-                 * Hoy una clase solo puede tener UNO: su simbolo es
-                 * `<Clase>__ctor`, sin nada que distinga a uno de otro -- ni
-                 * siquiera el numero de argumentos, a diferencia del struct,
-                 * cuyo simbolo si lo lleva.  Declarar dos emitia dos etiquetas
-                 * con el MISMO nombre y la llamada se iba a una cualquiera:
-                 * teniendo `K()` y `K(i64)`, `new K(9)` no ejecutaba el que se
-                 * habia escrito.  Y en silencio.
+                 * Repetir constructor es repetir sus PARAMETROS.  Una clase
+                 * admite varios: su simbolo era `<Clase>__ctor` a secas -- sin
+                 * nada que separara a uno de otro, ni siquiera la aridad, a
+                 * diferencia del struct --, asi que declarar dos emitia dos
+                 * etiquetas iguales y la llamada se iba a una cualquiera.  Eso
+                 * es lo que los tenia prohibidos; ahora el que comparte nombre
+                 * lleva su discriminante, como todo lo demas.
                  *
                  * Los HEREDADOS no cuentan: el constructor del super esta en la
                  * lista y no impide que la derivada declare el suyo. */
                 if (m->is_constructor) {
-                    bool has_own_ctor = false;
+                    bool already_declared = false;
                     for (const ClassMethodInfo &prev : layout.methods) {
-                        if (prev.is_constructor &&
-                            prev.defining_class == c->name) {
-                            has_own_ctor = true;
-                            break;
-                        }
+                        if (!prev.is_constructor ||
+                            prev.defining_class != c->name)
+                            continue;
+                        if (!overload::same_params(prev.param_types,
+                                                   mi_info.param_types))
+                            continue;
+                        already_declared = true;
+                        break;
                     }
-                    if (has_own_ctor) {
-                        diags_.error(m->loc,
-                                     "la clase '" + c->name +
-                                         "' ya tiene un constructor; por ahora"
-                                         " una clase solo admite uno.  Para"
-                                         " varias formas de construirla, usa"
-                                         " metodos 'static' que la devuelvan");
+                    if (already_declared) {
+                        diags_.diag(m->loc, DiagLevel::ERR, "VX2061",
+                                    {c->name});
                         continue;
                     }
                 }
@@ -5487,8 +5532,8 @@ void TypeChecker::collect_globals() {
                 layout.methods.push_back(std::move(mi_info));
             }
             // Con la lista cerrada, cada metodo recibe su simbolo definitivo.
-            name_layout_methods(layout.methods, c->name,
-                                /*ctor_arity=*/false);
+            close_layout_methods(layout.methods, c->name,
+                                 /*ctor_arity=*/false);
 
             // precomputar has_destructor para que las rules de
             // escape (check_assign) lo consulten en O(1) sin iterar
@@ -5599,7 +5644,14 @@ void TypeChecker::collect_globals() {
             }
             ClassMethodInfo mi = make_method_info(*m, key);
             mi.is_extension = true; // label = <key>__<name>, despacho estatico
+            /* En que hueco del layout cae: es por ahi por donde quien emite el
+             * cuerpo llega a su simbolo, y estos entran DESPUES del cierre.
+             * Se cierra EL, no el layout entero: un `impl` de diez metodos
+             * costaria diez veces el cuadrado de los que ya hubiera. */
+            const size_t slot = dst->size();
+            m->layout_slot = static_cast<uint32_t>(slot);
             dst->push_back(std::move(mi));
+            close_method(*dst, slot, key, /*ctor_arity=*/!is_class_target);
         }
         if (is_impl && !concept_name.empty())
             impl_conformances_[key].insert(concept_name);
@@ -5673,6 +5725,10 @@ void TypeChecker::collect_globals() {
         dtor->access = 0;
         dtor->body = std::make_unique<ast::BlockStmt>();
         dtor->body->loc = sd->loc;
+        /* En que hueco del layout acaba, igual que cualquier otro metodo: quien
+         * EMITE el cuerpo llega al simbolo por ahi, y este entra despues de
+         * haberse cerrado la lista. */
+        dtor->layout_slot = static_cast<uint32_t>(lay.methods.size());
         sd->methods.push_back(std::move(dtor));
         ClassMethodInfo mi;
         mi.name = "__dtor";
@@ -5682,6 +5738,9 @@ void TypeChecker::collect_globals() {
         mi.source_file = sd->loc.file();
         mi.source_line = sd->loc.line;
         lay.methods.push_back(std::move(mi));
+        // Y se cierra EL, que es lo unico que reparte simbolos.
+        close_method(lay.methods, lay.methods.size() - 1, sd->name,
+                     /*ctor_arity=*/true);
     }
 
     // punto-fijo de @c has_destructible_field.  Una clase tiene
@@ -5778,6 +5837,9 @@ void TypeChecker::collect_globals() {
         dtor->access = 0;
         dtor->body = std::make_unique<ast::BlockStmt>();
         dtor->body->loc = cd->loc;
+        /* En que hueco del layout acaba: quien EMITE el cuerpo llega al
+         * simbolo por ahi, y este entra despues del cierre de la lista. */
+        dtor->layout_slot = static_cast<uint32_t>(lay.methods.size());
         cd->methods.push_back(std::move(dtor));
 
         // Reflejarlo en el ClassLayout: anadir un ClassMethodInfo y
@@ -5796,6 +5858,9 @@ void TypeChecker::collect_globals() {
         mi_info.source_file = cd->loc.file();
         mi_info.source_line = cd->loc.line;
         lay.methods.push_back(std::move(mi_info));
+        // Y se cierra EL, que es lo unico que reparte simbolos.
+        close_method(lay.methods, lay.methods.size() - 1, cd->name,
+                     /*ctor_arity=*/false);
         lay.has_destructor = true;
     }
 
@@ -10012,23 +10077,75 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
         return new_expr_result_type(e->class_name);
     }
 
-    // Localizar el constructor: debe tener el mismo nombre que la
-    // clase y is_constructor=true.  Si hay varios, elegimos el que
-    // encaje con la lista de argumentos por aridad estricta (overload
-    // resolution mejorada llegara).
+    /* Cual de los constructores.  Por la MISMA regla que cualquier otra
+     * llamada -- exacta antes que compatible --, y no por aridad a secas: con
+     * `K(i64)` declarado antes que `K(f64)`, `new K(1.0)` acababa en el de
+     * enteros.  Se deja apuntado CUAL, porque el bajado necesita ese mismo para
+     * saber a que ayudante `__new_` llamar. */
     const ClassMethodInfo *ctor = nullptr;
-    for (const auto &m : cls.methods) {
-        if (!m.is_constructor) continue;
-        /* Con un variadico la aridad no es exacta: los parametros de delante
-         * son obligatorios y de ahi en adelante se admite cualquier cantidad,
-         * incluida ninguna. */
-        if (m.is_variadic) {
-            if (arg_types.size() + 1 < m.param_types.size()) continue;
-        } else if (m.param_types.size() != arg_types.size()) {
-            continue;
+    {
+        /* Los constructores PROPIOS de la clase, no los que hereda.  Construir
+         * una derivada usa SU constructor: el de la base esta en el layout
+         * -- copiado al aplanar -- y con la misma firma le ganaba por estar
+         * antes, asi que la llamada acababa en el ayudante de otra clase.  Es
+         * el mismo criterio con el que se emiten los ayudantes. */
+        bool has_own = false;
+        for (const ClassMethodInfo &m : cls.methods) {
+            if (m.is_constructor && m.defining_class == cls.name) {
+                has_own = true;
+                break;
+            }
         }
-        ctor = &m;
-        break;
+        util::SmallVector<overload::Candidate, 4> cands;
+        for (size_t i = 0; i < cls.methods.size(); ++i) {
+            const ClassMethodInfo &m = cls.methods[i];
+            if (!m.is_constructor) continue;
+            if (has_own && m.defining_class != cls.name) continue;
+            /* Con un variadico la aridad no es exacta: los de delante son
+             * obligatorios y de ahi en adelante vale cualquier cantidad.  La
+             * regla comun pide que cuadren, asi que ese se resuelve aparte y
+             * gana solo si no encaja ninguno de los otros. */
+            if (m.is_variadic) continue;
+            overload::Candidate c;
+            c.params = &m.param_types;
+            c.slot = static_cast<uint32_t>(i);
+            c.by_ref_mask = m.param_by_ref_mask;
+            cands.push_back(c);
+        }
+        const uint32_t pick =
+            cands.empty() ? overload::kNoPick
+                          : overload::select(cands.data(), cands.size(),
+                                             arg_types, &overload_accepts,
+                                             this);
+        if (pick != overload::kNoPick) {
+            ctor = &cls.methods[pick];
+            e->resolved_method = pick;
+        } else {
+            /* Ninguno encaja POR TIPOS.  Eso no quiere decir que la llamada
+             * este mal: lo que un argumento admite es mas de lo que sabe la
+             * regla de seleccion -- una constante que cabe en un newtype se
+             * re-tipa sola, y el NOMBRE de una funcion donde se espera una
+             * funcion se convierte en un valor-funcion --, y de eso se encarga
+             * `check_call_arg` mas abajo, con el nodo del argumento delante.
+             *
+             * Asi que los tipos DESEMPATAN, no filtran: si no deciden, se
+             * vuelve a la aridad, que es como se elegia antes.  Sin esto,
+             * `new K(3, doblar)` con `K(Metros, cfn(i64)->i64)` dejaba de
+             * compilar. */
+            for (size_t i = 0; i < cls.methods.size(); ++i) {
+                const ClassMethodInfo &m = cls.methods[i];
+                if (!m.is_constructor) continue;
+                if (has_own && m.defining_class != cls.name) continue;
+                if (m.is_variadic) {
+                    if (arg_types.size() + 1 < m.param_types.size()) continue;
+                } else if (m.param_types.size() != arg_types.size()) {
+                    continue;
+                }
+                ctor = &m;
+                e->resolved_method = static_cast<uint32_t>(i);
+                break;
+            }
+        }
     }
     if (!ctor) {
         // Si la clase no declara ningun constructor explicito,

@@ -1155,6 +1155,16 @@ es = "una direccion de campo se usa en algo que no es una carga ni la direccion 
 en = "stack SROA: in '{0}', ALLOCA %{1} left alone: {2}"
 es = "SROA de pila: en '{0}', la reserva %{1} se deja como esta: {2}"
 
+# Fallo del COMPILADOR, no del programa: se pregunta por el simbolo de un
+# metodo cuyo tipo nadie cerro, asi que no hay nombre que dar.  Antes se armaba
+# uno aqui mismo y era peor que no contestar: salia distinto del emitido -- el
+# constructor de un struct lleva la aridad dentro y el de una clase no --, el
+# enlazador lo daba por externo y el binario no cargaba.
+# {0} el metodo  {1} de quien es
+[VXA095]
+en = "the symbol of '{1}.{0}' was never computed: its type did not go through closing its method list"
+es = "el simbolo de '{1}.{0}' no se llego a calcular: su tipo no paso por el cierre de su lista de metodos"
+
 # ===========================================================================
 # HECHOS DEL ASA -- el texto de lo que se sabe
 # ===========================================================================
@@ -2519,6 +2529,12 @@ es = "'{0}' ya declara un metodo '{1}' con esos mismos parametros"
 ["VX2061"]
 en = "'{0}' already declares a constructor with those same parameters"
 es = "'{0}' ya declara un constructor con esos mismos parametros"
+# Un nombre de tipo es UNO.  {1} es la palabra clave con la que se declaro el
+# que ya lo tenia -- `struct`, `class` o `enum` --, y como es palabra clave del
+# lenguaje NO se traduce: entra como dato.
+["VX2062"]
+en = "the type name '{0}' is already taken by a '{1}' declared earlier"
+es = "el nombre de tipo '{0}' ya lo tiene un '{1}' declarado antes"
 # Ni frontera ni ignorancia: el valor no esta en el codigo que se mira.  La
 # tabla de valores no encoge cuando el optimizador borra una instruccion, asi
 # que la ranura sobrevive vacia -- y contestarle algo es trabajo sobre un dato

@@ -153,14 +153,14 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                         ctor_sig = &m;
                         break;
                     }
-            bool has_ctor = ctor_sig != nullptr;
-            if (!has_ctor)
-                for (const auto &m : slay.methods)
-                    if (m.is_constructor) {
-                        has_ctor = true;
-                        break;
-                    }
-            if (has_ctor) {
+            /* Sin constructor no hay llamada que emitir, y antes se emitia
+             * igual: bastaba que el struct tuviera ALGUNO para armar aqui
+             * `<T>__ctor_<n>` con la aridad escrita, una etiqueta que nadie
+             * habia emitido si ninguno tenia esa aridad.  No se llegaba con un
+             * programa valido -- el comprobador ya dice que ningun constructor
+             * coincide --, y eso es justo lo que hacia del respaldo un sitio
+             * donde solo podia salir un nombre falso. */
+            if (ctor_sig != nullptr) {
                 const uint64_t buf_bytes =
                     (static_cast<uint64_t>(slay.size_bytes) + 7ULL) & ~7ULL;
                 const ir::IrValueId v_buf =
@@ -188,38 +188,17 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 std::vector<ir::IrValueId> operands;
                 operands.reserve(e->args.size() + 1);
                 operands.push_back(v_buf); // this = buffer a inicializar
-                if (ctor_sig) {
-                    if (!lower_method_call_args(e->args, *ctor_sig, operands))
-                        return ir::IR_NO_VALUE;
-                } else {
-                    for (auto &a : e->args) {
-                        const ir::IrValueId av = lower_expr(a.get());
-                        if (av == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
-                        operands.push_back(av);
-                    }
-                }
+                if (!lower_method_call_args(e->args, *ctor_sig, operands))
+                    return ir::IR_NO_VALUE;
                 ir::IrInstr ins{};
                 ins.op = ir::IrOp::CALL;
                 ins.type = ir::IrType::VOID;
                 ins.dst = ir::IR_NO_VALUE;
-                /* El simbolo se LEE de la ficha del constructor elegido: lo
-                 * calculo el comprobador al cerrar el layout, con la aridad y
-                 * -- si comparte la suya con otro -- su discriminante. */
-                const std::string &owner =
-                    slay.name.empty() ? cid->name : slay.name;
                 /* El simbolo se LEE de la ficha del constructor elegido, que lo
-                 * calculo el comprobador con la aridad y -- si la comparte con
-                 * otro -- su discriminante.
-                 *
-                 * Cuando no lo trae hay que armarlo AQUI y no en la fabrica
-                 * generica: un constructor de struct lleva la aridad dentro y
-                 * el de una clase no, y desde alli no se sabe cual es cual.  Lo
-                 * trae vacio el layout que llega por el import, que se registra
-                 * sin pasar por el cierre del layout local. */
-                ins.func_name =
-                    (ctor_sig != nullptr && !ctor_sig->ir_symbol.empty())
-                        ? ctor_sig->ir_symbol.str()
-                        : (owner + "__ctor_" + std::to_string(e->args.size()));
+                 * calculo el comprobador al cerrar el layout -- con la aridad
+                 * y, si la comparte con otro, su discriminante --.  Tambien el
+                 * del importado, que trae el suyo de su modulo. */
+                ins.func_name = method_symbol_of(*ctor_sig);
                 ins.operands = std::move(operands);
                 ins.source_line = e->loc.line;
                 emit(current_block_, std::move(ins));
@@ -1118,9 +1097,22 @@ ir::IrValueId Lowering::lower_new_expr(ast::NewExpr *e) {
     ins.op = ir::IrOp::CALL;
     ins.type = ir::IrType::PTR;
     ins.dst = dst;
-    ins.func_name = e->is_shared ? ("__new_" + helper_class_name + "_shared")
-                    : e->is_gc   ? ("__new_" + helper_class_name + "_gc")
-                                 : ("__new_" + helper_class_name);
+    /* El ayudante lo nombra la fabrica, con el CONSTRUCTOR que el comprobador
+     * eligio: una clase puede tener varios y cada uno tiene el suyo.  El
+     * layout es el de la clase escrita, que no siempre es la del ayudante
+     * -- un newtype construye la de debajo --, asi que el constructor se busca
+     * donde se eligio. */
+    const ClassMethodInfo *new_ctor = nullptr;
+    {
+        const auto &class_layouts = tc_.class_layouts();
+        auto it_sel = class_layouts.find(e->class_name);
+        if (it_sel != class_layouts.end())
+            new_ctor = picked_method(it_sel->second, e->resolved_method);
+    }
+    ins.func_name = new_helper_symbol(new_ctor, helper_class_name,
+                                      e->is_shared ? NewHelperKind::Shared
+                                      : e->is_gc   ? NewHelperKind::Gc
+                                                   : NewHelperKind::Normal);
     ins.operands = std::move(arg_vals);
     ins.source_line = e->loc.line;
     emit(current_block_, std::move(ins));
@@ -2157,7 +2149,7 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
                 if (picked != nullptr && &m != picked) continue;
                 if (m.is_static && !m.is_constructor &&
                     m.name == fa->field_name) {
-                    mangled_label = method_symbol_of(m, idb->name);
+                    mangled_label = method_symbol_of(m);
                     ret_ir = ir_type_from_primitive(m.return_type.kind);
                     /* Y QUE devuelve, no solo de que tipo IR es.  Lo que hay
                      * mas abajo decide con esto si la llamada necesita un

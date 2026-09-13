@@ -2949,13 +2949,16 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
     int ctor_count = 0;
     for (const auto &m : cls->methods) {
         if (!m.is_constructor) continue;
-        /* Filtrar constructores heredados: solo el de esta clase.  Si
-         * defining_class esta vacio (metadata incompleta), usar el match por
-         * nombre ir_fn_name == "<clase>__ctor". */
-        const bool own = m.defining_class.empty()
-                             ? (m.ir_fn_name == class_name + "__ctor")
-                             : (m.defining_class == class_name);
-        if (!own) continue;
+        /* Filtrar constructores heredados: solo el de esta clase.  Quien lo
+         * define viene DICHO en la ficha, y sin ese dato no se cuenta como
+         * propio -- con lo que la funcion acaba renunciando por "0 propios",
+         * que es literalmente lo que pasa --.
+         *
+         * Antes, cuando no constaba, se adivinaba comparando el simbolo con
+         * `<clase>__ctor`: el nombre de cuando una clase solo podia tener un
+         * constructor.  Con dos, el de verdad lleva su discriminante y esa
+         * comparacion no acierta nunca. */
+        if (m.defining_class != class_name) continue;
         ctor_m = &m;
         ++ctor_count;
     }

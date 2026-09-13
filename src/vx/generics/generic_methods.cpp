@@ -139,19 +139,33 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
     for (const auto &p : cloned->params)
         mi.param_types.push_back(type_from_node(p->type.get()));
 
+    /* Entra al layout y se CIERRA el recien llegado: aparece DESPUES del cierre
+     * del tipo, asi que sin esto se quedaba sin simbolo y quien lo emitia tenia
+     * que armarselo -- que es justo lo que dejo de haber --.  Se cierra EL, no
+     * el layout entero: instanciar un metodo generico no puede costar el
+     * cuadrado de los metodos del tipo cada vez.
+     *
+     * Y se le apunta en QUE hueco cae, como a cualquier otro metodo: es por ahi
+     * por donde quien emite el cuerpo llega a su simbolo. */
     if (is_struct) {
         auto it = struct_layouts_.find(container);
         if (it == struct_layouts_.end()) return std::string();
         // Los structs no usan vtable (dispatch estatico); vtable_index
         // queda en 0 (irrelevante).
+        const size_t slot = it->second.methods.size();
+        cloned->layout_slot = static_cast<uint32_t>(slot);
         it->second.methods.push_back(std::move(mi));
+        close_method(it->second.methods, slot, container, /*ctor_arity=*/true);
     } else {
         auto it = class_layouts_.find(container);
         if (it == class_layouts_.end()) return std::string();
         // Metodo PROPIO nuevo al final: vtable_index = tamano actual,
         // identico a como collect asigna un metodo propio recien anyadido.
-        mi.vtable_index = static_cast<uint32_t>(it->second.methods.size());
+        const size_t slot = it->second.methods.size();
+        mi.vtable_index = static_cast<uint32_t>(slot);
+        cloned->layout_slot = mi.vtable_index;
         it->second.methods.push_back(std::move(mi));
+        close_method(it->second.methods, slot, container, /*ctor_arity=*/false);
     }
 
     // Encolar para anyadir al AST del contenedor + chequear el body en el

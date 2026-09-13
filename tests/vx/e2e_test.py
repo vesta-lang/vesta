@@ -5837,6 +5837,13 @@ fails_case("desbordamiento_sin_cast",
            "una cuenta que se sale del tipo, sin declararlo, es un ERROR",
            "538_desbordamiento_sin_cast.vx", "VX2050")
 
+# Un nombre de tipo es UNO.  `struct X` y `class X` convivian sin decir nada, y
+# `X` resolvia a uno o a otro segun donde se mirara: el guardian estaba escrito
+# tres veces y solo el del enum miraba las tres familias.
+fails_case("nombre_de_tipo_unico",
+           "un `struct` y una `class` no pueden llamarse igual",
+           "546_nombre_de_tipo_unico.vx", "VX2062")
+
 # Y cuando SI envuelve -- porque el cast lo declara --, tiene que envolver
 # BIEN.  Un valor estrecho vive en un registro de 64 y los bits de mas hacian
 # que el mismo valor se imprimiera bien y mintiera al compararse.  Los seis

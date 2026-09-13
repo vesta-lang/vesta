@@ -1,0 +1,31 @@
+namespace ejemplos.tipo_unico;
+
+// UN NOMBRE DE TIPO ES UNO.  Si lo tiene un `struct`, no lo puede tener una
+// `class` ni un `enum`.
+//
+// Suena obvio y no lo era: `struct X` y `class X` convivian en el mismo fichero
+// SIN UN SOLO DIAGNOSTICO, y `X` resolvia a uno o a otro segun donde se mirara
+// -- el layout, la vtable, el ayudante de construccion --.
+//
+// El guardian estaba escrito TRES veces, una por familia, y solo la del `enum`
+// miraba las tres: la del struct solo miraba structs y la de la clase solo
+// clases.  En Vesta eso pica mas que en otros lenguajes, porque un struct puede
+// casi lo mismo que una clase -- campos, metodos, constructores, virtuales --,
+// asi que las dos se escribieron como mundos paralelos y nadie noto que dos de
+// los tres guardianes miraban solo su mitad.
+//
+// Este ejemplo NO compila a proposito: el caso negativo es la prueba.
+
+struct Medida {
+	i64 valor;
+}
+
+class Medida {
+	public i64 otro;
+
+	public Medida() { this.otro = 0; }
+}
+
+i32 main() {
+	return 42;
+}

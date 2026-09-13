@@ -586,8 +586,7 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
                             act.inner_dtor_vtable_index = mi.vtable_index;
                             // Nombre directo del dtor (<owner>__<dtor>) para
                             // CALL directo en native_poo (AOT).
-                            act.inner_dtor_func_name = method_symbol_of(
-                                mi, sem_type.pointee->struct_name.str());
+                            act.inner_dtor_func_name = method_symbol_of(mi);
                             // Polimorfico si la clase de dentro tiene tabla de
                             // metodos: el destructor hay que buscarlo por lo
                             // que el objeto ES, no por como se declaro.
