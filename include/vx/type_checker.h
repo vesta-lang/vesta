@@ -572,6 +572,42 @@ inline const ClassMethodInfo *find_method(const Layout &lay,
 }
 
 /**
+ * @brief El SIMBOLO con el que se emite un metodo: `Duenyo__metodo`.
+ *
+ * Estaba escrito en SEIS sitios del bajado, cada uno armando la misma cadena a
+ * mano.  Mirandolos de cerca no eran lo mismo -- y por eso no se colapsan en un
+ * campo --: cada uno elige un dueno distinto A PROPoSITO.  Uno nombra al que
+ * DEFINE el metodo, otro al escrito en la llamada, otro a la clase del aspecto.
+ *
+ * Lo que si se repetia es la REGLA de formar el nombre, y eso es lo que vive
+ * aqui.  Cada llamante sigue diciendo de quien es el metodo; como se llama el
+ * simbolo lo dice esta funcion, y se cambia en un sitio.
+ *
+ * @param owner  De quien es el metodo, que lo decide el llamante.
+ * @param method Nombre del metodo.
+ */
+inline std::string method_symbol(const std::string &owner,
+                                 const std::string &method) {
+    return owner + "__" + method;
+}
+
+/**
+ * @brief Igual, con el dueno por DEFECTO cuando el metodo no dice quien lo
+ *        define.
+ *
+ * La otra mitad de lo que se repetia: tres de los seis sitios llevaban el mismo
+ * ternario -- el que define, y si no consta, este otro -- escrito a mano.
+ *
+ * @param m        El metodo.
+ * @param fallback A quien atribuirlo si @c defining_class viene vacio.
+ */
+inline std::string method_symbol_of(const ClassMethodInfo &m,
+                                    const std::string &fallback) {
+    return method_symbol(m.defining_class.empty() ? fallback : m.defining_class,
+                         m.name);
+}
+
+/**
  * @struct EnumVariantInfo
  * @brief Resumen de una variante de enum (ADT, tagged union).
  *

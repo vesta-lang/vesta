@@ -1956,7 +1956,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         ca.op = ir::IrOp::CALL;
         ca.type = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
         ca.dst = method_call_sret ? ir::IR_NO_VALUE : dst;
-        ca.func_name = mtd->defining_class + "__" + mtd->name;
+        ca.func_name = method_symbol(mtd->defining_class, mtd->name);
         ca.operands.push_back(obj);
         if (method_call_sret) ca.operands.push_back(v_method_call_retbuf);
         for (const ir::IrValueId av : arg_vals)
@@ -2273,14 +2273,11 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                 break;
             }
         if (is_leaf) {
-            const std::string owner = mtd->defining_class.empty()
-                                          ? bt.struct_name.str()
-                                          : mtd->defining_class;
             ir::IrInstr dc{};
             dc.op = ir::IrOp::CALL;
             dc.type = ret_ir;
             dc.dst = dst;
-            dc.func_name = owner + "__" + mtd->name;
+            dc.func_name = method_symbol_of(*mtd, bt.struct_name.str());
             dc.operands.push_back(obj);
             if (method_call_sret) dc.operands.push_back(v_method_call_retbuf);
             for (auto av : arg_vals)
@@ -2535,10 +2532,7 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
                 // simbolo del defining_class para evitar emitir referencia
                 // a un Class__method que no existe.  El transpiler C usa
                 // este nombre como label de funcion.
-                const std::string &defc = m.defining_class;
-                const std::string &owner =
-                    (!defc.empty() && defc != cl.name) ? defc : cl.name;
-                imeth.ir_fn_name = owner + "__" + m.name;
+                imeth.ir_fn_name = method_symbol_of(m, cl.name);
             }
             imeth.return_type = ir_type_from_primitive(m.return_type.kind);
             imeth.param_types.reserve(m.param_types.size());

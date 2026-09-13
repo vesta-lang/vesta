@@ -148,7 +148,7 @@ bool Lowering::run(ir::IrModule &out_module, const std::string &module_name) {
             const std::string target = t.substr(0, p) + "__" + t.substr(p + 1);
             ir::IrModule::ChainedAdvice entry;
             entry.kind = static_cast<uint8_t>(m->advice_kind - 1);
-            entry.method_ir_name = cd_asp->name + "__" + m->name;
+            entry.method_ir_name = method_symbol(cd_asp->name, m->name);
             advice_chains_[target].push_back(std::move(entry));
         }
     }

@@ -2121,7 +2121,7 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
             for (const auto &m : metodos) {
                 if (m.is_static && !m.is_constructor &&
                     m.name == fa->field_name) {
-                    mangled_label = idb->name + "__" + m.name;
+                    mangled_label = method_symbol(idb->name, m.name);
                     ret_ir = ir_type_from_primitive(m.return_type.kind);
                     /* Y QUE devuelve, no solo de que tipo IR es.  Lo que hay
                      * mas abajo decide con esto si la llamada necesita un
