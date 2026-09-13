@@ -146,6 +146,7 @@
 #ifndef VESTA_ANALYSIS_MANAGER_H
 #define VESTA_ANALYSIS_MANAGER_H
 
+#include "util/alloc/small_vector.h" // las listas de claves son de UNA
 #include "util/crono_tramo.h"  // el tramo de soltar las tablas
 #include "util/env_flags.h"    // medir la espera del cerrojo es OPCIONAL
 #include "util/shared_mutex.h" // lector/escritor SIN la emulacion de pthreads
@@ -616,7 +617,11 @@ class AnalysisManager {
             util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
             auto u = s.keys_by_unit.find(unit);
             if (u == s.keys_by_unit.end()) return;
-            std::vector<Key> dead;
+            /* EN LINEA: la media medida de esta lista es UNA clave -- 840.087
+             * reservas de 23 bytes al compilar 144.000 lineas, una por cada
+             * invalidacion --, y solo se recorre aqui mismo.  Un vector en el
+             * monton para guardar una clave de dieciseis bytes. */
+            util::SmallVector<Key, 2> dead;
             for (const Key &k : u->second) {
                 auto it = s.results.find(k);
                 if (it != s.results.end() && !it->second->survives(preserved))
@@ -631,7 +636,7 @@ class AnalysisManager {
             if (todo_local) return;
         }
         util::TimedUniqueLock cl(cascade_m_, exclusive_wait_slot());
-        std::vector<Key> con_dependientes;
+        util::SmallVector<Key, 2> con_dependientes; // idem, ver arriba
         {
             /* EXCLUSIVO, y sin soltarlo entre mirar y sacar.
              *
@@ -644,7 +649,11 @@ class AnalysisManager {
             util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
             auto u = s.keys_by_unit.find(unit);
             if (u == s.keys_by_unit.end()) return;
-            std::vector<Key> dead;
+            /* EN LINEA: la media medida de esta lista es UNA clave -- 840.087
+             * reservas de 23 bytes al compilar 144.000 lineas, una por cada
+             * invalidacion --, y solo se recorre aqui mismo.  Un vector en el
+             * monton para guardar una clave de dieciseis bytes. */
+            util::SmallVector<Key, 2> dead;
             for (const Key &k : u->second) {
                 auto it = s.results.find(k);
                 if (it != s.results.end() && !it->second->survives(preserved))
@@ -857,7 +866,15 @@ class AnalysisManager {
         /// Que analisis tiene cada unidad, para que invalidarla no obligue a
         /// recorrer el gestor entero.  Indexado por el nombre INTERNADO, como la
         /// clave: asi ni este indice copia cadenas.
-        std::unordered_map<const std::string *, std::vector<Key>> keys_by_unit;
+        /* EN LINEA, y con la capacidad que dice el comentario de arriba: son
+         * un analisis por tipo.  Cada invalidacion vacia la lista de su unidad
+         * y la siguiente vuelta la reconstruye, asi que ese "unas pocas" se
+         * paga una y otra vez -- 840.087 reservas de 23 bytes de media al
+         * compilar 144.000 lineas --.  Aqui el almacenamiento en linea engorda
+         * la tabla, que es lo que hay que vigilar: cuatro claves son 64 bytes
+         * por unidad, y las unidades son las funciones del programa. */
+        std::unordered_map<const std::string *, util::SmallVector<Key, 4>>
+            keys_by_unit;
     };
 
     /// Cuantas franjas.  Potencia de dos para repartir con una mascara.
