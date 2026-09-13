@@ -39,6 +39,7 @@
 #define VX_TYPE_CHECKER_H
 
 #include "util/env_flags.h"
+#include "vx/generics/instance_registry.h" // el reparto de instanciaciones
 #include <algorithm>
 #include <cstdint>
 #include <functional> // std::function, en la firma de un parametro de abajo
@@ -935,6 +936,24 @@ class TypeChecker {
      */
     void set_comptime_artifact(const std::vector<uint8_t> *bytes) noexcept {
         comptime_artifact_ = bytes;
+    }
+
+    /**
+     * @brief El reparto de instanciaciones genericas del PROYECTO.
+     *
+     * Se pone ANTES de @c run().  Con el puesto, una instanciacion que otro
+     * modulo ya se quedo se registra aqui solo por su FIRMA: ni se clona su
+     * cuerpo ni se baja, porque el que se la quedo ya lo hace y la fusion une
+     * las dos por el nombre mangleado.  Ver @ref vx::GenericInstanceRegistry.
+     *
+     * Sin el -- fichero suelto, o cualquier otro llamante que no lo ponga --
+     * cada modulo hace lo suyo, que es el comportamiento de siempre.
+     *
+     * @param reg El reparto, propiedad del llamante, o @c nullptr.
+     */
+    void
+    set_generic_instances(GenericInstanceRegistry *reg) noexcept {
+        generic_instances_ = reg;
     }
     ~TypeChecker(); // limpia g_active_typechecker thread_local
 
@@ -2489,6 +2508,9 @@ class TypeChecker {
 
     /// @copydoc set_comptime_artifact
     const std::vector<uint8_t> *comptime_artifact_ = nullptr;
+
+    /// @copydoc set_generic_instances
+    GenericInstanceRegistry *generic_instances_ = nullptr;
 
   public:
     uint64_t next_gensym_id() noexcept { return gensym_counter_++; }

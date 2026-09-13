@@ -1519,7 +1519,30 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
         np->type = clone_type_with_subst(p->type.get(), g);
         cloned->params.push_back(std::move(np));
     }
-    if (src->body) {
+    /* EL CUERPO SOLO LO CLONA QUIEN SE QUEDA CON LA INSTANCIA.
+     *
+     * Cada modulo tiene su propio checker, asi que sin esto `procesa<S0>` se
+     * clona, se comprueba y se baja a IR una vez POR MoDULO que la use, y la
+     * fusion se queda con una sola -- el "modelo COMDAT" que ella misma
+     * documenta --.  O sea el trabajo N veces para tirar N-1.
+     *
+     * Con el reparto puesto, el primero que la pide es quien la produce; los
+     * demas se quedan con la FIRMA, que es lo unico que necesitan para
+     * comprobar sus llamadas.  El nombre mangleado es el mismo, asi que la
+     * fusion las une.  Y sin cuerpo no se baja: `Lowering::lower_function`
+     * sale por `!fd->body`.
+     *
+     * DOS EXCEPCIONES, y las dos por la misma razon -- que aqui el cuerpo no
+     * es solo algo que bajar, es algo que EJECUTAR en esta compilacion:
+     *   - una instancia `comptime` se AST-evalua en el modulo que la invoca;
+     *   - un `@Macro` inyecta su texto en el sitio de llamada.
+     * A las dos hay que darles su cuerpo aunque otro modulo lo tenga tambien.
+     */
+    const bool cuerpo_es_de_este_modulo =
+        src->is_comptime || src->is_macro || generic_instances_ == nullptr ||
+        generic_instances_->claim(mangled);
+
+    if (src->body && cuerpo_es_de_este_modulo) {
         auto cb = clone_stmt(src->body.get(), g);
         if (cb && cb->kind == ast::NodeKind::BlockStmt) {
             cloned->body.reset(static_cast<ast::BlockStmt *>(cb.release()));

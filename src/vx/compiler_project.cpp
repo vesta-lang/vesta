@@ -2228,6 +2228,32 @@ CompileResult compile_vx_project(
 
     cerrar_fase(res.tiempos.resolver_us, "vx.phase.modules");
 
+    /* El reparto de instanciaciones genericas, UNO por proyecto.
+     *
+     * Vive aqui -- y no como global del proceso -- porque `libvesta` deja
+     * compilar varios proyectos en el mismo proceso y un reparto global los
+     * mezclaria.  Tiene que sobrevivir a todos los modulos, asi que se declara
+     * antes que ellos. */
+    vx::GenericInstanceRegistry generic_instances;
+
+    /* CON TREE-SHAKE NO SE REPARTE, y no es una limitacion cosmetica.
+     *
+     * El reparto decide quien produce cada instancia MIENTRAS se compilan los
+     * modulos; el tree-shake decide que modulos sobran DESPUES, y poda el
+     * modulo entero.  Si el que se quedo con `procesa<S0>` es justo el que se
+     * poda, quien la usaba se queda sin ella -- reproducido: `Relocacion:
+     * simbolo no resuelto: code.bench__lib__procesa_bench__tipos__S0`.
+     *
+     * Sin reparto cada modulo vuelve a llevar su copia, que es lo que hacia
+     * que podar fuera inofensivo.  Se paga la memoria de los clones solo en
+     * las compilaciones que enciendan la bandera, que es opcional y viene
+     * apagada.
+     *
+     * El arreglo bueno -- no podar un modulo del que cuelgan instancias que
+     * otros usan, o re-emitirlas al podarlo -- pide saber que reclamo cada
+     * uno, y eso es otra tanda. */
+    const bool share_instances = !util::flag_on(util::FlagId::TreeShake);
+
     // 2. Mover los AST parseados del graph a estructuras de trabajo.
     std::vector<ProjectModuleWork> work(topo.size());
     std::unordered_map<std::string, size_t> by_name; // module_name -> idx
@@ -3424,6 +3450,11 @@ CompileResult compile_vx_project(
          * compile antes de que exista la maquina que genera parte de su
          * codigo -- y salga con cuerpos de `asm` vacios. */
         pm.tc->set_comptime_artifact(opts_modulos.comptime_artifact);
+        /* El reparto de instanciaciones genericas del proyecto: que
+         * `procesa<S0>` la produzca UN modulo y no todos.  Ver
+         * @ref vx::GenericInstanceRegistry para lo que costaba no hacerlo. */
+        pm.tc->set_generic_instances(share_instances ? &generic_instances
+                                                     : nullptr);
 
         for (const auto &kv : target_skipped_proyecto) {
             for (const auto &spec : kv.second)
