@@ -23,7 +23,7 @@
 #ifndef VESTA_ANALYSIS_IR_FACTS_H
 #define VESTA_ANALYSIS_IR_FACTS_H
 
-#include "util/named_alloc.h" // que el perfil diga QUE es cada tabla
+#include "util/alloc/small_vector.h" // las tablas por valor, sin reservar
 
 #include <cstdint>
 #include <string>
@@ -38,29 +38,42 @@ enum IrValueId : uint32_t; // declaracion opaca; la define ssa_ir.h
 namespace analysis {
 
 /**
- * @name Las cuatro tablas de estos hechos, con NOMBRE
- *
- * Las cuatro son un valor por identificador SSA, y las cuatro eran
- * `std::vector<int32_t>` o `std::vector<uint8_t>` -- o sea, indistinguibles en
- * el perfil de reservas de las otras doscientas y pico que hay por el arbol.
- * Y pesan: `used` sola son 1,1 millones de reservas de DOCE bytes al compilar
- * 441.089 lineas, quince por funcion.
- *
- * Con la etiqueta en el asignador, cada una sale por su nombre y se puede
- * decidir cual merece almacenamiento en linea.  No cuesta nada: @ref
- * util::NamedAlloc no tiene estado y reserva por `::operator new`, igual que
- * `std::allocator`.
+ * @name Las cuatro tablas de estos hechos, EN LINEA
  * @{
  */
-struct DefIdxTag;   ///< value id -> indice de la instruccion que lo define.
-struct DefBlockTag; ///< value id -> bloque donde se define.
-struct ParamOfTag;  ///< value id -> indice de parametro.
-struct UsedTag;     ///< value id -> alguien lo lee.
 
-using DefIdxVec = util::NamedVector<int32_t, DefIdxTag>;
-using DefBlockVec = util::NamedVector<int32_t, DefBlockTag>;
-using ParamOfVec = util::NamedVector<int32_t, ParamOfTag>;
-using UsedVec = util::NamedVector<uint8_t, UsedTag>;
+/**
+ * @brief Valores que caben dentro de la propia tabla antes de tocar el monton.
+ *
+ * Las cuatro tablas de abajo se dimensionan al numero de VALORES de la
+ * funcion, y eran cuatro sitios de 336.015 reservas cada uno -- 1,34 millones,
+ * el 5% de lo que reserva compilar -- de doce a cuarenta y ocho bytes.  Cuatro
+ * reservas diminutas por funcion y por visita, y siete visitas por funcion.
+ *
+ * Con el almacenamiento en linea no cuesta ninguna mientras la funcion quepa;
+ * pasado eso crecen como cualquier vector.  Se paga en el tamano de estos
+ * hechos, que se CACHEAN -- pero lo que se paga es sitio que antes estaba
+ * igualmente reservado, solo que en otro bloque y con un salto de puntero por
+ * medio.
+ *
+ * LO QUE SE PIERDE: las cuatro llevaban etiqueta (@c util::NamedVector) para
+ * que el perfil las distinguiera de las otras tablas de cuatro bytes del
+ * arbol.  La etiqueta estaba para ENCONTRARLAS; encontradas y quitadas, lo que
+ * queda es el resto de las funciones grandes.  Si ese resto pesa, vuelve.
+ */
+/* DIECISEIS, y la razon es el TAMANO, no una medida: con treinta y dos la
+ * diferencia en reservas (13.304) queda POR DEBAJO del ruido de la medicion
+ * -- el mismo binario da 22,033 M, 22,065 M y 22,073 M en tres corridas --,
+ * asi que ahi no hay nada que leer.  Lo que si se sabe es lo que cuesta: estos
+ * hechos se CACHEAN, y con treinta y dos cada uno se lleva 416 bytes en linea
+ * en vez de 208, para cubrir una minoria de funciones que ademas siguen
+ * funcionando sin ello. */
+constexpr size_t kInlineValues = 16;
+
+using DefIdxVec = util::SmallVector<int32_t, kInlineValues>;
+using DefBlockVec = util::SmallVector<int32_t, kInlineValues>;
+using ParamOfVec = util::SmallVector<int32_t, kInlineValues>;
+using UsedVec = util::SmallVector<uint8_t, kInlineValues>;
 /// @}
 
 /// Marcador del analisis de hechos IR (identidad para el AnalysisManager).

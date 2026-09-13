@@ -47,6 +47,7 @@
 #ifndef VESTA_ANALYSIS_ANALYSIS_CODEC_H
 #define VESTA_ANALYSIS_ANALYSIS_CODEC_H
 
+#include "util/alloc/small_vector.h" // tablas con almacenamiento en linea
 #include "util/serialize.h"
 
 #include <cstddef>
@@ -126,6 +127,33 @@ bool read_pod_vector(util::ByteReader &r, std::vector<T, A> &out) {
     if (n == 0) return true;
     return r.raw(out.data(), static_cast<size_t>(n) * sizeof(T));
 }
+
+/**
+ * @name Lo mismo para una tabla con almacenamiento EN LINEA
+ *
+ * Por la misma razon que la plantilla de arriba lleva el asignador: una tabla
+ * que guarda los primeros N elementos dentro de si misma es OTRO tipo, y sin
+ * esto no entraria por esta puerta.  El formato en disco es EL MISMO -- la
+ * cuenta y los bytes seguidos --, que es lo que permite que una tabla cambie
+ * de una forma a la otra sin invalidar lo ya guardado.
+ * @{
+ */
+template <class T, size_t N>
+void write_pod_vector(util::ByteWriter &w, const util::SmallVector<T, N> &v) {
+    w.u32(static_cast<uint32_t>(v.size()));
+    if (!v.empty()) w.raw(v.data(), v.size() * sizeof(T));
+}
+
+template <class T, size_t N>
+bool read_pod_vector(util::ByteReader &r, util::SmallVector<T, N> &out) {
+    const uint32_t n = r.u32();
+    if (!r.ok()) return false;
+    if (static_cast<size_t>(n) * sizeof(T) > r.remaining()) return false;
+    out.assign(n, T{});
+    if (n == 0) return true;
+    return r.raw(out.data(), static_cast<size_t>(n) * sizeof(T));
+}
+/// @}
 
 /**
  * @brief Los CoDIGOS de un analisis, guardados una vez y referidos por indice.
