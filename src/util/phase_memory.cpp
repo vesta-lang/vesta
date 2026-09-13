@@ -79,20 +79,27 @@ static void release_impl(const char *next_mark, uint32_t from_class) {
  * media, la mayoria por debajo de esa clase --, asi que 8 se deja fuera casi
  * todo lo suyo.
  *
- * MEDIDO SOBRE 144.000 LINEAS, 12 corridas intercaladas por punto:
+ * MEDIDO SOBRE 144.000 LINEAS.  Pico RESIDENTE del proceso, 3 corridas por
+ * punto, cache en frio en cada una:
  *
- *     desde clase  8   621,7 MiB   3.057 ms      (el defecto del asignador)
- *     desde clase  4   595,2 MiB   3.232 ms      -26 MiB por +4,4%
- *     desde clase  0   572,9 MiB   3.951 ms      -49 MiB por +29%
+ *     desde clase  8   609,6 MiB   3.147 ms      (el defecto del asignador)
+ *     desde clase  4   583,7 MiB   3.207 ms      -26 MiB por +1,9%
+ *     desde clase  2   564,9 MiB   3.594 ms
+ *     desde clase  0   560,9 MiB   3.519 ms      -49 MiB por +11,8%
  *
- * El cuatro es donde gira la curva: el 55% de la memoria por el 15% del coste.
- * El cero no compensa porque el barrido cuesta por BLOQUE y devuelve por TROZO,
- * y en una clase de 16 bytes hay 4.096 bloques que tienen que estar TODOS
- * libres para que el trozo valga algo.
+ * El cuatro sigue siendo donde gira la curva: mas de la mitad de la memoria
+ * por una fraccion del coste.  El cero cuesta el barrido de las clases mas
+ * pequenas, que se paga por BLOQUE y se cobra por TROZO: en una clase de 16
+ * bytes hay 4.096 bloques que tienen que estar TODOS libres para que el trozo
+ * valga algo.  El dos no aporta nada sobre el cero y ademas mide mas lento.
  *
- * No es un numero que se pueda dejar puesto y olvidar: depende del perfil de
- * tamanos de quien reserva.  Si el compilador cambia como reserva, esta tabla
- * caduca y hay que rehacerla -- son tres builds.
+ * ESTA TABLA YA CADUCO UNA VEZ Y SE REHIZO (2026-09-13).  La anterior decia
+ * 621,7 / 595,2 / 572,9 MiB con el cero a +29% de tiempo; despues de quitar el
+ * 25% de las reservas del compilador -- y justo las mas pequenas -- cada punto
+ * bajo unos 12 MiB y el cero paso a costar +11,8% en vez de +29%.  O sea que
+ * la advertencia era cierta: depende del perfil de tamanos de quien reserva, y
+ * cuando eso cambia hay que rehacerla.  Son cuatro builds y tres corridas cada
+ * uno.
  */
 constexpr uint32_t kCompilerReclaimFrom = 4;
 
