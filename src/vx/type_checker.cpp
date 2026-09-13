@@ -624,6 +624,39 @@ void TypeChecker::resolve_pending_complexity_(ast::ClassMethodDecl &nm,
     }
 }
 
+/**
+ * @brief Le toca a ESTE modulo clonar el cuerpo de @p m, o ya se lo quedo
+ *        otro?
+ *
+ * El mismo reparto que para una funcion libre, un nivel mas adentro: lo que se
+ * comparte de una instancia como `Caja<i64>` son los CUERPOS de sus metodos.
+ * El layout -- los campos -- se clona siempre, porque cada modulo que use el
+ * tipo necesita saber como esta puesto.
+ *
+ * TRES CLASES DE METODO SE QUEDAN SIEMPRE CON SU CUERPO, y las tres por la
+ * misma razon: ahi el cuerpo no es algo que bajar UNA vez, es algo que se
+ * consulta o se ejecuta EN ESTE modulo.
+ *   - `@Inline`: `Lowering` lo mete en el SITIO DE LLAMADA leyendo su AST
+ *     (`oop.cpp`, la forma `{ return expr; }`).  Sin cuerpo no desaparece la
+ *     llamada -- cae a `CALLVIRT` --, o sea que quitarlo cambiaria el codigo de
+ *     quien llama, no solo quien lo define.
+ *   - `comptime`: se evalua sobre el AST al invocarlo.
+ *   - destructores: el bajado los invoca por su cuenta al salir de ambito, y
+ *     se dejan fuera hasta tener una prueba de que aguantan el reparto.
+ *
+ * @param reg     El reparto del proyecto, o @c nullptr si no lo hay.
+ * @param index   Indice de este modulo en el orden topologico.
+ * @param mangled Nombre mangleado de la INSTANCIA (`Caja_i64`).
+ * @param m       El metodo.
+ */
+static bool method_body_is_ours(vx::GenericInstanceRegistry *reg, size_t index,
+                                const std::string &mangled,
+                                const ast::ClassMethodDecl *m) {
+    if (reg == nullptr) return true;
+    if (m->is_inline || m->is_comptime || m->is_destructor) return true;
+    return reg->claim(mangled + "::" + m->name, index);
+}
+
 std::string TypeChecker::monomorphize_class(const std::string &template_name,
                                             const std::vector<Type> &args,
                                             const SourceLoc &loc) {
@@ -755,7 +788,11 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
             np->type = clone_type_with_subst(p->type.get(), g);
             nm->params.push_back(std::move(np));
         }
-        if (m->body) {
+        /* El cuerpo solo lo clona quien se queda con este metodo de la
+         * instancia; ver @c method_body_is_ours. */
+        if (m->body && method_body_is_ours(generic_instances_,
+                                           generic_module_index_, mangled,
+                                           m.get())) {
             auto cb = clone_stmt(m->body.get(), g);
             if (cb && cb->kind == ast::NodeKind::BlockStmt) {
                 nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
@@ -1017,7 +1054,11 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
             np->type = clone_type_with_subst(p->type.get(), g);
             nm->params.push_back(std::move(np));
         }
-        if (m->body) {
+        /* El cuerpo solo lo clona quien se queda con este metodo de la
+         * instancia; ver @c method_body_is_ours. */
+        if (m->body && method_body_is_ours(generic_instances_,
+                                           generic_module_index_, mangled,
+                                           m.get())) {
             auto cb = clone_stmt(m->body.get(), g);
             if (cb && cb->kind == ast::NodeKind::BlockStmt) {
                 nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
