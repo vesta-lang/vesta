@@ -1508,11 +1508,28 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
     /* Reservar de golpe: un modulo grande produce cientos de miles de hechos y
      * dejarlos crecer de uno en uno copia el vector entero una y otra vez.  La
      * cota se estima de lo unico que la determina -- valores por dominio -- y
-     * no hace falta que sea exacta. */
+     * no hace falta que sea exacta.
+     *
+     * Y A ESCALA DE LO QUE SE PIDE, que es la mitad que faltaba.  `values * 2`
+     * es la cota de producirlos TODOS, y una compilacion corriente pide UNO:
+     * `asa.layout`, que el informe de precondiciones consume siempre y que
+     * emite un hecho por dato estatico -- unos pocos.  Reservar para catorce
+     * dominios lo que va a llenar uno costaba, medido sobre 144.000 lineas,
+     * 118,8 MB pedidos DE UNA VEZ para guardar unos kilobytes.  Es justamente
+     * lo que el ASA no puede hacer: pagar de mas por una pregunta.
+     *
+     * Vacio quiere decir TODOS -- es lo que pide quien vuelca --, y ahi la cota
+     * entera es la correcta.  El divisor sale del registro y no escrito a mano:
+     * un dominio nuevo lo cambia solo, y un numero a mano se queda viejo sin
+     * que nadie lo note. */
     size_t values = 0;
     for (const ir::IrFunction &fn : mod.functions)
         if (!fn.is_native) values += fn.values.size();
-    store.reserve(values * 2u + 64u);
+    const size_t domains = registry().size();
+    const size_t requested = wanted.empty() ? domains : wanted.size();
+    store.reserve(domains == 0
+                      ? values * 2u + 64u
+                      : values * 2u * requested / domains + 64u);
 
     /* El modulo, recorrido UNA vez.  Antes lo recorria cada productor por su
      * cuenta y cada huella otra vez -- trece pasadas donde hace falta una --,
