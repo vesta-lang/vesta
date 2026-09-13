@@ -4073,6 +4073,28 @@ CompileResult compile_vx_project(
             pm.vxi.deps.push_back(std::move(drec));
         }
 
+        /* LO QUE ESTE MODULO SABE DE SI MISMO, apuntado aqui porque aqui es
+         * donde su AST existe -- y apuntarlo es lo que permite que deje de
+         * existir.  Los tres consumidores estan a dos mil lineas de aqui y
+         * ninguno quiere un AST: quieren estas respuestas.  Ver
+         * `release_compiled_module`.
+         *
+         * Y AQUI, ANTES DE SERIALIZAR LA INTERFAZ, no despues.  Estaba al final
+         * de la compilacion del modulo, cientos de lineas por debajo de
+         * `vxi_emit`, asi que `declares_classes` se ponia en la estructura
+         * cuando el fichero ya estaba escrito: el `.vxi` de disco decia SIEMPRE
+         * que no.  Quien servia el modulo de la cache no lo parseaba -- ese es
+         * el motivo de guardarlo --, leia el falso y el tree-shake se quedaba
+         * sin la unica razon por la que no debe eliminar esa dependencia. */
+        if (pm.ast) {
+            pm.has_classes = declares_classes(pm.ast->decls);
+            /* Y AL ARTEFACTO, que es lo que lo hace util: quien sirva este
+             * modulo del cache no lo parseara, asi que esta es la unica
+             * ocasion de averiguarlo.  Ver `VxiHeader::module_flags`. */
+            pm.vxi.declares_classes = pm.has_classes;
+            collect_contracts(pm.ast->decls, pm.contracts);
+        }
+
         // ---- M3: persistir .vxi + .vxir a disco para futuro cache ----
         if (cache_enabled && !is_root) {
             const std::string vp =
@@ -4188,19 +4210,6 @@ CompileResult compile_vx_project(
             }
         }
 
-        /* LO QUE ESTE MODULO SABE DE SI MISMO, apuntado aqui porque aqui es
-         * donde su AST existe -- y apuntarlo es lo que permite que deje de
-         * existir.  Los tres consumidores estan a dos mil lineas de aqui y
-         * ninguno quiere un AST: quieren estas respuestas.  Ver
-         * `release_compiled_module`. */
-        if (pm.ast) {
-            pm.has_classes = declares_classes(pm.ast->decls);
-            /* Y AL ARTEFACTO, que es lo que lo hace util: quien sirva este
-             * modulo del cache no lo parseara, asi que esta es la unica
-             * ocasion de averiguarlo.  Ver `VxiHeader::module_flags`. */
-            pm.vxi.declares_classes = pm.has_classes;
-            collect_contracts(pm.ast->decls, pm.contracts);
-        }
         if (pm.tc && pm.tc->inject_diferido()) {
             pm.inject_pending = true;
             pm.inject_code = pm.tc->asm_body_pending_code();
