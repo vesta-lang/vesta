@@ -70,8 +70,38 @@ int register_bits(const ir::Reg &r) {
     return 64;
 }
 
-/// Un registro, como nodo.
-std::unique_ptr<vm::ASTNode> make_register(const ir::Reg &r) {
+/**
+ * @brief Un registro, como nodo, REUSANDO uno de la vuelta anterior si lo hay.
+ *
+ * POR QUE MERECE UN POZO.  Es el nodo que mas se fabrica de todo el
+ * compilador: 1.151.996 reservas de 48 bytes al ensamblar 144.000 lineas, una
+ * por cada operando de registro de cada instruccion.  Y todas viven lo mismo
+ * -- hasta la llamada siguiente a @c next --, que es justo lo que hace que se
+ * puedan reciclar en vez de pedirlos y devolverlos.
+ *
+ * NO CAMBIA QUIEN LOS POSEE.  Siguen siendo `unique_ptr` dentro del nodo de la
+ * instruccion; lo unico que cambia es que al fabricar la siguiente se sacan de
+ * ahi en vez de destruirse.  El contrato que ya prometia el flujo -- el nodo
+ * entregado vale hasta la proxima llamada -- es exactamente el que hace esto
+ * legitimo: reusar la memoria del anterior no acorta ninguna vida que alguien
+ * pudiera estar mirando.
+ *
+ * @param r     El registro.
+ * @param spare Nodos de vueltas anteriores.  Se saca del final si hay.
+ */
+std::unique_ptr<vm::ASTNode>
+make_register(const ir::Reg &r,
+              std::vector<std::unique_ptr<vm::ASTNode>> &spare) {
+    if (!spare.empty()) {
+        std::unique_ptr<vm::ASTNode> n = std::move(spare.back());
+        spare.pop_back();
+        auto *reg = static_cast<vm::RegisterOperand *>(n.get());
+        /* Se ASIGNA, no se construye: la cadena del nombre conserva su reserva
+         * y un nombre de registro cabe de sobra en ella. */
+        reg->name = register_text(r);
+        reg->size_bits = register_bits(r);
+        return n;
+    }
     return std::make_unique<vm::RegisterOperand>(register_text(r),
                                                  register_bits(r));
 }
@@ -118,10 +148,12 @@ std::unique_ptr<vm::ASTNode> join(char op, std::unique_ptr<vm::ASTNode> a,
  * La asociatividad es a la IZQUIERDA porque el parser junta en un bucle: con
  * indice y desplazamiento a la vez sale `((base + indice) + desp)`.
  */
-std::unique_ptr<vm::ASTNode> make_memory(const ir::Mem &m) {
-    std::unique_ptr<vm::ASTNode> expr = make_register(m.base);
+std::unique_ptr<vm::ASTNode>
+make_memory(const ir::Mem &m,
+            std::vector<std::unique_ptr<vm::ASTNode>> &spare) {
+    std::unique_ptr<vm::ASTNode> expr = make_register(m.base, spare);
     if (m.hay_index) {
-        std::unique_ptr<vm::ASTNode> idx = make_register(m.index);
+        std::unique_ptr<vm::ASTNode> idx = make_register(m.index, spare);
         if (m.scale != 1)
             idx = join('*', std::move(idx),
                        make_number(std::to_string(m.scale)));
@@ -154,6 +186,14 @@ struct VelNodeStream::Impl {
     /// Por donde va el recorrido: primero la cabecera, luego los items.
     size_t at_header = 0;
     size_t at_item = 0;
+    /**
+     * @brief Nodos de registro de vueltas anteriores, para no volver a pedirlos.
+     *
+     * Es el nodo que mas se fabrica de todo el compilador -- 1.151.996 al
+     * ensamblar 144.000 lineas -- y todos viven lo mismo: hasta la llamada
+     * siguiente.  Ver @c make_register.
+     */
+    std::vector<std::unique_ptr<vm::ASTNode>> spare_regs;
     /// El nodo que se entrego ultimo.  Vive hasta la siguiente llamada, que es
     /// lo que promete el contrato.
     std::unique_ptr<vm::ASTNode> current;
@@ -284,10 +324,27 @@ const vm::ASTNode *VelNodeStream::next() {
 
         case VelSink::TipoItem::Instr: {
             const emmit::Instr &in = s.instrs_[r.idx];
+            /* AL POZO LO DE LA VUELTA ANTERIOR, antes de fabricar nada.
+             * El nodo que se entrego la vez pasada muere aqui por contrato, y
+             * sus operandos de registro son el sitio que mas reserva de todo
+             * el compilador -- 1.151.996 veces --, asi que en vez de
+             * destruirlos se guardan para rellenarlos otra vez.  Solo los de
+             * REGISTRO: los demas no compensan el rodeo, y anadirlos "por
+             * simetria" seria codigo sin medida que lo respalde. */
+            if (impl_->current != nullptr &&
+                impl_->current->node_kind() == vm::NodeKind::InstructionK) {
+                auto *prev =
+                    static_cast<vm::Instruction *>(impl_->current.get());
+                for (std::unique_ptr<vm::ASTNode> &op : prev->operands)
+                    if (op != nullptr &&
+                        op->node_kind() == vm::NodeKind::Register)
+                        impl_->spare_regs.push_back(std::move(op));
+            }
             std::vector<std::unique_ptr<vm::ASTNode>> ops;
             ops.reserve(in.n_ops);
             for (unsigned i = 0; i < in.n_ops; ++i)
-                ops.push_back(make_operand(s.ops_pool_[in.ops_off + i]));
+                ops.push_back(
+                    make_operand(s.ops_pool_[in.ops_off + i], impl_->spare_regs));
 
             auto node = std::make_unique<vm::Instruction>(
                 emmit::text_of(in.mnem), std::move(ops));
@@ -317,7 +374,7 @@ const vm::ASTNode *VelNodeStream::next() {
             } else {
                 valores.reserve(d.valores.size());
                 for (const emmit::Operand &o : d.valores)
-                    valores.push_back(make_data_value(o));
+                    valores.push_back(make_data_value(o, impl_->spare_regs));
             }
             /* La directiva es TEXTO en el nodo (`db`, `dq`), que es como la
              * deja el parser al leerla del `.vel`.  Las mismas dos palabras
@@ -332,7 +389,8 @@ const vm::ASTNode *VelNodeStream::next() {
 }
 
 std::unique_ptr<vm::ExprNode>
-VelNodeStream::make_data_value(const emmit::Operand &o) {
+VelNodeStream::make_data_value(const emmit::Operand &o,
+                               std::vector<std::unique_ptr<vm::ASTNode>> &spare) {
     /* Dentro de un bloque de datos el parser produce OTRA cosa para lo mismo:
      * un `@Absolute("x")` es aqui un `AbsRefExpr`, no una anotacion.  Son dos
      * caminos distintos del parser (`parse_data_values` frente a
@@ -341,14 +399,15 @@ VelNodeStream::make_data_value(const emmit::Operand &o) {
     if (o.kind == emmit::OperandKind::SymRef)
         return std::make_unique<vm::AbsRefExpr>(o.name_text());
     return std::unique_ptr<vm::ExprNode>(
-        static_cast<vm::ExprNode *>(make_operand(o).release()));
+        static_cast<vm::ExprNode *>(make_operand(o, spare).release()));
 }
 
 std::unique_ptr<vm::ASTNode>
-VelNodeStream::make_operand(const emmit::Operand &o) {
+VelNodeStream::make_operand(const emmit::Operand &o,
+                            std::vector<std::unique_ptr<vm::ASTNode>> &spare) {
     switch (o.kind) {
-    case emmit::OperandKind::Reg: return make_register(o.reg);
-    case emmit::OperandKind::Mem: return make_memory(o.mem);
+    case emmit::OperandKind::Reg: return make_register(o.reg, spare);
+    case emmit::OperandKind::Mem: return make_memory(o.mem, spare);
     case emmit::OperandKind::Label:
         return std::make_unique<vm::LabelOperand>(o.name_text());
     case emmit::OperandKind::SymRef:

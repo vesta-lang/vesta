@@ -99,11 +99,17 @@ class VelNodeStream final : public emmit::NodeStream {
 
   private:
     /// Un operando del emisor, como el nodo que el ensamblador espera.
-    static std::unique_ptr<vm::ASTNode> make_operand(const emmit::Operand &o);
+    /// @param spare Nodos de registro reciclables; ver @c make_register en el
+    ///              `.cpp`.  Sigue siendo estatica -- no mira el estado del
+    ///              recorrido --, asi que el pozo entra por la puerta.
+    static std::unique_ptr<vm::ASTNode>
+    make_operand(const emmit::Operand &o,
+                 std::vector<std::unique_ptr<vm::ASTNode>> &spare);
     /// Lo mismo DENTRO de un bloque de datos, donde el parser produce otra
     /// cosa para el mismo operando.
     static std::unique_ptr<vm::ExprNode>
-    make_data_value(const emmit::Operand &o);
+    make_data_value(const emmit::Operand &o,
+                    std::vector<std::unique_ptr<vm::ASTNode>> &spare);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
