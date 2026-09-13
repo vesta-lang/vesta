@@ -323,6 +323,20 @@ class AnalysisManager {
             return id == o.id && unit == o.unit;
         }
     };
+    /// Los dependientes de un resultado.  Ver @c Shard::rev_deps.
+    using RevDeps = util::SmallVector<Key, 2>;
+
+    /**
+     * @brief Anade @p k a @p v si no estaba ya.
+     *
+     * Lineal a proposito: ver el comentario de @c Shard::rev_deps.
+     */
+    static void add_rev_dep(RevDeps &v, const Key &k) {
+        for (const Key &x : v)
+            if (x == k) return;
+        v.push_back(k);
+    }
+
     struct KeyHash {
         size_t operator()(const Key &k) const {
             /* Mezcla de dos punteros.  El desplazamiento evita que dos claves
@@ -457,7 +471,7 @@ class AnalysisManager {
             drop_key(k);
         }
         util::TimedUniqueLock lk(sh.m, exclusive_wait_slot());
-        if (!stack().empty()) sh.rev_deps[k].insert(stack().back());
+        if (!stack().empty()) add_rev_dep(sh.rev_deps[k], stack().back());
         auto it = sh.results.find(k);
         if (it != sh.results.end()) {
             if (it->second->version == version) {
@@ -531,7 +545,7 @@ class AnalysisManager {
         }
         // Dependencia: el computo en curso (tope de la pila) depende de k.
         util::TimedUniqueLock lk(sh.m, exclusive_wait_slot());
-        if (!stack().empty()) sh.rev_deps[k].insert(stack().back());
+        if (!stack().empty()) add_rev_dep(sh.rev_deps[k], stack().back());
         auto it = sh.results.find(k);
         if (it != sh.results.end()) {
             retained().push_back(it->second); // ver el caso de arriba
@@ -803,7 +817,9 @@ class AnalysisManager {
      * mutuo es imposible por construccion, no por cuidado.
      */
     void invalidate_key_locked(const Key &k) {
-        std::vector<Key> deps;
+        // En la pila.  Es la copia de los dependientes para poder soltar el
+        // cerrojo antes de cascadear, y de dependientes hay uno o ninguno.
+        util::SmallVector<Key, 2> deps;
         {
             Shard &s = shard_of(k.unit);
             util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
@@ -861,8 +877,13 @@ class AnalysisManager {
          * `retained_`). */
         std::unordered_map<Key, std::shared_ptr<AnalysisResultConcept>, KeyHash>
             results;
-        std::unordered_map<Key, std::unordered_set<Key, KeyHash>, KeyHash>
-            rev_deps;
+        /* Quien depende de cada resultado.  Una LISTA y no un conjunto: la
+         * inmensa mayoria tienen UN dependiente -- el computo que estaba en
+         * curso cuando se pidio --, y a ese tamano un conjunto disperso es un
+         * nodo reservado por entrada mas la tabla, para acabar recorriendola
+         * entera igual.  La unicidad la pone @c add_rev_dep, que a una o dos
+         * entradas compara mas rapido de lo que el otro hashea. */
+        std::unordered_map<Key, RevDeps, KeyHash> rev_deps;
         /// Que analisis tiene cada unidad, para que invalidarla no obligue a
         /// recorrer el gestor entero.  Indexado por el nombre INTERNADO, como la
         /// clave: asi ni este indice copia cadenas.
@@ -1002,8 +1023,13 @@ class AnalysisManager {
         const size_t mine = shard_index(k.unit);
         /* Fase 1: el cierre transitivo, comprobando que no sale de la franja.
          * Sin tocar nada, para poder abandonar limpiamente. */
-        std::vector<Key> victims;
-        std::vector<Key> pending;
+        /* En la pila, porque el caso normal es UNA clave: lo raro es que un
+         * resultado tenga dependientes, y mas raro aun que sean varios.  Con
+         * un vector del monton estas dos listas eran dos reservas de dieciseis
+         * bytes por invalidacion, y de invalidaciones hay una por cada
+         * resultado que caduca. */
+        util::SmallVector<Key, 4> victims;
+        util::SmallVector<Key, 4> pending;
         pending.push_back(k);
         while (!pending.empty()) {
             const Key cur = pending.back();
