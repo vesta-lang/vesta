@@ -492,19 +492,37 @@ EffectAnalysis::build_summary(const std::vector<const ir::IrModule *> &mods) {
     //    el cierre CONSERVADOR (TOP robusto).  Con varios modulos, un callee de
     //    otro modulo SI esta en el mapa -> se resuelve (interproc
     //    cross-modulo).
-    // Reverse-callgraph: callee -> callers (para re-encolar dependientes).
-    std::unordered_map<std::string, std::vector<std::string>> callers;
+    /* Reverse-callgraph: callee -> callers (para re-encolar dependientes).
+     *
+     * Los callers se apuntan por PUNTERO al nombre que ya guarda `out.fns`, no
+     * copiandolo.  Un nombre de funcion pasa de los dieciseis caracteres que
+     * caben dentro del propio `std::string`, asi que cada copia era una
+     * reserva -- y aqui habia UNA POR ARISTA del grafo de llamadas --.  Las
+     * claves de un mapa disperso no se mueven cuando el mapa crece, de modo
+     * que el puntero vale mientras viva el mapa.
+     *
+     * Y que sea SIEMPRE el mismo puntero para el mismo nombre es ademas lo que
+     * permite que el punto fijo, mas abajo, deduplique la cola comparando
+     * punteros en vez de cadenas. */
+    std::unordered_map<std::string, std::vector<const std::string *>> callers;
     for (const auto &kv : calls) {
+        auto cf = out.fns.find(kv.first);
+        /* Sin resumen no hay nombre canonico al que apuntar.  No pasa -- los
+         * dos mapas se llenan en el mismo bucle, funcion por funcion --, y si
+         * pasara, antes se encolaba un nombre que al recomputarlo se creaba a
+         * si mismo una entrada vacia en el resumen.  Saltarlo es lo correcto. */
+        if (cf == out.fns.end()) continue;
+        const std::string *caller = &cf->first;
         for (const std::string &callee : kv.second.static_callees)
-            callers[callee].push_back(kv.first);
+            callers[callee].push_back(caller);
         /* Las nativas cuentan igual: si su implementacion esta en el programa,
          * cuando su cierre cambie hay que volver a mirar a quien la llama.  Por
          * los DOS nombres, que no se sabe todavia cual resolvera. */
         for (const std::string &callee : kv.second.native_callees) {
-            callers[callee].push_back(kv.first);
+            callers[callee].push_back(caller);
             const size_t sep = callee.rfind(':');
             if (sep != std::string::npos && sep + 1 < callee.size())
-                callers[callee.substr(sep + 1)].push_back(kv.first);
+                callers[callee.substr(sep + 1)].push_back(caller);
         }
     }
 
@@ -611,22 +629,27 @@ EffectAnalysis::build_summary(const std::vector<const ir::IrModule *> &mods) {
         return false;
     };
 
-    std::deque<std::string> work;
-    std::unordered_set<std::string> in_work;
+    /* La cola y la marca de "ya encolado" guardan PUNTEROS a las claves de
+     * `out.fns`, por lo mismo que el grafo inverso de arriba: encolar copiaba
+     * el nombre dos veces -- una en la cola y otra en la marca -- y el punto
+     * fijo encola una vez por arista cada vez que un cierre cambia.  De paso,
+     * marcar deja de hashear una cadena para hashear un puntero. */
+    std::deque<const std::string *> work;
+    std::unordered_set<const std::string *> in_work;
     for (const auto &kv : out.fns) {
-        work.push_back(kv.first);
-        in_work.insert(kv.first);
+        work.push_back(&kv.first);
+        in_work.insert(&kv.first);
     }
     while (!work.empty()) {
-        std::string name = std::move(work.front());
+        const std::string *name = work.front();
         work.pop_front();
         in_work.erase(name);
         ++n_pasos;
-        if (recompute(name)) {
+        if (recompute(*name)) {
             // El cierre de 'name' cambio -> sus callers pueden cambiar.
-            auto cit = callers.find(name);
+            auto cit = callers.find(*name);
             if (cit != callers.end())
-                for (const std::string &caller : cit->second)
+                for (const std::string *caller : cit->second)
                     if (in_work.insert(caller).second) work.push_back(caller);
         }
     }
