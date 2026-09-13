@@ -213,6 +213,23 @@ class ComptimeRuntime {
     }
 
     /**
+     * @brief Esta el bytecode de @p macro_name LISTO para invocarse?
+     *
+     * Distingue las dos formas de que una invocacion no salga, que no se
+     * parecen en nada: que el bytecode aun no este -- la primera pasada, donde
+     * callar es lo correcto porque la segunda lo resuelve -- y que este y aun
+     * asi falle, que es un fallo y hay que decirlo.  Sin poder separarlas, lo
+     * segundo se tomaba por lo primero y el resultado salia sin construir.
+     *
+     * @param macro_name Nombre canonico (`__macro_<original>`).
+     * @return @c true si esta registrado y con direccion resuelta.
+     */
+    bool macro_is_ready(const std::string &macro_name) const noexcept {
+        const auto it = macro_entry_pc_.find(macro_name);
+        return it != macro_entry_pc_.end() && it->second != kPcUnresolved;
+    }
+
+    /**
      * @brief itera los macros registrados con sus
      * entry PCs.  Util para diagnostico / probe.  Devuelve pairs
      * @c {macro_name, entry_pc} en orden arbitrario.

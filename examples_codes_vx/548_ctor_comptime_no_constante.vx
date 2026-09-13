@@ -1,0 +1,31 @@
+/**
+ * @file 548_ctor_comptime_no_constante.vx
+ * @brief Construir al compilar con algo que solo se sabe al ejecutar: ERROR.
+ *
+ * Un constructor `comptime` construye el valor AL COMPILAR, asi que lo que se
+ * le pase tiene que saberse entonces.  Pasarle el resultado de una funcion
+ * normal no se sabe: no hay ninguna pasada en la que eso se resuelva.
+ *
+ * Callarlo era lo peor que podia pasar.  El constructor no llegaba a
+ * ejecutarse y el struct se quedaba con lo que hubiera en su bufer -- ni
+ * siquiera ceros, lo que hubiera --, y el programa seguia adelante con un
+ * valor que nadie habia escrito y sin una sola queja.
+ *
+ * Se espera: VX2065.
+ */
+namespace ejemplos.ctor_comptime_no_constante;
+
+/** @brief Solo se puede construir al compilar. */
+struct Medida {
+	i64 valor;
+
+	public comptime Medida(i64 n) { this.valor = n; }
+}
+
+/** @brief Una funcion NORMAL: su resultado no existe hasta que se ejecuta. */
+i64 al_ejecutar() { return 40_i64; }
+
+i32 main() {
+	Medida m = Medida(al_ejecutar());
+	return (i32)m.valor;
+}

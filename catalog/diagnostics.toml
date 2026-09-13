@@ -2729,6 +2729,19 @@ es = "'{1}' ya tiene un metodo '{0}' con esos parametros; un 'impl' anyade metod
 ["VX2064"]
 en = "no constructor of '{0}' takes those arguments"
 es = "ningun constructor de '{0}' admite esos argumentos"
+# Un constructor `comptime` construye AL COMPILAR, asi que sus argumentos
+# tienen que saberse al compilar.  Callarse este daba lo peor que puede dar:
+# el struct salia a ceros -- o con lo que hubiera en el bufer -- y el programa
+# seguia con un valor que nadie escribio.  {0} el tipo, {1} que argumento es.
+["VX2065"]
+en = "'{0}' is built at compile time, and its argument {1} is not known then"
+es = "'{0}' se construye al compilar, y su argumento {1} no se sabe entonces"
+# Y que el constructor este cargado y aun asi no llegue a construir es un fallo
+# del COMPILADOR, no del programa.  Se dice igual: lo que no se puede es
+# entregar un struct con lo que hubiera en el bufer.  {0} el tipo.
+["VX2066"]
+en = "'{0}' could not be built at compile time: its constructor is loaded and did not run"
+es = "'{0}' no se ha podido construir al compilar: su constructor esta cargado y no llego a ejecutarse"
 # Un nombre de tipo es UNO.  {1} es la palabra clave con la que se declaro el
 # que ya lo tenia -- `struct`, `class` o `enum` --, y como es palabra clave del
 # lenguaje NO se traduce: entra como dato.

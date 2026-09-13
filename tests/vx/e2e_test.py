@@ -3531,7 +3531,7 @@ vm_jit_r0_case("aop_cadena_orden", "orden de la cadena: los @Before, el metodo y
 vm_jit_r0_case("aop_around_anidado", "varios @Around se ANIDAN, y el primero declarado es el mas externo", "380_aop_around_anidado.vx", 147)
 vm_jit_r0_case("aop_after_returning", "@AfterReturning recibe el RESULTADO del metodo, no sus argumentos", "381_aop_after_returning.vx", 742)
 r0_case("ctor_importado", "construir un struct declarado en otro modulo", "362_ctor_importado.vx", 42)
-r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja", "361_ctor_comptime.vx", 42)
+r0_case("ctor_comptime", "constructor comptime: recoge la llamada cuando ninguna sobrecarga encaja, y dos de la misma aridad se separan por el tipo", "361_ctor_comptime.vx", 42)
 r0_case("enum_valor_importado", "enum con valor importado: conserva valores y compara por contenido", "359_enum_valor_importado.vx", 42)
 r0_case("wideint_completo", "recorrido completo de u128/i128/u256/i256/u512/i512 con toString", "358_wideint_completo.vx", 42)
 r0_case("herencia_interpolacion", "metodo heredado que devuelve texto interpolado (el clon perdia la interpolacion)", "357_herencia_interpolacion.vx", 42)
@@ -5843,6 +5843,13 @@ fails_case("desbordamiento_sin_cast",
 fails_case("nombre_de_tipo_unico",
            "un `struct` y una `class` no pueden llamarse igual",
            "546_nombre_de_tipo_unico.vx", "VX2062")
+
+# Construir al compilar con algo que solo se sabe al ejecutar.  El constructor
+# no llegaba a correr y el struct salia con lo que hubiera en el bufer -- ni
+# ceros --, sin una queja: el programa seguia con un valor que nadie escribio.
+fails_case("ctor_comptime_no_constante",
+           "lo que se construye al compilar necesita argumentos de compilar",
+           "548_ctor_comptime_no_constante.vx", "VX2065")
 
 # Y cuando SI envuelve -- porque el cast lo declara --, tiene que envolver
 # BIEN.  Un valor estrecho vive en un registro de 64 y los bits de mas hacian

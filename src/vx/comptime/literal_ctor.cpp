@@ -58,28 +58,36 @@
 
 namespace vx {
 
-std::string Lowering::comptime_ctor_ir_name(const std::string &struct_name,
-                                            size_t arity) const {
-    // Un ctor comptime baja como codigo comptime: prefijo `__macro_` sobre el
-    // mismo esquema de aridad que el ctor runtime (`<T>__ctor_<aridad>`), que
-    // discrimina los overloads.
-    return "__macro_" + struct_name + "__ctor_" + std::to_string(arity);
+std::string Lowering::comptime_ctor_ir_name(const ClassMethodInfo &ctor) const {
+    /* Un ctor comptime baja como codigo comptime: el prefijo `__macro_` sobre
+     * el simbolo que ya tiene, que es el mismo que usa el que lo EMITE.
+     *
+     * Se armaba aqui como `<T>__ctor_<aridad>`, y eso era el nombre de cuando
+     * dos constructores solo se podian distinguir por cuantos argumentos
+     * tomaban: con dos de la misma aridad y distintos tipos, el que se emite
+     * lleva su discriminante y este pedia una etiqueta que no existe. */
+    return "__macro_" + method_symbol_of(ctor);
 }
 
 ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
                                                      const StructLayout &slay) {
-    // Localizar un ctor `comptime` cuya aridad case con la llamada.  Si no hay,
-    // no aplica: el caller sigue con el ctor runtime.
+    /* CUAL constructor comptime.  Si el comprobador eligio uno, ese: varios
+     * pueden compartir aridad y quedarse con el primero que la case seria
+     * llamar a otro.  Cuando no eligio ninguno -- que es el caso en que un ctor
+     * comptime recoge la llamada PORQUE ninguna sobrecarga encajaba -- se busca
+     * por aridad, que es lo unico que hay. */
     const size_t arity = e->args.size();
-    bool has_comptime_ctor = false;
-    for (const auto &m : slay.methods) {
-        if (m.is_constructor && m.is_comptime &&
-            m.param_types.size() == arity) {
-            has_comptime_ctor = true;
-            break;
-        }
-    }
-    if (!has_comptime_ctor) return ir::IR_NO_VALUE;
+    const ClassMethodInfo *ctor = picked_method(slay, e->resolved_method);
+    if (ctor != nullptr && !(ctor->is_constructor && ctor->is_comptime))
+        ctor = nullptr;
+    if (ctor == nullptr)
+        for (const auto &m : slay.methods)
+            if (m.is_constructor && m.is_comptime &&
+                m.param_types.size() == arity) {
+                ctor = &m;
+                break;
+            }
+    if (ctor == nullptr) return ir::IR_NO_VALUE;
 
     /* Dentro de codigo comptime la llamada NO se materializa: se LLAMA.
      *
@@ -123,7 +131,7 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
         ins.op = ir::IrOp::CALL;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
-        ins.func_name = comptime_ctor_ir_name(slay.name, arity);
+        ins.func_name = comptime_ctor_ir_name(*ctor);
         ins.operands = std::move(operands);
         ins.source_line = e->loc.line;
         emit(current_block_, std::move(ins));
@@ -157,6 +165,17 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
         } else {
             const ComptimeEvalResult ev = comptime_eval_expr(tc_, a.get());
             if (!ev.ok || ev.deferred) {
+                /* DIFERIDO no es lo mismo que NO SE PUEDE.  Un diferido lo
+                 * resuelve la segunda pasada -- su bytecode todavia no estaba
+                 * cargado --, y ahi callar es lo correcto.  Que el argumento no
+                 * sea constante de compilacion no se arregla en ninguna pasada,
+                 * y callarlo daba lo peor: este constructor construye AL
+                 * COMPILAR, asi que al no ejecutarse el struct se quedaba con
+                 * lo que hubiera en el bufer -- no ceros, lo que hubiera -- y
+                 * el programa seguia con un valor que nadie escribio. */
+                if (!ev.deferred)
+                    diags_.diag(a->loc, DiagLevel::ERR, "VX2065",
+                                {slay.name, std::to_string(vm_args.size() + 1)});
                 args_ok = false;
                 break;
             }
@@ -206,9 +225,17 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
                 bytes[fi.offset + b] =
                     static_cast<uint8_t>((raw >> (8 * b)) & 0xFF);
         }
-        if (cr.invoke_struct_macro(comptime_ctor_ir_name(slay.name, arity),
-                                   vm_args, buf_sz, bytes))
+        const std::string macro = comptime_ctor_ir_name(*ctor);
+        if (cr.invoke_struct_macro(macro, vm_args, buf_sz, bytes)) {
             fill_struct_fields_from_bytes(tc_, slay, bytes, 0, res);
+        } else if (cr.macro_is_ready(macro)) {
+            /* Que el bytecode aun no este es la PRIMERA pasada y ahi callar es
+             * lo correcto: la segunda lo resuelve.  Que este y aun asi no
+             * construya no lo arregla ninguna pasada, y lo que sale de aqui es
+             * un struct con lo que hubiera en el bufer -- ni siquiera ceros --
+             * que el programa usa como si alguien lo hubiera escrito. */
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2066", {slay.name});
+        }
     }
 
     // Materializar el struct como datos constantes; en el binario aparece el

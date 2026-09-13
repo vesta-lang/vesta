@@ -2711,15 +2711,13 @@ class Lowering {
     /// @brief Nombre de la IrFunction de un ctor `comptime` de struct.
     ///
     /// Un ctor comptime se ejecuta en la ComptimeVM, asi que baja con el
-    /// prefijo
-    /// @c __macro_ (lo identifica como codigo comptime) sobre el mismo esquema
-    /// de aridad que el ctor runtime: `__macro_<Struct>__ctor_<aridad>`.
+    /// prefijo @c __macro_ (lo identifica como codigo comptime) sobre el
+    /// simbolo que ya tiene el constructor -- el mismo que usa quien lo EMITE,
+    /// leido de su ficha, asi que los dos lados no pueden diferir.
     ///
-    /// @param struct_name Nombre del struct.
-    /// @param arity       Numero de parametros del constructor.
-    /// @return El nombre mangled de la IrFunction del ctor comptime.
-    std::string comptime_ctor_ir_name(const std::string &struct_name,
-                                      size_t arity) const;
+    /// @param ctor El constructor elegido.
+    /// @return El nombre de su IrFunction.
+    std::string comptime_ctor_ir_name(const ClassMethodInfo &ctor) const;
 
     /// @brief Intenta bajar `T(args)` como constructor `comptime` (F1b).
     ///

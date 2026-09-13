@@ -37,6 +37,28 @@ struct U128 {
 	}
 }
 
+/**
+ * @brief Dos constructores `comptime` que solo se distinguen por el TIPO.
+ *
+ * Un constructor `comptime` baja a una funcion aparte, con el prefijo
+ * `__macro_`, y ese nombre se armaba con la ARIDAD detras
+ * (`__macro_<T>__ctor_<n>`): el de cuando dos constructores solo se podian
+ * separar por cuantos argumentos tomaban.  Con dos de la misma aridad y
+ * distintos tipos, los dos salian con la MISMA etiqueta y la llamada acababa
+ * en cualquiera de ellos.  Ahora el nombre se LEE del elegido, que ya lleva su
+ * discriminante, y el elegido lo dice el comprobador en vez de ser el primero
+ * que case la aridad.
+ */
+struct Medida {
+	i64 valor;
+
+	/** @brief Desde un entero: se guarda tal cual. */
+	public comptime Medida(i64 n) { this.valor = n; }
+
+	/** @brief Desde un booleano: misma aridad, otro tipo. */
+	public comptime Medida(bool b) { this.valor = 1000; }
+}
+
 i32 main() {
 	// 2^128 - 1: los 128 bits a uno.  No cabe en ningun tipo nativo.
 	U128 m = U128(340282366920938463463374607431768211455);
@@ -46,11 +68,18 @@ i32 main() {
 	U128 p = U128(18446744073709551616);
 	println("lo=${p.lo} hi=${p.hi}");
 
+	// Y los dos de la misma aridad, elegidos por el tipo del argumento.
+	Medida ent = Medida(40_i64);
+	Medida bol = Medida(true);
+	println("ent=${ent.valor} bol=${bol.valor}");
+
 	i32 acc = 0_i32;
 	if (m.lo == 0xFFFFFFFFFFFFFFFF) { acc++; }
 	if (m.hi == 0xFFFFFFFFFFFFFFFF) { acc++; }
 	if (p.lo == 0) { acc++; }
 	if (p.hi == 1) { acc++; }
-	if (acc == 4) { return 42; }
+	if (ent.valor == 40) { acc++; }
+	if (bol.valor == 1000) { acc++; }
+	if (acc == 6) { return 42; }
 	return acc;
 }

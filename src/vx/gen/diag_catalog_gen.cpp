@@ -71,6 +71,8 @@ const CatEntry kEntries[] = {
     {"VX2062", {"the type name '{0}' is already taken by a '{1}' declared earlier", "el nombre de tipo '{0}' ya lo tiene un '{1}' declarado antes"}},
     {"VX2063", {"'{1}' already has a method '{0}' with those parameters; an 'impl' adds methods, it cannot redefine one", "'{1}' ya tiene un metodo '{0}' con esos parametros; un 'impl' anyade metodos, no puede redefinir uno"}},
     {"VX2064", {"no constructor of '{0}' takes those arguments", "ningun constructor de '{0}' admite esos argumentos"}},
+    {"VX2065", {"'{0}' is built at compile time, and its argument {1} is not known then", "'{0}' se construye al compilar, y su argumento {1} no se sabe entonces"}},
+    {"VX2066", {"'{0}' could not be built at compile time: its constructor is loaded and did not run", "'{0}' no se ha podido construir al compilar: su constructor esta cargado y no llego a ejecutarse"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -629,7 +631,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 608;
+const int kEntryCount = 610;
 
 } // namespace
 
