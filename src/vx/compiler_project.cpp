@@ -3453,8 +3453,8 @@ CompileResult compile_vx_project(
         /* El reparto de instanciaciones genericas del proyecto: que
          * `procesa<S0>` la produzca UN modulo y no todos.  Ver
          * @ref vx::GenericInstanceRegistry para lo que costaba no hacerlo. */
-        pm.tc->set_generic_instances(share_instances ? &generic_instances
-                                                     : nullptr);
+        pm.tc->set_generic_instances(
+            share_instances ? &generic_instances : nullptr, i);
 
         for (const auto &kv : target_skipped_proyecto) {
             for (const auto &spec : kv.second)

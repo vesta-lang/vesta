@@ -46,7 +46,7 @@
 
 #include <mutex>
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace vx {
 
@@ -63,16 +63,43 @@ class GenericInstanceRegistry {
     /**
      * @brief Pide quedarse con la instanciacion @p mangled.
      *
+     * GANA EL DE INDICE MAS BAJO, no el que llegue primero.  "El primero"
+     * parece lo natural y es un error: los modulos de un nivel se compilan a
+     * la vez, asi que quien llegue antes depende de como planifique el sistema
+     * -- y entonces la instancia acaba en un modulo distinto en cada
+     * compilacion, el binario cambia de orden y **deja de ser reproducible**.
+     * Medido: cuatro compilaciones del mismo proyecto, cuatro MD5.
+     *
+     * Con el indice manda un dato del PROYECTO y no del reloj.  Ademas encaja
+     * con lo que la fusion ya hace: recorre los modulos en orden topologico y
+     * se queda con la primera copia que ve, o sea la de indice mas bajo.  Al
+     * ganar siempre ese, la fusion elige siempre la misma.
+     *
+     * El precio es que, si los modulos llegan en orden decreciente, mas de uno
+     * clona -- a lo sumo tantos como la subsecuencia decreciente de llegada,
+     * en la practica uno o dos --.  Las copias de mas no estorban: la fusion
+     * las deduplica por nombre, que es lo que hacia antes con las dieciseis.
+     *
      * @param mangled Nombre ya mangleado de la instancia (`procesa_S0`), que
      *        es lo que la identifica: mismo template y mismos argumentos dan
      *        el mismo nombre.
-     * @return @c true si este es el PRIMERO que la pide, y por tanto quien
-     *         debe clonar el cuerpo y bajarla.  @c false si ya se la quedo
-     *         otro: entonces basta con registrar la firma.
+     * @param module_index Indice del modulo en el orden topologico.
+     * @return @c true si a este le toca clonar el cuerpo y bajarla.  @c false
+     *         si ya se la quedo otro de indice menor o igual: entonces basta
+     *         con registrar la firma.
      */
-    bool claim(const std::string &mangled) {
+    bool claim(const std::string &mangled, size_t module_index) {
         std::lock_guard<std::mutex> lk(m_);
-        return claimed_.insert(mangled).second;
+        auto it = claimed_.find(mangled);
+        if (it == claimed_.end()) {
+            claimed_.emplace(mangled, module_index);
+            return true;
+        }
+        if (module_index < it->second) {
+            it->second = module_index;
+            return true;
+        }
+        return false;
     }
 
     /// Cuantas se repartieron.  Para poder decir que el reparto funciono.
@@ -83,7 +110,8 @@ class GenericInstanceRegistry {
 
   private:
     mutable std::mutex m_;
-    std::unordered_set<std::string> claimed_;
+    /// Instancia -> el indice MAS BAJO que se la ha quedado hasta ahora.
+    std::unordered_map<std::string, size_t> claimed_;
 };
 
 } // namespace vx

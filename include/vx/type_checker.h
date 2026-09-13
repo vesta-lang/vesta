@@ -950,10 +950,15 @@ class TypeChecker {
      * cada modulo hace lo suyo, que es el comportamiento de siempre.
      *
      * @param reg El reparto, propiedad del llamante, o @c nullptr.
+     * @param module_index Indice de ESTE modulo en el orden topologico.  Es lo
+     *        que decide quien se queda con cada instancia -- gana el mas bajo
+     *        --, y es lo que hace que el binario salga igual en cada
+     *        compilacion.  Ver @ref vx::GenericInstanceRegistry::claim.
      */
-    void
-    set_generic_instances(GenericInstanceRegistry *reg) noexcept {
+    void set_generic_instances(GenericInstanceRegistry *reg,
+                               size_t module_index) noexcept {
         generic_instances_ = reg;
+        generic_module_index_ = module_index;
     }
     ~TypeChecker(); // limpia g_active_typechecker thread_local
 
@@ -2511,6 +2516,8 @@ class TypeChecker {
 
     /// @copydoc set_generic_instances
     GenericInstanceRegistry *generic_instances_ = nullptr;
+    /// @copydoc set_generic_instances
+    size_t generic_module_index_ = 0;
 
   public:
     uint64_t next_gensym_id() noexcept { return gensym_counter_++; }

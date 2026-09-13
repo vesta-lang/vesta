@@ -1538,11 +1538,11 @@ std::string TypeChecker::monomorphize_function(const std::string &template_name,
      *   - un `@Macro` inyecta su texto en el sitio de llamada.
      * A las dos hay que darles su cuerpo aunque otro modulo lo tenga tambien.
      */
-    const bool cuerpo_es_de_este_modulo =
+    const bool body_is_ours =
         src->is_comptime || src->is_macro || generic_instances_ == nullptr ||
-        generic_instances_->claim(mangled);
+        generic_instances_->claim(mangled, generic_module_index_);
 
-    if (src->body && cuerpo_es_de_este_modulo) {
+    if (src->body && body_is_ours) {
         auto cb = clone_stmt(src->body.get(), g);
         if (cb && cb->kind == ast::NodeKind::BlockStmt) {
             cloned->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
