@@ -2160,6 +2160,7 @@ def modulo_case(tag, carpeta, expected, line=None):
 # congela: es la respuesta que el ejemplo dice que va a dar.
 modulo_case("mod_import_selectivo", "ns_import_selectivo", 42)
 modulo_case("mod_import_by_namespace", "ns_import_by_namespace", 42)
+modulo_case("mod_sobrecarga_cruzando", "sobrecarga_cruzando_modulos", 42)
 modulo_case("mod_ns_internal", "ns_internal", 42)
 modulo_case("mod_ns_stdlib", "ns_stdlib", 42)
 modulo_case("mod_ns_impl", "ns_impl", 42)
@@ -3784,7 +3785,7 @@ modes3_case("overlay_element_tlv", "elementos tipo-longitud-valor sobre una vist
 modes3_case("overlay_extent", "extension de una vista calculada de sus propios campos", "278_overlay_extent.vx", 40)
 modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de una vez", "543_overlay_campos_anchos.vx", 136)
 modes3_case("params_alias", "dos punteros parametro pueden ser la misma memoria", "544_params_alias.vx", 111)
-modes3_case("sobrecarga545", "sobrecarga de funciones libres: por aridad, por tipo, gana la exacta, y el retorno sale de la elegida en los dos ordenes de declaracion", "545_sobrecarga_funciones.vx", 42)
+modes3_case("sobrecarga545", "sobrecarga por aridad y por tipo en los SEIS caminos de llamada (funcion libre, constructor de struct, metodo de struct, metodo de clase, static, super) mas la interfaz: gana la exacta, el retorno sale de la elegida en los dos ordenes de declaracion, y un override sigue siendo un override", "545_sobrecarga_funciones.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)

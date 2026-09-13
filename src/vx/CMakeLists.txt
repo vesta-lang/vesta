@@ -214,6 +214,11 @@ add_library(vx_lib STATIC
     # nombre contra doscientos literales.  La necesitan el bajador y el
     # comprobador de tipos, que antes tenian cada uno la suya.
     builtin_names.cpp
+    # Varias declaraciones con un nombre: cual quiere una llamada, y como se
+    # separan sus simbolos.  Aparte porque la misma regla la usan las funciones
+    # libres, los metodos y los constructores -- tenerla escrita tres veces es
+    # tener tres criterios distintos esperando a divergir.
+    overload.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

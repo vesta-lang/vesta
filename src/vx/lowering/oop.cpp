@@ -67,8 +67,17 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
 
         ir::IrFunction fn;
         // Mangling: ClassName__methodName; constructor usa "ctor".
-        std::string suffix = m->is_constructor ? std::string("ctor") : m->name;
-        fn.name = cd->name + "__" + suffix;
+        /* El simbolo NO se arma aqui: lo calculo el comprobador al cerrar el
+         * layout y esta internado en la ficha, que se alcanza por el hueco que
+         * el mismo dejo apuntado.  Vale igual para el constructor. */
+        const ClassMethodInfo *mi = nullptr;
+        auto it_lay = tc_.class_layouts().find(cd->name);
+        if (it_lay != tc_.class_layouts().end())
+            mi = picked_method(it_lay->second, m->layout_slot);
+        fn.name = mi != nullptr ? mi->ir_symbol.str()
+                  : m->is_constructor
+                      ? method_symbol(cd->name, "ctor")
+                      : method_symbol(cd->name, m->name);
 
         // @complexity del metodo al IR, igual que en una funcion libre (ver
         // lower_function): metadata pura que solo consume el analizador.
@@ -725,9 +734,17 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                             while (!cur.empty() && guard++ < 64 && !impl) {
                                 auto itc = tc_.class_layouts().find(cur);
                                 if (itc == tc_.class_layouts().end()) break;
+                                /* Nombre Y PARAMETROS: el que implementa un
+                                 * metodo de la interfaz es el de SU MISMA
+                                 * firma.  Con solo el nombre, una clase con dos
+                                 * sobrecargas ponia la primera en la ranura de
+                                 * la interfaz, y la llamada por la itable
+                                 * acababa en otro cuerpo. */
                                 for (const auto &cm : itc->second.methods)
                                     if (!cm.is_constructor &&
-                                        cm.name == im.name) {
+                                        cm.name == im.name &&
+                                        overload::same_params(
+                                            cm.param_types, im.param_types)) {
                                         impl = &cm;
                                         impl_owner = cm.defining_class.empty()
                                                          ? itc->second.name
@@ -741,7 +758,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         const uint32_t slot =
                             native_iface_slot(iname, im.vtable_index);
                         iface_slots.push_back(
-                            {slot, impl_owner + "__" + impl->name});
+                            {slot, method_symbol_of(*impl, impl_owner)});
                         if (slot + 1u > nslots) nslots = slot + 1u;
                     }
                 }
@@ -767,9 +784,11 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         const std::string owner = mi.defining_class.empty()
                                                       ? cd->name
                                                       : mi.defining_class;
+                        /* Cada ranura LEE el simbolo del metodo -- el
+                         * constructor tambien --, o apuntaria a una etiqueta
+                         * que nadie emitio. */
                         slot_sym[native_class_slot(mi.vtable_index) * 8u] =
-                            owner + "__" +
-                            (mi.is_constructor ? std::string("ctor") : mi.name);
+                            method_symbol_of(mi, owner);
                     }
                     for (const auto &is : iface_slots)
                         slot_sym[is.slot * 8u] = is.sym;
@@ -944,7 +963,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 cc.op = ir::IrOp::CALL;
                 cc.type = ir::IrType::VOID;
                 cc.dst = ir::IR_NO_VALUE;
-                cc.func_name = cd->name + "__ctor";
+                cc.func_name = method_symbol_of(*effective_ctor, cd->name);
                 cc.operands.reserve(nargs + 1);
                 cc.operands.push_back(v_obj);
                 for (size_t i = 0; i < nargs; ++i)
@@ -1058,7 +1077,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                     cc.op = ir::IrOp::CALL;
                     cc.type = ir::IrType::VOID;
                     cc.dst = ir::IR_NO_VALUE;
-                    cc.func_name = cd->name + "__ctor";
+                    cc.func_name = method_symbol_of(*effective_ctor, cd->name);
                     cc.operands.reserve(nargs + 1);
                     cc.operands.push_back(g_obj);
                     for (size_t i = 0; i < nargs; ++i)
@@ -1580,14 +1599,26 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
         for (const auto &m : lay.methods) {
             if (!m.defining_class.empty() && m.defining_class != cd->name)
                 continue; // heredado puro
-            const std::string suffix =
-                m.is_constructor ? std::string("ctor") : m.name;
             const std::string owner_class =
                 m.defining_class.empty() ? cd->name : m.defining_class;
-            const std::string method_label = owner_class + "__" + suffix;
+            /* El simbolo se LEE, el constructor tambien: si se rearmara aqui,
+             * la ficha de la clase podria apuntar a una etiqueta que nadie
+             * emitio. */
+            const std::string method_label = method_symbol_of(m, owner_class);
             const uint64_t mname_idx = intern_class_name(out, m.name);
             const uint32_t mname_len = static_cast<uint32_t>(m.name.size());
-            const std::string desc_str = "()";
+            /* El DESCRIPTOR: sus parametros, con el mismo mangleado que usan
+             * los genericos y las sobrecargas -- una sola forma de nombrar en
+             * todo el compilador --.
+             *
+             * Hasta ahora era el relleno `()` para todos, y el registro de
+             * clases detecta el override comparando NOMBRE y descriptor: con
+             * los dos iguales, dos SOBRECARGAS se tomaban por la misma, la
+             * segunda pisaba la ranura de la primera y todo lo que venia detras
+             * se corria un sitio.  Una llamada por la tabla acababa en OTRO
+             * metodo -- y sin una sola queja --. */
+            const std::string desc_str =
+                "(" + overload::discriminator(m.param_types) + ")";
             const uint64_t desc_idx = intern_class_name(out, desc_str);
             const uint32_t desc_len = static_cast<uint32_t>(desc_str.size());
 
@@ -1829,11 +1860,13 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const ClassLayout &lay = it->second;
-    const ClassMethodInfo *mtd = nullptr;
-    for (const auto &m : lay.methods) {
-        if (!m.is_constructor && m.name == fa->field_name) {
-            mtd = &m;
-            break;
+    const ClassMethodInfo *mtd = picked_method(lay, fa->resolved_method);
+    if (!mtd) {
+        for (const auto &m : lay.methods) {
+            if (!m.is_constructor && m.name == fa->field_name) {
+                mtd = &m;
+                break;
+            }
         }
     }
     if (!mtd) {
@@ -1956,7 +1989,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         ca.op = ir::IrOp::CALL;
         ca.type = method_call_sret ? ir::IrType::VOID : ret_ir_decl;
         ca.dst = method_call_sret ? ir::IR_NO_VALUE : dst;
-        ca.func_name = method_symbol(mtd->defining_class, mtd->name);
+        ca.func_name = method_symbol_of(*mtd, mtd->defining_class);
         ca.operands.push_back(obj);
         if (method_call_sret) ca.operands.push_back(v_method_call_retbuf);
         for (const ir::IrValueId av : arg_vals)
@@ -1989,9 +2022,15 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
             auto it_lay = tc_.class_layouts().find(concrete_name);
             if (it_lay != tc_.class_layouts().end()) {
                 const auto &conc_lay = it_lay->second;
-                // Buscar metodo por nombre en la clase concreta.
+                /* Buscar el metodo en la clase concreta.  Por nombre Y
+                 * PARAMETROS: con sobrecarga el nombre no identifica a nadie, y
+                 * quedarse con el primero devirtualizaba a OTRO cuerpo -- una
+                 * llamada a `hace(f64)` ejecutaba el de `hace(i64)` con los
+                 * bits del flotante como entero --. */
                 for (const auto &cm : conc_lay.methods) {
-                    if (cm.name == mtd->name && !cm.is_constructor) {
+                    if (cm.name == mtd->name && !cm.is_constructor &&
+                        overload::same_params(cm.param_types,
+                                              mtd->param_types)) {
                         if (native_poo_) {
                             // AOT (HOST_LEAF no soporta CALLVIRT): el tipo
                             // concreto se conoce -> CALL DIRECTO a
@@ -2025,7 +2064,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                                         it_ol->second.imported_helper_suffix;
                             }
                             const std::string callee =
-                                owner_class + "__" + cm.name;
+                                method_symbol_of(cm, owner_class);
                             ir::IrInstr ca{};
                             ca.op = ir::IrOp::CALL;
                             ca.type = ret_ir;
@@ -2223,7 +2262,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         std::vector<ir::DevirtCandidate> spec_cands;
         if (dst != ir::IR_NO_VALUE && !method_call_sret) {
             for (const auto &pr :
-                 spec_devirt_impls(iface_name, method_name, true)) {
+                 spec_devirt_impls(iface_name, *mtd, true)) {
                 spec_cands.push_back(ir::DevirtCandidate{
                     emit_findclass_into(setup, pr.first, e->loc.line),
                     pr.second});
@@ -2331,7 +2370,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     if (dst != ir::IR_NO_VALUE && !method_call_sret && !native_poo_) {
         std::vector<ir::IrInstr> cv_setup;
         for (const auto &pr :
-             spec_devirt_impls(bt.struct_name, mtd->name, false)) {
+             spec_devirt_impls(bt.struct_name, *mtd, false)) {
             cv_spec.push_back(ir::DevirtCandidate{
                 emit_findclass_into(cv_setup, pr.first, e->loc.line),
                 pr.second});
@@ -2525,15 +2564,12 @@ void Lowering::export_classes_to_ir(ir::IrModule &out) {
         for (const auto &m : cl.methods) {
             ir::IrMethod imeth;
             imeth.name = m.name;
-            if (m.is_constructor) {
-                imeth.ir_fn_name = cl.name + "__ctor";
-            } else {
-                // Si el metodo es heredado puro (no override), apuntar al
-                // simbolo del defining_class para evitar emitir referencia
-                // a un Class__method que no existe.  El transpiler C usa
-                // este nombre como label de funcion.
-                imeth.ir_fn_name = method_symbol_of(m, cl.name);
-            }
+            /* Si el metodo es heredado puro (no override), esto apunta al
+             * simbolo de quien lo DEFINE, para no emitir una referencia a un
+             * `Clase__metodo` que no existe.  El transpilador a C usa este
+             * nombre como etiqueta de funcion.  El constructor va por el mismo
+             * sitio: su simbolo tambien lo calculo el comprobador. */
+            imeth.ir_fn_name = method_symbol_of(m, cl.name);
             imeth.return_type = ir_type_from_primitive(m.return_type.kind);
             imeth.param_types.reserve(m.param_types.size());
             for (const auto &pt : m.param_types) {
@@ -2676,7 +2712,7 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
         // Metodo static IMPORTADO cross-module: usar el simbolo real del .velb
         // origen (link_name); si no, "<Name>__<metodo>".
         ins.func_name = static_mtd->link_name.empty()
-                            ? (class_name + "__" + fa->field_name)
+                            ? method_symbol_of(*static_mtd, class_name)
                             : static_mtd->link_name;
         ins.operands = arg_vals;
         ins.source_line = e->loc.line;
@@ -2692,7 +2728,7 @@ bool Lowering::try_lower_static_method_call(ast::CallExpr *e,
  */
 std::vector<std::pair<std::string, std::string>>
 Lowering::spec_devirt_impls(const std::string &static_class,
-                            const std::string &method_name,
+                            const ClassMethodInfo &target,
                             bool is_interface) const {
     std::vector<std::pair<std::string, std::string>> impls;
     /* Basta un aspecto que no se haya podido atribuir a un metodo concreto
@@ -2730,16 +2766,19 @@ Lowering::spec_devirt_impls(const std::string &static_class,
         /* Quien DEFINE el metodo: puede estar heredado sin aplanar, asi que se
          * sube por la cadena.  No vale buscar el primero con ese nombre: un
          * constructor puede llamarse igual y dejaria sin encontrar al que se
-         * busca. */
-        const std::string *owner = nullptr;
+         * busca, y con SOBRECARGA tampoco basta el nombre -- hay que dar con el
+         * de la MISMA firma, o se especula hacia otro metodo --. */
+        const ClassMethodInfo *impl = nullptr;
         for (const ClassMethodInfo &mm : cl.methods) {
-            if (mm.name != method_name || mm.is_constructor) continue;
-            owner = mm.defining_class.empty() ? &cl.name : &mm.defining_class;
+            if (mm.is_constructor || mm.name != target.name) continue;
+            if (!overload::same_params(mm.param_types, target.param_types))
+                continue;
+            impl = &mm;
             break;
         }
-        if (!owner) continue;
+        if (impl == nullptr) continue;
 
-        const std::string callee = *owner + "__" + method_name;
+        const std::string callee = method_symbol_of(*impl, cl.name);
         if (advice_chains_.count(callee) != 0) continue; // lleva aspectos
         impls.emplace_back(cl.name, callee);
         if (impls.size() > K_MAX) return {}; // demasiados: no compensa

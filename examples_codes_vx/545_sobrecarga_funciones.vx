@@ -1,7 +1,7 @@
 namespace ejemplos.sobrecarga;
 
-// SOBRECARGA de funciones libres: varias con el mismo nombre, distinguidas por
-// sus parametros.
+// SOBRECARGA: varias declaraciones con el mismo nombre, distinguidas por sus
+// parametros.  Funciones libres, metodos de struct y metodos de clase.
 //
 // Hasta ahora el lenguaje no la tenia en ninguna parte salvo un caso: los
 // constructores de STRUCT, y solo por ARIDAD, quedandose con el primero que
@@ -42,6 +42,86 @@ f64 ent_primero(f64 x) { return 20.0; }
 f64 flot_primero(f64 x) { return 20.0; }
 i64 flot_primero(i64 x) { return 10; }
 
+// --- 6. METODOS de un struct ------------------------------------------------
+//
+// El struct despacha estatico y cada metodo baja a una funcion libre
+// `Struct__metodo`.  Sin sobrecarga, dos metodos del mismo nombre daban "metodo
+// duplicado" -- y antes de eso, los dos se emitian con LA MISMA etiqueta.
+struct Medidor {
+	i64 base;
+
+	// 11. CONSTRUCTORES del struct.  Su simbolo lleva la ARIDAD dentro
+	// (`Medidor__ctor_1`), asi que dos de aridad distinta ya se separaban; dos
+	// de la MISMA aridad se emitian con la misma etiqueta y la llamada se iba a
+	// uno cualquiera.  Por eso se prohibieron -- "se distinguen por el numero de
+	// argumentos, no por sus tipos" --; ahora se distinguen como todo lo demas.
+	Medidor(i64 b) { this.base = b; }
+	Medidor(f64 b) { this.base = 7; }
+
+	i64 mide(i64 x) { return this.base + x; }
+	i64 mide(f64 x) { return this.base + 100; }
+	i64 mide(i64 x, i64 y) { return this.base + x + y; }
+}
+
+// --- 7. METODOS de una clase, y que NO se confundan con un override ---------
+//
+// Este es el caso que mas silencioso era: en una clase, un metodo que repetia
+// el nombre de otro se tomaba por un override IMPLICITO y REEMPLAZABA su hueco
+// de tabla.  Con `hace(i64)` y `hace(f64)` declarados en la misma clase, la
+// primera desaparecia y las dos llamadas acababan en la segunda.
+class Obrero {
+	private i64 turno;
+
+	public Obrero(i64 t) { this.turno = t; }
+
+	public i64 hace(i64 x) { return this.turno + x; }
+	public i64 hace(f64 x) { return this.turno + 1000; }
+
+	// 8. Y los `static`, que se llaman por otro camino: `Tipo.metodo(...)`, sin
+	// receptor.  Ese camino tambien resolvia por nombre y se quedaba con el
+	// primero.
+	public static i64 turnos(i64 n) { return n * 10; }
+	public static i64 turnos(f64 n) { return 300; }
+}
+
+// Y que un override SIGUE siendo un override: misma firma exacta, mismo hueco.
+//
+// 9. Ademas `super.metodo(...)`, que es un TERCER camino: sube por la jerarquia
+// buscando el metodo, y lo hacian por separado el comprobador y el bajado.  Con
+// dos `hace` en la base, pararse en el hueco equivocado hace que el programa
+// llame a un cuerpo creyendo que llama a otro.
+class Ayudante : Obrero {
+	public Ayudante(i64 t) { super(t); }
+
+	@Override
+	public i64 hace(i64 x) { return this.hace_base(x) * 2; }
+
+	// Llama explicitamente a la sobrecarga de f64 de la BASE.
+	public i64 delega_flotante() { return super.hace(1.0_f64); }
+
+	private i64 hace_base(i64 x) { return x + 1; }
+}
+
+// --- 10. por INTERFAZ -------------------------------------------------------
+//
+// El CUARTO camino, y el que no se ve: llamando por una interfaz, la ranura de
+// la itable se llenaba buscando el implementador POR NOMBRE.  Con dos `corre`,
+// las dos ranuras de la interfaz apuntaban al mismo cuerpo.
+interface ITarea {
+	i64 corre(i64 x);
+	i64 corre(f64 x);
+}
+
+class Tarea : ITarea {
+	public Tarea() { }
+
+	@Override
+	public i64 corre(i64 x) { return x + 1; }
+
+	@Override
+	public i64 corre(f64 x) { return 5000; }
+}
+
 i32 main() {
 	i64 n = 5_i64;
 	f64 d = 5.0_f64;
@@ -58,7 +138,45 @@ i32 main() {
 	i64 f = ent_primero(n);  // 10  (si se colara la de f64, saldria basura)
 	i64 g = flot_primero(n); // 10
 
-	i64 total = a + b + c + e + f + g; // 7+7+1+2+10+10 = 37
+	// 11. constructores del struct: los dos de aridad 1, por tipo
+	Medidor mi = Medidor(1_i64);                  // base = 1
+	Medidor mf = Medidor(1.0_f64);                // base = 7
+	i64     w  = mi.mide(0_i64) + mf.mide(0_i64); // 1 + 7 = 8
+
+	// 6. metodos de struct: por tipo y por aridad
+	Medidor m = {.base = 1};
+	i64     h = m.mide(2_i64);        // 1 + 2       = 3
+	i64     i = m.mide(2.0_f64);      // 1 + 100     = 101
+	i64     j = m.mide(2_i64, 3_i64); // 1 + 2 + 3   = 6
+
+	// 7. metodos de clase: la primera NO la borra la segunda
+	Obrero o = new Obrero(7);
+	i64    k = o.hace(3_i64);   // 7 + 3    = 10
+	i64    l = o.hace(3.0_f64); // 7 + 1000 = 1007
+
+	// Y el override sigue funcionando: misma firma, sustituye.
+	Ayudante y = new Ayudante(7);
+	i64      p = y.hace(3_i64); // (3 + 1) * 2 = 8
+
+	// 8. estaticos sobrecargados: `Tipo.metodo(...)`, sin receptor
+	i64 q = Obrero.turnos(2_i64);   // 2 * 10 = 20
+	i64 r = Obrero.turnos(2.0_f64); // 300
+
+	// 9. super.metodo(...) a la sobrecarga de f64 de la base
+	i64 s = y.delega_flotante(); // 7 + 1000 = 1007
+
+	// 10. por INTERFAZ: cada ranura de la itable a SU cuerpo
+	ITarea t = new Tarea();
+	i64    u = t.corre(2_i64);   // 2 + 1 = 3
+	i64    v = t.corre(2.0_f64); // 5000
+
+	i64 total = a + b + c + e + f + g;             // 7+7+1+2+10+10 = 37
+	i64 met   = h + i + j + k + l + p + q + r + s; // 1135+20+300+1007 = 2462
+	i64 ifz   = u + v + w;                         // 3 + 5000 + 8 = 5011
 	println("suma=${a},${b} cual=${c},${e} retorno=${f},${g} total=${total}");
-	return (i32)(total + 5); // 42
+	println("struct=${h},${i},${j} clase=${k},${l} override=${p}");
+	println("static=${q},${r} super=${s} met=${met}");
+	println("interfaz=${u},${v} ctor=${w} ifz=${ifz}");
+	// 37 + 2462 + 5011 = 7510; 7510 - 7468 = 42
+	return (i32)(total + met + ifz - 7468); // 42
 }

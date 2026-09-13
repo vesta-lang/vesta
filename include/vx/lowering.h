@@ -724,14 +724,18 @@ class Lowering {
      * normal, que si la recorre, y los demas siguen adivinandose.
      *
      * @param static_class  Tipo declarado del receptor (clase o interfaz).
-     * @param method_name   Metodo que se llama.
+     * @param target        El metodo que se llama, ya resuelto por el
+     *                      comprobador.  Va entero y no solo su nombre porque
+     *                      con SOBRECARGA el nombre no identifica a nadie: en
+     *                      cada clase candidata hay que encontrar el de la
+     *                      MISMA firma, o se especula hacia otro metodo.
      * @param is_interface  Si el tipo declarado es una interfaz.
      * @return Pares (clase concreta, nombre IR del metodo), vacio si son
      *         demasiados o hay algun aspecto sin atribuir.
      */
     std::vector<std::pair<std::string, std::string>>
     spec_devirt_impls(const std::string &static_class,
-                      const std::string &method_name, bool is_interface) const;
+                      const ClassMethodInfo &target, bool is_interface) const;
 
     /**
      * @brief Emite en @p setup la resolucion del @c ClassInfo* de una clase

@@ -1,0 +1,25 @@
+// SOBRECARGA CRUZANDO LA FRONTERA DE UN MODULO.
+//
+// Dentro de un fichero la sobrecarga ya funcionaba (`545`).  Al cruzar un
+// modulo se rompia por los dos extremos, y sin que el comprobador dijera nada:
+//
+//   - El `.vxi` se emite recorriendo un mapa de nombre -> UNA firma, asi que
+//     de cada grupo sobrecargado viajaba una sola.
+//   - Y el que importa registraba los simbolos de un namespace por nombre, uno
+//     por nombre: la segunda no llegaba.
+//
+// El sintoma era un fallo al ENLAZAR -- `simbolo no resuelto` --, porque quien
+// las declara las emite con su discriminante y quien llamaba pedia el nombre
+// publico pelado.  Con una sola sobrecarga el mismo montaje funcionaba, que es
+// lo que lo hacia dificil de ver.
+//
+// Resultado esperado: 42.
+import lib.ov;
+
+i64 main() {
+	i64 a = lib.ov.escala(3_i64);         // 3 * 2 = 6
+	i64 b = lib.ov.escala(3.0_f64);       // 500
+	i64 c = lib.ov.escala(10_i64, 6_i64); // 16
+	println("a=${a} b=${b} c=${c}");
+	return a + b + c - 480; // 6 + 500 + 16 - 480 = 42
+}

@@ -503,12 +503,39 @@ bool ClassRegistry::add_field(ClassInfo *cls, const FieldDecl &decl) {
 bool ClassRegistry::add_method(ClassInfo *cls, const MethodDecl &decl) {
     if (!cls) return false;
 
-    // Detectar override: si ya existe un metodo con el mismo nombre,
-    // sobrescribir el slot de la vtable manteniendo el vtable_index
-    // (semantica Java/C++ para herencia simple).
-    const uint32_t existing_idx =
-        lookup_slot(cls->method_lookup_table, cls->method_lookup_mask,
-                    decl.name.data(), decl.name.size());
+    /* Detectar override: si ya existe un metodo con el mismo nombre Y EL MISMO
+     * DESCRIPTOR, sobrescribir su ranura manteniendo el indice de vtable
+     * (semantica Java/C++ para herencia simple).
+     *
+     * El descriptor no es un adorno: sin el, dos SOBRECARGAS -- mismo nombre,
+     * parametros distintos -- se tomaban por el mismo metodo.  La segunda
+     * pisaba la ranura de la primera, todo lo que venia detras se corria un
+     * sitio, y una llamada por la tabla acababa en OTRO metodo.  Sin una sola
+     * queja: la ranura existia y tenia codigo, solo que no el que se pedia.
+     *
+     * La tabla de consulta se queda indexada por NOMBRE -- es lo que la
+     * reflexion pregunta, y asi sigue costando O(1) --; solo sirve para
+     * DESCARTAR rapido.  Si el nombre no esta, es nuevo y no hay nada que
+     * recorrer, que es el caso de casi todos. */
+    uint32_t existing_idx = UINT32_MAX;
+    if (lookup_slot(cls->method_lookup_table, cls->method_lookup_mask,
+                    decl.name.data(), decl.name.size()) != UINT32_MAX) {
+        for (size_t i = 0; i < cls->method_count; ++i) {
+            const MethodInfo &prev = cls->methods[i];
+            if (prev.name.size != decl.name.size()) continue;
+            if (prev.name.size > 0 &&
+                std::memcmp(prev.name.data, decl.name.data(), prev.name.size) !=
+                    0)
+                continue;
+            if (prev.descriptor.size != decl.descriptor.size()) continue;
+            if (prev.descriptor.size > 0 &&
+                std::memcmp(prev.descriptor.data, decl.descriptor.data(),
+                            prev.descriptor.size) != 0)
+                continue;
+            existing_idx = static_cast<uint32_t>(i);
+            break;
+        }
+    }
     const bool is_override =
         (existing_idx != UINT32_MAX && existing_idx < cls->method_count);
 

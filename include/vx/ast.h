@@ -304,6 +304,18 @@ struct ClassMethodDecl; ///< Necesaria para StructDecl::methods antes de
 struct BlockStmt;       ///< Necesaria para LambdaExpr antes de su definicion.
 
 /**
+ * @brief "El comprobador no ha dicho que metodo es".
+ *
+ * UN centinela para las dos anotaciones que apuntan un hueco de la lista de
+ * metodos de un layout -- la de la LLAMADA
+ * (@c FieldAccessExpr::resolved_method) y la de la DECLARACION
+ * (@c ClassMethodDecl::layout_slot) --, para que la puerta que las lee sea
+ * tambien una sola.  Dos centinelas iguales son dos ocasiones de que dejen de
+ * serlo.
+ */
+constexpr uint32_t kNoMethodSlot = 0xFFFFFFFFu;
+
+/**
  * @struct PendingComplexity
  * @brief Un @c @complexity cuyo @c when: habla del PARAMETRO DE TIPO y por
  *        tanto no se puede resolver al parsear.
@@ -738,6 +750,19 @@ struct FieldAccessExpr : Expr {
     /// depender de la pila de scopes (que ya esta vacia al lower).
     /// Sentinel: UINT32_MAX = no resuelto.
     uint32_t ns_index = 0xFFFFFFFFu;
+    /**
+     * @brief CUAL de los simbolos del namespace, cuando varios comparten
+     *        nombre.
+     *
+     * Un namespace importado puede traer varias funciones homonimas -- una
+     * sobrecarga del modulo que las declara --.  El comprobador ya eligio
+     * mirando los argumentos; sin apuntarlo, el bajado vuelve a buscar por
+     * NOMBRE y se queda con la primera, o sea que el programa llama a un cuerpo
+     * creyendo que llama a otro.
+     *
+     * Centinela = no anotado: entonces el bajado busca por nombre como siempre.
+     */
+    uint32_t ns_sym = 0xFFFFFFFFu;
     /// `&Tipo.metodo`: referencia a la funcion libre de un metodo (puntero
     /// a metodo NO ligado estilo C).  El checker la marca al ver el patron
     /// `&Tipo.metodo` (base = nombre de struct/clase, field = metodo) y
@@ -746,6 +771,19 @@ struct FieldAccessExpr : Expr {
     /// `Tipo*` como primer parametro (this explicito).
     bool is_func_ref = false;
     std::string func_ref_mangled;
+    /**
+     * @brief La sobrecarga que el comprobador eligio para esta llamada.
+     *
+     * Un metodo se busca en el layout POR NOMBRE, y con sobrecarga eso deja de
+     * identificarlo: hay varios con el mismo.  El comprobador ya resolvio cual
+     * es -- tiene los tipos de los argumentos --, asi que deja aqui su POSICION
+     * en @c methods y el bajado la usa tal cual, sin repetir la eleccion ni
+     * poder equivocarse en otro sitio.
+     *
+     * @c kNoMethodSlot en el caso normal: un nombre que no esta sobrecargado se
+     * sigue resolviendo por nombre y esto no cuesta nada.
+     */
+    uint32_t resolved_method = kNoMethodSlot;
     FieldAccessExpr() : Expr(NodeKind::FieldAccessExpr) {}
 };
 
@@ -954,6 +992,18 @@ struct CallExpr : Expr {
      */
     static constexpr uint32_t kNoSig = 0xFFFFFFFFu;
     uint32_t resolved_sig = kNoSig;
+    /**
+     * @brief El CONSTRUCTOR al que resolvio, cuando el tipo tiene varios.
+     *
+     * Va aparte de @c resolved_sig porque no indexa la misma tabla: aquel es
+     * un hueco de las firmas de funcion y este uno de la lista de metodos del
+     * layout.  Un solo campo con dos significados segun quien pregunte es la
+     * forma de que un dia se lea con la tabla equivocada.
+     *
+     * @c ast::kNoMethodSlot en el caso normal, y entonces el bajado resuelve
+     * como siempre.  Lo lee la misma puerta que el resto: @c picked_method.
+     */
+    uint32_t resolved_method = kNoMethodSlot;
     CallExpr() : Expr(NodeKind::CallExpr) {}
 };
 
@@ -997,6 +1047,21 @@ struct SuperCallExpr : Expr {
 struct SuperMethodCallExpr : Expr {
     std::string method_name;
     std::vector<std::unique_ptr<Expr>> args;
+    /**
+     * @name Donde acabo la busqueda por la jerarquia
+     *
+     * El comprobador y el bajado suben los dos por la cadena de superclases
+     * buscando el metodo.  Con SOBRECARGA el nombre no identifica a nadie, asi
+     * que dos busquedas por separado pueden parar en sitios distintos -- y ahi
+     * el programa llamaria a un cuerpo y pensaria que llama a otro --.
+     *
+     * El comprobador ya eligio: deja EN QUE clase lo encontro y en que hueco de
+     * su lista, y el bajado lo lee.  Una sola busqueda, un solo resultado.
+     * @{
+     */
+    std::string resolved_owner; ///< vacio mientras no se haya resuelto.
+    uint32_t resolved_method = kNoMethodSlot;
+    /** @} */
     SuperMethodCallExpr() : Expr(NodeKind::SuperMethodCallExpr) {}
 };
 
@@ -2740,6 +2805,20 @@ struct ClassMethodDecl : Node {
     std::vector<std::unique_ptr<ParamDecl>> params;
     std::unique_ptr<BlockStmt> body;
     uint8_t access = 0;
+    /**
+     * @brief En que hueco del layout acabo esta declaracion.
+     *
+     * Quien EMITE el metodo tiene la declaracion en la mano, no el layout, y
+     * necesita su ficha para saber con que simbolo emitirlo.  Buscarla por
+     * nombre deja de valer en cuanto hay sobrecarga -- hay varias que se llaman
+     * igual --, y COPIAR aqui el nombre ya formado seria tener el mismo dato en
+     * dos sitios, que es como se emitieron dos etiquetas iguales.
+     *
+     * Asi que no se copia nada: se apunta DONDE esta, y el nombre lo sigue
+     * diciendo la fabrica.  Cuatro bytes, y el mismo trato que
+     * @c FieldAccessExpr::resolved_method le da a la llamada.
+     */
+    uint32_t layout_slot = kNoMethodSlot;
     bool is_static = false;
     bool is_final = false;
     bool is_override = false;

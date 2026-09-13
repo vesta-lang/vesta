@@ -623,7 +623,18 @@ void TypeChecker::register_namespace_symbol(uint32_t ns_index,
     auto &ns = imported_namespaces_[ns_index];
     const uint32_t sym_idx = static_cast<uint32_t>(ns.symbols.size());
     ns.symbols.push_back(std::move(sym));
-    ns.by_name.emplace(public_name, sym_idx);
+    const auto ya = ns.by_name.emplace(public_name, sym_idx);
+    if (ya.second) return;
+
+    /* Ya habia uno con este nombre.  `emplace` no sobrescribe, asi que hasta
+     * ahora el segundo simplemente no llegaba -- y con sobrecarga eso es la
+     * mitad de las candidatas --.  Se ENCADENA al final de la lista del
+     * primero, sin tocar `by_name`: quien busca sigue entrando por el mismo
+     * sitio y quien necesite ver todas recorre la cadena. */
+    uint32_t cur = ya.first->second;
+    while (ns.symbols[cur].next_homonym != ImportedNamespace::kNoHomonym)
+        cur = ns.symbols[cur].next_homonym;
+    ns.symbols[cur].next_homonym = sym_idx;
 }
 
 //  NS.1b: resuelve `a.b.c.Symbol` probando el prefijo de namespace mas
@@ -1115,30 +1126,54 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         if (tc.is_imported(public_name) && !tc.is_reexported(public_name)) {
             continue;
         }
-        VxiSymbol s;
-        s.kind = VxiSymbolKind::FUNCTION;
-        s.name = public_name;
-        s.mangled_label = mangled_label;
-        s.ns_path =
-            ns_path_for_sym; // NS.2: namespace declarado (vacio si none)
-        s.return_type = canonical_typename_of(sig->return_type);
-        s.is_extern = !sig->extern_lib.empty();
-        s.extern_lib = sig->extern_lib;
-        // LIM-A: propagar @Naked al .vxi para que la importacion cross-modulo
-        // en interp/JIT enrute al dispatcher naked (y no ejecute el asm como
-        // bytecode).
-        s.is_naked = sig->is_naked;
-        s.is_internal = tc.function_is_internal(fname); // NS.3: package-scoped
-        s.param_types.reserve(sig->param_types.size());
-        for (const auto &pt : sig->param_types) {
-            s.param_types.push_back(canonical_typename_of(pt));
+        /* TODAS las que comparten el nombre, no una.
+         *
+         * `function_names()` es nombre -> UNA firma, asi que recorrerlo deja
+         * fuera al resto de un grupo sobrecargado.  El modulo que importa
+         * pedia entonces el nombre publico pelado y el enlazador se quedaba sin
+         * resolver, porque quien las define las emitio con su discriminante --
+         * y el comprobador no se quejaba: fallaba al enlazar. */
+        util::SmallVector<const FunctionSig *, 4> to_emit;
+        const auto ov = tc.overload_sets().find(fname);
+        if (ov != tc.overload_sets().end() && ov->second.size() > 1) {
+            for (uint32_t idx : ov->second) {
+                const FunctionSig *cand = tc.function_sig_at(idx);
+                if (cand != nullptr) to_emit.push_back(cand);
+            }
         }
-        s.param_names.assign(sig->param_types.size(), std::string());
-        // ABI custom por-param (`register("rax")`): imprescindible para que un
-        // CALLIND cross-modulo a traves de un campo cuyo default es esta
-        // funcion coloque los args en los registros correctos.
-        s.param_abi_regs = sig->param_abi_regs;
-        out.symbols.push_back(std::move(s));
+        if (to_emit.empty()) to_emit.push_back(sig);
+
+        for (const FunctionSig *cand : to_emit) {
+            VxiSymbol s;
+            s.kind = VxiSymbolKind::FUNCTION;
+            s.name = public_name;
+            /* La etiqueta propia de la candidata gana: es la que separa una
+             * sobrecarga de sus hermanas, y la calculada arriba sale del NOMBRE,
+             * que ellas comparten. */
+            s.mangled_label = cand->mangled_label.empty() ? mangled_label
+                                                          : cand->mangled_label;
+            s.ns_path =
+                ns_path_for_sym; // NS.2: namespace declarado (vacio si none)
+            s.return_type = canonical_typename_of(cand->return_type);
+            s.is_extern = !cand->extern_lib.empty();
+            s.extern_lib = cand->extern_lib;
+            // LIM-A: propagar @Naked al .vxi para que la importacion
+            // cross-modulo en interp/JIT enrute al dispatcher naked (y no
+            // ejecute el asm como bytecode).
+            s.is_naked = cand->is_naked;
+            s.is_internal =
+                tc.function_is_internal(fname); // NS.3: package-scoped
+            s.param_types.reserve(cand->param_types.size());
+            for (const auto &pt : cand->param_types) {
+                s.param_types.push_back(canonical_typename_of(pt));
+            }
+            s.param_names.assign(cand->param_types.size(), std::string());
+            // ABI custom por-param (`register("rax")`): imprescindible para que
+            // un CALLIND cross-modulo a traves de un campo cuyo default es esta
+            // funcion coloque los args en los registros correctos.
+            s.param_abi_regs = cand->param_abi_regs;
+            out.symbols.push_back(std::move(s));
+        }
     }
 
     // --- Globals ( M.L7) ---

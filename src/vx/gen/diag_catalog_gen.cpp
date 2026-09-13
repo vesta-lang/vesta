@@ -66,6 +66,8 @@ const CatEntry kEntries[] = {
     {"VX2057", {"these two were not separated because the index is not a compile-time constant: with a runtime index it could name any element", "no se han podido separar porque el indice no es constante al compilar: con un indice de ejecucion puede nombrar cualquier elemento"}},
     {"VX2058", {"these two were not separated because the region this pointer names is not resolved at this level; a 'borrow<T>', 'unique<T>' or 'shared<T>' does say whose memory it is", "no se han podido separar porque la region que nombra este puntero no esta resuelta en este nivel; un 'borrow<T>', un 'unique<T>' o un 'shared<T>' si dicen de quien es la memoria"}},
     {"VX2059", {"the borrow that gets in the way is of '{0}', which covers '{1}'", "el prestamo que estorba es de '{0}', que abarca a '{1}'"}},
+    {"VX2060", {"'{0}' already declares a method '{1}' with those same parameters", "'{0}' ya declara un metodo '{1}' con esos mismos parametros"}},
+    {"VX2061", {"'{0}' already declares a constructor with those same parameters", "'{0}' ya declara un constructor con esos mismos parametros"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -110,6 +112,9 @@ const CatEntry kEntries[] = {
     {"VX7029", {"bundle at {0}: {1} instructions, {2} moved", "paquete en {0}: {1} instrucciones, {2} movidas"}},
     {"VX7030", {"  {0}: {1}  [{2}]{3}", "  {0}: {1}  [{2}]{3}"}},
     {"VX7031", {" <- moved", " <- cambia"}},
+    {"VX7032", {"CALLSUPER: no ClassInfo in r{0} -- the preceding findclass did not resolve the superclass", "CALLSUPER: no hay ClassInfo en r{0} -- el findclass previo no resolvio la superclase"}},
+    {"VX7033", {"CALLSUPER: class '{0}' has no method table (index {1})", "CALLSUPER: la clase '{0}' no tiene tabla de metodos (indice {1})"}},
+    {"VX7034", {"CALLSUPER: index {0} is outside the table of '{1}', which has {2} methods", "CALLSUPER: el indice {0} esta fuera de la tabla de '{1}', que tiene {2} metodos"}},
     {"VX9100", {"Container: `{0}`", "Contenedor: `{0}`"}},
     {"VX9101", {"Complexity: **{0}**", "Complejidad: **{0}**"}},
     {"VX9102", {"(own body {0})", "(cuerpo propio {0})"}},
@@ -576,7 +581,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 555;
+const int kEntryCount = 560;
 
 } // namespace
 

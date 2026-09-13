@@ -571,6 +571,23 @@ es = "  {0}: {1}  [{2}]{3}"
 en = " <- moved"
 es = " <- cambia"
 
+# CALLSUPER, los tres motivos por los que no puede despachar.  Van SEPARADOS
+# porque se arreglan en sitios distintos: que no haya clase apunta al findclass
+# de quien llama, que no haya tabla a como se registro la clase, y un indice
+# fuera de rango a quien lo emitio.  Decir "o" las tres deja al que se lo
+# encuentra sin saber cual mirar.
+[VX7032]
+en = "CALLSUPER: no ClassInfo in r{0} -- the preceding findclass did not resolve the superclass"
+es = "CALLSUPER: no hay ClassInfo en r{0} -- el findclass previo no resolvio la superclase"
+
+[VX7033]
+en = "CALLSUPER: class '{0}' has no method table (index {1})"
+es = "CALLSUPER: la clase '{0}' no tiene tabla de metodos (indice {1})"
+
+[VX7034]
+en = "CALLSUPER: index {0} is outside the table of '{1}', which has {2} methods"
+es = "CALLSUPER: el indice {0} esta fuera de la tabla de '{1}', que tiene {2} metodos"
+
 # ---------------------------------------------------------------------------
 # VX9xxx -- texto de las herramientas (CLI y servidor de lenguaje).
 #
@@ -2489,6 +2506,19 @@ es = "no se han podido separar porque la region que nombra este puntero no esta 
 ["VX2059"]
 en = "the borrow that gets in the way is of '{0}', which covers '{1}'"
 es = "el prestamo que estorba es de '{0}', que abarca a '{1}'"
+# Repetir el NOMBRE de un metodo es legitimo -- es una sobrecarga --; repetir
+# nombre Y parametros no, porque entonces no hay nada que distinga a uno del
+# otro.  Una sola entrada para el struct y para la clase: lo que va dentro es el
+# nombre del TIPO, que es un dato del usuario, asi que la palabra "struct" o
+# "clase" no hace falta y no hay dos mensajes que mantener.
+["VX2060"]
+en = "'{0}' already declares a method '{1}' with those same parameters"
+es = "'{0}' ya declara un metodo '{1}' con esos mismos parametros"
+# El constructor va aparte y no como un metodo llamado "<constructor>": esa
+# palabra habria que traducirla, y lo que entra como dato NO se traduce nunca.
+["VX2061"]
+en = "'{0}' already declares a constructor with those same parameters"
+es = "'{0}' ya declara un constructor con esos mismos parametros"
 # Ni frontera ni ignorancia: el valor no esta en el codigo que se mira.  La
 # tabla de valores no encoge cuando el optimizador borra una instruccion, asi
 # que la ranura sobrevive vacia -- y contestarle algo es trabajo sobre un dato

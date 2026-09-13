@@ -6089,6 +6089,21 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
 
         emit_save_all_gc_aware(ctx, call_pos, regs_to_save);
 
+        /* El ClassInfo* a un registro que SOBREVIVA al marshalling -- r13, el
+         * scratch del emisor --, igual que hace CALLM con el MethodInfo*.
+         *
+         * Antes se volvia a pedir DESPUES de los moves, con la idea de
+         * "re-materializarlo".  Pero pedirlo no lo mueve: devuelve el registro
+         * donde el asignador cree que esta, y si le habia tocado r1..r12 los
+         * moves de la convencion ya lo habian pisado -- el `this` va a r1 --.
+         * En una funcion pequena el asignador elegia otro registro y no se
+         * notaba; al aplanar el metodo dentro de un `main` con mas presion le
+         * tocaba r1 y el CALLSUPER recibia el `this` como si fuera la clase.
+         * El fallo era MUDO hasta llegar al runtime, y alli decia que la clase
+         * no tenia tabla de metodos. */
+        Reg r_cls_src = ctx.load_src(ins.operands[0], 0);
+        ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(13), r_cls_src);
+
         // Args marshalling: r1 = this, r2..rN = args.
         const size_t nargs_user =
             ins.operands.size() > 2 ? ins.operands.size() - 2 : 0;
@@ -6101,10 +6116,7 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         // r15 = argc (incluyendo @c this).
         ctx.out.emit(emmit::Mnemonic::MOV, Reg::gp(15), (nargs_user + 1));
 
-        // El ClassInfo* puede haber sido clobbered por los moves.
-        // Re-materializarlo justo antes del callsuper.
-        Reg r_cls = ctx.load_src(ins.operands[0], 0);
-        ctx.out.emit(emmit::Mnemonic::CALLSUPER, r_cls, ins.imm);
+        ctx.out.emit(emmit::Mnemonic::CALLSUPER, Reg::gp(13), ins.imm);
 
         if (ins.dst != IR_NO_VALUE) {
             Reg rd = ctx.dst_of(ins.dst);

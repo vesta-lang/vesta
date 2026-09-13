@@ -34,6 +34,8 @@
 #include "loader/oop_types.h"
 #include "loader/loader.h"
 #include "loader/class_registry.h"
+#include "vx/diag/diag_catalog.h" // los mensajes salen del catalogo, no de aqui
+#include <string>
 
 /* hook JIT en CALLVIRT fast path. */
 #include "jit/interp_jit_bridge.h"
@@ -1087,12 +1089,39 @@ void exec_instr_callsuper(ProcessVM *vm, const DecodedInstr &instr) {
 
     auto *cls = reinterpret_cast<loader::ClassInfo *>(
         vm->registers.regs[r_cls].qword());
-    if (cls == nullptr || vtbl_idx >= cls->vtable_size ||
-        cls->vtable == nullptr) {
-        runtime::throw_fatalf(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
-                              "CALLSUPER: ClassInfo invalido o vtable_idx "
-                              "fuera de rango (idx=%u)",
-                              (unsigned)vtbl_idx);
+    /* Los tres motivos son distintos y se arreglan en sitios distintos, asi que
+     * cada uno tiene su codigo: que no haya clase apunta al `findclass` de
+     * quien llama, que no haya tabla a como se registro la clase, y un indice
+     * fuera de rango a quien lo emitio. */
+    if (cls == nullptr) {
+        runtime::throw_fatal(
+            vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+            vx::diag::format("VX7032", {std::to_string(r_cls)}).c_str());
+        return;
+    }
+    /* El NOMBRE de la clase: sin el, "la clase no tiene tabla" no dice de que
+     * clase se habla, y resolver mal el nombre es justo uno de los modos de
+     * fallar. */
+    const std::string cls_name =
+        (cls->name.data != nullptr && cls->name.size > 0)
+            ? std::string(reinterpret_cast<const char *>(cls->name.data),
+                          cls->name.size)
+            : std::string("<sin nombre>");
+    if (cls->vtable == nullptr) {
+        runtime::throw_fatal(
+            vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+            vx::diag::format("VX7033", {cls_name, std::to_string(vtbl_idx)})
+                .c_str());
+        return;
+    }
+    if (vtbl_idx >= cls->vtable_size) {
+        runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+                             vx::diag::format("VX7034",
+                                              {std::to_string(vtbl_idx),
+                                               cls_name,
+                                               std::to_string(
+                                                   cls->vtable_size)})
+                                 .c_str());
         return;
     }
 

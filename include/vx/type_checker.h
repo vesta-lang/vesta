@@ -38,6 +38,7 @@
 #ifndef VX_TYPE_CHECKER_H
 #define VX_TYPE_CHECKER_H
 
+#include "util/alloc/small_vector.h" // un grupo de sobrecargas, sin reservar
 #include "util/env_flags.h"
 #include "vx/generics/instance_registry.h" // el reparto de instanciaciones
 #include <algorithm>
@@ -54,6 +55,7 @@
 #include "vx/comptime/comptime_vm.h"
 #include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
+#include "vx/overload.h" // varias declaraciones con un nombre, y cual se elige
 
 namespace vx {
 
@@ -236,6 +238,31 @@ struct OverlaySpan {
 };
 
 /**
+ * @brief Las firmas que comparten un nombre, en el orden en que se declararon.
+ *
+ * Indices a @c TypeChecker::function_sigs_.
+ *
+ * @c SmallVector y no @c vector: un nombre sobrecargado tiene DOS o tres, y un
+ * vector por grupo seria una reserva de monton por cada nombre repetido del
+ * programa.  Cuatro caben dentro del propio objeto y no se reserva nada.
+ */
+using OverloadSet = util::SmallVector<uint32_t, 4>;
+
+/**
+ * @brief Nombre publico -> las firmas que lo comparten.
+ *
+ * SOLO tiene entrada un nombre que de verdad este sobrecargado: mientras hay
+ * una sola funcion con ese nombre la lleva @c sig_by_name_ y aqui no aparece.
+ * Es lo que hace que esto no cueste una entrada por funcion del programa --
+ * serian decenas de miles --, sino una por nombre repetido.
+ *
+ * Va con nombre propio y no como el mapa crudo: un
+ * `unordered_map<string, vector<uint32_t>>` en una firma no dice ni que es la
+ * clave ni que son los numeros.
+ */
+using OverloadTable = std::unordered_map<std::string, OverloadSet>;
+
+/**
  * @struct StructFieldInfo
  * @brief Informacion del layout de un campo dentro de un @c struct.
  *
@@ -416,6 +443,34 @@ struct ClassMethodInfo {
     /// "<struct_local>__<metodo>" (que llevaria el mangling del consumidor y no
     /// resolveria en el linker).  Vacio para metodos del propio modulo.
     std::string link_name;
+    /**
+     * @brief El SIMBOLO con el que este metodo se emite y se llama.
+     *
+     * `Duenyo__metodo`, mas su discriminante si el nombre esta sobrecargado.
+     *
+     * @par Se calcula UNA vez, y se INTERNA
+     * Antes se armaba por concatenacion en cada sitio que lo necesitaba -- al
+     * emitir el cuerpo, en cada llamada, en la ficha de la clase, en la
+     * vtable, al devirtualizar --, o sea decenas de miles de cadenas por
+     * compilacion, todas con el mismo texto.  Es exactamente lo que
+     * @c PooledName existe para evitar: aqui viaja un puntero al pozo, copiarlo
+     * son ocho bytes y quien lo usa lo LEE en vez de rehacerlo.
+     *
+     * Y de paso deja de poder divergir: un simbolo que se forma en un sitio no
+     * se puede escribir distinto en otro.
+     *
+     * Vacio solo mientras el layout se esta montando, y en los metodos
+     * IMPORTADOS, que traen el suyo hecho en @c link_name.
+     */
+    PooledName ir_symbol;
+    /**
+     * @brief Hay mas metodos con este nombre en el mismo tipo.
+     *
+     * Un bit, no una consulta: es lo que hace que una llamada corriente -- que
+     * son casi todas -- no pague NADA por la sobrecarga.  Solo cuando esto es
+     * cierto se miran los tipos de los argumentos para elegir.
+     */
+    bool is_overloaded = false;
     /// Debug info para stack traces.  Llenado por el type
     /// checker al ver el ClassMethodDecl original.  El lowering lo
     /// emite en __module_init via @c setmethdbg.
@@ -572,6 +627,32 @@ inline const ClassMethodInfo *find_method(const Layout &lay,
 }
 
 /**
+ * @brief El metodo del hueco que el comprobador ya dejo apuntado.
+ *
+ * Con sobrecarga, buscar por nombre en el layout deja de identificar a nadie:
+ * hay varios que se llaman igual.  El comprobador tiene los tipos y ya decidio;
+ * aqui solo se recoge su POSICION.
+ *
+ * La MISMA puerta para los dos que apuntan: la LLAMADA
+ * (@c ast::FieldAccessExpr::resolved_method) y la DECLARACION
+ * (@c ast::ClassMethodDecl::layout_slot).
+ *
+ * Devuelve nulo cuando no hay nada apuntado, que es el caso normal -- entonces
+ * quien pregunta sigue con su busqueda por nombre de siempre, y cada uno
+ * conserva la suya porque no son la misma: la de los metodos de clase salta los
+ * constructores y la de los structs no --.
+ *
+ * @param lay  El layout (de struct o de clase).
+ * @param slot El hueco apuntado, o @c ast::kNoMethodSlot.
+ */
+template <typename Layout>
+inline const ClassMethodInfo *picked_method(const Layout &lay,
+                                            uint32_t slot) noexcept {
+    if (slot >= lay.methods.size()) return nullptr; // cubre tambien el centinela
+    return &lay.methods[slot];
+}
+
+/**
  * @brief El SIMBOLO con el que se emite un metodo: `Duenyo__metodo`.
  *
  * Estaba escrito en SEIS sitios del bajado, cada uno armando la misma cadena a
@@ -585,26 +666,45 @@ inline const ClassMethodInfo *find_method(const Layout &lay,
  *
  * @param owner  De quien es el metodo, que lo decide el llamante.
  * @param method Nombre del metodo.
+ * @param tag    Lo que separa una SOBRECARGA de sus hermanas -- el mangleado de
+ *               sus parametros --, o vacio si el nombre no esta sobrecargado y
+ *               el metodo conserva su simbolo exacto.
  */
 inline std::string method_symbol(const std::string &owner,
-                                 const std::string &method) {
-    return owner + "__" + method;
+                                 const std::string &method,
+                                 const std::string &tag = std::string()) {
+    if (tag.empty()) return owner + "__" + method;
+    return owner + "__" + method + "_" + tag;
 }
 
 /**
- * @brief Igual, con el dueno por DEFECTO cuando el metodo no dice quien lo
- *        define.
+ * @brief El simbolo de un metodo, LEIDO -- no armado.
  *
- * La otra mitad de lo que se repetia: tres de los seis sitios llevaban el mismo
- * ternario -- el que define, y si no consta, este otro -- escrito a mano.
+ * Lo normal es que ya este calculado e internado en @c ir_symbol: entonces esto
+ * no reserva nada y no puede diferir de lo que se emitio.  El @p fallback solo
+ * cubre el caso en que no lo este -- un metodo que no paso por el cierre de su
+ * layout --, y ahi si se arma, como se armaba antes en los seis sitios.
  *
  * @param m        El metodo.
- * @param fallback A quien atribuirlo si @c defining_class viene vacio.
+ * @param fallback A quien atribuirlo si no consta ni el simbolo ni quien lo
+ *                 define.
  */
-inline std::string method_symbol_of(const ClassMethodInfo &m,
-                                    const std::string &fallback) {
-    return method_symbol(m.defining_class.empty() ? fallback : m.defining_class,
-                         m.name);
+inline const std::string &method_symbol_of(const ClassMethodInfo &m,
+                                           const std::string &fallback) {
+    if (!m.ir_symbol.empty()) return m.ir_symbol.str();
+    /* Sin simbolo calculado hay que armarlo, y se INTERNA -- pero no se guarda
+     * en la ficha: esto se lee desde el bajado, que va por modulos en paralelo,
+     * y escribir en un dato ya compartido es una carrera aunque las dos manos
+     * escriban lo mismo.  El pozo reparte el mismo puntero a todos, asi que no
+     * se duplica nada y la referencia vive lo que el proceso.
+     *
+     * Un constructor no se llama por su nombre -- que es el del tipo --, asi
+     * que armarlo igual que un metodo daria `Clase__Clase`. */
+    const std::string &owner =
+        m.defining_class.empty() ? fallback : m.defining_class;
+    return *util::intern_name(
+        m.is_constructor ? method_symbol(owner, "ctor")
+                         : method_symbol(owner, m.name));
 }
 
 /**
@@ -2008,6 +2108,53 @@ class TypeChecker {
                            const std::string &name);
 
     /**
+     * @brief De entre los metodos que comparten nombre, el que piden los
+     *        argumentos.
+     *
+     * Solo se llama cuando el nombre esta de verdad sobrecargado, y eso se sabe
+     * MIRANDO al primer candidato -- lleva la marca en su
+     * @c ClassMethodInfo::is_overloaded --, sin consultar ninguna tabla ni
+     * hashear el nombre otra vez.  Una llamada corriente, que son casi todas,
+     * no paga nada por esto.
+     *
+     * Anota ademas en @c fa la POSICION elegida, que es como el bajado llega al
+     * mismo metodo sin repetir la eleccion.
+     *
+     * @param methods     La lista del layout.
+     * @param name        El nombre que se llama.
+     * @param e           La llamada, de donde salen los tipos de los
+     *                    argumentos.
+     * @param fa          El acceso `base.metodo`, donde se anota la elegida.
+     * @param want_static Si se busca entre los `static` o entre los de
+     *                    instancia.  Una clase puede tener los dos con el mismo
+     *                    nombre, y se llaman de maneras distintas: mezclarlos
+     *                    aqui elegiria uno al que la llamada ni siquiera le pasa
+     *                    el receptor.
+     * @return El metodo elegido; nunca nulo (si ninguna encaja, la primera con
+     *         ese nombre, para que el error lo de la comprobacion de argumentos
+     *         y hable de tipos en vez de decir que el metodo no existe).
+     */
+    const ClassMethodInfo *
+    select_method_overload(const std::vector<ClassMethodInfo> &methods,
+                           const std::string &name, ast::CallExpr *e,
+                           ast::FieldAccessExpr *fa, bool want_static = false);
+
+    /**
+     * @brief Lo unico que la regla de seleccion necesita saber de aqui.
+     *
+     * @c vx::overload no depende del comprobador -- ni de sus cabeceras -- y aun
+     * asi tiene que preguntar si un argumento vale para un parametro admitiendo
+     * conversion.  Entra por puntero a funcion: sin objeto que construir, sin
+     * tabla virtual y sin @c std::function.
+     *
+     * @param ctx   El comprobador, tal cual se le paso a @c overload::select.
+     * @param param Tipo del parametro.
+     * @param arg   Tipo del argumento.
+     */
+    static bool overload_accepts(void *ctx, const Type &param, const Type &arg);
+
+
+    /**
      * @brief Construye la ficha de un metodo a partir de su declaracion.
      *
      * Estaba escrito dos veces -- override y no-override -- y a la copia del
@@ -2569,18 +2716,7 @@ class TypeChecker {
     /// @copydoc set_generic_instances
     size_t generic_module_index_ = 0;
 
-    /**
-     * @brief Las funciones que comparten nombre, y sus firmas.
-     *
-     * SOLO tiene entrada un nombre que de verdad este sobrecargado: mientras
-     * hay una sola funcion con ese nombre, la lleva @c sig_by_name_ y aqui no
-     * aparece.  Es lo que hace que esto no cueste un vector por funcion del
-     * programa -- serian decenas de miles --, sino uno por nombre repetido.
-     *
-     * Los indices son a @c function_sigs_, y estan en el orden en que se
-     * declararon.
-     */
-    std::unordered_map<std::string, std::vector<uint32_t>> overloads_;
+    OverloadTable overloads_;
 
     /**
      * @brief Apunta @p fn como sobrecarga y le da su simbolo propio.
@@ -2593,6 +2729,24 @@ class TypeChecker {
      *         llama.
      */
     bool register_overload(ast::FunctionDecl *fn, uint32_t sig_index);
+
+    /**
+     * @brief Apunta @p added como una candidata mas del nombre @p name.
+     *
+     * El nucleo COMUN a las dos puertas por las que llega una sobrecarga: la
+     * que se declara en este fichero y la que entra por un `.vxi` de otro
+     * modulo.  Decidir en dos sitios si dos funciones del mismo nombre chocan o
+     * se sobrecargan es tener dos criterios esperando a divergir.
+     *
+     * @param name  El nombre que comparten.
+     * @param prev  La que ya estaba (la primera candidata).
+     * @param added La que acaba de llegar.
+     * @return @c true si de verdad es una sobrecarga -- parametros distintos de
+     *         todas las que ya habia --.  @c false si repite una firma ya
+     *         declarada, que sigue siendo un choque y lo dice quien llama.
+     */
+    bool add_overload_candidate(const std::string &name, uint32_t prev,
+                                uint32_t added);
 
   public:
     /**
@@ -2862,9 +3016,51 @@ class TypeChecker {
             /// `const` runtime).  Solo valido cuando @c has_const_value.
             bool has_const_value = false;
             int64_t const_value = 0;
+            /**
+             * @brief El SIGUIENTE con este mismo nombre, o @c kNoHomonym.
+             *
+             * Un namespace puede traer varias funciones que comparten nombre --
+             * una sobrecarga del modulo que las declara --, y @c by_name apunta
+             * a UNA.  Sin esto la segunda no llegaba: el consumidor pedia el
+             * nombre publico pelado y el enlazador se quedaba sin resolver.
+             *
+             * Se encadenan por el PROPIO vector en vez de meter otro
+             * contenedor: no aparece ni un mapa ni un vector mas, y el caso
+             * normal -- ningun homonimo -- no paga nada.
+             */
+            uint32_t next_homonym = kNoHomonym;
         };
+        /// "no hay mas con este nombre".
+        static constexpr uint32_t kNoHomonym = 0xFFFFFFFFu;
         std::vector<Sym> symbols;
     };
+
+    /**
+     * @brief De las que un namespace importado trae con ese nombre, la que
+     *        piden los argumentos.
+     *
+     * Un namespace puede traer varias que comparten nombre -- una sobrecarga
+     * del modulo que las declara --, encadenadas por
+     * @c ImportedNamespace::Sym::next_homonym.  Con una sola, que es el caso
+     * normal, esto no mira los argumentos siquiera.
+     *
+     * Va en un sitio unico porque `ns.fn(...)` se resuelve en DOS ramas del
+     * comprobador -- la cualificada entera y la del namespace en la base --, y
+     * elegir distinto en cada una es como se llama a un cuerpo creyendo que se
+     * llama a otro.
+     *
+     * Devuelve el iNDICE y no el simbolo porque es lo que hay que dejarle
+     * apuntado al bajado: alli se vuelve a resolver, y buscar por nombre le
+     * daria el primero.
+     *
+     * @param ns   El namespace importado.
+     * @param name El nombre que se llama.
+     * @param e    La llamada, de donde salen los tipos de los argumentos.
+     * @return Indice en @c ns.symbols, o @c ImportedNamespace::kNoHomonym si el
+     *         namespace no trae ese nombre.
+     */
+    uint32_t select_ns_overload(const ImportedNamespace &ns,
+                                const std::string &name, ast::CallExpr *e);
 
   private:
     std::vector<ImportedNamespace> imported_namespaces_;
@@ -3256,6 +3452,20 @@ class TypeChecker {
         return sig_by_name_;
     }
 
+    /**
+     * @brief Las que comparten nombre, por si hay que enumerarlas TODAS.
+     * @see OverloadTable
+     *
+     * @c function_names() es nombre -> UNA firma, asi que quien recorra ese
+     * mapa ve una sola de cada grupo sobrecargado.  Al emitir el `.vxi` eso
+     * dejaba fuera al resto: el modulo que importa pedia el nombre publico
+     * pelado y el enlazador se quedaba sin resolver, porque quien las define
+     * las emitio con su discriminante.
+     *
+     * Solo tiene entrada un nombre que de verdad este sobrecargado.
+     */
+    const OverloadTable &overload_sets() const noexcept { return overloads_; }
+
     /// @brief Reserva un nominal_id univoco para un nuevo newtype
     /// (cuando se inyecta desde .vxi).  Cada llamada devuelve un id
     /// distinto.  No tiene efectos secundarios.
@@ -3395,17 +3605,28 @@ class TypeChecker {
          * caminos -- una re-exportacion, que es un patron corriente en la
          * stdlib y tiene que seguir funcionando --; si difiere son dos
          * funciones distintas peleandose por un nombre. */
-        const auto ya = sig_by_name_.find(name);
-        if (ya != sig_by_name_.end() && ya->second < function_sigs_.size()) {
-            const std::string &antes = function_sigs_[ya->second].mangled_label;
-            if (!antes.empty() && !sig.mangled_label.empty() &&
-                antes != sig.mangled_label)
-                diags_.error(
-                    {}, vx::diag::format("VXT003",
-                                         {name, antes, sig.mangled_label}));
-        }
+        const auto prev = sig_by_name_.find(name);
+        const bool has_previous =
+            prev != sig_by_name_.end() && prev->second < function_sigs_.size();
         const uint32_t idx = static_cast<uint32_t>(function_sigs_.size());
         function_sigs_.push_back(std::move(sig));
+        if (has_previous) {
+            const std::string &previous_label =
+                function_sigs_[prev->second].mangled_label;
+            const std::string &new_label = function_sigs_[idx].mangled_label;
+            /* Que no sea la misma etiqueta puede ser una de DOS cosas, y hasta
+             * ahora las dos se contaban como choque: dos funciones distintas
+             * peleandose por un nombre, o la misma sobrecarga que ya existia
+             * dentro de un modulo cruzando la frontera.  Lo que las separa son
+             * los PARaMETROS, y eso lo decide el mismo sitio que decide la
+             * sobrecarga local. */
+            if (!previous_label.empty() && !new_label.empty() &&
+                previous_label != new_label &&
+                !add_overload_candidate(name, prev->second, idx))
+                diags_.error({}, vx::diag::format(
+                                     "VXT003",
+                                     {name, previous_label, new_label}));
+        }
         sig_by_name_.emplace(name, idx);
         // Encolar para que `run()` declare el Symbol en el scope global
         // tras el push_scope inicial.  Sin esto, el lookup en

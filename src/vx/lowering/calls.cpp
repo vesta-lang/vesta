@@ -141,13 +141,18 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
             /* La ficha del constructor que se va a llamar, no solo si lo hay:
              * de ella sale como viaja cada argumento -- un `out` va como la
              * direccion del hueco --, igual que en cualquier otro metodo. */
-            const ClassMethodInfo *ctor_sig = nullptr;
-            for (const auto &m : slay.methods)
-                if (m.is_constructor &&
-                    m.param_types.size() == e->args.size()) {
-                    ctor_sig = &m;
-                    break;
-                }
+            /* El comprobador ya eligio cual: varios constructores pueden
+             * compartir aridad, asi que buscarlo aqui por el numero de
+             * argumentos se quedaria con el primero y llamaria a otro. */
+            const ClassMethodInfo *ctor_sig =
+                picked_method(slay, e->resolved_method);
+            if (ctor_sig == nullptr)
+                for (const auto &m : slay.methods)
+                    if (m.is_constructor &&
+                        m.param_types.size() == e->args.size()) {
+                        ctor_sig = &m;
+                        break;
+                    }
             bool has_ctor = ctor_sig != nullptr;
             if (!has_ctor)
                 for (const auto &m : slay.methods)
@@ -197,8 +202,24 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
                 ins.op = ir::IrOp::CALL;
                 ins.type = ir::IrType::VOID;
                 ins.dst = ir::IR_NO_VALUE;
-                ins.func_name = (slay.name.empty() ? cid->name : slay.name) +
-                                "__ctor_" + std::to_string(e->args.size());
+                /* El simbolo se LEE de la ficha del constructor elegido: lo
+                 * calculo el comprobador al cerrar el layout, con la aridad y
+                 * -- si comparte la suya con otro -- su discriminante. */
+                const std::string &owner =
+                    slay.name.empty() ? cid->name : slay.name;
+                /* El simbolo se LEE de la ficha del constructor elegido, que lo
+                 * calculo el comprobador con la aridad y -- si la comparte con
+                 * otro -- su discriminante.
+                 *
+                 * Cuando no lo trae hay que armarlo AQUI y no en la fabrica
+                 * generica: un constructor de struct lleva la aridad dentro y
+                 * el de una clase no, y desde alli no se sabe cual es cual.  Lo
+                 * trae vacio el layout que llega por el import, que se registra
+                 * sin pasar por el cierre del layout local. */
+                ins.func_name =
+                    (ctor_sig != nullptr && !ctor_sig->ir_symbol.empty())
+                        ? ctor_sig->ir_symbol.str()
+                        : (owner + "__ctor_" + std::to_string(e->args.size()));
                 ins.operands = std::move(operands);
                 ins.source_line = e->loc.line;
                 emit(current_block_, std::move(ins));
@@ -2076,9 +2097,18 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
         const auto &nss = tc_.imported_namespaces();
         if (fa->ns_index < nss.size()) {
             const auto &ns = nss[fa->ns_index];
-            auto its = ns.by_name.find(fa->field_name);
-            if (its != ns.by_name.end()) {
-                const auto &sym = ns.symbols[its->second];
+            /* CUAL de los homonimos lo dejo dicho el comprobador: varias
+             * funciones del namespace pueden compartir nombre, y buscar aqui
+             * por nombre daria la primera. */
+            uint32_t sym_idx = fa->ns_sym;
+            if (sym_idx >= ns.symbols.size()) {
+                auto its = ns.by_name.find(fa->field_name);
+                sym_idx = its == ns.by_name.end()
+                              ? static_cast<uint32_t>(ns.symbols.size())
+                              : its->second;
+            }
+            if (sym_idx < ns.symbols.size()) {
+                const auto &sym = ns.symbols[sym_idx];
                 mangled_label = sym.mangled_label;
                 // Para namespaces inline la sig esta vacia
                 // (se rellena durante run()); buscamos la
@@ -2118,10 +2148,16 @@ bool Lowering::try_lower_namespaced_call(ast::CallExpr *e, ir::IrValueId &out) {
         if (en_clases || en_structs) {
             const auto &metodos =
                 en_clases ? it_cls->second.methods : it_str->second.methods;
+            /* El comprobador ya eligio: con sobrecarga, buscar por nombre aqui
+             * se quedaria con la primera y llamaria a otra. */
+            const ClassMethodInfo *picked =
+                en_clases ? picked_method(it_cls->second, fa->resolved_method)
+                          : picked_method(it_str->second, fa->resolved_method);
             for (const auto &m : metodos) {
+                if (picked != nullptr && &m != picked) continue;
                 if (m.is_static && !m.is_constructor &&
                     m.name == fa->field_name) {
-                    mangled_label = method_symbol(idb->name, m.name);
+                    mangled_label = method_symbol_of(m, idb->name);
                     ret_ir = ir_type_from_primitive(m.return_type.kind);
                     /* Y QUE devuelve, no solo de que tipo IR es.  Lo que hay
                      * mas abajo decide con esto si la llamada necesita un

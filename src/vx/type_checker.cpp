@@ -30,6 +30,7 @@
  *     acceso por indice (cache-friendly al validar muchas llamadas).
  */
 
+#include "util/alloc/small_vector.h" // las candidatas de una sobrecarga, sin heap
 #include "util/env_flags.h"
 #include "util/os/thread_slot.h" // buffer por hilo sin pasar por la TLS emulada
 #include "vx/type_checker.h"
@@ -657,6 +658,27 @@ static bool method_body_is_ours(vx::GenericInstanceRegistry *reg, size_t index,
     return reg->claim(mangled + "::" + m->name, index);
 }
 
+bool TypeChecker::add_overload_candidate(const std::string &name, uint32_t prev,
+                                         uint32_t added) {
+    auto &candidates = overloads_[name];
+    if (candidates.empty()) candidates.push_back(prev);
+
+    const FunctionSig &added_sig = function_sigs_[added];
+    for (uint32_t idx : candidates) {
+        if (overload::same_params(function_sigs_[idx].param_types,
+                                  added_sig.param_types))
+            return false; // misma firma: es un choque de verdad
+    }
+    candidates.push_back(added);
+
+    /* La marca va en la FIRMA: es lo que hace que una llamada corriente no
+     * pague ninguna consulta para descubrir que su nombre no esta
+     * sobrecargado, y a diferencia del simbolo no se rehace por ambito. */
+    for (uint32_t idx : candidates)
+        function_sigs_[idx].is_overloaded = true;
+    return true;
+}
+
 bool TypeChecker::register_overload(ast::FunctionDecl *fn,
                                     uint32_t sig_index) {
     /* La PRIMERA sale del simbolo del ambito, no de `sig_by_name_`: ese ya se
@@ -666,15 +688,8 @@ bool TypeChecker::register_overload(ast::FunctionDecl *fn,
     const Symbol *prev = lookup(fn->name);
     if (prev == nullptr || prev->kind != SymbolKind::Function) return false;
 
-    auto &candidates = overloads_[fn->name];
-    if (candidates.empty()) candidates.push_back(prev->sig_index);
-
-    const FunctionSig &added = function_sigs_[sig_index];
-    for (uint32_t idx : candidates) {
-        if (function_sigs_[idx].param_types == added.param_types)
-            return false; // misma firma: es una redefinicion de verdad
-    }
-    candidates.push_back(sig_index);
+    if (!add_overload_candidate(fn->name, prev->sig_index, sig_index))
+        return false; // misma firma: es una redefinicion de verdad
 
     /* El simbolo de cada una lleva sus parametros, con el mismo mangleado que
      * ya usan los genericos: una sola forma de nombrar, no dos.  Se le pone
@@ -682,14 +697,12 @@ bool TypeChecker::register_overload(ast::FunctionDecl *fn,
      * porque esto corre en `collect_globals`, antes de comprobar ningun
      * cuerpo, asi que no hay ninguna llamada resuelta apuntando al nombre
      * pelado. */
+    const auto &candidates = overloads_[fn->name];
     for (uint32_t idx : candidates) {
         FunctionSig &s = function_sigs_[idx];
         if (s.mangled_label.empty())
-            s.mangled_label = fn->name + "_" + mangle_args(s.param_types);
-        /* La marca va en la FIRMA: es lo que hace que una llamada corriente no
-         * pague ninguna consulta para descubrir que su nombre no esta
-         * sobrecargado, y a diferencia del simbolo no se rehace por ambito. */
-        s.is_overloaded = true;
+            s.mangled_label =
+                fn->name + "_" + overload::discriminator(s.param_types);
     }
 
     /* Y la etiqueta tambien al AST, que es de donde el bajado saca el nombre
@@ -3512,6 +3525,96 @@ std::string TypeChecker::first_unresolved_type(const ast::TypeNode *tn) const {
     }
 }
 
+/**
+ * @brief Le pone su SIMBOLO a cada metodo del layout, de una vez y para todos.
+ *
+ * La UNICA puerta por la que un metodo recibe nombre.  Antes lo armaba por
+ * concatenacion cada sitio que lo necesitaba -- al emitir el cuerpo, en cada
+ * llamada, en la ficha de la clase, en la vtable, al devirtualizar --, con dos
+ * costes: decenas de miles de cadenas iguales por compilacion, y tantas
+ * ocasiones de escribirlo distinto como sitios habia.  Aqui se calcula una vez,
+ * se INTERNA (@c PooledName) y los demas lo LEEN.
+ *
+ * Si el nombre esta SOBRECARGADO, cada uno lleva detras el mangleado de sus
+ * parametros.  Si no lo esta -- el caso normal --, conserva su simbolo exacto,
+ * que es el que ven el enlazador, `@Export`, la FFI y la reflexion.
+ *
+ * @par Por que un recorrido cuadratico y no una tabla
+ * Los metodos de un tipo son una decena, y esto corre para CADA struct y CADA
+ * clase del programa -- instancias monomorfizadas incluidas, que son miles --.
+ * Comparar dos nombres no reserva nada; una tabla por nombre reserva un nodo y
+ * una clave POR METODO, que es justo la forma de reservar que domina el perfil
+ * del compilador.  Con n de un digito, el cuadratico no se mide y el lineal se
+ * paga entero.
+ *
+ * Los CONSTRUCTORES tambien pasan por aqui, con su propia regla: su simbolo no
+ * lleva el nombre del metodo sino la palabra `ctor`, y en un struct ademas la
+ * ARIDAD (`<T>__ctor_2`), que es como se emitio siempre.  Igual que el resto,
+ * solo reciben discriminante si de verdad hay con quien confundirse.
+ *
+ * Quedan fuera, a proposito:
+ * - los HEREDADOS, que ya tienen el simbolo que puso su clase -- y es el que
+ *   ella emitio; renombrarlo aqui apuntaria a una etiqueta que no existe --;
+ * - los IMPORTADOS, que traen el suyo en @c link_name.
+ *
+ * @param methods    La lista del layout, ya completa.
+ * @param owner      De quien es el layout que se cierra.
+ * @param ctor_arity Si el simbolo del constructor lleva la aridad dentro, que
+ *                   es lo que distingue a un struct (`<T>__ctor_2`) de una
+ *                   clase (`<Clase>__ctor`).
+ */
+static void name_layout_methods(std::vector<ClassMethodInfo> &methods,
+                                const std::string &owner, bool ctor_arity) {
+    const size_t n = methods.size();
+
+    /* Quien comparte nombre.  Se marcan TODOS -- heredados e importados
+     * incluidos --, porque la marca es lo que hace que una llamada mire los
+     * tipos: si el primero con ese nombre viniera de la base y no estuviera
+     * marcado, la llamada elegiria por nombre y se iria a cualquiera.
+     *
+     * Dos constructores comparten "nombre" por serlo los dos; en un struct
+     * ademas tienen que compartir ARIDAD, porque ahi la aridad ya esta dentro
+     * del simbolo y por si sola los separa. */
+    for (size_t i = 0; i < n; ++i) {
+        ClassMethodInfo &m = methods[i];
+        if (m.is_overloaded) continue;
+        for (size_t j = i + 1; j < n; ++j) {
+            ClassMethodInfo &o = methods[j];
+            if (o.is_constructor != m.is_constructor) continue;
+            if (m.is_constructor) {
+                if (ctor_arity &&
+                    o.param_types.size() != m.param_types.size())
+                    continue;
+            } else if (o.name != m.name) {
+                continue;
+            }
+            m.is_overloaded = true;
+            o.is_overloaded = true;
+        }
+    }
+
+    // Y el simbolo, solo a los que este layout emite.
+    for (ClassMethodInfo &m : methods) {
+        if (!m.link_name.empty()) continue;
+        if (!m.defining_class.empty() && m.defining_class != owner) continue;
+        if (!m.ir_symbol.empty()) continue;
+        /* El discriminante solo se construye si de verdad hay con quien
+         * confundirse: en el caso normal no se arma ninguna cadena de mas. */
+        const std::string tag =
+            m.is_overloaded ? overload::discriminator(m.param_types)
+                            : std::string();
+        if (!m.is_constructor) {
+            m.ir_symbol = method_symbol(owner, m.name, tag);
+            continue;
+        }
+        /* El constructor no se llama por su nombre -- que es el del tipo --
+         * sino `ctor`, y en un struct con la aridad detras. */
+        std::string base = "ctor";
+        if (ctor_arity) base += "_" + std::to_string(m.param_types.size());
+        m.ir_symbol = method_symbol(owner, base, tag);
+    }
+}
+
 // ---------------------------------------------------------------------
 // Pase 1: declaraciones globales.
 // ---------------------------------------------------------------------
@@ -4649,7 +4752,6 @@ void TypeChecker::collect_globals() {
             // <Struct>__<metodo>(this_ptr, args...).  No hay vtable
             // ni constructores; @c defining_class lleva el nombre del
             // struct para que el lowering construya el label correcto.
-            std::unordered_map<std::string, bool> seen_methods;
             // Slot de vtable para los metodos @Virtual, asignado por orden de
             // aparicion.  Como el flatten deja los metodos raiz-primero y el
             // override reemplaza EN SU POSICION, el slot de un metodo virtual
@@ -4663,45 +4765,43 @@ void TypeChecker::collect_globals() {
                 // anyade al layout (es plantilla).  Cada `obj.metodo<U>()`
                 // clona una version concreta via monomorphize_method.
                 if (!m->method_type_params.empty()) continue;
-                /* Un struct no sobrecarga: un nombre, un metodo.  Los
-                 * constructores son la unica excepcion, y lo que los distingue
-                 * es el NUMERO de argumentos -- literalmente su identidad,
-                 * porque el simbolo que se emite es `<T>__ctor_<aridad>`.
+                /* Lo que identifica a un metodo -- constructor incluido -- es
+                 * su nombre MAS sus parametros: dos con el mismo nombre y
+                 * distintos parametros son una sobrecarga, y cada uno recibe su
+                 * simbolo al cerrar el layout.  Repetir nombre Y parametros
+                 * sigue siendo una redefinicion.
                  *
-                 * Por eso entran en la comprobacion con esa clave, y no con su
-                 * nombre.  Antes quedaban FUERA por completo, asi que dos
-                 * constructores de la misma aridad se emitian los dos con el
-                 * mismo nombre -- dos etiquetas iguales que el enlazador se
-                 * tragaba -- y la llamada se iba a uno cualquiera: con
-                 * `V(f64,f64)` y `V(i64,i64)`, escribir `V(1.0, 2.0)` acababa
-                 * en el de enteros.  Sin una sola queja.
-                 *
-                 * Distinguirlos ademas por tipos seria darle al struct una
-                 * sobrecarga que no tiene en ningun otro sitio -- ni sus
-                 * metodos ni las funciones libres la tienen -- , asi que lo que
-                 * se hace es DECIRLO donde se escribe. */
-                const std::string clave =
-                    m->is_constructor
-                        ? ("ctor/" + std::to_string(m->params.size()))
-                        : m->name;
-                if (!seen_methods.emplace(clave, true).second) {
-                    if (m->is_constructor) {
-                        diags_.error(
-                            m->loc,
-                            "el struct '" + s->name +
-                                "' ya tiene un constructor de " +
-                                std::to_string(m->params.size()) +
-                                " argumentos; en un struct los constructores se"
-                                " distinguen por el numero de argumentos, no"
-                                " por sus tipos");
-                    } else {
-                        diags_.error(m->loc, "metodo duplicado en struct '" +
-                                                 s->name + "': '" + m->name +
-                                                 "'");
-                    }
+                 * Los constructores estuvieron FUERA de esta comprobacion, asi
+                 * que dos de la misma aridad se emitian los dos con el mismo
+                 * nombre -- dos etiquetas iguales que el enlazador se tragaba --
+                 * y la llamada se iba a uno cualquiera: con `V(f64,f64)` y
+                 * `V(i64,i64)`, escribir `V(1.0, 2.0)` acababa en el de
+                 * enteros.  Sin una sola queja.  Despues entraron por ARIDAD,
+                 * que los separaba pero prohibia la pareja legitima; ahora
+                 * entran por sus tipos, como todo lo demas. */
+                ClassMethodInfo mi = make_method_info(*m, s->name);
+                /* La respuesta esta en los que ya estan en el layout: ni tabla
+                 * ni clave de texto.  Comparar dos listas de tipos no reserva
+                 * nada, y esto corre para cada struct del programa. */
+                bool already_declared = false;
+                for (const ClassMethodInfo &prev : layout.methods) {
+                    if (prev.is_constructor != mi.is_constructor) continue;
+                    if (!mi.is_constructor && prev.name != mi.name) continue;
+                    if (!overload::same_params(prev.param_types,
+                                               mi.param_types))
+                        continue;
+                    already_declared = true;
+                    break;
+                }
+                if (already_declared) {
+                    if (m->is_constructor)
+                        diags_.diag(m->loc, DiagLevel::ERR, "VX2061",
+                                    {s->name});
+                    else
+                        diags_.diag(m->loc, DiagLevel::ERR, "VX2060",
+                                    {s->name, m->name});
                     continue;
                 }
-                ClassMethodInfo mi = make_method_info(*m, s->name);
                 /* El hueco en la tabla solo lo tienen los virtuales, y se
                  * reparten EN ORDEN de declaracion: eso es propio de montar el
                  * layout, no de la ficha del metodo. */
@@ -4709,8 +4809,15 @@ void TypeChecker::collect_globals() {
                 // copy-hook (copy-constructor implicito).  El compilador lo
                 // invoca en cada sitio de copia del struct.
                 if (m->name == "__clone__") layout.has_copy_hook = true;
+                /* En que hueco acaba.  Quien EMITE el metodo tiene la
+                 * declaracion en la mano, no el layout, y con sobrecarga
+                 * buscarla por nombre deja de identificarla. */
+                m->layout_slot = static_cast<uint32_t>(layout.methods.size());
                 layout.methods.push_back(std::move(mi));
             }
+            // Con la lista cerrada, cada metodo recibe su simbolo definitivo.
+            name_layout_methods(layout.methods, s->name,
+                                /*ctor_arity=*/true);
 
             // Sobrescribir la entrada vacia pre-registrada con el layout
             // ya completo.  Usar operator[] = porque la entrada existe.
@@ -5155,11 +5262,8 @@ void TypeChecker::collect_globals() {
             // uno heredado, REEMPLAZA el slot del super (mismo
             // vtable_index).  El AST lo marca con is_override pero
             // tambien aceptamos override implicito si el nombre coincide.
-            std::unordered_map<std::string, bool> seen_method;
-            for (const auto &m_inh : layout.methods)
-                seen_method[m_inh.name] = true;
             for (size_t mi = 0; mi < c->methods.size(); ++mi) {
-                const auto *m = c->methods[mi].get();
+                auto *m = c->methods[mi].get();
                 const std::string &mname = m->name;
 
                 // Metodo generico template (`R metodo<U>(...)`, #4): NO se
@@ -5170,12 +5274,31 @@ void TypeChecker::collect_globals() {
                 // template (que tampoco se procesan como concretos).
                 if (!m->method_type_params.empty()) continue;
 
-                // Detectar override: ya existe un metodo con ese nombre
-                // (heredado del super).  Buscar su slot.
+                /* La ficha se construye UNA vez: sus tipos de parametro son lo
+                 * que decide si esto sobrescribe o sobrecarga, asi que hace
+                 * falta antes de elegir rama -- y las dos la necesitan. */
+                ClassMethodInfo mi_info = make_method_info(*m, c->name);
+
+                /* Detectar override.  Tiene que coincidir el nombre Y LOS
+                 * PARAMETROS: con solo el nombre, declarar `f(f64)` donde ya
+                 * habia `f(i64)` no anyadia una sobrecarga sino que BORRABA la
+                 * primera, quedandose con su hueco de tabla.  El programa
+                 * compilaba y llamaba a la que no era.
+                 *
+                 * Con los parametros dentro, cada uno cae donde debe: misma
+                 * firma = sobrescribe el slot heredado; firma distinta = metodo
+                 * nuevo, y `tag_method_overloads` les dara simbolo propio.
+                 *
+                 * Y ESTE recorrido es tambien el que responde si es un
+                 * duplicado -- lo mismo que hacia aparte una tabla por nombre,
+                 * reservando un nodo y una clave por metodo de cada clase del
+                 * programa --.  Una pregunta, un recorrido. */
                 int override_idx = -1;
                 if (!m->is_constructor) {
                     for (size_t j = 0; j < layout.methods.size(); ++j) {
-                        if (layout.methods[j].name == mname) {
+                        if (layout.methods[j].name == mname &&
+                            overload::same_params(layout.methods[j].param_types,
+                                                  mi_info.param_types)) {
                             override_idx = static_cast<int>(j);
                             break;
                         }
@@ -5183,6 +5306,16 @@ void TypeChecker::collect_globals() {
                 }
 
                 if (override_idx >= 0) {
+                    /* Misma firma que uno que YA esta.  Que sea sobrescribir o
+                     * repetirse lo dice de DONDE viene el que ya estaba: si lo
+                     * declaro esta misma clase no hay nada que sobrescribir --
+                     * es la misma declaracion dos veces --. */
+                    if (layout.methods[override_idx].defining_class ==
+                        c->name) {
+                        diags_.diag(m->loc, DiagLevel::ERR, "VX2060",
+                                    {c->name, mname});
+                        continue;
+                    }
                     // Override de metodo heredado.  Validar que el
                     // metodo del super NO es final.
                     if (layout.methods[override_idx].is_final) {
@@ -5193,10 +5326,10 @@ void TypeChecker::collect_globals() {
                         continue;
                     }
                     // Reemplazar el slot manteniendo vtable_index.
-                    ClassMethodInfo mi_info = make_method_info(*m, c->name);
                     mi_info.is_constructor = false; // un ctor no sobrescribe
                     mi_info.vtable_index =
                         layout.methods[override_idx].vtable_index;
+                    m->layout_slot = static_cast<uint32_t>(override_idx);
                     layout.methods[override_idx] = std::move(mi_info);
                     continue;
                 }
@@ -5234,7 +5367,11 @@ void TypeChecker::collect_globals() {
                     }
                 }
 
-                /* Los constructores tambien entran, con una clave propia.
+                /* Un metodo repetido ya lo dijo el recorrido de arriba: si
+                 * coincide nombre Y parametros con uno que declaro esta misma
+                 * clase, es una redefinicion.  Aqui solo quedan los
+                 * constructores, que no entran en aquel recorrido porque su
+                 * simbolo no se forma igual.
                  *
                  * Hoy una clase solo puede tener UNO: su simbolo es
                  * `<Clase>__ctor`, sin nada que distinga a uno de otro -- ni
@@ -5244,28 +5381,27 @@ void TypeChecker::collect_globals() {
                  * teniendo `K()` y `K(i64)`, `new K(9)` no ejecutaba el que se
                  * habia escrito.  Y en silencio.
                  *
-                 * Se dice donde se escribe, en vez de dar un objeto mal
-                 * construido.  Mientras tanto, varias formas de construir se
-                 * escriben como metodos `static` que devuelven la clase, que si
-                 * tienen nombre propio y funcionan hoy. */
-                const std::string clave_m =
-                    m->is_constructor ? std::string("\1ctor") : mname;
-                if (!seen_method.emplace(clave_m, true).second) {
-                    if (m->is_constructor) {
+                 * Los HEREDADOS no cuentan: el constructor del super esta en la
+                 * lista y no impide que la derivada declare el suyo. */
+                if (m->is_constructor) {
+                    bool has_own_ctor = false;
+                    for (const ClassMethodInfo &prev : layout.methods) {
+                        if (prev.is_constructor &&
+                            prev.defining_class == c->name) {
+                            has_own_ctor = true;
+                            break;
+                        }
+                    }
+                    if (has_own_ctor) {
                         diags_.error(m->loc,
                                      "la clase '" + c->name +
                                          "' ya tiene un constructor; por ahora"
                                          " una clase solo admite uno.  Para"
                                          " varias formas de construirla, usa"
                                          " metodos 'static' que la devuelvan");
-                    } else {
-                        diags_.error(m->loc, "metodo duplicado en clase '" +
-                                                 c->name + "': '" + mname +
-                                                 "'");
+                        continue;
                     }
-                    continue;
                 }
-                ClassMethodInfo mi_info = make_method_info(*m, c->name);
                 mi_info.vtable_index =
                     static_cast<uint32_t>(layout.methods.size());
 
@@ -5345,8 +5481,14 @@ void TypeChecker::collect_globals() {
                     mi_info.is_zero_init_ctor = zero_init_only;
                 }
 
+                /* En que hueco acaba, por la misma razon que en el struct: el
+                 * que EMITE el metodo tiene la declaracion, no el layout. */
+                m->layout_slot = static_cast<uint32_t>(layout.methods.size());
                 layout.methods.push_back(std::move(mi_info));
             }
+            // Con la lista cerrada, cada metodo recibe su simbolo definitivo.
+            name_layout_methods(layout.methods, c->name,
+                                /*ctor_arity=*/false);
 
             // precomputar has_destructor para que las rules de
             // escape (check_assign) lo consulten en O(1) sin iterar
@@ -9364,8 +9506,13 @@ Type TypeChecker::check_expr(ast::Expr *e) {
         // metodo de instancia + clase con super_name.  Resuelve
         // el metodo en la jerarquia super y retorna su tipo.
         auto *sm = static_cast<ast::SuperMethodCallExpr *>(e);
+        /* Los tipos se guardan al comprobarlos: mas abajo deciden QUE
+         * sobrecarga se llama, y volver a comprobarlos seria hacer dos veces el
+         * mismo trabajo sobre el mismo arbol. */
+        std::vector<Type> arg_types;
+        arg_types.reserve(sm->args.size());
         for (auto &arg : sm->args)
-            check_expr(arg.get());
+            arg_types.push_back(check_expr(arg.get()));
         if (current_class_.empty()) {
             diags_.error(sm->loc,
                          "super.<metodo>(...) fuera de cuerpo de clase");
@@ -9380,19 +9527,37 @@ Type TypeChecker::check_expr(ast::Expr *e) {
             t = Type{};
             break;
         }
-        // Buscar el metodo en la jerarquia super (BFS).
+        /* Buscar el metodo subiendo por la jerarquia, y DEJAR APUNTADO donde se
+         * encontro: el bajado sube igual, y si el nombre esta sobrecargado dos
+         * busquedas por separado pueden parar en huecos distintos. */
         std::string cur = it->second.super_name;
         const ClassMethodInfo *found = nullptr;
         for (int depth = 0; depth < 32; ++depth) {
             auto it_s = class_layouts_.find(cur);
             if (it_s == class_layouts_.end()) break;
-            for (const auto &m : it_s->second.methods) {
-                if (!m.is_constructor && m.name == sm->method_name) {
-                    found = &m;
-                    break;
-                }
+            const auto &ms = it_s->second.methods;
+            /* Las candidatas de este nivel, y de entre ellas la que piden los
+             * argumentos -- por la MISMA regla que cualquier otra llamada --.
+             * Sin sobrecarga hay una sola y esto es el bucle de siempre. */
+            util::SmallVector<overload::Candidate, 4> cands;
+            for (size_t i = 0; i < ms.size(); ++i) {
+                if (ms[i].is_constructor || ms[i].name != sm->method_name)
+                    continue;
+                overload::Candidate c;
+                c.params = &ms[i].param_types;
+                c.slot = static_cast<uint32_t>(i);
+                cands.push_back(c);
             }
-            if (found) break;
+            if (!cands.empty()) {
+                uint32_t pick =
+                    overload::select(cands.data(), cands.size(), arg_types,
+                                     &overload_accepts, this);
+                if (pick == overload::kNoPick) pick = cands[0].slot;
+                found = &ms[pick];
+                sm->resolved_owner = it_s->second.name;
+                sm->resolved_method = pick;
+                break;
+            }
             if (it_s->second.super_name.empty()) break;
             cur = it_s->second.super_name;
         }
@@ -11464,6 +11629,89 @@ find_instance_method(const std::vector<ClassMethodInfo> &metodos,
         if (m.name == nombre) return &m;
     }
     return nullptr;
+}
+
+bool TypeChecker::overload_accepts(void *ctx, const Type &param,
+                                   const Type &arg) {
+    /* El puente por el que la regla de seleccion -- que no sabe de este
+     * comprobador -- pregunta lo unico que necesita saber de el. */
+    TypeChecker *self = static_cast<TypeChecker *>(ctx);
+    return self->types_assignable(param, arg) ||
+           self->class_is_assignable(param, arg) ||
+           self->value_assignable_to_interface(param, arg) ||
+           self->struct_ptr_upcast_ok(param, arg);
+}
+
+uint32_t TypeChecker::select_ns_overload(const ImportedNamespace &ns,
+                                         const std::string &name,
+                                         ast::CallExpr *e) {
+    auto it = ns.by_name.find(name);
+    if (it == ns.by_name.end()) return ImportedNamespace::kNoHomonym;
+    const uint32_t first = it->second;
+    if (ns.symbols[first].next_homonym == ImportedNamespace::kNoHomonym)
+        return first;
+
+    /* La firma con la que se compara es la LOCAL cuando existe -- el modulo se
+     * fusiono y sus tipos son ya los de aqui --; si no, la que viajo en el
+     * `.vxi`.  Es el mismo criterio que usa la rama de una sola candidata. */
+    util::SmallVector<overload::Candidate, 4> cands;
+    for (uint32_t cur = first; cur != ImportedNamespace::kNoHomonym;
+         cur = ns.symbols[cur].next_homonym) {
+        const ImportedNamespace::Sym &sym = ns.symbols[cur];
+        const FunctionSig *real = sym.mangled_label.empty()
+                                      ? nullptr
+                                      : function_sig_by_name(sym.mangled_label);
+        const FunctionSig *use = real != nullptr ? real : &sym.sig;
+        overload::Candidate c;
+        c.params = &use->param_types;
+        c.slot = cur; // el indice en `symbols`, que es lo que se devuelve
+        c.by_ref_mask = use->param_by_ref_mask;
+        cands.push_back(c);
+    }
+
+    std::vector<Type> arg_types;
+    arg_types.reserve(e->args.size());
+    for (auto &a : e->args)
+        arg_types.push_back(check_expr(a.get()));
+
+    const uint32_t pick = overload::select(cands.data(), cands.size(),
+                                           arg_types, &overload_accepts, this);
+    /* Ninguna encaja: se devuelve la primera para que el error lo de la
+     * comprobacion de argumentos hablando de TIPOS, y no "no existe". */
+    return pick == overload::kNoPick ? first : pick;
+}
+
+const ClassMethodInfo *TypeChecker::select_method_overload(
+    const std::vector<ClassMethodInfo> &methods, const std::string &name,
+    ast::CallExpr *e, ast::FieldAccessExpr *fa, bool want_static) {
+    std::vector<Type> arg_types;
+    arg_types.reserve(e->args.size());
+    for (auto &a : e->args)
+        arg_types.push_back(check_expr(a.get()));
+
+    /* Las candidatas se APUNTAN.  Son las que comparten nombre -- un punado --
+     * y sus parametros no se copian: la lista vive en el layout. */
+    util::SmallVector<overload::Candidate, 4> cands;
+    for (size_t i = 0; i < methods.size(); ++i) {
+        if (methods[i].is_constructor || methods[i].name != name) continue;
+        if (methods[i].is_static != want_static) continue;
+        overload::Candidate c;
+        c.params = &methods[i].param_types;
+        c.slot = static_cast<uint32_t>(i);
+        cands.push_back(c);
+    }
+    if (cands.empty()) return nullptr;
+
+    const uint32_t pick = overload::select(cands.data(), cands.size(),
+                                           arg_types, &overload_accepts, this);
+    if (pick != overload::kNoPick) {
+        fa->resolved_method = pick;
+        return &methods[pick];
+    }
+    /* Ninguna encaja.  Se devuelve la primera con ese nombre para que el error
+     * lo de `check_method_args` hablando de TIPOS -- que es lo que de verdad
+     * pasa -- en vez de decir que la clase no tiene ese metodo. */
+    return &methods[cands[0].slot];
 }
 
 /**
@@ -14198,10 +14446,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
                 if (ns_idx_c < imported_namespaces_.size()) {
                     const auto &ns = imported_namespaces_[ns_idx_c];
-                    auto its = ns.by_name.find(fa->field_name);
-                    if (its != ns.by_name.end()) {
+                    const uint32_t picked_ns =
+                        select_ns_overload(ns, fa->field_name, e);
+                    if (picked_ns != ImportedNamespace::kNoHomonym) {
                         referenced_names_.insert(ns_path);
-                        const auto &sym = ns.symbols[its->second];
+                        fa->ns_sym = picked_ns; // el bajado lee ESTE, no busca
+                        const auto &sym = ns.symbols[picked_ns];
                         const FunctionSig *real_sig =
                             sym.mangled_label.empty()
                                 ? nullptr
@@ -14259,8 +14509,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 referenced_names_.insert(idb->name);
                 if (ns_idx_b < imported_namespaces_.size()) {
                     const auto &ns = imported_namespaces_[ns_idx_b];
-                    auto its = ns.by_name.find(fa->field_name);
-                    if (its == ns.by_name.end()) {
+                    const uint32_t picked_ns =
+                        select_ns_overload(ns, fa->field_name, e);
+                    if (picked_ns == ImportedNamespace::kNoHomonym) {
                         diags_.error(e->loc,
                                      "el namespace '" + idb->name +
                                          "' no tiene un simbolo llamado '" +
@@ -14269,7 +14520,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                             (void)check_expr(a.get());
                         return Type{};
                     }
-                    const auto &sym = ns.symbols[its->second];
+                    fa->ns_sym = picked_ns; // el bajado lee ESTE, no busca
+                    const auto &sym = ns.symbols[picked_ns];
                     //  M.7.c: si la sig esta vacia (namespace
                     // inline; las firmas se rellenan en check_function),
                     // buscamos la sig real via function_sig_by_name
@@ -14310,6 +14562,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 lookup(idb->name) == nullptr) {
                 const ClassMethodInfo *smtd = find_static_method(
                     it_cls_s->second.methods, fa->field_name);
+                // La misma puerta que los de instancia: si el nombre esta
+                // sobrecargado, deciden los argumentos.
+                if (smtd != nullptr && smtd->is_overloaded)
+                    smtd = select_method_overload(it_cls_s->second.methods,
+                                                  fa->field_name, e, fa,
+                                                  /*want_static=*/true);
                 if (smtd)
                     return check_static_method_call(
                         e, fa, *smtd, idb->name + "." + fa->field_name,
@@ -14330,6 +14588,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                  * quien llama. */
                 const ClassMethodInfo *smtd = find_static_method(
                     it_str_s->second.methods, fa->field_name);
+                // Igual que en la clase.
+                if (smtd != nullptr && smtd->is_overloaded)
+                    smtd = select_method_overload(it_str_s->second.methods,
+                                                  fa->field_name, e, fa,
+                                                  /*want_static=*/true);
                 if (smtd)
                     return check_static_method_call(
                         e, fa, *smtd, idb->name + "." + fa->field_name,
@@ -14802,6 +15065,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (!smtd)
                 return report_method_missing(e, fa, slay.fields, bt.struct_name,
                                              "el struct", funcptr_field_call);
+            /* Que el nombre este sobrecargado lo dice el propio candidato: una
+             * rama sobre un bit que ya se tiene en la mano, sin tabla. */
+            if (smtd->is_overloaded)
+                smtd = select_method_overload(slay.methods, fa->field_name, e,
+                                              fa);
             check_method_args(e, *smtd, fa->field_name);
             fa->result_type = smtd->return_type;
             return smtd->return_type;
@@ -14826,6 +15094,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         if (!mtd)
             return report_method_missing(e, fa, cls.fields, bt.struct_name,
                                          "la clase", funcptr_field_call);
+        // Igual que en el struct: la marca viaja en el candidato.
+        if (mtd->is_overloaded)
+            mtd = select_method_overload(cls.methods, fa->field_name, e, fa);
         // Enforcement de visibilidad en metodos (private = solo dentro
         // de la misma clase).  Buscamos el ClassMethodDecl original
         // en el AST para consultar el flag access.
@@ -17475,32 +17746,33 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             arg_types.reserve(e->args.size());
             for (auto &a : e->args)
                 arg_types.push_back(check_expr(a.get()));
-            const ClassMethodInfo *ctor = nullptr;
-            bool any_ctor = false;
-            for (const auto &m : slay.methods) {
+            /* Cual de los constructores, por la MISMA regla que cualquier otra
+             * llamada: exacta antes que compatible.  Antes era una sola pasada
+             * permisiva y se quedaba con la primera que "encajaba", asi que con
+             * `V(i64,i64)` declarado antes que `V(f64,f64)`, escribir
+             * `V(1.0, 2.0)` acababa en el de enteros. */
+            util::SmallVector<overload::Candidate, 4> cands;
+            for (size_t i = 0; i < slay.methods.size(); ++i) {
+                const ClassMethodInfo &m = slay.methods[i];
                 if (!m.is_constructor) continue;
-                any_ctor = true;
-                if (m.param_types.size() != arg_types.size()) continue;
-                bool ok = true;
-                for (size_t i = 0; i < arg_types.size(); ++i) {
-                    if (arg_types[i].kind == PrimitiveKind::COUNT) continue;
-                    /* Un parametro de SALIDA se compara contra lo APUNTADO:
-                     * quien llama cede el hueco, no su direccion.  Sin esto,
-                     * un constructor con `out` se podia declarar y no habia
-                     * forma de llamarlo -- ninguna sobrecarga encajaba --. */
-                    const Type &tp = m.param_types[i];
-                    const bool por_ref =
-                        i < 64 && (m.param_by_ref_mask & (1ull << i)) != 0;
-                    const Type &esperado =
-                        (por_ref && tp.pointee) ? *tp.pointee : tp;
-                    if (!types_assignable(esperado, arg_types[i])) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (ok) {
-                    ctor = &m;
-                    break;
+                overload::Candidate c;
+                c.params = &m.param_types;
+                c.slot = static_cast<uint32_t>(i);
+                c.by_ref_mask = m.param_by_ref_mask;
+                cands.push_back(c);
+            }
+            const bool any_ctor = !cands.empty();
+            const ClassMethodInfo *ctor = nullptr;
+            if (any_ctor) {
+                const uint32_t pick =
+                    overload::select(cands.data(), cands.size(), arg_types,
+                                     &overload_accepts, this);
+                if (pick != overload::kNoPick) {
+                    ctor = &slay.methods[pick];
+                    /* Y se apunta CUAL: el bajado necesita ESE constructor --
+                     * varios comparten aridad -- y llega a el con un acceso a
+                     * un vector. */
+                    e->resolved_method = pick;
                 }
             }
             if (any_ctor) {
@@ -17754,40 +18026,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             arg_types.reserve(e->args.size());
             for (auto &a : e->args)
                 arg_types.push_back(check_expr(a.get()));
-            /* DOS PASADAS, y el orden importa: primero la que encaja EXACTA,
-             * y solo si no hay ninguna, la primera que admita conversion.
-             * Con una sola pasada `doble(2.0)` se iria a `doble(i64)` -- un
-             * f64 es asignable a un i64 -- y nunca llegaria a la de f64, que
-             * es la que el usuario escribio.  Es el mismo orden que el
-             * lenguaje ya usa al especializar: exacta antes que compatible.
-             *
-             * El centinela es PROPIO y no "sigue siendo la del simbolo": la
-             * primera candidata ES esa, asi que elegirla pareceria no haber
-             * elegido y la segunda pasada la pisaria. */
-            bool picked = false;
-            for (int pass = 0; pass < 2 && !picked; ++pass) {
-                for (uint32_t idx : ov->second) {
-                    const FunctionSig &c = function_sigs_[idx];
-                    if (c.param_types.size() != arg_types.size()) continue;
-                    bool fits = true;
-                    for (size_t i = 0; i < arg_types.size() && fits; ++i) {
-                        const Type &tp = c.param_types[i];
-                        const Type &ta = arg_types[i];
-                        if (ta.kind == PrimitiveKind::COUNT) continue;
-                        fits = (pass == 0)
-                                   ? (tp == ta)
-                                   : (types_assignable(tp, ta) ||
-                                      class_is_assignable(tp, ta) ||
-                                      value_assignable_to_interface(tp, ta) ||
-                                      struct_ptr_upcast_ok(tp, ta));
-                    }
-                    if (fits) {
-                        chosen_sig = idx;
-                        picked = true;
-                        break;
-                    }
-                }
+            /* La regla de preferencia -- exacta antes que compatible -- vive en
+             * `overload::select`, y es LA MISMA que usan los metodos.  Tenerla
+             * escrita dos veces es tener dos criterios esperando a divergir, y
+             * ya paso con el tipo de retorno y sus cinco tablas por nombre. */
+            util::SmallVector<overload::Candidate, 4> cands;
+            for (uint32_t idx : ov->second) {
+                overload::Candidate c;
+                c.params = &function_sigs_[idx].param_types;
+                c.slot = idx;
+                cands.push_back(c);
             }
+            const uint32_t pick =
+                overload::select(cands.data(), cands.size(), arg_types,
+                                 &overload_accepts, this);
+            if (pick != overload::kNoPick) chosen_sig = pick;
             /* Y se apunta CUAL, por indice: el bajado necesita ESA firma -- el
              * nombre publico lo comparten varias -- y llega a ella con un
              * acceso a un vector, sin hashear ni copiar cadenas. */

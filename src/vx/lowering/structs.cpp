@@ -349,7 +349,8 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const StructLayout &lay = it->second;
-    const ClassMethodInfo *mtd = find_method(lay, fa->field_name);
+    const ClassMethodInfo *mtd = picked_method(lay, fa->resolved_method);
+    if (!mtd) mtd = find_method(lay, fa->field_name);
     if (!mtd) {
         error_at(e->loc, "lowering: metodo '" + fa->field_name +
                              "' no encontrado en struct '" + bt.struct_name +
@@ -480,7 +481,7 @@ ir::IrValueId Lowering::lower_struct_method_call(ast::CallExpr *e) {
     // linker no lo resolveria.  Metodos del propio modulo: link_name vacio ->
     // el label clasico.
     ins.func_name = mtd->link_name.empty()
-                        ? (bt.struct_name + "__" + fa->field_name)
+                        ? method_symbol_of(*mtd, bt.struct_name.str())
                         : mtd->link_name;
     ins.operands = std::move(operands);
     ins.source_line = e->loc.line;
@@ -670,7 +671,23 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
             m->is_destructor    ? std::string("__dtor")
             : m->is_constructor ? ("ctor_" + std::to_string(m->params.size()))
                                 : m->name;
+        /* El simbolo NO se arma aqui: lo calculo el comprobador al cerrar el
+         * layout y esta internado en su ficha, que se alcanza por el hueco que
+         * el mismo dejo apuntado.  Vale igual para el constructor, cuyo nombre
+         * lleva la aridad y, si la comparte con otro, su discriminante.  El
+         * DESTRUCTOR no: no pasa por el layout con ese nombre. */
         fn.name = sd->name + "__" + suffix;
+        if (!m->is_destructor) {
+            auto it_lay = tc_.struct_layouts().find(sd->name);
+            if (it_lay != tc_.struct_layouts().end()) {
+                const ClassMethodInfo *mi =
+                    picked_method(it_lay->second, m->layout_slot);
+                // Vacio solo en un layout que no paso por su cierre -- el que
+                // llega por el import --; ahi vale el nombre de siempre.
+                if (mi != nullptr && !mi->ir_symbol.empty())
+                    fn.name = mi->ir_symbol.str();
+            }
+        }
 
         // F1b: un ctor `comptime T(expr)` se ejecuta en la ComptimeVM.  Se baja
         // con el prefijo `__macro_` (lo identifica como codigo comptime) y se

@@ -2613,12 +2613,20 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
         error_at(e->loc, "super.<metodo>(...) en clase sin super");
         return ir::IR_NO_VALUE;
     }
-    // Buscar el metodo en la cadena super (BFS).
-    std::string cur = it->second.super_name;
+    /* El comprobador ya subio por la jerarquia y dejo apuntado DONDE encontro
+     * el metodo.  Repetir la busqueda aqui no solo seria trabajo doble: con
+     * sobrecarga puede parar en otro hueco, y entonces el programa llamaria a
+     * un cuerpo creyendo que llama a otro. */
+    std::string cur = e->resolved_owner.empty() ? it->second.super_name
+                                                : e->resolved_owner;
     const ClassMethodInfo *found = nullptr;
     for (int depth = 0; depth < 32; ++depth) {
         auto it_s = tc_.class_layouts().find(cur);
         if (it_s == tc_.class_layouts().end()) break;
+        found = picked_method(it_s->second, e->resolved_method);
+        if (found != nullptr) break;
+        // Sin nada apuntado -- p.ej. codigo sintetizado --, la busqueda de
+        // siempre.
         for (const auto &m : it_s->second.methods) {
             if (!m.is_constructor && m.name == e->method_name) {
                 found = &m;
@@ -2654,7 +2662,7 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
         ca.op = ir::IrOp::CALL;
         ca.type = ret_ir;
         ca.dst = dst;
-        ca.func_name = owner + "__" + found->name;
+        ca.func_name = method_symbol_of(*found, owner);
         ca.operands.push_back(v_this);
         for (auto av : arg_vals)
             ca.operands.push_back(av);
