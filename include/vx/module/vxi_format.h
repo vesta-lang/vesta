@@ -62,7 +62,11 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// el mapa: el grafo ya esta en su almacen y es el mismo, porque la clave es el
 /// contenido.  Y va en la cabecera, que ya se lee entera, para no anadir ni una
 /// apertura por modulo -- con seis mil modulos eso serian seis mil.
-inline constexpr uint16_t VXI_FORMAT_VERSION = 19; // v19: tipo base del enum
+/// v20: banderas del modulo en el header (@ref VxiHeader::module_flags).
+inline constexpr uint16_t VXI_FORMAT_VERSION = 20;
+
+/// \brief Bit 0 de @ref VxiHeader::module_flags: el modulo declara clases.
+inline constexpr uint16_t VXI_MODULE_DECLARES_CLASSES = 1u << 0;
 /* v19: el payload de un ENUM lleva su tipo base.  El lector ya lo leia y el
  * escritor no lo ponia, asi que ningun `.vxi` con un enum parseaba -- y eso
  * no se ve, porque un interfaz que no parsea se recompila desde el fuente:
@@ -140,7 +144,20 @@ enum class VxiSymbolKind : uint8_t {
 struct VxiHeader {
     uint32_t magic = VXI_MAGIC;
     uint16_t format_version = VXI_FORMAT_VERSION;
-    uint16_t _reserved = 0;
+    /**
+     * v20: banderas del MODULO -- lo que se sabe de el entero y no de un
+     * simbolo suyo.  Bit 0: declara alguna clase.
+     *
+     * POR QUE VIAJA.  Quien sirve un modulo del cache no lo parsea, asi que no
+     * tiene AST al que preguntarle nada; y el tree-shake necesita saber si el
+     * dep declara clases para NO eliminarlo.  Sin el bit aqui, un dep cacheado
+     * contestaba "no declara ninguna" -- que es lo que contesta un AST que no
+     * existe -- y podia desaparecer del enlace en silencio llevandose sus
+     * clases.
+     *
+     * Ocupa el hueco reservado del header: cero bytes de crecimiento.
+     */
+    uint16_t module_flags = 0;
     uint64_t abi_hash = 0;
     uint64_t source_hash = 0;
     ///  M5.b L.27: hash de la version del compilador.  Si el .vxi
@@ -357,6 +374,10 @@ struct VxiSymbol {
  */
 struct VxiModule {
     uint16_t format_version = 0;
+    /// v20: si el modulo declara alguna clase.  Lo mira el tree-shake, y lo
+    /// mira sobre todo cuando el modulo vino del cache y no hay AST al que
+    /// preguntar.  Ver @ref VxiHeader::module_flags.
+    bool declares_classes = false;
     uint64_t abi_hash = 0;
     uint64_t source_hash = 0;
     uint64_t compiler_version_hash = 0; ///< M5.b L.27

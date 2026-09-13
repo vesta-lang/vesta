@@ -7,7 +7,7 @@
  *   Header (40 bytes en v2; 32 bytes en v1):
  *     +0   u32  magic
  *     +4   u16  format_version
- *     +6   u16  _reserved
+ *     +6   u16  module_flags  (v20+)  bit 0 = declara clases
  *     +8   u64  abi_hash
  *     +16  u64  source_hash
  *     +24  u64  compiler_version_hash  (v2+)  cierra L.27
@@ -852,8 +852,14 @@ std::vector<uint8_t> vxi_emit(const VxiModule &mod) {
         patch_u32(pos + 4, static_cast<uint32_t>((v >> 32) & 0xFFFFFFFFull));
     };
     patch_u32(0, VXI_MAGIC);
+    /* La version y, en el hueco de al lado, las banderas del MODULO.  Van en
+     * el header y no como un simbolo mas porque no son de ningun simbolo: son
+     * de la unidad entera, y quien las lee -- el tree-shake -- las necesita
+     * antes de mirar un solo simbolo. */
+    const uint16_t module_flags =
+        mod.declares_classes ? VXI_MODULE_DECLARES_CLASSES : uint16_t(0);
     patch_u32(4, static_cast<uint16_t>(VXI_FORMAT_VERSION) |
-                     (static_cast<uint32_t>(0) << 16));
+                     (static_cast<uint32_t>(module_flags) << 16));
     /* 4. abi_hash: lo que el modulo OFRECE.  Cubre todo lo que va despues del
      * header MENOS la tabla de dependencias.
      *
@@ -1412,7 +1418,10 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     size_t off = 0;
     uint32_t magic = 0;
     uint16_t version = 0;
-    uint16_t reserved = 0;
+    /// v20: las banderas del modulo; hasta v19 este hueco iba a cero.  Como la
+    /// version se rechaza si no es la actual, aqui no puede llegar un cero de
+    /// los de antes haciendose pasar por "no declara clases".
+    uint16_t module_flags = 0;
     uint64_t abi_hash = 0;
     uint64_t source_hash = 0;
     uint64_t cvh = 0;
@@ -1425,7 +1434,7 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     uint8_t blob_pool_alignment_hdr = 8;
     read_u32(data, size, off, magic);
     read_u16(data, size, off, version);
-    read_u16(data, size, off, reserved);
+    read_u16(data, size, off, module_flags);
     read_u64(data, size, off, abi_hash);
     read_u64(data, size, off, source_hash);
     read_u64(data, size, off, cvh); // M5.b L.27
@@ -1503,6 +1512,8 @@ VxiParseResult vxi_parse(const uint8_t *data, size_t size) {
     }
 
     r.module_.format_version = version;
+    r.module_.declares_classes =
+        (module_flags & VXI_MODULE_DECLARES_CLASSES) != 0;
     r.module_.abi_hash = abi_hash;
     r.module_.source_hash = source_hash;
     r.module_.compiler_version_hash = cvh;
