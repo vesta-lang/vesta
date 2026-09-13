@@ -4448,6 +4448,23 @@ CompileResult compile_vx_project(
         return res;
     }
 
+    /* LAS INTERFACES, QUE YA NO LAS LEE NADIE.
+     *
+     * El `.vxi` de un modulo se emite y se escribe DENTRO de su compilacion, y
+     * lo unico que le piden despues sus sucesores es el `abi_hash` -- ocho
+     * bytes -- para su tabla de dependencias, y eso pasa dentro de este mismo
+     * bucle.  De aqui en adelante no lo mira nadie: ni el merge, ni el
+     * optimizador, ni el emisor.
+     *
+     * Y pesa: es la tabla de simbolos exportados de cada modulo, con sus
+     * namespaces.  Medido en el corte del pico, 17,9 MiB solo en lo que el
+     * export deja puesto.
+     *
+     * Se asigna uno vacio en vez de vaciarlo campo a campo: no hay que saber
+     * que lleva dentro para soltarlo, y el dia que lleve otra cosa esto sigue
+     * valiendo. */
+    for (ProjectModuleWork &pm : work) pm.vxi = VxiModule{};
+
     /* Y aqui acaba de compilar modulos, que es una fase y no se llamaba de
      * ninguna forma: en la curva se veia como una caida de 231 MiB sin nombre
      * -- las estructuras de cada modulo muriendo segun se funden en el root --
@@ -4524,6 +4541,19 @@ CompileResult compile_vx_project(
             }
         }
     }
+
+    /* Y EL COMPROBADOR DE TIPOS DEL ROOT, que era el ultimo que quedaba vivo.
+     *
+     * Los demas se sueltan al acabar su modulo (`release_compiled_module`); el
+     * del root se conservaba junto con su AST, pero solo el AST hace falta
+     * despues -- los diagramas y el escaneo de `@AllocatorOverride` --.  Del
+     * comprobador, la ultima pregunta es `referenced_names()` del tree-shake,
+     * aqui mismo unas lineas arriba.
+     *
+     * Y pesa porque el root IMPORTA TODO: sus `imported_namespaces_` guardan
+     * los simbolos publicos de los veinticuatro modulos.  Medido en el corte
+     * del pico, 21,6 MiB en `register_namespace_symbol`. */
+    work.back().tc.reset();
 
     // #cross-module-generics: dedup de funciones por nombre al mergear.  Una
     // misma instanciacion `Caja_i64__leer` puede producirse en VARIOS modulos

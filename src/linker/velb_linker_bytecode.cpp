@@ -1108,6 +1108,19 @@ std::vector<uint8_t> Linker::build_executable() {
         build_section_table();
     }
 
+    /* AQUI NO VA UNA FRONTERA, Y ESTA MEDIDO.
+     *
+     * Es el sitio que la curva senala: de aqui en adelante se monta el
+     * ejecutable entero en un buffer -- 78 MiB de golpe en un solo corte, el
+     * salto mas grande del enlazado -- y delante hay 196 MiB en trozos sin un
+     * solo bloque vivo.  Parece la frontera perfecta.
+     *
+     * No lo es: 621,7 contra 617,9 MiB de pico, o sea nada.  Esos trozos estan
+     * en las clases PEQUENAS, que es justo por donde `host_chunk_reclaim` no
+     * empieza a barrer (ver `kReclaimFromClass`), asi que la frontera corre y
+     * no encuentra que devolver.  Lo que falta aqui no es pedirlo: es poder
+     * alcanzarlo. */
+
     // escribir tabla de espacio de direcciones
     auto write_space_address = [&](HeaderVELB &v) {
         for (int i = 0; i < final_header.n_spaces; ++i) {
