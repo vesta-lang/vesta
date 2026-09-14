@@ -9607,6 +9607,8 @@ Type TypeChecker::check_expr(ast::Expr *e) {
                 overload::Candidate c;
                 c.params = &ms[i].param_types;
                 c.slot = static_cast<uint32_t>(i);
+                c.by_ref_mask = ms[i].param_by_ref_mask;
+                if (ms[i].is_variadic) c.variadic_elem = &ms[i].variadic_elem;
                 cands.push_back(c);
             }
             if (!cands.empty()) {
@@ -10097,15 +10099,16 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             const ClassMethodInfo &m = cls.methods[i];
             if (!m.is_constructor) continue;
             if (has_own && m.defining_class != cls.name) continue;
-            /* Con un variadico la aridad no es exacta: los de delante son
-             * obligatorios y de ahi en adelante vale cualquier cantidad.  La
-             * regla comun pide que cuadren, asi que ese se resuelve aparte y
-             * gana solo si no encaja ninguno de los otros. */
-            if (m.is_variadic) continue;
             overload::Candidate c;
             c.params = &m.param_types;
             c.slot = static_cast<uint32_t>(i);
             c.by_ref_mask = m.param_by_ref_mask;
+            /* Con un variadico la aridad no es exacta: los de delante son
+             * obligatorios y de ahi en adelante vale cualquier cantidad.  Antes
+             * se quedaba FUERA de la seleccion y se resolvia aparte, con una
+             * segunda regla escrita aqui; ahora compite como los demas y la
+             * regla vive donde vive la de todos. */
+            if (m.is_variadic) c.variadic_elem = &m.variadic_elem;
             cands.push_back(c);
         }
         const uint32_t pick =
@@ -11779,6 +11782,8 @@ uint32_t TypeChecker::select_ns_overload(const ImportedNamespace &ns,
         c.params = &use->param_types;
         c.slot = cur; // el indice en `symbols`, que es lo que se devuelve
         c.by_ref_mask = use->param_by_ref_mask;
+        if (use->is_raw_variadic) c.raw_variadic = true;
+        else if (use->is_variadic) c.variadic_elem = &use->variadic_elem;
         cands.push_back(c);
     }
 
@@ -11811,6 +11816,9 @@ const ClassMethodInfo *TypeChecker::select_method_overload(
         overload::Candidate c;
         c.params = &methods[i].param_types;
         c.slot = static_cast<uint32_t>(i);
+        c.by_ref_mask = methods[i].param_by_ref_mask;
+        if (methods[i].is_variadic)
+            c.variadic_elem = &methods[i].variadic_elem;
         cands.push_back(c);
     }
     if (cands.empty()) return nullptr;
@@ -17872,6 +17880,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 c.params = &m.param_types;
                 c.slot = static_cast<uint32_t>(i);
                 c.by_ref_mask = m.param_by_ref_mask;
+                if (m.is_variadic) c.variadic_elem = &m.variadic_elem;
                 cands.push_back(c);
             }
             const bool any_ctor = !cands.empty();
@@ -18143,9 +18152,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              * ya paso con el tipo de retorno y sus cinco tablas por nombre. */
             util::SmallVector<overload::Candidate, 4> cands;
             for (uint32_t idx : ov->second) {
+                const FunctionSig &cs = function_sigs_[idx];
                 overload::Candidate c;
-                c.params = &function_sigs_[idx].param_types;
+                c.params = &cs.param_types;
                 c.slot = idx;
+                c.by_ref_mask = cs.param_by_ref_mask;
+                /* Y si su ultima posicion es variadica, con que se comparan los
+                 * argumentos de mas.  Sin esto la seleccion le exigia aridad
+                 * exacta y una variadica dejaba de aceptar cualquier cantidad
+                 * en cuanto se le declaraba un hermano con su nombre.
+                 *
+                 * El `...` CRUDO de una `@Naked` es otra cosa: no anyade
+                 * parametro y no tiene tipo de elemento, asi que va por su
+                 * marca y no por la del tipo. */
+                if (cs.is_raw_variadic) c.raw_variadic = true;
+                else if (cs.is_variadic) c.variadic_elem = &cs.variadic_elem;
                 cands.push_back(c);
             }
             const uint32_t pick =

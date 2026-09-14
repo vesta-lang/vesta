@@ -80,6 +80,33 @@ struct Candidate {
      * todos, que es donde debia estar.
      */
     uint64_t by_ref_mask = 0;
+    /**
+     * @brief El tipo del ELEMENTO si la ultima posicion es variadica; nulo si
+     *        toma un numero exacto de argumentos.
+     *
+     * Un puntero y no un `bool` mas un tipo: la presencia ES el hecho, asi que
+     * no pueden contradecirse.
+     *
+     * Sin esto, una variadica no competia -- la seleccion pedia que la lista
+     * midiera EXACTAMENTE lo que la llamada, y la suya mide uno --, asi que
+     * `f(i64... xs)` dejaba de aceptar cualquier cantidad en cuanto se le
+     * declaraba un hermano con su nombre: la MISMA llamada que compilaba antes
+     * de existir el hermano pasaba a ser un error de aridad.
+     */
+    const Type *variadic_elem = nullptr;
+    /**
+     * @brief Aridad abierta SIN tipo de elemento: el `...` crudo de una
+     *        `@Naked`, cuyo cuerpo lee los registros del ABI a mano.
+     *
+     * Es OTRA cosa que el variadico con tipo, y confundirlos no da un error
+     * sino un acceso invalido: el crudo no anyade parametro -- asi que tomar
+     * "todos menos el ultimo" como fijos se come uno de verdad -- y no tiene
+     * tipo de elemento contra el que comparar, asi que preguntar por el es
+     * preguntar por un tipo sin rellenar.  Aqui acepta de su cuenta de
+     * parametros en adelante y lo que sobra no se comprueba, que es lo que el
+     * lenguaje promete de un `...` crudo.
+     */
+    bool raw_variadic = false;
 };
 
 /**

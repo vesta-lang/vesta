@@ -31,6 +31,22 @@ namespace ejemplos.sobrecarga;
 i64 suma(i64 a) { return a; }
 i64 suma(i64 a, i64 b) { return a + b; }
 
+// 13. Y una VARIADICA con el mismo nombre, que es la que recoge lo que no
+// encaja en ninguna de las dos.  Un variadico acepta cualquier cantidad, pero
+// la seleccion pedia que la lista de parametros midiera EXACTAMENTE lo que la
+// llamada -- y la suya mide uno --, asi que se quedaba fuera: declarar este
+// hermano hacia que `suma(1,2,3)` dejara de compilar aunque la variadica sola
+// lo aceptara.  Ahora compite, y compite DESPUES: una que dice exactamente lo
+// que toma gana a la que lo recoge todo, asi que `suma(7)` sigue yendo a la de
+// un parametro.
+i64 suma_de_array(i64* xs, i64 n) {
+	i64 t = 0_i64;
+	for (i64 i = 0_i64; i < n; i = i + 1) { t = t + xs[i]; }
+	return t;
+}
+
+i64 suma(i64... xs) { return suma_de_array(xs, vacount()); }
+
 // --- 2 y 3. por tipo, y gana la exacta -------------------------------------
 i64 cual(i64 x) { return 1; }
 i64 cual(f64 x) { return 2; }
@@ -139,8 +155,10 @@ i32 main() {
 	f64 d = 5.0_f64;
 
 	// 1. aridad
-	i64 a = suma(7);    // 7
-	i64 b = suma(3, 4); // 7
+	i64 a = suma(7);    // 7   (gana la de UN parametro, no la variadica)
+	i64 b = suma(3, 4); // 7   (gana la de DOS)
+	// 13. y lo que no encaja en ninguna de las dos lo recoge la variadica
+	i64 va = suma(1_i64, 2_i64, 3_i64); // 6
 
 	// 2 y 3. tipo, y la exacta gana a la compatible
 	i64 c = cual(n); // 1
@@ -187,13 +205,13 @@ i32 main() {
 	i64    u = t.corre(2_i64);   // 2 + 1 = 3
 	i64    v = t.corre(2.0_f64); // 5000
 
-	i64 total = a + b + c + e + f + g;                 // 7+7+1+2+10+10 = 37
+	i64 total = a + b + va + c + e + f + g;            // 37 + 6 = 43
 	i64 met   = h + i + j + k + l + z + p + q + r + s; // 2462 + 102 = 2564
 	i64 ifz   = u + v + w;                             // 3 + 5000 + 8 = 5011
-	println("suma=${a},${b} cual=${c},${e} retorno=${f},${g} total=${total}");
+	println("suma=${a},${b},${va} cual=${c},${e} retorno=${f},${g} total=${total}");
 	println("struct=${h},${i},${j} clase=${k},${l},${z} override=${p}");
 	println("static=${q},${r} super=${s} met=${met}");
 	println("interfaz=${u},${v} ctor=${w} ifz=${ifz}");
-	// 37 + 2564 + 5011 = 7612; 7612 - 7570 = 42
-	return (i32)(total + met + ifz - 7570); // 42
+	// 43 + 2564 + 5011 = 7618; 7618 - 7576 = 42
+	return (i32)(total + met + ifz - 7576); // 42
 }
