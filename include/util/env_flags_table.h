@@ -269,6 +269,12 @@ VESTA_ENV_FLAG(VregsDebug, "VESTA_JIT_VREGS_DEBUG", Report, RegAlloc, Bool, Any)
  * enseno al JIT deja de compilarse y lo unico que pasa es que va mas despacio.
  * Con esto puesto, para y dice cual. */
 VESTA_ENV_FLAG(JitStrict, "VESTA_JIT_STRICT", Report, RegAlloc, Bool, Any)
+/* Que el JIT NO compile las funciones cuyo nombre contenga este texto.  Es la
+ * herramienta para aislar una divergencia entre motores: el mismo programa con
+ * una funcion cambiada de manos.  Sin ella solo se puede comparar "todo
+ * interpretado" contra "todo compilado", que es justo donde estos fallos NO
+ * salen -- salen en la mezcla. */
+VESTA_ENV_FLAG(JitSkip, "VESTA_JIT_SKIP", Emitted, RegAlloc, Text, Any)
 VESTA_ENV_FLAG(SsaCoalDbg, "VESTA_SSA_COAL_DBG", Report, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(RbankAsmDebug, "VESTA_RBANK_ASM_DEBUG", Report, RegAlloc, Bool,
                Any)

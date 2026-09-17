@@ -102,6 +102,36 @@ std::string &vreg_last_reason() { return g_last_reason.get(); }
 
 /** @brief Diagnostico opt-in (VESTA_JIT_VREGS_DEBUG=1) de por que una
  *  funcion no es seleccionable por el path vreg. */
+/**
+ * @brief Se le ha pedido al JIT que NO compile esta funcion?
+ *
+ * `VESTA_JIT_SKIP=<texto>`: la funcion cuyo nombre lo contenga se queda en el
+ * interprete.  Existe para aislar una divergencia entre motores -- el mismo
+ * programa con UNA funcion cambiada de manos --, que es el unico modo de
+ * acorralarla: comparar "todo interpretado" contra "todo compilado" no la
+ * ensenya, porque justamente sale en la mezcla.
+ *
+ * @param fn Nombre de la funcion.
+ */
+static bool vreg_skip_requested(const std::string &fn) {
+    /* Sin cache propia: `flag_text` ya devuelve una referencia estable -- lo
+     * leyo una vez y el texto vive lo que el proceso --, asi que guardarlo aqui
+     * seria una segunda cache de lo mismo. */
+    const std::string &pat = util::flag_text(util::FlagId::JitSkip);
+    if (pat.empty()) return false;
+    /* VARIOS, separados por coma: con uno solo no se puede BISECAR, que es para
+     * lo que existe -- hay que poder dejar fija la que reproduce el fallo y ir
+     * moviendo las demas. */
+    for (size_t i = 0; i < pat.size();) {
+        const size_t sep = pat.find(',', i);
+        const size_t end = (sep == std::string::npos) ? pat.size() : sep;
+        if (end > i && fn.find(pat.substr(i, end - i)) != std::string::npos)
+            return true;
+        i = end + 1;
+    }
+    return false;
+}
+
 static void vreg_dbg(const char *fn, const char *op) {
     vreg_last_reason() = (op != nullptr) ? op : "";
     static const bool on = util::flag_on(util::FlagId::VregsDebug);
@@ -999,6 +1029,13 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                  const CallResolver &resolve_symbol, bool pic, bool target_sysv,
                  bool mode32, FloatIsa fisa, bool emit_line_map,
                  const VregCallbackOpts &cb) {
+    /* Se ha pedido dejar ESTA en el interprete?  Es la palanca para acorralar
+     * una divergencia entre motores: mover UNA funcion de manos y ver si el
+     * resultado cambia. */
+    if (vreg_skip_requested(fn_in.name)) {
+        vreg_dbg(fn_in.name.c_str(), "VESTA_JIT_SKIP");
+        return false;
+    }
     /* Callback-ABI (jubilacion de slots): un callback nativo se compila en
      * VM_ABI pero con un prologo que carga proc y marshalea los args nativos a
      * proc->registers antes de que el prologo normal (mas abajo) los relea.  El
