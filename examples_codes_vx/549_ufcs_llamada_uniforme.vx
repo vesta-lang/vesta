@@ -1,0 +1,91 @@
+namespace ejemplos.ufcs;
+
+// LLAMADA UNIFORME (UFCS): `x.f(a)` y `f(x, a)` son la MISMA llamada.
+//
+// Una funcion libre cuyo primer parametro admita el receptor se puede escribir
+// tras el punto.  No es azucar del bajado: el comprobador REESCRIBE el nodo a
+// la otra grafia y lo comprueba el camino de siempre, asi que al IR, al JIT y
+// al nativo no les llega nada nuevo -- y las dos formas no pueden divergir en
+// la eleccion de sobrecarga, en los prestamos ni en la comprobacion de
+// argumentos, porque es literalmente el mismo codigo.
+//
+// Lo que se prueba aqui:
+//
+//   1. Receptor STRUCT: el tipo no declara el metodo, lo pone la libre.
+//   2. Con ARGUMENTOS ademas del receptor.
+//   3. Receptor PRIMITIVO, que es el caso que antes ni llegaba a mirarse:
+//      "invocacion de metodo sobre tipo no-clase" y se acababa ahi.
+//   4. SOBRECARGA entre las libres candidatas, resuelta con la MISMA regla que
+//      una llamada libre -- exacta antes que compatible, cerrada antes que
+//      variadica --, no con una propia.
+//   5. Mismo nombre para receptores de tipo DISTINTO: no es un choque, es
+//      sobrecarga, y es lo que permite extender un tipo sin tocarlo.
+//   6. ENCADENADO: el receptor puede ser lo que devolvio la anterior.
+//   7. Receptor PUNTERO y receptor CLASE.
+//   8. Y que todo esto vale con el fichero dentro de un `namespace`, que es el
+//      caso normal: el aplanado renombra la DECLARACION (`ejemplos__ufcs__f`)
+//      pero lo que va tras un punto se escribe corto, asi que buscar `f` a
+//      secas no encontraria nada si el indice no supiera el prefijo.
+//
+// Resultado esperado: 42.
+
+struct Punto {
+	i64 x;
+	i64 y;
+}
+
+// 1 y 2. lo que serian metodos de Punto, escritos fuera de el
+i64 perimetro(Punto p) { return (p.x + p.y) * 2; }
+i64 escala(Punto p, i64 k) { return (p.x + p.y) * k; }
+
+// 3 y 4. receptor primitivo, con sobrecarga entre las candidatas
+u64 doble(u64 v) { return v * 2_u64; }
+u64 mas(u64 a, u64 b) { return a + b; }
+u64 mas(u64 a, u64 b, u64 c) { return a + b + c; }
+
+// 5. el MISMO nombre para otro receptor: otra cabeza de tipo, otra candidata
+i64 mas(i64 a, i64 b) { return a + b + 100; }
+
+// 7. puntero y clase
+i64 leer(i64* p) { return *p; }
+
+class Caja {
+	public i64 v;
+	public Caja(i64 v) { this.v = v; }
+}
+
+i64 contenido(Caja c) { return c.v; }
+
+i32 main() {
+	Punto q;
+	q.x = 4;
+	q.y = 5;
+
+	// 1 y 2. receptor struct, con y sin argumentos
+	i64 a = q.perimetro(); // 18
+	i64 b = q.escala(3);   // 27
+
+	// 3 y 4. receptor primitivo, y la sobrecarga que toca por aridad
+	u64 c = ((u64)6).doble();           // 12
+	u64 d = ((u64)6).mas(3_u64);        // 9
+	u64 e = ((u64)6).mas(3_u64, 1_u64); // 10
+
+	// 6. encadenado: el receptor de la segunda es lo que devolvio la primera
+	u64 f = ((u64)6).doble().mas(1_u64); // 13
+
+	// 5. mismo nombre, receptor i64: va a la OTRA, no a la de u64
+	i64 g = 5_i64;
+	i64 n = g.mas(1_i64); // 5 + 1 + 100 = 106
+
+	// 7. receptor puntero y receptor clase
+	i64* pg = &g;
+	i64  h  = pg.leer(); // 5
+	Caja k  = new Caja(7);
+	i64  m  = k.contenido(); // 7
+
+	i64 prim = (i64)(c + d + e + f);     // 12 + 9 + 10 + 13 = 44
+	i64 tot  = a + b + prim + n + h + m; // 18+27+44+106+5+7 = 207
+	println("struct=${a},${b} prim=${c},${d},${e} cadena=${f}");
+	println("otra_cabeza=${n} puntero=${h} clase=${m} total=${tot}");
+	return (i32)(tot - 165); // 42
+}

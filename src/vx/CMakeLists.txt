@@ -219,6 +219,11 @@ add_library(vx_lib STATIC
     # libres, los metodos y los constructores -- tenerla escrita tres veces es
     # tener tres criterios distintos esperando a divergir.
     overload.cpp
+    # La llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada.  Aparte
+    # por lo mismo que la sobrecarga -- es una REGLA del lenguaje con su propia
+    # estructura, no un caso mas de la resolucion de metodos --, y repartirla
+    # por el comprobador dejaria el criterio en varios sitios.
+    ufcs.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

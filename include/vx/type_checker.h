@@ -56,6 +56,7 @@
 #include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
 #include "vx/overload.h" // varias declaraciones con un nombre, y cual se elige
+#include "vx/ufcs.h"     // `x.f(a)` y `f(x, a)` son la misma llamada
 
 namespace vx {
 
@@ -2152,10 +2153,47 @@ class TypeChecker {
      * @param fa     El acceso `obj.metodo`.
      * @param campos Los campos del tipo.
      * @param tipo   Nombre del tipo, para el mensaje.
-     * @param clase_o_struct Como llamarlo en el mensaje.
+     * @param clase_o_struct La palabra clave con la que se declaro: `struct` o
+     *                       `class`.  Entra como dato, sin traducir.
      * @param llamada_indirecta Que hacer si el nombre es un campo funcion.
      * @return El tipo del resultado, o ninguno.
      */
+    /**
+     * @brief `x.f(args)` cuando el tipo de `x` NO tiene `f`: la funcion LIBRE.
+     *
+     * Las dos grafias son la misma llamada -- `x.f(a)` es `f(x, a)` --, asi que
+     * antes de decir que el tipo no tiene ese metodo se mira si hay una funcion
+     * libre visible AQUI cuyo primer parametro admita el receptor.
+     *
+     * Si la hay, el nodo se convierte en la otra grafia y lo comprueba el camino
+     * de siempre: reescribir en vez de resolver aqui es lo que impide que las
+     * dos formas diverjan, y lo que hace que al bajado no le llegue nada nuevo.
+     *
+     * @param e    La llamada.
+     * @param fa   El acceso `x.f` que le sirve de destino.
+     * @param recv El tipo del receptor.
+     * @return true si la reescribio y la comprobo; false si no habia ninguna.
+     */
+    bool try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
+                       const Type &recv);
+
+    /**
+     * @brief El tipo TIENE el metodo, y ademas hay una libre que lo tomaria.
+     *
+     * Dos candidatos para el mismo receptor no se deciden en silencio: se
+     * cita a los dos y lo arregla quien escribio el segundo.  Solo mira el
+     * INDICE -- una consulta, sin comprobar argumentos --, asi que un metodo
+     * cuyo nombre no comparte ninguna libre no paga nada.
+     *
+     * @param recv El tipo del receptor.
+     * @param name El nombre escrito tras el punto.
+     * @param owner Como nombrar al duenyo del metodo en el diagnostico.
+     * @param loc  Donde se escribio la llamada.
+     * @return true si se reporto el choque.
+     */
+    bool report_ufcs_clash(const Type &recv, const std::string &name,
+                           const std::string &owner, const SourceLoc &loc);
+
     Type report_method_missing(
         ast::CallExpr *e, ast::FieldAccessExpr *fa,
         const std::vector<StructFieldInfo> &campos, const std::string &tipo,
@@ -3074,6 +3112,11 @@ class TypeChecker {
     std::unordered_map<std::string, std::pair<std::string, std::string>>
         declared_ns_symbols_;
 
+    /// Lo declarado en este modulo, indexado para la llamada uniforme: de que
+    /// receptor puede ser `f` un `x.f(...)`.  La regla y la estructura viven en
+    /// @c vx/ufcs.h; aqui solo se alimenta al declarar y se pregunta al llamar.
+    ufcs::Index ufcs_;
+
   public:
     const std::unordered_map<std::string, uint32_t> &
     ns_idx_by_local_name() const {
@@ -3086,6 +3129,10 @@ class TypeChecker {
                                      const std::string &ns_path,
                                      const std::string &public_name) {
         declared_ns_symbols_[mangled_label] = {ns_path, public_name};
+        /* Y al indice de UFCS, que es quien sabe con que nombre se escribio
+         * cada cosa en este fichero: un `x.f()` lleva `f` a secas y la funcion
+         * se declaro como `<ns>__f`. */
+        ufcs_.note_flattened(mangled_label, public_name);
     }
     const std::unordered_map<std::string, std::pair<std::string, std::string>> &
     declared_ns_symbols() const {

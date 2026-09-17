@@ -6074,6 +6074,12 @@ void TypeChecker::collect_globals() {
             s.kind = SymbolKind::Function;
             s.sig_index = (uint32_t)function_sigs_.size();
             sig_by_name_[fn->name] = s.sig_index;
+            /* Y al indice de UFCS, por la cabeza del tipo de su primer
+             * parametro.  La correlacion se hace AQUI, al declarar, y no al
+             * llamar: es una vez por funcion del programa en vez de una por
+             * sitio de llamada. */
+            if (!sig.param_types.empty())
+                ufcs_.declare(sig.param_types[0], fn->name, s.sig_index);
             function_sigs_.push_back(std::move(sig));
             if (!declare(fn->name, s)) {
                 // Bug fix 2026-05-23: forward declaration -- si el simbolo
@@ -11665,6 +11671,73 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
            struct_ptr_upcast_ok(tp, ta);
 }
 
+bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
+                                    const std::string &owner,
+                                    const SourceLoc &loc) {
+    /* Solo el INDICE: la pregunta es si ALGUIEN declaro una libre con ese
+     * nombre para esta cabeza de tipo, no cual de ellas ganaria.  Es una sonda
+     * en una tabla, asi que el metodo cuyo nombre no comparte ninguna libre --
+     * que son casi todos -- no paga por esta regla. */
+    if (ufcs_.find(recv, name) == nullptr) return false;
+    diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
+    return true;
+}
+
+bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
+                                const Type &recv) {
+    if (e == nullptr || fa == nullptr || !fa->base) return false;
+    /* QUE candidatas hay lo dice el indice de UFCS, que las correlaciono al
+     * DECLARARLAS por la cabeza del tipo de su primer parametro.  Aqui no se
+     * recorre nada: dos punteros ya internados y una sonda. */
+    const std::string *chosen = nullptr; // con QUE nombre se declaro
+    const ufcs::Candidates *cand_slots =
+        ufcs_.find(recv, fa->field_name, &chosen);
+    if (cand_slots == nullptr || cand_slots->empty()) return false;
+
+    /* Los tipos de la llamada CON el receptor delante, que es lo que una libre
+     * veria: `x.f(a)` es `f(x, a)`. */
+    std::vector<Type> arg_types;
+    arg_types.reserve(e->args.size() + 1);
+    arg_types.push_back(recv);
+    for (auto &a : e->args)
+        arg_types.push_back(check_expr(a.get()));
+
+    /* Y CUAL de ellas se elige con la MISMA regla que una llamada libre --
+     * exacta antes que compatible --, no con una propia: si aqui se decidiera
+     * de otra manera, `x.f(a)` y `f(x, a)` dejarian de ser la misma llamada,
+     * que es toda la propuesta. */
+    util::SmallVector<overload::Candidate, 4> cands;
+    for (uint32_t idx : *cand_slots) {
+        if (idx >= function_sigs_.size()) continue;
+        const FunctionSig &sig = function_sigs_[idx];
+        overload::Candidate c;
+        c.params = &sig.param_types;
+        c.slot = idx;
+        c.by_ref_mask = sig.param_by_ref_mask;
+        if (sig.is_raw_variadic) c.raw_variadic = true;
+        else if (sig.is_variadic) c.variadic_elem = &sig.variadic_elem;
+        cands.push_back(c);
+    }
+    const uint32_t pick = overload::select(cands.data(), cands.size(),
+                                           arg_types, &overload_accepts, this);
+    if (pick == overload::kNoPick) return false;
+
+    /* Encontrada: el nodo se convierte en la OTRA grafia y lo comprueba el
+     * camino de siempre.  Reescribir en vez de resolver aqui es lo que hace que
+     * las dos formas no puedan divergir -- comprobacion de argumentos, prestamos
+     * y la firma elegida son literalmente el mismo codigo -- y que al bajado, al
+     * JIT y al nativo no les llegue nada nuevo.  Es la operacion inversa de la
+     * que ya hace `__call__`, unas lineas mas abajo. */
+    auto id = std::make_unique<ast::IdentExpr>();
+    id->loc = fa->loc;
+    id->name = *chosen;
+    std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
+    e->callee = std::move(id);
+    e->args.insert(e->args.begin(), std::move(receiver));
+    e->result_type = check_call(e);
+    return true;
+}
+
 /**
  * @brief Dice por que no hay tal metodo, y comprueba los argumentos igual.
  *
@@ -11683,7 +11756,8 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
  * @param campos Los campos del tipo, por si el nombre es uno que guarda una
  *               funcion.
  * @param tipo   Nombre del tipo, para el mensaje.
- * @param clase_o_struct Como llamarlo ("la clase" / "el struct").
+ * @param clase_o_struct La palabra clave con la que se declaro: `struct` o
+ *               `class`.  Entra como DATO en el mensaje, sin traducir.
  * @param llamada_indirecta Que hacer si el nombre resulta ser un campo funcion.
  * @return El tipo del resultado: el de la llamada indirecta, o ninguno.
  */
@@ -11715,9 +11789,12 @@ Type TypeChecker::report_method_missing(
                                  "' no esta disponible para '" + tipo +
                                  "' (requiere " + requiere + ")");
     else
-        diags_.error(e->loc, std::string(clase_o_struct) + " '" + tipo +
-                                 "' no tiene un metodo '" + fa->field_name +
-                                 "'");
+        /* Se buscaron DOS cosas -- el metodo del tipo y la libre que lo tome
+         * de receptor --, asi que se dicen las dos: decir solo la primera
+         * manda a mirar la declaracion del tipo cuando el arreglo puede estar
+         * en un `import` que falta. */
+        diags_.diag(e->loc, DiagLevel::ERR, "VX2069",
+                    {clase_o_struct, tipo, fa->field_name});
 
     for (auto &a : e->args)
         (void)check_expr(a.get());
@@ -15183,9 +15260,17 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             const StructLayout &slay = it_s->second;
             const ClassMethodInfo *smtd =
                 find_instance_method(slay.methods, fa->field_name);
-            if (!smtd)
+            if (!smtd) {
+                /* Antes de darlo por inexistente: una funcion LIBRE que tome
+                 * este receptor es la misma llamada escrita del otro modo. */
+                if (try_ufcs_call(e, fa, bt)) return e->result_type;
                 return report_method_missing(e, fa, slay.fields, bt.struct_name,
-                                             "el struct", funcptr_field_call);
+                                             "struct", funcptr_field_call);
+            }
+            /* Tenerlo no cierra la pregunta: si ademas hay una libre que toma
+             * este receptor, hay dos candidatos y no se elige en silencio. */
+            if (report_ufcs_clash(bt, fa->field_name, bt.struct_name, e->loc))
+                return Type{PrimitiveKind::COUNT}; // ya se dijo que fallaba
             /* Que el nombre este sobrecargado lo dice el propio candidato: una
              * rama sobre un bit que ya se tiene en la mano, sin tabla. */
             if (smtd->is_overloaded)
@@ -15196,8 +15281,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             return smtd->return_type;
         }
         if (bt.kind != PrimitiveKind::CLASS) {
-            diags_.error(e->loc, "invocacion de metodo sobre tipo no-clase: " +
-                                     type_to_string(bt));
+            /* Un receptor que no es clase ni struct tampoco tiene por que
+             * quedarse sin metodos: una funcion libre que lo tome de primer
+             * parametro ES ese metodo, escrito del otro modo. */
+            if (try_ufcs_call(e, fa, bt)) return e->result_type;
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2070",
+                        {type_to_string(bt), fa->field_name});
             for (auto &a : e->args)
                 (void)check_expr(a.get());
             return Type{};
@@ -15212,9 +15301,15 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         const ClassLayout &cls = it->second;
         const ClassMethodInfo *mtd =
             find_instance_method(cls.methods, fa->field_name);
-        if (!mtd)
+        if (!mtd) {
+            // Igual que en el struct: la libre que tome este receptor.
+            if (try_ufcs_call(e, fa, bt)) return e->result_type;
             return report_method_missing(e, fa, cls.fields, bt.struct_name,
-                                         "la clase", funcptr_field_call);
+                                         "class", funcptr_field_call);
+        }
+        // Y como en el struct: tenerlo no cierra la pregunta.
+        if (report_ufcs_clash(bt, fa->field_name, bt.struct_name, e->loc))
+            return Type{PrimitiveKind::COUNT}; // ya se dijo que fallaba
         // Igual que en el struct: la marca viaja en el candidato.
         if (mtd->is_overloaded)
             mtd = select_method_overload(cls.methods, fa->field_name, e, fa);

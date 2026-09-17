@@ -1,0 +1,29 @@
+namespace ejemplos.ufcs_choque;
+
+// NEGATIVO: el tipo declara el metodo y ademas hay una funcion libre que toma
+// ese mismo receptor.  Dos candidatos para la misma llamada, y elegir en
+// silencio seria decidir por el programador.
+//
+// No es una precaucion teorica: cual ganase dependeria de los `import` de QUIEN
+// LLAMA, asi que anyadir un import en un fichero cambiaria a que cuerpo va una
+// llamada que ya estaba escrita y que nadie toco.  Por eso es un error y se
+// citan los dos.
+//
+// Se espera que NO compile, con VX2068.
+
+struct Punto {
+	i64 x;
+	i64 y;
+
+	i64 area() { return this.x * this.y; }
+}
+
+// El mismo nombre, para el mismo receptor: aqui esta el choque.
+i64 area(Punto p) { return 0_i64; }
+
+i32 main() {
+	Punto q;
+	q.x = 6;
+	q.y = 7;
+	return (i32)q.area();
+}

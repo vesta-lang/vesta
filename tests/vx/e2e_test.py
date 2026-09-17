@@ -3595,7 +3595,7 @@ r0_case("payloadvar486", "la carga de una variante admite lo mismo que un parame
 r0_case("companchos487", "un tipo estrecho sigue siendolo al ejecutar en compilacion: el registro es transporte, no tipo", "487_comptime_anchos.vx", 42, line=3772)
 r0_case("extimpl488", "impl: metodos anadidos desde fuera con 0..3 parametros, sobre struct y sobre clase, con y sin concepto", "488_impl_metodos.vx", 42, line=3774)
 r0_case("arguni489", "la MISMA expresion como argumento en las siete formas de llamar (funcion, ctor, metodo, estatico, struct, closure, variante)", "489_argumentos_uniformes.vx", 42, line=3776)
-fails_case("ctornomet490", "un constructor no se puede llamar como metodo de instancia (viven en la misma lista)", "490_ctor_no_es_metodo.vx", "no tiene un metodo", line=3778)
+fails_case("ctornomet490", "un constructor no se puede llamar como metodo de instancia (viven en la misma lista)", "490_ctor_no_es_metodo.vx", "VX2069", line=3778)
 fails_case("extret491", "'extension' esta retirada y el error dice con que se sustituye", "491_extension_retirada_err.vx", "ya no existe", line=3780)
 r0_case("vecall492", "todas las formas que el vectorizador reconoce, y las dos que no: la salida es la misma con y sin vectorizar, asi que lo que se comprueba es el IR (tools/verify_vectorize.sh idiomas)", "492_vectorizador_completo.vx", 42, line=3782)
 r0_case("stdnum493", "std.numeric desde fuera: las diez operaciones, con el segundo import que rompia la instanciacion de plantillas cross-module", "493_std_numeric.vx", 42, line=3784)
@@ -3786,6 +3786,7 @@ modes3_case("overlay_extent", "extension de una vista calculada de sus propios c
 modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de una vez", "543_overlay_campos_anchos.vx", 136)
 modes3_case("params_alias", "dos punteros parametro pueden ser la misma memoria", "544_params_alias.vx", 111)
 modes3_case("sobrecarga545", "sobrecarga por aridad y por tipo en los SEIS caminos de llamada (funcion libre, constructor de struct, metodo de struct, metodo de clase, static, super) mas la interfaz: gana la exacta, el retorno sale de la elegida en los dos ordenes de declaracion, y un override sigue siendo un override", "545_sobrecarga_funciones.vx", 42)
+modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada -- receptor struct, primitivo, puntero y clase, con sobrecarga entre las libres candidatas, encadenado, y el mismo nombre para receptores de tipo distinto", "549_ufcs_llamada_uniforme.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)
@@ -5850,6 +5851,13 @@ fails_case("nombre_de_tipo_unico",
 fails_case("ctor_comptime_no_constante",
            "lo que se construye al compilar necesita argumentos de compilar",
            "548_ctor_comptime_no_constante.vx", "VX2065")
+
+# El tipo declara el metodo y ademas hay una libre que toma ese receptor.  Cual
+# ganase dependeria de los `import` de quien llama, asi que anyadir un import en
+# un fichero cambiaria a que cuerpo va una llamada que ya estaba escrita.
+fails_case("ufcs_choque",
+           "metodo y funcion libre para el mismo receptor: dos candidatos, y no se elige en silencio",
+           "550_ufcs_choque.vx", "VX2068")
 
 # Y cuando SI envuelve -- porque el cast lo declara --, tiene que envolver
 # BIEN.  Un valor estrecho vive en un registro de 64 y los bits de mas hacian
