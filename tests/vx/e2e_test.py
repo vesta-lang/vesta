@@ -5859,6 +5859,14 @@ fails_case("ufcs_choque",
            "metodo y funcion libre para el mismo receptor: dos candidatos, y no se elige en silencio",
            "550_ufcs_choque.vx", "VX2068")
 
+# Un tipo FUERTE tiene identidad propia, asi que un literal no alcanza lo
+# declarado para el -- y esta bien --, pero negarlo a secas deja al programador
+# buscando una funcion que esta ahi al lado.  El mensaje dice cual y con que
+# cast, con el nombre que se ESCRIBE y no el que el aplanado le puso.
+fails_case("ufcs_cast_hint",
+           "el receptor no encaja pero la candidata existe: se dice cual y con que cast",
+           "550_ufcs_choque.vx", "VX2071")
+
 # Y cuando SI envuelve -- porque el cast lo declara --, tiene que envolver
 # BIEN.  Un valor estrecho vive en un registro de 64 y los bits de mas hacian
 # que el mismo valor se imprimiera bien y mintiera al compararse.  Los seis

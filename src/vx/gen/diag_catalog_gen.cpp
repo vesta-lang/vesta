@@ -77,6 +77,7 @@ const CatEntry kEntries[] = {
     {"VX2068", {"'{0}' is both a method of '{1}' and a free function taking that receiver: two candidates for the same call.  Rename one, or call the free one by its name: {0}(recv, ...)", "'{0}' es a la vez metodo de '{1}' y funcion libre que toma ese receptor: dos candidatos para la misma llamada.  Renombra uno, o llama a la libre por su nombre: {0}(recv, ...)"}},
     {"VX2069", {"{0} '{1}' has no method '{2}', and no free function '{2}' visible here takes a '{1}' as its first parameter either", "el {0} '{1}' no tiene un metodo '{2}', y tampoco hay ninguna funcion libre '{2}' visible aqui que tome un '{1}' de primer parametro"}},
     {"VX2070", {"'{0}' is neither a class nor a struct, and no free function '{1}' visible here takes a '{0}' as its first parameter either", "'{0}' no es una clase ni un struct, y tampoco hay ninguna funcion libre '{1}' visible aqui que tome un '{0}' de primer parametro"}},
+    {"VX2071", {"no '{1}' takes a '{0}' as its first parameter, but there are for: {2}.  Cast the receiver: `(({3})receiver).{1}(...)`", "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}.  Convierte el receptor: `(({3})receptor).{1}(...)`"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -636,7 +637,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 615;
+const int kEntryCount = 616;
 
 } // namespace
 

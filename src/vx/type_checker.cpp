@@ -11683,6 +11683,59 @@ bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
     return true;
 }
 
+bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
+                                        const std::string &name,
+                                        const SourceLoc &loc) {
+    // Solo entre escalares: es donde un cast arregla algo de verdad.
+    if (!is_numeric(recv.kind)) return false;
+
+    const ufcs::Candidates *slots = ufcs_.all_named(name);
+    if (slots == nullptr) return false;
+
+    /* De las que se llaman asi, las que piden un escalar DISTINTO: esas son
+     * las que un cast alcanza, y las que hay que nombrar.  Se quedan las
+     * CANDIDATAS, no sus nombres: el nombre se compone una vez al final, y
+     * repetido se descarta comparando el TIPO -- que es su identidad -- y no
+     * como se escribe, que es solo como se ve. */
+    ufcs::Candidates picked;
+    for (uint32_t s : *slots) {
+        if (s >= function_sigs_.size()) continue;
+        const FunctionSig &sig = function_sigs_[s];
+        if (sig.param_types.empty()) continue;
+        const Type &p = sig.param_types[0];
+        if (!is_numeric(p.kind)) continue;
+        bool seen = false;
+        for (uint32_t q : picked)
+            if (function_sigs_[q].param_types[0] == p) {
+                seen = true;
+                break;
+            }
+        if (!seen) picked.push_back(s);
+    }
+    if (picked.empty()) return false;
+
+    /* Por orden de DECLARACION, que es el de la ranura: el indice es una tabla
+     * hash, asi que sin esto el mismo programa daria el mismo error con los
+     * tipos en otro orden segun donde se compile. */
+    std::sort(picked.begin(), picked.end());
+
+    std::string list = written_type_name(function_sigs_[picked[0]].param_types[0]);
+    const std::string first = list;
+    for (size_t i = 1; i < picked.size(); ++i)
+        list +=
+            ", " + written_type_name(function_sigs_[picked[i]].param_types[0]);
+    diags_.diag(loc, DiagLevel::ERR, "VX2071",
+                {written_type_name(recv), name, list, first});
+    return true;
+}
+
+std::string TypeChecker::written_type_name(const Type &t) const {
+    std::string txt = type_to_string(t);
+    auto it = declared_ns_symbols_.find(txt);
+    if (it != declared_ns_symbols_.end()) return it->second.second;
+    return txt;
+}
+
 bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                                 const Type &recv) {
     if (e == nullptr || fa == nullptr || !fa->base) return false;
@@ -15285,8 +15338,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
              * quedarse sin metodos: una funcion libre que lo tome de primer
              * parametro ES ese metodo, escrito del otro modo. */
             if (try_ufcs_call(e, fa, bt)) return e->result_type;
-            diags_.diag(e->loc, DiagLevel::ERR, "VX2070",
-                        {type_to_string(bt), fa->field_name});
+            /* Y si la hay pero pide otro escalar -- el caso de un tipo FUERTE,
+             * que tiene identidad propia a proposito --, se dice cual y con
+             * que cast se llega, en vez de negar a secas. */
+            if (!report_ufcs_cast_hint(bt, fa->field_name, e->loc))
+                diags_.diag(e->loc, DiagLevel::ERR, "VX2070",
+                            {type_to_string(bt), fa->field_name});
             for (auto &a : e->args)
                 (void)check_expr(a.get());
             return Type{};

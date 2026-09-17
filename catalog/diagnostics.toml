@@ -3159,3 +3159,13 @@ es = "el {0} '{1}' no tiene un metodo '{2}', y tampoco hay ninguna funcion libre
 ["VX2070"]
 en = "'{0}' is neither a class nor a struct, and no free function '{1}' visible here takes a '{0}' as its first parameter either"
 es = "'{0}' no es una clase ni un struct, y tampoco hay ninguna funcion libre '{1}' visible aqui que tome un '{0}' de primer parametro"
+# La candidata EXISTE, pero pide otro receptor -- y entre escalares eso se
+# arregla con un cast, asi que el mensaje lo dice en vez de limitarse a negar.
+# El caso tipico es un tipo FUERTE: `41.anyos()` no encuentra `anyos(Edad)`
+# porque un literal es `i64` y un tipo fuerte tiene su propia identidad, que es
+# justo lo que se declara al hacerlo fuerte.  {0} el tipo del receptor, {1} el
+# nombre escrito tras el punto, {2} los tipos que SI la tienen, {3} el primero
+# de ellos, para el ejemplo.
+["VX2071"]
+en = "no '{1}' takes a '{0}' as its first parameter, but there are for: {2}.  Cast the receiver: `(({3})receiver).{1}(...)`"
+es = "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}.  Convierte el receptor: `(({3})receptor).{1}(...)`"

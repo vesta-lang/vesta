@@ -2194,6 +2194,39 @@ class TypeChecker {
     bool report_ufcs_clash(const Type &recv, const std::string &name,
                            const std::string &owner, const SourceLoc &loc);
 
+    /**
+     * @brief La candidata existe, pero pide OTRO receptor -- y se llega con un
+     *        cast.
+     *
+     * Negar a secas ("ninguna que tome un `i64`") deja al programador buscando
+     * una funcion que esta ahi al lado pidiendo un `Edad`.  Cuando los dos son
+     * escalares, la distancia es exactamente un cast, asi que se dice cual.
+     *
+     * Solo entre ESCALARES: es donde un cast arregla algo de verdad.  Sugerir
+     * convertir un `Punto` a un `Circulo` porque los dos tienen un `area`
+     * seria mandar a escribir un disparate.
+     *
+     * @param recv El tipo del receptor.
+     * @param name El nombre escrito tras el punto.
+     * @param loc  Donde se escribio la llamada.
+     * @return true si se reporto; false si no habia nada que sugerir.
+     */
+    bool report_ufcs_cast_hint(const Type &recv, const std::string &name,
+                               const SourceLoc &loc);
+
+    /**
+     * @brief El nombre de un tipo tal y como el usuario lo ESCRIBE.
+     *
+     * El aplanado de namespaces renombra las declaraciones (`probe__Edad`), y
+     * eso es lo que sale en los mensajes.  Da igual cuando solo hay que
+     * leerlo, pero NO cuando el mensaje dice "convierte el receptor": ahi el
+     * texto se teclea, y `((probe__Edad)x)` no compila.
+     *
+     * @param t El tipo.
+     * @return Su nombre publico si el aplanado lo renombro; el que hay, si no.
+     */
+    std::string written_type_name(const Type &t) const;
+
     Type report_method_missing(
         ast::CallExpr *e, ast::FieldAccessExpr *fa,
         const std::vector<StructFieldInfo> &campos, const std::string &tipo,

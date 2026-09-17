@@ -79,11 +79,12 @@ const std::string *head_of(const Type &t) {
 
 void Index::declare(const Type &first_param, const std::string &name,
                     uint32_t slot) {
-    const Key k{head_of(first_param), util::intern_name(name)};
-    Candidates &c = by_head_[k];
+    const std::string *n = util::intern_name(name);
+    Candidates &c = by_head_[Key{head_of(first_param), n}];
     for (uint32_t s : c)
         if (s == slot) return; // ya estaba: declarar dos veces no duplica
     c.push_back(slot);
+    by_name_[n].push_back(slot);
 }
 
 const Candidates *Index::find(const Type &recv, const std::string &written,
@@ -104,6 +105,17 @@ const Candidates *Index::find(const Type &recv, const std::string &written,
         if (it == by_head_.end()) continue;
         if (matched != nullptr) *matched = name;
         return &it->second;
+    }
+    return nullptr;
+}
+
+const Candidates *Index::all_named(const std::string &written) const {
+    // Las mismas grafias que prueba `find`, contra la tabla por NOMBRE.
+    auto it = by_name_.find(util::intern_name(written));
+    if (it != by_name_.end()) return &it->second;
+    for (const std::string &p : prefixes_) {
+        it = by_name_.find(util::intern_name(p + written));
+        if (it != by_name_.end()) return &it->second;
     }
     return nullptr;
 }

@@ -120,6 +120,25 @@ struct Index {
                            const std::string **matched = nullptr) const;
 
     /**
+     * @brief TODAS las que se llaman asi, sea cual sea el receptor.
+     *
+     * Para el DIAGNOSTICO, no para resolver: cuando no hay ninguna para ESTE
+     * receptor, poder decir para cuales si las hay y con que cast se llega.
+     * Sin esto el mensaje solo sabe negar -- "no hay ninguna que tome un
+     * `i64`" -- cuando la candidata esta ahi al lado pidiendo un `Edad`.
+     *
+     * Es una SONDA, no un recorrido: hay una segunda tabla por nombre, que es
+     * la del 6-bis.3 y crece con las declaraciones igual que la otra -- cuatro
+     * bytes mas por funcion y una entrada por nombre distinto --.  Recorrer el
+     * indice entero seria O(declaraciones del programa) por error, y con la
+     * stdlib dentro eso no es "solo cuando falla", es medio segundo.
+     *
+     * @param written El nombre escrito tras el punto.
+     * @return Las candidatas con ese nombre, o nulo si no hay ninguna.
+     */
+    const Candidates *all_named(const std::string &written) const;
+
+    /**
      * @brief Apunta que @p mangled es como el aplanado escribio @p public_name.
      *
      * Un `x.f()` lleva `f` tal cual -- el aplanado renombra declaraciones y
@@ -154,6 +173,15 @@ struct Index {
         }
     };
     std::unordered_map<Key, Candidates, KeyHash> by_head_;
+    /// Lo MISMO indexado solo por nombre, para poder decir para que receptores
+    /// SI la hay cuando no la hay para este.  Es la segunda tabla de 6-bis.3:
+    /// crece con las declaraciones, no con el uso.
+    struct NameHash {
+        size_t operator()(const std::string *n) const noexcept {
+            return reinterpret_cast<size_t>(n) * 1099511628211ull;
+        }
+    };
+    std::unordered_map<const std::string *, Candidates, NameHash> by_name_;
     std::vector<std::string> prefixes_;
 };
 
