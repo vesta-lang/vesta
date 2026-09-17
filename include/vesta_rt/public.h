@@ -748,6 +748,18 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr);
 void *vrt_findfield(vrt_proc *proc, uint64_t params_vaddr);
 
 /**
+ * @brief El miembro que ocupa la posicion @p idx, o nulo si se pasa.
+ *
+ * POR POSICION, que es la unica pregunta con respuesta unica cuando dos
+ * miembros comparten nombre.  @p fields elige la familia: 0 metodos, 1 campos.
+ */
+void *vrt_member_at(vrt_proc *proc, vrt_class *cls, uint64_t idx,
+                    uint32_t fields);
+
+/// @brief Cuantos miembros tiene la clase.  @p fields: 0 metodos, 1 campos.
+uint32_t vrt_member_count(vrt_proc *proc, vrt_class *cls, uint32_t fields);
+
+/**
  * @brief Registra debug info (file:line) para un metodo (setmethdbg).
  *        Lee @c SetMethDebugParams de vm_mem[params_vaddr].
  */

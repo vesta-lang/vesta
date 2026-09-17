@@ -1481,6 +1481,37 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
         i.source_line = ln;
         fn.append(cur, std::move(i));
     };
+    /* Igual, pero recogiendo EN QUE hueco quedo lo que se acaba de definir.
+     * Es el unico que lo sabe -- un override reemplaza el del heredado en vez
+     * de anyadir al final --, y sin el no habia forma de volver al metodo salvo
+     * buscarlo por su nombre. */
+    /// El metodo que ocupa @p v_idx en @p v_cls: `getmethat`, el mismo que la
+    /// reflexion usa para recorrerlos.  Por el HUECO, que identifica a uno.
+    auto emit_reflect_at = [&](ir::IrValueId v_cls,
+                               ir::IrValueId v_idx) -> ir::IrValueId {
+        const ir::IrValueId v = fn.new_value(ir::IrType::I64);
+        ir::IrInstr i{};
+        i.op = ir::IrOp::REFLECT_AT;
+        i.type = ir::IrType::I64;
+        i.dst = v;
+        i.operands = {v_cls, v_idx};
+        i.imm = 0; // 0 = metodos, 1 = campos
+        i.source_line = ln;
+        fn.append(cur, std::move(i));
+        return v;
+    };
+    auto emit_def2_at = [&](ir::IrOp op, ir::IrValueId v_cls,
+                            ir::IrValueId buf) -> ir::IrValueId {
+        const ir::IrValueId v = fn.new_value(ir::IrType::I64);
+        ir::IrInstr i{};
+        i.op = op;
+        i.type = ir::IrType::I64;
+        i.dst = v;
+        i.operands = {v_cls, buf};
+        i.source_line = ln;
+        fn.append(cur, std::move(i));
+        return v;
+    };
 
     for (auto &decl : mod_.decls) {
         if (!decl || decl->kind != ast::NodeKind::ClassDecl) continue;
@@ -1680,22 +1711,25 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
             store_at(b, 16, emit_strlit(desc_idx));
             store_at(b, 24, emit_label_addr(method_label)); // code_vaddr
             store_at(b, 32, emit_const64(mflags));
-            emit_def2(ir::IrOp::DEFMETHOD, reload_cls(), b);
+            const ir::IrValueId v_slot =
+                emit_def2_at(ir::IrOp::DEFMETHOD, reload_cls(), b);
 
-            // Debug info (file:line) si la hay: findmethod + setmethdbg.
+            // Debug info (file:line) si la hay: se le pone AL QUE SE ACABA DE
+            // definir, y por eso hace falta saber en que hueco quedo.
             if (!m.source_file.empty() && m.source_line > 0) {
                 const uint64_t fname_idx =
                     intern_class_name(out, m.source_file);
                 const uint32_t fname_len =
                     static_cast<uint32_t>(m.source_file.size());
 
-                // FindMethodParams (24B) + findmethod -> v_method.
-                const ir::IrValueId bf = fresh_buf();
-                store_at(bf, 0, reload_cls());
-                store_at(bf, 8, emit_strlit(mname_idx));
-                store_at(bf, 16, emit_const64(uint64_t(mname_len)));
+                /* El metodo, POR SU HUECO.  Se buscaba por NOMBRE justo despues
+                 * de definirlo -- volver a buscar lo que se acaba de crear --,
+                 * y en cuanto un tipo tiene dos metodos que se llaman igual eso
+                 * devolvia uno cualquiera: la informacion de depuracion de una
+                 * sobrecarga acababa puesta en la otra, y la traza de un fallo
+                 * senyalaba a la linea equivocada.  Sin una sola queja. */
                 const ir::IrValueId v_method =
-                    emit_find1(ir::IrOp::FINDMETHOD, bf);
+                    emit_reflect_at(reload_cls(), v_slot);
 
                 // SetMethDebugParams (24B) + setmethdbg.
                 const ir::IrValueId bs = fresh_buf();

@@ -1021,6 +1021,13 @@ EffectAnalysisResult effects_of_instr(const ir::IrFunction &fn,
         break;
     case IrOp::FINDCLASS:
     case IrOp::FINDMETHOD:
+    case IrOp::FINDFIELD:
+    /* Y los que preguntan por POSICION en vez de por nombre: cuantos miembros
+     * tiene un tipo y cual es el i-esimo.  Leen la misma tabla y no tocan nada
+     * mas; sin estar aqui caian al efecto MAXIMO, que es correcto pero ciego --
+     * y ademas se contaba como laguna del motor, que es lo que era. */
+    case IrOp::REFLECT_COUNT:
+    case IrOp::REFLECT_AT:
         add_read(e, {AbstractLoc::Kind::Global, LOC_GENERIC});
         break;
 

@@ -92,6 +92,16 @@ static constexpr uint64_t METHOD_FLAG_CONSTRUCTOR = (1ULL << 9);
 static constexpr uint64_t METHOD_FLAG_VIRTUAL = (1ULL << 10);
 static constexpr uint64_t METHOD_FLAG_OVERRIDE = (1ULL << 11);
 static constexpr uint64_t METHOD_FLAG_SYNCHRONIZED = (1ULL << 12);
+/**
+ * @brief Hay OTRO metodo de esta clase que se llama igual.
+ *
+ * Lo pone el registro al montar la tabla de consulta por nombre, que es donde
+ * la colision se ve.  Sirve para que quien busque POR NOMBRE sepa que su
+ * pregunta no tiene una sola respuesta, en vez de recibir una cualquiera:
+ * `getMethod(cls, "g")` con dos `g` devolvia uno al azar y un aspecto se
+ * enganchaba a la sobrecarga que tocara, sin decir nada.
+ */
+static constexpr uint64_t METHOD_FLAG_NAME_SHARED = (1ULL << 13);
 
 // -------------------------------------------------------------------------
 //  Modificadores de acceso de campo

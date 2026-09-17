@@ -6030,6 +6030,16 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
         (void)ctx.load_src(ins.operands[1], 1);
         ctx.out.emit(emmit::Mnemonic::DEFMETHOD, ctx.reg_at(ins.operands[0], 0),
                      ctx.reg_at(ins.operands[1], 1));
+        /* Y EN QUE hueco quedo, que el opcode deja en R0.  Quien acaba de
+         * definir un metodo lo necesita para volver a el; sin esto tenia que
+         * buscarlo POR NOMBRE, y un nombre deja de identificar a uno en cuanto
+         * el tipo tiene dos que se llaman igual. */
+        if (ins.dst != IR_NO_VALUE) {
+            Reg r_dst = ctx.dst_of(ins.dst);
+            if (!r_dst.is_gp(0))
+                ctx.out.emit(emmit::Mnemonic::MOV, r_dst, Reg::gp(0));
+            ctx.store_spilled(ins.dst);
+        }
         break;
     case IrOp::ADDADVICE:
         if (ins.operands.size() >= 2) {

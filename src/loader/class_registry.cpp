@@ -421,6 +421,27 @@ void ClassRegistry::rebuild_method_lookup(ClassInfo *cls) {
     }
     cls->method_lookup_table =
         build_lookup_table(entries, cls->method_lookup_mask);
+
+    /* Y QUE NOMBRES los comparten varios.  Esta tabla contesta por NOMBRE y da
+     * UN indice; desde que un tipo puede tener dos metodos que se llaman igual,
+     * ese indice es uno cualquiera de ellos.  Preguntar por el nombre pasa a
+     * ser una pregunta sin respuesta unica, y contestarla igual es lo que hacia
+     * que `getMethod(cls, "g")` devolviera uno al azar -- y que un aspecto se
+     * enganchara a la sobrecarga equivocada -- sin decir nada.
+     *
+     * Se marca AQUI porque es donde se ve, y se marca en el METODO para que
+     * preguntarlo despues no cueste nada: quien recibe la ficha mira un bit.
+     * El bucle es cuadratico sobre los metodos de UNA clase -- una decena --
+     * y corre al montarla, no al consultarla. */
+    for (size_t i = 0; i < entries.size(); ++i) {
+        MethodInfo &a = cls->methods[entries[i].second];
+        if ((a.flags & METHOD_FLAG_NAME_SHARED) != 0) continue;
+        for (size_t j = i + 1; j < entries.size(); ++j) {
+            if (entries[j].first != entries[i].first) continue;
+            a.flags |= METHOD_FLAG_NAME_SHARED;
+            cls->methods[entries[j].second].flags |= METHOD_FLAG_NAME_SHARED;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -500,7 +521,8 @@ bool ClassRegistry::add_field(ClassInfo *cls, const FieldDecl &decl) {
 //  antiguo cuando se anade uno nuevo.
 // ---------------------------------------------------------------------
 
-bool ClassRegistry::add_method(ClassInfo *cls, const MethodDecl &decl) {
+bool ClassRegistry::add_method(ClassInfo *cls, const MethodDecl &decl,
+                               uint32_t *index) {
     if (!cls) return false;
 
     /* Detectar override: si ya existe un metodo con el mismo nombre Y EL MISMO
@@ -548,6 +570,9 @@ bool ClassRegistry::add_method(ClassInfo *cls, const MethodDecl &decl) {
     }
 
     const size_t target_idx = is_override ? existing_idx : old_count;
+    // DONDE quedo, que es lo que quien lo define necesita para volver a el sin
+    // buscarlo por nombre.  No es siempre el ultimo: un override reemplaza.
+    if (index != nullptr) *index = static_cast<uint32_t>(target_idx);
     MethodInfo &mi = new_arr[target_idx];
     std::memset(&mi, 0, sizeof(MethodInfo));
     mi.name = intern_string(decl.name);

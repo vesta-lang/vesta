@@ -1355,6 +1355,15 @@ es = "la construccion esta en un bloque al que no se llega"
 en = "an argument of the construction that is not there, or is not valid"
 es = "un argumento de la construccion que no esta, o que no vale"
 
+# El modo ESTRICTO del JIT (VESTA_JIT_STRICT).  Que una funcion se quede sin
+# compilar es correcto -- el interprete da el mismo resultado -- y por eso no se
+# nota: una op que nadie le enseno al JIT solo hace que vaya mas despacio, y eso
+# se queda anyos sin duenyo.  Con el modo puesto, para y dice cual.
+# {0} la funcion  {1} por que se renuncio
+[VXA140]
+en = "strict JIT: '{0}' was left to the interpreter, because of {1}"
+es = "JIT estricto: '{0}' se queda en el interprete, por {1}"
+
 # ===========================================================================
 # HECHOS DEL ASA -- el texto de lo que se sabe
 # ===========================================================================
@@ -2742,6 +2751,12 @@ es = "'{0}' se construye al compilar, y su argumento {1} no se sabe entonces"
 ["VX2066"]
 en = "'{0}' could not be built at compile time: its constructor is loaded and did not run"
 es = "'{0}' no se ha podido construir al compilar: su constructor esta cargado y no llego a ejecutarse"
+# Buscar un metodo POR NOMBRE cuando ese nombre lo comparten varios.  Se
+# contestaba con uno cualquiera; ahora se dice que la pregunta no tiene una sola
+# respuesta y por donde se sale.  {0} la clase, {1} el nombre.
+["VX2067"]
+en = "'{1}' does not name one method of '{0}': several share it.  Walk them with getMethods/getMethodAt, where each overload has its own index"
+es = "'{1}' no nombra a un solo metodo de '{0}': lo comparten varios.  Recorrelos con getMethods/getMethodAt, donde cada sobrecarga tiene su propio indice"
 # Un nombre de tipo es UNO.  {1} es la palabra clave con la que se declaro el
 # que ya lo tenia -- `struct`, `class` o `enum` --, y como es palabra clave del
 # lenguaje NO se traduce: entra como dato.

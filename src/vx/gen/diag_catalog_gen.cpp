@@ -73,6 +73,7 @@ const CatEntry kEntries[] = {
     {"VX2064", {"no constructor of '{0}' takes those arguments", "ningun constructor de '{0}' admite esos argumentos"}},
     {"VX2065", {"'{0}' is built at compile time, and its argument {1} is not known then", "'{0}' se construye al compilar, y su argumento {1} no se sabe entonces"}},
     {"VX2066", {"'{0}' could not be built at compile time: its constructor is loaded and did not run", "'{0}' no se ha podido construir al compilar: su constructor esta cargado y no llego a ejecutarse"}},
+    {"VX2067", {"'{1}' does not name one method of '{0}': several share it.  Walk them with getMethods/getMethodAt, where each overload has its own index", "'{1}' no nombra a un solo metodo de '{0}': lo comparten varios.  Recorrelos con getMethods/getMethodAt, donde cada sobrecarga tiene su propio indice"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -368,6 +369,7 @@ const CatEntry kEntries[] = {
     {"VXA137", {"the type the constructor writes and the one that is read do not match", "el tipo que escribe el constructor y el que se lee no coinciden"}},
     {"VXA138", {"the construction is in a block nothing reaches", "la construccion esta en un bloque al que no se llega"}},
     {"VXA139", {"an argument of the construction that is not there, or is not valid", "un argumento de la construccion que no esta, o que no vale"}},
+    {"VXA140", {"strict JIT: '{0}' was left to the interpreter, because of {1}", "JIT estricto: '{0}' se queda en el interprete, por {1}"}},
     {"VXE930", {"@Hook(<point>) needs the instrumentation point.  Available: {0}", "@Hook(<punto>) necesita el punto de instrumentacion.  Disponibles: {0}"}},
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
@@ -631,7 +633,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 610;
+const int kEntryCount = 612;
 
 } // namespace
 

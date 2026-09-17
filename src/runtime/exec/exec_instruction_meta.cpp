@@ -58,6 +58,7 @@
 #include "loader/oop_types.h"
 #include "ffi/native_ffi.h"
 #include "gc/gc_heap.h"
+#include "vx/diag/diag_catalog.h" // el motivo, en todos los idiomas
 #include <cstdio>
 #include <cstdlib>
 
@@ -315,13 +316,16 @@ void exec_instr_defmethod(ProcessVM *vm, const DecodedInstr &instr) {
     decl.code_vaddr = p.code_vaddr;
     decl.code_size = 0; // el ejecutor no necesita el tamano para CALLVIRT
 
-    const bool ok = registry_of(vm).add_method(cls, decl);
+    uint32_t idx = UINT32_MAX;
+    const bool ok = registry_of(vm).add_method(cls, decl, &idx);
     if (!ok) {
         vm->registers.regs[R00].qword(UINT32_MAX);
         return;
     }
-    // El metodo recien anadido es el ultimo del array.
-    vm->registers.regs[R00].qword(static_cast<uint64_t>(cls->method_count - 1));
+    /* En que hueco quedo, DICHO por el registro.  Se daba por hecho que era el
+     * ultimo, y un override no lo es: reemplaza el del heredado.  Quien usara
+     * ese numero acababa en otro metodo. */
+    vm->registers.regs[R00].qword(static_cast<uint64_t>(idx));
 }
 
 // =========================================================================
@@ -381,6 +385,22 @@ void exec_instr_findmethod(ProcessVM *vm, const DecodedInstr &instr) {
     }
     const std::string name = read_vm_string(vm, p.name_addr, p.name_len);
     loader::MethodInfo *m = loader::ClassRegistry::find_method(cls, name);
+    /* Un nombre que comparten varios NO nombra a uno.  Devolver el que la tabla
+     * tuviera a mano es contestar una pregunta que no tiene una sola respuesta:
+     * la reflexion llamaba a una sobrecarga cualquiera y un aspecto se
+     * enganchaba a la que tocara, las dos veces en silencio.  Se dice, y con
+     * ello se dice tambien por donde SI se puede: el recorrido por indice, que
+     * da a cada sobrecarga el suyo. */
+    if (m != nullptr && (m->flags & loader::METHOD_FLAG_NAME_SHARED) != 0) {
+        const std::string cn =
+            (cls->name.data && cls->name.size)
+                ? std::string(reinterpret_cast<const char *>(cls->name.data),
+                              cls->name.size)
+                : std::string("?");
+        const std::string msg = vx::diag::format("VX2067", {cn, name});
+        throw_fatal(vm, FATAL_ILLEGAL_INSTRUCTION, msg.c_str());
+        return;
+    }
     vm->registers.regs[r_dst].qword(reinterpret_cast<uint64_t>(m));
 }
 

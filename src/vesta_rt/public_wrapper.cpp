@@ -51,6 +51,7 @@
 
 #include "gc/gc_heap.h"
 #include "jit/auto_jit.h"
+#include "vx/diag/diag_catalog.h" // el motivo, en todos los idiomas
 #include "jit/interp_jit_bridge.h"
 #include "loader/class_registry.h"
 #include "loader/loader.h"
@@ -1580,7 +1581,12 @@ uint32_t vrt_defmethod(vrt_proc *proc, vrt_class *cls, uint64_t params_vaddr) {
     md.code_vaddr = pr.code_vaddr;
     md.flags = pr.flags;
     auto *ci = reinterpret_cast<loader::ClassInfo *>(cls);
-    return reg.add_method(ci, md);
+    /* EN QUE hueco quedo, que es lo que devuelve este opcode.  Devolvia `true`
+     * -- o sea 1 -- para cualquier metodo, asi que quien se creyera el numero
+     * acababa siempre en el mismo. */
+    uint32_t idx = UINT32_MAX;
+    if (!reg.add_method(ci, md, &idx)) return UINT32_MAX;
+    return idx;
 }
 
 int32_t vrt_addadvice(vrt_proc *proc, void *target_method, void *advice_method,
@@ -1674,7 +1680,23 @@ void *vrt_findmethod(vrt_proc *proc, uint64_t params_vaddr) {
     buf[pr.name_len] = '\0';
     auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
     auto *ci = reinterpret_cast<loader::ClassInfo *>(pr.class_ptr);
-    void *m = reg.find_method(ci, buf);
+    loader::MethodInfo *m = reg.find_method(ci, buf);
+    /* Un nombre que comparten varios NO nombra a uno, y eso vale igual aqui que
+     * en el interprete: esta es la copia por la que pasan el JIT y el binario
+     * nativo.  Sin la comprobacion en las DOS, el mismo programa se quejaba al
+     * interpretarlo y llamaba a una sobrecarga cualquiera al compilarlo, que es
+     * la unica cosa que los tres modos no se pueden permitir. */
+    if (m != nullptr && (m->flags & loader::METHOD_FLAG_NAME_SHARED) != 0) {
+        const std::string cn =
+            (ci->name.data && ci->name.size)
+                ? std::string(reinterpret_cast<const char *>(ci->name.data),
+                              ci->name.size)
+                : std::string("?");
+        const std::string msg =
+            vx::diag::format("VX2067", {cn, std::string(buf)});
+        runtime::throw_fatal(p, VESTA_FATAL_ILLEGAL_INSTRUCTION, msg.c_str());
+        return nullptr;
+    }
     if (m) { /* cachear (reemplazo round-robin del slot mas viejo). */
         fm.e[fm.next & 7u] = FmEntry{pr.class_ptr, pr.name_addr, m};
         ++fm.next;
@@ -1700,6 +1722,27 @@ void *vrt_findfield(vrt_proc *proc, uint64_t params_vaddr) {
     auto &reg = p->scheduler.vm_reference.loader_public.class_registry();
     auto *ci = reinterpret_cast<loader::ClassInfo *>(pr.class_ptr);
     return reg.find_field(ci, buf);
+}
+
+void *vrt_member_at(vrt_proc *proc, vrt_class *cls, uint64_t idx,
+                    uint32_t fields) {
+    (void)proc;
+    auto *ci = reinterpret_cast<loader::ClassInfo *>(cls);
+    if (ci == nullptr) return nullptr;
+    /* POR POSICION, que es la pregunta que si tiene una sola respuesta cuando
+     * dos miembros comparten nombre.  Fuera de rango devuelve nulo, igual que
+     * el opcode del interprete: es lo que ve quien recorre. */
+    if (fields != 0)
+        return (idx < ci->field_count) ? &ci->fields[idx] : nullptr;
+    return (idx < ci->method_count) ? &ci->methods[idx] : nullptr;
+}
+
+uint32_t vrt_member_count(vrt_proc *proc, vrt_class *cls, uint32_t fields) {
+    (void)proc;
+    auto *ci = reinterpret_cast<loader::ClassInfo *>(cls);
+    if (ci == nullptr) return 0;
+    return static_cast<uint32_t>(fields != 0 ? ci->field_count
+                                             : ci->method_count);
 }
 
 void vrt_setmethdbg(vrt_proc *proc, uint64_t params_vaddr) {

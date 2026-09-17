@@ -172,10 +172,20 @@ class ClassRegistry {
      * Crece @c methods[] y, si el metodo es virtual, anade un slot al
      * @c vtable[].  Reconstruye la tabla hash.
      *
+     * @param cls   La clase.
+     * @param decl  El metodo.
+     * @param index Si no es nulo, recibe EN QUE hueco quedo.  Es el unico sitio
+     *              que lo sabe: un metodo nuevo se anyade al final, pero un
+     *              override REEMPLAZA el hueco que tenia el heredado, asi que
+     *              quien llama no lo puede deducir del orden en que define.
+     *              Sin este dato, quien acaba de definirlo tenia que volver a
+     *              buscarlo POR NOMBRE -- y un nombre deja de identificar a uno
+     *              en cuanto el tipo tiene dos que se llaman igual.
      * @return true si tuvo exito; false si ya existe un metodo con
      *         esa firma exacta (name + descriptor).
      */
-    bool add_method(ClassInfo *cls, const MethodDecl &decl);
+    bool add_method(ClassInfo *cls, const MethodDecl &decl,
+                    uint32_t *index = nullptr);
 
     /**
      * @brief Anade un advice (BEFORE / AFTER / AROUND) a un metodo.
