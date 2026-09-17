@@ -22,7 +22,16 @@ namespace ejemplos.ufcs;
 //      sobrecarga, y es lo que permite extender un tipo sin tocarlo.
 //   6. ENCADENADO: el receptor puede ser lo que devolvio la anterior.
 //   7. Receptor PUNTERO y receptor CLASE.
-//   8. Y que todo esto vale con el fichero dentro de un `namespace`, que es el
+//   8. Que el receptor NO tiene que encajar EXACTO: vale alli donde una
+//      llamada libre aceptaria el argumento.  Un `i32` encuentra la declarada
+//      contra `u64` -- porque `f(y, 3)` compila --, y un literal SIN sufijo se
+//      re-tipa si cabe, sin cast: `6.triple()` es `triple(6)`.  Con la clave
+//      exacta ninguno de los dos encontraba nada, y las dos grafias dejaban de
+//      ser la misma llamada.
+//   9. Pero eso vale para los PRIMITIVOS y solo para ellos: un tipo FUERTE es
+//      por dentro un entero y aun asi tiene su propio cubo de candidatas, que
+//      es precisamente lo que se declara al hacerlo fuerte.
+//   10. Y que todo esto vale con el fichero dentro de un `namespace`, que es el
 //      caso normal: el aplanado renombra la DECLARACION (`ejemplos__ufcs__f`)
 //      pero lo que va tras un punto se escribe corto, asi que buscar `f` a
 //      secas no encontraria nada si el indice no supiera el prefijo.
@@ -45,6 +54,16 @@ u64 mas(u64 a, u64 b, u64 c) { return a + b + c; }
 
 // 5. el MISMO nombre para otro receptor: otra cabeza de tipo, otra candidata
 i64 mas(i64 a, i64 b) { return a + b + 100; }
+
+// 8. el receptor no encaja EXACTO: un `i32` y un literal sin sufijo llegan
+// aqui igual que llegan a `triple(y)` y `triple(6)`
+u64 triple(u64 v) { return v * 3_u64; }
+
+// 9. y un tipo FUERTE, que por dentro es un u32 y aun asi no comparte
+// candidatas con el: lo suyo se busca en SU cubo
+typedef u32 Edad new;
+
+u64 anyos(Edad e) { return (u64)e + 1_u64; }
 
 // 7. puntero y clase
 i64 leer(i64* p) { return *p; }
@@ -83,9 +102,21 @@ i32 main() {
 	Caja k  = new Caja(7);
 	i64  m  = k.contenido(); // 7
 
-	i64 prim = (i64)(c + d + e + f);     // 12 + 9 + 10 + 13 = 44
-	i64 tot  = a + b + prim + n + h + m; // 18+27+44+106+5+7 = 207
+	// 8. sin cast: el literal se re-tipa si cabe, igual que en `triple(6)`,
+	// y un `i32` llega a la declarada contra `u64` igual que en `triple(y)`
+	i32 y  = 4_i32;
+	u64 sc = 6.triple(); // 18
+	u64 ch = y.triple(); // 12
+
+	// 9. tipo FUERTE: por dentro un u32, pero con su propio cubo
+	Edad ed = (Edad)41_u32;
+	u64  ea = ed.anyos(); // 42
+
+	i64 prim = (i64)(c + d + e + f);           // 12 + 9 + 10 + 13 = 44
+	i64 lax  = (i64)(sc + ch + ea);            // 18 + 12 + 42     = 72
+	i64 tot  = a + b + prim + n + h + m + lax; // 207 + 72 = 279
 	println("struct=${a},${b} prim=${c},${d},${e} cadena=${f}");
 	println("otra_cabeza=${n} puntero=${h} clase=${m} total=${tot}");
-	return (i32)(tot - 165); // 42
+	println("sin_cast=${sc} i32=${ch} fuerte=${ea}");
+	return (i32)(tot - 237); // 42
 }

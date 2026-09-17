@@ -62,10 +62,20 @@ using Candidates = util::SmallVector<uint32_t, 4>;
  *
  * | tipo del receptor | cabeza |
  * | :-- | :-- |
- * | `i64` | `i64` |
+ * | `i64`, `u8`, `f64`, `char`, `bool` | `num` |
  * | `i64*` | `ptr` |
  * | `Punto[8]` | `array` |
  * | `Caja<i64>` | `Caja` |
+ *
+ * Los escalares comparten cubo por la misma razon, un escalon mas abajo: una
+ * llamada libre acepta `add(y, 3)` con `y : i32` para `add(u64, u64)`, y un
+ * literal sin sufijo se re-tipa si cabe.  Con la cabeza exacta, `y.add(3)` y
+ * `6.doble()` no encontrarian la candidata que `add(y, 3)` y `doble(6)` si
+ * encuentran, y las dos grafias dejarian de ser la misma llamada.
+ *
+ * Eso vale para los PRIMITIVOS del lenguaje y solo para ellos: un tipo FUERTE
+ * (`typedef u32 Edad new`) es por dentro un entero pero tiene cubo propio, que
+ * es precisamente lo que se declara al hacerlo fuerte.
  *
  * @param t El tipo.
  * @return Su cabeza, INTERNADA: la comparacion es de punteros.

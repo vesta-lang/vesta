@@ -21,10 +21,40 @@ namespace vx {
 namespace ufcs {
 
 const std::string *head_of(const Type &t) {
+    /* Un tipo FUERTE tiene su propio cubo, aunque por dentro sea un entero: esa
+     * es toda su razon de ser.  Va ANTES del switch a proposito -- un newtype
+     * es un primitivo con nombre, asi que el cubo comun de los escalares se lo
+     * tragaria y `Edad` compartiria candidatas con `u32`, que es justo lo que
+     * declararlo fuerte prohibe. */
+    if (t.nominal_id != 0) return util::intern_name(t.nominal_name.str());
     /* Las familias que no llevan nombre propio caen en un cubo por FAMILIA: lo
      * declarado contra `T*` vale para cualquier puntero, y de eso hay uno solo
      * por programa en vez de uno por tipo apuntado. */
     switch (t.kind) {
+    /* Los ESCALARES caen todos en el mismo cubo, y no cada uno en el suyo.  No
+     * es una aproximacion: una llamada libre acepta `add(y, 3)` con `y : i32`
+     * para `add(u64, u64)` por conversion implicita, y un literal sin sufijo se
+     * re-tipa si cabe -- `doble(6)` va a `doble(u64)` --, asi que con la clave
+     * exacta `y.add(3)` y `6.doble()` no encontrarian la candidata y las dos
+     * grafias dejarian de ser la misma llamada, que es toda la propuesta.
+     *
+     * El cubo solo tiene que TRAERLAS todas; quien elige sigue siendo
+     * `overload::select`, que pone la exacta por delante de la compatible
+     * igual que en una llamada libre.  Y no engorda nada: lo que hay dentro
+     * son las sobrecargas de ESE nombre, que son las mismas que la llamada
+     * libre ya considera. */
+    case PrimitiveKind::BOOL:
+    case PrimitiveKind::CHAR:
+    case PrimitiveKind::I8:
+    case PrimitiveKind::I16:
+    case PrimitiveKind::I32:
+    case PrimitiveKind::I64:
+    case PrimitiveKind::U8:
+    case PrimitiveKind::U16:
+    case PrimitiveKind::U32:
+    case PrimitiveKind::U64:
+    case PrimitiveKind::F32:
+    case PrimitiveKind::F64: return util::intern_name("num");
     case PrimitiveKind::PTR: return util::intern_name("ptr");
     case PrimitiveKind::ARRAY: return util::intern_name("array");
     case PrimitiveKind::FUNCTION: return util::intern_name("fn");
