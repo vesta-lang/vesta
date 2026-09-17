@@ -300,6 +300,9 @@ VregEntries make_vreg_entries() {
         e.findmethod =
             reinterpret_cast<uint64_t>(g_runtime_entries->findmethod);
         e.findfield = reinterpret_cast<uint64_t>(g_runtime_entries->findfield);
+        e.member_at = reinterpret_cast<uint64_t>(g_runtime_entries->member_at);
+        e.member_count =
+            reinterpret_cast<uint64_t>(g_runtime_entries->member_count);
         e.defclass = reinterpret_cast<uint64_t>(g_runtime_entries->defclass);
         e.setmethdbg =
             reinterpret_cast<uint64_t>(g_runtime_entries->setmethdbg);

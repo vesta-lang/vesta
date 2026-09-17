@@ -263,6 +263,12 @@ VESTA_ENV_FLAG(DeadDefReport, "VESTA_DEAD_DEF_REPORT", Report, RegAlloc, Text,
 VESTA_ENV_FLAG(DeadDefOnly, "VESTA_DEAD_DEF_ONLY", Emitted, Codegen, Text, Any)
 VESTA_ENV_FLAG(VregDump, "VESTA_VREG_DUMP", Report, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(VregsDebug, "VESTA_JIT_VREGS_DEBUG", Report, RegAlloc, Bool, Any)
+/* Que una funcion que el JIT no sabe compilar sea un FALLO y no una caida
+ * callada al interprete.  Renunciar es correcto -- el interprete siempre da el
+ * resultado bueno --, y por eso mismo no se nota: una op nueva que nadie
+ * enseno al JIT deja de compilarse y lo unico que pasa es que va mas despacio.
+ * Con esto puesto, para y dice cual. */
+VESTA_ENV_FLAG(JitStrict, "VESTA_JIT_STRICT", Report, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(SsaCoalDbg, "VESTA_SSA_COAL_DBG", Report, RegAlloc, Bool, Any)
 VESTA_ENV_FLAG(RbankAsmDebug, "VESTA_RBANK_ASM_DEBUG", Report, RegAlloc, Bool,
                Any)

@@ -55,6 +55,7 @@
 #endif
 
 #include <cstdio>
+#include "vx/diag/diag_catalog.h" // el motivo, en todos los idiomas
 #include <cstdlib>
 #include <string>  // std::string (UCRT64 no lo incluye transitivo)
 #include <utility> // std::swap (FCMP operand reorder)
@@ -106,6 +107,25 @@ static void vreg_dbg(const char *fn, const char *op) {
     static const bool on = util::flag_on(util::FlagId::VregsDebug);
     if (on)
         std::fprintf(stderr, "[vreg-sel] '%s' no soportada: op %s\n", fn, op);
+    /* Y con el modo ESTRICTO, para.
+     *
+     * Renunciar es correcto -- el interprete siempre da el resultado bueno --
+     * y justo por eso no se nota: una op que nadie enseno al JIT deja de
+     * compilarse y lo unico que cambia es que va mas despacio.  Eso convierte
+     * un agujero en una perdida de rendimiento sin dueno, que es la clase de
+     * cosa que se queda anyos.  Aqui pasan TODAS las renuncias -- este es el
+     * unico sitio que las escribe --, asi que una sola comprobacion las cubre.
+     *
+     * Es un modo de DIAGNOSTICO, no el de por defecto: un programa normal debe
+     * seguir corriendo por el interprete lo que el JIT no sepa. */
+    static const bool strict = util::flag_on(util::FlagId::JitStrict);
+    if (strict) {
+        const std::string msg = vx::diag::format(
+            "VXA140", {fn != nullptr ? fn : "?", op != nullptr ? op : "?"});
+        std::fprintf(stderr, "\n%s\n\n", msg.c_str());
+        std::fflush(stderr);
+        std::abort();
+    }
 }
 
 /** @brief Diagnostico/A-B: VESTA_JIT_NO_INLINE_DEREF=1 enruta GC_DEREF_HOST
@@ -5899,6 +5919,63 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_unary(MOp::MOV, MOperand::make_reg(da0, 8),
                                        MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                break;
+            }
+
+            /* Preguntar por POSICION: cuantos miembros tiene un tipo y cual es
+             * el i-esimo.  Sin estos dos, cualquier funcion que recorriera los
+             * miembros de una clase -- `getMethods` / `getMethodAt`, que son
+             * del lenguaje -- se quedaba SIN COMPILAR, y eso no da un error:
+             * solo va por el interprete y nadie se entera. */
+            case ir::IrOp::REFLECT_COUNT:
+            case ir::IrOp::REFLECT_AT: {
+                flush_pending();
+                const bool at = (in.op == ir::IrOp::REFLECT_AT);
+                const uint64_t addr = at ? ent.member_at : ent.member_count;
+                if (!vm || addr == 0 || in.dst == ir::IR_NO_VALUE) {
+                    vreg_dbg(fn.name.c_str(), ir::ir_op_name(in.op));
+                    return false;
+                }
+                if (in.operands.size() != (at ? 2u : 1u)) return false;
+#if defined(_WIN32)
+                const MReg a0 = MReg::RCX, a1 = MReg::RDX, a2 = MReg::R8,
+                          a3 = MReg::R9;
+#else
+                const MReg a0 = MReg::RDI, a1 = MReg::RSI, a2 = MReg::RDX,
+                          a3 = MReg::RCX;
+#endif
+                /* Los operandos a scratch ANTES de tocar los registros de
+                 * argumento: `vr` puede devolver uno de ellos y pisarlo al
+                 * colocar el primero. */
+                O.push_back(MInstr::make_unary(MOp::MOV,
+                                               MOperand::make_reg(MReg::R10, 8),
+                                               vr(in.operands[0]))); // cls
+                if (at)
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(MReg::R11, 8),
+                        vr(in.operands[1]))); // indice
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(a1, 8),
+                                       MOperand::make_reg(MReg::R10, 8)));
+                if (at) {
+                    O.push_back(
+                        MInstr::make_unary(MOp::MOV, MOperand::make_reg(a2, 8),
+                                           MOperand::make_reg(MReg::R11, 8)));
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(a3, 8),
+                        MOperand::make_imm32(static_cast<int32_t>(in.imm))));
+                } else {
+                    O.push_back(MInstr::make_unary(
+                        MOp::MOV, MOperand::make_reg(a2, 8),
+                        MOperand::make_imm32(static_cast<int32_t>(in.imm))));
+                }
+                O.push_back(
+                    MInstr::make_unary(MOp::MOV, MOperand::make_reg(a0, 8),
+                                       MOperand::make_reg(MReg::RBX, 8)));
+                O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
+                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
+                                               MOperand::make_reg(MReg::RAX,
+                                                                  8)));
                 break;
             }
 

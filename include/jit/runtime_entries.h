@@ -163,6 +163,11 @@ struct RuntimeEntries {
     int32_t (*addadvice)(vrt_proc *, void *, void *, uint8_t) = nullptr;
     void *(*findmethod)(vrt_proc *, uint64_t) = nullptr;
     void *(*findfield)(vrt_proc *, uint64_t) = nullptr;
+    /* Por POSICION.  Sin esto, el JIT no sabia compilar `getMethodAt` ni
+     * `getMethods`, asi que NINGUNA funcion que recorriera los miembros de un
+     * tipo se compilaba -- y eso no da un error, solo va por el interprete. */
+    void *(*member_at)(vrt_proc *, vrt_class *, uint64_t, uint32_t) = nullptr;
+    uint32_t (*member_count)(vrt_proc *, vrt_class *, uint32_t) = nullptr;
     void (*setmethdbg)(vrt_proc *, uint64_t) = nullptr;
 
     /* ----- String ops (Sprint JIT-cobertura 2026-06-01) ----- */

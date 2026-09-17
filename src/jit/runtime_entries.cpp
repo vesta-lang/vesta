@@ -152,6 +152,8 @@ void RuntimeEntries::resolve() {
     addadvice = &vrt_addadvice;
     findmethod = &vrt_findmethod;
     findfield = &vrt_findfield;
+    member_at = &vrt_member_at;
+    member_count = &vrt_member_count;
     setmethdbg = &vrt_setmethdbg;
 
     // ----- String ops (Sprint JIT-cobertura 2026-06-01) -----

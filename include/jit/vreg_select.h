@@ -141,6 +141,10 @@ struct VregEntries {
     uint64_t findclass = 0;  ///< vrt_findclass(proc, params) -> ClassInfo*
     uint64_t findmethod = 0; ///< vrt_findmethod(proc, params) -> MethodInfo*
     uint64_t findfield = 0;  ///< vrt_findfield(proc, params) -> FieldInfo*
+    /// vrt_member_at(proc, cls, idx, fields) -> MethodInfo*/FieldInfo*
+    uint64_t member_at = 0;
+    /// vrt_member_count(proc, cls, fields) -> u32
+    uint64_t member_count = 0;
     uint64_t defclass = 0;   ///< vrt_defclass(proc, params) -> ClassInfo*
     uint64_t setmethdbg = 0; ///< vrt_setmethdbg(proc, params) -> void
     uint64_t deffield = 0;   ///< vrt_deffield(proc, cls, params) -> i32
