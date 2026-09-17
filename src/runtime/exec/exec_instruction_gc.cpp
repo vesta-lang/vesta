@@ -692,6 +692,44 @@ void exec_instr_gcalloc(ProcessVM *vm, const DecodedInstr &instr) {
  * @param vm    Proceso virtual que ejecuta RAWALLOC.
  * @param instr Instruccion descodificada con reg_data.reg1 (tamano) y mode.
  */
+/**
+ * @brief Invoca el asignador DEL PROGRAMA sin llevarse por delante el banco de
+ *        registros de quien ejecuto la instruccion.
+ *
+ * `alloc` y `free` son INSTRUCCIONES para quien las emite: leen un registro y,
+ * como mucho, escriben el del resultado.  Con el asignador del programa delante
+ * dejan de serlo por dentro -- son una LLAMADA, y el cuerpo al que llaman es
+ * codigo Vesta que usa el MISMO banco de registros que el interprete tiene vivo
+ * --.  Nadie se lo dijo al emisor, que deja valores en registros a traves de
+ * ellas porque su contrato no dice que las pisen.
+ *
+ * Lo que costaba: `return *p;` con un destructor que libera al salir de ambito
+ * devolvia CERO en vez del valor -- el valor estaba en `r0` desde antes del
+ * `free` y el `free` lo pisaba --.  Y solo a veces: con todo interpretado o
+ * todo compilado salia bien, porque el cuerpo del asignador pisa r0 o no segun
+ * por donde vaya; el fallo aparecia en la MEZCLA, que es donde nadie mira.
+ *
+ * @param vm          El proceso.
+ * @param fn_addr     Direccion del asignador del programa.
+ * @param arg         Lo que recibe (el tamano, o el puntero a liberar).
+ * @param keep_result Si su resultado en R00 es el de la instruccion.  `alloc`
+ *                    devuelve el puntero; `free` no devuelve nada.
+ */
+static void call_program_allocator(ProcessVM *vm, uint64_t fn_addr,
+                                   uint64_t arg, bool keep_result) {
+    uint64_t saved[16];
+    for (int i = 0; i < 16; ++i)
+        saved[i] = vm->registers.regs[i].qword();
+    vm->registers.regs[R01].qword(arg); // convencion de llamada de la VM
+    auto fn = reinterpret_cast<uint64_t (*)(void *)>(
+        static_cast<uintptr_t>(fn_addr));
+    fn(vm);
+    const uint64_t result = vm->registers.regs[R00].qword();
+    for (int i = 0; i < 16; ++i)
+        vm->registers.regs[i].qword(saved[i]);
+    if (keep_result) vm->registers.regs[R00].qword(result);
+}
+
 void exec_instr_raw_alloc(ProcessVM *vm, const DecodedInstr &instr) {
     const uint8_t rsrc =
         instr.data_instruction.reg_data.reg1; // registro con el tamano
@@ -708,11 +746,11 @@ void exec_instr_raw_alloc(ProcessVM *vm, const DecodedInstr &instr) {
      * Cuando no lo hay -- un programa que no trae ninguno, o lo que se reserve
      * antes de que este compilado -- se queda el propio, que es el respaldo. */
     if (vm->alloc_del_programa != 0) {
-        vm->registers.regs[R01].qword(size); // convencion de llamada de la VM
-        auto fn = reinterpret_cast<uint64_t (*)(void *)>(
-            static_cast<uintptr_t>(vm->alloc_del_programa));
-        fn(vm);
-        return; // deja el puntero en R00, como el resto de llamadas
+        // Deja el puntero en R00, como el resto de llamadas, y NADA mas: los
+        // demas registros son de quien ejecuto la instruccion.
+        call_program_allocator(vm, vm->alloc_del_programa, size,
+                               /*keep_result=*/true);
+        return;
     }
     uint64_t ptr =
         vm->raw_alloc.alloc(static_cast<size_t>(size)); // alocar bloque
@@ -734,10 +772,9 @@ void exec_instr_raw_free(ProcessVM *vm, const DecodedInstr &instr) {
     const uint64_t ptr = vm->registers.regs[rsrc].qword();
     // Quien reserva, libera: por el mismo sitio que @ref exec_instr_raw_alloc.
     if (vm->free_del_programa != 0) {
-        vm->registers.regs[R01].qword(ptr);
-        auto fn = reinterpret_cast<uint64_t (*)(void *)>(
-            static_cast<uintptr_t>(vm->free_del_programa));
-        fn(vm);
+        // `free` no devuelve nada, asi que no deja NINGUN registro tocado.
+        call_program_allocator(vm, vm->free_del_programa, ptr,
+                               /*keep_result=*/false);
         return;
     }
     vm->raw_alloc.free(ptr); // liberar el bloque
