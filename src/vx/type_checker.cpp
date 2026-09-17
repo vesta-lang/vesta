@@ -11745,6 +11745,16 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     const std::string *chosen = nullptr; // con QUE nombre se declaro
     const ufcs::Candidates *cand_slots =
         ufcs_.find(recv, fa->field_name, &chosen);
+    /* Un literal de cadena es un `ptr` a datos estaticos y solo se PROMUEVE a
+     * `string` donde hace falta -- por eso `grita("hola")` compila --, asi que
+     * si no hay nada para el puntero se pregunta tambien por la cadena.  Sin
+     * esto `"hola".grita()` no encontraria lo que `grita("hola")` si encuentra.
+     * Se prueba en este orden porque el puntero es lo que el literal ES y la
+     * cadena lo que puede llegar a ser. */
+    if (cand_slots == nullptr && recv.kind == PrimitiveKind::PTR &&
+        fa->base->kind == ast::NodeKind::StringLitExpr)
+        cand_slots =
+            ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name, &chosen);
     if (cand_slots == nullptr || cand_slots->empty()) return false;
 
     /* Los tipos de la llamada CON el receptor delante, que es lo que una libre

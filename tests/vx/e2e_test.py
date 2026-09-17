@@ -3787,6 +3787,7 @@ modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de 
 modes3_case("params_alias", "dos punteros parametro pueden ser la misma memoria", "544_params_alias.vx", 111)
 modes3_case("sobrecarga545", "sobrecarga por aridad y por tipo en los SEIS caminos de llamada (funcion libre, constructor de struct, metodo de struct, metodo de clase, static, super) mas la interfaz: gana la exacta, el retorno sale de la elegida en los dos ordenes de declaracion, y un override sigue siendo un override", "545_sobrecarga_funciones.vx", 42)
 modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada -- receptor struct, primitivo, puntero y clase, con sobrecarga entre las libres candidatas, encadenado, y el mismo nombre para receptores de tipo distinto", "549_ufcs_llamada_uniforme.vx", 42)
+modes3_case("ufcs551", "encadenar con UFCS: `2.add(4).mul(10).div(5)` sobre literales sin un solo cast, lo mismo con cadenas (incluido un literal de receptor, que es un `ptr` hasta que se promueve), y cruzar de familia a mitad de cadena", "551_ufcs_encadenado.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)
