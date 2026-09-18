@@ -941,6 +941,18 @@ struct AssignExpr : Expr {
 struct CallExpr : Expr {
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> args;
+    /**
+     * @brief Con que NOMBRE se escribio cada argumento, si se escribio alguno.
+     *
+     * `f(.a = 3, .b = "x")`: la grafia es la del init designado, que es la que
+     * el lenguaje ya tiene para decir "esta ranura se llama asi" -- meter una
+     * segunda parte en dos todo lo que hay detras.
+     *
+     * Paralelo a @c args, con cadena vacia donde el argumento fue posicional.
+     * VACIO del todo cuando NINGUNO lleva nombre, que es el caso normal: asi
+     * una llamada corriente no paga ni una reserva por esto.
+     */
+    std::vector<std::string> arg_names;
     /// Argumentos de tipo @c <T,U,...> para builtins comptime
     /// (@c sizeof<T>, @c offsetof<T>, etc.).  Vacio para llamadas
     /// normales.  Solo poblado por el parser cuando el callee es un

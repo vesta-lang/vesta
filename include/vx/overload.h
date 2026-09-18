@@ -67,6 +67,14 @@ constexpr uint32_t kNoPick = 0xFFFFFFFFu;
  */
 struct Candidate {
     const std::vector<Type> *params = nullptr;
+    /**
+     * @brief Como se llaman sus parametros, alineado con @c params.
+     *
+     * Solo hace falta cuando la llamada nombra alguno (`f(.a = 3)`), y entonces
+     * el nombre entra en la SELECCION: una candidata que no tenga un parametro
+     * `a` no es viable, aunque los tipos cuadraran.  Nulo cuando no se sabe.
+     */
+    const std::vector<std::string> *param_names = nullptr;
     uint32_t slot = kNoPick;
     /**
      * @brief Que parametros viajan por REFERENCIA (un bit por posicion).
@@ -134,15 +142,26 @@ using AcceptsFn = bool (*)(void *ctx, const Type &param, const Type &arg);
  * nadie: su error ya esta dado, y descartar por el solo anyadiria un segundo
  * mensaje diciendo que la funcion no existe.
  *
+ * @par Argumentos con NOMBRE
+ * `f(.a = 3, .b = 1)`.  La lista deja de estar en orden, y reordenarla es POR
+ * CANDIDATA -- cada sobrecarga puede llamar distinto a sus parametros --, asi
+ * que se hace AQUI y no en quien pregunta: hacerlo fuera obligaria a repetir la
+ * regla en cada sitio de llamada, que son cinco.  Sin nombres no cuesta nada:
+ * una sonda a un puntero nulo y el camino de siempre.
+ *
  * @param cands   Las que comparten nombre, en el orden en que se declararon.
  * @param n       Cuantas son.
  * @param args    Los tipos de los argumentos de la llamada.
  * @param accepts La regla de conversion, del comprobador.
  * @param ctx     Lo que @p accepts necesite; se le pasa tal cual.
+ * @param arg_names Con que nombre se escribio cada argumento, alineado con
+ *                @p args y vacio donde fue posicional.  Nulo o vacio = ninguno
+ *                lleva nombre, que es el caso normal.
  * @return El @c Candidate::slot de la elegida, o @c kNoPick.
  */
 uint32_t select(const Candidate *cands, size_t n, const std::vector<Type> &args,
-                AcceptsFn accepts, void *ctx);
+                AcceptsFn accepts, void *ctx,
+                const std::vector<std::string> *arg_names = nullptr);
 
 /**
  * @brief Lo que separa el simbolo de una sobrecarga del de sus hermanas.

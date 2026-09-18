@@ -1,0 +1,61 @@
+namespace ejemplos.nombrados;
+
+// ARGUMENTOS CON NOMBRE: `.nombre = valor`, la grafia del init designado.
+//
+// El lenguaje ya tenia una forma de decir "esta ranura se llama asi" -- el init
+// designado de un struct, `{.x = 1, .y = 2}` --, asi que se usa esa.  Meter una
+// segunda parte en dos todo lo que hay detras, y una de las mitades se queda
+// corta sin que nadie lo note.
+//
+// Lo que se prueba aqui:
+//
+//   1. Nombrar en una llamada LIBRE, en cualquier orden.
+//   2. Mezclar: lo posicional delante, lo nombrado detras.
+//   3. Con el punto, el receptor cae en el hueco NOMBRADO: `.b = _`.
+//   4. Y por ELIMINACION: si `a` ya esta dado, el receptor cae en `b`, que es
+//      la unica ranura que queda libre.
+//   5. Que el nombre entra en la SELECCION, no solo el tipo: entre dos
+//      sobrecargas del mismo nombre, nombrar una ranura elige la que la tiene.
+//   6. Y que llamar por nombre da EL MISMO resultado que por posicion, que es
+//      lo unico que hace que las dos formas sean la misma llamada.
+//
+// Resultado esperado: 42.
+
+i64 restar(i64 a, i64 b) { return a - b; }
+
+// El texto va SEGUNDO: aqui el sujeto es lo de dentro, no el marco.
+string enmarca(string marco, string texto) {
+	return marco.concat(texto).concat(marco);
+}
+
+// 5. dos sobrecargas que solo se distinguen por COMO se llaman sus ranuras
+i64 mide(i64 alto, i64 ancho) { return alto * 10 + ancho; }
+i64 mide(i64 alto, i64 ancho, i64 fondo) { return fondo; }
+
+i32 main() {
+	// 1. libre, nombrado, en los dos ordenes
+	i64 n1 = restar(.a = 25,.b = 5); // 20
+	i64 n2 = restar(.b = 5,.a = 25); // 20, el orden escrito no manda
+	i64 n3 = restar(25, 5);          // 20, la forma de siempre
+
+	// 2. mezclado: lo posicional delante
+	i64 n4 = restar(25,.b = 5); // 20
+
+	// 3. con punto, el receptor al hueco NOMBRADO
+	string s1 = "eh".enmarca(.marco = "<<",.texto = _); // "<<eh<<"
+	i64    l1 = (i64)s1.length();                       // 6
+
+	// 4. y por eliminacion: `a` dado, asi que el receptor cae en `b`
+	i64 n5 = 5.restar(.a = 25); // restar(25, 5) = 20
+
+	// 5. el nombre elige entre hermanas
+	i64 m1 = mide(.alto = 1,.ancho = 2);            // 12
+	i64 m2 = mide(.alto = 1,.ancho = 2,.fondo = 7); // 7
+
+	// 6. las cuatro formas de escribir lo mismo dan lo mismo
+	i64 iguales = n1 + n2 + n3 + n4 + n5; // 20 * 5 = 100
+	i64 tot     = iguales + l1 + m1 + m2; // 100 + 6 + 12 + 7 = 125
+	println("libre=${n1},${n2},${n3} mezcla=${n4} elim=${n5}");
+	println("punto=[${s1}] largo=${l1} sobrecarga=${m1},${m2} total=${tot}");
+	return (i32)(tot - 83); // 42
+}

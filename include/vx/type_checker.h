@@ -119,6 +119,14 @@ enum class SymbolKind : uint8_t {
 struct FunctionSig {
     Type return_type;
     std::vector<Type> param_types;
+    /// Como se llama cada parametro, alineado con @c param_types.
+    ///
+    /// Esta en la FIRMA por el mismo motivo que @c param_dirs, y con las
+    /// mismas consecuencias: quien lo necesita es el SITIO DE LLAMADA
+    /// (`f(.a = 3)`), que muchas veces esta en otro fichero, asi que viaja en
+    /// el `.vxi`.  Y de ahi sale que **el nombre de un parametro pasa a ser
+    /// parte del contrato**: renombrarlo rompe a quien llama.
+    std::vector<std::string> param_names;
     /// ABI custom por-parametro (`register("rXX") T name`): registro fisico de
     /// entrada por parametro, alineado con @c param_types.  Vacio = ABI
     /// estandar. Lo consume: (a) el codegen del CALL directo (via IrFunction),
@@ -367,6 +375,10 @@ struct ClassMethodInfo {
     std::string name;
     Type return_type;
     std::vector<Type> param_types;
+    /// Como se llama cada parametro, alineado con @c param_types.  Misma razon
+    /// que en @c FunctionSig::param_names: `obj.m(.a = 3)` se escribe donde se
+    /// llama, y el nombre entra en la seleccion.
+    std::vector<std::string> param_names;
     /// Direccion por parametro, alineada con @c param_types.  Misma razon que
     /// en @c FunctionSig::param_dirs: la necesita quien LLAMA.
     std::vector<ParamDir> param_dirs;
@@ -2194,6 +2206,25 @@ class TypeChecker {
      *         mas de uno (ya reportado).
      */
     size_t ufcs_receiver_hole(ast::CallExpr *e);
+
+    /**
+     * @brief Deja la llamada en orden POSICIONAL y sin nombres.
+     *
+     * Los nombres han cumplido en cuanto la candidata esta elegida: a partir de
+     * ahi `f(.b = 2, .a = 1)` es `f(1, 2)` y nada mas.  Reordenar el AST y
+     * borrarlos es lo que hace que al bajado, al JIT y al nativo no les llegue
+     * nada nuevo -- la misma operacion, y por la misma razon, que la
+     * reescritura de UFCS.
+     *
+     * @param e    La llamada, ya resuelta.
+     * @param pn   Los nombres de los parametros de la elegida.
+     * @param quien Como nombrarla en el diagnostico.
+     * @return false si algun nombre no existe, dos caen en la misma ranura o
+     *         alguna se queda sin llenar (ya reportado).
+     */
+    bool normalize_named_args(ast::CallExpr *e,
+                              const std::vector<std::string> &pn,
+                              const std::string &quien);
 
     /**
      * @brief El tipo TIENE el metodo, y ademas hay una libre que lo tomaria.

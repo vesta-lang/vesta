@@ -8464,6 +8464,42 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
 // Expresiones (cascada de precedencias).
 // ---------------------------------------------------------------------
 
+bool Parser::parse_call_arg(ast::CallExpr *call) {
+    std::string name;
+    if (current_.kind == TokenKind::DOT) {
+        (void)consume(); // '.'
+        if (current_.kind != TokenKind::IDENTIFIER) {
+            error_here("se esperaba el nombre del parametro tras '.'");
+            return false;
+        }
+        name = consume().lexeme;
+        if (!match(TokenKind::ASSIGN)) {
+            error_here("se esperaba '=' tras '.parametro'");
+            return false;
+        }
+    } else if (!call->arg_names.empty()) {
+        /* Ya hubo uno con nombre: los de detras tambien lo llevan.  Si no, a
+         * que ranura va este dependeria de la firma, y eso deja de leerse en
+         * el sitio de la llamada. */
+        error_here("un argumento posicional no puede ir detras de uno con "
+                   "nombre: ponlo antes, o dale su nombre");
+        return false;
+    }
+    auto arg = parse_expr();
+    if (!arg) return false;
+    /* Los nombres solo existen si alguno lo lleva.  Al primero que aparece se
+     * rellena con vacios lo que habia ANTES -- una vez por llamada nombrada, y
+     * ninguna por llamada corriente --, y desde ahi los dos vectores crecen a
+     * la par.  Rellenar DESPUES de meter el argumento dejaba el vector con la
+     * medida ya buena y el nombre sin guardar. */
+    const bool lleva_nombres = !name.empty() || !call->arg_names.empty();
+    if (lleva_nombres && call->arg_names.size() < call->args.size())
+        call->arg_names.resize(call->args.size());
+    call->args.push_back(std::move(arg));
+    if (lleva_nombres) call->arg_names.push_back(std::move(name));
+    return true;
+}
+
 std::unique_ptr<ast::Expr> Parser::parse_expr() {
     /* Misma medida que en las sentencias: el nodo se queda con la posicion de
      * su primer token y la longitud de ESE token, no la de la expresion.  Aqui
@@ -9008,8 +9044,7 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             call->type_args = std::move(tas);
             if (current_.kind != TokenKind::RPAREN) {
                 while (true) {
-                    auto arg = parse_expr();
-                    if (arg) call->args.push_back(std::move(arg));
+                    if (!parse_call_arg(call.get())) break;
                     if (!match(TokenKind::COMMA)) break;
                 }
             }
@@ -9209,9 +9244,8 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
                             }
                             call->args.push_back(std::move(slit));
                         }
-                    } else {
-                        auto arg = parse_expr();
-                        if (arg) call->args.push_back(std::move(arg));
+                    } else if (!parse_call_arg(call.get())) {
+                        break;
                     }
                     ++arg_idx;
                     if (!match(TokenKind::COMMA)) break;
@@ -9244,8 +9278,7 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             call->is_braces_call = true;
             if (current_.kind != TokenKind::RBRACE) {
                 while (true) {
-                    auto arg = parse_expr();
-                    if (arg) call->args.push_back(std::move(arg));
+                    if (!parse_call_arg(call.get())) break;
                     if (!match(TokenKind::COMMA)) break;
                 }
             }

@@ -109,6 +109,33 @@ const Candidates *Index::find(const Type &recv, const std::string &written,
     return nullptr;
 }
 
+void Index::declare_any(const Type &param, const std::string &name,
+                        uint32_t slot) {
+    Candidates &c = by_any_[Key{head_of(param), util::intern_name(name)}];
+    for (uint32_t s : c)
+        if (s == slot) return; // dos parametros de la misma cabeza no duplican
+    c.push_back(slot);
+}
+
+const Candidates *Index::find_any(const Type &recv, const std::string &written,
+                                  const std::string **matched) const {
+    const std::string *head = head_of(recv);
+    const std::string *name = util::intern_name(written);
+    auto it = by_any_.find(Key{head, name});
+    if (it != by_any_.end()) {
+        if (matched != nullptr) *matched = name;
+        return &it->second;
+    }
+    for (const std::string &p : prefixes_) {
+        name = util::intern_name(p + written);
+        it = by_any_.find(Key{head, name});
+        if (it == by_any_.end()) continue;
+        if (matched != nullptr) *matched = name;
+        return &it->second;
+    }
+    return nullptr;
+}
+
 const Candidates *Index::all_named(const std::string &written) const {
     // Las mismas grafias que prueba `find`, contra la tabla por NOMBRE.
     auto it = by_name_.find(util::intern_name(written));

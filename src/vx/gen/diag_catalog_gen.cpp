@@ -80,6 +80,9 @@ const CatEntry kEntries[] = {
     {"VX2071", {"no '{1}' takes a '{0}' as its first parameter, but there are for: {2}.  Cast the receiver: `(({3})receiver).{1}(...)`", "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}.  Convierte el receptor: `(({3})receptor).{1}(...)`"}},
     {"VX2072", {"'_' appears more than once in the same call: there is only one receiver to place", "'_' aparece mas de una vez en la misma llamada: solo hay un receptor que colocar"}},
     {"VX2073", {"'_' only means something after a dot: in a free call there is no receiver to place", "'_' solo significa algo tras un punto: en una llamada libre no hay receptor que colocar"}},
+    {"VX2074", {"'{1}' has no parameter named '{0}'", "'{1}' no tiene ningun parametro llamado '{0}'"}},
+    {"VX2075", {"two arguments land on parameter '{0}' of '{1}'", "dos argumentos caen en el parametro '{0}' de '{1}'"}},
+    {"VX2076", {"parameter '{0}' of '{1}' is left without an argument", "el parametro '{0}' de '{1}' se queda sin argumento"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -641,7 +644,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 620;
+const int kEntryCount = 623;
 
 } // namespace
 

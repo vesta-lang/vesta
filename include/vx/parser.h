@@ -516,6 +516,28 @@ class Parser {
     // Reglas gramaticales: expresiones, por nivel de precedencia.
     // -----------------------------------------------------------------
 
+    /**
+     * @brief Un argumento de llamada, con su nombre si lo lleva.
+     *
+     * `f(.a = 3)`: la grafia es la del init designado, que es la que el
+     * lenguaje ya tiene para nombrar una ranura.  Un `.` al empezar un
+     * argumento no es ambiguo con nada -- ninguna expresion empieza por punto.
+     *
+     * Lo posicional va ANTES que lo nombrado: en cuanto aparece un nombre, los
+     * de detras tambien tienen que llevarlo, porque si no, a que ranura va un
+     * posicional despues de un nombrado depende de la firma y deja de leerse
+     * en el sitio.
+     *
+     * Vive aqui y no repetido en los tres sitios que parsean argumentos --
+     * llamada normal, generica y `a{...}` -- porque tres copias son tres
+     * criterios esperando a divergir.
+     *
+     * @param call La llamada que se esta construyendo; se le anyade el
+     *             argumento y, si lleva, su nombre.
+     * @return true si el argumento se parseo.
+     */
+    bool parse_call_arg(ast::CallExpr *call);
+
     std::unique_ptr<ast::Expr> parse_expr();
     std::unique_ptr<ast::Expr> parse_assignment();
     std::unique_ptr<ast::Expr> parse_ternary(); ///< cond ? then : else

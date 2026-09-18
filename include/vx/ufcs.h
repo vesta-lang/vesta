@@ -101,6 +101,32 @@ struct Index {
                  uint32_t slot);
 
     /**
+     * @brief Apunta que @p param tambien puede recibir el receptor, por hueco.
+     *
+     * Con `_` el receptor no cae en el primero -- `"hola".sumar(.a = 3, .b = _)`
+     * lo manda a `b` --, asi que buscar solo por la cabeza del PRIMER parametro
+     * no encuentra nada.  Esto vive en su propia tabla y no mezclado con la
+     * otra: la regla 2.2 pregunta por "quien podria ser el metodo de esto", que
+     * es el primero y nada mas, y meter aqui los demas la haria gritar por
+     * funciones que solo se alcanzan escribiendo un hueco.
+     *
+     * @param param Tipo de UN parametro suyo (el primero incluido).
+     * @param name  Nombre con el que se declaro.
+     * @param slot  Como la reconoce quien pregunta.
+     */
+    void declare_any(const Type &param, const std::string &name,
+                     uint32_t slot);
+
+    /**
+     * @brief Como @c find, pero mirando CUALQUIER parametro.
+     *
+     * Solo para una llamada con hueco.  Sin hueco la pregunta es otra -- "cual
+     * puede tomar esto de PRIMERO" -- y la contesta @c find.
+     */
+    const Candidates *find_any(const Type &recv, const std::string &written,
+                               const std::string **matched = nullptr) const;
+
+    /**
      * @brief Las que podrian tomar @p recv con ese nombre, o nulo si ninguna.
      *
      * No dice CUAL: eso lo decide @c overload::select con los argumentos, que
@@ -173,6 +199,9 @@ struct Index {
         }
     };
     std::unordered_map<Key, Candidates, KeyHash> by_head_;
+    /// Lo mismo por la cabeza de CUALQUIER parametro, para la llamada con
+    /// hueco.  Aparte de  by_head_ a proposito: ver  declare_any.
+    std::unordered_map<Key, Candidates, KeyHash> by_any_;
     /// Lo MISMO indexado solo por nombre, para poder decir para que receptores
     /// SI la hay cuando no la hay para este.  Es la segunda tabla de 6-bis.3:
     /// crece con las declaraciones, no con el uso.

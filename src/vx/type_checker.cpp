@@ -6053,6 +6053,9 @@ void TypeChecker::collect_globals() {
                 // direccion la necesita quien LLAMA, y muchas veces llama
                 // desde otro fichero, donde la declaracion no se ve.
                 sig.param_dirs.push_back(p->dir);
+                // El NOMBRE, por lo mismo: `f(.a = 3)` se escribe donde se
+                // llama, y eso suele ser otro fichero.
+                sig.param_names.push_back(p->name);
             }
             // Normalizar: si ningun param declaro ABI custom, dejar el vector
             // vacio (== ABI estandar; consistente con el operator== de Type).
@@ -6080,6 +6083,11 @@ void TypeChecker::collect_globals() {
              * sitio de llamada. */
             if (!sig.param_types.empty())
                 ufcs_.declare(sig.param_types[0], fn->name, s.sig_index);
+            /* Y bajo la cabeza de CADA parametro, para la llamada con hueco:
+             * `"x".f(.a = 1, .b = _)` manda el receptor a `b`, asi que
+             * buscarla solo por el primero no la encontraria. */
+            for (const auto &pt : sig.param_types)
+                ufcs_.declare_any(pt, fn->name, s.sig_index);
             function_sigs_.push_back(std::move(sig));
             if (!declare(fn->name, s)) {
                 // Bug fix 2026-05-23: forward declaration -- si el simbolo
@@ -6155,6 +6163,7 @@ void TypeChecker::collect_globals() {
                                 sig.param_types.size());
                 sig.param_types.push_back(pt);
                 sig.param_dirs.push_back(p->dir);
+                sig.param_names.push_back(p->name);
             }
             sig.extern_lib = efd->lib;
             Symbol s;
@@ -6535,10 +6544,12 @@ void TypeChecker::record_method_params(const ast::ClassMethodDecl &m,
              * llamo, no un `T`. */
             mi.param_types.push_back(Type::make_ptr(pt));
             mi.param_dirs.push_back(p->dir);
+            mi.param_names.push_back(p->name);
             continue;
         }
         mi.param_types.push_back(pt);
         mi.param_dirs.push_back(p->dir);
+        mi.param_names.push_back(p->name);
     }
 }
 
@@ -9612,6 +9623,7 @@ Type TypeChecker::check_expr(ast::Expr *e) {
                     continue;
                 overload::Candidate c;
                 c.params = &ms[i].param_types;
+                c.param_names = &ms[i].param_names;
                 c.slot = static_cast<uint32_t>(i);
                 c.by_ref_mask = ms[i].param_by_ref_mask;
                 if (ms[i].is_variadic) c.variadic_elem = &ms[i].variadic_elem;
@@ -10107,6 +10119,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             if (has_own && m.defining_class != cls.name) continue;
             overload::Candidate c;
             c.params = &m.param_types;
+            c.param_names = &m.param_names;
             c.slot = static_cast<uint32_t>(i);
             c.by_ref_mask = m.param_by_ref_mask;
             /* Con un variadico la aridad no es exacta: los de delante son
@@ -11736,6 +11749,56 @@ std::string TypeChecker::written_type_name(const Type &t) const {
     return txt;
 }
 
+bool TypeChecker::normalize_named_args(ast::CallExpr *e,
+                                       const std::vector<std::string> &pn,
+                                       const std::string &quien) {
+    const size_t np = pn.size();
+    std::vector<std::unique_ptr<ast::Expr>> ord(np);
+    /* La MISMA regla que uso la seleccion, y por eso esta escrita igual: lo
+     * nombrado a su ranura, y lo posicional a las que queden libres.  Si las
+     * dos no coincidieran, se elegiria una candidata y se le pasarian los
+     * argumentos de otra forma. */
+    for (size_t k = 0; k < e->args.size(); ++k) {
+        if (k >= e->arg_names.size() || e->arg_names[k].empty()) continue;
+        size_t at = np;
+        for (size_t j = 0; j < np; ++j)
+            if (pn[j] == e->arg_names[k]) {
+                at = j;
+                break;
+            }
+        if (at == np) {
+            diags_.diag(e->args[k]->loc, DiagLevel::ERR, "VX2074",
+                        {e->arg_names[k], quien});
+            return false;
+        }
+        if (ord[at] != nullptr) {
+            diags_.diag(e->args[k]->loc, DiagLevel::ERR, "VX2075",
+                        {pn[at], quien});
+            return false;
+        }
+        ord[at] = std::move(e->args[k]);
+    }
+    size_t libre = 0;
+    for (size_t k = 0; k < e->args.size(); ++k) {
+        if (k < e->arg_names.size() && !e->arg_names[k].empty()) continue;
+        while (libre < np && ord[libre] != nullptr) ++libre;
+        if (libre == np) {
+            diags_.diag(e->args[k]->loc, DiagLevel::ERR, "VX2075",
+                        {pn.empty() ? std::string("?") : pn.back(), quien});
+            return false;
+        }
+        ord[libre] = std::move(e->args[k]);
+    }
+    for (size_t j = 0; j < np; ++j)
+        if (ord[j] == nullptr) {
+            diags_.diag(e->loc, DiagLevel::ERR, "VX2076", {pn[j], quien});
+            return false;
+        }
+    e->args = std::move(ord);
+    e->arg_names.clear();
+    return true;
+}
+
 size_t TypeChecker::ufcs_receiver_hole(ast::CallExpr *e) {
     size_t found = kUfcsNoHole;
     for (size_t i = 0; i < e->args.size(); ++i) {
@@ -11757,9 +11820,15 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     /* QUE candidatas hay lo dice el indice de UFCS, que las correlaciono al
      * DECLARARLAS por la cabeza del tipo de su primer parametro.  Aqui no se
      * recorre nada: dos punteros ya internados y una sonda. */
+    const size_t hole_pre = ufcs_receiver_hole(e);
     const std::string *chosen = nullptr; // con QUE nombre se declaro
+    /* Con hueco el receptor no cae en el primer parametro, asi que la pregunta
+     * es otra: "cual tiene ALGUN parametro que lo admita".  Sin hueco sigue
+     * siendo "cual lo toma de primero", que es lo que la regla 2.2 mira. */
     const ufcs::Candidates *cand_slots =
-        ufcs_.find(recv, fa->field_name, &chosen);
+        (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
+            ? ufcs_.find_any(recv, fa->field_name, &chosen)
+            : ufcs_.find(recv, fa->field_name, &chosen);
     /* Un literal de cadena es un `ptr` a datos estaticos y solo se PROMUEVE a
      * `string` donde hace falta -- por eso `grita("hola")` compila --, asi que
      * si no hay nada para el puntero se pregunta tambien por la cadena.  Sin
@@ -11769,7 +11838,11 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     if (cand_slots == nullptr && recv.kind == PrimitiveKind::PTR &&
         fa->base->kind == ast::NodeKind::StringLitExpr)
         cand_slots =
-            ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name, &chosen);
+            (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
+                ? ufcs_.find_any(Type{PrimitiveKind::STRING}, fa->field_name,
+                                 &chosen)
+                : ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name,
+                             &chosen);
     if (cand_slots == nullptr || cand_slots->empty()) return false;
 
     /* DONDE cae el receptor.  Por defecto delante -- `x.f(a)` es `f(x, a)` --,
@@ -11781,7 +11854,7 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
      * Es una REORDENACION, y ahi acaba: a partir de aqui todo es posicional
      * como siempre, asi que la seleccion de sobrecarga no se entera.  Tocarla
      * puede cambiar en silencio a que cuerpo va un programa ya escrito. */
-    const size_t hole = ufcs_receiver_hole(e);
+    const size_t hole = hole_pre;
     if (hole == kUfcsHoleBad) {
         /* Ya se dijo por que, asi que la llamada se da por CONTESTADA: dejarla
          * seguir la manda al camino de "no existe tal metodo", que sugiere un
@@ -11800,6 +11873,23 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     }
     if (at >= e->args.size()) arg_types.push_back(recv);
 
+    /* Los nombres, alineados con esa lista.  Con hueco ya lo estan -- el
+     * receptor ocupa el sitio del `_`, y `.b = _` dice que va a `b` --; sin
+     * hueco el receptor se mete DELANTE, asi que delante va tambien su nombre
+     * vacio.  Descuadrar los dos vectores manda cada nombre a la ranura de al
+     * lado, que es un error silencioso de los caros. */
+    std::vector<std::string> names_for_select;
+    if (!e->arg_names.empty()) {
+        if (hole == kUfcsNoHole) {
+            names_for_select.reserve(e->arg_names.size() + 1);
+            names_for_select.emplace_back();
+            for (const auto &nm : e->arg_names)
+                names_for_select.push_back(nm);
+        } else {
+            names_for_select = e->arg_names;
+        }
+    }
+
     /* Y CUAL de ellas se elige con la MISMA regla que una llamada libre --
      * exacta antes que compatible --, no con una propia: si aqui se decidiera
      * de otra manera, `x.f(a)` y `f(x, a)` dejarian de ser la misma llamada,
@@ -11810,14 +11900,16 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         const FunctionSig &sig = function_sigs_[idx];
         overload::Candidate c;
         c.params = &sig.param_types;
+        c.param_names = &sig.param_names;
         c.slot = idx;
         c.by_ref_mask = sig.param_by_ref_mask;
         if (sig.is_raw_variadic) c.raw_variadic = true;
         else if (sig.is_variadic) c.variadic_elem = &sig.variadic_elem;
         cands.push_back(c);
     }
-    const uint32_t pick = overload::select(cands.data(), cands.size(),
-                                           arg_types, &overload_accepts, this);
+    const uint32_t pick =
+        overload::select(cands.data(), cands.size(), arg_types,
+                         &overload_accepts, this, &names_for_select);
     if (pick == overload::kNoPick) return false;
 
     /* Encontrada: el nodo se convierte en la OTRA grafia y lo comprueba el
@@ -11831,10 +11923,13 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     id->name = *chosen;
     std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
     e->callee = std::move(id);
-    if (hole == kUfcsNoHole)
+    if (hole == kUfcsNoHole) {
         e->args.insert(e->args.begin(), std::move(receiver));
-    else
+        // Y su nombre vacio con el, para que los dos sigan cuadrando.
+        if (!e->arg_names.empty()) e->arg_names.insert(e->arg_names.begin(), "");
+    } else {
         e->args[hole] = std::move(receiver); // el hueco ERA su sitio
+    }
     e->result_type = check_call(e);
     return true;
 }
@@ -11958,6 +12053,7 @@ uint32_t TypeChecker::select_ns_overload(const ImportedNamespace &ns,
         const FunctionSig *use = real != nullptr ? real : &sym.sig;
         overload::Candidate c;
         c.params = &use->param_types;
+        c.param_names = &use->param_names;
         c.slot = cur; // el indice en `symbols`, que es lo que se devuelve
         c.by_ref_mask = use->param_by_ref_mask;
         if (use->is_raw_variadic) c.raw_variadic = true;
@@ -11970,8 +12066,9 @@ uint32_t TypeChecker::select_ns_overload(const ImportedNamespace &ns,
     for (auto &a : e->args)
         arg_types.push_back(check_expr(a.get()));
 
-    const uint32_t pick = overload::select(cands.data(), cands.size(),
-                                           arg_types, &overload_accepts, this);
+    const uint32_t pick =
+        overload::select(cands.data(), cands.size(), arg_types,
+                         &overload_accepts, this, &e->arg_names);
     /* Ninguna encaja: se devuelve la primera para que el error lo de la
      * comprobacion de argumentos hablando de TIPOS, y no "no existe". */
     return pick == overload::kNoPick ? first : pick;
@@ -11993,6 +12090,7 @@ const ClassMethodInfo *TypeChecker::select_method_overload(
         if (methods[i].is_static != want_static) continue;
         overload::Candidate c;
         c.params = &methods[i].param_types;
+        c.param_names = &methods[i].param_names;
         c.slot = static_cast<uint32_t>(i);
         c.by_ref_mask = methods[i].param_by_ref_mask;
         if (methods[i].is_variadic)
@@ -12001,8 +12099,9 @@ const ClassMethodInfo *TypeChecker::select_method_overload(
     }
     if (cands.empty()) return nullptr;
 
-    const uint32_t pick = overload::select(cands.data(), cands.size(),
-                                           arg_types, &overload_accepts, this);
+    const uint32_t pick =
+        overload::select(cands.data(), cands.size(), arg_types,
+                         &overload_accepts, this, &e->arg_names);
     if (pick != overload::kNoPick) {
         fa->resolved_method = pick;
         return &methods[pick];
@@ -18090,6 +18189,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 if (!m.is_constructor) continue;
                 overload::Candidate c;
                 c.params = &m.param_types;
+                c.param_names = &m.param_names;
                 c.slot = static_cast<uint32_t>(i);
                 c.by_ref_mask = m.param_by_ref_mask;
                 if (m.is_variadic) c.variadic_elem = &m.variadic_elem;
@@ -18100,7 +18200,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (any_ctor) {
                 const uint32_t pick =
                     overload::select(cands.data(), cands.size(), arg_types,
-                                     &overload_accepts, this);
+                                     &overload_accepts, this, &e->arg_names);
                 if (pick != overload::kNoPick) {
                     ctor = &slay.methods[pick];
                     /* Y se apunta CUAL: el bajado necesita ESE constructor --
@@ -18367,6 +18467,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 const FunctionSig &cs = function_sigs_[idx];
                 overload::Candidate c;
                 c.params = &cs.param_types;
+                c.param_names = &cs.param_names;
                 c.slot = idx;
                 c.by_ref_mask = cs.param_by_ref_mask;
                 /* Y si su ultima posicion es variadica, con que se comparan los
@@ -18383,7 +18484,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
             const uint32_t pick =
                 overload::select(cands.data(), cands.size(), arg_types,
-                                 &overload_accepts, this);
+                                 &overload_accepts, this, &e->arg_names);
             if (pick != overload::kNoPick) chosen_sig = pick;
             /* Y se apunta CUAL, por indice: el bajado necesita ESA firma -- el
              * nombre publico lo comparten varias -- y llega a ella con un
@@ -18392,6 +18493,13 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
     }
     const FunctionSig &sig = function_sigs_[chosen_sig];
+
+    /* Los nombres ya cumplieron: sirvieron para elegir, y a partir de aqui la
+     * llamada es POSICIONAL como cualquier otra.  Se hace en el UNICO sitio
+     * donde la firma elegida esta en la mano, sobrecargada o no. */
+    if (!e->arg_names.empty() &&
+        !normalize_named_args(e, sig.param_names, id->name))
+        return Type{PrimitiveKind::COUNT};
 
     // dispose(xs) acepta cualquier tipo coleccion (no solo I64).
     // Validamos que el arg es un IdentExpr (necesario en el lowering

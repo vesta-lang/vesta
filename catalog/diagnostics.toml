@@ -3198,3 +3198,20 @@ es = "'_' aparece mas de una vez en la misma llamada: solo hay un receptor que c
 ["VX2073"]
 en = "'_' only means something after a dot: in a free call there is no receiver to place"
 es = "'_' solo significa algo tras un punto: en una llamada libre no hay receptor que colocar"
+
+# Se llamo nombrando una ranura que la funcion elegida no tiene.  El nombre de
+# un parametro es parte del contrato, asi que esto es tan error como pasarle un
+# tipo que no es.  {0} el nombre escrito, {1} la funcion.
+["VX2074"]
+en = "'{1}' has no parameter named '{0}'"
+es = "'{1}' no tiene ningun parametro llamado '{0}'"
+# Dos argumentos para la misma ranura: uno por posicion y otro por nombre, o el
+# mismo nombre dos veces.  {0} el parametro, {1} la funcion.
+["VX2075"]
+en = "two arguments land on parameter '{0}' of '{1}'"
+es = "dos argumentos caen en el parametro '{0}' de '{1}'"
+# Y una ranura sin llenar.  Los parametros no tienen valor por defecto, asi que
+# no hay nada con que completarla.  {0} el parametro, {1} la funcion.
+["VX2076"]
+en = "parameter '{0}' of '{1}' is left without an argument"
+es = "el parametro '{0}' de '{1}' se queda sin argumento"
