@@ -3710,7 +3710,7 @@ CompileResult compile_vx_project(
                             ? flatten_ns_(req.ns_path)
                             : req.module_name;
                     auto missing = import_vxi_into_typechecker_with_missing(
-                        *pm.tc, dep_vxi, synth_only, qual);
+                        *pm.tc, dep_vxi, synth_only, qual, req.loc);
                     (void)missing; // best-effort; los privados ya fueron
                                    //              filtrados al construir el
                                    //              .vxi.
@@ -3773,7 +3773,7 @@ CompileResult compile_vx_project(
                         ? flatten_ns_(req.ns_path)
                         : req.module_name;
                 auto missing = import_vxi_into_typechecker_with_missing(
-                    *pm.tc, dep_vxi, req.only_symbols, qual);
+                    *pm.tc, dep_vxi, req.only_symbols, qual, req.loc);
                 // Namespace PARCIAL: un `import std.types only uintptr`
                 // resuelve `req.module_name` al PRIMER fichero del namespace
                 // (p.ej. arm64), donde el simbolo puede estar @Target-inactivo
@@ -3809,7 +3809,7 @@ CompileResult compile_vx_project(
                             // identidad distinta a la del primero.
                             auto still =
                                 import_vxi_into_typechecker_with_missing(
-                                    *pm.tc, other_vxi, retry, qual);
+                                    *pm.tc, other_vxi, retry, qual, req.loc);
                             // reducir retry a los que aun faltan tras este
                             // fichero
                             std::vector<TypeChecker::VxiOnlyEntry> next_retry;

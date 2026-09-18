@@ -65,6 +65,33 @@ static std::string qualify_once_(const std::string &ns_path,
     return out;
 }
 
+/**
+ * @brief Copia a una firma los nombres de ranura que traia el `.vxi`.
+ *
+ * Solo si hay alguno con nombre: una firma sin nombres y una con todos vacios
+ * no son lo mismo -- la segunda dice "los tiene, y son estos", que es
+ * justamente lo que el `.vxi` no sabia decir antes.  Y hay firmas que
+ * legitimamente no los llevan, como las `extern` declaradas sin nombrar sus
+ * parametros.
+ *
+ * @param sig   [in,out] la firma importada.
+ * @param names Los nombres tal como venian, paralelos a los tipos.
+ */
+static void fill_param_names(FunctionSig &sig,
+                             const std::vector<std::string> &names) {
+    bool any = false;
+    for (const auto &n : names)
+        if (!n.empty()) {
+            any = true;
+            break;
+        }
+    if (!any) return;
+    sig.param_names.clear();
+    sig.param_names.reserve(names.size());
+    for (const auto &n : names)
+        sig.param_names.push_back(PooledName(n));
+}
+
 // ---------------------------------------------------------------------------
 // Convertir un @c Type del checker a un typename canonico.  Usado para
 // serializar tipos de fields, returns, params, etc.
@@ -576,6 +603,7 @@ TypeChecker::register_imported_namespace(const std::string &local_name,
     const uint32_t idx = static_cast<uint32_t>(imported_namespaces_.size());
     ImportedNamespace ns;
     ns.module_name = module_name;
+    ns.local_name = local_name;
     imported_namespaces_.push_back(std::move(ns));
     pending_imported_ns_names_.push_back({local_name, idx});
     ns_idx_by_local_name_[local_name] = idx;
@@ -622,6 +650,19 @@ void TypeChecker::register_namespace_symbol(uint32_t ns_index,
     if (ns_index >= imported_namespaces_.size()) return;
     auto &ns = imported_namespaces_[ns_index];
     const uint32_t sym_idx = static_cast<uint32_t>(ns.symbols.size());
+    /* La pregunta al reves -- que namespaces traen este nombre -- se apunta
+     * AQUi, que es el unico sitio por el que pasan todos y donde el dato ya
+     * esta en la mano.  Solo las funciones: es lo unico que la usa. */
+    if (sym.kind == 0) {
+        auto &brought = ns_by_fn_name_[util::intern_name(public_name)];
+        bool dup = false;
+        for (uint32_t n : brought)
+            if (n == ns_index) {
+                dup = true;
+                break;
+            }
+        if (!dup) brought.push_back(ns_index);
+    }
     ns.symbols.push_back(std::move(sym));
     const auto ya = ns.by_name.emplace(public_name, sym_idx);
     if (ya.second) return;
@@ -1174,7 +1215,20 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             for (const auto &pt : cand->param_types) {
                 s.param_types.push_back(canonical_typename_of(pt));
             }
-            s.param_names.assign(cand->param_types.size(), std::string());
+            /* Los NOMBRES de los parametros van al `.vxi`, no solo los tipos.
+             *
+             * El formato ya tenia su hueco y aqui se rellenaba con vacio, con
+             * lo que al otro lado un `mide(.alto = 2)` no encontraba la ranura
+             * -- decia que la funcion no tiene un parametro llamado asi -- y
+             * una sobrecarga que se distinga por el nombre de sus ranuras
+             * dejaba de distinguirse al cruzar el modulo.  El nombre es parte
+             * del contrato: si renombrarlo rompe a quien llama, tiene que
+             * viajar con la firma. */
+            s.param_names.reserve(cand->param_types.size());
+            for (size_t pi = 0; pi < cand->param_types.size(); ++pi)
+                s.param_names.push_back(pi < cand->param_names.size()
+                                            ? cand->param_names[pi].str()
+                                            : std::string());
             // ABI custom por-param (`register("rax")`): imprescindible para que
             // un CALLIND cross-modulo a traves de un campo cuyo default es esta
             // funcion coloque los args en los registros correctos.
@@ -2090,8 +2144,12 @@ static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
 void import_vxi_into_typechecker(
     TypeChecker &tc, const VxiModule &mod,
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
-    const std::string &module_name) {
+    const std::string &module_name, const SourceLoc &at) {
     if (only_symbols.empty()) return;
+    /* Donde se escribio este `import`, para que un choque de nombres entre dos
+     * de ellos se explique AHI.  Se pone y se quita alrededor de la inyeccion:
+     * lo que se declare mientras tanto viene de esta linea. */
+    const TypeChecker::ImportSite site(tc, at);
 
     // Mapa name -> indice en mod.symbols para lookup O(1).
     std::unordered_map<std::string, size_t> by_name;
@@ -2386,6 +2444,11 @@ void import_vxi_into_typechecker(
             for (const auto &pt : s.param_types) {
                 sig.param_types.push_back(resolve_imported(pt));
             }
+            /* Y los NOMBRES de las ranuras, que viajan con la firma: son lo
+             * que hace falta para llamarla con `.nombre = valor` desde otro
+             * modulo, y para que dos hermanas que solo se distinguen por ellos
+             * sigan distinguiendose al cruzarlo. */
+            fill_param_names(sig, s.param_names);
             sig.extern_lib = s.is_extern ? s.extern_lib : std::string();
             //  M.5: si el .vxi declara un mangled_label, el
             // lowering del consumidor emitira @c CALLVM a ese label
@@ -2450,7 +2513,7 @@ void import_vxi_into_typechecker(
 std::vector<std::string> import_vxi_into_typechecker_with_missing(
     TypeChecker &tc, const VxiModule &mod,
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
-    const std::string &module_name) {
+    const std::string &module_name, const SourceLoc &at) {
     std::vector<std::string> missing;
     if (only_symbols.empty()) return missing;
 
@@ -2474,7 +2537,7 @@ std::vector<std::string> import_vxi_into_typechecker_with_missing(
     // Delegar la inyeccion real a la variante simple (ya skipea los missing
     // silenciosamente).  De esta manera no duplicamos la logica de switch
     // sobre VxiSymbolKind.
-    import_vxi_into_typechecker(tc, mod, only_symbols, module_name);
+    import_vxi_into_typechecker(tc, mod, only_symbols, module_name, at);
 
     return missing;
 }
@@ -2803,6 +2866,8 @@ void register_namespace_for_import(TypeChecker &tc,
                 sym.sig.param_types.push_back(
                     resolve_with_mangled_fallback(pt));
             }
+            // Los nombres de las ranuras, igual que por el camino de `only`.
+            fill_param_names(sym.sig, s.param_names);
             sym.sig.extern_lib = s.is_extern ? s.extern_lib : std::string();
             sym.sig.mangled_label = sym.mangled_label;
             // LIM-A: preservar @Naked para enrutar la llamada cross-modulo

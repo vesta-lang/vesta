@@ -48,11 +48,14 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
  * @param mod          Modulo @c VxiModule decodificado.
  * @param only_symbols Lista de simbolos a importar (con rename opcional).
  *                     Si vacio: no se inyecta nada.
+ * @param at           Donde se escribio el @c import.  Un choque de nombres
+ *                     entre dos imports se explica ahi y no en otro sitio; sin
+ *                     esto el diagnostico salia sin fichero ni linea.
  */
 void import_vxi_into_typechecker(
     TypeChecker &tc, const VxiModule &mod,
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
-    const std::string &module_name);
+    const std::string &module_name, const SourceLoc &at = SourceLoc{});
 
 /**
  * @brief Variante que devuelve la lista de simbolos solicitados pero
@@ -63,7 +66,7 @@ void import_vxi_into_typechecker(
 std::vector<std::string> import_vxi_into_typechecker_with_missing(
     TypeChecker &tc, const VxiModule &mod,
     const std::vector<TypeChecker::VxiOnlyEntry> &only_symbols,
-    const std::string &module_name);
+    const std::string &module_name, const SourceLoc &at = SourceLoc{});
 
 /**
  * @brief  M.7: registra un namespace para un @c "import \"lib\";"
