@@ -1,0 +1,90 @@
+// UFCS y namespaces del MISMO fichero.
+//
+// Un fichero puede declarar varios namespaces, y lo que uno declara no esta en
+// ambito desde otro.  Eso vale igual para el punto: `x.f(a)` es `f(x, a)`
+// escrita del otro modo, asi que donde no vale la segunda tampoco vale la
+// primera.  Si el punto alcanzara namespaces que no estan en ambito, con dos
+// `doble` se iria a la PRIMERA -- eligiendo por el orden de dos lineas que
+// nadie mira -- mientras la llamada libre dice que no esta declarada.
+//
+// Lo que se prueba aqui:
+//
+//   1. La llamada cualificada de siempre: `unidades.metrico.doble(6)`.
+//   2. La misma, por el punto: `6.doble$unidades.metrico()`.  `$` dice de que
+//      namespace es, y va DETRAS del nombre para que lo que sigue al punto
+//      sea siempre la funcion -- un campo puede llamarse igual que un
+//      namespace, y con la calificacion delante el mismo texto significaria
+//      una cosa u otra segun los campos del receptor.
+//   3. Que las dos homonimas son DOS: con `$` se llega a cada una.
+//   4. Lo del PROPIO namespace se sigue llamando por el punto sin calificar.
+//   5. Y compone con las ranuras por nombre.
+//
+// Aqui no cabe un `import`: es el mismo fichero, no hay nada que importar.
+// Por eso `$` es la unica forma corta, y es el caso que lo justifica.
+//
+// Compilar y ejecutar:
+//   vm --vesta examples_codes_vx/558_ufcs_ns_fichero.vx -o n
+//   vm --run n.velb --stats
+//
+// Resultado esperado: 42.
+
+namespace unidades.metrico {
+	public i64 doble(i64 x) => x * 2;
+
+	public i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
+}
+
+namespace unidades.imperial {
+	public i64 doble(i64 x) => x * 3;
+
+	public i64 pesa(i64 libras, i64 onzas) => libras * 454 + onzas;
+}
+
+namespace app_ns {
+	// Del PROPIO namespace: esta si esta en ambito y no hay que calificarla.
+	i64 triple(i64 x) => x * 3;
+
+	i32 main() {
+		i64 a = unidades.metrico.doble(6);   // cualificada de siempre: 12
+		i64 b = 6.doble$unidades.metrico();  // la misma, por el punto: 12
+		i64 c = 6.doble$unidades.imperial(); // la OTRA `doble`:        18
+		i64 d = 2.triple();                  // la de aqui, sin calificar: 6
+
+		/* Las dos `pesa` tienen la MISMA firma y las ranuras con otro nombre,
+		 * que es justo lo que en `556` permite importarlas juntas y llamarlas
+		 * con `2.pesa(.onzas = 5)`, sin calificar nada.
+		 *
+		 * Aqui NO vale, y conviene ver por que: alli lo que las pone en ambito
+		 * son los dos `import ... only pesa`, no que sus ranuras se llamen
+		 * distinto.  El problema no es de ambiguedad -- que la resolveria el
+		 * nombre de la ranura -- sino de AMBITO: `pesa` no es un nombre de
+		 * `app_ns`, es de `unidades.metrico` y de `unidades.imperial`.
+		 *
+		 *     2.pesa(.onzas = 5)    // VX2080: no hay ninguna en ambito aqui
+		 *     pesa(2, .onzas = 5)   // y la libre tampoco: no declarada
+		 *
+		 * Las dos fallan, que es la senyal de que la regla se sostiene: el
+		 * punto encuentra exactamente lo que encontraria la llamada libre.  Y
+		 * fallan igual que `doble`, cuyas ranuras se llaman IGUAL -- o sea que
+		 * el nombre de la ranura no entra en esto para nada --.  Lo demuestra
+		 * `559_ufcs_ns_fichero_err.vx`.
+		 *
+		 * Por eso aqui `$` no es una comodidad: es la unica forma corta, ya
+		 * que del propio fichero no hay nada que importar. */
+		i64 e = 2.pesa$unidades.metrico(.gramos = 5); // 2005
+		i64 f = 2.pesa$unidades.imperial(.onzas = 5); //  913
+
+		println("a=${a} b=${b} c=${c} d=${d} e=${e} f=${f}");
+		// Y dentro de una interpolacion, que es otra posicion de expresion.
+		println("interp=${6.doble$unidades.imperial()}");
+
+		i64 r = 0_i64;
+		if (a == 12) { r = r + 7; }   // la cualificada llega
+		if (b == a) { r = r + 7; }    // y `$` es la misma llamada
+		if (c == 18) { r = r + 7; }   // la homonima es OTRA
+		if (d == 6) { r = r + 7; }    // lo del propio namespace no se califica
+		if (e == 2005) { r = r + 7; } // `$` compone con las ranuras por nombre
+		if (f == 913) { r = r + 7; }  // y llega a la hermana correcta
+		return (i32)r;                // 42
+	}
+}

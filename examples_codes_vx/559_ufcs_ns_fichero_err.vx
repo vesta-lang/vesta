@@ -1,0 +1,50 @@
+// NEGATIVO, la otra mitad de `558_ufcs_ns_fichero.vx`: el punto SIN calificar
+// cuando la funcion es de otro namespace del mismo fichero.
+//
+// 1. `6.doble()` desde `app`.  No resuelve, y esta bien: `doble(6)` a secas
+//    tampoco vale ahi, y el punto es la misma llamada escrita del otro modo.
+//    Lo que no valdria es que el punto SI la alcanzara -- se iria a la primera
+//    de las dos, eligiendo por el orden de declaracion --.
+//
+//    Pero negarlo a secas deja buscando algo que esta unas lineas mas arriba
+//    en el MISMO fichero, asi que el mensaje dice de que namespace es y como
+//    llamarla.  Aqui no cabe sugerir un `import`: no hay nada que importar.
+//
+// 2. Y un nombre que no declara nadie, para el caso de al lado: ahi no hay que
+//    senyalar ningun namespace porque no hay ninguno que la traiga.
+//
+// Se espera que NO compile: VX2080 y VX2070.
+
+namespace unidades.metrico {
+	public i64 doble(i64 x) => x * 2;
+
+	// Ranuras con OTRO nombre que las de su hermana de abajo.
+	public i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
+}
+
+namespace unidades.imperial {
+	public i64 doble(i64 x) => x * 3;
+
+	public i64 pesa(i64 libras, i64 onzas) => libras * 454 + onzas;
+}
+
+namespace app_ns_err {
+	// 1: la candidata existe, pero en otro namespace de este fichero.
+	i64 sin_calificar() => 6.doble();
+
+	/* 2: y lo mismo con `pesa`, cuyas ranuras se llaman DISTINTO.
+	 *
+	 * Es el caso que mas despista: en `556`, importadas las dos, esta misma
+	 * llamada elige sin dudar porque el nombre de la ranura las separa.  Aqui
+	 * falla IGUAL que `doble`, cuyas ranuras se llaman igual -- y esa es la
+	 * leccion: lo que falta no es un criterio para desempatar, es que el
+	 * nombre este en AMBITO.  El de un namespace no lo esta en los demas del
+	 * fichero, se llamen sus parametros como se llamen. */
+	i64 ranuras_distintas() => 2.pesa(.onzas = 5);
+
+	// Y la libre, que es la misma llamada escrita del otro modo, tampoco.
+	i64 ranuras_distintas_libre() => pesa(2, .onzas = 5);
+
+	// 3: esta no la declara nadie, en ningun namespace.
+	i64 no_existe() => 6.cuadruple();
+}

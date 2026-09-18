@@ -1,0 +1,12 @@
+namespace geo.metrico;
+
+// Uno de los dos sistemas de unidades.  El otro, `geo.imperial`, no lo conoce:
+// dos librerias que no se hablan no tienen por que ponerse de acuerdo en los
+// nombres, y de ahi salen los dos casos que este ejemplo contrasta.
+
+// MISMO nombre y MISMA ranura que la de `geo.imperial`: nada las separa.
+public i64 doble(i64 x) => x * 2;
+
+// Mismo nombre y mismos tipos que la de `geo.imperial`, pero sus ranuras se
+// llaman distinto.  Eso SI las separa, asi que las dos pueden convivir.
+public i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;

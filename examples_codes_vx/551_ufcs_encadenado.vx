@@ -38,10 +38,9 @@ i64 div(i64 a, i64 b) => a / b;
 string grita(string s) => s.concat("!");
 string rodea(string s, string w) => w.concat(s).concat(w);
 
-// Encadenada tambien por dentro.  Sin bucle a proposito: asignar a una
-// variable `string` DENTRO de un bucle se pierde en el binario nativo -- la
-// variable se queda con lo de antes del bucle --, y este ejemplo es de
-// encadenar, no el sitio donde acorralar eso.
+// Encadenada tambien por dentro.  Sin bucle a proposito: este ejemplo es de
+// encadenar, y una cadena reasignada dentro de un bucle se acorrala en
+// `560_nativo_cadena_y_ranuras.vx`, que es su sitio.
 string repite3(string s) => s.concat(s).concat(s);
 
 // El puente entre las dos familias: recibe cadena y devuelve numero.

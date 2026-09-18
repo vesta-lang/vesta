@@ -242,8 +242,17 @@ Spacing space_between(const Piece *before, const Piece &prev, const Piece &cur,
          * la grafia nombrada le trajo. */
         return (a == TokenKind::COMMA) ? Spacing::Space : Spacing::None;
     case TokenKind::LBRACKET: return Spacing::None;
+    /* `x.f$geo.metrico(...)`: el `$` y lo que le sigue van pegados al nombre.
+     *
+     * La calificacion es parte de COMO se nombra la funcion, no un operador
+     * entre dos cosas; separarla la hace parecer lo segundo.  Vale igual para
+     * el `$` del relleno de un bloque `bytes` (`times 510-($-$$)`), que es el
+     * idioma de NASM y tambien va junto. */
+    case TokenKind::DOLLAR: return Spacing::None;
     default: break;
     }
+    // Y pegado tambien por DETRAS: `$geo`, `$$`.
+    if (a == TokenKind::DOLLAR) return Spacing::None;
 
     /* EL PAPEL MANDA.  Lo decidio el pase que si tiene contexto
      * (@ref annotate_roles), asi que aqui no se vuelve a adivinar.

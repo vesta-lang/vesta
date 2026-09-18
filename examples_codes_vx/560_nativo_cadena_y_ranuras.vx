@@ -1,0 +1,81 @@
+namespace ejemplos.nativo_cadena_ranuras;
+
+// Dos cosas que el binario nativo hacia MAL y ahora hace igual que los otros
+// dos modos.  Estaban dichas como limites -- el compilador se negaba a bajarlas
+// -- y eso es lo que un hueco no debe ser: si se sabe que esta mal, se arregla.
+//
+// 1. `s = otra + s` dentro de un bucle.
+//
+//    En el binario una cadena vive en un hueco de 24 bytes y el marco REUSA el
+//    mismo por vuelta.  Repuntando la variable al hueco recien construido, la
+//    vuelta siguiente empezaba escribiendo sobre el sitio del que tenia que
+//    leer: `"-" + s` dos veces sobre `"x"` daba `"---"` en vez de `"--x"`.
+//
+//    Ahora el resultado se construye en su propio hueco y se COPIA al de la
+//    variable, que es lo mismo que ya hacia `s += ...`.  Un solo camino que
+//    escribe una cadena nativa en su ranura.
+//
+// 2. Dos metodos de una CLASE que solo se distinguen por el NOMBRE de sus
+//    ranuras.
+//
+//    El interprete y el JIT los separaban -- van por el descriptor del
+//    registro, que lleva los nombres --, pero el nativo devirtualiza a una
+//    llamada directa y emparejaba por TIPOS: dos hermanas con los mismos tipos
+//    empatan ahi, y se quedaba con la primera.  `m.mide(.largo = 10)` ejecutaba
+//    el cuerpo de `mide(alto)` y devolvia 10 en vez de 20.
+//
+//    Un resultado falso que parece bueno, y ademas SOLO al compilar: bien
+//    interpretado y mal compilado es la unica clase de fallo que este proyecto
+//    no admite.  Ahora empareja por nombre, tipos Y nombres de ranura.
+//
+// Por eso este ejemplo corre en los TRES modos: lo que prueba es justamente
+// que los tres coinciden.
+//
+// Compilar y ejecutar:
+//   vm --vesta examples_codes_vx/560_nativo_cadena_y_ranuras.vx -o n
+//   vm --run n.velb --stats
+//
+// Resultado esperado: 42.
+
+// 1: la variable se lee desde la SEGUNDA posicion, y en un bucle.
+string envuelve(string s, string borde) {
+	for (i64 i = 0_i64; i < 2; i = i + 1) {
+		s = borde + s;
+	}
+	return s;
+}
+
+// Y la forma que siempre funciono, para contrastar: aqui va de primera.
+string alarga(string s, string cola) {
+	for (i64 i = 0_i64; i < 2; i = i + 1) {
+		s = s + cola;
+	}
+	return s;
+}
+
+// 2: misma firma, ranuras con nombre distinto, en una CLASE.
+class Medida {
+	public Medida() { }
+
+	public i64 mide(i64 alto) => alto;
+
+	public i64 mide(i64 largo) => largo * 2;
+}
+
+i32 main() {
+	string a = envuelve("x", "-"); // "--x", no "---"
+	string b = alarga("x", "+");   // "x++"
+
+	Medida m = new Medida();
+	i64    c = m.mide(.alto = 10);  // 10
+	i64    d = m.mide(.largo = 10); // 20, no 10
+
+	println("a=${a} b=${b} c=${c} d=${d}");
+
+	i64 r = 0_i64;
+	if (a.equals("--x")) { r = r + 12; } // la cadena, leida de la segunda
+	if (b.equals("x++")) { r = r + 10; } // y la de siempre, sin tocar
+	if (c == 10) { r = r + 10; }         // la ranura `alto`
+	if (d == 20) { r = r + 10; }         // y la ranura `largo`, que es OTRA
+	return (i32)r;                       // 42
+}

@@ -1,0 +1,44 @@
+namespace ejemplos.ufcs_xmod_choque;
+
+// NEGATIVO, y es la otra mitad de `556_ufcs_xmodulo.vx`: los dos casos que
+// alli salen bien, aqui sin lo que los hace salir bien.
+//
+// 1. Las dos `doble` de la MISMA firma y la MISMA ranura, importadas sin
+//    renombrar.  Ahi no hay nada que elegir -- no las separa ni el numero de
+//    argumentos, ni los tipos, ni el nombre de las ranuras --, asi que el
+//    nombre `doble` querria decir dos cosas a la vez.  Se dice, con las dos
+//    etiquetas para saber de donde viene cada una, y apuntando al `import`
+//    que lo causa.
+//
+//    Elegir en silencio seria decidir por el programador, y ademas por un
+//    criterio que no esta escrito en ningun sitio: el ORDEN de dos lineas que
+//    nadie mira.
+//
+// 2. Las dos `pesa`, que SI se pueden importar juntas porque sus ranuras se
+//    llaman distinto, llamadas POSICIONALMENTE.  Ahi la llamada no dice cual
+//    de las dos, y es lo mismo por el punto: el receptor cae en la primera
+//    ranura sin nombrarla.  Lo que separa a las hermanas es el nombre, asi que
+//    hay que usarlo.
+//
+// 3. Y la calificacion `$` con un namespace que no existe.  Ahi lo unico que
+//    el usuario escribio de mas es justo eso, asi que el mensaje habla de
+//    ello en vez de senyalar el primer segmento del nombre, que es lo que
+//    saldria dejando que la reescritura a la forma cualificada siguiera.
+//
+// Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
+// el del ejemplo que acompanya, que es su vecino de directorio.
+//
+// Se espera que NO compile: VXT003, VX2077 y VX2081.
+
+import geo.metrico only doble;
+import geo.imperial only doble;
+import geo.metrico only pesa;
+import geo.imperial only pesa;
+
+i64 usa_doble() => 6.doble();
+
+i64 sin_nombrar() => pesa(2, 5);
+
+i64 sin_nombrar_por_el_punto() => 2.pesa(5);
+
+i64 namespace_que_no_existe() => 6.doble$geo.metricooo();

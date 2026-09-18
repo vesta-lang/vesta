@@ -3792,6 +3792,9 @@ modes3_case("sobrecarga545", "sobrecarga por aridad y por tipo en los SEIS camin
 modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada -- receptor struct, primitivo, puntero y clase, con sobrecarga entre las libres candidatas, encadenado, y el mismo nombre para receptores de tipo distinto", "549_ufcs_llamada_uniforme.vx", 42)
 modes3_case("ufcs551", "encadenar con UFCS: `2.add(4).mul(10).div(5)` sobre literales sin un solo cast, lo mismo con cadenas (incluido un literal de receptor, que es un `ptr` hasta que se promueve), cruzar de familia a mitad de cadena, y el hueco `_` que dice donde cae el receptor cuando no va primero", "551_ufcs_encadenado.vx", 42)
 modes3_case("nombrados552", "argumentos con nombre `.a = 3`, la grafia del init designado: en cualquier orden, mezclados con posicionales, con el receptor cayendo en el hueco nombrado o en la ranura que queda libre, y el nombre entrando en la seleccion entre hermanas", "552_argumentos_nombrados.vx", 42)
+modes3_case("ufcs_xmod556", "UFCS y argumentos nombrados CRUZANDO el modulo, con los dos pares de homonimas: `doble` (misma firma y misma ranura) que solo conviven con `as`, y `pesa` (misma firma, ranuras con otro nombre) que se importan las dos sin renombrar y forman una sobrecarga -- resuelta nombrando la ranura, tambien a traves del punto", "556_ufcs_xmodulo.vx", 42)
+modes3_case("ufcs_ns558", "namespaces del MISMO fichero: la cualificada de siempre y la misma por el punto con `$`, que llega a cada una de dos homonimas; lo del propio namespace se sigue llamando sin calificar, y `$` compone con las ranuras por nombre y con una interpolacion", "558_ufcs_ns_fichero.vx", 42)
+modes3_case("nativo560", "dos huecos del binario nativo, cerrados: una cadena leida desde la SEGUNDA posicion en un bucle (`s = otra + s`, que daba `---` en vez de `--x`) y dos metodos de clase que solo se distinguen por el NOMBRE de sus ranuras (que devirtualizaba al primero).  Los tres modos tienen que coincidir, que es de lo que iba", "560_nativo_cadena_y_ranuras.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)
@@ -5882,6 +5885,58 @@ fails_case("ufcs_hueco_doble",
 fails_case("ufcs_hueco_libre",
            "`_` en una llamada libre, donde no hay receptor que colocar",
            "550_ufcs_choque.vx", "VX2073")
+
+# La candidata esta en un namespace importado solo por su NOMBRE.  Que el punto
+# no la encuentre es correcto -- la libre tampoco esta en ambito --, pero
+# negarlo a secas deja buscando algo que esta importado tres lineas mas arriba.
+fails_case("ufcs_import_hint",
+           "la libre existe pero en un namespace importado por su nombre: se dice donde esta y como traerla",
+           "550_ufcs_choque.vx", "VX2079")
+
+# Las tres formas de nombrar mal una ranura, cada una con su mensaje: decir
+# "la llamada no encaja" dejaria comparando la firma a ojo.
+fails_case("nombrados_ranura_mala",
+           "una ranura con un nombre que la funcion no tiene",
+           "550_ufcs_choque.vx", "VX2074")
+fails_case("nombrados_ranura_doble",
+           "dos argumentos que caen en la misma ranura",
+           "550_ufcs_choque.vx", "VX2075")
+fails_case("nombrados_ranura_vacia",
+           "una ranura que se queda sin argumento",
+           "550_ufcs_choque.vx", "VX2076")
+
+# Cruzando el modulo, la otra mitad de `556`: las dos `doble` de la misma firma
+# Y la misma ranura, importadas sin renombrar.  No hay nada que elegir, asi que
+# se dice -- y se apunta al `import` que lo causa, no a un sitio sin fichero.
+fails_case("ufcs_xmod_choque",
+           "dos homonimas de la misma firma y la misma ranura importadas sin `as`: no hay nada que las separe",
+           "557_ufcs_xmod_choque.vx", "VXT003")
+
+# Y las que SI conviven -- ranuras con otro nombre -- llamadas posicionalmente:
+# la llamada no dice cual, y por el punto tampoco, porque el receptor cae en la
+# primera ranura sin nombrarla.
+fails_case("ufcs_xmod_ambigua",
+           "dos hermanas importadas que solo se distinguen por el nombre de sus ranuras, llamadas sin nombrarlas",
+           "557_ufcs_xmod_choque.vx", "VX2077")
+
+# Y la calificacion `$` con un namespace que no existe: lo unico que se escribio
+# de mas es eso, asi que el mensaje habla de ello y no del primer segmento.
+fails_case("ufcs_xmod_ns_malo",
+           "`$` con un namespace que no esta en ambito",
+           "557_ufcs_xmod_choque.vx", "VX2081")
+
+# El punto SIN calificar cuando la candidata es de otro namespace del MISMO
+# fichero.  Que no resuelva es correcto -- la libre tampoco esta en ambito --,
+# pero negarlo a secas deja buscando algo que esta unas lineas mas arriba.
+fails_case("ufcs_ns_fichero",
+           "la candidata es de otro namespace del mismo fichero: se dice de quien es",
+           "559_ufcs_ns_fichero_err.vx", "VX2080")
+
+# Y el caso de al lado: un nombre que no declara NINGUN namespace, donde no hay
+# nada que senyalar y el mensaje se limita a decir que no hay candidata.
+fails_case("ufcs_sin_candidata",
+           "un nombre que no declara nadie: no hay namespace al que apuntar",
+           "559_ufcs_ns_fichero_err.vx", "VX2070")
 
 # Dos hermanas que solo se distinguen por como se llaman sus ranuras: DECLARARLAS
 # vale, y lo que no vale es una llamada posicional que no diga cual.  Se citan

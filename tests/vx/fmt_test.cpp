@@ -337,6 +337,12 @@ void check_spacing() {
                   .find("=>") == std::string::npos,
           "el bloque de un if no se confunde con un cuerpo");
 
+    /* `R96b`: la calificacion `$` de una llamada por el punto va pegada por
+     * los dos lados, se escriba como se escriba. */
+    check(fmt("i64 f() => 6.doble $ geo.metrico ();\n")
+                  .find("6.doble$geo.metrico()") != std::string::npos,
+          "la calificacion `$` se pega por los dos lados");
+
     // `R4`: la llave de apertura lleva un espacio delante.
     const std::string llave = fmt("i32 f(i32 a){ a += 1; return a; }\n");
     check(llave.find("f(i32 a) {") != std::string::npos,

@@ -1,0 +1,18 @@
+namespace geo.formas;
+
+// Uno de los dos modulos que declaran `doble`.  Ninguna de estas funciones es
+// metodo de nada: son libres y toman su sujeto de primer parametro, que es
+// todo lo que UFCS necesita.
+
+public i64 doble(i64 x) => x * 2;
+
+// Las RANURAS tienen nombre, y el nombre es parte del contrato: quien la llame
+// desde otro modulo puede nombrarlas, y renombrarlas aqui le rompe la llamada.
+public i64 mide(i64 ancho, i64 alto) => ancho * alto;
+
+// El receptor no va primero: el sujeto es el texto, no el marco.  Desde fuera
+// se llama con el hueco `_`, igual que si estuviera declarada al lado.
+public string enmarca(string marco, string texto) =>
+	marco.concat(texto).concat(marco);
+
+public i64 largo(string s) => (i64)s.length();

@@ -463,7 +463,15 @@ examples_codes_vx/54_enum_payload.vx
 examples_codes_vx/550_ufcs_choque.vx
 examples_codes_vx/551_ufcs_encadenado.vx
 examples_codes_vx/552_argumentos_nombrados.vx
+examples_codes_vx/553_ufcs_xmod_formas.vx
+examples_codes_vx/554_ufcs_xmod_metrico.vx
+examples_codes_vx/555_ufcs_xmod_imperial.vx
+examples_codes_vx/556_ufcs_xmodulo.vx
+examples_codes_vx/557_ufcs_xmod_choque.vx
+examples_codes_vx/558_ufcs_ns_fichero.vx
+examples_codes_vx/559_ufcs_ns_fichero_err.vx
 examples_codes_vx/55_linkedlist_basico.vx
+examples_codes_vx/560_nativo_cadena_y_ranuras.vx
 examples_codes_vx/56_linkedlist_hof.vx
 examples_codes_vx/57_linkedlist_option.vx
 examples_codes_vx/58_quicksort.vx

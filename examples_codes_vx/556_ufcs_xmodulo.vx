@@ -1,0 +1,80 @@
+namespace ejemplos.ufcs_xmodulo;
+
+// UFCS y argumentos nombrados CRUZANDO el modulo, con homonimas de por medio.
+//
+// `x.f(a)` es `f(x, a)` escrita del otro modo, y eso no puede depender de en
+// que fichero este declarada `f`: si depende, el punto funciona o no segun
+// donde vivan las cosas, que es justo lo que un `import` viene a que no pase.
+//
+// Lo mismo con el NOMBRE de una ranura.  Es parte del contrato -- renombrarlo
+// rompe a quien llama --, asi que viaja con la firma; y en cuanto viaja, dos
+// homonimas de la MISMA firma que solo se distinguen por como se llaman sus
+// ranuras se pueden separar tambien al cruzar la frontera.
+//
+// De ahi los DOS casos que este ejemplo contrasta, con los mismos dos modulos:
+//
+//   `doble`  mismo nombre, misma firma, MISMA ranura.  Nada las separa, asi
+//            que importar las dos a secas es un choque -- lo demuestra
+//            `557_ufcs_xmod_choque.vx` -- y hay que darle a una su nombre
+//            local con `as`.
+//
+//   `pesa`   mismo nombre, misma firma, ranuras con OTRO nombre.  Eso SI las
+//            separa: se importan las dos sin renombrar nada y forman una
+//            SOBRECARGA, que se resuelve nombrando la ranura -- tambien a
+//            traves del punto.
+//
+// Y lo demas que tiene que seguir funcionando al cruzar: las ranuras por
+// nombre en cualquier orden, el hueco `_` para el receptor que no va primero,
+// y encadenar con eslabones de otro modulo.
+//
+// Compilar y ejecutar:
+//   vm --vesta examples_codes_vx/556_ufcs_xmodulo.vx -o u
+//   vm --run u.velb --stats
+//
+// Resultado esperado: 42.
+
+import geo.formas only mide, enmarca, largo;
+import geo.metrico only doble, pesa;
+import geo.imperial only doble as doble_i, pesa;
+
+i32 main() {
+	// --- `doble`: las separa el `as`, y el punto usa el nombre LOCAL --------
+	i64 a = 6.doble();   // geo.metrico:  6 * 2 = 12
+	i64 b = 6.doble_i(); // geo.imperial: 6 * 3 = 18
+
+	/* Y sin depender del `as`: `$` dice de que namespace es la funcion, en la
+	 * llamada misma.  Va DETRAS del nombre para que lo que sigue al punto sea
+	 * siempre la funcion -- un campo puede llamarse igual que un namespace, y
+	 * con la calificacion delante el mismo texto significaria una cosa u otra
+	 * segun los campos del receptor, que se declaran en otro fichero. */
+	i64 u = 6.doble$geo.imperial(); // la misma que `b`, dicha en el sitio
+
+	// --- `pesa`: las separa el NOMBRE DE LA RANURA --------------------------
+	//
+	// Las dos entran sin renombrar y conviven.  Cual se llama lo dice la
+	// ranura que se nombre, no el orden de los `import`.
+	i64 p = pesa(.kilos = 2, .gramos = 5); // geo.metrico:  2005
+	i64 q = pesa(.onzas = 5, .libras = 2); // geo.imperial:  913
+	i64 s = 2.pesa(.gramos = 5);           // lo mismo por el punto: 2005
+	i64 t = 2.pesa(.onzas = 5);            // y su hermana:           913
+
+	// --- y lo que tiene que seguir valiendo al cruzar -----------------------
+	i64    c = mide(.alto = 2, .ancho = 3); // 6
+	i64    d = mide(.ancho = 3, .alto = 2); // la misma llamada: 6
+	string m = "eh".enmarca("<<", _);       // "<<" + "eh" + "<<"
+	i64    e = m.largo();                   // "<<eh<<" -> 6
+	i64    f = "hola".largo().doble();      // 4 * 2 = 8
+
+	println("a=${a} b=${b} u=${u} p=${p} q=${q} s=${s} t=${t}");
+	println("c=${c} d=${d} e=${e} f=${f}");
+
+	i64 r = 0_i64;
+	if (a == 12) { r = r + 6; }               // el punto encuentra la importada
+	if (b == 18 && u == b) { r = r + 6; }     // `as` y `$` llegan a la misma
+	if (p == 2005 && q == 913) { r = r + 6; } // dos sin renombrar: sobrecarga
+	if (s == p && t == q) { r = r + 6; }      // y lo mismo por el punto
+	if (c == d && c == 6) { r = r + 6; }      // el orden de las ranuras da igual
+	if (e == 6) { r = r + 6; }                // el hueco `_`, cruzando el modulo
+	if (f == 8) { r = r + 6; }                // encadenar con eslabones de fuera
+	return (i32)r;                            // 42
+}

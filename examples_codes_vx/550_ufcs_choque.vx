@@ -16,7 +16,16 @@ namespace ejemplos.ufcs_choque;
 // cast se llega, y ademas con el nombre que se ESCRIBE y no el que el aplanado
 // le puso.
 //
-// Se espera que NO compile: VX2068, VX2071, VX2072 y VX2073.
+// Y el tercero, que tampoco es un choque: la candidata esta en un namespace
+// importado solo POR SU NOMBRE.  Ahi el punto no la encuentra -- ni tiene que,
+// porque UFCS es la misma llamada escrita del otro modo y la libre tampoco
+// esta en ambito --, pero negarlo a secas deja buscando algo que esta
+// importado tres lineas mas arriba.  Se dice donde esta y como traerla.
+//
+// Se espera que NO compile: VX2068, VX2071, VX2072, VX2073, VX2074, VX2075,
+// VX2076 y VX2079.
+
+import std.fileio;
 
 struct Punto {
 	i64 x;
@@ -37,6 +46,16 @@ u64 anyos(Edad e) => (u64)e + 1_u64;
 // Y el hueco del receptor, mal puesto de las dos maneras posibles.
 i64 tres(i64 a, i64 b, i64 c) => a + b + c;
 
+/* Y las tres formas de nombrar mal una ranura.  No son casos raros: son
+ * exactamente lo que se escribe al equivocarse de nombre, al repetirlo o al
+ * olvidar uno, y las tres se dicen POR SEPARADO -- decir "la llamada no
+ * encaja" dejaria al programador comparando la firma a ojo. */
+i64 ranura_que_no_existe() => tres(.a = 1, .d = 2, .c = 3);
+
+i64 dos_veces_la_misma() => tres(.a = 1, .a = 2, .c = 3);
+
+i64 una_ranura_sin_dar() => tres(.a = 1, .c = 3);
+
 i32 main() {
 	Punto q;
 	q.x = 6;
@@ -46,7 +65,9 @@ i32 main() {
 	i64 dos = 1.tres(2, _, _);
 	// Y sin punto no hay receptor que colocar en ninguno.
 	i64 libre = tres(1, 2, _);
-	return (i32)(q.area() + dos + libre);
+	// La candidata existe, pero en un namespace importado solo por su nombre.
+	i64 tam = "datos.txt".file_size();
+	return (i32)(q.area() + dos + libre + tam);
 }
 
 // Y dos hermanas que SOLO se distinguen por como se llaman sus ranuras.

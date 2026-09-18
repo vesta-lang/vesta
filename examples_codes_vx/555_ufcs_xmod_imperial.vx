@@ -1,0 +1,10 @@
+namespace geo.imperial;
+
+// El otro sistema.  Declara lo mismo que `geo.metrico` con otros cuerpos, que
+// es exactamente lo que pasa cuando dos librerias resuelven el mismo problema.
+
+// Misma firma Y misma ranura que la de `geo.metrico`.
+public i64 doble(i64 x) => x * 3;
+
+// Misma firma, ranuras con OTRO nombre.
+public i64 pesa(i64 libras, i64 onzas) => libras * 454 + onzas;
