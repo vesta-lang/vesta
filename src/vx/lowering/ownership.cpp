@@ -33,6 +33,14 @@
 #include "lowering_internal.h" // la cocina compartida del lowering
 
 namespace vx {
+void Lowering::emit_cleanups_list(const std::vector<CleanupAction> &acts) {
+    if (acts.empty()) return;
+    const size_t mark = cleanup_stack_.size();
+    cleanup_stack_.insert(cleanup_stack_.end(), acts.begin(), acts.end());
+    emit_cleanups_range(mark, cleanup_stack_.size());
+    cleanup_stack_.resize(mark);
+}
+
 void Lowering::emit_cleanups_range(size_t start, size_t end) {
     if (end > cleanup_stack_.size()) end = cleanup_stack_.size();
     if (start >= end) return;
@@ -591,7 +599,12 @@ void Lowering::emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line) {
     // (movido/null).  Lo usan el cleanup SHAREDPTR_REL del scope local y el
     // destructor del contenedor para un campo shared (H5).
     if (v_slot == ir::IR_NO_VALUE) return;
-    const ir::IrValueId v_ctrl = emit_load_host_ptr(v_slot, line);
+    emit_shared_refcount_dec_ctrl(emit_load_host_ptr(v_slot, line), line);
+}
+
+void Lowering::emit_shared_refcount_dec_ctrl(ir::IrValueId v_ctrl,
+                                             uint32_t line) {
+    if (v_ctrl == ir::IR_NO_VALUE) return;
     const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
     const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
     {
@@ -647,7 +660,12 @@ void Lowering::emit_shared_refcount_inc(ir::IrValueId v_slot, uint32_t line) {
     // El slot guarda el host_ptr al ctrl block; refcount esta en [ctrl + 0].
     // Si ctrl == 0 (movido/null) es no-op.  Simetrico al SHAREDPTR_REL (dec).
     if (v_slot == ir::IR_NO_VALUE) return;
-    const ir::IrValueId v_ctrl = emit_load_host_ptr(v_slot, line);
+    emit_shared_refcount_inc_ctrl(emit_load_host_ptr(v_slot, line), line);
+}
+
+void Lowering::emit_shared_refcount_inc_ctrl(ir::IrValueId v_ctrl,
+                                             uint32_t line) {
+    if (v_ctrl == ir::IR_NO_VALUE) return;
     const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
     const ir::IrValueId v_cmp = fn_->new_value(ir::IrType::BOOL);
     {
@@ -1386,6 +1404,17 @@ void Lowering::scan_escaping_stmt(ast::Stmt *st, AliasGraph &alias) {
         auto *r = static_cast<ast::ReturnStmt *>(st);
         // return ident; -> ident escapa.
         mark_escaping_if_ident(r->value.get());
+        /* Y se apunta aparte que escapo POR AQUI, que no es lo mismo.
+         *
+         * Devolver TRASPASA: quien lo recibe se queda con lo que habia, sin
+         * subir ninguna cuenta, asi que el que lo devuelve deja de ser dueno.
+         * Guardarlo en un campo COPIA: la cuenta sube y el local sigue siendo
+         * un dueno mas.  Con un solo conjunto los dos casos se veian igual y un
+         * `shared` guardado en un campo perdia su limpieza, asi que su cuenta
+         * no bajaba nunca y el bloque no se liberaba. */
+        if (r->value && r->value->kind == ast::NodeKind::IdentExpr)
+            returned_locals_.insert(
+                static_cast<ast::IdentExpr *>(r->value.get())->name);
         scan_escaping_expr(r->value.get(), alias);
         return;
     }

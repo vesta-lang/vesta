@@ -32,16 +32,28 @@
 namespace vx {
 void Lowering::lower_block(ast::BlockStmt *b) {
     push_scope();
-    // scope-local cleanup deferido por interaccion con
-    // try/catch (el catch handler puede saltar en medio de un body
-    // dejando cleanups de inner scopes en estado intermedio que
-    // causan SEGFAULT al RET).
-    //
-    // Mantenemos el comportamiento original (cleanup al RET via
-    // emit_cleanups_all en lower_return / final de lower_function).
-    // Resultado: destructores corren al RET, no por iteracion del
-    // loop.  Para destructores por iteracion, refactorizar el body
-    // del loop a un helper auxiliar (cuyo RET dispara el dtor).
+    /* Lo que el bloque reserve se suelta AL CERRARLO, no al salir de la
+     * funcion: un recurso dentro de un `{ }` o de un cuerpo de bucle vive lo
+     * que el bloque, y esperar al RET significa tener N vivos a la vez donde
+     * deberia haber uno.
+     *
+     * Los caminos que salen del ambito son cinco, y cada uno suelta lo suyo:
+     * caer al final (aqui abajo), `return` (@c emit_cleanups_all), y `break` y
+     * `continue`, que se van sin pasar por el final y lo hacen ellos desde la
+     * marca del bucle.
+     *
+     * El cuarto es una EXCEPCION, que tampoco pasa por el final: lo suelta el
+     * manejador, que emite las del cuerpo del `try` al entrar.  Y ahi vale que
+     * las ranuras nacen a CERO y toda limpieza comprueba antes de soltar, asi
+     * que pasar por la de algo que aun no se habia construido no hace nada --
+     * que es justo para lo que esa comprobacion esta.
+     *
+     * El quinto es un `goto`, y ese no se puede resolver aqui porque su destino
+     * es de la FUNCION entera: saltar fuera de un ambito con algo que soltar se
+     * RECHAZA al compilar, como C++ rechaza saltar por encima de una
+     * inicializacion.  Callar y soltarlo igual seria soltar lo que todavia se
+     * usa. */
+    const size_t cleanup_mark = cleanup_stack_.size();
     bool warned_unreachable = false;
     for (auto &s : b->body) {
         if (block_terminated_) {
@@ -57,6 +69,22 @@ void Lowering::lower_block(ast::BlockStmt *b) {
             continue;
         }
         lower_stmt(s.get());
+    }
+    /* Si el bloque termino por su cuenta -- `return`, `break`, `continue`,
+     * `throw` --, ese camino ya solto lo suyo y volver a emitirlo aqui seria
+     * soltarlo dos veces.  Desapilar hay que desapilar igual: las entradas son
+     * de ESTE bloque y quien venga detras no debe verlas. */
+    if (!block_terminated_)
+        emit_cleanups_range(cleanup_mark, cleanup_stack_.size());
+    if (cleanup_stack_.size() > cleanup_mark) {
+        /* Si alguien escucha -- el `try` que envuelve esto --, se lleva copia
+         * de lo que se va: una excepcion no pasa por el final del bloque, asi
+         * que su manejador tendra que soltarlo el. */
+        if (cleanup_capture_)
+            cleanup_capture_->insert(cleanup_capture_->end(),
+                                     cleanup_stack_.begin() + cleanup_mark,
+                                     cleanup_stack_.end());
+        cleanup_stack_.resize(cleanup_mark);
     }
     pop_scope();
 }
@@ -217,6 +245,11 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         // continue_preds/continue_scopes.
         lt.break_preds.push_back(current_block_);
         lt.break_scopes.push_back(scopes_);
+        /* Un `break` sale del cuerpo sin pasar por su final, asi que lo que el
+         * cuerpo reservo lo suelta el: todo lo apilado por encima de la marca
+         * del bucle.  No se desapila -- el bajado sigue recorriendo el cuerpo
+         * y los demas caminos necesitan las mismas entradas. */
+        emit_cleanups_range(lt.cleanup_mark, cleanup_stack_.size());
         emit_br(lt.break_bb, s->loc.line);
         block_terminated_ = true;
         return;
@@ -232,6 +265,8 @@ void Lowering::lower_stmt(ast::Stmt *s) {
         // con los SSA values en este punto de la ejecucion.
         lt.continue_preds.push_back(current_block_);
         lt.continue_scopes.push_back(scopes_);
+        // Por lo mismo que el `break`: se va sin pasar por el final del cuerpo.
+        emit_cleanups_range(lt.cleanup_mark, cleanup_stack_.size());
         emit_br(lt.continue_bb, s->loc.line);
         block_terminated_ = true;
         return;
@@ -755,6 +790,9 @@ void Lowering::lower_while(ast::WhileStmt *s) {
     //    para que cualquier @c BreakStmt o @c ContinueStmt anidado
     //    sepa adonde saltar.
     loop_targets_.push_back({header_id, exit_id, {}, {}});
+    /* Y la altura de la pila de limpieza: un `break` o un `continue`
+     * sueltan ellos lo que el cuerpo reservo por encima de aqui. */
+    loop_targets_.back().cleanup_mark = cleanup_stack_.size();
     current_block_ = body_id;
     block_terminated_ = false;
     lower_stmt(s->body.get());
@@ -990,6 +1028,9 @@ void Lowering::lower_do_while(ast::DoWhileStmt *s) {
     // do-while.  En do-while continue salta al header (que evalua
     // cond y decide back-edge); break salta al exit.
     loop_targets_.push_back({header_id, exit_id, {}, {}});
+    /* Y la altura de la pila de limpieza: un `break` o un `continue`
+     * sueltan ellos lo que el cuerpo reservo por encima de aqui. */
+    loop_targets_.back().cleanup_mark = cleanup_stack_.size();
     current_block_ = body_id;
     block_terminated_ = false;
     lower_stmt(s->body.get());
@@ -1189,6 +1230,9 @@ void Lowering::lower_for(ast::ForStmt *s) {
     emit_br_cond_from(cond_end_block, cond_v, body_id, exit_id, s->loc.line);
     // Body: push targets {continue=step, break=exit}.
     loop_targets_.push_back({step_id, exit_id, {}, {}});
+    /* Y la altura de la pila de limpieza: un `break` o un `continue`
+     * sueltan ellos lo que el cuerpo reservo por encima de aqui. */
+    loop_targets_.back().cleanup_mark = cleanup_stack_.size();
     current_block_ = body_id;
     block_terminated_ = false;
     if (s->body) lower_stmt(s->body.get());

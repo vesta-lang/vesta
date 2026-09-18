@@ -535,10 +535,25 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
     // escapa, el caller toma posesion (return) o lo guarda
     // (asignacion a field/slot/deref), por lo que NO se debe liberar
     // aqui.
+    /* Escapar no quiere decir lo mismo para los dos.
+     *
+     * Un `unique` que escapa ha sido MOVIDO: el recurso es de otro y aqui no se
+     * suelta.  Un `shared` solo deja de ser dueno cuando se DEVUELVE, que es lo
+     * unico que traspasa; guardarlo en un campo o en una ranura lo COPIA, y la
+     * copia ya subio la cuenta, asi que este sigue siendo un dueno y tiene que
+     * bajarla al morir.  Con un solo conjunto los dos casos se veian igual y la
+     * cuenta de un `shared` guardado no bajaba nunca: el bloque no se liberaba.
+     */
+    const bool escapes =
+        escaping_locals_.find(vd->name) != escaping_locals_.end();
+    const bool is_returned =
+        returned_locals_.find(vd->name) != returned_locals_.end();
+    const bool still_owns =
+        (sem_type.kind == PrimitiveKind::SHARED_PTR) ? !is_returned : !escapes;
     if (v != ir::IR_NO_VALUE &&
         (sem_type.kind == PrimitiveKind::UNIQUE_PTR ||
          sem_type.kind == PrimitiveKind::SHARED_PTR) &&
-        escaping_locals_.find(vd->name) == escaping_locals_.end()) {
+        still_owns) {
         CleanupAction act;
         act.operands = {v};
         act.source_line = vd->loc.line;

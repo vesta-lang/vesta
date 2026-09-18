@@ -1574,6 +1574,7 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
     //  memoria.  Los marcados quedan fuera del cleanup automatico.
     const_str_locals_.clear();
     escaping_locals_.clear();
+    returned_locals_.clear();
     reassigned_locals_.clear();
     if (fd->body) scan_escaping_locals(fd->body.get());
     // Los deleters estaticos por-variable son por-funcion (los nombres de

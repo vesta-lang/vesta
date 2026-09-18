@@ -2771,6 +2771,12 @@ class Lowering {
     /// si cae a 0.  Lo usan el cleanup del scope y el dtor del contenedor
     /// (campo shared).  No-op si ctrl==0.
     void emit_shared_refcount_dec(ir::IrValueId v_slot, uint32_t line);
+    /// Los mismos dos, pero dado el BLOQUE DE CONTROL en vez de la ranura que
+    /// lo guarda.  Los quiere un campo ESTATICO, cuyo hueco no tiene direccion
+    /// que pasar -- se lee y se escribe con `getstatic`/`setstatic` --, asi que
+    /// lo unico que puede ofrecer es el bloque ya cargado.
+    void emit_shared_refcount_inc_ctrl(ir::IrValueId v_ctrl, uint32_t line);
+    void emit_shared_refcount_dec_ctrl(ir::IrValueId v_ctrl, uint32_t line);
     /// Suelta el recurso que guarda la ranura de un `unique<T>`, dada la
     /// DIRECCION de la ranura: comprobar que no es nula, comprobar que hay algo
     /// dentro, y llamar a quien libera.
@@ -3897,6 +3903,13 @@ class Lowering {
     /// ambito -- y sin ese `free` un programa que solo usa cadenas constantes
     /// deja de enlazar el asignador.
     std::unordered_set<std::string> reassigned_locals_;
+    /// Locales que escapan POR UN `return`, que no es lo mismo que escapar por
+    /// guardarse en un sitio.  Devolver TRASPASA -- quien lo recibe se queda
+    /// con lo que habia y ninguna cuenta sube --, mientras que guardar en un
+    /// campo COPIA y la cuenta sube.  Un `shared<T>` guardado sigue siendo un
+    /// dueno, asi que conserva su limpieza; uno devuelto ya no lo es.  Lo llena
+    /// el mismo pre-pase que @c escaping_locals_, del que es un subconjunto.
+    std::unordered_set<std::string> returned_locals_;
 
     /// pre-pase ejecutado al inicio de @c lower_function que
     /// rellena @c escaping_locals_ recorriendo el body.  Reusable como
@@ -4920,6 +4933,21 @@ private:
         std::vector<uint32_t> closure_field_offsets;
     };
     std::vector<CleanupAction> cleanup_stack_;
+    /// Cuantos `try` envuelven a lo que se esta bajando ahora mismo.
+    ///
+    /// Dentro de uno, las ranuras se reservan en el bloque de ENTRADA (ver
+    /// @c stack_alloc_buf): una excepcion llega al manejador por un borde que
+    /// el asignador de registros no tiene en su CFG, asi que un valor definido
+    /// en el cuerpo no esta donde el manejador lo buscaria.  Definido en la
+    /// entrada, que domina a todo, le llega igual que a cualquier otro bloque.
+    uint32_t try_body_depth_ = 0;
+    /// Donde @c lower_block deja copia de lo que desapila al cerrar un bloque,
+    /// cuando alguien esta escuchando.  Lo pone @c lower_try alrededor de su
+    /// cuerpo: una excepcion no pasa por el final del bloque, asi que el
+    /// manejador tiene que soltar el mismo lo que el cuerpo reservo, y para eso
+    /// necesita las entradas que el cuerpo ya se llevo de la pila.
+    /// @c nullptr cuando nadie escucha, que es lo normal.
+    std::vector<CleanupAction> *cleanup_capture_ = nullptr;
 
     /**
      * @brief Bajar un cuerpo en OTRA funcion, y volver donde se estaba.
@@ -5069,6 +5097,11 @@ private:
         /// distintos.
         std::vector<std::vector<std::unordered_map<std::string, ir::IrValueId>>>
             break_scopes;
+        /// Altura del @c cleanup_stack_ al entrar en el bucle.  Un `break` o un
+        /// `continue` SALEN del cuerpo sin pasar por su final, asi que tienen
+        /// que soltar ellos lo que el cuerpo reservo: todo lo que se apilara
+        /// por encima de esta marca.
+        size_t cleanup_mark = 0;
     };
     std::vector<LoopTargets> loop_targets_;
 
@@ -5267,6 +5300,12 @@ private:
     /// para garantizar que las acciones de salida (e.g. monexit) corran
     /// antes del RET.
     void emit_cleanups_all();
+
+    /// Emite una lista SUELTA de acciones, no las de la pila: las que
+    /// @c lower_block se llevo al cerrar el cuerpo de un `try` y el manejador
+    /// tiene que soltar.  Se apilan, se emiten y se quitan, para que salga por
+    /// el mismo sitio que todo lo demas y no haya dos formas de soltar.
+    void emit_cleanups_list(const std::vector<CleanupAction> &acts);
 
     /**
      * @brief Emite los cleanups del rango [start, end) del @c cleanup_stack_

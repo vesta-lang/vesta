@@ -205,6 +205,7 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
         cleanup_stack_.clear();
         const_str_locals_.clear();
         escaping_locals_.clear();
+        returned_locals_.clear();
         try_spill_slots_.clear();
         scan_address_taken(m->body.get());
         // fix5 - escape detection tambien para metodos de clase.

@@ -339,7 +339,18 @@ void Lowering::lower_try(ast::TryStmt *s) {
     // 2. Body del try.
     current_block_ = body_bb;
     block_terminated_ = false;
+    /* Dentro del `try`, lo que el cuerpo reserve se suelta al salir de la
+     * FUNCION, no al cerrar el bloque.  Ver @c try_body_depth_: la excepcion
+     * llega al manejador por un borde que el asignador de registros no tiene en
+     * su CFG, asi que un valor del cuerpo no esta donde el manejador lo
+     * buscaria. */
+    std::vector<CleanupAction> body_cleanups;
+    std::vector<CleanupAction> *prev_capture = cleanup_capture_;
+    cleanup_capture_ = &body_cleanups;
+    ++try_body_depth_;
     lower_stmt(s->body.get());
+    --try_body_depth_;
+    cleanup_capture_ = prev_capture;
 
     // Snapshot post-body para PHI.  Si el body alcanza el
     // merge (no terminado por return/throw/break), guardamos su
@@ -414,6 +425,13 @@ void Lowering::lower_try(ast::TryStmt *s) {
         const ast::CatchClause &cc = s->catches[ci];
         current_block_ = handler_bbs[ci];
         block_terminated_ = false;
+        /* Lo primero, soltar lo que el cuerpo del `try` habia reservado: se
+         * vino por aqui sin pasar por su final, asi que nadie mas lo hara.  Y
+         * la excepcion puede saltar desde cualquier punto, asi que se pasa
+         * tambien por lo que aun no se habia construido: esas ranuras estan a
+         * CERO y toda limpieza comprueba antes de soltar, que es justo para lo
+         * que esa comprobacion esta. */
+        emit_cleanups_list(body_cleanups);
         // NO reset a entry_bindings (creaba shadows -- ver explicacion arriba).
         // El catch reload via LOAD desde spill slots se encarga de restaurar
         // las vars relevantes al valor entry.

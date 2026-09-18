@@ -841,6 +841,7 @@ void Lowering::lower_struct_methods(ast::StructDecl *sd, ir::IrModule &out) {
         cleanup_stack_.clear();
         const_str_locals_.clear();
         escaping_locals_.clear();
+        returned_locals_.clear();
         try_spill_slots_.clear();
         current_fn_has_loops_ = false;
         current_fn_has_try_ = false;

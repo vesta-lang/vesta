@@ -596,6 +596,19 @@ ir::IrValueId Lowering::lower_class_field_load(ast::FieldAccessExpr *e) {
         if (s_typ.kind == PrimitiveKind::PTR && !s_typ.is_virtual) {
             fn_->values[v_val].is_host_ptr = true;
         }
+        /* Un `shared<T>` no se entrega como valor: en todo el resto del
+         * compilador vale la DIRECCION DE SU RANURA -- de ahi leen `use_count`,
+         * `ptr_of`, la copia y quien lo suelta --, y un campo de instancia la
+         * tiene porque es su propio hueco.  Un hueco estatico no: se lee con
+         * `getstatic` y lo que sale es el bloque.  Asi que se le pone una
+         * ranura, que es lo unico que falta para que el resto no tenga que
+         * saber de donde vino. */
+        if (s_typ.kind == PrimitiveKind::SHARED_PTR) {
+            const ir::IrValueId v_slot = stack_alloc_buf(8, e->loc.line);
+            emit_store_typed(v_slot, v_val, ir::IrType::I64, e->loc.line);
+            fn_->values[v_slot].pointee_is_host_ptr = true;
+            return v_slot;
+        }
         return v_val;
     }
 
@@ -820,6 +833,32 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         const uint32_t cname_len = static_cast<uint32_t>(base_id->name.size());
         const ir::IrValueId v_cls =
             emit_findclass_by_name(cname_idx, cname_len, loc.line);
+
+        /* Un campo `shared<T>` guarda el BLOQUE DE CONTROL, y quedarse con el
+         * es ser un dueno mas: hay que subir la cuenta, y bajar la del que
+         * hubiera antes para que una reasignacion no pierda el anterior.  Es lo
+         * mismo que hacen el campo de instancia y el de struct; aqui se escribia
+         * el `rhs` en crudo -- la direccion de la RANURA de origen, que muere
+         * con su marco -- y sin tocar la cuenta, asi que al salir del ambito el
+         * bloque se liberaba y el estatico se quedaba apuntando a memoria
+         * suelta.
+         *
+         * La cuenta se toca por el BLOQUE y no por la ranura porque un hueco
+         * estatico no tiene direccion que pasar: se lee y se escribe con
+         * `getstatic`/`setstatic`. */
+        if (s_typ.kind == PrimitiveKind::SHARED_PTR) {
+            const ir::IrValueId v_old = emit_getstatic(
+                v_cls, static_cast<uint64_t>(s_off), loc.line,
+                "__static_" + base_id->name + "_" + target->field_name);
+            emit_shared_refcount_dec_ctrl(v_old, loc.line);
+            const ir::IrValueId v_ctrl = emit_load_host_ptr(rhs, loc.line);
+            emit_setstatic(v_cls, v_ctrl, static_cast<uint64_t>(s_off),
+                           loc.line,
+                           "__static_" + base_id->name + "_" +
+                               target->field_name);
+            emit_shared_refcount_inc_ctrl(v_ctrl, loc.line);
+            return rhs;
+        }
         // 2) setstatic.  Coerce rhs_cast a I64 si fuera necesario.
         ir::IrValueId v_val_i64 = rhs_cast;
         if (fn_->values[rhs_cast].type != ir::IrType::I64) {

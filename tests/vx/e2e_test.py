@@ -3240,6 +3240,8 @@ modes3_case("uniq96", "unique<T> move semantics (mvtake): transfer ownership", "
 modes3_case("shr97", "shared<T> basico: shared_box + use_count + payload offset", "97_shared_basico.vx", 78, line=2006)
 modes3_case("uw105", "unique_with: deleter Vesta custom (counter de releases)", "105_unique_with_vesta.vx", 3, line=2013)
 modes3_case("sw563", "shared_with: bloque de control + deleter propio", "563_shared_with_deleter.vx", 42, line=2013)
+modes3_case("shst564", "shared<T> en campo estatico: cuenta y bloque", "564_shared_campo_estatico.vx", 42, line=2013)
+modes3_case("raii565", "RAII por ambito: bloque, bucle, break/continue, try y excepcion", "565_raii_por_ambito.vx", 42, line=2013)
 modes3_case("valloc106", "unique_with + VirtualAlloc/VirtualFree (Win32 API auto-released)", "106_virtualalloc_unique.vx", 42, line=2015)
 modes3_case("lifo107", "unique<T> LIFO cleanup + move chain (orden inverso)", "107_unique_lifo_move_chain.vx", 42, line=2017)
 modes3_case("shrc108", "shared<T> use_count + move + ptr_of value recovery", "108_shared_use_count.vx", 42, line=2019)

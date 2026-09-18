@@ -1,0 +1,83 @@
+namespace ejemplos.raii_por_ambito;
+
+// Un recurso se suelta AL CERRAR SU AMBITO, no al salir de la funcion.
+//
+// Importa mas de lo que parece: con la liberacion aplazada al RET, un bucle de
+// mil vueltas tenia mil recursos vivos a la vez donde deberia haber uno.
+//
+// Del ambito se sale por cinco sitios y los cinco sueltan lo suyo: caer al
+// final, `return`, `break`, `continue` y una EXCEPCION -- esta ultima no pasa
+// por el final del bloque, asi que la suelta el manejador.
+//
+// Devuelve 42 = 1 (bloque) + 5 (bucle) + 3 (break/continue) + 1 (try normal)
+//              + 1 (try con excepcion) + 31.
+
+class Contador {
+	public static i64 sueltas;
+}
+
+// Para el camino de la excepcion.  Se lanza un objeto, que es lo que el binario
+// nativo sabe recoger; `panic` todavia no (se muere sin pasar por el `catch`).
+class Salta {
+	public i64 v;
+	public Salta(i64 v) {
+		this.v = v;
+	}
+}
+
+void suelta(i64* p) {
+	Contador.sueltas = Contador.sueltas + 1;
+	free(p);
+}
+
+i32 main() {
+	// 1. Un bloque interno: al cerrarlo, no al salir de main.
+	{
+		unique<i64*> a = unique_with((i64*)malloc(8), suelta);
+	}
+	i64 tras_bloque = Contador.sueltas; // 1
+
+	// 2. Un bucle: UNA por vuelta, no cinco al final.
+	Contador.sueltas = 0;
+	for (i64 i = 0_i64; i < 5; i = i + 1) {
+		unique<i64*> b = unique_with((i64*)malloc(8), suelta);
+	}
+	i64 por_vuelta = Contador.sueltas; // 5
+
+	// 3. Salir por `break` y por `continue` tampoco se salta la liberacion.
+	Contador.sueltas = 0;
+	for (i64 i = 0_i64; i < 9; i = i + 1) {
+		unique<i64*> c = unique_with((i64*)malloc(8), suelta);
+		if (i == 0) {
+			continue;
+		}
+		if (i == 2) {
+			break;
+		}
+	}
+	i64 con_saltos = Contador.sueltas; // 3: vueltas 0, 1 y 2
+
+	// 4. El cuerpo de un `try` que termina bien.
+	Contador.sueltas = 0;
+	try {
+		unique<i64*> d = unique_with((i64*)malloc(8), suelta);
+	} catch (FatalError e) {
+		println("no deberia entrar aqui");
+	}
+	i64 try_normal = Contador.sueltas; // 1
+
+	// 5. Y el que sale por una excepcion, que no pasa por el final del bloque.
+	Contador.sueltas = 0;
+	try {
+		unique<i64*> e = unique_with((i64*)malloc(8), suelta);
+		throw new Salta(1);
+	} catch (Salta ex) {
+	// El manejador suelta lo que el cuerpo habia reservado.
+	}
+	i64 try_excepcion = Contador.sueltas; // 1
+
+	println("bloque=${tras_bloque} bucle=${por_vuelta} saltos=${con_saltos}");
+	println("try_normal=${try_normal} try_excepcion=${try_excepcion}");
+	return (i32)(tras_bloque + por_vuelta + con_saltos + try_normal +
+		try_excepcion + 31);
+}

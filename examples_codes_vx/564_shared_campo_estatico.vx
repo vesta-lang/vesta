@@ -1,0 +1,41 @@
+namespace ejemplos.shared_campo_estatico;
+
+// Un `shared<T>` guardado en un campo ESTATICO.
+//
+// El campo se queda con el BLOQUE DE CONTROL y pasa a ser un dueno mas, asi que
+// la cuenta sube.  La ruta estatica se saltaba las dos cosas: escribia la
+// direccion de la ranura de origen -- que muere con su marco -- y no tocaba la
+// cuenta, de modo que al volver de `productor` el bloque ya estaba liberado y
+// leer el campo reventaba con un acceso invalido.
+//
+// El caso que lo destapa necesita que el `shared` salga por una LLAMADA que no
+// se inline, porque si se inlina el escape se ve y el bloque se queda en el
+// monton igual.  De ahi el bucle de `guarda`.
+
+class Caja {
+	public static shared<i64> v;
+}
+
+void guarda(shared<i64> s, i64 n) {
+	i64 acc = 0_i64;
+	for (i64 i = 0_i64; i < n; i = i + 1) {
+		acc = acc + i * 3 - (i / 2) + (i % 7);
+		if (acc > 1_000_000) {
+			acc = acc - 1_000_000;
+		}
+	}
+	Caja.v = s; // el campo se queda con el bloque
+}
+
+void productor(i64 n) {
+	shared<i64> local = shared_box(40);
+	guarda(local, n);
+} // el marco de `productor` muere; el campo tiene que seguir valiendo
+
+i32 main() {
+	productor(3);
+	// Un solo dueno vivo: el campo.  Leerlo aqui es lo que antes reventaba.
+	i64 duenos = use_count(Caja.v);
+	println("duenos=${duenos}");
+	return (i32)(40 + duenos + 1);
+}

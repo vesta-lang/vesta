@@ -1060,7 +1060,25 @@ ir::IrValueId Lowering::stack_alloc_buf(uint64_t bytes, uint32_t line,
     al.dst = v_buf;
     al.source_line = line;
     al.host_alloca = host_memory;
-    emit(current_block_, std::move(al));
+    /* Dentro de un `try`, la ranura se reserva en el bloque de ENTRADA.
+     *
+     * No es una optimizacion: es lo unico que hace que el manejador pueda
+     * soltar lo que el cuerpo reservo.  Una excepcion llega alli por un borde
+     * que el asignador de registros no tiene en su CFG, asi que un valor
+     * definido en el cuerpo no esta donde el manejador lo buscaria -- y leer
+     * por ahi da una direccion que ya no es.  Definido en la entrada, que
+     * domina a todo, el valor le llega igual que a cualquier otro bloque.
+     *
+     * Cuesta que la ranura viva desde el principio de la funcion en vez de
+     * desde su declaracion.  Es pila, asi que son bytes del marco, no una
+     * reserva mas; y a cambio un recurso dentro de un `try` se suelta. */
+    if (try_body_depth_ > 0) {
+        std::vector<ir::IrInstr> setup;
+        setup.push_back(std::move(al));
+        splice_into_entry_block(setup);
+    } else {
+        emit(current_block_, std::move(al));
+    }
     if (host_memory) fn_->values[v_buf].is_host_ptr = true;
     return v_buf;
 }
