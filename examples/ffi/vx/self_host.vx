@@ -32,47 +32,47 @@
 // por la DLL desde dentro de este programa Vesta-lang).
 
 i32 main() {
-    // Snippet Vesta-lang a compilar+ejecutar via la DLL.  Devuelve 6 * 7 = 42.
-    string snippet = "i32 main() { return 6 * 7; }";
+	// Snippet Vesta-lang a compilar+ejecutar via la DLL.  Devuelve 6 * 7 = 42.
+	string snippet = "i32 main() { return 6 * 7; }";
 
-    // Buffer host de 4 bytes para recibir el out_exit (int) por puntero.
-    i32* slot = malloc(4);
-    slot[0] = 0;
+	// Buffer host de 4 bytes para recibir el out_exit (int) por puntero.
+	i32* slot = malloc(4);
+	slot[0] = 0;
 
-    // Cargar libvesta.  En Windows el loader busca en el directorio del
-    // ejecutable y el PATH; "libvesta.dll" resuelve si esta junto al .exe.
-    // En POSIX usar "libvesta.so".  Para portabilidad de la demo probamos
-    // el nombre Windows; si falla, el handle sera 0 y abortamos limpio.
-    i64 lib = ffi_open("libvesta.dll");
-    if (lib == 0) {
-        // Segundo intento: nombre POSIX.
-        lib = ffi_open("libvesta.so");
-    }
-    if (lib == 0) {
-        free(slot);
-        // No se pudo cargar la DLL: devolvemos 0 (fallo silencioso para la
-        // demo; el ejemplo C cubre el reporte de errores detallado).
-        return 0;
-    }
+	// Cargar libvesta.  En Windows el loader busca en el directorio del
+	// ejecutable y el PATH; "libvesta.dll" resuelve si esta junto al .exe.
+	// En POSIX usar "libvesta.so".  Para portabilidad de la demo probamos
+	// el nombre Windows; si falla, el handle sera 0 y abortamos limpio.
+	i64 lib = ffi_open("libvesta.dll");
+	if (lib == 0) {
+		// Segundo intento: nombre POSIX.
+		lib = ffi_open("libvesta.so");
+	}
+	if (lib == 0) {
+		free(slot);
+		// No se pudo cargar la DLL: devolvemos 0 (fallo silencioso para la
+		// demo; el ejemplo C cubre el reporte de errores detallado).
+		return 0;
+	}
 
-    // Resolver el simbolo exportado vesta_eval.
-    i64 fn_eval = ffi_sym(lib, "vesta_eval");
-    if (fn_eval == 0) {
-        free(slot);
-        return 0;
-    }
+	// Resolver el simbolo exportado vesta_eval.
+	i64 fn_eval = ffi_sym(lib, "vesta_eval");
+	if (fn_eval == 0) {
+		free(slot);
+		return 0;
+	}
 
-    // Invocar: vesta_eval(src, NULL, &out_exit, NULL).
-    // ffi_call devuelve el codigo de retorno (0 = ok).
-    i64 rc = ffi_call(fn_eval, str_cstr(snippet), 0, slot, 0);
+	// Invocar: vesta_eval(src, NULL, &out_exit, NULL).
+	// ffi_call devuelve el codigo de retorno (0 = ok).
+	i64 rc = ffi_call(fn_eval, str_cstr(snippet), 0, slot, 0);
 
-    // Leer el resultado interno (R0 del snippet) escrito en el slot host.
-    i32 inner = slot[0];
-    free(slot);
+	// Leer el resultado interno (R0 del snippet) escrito en el slot host.
+	i32 inner = slot[0];
+	free(slot);
 
-    println("self-host via libvesta: snippet -> ${inner} (rc=${rc})");
-    flush();
+	println("self-host via libvesta: snippet -> ${inner} (rc=${rc})");
+	flush();
 
-    // Devolver el resultado del programa que la DLL compilo + ejecuto.
-    return inner;
+	// Devolver el resultado del programa que la DLL compilo + ejecuto.
+	return inner;
 }
