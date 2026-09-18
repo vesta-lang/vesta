@@ -1115,7 +1115,16 @@ ir::IrValueId Lowering::lower_field_access(ast::FieldAccessExpr *e) {
          * `use_count` y quien lo suelta --.  Se deja pasar con la anfitrionia
          * que traiga @c lower_field_addr, que es la del contenedor. */
         e->result_type.kind == PrimitiveKind::SHARED_PTR ||
-        e->result_type.kind == PrimitiveKind::UNIQUE_PTR) {
+        e->result_type.kind == PrimitiveKind::UNIQUE_PTR ||
+        /* Un campo LAMBDA (`fn(...) -> R`) es otro agregado inline: ocupa 16
+         * bytes en el struct, {fn_addr, env}, y el valor SSA de una lambda es
+         * la DIRECCION de ese par -- es lo que espera quien la llama, que
+         * carga [slot] y [slot+8].  Cargarlo como un escalar devolvia solo la
+         * primera mitad y el sitio de llamada la volvia a desreferenciar,
+         * saltando a donde tocara.  Un `cfn(...)` NO entra aqui: son 8 bytes
+         * crudos, un escalar de verdad, y se carga. */
+        (e->result_type.kind == PrimitiveKind::FUNCTION &&
+         !e->result_type.fn_is_raw)) {
         return addr;
     }
 

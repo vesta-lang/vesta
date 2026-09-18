@@ -14080,6 +14080,17 @@ Type TypeChecker::check_assign_impl(ast::AssignExpr *e) {
             static_cast<ast::IdentExpr *>(e->target.get())->name);
     }
 
+    /* Borrow checker R3, la mitad que faltaba: reasignar el owner mientras
+     * esta prestado es la MISMA violacion que moverlo -- el prestamo queda
+     * apuntando a lo que ya solto --, y hasta ahora solo se comprobaba
+     * `move(u)`.  `on_owner_use` devuelve true para lo que no sea un owner
+     * registrado, asi que no hace falta filtrar por tipo aqui. */
+    if (e->target->kind == ast::NodeKind::IdentExpr) {
+        auto *tid = static_cast<ast::IdentExpr *>(e->target.get());
+        (void)borrow_checker_.on_owner_use(tid->name, e->loc,
+                                           /*is_mutation=*/true);
+    }
+
     // validacion de escape ilegal para clases con destructor.
     // Si el value es una instancia de clase con `~Class()` y se asigna
     // a un field, slot de array o deref-store, el destructor RAII del
@@ -18903,6 +18914,33 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                          "' no es una funcion conocida");
             return Type{PrimitiveKind::I64};
         }
+        /* El trampolin copia SOLO el banco entero: no toca los registros
+         * vectoriales, que es por donde la convencion nativa pasa un flotante.
+         * Sin esta comprobacion el programa compilaba y el callback recibia
+         * basura donde esperaba un numero -- un resultado equivocado, no un
+         * error, que es justo lo que no se admite. */
+        if (sym->sig_index < function_sigs_.size()) {
+            const FunctionSig &cb_sig = function_sigs_[sym->sig_index];
+            size_t bad = SIZE_MAX;
+            for (size_t i = 0; i < cb_sig.param_types.size(); ++i) {
+                const PrimitiveKind k = cb_sig.param_types[i].kind;
+                if (k == PrimitiveKind::F32 || k == PrimitiveKind::F64) {
+                    bad = i;
+                    break;
+                }
+            }
+            const PrimitiveKind rk = cb_sig.return_type.kind;
+            const bool bad_ret =
+                (rk == PrimitiveKind::F32 || rk == PrimitiveKind::F64);
+            if (bad != SIZE_MAX || bad_ret) {
+                const std::string what =
+                    (bad != SIZE_MAX)
+                        ? diag::format("VX2083", {std::to_string(bad + 1)})
+                        : diag::format("VX2084", {});
+                diags_.diag(fn_id->loc, DiagLevel::ERR, "VX2082",
+                            {fn_id->name, what});
+            }
+        }
         /* Marcamos result_type del IdentExpr como I64 sentinela para
          * que el lowering reconozca el patron (sin pasar por lower_ident
          * normal que daria error de simbolo). */
@@ -19078,14 +19116,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 e->borrow_owner_source = src;
             }
         } else if (borrow_param_count > 1) {
-            diags_.warning(e->loc, "lifetime elision ambigua: la funcion '" +
-                                       id->name +
-                                       "' tiene multiples parametros borrow; "
-                                       "la elision rule 1 no aplica.\n"
-                                       "  El borrow retornado podria tener "
-                                       "cualquiera de los lifetimes.\n"
-                                       "  (Anotaciones explicitas no "
-                                       "soportadas; considera reescribir.)");
+            /* Con dos o mas entradas no hay de donde deducir el owner, asi que
+             * el borrow devuelto sale SIN owner: el comprobador no lo ata a
+             * nada.  Eso se DICE -- callar aqui seria un analisis que renuncia
+             * en silencio, que es lo que parece que funciona. */
+            diags_.diag(e->loc, DiagLevel::WARN, "VXW921",
+                        {id->name, std::to_string(borrow_param_count)});
         }
     }
 

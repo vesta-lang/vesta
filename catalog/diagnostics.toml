@@ -2128,6 +2128,15 @@ es = "este bucle da exactamente una vuelta, asi que no es un bucle: se lee como 
 en = "this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type"
 es = "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"
 
+# La elision de vidas cubre UN borrow de entrada: si solo hay uno, el de salida
+# sale de el y no hay nada que elegir.  Con dos o mas, el compilador no sabe de
+# cual sale -- y esto es lo que NO se hace: callar y quedarse con el primero.
+# Un borrow atado al owner equivocado no da un error, da otro valor cuando el
+# owner de verdad ya murio.  Se dice que no se sabe, y por que.
+[VXW921]
+en = "'{0}' takes {1} borrow parameters, so which one the returned borrow comes from cannot be deduced: lifetime elision only covers a single input. The returned borrow is checked against NO owner, so nothing stops it from outliving the one it really points at"
+es = "'{0}' toma {1} parametros borrow, asi que no se puede deducir de cual sale el borrow que devuelve: la elision de vidas solo cubre una entrada. El borrow devuelto no se comprueba contra NINGUN owner, asi que nada impide que sobreviva a aquel al que de verdad apunta"
+
 [VXW918]
 en = "this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next"
 es = "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"
@@ -3253,3 +3262,30 @@ es = "aqui no hay en ambito ninguna funcion libre '{1}' que tome un '{0}': la qu
 ["VX2081"]
 en = "'{0}' after '$' is not a namespace in scope.  `x.{1}$<namespace>(...)` names which '{1}' to call, so what follows the '$' has to be a namespace this file declares or imports"
 es = "'{0}', tras el '$', no es un namespace en ambito.  `x.{1}$<namespace>(...)` dice a que '{1}' se llama, asi que lo que sigue al '$' tiene que ser un namespace que este fichero declare o importe"
+
+# El trampolin de `as_native_callback` copia SOLO el banco entero, y la
+# convencion nativa pasa los flotantes por los registros vectoriales.  Sin esta
+# comprobacion el programa compilaba y el callback leia basura donde esperaba un
+# numero: un resultado equivocado en vez de un error, que es lo que no se admite.
+# {0} el nombre de la funcion, {1} que parte de su firma es flotante -- y ese
+# {1} sale de VX2083/VX2084, no escrito aqui: un fragmento en castellano dentro
+# del mensaje ingles se ve a la primera.
+# `find_type("Punto")` se resuelve al compilar a la direccion de la ficha.  Con
+# una cadena calculada en ejecucion haria falta un resolutor que recorra la
+# tabla por nombre, y no lo hay.  El mensaje lo dice asi: nombrar la fase
+# interna en la que se hara no le sirve a quien lee el error.
+["VX2085"]
+en = "'find_type' resolves the type at compile time, so its argument has to be a string literal: looking one up by a name computed at run time would need a resolver that walks the table, and there is none"
+es = "'find_type' resuelve el tipo al compilar, asi que su argumento tiene que ser un literal de cadena: buscarlo por un nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no lo hay"
+
+["VX2083"]
+en = "parameter {0}"
+es = "el parametro {0}"
+
+["VX2084"]
+en = "the return value"
+es = "el valor de retorno"
+
+["VX2082"]
+en = "'{0}' cannot be used as a native callback: {1} is a float, and the thunk only carries the integer register bank -- the native convention passes floats in vector registers, so the callback would read garbage instead of a number.  Take the bits as 'u64' and bitcast inside"
+es = "'{0}' no puede ser un callback nativo: {1} es flotante, y el trampolin solo lleva el banco de registros enteros -- la convencion nativa pasa los flotantes por los vectoriales, asi que el callback leeria basura en vez de un numero.  Recibe los bits como 'u64' y conviertelos dentro"

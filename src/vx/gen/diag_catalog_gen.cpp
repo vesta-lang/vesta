@@ -88,6 +88,10 @@ const CatEntry kEntries[] = {
     {"VX2079", {"no free function '{1}' taking a '{0}' is in scope here, but '{2}' has one.  Either write `{2}.{1}(receiver, ...)`, or bring the name in with `import {2} only {1};` and the dot works", "aqui no hay en ambito ninguna funcion libre '{1}' que tome un '{0}', pero '{2}' trae una.  O la escribes `{2}.{1}(receptor, ...)`, o traes el nombre con `import {2} only {1};` y el punto funciona"}},
     {"VX2080", {"no free function '{1}' taking a '{0}' is in scope here: the one that exists belongs to namespace '{2}', declared in this same file.  Write `{2}.{1}(receiver, ...)`", "aqui no hay en ambito ninguna funcion libre '{1}' que tome un '{0}': la que hay es del namespace '{2}', declarado en este mismo fichero.  Escribela `{2}.{1}(receptor, ...)`"}},
     {"VX2081", {"'{0}' after '$' is not a namespace in scope.  `x.{1}$<namespace>(...)` names which '{1}' to call, so what follows the '$' has to be a namespace this file declares or imports", "'{0}', tras el '$', no es un namespace en ambito.  `x.{1}$<namespace>(...)` dice a que '{1}' se llama, asi que lo que sigue al '$' tiene que ser un namespace que este fichero declare o importe"}},
+    {"VX2082", {"'{0}' cannot be used as a native callback: {1} is a float, and the thunk only carries the integer register bank -- the native convention passes floats in vector registers, so the callback would read garbage instead of a number.  Take the bits as 'u64' and bitcast inside", "'{0}' no puede ser un callback nativo: {1} es flotante, y el trampolin solo lleva el banco de registros enteros -- la convencion nativa pasa los flotantes por los vectoriales, asi que el callback leeria basura en vez de un numero.  Recibe los bits como 'u64' y conviertelos dentro"}},
+    {"VX2083", {"parameter {0}", "el parametro {0}"}},
+    {"VX2084", {"the return value", "el valor de retorno"}},
+    {"VX2085", {"'find_type' resolves the type at compile time, so its argument has to be a string literal: looking one up by a name computed at run time would need a resolver that walks the table, and there is none", "'find_type' resuelve el tipo al compilar, asi que su argumento tiene que ser un literal de cadena: buscarlo por un nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no lo hay"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -432,6 +436,7 @@ const CatEntry kEntries[] = {
     {"VXW918", {"this loop fills a contiguous run with the same value: 'std.memory.fill' says it in one line, and says it to whoever reads it next", "este bucle rellena un tramo contiguo con el mismo valor: 'std.memory.fill' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW919", {"this loop copies a contiguous run: 'std.memory.copy' says it in one line, and says it to whoever reads it next", "este bucle copia un tramo contiguo: 'std.memory.copy' lo dice en una linea, y se lo dice a quien lo lea despues"}},
     {"VXW920", {"this loop advances past its limit without ever equalling it, so its '!=' guard never stops it: it either does not end, or ends only after wrapping around the whole type", "este bucle se pasa de su limite sin llegar a igualarlo nunca, asi que su guarda '!=' no lo para: o no termina, o solo termina tras dar la vuelta al tipo entero"}},
+    {"VXW921", {"'{0}' takes {1} borrow parameters, so which one the returned borrow comes from cannot be deduced: lifetime elision only covers a single input. The returned borrow is checked against NO owner, so nothing stops it from outliving the one it really points at", "'{0}' toma {1} parametros borrow, asi que no se puede deducir de cual sale el borrow que devuelve: la elision de vidas solo cubre una entrada. El borrow devuelto no se comprueba contra NINGUN owner, asi que nada impide que sobreviva a aquel al que de verdad apunta"}},
     {"VXW924", {"this will not compile to a bare native binary: it needs {0}", "esto no compila a un binario nativo sin runtime: necesita {0}"}},
     {"VXW925", {"'@overlaps({0})' on the field '{1}' is not true: the two do not share a single byte ('{1}' covers {2}..{3}, '{0}' covers {4}..{5}). The mark says the format has a union here; leaving it once it stops being true turns it into a note nobody can trust", "'@overlaps({0})' en el campo '{1}' no es cierto: los dos no comparten ni un byte ('{1}' cubre {2}..{3} y '{0}' cubre {4}..{5}). La marca dice que ahi el formato tiene una union; dejarla cuando deja de ser verdad la convierte en una nota de la que nadie se puede fiar"}},
     {"VXW926", {"the view '{0}' leaves {1} byte(s) that no field describes ({2}..{3}). A gap is fine -- describing only the fields you read is the normal way to use a view -- so this is only worth acting on if this one is meant to cover the whole format", "la vista '{0}' deja {1} byte(s) que ningun campo describe ({2}..{3}). Un hueco esta bien -- describir solo los campos que lees es el uso normal de una vista --, asi que esto solo hay que tocarlo si esta pretende cubrir el formato entero"}},
@@ -648,7 +653,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 627;
+const int kEntryCount = 632;
 
 } // namespace
 

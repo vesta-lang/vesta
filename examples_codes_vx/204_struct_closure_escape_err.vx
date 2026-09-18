@@ -14,6 +14,13 @@ struct Caja {
 	fn() -> i64 leer;
 }
 
+// El mismo struct guardado en un campo de otro que le sobrevive: la regla no
+// cambia, el ownership del env viaja con la copia y lo libera quien acaba
+// teniendo el valor.
+struct Exterior {
+	Caja dentro;
+}
+
 Caja crear(i64 v) {
 	Caja c;
 	c.leer = () => v + 1; // closure capturador; al escapar, env en heap
@@ -21,6 +28,13 @@ Caja crear(i64 v) {
 }
 
 i32 main() {
-	Caja c = crear(41);   // c posee el env; lo libera al exit del scope
+	Caja c = crear(41); // c posee el env; lo libera al exit del scope
+
+	Exterior e       = {.dentro = crear(31) }; // el env sobrevive a `crear`
+	i64      anidado = e.dentro.leer();        // 32
+
+	if (anidado != 32) {
+		return 1;
+	}
 	return (i32)c.leer(); // 42
 }

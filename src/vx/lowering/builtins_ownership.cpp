@@ -767,45 +767,8 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         // SHAREDPTR_REL hace `free` cuando el refcount cae a 0 (refcount
         // puro, determinista, sin GC -> funciona en AOT standalone).
         const ir::IrValueId v_slot = stack_alloc_buf(8, e->loc.line);
-        const ir::IrValueId v_ctrl_size =
-            emit_const(ir::IrType::I64, 16 + 8, e->loc.line); // 24 bytes total
-        // RAW_ALLOC -> host_ptr al bloque de control.
-        const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
-        fn_->values[v_ctrl].is_host_ptr = true;
-        {
-            ir::IrInstr ins{};
-            ins.op = ir::IrOp::RAW_ALLOC;
-            ins.type = ir::IrType::PTR;
-            ins.dst = v_ctrl;
-            ins.operands = {v_ctrl_size};
-            ins.source_line = e->loc.line;
-            emit(current_block_, std::move(ins));
-        }
-        // STORE refcount=1 at [v_ctrl + 0].
-        {
-            const ir::IrValueId v_one =
-                emit_const(ir::IrType::I64, 1, e->loc.line);
-            emit_store_typed(v_ctrl, v_one, ir::IrType::I64, e->loc.line);
-        }
-        // STORE deleter=0 at [v_ctrl + 8] (placeholder; cleanup usa free
-        // literal).
-        {
-            const ir::IrValueId v_eight =
-                emit_const(ir::IrType::I64, 8, e->loc.line);
-            const ir::IrValueId v_ctrl8 =
-                emit_ptr_add(v_ctrl, v_eight, e->loc.line);
-            const ir::IrValueId v_zero =
-                emit_const(ir::IrType::I64, 0, e->loc.line);
-            emit_store_typed(v_ctrl8, v_zero, ir::IrType::I64, e->loc.line);
-        }
-        // STORE payload at [v_ctrl + 16].
-        {
-            const ir::IrValueId v_sixteen =
-                emit_const(ir::IrType::I64, 16, e->loc.line);
-            const ir::IrValueId v_ctrl16 =
-                emit_ptr_add(v_ctrl, v_sixteen, e->loc.line);
-            emit_store_typed(v_ctrl16, v_payload, payload_t, e->loc.line);
-        }
+        const ir::IrValueId v_ctrl =
+            emit_shared_ctrl_block(v_payload, payload_t, e->loc.line);
         // STORE v_ctrl at [v_slot] (VM memory).
         emit_store_typed(v_slot, v_ctrl, ir::IrType::I64, e->loc.line);
         fn_->values[v_slot].pointee_is_host_ptr = true;
@@ -813,6 +776,49 @@ bool Lowering::lower_owner_box(ast::CallExpr *e, Builtin b,
         return true;
     }
     return true;
+}
+
+ir::IrValueId Lowering::emit_shared_ctrl_block(ir::IrValueId v_payload,
+                                               ir::IrType payload_t,
+                                               uint32_t line) {
+    const ir::IrValueId v_ctrl_size =
+        emit_const(ir::IrType::I64, 16 + 8, line); // 24 bytes en total
+    // RAW_ALLOC -> puntero del anfitrion al bloque de control.
+    const ir::IrValueId v_ctrl = fn_->new_value(ir::IrType::PTR);
+    fn_->values[v_ctrl].is_host_ptr = true;
+    {
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::RAW_ALLOC;
+        ins.type = ir::IrType::PTR;
+        ins.dst = v_ctrl;
+        ins.operands = {v_ctrl_size};
+        ins.source_line = line;
+        /* Que ESTO es un bloque de control lo sabe este sitio y nadie mas, asi
+         * que se dice aqui.  Si escapa o no lo contesta el optimizador. */
+        ins.is_shared_ctrl = true;
+        emit(current_block_, std::move(ins));
+    }
+    // La cuenta arranca en UNO: quien lo construye ya es un dueno.
+    {
+        const ir::IrValueId v_one = emit_const(ir::IrType::I64, 1, line);
+        emit_store_typed(v_ctrl, v_one, ir::IrType::I64, line);
+    }
+    /* `+8` queda a cero: es sitio reservado.  Quien libera va en el TIPO
+     * (@c Type::deleter_name), asi que se sabe al compilar y no hay nada que
+     * guardar aqui. */
+    {
+        const ir::IrValueId v_eight = emit_const(ir::IrType::I64, 8, line);
+        const ir::IrValueId v_ctrl8 = emit_ptr_add(v_ctrl, v_eight, line);
+        const ir::IrValueId v_zero = emit_const(ir::IrType::I64, 0, line);
+        emit_store_typed(v_ctrl8, v_zero, ir::IrType::I64, line);
+    }
+    // Y el valor, en `+16`.
+    {
+        const ir::IrValueId v_sixteen = emit_const(ir::IrType::I64, 16, line);
+        const ir::IrValueId v_ctrl16 = emit_ptr_add(v_ctrl, v_sixteen, line);
+        emit_store_typed(v_ctrl16, v_payload, payload_t, line);
+    }
+    return v_ctrl;
 }
 
 /**
@@ -875,15 +881,28 @@ bool Lowering::lower_owner_box_with(ast::CallExpr *e, Builtin b,
      * `extern` no sobrevivia a cruzar una funcion, porque no habia direccion
      * que guardar --: el tipo lo dice igual, sea Vesta o extern. */
     const ir::IrValueId v_slot = unique_slot_buf(e->loc.line);
-    emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
-    /* Y nada mas: la ranura es UNA palabra, el manejador.
-     *
-     * Aqui se escribia ademas la DIRECCION de quien libera en la de al lado, y
-     * con ella todo lo que hacia falta para ponerla: materializarla, y un cero
-     * para los liberadores que no son funciones Vesta -- `free` y los `extern`
-     * no tienen direccion que apuntar --.  Quien limpia lo saca del TIPO, asi
-     * que no hay nada que guardar; y de paso desaparece esa limitacion, porque
-     * el tipo lo dice igual sea Vesta o extern. */
+    if (is_unique_with) {
+        /* Un `unique` es UNA palabra: la ranura ES el recurso.
+         *
+         * Aqui se escribia ademas la DIRECCION de quien libera en la de al
+         * lado, y con ella todo lo que hacia falta para ponerla: materializarla
+         * y un cero para los liberadores que no son funciones Vesta -- `free` y
+         * los `extern` no tienen direccion que apuntar --.  Quien limpia lo
+         * saca del TIPO, asi que no hay nada que guardar; y de paso desaparece
+         * esa limitacion, porque el tipo lo dice igual sea Vesta o extern. */
+        emit_store_typed(v_slot, v_payload, ir::IrType::I64, e->loc.line);
+    } else {
+        /* Un `shared` NO: su ranura apunta al bloque de control, que es donde
+         * vive la cuenta.  Guardar aqui el recurso a pelo -- que es lo que se
+         * hacia, por venir esta funcion de `unique` -- dejaba a `use_count`
+         * leyendo los primeros ocho bytes del recurso como si fueran la cuenta,
+         * y a quien libera sin bloque que soltar: el liberador no llegaba a
+         * correr nunca.  El bloque es el mismo que el de `shared_box`; lo unico
+         * distinto es que el valor de `+16` ya venia hecho. */
+        const ir::IrValueId v_ctrl =
+            emit_shared_ctrl_block(v_payload, ir::IrType::I64, e->loc.line);
+        emit_store_typed(v_slot, v_ctrl, ir::IrType::I64, e->loc.line);
+    }
     (void)deleter_label;
     // El slot contiene un valor con semantica de host_ptr / handle.
     fn_->values[v_slot].pointee_is_host_ptr = true;

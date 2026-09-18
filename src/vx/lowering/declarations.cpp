@@ -600,6 +600,15 @@ void Lowering::lower_var_decl(ast::VarDeclStmt *vd) {
         } else {
             act.kind = CleanupAction::Kind::SHAREDPTR_REL;
             act.slot_size = 8;
+            /* Y quien libera, igual que en el `unique`: lo dice el TIPO.
+             *
+             * Un `shared_with` pone bajo dueno algo que no salio de pedir
+             * memoria -- un fichero, un descriptor, memoria del sistema --, asi
+             * que cuando la cuenta llega a cero no basta con soltar el bloque:
+             * hay que llamar a SU liberador sobre el valor.  Vacio = el de por
+             * defecto, y entonces el valor vive DENTRO del bloque y soltarlo
+             * basta. */
+            act.literal_deleter = sem_type.deleter_name;
         }
         cleanup_stack_.push_back(std::move(act));
 
@@ -767,10 +776,16 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
         // (bug struct-en-struct, value-type anidado).
         // Un campo de tipo `@overlay struct` NO es un agregado inline:
         // guarda el HANDLE de la vista (8 bytes) -> STORE escalar (abajo).
+        /* Una lambda (`fn(...) -> R`) es otro agregado inline: 16 bytes, el
+         * par {fn_addr, env}, y su valor es la DIRECCION del par.  Un
+         * `cfn(...)` no: son 8 bytes crudos y se guardan tal cual. */
         if ((fi->type.kind == PrimitiveKind::STRUCT &&
              !type_is_overlay(fi->type)) ||
-            fi->type.kind == PrimitiveKind::ARRAY) {
+            fi->type.kind == PrimitiveKind::ARRAY ||
+            (fi->type.kind == PrimitiveKind::FUNCTION &&
+             !fi->type.fn_is_raw)) {
             uint64_t sz = size_of_type(fi->type);
+            if (fi->type.kind == PrimitiveKind::FUNCTION) sz = 16;
             if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
                 auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
                 if (it_sl != tc_.struct_layouts().end())

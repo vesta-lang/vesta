@@ -465,8 +465,48 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
             }
             const ir::IrBlockId free_bb = fn_->new_block("sh_free");
             emit_br_cond(v_is0, free_bb, skip_bb, it->source_line);
-            // free_bb: RAW_FREE(v_ctrl) + br skip_bb.
+            // free_bb: (quiza) el liberador del usuario + RAW_FREE + br skip.
             current_block_ = free_bb;
+            /* Con un liberador PROPIO (`shared_with`), el valor de `+16` es un
+             * recurso que no salio de pedir memoria -- un fichero, memoria del
+             * sistema --, asi que soltar el bloque no lo suelta a el: hay que
+             * llamar a quien sabe hacerlo.  Con el de por defecto el valor vive
+             * DENTRO del bloque y no hay nada que llamar. */
+            if (!is_default_deleter(it->literal_deleter)) {
+                const uint32_t ln = it->source_line;
+                const ir::IrValueId v_sixteen =
+                    emit_const(ir::IrType::I64, 16, ln);
+                const ir::IrValueId v_ctrl16 =
+                    emit_ptr_add(v_ctrl, v_sixteen, ln);
+                const ir::IrValueId v_res =
+                    emit_load_typed(v_ctrl16, ir::IrType::I64, ln,
+                                    /*host_ptr=*/true);
+                /* Y no se le pasa un cero: el liberador es del usuario y no
+                 * tiene por que aguantarlo. */
+                const ir::IrBlockId bb_do = fn_->new_block("sh_del_do");
+                const ir::IrBlockId bb_after = fn_->new_block("sh_del_after");
+                const ir::IrValueId v_z0 = emit_const(ir::IrType::I64, 0, ln);
+                const ir::IrValueId v_nn = emit_ir_binop(
+                    ir::IrOp::CMP_NE, v_res, v_z0, ir::IrType::BOOL, ln);
+                emit_br_cond(v_nn, bb_do, bb_after, ln);
+                current_block_ = bb_do;
+                {
+                    ir::IrInstr ca{};
+                    const bool is_extern =
+                        (it->literal_deleter.rfind("@extern:", 0) == 0);
+                    ca.op = is_extern ? ir::IrOp::CALLN : ir::IrOp::CALL;
+                    ca.type = ir::IrType::VOID;
+                    ca.dst = ir::IR_NO_VALUE;
+                    ca.func_name = is_extern ? it->literal_deleter.substr(8)
+                                             : it->literal_deleter;
+                    ca.operands = {v_res};
+                    ca.source_line = ln;
+                    ca.is_call_site = true;
+                    emit(current_block_, std::move(ca));
+                }
+                emit_br(bb_after, ln);
+                current_block_ = bb_after;
+            }
             {
                 ir::IrInstr fr{};
                 fr.op = ir::IrOp::RAW_FREE;
@@ -642,44 +682,36 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     const ir::IrBlockId skip_bb = fn_->new_block("free_clo_skip");
     const ir::IrValueId zero = emit_const(ir::IrType::I64, 0, line);
 
-    // slot = LOAD [this + field_offset]  (host_ptr al slot RAW_ALLOC).
+    /* El campo ES el par {fn_addr, env}: son 16 bytes INLINE en el
+     * contenedor, que es lo que declara el layout.  Asi que lo unico que hay
+     * que soltar es el entorno, que si esta reservado aparte; el par no se
+     * libera porque no es una reserva propia -- vive dentro del struct o del
+     * objeto.  Liberarlo era soltar memoria que no era suya. */
     const ir::IrValueId slot_addr =
         emit_field_addr(fn_, current_block_, this_vid, field_offset, line);
-    const ir::IrValueId slot =
-        emit_load_typed(slot_addr, ir::IrType::I64, line, /*host_ptr=*/true);
-    // if (slot == 0) -> skip  (campo nunca asignado / closure null).
-    const ir::IrBlockId slot_ok = fn_->new_block("free_clo_slot_ok");
-    {
-        const ir::IrValueId is_null =
-            emit_ir_binop(ir::IrOp::CMP_EQ, slot, zero, ir::IrType::BOOL, line);
-        // Campo nunca asignado -> no hay nada que soltar.
-        emit_br_cond(is_null, skip_bb, slot_ok, line);
-        current_block_ = slot_ok;
-    }
-    // env = LOAD [slot + 8]
     const ir::IrValueId env_addr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[env_addr].is_host_ptr = true;
+    fn_->values[env_addr].is_host_ptr =
+        fn_->values[slot_addr].is_host_ptr;
     {
         const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
         ir::IrInstr ad{};
         ad.op = ir::IrOp::ADD;
         ad.type = ir::IrType::I64;
         ad.dst = env_addr;
-        ad.operands = {slot, eight};
+        ad.operands = {slot_addr, eight};
         ad.source_line = line;
         emit(current_block_, std::move(ad));
     }
-    const ir::IrValueId env =
-        emit_load_typed(env_addr, ir::IrType::I64, line, /*host_ptr=*/true);
-    // Bloque que SIEMPRE libera el slot (heap owned), tras (quiza) liberar env.
-    const ir::IrBlockId free_slot_bb = fn_->new_block("free_clo_slot");
-    // if (env == 0) -> free_slot; else RAW_FREE(env) -> free_slot
+    const ir::IrValueId env = emit_load_typed(
+        env_addr, ir::IrType::I64, line,
+        /*host_ptr=*/fn_->values[slot_addr].is_host_ptr);
+    /* Sin entorno -- campo nunca asignado, lambda sin capturas o ya movida --
+     * no hay nada que soltar. */
     {
         const ir::IrValueId is_null =
             emit_ir_binop(ir::IrOp::CMP_EQ, env, zero, ir::IrType::BOOL, line);
         const ir::IrBlockId free_env_bb = fn_->new_block("free_clo_env");
-        // Sin entorno solo hay que soltar la ranura.
-        emit_br_cond(is_null, free_slot_bb, free_env_bb, line);
+        emit_br_cond(is_null, skip_bb, free_env_bb, line);
         current_block_ = free_env_bb;
     }
     {
@@ -688,18 +720,6 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         rf.type = ir::IrType::VOID;
         rf.dst = ir::IR_NO_VALUE;
         rf.operands = {env};
-        rf.source_line = line;
-        emit(current_block_, std::move(rf));
-        emit_br(free_slot_bb, line);
-    }
-    // free_slot_bb: RAW_FREE(slot); br skip.
-    current_block_ = free_slot_bb;
-    {
-        ir::IrInstr rf{};
-        rf.op = ir::IrOp::RAW_FREE;
-        rf.type = ir::IrType::VOID;
-        rf.dst = ir::IR_NO_VALUE;
-        rf.operands = {slot};
         rf.source_line = line;
         emit(current_block_, std::move(rf));
         emit_br(skip_bb, line);

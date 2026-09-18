@@ -1,8 +1,19 @@
-// Test NEGATIVO: R3 - move(owner) mientras tiene borrows activos = ERROR.
+// Test NEGATIVO: R3 -- soltar el owner mientras tiene prestamos activos.
+//
+// Son DOS formas de lo mismo y las dos son error: moverlo con `move(...)` y
+// reasignarlo con `=`.  En ambas el prestamo se queda apuntando a lo que el
+// owner ya solto.
 
 i32 main() {
 	unique<i32> owner = unique_box(42);
 	borrow<i32> r     = lend(owner);
-	unique<i32> q     = move(owner); // ERROR esperado
+	unique<i32> q     = move(owner); // ERROR esperado: VX2034 (mover)
 	return 0;
+}
+
+i32 reasignar() {
+	unique<i32> owner = unique_box(42);
+	borrow<i32> r     = lend(owner);
+	owner = unique_box(7); // ERROR esperado: VX2031 (mutar)
+	return read_borrow(r);
 }

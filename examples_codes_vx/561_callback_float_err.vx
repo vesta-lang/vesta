@@ -1,0 +1,24 @@
+// Test NEGATIVO: un callback nativo con un flotante en la firma.
+//
+// El trampolin que `as_native_callback` genera copia SOLO el banco de registros
+// enteros, y la convencion nativa pasa los flotantes por los vectoriales: el
+// callback leeria basura donde espera un numero.  Por eso se rechaza al
+// compilar en vez de dar un resultado equivocado.
+//
+// La salida es recibir los BITS como `u64` y convertirlos dentro, que es lo que
+// el mensaje sugiere.
+
+i32 compare_f64(f64 a, f64 b) {
+	if (a < b) {
+		return -1;
+	}
+	if (a > b) {
+		return 1;
+	}
+	return 0;
+}
+
+i32 main() {
+	i64 cb = as_native_callback(compare_f64); // ERROR esperado: VX2082
+	return (i32)cb;
+}

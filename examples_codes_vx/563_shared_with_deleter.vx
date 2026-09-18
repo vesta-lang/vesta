@@ -1,0 +1,38 @@
+namespace ejemplos.shared_with_deleter;
+
+// `shared_with(valor, liberador)`: pone bajo dueno COMPARTIDO algo que no salio
+// de pedir memoria -- un fichero, un descriptor, memoria del sistema --, con la
+// funcion que sabe soltarlo.
+//
+// Un `shared` guarda su cuenta en un bloque aparte y el valor DENTRO de el, asi
+// que aqui hay dos cosas que comprobar y las dos se comprobaban mal:
+//
+//   1. `use_count` justo despues de construirlo tiene que ser 1.  Guardar el
+//      recurso a pelo en la ranura -- sin bloque -- dejaba a `use_count`
+//      leyendo los primeros ocho bytes del recurso como si fueran la cuenta.
+//   2. El liberador tiene que correr UNA vez, cuando la cuenta llega a cero.
+//      Sin bloque no habia cuenta que bajar, asi que no corria nunca y el
+//      recurso se fugaba en silencio.
+//
+// Devuelve 42: 40 del contador de liberaciones (dos sueltas) mas 2 de las dos
+// cuentas correctas.
+
+class Contador {
+	public static i64 sueltas;
+}
+
+void suelta(i64 p) {
+	Contador.sueltas = Contador.sueltas + 20;
+}
+
+i64 usa_y_suelta() {
+	shared<i64> s = shared_with(0x00C0FFEE_i64, suelta);
+	return use_count(s); // 1, y al salir del ambito corre `suelta`
+}
+
+i32 main() {
+	i64 a = usa_y_suelta();
+	i64 b = usa_y_suelta();
+	println("cuentas=${a}+${b} sueltas=${Contador.sueltas}");
+	return (i32)(Contador.sueltas + a + b);
+}

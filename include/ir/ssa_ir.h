@@ -1313,6 +1313,22 @@ struct IrInstr {
      */
     bool wrap_ok = false;
 
+    /**
+     * @brief Esta @c RAW_ALLOC es el bloque de control de un @c shared<T>.
+     *
+     * Son 24 bytes -- la cuenta, un hueco reservado y el valor -- y ahi viven
+     * porque el bloque tiene que sobrevivir a TODOS los duenos, y cual muere el
+     * ultimo no se sabe donde se construye.  Pero cuando se puede demostrar que
+     * ningun dueno sale del marco, no hace falta pedir memoria: cabe en la
+     * pila.
+     *
+     * La marca la pone el bajado, que es quien sabe QUE es este bloque, y la
+     * lee el optimizador, que es quien sabe SI escapa -- y lo sabe mejor,
+     * porque mira despues de haber metido las funciones pequenas dentro y ve
+     * lo que hacen con el.  Cada uno contesta lo que le toca.
+     */
+    bool is_shared_ctrl = false;
+
     /// @Naked: si true en un IrOp::RET, este RET es el SINTETICO de
     /// caida-al-final (fallthrough) que el lowering inserta cuando la funcion
     /// no termina en un `return` explicito -- NO proviene de un `return` del

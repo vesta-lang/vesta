@@ -165,10 +165,16 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
         // (no un STORE escalar, que guardaria la direccion como puntero).
         // Un campo de tipo `@overlay struct` NO es un agregado inline: guarda
         // el HANDLE de la vista (8 bytes) -> STORE escalar del puntero (abajo).
+        /* Una lambda (`fn(...) -> R`) es otro agregado inline: 16 bytes en el
+         * campo, el par {fn_addr, env}, y su valor es la DIRECCION del par.
+         * Un `cfn(...)` no, que son 8 bytes crudos y se guardan tal cual. */
         if ((fi->type.kind == PrimitiveKind::STRUCT &&
              !type_is_overlay(fi->type)) ||
-            fi->type.kind == PrimitiveKind::ARRAY) {
+            fi->type.kind == PrimitiveKind::ARRAY ||
+            (fi->type.kind == PrimitiveKind::FUNCTION &&
+             !fi->type.fn_is_raw)) {
             uint64_t sz = size_of_type(fi->type);
+            if (fi->type.kind == PrimitiveKind::FUNCTION) sz = 16;
             if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {
                 auto it_sl = tc_.struct_layouts().find(fi->type.struct_name);
                 if (it_sl != tc_.struct_layouts().end())

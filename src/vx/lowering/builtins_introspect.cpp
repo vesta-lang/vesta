@@ -430,11 +430,10 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
                     out_value = dst;
                     return true;
                 }
-                /* Runtime string: para MVP devolvemos 0 (no soportado).
-                 * Sprint 5 añade resolver sintetico. */
-                error_at(e->loc,
-                         "find_type: en MVP solo se soporta literal string "
-                         "(runtime resolver pendiente en Sprint 5)");
+                /* Una cadena calculada en ejecucion exige un resolutor que
+                 * recorra la tabla por nombre, y eso todavia no esta.  Se dice
+                 * asi, sin nombrar fases internas: al usuario no le sirven. */
+                diags_.diag(e->loc, DiagLevel::ERR, "VX2085", {});
                 out_value = emit_const(ir::IrType::I64, 0, src_line);
                 return true;
             }

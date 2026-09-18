@@ -84,6 +84,8 @@ constexpr uint8_t INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE =
     1 << 3; ///< Sprint mem-loop-fix: RAW_FREE preservado para liberar in-loop
 constexpr uint8_t INSTR_FLAG_RET_IMPLICIT =
     1 << 4; ///< @Naked: RET sintetico de caida-al-final (no `return` explicito)
+constexpr uint8_t INSTR_FLAG_SHARED_CTRL =
+    1 << 5; ///< RAW_ALLOC del bloque de control de un `shared<T>`
 
 // Bits del byte flags por IrFunction.
 constexpr uint8_t FN_FLAG_NATIVE =
@@ -203,6 +205,7 @@ void write_instr(std::vector<uint8_t> &o, const IrInstr &i) {
     if (i.host_alloca) flags |= INSTR_FLAG_HOST_ALLOCA;
     if (i.host_alloca_explicit_free)
         flags |= INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE;
+    if (i.is_shared_ctrl) flags |= INSTR_FLAG_SHARED_CTRL;
     write_u8(o, flags);
     // source_line: util para diagnosticos y stack traces.  0 si
     // el frontend no aporto info de linea.
@@ -304,6 +307,7 @@ bool read_instr(const std::vector<uint8_t> &in, size_t &off, IrInstr &i) {
     i.host_alloca = (flags & INSTR_FLAG_HOST_ALLOCA) != 0;
     i.host_alloca_explicit_free =
         (flags & INSTR_FLAG_HOST_ALLOCA_EXPLICIT_FREE) != 0;
+    i.is_shared_ctrl = (flags & INSTR_FLAG_SHARED_CTRL) != 0;
     i.source_line = source_line;
     i.source_column = source_column;
     i.source_len = source_len;

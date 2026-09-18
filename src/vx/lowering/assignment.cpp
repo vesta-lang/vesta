@@ -942,6 +942,49 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
             }
         }
     }
+    /* Campo LAMBDA (`fn(...) -> R`): el campo son 16 bytes inline, el par
+     * {fn_addr, env}, y @c rhs es la DIRECCION de ese par.  Hay que COPIAR los
+     * dos qwords, no guardar la direccion: un STORE escalar dejaba en el campo
+     * un puntero al slot de origen -- que ademas vive en el marco de quien la
+     * construyo --, asi que llamarla despues saltaba a donde tocara.  Un
+     * `cfn(...)` no entra aqui: es un escalar de 8 bytes y se guarda tal cual. */
+    if (fa->result_type.kind == PrimitiveKind::FUNCTION &&
+        !fa->result_type.fn_is_raw) {
+        const bool dst_host = fn_->values[addr].is_host_ptr;
+        const bool src_host = fn_->values[rhs].is_host_ptr;
+        for (uint64_t qi = 0; qi < 2; ++qi) {
+            const ir::IrValueId v_off = emit_const(
+                ir::IrType::I64, static_cast<int64_t>(qi * 8), e->loc.line);
+            const ir::IrValueId s_at = fn_->new_value(ir::IrType::PTR);
+            fn_->values[s_at].is_host_ptr = src_host;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = s_at;
+                ad.operands = {rhs, v_off};
+                ad.source_line = e->loc.line;
+                emit(current_block_, std::move(ad));
+            }
+            const ir::IrValueId w =
+                emit_load_typed(s_at, ir::IrType::I64, e->loc.line);
+            const ir::IrValueId d_at = fn_->new_value(ir::IrType::PTR);
+            fn_->values[d_at].is_host_ptr = dst_host;
+            {
+                ir::IrInstr ad{};
+                ad.op = ir::IrOp::ADD;
+                ad.type = ir::IrType::I64;
+                ad.dst = d_at;
+                ad.operands = {addr, v_off};
+                ad.source_line = e->loc.line;
+                emit(current_block_, std::move(ad));
+            }
+            emit_store_typed(d_at, w, ir::IrType::I64, e->loc.line);
+        }
+        out = rhs;
+        return true;
+    }
+
     // Campo de tipo STRUCT (value-type): @c rhs es la DIRECCION del struct
     // origen -> copia memberwise (qword-by-qword) sus bytes al campo, NO un
     // STORE escalar (que guardaria la direccion origen).  Si el struct

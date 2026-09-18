@@ -1631,6 +1631,26 @@ class Lowering {
                               ir::IrValueId &out_value);
 
     /**
+     * @brief Reserva y rellena el bloque de control de un @c shared<T>.
+     *
+     * Son 24 bytes del anfitrion, `[+0 cuenta][+8 reservado][+16 valor]`, y se
+     * reservan UNA vez: lo que viaja despues -- al devolverlo, al pasarlo, al
+     * moverlo -- es el puntero de ocho bytes que devuelve esto, nunca el
+     * bloque.
+     *
+     * Lo usan los dos constructores, `shared_box` y `shared_with`, porque la
+     * forma del bloque es la misma; lo unico que cambia es de donde sale el
+     * valor que se guarda.
+     *
+     * @param v_payload  El valor a guardar en `+16`.
+     * @param payload_t  Su tipo en el intermedio.
+     * @param line       Linea del fuente para los diagnosticos.
+     * @return El puntero del anfitrion al bloque.
+     */
+    ir::IrValueId emit_shared_ctrl_block(ir::IrValueId v_payload,
+                                         ir::IrType payload_t, uint32_t line);
+
+    /**
      * @brief Traslada la propiedad de un valor: `move(p)`.
      *
      * Deja el origen a CERO, y esa es toda la garantia: al salir del ambito se

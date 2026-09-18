@@ -8,9 +8,10 @@ namespace ejemplos.introspect_runtime;
 // puntero al IntrospectInfo (i64) o 0 si no existe.  Los builtins
 // `type_info_*` consultan la informacion mediante ese puntero.
 //
-// MVP: find_type acepta literales compile-time (resueltos a un
-// `mov @Absolute(...)` directo).  Runtime string lookup queda pendiente
-// para Sprint 5.
+// `find_type` resuelve el tipo AL COMPILAR, a un `mov @Absolute(...)` directo,
+// asi que su argumento tiene que ser un literal de cadena.  Buscarlo por un
+// nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no
+// lo hay: ver `562_find_type_runtime_err.vx`.
 
 @Introspect
 struct Vec3 {

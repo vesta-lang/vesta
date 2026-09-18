@@ -1,0 +1,19 @@
+// Test NEGATIVO: `find_type` con una cadena calculada en ejecucion.
+//
+// `find_type` resuelve el tipo AL COMPILAR: baja a la direccion de la ficha
+// `IntrospectInfo`, que el compilador conoce porque el nombre es un literal.
+// Con un nombre que solo existe en ejecucion haria falta un resolutor que
+// recorra la tabla por nombre, y no lo hay -- asi que se rechaza en vez de
+// devolver 0 y hacer pensar que el tipo no existe.
+
+@Introspect
+struct Punto {
+	i64 x;
+	i64 y;
+}
+
+i32 main() {
+	string name = "Punto";
+	i64    info = find_type(name); // ERROR esperado: VX2085
+	return (i32)info;
+}
