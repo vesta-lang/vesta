@@ -44,6 +44,7 @@
 #include <string>
 #include <vector>
 
+#include "util/alloc/small_vector.h" // ParamNames: los nombres, en pila
 #include "util/name_pool.h" // los nombres de un tipo, compartidos
 #include "vx/token.h"
 
@@ -400,6 +401,22 @@ inline bool operator!=(const std::string &a, const PooledName &b) {
 }
 /// @copydoc operator!=(const std::string &, const PooledName &)
 inline bool operator!=(const char *a, const PooledName &b) { return b != a; }
+
+/**
+ * @brief Los nombres de las ranuras de una llamada o de una firma.
+ *
+ * Un solo tipo para las cuatro listas que hablan de lo mismo -- los parametros
+ * de una funcion, los de un metodo, los nombres escritos en una llamada y los
+ * de una candidata --, porque son la misma cosa y compararlas entre si es la
+ * operacion central de todo esto.
+ *
+ * Del pozo y en un @c SmallVector, no @c std::vector<std::string>: un nombre es
+ * OCHO BYTES, compararlo es comparar punteros, y las firmas de hasta cuatro
+ * parametros -- que son casi todas -- no tocan el monton.  Con cadenas sueltas
+ * serian una reserva por nombre, otra por lista, y comparar por texto en el
+ * sitio donde se elige a que cuerpo va cada llamada del programa.
+ */
+using ParamNames = util::SmallVector<PooledName, 4>;
 
 /**
  * @struct Type

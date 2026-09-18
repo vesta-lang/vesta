@@ -126,7 +126,7 @@ struct FunctionSig {
     /// (`f(.a = 3)`), que muchas veces esta en otro fichero, asi que viaja en
     /// el `.vxi`.  Y de ahi sale que **el nombre de un parametro pasa a ser
     /// parte del contrato**: renombrarlo rompe a quien llama.
-    std::vector<std::string> param_names;
+    ParamNames param_names;
     /// ABI custom por-parametro (`register("rXX") T name`): registro fisico de
     /// entrada por parametro, alineado con @c param_types.  Vacio = ABI
     /// estandar. Lo consume: (a) el codegen del CALL directo (via IrFunction),
@@ -183,6 +183,19 @@ struct FunctionSig {
      * marca puesta en uno que luego se vuelve a declarar se pierde.
      */
     bool is_overloaded = false;
+    /**
+     * @brief Lo que la separa de sus hermanas son los NOMBRES de sus ranuras.
+     *
+     * Cierto cuando alguna toma exactamente lo mismo y solo se distinguen por
+     * como se llaman sus parametros.  Entonces el simbolo tiene que llevarlos:
+     * si no, dos cuerpos comparten etiqueta -- el fallo que ya mordio aqui con
+     * la tabla de metodos --.
+     *
+     * Es un HECHO guardado, no una busqueda: lo apunta el mismo recorrido de
+     * hermanas que decide @c is_overloaded, que ya estaba escrito.  Volver a
+     * recorrerlas para preguntar esto seria pasar dos veces por lo mismo.
+     */
+    bool overload_needs_names = false;
     /// Variadicos: si @c true, el ULTIMO param es un rest `T... name`.  En
     /// @c param_types el ultimo entry es @c T* (puntero al elemento) y
     /// @c variadic_elem guarda el tipo del ELEMENTO T (para validar los args
@@ -378,7 +391,7 @@ struct ClassMethodInfo {
     /// Como se llama cada parametro, alineado con @c param_types.  Misma razon
     /// que en @c FunctionSig::param_names: `obj.m(.a = 3)` se escribe donde se
     /// llama, y el nombre entra en la seleccion.
-    std::vector<std::string> param_names;
+    ParamNames param_names;
     /// Direccion por parametro, alineada con @c param_types.  Misma razon que
     /// en @c FunctionSig::param_dirs: la necesita quien LLAMA.
     std::vector<ParamDir> param_dirs;
@@ -484,6 +497,9 @@ struct ClassMethodInfo {
      * cierto se miran los tipos de los argumentos para elegir.
      */
     bool is_overloaded = false;
+    /// Ver @c FunctionSig::overload_needs_names: lo que la separa de sus
+    /// hermanas son los nombres de sus ranuras, asi que entran en el simbolo.
+    bool overload_needs_names = false;
     /// Debug info para stack traces.  Llenado por el type
     /// checker al ver el ClassMethodDecl original.  El lowering lo
     /// emite en __module_init via @c setmethdbg.
@@ -2222,9 +2238,24 @@ class TypeChecker {
      * @return false si algun nombre no existe, dos caen en la misma ranura o
      *         alguna se queda sin llenar (ya reportado).
      */
-    bool normalize_named_args(ast::CallExpr *e,
-                              const std::vector<std::string> &pn,
+    bool normalize_named_args(ast::CallExpr *e, const ParamNames &pn,
                               const std::string &quien);
+
+    /**
+     * @brief Dos candidatas encajan y la llamada no dice cual.
+     *
+     * Solo pasa entre hermanas que toman LO MISMO y se distinguen por como se
+     * llaman sus ranuras.  Se citan las DOS con sus nombres -- que es lo que
+     * hay que escribir para elegir -- y se senyala la primera ranura donde
+     * difieren, que es la minima que hace falta nombrar.
+     *
+     * @param name Nombre de la funcion o metodo.
+     * @param a    Los nombres de las ranuras de una.
+     * @param b    Los de la otra.
+     * @param loc  Donde se escribio la llamada.
+     */
+    void report_overload_ambiguous(const std::string &name, const ParamNames &a,
+                                   const ParamNames &b, const SourceLoc &loc);
 
     /**
      * @brief El tipo TIENE el metodo, y ademas hay una libre que lo tomaria.
@@ -2275,6 +2306,14 @@ class TypeChecker {
      * @return Su nombre publico si el aplanado lo renombro; el que hay, si no.
      */
     std::string written_type_name(const Type &t) const;
+
+    /**
+     * @brief El nombre tal y como se ESCRIBE, dado el que el aplanado le puso.
+     *
+     * La misma regla que  written_type_name, para lo que no es un tipo: una
+     * funcion, un metodo.  Una sola consulta y un solo criterio.
+     */
+    std::string written_name(const std::string &mangled) const;
 
     Type report_method_missing(
         ast::CallExpr *e, ast::FieldAccessExpr *fa,

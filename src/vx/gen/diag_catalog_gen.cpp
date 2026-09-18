@@ -83,6 +83,8 @@ const CatEntry kEntries[] = {
     {"VX2074", {"'{1}' has no parameter named '{0}'", "'{1}' no tiene ningun parametro llamado '{0}'"}},
     {"VX2075", {"two arguments land on parameter '{0}' of '{1}'", "dos argumentos caen en el parametro '{0}' de '{1}'"}},
     {"VX2076", {"parameter '{0}' of '{1}' is left without an argument", "el parametro '{0}' de '{1}' se queda sin argumento"}},
+    {"VX2077", {"the call to '{0}' does not tell two apart: one takes ({1}), the other takes ({2}).  Name the slot that separates them: {0}(.{3} = ...)", "la llamada a '{0}' no distingue entre dos: una toma ({1}) y la otra ({2}).  Nombra la ranura que las separa: {0}(.{3} = ...)"}},
+    {"VX2078", {"@Override: '{0}' does not replace anything.  There is one taking the same types, but its slots are called ({1}): keep those names to override it, or drop @Override and it is a new overload", "@Override: '{0}' no sustituye a ninguno.  Hay uno que toma lo mismo, pero sus ranuras se llaman ({1}): conserva esos nombres para sustituirlo, o quita @Override y es una sobrecarga nueva"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -91,6 +93,7 @@ const CatEntry kEntries[] = {
     {"VX3006", {"in function '{0}' (the line refers to its own module, which may not be the one being compiled)", "en la funcion '{0}' (la linea es la de su propio modulo, que puede no ser el que se compila)"}},
     {"VX3007", {"lowering: unresolved name '{0}'", "bajado: nombre no resuelto '{0}'"}},
     {"VX3008", {"in the native binary '{0} = ...' cannot read '{0}' from any position other than the first: the result shares its buffer with the source.  Write it as '{0} += ...', or go through a temporary", "en el binario nativo '{0} = ...' no puede leer '{0}' desde otra posicion que no sea la primera: el resultado comparte hueco con la fuente.  Escribelo como '{0} += ...', o pasa por una variable intermedia"}},
+    {"VX3009", {"'{1}.{0}': two methods of a class that differ only in their slot names do not work in the native binary yet (it devirtualizes to the first).  It does work on a struct and on a free function", "'{1}.{0}': dos metodos de una clase que solo se distinguen por el nombre de sus ranuras todavia no funcionan en el binario nativo (devirtualiza al primero).  En un struct y en una funcion libre si funciona"}},
     {"VX4001", {"'{0}' is declared with @Target(\"{1}\"), which does not hold for this target -- that declaration is not available here", "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objetivo -- esa declaracion no esta disponible aqui"}},
     {"VX4002", {"'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled", "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"}},
     {"VX4003", {"the namespace '{0}' is offered by two different places; the one in '{1}' is used and the one in '{2}' is ignored ({3} namespaces in total)", "el namespace '{0}' lo ofrecen dos sitios distintos; se usa el de '{1}' y se ignora el de '{2}' ({3} namespaces en total)"}},
@@ -644,7 +647,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 623;
+const int kEntryCount = 626;
 
 } // namespace
 

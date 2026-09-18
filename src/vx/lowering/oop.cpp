@@ -1691,8 +1691,16 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
              * segunda pisaba la ranura de la primera y todo lo que venia detras
              * se corria un sitio.  Una llamada por la tabla acababa en OTRO
              * metodo -- y sin una sola queja --. */
+            /* Y por la MISMA razon lleva los nombres cuando son lo unico que
+             * la separa de una hermana: el registro compara nombre y
+             * descriptor, asi que dos que toman lo mismo volverian a colapsar
+             * en una ranura -- el fallo de arriba, por la otra puerta. */
             const std::string desc_str =
-                "(" + overload::discriminator(m.param_types) + ")";
+                "(" +
+                overload::discriminator(
+                    m.param_types,
+                    m.overload_needs_names ? &m.param_names : nullptr) +
+                ")";
             const uint64_t desc_idx = intern_class_name(out, desc_str);
             const uint32_t desc_len = static_cast<uint32_t>(desc_str.size());
 
@@ -1937,6 +1945,21 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const ClassLayout &lay = it->second;
+    /* Dos metodos de la clase que solo se distinguen por el nombre de sus
+     * ranuras: aqui el camino nativo devirtualiza a una llamada DIRECTA y se
+     * queda con el primero, asi que el programa correria otro cuerpo sin una
+     * queja.  Se dice y se para.  El interprete y el JIT si los separan -- van
+     * por el descriptor del registro, que lleva los nombres --, y en un struct
+     * y en una funcion libre funciona en los tres modos. */
+    if (native_poo_) {
+        for (const auto &m : lay.methods)
+            if (!m.is_constructor && m.name == fa->field_name &&
+                m.overload_needs_names) {
+                error_at(e->loc, vx::diag::format(
+                                     "VX3009", {fa->field_name, lay.name}));
+                return ir::IR_NO_VALUE;
+            }
+    }
     const ClassMethodInfo *mtd = picked_method(lay, fa->resolved_method);
     if (!mtd) {
         for (const auto &m : lay.methods) {

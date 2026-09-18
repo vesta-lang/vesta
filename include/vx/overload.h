@@ -74,7 +74,16 @@ struct Candidate {
      * el nombre entra en la SELECCION: una candidata que no tenga un parametro
      * `a` no es viable, aunque los tipos cuadraran.  Nulo cuando no se sabe.
      */
-    const std::vector<std::string> *param_names = nullptr;
+    const ParamNames *param_names = nullptr;
+    /**
+     * @brief Hay otra que toma LO MISMO y solo se distinguen por los nombres.
+     *
+     * Un bit, no una busqueda: lo apunto el recorrido de hermanas al
+     * declararlas.  Sirve para no pagar nada en el caso normal -- si esto es
+     * falso, la primera que encaja ES la respuesta, como siempre -- y para
+     * mirar si hay una segunda solo cuando de verdad puede haberla.
+     */
+    bool needs_names = false;
     uint32_t slot = kNoPick;
     /**
      * @brief Que parametros viajan por REFERENCIA (un bit por posicion).
@@ -161,7 +170,8 @@ using AcceptsFn = bool (*)(void *ctx, const Type &param, const Type &arg);
  */
 uint32_t select(const Candidate *cands, size_t n, const std::vector<Type> &args,
                 AcceptsFn accepts, void *ctx,
-                const std::vector<std::string> *arg_names = nullptr);
+                const ParamNames *arg_names = nullptr,
+                uint32_t *other_fit = nullptr);
 
 /**
  * @brief Lo que separa el simbolo de una sobrecarga del de sus hermanas.
@@ -176,7 +186,8 @@ uint32_t select(const Candidate *cands, size_t n, const std::vector<Type> &args,
  *
  * @param params Los parametros de esa candidata.
  */
-std::string discriminator(const std::vector<Type> &params);
+std::string discriminator(const std::vector<Type> &params,
+                          const ParamNames *names = nullptr);
 
 /**
  * @brief Cuantas de @p cands comparten los MISMOS parametros que @p which.
@@ -189,6 +200,33 @@ std::string discriminator(const std::vector<Type> &params);
  * candidatas de un nombre son de un digito.
  */
 bool same_params(const std::vector<Type> &a, const std::vector<Type> &b);
+
+/**
+ * @brief La MISMA firma: mismos tipos y las ranuras llamadas igual.
+ *
+ * Desde que una llamada puede nombrar la ranura (`f(.a = 3)`), dos que toman lo
+ * mismo pero lo llaman distinto SON distinguibles, asi que son dos y no una
+ * repetida.  Con esto se puede escribir
+ *
+ * ```vx
+ * i64 mide(i64 alto, i64 ancho)
+ * i64 mide(i64 largo, i64 grosor)
+ * ```
+ *
+ * que antes era "redefinicion".  Basta con que UNA ranura se llame distinto.
+ *
+ * Lo que arrastra, y no es opcional: **el simbolo tiene que llevar lo que las
+ * separa**, o las dos acaban con la misma etiqueta -- dos cuerpos, un nombre --,
+ * que es el fallo que ya mordio aqui con la tabla de metodos.  Ver
+ * @c discriminator.
+ *
+ * Una lista de nombres VACIA (no se supo) no separa: dos asi siguen siendo la
+ * misma, que es lo conservador.
+ */
+bool same_signature(const std::vector<Type> &ta,
+                    const ParamNames &na,
+                    const std::vector<Type> &tb,
+                    const ParamNames &nb);
 
 } // namespace overload
 } // namespace vx

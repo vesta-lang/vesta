@@ -952,7 +952,7 @@ struct CallExpr : Expr {
      * VACIO del todo cuando NINGUNO lleva nombre, que es el caso normal: asi
      * una llamada corriente no paga ni una reserva por esto.
      */
-    std::vector<std::string> arg_names;
+    ParamNames arg_names;
     /// Argumentos de tipo @c <T,U,...> para builtins comptime
     /// (@c sizeof<T>, @c offsetof<T>, etc.).  Vacio para llamadas
     /// normales.  Solo poblado por el parser cuando el callee es un

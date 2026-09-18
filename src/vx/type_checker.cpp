@@ -70,6 +70,16 @@ extern "C" uint64_t vx_get_native_thunk(uint64_t fn_pc, uint64_t argc);
 
 namespace vx {
 
+/// Las ranuras de una candidata, para poder ensenyarlas: `alto, ancho`.
+static std::string join_slot_names(const ParamNames &names) {
+    std::string out;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i != 0) out += ", ";
+        out += names[i].str();
+    }
+    return out;
+}
+
 //  AS inc.4: la canonicalizacion de registros x86-64 vive ahora en
 // @c asm_effects.{h,cpp} (compartida con la inferencia de clobbers).  El
 // type checker la usa via @c asm_canonical_reg.
@@ -686,11 +696,21 @@ bool TypeChecker::add_overload_candidate(const std::string &name, uint32_t prev,
     auto &candidates = overloads_[name];
     if (candidates.empty()) candidates.push_back(prev);
 
-    const FunctionSig &added_sig = function_sigs_[added];
     for (uint32_t idx : candidates) {
-        if (overload::same_params(function_sigs_[idx].param_types,
-                                  added_sig.param_types))
+        FunctionSig &prev = function_sigs_[idx];
+        const FunctionSig &add = function_sigs_[added];
+        if (overload::same_signature(prev.param_types, prev.param_names,
+                                     add.param_types, add.param_names))
             return false; // misma firma: es un choque de verdad
+        /* Este MISMO recorrido contesta la otra pregunta: si toman lo mismo y
+         * aun asi son dos, lo unico que las separa son los nombres de sus
+         * ranuras, y entonces el simbolo tiene que llevarlos.  Se apunta en
+         * las DOS, que es lo que hace que no haya que volver a recorrer nada
+         * cuando le toque a la otra. */
+        if (overload::same_params(prev.param_types, add.param_types)) {
+            prev.overload_needs_names = true;
+            function_sigs_[added].overload_needs_names = true;
+        }
     }
     candidates.push_back(added);
 
@@ -723,9 +743,14 @@ bool TypeChecker::register_overload(ast::FunctionDecl *fn,
     const auto &candidates = overloads_[fn->name];
     for (uint32_t idx : candidates) {
         FunctionSig &s = function_sigs_[idx];
-        if (s.mangled_label.empty())
-            s.mangled_label =
-                fn->name + "_" + overload::discriminator(s.param_types);
+        if (!s.mangled_label.empty()) continue;
+        /* Los nombres entran en la etiqueta solo cuando son lo UNICO que la
+         * separa de una hermana, y eso ya se sabe: lo apunto el recorrido de
+         * arriba.  Aqui no se busca nada. */
+        s.mangled_label = fn->name + "_" +
+                          overload::discriminator(
+                              s.param_types,
+                              s.overload_needs_names ? &s.param_names : nullptr);
     }
 
     /* Y la etiqueta tambien al AST, que es de donde el bajado saca el nombre
@@ -3640,6 +3665,13 @@ void close_method(std::vector<ClassMethodInfo> &methods, size_t i,
             }
             m.is_overloaded = true;
             o.is_overloaded = true;
+            /* Y de paso, en el mismo recorrido: si ademas toman LO MISMO, lo
+             * unico que las separa son los nombres de sus ranuras, y entonces
+             * el simbolo tiene que llevarlos.  Se apunta en las dos. */
+            if (overload::same_params(o.param_types, m.param_types)) {
+                m.overload_needs_names = true;
+                o.overload_needs_names = true;
+            }
         }
 
     /* 2) Y el simbolo.  El importado no se nombra: se COPIA el que trae de su
@@ -3653,10 +3685,15 @@ void close_method(std::vector<ClassMethodInfo> &methods, size_t i,
     if (!m.defining_class.empty() && m.defining_class != owner) return;
     if (!m.ir_symbol.empty()) return;
     /* El discriminante solo se construye si de verdad hay con quien
-     * confundirse: en el caso normal no se arma ninguna cadena de mas. */
-    const std::string tag = m.is_overloaded
-                                ? overload::discriminator(m.param_types)
-                                : std::string();
+     * confundirse: en el caso normal no se arma ninguna cadena de mas.  Y los
+     * nombres entran solo cuando son lo UNICO que la separa de una hermana,
+     * que es un hecho que el recorrido de arriba ya dejo apuntado. */
+    const std::string tag =
+        m.is_overloaded
+            ? overload::discriminator(
+                  m.param_types,
+                  m.overload_needs_names ? &m.param_names : nullptr)
+            : std::string();
     if (!m.is_constructor) {
         m.ir_symbol = method_symbol(owner, m.name, tag);
         return;
@@ -4846,8 +4883,9 @@ void TypeChecker::collect_globals() {
                 for (const ClassMethodInfo &prev : layout.methods) {
                     if (prev.is_constructor != mi.is_constructor) continue;
                     if (!mi.is_constructor && prev.name != mi.name) continue;
-                    if (!overload::same_params(prev.param_types,
-                                               mi.param_types))
+                    if (!overload::same_signature(prev.param_types, prev.param_names,
+                                                  mi.param_types,
+                                                  mi.param_names))
                         continue;
                     already_declared = true;
                     break;
@@ -5342,9 +5380,16 @@ void TypeChecker::collect_globals() {
                 int override_idx = -1;
                 if (!m->is_constructor) {
                     for (size_t j = 0; j < layout.methods.size(); ++j) {
+                        /* Sustituir pide la MISMA firma, nombres de ranura
+                         * incluidos: si la derivada renombra una, no esta
+                         * sustituyendo nada -- esta declarando otra --, y
+                         * llamarla por la base nombraria una ranura que no
+                         * existe en el cuerpo que corre. */
                         if (layout.methods[j].name == mname &&
-                            overload::same_params(layout.methods[j].param_types,
-                                                  mi_info.param_types)) {
+                            overload::same_signature(
+                                layout.methods[j].param_types,
+                                layout.methods[j].param_names,
+                                mi_info.param_types, mi_info.param_names)) {
                             override_idx = static_cast<int>(j);
                             break;
                         }
@@ -5406,10 +5451,30 @@ void TypeChecker::collect_globals() {
                         if (found_in_iface) break;
                     }
                     if (!found_in_iface) {
-                        diags_.error(
-                            m->loc,
-                            "@Override: el metodo '" + mname +
-                                "' no existe en la jerarquia de la clase");
+                        /* El caso que mas despista: EXISTE uno que toma lo
+                         * mismo, y lo unico distinto es como se llaman sus
+                         * ranuras -- asi que no sustituye, declara otro --.
+                         * Decir "no existe" ahi manda a buscar algo que esta
+                         * delante, asi que se dice cual es y con que nombres.
+                         * Se mira aqui y no antes: es el camino del error, que
+                         * ya no corre en una compilacion que va bien. */
+                        const ClassMethodInfo *near = nullptr;
+                        for (const auto &lm : layout.methods)
+                            if (!lm.is_constructor && lm.name == mname &&
+                                overload::same_params(lm.param_types,
+                                                      mi_info.param_types)) {
+                                near = &lm;
+                                break;
+                            }
+                        if (near != nullptr)
+                            diags_.diag(m->loc, DiagLevel::ERR, "VX2078",
+                                        {written_name(mname),
+                                         join_slot_names(near->param_names)});
+                        else
+                            diags_.error(m->loc,
+                                         "@Override: el metodo '" + mname +
+                                             "' no existe en la jerarquia de "
+                                             "la clase");
                     }
                 }
 
@@ -5435,8 +5500,9 @@ void TypeChecker::collect_globals() {
                         if (!prev.is_constructor ||
                             prev.defining_class != c->name)
                             continue;
-                        if (!overload::same_params(prev.param_types,
-                                                   mi_info.param_types))
+                        if (!overload::same_signature(
+                                prev.param_types, prev.param_names,
+                                mi_info.param_types, mi_info.param_names))
                             continue;
                         already_declared = true;
                         break;
@@ -9624,6 +9690,7 @@ Type TypeChecker::check_expr(ast::Expr *e) {
                 overload::Candidate c;
                 c.params = &ms[i].param_types;
                 c.param_names = &ms[i].param_names;
+                c.needs_names = ms[i].overload_needs_names;
                 c.slot = static_cast<uint32_t>(i);
                 c.by_ref_mask = ms[i].param_by_ref_mask;
                 if (ms[i].is_variadic) c.variadic_elem = &ms[i].variadic_elem;
@@ -10120,6 +10187,7 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             overload::Candidate c;
             c.params = &m.param_types;
             c.param_names = &m.param_names;
+            c.needs_names = m.overload_needs_names;
             c.slot = static_cast<uint32_t>(i);
             c.by_ref_mask = m.param_by_ref_mask;
             /* Con un variadico la aridad no es exacta: los de delante son
@@ -11742,15 +11810,33 @@ bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
     return true;
 }
 
-std::string TypeChecker::written_type_name(const Type &t) const {
-    std::string txt = type_to_string(t);
-    auto it = declared_ns_symbols_.find(txt);
+std::string TypeChecker::written_name(const std::string &mangled) const {
+    auto it = declared_ns_symbols_.find(mangled);
     if (it != declared_ns_symbols_.end()) return it->second.second;
-    return txt;
+    return mangled;
 }
 
-bool TypeChecker::normalize_named_args(ast::CallExpr *e,
-                                       const std::vector<std::string> &pn,
+std::string TypeChecker::written_type_name(const Type &t) const {
+    return written_name(type_to_string(t));
+}
+
+void TypeChecker::report_overload_ambiguous(const std::string &name,
+                                            const ParamNames &a,
+                                            const ParamNames &b,
+                                            const SourceLoc &loc) {
+    // La PRIMERA ranura donde difieren: la minima que hay que nombrar.
+    std::string first_diff = a.empty() ? std::string() : a[0].str();
+    for (size_t i = 0; i < a.size() && i < b.size(); ++i)
+        if (!(a[i] == b[i])) {
+            first_diff = a[i].str();
+            break;
+        }
+    diags_.diag(loc, DiagLevel::ERR, "VX2077",
+                {written_name(name), join_slot_names(a), join_slot_names(b),
+                 first_diff});
+}
+
+bool TypeChecker::normalize_named_args(ast::CallExpr *e, const ParamNames &pn,
                                        const std::string &quien) {
     const size_t np = pn.size();
     std::vector<std::unique_ptr<ast::Expr>> ord(np);
@@ -11784,7 +11870,8 @@ bool TypeChecker::normalize_named_args(ast::CallExpr *e,
         while (libre < np && ord[libre] != nullptr) ++libre;
         if (libre == np) {
             diags_.diag(e->args[k]->loc, DiagLevel::ERR, "VX2075",
-                        {pn.empty() ? std::string("?") : pn.back(), quien});
+                        {pn.empty() ? std::string("?") : pn.back().str(),
+                         quien});
             return false;
         }
         ord[libre] = std::move(e->args[k]);
@@ -11878,16 +11965,11 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
      * hueco el receptor se mete DELANTE, asi que delante va tambien su nombre
      * vacio.  Descuadrar los dos vectores manda cada nombre a la ranura de al
      * lado, que es un error silencioso de los caros. */
-    std::vector<std::string> names_for_select;
+    ParamNames names_for_select;
     if (!e->arg_names.empty()) {
-        if (hole == kUfcsNoHole) {
-            names_for_select.reserve(e->arg_names.size() + 1);
-            names_for_select.emplace_back();
-            for (const auto &nm : e->arg_names)
-                names_for_select.push_back(nm);
-        } else {
-            names_for_select = e->arg_names;
-        }
+        if (hole == kUfcsNoHole) names_for_select.push_back(PooledName());
+        for (const PooledName &nm : e->arg_names)
+            names_for_select.push_back(nm);
     }
 
     /* Y CUAL de ellas se elige con la MISMA regla que una llamada libre --
@@ -11901,6 +11983,7 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         overload::Candidate c;
         c.params = &sig.param_types;
         c.param_names = &sig.param_names;
+        c.needs_names = sig.overload_needs_names;
         c.slot = idx;
         c.by_ref_mask = sig.param_by_ref_mask;
         if (sig.is_raw_variadic) c.raw_variadic = true;
@@ -11926,7 +12009,8 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     if (hole == kUfcsNoHole) {
         e->args.insert(e->args.begin(), std::move(receiver));
         // Y su nombre vacio con el, para que los dos sigan cuadrando.
-        if (!e->arg_names.empty()) e->arg_names.insert(e->arg_names.begin(), "");
+        if (!e->arg_names.empty())
+            e->arg_names.insert_at(0, PooledName());
     } else {
         e->args[hole] = std::move(receiver); // el hueco ERA su sitio
     }
@@ -12054,6 +12138,7 @@ uint32_t TypeChecker::select_ns_overload(const ImportedNamespace &ns,
         overload::Candidate c;
         c.params = &use->param_types;
         c.param_names = &use->param_names;
+        c.needs_names = use->overload_needs_names;
         c.slot = cur; // el indice en `symbols`, que es lo que se devuelve
         c.by_ref_mask = use->param_by_ref_mask;
         if (use->is_raw_variadic) c.raw_variadic = true;
@@ -12091,6 +12176,7 @@ const ClassMethodInfo *TypeChecker::select_method_overload(
         overload::Candidate c;
         c.params = &methods[i].param_types;
         c.param_names = &methods[i].param_names;
+        c.needs_names = methods[i].overload_needs_names;
         c.slot = static_cast<uint32_t>(i);
         c.by_ref_mask = methods[i].param_by_ref_mask;
         if (methods[i].is_variadic)
@@ -12099,9 +12185,16 @@ const ClassMethodInfo *TypeChecker::select_method_overload(
     }
     if (cands.empty()) return nullptr;
 
+    uint32_t other = overload::kNoPick;
     const uint32_t pick =
         overload::select(cands.data(), cands.size(), arg_types,
-                         &overload_accepts, this, &e->arg_names);
+                         &overload_accepts, this, &e->arg_names, &other);
+    if (other != overload::kNoPick) {
+        // Dos encajan y solo se distinguen por el nombre de sus ranuras.
+        report_overload_ambiguous(name, methods[pick].param_names,
+                                  methods[other].param_names, e->loc);
+        return nullptr;
+    }
     if (pick != overload::kNoPick) {
         fa->resolved_method = pick;
         return &methods[pick];
@@ -15476,6 +15569,13 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (smtd->is_overloaded)
                 smtd = select_method_overload(slay.methods, fa->field_name, e,
                                               fa);
+            // Ambigua: ya se dijo cuales son las dos y como separarlas.
+            if (smtd == nullptr) return Type{PrimitiveKind::COUNT};
+            /* Y con la elegida en la mano, la llamada se deja POSICIONAL: los
+             * nombres sirvieron para elegir y ahi acaban. */
+            if (!e->arg_names.empty() &&
+                !normalize_named_args(e, smtd->param_names, fa->field_name))
+                return Type{PrimitiveKind::COUNT};
             check_method_args(e, *smtd, fa->field_name);
             fa->result_type = smtd->return_type;
             return smtd->return_type;
@@ -15517,6 +15617,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // Igual que en el struct: la marca viaja en el candidato.
         if (mtd->is_overloaded)
             mtd = select_method_overload(cls.methods, fa->field_name, e, fa);
+        // Ambigua: ya se dijo cuales son las dos y como separarlas.
+        if (mtd == nullptr) return Type{PrimitiveKind::COUNT};
+        // Y POSICIONAL de aqui en adelante, igual que en el struct.
+        if (!e->arg_names.empty() &&
+            !normalize_named_args(e, mtd->param_names, fa->field_name))
+            return Type{PrimitiveKind::COUNT};
         // Enforcement de visibilidad en metodos (private = solo dentro
         // de la misma clase).  Buscamos el ClassMethodDecl original
         // en el AST para consultar el flag access.
@@ -18190,6 +18296,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 overload::Candidate c;
                 c.params = &m.param_types;
                 c.param_names = &m.param_names;
+                c.needs_names = m.overload_needs_names;
                 c.slot = static_cast<uint32_t>(i);
                 c.by_ref_mask = m.param_by_ref_mask;
                 if (m.is_variadic) c.variadic_elem = &m.variadic_elem;
@@ -18468,6 +18575,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 overload::Candidate c;
                 c.params = &cs.param_types;
                 c.param_names = &cs.param_names;
+                c.needs_names = cs.overload_needs_names;
                 c.slot = idx;
                 c.by_ref_mask = cs.param_by_ref_mask;
                 /* Y si su ultima posicion es variadica, con que se comparan los
@@ -18482,9 +18590,21 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 else if (cs.is_variadic) c.variadic_elem = &cs.variadic_elem;
                 cands.push_back(c);
             }
+            uint32_t other = overload::kNoPick;
             const uint32_t pick =
                 overload::select(cands.data(), cands.size(), arg_types,
-                                 &overload_accepts, this, &e->arg_names);
+                                 &overload_accepts, this, &e->arg_names, &other);
+            /* Dos encajan y solo se distinguen por como se llaman sus ranuras:
+             * la llamada no dice cual, asi que se citan las dos con sus nombres
+             * -- que es lo que hay que escribir para elegir -- en vez de
+             * quedarse con una. */
+            if (other != overload::kNoPick) {
+                report_overload_ambiguous(id->name,
+                                          function_sigs_[pick].param_names,
+                                          function_sigs_[other].param_names,
+                                          e->loc);
+                return Type{PrimitiveKind::COUNT};
+            }
             if (pick != overload::kNoPick) chosen_sig = pick;
             /* Y se apunta CUAL, por indice: el bajado necesita ESA firma -- el
              * nombre publico lo comparten varias -- y llega a ella con un

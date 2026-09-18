@@ -5883,6 +5883,19 @@ fails_case("ufcs_hueco_libre",
            "`_` en una llamada libre, donde no hay receptor que colocar",
            "550_ufcs_choque.vx", "VX2073")
 
+# Dos hermanas que solo se distinguen por como se llaman sus ranuras: DECLARARLAS
+# vale, y lo que no vale es una llamada posicional que no diga cual.  Se citan
+# las dos con sus nombres, que es lo que hay que escribir para elegir.
+fails_case("sobrecarga_ambigua",
+           "dos hermanas que solo difieren en el nombre de sus ranuras: la llamada posicional no dice cual",
+           "550_ufcs_choque.vx", "VX2077")
+
+# Y `@Override` sobre una firma que no sustituye.  Decir "no existe" despistaba:
+# existe y toma lo mismo, solo que sus ranuras se llaman de otra forma.
+fails_case("override_renombra",
+           "`@Override` con la ranura renombrada no sustituye, y se dice cual es el que si esta",
+           "550_ufcs_choque.vx", "VX2078")
+
 # Y cuando SI envuelve -- porque el cast lo declara --, tiene que envolver
 # BIEN.  Un valor estrecho vive en un registro de 64 y los bits de mas hacian
 # que el mismo valor se imprimiera bien y mintiera al compararse.  Los seis

@@ -3215,3 +3215,30 @@ es = "dos argumentos caen en el parametro '{0}' de '{1}'"
 ["VX2076"]
 en = "parameter '{0}' of '{1}' is left without an argument"
 es = "el parametro '{0}' de '{1}' se queda sin argumento"
+
+# Dos hermanas toman exactamente lo mismo y solo se distinguen por como se
+# llaman sus ranuras, asi que una llamada POSICIONAL no dice cual.  Se citan las
+# dos con sus nombres, que es lo que hay que escribir para elegir.  {0} el
+# nombre, {1} las ranuras de una, {2} las de la otra.
+["VX2077"]
+en = "the call to '{0}' does not tell two apart: one takes ({1}), the other takes ({2}).  Name the slot that separates them: {0}(.{3} = ...)"
+es = "la llamada a '{0}' no distingue entre dos: una toma ({1}) y la otra ({2}).  Nombra la ranura que las separa: {0}(.{3} = ...)"
+
+# `@Override` sobre una firma que no sustituye a ninguna.  El caso que mas
+# despista: el metodo EXISTE y toma lo mismo, pero sus ranuras se llaman de
+# otra forma, asi que no sustituye -- declara otra.  Decir "no existe" ahi manda
+# a buscar algo que esta delante.  {0} el nombre, {1} como se llaman las ranuras
+# del que si esta en la jerarquia.
+["VX2078"]
+en = "@Override: '{0}' does not replace anything.  There is one taking the same types, but its slots are called ({1}): keep those names to override it, or drop @Override and it is a new overload"
+es = "@Override: '{0}' no sustituye a ninguno.  Hay uno que toma lo mismo, pero sus ranuras se llaman ({1}): conserva esos nombres para sustituirlo, o quita @Override y es una sobrecarga nueva"
+
+# Dos metodos de una CLASE que solo se distinguen por como se llaman sus
+# ranuras.  El interprete y el JIT los despachan bien -- por el descriptor del
+# registro, que lleva los nombres --, pero el binario nativo devirtualiza a una
+# llamada directa y ahi se queda con el primero: un resultado falso que parece
+# bueno.  Se dice mientras no este cerrado; en un struct y en una funcion libre
+# si funciona.  {0} el metodo, {1} la clase.
+["VX3009"]
+en = "'{1}.{0}': two methods of a class that differ only in their slot names do not work in the native binary yet (it devirtualizes to the first).  It does work on a struct and on a free function"
+es = "'{1}.{0}': dos metodos de una clase que solo se distinguen por el nombre de sus ranuras todavia no funcionan en el binario nativo (devirtualiza al primero).  En un struct y en una funcion libre si funciona"
