@@ -10,7 +10,7 @@ struct Flags {
 }
 
 i32 main() {
-	Flags f = {.a = 5,.b = 7,.c = 42,.rest = 12_345};
+	Flags f = {.a = 5, .b = 7, .c = 42, .rest = 12_345};
 	if (f.a != 5) return 1;
 	if (f.b != 7) return 2;
 	if (f.c != 42) return 3;

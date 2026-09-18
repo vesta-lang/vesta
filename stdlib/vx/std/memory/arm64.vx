@@ -368,7 +368,7 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
 public void memset_small_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1, ) {
 		dup q0.2_d, p
 		mov q1.16_b, q0.16_b
 		inject(gen_relleno_solapado_neon(64))
@@ -389,7 +389,7 @@ public void memset_small_neon(u8* dst, u8 val, usize n) {
 public void memset_medium_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1, ) {
 		dup q0.2_d, p
 		mov q1.16_b, q0.16_b
 		inject(gen_relleno_grande_neon("stp", "stp", 8, ""))
@@ -522,7 +522,7 @@ public void memset_zva(u8* dst, usize n) {
 public void memset_streaming_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1, ) {
 		dup q0.2_d, p
 		mov q1.16_b, q0.16_b
 		inject(gen_relleno_grande_neon("stnp", "stp", 8, ""))

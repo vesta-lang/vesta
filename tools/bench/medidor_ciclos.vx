@@ -39,7 +39,7 @@ u64 ciclos() {
 	// lo optimice, y aqui no hay nada que esconderle -- es una lectura de un
 	// contador --.  Ponerlo seria renunciar a lo que este compilador hace con
 	// el asm, que es leerlo y quedarse con lo que dice.
-	asm (rax lo, rdx hi,) {
+	asm (rax lo, rdx hi, ) {
 		rdtsc
 	}
 	return (hi << 32) | lo;

@@ -15,7 +15,7 @@
 
 // Escribe ocho bytes DETRAS de lo que le den.
 void escribe_detras(u8* p) {
-	asm (reg d = p,) {
+	asm (reg d = p, ) {
 		mov [d+16], rax
 	}
 }

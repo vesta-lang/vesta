@@ -13,8 +13,8 @@ struct Punto {
 T sumar < T : Numeric > (T a, T b) { return a + b; }
 
 i32 main() {
-	Punto p = {.x = 1,.y = 2};
-	Punto q = {.x = 3,.y = 4};
+	Punto p = {.x = 1, .y = 2};
+	Punto q = {.x = 3, .y = 4};
 	Punto r = sumar<Punto>(p, q); // ERROR: Punto no es Numeric
 	return 0;
 }

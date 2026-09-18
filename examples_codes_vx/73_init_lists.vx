@@ -20,7 +20,7 @@ i32 main() {
 	if (p.y != 35) return 5;
 
 	// Struct init designado.
-	Point q = {.y = 100,.x = 200};
+	Point q = {.y = 100, .x = 200};
 	if (q.x != 200) return 6;
 	if (q.y != 100) return 7;
 

@@ -13,7 +13,7 @@ impl Sumable for Par {
 }
 
 i64 main() {
-	Par p = {.a = 40,.b = 2 };
+	Par p = {.a = 40, .b = 2 };
 	i64 r = p.suma(); // 42
 	println("r=${r}");
 	return r;

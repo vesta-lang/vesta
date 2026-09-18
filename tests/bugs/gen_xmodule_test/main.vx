@@ -14,8 +14,8 @@ i32 main() {
 
 	i64 d = doblar<i64>(5); // funcion + concepto/bound -> 10
 
-	Par<i32> p1 = {.a = 0};            // primario -> 1
-	Par<i64> p2 = {.a = 0,.extra = 0}; // especializacion total -> 2
+	Par<i32> p1 = {.a = 0};             // primario -> 1
+	Par<i64> p2 = {.a = 0, .extra = 0}; // especializacion total -> 2
 
 	// 4 + 6 + 8 + 10 + 1 + 2 = 31; + 11 = 42
 	return (i32)(id + lv + bv + d + p1.cual() + p2.cual() + 11);

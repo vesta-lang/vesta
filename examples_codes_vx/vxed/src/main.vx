@@ -1947,7 +1947,7 @@ i32 main() {
 		}
 		// --- gestion de pestanas ---
 		else if (key == keys.KEY_CTRL_N) {
-			ws.open_tab(make_tab("", "untitled-${ws.count + 1}"));
+			ws.open_tab(make_tab("", "untitled-${ws.count + 1}") );
 			sc.clear();
 			status_msg = "nueva pestana";
 		} else if (key == keys.KEY_CTRL_W) {

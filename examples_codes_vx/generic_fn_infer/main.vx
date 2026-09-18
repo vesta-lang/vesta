@@ -12,7 +12,7 @@ struct Par {
 i64 aplica < T : Sumable > (T v) { return v.suma(); }
 
 i64 main() {
-	Par p = {.a = 40,.b = 2 };
+	Par p = {.a = 40, .b = 2 };
 	i64 r = aplica(p); // type-arg inferido -> Par; llama Par.suma()
 	println("r=${r}");
 	return r; // 42

@@ -13,7 +13,7 @@
 
 // Escribe 16 ceros en `dst` con la variante que EXIGE la direccion alineada.
 void limpia_16(u8* dst) {
-	asm (reg d = dst, xmm v0,) {
+	asm (reg d = dst, xmm v0, ) {
 		pxor v0, v0
 		movdqa [d], v0
 	}

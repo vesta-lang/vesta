@@ -32,30 +32,66 @@ string enmarca(string marco, string texto) {
 i64 mide(i64 alto, i64 ancho) { return alto * 10 + ancho; }
 i64 mide(i64 alto, i64 ancho, i64 fondo) { return fondo; }
 
+// 7. Y el caso que ANTES era "redefinicion": mismos tipos, misma aridad, y lo
+// unico que cambia es como se llaman las ranuras.  Basta con que UNA se llame
+// distinto.  Lo que eso arrastra, y no es opcional: el simbolo de cada una
+// tiene que llevar los nombres, porque es lo unico que las separa -- si no,
+// dos cuerpos comparten etiqueta, que es el fallo que ya mordio aqui con la
+// tabla de metodos.
+i64 pesa(i64 kilos, i64 gramos) { return kilos * 1000 + gramos; }
+i64 pesa(i64 libras, i64 onzas) { return libras + onzas * 1000; }
+
+// 8. lo mismo siendo METODOS.  De un struct, que despacha estatico: en una
+// CLASE funcionan el interprete y el JIT -- van por el descriptor del registro,
+// que lleva los nombres -- pero el binario nativo devirtualiza a una llamada
+// directa y se queda con el primero, asi que ahi se dice y no se compila
+// (VX3009).  Mientras eso no se cierre, el ejemplo usa lo que vale en los tres.
+struct Bulto {
+	i64 v;
+
+	i64 mide(i64 alto, i64 ancho) { return alto * 10 + ancho; }
+	i64 mide(i64 largo, i64 grosor) { return largo + grosor * 100; }
+}
+
 i32 main() {
 	// 1. libre, nombrado, en los dos ordenes
-	i64 n1 = restar(.a = 25,.b = 5); // 20
-	i64 n2 = restar(.b = 5,.a = 25); // 20, el orden escrito no manda
-	i64 n3 = restar(25, 5);          // 20, la forma de siempre
+	i64 n1 = restar(.a = 25, .b = 5); // 20
+	i64 n2 = restar(.b = 5, .a = 25); // 20, el orden escrito no manda
+	i64 n3 = restar(25, 5);           // 20, la forma de siempre
 
 	// 2. mezclado: lo posicional delante
-	i64 n4 = restar(25,.b = 5); // 20
+	i64 n4 = restar(25, .b = 5); // 20
 
 	// 3. con punto, el receptor al hueco NOMBRADO
-	string s1 = "eh".enmarca(.marco = "<<",.texto = _); // "<<eh<<"
-	i64    l1 = (i64)s1.length();                       // 6
+	string s1 = "eh".enmarca(.marco = "<<", .texto = _); // "<<eh<<"
+	i64    l1 = (i64)s1.length();                        // 6
 
 	// 4. y por eliminacion: `a` dado, asi que el receptor cae en `b`
 	i64 n5 = 5.restar(.a = 25); // restar(25, 5) = 20
 
 	// 5. el nombre elige entre hermanas
-	i64 m1 = mide(.alto = 1,.ancho = 2);            // 12
-	i64 m2 = mide(.alto = 1,.ancho = 2,.fondo = 7); // 7
+	i64 m1 = mide(.alto = 1, .ancho = 2);             // 12
+	i64 m2 = mide(.alto = 1, .ancho = 2, .fondo = 7); // 7
+
+	// 7. hermanas que SOLO se distinguen por el nombre de sus ranuras
+	i64 p1 = pesa(.kilos = 2, .gramos = 3); // 2003
+	i64 p2 = pesa(.libras = 2, .onzas = 3); // 3002
+	i64 p3 = pesa(.onzas = 3, .libras = 2); // 3002, el orden escrito no manda
+
+	// 8. y lo mismo siendo metodos de un struct
+	Bulto b  = {.v = 1};
+	i64   b1 = b.mide(.alto = 1, .ancho = 2);   // 12
+	i64   b2 = b.mide(.largo = 1, .grosor = 2); // 201
+	i64   b3 = b.mide(.grosor = 2, .largo = 1); // 201, invertido
 
 	// 6. las cuatro formas de escribir lo mismo dan lo mismo
 	i64 iguales = n1 + n2 + n3 + n4 + n5; // 20 * 5 = 100
+	i64 nombres = p1 + p2 + p3;           // 2003 + 3002 + 3002 = 8007
+	i64 clase   = b1 + b2 + b3;           // 12 + 201 + 201 = 414
 	i64 tot     = iguales + l1 + m1 + m2; // 100 + 6 + 12 + 7 = 125
 	println("libre=${n1},${n2},${n3} mezcla=${n4} elim=${n5}");
 	println("punto=[${s1}] largo=${l1} sobrecarga=${m1},${m2} total=${tot}");
-	return (i32)(tot - 83); // 42
+	println("solo_nombre=${p1},${p2},${p3} clase=${b1},${b2},${b3}");
+	// 125 + 8007 + 414 = 8546;  8546 - 8504 = 42
+	return (i32)(tot + nombres + clase - 8504); // 42
 }

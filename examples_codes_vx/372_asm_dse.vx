@@ -24,7 +24,7 @@ i32 main() {
 	i64  salida = 0_i64;
 	i64* p      = &salida;
 
-	asm (reg b = base, reg d = p,) {
+	asm (reg b = base, reg d = p, ) {
 		mov [d], b
 	}
 	i64 uno = salida; // 20

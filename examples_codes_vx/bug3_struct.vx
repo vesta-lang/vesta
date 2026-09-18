@@ -20,7 +20,7 @@ void escalar(borrow_mut<Punto> p, i32 k) {
 }
 
 i32 main() {
-	Punto         inicial = {.x = 10,.y = 20};
+	Punto         inicial = {.x = 10, .y = 20};
 	unique<Punto> punto   = unique_box(inicial);
 
 	borrow<Punto> r  = lend(punto);

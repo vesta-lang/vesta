@@ -48,3 +48,26 @@ i32 main() {
 	i64 libre = tres(1, 2, _);
 	return (i32)(q.area() + dos + libre);
 }
+
+// Y dos hermanas que SOLO se distinguen por como se llaman sus ranuras.
+// Declararlas vale -- basta con que una se llame distinto --, pero una llamada
+// POSICIONAL no dice cual, asi que hay que nombrar hasta separarlas.
+i64 pesa(i64 kilos, i64 gramos) { return kilos * 1000 + gramos; }
+i64 pesa(i64 libras, i64 onzas) { return libras + onzas * 1000; }
+
+i64 ambigua() { return pesa(1, 2); }
+
+// Lo mismo con `@Override`: la derivada renombra la ranura, asi que NO
+// sustituye.  Sin `@Override` seria una sobrecarga nueva y valdria.
+class Base {
+	public Base() { }
+
+	public i64 mide(i64 alto) { return alto; }
+}
+
+class Hija : Base {
+	public Hija() { }
+
+	@Override
+	public i64 mide(i64 largo) { return largo * 2; }
+}

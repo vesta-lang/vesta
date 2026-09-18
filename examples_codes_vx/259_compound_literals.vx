@@ -25,7 +25,7 @@ i32 distancia_manhattan(Punto p) {
 
 // Un compound literal como valor de RETORNO (sin variable intermedia).
 Punto origen_desplazado(i32 d) {
-	return (Punto) {.x = d,.y = d};
+	return (Punto) {.x = d, .y = d};
 }
 
 i64 caja_total(Caja<i64> c) {
@@ -34,7 +34,7 @@ i64 caja_total(Caja<i64> c) {
 
 i32 main() {
 	// 1. Como ARGUMENTO: sin declarar una variable Punto aparte.
-	i32 d1 = distancia_manhattan((Punto) {.x = -3,.y = 4});
+	i32 d1 = distancia_manhattan((Punto) {.x = -3, .y = 4});
 	println("dist   = ${d1}"); // 7
 
 	// 2. En un RETURN: la funcion devuelve el compound literal.
@@ -46,5 +46,5 @@ i32 main() {
 	println("caja   = ${t}"); // 100 + 7 = 107
 
 	// Retorno determinista (harness): 30 (arg) + 10 (return o.x) + 107 (templ) = 147.
-	return distancia_manhattan((Punto) {.x = -3,.y = 4}) + o.x + (i32)t;
+	return distancia_manhattan((Punto) {.x = -3, .y = 4}) + o.x + (i32)t;
 }

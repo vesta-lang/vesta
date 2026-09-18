@@ -248,7 +248,7 @@ public void memcpy_small_avx2(u8* dst, u8* src, usize n) {
 public void memcpy_small_avx512(u8* dst, u8* src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
-	asm (reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s, zmm v0,) {
+	asm (reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s, zmm v0, ) {
 		inject(gen_solapada("vmovdqu64", 64, 64, 1))
 	}
 }
@@ -335,7 +335,7 @@ public void memcpy_small_avx2_aligned(u8* dst, u8* src, usize n) {
 public void memcpy_small_avx512_aligned(u8* dst, u8* src, usize n) {
 	u8* fin_d = dst + n - 64;
 	u8* fin_s = src + n - 64;
-	asm (reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s, zmm v0,) {
+	asm (reg d = dst, reg s = src, reg fd = fin_d, reg fs = fin_s, zmm v0, ) {
 		inject(gen_solapada("vmovdqa64", 64, 64, 1))
 	}
 }
@@ -765,7 +765,7 @@ public void memcpy_medium_avx512(u8* dst, u8* src, usize n) {
 @Target("arch:x86_64")
 @NoIdiom
 public void memcpy_erms(u8* dst, u8* src, usize n) {
-	asm (rdi d = dst, rsi s = src, rcx c = n,) {
+	asm (rdi d = dst, rsi s = src, rcx c = n, ) {
 		rep movsb
 	}
 }
@@ -802,7 +802,7 @@ public void memcpy_erms(u8* dst, u8* src, usize n) {
 public void memset_small_sse2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0, ) {
 		movq v0, p
 		punpcklqdq v0, v0
 		inject(gen_relleno_solapado("movdqu", 16, 64))
@@ -826,7 +826,7 @@ public void memset_small_sse2(u8* dst, u8 val, usize n) {
 public void memset_small_avx2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0, ) {
 
 		vmovq sem, p
 		vpbroadcastq v0, sem
@@ -849,7 +849,7 @@ public void memset_small_avx2(u8* dst, u8 val, usize n) {
 public void memset_small_avx512(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0, ) {
 		vpbroadcastq v0, p
 		inject(gen_relleno_solapado("vmovdqu64", 64, 64))
 		vzeroupper
@@ -872,7 +872,7 @@ public void memset_small_avx512(u8* dst, u8 val, usize n) {
 public void memset_medium_sse2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 128;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0, ) {
 		movq v0, p
 		punpcklqdq v0, v0
 		inject(gen_relleno_grande("movdqu", "movdqu", 16, 8, ""))
@@ -893,7 +893,7 @@ public void memset_medium_sse2(u8* dst, u8 val, usize n) {
 public void memset_medium_avx2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0, ) {
 
 		vmovq sem, p
 		vpbroadcastq v0, sem
@@ -915,7 +915,7 @@ public void memset_medium_avx2(u8* dst, u8 val, usize n) {
 public void memset_medium_avx512(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0, ) {
 		vpbroadcastq v0, p
 		inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 8, "vzeroupper"))
 	}
@@ -944,7 +944,7 @@ public void memset_medium_avx512(u8* dst, u8 val, usize n) {
 public void memset_big_sse2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0, ) {
 		movq v0, p
 		punpcklqdq v0, v0
 		inject(gen_relleno_grande("movdqu", "movdqu", 16, 16, ""))
@@ -966,7 +966,7 @@ public void memset_big_sse2(u8* dst, u8 val, usize n) {
 public void memset_big_avx2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0, ) {
 		vmovq sem, p
 		vpbroadcastq v0, sem
 		inject(gen_relleno_grande("vmovdqu", "vmovdqu", 32, 16, "vzeroupper"))
@@ -988,7 +988,7 @@ public void memset_big_avx2(u8* dst, u8 val, usize n) {
 public void memset_big_avx512(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 1024;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0, ) {
 		vpbroadcastq v0, p
 		inject(gen_relleno_grande("vmovdqu64", "vmovdqu64", 64, 16, "vzeroupper"))
 	}
@@ -1021,7 +1021,7 @@ public void memset_big_avx512(u8* dst, u8 val, usize n) {
 public void memset_streaming_avx2(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0, ) {
 		vmovq sem, p
 		vpbroadcastq v0, sem
 		inject(gen_relleno_grande("vmovntdq", "vmovdqu", 32, 16,
@@ -1044,7 +1044,7 @@ public void memset_streaming_avx2(u8* dst, u8 val, usize n) {
 public void memset_streaming_avx512(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 1024;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0, ) {
 		vpbroadcastq v0, p
 		inject(gen_relleno_grande("vmovntdq", "vmovdqu64", 64, 16,
 		                          "sfence\nvzeroupper"))
@@ -1077,7 +1077,7 @@ public void memset_streaming_avx512(u8* dst, u8 val, usize n) {
 public void memset_small_sse2_aligned(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0, ) {
 		movq v0, p
 		punpcklqdq v0, v0
 		inject(gen_relleno_solapado("movdqa", 16, 64))
@@ -1095,7 +1095,7 @@ public void memset_small_sse2_aligned(u8* dst, u8 val, usize n) {
 public void memset_small_avx2_aligned(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0, ) {
 		vmovq sem, p
 		vpbroadcastq v0, sem
 		inject(gen_relleno_solapado("vmovdqa", 32, 64))
@@ -1114,7 +1114,7 @@ public void memset_small_avx2_aligned(u8* dst, u8 val, usize n) {
 public void memset_small_avx512_aligned(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0, ) {
 		vpbroadcastq v0, p
 		inject(gen_relleno_solapado("vmovdqa64", 64, 64))
 		vzeroupper
@@ -1137,7 +1137,7 @@ public void memset_small_avx512_aligned(u8* dst, u8 val, usize n) {
 public void memset_medium_sse2_aligned(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 128;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm v0, ) {
 		movq v0, p
 		punpcklqdq v0, v0
 		inject(gen_relleno_grande("movdqa", "movdqu", 16, 8, ""))
@@ -1156,7 +1156,7 @@ public void memset_medium_sse2_aligned(u8* dst, u8 val, usize n) {
 public void memset_medium_avx2_aligned(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, xmm sem, ymm v0, ) {
 		vmovq sem, p
 		vpbroadcastq v0, sem
 		inject(gen_relleno_grande("vmovdqa", "vmovdqu", 32, 8, "vzeroupper"))
@@ -1175,7 +1175,7 @@ public void memset_medium_avx2_aligned(u8* dst, u8 val, usize n) {
 public void memset_medium_avx512_aligned(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 512;
 	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
-	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0,) {
+	asm (reg d = dst, reg fd = fin_d, reg p = pat, zmm v0, ) {
 		vpbroadcastq v0, p
 		inject(gen_relleno_grande("vmovdqa64", "vmovdqu64", 64, 8, "vzeroupper"))
 	}
@@ -1185,7 +1185,7 @@ public void memset_medium_avx512_aligned(u8* dst, u8 val, usize n) {
 @NoIdiom
 public void memset_erms(u8* dst, u8 val, usize n) {
 	u64 v = (u64) val;
-	asm (rdi d = dst, rax a = v, rcx c = n,) {
+	asm (rdi d = dst, rax a = v, rcx c = n, ) {
 		rep stosb
 	}
 }

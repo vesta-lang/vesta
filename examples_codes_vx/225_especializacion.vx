@@ -50,12 +50,12 @@ struct Caja<T*> {
 }
 
 i32 main() {
-	Caja<i32>   a   = {.v = 7};             // -> primario  (clase=1)
-	Caja<i64>   b   = {.v = 10,.extra = 5}; // -> total i64 (clase=2, extra=5)
-	Punto       pt  = {.x = 1,.y = 2};
+	Caja<i32>   a   = {.v = 7};              // -> primario  (clase=1)
+	Caja<i64>   b   = {.v = 10, .extra = 5}; // -> total i64 (clase=2, extra=5)
+	Punto       pt  = {.x = 1, .y = 2};
 	Caja<Punto> c   = {.v = pt}; // -> total Punto (clase=3)
 	i64*        raw = (i64*) malloc(8);
-	Caja<i64*>  d   = {.v = raw,.propio = true}; // -> parcial T* (clase=4)
+	Caja<i64*>  d   = {.v = raw, .propio = true}; // -> parcial T* (clase=4)
 
 	// Suma de marcas: 1 + 2 + 3 + 4 = 10.  Mas el campo extra (5) de la total.
 	i64 marcas = a.clase() + b.clase() + c.clase() + d.clase();

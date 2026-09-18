@@ -24,7 +24,7 @@ impl Contador {
 }
 
 i64 main() {
-	Punto    p = {.x = 15,.y = 5 };
+	Punto    p = {.x = 15, .y = 5 };
 	Contador c = new Contador(6);
 	i64      r = p.suma() + p.escala(1) + c.doble(); // 20 + 20 + 12 = 52
 	println("r=${r}");

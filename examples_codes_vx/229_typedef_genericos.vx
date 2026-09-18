@@ -35,7 +35,7 @@ i32 main() {
 	Caja      c    = {.base = 0};
 	Edad      e    = c.id<Edad>(10);        // alias como type-arg de metodo -> 10
 	Cantidad  q    = sumar<Cantidad>(6, 6); // alias satisface el bound Num -> 12
-	Env<Edad> env  = {.v = 0,.extra = 0};   // Edad == i64 -> elige la spec total
+	Env<Edad> env  = {.v = 0, .extra = 0};  // Edad == i64 -> elige la spec total
 	i64       cual = env.cual();            // 2
 
 	println("e=${e} q=${q} cual=${cual}");

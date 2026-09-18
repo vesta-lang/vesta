@@ -38,7 +38,7 @@ static_assert(FIB[8] == 21, "fib(8)");
 static_assert(FIB[9] == 34, "fib(9)");
 
 // (4) Struct comptime.
-comptime Item ITEMS_FIRST = {.id = 7,.weight = 50};
+comptime Item ITEMS_FIRST = {.id = 7, .weight = 50};
 static_assert(ITEMS_FIRST.id == 7, "items first id");
 static_assert(ITEMS_FIRST.weight == 50, "items first weight");
 
@@ -63,7 +63,7 @@ i32 main() {
 		static_assert(squares[7] == 49, "7^2");
 
 		// (4) Struct mutable: simular un acumulador con dos counters.
-		Item totals = {.id = 0,.weight = 0};
+		Item totals = {.id = 0, .weight = 0};
 		for (i64 j = 1_i64; j <= 5; j = j + 1) {
 			totals.id += 1;
 			totals.weight += (i32)(j * 10);

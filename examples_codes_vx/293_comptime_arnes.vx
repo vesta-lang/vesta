@@ -104,7 +104,7 @@ static_assert(CHK == 10, "buffer + println en comptime puro");
 
 // ---- runtime: usa las mismas clases/metodos/overlays/fns -------------------
 i32 main() {
-	Punto p = {.x = 3,.y = 4};
+	Punto p = {.x = 3, .y = 4};
 
 	// clase + metodo
 	Contador c = new Contador();
