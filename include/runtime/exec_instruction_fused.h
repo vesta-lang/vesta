@@ -88,8 +88,8 @@
  * orden, que es lo contrario de lo que se busca.
  *
  * Se resuelve por FORMATO y no guardando mascaras dentro de la instruccion,
- * porque no siempre hay sitio: `mem2` llena sus dieciseis bytes de operandos con
- * los dos bloques de direccionamiento.
+ * porque no siempre hay sitio: `mem2` llena sus dieciseis bytes de operandos
+ * con los dos bloques de direccionamiento.
  */
 
 #ifndef VESTA_RUNTIME_EXEC_INSTRUCTION_FUSED_H
@@ -514,8 +514,7 @@ static_assert(sizeof(MovnOperands) <= sizeof(uint64_t),
  * @tparam N Cuantas copias, fijado AL COMPILAR: el bucle desaparece y queda una
  *           secuencia recta de N lecturas y N escrituras.
  */
-template <uint32_t N>
-void exec_movn(ProcessVM *vm, const DecodedInstr &d) {
+template <uint32_t N> void exec_movn(ProcessVM *vm, const DecodedInstr &d) {
     MovnOperands ops;
     std::memcpy(&ops, &d.data_instruction.raw_data.raw1, sizeof(ops));
     auto &regs = vm->registers.regs;
@@ -556,9 +555,8 @@ inline constexpr Alu2xFn kMovn[5] = {nullptr, nullptr, &exec_movn<2>,
  * @param src Registros fuente, en orden.
  * @param n   Cuantas copias (2, 3 o 4).
  */
-[[gnu::always_inline]] inline void make_movn(DecodedInstr &a,
-                                             const uint8_t *dst,
-                                             const uint8_t *src, uint32_t n) {
+[[gnu::always_inline]] inline void
+make_movn(DecodedInstr &a, const uint8_t *dst, const uint8_t *src, uint32_t n) {
     MovnOperands ops{};
     for (uint32_t i = 0; i < n; ++i) {
         ops.dst[i] = dst[i];
@@ -697,7 +695,8 @@ inline constexpr Alu2xFn kMem2[2][2] = {
  * @param src2     Segunda fuente de la primera.
  * @param src3     La fuente de la segunda que NO es el temporal.
  * @param rt_right El temporal entra como operando DERECHO de la segunda.  Da
- *                 igual en `add`/`and`/`or`/`xor`; en `sub` cambia el resultado.
+ *                 igual en `add`/`and`/`or`/`xor`; en `sub` cambia el
+ * resultado.
  */
 [[gnu::always_inline]] inline void make_alu2x(DecodedInstr &a, uint8_t op1,
                                               uint8_t op2, uint8_t dst,

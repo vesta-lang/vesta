@@ -75,7 +75,6 @@ struct RegOperand {
     bool dest;     ///< ocupa la posicion de destino de la instruccion
 };
 
-
 /**
  * @brief Resultado del desensamblado de una sola instruccion.
  */

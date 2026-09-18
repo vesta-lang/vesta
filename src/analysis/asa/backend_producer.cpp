@@ -91,7 +91,8 @@ void produce_backend(Production &p) {
          * instruccion que la produjo.  Es el ultimo recurso del ancla -- la
          * unica clase que puede quedarse rancia al mover texto --, y se acepta
          * porque no hay a que anclar; si algun dia el informe traiga tambien la
-         * posicion de la operacion, esto pasa a @c Anchor::Kind::Instruction. */
+         * posicion de la operacion, esto pasa a @c Anchor::Kind::Instruction.
+         */
         f.seal.origin.site = Anchor{Anchor::Kind::Line, inc.source_line};
         /* DEMOSTRADO: la clasificacion es un `switch` sobre la operacion, no
          * una estimacion.  O la operacion baja a maquina o necesita algo que en

@@ -23,18 +23,18 @@
 
 #include <cstddef>
 
-#include "util/gc_diag.h"   // VGC_CERR/COUT (neutralizable en freestanding)
+#include "util/gc_diag.h" // VGC_CERR/COUT (neutralizable en freestanding)
 #include "util/os/os_memory.h" // apalabrar, entregar y permisos; sin cabeceras del sistema
 
 /* AQUI YA NO SE INCLUYE `windows.h` NI `sys/mman.h`, y es un alivio: esta
  * cabecera la incluye media docena de subsistemas, y `windows.h` define `VOID`
- * como macro -- lo que rompe cualquier `enum class` que use ese nombre -- ademas
- * de arrastrar miles de lineas a cada unidad que la toque.  Ya obligo a aislar
- * `ThreadPool` en su propio `.cpp`.
+ * como macro -- lo que rompe cualquier `enum class` que use ese nombre --
+ * ademas de arrastrar miles de lineas a cada unidad que la toque.  Ya obligo a
+ * aislar `ThreadPool` en su propio `.cpp`.
  *
  * Lo unico que las necesitaba era reservar memoria, y eso lo hace ahora
- * `util/os/os_memory.h`, cuya cabecera no incluye nada del sistema: la traduccion
- * de permisos a `PAGE_*` o `PROT_*` vive en su `.cpp`. */
+ * `util/os/os_memory.h`, cuya cabecera no incluye nada del sistema: la
+ * traduccion de permisos a `PAGE_*` o `PROT_*` vive en su `.cpp`. */
 
 #include "net/net.h"
 
@@ -135,10 +135,10 @@ constexpr size_t round_up_to(size_t n, size_t a) {
  *
  * QUIEN HABLA CON EL SISTEMA.  Ya no este fichero.  La traduccion a
  * `PAGE_EXECUTE_READWRITE` o a `PROT_READ` -- y las llamadas a `VirtualAlloc` y
- * `mmap` -- viven en `util/os_memory.cpp`, que es la unica capa del proyecto que
- * trata con el sistema por debajo de las reservas.  Aqui quedan los conceptos
- * de la MAQUINA VIRTUAL: arenas, bloques, mapeos y tablas de paginas del
- * invitado.
+ * `mmap` -- viven en `util/os_memory.cpp`, que es la unica capa del proyecto
+ * que trata con el sistema por debajo de las reservas.  Aqui quedan los
+ * conceptos de la MAQUINA VIRTUAL: arenas, bloques, mapeos y tablas de paginas
+ * del invitado.
  *
  * Que no es lo mismo, y merece decirse: `vesta_alloc` sirve la memoria del
  * ANFITRION -- mas rapida que `malloc`/`free` --, y esto de aqui sirve la

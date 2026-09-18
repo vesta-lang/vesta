@@ -17,7 +17,7 @@
 
 #include "util/named_alloc.h" // que el perfil diga QUE es cada marca
 #include "analysis/manager/analysis_codec.h" // lo COMUN de guardar un analisis
-#include "analysis/memory/memory_access.h" // tamano de un tipo (UNICA verdad)
+#include "analysis/memory/memory_access.h"   // tamano de un tipo (UNICA verdad)
 #include "analysis/facts/loop_facts.h"
 #include "analysis/facts/loop_iv.h"
 #include "analysis/facts/loop_structure.h"
@@ -477,8 +477,7 @@ struct Resolver {
      * @return true si lo promete.
      */
     bool declared_dir_of(int32_t pidx) const {
-        if (pidx < 0 ||
-            static_cast<size_t>(pidx) >= fn.param_contracts.size())
+        if (pidx < 0 || static_cast<size_t>(pidx) >= fn.param_contracts.size())
             return false;
         /* Se pregunta por lo APUNTADO, que es de lo que habla el aliasing: si
          * dos parametros llevan a la misma REGION.  El nivel del puntero dice
@@ -492,7 +491,8 @@ struct Resolver {
         // Parametro: memoria alcanzable desde el arg (points-to grueso).
         const int32_t pidx = facts.param_index(v);
         if (pidx >= 0) {
-            PointsToEntry e{K::ArgDerived, static_cast<uint32_t>(pidx), 0, true};
+            PointsToEntry e{K::ArgDerived, static_cast<uint32_t>(pidx), 0,
+                            true};
             /* Si el parametro DECLARA su direccion, dice lo que la funcion hace
              * con lo apuntado -- y con ello que esa region es SUYA: no coincide
              * con la de otro parametro declarado.
@@ -866,8 +866,8 @@ PointsTo compute_points_to(const ir::IrFunction &fn, const IrFacts &facts,
     // acabar con lo mismo dos veces.
     Resolver r(fn, facts, rangos, out.loc, loops);
     out.extent.assign(n, RegionExtent{});
-    for (ir::IrValueId v = ir::IrValueId(0);
-         v < static_cast<ir::IrValueId>(n); ++v) {
+    for (ir::IrValueId v = ir::IrValueId(0); v < static_cast<ir::IrValueId>(n);
+         ++v) {
         r.resolve(v); // deja la respuesta en `out.loc[v]`
         // La extension se guarda en la RAIZ, que es de quien es propiedad.
         if (const ir::IrInstr *d = facts.def(v))
@@ -889,9 +889,8 @@ AbstractLoc loc_of(const PointsTo &pt, ir::IrValueId ptr, int32_t width) {
     return AbstractLoc{e.kind, e.root, e.off, width, e.declared_dir};
 }
 
-std::vector<ir::IrValueId>
-single_values_of_slots(const ir::IrFunction &fn,
-                       ir::IrValueList slots) {
+std::vector<ir::IrValueId> single_values_of_slots(const ir::IrFunction &fn,
+                                                  ir::IrValueList slots) {
     std::vector<ir::IrValueId> out(slots.size(), ir::IR_NO_VALUE);
     if (slots.empty()) return out;
 

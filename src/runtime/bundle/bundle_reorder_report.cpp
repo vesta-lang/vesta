@@ -57,11 +57,10 @@ void reorder_report_dump(const DecodedInstr *before, const DecodedInstr *after,
         const char *reason =
             bundle_reorder_criterion(why != nullptr ? why[i] : 0xFF);
         std::fprintf(stderr, "%s\n",
-                     vx::diag::format("VX7030",
-                                      {slot, pc, reason,
-                                       after[i].pc != before[i].pc
-                                           ? changed
-                                           : std::string()})
+                     vx::diag::format("VX7030", {slot, pc, reason,
+                                                 after[i].pc != before[i].pc
+                                                     ? changed
+                                                     : std::string()})
                          .c_str());
     }
 }

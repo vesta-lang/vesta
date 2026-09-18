@@ -20,19 +20,20 @@
  * parametro hay que ver a todos los que la llaman --, exactamente por el mismo
  * motivo que los resumenes de frontera, y se cachea igual: una vez por base.
  *
- * Y sobre todo, porque lo preguntan DOS: el productor de contratos de parametro,
- * que lo afirma como hecho, y la comprobacion de prestamos, que lo cruza con la
- * exclusividad prometida.  Calcularlo en cada uno serian dos productores del
- * mismo hecho, que es el primer invariante del ASA roto -- y el dia que uno de
- * los dos cambiara, el mismo programa se juzgaria de dos maneras.
+ * Y sobre todo, porque lo preguntan DOS: el productor de contratos de
+ * parametro, que lo afirma como hecho, y la comprobacion de prestamos, que lo
+ * cruza con la exclusividad prometida.  Calcularlo en cada uno serian dos
+ * productores del mismo hecho, que es el primer invariante del ASA roto -- y el
+ * dia que uno de los dos cambiara, el mismo programa se juzgaria de dos
+ * maneras.
  *
  * @par COSTE, que es lo que decide la forma de esto
  * Lo que se guarda son las POSICIONES ya resueltas por argumento y sitio de
- * llamada, no un veredicto por PAR.  Es la diferencia entre lineal y cuadratico,
- * y no es teorica:
+ * llamada, no un veredicto por PAR.  Es la diferencia entre lineal y
+ * cuadratico, y no es teorica:
  *
- *   - Resolver por par obliga a recorrer todos los sitios una vez por par, o sea
- *     `pares x sitios` resoluciones -- y los pares son el cuadrado de los
+ *   - Resolver por par obliga a recorrer todos los sitios una vez por par, o
+ * sea `pares x sitios` resoluciones -- y los pares son el cuadrado de los
  *     parametros.
  *   - Resolviendo por ARGUMENTO se hace una vez por argumento y sitio, que
  *     sumado sobre el modulo es exactamente el tamano de sus listas de
@@ -126,9 +127,9 @@ struct ParamReach {
 /**
  * @brief Lo que alcanza cada argumento de una llamada, ya resuelto.
  *
- * Una entrada por argumento, en el orden de los parametros.  Un argumento que no
- * era puntero, o cuya posicion no se pudo resolver, queda con una posicion NO
- * concreta -- que es una respuesta, no un hueco.
+ * Una entrada por argumento, en el orden de los parametros.  Un argumento que
+ * no era puntero, o cuya posicion no se pudo resolver, queda con una posicion
+ * NO concreta -- que es una respuesta, no un hueco.
  */
 struct CallSiteLocs {
     uint32_t line = 0;
@@ -168,10 +169,10 @@ class ParamAliasing {
      * Recorre los sitios de esa funcion comparando dos posiciones ya resueltas.
      * Basta UNA llamada donde se DEMUESTRE el solapamiento para que ese sea el
      * veredicto -- es un dato del programa, y gana sobre cualquier sitio
-     * indeciso, por eso se miran todos --, y basta una donde no se pueda decidir
-     * para que la disyuncion no se pueda afirmar: ahi la respuesta es "no se",
-     * no "disjunto".  Darlo por disjunto mirando solo las llamadas faciles seria
-     * dar por buena una promesa sin comprobarla.
+     * indeciso, por eso se miran todos --, y basta una donde no se pueda
+     * decidir para que la disyuncion no se pueda afirmar: ahi la respuesta es
+     * "no se", no "disjunto".  Darlo por disjunto mirando solo las llamadas
+     * faciles seria dar por buena una promesa sin comprobarla.
      *
      * Y @c Overlaps sale de @ref must_overlap, no de @ref may_alias: la segunda
      * contesta "no se pudo demostrar que sean disjuntas", que como respuesta
@@ -191,7 +192,8 @@ class ParamAliasing {
     ///
     /// La primera vez los resuelve; despues los devuelve.  Nulo si a esa
     /// funcion no la llama nadie visible.
-    const std::vector<CallSiteLocs> *sites_of(const std::string &function) const;
+    const std::vector<CallSiteLocs> *
+    sites_of(const std::string &function) const;
 
     /// @brief La funcion @p name del modulo, o nulo.
     ///
@@ -211,7 +213,8 @@ class ParamAliasing {
     mutable std::unordered_map<std::string, const ir::IrFunction *> by_name_;
     /// Lo ya resuelto.  `mutable` porque la consulta es const y el cacheo es un
     /// detalle suyo: quien pregunta no cambia nada de lo que se sabe.
-    mutable std::unordered_map<std::string, std::vector<CallSiteLocs>> resolved_;
+    mutable std::unordered_map<std::string, std::vector<CallSiteLocs>>
+        resolved_;
 };
 
 } // namespace effects

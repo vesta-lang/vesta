@@ -48,7 +48,8 @@ size_t functions_footprint(const std::vector<IrFunction> &fns) {
         total += vector_heap(fn.values);
         total += vector_heap(fn.blocks);
         total += vector_heap(fn.params);
-        for (const IrValue &v : fn.values) total += string_heap(v.name);
+        for (const IrValue &v : fn.values)
+            total += string_heap(v.name);
         for (const IrBlock &b : fn.blocks) {
             total += string_heap(b.name);
             total += vector_heap(b.instrs);
@@ -101,8 +102,8 @@ bool restore_functions(IrModule &mod, const std::string &path, size_t expected,
          * despues, como un simbolo sin resolver, o no revienta y sale otro
          * programa. */
         err = "de " + path + " vuelven " +
-              std::to_string(parsed.functions.size()) + " funciones y bajaron " +
-              std::to_string(expected);
+              std::to_string(parsed.functions.size()) +
+              " funciones y bajaron " + std::to_string(expected);
         return false;
     }
     mod.functions = std::move(parsed.functions);

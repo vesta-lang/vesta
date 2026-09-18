@@ -114,8 +114,7 @@ Lowering::emit_string_lit(ast::StringLitExpr *slit) {
 // si no, se usa el simbolo C por defecto (CALLN vx_bare_io:<prim>, lo
 // aporta stdlib/native/io/vesta_io_bare.c).  Asi las primitivas son
 // programables en el propio lenguaje sin import ni libreria std.
-void Lowering::emit_io_prim(const std::string &prim,
-                            ir::IrValueList args,
+void Lowering::emit_io_prim(const std::string &prim, ir::IrValueList args,
                             uint32_t line) {
     const bool user_defined = (tc_.function_sig_by_name(prim) != nullptr);
     ir::IrInstr ins{};

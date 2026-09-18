@@ -133,12 +133,12 @@ bool no_alias(const AbstractLoc &a, const AbstractLoc &b);
  * @brief Se DEMUESTRA que @p a y @p b tocan algun byte comun?
  *
  * No es la negacion de @ref no_alias, y confundirlas es el error que este
- * predicado existe para impedir.  @ref may_alias contesta "no se puede demostrar
- * que sean disjuntas", que es una respuesta PERMISIVA: sirve para NO optimizar,
- * porque quedarse quieto de mas nunca da un resultado equivocado.  Usarla para
- * ACUSAR invierte su sentido y rompe el segundo invariante del ASA -- no poder
- * demostrar que algo es seguro no es demostrar que es inseguro --, que es
- * exactamente como un programa correcto acababa rechazado.
+ * predicado existe para impedir.  @ref may_alias contesta "no se puede
+ * demostrar que sean disjuntas", que es una respuesta PERMISIVA: sirve para NO
+ * optimizar, porque quedarse quieto de mas nunca da un resultado equivocado.
+ * Usarla para ACUSAR invierte su sentido y rompe el segundo invariante del ASA
+ * -- no poder demostrar que algo es seguro no es demostrar que es inseguro --,
+ * que es exactamente como un programa correcto acababa rechazado.
  *
  * Demostrarlo exige la misma raiz concreta y que los rangos se corten, contando
  * un ancho DESCONOCIDO como un solo byte: la region empieza en su

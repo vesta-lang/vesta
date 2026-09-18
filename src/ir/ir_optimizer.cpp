@@ -19,11 +19,11 @@
 #include "util/env_flags.h"
 #include "util/crono_tramo.h"
 #include "vx/diag/diag_catalog.h" // los motivos, en todos los idiomas
-#include "util/fnv.h"         // dispersion de las claves de la CSE
+#include "util/fnv.h"             // dispersion de las claves de la CSE
 #include "util/phase_memory.h" // la frontera al cerrar una vuelta del punto fijo
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
 #include "util/named_alloc.h" // que el perfil diga QUE es cada estructura auxiliar
-#include "util/os/thread_slot.h"  // los vectores de trabajo, uno por hilo
+#include "util/os/thread_slot.h" // los vectores de trabajo, uno por hilo
 
 #include "util/reloj.h"
 // DE QUE MODULO ES ESTE DIRECTORIO, dicho por el codigo y no deducido de su
@@ -49,10 +49,10 @@
 #include "ir/passes/bulk_memory_lower.h" // bucle que mueve memoria -> operacion de bloque
 #include "ir/passes/unroll.h" // desenrollado de bucles (factor automatico)
 #include "ir/passes/select_simplify.h" // canonicalizacion algebraica de SELECT
-#include "analysis/asa/fact_base.h" // la puerta UNICA a los hechos del ASA
+#include "analysis/asa/fact_base.h"    // la puerta UNICA a los hechos del ASA
 #include "analysis/facts/loop_iv_bounds.h" // hasta donde llega la variable de un bucle
 #include "analysis/facts/demanded_bits.h" // cuantos bits de un valor mira alguien
-#include "analysis/facts/alignment.h"  // de cuanto es multiplo un valor
+#include "analysis/facts/alignment.h"     // de cuanto es multiplo un valor
 #include "analysis/facts/asm_bindings.h" // de que valor habla un operando de asm
 #include "analysis/facts/ir_facts.h" // hechos (def-use) para el modelo de efectos
 #include "analysis/facts/inline_facts.h" // se puede inlinar, y cuanto mide
@@ -101,9 +101,10 @@ namespace ir {
 namespace scratch {
 struct DceUsed;           ///< DCE: valores que alguien usa.
 struct DeadAllocUsed;     ///< Reserva muerta: lo mismo, por su cuenta.
-struct ElideUnwrapDefOp;  ///< Quitar afirmaciones: operacion que define cada valor.
+struct ElideUnwrapDefOp;  ///< Quitar afirmaciones: operacion que define cada
+                          ///< valor.
 struct ElideUnwrapDefIns; ///< ... y la instruccion que lo define.
-struct FoldStrcatDef;     ///< Plegado de concatenaciones: definicion de cada valor.
+struct FoldStrcatDef; ///< Plegado de concatenaciones: definicion de cada valor.
 struct LoadNarrowUses;    ///< Estrechar cargas: quien usa cada valor.
 struct LoadNarrowUseRefs; ///< ... la lista de usos de UN valor.
 
@@ -113,51 +114,51 @@ struct LoadNarrowUseRefs; ///< ... la lista de usos de UN valor.
  * Sin nombre, las catorce de este fichero y las doscientas y pico del resto
  * comparten simbolo (`std::vector<unsigned char>`) y no hay forma de saber
  * cual pesa. */
-struct EscapeCandidates;  ///< Analisis de escape: candidato que se escapa.
-struct EscapeSites;       ///< ... lo mismo, por sitio de reserva.
-struct SlotLoaded;        ///< Promocion de reservas: del hueco se ha leido.
-struct SlotEscapes;       ///< ... el hueco se escapa.
-struct SlotOffZero;       ///< ... se accede siempre con desplazamiento cero.
-struct SlotLoadsOff0;     ///< ... y todas sus lecturas.
-struct BoxCarrier;        ///< ... el valor lleva una caja dentro.
-struct CarrierAlias;      ///< ... y quien es su alias.
-struct BlockVisited;      ///< Recorrido de bloques: ya visitado.
-struct LoopHeader;        ///< Bucles: el bloque es cabecera.
-struct InLoop;            ///< ... el bloque esta dentro de uno.
-struct ExtKind;           ///< Normalizar extensiones: 1=SEXT, 2=ZEXT.
-struct ExtIsConst;        ///< ... el valor es constante.
+struct EscapeCandidates; ///< Analisis de escape: candidato que se escapa.
+struct EscapeSites;      ///< ... lo mismo, por sitio de reserva.
+struct SlotLoaded;       ///< Promocion de reservas: del hueco se ha leido.
+struct SlotEscapes;      ///< ... el hueco se escapa.
+struct SlotOffZero;      ///< ... se accede siempre con desplazamiento cero.
+struct SlotLoadsOff0;    ///< ... y todas sus lecturas.
+struct BoxCarrier;       ///< ... el valor lleva una caja dentro.
+struct CarrierAlias;     ///< ... y quien es su alias.
+struct BlockVisited;     ///< Recorrido de bloques: ya visitado.
+struct LoopHeader;       ///< Bucles: el bloque es cabecera.
+struct InLoop;           ///< ... el bloque esta dentro de uno.
+struct ExtKind;          ///< Normalizar extensiones: 1=SEXT, 2=ZEXT.
+struct ExtIsConst;       ///< ... el valor es constante.
 
 /* Las que crecen a base de `push_back` sobre un vector diminuto: el perfil las
  * ve como `_M_realloc_insert` de cinco a diecinueve bytes, cincuenta veces por
  * funcion, y sin etiqueta no hay forma de saber cual es cual. */
-struct Reachable;         ///< Bloques alcanzables desde la entrada.
-struct RpoPos;            ///< Bloque -> su posicion en el orden inverso.
-struct StrcatOffsets;     ///< Concatenar cadenas: donde empieza cada trozo.
-struct ConstOfValue;      ///< Valor -> la constante que lleva.
-struct SiteOfValue;       ///< Valor -> el sitio de reserva del que sale.
-struct FieldSiteOf;       ///< ... lo mismo, por campo.
-struct FieldOffsetOf;     ///< ... y su desplazamiento.
-struct ValueIsConst;      ///< Valor -> se sabe constante.
-struct RangeKnown;        ///< Rangos: del valor se sabe algo.
-struct FactPresent;       ///< El hecho esta en la tabla.
-struct CallPathLen;       ///< Largo del camino de llamadas.
-struct DirtyOf;           ///< Funcion -> sus hechos caducaron.
-struct EffectsDirtyOf;    ///< ... y sus efectos.
-struct JointBytes;        ///< Trozos de cadena ya unidos.
-struct SlotAlive;         ///< Hueco de pila -> alguien lo usa todavia.
-struct FmaUseCount;       ///< Fusion multiplicar-sumar: cuantos usos tiene.
-struct NarrowCmpConst;    ///< Estrechar comparaciones: la constante del valor.
-struct ConstMapValue;     ///< Mapa de constantes: el valor de cada una.
-struct IsSlot;            ///< El valor es un hueco de pila.
-struct ReachesCalln;      ///< El valor llega a una llamada nativa.
-struct AmbiguousAlias;    ///< No se pudo demostrar de quien es la direccion.
-struct DerivedFrom;       ///< El valor se deriva de otro que se persigue.
-struct Tainted;           ///< El valor quedo contaminado por lo de arriba.
-struct CreatesEnv;        ///< La funcion crea un entorno de closure.
-struct IsYielder;         ///< ... y la que cede el paso.
-struct Ownable;           ///< ... y de la que se puede tomar propiedad.
-struct IsConstDef;        ///< La definicion del valor es una constante.
-struct Unreachable;       ///< Bloque al que no se llega desde la entrada.
+struct Reachable;      ///< Bloques alcanzables desde la entrada.
+struct RpoPos;         ///< Bloque -> su posicion en el orden inverso.
+struct StrcatOffsets;  ///< Concatenar cadenas: donde empieza cada trozo.
+struct ConstOfValue;   ///< Valor -> la constante que lleva.
+struct SiteOfValue;    ///< Valor -> el sitio de reserva del que sale.
+struct FieldSiteOf;    ///< ... lo mismo, por campo.
+struct FieldOffsetOf;  ///< ... y su desplazamiento.
+struct ValueIsConst;   ///< Valor -> se sabe constante.
+struct RangeKnown;     ///< Rangos: del valor se sabe algo.
+struct FactPresent;    ///< El hecho esta en la tabla.
+struct CallPathLen;    ///< Largo del camino de llamadas.
+struct DirtyOf;        ///< Funcion -> sus hechos caducaron.
+struct EffectsDirtyOf; ///< ... y sus efectos.
+struct JointBytes;     ///< Trozos de cadena ya unidos.
+struct SlotAlive;      ///< Hueco de pila -> alguien lo usa todavia.
+struct FmaUseCount;    ///< Fusion multiplicar-sumar: cuantos usos tiene.
+struct NarrowCmpConst; ///< Estrechar comparaciones: la constante del valor.
+struct ConstMapValue;  ///< Mapa de constantes: el valor de cada una.
+struct IsSlot;         ///< El valor es un hueco de pila.
+struct ReachesCalln;   ///< El valor llega a una llamada nativa.
+struct AmbiguousAlias; ///< No se pudo demostrar de quien es la direccion.
+struct DerivedFrom;    ///< El valor se deriva de otro que se persigue.
+struct Tainted;        ///< El valor quedo contaminado por lo de arriba.
+struct CreatesEnv;     ///< La funcion crea un entorno de closure.
+struct IsYielder;      ///< ... y la que cede el paso.
+struct Ownable;        ///< ... y de la que se puede tomar propiedad.
+struct IsConstDef;     ///< La definicion del valor es una constante.
+struct Unreachable;    ///< Bloque al que no se llega desde la entrada.
 } // namespace scratch
 
 /**
@@ -177,7 +178,8 @@ struct Unreachable;       ///< Bloque al que no se llega desde la entrada.
 template <typename Tag> using UsedMarks = util::NamedVector<uint8_t, Tag>;
 
 /// @brief Apunta que @p v se usa.  Fuera del pool no hay nada que apuntar.
-template <typename Tag> static void mark_used(UsedMarks<Tag> &used, IrValueId v) {
+template <typename Tag>
+static void mark_used(UsedMarks<Tag> &used, IrValueId v) {
     if (v < used.size()) used[v] = 1;
 }
 
@@ -2274,10 +2276,10 @@ static bool fold_strcat_impl(IrModule &mod) {
                 // dedupea, asi que dos `"aaa" + "bbb"` comparten entrada.
                 auto [pa, na] = mod.static_data.bytes_at(sa);
                 auto [pb, nb] = mod.static_data.bytes_at(sb);
-                /* Sin etiqueta a proposito: esto NO es estructura auxiliar, es el bufer que
-     * se ENTREGA a `intern_static_data`, y ese es un `std::vector<uint8_t>` de
-     * la API del modulo. */
-    std::vector<uint8_t> junto;
+                /* Sin etiqueta a proposito: esto NO es estructura auxiliar, es
+                 * el bufer que se ENTREGA a `intern_static_data`, y ese es un
+                 * `std::vector<uint8_t>` de la API del modulo. */
+                std::vector<uint8_t> junto;
                 junto.reserve(na + nb);
                 junto.insert(junto.end(), pa, pa + na);
                 junto.insert(junto.end(), pb, pb + nb);
@@ -2610,7 +2612,8 @@ std::vector<GcAllocSite> analyze_gc_escape(const IrFunction &fn,
             /* De QUE clase es el objeto: se pregunta al modulo, no se raja el
              * nombre del ayudante.  Con dos constructores el trozo de detras
              * del prefijo no es una clase, y el sitio se quedaba sin atribuir
-             * -- o sea, sin sustituir por escalares -- sin que nadie lo dijera. */
+             * -- o sea, sin sustituir por escalares -- sin que nadie lo dijera.
+             */
             const IrClass *cls = new_helper_class(mod, ins.func_name);
             if (cls == nullptr) continue;
             GcAllocSite s;
@@ -2846,10 +2849,10 @@ static bool escape_detect_gc_impl(IrFunction &fn, const IrModule &mod) {
     if (sites.empty()) return false;
     for (const auto &s : sites) {
         // Por el catalogo: el veredicto tambien lo lee una persona.
-        const std::string msg = vx::diag::format(
-            s.escapes ? "VXA120" : "VXA121",
-            {fn.name, s.class_name,
-             std::to_string(static_cast<unsigned>(s.dst))});
+        const std::string msg =
+            vx::diag::format(s.escapes ? "VXA120" : "VXA121",
+                             {fn.name, s.class_name,
+                              std::to_string(static_cast<unsigned>(s.dst))});
         std::fprintf(stderr, "%s\n", msg.c_str());
     }
     return false;
@@ -3029,8 +3032,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
         case IrOp::RET:
             /* ret.void: no debe retornar `this` ni un derivado. */
             for (auto v : ins.operands) {
-                if (v == this_vid ||
-                    (v < n_ctor_values && is_field_addr[v]))
+                if (v == this_vid || (v < n_ctor_values && is_field_addr[v]))
                     return bail("VXA107");
             }
             break;
@@ -3093,8 +3095,7 @@ bool sr_build_ctor_model(const IrModule &mod, const std::string &class_name,
             } else if (pidx >= 1) {
                 fi.kind = SrFieldInit::PARAM;
                 fi.new_arg_index = pidx - 1;
-                if (val >= ctor->values.size())
-                    return bail("VXA115");
+                if (val >= ctor->values.size()) return bail("VXA115");
                 fi.field_type = ctor->values[val].type;
             } else {
                 if (val >= n_ctor_values || !is_const_val[val])
@@ -3165,9 +3166,8 @@ inline void sr_forward_mem_marks(IrFunction &fn, IrValueId load_dst,
  *
  * @return true si la reescritura es posible / se aplico; false -> abortar.
  */
-bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi,
-                     IrValueList args, IrFunction &fn,
-                     bool apply) {
+bool sr_rewrite_load(IrInstr &ld, const SrFieldInit &fi, IrValueList args,
+                     IrFunction &fn, bool apply) {
     const IrType T = ld.type; /* tipo leido del campo */
     /* Solo enteros por ahora (float/ptr/handle -> abortar, conservador). */
     if (!type_is_integer(T)) return false;
@@ -4008,11 +4008,10 @@ done_call:;
  * @param const_of      Recibe, por identificador de valor, el inmediato.
  * @param is_const_def  Recibe si ese identificador lo define un @c CONST.
  */
-static void build_const_index(const IrFunction &fn,
-                              util::NamedVector<uint64_t, scratch::ConstOfValue>
-                                  &const_of,
-                              util::NamedVector<char, scratch::IsConstDef>
-                                  &is_const_def) {
+static void
+build_const_index(const IrFunction &fn,
+                  util::NamedVector<uint64_t, scratch::ConstOfValue> &const_of,
+                  util::NamedVector<char, scratch::IsConstDef> &is_const_def) {
     const_of.assign(fn.values.size(), 0);
     is_const_def.assign(fn.values.size(), 0);
     for (const auto &b : fn.blocks)
@@ -4037,14 +4036,11 @@ static void build_const_index(const IrFunction &fn,
  * @param out_k         Recibe el inmediato si lo hay.
  * @return true si @p v es constante.
  */
-static bool const_value_indexed(const IrFunction &fn,
-                                const util::NamedVector<uint64_t,
-                                                        scratch::ConstOfValue>
-                                    &const_of,
-                                const util::NamedVector<char,
-                                                        scratch::IsConstDef>
-                                    &is_const_def,
-                                IrValueId v, uint64_t &out_k) {
+static bool const_value_indexed(
+    const IrFunction &fn,
+    const util::NamedVector<uint64_t, scratch::ConstOfValue> &const_of,
+    const util::NamedVector<char, scratch::IsConstDef> &is_const_def,
+    IrValueId v, uint64_t &out_k) {
     if (v == IR_NO_VALUE || v >= fn.values.size()) return false;
     if (fn.values[v].is_const) {
         out_k = fn.values[v].const_val;
@@ -4130,7 +4126,7 @@ static bool scalar_replace_gc_impl(IrFunction &fn, const IrModule &mod) {
         if (site.ins_idx >= seed_blk.instrs.size()) continue;
         IrInstr &call_ins = seed_blk.instrs[site.ins_idx];
         if (call_ins.op != IrOp::CALL || call_ins.dst != obj) continue;
-        const IrOperands args = call_ins.operands; /* copia */
+        const IrOperands args = call_ins.operands;        /* copia */
         if (args.size() != model->num_new_args) continue; /* arity mismatch */
 
         /* --- Recolectar TODOS los usos de obj.  Deben ser solo
@@ -4676,7 +4672,8 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
      * tablas hash: son del tamano de la funcion y se consultan una vez por
      * operando, que es el camino caliente de este pase. */
     constexpr int32_t kNoSite = -1;
-    util::NamedVector<int32_t, scratch::SiteOfValue> site_of(fn.values.size(), kNoSite);
+    util::NamedVector<int32_t, scratch::SiteOfValue> site_of(fn.values.size(),
+                                                             kNoSite);
     for (size_t si = 0; si < sites.size(); ++si)
         if (sites[si].base < site_of.size())
             site_of[sites[si].base] = static_cast<int32_t>(si);
@@ -4689,8 +4686,10 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
      * no la frase deja esto en un puntero por sitio. */
     std::vector<const char *> why(sites.size(), "VXA087");
     /* Que sitio posee cada field-addr, y con que desplazamiento. */
-    util::NamedVector<int32_t, scratch::FieldSiteOf> fa_site(fn.values.size(), kNoSite);
-    util::NamedVector<uint32_t, scratch::FieldOffsetOf> fa_off(fn.values.size(), 0);
+    util::NamedVector<int32_t, scratch::FieldSiteOf> fa_site(fn.values.size(),
+                                                             kNoSite);
+    util::NamedVector<uint32_t, scratch::FieldOffsetOf> fa_off(fn.values.size(),
+                                                               0);
     /* Y la lista por sitio, para poder armar su mapa sin recorrer la funcion
      * otra vez al final. */
     std::vector<std::vector<std::pair<IrValueId, uint32_t>>> fa_by_site(
@@ -4724,8 +4723,7 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
                 if (s == kNoSite || !ok[s]) continue;
                 const IrValueId base = v;
                 if (in.op == IrOp::ADD && in.operands.size() == 2 &&
-                    in.dst != IR_NO_VALUE &&
-                    in.operands[0] != in.operands[1]) {
+                    in.dst != IR_NO_VALUE && in.operands[0] != in.operands[1]) {
                     const IrValueId other = (in.operands[0] == base)
                                                 ? in.operands[1]
                                                 : in.operands[0];
@@ -4800,7 +4798,8 @@ static bool sroa_stack_structs_impl(IrFunction &fn) {
             if (dbg) {
                 const std::string motivo = vx::diag::format(why[si], {});
                 const std::string msg = vx::diag::format(
-                    "VXA094", {fn.name, std::to_string((unsigned)base), motivo});
+                    "VXA094",
+                    {fn.name, std::to_string((unsigned)base), motivo});
                 std::fprintf(stderr, "%s\n", msg.c_str());
             }
             continue;
@@ -5077,7 +5076,8 @@ static bool narrow_cmp_impl(IrFunction &fn) {
     // Mapa de definiciones: por cada value, si es SEXT/ZEXT (con su fuente +
     // ancho) o CONST (con su valor).
     std::vector<IrValueId> ext_src(nv, IR_NO_VALUE);
-    util::NamedVector<uint8_t, scratch::ExtKind> ext_kind(nv, 0); // 1=SEXT, 2=ZEXT
+    util::NamedVector<uint8_t, scratch::ExtKind> ext_kind(nv,
+                                                          0); // 1=SEXT, 2=ZEXT
     std::vector<IrType> src_type(nv, IrType::I64);
     util::NamedVector<int64_t, scratch::NarrowCmpConst> cval(nv, 0);
     util::NamedVector<uint8_t, scratch::ExtIsConst> is_c(nv, 0);
@@ -5280,7 +5280,8 @@ struct PassTimer : util::CronoTramo {
  * inicializa con lo que esto devuelve.  Recorre el modulo entero y no llevaba
  * cronometro, asi que su coste caia en el saco sin atribuir del optimizador.
  */
-static analysis::effects::NativeDecls collect_native_decls_timed(IrModule &mod) {
+static analysis::effects::NativeDecls
+collect_native_decls_timed(IrModule &mod) {
     PassTimer c__("opt:collect_native_decls");
     return analysis::effects::collect_native_decls({&mod});
 }
@@ -5665,7 +5666,8 @@ static bool simplify_impl(IrFunction &fn) {
                  * normalizacion: el valor se imprimia bien -- ese camino
                  * trunca -- y mentia al compararse.
                  *
-                 * Con 64 bits si es identidad: no hay bits de mas que quitar. */
+                 * Con 64 bits si es identidad: no hay bits de mas que quitar.
+                 */
                 if (from_t == ins.type && type_slot_bytes(ins.type) == 8) {
                     rewrite_as_mov(ins, ins.operands[0]);
                     changed = true;
@@ -6358,13 +6360,15 @@ FactsTable &facts_scratch() {
  * ---------------------------------------------------------------------- */
 namespace {
 std::atomic<long long> g_rc_values{0};   ///< valores mirados
-std::atomic<long long> g_rc_opt_only{0};  ///< solo el optimizador acota
-std::atomic<long long> g_rc_asa_only{0};  ///< solo el ASA acota
-std::atomic<long long> g_rc_equal{0};   ///< el mismo intervalo
-std::atomic<long long> g_rc_opt_tighter{0}; ///< el del optimizador, mas estrecho
+std::atomic<long long> g_rc_opt_only{0}; ///< solo el optimizador acota
+std::atomic<long long> g_rc_asa_only{0}; ///< solo el ASA acota
+std::atomic<long long> g_rc_equal{0};    ///< el mismo intervalo
+std::atomic<long long> g_rc_opt_tighter{
+    0}; ///< el del optimizador, mas estrecho
 std::atomic<long long> g_rc_asa_tighter{0}; ///< el del ASA, mas estrecho
-std::atomic<long long> g_rc_crossed{0};  ///< cada uno estrecha por un lado
-std::atomic<long long> g_rc_contradict{0};    ///< NO se solapan: uno de los dos miente
+std::atomic<long long> g_rc_crossed{0};     ///< cada uno estrecha por un lado
+std::atomic<long long> g_rc_contradict{
+    0}; ///< NO se solapan: uno de los dos miente
 /// El ASA lo acota, pero con otro ancho: NO se puede comparar, y sobre todo NO
 /// es un valor que se le escape.
 std::atomic<long long> g_rc_other_width{0};
@@ -6706,9 +6710,7 @@ static void compute_value_facts_into(const IrFunction &fn, FactsTable &facts) {
 // valdria -- el pase es compartido, los 3 backends coincidirian aun mal).
 // Impl interna: opera sobre ValueFacts YA computados (los comparte el runner
 // de consumidores para no recalcular).  El wrapper publico los computa.
-static bool
-elim_casts_with_facts(IrFunction &fn,
-                      const FactsTable &facts) {
+static bool elim_casts_with_facts(IrFunction &fn, const FactsTable &facts) {
     /* Aqui el estrechable tiene que llevar SIGNO, a diferencia del resto del
      * fichero: este pase razona sobre extensiones con signo, y admitir los u*
      * cambiaria lo que elimina.  Se escribe sobre el vocabulario unico en vez
@@ -6895,8 +6897,7 @@ inline int cmp_implies(IrOp krel, IrOp qop) {
 // una over-aproximacion, asi que `a.hi < b.lo` implica a < b para TODOS los
 // valores reales.  Solo enteros con signo (los rangos son i64 con signo); los
 // CMP_U* se dejan (su semantica unsigned no encaja con el rango signed).
-static bool fold_compares_with_facts(
-    IrFunction &fn, const FactsTable &facts) {
+static bool fold_compares_with_facts(IrFunction &fn, const FactsTable &facts) {
     auto facts_of = [&](IrValueId v) -> ValueFacts { return facts.get(v); };
     constexpr uint64_t SIGN = 1ULL << 63; // bit de signo del registro i64
     // Un valor es provablemente no-negativo si su bit de signo es known-zero o
@@ -7190,8 +7191,7 @@ PassResult ir_pass_fold_compares(IrFunction &fn) {
 }
 
 // Fwd: strength reduction que consume ValueFacts (definida mas abajo).
-static bool strength_reduce_with_facts(
-    IrFunction &fn, const FactsTable &facts);
+static bool strength_reduce_with_facts(IrFunction &fn, const FactsTable &facts);
 
 // Runner de los consumidores de ValueFacts: computa el analisis UNA vez y lo
 // comparte; solo lo RECOMPUTA (invalida) si un consumidor muto el IR.  Es el
@@ -7222,9 +7222,8 @@ static bool strength_reduce_with_facts(
 // Es una optimizacion PURA: si el rango no dice nada, la normalizacion se
 // queda.  Quitar de menos solo cuesta velocidad; no hay forma de que
 // produzca un resultado equivocado.
-static bool
-elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
-                       const analysis::DemandedBits &demanded) {
+static bool elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
+                                   const analysis::DemandedBits &demanded) {
     if (fn.blocks.empty()) return false;
 
     /* Quien define cada valor, para llegar de la normalizacion a la cuenta
@@ -7362,7 +7361,8 @@ elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
                     in.op == IrOp::MUL) &&
                    in.dst != IR_NO_VALUE && in.dst < fn.values.size();
         };
-        /* Que normalizacion tiene cada cuenta, tras las dos reglas de arriba. */
+        /* Que normalizacion tiene cada cuenta, tras las dos reglas de arriba.
+         */
         std::unordered_map<IrValueId, IrValueId> norm_of;
         for (const auto &bb : fn.blocks)
             for (const auto &in : bb.instrs)
@@ -7404,10 +7404,10 @@ elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
                         if (in.dst == IR_NO_VALUE || in.dst >= fn.values.size())
                             continue;
                         if (in.op == IrOp::TRUNC) continue; // limpia
-                        const bool cleans =
-                            is_narrow_arith(in) && norm_of.count(in.dst) != 0 &&
-                            sink.count(norm_of[in.dst]) == 0 &&
-                            replace.count(norm_of[in.dst]) == 0;
+                        const bool cleans = is_narrow_arith(in) &&
+                                            norm_of.count(in.dst) != 0 &&
+                                            sink.count(norm_of[in.dst]) == 0 &&
+                                            replace.count(norm_of[in.dst]) == 0;
                         if (cleans) continue;
                         bool any = false;
                         for (IrValueId o : in.operands)
@@ -7436,8 +7436,7 @@ elide_narrow_norm_impl(IrFunction &fn, analysis::RangeQuery &ranges,
                      ++ii) {
                     const IrInstr &in = bb.instrs[ii];
                     if (in.op == IrOp::TRUNC && in.operands.size() == 1 &&
-                        in.dst != IR_NO_VALUE &&
-                        sink.count(in.dst) != 0)
+                        in.dst != IR_NO_VALUE && sink.count(in.dst) != 0)
                         continue; // la que se va
                     const bool tolerates =
                         is_narrow_arith(in) || in.op == IrOp::PHI;
@@ -7731,8 +7730,8 @@ static bool valuefacts_consumers_impl(IrFunction &fn) {
     return c1 || c2 || c3 || c4;
 }
 
-static bool strength_reduce_with_facts(
-    IrFunction &fn, const FactsTable &facts) {
+static bool strength_reduce_with_facts(IrFunction &fn,
+                                       const FactsTable &facts) {
     bool changed = false;
     constexpr uint64_t SR_SIGN = 1ULL << 63; // bit de signo del registro i64
     // Un dividendo es provablemente no-negativo si su bit de signo es
@@ -8060,7 +8059,8 @@ static bool reassoc_impl(IrFunction &fn) {
     while (p < pending.size()) {
         const size_t bi = pending[p].bb_idx;
         size_t q = p;
-        while (q < pending.size() && pending[q].bb_idx == bi) ++q;
+        while (q < pending.size() && pending[q].bb_idx == bi)
+            ++q;
 
         auto &bb = fn.blocks[bi];
         std::vector<IrInstr> &woven = scratch.woven;
@@ -8075,7 +8075,8 @@ static bool reassoc_impl(IrFunction &fn) {
             woven.push_back(std::move(bb.instrs[i]));
         }
         // Y lo que quedara pedido para el final del bloque.
-        while (k < q) woven.push_back(std::move(pending[k++].instr));
+        while (k < q)
+            woven.push_back(std::move(pending[k++].instr));
         bb.instrs.swap(woven);
         p = q;
     }
@@ -8469,7 +8470,8 @@ static bool model_removable(const IrFunction &fn,
     return !e.mem.writes.locs.empty();
 }
 
-static bool dce_impl(IrFunction &fn, const analysis::effects::NativeDecls *decls,
+static bool dce_impl(IrFunction &fn,
+                     const analysis::effects::NativeDecls *decls,
                      const analysis::AsmBindingFacts *asm_bindings,
                      DceEffectsCache *cache, const analysis::IrFacts *facts,
                      const analysis::PointsTo *pt,
@@ -10190,7 +10192,8 @@ struct KeyBuilder {
             buf[n++] = static_cast<char>('0' + (v % 10));
             v /= 10;
         } while (v != 0);
-        while (n > 0) s += buf[--n];
+        while (n > 0)
+            s += buf[--n];
     }
 
     /// @brief Anade el separador de campos.
@@ -12606,8 +12609,7 @@ static bool spec_devirt_impl(IrFunction &fn) {
         const IrInstr callins = fn.blocks[bidx].instrs[i];
         const IrType rtype = callins.type;
         const IrValueId orig_dst = callins.dst;
-        const IrOperands ops =
-            callins.operands; /* [obj, (meta), args...] */
+        const IrOperands ops = callins.operands; /* [obj, (meta), args...] */
         const uint32_t srcline = callins.source_line;
         if (ops.empty()) continue; /* sin receptor: no especulable */
 
@@ -12828,7 +12830,8 @@ static bool load_narrow_impl(IrFunction &fn) {
      * Dos pasadas, contar y llenar, que es lo que ya hace @c UseDefFacts.  El
      * truco del final: al llenar con `use_end[v]++`, cada entrada acaba
      * apuntando al FINAL de su valor, asi que el principio de `v` es el final
-     * del anterior.  De ahi que se llame `use_end` y que el primero sea cero. */
+     * del anterior.  De ahi que se llame `use_end` y que el primero sea cero.
+     */
     const size_t n_values = fn.values.size();
     util::NamedVector<uint32_t, scratch::LoadNarrowUses> use_end(n_values + 1,
                                                                  0);
@@ -14358,7 +14361,9 @@ util::ThreadOwned<AcumuladorPases> g_pass_accumulators;
 
 /// El acumulador de ESTE hilo.  Se da de alta la primera vez y ya no vuelve a
 /// tocar el cerrojo.
-AcumuladorPases &acumulador_pases() { return g_pass_accumulators.get(); }
+AcumuladorPases &acumulador_pases() {
+    return g_pass_accumulators.get();
+}
 
 /// Suma de todos los hilos, para quien pregunte por el total.
 /* Cuantos HILOS aportaron a cada pase.  Se cuenta al sumar porque es el unico
@@ -14492,7 +14497,7 @@ using LocalSeen =
         const bool cambio__ = applied(PASE(llamada));                          \
         if (cambio__) any.store(true, std::memory_order_relaxed);              \
         dirty = dirty || cambio__;                                             \
-        effects_dirty = effects_dirty || cambio__;                           \
+        effects_dirty = effects_dirty || cambio__;                             \
     } while (0)
 
 /**
@@ -14588,8 +14593,10 @@ void ranges_compared_report() {
     const long long solo_opt = g_rc_opt_only.load(std::memory_order_relaxed);
     const long long solo_asa = g_rc_asa_only.load(std::memory_order_relaxed);
     const long long iguales = g_rc_equal.load(std::memory_order_relaxed);
-    const long long opt_mejor = g_rc_opt_tighter.load(std::memory_order_relaxed);
-    const long long asa_mejor = g_rc_asa_tighter.load(std::memory_order_relaxed);
+    const long long opt_mejor =
+        g_rc_opt_tighter.load(std::memory_order_relaxed);
+    const long long asa_mejor =
+        g_rc_asa_tighter.load(std::memory_order_relaxed);
     const long long cruzados = g_rc_crossed.load(std::memory_order_relaxed);
     const long long contra = g_rc_contradict.load(std::memory_order_relaxed);
     std::fprintf(stderr,
@@ -14794,8 +14801,9 @@ PassResult ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt,
     return PassResult::of(fn, licm_impl(fn, pt, pure_callees));
 }
 
-PassResult ir_pass_speculative_devirt(IrFunction &fn,
-                                      const std::vector<SpecDevirtSite> &sites) {
+PassResult
+ir_pass_speculative_devirt(IrFunction &fn,
+                           const std::vector<SpecDevirtSite> &sites) {
     return PassResult::of(fn, speculative_devirt_impl(fn, sites));
 }
 
@@ -15191,8 +15199,7 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         return *am.get_or_compute_v<
             analysis::RangeAnalysis,
             std::shared_ptr<const analysis::RangeFacts>>(
-            fn.name_key(), fn.version,
-            [&]() {
+            fn.name_key(), fn.version, [&]() {
                 const analysis::RangeRequester mark(
                     analysis::RangeAsker::Optimizer);
                 return analysis::compute_ranges_ptr(
@@ -15336,7 +15343,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                  * dentro se reparte entre hilos: cada tarea hasheaba un nombre
                  * manglado dos veces sobre estructuras compartidas para hacer
                  * cinco microsegundos de trabajo.  Con el indice no hay hash,
-                 * no hay busqueda, y cada hilo escribe en su propia posicion. */
+                 * no hay busqueda, y cada hilo escribe en su propia posicion.
+                 */
                 const size_t fi =
                     static_cast<size_t>(&fn - mod.functions.data());
                 uint8_t &dirty = dirty_of[fi];
@@ -15596,7 +15604,8 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
                     /* Sospechoso principal: corre POR FUNCION y recibe el
                      * MODULO entero.  Si mira mas alla de `fn`, el coste es
                      * funciones x modulo, o sea cuadratico. */
-                    PassTimer c__("  x-mod:scalar_replace_gc (per fn, sees module)");
+                    PassTimer c__(
+                        "  x-mod:scalar_replace_gc (per fn, sees module)");
                     for (auto &fn : mod.functions) {
                         if (fn.is_native) continue;
                         if (applied(ir_pass_scalar_replace_gc(fn, mod)))
@@ -15858,9 +15867,9 @@ void ir_optimize(IrModule &mod, OptLevel level, bool allow_inline,
         const auto c = am.counts();
         const long long total = c.hits + c.stale + c.fresh;
         /* Y lo que se ESPERO por entrar, separado por cerrojo.  Las cuentas de
-         * arriba dicen si cachear sirve; estas dos dicen si el mecanismo se come
-         * la ganancia haciendo cola -- y con VEINTICUATRO hilos preguntando por
-         * su funcion, medido, era mas de la mitad del CPU --.
+         * arriba dicen si cachear sirve; estas dos dicen si el mecanismo se
+         * come la ganancia haciendo cola -- y con VEINTICUATRO hilos
+         * preguntando por su funcion, medido, era mas de la mitad del CPU --.
          *
          * En milisegundos y SUMADAS sobre los hilos, que es lo que son: si un
          * numero aqui pasa del tiempo de pared de la fase, no es un error, es

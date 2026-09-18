@@ -66,8 +66,8 @@ uint64_t class_mask_win(CoreClass which) {
                                                                            off);
             if (info->Size == 0) break; // no avanzaria: parar antes de girar
             if (info->Relationship == RelationProcessorCore) {
-                const unsigned ec =
-                    reinterpret_cast<const unsigned char *>(&info->Processor)[1];
+                const unsigned ec = reinterpret_cast<const unsigned char *>(
+                    &info->Processor)[1];
                 if (pass == 0) {
                     if (ec > best) best = ec;
                     if (ec < worst) worst = ec;
@@ -121,14 +121,17 @@ uint64_t class_mask_linux(CoreClass which) {
             continue;
         }
         unsigned a = 0;
-        while (*p >= '0' && *p <= '9') a = a * 10u + (unsigned)(*p++ - '0');
+        while (*p >= '0' && *p <= '9')
+            a = a * 10u + (unsigned)(*p++ - '0');
         unsigned b = a;
         if (*p == '-') {
             ++p;
             b = 0;
-            while (*p >= '0' && *p <= '9') b = b * 10u + (unsigned)(*p++ - '0');
+            while (*p >= '0' && *p <= '9')
+                b = b * 10u + (unsigned)(*p++ - '0');
         }
-        for (unsigned c = a; c <= b && c < 64u; ++c) acc |= (uint64_t)1 << c;
+        for (unsigned c = a; c <= b && c < 64u; ++c)
+            acc |= (uint64_t)1 << c;
     }
     return acc;
 }

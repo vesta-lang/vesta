@@ -721,8 +721,8 @@ static void call_program_allocator(ProcessVM *vm, uint64_t fn_addr,
     for (int i = 0; i < 16; ++i)
         saved[i] = vm->registers.regs[i].qword();
     vm->registers.regs[R01].qword(arg); // convencion de llamada de la VM
-    auto fn = reinterpret_cast<uint64_t (*)(void *)>(
-        static_cast<uintptr_t>(fn_addr));
+    auto fn =
+        reinterpret_cast<uint64_t (*)(void *)>(static_cast<uintptr_t>(fn_addr));
     fn(vm);
     const uint64_t result = vm->registers.regs[R00].qword();
     for (int i = 0; i < 16; ++i)

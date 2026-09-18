@@ -109,7 +109,9 @@ inline uint16_t cursor_dump_len(const runtime::InstrCursor &c) {
  * median cada cuanto el reloj se dignaba a saltar.  Ademas se lee mas barato,
  * y se lee dos veces por instruccion.
  */
-inline uint64_t now_ticks() { return util::reloj::ahora(); }
+inline uint64_t now_ticks() {
+    return util::reloj::ahora();
+}
 
 /**
  * @brief Nanosegundos transcurridos desde la marca @p t1.
@@ -1251,9 +1253,9 @@ void decode_instr_calln(const InstrCursor &c, DecodedInstr &instr) {
  * Solo los cuatro binarios de coma flotante (`fadd`, `fsub`, `fmul`, `fdiv`,
  * extendidos 0xF1..0xF4) la tienen.  Preguntarlo AQUI ahorra una llamada entre
  * unidades de traduccion por cada instruccion extendida descodificada -- que
- * son casi todas -- para que la respuesta sea `nullptr`: `float_exec_specialized`
- * vive en `exec_instruction_float.cpp`, asi que no se puede incrustar y el
- * compilador tiene que montar la llamada entera.
+ * son casi todas -- para que la respuesta sea `nullptr`:
+ * `float_exec_specialized` vive en `exec_instruction_float.cpp`, asi que no se
+ * puede incrustar y el compilador tiene que montar la llamada entera.
  *
  * La resta sin signo hace el rango en UNA comparacion: cualquier opcode por
  * debajo de 0xF1 se envuelve a un numero grande.
@@ -1396,8 +1398,7 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out,
          * "funciona" convierte un error en un resultado equivocado, y este no
          * fallaba en ningun sitio -- daba `R0 = 0` donde tocaba 30769 --. */
         for (size_t i = 0; i < INSTR_BYTES_MAX; ++i) {
-            const uint8_t *p =
-                process->vm_mem.host_ptr_readonly(pc + i, *view);
+            const uint8_t *p = process->vm_mem.host_ptr_readonly(pc + i, *view);
             if (p == nullptr) return false; // no se sabe: no se adelanta nada
             buf[i] = *p;
         }
@@ -1434,8 +1435,7 @@ bool decode_peek(ProcessVM *process, uint64_t pc, DecodedInstr &out,
  * sigue existiendo para ellos.  Con dos instanciaciones no hay que elegir: la
  * del planificador no lleva ni la busqueda ni la rama.
  */
-template <bool AlreadyMissed>
-static void decode_impl(ProcessVM *process) {
+template <bool AlreadyMissed> static void decode_impl(ProcessVM *process) {
     const bool measuring =
         process->scheduler.has_hooks; // activar medicion solo si hay hooks
     vm_hook(process, DebugStage::DecodeBegin); // hook de inicio de fase
@@ -1450,17 +1450,17 @@ static void decode_impl(ProcessVM *process) {
     // resultado anterior. Importante: la icache no detecta modificaciones en
     // tiempo de ejecucion del codigo.
     if constexpr (!AlreadyMissed) {
-    DecodedInstr *cached = icache_lookup(process, pc);
-    if (cached != nullptr && process->decoded_ptr != nullptr) {
-        process->decoded_ptr = cached; // apuntar al cache sin copiar
+        DecodedInstr *cached = icache_lookup(process, pc);
+        if (cached != nullptr && process->decoded_ptr != nullptr) {
+            process->decoded_ptr = cached; // apuntar al cache sin copiar
 
-        if (measuring)
-            process->scheduler.time_decode += elapsed_ns(t1); // acumular
+            if (measuring)
+                process->scheduler.time_decode += elapsed_ns(t1); // acumular
 
-        PROFILE_END("DECODER");
-        vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
-        return;
-    }
+            PROFILE_END("DECODER");
+            vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
+            return;
+        }
     }
 
 #if VM_BUNDLES
@@ -1496,74 +1496,78 @@ static void decode_impl(ProcessVM *process) {
                 process->ooo_decode_hits = 0;
             }
         } else {
-        DecodedInstr pre;
-        const bool hit = predecode_probe(pc, pre);
-        /* La PRUEBA: acierta bastante como para compensar?
-         *
-         * Cada consulta fallida cuesta una linea de cache que el ayudante esta
-         * escribiendo, asi que fallar mucho es peor que no intentarlo.  Se
-         * decide con el dato al cerrar la ventana, no antes. */
-        process->ooo_decode_hits += hit ? 1u : 0u;
-        if (__builtin_expect(++process->ooo_decode_probe >=
-                                 ProcessVM::kDecodeProbe,
-                             0)) {
-            // La mitad.  Por debajo, la linea disputada se come lo que ahorra.
-            if (process->ooo_decode_hits * 2 >= process->ooo_decode_probe) {
-                // Compensa: se sigue, y el proximo reintento vuelve a ser corto.
-                process->ooo_decode_backoff = 0;
-            } else {
-                process->ooo_try_decode = false;
-                process->ooo_decode_backoff =
-                    process->ooo_decode_backoff == 0
-                        ? ProcessVM::kDecodeRetry
-                        : (process->ooo_decode_backoff <
-                                   ProcessVM::kDecodeRetryMax / 2
-                               ? process->ooo_decode_backoff * 2
-                               : ProcessVM::kDecodeRetryMax);
-                process->ooo_decode_wait = process->ooo_decode_backoff;
+            DecodedInstr pre;
+            const bool hit = predecode_probe(pc, pre);
+            /* La PRUEBA: acierta bastante como para compensar?
+             *
+             * Cada consulta fallida cuesta una linea de cache que el ayudante
+             * esta escribiendo, asi que fallar mucho es peor que no intentarlo.
+             * Se decide con el dato al cerrar la ventana, no antes. */
+            process->ooo_decode_hits += hit ? 1u : 0u;
+            if (__builtin_expect(++process->ooo_decode_probe >=
+                                     ProcessVM::kDecodeProbe,
+                                 0)) {
+                // La mitad.  Por debajo, la linea disputada se come lo que
+                // ahorra.
+                if (process->ooo_decode_hits * 2 >= process->ooo_decode_probe) {
+                    // Compensa: se sigue, y el proximo reintento vuelve a ser
+                    // corto.
+                    process->ooo_decode_backoff = 0;
+                } else {
+                    process->ooo_try_decode = false;
+                    process->ooo_decode_backoff =
+                        process->ooo_decode_backoff == 0
+                            ? ProcessVM::kDecodeRetry
+                            : (process->ooo_decode_backoff <
+                                       ProcessVM::kDecodeRetryMax / 2
+                                   ? process->ooo_decode_backoff * 2
+                                   : ProcessVM::kDecodeRetryMax);
+                    process->ooo_decode_wait = process->ooo_decode_backoff;
+                }
+                process->ooo_decode_probe = 0;
+                process->ooo_decode_hits = 0;
             }
-            process->ooo_decode_probe = 0;
-            process->ooo_decode_hits = 0;
-        }
-        if (hit) {
-            /* Se instala igual que el camino normal, incluida la ranura de
-             * reserva cuando la victima es la que se esta ejecutando: eso no lo
-             * puede saltar nadie, ni siquiera un camino mas rapido. */
-            DecodedInstr *slot_pre = icache_victim(process, pc);
-            if (slot_pre == nullptr) slot_pre = &process->decoded_scratch;
+            if (hit) {
+                /* Se instala igual que el camino normal, incluida la ranura de
+                 * reserva cuando la victima es la que se esta ejecutando: eso
+                 * no lo puede saltar nadie, ni siquiera un camino mas rapido.
+                 */
+                DecodedInstr *slot_pre = icache_victim(process, pc);
+                if (slot_pre == nullptr) slot_pre = &process->decoded_scratch;
 #if VM_BUNDLES && ICACHE_HEAD_SHIFT
-            /* Lo mismo que hace el camino normal, y por lo mismo: si lo que se
-             * va a pisar era la CABECERA de un paquete de otra direccion, esta
-             * ranura esta disputada y hay que apuntarlo ANTES de pisarla. */
-            const bool was_bundle_head_pre =
-                (slot_pre != &process->decoded_scratch) &&
-                slot_pre->pc != pc && slot_pre->exec_cached == &exec_bundle;
+                /* Lo mismo que hace el camino normal, y por lo mismo: si lo que
+                 * se va a pisar era la CABECERA de un paquete de otra
+                 * direccion, esta ranura esta disputada y hay que apuntarlo
+                 * ANTES de pisarla. */
+                const bool was_bundle_head_pre =
+                    (slot_pre != &process->decoded_scratch) &&
+                    slot_pre->pc != pc && slot_pre->exec_cached == &exec_bundle;
 #endif
-            *slot_pre = pre;
+                *slot_pre = pre;
 #if VM_BUNDLES && ICACHE_HEAD_SHIFT
-            if (was_bundle_head_pre) process->icache_head_clash = pc;
+                if (was_bundle_head_pre) process->icache_head_clash = pc;
 #endif
 #if VM_BUNDLES
-            /* Y FORMAR PAQUETE, que es lo que el camino normal hace justo
-             * despues de instalar.
-             *
-             * Saltarselo no era solo perder el paquete: la entrada queda como
-             * una instruccion suelta donde el resto del sistema espera poder
-             * encontrar una cabecera, y eso es un estado que el camino normal
-             * no produce nunca.  Un atajo tiene que dejar el mismo estado que
-             * el camino que ataja, no uno parecido. */
-            bundle_try_form(process, slot_pre, pc);
+                /* Y FORMAR PAQUETE, que es lo que el camino normal hace justo
+                 * despues de instalar.
+                 *
+                 * Saltarselo no era solo perder el paquete: la entrada queda
+                 * como una instruccion suelta donde el resto del sistema espera
+                 * poder encontrar una cabecera, y eso es un estado que el
+                 * camino normal no produce nunca.  Un atajo tiene que dejar el
+                 * mismo estado que el camino que ataja, no uno parecido. */
+                bundle_try_form(process, slot_pre, pc);
 #endif
-            process->decoded_ptr = slot_pre;
+                process->decoded_ptr = slot_pre;
+                if (process->bundle_stats_on)
+                    ++process->bundle_stats.predecode_hits;
+                if (measuring) process->scheduler.time_decode += elapsed_ns(t1);
+                PROFILE_END("DECODER");
+                vm_hook(process, DebugStage::DecodeEnd);
+                return;
+            }
             if (process->bundle_stats_on)
-                ++process->bundle_stats.predecode_hits;
-            if (measuring) process->scheduler.time_decode += elapsed_ns(t1);
-            PROFILE_END("DECODER");
-            vm_hook(process, DebugStage::DecodeEnd);
-            return;
-        }
-        if (process->bundle_stats_on)
-            ++process->bundle_stats.predecode_misses;
+                ++process->bundle_stats.predecode_misses;
         }
     }
 #endif
@@ -1650,9 +1654,8 @@ static void decode_impl(ProcessVM *process) {
     // Ver el otro sitio que rellena `exec_cached`, mas arriba en este fichero.
     if (has_float_variant(decode_tmp.flags_info.opcode_index,
                           decode_tmp.flags_info.is_not_extended)) {
-        if (auto *esp =
-                float_exec_specialized(decode_tmp.flags_info.opcode_index,
-                                       decode_tmp.flags_info.mode))
+        if (auto *esp = float_exec_specialized(
+                decode_tmp.flags_info.opcode_index, decode_tmp.flags_info.mode))
             decode_tmp.exec_cached = esp;
     }
     cachear_estado_de_runtime(process, metadata, decode_tmp);
@@ -1678,9 +1681,9 @@ static void decode_impl(ProcessVM *process) {
      * Tiene que ser aqui y no alli: cuando `bundle_try_form` corre, la entrada
      * YA se reclamo para el `pc` nuevo y el ocupante anterior se perdio.  Se
      * intento comprobarlo alli primero y no se disparaba ni una vez. */
-    const bool was_bundle_head =
-        (slot != &process->decoded_scratch) && slot->pc != pc &&
-        slot->exec_cached == &exec_bundle;
+    const bool was_bundle_head = (slot != &process->decoded_scratch) &&
+                                 slot->pc != pc &&
+                                 slot->exec_cached == &exec_bundle;
 #endif
     *slot = decode_tmp;
 
@@ -1707,7 +1710,9 @@ static void decode_impl(ProcessVM *process) {
     vm_hook(process, DebugStage::DecodeEnd); // hook de fin de fase
 }
 
-void decode_instruction(ProcessVM *process) { decode_impl<false>(process); }
+void decode_instruction(ProcessVM *process) {
+    decode_impl<false>(process);
+}
 
 void decode_instruction_after_miss(ProcessVM *process) {
     decode_impl<true>(process);

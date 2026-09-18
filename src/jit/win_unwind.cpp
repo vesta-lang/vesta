@@ -64,8 +64,8 @@ bool register_jit_unwind(uint8_t *code, size_t bytes, const MFunction &fn,
         return false;
     if (info.size() > sizeof(UnwindEntry::info)) return false;
 
-    auto *d = reinterpret_cast<UnwindEntry *>(
-        cc.alloc(sizeof(UnwindEntry), 16));
+    auto *d =
+        reinterpret_cast<UnwindEntry *>(cc.alloc(sizeof(UnwindEntry), 16));
     if (d == nullptr) return false;
     std::memset(d, 0, sizeof(*d));
     std::memcpy(d->info, info.data(), info.size());

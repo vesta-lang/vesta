@@ -137,8 +137,7 @@ struct LoopTripInfo {
  *                  el programa lo dice, no hace falta deducirlo.
  */
 LoopTripInfo compute_trip_count(const ir::IrFunction &fn,
-                                const DefBlockVec &def_block,
-                                const LoopIV &iv,
+                                const DefBlockVec &def_block, const LoopIV &iv,
                                 const RangeFacts *ranges = nullptr);
 
 } // namespace analysis

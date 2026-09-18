@@ -147,8 +147,8 @@
 #define VESTA_ANALYSIS_MANAGER_H
 
 #include "util/alloc/small_vector.h" // las listas de claves son de UNA
-#include "util/crono_tramo.h"  // el tramo de soltar las tablas
-#include "util/env_flags.h"    // medir la espera del cerrojo es OPCIONAL
+#include "util/crono_tramo.h"        // el tramo de soltar las tablas
+#include "util/env_flags.h"          // medir la espera del cerrojo es OPCIONAL
 #include "util/shared_mutex.h" // lector/escritor SIN la emulacion de pthreads
 #include "util/thread_owned.h" // un objeto por hilo, sin `thread_local`
 
@@ -381,9 +381,9 @@ class AnalysisManager {
          * la consulta solo LEE.  Es el caso normal dentro del bucle repartido,
          * y con cerrojo exclusivo era donde los hilos hacian cola. */
         Shard &sh = shard_of(unit);
-        /* Si ya se miro arriba no se vuelve a mirar: para una consulta caduca de
-         * nivel superior eran DOS busquedas y dos tomas del cerrojo para saber
-         * lo mismo. */
+        /* Si ya se miro arriba no se vuelve a mirar: para una consulta caduca
+         * de nivel superior eran DOS busquedas y dos tomas del cerrojo para
+         * saber lo mismo. */
         bool stale_now = false;
         bool already_looked = false;
         if (stack().empty()) {
@@ -426,8 +426,8 @@ class AnalysisManager {
                 T value = factory();
                 stack().pop_back();
                 /* Pudo aparecer mientras se calculaba -- otro hilo, o una
-                 * consulta anidada de la propia fabrica --.  Si lo que hay es de
-                 * OTRA version, hay que sacarlo con lo que dependia de el.
+                 * consulta anidada de la propia fabrica --.  Si lo que hay es
+                 * de OTRA version, hay que sacarlo con lo que dependia de el.
                  *
                  * Se MIRA con el compartido y se saca por `drop_key`, ANTES de
                  * tomar el exclusivo de la franja: sacarlo cascadea, y una
@@ -623,9 +623,9 @@ class AnalysisManager {
          * descubre tarde y caro cuando alguien compila un modulo grande. */
         /* Cascada: el de cascada PRIMERO y el de la franja despues, que es el
          * orden fijo que descarta el bloqueo mutuo.  @see cascade_m_ */
-        /* Primero el intento LOCAL, que es el caso comun: si todo lo que hay que
-         * sacar de esta unidad cascadea dentro de su franja, el cerrojo global no
-         * hace falta.  @see drop_within_shard */
+        /* Primero el intento LOCAL, que es el caso comun: si todo lo que hay
+         * que sacar de esta unidad cascadea dentro de su franja, el cerrojo
+         * global no hace falta.  @see drop_within_shard */
         {
             Shard &s = shard_of(unit);
             util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
@@ -834,8 +834,9 @@ class AnalysisManager {
         }
         /* La cascada, con la franja de @p k ya SOLTADA: un dependiente puede
          * vivir en la misma, y volver a pedir su cerrojo se autobloquearia
-         * (`SharedMutex` no es reentrante).  Soltar antes es seguro porque quien
-         * llama sigue teniendo el de cascada: nadie mas esta cascadeando. */
+         * (`SharedMutex` no es reentrante).  Soltar antes es seguro porque
+         * quien llama sigue teniendo el de cascada: nadie mas esta cascadeando.
+         */
         for (const Key &dep : deps)
             invalidate_key_locked(dep);
     }
@@ -858,9 +859,9 @@ class AnalysisManager {
          * mayoria dentro del bucle repartido -- solo leen.
          *
          * Y es el NUESTRO, no `std::shared_mutex`: en MinGW ese se apoya en la
-         * emulacion de pthreads, que SE ROMPE con hilos que nacen y mueren -- el
-         * lote de hilos por nivel de modulos --.  Se vio aqui, con los 23 hilos
-         * parados y la seccion critica VACIA, y se reprodujo fuera del
+         * emulacion de pthreads, que SE ROMPE con hilos que nacen y mueren --
+         * el lote de hilos por nivel de modulos --.  Se vio aqui, con los 23
+         * hilos parados y la seccion critica VACIA, y se reprodujo fuera del
          * compilador en una sonda de sesenta lineas: cambiando solo el tipo del
          * cerrojo, `std::shared_mutex` moria 5 de 5 y `std::mutex` pasaba 5 de
          * 5.  Ver `util/shared_mutex.h`. */
@@ -885,8 +886,8 @@ class AnalysisManager {
          * entradas compara mas rapido de lo que el otro hashea. */
         std::unordered_map<Key, RevDeps, KeyHash> rev_deps;
         /// Que analisis tiene cada unidad, para que invalidarla no obligue a
-        /// recorrer el gestor entero.  Indexado por el nombre INTERNADO, como la
-        /// clave: asi ni este indice copia cadenas.
+        /// recorrer el gestor entero.  Indexado por el nombre INTERNADO, como
+        /// la clave: asi ni este indice copia cadenas.
         /* EN LINEA, y con la capacidad que dice el comentario de arriba: son
          * un analisis por tipo.  Cada invalidacion vacia la lista de su unidad
          * y la siguiente vuelta la reconstruye, asi que ese "unas pocas" se
@@ -971,16 +972,16 @@ class AnalysisManager {
      * mas.  Solo se pasa por el cerrojo global cuando de verdad hay que seguir
      * dependencias, que es lo unico capaz de cruzar de franja.
      *
-     * Importa porque el camino de "caduco" es el 23 % de las consultas: tomar el
-     * cerrojo global en todas ellas cambia un cuello de botella por otro --
+     * Importa porque el camino de "caduco" es el 23 % de las consultas: tomar
+     * el cerrojo global en todas ellas cambia un cuello de botella por otro --
      * medido, eso solo dejaba la compilacion mas lenta que antes de trocear --.
      * Y las dependencias se apuntan SOLO en consultas anidadas, asi que la
      * inmensa mayoria de las claves no tiene ninguna.
      *
-     * Sin ventanas: cuando hay dependientes no se toca nada por el camino corto,
-     * se abandona y se hace TODO bajo el cerrojo de cascada.  Asi la cascada
-     * sigue siendo atomica, que es lo que evita servir un analisis que debia
-     * haberse invalidado.
+     * Sin ventanas: cuando hay dependientes no se toca nada por el camino
+     * corto, se abandona y se hace TODO bajo el cerrojo de cascada.  Asi la
+     * cascada sigue siendo atomica, que es lo que evita servir un analisis que
+     * debia haberse invalidado.
      */
     void drop_key(const Key &k) {
         {
@@ -988,9 +989,9 @@ class AnalysisManager {
             util::TimedUniqueLock lk(s.m, exclusive_wait_slot());
             if (drop_within_shard(s, k)) return;
         }
-        /* Algun dependiente vive en OTRA franja: eso es lo unico que necesita el
-         * cerrojo global, y por eso se rehace entero aqui.  No se ha tocado nada
-         * arriba, asi que la cascada sigue siendo atomica. */
+        /* Algun dependiente vive en OTRA franja: eso es lo unico que necesita
+         * el cerrojo global, y por eso se rehace entero aqui.  No se ha tocado
+         * nada arriba, asi que la cascada sigue siendo atomica. */
         util::TimedUniqueLock cl(cascade_m_, exclusive_wait_slot());
         invalidate_key_locked(k);
     }
@@ -1011,9 +1012,10 @@ class AnalysisManager {
      * cerrojo con **172.881 esperas y 40,4 de los 42,8 segundos de espera
      * total** -- el 94 % --, con la maquina al 7,2 % de aprovechamiento.
      *
-     * Y lo que lo arregla es que esa dependencia NO cruza de franja: los dos son
-     * la misma unidad, y la franja se elige por la unidad.  Cruzar solo ocurre
-     * siguiendo una dependencia entre funciones distintas, que es lo raro.
+     * Y lo que lo arregla es que esa dependencia NO cruza de franja: los dos
+     * son la misma unidad, y la franja se elige por la unidad.  Cruzar solo
+     * ocurre siguiendo una dependencia entre funciones distintas, que es lo
+     * raro.
      *
      * @param s La franja de @p k, con su cerrojo ya puesto.
      * @param k Que sacar.

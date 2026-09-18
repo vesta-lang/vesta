@@ -65,9 +65,9 @@ namespace analysis {
  */
 struct InlineFacts {
     // --- Lo que se sabe sin mirar el cuerpo (nombre y marcas) -------------
-    bool is_native = false;      ///< declarada nativa: no hay cuerpo que copiar.
-    bool is_naked = false;       ///< @Naked: sin prologo, epilogo ni retorno.
-    bool has_section = false;    ///< colocada en una seccion propia.
+    bool is_native = false;   ///< declarada nativa: no hay cuerpo que copiar.
+    bool is_naked = false;    ///< @Naked: sin prologo, epilogo ni retorno.
+    bool has_section = false; ///< colocada en una seccion propia.
     /* DOS listas negras, y no es un descuido: hoy los dos inliners rechazan
      * familias de nombres DISTINTAS -- el de un bloque tambien aparta
      * `__spawn_`, `__async_`, `__rspawn_` y los ayudantes de cadena --, y
@@ -79,9 +79,9 @@ struct InlineFacts {
     /// `__ovl_resolve_*`: los rechazan LOS DOS, y por el mismo motivo, asi que
     /// va aparte de las listas.
     bool is_overlay_resolver = false;
-    bool is_new_helper = false;  ///< `__new_<Clase>`: lo decide el reemplazo
-                                 ///< escalar, que esta tras bandera, asi que
-                                 ///< va SEPARADO de las listas.
+    bool is_new_helper = false; ///< `__new_<Clase>`: lo decide el reemplazo
+                                ///< escalar, que esta tras bandera, asi que
+                                ///< va SEPARADO de las listas.
 
     // --- Forma del cuerpo -------------------------------------------------
     uint32_t block_count = 0;       ///< cuantos bloques tiene.
@@ -96,11 +96,11 @@ struct InlineFacts {
     bool entry_has_phi = false;     ///< el de entrada lleva un PHI.
 
     // --- Lo que prohibe inlinar, y cada uno por su razon ------------------
-    bool recursive = false;      ///< se llama a si misma.
-    bool has_raw_asm = false;    ///< RAW_ASM: asume la convencion de la VM.
-    bool has_inline_asm = false; ///< INLINE_ASM: sus ataduras son suyas.
-    bool has_jump_table = false; ///< SWITCH_DENSE o destinos calculados.
-    bool has_alloca = false;     ///< crece la pila del llamante en un bucle.
+    bool recursive = false;        ///< se llama a si misma.
+    bool has_raw_asm = false;      ///< RAW_ASM: asume la convencion de la VM.
+    bool has_inline_asm = false;   ///< INLINE_ASM: sus ataduras son suyas.
+    bool has_jump_table = false;   ///< SWITCH_DENSE o destinos calculados.
+    bool has_alloca = false;       ///< crece la pila del llamante en un bucle.
     bool frees_resources = false;  ///< RAW_FREE / SMARTPTR_FREE: duplicar la
                                    ///< limpieza cambia el resultado.
     bool has_frame_op = false;     ///< marco de excepcion, GC, reflexion o

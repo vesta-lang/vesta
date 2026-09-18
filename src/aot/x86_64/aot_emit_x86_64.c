@@ -407,8 +407,7 @@ static int aot_pe_finish_pdata(PE64FILE_struct *pe, const AotSection *secs,
         if (live < total)
             memset(p + live * 12, 0, (size_t)((total - live) * 12));
 
-        if (live > 1)
-            qsort(p, (size_t)live, 12, aot_pe_cmp_runtime_function);
+        if (live > 1) qsort(p, (size_t)live, 12, aot_pe_cmp_runtime_function);
 
         /* Ya ordenada, se valida lo que el orden no arregla. */
         uint32_t prev_begin = 0;
@@ -419,14 +418,16 @@ static int aot_pe_finish_pdata(PE64FILE_struct *pe, const AotSection *secs,
                                    ((uint32_t)e[2] << 16) |
                                    ((uint32_t)e[3] << 24);
             const uint32_t end = (uint32_t)e[4] | ((uint32_t)e[5] << 8) |
-                                 ((uint32_t)e[6] << 16) | ((uint32_t)e[7] << 24);
+                                 ((uint32_t)e[6] << 16) |
+                                 ((uint32_t)e[7] << 24);
             if (end <= begin) {
                 set_err(err, err_cap, "VX9254");
                 return 0;
             }
             /* Dos funciones no pueden empezar en la misma direccion.  Si pasa,
              * es que la misma tabla entro dos veces o que una reloc se quedo
-             * sin resolver, y la biseccion devolveria una de las dos al azar. */
+             * sin resolver, y la biseccion devolveria una de las dos al azar.
+             */
             if (has_prev && begin == prev_begin) {
                 set_err(err, err_cap, "VX9255");
                 return 0;
@@ -493,13 +494,14 @@ int aot_emit_pe(const char *path, const AotLayoutCfg *cfg,
         }
     }
 
-    /* Desenrollado: anunciar `.pdata` en el directorio de excepciones.  Va justo
-     * detras del bucle porque es donde addSection ya ha asignado las
+    /* Desenrollado: anunciar `.pdata` en el directorio de excepciones.  Va
+     * justo detras del bucle porque es donde addSection ya ha asignado las
      * VirtualAddress de todas las secciones del usuario, que es lo unico que
      * hace falta; lo que se anada despues (una `.reloc` del TLS, por ejemplo)
      * se coloca al final y no mueve a las anteriores. */
     if (!aot_pe_set_exception_dir(&pe, secs, num_secs, err, err_cap)) {
-        freePE64File(&pe); /* addSection copia los datos: liberar aqui es seguro */
+        freePE64File(
+            &pe); /* addSection copia los datos: liberar aqui es seguro */
         return 0;
     }
 
@@ -1848,7 +1850,6 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
 #define R_X86_64_TPOFF32 23 /* TLS local-exec: offset TP-relativo (32-bit) */
 #endif
 
-
 /* aot_emit_elf32_obj (+ e32_push16/32) -> movidos a x86_32/aot_emit_x86_32.c.
  */
 
@@ -1860,11 +1861,11 @@ int aot_emit_elf_dynexec(const char *path, const AotLayoutCfg *cfg,
 const AotElfObjArch *aot_elf_obj_arch_x86_64(void) {
     static const AotElfObjArch A = {
         EM_X86_64,
-        R_X86_64_PLT32,  /* llamada a simbolo indefinido */
-        R_X86_64_PLT32,  /* llamada dentro del propio objeto */
-        R_X86_64_PC32,   /* referencia PC-relativa de 32 bits */
-        R_X86_64_64,     /* direccion absoluta de 64 bits */
-        R_X86_64_TPOFF32,/* TLS local-exec */
+        R_X86_64_PLT32,   /* llamada a simbolo indefinido */
+        R_X86_64_PLT32,   /* llamada dentro del propio objeto */
+        R_X86_64_PC32,    /* referencia PC-relativa de 32 bits */
+        R_X86_64_64,      /* direccion absoluta de 64 bits */
+        R_X86_64_TPOFF32, /* TLS local-exec */
         /* El desplazamiento se cuenta desde el FINAL de la instruccion, asi
          * que hay que descontar los cuatro bytes del propio campo. */
         -4,

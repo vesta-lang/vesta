@@ -208,7 +208,8 @@ void close_record(std::vector<uint8_t> &v, size_t a) {
         put8(v, DW_CFA_nop);
     const uint32_t len = static_cast<uint32_t>(v.size() - 4);
     for (int i = 0; i < 4; ++i)
-        v[static_cast<size_t>(i)] = static_cast<uint8_t>((len >> (i * 8)) & 0xFF);
+        v[static_cast<size_t>(i)] =
+            static_cast<uint8_t>((len >> (i * 8)) & 0xFF);
 }
 
 } // namespace
@@ -230,9 +231,9 @@ uint32_t dwarf_reg_x86_64(uint32_t reg) noexcept {
 
 void build_eh_frame_cie_x86_64(std::vector<uint8_t> &out) {
     out.clear();
-    put32(out, 0);  // longitud: se rellena en close_record()
-    put32(out, 0);  // CIE_id: cero identifica a una CIE en `.eh_frame`
-    put8(out, 1);   // version
+    put32(out, 0); // longitud: se rellena en close_record()
+    put32(out, 0); // CIE_id: cero identifica a una CIE en `.eh_frame`
+    put8(out, 1);  // version
 
     /* "zR": la 'z' anuncia que hay un bloque de datos de aumento con su
      * longitud delante -- de modo que quien no entienda el resto pueda
@@ -242,8 +243,8 @@ void build_eh_frame_cie_x86_64(std::vector<uint8_t> &out) {
     put8(out, 'R');
     put8(out, 0);
 
-    uleb(out, 1);   // factor de alineamiento de codigo: 1 byte
-    sleb(out, -8);  // factor de alineamiento de datos: la pila crece hacia abajo
+    uleb(out, 1);  // factor de alineamiento de codigo: 1 byte
+    sleb(out, -8); // factor de alineamiento de datos: la pila crece hacia abajo
     uleb(out, DWARF_RA_X86_64); // que registro es la direccion de retorno
 
     uleb(out, 1); // longitud de los datos de aumento
@@ -402,11 +403,11 @@ bool build_eh_frame_fde_x86_64(const FrameUnwind &frame, uint32_t code_size,
     /* Se rellena a OCHO, el tamano de un puntero, no a cuatro.
      *
      * No es cosmetico y no se ve probando una FDE sola: al enlazar, la seccion
-     * es la concatenacion de las aportaciones de cada objeto, y cada una empieza
-     * en un limite de ocho.  Si una acaba en un multiplo de cuatro que no lo es
-     * de ocho, el enlazador mete cuatro ceros para cuadrar -- y cuatro ceros
-     * SON un registro de longitud cero, o sea un terminador.  Un lector que
-     * recorra la seccion se para ahi y da por vacio todo lo que aporten los
+     * es la concatenacion de las aportaciones de cada objeto, y cada una
+     * empieza en un limite de ocho.  Si una acaba en un multiplo de cuatro que
+     * no lo es de ocho, el enlazador mete cuatro ceros para cuadrar -- y cuatro
+     * ceros SON un registro de longitud cero, o sea un terminador.  Un lector
+     * que recorra la seccion se para ahi y da por vacio todo lo que aporten los
      * objetos siguientes.
      *
      * Rellenando a ocho, ninguna aportacion deja hueco y el problema no llega a

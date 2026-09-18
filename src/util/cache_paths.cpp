@@ -33,8 +33,8 @@ namespace {
  * @brief Una fila de la tabla: como se llama el cajon y hasta donde vale.
  */
 struct KindRow {
-    const char *dir;   ///< nombre del directorio dentro de la raiz.
-    CacheScope scope;  ///< alcance de lo que guarda.
+    const char *dir;  ///< nombre del directorio dentro de la raiz.
+    CacheScope scope; ///< alcance de lo que guarda.
 };
 
 /**
@@ -48,7 +48,7 @@ constexpr KindRow kKinds[] = {
     /* Interfaz e intermedio: salen del fuente, de la version del compilador y
      * del objetivo, y los tres entran en la clave.  Es la mitad que interesa
      * conservar y compartir. */
-    {"ir", CacheScope::Portable},       // CacheKind::ModuleIr
+    {"ir", CacheScope::Portable}, // CacheKind::ModuleIr
     /* Lo que el ASA supo del modulo, con el mismo criterio que el intermedio:
      * es conocimiento DERIVADO del fuente, no de esta maquina. */
     {"facts", CacheScope::Portable},    // CacheKind::Facts
@@ -56,20 +56,20 @@ constexpr KindRow kKinds[] = {
     {"vel", CacheScope::Portable},      // CacheKind::Vel
     /* El `.velb` de un fuente, con la clave sacada de su contenido: sirve en
      * otra maquina siempre que coincida el objetivo. */
-    {"velb", CacheScope::Portable},     // CacheKind::Bytecode
+    {"velb", CacheScope::Portable}, // CacheKind::Bytecode
     /* Ejecutar al compilar da un valor, y la clave es el hash del intermedio
      * del modulo: el mismo intermedio da el mismo valor en cualquier sitio. */
-    {"ctpe", CacheScope::Portable},     // CacheKind::Comptime
+    {"ctpe", CacheScope::Portable}, // CacheKind::Comptime
     /* El unico repartido: `packs` va por contenido y viaja, `roots` son
      * apuntadores con rutas absolutas y no.  @see CacheScope::Mixed */
-    {"vxdbg", CacheScope::Mixed},       // CacheKind::DebugInfo
+    {"vxdbg", CacheScope::Mixed}, // CacheKind::DebugInfo
     /* Lo descargado es el paquete tal cual, con su firma: viaja. */
-    {"pkg", CacheScope::Portable},      // CacheKind::Packages
+    {"pkg", CacheScope::Portable}, // CacheKind::Packages
     /* Guarda por donde estan los artefactos de ESTE arbol.  En otra maquina
      * las entradas apuntan a sitios que no existen. */
-    {"projects", CacheScope::Local},    // CacheKind::Projects
-    {"work", CacheScope::Transient},    // CacheKind::Work
-    {"tmp", CacheScope::Transient},     // CacheKind::Temp
+    {"projects", CacheScope::Local}, // CacheKind::Projects
+    {"work", CacheScope::Transient}, // CacheKind::Work
+    {"tmp", CacheScope::Transient},  // CacheKind::Temp
 };
 
 static_assert(sizeof(kKinds) / sizeof(kKinds[0]) == kCacheKindCount,
@@ -117,7 +117,9 @@ size_t kind_index(CacheKind kind) noexcept {
 
 } // namespace
 
-const char *cache_root_name() noexcept { return ".cache"; }
+const char *cache_root_name() noexcept {
+    return ".cache";
+}
 
 const char *cache_kind_dir(CacheKind kind) noexcept {
     return kKinds[kind_index(kind)].dir;
@@ -129,14 +131,10 @@ CacheScope cache_kind_scope(CacheKind kind) noexcept {
 
 const char *cache_scope_name(CacheScope scope) noexcept {
     switch (scope) {
-    case CacheScope::Portable:
-        return "portable";
-    case CacheScope::Local:
-        return "local";
-    case CacheScope::Transient:
-        return "transitorio";
-    case CacheScope::Mixed:
-        return "mixto";
+    case CacheScope::Portable: return "portable";
+    case CacheScope::Local: return "local";
+    case CacheScope::Transient: return "transitorio";
+    case CacheScope::Mixed: return "mixto";
     }
     return "desconocido";
 }

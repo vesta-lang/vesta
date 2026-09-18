@@ -43,7 +43,8 @@ namespace asa {
 
 /* Fuera del anonimo: el nombre se declara en `fact_base.h` porque su ALCANCE
  * importa desde otros sitios -- este dominio sigue las llamadas, asi que no
- * admite clave por funcion, y quien valida la cache tiene que poder nombrarlo. */
+ * admite clave por funcion, y quien valida la cache tiene que poder nombrarlo.
+ */
 const char *const kProducerValueShape = "asa.value_shape";
 
 namespace {

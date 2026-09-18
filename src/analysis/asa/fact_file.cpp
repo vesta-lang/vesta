@@ -38,9 +38,9 @@ constexpr uint32_t kMagicEnd = 0x4E494658u; ///< 'XFIN': cierra el fichero.
  * fichero, y un fichero roto puede decir cualquier cosa.  Con esto, lo que se
  * pide depende de los bytes que quedan de verdad.
  */
-constexpr size_t kMinFactBytes = 4 + 4 + 8 + 8 + 4 + 3 * 4 + 4 /* why */ +
-                                      1 + 4 + 4 + 1 + 1 /* unknown_reason */ +
-                                      1 + 4 + 4 + 4 + 4 * 4 + 4 + 4;
+constexpr size_t kMinFactBytes = 4 + 4 + 8 + 8 + 4 + 3 * 4 + 4 /* why */ + 1 +
+                                 4 + 4 + 1 + 1 /* unknown_reason */ + 1 + 4 +
+                                 4 + 4 + 4 * 4 + 4 + 4;
 
 /// Marca de "esta cadena no esta" en la tabla de un registro.  No es la cadena
 /// cero: la cadena vacia es una entrada legitima.
@@ -102,7 +102,8 @@ const char *canonicalize(FactStore &store, const std::string &s) {
 
 uint64_t record_checksum(const uint8_t *d, size_t begin, size_t hole,
                          size_t end) {
-    const uint64_t h = util::fnv_bytes(util::kFnvOffset, d + begin, hole - begin);
+    const uint64_t h =
+        util::fnv_bytes(util::kFnvOffset, d + begin, hole - begin);
     return util::fnv_bytes(h, d + hole + 8, end - (hole + 8));
 }
 
@@ -378,8 +379,7 @@ std::vector<uint8_t> serialize(const FactStore &store, uint64_t fingerprint,
 }
 
 ReadResult read_facts(const uint8_t *data, size_t n, uint64_t fingerprint,
-                      FactStore &dest,
-                      const std::vector<DomainCost> &current,
+                      FactStore &dest, const std::vector<DomainCost> &current,
                       uint64_t compiler, const Scope &here) {
     ReadResult r;
     if (data == nullptr || n == 0) {
@@ -665,7 +665,8 @@ ReadResult read_facts(const uint8_t *data, size_t n, uint64_t fingerprint,
             f.proof.rule = str(L.u32());
             const uint32_t n_support = L.u32();
             if (!L.ok()) break;
-            f.proof.from.reserve(std::min<size_t>(n_support, L.remaining() / 4));
+            f.proof.from.reserve(
+                std::min<size_t>(n_support, L.remaining() / 4));
             for (uint32_t k = 0; k < n_support && L.ok(); ++k)
                 f.proof.from.push_back(
                     L.u32()); // aun en identidades del fichero.
@@ -780,7 +781,8 @@ ReadResult read_facts(const uint8_t *data, size_t n, uint64_t fingerprint,
              *
              * Marcar el dominio aqui seria el fallo silencioso de siempre: los
              * hechos de las funciones que cambiaron no los produciria nadie y
-             * el compilador razonaria con un agujero, sin que nada lo dijera. */
+             * el compilador razonaria con un agujero, sin que nada lo dijera.
+             */
             std::sort(reused_here.begin(), reused_here.end());
             reused_here.erase(
                 std::unique(reused_here.begin(), reused_here.end()),

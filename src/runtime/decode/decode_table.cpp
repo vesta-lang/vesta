@@ -20,7 +20,7 @@
  *   - @c decode_table_extended: instrucciones de dos bytes con prefijo 0x00   \
  *                                                                             \
  * AL ANADIR O CAMBIAR UNA INSTRUCCION, REGENERAR LA BASE DE DATOS DE LA VM    \
- * ---------------------------------------------------------------------      \
+ * ---------------------------------------------------------------------       \
  * `include/runtime/instr_db_vm.h` y `src/runtime/instr_db_vm_gen.cpp` guardan \
  * lo que cada opcode TOCA sin nombrarlo en un operando --banderas, pila,      \
  * marco, contador de programa-- y lo que cuesta.  De ahi sale la respuesta a  \

@@ -277,7 +277,9 @@ struct CondCompTarget {
 static util::ThreadOwned<CondCompTarget> g_cc_owner;
 
 /// El objetivo de compilacion condicional de ESTE hilo.
-static CondCompTarget &cc_target() { return g_cc_owner.get(); }
+static CondCompTarget &cc_target() {
+    return g_cc_owner.get();
+}
 
 void set_aot_condcomp_target(const std::string &os,
                              const std::string &arch) noexcept {
@@ -432,8 +434,7 @@ static bool target_atom_eval_(const std::string &atom,
         // AOT cross-target: evaluar contra el OS del binario generado.
         if (!tgt.os.empty()) {
             if (val == tgt.os) return true;
-            if (val == "posix")
-                return tgt.os == "linux" || tgt.os == "macos";
+            if (val == "posix") return tgt.os == "linux" || tgt.os == "macos";
             return false;
         }
 #if defined(_WIN32)
@@ -2126,9 +2127,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                     // en una clave de @Target.
                     HookPoint hook_pt = HookPoint::Enter;
                     if (!hook_point_from_name(current_.lexeme, hook_pt)) {
-                        diags_.diag(
-                            current_.loc, DiagLevel::ERR, "VXE931",
-                            {current_.lexeme, hook_points_available()});
+                        diags_.diag(current_.loc, DiagLevel::ERR, "VXE931",
+                                    {current_.lexeme, hook_points_available()});
                     } else {
                         top_hook_point = current_.lexeme;
                     }
@@ -2141,8 +2141,7 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                         (current_.kind == TokenKind::STRING_LIT ||
                          current_.kind == TokenKind::RAW_STRING_LIT);
                     if (!is_string) {
-                        diags_.diag(current_.loc, DiagLevel::ERR, "VXE932",
-                                    {});
+                        diags_.diag(current_.loc, DiagLevel::ERR, "VXE932", {});
                     } else {
                         top_hook_selector = current_.str_val;
                         (void)consume();
@@ -3850,8 +3849,10 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     while (current_.kind == TokenKind::KW_CONST ||
            (current_.kind == TokenKind::IDENTIFIER &&
             current_.lexeme == "volatile")) {
-        if (current_.kind == TokenKind::KW_CONST) base_const = true;
-        else base_volatile = true;
+        if (current_.kind == TokenKind::KW_CONST)
+            base_const = true;
+        else
+            base_volatile = true;
         (void)consume();
     }
     bool nonnull = false;
@@ -4072,8 +4073,10 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
         while (current_.kind == TokenKind::KW_CONST ||
                (current_.kind == TokenKind::IDENTIFIER &&
                 current_.lexeme == "volatile")) {
-            if (current_.kind == TokenKind::KW_CONST) pn->is_const = true;
-            else pn->is_volatile = true;
+            if (current_.kind == TokenKind::KW_CONST)
+                pn->is_const = true;
+            else
+                pn->is_volatile = true;
             (void)consume();
         }
         base = std::move(pn);
@@ -5521,7 +5524,7 @@ std::unique_ptr<ast::BytesDecl> Parser::parse_asm_block_decl() {
             ++brace_depth;
         }
         body_tokens.emplace_back(current_.loc.offset,
-                                   current_.loc.offset + current_.loc.length);
+                                 current_.loc.offset + current_.loc.length);
         (void)consume();
     }
     if (brace_depth != 0) {
@@ -8438,7 +8441,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
             ++brace_depth;
         }
         body_tokens.emplace_back(current_.loc.offset,
-                                   current_.loc.offset + current_.loc.length);
+                                 current_.loc.offset + current_.loc.length);
         (void)consume();
     }
     if (brace_depth != 0) {
@@ -8453,8 +8456,7 @@ std::unique_ptr<ast::Stmt> Parser::parse_asm_stmt() {
     }
     if (start_off <= src.size() && end_off >= start_off &&
         end_off <= src.size()) {
-        s->body =
-            body_without_comments(src, start_off, end_off, body_tokens);
+        s->body = body_without_comments(src, start_off, end_off, body_tokens);
     }
 
     // Clausula opcional `clobbers("rdx", "memory", "flags")`.  `clobbers`

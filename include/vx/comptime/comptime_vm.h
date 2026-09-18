@@ -280,16 +280,15 @@ class ComptimeRuntime {
     enum class InvokeFailure : uint8_t {
         None = 0,      ///< se ejecuto.
         NoMachine,     ///< aun no hay bytecode cargado (la primera pasada).
-        NotRegistered, ///< la maquina esta cargada, pero esa fn no esta en ella.
+        NotRegistered, ///< la maquina esta cargada, pero esa fn no esta en
+                       ///< ella.
         NoAddress,     ///< registrada y sin direccion resuelta.
         TooManyArgs,   ///< mas de 12: la convencion de llamada no los lleva.
         Trapped,       ///< la ejecucion murio dentro de la maquina.
     };
 
     /// @brief Motivo del ultimo intento fallido de invocar.
-    InvokeFailure last_invoke_failure() const noexcept {
-        return last_failure_;
-    }
+    InvokeFailure last_invoke_failure() const noexcept { return last_failure_; }
 
     /// @brief Nombre que se intento invocar en ese ultimo intento fallido.
     const std::string &last_invoke_name() const noexcept {

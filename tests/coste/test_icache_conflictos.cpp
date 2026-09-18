@@ -97,18 +97,18 @@
  *   B = benchmark1.velb         226 instrs en  354 bytes  (~1,57 B/instr)
  *
  *   variante                        A                B         nota
- *   ------------------------  ------------  ---------------  --------------------
- *   actual (4096, directa)    2091 (94,1%)     0 ( 0,0%)     linea base
- *   4096 con hash              172 ( 7,7%)     0 ( 0,0%)     -92%, pero DISPERSA
- *   4096 hash + 2 vias         129 ( 5,8%)     0 ( 0,0%)     lo mejor con mezcla
- *   4096 hash + 4 vias         215 ( 9,7%)     0 ( 0,0%)     las vias acortan
- *   pc>>2, sin mezclar         155 ( 7,0%)   202 (89,4%)     ROMPE el caso denso
- *   pc>>2 + pliegue alto       155 ( 7,0%)   202 (89,4%)     el pliegue no salva
- *   pc>>3, sin mezclar        2209 (99,4%)      --           peor que la base
- *   pc>>2, 2 vias              195 ( 8,8%)   192 (85,0%)     sigue roto en B
+ *   ------------------------  ------------  ---------------
+ * -------------------- actual (4096, directa)    2091 (94,1%)     0 ( 0,0%)
+ * linea base 4096 con hash              172 ( 7,7%)     0 ( 0,0%)     -92%,
+ * pero DISPERSA 4096 hash + 2 vias         129 ( 5,8%)     0 ( 0,0%)     lo
+ * mejor con mezcla 4096 hash + 4 vias         215 ( 9,7%)     0 ( 0,0%)     las
+ * vias acortan pc>>2, sin mezclar         155 ( 7,0%)   202 (89,4%)     ROMPE
+ * el caso denso pc>>2 + pliegue alto       155 ( 7,0%)   202 (89,4%)     el
+ * pliegue no salva pc>>3, sin mezclar        2209 (99,4%)      -- peor que la
+ * base pc>>2, 2 vias              195 ( 8,8%)   192 (85,0%)     sigue roto en B
  *   4096, 2 vias (sin mezcla) 2094 (94,2%)     0 ( 0,0%)     +0%: no hace NADA
- *   2048 (la mitad)           2094 (94,2%)     0 ( 0,0%)     +0%: no es capacidad
- *   512 (cabe en L1)          2094 (94,2%)     0 ( 0,0%)     +0%: idem
+ *   2048 (la mitad)           2094 (94,2%)     0 ( 0,0%)     +0%: no es
+ * capacidad 512 (cabe en L1)          2094 (94,2%)     0 ( 0,0%)     +0%: idem
  *   1024 con hash (64 KB)     2114 (95,1%)     0 ( 0,0%)     +1%: LA PEOR
  *   512 con hash (32 KB)      2114 (95,1%)      --           idem
  *   8192 directa (512 KB)       98 ( 4,4%)     0 ( 0,0%)     dobla la memoria
@@ -331,8 +331,8 @@ bool es_salto(const std::string &m) {
  *
  * Y a diferencia de la mezcla, NO DISPERSA: dentro de una clase el mapeo sigue
  * siendo contiguo, asi que no deberia pagar el precio que el XOR cobra en
- * bucles cortos.  En `benchmark1` da cero, o sea que tampoco rompe el caso denso
- * como si hace `pc>>2` a secas.
+ * bucles cortos.  En `benchmark1` da cero, o sea que tampoco rompe el caso
+ * denso como si hace `pc>>2` a secas.
  *
  * LO QUE FALTA antes de llevarlo al runtime: la clase sale del byte de opcode
  * (`select_metadata` ya da el formato y de ahi el tamano), o sea una lectura de
@@ -406,8 +406,8 @@ int main(int argc, char **argv) {
      * escribirse aqui: es la linea base contra la que se compara todo lo demas,
      * asi que si miente, mienten todas las filas. */
     static char etiqueta_actual[64];
-    std::snprintf(etiqueta_actual, sizeof(etiqueta_actual),
-                  "actual (%u, %s%s)", runtime::ICACHE_SIZE,
+    std::snprintf(etiqueta_actual, sizeof(etiqueta_actual), "actual (%u, %s%s)",
+                  runtime::ICACHE_SIZE,
                   ICACHE_WAYS == 1 ? "directa"
                                    : (ICACHE_WAYS == 2 ? "2 vias" : "N vias"),
                   ICACHE_HASH ? ", hash" : "");
@@ -420,7 +420,8 @@ int main(int argc, char **argv) {
                   runtime::ICACHE_SIZE / 2);
 
     const Config configs[] = {
-        {etiqueta_actual, runtime::ICACHE_SIZE, ICACHE_WAYS, ICACHE_HASH != 0, 0},
+        {etiqueta_actual, runtime::ICACHE_SIZE, ICACHE_WAYS, ICACHE_HASH != 0,
+         0},
         {etiqueta_hash, runtime::ICACHE_SIZE, ICACHE_WAYS, true, 0},
         /* Tirar los bits bajos en vez de mezclar: usa la tabla entera Y deja
          * juntas las instrucciones que van juntas.  Dos y tres porque el paso

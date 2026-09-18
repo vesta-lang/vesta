@@ -23,8 +23,8 @@
  */
 
 #include "util/env_flags.h"
-#include "util/thread_owned.h" // estado por hilo, sin `thread_local`
-#include "util/os/thread_slot.h"  // lo que cabe en un puntero, sin reservar
+#include "util/thread_owned.h"   // estado por hilo, sin `thread_local`
+#include "util/os/thread_slot.h" // lo que cabe en un puntero, sin reservar
 #include "jit/vreg_select.h"
 #include "jit/jit_branch_prof.h" // auto-PGO: contadores de branch por linea
 
@@ -98,7 +98,9 @@ static bool vreg_fma_ok() {
  * hay mas hilos. */
 static util::ThreadOwned<std::string> g_last_reason;
 
-std::string &vreg_last_reason() { return g_last_reason.get(); }
+std::string &vreg_last_reason() {
+    return g_last_reason.get();
+}
 
 /** @brief Diagnostico opt-in (VESTA_JIT_VREGS_DEBUG=1) de por que una
  *  funcion no es seleccionable por el path vreg. */
@@ -861,9 +863,9 @@ bool emit_rep_block(std::vector<MInstr> &O, const TargetRegInfo &tri,
     push_value(second);
     push_value(len);
     /* 3. Y de la pila a los fijos, en orden inverso al de entrada. */
-    pop_reg(MReg::RCX);   // len
-    pop_reg(third);       // origen / valor
-    pop_reg(MReg::RDI);   // destino
+    pop_reg(MReg::RCX); // len
+    pop_reg(third);     // origen / valor
+    pop_reg(MReg::RDI); // destino
     /* 4. La operacion. */
     O.push_back(is_copy ? MInstr::make_rep_movsb() : MInstr::make_rep_stosb());
     /* 5. Restaurar, en orden inverso al de salvado. */
@@ -912,8 +914,7 @@ bool emit_short_fill(std::vector<MInstr> &O, const MOperand &addr, int64_t len,
     for (uint64_t w = lane_w; w >= 16; w /= 2) {
         while (rem >= static_cast<int64_t>(w)) {
             O.push_back(MInstr::make_unary(
-                MOp::MOVUPD,
-                MOperand::make_mem(gp0, static_cast<int32_t>(off)),
+                MOp::MOVUPD, MOperand::make_mem(gp0, static_cast<int32_t>(off)),
                 MOperand::make_reg(fp0, static_cast<uint8_t>(w))));
             off += static_cast<int64_t>(w);
             rem -= static_cast<int64_t>(w);
@@ -974,7 +975,9 @@ void vreg_set_ctpe_safepoint_handler(uint64_t handler_addr) noexcept {
 static util::ThreadOwned<AbiResolver> g_abi_owner;
 
 /// El resolutor de ABI de ESTE hilo.
-static AbiResolver &g_abi_resolver() { return g_abi_owner.get(); }
+static AbiResolver &g_abi_resolver() {
+    return g_abi_owner.get();
+}
 
 void vreg_set_abi_resolver(AbiResolver resolver) noexcept {
     g_abi_resolver() = std::move(resolver);
@@ -1418,9 +1421,9 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
      * operando float lleva clase FP (vrt) -> el rewrite lo manda a un XMM
      * arg_reg via MOVSD.  Devuelve false si algun arg excede los arg_regs de
      * su clase (paso por pila no soportado en v1). */
-    auto emit_host_args =
-        [&](ir::IrValueList operands, std::vector<MInstr> &OO,
-            const std::vector<std::string> *abi_regs = nullptr) -> bool {
+    auto emit_host_args = [&](ir::IrValueList operands, std::vector<MInstr> &OO,
+                              const std::vector<std::string> *abi_regs =
+                                  nullptr) -> bool {
         const size_t gmax =
             tri_sel.arg_regs[static_cast<size_t>(RegClass::GP)].size();
         const size_t fmax =
@@ -1673,7 +1676,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                      * asi que lo que no quepa se queda sin fusionar el indice.
                      * Un desplazamiento de campo pasa de 127 muy pocas veces, y
                      * rendirse aqui solo cuesta una instruccion. */
-                    if (f.has_index && (f.disp < -128 || f.disp > 127)) continue;
+                    if (f.has_index && (f.disp < -128 || f.disp > 127))
+                        continue;
                     cand[in.dst] = f;
                 }
             }
@@ -1774,8 +1778,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
     int sp_idx = -1;
     const uint64_t sp_handler = g_ctpe_sp_handler();
     if (sp_handler != 0) {
-        sp_idx =
-            static_cast<int>(out.intern_imm64(static_cast<int64_t>(sp_handler)));
+        sp_idx = static_cast<int>(
+            out.intern_imm64(static_cast<int64_t>(sp_handler)));
     }
 
     for (size_t b = 0; b < NB; ++b) {
@@ -3994,11 +3998,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                          * 0..63 y este operando aun no lo es --.  Es el ultimo
                          * hueco que quedaba sin crecer el MInstr. */
                         ld.src2.reg = fa.scale;
-                        ld.variant = static_cast<uint8_t>(
-                            static_cast<int8_t>(fa.disp));
+                        ld.variant =
+                            static_cast<uint8_t>(static_cast<int8_t>(fa.disp));
                     } else {
-                        ld.src2 = MOperand::make_imm32(
-                            static_cast<int32_t>(fa.disp));
+                        ld.src2 =
+                            MOperand::make_imm32(static_cast<int32_t>(fa.disp));
                     }
                     O.push_back(ld);
                     break;
@@ -4145,11 +4149,11 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 const bool val_known = in.operands[1] < fn.values.size() &&
                                        fn.values[in.operands[1]].is_const;
                 if (len_known && val_known &&
-                    emit_short_fill(
-                        O, vr(in.operands[0]),
-                        fn.values[in.operands[2]].const_val,
-                        static_cast<uint8_t>(fn.values[in.operands[1]].const_val),
-                        vec_host_w(), fp_ok, tri_sel))
+                    emit_short_fill(O, vr(in.operands[0]),
+                                    fn.values[in.operands[2]].const_val,
+                                    static_cast<uint8_t>(
+                                        fn.values[in.operands[1]].const_val),
+                                    vec_host_w(), fp_ok, tri_sel))
                     break;
                 if (!emit_rep_block(O, tri_sel, vr(in.operands[0]),
                                     vr(in.operands[1]), vr(in.operands[2]),
@@ -5976,10 +5980,10 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 if (in.operands.size() != (at ? 2u : 1u)) return false;
 #if defined(_WIN32)
                 const MReg a0 = MReg::RCX, a1 = MReg::RDX, a2 = MReg::R8,
-                          a3 = MReg::R9;
+                           a3 = MReg::R9;
 #else
                 const MReg a0 = MReg::RDI, a1 = MReg::RSI, a2 = MReg::RDX,
-                          a3 = MReg::RCX;
+                           a3 = MReg::RCX;
 #endif
                 /* Los operandos a scratch ANTES de tocar los registros de
                  * argumento: `vr` puede devolver uno de ellos y pisarlo al
@@ -6010,9 +6014,8 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                     MInstr::make_unary(MOp::MOV, MOperand::make_reg(a0, 8),
                                        MOperand::make_reg(MReg::RBX, 8)));
                 O.push_back(MInstr::make_call_abs(out.intern_imm64(addr)));
-                O.push_back(MInstr::make_unary(MOp::MOV, vr(in.dst),
-                                               MOperand::make_reg(MReg::RAX,
-                                                                  8)));
+                O.push_back(MInstr::make_unary(
+                    MOp::MOV, vr(in.dst), MOperand::make_reg(MReg::RAX, 8)));
                 break;
             }
 

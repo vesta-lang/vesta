@@ -54,13 +54,17 @@ static inline PSRWLOCK as_srwlock(unsigned char *state) noexcept {
     return reinterpret_cast<PSRWLOCK>(state);
 }
 
-void SharedMutex::lock() noexcept { AcquireSRWLockExclusive(as_srwlock(state_)); }
+void SharedMutex::lock() noexcept {
+    AcquireSRWLockExclusive(as_srwlock(state_));
+}
 
 bool SharedMutex::try_lock() noexcept {
     return TryAcquireSRWLockExclusive(as_srwlock(state_)) != 0;
 }
 
-void SharedMutex::unlock() noexcept { ReleaseSRWLockExclusive(as_srwlock(state_)); }
+void SharedMutex::unlock() noexcept {
+    ReleaseSRWLockExclusive(as_srwlock(state_));
+}
 
 void SharedMutex::lock_shared() noexcept {
     AcquireSRWLockShared(as_srwlock(state_));
@@ -82,12 +86,24 @@ namespace util {
 
 /* Fuera de Windows se delega en `std::shared_mutex`, que ahi se apoya en un
  * `pthread_rwlock_t` de verdad y no en la emulacion que rompe en MinGW. */
-void SharedMutex::lock() noexcept { impl_.lock(); }
-bool SharedMutex::try_lock() noexcept { return impl_.try_lock(); }
-void SharedMutex::unlock() noexcept { impl_.unlock(); }
-void SharedMutex::lock_shared() noexcept { impl_.lock_shared(); }
-bool SharedMutex::try_lock_shared() noexcept { return impl_.try_lock_shared(); }
-void SharedMutex::unlock_shared() noexcept { impl_.unlock_shared(); }
+void SharedMutex::lock() noexcept {
+    impl_.lock();
+}
+bool SharedMutex::try_lock() noexcept {
+    return impl_.try_lock();
+}
+void SharedMutex::unlock() noexcept {
+    impl_.unlock();
+}
+void SharedMutex::lock_shared() noexcept {
+    impl_.lock_shared();
+}
+bool SharedMutex::try_lock_shared() noexcept {
+    return impl_.try_lock_shared();
+}
+void SharedMutex::unlock_shared() noexcept {
+    impl_.unlock_shared();
+}
 
 } // namespace util
 

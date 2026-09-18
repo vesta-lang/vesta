@@ -44,9 +44,9 @@ std::string Place::text() const {
         }
         case PlaceStep::Kind::UnknownIndex:
             /* Se escribe con corchetes vacios y no con el nombre del indice: el
-             * lugar habla de MEMORIA, y dos indices con nombres distintos que no
-             * se pueden separar son el mismo lugar.  Poner el nombre daria dos
-             * textos para una sola cosa. */
+             * lugar habla de MEMORIA, y dos indices con nombres distintos que
+             * no se pueden separar son el mismo lugar.  Poner el nombre daria
+             * dos textos para una sola cosa. */
             out += "[]";
             break;
         case PlaceStep::Kind::Deref:
@@ -92,8 +92,8 @@ bool places_may_overlap(const Place &a, const Place &b, PlaceUnknown *why) {
     // Resueltos los dos: la raiz ya es una identidad.
     if (a.root != b.root) return false;
 
-    const size_t n = a.path.size() < b.path.size() ? a.path.size()
-                                                   : b.path.size();
+    const size_t n =
+        a.path.size() < b.path.size() ? a.path.size() : b.path.size();
     for (size_t i = 0; i < n; ++i) {
         const PlaceStep &x = a.path[i];
         const PlaceStep &y = b.path[i];

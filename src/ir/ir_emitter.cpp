@@ -40,7 +40,7 @@
 #include "ir/ir_emitter.h"
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include "ir/vel_sink.h" // a donde sale lo emitido (una emision, N destinos)
-#include "ir/gc_safepoint.h" // pase compartido: raices GC por safepoint
+#include "ir/gc_safepoint.h"      // pase compartido: raices GC por safepoint
 #include "vx/diag/diag_catalog.h" // el texto del fallo vive en el catalogo
 #include "analysis/asa/aggregate_facts.h"
 #include <chrono>
@@ -6580,8 +6580,8 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
     default:
         /* Se PARA.  Antes se dejaba un comentario y un `NOP`, y eso no es
          * conservador: la instruccion tenia que PRODUCIR un valor y el `NOP` no
-         * produce ninguno, asi que quien lo lea despues encuentra lo que hubiera
-         * en el registro.  No un error -- otro resultado.
+         * produce ninguno, asi que quien lo lea despues encuentra lo que
+         * hubiera en el registro.  No un error -- otro resultado.
          *
          * Y es un fallo NUESTRO, no del programa del usuario: significa que el
          * intermedio lleva una operacion que este emisor no conoce, casi
@@ -6589,10 +6589,10 @@ static void emit_instr(EmitCtx &ctx, const IrBlock &bb, size_t idx,
          * dice la operacion por su nombre: es lo unico que hace falta para
          * saber donde ponerla. */
         if (ctx.emit_error.empty())
-            ctx.emit_error = vx::diag::format(
-                "emit.unsupported_op",
-                {ctx.fn.name, std::to_string(ins.source_line),
-                 std::string(ir_op_name(ins.op))});
+            ctx.emit_error =
+                vx::diag::format("emit.unsupported_op",
+                                 {ctx.fn.name, std::to_string(ins.source_line),
+                                  std::string(ir_op_name(ins.op))});
         break;
     }
 }
@@ -6898,7 +6898,8 @@ compute_zmm_alloc(const IrFunction &fn, const LivenessResult &liveness) {
         for (const auto &kv : total)
             if (kv.second > 1 && in_bank[kv.first] != kv.second) {
                 const int r = kv.first;
-                for (IrValueId v = IrValueId(0); static_cast<size_t>(v) < nv; ++v)
+                for (IrValueId v = IrValueId(0); static_cast<size_t>(v) < nv;
+                     ++v)
                     if (uf_find(static_cast<int>(v)) == r) zmm_map.erase(v);
             }
     }
@@ -6979,9 +6980,9 @@ static unsigned estimated_vel_instrs(IrOp op) {
  * que decide QUE imports declara el prologo, y la reescritura de cada funcion.
  */
 struct VmathMap {
-    IrOp op;            ///< la op del IR.
-    const char *fn;     ///< la nativa que hace lo mismo.
-    ir::IrType ret_ir;  ///< que devuelve.
+    IrOp op;           ///< la op del IR.
+    const char *fn;    ///< la nativa que hace lo mismo.
+    ir::IrType ret_ir; ///< que devuelve.
 };
 
 /// La libreria donde viven.
@@ -7547,8 +7548,7 @@ static void interp_sink_addr_adds(IrFunction &fn) {
     for (auto &bb : fn.blocks) {
         for (auto &in : bb.instrs) {
             for (IrValueId op : in.operands)
-                if (op != IR_NO_VALUE && op < use_count.size())
-                    ++use_count[op];
+                if (op != IR_NO_VALUE && op < use_count.size()) ++use_count[op];
             for (auto &pa : in.phi_args)
                 if (pa.value != IR_NO_VALUE && pa.value < use_count.size())
                     ++use_count[pa.value];

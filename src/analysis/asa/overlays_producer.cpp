@@ -150,8 +150,9 @@ void say_run_lanes(Production &p, const char *view, const Subject &subject,
      * geometria.  Se pide asi y no se copia: dos tablas de anchos se separan en
      * cuanto una cambie, y la que se quedaria vieja es la copia. */
     const auto wide_of = [](const codegen::rbank::TargetDescriptor &d) {
-        return d.classes[static_cast<size_t>(
-                             codegen::rbank::ResourceClass::FP_VECTOR)]
+        return d
+            .classes[static_cast<size_t>(
+                codegen::rbank::ResourceClass::FP_VECTOR)]
             .widths;
     };
     /* x86-64 se responde por NIVEL, no con el techo de la arquitectura: con
@@ -334,10 +335,10 @@ void produce_contiguous_runs(Production &p, const ir::IrOverlay &ov,
                 /* El PRIMER campo del tramo, que es por donde empieza a
                  * mirarlo quien lo consuma. */
                 f.about.id = ps[i].idx;
-                /* Una vista `@overlay` se DECLARA en el fuente: no la produce ninguna
-                 * instruccion, asi que no hay entidad del intermedio a la que
-                 * anclarla.  Es el ultimo recurso del ancla, y el unico que puede
-                 * quedarse rancio al mover texto. */
+                /* Una vista `@overlay` se DECLARA en el fuente: no la produce
+                 * ninguna instruccion, asi que no hay entidad del intermedio a
+                 * la que anclarla.  Es el ultimo recurso del ancla, y el unico
+                 * que puede quedarse rancio al mover texto. */
                 f.seal.origin.site = Anchor{Anchor::Kind::Line, ov.line};
                 f.seal.certainty = Certainty::Proven;
                 f.seal.origin.source = Source::Static;
@@ -382,11 +383,11 @@ void produce_overlays(Production &p) {
             f.what.detail = view;
             /* Donde se declara: una vista no es una funcion, asi que quien
              * quiera senalarla no la puede localizar por el codigo. */
-            /* Una vista `@overlay` se DECLARA en el fuente: no la produce ninguna
-                 * instruccion, asi que no hay entidad del intermedio a la que
-                 * anclarla.  Es el ultimo recurso del ancla, y el unico que puede
-                 * quedarse rancio al mover texto. */
-                f.seal.origin.site = Anchor{Anchor::Kind::Line, ov.line};
+            /* Una vista `@overlay` se DECLARA en el fuente: no la produce
+             * ninguna instruccion, asi que no hay entidad del intermedio a la
+             * que anclarla.  Es el ultimo recurso del ancla, y el unico que
+             * puede quedarse rancio al mover texto. */
+            f.seal.origin.site = Anchor{Anchor::Kind::Line, ov.line};
             f.about = subject;
             f.about.function = view;
             f.seal.certainty = Certainty::Proven;
@@ -446,8 +447,7 @@ void produce_overlays(Production &p) {
 }
 
 void register_overlays_producer() {
-    register_producer(kProducerOverlays, &produce_overlays,
-                      &overlays_inputs);
+    register_producer(kProducerOverlays, &produce_overlays, &overlays_inputs);
 }
 
 } // namespace asa

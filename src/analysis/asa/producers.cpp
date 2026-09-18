@@ -280,8 +280,7 @@ AllInputs compute_all_inputs(const ir::IrModule &mod) {
              * deberia sonar -- todos los sitios que construyen una funcion le
              * ponen nombre --, asi que si suena es que hay una via nueva. */
             in.unnamed_code = util::fnv_mix(in.unnamed_code, f.function_code);
-            in.unnamed_code =
-                util::fnv_mix(in.unnamed_code, f.param_contracts);
+            in.unnamed_code = util::fnv_mix(in.unnamed_code, f.param_contracts);
             warn_unnamed_function();
         }
     }
@@ -293,7 +292,8 @@ AllInputs compute_all_inputs(const ir::IrModule &mod) {
     }
     in.globals = util::kFnvOffset;
     for (const auto &g : mod.globals) {
-        in.globals = util::fnv_bytes(in.globals, g.first.data(), g.first.size());
+        in.globals =
+            util::fnv_bytes(in.globals, g.first.data(), g.first.size());
         in.globals = util::fnv_mix(in.globals, g.second);
     }
     return all;
@@ -347,15 +347,15 @@ uint64_t fold_declared_inputs_for_function(DomainInput set,
 }
 
 uint64_t fold_declared_inputs(DomainInput set, const ModuleInputs &in) {
-    uint64_t h = 0x9E3779B97F4A7C15ULL; // semilla != 0: declarar None es un dato
+    uint64_t h =
+        0x9E3779B97F4A7C15ULL; // semilla != 0: declarar None es un dato
     if (has_input(set, DomainInput::FunctionCode))
         h = util::fnv_mix(h, in.function_code);
     if (has_input(set, DomainInput::ParamContracts))
         h = util::fnv_mix(h, in.param_contracts);
     if (has_input(set, DomainInput::StaticData))
         h = util::fnv_mix(h, in.static_data);
-    if (has_input(set, DomainInput::Globals))
-        h = util::fnv_mix(h, in.globals);
+    if (has_input(set, DomainInput::Globals)) h = util::fnv_mix(h, in.globals);
     return h;
 }
 
@@ -501,35 +501,38 @@ void produce_ranges(Production &p) {
             p.assert_fact(std::move(f));
         }
 
-    /* Y las operaciones que DAN LA VUELTA, que el dominio apunto al plegar.
-     *
-     * Van aparte de los rangos porque no son un rango: son una operacion.  Y
-     * tienen que salir de aqui porque despues NO se pueden reconstruir -- el
-     * plegado ya sustituyo `127 + 1` por un `-128` indistinguible de uno
-     * escrito --.  El consumidor que avisa (la familia `types.int_wraparound`
-     * del linter) mira el modulo ya optimizado, donde esa suma no existe. */
-    for (const RangeFacts::Wrap &w : rf.wraps) {
-        Fact f;
-        f.what.domain = kProducerRanges;
-        f.what.code = "range.wraps";
-        f.what.a = w.exacto;
-        f.what.b = static_cast<int64_t>(w.t);
-        /* Neutro respecto al idioma: el detalle acaba en el volcado y en el
-         * mensaje, y una frase escrita aqui no la puede traducir el catalogo. */
-        f.what.detail = p.store.intern(std::to_string(w.exacto) + " -> [" +
-                                       std::to_string(w.lo) + ", " +
-                                       std::to_string(w.hi) + "]");
-        f.about = value_subject(p, fn, w.dst);
-        f.seal = s;
-        /* Se ancla al VALOR, no a su linea.  El consumidor tiene otro codigo
-         * delante, si -- pero lo que necesita es a que se refiere, no donde
-         * estaba escrito cuando se produjo: la linea la saca del intermedio que
-         * tenga en la mano (@ref resolve_anchor_line).  Guardarla aqui la
-         * convertia en un dato que caduca al reindentar. */
-        f.seal.origin.site = Anchor{Anchor::Kind::Value, w.dst};
-        support_with_structure(p, fn, f, "data-flow");
-        p.assert_fact(std::move(f));
-    }
+        /* Y las operaciones que DAN LA VUELTA, que el dominio apunto al plegar.
+         *
+         * Van aparte de los rangos porque no son un rango: son una operacion. Y
+         * tienen que salir de aqui porque despues NO se pueden reconstruir --
+         * el plegado ya sustituyo `127 + 1` por un `-128` indistinguible de uno
+         * escrito --.  El consumidor que avisa (la familia
+         * `types.int_wraparound` del linter) mira el modulo ya optimizado,
+         * donde esa suma no existe. */
+        for (const RangeFacts::Wrap &w : rf.wraps) {
+            Fact f;
+            f.what.domain = kProducerRanges;
+            f.what.code = "range.wraps";
+            f.what.a = w.exacto;
+            f.what.b = static_cast<int64_t>(w.t);
+            /* Neutro respecto al idioma: el detalle acaba en el volcado y en el
+             * mensaje, y una frase escrita aqui no la puede traducir el
+             * catalogo. */
+            f.what.detail = p.store.intern(std::to_string(w.exacto) + " -> [" +
+                                           std::to_string(w.lo) + ", " +
+                                           std::to_string(w.hi) + "]");
+            f.about = value_subject(p, fn, w.dst);
+            f.seal = s;
+            /* Se ancla al VALOR, no a su linea.  El consumidor tiene otro
+             * codigo delante, si -- pero lo que necesita es a que se refiere,
+             * no donde estaba escrito cuando se produjo: la linea la saca del
+             * intermedio que tenga en la mano (@ref resolve_anchor_line).
+             * Guardarla aqui la convertia en un dato que caduca al reindentar.
+             */
+            f.seal.origin.site = Anchor{Anchor::Kind::Value, w.dst};
+            support_with_structure(p, fn, f, "data-flow");
+            p.assert_fact(std::move(f));
+        }
     }
 }
 
@@ -844,10 +847,10 @@ void produce_layout(Production &p) {
     /* Este hueco es SOLO del nativo: el que coloca ahi es un guion de enlazado
      * que aqui no se ve, y con bytecode no existe tal cosa -- lo coloca el
      * cargador de la maquina, que es lo que el hecho de arriba afirma --. */
-    p.say_unknown(subject, UnknownReason::OpaqueBoundary,
-                  "layout.placement_is_configurable", kProducerLayout, "",
-                  Scope::only_in_backend(kBackendAot,
-                                         "layout.script_is_the_users"));
+    p.say_unknown(
+        subject, UnknownReason::OpaqueBoundary,
+        "layout.placement_is_configurable", kProducerLayout, "",
+        Scope::only_in_backend(kBackendAot, "layout.script_is_the_users"));
 }
 
 /**
@@ -950,8 +953,7 @@ void produce_memory(Production &p) {
                 continue;
             }
             const PointsToEntry &pe = pt.at(v);
-            const bool is_global =
-                l.kind == effects::AbstractLoc::Kind::Global;
+            const bool is_global = l.kind == effects::AbstractLoc::Kind::Global;
             Fact f;
             f.what.domain = kProducerMemory;
             /* Dos codigos, porque son dos propiedades distintas y la segunda es
@@ -1094,8 +1096,7 @@ void produce_loops(Production &p) {
         }
         if (seen == 0) {
             p.say_unknown(function_subject(p, fn), UnknownReason::NothingToSay,
-                          "loop.none", kProducerLoops, "",
-                          Scope::everywhere());
+                          "loop.none", kProducerLoops, "", Scope::everywhere());
             continue;
         }
 
@@ -1233,8 +1234,7 @@ void produce_loops(Production &p) {
             /* `Subject::id` vale para un valor, un bloque o una instruccion
              * segun el `kind`; aqui el `kind` ya dijo que es un bloque. */
             if (!loop_trip_fact(p.store, fn, ir::IrBlockId(about.id), tc,
-                                p.stage,
-                                Source::Static, f))
+                                p.stage, Source::Static, f))
                 continue; // no habia nada que afirmar (ya se dijo por que)
             /* El apoyo CONCRETO -- no solo el nombre del productor -- para que
              * la derivacion se pueda recorrer.  Eso solo lo sabe quien produce
@@ -1353,7 +1353,6 @@ void support_with_structure(Production &p, const ir::IrFunction &fn, Fact &f,
     f.seal.support.add(kProducerStructure);
 }
 
-
 // ===========================================================================
 // Motor
 // ===========================================================================
@@ -1453,8 +1452,8 @@ std::vector<DomainCost> current_inputs(const ir::IrModule &mod) {
                 c.by_function.reserve(all.by_function.size());
                 for (const auto &f : all.by_function)
                     c.by_function.emplace_back(
-                        f.first, fold_declared_inputs_for_function(
-                                     d.inputs, in, f.second));
+                        f.first, fold_declared_inputs_for_function(d.inputs, in,
+                                                                   f.second));
             }
         } else {
             /* Declara `None`: no mira NADA del programa, asi que sus hechos no
@@ -1527,9 +1526,8 @@ std::vector<ProductionSummary> produce(const ir::IrModule &mod,
         if (!fn.is_native) values += fn.values.size();
     const size_t domains = registry().size();
     const size_t requested = wanted.empty() ? domains : wanted.size();
-    store.reserve(domains == 0
-                      ? values * 2u + 64u
-                      : values * 2u * requested / domains + 64u);
+    store.reserve(domains == 0 ? values * 2u + 64u
+                               : values * 2u * requested / domains + 64u);
 
     /* El modulo, recorrido UNA vez.  Antes lo recorria cada productor por su
      * cuenta y cada huella otra vez -- trece pasadas donde hace falta una --,

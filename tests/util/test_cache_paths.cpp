@@ -55,7 +55,8 @@ static int g_fail = 0;
  */
 static bool ends_with(const std::string &text, const std::string &suffix) {
     if (suffix.size() > text.size()) return false;
-    return text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+    return text.compare(text.size() - suffix.size(), suffix.size(), suffix) ==
+           0;
 }
 
 /**
@@ -173,9 +174,9 @@ static void test_drawer_under_a_given_root() {
      * be.  Falling back would write somebody's packages into the working
      * directory, which is the kind of default that never errors and always
      * surprises. */
-    CHECK(util::cache_dir_under(std::string(), util::CacheKind::Packages)
-              .empty(),
-          "an empty root yields an empty path, not a relative one");
+    CHECK(
+        util::cache_dir_under(std::string(), util::CacheKind::Packages).empty(),
+        "an empty root yields an empty path, not a relative one");
 }
 
 /**

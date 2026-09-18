@@ -161,9 +161,9 @@ std::string canonical_based(std::string_view text) {
     // El recorrido de arriba se para en el `.` o en la `p` -- no son digitos
     // hexadecimales --, asi que sin esto lo que sigue se tomaba por el sufijo
     // de tipo, y `0x1.8p+1` salia `0x01_.8p+1`: relleno a par de digitos y
-    // separador metidos en mitad de la mantisa.  Seguia valiendo lo mismo, pero para un literal
-    // cuya razon de ser es ensenar los BITS EXACTOS, esconderlos detras de un
-    // relleno es justo lo contrario de lo que se pide.
+    // separador metidos en mitad de la mantisa.  Seguia valiendo lo mismo, pero
+    // para un literal cuya razon de ser es ensenar los BITS EXACTOS,
+    // esconderlos detras de un relleno es justo lo contrario de lo que se pide.
     //
     // Ni el `.` ni la `p` aparecen en un sufijo de tipo (i8..i64, u8..u64,
     // f32, f64), asi que basta buscarlos en todo el lexema: asi tambien se

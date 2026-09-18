@@ -446,7 +446,8 @@ void host_cpuid(unsigned leaf, unsigned subleaf, unsigned regs[4]) {
 #endif
 }
 
-/// Lee de CPUID lo que decide la microarquitectura, en el core que ejecuta esto.
+/// Lee de CPUID lo que decide la microarquitectura, en el core que ejecuta
+/// esto.
 HostCpuId read_host_cpuid() {
     HostCpuId id;
     unsigned r[4] = {0, 0, 0, 0};
@@ -476,9 +477,9 @@ HostCpuId read_host_cpuid() {
         id.hybrid = ((r[3] >> 15) & 1u) != 0;
     }
     // Clase del core: hoja 0x1A, EAX[31:24].  Se consulta las DOS condiciones
-    // -- que la hoja exista Y que la pieza sea hibrida -- porque una hoja que no
-    // existe no devuelve un error, devuelve los registros de OTRA hoja, y eso
-    // daria una clase de core inventada con toda la pinta de ser buena.
+    // -- que la hoja exista Y que la pieza sea hibrida -- porque una hoja que
+    // no existe no devuelve un error, devuelve los registros de OTRA hoja, y
+    // eso daria una clase de core inventada con toda la pinta de ser buena.
     if (id.hybrid && max_leaf >= 0x1A) {
         host_cpuid(0x1A, 0, r);
         id.core_type = (r[0] >> 24) & 0xFFu;
@@ -524,9 +525,9 @@ std::string uarch_from_cpuid(const HostCpuId &id) {
         case 0x6C: return "intel-icelake";
         case 0xA7: return "intel-rocketlake";
         // Alder Lake y Raptor Lake son HIBRIDAS: el mismo modelo describe un
-        // core P y uno E, que no comparten latencias ni puertos.  La DB trae las
-        // dos filas; elegir siempre la P costeaba con el modelo equivocado los
-        // 8 cores E de un i7-13700KF de 24 hilos.
+        // core P y uno E, que no comparten latencias ni puertos.  La DB trae
+        // las dos filas; elegir siempre la P costeaba con el modelo equivocado
+        // los 8 cores E de un i7-13700KF de 24 hilos.
         case 0x97:
         case 0x9A:
         case 0xBF:

@@ -343,7 +343,8 @@ struct Subject {
 
     bool operator==(const Subject &o) const {
         return kind == o.kind && id == o.id &&
-               (function == o.function || std::string(function) == o.function) &&
+               (function == o.function ||
+                std::string(function) == o.function) &&
                (stage == o.stage || std::string(stage) == o.stage);
     }
 };
@@ -587,8 +588,7 @@ struct Scope {
      * @param backend_name Modo donde vale.
      * @param reason       Nombre estable del vocabulario del dominio.
      */
-    static Scope only_in_backend(const char *backend_name,
-                                 const char *reason) {
+    static Scope only_in_backend(const char *backend_name, const char *reason) {
         Scope s;
         s.backend = backend_name;
         s.why = reason;

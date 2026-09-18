@@ -343,7 +343,8 @@ extern const uint64_t kFormExtended[256];
 extern const uint64_t kFormExactPrimary[4];
 extern const uint64_t kFormExactExtended[4];
 
-/// @return true si la forma de @p opcode es de fiar (ver @ref kFormExactPrimary).
+/// @return true si la forma de @p opcode es de fiar (ver @ref
+/// kFormExactPrimary).
 inline bool vm_form_exact(bool extended, uint8_t opcode) {
     const uint64_t *mapa = extended ? kFormExactExtended : kFormExactPrimary;
     return ((mapa[opcode >> 6] >> (opcode & 63)) & 1u) != 0;
@@ -381,15 +382,15 @@ extern const uint8_t kFixedExtended[256];
  * guarda su unico registro.
  */
 enum VmForm : uint16_t {
-    VF_REG1 = 1u << 0,    ///< reg1 entero
-    VF_REG1_LO = 1u << 1, ///< nibble bajo de reg1
-    VF_REG1_HI = 1u << 2, ///< nibble alto de reg1
-    VF_REG2 = 1u << 3,    ///< reg2 entero
-    VF_REG2_LO = 1u << 4, ///< nibble bajo de reg2
-    VF_REG2_HI = 1u << 5, ///< nibble alto de reg2
-    VF_REG3 = 1u << 6,    ///< reg3 entero (forma de memoria)
-    VF_REG3_LO = 1u << 7, ///< nibble bajo de reg3
-    VF_REG3_HI = 1u << 8, ///< nibble alto de reg3
+    VF_REG1 = 1u << 0,     ///< reg1 entero
+    VF_REG1_LO = 1u << 1,  ///< nibble bajo de reg1
+    VF_REG1_HI = 1u << 2,  ///< nibble alto de reg1
+    VF_REG2 = 1u << 3,     ///< reg2 entero
+    VF_REG2_LO = 1u << 4,  ///< nibble bajo de reg2
+    VF_REG2_HI = 1u << 5,  ///< nibble alto de reg2
+    VF_REG3 = 1u << 6,     ///< reg3 entero (forma de memoria)
+    VF_REG3_LO = 1u << 7,  ///< nibble bajo de reg3
+    VF_REG3_HI = 1u << 8,  ///< nibble alto de reg3
     VF_REGI = 1u << 9,     ///< registro de la forma con inmediato
     VF_REGI_LO = 1u << 10, ///< nibble bajo de ese registro
     VF_REGI_HI = 1u << 11, ///< nibble alto de ese registro
@@ -412,7 +413,9 @@ inline uint64_t vm_form(bool extended, uint8_t opcode) {
 }
 
 /// Los cuatro campos de @ref vm_form, por separado.
-inline uint16_t vm_form_read(uint64_t f) { return (uint16_t)(f & 0xFFFF); }
+inline uint16_t vm_form_read(uint64_t f) {
+    return (uint16_t)(f & 0xFFFF);
+}
 inline uint16_t vm_form_write(uint64_t f) {
     return (uint16_t)((f >> 16) & 0xFFFF);
 }

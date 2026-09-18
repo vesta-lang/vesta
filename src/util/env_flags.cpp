@@ -300,8 +300,8 @@ void print_env_flags(std::ostream &out) {
             }
             char line[256];
             std::snprintf(line, sizeof(line), "    %s %-34s %-10s %-22s%s",
-                          set ? "[*]" : "   ", f.name,
-                          flag_kind_name(f.kind), flag_scope_name(f.scope),
+                          set ? "[*]" : "   ", f.name, flag_kind_name(f.kind),
+                          flag_scope_name(f.scope),
                           here ? "" : "  (no en este sistema)");
             out << line << "\n";
         }

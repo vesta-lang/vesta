@@ -28,9 +28,9 @@ namespace analyze {
 
 /// Una operacion cuyo resultado no cabe en el tipo que declara.
 struct IntWrap {
-    uint32_t line = 0;              ///< linea fuente de la operacion.
-    int64_t exact = 0;              ///< lo que da la cuenta sin envolver.
-    int64_t lo = 0, hi = 0;         ///< lo que el tipo admite.
+    uint32_t line = 0;                  ///< linea fuente de la operacion.
+    int64_t exact = 0;                  ///< lo que da la cuenta sin envolver.
+    int64_t lo = 0, hi = 0;             ///< lo que el tipo admite.
     ir::IrType type = ir::IrType::VOID; ///< el tipo del resultado.
 };
 

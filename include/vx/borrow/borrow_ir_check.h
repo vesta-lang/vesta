@@ -29,13 +29,13 @@
  *     que sale de mirar los sitios de llamada.
  *
  * Juntarlos es lo que produce el veredicto, y juntar es del consumidor.  Acunar
- * un hecho "promesa incumplida" seria meter el juicio dentro del dato y duplicar
- * lo que esas dos proposiciones ya dicen.
+ * un hecho "promesa incumplida" seria meter el juicio dentro del dato y
+ * duplicar lo que esas dos proposiciones ya dicen.
  *
  * @par Y solo acusa con una PRUEBA
- * Un par sobre el que no se pudo decidir no es una violacion: no poder demostrar
- * que dos regiones son disjuntas NO es demostrar que se solapan.  Solo el
- * veredicto demostrado -- con la llamada que lo ensena -- sale de aqui.
+ * Un par sobre el que no se pudo decidir no es una violacion: no poder
+ * demostrar que dos regiones son disjuntas NO es demostrar que se solapan. Solo
+ * el veredicto demostrado -- con la llamada que lo ensena -- sale de aqui.
  */
 
 #ifndef VX_BORROW_IR_CHECK_H

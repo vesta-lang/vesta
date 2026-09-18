@@ -46,8 +46,8 @@
 #define VESTA_UTIL_SHARED_MUTEX_H
 
 /* Fuera del `#if`: las guardas MEDIDAS de abajo son iguales en los dos sistemas
- * y las necesitan siempre.  Lo que depende del sistema es el estado del cerrojo,
- * no quien lo cronometra. */
+ * y las necesitan siempre.  Lo que depende del sistema es el estado del
+ * cerrojo, no quien lo cronometra. */
 #include "util/reloj.h" // el reloj del proyecto, no el de la biblioteca
 
 #include <atomic>

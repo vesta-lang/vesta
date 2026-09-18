@@ -267,7 +267,7 @@ class Lexer {
     /// solo el puntero.  Por valor, cada `SourceLoc` que sale de aqui reservaba
     /// memoria -- y de aqui sale una por token.
     const std::string *file_name_;
-    Diagnostics &diags_;   ///< Sumidero de diagnosticos (no-owner).
+    Diagnostics &diags_; ///< Sumidero de diagnosticos (no-owner).
 
     size_t pos_ = 0; ///< Indice de byte en source_.
     /// De que expansion viene lo que se esta leyendo, o @c nullptr si es

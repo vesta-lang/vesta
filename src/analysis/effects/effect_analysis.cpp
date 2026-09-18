@@ -510,7 +510,8 @@ EffectAnalysis::build_summary(const std::vector<const ir::IrModule *> &mods) {
         /* Sin resumen no hay nombre canonico al que apuntar.  No pasa -- los
          * dos mapas se llenan en el mismo bucle, funcion por funcion --, y si
          * pasara, antes se encolaba un nombre que al recomputarlo se creaba a
-         * si mismo una entrada vacia en el resumen.  Saltarlo es lo correcto. */
+         * si mismo una entrada vacia en el resumen.  Saltarlo es lo correcto.
+         */
         if (cf == out.fns.end()) continue;
         const std::string *caller = &cf->first;
         for (const std::string &callee : kv.second.static_callees)

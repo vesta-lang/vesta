@@ -94,8 +94,8 @@ vm::ptr_mapped host_target(uint64_t page) {
  * que difieren en los altos no comparten ninguno.
  */
 enum class Pattern {
-    Contiguous, ///< paginas seguidas desde 0: el caso comun de un programa
-    ScatteredMid, ///< separadas 16 MB: cambia PT1 en cada una
+    Contiguous,    ///< paginas seguidas desde 0: el caso comun de un programa
+    ScatteredMid,  ///< separadas 16 MB: cambia PT1 en cada una
     ScatteredHigh, ///< separadas 1 TB: cambia PT2, que es el nivel de 24 bits
 };
 
@@ -163,9 +163,8 @@ void bench_lookup(Pattern p) {
         const tlb::TLBEntryData *e = t.get_entry(address_of(p, idx));
         sink += (e != nullptr) ? (uintptr_t)e->address.ptr_host : 0u;
     }
-    const double ns =
-        (double)::util::reloj::a_ns(::util::reloj::ahora() - t0) /
-        (double)kLookups;
+    const double ns = (double)::util::reloj::a_ns(::util::reloj::ahora() - t0) /
+                      (double)kLookups;
 
     if (sink == 0) std::printf("  (sink vacio: el bucle se borro)\n");
     report("consulta", pattern_name(p), ns, "ns/consulta");
@@ -323,7 +322,6 @@ bool test_race() {
 }
 
 } // namespace
-
 
 // --- Memoria del proceso, por plataforma ----------------------------------
 

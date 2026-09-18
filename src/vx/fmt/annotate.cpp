@@ -440,10 +440,9 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 /* Y un nombre que este fichero declara como tipo cuenta igual
                  * que uno integrado: `(Edad)n` es un cast, `(v) - 1` no.  Sin
                  * esto el formateador dejaba las dos formas del primero. */
-                const bool tipo_nombrado =
-                    is_type_keyword(tipo) ||
-                    (tipo == TokenKind::IDENTIFIER &&
-                     tipos.count(pieces[ini].text) != 0);
+                const bool tipo_nombrado = is_type_keyword(tipo) ||
+                                           (tipo == TokenKind::IDENTIFIER &&
+                                            tipos.count(pieces[ini].text) != 0);
                 size_t t = ini + 1;
                 size_t estrellas = 0;
                 while (t < pieces.size()) {

@@ -657,7 +657,8 @@ inline const ClassMethodInfo *find_method(const Layout &lay,
 
 /**
  * @enum NewHelperKind
- * @brief De donde sale la memoria del objeto que construye un ayudante `__new_`.
+ * @brief De donde sale la memoria del objeto que construye un ayudante
+ * `__new_`.
  */
 enum class NewHelperKind : uint8_t {
     Normal, ///< el monton de siempre (o `calloc` en un binario nativo).
@@ -697,8 +698,10 @@ inline const std::string &new_helper_symbol(const ClassMethodInfo *ctor,
      * que siempre tuvo. */
     if (ctor != nullptr && ctor->is_overloaded)
         s += "_" + overload::discriminator(ctor->param_types);
-    if (kind == NewHelperKind::Shared) s += "_shared";
-    else if (kind == NewHelperKind::Gc) s += "_gc";
+    if (kind == NewHelperKind::Shared)
+        s += "_shared";
+    else if (kind == NewHelperKind::Gc)
+        s += "_gc";
     return *util::intern_name(s);
 }
 
@@ -724,7 +727,8 @@ inline const std::string &new_helper_symbol(const ClassMethodInfo *ctor,
 template <typename Layout>
 inline const ClassMethodInfo *picked_method(const Layout &lay,
                                             uint32_t slot) noexcept {
-    if (slot >= lay.methods.size()) return nullptr; // cubre tambien el centinela
+    if (slot >= lay.methods.size())
+        return nullptr; // cubre tambien el centinela
     return &lay.methods[slot];
 }
 
@@ -2193,9 +2197,10 @@ class TypeChecker {
      * antes de decir que el tipo no tiene ese metodo se mira si hay una funcion
      * libre visible AQUI cuyo primer parametro admita el receptor.
      *
-     * Si la hay, el nodo se convierte en la otra grafia y lo comprueba el camino
-     * de siempre: reescribir en vez de resolver aqui es lo que impide que las
-     * dos formas diverjan, y lo que hace que al bajado no le llegue nada nuevo.
+     * Si la hay, el nodo se convierte en la otra grafia y lo comprueba el
+     * camino de siempre: reescribir en vez de resolver aqui es lo que impide
+     * que las dos formas diverjan, y lo que hace que al bajado no le llegue
+     * nada nuevo.
      *
      * @param e    La llamada.
      * @param fa   El acceso `x.f` que le sirve de destino.
@@ -2463,8 +2468,8 @@ class TypeChecker {
      * @param want_static Si se busca entre los `static` o entre los de
      *                    instancia.  Una clase puede tener los dos con el mismo
      *                    nombre, y se llaman de maneras distintas: mezclarlos
-     *                    aqui elegiria uno al que la llamada ni siquiera le pasa
-     *                    el receptor.
+     *                    aqui elegiria uno al que la llamada ni siquiera le
+     * pasa el receptor.
      * @return El metodo elegido; nunca nulo (si ninguna encaja, la primera con
      *         ese nombre, para que el error lo de la comprobacion de argumentos
      *         y hable de tipos en vez de decir que el metodo no existe).
@@ -2477,10 +2482,10 @@ class TypeChecker {
     /**
      * @brief Lo unico que la regla de seleccion necesita saber de aqui.
      *
-     * @c vx::overload no depende del comprobador -- ni de sus cabeceras -- y aun
-     * asi tiene que preguntar si un argumento vale para un parametro admitiendo
-     * conversion.  Entra por puntero a funcion: sin objeto que construir, sin
-     * tabla virtual y sin @c std::function.
+     * @c vx::overload no depende del comprobador -- ni de sus cabeceras -- y
+     * aun asi tiene que preguntar si un argumento vale para un parametro
+     * admitiendo conversion.  Entra por puntero a funcion: sin objeto que
+     * construir, sin tabla virtual y sin @c std::function.
      *
      * @param ctx   El comprobador, tal cual se le paso a @c overload::select.
      * @param param Tipo del parametro.
@@ -2524,7 +2529,6 @@ class TypeChecker {
      *         traduce: entra como dato en el mensaje.
      */
     const char *declared_type_keyword(const std::string &name) const;
-
 
     /**
      * @brief Construye la ficha de un metodo a partir de su declaracion.
@@ -3136,7 +3140,6 @@ class TypeChecker {
     }
 
   private:
-
   public:
     uint64_t next_gensym_id() noexcept { return gensym_counter_++; }
     std::unordered_map<std::string,

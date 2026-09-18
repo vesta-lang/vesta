@@ -557,8 +557,10 @@ void family_bulk_by_hand(const LintInput &in, vx::Diagnostics &diags) {
                  * optimizacion y lo que tenemos delante es el codigo de
                  * DESPUES, asi que resolver un ancla al intermedio daria la
                  * posicion de otro sitio.  Con el ancla tipada eso se puede
-                 * exigir; con el `uint32` de antes no habia forma de saberlo. */
-                if (h->seal.origin.site.kind == analysis::asa::Anchor::Kind::Line &&
+                 * exigir; con el `uint32` de antes no habia forma de saberlo.
+                 */
+                if (h->seal.origin.site.kind ==
+                        analysis::asa::Anchor::Kind::Line &&
                     h->seal.origin.site.id > 0)
                     loc.line = h->seal.origin.site.id;
                 if (loc.line > 0 && !ya_dicho.insert(loc.line).second) continue;
@@ -684,9 +686,10 @@ void family_overlay_gaps(const LintInput &in, vx::Diagnostics &diags) {
          * instruccion: su ancla es una LINEA, que es el ultimo recurso y el
          * unico que aqui puede valer -- no hay funcion contra la que resolver
          * nada, que es lo que dice el comentario de arriba. */
-        loc.line = huella->seal.origin.site.kind == analysis::asa::Anchor::Kind::Line
-                       ? huella->seal.origin.site.id
-                       : 0;
+        loc.line =
+            huella->seal.origin.site.kind == analysis::asa::Anchor::Kind::Line
+                ? huella->seal.origin.site.id
+                : 0;
         if (!cabe_en_el_fichero(in, loc.line)) continue;
 
         /* Los bytes cubiertos, marcados uno a uno.  La huella de una vista son
@@ -710,7 +713,8 @@ void family_overlay_gaps(const LintInput &in, vx::Diagnostics &diags) {
                 continue;
             }
             const size_t ini = i;
-            while (i < cubierto.size() && !cubierto[i]) ++i;
+            while (i < cubierto.size() && !cubierto[i])
+                ++i;
             char desde[24], hasta[24];
             std::snprintf(desde, sizeof(desde), "0x%02llX",
                           static_cast<unsigned long long>(ini));

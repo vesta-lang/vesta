@@ -38,7 +38,7 @@ struct IrFunction;
 /// Declarada, no incluida: `ssa_ir.h` arrastra medio compilador y aqui solo se
 /// necesita nombrar la operacion que causo un hueco.
 enum class IrOp : uint16_t;
-}
+} // namespace ir
 
 namespace analysis {
 
@@ -315,9 +315,8 @@ ir::IrValueId single_value_of_slot(const ir::IrFunction &fn,
  * @return Un valor por cada entrada de @p slots, en el mismo orden;
  *         @c ir::IR_NO_VALUE donde no se pueda afirmar cual es.
  */
-std::vector<ir::IrValueId>
-single_values_of_slots(const ir::IrFunction &fn,
-                       ir::IrValueList slots);
+std::vector<ir::IrValueId> single_values_of_slots(const ir::IrFunction &fn,
+                                                  ir::IrValueList slots);
 
 } // namespace analysis
 

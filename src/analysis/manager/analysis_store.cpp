@@ -148,8 +148,8 @@ void AnalysisStore::flush() {
      *
      * Envejecer y no "quedarse solo con lo usado" es la diferencia entre un
      * almacen que dura y uno que se vacia solo: un consumidor que no corre en
-     * esta compilacion -- porque sus hechos vinieron del fichero de hechos -- no
-     * significa que su analisis sobre.  @see kDefaultUnusedRuns */
+     * esta compilacion -- porque sus hechos vinieron del fichero de hechos --
+     * no significa que su analisis sobre.  @see kDefaultUnusedRuns */
     std::vector<uint64_t> to_write;
     to_write.reserve(entries_.size());
     for (std::pair<const uint64_t, Entry> &kv : entries_) {
@@ -189,7 +189,8 @@ void AnalysisStore::flush() {
     std::error_code ec;
     std::filesystem::create_directories(
         std::filesystem::path(path_).parent_path(), ec);
-    if (util::write_whole_file(path_, bytes)) stats_.bytes_written = bytes.size();
+    if (util::write_whole_file(path_, bytes))
+        stats_.bytes_written = bytes.size();
 }
 
 bool AnalysisStore::load(uint64_t key, std::vector<uint8_t> &out) {

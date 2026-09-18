@@ -145,7 +145,8 @@ struct BorrowRecord {
 
 /**
  * @struct OwnerState
- * @brief Lo que se sabe de una RAIZ: su categoria y lo que hay prestado de ella.
+ * @brief Lo que se sabe de una RAIZ: su categoria y lo que hay prestado de
+ * ella.
  *
  * La raiz es el indice, no la unidad: de `p` pueden estar vivos a la vez un
  * prestamo de `p.a` y otro de `p.b`, que no se estorban.  Por eso la categoria

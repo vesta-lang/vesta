@@ -12,9 +12,10 @@
  * Que valida, y por que asi
  * -------------------------
  * `decode_effects` declara la FORMA de cada instruccion en codigo: que registro
- * se lee, cual se escribe y en que campo vive.  Comprobar eso contra si mismo no
- * demostraria nada, asi que se compara con el DESENSAMBLADOR, que llega al mismo
- * dato por otro camino -- el formato de cada opcode, que es como imprime `r3`.
+ * se lee, cual se escribe y en que campo vive.  Comprobar eso contra si mismo
+ * no demostraria nada, asi que se compara con el DESENSAMBLADOR, que llega al
+ * mismo dato por otro camino -- el formato de cada opcode, que es como imprime
+ * `r3`.
  *
  * Dos derivaciones independientes que coinciden es una prueba; una sola es una
  * afirmacion.
@@ -70,8 +71,8 @@ void mal(const char *que, const char *nombre, const char *tabla, int idx,
 /* Bytes de operando de la instruccion de prueba.
  *
  * Cada byte lleva un par de nibbles DISTINTO.  Que sean distintos importa: si
- * dos operandos cayeran en el mismo registro no se podria ver que son dos, y una
- * forma mal declarada pasaria desapercibida. */
+ * dos operandos cayeran en el mismo registro no se podria ver que son dos, y
+ * una forma mal declarada pasaria desapercibida. */
 uint8_t operand_byte(size_t k) {
     const unsigned lo = static_cast<unsigned>((2 * k + 1) & 0x0F);
     const unsigned hi = static_cast<unsigned>((2 * k + 2) & 0x0F);
@@ -82,9 +83,8 @@ uint8_t operand_byte(size_t k) {
 /// VM -- el mismo que usa el interprete, no una reimplementacion.
 bool build(bool ext, int idx, const uint8_t *bytes, size_t n,
            runtime::DecodedInstr &d) {
-    runtime::InstrFormat *fmt =
-        ext ? &runtime::decode_table_extended[idx]
-            : &runtime::decode_table_primary[idx];
+    runtime::InstrFormat *fmt = ext ? &runtime::decode_table_extended[idx]
+                                    : &runtime::decode_table_primary[idx];
     if (fmt->decode == nullptr || fmt->name == nullptr || !fmt->name[0])
         return false;
 
@@ -174,7 +174,8 @@ int main(int argc, char **argv) {
                                         "r2", "r2.bajo", "r2.alto"};
             std::string s;
             for (int b = 0; b < 6; ++b)
-                if ((m >> b) & 1) s += std::string(s.empty() ? "" : ",") + kN[b];
+                if ((m >> b) & 1)
+                    s += std::string(s.empty() ? "" : ",") + kN[b];
             return s.empty() ? std::string("-") : s;
         };
         std::map<const void *, std::vector<std::string>> grupos;
@@ -244,9 +245,11 @@ int main(int argc, char **argv) {
             "  Se declara desde el CONTRATO del opcode; esto confirma, no "
             "decide.\n\n");
         std::vector<std::pair<size_t, const void *>> orden;
-        for (const auto &kv : grupos) orden.push_back({kv.second.size(), kv.first});
-        std::sort(orden.begin(), orden.end(),
-                  [](const auto &a, const auto &b) { return a.first > b.first; });
+        for (const auto &kv : grupos)
+            orden.push_back({kv.second.size(), kv.first});
+        std::sort(orden.begin(), orden.end(), [](const auto &a, const auto &b) {
+            return a.first > b.first;
+        });
         for (const auto &o : orden) {
             std::printf("--- %zu instrucciones ---\n", o.first);
             for (const std::string &s : grupos[o.second])
@@ -287,8 +290,7 @@ int main(int argc, char **argv) {
             if (!runtime::probe_effects(d, e)) {
                 ++sin_declarar;
                 pendientes.push_back(std::string(nombre) + " " + tabla + " 0x" +
-                                     (idx < 16 ? "0" : "") +
-                                     [idx] {
+                                     (idx < 16 ? "0" : "") + [idx] {
                                          char b[4];
                                          std::snprintf(b, sizeof(b), "%X", idx);
                                          return std::string(b);
@@ -307,7 +309,8 @@ int main(int argc, char **argv) {
             uint16_t d_read = 0, d_write = 0;
             for (const auto &r : regs) {
                 if (r.floating) continue; // el banco ancho va aparte
-                const uint16_t bit = static_cast<uint16_t>(1u << (r.index & 0xF));
+                const uint16_t bit =
+                    static_cast<uint16_t>(1u << (r.index & 0xF));
                 if (r.dest)
                     d_write |= bit;
                 else
@@ -331,7 +334,8 @@ int main(int argc, char **argv) {
              * los efectos NO pueden nombrar un registro que la instruccion no
              * nombra.  Si lo hacen, la forma declarada esta leyendo un nibble
              * que no es un operando, y eso son dependencias inventadas. */
-            const uint16_t nombra_disasm = static_cast<uint16_t>(d_read | d_write);
+            const uint16_t nombra_disasm =
+                static_cast<uint16_t>(d_read | d_write);
             const uint16_t nombra_efectos =
                 static_cast<uint16_t>(e.reg_read | e.reg_write);
             if ((nombra_efectos & ~nombra_disasm) != 0) {
@@ -344,7 +348,8 @@ int main(int argc, char **argv) {
             /* Y cuando la instruccion tiene TRES registros no hay ambiguedad
              * posible: es una forma de tres direcciones, el destino posicional
              * es el semantico, y los dos tienen que decir el mismo. */
-            if (regs.size() >= 3 && e.reg_write != 0 && d_write != e.reg_write) {
+            if (regs.size() >= 3 && e.reg_write != 0 &&
+                d_write != e.reg_write) {
                 mal("el destino de tres direcciones no coincide", nombre, tabla,
                     idx,
                     "desensamblador: " + mascara(d_write) +
@@ -354,13 +359,14 @@ int main(int argc, char **argv) {
             /* --- 2. El destino se puede reescribir donde dice --- */
             if (e.dest_slot != runtime::RS_NONE) {
                 runtime::DecodedInstr copia = d;
-                const uint8_t nuevo = static_cast<uint8_t>((e.dest_reg + 7) & 0xF);
+                const uint8_t nuevo =
+                    static_cast<uint8_t>((e.dest_reg + 7) & 0xF);
                 runtime::reg_slot_set(copia, e.dest_slot, nuevo);
                 const uint8_t leido = runtime::reg_slot_get(copia, e.dest_slot);
                 if (leido != nuevo) {
                     mal("el destino no se puede reescribir", nombre, tabla, idx,
-                        "se escribio r" + std::to_string(nuevo) + " y se leyo r" +
-                            std::to_string(leido));
+                        "se escribio r" + std::to_string(nuevo) +
+                            " y se leyo r" + std::to_string(leido));
                 }
                 /* Y no puede haber pisado nada mas: retargetear el destino no
                  * debe cambiar los operandos de origen. */
@@ -384,10 +390,10 @@ int main(int argc, char **argv) {
 
     /* --- 3. El estrechamiento de `mov` no se pasa de listo ---------------
      *
-     * Por opcode, `mov` declara que puede tocar cualquiera de los cuatro campos.
-     * Por instancia dice uno.  La UNION sobre todo el espacio de operandos tiene
-     * que cubrir lo que declara el opcode: si se quedara corta, habria una
-     * combinacion cuyos efectos se estarian negando. */
+     * Por opcode, `mov` declara que puede tocar cualquiera de los cuatro
+     * campos. Por instancia dice uno.  La UNION sobre todo el espacio de
+     * operandos tiene que cubrir lo que declara el opcode: si se quedara corta,
+     * habria una combinacion cuyos efectos se estarian negando. */
     {
         const runtime::vm_isa::VmInstr *v =
             runtime::vm_isa::vm_instr(/*extended=*/true, 0x14);
@@ -453,7 +459,8 @@ int main(int argc, char **argv) {
             /* Se sigue UN nivel: `decode_effects` es un envoltorio de dos
              * lineas sobre el cuerpo comun, asi que mirar solo el envoltorio
              * daria un veredicto sobre nada.  Con un nivel se entra al cuerpo y
-             * no mas alla -- el fallo fatal arrastra media libreria estandar. */
+             * no mas alla -- el fallo fatal arrastra media libreria estandar.
+             */
             int llamadas = 0, saltos_indirectos = 0, instrucciones = 0;
             tests::WalkResult res;
             std::set<tests::WalkVisit> vistas;
@@ -476,8 +483,9 @@ int main(int argc, char **argv) {
             std::printf("  %d llamadas, %d saltos indirectos\n", llamadas,
                         saltos_indirectos);
             if (saltos_indirectos == 0) {
-                std::printf("  FALLO  no hay salto calculado: el despacho se ha "
-                            "convertido en otra cosa\n");
+                std::printf(
+                    "  FALLO  no hay salto calculado: el despacho se ha "
+                    "convertido en otra cosa\n");
                 ++fallos;
             }
             /* Se admite UNA llamada: la del fallo que mata el programa cuando
@@ -508,8 +516,9 @@ int main(int argc, char **argv) {
      * razon mide es lo que anade el despacho de la forma sobre esa lectura. */
     if (!medir.empty()) {
         const util::reloj::Info &clk = util::reloj::info();
-        std::printf("\nCoste (reloj: %s, resolucion %.2f ns, lectura %lld ns)\n",
-                    clk.fuente, clk.resolucion_ns, clk.coste_ns);
+        std::printf(
+            "\nCoste (reloj: %s, resolucion %.2f ns, lectura %lld ns)\n",
+            clk.fuente, clk.resolucion_ns, clk.coste_ns);
 
         constexpr int kVueltas = 200000;
         uint64_t suma = 0; // impide que el optimizador borre el trabajo
@@ -558,12 +567,14 @@ int main(int argc, char **argv) {
             }
         const uint64_t t4 = util::reloj::ahora();
 
-        const double n = static_cast<double>(kVueltas) *
-                         static_cast<double>(medir.size());
+        const double n =
+            static_cast<double>(kVueltas) * static_cast<double>(medir.size());
         const double ns_predicho =
             static_cast<double>(util::reloj::a_ns(t4 - t3)) / n;
-        const double ns_todo = static_cast<double>(util::reloj::a_ns(t1 - t0)) / n;
-        const double ns_base = static_cast<double>(util::reloj::a_ns(t2 - t1)) / n;
+        const double ns_todo =
+            static_cast<double>(util::reloj::a_ns(t1 - t0)) / n;
+        const double ns_base =
+            static_cast<double>(util::reloj::a_ns(t2 - t1)) / n;
         const double razon = ns_base > 0.0 ? ns_todo / ns_base : 0.0;
 
         std::printf("  %.2f ns por consulta, opcodes MEZCLADOS (%zu x %d "
@@ -573,8 +584,9 @@ int main(int argc, char **argv) {
                     ns_predicho);
         std::printf("  (salen iguales: el despacho no lo domina la prediccion "
                     "del salto)\n");
-        std::printf("  %.2f ns solo la lectura de la tabla (parte irreducible)\n",
-                    ns_base);
+        std::printf(
+            "  %.2f ns solo la lectura de la tabla (parte irreducible)\n",
+            ns_base);
         std::printf("  razon %.2fx\n", razon);
         std::printf("  (suma %llu -- solo existe para que no se optimice el "
                     "bucle)\n",
@@ -584,11 +596,11 @@ int main(int argc, char **argv) {
          *
          * La RAZON no es una caracterizacion justa: el denominador es un bucle
          * que el compilador optimiza mucho mas agresivamente que el camino real
-         * -- puede sacar la carga fuera o encadenar las dependencias --, asi que
-         * decir "el despacho cuesta 8 veces la lectura" seria enganoso.  Pero SI
-         * es un disparador estable, que es otro uso: normaliza contra la misma
-         * maquina y el mismo compilador.  Medido en limpio da 5,8-8,0x; con un
-         * `std::string` metido en el camino se va a 15x.
+         * -- puede sacar la carga fuera o encadenar las dependencias --, asi
+         * que decir "el despacho cuesta 8 veces la lectura" seria enganoso.
+         * Pero SI es un disparador estable, que es otro uso: normaliza contra
+         * la misma maquina y el mismo compilador.  Medido en limpio da
+         * 5,8-8,0x; con un `std::string` metido en el camino se va a 15x.
          *
          * El ABSOLUTO se escala por lo que cuesta leer el reloj aqui, para que
          * no dependa de lo rapida que sea la maquina.  Caza los ordenes de
@@ -614,15 +626,16 @@ int main(int argc, char **argv) {
          * ejecucion la crea; las siguientes comparan.
          *
          * La tolerancia va en instrucciones por milisegundo, que es la magnitud
-         * que se lee, y sale de la dispersion MEDIDA (4,20-4,73 ns por consulta,
-         * o sea unas 211.000-238.000 por ms: un 12%).  Se pone al 25% para que
-         * el ruido de una maquina cargada no dispare, y aun asi caza el 2x de
-         * meter una construccion de cadena en el camino. */
+         * que se lee, y sale de la dispersion MEDIDA (4,20-4,73 ns por
+         * consulta, o sea unas 211.000-238.000 por ms: un 12%).  Se pone al 25%
+         * para que el ruido de una maquina cargada no dispare, y aun asi caza
+         * el 2x de meter una construccion de cadena en el camino. */
         const double instr_ms = 1e6 / ns_todo;
         const double instr_s = instr_ms * 1000.0;
-        std::printf("  %.0f instrucciones analizadas por ms  (%.1f millones por "
-                    "segundo)\n",
-                    instr_ms, instr_s / 1e6);
+        std::printf(
+            "  %.0f instrucciones analizadas por ms  (%.1f millones por "
+            "segundo)\n",
+            instr_ms, instr_s / 1e6);
 
         constexpr double kToleranciaMs = 0.25;
         const char *kBase = "effects_decode_baseline.txt";
@@ -645,14 +658,14 @@ int main(int argc, char **argv) {
             std::printf("  linea base %.0f por ms  (%+.0f, %+.1f%%)\n", base_ms,
                         dif, rel * 100.0);
             if (rel < -kToleranciaMs) {
-                std::printf("  FALLO  se analizan %.0f instrucciones por ms "
-                            "MENOS que la linea base\n"
-                            "         (%.0f contra %.0f, tolerancia %.0f%%).  "
-                            "Posible regresion; si el\n"
-                            "         cambio es deliberado, borrar %s y volver a "
-                            "medir.\n",
-                            -dif, instr_ms, base_ms, kToleranciaMs * 100.0,
-                            kBase);
+                std::printf(
+                    "  FALLO  se analizan %.0f instrucciones por ms "
+                    "MENOS que la linea base\n"
+                    "         (%.0f contra %.0f, tolerancia %.0f%%).  "
+                    "Posible regresion; si el\n"
+                    "         cambio es deliberado, borrar %s y volver a "
+                    "medir.\n",
+                    -dif, instr_ms, base_ms, kToleranciaMs * 100.0, kBase);
                 ++fallos;
             } else if (rel > kToleranciaMs) {
                 /* Subir tambien se avisa, pero no falla: puede ser una mejora
@@ -672,17 +685,18 @@ int main(int argc, char **argv) {
             (clk.coste_ns > 0) ? 4.0 * static_cast<double>(clk.coste_ns) : 20.0;
         constexpr double kRazonMax = 11.0;
         if (ns_todo > tope_ns || razon > kRazonMax) {
-            std::printf("  FALLO  %.2f ns por consulta (tope %.2f) y razon "
-                        "%.2fx (tope %.1fx)\n"
-                        "         eso ya no es un indexado y un salto: mirar si "
-                        "se ha colado una\n"
-                        "         llamada indirecta, una construccion de cadena "
-                        "o una vuelta al desensamblador\n",
-                        ns_todo, tope_ns, razon, kRazonMax);
+            std::printf(
+                "  FALLO  %.2f ns por consulta (tope %.2f) y razon "
+                "%.2fx (tope %.1fx)\n"
+                "         eso ya no es un indexado y un salto: mirar si "
+                "se ha colado una\n"
+                "         llamada indirecta, una construccion de cadena "
+                "o una vuelta al desensamblador\n",
+                ns_todo, tope_ns, razon, kRazonMax);
             ++fallos;
         } else {
-            std::printf("  dentro de los dos topes (%.2f ns y %.1fx)\n", tope_ns,
-                        kRazonMax);
+            std::printf("  dentro de los dos topes (%.2f ns y %.1fx)\n",
+                        tope_ns, kRazonMax);
         }
     }
 
@@ -690,8 +704,8 @@ int main(int argc, char **argv) {
      *
      * El desensamblador dice que registros NOMBRA una instruccion, y con eso se
      * comprueba que la forma declarada no se invente ninguno.  Pero no puede
-     * decir cual se LEE y cual se ESCRIBE: eso no esta en el formato, esta en el
-     * codigo del manejador.
+     * decir cual se LEE y cual se ESCRIBE: eso no esta en el formato, esta en
+     * el codigo del manejador.
      *
      * Aqui se compara contra el, derivado de su codigo maquina.  Es la unica
      * fuente que responde a la pregunta que de verdad importa para reordenar --
@@ -733,7 +747,8 @@ int main(int argc, char **argv) {
                 runtime::DecodedInstr d;
                 if (!build(ext, f.indice, bytes, sizeof(bytes), d)) continue;
                 runtime::InstrEffects e;
-                if (!runtime::probe_effects(d, e)) continue; // sin forma escrita
+                if (!runtime::probe_effects(d, e))
+                    continue; // sin forma escrita
                 /* La forma declarada se lee por INSTANCIA y la derivada por
                  * OPCODE: donde la instruccion se comporta distinto segun una
                  * bandera -- `mov` con `_signed_instruct` pasa a mover
@@ -759,7 +774,8 @@ int main(int argc, char **argv) {
                 ++comparadas;
                 const uint16_t der_r = regs_de_forma(f.imp.form_read, d);
                 const uint16_t der_w = regs_de_forma(f.imp.form_write, d);
-                const uint16_t falta_r = static_cast<uint16_t>(der_r & ~e.reg_read);
+                const uint16_t falta_r =
+                    static_cast<uint16_t>(der_r & ~e.reg_read);
                 const uint16_t falta_w =
                     static_cast<uint16_t>(der_w & ~e.reg_write);
                 if (falta_r == 0 && falta_w == 0) {
@@ -779,12 +795,12 @@ int main(int argc, char **argv) {
              * quedarse callado.
              *
              * Las formas del banco VECTORIAL estan declaradas leyendo el
-             * manejador -- `fadd` opera sobre `registers.zmm[]`, y eso el fuente
-             * lo dice sin ambiguedad --, pero el derivador todavia no ve esos
-             * accesos: con 64 bytes por registro la escala de un acceso indexado
-             * no llega, asi que el compilador calcula la base aparte y el rastro
-             * se pierde.  O sea que descansan sobre UNA fuente y no sobre dos,
-             * que es justo lo que este test existe para evitar.
+             * manejador -- `fadd` opera sobre `registers.zmm[]`, y eso el
+             * fuente lo dice sin ambiguedad --, pero el derivador todavia no ve
+             * esos accesos: con 64 bytes por registro la escala de un acceso
+             * indexado no llega, asi que el compilador calcula la base aparte y
+             * el rastro se pierde.  O sea que descansan sobre UNA fuente y no
+             * sobre dos, que es justo lo que este test existe para evitar.
              *
              * Se cuenta para que sea un numero que baja, y no una nota al pie
              * que se olvida. */

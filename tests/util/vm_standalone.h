@@ -198,7 +198,6 @@ inline void vm_standalone_build(VmStandalone &s, const std::string &source,
     s.proc->state.store(runtime::EXECUTE, std::memory_order_relaxed);
 }
 
-
 /**
  * @brief Ejecuta el proceso a mano hasta que pare o gaste @p cap despachos.
  *

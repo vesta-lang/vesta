@@ -1986,8 +1986,8 @@ int float_isa_level();
  * @return El manejador especializado, o @c nullptr si esa instruccion no tiene
  *         variantes (y entonces se deja el generico).
  */
-void (*float_exec_specialized(uint8_t opcode2, uint8_t mode))(
-    ProcessVM *, const DecodedInstr &);
+void (*float_exec_specialized(uint8_t opcode2,
+                              uint8_t mode))(ProcessVM *, const DecodedInstr &);
 /** @} */
 
 /** @brief FSUB: resta flotante; reg1 -= reg2. */

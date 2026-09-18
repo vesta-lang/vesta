@@ -1308,12 +1308,12 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                      * aunque el tipo parezca darla.
                      *
                      * El comprobador lleva sus prestamos por NOMBRE de variable
-                     * (`owners_` va indexado por cadena), asi que dos nombres de
-                     * la misma region no chocan y un prestamo tomado DENTRO del
-                     * llamado es otra entrada distinta.  Pasar el dueno a otra
-                     * funcion que lo vuelve a prestar no lo ve nadie, y entonces
-                     * dos `borrow_mut` de la MISMA region llegan a la misma
-                     * llamada.
+                     * (`owners_` va indexado por cadena), asi que dos nombres
+                     * de la misma region no chocan y un prestamo tomado DENTRO
+                     * del llamado es otra entrada distinta.  Pasar el dueno a
+                     * otra funcion que lo vuelve a prestar no lo ve nadie, y
+                     * entonces dos `borrow_mut` de la MISMA region llegan a la
+                     * misma llamada.
                      *
                      * Que el agujero existe esta COMPROBADO: los dos programas
                      * de arriba compilan sin una queja.  Que hoy produzca un
@@ -1323,19 +1323,20 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                      * es el arreglo de un fallo medido.
                      *
                      * Asi que se DICE, pero sin demostrar.  El mecanismo sigue
-                     * entero -- quien quiera afinar con ella puede -- y el hecho
-                     * no miente: sale `inferred`, que en el ASA significa "la
-                     * evidencia apunta ahi pero pudo quedar algo sin ver".  Lo
-                     * que no se hace es venderla como garantia.
+                     * entero -- quien quiera afinar con ella puede -- y el
+                     * hecho no miente: sale `inferred`, que en el ASA significa
+                     * "la evidencia apunta ahi pero pudo quedar algo sin ver".
+                     * Lo que no se hace es venderla como garantia.
                      *
-                     * Y sin `by_author`, que es la otra mitad: esto lo DERIVA el
-                     * compilador del tipo, no lo escribio nadie, asi que no hay
-                     * ninguna declaracion que ir a comprobar a los sitios de
-                     * llamada.
+                     * Y sin `by_author`, que es la otra mitad: esto lo DERIVA
+                     * el compilador del tipo, no lo escribio nadie, asi que no
+                     * hay ninguna declaracion que ir a comprobar a los sitios
+                     * de llamada.
                      *
                      * Pasa a demostrada en cuanto exista quien la verifique: el
-                     * prestamo indexado por localizacion abstracta en vez de por
-                     * nombre, mas la comprobacion en el sitio de llamada. */
+                     * prestamo indexado por localizacion abstracta en vez de
+                     * por nombre, mas la comprobacion en el sitio de llamada.
+                     */
                     pointee.set(Claim::ExclusiveCall, /*is_proven=*/false);
                     break;
                 case PrimitiveKind::UNIQUE_PTR:
@@ -1350,10 +1351,10 @@ void Lowering::lower_function(ast::FunctionDecl *fd, ir::IrModule &out) {
                     /* La exclusividad en la EJECUCION -- que no la alcance otro
                      * hilo ni un puntero guardado antes -- no se afirma: nadie
                      * la hace cumplir, y `ptr_of` entrega el puntero crudo sin
-                     * consumir el dueno.  Inferirla seria creerla, porque no hay
-                     * guarda posible en ejecucion para "nadie mas la alcanza".
-                     * Se emitira cuando la alcanzabilidad por hilos sea un hecho
-                     * del ASA y la pueda DEMOSTRAR. */
+                     * consumir el dueno.  Inferirla seria creerla, porque no
+                     * hay guarda posible en ejecucion para "nadie mas la
+                     * alcanza". Se emitira cuando la alcanzabilidad por hilos
+                     * sea un hecho del ASA y la pueda DEMOSTRAR. */
                     break;
                 default: break;
                 }
@@ -1840,7 +1841,8 @@ static bool glob_matches(const std::string &pattern, const std::string &text) {
             return false;
         }
     }
-    while (p < pattern.size() && pattern[p] == '*') ++p;
+    while (p < pattern.size() && pattern[p] == '*')
+        ++p;
     return p == pattern.size();
 }
 
@@ -1905,9 +1907,9 @@ void Lowering::collect_hook_providers() {
             if (!pd) continue;
             const HookFieldInfo *field = hook_field_for(pd->name, point);
             if (!field) {
-                diags_.diag(fd->loc, DiagLevel::ERR, "VXE933",
-                            {fd->hook_point, pd->name,
-                             hook_fields_available(point)});
+                diags_.diag(
+                    fd->loc, DiagLevel::ERR, "VXE933",
+                    {fd->hook_point, pd->name, hook_fields_available(point)});
                 signature_ok = false;
                 continue;
             }
@@ -1916,8 +1918,7 @@ void Lowering::collect_hook_providers() {
             // parece un dato: el gancho mediria y el resultado seria mentira.
             if (pd->name != "fn_id" && pd->name != "ret_value" &&
                 pd->name != "call_site" && pd->name != "fn_name") {
-                diags_.diag(fd->loc, DiagLevel::WARN, "VXW930",
-                            {pd->name});
+                diags_.diag(fd->loc, DiagLevel::WARN, "VXW930", {pd->name});
             }
             hp.params.push_back(pd->name);
         }
@@ -2039,8 +2040,8 @@ void Lowering::emit_hook_calls(HookPoint point, const std::string &fn_name,
         for (const auto &name : hp.params) {
             if (name == "fn_id") {
                 args.push_back(emit_const(
-                    ir::IrType::I32,
-                    static_cast<int64_t>(hook_fn_id(fn_name)), line));
+                    ir::IrType::I32, static_cast<int64_t>(hook_fn_id(fn_name)),
+                    line));
             } else if (name == "ret_value") {
                 args.push_back(v_ret != ir::IR_NO_VALUE
                                    ? v_ret
@@ -2801,7 +2802,6 @@ void Lowering::emit_startup_wiring(ir::IrModule &out_module) {
     }
 }
 
-
 /**
  * @brief Rellena el parametro `string[] args` de `main`.
  *
@@ -2900,10 +2900,9 @@ bool Lowering::emit_main_args_prologue(const ast::FunctionDecl *fd) {
         emit_ir_binop(ir::IrOp::ADD, v_buf, v_off, ir::IrType::PTR, ln);
     fn_->values[v_addr].is_host_ptr = true;
     emit_store_i64(v_addr, v_h, ln);
-    emit_store_i64(v_i_slot,
-                   emit_ir_binop(ir::IrOp::ADD, v_i2, v_uno, ir::IrType::I64,
-                                 ln),
-                   ln);
+    emit_store_i64(
+        v_i_slot,
+        emit_ir_binop(ir::IrOp::ADD, v_i2, v_uno, ir::IrType::I64, ln), ln);
     emit_br(bb_test, ln);
 
     current_block_ = bb_done;

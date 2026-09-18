@@ -418,7 +418,8 @@ void Lowering::emit_label_phis(GotoEntry &ge, ir::IrBlockId lab_bb,
         phi.dst = fn_->new_value(phi.type);
         phi.source_line = loc.line;
         // El camino que cae trae el valor que hay ahora mismo.
-        if (fall_pred != ir::IR_NO_BLOCK) phi.phi_args.push_back({cur, fall_pred});
+        if (fall_pred != ir::IR_NO_BLOCK)
+            phi.phi_args.push_back({cur, fall_pred});
         // Y cada `goto` hacia delante, el que tuviera en SU ambito.  La foto
         // se busca de dentro hacia fuera, igual que haria `lookup`.
         for (size_t k = 0; k < ge.pending_preds.size(); ++k) {

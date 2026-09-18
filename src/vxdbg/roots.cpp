@@ -34,14 +34,13 @@ void ArtifactMap::normalize() const {
                          return a.first < b.first;
                      });
     // Ya adyacentes los repetidos, se queda el primero de cada tanda.
-    symbols.erase(std::unique(symbols.begin(), symbols.end(),
-                              [](const std::pair<std::string,
-                                                 LanguageEntityId> &a,
-                                 const std::pair<std::string,
-                                                 LanguageEntityId> &b) {
-                                  return a.first == b.first;
-                              }),
-                  symbols.end());
+    symbols.erase(
+        std::unique(symbols.begin(), symbols.end(),
+                    [](const std::pair<std::string, LanguageEntityId> &a,
+                       const std::pair<std::string, LanguageEntityId> &b) {
+                        return a.first == b.first;
+                    }),
+        symbols.end());
     sorted_ = true;
 }
 

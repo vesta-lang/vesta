@@ -51,13 +51,16 @@ static std::atomic<unsigned> g_claimed{0};
  * En una ranura propia y NO en `thread_local`: en MinGW la TLS es emulada, y
  * una variable de hilo con inicializador dinamico genera una guarda que se
  * bloquea cuando hay hilos que nacen y mueren -- que es exactamente lo que hace
- * el reparto por modulo, un lote de hilos por nivel.  Ver `util/os/thread_slot.h`.
- * El valor cabe en el propio puntero, asi que no hay nada que reservar.
+ * el reparto por modulo, un lote de hilos por nivel.  Ver
+ * `util/os/thread_slot.h`. El valor cabe en el propio puntero, asi que no hay
+ * nada que reservar.
  */
 static util::ThreadSlot g_in_pool_task;
 
 /// El puntero ES el valor: nulo = no, cualquier otra cosa = si.
-inline bool in_pool_task() noexcept { return g_in_pool_task.get() != nullptr; }
+inline bool in_pool_task() noexcept {
+    return g_in_pool_task.get() != nullptr;
+}
 
 inline void set_in_pool_task(bool v) noexcept {
     g_in_pool_task.ensure();

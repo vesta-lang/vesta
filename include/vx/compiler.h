@@ -54,7 +54,7 @@ struct IrModule;
 /// El emisor que guarda lo escrito como items tipados.  Adelantado: quien
 /// incluya esto no tiene por que ver su modelo interno.
 class VelSink;
-}
+} // namespace ir
 
 namespace vx {
 
@@ -322,8 +322,8 @@ struct CompileOptions {
      * gobierna tambien la exclusividad -- que se le anadio despues -- ni que lo
      * que decide es el PESO y no si se comprueba.  Y detras del nombre viejo se
      * escondian dos fallos: el camino de fichero suelto no la miraba para la
-     * exclusividad -- el mismo programa acusaba analizado como fichero y callaba
-     * analizado como proyecto -- y, donde si la miraba, se saltaba la
+     * exclusividad -- el mismo programa acusaba analizado como fichero y
+     * callaba analizado como proyecto -- y, donde si la miraba, se saltaba la
      * comprobacion ENTERA en vez de bajarle el peso, asi que `--analyze` no
      * ensenaba nada: la cabecera prometia una seccion propia que no existe.
      */
@@ -532,7 +532,7 @@ struct CompileResult {
      * hasta el final del analisis de tipos.
      */
     struct TiemposFrontend {
-        long analisis_us = 0;  ///< Lexico + sintaxis: fuente -> AST.
+        long analisis_us = 0; ///< Lexico + sintaxis: fuente -> AST.
         /**
          * @brief De @c analisis_us , lo que se ESTIMA del lexico.
          *
@@ -547,10 +547,10 @@ struct CompileResult {
         long long tokens = 0;         ///< Tokens entregados.  EXACTO.
         long long lexing_samples = 0; ///< Muestras que sostienen la estimacion.
         long long ast_decls = 0;      ///< Declaraciones de primer nivel.
-        long tipos_us = 0;     ///< Comprobacion de tipos sobre el AST.
-        long bajada_us = 0;    ///< AST -> IR.
-        long optimizar_us = 0; ///< Pases sobre el IR.
-        long emitir_us = 0;    ///< IR -> texto .vel.
+        long tipos_us = 0;            ///< Comprobacion de tipos sobre el AST.
+        long bajada_us = 0;           ///< AST -> IR.
+        long optimizar_us = 0;        ///< Pases sobre el IR.
+        long emitir_us = 0;           ///< IR -> texto .vel.
 
         /** Resolver el grafo de dependencias: averiguar QUE modulos entran en
          *  la compilacion.  Solo se llena al compilar un proyecto (varios
@@ -986,11 +986,11 @@ void vx_report_bounds(const ir::IrModule &mod, Diagnostics &diags,
 /**
  * @brief Avisa de las promesas de exclusividad que el programa incumple.
  *
- * El comprobador de prestamos del AST aplica la exclusividad por nombre y dentro
- * de una funcion; esto cierra lo que se le escapa: dos prestamos exclusivos de
- * la misma region que llegan a la misma llamada por separado.  La pregunta no se
- * puede contestar mientras se baja -- ahi los parametros son dos nombres --, asi
- * que necesita el IR terminado y el modulo.
+ * El comprobador de prestamos del AST aplica la exclusividad por nombre y
+ * dentro de una funcion; esto cierra lo que se le escapa: dos prestamos
+ * exclusivos de la misma region que llegan a la misma llamada por separado.  La
+ * pregunta no se puede contestar mientras se baja -- ahi los parametros son dos
+ * nombres --, asi que necesita el IR terminado y el modulo.
  *
  * Igual que el de arriba, el conocimiento sale de la BASE y no se calcula aqui:
  * lo mismo lo consume el productor de contratos de parametro.

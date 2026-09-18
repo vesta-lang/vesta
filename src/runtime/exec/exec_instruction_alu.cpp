@@ -270,7 +270,7 @@ struct MulOp {
     /** @brief Detects multiplication overflow and sets CF/OF accordingly. */
     template <typename T>
     static inline uint8_t flags(ProcessVM * /*vm*/, T a, T b, T result,
-                             bool is_signed) {
+                                bool is_signed) {
         using ST =
             std::make_signed_t<T>; // vista con signo para verificacion de IMUL
         using UT =
@@ -345,7 +345,7 @@ struct DivOp {
                                 bool is_signed) {
         using ST = std::make_signed_t<T>; // vista con signo para verificacion
                                           // de desbordamiento IDIV
-        (void)result; // lo usa alu_core; aqui no hace falta
+        (void)result;                     // lo usa alu_core; aqui no hace falta
         // la division por cero es una condicion excepcional
         if (b == 0) return RF_OF | RF_CF;
         if (is_signed) {
@@ -409,8 +409,7 @@ struct ShlOp {
                          (sizeof(T) * 8 - 1); // mismo enmascarado que compute()
         if (shift == 0) return 0; // desplazamiento cero deja CF y OF limpios
         UT ua = (UT)a;
-        UT cf_bit =
-            (ua >> (sizeof(T) * 8 - shift)) & 1; // bit desplazado fuera
+        UT cf_bit = (ua >> (sizeof(T) * 8 - shift)) & 1; // bit desplazado fuera
         UT msb = ((UT)result >> (sizeof(T) * 8 - 1)) & 1;
         // OF = CF XOR nuevo MSB (regla SHL de x86)
         return (uint8_t)((cf_bit ? RF_CF : 0) | ((cf_bit ^ msb) ? RF_OF : 0));
@@ -570,10 +569,10 @@ inline T compute_with_flags(ProcessVM *vm, T a, T b, bool is_signed,
      * medido con VTune, y ademas hacian que el derivador de efectos viera un
      * `add` LEYENDO las banderas.  Ver `include/runtime/rflags.h`. */
     constexpr int SIGN_BIT =
-        sizeof(T) * 8 - 1; // indice del bit de mayor peso (signo)
-    uint8_t nf = (res == 0) ? RF_ZF : 0;                 // ZF
+        sizeof(T) * 8 - 1;               // indice del bit de mayor peso (signo)
+    uint8_t nf = (res == 0) ? RF_ZF : 0; // ZF
     if ((static_cast<UT>(res) >> SIGN_BIT) & 1) nf |= RF_SF; // SF
-    nf |= Op::flags(vm, a, b, res, is_signed);           // CF/OF segun Op
+    nf |= Op::flags(vm, a, b, res, is_signed);               // CF/OF segun Op
     vm->registers.flags.arith = nf; // store PURO: no lee el valor anterior
     return res; // el llamante decide si almacenar el resultado
 }
@@ -642,15 +641,15 @@ inline void alu_core(ProcessVM *vm, T a, T b, bool is_signed,
 template <typename T, typename Op>
 inline void alu_core_unary(ProcessVM *vm, T a, int dst_reg_index) {
     using UT = std::make_unsigned_t<T>; // vista sin signo para extraccion de SF
-    T result = Op::compute(a);                  // aplicar la operacion unaria
+    T result = Op::compute(a);          // aplicar la operacion unaria
     constexpr int SIGN_BIT = sizeof(T) * 8 - 1; // indice del bit de signo
     // Mismo criterio que en `compute_with_flags`: componer y escribir una vez.
     // OJO con el ORDEN: `Op::flags` de INC y DEC LEE el CF anterior para
     // preservarlo, asi que tiene que llamarse ANTES de escribir el byte.
     uint8_t nf = (result == 0) ? RF_ZF : 0;                     // ZF
     if ((static_cast<UT>(result) >> SIGN_BIT) & 1) nf |= RF_SF; // SF
-    nf |= Op::flags(vm, a, result);          // CF/OF segun Op
-    vm->registers.flags.arith = nf;          // store PURO
+    nf |= Op::flags(vm, a, result); // CF/OF segun Op
+    vm->registers.flags.arith = nf; // store PURO
     auto &dst =
         vm->registers.regs[dst_reg_index]; // referencia al registro destino
     if constexpr (sizeof(T) == 1)
@@ -1067,8 +1066,8 @@ using SIBFn = void (*)(ProcessVM *, uint64_t, uint64_t, bool, int);
  * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
  * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-[[gnu::always_inline]] static inline void sib_mov_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
-                           int dst_reg) {
+[[gnu::always_inline]] static inline void
+sib_mov_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool, int dst_reg) {
     T val = vm->vm_mem.read_any<T>(addr);  // read T-width value from VM memory
     auto &d = vm->registers.regs[dst_reg]; // referencia al registro destino
     if constexpr (sizeof(T) == 1)
@@ -1088,8 +1087,8 @@ template <typename T>
  * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
  * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-[[gnu::always_inline]] static inline void sib_mov_to_mem(ProcessVM *vm, uint64_t addr, uint64_t reg_val, bool,
-                           int) {
+[[gnu::always_inline]] static inline void
+sib_mov_to_mem(ProcessVM *vm, uint64_t addr, uint64_t reg_val, bool, int) {
     vm->vm_mem.write_any<T>(
         addr, (T)reg_val); // write truncated register value to VM memory
 }
@@ -1101,8 +1100,8 @@ template <typename T>
  * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
  * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-[[gnu::always_inline]] static inline void movh_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool,
-                        int dst_reg) {
+[[gnu::always_inline]] static inline void
+movh_to_reg(ProcessVM *vm, uint64_t addr, uint64_t, bool, int dst_reg) {
     T val = *reinterpret_cast<const T *>(
         addr); // dereference native pointer -- bypasses VM memory
     auto &d = vm->registers.regs[dst_reg];
@@ -1123,8 +1122,8 @@ template <typename T>
  * en el camino caliente --.  Ahora se puede exigir porque ya nadie toma su
  * direccion: la tabla de punteros que lo impedia esta retirada. */
 template <typename T>
-[[gnu::always_inline]] static inline void movh_to_mem(ProcessVM *, uint64_t addr, uint64_t reg_val, bool,
-                        int) {
+[[gnu::always_inline]] static inline void
+movh_to_mem(ProcessVM *, uint64_t addr, uint64_t reg_val, bool, int) {
     *reinterpret_cast<T *>(addr) =
         static_cast<T>(reg_val); // write to native address
 }
@@ -1308,7 +1307,7 @@ inline bool read_flag(ProcessVM *vm, uint8_t flag_code) {
     case 1: return vm->registers.flags.bits.ZF; // zero flag
     case 2: return vm->registers.flags.bits.CF; // acarreo flag
     case 3: return vm->registers.flags.bits.OF; // desbordamiento flag
-    case 4: return vm->registers.flags.DM; // direction / mode flag
+    case 4: return vm->registers.flags.DM;      // direction / mode flag
     default: return false; // unknown code: treated as not set
     }
 }
@@ -1841,10 +1840,11 @@ void exec_instr_alu3(ProcessVM *vm, const DecodedInstr &instr) {
      * cuanto alguien tocara una bandera, y entonces el mismo programa daria un
      * resultado suelto y otro dentro de un paquete.
      *
-     * No cuesta nada: es `always_inline` y el `switch` es el mismo que habia. */
+     * No cuesta nada: es `always_inline` y el `switch` es el mismo que habia.
+     */
     uint8_t cf_of = 0;
-    const uint64_t res = alu3_apply(opc, regs[r_src1].qword(),
-                                    regs[r_src2].qword(), cf_of);
+    const uint64_t res =
+        alu3_apply(opc, regs[r_src1].qword(), regs[r_src2].qword(), cf_of);
     regs[r_dst].qword(res);
     // ZF y SF son iguales en las nueve, asi que todo se escribe de UNA vez.
     vm->registers.flags.arith = alu3_flags(res, cf_of);

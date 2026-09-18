@@ -175,8 +175,8 @@ bool PackNodeStore::put(const StoredNode &node) {
      *
      * Estaba despues, asi que un nodo que ESTA COMPILACION ya tenia en la mano
      * provocaba igualmente una llamada al sistema.  Medido con VTune sobre
-     * 441.000 lineas, `wstat64` bajo este camino era **2,24 s, el 13,4 % del CPU
-     * del compilador** y su mayor coste individual.
+     * 441.000 lineas, `wstat64` bajo este camino era **2,24 s, el 13,4 % del
+     * CPU del compilador** y su mayor coste individual.
      *
      * Y si ya esta pendiente con OTRO contenido, algo va mal de verdad: o la
      * huella se calculo sobre otra cosa o se guardo bajo la clave equivocada.

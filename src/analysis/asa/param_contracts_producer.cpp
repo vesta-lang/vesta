@@ -133,8 +133,7 @@ const char *level_claim_code(ir::IrParamClaim c, uint32_t level, bool denied) {
         switch (c) {
         case ir::IrParamClaim::MayRead: return "param.not_may_read";
         case ir::IrParamClaim::MayWrite: return "param.not_may_write";
-        case ir::IrParamClaim::ExclusiveCall:
-            return "param.not_exclusive_call";
+        case ir::IrParamClaim::ExclusiveCall: return "param.not_exclusive_call";
         case ir::IrParamClaim::ExclusiveRun: return "param.not_exclusive_run";
         case ir::IrParamClaim::NonNull: return "param.ptr.not_nonnull";
         case ir::IrParamClaim::NoEscape: return "param.ptr.not_no_escape";
@@ -193,8 +192,8 @@ enum class PairVerdict {
  * @return El veredicto.
  */
 PairVerdict pair_from_call_sites(Production &p,
-                                 const std::vector<ModuleWalk::Site> &sites, size_t pa,
-                                 size_t pb, uint32_t &site) {
+                                 const std::vector<ModuleWalk::Site> &sites,
+                                 size_t pa, size_t pb, uint32_t &site) {
     site = 0;
     if (sites.empty()) {
         /* Nadie la llama.  No se afirma nada: un hecho sobre codigo que no se
@@ -254,7 +253,8 @@ size_t exclusive_pointer_params(const ir::IrFunction &fn) {
         if (v >= fn.values.size()) continue;
         if (fn.values[v].type != ir::IrType::PTR) continue;
         if (i < fn.param_contracts.size() &&
-            fn.param_contracts[i].pointee().has(ir::IrParamClaim::ExclusiveCall))
+            fn.param_contracts[i].pointee().has(
+                ir::IrParamClaim::ExclusiveCall))
             ++n;
     }
     return n;
@@ -269,7 +269,8 @@ size_t undeclared_pointer_params(const ir::IrFunction &fn) {
         /* Habla lo APUNTADO: la exclusividad es sobre la region, no sobre la
          * variable que la senala. */
         if (i < fn.param_contracts.size() &&
-            fn.param_contracts[i].pointee().has(ir::IrParamClaim::ExclusiveCall))
+            fn.param_contracts[i].pointee().has(
+                ir::IrParamClaim::ExclusiveCall))
             continue;
         ++n;
     }
@@ -548,9 +549,8 @@ void produce_param_contracts(Production &p) {
                      * en vez de tirarlo. */
                     Fact f;
                     f.what.domain = kProducerParamContracts;
-                    f.what.code = fn.is_public
-                                      ? "param.disjoint_in_seen_calls"
-                                      : "param.disjoint_in_all_calls";
+                    f.what.code = fn.is_public ? "param.disjoint_in_seen_calls"
+                                               : "param.disjoint_in_all_calls";
                     f.what.a = static_cast<int64_t>(a);
                     f.what.b = static_cast<int64_t>(b);
                     f.about = s;
@@ -565,12 +565,11 @@ void produce_param_contracts(Production &p) {
                 /* No se pudo decidir, y se dice DONDE: sin la linea, "declara
                  * la direccion" es un consejo sobre una funcion entera cuando
                  * el problema esta en una llamada concreta. */
-                p.say_unknown(s, UnknownReason::MissingDependency,
-                              "param.call_site_undecidable",
-                              kProducerParamContracts,
-                              p.store.intern(std::to_string(a) + "," +
-                                             std::to_string(b)),
-                              Scope::everywhere());
+                p.say_unknown(
+                    s, UnknownReason::MissingDependency,
+                    "param.call_site_undecidable", kProducerParamContracts,
+                    p.store.intern(std::to_string(a) + "," + std::to_string(b)),
+                    Scope::everywhere());
             }
         }
     }

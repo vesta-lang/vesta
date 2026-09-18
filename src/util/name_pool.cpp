@@ -51,18 +51,19 @@ const std::string *intern_name(const std::string &name) {
      * respuesta es la misma que la vez anterior -- que es lo normal --.
      *
      * El bajado pide el nombre del fichero una vez por CONVERSION (desde
-     * `SourceLoc::set_file`, que llama `cast_if_needed`), o sea decenas de miles
-     * de veces seguidas, y siempre el mismo: un hilo baja un fichero cada vez.
-     * Medido con VTune sobre 441.000 lineas, ese mutex era el **10,8 % del CPU
-     * del compilador** y el **72 % de la fase de bajado**, con todos los hilos
-     * haciendo cola en el.
+     * `SourceLoc::set_file`, que llama `cast_if_needed`), o sea decenas de
+     * miles de veces seguidas, y siempre el mismo: un hilo baja un fichero cada
+     * vez. Medido con VTune sobre 441.000 lineas, ese mutex era el **10,8 % del
+     * CPU del compilador** y el **72 % de la fase de bajado**, con todos los
+     * hilos haciendo cola en el.
      *
-     * Comparar la cadena es mas barato que tomar un mutex, y ademas casi siempre
-     * corta en el primer paso (`std::string::operator==` mira el tamano antes
-     * que los bytes).
+     * Comparar la cadena es mas barato que tomar un mutex, y ademas casi
+     * siempre corta en el primer paso (`std::string::operator==` mira el tamano
+     * antes que los bytes).
      *
      * El puntero se puede guardar porque el pozo es un `unordered_set`: sus
-     * nodos no se mueven al crecer, asi que lo internado vive lo que el proceso.
+     * nodos no se mueven al crecer, asi que lo internado vive lo que el
+     * proceso.
      *
      * Por RANURA de hilo y NUNCA `thread_local`: en MinGW la TLS es emulada y
      * cuelga con hilos que nacen y mueren, que es justo lo que hace el reparto

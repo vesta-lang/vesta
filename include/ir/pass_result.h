@@ -44,10 +44,10 @@ struct IrModule;
  *
  * @par Como lo impide
  * El `bool` de dentro solo lo puede leer @ref applied , que es amiga.  Asi
- * `if (ir_pass_x(fn))` NO COMPILA: hay que escribir `if (applied(ir_pass_x(fn)))`
- * y esa puerta avanza la version.  Y el resultado lleva a QUE funcion se
- * aplico, para que la puerta no pueda avanzar la version equivocada -- que
- * seria el mismo fallo mudo con otro disfraz.
+ * `if (ir_pass_x(fn))` NO COMPILA: hay que escribir `if
+ * (applied(ir_pass_x(fn)))` y esa puerta avanza la version.  Y el resultado
+ * lleva a QUE funcion se aplico, para que la puerta no pueda avanzar la version
+ * equivocada -- que seria el mismo fallo mudo con otro disfraz.
  */
 class [[nodiscard]] PassResult {
   public:

@@ -27,12 +27,12 @@
 #include "aot/link_script.h" //  AOT.5: link-script Vesta (configurable)
 
 #include <cstdint>
-#include <cstdio>  // std::snprintf (cabeceras ar)
-#include <cstdlib> // std::getenv (ruta de las DLLs del sistema)
+#include <cstdio>                 // std::snprintf (cabeceras ar)
+#include <cstdlib>                // std::getenv (ruta de las DLLs del sistema)
 #include "vx/diag/diag_catalog.h" // los errores salen del catalogo, por idioma
 
-#include <cctype>  // std::tolower (nombres de directiva sin distinguir caja)
-#include <cstring> // std::memset/memcpy (cabeceras ar)
+#include <cctype>     // std::tolower (nombres de directiva sin distinguir caja)
+#include <cstring>    // std::memset/memcpy (cabeceras ar)
 #include <filesystem> // recorrer las versiones instaladas del SDK
 #include <fstream>
 #include <string>
@@ -188,8 +188,8 @@ void coff_parse_drectve(const uint8_t *p, size_t n,
     const std::string s((const char *)p, n);
     size_t i = 0;
     while (i < n) {
-        while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' ||
-                         s[i] == '\n'))
+        while (i < n &&
+               (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n'))
             ++i;
         if (i >= n) break;
 
@@ -697,10 +697,10 @@ bool parse_coff_obj(const std::string &path, ParsedObj &po, std::string &err) {
          * No son datos: son ordenes para el enlazador que el compilador dejo
          * dentro del objeto.  La mas importante es `/DEFAULTLIB`, con la que un
          * objeto de MSVC dice contra que biblioteca hay que resolver lo que el
-         * mismo referencia -- el guardia de pila, por ejemplo.  Tirar la seccion
-         * sin mirarla es lo que hacia que esos simbolos salieran como no
-         * resueltos, y el mensaje mandaba a buscar una definicion que faltaba
-         * cuando lo que faltaba era leer la peticion. */
+         * mismo referencia -- el guardia de pila, por ejemplo.  Tirar la
+         * seccion sin mirarla es lo que hacia que esos simbolos salieran como
+         * no resueltos, y el mensaje mandaba a buscar una definicion que
+         * faltaba cuando lo que faltaba era leer la peticion. */
         if (s.name == ".drectve" && s.sh_offset &&
             (uint64_t)s.sh_offset + s.sh_size <= b.size())
             coff_parse_drectve(&b[s.sh_offset], s.sh_size, po.default_libs);
@@ -967,7 +967,8 @@ std::string find_on_path(const std::string &exe) {
     return std::string();
 }
 
-/// Sube @p n niveles desde la ruta de un ejecutable ("C:/x/bin/cl.exe" -> "C:/x").
+/// Sube @p n niveles desde la ruta de un ejecutable ("C:/x/bin/cl.exe" ->
+/// "C:/x").
 std::string parent_dir(const std::string &path, int levels) {
     std::string p = path;
     for (int i = 0; i < levels; ++i) {
@@ -1092,7 +1093,8 @@ const std::vector<std::string> &library_search_dirs() {
                     if (v > best) best = v;
                 }
                 if (!best.empty()) {
-                    const std::string base = root + "/lib/clang/" + best + "/lib";
+                    const std::string base =
+                        root + "/lib/clang/" + best + "/lib";
                     add_dir(dirs, base + "/windows");
                     add_dir(dirs, base + "/linux");
                     add_dir(dirs, base);
@@ -1471,8 +1473,8 @@ bool aot_link(const std::vector<std::string> &inputs,
                 objs[0].container == ParsedObj::Container::Elf ? "ELF" : "COFF";
             const std::string other =
                 objs[i].container == ParsedObj::Container::Elf ? "ELF" : "COFF";
-            err = vx::diag::format(
-                "VX9257", {objs[i].path, other, objs[0].path, first});
+            err = vx::diag::format("VX9257",
+                                   {objs[i].path, other, objs[0].path, first});
             return false;
         }
 

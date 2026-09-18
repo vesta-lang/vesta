@@ -48,13 +48,13 @@ namespace runtime {
 /// acceso a memoria, y las dos cosas abren patrones distintos.
 enum FuseRole : uint8_t {
     FR_NONE = 0,
-    FR_MOV_REG = 1u << 0,  ///< `mov rd, rs` general de 64 bits
-    FR_MOV_IMM = 1u << 1,  ///< `mov rd, K` general de 64 bits
-    FR_ALU3 = 1u << 2,     ///< ALU de tres operandos (0x73-0x7B)
-    FR_GP_LOAD = 1u << 3,  ///< `mld` al banco general
-    FR_MEM = 1u << 4,      ///< `mld` o `mst` al banco general
-    FR_ALU2 = 1u << 5,     ///< ALU de dos operandos con forma de tres
-    FR_KILLS = 1u << 6,    ///< pisa su destino ENTERO, sin leerlo
+    FR_MOV_REG = 1u << 0, ///< `mov rd, rs` general de 64 bits
+    FR_MOV_IMM = 1u << 1, ///< `mov rd, K` general de 64 bits
+    FR_ALU3 = 1u << 2,    ///< ALU de tres operandos (0x73-0x7B)
+    FR_GP_LOAD = 1u << 3, ///< `mld` al banco general
+    FR_MEM = 1u << 4,     ///< `mld` o `mst` al banco general
+    FR_ALU2 = 1u << 5,    ///< ALU de dos operandos con forma de tres
+    FR_KILLS = 1u << 6,   ///< pisa su destino ENTERO, sin leerlo
 };
 
 /// Ancho de 64 bits en el campo `mode`.
@@ -66,7 +66,8 @@ constexpr uint8_t kFuseMode64 = 3;
  */
 [[gnu::always_inline]] inline uint8_t fuse_role(const DecodedInstr &d) {
     if (d.flags_info.is_not_extended != 0x00) return FR_NONE;
-    // Una YA fusionada no vuelve a entrar: sus campos de opcode no la describen.
+    // Una YA fusionada no vuelve a entrar: sus campos de opcode no la
+    // describen.
     if (d.flags_info.absorbed != 0) return FR_NONE;
 
     const uint8_t op = (uint8_t)d.flags_info.opcode_index;
@@ -106,11 +107,11 @@ constexpr uint8_t kFuseMode64 = 3;
  * hacer.  Sin ramas dependientes de datos: son ANDs y un `or`.
  */
 [[gnu::always_inline]] inline bool fuse_roles_pairable(uint8_t a, uint8_t b) {
-    return ((a & FR_MOV_REG) && (b & FR_ALU2)) ||   // mov + ALU -> ALU de 3
-           ((a & FR_KILLS) && (b & FR_MOV_REG)) ||  // redirigir el destino
-           ((a & FR_ALU3) && (b & FR_ALU3)) ||      // dos ALU encadenadas
-           ((a & FR_GP_LOAD) && (b & FR_ALU3)) ||   // cargar y operar
-           ((a & FR_MOV_IMM) && (b & FR_ALU3)) ||   // operar con constante
+    return ((a & FR_MOV_REG) && (b & FR_ALU2)) ||    // mov + ALU -> ALU de 3
+           ((a & FR_KILLS) && (b & FR_MOV_REG)) ||   // redirigir el destino
+           ((a & FR_ALU3) && (b & FR_ALU3)) ||       // dos ALU encadenadas
+           ((a & FR_GP_LOAD) && (b & FR_ALU3)) ||    // cargar y operar
+           ((a & FR_MOV_IMM) && (b & FR_ALU3)) ||    // operar con constante
            ((a & FR_MOV_REG) && (b & FR_MOV_REG)) || // tanda de `mov`
            ((a & FR_MEM) && (b & FR_MEM));           // tanda de memoria
 }

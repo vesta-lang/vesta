@@ -80,9 +80,9 @@ struct PeView {
     uint32_t exc_rva = 0;  ///< DataDirectory[3].VirtualAddress
     uint32_t exc_size = 0; ///< DataDirectory[3].Size
     uint32_t num_dirs = 0;
-    uint32_t sec_rva = 0;  ///< RVA de la seccion buscada (0 si no esta)
+    uint32_t sec_rva = 0; ///< RVA de la seccion buscada (0 si no esta)
     uint32_t sec_vsize = 0;
-    uint32_t sec_raw = 0;  ///< offset EN FICHERO, para poder leer su contenido
+    uint32_t sec_raw = 0; ///< offset EN FICHERO, para poder leer su contenido
     bool sec_found = false;
 };
 
@@ -237,10 +237,11 @@ int main() {
 
     // --- .pdata con un tamano imposible: se rechaza -----------------------
     {
-        /* 10 bytes no descendingriben ninguna cantidad entera de RUNTIME_FUNCTION.
-         * Publicarlo dejaria una entrada a medias al final, y el sistema la
-         * leeria igual porque recorre el directorio por su tamano.  Se rechaza
-         * al emitir, que es donde todavia se puede decir algo util. */
+        /* 10 bytes no descendingriben ninguna cantidad entera de
+         * RUNTIME_FUNCTION. Publicarlo dejaria una entrada a medias al final, y
+         * el sistema la leeria igual porque recorre el directorio por su
+         * tamano.  Se rechaza al emitir, que es donde todavia se puede decir
+         * algo util. */
         ObjectWriter w(ObjFormat::PE);
         w.add_text(tiny_text());
 
@@ -254,8 +255,10 @@ int main() {
         const bool ok = w.write("pdata_bad_pe.exe", err);
         CHECK(!ok);
         CHECK(!err.empty()); // y dice por que, no falla en silencio
-        if (ok) std::printf("  se emitio una .pdata de 10 bytes\n");
-        else std::printf("  rechazada: %s\n", err.c_str());
+        if (ok)
+            std::printf("  se emitio una .pdata de 10 bytes\n");
+        else
+            std::printf("  rechazada: %s\n", err.c_str());
     }
 
     // --- Una tabla desordenada se ORDENA al emitir ------------------------
@@ -328,7 +331,8 @@ int main() {
         std::string err;
         const bool ok = w.write("pdata_invertida_pe.exe", err);
         CHECK(!ok);
-        if (!ok) std::printf("  entrada invertida rechazada: %s\n", err.c_str());
+        if (!ok)
+            std::printf("  entrada invertida rechazada: %s\n", err.c_str());
     }
 
     std::printf("--- %d checks, %d fallos ---\n", g_checks, g_fails);

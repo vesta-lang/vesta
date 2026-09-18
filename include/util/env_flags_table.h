@@ -177,7 +177,8 @@ VESTA_ENV_FLAG(SchedVerify, "VESTA_SCHED_VERIFY", Report, Scheduler, Bool, Any)
  * llamada indirecta -- y los vuelca ordenados al terminar.  La tabla de rutas
  * rapidas cubre unas treinta de casi doscientas cuarenta instrucciones, y cual
  * conviene anadir depende de lo que EJECUTEN los programas, no de lo que uno
- * suponga: sin esto la lista se elige a ojo y envejece sin que nadie lo note. */
+ * suponga: sin esto la lista se elige a ojo y envejece sin que nadie lo note.
+ */
 VESTA_ENV_FLAG(SlowOps, "VESTA_SLOW_OPS", Report, Scheduler, Bool, Any)
 /* Cuando al manejador de fallos de la VM le llega un codigo que NO es un fallo
  * del procesador conocido, contar tambien la caida del ANFITRION -- pila

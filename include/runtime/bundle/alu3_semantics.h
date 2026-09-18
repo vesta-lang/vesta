@@ -19,12 +19,13 @@
  *
  * ESTA PENSADO PARA DESAPARECER AL COMPILAR
  * -----------------------------------------
- * El `switch` es sobre @p opc, y cuando quien llama pasa una constante -- que es
- * lo que hace la version sintetica, especializada por plantilla -- el compilador
- * se queda con la rama que toca y borra el resto.  La sintetica acaba siendo
- * literalmente un `add` y un `xor`, sin mirar ningun byte de operacion ni
- * ejecutar ninguna rama.  Por eso es una funcion `always_inline` con el opcode
- * por argumento, y no una tabla de punteros: un puntero no se puede plegar.
+ * El `switch` es sobre @p opc, y cuando quien llama pasa una constante -- que
+ * es lo que hace la version sintetica, especializada por plantilla -- el
+ * compilador se queda con la rama que toca y borra el resto.  La sintetica
+ * acaba siendo literalmente un `add` y un `xor`, sin mirar ningun byte de
+ * operacion ni ejecutar ninguna rama.  Por eso es una funcion `always_inline`
+ * con el opcode por argumento, y no una tabla de punteros: un puntero no se
+ * puede plegar.
  */
 
 #ifndef VESTA_RUNTIME_ALU3_SEMANTICS_H
@@ -37,8 +38,8 @@
 namespace runtime {
 
 /// Opcodes de la familia de tres operandos, para indexar sin escribirlos.
-constexpr uint8_t kAlu3First = 0x73; ///< `adds3`
-constexpr uint8_t kAlu3Last = 0x7B;  ///< `xor3`
+constexpr uint8_t kAlu3First = 0x73;                        ///< `adds3`
+constexpr uint8_t kAlu3Last = 0x7B;                         ///< `xor3`
 constexpr uint32_t kAlu3Count = kAlu3Last - kAlu3First + 1; // nueve
 
 /**

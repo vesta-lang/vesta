@@ -20,9 +20,9 @@
  *
  *  1. Se resuelve por ARGUMENTO y no por par.  Por par obliga a recorrer los
  *     sitios una vez por cada uno, y los pares son el cuadrado de los
- *     parametros -- que no estan acotados en el camino nativo --.  Por argumento
- *     es una resolucion por argumento y sitio: sumado, las listas de argumentos
- *     del modulo.
+ *     parametros -- que no estan acotados en el camino nativo --.  Por
+ * argumento es una resolucion por argumento y sitio: sumado, las listas de
+ * argumentos del modulo.
  *  2. Se resuelve la funcion QUE SE PREGUNTA, no el modulo.  Lo demas seria
  *     pagar por todas para contestar por una.
  */

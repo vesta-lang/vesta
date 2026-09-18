@@ -207,7 +207,8 @@ void validar(runtime::ProcessVM *proc, const runtime::Bundle &antes,
     for (uint32_t i = 0; i < ahora.k; ++i) {
         bool esta = false;
         for (uint32_t j = 0; j < antes.k; ++j)
-            if (antes.instr[j].pc == ahora.instr[i].pc && !((vistas >> j) & 1)) {
+            if (antes.instr[j].pc == ahora.instr[i].pc &&
+                !((vistas >> j) & 1)) {
                 vistas |= (1u << j);
                 esta = true;
                 break;
@@ -326,7 +327,8 @@ void probar(const std::string &fichero, bool detalle) {
     jit::g_jit_threshold = UINT32_MAX;
     jit::g_pc_jit_active = false;
     proc->bundles_on = true;
-    for (const auto &s : vm->schedulers) s->has_hooks = false;
+    for (const auto &s : vm->schedulers)
+        s->has_hooks = false;
     vm->make_ready(proc->pid);
     vm->start();
     while (proc->state != runtime::HALT && proc->state != runtime::DEAD)
@@ -359,8 +361,8 @@ void probar(const std::string &fichero, bool detalle) {
          * ya reordenado, que es un no-op y pasa sin comprobar nada. */
         runtime::Bundle antes = *b;
         for (uint32_t x = 1; x < antes.k; ++x)
-            for (uint32_t y = x; y > 0 && antes.instr[y].pc < antes.instr[y - 1].pc;
-                 --y) {
+            for (uint32_t y = x;
+                 y > 0 && antes.instr[y].pc < antes.instr[y - 1].pc; --y) {
                 const runtime::DecodedInstr tmp = antes.instr[y];
                 antes.instr[y] = antes.instr[y - 1];
                 antes.instr[y - 1] = tmp;
@@ -389,7 +391,8 @@ void probar(const std::string &fichero, bool detalle) {
             check(runtime::bundle_reorder(proc, otra, tc_otra) == 0,
                   "reordenar lo ya reordenado lo vuelve a mover", donde);
         }
-        if (mirados >= 200) break; // suficiente: mas no anade casos, solo tiempo
+        if (mirados >= 200)
+            break; // suficiente: mas no anade casos, solo tiempo
     }
     // Que MUEVA algo: un reordenador que nunca mueve pasa las comprobaciones
     // de correccion sin hacer nada, y entonces no estan comprobando nada.
@@ -455,7 +458,8 @@ int main(int argc, char **argv) {
                 " del que usa el\n  planificador: mas basto, asi que solo puede"
                 " acusar de mas.\n\n");
 
-    for (const std::string &f : ficheros) probar(f, detalle);
+    for (const std::string &f : ficheros)
+        probar(f, detalle);
 
     /* Las dos propiedades del CONJUNTO.  Ninguna se puede exigir por programa:
      * un programa donde cada instruccion ya es independiente de la anterior no
@@ -476,8 +480,8 @@ int main(int argc, char **argv) {
 
     std::printf("\ncomprobaciones: %s%d pasaron%s, %s%d fallaron%s\n",
                 ansi::c(ansi::BR_GREEN), g_pass, ansi::c(ansi::RESET),
-                g_fail ? ansi::c(ansi::BR_RED) : ansi::c(ansi::BR_BLACK), g_fail,
-                ansi::c(ansi::RESET));
+                g_fail ? ansi::c(ansi::BR_RED) : ansi::c(ansi::BR_BLACK),
+                g_fail, ansi::c(ansi::RESET));
     return g_fail == 0 ? 0 : 1;
 #endif
 }

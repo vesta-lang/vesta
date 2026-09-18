@@ -613,8 +613,8 @@ struct Expr : Node {
      * que se queda como bandera porque cabe en el relleno y se consulta antes.
      */
     struct ComptimeConst {
-        int64_t i = 0;    ///< el valor, si no es cadena
-        std::string s;    ///< el valor, si @c comptime_const_is_str
+        int64_t i = 0; ///< el valor, si no es cadena
+        std::string s; ///< el valor, si @c comptime_const_is_str
     };
     std::unique_ptr<ComptimeConst> comptime_const;
 

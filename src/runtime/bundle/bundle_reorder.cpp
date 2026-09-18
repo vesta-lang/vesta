@@ -199,7 +199,6 @@ constexpr uint32_t kWindow = 8;
  * que se escribe --, porque para decidir si dos instrucciones se cruzan sobrar
  * una lectura solo cuesta una reordenacion que no se hace. */
 
-
 /* -------------------------------------------------------------------------
  * Los CRITERIOS
  *
@@ -360,9 +359,10 @@ constexpr Criterion kCriteria[CR_COUNT] = {
 #undef VM_REORDER_ROW
 };
 
-static_assert(CR_COUNT == kBundleReorderCriteria,
-              "la cuenta publicada en bundle.h y la lista tienen que coincidir: "
-              "quien lee `why` indexa por ella");
+static_assert(
+    CR_COUNT == kBundleReorderCriteria,
+    "la cuenta publicada en bundle.h y la lista tienen que coincidir: "
+    "quien lee `why` indexa por ella");
 
 /**
  * @brief Puntua a la candidata @p i con TODOS los criterios.
@@ -480,7 +480,8 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, BundleTouch &tc,
      * pasa por los recursos.
      *
      * CORTE 3: si cada una depende de la ANTERIOR, el unico orden topologico
-     * valido es el que ya trae.  Sale antes del planificador, que es lo caro. */
+     * valido es el que ya trae.  Sale antes del planificador, que es lo caro.
+     */
     const uint32_t all = (b.k >= 32) ? 0xFFFFFFFFu : ((1u << b.k) - 1u);
     uint32_t w_reg[kRegs] = {}, r_reg[kRegs] = {};
     uint32_t w_vec[kRegs] = {}, r_vec[kRegs] = {};
@@ -591,8 +592,7 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, BundleTouch &tc,
     int32_t last = -1;
 
     while (pending != 0) {
-        const Ctx c{t,    role,          clash,   b.k,
-                    pending, last, pend_reg_read, emitted};
+        const Ctx c{t, role, clash, b.k, pending, last, pend_reg_read, emitted};
 
         int best = 0;
         int32_t pick = -1;
@@ -693,8 +693,7 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, BundleTouch &tc,
         // Lo que dejaba de aportar a las pendientes, ahora que ya salio.
         for (uint16_t m = t[pick].reg_read; m != 0; m &= (uint16_t)(m - 1)) {
             const uint32_t r = (uint32_t)__builtin_ctz(m);
-            if (--read_count[r] == 0)
-                pend_reg_read &= (uint16_t)~(1u << r);
+            if (--read_count[r] == 0) pend_reg_read &= (uint16_t)~(1u << r);
         }
         last = pick;
         ++emitted;
@@ -718,7 +717,8 @@ uint32_t reorder_impl(ProcessVM *process, Bundle &b, BundleTouch &tc,
     BundleTouch permuted;
     for (uint32_t i = 0; i < emitted; ++i)
         bundle_touch_move(permuted, i, tc, order[i]);
-    for (uint32_t i = 0; i < emitted; ++i) bundle_touch_move(tc, i, permuted, i);
+    for (uint32_t i = 0; i < emitted; ++i)
+        bundle_touch_move(tc, i, permuted, i);
     return moved;
 }
 

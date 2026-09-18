@@ -12,14 +12,14 @@
  * Como se reparte el trabajo
  * --------------------------
  * La base de datos generada (`instr_db_vm.h`) ya guarda lo que vale para TODAS
- * las instancias de un opcode: los campos implicitos, si transfiere control y si
- * lo derivado es completo.  Eso NO se repite aqui; se lee.
+ * las instancias de un opcode: los campos implicitos, si transfiere control y
+ * si lo derivado es completo.  Eso NO se repite aqui; se lee.
  *
  * Lo que anade este fichero son las dos cosas que una tabla por opcode no puede
  * tener:
  *
- *   - la FORMA -- que registro concreto se lee y cual se escribe --, que depende
- *     de los BYTES de esta instruccion;
+ *   - la FORMA -- que registro concreto se lee y cual se escribe --, que
+ * depende de los BYTES de esta instruccion;
  *   - el ESTRECHAMIENTO -- que campos implicitos toca DE VERDAD esta vez --,
  *     cuando los operandos lo deciden.
  *
@@ -117,7 +117,7 @@ inline void form_b_dst_hi(const DecodedInstr &d, InstrEffects &e) {
 /**
  * @brief Como la anterior, pero el destino tambien se LEE: `strfinalize`.
  *
- * Saca de el el objeto que va a actualizar, asi que no lo pisa entero.  Comparte
+ * Saca de el el objeto que va a actualizar, asi que no lo pisa entero. Comparte
  * decoder y disposicion con las demas de su familia y NO comparte efecto: es la
  * excepcion que aparecio al verificarlas una por una.
  */
@@ -195,8 +195,8 @@ inline void form_alu3(const DecodedInstr &d, InstrEffects &e) {
  * Convencion A: el decoder deja los DOS numeros de registro directos, `rd` en
  * `reg1` y `rs` en `reg2`.
  *
- * El destino se ACUMULA -- `add rd, rs` es `rd += rs` --, asi que tambien se lee
- * y no mata ningun temporal.
+ * El destino se ACUMULA -- `add rd, rs` es `rd += rs` --, asi que tambien se
+ * lee y no mata ningun temporal.
  */
 inline void form_alu_bin(const DecodedInstr &d, InstrEffects &e) {
     mark_write(d, e, RS_REG1, /*kill=*/false);
@@ -265,12 +265,13 @@ inline void form_mov(const DecodedInstr &d, InstrEffects &e) {
      * comparaciones.  Los ceros son los cursores (0..3) y las ranuras
      * reservadas (4..7 y 12..15), que no tocan ninguno de los cuatro campos. */
     static constexpr uint8_t kSpecialField[16] = {
-        0, 0, 0, 0,                            // 0..3   cursores
-        0, 0, 0, 0,                            // 4..7   reservados
-        EF_PC, EF_FRAME, EF_STACK, EF_FLAGS,   // 8..11  rip, rbp, rsp, rflags
-        0, 0, 0, 0,                            // 12..15 reservados
+        0,     0,        0,        0,        // 0..3   cursores
+        0,     0,        0,        0,        // 4..7   reservados
+        EF_PC, EF_FRAME, EF_STACK, EF_FLAGS, // 8..11  rip, rbp, rsp, rflags
+        0,     0,        0,        0,        // 12..15 reservados
     };
-    const uint8_t field = kSpecialField[d.data_instruction.reg_data.reg2 & 0x0F];
+    const uint8_t field =
+        kSpecialField[d.data_instruction.reg_data.reg2 & 0x0F];
 
     if (d.flags_info.direction == 0) {
         // `mov r_ext, r`: el especial se ESCRIBE con el valor del general.
@@ -288,13 +289,13 @@ inline void form_mov(const DecodedInstr &d, InstrEffects &e) {
  *
  * No es permisividad al reves: es la unica forma de que esto se acabe de
  * escribir.  Si "no se la forma" fuese una respuesta valida, los opcodes que
- * faltan se quedarian sin declarar indefinidamente -- nadie los echaria de menos
- * porque el programa seguiria corriendo -- y el modelo estaria eternamente a
- * medias.  Muriendo aqui, cada opcode que se ejecute y no este declarado sale a
- * la luz con nombre y sitio.
+ * faltan se quedarian sin declarar indefinidamente -- nadie los echaria de
+ * menos porque el programa seguiria corriendo -- y el modelo estaria
+ * eternamente a medias.  Muriendo aqui, cada opcode que se ejecute y no este
+ * declarado sale a la luz con nombre y sitio.
  *
- * Es coherente con el resto: en una VM PROPIA no puede haber instrucciones cuyos
- * efectos no se conozcan.  Son NUESTRAS instrucciones.
+ * Es coherente con el resto: en una VM PROPIA no puede haber instrucciones
+ * cuyos efectos no se conozcan.  Son NUESTRAS instrucciones.
  *
  * Y por eso este descodificador no se enchufa a la VM hasta que las 242 esten:
  * mientras tanto solo lo usan los tests, que es donde debe doler.
@@ -374,13 +375,14 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
  * soporta: es una extension del lenguaje, no del ABI.  Sin nombrarlo aqui, este
  * fichero caia en el `#error` de abajo -- que ya pedia "GCC/Clang". */
 #if defined(__GNUC__) || defined(__clang__)
-    /* Tabla de destinos.  Se rellena una vez; el resto de las ejecuciones es una
-     * rama predicha y un salto.  La escritura concurrente es benigna: dos hilos
-     * escribirian los MISMOS valores. */
+    /* Tabla de destinos.  Se rellena una vez; el resto de las ejecuciones es
+     * una rama predicha y un salto.  La escritura concurrente es benigna: dos
+     * hilos escribirian los MISMOS valores. */
     static void *dispatch[512];
     static bool dispatch_ready = false;
     if (__builtin_expect(!dispatch_ready, 0)) {
-        for (unsigned i = 0; i < 512; ++i) dispatch[i] = &&L_UNDECLARED;
+        for (unsigned i = 0; i < 512; ++i)
+            dispatch[i] = &&L_UNDECLARED;
 
         // ALU binaria registro-registro (convencion A).
         dispatch[0x100 | 0x05] = &&L_ALU_BIN; // add
@@ -398,7 +400,8 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
         dispatch[0x100 | 0x14] = &&L_MOV; // mov, y la variante de reg especial
 
         // ALU de tres operandos: nueve opcodes, UNA etiqueta.
-        for (unsigned o = 0x73; o <= 0x7B; ++o) dispatch[0x100 | o] = &&L_ALU3;
+        for (unsigned o = 0x73; o <= 0x7B; ++o)
+            dispatch[0x100 | o] = &&L_ALU3;
 
         /* --- Cadenas: convencion B con el destino en el nibble ALTO --------
          *
@@ -407,8 +410,8 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
          * contrario.  Y dentro de la propia familia hay una excepcion --
          * `strfinalize` --, que fue justo lo que aparecio al mirarlas una por
          * una en vez de declararlas en bloque. */
-        for (unsigned o : {0x47u, 0x4Bu, 0x4Du, 0x4Eu, 0x4Fu, 0x50u, 0x51u,
-                           0x52u, 0x53u})
+        for (unsigned o :
+             {0x47u, 0x4Bu, 0x4Du, 0x4Eu, 0x4Fu, 0x50u, 0x51u, 0x52u, 0x53u})
             dispatch[0x100 | o] = &&L_B_HI; // strlen strraw strflat strhash
                                             // strintern strgetenc strgetbytes
                                             // strgetkind strreserve
@@ -416,7 +419,8 @@ inline bool decode_effects_impl(const DecodedInstr &d, InstrEffects &out,
             dispatch[0x100 | o] = &&L_B_HI3; // strmake strcat strcmp strconv
                                              // strslice strmake_h
         /* `strfinalize` LEE su primer operando ademas de escribirlo: saca de el
-         * el objeto que va a actualizar.  Misma disposicion, distinto efecto. */
+         * el objeto que va a actualizar.  Misma disposicion, distinto efecto.
+         */
         dispatch[0x100 | 0x54] = &&L_B_HI_RMW;
 
         /* --- Coma flotante: mismos campos, OTRO BANCO ----------------------
@@ -488,7 +492,8 @@ L_DONE:;
 #endif
 
     /* Solo aqui se puede prometer exactitud, y solo si las DOS mitades la
-     * tienen: la base derivada del codigo maquina y la forma declarada arriba. */
+     * tienen: la base derivada del codigo maquina y la forma declarada arriba.
+     */
     out.exact = (hot & vm_isa::VE_EXACT) != 0 && (hot & vm_isa::VE_IMPL) != 0;
     return true; // la forma esta declarada; la exactitud la dice `out.exact`
 }

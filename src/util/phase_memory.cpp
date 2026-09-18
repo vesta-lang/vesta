@@ -56,10 +56,11 @@ static void release_impl(const char *next_mark, uint32_t from_class) {
     if (flag_on(FlagId::HostAllocScan)) {
         uint64_t blocks = 0, chunks = 0;
         const auto t0 = std::chrono::steady_clock::now();
-        const size_t bytes = host_chunk_scan(kReclaimFromClass, &blocks,
-                                             &chunks);
+        const size_t bytes =
+            host_chunk_scan(kReclaimFromClass, &blocks, &chunks);
         const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-                            std::chrono::steady_clock::now() - t0).count();
+                            std::chrono::steady_clock::now() - t0)
+                            .count();
         std::fprintf(stderr,
                      "[scan] %-18s %8llu bloques  %6llu trozos  %6.1f MiB"
                      "  %7lld us\n",

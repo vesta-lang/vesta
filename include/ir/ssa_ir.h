@@ -50,7 +50,7 @@
 #include <cstddef>
 
 #include "ir/native_effect_vocab.h" // de quien es lo que sale, y que puede fallar
-#include "util/name_pool.h"    // nombres internados: la clave sin copiar
+#include "util/name_pool.h"         // nombres internados: la clave sin copiar
 #include "util/alloc/small_vector.h" // los operandos casi siempre son uno o dos
 #include <cstring>
 #include <string>
@@ -150,14 +150,14 @@ bool ir_type_parse(const char *name, IrType &out);
 /**
  * @brief De que clase es el DUENO del que sale un prestamo.
  *
- * Va con el prestamo para que ningun consumidor extrapole: la exclusividad de un
- * `borrow_mut` NO se puede trasladar a un puntero crudo sacado del mismo objeto
- * ni al interior de un `unique`.
+ * Va con el prestamo para que ningun consumidor extrapole: la exclusividad de
+ * un `borrow_mut` NO se puede trasladar a un puntero crudo sacado del mismo
+ * objeto ni al interior de un `unique`.
  *
  * Y separa lo que de verdad se comporta distinto: los duenos que se COPIAN
  * (@c Plain, @c Shared) se le pueden pasar a otra funcion que los vuelva a
- * prestar, y @c Unique no -- pasarlo exige moverlo, y mover un dueno prestado ya
- * se rechaza --.
+ * prestar, y @c Unique no -- pasarlo exige moverlo, y mover un dueno prestado
+ * ya se rechaza --.
  */
 enum class BorrowOwnerKind : uint8_t {
     Plain = 0, ///< Local corriente cuya direccion se tomo.
@@ -893,7 +893,8 @@ inline bool borrow_is_exclusive(uint64_t imm) noexcept {
 
 /// @brief De que clase es el dueno del que salio.
 inline BorrowOwnerKind borrow_owner_kind(uint64_t imm) noexcept {
-    return static_cast<BorrowOwnerKind>(static_cast<uint8_t>((imm >> 8) & 0xFF));
+    return static_cast<BorrowOwnerKind>(
+        static_cast<uint8_t>((imm >> 8) & 0xFF));
 }
 
 /**
@@ -1589,9 +1590,9 @@ struct AsmMicroOperand {
     uint16_t width =
         0; ///< ancho en BITS del operando (de la forma DB); nombra el reg
     int16_t fixed_phys = -1; ///< reg fisico fijo (-1 = libre, lo asigna el RA)
-    IrValueId value = IrValueId(
-        0);          ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
-    int64_t imm = 0; ///< inmediato (solo @c kind==IMM)
+    IrValueId value =
+        IrValueId(0); ///< SSA leido/definido (REG/MEM base); IR_NO_VALUE si no
+    int64_t imm = 0;  ///< inmediato (solo @c kind==IMM)
 
     bool reads() const { return (flags & ASM_OP_READ) != 0; }
     bool writes() const { return (flags & ASM_OP_WRITE) != 0; }

@@ -368,8 +368,8 @@ static std::string fmt_ext_operands(uint8_t opc,
                 snprintf(buf, sizeof(buf), "%c%u, %s[%s] (%u bytes%s)", rb, reg,
                          mark, addr, width, sign_ext ? ", con signo" : "");
             else
-                snprintf(buf, sizeof(buf), "%s[%s], %c%u (%u bytes)", mark, addr,
-                         rb, reg, width);
+                snprintf(buf, sizeof(buf), "%s[%s], %c%u (%u bytes)", mark,
+                         addr, rb, reg, width);
             // mld escribe el registro y lee la direccion; mst al reves.
             anota(out, reg, opc == 0x90, fp_bank);
             if (base < 16) anota(out, base, false);

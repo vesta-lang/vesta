@@ -104,10 +104,11 @@ class VirtualMemory {
      * POR QUE EXISTE
      * --------------
      * Leer memoria de la VM desde OTRO hilo era imposible, y no por la TLB --
-     * consultarla no muta nada, es un recorrido de tres niveles y ya --: era por
-     * `cached_page_vaddr` y `cached_page_host`, que se escriben en cada acceso.
-     * Dos hilos leyendo se pisan esa pareja y uno acaba usando el puntero de una
-     * pagina con la direccion de otra.  Y eso no falla: lee bytes equivocados.
+     * consultarla no muta nada, es un recorrido de tres niveles y ya --: era
+     * por `cached_page_vaddr` y `cached_page_host`, que se escriben en cada
+     * acceso. Dos hilos leyendo se pisan esa pareja y uno acaba usando el
+     * puntero de una pagina con la direccion de otra.  Y eso no falla: lee
+     * bytes equivocados.
      *
      * Ya mordio una vez.  El fusionador de paquetes se llevo a un hilo ayudante
      * y por dentro llamaba a `live_out_after`, que descodifica hasta ocho
@@ -127,8 +128,8 @@ class VirtualMemory {
      *
      * No asigna paginas: si la direccion no esta mapeada devuelve null, y quien
      * llama decide.  Asignar es lo unico que muta de verdad en este camino
-     * -- crea nodos en la TLB --, asi que dejarlo fuera es lo que hace segura la
-     * lectura desde otro hilo.
+     * -- crea nodos en la TLB --, asi que dejarlo fuera es lo que hace segura
+     * la lectura desde otro hilo.
      *
      * @param vaddr Direccion virtual de la VM.
      * @param view  Cache de pagina del llamante.  Se actualiza.

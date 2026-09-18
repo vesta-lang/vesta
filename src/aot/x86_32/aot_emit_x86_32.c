@@ -359,10 +359,10 @@ int aot_emit_pe32(const char *path, const AotLayoutCfg *cfg,
             ok = 0;
             break;
         }
-        uint64_t tv = rl->target_is_imagebase
-                          ? (uint64_t)IMGBASE // `__ImageBase`: la base, tal cual
-                          : (IMGBASE + sec_rva[rl->target_section] +
-                             rl->target_off);
+        uint64_t tv =
+            rl->target_is_imagebase
+                ? (uint64_t)IMGBASE // `__ImageBase`: la base, tal cual
+                : (IMGBASE + sec_rva[rl->target_section] + rl->target_off);
         tv = (uint64_t)((int64_t)tv + rl->addend);
         uint64_t site_va = IMGBASE + sec_rva[rl->site_section] + rl->site_off;
         if (!apply_reloc(img + sec_foff[rl->site_section] + rl->site_off,

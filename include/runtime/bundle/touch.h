@@ -105,8 +105,8 @@ struct Touch {
 /// Los EFECTOS IMPLICITOS de @p d, que salen de la base y no cuestan nada.
 /// @param pc_is_barrier Si leer `rip` descalifica.  Quien REORDENA dice que si
 ///        -- mover algo que lo lee cambia el valor que ve --; quien reparte en
-///        dos hilos dice que no, porque esa instruccion se queda en su hilo y en
-///        su orden, y ahi `rip` vale lo que tiene que valer.
+///        dos hilos dice que no, porque esa instruccion se queda en su hilo y
+///        en su orden, y ahi `rip` vale lo que tiene que valer.
 [[gnu::always_inline]] inline bool effects_of(const DecodedInstr &d, Touch &t,
                                               bool pc_is_barrier = true) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
@@ -197,9 +197,9 @@ struct Touch {
 
 /// En que categoria cae una instruccion para quien quiere MOVERLA o REPARTIRLA.
 enum class TouchKind : uint8_t {
-    Movable,  ///< se puede mover y se puede delegar a otro hilo
-    ReadsPc,  ///< lee el contador de programa: se queda en su hilo, en orden
-    Barrier,  ///< transfiere control, puede abortar, o no se sabe que toca
+    Movable, ///< se puede mover y se puede delegar a otro hilo
+    ReadsPc, ///< lee el contador de programa: se queda en su hilo, en orden
+    Barrier, ///< transfiere control, puede abortar, o no se sabe que toca
 };
 
 /**
@@ -221,8 +221,9 @@ enum class TouchKind : uint8_t {
  */
 [[gnu::always_inline]] inline TouchKind touch_classify(const DecodedInstr &d,
                                                        Touch &t) {
-    /* Se pide SIN la regla de `rip` -- asi se rellena tambien lo que la lee -- y
-     * despues se mira si la lleva.  Al reves habria que repetir el relleno. */
+    /* Se pide SIN la regla de `rip` -- asi se rellena tambien lo que la lee --
+     * y despues se mira si la lleva.  Al reves habria que repetir el relleno.
+     */
     if (!touch_one(d, t, /*pc_is_barrier=*/false)) return TouchKind::Barrier;
     return reads_pc_now(d) ? TouchKind::ReadsPc : TouchKind::Movable;
 }

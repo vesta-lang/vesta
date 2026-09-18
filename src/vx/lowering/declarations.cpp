@@ -797,8 +797,7 @@ bool Lowering::try_lower_struct_init_list(ast::VarDeclStmt *vd,
         if ((fi->type.kind == PrimitiveKind::STRUCT &&
              !type_is_overlay(fi->type)) ||
             fi->type.kind == PrimitiveKind::ARRAY ||
-            (fi->type.kind == PrimitiveKind::FUNCTION &&
-             !fi->type.fn_is_raw)) {
+            (fi->type.kind == PrimitiveKind::FUNCTION && !fi->type.fn_is_raw)) {
             uint64_t sz = size_of_type(fi->type);
             if (fi->type.kind == PrimitiveKind::FUNCTION) sz = 16;
             if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {

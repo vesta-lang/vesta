@@ -89,8 +89,7 @@ int main() {
     int32_t je = match(Isa::X86, "je", {ParsedOp{OP_IMM, 0}});
     CHECK(je >= 0, "je <destino>: un destino de salto casa como inmediato");
     bool je_r = false, je_w = false;
-    CHECK(flags_of(Isa::X86, je, je_r, je_w) && je_r,
-          "je lee las banderas");
+    CHECK(flags_of(Isa::X86, je, je_r, je_w) && je_r, "je lee las banderas");
 
     /* Un registro VECTORIAL es un CONTENEDOR: `xmm0` mide 128 bits pero
      * `addsd` opera sobre los 64 de abajo.  El texto solo puede dar el tamano
@@ -125,8 +124,7 @@ int main() {
     CHECK(mabs >= 0 && std::string(iclass_name(Isa::X86, mabs)) == "MOV",
           "movabs: es la grafia de GAS de MOV");
     int32_t msse = match(Isa::X86, "movsd", {reg(128), mem(64)});
-    CHECK(msse >= 0 &&
-              std::string(iclass_name(Isa::X86, msse)) == "MOVSD_XMM",
+    CHECK(msse >= 0 && std::string(iclass_name(Isa::X86, msse)) == "MOVSD_XMM",
           "movsd xmm,[mem]: la escalar, no la de cadena");
     int32_t mstr = match(Isa::X86, "movsd", {});
     CHECK(mstr >= 0 && std::string(iclass_name(Isa::X86, mstr)) == "MOVSD",
@@ -151,11 +149,13 @@ int main() {
      * memoria.  Eso deja mover un acceso por encima de otro, que es de los
      * peores errores que puede cometer esto. */
     {
-        const AsmInsnSem ld = asm_insn_sem(Isa::ARM64, "ldrb w8, [x1, #0x5]", 0);
+        const AsmInsnSem ld =
+            asm_insn_sem(Isa::ARM64, "ldrb w8, [x1, #0x5]", 0);
         CHECK(ld.modeled, "arm64: ldrb con direccion por partes casa");
         CHECK(ld.reads_mem && !ld.writes_mem, "arm64: ldrb LEE memoria");
         CHECK(!ld.writes.empty(), "arm64: ldrb escribe su destino");
-        const AsmInsnSem st = asm_insn_sem(Isa::ARM64, "strb w9, [x0, #0x58]", 0);
+        const AsmInsnSem st =
+            asm_insn_sem(Isa::ARM64, "strb w9, [x0, #0x58]", 0);
         CHECK(st.modeled, "arm64: strb casa");
         CHECK(st.writes_mem && !st.reads_mem, "arm64: strb ESCRIBE memoria");
         // Y la agrupacion no se lleva por delante la forma directa.

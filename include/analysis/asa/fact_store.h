@@ -164,10 +164,10 @@ class FactStore {
      * ya vinieron de disco.  El productor no se entera; sigue recorriendo el
      * modulo como siempre.
      *
-     * La clave se resume en 64 bits para encontrar el cubo, pero la coincidencia
-     * se CONFIRMA comparando las tres cadenas: un choque de hash aqui no seria
-     * trabajo de mas sino un hecho que nadie produce, y eso si cambia el
-     * resultado.
+     * La clave se resume en 64 bits para encontrar el cubo, pero la
+     * coincidencia se CONFIRMA comparando las tres cadenas: un choque de hash
+     * aqui no seria trabajo de mas sino un hecho que nadie produce, y eso si
+     * cambia el resultado.
      *
      * @param domain   Quien lo produjo.
      * @param stage    En que momento del programa.  @see kStage*.

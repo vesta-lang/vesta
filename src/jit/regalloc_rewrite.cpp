@@ -1780,8 +1780,8 @@ struct Lowerer {
         uint8_t scale = slot.reg == 0 ? uint8_t{1} : slot.reg;
         MOperand ix = resolve_use(slot);
         if (ix.kind != MOperandKind::MEM)
-            return MOperand::make_mem(addr_reg, disp,
-                                      static_cast<MReg>(ix.reg), scale);
+            return MOperand::make_mem(addr_reg, disp, static_cast<MReg>(ix.reg),
+                                      scale);
         /* DERRAMADO.  Hay que traerlo a un registro y sumarlo a la base, y el
          * unico libre aqui es scr1 -- scr0 se lo puede haber quedado el valor
          * de un almacenamiento --.  Con paso, ademas, no basta sumar: hay que

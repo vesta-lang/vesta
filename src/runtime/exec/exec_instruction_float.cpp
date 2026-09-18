@@ -158,9 +158,8 @@ static inline int fmode_bytes(uint8_t mode) {
 
 #define DEF_BINARY_SSE2_F64(fname, op128)                                      \
     [[gnu::target("sse2"), gnu::always_inline]]                                \
-    static inline void fname##_sse2_f64(uint8_t *__restrict__ d,               \
-                                        const uint8_t *__restrict__ s,         \
-                                        int bytes) {                           \
+    static inline void fname##_sse2_f64(                                       \
+        uint8_t *__restrict__ d, const uint8_t *__restrict__ s, int bytes) {   \
         for (int i = 0; i < bytes; i += 16) {                                  \
             __m128d vd = _mm_load_pd(reinterpret_cast<const double *>(d + i)); \
             __m128d vs = _mm_load_pd(reinterpret_cast<const double *>(s + i)); \
@@ -171,9 +170,8 @@ static inline int fmode_bytes(uint8_t mode) {
 
 #define DEF_BINARY_SSE2_F32(fname, op128)                                      \
     [[gnu::target("sse2"), gnu::always_inline]]                                \
-    static inline void fname##_sse2_f32(uint8_t *__restrict__ d,               \
-                                        const uint8_t *__restrict__ s,         \
-                                        int bytes) {                           \
+    static inline void fname##_sse2_f32(                                       \
+        uint8_t *__restrict__ d, const uint8_t *__restrict__ s, int bytes) {   \
         for (int i = 0; i < bytes; i += 16) {                                  \
             __m128 vd = _mm_load_ps(reinterpret_cast<const float *>(d + i));   \
             __m128 vs = _mm_load_ps(reinterpret_cast<const float *>(s + i));   \
@@ -186,9 +184,8 @@ static inline int fmode_bytes(uint8_t mode) {
 
 #define DEF_BINARY_AVX_F64(fname, op128, op256)                                \
     [[gnu::target("avx"), gnu::always_inline]]                                 \
-    static inline void fname##_avx_f64(uint8_t *__restrict__ d,                \
-                                       const uint8_t *__restrict__ s,          \
-                                       int bytes) {                            \
+    static inline void fname##_avx_f64(                                        \
+        uint8_t *__restrict__ d, const uint8_t *__restrict__ s, int bytes) {   \
         if (__builtin_expect(bytes < 32, 0)) {                                 \
             __m128d vd = _mm_load_pd(reinterpret_cast<const double *>(d));     \
             __m128d vs = _mm_load_pd(reinterpret_cast<const double *>(s));     \
@@ -208,9 +205,8 @@ static inline int fmode_bytes(uint8_t mode) {
 
 #define DEF_BINARY_AVX_F32(fname, op128, op256)                                \
     [[gnu::target("avx"), gnu::always_inline]]                                 \
-    static inline void fname##_avx_f32(uint8_t *__restrict__ d,                \
-                                       const uint8_t *__restrict__ s,          \
-                                       int bytes) {                            \
+    static inline void fname##_avx_f32(                                        \
+        uint8_t *__restrict__ d, const uint8_t *__restrict__ s, int bytes) {   \
         if (__builtin_expect(bytes < 32, 0)) {                                 \
             __m128 vd = _mm_load_ps(reinterpret_cast<const float *>(d));       \
             __m128 vs = _mm_load_ps(reinterpret_cast<const float *>(s));       \
@@ -232,9 +228,8 @@ static inline int fmode_bytes(uint8_t mode) {
 
 #define DEF_BINARY_AVX512_F64(fname, op128, op256, op512)                      \
     [[gnu::target("avx512f"), gnu::always_inline]]                             \
-    static inline void fname##_avx512_f64(uint8_t *__restrict__ d,             \
-                                          const uint8_t *__restrict__ s,       \
-                                          int bytes) {                         \
+    static inline void fname##_avx512_f64(                                     \
+        uint8_t *__restrict__ d, const uint8_t *__restrict__ s, int bytes) {   \
         if (bytes == 64) {                                                     \
             __m512d vd = _mm512_load_pd(reinterpret_cast<const double *>(d));  \
             __m512d vs = _mm512_load_pd(reinterpret_cast<const double *>(s));  \
@@ -254,9 +249,8 @@ static inline int fmode_bytes(uint8_t mode) {
 
 #define DEF_BINARY_AVX512_F32(fname, op128, op256, op512)                      \
     [[gnu::target("avx512f"), gnu::always_inline]]                             \
-    static inline void fname##_avx512_f32(uint8_t *__restrict__ d,             \
-                                          const uint8_t *__restrict__ s,       \
-                                          int bytes) {                         \
+    static inline void fname##_avx512_f32(                                     \
+        uint8_t *__restrict__ d, const uint8_t *__restrict__ s, int bytes) {   \
         if (bytes == 64) {                                                     \
             __m512 vd = _mm512_load_ps(reinterpret_cast<const float *>(d));    \
             __m512 vs = _mm512_load_ps(reinterpret_cast<const float *>(s));    \
@@ -917,8 +911,9 @@ int float_isa_level() {
     }
 }
 
-void (*float_exec_specialized(uint8_t opcode2, uint8_t mode))(
-    ProcessVM *, const DecodedInstr &) {
+void (*float_exec_specialized(uint8_t opcode2,
+                              uint8_t mode))(ProcessVM *,
+                                             const DecodedInstr &) {
     /* Se resuelve la primera vez y se queda.  Ni la ISA de una maquina ni el
      * juego de anchos cambian a mitad de ejecucion, asi que esto se pregunta
      * una vez y no una vez por instruccion.

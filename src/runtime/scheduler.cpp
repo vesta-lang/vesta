@@ -83,10 +83,11 @@ struct SlowOpsDump {
                      (unsigned long long)total);
         for (const Row &f : rows) {
             const bool ext = (f.idx & 0x100) != 0;
-            const vm_isa::VmInstr *vi = vm_isa::vm_instr(ext, (uint8_t)(f.idx & 0xFF));
+            const vm_isa::VmInstr *vi =
+                vm_isa::vm_instr(ext, (uint8_t)(f.idx & 0xFF));
             std::fprintf(stderr, "  %-18s %s0x%02X  %12llu  %5.1f%%\n",
                          (vi != nullptr && vi->name != nullptr) ? vi->name
-                                                                  : "?",
+                                                                : "?",
                          ext ? "ext " : "pri ", (unsigned)(f.idx & 0xFF),
                          (unsigned long long)f.times,
                          100.0 * (double)f.times / (double)total);
@@ -1122,7 +1123,7 @@ void Scheduler::run_loop() {
  * llamada de ninguna clase.  Escribe con `write_*_keep`, preservando los
  * bytes altos igual que hace el procesador. */
 #define FAST_FBIN(label, oper)                                                 \
-    label : {                                                                  \
+    label: {                                                                   \
         if (fl_inl.mode != 0) { /* empaquetado: ya especializado */            \
             d->exec_cached(instance, *d);                                      \
             goto L_F_FIN;                                                      \
@@ -1137,10 +1138,10 @@ void Scheduler::run_loop() {
         goto L_F_FIN;                                                          \
     }
 
-            FAST_FBIN(L_FADD, +)
-            FAST_FBIN(L_FSUB, -)
-            FAST_FBIN(L_FMUL, *)
-            FAST_FBIN(L_FDIV, /)
+                FAST_FBIN(L_FADD, +)
+                FAST_FBIN(L_FSUB, -)
+                FAST_FBIN(L_FMUL, *)
+                FAST_FBIN(L_FDIV, /)
 #undef FAST_FBIN
 
             /* FMOV se mete entero: las cuatro anchuras son una copia con
@@ -1164,28 +1165,28 @@ void Scheduler::run_loop() {
  * `fload`/`fstore` pasan por la memoria de la VM, y las unarias empaquetadas
  * vuelven a las funciones por ISA -- pero quitarles el salto por puntero si. */
 #define FAST_FDIRECTA(etiqueta, manejador)                                     \
-    etiqueta : {                                                               \
+    etiqueta: {                                                                \
         manejador(instance, *d);                                               \
         goto L_F_FIN;                                                          \
     }
 
-            FAST_FDIRECTA(L_FCMP, exec_instr_fcmp)
-            FAST_FDIRECTA(L_FSQRT, exec_instr_fsqrt)
-            FAST_FDIRECTA(L_FABS, exec_instr_fabs)
-            FAST_FDIRECTA(L_FNEG, exec_instr_fneg)
-            FAST_FDIRECTA(L_FCVT, exec_instr_fcvt)
-            FAST_FDIRECTA(L_FMOVI, exec_instr_fmovi)
-            FAST_FDIRECTA(L_FLOAD, exec_instr_fload)
-            FAST_FDIRECTA(L_FSTORE, exec_instr_fstore)
-            FAST_FDIRECTA(L_FEXTEND, exec_instr_fextend)
-            FAST_FDIRECTA(L_FNARROW, exec_instr_fnarrow)
+                FAST_FDIRECTA(L_FCMP, exec_instr_fcmp)
+                FAST_FDIRECTA(L_FSQRT, exec_instr_fsqrt)
+                FAST_FDIRECTA(L_FABS, exec_instr_fabs)
+                FAST_FDIRECTA(L_FNEG, exec_instr_fneg)
+                FAST_FDIRECTA(L_FCVT, exec_instr_fcvt)
+                FAST_FDIRECTA(L_FMOVI, exec_instr_fmovi)
+                FAST_FDIRECTA(L_FLOAD, exec_instr_fload)
+                FAST_FDIRECTA(L_FSTORE, exec_instr_fstore)
+                FAST_FDIRECTA(L_FEXTEND, exec_instr_fextend)
+                FAST_FDIRECTA(L_FNARROW, exec_instr_fnarrow)
 #undef FAST_FDIRECTA
 
             /* Cierre comun.  Ninguna instruccion de coma flotante salta ni se
              * bloquea -- `fcmp` deja banderas, nada mas --, asi que les vale
              * el epilogo simple y no hace falta tocar el camino de eventos. */
             L_F_FIN:
-            ADVANCE_AND_NEXT();
+                ADVANCE_AND_NEXT();
 
             /* RET, en su forma simple.
              *
@@ -1266,7 +1267,8 @@ void Scheduler::run_loop() {
             L_ENTER: {
                 const uint64_t frame_size =
                     d->data_instruction.inmmed_data.inmmed;
-                const uint64_t rbp_value = instance->registers.base_pointer.raw();
+                const uint64_t rbp_value =
+                    instance->registers.base_pointer.raw();
                 // push rbp
                 const uint64_t rsp_after_push =
                     instance->registers.stack_pointer.qword() - 8;
@@ -1326,8 +1328,7 @@ void Scheduler::run_loop() {
                 const uint64_t rsp = instance->registers.stack_pointer.qword();
                 // Mismo recorrido que `fastpush`, leyendo en descendente: asi
                 // cada valor vuelve al registro del que salio.
-                uint64_t slot =
-                    rsp + static_cast<uint64_t>(count - 1) * 8ULL;
+                uint64_t slot = rsp + static_cast<uint64_t>(count - 1) * 8ULL;
                 while (mask) {
                     const int r = __builtin_ctz(static_cast<unsigned>(mask));
                     instance->registers.regs[r].qword(

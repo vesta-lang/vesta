@@ -604,8 +604,8 @@ IrBuilder::phi(IrType type,
  * real en el patch pass.  Si la funcion no existe en el modulo, el
  * linker reportara unresolved symbol al final.
  */
-IrValueId IrBuilder::call(const std::string &fn_name,
-                          IrValueList args, IrType ret_type) {
+IrValueId IrBuilder::call(const std::string &fn_name, IrValueList args,
+                          IrType ret_type) {
     // Si el callee no devuelve nada, no reservamos SSA value (dst queda
     // como IR_NO_VALUE).  Asi el DCE no intenta mantener viva una
     // "variable" sin definicion conceptual.
@@ -628,8 +628,7 @@ IrValueId IrBuilder::call(const std::string &fn_name,
  * el sitio de uso que no hay valor de retorno.  Mejora la legibilidad
  * del frontend cuando se ejecuta una funcion por sus efectos laterales.
  */
-void IrBuilder::call_void(const std::string &fn_name,
-                          IrValueList args) {
+void IrBuilder::call_void(const std::string &fn_name, IrValueList args) {
     IrInstr ins{};
     ins.op = IrOp::CALL;
     ins.type = IrType::VOID;
@@ -646,8 +645,7 @@ void IrBuilder::call_void(const std::string &fn_name,
  * values, o de un @c STR_LIT_ADDR (no esta soportado en este builder
  * por simplicidad; el frontend Vesta tiene helpers especializados).
  */
-IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
-                                   IrValueList args,
+IrValueId IrBuilder::call_indirect(IrValueId fn_ptr, IrValueList args,
                                    IrType ret_type) {
     const IrValueId id =
         (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);
@@ -670,8 +668,7 @@ IrValueId IrBuilder::call_indirect(IrValueId fn_ptr,
  * El loader del .velb registra la importacion y resuelve a la direccion real
  * via @c dlsym / @c GetProcAddress al cargar el modulo nativo.
  */
-IrValueId IrBuilder::call_native(const std::string &lib_func,
-                                 IrValueList args,
+IrValueId IrBuilder::call_native(const std::string &lib_func, IrValueList args,
                                  IrType ret_type) {
     const IrValueId id =
         (ret_type == IrType::VOID) ? IR_NO_VALUE : new_value(ret_type);

@@ -136,9 +136,8 @@ void bench_working_set(uint32_t pages, bool random) {
         // signifique algo y la guarda de abajo no mienta.
         sink += v.mem[kBase + (uint64_t)idx * kPage + 8];
     }
-    const double ns =
-        (double)::util::reloj::a_ns(::util::reloj::ahora() - t0) /
-        (double)kAccesses;
+    const double ns = (double)::util::reloj::a_ns(::util::reloj::ahora() - t0) /
+                      (double)kAccesses;
 
     if (sink == 0) std::printf("  (sink vacio: el bucle se borro)\n");
 
@@ -222,7 +221,6 @@ void bench_memory_at(uint64_t addr, const char *name) {
 }
 
 } // namespace
-
 
 int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i)

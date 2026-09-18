@@ -34,9 +34,9 @@
 #include "util/fnv.h"
 #include "util/reloj.h"
 #include "analysis/manager/analysis_codec.h" // lo COMUN de guardar un analisis
-#include "util/alloc/small_vector.h"  // el estado casi siempre es diminuto
-#include "util/thread_owned.h"  // por hilo, sin `thread_local`
-#include "util/os/thread_slot.h"   // lo que cabe en un puntero, sin reservar
+#include "util/alloc/small_vector.h" // el estado casi siempre es diminuto
+#include "util/thread_owned.h"       // por hilo, sin `thread_local`
+#include "util/os/thread_slot.h"     // lo que cabe en un puntero, sin reservar
 
 #include <cstring> // memcmp: comparar dos estados de una vez
 
@@ -192,7 +192,9 @@ struct CostCounters {
  * `util/thread_owned.h`. */
 util::ThreadOwned<CostCounters> g_cost_owner;
 /// Los contadores de ESTE hilo.
-inline CostCounters &g_cost() { return g_cost_owner.get(); }
+inline CostCounters &g_cost() {
+    return g_cost_owner.get();
+}
 
 /**
  * @brief Si se estan contando los costes.  Se mira ANTES de tocar @c g_cost().
@@ -240,7 +242,8 @@ static const bool g_no_range_cache = util::flag_on(util::FlagId::NoRangeCache);
  *
  * Y no hacia falta: estos vectores son diminutos (mediana 0 entradas,
  * percentil 90 igual a 9), o sea un millon de reservas PEQUENAS, que es
- * justo lo que sirve bien el asignador por clases de `util/alloc/host_allocator.h`
+ * justo lo que sirve bien el asignador por clases de
+ * `util/alloc/host_allocator.h`
  * -- donde al crecer el bufer viejo SI se devuelve y se reaprovecha.
  */
 struct Estado {
@@ -421,7 +424,8 @@ struct Contexto {
         : fn(f), facts(fc), sum(s) {
         const size_t n = fc.value_count();
         suelo.assign(n, ValueRange::top());
-        for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size() && v < n; ++v) {
+        for (ir::IrValueId v = ir::IrValueId(0); v < fn.values.size() && v < n;
+             ++v) {
             suelo[v] = del_tipo(fn.values[v].type);
             if (fn.values[v].is_const && suelo[v].acotada())
                 suelo[v] = suelo[v].cortar(
@@ -497,8 +501,7 @@ struct Contexto {
                     ir::IrBlockId drop_dead_at) const;
 
     /// Que no se filtre nada.  No es un bloque valido a proposito.
-    static constexpr ir::IrBlockId kNoDropDead =
-        static_cast<ir::IrBlockId>(-1);
+    static constexpr ir::IrBlockId kNoDropDead = static_cast<ir::IrBlockId>(-1);
 
     /// Ultimo bloque donde se USA cada valor.  Lo rellena @c Motor; se declara
     /// aqui porque quien transfiere es quien puede no anotar lo ya muerto.
@@ -686,8 +689,7 @@ struct Motor : Contexto {
          * ganancia limpia. */
         LoopFacts own;
         if (!loops_.valid()) own = compute_loop_facts(fn);
-        const LoopFacts &lf =
-            loops_.valid() ? loops_.ask(loops_.ctx, fn) : own;
+        const LoopFacts &lf = loops_.valid() ? loops_.ask(loops_.ctx, fn) : own;
         auto dentro_de = [&](ir::IrBlockId b, uint32_t lid) {
             if (lid == LoopFacts::NO_LOOP) return false;
             uint32_t l =
@@ -1723,8 +1725,7 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
     // Sin registro no se afirma nada: se recalcula.  Es la misma regla que rige
     // el resto del analisis -- no haber mirado no es haber comprobado.
     if (!d.registrada) return false;
-    if (d.huella_opciones != op.fingerprint())
-        return false;
+    if (d.huella_opciones != op.fingerprint()) return false;
     if (d.huella_ir != function_code_key(fn)) return false;
     /* HABIA resumenes entonces y los hay ahora?  Esta comprobacion no la puede
      * hacer la lista de abajo: un calculo SIN resumenes no consulta ninguno, y
@@ -1759,12 +1760,10 @@ bool dependencias_vigentes(const DependenciasRango &d, const ir::IrFunction &fn,
 static std::atomic<long long> g_ns_motor{0};
 static std::atomic<long long> g_n_motor{0};
 
-static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
-                                       const IrFacts &facts,
-                                       const RangeOptions &op,
-                                       const RangeSummaries *sum,
-                                       const LoopIvBounds *ivb,
-                                       LoopsOracle loops);
+static RangeFacts
+calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &facts,
+                     const RangeOptions &op, const RangeSummaries *sum,
+                     const LoopIvBounds *ivb, LoopsOracle loops);
 
 /* Quien pidio el analisis que se esta haciendo.  Sin esto el recuento total no
  * es accionable: dice cuantos hay, no de quien son ni cuales sobran.
@@ -1784,10 +1783,10 @@ inline RangeAsker g_asker() {
 /// Fija el peticionario de ESTE hilo.
 inline void set_g_asker(RangeAsker who) {
     g_asker_slot.ensure();
-    g_asker_slot.set(
-        reinterpret_cast<void *>(static_cast<uintptr_t>(who)));
+    g_asker_slot.set(reinterpret_cast<void *>(static_cast<uintptr_t>(who)));
 }
-static std::atomic<long long> g_by_asker[static_cast<size_t>(RangeAsker::Count)];
+static std::atomic<long long>
+    g_by_asker[static_cast<size_t>(RangeAsker::Count)];
 
 /* Con la bandera apagada NO se toca la variable de hilo.  En MinGW cada acceso
  * a una de ellas es una llamada (`__emutls_get_address`), y esto se pone en
@@ -1874,8 +1873,7 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
          * sea de una forma que este despeje no cubre, no mejora por saber mas
          * de los valores -- y lanzar ahi una pasada de rangos entera era pagar
          * el doble por nada, medido. */
-        if (ivb_propias.no_const_init != 0 ||
-            ivb_propias.no_const_bound != 0) {
+        if (ivb_propias.no_const_init != 0 || ivb_propias.no_const_bound != 0) {
             // Que se vea de quien es esta pasada de mas.
             const RangeRequester mark(RangeAsker::IvStaging);
             const RangeFacts sin_cotas =
@@ -1897,8 +1895,7 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
         std::fprintf(stderr, "[motor-rangos] %lld analisis | %lld ms\n",
                      g_n_motor.load(), g_ns_motor.load() / 1000000);
         for (size_t i = 0; i < static_cast<size_t>(RangeAsker::Count); ++i) {
-            const long long c =
-                g_by_asker[i].load(std::memory_order_relaxed);
+            const long long c = g_by_asker[i].load(std::memory_order_relaxed);
             if (c != 0)
                 std::fprintf(stderr, "[motor-rangos]   %-20s %8lld\n",
                              range_asker_name(static_cast<RangeAsker>(i)), c);
@@ -1907,12 +1904,10 @@ static RangeFacts calcular_rangos(const ir::IrFunction &fn,
     return r;
 }
 
-static RangeFacts calcular_rangos_impl(const ir::IrFunction &fn,
-                                       const IrFacts &facts,
-                                       const RangeOptions &op,
-                                       const RangeSummaries *sum,
-                                       const LoopIvBounds *ivb,
-                                       LoopsOracle loops) {
+static RangeFacts
+calcular_rangos_impl(const ir::IrFunction &fn, const IrFacts &facts,
+                     const RangeOptions &op, const RangeSummaries *sum,
+                     const LoopIvBounds *ivb, LoopsOracle loops) {
     /* --------------------------------------------------------------- reuso
      *
      * Siete sitios distintos piden rangos de la misma funcion, y medido sobre
@@ -2174,7 +2169,8 @@ size_t release_range_memo() noexcept {
                         util::flag_on(util::FlagId::Times));
     std::lock_guard<std::mutex> g(mx_cache);
     size_t sueltos = 0;
-    for (const auto &cajon : cache) sueltos += cajon.second.size();
+    for (const auto &cajon : cache)
+        sueltos += cajon.second.size();
     /* VACIAR NO BASTA: un `unordered_map` vaciado conserva sus cubos, que en
      * una compilacion grande son decenas de miles.  Intercambiar con uno recien
      * hecho es lo que devuelve tambien esa tabla. */
@@ -2193,9 +2189,10 @@ size_t release_range_memo() noexcept {
  * Se devuelve un puntero COMPARTIDO, no una referencia al cajon: asi la entrada
  * puede desalojarse sin dejar colgado a quien la estaba mirando.
  */
-static std::shared_ptr<const RangeFacts> rangos_de(
-    const ir::IrFunction &fn, const IrFacts &facts, const RangeOptions &op,
-    const RangeSummaries *sum, const LoopIvBounds *ivb, LoopsOracle loops) {
+static std::shared_ptr<const RangeFacts>
+rangos_de(const ir::IrFunction &fn, const IrFacts &facts,
+          const RangeOptions &op, const RangeSummaries *sum,
+          const LoopIvBounds *ivb, LoopsOracle loops) {
     if (g_no_range_cache)
         return std::make_shared<const RangeFacts>(
             calcular_rangos(fn, facts, op, sum, ivb, loops));
@@ -2230,15 +2227,12 @@ static std::shared_ptr<const RangeFacts> rangos_de(
     return nuevos;
 }
 
-std::shared_ptr<const RangeFacts> compute_ranges_ptr(const ir::IrFunction &fn,
-                                                     const IrFacts &facts,
-                                                     const RangeOptions &op,
-                                                     const RangeSummaries *sum,
-                                                     const LoopIvBounds *ivb,
-                                                     LoopsOracle loops) {
+std::shared_ptr<const RangeFacts>
+compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
+                   const RangeOptions &op, const RangeSummaries *sum,
+                   const LoopIvBounds *ivb, LoopsOracle loops) {
     return rangos_de(fn, facts, op, sum, ivb, loops);
 }
-
 
 RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
                           const RangeOptions &op, const RangeSummaries *sum,
@@ -2345,8 +2339,8 @@ struct RangeQuery::Impl {
     util::NamedVector<uint8_t, QueryStateTag> state;
     uint64_t evaluated_count = 0;
 
-    Impl(const ir::IrFunction &fn, const IrFacts &facts,
-         const LoopIvBounds *b, const RangeSummaries *s)
+    Impl(const ir::IrFunction &fn, const IrFacts &facts, const LoopIvBounds *b,
+         const RangeSummaries *s)
         : ctx(fn, facts, s), ivb(b) {
         memo = ctx.suelo; // el suelo es la respuesta por defecto
         state.assign(memo.size(), 0);
@@ -2423,8 +2417,12 @@ RangeQuery::RangeQuery(const ir::IrFunction &fn, const IrFacts &facts,
 RangeQuery::RangeQuery(RangeQuery &&) noexcept = default;
 RangeQuery::~RangeQuery() = default;
 
-const ValueRange &RangeQuery::of(ir::IrValueId v) { return impl_->of(v, 0); }
-uint64_t RangeQuery::evaluated() const { return impl_->evaluated_count; }
+const ValueRange &RangeQuery::of(ir::IrValueId v) {
+    return impl_->of(v, 0);
+}
+uint64_t RangeQuery::evaluated() const {
+    return impl_->evaluated_count;
+}
 
 // ===========================================================================
 //  Guardarlos y recuperarlos entre compilaciones

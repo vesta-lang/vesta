@@ -21,7 +21,7 @@
 
 #include "bytecode/bytecode.h"
 #include "runtime/decode_instruction.h"
-#include "disasm/disasm.h" // asm real en los volcados de la cache
+#include "disasm/disasm.h"       // asm real en los volcados de la cache
 #include "runtime/instr_db_vm.h" // nombre del opcode en los volcados
 #include "util/env_flags.h" // VESTA_CACHE_DUMP: volcado del estado de caches
 #include "runtime/bundle/fuse_report.h"
@@ -262,13 +262,13 @@ runtime::InstrFormat g_bundle_format = {
     }
     std::fprintf(stderr, "                 tamano de paquete:");
     for (uint32_t n = 1; n < 16; ++n)
-        if (by_size[n] != 0)
-            std::fprintf(stderr, " %u:%u", n, by_size[n]);
+        if (by_size[n] != 0) std::fprintf(stderr, " %u:%u", n, by_size[n]);
     std::fprintf(stderr, "%s\n", by_size[15] ? " (15 = 15 o mas)" : "");
 }
 
-void bundle_dump(const ProcessVM *process) { bundle_dump_state(process); }
-
+void bundle_dump(const ProcessVM *process) {
+    bundle_dump_state(process);
+}
 
 void bundle_dump_one(ProcessVM *process, const Bundle *b) {
     /* El CONTENIDO, que es lo que hace falta el dia que algo va mal: que
@@ -276,9 +276,9 @@ void bundle_dump_one(ProcessVM *process, const Bundle *b) {
      * histograma se ve la forma; con esto se ve el caso.
      *
      * El `pc` de cada instruccion se guarda al formar, no se deduce del orden.
-     * Eso importa aqui mas que en ningun sitio: en cuanto se reordene, deducirlo
-     * daria la direccion equivocada, y un volcado de depuracion que miente es
-     * peor que no tenerlo. */
+     * Eso importa aqui mas que en ningun sitio: en cuanto se reordene,
+     * deducirlo daria la direccion equivocada, y un volcado de depuracion que
+     * miente es peor que no tenerlo. */
     if (b == nullptr) {
         std::fprintf(stderr, "  (paquete nulo)\n");
         return;
@@ -304,15 +304,17 @@ void bundle_dump_one(ProcessVM *process, const Bundle *b) {
 [[gnu::cold]] static void fput_padded(const char *s, int width) {
     int visible = 0;
     for (const char *p = s; *p != '\0'; ++p) {
-        if (*p == '\x1B') {                     // arranca una secuencia ANSI
-            while (*p != '\0' && *p != 'm') ++p; // hasta su terminador
+        if (*p == '\x1B') { // arranca una secuencia ANSI
+            while (*p != '\0' && *p != 'm')
+                ++p; // hasta su terminador
             if (*p == '\0') break;
             continue; // no ocupa columnas
         }
         ++visible;
     }
     std::fputs(s, stderr);
-    for (int i = visible; i < width; ++i) std::fputc(' ', stderr);
+    for (int i = visible; i < width; ++i)
+        std::fputc(' ', stderr);
 }
 
 void bundle_dump_asm(ProcessVM *process, const Bundle *b) {
@@ -374,8 +376,9 @@ void bundle_dump_heads(ProcessVM *process, uint32_t max_lines,
      * `MIN_PER_ENTRY` instrucciones por entrada el paquete no compensa y se
      * devuelve la ranura.  Verlas es la unica forma de entender por que un
      * paquete concreto se retiro. */
-    std::fprintf(stderr, "\n[cabeceras pid=%llu]  pc  k  entradas  ejecutadas  "
-                         "por_entrada  retirado\n",
+    std::fprintf(stderr,
+                 "\n[cabeceras pid=%llu]  pc  k  entradas  ejecutadas  "
+                 "por_entrada  retirado\n",
                  (unsigned long long)process->pid.local_pid);
     uint32_t shown = 0;
     for (uint32_t i = 0; i < ICACHE_SIZE && shown < max_lines; ++i) {
@@ -385,7 +388,8 @@ void bundle_dump_heads(ProcessVM *process, uint32_t max_lines,
         if (b == nullptr) continue;
         std::fprintf(stderr, "  0x%08llx  %2u  %8u  %10u  %11.1f  %s\n",
                      (unsigned long long)e.pc, b->k, b->entries, b->executed,
-                     b->entries ? (double)b->executed / (double)b->entries : 0.0,
+                     b->entries ? (double)b->executed / (double)b->entries
+                                : 0.0,
                      b->retired ? "si" : "no");
         // La linea de arriba ya dice lo que el paquete ha hecho; aqui va lo que
         // LLEVA, entero.  Por eso se llama al desensamblado y no a
@@ -428,7 +432,8 @@ void bundle_release(ProcessVM *process) {
             stderr,
             "\n[paquetes] formados=%llu no_formados=%llu aplazados=%llu "
             "recolecciones=%llu\n"
-            "           despachos=%llu instr_dentro=%llu  -> %.1f por despacho\n"
+            "           despachos=%llu instr_dentro=%llu  -> %.1f por "
+            "despacho\n"
             "           abandonos=%llu encogidos=%llu encadenados=%llu "
             "cabeceras_movidas=%llu\n"
             "           fusionados=%llu pares\n"
@@ -474,9 +479,8 @@ void bundle_release(ProcessVM *process) {
             /* NADIE MIRO.  Decir "partibles=0" aqui seria decir "no hay donde
              * partir", que es otra cosa: la busqueda va con el reparto porque
              * cuesta un 8%, y sin el no llega a correr. */
-            std::fprintf(stderr,
-                         "           reparto: NO SE BUSCO (pide "
-                         "VESTA_BUNDLE_OOO; buscar cuesta ~8%%)\n");
+            std::fprintf(stderr, "           reparto: NO SE BUSCO (pide "
+                                 "VESTA_BUNDLE_OOO; buscar cuesta ~8%%)\n");
         } else {
             std::fprintf(stderr,
                          "           reparto: partibles=%llu  repartidos=%llu"
@@ -703,9 +707,8 @@ static void bundle_copy_head_and_k(Bundle &dst, const Bundle &src) {
      * paquetes a secas no reordena ni fusiona ni reparte: calcularselo igual
      * seria anadirle una pasada por instruccion que nadie lee, y eso se ve --
      * costaba un 8%. */
-    const bool want_reorder =
-        process->bundle_reorder_on &&
-        !::util::flag_on(::util::FlagId::NoBundleReorder);
+    const bool want_reorder = process->bundle_reorder_on &&
+                              !::util::flag_on(::util::FlagId::NoBundleReorder);
     const bool want_split = process->bundle_ooo_on;
     BundleTouch tc;
     if (__builtin_expect(want_reorder || process->bundle_fuse_on || want_split,
@@ -771,11 +774,13 @@ static void bundle_copy_head_and_k(Bundle &dst, const Bundle &src) {
             su.reg_write = (uint16_t)(su.reg_write | tc.t[i].reg_write);
             su.vec_read = (uint16_t)(su.vec_read | tc.t[i].vec_read);
             su.vec_write = (uint16_t)(su.vec_write | tc.t[i].vec_write);
-            su.field = (uint8_t)(su.field | tc.t[i].field_read |
-                                 tc.t[i].field_write);
+            su.field =
+                (uint8_t)(su.field | tc.t[i].field_read | tc.t[i].field_write);
             if (tc.t[i].mem) su.flags |= Bundle::SUM_MEM;
-            if (tc.kind[i] == TouchKind::Barrier) su.flags |= Bundle::SUM_BARRIER;
-            if (tc.kind[i] == TouchKind::ReadsPc) su.flags |= Bundle::SUM_READS_PC;
+            if (tc.kind[i] == TouchKind::Barrier)
+                su.flags |= Bundle::SUM_BARRIER;
+            if (tc.kind[i] == TouchKind::ReadsPc)
+                su.flags |= Bundle::SUM_READS_PC;
         }
         b.summary = su;
         if ((su.flags & Bundle::SUM_NOT_DELEGABLE) == 0)
@@ -980,8 +985,7 @@ void bundle_try_form(ProcessVM *process, DecodedInstr *slot, uint64_t pc) {
         /* La copia la reserva ESTE hilo, porque la arena no es de varios.  Y
          * solo si la cola tiene hueco: reservarla para descubrir despues que no
          * cabe seria gastar una ranura de arena por nada. */
-        Bundle *scratch =
-            ooo_pending() < kOooSlots ? arena->alloc() : nullptr;
+        Bundle *scratch = ooo_pending() < kOooSlots ? arena->alloc() : nullptr;
         if (scratch != nullptr) {
             /* Y se copian solo las `k` que HAY, no las 32 que caben.
              *
@@ -1087,8 +1091,8 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
             /* Camino caliente: un decremento, una comparacion y una rama que
              * casi siempre no se toma.  El trabajo de verdad esta detras, en
              * una funcion marcada FRIA para que no engorde este bucle. */
-            if (__builtin_expect(--p->bundle_depth == 0 && p->bundle_needs_grace,
-                                 0))
+            if (__builtin_expect(
+                    --p->bundle_depth == 0 && p->bundle_needs_grace, 0))
                 bundle_grace_slow(p);
         }
     } pin(process, head);
@@ -1178,11 +1182,11 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
 
             Bundle *hb = head_bundle;
 
-            /* La fusion, PONDERADA POR EJECUCION.  Va aqui y no al final por una
-             * razon que costo un reventon: al final, recorrer la icache para
-             * leer los paquetes no vale -- una entrada puede seguir diciendo
-             * "paquete" con el paquete ya recogido --.  Aqui el paquete se
-             * acaba de ejecutar, asi que es seguro por construccion.
+            /* La fusion, PONDERADA POR EJECUCION.  Va aqui y no al final por
+             * una razon que costo un reventon: al final, recorrer la icache
+             * para leer los paquetes no vale -- una entrada puede seguir
+             * diciendo "paquete" con el paquete ya recogido --.  Aqui el
+             * paquete se acaba de ejecutar, asi que es seguro por construccion.
              *
              * Y no cuesta: este sitio ya corre una vez por DESPACHO, no por
              * instruccion, con la linea de cache caliente y detras de la misma
@@ -1265,8 +1269,7 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
                 ooo_pending() == 0)
                 p->vm_mem.reclaim_translation_tables();
 
-            if (__builtin_expect(p->ooo_exec_dirty, 0) &&
-                ooo_exec_inflight()) {
+            if (__builtin_expect(p->ooo_exec_dirty, 0) && ooo_exec_inflight()) {
                 const uint32_t spins = ooo_drain();
                 p->ooo_inflight = ProcessVM::OooInflight{};
                 p->ooo_exec_dirty = false;
@@ -1353,10 +1356,10 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
          *
          * Asi que la condicion es "nada que delegar Y nada en vuelo".  Con las
          * dos, esto es una carga local y una rama. */
-        if (__builtin_expect(!process->bundle_ooo_on ||
-                                 (!process->ooo_try_exec &&
-                                  !process->ooo_exec_dirty),
-                             1))
+        if (__builtin_expect(
+                !process->bundle_ooo_on ||
+                    (!process->ooo_try_exec && !process->ooo_exec_dirty),
+                1))
             return false;
         const Bundle::Summary &su = b->summary;
         ProcessVM::OooInflight &fly = process->ooo_inflight;
@@ -1387,12 +1390,12 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
          * que no se puede desambiguar (los campos implicitos y la memoria de
          * la VM).
          *
-         * Y SIN ANALIZAR choca con todo.  No es una precaucion: el resumen de un
-         * paquete que nadie ha mirado esta a cero, y cero se lee exactamente
+         * Y SIN ANALIZAR choca con todo.  No es una precaucion: el resumen de
+         * un paquete que nadie ha mirado esta a cero, y cero se lee exactamente
          * igual que "no toca nada" -- incluida la memoria --.  Con la lectura
          * ingenua, un paquete crudo pasaba por aqui diciendo que no chocaba con
-         * nada, se rechazaba su delegacion por estar sin analizar, y entonces se
-         * EJECUTABA aqui mientras el anterior seguia en vuelo.  En la mezcla
+         * nada, se rechazaba su delegacion por estar sin analizar, y entonces
+         * se EJECUTABA aqui mientras el anterior seguia en vuelo.  En la mezcla
          * `memoria` los dos escriben la misma direccion: `R0 = 0` donde
          * esperaba 30769.
          *
@@ -1420,8 +1423,8 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
              *
              * Si el ayudante ya termino, el choque no existe: era el marcador
              * el que seguia acusando a un paquete que ya no vuela.  Se limpia y
-             * se sigue sin esperar a nadie ni apuntar parada -- contarla apagaba
-             * la sonda justo cuando mejor iba --.
+             * se sigue sin esperar a nadie ni apuntar parada -- contarla
+             * apagaba la sonda justo cuando mejor iba --.
              *
              * Y si de verdad esta en vuelo, entonces si toca esperar.  CUANTO
              * se espera es la cifra que dice si esto llego a ser una tuberia;
@@ -1480,8 +1483,8 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
 
             BSTAT(process, ooo_split);
             BSTAT_ADD(process, ooo_delegated, k);
-            delegated = true;                 // nada que ejecutar aqui
-            process->ooo_owner_turn = true;   // el siguiente es para este hilo
+            delegated = true;               // nada que ejecutar aqui
+            process->ooo_owner_turn = true; // el siguiente es para este hilo
 
             /* Y la PRUEBA: esto sirve o solo estorba?
              *
@@ -1548,8 +1551,7 @@ void exec_bundle(ProcessVM *process, const DecodedInstr &d) {
     for (;;) {
         if (!try_delegate()) break; // este no se va: se ejecuta aqui abajo
         gone = true;
-        if (turns >= BUNDLE_LOOP_MAX ||
-            process->reductions_remaining <= b->k)
+        if (turns >= BUNDLE_LOOP_MAX || process->reductions_remaining <= b->k)
             break;
         DecodedInstr *next = icache_lookup(process, rip.raw());
         if (next == nullptr || next->metadata != &g_bundle_format) break;

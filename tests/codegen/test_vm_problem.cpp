@@ -180,10 +180,8 @@ int main() {
         IrFunction fn = make_fn(4, SIZE_MAX);
         fn.params = {vid(10), vid(11), vid(12)};
         LivenessResult live = make_live(4, {});
-        live.intervals = {{vid(10), 0, 3},
-                          {vid(11), 0, 3},
-                          {vid(12), 0, 3},
-                          {vid(50), 1, 2}};
+        live.intervals = {
+            {vid(10), 0, 3}, {vid(11), 0, 3}, {vid(12), 0, 3}, {vid(50), 1, 2}};
         const codegen::rbank::AbstractProblem p =
             codegen::liveness_to_problem(fn, live);
 

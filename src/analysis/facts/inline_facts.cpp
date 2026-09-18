@@ -70,10 +70,10 @@ bool es_op_de_marco(ir::IrOp op) {
  *    una decena de instrucciones y varios juntos reventaban el asignador.
  */
 bool en_lista_de_un_bloque(const std::string &name) {
-    return empieza_por(name, "__module_init") || empieza_por(name, "__lambda_") ||
-           empieza_por(name, "__spawn_") || empieza_por(name, "__async_") ||
-           empieza_por(name, "__rspawn_") || empieza_por(name, "__vx_str") ||
-           name == "__uncaught";
+    return empieza_por(name, "__module_init") ||
+           empieza_por(name, "__lambda_") || empieza_por(name, "__spawn_") ||
+           empieza_por(name, "__async_") || empieza_por(name, "__rspawn_") ||
+           empieza_por(name, "__vx_str") || name == "__uncaught";
 }
 
 /**
@@ -152,7 +152,8 @@ InlineFacts compute_inline_facts(const ir::IrFunction &fn) {
             continue;
         }
         f.instr_count += static_cast<uint32_t>(b.instrs.size());
-        if (k == 0) f.entry_instr_count = static_cast<uint32_t>(b.instrs.size());
+        if (k == 0)
+            f.entry_instr_count = static_cast<uint32_t>(b.instrs.size());
 
         const ir::IrInstr &last = b.instrs.back();
         const bool cierra = last.op == ir::IrOp::BR ||
@@ -173,8 +174,7 @@ InlineFacts compute_inline_facts(const ir::IrFunction &fn) {
             if (in.op == ir::IrOp::SWITCH_DENSE || !in.jump_targets.empty())
                 f.has_jump_table = true;
             if (in.op == ir::IrOp::ALLOCA) f.has_alloca = true;
-            if (in.op == ir::IrOp::RAW_FREE ||
-                in.op == ir::IrOp::SMARTPTR_FREE)
+            if (in.op == ir::IrOp::RAW_FREE || in.op == ir::IrOp::SMARTPTR_FREE)
                 f.frees_resources = true;
             if (es_op_de_marco(in.op)) f.has_frame_op = true;
             if (in.op == ir::IrOp::CALL &&
@@ -222,7 +222,8 @@ bool inlineable_single_block(const InlineFacts &f, size_t threshold,
 
     if (f.recursive) return false;
     /* RAW_ASM asume la convencion de llamada de la VM y no se puede mover.
-     * INLINE_ASM SI: el copiado remapea sus ataduras de registro al llamante. */
+     * INLINE_ASM SI: el copiado remapea sus ataduras de registro al llamante.
+     */
     if (f.has_raw_asm) return false;
     return true;
 }

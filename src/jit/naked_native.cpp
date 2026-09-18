@@ -295,9 +295,9 @@ uint64_t compile_native_fn(runtime::ProcessVM *vm, const std::string &name,
      * distancia con signo es el dato: si sale menor de 2 GB, el problema no es
      * la colocacion sino otro. */
     if (debug) {
-        const int64_t dist = static_cast<int64_t>(reinterpret_cast<uint64_t>(
-                                 code)) -
-                             static_cast<int64_t>(st.cc.anchor());
+        const int64_t dist =
+            static_cast<int64_t>(reinterpret_cast<uint64_t>(code)) -
+            static_cast<int64_t>(st.cc.anchor());
         std::fprintf(
             stderr,
             "[naked] ancla=0x%llx codigo=%p distancia=%lld (%lld MiB) %s\n",
@@ -535,13 +535,14 @@ extern "C" uint64_t vrt_naked_fnaddr(uint64_t proc, uint64_t name_hash) {
         /* No es "devuelvo cero y ya": un cero se usa DESPUES como direccion de
          * una funcion -- de hecho como punto de entrada de un hilo --, asi que
          * callarlo convierte un fallo de compilacion en un salto a la direccion
-         * cero, tres capas mas abajo y sin ninguna pista.  Eso es exactamente lo
-         * que paso: un `vx_thread_spawn` arrancaba un hilo en 0 y el proceso
+         * cero, tres capas mas abajo y sin ninguna pista.  Eso es exactamente
+         * lo que paso: un `vx_thread_spawn` arrancaba un hilo en 0 y el proceso
          * moria con una traza vacia. */
-        runtime::throw_fatalf(vm, runtime::FATAL_INVALID_SYSCALL,
-                     "(cfn) sobre una funcion que no existe: ninguna funcion "
-                     "cargada tiene la huella 0x%llx",
-                     (unsigned long long)name_hash);
+        runtime::throw_fatalf(
+            vm, runtime::FATAL_INVALID_SYSCALL,
+            "(cfn) sobre una funcion que no existe: ninguna funcion "
+            "cargada tiene la huella 0x%llx",
+            (unsigned long long)name_hash);
         return 0;
     }
     NakedState &st = state();
@@ -555,11 +556,12 @@ extern "C" uint64_t vrt_naked_fnaddr(uint64_t proc, uint64_t name_hash) {
          * DECIRLO aqui.  `compile_native_fn` ya explica el motivo por
          * `VESTA_NAKED_DEBUG`, pero sin la bandera puesta -- que es el caso
          * normal -- devolver cero dejaba el fallo mudo. */
-        runtime::throw_fatalf(vm, runtime::FATAL_INVALID_SYSCALL,
-                     "no se pudo compilar '%s' a codigo nativo, que es lo que "
-                     "exige tomar su direccion con (cfn).  Con "
-                     "VESTA_NAKED_DEBUG=1 se dice por que",
-                     target_name.c_str());
+        runtime::throw_fatalf(
+            vm, runtime::FATAL_INVALID_SYSCALL,
+            "no se pudo compilar '%s' a codigo nativo, que es lo que "
+            "exige tomar su direccion con (cfn).  Con "
+            "VESTA_NAKED_DEBUG=1 se dice por que",
+            target_name.c_str());
     }
     return entry;
 }

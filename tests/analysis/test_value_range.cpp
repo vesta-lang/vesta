@@ -870,7 +870,7 @@ static void comparar_con_demanda(const ir::IrFunction &fn,
 
 /// Las mismas formas que el resto del fichero, vistas por la consulta.
 static void probar_bajo_demanda() {
-    {   // guardas: `if (x < 10)`
+    { // guardas: `if (x < 10)`
         ir::IrFunction fn;
         fn.name = "demanda_guarda";
         const ir::IrBlockId b0 = fn.new_block("entry");
@@ -895,7 +895,7 @@ static void probar_bajo_demanda() {
         emitir(fn, bf, ir::IrOp::RET, ir::IR_NO_VALUE, {en_no});
         comparar_con_demanda(fn, "guarda");
     }
-    {   // aritmetica encadenada: es lo que la recursion tiene que resolver
+    { // aritmetica encadenada: es lo que la recursion tiene que resolver
         ir::IrFunction fn;
         fn.name = "demanda_cadena";
         const ir::IrBlockId b0 = fn.new_block("entry");

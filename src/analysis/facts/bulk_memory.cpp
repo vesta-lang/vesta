@@ -306,8 +306,8 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
         // continuo.  Si avanza mas, hay huecos; si menos, se pisan.
         ir::IrValueId base_d = ir::IR_NO_VALUE;
         int64_t esc_d = 0;
-        if (!resolve_direccion(fn, hechos, el_store->operands[1],
-                               f.iv.phi, base_d, esc_d)) {
+        if (!resolve_direccion(fn, hechos, el_store->operands[1], f.iv.phi,
+                               base_d, esc_d)) {
             rendirse("bulk.dst_address_not_resolved");
             continue;
         }
@@ -382,8 +382,8 @@ BulkMemoryReport analyze_bulk_memory(const ir::IrFunction &fn) {
         }
         ir::IrValueId base_s = ir::IR_NO_VALUE;
         int64_t esc_s = 0;
-        if (!resolve_direccion(fn, hechos, el_load->operands[0],
-                               f.iv.phi, base_s, esc_s)) {
+        if (!resolve_direccion(fn, hechos, el_load->operands[0], f.iv.phi,
+                               base_s, esc_s)) {
             rendirse("bulk.src_address_not_resolved");
             continue;
         }
@@ -476,8 +476,8 @@ StraightLineBulkReport analyze_straight_line_bulk(const ir::IrFunction &fn) {
              * porque su direccion se arma en dos pasos. */
             auto prev = addr_of.find(in.operands[0]);
             if (prev != addr_of.end())
-                addr_of[in.dst] = Addr{prev->second.base,
-                                       prev->second.off + c1->second};
+                addr_of[in.dst] =
+                    Addr{prev->second.base, prev->second.off + c1->second};
             else
                 addr_of[in.dst] = Addr{in.operands[0], c1->second};
         }
@@ -589,12 +589,12 @@ StraightLineBulkReport analyze_straight_line_bulk(const ir::IrFunction &fn) {
                  *
                  * Una vez por bloque y motivo: repetirlo diecinueve veces, una
                  * por campo, ahoga el recuento sin decir nada nuevo. */
-                if (std::find_if(out.declines.begin(), out.declines.end(),
-                                 [&](const BulkMemoryDecline &d) {
-                                     return d.header ==
-                                                static_cast<ir::IrBlockId>(bi) &&
-                                            d.code == why;
-                                 }) == out.declines.end()) {
+                if (std::find_if(
+                        out.declines.begin(), out.declines.end(),
+                        [&](const BulkMemoryDecline &d) {
+                            return d.header == static_cast<ir::IrBlockId>(bi) &&
+                                   d.code == why;
+                        }) == out.declines.end()) {
                     BulkMemoryDecline d;
                     d.header = static_cast<ir::IrBlockId>(bi);
                     d.code = why;

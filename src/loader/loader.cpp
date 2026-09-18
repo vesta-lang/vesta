@@ -1314,19 +1314,21 @@ static void materialize_gdata_host(Executable &exe) {
      * ejecucion: esto son datos, y el codigo vive en sus propias paginas.
      *
      * Si la region no puede servirlo se cae a una reserva alineada normal.  Eso
-     * NO es un respaldo que tape nada: el programa sigue funcionando en los tres
-     * modos, y si el codigo nativo no alcanza sus datos el generador lo DICE
+     * NO es un respaldo que tape nada: el programa sigue funcionando en los
+     * tres modos, y si el codigo nativo no alcanza sus datos el generador lo
+     * DICE
      * (`VESTA_NAKED_DEBUG=1` cuenta por que) en vez de emitir un cero.
      *
-     * LO QUE CUESTA, que hay que tenerlo presente aqui porque esto corre UNA VEZ
-     * POR MODULO CARGADO: la peticion se redondea a un trozo entero de un MiB y
-     * el cursor del que sale solo avanza, asi que soltar el bloque devuelve las
-     * paginas pero no el rango.  Cada modulo gasta un MiB del espacio de
-     * direcciones de la region para lo que queda de proceso.  Con 16 GiB
-     * apalabrados son 16.384 modulos, que sobran para compilar y ejecutar un
-     * programa -- son uno o unos pocos --, pero NO sobran para cargar modulos en
-     * bucle con `loadmodule`.  Si eso llega a pasar, lo que se agota es la
-     * region: el respaldo de aqui entra solo, y lo que se pierde es la cercania
+     * LO QUE CUESTA, que hay que tenerlo presente aqui porque esto corre UNA
+     * VEZ POR MODULO CARGADO: la peticion se redondea a un trozo entero de un
+     * MiB y el cursor del que sale solo avanza, asi que soltar el bloque
+     * devuelve las paginas pero no el rango.  Cada modulo gasta un MiB del
+     * espacio de direcciones de la region para lo que queda de proceso.  Con 16
+     * GiB apalabrados son 16.384 modulos, que sobran para compilar y ejecutar
+     * un programa -- son uno o unos pocos --, pero NO sobran para cargar
+     * modulos en bucle con `loadmodule`.  Si eso llega a pasar, lo que se agota
+     * es la region: el respaldo de aqui entra solo, y lo que se pierde es la
+     * cercania
      * -- que el generador DICE --, no el programa. */
     uint8_t *bloque = static_cast<uint8_t *>(
         util::host_alloc_pages_in_region(redondeado, util::kOsReadWrite));

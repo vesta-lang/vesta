@@ -87,10 +87,10 @@ static_assert(sizeof(kHookPoints) / sizeof(kHookPoints[0]) ==
  * usuario sin que haya dispatch alguno en ejecucion.
  */
 struct HookFieldInfo {
-    const char *name;  ///< Nombre del parametro que lo recibe.
-    const char *type;  ///< Tipo que debe declarar el gancho.
-    uint8_t points;    ///< Puntos donde este campo esta disponible.
-    const char *desc;  ///< Una linea, para el diagnostico.
+    const char *name; ///< Nombre del parametro que lo recibe.
+    const char *type; ///< Tipo que debe declarar el gancho.
+    uint8_t points;   ///< Puntos donde este campo esta disponible.
+    const char *desc; ///< Una linea, para el diagnostico.
 };
 
 /**

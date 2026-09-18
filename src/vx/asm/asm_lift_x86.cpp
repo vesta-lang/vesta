@@ -285,8 +285,7 @@ int reg_info(const std::string &tok, std::string &canon, bool &is_high) {
  *  (lift de instrucciones + condicion de rama).  reg_info/binop_of/parse_mem/
  *  mem_hint_width/setcc_to_cmp son la parte x86.  @p out_exit (si != null)
  * queda con el bloque de continuacion (donde sigue el codigo tras el asm). */
-bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block,
-              const std::string &body,
+bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block, const std::string &body,
               const std::unordered_map<std::string, AsmBoundReg> &bound,
               uint32_t line, ir::IrBlockId *out_exit) {
     // El CFG (por-ISA) trocea el body en bloques basicos + aristas.  Usamos su

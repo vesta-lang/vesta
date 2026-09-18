@@ -25,9 +25,9 @@ namespace {
 /// @brief Va @p target hacia ATRAS desde el bloque @p from?
 ///
 /// Es la aproximacion de bucle que usa este recorrido: un salto a un bloque que
-/// ya se paso.  Funcion con nombre y no una lambda dentro del bucle -- se prueba
-/// sola, sale con su nombre en un perfil, y no captura nada cuya vida haya que
-/// razonar.
+/// ya se paso.  Funcion con nombre y no una lambda dentro del bucle -- se
+/// prueba sola, sale con su nombre en un perfil, y no captura nada cuya vida
+/// haya que razonar.
 bool is_back_edge(ir::IrBlockId target, ir::IrBlockId from) {
     return target != ir::IR_NO_BLOCK && target <= from;
 }

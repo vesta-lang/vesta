@@ -83,8 +83,7 @@ bool asm_lift_micro(
     ir::IrFunction &fn, ir::IrBlockId block, instr_db::Isa isa,
     const std::string &body, uint32_t line,
     const std::unordered_map<std::string, ir::IrValueId> &slot_of = {},
-    AsmMotivoOpaco *motivo = nullptr,
-    ir::IrBlockId *bloque_salida = nullptr);
+    AsmMotivoOpaco *motivo = nullptr, ir::IrBlockId *bloque_salida = nullptr);
 
 /**
  * @brief Instrucciones que la base de datos no supo resolver en lo que va de

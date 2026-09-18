@@ -121,9 +121,8 @@ using NamedSet =
 
 /// Un mapa que dice que es.
 template <typename K, typename V, typename Tag, typename Hash = std::hash<K>>
-using NamedMap =
-    std::unordered_map<K, V, Hash, std::equal_to<K>,
-                       NamedAlloc<std::pair<const K, V>, Tag>>;
+using NamedMap = std::unordered_map<K, V, Hash, std::equal_to<K>,
+                                    NamedAlloc<std::pair<const K, V>, Tag>>;
 
 } // namespace util
 

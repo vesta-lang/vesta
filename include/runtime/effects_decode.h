@@ -36,8 +36,8 @@
  * Que aporta sobre la base de datos
  * ---------------------------------
  * La base de datos (`instr_db_vm.h`) guarda lo que vale para TODAS las
- * instancias de un opcode, derivado del codigo maquina y verificado.  Esto no la
- * duplica: la lee y le anade las dos cosas que ella no puede tener --
+ * instancias de un opcode, derivado del codigo maquina y verificado.  Esto no
+ * la duplica: la lee y le anade las dos cosas que ella no puede tener --
  *
  *   - la FORMA: que registro concreto se lee o se escribe, que depende de los
  *     bytes de esta instruccion;
@@ -85,9 +85,9 @@ enum : uint8_t {
  * Hace falta para poder REESCRIBIRLO: fusionar dos instrucciones en una pasa
  * por cambiarle el destino a la primera.
  *
- * Los nombres son los del DECODER, no los de los bytes: `decode_instr_raw_bytes`
- * deja byte2 en `reg_data.reg1` y byte3 en `reg_data.reg2`, asi que sacar un
- * nibble es un desplazamiento y una mascara.
+ * Los nombres son los del DECODER, no los de los bytes:
+ * `decode_instr_raw_bytes` deja byte2 en `reg_data.reg1` y byte3 en
+ * `reg_data.reg2`, asi que sacar un nibble es un desplazamiento y una mascara.
  */
 enum RegSlot : uint8_t {
     RS_NONE = 0,
@@ -157,7 +157,7 @@ struct InstrEffects {
     uint16_t vec_write = 0;
     uint8_t field_read = 0; ///< bits de EffField
     uint8_t field_write = 0;
-    bool mem_read = false;  ///< toca la memoria de la VM
+    bool mem_read = false; ///< toca la memoria de la VM
     bool mem_write = false;
     bool control = false; ///< transfiere control: no se mueve nunca
     bool exact = false;   ///< se sabe TODO lo que toca
@@ -166,8 +166,9 @@ struct InstrEffects {
      * que no hay destino conocido, y entonces no se puede retargetear. */
     uint8_t dest_reg = 0;
     uint8_t dest_slot = RS_NONE;
-    /// A que banco pertenece el destino.  Sin esto, reescribir el destino de una
-    /// operacion flotante cambiaria un registro general con el mismo numero.
+    /// A que banco pertenece el destino.  Sin esto, reescribir el destino de
+    /// una operacion flotante cambiaria un registro general con el mismo
+    /// numero.
     uint8_t dest_bank = RB_GP;
     /// El destino se pisa ENTERO (no se acumula sobre su valor previo).  Es lo
     /// que decide si una instruccion MATA un temporal o solo lo actualiza.
@@ -179,9 +180,9 @@ struct InstrEffects {
  *        desplaza y que mascara lleva.
  *
  * Es una tabla y no un `switch` a proposito.  Leer o escribir un operando pasa
- * a ser un indexado y tres operaciones aritmeticas, sin una sola rama, y sin que
- * el compilador tenga que elegir entre comparar en cadena o montar su propia
- * tabla de saltos.
+ * a ser un indexado y tres operaciones aritmeticas, sin una sola rama, y sin
+ * que el compilador tenga que elegir entre comparar en cadena o montar su
+ * propia tabla de saltos.
  *
  * `RS_NONE` lleva mascara 0, que es lo que lo hace inofensivo sin comprobarlo:
  * al leer da 0 y al escribir no cambia nada.
@@ -227,11 +228,9 @@ inline uint8_t reg_slot_get(const DecodedInstr &d, uint8_t slot) {
 /// retargetear el destino de una instruccion al fusionarla con la siguiente.
 inline void reg_slot_set(DecodedInstr &d, uint8_t slot, uint8_t v) {
     const RegSlotDesc &s = kRegSlotDesc[slot];
-    uint8_t &dst =
-        reinterpret_cast<uint8_t *>(&d.data_instruction)[s.byte];
+    uint8_t &dst = reinterpret_cast<uint8_t *>(&d.data_instruction)[s.byte];
     const uint8_t hueco = static_cast<uint8_t>(s.mask << s.shift);
-    dst = static_cast<uint8_t>((dst & ~hueco) |
-                               ((v & s.mask) << s.shift));
+    dst = static_cast<uint8_t>((dst & ~hueco) | ((v & s.mask) << s.shift));
 }
 
 /**
@@ -268,12 +267,13 @@ constexpr RegSlot kFormSlot[12] = {
  * Sin tocar memoria fuera de la propia instruccion, que es lo que permite
  * llamarlo al formar el paquete sin desensamblar nada.
  */
-[[gnu::always_inline]] inline uint16_t
-regs_of_form(uint16_t form, const DecodedInstr &d) {
+[[gnu::always_inline]] inline uint16_t regs_of_form(uint16_t form,
+                                                    const DecodedInstr &d) {
     uint16_t m = 0;
     for (uint16_t f = form; f != 0; f &= static_cast<uint16_t>(f - 1)) {
         const int b = __builtin_ctz(f);
-        m |= static_cast<uint16_t>(1u << (reg_slot_get(d, kFormSlot[b]) & 0x0F));
+        m |=
+            static_cast<uint16_t>(1u << (reg_slot_get(d, kFormSlot[b]) & 0x0F));
     }
     return m;
 }
@@ -297,8 +297,8 @@ regs_of_form(uint16_t form, const DecodedInstr &d) {
  *       toca cambia el resultado del programa sin que salte ningun error.
  *       Descartarla es un aviso del compilador.
  *
- *       NO se aborta al no saberlo, y no por permisividad: hoy la mayoria de los
- *       opcodes no tienen forma declarada, asi que "no lo se" es el caso comun y
+ *       NO se aborta al no saberlo, y no por permisividad: hoy la mayoria de
+ * los opcodes no tienen forma declarada, asi que "no lo se" es el caso comun y
  *       no un fallo.  El sitio donde eso SI tiene que gritar es
  *       `test_efectos_opcodes`, que lista los que faltan y puede actuarse sobre
  *       ellos.  Cuando esten todos declarados, este camino pasa a ser

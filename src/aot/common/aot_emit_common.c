@@ -271,8 +271,9 @@ static int coff_obj_impl(const char *path, const AotSection *secs, int num_secs,
      * La cabecera de seccion reserva ocho bytes justos para el nombre, asi que
      * `.eh_frame` -- que tiene nueve -- no cabe.  En un OBJETO el formato da
      * salida: se escribe `/N`, donde N es en decimal el desplazamiento del
-     * nombre completo dentro de la tabla de cadenas.  (En una imagen ya no vale,
-     * y por eso alli la seccion aparece recortada; es lo que hacen todos.)
+     * nombre completo dentro de la tabla de cadenas.  (En una imagen ya no
+     * vale, y por eso alli la seccion aparece recortada; es lo que hacen
+     * todos.)
      *
      * Sin esto el nombre se truncaba, y el fallo es de los que no avisan: `gcc`
      * emite `.eh_frame` con el nombre completo, nosotros emitiriamos

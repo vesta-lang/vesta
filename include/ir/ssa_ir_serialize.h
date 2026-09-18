@@ -208,8 +208,8 @@ static constexpr uint16_t IR_MODULE_CACHE_VERSION =
         // v16: el contrato de cada parametro, por NIVEL y con la cara negativa.
         // v15: + el contrato de cada parametro.  Sube A LA VEZ que
         // IR_SECTION_VERSION porque las dos comparten `serialize_function`:
-        // olvidarla no da un error de version -- la comprobacion pasa -- sino un
-        // cuerpo leido con el reparto equivocado, y de ahi salen funciones
+        // olvidarla no da un error de version -- la comprobacion pasa -- sino
+        // un cuerpo leido con el reparto equivocado, y de ahi salen funciones
         // PERDIDAS y un simbolo sin resolver muy lejos del sitio.
         // v14: + los ejes `blocks` y `traps` de una nativa declarada
 

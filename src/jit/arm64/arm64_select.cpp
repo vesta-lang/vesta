@@ -249,9 +249,11 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                      * el valor miente al compararlo aunque se imprima bien. */
                     const bool sign = ir::type_is_signed(dt);
                     if (db == 1)
-                        os << (sign ? "    sxtb x9, w9\n" : "    uxtb x9, w9\n");
+                        os << (sign ? "    sxtb x9, w9\n"
+                                    : "    uxtb x9, w9\n");
                     else if (db == 2)
-                        os << (sign ? "    sxth x9, w9\n" : "    uxth x9, w9\n");
+                        os << (sign ? "    sxth x9, w9\n"
+                                    : "    uxth x9, w9\n");
                     else // db == 4
                         os << (sign ? "    sxtw x9, w9\n" : "    mov w9, w9\n");
                 } else if (db == sb) {

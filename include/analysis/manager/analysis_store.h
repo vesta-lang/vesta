@@ -127,10 +127,10 @@ namespace analysis {
  *
  * Ahora cada entrada lleva cuantas corridas SEGUIDAS lleva sin que se la pida.
  * Al usarla vuelve a cero; al no usarla sube una; pasada
- * @ref kDefaultUnusedRuns se cae.  Asi una entrada sobrevive a que su consumidor no
- * corra -- que es lo normal -- y lo que de verdad murio desaparece igual, solo
- * que un poco mas tarde.  Sin esto el almacen o bien se vacia solo, o bien
- * crece sin limite; con esto, ni una cosa ni la otra.
+ * @ref kDefaultUnusedRuns se cae.  Asi una entrada sobrevive a que su
+ * consumidor no corra -- que es lo normal -- y lo que de verdad murio
+ * desaparece igual, solo que un poco mas tarde.  Sin esto el almacen o bien se
+ * vacia solo, o bien crece sin limite; con esto, ni una cosa ni la otra.
  *
  * Sin ruta -- @c open no llamado -- todo falla en frio y se computa, que es
  * exactamente el comportamiento de siempre: no tener cache nunca es un error.
@@ -144,9 +144,9 @@ class AnalysisStore {
      * como el nivel [2] estuvo roto sin que nadie lo notara.
      */
     struct Stats {
-        uint64_t hits = 0;    ///< se pidio y estaba.
-        uint64_t misses = 0;  ///< se pidio y no estaba: hubo que computar.
-        uint64_t stored = 0;  ///< se deposito tras computar.
+        uint64_t hits = 0;     ///< se pidio y estaba.
+        uint64_t misses = 0;   ///< se pidio y no estaba: hubo que computar.
+        uint64_t stored = 0;   ///< se deposito tras computar.
         uint64_t rejected = 0; ///< estaba pero no se pudo leer (formato roto).
         uint64_t bytes_read = 0;
         uint64_t bytes_written = 0;
@@ -173,9 +173,9 @@ class AnalysisStore {
      * @brief Escribe el paquete: UNA escritura.
      *
      * Sale lo que esta compilacion uso o produjo, y ademas lo que lleva menos
-     * de @ref kDefaultUnusedRuns corridas sin pedirse.  Ver la nota de la clase: no
-     * usarse en una corrida NO es estar muerto, y confundirlo vaciaba el
-     * almacen solo.
+     * de @ref kDefaultUnusedRuns corridas sin pedirse.  Ver la nota de la
+     * clase: no usarse en una corrida NO es estar muerto, y confundirlo vaciaba
+     * el almacen solo.
      */
     void flush();
 
@@ -246,8 +246,9 @@ class AnalysisStore {
      * y si algun dia no lo es, es un fallo del almacen o del formato de ese
      * analisis.
      *
-     * Y no se deja a la buena fe: lo mide `tests/analysis/test_analysis_store.cpp`,
-     * que compara las dos vias intercaladas y falla si la de disco no gana.
+     * Y no se deja a la buena fe: lo mide
+     * `tests/analysis/test_analysis_store.cpp`, que compara las dos vias
+     * intercaladas y falla si la de disco no gana.
      */
 
     /// Que ha pasado.  @see Stats
@@ -274,9 +275,9 @@ class AnalysisStore {
     /// Lo que hay, por clave.  Tabla asociativa y no vector plano: se consulta
     /// una vez por (analisis x funcion), que en un modulo grande son miles.
     std::unordered_map<uint64_t, Entry> entries_;
-    /// De esas, las que esta compilacion ha usado o producido.  No decide QUE se
-    /// escribe -- eso lo decide @ref kDefaultUnusedRuns --, decide a cuales se les
-    /// pone el contador a cero.
+    /// De esas, las que esta compilacion ha usado o producido.  No decide QUE
+    /// se escribe -- eso lo decide @ref kDefaultUnusedRuns --, decide a cuales
+    /// se les pone el contador a cero.
     std::unordered_set<uint64_t> live_;
     /// El limite en vigor.  @see kDefaultUnusedRuns, set_unused_runs
     uint32_t max_unused_runs_ = kDefaultUnusedRuns;

@@ -359,8 +359,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         ir::IrValueId v_src = ir::IR_NO_VALUE;
         bool free_src_buf = false; // liberar el buffer fuente tras copiar
         if (append_rhs->kind == ast::NodeKind::StringLitExpr &&
-            !static_cast<ast::StringLitExpr *>(append_rhs)
-                 ->is_interpolated()) {
+            !static_cast<ast::StringLitExpr *>(append_rhs)->is_interpolated()) {
             auto *slit = static_cast<ast::StringLitExpr *>(append_rhs);
             v_src = build_native_string_from_literal(slit, ln);
             free_src_buf = true; // buffer temporal owned -> liberar
@@ -370,7 +369,8 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
             // tras copiar sus bytes hay que liberarlo (no se registro
             // STRING_FREE porque no es un var-decl).  Una var simple
             // (IdentExpr) NO se libera (su buffer lo posee la var).
-            if (append_rhs->kind != ast::NodeKind::IdentExpr) free_src_buf = true;
+            if (append_rhs->kind != ast::NodeKind::IdentExpr)
+                free_src_buf = true;
         }
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         // Inc 5 (SSO): (ptr, len) de la fuente via accesores flag-aware.
@@ -947,7 +947,8 @@ bool Lowering::try_lower_assign_to_field(ast::AssignExpr *e,
      * dos qwords, no guardar la direccion: un STORE escalar dejaba en el campo
      * un puntero al slot de origen -- que ademas vive en el marco de quien la
      * construyo --, asi que llamarla despues saltaba a donde tocara.  Un
-     * `cfn(...)` no entra aqui: es un escalar de 8 bytes y se guarda tal cual. */
+     * `cfn(...)` no entra aqui: es un escalar de 8 bytes y se guarda tal cual.
+     */
     if (fa->result_type.kind == PrimitiveKind::FUNCTION &&
         !fa->result_type.fn_is_raw) {
         const bool dst_host = fn_->values[addr].is_host_ptr;

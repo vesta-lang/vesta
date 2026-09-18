@@ -93,15 +93,23 @@ void *volatile g_here = nullptr;
  *     justamente lo que se venia a medir.  Con GCC no pasa, que es la clase de
  *     diferencia por la que un test pasa en un compilador y miente en el otro.
  */
-[[gnu::noinline]] void *capture_pc() { return __builtin_return_address(0); }
+[[gnu::noinline]] void *capture_pc() {
+    return __builtin_return_address(0);
+}
 
-[[gnu::always_inline]] inline void innermost() { g_here = capture_pc(); }
+[[gnu::always_inline]] inline void innermost() {
+    g_here = capture_pc();
+}
 
 /// Una capa mas, para que la cadena tenga tres pisos y no dos.
-[[gnu::always_inline]] inline void middle() { innermost(); }
+[[gnu::always_inline]] inline void middle() {
+    innermost();
+}
 
 /// La de fuera es la unica que existe de verdad en el binario.
-[[gnu::noinline]] void outermost() { middle(); }
+[[gnu::noinline]] void outermost() {
+    middle();
+}
 
 } // namespace
 
@@ -109,8 +117,9 @@ int main() {
     std::printf("== cadena de funciones inlineadas ==\n");
 
     const size_t units = util::self_dwarf_units();
-    std::printf("  unidades con informacion de depuracion: %zu, en %zu tramos\n",
-                units, util::self_dwarf_ranges());
+    std::printf(
+        "  unidades con informacion de depuracion: %zu, en %zu tramos\n", units,
+        util::self_dwarf_ranges());
     /* Unidades sin tramos no es "no hay informacion": es que se leyeron las
      * cabeceras y no se entendieron sus rangos.  Se separa porque las dos cosas
      * se ven igual desde fuera -- cero marcos -- y solo una es un fallo. */
@@ -154,8 +163,9 @@ int main() {
      * creia capaz y fallaba por algo que no era un fallo.
      *
      * No se sale corriendo: irse aqui tiraria cuatro comprobaciones que valen
-     * igual sin DWARF (una direccion ajena, una nula, sin sitio donde escribir).
-     * Se apunta que la parte principal no se pudo hacer y se sigue. */
+     * igual sin DWARF (una direccion ajena, una nula, sin sitio donde
+     * escribir). Se apunta que la parte principal no se pudo hacer y se sigue.
+     */
     const bool con_dwarf = util::self_dwarf_covers(pc);
     if (!con_dwarf)
         std::printf("  AVISO: esta unidad de compilacion no lleva informacion "
@@ -177,13 +187,15 @@ int main() {
     if (con_dwarf)
         check(n > 0, "una direccion de este binario da al menos un marco");
     else
-        check(n == 0, "sin informacion de esta unidad no se inventa ningun marco");
+        check(n == 0,
+              "sin informacion de esta unidad no se inventa ningun marco");
 
     if (n > 0) {
         /* El ULTIMO es la funcion que existe en el binario.  Los de antes son
          * funciones que se comio: si el ultimo saliera como inlineado, la
          * cadena estaria al reves o le faltaria el suelo. */
-        check(!frames[n - 1].inlined, "el ultimo marco es una funcion de verdad");
+        check(!frames[n - 1].inlined,
+              "el ultimo marco es una funcion de verdad");
 
         bool todos_inline = true;
         for (unsigned i = 0; i + 1 < n; ++i)
@@ -201,7 +213,8 @@ int main() {
      * nada de inline y sin embargo tiene que coincidir con el ultimo marco: es
      * la misma funcion vista por dos caminos que no comparten codigo. */
     const char *sym = util::self_symbol(pc);
-    std::printf("  la tabla de simbolos dice: %s\n", sym != nullptr ? sym : "(nada)");
+    std::printf("  la tabla de simbolos dice: %s\n",
+                sym != nullptr ? sym : "(nada)");
     if (n > 0 && sym != nullptr && frames[n - 1].function != nullptr) {
         /* Se compara por CONTENIDO y no por identidad: uno viene manglado del
          * enlazador y el otro del DWARF, que puede dar el nombre llano.  Con

@@ -105,8 +105,8 @@ inline bool parse_imm(const std::string &op, int64_t &out) {
 }
 
 /// Emisores IR minimos.
-inline ir::IrValueId emit_const(ir::IrFunction &fn, ir::IrBlockId blk, int64_t v,
-                                uint32_t line) {
+inline ir::IrValueId emit_const(ir::IrFunction &fn, ir::IrBlockId blk,
+                                int64_t v, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
     in.op = ir::IrOp::CONST;
@@ -118,8 +118,9 @@ inline ir::IrValueId emit_const(ir::IrFunction &fn, ir::IrBlockId blk, int64_t v
     return d;
 }
 
-inline ir::IrValueId emit_bin(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
-                              ir::IrValueId a, ir::IrValueId b, uint32_t line) {
+inline ir::IrValueId emit_bin(ir::IrFunction &fn, ir::IrBlockId blk,
+                              ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
+                              uint32_t line) {
     const ir::IrValueId d = fn.new_value(ir::IrType::I64);
     ir::IrInstr in{};
     in.op = op;
@@ -133,8 +134,8 @@ inline ir::IrValueId emit_bin(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op
 
 /** @brief Como @ref emit_bin pero con TIPO explicito (para DIV/MOD, donde el
  *  tipo -- I64 vs U64 -- decide con signo / sin signo). */
-inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, ir::IrBlockId blk, ir::IrOp op,
-                                 ir::IrValueId a, ir::IrValueId b,
+inline ir::IrValueId emit_bin_ty(ir::IrFunction &fn, ir::IrBlockId blk,
+                                 ir::IrOp op, ir::IrValueId a, ir::IrValueId b,
                                  ir::IrType ty, uint32_t line) {
     const ir::IrValueId d = fn.new_value(ty);
     ir::IrInstr in{};
@@ -293,8 +294,7 @@ inline bool cfg_give_up(const vx::AsmBasicBlock *bb, const char *why) {
 }
 
 inline bool lift_cfg_neutral(LiftCtx &c, const vx::AsmCfg &cfg,
-                             const CfgHooks &hooks,
-                             ir::IrBlockId &out_exit) {
+                             const CfgHooks &hooks, ir::IrBlockId &out_exit) {
     const size_t nb = cfg.blocks.size();
     if (nb == 0) return cfg_give_up(nullptr, "el asm no tiene ni un bloque");
     // Un bloque IR NUEVO por bloque basico.  El bloque de entrada actual NO se

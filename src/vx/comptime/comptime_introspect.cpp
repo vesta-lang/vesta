@@ -24,7 +24,7 @@
  */
 
 #include "vx/comptime/comptime_introspect.h"
-#include <algorithm>             // UCRT64: no transitivo
+#include <algorithm>              // UCRT64: no transitivo
 #include "vx/diag/diag_catalog.h" // el motivo sale del catalogo, nunca a mano
 #include "vx/lexer.h"
 #include "vx/parser.h"
@@ -2644,7 +2644,8 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                  * la llamada entera se difiera, y sin el la cadena se corta
                  * justo donde empieza a ser util.  Se lleva el CODIGO y su
                  * argumento, no el texto ya escrito: formatearlo aqui
-                 * congelaria el idioma del compilador en vez del de quien lee. */
+                 * congelaria el idioma del compilador en vez del de quien lee.
+                 */
                 std::string arg_code;
                 std::string arg_arg;
                 for (const auto &a : ce->args) {

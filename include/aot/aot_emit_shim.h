@@ -113,7 +113,7 @@ typedef struct {
        *                                                                       \
        * Hace falta para `.pdata`: un RUNTIME_FUNCTION son TRES campos y los   \
        * tres son RVA, asi que sin esto no se puede escribir ni una entrada.   \
-       * Es tambien la que le falta al enlazador de objetos COFF              \
+       * Es tambien la que le falta al enlazador de objetos COFF               \
        * (IMAGE_REL_AMD64_ADDR32NB) para conservar la `.pdata` ajena: el mismo \
        * concepto, en las dos direcciones.                                     \
        *                                                                       \
@@ -153,8 +153,8 @@ typedef struct {
      * sentido al producir una IMAGEN (exe / .bin): en un objeto suelto la base
      * todavia no existe, y ahi se rechaza diciendolo. */
     int target_is_imagebase;
-    int kind;            /* AOT_RELOC_* */
-    int64_t addend;      /* desplazamiento adicional */
+    int kind;       /* AOT_RELOC_* */
+    int64_t addend; /* desplazamiento adicional */
     /* Reloc a un SIMBOLO EXTERNO (libc: malloc/free/abort...): si != NULL, el
      * target NO es una seccion sino un simbolo indefinido que resuelve el
      * linker del sistema.  target_section/off se ignoran.  Solo .o/.obj. */
@@ -353,9 +353,9 @@ int aot_emit_elf_obj(const char *path, const AotSection *secs, int num_secs,
  * escribir a un objeto de ARM.
  */
 int aot_emit_elf_obj_arm64(const char *path, const AotSection *secs,
-                           int num_secs, const AotReloc *relocs,
-                           int num_relocs, const AotSym *syms, int num_syms,
-                           char *err, size_t err_cap);
+                           int num_secs, const AotReloc *relocs, int num_relocs,
+                           const AotSym *syms, int num_syms, char *err,
+                           size_t err_cap);
 
 /**
  * @brief Emite un objeto RELOCATABLE ELF32 (.o i386) a disco.

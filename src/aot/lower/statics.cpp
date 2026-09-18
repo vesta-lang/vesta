@@ -65,9 +65,8 @@ bool lower_static_field(ir::IrFunction &fn, const ir::IrInstr &in,
          * son valores del mismo ancho -- : escribe la direccion del hueco
          * dentro de lo que se queria guardar, y el fallo aparece en otro
          * sitio. */
-        acc.operands = {in.operands.size() > 1 ? in.operands[1]
-                                               : in.operands[0],
-                        v_addr};
+        acc.operands = {
+            in.operands.size() > 1 ? in.operands[1] : in.operands[0], v_addr};
     }
     out.push_back(std::move(acc));
     return true;
@@ -81,7 +80,8 @@ void clean_after_static_lowering(ir::IrFunction &fn) {
     std::unordered_set<ir::IrValueId> used;
     for (const auto &bb : fn.blocks)
         for (const auto &in : bb.instrs)
-            for (ir::IrValueId v : in.operands) used.insert(v);
+            for (ir::IrValueId v : in.operands)
+                used.insert(v);
 
     /* Los buffers de pila donde se le dejaban los parametros a esas busquedas.
      * Se apuntan al quitarlas: son lo unico que queda por deshacer. */
@@ -127,8 +127,8 @@ void clean_after_static_lowering(ir::IrFunction &fn) {
             for (size_t k = 0; k < in.operands.size(); ++k) {
                 if (!buffers.count(in.operands[k])) continue;
                 const bool store_into = (in.op == ir::IrOp::STORE && k == 1);
-                const bool step_within = (in.op == ir::IrOp::ADD && k == 0 &&
-                                          buffers.count(in.dst));
+                const bool step_within =
+                    (in.op == ir::IrOp::ADD && k == 0 && buffers.count(in.dst));
                 if (!store_into && !step_within) return;
             }
         }

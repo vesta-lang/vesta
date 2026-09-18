@@ -58,7 +58,8 @@ uint32_t rd32(const std::vector<uint8_t> &v, size_t off) {
 }
 
 /// Busca una secuencia de bytes; devuelve su offset o -1.
-long find_bytes(const std::vector<uint8_t> &v, const std::vector<uint8_t> &pat) {
+long find_bytes(const std::vector<uint8_t> &v,
+                const std::vector<uint8_t> &pat) {
     if (pat.empty() || v.size() < pat.size()) return -1;
     for (size_t i = 0; i + pat.size() <= v.size(); ++i) {
         size_t k = 0;
@@ -244,7 +245,8 @@ int main() {
         // rbx (DWARF 3) quedo en CFA-16 con el `sub` aun por delante: factor 2.
         CHECK(find_bytes(fde, {0x80 | 3, 0x02}) > 0);
         // Sin puntero de marco no se toca el registro del CFA.
-        CHECK(find_bytes(fde, {0x0D}) < 0 || true); // (0x0D tambien puede ser dato)
+        CHECK(find_bytes(fde, {0x0D}) < 0 ||
+              true); // (0x0D tambien puede ser dato)
     }
 
     // --- Varios registros: cada uno en SU sitio ----------------------------
@@ -261,9 +263,10 @@ int main() {
          *   rbx  CFA-24  factor 3
          *   r12  CFA-32  factor 4
          * Que cada uno lleve SU factor es justamente lo que se comprueba: si
-         * el codificador reutilizara uno, los tres apuntarian al mismo hueco. */
-        CHECK(find_bytes(fde, {0x80 | 6, 0x02}) > 0); // rbp
-        CHECK(find_bytes(fde, {0x80 | 3, 0x03}) > 0); // rbx
+         * el codificador reutilizara uno, los tres apuntarian al mismo hueco.
+         */
+        CHECK(find_bytes(fde, {0x80 | 6, 0x02}) > 0);  // rbp
+        CHECK(find_bytes(fde, {0x80 | 3, 0x03}) > 0);  // rbx
         CHECK(find_bytes(fde, {0x80 | 12, 0x04}) > 0); // r12
     }
 
@@ -301,7 +304,8 @@ int main() {
         f.ops = {save(5), setfp(5)};
 
         std::vector<uint8_t> fde;
-        CHECK(build_eh_frame_fde_x86_64(f, 0x400, 0, (uint32_t)cie.size(), fde));
+        CHECK(
+            build_eh_frame_fde_x86_64(f, 0x400, 0, (uint32_t)cie.size(), fde));
         // advance_loc2 (0x03) con 300 = 0x012C en little endian.
         CHECK(find_bytes(fde, {0x03, 0x2C, 0x01}) > 0);
     }

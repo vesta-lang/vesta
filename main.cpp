@@ -14,7 +14,7 @@
 #include "util/alloc_report.h"
 #include "util/phase_memory.h" // la frontera entre el frontend y el ensamblado
 #include "util/crash_report.h" // contar una caida del proceso antes de morir
-#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
+#include "util/cache_paths.h"  // el reparto de la cache por tipo y alcance
 #include "util/env_flags.h"
 #include <cstdlib>
 #include <iostream>
@@ -45,7 +45,7 @@
 #include "analysis/effects/effects_report.h" // Modelo unico de efectos: --analyze --effects
 #include "vx/contract_when.h" // registro de arquitecturas conocidas
 #include "ir/ir_emitter.h"
-#include "ir/vel_node_stream.h" // ensamblar sin pasar por texto
+#include "ir/vel_node_stream.h"      // ensamblar sin pasar por texto
 #include "ir/passes/select_policy.h" // PGO: load_branch_profile (if-conversion)
 #include "ir/ssa_ir_serialize.h" //  AOT: parse_ir_section (round-trip del @ir)
 #include "aot/aot_analyze.h"     //  analisis de compatibilidad nativa
@@ -3808,11 +3808,11 @@ int main(int argc, char *argv[]) {
 #ifdef VESTA_HAS_PREPROCESSOR
         {
             vpp::Preprocessor pp;
-            /* El lexer de Vesta ya se salta los comentarios por su cuenta -- con
-             * su propio diagnostico de bloque sin cerrar --, asi que un fichero
-             * sin directivas y sin macros no necesita que se toque NADA.
-             * Ademas de ahorrar el trabajo, deja las columnas donde estan en el
-             * fichero de verdad: quitar un comentario mueve lo que venia
+            /* El lexer de Vesta ya se salta los comentarios por su cuenta --
+             * con su propio diagnostico de bloque sin cerrar --, asi que un
+             * fichero sin directivas y sin macros no necesita que se toque
+             * NADA. Ademas de ahorrar el trabajo, deja las columnas donde estan
+             * en el fichero de verdad: quitar un comentario mueve lo que venia
              * detras. */
             pp.options().passthrough_if_nothing_to_expand = true;
             std::string source_dir =
@@ -4371,9 +4371,9 @@ int main(int argc, char *argv[]) {
          * que se creian iguales daban 40 s y 8,5 s.
          *
          * Se corta la LECTURA y no la escritura porque esto no es una copia de
-         * cache: `cache_path` es donde el artefacto del comptime se CONSTRUYE, y
-         * esta compilacion lo necesita para ejecutar codigo al compilar.  Lo que
-         * sobra al medir es heredar el de antes, no producir el propio. */
+         * cache: `cache_path` es donde el artefacto del comptime se CONSTRUYE,
+         * y esta compilacion lo necesita para ejecutar codigo al compilar.  Lo
+         * que sobra al medir es heredar el de antes, no producir el propio. */
         const bool cache_hit =
             !util::cache_disabled() && std::filesystem::exists(cache_path);
         const bool user_already_set_prebuilt =
@@ -4413,8 +4413,8 @@ int main(int argc, char *argv[]) {
         // el @c .velb cacheado al output y SALTAR todo el compile +
         // link.  Desactivable via @c VX_NO_PROJECT_CACHE=1.
         /* `VX_NO_CACHE` es el paraguas: "sin cache" incluye esta.  Sin eso, la
-         * bandera general dejaba viva la de proyecto -- que ademas SALTA todo el
-         * compilado -- y una medida "en frio" podia no compilar nada. */
+         * bandera general dejaba viva la de proyecto -- que ademas SALTA todo
+         * el compilado -- y una medida "en frio" podia no compilar nada. */
         const bool project_cache_enabled =
             !util::cache_disabled() &&
             !util::flag_on(util::FlagId::NoProjectCache);
@@ -4753,8 +4753,8 @@ int main(int argc, char *argv[]) {
                      * su idioma.  El codigo (VX9248) es lo permanente -- lo
                      * referencian la documentacion y las herramientas --; la
                      * redaccion puede cambiar sin romper nada. */
-                    std::cerr << "error: "
-                              << vx::diag::format("VX9248", {u}) << "\n";
+                    std::cerr << "error: " << vx::diag::format("VX9248", {u})
+                              << "\n";
                     return 1;
                 }
             }
@@ -5042,7 +5042,8 @@ int main(int argc, char *argv[]) {
                  * primera.  Que a la primera le falte la maquina es lo normal
                  * -- todavia se esta construyendo --, asi que avisar ahi era
                  * ruido que ademas tapaba el caso que importa: un cuerpo que
-                 * sigue vacio DESPUES de cargarla es el que llega al binario. */
+                 * sigue vacio DESPUES de cargarla es el que llega al binario.
+                 */
                 warn_unresolved_inject(cr, vx_path);
                 if (verbose_mc) {
                     std::cerr << "[mc-cache] miss + populated: " << cache_path
@@ -5317,25 +5318,23 @@ int main(int argc, char *argv[]) {
                 auto linea = vesta::scout();
                 if (tf.resolver_us > 0 || tf.modulos_us > 0) {
                     linea << "[vx] "
-                          << vx::diag::format(
-                                 "VXA082",
-                                 {std::to_string(tf.resolver_us),
-                                  std::to_string(tf.modulos_us),
-                                  std::to_string(tf.optimizar_us),
-                                  std::to_string(tf.emitir_us),
-                                  std::to_string(tf.total_us())})
+                          << vx::diag::format("VXA082",
+                                              {std::to_string(tf.resolver_us),
+                                               std::to_string(tf.modulos_us),
+                                               std::to_string(tf.optimizar_us),
+                                               std::to_string(tf.emitir_us),
+                                               std::to_string(tf.total_us())})
                           << "\n";
                 } else {
                     linea << "[vx] "
                           << vx::diag::format(
-                                 "VXA081",
-                                 {std::to_string(tf.analisis_us),
-                                  std::to_string(tf.tipos_us),
-                                  std::to_string(tf.bajada_us),
-                                  std::to_string(tf.optimizar_us),
-                                  std::to_string(tf.emitir_us),
-                                  std::to_string(tf.comprobar_us()),
-                                  std::to_string(tf.total_us())})
+                                 "VXA081", {std::to_string(tf.analisis_us),
+                                            std::to_string(tf.tipos_us),
+                                            std::to_string(tf.bajada_us),
+                                            std::to_string(tf.optimizar_us),
+                                            std::to_string(tf.emitir_us),
+                                            std::to_string(tf.comprobar_us()),
+                                            std::to_string(tf.total_us())})
                           << "\n";
                 }
             }
@@ -5382,9 +5381,9 @@ int main(int argc, char *argv[]) {
                     if (q.us * 100 < total_pases || mostrados >= 6) break;
                     /* CON su padre.  Sin el, la lista es plana y dos cifras que
                      * se solapan -- una dentro de la otra -- se leen como si se
-                     * sumaran: es lo que hizo pasar por coste del emisor 1810 ms
-                     * que eran de comprobar limites, y por coste de estos 190 ms
-                     * que estaban dentro de aquellos. */
+                     * sumaran: es lo que hizo pasar por coste del emisor 1810
+                     * ms que eran de comprobar limites, y por coste de estos
+                     * 190 ms que estaban dentro de aquellos. */
                     lp << " " << q.name;
                     if (q.parent != nullptr) lp << "<" << q.parent;
                     lp << " " << q.us << " us";
@@ -5402,15 +5401,14 @@ int main(int argc, char *argv[]) {
                  * que no ocurre no tiene por que ocupar sitio en la linea. */
                 if (ir::fixpoint_truncations() > 0)
                     lp << vx::diag::format(
-                        "VXA085",
-                        {std::to_string(ir::fixpoint_truncations())});
+                        "VXA085", {std::to_string(ir::fixpoint_truncations())});
                 lp << vx::diag::format(
                           "VXA084",
                           {std::to_string(pases.size()),
                            std::to_string(total_pases),
                            std::to_string(ir::vueltas_punto_fijo()),
-                           std::to_string(ir::visitas_a_funcion()),
-                           cal.fuente, std::to_string(cal.resolucion_ns),
+                           std::to_string(ir::visitas_a_funcion()), cal.fuente,
+                           std::to_string(cal.resolucion_ns),
                            std::to_string(cal.coste_ns)})
                    << "\n";
             }
@@ -5475,12 +5473,12 @@ int main(int argc, char *argv[]) {
                 std::sort(by_cost.begin(), by_cost.end(), asa_costlier_first);
                 auto line = vesta::scout();
                 line << "[asa] "
-                     << vx::diag::format(
-                            "VXA077",
-                            {std::to_string(by_cost.size()),
-                             std::to_string(asa_us), std::to_string(asa_facts),
-                             std::to_string(asa_reused),
-                             std::to_string(asa_silent)})
+                     << vx::diag::format("VXA077",
+                                         {std::to_string(by_cost.size()),
+                                          std::to_string(asa_us),
+                                          std::to_string(asa_facts),
+                                          std::to_string(asa_reused),
+                                          std::to_string(asa_silent)})
                      << "\n";
                 for (const auto *r : by_cost) {
                     /* Los que no costaron nada NI dijeron nada no ocupan sitio:
@@ -5524,8 +5522,8 @@ int main(int argc, char *argv[]) {
             /* Las claves van en INGLES: esto no es prosa que lea una persona en
              * su idioma -- para eso esta el catalogo -- sino un INTERFAZ que
              * leen herramientas, o sea identificadores.  Y siguen acabando en
-             * `_us`, que es por lo que el banco las filtra: cambiar el nombre no
-             * puede cambiar lo que otro sabe leer. */
+             * `_us`, que es por lo que el banco las filtra: cambiar el nombre
+             * no puede cambiar lo que otro sabe leer. */
             jf["analysis_us"] = tf.analisis_us;
             jf["types_us"] = tf.tipos_us;
             jf["lowering_us"] = tf.bajada_us;

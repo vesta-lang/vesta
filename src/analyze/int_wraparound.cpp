@@ -15,9 +15,18 @@ bool int_type_bounds(ir::IrType t, int64_t &lo, int64_t &hi) {
     case ir::IrType::I8: bits = 8; break;
     case ir::IrType::I16: bits = 16; break;
     case ir::IrType::I32: bits = 32; break;
-    case ir::IrType::U8: bits = 8; with_sign = false; break;
-    case ir::IrType::U16: bits = 16; with_sign = false; break;
-    case ir::IrType::U32: bits = 32; with_sign = false; break;
+    case ir::IrType::U8:
+        bits = 8;
+        with_sign = false;
+        break;
+    case ir::IrType::U16:
+        bits = 16;
+        with_sign = false;
+        break;
+    case ir::IrType::U32:
+        bits = 32;
+        with_sign = false;
+        break;
     /* Los de 64 quedan fuera: para saber si su cuenta se sale haria falta
      * aritmetica mas ancha que la que hay aqui, y afirmar de menos es el lado
      * seguro cuando lo que se emite es un ERROR. */

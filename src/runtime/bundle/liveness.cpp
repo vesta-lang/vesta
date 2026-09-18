@@ -73,7 +73,6 @@ void bundle_live_after(const Bundle &b, const Touch *t, uint16_t live_out,
  * envejece bien: se queda diciendo cosas de un diseno que ya no existe.  Vive
  * en el historial de git. */
 
-
 uint16_t live_out_after(ProcessVM *process, uint64_t pc,
                         vm::VirtualMemory::PageView *view) {
     uint16_t live = 0;   // lo que LEE lo que viene detras
@@ -85,7 +84,8 @@ uint16_t live_out_after(ProcessVM *process, uint64_t pc,
             ins.exec_cached = ins.metadata->exec;
 
         Touch t;
-        if (!touch_one(ins, t)) return kAllLive; // barrera: se acaba lo que se sabe
+        if (!touch_one(ins, t))
+            return kAllLive; // barrera: se acaba lo que se sabe
 
         live |= (uint16_t)(t.reg_read & ~killed);
         killed |= (uint16_t)(t.reg_write & ~t.reg_read);

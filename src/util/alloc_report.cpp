@@ -111,7 +111,8 @@ std::string hex_offset(uint64_t v) {
 void replace_all(std::string &s, const char *from, const char *to) {
     const size_t n = std::strlen(from);
     const size_t m = std::strlen(to);
-    for (size_t i = s.find(from); i != std::string::npos; i = s.find(from, i + m))
+    for (size_t i = s.find(from); i != std::string::npos;
+         i = s.find(from, i + m))
         s.replace(i, n, to);
 }
 
@@ -134,12 +135,18 @@ bool is_default_arg(const std::string &s, size_t i) {
      * buscar el `<`: hay que aceptar tambien que detras venga el final del
      * argumento. */
     static const char *const kDefaults[] = {
-        "std::allocator",           "std::char_traits",
-        "std::less",                "std::hash",
-        "std::equal_to",            "std::_Select1st",
-        "std::_Identity",           "std::_Mod_range_hashing",
-        "std::_Default_ranged_hash", "std::_Prime_rehash_policy",
-        "std::_Hashtable_traits",   "std::__uniq_ptr_impl",
+        "std::allocator",
+        "std::char_traits",
+        "std::less",
+        "std::hash",
+        "std::equal_to",
+        "std::_Select1st",
+        "std::_Identity",
+        "std::_Mod_range_hashing",
+        "std::_Default_ranged_hash",
+        "std::_Prime_rehash_policy",
+        "std::_Hashtable_traits",
+        "std::__uniq_ptr_impl",
     };
     for (const char *d : kDefaults) {
         const size_t n = std::strlen(d);
@@ -194,7 +201,8 @@ std::string drop_default_args(const std::string &in) {
         const bool opens = in[i] == '<';
         if (in[i] == ',' || opens) {
             size_t j = i + 1;
-            while (j < in.size() && in[j] == ' ') ++j;
+            while (j < in.size() && in[j] == ' ')
+                ++j;
             const bool policy = is_lock_policy(in, j);
             /* Tras el `<` SOLO la politica; tras una coma, cualquiera. */
             if (policy || (!opens && is_default_arg(in, j))) {
@@ -204,7 +212,8 @@ std::string drop_default_args(const std::string &in) {
                      * asi que el barrido normal se paraba en su `)` y dejaba el
                      * numero suelto.  Se salta el molde y luego las cifras. */
                     k = j + std::strlen("(__gnu_cxx::_Lock_policy)");
-                    while (k < in.size() && in[k] >= '0' && in[k] <= '9') ++k;
+                    while (k < in.size() && in[k] >= '0' && in[k] <= '9')
+                        ++k;
                 } else {
                     int depth = 0;
                     for (; k < in.size(); ++k) {
@@ -234,7 +243,8 @@ std::string drop_default_args(const std::string &in) {
                     out.push_back('<');
                     if (k < in.size() && in[k] == ',') {
                         ++k;
-                        while (k < in.size() && in[k] == ' ') ++k;
+                        while (k < in.size() && in[k] == ' ')
+                            ++k;
                     }
                 }
                 i = k; // se van el separador y el argumento ENTERO
@@ -254,7 +264,7 @@ std::string drop_default_args(const std::string &in) {
 /**
  * @brief Todos los tipos con plantilla que aparecen en @p s, sin repetir.
  *
- * Un tipo es un nombre cualificado seguido de una lista `<...>` equilibrada.  Se
+ * Un tipo es un nombre cualificado seguido de una lista `<...>` equilibrada. Se
  * busca desde cada `<` hacia atras para coger el nombre, y hacia delante hasta
  * su cierre; asi salen tambien los anidados, que es lo que hace falta para
  * poder abreviar primero el de fuera.
@@ -333,7 +343,8 @@ std::string abbreviate_repeats(std::string s, std::vector<std::string> &defs) {
 
     for (const std::string &t : template_types(s)) {
         if (defs.size() >= kMaxAbbrev) break;
-        if (t.size() < kMinLen) break; // vienen ordenados: los demas son menores
+        if (t.size() < kMinLen)
+            break; // vienen ordenados: los demas son menores
         if (count_of(s, t) < 2) continue;
         char name[8];
         std::snprintf(name, sizeof(name), "T%u", unsigned(defs.size()) + 1);
@@ -395,14 +406,16 @@ std::string wrap(const std::string &text, unsigned width, unsigned indent) {
     while (text.size() - line_start > room) {
         /* El ultimo sitio donde se puede partir dentro de lo que cabe. */
         size_t cut = std::string::npos;
-        for (size_t i = line_start; i < line_start + room && i < text.size(); ++i)
+        for (size_t i = line_start; i < line_start + room && i < text.size();
+             ++i)
             if (text[i] == ' ' || text[i] == ',') cut = i;
         if (cut == std::string::npos || cut <= line_start) break; // no se puede
         out.append(text, line_start, cut - line_start + 1);
         out.push_back('\n');
         out.append(pad);
         line_start = cut + 1;
-        while (line_start < text.size() && text[line_start] == ' ') ++line_start;
+        while (line_start < text.size() && text[line_start] == ' ')
+            ++line_start;
         room = width > indent ? width - indent : width;
     }
     out.append(text, line_start, std::string::npos);
@@ -432,7 +445,8 @@ bool template_args(const std::string &s, size_t open,
         } else if (s[i] == ',' && depth == 1) {
             out.push_back(s.substr(start, i - start));
             start = i + 1;
-            while (start < s.size() && s[start] == ' ') ++start;
+            while (start < s.size() && s[start] == ' ')
+                ++start;
         }
     }
     return false;
@@ -484,10 +498,10 @@ std::string rewrite_containers(std::string s) {
      * -- el par es el PRIMER argumento, no el segundo --, y meterlos en la
      * tabla de arriba habria leido la clave donde esta el valor. */
     struct Inner {
-        const char *name;    ///< como lo llama libstdc++
-        const char *as_map;  ///< si dentro hay un par, de que mapa es
-        const char *as_set;  ///< y si no, de que conjunto
-        const char *what;    ///< que pieza suya
+        const char *name;   ///< como lo llama libstdc++
+        const char *as_map; ///< si dentro hay un par, de que mapa es
+        const char *as_set; ///< y si no, de que conjunto
+        const char *what;   ///< que pieza suya
     };
     static const Inner kInner[] = {
         {"std::_Hash_node<", "std::unordered_map", "std::unordered_set",
@@ -662,7 +676,8 @@ std::string segment_after(const std::string &s, const char *from) {
     if (at == std::string::npos) return std::string();
     const size_t start = at + std::strlen(from);
     size_t end = start;
-    while (end < s.size() && s[end] != '/' && s[end] != '\\') ++end;
+    while (end < s.size() && s[end] != '/' && s[end] != '\\')
+        ++end;
     return s.substr(start, end - start);
 }
 
@@ -750,7 +765,8 @@ std::string component_before(const std::string &s, const char *marker) {
     const size_t at = s.find(marker);
     if (at == std::string::npos || at == 0) return std::string();
     size_t start = at;
-    while (start > 0 && s[start - 1] != '/' && s[start - 1] != '\\') --start;
+    while (start > 0 && s[start - 1] != '/' && s[start - 1] != '\\')
+        --start;
     return s.substr(start, at - start);
 }
 
@@ -902,7 +918,8 @@ std::string module_of(const char *file, const char *fn) {
      * lo que salio de la informacion de depuracion. */
     if (fn != nullptr) {
         const std::string s(fn);
-        if (s.compare(0, 5, "std::") == 0 || s.compare(0, 11, "__gnu_cxx::") == 0 ||
+        if (s.compare(0, 5, "std::") == 0 ||
+            s.compare(0, 11, "__gnu_cxx::") == 0 ||
             s.compare(0, 4, "_ZSt") == 0 || s.compare(0, 4, "_ZNS") == 0)
             return "libstdc++?";
     }
@@ -927,7 +944,6 @@ void add_to_module(std::vector<ModuleTotal> &tot, const std::string &name,
         }
     tot.push_back(ModuleTotal{name, allocs, bytes});
 }
-
 
 /**
  * @brief Un marco para una direccion que NO es de nuestra imagen.
@@ -1023,12 +1039,12 @@ unsigned resolve_frames(const void *pc, AllocFrame *out, unsigned max) {
      * asignador.  Estan las dos porque este resolutor anade lo que aquel no
      * puede saber -- a que MODULO logico del proyecto pertenece un fichero --,
      * pero la parte de "esta direccion no es mia" es identica, y por eso las
-     * dos se apoyan en la misma funcion en vez de tener cada una su criterio. */
+     * dos se apoyan en la misma funcion en vez de tener cada una su criterio.
+     */
     if (!vesta_module_is_self(pc)) return resolve_other_module(pc, out, max);
 
     SelfFrame frames[64];
-    const unsigned n =
-        self_inline_frames(pc, frames, max < 64 ? max : 64);
+    const unsigned n = self_inline_frames(pc, frames, max < 64 ? max : 64);
     if (n > 0) {
         const unsigned got = n < max ? n : max;
         for (unsigned i = 0; i < got; ++i) {
@@ -1082,9 +1098,9 @@ unsigned resolve_frames(const void *pc, AllocFrame *out, unsigned max) {
     static char fallback[64];
     const void *fn = nullptr;
     if (self_function_range(pc, &fn, nullptr)) {
-        std::snprintf(fallback, sizeof(fallback), "fn +0x%llx",
-                      (unsigned long long)(uintptr_t(fn) -
-                                           uintptr_t(os_module_base())));
+        std::snprintf(
+            fallback, sizeof(fallback), "fn +0x%llx",
+            (unsigned long long)(uintptr_t(fn) - uintptr_t(os_module_base())));
         out[0].function = fallback;
         out[0].file = nullptr;
         out[0].line = 0;
@@ -1135,7 +1151,8 @@ const char *classify_module(const char *file, const char *function) {
     /* "SIN CLASIFICAR" NO ES UNA RESPUESTA, es la ausencia de una -- y
      * devolverla como si lo fuera cortaba la cadena: el asignador se quedaba
      * con ella y no llegaba a preguntarle al mapa del enlazador, que para esos
-     * marcos SI sabe de que objeto son.  Nulo es lo que deja seguir buscando. */
+     * marcos SI sabe de que objeto son.  Nulo es lo que deja seguir buscando.
+     */
     if (held.empty() || held == "sin clasificar") return nullptr;
     return held.c_str();
 }
@@ -1156,8 +1173,8 @@ void report_alloc_sites() {
      * La correccion no es DECLARAR esas reservas para que desaparezcan de esa
      * lista: eso es lo contrario de lo que se arreglo aqui en su dia, cuando el
      * informe tomaba la foto antes de construir la tabla y se dejaba fuera su
-     * propio coste -- el sitio que mas reservaba del proceso entero no salia --.
-     * Quien mide tiene que APARECER entre lo medido.
+     * propio coste -- el sitio que mas reservaba del proceso entero no salia
+     * --. Quien mide tiene que APARECER entre lo medido.
      *
      * Lo que faltaba es poder RESTARLO, y para eso hay que saber cuanto es.  Se
      * lee al entrar, se lee al salir, y la diferencia se dice al final con las
@@ -1225,8 +1242,8 @@ void report_alloc_sites() {
      *
      * Y con sitio para TODOS.  Con 64 la foto salia llena en cualquier
      * compilacion de verdad, asi que la lista no era "los sitios", era "unos
-     * cuantos" -- y encima los mas gordos, que son justo los que uno ya sabe --.
-     * El tope de la tabla del asignador son `kMaxThreads * kSlots` entradas
+     * cuantos" -- y encima los mas gordos, que son justo los que uno ya sabe
+     * --. El tope de la tabla del asignador son `kMaxThreads * kSlots` entradas
      * distintas; esto coge cuatro mil, que sobra para lo que se mide (una
      * compilacion entera se queda en unos centenares) y ocupa un cuarto de mega
      * de pila, que en el hilo principal no es nada.  Si aun asi se llenara, se
@@ -1252,57 +1269,52 @@ void report_alloc_sites() {
     const HostAllocStats st_at_snapshot = host_alloc_stats();
     const uint64_t entries_at_snapshot = host_new_calls();
     if (n == 0) {
-        out.add(
-                     "[reservas] no se apunto ningun sitio.  Con "
-                     "VESTA_HOST_ALLOC_SITES=1 se apunta solo lo que llega SIN "
-                     "declarar su proposito: si todo lo declara, esto es la "
-                     "respuesta correcta.\n");
+        out.add("[reservas] no se apunto ningun sitio.  Con "
+                "VESTA_HOST_ALLOC_SITES=1 se apunta solo lo que llega SIN "
+                "declarar su proposito: si todo lo declara, esto es la "
+                "respuesta correcta.\n");
         out.flush();
         return;
     }
 
     const uintptr_t base = uintptr_t(os_module_base());
-    out.add(
-                 "[reservas] los %u sitios que reservan sin declarar su "
-                 "proposito -- TODOS, de mayor a menor:\n",
-                 n);
+    out.add("[reservas] los %u sitios que reservan sin declarar su "
+            "proposito -- TODOS, de mayor a menor:\n",
+            n);
     /* Y si la foto se lleno, se dice.  Una lista cortada se lee como completa,
      * y aqui lo que se viene a buscar -- lo que falta por declarar -- es
      * justamente lo que se queda en la cola. */
     if (n == kMax)
-        out.add(
-                     "           OJO: cabian %u y se llenaron todos, asi que "
-                     "puede haber mas sin ensenar.  Sube `kMax` en "
-                     "`src/util/alloc_report.cpp`.\n",
-                     kMax);
+        out.add("           OJO: cabian %u y se llenaron todos, asi que "
+                "puede haber mas sin ensenar.  Sube `kMax` en "
+                "`src/util/alloc_report.cpp`.\n",
+                kMax);
     /* Si no hay informacion de depuracion se DICE, en vez de no ensenar
      * cadenas de inline y dejar que se lea como "aqui no habia nada
      * inlineado" -- que con el optimizador encendido es siempre falso. */
     const size_t units = self_dwarf_units();
     if (units == 0)
-        out.add(
-                     "           SIN INFORMACION DE DEPURACION: no se puede "
-                     "decir que funciones se inlinearon en cada sitio, que es "
-                     "lo unico que dice quien LLAMO.  Se construye con "
-                     "`-DCMAKE_BUILD_TYPE=Profile`.\n");
+        out.add("           SIN INFORMACION DE DEPURACION: no se puede "
+                "decir que funciones se inlinearon en cada sitio, que es "
+                "lo unico que dice quien LLAMO.  Se construye con "
+                "`-DCMAKE_BUILD_TYPE=Profile`.\n");
     else
         out.add(
-                     /* `%llu` con conversion explicita, no `%zu`: el `printf`
-                      * de msvcrt no conoce la `z`, asi que ahi salia la letra
-                      * en vez del numero -- y el argumento se perdia.  Lo dijo
-                      * el compilador; se ve en el informe solo si alguien mira
-                      * esa linea. */
-                     "           %llu unidades de compilacion con informacion "
-                     "de depuracion; debajo de cada sitio, la cadena de "
-                     "funciones inlineadas de dentro hacia fuera.\n",
-                     (unsigned long long)units);
+            /* `%llu` con conversion explicita, no `%zu`: el `printf`
+             * de msvcrt no conoce la `z`, asi que ahi salia la letra
+             * en vez del numero -- y el argumento se perdia.  Lo dijo
+             * el compilador; se ve en el informe solo si alguien mira
+             * esa linea. */
+            "           %llu unidades de compilacion con informacion "
+            "de depuracion; debajo de cada sitio, la cadena de "
+            "funciones inlineadas de dentro hacia fuera.\n",
+            (unsigned long long)units);
     if (symbols == 0)
-        out.add(
-                     "           SIN TABLA DE SIMBOLOS en este binario: salen "
-                     "los desplazamientos desde la base del modulo (%p).  Se "
-                     "resuelven con `addr2line -f -C -e <binario>` sobre una "
-                     "construccion que los conserve.\n",
-                     (const void *)base);
+        out.add("           SIN TABLA DE SIMBOLOS en este binario: salen "
+                "los desplazamientos desde la base del modulo (%p).  Se "
+                "resuelven con `addr2line -f -C -e <binario>` sobre una "
+                "construccion que los conserve.\n",
+                (const void *)base);
 
     /* La suma de lo que cada sitio SE GANO.  Con las cotas superiores esto
      * pasaba del 100% de las reservas reales -- se midio un 192,5% -- porque
@@ -1330,8 +1342,8 @@ void report_alloc_sites() {
     const uint64_t skipped = alloc_sites_skipped();
     const uint64_t untagged = st.by_tag[AllocTag{}.raw()];
 
-    out.add( "  %12s %6s %10s %8s  %-15s %-8s  %s\n", "reservas",
-                 "% ", "MiB", "media", "proposito", "forma", "sitio");
+    out.add("  %12s %6s %10s %8s  %-15s %-8s  %s\n", "reservas", "% ", "MiB",
+            "media", "proposito", "forma", "sitio");
 
     /// Cuanto cabe de ancho.  Cero cuando la salida no es una consola, y
     /// entonces no se parte nada.
@@ -1376,13 +1388,13 @@ void report_alloc_sites() {
             fn_name = readable(name);
             where = "+" + std::to_string(off);
             /* Y SE CONTRASTA.  Si el tramo NO empieza donde el simbolo, ese
-             * simbolo no es la funcion que contiene la direccion: es el anterior
-             * mas cercano, que es lo unico que la tabla de simbolos puede dar.
-             * Pasa con las funciones que no dejan simbolo.  Antes se ensenaba el
-             * nombre equivocado sin que nada lo delatara.
+             * simbolo no es la funcion que contiene la direccion: es el
+             * anterior mas cercano, que es lo unico que la tabla de simbolos
+             * puede dar. Pasa con las funciones que no dejan simbolo.  Antes se
+             * ensenaba el nombre equivocado sin que nada lo delatara.
              *
-             * El nombre NO se quita: sigue siendo el mejor dato que hay y con el
-             * aviso al lado ya no engana. */
+             * El nombre NO se quita: sigue siendo el mejor dato que hay y con
+             * el aviso al lado ya no engana. */
             if (has_range && uintptr_t(sites[i].pc) - off != uintptr_t(fn))
                 where += " [OJO: nombre del simbolo ANTERIOR; la funcion que "
                          "contiene esta direccion empieza en " +
@@ -1440,8 +1452,8 @@ void report_alloc_sites() {
          *
          * El ultimo marco de la cadena es esta misma funcion -- sale marcado
          * como `[la funcion real]` --, asi que ponerlo tambien en la fila era
-         * escribir dos veces lo mismo, y es lo que hacia esta linea imposible de
-         * leer.  No se pierde nada: esta ahi debajo, entero.
+         * escribir dos veces lo mismo, y es lo que hacia esta linea imposible
+         * de leer.  No se pierde nada: esta ahi debajo, entero.
          *
          * Sin cadena -- una construccion sin informacion de depuracion -- la
          * fila es el UNICO sitio donde aparece, y ahi se queda como estaba. */
@@ -1449,14 +1461,13 @@ void report_alloc_sites() {
         const unsigned nf = self_inline_frames(sites[i].pc, frames, 64);
         if (nf == 0 && !fn_name.empty()) where = fn_name + " " + where;
 
-        out.add( "  %12llu %5.1f%% %10.1f %8llu  %-15s %-8s  %s\n",
-                     (unsigned long long)hechas,
-                     total == 0 ? 0.0
-                                : 100.0 * double(hechas) / double(total),
-                     double(bytes) / (1024.0 * 1024.0),
-                     (unsigned long long)(hechas == 0 ? 0 : bytes / hechas),
-                     tag.unknown() ? "SIN DECLARAR" : alloc_tag_name(tag), forma,
-                     where.c_str());
+        out.add("  %12llu %5.1f%% %10.1f %8llu  %-15s %-8s  %s\n",
+                (unsigned long long)hechas,
+                total == 0 ? 0.0 : 100.0 * double(hechas) / double(total),
+                double(bytes) / (1024.0 * 1024.0),
+                (unsigned long long)(hechas == 0 ? 0 : bytes / hechas),
+                tag.unknown() ? "SIN DECLARAR" : alloc_tag_name(tag), forma,
+                where.c_str());
 
         /* Y DEBAJO, LA CADENA DE INLINE ENTERA.
          *
@@ -1479,11 +1490,11 @@ void report_alloc_sites() {
          * atribuirle la reserva a ellas diria que casi todo es de `std::` --
          * cierto y sin ninguna utilidad, porque quien decidio reservar es el de
          * fuera. */
-        add_to_module(by_module,
-                      nf > 0 ? module_of(frames[nf - 1].file,
-                                         frames[nf - 1].function)
-                             : module_of(nullptr, name),
-                      hechas, bytes);
+        add_to_module(
+            by_module,
+            nf > 0 ? module_of(frames[nf - 1].file, frames[nf - 1].function)
+                   : module_of(nullptr, name),
+            hechas, bytes);
 
         /* AGRUPADOS POR FICHERO, y la carpeta UNA sola vez.
          *
@@ -1513,8 +1524,8 @@ void report_alloc_sites() {
                  * solo importa si es `bits/` o `ext/`.  La raiz entera sale una
                  * vez, arriba del informe. */
                 std::string tail = dir;
-                for (const char *marker : {"include/c++/", "include\\c++\\",
-                                           "libs/SourceCode/"}) {
+                for (const char *marker :
+                     {"include/c++/", "include\\c++\\", "libs/SourceCode/"}) {
                     const size_t at = tail.find(marker);
                     if (at != std::string::npos) {
                         /* Lo que se quita se APUNTA, y sale al final del
@@ -1531,9 +1542,9 @@ void report_alloc_sites() {
                     }
                 }
                 out.add("      %-16s %s\n", mod.c_str(),
-                        dir.empty() ? "(sin fichero)"
-                                    : (tail.empty() ? dir.c_str()
-                                                    : tail.c_str()));
+                        dir.empty()
+                            ? "(sin fichero)"
+                            : (tail.empty() ? dir.c_str() : tail.c_str()));
             }
             /* El sitio dentro del fichero primero y alineado, que es por donde
              * se busca; el nombre detras, que es lo que se lee. */
@@ -1549,11 +1560,10 @@ void report_alloc_sites() {
             std::vector<std::string> defs;
             const std::string line =
                 std::string(frames[k].inlined ? "" : "[la funcion real] ") +
-                abbreviate_repeats(
-                    frames[k].function != nullptr
-                        ? readable(frames[k].function)
-                        : std::string("(sin nombre)"),
-                    defs);
+                abbreviate_repeats(frames[k].function != nullptr
+                                       ? readable(frames[k].function)
+                                       : std::string("(sin nombre)"),
+                                   defs);
             out.add("        %-28s %s\n", place,
                     wrap(line, cols > 46 ? cols - 46 : 0, 46).c_str());
             /* Y debajo, que significa cada abreviatura.  Van con el nombre
@@ -1568,7 +1578,8 @@ void report_alloc_sites() {
      * `bits/stl_vector.h:346` no se puede abrir. */
     if (!roots.empty()) {
         out.add("\n[reservas] las rutas de arriba cuelgan de:\n");
-        for (const std::string &r : roots) out.add("      %s\n", r.c_str());
+        for (const std::string &r : roots)
+            out.add("      %s\n", r.c_str());
     }
 
     /* EL REPARTO POR MODULO, que es la lectura que la lista de sitios no da:
@@ -1580,31 +1591,28 @@ void report_alloc_sites() {
                   [](const ModuleTotal &a, const ModuleTotal &b) {
                       return a.allocs > b.allocs;
                   });
-        out.add( "\n[reservas] reparto por modulo y libreria:\n");
-        out.add( "  %12s %6s %10s  %s\n", "reservas", "% ", "MiB",
-                     "de quien es el codigo");
+        out.add("\n[reservas] reparto por modulo y libreria:\n");
+        out.add("  %12s %6s %10s  %s\n", "reservas", "% ", "MiB",
+                "de quien es el codigo");
         for (const ModuleTotal &m : by_module)
-            out.add( "  %12llu %5.1f%% %10.1f  %s\n",
-                         (unsigned long long)m.allocs,
-                         total == 0 ? 0.0
-                                    : 100.0 * double(m.allocs) / double(total),
-                         double(m.bytes) / (1024.0 * 1024.0), m.name.c_str());
-        out.add(
-                     "  se atribuye al marco de MAS AFUERA de cada sitio, que "
-                     "es la funcion que existe en el binario: los de dentro son "
-                     "plantillas de `std::` instanciadas con tipos nuestros.\n"
-                     "  `sin clasificar` es lo que no tiene informacion de "
-                     "depuracion; `libstdc++?` es una suposicion por el nombre, "
-                     "no un dato.\n\n");
+            out.add("  %12llu %5.1f%% %10.1f  %s\n",
+                    (unsigned long long)m.allocs,
+                    total == 0 ? 0.0 : 100.0 * double(m.allocs) / double(total),
+                    double(m.bytes) / (1024.0 * 1024.0), m.name.c_str());
+        out.add("  se atribuye al marco de MAS AFUERA de cada sitio, que "
+                "es la funcion que existe en el binario: los de dentro son "
+                "plantillas de `std::` instanciadas con tipos nuestros.\n"
+                "  `sin clasificar` es lo que no tiene informacion de "
+                "depuracion; `libstdc++?` es una suposicion por el nombre, "
+                "no un dato.\n\n");
     }
 
-    out.add(
-                 "  %12llu %5.1f%% %10.1f            <- suma de los %u pares "
-                 "(sitio, proposito) apuntados, sobre %llu reservas\n",
-                 (unsigned long long)total_allocs,
-                 total == 0 ? 0.0 : 100.0 * double(total_allocs) / double(total),
-                 double(total_bytes) / (1024.0 * 1024.0), n,
-                 (unsigned long long)total);
+    out.add("  %12llu %5.1f%% %10.1f            <- suma de los %u pares "
+            "(sitio, proposito) apuntados, sobre %llu reservas\n",
+            (unsigned long long)total_allocs,
+            total == 0 ? 0.0 : 100.0 * double(total_allocs) / double(total),
+            double(total_bytes) / (1024.0 * 1024.0), n,
+            (unsigned long long)total);
     /* Un porcentaje por encima de 100 no se puede dejar pasar como si fuera una
      * escala rara: significa que la tabla y el contador no hablan de lo mismo,
      * y hasta saber cual de los dos falla el resto del informe no se puede
@@ -1615,31 +1623,27 @@ void report_alloc_sites() {
      * desvio de verdad -- el que hubo aqui era del 124% --, no dos reservas. */
     const uint64_t margin = total / 64 + 16;
     if (total != 0 && total_allocs > total + margin)
-        out.add(
-                     "  NOTE: that is over 100%%.  The three figures do not "
-                     "agree: %llu entries into operator new, %llu recorded + "
-                     "%llu dropped, %llu allocations counted.  Until they do, "
-                     "the percentages above are over the wrong base\n",
-                     (unsigned long long)entries_at_snapshot,
-                     (unsigned long long)total_allocs,
-                     (unsigned long long)skipped, (unsigned long long)total);
-    out.add(
-                 "  sin declarar proposito: %llu de %llu (%.1f%%) -- eso es lo "
-                 "que queda por migrar\n",
-                 (unsigned long long)untagged, (unsigned long long)total,
-                 total == 0 ? 0.0 : 100.0 * double(untagged) / double(total));
-    out.add(
-                 "  la columna FORMA esta medida; el otro eje -- cuanto VIVE lo "
-                 "de cada sitio -- sale del par reserva/liberacion, que es la "
-                 "fase 4 del plan y aun no esta\n");
+        out.add("  NOTE: that is over 100%%.  The three figures do not "
+                "agree: %llu entries into operator new, %llu recorded + "
+                "%llu dropped, %llu allocations counted.  Until they do, "
+                "the percentages above are over the wrong base\n",
+                (unsigned long long)entries_at_snapshot,
+                (unsigned long long)total_allocs, (unsigned long long)skipped,
+                (unsigned long long)total);
+    out.add("  sin declarar proposito: %llu de %llu (%.1f%%) -- eso es lo "
+            "que queda por migrar\n",
+            (unsigned long long)untagged, (unsigned long long)total,
+            total == 0 ? 0.0 : 100.0 * double(untagged) / double(total));
+    out.add("  la columna FORMA esta medida; el otro eje -- cuanto VIVE lo "
+            "de cada sitio -- sale del par reserva/liberacion, que es la "
+            "fase 4 del plan y aun no esta\n");
     const uint64_t evicted = alloc_sites_overflow();
     if (evicted != 0)
-        out.add(
-                     "  %llu reservas encontraron su ventana llena y "
-                     "desalojaron a la mas floja: lo que hereda el que entra ya "
-                     "va DESCONTADO de las cifras de arriba, asi que son lo que "
-                     "cada sitio se gano y no una cota superior\n",
-                     (unsigned long long)evicted);
+        out.add("  %llu reservas encontraron su ventana llena y "
+                "desalojaron a la mas floja: lo que hereda el que entra ya "
+                "va DESCONTADO de las cifras de arriba, asi que son lo que "
+                "cada sitio se gano y no una cota superior\n",
+                (unsigned long long)evicted);
 
     /* LO QUE HA COSTADO MIRAR, dicho antes de que se lea nada suyo.
      *
@@ -1653,18 +1657,18 @@ void report_alloc_sites() {
      * Se lee ANTES del vaciado a proposito, para que salga pegado al informe
      * que lo explica y no suelto entre dos volcados.  Ver `st_on_entry`. */
     const HostAllocStats st_on_exit = host_alloc_stats();
-    const uint64_t own_small = st_on_exit.small_allocs - st_on_entry.small_allocs;
-    const uint64_t own_large = st_on_exit.large_allocs - st_on_entry.large_allocs;
+    const uint64_t own_small =
+        st_on_exit.small_allocs - st_on_entry.small_allocs;
+    const uint64_t own_large =
+        st_on_exit.large_allocs - st_on_entry.large_allocs;
     if (own_small != 0 || own_large != 0)
-        out.add(
-                     "[reservas] MIRAR COSTO %llu reservas pequenas y %llu "
-                     "grandes: leer los simbolos y dar formato a esta pagina.  "
-                     "Las cifras del asignador que salen a continuacion las "
-                     "llevan dentro, porque su volcado corre despues de este.  "
-                     "Restalas antes de compararlas con una corrida sin "
-                     "`VESTA_HOST_ALLOC_SITES`.\n",
-                     (unsigned long long)own_small,
-                     (unsigned long long)own_large);
+        out.add("[reservas] MIRAR COSTO %llu reservas pequenas y %llu "
+                "grandes: leer los simbolos y dar formato a esta pagina.  "
+                "Las cifras del asignador que salen a continuacion las "
+                "llevan dentro, porque su volcado corre despues de este.  "
+                "Restalas antes de compararlas con una corrida sin "
+                "`VESTA_HOST_ALLOC_SITES`.\n",
+                (unsigned long long)own_small, (unsigned long long)own_large);
 
     /* Y AQUI sale todo, de una vez.  Vaciar antes de volver importa: esto corre
      * desde un manejador de salida y detras de el ya no queda nadie que lo

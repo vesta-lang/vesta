@@ -168,8 +168,8 @@ static int cmd_install(const std::vector<std::string> &args) {
     }
 
     ui::step("resolviendo dependencias");
-    std::string work = util::cache_dir_under(paths::project_root(""),
-                                             util::CacheKind::Work);
+    std::string work =
+        util::cache_dir_under(paths::project_root(""), util::CacheKind::Work);
     paths::ensure_dir(work);
 
     auto pins = signing::load_trust_pins();

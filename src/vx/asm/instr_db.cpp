@@ -56,7 +56,8 @@ void form_ops(const IsaData &t, const DbForm &f, bool con_implicitos,
     out.clear();
     for (unsigned i = 0; i < f.ops_count; ++i) {
         const DbOperand &o = t.ops[f.ops_off + i];
-        if ((o.flags & 0x0C) && !con_implicitos) continue; // implicit|suppressed
+        if ((o.flags & 0x0C) && !con_implicitos)
+            continue; // implicit|suppressed
         /* "No textual" quiere decir que no hace falta escribirlo, no que este
          * prohibido.  Una CONDICION es un operando de la forma -- `CSET`
          * declara destino y condicion -- y el desensamblador la escribe:
@@ -95,12 +96,12 @@ int score_ops(const std::vector<ParsedOp> &user,
         /* Una direccion GENERADA (`agen`) y un acceso a memoria se escriben
          * EXACTAMENTE igual: `[base + indice*escala + desp]`.  La diferencia no
          * esta en el texto, esta en lo que la instruccion hace con el -- `lea`
-         * calcula la direccion y no toca memoria --, asi que quien la sabe es la
-         * FORMA, no el que lee la linea.
+         * calcula la direccion y no toca memoria --, asi que quien la sabe es
+         * la FORMA, no el que lee la linea.
          *
          * Exigir tipo exacto dejaba `lea` sin emparejar en TODAS sus formas: el
-         * texto da `mem` y la forma pide `agen`.  Y `lea` es de las que mas sale
-         * en codigo compilado, ademas de ser la que lleva el calculo de
+         * texto da `mem` y la forma pide `agen`.  Y `lea` es de las que mas
+         * sale en codigo compilado, ademas de ser la que lleva el calculo de
          * direcciones -- justo lo que hace falta para saber a que apunta un
          * puntero.  La DB tenia las 90 entradas `agen` desde el principio; lo
          * que faltaba era que alguien las pudiera alcanzar.
@@ -153,8 +154,7 @@ int score_ops(const std::vector<ParsedOp> &user,
                 s += 1;
                 ++iu;
                 jf = k + 1;
-                if (con_desp && iu < user.size() &&
-                    user[iu].kind == OP_IMM)
+                if (con_desp && iu < user.size() && user[iu].kind == OP_IMM)
                     ++iu;
                 continue;
             }
@@ -284,8 +284,10 @@ const char *simd_cmp_folded_predicate(const std::string &up) {
     static const char *const kPreds[] = {"EQ",  "LT",  "LE",  "UNORD",
                                          "NEQ", "NLT", "NLE", "ORD"};
     static const std::pair<const char *, const char *> kSuffixes[] = {
-        {"SD", "CMPSD_XMM"}, {"SS", "CMPSS"},
-        {"PD", "CMPPD"},     {"PS", "CMPPS"},
+        {"SD", "CMPSD_XMM"},
+        {"SS", "CMPSS"},
+        {"PD", "CMPPD"},
+        {"PS", "CMPPS"},
     };
     if (up.size() <= 5 || up.compare(0, 3, "CMP") != 0) return nullptr;
     for (const auto &suf : kSuffixes) {
@@ -1267,10 +1269,10 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
     }
     /* `ret` a secas es `ret x30`.
      *
-     * La sintaxis de ARM deja implicito el registro de retorno, pero la FORMA lo
-     * declara -- porque la codificacion siempre lo lleva --, asi que la linea
-     * escrita se quedaba con un operando de menos y `ret` salia sin modelar.  Y
-     * `ret` esta al final de cada funcion.
+     * La sintaxis de ARM deja implicito el registro de retorno, pero la FORMA
+     * lo declara -- porque la codificacion siempre lo lleva --, asi que la
+     * linea escrita se quedaba con un operando de menos y `ret` salia sin
+     * modelar.  Y `ret` esta al final de cada funcion.
      *
      * Se completa aqui, que es donde ya vive lo que la sintaxis de cada
      * arquitectura da por sabido -- al lado de los prefijos de repeticion de
@@ -1465,8 +1467,8 @@ AsmInsnSem asm_insn_sem(Isa isa, const std::string &line, uint32_t ua_id) {
                           s.reads); // los regs de direccion se leen
             } else if (o.kind == OP_AGEN) {
                 /* Una direccion GENERADA no accede a memoria: se CALCULA.  Por
-                 * eso no toca `reads_mem`/`writes_mem` -- decir que si es lo que
-                 * convierte una `lea` en una barrera para todo lo que lea o
+                 * eso no toca `reads_mem`/`writes_mem` -- decir que si es lo
+                 * que convierte una `lea` en una barrera para todo lo que lea o
                  * escriba memoria alrededor, cuando no estorba a nada.
                  *
                  * Lo que si hace es LEER los registros que entran en la cuenta.

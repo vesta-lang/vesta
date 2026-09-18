@@ -98,7 +98,6 @@ enum class Role : uint8_t {
  */
 std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces);
 
-
 std::vector<Role> annotate_roles(const std::vector<Piece> &pieces);
 
 /**
@@ -261,7 +260,8 @@ struct ExprBody {
 };
 
 /**
- * @brief `R39b`: junta en `=> e;` el cuerpo cuya unica sentencia es `return e;`.
+ * @brief `R39b`: junta en `=> e;` el cuerpo cuya unica sentencia es `return
+ * e;`.
  *
  * @param pieces [in,out] piezas del fuente; se les pone @c drop y @c glued.
  * @return Los cuerpos juntados, para medirlos y quedarse con los que quepan.
@@ -278,12 +278,10 @@ std::vector<ExprBody> apply_expression_bodies(std::vector<Piece> &pieces);
  * @param options  Ajustes, de los que sale el ancho.
  * @return Las reescrituras de los cuerpos que se quedan, dos por cuerpo.
  */
-std::vector<Rewrite>
-keep_fitting_expression_bodies(std::vector<Piece> &pieces,
-                               const std::vector<ExprBody> &bodies,
-                               const std::vector<Role> &roles,
-                               const Layout &measured,
-                               const FormatOptions &options);
+std::vector<Rewrite> keep_fitting_expression_bodies(
+    std::vector<Piece> &pieces, const std::vector<ExprBody> &bodies,
+    const std::vector<Role> &roles, const Layout &measured,
+    const FormatOptions &options);
 
 /**
  * @brief Un corte de linea decidido por el reparto (`R12`).

@@ -66,11 +66,11 @@ struct AotOptions {
     aot::Tier tier = aot::Tier::BARE; ///< bare|embed|full.
     /// --unwind: como se describe el marco.  Ver @ref UnwindEmit.
     UnwindEmit unwind = UnwindEmit::AUTO;
-    bool freestanding = false;        ///< --freestanding (sin libc).
-    bool no_exceptions = false;       ///< --no-exceptions.
-    bool no_io = false;               ///< --no-io.
-    bool no_mem = false;              ///< --no-mem (sin slab allocator).
-    std::string arch = "x86-64";      ///< --aot-arch: x86-64 | x86-32.
+    bool freestanding = false;      ///< --freestanding (sin libc).
+    bool no_exceptions = false;     ///< --no-exceptions.
+    bool no_io = false;             ///< --no-io.
+    bool no_mem = false;            ///< --no-mem (sin slab allocator).
+    std::string arch = "x86-64";    ///< --aot-arch: x86-64 | x86-32.
     std::string float_isa = "sse2"; ///< --float-isa: sse2|x87|avx|avx512f|auto.
     std::string format;             ///< --format: "" (host) | pe | elf.
     std::string emit;               ///< --emit: "" (exe) | obj | shared | bin.

@@ -75,8 +75,9 @@ CompiledIr compile_ir_to_bytecode(const ir::IrModule &mod,
     /* El nombre sale del CONTENIDO, no de un contador: dos compilaciones del
      * mismo texto usan el mismo intermedio, y dos distintas no se pisan aunque
      * corran a la vez. */
-    const std::string base = dir + "/" + diag_name + "_" +
-                             std::to_string(std::hash<std::string>{}(e.vel_text));
+    const std::string base =
+        dir + "/" + diag_name + "_" +
+        std::to_string(std::hash<std::string>{}(e.vel_text));
 
     // 2) Texto -> `.velb`.  Desde la fuente EN MEMORIA: el texto lo acaba de
     //    producir la linea de arriba, asi que escribirlo para que la siguiente

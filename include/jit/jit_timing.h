@@ -179,8 +179,7 @@ class JitTiming {
 class ScopedJitTimer {
   public:
     explicit ScopedJitTimer(const char *name) noexcept
-        : name_(name), t0_(std::chrono::steady_clock::now()),
-          depth_(depth()) {
+        : name_(name), t0_(std::chrono::steady_clock::now()), depth_(depth()) {
         set_depth(static_cast<uint16_t>(depth_ + 1));
     }
 

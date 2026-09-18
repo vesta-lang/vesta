@@ -22,7 +22,7 @@
 #include "vx/collection_intrinsics.h"
 #include "vx/comptime/comptime_introspect.h"
 #include "vx/comptime/comptime_vm.h" // la maquina de compilacion, para saber si HAY
-#include "vx/diag/diag_catalog.h"    // el texto sale del catalogo, nunca a mano
+#include "vx/diag/diag_catalog.h" // el texto sale del catalogo, nunca a mano
 #include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
@@ -503,10 +503,9 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
     /* Con SOBRECARGA, buscar por nombre devuelve una cualquiera de las que lo
      * comparten -- y de esta firma salen el tipo de retorno y como se
      * empaquetan los argumentos --.  Manda la que el comprobador resolvio. */
-    const FunctionSig *callee_sig =
-        e->resolved_sig == ast::CallExpr::kNoSig
-            ? tc_.function_sig_by_name(id->name)
-            : tc_.function_sig_at(e->resolved_sig);
+    const FunctionSig *callee_sig = e->resolved_sig == ast::CallExpr::kNoSig
+                                        ? tc_.function_sig_by_name(id->name)
+                                        : tc_.function_sig_at(e->resolved_sig);
     if (callee_sig == nullptr) callee_sig = tc_.function_sig_by_name(id->name);
 
     /* El SIMBOLO al que va esta llamada, que no siempre es el nombre escrito:
@@ -518,11 +517,11 @@ ir::IrValueId Lowering::lower_call(ast::CallExpr *e) {
      * modulo lleva ahi su label (`lib__foo`) --, pero esas se registran en las
      * tablas por su nombre PUBLICO.  Sin la condicion, buscarlas por su label
      * no encontraba nada y se les daba el tipo de retorno por defecto. */
-    const std::string &callee_sym =
-        callee_sig != nullptr && callee_sig->is_overloaded &&
-                !callee_sig->mangled_label.empty()
-            ? callee_sig->mangled_label
-            : id->name;
+    const std::string &callee_sym = callee_sig != nullptr &&
+                                            callee_sig->is_overloaded &&
+                                            !callee_sig->mangled_label.empty()
+                                        ? callee_sig->mangled_label
+                                        : id->name;
 
     // Resolver tipo de retorno.
     ir::IrType ret_ir = ir::IrType::I64;

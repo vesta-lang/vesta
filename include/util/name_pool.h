@@ -74,7 +74,9 @@ inline const std::string kEmptyName;
  *
  * @return Puntero a la cadena vacia compartida; nunca nulo.
  */
-inline const std::string *empty_name() noexcept { return &kEmptyName; }
+inline const std::string *empty_name() noexcept {
+    return &kEmptyName;
+}
 
 } // namespace util
 

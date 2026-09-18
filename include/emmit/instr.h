@@ -134,13 +134,14 @@ struct Operand {
     /**
      * @brief El nombre, solo con Label o SymRef.  Nunca nulo.
      *
-     * UN PUNTERO AL POZO y no una cadena propia: era un `std::string`, treinta y
-     * dos bytes en cada operando de cada instruccion, y medido sobre un proyecto
-     * de 144.000 lineas solo unas 24.000 de los millones de operandos emitidos
-     * llevan nombre.  Los demas pagaban la cadena para dejarla vacia.
+     * UN PUNTERO AL POZO y no una cadena propia: era un `std::string`, treinta
+     * y dos bytes en cada operando de cada instruccion, y medido sobre un
+     * proyecto de 144.000 lineas solo unas 24.000 de los millones de operandos
+     * emitidos llevan nombre.  Los demas pagaban la cadena para dejarla vacia.
      *
-     * De paso deja de pedirse memoria por nombre repetido: una etiqueta a la que
-     * saltan veinte instrucciones se aloja UNA vez.  Ver @ref intern_operand_name.
+     * De paso deja de pedirse memoria por nombre repetido: una etiqueta a la
+     * que saltan veinte instrucciones se aloja UNA vez.  Ver @ref
+     * intern_operand_name.
      */
     const std::string *name = nullptr;
 
@@ -217,10 +218,11 @@ inline constexpr int kMaxOperandos = 4;
  * acabar donde ya estaban.
  */
 /* EL ORDEN NO ES ESTETICO.  `ops` y el `std::string` se alinean a ocho, asi que
- * cualquier escalar suelto entre ellos deja su hueco de relleno multiplicado por
- * todas las instrucciones del programa.  Con `mnem` delante de `ops` y los demas
- * detras -- que era el orden natural de escribirlo -- se perdian seis bytes tras
- * el mnemonico y cuatro antes del stackmap: diez de cada instruccion.
+ * cualquier escalar suelto entre ellos deja su hueco de relleno multiplicado
+ * por todas las instrucciones del programa.  Con `mnem` delante de `ops` y los
+ * demas detras -- que era el orden natural de escribirlo -- se perdian seis
+ * bytes tras el mnemonico y cuatro antes del stackmap: diez de cada
+ * instruccion.
  *
  * Juntos delante caben en el relleno que `ops` iba a dejar igualmente, y la
  * instruccion pasa de 280 bytes a 272 sin quitar ni un campo. */

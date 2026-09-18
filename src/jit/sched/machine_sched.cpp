@@ -130,13 +130,11 @@ MemRef extract_memref(const MInstr &mi, const MEffects &e,
          * del imm64 del fallback (`IMM64_IDX`), que no es ningun
          * desplazamiento -- y ahi no hay fusion posible, porque la direccion
          * viaja entera al runtime. */
-        r.disp = mi.op == MOp::LOAD    ? (mi.src2.kind == MOperandKind::IMM32
-                                              ? mi.src2.value
-                                              : 0)
-                 : mi.op == MOp::STORE ? (mi.dst.kind == MOperandKind::IMM32
-                                              ? mi.dst.value
-                                              : 0)
-                                       : 0;
+        r.disp = mi.op == MOp::LOAD
+                     ? (mi.src2.kind == MOperandKind::IMM32 ? mi.src2.value : 0)
+                 : mi.op == MOp::STORE
+                     ? (mi.dst.kind == MOperandKind::IMM32 ? mi.dst.value : 0)
+                     : 0;
         // LOAD: flags=(width<<1)|signed; STORE: flags=width.
         const int w = (mi.op == MOp::LOAD || mi.op == MOp::LOAD_VM)
                           ? (mi.flags >> 1)

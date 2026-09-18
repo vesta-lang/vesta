@@ -148,16 +148,15 @@ enum class RelocKind : uint8_t {
            ///< seccion (.tls), no la VA.  El acceso suma este offset a la base
            ///< del bloque TLS (cargada desde el TEB en runtime).
     ARM64_CALL26 =
-        6, ///< AArch64 BL/B: parchea imm26 = (target - site) >> 2 en la
-           ///< instruccion de 32 bits del sitio (R_AARCH64_CALL26/JUMP26).
-    RVA32 =
-        7, ///< desplazamiento de 32 bits DESDE LA BASE DE LA IMAGEN, no desde
-           ///< el sitio: *(uint32*)site = target_va - image_base.  Es lo que
-           ///< piden las tablas que lee el propio sistema -- cada
-           ///< `RUNTIME_FUNCTION` de `.pdata` son tres --, y por eso no vale
-           ///< ni REL32 (relativa al sitio) ni IMM32 (la direccion entera).
-           ///< Solo tiene sentido en PE; en ELF el emisor la rechaza en vez
-           ///< de escribir un numero que parezca bueno.
+        6,     ///< AArch64 BL/B: parchea imm26 = (target - site) >> 2 en la
+               ///< instruccion de 32 bits del sitio (R_AARCH64_CALL26/JUMP26).
+    RVA32 = 7, ///< desplazamiento de 32 bits DESDE LA BASE DE LA IMAGEN, no
+               ///< desde el sitio: *(uint32*)site = target_va - image_base.  Es
+               ///< lo que piden las tablas que lee el propio sistema -- cada
+               ///< `RUNTIME_FUNCTION` de `.pdata` son tres --, y por eso no
+               ///< vale ni REL32 (relativa al sitio) ni IMM32 (la direccion
+               ///< entera). Solo tiene sentido en PE; en ELF el emisor la
+               ///< rechaza en vez de escribir un numero que parezca bueno.
 };
 
 /**
@@ -166,10 +165,10 @@ enum class RelocKind : uint8_t {
  *        @c __start_/@c __stop_ del linker).
  */
 struct RelocTarget {
-    int section = 0;         ///< seccion objetivo.
-    uint64_t offset = 0;     ///< offset dentro de la seccion (modo ADDR).
-    bool is_size = false;    ///< true => el valor es el TAMANO de la seccion.
-    bool is_end = false;     ///< true => el valor es VA(seccion)+tamano (fin).
+    int section = 0;      ///< seccion objetivo.
+    uint64_t offset = 0;  ///< offset dentro de la seccion (modo ADDR).
+    bool is_size = false; ///< true => el valor es el TAMANO de la seccion.
+    bool is_end = false;  ///< true => el valor es VA(seccion)+tamano (fin).
     /// true => el valor es la BASE DE LA IMAGEN (`__ImageBase` en PE).
     bool is_imagebase = false;
     std::string extern_name; ///< no vacio => simbolo EXTERNO (libc); resuelve

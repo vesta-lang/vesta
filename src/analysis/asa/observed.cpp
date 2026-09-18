@@ -162,8 +162,7 @@ bool straight_line_bulk_fact(FactStore &store, const ir::IrFunction &fn,
     const ir::IrBlock &bb = fn.blocks[b.block];
     if (b.instrs.front() < bb.instrs.size())
         f.seal.origin.site =
-            Anchor{Anchor::Kind::Line,
-                   bb.instrs[b.instrs.front()].source_line};
+            Anchor{Anchor::Kind::Line, bb.instrs[b.instrs.front()].source_line};
 
     f.seal.certainty = Certainty::Proven;
     f.seal.origin.source = source;

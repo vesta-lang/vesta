@@ -109,10 +109,11 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     const analysis::AsmBindingFacts &lig = *ligp;
     std::vector<std::pair<std::string, std::string>> clases;
     {
-        // La decision de medir es de QUIEN mide: el cronometro es una utilidad y
-    // no sabe bajo que bandera vive cada uno de sus usuarios.
-    util::CronoTramo crono__("  effects:build classes",
-                             util::flag_on(util::FlagId::Times));
+        // La decision de medir es de QUIEN mide: el cronometro es una utilidad
+        // y
+        // no sabe bajo que bandera vive cada uno de sus usuarios.
+        util::CronoTramo crono__("  effects:build classes",
+                                 util::flag_on(util::FlagId::Times));
         clases.reserve(lig.ligaduras.size());
         for (const analysis::LigaduraAsm &l : lig.ligaduras)
             clases.emplace_back(l.marcador, l.clase);
@@ -161,7 +162,7 @@ static EffectAnalysisResult opaque_asm_effects(const ir::IrFunction &fn,
     {
         /* En su propio bloque: mide SOLO el analisis del texto del bloque. */
         util::CronoTramo crono__("  effects:analyze asm block",
-                             util::flag_on(util::FlagId::Times));
+                                 util::flag_on(util::FlagId::Times));
         e = vx::asm_analyze_block(texto_asm, vx::asm_arch_actual(), clases);
     }
     /* Se declara SOLO lo que el bloque hace.  Antes, cualquier asm que tocara
@@ -592,7 +593,8 @@ LocSet reach_through_param(const SemanticEffects &callee_eff,
                            const analysis::PointsTo &pt, size_t param,
                            bool &complete) {
     LocSet out;
-    const LocSet *const sets[] = {&callee_eff.mem.reads, &callee_eff.mem.writes};
+    const LocSet *const sets[] = {&callee_eff.mem.reads,
+                                  &callee_eff.mem.writes};
     for (const LocSet *s : sets) {
         if (s->is_top) {
             // Ya venia sin acotar: puede alcanzar cualquier cosa, y eso incluye

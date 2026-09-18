@@ -23,7 +23,7 @@
 
 #include "analysis/asa/fact_base.h"
 #include "ir/ssa_ir.h"
-#include "vx/compiler.h"      // CompileOptions: la configuracion que entra en la clave
+#include "vx/compiler.h" // CompileOptions: la configuracion que entra en la clave
 #include "vx/project_cache.h" // asa_facts_key / asa_facts_path_for_stage
 
 #include "analysis/asa/fact_file.h" // serialize / read_facts: la cache en disco
@@ -154,7 +154,8 @@ static void test_reuse_same_version() {
     const size_t after_first = base.computations();
     CHECK(after_first >= 1, "la primera pregunta computa");
 
-    for (int i = 0; i < 5; ++i) (void)base.structure(mod.functions[0]);
+    for (int i = 0; i < 5; ++i)
+        (void)base.structure(mod.functions[0]);
     CHECK(base.computations() == after_first,
           "cinco preguntas mas no computan ninguna vez");
     CHECK(base.queries() >= 6, "pero las preguntas SI se cuentan");
@@ -330,9 +331,10 @@ static void test_facts_path_per_stage() {
     CHECK(pre.find(".vxfacts") != std::string::npos &&
               post.find(".vxfacts") != std::string::npos,
           "y los dos siguen siendo ficheros de hechos");
-    CHECK(vx::asa_facts_path_for_stage(std::string(),
-                                       analysis::asa::kStagePreOpt).empty(),
-          "sin ruta base no se inventa ninguna: es 'no tocar disco'");
+    CHECK(
+        vx::asa_facts_path_for_stage(std::string(), analysis::asa::kStagePreOpt)
+            .empty(),
+        "sin ruta base no se inventa ninguna: es 'no tocar disco'");
 }
 
 // --------------------------------------------------------------------------
@@ -341,8 +343,8 @@ static void test_facts_path_per_stage() {
 //    Un dominio que no lo dice se acepta de disco sin comprobar y, peor, en el
 //    lector NI SIQUIERA PUEDE CADUCAR -- `caduco` solo se marca si la huella no
 //    es cero --.  Su unica proteccion era que la puerta del modulo fuese
-//    gruesa, asi que en cuanto esa se afine (granularidad por funcion) empezaria
-//    a servir hechos rancios en silencio.
+//    gruesa, asi que en cuanto esa se afine (granularidad por funcion)
+//    empezaria a servir hechos rancios en silencio.
 //
 //    Este test es el que impide que vuelva a colarse uno: anadir un dominio sin
 //    declarar sus entradas lo rompe.
@@ -367,7 +369,8 @@ static void test_every_domain_declares_inputs() {
         if (!found) {
             ++g_fail;
             std::printf("FALLO: el dominio '%s' no declara de que depende; "
-                        "se aceptaria de disco sin comprobar\n", d);
+                        "se aceptaria de disco sin comprobar\n",
+                        d);
         }
         ++g_checks;
     }
@@ -397,11 +400,11 @@ static void test_declaring_less_invalidates_less() {
         return 0;
     };
 
-    CHECK(key_of_domain(keys_a,asa::kProducerRanges) !=
-              key_of_domain(keys_b,asa::kProducerRanges),
+    CHECK(key_of_domain(keys_a, asa::kProducerRanges) !=
+              key_of_domain(keys_b, asa::kProducerRanges),
           "cambiar el codigo mueve la huella de quien mira el codigo");
-    CHECK(key_of_domain(keys_a,asa::kProducerLayout) ==
-              key_of_domain(keys_b,asa::kProducerLayout),
+    CHECK(key_of_domain(keys_a, asa::kProducerLayout) ==
+              key_of_domain(keys_b, asa::kProducerLayout),
           "pero NO la de quien solo mira los datos estaticos");
 }
 
@@ -455,7 +458,8 @@ static void test_partial_load_reuses_work() {
     written.add(fact_about("g"));
 
     std::vector<asa::DomainCost> keys = asa::current_inputs(a);
-    for (asa::DomainCost &c : keys) c.recomputable = false; // que se guarde
+    for (asa::DomainCost &c : keys)
+        c.recomputable = false; // que se guarde
 
     const std::vector<uint8_t> bytes = asa::serialize(
         written, 0x1234u, asa::CacheLevel::All, keys, /*compiler*/ 0x99u);
@@ -471,7 +475,8 @@ static void test_partial_load_reuses_work() {
         asa::read_facts(bytes.data(), bytes.size(), 0x1234u, read, keys_now,
                         /*compiler*/ 0x99u);
     CHECK(r.ok, "el fichero se leyo");
-    CHECK(r.stale == 0, "el registro NO se tira entero: solo cambio una funcion");
+    CHECK(r.stale == 0,
+          "el registro NO se tira entero: solo cambio una funcion");
     CHECK(r.partial_domains == 1, "se leyo a medias, y queda dicho");
     CHECK(r.facts == 1, "entra el hecho de `f`");
     CHECK(r.stale_facts == 1, "y se queda fuera el de `g`");
@@ -501,7 +506,8 @@ static void test_all_stale_is_whole_record() {
     written.add(fact_about("f"));
     written.add(fact_about("g"));
     std::vector<asa::DomainCost> keys = asa::current_inputs(a);
-    for (asa::DomainCost &c : keys) c.recomputable = false;
+    for (asa::DomainCost &c : keys)
+        c.recomputable = false;
     const std::vector<uint8_t> bytes =
         asa::serialize(written, 0x1234u, asa::CacheLevel::All, keys, 0x99u);
 
@@ -572,8 +578,8 @@ static void test_producer_skips_reused_function() {
 
     // Lo que haria una compilacion entera, sin cache: se produce todo.
     FactStore full;
-    const auto s_full = asa::produce(mod, full, {asa::kProducerRanges},
-                                     asa::kStagePreOpt);
+    const auto s_full =
+        asa::produce(mod, full, {asa::kProducerRanges}, asa::kStagePreOpt);
     CHECK(s_full.size() == 1, "corre solo el dominio pedido");
     const uint32_t looked_full = s_full.empty() ? 0 : s_full[0].looked_at;
     CHECK(s_full.empty() || s_full[0].reused == 0,
@@ -582,8 +588,8 @@ static void test_producer_skips_reused_function() {
     // Y ahora lo mismo diciendo que `f` ya esta.
     FactStore partial;
     partial.mark_function(asa::kProducerRanges, asa::kStagePreOpt, "f");
-    const auto s_part = asa::produce(mod, partial, {asa::kProducerRanges},
-                                     asa::kStagePreOpt);
+    const auto s_part =
+        asa::produce(mod, partial, {asa::kProducerRanges}, asa::kStagePreOpt);
     CHECK(s_part.size() == 1, "el dominio corre igual: no esta marcado entero");
     if (s_part.empty()) return;
     CHECK(s_part[0].reused == 1, "y se salta UNA funcion, la que ya estaba");

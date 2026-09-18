@@ -158,8 +158,8 @@ bool FileNodeStore::put(const StoredNode &node) {
     }
     /* El nodo ya esta en disco, asi que entra en lo que sabemos de su
      * subcarpeta.  Sin esto, preguntar por el DESPUES de guardarlo diria que no
-     * esta -- y se guardaria otra vez --: la cache dejaria de describir el disco
-     * en el momento en que nosotros mismos lo cambiamos. */
+     * esta -- y se guardaria otra vez --: la cache dejaria de describir el
+     * disco en el momento en que nosotros mismos lo cambiamos. */
     {
         const std::string hex = node.header.hash.to_hex();
         const std::string prefix = hex.substr(0, 2);
@@ -210,9 +210,9 @@ const std::unordered_set<std::string> &
 FileNodeStore::names_in_(const std::string &prefix) const {
     auto it = by_prefix_.find(prefix);
     if (it != by_prefix_.end()) return it->second;
-    /* Primera pregunta de este prefijo: se lee el directorio ENTERO y se guarda.
-     * Un recorrido de directorio cuesta parecido a un `stat`, asi que cambiar N
-     * consultas por una es la diferencia completa. */
+    /* Primera pregunta de este prefijo: se lee el directorio ENTERO y se
+     * guarda. Un recorrido de directorio cuesta parecido a un `stat`, asi que
+     * cambiar N consultas por una es la diferencia completa. */
     std::unordered_set<std::string> names;
     /* Por NUESTRA via, no por `std::filesystem::directory_iterator`: la de la
      * biblioteca pasa por el CRT y acaba preguntando de mas.  @see

@@ -442,8 +442,8 @@ void Lexer::skip_trivia() {
                 // Comentario de bloque: avanzar hasta "*/" o EOF.
                 // Mantenemos el track de linea para diagnosticar
                 // comentarios sin cerrar.
-                const SourceLoc start{file_name_, line_, column_, (uint32_t)pos_,
-                                      2};
+                const SourceLoc start{file_name_, line_, column_,
+                                      (uint32_t)pos_, 2};
                 pos_ += 2;
                 column_ += 2;
                 while (pos_ < source_.size()) {
@@ -1165,7 +1165,8 @@ Token Lexer::lex_string(bool raw) {
                 }
                 error_at(start,
                          "string triple-quoted interpolado sin cerrar (EOF)");
-                SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_, 0};
+                SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_,
+                                  0};
                 string_emit_queue_.push_back(
                     make_token(TokenKind::ISTR_END, "", loc_end));
                 Token first = std::move(string_emit_queue_.front());
@@ -1421,8 +1422,8 @@ Token Lexer::lex_string(bool raw) {
                     string_emit_queue_.push_back(std::move(tt));
                 }
                 if (string_done) {
-                    SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_,
-                                      0};
+                    SourceLoc loc_end{file_name_, line_, column_,
+                                      (uint32_t)pos_, 0};
                     string_emit_queue_.push_back(
                         make_token(TokenKind::ISTR_END, "", loc_end));
                     // Devolvemos el primer token de la cola (ISTR_BEGIN
@@ -1435,8 +1436,8 @@ Token Lexer::lex_string(bool raw) {
                 if (!nested_interp) {
                     error_at(start, "string literal interpolado sin cerrar");
                     // Cierre defensivo: ISTR_END para mantener parser sano.
-                    SourceLoc loc_end{file_name_, line_, column_, (uint32_t)pos_,
-                                      0};
+                    SourceLoc loc_end{file_name_, line_, column_,
+                                      (uint32_t)pos_, 0};
                     string_emit_queue_.push_back(
                         make_token(TokenKind::ISTR_END, "", loc_end));
                     Token first = std::move(string_emit_queue_.front());

@@ -437,11 +437,11 @@ static void an_outer_loop_is_recognized_too() {
     IrBlock entry; // b0
     entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(vid(0),0));
+    entry.instrs.push_back(cte(vid(0), 0));
     /* El arranque de `j` y el paso viven en el preheader del de fuera, que es
      * donde los deja el frontend. */
-    entry.instrs.push_back(cte(vid(6),0));
-    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(cte(vid(6), 0));
+    entry.instrs.push_back(cte(vid(5), 1));
     entry.instrs.push_back(br(blk(1)));
 
     IrBlock outer; // b1: for (i = 0; i < 32; i++)
@@ -452,7 +452,7 @@ static void an_outer_loop_is_recognized_too() {
         phi.phi_args.push_back({vid(0), blk(0)});
         phi.phi_args.push_back({vid(4), blk(4)});
         outer.instrs.push_back(phi);
-        outer.instrs.push_back(cte(vid(2),32));
+        outer.instrs.push_back(cte(vid(2), 32));
         IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
         cmp.operands.push_back(vid(1));
         cmp.operands.push_back(vid(2));
@@ -470,7 +470,7 @@ static void an_outer_loop_is_recognized_too() {
         phi.phi_args.push_back({vid(6), blk(1)});
         phi.phi_args.push_back({vid(10), blk(3)});
         inner.instrs.push_back(phi);
-        inner.instrs.push_back(cte(vid(8),16));
+        inner.instrs.push_back(cte(vid(8), 16));
         IrInstr cmp = val(IrOp::CMP_LT, vid(9), IrType::BOOL);
         cmp.operands.push_back(vid(7));
         cmp.operands.push_back(vid(8));
@@ -611,9 +611,9 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
     IrBlock entry;
     entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(vid(0),0));
-    entry.instrs.push_back(cte(vid(6),0));
-    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(cte(vid(0), 0));
+    entry.instrs.push_back(cte(vid(6), 0));
+    entry.instrs.push_back(cte(vid(5), 1));
     entry.instrs.push_back(br(blk(1)));
 
     IrBlock outer;
@@ -624,7 +624,7 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
         phi.phi_args.push_back({vid(0), blk(0)});
         phi.phi_args.push_back({vid(4), blk(4)});
         outer.instrs.push_back(phi);
-        outer.instrs.push_back(cte(vid(2),64));
+        outer.instrs.push_back(cte(vid(2), 64));
         IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
         cmp.operands.push_back(vid(1));
         cmp.operands.push_back(vid(2));
@@ -697,9 +697,8 @@ static void a_constant_outer_loop_does_not_square_the_cost() {
     trip.trip = 64;
     analysis::asa::Fact f;
     CHECK(analysis::asa::loop_trip_fact(
-              store, fn, lf.header_block_of(lf.innermost(blk(1))),
-              trip, analysis::asa::kStagePreOpt, analysis::asa::Source::Static,
-              f),
+              store, fn, lf.header_block_of(lf.innermost(blk(1))), trip,
+              analysis::asa::kStagePreOpt, analysis::asa::Source::Static, f),
           "hay hecho que publicar");
     store.add(std::move(f));
 
@@ -746,8 +745,8 @@ static void a_multiplying_loop_is_logarithmic() {
         IrBlock entry;
         entry.id = blk(0);
         entry.name = "entry";
-        entry.instrs.push_back(cte(vid(0),1));
-        entry.instrs.push_back(cte(vid(5),k));
+        entry.instrs.push_back(cte(vid(0), 1));
+        entry.instrs.push_back(cte(vid(5), k));
         entry.instrs.push_back(br(blk(1)));
 
         IrBlock header;
@@ -877,8 +876,8 @@ static void a_counting_down_loop_is_counted_too() {
         IrBlock entry;
         entry.id = blk(0);
         entry.name = "entry";
-        entry.instrs.push_back(cte(vid(0),(uint64_t)I));
-        entry.instrs.push_back(cte(vid(5),S));
+        entry.instrs.push_back(cte(vid(0), (uint64_t)I));
+        entry.instrs.push_back(cte(vid(5), S));
         entry.instrs.push_back(br(blk(1)));
 
         IrBlock header;
@@ -889,7 +888,7 @@ static void a_counting_down_loop_is_counted_too() {
             phi.phi_args.push_back({vid(0), blk(0)});
             phi.phi_args.push_back({vid(4), blk(2)});
             header.instrs.push_back(phi);
-            header.instrs.push_back(cte(vid(2),0));
+            header.instrs.push_back(cte(vid(2), 0));
             IrInstr cmp = val(cmp_op, vid(3), IrType::BOOL);
             cmp.operands.push_back(vid(1));
             cmp.operands.push_back(vid(2));
@@ -1023,8 +1022,8 @@ static void the_cost_asks_for_the_reason_not_the_code() {
     IrBlock entry;
     entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(vid(0),0));
-    entry.instrs.push_back(cte(vid(5),1));
+    entry.instrs.push_back(cte(vid(0), 0));
+    entry.instrs.push_back(cte(vid(5), 1));
     entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
@@ -1035,7 +1034,7 @@ static void the_cost_asks_for_the_reason_not_the_code() {
         phi.phi_args.push_back({vid(0), blk(0)});
         phi.phi_args.push_back({vid(4), blk(2)});
         header.instrs.push_back(phi);
-        header.instrs.push_back(cte(vid(2),8));
+        header.instrs.push_back(cte(vid(2), 8));
         IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
         cmp.operands.push_back(vid(1));
         cmp.operands.push_back(vid(2));
@@ -1149,9 +1148,9 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
     IrBlock entry;
     entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(vid(0),0));
-    entry.instrs.push_back(cte(vid(5),1));
-    entry.instrs.push_back(cte(vid(6),7));
+    entry.instrs.push_back(cte(vid(0), 0));
+    entry.instrs.push_back(cte(vid(5), 1));
+    entry.instrs.push_back(cte(vid(6), 7));
     entry.instrs.push_back(br(blk(1)));
 
     IrBlock header;
@@ -1162,7 +1161,7 @@ static void an_early_exit_still_leaves_the_loop_bounded() {
         phi.phi_args.push_back({vid(0), blk(0)});
         phi.phi_args.push_back({vid(4), blk(3)});
         header.instrs.push_back(phi);
-        header.instrs.push_back(cte(vid(2),32));
+        header.instrs.push_back(cte(vid(2), 32));
         IrInstr cmp = val(IrOp::CMP_LT, vid(3), IrType::BOOL);
         cmp.operands.push_back(vid(1));
         cmp.operands.push_back(vid(2));
@@ -1284,9 +1283,9 @@ static void a_do_while_is_counted_with_one_more_turn() {
     IrBlock entry;
     entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(vid(0),0));
-    entry.instrs.push_back(cte(vid(2),1));
-    entry.instrs.push_back(cte(vid(4),24));
+    entry.instrs.push_back(cte(vid(0), 0));
+    entry.instrs.push_back(cte(vid(2), 1));
+    entry.instrs.push_back(cte(vid(4), 24));
     entry.instrs.push_back(br(blk(1)));
 
     // b1 es la CABECERA -- tiene las PHIs -- y termina en salto incondicional.
@@ -1380,9 +1379,9 @@ static void a_self_loop_is_counted_too() {
     IrBlock entry;
     entry.id = blk(0);
     entry.name = "entry";
-    entry.instrs.push_back(cte(vid(0),0));
-    entry.instrs.push_back(cte(vid(3),1));
-    entry.instrs.push_back(cte(vid(6),24));
+    entry.instrs.push_back(cte(vid(0), 0));
+    entry.instrs.push_back(cte(vid(3), 1));
+    entry.instrs.push_back(cte(vid(6), 24));
     entry.instrs.push_back(br(blk(1)));
 
     IrBlock solo;
@@ -1462,7 +1461,8 @@ int main() {
         fn.name = "oneloop";
         fn.blocks.push_back(block(blk(0), "entry", br(blk(1))));
         fn.blocks.push_back(block(blk(1), "header", brcond(blk(2), blk(3))));
-        fn.blocks.push_back(block(blk(2), "body", br(blk(1)))); // back-edge 2->1
+        fn.blocks.push_back(
+            block(blk(2), "body", br(blk(1)))); // back-edge 2->1
         fn.blocks.push_back(block(blk(3), "exit", ret()));
         LoopFacts f = compute_loop_facts(fn);
         CHECK(f.loop_count == 1, "loop_count != 1");

@@ -268,7 +268,8 @@ static_assert(sizeof(OooJob) <= 64,
  */
 struct OooQueue {
     alignas(64) std::atomic<uint32_t> head{0}; ///< solo lo escribe el productor
-    alignas(64) std::atomic<uint32_t> tail{0}; ///< solo lo escribe el consumidor
+    alignas(64) std::atomic<uint32_t> tail{
+        0}; ///< solo lo escribe el consumidor
     alignas(64) std::atomic<uint32_t> stop{0}; ///< que se pare el ayudante
     /**
      * @brief El ayudante esta DORMIDO y hay que avisarle.
@@ -368,8 +369,8 @@ inline void ooo_release_owner(ProcessVM *process) {
  * ayudante decrementaba al terminar.  O sea una SEGUNDA linea de cache
  * disputada entre los dos nucleos -- ademas de `head` y `tail` --, y dos
  * lectura-modificacion-escritura por entrega, que son mucho mas caras que una
- * lectura.  En el perfil de hardware, `fetch_add`/`fetch_sub` salian con 0,216 s
- * de los 2,30 s que costaba coordinar.
+ * lectura.  En el perfil de hardware, `fetch_add`/`fetch_sub` salian con 0,216
+ * s de los 2,30 s que costaba coordinar.
  *
  * Y era redundante: `tail` ya dice lo mismo.  El ayudante lo publica DESPUES de
  * terminar cada encargo y con `release`, asi que ver `tail` pasado de esta
@@ -461,7 +462,8 @@ void ooo_wake();
      * Que la lectura de fuera sea relajada deja abierta una ventana teorica --
      * verla a cero justo cuando se acaba de poner a uno --, y para eso esta el
      * plazo de `ooo_idle_wait`: el sintoma seria un retraso, no un bloqueo. */
-    if (__builtin_expect(g_ooo.parked.load(std::memory_order_relaxed) != 0, 0)) {
+    if (__builtin_expect(g_ooo.parked.load(std::memory_order_relaxed) != 0,
+                         0)) {
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (g_ooo.parked.load(std::memory_order_relaxed) != 0) ooo_wake();
     }
@@ -478,9 +480,8 @@ void ooo_wake();
  *         no existe o si lo tiene cogido otro proceso.  En los tres casos el
  *         llamante ejecuta el paquete el mismo, que siempre es correcto.
  */
-[[gnu::always_inline]] inline bool ooo_push(ProcessVM *process,
-                                            const DecodedInstr *instr,
-                                            uint32_t n) {
+[[gnu::always_inline]] inline bool
+ooo_push(ProcessVM *process, const DecodedInstr *instr, uint32_t n) {
     if (__builtin_expect(!g_ooo_started.load(std::memory_order_acquire), 0)) {
         /* Arrancarlo y SEGUIR.  No hace falta esperar a que el hilo este
          * girando: el encargo se queda en la cola y lo coge en cuanto arranque.
@@ -542,9 +543,10 @@ void ooo_wake();
  * @return true si entro en la cola.  Si no, el paquete se queda crudo, que es
  *         correcto -- reordenar y fusionar son optimizaciones, no semantica --.
  */
-[[gnu::always_inline]] inline bool
-ooo_push_prepare(ProcessVM *process, Bundle *target, Bundle *scratch,
-                 uint64_t next_pc) {
+[[gnu::always_inline]] inline bool ooo_push_prepare(ProcessVM *process,
+                                                    Bundle *target,
+                                                    Bundle *scratch,
+                                                    uint64_t next_pc) {
     if (__builtin_expect(!g_ooo_started.load(std::memory_order_acquire), 0)) {
         ooo_start();
         return false;
@@ -560,8 +562,7 @@ ooo_push_prepare(ProcessVM *process, Bundle *target, Bundle *scratch,
 
     const uint32_t h = g_ooo.head.load(std::memory_order_relaxed);
     const uint32_t t = g_ooo.tail.load(std::memory_order_acquire);
-    if (h - t >= kOooSlots)
-        return false;
+    if (h - t >= kOooSlots) return false;
 
     OooJob &slot = g_ooo.job[h & (kOooSlots - 1)];
     slot.proc = process;
@@ -602,8 +603,7 @@ ooo_push_prepare(ProcessVM *process, Bundle *target, Bundle *scratch,
 
     const uint32_t h = g_ooo.head.load(std::memory_order_relaxed);
     const uint32_t t = g_ooo.tail.load(std::memory_order_acquire);
-    if (h - t >= kOooSlots)
-        return false;
+    if (h - t >= kOooSlots) return false;
 
     OooJob &slot = g_ooo.job[h & (kOooSlots - 1)];
     slot.proc = process;
@@ -677,7 +677,8 @@ inline constexpr uint32_t kOooDrainSlack = 4;
 /// Espera a que termine TODO, analisis incluido.  Solo al desmontar: mientras
 /// haya un encargo vivo, el proceso al que apunta tiene que seguir existiendo.
 [[gnu::always_inline]] inline void ooo_drain_all() {
-    while (ooo_pending() != 0) ooo_pause();
+    while (ooo_pending() != 0)
+        ooo_pause();
 }
 
 /// Para el hilo ayudante.  Se llama al terminar el proceso.

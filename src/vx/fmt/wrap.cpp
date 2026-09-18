@@ -97,10 +97,13 @@ static void enforce_chain_all_or_none(const std::vector<Piece> &pieces,
     int depth = 0;
     for (size_t k = first; k <= last; ++k) {
         const TokenKind kind = kind_of(pieces[k]);
-        if (opens_list(kind)) ++depth;
-        else if (closes_list(kind)) --depth;
+        if (opens_list(kind))
+            ++depth;
+        else if (closes_list(kind))
+            --depth;
         else if (depth == 0 && kind == TokenKind::DOT && k > first &&
-                 k + 2 <= last && kind_of(pieces[k + 1]) == TokenKind::IDENTIFIER &&
+                 k + 2 <= last &&
+                 kind_of(pieces[k + 1]) == TokenKind::IDENTIFIER &&
                  kind_of(pieces[k + 2]) == TokenKind::LPAREN)
             up.push_back(k);
     }

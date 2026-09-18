@@ -12,7 +12,8 @@
  *        + INTERPROCEDURAL (los CALL resuelven captura via el summary del
  *        callee, cerrado por punto-fijo).
  */
-// De que modulo es este directorio.  Ver `src/analysis/asa/aggregate_facts.cpp`.
+// De que modulo es este directorio.  Ver
+// `src/analysis/asa/aggregate_facts.cpp`.
 #include "util/report/alloc_csv_c.h"
 
 VESTA_ALLOC_MODULE_HERE("analysis");

@@ -405,8 +405,7 @@ void produce_asm(Production &p) {
                 p.say_unknown({Subject::Kind::Function, f.about.function, 0},
                               analysis::asa::UnknownReason::ShapeNotRecognized,
                               "asm.binding_value_unresolved", kProductorAsm,
-                              p.store.intern(l.marcador),
-                              Scope::everywhere());
+                              p.store.intern(l.marcador), Scope::everywhere());
                 continue;
             }
             Fact b;

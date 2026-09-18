@@ -92,7 +92,7 @@
 #include <thread>
 #include <vector>
 
-#include "emmit/parser_to_bytecode.h"    // el ensamblador: `.vel` -> bytes
+#include "emmit/parser_to_bytecode.h" // el ensamblador: `.vel` -> bytes
 #include "lexer/lexer.h"
 #include "linker/velb_linker_bytecode.h" // y el enlazador: bytes -> .velb
 #include "loader/loader.h"
@@ -116,10 +116,10 @@ namespace {
  * se ha movido.
  */
 enum class Mix {
-    Alu,     ///< aritmetica y logica de 64 bits entre registros
-    Widths,  ///< las mismas, en 8/16/32/64 -- ejercita el despacho por ANCHO
+    Alu,    ///< aritmetica y logica de 64 bits entre registros
+    Widths, ///< las mismas, en 8/16/32/64 -- ejercita el despacho por ANCHO
     Memory, ///< cargas y almacenamientos: pasa por la TLB y la cache de pagina
-    Mixed,   ///< las tres alternadas, que es a lo que se parece un programa
+    Mixed,  ///< las tres alternadas, que es a lo que se parece un programa
     /* Las dos siguientes van DESPUES de `Mixed` a proposito: el cuerpo mixto
      * alterna las tres primeras con `i % 3`, asi que meterlas antes las
      * arrastraria ahi dentro. */
@@ -194,7 +194,8 @@ const char *dispatch_color(bool bundles) {
  */
 enum class Engine : uint8_t {
     Scalar,        ///< sin paquetes, sin reordenar, sin fusionar: el de siempre
-    ScalarReorder, ///< sin paquetes, con el reorden pedido -- control, ver abajo
+    ScalarReorder, ///< sin paquetes, con el reorden pedido -- control, ver
+                   ///< abajo
     ScalarFuse,    ///< sin paquetes, con la fusion pedida -- el otro control
     Bundles,       ///< paquetes, en el orden del programa y sin fusionar
     Reorder,       ///< paquetes + reorden
@@ -203,10 +204,10 @@ enum class Engine : uint8_t {
     /* Y los mismos CON REPARTO entre dos nucleos.  Van al final y no
      * intercalados para no correr los indices de `base[]`, que es posicional:
      * meterlos en medio invalidaria en silencio toda la calibracion. */
-    ScalarOoo,      ///< sin paquetes, con el reparto pedido -- el tercer control
-    BundlesOoo,     ///< paquetes + reparto
-    ReorderOoo,     ///< paquetes + reorden + reparto
-    FuseOoo,        ///< paquetes + fusion + reparto
+    ScalarOoo,  ///< sin paquetes, con el reparto pedido -- el tercer control
+    BundlesOoo, ///< paquetes + reparto
+    ReorderOoo, ///< paquetes + reorden + reparto
+    FuseOoo,    ///< paquetes + fusion + reparto
     FuseReorderOoo, ///< los cuatro ejes a la vez
 };
 constexpr uint32_t kEngines = 12;
@@ -214,24 +215,23 @@ constexpr uint32_t kEngines = 12;
 /* Los SIETE, en el orden en que se miden: las tres combinaciones de los ejes
  * que hacen algo, mas los dos controles.
  *
- * Estan TODAS a proposito.  Con una cadena -- escalar, +reorden, +fusion -- solo
- * se puede leer lo que anade cada eje SOBRE el anterior, y eso da por hecho que
- * no interactuan.  No es cierto: reordenar mueve instrucciones para dejar
- * pegados los pares que la fusion junta, asi que `paq+fusion` a secas y
+ * Estan TODAS a proposito.  Con una cadena -- escalar, +reorden, +fusion --
+ * solo se puede leer lo que anade cada eje SOBRE el anterior, y eso da por
+ * hecho que no interactuan.  No es cierto: reordenar mueve instrucciones para
+ * dejar pegados los pares que la fusion junta, asi que `paq+fusion` a secas y
  * `paq+fus+reord` miden cosas distintas y la diferencia entre las dos ES la
  * interaccion.  Sin las dos filas no se puede ni ver. */
 constexpr Engine kEngineList[kEngines] = {
-    Engine::Scalar,     Engine::ScalarReorder, Engine::ScalarFuse,
-    Engine::Bundles,    Engine::Reorder,       Engine::Fuse,
-    Engine::FuseReorder,
+    Engine::Scalar, Engine::ScalarReorder, Engine::ScalarFuse, Engine::Bundles,
+    Engine::Reorder, Engine::Fuse, Engine::FuseReorder,
     /* El cuarto eje.  Aparte de los otros tres por lo mismo que ellos entre
      * si: repartir un paquete entre dos nucleos y fusionar sus pares no son la
      * misma cosa, y sumadas en una sola fila no se sabria cual aporta que.  Y
      * ademas INTERACTuAN en el sentido contrario a lo que uno diria -- fusionar
      * acorta el paquete, y un paquete mas corto tiene menos que repartir --,
      * asi que `paq+reparto` y `paq+fus+reparto` miden cosas distintas. */
-    Engine::ScalarOoo,  Engine::BundlesOoo,    Engine::ReorderOoo,
-    Engine::FuseOoo,    Engine::FuseReorderOoo};
+    Engine::ScalarOoo, Engine::BundlesOoo, Engine::ReorderOoo, Engine::FuseOoo,
+    Engine::FuseReorderOoo};
 
 /// @brief Nombre corto del motor, para las tablas.
 const char *engine_name(Engine e) {
@@ -310,8 +310,8 @@ const char *mips_color(double mips) {
 /// Un caso del banco: una mezcla con una longitud de bloque recto.
 struct Case {
     Mix mix;
-    const char *shape;  ///< como se llama esta longitud ("apretado", "medio"..)
-    uint64_t body;    ///< instrucciones rectas entre dos ramas
+    const char *shape; ///< como se llama esta longitud ("apretado", "medio"..)
+    uint64_t body;     ///< instrucciones rectas entre dos ramas
     /**
      * @brief Linea base POR MOTOR.  Cero = sin calibrar: informa y no falla.
      *
@@ -393,10 +393,17 @@ struct Case {
  * aguanta; pero con el margen del 25% esas celdas vigilan menos que las demas.
  * Se dice para que nadie lea un verde suyo como garantia. */
 const Case kCases[] = {
-    //                              cuerpo   esc  e+reo  e+fus   paq  p+reo  p+fus  p+f+r
-    {Mix::Alu, "apretado", 0,       {329.7, 324.6, 328.4, 319.1, 327.7, 330.7, 333.3}},
-    {Mix::Alu, "medio", 16,         {317.8, 320.1, 312.4, 346.9, 352.3, 355.7, 353.9}},
-    {Mix::Alu, "cabe en icache", 256, {310.3, 299.8, 305.2, 320.5, 322.2, 336.0, 331.1}},
+    //                              cuerpo   esc  e+reo  e+fus   paq  p+reo
+    //                              p+fus  p+f+r
+    {Mix::Alu,
+     "apretado",
+     0,
+     {329.7, 324.6, 328.4, 319.1, 327.7, 330.7, 333.3}},
+    {Mix::Alu, "medio", 16, {317.8, 320.1, 312.4, 346.9, 352.3, 355.7, 353.9}},
+    {Mix::Alu,
+     "cabe en icache",
+     256,
+     {310.3, 299.8, 305.2, 320.5, 322.2, 336.0, 331.1}},
     /* `no cabe` con paquetes pasa de 3,4 a 71 MIPS al mover la comprobacion de
      * arena llena al PRINCIPIO de `bundle_try_form`: estaba al final, despues
      * de descodificar 32 instrucciones por adelantado, asi que con la arena
@@ -405,17 +412,38 @@ const Case kCases[] = {
      * Hoy los cuatro motores de paquete rondan los 315 MIPS donde el escalar se
      * queda en 85: es el caso donde el paquete mas cunde, porque cada
      * instruccion se volveria a descodificar y el paquete lo evita. */
-    {Mix::Alu, "no cabe", 8188,     { 75.9,  77.9,  78.3, 291.6, 301.1, 288.4, 284.4}},
-    {Mix::Widths, "medio", 16,      {251.4, 268.8, 272.6, 335.3, 315.0, 328.7, 338.7}},
-    {Mix::Widths, "cabe en icache", 256, {229.8, 237.0, 241.4, 309.3, 296.5, 303.9, 300.5}},
-    {Mix::Memory, "medio", 16,      {320.0, 324.3, 322.5, 330.4, 347.0, 340.5, 350.1}},
-    {Mix::Memory, "cabe en icache", 256, {314.0, 314.2, 310.7, 312.6, 308.7, 303.6, 308.7}},
-    {Mix::Mixed, "medio", 16,       {295.6, 293.7, 298.6, 340.0, 351.2, 327.5, 325.4}},
-    {Mix::Mixed, "cabe en icache", 256, {268.4, 267.8, 272.3, 304.0, 299.7, 308.5, 307.0}},
+    {Mix::Alu, "no cabe", 8188, {75.9, 77.9, 78.3, 291.6, 301.1, 288.4, 284.4}},
+    {Mix::Widths,
+     "medio",
+     16,
+     {251.4, 268.8, 272.6, 335.3, 315.0, 328.7, 338.7}},
+    {Mix::Widths,
+     "cabe en icache",
+     256,
+     {229.8, 237.0, 241.4, 309.3, 296.5, 303.9, 300.5}},
+    {Mix::Memory,
+     "medio",
+     16,
+     {320.0, 324.3, 322.5, 330.4, 347.0, 340.5, 350.1}},
+    {Mix::Memory,
+     "cabe en icache",
+     256,
+     {314.0, 314.2, 310.7, 312.6, 308.7, 303.6, 308.7}},
+    {Mix::Mixed,
+     "medio",
+     16,
+     {295.6, 293.7, 298.6, 340.0, 351.2, 327.5, 325.4}},
+    {Mix::Mixed,
+     "cabe en icache",
+     256,
+     {268.4, 267.8, 272.3, 304.0, 299.7, 308.5, 307.0}},
     /* Coma flotante.  `vector` sale por debajo de `float` en escalar: son los
      * mismos mnemonicos sobre cuatro carriles en vez de uno, asi que la
      * diferencia ES el coste de operar empaquetado. */
-    {Mix::Float, "medio", 16,       {309.3, 312.3, 313.1, 467.1, 472.4, 468.4, 475.5}},
+    {Mix::Float,
+     "medio",
+     16,
+     {309.3, 312.3, 313.1, 467.1, 472.4, 468.4, 475.5}},
     /* Recorrido de `vector`, que es donde mas se ha movido todo:
      *
      *            escalar  paquetes
@@ -433,7 +461,10 @@ const Case kCases[] = {
      * El de `ancho` es el que remata: con el ancho fijo, el bucle SIMD se
      * convierte en una o dos operaciones rectas y -- con `always_inline` --
      * desaparece tambien la llamada.  De 232 a 427 en total, un +85%. */
-    {Mix::Vector, "medio", 16,      {304.3, 299.5, 295.1, 424.7, 424.8, 434.4, 430.0}},
+    {Mix::Vector,
+     "medio",
+     16,
+     {304.3, 299.5, 295.1, 424.7, 424.8, 434.4, 430.0}},
 };
 
 /* LA BASE DE `no cabe` CON PAQUETES SON 3,4 MIPS, Y NO ES UNA ERRATA.
@@ -514,12 +545,12 @@ struct SweepBase {
  * una regresion mayor para que salte --.  Si alguna vez se recalibra en una
  * maquina quieta, estas subiran. */
 const SweepBase kSweepBases[] = {
-    {Mix::Alu,     {279.0, 277.0, 279.0, 335.0, 333.0, 331.0, 329.0}},
-    {Mix::Widths,  {229.0, 226.0, 228.0, 314.0, 312.0, 313.0, 310.0}},
-    {Mix::Memory,  {270.0, 272.0, 271.0, 312.0, 307.0, 307.0, 304.0}},
-    {Mix::Mixed,   {209.0, 208.0, 208.0, 311.0, 310.0, 309.0, 308.0}},
-    {Mix::Float,   {254.0, 252.0, 253.0, 427.0, 407.0, 414.0, 399.0}},
-    {Mix::Vector,  {243.0, 244.0, 242.0, 376.0, 360.0, 370.0, 358.0}},
+    {Mix::Alu, {279.0, 277.0, 279.0, 335.0, 333.0, 331.0, 329.0}},
+    {Mix::Widths, {229.0, 226.0, 228.0, 314.0, 312.0, 313.0, 310.0}},
+    {Mix::Memory, {270.0, 272.0, 271.0, 312.0, 307.0, 307.0, 304.0}},
+    {Mix::Mixed, {209.0, 208.0, 208.0, 311.0, 310.0, 309.0, 308.0}},
+    {Mix::Float, {254.0, 252.0, 253.0, 427.0, 407.0, 414.0, 399.0}},
+    {Mix::Vector, {243.0, 244.0, 242.0, 376.0, 360.0, 370.0, 358.0}},
 };
 
 /// Margen de las MEDIAS.  Mas estrecho que @ref kMargin porque promediar doce
@@ -529,8 +560,8 @@ constexpr double kSweepMargin = 0.90;
 
 /// Linea base de la media GLOBAL del barrido.  Cero = sin calibrar.
 /// Recalibrada el 2026-09-06: mediana de cuatro barridos (305,8 / 307,4 / 307,8
-/// / 309,8).  Es la cifra mas robusta de las tres -- promedia los 1008 puntos --
-/// y por eso la que primero avisa de una caida general.
+/// / 309,8).  Es la cifra mas robusta de las tres -- promedia los 1008 puntos
+/// -- y por eso la que primero avisa de una caida general.
 constexpr double kGlobalBase = 307.0;
 
 /**
@@ -596,7 +627,7 @@ std::string generate(uint64_t loops, uint64_t body, Mix mix) {
             case 0: straight += "    adds r" + rn + s2 + ", 3\n"; break;
             case 1: straight += "    subs r" + rn + s2 + ", 1\n"; break;
             default:
-                straight +="    xor r" + rn + s2 + ", r" + otro + s2 + "\n";
+                straight += "    xor r" + rn + s2 + ", r" + otro + s2 + "\n";
             }
             break;
         }
@@ -607,9 +638,9 @@ std::string generate(uint64_t loops, uint64_t body, Mix mix) {
              * -- lo que se quiere medir es el ACIERTO de cache, que es el caso
              * comun; el fallo tiene su propio coste y otra historia. */
             if (i % 2 == 0)
-                straight +="    mov [r14], r" + rn + "\n";
+                straight += "    mov [r14], r" + rn + "\n";
             else
-                straight +="    mov r" + rn + ", [r14]\n";
+                straight += "    mov r" + rn + ", [r14]\n";
             break;
 
         case Mix::Independent: {
@@ -623,7 +654,8 @@ std::string generate(uint64_t loops, uint64_t body, Mix mix) {
             const bool second = ((i / 32u) & 1u) != 0;
             const int base = second ? 8 : 2; // f8..f13 contra f2..f7
             const std::string d = "f" + std::to_string(base + (int)(i % 6));
-            const std::string o = "f" + std::to_string(base + (int)((i + 1) % 6));
+            const std::string o =
+                "f" + std::to_string(base + (int)((i + 1) % 6));
             if (i % 2 == 0)
                 straight += "    fadd " + d + ", " + o + "\n";
             else
@@ -651,8 +683,7 @@ std::string generate(uint64_t loops, uint64_t body, Mix mix) {
              * oscila y se queda acotado.  Una division metida aqui daria 0/0
              * en los carriles altos -- que arrancan a cero -- y lo que se
              * mediria entonces seria el coste de propagar NaN. */
-            const std::string b =
-                (m == Mix::Vector) ? "ymm" : "f";
+            const std::string b = (m == Mix::Vector) ? "ymm" : "f";
             const std::string fr = b + std::to_string((i % 4) + 2);
             const std::string fo = b + std::to_string(((i + 1) % 4) + 2);
             switch (i % 3) {
@@ -792,7 +823,7 @@ bool prepare(const std::string &fuente, const std::string &salida) {
  * @return nanosegundos, o 0 si no llego a terminar dentro del plazo.
  */
 uint64_t run_program(const std::string &velb, Engine engine, uint64_t *r0,
-                  uint64_t *counted) {
+                     uint64_t *counted) {
     // Los cuatro motores de paquete los forman.  Los dos CONTROLES piden
     // reordenar o fusionar SIN paquetes, que es precisamente lo que no puede
     // pasar: sin paquete no hay nada que reordenar ni que fusionar.
@@ -808,7 +839,8 @@ uint64_t run_program(const std::string &velb, Engine engine, uint64_t *r0,
     }
     if (proc == nullptr) return 0;
 
-    for (const auto &s : vm->schedulers) s->has_hooks = false;
+    for (const auto &s : vm->schedulers)
+        s->has_hooks = false;
 
     /* El interruptor del ILP.  Apagado por defecto en el binario que se
      * entrega, asi que sin esta linea el test solo mediria un motor de los
@@ -907,7 +939,7 @@ uint64_t run_program(const std::string &velb, Engine engine, uint64_t *r0,
  * uno midiera a su manera, sus cifras no se podrian comparar entre si.
  */
 double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
-             int repeats, uint64_t *instrs_out) {
+               int repeats, uint64_t *instrs_out) {
     const uint64_t v = body == 0 ? loops : (loops * 4) / (body + 4);
     /* CERO VUELTAS NO SE MIDE, SE DICE.
      *
@@ -946,10 +978,10 @@ double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
      *
      * De ahi se paso a uno por MEDIDA, con nombre unico.  Eso quito el
      * problema, pero con siete motores se genera SIETE VECES el mismo programa
-     * -- el `.velb` no depende del motor que lo va a ejecutar --, y ese trasiego
-     * de crear y borrar cientos de ficheros en el mismo directorio vuelve a
-     * disparar la carrera de Windows por otro lado: "no se pudo abrir el
-     * ejecutable" justo despues de escribirlo.
+     * -- el `.velb` no depende del motor que lo va a ejecutar --, y ese
+     * trasiego de crear y borrar cientos de ficheros en el mismo directorio
+     * vuelve a disparar la carrera de Windows por otro lado: "no se pudo abrir
+     * el ejecutable" justo despues de escribirlo.
      *
      * Asi que uno por PROGRAMA: la clave es lo unico de lo que depende su
      * contenido -- mezcla, cuerpo y vueltas --.  Se escribe una vez, se lee
@@ -959,7 +991,8 @@ double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
     /// Los borra TODOS al terminar el proceso: son cientos por barrido.
     struct Barrer {
         ~Barrer() {
-            for (const auto &kv : cache) std::remove(kv.second.c_str());
+            for (const auto &kv : cache)
+                std::remove(kv.second.c_str());
         }
     };
     static Barrer barrer;
@@ -994,8 +1027,9 @@ double measure(uint64_t loops, uint64_t body, Mix mix, Engine engine,
     for (int i = 0; i < repeats; ++i) {
         const uint64_t ns = run_program(velb, engine, &r0, &counted);
         if (ns == 0) {
-            std::fprintf(stderr, "[medida] el programa no llego a ejecutarse "
-                                 "(mezcla=%s cuerpo=%llu despacho=%s)\n",
+            std::fprintf(stderr,
+                         "[medida] el programa no llego a ejecutarse "
+                         "(mezcla=%s cuerpo=%llu despacho=%s)\n",
                          mix_name(mix), (unsigned long long)body,
                          engine_name(engine));
             return 0.0;
@@ -1059,11 +1093,10 @@ int sweep_peak(uint64_t loops, int repeats) {
      * (4096), y un barrido que se pare antes no lo ve.  Cuando alguien mueva
      * ese valor, el ultimo punto tiene que quedar POR ENCIMA o el barrido deja
      * de medir lo unico que solo el mide. */
-    const uint64_t kLengths[] = {0,    4,    12,   28,   60,   124,
-                                252,  508,  1020, 2044, 4092, 8188};
-    const Mix kMixes[] = {Mix::Alu,   Mix::Widths, Mix::Memory,
-                          Mix::Mixed, Mix::Float,  Mix::Vector,
-                          Mix::Independent};
+    const uint64_t kLengths[] = {0,   4,   12,   28,   60,   124,
+                                 252, 508, 1020, 2044, 4092, 8188};
+    const Mix kMixes[] = {Mix::Alu,   Mix::Widths, Mix::Memory,     Mix::Mixed,
+                          Mix::Float, Mix::Vector, Mix::Independent};
 
     const char *RESET = ansi::c(ansi::RESET);
     const char *BOLD = ansi::c(ansi::BOLD);
@@ -1083,13 +1116,12 @@ int sweep_peak(uint64_t loops, int repeats) {
      * este barrido -- donde cae el precipicio es donde se acaba la tabla --,
      * asi que sin ella las cifras no se pueden comparar entre dos maquinas ni
      * entre dos configuraciones. */
-    std::printf("%s  icache: %u entradas x %zu B = %zu KB por proceso, %d "
-                "via(s)%s\n\n",
-                DIM, (unsigned)runtime::ICACHE_SIZE,
-                sizeof(runtime::DecodedInstr),
-                (size_t)runtime::ICACHE_SIZE * sizeof(runtime::DecodedInstr) /
-                    1024,
-                (int)ICACHE_WAYS, RESET);
+    std::printf(
+        "%s  icache: %u entradas x %zu B = %zu KB por proceso, %d "
+        "via(s)%s\n\n",
+        DIM, (unsigned)runtime::ICACHE_SIZE, sizeof(runtime::DecodedInstr),
+        (size_t)runtime::ICACHE_SIZE * sizeof(runtime::DecodedInstr) / 1024,
+        (int)ICACHE_WAYS, RESET);
 
     /* Que son los numeros de la cabecera.  Sin esto la tabla es ilegible: son
      * MIPS por longitud, pero de que longitud no lo dice ninguna columna. */
@@ -1117,8 +1149,8 @@ int sweep_peak(uint64_t loops, int repeats) {
         std::printf("%6llu", (unsigned long long)(length + 4));
     std::printf("%s%7s%s\n", BOLD, "media", RESET);
     const size_t kPoints = sizeof(kLengths) / sizeof(kLengths[0]);
-    std::printf("%s  %s%s\n", DIM,
-                std::string(25 + 6 * kPoints, '-').c_str(), RESET);
+    std::printf("%s  %s%s\n", DIM, std::string(25 + 6 * kPoints, '-').c_str(),
+                RESET);
 
     /* TESTIGO.  Se mide el MISMO punto antes y despues del barrido.
      *
@@ -1168,8 +1200,8 @@ int sweep_peak(uint64_t loops, int repeats) {
             double row_sum = 0.0;
             int row_n = 0;
             for (uint64_t length : kLengths) {
-                const double mips = measure(loops, length, m, engine, repeats,
-                                          nullptr);
+                const double mips =
+                    measure(loops, length, m, engine, repeats, nullptr);
                 if (mips <= 0.0) {
                     std::printf("%s%6s%s", DIM, "-", RESET);
                     continue;
@@ -1233,8 +1265,9 @@ int sweep_peak(uint64_t loops, int repeats) {
                     BOLD, ansi::c(mal ? ansi::BR_RED : mips_color(global_avg)),
                     global_avg, RESET, DIM, global_n, RESET);
         if (mal) {
-            std::printf("  %sREGRESION: la media global cayo de %.0f a %.0f%s\n",
-                        ROJO, kGlobalBase, global_avg, RESET);
+            std::printf(
+                "  %sREGRESION: la media global cayo de %.0f a %.0f%s\n", ROJO,
+                kGlobalBase, global_avg, RESET);
             ++avg_failures;
         }
     }
@@ -1278,8 +1311,8 @@ int sweep_peak(uint64_t loops, int repeats) {
                         RESET);
         else
             std::printf("  %s%7s%s", DIM, "", RESET);
-        if (bundle_avg > 0.0 && eng != Engine::Bundles && !engine_is_control(eng) &&
-            eng != Engine::Scalar)
+        if (bundle_avg > 0.0 && eng != Engine::Bundles &&
+            !engine_is_control(eng) && eng != Engine::Scalar)
             std::printf("  %s%+6.1f%% sobre paquetes%s", DIM,
                         (avg / bundle_avg - 1.0) * 100.0, RESET);
         std::printf("\n");
@@ -1289,8 +1322,7 @@ int sweep_peak(uint64_t loops, int repeats) {
      * comparar con nada. */
     const double canary_end =
         measure(loops, 16, Mix::Alu, Engine::Scalar, repeats, nullptr);
-    const double drift =
-        canary_start > 0.0 ? canary_end / canary_start : 0.0;
+    const double drift = canary_start > 0.0 ? canary_end / canary_start : 0.0;
     std::printf("%s  testigo: %.0f MIPS al empezar, %.0f al terminar "
                 "(%+.1f%%)%s\n",
                 DIM, canary_start, canary_end, (drift - 1.0) * 100.0, RESET);
@@ -1316,7 +1348,8 @@ int sweep_peak(uint64_t loops, int repeats) {
      * Se ata el PROCESO y no el hilo: el programa lo ejecutan los hilos del
      * planificador de la VM, asi que atar el que mide no ataria nada. */
     {
-        const uint64_t rapidos = ::util::cpu_class_mask(::util::CoreClass::Fast);
+        const uint64_t rapidos =
+            ::util::cpu_class_mask(::util::CoreClass::Fast);
         const uint64_t lentos = ::util::cpu_class_mask(::util::CoreClass::Slow);
         const uint64_t todos = rapidos | lentos;
         if (lentos == 0) {
@@ -1405,14 +1438,14 @@ int main(int argc, char **argv) {
         else if (std::strcmp(argv[i], "--solo") == 0 && i + 1 < argc)
             solo = argv[++i];
         else {
-            std::fprintf(stderr,
-                         "uso: test_mips [--vueltas N] [--repetir N]\n"
-                         "                [--solo <mezcla>:<tramo>:<despacho>]\n"
-                         "  mezcla:   alu | anchos | memoria | mixta | float "
-                         "| vector\n"
-                         "  tramo:    instrucciones seguidas sin salto\n"
-                         "  despacho: escalar | esc+reord | paquetes "
-                         "| paq+reord\n");
+            std::fprintf(
+                stderr, "uso: test_mips [--vueltas N] [--repetir N]\n"
+                        "                [--solo <mezcla>:<tramo>:<despacho>]\n"
+                        "  mezcla:   alu | anchos | memoria | mixta | float "
+                        "| vector\n"
+                        "  tramo:    instrucciones seguidas sin salto\n"
+                        "  despacho: escalar | esc+reord | paquetes "
+                        "| paq+reord\n");
             return 2;
         }
     }
@@ -1432,12 +1465,18 @@ int main(int argc, char **argv) {
             return 2;
         }
         Mix m;
-        if (std::strcmp(mezcla_txt, "alu") == 0) m = Mix::Alu;
-        else if (std::strcmp(mezcla_txt, "anchos") == 0) m = Mix::Widths;
-        else if (std::strcmp(mezcla_txt, "memoria") == 0) m = Mix::Memory;
-        else if (std::strcmp(mezcla_txt, "mixta") == 0) m = Mix::Mixed;
-        else if (std::strcmp(mezcla_txt, "float") == 0) m = Mix::Float;
-        else if (std::strcmp(mezcla_txt, "vector") == 0) m = Mix::Vector;
+        if (std::strcmp(mezcla_txt, "alu") == 0)
+            m = Mix::Alu;
+        else if (std::strcmp(mezcla_txt, "anchos") == 0)
+            m = Mix::Widths;
+        else if (std::strcmp(mezcla_txt, "memoria") == 0)
+            m = Mix::Memory;
+        else if (std::strcmp(mezcla_txt, "mixta") == 0)
+            m = Mix::Mixed;
+        else if (std::strcmp(mezcla_txt, "float") == 0)
+            m = Mix::Float;
+        else if (std::strcmp(mezcla_txt, "vector") == 0)
+            m = Mix::Vector;
         else if (std::strcmp(mezcla_txt, "independ") == 0)
             m = Mix::Independent;
         else {
@@ -1498,160 +1537,163 @@ int main(int argc, char **argv) {
 
     int failures = 0;
     for (const Case &c : kCases)
-    for (uint32_t modo = 0; modo < kEngines; ++modo) {
-        const Engine engine = kEngineList[modo];
-        const bool use_bundles =
-            (engine != Engine::Scalar && !engine_is_control(engine));
-        const char *mode_name = engine_name(engine);
-        /* Solo los dos motores calibrados validan.  Los dos nuevos se miden y
-         * se ensenan; ponerles linea base con una sola corrida seria fijar como
-         * verdad el ruido de esta maquina. */
-        const double base = c.base[(size_t)engine];
+        for (uint32_t modo = 0; modo < kEngines; ++modo) {
+            const Engine engine = kEngineList[modo];
+            const bool use_bundles =
+                (engine != Engine::Scalar && !engine_is_control(engine));
+            const char *mode_name = engine_name(engine);
+            /* Solo los dos motores calibrados validan.  Los dos nuevos se miden
+             * y se ensenan; ponerles linea base con una sola corrida seria
+             * fijar como verdad el ruido de esta maquina. */
+            const double base = c.base[(size_t)engine];
 
-        /* Las loops se reparten para que los tres casos ejecuten un numero
-         * de instrucciones PARECIDO.  Sin esto, el caso recto haria mil veces
-         * mas trabajo y tardaria mil veces mas. */
-        const uint64_t v = c.body == 0
-                               ? loops
-                               : (loops * 4) / (c.body + 4);
-        // Nombre por caso, por lo mismo que en `measure`: compartirlo hace que
-        // una escritura que no cuaja se cronometre como si fuera este caso.
-        static std::atomic<uint64_t> serie_matriz{0};
-        char nombre_m[64];
-        std::snprintf(nombre_m, sizeof nombre_m, "test_mips_caso_%llu.velb",
-                      (unsigned long long)serie_matriz.fetch_add(1));
-        const std::string velb = nombre_m;
-        struct BarrerCaso {
-            std::string f;
-            ~BarrerCaso() { std::remove(f.c_str()); }
-        } barrer_caso{velb};
-        if (!prepare(generate(v, c.body, c.mix), velb)) return 1;
-        const uint64_t expected_count = instruction_count(v, c.body);
+            /* Las loops se reparten para que los tres casos ejecuten un numero
+             * de instrucciones PARECIDO.  Sin esto, el caso recto haria mil
+             * veces mas trabajo y tardaria mil veces mas. */
+            const uint64_t v = c.body == 0 ? loops : (loops * 4) / (c.body + 4);
+            // Nombre por caso, por lo mismo que en `measure`: compartirlo hace
+            // que una escritura que no cuaja se cronometre como si fuera este
+            // caso.
+            static std::atomic<uint64_t> serie_matriz{0};
+            char nombre_m[64];
+            std::snprintf(nombre_m, sizeof nombre_m, "test_mips_caso_%llu.velb",
+                          (unsigned long long)serie_matriz.fetch_add(1));
+            const std::string velb = nombre_m;
+            struct BarrerCaso {
+                std::string f;
+                ~BarrerCaso() { std::remove(f.c_str()); }
+            } barrer_caso{velb};
+            if (!prepare(generate(v, c.body, c.mix), velb)) return 1;
+            const uint64_t expected_count = instruction_count(v, c.body);
 
-        /* CALENTAMIENTO, que se tira.  La primera pasada de un caso paga lo
-         * que ninguna de las siguientes vuelve a pagar: fallos de pagina al
-         * tocar la memoria de la VM por primera vez, la icache de
-         * instrucciones descodificadas vacia, el codigo del interprete aun sin
-         * subir a la cache del anfitrion y la CPU todavia en frecuencia baja.
-         *
-         * Se veia: con una sola pasada aparecian caidas del 25% que no se
-         * reproducian.  Como aqui se busca el TECHO -- de cuanto es capaz el
-         * interprete, no cuanto tarda en arrancar --, la pasada fria no dice
-         * nada de lo que se pregunta. */
-        {
-            uint64_t r0 = 0, counted = 0;
-            run_program(velb, engine, &r0, &counted);
-        }
-
-        uint64_t best_ns = UINT64_MAX;
-        uint64_t instrs = 0;
-        for (int i = 0; i < repeats; ++i) {
-            uint64_t r0 = 0, counted = 0;
-            const uint64_t ns = run_program(velb, engine, &r0, &counted);
-            if (ns == 0) {
-                std::printf("  %s%-8s %-16s %6s %-16s  FALLO: no termino en el "
-                            "plazo%s\n",
-                            ROJO, mix_name(c.mix), c.shape, "",
-                            mode_name, RESET);
-                ++failures;
-                break;
-            }
-            /* Que el resultado sea el esperado importa tanto como el tiempo: un
-             * bucle que termina antes de la cuenta saldria como una mejora
-             * espectacular en vez de como el fallo que es. */
-            if (r0 != v) {
-                std::printf("  %s%-8s %-16s %6s %-16s  FALLO: R0 = %llu, se "
-                            "esperaba %llu%s\n",
-                            ROJO, mix_name(c.mix), c.shape, "",
-                            mode_name, (unsigned long long)r0,
-                            (unsigned long long)v, RESET);
-                ++failures;
-                break;
-            }
-            /* Lo que la VM dice haber retirado tiene que ser EXACTAMENTE lo
-             * que el generador escribio, EN LOS DOS MODOS.  Es una
-             * comprobacion del contador, no del rendimiento, y aqui sale
-             * gratis.
+            /* CALENTAMIENTO, que se tira.  La primera pasada de un caso paga lo
+             * que ninguna de las siguientes vuelve a pagar: fallos de pagina al
+             * tocar la memoria de la VM por primera vez, la icache de
+             * instrucciones descodificadas vacia, el codigo del interprete aun
+             * sin subir a la cache del anfitrion y la CPU todavia en frecuencia
+             * baja.
              *
-             * Hace falta porque ya fallo dos veces, y de las dos maneras
-             * posibles:
-             *
-             *   - Por ARRIBA: el contador se declaraba como "se incrementa
-             *     cada 256 instrucciones" y en realidad iba de una en una, asi
-             *     que todo el que multiplicaba por 256 daba MIPS 256 veces mas
-             *     altos.
-             *   - Por ABAJO: con bundles, `exec_bundle` retiraba N
-             *     instrucciones y el planificador contaba UNA, porque el
-             *     paquete no tocaba el contador.  Los MIPS bajaban cuanto
-             *     MEJOR fuera el ILP.
-             *
-             * Las dos sobrevivieron por lo mismo: nadie comparaba la cifra con
-             * nada.  Comparandola con el generador, cualquiera de las dos sale
-             * a la primera. */
-            if (counted != expected_count) {
-                std::printf("  %s%-8s %-16s %6s %-16s  FALLO: la VM conto %llu "
-                            "instrucciones y se generaron %llu%s\n",
-                            ROJO, mix_name(c.mix), c.shape, "",
-                            mode_name, (unsigned long long)counted,
-                            (unsigned long long)expected_count, RESET);
+             * Se veia: con una sola pasada aparecian caidas del 25% que no se
+             * reproducian.  Como aqui se busca el TECHO -- de cuanto es capaz
+             * el interprete, no cuanto tarda en arrancar --, la pasada fria no
+             * dice nada de lo que se pregunta. */
+            {
+                uint64_t r0 = 0, counted = 0;
+                run_program(velb, engine, &r0, &counted);
+            }
+
+            uint64_t best_ns = UINT64_MAX;
+            uint64_t instrs = 0;
+            for (int i = 0; i < repeats; ++i) {
+                uint64_t r0 = 0, counted = 0;
+                const uint64_t ns = run_program(velb, engine, &r0, &counted);
+                if (ns == 0) {
+                    std::printf(
+                        "  %s%-8s %-16s %6s %-16s  FALLO: no termino en el "
+                        "plazo%s\n",
+                        ROJO, mix_name(c.mix), c.shape, "", mode_name, RESET);
+                    ++failures;
+                    break;
+                }
+                /* Que el resultado sea el esperado importa tanto como el
+                 * tiempo: un bucle que termina antes de la cuenta saldria como
+                 * una mejora espectacular en vez de como el fallo que es. */
+                if (r0 != v) {
+                    std::printf(
+                        "  %s%-8s %-16s %6s %-16s  FALLO: R0 = %llu, se "
+                        "esperaba %llu%s\n",
+                        ROJO, mix_name(c.mix), c.shape, "", mode_name,
+                        (unsigned long long)r0, (unsigned long long)v, RESET);
+                    ++failures;
+                    break;
+                }
+                /* Lo que la VM dice haber retirado tiene que ser EXACTAMENTE lo
+                 * que el generador escribio, EN LOS DOS MODOS.  Es una
+                 * comprobacion del contador, no del rendimiento, y aqui sale
+                 * gratis.
+                 *
+                 * Hace falta porque ya fallo dos veces, y de las dos maneras
+                 * posibles:
+                 *
+                 *   - Por ARRIBA: el contador se declaraba como "se incrementa
+                 *     cada 256 instrucciones" y en realidad iba de una en una,
+                 * asi que todo el que multiplicaba por 256 daba MIPS 256 veces
+                 * mas altos.
+                 *   - Por ABAJO: con bundles, `exec_bundle` retiraba N
+                 *     instrucciones y el planificador contaba UNA, porque el
+                 *     paquete no tocaba el contador.  Los MIPS bajaban cuanto
+                 *     MEJOR fuera el ILP.
+                 *
+                 * Las dos sobrevivieron por lo mismo: nadie comparaba la cifra
+                 * con nada.  Comparandola con el generador, cualquiera de las
+                 * dos sale a la primera. */
+                if (counted != expected_count) {
+                    std::printf(
+                        "  %s%-8s %-16s %6s %-16s  FALLO: la VM conto %llu "
+                        "instrucciones y se generaron %llu%s\n",
+                        ROJO, mix_name(c.mix), c.shape, "", mode_name,
+                        (unsigned long long)counted,
+                        (unsigned long long)expected_count, RESET);
+                    ++failures;
+                    break;
+                }
+                if (ns < best_ns) {
+                    best_ns = ns;
+                    instrs = counted;
+                }
+            }
+            if (best_ns == UINT64_MAX) continue;
+
+            /* El MEJOR de varias pasadas, no la media: lo que estorba en una
+             * maquina compartida solo puede hacer que tarde MAS, asi que el
+             * minimo es la pasada que menos interferencia sufrio. */
+            const double mips = (double)instrs * 1000.0 / (double)best_ns;
+            const double minimo = base * kMargin;
+            const double deviation = (mips / base - 1.0) * 100.0;
+
+            /* Tres estados, no dos.  Por encima de la base es verde; por debajo
+             * pero dentro del margen es ambar -- no falla, pero se ve --; por
+             * debajo del margen es rojo y cuenta como fallo.  El ambar es lo
+             * que permite notar una caida que aun no ha llegado a regresion. */
+            const char *color = mips < minimo     ? ROJO
+                                : deviation < 0.0 ? AMBAR
+                                                  : VERDE;
+
+            /* La mezcla y el bloque solo se escriben en la primera de las dos
+             * filas: repetirlos convierte la tabla en una pared de texto donde
+             * el par de modos deja de leerse como un par. */
+            const bool primera = (modo == 0);
+            char recto[16] = "";
+            if (primera)
+                std::snprintf(recto, sizeof(recto), "%llu",
+                              (unsigned long long)(c.body + 4));
+            /* Sin linea base no hay desviacion que ensenar.  Se imprimia igual,
+             * y dividir entre cero daba `+inf%` en toda la columna de los
+             * motores sin calibrar -- un numero que no significa nada ocupando
+             * el sitio del que si. */
+            char vs[16];
+            if (base > 0.0)
+                std::snprintf(vs, sizeof(vs), "%+7.1f%%", deviation);
+            else
+                std::snprintf(vs, sizeof(vs), "%8s", "-");
+
+            std::printf("  %s%-8s%s %-16s %6s %s%-16s%s %s%9.1f%s  %s%8s%s  "
+                        "%s%10llu  %9.1f%s\n",
+                        ansi::c(mix_color(c.mix)),
+                        primera ? mix_name(c.mix) : "", RESET,
+                        primera ? c.shape : "", recto,
+                        ansi::c(engine_color(engine)), mode_name, RESET, color,
+                        mips, RESET, color, vs, RESET, DIM,
+                        (unsigned long long)instrs, best_ns / 1e6, RESET);
+
+            if (mips < minimo) {
+                std::printf(
+                    "  %s%*s^ REGRESION: por debajo de %.0f MIPS (%.0f%% "
+                    "de la base %.0f)%s\n",
+                    ROJO, 45, "", minimo, kMargin * 100.0, base, RESET);
                 ++failures;
-                break;
-            }
-            if (ns < best_ns) {
-                best_ns = ns;
-                instrs = counted;
             }
         }
-        if (best_ns == UINT64_MAX) continue;
-
-        /* El MEJOR de varias pasadas, no la media: lo que estorba en una
-         * maquina compartida solo puede hacer que tarde MAS, asi que el minimo
-         * es la pasada que menos interferencia sufrio. */
-        const double mips = (double)instrs * 1000.0 / (double)best_ns;
-        const double minimo = base * kMargin;
-        const double deviation = (mips / base - 1.0) * 100.0;
-
-        /* Tres estados, no dos.  Por encima de la base es verde; por debajo
-         * pero dentro del margen es ambar -- no falla, pero se ve --; por
-         * debajo del margen es rojo y cuenta como fallo.  El ambar es lo que
-         * permite notar una caida que aun no ha llegado a regresion. */
-        const char *color = mips < minimo    ? ROJO
-                            : deviation < 0.0   ? AMBAR
-                                             : VERDE;
-
-        /* La mezcla y el bloque solo se escriben en la primera de las dos
-         * filas: repetirlos convierte la tabla en una pared de texto donde el
-         * par de modos deja de leerse como un par. */
-        const bool primera = (modo == 0);
-        char recto[16] = "";
-        if (primera)
-            std::snprintf(recto, sizeof(recto), "%llu",
-                          (unsigned long long)(c.body + 4));
-        /* Sin linea base no hay desviacion que ensenar.  Se imprimia igual, y
-         * dividir entre cero daba `+inf%` en toda la columna de los motores sin
-         * calibrar -- un numero que no significa nada ocupando el sitio del que
-         * si. */
-        char vs[16];
-        if (base > 0.0)
-            std::snprintf(vs, sizeof(vs), "%+7.1f%%", deviation);
-        else
-            std::snprintf(vs, sizeof(vs), "%8s", "-");
-
-        std::printf("  %s%-8s%s %-16s %6s %s%-16s%s %s%9.1f%s  %s%8s%s  "
-                    "%s%10llu  %9.1f%s\n",
-                    ansi::c(mix_color(c.mix)), primera ? mix_name(c.mix) : "",
-                    RESET, primera ? c.shape : "", recto,
-                    ansi::c(engine_color(engine)), mode_name, RESET, color,
-                    mips, RESET, color, vs, RESET, DIM,
-                    (unsigned long long)instrs, best_ns / 1e6, RESET);
-
-        if (mips < minimo) {
-            std::printf("  %s%*s^ REGRESION: por debajo de %.0f MIPS (%.0f%% "
-                        "de la base %.0f)%s\n",
-                        ROJO, 45, "", minimo, kMargin * 100.0, base, RESET);
-            ++failures;
-        }
-    }
 
     /* El barrido corre SIEMPRE, tambien cuando la matriz ha fallado: si algo
      * ha caido, la forma del techo es justo lo que dice por donde.

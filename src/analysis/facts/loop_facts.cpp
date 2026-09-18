@@ -97,9 +97,7 @@ struct Graph {
     util::SmallVector<IrBlockId, kInlineBlocks * 2> edges;
 
     /// Cuantos bloques hay.
-    size_t size() const noexcept {
-        return offs.empty() ? 0 : offs.size() - 1;
-    }
+    size_t size() const noexcept { return offs.empty() ? 0 : offs.size() - 1; }
 
     /// Los vecinos de UN bloque, como algo que se puede recorrer e indexar.
     struct Row {

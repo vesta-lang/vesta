@@ -148,8 +148,8 @@ void emit_inc_dec(const vm::Instruction *instruction_parser,
     // bit 6: 0=INC, 1=DEC
     uint8_t reg = (instruction_parser->opcode == "inc") ? 0 : 0b01000000;
 
-    auto s = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto s =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (s == nullptr)
         throw std::runtime_error("INC/DEC: operand must be a register");
 
@@ -183,10 +183,10 @@ void emit_inc_dec(const vm::Instruction *instruction_parser,
 void emit_instr_reg(const vm::Instruction *instruction_parser,
                     ByteWriter &code_final, const InstrInfo *now_instr,
                     Assembler *assembly_ctx) {
-    auto reg1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto reg2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto reg1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto reg2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (reg1 == nullptr || reg2 == nullptr)
         throw std::runtime_error("Instruction " + instruction_parser->opcode +
@@ -247,10 +247,10 @@ void emit_instr_inmed_with_annotation(const vm::Instruction *instruction_parser,
     bool is_a_signed =
         is_signed(instruction_parser->opcode); // detectar variante con signo
 
-    auto reg = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto annotacion = vm::node_as<vm::AnnotationNode>(
-        instruction_parser->operands[1].get());
+    auto reg =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto annotacion =
+        vm::node_as<vm::AnnotationNode>(instruction_parser->operands[1].get());
 
     if (annotacion == nullptr)
         throw std::runtime_error("emit_instr_inmed_with_annotation(): expected "
@@ -371,8 +371,8 @@ void emit_instr_inmed(const vm::Instruction *instruction_parser,
     auto n0 = instruction_parser->operands[0].get(); // primer operando
     auto n1 = instruction_parser->operands[1].get(); // segundo operando
 
-    auto inmmed_str = vm::node_as<vm::NumberOperand>(
-        n1); // intentar leer el valor inmediato
+    auto inmmed_str =
+        vm::node_as<vm::NumberOperand>(n1); // intentar leer el valor inmediato
 
     auto reg = vm::node_as<vm::RegisterOperand>(n0); // destino registro
     auto mem = vm::node_as<vm::MemoryOperand>(n0);   // destino memoria
@@ -706,14 +706,13 @@ void emit_instr_sib(const vm::Instruction *instruction_parser,
     uint8_t direction = 0; // 0 = reg, [mem] ; 1 = [mem], reg
 
     if (auto *r = vm::node_as<vm::RegisterOperand>(op0)) {
-        reg_op = r;                                      // register on the left
+        reg_op = r;                                   // register on the left
         mem_op = vm::node_as<vm::MemoryOperand>(op1); // memory on the right
         direction = 0; // el destino es el registro
     } else {
-        mem_op = vm::node_as<vm::MemoryOperand>(op0); // memory on the left
-        reg_op =
-            vm::node_as<vm::RegisterOperand>(op1); // register on the right
-        direction = 1;                                // el destino es memoria
+        mem_op = vm::node_as<vm::MemoryOperand>(op0);   // memory on the left
+        reg_op = vm::node_as<vm::RegisterOperand>(op1); // register on the right
+        direction = 1;                                  // el destino es memoria
     }
 
     if (!reg_op || !mem_op)
@@ -728,9 +727,7 @@ void emit_instr_sib(const vm::Instruction *instruction_parser,
     // has_index is set whenever the expression is a BinaryExpr (base+index
     // form)
     uint8_t has_index =
-        (vm::node_as<vm::BinaryExpr>(mem_op->expr.get()) != nullptr)
-            ? 1
-            : 0;
+        (vm::node_as<vm::BinaryExpr>(mem_op->expr.get()) != nullptr) ? 1 : 0;
 
     uint8_t mode = encode_mode(reg_op->size_bits); // codigo de ancho de 2 bits
     uint8_t dst_reg = encode_reg_general(
@@ -779,10 +776,10 @@ void emit_instr_sib(const vm::Instruction *instruction_parser,
 void emit_xchg(const vm::Instruction *instruction_parser,
                ByteWriter &code_final, const InstrInfo *now_instr,
                Assembler *assembly_ctx) {
-    auto reg1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto reg2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto reg1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto reg2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (reg1 == nullptr)
         throw std::runtime_error("XCHG: missing first register operand");
@@ -900,10 +897,10 @@ void emit_pop_push(const vm::Instruction *instruction_parser,
 void emit_instr_mov_reg(const vm::Instruction *instruction_parser,
                         ByteWriter &code_final, const InstrInfo *now_instr,
                         Assembler *assembly_ctx) {
-    auto reg1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto reg2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto reg1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto reg2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (reg1 == nullptr || reg2 == nullptr)
         throw std::runtime_error("MOV: requires two register operands");
@@ -1021,9 +1018,9 @@ void emit_instr_mov_inmed(const vm::Instruction *instruction_parser,
     auto n1 = instruction_parser->operands[1]
                   .get(); // source operand (immediate or annotation)
 
-    auto inmmed_str = vm::node_as<vm::NumberOperand>(
-        n1);                 // intentar leer inmediato numerico
-    uint64_t val_inmmed = 0; // will be set below if numeric
+    auto inmmed_str =
+        vm::node_as<vm::NumberOperand>(n1); // intentar leer inmediato numerico
+    uint64_t val_inmmed = 0;                // will be set below if numeric
 
     if (inmmed_str != nullptr) {
         auto inmmed_opt = vm::parse_number_safe(
@@ -1185,8 +1182,8 @@ void emit_instr_mov_inmed(const vm::Instruction *instruction_parser,
 void emit_instr_calln_inmmed(const vm::Instruction *instruction_parser,
                              ByteWriter &code_final, const InstrInfo *now_instr,
                              Assembler *assembly_ctx) {
-    auto method = vm::node_as<vm::AnnotationNode>(
-        instruction_parser->operands[0].get());
+    auto method =
+        vm::node_as<vm::AnnotationNode>(instruction_parser->operands[0].get());
     if (method == nullptr)
         throw std::runtime_error("CALLN: expected @Method(\"lib:func\") "
                                  "annotation as first operand");
@@ -1246,8 +1243,8 @@ void emit_instr_mov_sib(const vm::Instruction *instruction_parser,
 void emit_instr_one_reg(const vm::Instruction *instruction_parser,
                         ByteWriter &code_final, const InstrInfo *now_instr,
                         Assembler *assembly_ctx) {
-    auto reg = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto reg =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (reg == nullptr)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requires a register operand");
@@ -1277,12 +1274,12 @@ void emit_instr_one_reg(const vm::Instruction *instruction_parser,
 void emit_instr_three_reg(const vm::Instruction *instruction_parser,
                           ByteWriter &code_final, const InstrInfo *now_instr,
                           Assembler *assembly_ctx) {
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto r3 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto r3 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
     if (r1 == nullptr || r2 == nullptr || r3 == nullptr)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requires three register operands");
@@ -1307,14 +1304,14 @@ void emit_instr_four_reg(const vm::Instruction *instruction_parser,
                          const InstrInfo * /*now_instr*/,
                          Assembler * /*assembly_ctx*/
 ) {
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto r3 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
-    auto r4 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[3].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto r3 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
+    auto r4 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[3].get());
     if (r1 == nullptr || r2 == nullptr || r3 == nullptr || r4 == nullptr)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requires four register operands");
@@ -1349,10 +1346,10 @@ void emit_instr_four_reg(const vm::Instruction *instruction_parser,
 void emit_cursor_rw(const vm::Instruction *instruction_parser,
                     ByteWriter &code_final, const InstrInfo *now_instr,
                     Assembler *assembly_ctx) {
-    auto reg0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto reg1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto reg0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto reg1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (reg0 == nullptr || reg1 == nullptr)
         throw std::runtime_error(instruction_parser->opcode +
@@ -1410,10 +1407,10 @@ void emit_cursor_rw(const vm::Instruction *instruction_parser,
 void emit_gcderef(const vm::Instruction *instruction_parser,
                   ByteWriter &code_final, const InstrInfo *now_instr,
                   Assembler *assembly_ctx) {
-    auto cur_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto handle_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto cur_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto handle_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (cur_op == nullptr || handle_op == nullptr)
         throw std::runtime_error(
@@ -1452,10 +1449,10 @@ void emit_gcderef(const vm::Instruction *instruction_parser,
 void emit_addcur(const vm::Instruction *instruction_parser,
                  ByteWriter &code_final, const InstrInfo *now_instr,
                  Assembler *assembly_ctx) {
-    auto *cur_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *imm_op = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto *cur_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *imm_op =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
 
     if (!cur_op || !imm_op)
         throw std::runtime_error("addcur: requiere (curN, imm16)");
@@ -1496,12 +1493,12 @@ void emit_addcur(const vm::Instruction *instruction_parser,
 void emit_vmcopy(const vm::Instruction *instruction_parser,
                  ByteWriter &code_final, const InstrInfo *now_instr,
                  Assembler *assembly_ctx) {
-    auto *cur_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *src_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *len_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
+    auto *cur_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *src_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *len_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
 
     if (!cur_op || !src_op || !len_op)
         throw std::runtime_error(
@@ -1535,12 +1532,12 @@ void emit_vmcopy(const vm::Instruction *instruction_parser,
 void emit_vcopyh(const vm::Instruction *instruction_parser,
                  ByteWriter &code_final, const InstrInfo *now_instr,
                  Assembler *assembly_ctx) {
-    auto *dst_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *cur_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *len_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
+    auto *dst_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *cur_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *len_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
 
     if (!dst_op || !cur_op || !len_op)
         throw std::runtime_error(
@@ -1736,15 +1733,15 @@ void emit_instr_reg_imm8(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (reg, imm8)");
 
-    auto *reg_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto *reg_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (reg_op == nullptr)
         throw std::runtime_error("emit_instr_reg_imm8: '" +
                                  instruction_parser->opcode +
                                  "': first operand must be a register");
 
-    auto *num_op = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto *num_op =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
     if (num_op == nullptr)
         throw std::runtime_error(
             "emit_instr_reg_imm8: '" + instruction_parser->opcode +
@@ -1794,8 +1791,8 @@ void emit_instr_spimm(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (rsp|rbp, imm)");
 
-    auto *reg_op = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto *reg_op =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (reg_op == nullptr)
         throw std::runtime_error("emit_instr_spimm: '" +
                                  instruction_parser->opcode +
@@ -1810,8 +1807,8 @@ void emit_instr_spimm(const vm::Instruction *instruction_parser,
             "emit_instr_spimm: '" + instruction_parser->opcode +
             "': first operand must be rsp or rbp, got " + rname);
 
-    auto *num_op = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto *num_op =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
     if (num_op == nullptr)
         throw std::runtime_error("emit_instr_spimm: '" +
                                  instruction_parser->opcode +
@@ -1860,12 +1857,12 @@ void emit_instr_jumptable(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (r_val, r_table, count)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op2 = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[2].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op2 =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[2].get());
 
     if (!op0 || !op1 || !op2)
         throw std::runtime_error("emit_instr_jumptable: '" +
@@ -1917,12 +1914,12 @@ void emit_instr_addadvice(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (r_target, r_advice, kind)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op2 = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[2].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op2 =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[2].get());
 
     if (!op0 || !op1 || !op2)
         throw std::runtime_error("emit_instr_addadvice: '" +
@@ -1972,10 +1969,10 @@ void emit_instr_loadz(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (r_dst, r_src)");
 
-    auto *reg_dst = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *reg_src = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *reg_dst =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *reg_src =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (!reg_dst || !reg_src)
         throw std::runtime_error("emit_instr_loadz: '" +
@@ -2096,12 +2093,12 @@ void emit_instr_alu3(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (r_dst, r_src1, r_src2)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
 
     if (!op0 || !op1 || !op2)
         throw std::runtime_error("emit_instr_alu3: '" +
@@ -2150,12 +2147,12 @@ void emit_instr_static(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (reg, reg, offset_u32)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op2 = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[2].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op2 =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[2].get());
 
     if (!op0 || !op1 || !op2)
         throw std::runtime_error("emit_instr_static: '" +
@@ -2201,14 +2198,14 @@ void emit_instr_mem_full(const vm::Instruction *instruction_parser,
         throw std::runtime_error(
             instruction_parser->opcode +
             ": requires (reg, reg_index, ctrlword, disp16)");
-    auto *op_dst = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op_idx = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op_ctrl = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[2].get());
-    auto *op_disp = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[3].get());
+    auto *op_dst =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op_idx =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op_ctrl =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[2].get());
+    auto *op_disp =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[3].get());
     if (!op_dst || !op_idx || !op_ctrl || !op_disp)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": operands must be (reg, reg, imm16, imm16)");
@@ -2251,12 +2248,12 @@ void emit_instr_dlopen(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (r_dst, r_path_addr, r_path_len)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
     if (!op0 || !op1 || !op2)
         throw std::runtime_error(
             "emit_instr_dlopen: operandos deben ser registros");
@@ -2284,14 +2281,14 @@ void emit_instr_dlsym(const vm::Instruction *instruction_parser,
             "emit_instr_dlsym: '" + instruction_parser->opcode +
             "' requires (r_dst, r_handle, r_name_addr, r_name_len)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto *op2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[2].get());
-    auto *op3 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[3].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto *op2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[2].get());
+    auto *op3 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[3].get());
     if (!op0 || !op1 || !op2 || !op3)
         throw std::runtime_error(
             "emit_instr_dlsym: operandos deben ser registros");
@@ -2321,8 +2318,8 @@ void emit_instr_callni(const vm::Instruction *instruction_parser,
                                  instruction_parser->opcode +
                                  "' requires (r_fn)");
 
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (!op0)
         throw std::runtime_error(
             "emit_instr_callni: operando debe ser un registro");
@@ -2352,10 +2349,10 @@ void emit_instr_gcallocp(const vm::Instruction *instruction_parser,
         throw std::runtime_error("emit_instr_gcallocp: '" +
                                  instruction_parser->opcode +
                                  "' requiere (r_dst, r_size)");
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!op0 || !op1)
         throw std::runtime_error(
             "emit_instr_gcallocp: ambos operandos deben ser registros");
@@ -2383,8 +2380,8 @@ void emit_instr_spawnargs(const vm::Instruction *instruction_parser,
         throw std::runtime_error("emit_instr_spawnargs: '" +
                                  instruction_parser->opcode +
                                  "' requiere (r_pc)");
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (!op0)
         throw std::runtime_error(
             "emit_instr_spawnargs: el operando debe ser un registro");
@@ -2411,10 +2408,10 @@ void emit_instr_fulfillhlt(const vm::Instruction *instruction_parser,
         throw std::runtime_error("emit_instr_fulfillhlt: '" +
                                  instruction_parser->opcode +
                                  "' requiere (r_fut, r_value)");
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!op0 || !op1)
         throw std::runtime_error(
             "emit_instr_fulfillhlt: ambos operandos deben ser registros");
@@ -2507,10 +2504,10 @@ void emit_instr_cmpjmp_signed(const vm::Instruction *instruction_parser,
         throw std::runtime_error("emit_instr_cmpjmp_signed: '" +
                                  instruction_parser->opcode +
                                  "' requiere (r_a, r_b, label)");
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!op0 || !op1)
         throw std::runtime_error("emit_instr_cmpjmp_signed: los dos primeros "
                                  "operandos deben ser registros");
@@ -2542,10 +2539,10 @@ void emit_instr_cmpjmp_unsigned(const vm::Instruction *instruction_parser,
         throw std::runtime_error("emit_instr_cmpjmp_unsigned: '" +
                                  instruction_parser->opcode +
                                  "' requiere (r_a, r_b, label)");
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *op1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *op1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!op0 || !op1)
         throw std::runtime_error("emit_instr_cmpjmp_unsigned: los dos primeros "
                                  "operandos deben ser registros");
@@ -2578,8 +2575,8 @@ void emit_instr_decjnz(const vm::Instruction *instruction_parser,
         throw std::runtime_error("emit_instr_decjnz: '" +
                                  instruction_parser->opcode +
                                  "' requiere (r_counter, label)");
-    auto *op0 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto *op0 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
     if (!op0)
         throw std::runtime_error(
             "emit_instr_decjnz: el primer operando debe ser un registro");
@@ -2614,8 +2611,8 @@ void emit_instr_fastmask(const vm::Instruction *instruction_parser,
             "emit_instr_fastmask: '" + instruction_parser->opcode +
             "' requiere un operando inmediato (bitmask de 16 bits)");
 
-    auto *num = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[0].get());
+    auto *num =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[0].get());
     if (!num)
         throw std::runtime_error(
             "emit_instr_fastmask: el operando debe ser un literal numerico");
@@ -2802,10 +2799,10 @@ void emit_instr_freg(const vm::Instruction *instruction_parser,
     (void)assembly_ctx;
     (void)now_instr;
 
-    auto *r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (!r1 || !r2)
         throw std::runtime_error(
@@ -2882,8 +2879,8 @@ void emit_instr_freg_unary(const vm::Instruction *instruction_parser,
     (void)assembly_ctx;
     (void)now_instr;
 
-    auto *r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
+    auto *r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
 
     if (!r1)
         throw std::runtime_error(instruction_parser->opcode +
@@ -2923,10 +2920,10 @@ void emit_instr_fmowi(const vm::Instruction *instruction_parser,
     (void)assembly_ctx;
     (void)now_instr;
 
-    auto *r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *imm = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto *r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *imm =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
 
     if (!r1 || !imm)
         throw std::runtime_error(
@@ -2968,10 +2965,10 @@ void emit_instr_fmem(const vm::Instruction *instruction_parser,
     (void)assembly_ctx;
     (void)now_instr;
 
-    auto *r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (!r1 || !r2)
         throw std::runtime_error(instruction_parser->opcode +
@@ -3018,10 +3015,10 @@ void emit_instr_fcvt(const vm::Instruction *instruction_parser,
     (void)assembly_ctx;
     (void)now_instr;
 
-    auto *r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
 
     if (!r1 || !r2)
         throw std::runtime_error(
@@ -3066,10 +3063,10 @@ void emit_instr_bitcast_zg(const vm::Instruction *instruction_parser,
                            Assembler *assembly_ctx) {
     (void)assembly_ctx;
     (void)now_instr;
-    auto *r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto *r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto *r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto *r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!r1 || !r2)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": se requieren dos operandos de registro");
@@ -3107,10 +3104,10 @@ void emit_instr_bitcast_zg(const vm::Instruction *instruction_parser,
 void emit_str_two_reg(const vm::Instruction *instruction_parser,
                       ByteWriter &code_final, const InstrInfo *now_instr,
                       Assembler *assembly_ctx) {
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!r1 || !r2)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requiere dos operandos registro");
@@ -3137,12 +3134,12 @@ void emit_str_two_reg(const vm::Instruction *instruction_parser,
 void emit_strconv(const vm::Instruction *instruction_parser,
                   ByteWriter &code_final, const InstrInfo *now_instr,
                   Assembler *assembly_ctx) {
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
-    auto enc = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[2].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
+    auto enc =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[2].get());
     if (!r1 || !r2 || !enc)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requiere r_dst, r_src, enc_literal");
@@ -3168,10 +3165,10 @@ void emit_strconv(const vm::Instruction *instruction_parser,
 void emit_setcc(const vm::Instruction *instruction_parser,
                 ByteWriter &code_final, const InstrInfo *now_instr,
                 Assembler *assembly_ctx) {
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto cond = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto cond =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
     if (!r1 || !cond)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requiere r_dst, cond_literal");
@@ -3199,10 +3196,10 @@ void emit_sext(const vm::Instruction *instruction_parser,
                Assembler *assembly_ctx) {
     (void)now_instr;
     (void)assembly_ctx;
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto width = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto width =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
     if (!r1 || !width)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requiere r_dst, N_literal (8/16/32)");
@@ -3220,10 +3217,10 @@ void emit_gcfinal(const vm::Instruction *instruction_parser,
                   Assembler *assembly_ctx) {
     (void)now_instr;
     (void)assembly_ctx;
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto kind = vm::node_as<vm::NumberOperand>(
-        instruction_parser->operands[1].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto kind =
+        vm::node_as<vm::NumberOperand>(instruction_parser->operands[1].get());
     if (!r1 || !kind)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requiere r_box, kind_literal");
@@ -3250,10 +3247,10 @@ void emit_gcfinalc(const vm::Instruction *instruction_parser,
                    Assembler *assembly_ctx) {
     (void)now_instr;
     (void)assembly_ctx;
-    auto r1 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[0].get());
-    auto r2 = vm::node_as<vm::RegisterOperand>(
-        instruction_parser->operands[1].get());
+    auto r1 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[0].get());
+    auto r2 =
+        vm::node_as<vm::RegisterOperand>(instruction_parser->operands[1].get());
     if (!r1 || !r2)
         throw std::runtime_error(instruction_parser->opcode +
                                  ": requiere r_box, r_target");

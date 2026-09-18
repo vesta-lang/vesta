@@ -162,8 +162,9 @@ typedef struct DecodedInstr {
          * de dos hechos:
          *
          *     mayor instruccion de la ISA   = 11 bytes (FIXED_11)
-         *     mayor tanda fusionable        =  4       (lo que admite `absorbed`)
-         *     techo                         = 44       -> no cabe en 5 bits (31)
+         *     mayor tanda fusionable        =  4       (lo que admite
+         * `absorbed`) techo                         = 44       -> no cabe en 5
+         * bits (31)
          *
          * INVARIANTE: `size_instr` tiene que poder con `11 * (absorbed_max+1)`.
          * El dia que `absorbed` crezca a tres bits -- ocho instrucciones --
@@ -203,8 +204,8 @@ typedef struct DecodedInstr {
          */
         uint8_t absorbed : 2;
     } flags_info = {
-        0,     0,     0, 0, false,
-        false, false, 0, 0, 0}; ///< Campos de control inicializados a cero/false
+        0,     0, 0, 0, false, false,
+        false, 0, 0, 0}; ///< Campos de control inicializados a cero/false
 
     /**
      * @brief Operandos descodificados de la instruccion (union de todos los
@@ -1069,8 +1070,8 @@ class ProcessVM {
      * Adelantarla sale muy a cuenta cuando acierta -- descodificar es el 5,7%
      * del banco, cinco veces lo que cuesta formar paquetes -- y muy cara cuando
      * no: la tabla de adelanto son 38 KB que el ayudante machaca mientras el
-     * principal la consulta, y en un programa que YA va justo de cache eso es lo
-     * peor que se le puede anadir.  Medido en un tramo recto de 8188
+     * principal la consulta, y en un programa que YA va justo de cache eso es
+     * lo peor que se le puede anadir.  Medido en un tramo recto de 8188
      * instrucciones: 3,4% de aciertos y el caso pasa de 216 a 55 MIPS.
      *
      * Asi que se prueba y se decide con el dato: si en una ventana de
@@ -1306,9 +1307,9 @@ class ProcessVM {
          * cuerpo de un bucle que corre un millon.  Se acumulan AL ENTRAR, que
          * es el unico momento en que el paquete es seguro de leer: al final ya
          * puede estar recogido. */
-        uint64_t fused_weighted;           ///< instrucciones ahorradas de verdad
-        uint64_t newop_ready_weighted;     ///< las que ahorraria un opcode nuevo
-        uint64_t newop_livewall_weighted;  ///< las que no rescataria ninguno
+        uint64_t fused_weighted;          ///< instrucciones ahorradas de verdad
+        uint64_t newop_ready_weighted;    ///< las que ahorraria un opcode nuevo
+        uint64_t newop_livewall_weighted; ///< las que no rescataria ninguno
 
         /// Instrucciones que el planificador movio de sitio al formar.  Se
         /// cuenta en UNIDADES, no en veces: lo que interesa es cuanto se

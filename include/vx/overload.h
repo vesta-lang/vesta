@@ -216,17 +216,15 @@ bool same_params(const std::vector<Type> &a, const std::vector<Type> &b);
  * que antes era "redefinicion".  Basta con que UNA ranura se llame distinto.
  *
  * Lo que arrastra, y no es opcional: **el simbolo tiene que llevar lo que las
- * separa**, o las dos acaban con la misma etiqueta -- dos cuerpos, un nombre --,
- * que es el fallo que ya mordio aqui con la tabla de metodos.  Ver
+ * separa**, o las dos acaban con la misma etiqueta -- dos cuerpos, un nombre
+ * --, que es el fallo que ya mordio aqui con la tabla de metodos.  Ver
  * @c discriminator.
  *
  * Una lista de nombres VACIA (no se supo) no separa: dos asi siguen siendo la
  * misma, que es lo conservador.
  */
-bool same_signature(const std::vector<Type> &ta,
-                    const ParamNames &na,
-                    const std::vector<Type> &tb,
-                    const ParamNames &nb);
+bool same_signature(const std::vector<Type> &ta, const ParamNames &na,
+                    const std::vector<Type> &tb, const ParamNames &nb);
 
 } // namespace overload
 } // namespace vx

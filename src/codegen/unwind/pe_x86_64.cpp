@@ -125,7 +125,8 @@ bool build_pe_x86_64(const FrameUnwind &frame, std::vector<uint8_t> &out,
         }
     }
 
-    if (codes.empty()) return false; // nada que describir (why sigue en Nothing)
+    if (codes.empty())
+        return false; // nada que describir (why sigue en Nothing)
 
     // Cuantas ranuras de dos bytes ocupan en total.
     uint32_t slots = 0;

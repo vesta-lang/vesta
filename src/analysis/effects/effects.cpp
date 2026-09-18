@@ -85,7 +85,8 @@ bool no_alias(const AbstractLoc &a, const AbstractLoc &b) {
 
 bool must_overlap(const AbstractLoc &a, const AbstractLoc &b) {
     /* Sin raiz concreta no hay nada que demostrar en ningun sentido, y la clase
-     * generica es "cualquier sitio de la clase", que tampoco senyala un byte. */
+     * generica es "cualquier sitio de la clase", que tampoco senyala un byte.
+     */
     if (!a.concrete() || !b.concrete()) return false;
     /* Raices distintas: dos reservas, dos huecos del marco, dos globales.  Y en
      * un parametro la raiz es su POSICION -- un nombre --, asi que ahi tampoco

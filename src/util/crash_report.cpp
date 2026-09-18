@@ -152,9 +152,9 @@ std::string say_address(const void *pc, const char *prefix) noexcept {
             fn.c_str());
         if (frames[i].file != nullptr && frames[i].line != 0)
             say("%s    %s\n", prefix,
-                vx::diag::format("crash.at_file",
-                                 {frames[i].file,
-                                  std::to_string((unsigned)frames[i].line)})
+                vx::diag::format(
+                    "crash.at_file",
+                    {frames[i].file, std::to_string((unsigned)frames[i].line)})
                     .c_str());
         /* Los siguientes son lo que el compilador metio dentro, asi que se
          * marcan como tales en vez de parecer marcos independientes. */
@@ -235,8 +235,8 @@ void say_disassembly(uint64_t pc) noexcept {
     uint64_t start = (pc > kBefore) ? (pc - kBefore) : pc;
 
     /* Buscar un punto de partida que ENCAJE con el PC: se prueban los offsets
-     * hacia atras y se queda el primero desde el que la descodificacion aterriza
-     * exactamente en la instruccion que fallo. */
+     * hacia atras y se queda el primero desde el que la descodificacion
+     * aterriza exactamente en la instruccion que fallo. */
     bool aligned = (start == pc);
     if (!aligned) {
         for (uint64_t off = kBefore; off > 0 && !aligned; --off) {
@@ -282,8 +282,7 @@ void say_header(const char *cause_code, const void *fault_addr) noexcept {
     say("\n");
     say_code("crash.header");
     say_code("crash.cause", {vx::diag::format(cause_code)});
-    if (fault_addr != nullptr)
-        say_code("crash.address", {hex_of(fault_addr)});
+    if (fault_addr != nullptr) say_code("crash.address", {hex_of(fault_addr)});
     const char *stage = g_stage.load(std::memory_order_relaxed);
     const char *detail = g_detail.load(std::memory_order_relaxed);
     if (stage != nullptr) {
@@ -308,12 +307,14 @@ const char *exception_name(DWORD code) noexcept {
     switch (code) {
     case EXCEPTION_ACCESS_VIOLATION: return "crash.cause.access_violation";
     case EXCEPTION_STACK_OVERFLOW: return "crash.cause.stack_overflow";
-    case EXCEPTION_ILLEGAL_INSTRUCTION: return "crash.cause.illegal_instruction";
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+        return "crash.cause.illegal_instruction";
     case EXCEPTION_INT_DIVIDE_BY_ZERO: return "crash.cause.int_divide_by_zero";
     case EXCEPTION_INT_OVERFLOW: return "crash.cause.int_overflow";
     case EXCEPTION_FLT_DIVIDE_BY_ZERO:
         return "crash.cause.float_divide_by_zero";
-    case EXCEPTION_PRIV_INSTRUCTION: return "crash.cause.privileged_instruction";
+    case EXCEPTION_PRIV_INSTRUCTION:
+        return "crash.cause.privileged_instruction";
     case EXCEPTION_IN_PAGE_ERROR: return "crash.cause.in_page_error";
     case EXCEPTION_DATATYPE_MISALIGNMENT: return "crash.cause.misalignment";
     /* Los que no estan en las cabeceras publicas con nombre de excepcion, y que
@@ -350,7 +351,8 @@ const char *exception_name(DWORD code) noexcept {
 void say_exception_record(const EXCEPTION_RECORD *r, int depth) noexcept {
     if (r == nullptr || depth > 4) return;
     char buf[64];
-    std::snprintf(buf, sizeof(buf), "0x%08lX", (unsigned long)r->ExceptionFlags);
+    std::snprintf(buf, sizeof(buf), "0x%08lX",
+                  (unsigned long)r->ExceptionFlags);
     say_code("crash.flags",
              {buf, (r->ExceptionFlags & EXCEPTION_NONCONTINUABLE)
                        ? vx::diag::format("crash.flags.noncontinuable")
@@ -420,7 +422,8 @@ void say_module(const void *pc, const char *prefix) noexcept {
         return;
     char path[MAX_PATH];
     if (::GetModuleFileNameA(mod, path, MAX_PATH) == 0) return;
-    /* Solo el nombre del fichero: la ruta entera empuja fuera lo que importa. */
+    /* Solo el nombre del fichero: la ruta entera empuja fuera lo que importa.
+     */
     const char *name = path;
     for (const char *p = path; *p; ++p)
         if (*p == '\\' || *p == '/') name = p + 1;
@@ -457,7 +460,8 @@ std::vector<std::string> param_types(const std::string &readable) noexcept {
     size_t open = std::string::npos;
     for (size_t i = close + 1; i-- > 0;) {
         const char c = readable[i];
-        if (c == ')') ++depth;
+        if (c == ')')
+            ++depth;
         else if (c == '(') {
             if (--depth == 0) {
                 open = i;
@@ -471,10 +475,14 @@ std::vector<std::string> param_types(const std::string &readable) noexcept {
     int ang = 0, par = 0;
     for (size_t i = open + 1; i < close; ++i) {
         const char c = readable[i];
-        if (c == '<') ++ang;
-        else if (c == '>') --ang;
-        else if (c == '(') ++par;
-        else if (c == ')') --par;
+        if (c == '<')
+            ++ang;
+        else if (c == '>')
+            --ang;
+        else if (c == '(')
+            ++par;
+        else if (c == ')')
+            --par;
         if (c == ',' && ang == 0 && par == 0) {
             out.push_back(cur);
             cur.clear();
@@ -496,7 +504,8 @@ std::vector<std::string> param_types(const std::string &readable) noexcept {
  * ensenar otra cosa.
  */
 bool goes_in_float_bank(const std::string &t) noexcept {
-    /* Solo el tipo PELADO: un `double*` es un puntero y viaja por el general. */
+    /* Solo el tipo PELADO: un `double*` es un puntero y viaja por el general.
+     */
     if (t.find('*') != std::string::npos || t.find('&') != std::string::npos)
         return false;
     return t == "float" || t == "double" || t == "long double";
@@ -532,13 +541,13 @@ void say_frame_args(const std::string &readable, const CONTEXT &ctx,
         say("%s%s\n", prefix,
             vx::diag::format(
                 innermost ? "crash.args_regs" : "crash.args_home",
-                {hex_of(reinterpret_cast<void *>(
-                     innermost ? ctx.Rcx : home[0])),
-                 hex_of(reinterpret_cast<void *>(innermost ? ctx.Rdx
-                                                           : home[1])),
+                {hex_of(
+                     reinterpret_cast<void *>(innermost ? ctx.Rcx : home[0])),
+                 hex_of(
+                     reinterpret_cast<void *>(innermost ? ctx.Rdx : home[1])),
                  hex_of(reinterpret_cast<void *>(innermost ? ctx.R8 : home[2])),
-                 hex_of(reinterpret_cast<void *>(innermost ? ctx.R9
-                                                           : home[3]))})
+                 hex_of(
+                     reinterpret_cast<void *>(innermost ? ctx.R9 : home[3]))})
                 .c_str());
         return;
     }
@@ -596,8 +605,7 @@ void say_stack_walk(const CONTEXT *start) noexcept {
         const std::string name =
             say_address(reinterpret_cast<const void *>(ctx.Rip), "    ");
         say_module(reinterpret_cast<const void *>(ctx.Rip), "      ");
-        if (ctx.Rsp != 0)
-            say_frame_args(name, ctx, depth == 0, "      ");
+        if (ctx.Rsp != 0) say_frame_args(name, ctx, depth == 0, "      ");
 
         DWORD64 image_base = 0;
         RUNTIME_FUNCTION *fn =
@@ -1016,7 +1024,7 @@ void install_crash_reporter() noexcept {
     ss.ss_flags = 0;
     (void)sigaltstack(&ss, nullptr);
 
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_sigaction = &crash_signal;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK;

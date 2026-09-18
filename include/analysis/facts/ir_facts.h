@@ -94,15 +94,15 @@ struct IrFacts {
      * @brief value id -> POSICIoN de la instruccion que lo define dentro de su
      *        bloque, o -1 si no la define ninguna.
      *
-     * Con @ref def_block -- que dice en QUE bloque -- localiza la instruccion en
-     * O(1).  Aqui habia un `std::vector<const ir::IrInstr *>`, y guardar
+     * Con @ref def_block -- que dice en QUE bloque -- localiza la instruccion
+     * en O(1).  Aqui habia un `std::vector<const ir::IrInstr *>`, y guardar
      * PUNTEROS era un riesgo real, no teorico:
      *
      * - **Un puntero colgante no se nota.**  La validez de estos hechos no
-     *   estaba atada a ninguna version del IR, asi que servir unos viejos no era
-     *   imprecision: era leer memoria liberada.  Un indice fuera de rango da
-     *   `nullptr` -- falla SEGURO --, que es la diferencia entre "no lo se" y un
-     *   resultado inventado.
+     *   estaba atada a ninguna version del IR, asi que servir unos viejos no
+     * era imprecision: era leer memoria liberada.  Un indice fuera de rango da
+     *   `nullptr` -- falla SEGURO --, que es la diferencia entre "no lo se" y
+     * un resultado inventado.
      * - **Y con punteros dentro esto no se puede guardar en disco.**  Un
      *   analisis que no se puede persistir se rehace entero en cada
      *   compilacion, que es de donde sale que hoy se cacheen las CONCLUSIONES y

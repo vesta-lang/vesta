@@ -88,8 +88,7 @@ uint16_t vm_narrow_effects(const VmInstr *v, uint8_t signed_bit,
     case VN_SPECIAL_REG:
         return narrow_special_reg(v->effects, signed_bit, direction, reg2);
     case VN_NONE:
-    default:
-        return v->effects;
+    default: return v->effects;
     }
 }
 

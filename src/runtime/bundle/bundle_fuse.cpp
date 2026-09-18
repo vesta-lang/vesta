@@ -175,9 +175,8 @@ constexpr std::array<uint8_t, 512> kAlu3 = build_alu3();
  * separarian sin que nadie lo notara: el informe diria que hay trabajo donde el
  * fusionador no ve nada, o al reves.  Un hecho, un productor.
  */
-[[gnu::always_inline]] inline FuseReject can_fuse(const DecodedInstr &a,
-                                                  const DecodedInstr &b,
-                                                  uint8_t &out_op3) {
+[[gnu::always_inline]] inline FuseReject
+can_fuse(const DecodedInstr &a, const DecodedInstr &b, uint8_t &out_op3) {
     /* Las cuatro condiciones del `mov`, SEPARADAS.
      *
      * Juntas en un solo "no encaja" el informe no sirve para nada: dice que no
@@ -194,9 +193,8 @@ constexpr std::array<uint8_t, 512> kAlu3 = build_alu3();
     if (b.flags_info.is_not_extended != 0x00) return FuseReject::NoThreeOpForm;
     if (b.flags_info.mode != kMode64) return FuseReject::WidthMismatch;
 
-    const uint8_t op3 =
-        kAlu3[((uint32_t)b.flags_info.opcode_index << 1) |
-              (b.flags_info._signed_instruct != 0 ? 1u : 0u)];
+    const uint8_t op3 = kAlu3[((uint32_t)b.flags_info.opcode_index << 1) |
+                              (b.flags_info._signed_instruct != 0 ? 1u : 0u)];
     if (op3 == 0) return FuseReject::NoThreeOpForm;
 
     const uint8_t rd = a.data_instruction.reg_data.reg1;
@@ -224,9 +222,8 @@ constexpr std::array<uint8_t, 512> kAlu3 = build_alu3();
  *         fusionador que deja el paquete a medias al renunciar es peor que uno
  *         que no lo intenta.
  */
-[[gnu::always_inline]] inline void rewrite_mov_alu(DecodedInstr &a,
-                                                  const DecodedInstr &b,
-                                                  uint8_t op3) {
+[[gnu::always_inline]] inline void
+rewrite_mov_alu(DecodedInstr &a, const DecodedInstr &b, uint8_t op3) {
     const uint8_t rd = a.data_instruction.reg_data.reg1;
     const uint8_t rs1 = a.data_instruction.reg_data.reg2;
     const uint8_t rs2 = b.data_instruction.reg_data.reg2;
@@ -234,8 +231,8 @@ constexpr std::array<uint8_t, 512> kAlu3 = build_alu3();
     /* Se construye la fusionada SOBRE `a`, que ya lleva el `pc` bueno.  El
      * formato de `alu3` es Convencion B: los dos bytes crudos, no los campos
      * de registro del decodificador. */
-    const uint32_t size = (uint32_t)a.flags_info.size_instr +
-                          (uint32_t)b.flags_info.size_instr;
+    const uint32_t size =
+        (uint32_t)a.flags_info.size_instr + (uint32_t)b.flags_info.size_instr;
 
     /* Y cuantas instrucciones del PROGRAMA pasa a representar la fusionada.
      * Sin esto, la maquina retiraria UNA donde el programa tiene DOS y los
@@ -244,8 +241,8 @@ constexpr std::array<uint8_t, 512> kAlu3 = build_alu3();
      * comprueba en vez de suponerlo -- una cuenta que se envuelve en silencio
      * no da un error, da otro numero --, y esa comprobacion la hizo ya
      * `can_fuse`, que es donde viven TODAS las condiciones. */
-    const uint32_t absorbed = (uint32_t)a.flags_info.absorbed +
-                              (uint32_t)b.flags_info.absorbed + 1u;
+    const uint32_t absorbed =
+        (uint32_t)a.flags_info.absorbed + (uint32_t)b.flags_info.absorbed + 1u;
 
     a.flags_info.opcode_index = op3;
     a.flags_info._signed_instruct = 0;
@@ -334,10 +331,9 @@ constexpr std::array<uint8_t, 512> kAlu3 = build_alu3();
  * @param live_after Registros vivos DESPUES del par.
  */
 template <typename LiveFn>
-[[gnu::always_inline]] inline FuseReject fuse_retarget(DecodedInstr &a,
-                                                       const DecodedInstr &b,
-                                                       const Touch &ta,
-                                                       LiveFn &&live_at) {
+[[gnu::always_inline]] inline FuseReject
+fuse_retarget(DecodedInstr &a, const DecodedInstr &b, const Touch &ta,
+              LiveFn &&live_at) {
     if (!kills_dest_whole(a)) return FuseReject::NotAMov;
     if (!is_plain_mov(b)) return FuseReject::CopyMismatch;
 
@@ -349,16 +345,16 @@ template <typename LiveFn>
     if (ta.reg_write != (uint16_t)(1u << rd)) return FuseReject::CopyMismatch;
     // Y a `rd` no puede quererlo nadie despues del par.  La vivacidad se pide
     // AQUI y no antes: es lo caro, y hasta este punto ya se descarto casi todo.
-    if ((live_at() & (uint16_t)(1u << rd)) != 0)
-        return FuseReject::DestLiveOut;
+    if ((live_at() & (uint16_t)(1u << rd)) != 0) return FuseReject::DestLiveOut;
 
     /* Los dos contadores del paquete son campos de bits ESTRECHOS y se
      * comprueban en vez de suponerlos: `absorbed` son 2 bits y `size_instr`
-     * son 4, asi que una cadena larga los desbordaria.  Y desbordar `size_instr`
-     * no da un error: deja `rip` corrido y el salto siguiente va a otro sitio. */
+     * son 4, asi que una cadena larga los desbordaria.  Y desbordar
+     * `size_instr` no da un error: deja `rip` corrido y el salto siguiente va a
+     * otro sitio. */
     const uint32_t absorbed = (uint32_t)a.flags_info.absorbed + 1u;
-    const uint32_t size = (uint32_t)a.flags_info.size_instr +
-                          (uint32_t)b.flags_info.size_instr;
+    const uint32_t size =
+        (uint32_t)a.flags_info.size_instr + (uint32_t)b.flags_info.size_instr;
     if (absorbed > kFusedMaxAbsorbed || size > kFusedMaxSize)
         return FuseReject::TooMany;
 
@@ -384,10 +380,9 @@ template <typename LiveFn>
  * Sin opcode nuevo: ver el comentario grande de arriba.
  */
 template <typename LiveFn>
-[[gnu::always_inline]] inline FuseReject fuse_alu2x(DecodedInstr &a,
-                                                    const DecodedInstr &b,
-                                                    const Touch &ta,
-                                                    LiveFn &&live_at) {
+[[gnu::always_inline]] inline FuseReject
+fuse_alu2x(DecodedInstr &a, const DecodedInstr &b, const Touch &ta,
+           LiveFn &&live_at) {
     if (!is_alu3(a)) return FuseReject::NotAMov;
     if (!is_alu3(b)) return FuseReject::NoThreeOpForm;
 
@@ -413,13 +408,12 @@ template <typename LiveFn>
 
     // Y a nadie le puede hacer falta despues.  Se pregunta AQUI, que es lo caro
     // y llega despues de haber descartado casi todo.
-    if ((live_at() & (uint16_t)(1u << rt)) != 0)
-        return FuseReject::DestLiveOut;
+    if ((live_at() & (uint16_t)(1u << rt)) != 0) return FuseReject::DestLiveOut;
 
-    const uint32_t absorbed = (uint32_t)a.flags_info.absorbed +
-                              (uint32_t)b.flags_info.absorbed + 1u;
-    const uint32_t size = (uint32_t)a.flags_info.size_instr +
-                          (uint32_t)b.flags_info.size_instr;
+    const uint32_t absorbed =
+        (uint32_t)a.flags_info.absorbed + (uint32_t)b.flags_info.absorbed + 1u;
+    const uint32_t size =
+        (uint32_t)a.flags_info.size_instr + (uint32_t)b.flags_info.size_instr;
     if (absorbed > kFusedMaxAbsorbed || size > kFusedMaxSize)
         return FuseReject::TooMany;
     /* La construccion la hace `make_alu2x`: aqui se decide QUE se fusiona, no
@@ -467,10 +461,9 @@ template <typename LiveFn>
  * hace `mem_full_load`, que es la que usa `mld`.
  */
 template <typename LiveFn>
-[[gnu::always_inline]] inline FuseReject fuse_ldop(DecodedInstr &a,
-                                                   const DecodedInstr &b,
-                                                   const Touch &ta,
-                                                   LiveFn &&live_at) {
+[[gnu::always_inline]] inline FuseReject
+fuse_ldop(DecodedInstr &a, const DecodedInstr &b, const Touch &ta,
+          LiveFn &&live_at) {
     if (!is_gp_load(a)) return FuseReject::NotAMov;
     if (!is_alu3(b)) return FuseReject::NoThreeOpForm;
 
@@ -483,7 +476,8 @@ template <typename LiveFn>
     if (ta.reg_write != (uint16_t)(1u << rt)) return FuseReject::CopyMismatch;
     const bool rt_left = (b1 == rt);
     const bool rt_right = (b2 == rt);
-    if (rt_left == rt_right) return FuseReject::CopyMismatch; // ni una ni las dos
+    if (rt_left == rt_right)
+        return FuseReject::CopyMismatch; // ni una ni las dos
 
     /* Y el destino de la ALU no puede ser un registro del que dependa la
      * DIRECCION: la fusionada calcula la direccion y escribe el resultado en la
@@ -494,18 +488,17 @@ template <typename LiveFn>
     if ((ta.reg_read & dst_bit) != 0) return FuseReject::SrcIsDest;
 
     // Y a nadie le puede hacer falta el temporal despues.
-    if ((live_at() & (uint16_t)(1u << rt)) != 0)
-        return FuseReject::DestLiveOut;
+    if ((live_at() & (uint16_t)(1u << rt)) != 0) return FuseReject::DestLiveOut;
 
-    const uint32_t absorbed = (uint32_t)a.flags_info.absorbed +
-                              (uint32_t)b.flags_info.absorbed + 1u;
-    const uint32_t size = (uint32_t)a.flags_info.size_instr +
-                          (uint32_t)b.flags_info.size_instr;
+    const uint32_t absorbed =
+        (uint32_t)a.flags_info.absorbed + (uint32_t)b.flags_info.absorbed + 1u;
+    const uint32_t size =
+        (uint32_t)a.flags_info.size_instr + (uint32_t)b.flags_info.size_instr;
     if (absorbed > kFusedMaxAbsorbed || size > kFusedMaxSize)
         return FuseReject::TooMany;
 
-    make_ldop(a, (uint8_t)b.flags_info.opcode_index, rd,
-              rt_left ? b2 : b1, rt_right);
+    make_ldop(a, (uint8_t)b.flags_info.opcode_index, rd, rt_left ? b2 : b1,
+              rt_right);
     a.flags_info.size_instr = (uint8_t)size;
     a.flags_info.absorbed = (uint8_t)absorbed;
     return FuseReject::None;
@@ -518,9 +511,8 @@ template <typename LiveFn>
 /// memoria y no produce ningun valor en un registro.
 [[gnu::always_inline]] inline bool is_mov_imm(const DecodedInstr &d) {
     return d.flags_info.is_not_extended == 0x00 &&
-           d.flags_info.opcode_index == 0x15 &&
-           d.flags_info.direction == 0 && d.flags_info._signed_instruct == 0 &&
-           d.flags_info.mode == kMode64;
+           d.flags_info.opcode_index == 0x15 && d.flags_info.direction == 0 &&
+           d.flags_info._signed_instruct == 0 && d.flags_info.mode == kMode64;
 }
 
 /**
@@ -534,10 +526,9 @@ template <typename LiveFn>
  * de sobra en los dieciseis bytes de operandos de una sintetica.
  */
 template <typename LiveFn>
-[[gnu::always_inline]] inline FuseReject fuse_alui(DecodedInstr &a,
-                                                   const DecodedInstr &b,
-                                                   const Touch &ta,
-                                                   LiveFn &&live_at) {
+[[gnu::always_inline]] inline FuseReject
+fuse_alui(DecodedInstr &a, const DecodedInstr &b, const Touch &ta,
+          LiveFn &&live_at) {
     if (!is_mov_imm(a)) return FuseReject::NotAMov;
     if (!is_alu3(b)) return FuseReject::NoThreeOpForm;
 
@@ -554,21 +545,20 @@ template <typename LiveFn>
     if (rt_left == rt_right) return FuseReject::CopyMismatch;
 
     // Y a nadie le puede hacer falta el temporal despues.
-    if ((live_at() & (uint16_t)(1u << rt)) != 0)
-        return FuseReject::DestLiveOut;
+    if ((live_at() & (uint16_t)(1u << rt)) != 0) return FuseReject::DestLiveOut;
 
-    const uint32_t absorbed = (uint32_t)a.flags_info.absorbed +
-                              (uint32_t)b.flags_info.absorbed + 1u;
-    const uint32_t size = (uint32_t)a.flags_info.size_instr +
-                          (uint32_t)b.flags_info.size_instr;
+    const uint32_t absorbed =
+        (uint32_t)a.flags_info.absorbed + (uint32_t)b.flags_info.absorbed + 1u;
+    const uint32_t size =
+        (uint32_t)a.flags_info.size_instr + (uint32_t)b.flags_info.size_instr;
     if (absorbed > kFusedMaxAbsorbed || size > kFusedMaxSize)
         return FuseReject::TooMany;
 
     /* La constante va donde estaba el temporal: si el `mov` lo dejaba en la
      * fuente IZQUIERDA de la ALU, la constante entra por la izquierda.  Importa
      * en `sub`, donde el orden es el resultado. */
-    make_alui(a, imm, (uint8_t)b.flags_info.opcode_index, rd,
-              rt_left ? b2 : b1, rt_left ? false : true);
+    make_alui(a, imm, (uint8_t)b.flags_info.opcode_index, rd, rt_left ? b2 : b1,
+              rt_left ? false : true);
     a.flags_info.size_instr = (uint8_t)size;
     a.flags_info.absorbed = (uint8_t)absorbed;
     return FuseReject::None;
@@ -603,8 +593,8 @@ template <typename LiveFn>
     if (a.flags_info.absorbed != 0 || b.flags_info.absorbed != 0)
         return FuseReject::TooMany;
 
-    const uint32_t size = (uint32_t)a.flags_info.size_instr +
-                          (uint32_t)b.flags_info.size_instr;
+    const uint32_t size =
+        (uint32_t)a.flags_info.size_instr + (uint32_t)b.flags_info.size_instr;
     if (size > kFusedMaxSize) return FuseReject::TooMany;
 
     make_mem2(a, b, a.flags_info.opcode_index == 0x91,
@@ -644,10 +634,9 @@ template <typename LiveFn>
 }
 
 template <typename LiveFn>
-[[gnu::always_inline]] inline FuseReject try_fuse(DecodedInstr &a,
-                                                  const DecodedInstr &b,
-                                                  const Touch &ta,
-                                                  LiveFn &&live_at) {
+[[gnu::always_inline]] inline FuseReject
+try_fuse(DecodedInstr &a, const DecodedInstr &b, const Touch &ta,
+         LiveFn &&live_at) {
     uint8_t op3 = 0;
     const FuseReject r = can_fuse(a, b, op3);
     if (r != FuseReject::NotAMov) {
@@ -668,14 +657,12 @@ template <typename LiveFn>
     return fuse_mem2(a, b);
 }
 
-
 } // namespace
 
 FuseReject fuse_would_apply(const DecodedInstr &a, const DecodedInstr &b) {
     uint8_t op3 = 0;
     return can_fuse(a, b, op3);
 }
-
 
 uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
                      uint64_t next_pc, vm::VirtualMemory::PageView *view,
@@ -718,7 +705,8 @@ uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
              * pereza evitaba (medido: 29%).
              *
              * Con la cache de pagina del llamante ya no hace falta elegir: el
-             * ayudante trae la suya y lo mira aqui, cuando un patron lo pide. */
+             * ayudante trae la suya y lo mira aqui, cuando un patron lo pide.
+             */
             const uint16_t live_out = live_out_after(process, next_pc, view);
             if (live_out == 0xFFFF && process->bundle_stats_on)
                 ++process->bundle_stats.lookahead_blind;
@@ -786,8 +774,8 @@ uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
                 if (r == FuseReject::NotAMov) {
                     const bool ext =
                         (b.instr[i].flags_info.is_not_extended == 0x00);
-                    tel->uncovered[(ext ? 256u : 0u) + touch_opcode(b.instr[i])] +=
-                        1;
+                    tel->uncovered[(ext ? 256u : 0u) +
+                                   touch_opcode(b.instr[i])] += 1;
                 } else if (r == FuseReject::NoThreeOpForm &&
                            (t[i].reg_write & t[i + 1].reg_read) != 0) {
                     /* La primera SI encajaba: lo que falta es admitir esta como
@@ -807,8 +795,8 @@ uint32_t bundle_fuse(Bundle &b, BundleTouch &tc, ProcessVM *process,
                 probe_new_opcode(t[i], t[i + 1], live_at(i + 1), b, *tel);
             }
         }
-        /* El analisis compartido se COMPACTA con el paquete.  `out <= i` siempre,
-         * asi que moverlo en el sitio no se pisa a si mismo. */
+        /* El analisis compartido se COMPACTA con el paquete.  `out <= i`
+         * siempre, asi que moverlo en el sitio no se pisa a si mismo. */
         bundle_touch_move(tc, out, tc, i);
         b.instr[out++] = b.instr[i++];
     }

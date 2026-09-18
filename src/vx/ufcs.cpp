@@ -160,11 +160,10 @@ const Candidates *Index::all_named(const std::string &written,
 void Index::note_flattened(const std::string &mangled,
                            const std::string &public_name) {
     if (mangled.size() <= public_name.size()) return;
-    if (mangled.compare(mangled.size() - public_name.size(),
-                        public_name.size(), public_name) != 0)
+    if (mangled.compare(mangled.size() - public_name.size(), public_name.size(),
+                        public_name) != 0)
         return;
-    std::string prefix =
-        mangled.substr(0, mangled.size() - public_name.size());
+    std::string prefix = mangled.substr(0, mangled.size() - public_name.size());
     for (const std::string &p : prefixes_)
         if (p == prefix) return;
     prefixes_.push_back(std::move(prefix));

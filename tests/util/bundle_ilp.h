@@ -96,7 +96,8 @@ struct Touch {
     /// inferior y por tanto se desconoce parte de lo que toca.
     bool barrier = true;
     bool bar_control = false; ///< transfiere control: inmovible de verdad
-    bool bar_unknown = false; ///< efectos de COTA INFERIOR: limitacion del modelo
+    bool bar_unknown =
+        false; ///< efectos de COTA INFERIOR: limitacion del modelo
 };
 
 /**
@@ -235,13 +236,14 @@ namespace {
 
 /// Un par de opcodes consecutivos y lo que pesa.
 struct PairStat {
-    double weight = 0;   ///< veces que se ejecuta el par
-    double fusable = 0;  ///< de esas, cuantas con el temporal MUERTO
-    double cycles = 0;   ///< ciclos de ejecutar los dos, sumados
-    uint32_t seen = 0;   ///< sitios distintos donde aparece
-    double reorder = 0;  ///< fusionables SOLO si se aparta lo de en medio
-    double reorder_named = 0; ///< lo mismo, apuntado al par REAL (i, consumidor)
-    double hoy = 0;      ///< de las fusionables, cuantas sabe hacer YA el fusionador
+    double weight = 0;  ///< veces que se ejecuta el par
+    double fusable = 0; ///< de esas, cuantas con el temporal MUERTO
+    double cycles = 0;  ///< ciclos de ejecutar los dos, sumados
+    uint32_t seen = 0;  ///< sitios distintos donde aparece
+    double reorder = 0; ///< fusionables SOLO si se aparta lo de en medio
+    double reorder_named =
+        0;          ///< lo mismo, apuntado al par REAL (i, consumidor)
+    double hoy = 0; ///< de las fusionables, cuantas sabe hacer YA el fusionador
 };
 std::map<std::string, PairStat> g_fusion;
 
@@ -249,7 +251,6 @@ std::map<std::string, PairStat> g_fusion;
 /// que convierte un "0%" en una respuesta: dice si no hay material, si el
 /// patron esta mal escrito o si lo que falla es otra cosa.
 double g_reject[8] = {0};
-
 
 /// Nombre del opcode de una instruccion del paquete.
 const char *op_name(const Model &model, const runtime::DecodedInstr &d) {
@@ -295,8 +296,7 @@ bool writes_dest_only(const std::vector<disasm::RegOperand> &regs,
                       const char *name) {
     if (name != nullptr) {
         if (std::strcmp(name, "mov") == 0 || std::strcmp(name, "mld") == 0 ||
-            std::strcmp(name, "loadz") == 0 ||
-            std::strcmp(name, "loadzh") == 0)
+            std::strcmp(name, "loadz") == 0 || std::strcmp(name, "loadzh") == 0)
             return true;
     }
     if (regs.size() < 3) return false;
@@ -318,8 +318,8 @@ bool writes_dest_only(const std::vector<disasm::RegOperand> &regs,
  * --, pero ese dato solo se usaba para decidir si dos instrucciones se pueden
  * INTERCAMBIAR, no para ver si una alimenta a la otra.
  *
- * Es el mismo tipo de agujero que el de los nombres de opcode: no daba un error,
- * daba un cero -- y un cero se lee como "no hay nada que hacer".
+ * Es el mismo tipo de agujero que el de los nombres de opcode: no daba un
+ * error, daba un cero -- y un cero se lee como "no hay nada que hacer".
  */
 constexpr int kFlagShift = 16;
 
@@ -345,8 +345,8 @@ struct Shape {
  */
 void add_flags_to_shape(Shape &s, const runtime::DecodedInstr &d) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const runtime::vm_isa::VmInstr *v = runtime::vm_isa::vm_instr(
-        ext, op_index(d));
+    const runtime::vm_isa::VmInstr *v =
+        runtime::vm_isa::vm_instr(ext, op_index(d));
     if (v == nullptr) return; // ranura desconocida: no se afirma nada
     if ((v->effects & runtime::vm_isa::VE_EXACT) == 0) {
         /* Cota inferior: puede tocarlas y no consta.  Se marca que las escribe
@@ -356,15 +356,13 @@ void add_flags_to_shape(Shape &s, const runtime::DecodedInstr &d) {
         s.read |= (1u << kFlagShift);
         return;
     }
-    if (v->effects & runtime::vm_isa::VE_W_FLAGS)
-        s.write |= (1u << kFlagShift);
-    if (v->effects & runtime::vm_isa::VE_R_FLAGS)
-        s.read |= (1u << kFlagShift);
+    if (v->effects & runtime::vm_isa::VE_W_FLAGS) s.write |= (1u << kFlagShift);
+    if (v->effects & runtime::vm_isa::VE_R_FLAGS) s.read |= (1u << kFlagShift);
 }
 
 /// consume la VM va en la base de datos generada.
 Shape shape_of(runtime::ProcessVM *proc, const runtime::DecodedInstr &d,
-                const char *name) {
+               const char *name) {
     Shape s;
     uint8_t raw[16] = {0};
     const size_t n = d.flags_info.size_instr ? d.flags_info.size_instr : 16;
@@ -400,7 +398,7 @@ Shape shape_of(runtime::ProcessVM *proc, const runtime::DecodedInstr &d,
  */
 bool dead_after(const std::vector<Shape> &sh, uint32_t from, uint32_t reg) {
     for (uint32_t j = from + 1; j < sh.size(); ++j) {
-        if (sh[j].read & reg) return false;                  // lo usa
+        if (sh[j].read & reg) return false;                      // lo usa
         if ((sh[j].write & reg) && sh[j].dest_only) return true; // lo pisa
     }
     return false; // se acabo el paquete: puede vivir fuera
@@ -411,8 +409,8 @@ bool dead_after(const std::vector<Shape> &sh, uint32_t from, uint32_t reg) {
 /// descodificacion ya se pago al formarlo.
 double exec_cycles(const runtime::DecodedInstr &d) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const runtime::vm_isa::VmInstr *v = runtime::vm_isa::vm_instr(
-        ext, op_index(d));
+    const runtime::vm_isa::VmInstr *v =
+        runtime::vm_isa::vm_instr(ext, op_index(d));
     if (!runtime::vm_isa::vm_cost_measured(v, runtime::vm_isa::VH_X86))
         return 0.0;
     return v->cost[runtime::vm_isa::VH_X86].exec_cycles_avg;
@@ -434,7 +432,8 @@ void tally_pairs(runtime::ProcessVM *proc, const Model &model,
         PairStat &st = g_fusion[key];
         st.weight += w;
         ++st.seen;
-        st.cycles += w * (exec_cycles(b.instr[i]) + exec_cycles(b.instr[i + 1]));
+        st.cycles +=
+            w * (exec_cycles(b.instr[i]) + exec_cycles(b.instr[i + 1]));
 
         /* Fusionable: lo que escribe la primera lo lee la segunda, y ese valor
          * no lo quiere nadie mas.  Sin la segunda condicion la fusion tendria
@@ -488,9 +487,9 @@ struct TraceEntry {
     Shape shape;
     std::string name;
     std::string label; ///< `nombre/OPCODE`: lo que se imprime, sin ambiguedad
-    runtime::DecodedInstr raw; ///< la instruccion tal cual, para preguntarle al fusionador
+    runtime::DecodedInstr
+        raw; ///< la instruccion tal cual, para preguntarle al fusionador
 };
-
 
 /**
  * @brief Efectos implicitos, de la base de datos generada.
@@ -513,8 +512,8 @@ struct TraceEntry {
  */
 void fill_effects(TraceEntry &e, const runtime::DecodedInstr &d) {
     const bool ext = (d.flags_info.is_not_extended == 0x00);
-    const runtime::vm_isa::VmInstr *v = runtime::vm_isa::vm_instr(
-        ext, op_index(d));
+    const runtime::vm_isa::VmInstr *v =
+        runtime::vm_isa::vm_instr(ext, op_index(d));
     if (v == nullptr) {
         e.control = true; // ranura desconocida: no se mueve nada a su lado
         return;
@@ -530,8 +529,8 @@ void fill_effects(TraceEntry &e, const runtime::DecodedInstr &d) {
         e.field_read = 0x0F;
         e.mem = true;
     }
-    /* Las banderas NO se anaden aqui: ya las puso `shape_of` en la forma, que es
-     * el unico sitio que la construye.  Ponerlas tambien aqui las tendria
+    /* Las banderas NO se anaden aqui: ya las puso `shape_of` en la forma, que
+     * es el unico sitio que la construye.  Ponerlas tambien aqui las tendria
      * calculadas en dos, y dos productores del mismo hecho es como se separan
      * en cuanto uno cambia. */
 }
@@ -698,13 +697,13 @@ uint64_t trace_pairs(runtime::ProcessVM *proc, const Model &model,
 std::map<std::string, double> g_unknown_weight;
 struct BundleStat {
     uint32_t k = 0;
-    uint32_t critical = 0;   ///< cadena de dependencias mas larga
-    uint32_t pairs = 0;      ///< pares (i<j) en total
-    uint32_t free_pairs = 0; ///< pares que se podrian intercambiar
-    uint32_t barriers = 0;   ///< instrucciones que no se mueven
-    uint32_t bar_control = 0;///< ...por transferir control
-    uint32_t bar_unknown = 0;///< ...por efectos de cota inferior
-    uint64_t entries = 0;    ///< veces que se entro a este paquete
+    uint32_t critical = 0;    ///< cadena de dependencias mas larga
+    uint32_t pairs = 0;       ///< pares (i<j) en total
+    uint32_t free_pairs = 0;  ///< pares que se podrian intercambiar
+    uint32_t barriers = 0;    ///< instrucciones que no se mueven
+    uint32_t bar_control = 0; ///< ...por transferir control
+    uint32_t bar_unknown = 0; ///< ...por efectos de cota inferior
+    uint64_t entries = 0;     ///< veces que se entro a este paquete
 };
 
 /**
@@ -732,10 +731,10 @@ BundleStat analyze(runtime::ProcessVM *proc, const Model &model,
              * ENTRADAS: da igual que un opcode raro sea cota inferior si no se
              * ejecuta nunca. */
             const bool ext = (b.instr[i].flags_info.is_not_extended == 0x00);
-            const tests::OpcodeRow *r =
-                model.find(ext, op_index(b.instr[i]));
+            const tests::OpcodeRow *r = model.find(ext, op_index(b.instr[i]));
             if (r != nullptr)
-                g_unknown_weight[r->nombre] += (double)(b.entries ? b.entries : 1);
+                g_unknown_weight[r->nombre] +=
+                    (double)(b.entries ? b.entries : 1);
         }
     }
 
@@ -865,7 +864,8 @@ inline int ilp_report(const std::vector<std::string> &ficheros, bool detalle,
         /* Se recorre la region VIVA por indice.  Antes se paseaba por los
          * bloques a mano; con la cache de doble region eso ya no vale -- hay
          * dos, y la vieja puede estar a medio reciclar --, asi que la region
-         * expone `at()` y quien recorre no tiene que saber como esta troceada. */
+         * expone `at()` y quien recorre no tiene que saber como esta troceada.
+         */
         {
             const auto &half = arena->live();
             for (uint32_t i = 0; i < half.used; ++i) {
@@ -914,8 +914,7 @@ inline int ilp_report(const std::vector<std::string> &ficheros, bool detalle,
                     : desconocido >= 10.0 ? ansi::c(ansi::BR_YELLOW)
                                           : ansi::c(ansi::BR_BLACK),
                     desconocido, R);
-        if (detalle)
-            std::printf("      entradas ponderadas: %.0f\n", ent);
+        if (detalle) std::printf("      entradas ponderadas: %.0f\n", ent);
         g_bundles += n;
         g_k += k;
         g_crit += crit;
@@ -946,122 +945,134 @@ inline int ilp_report(const std::vector<std::string> &ficheros, bool detalle,
                     "  ?%%     = el modelo NO sabe todo lo que toca, asi que "
                     "se trata como barrera.\n");
 
-    /* --- Que pares merece la pena convertir en UNA instruccion ---
-     *
-     * Ordenado por peso de EJECUCION, no por apariciones: lo que importa es lo
-     * que corre, no lo que ocupa sitio en el fichero. */
-    {
-        std::vector<std::pair<double, std::string>> orden;
-        for (const auto &kv : g_fusion)
-            if (kv.second.fusable + kv.second.reorder_named > 0)
-                orden.push_back(
-                    {kv.second.fusable + kv.second.reorder_named, kv.first});
-        std::sort(orden.begin(), orden.end(),
-                  [](const auto &a, const auto &b) { return a.first > b.first; });
+        /* --- Que pares merece la pena convertir en UNA instruccion ---
+         *
+         * Ordenado por peso de EJECUCION, no por apariciones: lo que importa es
+         * lo que corre, no lo que ocupa sitio en el fichero. */
+        {
+            std::vector<std::pair<double, std::string>> orden;
+            for (const auto &kv : g_fusion)
+                if (kv.second.fusable + kv.second.reorder_named > 0)
+                    orden.push_back(
+                        {kv.second.fusable + kv.second.reorder_named,
+                         kv.first});
+            std::sort(
+                orden.begin(), orden.end(),
+                [](const auto &a, const auto &b) { return a.first > b.first; });
 
-        double total_fus = 0, total_w = 0, total_re = 0, total_hoy = 0;
-        for (const auto &kv : g_fusion) {
-            total_fus += kv.second.fusable;
-            total_re += kv.second.reorder;
-            total_w += kv.second.weight;
-            total_hoy += kv.second.hoy;
-        }
-        std::printf("\nPares consecutivos que se podrian convertir en UNA "
-                    "instruccion\n");
-        std::printf("  Fusionable = la primera produce un valor que la segunda "
-                    "consume\n  y que NADIE mas quiere (temporal muerto).  Es "
-                    "lo unico que baja el\n  RECUENTO, que es el cuello "
-                    "medido.\n\n");
-        std::printf("  ya adyacentes            : %8.0f (%.1f%%)\n", total_fus,
-                    total_w > 0 ? 100.0 * total_fus / total_w : 0.0);
-        std::printf("  SOLO tras reordenar      : %8.0f (%.1f%%)  <- lo que "
-                    "aporta mover\n",
-                    total_re, total_w > 0 ? 100.0 * total_re / total_w : 0.0);
-        std::printf("  total fusionable         : %8.0f (%.1f%%)  de %.0f "
-                    "instrucciones ejecutadas\n\n",
-                    total_fus + total_re,
-                    total_w > 0 ? 100.0 * (total_fus + total_re) / total_w : 0.0,
-                    total_w);
-        /* Lo que el fusionador sabe hacer HOY, contestado por EL, no deducido
-         * del nombre del opcode.  Es la cifra que decide si hay trabajo o hace
-         * falta un opcode nuevo, y la que faltaba: sin ella la tabla de arriba
-         * se leia como "hay un 38% pendiente" cuando ese 38% pedia
-         * instrucciones que no existen. */
-        std::printf("  al alcance del ABI de HOY: %8.0f (%.1f%% del "
-                    "fusionable)\n",
-                    total_hoy,
-                    (total_fus + total_re) > 0
-                        ? 100.0 * total_hoy / (total_fus + total_re)
-                        : 0.0);
-        std::printf("  pide opcodes NUEVOS      : %8.0f (%.1f%%)\n\n",
-                    total_fus + total_re - total_hoy,
-                    (total_fus + total_re) > 0
-                        ? 100.0 * (total_fus + total_re - total_hoy) /
-                              (total_fus + total_re)
-                        : 0.0);
-
-        /* Y de quien es la culpa.  Sin esto, un 0% no dice si es que no hay
-         * material, si el patron del fusionador esta mal escrito o si lo que
-         * falla es el modelo que trae los pares. */
-        double rechazo_total = 0;
-        for (size_t i = 1; i < 8; ++i) rechazo_total += g_reject[i];
-        if (rechazo_total > 0) {
-            std::printf("  Por que renuncia el fusionador:\n");
-            for (size_t i = 1; i < 8; ++i) {
-                if (g_reject[i] <= 0) continue;
-                std::printf("    %-40s %10.0f (%.1f%%)\n",
-                            runtime::fuse_reject_name(
-                                static_cast<runtime::FuseReject>(i)),
-                            g_reject[i], 100.0 * g_reject[i] / rechazo_total);
+            double total_fus = 0, total_w = 0, total_re = 0, total_hoy = 0;
+            for (const auto &kv : g_fusion) {
+                total_fus += kv.second.fusable;
+                total_re += kv.second.reorder;
+                total_w += kv.second.weight;
+                total_hoy += kv.second.hoy;
             }
-            std::printf("\n");
-        }
+            std::printf("\nPares consecutivos que se podrian convertir en UNA "
+                        "instruccion\n");
+            std::printf(
+                "  Fusionable = la primera produce un valor que la segunda "
+                "consume\n  y que NADIE mas quiere (temporal muerto).  Es "
+                "lo unico que baja el\n  RECUENTO, que es el cuello "
+                "medido.\n\n");
+            std::printf("  ya adyacentes            : %8.0f (%.1f%%)\n",
+                        total_fus,
+                        total_w > 0 ? 100.0 * total_fus / total_w : 0.0);
+            std::printf(
+                "  SOLO tras reordenar      : %8.0f (%.1f%%)  <- lo que "
+                "aporta mover\n",
+                total_re, total_w > 0 ? 100.0 * total_re / total_w : 0.0);
+            std::printf("  total fusionable         : %8.0f (%.1f%%)  de %.0f "
+                        "instrucciones ejecutadas\n\n",
+                        total_fus + total_re,
+                        total_w > 0 ? 100.0 * (total_fus + total_re) / total_w
+                                    : 0.0,
+                        total_w);
+            /* Lo que el fusionador sabe hacer HOY, contestado por EL, no
+             * deducido del nombre del opcode.  Es la cifra que decide si hay
+             * trabajo o hace falta un opcode nuevo, y la que faltaba: sin ella
+             * la tabla de arriba se leia como "hay un 38% pendiente" cuando ese
+             * 38% pedia instrucciones que no existen. */
+            std::printf("  al alcance del ABI de HOY: %8.0f (%.1f%% del "
+                        "fusionable)\n",
+                        total_hoy,
+                        (total_fus + total_re) > 0
+                            ? 100.0 * total_hoy / (total_fus + total_re)
+                            : 0.0);
+            std::printf("  pide opcodes NUEVOS      : %8.0f (%.1f%%)\n\n",
+                        total_fus + total_re - total_hoy,
+                        (total_fus + total_re) > 0
+                            ? 100.0 * (total_fus + total_re - total_hoy) /
+                                  (total_fus + total_re)
+                            : 0.0);
 
-        /* La tabla lleva ACUMULADO y no corta en seco.  Un top-N sin acumulado
-         * no dice si esas filas son el material o solo la punta: la cola puede
-         * pesar mas que la cabeza y no se ve.  Se imprime hasta cubrir el 95% y
-         * lo que quede se resume en una linea, para no confundir "no sale" con
-         * "no hay". */
-        std::printf("  %-28s %12s %10s %10s %8s %6s\n", "par", "ejecuciones",
-                    "adyacente", "reordenando", "hoy", "acum%");
-        const double total_orden = total_fus + total_re;
-        double acumulado = 0;
-        size_t mostradas = 0;
-        for (size_t i = 0; i < orden.size(); ++i) {
-            const PairStat &st = g_fusion[orden[i].second];
-            acumulado += orden[i].first;
-            const double pct =
-                total_orden > 0 ? 100.0 * acumulado / total_orden : 0.0;
-            std::printf("  %-28s %12.0f %10.0f %10.0f %8.0f %5.1f%%\n",
-                        orden[i].second.c_str(), st.weight, st.fusable,
-                        st.reorder_named, st.hoy, pct);
-            ++mostradas;
-            if (pct >= 95.0) break;
-        }
-        if (mostradas < orden.size()) {
-            double resto = 0, resto_hoy = 0;
-            for (size_t i = mostradas; i < orden.size(); ++i) {
-                resto += orden[i].first;
-                resto_hoy += g_fusion[orden[i].second].hoy;
+            /* Y de quien es la culpa.  Sin esto, un 0% no dice si es que no hay
+             * material, si el patron del fusionador esta mal escrito o si lo
+             * que falla es el modelo que trae los pares. */
+            double rechazo_total = 0;
+            for (size_t i = 1; i < 8; ++i)
+                rechazo_total += g_reject[i];
+            if (rechazo_total > 0) {
+                std::printf("  Por que renuncia el fusionador:\n");
+                for (size_t i = 1; i < 8; ++i) {
+                    if (g_reject[i] <= 0) continue;
+                    std::printf("    %-40s %10.0f (%.1f%%)\n",
+                                runtime::fuse_reject_name(
+                                    static_cast<runtime::FuseReject>(i)),
+                                g_reject[i],
+                                100.0 * g_reject[i] / rechazo_total);
+                }
+                std::printf("\n");
             }
-            std::printf("  %-28s %12s %10.0f %10s %8.0f %5.1f%%\n",
-                        ("(cola: " + std::to_string(orden.size() - mostradas) +
-                         " pares mas)")
-                            .c_str(),
-                        "", resto, "", resto_hoy, 100.0);
+
+            /* La tabla lleva ACUMULADO y no corta en seco.  Un top-N sin
+             * acumulado no dice si esas filas son el material o solo la punta:
+             * la cola puede pesar mas que la cabeza y no se ve.  Se imprime
+             * hasta cubrir el 95% y lo que quede se resume en una linea, para
+             * no confundir "no sale" con "no hay". */
+            std::printf("  %-28s %12s %10s %10s %8s %6s\n", "par",
+                        "ejecuciones", "adyacente", "reordenando", "hoy",
+                        "acum%");
+            const double total_orden = total_fus + total_re;
+            double acumulado = 0;
+            size_t mostradas = 0;
+            for (size_t i = 0; i < orden.size(); ++i) {
+                const PairStat &st = g_fusion[orden[i].second];
+                acumulado += orden[i].first;
+                const double pct =
+                    total_orden > 0 ? 100.0 * acumulado / total_orden : 0.0;
+                std::printf("  %-28s %12.0f %10.0f %10.0f %8.0f %5.1f%%\n",
+                            orden[i].second.c_str(), st.weight, st.fusable,
+                            st.reorder_named, st.hoy, pct);
+                ++mostradas;
+                if (pct >= 95.0) break;
+            }
+            if (mostradas < orden.size()) {
+                double resto = 0, resto_hoy = 0;
+                for (size_t i = mostradas; i < orden.size(); ++i) {
+                    resto += orden[i].first;
+                    resto_hoy += g_fusion[orden[i].second].hoy;
+                }
+                std::printf(
+                    "  %-28s %12s %10.0f %10s %8.0f %5.1f%%\n",
+                    ("(cola: " + std::to_string(orden.size() - mostradas) +
+                     " pares mas)")
+                        .c_str(),
+                    "", resto, "", resto_hoy, 100.0);
+            }
         }
-    }
         /* Cuales cerrar primero.  Es la lista de trabajo: cada uno de estos es
          * un opcode caliente cuyos efectos son cota inferior, y mientras lo
          * sean no se puede mover nada a su alrededor. */
         std::vector<std::pair<double, std::string>> peor;
         for (const auto &kv : g_unknown_weight)
             peor.push_back({kv.second, kv.first});
-        std::sort(peor.begin(), peor.end(),
-                  [](const auto &a, const auto &b) { return a.first > b.first; });
+        std::sort(peor.begin(), peor.end(), [](const auto &a, const auto &b) {
+            return a.first > b.first;
+        });
         std::printf("\n  Opcodes que aportan el `?`, por peso de ejecucion:\n");
         double suma = 0;
-        for (const auto &p : peor) suma += p.first;
+        for (const auto &p : peor)
+            suma += p.first;
         for (size_t i = 0; i < peor.size() && i < 12; ++i)
             std::printf("    %-14s %5.1f%%\n", peor[i].second.c_str(),
                         suma > 0 ? 100.0 * peor[i].first / suma : 0.0);

@@ -93,7 +93,8 @@
  * falta.  Eso obliga a distinguir dos cosas que antes eran una:
  *
  *   `FactStore::mark_domain(dom, momento)`     -> "este dominio esta COMPLETO"
- *   `FactStore::mark_function(dom, mom, fn)`   -> "de este dominio, esta funcion
+ *   `FactStore::mark_function(dom, mom, fn)`   -> "de este dominio, esta
+ funcion
  *                                                  ya vino de disco"
  *
  * En carga parcial se marcan las FUNCIONES y NO el dominio.  Asi `produce`
@@ -125,7 +126,8 @@
  *   - **La VERSION tambien.**  Estos analisis guardan punteros a instrucciones:
  *     servir uno viejo no es imprecision, es leer memoria liberada.  Esta clase
  *     hacia ONCE llamadas a la puerta sin versionar y cero a la versionada.
- *   - **`cached()` no mira la version**; contesta "hay algo guardado", que no es
+ *   - **`cached()` no mira la version**; contesta "hay algo guardado", que no
+ es
  *     "se va a reutilizar".  Para contar reuso o refrescar sellos, @c cached_v.
  *   - **La capa de `BuildConfig` importa**: `ir_fingerprint()` excluye el
  *     `opt_level` A PROPoSITO porque describe el IR pre-optimize.  Usarla para
@@ -168,7 +170,7 @@
 #include "analysis/manager/analysis_store.h" // el nivel [1] a DISCO, entre compilaciones
 #include "analysis/effects/effect_analysis.h" // el motor de efectos, compartido
 #include "analysis/effects/param_aliasing.h"  // que le llega a cada parametro
-#include "analysis/escape/escape.h"          // que sobrevive a la funcion
+#include "analysis/escape/escape.h"           // que sobrevive a la funcion
 #include "analysis/memory/points_to.h"
 
 #include <cstddef>
@@ -514,10 +516,11 @@ class FactBase {
      *
      * Vive aqui porque lo piden VARIOS y cada uno se lo calculaba entero: el
      * optimizador -- para saber que llamadas son puras y no hacen de barrera --
-     * y el comprobador de regiones -- para saber que puede escribir cada una --.
-     * Cada uno construia su propio motor desde cero, y medido con VTune sobre
-     * un programa de veintiocho mil lineas eso eran 3,4 % y 3,1 % del tiempo de
-     * compilar: casi el siete por ciento gastado DOS veces en lo mismo.
+     * y el comprobador de regiones -- para saber que puede escribir cada una
+     * --. Cada uno construia su propio motor desde cero, y medido con VTune
+     * sobre un programa de veintiocho mil lineas eso eran 3,4 % y 3,1 % del
+     * tiempo de compilar: casi el siete por ciento gastado DOS veces en lo
+     * mismo.
      *
      * Es exactamente lo que el primer invariante prohibe -- un hecho, un
      * productor -- aplicado a algo que no estaba aqui.
@@ -617,16 +620,17 @@ class FactBase {
      * @par Como se usa
      * No hace falta llamarla para consultar la base -- los accesores de modulo
      * ya lo hacen --.  Se expone porque es una pregunta legitima por si misma
-     * ("ha cambiado algo de este modulo desde que mire") y porque sin ella no se
-     * puede COMPROBAR que la reutilizacion funcione, que es la mitad del valor.
+     * ("ha cambiado algo de este modulo desde que mire") y porque sin ella no
+     * se puede COMPROBAR que la reutilizacion funcione, que es la mitad del
+     * valor.
      *
      * @par Y no es una suma, a proposito
      * Dos funciones que se intercambiaran versiones -- una sube, otra baja --
      * darian la misma suma, y un modulo se serviria con los resumenes del otro.
      * Se pliega mezclando, asi que la posicion cuenta.
      *
-     * Cuesta O(funciones) y se pide una vez por consulta, no por funcion: frente
-     * a recalcular un punto fijo sobre el grafo de llamadas, no se nota.
+     * Cuesta O(funciones) y se pide una vez por consulta, no por funcion:
+     * frente a recalcular un punto fijo sobre el grafo de llamadas, no se nota.
      */
     static uint64_t module_version(const ir::IrModule &mod) noexcept;
 
@@ -680,10 +684,9 @@ class FactBase {
      * @tparam T       Tipo del resultado.
      * @tparam Factory Como calcularlo si no esta.
      * @param fresh    Si NO estaba cacheado.  Lo pasa el accesor, que ya lo
-     *                 pregunto para decidir si sellar: preguntarlo aqui otra vez
-     *                 seria una segunda busqueda por consulta, y hay decenas de
-     *                 miles.  Va como parametro OBLIGATORIO, no como algo que
-     *                 se pueda dejar de pasar.
+     *                 pregunto para decidir si sellar: preguntarlo aqui otra
+     * vez seria una segunda busqueda por consulta, y hay decenas de miles.  Va
+     * como parametro OBLIGATORIO, no como algo que se pueda dejar de pasar.
      * @param unit     Clave de la unidad (funcion o modulo), ya internada.
      * @param version  Version con la que vale el resultado.
      * @param factory  Se invoca solo si hay que calcular.
@@ -752,7 +755,6 @@ class FactBase {
     const char *stage_or_default(const char *stage) const noexcept {
         return (stage != nullptr && stage[0] != '\0') ? stage : default_stage_;
     }
-
 
     /// Anota el sello de un hecho recien producido.
     void mark(const char *producer, const std::string &key, Certainty c,

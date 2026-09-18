@@ -1196,8 +1196,8 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             s.kind = VxiSymbolKind::FUNCTION;
             s.name = public_name;
             /* La etiqueta propia de la candidata gana: es la que separa una
-             * sobrecarga de sus hermanas, y la calculada arriba sale del NOMBRE,
-             * que ellas comparten. */
+             * sobrecarga de sus hermanas, y la calculada arriba sale del
+             * NOMBRE, que ellas comparten. */
             s.mangled_label = cand->mangled_label.empty() ? mangled_label
                                                           : cand->mangled_label;
             s.ns_path =

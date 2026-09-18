@@ -2617,8 +2617,8 @@ Lowering::lower_super_method_call_expr(ast::SuperMethodCallExpr *e) {
      * el metodo.  Repetir la busqueda aqui no solo seria trabajo doble: con
      * sobrecarga puede parar en otro hueco, y entonces el programa llamaria a
      * un cuerpo creyendo que llama a otro. */
-    std::string cur = e->resolved_owner.empty() ? it->second.super_name
-                                                : e->resolved_owner;
+    std::string cur =
+        e->resolved_owner.empty() ? it->second.super_name : e->resolved_owner;
     const ClassMethodInfo *found = nullptr;
     for (int depth = 0; depth < 32; ++depth) {
         auto it_s = tc_.class_layouts().find(cur);

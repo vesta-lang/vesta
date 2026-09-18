@@ -437,7 +437,6 @@ class VelSink {
         ops_pool_.reserve(n * 9u / 4u);
     }
 
-
   private:
     /* LA SEGUNDA VISTA, por fin enchufada.  Fabrica los nodos que el
      * ensamblador espera a partir de estos items, de uno en uno y sin pasar por
@@ -578,7 +577,8 @@ class VelSink {
         case emmit::OperandKind::Mem: os << o.mem; return;
         case emmit::OperandKind::Label: os << o.name_text(); return;
         case emmit::OperandKind::SymRef:
-            os << '@' << emmit::text_of(o.sym_kind) << "(\"" << o.name_text() << "\")";
+            os << '@' << emmit::text_of(o.sym_kind) << "(\"" << o.name_text()
+               << "\")";
             return;
         case emmit::OperandKind::Imm:
             if (o.imm_digitos_hex > 0) {

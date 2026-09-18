@@ -154,8 +154,8 @@ int main(int argc, char **argv) {
                 probados, aciertos);
 
     // 3. El nombre viene DESHECHO, no como lo codifica el enlazador.
-    const std::string n_hlt = tests::symbol_at(
-        ancla(), reinterpret_cast<uint64_t>(ancla()));
+    const std::string n_hlt =
+        tests::symbol_at(ancla(), reinterpret_cast<uint64_t>(ancla()));
     check(n_hlt.find("runtime::exec_instr_hlt") != std::string::npos,
           "el nombre sale deshecho, no codificado", n_hlt);
     check(n_hlt.find('+') == std::string::npos,

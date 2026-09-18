@@ -45,7 +45,8 @@ extern "C" {
  * sabria interpretar.
  */
 typedef struct {
-    /** @c e_machine de la cabecera ELF: @c EM_X86_64 (62), @c EM_AARCH64 (183). */
+    /** @c e_machine de la cabecera ELF: @c EM_X86_64 (62), @c EM_AARCH64 (183).
+     */
     uint16_t e_machine;
     /** Llamada a un simbolo INDEFINIDO (libc y demas). */
     uint32_t r_call_extern;

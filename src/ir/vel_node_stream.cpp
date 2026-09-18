@@ -112,8 +112,8 @@ make_register(const ir::Reg &r,
 /// mismo texto: decimal o hexadecimal segun como se escribio.  No es
 /// cosmetica -- hay quien lo mira para decidir el ancho del inmediato --.
 std::unique_ptr<vm::ASTNode> make_number(const std::string &text) {
-    const bool hex = text.size() > 2 && text[0] == '0' &&
-                     (text[1] == 'x' || text[1] == 'X');
+    const bool hex =
+        text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X');
     return std::make_unique<vm::NumberOperand>(
         text, hex ? vm::TokenType::NUMBER_HEX : vm::TokenType::NUMBER_DEC);
 }
@@ -129,8 +129,7 @@ std::unique_ptr<vm::ASTNode> join(char op, std::unique_ptr<vm::ASTNode> a,
                                   std::unique_ptr<vm::ASTNode> b) {
     return std::make_unique<vm::BinaryExpr>(
         op,
-        std::unique_ptr<vm::ExprNode>(
-            static_cast<vm::ExprNode *>(a.release())),
+        std::unique_ptr<vm::ExprNode>(static_cast<vm::ExprNode *>(a.release())),
         std::unique_ptr<vm::ExprNode>(
             static_cast<vm::ExprNode *>(b.release())));
 }
@@ -155,8 +154,8 @@ make_memory(const ir::Mem &m,
     if (m.hay_index) {
         std::unique_ptr<vm::ASTNode> idx = make_register(m.index, spare);
         if (m.scale != 1)
-            idx = join('*', std::move(idx),
-                       make_number(std::to_string(m.scale)));
+            idx =
+                join('*', std::move(idx), make_number(std::to_string(m.scale)));
         expr = join('+', std::move(expr), std::move(idx));
     }
     if (m.disp > 0) {
@@ -187,7 +186,8 @@ struct VelNodeStream::Impl {
     size_t at_header = 0;
     size_t at_item = 0;
     /**
-     * @brief Nodos de registro de vueltas anteriores, para no volver a pedirlos.
+     * @brief Nodos de registro de vueltas anteriores, para no volver a
+     * pedirlos.
      *
      * Es el nodo que mas se fabrica de todo el compilador -- 1.151.996 al
      * ensamblar 144.000 lineas -- y todos viven lo mismo: hasta la llamada
@@ -205,8 +205,7 @@ struct VelNodeStream::Impl {
     explicit Impl(VelSink &s) : sink(s) {}
 };
 
-VelNodeStream::VelNodeStream(VelSink &sink)
-    : impl_(new Impl(sink)) {
+VelNodeStream::VelNodeStream(VelSink &sink) : impl_(new Impl(sink)) {
     /* La cabecera: los crudos que van ANTES del primer item tipado.  Se juntan
      * y se parsean de una vez.  Lo que venga despues tiene que ser comentario
      * o espacio; cualquier otra cosa es algo que no sabemos fabricar, y
@@ -227,14 +226,13 @@ VelNodeStream::VelNodeStream(VelSink &sink)
             size_t p = 0;
             while (p < raw.size()) {
                 const size_t nl = raw.find('\n', p);
-                const std::string ln =
-                    raw.substr(p, nl == std::string::npos ? std::string::npos
-                                                          : nl - p);
+                const std::string ln = raw.substr(
+                    p, nl == std::string::npos ? std::string::npos : nl - p);
                 const size_t a = ln.find_first_not_of(" \t\r");
                 if (a != std::string::npos && ln.compare(a, 2, "//") != 0) {
                     ok_ = false;
-                    why_not_ = "texto sin forma propia en el cuerpo: " +
-                               ln.substr(a);
+                    why_not_ =
+                        "texto sin forma propia en el cuerpo: " + ln.substr(a);
                     return;
                 }
                 if (nl == std::string::npos) break;
@@ -343,8 +341,8 @@ const vm::ASTNode *VelNodeStream::next() {
             std::vector<std::unique_ptr<vm::ASTNode>> ops;
             ops.reserve(in.n_ops);
             for (unsigned i = 0; i < in.n_ops; ++i)
-                ops.push_back(
-                    make_operand(s.ops_pool_[in.ops_off + i], impl_->spare_regs));
+                ops.push_back(make_operand(s.ops_pool_[in.ops_off + i],
+                                           impl_->spare_regs));
 
             auto node = std::make_unique<vm::Instruction>(
                 emmit::text_of(in.mnem), std::move(ops));
@@ -388,9 +386,8 @@ const vm::ASTNode *VelNodeStream::next() {
     return nullptr;
 }
 
-std::unique_ptr<vm::ExprNode>
-VelNodeStream::make_data_value(const emmit::Operand &o,
-                               std::vector<std::unique_ptr<vm::ASTNode>> &spare) {
+std::unique_ptr<vm::ExprNode> VelNodeStream::make_data_value(
+    const emmit::Operand &o, std::vector<std::unique_ptr<vm::ASTNode>> &spare) {
     /* Dentro de un bloque de datos el parser produce OTRA cosa para lo mismo:
      * un `@Absolute("x")` es aqui un `AbsRefExpr`, no una anotacion.  Son dos
      * caminos distintos del parser (`parse_data_values` frente a
@@ -416,8 +413,8 @@ VelNodeStream::make_operand(const emmit::Operand &o,
          * que da `parse_annotation` -- un `AnnotationNode` con la clave y el
          * simbolo --, y `AbsRefExpr` solo aparece dentro de un bloque de
          * datos, que es otro camino del parser.  Ver `make_data_value`. */
-        return std::make_unique<vm::AnnotationNode>(
-            emmit::text_of(o.sym_kind), o.name_text());
+        return std::make_unique<vm::AnnotationNode>(emmit::text_of(o.sym_kind),
+                                                    o.name_text());
     case emmit::OperandKind::Imm: return make_number(immediate_text(o));
     case emmit::OperandKind::None: break;
     }

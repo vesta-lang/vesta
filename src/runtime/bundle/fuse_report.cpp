@@ -26,12 +26,15 @@ const char *fuse_reject_name(FuseReject r) {
     switch (r) {
     case FuseReject::None: return "se fusiona";
     case FuseReject::NotAMov: return "la 1a no encaja en ningun patron";
-    case FuseReject::NoThreeOpForm: return "la 2a no tiene forma de 3 operandos";
+    case FuseReject::NoThreeOpForm:
+        return "la 2a no tiene forma de 3 operandos";
     case FuseReject::WidthMismatch: return "no operan a 64 bits";
-    case FuseReject::DestMismatch: return "la ALU no escribe el destino del mov";
+    case FuseReject::DestMismatch:
+        return "la ALU no escribe el destino del mov";
     case FuseReject::SrcIsDest: return "la 2a fuente ES el destino";
     case FuseReject::TooMany: return "no cabe en `absorbed` o en `size_instr`";
-    case FuseReject::CopyMismatch: return "la 2a no consume lo que produjo la 1a";
+    case FuseReject::CopyMismatch:
+        return "la 2a no consume lo que produjo la 1a";
     case FuseReject::DestLiveOut: return "el temporal sigue VIVO";
     }
     return "?";
@@ -70,7 +73,8 @@ namespace {
         // El mayor que quede sin imprimir, para que salgan ordenados.
         uint32_t best = 8;
         for (uint32_t k = 0; k < 8; ++k)
-            if (top[k].n != 0 && (best == 8 || top[k].n > top[best].n)) best = k;
+            if (top[k].n != 0 && (best == 8 || top[k].n > top[best].n))
+                best = k;
         if (best == 8) break;
         const bool ext = top[best].idx >= 256;
         const uint8_t op = (uint8_t)(top[best].idx & 0xFF);
@@ -109,7 +113,8 @@ void fuse_dump(const ProcessVM *process) {
     const auto &s = process->bundle_stats;
 
     uint64_t rejects = 0;
-    for (size_t i = 1; i < kFuseRejectCount; ++i) rejects += s.fuse_reject[i];
+    for (size_t i = 1; i < kFuseRejectCount; ++i)
+        rejects += s.fuse_reject[i];
     if (rejects != 0) {
         std::fprintf(stderr,
                      "           no fusionados, por que (mirada ciega=%llu de "

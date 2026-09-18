@@ -83,9 +83,9 @@ namespace codegen {
  * identificadores opacos, asi que no hace falta renumerar y el resultado se
  * puede devolver al emisor sin tabla de traduccion.
  */
-inline rbank::AbstractProblem
-liveness_to_problem(const ir::IrFunction &fn, const ir::LivenessResult &live,
-                    const std::vector<ir::IrValueId> *coalesce_remap = nullptr) {
+inline rbank::AbstractProblem liveness_to_problem(
+    const ir::IrFunction &fn, const ir::LivenessResult &live,
+    const std::vector<ir::IrValueId> *coalesce_remap = nullptr) {
     /* CANONICALIZACION por congruencia de PHI.  Cuando hay remap, los valores
      * de una misma clase COMPARTEN registro, asi que el problema real tiene un
      * unico valor por clase con el intervalo UNIDO (def = min, end = max).  Si

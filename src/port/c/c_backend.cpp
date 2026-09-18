@@ -1326,8 +1326,7 @@ void CBackend::emit_str_lit_addr(EmitContext &ctx, ir::IrValueId dst,
 
 void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
                             const std::string &asm_text,
-                            ir::IrValueList operands,
-                            ir::IrType t) {
+                            ir::IrValueList operands, ir::IrType t) {
     // El tipo del dst determina como castear el resultado: PTR para
     // strraw (host buffer) vs I64 para los handles internos.
     const char *result_cast =
@@ -1688,8 +1687,7 @@ void CBackend::emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
 
 void CBackend::emit_native_call(EmitContext &ctx, ir::IrValueId dst,
                                 const std::string &lib, const std::string &sym,
-                                ir::IrValueList args,
-                                ir::IrType ret_type) {
+                                ir::IrValueList args, ir::IrType ret_type) {
     (void)lib;
     (void)ret_type;
     auto src = [&](size_t i) -> std::string {
@@ -3117,8 +3115,7 @@ void CBackend::emit_raw_free(EmitContext &ctx, ir::IrValueId ptr) {
 // =========================================================================
 
 void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
-                         const std::string &func_name,
-                         ir::IrValueList args,
+                         const std::string &func_name, ir::IrValueList args,
                          ir::IrType ret_type) {
     // Skip llamadas a @c __module_init: la funcion no se emite (es para
     // VestaVM runtime).  Las clases en C son literales con structs
@@ -3221,8 +3218,7 @@ void CBackend::emit_call(EmitContext &ctx, ir::IrValueId dst,
 
 void CBackend::emit_callvirt(EmitContext &ctx, ir::IrValueId dst,
                              ir::IrValueId obj, uint32_t vtable_idx,
-                             ir::IrValueList args,
-                             ir::IrType ret_type) {
+                             ir::IrValueList args, ir::IrType ret_type) {
     // Estrategia: SIEMPRE intentar devirtualizar.  Si el tipo concreto
     // del receiver es conocido (via @c concrete_type_), buscar el
     // metodo en @c cls.methods por vtable_index y emitir DIRECT CALL.
@@ -3299,8 +3295,7 @@ void CBackend::emit_callvirt(EmitContext &ctx, ir::IrValueId dst,
 }
 
 void CBackend::emit_call_closure(EmitContext &ctx, ir::IrValueId dst,
-                                 ir::IrValueId fn_addr,
-                                 ir::IrValueList args,
+                                 ir::IrValueId fn_addr, ir::IrValueList args,
                                  ir::IrType ret_type, const ir::IrInstr &ins) {
     (void)ins;
     // Layout IR: @c callclosure func_ptr=%fn_addr, operands=[%env, args...]
@@ -3352,8 +3347,7 @@ void CBackend::emit_spawn_trampoline_call(EmitContext &ctx,
 
 void CBackend::emit_callm(EmitContext &ctx, ir::IrValueId dst,
                           ir::IrValueId obj, ir::IrValueId method_ptr,
-                          ir::IrValueList args,
-                          ir::IrType ret_type) {
+                          ir::IrValueList args, ir::IrType ret_type) {
     // En port C el dispatch dinamico via @c MethodInfo* no es viable
     // sin ClassRegistry runtime.  La devirtualizacion compile-time
     // (en lowering Vesta) reescribe el patron a CALLVIRT cuando el tipo
@@ -3377,8 +3371,7 @@ void CBackend::emit_callm(EmitContext &ctx, ir::IrValueId dst,
 }
 
 void CBackend::emit_call_indirect(EmitContext &ctx, ir::IrValueId dst,
-                                  ir::IrValueId fn_ptr,
-                                  ir::IrValueList args,
+                                  ir::IrValueId fn_ptr, ir::IrValueList args,
                                   ir::IrType ret_type) {
     if (ret_type != ir::IrType::VOID && dst != ir::IR_NO_VALUE) {
         emit_assign_lhs(ctx, dst);

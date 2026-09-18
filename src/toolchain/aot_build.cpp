@@ -2857,10 +2857,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // hace `.vxgc_smap` aqui arriba con su `func_addr`.
     // ------------------------------------------------------------------
     struct PdataFix {
-        uint32_t site;    ///< offset dentro de `.pdata` a parchear
-        int target_sec;   ///< seccion del objetivo
-        uint64_t
-            target_off;   ///< offset dentro de esa seccion
+        uint32_t site;       ///< offset dentro de `.pdata` a parchear
+        int target_sec;      ///< seccion del objetivo
+        uint64_t target_off; ///< offset dentro de esa seccion
     };
     std::vector<PdataFix> pdata_fixes;
     int pdata_si = -1, xdata_si = -1;
@@ -2892,7 +2891,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         if (fmt == aot::ObjFormat::PE && arch == aot::AotArch::X86_64 &&
             !no_own_header) {
             switch (opt.unwind) {
-            case UnwindEmit::AUTO:  // el defecto en Windows, y es cambiable
+            case UnwindEmit::AUTO: // el defecto en Windows, y es cambiable
             case UnwindEmit::TABLE:
             case UnwindEmit::BOTH: want_table = true; break;
             case UnwindEmit::NONE:
@@ -2950,8 +2949,7 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
 
                 std::vector<uint8_t> info;
                 codegen::unwind::PeUnwindSkip why;
-                if (!codegen::unwind::build_pe_x86_64(af.unwind, info,
-                                                      &why)) {
+                if (!codegen::unwind::build_pe_x86_64(af.unwind, info, &why)) {
                     if (why == codegen::unwind::PeUnwindSkip::TooComplex) {
                         std::cerr << vx::diag::format("VX9250", {af.name})
                                   << "\n";
@@ -2977,7 +2975,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                      * `.pdata` es una RVA cualquiera, pero el formato exige la
                      * alineacion y el desenrollador lee campos de 2 y 4 bytes
                      * dentro. */
-                    while (xdata.size() % 4) xdata.push_back(0);
+                    while (xdata.size() % 4)
+                        xdata.push_back(0);
                     xoff = static_cast<uint32_t>(xdata.size());
                     xdata.insert(xdata.end(), info.begin(), info.end());
                     xdata_off.emplace(info, xoff);
@@ -2985,8 +2984,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
 
                 const FnLoc &fl = fn_loc[af.name];
                 // BeginAddress, EndAddress, UnwindInfoAddress: tres RVA.
-                pdata_fixes.push_back({static_cast<uint32_t>(pdata.size()),
-                                       fl.sec, fl.off});
+                pdata_fixes.push_back(
+                    {static_cast<uint32_t>(pdata.size()), fl.sec, fl.off});
                 put32(pdata, 0);
                 pdata_fixes.push_back({static_cast<uint32_t>(pdata.size()),
                                        fl.sec, fl.off + af.bytes.size()});
@@ -3027,8 +3026,8 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // reloc despues del layout, igual que las RVA de `.pdata`.
     // ------------------------------------------------------------------
     struct EhFix {
-        uint32_t site;  ///< offset del hueco dentro de `.eh_frame`
-        int target_sec; ///< seccion de la funcion
+        uint32_t site;       ///< offset del hueco dentro de `.eh_frame`
+        int target_sec;      ///< seccion de la funcion
         uint64_t target_off; ///< offset de la funcion dentro de esa seccion
     };
     std::vector<EhFix> eh_fixes;
@@ -3043,7 +3042,9 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
              * ES esto, mientras que en PE lo que el sistema sabe leer son las
              * tablas, asi que alli `auto` ya eligio `.pdata` mas arriba.  Quien
              * quiera los dos en una PE lo pide con `both`. */
-            case UnwindEmit::AUTO: want_cfi = (fmt == aot::ObjFormat::ELF); break;
+            case UnwindEmit::AUTO:
+                want_cfi = (fmt == aot::ObjFormat::ELF);
+                break;
             case UnwindEmit::NONE:
             case UnwindEmit::TABLE: break;
             }
@@ -3487,9 +3488,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
      *
      * Van como REL32 CON ADDEND +4, y ese +4 no es un apano: la codificacion
      * que declara la CIE es `pcrel`, o sea relativa a la posicion del propio
-     * campo -- `objetivo - sitio` --, mientras que REL32 escribe lo que necesita
-     * un `call` de x86, que es `objetivo - (sitio + 4)` porque el procesador
-     * cuenta desde la instruccion SIGUIENTE.  El addend cancela esa diferencia.
+     * campo -- `objetivo - sitio` --, mientras que REL32 escribe lo que
+     * necesita un `call` de x86, que es `objetivo - (sitio + 4)` porque el
+     * procesador cuenta desde la instruccion SIGUIENTE.  El addend cancela esa
+     * diferencia.
      *
      * Y se emite pcrel, y no una direccion absoluta, para que `.eh_frame` pueda
      * ser de solo lectura y no haya que reubicarla en cada arranque. */

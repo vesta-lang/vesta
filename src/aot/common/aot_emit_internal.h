@@ -118,7 +118,8 @@ static inline int apply_reloc(uint8_t *site, uint64_t site_va,
          * mas de 4 GiB de ella, no tiene RVA; escribir los 32 bits bajos daria
          * una tabla bien formada que apunta a cualquier sitio, y el sistema la
          * seguiria.  Fallar aqui es lo unico util que se puede hacer. */
-        if (image_base == AOT_NO_IMAGE_BASE) return 0; // no aplica a este formato
+        if (image_base == AOT_NO_IMAGE_BASE)
+            return 0; // no aplica a este formato
         if (target_value < image_base) return 0;
         const uint64_t rva = target_value - image_base;
         if (rva > 0xFFFFFFFFull) return 0;

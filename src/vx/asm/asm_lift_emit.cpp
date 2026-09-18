@@ -24,8 +24,8 @@ namespace {
 /// Emite un LOAD i64 del slot @p slot y devuelve el valor.  Si @p host, marca
 /// el resultado como host_ptr (una direccion @c [reg] del asm es una direccion
 /// del proceso host, no del espacio VM).
-ir::IrValueId load_slot(ir::IrFunction &fn, ir::IrBlockId block, ir::IrValueId slot,
-                        bool host, uint32_t line) {
+ir::IrValueId load_slot(ir::IrFunction &fn, ir::IrBlockId block,
+                        ir::IrValueId slot, bool host, uint32_t line) {
     const ir::IrValueId v = fn.new_value(ir::IrType::I64);
     ir::IrInstr ld{};
     ld.op = ir::IrOp::LOAD;

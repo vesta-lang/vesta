@@ -294,8 +294,8 @@ struct Mem {
     constexpr Mem(Reg b, long long off) noexcept
         : base(b), index(Reg::gp(0)), hay_index(false), scale(1), disp(off) {}
     constexpr Mem(Reg b, Reg idx, unsigned sc) noexcept
-        : base(b), index(idx), hay_index(true),
-          scale(static_cast<uint8_t>(sc)), disp(0) {}
+        : base(b), index(idx), hay_index(true), scale(static_cast<uint8_t>(sc)),
+          disp(0) {}
 };
 
 /**

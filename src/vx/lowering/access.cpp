@@ -785,7 +785,8 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
          * bytes, `f64` ocho).  Es la misma conversion que usa el sitio que
          * inicializa los datos estaticos, y por eso comparte helper. */
         auto emitir_flotante = [&](double d) {
-            return emit_const(t, float_bits_from_double(d, t == ir::IrType::F32),
+            return emit_const(t,
+                              float_bits_from_double(d, t == ir::IrType::F32),
                               e->loc.line);
         };
         if (gv->init->kind == ast::NodeKind::FloatLitExpr) {

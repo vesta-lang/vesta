@@ -298,7 +298,6 @@ using Producer = void (*)(Production &);
  * explicita, comprobable, y da una huella constante siempre valida.
  */
 
-
 /**
  * @brief Huella de las ENTRADAS de un dominio, sin producir nada.
  *
@@ -326,8 +325,8 @@ using DomainFingerprint = uint64_t (*)(const ir::IrModule &);
  *
  * @par Como se declara uno nuevo
  * Se pasa a @ref register_producer el OR de lo que de verdad lea.  Si lee algo
- * que no esta en esta lista, se anade aqui una entrada y se calcula su huella en
- * el motor -- una sola vez por modulo --, no en el productor.
+ * que no esta en esta lista, se anade aqui una entrada y se calcula su huella
+ * en el motor -- una sola vez por modulo --, no en el productor.
  *
  * @par Y por que no se OBSERVA en vez de declararse
  * Observar lo que cada uno pide seria imposible de desactualizar, pero hace la
@@ -507,8 +506,7 @@ void register_param_contracts_producer();
  * @param fn Funcion a la que pertenece el valor.
  * @param v  Id del valor SSA.
  */
-Subject value_subject(Production &p, const ir::IrFunction &fn,
-                      ir::IrValueId v);
+Subject value_subject(Production &p, const ir::IrFunction &fn, ir::IrValueId v);
 
 /**
  * @brief El sujeto de un hecho que habla de UNA FUNCION.

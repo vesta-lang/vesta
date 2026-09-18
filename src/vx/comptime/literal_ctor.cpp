@@ -174,8 +174,9 @@ ir::IrValueId Lowering::try_lower_comptime_ctor_call(ast::CallExpr *e,
                  * lo que hubiera en el bufer -- no ceros, lo que hubiera -- y
                  * el programa seguia con un valor que nadie escribio. */
                 if (!ev.deferred)
-                    diags_.diag(a->loc, DiagLevel::ERR, "VX2065",
-                                {slay.name, std::to_string(vm_args.size() + 1)});
+                    diags_.diag(
+                        a->loc, DiagLevel::ERR, "VX2065",
+                        {slay.name, std::to_string(vm_args.size() + 1)});
                 args_ok = false;
                 break;
             }

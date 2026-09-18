@@ -175,8 +175,9 @@ void init_threshold_from_env() {
     /* C2 tier-up (opt-in).  VESTA_C2_THRESHOLD=N activa el tier-up con
      * umbral N; ausente o 0 = C2 apagado (default). */
     {
-        /* Mismo fallo que el umbral del JIT, y por eso mismo `VESTA_C2_THRESHOLD`
-         * tampoco encendia nunca el C2.  Ver la nota de arriba. */
+        /* Mismo fallo que el umbral del JIT, y por eso mismo
+         * `VESTA_C2_THRESHOLD` tampoco encendia nunca el C2.  Ver la nota de
+         * arriba. */
         const int64_t v = util::flag_int(util::FlagId::C2Threshold, -1);
         if (v >= 0 && v <= static_cast<int64_t>(UINT32_MAX))
             g_c2_threshold = static_cast<uint32_t>(v);
@@ -346,10 +347,8 @@ VregEntries make_vreg_entries() {
             reinterpret_cast<uint64_t>(g_runtime_entries->vm_write_u32);
         e.vm_write_u64 =
             reinterpret_cast<uint64_t>(g_runtime_entries->vm_write_u64);
-        e.vm_memset =
-            reinterpret_cast<uint64_t>(g_runtime_entries->vm_memset);
-        e.vm_memcpy =
-            reinterpret_cast<uint64_t>(g_runtime_entries->vm_memcpy);
+        e.vm_memset = reinterpret_cast<uint64_t>(g_runtime_entries->vm_memset);
+        e.vm_memcpy = reinterpret_cast<uint64_t>(g_runtime_entries->vm_memcpy);
     }
     return e;
 }
@@ -1413,8 +1412,8 @@ CompileResult eager_compile_function(
                 any = ir::applied(ir::ir_pass_inline(tmp, 256)) || any;
                 any = ir::applied(ir::ir_pass_const_fold(tmp.functions[0])) ||
                       any;
-                any = ir::applied(ir::ir_pass_copy_prop(tmp.functions[0])) ||
-                      any;
+                any =
+                    ir::applied(ir::ir_pass_copy_prop(tmp.functions[0])) || any;
                 any =
                     ir::applied(ir::ir_pass_simplify(tmp.functions[0])) || any;
                 any = ir::applied(ir::ir_pass_dce(tmp.functions[0])) || any;
@@ -1680,7 +1679,8 @@ CompileResult eager_compile_function(
                         /* Inline agresivo + limpieza a fixpoint. */
                         bool any_opt = false;
                         for (int it = 0; it < 5; ++it) {
-                            bool any = ir::applied(ir::ir_pass_inline(tmp, 256));
+                            bool any =
+                                ir::applied(ir::ir_pass_inline(tmp, 256));
                             any = ir::applied(ir::ir_pass_const_fold(
                                       tmp.functions[0])) ||
                                   any;
@@ -1690,9 +1690,9 @@ CompileResult eager_compile_function(
                             any = ir::applied(
                                       ir::ir_pass_simplify(tmp.functions[0])) ||
                                   any;
-                            any =
-                                ir::applied(ir::ir_pass_dce(tmp.functions[0])) ||
-                                any;
+                            any = ir::applied(
+                                      ir::ir_pass_dce(tmp.functions[0])) ||
+                                  any;
                             any_opt = any_opt || any;
                             if (!any) break;
                         }
@@ -2855,10 +2855,9 @@ void c2_tier_up(runtime::ProcessVM *vm, uint64_t fn_pc) noexcept {
                     /* inline del CALL fast-path + limpieza a fixpoint. */
                     for (int it = 0; it < 5; ++it) {
                         bool any = ir::applied(ir::ir_pass_inline(tmp));
-                        any =
-                            ir::applied(ir::ir_pass_const_fold(
-                                tmp.functions[0])) ||
-                            any;
+                        any = ir::applied(
+                                  ir::ir_pass_const_fold(tmp.functions[0])) ||
+                              any;
                         any = ir::applied(
                                   ir::ir_pass_copy_prop(tmp.functions[0])) ||
                               any;

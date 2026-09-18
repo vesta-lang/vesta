@@ -177,7 +177,7 @@ static void probar_por_orden_de_magnitud() {
             if (i % paso == 0)
                 barra(c.titulo, c.repeticiones + i, 2 * c.repeticiones);
             // La prueba SIEMPRE mide: es lo que esta comprobando.
-        util::CronoTramo crono(c.etiqueta, true);
+            util::CronoTramo crono(c.etiqueta, true);
             esperar_ns(c.ns);
         }
         barra(c.titulo, 2 * c.repeticiones, 2 * c.repeticiones);

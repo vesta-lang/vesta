@@ -319,7 +319,8 @@ const char *heat_bad(double frac) {
  * Tres niveles, de menos a mas detalle, porque son tres preguntas distintas:
  *
  *   1. el RESUMEN -- cuanto de la icache se usa, cuantas cabeceras sobreviven,
- *      cuanto ocupa la region viva --, que dice si el mecanismo esta trabajando;
+ *      cuanto ocupa la region viva --, que dice si el mecanismo esta
+ * trabajando;
  *   2. las CABECERAS con lo que cada paquete ha hecho (entradas, ejecutadas,
  *      instrucciones por entrada, si se retiro), que es lo que explica POR QUE
  *      un paquete concreto se comporto como se comporto;
@@ -392,8 +393,8 @@ void dump_caches(runtime::ProcessVM *proc, const char *name) {
     runtime::bundle_dump_heads(proc, 6, /*with_instructions=*/false);
     // Nivel 3: el ensamblador de la mas usada, con sus direcciones virtuales.
     if (sample != nullptr) {
-        std::fprintf(stderr, "\n%scabecera mas ejecutada, desensamblada:%s\n", B,
-                     R);
+        std::fprintf(stderr, "\n%scabecera mas ejecutada, desensamblada:%s\n",
+                     B, R);
         runtime::bundle_dump_one(proc, sample);
     }
     std::fflush(stderr);
@@ -437,7 +438,8 @@ int main(int argc, char **argv) {
      *
      * Los dos programas generados no son arbitrarios: uno cabe de sobra en la
      * cache y el otro la desborda a proposito, que es lo que hace pasar por el
-     * RECOLECTOR.  Sin el segundo, la recoleccion no se ejecutaria nunca aqui. */
+     * RECOLECTOR.  Sin el segundo, la recoleccion no se ejecutaria nunca aqui.
+     */
     bool generados = false;
     if (files.empty()) {
         files = tests::default_bundle_programs("test_bundles");
@@ -505,11 +507,12 @@ int main(int argc, char **argv) {
                 "ya formada.  Es lo que\n"
                 "             amortiza el coste de formarla.\n",
                 D, R);
-    std::printf("  %sidentico%s   si las dos corridas coinciden en instrucciones"
-                ", `rip` y los 16\n"
-                "             registros.  `si*` = las dos se cortaron en el "
-                "tope, no es concluyente.\n",
-                D, R);
+    std::printf(
+        "  %sidentico%s   si las dos corridas coinciden en instrucciones"
+        ", `rip` y los 16\n"
+        "             registros.  `si*` = las dos se cortaron en el "
+        "tope, no es concluyente.\n",
+        D, R);
     std::printf("  %smotivo%s     por que PARO el arnes: `hlt` es que el "
                 "programa termino solo.\n"
                 "             Cualquier otra cosa dice que se corto antes, y "
@@ -695,30 +698,33 @@ int main(int argc, char **argv) {
         std::snprintf(c_turns, sizeof c_turns, "%llu",
                       (unsigned long long)turns);
 
-        std::printf("%s%-28s%s %s%12llu%s %s%9s%s %s%12s%s %s%10s%s "
-                    "%s%9s%s %s%9s%s  %s%s%s\n",
-                    ansi::c(ansi::BR_CYAN), b, ansi::c(ansi::RESET),
-                    /* El recuento se toma del modo SIN paquetes: ahi cada
-                     * instruccion es un despacho, asi que es exacto.  El del
-                     * modo con paquetes solo lo es con telemetria -- lo que se
-                     * ejecuta DENTRO de un paquete no gasta despacho --, y
-                     * ponerlo daba 5.421 donde el programa hace 2,4 millones. */
-                    ansi::c(ansi::WHITE), (unsigned long long)out[0].vm_instrs,
-                    ansi::c(ansi::RESET),
-                    heat(formed ? 1.0 : 0.0), c_formed, ansi::c(ansi::RESET),
-                    heat(frac_saved), c_saved, ansi::c(ansi::RESET),
-                    heat_bad(frac_abort), c_aborts, ansi::c(ansi::RESET),
-                    heat(turns ? 1.0 : 0.0), c_turns, ansi::c(ansi::RESET),
-                    ok ? ansi::c(ansi::BR_GREEN) : ansi::c(ansi::BR_RED),
-                    !mismo_n ? "NO" : cortado ? "si*" : ok ? "si" : "NO",
-                    ansi::c(ansi::RESET),
-                    /* POR QUE paro.  Estaba en `Result::why` y no lo imprimia
-                     * nadie: el arnes se detenia y el motivo no salia por
-                     * ningun sitio, que es justo el fallo mudo que este
-                     * proyecto no admite. */
-                    ansi::c(ansi::DIM),
-                    out[1].why[0] != '\0' ? out[1].why : "tope",
-                    ansi::c(ansi::RESET));
+        std::printf(
+            "%s%-28s%s %s%12llu%s %s%9s%s %s%12s%s %s%10s%s "
+            "%s%9s%s %s%9s%s  %s%s%s\n",
+            ansi::c(ansi::BR_CYAN), b, ansi::c(ansi::RESET),
+            /* El recuento se toma del modo SIN paquetes: ahi cada
+             * instruccion es un despacho, asi que es exacto.  El del
+             * modo con paquetes solo lo es con telemetria -- lo que se
+             * ejecuta DENTRO de un paquete no gasta despacho --, y
+             * ponerlo daba 5.421 donde el programa hace 2,4 millones. */
+            ansi::c(ansi::WHITE), (unsigned long long)out[0].vm_instrs,
+            ansi::c(ansi::RESET), heat(formed ? 1.0 : 0.0), c_formed,
+            ansi::c(ansi::RESET), heat(frac_saved), c_saved,
+            ansi::c(ansi::RESET), heat_bad(frac_abort), c_aborts,
+            ansi::c(ansi::RESET), heat(turns ? 1.0 : 0.0), c_turns,
+            ansi::c(ansi::RESET),
+            ok ? ansi::c(ansi::BR_GREEN) : ansi::c(ansi::BR_RED),
+            !mismo_n  ? "NO"
+            : cortado ? "si*"
+            : ok      ? "si"
+                      : "NO",
+            ansi::c(ansi::RESET),
+            /* POR QUE paro.  Estaba en `Result::why` y no lo imprimia
+             * nadie: el arnes se detenia y el motivo no salia por
+             * ningun sitio, que es justo el fallo mudo que este
+             * proyecto no admite. */
+            ansi::c(ansi::DIM), out[1].why[0] != '\0' ? out[1].why : "tope",
+            ansi::c(ansi::RESET));
         std::fflush(stdout);
 
         // Tiempo: ns por instruccion de VM en cada modo.  Es la unica cifra que

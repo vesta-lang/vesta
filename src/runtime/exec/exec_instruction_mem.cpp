@@ -26,8 +26,8 @@
  * eso es UNA instruccion.
  *
  * DE DONDE SALEN LOS MOVIMIENTOS.  De @c util/mem/vesta_memcpy.h y
- * @c util/mem/vesta_memset.h, en @c vesta_alloc.  Antes vivian AQUI DENTRO, en el
- * anonimo de este fichero y sin cabecera, asi que solo los podia usar el
+ * @c util/mem/vesta_memset.h, en @c vesta_alloc.  Antes vivian AQUI DENTRO, en
+ * el anonimo de este fichero y sin cabecera, asi que solo los podia usar el
  * interprete: el asignador, que necesita exactamente lo mismo, llamaba a
  * @c std::memset teniendolos al lado.  Son primitivas de memoria del anfitrion,
  * no instrucciones de la maquina virtual, y su sitio es la libreria de memoria.
@@ -51,8 +51,8 @@
 #include "runtime/exception_runtime.h"
 #include "runtime/exec_instruction.h"
 #include "runtime/proceso_runtime.h"
-#include "runtime/vm_block_mem.h" // el recorrido por paginas, en UN sitio
-#include "util/mem/vesta_memcpy.h"    // los movimientos, en UN sitio
+#include "runtime/vm_block_mem.h"  // el recorrido por paginas, en UN sitio
+#include "util/mem/vesta_memcpy.h" // los movimientos, en UN sitio
 #include "util/mem/vesta_memset.h"
 
 #include <cstddef>

@@ -103,19 +103,18 @@ struct Index {
     /**
      * @brief Apunta que @p param tambien puede recibir el receptor, por hueco.
      *
-     * Con `_` el receptor no cae en el primero -- `"hola".sumar(.a = 3, .b = _)`
-     * lo manda a `b` --, asi que buscar solo por la cabeza del PRIMER parametro
-     * no encuentra nada.  Esto vive en su propia tabla y no mezclado con la
-     * otra: la regla 2.2 pregunta por "quien podria ser el metodo de esto", que
-     * es el primero y nada mas, y meter aqui los demas la haria gritar por
-     * funciones que solo se alcanzan escribiendo un hueco.
+     * Con `_` el receptor no cae en el primero -- `"hola".sumar(.a = 3, .b =
+     * _)` lo manda a `b` --, asi que buscar solo por la cabeza del PRIMER
+     * parametro no encuentra nada.  Esto vive en su propia tabla y no mezclado
+     * con la otra: la regla 2.2 pregunta por "quien podria ser el metodo de
+     * esto", que es el primero y nada mas, y meter aqui los demas la haria
+     * gritar por funciones que solo se alcanzan escribiendo un hueco.
      *
      * @param param Tipo de UN parametro suyo (el primero incluido).
      * @param name  Nombre con el que se declaro.
      * @param slot  Como la reconoce quien pregunta.
      */
-    void declare_any(const Type &param, const std::string &name,
-                     uint32_t slot);
+    void declare_any(const Type &param, const std::string &name, uint32_t slot);
 
     /**
      * @brief Como @c find, pero mirando CUALQUIER parametro.
@@ -211,7 +210,8 @@ struct Index {
              * vuelve a hashear el texto. */
             const size_t a = reinterpret_cast<size_t>(k.head);
             const size_t b = reinterpret_cast<size_t>(k.name);
-            return a * 1099511628211ull ^ (b + 0x9e3779b97f4a7c15ull + (a << 6));
+            return a * 1099511628211ull ^
+                   (b + 0x9e3779b97f4a7c15ull + (a << 6));
         }
     };
     std::unordered_map<Key, Candidates, KeyHash> by_head_;

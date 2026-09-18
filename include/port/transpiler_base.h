@@ -343,14 +343,12 @@ class IPortBackend {
 
     /** Emite call directo: @c "v0 = my_func(v_a, v_b);". */
     virtual void emit_call(EmitContext &ctx, ir::IrValueId dst,
-                           const std::string &func_name,
-                           ir::IrValueList args,
+                           const std::string &func_name, ir::IrValueList args,
                            ir::IrType ret_type) = 0;
 
     /** Emite call indirecto via puntero: @c "v0 = ((fn_t)v_fn)(v_a, ...);". */
     virtual void emit_call_indirect(EmitContext &ctx, ir::IrValueId dst,
-                                    ir::IrValueId fn_ptr,
-                                    ir::IrValueList args,
+                                    ir::IrValueId fn_ptr, ir::IrValueList args,
                                     ir::IrType ret_type) = 0;
 
     /**
@@ -363,8 +361,7 @@ class IPortBackend {
      */
     virtual void emit_callvirt(EmitContext &ctx, ir::IrValueId dst,
                                ir::IrValueId obj, uint32_t vtable_idx,
-                               ir::IrValueList args,
-                               ir::IrType ret_type) {
+                               ir::IrValueList args, ir::IrType ret_type) {
         (void)ctx;
         (void)dst;
         (void)obj;
@@ -388,8 +385,7 @@ class IPortBackend {
      */
     virtual void emit_callm(EmitContext &ctx, ir::IrValueId dst,
                             ir::IrValueId obj, ir::IrValueId method_ptr,
-                            ir::IrValueList args,
-                            ir::IrType ret_type) {
+                            ir::IrValueList args, ir::IrType ret_type) {
         (void)dst;
         (void)obj;
         (void)method_ptr;
@@ -410,8 +406,7 @@ class IPortBackend {
      * Default: emit_unsupported.
      */
     virtual void emit_call_closure(EmitContext &ctx, ir::IrValueId dst,
-                                   ir::IrValueId slot_ptr,
-                                   ir::IrValueList args,
+                                   ir::IrValueId slot_ptr, ir::IrValueList args,
                                    ir::IrType ret_type,
                                    const ir::IrInstr &ins) {
         (void)dst;

@@ -45,7 +45,7 @@
 #include <vector>
 
 #include "util/alloc/small_vector.h" // ParamNames: los nombres, en pila
-#include "util/name_pool.h" // los nombres de un tipo, compartidos
+#include "util/name_pool.h"          // los nombres de un tipo, compartidos
 #include "vx/token.h"
 
 namespace vx {
@@ -355,7 +355,9 @@ class PooledName {
     size_t rfind(const std::string &s, size_t pos = std::string::npos) const {
         return p_->rfind(s, pos);
     }
-    size_t find(const char *s, size_t pos = 0) const { return p_->find(s, pos); }
+    size_t find(const char *s, size_t pos = 0) const {
+        return p_->find(s, pos);
+    }
     size_t find(const std::string &s, size_t pos = 0) const {
         return p_->find(s, pos);
     }
@@ -394,13 +396,17 @@ inline bool operator==(const std::string &a, const PooledName &b) {
     return a == b.str();
 }
 /// @copydoc operator==(const std::string &, const PooledName &)
-inline bool operator==(const char *a, const PooledName &b) { return b == a; }
+inline bool operator==(const char *a, const PooledName &b) {
+    return b == a;
+}
 /// @brief Desigualdad con el nombre a la derecha.
 inline bool operator!=(const std::string &a, const PooledName &b) {
     return a != b.str();
 }
 /// @copydoc operator!=(const std::string &, const PooledName &)
-inline bool operator!=(const char *a, const PooledName &b) { return b != a; }
+inline bool operator!=(const char *a, const PooledName &b) {
+    return b != a;
+}
 
 /**
  * @brief Los nombres de las ranuras de una llamada o de una firma.
@@ -955,9 +961,9 @@ inline Type::Type(const Type &o)
       is_volatile(o.is_volatile), array_size(o.array_size),
       fn_param_by_ref_mask(o.fn_param_by_ref_mask),
       nominal_name(o.nominal_name), deleter_name(o.deleter_name),
-      align_override(o.align_override), kind(o.kind),
-      gc_managed(o.gc_managed), is_valued_enum(o.is_valued_enum),
-      nominal_id(o.nominal_id), is_opaque(o.is_opaque), fn_is_raw(o.fn_is_raw),
+      align_override(o.align_override), kind(o.kind), gc_managed(o.gc_managed),
+      is_valued_enum(o.is_valued_enum), nominal_id(o.nominal_id),
+      is_opaque(o.is_opaque), fn_is_raw(o.fn_is_raw),
       fn_is_variadic(o.fn_is_variadic) {
     // Solo hay bloque que duplicar si el otro lo tenia: un tipo que no es una
     // funcion no reserva nada al copiarse, que es de lo que iba todo esto.

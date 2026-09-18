@@ -92,8 +92,8 @@ struct BuildConfig {
      * sale de la clave, sin una cache aparte que mantener.
      */
     uint64_t hooks_fp = 0;
-    std::string tgt_os;          ///< @Target OS (solo si el modulo lo usa).
-    std::string tgt_arch;        ///< @Target arch (idem).
+    std::string tgt_os;   ///< @Target OS (solo si el modulo lo usa).
+    std::string tgt_arch; ///< @Target arch (idem).
     // -- Dimensiones que afectan SOLO al artefacto final (post-merge) --------
     int opt_level = 2;          ///< 0..3: optimizacion post-merge.
     bool emit_debug = false;    ///< info de debug en el .velb final.

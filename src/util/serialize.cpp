@@ -46,11 +46,17 @@ template <class T> void ByteWriter::put_le(T v) {
     buf_.insert(buf_.end(), tmp, tmp + sizeof(T));
 }
 
-void ByteWriter::u16(uint16_t v) { put_le(v); }
+void ByteWriter::u16(uint16_t v) {
+    put_le(v);
+}
 
-void ByteWriter::u32(uint32_t v) { put_le(v); }
+void ByteWriter::u32(uint32_t v) {
+    put_le(v);
+}
 
-void ByteWriter::u64(uint64_t v) { put_le(v); }
+void ByteWriter::u64(uint64_t v) {
+    put_le(v);
+}
 
 void ByteWriter::i64(int64_t v) {
     u64(static_cast<uint64_t>(v));

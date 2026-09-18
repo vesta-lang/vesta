@@ -1294,8 +1294,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             asn.value = std::move(one);
             const ir::IrValueId new_val = lower_assign(&asn);
             if (new_val == ir::IR_NO_VALUE) {
-                error_at(e->loc,
-                         vx::diag::format("VX3007", {id->name}));
+                error_at(e->loc, vx::diag::format("VX3007", {id->name}));
                 return ir::IR_NO_VALUE;
             }
             return is_pre ? new_val : prev;
@@ -1462,8 +1461,7 @@ ir::IrValueId Lowering::lower_unary(ast::UnaryExpr *e) {
             }
             const ir::IrValueId addr = lookup(id->name);
             if (addr == ir::IR_NO_VALUE) {
-                error_at(e->loc,
-                         vx::diag::format("VX3007", {id->name}));
+                error_at(e->loc, vx::diag::format("VX3007", {id->name}));
                 return ir::IR_NO_VALUE;
             }
             if (!address_taken_locals_.count(id->name) &&

@@ -74,7 +74,8 @@ void Lowering::lower_class_methods(ast::ClassDecl *cd, ir::IrModule &out) {
          *
          * Habia un respaldo que lo armaba cuando el hueco no llevaba a nadie, y
          * daba el nombre de cuando una clase solo podia tener un constructor:
-         * con dos, el cuerpo salia bajo una etiqueta y la llamada pedia otra. */
+         * con dos, el cuerpo salia bajo una etiqueta y la llamada pedia otra.
+         */
         const ClassMethodInfo *mi = layout_method(cd->name, m->layout_slot);
         if (mi == nullptr) method_symbol_missing(m->name, cd->name);
         fn.name = method_symbol_of(*mi);
@@ -775,8 +776,8 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                                 for (const auto &cm : itc->second.methods)
                                     if (!cm.is_constructor &&
                                         cm.name == im.name &&
-                                        overload::same_params(
-                                            cm.param_types, im.param_types)) {
+                                        overload::same_params(cm.param_types,
+                                                              im.param_types)) {
                                         impl = &cm;
                                         impl_owner = cm.defining_class.empty()
                                                          ? itc->second.name
@@ -789,8 +790,7 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                         if (!impl) continue;
                         const uint32_t slot =
                             native_iface_slot(iname, im.vtable_index);
-                        iface_slots.push_back(
-                            {slot, method_symbol_of(*impl)});
+                        iface_slots.push_back({slot, method_symbol_of(*impl)});
                         if (slot + 1u > nslots) nslots = slot + 1u;
                     }
                 }
@@ -1163,10 +1163,10 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
 
             // Construir IrFunction __new_<Class>[_shared].
             ir::IrFunction fn;
-            fn.name = new_helper_symbol(effective_ctor, cd->name,
-                                        is_shared_variant
-                                            ? NewHelperKind::Shared
-                                            : NewHelperKind::Normal);
+            fn.name =
+                new_helper_symbol(effective_ctor, cd->name,
+                                  is_shared_variant ? NewHelperKind::Shared
+                                                    : NewHelperKind::Normal);
             fn.ret_type = ir::IrType::PTR;
 
             // Params: replicar tipos del ctor (si existe).  El ultimo puede ser
@@ -1698,9 +1698,9 @@ void Lowering::generate_module_init_function(ir::IrModule &out) {
              * en una ranura -- el fallo de arriba, por la otra puerta. */
             const std::string desc_str =
                 "(" +
-                overload::discriminator(
-                    m.param_types,
-                    m.overload_needs_names ? &m.param_names : nullptr) +
+                overload::discriminator(m.param_types, m.overload_needs_names
+                                                           ? &m.param_names
+                                                           : nullptr) +
                 ")";
             const uint64_t desc_idx = intern_class_name(out, desc_str);
             const uint32_t desc_len = static_cast<uint32_t>(desc_str.size());
@@ -2122,8 +2122,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                      * interpretado y mal compilado, que es la unica clase de
                      * fallo que este proyecto no admite --. */
                     if (cm.name == mtd->name && !cm.is_constructor &&
-                        overload::same_signature(cm.param_types,
-                                                 cm.param_names,
+                        overload::same_signature(cm.param_types, cm.param_names,
                                                  mtd->param_types,
                                                  mtd->param_names)) {
                         if (native_poo_) {
@@ -2158,8 +2157,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                                     owner_class =
                                         it_ol->second.imported_helper_suffix;
                             }
-                            const std::string callee =
-                                method_symbol_of(cm);
+                            const std::string callee = method_symbol_of(cm);
                             ir::IrInstr ca{};
                             ca.op = ir::IrOp::CALL;
                             ca.type = ret_ir;
@@ -2356,8 +2354,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         // eager en __module_init (1x total).
         std::vector<ir::DevirtCandidate> spec_cands;
         if (dst != ir::IR_NO_VALUE && !method_call_sret) {
-            for (const auto &pr :
-                 spec_devirt_impls(iface_name, *mtd, true)) {
+            for (const auto &pr : spec_devirt_impls(iface_name, *mtd, true)) {
                 spec_cands.push_back(ir::DevirtCandidate{
                     emit_findclass_into(setup, pr.first, e->loc.line),
                     pr.second});
@@ -2464,8 +2461,7 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
     std::vector<ir::DevirtCandidate> cv_spec;
     if (dst != ir::IR_NO_VALUE && !method_call_sret && !native_poo_) {
         std::vector<ir::IrInstr> cv_setup;
-        for (const auto &pr :
-             spec_devirt_impls(bt.struct_name, *mtd, false)) {
+        for (const auto &pr : spec_devirt_impls(bt.struct_name, *mtd, false)) {
             cv_spec.push_back(ir::DevirtCandidate{
                 emit_findclass_into(cv_setup, pr.first, e->loc.line),
                 pr.second});

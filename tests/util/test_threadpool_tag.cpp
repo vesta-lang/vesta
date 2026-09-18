@@ -60,7 +60,8 @@ constexpr int kTasks = 64;
 int main() {
     std::printf("== la etiqueta de reservas viaja con la tarea del pool ==\n");
 
-    const util::AllocTag phase{util::AllocUse::Instant, util::AllocShape::Fixed};
+    const util::AllocTag phase{util::AllocUse::Instant,
+                               util::AllocShape::Fixed};
     const util::AllocTag other{util::AllocUse::Long, util::AllocShape::Growing};
 
     /* 1 y 2. Con el ambito abierto, lo que vean y reserven los trabajadores. */

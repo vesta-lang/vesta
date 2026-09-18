@@ -57,7 +57,7 @@
 #include "analysis/asa/fact.h" // UnknownReason: por que no se pudo afirmar mas
 #include "analysis/facts/ir_facts.h"
 #include "analysis/facts/loop_facts.h" // LoopsOracle: a quien preguntar
-#include "util/fnv.h"          // huella de las opciones, campo a campo
+#include "util/fnv.h"                  // huella de las opciones, campo a campo
 #include "util/alloc/small_vector.h" // el estado de un punto casi siempre es diminuto
 
 #include <cstddef> // offsetof: las aserciones que fijan el layout de RangeEntry
@@ -537,8 +537,8 @@ struct RangeStats {
  */
 struct RangeEntry {
     ir::IrValueId id = ir::IrValueId(0); ///< el valor refinado
-    RangeKind kind = RangeKind::Top; ///< los tres campos de ValueRange,
-    RangeType t{};                   ///< aplanados para que no haya relleno
+    RangeKind kind = RangeKind::Top;     ///< los tres campos de ValueRange,
+    RangeType t{};                       ///< aplanados para que no haya relleno
     uint8_t _pad = 0;
     uint64_t lo_c = 0;
     uint64_t hi_c = 0;
@@ -709,8 +709,7 @@ std::shared_ptr<const RangeFacts>
 compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
                    const RangeOptions &op = RangeOptions{},
                    const RangeSummaries *sum = nullptr,
-                   const LoopIvBounds *ivb = nullptr,
-                   LoopsOracle loops = {});
+                   const LoopIvBounds *ivb = nullptr, LoopsOracle loops = {});
 
 /**
  * @brief Suelta lo que la memoizacion de rangos tiene guardado.
@@ -725,9 +724,9 @@ compute_ranges_ptr(const ir::IrFunction &fn, const IrFacts &facts,
  *
  * NO ES UNA INVALIDACION.  No dice que lo guardado sea falso -- lo sigue siendo
  * --, dice que ya no se va a usar.  Quien llame despues no obtiene un resultado
- * distinto: obtiene el mismo, calculado otra vez.  Por eso lo pide el consumidor
- * y no lo decide el analisis: el unico que sabe que no va a volver a preguntar
- * es quien dirige la compilacion.
+ * distinto: obtiene el mismo, calculado otra vez.  Por eso lo pide el
+ * consumidor y no lo decide el analisis: el unico que sabe que no va a volver a
+ * preguntar es quien dirige la compilacion.
  *
  * @return
  * \~english how many memoized analyses it let go.  A COUNT and not bytes,
@@ -807,7 +806,8 @@ struct RangeFacts {
      * que no cabe --.
      */
     struct Wrap {
-        ir::IrValueId dst = ir::IrValueId(0); ///< el resultado que sale envuelto.
+        ir::IrValueId dst =
+            ir::IrValueId(0);   ///< el resultado que sale envuelto.
         int64_t exacto = 0;     ///< lo que daria la cuenta sin envolver.
         int64_t lo = 0, hi = 0; ///< lo que el tipo del destino admite.
         uint32_t line = 0;      ///< linea fuente de la operacion.
@@ -950,14 +950,14 @@ RangeFacts compute_ranges(const ir::IrFunction &fn, const IrFacts &facts,
  * peticion de rangos -- quedan atribuidas a quien de verdad las provoco.
  */
 enum class RangeAsker : uint8_t {
-    Unknown = 0,   ///< nadie se identifico.
-    FactBase,      ///< la base de hechos del ASA.
-    Optimizer,     ///< un pase del optimizador.
-    OptimizerAsm,  ///< los pases del optimizador que miran bloques de asm.
-    Effects,       ///< el modelo de efectos.
-    Summaries,     ///< los resumenes de frontera del modulo.
-    Bounds,        ///< el comprobador de limites.
-    IvStaging,     ///< la pasada extra que despeja cotas con rangos.
+    Unknown = 0,  ///< nadie se identifico.
+    FactBase,     ///< la base de hechos del ASA.
+    Optimizer,    ///< un pase del optimizador.
+    OptimizerAsm, ///< los pases del optimizador que miran bloques de asm.
+    Effects,      ///< el modelo de efectos.
+    Summaries,    ///< los resumenes de frontera del modulo.
+    Bounds,       ///< el comprobador de limites.
+    IvStaging,    ///< la pasada extra que despeja cotas con rangos.
     Count
 };
 
@@ -1088,7 +1088,6 @@ struct RangeAnalysis {
     /// Como se llama al medirlo.  @see FactBase::memoized
     static constexpr const char *kName = "ranges";
 };
-
 
 } // namespace analysis
 

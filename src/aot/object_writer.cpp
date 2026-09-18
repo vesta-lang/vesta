@@ -138,17 +138,22 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
      * a aplicarse como la SIGUIENTE -- un rel32 escrito donde iba una direccion
      * absoluta --, y eso no rompe el enlace: produce un binario que salta mal.
      * Se comprueba al compilar, que es cuando todavia se puede arreglar. */
-    static_assert((int)RelocKind::REL32 == AOT_RELOC_REL32, "kind desincronizado");
-    static_assert((int)RelocKind::ABS64 == AOT_RELOC_ABS64, "kind desincronizado");
-    static_assert((int)RelocKind::IMM32 == AOT_RELOC_IMM32, "kind desincronizado");
-    static_assert((int)RelocKind::IMM64 == AOT_RELOC_IMM64, "kind desincronizado");
+    static_assert((int)RelocKind::REL32 == AOT_RELOC_REL32,
+                  "kind desincronizado");
+    static_assert((int)RelocKind::ABS64 == AOT_RELOC_ABS64,
+                  "kind desincronizado");
+    static_assert((int)RelocKind::IMM32 == AOT_RELOC_IMM32,
+                  "kind desincronizado");
+    static_assert((int)RelocKind::IMM64 == AOT_RELOC_IMM64,
+                  "kind desincronizado");
     static_assert((int)RelocKind::TPOFF32 == AOT_RELOC_TPOFF32,
                   "kind desincronizado");
     static_assert((int)RelocKind::SECREL32 == AOT_RELOC_SECREL32,
                   "kind desincronizado");
     static_assert((int)RelocKind::ARM64_CALL26 == AOT_RELOC_ARM64_CALL26,
                   "kind desincronizado");
-    static_assert((int)RelocKind::RVA32 == AOT_RELOC_RVA32, "kind desincronizado");
+    static_assert((int)RelocKind::RVA32 == AOT_RELOC_RVA32,
+                  "kind desincronizado");
 
     std::vector<AotReloc> crelocs(relocs_.size());
     for (size_t i = 0; i < relocs_.size(); ++i) {
@@ -215,22 +220,21 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
         const AotSym *sym_ptr = csyms.empty() ? nullptr : csyms.data();
         const int sym_n = static_cast<int>(csyms.size());
         if (fmt_ == ObjFormat::ELF)
-            ok = mode32_ ? aot_emit_elf32_obj(path.c_str(), csecs.data(),
+            ok =
+                mode32_
+                    ? aot_emit_elf32_obj(path.c_str(), csecs.data(),
+                                         static_cast<int>(csecs.size()),
+                                         crel_ptr, crel_n, sym_ptr, sym_n,
+                                         errbuf, sizeof(errbuf))
+                    : (cfg_.machine == 183 /* EM_AARCH64 */
+                           ? aot_emit_elf_obj_arm64(
+                                 path.c_str(), csecs.data(),
+                                 static_cast<int>(csecs.size()), crel_ptr,
+                                 crel_n, sym_ptr, sym_n, errbuf, sizeof(errbuf))
+                           : aot_emit_elf_obj(path.c_str(), csecs.data(),
                                               static_cast<int>(csecs.size()),
                                               crel_ptr, crel_n, sym_ptr, sym_n,
-                                              errbuf, sizeof(errbuf))
-                         : (cfg_.machine == 183 /* EM_AARCH64 */
-                                ? aot_emit_elf_obj_arm64(
-                                      path.c_str(), csecs.data(),
-                                      static_cast<int>(csecs.size()), crel_ptr,
-                                      crel_n, sym_ptr, sym_n, errbuf,
-                                      sizeof(errbuf))
-                                : aot_emit_elf_obj(path.c_str(), csecs.data(),
-                                                   static_cast<int>(
-                                                       csecs.size()),
-                                                   crel_ptr, crel_n, sym_ptr,
-                                                   sym_n, errbuf,
-                                                   sizeof(errbuf)));
+                                              errbuf, sizeof(errbuf)));
         else /* PE -> COFF .obj (AMD64 o i386 segun mode32) */
             ok = mode32_ ? aot_emit_coff32_obj(path.c_str(), csecs.data(),
                                                static_cast<int>(csecs.size()),
@@ -363,8 +367,7 @@ bool ObjectWriter::write(const std::string &path, std::string &err) {
     aot_set_debug_symbols(nullptr, 0);
 
     if (!ok) {
-        err = render_emitter_error(errbuf,
-                                   "ObjectWriter: error desconocido");
+        err = render_emitter_error(errbuf, "ObjectWriter: error desconocido");
         return false;
     }
     return true;

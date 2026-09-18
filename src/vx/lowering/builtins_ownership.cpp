@@ -1029,8 +1029,8 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
      * hay que decir DE DONDE salio y con que exclusividad.  Va como operacion y
      * no como tabla al margen porque asi el dueno es un OPERANDO, y un operando
      * lo remapea el inliner solo, muere cuando muere su valor y sale en el
-     * volcado.  Guardado aparte hacia falta que cada pase se acordara, y ninguno
-     * se acordaba.
+     * volcado.  Guardado aparte hacia falta que cada pase se acordara, y
+     * ninguno se acordaba.
      *
      * @param v_pres El puntero que se presta.
      * @param v_owner De donde sale.
@@ -1073,9 +1073,10 @@ bool Lowering::lower_borrow_of(ast::CallExpr *e, Builtin b,
              * anfitrion, y el cambio se perdia sin un solo aviso.
              *
              * Todos los duenos menos el LOCAL CORRIENTE dan un puntero del
-             * anfitrion: un `unique`/`shared` guardan ahi su carga, una clase es
-             * un objeto del anfitrion, y represtar es represtar uno de esos.  El
-             * local vive en la pila de la maquina, y ese se queda como venga. */
+             * anfitrion: un `unique`/`shared` guardan ahi su carga, una clase
+             * es un objeto del anfitrion, y represtar es represtar uno de esos.
+             * El local vive en la pila de la maquina, y ese se queda como
+             * venga. */
             if (kind != ir::BorrowOwnerKind::Plain) dst.is_host_ptr = true;
         }
         /* DOS operandos, y los dos hacen falta: el primero es lo que se copia

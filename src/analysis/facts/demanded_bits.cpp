@@ -61,7 +61,8 @@ uint8_t reads_from(const ir::IrInstr &in, size_t k, const ir::IrFunction &fn,
     switch (in.op) {
     /* Escribe N bytes en memoria: de lo que guarda solo mira esos.  La
      * DIRECCION no: ahi los bits de arriba deciden a donde se escribe. */
-    case ir::IrOp::STORE: return k == 0 ? type_promised_bits(in.type) : uint8_t{64};
+    case ir::IrOp::STORE:
+        return k == 0 ? type_promised_bits(in.type) : uint8_t{64};
     /* Se queda con los de abajo, tantos como diga su tipo destino. */
     case ir::IrOp::TRUNC: return type_promised_bits(in.type);
     /* Extienden DESDE el ancho de su fuente: leen exactamente eso. */

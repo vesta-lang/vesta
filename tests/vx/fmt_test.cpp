@@ -333,8 +333,8 @@ void check_spacing() {
           "un cuerpo de dos sentencias se queda como bloque");
     /* Y un bloque de sentencias NO es un cuerpo por mucho que venga tras un
      * `)`: `if (c) { return 1; }` sigue siendo un `if`. */
-    check(fmt("i32 f(i32 c) { if (c) { return 1; } return 0; }\n")
-                  .find("=>") == std::string::npos,
+    check(fmt("i32 f(i32 c) { if (c) { return 1; } return 0; }\n").find("=>") ==
+              std::string::npos,
           "el bloque de un if no se confunde con un cuerpo");
 
     /* `R96b`: la calificacion `$` de una llamada por el punto va pegada por

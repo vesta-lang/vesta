@@ -45,11 +45,9 @@ extern "C" {
  * que es del kit de drivers y no se instala con el SDK.  Asi que con MSVC hay
  * que traerla, y con MinGW no, porque chocaria. */
 #if defined(_MSC_VER)
-NTSTATUS NTAPI NtQueryInformationFile(HANDLE FileHandle,
-                                      PIO_STATUS_BLOCK IoStatusBlock,
-                                      PVOID FileInformation, ULONG Length,
-                                      FILE_INFORMATION_CLASS
-                                          FileInformationClass);
+NTSTATUS NTAPI NtQueryInformationFile(
+    HANDLE FileHandle, PIO_STATUS_BLOCK IoStatusBlock, PVOID FileInformation,
+    ULONG Length, FILE_INFORMATION_CLASS FileInformationClass);
 #endif
 NTSTATUS NTAPI NtOpenFile(PHANDLE FileHandle, ACCESS_MASK DesiredAccess,
                           POBJECT_ATTRIBUTES ObjectAttributes,
@@ -439,8 +437,8 @@ bool DirectoryReader::names(std::vector<std::string> &out) const {
         const NTSTATUS st = NtQueryDirectoryFile(
             static_cast<HANDLE>(handle_), nullptr, nullptr, nullptr, &io,
             buf.data(), static_cast<ULONG>(buf.size()),
-            static_cast<FILE_INFORMATION_CLASS>(kFileNamesInformation),
-            FALSE, nullptr, primera ? TRUE : FALSE);
+            static_cast<FILE_INFORMATION_CLASS>(kFileNamesInformation), FALSE,
+            nullptr, primera ? TRUE : FALSE);
         primera = false;
         if (st < 0) break; // incluido STATUS_NO_MORE_FILES: ya no queda nada
         const uint8_t *p = buf.data();

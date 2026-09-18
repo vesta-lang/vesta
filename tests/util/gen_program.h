@@ -71,12 +71,12 @@ inline bool assemble_program(const std::string &source,
 
 /// Que clase de instrucciones lleva el cuerpo del programa generado.
 enum class BodyKind {
-    Alu,     ///< aritmetica y logica entre registros
-    Widths,  ///< las mismas en 8/16/32/64: ejercita el despacho por ANCHO
-    Memory,  ///< cargas y almacenes: pasa por la traduccion de direcciones
-    Branch,  ///< saltos condicionales cortos: rompe el tramo recto a menudo
-    Float,   ///< coma flotante escalar: OTRO banco de registros
-    Mixed,   ///< las anteriores alternadas
+    Alu,    ///< aritmetica y logica entre registros
+    Widths, ///< las mismas en 8/16/32/64: ejercita el despacho por ANCHO
+    Memory, ///< cargas y almacenes: pasa por la traduccion de direcciones
+    Branch, ///< saltos condicionales cortos: rompe el tramo recto a menudo
+    Float,  ///< coma flotante escalar: OTRO banco de registros
+    Mixed,  ///< las anteriores alternadas
     /**
      * @brief Paquetes CONSECUTIVOS de verdad independientes.
      *
@@ -187,8 +187,8 @@ inline std::string body_instruction(BodyKind kind, uint32_t i) {
          * que el test compara. */
         static const char *kOps[3] = {"adds", "subs", "xor"};
         const std::string dst = std::to_string((int)(i % 3) + 5); // r5..r7
-        return "    mov r" + dst + ", r" + rn + "\n    " +
-               kOps[i % 3] + " r" + dst + ", r" + other + "\n";
+        return "    mov r" + dst + ", r" + rn + "\n    " + kOps[i % 3] + " r" +
+               dst + ", r" + other + "\n";
     }
     default:
         if (i % 3 == 0) return "    adds r" + rn + ", 3\n";
@@ -245,7 +245,8 @@ nunca:
 
     std::string straight;
     straight.reserve((size_t)body * 24);
-    for (uint32_t i = 0; i < body; ++i) straight += body_instruction(kind, i);
+    for (uint32_t i = 0; i < body; ++i)
+        straight += body_instruction(kind, i);
 
     std::string src = kSkeleton;
     const size_t pl = src.find("%LOOPS%");

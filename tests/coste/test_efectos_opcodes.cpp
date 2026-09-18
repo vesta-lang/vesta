@@ -182,42 +182,40 @@ int main(int argc, char **argv) {
 
     const std::vector<OpcodeRow> rows = build_opcode_model(desde);
 
-
     // --- Volcado en JSON, para el generador de la base de datos ---
     if (json_out) {
         std::printf("{\n  \"opcodes\": [\n");
         for (size_t i = 0; i < rows.size(); ++i) {
             const OpcodeRow &f = rows[i];
-            std::printf("    {\"nombre\": \"%s\", \"tabla\": \"%s\", "
-                        "\"indice\": %d, \"bytes\": %zu, \"modo\": \"%s\", "
-                        "\"salta\": %s, \"implementada\": %s, "
-                        "\"exacto\": %s, \"escribe\": %u, \"lee\": %u, "
-                        "\"form_read\": %u, \"form_write\": %u, "
-                        // El banco VECTORIAL va aparte del general: una
-                        // instruccion de coma flotante no choca con una de
-                        // enteros, y mezclarlos en un solo campo obligaria a
-                        // ordenarlas entre si sin motivo.
-                        "\"form_vec_read\": %u, \"form_vec_write\": %u, "
-                        /* Si la FORMA se puede creer, que es distinto de que
-                         * la mascara valga algo.  Una mascara a cero tiene dos
-                         * lecturas opuestas -- "no toca registros" y "no se vio
-                         * que tocaba" -- y quien reordena necesita saber cual
-                         * es: sobrar una lectura cuesta un reorden, faltar una
-                         * ESCRITURA cuesta un resultado.  Exige las dos cosas:
-                         * que el recorrido llegara al final y que ni un solo
-                         * acceso al banco quedara sin atribuir a un campo. */
-                        "\"form_exact\": %s, "
-                        "\"puede_abortar\": %s, "
-                        "\"tablas_resueltas\": %u, \"motivo\": \"",
-                        f.nombre.c_str(), f.tabla, f.indice, f.bytes,
-                        f.modo.c_str(), f.salta ? "true" : "false",
-                        f.implementada ? "true" : "false",
-                        f.imp.completo ? "true" : "false", f.imp.escribe,
-                        f.imp.lee, f.imp.form_read, f.imp.form_write,
-                        f.imp.form_vec_read, f.imp.form_vec_write,
-                        (f.imp.completo && f.imp.form_unknown == 0) ? "true"
-                                                                    : "false",
-                        f.imp.can_abort ? "true" : "false", f.imp.tablas);
+            std::printf(
+                "    {\"nombre\": \"%s\", \"tabla\": \"%s\", "
+                "\"indice\": %d, \"bytes\": %zu, \"modo\": \"%s\", "
+                "\"salta\": %s, \"implementada\": %s, "
+                "\"exacto\": %s, \"escribe\": %u, \"lee\": %u, "
+                "\"form_read\": %u, \"form_write\": %u, "
+                // El banco VECTORIAL va aparte del general: una
+                // instruccion de coma flotante no choca con una de
+                // enteros, y mezclarlos en un solo campo obligaria a
+                // ordenarlas entre si sin motivo.
+                "\"form_vec_read\": %u, \"form_vec_write\": %u, "
+                /* Si la FORMA se puede creer, que es distinto de que
+                 * la mascara valga algo.  Una mascara a cero tiene dos
+                 * lecturas opuestas -- "no toca registros" y "no se vio
+                 * que tocaba" -- y quien reordena necesita saber cual
+                 * es: sobrar una lectura cuesta un reorden, faltar una
+                 * ESCRITURA cuesta un resultado.  Exige las dos cosas:
+                 * que el recorrido llegara al final y que ni un solo
+                 * acceso al banco quedara sin atribuir a un campo. */
+                "\"form_exact\": %s, "
+                "\"puede_abortar\": %s, "
+                "\"tablas_resueltas\": %u, \"motivo\": \"",
+                f.nombre.c_str(), f.tabla, f.indice, f.bytes, f.modo.c_str(),
+                f.salta ? "true" : "false", f.implementada ? "true" : "false",
+                f.imp.completo ? "true" : "false", f.imp.escribe, f.imp.lee,
+                f.imp.form_read, f.imp.form_write, f.imp.form_vec_read,
+                f.imp.form_vec_write,
+                (f.imp.completo && f.imp.form_unknown == 0) ? "true" : "false",
+                f.imp.can_abort ? "true" : "false", f.imp.tablas);
             /* POR QUE se quedo corto.  Es la SEMILLA de la declaracion: lo que
              * se declare nace del diagnostico del analisis, no de lo que
              * alguien recuerde del manejador. */
@@ -294,10 +292,9 @@ int main(int argc, char **argv) {
                  * inmediato; sin esos dos, ninguna instruccion con inmediato
                  * podia declarar que registro toca. */
                 static const char *kParts[12] = {
-                    "reg1", "reg1.bajo", "reg1.alto",
-                    "reg2", "reg2.bajo", "reg2.alto",
-                    "reg3", "reg3.bajo", "reg3.alto",
-                    "regi", "regi.bajo", "regi.alto"};
+                    "reg1",      "reg1.bajo", "reg1.alto", "reg2",
+                    "reg2.bajo", "reg2.alto", "reg3",      "reg3.bajo",
+                    "reg3.alto", "regi",      "regi.bajo", "regi.alto"};
                 constexpr int kNumParts = 12;
                 std::string lee, esc;
                 for (int b = 0; b < kNumParts; ++b) {
@@ -312,9 +309,11 @@ int main(int argc, char **argv) {
                 std::string vlee, vesc;
                 for (int b = 0; b < kNumParts; ++b) {
                     if (f.imp.form_vec_read >> b & 1)
-                        vlee += std::string(vlee.empty() ? "" : " ") + kParts[b];
+                        vlee +=
+                            std::string(vlee.empty() ? "" : " ") + kParts[b];
                     if (f.imp.form_vec_write >> b & 1)
-                        vesc += std::string(vesc.empty() ? "" : " ") + kParts[b];
+                        vesc +=
+                            std::string(vesc.empty() ? "" : " ") + kParts[b];
                 }
                 if (!vlee.empty() || !vesc.empty())
                     std::printf("  forma.v  lee=[%s] escribe=[%s]  (banco "
@@ -462,14 +461,13 @@ int main(int argc, char **argv) {
         const size_t regs_off =
             kRegs + offsetof(runtime::context_registers_vm, regs);
         char b[128];
-        std::snprintf(b, sizeof(b),
-                      "  %-8s  0x%02zX  (banco; el indice sale del operando)\n"
-                      "  %-8s  0x%02zX / 0x%02zX  dentro de DecodedInstr\n",
-                      "regs[]", regs_off, "reg1/2",
-                      offsetof(runtime::DecodedInstr,
-                               data_instruction.reg_data.reg1),
-                      offsetof(runtime::DecodedInstr,
-                               data_instruction.reg_data.reg2));
+        std::snprintf(
+            b, sizeof(b),
+            "  %-8s  0x%02zX  (banco; el indice sale del operando)\n"
+            "  %-8s  0x%02zX / 0x%02zX  dentro de DecodedInstr\n",
+            "regs[]", regs_off, "reg1/2",
+            offsetof(runtime::DecodedInstr, data_instruction.reg_data.reg1),
+            offsetof(runtime::DecodedInstr, data_instruction.reg_data.reg2));
         out.s(b);
     }
 
@@ -479,7 +477,10 @@ int main(int argc, char **argv) {
      * Estas tres lineas son el estado de esa promesa. */
     int n_impl = 0, n_exact = 0, n_narrow = 0, n_runtime = 0, n_ranura = 0;
     for (const OpcodeRow &f : rows) {
-        if (!f.implementada) { ++n_ranura; continue; }
+        if (!f.implementada) {
+            ++n_ranura;
+            continue;
+        }
         ++n_impl;
         const bool ext = (f.tabla[0] == 'e');
         const runtime::vm_isa::VmInstr &v =
@@ -491,15 +492,19 @@ int main(int argc, char **argv) {
     }
     out.s("\nCuanto se sabe\n");
     out.s("  ").num((uint64_t)n_impl, 5).s("  implementadas\n");
-    out.s("  ").num((uint64_t)n_exact, 5)
+    out.s("  ")
+        .num((uint64_t)n_exact, 5)
         .s("  EXACTAS       -- el recorrido llego al final\n");
-    out.s("  ").num((uint64_t)n_narrow, 5)
+    out.s("  ")
+        .num((uint64_t)n_narrow, 5)
         .s("  ESTRECHABLES  -- el efecto sale de un campo del operando, ")
         .s("exacto al formar\n");
-    out.s("  ").num((uint64_t)n_runtime, 5)
+    out.s("  ")
+        .num((uint64_t)n_runtime, 5)
         .s("  EN EJECUCION  -- el destino solo existe al ejecutar; ")
         .s("guarda y abandono\n");
-    out.s("  ").num((uint64_t)n_ranura, 5)
+    out.s("  ")
+        .num((uint64_t)n_ranura, 5)
         .s("  ranuras con nombre pero sin implementar\n");
 
     /* --- Que campo toca cuanta gente --------------------------------------
@@ -551,11 +556,10 @@ int main(int argc, char **argv) {
     for (const auto &kv : fam) {
         const Grupo &g = kv.second;
         char b[160];
-        std::snprintf(b, sizeof(b),
-                      "  %-18s %5d %8d %9d %10d %7d %6d %7d %4d\n",
-                      kv.first.c_str(), g.total, g.exactos, g.declarados,
-                      g.estrechan, g.escribe[0], g.escribe[1], g.escribe[2],
-                      g.escribe[3]);
+        std::snprintf(
+            b, sizeof(b), "  %-18s %5d %8d %9d %10d %7d %6d %7d %4d\n",
+            kv.first.c_str(), g.total, g.exactos, g.declarados, g.estrechan,
+            g.escribe[0], g.escribe[1], g.escribe[2], g.escribe[3]);
         out.s(b);
     }
 
@@ -608,7 +612,8 @@ int main(int argc, char **argv) {
                 : runtime::vm_isa::kPrimary[f.indice & 0xFF];
         if (v.narrow == runtime::vm_isa::VN_NONE) continue;
         if (!hay_narrow) {
-            out.s("\nEstrechables por operando (exacto al formar, sin guarda)\n");
+            out.s(
+                "\nEstrechables por operando (exacto al formar, sin guarda)\n");
             hay_narrow = true;
         }
         char b[120];
@@ -652,10 +657,10 @@ int main(int argc, char **argv) {
 
     /* --- La DB generada sigue coincidiendo con el codigo? ---
      *
-     * `src/runtime/isa/instr_db_vm_gen.cpp` es una tabla APARTE, y una tabla aparte
-     * envejece: el dia que alguien toque un manejador y no la regenere, la VM
-     * reordenaria con efectos que ya no son ciertos.  Eso no da un error, da
-     * OTRO RESULTADO.
+     * `src/runtime/isa/instr_db_vm_gen.cpp` es una tabla APARTE, y una tabla
+     * aparte envejece: el dia que alguien toque un manejador y no la regenere,
+     * la VM reordenaria con efectos que ya no son ciertos.  Eso no da un error,
+     * da OTRO RESULTADO.
      *
      * Por eso el derivador la COMPRUEBA en cada ejecucion.  Es lo que permite
      * que la tabla exista: generada mas verificada no se puede desincronizar,
@@ -727,8 +732,9 @@ int main(int argc, char **argv) {
          * sobra.  Es el caso de `div` y `mod`, a los que el recorrido les
          * atribuye los efectos de construir la traza y formatear el mensaje por
          * llegar al camino de fallo. */
-        const bool declarado = ext ? runtime::vm_isa::kFixedExtended[f.indice & 0xFF]
-                                   : runtime::vm_isa::kFixedPrimary[f.indice & 0xFF];
+        const bool declarado =
+            ext ? runtime::vm_isa::kFixedExtended[f.indice & 0xFF]
+                : runtime::vm_isa::kFixedPrimary[f.indice & 0xFF];
         const bool corta = !declarado && (campos_der & ~campos_tab) != 0;
 
         if (v.name == nullptr || f.nombre != v.name || corta || mem_corta ||
@@ -770,15 +776,16 @@ int main(int argc, char **argv) {
                     : runtime::vm_isa::kPrimary[i];
             const uint16_t hot = runtime::vm_isa::vm_hot(ext, (uint8_t)i);
             const uint16_t esperado = static_cast<uint16_t>(
-                v.effects |
-                (static_cast<uint16_t>(v.narrow) << runtime::vm_isa::kNarrowShift));
+                v.effects | (static_cast<uint16_t>(v.narrow)
+                             << runtime::vm_isa::kNarrowShift));
             if (hot != esperado) {
                 if (discrepan_hot == 0)
                     std::printf("\nLA TABLA CALIENTE NO DICE LO MISMO QUE "
                                 "`VmInstr`:\n");
-                std::printf("  %-16s %s 0x%02X: caliente=0x%04X VmInstr=0x%04X\n",
-                            v.name ? v.name : "(vacia)",
-                            ext ? "extended" : "primary", i, hot, esperado);
+                std::printf(
+                    "  %-16s %s 0x%02X: caliente=0x%04X VmInstr=0x%04X\n",
+                    v.name ? v.name : "(vacia)", ext ? "extended" : "primary",
+                    i, hot, esperado);
                 ++discrepan_hot;
             }
         }
@@ -797,13 +804,13 @@ int main(int argc, char **argv) {
      * instruccion del anfitrion.  Cuando no lo sabe, el recorrido asume lo peor
      * para que el resultado siga siendo sano -- pero eso NO es la respuesta, y
      * dejarlo asi es el modo de fallo que este proyecto no acepta: el analisis
-     * parece funcionar, la respuesta sale conservadora, y nadie se entera de que
-     * la base no conoce instrucciones que el compilador emite a diario.
+     * parece funcionar, la respuesta sale conservadora, y nadie se entera de
+     * que la base no conoce instrucciones que el compilador emite a diario.
      *
-     * Asi estuvieron `lea` -- en TODAS sus formas -- y los saltos condicionales,
-     * y no lo destapo nadie hasta que se le pregunto a la base por codigo
-     * compilado.  Cada linea de aqui es un hueco de la base, y se falla con la
-     * lista para que sea trabajo concreto y no una sospecha. */
+     * Asi estuvieron `lea` -- en TODAS sus formas -- y los saltos
+     * condicionales, y no lo destapo nadie hasta que se le pregunto a la base
+     * por codigo compilado.  Cada linea de aqui es un hueco de la base, y se
+     * falla con la lista para que sea trabajo concreto y no una sospecha. */
     /* Los que la base NO PUEDE conocer desde aqui, con su motivo.
      *
      * Va como lista DECLARADA y no como silencio: uno nuevo sigue haciendo

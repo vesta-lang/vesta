@@ -92,7 +92,8 @@ static bool reorder_named(const Candidate &c, const std::vector<Type> &args,
     size_t free_slot = 0;
     for (size_t k = 0; k < args.size(); ++k) {
         if (k < names.size() && !names[k].empty()) continue;
-        while (free_slot < np && taken[free_slot]) ++free_slot;
+        while (free_slot < np && taken[free_slot])
+            ++free_slot;
         if (free_slot == np) return false;
         out[free_slot] = args[k];
         taken[free_slot] = 1;
@@ -179,7 +180,8 @@ uint32_t select(const Candidate *cands, size_t n, const std::vector<Type> &args,
                 const std::vector<Type> *use = &args;
                 if (named) {
                     if (is_open) continue;
-                    if (!reorder_named(c, args, *arg_names, reordered)) continue;
+                    if (!reorder_named(c, args, *arg_names, reordered))
+                        continue;
                     use = &reordered;
                 }
                 if (!candidate_fits(c, *use, pass == 0, accepts, ctx)) continue;

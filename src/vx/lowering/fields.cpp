@@ -23,7 +23,7 @@
  */
 #include "vx/lowering.h"
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -837,11 +837,11 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
         /* Un campo `shared<T>` guarda el BLOQUE DE CONTROL, y quedarse con el
          * es ser un dueno mas: hay que subir la cuenta, y bajar la del que
          * hubiera antes para que una reasignacion no pierda el anterior.  Es lo
-         * mismo que hacen el campo de instancia y el de struct; aqui se escribia
-         * el `rhs` en crudo -- la direccion de la RANURA de origen, que muere
-         * con su marco -- y sin tocar la cuenta, asi que al salir del ambito el
-         * bloque se liberaba y el estatico se quedaba apuntando a memoria
-         * suelta.
+         * mismo que hacen el campo de instancia y el de struct; aqui se
+         * escribia el `rhs` en crudo -- la direccion de la RANURA de origen,
+         * que muere con su marco -- y sin tocar la cuenta, asi que al salir del
+         * ambito el bloque se liberaba y el estatico se quedaba apuntando a
+         * memoria suelta.
          *
          * La cuenta se toca por el BLOQUE y no por la ranura porque un hueco
          * estatico no tiene direccion que pasar: se lee y se escribe con
@@ -852,10 +852,9 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                 "__static_" + base_id->name + "_" + target->field_name);
             emit_shared_refcount_dec_ctrl(v_old, loc.line);
             const ir::IrValueId v_ctrl = emit_load_host_ptr(rhs, loc.line);
-            emit_setstatic(v_cls, v_ctrl, static_cast<uint64_t>(s_off),
-                           loc.line,
-                           "__static_" + base_id->name + "_" +
-                               target->field_name);
+            emit_setstatic(
+                v_cls, v_ctrl, static_cast<uint64_t>(s_off), loc.line,
+                "__static_" + base_id->name + "_" + target->field_name);
             emit_shared_refcount_inc_ctrl(v_ctrl, loc.line);
             return rhs;
         }
@@ -866,8 +865,7 @@ ir::IrValueId Lowering::lower_class_field_store(ast::FieldAccessExpr *target,
                                        ir::IrType::I64, loc.line,
                                        /*is_explicit=*/true);
         }
-        emit_setstatic(v_cls, v_val_i64, static_cast<uint64_t>(s_off),
-                       loc.line,
+        emit_setstatic(v_cls, v_val_i64, static_cast<uint64_t>(s_off), loc.line,
                        "__static_" + base_id->name + "_" + target->field_name);
         return rhs_cast;
     }

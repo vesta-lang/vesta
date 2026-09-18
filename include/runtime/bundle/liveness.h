@@ -67,7 +67,8 @@ void bundle_live_after(const Bundle &b, const Touch *t, uint16_t live_out,
                        uint16_t *out);
 
 /**
- * @brief Que registros siguen vivos a partir de @p pc, mirando un poco mas alla.
+ * @brief Que registros siguen vivos a partir de @p pc, mirando un poco mas
+ * alla.
  *
  * Sin esto la respuesta al salir del paquete es "todos", y con "todos" no cuaja
  * ningun patron de fusion: al temporal que una ALU produce lo mata la

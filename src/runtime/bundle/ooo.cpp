@@ -57,10 +57,11 @@ NTSTATUS NTAPI NtSetInformationThread(HANDLE ThreadHandle,
                                       ULONG ThreadInformationLength);
 #endif
 /* Crear el hilo tambien por la capa NT.  `std::thread` en MinGW pasa por
- * winpthreads, que es otra capa encima de Win32 encima de esto; y `CreateThread`
- * es Win32 encima de esto.  Aqui no se gana tiempo -- el hilo se crea UNA vez --
- * pero se quita una dependencia entera de una biblioteca de hilos para algo que
- * son tres llamadas, y el proyecto ya baja a NT en otros sitios. */
+ * winpthreads, que es otra capa encima de Win32 encima de esto; y
+ * `CreateThread` es Win32 encima de esto.  Aqui no se gana tiempo -- el hilo se
+ * crea UNA vez -- pero se quita una dependencia entera de una biblioteca de
+ * hilos para algo que son tres llamadas, y el proyecto ya baja a NT en otros
+ * sitios. */
 NTSTATUS NTAPI NtCreateThreadEx(PHANDLE ThreadHandle, ACCESS_MASK DesiredAccess,
                                 POBJECT_ATTRIBUTES ObjectAttributes,
                                 HANDLE ProcessHandle, PVOID StartRoutine,
@@ -185,8 +186,8 @@ void worker_loop() {
          * verse ya escrita.  Es el otro lado del `release` de `ooo_push`. */
         const uint32_t h = g_ooo.head.load(std::memory_order_acquire);
         if (t == h) {
-            if (__builtin_expect(g_ooo.stop.load(std::memory_order_relaxed) != 0,
-                                 0))
+            if (__builtin_expect(
+                    g_ooo.stop.load(std::memory_order_relaxed) != 0, 0))
                 return;
             /* GIRAR EN CALIENTE UN RATO, Y DESPUES SOLTAR EL NUCLEO.
              *
@@ -245,7 +246,8 @@ void worker_loop() {
              * del paquete antes de encolarlo. */
             const DecodedInstr *p = job.instr;
             const uint32_t n = job.n;
-            for (uint32_t i = 0; i < n; ++i) p[i].exec_cached(proc, p[i]);
+            for (uint32_t i = 0; i < n; ++i)
+                p[i].exec_cached(proc, p[i]);
             /* Nada mas que hacer: el avance de `tail` que hay al final del
              * bucle lo publica con `release`, y ESO es lo que le dice al
              * principal que los registros que se acaban de escribir ya se ven.
@@ -311,8 +313,8 @@ DWORD WINAPI worker_entry(LPVOID) {
  * @brief Ata el ayudante a un procesador lejos del que usa el hilo principal.
  *
  * NO es un afinado fino: es una CONDICION para que la prueba valga.  El
- * ayudante espera GIRANDO, asi que si el sistema lo coloca en el hermano SMT del
- * hilo principal los dos comparten las mismas unidades de ejecucion y van a
+ * ayudante espera GIRANDO, asi que si el sistema lo coloca en el hermano SMT
+ * del hilo principal los dos comparten las mismas unidades de ejecucion y van a
  * media velocidad -- y entonces la medida diria que el paralelismo no compensa
  * cuando lo que no compensa es la colocacion.
  *
@@ -347,12 +349,11 @@ void pin_worker_high(HANDLE h) {
      * Que la topologia la conteste `util::cpu_class_mask` y no este fichero es
      * a proposito: el banco de MIPS necesita el mismo dato para atar sus
      * medidas, y un hecho tiene un solo productor. */
-    ULONG_PTR bit =
-        (ULONG_PTR)::util::cpu_class_mask(::util::CoreClass::Fast) &
-        (ULONG_PTR)info.mask;
+    ULONG_PTR bit = (ULONG_PTR)::util::cpu_class_mask(::util::CoreClass::Fast) &
+                    (ULONG_PTR)info.mask;
     if (bit == 0)
-        bit = (ULONG_PTR)1
-              << (63 - (unsigned)__builtin_clzll((uint64_t)info.mask));
+        bit = (ULONG_PTR)1 << (63 -
+                               (unsigned)__builtin_clzll((uint64_t)info.mask));
     NtSetInformationThread(h, kThreadAffinityMask, &bit, sizeof(bit));
 }
 

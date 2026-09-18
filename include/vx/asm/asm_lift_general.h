@@ -67,8 +67,7 @@ struct AsmBoundReg {
  *         instruccion/forma fuera del subset -> el llamador emite INLINE_ASM.
  */
 bool asm_lift_general(ir::IrFunction &fn, ir::IrBlockId block,
-                      instr_db::Isa isa,
-                      const std::string &body,
+                      instr_db::Isa isa, const std::string &body,
                       const std::unordered_map<std::string, AsmBoundReg> &bound,
                       uint32_t line, ir::IrBlockId *out_exit = nullptr);
 

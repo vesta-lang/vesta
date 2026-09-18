@@ -78,8 +78,8 @@ bool const_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
  * El tope de saltos no es por miedo a un ciclo -- en SSA no puede haberlo --,
  * sino por si el IR llega roto: un analisis no debe colgar el compilador.
  */
-IrValueId skip_copies(const ir::IrFunction &fn,
-                      const DefBlockVec &def_block, IrValueId v) {
+IrValueId skip_copies(const ir::IrFunction &fn, const DefBlockVec &def_block,
+                      IrValueId v) {
     for (int hops = 0; hops < 16; ++hops) {
         if (v == IR_NO_VALUE || v >= fn.values.size()) return v;
         const int db = (v < def_block.size()) ? def_block[v] : -1;
@@ -97,8 +97,8 @@ IrValueId skip_copies(const ir::IrFunction &fn,
 }
 
 // Descompone @p v = ADD(base, const) (en cualquier orden).  Devuelve base y c.
-bool add_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
-            IrValueId v, IrValueId &base, int64_t &c) {
+bool add_of(const ir::IrFunction &fn, const DefBlockVec &def_block, IrValueId v,
+            IrValueId &base, int64_t &c) {
     const int db =
         (v < def_block.size() && v != IR_NO_VALUE) ? def_block[v] : -1;
     if (db < 0 || (size_t)db >= fn.blocks.size()) return false;
@@ -155,8 +155,8 @@ bool chain_add_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
 
 /// Descompone @p v = SUB(base, const).  El orden importa: `K - x` no es una
 /// induccion decreciente, es otra cosa -- se alterna en vez de bajar.
-bool sub_of(const ir::IrFunction &fn, const DefBlockVec &def_block,
-            IrValueId v, IrValueId &base, int64_t &c) {
+bool sub_of(const ir::IrFunction &fn, const DefBlockVec &def_block, IrValueId v,
+            IrValueId &base, int64_t &c) {
     const int db =
         (v < def_block.size() && v != IR_NO_VALUE) ? def_block[v] : -1;
     if (db < 0 || (size_t)db >= fn.blocks.size()) return false;
@@ -357,16 +357,16 @@ bool detect_loop_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
                           /*admite_baja=*/false, out);
 }
 
-bool detect_counted_iv(const ir::IrFunction &fn,
-                       const DefBlockVec &def_block, IrBlockId header,
-                       IrBlockId preheader, IrBlockId latch, LoopIV &out) {
+bool detect_counted_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
+                       IrBlockId header, IrBlockId preheader, IrBlockId latch,
+                       LoopIV &out) {
     return detect_iv_impl(fn, def_block, header, preheader, latch,
                           /*admite_baja=*/true, out);
 }
 
-bool detect_geometric_iv(const ir::IrFunction &fn,
-                         const DefBlockVec &def_block, IrBlockId header,
-                         IrBlockId preheader, IrBlockId latch, GeoIV &out) {
+bool detect_geometric_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
+                         IrBlockId header, IrBlockId preheader, IrBlockId latch,
+                         GeoIV &out) {
     if (header == (IrBlockId)IR_NO_BLOCK || header >= fn.blocks.size())
         return false;
     const auto &hins = fn.blocks[header].instrs;

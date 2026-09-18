@@ -181,8 +181,8 @@ class ThreadPool {
         {
             std::lock_guard lk(tasks_m_);
             if (stopping_.load()) return; // pool en apagado: descartar tarea
-            tasks_.push(QueuedTask{std::function<void()>(std::forward<F>(f)),
-                                   tag});
+            tasks_.push(
+                QueuedTask{std::function<void()>(std::forward<F>(f)), tag});
         }
 
         /* Contador que solo SUBE, no un 0/1.  Con una bandera, el worker
@@ -216,7 +216,8 @@ class ThreadPool {
     void worker_loop();
 
     /**
-     * @brief Una tarea encolada, con la etiqueta de reservas de quien la encolo.
+     * @brief Una tarea encolada, con la etiqueta de reservas de quien la
+     * encolo.
      *
      * POR QUE VIAJA LA ETIQUETA.  Un `util::AllocScope` vale para SU hilo, y
      * este compilador reparte casi todo: una fase etiquetada cuyo trabajo se
@@ -230,14 +231,15 @@ class ThreadPool {
      * saberlo.  Puesto aqui, sale gratis para todos y no hay nada que recordar.
      *
      * POR QUE AL LADO DE LA TAREA Y NO ENVOLVIENDOLA.  Envolver el callable en
-     * otra lambda que lleve la etiqueta anade un byte al cierre, y `std::function`
-     * guarda dentro de si mismo solo hasta un tamano: pasarse convierte una
-     * tarea que no reservaba en una que pide memoria al encolarse.  Un campo al
-     * lado no puede provocar eso.
+     * otra lambda que lleve la etiqueta anade un byte al cierre, y
+     * `std::function` guarda dentro de si mismo solo hasta un tamano: pasarse
+     * convierte una tarea que no reservaba en una que pide memoria al
+     * encolarse.  Un campo al lado no puede provocar eso.
      */
     struct QueuedTask {
         std::function<void()> fn;
-        util::AllocTag tag; ///< la del hilo que encolo; "no se" si no habia ninguna
+        util::AllocTag
+            tag; ///< la del hilo que encolo; "no se" si no habia ninguna
     };
 
     std::vector<std::thread> workers_; ///< Hilos worker del pool
@@ -270,10 +272,8 @@ auto ThreadPool::submit(F &&f, Args &&...args)
             throw std::runtime_error(
                 "ThreadPool is stopping, cannot submit new tasks");
         // envolver en lambda sin argumentos
-        tasks_.push(QueuedTask{std::function<void()>([task_ptr]() {
-                                   (*task_ptr)();
-                               }),
-                               tag});
+        tasks_.push(QueuedTask{
+            std::function<void()>([task_ptr]() { (*task_ptr)(); }), tag});
     }
 
     wake_flag_.fetch_add(1, std::memory_order_release); // ver enqueue()

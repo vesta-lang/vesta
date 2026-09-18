@@ -33,11 +33,11 @@
 #include <memory>
 #include <vector>
 
-#include "aot/aot_native.h"          // AotArch
-#include "codegen/frame_unwind.h"    // FrameUnwind
-#include "ir/ssa_ir.h"               // IrFunction
-#include "jit/jit_registry.h"        // Stackmap
-#include "jit/vreg_pipeline.h"       // NativeReloc, FloatIsa
+#include "aot/aot_native.h"       // AotArch
+#include "codegen/frame_unwind.h" // FrameUnwind
+#include "ir/ssa_ir.h"            // IrFunction
+#include "jit/jit_registry.h"     // Stackmap
+#include "jit/vreg_pipeline.h"    // NativeReloc, FloatIsa
 
 namespace aot {
 

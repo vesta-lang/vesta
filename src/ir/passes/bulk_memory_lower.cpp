@@ -111,7 +111,8 @@ bool lower_straight_line_runs(IrFunction &fn, analysis::asa::FactStore *facts) {
          * las dos constantes y la operacion, y los demas del grupo desaparecen.
          * En el primero y no al final porque ahi es donde estaba la primera
          * escritura, y adelantar o atrasar el conjunto respecto de lo que haya
-         * alrededor es justo lo que el detector se ha cuidado de no permitir. */
+         * alrededor es justo lo que el detector se ha cuidado de no permitir.
+         */
         std::vector<bool> drop(bb.instrs.size(), false);
         for (uint32_t i : f.instrs)
             if (i < drop.size()) drop[i] = true;
@@ -219,9 +220,8 @@ static bool bulk_memory_lower_impl(IrFunction &fn,
         }
 
         IrInstr op{};
-        op.op = (f.kind == analysis::BulkMemoryFact::Kind::Copy)
-                    ? IrOp::MEMCPY
-                    : IrOp::MEMSET;
+        op.op = (f.kind == analysis::BulkMemoryFact::Kind::Copy) ? IrOp::MEMCPY
+                                                                 : IrOp::MEMSET;
         op.type = IrType::VOID;
         op.dst = IR_NO_VALUE;
         op.operands = {f.dst_base,

@@ -152,8 +152,7 @@ int main() {
         CHECK(f.off[4] - f.off[3] == 1 && f.use_pos[f.off[3]] == 2,
               "el arg PHI v3 (back-edge) debe contar en block_end[b1]=2");
         // v2 se usa como operando del ADD en la posicion 2.
-        CHECK(f.next_use_after(vid(2), P(1)) == P(2),
-              "v2 se usa en el ADD @2");
+        CHECK(f.next_use_after(vid(2), P(1)) == P(2), "v2 se usa en el ADD @2");
     }
 
     // -----------------------------------------------------------------------

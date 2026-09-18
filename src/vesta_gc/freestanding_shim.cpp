@@ -133,5 +133,4 @@ extern "C" int atexit(void (*)(void)) {
     return 0;
 }
 
-
 #endif // VESTA_GC_FREESTANDING

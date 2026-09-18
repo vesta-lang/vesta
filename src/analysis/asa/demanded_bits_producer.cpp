@@ -125,7 +125,8 @@ void produce_demanded_bits(Production &p) {
             /* Un valor sin NINGUN uso es otra cosa que uno del que se leen
              * pocos bits, y se dice aparte: al primero le sobra la
              * instruccion entera, al segundo solo la limpieza. */
-            f.what.code = leidos == 0 ? "demanded_bits.none" : "demanded_bits.low";
+            f.what.code =
+                leidos == 0 ? "demanded_bits.none" : "demanded_bits.low";
             f.what.a = leidos;
             f.what.b = promete;
             f.about = value_subject(p, fn, v);

@@ -250,7 +250,8 @@ class CodeCache {
         return arena_ != nullptr ? arena_->last_scan().regions : 0;
     }
 
-    /// @brief Y cual fue el hueco libre mayor que vio.  @copydetails scan_regions
+    /// @brief Y cual fue el hueco libre mayor que vio.  @copydetails
+    /// scan_regions
     size_t scan_largest_free() const noexcept {
         return arena_ != nullptr ? arena_->last_scan().largest_free : 0;
     }
@@ -262,7 +263,6 @@ class CodeCache {
     }
 
   private:
-
     /// Activa permisos de ejecucion para una pagina (no-op en modo RWX).
     void transition_to_executable(uint8_t *ptr, size_t size);
 

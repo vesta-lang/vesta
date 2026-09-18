@@ -57,9 +57,8 @@ struct IrFunction;
  *              pase no disparo porque no vio el bucle o porque decidio no
  *              tocarlo.
  */
-PassResult
-ir_pass_bulk_memory_lower(IrFunction &fn,
-                          analysis::asa::FactStore *facts = nullptr);
+PassResult ir_pass_bulk_memory_lower(IrFunction &fn,
+                                     analysis::asa::FactStore *facts = nullptr);
 
 } // namespace ir
 

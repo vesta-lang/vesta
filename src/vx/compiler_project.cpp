@@ -27,7 +27,7 @@
 
 #include "util/cache_paths.h"  // el reparto de la cache por tipo y alcance
 #include "util/crash_report.h" // dejar dicho QUE modulo se esta compilando
-#include "util/fnv.h" // la semilla y el primo, en UN sitio
+#include "util/fnv.h"          // la semilla y el primo, en UN sitio
 #include "util/file_read.h"
 
 /* El ensamblador, DECLARADO y no incluido.  Su cabecera arrastra `windows.h`,
@@ -97,9 +97,9 @@ int run_worker_from_source(std::string code, const std::string &file_name,
 #include "vx/module/vxi_format.h"
 #include "vx/source_hash.h" // la identidad de un fuente son sus tokens
 #include "analysis/asa/fact_file.h"
-#include "analysis/asa/producers.h" // produce() + FactStore::find
+#include "analysis/asa/producers.h"     // produce() + FactStore::find
 #include "analysis/facts/value_range.h" // soltar la memoizacion de rangos
-#include "util/fs_utils.h"          // fs::get_executable_path()
+#include "util/fs_utils.h"              // fs::get_executable_path()
 
 #include <atomic>
 #include <cstdlib>
@@ -149,8 +149,11 @@ ir::OptLevel opt_level_from_int_(int n) noexcept {
 
 /// Si la cache esta apagada.  La respuesta la da `cache_paths.h`, que es quien
 /// conoce los cajones: antes se contestaba aqui y solo valia para el de este
-/// camino, asi que la bandera dejaba vivos los otros.  @see util::cache_disabled
-bool vxi_cache_disabled_() noexcept { return util::cache_disabled(); }
+/// camino, asi que la bandera dejaba vivos los otros.  @see
+/// util::cache_disabled
+bool vxi_cache_disabled_() noexcept {
+    return util::cache_disabled();
+}
 
 /// Escribe @p bytes al fichero @p path (binary).  Devuelve true si OK.
 /// Crea el directorio padre si no existe.
@@ -444,7 +447,6 @@ struct RutasCache {
     std::string hechos; ///< lo que el ASA supo de el al bajarlo.
 };
 
-
 /**
  * @brief Las rutas de @p source_path, calculadas la primera vez y reusadas.
  *
@@ -721,7 +723,8 @@ ensure_facts_impl_(const ir::IrModule &mod, analysis::asa::FactStore &store,
                 break;
             }
     /* Y los que no saben decir de que dependen tampoco salen de `keys`, asi que
-     * se anaden con su coste: se guardan igual, solo que sin poder validarse. */
+     * se anaden con su coste: se guardan igual, solo que sin poder validarse.
+     */
     for (const analysis::asa::ProductionSummary &r : summaries) {
         bool known = false;
         for (const analysis::asa::DomainCost &c : keys)
@@ -920,10 +923,10 @@ size_t ir_ram_ceiling_bytes() {
  */
 /// Un recuento del barrido: cuantas funciones quedan fuera y cuanto pesan.
 struct ReachTally {
-    size_t seeds = 0;      ///< Cuantas se dieron por alcanzables de entrada.
-    size_t dead = 0;       ///< Cuantas no alcanzo nadie.
-    size_t dead_instrs = 0;///< Y cuantas instrucciones suman.
-    size_t all_instrs = 0; ///< De cuantas en total.
+    size_t seeds = 0;       ///< Cuantas se dieron por alcanzables de entrada.
+    size_t dead = 0;        ///< Cuantas no alcanzo nadie.
+    size_t dead_instrs = 0; ///< Y cuantas instrucciones suman.
+    size_t all_instrs = 0;  ///< De cuantas en total.
     /// Unas cuantas por su nombre, para poder MIRAR si el cierre se dejo una
     /// via de alcanzar.  Un porcentaje no delata eso; un nombre si.
     std::vector<std::string> names;
@@ -938,9 +941,10 @@ struct ReachTally {
  *                    el paquete entero delante las llamadas de una `internal`
  *                    se ven TODAS, asi que no tendria por que ser semilla.
  */
-ReachTally reach_from_seeds(const ir::IrModule &mod,
-                            const std::unordered_map<std::string, size_t> &by_name,
-                            bool seed_public) {
+ReachTally
+reach_from_seeds(const ir::IrModule &mod,
+                 const std::unordered_map<std::string, size_t> &by_name,
+                 bool seed_public) {
     ReachTally t;
     std::vector<uint8_t> reached(mod.functions.size(), 0);
     std::vector<size_t> pending;
@@ -1023,14 +1027,12 @@ void count_unreachable_functions(const ir::IrModule &mod) {
     const ReachTally hoy = reach_from_seeds(mod, by_name, true);
     const ReachTally sin_publicas = reach_from_seeds(mod, by_name, false);
 
-    const double pct = mod.functions.empty()
-                           ? 0.0
-                           : 100.0 * double(hoy.dead) /
-                                 double(mod.functions.size());
-    const double pct_i =
-        hoy.all_instrs == 0
-            ? 0.0
-            : 100.0 * double(hoy.dead_instrs) / double(hoy.all_instrs);
+    const double pct = mod.functions.empty() ? 0.0
+                                             : 100.0 * double(hoy.dead) /
+                                                   double(mod.functions.size());
+    const double pct_i = hoy.all_instrs == 0 ? 0.0
+                                             : 100.0 * double(hoy.dead_instrs) /
+                                                   double(hoy.all_instrs);
     std::fprintf(stderr,
                  "[dead-fn] %zu funciones, %zu semillas\n"
                  "[dead-fn] no alcanzables: %zu (%.1f%%), con %zu de %zu "
@@ -1816,8 +1818,7 @@ uint64_t asa_facts_key(uint64_t module_id, const CompileOptions &opts,
     /* La CAPA que corresponde al momento.  Ver la nota de `asa_facts_key` en la
      * cabecera: pre-opt habla del IR tal y como se bajo, post-opt depende del
      * optimizador. */
-    const uint64_t cfg_fp =
-        pre ? cfg.ir_fingerprint() : cfg.full_fingerprint();
+    const uint64_t cfg_fp = pre ? cfg.ir_fingerprint() : cfg.full_fingerprint();
 
     uint64_t h = 0xcbf29ce484222325ULL;
     auto mix = [&h](uint64_t v) {
@@ -1849,10 +1850,10 @@ std::string asa_facts_path_for_stage(const std::string &base_facts_path,
         (stage != nullptr &&
          std::strcmp(stage, analysis::asa::kStagePreOpt) == 0)
             ? "pre"
-            : (stage != nullptr &&
-               std::strcmp(stage, analysis::asa::kStageDuringOpt) == 0)
-                  ? "mid"
-                  : "post";
+        : (stage != nullptr &&
+           std::strcmp(stage, analysis::asa::kStageDuringOpt) == 0)
+            ? "mid"
+            : "post";
     if (base_facts_path.size() > kExt.size() &&
         base_facts_path.compare(base_facts_path.size() - kExt.size(),
                                 kExt.size(), kExt) == 0) {
@@ -2114,7 +2115,8 @@ CompileResult compile_vx_project(
      *
      * NO CUESTA NADA sin comprobador: fuera de ese build `san_mark` es un
      * cuerpo vacio en linea.  Ver `util::san_mark`. */
-    auto cerrar_fase = [&marca](long &destino, const char *siguiente = nullptr) {
+    auto cerrar_fase = [&marca](long &destino,
+                                const char *siguiente = nullptr) {
         const auto ahora = RelojProyecto::now();
         destino += (long)std::chrono::duration_cast<std::chrono::microseconds>(
                        ahora - marca)
@@ -2747,7 +2749,8 @@ CompileResult compile_vx_project(
                 for (const auto &decl : ds) {
                     if (!decl) continue;
                     if (decl->kind == ast::NodeKind::NamespaceDecl) {
-                        auto *nd = static_cast<ast::NamespaceDecl *>(decl.get());
+                        auto *nd =
+                            static_cast<ast::NamespaceDecl *>(decl.get());
                         collect(nd->decls,
                                 ns.empty() ? nd->name : ns + "." + nd->name);
                         continue;
@@ -2771,7 +2774,8 @@ CompileResult compile_vx_project(
                                    : flatten_ns_(ns) + "__" + fd->name;
                     if (!fd->hook_point.empty())
                         root_hooks.push_back({fd, flat});
-                    if (fd->is_no_instrument) root_no_instrument.push_back(flat);
+                    if (fd->is_no_instrument)
+                        root_no_instrument.push_back(flat);
                 }
             };
         collect(work.back().ast->decls, std::string());
@@ -4503,7 +4507,8 @@ CompileResult compile_vx_project(
      * Se asigna uno vacio en vez de vaciarlo campo a campo: no hay que saber
      * que lleva dentro para soltarlo, y el dia que lleve otra cosa esto sigue
      * valiendo. */
-    for (ProjectModuleWork &pm : work) pm.vxi = VxiModule{};
+    for (ProjectModuleWork &pm : work)
+        pm.vxi = VxiModule{};
 
     /* Y aqui acaba de compilar modulos, que es una fase y no se llamaba de
      * ninguna forma: en la curva se veia como una caida de 231 MiB sin nombre
@@ -5061,7 +5066,8 @@ CompileResult compile_vx_project(
          * modulos -- que es lo que decide quien gana si dos declaran el mismo
          * nombre. */
         for (const auto &pm : work)
-            for (const auto &kv : pm.contracts) res.contracts[kv.first] = kv.second;
+            for (const auto &kv : pm.contracts)
+                res.contracts[kv.first] = kv.second;
 
         /* Aqui es donde MAS aparece: `merged` es la fusion de los modulos del
          * proyecto, asi que la misma nativa declarada en dos de ellos llega
@@ -5236,10 +5242,11 @@ CompileResult compile_vx_project(
      * antes de que nadie los mire, asi que observar solo despues hace creer que
      * el programa no los tenia. */
     {
-        // Medir es decision de QUIEN mide: el cronometro es una utilidad y no sabe
-    // bajo que bandera vive cada uno de sus usuarios.
-    util::CronoTramo t_("phase:asa_dump_shapes",
-                        util::flag_on(util::FlagId::Times));
+        // Medir es decision de QUIEN mide: el cronometro es una utilidad y no
+        // sabe
+        // bajo que bandera vive cada uno de sus usuarios.
+        util::CronoTramo t_("phase:asa_dump_shapes",
+                            util::flag_on(util::FlagId::Times));
         analysis::asa::volcar_formas(merged, "pre-opt");
     }
 
@@ -5265,7 +5272,7 @@ CompileResult compile_vx_project(
      * con el binario nativo, que es lo que permite depurar aquel desde aqui. */
     {
         util::CronoTramo t_("phase:language_allocator",
-                        util::flag_on(util::FlagId::Times));
+                            util::flag_on(util::FlagId::Times));
         traer_asignador_del_lenguaje(merged, opts, root_path);
     }
 
@@ -5273,8 +5280,9 @@ CompileResult compile_vx_project(
      * de ese momento.  Aqui corria DESPUES, compartiendo base con las cotas, y
      * eran dos fallos en uno: el inline se lleva por delante los sitios de
      * llamada que la demuestran -- asi que no encontraba nada, mientras que en
-     * el camino de fichero suelto si --, y una misma base servia a dos momentos,
-     * con lo que un analisis de antes de optimizar se reutilizaba despues.
+     * el camino de fichero suelto si --, y una misma base servia a dos
+     * momentos, con lo que un analisis de antes de optimizar se reutilizaba
+     * despues.
      *
      * La misma comprobacion no puede dar dos respuestas segun se compile un
      * fichero o un proyecto. */
@@ -5285,16 +5293,14 @@ CompileResult compile_vx_project(
         util::CronoTramo t_borrow_("phase:borrow_across_calls",
                                    util::flag_on(util::FlagId::Times));
         analysis::asa::FactBase pre_opt_base(analysis::asa::kStagePreOpt);
-        vx_report_borrow_across_calls(merged, res.diagnostics, root_path,
-                                      pre_opt_base,
-                                      opts.violations_are_errors
-                                          ? DiagLevel::ERR
-                                          : DiagLevel::WARN);
+        vx_report_borrow_across_calls(
+            merged, res.diagnostics, root_path, pre_opt_base,
+            opts.violations_are_errors ? DiagLevel::ERR : DiagLevel::WARN);
     }
 
     {
         util::CronoTramo t_("phase:ir_optimize",
-                        util::flag_on(util::FlagId::Times));
+                            util::flag_on(util::FlagId::Times));
         /* Con el almacen si se pidio el momento de EN MEDIO.  Ver la nota en
          * el camino de fichero suelto. */
         ir::ir_optimize(merged, opt_level_from_int_(opts.opt_level),
@@ -5349,7 +5355,7 @@ CompileResult compile_vx_project(
         }
     {
         util::CronoTramo t_("phase:asm_preconditions",
-                        util::flag_on(util::FlagId::Times));
+                            util::flag_on(util::FlagId::Times));
         /* Antes de preguntar, que este lo que se va a preguntar -- venga de la
          * compilacion anterior o de producirlo ahora.  El consumidor no
          * distingue una cosa de la otra a proposito: si tuviera que decidir
@@ -5719,7 +5725,8 @@ CompileResult compile_vx_project(
     /* Lo que queda del frontend, que NO es enlazar: se llamaba asi porque era
      * la ultima marca y se comia todo lo que viniera detras -- la cola de esta
      * funcion Y el ensamblado entero --.  Ahora el ensamblado abre la suya en
-     * cuanto el frontend devuelve, y esta se queda con lo que de verdad cubre. */
+     * cuanto el frontend devuelve, y esta se queda con lo que de verdad cubre.
+     */
     cerrar_fase(res.tiempos.emitir_us, "vx.phase.finish");
 
     // AOT.2.d: detectar @AllocatorOverride / @PanicHandler en el modulo ROOT,
@@ -6029,8 +6036,8 @@ static bool contiene_palabra(const std::string &source, const char *kw) {
  * @param file  Fichero al que apuntar.
  */
 static void vx_warn_call_site_with_asm(const ir::IrModule &mod,
-                                        Diagnostics &diags,
-                                        const std::string &file) {
+                                       Diagnostics &diags,
+                                       const std::string &file) {
     for (const ir::IrFunction &fn : mod.functions) {
         // Una sola pasada por funcion, y se corta en cuanto se sabe la
         // respuesta: en cuanto hay las dos cosas ya no queda nada que mirar.
@@ -6038,7 +6045,8 @@ static void vx_warn_call_site_with_asm(const ir::IrModule &mod,
         const ir::IrInstr *asm_block = nullptr;
         for (const ir::IrBlock &b : fn.blocks) {
             for (const ir::IrInstr &in : b.instrs) {
-                if (in.op == ir::IrOp::RETURN_ADDR) wants_return_addr = true;
+                if (in.op == ir::IrOp::RETURN_ADDR)
+                    wants_return_addr = true;
                 else if (in.op == ir::IrOp::INLINE_ASM && asm_block == nullptr)
                     asm_block = &in;
                 if (wants_return_addr && asm_block != nullptr) break;
@@ -6059,22 +6067,24 @@ static void vx_warn_call_site_with_asm(const ir::IrModule &mod,
          * `x30` entra porque en arm64 la vuelta viaja en el registro de
          * enlace, no en la pila: pisarlo rompe lo mismo que mover `rsp` en
          * x86, aunque la pila quede intacta. */
-        static const char *const kReturnPathRegs[] = {"rsp", "rbp", "sp",
-                                                     "x29", "x30", "r13",
-                                                     "r11", "r14"};
+        static const char *const kReturnPathRegs[] = {
+            "rsp", "rbp", "sp", "x29", "x30", "r13", "r11", "r14"};
         std::string touched;
         for (const std::string &r : e.escritos) {
             bool afecta = false;
             for (const char *c : kReturnPathRegs)
-                if (r == c) { afecta = true; break; }
+                if (r == c) {
+                    afecta = true;
+                    break;
+                }
             if (!afecta) continue;
             if (!touched.empty()) touched += ", ";
             touched += r;
         }
         if (touched.empty()) continue;
-        diags.diag(SourceLoc{util::intern_name(file), asm_block->source_line, 1},
-                   DiagLevel::WARN,
-                   "VXW934", {fn.name, touched});
+        diags.diag(
+            SourceLoc{util::intern_name(file), asm_block->source_line, 1},
+            DiagLevel::WARN, "VXW934", {fn.name, touched});
     }
 }
 
@@ -6573,20 +6583,20 @@ void vx_report_borrow_across_calls(const ir::IrModule &mod, Diagnostics &diags,
          * lo que los junta esta en quien la llama. */
         loc.line = v.line;
         loc.set_file(file);
-        diags.diag(loc, level, "VX2053",
-                   {std::to_string(v.promised), v.function,
-                    std::to_string(v.other)});
+        diags.diag(
+            loc, level, "VX2053",
+            {std::to_string(v.promised), v.function, std::to_string(v.other)});
         /* La PRUEBA, en datos: sin la llamada delante esto seria una acusacion
          * que quien la lee no puede juzgar. */
         diags.note(loc, vx::diag::format("VX2054", {std::to_string(v.line)}));
         /* Y la salida, que depende de QUIEN hizo la promesa.  Derivada del
          * tipo, se habla de prestamos y las salidas las define el modelo;
          * escrita por el programador, lo que sobra o falta es su declaracion, y
-         * mandarle a terminar un prestamo seria mandarle a buscar algo que en su
-         * programa no existe. */
+         * mandarle a terminar un prestamo seria mandarle a buscar algo que en
+         * su programa no existe. */
         if (v.declared)
-            diags.note(loc, vx::diag::format(
-                                "VX2056", {std::to_string(v.promised)}));
+            diags.note(
+                loc, vx::diag::format("VX2056", {std::to_string(v.promised)}));
         else
             diags.note(loc, vx::diag::format("VX2055", {}));
     }

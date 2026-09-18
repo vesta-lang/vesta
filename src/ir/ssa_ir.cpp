@@ -1391,7 +1391,7 @@ void ir_print(const IrModule &mod, std::ostream &o) {
                 const IrParamContract &c = fn.param_contracts[pi];
                 if (!c.empty()) {
                     static const char *kNames[] = {
-                        "read",    "write",     "excl-call", "excl-run",
+                        "read",    "write",     "excl-call",  "excl-run",
                         "nonnull", "no-escape", "observable", "immutable"};
                     o << " [";
                     bool sep = false;
@@ -1401,7 +1401,8 @@ void ir_print(const IrModule &mod, std::ostream &o) {
                         for (uint32_t k = 0;
                              k < static_cast<uint32_t>(IrParamClaim::COUNT);
                              ++k) {
-                            const IrParamClaim cl = static_cast<IrParamClaim>(k);
+                            const IrParamClaim cl =
+                                static_cast<IrParamClaim>(k);
                             const bool vale = l.has(cl);
                             const bool niega = l.denies(cl);
                             if (!vale && !niega) continue;

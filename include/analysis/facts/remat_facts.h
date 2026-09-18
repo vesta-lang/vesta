@@ -98,12 +98,12 @@ inline bool is_rematerializable_op(ir::IrOp op) noexcept {
  * vuelve un arbol sin cambiar este tipo.
  */
 struct RematRecipe {
-    ir::IrOp op = ir::IrOp::NOP;         ///< op que recomputa el valor.
-    uint64_t imm = 0;                    ///< literal (CONST/direcciones).
+    ir::IrOp op = ir::IrOp::NOP; ///< op que recomputa el valor.
+    uint64_t imm = 0;            ///< literal (CONST/direcciones).
     /// SSA que la receta necesita.  MISMO tipo que los de una instruccion:
     /// asi copiarlos aqui no reserva cuando son pocos, que es siempre.
     ir::IrOperands operands;
-    bool valid = false;                  ///< el valor es recomputable.
+    bool valid = false; ///< el valor es recomputable.
 };
 
 /**

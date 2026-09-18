@@ -294,7 +294,8 @@ void LazyHybridTLB::dump_stats() const {
     }
 
     uint32_t chained = 0;
-    for (Table *o = t->older; o != nullptr; o = o->older) ++chained;
+    for (Table *o = t->older; o != nullptr; o = o->older)
+        ++chained;
 
     std::printf("TLB: %u ranuras, %u vivas, %u invalidadas (carga %.2f)\n",
                 slots, live, dead, (double)live / (double)slots);

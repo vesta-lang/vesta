@@ -23,7 +23,7 @@
 #include "vx/vxdbg_emit.h"   // base de conocimiento de depuracion
 
 #include "analyze/bigo.h"
-#include "analyze/fingerprint.h" // verificacion de contratos de huella
+#include "analyze/fingerprint.h"    // verificacion de contratos de huella
 #include "analyze/int_wraparound.h" // la cuenta que se sale de su tipo
 #include "ir/ir_emitter.h"
 #include "analysis/asa/aggregate_facts.h"
@@ -703,10 +703,10 @@ CompileResult compile_vx_source(const std::string &source,
         if (fd->is_string_concat_override) {
             if (!res.string_concat_override.empty()) {
                 res.ok = false;
-                res.diagnostics.error(SourceLoc{util::intern_name(opts.module_name), 0, 0},
-                                      "multiples @StringConcat: '" +
-                                          res.string_concat_override + "' y '" +
-                                          fd->name + "'");
+                res.diagnostics.error(
+                    SourceLoc{util::intern_name(opts.module_name), 0, 0},
+                    "multiples @StringConcat: '" + res.string_concat_override +
+                        "' y '" + fd->name + "'");
                 return res;
             }
             res.string_concat_override = fd->name;
@@ -714,10 +714,10 @@ CompileResult compile_vx_source(const std::string &source,
         if (fd->is_string_eq_override) {
             if (!res.string_eq_override.empty()) {
                 res.ok = false;
-                res.diagnostics.error(SourceLoc{util::intern_name(opts.module_name), 0, 0},
-                                      "multiples @StringEq: '" +
-                                          res.string_eq_override + "' y '" +
-                                          fd->name + "'");
+                res.diagnostics.error(
+                    SourceLoc{util::intern_name(opts.module_name), 0, 0},
+                    "multiples @StringEq: '" + res.string_eq_override +
+                        "' y '" + fd->name + "'");
                 return res;
             }
             res.string_eq_override = fd->name;
@@ -879,8 +879,7 @@ CompileResult compile_vx_source(const std::string &source,
          * queda hasta aqui" acusa de su coste a lo primero que lleve dentro --,
          * y sin separarlo quien quisiera optimizar la bajada miraria donde no
          * esta. */
-        util::CronoTramo t_("lower:run",
-                            util::flag_on(util::FlagId::Times));
+        util::CronoTramo t_("lower:run", util::flag_on(util::FlagId::Times));
         if (!lo.run(irmod, mod_name)) {
             res.ok = false;
             return res;
@@ -928,8 +927,7 @@ CompileResult compile_vx_source(const std::string &source,
         for (auto &e : emitted)
             spans.push_back({std::move(e.symbol), e.line, e.column, e.length});
         if (!emit_vxdbg_source(tc, lo.emitted_symbols(), std::move(spans),
-                               filename, source, opts.vxdbg_dir, st,
-                               dbg_err)) {
+                               filename, source, opts.vxdbg_dir, st, dbg_err)) {
             std::cerr << "[vxdbg] no se pudo emitir: " << dbg_err << "\n";
         }
         res.vxdbg_artifact_map = st.artifact_map;
@@ -1216,8 +1214,9 @@ CompileResult compile_vx_source(const std::string &source,
                     SourceLoc loc;
                     loc.set_file(filename);
                     for (const auto &e : ptres.errors) {
-                        res.diagnostics.error(SourceLoc{util::intern_name(filename), 0, 0},
-                                              std::string("port-c: ") + e);
+                        res.diagnostics.error(
+                            SourceLoc{util::intern_name(filename), 0, 0},
+                            std::string("port-c: ") + e);
                     }
                 }
             } else {
@@ -1302,8 +1301,7 @@ CompileResult compile_vx_source(const std::string &source,
                 bool changed = true;
                 while (changed) {
                     changed = false;
-                    if (ir::applied(ir::ir_pass_const_fold(fn)))
-                        changed = true;
+                    if (ir::applied(ir::ir_pass_const_fold(fn))) changed = true;
                     if (ir::applied(ir::ir_pass_unreachable(fn)))
                         changed = true;
                 }
@@ -1505,14 +1503,13 @@ CompileResult compile_vx_source(const std::string &source,
          * no llegaba a actuar nunca. */
         const uint64_t module_id = wants_facts ? asa_module_id(filename) : 0;
         if (wants_facts && wants_stage(analysis::asa::kStagePreOpt)) {
-            const auto s =
-                ensure_facts(irmod_for_section, res.facts, asa_wanted,
-                             asa_facts_path_for_stage(
-                                 vxfacts_path_for(filename, std::string()),
-                                 analysis::asa::kStagePreOpt),
-                             asa_facts_key(module_id, opts,
-                                           analysis::asa::kStagePreOpt),
-                             analysis::asa::kStagePreOpt, filename);
+            const auto s = ensure_facts(
+                irmod_for_section, res.facts, asa_wanted,
+                asa_facts_path_for_stage(
+                    vxfacts_path_for(filename, std::string()),
+                    analysis::asa::kStagePreOpt),
+                asa_facts_key(module_id, opts, analysis::asa::kStagePreOpt),
+                analysis::asa::kStagePreOpt, filename);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -1538,11 +1535,9 @@ CompileResult compile_vx_source(const std::string &source,
              * mirar la opcion, y era una respuesta distinta para el mismo
              * programa: analizado como fichero suelto acusaba y abortaba,
              * analizado como proyecto callaba. */
-            vx_report_borrow_across_calls(irmod_for_section, res.diagnostics,
-                                          filename, pre_opt_base,
-                                          opts.violations_are_errors
-                                              ? DiagLevel::ERR
-                                              : DiagLevel::WARN);
+            vx_report_borrow_across_calls(
+                irmod_for_section, res.diagnostics, filename, pre_opt_base,
+                opts.violations_are_errors ? DiagLevel::ERR : DiagLevel::WARN);
         }
 
         /* Y el almacen, si alguien pidio el momento de EN MEDIO: lo que un
@@ -1563,14 +1558,13 @@ CompileResult compile_vx_source(const std::string &source,
          * hecho con su momento sellado; no se contradicen, hablan de codigos
          * distintos. */
         if (wants_facts && wants_stage(analysis::asa::kStagePostOpt)) {
-            const auto s =
-                ensure_facts(irmod_for_section, res.facts, asa_wanted,
-                             asa_facts_path_for_stage(
-                                 vxfacts_path_for(filename, std::string()),
-                                 analysis::asa::kStagePostOpt),
-                             asa_facts_key(module_id, opts,
-                                           analysis::asa::kStagePostOpt),
-                             analysis::asa::kStagePostOpt, filename);
+            const auto s = ensure_facts(
+                irmod_for_section, res.facts, asa_wanted,
+                asa_facts_path_for_stage(
+                    vxfacts_path_for(filename, std::string()),
+                    analysis::asa::kStagePostOpt),
+                asa_facts_key(module_id, opts, analysis::asa::kStagePostOpt),
+                analysis::asa::kStagePostOpt, filename);
             res.asa_summaries.insert(res.asa_summaries.end(), s.begin(),
                                      s.end());
         }
@@ -1610,10 +1604,9 @@ CompileResult compile_vx_source(const std::string &source,
              * y quien fuera a optimizarlo miraria donde no esta. */
             util::CronoTramo t_("emit:report_bounds",
                                 util::flag_on(util::FlagId::Times));
-            vx_report_bounds(irmod_for_section, res.diagnostics, filename,
-                             fact_base,
-                             opts.violations_are_errors ? DiagLevel::ERR
-                                                        : DiagLevel::WARN);
+            vx_report_bounds(
+                irmod_for_section, res.diagnostics, filename, fact_base,
+                opts.violations_are_errors ? DiagLevel::ERR : DiagLevel::WARN);
         }
         /* La exclusividad de los prestamos NO se comprueba aqui: se hizo antes
          * de optimizar, que es donde todavia existen las llamadas que la

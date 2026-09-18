@@ -43,7 +43,7 @@
 namespace vm {
 struct ASTNode;
 struct ExprNode;
-}
+} // namespace vm
 
 namespace ir {
 
@@ -87,8 +87,8 @@ class VelNodeStream final : public emmit::NodeStream {
      *        final del enlazado sin que nadie los mire.
      *
      * Lo pide el ensamblador cuando ya ha dado todas sus pasadas.  Despues de
-     * esto el flujo esta AGOTADO -- ver @c emmit::NodeStream::release_source --,
-     * asi que no se llama entre pasada y pasada.
+     * esto el flujo esta AGOTADO -- ver @c emmit::NodeStream::release_source
+     * --, asi que no se llama entre pasada y pasada.
      */
     void release_source() override;
 

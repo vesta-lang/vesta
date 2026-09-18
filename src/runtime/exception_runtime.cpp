@@ -4,7 +4,7 @@
  */
 
 #include "util/crash_report.h" // contar la caida entera antes de saltar
-#include "util/cache_paths.h" // el reparto de la cache por tipo y alcance
+#include "util/cache_paths.h"  // el reparto de la cache por tipo y alcance
 #include "util/env_flags.h"
 #include "runtime/exception_runtime.h"
 
@@ -2370,8 +2370,8 @@ static LONG WINAPI vx_av_veh(EXCEPTION_POINTERS *info) {
         /* Y, SI SE PIDE, el informe del anfitrion entero: pila nativa, simbolos
          * y desensamblado.  La linea de arriba dice QUE paso y DoNDE; esto dice
          * COMO se llego, que es lo que convierte un codigo desconocido en un
-         * diagnostico.  Tiene que ser en este punto: lo siguiente es el salto al
-         * punto de rescate, y a partir de ahi la pila es la del salto.
+         * diagnostico.  Tiene que ser en este punto: lo siguiente es el salto
+         * al punto de rescate, y a partir de ahi la pila es la del salto.
          *
          * Apagado por defecto porque son DOS manejadores distintos a proposito
          * -- este convierte un fallo del programa invitado en algo capturable;

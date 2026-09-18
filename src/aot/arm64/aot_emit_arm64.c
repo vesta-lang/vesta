@@ -93,9 +93,9 @@ const AotElfObjArch *aot_elf_obj_arch_arm64(void) {
  * @return 1 si se escribio; 0 si no, con @p err puesto.
  */
 int aot_emit_elf_obj_arm64(const char *path, const AotSection *secs,
-                           int num_secs, const AotReloc *relocs,
-                           int num_relocs, const AotSym *syms, int num_syms,
-                           char *err, size_t err_cap) {
+                           int num_secs, const AotReloc *relocs, int num_relocs,
+                           const AotSym *syms, int num_syms, char *err,
+                           size_t err_cap) {
     return aot_emit_elf_obj_arch(path, secs, num_secs, relocs, num_relocs, syms,
                                  num_syms, aot_elf_obj_arch_arm64(), err,
                                  err_cap);

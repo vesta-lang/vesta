@@ -53,8 +53,7 @@ static Place F(const char *root, const char *field) {
 static void test_disjoint_fields() {
     CHECK(!places_may_overlap(F("p", "a"), F("p", "b")),
           "p.a y p.b son campos distintos: no se pisan");
-    CHECK(places_may_overlap(F("p", "a"), F("p", "a")),
-          "p.a consigo mismo si");
+    CHECK(places_may_overlap(F("p", "a"), F("p", "a")), "p.a consigo mismo si");
     CHECK(places_same(F("p", "a"), F("p", "a")), "y ademas es EL MISMO lugar");
     CHECK(!places_same(F("p", "a"), F("p", "b")), "p.a y p.b no son el mismo");
 }
@@ -64,8 +63,7 @@ static void test_disjoint_fields() {
 //    prestamo, asi que tienen que chocar aunque `p` sea "mas grande".
 // --------------------------------------------------------------------------
 static void test_prefix() {
-    CHECK(places_may_overlap(P("p"), F("p", "a")),
-          "p contiene a p.a: chocan");
+    CHECK(places_may_overlap(P("p"), F("p", "a")), "p contiene a p.a: chocan");
     CHECK(places_may_overlap(F("p", "a"), P("p")), "y da igual el orden");
     CHECK(!places_same(P("p"), F("p", "a")),
           "pero no son el MISMO lugar: contener no es ser");

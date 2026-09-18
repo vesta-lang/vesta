@@ -87,8 +87,7 @@ void produce_definite_store(Production &p) {
             const Subject about = pointer_subject(p, fn, e.first);
             if (d.verdict == DefiniteStoreFacts::Verdict::Unknown) {
                 p.say_unknown(about, d.reason, d.reason_code,
-                              kProducerDefiniteStore, "",
-                              Scope::everywhere());
+                              kProducerDefiniteStore, "", Scope::everywhere());
                 continue;
             }
             Fact f;

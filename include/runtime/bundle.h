@@ -285,7 +285,7 @@ struct Bundle {
          */
         uint16_t vec_read = 0;
         uint16_t vec_write = 0;
-        uint8_t field = 0;      ///< campos implicitos que toca (banderas, pila)
+        uint8_t field = 0; ///< campos implicitos que toca (banderas, pila)
         /// @see SUM_MEM, SUM_BARRIER, SUM_READS_PC, SUM_UNKNOWN.  Arranca en
         /// `SUM_UNKNOWN`: hasta que alguien mire, el paquete no se delega.
         uint8_t flags = SUM_UNKNOWN;
@@ -329,10 +329,11 @@ struct Bundle {
      * que de verdad hacia falta proteger. */
     Bundle *improved = nullptr;
 
-    uint8_t fused_pairs = 0;    ///< pares que el fusionador junto aqui
-    uint8_t newop_ready = 0;    ///< pares que un opcode nuevo capturaria
-    uint8_t newop_livewall = 0; ///< ...y los que no, por seguir vivo el temporal
-    bool retired = false;  ///< ya se devolvio la entrada de icache
+    uint8_t fused_pairs = 0; ///< pares que el fusionador junto aqui
+    uint8_t newop_ready = 0; ///< pares que un opcode nuevo capturaria
+    uint8_t newop_livewall =
+        0;                ///< ...y los que no, por seguir vivo el temporal
+    bool retired = false; ///< ya se devolvio la entrada de icache
 
     /// Entradas antes de juzgar.  Suficientes para que la media signifique algo
     /// y pocas para no arrastrar la perdida mucho tiempo.
@@ -343,10 +344,10 @@ struct Bundle {
     /**
      * @brief La instruccion que habia en la entrada de icache al formar.
      *
-     * Es lo que se devuelve al retirar el paquete, y va APARTE porque `instr[0]`
-     * ya no sirve para eso: el planificador reordena el paquete antes de
-     * publicarlo, y entonces en el hueco cero hay OTRA instruccion -- la que
-     * mejor puntuo --, no la de esta direccion.
+     * Es lo que se devuelve al retirar el paquete, y va APARTE porque
+     * `instr[0]` ya no sirve para eso: el planificador reordena el paquete
+     * antes de publicarlo, y entonces en el hueco cero hay OTRA instruccion --
+     * la que mejor puntuo --, no la de esta direccion.
      *
      * Restaurando `instr[0]` la entrada quedaba con una instruccion de otro
      * sitio, y eso rompe la CADENA: un paquete encadena mirando si el destino
@@ -488,9 +489,10 @@ struct BundleArena {
      * esta vaciando.  O sea punteros colgando, en silencio.  Subir
      * `ICACHE_SIZE` por encima de `CAPACITY` es justo el cambio que alguien
      * haria sin sospecharlo, y por eso se para aqui. */
-    static_assert(CAPACITY >= ICACHE_SIZE,
-                  "una mitad tiene que poder alojar TODAS las raices vivas: "
-                  "con menos, la copia deja raices apuntando a la region vieja");
+    static_assert(
+        CAPACITY >= ICACHE_SIZE,
+        "una mitad tiene que poder alojar TODAS las raices vivas: "
+        "con menos, la copia deja raices apuntando a la region vieja");
 
     /// Bloques por mitad.  Array fijo, no `std::vector`: el numero maximo se
     /// sabe (CAPACITY/CHUNK) y una lista que crece en el corazon del
@@ -529,7 +531,8 @@ struct BundleArena {
                     CHUNK_BYTES, vm::MemPerm::READ | vm::MemPerm::WRITE);
                 if (mem == nullptr) return nullptr;
                 Bundle *c = static_cast<Bundle *>(mem);
-                for (uint32_t i = 0; i < CHUNK; ++i) new (&c[i]) Bundle();
+                for (uint32_t i = 0; i < CHUNK; ++i)
+                    new (&c[i]) Bundle();
                 chunks[n_chunks++] = c;
             }
             return &chunks[chunk][used++ % CHUNK];
@@ -741,10 +744,10 @@ uint32_t bundle_reorder(ProcessVM *process, Bundle &b, BundleTouch &tc,
  * cuenta saldria mal SIN dar ningun error.
  */
 struct FuseTelemetry {
-    uint64_t *reject;         ///< kFuseRejectCount contadores, por razon
-    uint64_t *uncovered;      ///< 512: que opcode encabeza un par sin patron
+    uint64_t *reject;           ///< kFuseRejectCount contadores, por razon
+    uint64_t *uncovered;        ///< 512: que opcode encabeza un par sin patron
     uint64_t *unmatched_second; ///< 512: que opcode va SEGUNDO y no encaja
-    uint64_t *newop_ready;    ///< pares que un opcode nuevo capturaria
+    uint64_t *newop_ready;      ///< pares que un opcode nuevo capturaria
     uint64_t *newop_livewall; ///< ...y los que no, por seguir vivo el temporal
 };
 
@@ -789,13 +792,13 @@ enum class FuseReject : uint8_t {
     NoThreeOpForm, ///< la segunda no tiene variante de tres operandos
     WidthMismatch, ///< alguna no opera a 64 bits
     DestMismatch,  ///< la ALU no escribe lo que el `mov` acaba de dejar
-    SrcIsDest,     ///< la segunda fuente ES el destino: `alu3` leeria otro valor
-    TooMany,       ///< la fusionada no cabe en `absorbed` o en `size_instr`
+    SrcIsDest, ///< la segunda fuente ES el destino: `alu3` leeria otro valor
+    TooMany,   ///< la fusionada no cabe en `absorbed` o en `size_instr`
     /* --- del patron de REDIRIGIR EL DESTINO ------------------------------- */
-    CopyMismatch,  ///< la segunda no es un `mov` que copie lo que produjo la
-                   ///< primera
-    DestLiveOut    ///< el destino intermedio SIGUE VIVO al salir del paquete,
-                   ///< asi que no se le puede quitar la escritura
+    CopyMismatch, ///< la segunda no es un `mov` que copie lo que produjo la
+                  ///< primera
+    DestLiveOut   ///< el destino intermedio SIGUE VIVO al salir del paquete,
+                  ///< asi que no se le puede quitar la escritura
 };
 
 /// Cuantas razones hay.  Fija el tamano de los contadores del proceso.

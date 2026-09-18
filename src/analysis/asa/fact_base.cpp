@@ -130,10 +130,10 @@ void register_asa_canonical_names() {
 /// Marcadores de identidad para el gestor.  Uno por dominio: la cache va por
 /// (analisis, unidad), asi que dos dominios distintos no se pisan.
 ///
-/// Cada uno declara ademas @c kName , y no es decorativo: @ref FactBase::memoized
-/// lo exige, asi que un analisis nuevo que se olvide de ponerlo NO COMPILA en
-/// vez de aparecer sin medir.  El nombre va en INGLES, como el resto del
-/// vocabulario que sale impreso.
+/// Cada uno declara ademas @c kName , y no es decorativo: @ref
+/// FactBase::memoized lo exige, asi que un analisis nuevo que se olvide de
+/// ponerlo NO COMPILA en vez de aparecer sin medir.  El nombre va en INGLES,
+/// como el resto del vocabulario que sale impreso.
 namespace {
 struct MemoryAnalysis {
     static char ID;
@@ -201,8 +201,7 @@ bool FactBase::telemetry_on() noexcept {
     return on;
 }
 
-FactBase::AnalysisStats &FactBase::stats_slot(AnalysisID id,
-                                              const char *name) {
+FactBase::AnalysisStats &FactBase::stats_slot(AnalysisID id, const char *name) {
     /* Busqueda lineal sobre un vector plano: son un punado de analisis -- once
      * hoy -- y a esa escala recorrerlos gana a cualquier tabla hash, que ademas
      * reservaria.  Y solo se llega aqui con la telemetria encendida. */
@@ -234,14 +233,15 @@ FactBase::~FactBase() {
     if (telemetry_on() && !analysis_stats_.empty()) {
         std::vector<const AnalysisStats *> by_cost;
         by_cost.reserve(analysis_stats_.size());
-        for (const AnalysisStats &s : analysis_stats_) by_cost.push_back(&s);
+        for (const AnalysisStats &s : analysis_stats_)
+            by_cost.push_back(&s);
         std::sort(by_cost.begin(), by_cost.end(), analysis_costlier_first);
         for (const AnalysisStats *s : by_cost) {
             const std::string msg = vx::diag::format(
                 "VXA079", vx::diag::current_language(),
-                {s->name != nullptr ? s->name : "?",
-                 std::to_string(s->micros), std::to_string(s->computes),
-                 std::to_string(s->queries), default_stage_});
+                {s->name != nullptr ? s->name : "?", std::to_string(s->micros),
+                 std::to_string(s->computes), std::to_string(s->queries),
+                 default_stage_});
             std::fprintf(stderr, "[asa] %s\n", msg.c_str());
         }
     }
@@ -250,10 +250,9 @@ FactBase::~FactBase() {
     dump_facts(dump(), stderr);
     /* Por el CATALOGO, como el resto: esto lo lee una persona, y una traza
      * escrita a mano solo esta en un idioma. */
-    const std::string msg =
-        vx::diag::format("VXA076", vx::diag::current_language(),
-                         {std::to_string(queries_),
-                          std::to_string(computations_)});
+    const std::string msg = vx::diag::format(
+        "VXA076", vx::diag::current_language(),
+        {std::to_string(queries_), std::to_string(computations_)});
     std::fprintf(stderr, "%s\n", msg.c_str());
 }
 
@@ -312,8 +311,9 @@ const IrFacts &FactBase::structure(const ir::IrFunction &fn,
                                    const char *stage) {
     const std::string *key = key_of(fn, stage_or_default(stage));
     /* Con la VERSION: `cached` a secas dice "hay algo guardado", que no es lo
-     * mismo que "se va a reutilizar".  Preguntarlo sin ella contaba de menos los
-     * recomputos y, peor, se saltaba el sello -- lo destapo el test de reuso. */
+     * mismo que "se va a reutilizar".  Preguntarlo sin ella contaba de menos
+     * los recomputos y, peor, se saltaba el sello -- lo destapo el test de
+     * reuso. */
     const bool fresh = !manager_.cached_v<IRFactsAnalysis>(key, fn.version);
     if (fresh) {
         /* Un recorrido, sin reticulo ni punto fijo: lo que sale de aqui esta
@@ -340,9 +340,9 @@ FactBase::ranges_from_store_(const ir::IrFunction &fn, const char *stage) {
     const uint64_t ir_key = function_code_key(fn);
 
     if (analysis_store_ != nullptr) {
-        const uint64_t k = analysis_store_->key_of(
-            kRangeFactsAnalysisName, kRangeFactsFormat, ir_key,
-            stage_or_default(stage));
+        const uint64_t k =
+            analysis_store_->key_of(kRangeFactsAnalysisName, kRangeFactsFormat,
+                                    ir_key, stage_or_default(stage));
         std::vector<uint8_t> bytes;
         if (analysis_store_->load(k, bytes)) {
             /* Se arma un `RangeFacts` y se entrega por puntero, que es como lo
@@ -365,18 +365,17 @@ FactBase::ranges_from_store_(const ir::IrFunction &fn, const char *stage) {
      * TIPO.
      *
      * Antes se pasaban desde aqui, y eso las dejaba en su version pobre:
-     * `compute_loop_iv_bounds` solo despeja limites CONSTANTES ESCRITOS, y en un
-     * programa real eso dejaba sin cota al 89 % de los bucles contados.  El
+     * `compute_loop_iv_bounds` solo despeja limites CONSTANTES ESCRITOS, y en
+     * un programa real eso dejaba sin cota al 89 % de los bucles contados.  El
      * motor las saca ESCALONADAS -- rangos sin cotas, cotas con esos rangos,
      * rangos con las cotas --, que recupera los limites que no son un literal
      * sin cerrar el circulo.  Pasarlas desde aqui SALTABA ese escalon. */
-    std::shared_ptr<const RangeFacts> computed =
-        compute_ranges_ptr(fn, structure(fn, stage), RangeOptions{}, nullptr,
-                           nullptr);
+    std::shared_ptr<const RangeFacts> computed = compute_ranges_ptr(
+        fn, structure(fn, stage), RangeOptions{}, nullptr, nullptr);
     if (analysis_store_ != nullptr && computed != nullptr) {
-        const uint64_t k = analysis_store_->key_of(
-            kRangeFactsAnalysisName, kRangeFactsFormat, ir_key,
-            stage_or_default(stage));
+        const uint64_t k =
+            analysis_store_->key_of(kRangeFactsAnalysisName, kRangeFactsFormat,
+                                    ir_key, stage_or_default(stage));
         analysis_store_->store(k, serialize_range_facts(*computed));
     }
     return computed;
@@ -393,9 +392,9 @@ IrFacts FactBase::structure_from_store_(const ir::IrFunction &fn,
      * aunque el resto del modulo si haya cambiado.  Y como es del contenido,
      * dos funciones con el mismo intermedio comparten el analisis -- que es
      * correcto, porque el def-use de un codigo identico es identico. */
-    const uint64_t k = analysis_store_->key_of(
-        kIrFactsAnalysisName, kIrFactsFormat, function_code_key(fn),
-        stage_or_default(stage));
+    const uint64_t k =
+        analysis_store_->key_of(kIrFactsAnalysisName, kIrFactsFormat,
+                                function_code_key(fn), stage_or_default(stage));
 
     std::vector<uint8_t> bytes;
     if (analysis_store_->load(k, bytes)) {
@@ -415,14 +414,14 @@ const DemandedBits &FactBase::demanded(const ir::IrFunction &fn,
                                        const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
-    const bool fresh = !manager_.cached_v<DemandedBitsAnalysis>(key, fn.version);
+    const bool fresh =
+        !manager_.cached_v<DemandedBitsAnalysis>(key, fn.version);
     /* Por el gestor, como los rangos: los tres que preguntan -- el pase que
      * quita normalizaciones, el productor del dominio y quien venga -- acaban
      * en la MISMA instancia en vez de recalcularla cada uno.  Esa es la unica
      * forma de que anadir un consumidor no cueste otro analisis. */
     const DemandedBits &db =
-        *memoized<DemandedBitsAnalysis,
-                  std::shared_ptr<const DemandedBits>>(
+        *memoized<DemandedBitsAnalysis, std::shared_ptr<const DemandedBits>>(
             fresh, key, fn.version, [&fn]() {
                 return std::make_shared<const DemandedBits>(
                     compute_demanded_bits(fn));
@@ -452,24 +451,24 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn,
      * optimizador y el de efectos -- apuntan a la MISMA. */
     const RangeFacts &rf =
         *memoized<RangeAnalysis, std::shared_ptr<const RangeFacts>>(
-                 fresh, key, fn.version, [this, &fn, stage]() {
-                     /* Con las cotas de induccion, que las saca el PROPIO
-                      * motor de rangos.  Es conocimiento que los rangos no
-                      * pueden deducir solos -- la guarda de un bucle
-                      * desenrollado compara `i + 7`, y despejar la `i` con
-                      * aritmetica que envuelve es incorrecto --, y sin ellas
-                      * la variable del bucle vale TODO SU TIPO.
-                      *
-                      * Antes se pasaban desde aqui, y eso las dejaba en su
-                      * version pobre: `compute_loop_iv_bounds` solo despeja
-                      * limites CONSTANTES ESCRITOS, y en un programa real eso
-                      * dejaba sin cota al 89 % de los bucles contados.  El
-                      * motor las saca ESCALONADAS -- rangos sin cotas, cotas
-                      * con esos rangos, rangos con las cotas --, que recupera
-                      * los limites que no son un literal sin cerrar el
-                      * circulo.  Pasarlas desde aqui SALTABA ese escalon. */
-                     return ranges_from_store_(fn, stage);
-                 });
+            fresh, key, fn.version, [this, &fn, stage]() {
+                /* Con las cotas de induccion, que las saca el PROPIO
+                 * motor de rangos.  Es conocimiento que los rangos no
+                 * pueden deducir solos -- la guarda de un bucle
+                 * desenrollado compara `i + 7`, y despejar la `i` con
+                 * aritmetica que envuelve es incorrecto --, y sin ellas
+                 * la variable del bucle vale TODO SU TIPO.
+                 *
+                 * Antes se pasaban desde aqui, y eso las dejaba en su
+                 * version pobre: `compute_loop_iv_bounds` solo despeja
+                 * limites CONSTANTES ESCRITOS, y en un programa real eso
+                 * dejaba sin cota al 89 % de los bucles contados.  El
+                 * motor las saca ESCALONADAS -- rangos sin cotas, cotas
+                 * con esos rangos, rangos con las cotas --, que recupera
+                 * los limites que no son un literal sin cerrar el
+                 * circulo.  Pasarlas desde aqui SALTABA ese escalon. */
+                return ranges_from_store_(fn, stage);
+            });
     if (fresh) {
         /* La certeza sale del propio analisis, no de quien pregunta: llegar a
          * punto fijo es haber visto todo lo que podia contradecirlo; pararse
@@ -482,8 +481,7 @@ const RangeFacts &FactBase::ranges(const ir::IrFunction &fn,
     return rf;
 }
 
-const PointsTo &FactBase::memory(const ir::IrFunction &fn,
-                                 const char *stage) {
+const PointsTo &FactBase::memory(const ir::IrFunction &fn, const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
     const bool fresh = !manager_.cached_v<MemoryAnalysis>(key, fn.version);
@@ -506,14 +504,14 @@ PointsTo FactBase::memory_from_store_(const ir::IrFunction &fn,
     if (analysis_store_ == nullptr)
         return compute_points_to(fn, structure(fn, stage));
 
-    const uint64_t k = analysis_store_->key_of(
-        kPointsToAnalysisName, kPointsToFormat, function_code_key(fn),
-        stage_or_default(stage));
+    const uint64_t k =
+        analysis_store_->key_of(kPointsToAnalysisName, kPointsToFormat,
+                                function_code_key(fn), stage_or_default(stage));
     std::vector<uint8_t> bytes;
     if (analysis_store_->load(k, bytes)) {
         PointsTo restored;
-        if (deserialize_points_to(bytes.data(), bytes.size(),
-                                  fn.values.size(), restored))
+        if (deserialize_points_to(bytes.data(), bytes.size(), fn.values.size(),
+                                  restored))
             return restored;
         /* Estaba y no se pudo interpretar.  Se DICE -- "no habia" y "habia y
          * estaba roto" se arreglan distinto -- y se computa. */
@@ -524,8 +522,7 @@ PointsTo FactBase::memory_from_store_(const ir::IrFunction &fn,
     return computed;
 }
 
-const LoopFacts &FactBase::loops(const ir::IrFunction &fn,
-                                 const char *stage) {
+const LoopFacts &FactBase::loops(const ir::IrFunction &fn, const char *stage) {
     ++queries_;
     const std::string *key = key_of(fn, stage_or_default(stage));
     const bool fresh = !manager_.cached_v<LoopsAnalysis>(key, fn.version);
@@ -563,10 +560,9 @@ const RangeSummaries &FactBase::boundary(const ir::IrModule &mod,
     const std::string *key = module_key(stage_or_default(stage));
     const bool fresh =
         !manager_.cached_v<BoundaryAnalysis>(key, module_version(mod));
-    const RangeSummaries &rs =
-        memoized<BoundaryAnalysis, RangeSummaries>(
-            fresh, key, module_version(mod),
-            [&mod]() { return compute_range_summaries(mod); });
+    const RangeSummaries &rs = memoized<BoundaryAnalysis, RangeSummaries>(
+        fresh, key, module_version(mod),
+        [&mod]() { return compute_range_summaries(mod); });
     if (fresh) {
         /* Sin punto fijo del grafo de llamadas los resumenes se abren solos, y
          * entonces lo que se sabe es nada -- no algo menos preciso. */
@@ -660,8 +656,7 @@ FactBase::escape(const ir::IrModule &mod) {
      * aparte: asi el punto fijo del escape reusa lo que ya haya y una
      * invalidacion arrastra a los dos. */
     const auto &res =
-        memoized<EscapeAnalysisId,
-                 std::unordered_map<std::string, EscapeInfo>>(
+        memoized<EscapeAnalysisId, std::unordered_map<std::string, EscapeInfo>>(
             fresh, key, module_version(mod), [this, &mod]() {
                 auto facts_of =
                     [this](const ir::IrFunction &f) -> const IrFacts & {
@@ -686,7 +681,8 @@ void FactBase::invalidate(const ir::IrFunction &fn) {
     /* Con el momento POR DEFECTO de la base.  Invalidar es "esta funcion ha
      * cambiado", y quien la cambia esta trabajando en un momento concreto: lo
      * de los OTROS momentos habla de otro codigo y no le afecta -- lo pre-opt
-     * sigue siendo cierto de lo pre-opt aunque el optimizador ya haya pasado. */
+     * sigue siendo cierto de lo pre-opt aunque el optimizador ya haya pasado.
+     */
     const std::string *key = key_of(fn, default_stage_);
     /* La estructura arrastra en cascada a todo lo que se derivo de ella; los
      * demas se descartan tambien de forma explicita por si alguien los pidio

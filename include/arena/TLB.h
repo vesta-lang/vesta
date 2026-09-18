@@ -54,8 +54,7 @@
  */
 #define GET_OFFSET(address)                                                    \
     ((address) & 0xFFF) ///< Extrae los 12 bits de offset de pagina
-#define GET_PAGE(address)                                                      \
-    ((address) >> 12) ///< Extrae la pagina (bits 63-12)
+#define GET_PAGE(address) ((address) >> 12) ///< Extrae la pagina (bits 63-12)
 /** @} */
 
 namespace tlb {
@@ -141,9 +140,9 @@ typedef struct TLBEntryData {
 /* RETIRADO: `TLBEntry` y `TLBTable`, el arbol TLB *original*.
  *
  * Estaban marcados como "se mantiene por compatibilidad con codigo legado", y
- * no habia tal codigo: ni una sola referencia fuera de este fichero y su `.cpp`.
- * Lo unico que hacian era obligar a mantener vivo el enumerado de niveles y
- * dar la impresion de que habia dos implementaciones en uso. */
+ * no habia tal codigo: ni una sola referencia fuera de este fichero y su
+ * `.cpp`. Lo unico que hacian era obligar a mantener vivo el enumerado de
+ * niveles y dar la impresion de que habia dos implementaciones en uso. */
 
 /* RETIRADO: `TLBNode`, el nodo del arbol de tres niveles.
  *

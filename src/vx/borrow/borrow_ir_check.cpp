@@ -29,8 +29,7 @@ bool promises_exclusive(const ir::IrFunction &fn, size_t i) {
     /* Habla lo APUNTADO: la exclusividad es sobre la region, no sobre la
      * variable que la senala. */
     return i < fn.param_contracts.size() &&
-           fn.param_contracts[i].pointee().has(
-               ir::IrParamClaim::ExclusiveCall);
+           fn.param_contracts[i].pointee().has(ir::IrParamClaim::ExclusiveCall);
 }
 
 /// @brief Si esa promesa la escribio el PROGRAMADOR, no el compilador.

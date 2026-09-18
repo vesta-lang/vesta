@@ -158,7 +158,8 @@ static void test_rejects_garbage() {
     const ir::IrFunction fn = make_function("f", 8);
     IrFacts out;
 
-    CHECK(!deserialize_ir_facts(nullptr, 0, fn, out), "nothing is not analysis");
+    CHECK(!deserialize_ir_facts(nullptr, 0, fn, out),
+          "nothing is not analysis");
 
     const uint8_t garbage[] = {1, 2, 3, 4, 5, 6, 7, 8};
     CHECK(!deserialize_ir_facts(garbage, sizeof garbage, fn, out),
@@ -316,16 +317,17 @@ static void test_load_beats_compute() {
 
     const long long compute_us = compute_a + compute_b;
     const long long load_us = load_a + load_b;
-    std::printf("  [bench] %d rounds x2: compute=%lld us, load=%lld us (%.2fx)\n",
-                kRounds, compute_us, load_us,
-                load_us > 0 ? (double)compute_us / (double)load_us : 0.0);
+    std::printf(
+        "  [bench] %d rounds x2: compute=%lld us, load=%lld us (%.2fx)\n",
+        kRounds, compute_us, load_us,
+        load_us > 0 ? (double)compute_us / (double)load_us : 0.0);
 
     std::vector<uint8_t> stored_bytes;
     store.load(key, stored_bytes);
     std::printf("  [bench] inside load: lookup+copy=%lld us, decode=%lld us"
                 " (%d rounds, no disk)\n",
-                time_lookup_and_copy(store, key),
-                time_decode(stored_bytes, fn), kRounds);
+                time_lookup_and_copy(store, key), time_decode(stored_bytes, fn),
+                kRounds);
     std::printf("  [bench] opening the bundle (ONCE per module): %.1f us\n",
                 (double)time_open(path) / (double)kRounds);
 

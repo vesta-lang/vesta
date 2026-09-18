@@ -298,10 +298,10 @@ inline bool is_readable_addr(uint64_t addr) {
  * IDIOMAS DE x86
  *
  * Aqui empieza lo que es de UNA arquitectura y no del recorrido.  El recorrido
- * -- descodificar hasta el `ret`, seguir las llamadas, no repetir lo ya visto --
- * es el mismo en cualquier ISA; lo que cambia son los IDIOMAS: como se llama a
- * los registros, con que forma se despacha por tabla, cual de los operandos es
- * el destino, y como se ve que un valor salio de tal campo.
+ * -- descodificar hasta el `ret`, seguir las llamadas, no repetir lo ya visto
+ * -- es el mismo en cualquier ISA; lo que cambia son los IDIOMAS: como se llama
+ * a los registros, con que forma se despacha por tabla, cual de los operandos
+ * es el destino, y como se ve que un valor salio de tal campo.
  *
  * Estan encerrados a proposito, no repartidos.  Anadir ARM64 es escribir
  * `namespace isa_arm64` con las mismas funciones y cambiar el alias de abajo;
@@ -417,22 +417,23 @@ struct Origin {
     /* Que BITS de lo que se leyo lleva ahora el registro.
      *
      * Se guarda como rango de bits y no como "nibble bajo / nibble alto" a
-     * proposito.  Un nibble es cosa de NUESTRA codificacion -- la convencion que
-     * mete dos registros de cuatro bits en un byte --, no de la arquitectura, y
-     * meterlo aqui obligaria a que cada ISA volviese a codificar el formato de
-     * la VM en sus propios idiomas.
+     * proposito.  Un nibble es cosa de NUESTRA codificacion -- la convencion
+     * que mete dos registros de cuatro bits en un byte --, no de la
+     * arquitectura, y meterlo aqui obligaria a que cada ISA volviese a
+     * codificar el formato de la VM en sus propios idiomas.
      *
-     * El idioma dice "ahora lleva los bits [shift, shift+width)"; que eso sea el
-     * primer o el segundo operando lo decide quien conoce la codificacion. */
+     * El idioma dice "ahora lleva los bits [shift, shift+width)"; que eso sea
+     * el primer o el segundo operando lo decide quien conoce la codificacion.
+     */
     uint8_t shift = 0; ///< primer bit
     uint8_t width = 0; ///< cuantos bits; 0 = no se sabe
     /* Lo que se le ha hecho al valor DESPUES de leerlo, como funcion afin:
      * el registro lleva `(campo + pre_add) * scale`.
      *
-     * Hace falta porque el compilador no siempre usa el modo de direccionamiento
-     * de la arquitectura.  Para indexar un banco de 64 bytes por registro la
-     * escala de un acceso indexado NO llega, asi que hace reduccion de fuerza y
-     * pliega la base del banco DENTRO del indice:
+     * Hace falta porque el compilador no siempre usa el modo de
+     * direccionamiento de la arquitectura.  Para indexar un banco de 64 bytes
+     * por registro la escala de un acceso indexado NO llega, asi que hace
+     * reduccion de fuerza y pliega la base del banco DENTRO del indice:
      *
      *     add r9, 4        ; el banco empieza en 4*64 = 0x100
      *     shl r9, 6        ; x64
@@ -484,9 +485,9 @@ struct AddrOrigin {
  * se podian intercambiar al reordenar, que no da un error: da otro resultado.
  */
 struct TaintRegion {
-    int arg = -1;     ///< que argumento (0 = el primero); -1 = sin rango
-    int64_t lo = 0;   ///< desplazamiento inicial dentro de el
-    int64_t hi = 0;   ///< y final (excluido)
+    int arg = -1;   ///< que argumento (0 = el primero); -1 = sin rango
+    int64_t lo = 0; ///< desplazamiento inicial dentro de el
+    int64_t hi = 0; ///< y final (excluido)
     bool contains(int base, int64_t disp) const {
         return arg >= 0 && base == arg && disp >= lo && disp < hi;
     }
@@ -517,8 +518,8 @@ struct TableState {
      * funcion.  Si algo que no sea un prologo reconocible lo toca, se deja de
      * saber y se renuncia -- atribuir un campo EQUIVOCADO es mucho peor que no
      * atribuir ninguno. */
-    int64_t rsp_delta = 0;   ///< puntero de pila actual menos el de la entrada
-    bool rsp_known = true;   ///< sigue siendo calculable?
+    int64_t rsp_delta = 0; ///< puntero de pila actual menos el de la entrada
+    bool rsp_known = true; ///< sigue siendo calculable?
     Origin outgoing[kStackArgs]; ///< lo que dejo yo para la proxima llamada
     Origin incoming[kStackArgs]; ///< lo que me dejo mi llamante
     /// Registros que llevan un argumento de la funcion, sin transformar.  Se
@@ -632,7 +633,8 @@ struct TableState {
  * un campo del operando que no lo indexa.
  *
  * @param s          Ranura ya apuntada.
- * @param off        Desplazamiento de la que se busca, ya convertido si se pudo.
+ * @param off        Desplazamiento de la que se busca, ya convertido si se
+ * pudo.
  * @param normalized Si @p off esta en coordenadas de la entrada.
  * @param from_rbp   Con que puntero se nombra la que se busca.
  */
@@ -722,10 +724,12 @@ inline uint32_t read_dispatch_entries(const cs_x86_op &mem,
         mask = (static_cast<int64_t>(1) << st.origin[k].width) - 1;
     // Sin base no hay donde mirar; sin cota no hay tamano demostrable.
     if (base == 0) return rendirse("no se rastreo la base de la tabla");
-    if (mask <= 0) return rendirse("el indice no esta acotado (ni mascara ni ancho)");
+    if (mask <= 0)
+        return rendirse("el indice no esta acotado (ni mascara ni ancho)");
     const uint64_t count = static_cast<uint64_t>(mask) + 1;
     if (count > kWalkTableMax)
-        return rendirse("la cota del indice es demasiado grande para ser una tabla");
+        return rendirse(
+            "la cota del indice es demasiado grande para ser una tabla");
     const uint64_t scale = mem.mem.scale > 0
                                ? static_cast<uint64_t>(mem.mem.scale)
                                : sizeof(uint64_t);
@@ -911,8 +915,7 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
     const bool por_rbp = (x.operands[1].mem.base == X86_REG_RBP);
     if ((m == "mov" || m == "movzx" || m == "movsx" || m == "movsxd") &&
         x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
-        x.operands[1].type == X86_OP_MEM &&
-        (por_rsp || por_rbp) &&
+        x.operands[1].type == X86_OP_MEM && (por_rsp || por_rbp) &&
         x.operands[1].mem.index == X86_REG_INVALID &&
         ((por_rsp && st.rsp_known) || (por_rbp && st.rbp_known))) {
         const int d = gpr_slot(x.operands[0].reg);
@@ -930,9 +933,9 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         }
     }
     /* La cota de un `switch`: `cmp REG, imm` + la rama que se va cuando NO
-     * cabe.  El `cmp` SOLO no acota nada -- podria ser cualquier comparacion --,
-     * asi que se apunta y se confirma con la instruccion siguiente.  Como el
-     * recorrido sigue el camino de NO SALTO, ahi el valor si esta acotado.
+     * cabe.  El `cmp` SOLO no acota nada -- podria ser cualquier comparacion
+     * --, asi que se apunta y se confirma con la instruccion siguiente.  Como
+     * el recorrido sigue el camino de NO SALTO, ahi el valor si esta acotado.
      *
      * Es la segunda forma de acotar, y sin ella se quedaba fuera toda la
      * familia ALU de tres operandos, que era el 82% del peso de ejecucion. */
@@ -970,7 +973,6 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         }
     }
 
-
     /* --- Procedencia: de que campo salio lo que lleva un registro ---------
      *
      * Va ANTES de lo demas porque son los mismos mnemonicos: un
@@ -979,8 +981,7 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
      * Apuntarlo aqui no estorba a lo otro, que solo mira `lea`, `mov` de
      * inmediato y `and`. */
     if ((m == "movzx" || m == "movsx" || m == "mov") && x.op_count == 2 &&
-        x.operands[0].type == X86_OP_REG &&
-        x.operands[1].type == X86_OP_MEM &&
+        x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_MEM &&
         x.operands[1].mem.index == X86_REG_INVALID &&
         x.operands[1].mem.base != X86_REG_RIP) {
         const int d = gpr_slot(x.operands[0].reg);
@@ -1026,8 +1027,8 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
                  * procedencia y acto seguido caia en la invalidacion final, que
                  * la borraba por ver que la instruccion escribe `eax`.  El
                  * resultado era que la procedencia funcionaba para `mov` (que
-                 * sale antes por la rama de tablas) y NUNCA para `movzx`, que es
-                 * justo la que carga los campos de registro.
+                 * sale antes por la rama de tablas) y NUNCA para `movzx`, que
+                 * es justo la que carga los campos de registro.
                  *
                  * Salir no se lleva por delante el despacho por tabla: esa rama
                  * necesita un INDICE, y esta exige no tenerlo. */
@@ -1040,8 +1041,8 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         }
     }
     /* Extraer un trozo de bits.  Lo que se apunta es el RANGO, no "el nibble
-     * bajo": cuantos bits caben en un campo es cosa de la codificacion de la VM,
-     * no de x86, y ponerlo aqui obligaria a cada ISA a repetirlo.
+     * bajo": cuantos bits caben en un campo es cosa de la codificacion de la
+     * VM, no de x86, y ponerlo aqui obligaria a cada ISA a repetirlo.
      *
      * `and REG, mask` con una mascara de bits bajos contiguos deja `n` bits.
      * `shr REG, k` corre el rango k bits hacia arriba. */
@@ -1052,7 +1053,8 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         // Mascara de bits bajos contiguos: `mask + 1` es potencia de dos.
         if (d >= 0 && st.origin[d].valid && (mask & (mask + 1)) == 0) {
             uint8_t n = 0;
-            while ((mask >> n) != 0) ++n;
+            while ((mask >> n) != 0)
+                ++n;
             if (n < st.origin[d].width) st.origin[d].width = n;
         }
     }
@@ -1094,8 +1096,10 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
         const uint8_t k = static_cast<uint8_t>(x.operands[1].imm);
         if (d >= 0 && st.origin[d].valid) {
             if (k < st.origin[d].width) {
-                st.origin[d].shift = static_cast<uint8_t>(st.origin[d].shift + k);
-                st.origin[d].width = static_cast<uint8_t>(st.origin[d].width - k);
+                st.origin[d].shift =
+                    static_cast<uint8_t>(st.origin[d].shift + k);
+                st.origin[d].width =
+                    static_cast<uint8_t>(st.origin[d].width - k);
             } else {
                 st.origin[d] = Origin{}; // se lo llevo entero: ya no queda nada
             }
@@ -1240,8 +1244,7 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
      * una tabla de punteros.  La diferencia esta en la propia instruccion, no
      * hay que suponerla. */
     if ((m == "mov" || m == "movsxd") && x.op_count == 2 &&
-        x.operands[0].type == X86_OP_REG &&
-        x.operands[1].type == X86_OP_MEM) {
+        x.operands[0].type == X86_OP_REG && x.operands[1].type == X86_OP_MEM) {
         const int d = gpr_slot(x.operands[0].reg);
         if (d >= 0) {
             std::vector<uint64_t> targets;
@@ -1274,9 +1277,10 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
     }
     /* `add REG, ARG` con una funcion afin acumulada: ya es una DIRECCION.
      *
-     * Es el ultimo paso de la reduccion de fuerza -- sumar la base --, y aqui es
-     * donde `(campo + K) * S` mas el proceso se convierte en lo mismo que
-     * `[proceso + campo*S + K*S]`, que es la forma que el resto ya sabe leer. */
+     * Es el ultimo paso de la reduccion de fuerza -- sumar la base --, y aqui
+     * es donde `(campo + K) * S` mas el proceso se convierte en lo mismo que
+     * `[proceso + campo*S + K*S]`, que es la forma que el resto ya sabe leer.
+     */
     if (m == "add" && x.op_count == 2 && x.operands[0].type == X86_OP_REG &&
         x.operands[1].type == X86_OP_REG) {
         const int d = gpr_slot(x.operands[0].reg);
@@ -1285,8 +1289,8 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
             st.origin[d].scale > 1) {
             AddrOrigin a;
             a.base = st.arg[b];
-            a.disp = st.origin[d].pre_add *
-                     static_cast<int64_t>(st.origin[d].scale);
+            a.disp =
+                st.origin[d].pre_add * static_cast<int64_t>(st.origin[d].scale);
             a.index = st.origin[d];
             a.index.pre_add = 0;
             a.index.scale = 1;
@@ -1401,7 +1405,6 @@ inline void track_table_state(csh cs, const cs_insn &in, TableState &st) {
     }
 }
 
-
 /**
  * @brief Destino de un `call qword ptr [rip + disp]`.
  *
@@ -1478,7 +1481,7 @@ inline uint32_t resolve_dispatch_table(const cs_insn &in, const TableState &st,
 
 /* --- Lo que el recorrido pregunta de cada instruccion -------------------
  *
- * Cuatro preguntas, y las cuatro tienen respuesta distinta en cada ISA.  Estaban
+ * Cuatro preguntas, y las cuatro tienen respuesta distinta en cada ISA. Estaban
  * escritas a mano dentro del bucle comparando mnemonicos; aqui tienen nombre,
  * que es lo que permite que otra arquitectura las conteste a su manera. */
 
@@ -1486,15 +1489,15 @@ inline uint32_t resolve_dispatch_table(const cs_insn &in, const TableState &st,
  * @brief Un acceso a memoria de una instruccion, ya interpretado.
  *
  * Es lo que hace falta para preguntar "toca este campo de la estructura?" sin
- * saber nada de x86.  Quien analiza el dominio conoce los desplazamientos que le
- * importan; que forma tiene un operando de memoria, y si se lee o se escribe, es
- * del idioma.
+ * saber nada de x86.  Quien analiza el dominio conoce los desplazamientos que
+ * le importan; que forma tiene un operando de memoria, y si se lee o se
+ * escribe, es del idioma.
  */
 struct MemAccess {
-    int base = -1;      ///< ranura del registro base; -1 si no es un GPR
-    int index = -1;     ///< ranura del indice; -1 si no lleva
-    int64_t disp = 0;   ///< desplazamiento
-    uint8_t scale = 1;  ///< escala del indice
+    int base = -1;     ///< ranura del registro base; -1 si no es un GPR
+    int index = -1;    ///< ranura del indice; -1 si no lleva
+    int64_t disp = 0;  ///< desplazamiento
+    uint8_t scale = 1; ///< escala del indice
     bool reads = false;
     bool writes = false;
     /**
@@ -1514,9 +1517,9 @@ struct MemAccess {
      * @brief El acceso va por la pila, el marco o el contador de programa.
      *
      * Quien busca un campo de una estructura del monton tiene que descartarlos:
-     * por ahi solo se llega a las variables locales de la propia funcion y a las
-     * globales.  Sin este filtro el criterio se queda en el desplazamiento, y
-     * cualquier `[rsp+0x58]` se confunde con el campo que viva en 0x58.
+     * por ahi solo se llega a las variables locales de la propia funcion y a
+     * las globales.  Sin este filtro el criterio se queda en el desplazamiento,
+     * y cualquier `[rsp+0x58]` se confunde con el campo que viva en 0x58.
      */
     bool via_stack = false;
 };
@@ -1534,8 +1537,8 @@ struct MemAccess {
  * por su consumidor.
  *
  * La base sale de `arch-data`, cubre x86, ARM64, ARM32 y RISCV, y sabe cosas
- * que la regla no sabia: que banderas concretas toca cada instruccion, si es una
- * barrera, que estado del procesador lee y escribe, y cuanto tarda.
+ * que la regla no sabia: que banderas concretas toca cada instruccion, si es
+ * una barrera, que estado del procesador lee y escribe, y cuanto tarda.
  *
  * Se cachea por el TEXTO de la instruccion porque el emparejador parsea la
  * linea, y en un recorrido se repiten muchisimo: son millones de instrucciones
@@ -1574,10 +1577,10 @@ inline int mem_access_count(const cs_insn &in) {
  *
  * La direccion NO sale de `op.access` de Capstone: se comprobo y marca como
  * ESCRITURA el operando FUENTE -- el veredicto "`cmp` escribe las banderas"
- * salia de un `movzx r11d, byte ptr [rcx+0x58]`, que es una lectura --.  Con esa
- * clasificacion "lee" y "escribe" significaban lo mismo, que es justo lo que hay
- * que distinguir: dos lecturas del mismo sitio conmutan, una lectura y una
- * escritura no.
+ * salia de un `movzx r11d, byte ptr [rcx+0x58]`, que es una lectura --.  Con
+ * esa clasificacion "lee" y "escribe" significaban lo mismo, que es justo lo
+ * que hay que distinguir: dos lecturas del mismo sitio conmutan, una lectura y
+ * una escritura no.
  *
  * La FORMA de x86 si es de fiar: el destino es el primer operando.
  */
@@ -1612,9 +1615,9 @@ inline MemAccess mem_access(const cs_insn &in, int k) {
              *
              * Para los efectos se marca lo peor de los dos: la direccion puede
              * acabar en cualquier sitio y hacer cualquier cosa, y puede que ese
-             * sitio no se llegue a recorrer.  Pero se deja dicho que era solo un
-             * calculo, porque para saber QUE campo se escribe eso es veneno --
-             * atribuye las dos direcciones a la vez --.
+             * sitio no se llegue a recorrer.  Pero se deja dicho que era solo
+             * un calculo, porque para saber QUE campo se escribe eso es veneno
+             * -- atribuye las dos direcciones a la vez --.
              *
              * Antes esto era `strcmp(mn, "lea")`.  Ahora sale de la clase de
              * operando `agen` de la base, que es la misma nocion y la tiene
@@ -1637,10 +1640,10 @@ inline MemAccess mem_access(const cs_insn &in, int k) {
 /**
  * @brief Marca que registros llevan los argumentos al entrar a una funcion.
  *
- * Lo dice la convencion de llamada, que es parte del idioma de la ISA tanto como
- * los mnemonicos.  Sin esto, un `[rdx+0x8]` es una carga cualquiera; con esto es
- * "un campo del SEGUNDO argumento", que es lo que permite decir de QUE operando
- * salio un indice.
+ * Lo dice la convencion de llamada, que es parte del idioma de la ISA tanto
+ * como los mnemonicos.  Sin esto, un `[rdx+0x8]` es una carga cualquiera; con
+ * esto es "un campo del SEGUNDO argumento", que es lo que permite decir de QUE
+ * operando salio un indice.
  */
 /**
  * @brief La convencion de llamada del ANFITRION, tal como la describe el JIT.
@@ -1683,9 +1686,9 @@ inline void seed_args(TableState &st) {
  * @brief Sobrevive el registro @p slot a una llamada?
  *
  * La convencion parte los registros en dos: los que el llamado puede machacar y
- * los que tiene que devolver como estaban.  Tras una llamada hay que olvidar los
- * primeros -- conservar una base que ya no vale es leer una tabla que no es --,
- * pero olvidar los SEGUNDOS tambien tiene precio, y no es pequeno: el
+ * los que tiene que devolver como estaban.  Tras una llamada hay que olvidar
+ * los primeros -- conservar una base que ya no vale es leer una tabla que no es
+ * --, pero olvidar los SEGUNDOS tambien tiene precio, y no es pequeno: el
  * compilador guarda ahi justo lo que necesita despues, y el puntero al proceso
  * es el ejemplo tipico.
  *
@@ -1696,15 +1699,13 @@ inline void seed_args(TableState &st) {
  * faltar uno rompe el programa.
  */
 inline bool is_callee_saved(int slot) {
-    return slot >= 0 &&
-           host_abi().is_callee_saved(jit::RegClass::GP,
-                                      static_cast<uint8_t>(slot));
+    return slot >= 0 && host_abi().is_callee_saved(jit::RegClass::GP,
+                                                   static_cast<uint8_t>(slot));
 }
 
 /// La ranura de registro donde viaja el argumento @p n, o -1.
 inline int arg_slot(int n) {
-    const auto &v =
-        host_abi().arg_regs[static_cast<size_t>(jit::RegClass::GP)];
+    const auto &v = host_abi().arg_regs[static_cast<size_t>(jit::RegClass::GP)];
     return (n >= 0 && static_cast<size_t>(n) < v.size())
                ? static_cast<int>(v[static_cast<size_t>(n)])
                : -1;
@@ -1718,8 +1719,8 @@ inline int arg_slot(int n) {
  * que hace el ayudante en un acceso atribuible al campo del operando.
  */
 struct CallSeed {
-    AddrOrigin arg[kArgRegs];    ///< direcciones en los argumentos de registro
-    Origin stack[kStackArgs];    ///< valores dejados en el area de la pila
+    AddrOrigin arg[kArgRegs]; ///< direcciones en los argumentos de registro
+    Origin stack[kStackArgs]; ///< valores dejados en el area de la pila
     /**
      * @brief De donde salio el VALOR que va en cada argumento de registro.
      *
@@ -1824,7 +1825,8 @@ inline void apply_call_seed(TableState &st, const CallSeed &s) {
         // ayudante empieza sabiendolo: el acceso lo hace EL.
         if (s.arg_mem[n]) st.mem_ptr[slot] = true;
     }
-    for (int n = 0; n < kStackArgs; ++n) st.incoming[n] = s.stack[n];
+    for (int n = 0; n < kStackArgs; ++n)
+        st.incoming[n] = s.stack[n];
 }
 
 /// Termina aqui la funcion?
@@ -1840,7 +1842,9 @@ inline bool is_call(const cs_insn &in) {
 }
 
 /// Es un salto (condicional o no)?
-inline bool is_jump(const cs_insn &in) { return in.mnemonic[0] == 'j'; }
+inline bool is_jump(const cs_insn &in) {
+    return in.mnemonic[0] == 'j';
+}
 
 /// Es un salto INCONDICIONAL?  Uno asi al final es una llamada de cola.
 inline bool is_tail_jump(const cs_insn &in) {
@@ -1855,10 +1859,10 @@ inline uint64_t branch_target(const cs_insn &in) {
 
 } // namespace isa_x86
 
-/* El idioma que se usa.  Es un alias de compilacion, no un puntero: la ISA es la
- * de la maquina donde se compilo -- lo que se recorre es el codigo maquina de
- * este mismo binario --, asi que no hay nada que elegir en ejecucion ni ningun
- * despacho que pagar. */
+/* El idioma que se usa.  Es un alias de compilacion, no un puntero: la ISA es
+ * la de la maquina donde se compilo -- lo que se recorre es el codigo maquina
+ * de este mismo binario --, asi que no hay nada que elegir en ejecucion ni
+ * ningun despacho que pagar. */
 namespace isa = isa_x86;
 
 /// Compatibilidad con quien ya abria Capstone con estos nombres.
@@ -1871,9 +1875,9 @@ using TableState = isa::TableState;
 /// estructura; el recorredor solo propaga la marca.
 using TaintRegion = isa::TaintRegion;
 
-/// De donde salio lo que lleva un registro, segun el idioma en uso.  Es un rango
-/// de BITS a proposito: que trozo corresponde a que campo lo decide quien conoce
-/// nuestra codificacion, no la ISA.
+/// De donde salio lo que lleva un registro, segun el idioma en uso.  Es un
+/// rango de BITS a proposito: que trozo corresponde a que campo lo decide quien
+/// conoce nuestra codificacion, no la ISA.
 using Origin = isa::Origin;
 
 /// Una direccion calculada y aun sin desreferenciar.  Ver `isa::AddrOrigin`.
@@ -1951,10 +1955,11 @@ struct WalkResult {
      * en nuestro propio binario.  Asumir lo peor y seguir seria lo comodo, y es
      * exactamente el modo de fallo que no se acepta aqui: el analisis parece
      * funcionar, la respuesta sale conservadora, y nadie se entera de que la
-     * base no conoce media docena de instrucciones que el compilador emite todos
-     * los dias.  Asi estuvieron `lea` y los saltos condicionales.
+     * base no conoce media docena de instrucciones que el compilador emite
+     * todos los dias.  Asi estuvieron `lea` y los saltos condicionales.
      *
-     * Se guarda el TEXTO, sin repetir, para que quien lo lea sepa que cerrar. */
+     * Se guarda el TEXTO, sin repetir, para que quien lo lea sepa que cerrar.
+     */
     std::set<std::string> unmodeled;
     /**
      * @brief Fronteras alcanzadas: destinos que el recorrido decidio NO cruzar.
@@ -1962,10 +1967,10 @@ struct WalkResult {
      * Hay codigo al que se llega y que no interesa recorrer, y no por tamano:
      * porque lo que hay al otro lado no es lo que hace la instruccion.  El caso
      * que lo motiva es el manejador de errores -- se llega a el con el proceso
-     * como argumento, o sea con procedencia legitima, y desde ahi se entra en la
-     * traza de pila, el formateo y el runtime de C++ --.  Seguirlo hacia que una
-     * division declarase escribir la pila, el marco y el contador de programa,
-     * que es lo que toca LANZAR, no dividir.
+     * como argumento, o sea con procedencia legitima, y desde ahi se entra en
+     * la traza de pila, el formateo y el runtime de C++ --.  Seguirlo hacia que
+     * una division declarase escribir la pila, el marco y el contador de
+     * programa, que es lo que toca LANZAR, no dividir.
      *
      * Quien recorre dice cuales son (el recorredor no sabe de manejadores de
      * error) y se entera aqui de cuales se alcanzaron.
@@ -2058,9 +2063,9 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
      * los argumentos.
      *
      * Limitacion conocida: `vistas` corta por direccion, asi que un ayudante
-     * alcanzado DOS veces con semillas distintas solo se recorre con la primera.
-     * Se pierde atribucion, nunca se inventa -- el segundo camino queda como
-     * "no se sabe", que es el lado seguro. */
+     * alcanzado DOS veces con semillas distintas solo se recorre con la
+     * primera. Se pierde atribucion, nunca se inventa -- el segundo camino
+     * queda como "no se sabe", que es el lado seguro. */
     std::vector<std::pair<uint64_t, CallSeed>> pendientes;
     std::vector<std::string> previas; // ultimas instrucciones, para el contexto
     /* Bases de tabla y cotas de indice vistas hasta aqui.  Es estado LINEAL:
@@ -2093,10 +2098,11 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
      * es este, y lo emite el compilador constantemente (`exec_instr_add_imm`):
      *
      *     and  eax, 0x3               ; <- LA COTA del indice
-     *     je   .otro                  ; <- salta por encima del bloque de al lado
+     *     je   .otro                  ; <- salta por encima del bloque de al
+     * lado
      *     ...
-     *     mov  rax, [r10+rax*8]       ; <- machaca eax... en el camino QUE NO SE TOMA
-     *     jmp  rax                    ; <- y ese camino se va por aqui
+     *     mov  rax, [r10+rax*8]       ; <- machaca eax... en el camino QUE NO
+     * SE TOMA jmp  rax                    ; <- y ese camino se va por aqui
      *   .otro:
      *     cltq
      *     call qword ptr [r10+rax*8]  ; <- aqui la cota SIGUE viva de verdad
@@ -2218,9 +2224,9 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
          * declararlo desconocido: afirma que se sabe todo lo que toca cuando no
          * se ha mirado la mitad --.  `exec_instr_loadz` es exactamente eso: la
          * rama del puntero del ANFITRION sale por un `ret` y detras, sin mirar,
-         * esta la de la memoria de la VM.  El opcode salia sin declarar que toca
-         * memoria, y reordenar una carga con un almacen no da un error: da otro
-         * resultado.
+         * esta la de la memoria de la VM.  El opcode salia sin declarar que
+         * toca memoria, y reordenar una carga con un almacen no da un error: da
+         * otro resultado.
          *
          * Se sigue mientras haya un salto de ESTA funcion que apunte mas alla:
          * eso es codigo alcanzable, y quien lo alcanza esta dentro.  Cuando no
@@ -2295,7 +2301,8 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                      * Y la RAZON por la que la tabla no se resolvio, que es lo
                      * que dice cual de los cinco motivos hay que cerrar. */
                     std::string ctx;
-                    for (const std::string &p : previas) ctx += "\n      " + p;
+                    for (const std::string &p : previas)
+                        ctx += "\n      " + p;
                     char b[160];
                     std::snprintf(b, sizeof(b), "0x%llX: %s %s",
                                   (unsigned long long)insn->address,
@@ -2306,8 +2313,9 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                     res.unresolved.push_back(linea + ctx);
                     res.unresolved_fn.push_back(dir);
                 }
-}
-            for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
+            }
+            for (uint64_t d : destinos)
+                pendientes.emplace_back(d, sub);
             /* Tras la llamada no se sabe que queda en los registros -- la
              * convencion permite machacar la mitad --, asi que se olvida todo.
              * Perder una base solo cuesta una resolucion; conservar una que ya
@@ -2325,14 +2333,15 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
             limpio.rsp_known = rsp_known;
             for (int n = 0; n < isa::kStackArgs; ++n)
                 limpio.incoming[n] = table_state.incoming[n];
-            /* Lo que la convencion OBLIGA a devolver como estaba sigue valiendo.
-             * Es donde el compilador guarda lo que necesita despues de la
-             * llamada -- el puntero al proceso, sobre todo --, y olvidarlo hace
-             * que la procedencia se pierda en la primera llamada del manejador.
+            /* Lo que la convencion OBLIGA a devolver como estaba sigue
+             * valiendo. Es donde el compilador guarda lo que necesita despues
+             * de la llamada -- el puntero al proceso, sobre todo --, y
+             * olvidarlo hace que la procedencia se pierda en la primera llamada
+             * del manejador.
              *
-             * No se conservan las BASES de tabla ni lo cargado de ellas: eso son
-             * datos que el llamado pudo invalidar aunque el registro sobreviva,
-             * y ahi lo barato es perderlo. */
+             * No se conservan las BASES de tabla ni lo cargado de ellas: eso
+             * son datos que el llamado pudo invalidar aunque el registro
+             * sobreviva, y ahi lo barato es perderlo. */
             for (int s = 0; s < 16; ++s) {
                 if (!isa::is_callee_saved(s)) continue;
                 limpio.arg[s] = table_state.arg[s];
@@ -2344,8 +2353,8 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
         }
         if (isa::is_jump(*insn)) {
             /* Un salto de cola no monta marco: el destino recibe los MISMOS
-             * argumentos que tiene esta funcion ahora mismo.  Por eso la semilla
-             * se toma igual que en un `call`. */
+             * argumentos que tiene esta funcion ahora mismo.  Por eso la
+             * semilla se toma igual que en un `call`. */
             const CallSeed sub = isa::capture_call_seed(table_state);
             std::vector<uint64_t> destinos;
             const char *motivo_salto = nullptr; ///< por que no se resolvio
@@ -2359,41 +2368,44 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                     destinos.push_back(ext);
                     res.tables_resolved++;
                 } else if (const uint32_t n = resolve_dispatch_table(
-                        *insn, table_state, destinos, &motivo_salto)) {
+                               *insn, table_state, destinos, &motivo_salto)) {
                     res.tables_resolved++;
                     (void)n;
                 } else if (!sub.any) {
-                /* Salto de cola al que no le llega NADA nuestro: mismo
-                 * argumento que en la llamada indirecta.  Sin procedencia por
-                 * donde alcanzar nuestro estado, lo que haya al otro lado no
-                 * puede tocarlo, asi que no vuelve desconocido al opcode.
-                 *
-                 * Es el caso que quedaba vivo: el camino de FALLO de la memoria
-                 * hace `VGC_CERR << ...`, y dentro de libstdc++
-                 * `std::ctype<char>::widen` termina en un `jmp` por vtable.  La
-                 * regla estaba puesta en el `call` y no aqui, asi que 87
-                 * opcodes -- `loadz` y media ALU -- seguian declarados
-                 * desconocidos por un mensaje de diagnostico. */
-                res.sin_seguir_ajenas++;
+                    /* Salto de cola al que no le llega NADA nuestro: mismo
+                     * argumento que en la llamada indirecta.  Sin procedencia
+                     * por donde alcanzar nuestro estado, lo que haya al otro
+                     * lado no puede tocarlo, asi que no vuelve desconocido al
+                     * opcode.
+                     *
+                     * Es el caso que quedaba vivo: el camino de FALLO de la
+                     * memoria hace `VGC_CERR << ...`, y dentro de libstdc++
+                     * `std::ctype<char>::widen` termina en un `jmp` por vtable.
+                     * La regla estaba puesta en el `call` y no aqui, asi que 87
+                     * opcodes -- `loadz` y media ALU -- seguian declarados
+                     * desconocidos por un mensaje de diagnostico. */
+                    res.sin_seguir_ajenas++;
                 } else {
-                res.sin_seguir++;
-                if (res.unresolved.size() < 8) {
-                    /* El sitio TAMBIEN para los saltos indirectos.  Sin esto
-                     * salian sin sitio y mi informe los llamaba "truncado por
-                     * tamano", que es otra cosa: 27 opcodes acusados de una
-                     * causa que no era la suya. */
-                    std::string ctx;
-                    for (const std::string &p : previas) ctx += "\n      " + p;
-                    char b[160];
-                    std::snprintf(b, sizeof(b), "0x%llX: %s %s",
-                                  (unsigned long long)insn->address,
-                                  insn->mnemonic, insn->op_str);
-                    std::string linea(b);
-                    if (motivo_salto != nullptr)
-                        linea += "  [tabla: " + std::string(motivo_salto) + "]";
-                    res.unresolved.push_back(linea + ctx);
-                    res.unresolved_fn.push_back(dir);
-                }
+                    res.sin_seguir++;
+                    if (res.unresolved.size() < 8) {
+                        /* El sitio TAMBIEN para los saltos indirectos.  Sin
+                         * esto salian sin sitio y mi informe los llamaba
+                         * "truncado por tamano", que es otra cosa: 27 opcodes
+                         * acusados de una causa que no era la suya. */
+                        std::string ctx;
+                        for (const std::string &p : previas)
+                            ctx += "\n      " + p;
+                        char b[160];
+                        std::snprintf(b, sizeof(b), "0x%llX: %s %s",
+                                      (unsigned long long)insn->address,
+                                      insn->mnemonic, insn->op_str);
+                        std::string linea(b);
+                        if (motivo_salto != nullptr)
+                            linea +=
+                                "  [tabla: " + std::string(motivo_salto) + "]";
+                        res.unresolved.push_back(linea + ctx);
+                        res.unresolved_fn.push_back(dir);
+                    }
                 }
             } else if (destino <= insn->address && destino >= lo) {
                 res.saltos_atras++;
@@ -2401,10 +2413,12 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
                 res.saltos_adelante++;
             } else if (isa::is_tail_jump(*insn)) {
                 destinos.push_back(destino); // tail call
-                for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
+                for (uint64_t d : destinos)
+                    pendientes.emplace_back(d, sub);
                 break;
             }
-            for (uint64_t d : destinos) pendientes.emplace_back(d, sub);
+            for (uint64_t d : destinos)
+                pendientes.emplace_back(d, sub);
         }
         if (res.instrs > max_instrs) {
             res.truncado = true;
@@ -2417,7 +2431,8 @@ inline void walk_handler(csh cs, uint64_t dir, int profundidad,
         // El rango marcado viaja a los ayudantes: un manejador saca el puntero
         // y se lo PASA, asi que el acceso de verdad ocurre alli.
         walk_handler(cs, p.first, profundidad - 1, vistas, ver, res, p.second,
-                     frontera, ambito_lo, ambito_hi, taint, inicios, max_instrs);
+                     frontera, ambito_lo, ambito_hi, taint, inicios,
+                     max_instrs);
 }
 
 } // namespace tests

@@ -23,8 +23,7 @@ enum IrBlockId : uint32_t; // declaracion opaca; la define ssa_ir.h
 namespace vx {
 /** @brief Lifta el bloque asm x86 @p body a IR (recto o con ramas/bucles).  Ver
  *  asm_lift_general para la semantica de @p bound / @p out_exit. */
-bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block,
-              const std::string &body,
+bool lift_x86(ir::IrFunction &fn, ir::IrBlockId block, const std::string &body,
               const std::unordered_map<std::string, AsmBoundReg> &bound,
               uint32_t line, ir::IrBlockId *out_exit);
 } // namespace vx

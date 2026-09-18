@@ -57,7 +57,9 @@
  * Leia `CLOCK_MONOTONIC`, que en Windows salta de 100 en 100 ns -- mas que lo
  * que dura un metodo corto ya compilado.  Solo se invoca con @c has_hooks
  * activo (modo --stats): sin perfilador no se lee ni una vez. */
-static inline uint64_t jit_now_ticks() { return util::reloj::ahora(); }
+static inline uint64_t jit_now_ticks() {
+    return util::reloj::ahora();
+}
 
 /// Nanosegundos desde @p t0.  Se convierte la DIFERENCIA, no cada lectura.
 static inline uint64_t jit_elapsed_ns(uint64_t t0) {
@@ -1115,13 +1117,11 @@ void exec_instr_callsuper(ProcessVM *vm, const DecodedInstr &instr) {
         return;
     }
     if (vtbl_idx >= cls->vtable_size) {
-        runtime::throw_fatal(vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
-                             vx::diag::format("VX7034",
-                                              {std::to_string(vtbl_idx),
-                                               cls_name,
-                                               std::to_string(
-                                                   cls->vtable_size)})
-                                 .c_str());
+        runtime::throw_fatal(
+            vm, runtime::FATAL_ILLEGAL_INSTRUCTION,
+            vx::diag::format("VX7034", {std::to_string(vtbl_idx), cls_name,
+                                        std::to_string(cls->vtable_size)})
+                .c_str());
         return;
     }
 

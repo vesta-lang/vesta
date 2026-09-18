@@ -178,7 +178,8 @@ typedef struct PendingCall_t {
                               ///< finished==true).
     bool finished; ///< true una vez que la funcion termino de ejecutarse.
 
-    util::SharedMutex lock; ///< Cerrojo que protege el acceso a finished y result.
+    util::SharedMutex
+        lock; ///< Cerrojo que protege el acceso a finished y result.
 } PendingCall_t;
 
 #endif // JIT_CALL_H

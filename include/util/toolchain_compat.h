@@ -45,7 +45,9 @@ typedef SSIZE_T ssize_t;
  *
  * @return Identificador del proceso.
  */
-inline int getpid() { return ::_getpid(); }
+inline int getpid() {
+    return ::_getpid();
+}
 
 #endif // _MSC_VER
 

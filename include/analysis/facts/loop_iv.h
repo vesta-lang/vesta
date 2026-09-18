@@ -104,10 +104,9 @@ bool detect_loop_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
  * darle uno que baja haria que tocara lo que el bucle no toca.  Quien solo
  * quiere CONTAR pide este.
  */
-bool detect_counted_iv(const ir::IrFunction &fn,
-                       const DefBlockVec &def_block, ir::IrBlockId header,
-                       ir::IrBlockId preheader, ir::IrBlockId latch,
-                       LoopIV &out);
+bool detect_counted_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
+                       ir::IrBlockId header, ir::IrBlockId preheader,
+                       ir::IrBlockId latch, LoopIV &out);
 
 /**
  * @brief Variable de induccion GEOMETRICA: la que MULTIPLICA en vez de sumar.
@@ -145,8 +144,7 @@ struct GeoIV {
  * @return true si la hay.  No se comprueba que la guarda compare ESE valor:
  *         eso lo mira quien lo use, igual que con @c detect_loop_iv.
  */
-bool detect_geometric_iv(const ir::IrFunction &fn,
-                         const DefBlockVec &def_block,
+bool detect_geometric_iv(const ir::IrFunction &fn, const DefBlockVec &def_block,
                          ir::IrBlockId header, ir::IrBlockId preheader,
                          ir::IrBlockId latch, GeoIV &out);
 

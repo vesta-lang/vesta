@@ -731,9 +731,9 @@ ModulePassResult ir_pass_inline_closures(IrModule &mod);
  *
  * @return true si movio al menos una instr.
  */
-PassResult ir_pass_licm(
-    IrFunction &fn, const analysis::PointsTo *pt = nullptr,
-    const std::unordered_set<std::string> *pure_callees = nullptr);
+PassResult
+ir_pass_licm(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+             const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Devirtualizacion monomorfica de CALLVIRT a CALL directo.
@@ -1014,9 +1014,9 @@ PassResult ir_pass_load_narrow(IrFunction &fn);
  *
  * @return true si reordeno al menos un basic block.
  */
-PassResult ir_pass_schedule(
-    IrFunction &fn, const analysis::PointsTo *pt = nullptr,
-    const std::unordered_set<std::string> *pure_callees = nullptr);
+PassResult
+ir_pass_schedule(IrFunction &fn, const analysis::PointsTo *pt = nullptr,
+                 const std::unordered_set<std::string> *pure_callees = nullptr);
 
 /**
  * @brief Registra un helper @c __new_<X> como "puro" (sin side effects

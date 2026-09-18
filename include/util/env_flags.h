@@ -202,10 +202,11 @@ bool flag_on(FlagId id);
 /**
  * @brief Valor de un mando de tipo @c Int.
  *
- * `int64_t` y no `long`, y no es un detalle de estilo: `long` mide lo que quiera
- * la plataforma -- 32 bits en Windows, 64 en Linux --, asi que no cabe ni un
- * `UINT32_MAX` ni una fecha Unix posterior a 2038, y el codigo se comporta
- * distinto segun donde se compile.  Un ancho FIJO no tiene ese problema.
+ * `int64_t` y no `long`, y no es un detalle de estilo: `long` mide lo que
+ * quiera la plataforma -- 32 bits en Windows, 64 en Linux --, asi que no cabe
+ * ni un `UINT32_MAX` ni una fecha Unix posterior a 2038, y el codigo se
+ * comporta distinto segun donde se compile.  Un ancho FIJO no tiene ese
+ * problema.
  *
  * `VESTA_JIT_THRESHOLD` no funciono NUNCA por eso: su comprobacion de rango era
  * `v <= static_cast<long>(UINT32_MAX)`, ese cast vale -1 en Windows, y la

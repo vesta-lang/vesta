@@ -330,9 +330,8 @@ static void print_prestamos(std::ostream &os, const ir::IrFunction &fn) {
                     : std::string("?");
             os << "    "
                << (ir::borrow_is_exclusive(in.imm) ? "exclusivo" : "compartido")
-               << " de " << nombre << " ("
-               << nat(ir::borrow_owner_kind(in.imm)) << ") en linea "
-               << in.source_line << "\n";
+               << " de " << nombre << " (" << nat(ir::borrow_owner_kind(in.imm))
+               << ") en linea " << in.source_line << "\n";
         }
     }
 }

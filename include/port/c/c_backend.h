@@ -166,27 +166,22 @@ class CBackend : public IPortBackend {
 
     // -------- LLAMADAS --------
     void emit_call(EmitContext &ctx, ir::IrValueId dst,
-                   const std::string &func_name,
-                   ir::IrValueList args,
+                   const std::string &func_name, ir::IrValueList args,
                    ir::IrType ret_type) override;
     void emit_call_indirect(EmitContext &ctx, ir::IrValueId dst,
-                            ir::IrValueId fn_ptr,
-                            ir::IrValueList args,
+                            ir::IrValueId fn_ptr, ir::IrValueList args,
                             ir::IrType ret_type) override;
     void emit_callvirt(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId obj,
-                       uint32_t vtable_idx,
-                       ir::IrValueList args,
+                       uint32_t vtable_idx, ir::IrValueList args,
                        ir::IrType ret_type) override;
 
     void emit_call_closure(EmitContext &ctx, ir::IrValueId dst,
-                           ir::IrValueId slot_ptr,
-                           ir::IrValueList args,
+                           ir::IrValueId slot_ptr, ir::IrValueList args,
                            ir::IrType ret_type,
                            const ir::IrInstr &ins) override;
 
     void emit_callm(EmitContext &ctx, ir::IrValueId dst, ir::IrValueId obj,
-                    ir::IrValueId method_ptr,
-                    ir::IrValueList args,
+                    ir::IrValueId method_ptr, ir::IrValueList args,
                     ir::IrType ret_type) override;
 
     void emit_spawn_trampoline_call(EmitContext &ctx, ir::IrValueId fn_ptr,
@@ -210,8 +205,7 @@ class CBackend : public IPortBackend {
      * emit_unsupported con el texto truncado.
      */
     void emit_raw_asm(EmitContext &ctx, ir::IrValueId dst,
-                      const std::string &asm_text,
-                      ir::IrValueList operands,
+                      const std::string &asm_text, ir::IrValueList operands,
                       ir::IrType t) override;
 
     ///  AS inc.3: inline asm nativo (IrOp::INLINE_ASM) -> bloque
@@ -236,8 +230,7 @@ class CBackend : public IPortBackend {
      */
     void emit_native_call(EmitContext &ctx, ir::IrValueId dst,
                           const std::string &lib, const std::string &sym,
-                          ir::IrValueList args,
-                          ir::IrType ret_type);
+                          ir::IrValueList args, ir::IrType ret_type);
 
     /**
      * @brief Emite el runtime VxString inline al inicio del .c.

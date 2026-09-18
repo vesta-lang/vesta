@@ -54,8 +54,7 @@ struct SpanKeyHash {
 };
 
 struct Acumulador {
-    std::unordered_map<SpanKey, std::pair<long long, long long>, SpanKeyHash>
-        t;
+    std::unordered_map<SpanKey, std::pair<long long, long long>, SpanKeyHash> t;
     /**
      * @brief Los tramos ABIERTOS ahora mismo, del mas externo al mas interno.
      *
@@ -79,7 +78,9 @@ struct Acumulador {
 util::ThreadOwned<Acumulador> g_accumulators;
 
 /// El acumulador de ESTE hilo.
-Acumulador &mio() { return g_accumulators.get(); }
+Acumulador &mio() {
+    return g_accumulators.get();
+}
 } // namespace
 
 void acumular_tramo_ns(const char *etiqueta, long long ns) {

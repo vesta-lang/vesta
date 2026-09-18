@@ -708,8 +708,7 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
     const ir::IrValueId slot_addr =
         emit_field_addr(fn_, current_block_, this_vid, field_offset, line);
     const ir::IrValueId env_addr = fn_->new_value(ir::IrType::PTR);
-    fn_->values[env_addr].is_host_ptr =
-        fn_->values[slot_addr].is_host_ptr;
+    fn_->values[env_addr].is_host_ptr = fn_->values[slot_addr].is_host_ptr;
     {
         const ir::IrValueId eight = emit_const(ir::IrType::I64, 8, line);
         ir::IrInstr ad{};
@@ -720,9 +719,9 @@ void Lowering::emit_free_closure_env_field(ir::IrValueId this_vid,
         ad.source_line = line;
         emit(current_block_, std::move(ad));
     }
-    const ir::IrValueId env = emit_load_typed(
-        env_addr, ir::IrType::I64, line,
-        /*host_ptr=*/fn_->values[slot_addr].is_host_ptr);
+    const ir::IrValueId env =
+        emit_load_typed(env_addr, ir::IrType::I64, line,
+                        /*host_ptr=*/fn_->values[slot_addr].is_host_ptr);
     /* Sin entorno -- campo nunca asignado, lambda sin capturas o ya movida --
      * no hay nada que soltar. */
     {

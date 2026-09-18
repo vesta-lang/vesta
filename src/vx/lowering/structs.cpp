@@ -27,7 +27,7 @@
 #include "vx/lowering.h"
 #include "vx/comptime/comptime_introspect.h"
 #include "util/os/thread_slot.h" // el estado por hilo NO va en thread_local
-#include "ir/ir_type_info.h"  // vocabulario UNICO de anchura/clase de un IrType
+#include "ir/ir_type_info.h" // vocabulario UNICO de anchura/clase de un IrType
 #include <algorithm>
 #include <functional>
 #include <map>
@@ -171,8 +171,7 @@ void Lowering::emit_struct_init_fields(ir::IrValueId base_addr,
         if ((fi->type.kind == PrimitiveKind::STRUCT &&
              !type_is_overlay(fi->type)) ||
             fi->type.kind == PrimitiveKind::ARRAY ||
-            (fi->type.kind == PrimitiveKind::FUNCTION &&
-             !fi->type.fn_is_raw)) {
+            (fi->type.kind == PrimitiveKind::FUNCTION && !fi->type.fn_is_raw)) {
             uint64_t sz = size_of_type(fi->type);
             if (fi->type.kind == PrimitiveKind::FUNCTION) sz = 16;
             if (sz == 0 && fi->type.kind == PrimitiveKind::STRUCT) {

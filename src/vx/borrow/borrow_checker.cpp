@@ -253,7 +253,7 @@ bool BorrowChecker::on_lend(const std::string &owner_name,
 bool BorrowChecker::on_lend(const borrow::Place &place,
                             const std::string &borrower_name,
                             SourceLoc loc_borrow, bool is_mut) {
-    if (!place.valid()) return true; // no hay memoria que registrar
+    if (!place.valid()) return true;      // no hay memoria que registrar
     OwnerState &st = owners_[place.root]; // crea la raiz si no existia
 
     /* R1 y R2 se preguntan contra lo que PUEDE PISARSE, no contra lo que se
@@ -318,7 +318,7 @@ void BorrowChecker::on_borrow_drop(const std::string &borrower_name,
     auto ost = owners_.find(owner.root);
     if (ost == owners_.end()) return; // defensive
     BorrowRecord *found = find_same_place_(ost->second, owner);
-    if (found == nullptr) return;     // defensive
+    if (found == nullptr) return; // defensive
     BorrowRecord &rec = *found;
     if (is_mut) {
         rec.kind = BorrowKind::None;
@@ -471,8 +471,7 @@ void BorrowChecker::note_unproven_overlap_(SourceLoc loc,
     case borrow::PlaceUnknown::RegionNotResolvedHere:
         diags_.diag(loc, DiagLevel::NOTE, "VX2058", {});
         break;
-    case borrow::PlaceUnknown::None:
-        break;
+    case borrow::PlaceUnknown::None: break;
     }
 }
 
@@ -487,10 +486,10 @@ void BorrowChecker::error_aliasing(SourceLoc loc_conflict,
     const std::string place_text = place.text();
     if (rec.kind == BorrowKind::Mutable)
         diags_.diag(loc_conflict, DiagLevel::ERR, "VX2026",
-                    {place_text, wanted,kind_word(rec.kind)});
+                    {place_text, wanted, kind_word(rec.kind)});
     else
         diags_.diag(loc_conflict, DiagLevel::ERR, "VX2027",
-                    {place_text, wanted,std::to_string(rec.shared_count)});
+                    {place_text, wanted, std::to_string(rec.shared_count)});
     note_previous_borrow_(rec);
     /* Y CUAL es el prestamo que estorba, cuando no es el mismo lugar: `p`
      * bloqueando a `p.a` se lee de otra manera si se dice. */
@@ -509,7 +508,7 @@ void BorrowChecker::error_use_while_borrowed(SourceLoc loc_use,
     const std::string place_text = place.text();
     if (is_mutation)
         diags_.diag(loc_use, DiagLevel::ERR, "VX2031",
-                    {place_text,kind_word(rec.kind)});
+                    {place_text, kind_word(rec.kind)});
     else
         diags_.diag(loc_use, DiagLevel::ERR, "VX2032", {place_text});
     note_previous_borrow_(rec);
@@ -527,7 +526,7 @@ void BorrowChecker::error_move_while_borrowed(SourceLoc loc_move,
                                               borrow::PlaceUnknown why) {
     const std::string place_text = place.text();
     diags_.diag(loc_move, DiagLevel::ERR, "VX2034",
-                {place_text,kind_word(rec.kind)});
+                {place_text, kind_word(rec.kind)});
     note_previous_borrow_(rec);
     if (!borrow::places_same(rec.place, place))
         diags_.diag(rec.loc_taken, DiagLevel::NOTE, "VX2059",

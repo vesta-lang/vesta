@@ -95,8 +95,8 @@ inline const std::vector<ModuleSymbol> &module_symbols(const void *ancla) {
 
     const auto *dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);
     if (dos->e_magic != IMAGE_DOS_SIGNATURE) return tabla;
-    const auto *nt = reinterpret_cast<const IMAGE_NT_HEADERS64 *>(
-        base + dos->e_lfanew);
+    const auto *nt =
+        reinterpret_cast<const IMAGE_NT_HEADERS64 *>(base + dos->e_lfanew);
     if (nt->Signature != IMAGE_NT_SIGNATURE) return tabla;
 
     const uint32_t off_tabla = nt->FileHeader.PointerToSymbolTable;
@@ -107,9 +107,9 @@ inline const std::vector<ModuleSymbol> &module_symbols(const void *ancla) {
      * cargado esta mapeado por SECCIONES: los dos no coinciden.  Asi que se lee
      * del fichero, no de la imagen. */
     char ruta[MAX_PATH];
-    if (GetModuleFileNameA(reinterpret_cast<HMODULE>(
-                               const_cast<uint8_t *>(base)),
-                           ruta, MAX_PATH) == 0)
+    if (GetModuleFileNameA(
+            reinterpret_cast<HMODULE>(const_cast<uint8_t *>(base)), ruta,
+            MAX_PATH) == 0)
         return tabla;
     std::FILE *f = std::fopen(ruta, "rb");
     if (f == nullptr) return tabla;
@@ -151,7 +151,7 @@ inline const std::vector<ModuleSymbol> &module_symbols(const void *ancla) {
         std::memcpy(&valor, e + 8, 4);
         std::memcpy(&n_seccion, e + 12, 2);
         aux = e[17];
-        i += 1u + aux;                             // saltar los auxiliares
+        i += 1u + aux; // saltar los auxiliares
         if (n_seccion <= 0 || n_seccion > n_sec) continue; // sin seccion
         const auto &s = sec[n_seccion - 1];
         if ((s.Characteristics & IMAGE_SCN_CNT_CODE) == 0) continue;
@@ -223,10 +223,9 @@ inline std::string demangle(const std::string &s) {
 inline std::string symbol_at(const void *ancla, uint64_t dir) {
     const std::vector<ModuleSymbol> &t = module_symbols(ancla);
     if (t.empty()) return std::string();
-    auto it = std::upper_bound(t.begin(), t.end(), dir,
-                               [](uint64_t d, const ModuleSymbol &s) {
-                                   return d < s.addr;
-                               });
+    auto it = std::upper_bound(
+        t.begin(), t.end(), dir,
+        [](uint64_t d, const ModuleSymbol &s) { return d < s.addr; });
     if (it == t.begin()) return std::string();
     --it;
     /* Sin tamano de simbolo no se puede saber si `dir` sigue DENTRO de esa

@@ -205,7 +205,8 @@ std::string cache_dir_under(const std::string &root, CacheKind kind);
  * Vive aqui, con el reparto, porque la respuesta tiene que ser la MISMA para
  * todos los cajones.  Estaba escrita dentro del camino de proyecto y solo la
  * consultaba el suyo, asi que con la bandera puesta seguian escribiendose el
- * `.velb` del comptime y el grafo de depuracion -- medido: 79 y 522 ficheros --.
+ * `.velb` del comptime y el grafo de depuracion -- medido: 79 y 522 ficheros
+ * --.
  *
  * Eso no es un detalle de limpieza: una bandera que dice "sin cache" y deja
  * cajones vivos hace que una medicion PAREZCA en frio sin serlo, y de ahi

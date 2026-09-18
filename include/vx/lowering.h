@@ -64,7 +64,7 @@
 #include "vx/builtin_names.h" // Builtin: el nombre ya resuelto, no la cadena
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
-#include "vx/hook_points.h" // vocabulario de @Hook: puntos y campos
+#include "vx/hook_points.h"  // vocabulario de @Hook: puntos y campos
 #include "vx/module_index.h" // que declara el modulo, indexado una vez
 #include "vx/type_checker.h"
 
@@ -398,8 +398,8 @@ class Lowering {
      * o una entrada de phi que apunta al bloque equivocado.
      */
     struct VecLoopFrame {
-        ir::IrBlockId hdr = ir::IrBlockId(0);  ///< La cabecera: phi, condicion
-                                               ///< y salto.
+        ir::IrBlockId hdr = ir::IrBlockId(0);   ///< La cabecera: phi, condicion
+                                                ///< y salto.
         ir::IrBlockId body = ir::IrBlockId(0);  ///< El cuerpo.
         ir::IrBlockId after = ir::IrBlockId(0); ///< Donde sigue cuando ya no se
                                                 ///< entra.
@@ -480,8 +480,7 @@ class Lowering {
                        ir::IrValueId bound, ir::IrValueId step,
                        uint64_t step_imm, VecLoopGuard guard,
                        const std::vector<ir::IrValueId> &carried_init,
-                       uint32_t ln,
-                       ir::IrBlockId from_hint = ir::IrBlockId(0));
+                       uint32_t ln, ir::IrBlockId from_hint = ir::IrBlockId(0));
 
     /**
      * @brief Cierra el cuerpo de un bucle contado y sale a su bloque de salida.
@@ -2087,7 +2086,6 @@ class Lowering {
     /// el init-once (horneado en gdata si el init es constante, o guardado con
     /// un booleano global si es dinamico).
     void lower_static_local(ast::VarDeclStmt *vd, const Type &sem_type);
-
 
     /**
      * @brief Deja un valor de tipo estrecho normalizado a SU ancho.
@@ -4514,8 +4512,7 @@ class Lowering {
      *        sin dejar de ser neutral.
      */
     ir::IrValueId emit_getstatic(ir::IrValueId v_cls, uint64_t offset,
-                                 uint32_t line,
-                                 const std::string &slot_name);
+                                 uint32_t line, const std::string &slot_name);
     /// @copydoc emit_getstatic
     void emit_setstatic(ir::IrValueId v_cls, ir::IrValueId v_val,
                         uint64_t offset, uint32_t line,
@@ -4635,11 +4632,11 @@ class Lowering {
      * fichero no puede decidir que se mide.
      */
     struct HookProvider {
-        std::string fn_name;              ///< Funcion que provee el gancho.
-        std::string selector;             ///< Glob; vacio = todas.
-        std::vector<std::string> params;  ///< Campos que pidio, en orden.
+        std::string fn_name;                ///< Funcion que provee el gancho.
+        std::string selector;               ///< Glob; vacio = todas.
+        std::vector<std::string> params;    ///< Campos que pidio, en orden.
         HookPoint point = HookPoint::Enter; ///< Donde se instala.
-        SourceLoc loc;                    ///< Donde se declaro, para el aviso.
+        SourceLoc loc; ///< Donde se declaro, para el aviso.
         /// Cuantas funciones alcanzo EN ESTE modulo.
         size_t reached = 0;
         /**
@@ -4660,7 +4657,7 @@ class Lowering {
     /// Los `@Hook` del modulo, ya validados contra @ref kHookPoints.
     std::vector<HookProvider> hook_providers_;
 
-public:
+  public:
     /**
      * @brief Instala los `@Hook` que vienen del modulo RAIZ.
      *
@@ -4679,7 +4676,8 @@ public:
         const std::vector<std::pair<ast::FunctionDecl *, std::string>> &decls,
         const std::vector<std::string> &excluded) {
         root_hook_decls_ = decls;
-        for (const std::string &n : excluded) hook_excluded_.insert(n);
+        for (const std::string &n : excluded)
+            hook_excluded_.insert(n);
     }
 
     /**
@@ -4697,7 +4695,7 @@ public:
         hook_counters_ = c;
     }
 
-private:
+  private:
     /**
      * @brief Los `@Hook` del raiz, con el nombre por el que se les llama.
      *

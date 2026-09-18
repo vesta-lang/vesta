@@ -165,8 +165,7 @@ constexpr size_t kRegSize = sizeof(runtime::GeneralRegister);
 /// Y lo mismo para el banco VECTORIAL.  Va aparte porque son bancos distintos:
 /// `fadd f7, f8` y `adds r7, r8` llevan el mismo numero y no se estorban, asi
 /// que atribuirlos al mismo sitio inventaria una dependencia que no existe.
-constexpr size_t kZmmOff =
-    kRegs + offsetof(runtime::context_registers_vm, zmm);
+constexpr size_t kZmmOff = kRegs + offsetof(runtime::context_registers_vm, zmm);
 constexpr size_t kZmmSize = sizeof(runtime::ZmmRegister);
 
 /* Los campos, por offset.  `regs[]` va entero como un solo rango: un acceso con
@@ -215,7 +214,7 @@ struct ImplicitEffects {
     uint32_t escribe = 0; ///< bit i = escribe kFields[i]
     uint32_t lee = 0;     ///< bit i = lee kFields[i]
     bool completo =
-        true;            ///< false: habia llamadas indirectas, esto es una cota
+        true; ///< false: habia llamadas indirectas, esto es una cota
     /// Donde se quedo el recorrido cuando no fue completo.  Sin esto, "no se
     /// sabe" no es accionable: no dice QUE cerrar.
     std::vector<std::string> sin_resolver;
@@ -231,7 +230,8 @@ struct ImplicitEffects {
      * Sale del mismo recorrido que los efectos: el manejador hace
      * `regs[campo]`, que en codigo maquina es un acceso con el banco de
      * desplazamiento y el campo de indice.  La procedencia (`Origin`) dice CUAL
-     * de los dos campos lleva ese indice, que es lo que no se podia saber antes.
+     * de los dos campos lleva ese indice, que es lo que no se podia saber
+     * antes.
      *
      * Si sale 0 no significa "no toca registros": significa que el recorrido no
      * lo vio, y hay que tratarlo como desconocido igual que los efectos. */
@@ -251,9 +251,9 @@ struct ImplicitEffects {
     /// El primero de ellos, para poder mirarlo.
     std::string form_why;
     /// Instrucciones que la base del compilador NO supo emparejar.  Cada una es
-    /// un hueco de la base, y quien lea esto debe FALLAR, no seguir: taparlo con
-    /// un valor conservador es lo que hizo que `lea` estuviera sin modelar sin
-    /// que nadie lo notara.
+    /// un hueco de la base, y quien lea esto debe FALLAR, no seguir: taparlo
+    /// con un valor conservador es lo que hizo que `lea` estuviera sin modelar
+    /// sin que nadie lo notara.
     std::set<std::string> unmodeled;
     /// La funcion que contiene cada sitio de `sin_resolver`, en paralelo.  Es
     /// lo que convierte un hueco de "una direccion" en trabajo concreto.
@@ -292,8 +292,10 @@ struct ImplicitEffects {
     /* UNA por campo vigilado, y son CINCO desde que la memoria es uno de ellos.
      * Estaban dimensionadas a cuatro y el indice del quinto escribia fuera:
      * corrupcion de pila, sin aviso, en un sitio que no tiene nada que ver.
-     * Se dimensionan desde `kFields` para que anadir otro no vuelva a hacerlo. */
-    std::string prueba_w[sizeof(kFields) / sizeof(kFields[0])]; ///< la que escribe
+     * Se dimensionan desde `kFields` para que anadir otro no vuelva a hacerlo.
+     */
+    std::string
+        prueba_w[sizeof(kFields) / sizeof(kFields[0])]; ///< la que escribe
     std::string prueba_r[sizeof(kFields) / sizeof(kFields[0])]; ///< la que lee
 };
 
@@ -311,9 +313,9 @@ struct ImplicitEffects {
 /**
  * @brief De que campo del operando salio un indice, segun NUESTRA codificacion.
  *
- * El idioma de la ISA dice "este registro lleva los bits [shift, shift+width) de
- * lo que se leyo en tal desplazamiento del segundo argumento".  Traducir eso a
- * "el primer operando" o "el nibble alto del segundo" es cosa de aqui, que es
+ * El idioma de la ISA dice "este registro lleva los bits [shift, shift+width)
+ * de lo que se leyo en tal desplazamiento del segundo argumento".  Traducir eso
+ * a "el primer operando" o "el nibble alto del segundo" es cosa de aqui, que es
  * quien conoce el formato: dos campos de registro de CUATRO bits metidos en un
  * byte, uno en cada nibble.
  *
@@ -374,7 +376,8 @@ inline uint16_t operand_field_bit(const tests::Origin &o) {
 }
 
 /**
- * @brief Hasta donde se recorre: el camino de FALLO no es lo que hace el opcode.
+ * @brief Hasta donde se recorre: el camino de FALLO no es lo que hace el
+ * opcode.
  *
  * `throw_fatal` recibe el proceso como primer argumento, asi que llegar a el es
  * legitimo y todo lo que hay dentro tiene procedencia buena.  Pero lo que hay
@@ -487,8 +490,10 @@ inline const std::vector<uint64_t> &known_function_starts() {
                 s.push_back(reinterpret_cast<uint64_t>(
                     reinterpret_cast<const void *>(e.exec)));
         }
-        for (uint64_t f : fatal_frontier()) s.push_back(f);
-        for (const auto &kv : contract_frontier()) s.push_back(kv.first);
+        for (uint64_t f : fatal_frontier())
+            s.push_back(f);
+        for (const auto &kv : contract_frontier())
+            s.push_back(kv.first);
         std::sort(s.begin(), s.end());
         s.erase(std::unique(s.begin(), s.end()), s.end());
         return s;
@@ -500,7 +505,8 @@ inline const std::vector<uint64_t> &known_function_starts() {
 inline const std::set<uint64_t> &all_frontiers() {
     static const std::set<uint64_t> f = [] {
         std::set<uint64_t> s = fatal_frontier();
-        for (const auto &kv : contract_frontier()) s.insert(kv.first);
+        for (const auto &kv : contract_frontier())
+            s.insert(kv.first);
         return s;
     }();
     return f;
@@ -637,8 +643,8 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
      *
      * El descarte es del lado seguro por el mismo motivo que el resto: lo que
      * se descarta es lo que nunca llega a observarse. */
-    ImplicitEffects region;      ///< lo visto desde el ultimo `ret`
-    bool region_aborta = false;  ///< ...y si acaba lanzando
+    ImplicitEffects region;     ///< lo visto desde el ultimo `ret`
+    bool region_aborta = false; ///< ...y si acaba lanzando
     bool anterior_fue_ret = false;
     /// Suma la region a lo bueno, o la tira si acabo lanzando.
     auto cerrar_region = [&out, &region, &region_aborta]() {
@@ -703,19 +709,19 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
 
                 /* Un campo de `ProcessVM` NUNCA se alcanza por la pila: el
                  * manejador recibe un PUNTERO, y el objeto vive en el monton.
-                 * Por la pila solo se llega a las variables locales de la propia
-                 * funcion, y por el contador de programa a las globales.
+                 * Por la pila solo se llega a las variables locales de la
+                 * propia funcion, y por el contador de programa a las globales.
                  *
                  * Sin este filtro el criterio es solo el desplazamiento, y los
-                 * campos vigilados caen en [0x40, 0x60) -- justo el rango de los
-                 * marcos de pila corrientes --, asi que cualquier
-                 * `mov [rsp+0x58], rax` se contaba como "escribe flags".  De ahi
+                 * campos vigilados caen en [0x40, 0x60) -- justo el rango de
+                 * los marcos de pila corrientes --, asi que cualquier `mov
+                 * [rsp+0x58], rax` se contaba como "escribe flags".  De ahi
                  * salia que `mov` escribiera las banderas y que `not` no las
                  * escribiera pero tocase el contador de programa.
                  *
-                 * Si el compilador guarda el puntero en la pila, lo que hace por
-                 * ahi es LEER EL PUNTERO; el acceso al campo sigue siendo por el
-                 * registro donde lo deja, y ese si se mira. */
+                 * Si el compilador guarda el puntero en la pila, lo que hace
+                 * por ahi es LEER EL PUNTERO; el acceso al campo sigue siendo
+                 * por el registro donde lo deja, y ese si se mira. */
                 if (acc.via_stack) continue;
                 const bool escribe = acc.writes;
                 const bool lee = acc.reads;
@@ -742,8 +748,8 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                  *
                  * Va ANTES del filtro de desplazamiento porque el caso mas
                  * comun tiene desplazamiento CERO: el manejador calcula
-                 * `&regs[campo]` y se lo pasa al ayudante, que accede por `[reg]`
-                 * a secas.
+                 * `&regs[campo]` y se lo pasa al ayudante, que accede por
+                 * `[reg]` a secas.
                  *
                  * Dos formas de llegar, y las dos hacen falta:
                  *
@@ -754,8 +760,8 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                  *     llamada, y aqui solo queda un `[reg]`.
                  *
                  * En los dos casos se exige que la base salga del PRIMER
-                 * argumento -- el proceso --: el mismo desplazamiento sobre otra
-                 * estructura no es el banco. */
+                 * argumento -- el proceso --: el mismo desplazamiento sobre
+                 * otra estructura no es el banco. */
                 if (acc.base >= 0 && !acc.address_only) {
                     const tests::AddrOrigin &a = st.addr[acc.base];
                     /* Los dos bancos, con el mismo criterio.  El desplazamiento
@@ -786,7 +792,8 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                      *
                      * `Origin` ya guardaba `pre_add` y `scale` para esto; lo
                      * que faltaba era mirarlos aqui. */
-                    auto disp_efectivo = [](int64_t disp, const tests::Origin &o,
+                    auto disp_efectivo = [](int64_t disp,
+                                            const tests::Origin &o,
                                             uint8_t escala) -> int64_t {
                         if (!o.valid) return disp;
                         return disp + (int64_t)o.pre_add * (int64_t)escala;
@@ -816,8 +823,8 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                      * calculo de la direccion, o del que se aplica en el propio
                      * acceso.  Las dos formas existen y dependen de cuanto
                      * pudo plegar el compilador -- con un banco de 64 bytes por
-                     * registro la escala del acceso NO llega, asi que calcula la
-                     * base una vez y multiplica el indice aparte. */
+                     * registro la escala del acceso NO llega, asi que calcula
+                     * la base una vez y multiplica el indice aparte. */
                     uint16_t bit = 0; // doce partes: no cabe en un byte
                     if (caso1)
                         bit = operand_field_bit(st.origin[acc.index]);
@@ -902,8 +909,8 @@ inline ImplicitEffects implicit_effects_of(csh cs, const void *handler) {
                          * Se atribuye, pues, y se CUENTA aparte.  Cada uno es o
                          * bien procedencia que el recorrido perdio, o bien un
                          * efecto que no es nuestro -- `mod` divide, dividir por
-                         * cero lanza, y ahi dentro hay estructuras con campos en
-                         * los mismos desplazamientos --.  Hasta poder
+                         * cero lanza, y ahi dentro hay estructuras con campos
+                         * en los mismos desplazamientos --.  Hasta poder
                          * distinguirlos, se dice cuantos hay en vez de elegir
                          * en silencio. */
                         ++out.ajenos;
@@ -1004,7 +1011,7 @@ struct OpcodeRow {
     std::vector<disasm::RegOperand> regs;
     bool salta = false;        ///< transfiere control: no se reordena nunca
     bool implementada = false; ///< tiene exec y decode
-    ImplicitEffects imp;            ///< efectos que no son operandos
+    ImplicitEffects imp;       ///< efectos que no son operandos
 };
 
 /**

@@ -55,7 +55,8 @@
 #include "jit/code_cache.h"
 
 // Declarar QUE es esta memoria, no solo pedirla.  `AllocScope` vive aqui, no en
-// `alloc_tag.h`: ahi esta la etiqueta, y el ambito que la pone es del asignador.
+// `alloc_tag.h`: ahi esta la etiqueta, y el ambito que la pone es del
+// asignador.
 #include "util/alloc/host_allocator.h"
 
 #include <cstring>
@@ -113,7 +114,9 @@ CodeCache::CodeCache(size_t chunk_bytes, size_t max_total_bytes)
  * Devolver la memoria SIGUE importando, porque las paginas ejecutables cuentan
  * en el presupuesto del proceso; lo que cambia es quien lo hace.
  */
-CodeCache::~CodeCache() { chunks_.clear(); }
+CodeCache::~CodeCache() {
+    chunks_.clear();
+}
 
 /**
  * @brief Reserva un nuevo chunk del SO y lo añade a la lista.
@@ -134,11 +137,11 @@ bool CodeCache::reserve_chunk() {
         return false;
     }
     /* LA MEMORIA SE LA PIDE AL ASIGNADOR, con los permisos y la zona que hacen
-     * falta.  No es un caso especial: el asignador es, por debajo, un repartidor
-     * de arenas con permisos, y una arena de codigo es una de ellas.
+     * falta.  No es un caso especial: el asignador es, por debajo, un
+     * repartidor de arenas con permisos, y una arena de codigo es una de ellas.
      *
-     * LA DIRECCION NO DA IGUAL, y por eso se le pasa el ancla.  El codigo que se
-     * emite aqui referencia datos del anfitrion -- los globales del modulo,
+     * LA DIRECCION NO DA IGUAL, y por eso se le pasa el ancla.  El codigo que
+     * se emite aqui referencia datos del anfitrion -- los globales del modulo,
      * sobre todo -- con desplazamientos RELATIVOS A RIP de 32 bits, que
      * alcanzan +-2 GB.  Mientras codigo y datos salian del mismo sitio caian
      * cerca por casualidad -- medido, a 18 MB --; al separarse, la distancia
@@ -149,8 +152,8 @@ bool CodeCache::reserve_chunk() {
      * El barrido de regiones que habia aqui se fue a `os_alloc_near`, que es
      * donde le toca: preguntar al mapa de memoria donde hay hueco no es trabajo
      * de un generador de codigo, y ahi ademas se elige el hueco MAS CERCANO en
-     * vez del primero -- esto se quedaba en el borde de la ventana, a 1.920 MiB,
-     * y ahi no queda margen para los datos que no son el ancla exacta. */
+     * vez del primero -- esto se quedaba en el borde de la ventana, a 1.920
+     * MiB, y ahi no queda margen para los datos que no son el ancla exacta. */
     /* QUE ES ESTA MEMORIA, declarado donde se pide.
      *
      * Los trozos del cache de codigo viven lo que el proceso -- el codigo

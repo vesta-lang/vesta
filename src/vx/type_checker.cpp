@@ -722,8 +722,7 @@ bool TypeChecker::add_overload_candidate(const std::string &name, uint32_t prev,
     return true;
 }
 
-bool TypeChecker::register_overload(ast::FunctionDecl *fn,
-                                    uint32_t sig_index) {
+bool TypeChecker::register_overload(ast::FunctionDecl *fn, uint32_t sig_index) {
     /* La PRIMERA sale del simbolo del ambito, no de `sig_by_name_`: ese ya se
      * sobrescribio con la firma de esta, que se apunta antes de intentar
      * declararla.  El simbolo, en cambio, sigue siendo el de la primera --
@@ -747,10 +746,11 @@ bool TypeChecker::register_overload(ast::FunctionDecl *fn,
         /* Los nombres entran en la etiqueta solo cuando son lo UNICO que la
          * separa de una hermana, y eso ya se sabe: lo apunto el recorrido de
          * arriba.  Aqui no se busca nada. */
-        s.mangled_label = fn->name + "_" +
-                          overload::discriminator(
-                              s.param_types,
-                              s.overload_needs_names ? &s.param_names : nullptr);
+        s.mangled_label =
+            fn->name + "_" +
+            overload::discriminator(s.param_types, s.overload_needs_names
+                                                       ? &s.param_names
+                                                       : nullptr);
     }
 
     /* Y la etiqueta tambien al AST, que es de donde el bajado saca el nombre
@@ -901,9 +901,9 @@ std::string TypeChecker::monomorphize_class(const std::string &template_name,
         }
         /* El cuerpo solo lo clona quien se queda con este metodo de la
          * instancia; ver @c method_body_is_ours. */
-        if (m->body && method_body_is_ours(generic_instances_,
-                                           generic_module_index_, mangled,
-                                           m.get())) {
+        if (m->body &&
+            method_body_is_ours(generic_instances_, generic_module_index_,
+                                mangled, m.get())) {
             auto cb = clone_stmt(m->body.get(), g);
             if (cb && cb->kind == ast::NodeKind::BlockStmt) {
                 nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
@@ -1167,9 +1167,9 @@ std::string TypeChecker::monomorphize_struct(const std::string &template_name,
         }
         /* El cuerpo solo lo clona quien se queda con este metodo de la
          * instancia; ver @c method_body_is_ours. */
-        if (m->body && method_body_is_ours(generic_instances_,
-                                           generic_module_index_, mangled,
-                                           m.get())) {
+        if (m->body &&
+            method_body_is_ours(generic_instances_, generic_module_index_,
+                                mangled, m.get())) {
             auto cb = clone_stmt(m->body.get(), g);
             if (cb && cb->kind == ast::NodeKind::BlockStmt) {
                 nm->body.reset(static_cast<ast::BlockStmt *>(cb.release()));
@@ -3052,8 +3052,7 @@ static void borrowed_place(const ast::Expr *a, const BorrowChecker &bc,
         }
         return;
     }
-    default:
-        return;
+    default: return;
     }
 }
 
@@ -3690,9 +3689,9 @@ void close_method(std::vector<ClassMethodInfo> &methods, size_t i,
      * que es un hecho que el recorrido de arriba ya dejo apuntado. */
     const std::string tag =
         m.is_overloaded
-            ? overload::discriminator(
-                  m.param_types,
-                  m.overload_needs_names ? &m.param_names : nullptr)
+            ? overload::discriminator(m.param_types, m.overload_needs_names
+                                                         ? &m.param_names
+                                                         : nullptr)
             : std::string();
     if (!m.is_constructor) {
         m.ir_symbol = method_symbol(owner, m.name, tag);
@@ -4279,8 +4278,7 @@ void TypeChecker::collect_globals() {
              * una clase, ni un enum --.  Antes esto solo miraba los structs,
              * asi que `struct X` y `class X` convivian sin decir nada. */
             if (const char *taken = declared_type_keyword(s->name)) {
-                diags_.diag(s->loc, DiagLevel::ERR, "VX2062",
-                            {s->name, taken});
+                diags_.diag(s->loc, DiagLevel::ERR, "VX2062", {s->name, taken});
                 continue;
             }
 
@@ -4869,8 +4867,8 @@ void TypeChecker::collect_globals() {
                  *
                  * Los constructores estuvieron FUERA de esta comprobacion, asi
                  * que dos de la misma aridad se emitian los dos con el mismo
-                 * nombre -- dos etiquetas iguales que el enlazador se tragaba --
-                 * y la llamada se iba a uno cualquiera: con `V(f64,f64)` y
+                 * nombre -- dos etiquetas iguales que el enlazador se tragaba
+                 * -- y la llamada se iba a uno cualquiera: con `V(f64,f64)` y
                  * `V(i64,i64)`, escribir `V(1.0, 2.0)` acababa en el de
                  * enteros.  Sin una sola queja.  Despues entraron por ARIDAD,
                  * que los separaba pero prohibia la pareja legitima; ahora
@@ -4883,9 +4881,9 @@ void TypeChecker::collect_globals() {
                 for (const ClassMethodInfo &prev : layout.methods) {
                     if (prev.is_constructor != mi.is_constructor) continue;
                     if (!mi.is_constructor && prev.name != mi.name) continue;
-                    if (!overload::same_signature(prev.param_types, prev.param_names,
-                                                  mi.param_types,
-                                                  mi.param_names))
+                    if (!overload::same_signature(
+                            prev.param_types, prev.param_names, mi.param_types,
+                            mi.param_names))
                         continue;
                     already_declared = true;
                     break;
@@ -5184,8 +5182,7 @@ void TypeChecker::collect_globals() {
             /* Igual que el struct: el nombre no lo puede tener ya ningun tipo.
              * Esto solo miraba las clases. */
             if (const char *taken = declared_type_keyword(c->name)) {
-                diags_.diag(c->loc, DiagLevel::ERR, "VX2062",
-                            {c->name, taken});
+                diags_.diag(c->loc, DiagLevel::ERR, "VX2062", {c->name, taken});
                 continue;
             }
 
@@ -6348,7 +6345,8 @@ void TypeChecker::resolve_overlay_spans(StructLayout &lay) {
      * una constante que no se plego) deja el tramo sin saber, que es la
      * respuesta honesta -- podria valer cualquier cosa. */
     std::unordered_set<std::string> siblings;
-    for (const StructFieldInfo &fi : lay.fields) siblings.insert(fi.name);
+    for (const StructFieldInfo &fi : lay.fields)
+        siblings.insert(fi.name);
 
     /* `expr` -> (simbolos, constante).  Solo suma y resta: son las dos que
      * mantienen la propiedad que hace util esto -- que dos campos del mismo
@@ -6365,13 +6363,11 @@ void TypeChecker::resolve_overlay_spans(StructLayout &lay) {
         switch (e->kind) {
         case ast::NodeKind::IntLitExpr:
             out.known = true;
-            out.constant =
-                static_cast<int64_t>(
-                    static_cast<const ast::IntLitExpr *>(e)->value);
+            out.constant = static_cast<int64_t>(
+                static_cast<const ast::IntLitExpr *>(e)->value);
             return out;
         case ast::NodeKind::IdentExpr: {
-            const std::string &n =
-                static_cast<const ast::IdentExpr *>(e)->name;
+            const std::string &n = static_cast<const ast::IdentExpr *>(e)->name;
             if (!siblings.count(n)) return out; // no es un hermano: no se sabe
             out.known = true;
             out.terms.push_back(n);
@@ -10205,10 +10201,10 @@ Type TypeChecker::check_new(ast::NewExpr *e) {
             cands.push_back(c);
         }
         const uint32_t pick =
-            cands.empty() ? overload::kNoPick
-                          : overload::select(cands.data(), cands.size(),
-                                             arg_types, &overload_accepts,
-                                             this);
+            cands.empty()
+                ? overload::kNoPick
+                : overload::select(cands.data(), cands.size(), arg_types,
+                                   &overload_accepts, this);
         if (pick != overload::kNoPick) {
             ctor = &cls.methods[pick];
             e->resolved_method = pick;
@@ -10851,9 +10847,9 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
                 e->comptime_const_resolved = true;
                 if (it->second.is_str) {
                     e->comptime_const_is_str = true;
-                    e->comptime_mut().s =it->second.str_value;
+                    e->comptime_mut().s = it->second.str_value;
                 } else {
-                    e->comptime_mut().i =it->second.value;
+                    e->comptime_mut().i = it->second.value;
                 }
                 e->result_type = it->second.type;
                 return e->result_type;
@@ -10865,9 +10861,9 @@ Type TypeChecker::check_ident(ast::IdentExpr *e) {
             e->comptime_const_resolved = true;
             if (it->second.is_str) {
                 e->comptime_const_is_str = true;
-                e->comptime_mut().s =it->second.str_value;
+                e->comptime_mut().s = it->second.str_value;
             } else {
-                e->comptime_mut().i =it->second.value;
+                e->comptime_mut().i = it->second.value;
             }
             e->result_type = it->second.type;
             return e->result_type;
@@ -10981,7 +10977,8 @@ Type TypeChecker::field_type_with_abi(const StructFieldInfo &f) const {
     if (t.kind == PrimitiveKind::FUNCTION && f.default_init &&
         f.default_init->result_type.kind == PrimitiveKind::FUNCTION &&
         !f.default_init->result_type.fn_param_abi_regs().empty()) {
-        t.fn_mut().param_abi_regs = f.default_init->result_type.fn_param_abi_regs();
+        t.fn_mut().param_abi_regs =
+            f.default_init->result_type.fn_param_abi_regs();
     }
     return t;
 }
@@ -11056,9 +11053,9 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                             e->comptime_const_resolved = true;
                             if (itcc->second.is_str) {
                                 e->comptime_const_is_str = true;
-                                e->comptime_mut().s =itcc->second.str_value;
+                                e->comptime_mut().s = itcc->second.str_value;
                             } else {
-                                e->comptime_mut().i =itcc->second.value;
+                                e->comptime_mut().i = itcc->second.value;
                             }
                             e->result_type = itcc->second.type;
                             return e->result_type;
@@ -11183,9 +11180,9 @@ Type TypeChecker::check_field_access(ast::FieldAccessExpr *e) {
                             e->comptime_const_resolved = true;
                             if (itcc->second.is_str) {
                                 e->comptime_const_is_str = true;
-                                e->comptime_mut().s =itcc->second.str_value;
+                                e->comptime_mut().s = itcc->second.str_value;
                             } else {
-                                e->comptime_mut().i =itcc->second.value;
+                                e->comptime_mut().i = itcc->second.value;
                             }
                             e->result_type = itcc->second.type;
                             return e->result_type;
@@ -11811,7 +11808,8 @@ bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
      * tipos en otro orden segun donde se compile. */
     std::sort(picked.begin(), picked.end());
 
-    std::string list = written_type_name(function_sigs_[picked[0]].param_types[0]);
+    std::string list =
+        written_type_name(function_sigs_[picked[0]].param_types[0]);
     const std::string first = list;
     for (size_t i = 1; i < picked.size(); ++i)
         list +=
@@ -11843,9 +11841,9 @@ bool TypeChecker::report_ufcs_ns_hint(const Type &recv, const ast::Expr *base,
         const bool promoted = p.kind == PrimitiveKind::STRING &&
                               ufcs_promotes_to_string(recv, base);
         if (!(p == recv) && !promoted) continue;
-        diags_.diag(loc, DiagLevel::ERR, "VX2080",
-                    {written_type_name(promoted ? p : recv), name,
-                     it->second.first});
+        diags_.diag(
+            loc, DiagLevel::ERR, "VX2080",
+            {written_type_name(promoted ? p : recv), name, it->second.first});
         return true;
     }
     return false;
@@ -11892,10 +11890,10 @@ bool TypeChecker::report_ufcs_import_hint(const Type &recv,
              * no puso en ningun sitio.  Y el namespace, tal como lo escribio
              * en su `import` -- `std.fileio`, no `fileio` --, que es lo unico
              * que al teclearlo resuelve. */
-            diags_.diag(loc, DiagLevel::ERR, "VX2079",
-                        {written_type_name(promoted ? p : recv), name,
-                         ns.local_name.empty() ? ns.module_name
-                                               : ns.local_name});
+            diags_.diag(
+                loc, DiagLevel::ERR, "VX2079",
+                {written_type_name(promoted ? p : recv), name,
+                 ns.local_name.empty() ? ns.module_name : ns.local_name});
             return true;
         }
     }
@@ -11988,11 +11986,12 @@ bool TypeChecker::normalize_named_args(ast::CallExpr *e, const ParamNames &pn,
     size_t libre = 0;
     for (size_t k = 0; k < e->args.size(); ++k) {
         if (k < e->arg_names.size() && !e->arg_names[k].empty()) continue;
-        while (libre < np && ord[libre] != nullptr) ++libre;
+        while (libre < np && ord[libre] != nullptr)
+            ++libre;
         if (libre == np) {
-            diags_.diag(e->args[k]->loc, DiagLevel::ERR, "VX2075",
-                        {pn.empty() ? std::string("?") : pn.back().str(),
-                         quien});
+            diags_.diag(
+                e->args[k]->loc, DiagLevel::ERR, "VX2075",
+                {pn.empty() ? std::string("?") : pn.back().str(), quien});
             return false;
         }
         ord[libre] = std::move(e->args[k]);
@@ -12179,8 +12178,10 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         c.needs_names = sig.overload_needs_names;
         c.slot = idx;
         c.by_ref_mask = sig.param_by_ref_mask;
-        if (sig.is_raw_variadic) c.raw_variadic = true;
-        else if (sig.is_variadic) c.variadic_elem = &sig.variadic_elem;
+        if (sig.is_raw_variadic)
+            c.raw_variadic = true;
+        else if (sig.is_variadic)
+            c.variadic_elem = &sig.variadic_elem;
         cands.push_back(c);
     }
     const uint32_t pick =
@@ -12190,10 +12191,10 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
 
     /* Encontrada: el nodo se convierte en la OTRA grafia y lo comprueba el
      * camino de siempre.  Reescribir en vez de resolver aqui es lo que hace que
-     * las dos formas no puedan divergir -- comprobacion de argumentos, prestamos
-     * y la firma elegida son literalmente el mismo codigo -- y que al bajado, al
-     * JIT y al nativo no les llegue nada nuevo.  Es la operacion inversa de la
-     * que ya hace `__call__`, unas lineas mas abajo. */
+     * las dos formas no puedan divergir -- comprobacion de argumentos,
+     * prestamos y la firma elegida son literalmente el mismo codigo -- y que al
+     * bajado, al JIT y al nativo no les llegue nada nuevo.  Es la operacion
+     * inversa de la que ya hace `__call__`, unas lineas mas abajo. */
     auto id = std::make_unique<ast::IdentExpr>();
     id->loc = fa->loc;
     id->name = *chosen;
@@ -12202,8 +12203,7 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     if (hole == kUfcsNoHole) {
         e->args.insert(e->args.begin(), std::move(receiver));
         // Y su nombre vacio con el, para que los dos sigan cuadrando.
-        if (!e->arg_names.empty())
-            e->arg_names.insert_at(0, PooledName());
+        if (!e->arg_names.empty()) e->arg_names.insert_at(0, PooledName());
     } else {
         e->args[hole] = std::move(receiver); // el hueco ERA su sitio
     }
@@ -12334,8 +12334,10 @@ uint32_t TypeChecker::select_ns_overload(const ImportedNamespace &ns,
         c.needs_names = use->overload_needs_names;
         c.slot = cur; // el indice en `symbols`, que es lo que se devuelve
         c.by_ref_mask = use->param_by_ref_mask;
-        if (use->is_raw_variadic) c.raw_variadic = true;
-        else if (use->is_variadic) c.variadic_elem = &use->variadic_elem;
+        if (use->is_raw_variadic)
+            c.raw_variadic = true;
+        else if (use->is_variadic)
+            c.variadic_elem = &use->variadic_elem;
         cands.push_back(c);
     }
 
@@ -12372,8 +12374,7 @@ const ClassMethodInfo *TypeChecker::select_method_overload(
         c.needs_names = methods[i].overload_needs_names;
         c.slot = static_cast<uint32_t>(i);
         c.by_ref_mask = methods[i].param_by_ref_mask;
-        if (methods[i].is_variadic)
-            c.variadic_elem = &methods[i].variadic_elem;
+        if (methods[i].is_variadic) c.variadic_elem = &methods[i].variadic_elem;
         cands.push_back(c);
     }
     if (cands.empty()) return nullptr;
@@ -13216,7 +13217,8 @@ Type TypeChecker::check_unary(ast::UnaryExpr *e) {
                     // el hueco del `this` delante para que siga alineada con
                     // `params`.
                     if (!m.param_dirs.empty()) {
-                        cfnt.fn_mut().param_dirs.reserve(m.param_dirs.size() + 1);
+                        cfnt.fn_mut().param_dirs.reserve(m.param_dirs.size() +
+                                                         1);
                         cfnt.fn_mut().param_dirs.push_back(ParamDir::None);
                         for (const auto d : m.param_dirs)
                             cfnt.fn_mut().param_dirs.push_back(d);
@@ -15091,11 +15093,11 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             e->is_indirect_call = true;
             // Validar el numero de argumentos contra la firma.
             if (e->args.size() != ftype.fn_params().size()) {
-                diags_.error(e->loc,
-                             "llamada indirecta: numero de argumentos (" +
-                                 std::to_string(e->args.size()) +
-                                 ") distinto de la firma (" +
-                                 std::to_string(ftype.fn_params().size()) + ")");
+                diags_.error(
+                    e->loc, "llamada indirecta: numero de argumentos (" +
+                                std::to_string(e->args.size()) +
+                                ") distinto de la firma (" +
+                                std::to_string(ftype.fn_params().size()) + ")");
             }
             for (size_t i = 0; i < e->args.size(); ++i) {
                 Type at = check_expr(e->args[i].get());
@@ -15718,12 +15720,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             e->is_indirect_call = true;
             fa->result_type = ftype;
             if (e->args.size() != ftype.fn_params().size())
-                diags_.error(e->loc,
-                             "llamada a campo-funcion '" + fa->field_name +
-                                 "': numero de argumentos (" +
-                                 std::to_string(e->args.size()) +
-                                 ") distinto de la firma (" +
-                                 std::to_string(ftype.fn_params().size()) + ")");
+                diags_.error(
+                    e->loc, "llamada a campo-funcion '" + fa->field_name +
+                                "': numero de argumentos (" +
+                                std::to_string(e->args.size()) +
+                                ") distinto de la firma (" +
+                                std::to_string(ftype.fn_params().size()) + ")");
             const size_t n = std::min(e->args.size(), ftype.fn_params().size());
             for (size_t i = 0; i < n; ++i) {
                 const Type ta = check_expr(e->args[i].get());
@@ -15777,8 +15779,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             /* Que el nombre este sobrecargado lo dice el propio candidato: una
              * rama sobre un bit que ya se tiene en la mano, sin tabla. */
             if (smtd->is_overloaded)
-                smtd = select_method_overload(slay.methods, fa->field_name, e,
-                                              fa);
+                smtd =
+                    select_method_overload(slay.methods, fa->field_name, e, fa);
             // Ambigua: ya se dijo cuales son las dos y como separarlas.
             if (smtd == nullptr) return Type{PrimitiveKind::COUNT};
             /* Y con la elegida en la mano, la llamada se deja POSICIONAL: los
@@ -15874,8 +15876,9 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     if (ufcs_receiver_hole(e) != kUfcsNoHole) {
         diags_.diag(e->loc, DiagLevel::ERR, "VX2073", {});
         for (auto &a : e->args)
-            if (a && (a->kind != ast::NodeKind::IdentExpr ||
-                      static_cast<const ast::IdentExpr *>(a.get())->name != "_"))
+            if (a &&
+                (a->kind != ast::NodeKind::IdentExpr ||
+                 static_cast<const ast::IdentExpr *>(a.get())->name != "_"))
                 (void)check_expr(a.get());
         return Type{PrimitiveKind::COUNT};
     }
@@ -18443,8 +18446,7 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 if (marshal_const_args(*e, arg_words)) {
                     const std::string src_loc =
                         e->loc.file() + ":" + std::to_string(e->loc.line) +
-                        ":" +
-                        std::to_string(e->loc.column);
+                        ":" + std::to_string(e->loc.column);
                     comptime_runtime_.record_expectation(
                         id->name, std::move(arg_words), r.str, src_loc);
                 }
@@ -18686,8 +18688,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 std::string(
                     "numero de argumentos incorrecto en llamada al closure '") +
                     id->name + "': esperados " +
-                    std::to_string(fn_type.fn_params().size()) + ", recibidos " +
-                    std::to_string(e->args.size()));
+                    std::to_string(fn_type.fn_params().size()) +
+                    ", recibidos " + std::to_string(e->args.size()));
         }
         const size_t n =
             fn_type.fn_is_variadic
@@ -18711,8 +18713,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             const bool by_ref =
                 i < 64 && (fn_type.fn_param_by_ref_mask & (1ull << i)) != 0;
             check_call_arg(e->args[i].get(),
-                           (i >= fn_fixed) ? var_elem : fn_type.fn_params()[i], i,
-                           std::string(), d, by_ref);
+                           (i >= fn_fixed) ? var_elem : fn_type.fn_params()[i],
+                           i, std::string(), d, by_ref);
         }
         /* Y las reglas de prestamo tambien: un `inout` por puntero a funcion
          * es un prestamo exclusivo igual que uno por llamada directa. */
@@ -18802,23 +18804,24 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                  * El `...` CRUDO de una `@Naked` es otra cosa: no anyade
                  * parametro y no tiene tipo de elemento, asi que va por su
                  * marca y no por la del tipo. */
-                if (cs.is_raw_variadic) c.raw_variadic = true;
-                else if (cs.is_variadic) c.variadic_elem = &cs.variadic_elem;
+                if (cs.is_raw_variadic)
+                    c.raw_variadic = true;
+                else if (cs.is_variadic)
+                    c.variadic_elem = &cs.variadic_elem;
                 cands.push_back(c);
             }
             uint32_t other = overload::kNoPick;
-            const uint32_t pick =
-                overload::select(cands.data(), cands.size(), arg_types,
-                                 &overload_accepts, this, &e->arg_names, &other);
+            const uint32_t pick = overload::select(cands.data(), cands.size(),
+                                                   arg_types, &overload_accepts,
+                                                   this, &e->arg_names, &other);
             /* Dos encajan y solo se distinguen por como se llaman sus ranuras:
              * la llamada no dice cual, asi que se citan las dos con sus nombres
              * -- que es lo que hay que escribir para elegir -- en vez de
              * quedarse con una. */
             if (other != overload::kNoPick) {
-                report_overload_ambiguous(id->name,
-                                          function_sigs_[pick].param_names,
-                                          function_sigs_[other].param_names,
-                                          e->loc);
+                report_overload_ambiguous(
+                    id->name, function_sigs_[pick].param_names,
+                    function_sigs_[other].param_names, e->loc);
                 return Type{PrimitiveKind::COUNT};
             }
             if (pick != overload::kNoPick) chosen_sig = pick;
