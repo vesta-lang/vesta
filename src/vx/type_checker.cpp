@@ -11736,6 +11736,21 @@ std::string TypeChecker::written_type_name(const Type &t) const {
     return txt;
 }
 
+size_t TypeChecker::ufcs_receiver_hole(ast::CallExpr *e) {
+    size_t found = kUfcsNoHole;
+    for (size_t i = 0; i < e->args.size(); ++i) {
+        const ast::Expr *a = e->args[i].get();
+        if (a == nullptr || a->kind != ast::NodeKind::IdentExpr) continue;
+        if (static_cast<const ast::IdentExpr *>(a)->name != "_") continue;
+        if (found != kUfcsNoHole) {
+            diags_.diag(a->loc, DiagLevel::ERR, "VX2072", {});
+            return kUfcsHoleBad;
+        }
+        found = i;
+    }
+    return found;
+}
+
 bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                                 const Type &recv) {
     if (e == nullptr || fa == nullptr || !fa->base) return false;
@@ -11757,13 +11772,33 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
             ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name, &chosen);
     if (cand_slots == nullptr || cand_slots->empty()) return false;
 
-    /* Los tipos de la llamada CON el receptor delante, que es lo que una libre
-     * veria: `x.f(a)` es `f(x, a)`. */
+    /* DONDE cae el receptor.  Por defecto delante -- `x.f(a)` es `f(x, a)` --,
+     * y en el hueco si se escribio uno: `x.f(a, _)` es `f(a, x)`.  Eso es lo
+     * que permite llamar por el punto a una firma cuyo primer parametro no es
+     * el sujeto (`memcpy(dst, src, n)`) sin retorcer la firma, que era el
+     * precio que la seccion 5 del plan daba por inevitable.
+     *
+     * Es una REORDENACION, y ahi acaba: a partir de aqui todo es posicional
+     * como siempre, asi que la seleccion de sobrecarga no se entera.  Tocarla
+     * puede cambiar en silencio a que cuerpo va un programa ya escrito. */
+    const size_t hole = ufcs_receiver_hole(e);
+    if (hole == kUfcsHoleBad) {
+        /* Ya se dijo por que, asi que la llamada se da por CONTESTADA: dejarla
+         * seguir la manda al camino de "no existe tal metodo", que sugiere un
+         * cast para un problema que no es ese. */
+        e->result_type = Type{PrimitiveKind::COUNT};
+        return true;
+    }
+    const size_t at = (hole == kUfcsNoHole) ? 0 : hole;
+
     std::vector<Type> arg_types;
     arg_types.reserve(e->args.size() + 1);
-    arg_types.push_back(recv);
-    for (auto &a : e->args)
-        arg_types.push_back(check_expr(a.get()));
+    for (size_t i = 0; i < e->args.size(); ++i) {
+        if (i == at) arg_types.push_back(recv);
+        if (i == hole) continue; // el hueco NO es un argumento suyo
+        arg_types.push_back(check_expr(e->args[i].get()));
+    }
+    if (at >= e->args.size()) arg_types.push_back(recv);
 
     /* Y CUAL de ellas se elige con la MISMA regla que una llamada libre --
      * exacta antes que compatible --, no con una propia: si aqui se decidiera
@@ -11796,7 +11831,10 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     id->name = *chosen;
     std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
     e->callee = std::move(id);
-    e->args.insert(e->args.begin(), std::move(receiver));
+    if (hole == kUfcsNoHole)
+        e->args.insert(e->args.begin(), std::move(receiver));
+    else
+        e->args[hole] = std::move(receiver); // el hueco ERA su sitio
     e->result_type = check_call(e);
     return true;
 }
@@ -15407,6 +15445,18 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // (util para que el lowering tenga el target_type listo).
         fa->result_type = mtd->return_type;
         return mtd->return_type;
+    }
+
+    /* El hueco dice donde cae el RECEPTOR, y aqui no hay ninguno.  Se dice, en
+     * vez de dejar que `_` salga por el camino de "nombre no resuelto", que
+     * manda a buscar una variable que nadie quiso declarar. */
+    if (ufcs_receiver_hole(e) != kUfcsNoHole) {
+        diags_.diag(e->loc, DiagLevel::ERR, "VX2073", {});
+        for (auto &a : e->args)
+            if (a && (a->kind != ast::NodeKind::IdentExpr ||
+                      static_cast<const ast::IdentExpr *>(a.get())->name != "_"))
+                (void)check_expr(a.get());
+        return Type{PrimitiveKind::COUNT};
     }
 
     // Caso B: llamada normal a funcion top-level.

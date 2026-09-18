@@ -21,7 +21,11 @@ namespace ejemplos.ufcs_cadena;
 //      estaticos y solo se PROMUEVE a `string` donde hace falta -- por eso
 //      `grita("hola")` compila --, asi que `"hola".grita()` tiene que
 //      encontrar lo mismo.
-//   4. Y cruzar de familia a mitad de cadena: de cadena a numero y seguir.
+//   4. Cruzar de familia a mitad de cadena: de cadena a numero y seguir.
+//   5. Y que el receptor no tiene por que ir PRIMERO: `_` dice donde cae.  Es
+//      lo que permite llamar por el punto a una firma cuyo primer parametro no
+//      es el sujeto -- `memcpy(dst, src, n)` -- sin retorcer la firma, que era
+//      el precio que se daba por inevitable para poder escribir asi.
 //
 // Resultado esperado: 42.
 
@@ -43,6 +47,24 @@ string repite3(string s) { return s.concat(s).concat(s); }
 // El puente entre las dos familias: recibe cadena y devuelve numero.
 i64 largo(string s) { return (i64)s.length(); }
 
+// --- 5. el receptor no tiene por que ir PRIMERO -----------------------------
+//
+// `_` dice DONDE cae.  Sin el, cae delante, que es lo de siempre.  Con el, en
+// el hueco: `10.restar(40, _)` es `restar(40, 10)`.
+//
+// Esto es lo que permite llamar por el punto a una firma cuyo primer parametro
+// NO es el sujeto -- `memcpy(dst, src, n)`, `rodea(lo_que_rodea, el_texto)` --
+// sin retorcer la firma para acomodar la forma de llamar.
+//
+// Y es una REORDENACION y ahi acaba: a partir de ese punto todo es posicional
+// como siempre, asi que la eleccion de sobrecarga es exactamente la misma.
+i64 restar(i64 a, i64 b) { return a - b; }
+
+// El texto va SEGUNDO a proposito: aqui el sujeto es lo de dentro, no el marco.
+string enmarca(string marco, string texto) {
+	return marco.concat(texto).concat(marco);
+}
+
 i32 main() {
 	// 1. cuatro eslabones, ningun cast, ningun metodo declarado en ninguna
 	// parte.  Y el primer receptor es el literal `2` tal cual.
@@ -60,7 +82,17 @@ i32 main() {
 	// 4. cruzar de familia a mitad de cadena y seguir por la otra
 	i64 x = "hola".largo().mul(4); // 4 * 4 = 16
 
-	i64 tot = n + l + r + x; // 12 + 8 + 6 + 16 = 42
+	// 5. el receptor donde se diga.  Sin `_` cae delante, con `_` en el hueco,
+	// y las dos son la misma llamada escrita de otra forma.
+	i64 h1 = 10.restar(40, _); // restar(40, 10) = 30
+	i64 h2 = 40.restar(10);    // restar(40, 10) = 30
+
+	// Y lo que esto desbloquea: `enmarca` pone el texto de SEGUNDO -- su sujeto
+	// es lo de dentro, no el marco --, y aun asi se encadena sin tocar la firma.
+	string m = "eh".grita().enmarca("<<", _); // "<<" + "eh!" + "<<"
+	i64    q = m.largo();                     // "<<eh!<<" -> 7
+
+	i64 tot = n + l + r + x + (h1 - h2) + q - 7; // 42 + 0 + 7 - 7 = 42
 	println("num=${n} igual=${igual} cadena=${s} largo=${l}");
 	println("repite=${r} cruce=${x} total=${tot}");
 	return (i32)tot; // 42

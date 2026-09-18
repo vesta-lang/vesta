@@ -3187,3 +3187,14 @@ es = "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}
 ["VX3008"]
 en = "in the native binary '{0} = ...' cannot read '{0}' from any position other than the first: the result shares its buffer with the source.  Write it as '{0} += ...', or go through a temporary"
 es = "en el binario nativo '{0} = ...' no puede leer '{0}' desde otra posicion que no sea la primera: el resultado comparte hueco con la fuente.  Escribelo como '{0} += ...', o pasa por una variable intermedia"
+
+# Dos huecos son dos receptores, y solo hay uno.  No se elige en silencio cual
+# de los dos: se dice.
+["VX2072"]
+en = "'_' appears more than once in the same call: there is only one receiver to place"
+es = "'_' aparece mas de una vez en la misma llamada: solo hay un receptor que colocar"
+# El hueco dice DONDE cae el receptor de una llamada con punto.  En una llamada
+# libre no hay receptor que colocar, asi que no significa nada.
+["VX2073"]
+en = "'_' only means something after a dot: in a free call there is no receiver to place"
+es = "'_' solo significa algo tras un punto: en una llamada libre no hay receptor que colocar"

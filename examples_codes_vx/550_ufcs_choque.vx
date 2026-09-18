@@ -16,7 +16,7 @@ namespace ejemplos.ufcs_choque;
 // cast se llega, y ademas con el nombre que se ESCRIBE y no el que el aplanado
 // le puso.
 //
-// Se espera que NO compile: VX2068 lo primero, VX2071 lo segundo.
+// Se espera que NO compile: VX2068, VX2071, VX2072 y VX2073.
 
 struct Punto {
 	i64 x;
@@ -34,10 +34,17 @@ typedef u32 Edad new;
 
 u64 anyos(Edad e) { return (u64)e + 1_u64; }
 
+// Y el hueco del receptor, mal puesto de las dos maneras posibles.
+i64 tres(i64 a, i64 b, i64 c) { return a + b + c; }
+
 i32 main() {
 	Punto q;
 	q.x = 6;
 	q.y = 7;
 	println("fuerte=${41.anyos()}");
-	return (i32)q.area();
+	// Dos huecos son dos receptores, y solo hay uno.
+	i64 dos = 1.tres(2, _, _);
+	// Y sin punto no hay receptor que colocar en ninguno.
+	i64 libre = tres(1, 2, _);
+	return (i32)(q.area() + dos + libre);
 }

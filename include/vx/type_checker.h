@@ -2177,6 +2177,24 @@ class TypeChecker {
     bool try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                        const Type &recv);
 
+    /// No se escribio ningun `_`: el receptor va delante, como siempre.
+    static constexpr size_t kUfcsNoHole = static_cast<size_t>(-1);
+    /// Se escribio mal y ya se dijo por que; la llamada no sigue.
+    static constexpr size_t kUfcsHoleBad = static_cast<size_t>(-2);
+
+    /**
+     * @brief En que argumento se escribio el hueco `_`, si se escribio.
+     *
+     * El hueco dice DONDE cae el receptor: `x.f(a, _)` es `f(a, x)`.  Es lo que
+     * permite llamar por el punto a una firma cuyo primer parametro no es el
+     * sujeto -- `memcpy(dst, src, n)` -- sin retorcer la firma.
+     *
+     * @param e La llamada.
+     * @return El indice, @c kUfcsNoHole si no hay, o @c kUfcsHoleBad si habia
+     *         mas de uno (ya reportado).
+     */
+    size_t ufcs_receiver_hole(ast::CallExpr *e);
+
     /**
      * @brief El tipo TIENE el metodo, y ademas hay una libre que lo tomaria.
      *
