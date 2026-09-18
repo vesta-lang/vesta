@@ -29,14 +29,10 @@ struct Vec2 {
 	i32 y;
 
 	// Sobrecarga de `+`: devuelve la suma de todas las componentes.
-	i32 __add__(Vec2 o) {
-		return this.x + o.x + this.y + o.y;
-	}
+	i32 __add__(Vec2 o) => this.x + o.x + this.y + o.y;
 
 	// Sobrecarga de `==`: igualdad componente a componente.
-	bool __eq__(Vec2 o) {
-		return this.x == o.x && this.y == o.y;
-	}
+	bool __eq__(Vec2 o) => this.x == o.x && this.y == o.y;
 }
 
 i32 main() {

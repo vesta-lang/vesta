@@ -52,13 +52,9 @@ void al_salir(string fn_name) {
 // linea de traza generaria mas traza.  El compilador ya excluye al propio
 // gancho; esto es para lo que el gancho llame.
 @NoInstrument
-i32 sin_medir(i32 x) {
-	return x + 1;
-}
+i32 sin_medir(i32 x) => x + 1;
 
-i32 preparar() {
-	return sin_medir(2);
-}
+i32 preparar() => sin_medir(2);
 
 // Recursiva a proposito: es lo unico que el inline no se lleva por delante, y
 // asi se ve que las tres entradas dan el MISMO nombre.

@@ -18,8 +18,8 @@ extern "msvcrt.dll" {
 
 // Comparator trivial - el costo del callback domina, no el comparator.
 i32 cmp_i32(i64 a_ptr, i64 b_ptr) {
-	i32* pa = (i32*) a_ptr;
-	i32* pb = (i32*) b_ptr;
+	i32* pa = (i32*)a_ptr;
+	i32* pb = (i32*)b_ptr;
 	i32  a  = *pa;
 	i32  b  = *pb;
 	if (a < b) return -1;

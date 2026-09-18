@@ -11,9 +11,7 @@ import "serial"; // reutiliza inb/outb
 bool g_shift = false; // estado de Shift (izq o der)
 
 // true si el controlador tiene un scancode pendiente.
-bool kbd_has_scancode() {
-	return (serial.inb(0x64) & 0x01) != 0;
-}
+bool kbd_has_scancode() => (serial.inb(0x64) & 0x01) != 0;
 
 // Traduce un make-code (scancode set 1) a ASCII segun Shift.  Devuelve 0 si
 // la tecla no produce caracter imprimible (modificador, desconocida).

@@ -7,5 +7,5 @@ namespace ejemplos.neg_sufijo_no_cabe;
 
 i32 main() {
 	u8 no = 300_u8;
-	return (i32) no;
+	return (i32)no;
 }

@@ -22,12 +22,12 @@ interface Habla {
 }
 
 class Animal {
-	public i64 patas() { return 1; }
+	public i64 patas() => 1;
 }
 
 class Perro : Animal {
 	@Override
-	public i64 patas() { return 4; }
+	public i64 patas() => 4;
 }
 
 // El que cumple la interfaz va APARTE, sin superclase, a proposito: una clase
@@ -36,7 +36,7 @@ class Perro : Animal {
 // para fijar el ascenso, no para arrastrar aquello.  El fallo tiene su propio
 // reproductor.
 class Loro : Habla {
-	public i64 decir() { return 10; }
+	public i64 decir() => 10;
 }
 
 class Jaula {
@@ -53,17 +53,13 @@ class Jaula {
 }
 
 // El retorno: se declara la base y se devuelve la subclase.
-Animal fabricar() {
-	return new Perro();
-}
+Animal fabricar() => new Perro();
 
-Habla fabricar_habla() {
-	return new Loro();
-}
+Habla fabricar_habla() => new Loro();
 
 // El argumento: se declara la base y se pasa la subclase.
-i64 patas_de(Animal a) { return a.patas(); }
-i64 dice(Habla h) { return h.decir(); }
+i64 patas_de(Animal a) => a.patas();
+i64 dice(Habla h) => h.decir();
 
 i32 main() {
 	// 1. Declarar con inicializador.

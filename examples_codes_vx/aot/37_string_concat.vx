@@ -28,6 +28,6 @@ i32 nested_demo() {
 	string a = "ab";
 	string b = "cd";
 	string c = "ef";
-	string r = a + b + c;    // "abcdef"
-	return (i32) r.length(); // 6
+	string r = a + b + c;   // "abcdef"
+	return (i32)r.length(); // 6
 }

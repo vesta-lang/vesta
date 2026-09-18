@@ -18,7 +18,7 @@ namespace ejemplos.argumentos_uniformes;
 
 typedef i64 Metros new;
 
-i64 doblar(i64 x) { return x * 2; }
+i64 doblar(i64 x) => x * 2;
 
 enum Caja {
 	ConNewtype(Metros),
@@ -26,25 +26,25 @@ enum Caja {
 }
 
 // 1. Funcion suelta.
-i64 f_newtype(Metros m) { return (i64) m; }
-i64 f_fn(cfn(i64) -> i64 cb) { return cb(21); }
+i64 f_newtype(Metros m) => (i64)m;
+i64 f_fn(cfn(i64) -> i64 cb) => cb(21);
 
 class K {
 	public i64 v;
 	// 2. Constructor.
-	public K(Metros m, cfn(i64) -> i64 cb) { this.v = (i64) m + cb(21); }
+	public K(Metros m, cfn(i64) -> i64 cb) { this.v = (i64)m + cb(21); }
 	// 3. Metodo.
-	public i64 m_newtype(Metros m) { return (i64) m; }
-	public i64 m_fn(cfn(i64) -> i64 cb) { return cb(21); }
+	public i64 m_newtype(Metros m) => (i64)m;
+	public i64 m_fn(cfn(i64) -> i64 cb) => cb(21);
 	// 4. Metodo estatico.
-	public static i64 s_newtype(Metros m) { return (i64) m; }
-	public static i64 s_fn(cfn(i64) -> i64 cb) { return cb(21); }
+	public static i64 s_newtype(Metros m) => (i64)m;
+	public static i64 s_fn(cfn(i64) -> i64 cb) => cb(21);
 }
 
 struct S {
 	// 5. Metodo de struct, y su estatico.
-	i64 m_newtype(Metros m) { return (i64) m; }
-	static i64 s_fn(cfn(i64) -> i64 cb) { return cb(21); }
+	i64 m_newtype(Metros m) => (i64)m;
+	static i64 s_fn(cfn(i64) -> i64 cb) => cb(21);
 }
 
 i32 main() {
@@ -58,7 +58,7 @@ i32 main() {
 	Caja c1 = Caja.ConNewtype(3);
 	Caja c2 = Caja.ConFn(doblar);
 	i64  v1 = 0_i64;
-	match (c1) { case ConNewtype(m) => { v1 = (i64) m; } case ConFn(f) => { v1 = 0; } }
+	match (c1) { case ConNewtype(m) => { v1 = (i64)m; } case ConFn(f) => { v1 = 0; } }
 	i64 v2 = 0_i64;
 	match (c2) { case ConNewtype(m) => { v2 = 0; } case ConFn(f) => { v2 = f(21); } }
 

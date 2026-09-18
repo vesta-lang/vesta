@@ -209,9 +209,7 @@ struct X86 {
 	}
 
 	// Offset relativo del ModR/M respecto a base.
-	public u64 modrm_off_rel() {
-		return this.rex_len() + this.op_bytes();
-	}
+	public u64 modrm_off_rel() => this.rex_len() + this.op_bytes();
 
 	// Hay byte SIB?  (mod!=3 y rm==4).
 	public u64 has_sib() {
@@ -227,9 +225,7 @@ struct X86 {
 		return 0;
 	}
 
-	public u64 sib_off_rel() {
-		return this.modrm_off_rel() + 1;
-	}
+	public u64 sib_off_rel() => this.modrm_off_rel() + 1;
 
 	// Longitud del desplazamiento segun el campo mod.
 	public u64 disp_len() {
@@ -249,9 +245,7 @@ struct X86 {
 		return 0;
 	}
 
-	public u64 disp_off_rel() {
-		return this.modrm_off_rel() + 1 + this.has_sib();
-	}
+	public u64 disp_off_rel() => this.modrm_off_rel() + 1 + this.has_sib();
 
 	// Longitud del inmediato segun el opcode.
 	public u64 imm_len() {
@@ -385,7 +379,7 @@ struct X86 {
 }
 
 i32 main() {
-	u8* code = (u8*) malloc(96);
+	u8* code = (u8*)malloc(96);
 
 	// Buffer limpio: los resolvers leen el byte0 como candidato a REX antes de
 	// escribir el opcode; para instrucciones SIN REX (push/ret/...) ese byte
@@ -448,7 +442,7 @@ i32 main() {
 	for (u64 bi = 0_u64; bi < pos; bi++) {
 		u8 by = *(u8*)(code + bi);
 		print(" ${by:hex}");
-		sum = sum + (i64) by;
+		sum = sum + (i64)by;
 	}
 	println("");
 
@@ -462,5 +456,5 @@ i32 main() {
 
 	println("bytes=${pos} sum=${sum}");
 	free(code);
-	return (i32) sum;
+	return (i32)sum;
 }

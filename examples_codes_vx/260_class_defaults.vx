@@ -30,7 +30,7 @@ class Ventana {
 		this.y = py;
 	// z NO se toca -> conserva su default (100).
 	}
-	public i32 area_z() { return this.z; }
+	public i32 area_z() => this.z;
 }
 
 // Herencia: Base aporta su default, Deriv el suyo.
@@ -41,7 +41,7 @@ class Base {
 class Panel : Base {
 	i32 panel_v = 30_i32;
 	public Panel() { super(); }
-	public i32 total() { return this.base_v + this.panel_v; }
+	public i32 total() => this.base_v + this.panel_v;
 }
 
 // Generico: el default de `n` se conserva en cada instanciacion.
@@ -49,7 +49,7 @@ class Contador<T> {
 	T   valor;
 	i32 n = 42_i32;
 	public Contador() { }
-	public i32 get_n() { return this.n; }
+	public i32 get_n() => this.n;
 }
 
 i32 main() {

@@ -21,13 +21,13 @@ u64 g_bg    = 0x00101830_u64; // color de fondo (azul muy oscuro)
 
 void fb_putpix(u64 x, u64 y, u64 color) {
 	u32* p = (u32*)(g_lfb + y * g_pitch + x * 4);
-	p[0] = (u32) color;
+	p[0] = (u32)color;
 }
 
 // Pinta toda la pantalla con el color de fondo.
 void fb_clear() {
 	u64  total = g_w * g_h;
-	u32* p     = (u32*) g_lfb;
+	u32* p     = (u32*)g_lfb;
 	u64  i     = 0_u64;
 	// pitch puede ser > ancho*4; recorremos por fila para respetarlo.
 	u64 y = 0_u64;
@@ -36,7 +36,7 @@ void fb_clear() {
 		u64 x    = 0_u64;
 		while (x < g_w) {
 			u32* q = (u32*)(g_lfb + base + x * 4);
-			q[0] = (u32) g_bg;
+			q[0] = (u32)g_bg;
 			x    = x + 1;
 		}
 		y = y + 1;
@@ -50,10 +50,10 @@ void fb_init() {
 	u16* w_p     = (u16*)(0x5000 + 0x12);
 	u16* h_p     = (u16*)(0x5000 + 0x14);
 	u32* lfb_p   = (u32*)(0x5000 + 0x28);
-	g_pitch = (u64) pitch_p[0];
-	g_w     = (u64) w_p[0];
-	g_h     = (u64) h_p[0];
-	g_lfb   = (u64) lfb_p[0];
+	g_pitch = (u64)pitch_p[0];
+	g_w     = (u64)w_p[0];
+	g_h     = (u64)h_p[0];
+	g_lfb   = (u64)lfb_p[0];
 	g_cols  = g_w / 8;
 	g_rows  = g_h / 16;
 	fb_clear();
@@ -61,13 +61,13 @@ void fb_init() {
 
 // Dibuja el glifo del caracter c en la celda (cx, cy).
 void fb_drawc(u64 c, u64 cx, u64 cy) {
-	u8* font = (u8*) 0x00060000;
+	u8* font = (u8*)0x00060000;
 	u64 gi   = c * 16;
 	u64 px0  = cx * 8;
 	u64 py0  = cy * 16;
 	u64 r    = 0_u64;
 	while (r < 16) {
-		u64 bits = (u64) font[gi + r];
+		u64 bits = (u64)font[gi + r];
 		u64 mask = 0x80_u64;
 		u64 b    = 0_u64;
 		while (b < 8) {
@@ -87,7 +87,7 @@ void fb_drawc(u64 c, u64 cx, u64 cy) {
 void fb_scroll() {
 	u64 row_bytes = g_pitch * 16;
 	u64 total     = g_pitch * g_h;
-	u8* lfb       = (u8*) g_lfb;
+	u8* lfb       = (u8*)g_lfb;
 	// copiar hacia arriba en bloques de 8 bytes (mas rapido que byte a byte).
 	u64 i   = 0_u64;
 	u64 lim = total - row_bytes;

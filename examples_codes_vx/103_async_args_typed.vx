@@ -25,15 +25,11 @@ namespace ejemplos.async_args_typed;
 
 // Caso 1: dos args i32, retorno i32.
 @Async
-i32 sum_i32(i32 a, i32 b) {
-	return a + b;
-}
+i32 sum_i32(i32 a, i32 b) => a + b;
 
 // Caso 2: tres args i64, retorno i64.
 @Async
-i64 sum_three(i64 a, i64 b, i64 c) {
-	return a + b + c;
-}
+i64 sum_three(i64 a, i64 b, i64 c) => a + b + c;
 
 // Caso 3: arg con coercion (mezcla de tipos).
 @Async
@@ -44,9 +40,7 @@ i32 combine(i32 base, i32 mult) {
 
 // Caso 4: retorno bool.
 @Async
-bool is_even(i32 n) {
-	return n % 2 == 0;
-}
+bool is_even(i32 n) => n % 2 == 0;
 
 i32 main() {
 	// Caso 1: 10 + 15 = 25

@@ -29,5 +29,5 @@ comptime u64 tolerante(u64 n) {
 
 i32 main() {
 	// 99 incumple la asercion; el `catch` la recoge y devuelve el de reserva.
-	return (i32) tolerante(99);
+	return (i32)tolerante(99);
 }

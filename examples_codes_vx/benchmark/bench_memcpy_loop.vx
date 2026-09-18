@@ -7,8 +7,8 @@
 
 i32 main() {
 	u64 N   = 1_048_576; // 1 MB
-	u8* src = (u8*) malloc(N);
-	u8* dst = (u8*) malloc(N);
+	u8* src = (u8*)malloc(N);
+	u8* dst = (u8*)malloc(N);
 
 	// Inicializar src con patron predecible.
 	u64 i = 0_u64;
@@ -29,7 +29,7 @@ i32 main() {
 	}
 
 	// Verificacion: leer un byte para que el compilador no elimine la copia.
-	i32 r = (i32) dst[1234];
+	i32 r = (i32)dst[1234];
 	free(src);
 	free(dst);
 	return r; // esperado: 1234 & 0xFF = 0xD2 = 210

@@ -18,6 +18,4 @@ const i64 V = asm_v();
 // 42 != 99 -> la compilacion debe fallar.
 static_assert(V == 99, "V debe ser 99");
 
-i32 main() {
-	return (i32) V;
-}
+i32 main() => (i32)V;

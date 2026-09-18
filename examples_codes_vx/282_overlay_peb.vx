@@ -202,15 +202,15 @@ struct PEB {
 
 		// --- modulos cargados: Ldr -> InLoadOrderModuleList (sub-overlays) ---
 		println("modulos cargados:");
-		LdrData ld    = LdrData((u8*) this.Ldr);
+		LdrData ld    = LdrData((u8*)this.Ldr);
 		u64     head  = this.Ldr + 0x10;
 		u64     cur   = ld.InLoadOrderFlink;
 		i32     count = 0_i32;
 		while (cur != head && cur != 0 && count < 64) {
-			LdrEntry m = LdrEntry((u8*) cur);
+			LdrEntry m = LdrEntry((u8*)cur);
 			if (m.DllBase != 0 && m.NameLen > 0) {
 				print("  ");
-				u8* nb     = (u8*) m.NameBuf; // BaseDllName UTF-16 -> byte bajo (ASCII)
+				u8* nb     = (u8*)m.NameBuf; // BaseDllName UTF-16 -> byte bajo (ASCII)
 				i32 j      = 0_i32;
 				i32 wchars = (i32)(m.NameLen / 2);
 				while (j < wchars && j < 128) {
@@ -225,7 +225,7 @@ struct PEB {
 		println("total_modulos=${count}");
 
 		// invariante: MZ en ImageBase + plataforma NT + al menos 1 modulo.
-		u8* ib = (u8*) this.ImageBaseAddress;
+		u8* ib = (u8*)this.ImageBaseAddress;
 		if (*(u8*)(ib + 0) == 0x4D && *(u8*)(ib + 1) == 0x5A
 			&& this.OSPlatformId == 2 && count > 0) { return 42; }
 		return 0;
@@ -238,7 +238,7 @@ i32 main() {
 		println("sin PEB (no Windows?)");
 		return 1;
 	}
-	PEB p = PEB((u8*) peb_ptr);
+	PEB p = PEB((u8*)peb_ptr);
 	println("PEB @ ${peb_ptr:hex}");
 	return p.dump(); // el overlay se disecciona a si mismo; 42 si OK
 }

@@ -151,11 +151,11 @@ i32 main() {
 	i64 lok    = 0_i64;
 	i64 ltotal = 0_i64;
 
-	char* s0  = (char*) section_start(".s_len0");
-	char* s5  = (char*) section_start(".s_len5");
-	char* s16 = (char*) section_start(".s_len16");
-	char* s17 = (char*) section_start(".s_len17");
-	char* s33 = (char*) section_start(".s_len33");
+	char* s0  = (char*)section_start(".s_len0");
+	char* s5  = (char*)section_start(".s_len5");
+	char* s16 = (char*)section_start(".s_len16");
+	char* s17 = (char*)section_start(".s_len17");
+	char* s33 = (char*)section_start(".s_len33");
 
 	ltotal = ltotal + 1;
 	if (simd_string.strlen_cstr(s0) == 0) { lok = lok + 1; }

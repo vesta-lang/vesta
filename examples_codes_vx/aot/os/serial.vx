@@ -38,17 +38,13 @@ void serial_putc(u64 c) {
 void serial_puts(char* s) {
 	u64 i = 0_u64;
 	while (s[i] != 0) {
-		serial_putc((u64) s[i]);
+		serial_putc((u64)s[i]);
 		i = i + 1;
 	}
 }
 
 // true si hay un byte disponible para leer (LSR bit 0 = data ready).
-bool serial_haskey() {
-	return (inb(0x03FD) & 0x01) != 0;
-}
+bool serial_haskey() => (inb(0x03FD) & 0x01) != 0;
 
 // Lee un byte recibido por COM1 (asume serial_haskey() == true).
-u64 serial_getc() {
-	return inb(0x03F8) & 0xFF;
-}
+u64 serial_getc() => inb(0x03F8) & 0xFF;

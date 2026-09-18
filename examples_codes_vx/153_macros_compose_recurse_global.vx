@@ -16,17 +16,15 @@ namespace ejemplos.macros_compose_recurse_global;
 //       @Macros pueden leer + escribir.  Util para id counters, tablas
 //       de simbolos acumuladas, cache de codigo, etc.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 mas_uno(i32 x) { return x + 1; }
-i32 sumar(i32 a, i32 b) { return a + b; }
+i32 doblar(i32 x) => x * 2;
+i32 mas_uno(i32 x) => x + 1;
+i32 sumar(i32 a, i32 b) => a + b;
 
 // ============================================
 // (1) COMPOSICION
 // ============================================
 @Macro
-comptime string M_inc(i64 n) {
-	return "mas_uno(" + to_str(n) + ")";
-}
+comptime string M_inc(i64 n) => "mas_uno(" + to_str(n) + ")";
 
 @Macro
 comptime string M_inc_double(i64 n) {

@@ -30,9 +30,7 @@ import std.types only usize;
 
 // Marca reconocible por posicion: si un byte no llega, o llega de otro sitio,
 // la comprobacion cae.
-u8 pattern(i64 i) {
-	return (u8)((i * 31 + 7) % 251);
-}
+u8 pattern(i64 i) => (u8)((i * 31 + 7) % 251);
 
 // Buffers estaticos grandes: las variantes `big`/`streaming` piden 1 KiB.
 // Se reservan de sobra para poder alinear dentro sin salirse.
@@ -42,7 +40,7 @@ u8[16_384] g_dst;
 // Prepara origen con el pattern y destino a cero, y devuelve el desplazamiento
 // que deja `&g_dst[off]` alineado a `alin` bytes.
 i64 align_offset(u8* base, i64 alin) {
-	i64 dir   = (i64) base;
+	i64 dir   = (i64)base;
 	i64 resto = dir % alin;
 	if (resto == 0) return 0;
 	return alin - resto;

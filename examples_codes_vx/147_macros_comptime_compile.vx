@@ -55,4 +55,4 @@ const string e2 = comptime_concat(e1, " + 10");
 const i64    r3 = comptime_compile(e2); // (3 * 4) + 10 = 22
 static_assert(r3 == 22, "macro encadenado: (3*4)+10");
 
-i32 main() { return 42; }
+i32 main() => 42;

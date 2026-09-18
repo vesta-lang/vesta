@@ -14,7 +14,7 @@ struct S {
 
 S mk() {
 	S r;
-	r.p  = (i64*) malloc(8);
+	r.p  = (i64*)malloc(8);
 	*r.p = 7;
 	return r;
 }

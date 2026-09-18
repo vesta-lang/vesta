@@ -18,6 +18,4 @@ u64 get_val() {
 	return x;
 }
 
-u64 main() {
-	return get_val();
-}
+u64 main() => get_val();

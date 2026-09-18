@@ -14,12 +14,12 @@ class Rect {
 		this.w = a;
 		this.h = b;
 	}
-	i32 area() { return this.w * this.h; }
+	i32 area() => this.w * this.h;
 }
 
 // `r` es un parametro: el optimizer no sabe su tipo concreto, pero el frontend
 // SI (Rect es hoja) -> CALL directo a Rect__area, compilable a nativo.
-i32 use(Rect r) { return r.area(); }
+i32 use(Rect r) => r.area();
 
 i32 main() {
 	Rect r = new Rect(6, 7); // heap: calloc + ctor + free al exit (RAII)

@@ -28,6 +28,4 @@ u64 bitops_then_answer() {
 	return 42;
 }
 
-u64 main() {
-	return bitops_then_answer();
-}
+u64 main() => bitops_then_answer();

@@ -27,5 +27,5 @@ void run() {
 i32 main() {
 	Counter.libs = 0;
 	run();
-	return (i32) Counter.libs; // 1
+	return (i32)Counter.libs; // 1
 }

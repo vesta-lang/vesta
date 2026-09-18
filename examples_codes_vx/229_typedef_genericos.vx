@@ -12,23 +12,23 @@ using Cantidad = i64;
 
 // #4: metodo generico.
 struct Caja {
-	i64 base;
-	U id<U>(U x) { return x; }
+	i64             base;
+	U id<U>(U x) => x;
 }
 
 // #6: concepto + bound.
 concept Num<T> = is_numeric<T>();
-i64 sumar < T : Num > (T a, T b) { return (i64)a + (i64)b; }
+i64 sumar < T : Num > (T a, T b) => (i64)a + (i64)b;
 
 // #7: especializacion total i64.
 struct Env<T> {
 	T v;
-	i64 cual() { return 1; }
+	i64 cual() => 1;
 }
 struct Env<i64> {
 	i64 v;
 	i64 extra;
-	i64 cual() { return 2; }
+	i64 cual() => 2;
 }
 
 i32 main() {

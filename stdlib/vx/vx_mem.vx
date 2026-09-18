@@ -60,7 +60,7 @@ extern "kernel32.dll" {
  * @param n   Numero de bytes a escribir.
  */
 void vx_memset(u64 dst, u8 val, u64 n) {
-	memset((u8*) dst, val, (usize) n);
+	memset((u8*)dst, val, (usize) n);
 }
 
 /**
@@ -77,7 +77,7 @@ void vx_memcpy(u64 dst, u64 src, u64 n) {
 	// que reparte por tamano y por juego de instrucciones.  Aqui habia un
 	// bucle de ocho bytes por vuelta que ni usaba los registros anchos ni
 	// llegaba a `rep movsb`.
-	memcpy((u8*) dst, (u8*) src, (usize) n);
+	memcpy((u8*)dst, (u8*)src, (usize) n);
 }
 
 /**
@@ -93,7 +93,7 @@ void vx_memcpy(u64 dst, u64 src, u64 n) {
 void vx_memmove(u64 dst, u64 src, u64 n) {
 	// Tambien la de `std.memory`: alli el caso hacia atras no es byte a byte
 	// como lo era aqui.
-	memmove((u8*) dst, (u8*) src, (usize) n);
+	memmove((u8*)dst, (u8*)src, (usize) n);
 }
 
 // =========================================================================
@@ -169,8 +169,8 @@ u64 vmem_reserve(u64 size, MemProt prot) {
 	// El nucleo devuelve el codigo de error como valor negativo pequeno; el
 	// caso corriente es MAP_FAILED (-1).  Cualquiera de ellos es "no hay
 	// arena", que es lo unico que el llamante puede hacer distinto.
-	if (((i64) r) < 0) return 0;
-	return (u64) r;
+	if (((i64)r) < 0) return 0;
+	return (u64)r;
 }
 
 /**
@@ -462,9 +462,7 @@ void __vmem_free_impl(u64 payload) {
  * @return Puntero al bloque.
  */
 @AllocatorOverride
-i64* __vx_malloc(u64 size) {
-	return (i64*)__vmem_alloc(size);
-}
+i64* __vx_malloc(u64 size) => (i64*)__vmem_alloc(size);
 
 /**
  * @brief Liberador por defecto (via @c @AllocatorOverride; retorno void -> free).

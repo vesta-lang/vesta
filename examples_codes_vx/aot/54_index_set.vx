@@ -75,13 +75,13 @@ i32 main() {
 	s[0] = 'b'; // "bat"
 	s[2] = 't'; // "bat" (sin cambio real, valida store)
 	// s[0]='b'(98), s[1]='a'(97), s[2]='t'(116).
-	i32 str_sso = (i32) s[0] + (i32) s[1] + (i32) s[2]; // 98+97+116 = 311
+	i32 str_sso = (i32)s[0] + (i32)s[1] + (i32)s[2]; // 98+97+116 = 311
 
 	// (B) value-string HEAP: cadena > 22 chars (buffer malloc). Mutar
 	// un char del medio in-place; no cambia la longitud.
 	string h = "0123456789abcdefghijklmnopqrst"; // 30 chars -> HEAP
 	h[10] = 'Z';                                 // posicion 10 ('a') -> 'Z'(90)
-	i32 str_heap = (i32) h[10];                  // 90
+	i32 str_heap = (i32)h[10];                   // 90
 
 	// (A) STRUCT index-set.
 	Triple t;

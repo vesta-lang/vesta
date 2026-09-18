@@ -22,29 +22,27 @@ struct Figura {
 	i64 lado;
 	// Metodo virtual base: el default para cualquier Figura.
 	@Virtual
-	public i64 area() { return 0; }
-	public i64 get_lado() { return this.lado; } // NO virtual: dispatch estatico
+	public i64 area() => 0;
+	public i64 get_lado() => this.lado; // NO virtual: dispatch estatico
 }
 
 struct Cuadrado : Figura {
 	// Redefine area() -- mismo slot de vtable que Figura.area().
 	@Override
 	@Virtual
-	public i64 area() { return this.lado * this.lado; }
+	public i64 area() => this.lado * this.lado;
 }
 
 struct Triangulo : Figura {
 	i64 altura;
 	@Override
 	@Virtual
-	public i64 area() { return (this.lado * this.altura) / 2; }
+	public i64 area() => (this.lado * this.altura) / 2;
 }
 
 // Recibe cualquier Figura por puntero: el dispatch de area() es DINAMICO.
 // El mismo codigo llama al area() del tipo real en cada caso.
-i64 area_de(Figura* f) {
-	return f.area();
-}
+i64 area_de(Figura* f) => f.area();
 
 i32 main() {
 	Cuadrado c;

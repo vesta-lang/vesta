@@ -15,7 +15,7 @@
 
 @NoIdiom
 public void hoja(u8* p) {
-	u64* q = (u64*) p;
+	u64* q = (u64*)p;
 	q[0] = 0;
 	q[1] = 0;
 	q[2] = 0;

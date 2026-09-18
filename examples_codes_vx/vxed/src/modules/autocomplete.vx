@@ -109,10 +109,10 @@ public class AutoComplete {
 		this.names_used = 0;
 		i32 i = 0_i32;
 		while (i < b.length) {
-			i32 c = (i32) b.data[i];
+			i32 c = (i32)b.data[i];
 			if (this.is_id_start(c) == 1) {
 				i32 j = i + 1;
-				while (j < b.length && this.is_id_char((i32) b.data[j]) == 1) {
+				while (j < b.length && this.is_id_char((i32)b.data[j]) == 1) {
 					j = j + 1;
 				}
 				this.add_token(b.data + i, j - i);
@@ -130,7 +130,7 @@ public class AutoComplete {
 		i32 i          = b.cursor - 1;
 		i32 chars_back = 0_i32;
 		while (i >= 0 && chars_back < AC_MAX_NAME - 1) {
-			i32 c = (i32) b.data[i];
+			i32 c = (i32)b.data[i];
 			if (this.is_id_char(c) == 0) break;
 			i          = i - 1;
 			chars_back = chars_back + 1;
@@ -205,7 +205,7 @@ public class AutoComplete {
 				if (tlen > cap_w - 2) tlen  = cap_w - 2;
 				i32                   k     = 0_i32;
 				while (k < tlen) {
-					print_char((i32) tok[k]);
+					print_char((i32)tok[k]);
 					k = k + 1;
 				}
 				i32 used = 1 + tlen;

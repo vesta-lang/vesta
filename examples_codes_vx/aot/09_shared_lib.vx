@@ -1,2 +1,2 @@
-i32 add(i32 a, i32 b) { return a + b; }
-i32 triple(i32 x) { return x + x + x; }
+i32 add(i32 a, i32 b) => a + b;
+i32 triple(i32 x) => x + x + x;

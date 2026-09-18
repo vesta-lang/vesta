@@ -20,7 +20,7 @@ i32 main() {
 
 	// Puntero nulo.
 	try {
-		i64* p = (i64*) 0;
+		i64* p = (i64*)0;
 		i64  v = *p;
 		println("no deberia llegar: ${v}");
 	} catch (FatalError e) {
@@ -30,7 +30,7 @@ i32 main() {
 	// Una direccion que no esta mapeada.  Se hace DESPUES del primero: si la
 	// recuperacion dejase el proceso tocado, esta segunda no llegaria a correr.
 	try {
-		i64* malo = (i64*) 0xDEADBEEF;
+		i64* malo = (i64*)0xDEADBEEF;
 		i64  v    = *malo;
 		println("no deberia llegar: ${v}");
 	} catch (FatalError e) {
@@ -40,7 +40,7 @@ i32 main() {
 	// Escritura, no lectura: el sistema lo cuenta como otro tipo de acceso y la
 	// recuperacion tiene que valer igual.
 	try {
-		i64* p = (i64*) 0;
+		i64* p = (i64*)0;
 		*    p = 1;
 		println("no deberia llegar");
 	} catch (FatalError e) {

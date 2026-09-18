@@ -26,9 +26,7 @@ i32 compute_length(borrow<i64> p) {
 	return digits;
 }
 
-unique<i64> consume(unique<i64> p) {
-	return p;
-}
+unique<i64> consume(unique<i64> p) => p;
 
 i32 main() {
 	unique<i64> data = unique_box(123_456);

@@ -12,11 +12,11 @@ u64 g_attr = 0x1F_u64; // atributo de color (blanco sobre azul por defecto)
 
 // Limpia toda la pantalla con el atributo dado y resetea el cursor.
 void clear(u64 attr) {
-	u16* vga  = (u16*) 0x000B8000;
+	u16* vga  = (u16*)0x000B8000;
 	u64  cell = (attr << 8) | 0x20; // espacio
 	u64  i    = 0_u64;
 	while (i < 2000) {
-		vga[i] = (u16) cell;
+		vga[i] = (u16)cell;
 		i      = i + 1;
 	}
 	g_row  = 0;
@@ -26,7 +26,7 @@ void clear(u64 attr) {
 
 // Sube todas las filas una posicion (scroll) y limpia la ultima.
 void scroll() {
-	u16* vga = (u16*) 0x000B8000;
+	u16* vga = (u16*)0x000B8000;
 	u64  i   = 0_u64;
 	while (i < 1920) { // 80*24
 		vga[i] = vga[i + 80];
@@ -34,7 +34,7 @@ void scroll() {
 	}
 	u64 cell = (g_attr << 8) | 0x20;
 	while (i < 2000) {
-		vga[i] = (u16) cell;
+		vga[i] = (u16)cell;
 		i      = i + 1;
 	}
 }
@@ -46,7 +46,7 @@ void set_color(u64 attr) {
 
 // Escribe un caracter avanzando el cursor (maneja '\n' y scroll).
 void putc(u64 c) {
-	u16* vga = (u16*) 0x000B8000;
+	u16* vga = (u16*)0x000B8000;
 	if (c == 8) { // backspace: borra el caracter previo
 		if (g_col > 0) {
 			g_col = g_col - 1;
@@ -77,7 +77,7 @@ void putc(u64 c) {
 void puts(char* s) {
 	u64 i = 0_u64;
 	while (s[i] != 0) {
-		putc((u64) s[i]);
+		putc((u64)s[i]);
 		i = i + 1;
 	}
 }
@@ -88,7 +88,7 @@ void dec(u64 v) {
 	lib.itoa(v, buf);
 	u64 i = 0_u64;
 	while (buf[i] != 0) {
-		putc((u64) buf[i]);
+		putc((u64)buf[i]);
 		i = i + 1;
 	}
 }
@@ -99,7 +99,7 @@ void hex(u64 v) {
 	lib.itoa_hex(v, buf);
 	u64 i = 0_u64;
 	while (buf[i] != 0) {
-		putc((u64) buf[i]);
+		putc((u64)buf[i]);
 		i = i + 1;
 	}
 }

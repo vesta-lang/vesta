@@ -22,17 +22,11 @@ namespace ejemplos.topfn_as_fnvalue;
 //   compose = compose_apply(doubler, inc, 10) -> double(inc(10)) = 22
 //   R0 = sum + prod + sum_inc + compose - 73 = 55 + 24 + 14 + 22 - 73 = 42
 
-i32 add2(i32 a, i32 b) {
-	return a + b;
-}
+i32 add2(i32 a, i32 b) => a + b;
 
-i32 mul2(i32 a, i32 b) {
-	return a * b;
-}
+i32 mul2(i32 a, i32 b) => a * b;
 
-i32 inc(i32 v) {
-	return v + 1;
-}
+i32 inc(i32 v) => v + 1;
 
 i32 reduce(i32[] arr, i32 n, i32 init, fn(i32, i32) -> i32 op) {
 	i32 acc = init;
@@ -52,9 +46,7 @@ void map_inplace(i32[] arr, i32 n, fn(i32) -> i32 f) {
 	}
 }
 
-i32 compose_apply(fn(i32) -> i32 f, fn(i32) -> i32 g, i32 x) {
-	return f(g(x));
-}
+i32 compose_apply(fn(i32) -> i32 f, fn(i32) -> i32 g, i32 x) => f(g(x));
 
 i32 main() {
 	// 1) reduce(xs, 10, 0, add2): SUM 1..10 = 55  (top-level fn como arg)

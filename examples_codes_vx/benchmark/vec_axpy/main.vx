@@ -35,5 +35,5 @@ i32 main() {
 	f64 r = a[N / 2]; // converge a 2*b[N/2] = 16
 	free(a);
 	free(b);
-	return (i32)((i64) r & 0xFF);
+	return (i32)((i64)r & 0xFF);
 }

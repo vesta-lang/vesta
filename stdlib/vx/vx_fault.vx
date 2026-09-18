@@ -195,9 +195,7 @@ struct Hallazgo {
 /// Redondea al alza a multiplo de 4.  Los campos de la seccion se rellenan para
 /// que las lecturas de 4 bytes queden alineadas: x86 toleraria leerlas sin
 /// alinear, pero otras arquitecturas no.
-uintptr __vxf_alinea4(uintptr v) {
-	return (v + 3) & ~3;
-}
+uintptr __vxf_alinea4(uintptr v) => (v + 3) & ~3;
 
 /// Localiza la entrada @p idx de la tabla de textos.  Nombres e instrucciones
 /// comparten tabla: la misma cadena aparece en muchos tramos y repetirla
@@ -205,10 +203,10 @@ uintptr __vxf_alinea4(uintptr v) {
 Tramo __vxf_texto(uintptr tabla, u32 idx) {
 	uintptr e = tabla + 4; // tras la cuenta de entradas
 	for (u32 k = 0_u32; k < idx; k++) {
-		DbgTexto t = DbgTexto((u8*) e);
+		DbgTexto t = DbgTexto((u8*)e);
 		e = __vxf_alinea4(e + 4 + t.len);
 	}
-	DbgTexto cab = DbgTexto((u8*) e);
+	DbgTexto cab = DbgTexto((u8*)e);
 	Tramo    t;
 	t.dir = (char*)(e + 4);
 	t.len = cab.len;
@@ -249,7 +247,7 @@ Hallazgo __vxf_buscar(uintptr off) {
 	if (base == 0 || fin <= base + DBG_RUTA) {
 		return h;
 	}
-	DbgCabecera cab = DbgCabecera((u8*) base);
+	DbgCabecera cab = DbgCabecera((u8*)base);
 	if (cab.magic != DBG_MAGIC) {
 		return h; // no es nuestra seccion
 	}
@@ -262,7 +260,7 @@ Hallazgo __vxf_buscar(uintptr off) {
 
 	uintptr c = base + __vxf_alinea4(DBG_RUTA + cab.ruta_len);
 	for (u32 k = 0_u32; k < cab.n_fn; k++) {
-		DbgFuncion ent    = DbgFuncion((u8*) c);
+		DbgFuncion ent    = DbgFuncion((u8*)c);
 		uintptr    nombre = c + DBG_FN_NOMBRE;
 		uintptr    puntos = __vxf_alinea4(nombre + ent.nom_len);
 
@@ -292,7 +290,7 @@ Hallazgo __vxf_buscar(uintptr off) {
 			return h; // el prologo no viene de ninguna linea escrita
 		}
 
-		h.funcion.dir = (char*) nombre;
+		h.funcion.dir = (char*)nombre;
 		h.funcion.len = ent.nom_len;
 		h.linea       = linea;
 		h.col         = col;
@@ -389,7 +387,7 @@ void __vxf_cadena(uintptr sp) {
 	u32     vistos = 0_u32;
 	uintptr tope   = sp + CADENA_MAX_BYTES;
 	for (uintptr a = sp; a < tope && vistos < CADENA_MAX_MARCOS; a += 8) {
-		uintptr* ranura = (uintptr*) a;
+		uintptr* ranura = (uintptr*)a;
 		uintptr  v      = ranura[0];
 		if (v < texto || v >= fin_texto) {
 			continue;
@@ -419,11 +417,11 @@ i32 __vx_fault_handler(uintptr info) {
 		return SEGUIR_BUSCANDO;
 	}
 	__vxf_dentro = 1;
-	ExcPointers p = ExcPointers((u8*) info);
+	ExcPointers p = ExcPointers((u8*)info);
 	if (p.record == 0) {
 		return SEGUIR_BUSCANDO;
 	}
-	ExcRecord r = ExcRecord((u8*) p.record);
+	ExcRecord r = ExcRecord((u8*)p.record);
 
 	u32 salida = 0_u32;
 	if (r.code == Exc.DIVISION_CERO) {
@@ -447,7 +445,7 @@ i32 __vx_fault_handler(uintptr info) {
 
 	__vxf_donde(r.address);
 	if (p.context != 0) {
-		CtxX64 ctx = CtxX64((u8*) p.context);
+		CtxX64 ctx = CtxX64((u8*)p.context);
 		__vxf_cadena(ctx.rsp);
 	}
 	flush(); // el proceso muere aqui: nadie vaciara el buffer despues
@@ -509,7 +507,7 @@ void __vxf_exit(i64 code) {
 @Target("!os:windows && arch:x86_64")
 void __vx_fault_signal(i32 sig, uintptr info, uintptr uc) {
 	if (__vxf_dentro != 0) {
-		__vxf_exit(128 + (i64) sig); // el fallo viene de nosotros
+		__vxf_exit(128 + (i64)sig); // el fallo viene de nosotros
 	}
 	__vxf_dentro = 1;
 
@@ -525,18 +523,18 @@ void __vx_fault_signal(i32 sig, uintptr info, uintptr uc) {
 		println("error fatal: abortado por el programa [VX7011]");
 	}
 	if (uc != 0) {
-		UCtxX64 ctx = UCtxX64((u8*) uc);
+		UCtxX64 ctx = UCtxX64((u8*)uc);
 		__vxf_donde(ctx.rip);
 		__vxf_cadena(ctx.rsp);
 	}
 	flush(); // el proceso muere aqui: nadie vaciara el buffer despues
-	__vxf_exit(128 + (i64) sig);
+	__vxf_exit(128 + (i64)sig);
 }
 
 /// rt_sigaction(sig, act, oact, tam_del_conjunto).
 @Target("!os:windows && arch:x86_64")
 void __vxf_hook(i32 sig, uintptr act) {
-	register("rdi") i64     a1 = (i64) sig;
+	register("rdi") i64     a1 = (i64)sig;
 	register("rsi") uintptr a2 = act;
 	register("rdx") i64     a3 = 0_i64;
 	register("r10") i64     a4 = SIGSET_TAM;

@@ -6,7 +6,7 @@
 void memset(u8* dst, u64 val, u64 n) {
 	u64 i = 0_u64;
 	while (i < n) {
-		dst[i] = (u8) val;
+		dst[i] = (u8)val;
 		i      = i + 1;
 	}
 }

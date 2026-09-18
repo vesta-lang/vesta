@@ -90,7 +90,7 @@ public i64 dir_open(u8* spec, u8* finddata) {
 @cold
 public i32 dir_next(i64 handle, u8* finddata) {
 	ensure_loaded();
-	return (i32) ffi_call(g_findnext, handle, finddata);
+	return (i32)ffi_call(g_findnext, handle, finddata);
 }
 
 @cold
@@ -106,7 +106,7 @@ public u8* getcwd_into(u8* out, i32 cap) {
 	ensure_loaded();
 	i64 r = ffi_call(g_getcwd, out, cap);
 	if (r == 0) return null;
-	return (u8*) r;
+	return (u8*)r;
 }
 
 // =============================================================================

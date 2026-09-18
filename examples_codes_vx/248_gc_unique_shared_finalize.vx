@@ -32,7 +32,7 @@ gc<unique<i64, del>> crea_unique() {
 
 i32 main() {
 	Trace.frees = 0;
-	crea_unique();            // box unique escapado (recurso via deleter `del`)
-	gc_finalize_all();        // finaliza el box -> del() corre una vez
-	return (i32) Trace.frees; // 1
+	crea_unique();           // box unique escapado (recurso via deleter `del`)
+	gc_finalize_all();       // finaliza el box -> del() corre una vez
+	return (i32)Trace.frees; // 1
 }

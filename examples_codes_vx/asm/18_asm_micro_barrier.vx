@@ -20,6 +20,4 @@ u64 barrier_then_answer() {
 	return 42;
 }
 
-u64 main() {
-	return barrier_then_answer();
-}
+u64 main() => barrier_then_answer();

@@ -106,8 +106,8 @@ public void memcpy_c(u8* dst, u8* src, usize n) {
 	usize off   = 0;
 	// Cuerpo: de palabra en palabra mientras quepa una entera.
 	usize  palabras = total / ANCHO;
-	usize* dw       = (usize*) dst;
-	usize* sw       = (usize*) src;
+	usize* dw       = (usize*)dst;
+	usize* sw       = (usize*)src;
 	for (usize i = 0; i < palabras; i++) {
 		dw[i] = sw[i];
 	}
@@ -158,8 +158,8 @@ public void memcpy_tiny(u8* dst, u8* src, usize n) {
 		return;
 	}
 	if (total >= 32) {
-		u64* d = (u64*) dst;
-		u64* s = (u64*) src;
+		u64* d = (u64*)dst;
+		u64* s = (u64*)src;
 		d[0] = s[0];
 		d[1] = s[1];
 		d[2] = s[2];
@@ -173,8 +173,8 @@ public void memcpy_tiny(u8* dst, u8* src, usize n) {
 		return;
 	}
 	if (total >= 16) {
-		u64* d = (u64*) dst;
-		u64* s = (u64*) src;
+		u64* d = (u64*)dst;
+		u64* s = (u64*)src;
 		d[0] = s[0];
 		d[1] = s[1];
 		u64* dz = (u64*)(dst + total - 16);
@@ -184,8 +184,8 @@ public void memcpy_tiny(u8* dst, u8* src, usize n) {
 		return;
 	}
 	if (total >= 8) {
-		u64* d = (u64*) dst;
-		u64* s = (u64*) src;
+		u64* d = (u64*)dst;
+		u64* s = (u64*)src;
 		d[0] = s[0];
 		u64* dz = (u64*)(dst + total - 8);
 		u64* sz = (u64*)(src + total - 8);
@@ -193,8 +193,8 @@ public void memcpy_tiny(u8* dst, u8* src, usize n) {
 		return;
 	}
 	if (total >= 4) {
-		u32* d = (u32*) dst;
-		u32* s = (u32*) src;
+		u32* d = (u32*)dst;
+		u32* s = (u32*)src;
 		d[0] = s[0];
 		u32* dz = (u32*)(dst + total - 4);
 		u32* sz = (u32*)(src + total - 4);
@@ -388,19 +388,19 @@ public void memset_c(u8* dst, u8 val, usize n) {
 		patron = patron | (patron << 32);
 	}
 	usize  palabras = total / ANCHO;
-	usize* dw       = (usize*) dst;
+	usize* dw       = (usize*)dst;
 	for (usize i = 0; i < palabras; i++) {
 		dw[i] = patron;
 	}
 	usize off = palabras * ANCHO;
 	if (off + 4 <= total) {
 		u32* d4 = (u32*)(dst + off);
-		d4[0] = (u32) patron;
+		d4[0] = (u32)patron;
 		off   = off + 4;
 	}
 	if (off + 2 <= total) {
 		u16* d2 = (u16*)(dst + off);
-		d2[0] = (u16) patron;
+		d2[0] = (u16)patron;
 		off   = off + 2;
 	}
 	if (off < total) {
@@ -440,9 +440,9 @@ public void memset_tiny(u8* dst, u8 val, usize n) {
 		return;
 	}
 	// 0x0101010101010101: el byte replicado a los ocho de la palabra.
-	u64 pat = ((u64) val) * 72_340_172_838_076_673;
+	u64 pat = ((u64)val) * 72_340_172_838_076_673;
 	if (total >= 32) {
-		u64* d = (u64*) dst;
+		u64* d = (u64*)dst;
 		d[0] = pat;
 		d[1] = pat;
 		d[2] = pat;
@@ -455,7 +455,7 @@ public void memset_tiny(u8* dst, u8 val, usize n) {
 		return;
 	}
 	if (total >= 16) {
-		u64* d = (u64*) dst;
+		u64* d = (u64*)dst;
 		d[0] = pat;
 		d[1] = pat;
 		u64* dz = (u64*)(dst + total - 16);
@@ -464,24 +464,24 @@ public void memset_tiny(u8* dst, u8 val, usize n) {
 		return;
 	}
 	if (total >= 8) {
-		u64* d = (u64*) dst;
+		u64* d = (u64*)dst;
 		d[0] = pat;
 		u64* dz = (u64*)(dst + total - 8);
 		dz[0] = pat;
 		return;
 	}
 	if (total >= 4) {
-		u32* d = (u32*) dst;
-		d[0] = (u32) pat;
+		u32* d = (u32*)dst;
+		d[0] = (u32)pat;
 		u32* dz = (u32*)(dst + total - 4);
-		dz[0] = (u32) pat;
+		dz[0] = (u32)pat;
 		return;
 	}
 	if (total >= 2) {
-		u16* d = (u16*) dst;
-		d[0] = (u16) pat;
+		u16* d = (u16*)dst;
+		d[0] = (u16)pat;
 		u16* dz = (u16*)(dst + total - 2);
-		dz[0] = (u16) pat;
+		dz[0] = (u16)pat;
 		return;
 	}
 	dst[0] = val;

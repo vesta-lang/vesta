@@ -28,24 +28,24 @@ void ensure_loaded() {
 	// Reservar buffers en host memory.  INPUT_RECORD son 20 bytes en x64.
 	u8* irec  = malloc(32);
 	u8* nread = malloc(8);
-	g_irec_buf  = (i64) irec;
-	g_nread_buf = (i64) nread;
+	g_irec_buf  = (i64)irec;
+	g_nread_buf = (i64)nread;
 	g_init      = 1;
 }
 
 // Lee WORD (2 bytes) little-endian desde u8* buf en offset dado.
 i32 read_u16_le(u8* buf, i32 off) {
-	i32 lo = (i32) buf[off];
-	i32 hi = (i32) buf[off + 1];
+	i32 lo = (i32)buf[off];
+	i32 hi = (i32)buf[off + 1];
 	return (hi << 8) | lo;
 }
 
 // Lee DWORD (4 bytes) little-endian desde u8* buf en offset dado.
 i32 read_u32_le(u8* buf, i32 off) {
-	i32 b0 = (i32) buf[off];
-	i32 b1 = (i32) buf[off + 1];
-	i32 b2 = (i32) buf[off + 2];
-	i32 b3 = (i32) buf[off + 3];
+	i32 b0 = (i32)buf[off];
+	i32 b1 = (i32)buf[off + 1];
+	i32 b2 = (i32)buf[off + 2];
+	i32 b3 = (i32)buf[off + 3];
 	return (b3 << 24) | (b2 << 16) | (b1 << 8) | b0;
 }
 
@@ -131,7 +131,7 @@ i32 map_win_vk(i32 vk, i32 cks) {
 // evento no es KEY_EVENT down con tecla mapeable, descarta y reintenta.
 public i32 read_key_blocking() {
 	ensure_loaded();
-	u8* irec  = (u8*) g_irec_buf;
+	u8* irec  = (u8*)g_irec_buf;
 	i64 nread = g_nread_buf;
 
 	while (1) {
@@ -156,7 +156,7 @@ public i32 read_key_blocking() {
 		if (key_down == 0) continue;
 
 		i32 vk    = read_u16_le(irec, 10);
-		i32 ascii = (i32) irec[14]; // uChar.AsciiChar en byte bajo
+		i32 ascii = (i32)irec[14]; // uChar.AsciiChar en byte bajo
 		i32 cks   = read_u32_le(irec, 16);
 
 		// 1. Tecla especial (flecha/F1/Home/End/etc.) -- prioridad maxima.
@@ -175,6 +175,4 @@ public i32 read_key_blocking() {
 // Compat shim: el codigo viejo podria llamar poll_key.  Con ReadConsoleInputA
 // el patron es bloqueante directo; retornamos KEY_NONE para sigificar
 // "no hay tecla disponible sin bloquear" (no se usa en el editor actual).
-public i32 poll_key() {
-	return keys.KEY_NONE;
-}
+public i32 poll_key() => keys.KEY_NONE;

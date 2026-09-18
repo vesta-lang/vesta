@@ -40,9 +40,7 @@ T maximo < T : Comparable > (T a, T b) {
 }
 
 // ---- 6: clausula `where` con concepto de usuario -------------------------
-T sumar<T>(T a, T b) where T: MiNumero {
-	return a + b;
-}
+T sumar<T>(T a, T b) where T: MiNumero => a + b;
 
 // ---- composicion + where ------------------------------------------------
 T elegir<T>(T a, T b) where T: Ordenable {
@@ -52,23 +50,23 @@ T elegir<T>(T a, T b) where T: Ordenable {
 
 // ---- 7: bound inline en STRUCT generico ----------------------------------
 struct Caja < T : CabeEnReg > {
-	T v;
-	T leer() { return this.v; }
+	T                v;
+	T leer() => this.v;
 }
 
 // ---- 7: bound estructural en funcion + clase con area() ------------------
 class Cuadrado {
 	i64 lado;
 	Cuadrado(i64 l) { this.lado = l; }
-	i64 area() { return this.lado * this.lado; }
+	i64 area() => this.lado * this.lado;
 }
 
-i64 pintar < T : Dibujable > (T fig) { return fig.area(); }
+i64 pintar < T : Dibujable > (T fig) => fig.area();
 
 // ---- 7: bound en METODO generico -----------------------------------------
 struct Acumulador {
-	i64 base;
-	U combinar < U : Numeric > (U x) { return (U) this.base + x; }
+	i64                                                 base;
+	U combinar < U : Numeric > (U x) => (U) this.base + x;
 }
 
 i32 main() {

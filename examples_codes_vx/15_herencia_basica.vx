@@ -22,13 +22,9 @@ class Animal {
 		this.edad = e;
 	}
 
-	public i32 vivir() {
-		return this.edad * 10;
-	}
+	public i32 vivir() => this.edad * 10;
 
-	public i32 sonido() {
-		return 1;
-	}
+	public i32 sonido() => 1;
 }
 
 class Perro : Animal {
@@ -39,9 +35,7 @@ class Perro : Animal {
 	}
 
 	@Override
-	public i32 sonido() {
-		return 99;
-	}
+	public i32 sonido() => 99;
 }
 
 i32 main() {

@@ -29,8 +29,8 @@ class Pair<A, B> {
 		this.first  = a;
 		this.second = b;
 	}
-	public A get_first() { return this.first; }
-	public B get_second() { return this.second; }
+	public A get_first() => this. first;
+	public B get_second() => this.second;
 }
 
 class Triple<X, Y, Z> {
@@ -42,7 +42,7 @@ class Triple<X, Y, Z> {
 		this.y = y;
 		this.z = z;
 	}
-	public X get_x() { return this.x; }
+	public X get_x() => this.x;
 }
 
 i32 main() {

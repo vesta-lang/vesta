@@ -16,9 +16,7 @@ void por_puntero(i64* p) {
 	*p = 9_i64;
 }
 
-i64 lee(in i64* p) {
-	return *p;
-}
+i64 lee(in i64* p) => *p;
 
 i64 main() {
 	// 1. La marca se cae al guardar la funcion.

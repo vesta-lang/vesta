@@ -24,9 +24,7 @@ struct Divisor {
 	 * @param x Dividendo.
 	 * @return El cociente, si el divisor no es cero.
 	 */
-	i64 aplicar(i64 x) {
-		return x / this.valor;
-	}
+	i64 aplicar(i64 x) => x / this.valor;
 }
 
 /**
@@ -78,5 +76,5 @@ i32 main() {
 
 	Calculadora c = new Calculadora();
 	println("antes de dividir");
-	return (i32) c.calcular(42, d);
+	return (i32)c.calcular(42, d);
 }

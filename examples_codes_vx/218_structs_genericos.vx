@@ -12,14 +12,14 @@ namespace ejemplos.structs_genericos;
 // `field_name<T>`, `offsetof<T>`).
 
 struct Caja<T> {
-	T dato;
-	T leer() { return this.dato; } // metodo generico
+	T                dato;
+	T leer() => this.dato; // metodo generico
 }
 
 struct Par<K, V> {
-	K clave;
-	V valor;
-	V get_valor() { return this.valor; }
+	K                     clave;
+	V                     valor;
+	V get_valor() => this.valor;
 }
 
 i32 main() {

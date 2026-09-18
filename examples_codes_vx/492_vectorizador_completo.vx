@@ -91,9 +91,9 @@ i64 scalar_i64(i64* c, i64* a, i64 k, i64 n) {
 }
 
 i32 main() {
-	i64* a = (i64*) malloc(N * 8);
-	i64* b = (i64*) malloc(N * 8);
-	i64* c = (i64*) malloc(N * 8);
+	i64* a = (i64*)malloc(N * 8);
+	i64* b = (i64*)malloc(N * 8);
+	i64* c = (i64*)malloc(N * 8);
 
 	for (i64 i = 0_i64; i < N; i = i + 1) {
 		a[i] = i;

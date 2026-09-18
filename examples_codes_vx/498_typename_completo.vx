@@ -17,9 +17,9 @@ struct Punto {
 	i64 y;
 }
 
-class Animal { public i64 patas() { return 4; } }
+class Animal { public i64 patas() => 4; }
 
-i64 cuenta(string s, string esperado) { return s.equals(esperado) ? 1 : 0; }
+i64 cuenta(string s, string esperado) => s.equals(esperado) ? 1 : 0;
 
 i32 main() {
 	i64 ok = 0_i64;

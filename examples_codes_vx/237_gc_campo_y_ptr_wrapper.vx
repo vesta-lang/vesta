@@ -21,5 +21,5 @@ class Wrap {
 i32 main() {
 	Wrap w = new Wrap();
 	w.n = new Nodo(42);
-	return (i32) w.n.v;
+	return (i32)w.n.v;
 }

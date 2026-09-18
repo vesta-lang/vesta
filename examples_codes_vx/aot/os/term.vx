@@ -37,7 +37,7 @@ void tputc(u64 c) {
 void tputs(char* s) {
 	u64 i = 0_u64;
 	while (s[i] != 0) {
-		tputc((u64) s[i]);
+		tputc((u64)s[i]);
 		i = i + 1;
 	}
 }
@@ -49,10 +49,10 @@ void tdec(i64 v) {
 		v = 0 - v;
 	}
 	u8 b[24];
-	lib.itoa((u64) v, b);
+	lib.itoa((u64)v, b);
 	u64 i = 0_u64;
 	while (b[i] != 0) {
-		tputc((u64) b[i]);
+		tputc((u64)b[i]);
 		i = i + 1;
 	}
 }
@@ -77,7 +77,7 @@ u64 read_line(u8* buf, u64 max) {
 		}
 		if (c >= 32 && c < 127) {
 			if (n < max - 1) {
-				buf[n] = (u8) c;
+				buf[n] = (u8)c;
 				n      = n + 1;
 				tputc(c);
 			}

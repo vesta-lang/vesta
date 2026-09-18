@@ -161,9 +161,7 @@ public struct Wide128 {
 	 * @brief Trunca el valor a sus 64 bits menos significativos.
 	 * @return El limb bajo.
 	 */
-	public u64 to_u64() {
-		return this.lo64;
-	}
+	public u64 to_u64() => this.lo64;
 
 	/**
 	 * @brief Representacion legible, en hexadecimal.
@@ -379,17 +377,13 @@ public struct Wide128 {
 	 * @brief Comprueba si el valor es cero.
 	 * @return `true` si ambos limbs son 0.
 	 */
-	public bool is_zero() {
-		return (this.lo64 == 0) && (this.hi64 == 0);
-	}
+	public bool is_zero() => (this.lo64 == 0) && (this.hi64 == 0);
 
 	/**
 	 * @brief Conversion a `bool` para `if (x)` y `!x`.
 	 * @return `true` si el valor es distinto de cero.
 	 */
-	public bool __bool__() {
-		return (this.lo64 != 0) || (this.hi64 != 0);
-	}
+	public bool __bool__() => (this.lo64 != 0) || (this.hi64 != 0);
 
 	/**
 	 * @brief Intercambia este valor con otro (usado en la division).
@@ -481,9 +475,9 @@ public struct Wide128 {
 			if (rem.ucmp(divisor) != Ordering.Less) {
 				rem = rem - divisor;
 				if (i >= 64) {
-					q.hi64 = q.hi64 | (((u64) 1) << (i - 64));
+					q.hi64 = q.hi64 | (((u64)1) << (i - 64));
 				} else {
-					q.lo64 = q.lo64 | (((u64) 1) << i);
+					q.lo64 = q.lo64 | (((u64)1) << i);
 				}
 			}
 			i = i - 1;
@@ -655,36 +649,28 @@ public struct u128 : Wide128 {
 	 * @param o Valor a comparar.
 	 * @return `true` si `this < o`.
 	 */
-	public bool __lt__(u128 o) {
-		return this.ucmp(o) == Ordering.Less;
-	}
+	public bool __lt__(u128 o) => this.ucmp(o) == Ordering.Less;
 
 	/**
 	 * @brief Mayor que (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this > o`.
 	 */
-	public bool __gt__(u128 o) {
-		return this.ucmp(o) == Ordering.Greater;
-	}
+	public bool __gt__(u128 o) => this.ucmp(o) == Ordering.Greater;
 
 	/**
 	 * @brief Menor o igual (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this <= o`.
 	 */
-	public bool __le__(u128 o) {
-		return this.ucmp(o) != Ordering.Greater;
-	}
+	public bool __le__(u128 o) => this.ucmp(o) != Ordering.Greater;
 
 	/**
 	 * @brief Mayor o igual (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this >= o`.
 	 */
-	public bool __ge__(u128 o) {
-		return this.ucmp(o) != Ordering.Less;
-	}
+	public bool __ge__(u128 o) => this.ucmp(o) != Ordering.Less;
 }
 
 // ===========================================================================
@@ -759,7 +745,7 @@ public struct i128 : Wide128 {
 	 */
 	public static i128 from_i64(i64 x) {
 		i128 r;
-		r.lo64 = (u64) x;
+		r.lo64 = (u64)x;
 		if (x < 0) {
 			r.hi64 = 0xFFFFFFFFFFFFFFFF;
 		} else {
@@ -790,9 +776,7 @@ public struct i128 : Wide128 {
 	 * @brief Comprueba el signo.
 	 * @return `true` si el valor es negativo (bit de signo del limb alto = 1).
 	 */
-	public bool is_negative() {
-		return (this.hi64 >> 63) != 0;
-	}
+	public bool is_negative() => (this.hi64 >> 63) != 0;
 
 	/**
 	 * @brief Desplazamiento aritmetico a la derecha (replica el bit de signo).
@@ -813,11 +797,11 @@ public struct i128 : Wide128 {
 			r.lo64 = sign_fill;
 			r.hi64 = sign_fill;
 		} else if (n >= 64) {
-			i64 hi_signed = (i64) this.hi64;
+			i64 hi_signed = (i64)this.hi64;
 			r.lo64 = (u64)(hi_signed >> (n - 64));
 			r.hi64 = sign_fill;
 		} else {
-			i64 hi_signed = (i64) this.hi64;
+			i64 hi_signed = (i64)this.hi64;
 			r.lo64 = (this.lo64 >> n) | (this.hi64 << (64 - n));
 			r.hi64 = (u64)(hi_signed >> n);
 		}
@@ -881,8 +865,8 @@ public struct i128 : Wide128 {
 	 *         como `u64`.
 	 */
 	public bool __lt__(i128 o) {
-		i64 a_hi = (i64) this.hi64;
-		i64 b_hi = (i64) o.hi64;
+		i64 a_hi = (i64)this.hi64;
+		i64 b_hi = (i64)o.hi64;
 		if (a_hi != b_hi) {
 			return a_hi < b_hi;
 		}
@@ -895,8 +879,8 @@ public struct i128 : Wide128 {
 	 * @return `true` si `this > o`.
 	 */
 	public bool __gt__(i128 o) {
-		i64 a_hi = (i64) this.hi64;
-		i64 b_hi = (i64) o.hi64;
+		i64 a_hi = (i64)this.hi64;
+		i64 b_hi = (i64)o.hi64;
 		if (a_hi != b_hi) {
 			return a_hi > b_hi;
 		}
@@ -909,8 +893,8 @@ public struct i128 : Wide128 {
 	 * @return `true` si `this <= o`.
 	 */
 	public bool __le__(i128 o) {
-		i64 a_hi = (i64) this.hi64;
-		i64 b_hi = (i64) o.hi64;
+		i64 a_hi = (i64)this.hi64;
+		i64 b_hi = (i64)o.hi64;
 		if (a_hi != b_hi) {
 			return a_hi < b_hi;
 		}
@@ -923,8 +907,8 @@ public struct i128 : Wide128 {
 	 * @return `true` si `this >= o`.
 	 */
 	public bool __ge__(i128 o) {
-		i64 a_hi = (i64) this.hi64;
-		i64 b_hi = (i64) o.hi64;
+		i64 a_hi = (i64)this.hi64;
+		i64 b_hi = (i64)o.hi64;
 		if (a_hi != b_hi) {
 			return a_hi > b_hi;
 		}
@@ -1033,9 +1017,7 @@ public struct Wide256 {
 	 * @brief Trunca el valor a sus 64 bits menos significativos.
 	 * @return El limb mas bajo.
 	 */
-	public u64 to_u64() {
-		return this.lo128.to_u64();
-	}
+	public u64 to_u64() => this.lo128.to_u64();
 
 	/**
 	 * @brief Representacion legible, en hexadecimal.
@@ -1046,17 +1028,13 @@ public struct Wide256 {
 	 * @return El valor como texto, con sus cuatro limbs separados por dos
 	 *         puntos.
 	 */
-	public string toString() {
-		return "${this.hi128}:${this.lo128}";
-	}
+	public string toString() => "${this.hi128}:${this.lo128}";
 
 	/**
 	 * @brief Trunca el valor a sus 128 bits menos significativos.
 	 * @return La mitad baja.
 	 */
-	public u128 to_u128() {
-		return this.lo128;
-	}
+	public u128 to_u128() => this.lo128;
 
 	/**
 	 * @brief Suma modular de 256 bits.
@@ -1227,25 +1205,19 @@ public struct Wide256 {
 	 * @param o Valor a comparar.
 	 * @return `true` si alguna mitad difiere.
 	 */
-	public bool __ne__(Self o) {
-		return !(this == o);
-	}
+	public bool __ne__(Self o) => !(this == o);
 
 	/**
 	 * @brief Comprueba si el valor es cero.
 	 * @return `true` si todos los bits estan a 0.
 	 */
-	public bool is_zero() {
-		return this.lo128.is_zero() && this.hi128.is_zero();
-	}
+	public bool is_zero() => this.lo128.is_zero() && this.hi128.is_zero();
 
 	/**
 	 * @brief Conversion a booleano.
 	 * @return `true` si el valor no es cero.
 	 */
-	public bool __bool__() {
-		return !this.is_zero();
-	}
+	public bool __bool__() => !this.is_zero();
 
 	/**
 	 * @brief Intercambia el valor con el de otro.
@@ -1297,7 +1269,7 @@ public struct Wide256 {
 			if (i >= 128) {
 				bit = (this.hi128 >> ((u64)(i - 128))).lo64 & 1;
 			} else {
-				bit = (this.lo128 >> ((u64) i)).lo64 & 1;
+				bit = (this.lo128 >> ((u64)i)).lo64 & 1;
 			}
 			if (bit != 0) {
 				rem.lo128 = rem.lo128 | u128.one();
@@ -1308,7 +1280,7 @@ public struct Wide256 {
 				if (i >= 128) {
 					q.hi128 = q.hi128 | (u128.one() << ((u64)(i - 128)));
 				} else {
-					q.lo128 = q.lo128 | (u128.one() << ((u64) i));
+					q.lo128 = q.lo128 | (u128.one() << ((u64)i));
 				}
 			}
 			i = i - 1;
@@ -1386,9 +1358,7 @@ public struct u256 : Wide256 {
 	 * @brief Menor valor representable.
 	 * @return Cero.
 	 */
-	public static u256 min() {
-		return u256.zero();
-	}
+	public static u256 min() => u256.zero();
 
 	/**
 	 * @brief Producto COMPLETO de dos valores de 128 bits.
@@ -1477,36 +1447,28 @@ public struct u256 : Wide256 {
 	 * @param o Valor a comparar.
 	 * @return `true` si `this < o`.
 	 */
-	public bool __lt__(u256 o) {
-		return this.ucmp(o) == Ordering.Less;
-	}
+	public bool __lt__(u256 o) => this.ucmp(o) == Ordering.Less;
 
 	/**
 	 * @brief Mayor que (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this > o`.
 	 */
-	public bool __gt__(u256 o) {
-		return this.ucmp(o) == Ordering.Greater;
-	}
+	public bool __gt__(u256 o) => this.ucmp(o) == Ordering.Greater;
 
 	/**
 	 * @brief Menor o igual (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this <= o`.
 	 */
-	public bool __le__(u256 o) {
-		return this.ucmp(o) != Ordering.Greater;
-	}
+	public bool __le__(u256 o) => this.ucmp(o) != Ordering.Greater;
 
 	/**
 	 * @brief Mayor o igual (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this >= o`.
 	 */
-	public bool __ge__(u256 o) {
-		return this.ucmp(o) != Ordering.Less;
-	}
+	public bool __ge__(u256 o) => this.ucmp(o) != Ordering.Less;
 }
 
 // ===========================================================================
@@ -1591,7 +1553,7 @@ public struct i256 : Wide256 {
 	 */
 	public static i256 from_i64(i64 x) {
 		i256 r;
-		r.lo128 = u128.from_u64((u64) x);
+		r.lo128 = u128.from_u64((u64)x);
 		if (x < 0) {
 			r.lo128.hi64 = 0xFFFFFFFFFFFFFFFF;
 			r.hi128      = u128.max();
@@ -1605,17 +1567,13 @@ public struct i256 : Wide256 {
 	 * @brief Indica si el valor es negativo.
 	 * @return `true` si el bit mas alto esta a 1.
 	 */
-	public bool is_negative() {
-		return (this.hi128.hi64 >> 63) != 0;
-	}
+	public bool is_negative() => (this.hi128.hi64 >> 63) != 0;
 
 	/**
 	 * @brief Negacion en complemento a dos.
 	 * @return `-this` (el complemento a uno mas uno).
 	 */
-	public i256 __neg__() {
-		return (~this) + i256.one();
-	}
+	public i256 __neg__() => (~this) + i256.one();
 
 	/**
 	 * @brief Desplazamiento ARITMETICO a la derecha.
@@ -1760,27 +1718,21 @@ public struct i256 : Wide256 {
 	 * @param o Valor a comparar.
 	 * @return `true` si `this > o`.
 	 */
-	public bool __gt__(i256 o) {
-		return o < this;
-	}
+	public bool __gt__(i256 o) => o < this;
 
 	/**
 	 * @brief Menor o igual (con signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this <= o`.
 	 */
-	public bool __le__(i256 o) {
-		return !(o < this);
-	}
+	public bool __le__(i256 o) => !(o < this);
 
 	/**
 	 * @brief Mayor o igual (con signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this >= o`.
 	 */
-	public bool __ge__(i256 o) {
-		return !(this < o);
-	}
+	public bool __ge__(i256 o) => !(this < o);
 }
 
 // ===========================================================================
@@ -1855,25 +1807,19 @@ public struct Wide512 {
 	 * @brief Trunca el valor a sus 64 bits menos significativos.
 	 * @return El limb mas bajo.
 	 */
-	public u64 to_u64() {
-		return this.lo256.to_u64();
-	}
+	public u64 to_u64() => this.lo256.to_u64();
 
 	/**
 	 * @brief Representacion legible, en hexadecimal.
 	 * @return El valor como texto, con sus ocho limbs separados por dos puntos.
 	 */
-	public string toString() {
-		return "${this.hi256}:${this.lo256}";
-	}
+	public string toString() => "${this.hi256}:${this.lo256}";
 
 	/**
 	 * @brief Trunca el valor a sus 256 bits menos significativos.
 	 * @return La mitad baja.
 	 */
-	public u256 to_u256() {
-		return this.lo256;
-	}
+	public u256 to_u256() => this.lo256;
 
 	/**
 	 * @brief Suma modular de 512 bits.
@@ -2018,25 +1964,19 @@ public struct Wide512 {
 	 * @param o Valor a comparar.
 	 * @return `true` si alguna mitad difiere.
 	 */
-	public bool __ne__(Self o) {
-		return !(this == o);
-	}
+	public bool __ne__(Self o) => !(this == o);
 
 	/**
 	 * @brief Comprueba si el valor es cero.
 	 * @return `true` si todos los bits estan a 0.
 	 */
-	public bool is_zero() {
-		return this.lo256.is_zero() && this.hi256.is_zero();
-	}
+	public bool is_zero() => this.lo256.is_zero() && this.hi256.is_zero();
 
 	/**
 	 * @brief Conversion a booleano.
 	 * @return `true` si el valor no es cero.
 	 */
-	public bool __bool__() {
-		return !this.is_zero();
-	}
+	public bool __bool__() => !this.is_zero();
 
 	/**
 	 * @brief Intercambia el valor con el de otro.
@@ -2100,7 +2040,7 @@ public struct Wide512 {
 			if (i >= 256) {
 				bit = (this.hi256 >> ((u64)(i - 256))).lo128.lo64 & 1;
 			} else {
-				bit = (this.lo256 >> ((u64) i)).lo128.lo64 & 1;
+				bit = (this.lo256 >> ((u64)i)).lo128.lo64 & 1;
 			}
 			if (bit != 0) {
 				rem.lo256 = rem.lo256 | u256.one();
@@ -2110,7 +2050,7 @@ public struct Wide512 {
 				if (i >= 256) {
 					q.hi256 = q.hi256 | (u256.one() << ((u64)(i - 256)));
 				} else {
-					q.lo256 = q.lo256 | (u256.one() << ((u64) i));
+					q.lo256 = q.lo256 | (u256.one() << ((u64)i));
 				}
 			}
 			i = i - 1;
@@ -2168,9 +2108,7 @@ public struct u512 : Wide512 {
 	 * @brief Menor valor representable.
 	 * @return Cero.
 	 */
-	public static u512 min() {
-		return u512.zero();
-	}
+	public static u512 min() => u512.zero();
 
 	/**
 	 * @brief Desplazamiento logico a la derecha.
@@ -2236,36 +2174,28 @@ public struct u512 : Wide512 {
 	 * @param o Valor a comparar.
 	 * @return `true` si `this < o`.
 	 */
-	public bool __lt__(u512 o) {
-		return this.ucmp(o) == Ordering.Less;
-	}
+	public bool __lt__(u512 o) => this.ucmp(o) == Ordering.Less;
 
 	/**
 	 * @brief Mayor que (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this > o`.
 	 */
-	public bool __gt__(u512 o) {
-		return this.ucmp(o) == Ordering.Greater;
-	}
+	public bool __gt__(u512 o) => this.ucmp(o) == Ordering.Greater;
 
 	/**
 	 * @brief Menor o igual (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this <= o`.
 	 */
-	public bool __le__(u512 o) {
-		return this.ucmp(o) != Ordering.Greater;
-	}
+	public bool __le__(u512 o) => this.ucmp(o) != Ordering.Greater;
 
 	/**
 	 * @brief Mayor o igual (sin signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this >= o`.
 	 */
-	public bool __ge__(u512 o) {
-		return this.ucmp(o) != Ordering.Less;
-	}
+	public bool __ge__(u512 o) => this.ucmp(o) != Ordering.Less;
 }
 
 // ===========================================================================
@@ -2369,10 +2299,10 @@ public struct i512 : Wide512 {
 		if (x < 0) {
 			// -1 en todo lo alto, y el valor en el limb mas bajo.
 			r.lo256            = ~u256.zero();
-			r.lo256.lo128.lo64 = (u64) x;
+			r.lo256.lo128.lo64 = (u64)x;
 			r.hi256            = u256.max();
 		} else {
-			r.lo256 = u256.from_u64((u64) x);
+			r.lo256 = u256.from_u64((u64)x);
 			r.hi256 = u256.zero();
 		}
 		return r;
@@ -2382,17 +2312,13 @@ public struct i512 : Wide512 {
 	 * @brief Indica si el valor es negativo.
 	 * @return `true` si el bit mas alto esta a 1.
 	 */
-	public bool is_negative() {
-		return (this.hi256.hi128.hi64 >> 63) != 0;
-	}
+	public bool is_negative() => (this.hi256.hi128.hi64 >> 63) != 0;
 
 	/**
 	 * @brief Negacion en complemento a dos.
 	 * @return `-this`.
 	 */
-	public i512 __neg__() {
-		return (~this) + i512.one();
-	}
+	public i512 __neg__() => (~this) + i512.one();
 
 	/**
 	 * @brief Desplazamiento ARITMETICO a la derecha.
@@ -2526,25 +2452,19 @@ public struct i512 : Wide512 {
 	 * @param o Valor a comparar.
 	 * @return `true` si `this > o`.
 	 */
-	public bool __gt__(i512 o) {
-		return o < this;
-	}
+	public bool __gt__(i512 o) => o < this;
 
 	/**
 	 * @brief Menor o igual (con signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this <= o`.
 	 */
-	public bool __le__(i512 o) {
-		return !(o < this);
-	}
+	public bool __le__(i512 o) => !(o < this);
 
 	/**
 	 * @brief Mayor o igual (con signo).
 	 * @param o Valor a comparar.
 	 * @return `true` si `this >= o`.
 	 */
-	public bool __ge__(i512 o) {
-		return !(this < o);
-	}
+	public bool __ge__(i512 o) => !(this < o);
 }

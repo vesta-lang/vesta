@@ -10,7 +10,7 @@ class Punto {
 		this.x = px;
 		this.y = py;
 	}
-	public i32 suma() { return this.x + this.y; }
+	public i32 suma() => this.x + this.y;
 }
 
 i32 leer_suma(borrow<Punto> p) {

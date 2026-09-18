@@ -43,9 +43,7 @@ i32 main() {
 	return a + b + c;
 }
 
-i32 suma(i32 x, i32 y) {
-	return x + y;
-}
+i32 suma(i32 x, i32 y) => x + y;
 
 void lanza() {
 	panic("corta aqui");

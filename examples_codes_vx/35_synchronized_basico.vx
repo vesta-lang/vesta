@@ -23,9 +23,7 @@ class Counter {
 		}
 		return this.value;
 	}
-	i32 read() {
-		return this.value;
-	}
+	i32 read() => this.value;
 }
 
 i32 main() {

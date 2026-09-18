@@ -40,9 +40,9 @@ struct Rgb {
 	u8 b;
 }
 enum Color : Rgb {
-	RED   = (Rgb) {255, 0, 0},
-	GREEN = (Rgb) {0, 255, 0},
-	BLUE  = (Rgb) {0, 0, 255}
+	RED   = (Rgb){ 255, 0, 0},
+	GREEN = (Rgb){ 0, 255, 0},
+	BLUE  = (Rgb){ 0, 0, 255}
 }
 
 // Clase: cada variante es una instancia.  Un Anchor ES un Point.
@@ -60,13 +60,13 @@ enum Anchor : Point {
 }
 
 // Comptime: el valor de una variante es una constante compile-time.
-const i32 MOV_OPCODE = (i32) Op.MOV; // 0x89
+const i32 MOV_OPCODE = (i32)Op.MOV; // 0x89
 
 i32 main() {
 	// Entero: aritmetica/comparacion directas (sin cast).
-	u8  opcode  = Op.MOV;                       // 0x89
-	u8  rbp_num = Reg.RBX;                      // 3
-	i64 acc     = (i64) opcode + (i64) rbp_num; // 0x89 + 3 = 140
+	u8  opcode  = Op.MOV;                     // 0x89
+	u8  rbp_num = Reg.RBX;                    // 3
+	i64 acc     = (i64)opcode + (i64)rbp_num; // 0x89 + 3 = 140
 
 	// Float.
 	f64 half = Angle.HALF; // 3.1415926
@@ -77,15 +77,15 @@ i32 main() {
 
 	// Struct: acceso a campos del valor de la variante.
 	Rgb g = Color.GREEN;
-	acc = acc + (i64) g.g; // 141 + 255 = 396
+	acc = acc + (i64)g.g; // 141 + 255 = 396
 
 	// Clase: instancia de la variante.
 	Point c = Anchor.CORNER;
 	acc = acc + (i64)(c.x + c.y); // 396 + 30 = 426
 
 	// Comptime.
-	acc = acc + (i64) MOV_OPCODE; // 426 + 137 = 563
+	acc = acc + (i64)MOV_OPCODE; // 426 + 137 = 563
 
 	println("opcode=${opcode:hex} half=${half} ${msg} acc=${acc}");
-	return (i32) acc; // 563
+	return (i32)acc; // 563
 }

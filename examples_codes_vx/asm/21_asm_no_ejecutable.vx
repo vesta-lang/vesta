@@ -11,7 +11,7 @@ i32 main() {
 	try {
 		register("rax") i64 a = 40_i64;
 		asm volatile { add rax, 2 };
-		r = (i32) a;
+		r = (i32)a;
 	} catch (FatalError e) {
 		r = 7; // sin ensamblador: se captura y el programa DECIDE, no se arrastra
 	}

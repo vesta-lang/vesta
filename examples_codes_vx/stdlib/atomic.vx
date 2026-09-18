@@ -29,20 +29,20 @@ i32 main() {
 	// --- Ancho estrecho: u8 (la instruccion atomica es de 1 byte). ---
 	atomic<u8> b;
 	b.store(4);
-	b.fetch_add(2);          // 6
-	i32 rb = (i32) b.load(); // 6
+	b.fetch_add(2);         // 6
+	i32 rb = (i32)b.load(); // 6
 
 	// --- Float f32: fetch_add via bucle CAS sobre los BITS (where Numeric). ---
 	atomic<f32> c;
 	c.store(1.5);
-	c.fetch_add(0.5);        // 2.0
-	i32 rc = (i32) c.load(); // 2
+	c.fetch_add(0.5);       // 2.0
+	i32 rc = (i32)c.load(); // 2
 
 	// --- Float f64. ---
 	atomic<f64> d;
 	d.store(10.0);
-	d.fetch_add(2.5);        // 12.5
-	i32 rd = (i32) d.load(); // 12
+	d.fetch_add(2.5);       // 12.5
+	i32 rd = (i32)d.load(); // 12
 
 	// --- bool: solo load/store/cas/swap (sin fetch_add ni bit-ops). ---
 	atomic<bool> flag;

@@ -23,5 +23,5 @@ const i64 SUM = asm_add(40, 2);
 static_assert(SUM == 42, "asm_add(40, 2) debe ser 42");
 
 i32 main() {
-	return (i32) SUM; // 42
+	return (i32)SUM; // 42
 }

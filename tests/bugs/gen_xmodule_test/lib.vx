@@ -5,9 +5,9 @@
 
 // Struct generico con metodo generico.
 public struct Caja<T> {
-	T v;
-	U identidad<U>(U x) { return x; } // metodo generico
-	i64 leer() { return (i64) this.v; }
+	T                       v;
+	U identidad<U>(U x) =>  x; // metodo generico
+	i64 leer() => (i64)this.v;
 }
 
 // Clase generica.
@@ -19,15 +19,15 @@ public class Box<T> {
 
 // Concepto + funcion con bound.
 public concept Num<T> = is_numeric<T>();
-public i64 doblar < T : Num > (T x) { return (i64)x + (i64)x; }
+public i64 doblar < T : Num > (T x) => (i64)x + (i64)x;
 
 // Especializacion: primario + total i64 (con campo extra).
 public struct Par<T> {
 	T a;
-	i64 cual() { return 1; }
+	i64 cual() => 1;
 }
 public struct Par<i64> {
 	i64 a;
 	i64 extra;
-	i64 cual() { return 2; }
+	i64 cual() => 2;
 }

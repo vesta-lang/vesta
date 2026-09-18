@@ -56,9 +56,7 @@ public void exit(UINT uExitCode) {
  * @param nStdHandle Cual se pide (STD_OUTPUT_HANDLE y companeros).
  * @return El manejador.
  */
-public HANDLE get_std_handle(DWORD nStdHandle) {
-	return GetStdHandle(nStdHandle);
-}
+public HANDLE get_std_handle(DWORD nStdHandle) => GetStdHandle(nStdHandle);
 
 /**
  * @brief Escribe bytes.  Sin buffer y sin conversiones.

@@ -15,7 +15,7 @@ struct Cfg {
 
 // Param `const T*` (puntero a const): se LEE a traves del puntero (OK); el
 // puntero en si es reasignable (no lo hacemos aqui).
-i32 read_through(const i32* p) { return *p; }
+i32 read_through(const i32* p) => *p;
 
 // Param `T *const` (puntero const): el APUNTADO es mutable -> `*q` se puede
 // escribir; el puntero no se reasigna.

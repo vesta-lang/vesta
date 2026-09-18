@@ -8,9 +8,7 @@ namespace ejemplos.borrow_nll;
 // Sin NLL: ERROR R3 (move while borrowed).
 // Con NLL: OK (el borrow ya no se usa cuando se hace el move).
 
-unique<i32> consume(unique<i32> p) {
-	return p;
-}
+unique<i32> consume(unique<i32> p) => p;
 
 i32 main() {
 	unique<i32> owner = unique_box(42);

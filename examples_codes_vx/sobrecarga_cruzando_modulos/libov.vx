@@ -3,8 +3,8 @@ namespace lib.ov;
 // La sobrecarga vista desde el modulo que la DECLARA.  Aqui no hay nada
 // especial: dos funciones con el mismo nombre y distintos parametros, como en
 // `545`.  Lo que se prueba esta al otro lado, en `main.vx`.
-public i64 escala(i64 x) { return x * 2; }
+public i64 escala(i64 x) => x * 2;
 
-public i64 escala(f64 x) { return 500; }
+public i64 escala(f64 x) => 500;
 
-public i64 escala(i64 x, i64 y) { return x + y; }
+public i64 escala(i64 x, i64 y) => x + y;

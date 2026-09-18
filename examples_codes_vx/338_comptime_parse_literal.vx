@@ -74,7 +74,7 @@ comptime IntLit parse_int_lit(string src) {
 		} else if (c >= 65 && c <= 70) {
 			d = c - 55; // 'A'..'F'
 		}
-		acc = acc * (u64) base + (u64) d;
+		acc = acc * (u64)base + (u64)d;
 		i   = i + 1;
 	}
 	r.w0 = acc;

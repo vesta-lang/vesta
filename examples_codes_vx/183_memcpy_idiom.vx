@@ -23,13 +23,13 @@ namespace ejemplos.memcpy_idiom;
 
 i64 sum_u8(u8* p, i32 n) {
 	i64 acc = 0_i64;
-	for (i32 i = 0_i32; i < n; i++) { acc = acc + (i64) p[i]; }
+	for (i32 i = 0_i32; i < n; i++) { acc = acc + (i64)p[i]; }
 	return acc;
 }
 
 i64 sum_u64(u64* p, i32 n) {
 	i64 acc = 0_i64;
-	for (i32 i = 0_i32; i < n; i++) { acc = acc + (i64) p[i]; }
+	for (i32 i = 0_i32; i < n; i++) { acc = acc + (i64)p[i]; }
 	return acc;
 }
 
@@ -58,7 +58,7 @@ i32 main() {
 	for (i32 k = 0_i32; k < 10; k++) { d32[k] = 0; }             // limpiar dst
 	for (i32 k = 3_i32; k < 10; k++) { d32[k] = s32[k]; } // IDIOMA copia (for, k=3..9)
 	i64 s32sum = 0_i64;
-	for (i32 k = 0_i32; k < 10; k++) { s32sum = s32sum + (i64) d32[k]; }
+	for (i32 k = 0_i32; k < 10; k++) { s32sum = s32sum + (i64)d32[k]; }
 	total = total + s32sum; // d32[3..9] = 30,40,50,60,70,80,90 -> 420; d32[0..2]=0
 
 	// --- u64: copia con FOR ---
@@ -75,8 +75,8 @@ i32 main() {
 	while (m < 4) {
 		q0[m] = p0[m];
 		m     = m + 1;
-	}                        // 0 copias; m queda 5
-	total = total + (i64) m; // +5
+	}                       // 0 copias; m queda 5
+	total = total + (i64)m; // +5
 
 	free(s8);
 	free(d8);
@@ -88,5 +88,5 @@ i32 main() {
 	free(q0);
 
 	// total = 136 + 420 + 36 + 5 = 597
-	return (i32) total;
+	return (i32)total;
 }

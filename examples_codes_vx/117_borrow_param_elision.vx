@@ -11,15 +11,11 @@ namespace ejemplos.borrow_param_elision;
 // el borrow resultante tiene como owner el argumento original.
 
 // Identidad: devuelve el mismo borrow recibido.
-borrow<i32> identity_borrow(borrow<i32> p) {
-	return p;
-}
+borrow<i32> identity_borrow(borrow<i32> p) => p;
 
 // Read-through via borrow: cualquier funcion que recibe un borrow y
 // devuelve un valor (no un borrow) NO necesita elision.
-i32 deref_borrow(borrow<i32> p) {
-	return read_borrow(p);
-}
+i32 deref_borrow(borrow<i32> p) => read_borrow(p);
 
 i32 main() {
 	unique<i32> myvec = unique_box(77);

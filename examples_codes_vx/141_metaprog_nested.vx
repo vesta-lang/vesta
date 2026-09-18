@@ -27,9 +27,7 @@ static_assert(comptime_strlen(BARS) == 8, "repeat | x8");
 static_assert(comptime_streq(NUM_S, "2024"), "to_str");
 
 // (4) Generic textual: construir un identificador a partir de un tipo.
-comptime<T> string mk_setter_name() {
-	return comptime_concat("set_", typename<T>());
-}
+comptime<T> string mk_setter_name() => comptime_concat("set_", typename<T>());
 
 struct Vec3 {
 	f64 x;

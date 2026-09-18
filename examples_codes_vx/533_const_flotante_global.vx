@@ -27,9 +27,7 @@ const i64 VECES =  2_i64;
 // Sirven de verdad para calcular, no solo para imprimirse.  (El cuerpo de
 // expresion `=>` es solo para metodos y propiedades, no para una funcion
 // libre.)
-f64 area(f64 r) {
-	return PI * r * r;
-}
+f64 area(f64 r) => PI * r * r;
 
 i32 main() {
 	// (1) La constante se usa en una expresion.

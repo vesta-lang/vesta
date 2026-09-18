@@ -45,5 +45,5 @@ i32 main() {
 	pool_join();
 	chan_free(g_ch);
 	// sum(1..50) = 1275, count = 50 -> 42 si ambos correctos.
-	return (g_sum == 1275 && g_count == 50) ? 42 : (i32) g_sum;
+	return (g_sum == 1275 && g_count == 50) ? 42 : (i32)g_sum;
 }

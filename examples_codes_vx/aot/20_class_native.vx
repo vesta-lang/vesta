@@ -17,7 +17,7 @@ class Rect {
 		this.w = a;
 		this.h = b;
 	}
-	i32 area() { return this.w * this.h; }
+	i32 area() => this.w * this.h;
 }
 
 i32 main() {

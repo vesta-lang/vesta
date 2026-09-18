@@ -9,11 +9,11 @@
 interface Speaker {
 	i32 speak();
 }
-class Dog : Speaker { @Override i32 speak() { return 10; } }
-class Cat : Speaker { @Override i32 speak() { return 32; } }
+class Dog : Speaker { @Override i32 speak() => 10; }
+class Cat : Speaker { @Override i32 speak() => 32; }
 
 // Dispatch polimorfico: s puede ser cualquier implementador de Speaker.
-i32 ask(Speaker s) { return s.speak(); }
+i32 ask(Speaker s) => s.speak();
 
 i32 main() {
 	Speaker a = new Dog();

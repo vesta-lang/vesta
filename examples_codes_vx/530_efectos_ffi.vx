@@ -348,19 +348,19 @@ extern "libc.so.6" {
 // externas: lo que importa es que le cuesta a quien llama.
 // ==========================================================================
 
-u64 con_io(u64 x) { return vmath_abs(x); }
-u64 con_throws(u64 x) { return vmath_trunc(x); }
-u64 con_panics(u64 x) { return vmath_ilog2(x); }
-u64 con_alloc(u64 x) { return vmath_popcount(x); }
-u64 con_nondet(u64 x) { return vmath_clz(x); }
-u64 con_keeps_state(u64 x) { return vmath_ctz(x); }
-u64 con_reads_env(u64 x) { return vmath_bswap(x); }
-u64 con_reloj(u64 x) { return vmath_rotr(x, 1_u64); }
-u64 con_writes_env(u64 x) { return vmath_rotl(x, 1_u64); }
-u64 con_blocks(u64 x) { return vmath_min(x, 1_u64); }
-u64 con_traps(u64 x) { return vmath_max(x, 1_u64); }
-u64 sin_nada(u64 x) { return vmath_minu(x, 99_u64); }
-u64 segun_objetivo(u64 x) { return vmath_maxu(x, 0_u64); }
+u64 con_io(u64 x) => vmath_abs(x);
+u64 con_throws(u64 x) => vmath_trunc(x);
+u64 con_panics(u64 x) => vmath_ilog2(x);
+u64 con_alloc(u64 x) => vmath_popcount(x);
+u64 con_nondet(u64 x) => vmath_clz(x);
+u64 con_keeps_state(u64 x) => vmath_ctz(x);
+u64 con_reads_env(u64 x) => vmath_bswap(x);
+u64 con_reloj(u64 x) => vmath_rotr(x, 1_u64);
+u64 con_writes_env(u64 x) => vmath_rotl(x, 1_u64);
+u64 con_blocks(u64 x) => vmath_min(x, 1_u64);
+u64 con_traps(u64 x) => vmath_max(x, 1_u64);
+u64 sin_nada(u64 x) => vmath_minu(x, 99_u64);
+u64 segun_objetivo(u64 x) => vmath_maxu(x, 0_u64);
 
 i64 main() {
 	// Lo que este fichero fija es lo que el COMPILADOR sabe de cada llamada.

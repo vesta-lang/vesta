@@ -11,7 +11,7 @@ i32 main() {
 	i32 i    = 0_i32;
 	while (i < 50_000_000) {
 		// FNV-1a step inline (xor + mul) + shift + and.
-		seed = seed ^ (u64) i;
+		seed = seed ^ (u64)i;
 		seed = seed * 1_099_511_628_211; // FNV prime
 		seed = seed >> 7;
 		seed = seed | 1; // ensure odd
@@ -20,5 +20,5 @@ i32 main() {
 		}
 		i = i + 1;
 	}
-	return (i32) acc;
+	return (i32)acc;
 }

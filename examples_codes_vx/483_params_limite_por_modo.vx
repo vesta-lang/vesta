@@ -34,7 +34,7 @@ class Caja {
 }
 
 i64 g_valor = 5_i64;
-i64 doblar(i64 x) { return x * 2; }
+i64 doblar(i64 x) => x * 2;
 
 // ---------------------------------------------------------------------------
 // NATIVO: las doce formas de golpe, en un solo constructor.

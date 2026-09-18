@@ -25,9 +25,7 @@ void escribe(out i64 r) {
 	r = 7_i64;
 }
 
-i64 lee(in i64* p) {
-	return *p;
-}
+i64 lee(in i64* p) => *p;
 
 // -------------------------------------------------------------------------
 // 2. La misma operacion, escrita con el puntero a mano

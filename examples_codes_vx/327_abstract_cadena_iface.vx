@@ -25,15 +25,15 @@ concept Medible {
 // Valido: la obligacion se transfiere al derivado concreto.
 @Abstract
 struct Entidad : Medible {
-	i64 id;
-	public i64 get_id() { return this.id; }
+	i64                         id;
+	public i64 get_id() => this.id;
 }
 
 // Abstracto intermedio: hereda de otro abstracto (Entidad).
 @Abstract
 struct Poligono : Entidad {
-	i64 lados;
-	public i64 num_lados() { return this.lados; }
+	i64                            lados;
+	public i64 num_lados() => this.lados;
 }
 
 // Concreto: cierra la cadena.  Implementa medida() para cumplir Medible
@@ -41,7 +41,7 @@ struct Poligono : Entidad {
 struct Triangulo : Poligono {
 	i64 base;
 	i64 altura;
-	public i64 medida() { return (this.base * this.altura) / 2; }
+	public i64 medida() => (this.base * this.altura) / 2;
 }
 
 i32 main() {

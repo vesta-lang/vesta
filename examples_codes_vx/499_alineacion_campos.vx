@@ -36,14 +36,14 @@ struct ConFuncion {
 
 i32 main() {
 	// Un campo de tres palabras alineado a palabra: empieza en 8, no en 24.
-	const i64 r_off  = (i64) offsetof<ConResult>("r"); // 8
-	const i64 r_size = (i64) sizeof<ConResult>();      // 40, no 72
+	const i64 r_off  = (i64)offsetof<ConResult>("r"); // 8
+	const i64 r_size = (i64)sizeof<ConResult>();      // 40, no 72
 
 	// Dos palabras, misma regla.
-	const i64 o_off = (i64) offsetof<ConOptional>("o"); // 8
+	const i64 o_off = (i64)offsetof<ConOptional>("o"); // 8
 
 	// Control: este ya se alineaba bien antes.
-	const i64 f_off = (i64) offsetof<ConFuncion>("f"); // 8
+	const i64 f_off = (i64)offsetof<ConFuncion>("f"); // 8
 
 	println("Result off=${r_off} size=${r_size} | Optional off=${o_off} | fn off=${f_off}");
 

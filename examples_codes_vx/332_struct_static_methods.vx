@@ -24,8 +24,8 @@ struct Vec2 {
 		r.y = b;
 		return r;
 	}
-	public static i64 dim() { return 2; }
-	public i64 sum() { return this.x + this.y; }
+	public static i64 dim() => 2;
+	public i64 sum() => this.x + this.y;
 }
 
 i32 main() {

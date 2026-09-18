@@ -15,9 +15,7 @@
 // Resultado esperado: R0 = 3 (length del resultado del override).
 
 @StringConcat
-string my_concat(string a, string b) {
-	return "OVR";
-}
+string my_concat(string a, string b) => "OVR";
 
 i32 main() {
 	string s = "hola";

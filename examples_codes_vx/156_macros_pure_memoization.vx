@@ -24,7 +24,7 @@ namespace ejemplos.macros_pure_memoization;
 //   Con @Pure, 20 calls heavy(50K iter) -> 8 ms de compile.
 //   Speedup: ~5000x cuando los args se repiten.
 
-i32 doblar(i32 x) { return x * 2; }
+i32 doblar(i32 x) => x * 2;
 
 // Macro PURO: el resultado depende solo de los args, sin side effects.
 // @Pure activa la memoizacion -- llamadas repetidas con mismos args

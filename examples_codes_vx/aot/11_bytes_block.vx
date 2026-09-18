@@ -16,6 +16,4 @@ bytes tabla {
 		times 4 db 0xFF       // FF FF FF FF
 }
 
-i32 main() {
-	return 42;
-}
+i32 main() => 42;

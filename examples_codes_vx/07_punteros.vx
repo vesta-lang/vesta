@@ -35,9 +35,7 @@ void set_to(i32* out, i32 v) {
 	*out = v;
 }
 
-i32 read_ptr(i32* p) {
-	return *p;
-}
+i32 read_ptr(i32* p) => *p;
 
 i32 main() {
 	i32 a = 0_i32;

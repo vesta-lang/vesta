@@ -23,9 +23,9 @@ namespace ejemplos.metodos_genericos;
 struct Caja {
 	i64 v;
 	// Identidad generica: devuelve el argumento tal cual (U explicito/inferido).
-	U identidad<U>(U x) { return x; }
+	U identidad<U>(U x) => x;
 	// Lee el campo casteado al tipo U pedido (cast con type-param del metodo).
-	U leer_como<U>() { return (U) this.v; }
+	U leer_como<U>() => (U) this.v;
 }
 
 // ---- 2: clase con metodo generico ----------------------------------------
@@ -33,19 +33,17 @@ class Contador {
 	i64 n;
 	Contador(i64 inicial) { this.n = inicial; }
 	// Suma el campo (casteado a U) con el argumento U.
-	U sumar<U>(U extra) { return (U) this.n + extra; }
+	U sumar<U>(U extra) => (U) this.n + extra;
 }
 
 // ---- 4 + 7: varios type-params + metodo llamando a otro generico ---------
 struct Util {
 	i64 base;
 	// Dos type-params: devuelve el primero (de tipo K), ignora el de tipo V.
-	K primero<K, V>(K a, V b) { return a; }
+	K primero<K, V>(K a, V b) => a;
 	// Llama internamente a primero<i64, i64> y suma -> dispatch estatico anidado.
-	i64 doble<U>(U x) {
-		return this.primero<i64,
-		i64>((i64) x, (i64) x) + (i64) x;
-	}
+	i64 doble<U>(U x) => this.primero<i64,
+	i64>((i64)x, (i64)x) + (i64)x;
 }
 
 // ---- 6: metodo generico en un STRUCT GENERICO ----------------------------
@@ -53,7 +51,7 @@ struct Util {
 struct Par<T> {
 	T v;
 	// Combina el campo T con un argumento U, ambos llevados a i64.
-	i64 mezcla<U>(U x) { return (i64) this.v + (i64) x; }
+	i64 mezcla<U>(U x) => (i64)this.v + (i64)x;
 }
 
 i32 main() {
@@ -75,5 +73,5 @@ i32 main() {
 	// 2 + 3 + (40-40) + 35 + 4 + 18 - 20 = 42 ; ademas validamos m == 42.
 	i64 total = a + b + (d - 40) + s + p + dd - 20;
 	if (m != 42) { return 0; }
-	return (i32) total; // 42
+	return (i32)total; // 42
 }

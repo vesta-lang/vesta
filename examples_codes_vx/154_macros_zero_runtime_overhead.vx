@@ -14,8 +14,8 @@ namespace ejemplos.macros_zero_runtime_overhead;
 //   El bytecode .velb no contiene rastro de macros -- son solo
 //   instrucciones aritmeticas y CALLVMs normales.  Cero penalizacion.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 mas_uno(i32 x) { return x + 1; }
+i32 doblar(i32 x) => x * 2;
+i32 mas_uno(i32 x) => x + 1;
 
 // (1) Macro recursivo: 100 niveles de mas_uno anidados.
 @Macro

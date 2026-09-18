@@ -20,12 +20,12 @@ struct Punto {
 }
 
 extension Punto {
-	i64 suma() { return this.x + this.y; }
+	i64 suma() => this.x + this.y;
 }
 
 i32 main() {
 	Punto p;
 	p.x = 20;
 	p.y = 22;
-	return (i32) p.suma();
+	return (i32)p.suma();
 }

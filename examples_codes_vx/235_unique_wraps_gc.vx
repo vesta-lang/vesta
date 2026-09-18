@@ -20,5 +20,5 @@ class Nodo {
 i32 main() {
 	gc<Nodo>         g = new Nodo(42);
 	unique<gc<Nodo>> u = unique_box(g);
-	return (i32) g.v; // 42; el GC recoge el Nodo, u no lo libera
+	return (i32)g.v; // 42; el GC recoge el Nodo, u no lo libera
 }

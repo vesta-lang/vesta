@@ -34,7 +34,7 @@ void my_memcpy(u8* dst, u8* src, u64 n) {
 		i      = i + 1;
 	}
 	// Registrar la invocacion en el contador global.
-	u64* ctr = (u64*) section_start(".ovrctr");
+	u64* ctr = (u64*)section_start(".ovrctr");
 	*    ctr = *ctr + 1;
 }
 
@@ -50,7 +50,7 @@ i32 main() {
 	i32 len_ok = (i32)(total == 55);
 
 	// (b) el override SE invoco: g_calls > 0.
-	u64* ctr     = (u64*) section_start(".ovrctr");
+	u64* ctr     = (u64*)section_start(".ovrctr");
 	i32  used_ok = (i32)(*ctr > 0);
 
 	// 42 solo si AMBAS condiciones se cumplen.

@@ -14,18 +14,18 @@ class Contador {
 		this.n = this.n + 1;
 		return this.n;
 	}
-	i64 suma(i64 x) { return this.n + x; }
+	i64 suma(i64 x) => this.n + x;
 }
 
 // Receptor STRUCT (value-type): el metodo ligado captura una COPIA del struct
 // (snapshot al momento de `&p.metodo`); opera sobre esa copia.
 struct Punto {
-	i64 v;
-	i64 escala(i64 k) { return this.v * k; }
+	i64                           v;
+	i64 escala(i64 k) => this.v * k;
 }
 
 // callback: recibe un metodo ligado (lambda) y lo aplica.
-i64 aplicar(fn(i64) -> i64 f, i64 x) { return f(x); }
+i64 aplicar(fn(i64) -> i64 f, i64 x) => f(x);
 
 // holder para guardar un metodo ligado en un CAMPO (Fase 1 + Fase 2).
 class Widget { fn() -> i64 onTick; }

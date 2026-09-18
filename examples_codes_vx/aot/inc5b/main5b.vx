@@ -51,7 +51,7 @@ i32 main() {
 	i32 cmp_ok = (i32)(n == 10);
 
 	// El override de la lib (cross-module) SE invoco: g_calls > 0.
-	u64* ctr     = (u64*) section_start(".ovrctr");
+	u64* ctr     = (u64*)section_start(".ovrctr");
 	i32  used_ok = (i32)(*ctr > 0);
 
 	// 42 solo si las comparaciones son correctas Y el override heredado se uso.

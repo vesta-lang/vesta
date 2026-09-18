@@ -17,8 +17,8 @@ namespace ejemplos.macros_emit_splice;
 //       (typename, comptime_to_str).
 //   (4) Composicion: macros encadenados.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 mas_uno(i32 x) { return x + 1; }
+i32 doblar(i32 x) => x * 2;
+i32 mas_uno(i32 x) => x + 1;
 
 i32 main() {
 	// (1) Splice simple: el string "10 + 5" -> AST `10 + 5` -> emite

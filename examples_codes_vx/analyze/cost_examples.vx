@@ -17,9 +17,7 @@
 //   vm --analyze examples_codes_vx/analyze/cost_examples.vx --analyze-json
 
 // O(1): operaciones constantes, sin loops.
-i64 constante(i64 x) {
-	return x + 7;
-}
+i64 constante(i64 x) => x + 7;
 
 // O(n): un solo loop sobre n.
 i64 lineal(i64 n) {

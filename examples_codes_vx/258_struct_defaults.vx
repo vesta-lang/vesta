@@ -27,9 +27,7 @@ struct Caja<T> {
 	u8 tag = 0x07_u8; // default conservado en cada instanciacion
 }
 
-i32 sumar(Valores v) {
-	return (i32)v.a + (i32)v.b + v.c;
-}
+i32 sumar(Valores v) => (i32)v.a + (i32)v.b + v.c;
 
 i32 main() {
 	// 1. `= {}` -> todos los defaults: 16 + 32 + 100 = 148.

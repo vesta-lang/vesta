@@ -59,7 +59,7 @@ i32 main() {
 	//   f64 mal = 3.14_i32;  // un sufijo entero sobre un numero con decimales
 	//
 	// Y asi se trunca a proposito, que es la unica forma de truncar:
-	u8 truncado = (u8) 300;
+	u8 truncado = (u8)300;
 
 	i32 ok = 0_i32;
 	if (con_sufijo == 42) { ok = ok + 10; }

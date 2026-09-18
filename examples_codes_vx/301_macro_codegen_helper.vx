@@ -8,16 +8,12 @@
 // -----------------------------------------------------------------------------
 
 // Helper comptime: captura verbatim el TEXTO de su argumento.
-private comptime string tmpl(expr code) {
-	return code;
-}
+private comptime string tmpl(expr code) => code;
 
 // @Macro: construye la expresion `<code> + <n>` como string, inyectada como
 // codigo real en el call site.  La parte `base` viene del helper `expr`.
 @Macro
-public comptime string plus(u32 n) {
-	return tmpl(base)+ " + " + to_str(n);
-}
+public comptime string plus(u32 n) => tmpl(base)+ " + " + to_str(n);
 
 i32 main() {
 	i32 base = 2_i32;

@@ -22,5 +22,5 @@ i32 main() {
 	Counter.inc();
 	Counter.inc();
 	Counter.count = Counter.count + 39; // 3 + 39 = 42
-	return (i32) Counter.get();
+	return (i32)Counter.get();
 }

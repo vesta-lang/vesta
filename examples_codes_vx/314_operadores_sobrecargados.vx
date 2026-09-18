@@ -62,11 +62,11 @@ struct Vec2 {
 		r.y = -this.y;
 		return r;
 	}
-	public bool __eq__(Vec2 o) { return this.x == o.x && this.y == o.y; }
+	public bool __eq__(Vec2 o) => this.x == o.x && this.y == o.y;
 	/// `v[0]` / `v[1]` -> componente.
 	public i64 __index__(i64 i) { if (i == 0) { return this.x; } return this.y; }
 	/// `v` es "verdad" si no es el vector cero.
-	public bool __bool__() { return this.x != 0 || this.y != 0; }
+	public bool __bool__() => this.x != 0 || this.y != 0;
 }
 
 /// Mascara de bits: bitwise, shifts y el `+=` con dunder IN-PLACE.
@@ -103,7 +103,7 @@ struct Mask {
 		m.v = ~this.v;
 		return m;
 	}
-	public bool __bool__() { return this.v != 0; }
+	public bool __bool__() => this.v != 0;
 
 	/// Dunder IN-PLACE: `m += 1` llama AQUI, en vez de a `__add__` + store.
 	/// Para un tipo normal da igual; para uno que promete atomicidad es la

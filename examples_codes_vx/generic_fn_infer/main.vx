@@ -4,12 +4,12 @@
 concept Sumable<T> { i64 suma(); }
 
 struct Par {
-	i64 a;
-	i64 b;
-	i64 suma() { return this.a + this.b; }
+	i64                         a;
+	i64                         b;
+	i64 suma() => this.a + this.b;
 }
 
-i64 aplica < T : Sumable > (T v) { return v.suma(); }
+i64 aplica < T : Sumable > (T v) => v.suma();
 
 i64 main() {
 	Par p = {.a = 40, .b = 2 };

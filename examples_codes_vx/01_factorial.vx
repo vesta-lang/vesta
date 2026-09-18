@@ -27,6 +27,4 @@ i64 factorial(i64 n) {
 	return n * factorial(n - 1);
 }
 
-i32 main() {
-	return factorial(10);
-}
+i32 main() => factorial(10);

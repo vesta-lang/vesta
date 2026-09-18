@@ -17,9 +17,9 @@ namespace ejemplos.sugar_aliases_block;
 //        `comptime auto name = expr;` (inferencia + const implicito).
 //        Reduce ruido en cadenas largas de templates.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 sumar(i32 a, i32 b) { return a + b; }
-i32 mas_uno(i32 x) { return x + 1; }
+i32 doblar(i32 x) => x * 2;
+i32 sumar(i32 a, i32 b) => a + b;
+i32 mas_uno(i32 x) => x + 1;
 
 i32 main() {
 	// ============================================

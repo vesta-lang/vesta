@@ -17,8 +17,8 @@ f64 fpow(i64 n, f64 acc, f64 factor) {
 
 // Resta y division directas sobre params (no se foldean por la recursion
 // previa que produce valores runtime).
-f64 fsub(f64 a, f64 b) { return a - b; }
-f64 fdiv(f64 a, f64 b) { return a / b; }
+f64 fsub(f64 a, f64 b) => a - b;
+f64 fdiv(f64 a, f64 b) => a / b;
 
 i32 main() {
 	f64 s = fsum(4, 0.0, 2.5); // 0 + 2.5*4 = 10.0

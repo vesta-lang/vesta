@@ -20,28 +20,28 @@ i64 suma(i64* xs, i64 n) {
 }
 
 // 1. Funcion suelta: la que siempre funciono.
-i64 fn_var(i64... xs) { return suma(xs, vacount()); }
+i64 fn_var(i64... xs) => suma(xs, vacount());
 
 // 2. Metodo de clase.  3. Su constructor.
 class Clase {
 	public i64 delCtor;
 	public Clase(i64... xs) { this.delCtor = suma(xs, vacount()); }
-	public i64 total(i64... xs) { return suma(xs, vacount()); }
+	public i64 total(i64... xs) => suma(xs, vacount());
 	// Con parametros fijos DELANTE del variadico: los de delante son
 	// obligatorios, de ahi en adelante cualquier cantidad.
-	public i64 desde(i64 base, i64... xs) { return base + suma(xs, vacount()); }
+	public i64 desde(i64 base, i64... xs) => base + suma(xs, vacount());
 }
 
 // 4. Metodo de struct.
 struct Estructura {
-	i64 total(i64... xs) { return suma(xs, vacount()); }
+	i64 total(i64... xs) => suma(xs, vacount());
 }
 
 // 5. Metodo de interfaz.
 interface Contrato { i64 total(i64... xs); }
 class Implementa : Contrato {
 	@Override
-	public i64 total(i64... xs) { return suma(xs, vacount()); }
+	public i64 total(i64... xs) => suma(xs, vacount());
 }
 
 i32 main() {

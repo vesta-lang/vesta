@@ -33,16 +33,14 @@ typedef u64 secret_token new @opaque;
 
 // API de uso real: cada parametro lleva su tipo unico.  Si el usuario
 // confunde el orden de los args (user_id vs group_id), error compile-time.
-u64 grant(user_id u, group_id g) {
-	return (u64) u + (u64) g * 1000;
-}
+u64 grant(user_id u, group_id g) => (u64)u + (u64)g * 1000;
 
 i32 main() {
 	// Crear envueltos via cast explicito (newtypes no-opaque).
-	user_id  alice    = (user_id) 101;
-	user_id  bob      = (user_id) 202;
-	group_id admins   = (group_id) 7;
-	port_num web_port = (port_num) 8080;
+	user_id  alice    = (user_id)101;
+	user_id  bob      = (user_id)202;
+	group_id admins   = (group_id)7;
+	port_num web_port = (port_num)8080;
 
 	// OK: tipos coinciden.
 	u64 g1 = grant(alice, admins); // 101 + 7*1000 = 7101
@@ -54,10 +52,10 @@ i32 main() {
 	//   u64 mix = alice + admins;  // u64+u64 OK, pero user_id+group_id no
 
 	// OK: cast explicito para extraer bits.
-	u64 raw = (u64) bob;
+	u64 raw = (u64)bob;
 	if (raw != 202) return 100;
 	if (g1 != 7101) return 200;
-	if ((u32) web_port != 8080) return 300;
+	if ((u32)web_port != 8080) return 300;
 
 	// Introspeccion compile-time.
 	if (!is_newtype<user_id>()) return 400;

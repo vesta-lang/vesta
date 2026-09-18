@@ -89,7 +89,7 @@ i32 main() {
 	// IMPORTANTE: structs pasados a Win32 deben vivir en memoria HOST
 	// (no VM stack).  user32 dereferencia el puntero directo; un VM-addr
 	// crashearia la API nativa.  Usamos malloc() para alocacion host.
-	u8* wc = (u8*) malloc(80);
+	u8* wc = (u8*)malloc(80);
 	i32 i  = 0_i32;
 	while (i < 80) {
 		wc[i] = 0;
@@ -111,7 +111,7 @@ i32 main() {
 
 	// wc.lpszClassName.  Necesitamos un literal UTF-16LE "VxTest\0".
 	// Bytes: V=0x56,e=0x65,x=0x78,T=0x54,e=0x65,s=0x73,t=0x74, terminador.
-	u8* class_name = (u8*) malloc(20);
+	u8* class_name = (u8*)malloc(20);
 	i = 0;
 	while (i < 20) {
 		class_name[i] = 0;
@@ -168,7 +168,7 @@ i32 main() {
 	// Layout MSG (48 bytes Win64): hwnd(8) + msg(4) + pad(4) + wparam(8)
 	//   + lparam(8) + time(4) + pt.x(4) + pt.y(4) + pad(4) + lPrivate(4).
 	// Tambien necesita ser HOST memory (user32 lo dereferencia).
-	u8* msg = (u8*) malloc(64);
+	u8* msg = (u8*)malloc(64);
 	i32 j   = 0_i32;
 	while (j < 64) {
 		msg[j] = 0;

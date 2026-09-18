@@ -17,14 +17,14 @@ namespace ejemplos.clases_finales;
 final class Cerrada {
 	public i32 v;
 	public Cerrada(i32 x) { this.v = x; }
-	public i32 doble() { return this.v * 2; }
+	public i32 doble() => this.v * 2;
 }
 
 @Final
 class TambienCerrada {
 	public i32 v;
 	public TambienCerrada(i32 x) { this.v = x; }
-	public i32 triple() { return this.v * 3; }
+	public i32 triple() => this.v * 3;
 }
 
 // Una final PUEDE heredar; lo que no puede es que hereden DE ella.  Asi que
@@ -32,13 +32,13 @@ class TambienCerrada {
 class Abierta {
 	public i32 base_v;
 	public Abierta(i32 x) { this.base_v = x; }
-	public i32 quien() { return 1; }
+	public i32 quien() => 1;
 }
 
 final class HojaDeAbierta : Abierta {
 	public HojaDeAbierta(i32 x) { super(x); }
 	@Override
-	public i32 quien() { return 2; }
+	public i32 quien() => 2;
 }
 
 // Y el modificador combina con la visibilidad, en cualquier orden.

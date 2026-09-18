@@ -24,7 +24,7 @@ i64 sum_f64(f64* p, i32 n) {
 	for (i32 i = 0_i32; i < n; i++) {
 		acc = acc + p[i];
 	}
-	return (i64) acc;
+	return (i64)acc;
 }
 
 i32 main() {

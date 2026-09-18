@@ -75,7 +75,7 @@ i64 my_wnd_proc(u64 hwnd, u32 msg, u64 wparam, i64 lparam) {
 	// WM_PAINT = 0x000F = 15.  Pintar el fondo con un color del sistema.
 	// Layout PAINTSTRUCT (~72 bytes en Win64; reservamos 96 con margen).
 	if (msg == 15) {
-		u8* ps = (u8*) malloc(96);
+		u8* ps = (u8*)malloc(96);
 		i32 i  = 0_i32;
 		while (i < 96) {
 			ps[i] = 0;
@@ -83,7 +83,7 @@ i64 my_wnd_proc(u64 hwnd, u32 msg, u64 wparam, i64 lparam) {
 		}
 		u64 hdc = BeginPaint(hwnd, (u64)(&ps[0]));
 		// Layout RECT: left/top/right/bottom (16 bytes).
-		u8* rc = (u8*) malloc(16);
+		u8* rc = (u8*)malloc(16);
 		i = 0;
 		while (i < 16) {
 			rc[i] = 0;
@@ -106,7 +106,7 @@ i32 main() {
 	i64 thunk = as_native_callback(my_wnd_proc);
 
 	// WNDCLASSEXW en memoria HOST.
-	u8* wc = (u8*) malloc(80);
+	u8* wc = (u8*)malloc(80);
 	i32 i  = 0_i32;
 	while (i < 80) {
 		wc[i] = 0;
@@ -117,7 +117,7 @@ i32 main() {
 	*((u64*)(&wc[24])) = hinst; // hInstance
 
 	// Class name "VxVisible\0" en UTF-16LE (22 bytes incl. NUL).
-	u8* cn = (u8*) malloc(24);
+	u8* cn = (u8*)malloc(24);
 	i = 0;
 	while (i < 24) {
 		cn[i] = 0;
@@ -138,7 +138,7 @@ i32 main() {
 	RegisterClassExW((u64)(&wc[0]));
 
 	// Window title " - WndProc demo (cierra en 3s)" en UTF-16LE.
-	u8* title = (u8*) malloc(80);
+	u8* title = (u8*)malloc(80);
 	i = 0;
 	while (i < 80) {
 		title[i] = 0;
@@ -180,7 +180,7 @@ i32 main() {
 	SetTimer(hwnd, 1, 3000, 0);
 
 	// Message pump.
-	u8* msg = (u8*) malloc(64);
+	u8* msg = (u8*)malloc(64);
 	i32 j   = 0_i32;
 	while (j < 64) {
 		msg[j] = 0;

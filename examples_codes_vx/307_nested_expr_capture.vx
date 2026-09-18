@@ -10,13 +10,13 @@
 //
 // Resultado esperado: R0 == 42.
 
-comptime string src(expr code) { return code; }
+comptime string src(expr code) => code;
 
 // forwardea su param expr a otra fn expr-capture (bare-return, sin concat):
-comptime string outer(expr code) { return src(code); }
+comptime string outer(expr code) => src(code);
 
 // tambien via concat:
-comptime string wrapped(expr code) { return "[" + src(code)+ "]"; }
+comptime string wrapped(expr code) => "[" + src(code)+ "]";
 
 i32 main() {
 	string s1 = outer(hola + mundo); // "hola + mundo"

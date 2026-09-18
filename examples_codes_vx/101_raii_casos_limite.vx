@@ -115,7 +115,7 @@ i32 caso_9_try_catch() {
 }
 
 // Helpers que aislan static fields a un solo acceso por funcion.
-i32 read_cnt() { return Counter.cnt; }
+i32 read_cnt() => Counter.cnt;
 void reset_cnt() { Counter.cnt = 0; }
 
 // Verificadores simples que retornan 1 si OK, 0 si FAIL.

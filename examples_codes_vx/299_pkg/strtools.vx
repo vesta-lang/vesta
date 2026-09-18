@@ -5,6 +5,4 @@ namespace strtools;
 // VALOR string.  Usada cross-modulo -> el importador debe (a) capturar el arg
 // como texto crudo aunque no conozca la firma al parsear (siembra de params
 // `expr`), y (b) evaluar la fn importada por tree-walk (no re-baja a IR).
-public comptime string src(expr code) {
-	return code;
-}
+public comptime string src(expr code) => code;

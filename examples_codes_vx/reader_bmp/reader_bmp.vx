@@ -142,15 +142,15 @@ void dump_terminal(u8* buf) {
 	i32           bytes_per_row = width * 3;
 	i32           padding       = (4 - (bytes_per_row % 4)) % 4;
 	i32           row_padded    = bytes_per_row + padding;
-	i32           base          = (i32) fh.offset;
+	i32           base          = (i32)fh.offset;
 
 	// BMP se almacena de abajo hacia arriba: fila height-1 primero.
 	for (i32 fila = height - 1; fila >= 0; fila--) {
 		for (i32 col = 0_i32; col < width; col++) {
 			i32 index = base + fila * row_padded + col * 3;
-			i32 b     = (i32) buf[index];
-			i32 g     = (i32) buf[index + 1];
-			i32 r     = (i32) buf[index + 2];
+			i32 b     = (i32)buf[index];
+			i32 g     = (i32)buf[index + 1];
+			i32 r     = (i32)buf[index + 2];
 			print("${bg_rgb(r, g, b)} ${RESET}");
 		}
 		println("");

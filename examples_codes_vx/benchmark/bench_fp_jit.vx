@@ -21,7 +21,7 @@ class FpOps {
 		f64 acc = 0.0_f64;
 		i32 i   = 1_i32;
 		while (i < n) {
-			f64 x = (f64) i;
+			f64 x = (f64)i;
 			acc = acc + sqrt(x);
 			acc = acc + fabs(x - 1000.0);
 			acc = acc + floor(x * 0.7);

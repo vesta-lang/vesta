@@ -31,9 +31,7 @@ class Punto {
 		this.x = a;
 		this.y = b;
 	}
-	i32 sum() {
-		return this.x + this.y;
-	}
+	i32 sum() => this.x + this.y;
 }
 
 i32 main() {

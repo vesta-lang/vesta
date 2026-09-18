@@ -33,7 +33,7 @@ struct Recurso {
 // aqui se suprime; el dueno pasa al caller).
 Recurso adquirir(i64 v) {
 	Recurso r;
-	r.p  = (i64*) malloc(8);
+	r.p  = (i64*)malloc(8);
 	*r.p = v;
 	return r;
 }

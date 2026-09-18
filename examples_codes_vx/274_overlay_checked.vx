@@ -33,11 +33,11 @@ struct Hdr {
 i64 sec_size_checked(Hdr h, i32 i, u64 len) {
 	if ((u32)i >= (u32)h.count) { return -1; }        // indice fuera de count
 	if (!in_bounds(h.secs[i].sz, len)) { return -1; } // campo fuera del buffer
-	return (i64) h.secs[i].sz;                        // solo aqui, ya probado
+	return (i64)h.secs[i].sz;                         // solo aqui, ya probado
 }
 
 i32 main() {
-	u8* buf = (u8*) malloc(64);
+	u8* buf = (u8*)malloc(64);
 	*(u32*)(buf + 0)  = 0xCAFE;
 	*(u16*)(buf + 4)  = 2;
 	*(u32*)(buf + 8)  = 100;
@@ -69,5 +69,5 @@ i32 main() {
 	println("ACC=${acc}"); // 351
 
 	free(buf);
-	return (i32) acc; // 351 & 0xFF = 95
+	return (i32)acc; // 351 & 0xFF = 95
 }

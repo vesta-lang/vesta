@@ -21,13 +21,9 @@
 		this.base = 0;
 	}
 
-	public i32 doblar(i32 x) {
-		return x + x;
-	}
+	public i32 doblar(i32 x) => x + x;
 
-	public i32 sumar(i32 x) {
-		return this.base + x;
-	}
+	public i32 sumar(i32 x) => this.base + x;
 }
 
 i32 pruebas() {

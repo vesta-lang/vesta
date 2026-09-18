@@ -22,7 +22,7 @@
 
 class Service {
 	public Service() { }
-	public i32 run(i32 x) { return x; }
+	public i32 run(i32 x) => x;
 }
 
 @Aspect
@@ -31,15 +31,11 @@ class Envoltura {
 
 	/** @brief Declarado el primero: es el mas EXTERNO, envuelve al de abajo. */
 	@Around("Service.run")
-	public i32 externo(i32 x) {
-		return proceed() * 2 + 1;
-	}
+	public i32 externo(i32 x) => proceed() * 2 + 1;
 
 	/** @brief Declarado el segundo: es el mas INTERNO, envuelve al metodo. */
 	@Around("Service.run")
-	public i32 interno(i32 x) {
-		return proceed() * 10 + 3;
-	}
+	public i32 interno(i32 x) => proceed() * 10 + 3;
 }
 
 i32 main() {

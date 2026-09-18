@@ -25,15 +25,15 @@ import std.atomic only atomic_load64, atomic_store64, atomic_add64;
 struct Atomic {
 	i64 v;
 
-	public i64 __deref__() { return atomic_load64(&this.v); }
+	public i64 __deref__() => atomic_load64(&this.v);
 	public i64 __assign__(i64 n) {
 		atomic_store64(&this.v, n);
 		return n;
 	}
 
 	// El incremento es UNA instruccion (lock xadd): ningun hilo cabe en medio.
-	public i64 __iadd__(i64 d) { return atomic_add64(&this.v, d) + d; }
-	public i64 __isub__(i64 d) { return atomic_add64(&this.v, 0 - d) - d; }
+	public i64 __iadd__(i64 d) => atomic_add64(&this.v, d) +     d;
+	public i64 __isub__(i64 d) => atomic_add64(&this.v, 0 - d) - d;
 }
 
 // Tipo no atomico que solo declara operaciones in-place, para ver la fusion en
@@ -41,7 +41,7 @@ struct Atomic {
 struct Reg {
 	i64 v;
 
-	public i64 __deref__() { return this.v; }
+	public i64 __deref__() => this.v;
 	public i64 __assign__(i64 n) {
 		this.v = n;
 		return n;

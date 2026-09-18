@@ -25,18 +25,14 @@ i64 nivel3(i64 x) {
  * @param x Valor.
  * @return Lo que devuelva el de abajo.
  */
-i64 nivel2(i64 x) {
-	return nivel3(x + 1);
-}
+i64 nivel2(i64 x) => nivel3(x + 1);
 
 /**
  * @brief Primer nivel.
  * @param x Valor.
  * @return Lo que devuelva el de abajo.
  */
-i64 nivel1(i64 x) {
-	return nivel2(x + 1);
-}
+i64 nivel1(i64 x) => nivel2(x + 1);
 
 /**
  * @brief Punto de entrada.
@@ -44,5 +40,5 @@ i64 nivel1(i64 x) {
  */
 i32 main() {
 	println("antes del panic");
-	return (i32) nivel1(1);
+	return (i32)nivel1(1);
 }

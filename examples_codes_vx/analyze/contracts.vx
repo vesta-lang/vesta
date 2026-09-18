@@ -36,9 +36,7 @@
 @nothrow
 @nopanic
 @alloc(0)
-i64 cuadrado(i64 x) {
-	return x * x;
-}
+i64 cuadrado(i64 x) => x * x;
 
 // --------------------------------------------------------------------------
 // 2. PUREZA POR COMPOSICION: 'combina' no tiene efectos propios y solo llama
@@ -49,9 +47,7 @@ i64 cuadrado(i64 x) {
 @pure
 @alloc(0)
 @nothrow
-i64 combina(i64 a, i64 b) {
-	return cuadrado(a) + cuadrado(b);
-}
+i64 combina(i64 a, i64 b) => cuadrado(a) + cuadrado(b);
 
 // --------------------------------------------------------------------------
 // 3. SIN ALLOCACIONES en un bucle: @alloc(0) garantiza que la funcion no
@@ -78,9 +74,7 @@ i64 suma_hasta(i64 n) {
 // --------------------------------------------------------------------------
 @stack(256)
 @alloc(0)
-i64 poligono(i64 lado, i64 n) {
-	return lado * lado * n;
-}
+i64 poligono(i64 lado, i64 n) => lado * lado * n;
 
 // --------------------------------------------------------------------------
 // EJEMPLOS DE VIOLACION (comentados: romperian la compilacion a proposito).
@@ -123,7 +117,7 @@ struct Contador {
 		total_pre:    O(1),
 		total_post:   O(1)
 	)
-		public i64 leer() { return this.n; }
+		public i64 leer() => this.n;
 }
 
 // --------------------------------------------------------------------------
@@ -195,7 +189,7 @@ i32 main() {
 
 	Caja<f64> cf;
 	cf.v = 1.0;
-	r    = r + (i64) cf.sumar(3.0); // 1 + 3*3 = 10 -> 100 + 10 = 110
+	r    = r + (i64)cf.sumar(3.0); // 1 + 3*3 = 10 -> 100 + 10 = 110
 
-	return (i32) r;
+	return (i32)r;
 }

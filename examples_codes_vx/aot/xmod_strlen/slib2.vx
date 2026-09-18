@@ -7,6 +7,4 @@
 // se hace `public`: dentro de un namespace, lo que no lo es no sale de el.
 namespace slib2;
 
-public i32 slen2(string s) {
-	return (i32) s.length();
-}
+public i32 slen2(string s) => (i32)s.length();

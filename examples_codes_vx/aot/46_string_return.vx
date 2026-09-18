@@ -20,13 +20,9 @@
 // Validado por ejecucion (PE/ELF) + valgrind (0 leaks, sin double-free:
 // cada buffer lo libera UNA sola vez su poseedor).
 
-string mk(string a, string b) {
-	return a + b;
-}
+string mk(string a, string b) => a + b;
 
-string g() {
-	return "hola";
-}
+string g() => "hola";
 
 i32 main() {
 	string a = "ab";

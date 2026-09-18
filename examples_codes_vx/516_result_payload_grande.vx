@@ -36,9 +36,7 @@ Result<Grande, i64> hacer(i64 x) {
 	return Ok(g);
 }
 
-Result<Grande, i64> fallar() {
-	return Err(99);
-}
+Result<Grande, i64> fallar() => Err(99);
 
 i32 main() {
 	// Un centinela en la pila: si el conjunto se dimensionara corto, lo

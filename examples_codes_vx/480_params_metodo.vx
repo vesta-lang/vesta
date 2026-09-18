@@ -8,20 +8,20 @@ namespace ejemplos.params_metodo;
 // ni un puntero a funcion al estilo de C, y no por ninguna razon de diseno:
 // porque la copia no lo sabia leer.
 
-i64 doblar(i64 x) { return x * 2; }
-i64 restar_uno(i64 x) { return x - 1; }
+i64 doblar(i64 x) => x * 2;
+i64 restar_uno(i64 x) => x - 1;
 
 class Calculadora {
 	// Puntero a funcion al estilo de C, como parametro de un metodo.
-	public i64 aplicar(i64 (*op)(i64), i64 v) { return op(v); }
+	public i64 aplicar(i64 (*op)(i64), i64 v) => op(v);
 
 	// Parametro no-nulo: el que llama no puede pasar nulo, y el cuerpo no
 	// tiene que comprobarlo.
-	public i64 sumar_uno(i64 !!x) { return x + 1; }
+	public i64 sumar_uno(i64 !!x) => x + 1;
 }
 
 struct CalcS {
-	i64 aplicar(i64 (*op)(i64), i64 v) { return op(v); }
+	i64 aplicar(i64 (*op)(i64), i64 v) => op(v);
 }
 
 i32 main() {

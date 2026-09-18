@@ -30,8 +30,8 @@ struct SlotRec {
 }
 
 i32 main() {
-	u8* a = (u8*) malloc(128);
-	u8* b = (u8*) malloc(128);
+	u8* a = (u8*)malloc(128);
+	u8* b = (u8*)malloc(128);
 
 	// Registro A: 2 ranuras -> tail en 0x10 + 2*8 = 0x20.
 	SlotRec ra = SlotRec(a);

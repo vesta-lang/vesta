@@ -11,7 +11,7 @@
 typedef struct _CTX * PCTX, *LPCTX;
 
 // (2) uso como HANDLE opaco (nunca derefenciado; solo se pasa).
-i64 as_handle(PCTX c) { return (i64)c; }
+i64 as_handle(PCTX c) => (i64)c;
 
 // (3) COMPLETACION: definir el struct despues -> ahora es derefenciable.
 struct _CTX {

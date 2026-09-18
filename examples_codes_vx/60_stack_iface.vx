@@ -51,9 +51,7 @@ class LinkedListStack : IStack {
 		return v;
 	}
 
-	public i32 size() {
-		return this.count;
-	}
+	public i32 size() => this.count;
 }
 
 // Helper polimorfico: opera sobre cualquier IStack.

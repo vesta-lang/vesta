@@ -20,15 +20,15 @@ namespace ejemplos.payload_variante;
 
 typedef i64 Metros new;
 
-i64 doblar(i64 x) { return x * 2; }
+i64 doblar(i64 x) => x * 2;
 
 enum Caja {
 	ConNewtype(Metros),
 	ConFn(cfn(i64) -> i64)
 }
 
-i64 usa_newtype(Metros m) { return (i64) m; }
-i64 usa_fn(cfn(i64) -> i64 cb) { return cb(21); }
+i64 usa_newtype(Metros m) => (i64)m;
+i64 usa_fn(cfn(i64) -> i64 cb) => cb(21);
 
 i32 main() {
 	// Como argumento de una funcion.
@@ -42,7 +42,7 @@ i32 main() {
 
 	i64 c = 0_i64;
 	match (c1) {
-		case ConNewtype(m) => { c = (i64) m; }
+		case ConNewtype(m) => { c = (i64)m; }
 		case ConFn(f)      => { c = 0; }
 	}
 	i64 d = 0_i64;

@@ -21,8 +21,8 @@ class Pair<K, V> {
 		this.first  = f;
 		this.second = s;
 	}
-	public K getFirst() { return this.first; }
-	public V getSecond() { return this.second; }
+	public K getFirst() => this. first;
+	public V getSecond() => this.second;
 }
 
 i32 main() {

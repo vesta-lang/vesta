@@ -113,7 +113,7 @@ void __vio_raw(u8* buf, u64 len) {
 }
 @Target("!os:windows")
 void __vio_raw(u8* buf, u64 len) {
-	if (len > 0) write(STDOUT_FILENO, (char*) buf, len);
+	if (len > 0) write(STDOUT_FILENO, (char*)buf, len);
 }
 
 // Buffer de salida (block-buffered): acumula y vuelca en UN syscall.  Bate a
@@ -166,7 +166,7 @@ void __vx_write(u8* buf, u64 len) {
  * @return 1 si hay depurador, 0 si no o si no se pudo averiguar.
  */
 @Target("os:windows")
-i32 __vio_trazado() { return IsDebuggerPresent(); }
+i32 __vio_trazado() => IsDebuggerPresent();
 
 /**
  * @brief Version de Linux: no hay llamada que lo diga.
@@ -203,7 +203,7 @@ i32 __vio_trazado() {
 
 /// En un target sin sistema operativo no hay a quien preguntar.
 @Target("!os:windows && !os:linux")
-i32 __vio_trazado() { return 0; }
+i32 __vio_trazado() => 0;
 
 /**
  * @brief Hook por defecto de `panic(msg)`.

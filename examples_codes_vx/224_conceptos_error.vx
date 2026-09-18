@@ -10,7 +10,7 @@ struct Punto {
 	i64 y;
 }
 
-T sumar < T : Numeric > (T a, T b) { return a + b; }
+T sumar < T : Numeric > (T a, T b) => a + b;
 
 i32 main() {
 	Punto p = {.x = 1, .y = 2};

@@ -44,36 +44,36 @@ struct Punto {
 }
 
 // 1 y 2. lo que serian metodos de Punto, escritos fuera de el
-i64 perimetro(Punto p) { return (p.x + p.y) * 2; }
-i64 escala(Punto p, i64 k) { return (p.x + p.y) * k; }
+i64 perimetro(Punto p) => (p.x + p.y) * 2;
+i64 escala(Punto p, i64 k) => (p.x + p.y) * k;
 
 // 3 y 4. receptor primitivo, con sobrecarga entre las candidatas
-u64 doble(u64 v) { return v * 2_u64; }
-u64 mas(u64 a, u64 b) { return a + b; }
-u64 mas(u64 a, u64 b, u64 c) { return a + b + c; }
+u64 doble(u64 v) => v * 2_u64;
+u64 mas(u64 a, u64 b) => a +            b;
+u64 mas(u64 a, u64 b, u64 c) => a + b + c;
 
 // 5. el MISMO nombre para otro receptor: otra cabeza de tipo, otra candidata
-i64 mas(i64 a, i64 b) { return a + b + 100; }
+i64 mas(i64 a, i64 b) => a + b + 100;
 
 // 8. el receptor no encaja EXACTO: un `i32` y un literal sin sufijo llegan
 // aqui igual que llegan a `triple(y)` y `triple(6)`
-u64 triple(u64 v) { return v * 3_u64; }
+u64 triple(u64 v) => v * 3_u64;
 
 // 9. y un tipo FUERTE, que por dentro es un u32 y aun asi no comparte
 // candidatas con el: lo suyo se busca en SU cubo
 typedef u32 Edad new;
 
-u64 anyos(Edad e) { return (u64)e + 1_u64; }
+u64 anyos(Edad e) => (u64)e + 1_u64;
 
 // 7. puntero y clase
-i64 leer(i64* p) { return *p; }
+i64 leer(i64* p) => *p;
 
 class Caja {
 	public i64 v;
 	public Caja(i64 v) { this.v = v; }
 }
 
-i64 contenido(Caja c) { return c.v; }
+i64 contenido(Caja c) => c.v;
 
 i32 main() {
 	Punto q;

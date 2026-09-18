@@ -234,6 +234,4 @@ i32 corre() {
  * @brief Punto de entrada: delega en la rama del sistema en que se compilo.
  * @return @c EXITO (42) si todas las syscalls de esa plataforma salieron bien.
  */
-i32 main() {
-	return corre();
-}
+i32 main() => corre();

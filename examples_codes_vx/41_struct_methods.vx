@@ -24,14 +24,10 @@ struct Punto {
 	i32 y;
 
 	// Metodo de bloque: suma de las dos componentes.
-	i32 sum() {
-		return this.x + this.y;
-	}
+	i32 sum() => this.x + this.y;
 
 	// Metodo con parametro: escala ambas componentes y devuelve la suma.
-	i32 scaled_sum(i32 k) {
-		return (this.x + this.y) * k;
-	}
+	i32 scaled_sum(i32 k) => (this.x + this.y) * k;
 
 	// Metodo expression-bodied (=> expr): producto de las componentes.
 	i32 prod() => this.x * this.y;

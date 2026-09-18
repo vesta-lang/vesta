@@ -9,7 +9,7 @@
 // escapa, el optimizador lo promueve a pila (alloca) y elimina el free
 // (sin dangling, sin libc).  Aqui escapa via return -> heap real, pareado.
 
-i64* make_buf(i64 n) { return malloc(n * 8); }
+i64* make_buf(i64 n) => malloc(n * 8);
 
 i32 main() {
 	i64* p = make_buf(8); // malloc(64) (escapa -> heap real)

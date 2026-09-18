@@ -21,6 +21,6 @@ Caja crear(i64 v) {
 }
 
 i32 main() {
-	Caja c = crear(41);    // c posee el env; lo libera al exit del scope
-	return (i32) c.leer(); // 42
+	Caja c = crear(41);   // c posee el env; lo libera al exit del scope
+	return (i32)c.leer(); // 42
 }

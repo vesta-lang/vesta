@@ -2,7 +2,7 @@
 // nombre cualificado desde OTRO modulo.  Se pliegan/expanden en compile-time.
 namespace mat;
 
-public comptime i64 sq(i64 n) { return n * n; }
+public comptime i64 sq(i64 n) => n * n;
 
 @Macro
-public comptime string veces7(i64 n) { return to_str(n * 7); }
+public comptime string veces7(i64 n) => to_str(n * 7);

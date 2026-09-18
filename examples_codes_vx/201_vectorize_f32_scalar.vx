@@ -37,5 +37,5 @@ i64 main() {
 	free(c);
 	free(a);
 	free(b);
-	return (i64) s; // sum_{i=0..24}(2(i+1)+i) = sum(3i+2) = 3*300 + 50 = 950
+	return (i64)s; // sum_{i=0..24}(2(i+1)+i) = sum(3i+2) = 3*300 + 50 = 950
 }

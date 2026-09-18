@@ -5,9 +5,7 @@ namespace ejemplos.bug3;
 // stack, no en host heap; no se puede pasar cross-funcion sin overhead).
 // La solucion idiomatica: declarar el owner como unique<T>.
 
-i32 leer_y_doblar(borrow<i32> r) {
-	return read_borrow(r) * 2;
-}
+i32 leer_y_doblar(borrow<i32> r) => read_borrow(r) * 2;
 
 void incrementar(borrow_mut<i32> m, i32 delta) {
 	i32 actual = read_borrow(m);

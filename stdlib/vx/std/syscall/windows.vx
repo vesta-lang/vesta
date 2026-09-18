@@ -350,12 +350,12 @@ public void InitializeObjectAttributes(POBJECT_ATTRIBUTES InitializedAttributes,
 	PVOID SecurityDescriptor) {
 	// `Length` debe valer el tamano real de la estructura: la syscall lo usa
 	// para validar la version del descriptor.  Se toma con sizeof, no a mano.
-	(*InitializedAttributes).Length = (u32) sizeof<OBJECT_ATTRIBUTES>();
+	(*InitializedAttributes).Length = (u32)sizeof<OBJECT_ATTRIBUTES>();
 	(*InitializedAttributes).RootDirectory = RootDirectory;
 	(*InitializedAttributes).ObjectName = ObjectName;
 	(*InitializedAttributes).Attributes = Attributes;
 	(*InitializedAttributes).SecurityDescriptor = SecurityDescriptor;
-	(*InitializedAttributes).SecurityQualityOfService = (void*) 0;
+	(*InitializedAttributes).SecurityQualityOfService = (void*)0;
 }
 
 /**

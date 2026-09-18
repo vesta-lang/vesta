@@ -61,8 +61,8 @@ i32 main() {
 	Color c = {.r = 255, .g = 128, .b = 0, .a = 255};
 	// area = 4 * 3 = 12; + c.g (128) - c.b (0) = 140.
 	f64 a  = area(r);
-	i32 ai = (i32) a;
-	i32 g  = (i32) c.g;
-	i32 b  = (i32) c.b;
+	i32 ai = (i32)a;
+	i32 g  = (i32)c.g;
+	i32 b  = (i32)c.b;
 	return ai + g - b;
 }

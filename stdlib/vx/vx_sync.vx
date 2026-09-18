@@ -55,9 +55,7 @@ extern "kernel32.dll" {
  * @return Id de hilo (kernel32 `GetCurrentThreadId`), nunca 0.
  */
 @Target("os:windows")
-i64 __vsync_tid_raw() {
-	return (i64)GetCurrentThreadId();
-}
+i64 __vsync_tid_raw() => (i64)GetCurrentThreadId();
 
 /**
  * @brief TID del hilo actual en Linux/ELF (syscall `gettid` 186, RAW sin libc).
@@ -80,9 +78,7 @@ i64 __vsync_tid_raw() {
  *       un syscall (correcto).  Una optimizacion futura seria un cache
  *       thread-local (thread_local emite TLS nativo en AOT).
  */
-i64 __vsync_tid() {
-	return __vsync_tid_raw();
-}
+i64 __vsync_tid() => __vsync_tid_raw();
 
 // ---------------------------------------------------------------------------
 // Primitivas atomicas de bajo nivel.
@@ -111,9 +107,7 @@ i64 __vsync_cas64(i64* addr, i64 expected, i64 desired) {
  * @return `*addr`.
  * @note En x86-64 un `mov` alineado de 8 bytes ya es atomico.
  */
-i64 __vsync_load64(i64* addr) {
-	return *addr;
-}
+i64 __vsync_load64(i64* addr) => *addr;
 
 /**
  * @brief Hint de spin para el camino contended (`pause`).
@@ -134,9 +128,7 @@ void __vsync_pause() {
  * @param depth Profundidad de recursion (1..0xFFFF).
  * @return `(owner << 16) | (depth & 0xFFFF)`.
  */
-i64 __vsync_make(i64 owner, i64 depth) {
-	return (owner << 16) | (depth & 0xFFFF);
-}
+i64 __vsync_make(i64 owner, i64 depth) => (owner << 16) | (depth & 0xFFFF);
 
 /**
  * @brief Extrae el TID duenño de una palabra de monitor.
@@ -152,9 +144,7 @@ i64 __vsync_owner(i64 word) {
  * @param word Palabra de monitor.
  * @return lock_depth (0 = libre).
  */
-i64 __vsync_depth(i64 word) {
-	return word & 0xFFFF;
-}
+i64 __vsync_depth(i64 word) => word & 0xFFFF;
 
 /**
  * @brief Identidad del "duenño" del monitor: COMPUESTO (tid, fiber-id).
@@ -169,9 +159,7 @@ i64 __vsync_depth(i64 word) {
  *       en fiber_id.  La contienda cede (fibra) o spinea (hilo real) segun el
  *       caso en __vx_monenter.
  */
-i64 __vsync_self() {
-	return (__vsync_tid() << 16) | vasync_cur_fiber();
-}
+i64 __vsync_self() => (__vsync_tid() << 16) | vasync_cur_fiber();
 
 // ---------------------------------------------------------------------------
 // API publica: monenter / monexit.

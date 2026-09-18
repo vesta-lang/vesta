@@ -11,9 +11,9 @@ namespace ejemplos.macros_pattern_template;
 // `comptime_contains(s, needle) -> bool` valida que el template tenga
 // los placeholders esperados antes de aplicar replace.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 sumar(i32 a, i32 b) { return a + b; }
-i32 mas_uno(i32 x) { return x + 1; }
+i32 doblar(i32 x) => x * 2;
+i32 sumar(i32 a, i32 b) => a + b;
+i32 mas_uno(i32 x) => x + 1;
 
 i32 main() {
 	// ============================================

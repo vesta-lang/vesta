@@ -37,14 +37,10 @@ void map_inplace(i32[] arr, i32 n, fn(i32) -> i32 f) {
 	}
 }
 
-i32 compose_apply(fn(i32) -> i32 f, fn(i32) -> i32 g, i32 x) {
-	return f(g(x));
-}
+i32 compose_apply(fn(i32) -> i32 f, fn(i32) -> i32 g, i32 x) => f(g(x));
 
 // Funciones top-level que se pasan como function values al HOF reduce/map.
-i32 add2(i32 a, i32 b) {
-	return a + b;
-}
+i32 add2(i32 a, i32 b) => a + b;
 
 i32 max2(i32 a, i32 b) {
 	if (a > b) return a;

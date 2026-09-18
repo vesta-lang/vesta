@@ -122,9 +122,7 @@ i64 __vasync_current_fiber = 0_i64;
  *       const), asi que vx_sync (monitor cooperativo, FN.4/LIM-5) lo lee via
  *       esta fn en vez de referenciar el global directo.
  */
-public i64 vasync_cur_fiber() {
-	return __vasync_current_fiber;
-}
+public i64 vasync_cur_fiber() => __vasync_current_fiber;
 
 // Tabla de fibras (una entrada por tarea suspendible viva).  VASYNC_FIBCAP
 // entradas; cada una: ctx (host_ptr), stack_top (host_ptr, para liberar),
@@ -333,9 +331,7 @@ i64 __vx_msgrecv() {
  * @brief Pid de la tarea en ejecucion.
  * @return Pid actual (0 = main).
  */
-i64 __vx_pid() {
-	return __vasync_current_pid;
-}
+i64 __vx_pid() => __vasync_current_pid;
 
 // ===========================================================================
 //  F3: primitivos de fibra INLINEADOS (identicos a stdlib/vx/vx_fiber.vx).

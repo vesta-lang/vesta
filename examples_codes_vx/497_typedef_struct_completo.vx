@@ -16,7 +16,7 @@ struct Vesta {
 	private i64 valor;
 	static  i64 cuantos = 0_i64;
 
-	public i64 doble() { return this.valor * 2; }
+	public i64 doble() => this.valor * 2;
 	public void poner(i64 v) { this.valor = v; }
 }
 
@@ -24,7 +24,7 @@ typedef struct {
 	private i64 valor;
 	static  i64 cuantos = 0_i64;
 
-	public i64 doble() { return this.valor * 2; }
+	public i64 doble() => this.valor * 2;
 	public void poner(i64 v) { this.valor = v; }
 } Ce;
 

@@ -8,5 +8,5 @@ namespace ejemplos.neg_sufijo_c;
 
 i32 main() {
 	i64 c = 100_L;
-	return (i32) c;
+	return (i32)c;
 }

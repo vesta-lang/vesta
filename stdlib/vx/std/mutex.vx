@@ -76,7 +76,7 @@ void __vxm_unlock_after_park(i64 spin_addr, i64 fib) {
  *         puede comprobarlo con mutex_is_null antes de usarlo).
  */
 public Mutex mutex_new() {
-	Mutex m = Mutex((i64) malloc(MUTEX_SZ));
+	Mutex m = Mutex((i64)malloc(MUTEX_SZ));
 	if (!mutex_is_null(m)) {
 		m.held = 0;
 		m.spin = 0;
@@ -87,9 +87,7 @@ public Mutex mutex_new() {
 }
 
 /// @return true si el handle no apunta a ningun bloque (OOM en mutex_new).
-public bool mutex_is_null(Mutex m) {
-	return (i64)&m.held == 0;
-}
+public bool mutex_is_null(Mutex m) => (i64)&m.held == 0;
 
 /// Libera el mutex (nadie debe poseerlo ni estar en espera).
 public void mutex_free(Mutex m) {
@@ -136,9 +134,7 @@ public void mutex_lock(Mutex m) {
  * @brief Intento de adquisicion sin suspender (pura atomica, sin spinlock).
  * @return true si se tomo el mutex, false si ya estaba tomado.
  */
-public bool mutex_trylock(Mutex m) {
-	return atomic_cas64(&m.held, 0, 1) == 0;
-}
+public bool mutex_trylock(Mutex m) => atomic_cas64(&m.held, 0, 1) == 0;
 
 /**
  * @brief Libera el mutex.  Si hay fibras en espera, pasa la propiedad a la

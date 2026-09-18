@@ -57,7 +57,7 @@ public class Launcher {
 		u8* cwd_buf = malloc(512);
 		u8* got     = file_io.getcwd_into(cwd_buf, 512);
 		if (got == null) {
-			cwd_buf[0] = (u8) 46;
+			cwd_buf[0] = (u8)46;
 			cwd_buf[1] = 0;
 		}
 		i32                           cwd_len = 0_i32;
@@ -90,12 +90,12 @@ public class Launcher {
 		this.scroll     = 0;
 
 		// 1. añadir ".." si tiene sentido (cwd no es raiz).
-		i32 cwd_n = (i32) this.cwd.bytes();
+		i32 cwd_n = (i32)this.cwd.bytes();
 		if (cwd_n > 3) {
 			if (this.names_used + 3 <= this.names_cap) {
 				i32 dst = this.names_used;
-				this.names[dst]          = (u8) 46;
-				this.names[dst + 1]      = (u8) 46;
+				this.names[dst]          = (u8)46;
+				this.names[dst + 1]      = (u8)46;
 				this.names[dst + 2]      = 0;
 				this.offsets[this.count] = dst;
 				this.lens[this.count]    = 2;
@@ -111,8 +111,8 @@ public class Launcher {
 			spec[i] = cwd_c[i];
 			i       = i + 1;
 		}
-		spec[cwd_n]     = (u8) 92; // '\'
-		spec[cwd_n + 1] = (u8) 42; // '*'
+		spec[cwd_n]     = (u8)92; // '\'
+		spec[cwd_n + 1] = (u8)42; // '*'
 		spec[cwd_n + 2] = 0;
 		u8* finddata = malloc(LC_FINDDATA);
 		i64 h        = file_io.dir_open(spec, finddata);
@@ -129,15 +129,15 @@ public class Launcher {
 		// el resultado al slot del var-decl).  Cero overhead vs version &&.
 		i32 cont = 1_i32;
 		while (cont == 1 && this.count < LC_MAX_ENTRIES) {
-			i32 attrib = (i32) finddata[0];
+			i32 attrib = (i32)finddata[0];
 			i32 is_dir = 0_i32;
 			if ((attrib & 16) != 0) is_dir = 1;
 			u8* name_p = finddata + 40;
 			i32 nlen = 0_i32;
 			while (nlen < LC_NAME_MAX && name_p[nlen] != 0) nlen = nlen + 1;
 			i32 skip = 0_i32;
-			if (nlen == 1 && name_p[0] == (u8) 46) skip = 1;                         // "."
-			if (nlen == 2 && name_p[0] == (u8) 46 && name_p[1] == (u8) 46) skip = 1; // ".."
+			if (nlen == 1 && name_p[0] == (u8)46) skip = 1;                        // "."
+			if (nlen == 2 && name_p[0] == (u8)46 && name_p[1] == (u8)46) skip = 1; // ".."
 			if (skip == 0 && this.names_used + nlen + 1 <= this.names_cap) {
 				i32 dst = this.names_used;
 				i32 k   = 0_i32;
@@ -168,8 +168,8 @@ public class Launcher {
 		if (this.names_used + actual_len + 1 > this.names_cap) return;
 		i32 dst = this.names_used;
 		if (nlen == -1) {
-			this.names[dst]     = (u8) 46;
-			this.names[dst + 1] = (u8) 46;
+			this.names[dst]     = (u8)46;
+			this.names[dst + 1] = (u8)46;
 		} else {
 			i32 k = 0_i32;
 			while (k < nlen) {
@@ -188,7 +188,7 @@ public class Launcher {
 	// Repuebla visible_idx segun search_query.  Si query vacia, todas.
 	public void apply_filter() {
 		this.visible_count = 0;
-		i32 qn = (i32) this.search_query.bytes();
+		i32 qn = (i32)this.search_query.bytes();
 		if (qn == 0) {
 			i32 i = 0_i32;
 			while (i < this.count) {
@@ -221,8 +221,8 @@ public class Launcher {
 		while (i <= hn - nn) {
 			i32 j = 0_i32;
 			while (j < nn) {
-				i32                     a = (i32) hay[i + j];
-				i32                     b = (i32) needle[j];
+				i32                     a = (i32)hay[i + j];
+				i32                     b = (i32)needle[j];
 				if (a >= 65 && a <= 90) a = a + 32;
 				if (b >= 65 && b <= 90) b = b + 32;
 				if (a != b) break;
@@ -250,7 +250,7 @@ public class Launcher {
 	public string entry_path(i32 vi) {
 		if (vi < 0 || vi >= this.visible_count) return this.cwd;
 		i32 idx   = this.visible_idx[vi];
-		i32 cwd_n = (i32) this.cwd.bytes();
+		i32 cwd_n = (i32)this.cwd.bytes();
 		i32 en    = this.lens[idx];
 		u8* cwd_c = this.cwd.cstr();
 		u8* buf   = malloc(cwd_n + en + 2);
@@ -259,7 +259,7 @@ public class Launcher {
 			buf[k] = cwd_c[k];
 			k      = k + 1;
 		}
-		buf[cwd_n] = (u8) 92;
+		buf[cwd_n] = (u8)92;
 		u8* nm = this.names + this.offsets[idx];
 		k = 0;
 		while (k < en) {
@@ -274,11 +274,11 @@ public class Launcher {
 
 	// Sube al directorio padre (corta tras el ultimo '\').
 	public void go_parent() {
-		u8*                                      c   = this.cwd.cstr();
-		i32                                      nL  = (i32) this.cwd.bytes();
-		i32                                      cut = nL;
-		while (cut > 0 && c[cut - 1] != (u8) 92) cut = cut - 1;
-		if (cut > 0)                             cut = cut - 1;
+		u8*                                     c   = this.cwd.cstr();
+		i32                                     nL  = (i32)this.cwd.bytes();
+		i32                                     cut = nL;
+		while (cut > 0 && c[cut - 1] != (u8)92) cut = cut - 1;
+		if (cut > 0)                            cut = cut - 1;
 		if (cut > 2) {
 			this.cwd           = str_make(c, cut);
 			this.search_query  = "";
@@ -371,7 +371,7 @@ public class Launcher {
 		i32 k         = 0_i32;
 		i32 max_chars = cols - 6;
 		while (k < nlen && k < max_chars) {
-			i32 ch = (i32) nm[k];
+			i32 ch = (i32)nm[k];
 			if (ch >= 32 && ch < 127) print_char(ch);
 			else print(".");
 			k = k + 1;
@@ -418,7 +418,7 @@ public class Launcher {
 				continue;
 			}
 			if (k >= 32 && k < 127 && n < 250) {
-				buf[n] = (u8) k;
+				buf[n] = (u8)k;
 				n      = n + 1;
 				sc.move_cursor(sc.rows - 1, 17 + n - 1);
 				print_char(k);
@@ -454,7 +454,7 @@ public class Launcher {
 					continue;
 				}
 				if (k == keys.KEY_BACKSPACE || k == keys.KEY_BACKSPACE_WIN) {
-					i32 qn = (i32) this.search_query.bytes();
+					i32 qn = (i32)this.search_query.bytes();
 					if (qn > 0) {
 						u8* qc = this.search_query.cstr();
 						this.search_query = str_make(qc, qn - 1);
@@ -463,7 +463,7 @@ public class Launcher {
 					continue;
 				}
 				if (k >= 32 && k < 127) {
-					i32 qn = (i32) this.search_query.bytes();
+					i32 qn = (i32)this.search_query.bytes();
 					u8* qc = this.search_query.cstr();
 					u8* nq = malloc(qn + 2);
 					i32 i  = 0_i32;
@@ -471,7 +471,7 @@ public class Launcher {
 						nq[i] = qc[i];
 						i     = i + 1;
 					}
-					nq[qn]            = (u8) k;
+					nq[qn]            = (u8)k;
 					nq[qn + 1]        = 0;
 					this.search_query = str_make(nq, qn + 1);
 					free(nq);
@@ -540,8 +540,8 @@ public class Launcher {
 				string nm = this.prompt_new_name(sc);
 				if (nm.bytes() > 0) {
 					// construir cwd + '\' + nm
-					i32 cn  = (i32) this.cwd.bytes();
-					i32 nn  = (i32) nm.bytes();
+					i32 cn  = (i32)this.cwd.bytes();
+					i32 nn  = (i32)nm.bytes();
 					u8* cc  = this.cwd.cstr();
 					u8* nc  = nm.cstr();
 					u8* buf = malloc(cn + nn + 2);
@@ -550,7 +550,7 @@ public class Launcher {
 						buf[i] = cc[i];
 						i      = i + 1;
 					}
-					buf[cn] = (u8) 92;
+					buf[cn] = (u8)92;
 					i       = 0;
 					while (i < nn) {
 						buf[cn + 1 + i] = nc[i];

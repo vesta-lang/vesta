@@ -24,7 +24,7 @@ struct Desc {
 	u32 val      @0x04; // payload verificable
 	// nombre en translate(name_rva) por las secciones del ROOT.
 	u8 name @offset {
-		u64 rb  = (u64) parent<Root>();
+		u64 rb  = (u64)parent<Root>();
 		u32 rva = this.name_rva;
 		i32 i   = 0_i32;
 		while ((u32)i < (u32)parent<Root>().count) {
@@ -46,7 +46,7 @@ struct Root {
 	Sec secs[count] @offset(0x08) stride(12);
 	// tabla de descriptores anclada en translate(desc_rva), sin count.
 	Desc Descs[] @offset {
-		u64 rb  = (u64) base;
+		u64 rb  = (u64)base;
 		u32 rva = this.desc_rva;
 		i32 i   = 0_i32;
 		while ((u32)i < (u32)this.count) {
@@ -62,7 +62,7 @@ struct Root {
 }
 
 i32 main() {
-	u8* buf = (u8*) malloc(512);
+	u8* buf = (u8*)malloc(512);
 	*(u32*)(buf + 0) = 1;      // count=1
 	*(u32*)(buf + 4) = 0x1000; // desc_rva
 	// secs[0]: cubre todo el rango, va=0x1000 vsz=0x1000 rptr=0x40
@@ -104,5 +104,5 @@ i32 main() {
 	println("count=${count} acc=${acc}");
 
 	free(buf);
-	return (i32) acc; // 162
+	return (i32)acc; // 162
 }

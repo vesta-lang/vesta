@@ -9,6 +9,4 @@ namespace ejemplos.aritmetica;
 // Resultado esperado:
 //   exit code / R00 == 7
 
-i32 main() {
-	return 1 + 2 * 3;
-}
+i32 main() => 1 + 2 * 3;

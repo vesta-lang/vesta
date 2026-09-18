@@ -41,5 +41,5 @@ i64 main() {
 	free(y);
 
 	// 1055 + (-5) = 1050
-	return (i64) s + sy;
+	return (i64)s + sy;
 }

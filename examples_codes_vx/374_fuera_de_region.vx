@@ -40,5 +40,5 @@ i64 agregado_pequeno() {
 i32 main() {
 	i64 r = dentro_del_hueco() + agregado_pequeno();
 	println("r=${r}");
-	return (i32) r;
+	return (i32)r;
 }

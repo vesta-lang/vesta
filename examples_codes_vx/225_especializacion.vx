@@ -26,27 +26,27 @@ struct Punto {
 // ---- PRIMARIO ------------------------------------------------------------
 struct Caja<T> {
 	T v;
-	i64 clase() { return 1; } // marca: "primario"
+	i64 clase() => 1; // marca: "primario"
 }
 
 // ---- TOTAL sobre un primitivo: i64 exacto --------------------------------
 struct Caja<i64> {
 	i64 v;
-	i64 extra;                // campo EXTRA que el primario no tiene
-	i64 clase() { return 2; } // marca: "total i64"
+	i64 extra;        // campo EXTRA que el primario no tiene
+	i64 clase() => 2; // marca: "total i64"
 }
 
 // ---- TOTAL sobre un tipo de usuario: Punto exacto ------------------------
 struct Caja<Punto> {
 	Punto v;
-	i64 clase() { return 3; } // marca: "total Punto"
+	i64 clase() => 3; // marca: "total Punto"
 }
 
 // ---- PARCIAL: cualquier puntero host (T es param fresco) -----------------
 struct Caja<T*> {
 	T*   v;
-	bool propio;              // campo EXTRA propio del patron puntero
-	i64 clase() { return 4; } // marca: "parcial T*"
+	bool propio;      // campo EXTRA propio del patron puntero
+	i64 clase() => 4; // marca: "parcial T*"
 }
 
 i32 main() {
@@ -54,7 +54,7 @@ i32 main() {
 	Caja<i64>   b   = {.v = 10, .extra = 5}; // -> total i64 (clase=2, extra=5)
 	Punto       pt  = {.x = 1, .y = 2};
 	Caja<Punto> c   = {.v = pt}; // -> total Punto (clase=3)
-	i64*        raw = (i64*) malloc(8);
+	i64*        raw = (i64*)malloc(8);
 	Caja<i64*>  d   = {.v = raw, .propio = true}; // -> parcial T* (clase=4)
 
 	// Suma de marcas: 1 + 2 + 3 + 4 = 10.  Mas el campo extra (5) de la total.

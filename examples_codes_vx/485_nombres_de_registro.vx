@@ -21,14 +21,14 @@ namespace ejemplos.nombres_de_registro;
 
 class rax {
 	public i64 rbx;
-	public rax(i64 n) { this.rbx = n; } public i64 f0() { return this.rbx; }
+	public rax(i64 n) { this.rbx = n; } public i64 f0() => this.rbx;
 }
 struct zmm1 {
 	i64 rsp;
 	i64 cur0;
 }
-i64 xmm3(i64 rdi) { return rdi; }
-i64 f11(i64 x) { return x; }
+i64 xmm3(i64 rdi) => rdi;
+i64 f11(i64 x) =>    x;
 i64 ymm7(i64 r15) {
 	i64 rbp = r15 + 1;
 	return rbp;

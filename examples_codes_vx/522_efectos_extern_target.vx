@@ -58,9 +58,7 @@ extern "stdlib/native/io/vesta_io" {
 // ni roto --, que es la situacion que se quiere evitar.
 @nothrow
 @nopanic
-i64 escribir(in u8* p, u64 n) {
-	return vio_print_buf(p, n);
-}
+i64 escribir(in u8* p, u64 n) => vio_print_buf(p, n);
 
 i32 main() {
 	u8[10] msg;

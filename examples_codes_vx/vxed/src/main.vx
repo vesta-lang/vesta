@@ -83,9 +83,9 @@ void settings_save(EditorSettings s) {
 	string ln1 = "line_numbers=${s.show_line_numbers}\n";
 	string ln2 = "whitespace=${s.show_whitespace}\n";
 	string ln3 = "sidebar=${s.show_sidebar}\n";
-	file_io.write_bytes(fp, ln1.cstr(), (i32) ln1.bytes());
-	file_io.write_bytes(fp, ln2.cstr(), (i32) ln2.bytes());
-	file_io.write_bytes(fp, ln3.cstr(), (i32) ln3.bytes());
+	file_io.write_bytes(fp, ln1.cstr(), (i32)ln1.bytes());
+	file_io.write_bytes(fp, ln2.cstr(), (i32)ln2.bytes());
+	file_io.write_bytes(fp, ln3.cstr(), (i32)ln3.bytes());
 	file_io.close_file(fp);
 }
 
@@ -104,7 +104,7 @@ EditorSettings settings_load() {
 	// Parser ad-hoc: busca substrings "line_numbers=N", "whitespace=N",
 	// "sidebar=N".  Lee el digito justo despues del `=`.
 	i32 i = 0_i32;
-	while (i < (i32) n - 14) {
+	while (i < (i32)n - 14) {
 		// Buscar "line_numbers="
 		if (fr.data[i] == 108 && fr.data[i + 1] == 105 && fr.data[i + 2] == 110 &&
 			fr.data[i + 3] == 101 && fr.data[i + 4] == 95 && fr.data[i + 12] == 61) {
@@ -113,14 +113,14 @@ EditorSettings settings_load() {
 			else s.show_line_numbers                       = 1;
 		}
 		// "whitespace="
-		if (i < (i32) n - 11 &&
+		if (i < (i32)n - 11 &&
 			fr.data[i] == 119 && fr.data[i + 1] == 104 && fr.data[i + 2] == 105 &&
 			fr.data[i + 3] == 116 && fr.data[i + 10] == 61) {
 			if (fr.data[i + 11] == 48) s.show_whitespace = 0;
 			else s.show_whitespace                       = 1;
 		}
 		// "sidebar="
-		if (i < (i32) n - 8 &&
+		if (i < (i32)n - 8 &&
 			fr.data[i] == 115 && fr.data[i + 1] == 105 && fr.data[i + 2] == 100 &&
 			fr.data[i + 3] == 101 && fr.data[i + 4] == 98 && fr.data[i + 5] == 97 &&
 			fr.data[i + 6] == 114 && fr.data[i + 7] == 61) {
@@ -154,7 +154,7 @@ class Sidebar {
 		u8* cwd_buf = malloc(512);
 		u8* got     = file_io.getcwd_into(cwd_buf, 512);
 		if (got == null) {
-			cwd_buf[0] = (u8) 46; // '.'
+			cwd_buf[0] = (u8)46; // '.'
 			cwd_buf[1] = 0;
 		}
 		i32                           cwd_len = 0_i32;
@@ -185,7 +185,7 @@ class Sidebar {
 		if (this.is_dirs[idx] != 1) return;
 		if (this.is_expanded[idx] == 1) return;
 		// Construir el path absoluto del dir: cwd + "\\" + relname.
-		i32 cwd_n = (i32) this.cwd.bytes();
+		i32 cwd_n = (i32)this.cwd.bytes();
 		i32 rel_n = this.lens[idx];
 		u8* cwd_c = this.cwd.cstr();
 		u8* rel_c = this.names + this.offsets[idx];
@@ -222,7 +222,7 @@ class Sidebar {
 		i32  child_count = 0_i32;
 		i32  cont        = 1_i32;
 		while (cont == 1 && child_count < 64) {
-			i32 attrib = (i32) finddata[0];
+			i32 attrib = (i32)finddata[0];
 			i32 is_dir = 0_i32;
 			if ((attrib & 16) != 0) is_dir = 1;
 			u8* name_p = finddata + 40;
@@ -348,7 +348,7 @@ class Sidebar {
 		this.names_used = 0;
 		// Construir el spec "<cwd>\*" en un buffer host.
 		u8* cwd_c = this.cwd.cstr();
-		i32 cwd_n = (i32) this.cwd.bytes();
+		i32 cwd_n = (i32)this.cwd.bytes();
 		u8* spec  = malloc(cwd_n + 8);
 		i32 i     = 0_i32;
 		while (i < cwd_n) {
@@ -356,8 +356,8 @@ class Sidebar {
 			i       = i + 1;
 		}
 		// añadir "\\*" (Windows) o "/*" (POSIX).  Usamos '\' por defecto.
-		spec[cwd_n]     = (u8) 92; // '\'
-		spec[cwd_n + 1] = (u8) 42; // '*'
+		spec[cwd_n]     = (u8)92; // '\'
+		spec[cwd_n + 1] = (u8)42; // '*'
 		spec[cwd_n + 2] = 0;
 
 		u8* finddata = malloc(FINDDATA_BYTES);
@@ -370,7 +370,7 @@ class Sidebar {
 		// Primera entrada ya esta en finddata.
 		i32 cont = 1_i32;
 		while (cont == 1 && this.count < SB_MAX_ENTRIES) {
-			i32                     attrib = (i32) finddata[0];
+			i32                     attrib = (i32)finddata[0];
 			i32                     is_dir = 0_i32;
 			if ((attrib & 16) != 0) is_dir = 1;
 			// Saltar "." (no util).
@@ -378,7 +378,7 @@ class Sidebar {
 			i32 nlen = 0_i32;
 			while (nlen < SB_NAME_MAX && name_p[nlen] != 0) nlen = nlen + 1;
 			i32 skip = 0_i32;
-			if (nlen == 1 && name_p[0] == (u8) 46) skip = 1; // "."
+			if (nlen == 1 && name_p[0] == (u8)46) skip = 1; // "."
 			if (skip == 0 && this.names_used + nlen + 1 <= this.names_cap) {
 				i32 dst = this.names_used;
 				i32 k   = 0_i32;
@@ -414,13 +414,13 @@ class Sidebar {
 
 	public i32 entry_is_dir(i32 i) {
 		if (i < 0 || i >= this.count) return 0;
-		return (i32) this.is_dirs[i];
+		return (i32)this.is_dirs[i];
 	}
 
 	// Construye el path absoluto cwd + "\\" + entry_name(i).
 	public string entry_path(i32 i) {
 		if (i < 0 || i >= this.count) return this.cwd;
-		i32 cwd_n = (i32) this.cwd.bytes();
+		i32 cwd_n = (i32)this.cwd.bytes();
 		i32 en    = this.lens[i];
 		u8* cwd_c = this.cwd.cstr();
 		u64 total = (u64)(cwd_n + en + 2);
@@ -430,7 +430,7 @@ class Sidebar {
 			buf[k] = cwd_c[k];
 			k      = k + 1;
 		}
-		buf[cwd_n] = (u8) 92; // '\'
+		buf[cwd_n] = (u8)92; // '\'
 		u8* nm = this.names + this.offsets[i];
 		k = 0;
 		while (k < en) {
@@ -488,7 +488,7 @@ void render_tab_bar(tabs.Workspace ws, screen.Screen sc) {
 		diag_log("RTB:6 pre-label cur_id=${cur.id}");
 		string label = " ${idx} ${cur.title}${mark} ";
 		diag_log("RTB:7 post-label");
-		i32 lblen = (i32) label.bytes();
+		i32 lblen = (i32)label.bytes();
 		if (col_used + lblen > max_col) break;
 		if (cur.id == active_id) print(screen.ATTR_INVERT);
 		else print(screen.ATTR_DIM);
@@ -638,7 +638,7 @@ void render_sidebar(Sidebar sb, screen.Screen sc) {
 					print(col_ext);
 					ext_started = 1;
 				}
-				i32 ch = (i32) nm[k];
+				i32 ch = (i32)nm[k];
 				if (ch >= 32 && ch < 127) print_char(ch);
 				else print(".");
 				k = k + 1;
@@ -848,7 +848,7 @@ string prompt(screen.Screen sc, string label) {
 		// Imprime el contenido del buffer hasta n.
 		i32 i = 0_i32;
 		while (i < n) {
-			print_char((i32) buf[i]);
+			print_char((i32)buf[i]);
 			i = i + 1;
 		}
 		print(" ");
@@ -874,7 +874,7 @@ string prompt(screen.Screen sc, string label) {
 			continue;
 		}
 		if (k >= 32 && k < 127 && n < 255) {
-			buf[n] = (u8) k;
+			buf[n] = (u8)k;
 			n      = n + 1;
 		}
 	}
@@ -913,7 +913,7 @@ void show_help_line(i32 row, i32 left, i32 inner_w, string label, string desc,
 	print(label);
 	print(screen.ATTR_RESET);
 	// Padding entre label y desc: alinear desc a columna 22 del interior.
-	i32          lblen = (i32) label.bytes();
+	i32          lblen = (i32)label.bytes();
 	i32          pad   = 22 - lblen;
 	if (pad < 1) pad   = 1;
 	i32          k     = 0_i32;
@@ -925,7 +925,7 @@ void show_help_line(i32 row, i32 left, i32 inner_w, string label, string desc,
 	print(desc);
 	print(screen.ATTR_RESET);
 	// Padding final hasta el borde derecho.
-	i32 used = 1 + 1 + lblen + pad + (i32) desc.bytes();
+	i32 used = 1 + 1 + lblen + pad + (i32)desc.bytes();
 	while (used < inner_w + 1) {
 		print(" ");
 		used = used + 1;
@@ -949,7 +949,7 @@ void show_help_render_entry(i32 row, i32 left, i32 inner_w, HelpEntry e,
 		print(screen.ATTR_BOLD);
 		print(e.label);
 		print(screen.ATTR_RESET);
-		i32 used = 1 + (i32) e.label.bytes() + 1;
+		i32 used = 1 + (i32)e.label.bytes() + 1;
 		while (used < inner_w + 1) {
 			print(" ");
 			used = used + 1;
@@ -965,7 +965,7 @@ void show_help_render_entry(i32 row, i32 left, i32 inner_w, HelpEntry e,
 		print(col_kw);
 		print(e.label);
 		print(screen.ATTR_RESET);
-		i32          lblen = (i32) e.label.bytes();
+		i32          lblen = (i32)e.label.bytes();
 		i32          pad   = 22 - lblen;
 		if (pad < 1) pad   = 1;
 		i32          k     = 0_i32;
@@ -976,7 +976,7 @@ void show_help_render_entry(i32 row, i32 left, i32 inner_w, HelpEntry e,
 		print("\x1b[38;2;248;248;242m");
 		print(e.desc);
 		print(screen.ATTR_RESET);
-		i32 used = 3 + lblen + pad + (i32) e.desc.bytes();
+		i32 used = 3 + lblen + pad + (i32)e.desc.bytes();
 		while (used < inner_w + 1) {
 			print(" ");
 			used = used + 1;
@@ -1119,7 +1119,7 @@ void show_help_overlay(screen.Screen sc) {
 		print(col_bord);
 		print("+");
 		string        title = " vxed - ayuda ";
-		i32           tlen  = (i32) title.bytes();
+		i32           tlen  = (i32)title.bytes();
 		i32           lpad  = (inner_w - tlen) / 2;
 		if (lpad < 0) lpad  = 0;
 		i32           i2    = 0_i32;
@@ -1168,7 +1168,7 @@ void show_help_overlay(screen.Screen sc) {
 		i32 last_visible = scroll_off + content_h;
 		if (last_visible > entry_count) last_visible = entry_count;
 		string foot = " ${last_visible}/${entry_count}  Up/Down/PgUp/PgDn  Esc=cerrar ";
-		i32 flen = (i32) foot.bytes();
+		i32 flen = (i32)foot.bytes();
 		i32 fpad = (inner_w - flen) / 2;
 		if (fpad < 0) fpad = 0;
 		i32 j2 = 0_i32;
@@ -1255,11 +1255,11 @@ i32 g_diag_sink = 0_i32;
 void diag_log(string msg) {
 	// DIAGNOSTICO FORZADO (bug C): siempre escribe + flush para que el log
 	// tenga el ultimo entry antes del crash.  Sin el gate DEBUG_LOG.
-	g_diag_sink = (i32) msg.bytes();
+	g_diag_sink = (i32)msg.bytes();
 	Result<i64, i32> rfp = file_io.open_file("vxed_diag.log", "ab");
 	if (!isOk(rfp)) return;
 	i64 fp = value(rfp);
-	file_io.write_bytes(fp, msg.cstr(), (i32) msg.bytes());
+	file_io.write_bytes(fp, msg.cstr(), (i32)msg.bytes());
 	u8* nl = malloc(1);
 	nl[0] = 10;
 	file_io.write_bytes(fp, nl, 1);
@@ -1283,18 +1283,18 @@ tabs.EditorTab make_tab(string path, string display_title) {
 		make_tab_last_status = n;
 		make_tab_last_err    = 0;
 		diag_log("make_tab leidos ${n} bytes de '${display_title}'");
-		t.buf.ensure_capacity((i32) n + 64);
+		t.buf.ensure_capacity((i32)n + 64);
 		i32 i = 0_i32;
-		while (i < (i32) n) {
+		while (i < (i32)n) {
 			t.buf.data[i] = fr.data[i];
 			i             = i + 1;
 		}
-		t.buf.length = (i32) n;
+		t.buf.length = (i32)n;
 		t.buf.cursor = 0;
 		t.buf.dirty  = 0;
 	} else {
 		make_tab_last_status = -2;
-		make_tab_last_err    =  (i64) error(rload);
+		make_tab_last_err    =  (i64)error(rload);
 		diag_log("make_tab FALLO al leer err=${(i32) error(rload)}");
 	}
 	diag_log("make_tab EXIT status=${make_tab_last_status}");
@@ -1402,9 +1402,9 @@ i32 main() {
 	if (lr.mode == launcher.LR_FILE) {
 		// Extraer el basename para el titulo de la pestana.
 		u8* pc  = lr.path.cstr();
-		i32 pn  = (i32) lr.path.bytes();
+		i32 pn  = (i32)lr.path.bytes();
 		i32 cut = pn;
-		while (cut > 0 && pc[cut - 1] != (u8) 92 && pc[cut - 1] != (u8) 47) {
+		while (cut > 0 && pc[cut - 1] != (u8)92 && pc[cut - 1] != (u8)47) {
 			cut = cut - 1;
 		}
 		string title = str_make(pc + cut, pn - cut);
@@ -1412,9 +1412,9 @@ i32 main() {
 	} else if (lr.mode == launcher.LR_NEW) {
 		// Nuevo: titulo = nombre del fichero (basename), buffer vacio.
 		u8* pc  = lr.path.cstr();
-		i32 pn  = (i32) lr.path.bytes();
+		i32 pn  = (i32)lr.path.bytes();
 		i32 cut = pn;
-		while (cut > 0 && pc[cut - 1] != (u8) 92 && pc[cut - 1] != (u8) 47) {
+		while (cut > 0 && pc[cut - 1] != (u8)92 && pc[cut - 1] != (u8)47) {
 			cut = cut - 1;
 		}
 		string title = str_make(pc + cut, pn - cut);
@@ -1528,9 +1528,9 @@ i32 main() {
 						// F3 toggle expand/collapse en lugar de cd.
 						if (nm.equals("..")) {
 							u8* c = sb.cwd.cstr();
-							i32 nL = (i32) sb.cwd.bytes();
+							i32 nL = (i32)sb.cwd.bytes();
 							i32 cut = nL;
-							while (cut > 0 && c[cut - 1] != (u8) 92) cut = cut - 1;
+							while (cut > 0 && c[cut - 1] != (u8)92) cut = cut - 1;
 							if (cut > 0) cut = cut - 1;
 							if (cut > 0) sb.cwd = str_make(c, cut);
 							sb.sel              = 0;
@@ -1547,7 +1547,7 @@ i32 main() {
 					} else {
 						string p    = sb.entry_path(sb.sel);
 						string nm   = sb.entry_name(sb.sel);
-						i32    plen = (i32) p.bytes();
+						i32    plen = (i32)p.bytes();
 						tabs.EditorTab new_t = make_tab(p, nm);
 						ws.open_tab(new_t);
 						tabs.EditorTab chk = ws.active;
@@ -1731,7 +1731,7 @@ i32 main() {
 			i32 ls          = b.line_offset(cur_row_idx);
 			i32 indent_end  = ls;
 			while (indent_end < b.length) {
-				i32 ch = (i32) b.data[indent_end];
+				i32 ch = (i32)b.data[indent_end];
 				if (ch == 32 || ch == 9) {
 					indent_end = indent_end + 1;
 				} else {
@@ -1747,7 +1747,7 @@ i32 main() {
 			i32 cur_cursor   = b.cursor;
 			i32 j            = cur_cursor - 1;
 			while (j >= ls) {
-				i32 ch = (i32) b.data[j];
+				i32 ch = (i32)b.data[j];
 				if (ch == 32 || ch == 9) {
 					j = j - 1;
 				} else {
@@ -1848,7 +1848,7 @@ i32 main() {
 				if (idx < 0) {
 					status_msg = "no encontrado: ${needle}";
 				} else {
-					b.cursor = (i32) idx;
+					b.cursor = (i32)idx;
 					b.sel_clear();
 					status_msg = "encontrado en offset ${idx}";
 				}
@@ -1865,7 +1865,7 @@ i32 main() {
 				if (idx < 0) {
 					status_msg = "no encontrado: ${nd}";
 				} else {
-					b.cursor = (i32) idx;
+					b.cursor = (i32)idx;
 					b.sel_clear();
 					status_msg = "siguiente en offset ${idx}";
 				}
@@ -1876,11 +1876,11 @@ i32 main() {
 			if (ln_str.bytes() > 0) {
 				// Parseo decimal manual desde el StringObject.
 				u8* p       = ln_str.cstr();
-				i32 n_bytes = (i32) ln_str.bytes();
+				i32 n_bytes = (i32)ln_str.bytes();
 				i32 v       = 0_i32;
 				i32 j       = 0_i32;
 				while (j < n_bytes) {
-					i32 ch = (i32) p[j];
+					i32 ch = (i32)p[j];
 					if (ch >= 48 && ch <= 57) {
 						v = v * 10 + (ch - 48);
 					} else {

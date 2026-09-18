@@ -10,7 +10,7 @@ interface Shape {
 class Circle : Shape {
 	public i32 r;
 	public Circle(i32 r) { this.r = r; }
-	public i32 area() { return this.r * this.r * 3; } // ~PI
+	public i32 area() => this.r * this.r * 3; // ~PI
 }
 
 class Rect : Shape {
@@ -20,7 +20,7 @@ class Rect : Shape {
 		this.w = w;
 		this.h = h;
 	}
-	public i32 area() { return this.w * this.h; }
+	public i32 area() => this.w * this.h;
 }
 
 class Triangle : Shape {
@@ -30,7 +30,7 @@ class Triangle : Shape {
 		this.b = b;
 		this.h = h;
 	}
-	public i32 area() { return (this.b * this.h) / 2; }
+	public i32 area() => (this.b * this.h) / 2;
 }
 
 i32 main() {

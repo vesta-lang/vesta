@@ -22,9 +22,7 @@ class Tag {
 	public Tag(i32 x) { this.v = x; }
 }
 
-i32 addOne(Tag !!arg) {
-	return arg.v + 1;
-}
+i32 addOne(Tag !!arg) => arg.v + 1;
 
 i32 main() {
 	Tag !!tag = new Tag(11);    // nonnull + runtime check via !!

@@ -9,7 +9,7 @@ f64 fsum(i64 n, f64 acc, f64 step) {
 	return fsum(n - 1, acc + step, step);
 }
 
-f64 myabs(f64 x) { return fabs(x); } // -> IrOp::FABS -> ANDPS
+f64 myabs(f64 x) => fabs(x); // -> IrOp::FABS -> ANDPS
 
 i32 main() {
 	f64 neg = fsum(4, 0.0, -2.5); // -10.0 (runtime)

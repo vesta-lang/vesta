@@ -10,18 +10,14 @@ namespace ejemplos.borrow_factory_chain;
 //   let view = second_view(&data);
 //   // El borrow checker sabe que view tiene lifetime de data.
 
-borrow<i64> first_view(borrow<i64> p) {
-	return p;
-}
+borrow<i64> first_view(borrow<i64> p) => p;
 
 borrow<i64> second_view(borrow<i64> p) {
 	// F4: el output de first_view hereda el owner_source de p.
 	return first_view(p);
 }
 
-borrow<i64> third_view(borrow<i64> p) {
-	return second_view(p);
-}
+borrow<i64> third_view(borrow<i64> p) => second_view(p);
 
 // Compose lectura via 3-niveles de elision:
 i64 deep_read(borrow<i64> p) {

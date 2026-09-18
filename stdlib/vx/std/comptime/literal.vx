@@ -44,14 +44,10 @@ public struct IntLit {
 	}
 
 	/** @brief Numero de words significativos. */
-	i64 word_count() {
-		return this.n_words;
-	}
+	i64 word_count() => this.n_words;
 
 	/** @brief True si el literal era negativo. */
-	bool is_negative() {
-		return this.negative;
-	}
+	bool is_negative() => this.negative;
 
 	/**
 	 * @brief Bits significativos (posicion del bit 1 mas alto + 1).
@@ -63,7 +59,7 @@ public struct IntLit {
 		}
 		i64 hi   = this.n_words - 1;
 		u64 w    = this.words[hi];
-		u64 bits = (u64) hi * 64;
+		u64 bits = (u64)hi * 64;
 		while (w != 0) {
 			bits = bits + 1;
 			w    = w >> 1;
@@ -160,13 +156,13 @@ public comptime IntLit parse_int_lit(string src) {
 			static_assert(d >= 0 && d < base, VX_LITERAL_DIGITO);
 		}
 		if (d >= 0 && c != 95) {
-			u64 carry = (u64) d;
+			u64 carry = (u64)d;
 			i64 k     = 0_i64;
 			while (k < nw) {
 				// w * base + carry sin overflow: split en mitades de 32 bits.
 				u64 w  = buf[k];
-				u64 lo = (w & 0xFFFFFFFF) * (u64) base + (carry & 0xFFFFFFFF);
-				u64 hi = (w >> 32) * (u64) base + (lo >> 32) + (carry >> 32);
+				u64 lo = (w & 0xFFFFFFFF) * (u64)base + (carry & 0xFFFFFFFF);
+				u64 hi = (w >> 32) * (u64)base + (lo >> 32) + (carry >> 32);
 				buf[k] = (lo & 0xFFFFFFFF) | (hi << 32);
 				carry  = hi >> 32;
 				k      = k + 1;

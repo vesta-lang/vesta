@@ -31,14 +31,10 @@ class Vec2 {
 	}
 
 	// Sobrecarga de `+`: devuelve la suma de todas las componentes.
-	public i32 __add__(Vec2 o) {
-		return this.x + o.x + this.y + o.y;
-	}
+	public i32 __add__(Vec2 o) => this.x + o.x + this.y + o.y;
 
 	// Sobrecarga de `==`: igualdad componente a componente.
-	public bool __eq__(Vec2 o) {
-		return this.x == o.x && this.y == o.y;
-	}
+	public bool __eq__(Vec2 o) => this.x == o.x && this.y == o.y;
 }
 
 i32 main() {

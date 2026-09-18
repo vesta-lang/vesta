@@ -24,7 +24,7 @@ struct Inner {
 struct Punto {
 	i32   x;
 	Inner dentro;
-	i32 doble() { return this.x * 2; }
+	i32 doble() => this.x * 2;
 }
 
 struct Nodo {

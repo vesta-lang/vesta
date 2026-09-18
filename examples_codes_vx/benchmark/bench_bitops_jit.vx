@@ -16,9 +16,9 @@ class BitOps {
 		u64 acc = 0_u64;
 		i32 i   = 0_i32;
 		while (i < n) {
-			acc = acc + popcount((u64) i);
-			acc = acc + clz((u64) i + 1);
-			acc = acc ^ bswap((u64) i);
+			acc = acc + popcount((u64)i);
+			acc = acc + clz((u64)i + 1);
+			acc = acc ^ bswap((u64)i);
 			i   = i + 1;
 		}
 		return acc;

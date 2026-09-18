@@ -11,7 +11,7 @@
 class Counter {
 	public i32 value;
 	public Counter() { this.value = 0; }
-	public i32 inc() { return this.value + 1; }
+	public i32 inc() => this.value + 1;
 }
 
 i32 main() {
@@ -19,9 +19,9 @@ i32 main() {
 	i64     sum = 0_i64;
 	i32     i   = 0_i32;
 	while (i < 30_000_000) {
-		u32 t = ((u32) c.inc()) * 1_664_525 + 1_013_904_223;
+		u32 t = ((u32)c.inc()) * 1_664_525 + 1_013_904_223;
 		c.value = (i32)(t & 255);
-		sum     = sum + (i64) c.value;
+		sum     = sum + (i64)c.value;
 		i       = i + 1;
 	}
 	return (i32)(sum % 251);

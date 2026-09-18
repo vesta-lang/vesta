@@ -15,8 +15,8 @@ namespace ejemplos.macros_hygenic_gensym;
 // Si usa un nombre fijo ("__tmp"), puede colisionar con una variable
 // "__tmp" del caller.  gensym evita el bug.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 sumar(i32 a, i32 b) { return a + b; }
+i32 doblar(i32 x) => x * 2;
+i32 sumar(i32 a, i32 b) => a + b;
 
 i32 main() {
 	// ============================================

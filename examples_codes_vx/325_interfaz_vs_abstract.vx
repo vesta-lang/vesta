@@ -33,7 +33,7 @@ struct FormaBase {
 	i64 w;
 	i64 h;
 	// Implementacion REAL, heredable por los derivados.
-	public i64 area() { return this.w * this.h; }
+	public i64 area() => this.w * this.h;
 }
 
 // --- Rect: hereda de FormaBase (recibe campos + area) Y satisface Dibujable
@@ -45,8 +45,8 @@ struct Rect : FormaBase, Dibujable {
 // --- Cuadrado: solo satisface la interfaz Dibujable, SIN heredar de nadie.
 //     Aqui NO hay codigo reutilizado; el contrato obliga a escribir `area`.
 struct Cuadrado : Dibujable {
-	i64 lado;
-	public i64 area() { return this.lado * this.lado; }
+	i64                                   lado;
+	public i64 area() => this.lado * this.lado;
 }
 
 i32 main() {

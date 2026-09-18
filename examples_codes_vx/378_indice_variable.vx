@@ -16,7 +16,7 @@ i64 mal(u64 n) {
 	u8*    p = &buf[0];
 	u64    i = 100 + (n & 7);
 	*(u64*)(p + i) = 1;
-	return (i64) buf[0];
+	return (i64)buf[0];
 }
 
-i32 main() { return (i32) mal(3); }
+i32 main() => (i32)mal(3);

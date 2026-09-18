@@ -79,4 +79,4 @@ comptime Type Pk2      = pick(2);
 comptime Type Pk2Field = field_type_at<Pk2>(0); // f64 (Vec3.x)
 static_assert(sizeof<Pk2Field>() == 8, "pick(2).f0 = f64");
 
-i32 main() { return 42; }
+i32 main() => 42;

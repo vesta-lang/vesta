@@ -44,5 +44,5 @@ i32 main() {
 	config.usos = config.usos + 4;     // 3 + 4 = 7
 	total       = total + config.usos; // 35 + 7 = 42
 
-	return (i32) total;
+	return (i32)total;
 }

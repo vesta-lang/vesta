@@ -29,9 +29,7 @@ namespace ejemplos.string_op_override;
 
 // Override del concat: siempre devuelve un marcador fijo "OVR".
 @StringConcat
-string my_concat(string a, string b) {
-	return "OVR";
-}
+string my_concat(string a, string b) => "OVR";
 
 // Override del eq: invierte la semantica -- true si difieren.
 @StringEq

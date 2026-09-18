@@ -15,7 +15,7 @@ namespace ejemplos.inline_asm_symbols;
 // Compilar nativo:  vm -m aot --vx 198_inline_asm_symbols.vx --format pe -o p.exe
 // Resultado: 42.
 
-i64 add(i64 a, i64 b) { return a + b; }
+i64 add(i64 a, i64 b) => a + b;
 
 i64 g_fp = 0_i64;
 

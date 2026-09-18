@@ -91,9 +91,7 @@ const i64 CH_HDR = 88_i64; // el ring empieza aqui: cap*8 bytes inline.
 
 /// Direccion base del bloque host del canal (el handle ES el puntero).  Uso
 /// interno: aritmetica del ring y orden de lock del select.
-i64 __vxch_base(Chan c) {
-	return (i64) c;
-}
+i64 __vxch_base(Chan c) => (i64)c;
 
 // ---------------------------------------------------------------------------
 // WAITER: nodo de espera.  Vive en la PILA de la fibra que se bloquea (pilas de
@@ -128,9 +126,7 @@ const i64 VXCH_SEL_MAX = 32_i64; // maximo de canales por select (cota de pila).
 
 /// @return true si el Waiter espera por un SELECT (comparte una palabra de
 ///         reclamacion con los Waiter hermanos); false si es una espera NORMAL.
-bool __vxch_is_select_waiter(Waiter w) {
-	return w.sel != 0;
-}
+bool __vxch_is_select_waiter(Waiter w) => w.sel != 0;
 
 /// Despierta a la fibra @p f si hay alguna.  Encapsula en UN solo sitio el
 /// "no hay nadie a quien despertar" de los helpers bajo-el-lock (el out-param no
@@ -241,7 +237,7 @@ public Chan chan_new(i64 cap) {
 		}
 		mask = c - 1;
 	}
-	Chan ch = Chan((i64) malloc(CH_HDR + c * 8));
+	Chan ch = Chan((i64)malloc(CH_HDR + c * 8));
 	if (!chan_is_null(ch)) {
 		ch.lock   = 0;
 		ch.cap    = c;
@@ -259,14 +255,12 @@ public Chan chan_new(i64 cap) {
 }
 
 /// @return true si el handle no apunta a ningun bloque (OOM en chan_new).
-public bool chan_is_null(Chan ch) {
-	return __vxch_base(ch) == 0;
-}
+public bool chan_is_null(Chan ch) => __vxch_base(ch) == 0;
 
 /// Libera el canal (nadie debe estar bloqueado en el).
 public void chan_free(Chan ch) {
 	if (!chan_is_null(ch)) {
-		free((u8*) __vxch_base(ch));
+		free((u8*)__vxch_base(ch));
 	}
 }
 
@@ -482,9 +476,7 @@ public void chan_close(Chan ch) {
 }
 
 /// @return true si el canal esta cerrado.
-public bool chan_is_closed(Chan ch) {
-	return ch.closed;
-}
+public bool chan_is_closed(Chan ch) => ch.closed;
 
 /**
  * @brief Envio NO-BLOQUEANTE.  Igual que send pero sin el paso (3): si no hay

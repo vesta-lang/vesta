@@ -15,11 +15,11 @@ u64 RAMDISK = 0x7C00_u64; // base del ramdisk (sector 0 = boot sector)
 // --- Lectura de campos del BPB (en el boot sector, RAMDISK + offset) ---
 u64 bpb_u8(u64 off) {
 	u8* p = (u8*)(RAMDISK + off);
-	return (u64) p[0];
+	return (u64)p[0];
 }
 u64 bpb_u16(u64 off) {
 	u16* p = (u16*)(RAMDISK + off);
-	return (u64) p[0];
+	return (u64)p[0];
 }
 
 // Siguiente cluster en la cadena (FAT12: entradas de 12 bits empaquetadas).
@@ -28,7 +28,7 @@ u64 fat_next(u64 cluster) {
 	u64  fat_base = RAMDISK + reserved * 512;
 	u64  off      = cluster + (cluster / 2); // cluster * 1.5
 	u16* p        = (u16*)(fat_base + off);
-	u64  val      = (u64) p[0];
+	u64  val      = (u64)p[0];
 	if ((cluster & 1) != 0) {
 		return val >> 4; // cluster impar: 12 bits altos
 	}
@@ -45,9 +45,9 @@ void fat_mk83(char* name, u8* dst) {
 	} // rellenar de espacios
 	i = 0;
 	while (name[i] != 0 && i < 8) {
-		u64 c = (u64) name[i];
+		u64 c = (u64)name[i];
 		if (c >= 97 && c <= 122) { c = c - 32; } // a-z -> A-Z
-		dst[i] = (u8) c;
+		dst[i] = (u8)c;
 		i      = i + 1;
 	}
 }
@@ -88,9 +88,7 @@ u64 fat_root_addr() {
 	u64 spf      = bpb_u16(0x16);
 	return RAMDISK + (reserved + nfats * spf) * 512;
 }
-u64 fat_root_ents() {
-	return bpb_u16(0x11);
-}
+u64 fat_root_ents() => bpb_u16(0x11);
 
 // Numero total de sectores del volumen (BPB 0x13 de 16 bits; si es 0, el
 // campo de 32 bits en 0x20).
@@ -98,7 +96,7 @@ u64 bpb_total() {
 	u64 t16 = bpb_u16(0x13);
 	if (t16 != 0) { return t16; }
 	u32* p = (u32*)(RAMDISK + 0x20);
-	return (u64) p[0];
+	return (u64)p[0];
 }
 
 // Primer sector de la zona de datos (donde empieza el cluster 2).
@@ -119,9 +117,7 @@ u64 fat_cluster_count() {
 }
 
 // Tamano de un cluster en bytes.
-u64 fat_cluster_bytes() {
-	return bpb_u8(0x0D) * 512;
-}
+u64 fat_cluster_bytes() => bpb_u8(0x0D) * 512;
 
 // Numero de clusters libres (entrada FAT == 0) en el volumen.
 u64 fat_free_clusters() {
@@ -146,7 +142,7 @@ void fat_set_next(u64 cluster, u64 val) {
 	while (f < nfats) {
 		u64  fat_base = RAMDISK + (reserved + f * spf) * 512;
 		u16* p        = (u16*)(fat_base + off);
-		u64  cur      = (u64) p[0];
+		u64  cur      = (u64)p[0];
 		if ((cluster & 1) != 0) {
 			// cluster impar: los 12 bits ALTOS; preservar el nibble bajo.
 			p[0] = (u16)((cur & 0x000F) | ((val & 0x0FFF) << 4));
@@ -194,13 +190,13 @@ u64 fat_delete(char* name) {
 	u64 ent = fat_find(name);
 	if (ent == 0) { return 0; }
 	u16* first_p = (u16*)(ent + 0x1A);
-	u64  c       = (u64) first_p[0];
+	u64  c       = (u64)first_p[0];
 	while (c >= 2 && c < 0x0FF8) {
 		u64 nx = fat_next(c);
 		fat_set_next(c, 0); // marcar cluster libre
 		c = nx;
 	}
-	u8* e = (u8*) ent;
+	u8* e = (u8*)ent;
 	e[0] = 0xE5; // entrada borrada
 	return 1;
 }
@@ -213,7 +209,7 @@ u64 fat_write(char* name, u8* src, u64 size) {
 	if (fat_find(name) != 0) { fat_delete(name); } // sobrescritura
 	u64 ent = fat_new_entry();
 	if (ent == 0) { return 0; } // root lleno
-	u8* e = (u8*) ent;
+	u8* e = (u8*)ent;
 	u64 z = 0_u64;
 	while (z < 32) {
 		e[z] = 0;
@@ -243,9 +239,9 @@ u64 fat_write(char* name, u8* src, u64 size) {
 		prev = c;
 	}
 	u16* fp = (u16*)(ent + 0x1A);
-	fp[0] = (u16) first; // primer cluster
+	fp[0] = (u16)first; // primer cluster
 	u32* sp = (u32*)(ent + 0x1C);
-	sp[0] = (u32) size; // tamano
+	sp[0] = (u32)size; // tamano
 	return written;
 }
 
@@ -260,7 +256,7 @@ u64 fat_mkdir(char* name) {
 	u64 c = fat_alloc_cluster();
 	if (c == 0) { return 0; }
 	fat_set_next(c, 0x0FFF); // 1 cluster, EOC
-	u8* e = (u8*) ent;
+	u8* e = (u8*)ent;
 	u64 z = 0_u64;
 	while (z < 32) {
 		e[z] = 0;
@@ -269,7 +265,7 @@ u64 fat_mkdir(char* name) {
 	fat_mk83(name, e);
 	e[0x0B] = 0x10; // attr = DIRECTORY
 	u16* fp = (u16*)(ent + 0x1A);
-	fp[0] = (u16) c;
+	fp[0] = (u16)c;
 	// Inicializar el cluster del dir: "." y ".." + resto a cero.
 	u64 spc  = bpb_u8(0x0D);
 	u64 sect = fat_data_start() + (c - 2) * spc;
@@ -288,7 +284,7 @@ u64 fat_mkdir(char* name) {
 	d[0]    = 46; // "."
 	d[0x0B] = 0x10;
 	u16* dotc = (u16*)(d + 0x1A);
-	dotc[0]      = (u16) c; // "." -> este dir
+	dotc[0]      = (u16)c; // "." -> este dir
 	d[32]        = 46;
 	d[33]        = 46; // ".."
 	d[32 + 0x0B] = 0x10;
@@ -302,7 +298,7 @@ u64 fat_mkdir(char* name) {
 u64 fat_load(u64 ent, u8* dst) {
 	u16* first_p    = (u16*)(ent + 0x1A); // primer cluster (low word)
 	u32* size_p     = (u32*)(ent + 0x1C); // tamano del fichero
-	u64  size       = (u64) size_p[0];
+	u64  size       = (u64)size_p[0];
 	u64  spc        = bpb_u8(0x0D);
 	u64  reserved   = bpb_u16(0x0E);
 	u64  nfats      = bpb_u8(0x10);
@@ -310,7 +306,7 @@ u64 fat_load(u64 ent, u8* dst) {
 	u64  root_ents  = bpb_u16(0x11);
 	u64  root_sects = (root_ents * 32 + 511) / 512;
 	u64  data_start = reserved + nfats * spf + root_sects;
-	u64  cluster    = (u64) first_p[0];
+	u64  cluster    = (u64)first_p[0];
 	u64  csize      = spc * 512;
 	u64  written    = 0_u64;
 	// Cluster valido: 2..0xFF7; >= 0xFF8 es fin-de-cadena (EOC).

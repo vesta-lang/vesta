@@ -86,7 +86,7 @@ public ssize_t write(Stream cual, const char* buf, size_t count) {
 	DWORD idx = ((DWORD) STD_INPUT_HANDLE) - ((DWORD) cual);
 	if (__os_manejador_pedido[idx] == 0) {
 		__os_manejador[idx] =
-			(u64) std.os.windows.get_std_handle((DWORD) cual);
+			(u64)std.os.windows.get_std_handle((DWORD) cual);
 		__os_manejador_pedido[idx] = 1;
 	}
 	HANDLE h        = (HANDLE) __os_manejador[idx];
@@ -106,5 +106,5 @@ public ssize_t write(Stream cual, const char* buf, size_t count) {
  */
 @Target("os:linux")
 public ssize_t write(Stream cual, const char* buf, size_t count) {
-	return std.os.linux.write((u32) cual, buf, count);
+	return std.os.linux.write((u32)cual, buf, count);
 }

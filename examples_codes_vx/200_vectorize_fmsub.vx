@@ -41,5 +41,5 @@ i64 main() {
 	free(a);
 	free(b);
 	free(d);
-	return (i64) s;
+	return (i64)s;
 }

@@ -50,9 +50,7 @@ comptime string build_id() {
 // Macro 2: emite el PID literal del compilador.  Util para diagnostico:
 // el binario "sabe" en que proceso fue compilado.
 @Macro
-comptime string compiler_pid() {
-	return to_str(GetCurrentProcessId());
-}
+comptime string compiler_pid() => to_str(GetCurrentProcessId());
 
 // Macro 3: usa el tick count del compilador como semilla y emite la
 // suma de N pasos de un LCG simple.  Util como check rapido de que la

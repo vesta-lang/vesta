@@ -38,6 +38,4 @@ public size_t invoke(register("rax") syscall_id id,
  * contexto es reasignable, de modo que quien necesite un esquema distinto puede
  * enchufar el suyo sin tocar la libreria.
  */
-public usize resolve(usize ctx) {
-	return 0;
-}
+public usize resolve(usize ctx) => 0;

@@ -32,10 +32,10 @@ i32 main() {
 
 	// Frontera con codigo nativo: la codificacion se elige aqui, no en el tipo.
 	dump("cstr_a", a.cstr(), 5);
-	dump("wstr_a", (u8*) a.wstr(), 10);
+	dump("wstr_a", (u8*)a.wstr(), 10);
 	dump("cstr_b", b.cstr(), 6);
-	dump("wstr_b", (u8*) b.wstr(), 10);
-	dump("wstr_c", (u8*) c.wstr(), 4);
+	dump("wstr_b", (u8*)b.wstr(), 10);
+	dump("wstr_c", (u8*)c.wstr(), 4);
 
 	// Concatenacion e igualdad.
 	string j = a.concat("!");

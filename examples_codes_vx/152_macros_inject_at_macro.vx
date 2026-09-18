@@ -19,15 +19,13 @@ namespace ejemplos.macros_inject_at_macro;
 //     (NO `string`).  Asi `i32 r = my_macro(args);` typecheckea
 //     si el macro genera una expresion de tipo i32.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 mas_uno(i32 x) { return x + 1; }
-i32 sumar(i32 a, i32 b) { return a + b; }
+i32 doblar(i32 x) => x * 2;
+i32 mas_uno(i32 x) => x + 1;
+i32 sumar(i32 a, i32 b) => a + b;
 
 // Macro simple: doblar literal.
 @Macro
-comptime string macro_double(i64 n) {
-	return "doblar(" + to_str(n) + ")";
-}
+comptime string macro_double(i64 n) => "doblar(" + to_str(n) + ")";
 
 // Macro con LOOP que construye codigo iterativamente.
 //   make_inc_chain(N) -> "mas_uno(mas_uno(...mas_uno(x)...))" con N niveles

@@ -70,24 +70,24 @@ class Caja {
 }
 
 i64 g_valor = 5_i64;
-i64 doblar(i64 x) { return x * 2; }
+i64 doblar(i64 x) => x * 2;
 
 // ---------------------------------------------------------------------------
 // Contexto 1: funcion suelta.  Es la que siempre acepto todo, y por eso sirve
 // de referencia contra la que comparar las demas.
 // ---------------------------------------------------------------------------
-i64 f_plano(i64 x) { return x; }
-i64 f_puntero(i64* p) { return *p; }
-i64 f_nonulo(i64 !!x) { return x; }
-i64 f_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
-i64 f_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
-i64 f_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
-i64 f_array(i64[] xs) { return xs[0] + xs[1]; }
-i64 f_cadena(string s) { return s.length(); }
-i64 f_struct(Punto pt) { return pt.x + pt.y; }
-i64 f_clase(Caja k) { return k.v; }
-i64 f_registro(register("rax") i64 x) { return x; }
-i64 f_compartido(shared i64 x) { return x; }
+i64 f_plano(i64 x) =>     x;
+i64 f_puntero(i64* p) => *p;
+i64 f_nonulo(i64 !!x) =>  x;
+i64 f_cstyle(i64 (*cb)(i64), i64 v) => cb(v);
+i64 f_cfn(cfn(i64) -> i64 cb, i64 v) => cb(v);
+i64 f_fn(fn(i64) -> i64 cb, i64 v) => cb(v);
+i64 f_array(i64[] xs) => xs[0] + xs[1];
+i64 f_cadena(string s) => s.length();
+i64 f_struct(Punto pt) => pt.x + pt.     y;
+i64 f_clase(Caja k) => k.                v;
+i64 f_registro(register("rax") i64 x) => x;
+i64 f_compartido(shared i64 x) =>        x;
 
 // ---------------------------------------------------------------------------
 // Contexto 2: metodo de clase.  Contexto 3: su constructor, que lo parsea otra
@@ -122,18 +122,18 @@ class Clase {
 		this.delCtor = a + *p + nn + cb(3) + cb2(4) + lam(5);
 	}
 
-	public i64 m_plano(i64 x) { return x; }
-	public i64 m_puntero(i64* p) { return *p; }
-	public i64 m_nonulo(i64 !!x) { return x; }
-	public i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
-	public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
-	public i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
-	public i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
-	public i64 m_cadena(string s) { return s.length(); }
-	public i64 m_struct(Punto pt) { return pt.x + pt.y; }
-	public i64 m_clase(Caja k) { return k.v; }
-	public i64 m_registro(register("rax") i64 x) { return x; }
-	public i64 m_compartido(shared i64 x) { return x; }
+	public i64 m_plano(i64 x) =>     x;
+	public i64 m_puntero(i64* p) => *p;
+	public i64 m_nonulo(i64 !!x) =>  x;
+	public i64 m_cstyle(i64 (*cb)(i64), i64 v) => cb(v);
+	public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) => cb(v);
+	public i64 m_fn(fn(i64) -> i64 cb, i64 v) => cb(v);
+	public i64 m_array(i64[] xs) => xs[0] + xs[1];
+	public i64 m_cadena(string s) => s.length();
+	public i64 m_struct(Punto pt) => pt.x + pt.     y;
+	public i64 m_clase(Caja k) => k.                v;
+	public i64 m_registro(register("rax") i64 x) => x;
+	public i64 m_compartido(shared i64 x) =>        x;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,18 +141,18 @@ class Clase {
 // parser y otro fichero de bajada.
 // ---------------------------------------------------------------------------
 struct Estructura {
-	i64 m_plano(i64 x) { return x; }
-	i64 m_puntero(i64* p) { return *p; }
-	i64 m_nonulo(i64 !!x) { return x; }
-	i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
-	i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
-	i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
-	i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
-	i64 m_cadena(string s) { return s.length(); }
-	i64 m_struct(Punto pt) { return pt.x + pt.y; }
-	i64 m_clase(Caja k) { return k.v; }
-	i64 m_registro(register("rax") i64 x) { return x; }
-	i64 m_compartido(shared i64 x) { return x; }
+	i64 m_plano(i64 x) =>     x;
+	i64 m_puntero(i64* p) => *p;
+	i64 m_nonulo(i64 !!x) =>  x;
+	i64 m_cstyle(i64 (*cb)(i64), i64 v) => cb(v);
+	i64 m_cfn(cfn(i64) -> i64 cb, i64 v) => cb(v);
+	i64 m_fn(fn(i64) -> i64 cb, i64 v) => cb(v);
+	i64 m_array(i64[] xs) => xs[0] + xs[1];
+	i64 m_cadena(string s) => s.length();
+	i64 m_struct(Punto pt) => pt.x + pt.     y;
+	i64 m_clase(Caja k) => k.                v;
+	i64 m_registro(register("rax") i64 x) => x;
+	i64 m_compartido(shared i64 x) =>        x;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,29 +176,29 @@ interface Contrato {
 
 class Implementa : Contrato {
 	@Override
-	public i64 m_plano(i64 x) { return x; }
+	public i64 m_plano(i64 x) => x;
 	@Override
-	public i64 m_puntero(i64* p) { return *p; }
+	public i64 m_puntero(i64* p) => *p;
 	@Override
-	public i64 m_nonulo(i64 !!x) { return x; }
+	public i64 m_nonulo(i64 !!x) => x;
 	@Override
-	public i64 m_cstyle(i64 (*cb)(i64), i64 v) { return cb(v); }
+	public i64 m_cstyle(i64 (*cb)(i64), i64 v) => cb(v);
 	@Override
-	public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) { return cb(v); }
+	public i64 m_cfn(cfn(i64) -> i64 cb, i64 v) => cb(v);
 	@Override
-	public i64 m_fn(fn(i64) -> i64 cb, i64 v) { return cb(v); }
+	public i64 m_fn(fn(i64) -> i64 cb, i64 v) => cb(v);
 	@Override
-	public i64 m_array(i64[] xs) { return xs[0] + xs[1]; }
+	public i64 m_array(i64[] xs) => xs[0] + xs[1];
 	@Override
-	public i64 m_cadena(string s) { return s.length(); }
+	public i64 m_cadena(string s) => s.length();
 	@Override
-	public i64 m_struct(Punto pt) { return pt.x + pt.y; }
+	public i64 m_struct(Punto pt) => pt.x + pt.y;
 	@Override
-	public i64 m_clase(Caja k) { return k.v; }
+	public i64 m_clase(Caja k) => k.v;
 	@Override
-	public i64 m_registro(register("rax") i64 x) { return x; }
+	public i64 m_registro(register("rax") i64 x) => x;
 	@Override
-	public i64 m_compartido(shared i64 x) { return x; }
+	public i64 m_compartido(shared i64 x) => x;
 }
 
 // ---------------------------------------------------------------------------
@@ -206,18 +206,18 @@ class Implementa : Contrato {
 // argumentos son constantes; las formas se declaran igual que en cualquier otro
 // sitio.
 // ---------------------------------------------------------------------------
-comptime i64 c_plano(i64 x) { return x; }
-comptime i64 c_nonulo(i64 !!x) { return x; }
-comptime i64 c_cadena(string s) { return comptime_strlen(s); }
-comptime i64 c_registro(register("rax") i64 x) { return x; }
-comptime i64 c_compartido(shared i64 x) { return x; }
-comptime i64 c_cstyle(i64 (*cb)(i64), i64 v) { return v; }
-comptime i64 c_cfn(cfn(i64) -> i64 cb, i64 v) { return v; }
-comptime i64 c_fn(fn(i64) -> i64 cb, i64 v) { return v; }
-comptime i64 c_struct(Punto pt) { return pt.x + pt.y; }
-comptime i64 c_clase(Caja k) { return 7; }
-comptime i64 c_array(i64[] xs) { return xs[0] + xs[1]; }
-comptime i64 c_puntero(i64* p) { return 5; }
+comptime i64 c_plano(i64 x) =>    x;
+comptime i64 c_nonulo(i64 !!x) => x;
+comptime i64 c_cadena(string s) => comptime_strlen(s);
+comptime i64 c_registro(register("rax") i64 x) => x;
+comptime i64 c_compartido(shared i64 x) =>        x;
+comptime i64 c_cstyle(i64 (*cb)(i64), i64 v) =>   v;
+comptime i64 c_cfn(cfn(i64) -> i64 cb, i64 v) =>  v;
+comptime i64 c_fn(fn(i64) -> i64 cb, i64 v) =>    v;
+comptime i64 c_struct(Punto pt) => pt.x + pt.     y;
+comptime i64 c_clase(Caja k) => 7;
+comptime i64 c_array(i64[] xs) => xs[0] + xs[1];
+comptime i64 c_puntero(i64* p) => 5;
 
 // ---------------------------------------------------------------------------
 // El recorrido.  Todas las filas dan los MISMOS doce valores.

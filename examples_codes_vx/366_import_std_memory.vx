@@ -24,9 +24,7 @@ import std.memory;
 import std.types only usize;
 
 // Marca reconocible: si un byte no llega, o llega de otra copia, la suma cambia.
-u8 patron(i64 i) {
-	return (u8)((i * 7 + 13) % 251);
-}
+u8 patron(i64 i) => (u8)((i * 7 + 13) % 251);
 
 // Copia `n` bytes y comprueba que llegaron TODOS y solo esos.  Devuelve 1 si
 // esta bien.  Se comprueba tambien el byte de despues: una copia que se pasa de
@@ -109,5 +107,5 @@ i32 main() {
 	// 24 tamanos x 2 operaciones = 48 comprobaciones.  Cualquier variante que
 	// se deje un byte, se pase, o no llegue a compilarse desde fuera baja el
 	// numero, y el caso falla con un valor distinto de 48.
-	return (i32) ok;
+	return (i32)ok;
 }

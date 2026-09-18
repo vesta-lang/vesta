@@ -45,6 +45,6 @@ i32 main() {
 	crea();
 	crea();
 	crea();
-	gc_finalize_all();   // finaliza los 5 boxes -> del() corre 5 veces
-	return (i32) C.libs; // 5
+	gc_finalize_all();  // finaliza los 5 boxes -> del() corre 5 veces
+	return (i32)C.libs; // 5
 }

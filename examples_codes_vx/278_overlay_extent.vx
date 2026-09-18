@@ -25,7 +25,7 @@ struct Img {
 }
 
 i32 main() {
-	u8* buf = (u8*) malloc(256);
+	u8* buf = (u8*)malloc(256);
 	*(u32*)(buf + 0) = 0xCAFE;
 	*(u16*)(buf + 4) = 3; // count = 3
 
@@ -43,5 +43,5 @@ i32 main() {
 	println("fits32=${extent(im) <= 32}");   // false (40 > 32)
 
 	free(buf);
-	return (i32) ext; // 40
+	return (i32)ext; // 40
 }

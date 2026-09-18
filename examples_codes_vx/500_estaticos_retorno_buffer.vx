@@ -30,8 +30,8 @@ struct Grande {
 } // 32 bytes
 
 class FabricaC {
-	public static string saluda() { return "hola"; }
-	public static Optional<i64> escalar() { return Some(7); }
+	public static string saluda() => "hola";
+	public static Optional<i64> escalar() => Some(7);
 	public static Optional<Grande> grande() {
 		Grande g;
 		g.a = 1;
@@ -43,8 +43,8 @@ class FabricaC {
 }
 
 struct FabricaS {
-	public static string saluda() { return "hola"; }
-	public static Optional<i64> escalar() { return Some(7); }
+	public static string saluda() => "hola";
+	public static Optional<i64> escalar() => Some(7);
 	public static Optional<Grande> grande() {
 		Grande g;
 		g.a = 1;

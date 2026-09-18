@@ -367,7 +367,7 @@ comptime string gen_relleno_grande_neon(string mne, string mne_cola, i64 pares,
 @NoIdiom
 public void memset_small_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 64;
-	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	u64 pat   = ((u64)val) * 72_340_172_838_076_673;
 	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1, ) {
 		dup q0.2_d, p
 		mov q1.16_b, q0.16_b
@@ -388,7 +388,7 @@ public void memset_small_neon(u8* dst, u8 val, usize n) {
 @NoIdiom
 public void memset_medium_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
-	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	u64 pat   = ((u64)val) * 72_340_172_838_076_673;
 	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1, ) {
 		dup q0.2_d, p
 		mov q1.16_b, q0.16_b
@@ -426,7 +426,7 @@ u64 __zva_bloque_leer() {
 	if ((v & 16) != 0) return 0;
 	// Bits 3:0: log2 del bloque en palabras de 4 bytes.
 	u64 log2_palabras = v & 15;
-	return ((u64) 4) << log2_palabras;
+	return ((u64)4) << log2_palabras;
 }
 
 /// Cache de @ref __zva_bloque_leer.  0 = sin preguntar todavia.
@@ -474,7 +474,7 @@ public u64 zva_bloque() {
 public void memset_zva(u8* dst, usize n) {
 	u64 blq = zva_bloque();
 	u64 a   = (u64)((uintptr) dst);
-	u64 fin = a + (u64) n;
+	u64 fin = a + (u64)n;
 	// Primer limite de bloque en o despues de `a`.
 	u64 ini = (a + blq - 1) & ~(blq - 1);
 	// Ultimo limite de bloque en o antes de `fin`.
@@ -521,7 +521,7 @@ public void memset_zva(u8* dst, usize n) {
 @NoIdiom
 public void memset_streaming_neon(u8* dst, u8 val, usize n) {
 	u8* fin_d = dst + n - 256;
-	u64 pat   = ((u64) val) * 72_340_172_838_076_673;
+	u64 pat   = ((u64)val) * 72_340_172_838_076_673;
 	asm (reg d = dst, reg fd = fin_d, reg p = pat, vec q0, vec q1, ) {
 		dup q0.2_d, p
 		mov q1.16_b, q0.16_b

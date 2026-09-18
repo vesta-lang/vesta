@@ -28,8 +28,8 @@ namespace ejemplos.sobrecarga;
 // Resultado esperado: 42.
 
 // --- 1. por aridad ---------------------------------------------------------
-i64 suma(i64 a) { return a; }
-i64 suma(i64 a, i64 b) { return a + b; }
+i64 suma(i64 a) =>            a;
+i64 suma(i64 a, i64 b) => a + b;
 
 // 13. Y una VARIADICA con el mismo nombre, que es la que recoge lo que no
 // encaja en ninguna de las dos.  Un variadico acepta cualquier cantidad, pero
@@ -45,18 +45,18 @@ i64 suma_de_array(i64* xs, i64 n) {
 	return t;
 }
 
-i64 suma(i64... xs) { return suma_de_array(xs, vacount()); }
+i64 suma(i64... xs) => suma_de_array(xs, vacount());
 
 // --- 2 y 3. por tipo, y gana la exacta -------------------------------------
-i64 cual(i64 x) { return 1; }
-i64 cual(f64 x) { return 2; }
+i64 cual(i64 x) => 1;
+i64 cual(f64 x) => 2;
 
 // --- 4. retornos DISTINTOS, en los dos ordenes ------------------------------
-i64 ent_primero(i64 x) { return 10; }
-f64 ent_primero(f64 x) { return 20.0; }
+i64 ent_primero(i64 x) => 10;
+f64 ent_primero(f64 x) => 20.0;
 
-f64 flot_primero(f64 x) { return 20.0; }
-i64 flot_primero(i64 x) { return 10; }
+f64 flot_primero(f64 x) => 20.0;
+i64 flot_primero(i64 x) => 10;
 
 // --- 6. METODOS de un struct ------------------------------------------------
 //
@@ -74,9 +74,9 @@ struct Medidor {
 	Medidor(i64 b) { this.base = b; }
 	Medidor(f64 b) { this.base = 7; }
 
-	i64 mide(i64 x) { return this.base + x; }
-	i64 mide(f64 x) { return this.base + 100; }
-	i64 mide(i64 x, i64 y) { return this.base + x + y; }
+	i64 mide(i64 x) => this.base + x;
+	i64 mide(f64 x) => this.base + 100;
+	i64 mide(i64 x, i64 y) => this.base + x + y;
 }
 
 // --- 7. METODOS de una clase, y que NO se confundan con un override ---------
@@ -102,14 +102,14 @@ class Obrero {
 	public Obrero(i64 t) { this.turno = t; }
 	public Obrero(f64 t) { this.turno = 99; }
 
-	public i64 hace(i64 x) { return this.turno + x; }
-	public i64 hace(f64 x) { return this.turno + 1000; }
+	public i64 hace(i64 x) => this.turno + x;
+	public i64 hace(f64 x) => this.turno + 1000;
 
 	// 8. Y los `static`, que se llaman por otro camino: `Tipo.metodo(...)`, sin
 	// receptor.  Ese camino tambien resolvia por nombre y se quedaba con el
 	// primero.
-	public static i64 turnos(i64 n) { return n * 10; }
-	public static i64 turnos(f64 n) { return 300; }
+	public static i64 turnos(i64 n) => n * 10;
+	public static i64 turnos(f64 n) => 300;
 }
 
 // Y que un override SIGUE siendo un override: misma firma exacta, mismo hueco.
@@ -122,12 +122,12 @@ class Ayudante : Obrero {
 	public Ayudante(i64 t) { super(t); }
 
 	@Override
-	public i64 hace(i64 x) { return this.hace_base(x) * 2; }
+	public i64 hace(i64 x) => this.hace_base(x) * 2;
 
 	// Llama explicitamente a la sobrecarga de f64 de la BASE.
-	public i64 delega_flotante() { return super.hace(1.0_f64); }
+	public i64 delega_flotante() => super.hace(1.0_f64);
 
-	private i64 hace_base(i64 x) { return x + 1; }
+	private i64 hace_base(i64 x) => x + 1;
 }
 
 // --- 10. por INTERFAZ -------------------------------------------------------
@@ -144,10 +144,10 @@ class Tarea : ITarea {
 	public Tarea() { }
 
 	@Override
-	public i64 corre(i64 x) { return x + 1; }
+	public i64 corre(i64 x) => x + 1;
 
 	@Override
-	public i64 corre(f64 x) { return 5000; }
+	public i64 corre(f64 x) => 5000;
 }
 
 i32 main() {

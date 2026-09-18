@@ -46,14 +46,14 @@ void pump(i64 a) {
 		i64    recv_case = -1_i64;
 		i64    send_case = -1_i64;
 		if (got < M && cnt < 2) { // ofrece RECIBIR si quedan y hay hueco
-			cases[nc * 3 + 0] = (i64) src;
+			cases[nc * 3 + 0] = (i64)src;
 			cases[nc * 3 + 1] = CASE_RECV;
 			cases[nc * 3 + 2] = 0;
 			recv_case         = nc;
 			nc += 1;
 		}
 		if (cnt > 0) { // ofrece ENVIAR si tiene pendiente
-			cases[nc * 3 + 0] = (i64) dst;
+			cases[nc * 3 + 0] = (i64)dst;
 			cases[nc * 3 + 1] = CASE_SEND;
 			cases[nc * 3 + 2] = buf[head];
 			send_case         = nc;

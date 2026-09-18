@@ -57,9 +57,7 @@ i64 nivel_h(i64 n) {
 
 // nivel_g: sin loops propios (parcial O(1)), pero llama a nivel_h (O(n))
 // fuera de cualquier loop -> TOTAL O(n).
-i64 nivel_g(i64 n) {
-	return nivel_h(n) + 1;
-}
+i64 nivel_g(i64 n) => nivel_h(n) + 1;
 
 // nivel_f: un loop propio (parcial O(n)) y dentro llama a nivel_g (TOTAL O(n))
 // -> TOTAL O(n^2) por transitividad (f -> g -> h compuesto).

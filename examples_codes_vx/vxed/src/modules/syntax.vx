@@ -433,7 +433,7 @@ public class SyntaxHighlighter {
 					cur_color = 0;
 					continue;
 				}
-				print_char((i32) c);
+				print_char((i32)c);
 				i         = i + 1;
 				col_count = col_count + 1;
 				continue;
@@ -456,7 +456,7 @@ public class SyntaxHighlighter {
 					cur_color = 0;
 					continue;
 				}
-				print_char((i32) c);
+				print_char((i32)c);
 				i         = i + 1;
 				col_count = col_count + 1;
 				continue;
@@ -506,7 +506,7 @@ public class SyntaxHighlighter {
 				while (j < length && cc_count < max_chars) {
 					u8 cc = data[j];
 					if (cc == 10) break;
-					print_char((i32) cc);
+					print_char((i32)cc);
 					j        = j + 1;
 					cc_count = cc_count + 1;
 				}
@@ -525,18 +525,18 @@ public class SyntaxHighlighter {
 					print(SX_STR);
 					cur_color = 3;
 				}
-				print_char((i32) c);
+				print_char((i32)c);
 				i32 j        = i + 1;
 				i32 cc_count = col_count + 1;
 				while (j < length && cc_count < max_chars) {
 					u8 cc = data[j];
 					if (cc == 10) break;
-					print_char((i32) cc);
+					print_char((i32)cc);
 					j        = j + 1;
 					cc_count = cc_count + 1;
 					if (cc == 92 && j < length) {
 						if (cc_count < max_chars && data[j] != 10) {
-							print_char((i32) data[j]);
+							print_char((i32)data[j]);
 							j        = j + 1;
 							cc_count = cc_count + 1;
 						}
@@ -556,18 +556,18 @@ public class SyntaxHighlighter {
 					print(SX_STR);
 					cur_color = 3;
 				}
-				print_char((i32) c);
+				print_char((i32)c);
 				i32 j        = i + 1;
 				i32 cc_count = col_count + 1;
 				while (j < length && cc_count < max_chars) {
 					u8 cc = data[j];
 					if (cc == 10) break;
-					print_char((i32) cc);
+					print_char((i32)cc);
 					j        = j + 1;
 					cc_count = cc_count + 1;
 					if (cc == 92 && j < length) {
 						if (cc_count < max_chars && data[j] != 10) {
-							print_char((i32) data[j]);
+							print_char((i32)data[j]);
 							j        = j + 1;
 							cc_count = cc_count + 1;
 						}
@@ -601,7 +601,7 @@ public class SyntaxHighlighter {
 					if (cc >= 97 && cc <= 102) ok = 1;
 					if (cc >= 65 && cc <= 70)  ok = 1;
 					if (ok == 0) break;
-					print_char((i32) cc);
+					print_char((i32)cc);
 					j        = j + 1;
 					cc_count = cc_count + 1;
 				}
@@ -617,13 +617,13 @@ public class SyntaxHighlighter {
 					print(SX_ANNOT);
 					cur_color = 7;
 				}
-				print_char((i32) c);
+				print_char((i32)c);
 				i32 j        = i + 1;
 				i32 cc_count = col_count + 1;
 				while (j < length && cc_count < max_chars) {
 					u8 cc = data[j];
 					if (is_alnum_or_us(cc) == 0) break;
-					print_char((i32) cc);
+					print_char((i32)cc);
 					j        = j + 1;
 					cc_count = cc_count + 1;
 				}
@@ -685,7 +685,7 @@ public class SyntaxHighlighter {
 				i32 k        = word_start;
 				i32 cc_count = col_count;
 				while (k < i && cc_count < max_chars) {
-					print_char((i32) data[k]);
+					print_char((i32)data[k]);
 					k        = k + 1;
 					cc_count = cc_count + 1;
 				}
@@ -700,7 +700,7 @@ public class SyntaxHighlighter {
 					print(SX_OP);
 					cur_color = 9;
 				}
-				print_char((i32) c);
+				print_char((i32)c);
 				i         = i + 1;
 				col_count = col_count + 1;
 				continue;
@@ -712,7 +712,7 @@ public class SyntaxHighlighter {
 				cur_color = 0;
 			}
 			if (c == 9) print(" "); // tab
-			else if (c >= 32 && c < 127) print_char((i32) c);
+			else if (c >= 32 && c < 127) print_char((i32)c);
 			else print(".");
 			i         = i + 1;
 			col_count = col_count + 1;

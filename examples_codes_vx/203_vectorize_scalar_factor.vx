@@ -24,5 +24,5 @@ i64 main() {
 	f64 acc = 0.0_f64;
 	for (i32 i = 0_i32; i < 50; i++) { acc = acc + a[i] * c; } // -> VFMADD con bcast
 	free(a);
-	return (i64) acc; // c * sum(1..50) = 3 * 1275 = 3825
+	return (i64)acc; // c * sum(1..50) = 3 * 1275 = 3825
 }

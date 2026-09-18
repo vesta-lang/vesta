@@ -1,1 +1,1 @@
-public i32 c_value() { return 10; }
+public i32 c_value() => 10;

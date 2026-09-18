@@ -65,13 +65,9 @@ void al_aterrizar(u32 fn_id) {
 // compilador ya excluye al propio gancho; esto es para las funciones de apoyo
 // que el gancho llame, y es lo que permite instrumentar TODO lo demas.
 @NoInstrument
-i32 sin_medir(i32 x) {
-	return x + 1;
-}
+i32 sin_medir(i32 x) => x + 1;
 
-i32 doblar(i32 x) {
-	return x + x;
-}
+i32 doblar(i32 x) => x + x;
 
 class MiExc {
 	public i32 valor;

@@ -27,7 +27,7 @@ struct Vec3 {
 class Animal {
 	i32 age;
 	void hablar() { }
-	i32 getAge() { return this.age; }
+	i32 getAge() => this.age;
 }
 
 class Perro : Animal {

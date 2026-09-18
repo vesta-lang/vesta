@@ -47,9 +47,7 @@ void pipeline(borrow_mut<i64> p) {
 }
 
 // Factory con F4: devuelve el mismo borrow recibido (elision rule 1).
-borrow<i64> identity(borrow<i64> p) {
-	return p;
-}
+borrow<i64> identity(borrow<i64> p) => p;
 
 i32 main() {
 	unique<i64> a = unique_box(10);

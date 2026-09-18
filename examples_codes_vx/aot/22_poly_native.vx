@@ -8,23 +8,23 @@
 //   gcc p.o -o p && ./p        # exit 47
 
 class Shape {
-	i32 area(i32 k) { return k; }
+	i32 area(i32 k) => k;
 }
 class Square : Shape {
 	i32 s;
 	Square(i32 side) { this.s = side; }
 	@Override
-	i32 area(i32 k) { return this.s * this.s * k; }
+	i32 area(i32 k) => this.s * this.s * k;
 }
 class Circle : Shape {
 	i32 r;
 	Circle(i32 rad) { this.r = rad; }
 	@Override
-	i32 area(i32 k) { return this.r * k; }
+	i32 area(i32 k) => this.r * k;
 }
 
 // Dispatch polimorfico por parametros de tipo base.
-i32 total(Shape a, Shape b) { return a.area(2) + b.area(3); }
+i32 total(Shape a, Shape b) => a.area(2) + b.area(3);
 
 i32 main() {
 	Shape sq = new Square(4); // dinamico Square -> 4*4*2 = 32

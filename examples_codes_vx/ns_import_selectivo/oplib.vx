@@ -3,14 +3,8 @@
 // no que hacen.
 namespace calc.ops;
 
-public i64 doblar(i64 x) {
-	return x * 2;
-}
+public i64 doblar(i64 x) => x * 2;
 
-public i64 triplicar(i64 x) {
-	return x * 3;
-}
+public i64 triplicar(i64 x) => x * 3;
 
-public i64 restar(i64 a, i64 b) {
-	return a - b;
-}
+public i64 restar(i64 a, i64 b) => a - b;

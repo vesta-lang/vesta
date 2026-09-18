@@ -21,16 +21,14 @@ namespace ejemplos.nombrados;
 //
 // Resultado esperado: 42.
 
-i64 restar(i64 a, i64 b) { return a - b; }
+i64 restar(i64 a, i64 b) => a - b;
 
 // El texto va SEGUNDO: aqui el sujeto es lo de dentro, no el marco.
-string enmarca(string marco, string texto) {
-	return marco.concat(texto).concat(marco);
-}
+string enmarca(string marco, string texto) => marco.concat(texto).concat(marco);
 
 // 5. dos sobrecargas que solo se distinguen por COMO se llaman sus ranuras
-i64 mide(i64 alto, i64 ancho) { return alto * 10 + ancho; }
-i64 mide(i64 alto, i64 ancho, i64 fondo) { return fondo; }
+i64 mide(i64 alto, i64 ancho) => alto * 10 + ancho;
+i64 mide(i64 alto, i64 ancho, i64 fondo) =>  fondo;
 
 // 7. Y el caso que ANTES era "redefinicion": mismos tipos, misma aridad, y lo
 // unico que cambia es como se llaman las ranuras.  Basta con que UNA se llame
@@ -38,8 +36,8 @@ i64 mide(i64 alto, i64 ancho, i64 fondo) { return fondo; }
 // tiene que llevar los nombres, porque es lo unico que las separa -- si no,
 // dos cuerpos comparten etiqueta, que es el fallo que ya mordio aqui con la
 // tabla de metodos.
-i64 pesa(i64 kilos, i64 gramos) { return kilos * 1000 + gramos; }
-i64 pesa(i64 libras, i64 onzas) { return libras + onzas * 1000; }
+i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
+i64 pesa(i64 libras, i64 onzas) => libras + onzas * 1000;
 
 // 8. lo mismo siendo METODOS.  De un struct, que despacha estatico: en una
 // CLASE funcionan el interprete y el JIT -- van por el descriptor del registro,
@@ -49,8 +47,8 @@ i64 pesa(i64 libras, i64 onzas) { return libras + onzas * 1000; }
 struct Bulto {
 	i64 v;
 
-	i64 mide(i64 alto, i64 ancho) { return alto * 10 + ancho; }
-	i64 mide(i64 largo, i64 grosor) { return largo + grosor * 100; }
+	i64 mide(i64 alto, i64 ancho) => alto * 10 + ancho;
+	i64 mide(i64 largo, i64 grosor) => largo + grosor * 100;
 }
 
 i32 main() {

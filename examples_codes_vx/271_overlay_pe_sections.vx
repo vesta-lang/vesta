@@ -38,7 +38,7 @@ void escribe_seccion(PeImage pe, i32 i) {
 }
 
 i32 main() {
-	u8*     buf = (u8*) malloc(512);
+	u8*     buf = (u8*)malloc(512);
 	PeImage pe  = PeImage(buf);
 	pe.magic        = (u16)0x5A4D; // 'MZ'
 	pe.num_sections = (u32)3;

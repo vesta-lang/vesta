@@ -2,9 +2,7 @@
 class Box {
 	public i32 val;
 	public Box(i32 v) { val = v; }
-	public fn() -> i32 get_closure() {
-		return () => val;
-	}
+	public fn() -> i32 get_closure() => () => val;
 }
 i32 main() {
 	Box         b = new Box(42);

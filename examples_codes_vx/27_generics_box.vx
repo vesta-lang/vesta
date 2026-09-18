@@ -22,7 +22,7 @@ namespace ejemplos.generics_box;
 class Box<T> {
 	public T value;
 	public Box(T v) { this.value = v; }
-	public T read() { return this.value; }
+	public T read() => this.value;
 }
 
 i32 main() {

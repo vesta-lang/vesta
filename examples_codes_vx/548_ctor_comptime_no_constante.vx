@@ -23,7 +23,7 @@ struct Medida {
 }
 
 /** @brief Una funcion NORMAL: su resultado no existe hasta que se ejecuta. */
-i64 al_ejecutar() { return 40_i64; }
+i64 al_ejecutar() => 40_i64;
 
 i32 main() {
 	Medida m = Medida(al_ejecutar());

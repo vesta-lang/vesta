@@ -11,5 +11,5 @@ i32 main() {
 	Optional<i64> o = Some(7);
 	string        s = "calculado";
 	const i64     v = expect(o, s);
-	return (i32) v;
+	return (i32)v;
 }

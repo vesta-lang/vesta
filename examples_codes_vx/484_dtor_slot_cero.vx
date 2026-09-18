@@ -47,7 +47,7 @@ class BaseA {
 	public ~BaseA() { Cuenta.base_solo = Cuenta.base_solo + 1; }
 }
 class DerivA : BaseA {
-	public i64 f() { return 1; }
+	public i64 f() => 1;
 }
 
 // Herencia CON destructor propio: corren LOS DOS, primero el de la derivada y

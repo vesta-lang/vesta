@@ -53,12 +53,12 @@ namespace ejemplos.cfn_vs_lambda;
 extern "msvcrt.dll" { fn toupper(i32 c) -> i32; }
 
 // Funciones libres normales (su direccion es un puntero a funcion crudo).
-i64 doblar(i64 x) { return x * 2; }
-i64 triplicar(i64 x) { return x * 3; }
-i64 negar(i64 x) { return 0 - x; }
+i64 doblar(i64 x) => x * 2;
+i64 triplicar(i64 x) => x * 3;
+i64 negar(i64 x) => 0 - x;
 
 // callback: recibe un cfn y lo aplica.  El cfn se decide en el call site.
-i64 aplicar(cfn(i64) -> i64 f, i64 x) { return f(x); }
+i64 aplicar(cfn(i64) -> i64 f, i64 x) => f(x);
 
 // callback recibido por BORROW (prestamo): el cfn lo posee un unique<> del
 // caller; aqui solo lo leemos sin tomar ownership.
@@ -79,7 +79,7 @@ struct Calculadora {
 	i64 base;
 	// Miembro funcion (metodo).  No ocupa bytes en la instancia; el lowering
 	// emite CALL directo a Calculadora_sumar(Calculadora*, i64) -- inline-able.
-	i64 sumar(i64 x) { return this.base + x; }
+	i64 sumar(i64 x) => this.base + x;
 }
 
 // --- 2. cfn FIELD: ATRIBUTO puntero a funcion crudo (8 bytes, CALLIND) -------

@@ -25,5 +25,5 @@ i32 main() {
 		}
 		i = i + 1;
 	}
-	return (i32) hits;
+	return (i32)hits;
 }

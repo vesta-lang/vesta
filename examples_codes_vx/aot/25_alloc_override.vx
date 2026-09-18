@@ -27,7 +27,7 @@ extern "vmrt" {
 // El allocator debe ZERIFICAR (convencion kzalloc) para preservar el cero-init
 // de los campos no escritos por el constructor.
 @AllocatorOverride
-i64* my_alloc(u64 n) { return rt_alloc(n); }
+i64* my_alloc(u64 n) => rt_alloc(n);
 
 @AllocatorOverride
 void my_free(i64* p) { rt_free(p); }

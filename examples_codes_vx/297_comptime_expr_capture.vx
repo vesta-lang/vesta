@@ -8,21 +8,15 @@
 // -----------------------------------------------------------------------------
 
 // comptime fn: stringifica el codigo capturado y lo devuelve como VALOR string.
-private comptime string stringify(expr code) {
-	return code;
-}
+private comptime string stringify(expr code) => code;
 
 // comptime fn: envuelve el texto capturado entre comillas (valor string).
-private comptime string quoted(expr code) {
-	return "[" + code + "]";
-}
+private comptime string quoted(expr code) => "[" + code + "]";
 
 // @Macro: emite un string LITERAL que se inyecta como codigo.  El resultado
 // del splice es una expresion string en el call site.
 @Macro
-private comptime string as_literal(expr code) {
-	return "\"" + code + "\"";
-}
+private comptime string as_literal(expr code) => "\"" + code + "\"";
 
 i32 main() {
 	i32 x = 5_i32;

@@ -32,46 +32,26 @@ struct Vec2 {
 	i32 y;
 
 	// Resta componente a componente: devuelve la suma de las diferencias.
-	i32 __sub__(Vec2 o) {
-		return (this.x - o.x) + (this.y - o.y);
-	}
+	i32 __sub__(Vec2 o) => (this.x - o.x) + (this.y - o.y);
 
 	// Producto escalar (dot product).
-	i32 __mul__(Vec2 o) {
-		return this.x * o.x + this.y * o.y;
-	}
+	i32 __mul__(Vec2 o) => this.x * o.x + this.y * o.y;
 
 	// Division entera componente a componente, sumada.
-	i32 __div__(Vec2 o) {
-		return this.x / o.x + this.y / o.y;
-	}
+	i32 __div__(Vec2 o) => this.x / o.x + this.y / o.y;
 
 	// Modulo componente a componente, sumado.
-	i32 __mod__(Vec2 o) {
-		return this.x % o.x + this.y % o.y;
-	}
+	i32 __mod__(Vec2 o) => this.x % o.x + this.y % o.y;
 
 	// Comparacion ordenada por magnitud al cuadrado (x*x + y*y).
-	i32 mag2() {
-		return this.x * this.x + this.y * this.y;
-	}
-	bool __lt__(Vec2 o) {
-		return this.mag2() < o.mag2();
-	}
-	bool __gt__(Vec2 o) {
-		return this.mag2() > o.mag2();
-	}
-	bool __le__(Vec2 o) {
-		return this.mag2() <= o.mag2();
-	}
-	bool __ge__(Vec2 o) {
-		return this.mag2() >= o.mag2();
-	}
+	i32 mag2() => this.x * this.x + this.y * this.y;
+	bool __lt__(Vec2 o) => this.mag2() < o.mag2();
+	bool __gt__(Vec2 o) => this.mag2() > o.mag2();
+	bool __le__(Vec2 o) => this.mag2() <= o.mag2();
+	bool __ge__(Vec2 o) => this.mag2() >= o.mag2();
 
 	// Negacion: invierte ambas componentes y suma; -Vec2(3,4) -> -7.
-	i32 __neg__() {
-		return (0 - this.x) + (0 - this.y);
-	}
+	i32 __neg__() => (0 - this.x) + (0 - this.y);
 
 	// Indexado de lectura: 0 -> x, otro -> y.
 	i32 __index__(i32 i) {

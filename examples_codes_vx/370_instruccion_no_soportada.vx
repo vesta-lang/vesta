@@ -41,7 +41,7 @@ i32 main() {
 		std.memory.x86_64.memcpy_small_avx512(&g_destino[0], &g_origen[0],
 			(usize) 96);
 	} catch (FatalError e) {
-		visto = (i64) e.kind;
+		visto = (i64)e.kind;
 	}
 
 	i64 hechas = 0_i64;

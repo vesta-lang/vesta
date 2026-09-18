@@ -3,8 +3,8 @@
 //   - Compile time: cuanto tarda el front end en expandir todo.
 //   - Runtime: si los emit-eds tienen overhead vs codigo hand-written.
 
-i32 doblar(i32 x) { return x * 2; }
-i32 mas_uno(i32 x) { return x + 1; }
+i32 doblar(i32 x) => x * 2;
+i32 mas_uno(i32 x) => x + 1;
 
 // Contador global compartido entre N macros.
 const i64 g_n = 0_i64;

@@ -21,9 +21,7 @@ namespace ejemplos.estaticos_lambda_y_unique;
 
 class Fabrica {
 	// Devuelve un lambda: su ranura son dos palabras (la funcion y su entorno).
-	public static fn(i64) -> i64 doblador() {
-		return (i64 x) => x * 2;
-	}
+	public static fn(i64) -> i64 doblador() => (i64 x) => x * 2;
 
 	// Devuelve un puntero inteligente: la ranura de un `unique` son dos
 	// palabras (el puntero y quien lo libera); la de un `shared`, una sola.
@@ -39,9 +37,7 @@ class Fabrica {
 }
 
 struct FabricaS {
-	public static fn(i64) -> i64 triplicador() {
-		return (i64 x) => x * 3;
-	}
+	public static fn(i64) -> i64 triplicador() => (i64 x) => x * 3;
 
 	public static unique<i64> caja(i64 v) {
 		unique<i64> u = unique_box(v);

@@ -25,15 +25,15 @@ interface Alta : Media {
 }
 
 class Todo : Alta {
-	public i64 a() { return 1; }
-	public i64 b() { return 2; }
-	public i64 c() { return 4; }
+	public i64 a() => 1;
+	public i64 b() => 2;
+	public i64 c() => 4;
 }
 
 // Recibir por cada nivel de la cadena: los tres son el mismo objeto.
-i64 por_base(Base x) { return x.a(); }
-i64 por_media(Media x) { return x.b(); }
-i64 por_alta(Alta x) { return x.c(); }
+i64 por_base(Base x) => x.a();
+i64 por_media(Media x) => x.b();
+i64 por_alta(Alta x) => x.c();
 
 i32 main() {
 	// Asignar a cada nivel de la cadena.

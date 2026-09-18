@@ -62,5 +62,5 @@ i32 main() {
 	i64 b = msgrecv();
 	i64 d = msgrecv();
 	i64 e = msgrecv();
-	return (i32) c.value; // 400_000
+	return (i32)c.value; // 400_000
 }

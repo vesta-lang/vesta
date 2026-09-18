@@ -15,13 +15,11 @@ namespace ejemplos.first_class_functions;
 
 fn(i64, i64) -> i64 g_op; // variable GLOBAL de tipo funcion
 
-i64 add(i64 a, i64 b) { return a + b; }
-i64 mul(i64 a, i64 b) { return a * b; }
+i64 add(i64 a, i64 b) => a + b;
+i64 mul(i64 a, i64 b) => a * b;
 
 // Higher-order: recibe la operacion como valor y la aplica.
-i64 apply(fn(i64, i64) -> i64 op, i64 x, i64 y) {
-	return op(x, y);
-}
+i64 apply(fn(i64, i64) -> i64 op, i64 x, i64 y) => op(x, y);
 
 i64 main() {
 	// 1. var-decl: nombre de funcion -> function value.

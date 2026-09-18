@@ -21,7 +21,7 @@ struct Base {
 	}
 }
 struct Der : Base {
-	public u64 doble() { return this.v * 2; }
+	public u64 doble() => this.v * 2;
 }
 i32 main() {
 	Der d;

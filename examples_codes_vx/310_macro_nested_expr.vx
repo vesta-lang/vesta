@@ -13,13 +13,11 @@
 // Resultado esperado: R0 == 42.
 
 // Helper expr-capture: devuelve el texto crudo de su argumento.
-comptime string source(expr code) { return code; }
+comptime string source(expr code) => code;
 
 // @Macro que genera codigo, forwardeando su `expr` param al helper anidado:
 @Macro
-comptime string twice(expr e) {
-	return "(" + source(e)+ ") + (" + source(e)+ ")";
-}
+comptime string twice(expr e) => "(" + source(e)+ ") + (" + source(e)+ ")";
 
 i32 main() {
 	i32 a = 20_i32;

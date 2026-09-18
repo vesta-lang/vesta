@@ -23,5 +23,5 @@ struct Nodo {
 i32 main() {
 	Nodo n;
 	n.v = 1;
-	return (i32) n.v;
+	return (i32)n.v;
 }

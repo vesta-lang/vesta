@@ -130,7 +130,7 @@ public class Screen {
 		i32 col       = 0_i32;
 		i32 max_col   = this.cols - screen_col;
 		while (i < b.length && col < max_col) {
-			i32 c = (i32) b.data[i];
+			i32 c = (i32)b.data[i];
 			if (sel_on == 1) {
 				i32                    want = 0_i32;
 				if (i >= ss && i < se) want = 1;
@@ -273,7 +273,7 @@ public class Screen {
 					else print(col_fg);
 					in_ws = 0;
 				}
-				if (c >= 32 && c < 127) print_char((i32) c);
+				if (c >= 32 && c < 127) print_char((i32)c);
 				else print_char(46); // chars no imprimibles
 				col = col + 1;
 			}

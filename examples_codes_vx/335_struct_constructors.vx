@@ -28,9 +28,7 @@ struct Vec {
 	}
 
 	/** @brief Suma de las dos componentes. */
-	public i64 sum() {
-		return this.x + this.y;
-	}
+	public i64 sum() => this.x + this.y;
 }
 
 i32 main() {

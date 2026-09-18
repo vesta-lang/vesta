@@ -14,7 +14,7 @@ struct Inner<T> { T v; }
 class Lista<T> {
 	T v;
 	Lista(T x) { this.v = x; }
-	i64 cual() { return 1; } // primario
+	i64 cual() => 1; // primario
 }
 class Lista<i64> {
 	i64 v;
@@ -23,22 +23,22 @@ class Lista<i64> {
 		this.v     = x;
 		this.doble = x + x;
 	}
-	i64 cual() { return 2; } // total i64
+	i64 cual() => 2; // total i64
 }
 
 // ---- ESPECIALIZACION DE FUNCION ------------------------------------------
-i64 rango<T>(T x) { return 10; }     // primario
-i64 rango<i64>(i64 x) { return 20; } // total i64
-i64 rango<T*>(T * x) { return 30; }  // parcial puntero
+i64 rango<T>(T x) => 10;     // primario
+i64 rango<i64>(i64 x) => 20; // total i64
+i64 rango<T*>(T* x) => 30;   // parcial puntero
 
 // ---- PATRON GENERICO ANIDADO ---------------------------------------------
 struct Caja<T> {
 	T v;
-	i64 forma() { return 1; }
+	i64 forma() => 1;
 }
 struct Caja<Inner<T>> { // T se liga al type-arg del Inner concreto
 	Inner<T> w;
-	i64 forma() { return 2; }
+	i64 forma() => 2;
 }
 
 i32 main() {
@@ -49,7 +49,7 @@ i32 main() {
 	// Funcion: primario / total / parcial.
 	i64  r1 = rango<i32>(5); // primario -> 10
 	i64  r2 = rango<i64>(6); // total    -> 20
-	i64* p  = (i64*) malloc(8);
+	i64* p  = (i64*)malloc(8);
 	i64  r3 = rango<i64*>(p); // parcial  -> 30
 	free(p);
 

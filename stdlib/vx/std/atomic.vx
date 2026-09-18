@@ -148,9 +148,7 @@ namespace std.atomic;
 	total_pre:    O(1),
 	total_post:   O(1)
 )
-	public i64 atomic_load64(i64* addr) {
-	return atomic_load_i64(addr);
-}
+	public i64 atomic_load64(i64* addr) => atomic_load_i64(addr);
 
 /// Store atomico de 64 bits (mov alineado; release en x86-TSO).
 @Target("arch:x86_64 || arch:x86")
@@ -302,9 +300,7 @@ namespace std.atomic;
 	total_pre:    O(1),
 	total_post:   O(1)
 )
-	public i64 atomic_load64(i64* addr) {
-	return *addr;
-}
+	public i64 atomic_load64(i64* addr) => *addr;
 @Target("arch:arm64")
 @nothrow
 @nopanic
@@ -365,9 +361,7 @@ namespace std.atomic;
 	total_pre:    O(1),
 	total_post:   O(1)
 )
-	public i64 atomic_sub64(i64* addr, i64 delta) {
-	return atomic_add64(addr, -delta);
-}
+	public i64 atomic_sub64(i64* addr, i64 delta) => atomic_add64(addr, -delta);
 
 /// fetch-and-or: `*addr |= mask`; devuelve el OLD.  Bucle CAS -> O(n) sobre los
 /// REINTENTOS: sin contencion el CAS triunfa a la primera (O(1) amortizado).
@@ -826,7 +820,7 @@ struct atomic < T : Scalar > {
 		total_post:   O(n),
 		when:         is_float<T>()
 	)
-		public T __iadd__(T d) where T: Numeric { return this.fetch_add(d) + d; }
+		public T __iadd__(T d) where T: Numeric => this.fetch_add(d) + d;
 
 	/// `g -= d` / `g = g - d` / `g--`.  Devuelve el valor NUEVO.  Ver __iadd__.
 	@nothrow
@@ -849,7 +843,7 @@ struct atomic < T : Scalar > {
 		total_post:   O(n),
 		when:         is_float<T>()
 	)
-		public T __isub__(T d) where T: Numeric { return this.fetch_sub(d) - d; }
+		public T __isub__(T d) where T: Numeric => this.fetch_sub(d) - d;
 
 	/// `g |= m` / `g = g | m`.  Devuelve el valor NUEVO.  Bucle CAS en la
 	/// primitiva: cuerpo O(1) (una llamada), total O(n) (reintentos).
@@ -864,7 +858,7 @@ struct atomic < T : Scalar > {
 		total_pre:    O(n),
 		total_post:   O(n)
 	)
-		public T __ior__(T m) where T: Integer { return this.fetch_or(m) | m; }
+		public T __ior__(T m) where T: Integer => this.fetch_or(m) | m;
 
 	/// `g &= m` / `g = g & m`.  Devuelve el valor NUEVO.  Ver __ior__.
 	@nothrow
@@ -878,7 +872,7 @@ struct atomic < T : Scalar > {
 		total_pre:    O(n),
 		total_post:   O(n)
 	)
-		public T __iand__(T m) where T: Integer { return this.fetch_and(m) & m; }
+		public T __iand__(T m) where T: Integer => this.fetch_and(m) & m;
 
 	/// `g ^= m` / `g = g ^ m`.  Devuelve el valor NUEVO.  Ver __ior__.
 	@nothrow
@@ -892,7 +886,7 @@ struct atomic < T : Scalar > {
 		total_pre:    O(n),
 		total_post:   O(n)
 	)
-		public T __ixor__(T m) where T: Integer { return this.fetch_xor(m) ^ m; }
+		public T __ixor__(T m) where T: Integer => this.fetch_xor(m) ^ m;
 
 	// -----------------------------------------------------------------------
 	//  CAS y exchange.
@@ -996,7 +990,7 @@ struct atomic < T : Scalar > {
 		total_pre:    O(1),
 		total_post:   O(1)
 	)
-		public T load() { return this.__deref__(); }
+		public T load() => this.__deref__();
 
 	/// Store atomico.  Igual que `g = v`.
 	@nothrow
@@ -1009,7 +1003,7 @@ struct atomic < T : Scalar > {
 		total_pre:    O(1),
 		total_post:   O(1)
 	)
-		public T store(T v) { return this.__assign__(v); }
+		public T store(T v) => this.__assign__(v);
 
 	/// Exchange.  Alias de @ref swap, con el nombre de C++/Rust.  Su cuerpo es
 	/// solo una llamada -> parcial O(1) (el analizador NO cuenta el inline en el
@@ -1034,7 +1028,7 @@ struct atomic < T : Scalar > {
 		total_post:   O(1),
 		when:         arch:arm64
 	)
-		public T exchange(T v) { return this.swap(v); }
+		public T exchange(T v) => this.swap(v);
 
 	// -----------------------------------------------------------------------
 	//  RMW compuestos sobre CAS.

@@ -26,7 +26,7 @@ interface Shape { public i32 area(); }
 class Circle : Shape {
 	public i32 r;
 	public Circle(i32 rr) { this.r = rr; }
-	public i32 area() { return this.r * this.r; }
+	public i32 area() => this.r * this.r;
 }
 
 class Rect : Shape {
@@ -36,7 +36,7 @@ class Rect : Shape {
 		this.w = ww;
 		this.h = hh;
 	}
-	public i32 area() { return this.w * this.h; }
+	public i32 area() => this.w * this.h;
 }
 
 class ColoredCircle : Circle {

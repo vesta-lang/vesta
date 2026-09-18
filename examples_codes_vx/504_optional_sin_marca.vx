@@ -56,5 +56,5 @@ i32 main() {
 	println("con=${s1} match=${s2} vacio=${s3} hay=${hay} plano=${s4}");
 
 	// 30 + 12 + 0 + 0 = 42, y el plano se resta entero.
-	return (i32)(s1 + s2 + s3 + (i64) hay + s4 - 99);
+	return (i32)(s1 + s2 + s3 + (i64)hay + s4 - 99);
 }

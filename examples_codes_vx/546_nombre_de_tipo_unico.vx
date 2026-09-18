@@ -26,6 +26,4 @@ class Medida {
 	public Medida() { this.otro = 0; }
 }
 
-i32 main() {
-	return 42;
-}
+i32 main() => 42;

@@ -22,20 +22,20 @@ struct Punto {
 	i64 x;
 	i64 y;
 
-	i64 area() { return this.x * this.y; }
+	i64 area() => this.x * this.y;
 }
 
 // El mismo nombre, para el mismo receptor: aqui esta el choque.
-i64 area(Punto p) { return p.x; }
+i64 area(Punto p) => p.x;
 
 // Y un tipo FUERTE, con su funcion.  `41.anyos()` no la encuentra -- un literal
 // es `i64` --, y el error lo dice con el cast que hace falta.
 typedef u32 Edad new;
 
-u64 anyos(Edad e) { return (u64)e + 1_u64; }
+u64 anyos(Edad e) => (u64)e + 1_u64;
 
 // Y el hueco del receptor, mal puesto de las dos maneras posibles.
-i64 tres(i64 a, i64 b, i64 c) { return a + b + c; }
+i64 tres(i64 a, i64 b, i64 c) => a + b + c;
 
 i32 main() {
 	Punto q;
@@ -52,22 +52,22 @@ i32 main() {
 // Y dos hermanas que SOLO se distinguen por como se llaman sus ranuras.
 // Declararlas vale -- basta con que una se llame distinto --, pero una llamada
 // POSICIONAL no dice cual, asi que hay que nombrar hasta separarlas.
-i64 pesa(i64 kilos, i64 gramos) { return kilos * 1000 + gramos; }
-i64 pesa(i64 libras, i64 onzas) { return libras + onzas * 1000; }
+i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
+i64 pesa(i64 libras, i64 onzas) => libras + onzas * 1000;
 
-i64 ambigua() { return pesa(1, 2); }
+i64 ambigua() => pesa(1, 2);
 
 // Lo mismo con `@Override`: la derivada renombra la ranura, asi que NO
 // sustituye.  Sin `@Override` seria una sobrecarga nueva y valdria.
 class Base {
 	public Base() { }
 
-	public i64 mide(i64 alto) { return alto; }
+	public i64 mide(i64 alto) => alto;
 }
 
 class Hija : Base {
 	public Hija() { }
 
 	@Override
-	public i64 mide(i64 largo) { return largo * 2; }
+	public i64 mide(i64 largo) => largo * 2;
 }

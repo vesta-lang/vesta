@@ -17,12 +17,12 @@ struct Ops {
 	u8 tag;
 }
 
-i32 c_add(i32 a, i32 b) { return a + b; }
-i32 c_mul(i32 a, i32 b) { return a * b; }
-i32 c_dbl(i32 x) { return x * 2; }
+i32 c_add(i32 a, i32 b) => a + b;
+i32 c_mul(i32 a, i32 b) => a * b;
+i32 c_dbl(i32 x) => x * 2;
 
 // Parametro puntero a funcion (callback), llamado indirectamente.
-i32 apply1(i32 (*cb)(i32 x), i32 v) { return cb(v); }
+i32 apply1(i32 (*cb)(i32 x), i32 v) => cb(v);
 
 i32 main() {
 	// Variable local puntero a funcion C + promocion del nombre desnudo.

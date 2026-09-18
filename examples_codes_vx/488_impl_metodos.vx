@@ -42,20 +42,20 @@ concept Sumable<T> = true;
 
 // Sobre un struct: el numero de parametros es justo lo que se rompia.
 impl Punto {
-	i64 cero() { return this.y; }
-	i64 uno(i64 a) { return this.x + a; }
-	i64 dos(i64 a, i64 b) { return this.x + this.y + a + b; }
-	i64 tres(i64 a, i64 b, i64 c) { return this.x + a + b + c; }
+	i64 cero() => this.                               y;
+	i64 uno(i64 a) => this.x +                        a;
+	i64 dos(i64 a, i64 b) => this.x + this.y + a +    b;
+	i64 tres(i64 a, i64 b, i64 c) => this.x + a + b + c;
 }
 
 // Sobre una CLASE: otra rama, mismo mecanismo.
 impl Caja {
-	i64 mas(i64 a, i64 b, i64 c) { return this.v + a + b + c; }
+	i64 mas(i64 a, i64 b, i64 c) => this.v + a + b + c;
 }
 
 // La otra forma de anadir metodos, atada a un concepto.
 impl Sumable for Punto {
-	i64 total(i64 k) { return this.x + this.y + k; }
+	i64 total(i64 k) => this.x + this.y + k;
 }
 
 i32 main() {

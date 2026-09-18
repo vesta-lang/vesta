@@ -27,7 +27,7 @@ struct Rc {
 
 Rc make() {
 	Rc r;
-	r.ctrl        = (i64*) malloc(8);
+	r.ctrl        = (i64*)malloc(8);
 	*r.ctrl       = 1;
 	Counter.vivos = Counter.vivos + 1;
 	return r;

@@ -7,6 +7,4 @@ static_assert(
 	"i32 debe ser 8 bytes (test deliberadamente falso)"
 );
 
-i32 main() {
-	return 0;
-}
+i32 main() => 0;

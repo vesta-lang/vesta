@@ -113,20 +113,20 @@ i64 avx_sgn(u8* a, i64 la, u8* b, i64 lb) {
 }
 
 i32 main() {
-	u8* p_empty = (u8*) section_start(".d_empty");
-	u8* p_a     = (u8*) section_start(".d_a");
-	u8* p_b     = (u8*) section_start(".d_b");
-	u8* p_abc   = (u8*) section_start(".d_abc");
-	u8* p_abd   = (u8*) section_start(".d_abd");
-	u8* p_ab    = (u8*) section_start(".d_ab");
-	u8* p_x15A  = (u8*) section_start(".d_x15A");
-	u8* p_x15B  = (u8*) section_start(".d_x15B");
-	u8* p_x16A  = (u8*) section_start(".d_x16A");
-	u8* p_x16B  = (u8*) section_start(".d_x16B");
-	u8* p_q31A  = (u8*) section_start(".d_q31A");
-	u8* p_q31B  = (u8*) section_start(".d_q31B");
-	u8* p_t33a  = (u8*) section_start(".d_t33a");
-	u8* p_t33b  = (u8*) section_start(".d_t33b");
+	u8* p_empty = (u8*)section_start(".d_empty");
+	u8* p_a     = (u8*)section_start(".d_a");
+	u8* p_b     = (u8*)section_start(".d_b");
+	u8* p_abc   = (u8*)section_start(".d_abc");
+	u8* p_abd   = (u8*)section_start(".d_abd");
+	u8* p_ab    = (u8*)section_start(".d_ab");
+	u8* p_x15A  = (u8*)section_start(".d_x15A");
+	u8* p_x15B  = (u8*)section_start(".d_x15B");
+	u8* p_x16A  = (u8*)section_start(".d_x16A");
+	u8* p_x16B  = (u8*)section_start(".d_x16B");
+	u8* p_q31A  = (u8*)section_start(".d_q31A");
+	u8* p_q31B  = (u8*)section_start(".d_q31B");
+	u8* p_t33a  = (u8*)section_start(".d_t33a");
+	u8* p_t33b  = (u8*)section_start(".d_t33b");
 
 	// Cada caso suma 2 al total (sse + avx) y suma 1 por cada variante que
 	// acierta el signo esperado.  ok == total <=> ambas variantes correctas

@@ -22,5 +22,5 @@ i32 main() {
 	comptime {
 		static_assert(R == 42, "asm_mul3(14) debe ser 42");
 	}
-	return (i32) R; // 42
+	return (i32)R; // 42
 }

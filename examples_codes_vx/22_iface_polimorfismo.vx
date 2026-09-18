@@ -24,12 +24,12 @@ interface IServicio {
 
 class ImplA : IServicio {
 	public ImplA() { }
-	public i32 metodo() { return 10; }
+	public i32 metodo() => 10;
 }
 
 class ImplB : IServicio {
 	public ImplB() { }
-	public i32 metodo() { return 20; }
+	public i32 metodo() => 20;
 }
 
 i32 main() {

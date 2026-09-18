@@ -32,9 +32,7 @@ void mueve_declarado(out i64* d, in i64* s) {
 	d[2] = s[2];
 }
 
-i64 suma4(i64* m) {
-	return m[0] * 1000 + m[1] * 100 + m[2] * 10 + m[3];
-}
+i64 suma4(i64* m) => m[0] * 1000 + m[1] * 100 + m[2] * 10 + m[3];
 
 i64 main() {
 	i64* m = (i64*)malloc(128);

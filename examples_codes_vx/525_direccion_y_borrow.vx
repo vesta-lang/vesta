@@ -23,9 +23,7 @@ namespace ejemplos.direccion_y_borrow;
 // Esperado: 42.
 
 // Presta COMPARTIDO lo que se le pasa: por aqui solo se lee.
-i32 sumar(in i32* a, in i32* b) {
-	return (*a) + (*b);
-}
+i32 sumar(in i32* a, in i32* b) => (*a) + (*b);
 
 // Presta EXCLUSIVO: el hueco del llamante se escribe.
 void poner(out i32 destino, i32 v) {

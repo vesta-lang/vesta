@@ -11,8 +11,8 @@ namespace ejemplos.inferencia_generica;
 // Ambas producen el mismo tipo concreto; cero overhead.
 
 struct Caja<T> {
-	T dato;
-	T leer() { return this.dato; }
+	T                dato;
+	T leer() => this.dato;
 }
 
 Caja<i64> hacer_caja(i64 x) {

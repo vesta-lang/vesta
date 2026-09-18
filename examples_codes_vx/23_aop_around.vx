@@ -16,9 +16,7 @@ namespace ejemplos.aop_around;
 
 class Service {
 	public Service() { }
-	public i32 run() {
-		return 7;
-	}
+	public i32 run() => 7;
 }
 
 @Aspect

@@ -20,21 +20,21 @@ concept MiNum<T> = is_numeric<T>();
 class Cuadrado {
 	i64 lado;
 	Cuadrado(i64 l) { this.lado = l; }
-	i64 area() { return this.lado * this.lado; }
-	bool igual(i64 x) { return this.lado == x; }
+	i64 area() => this.lado * this.   lado;
+	bool igual(i64 x) => this.lado == x;
 }
 
 // Bound estructural (firma) en funcion.
-i64 medir < T : Figura > (T f) { return f.area(); }
+i64 medir < T : Figura > (T f) => f.area();
 
 struct Calc {
 	i64 base;
 	// bound inline en metodo generico
-	U sumar < U : Numeric > (U x) { return (U) this.base + x; }
+	U sumar < U : Numeric > (U x) => (U) this.base + x;
 	// where con concepto de usuario
-	U mult<U>(U x) where U: MiNum { return (U) this.base * x; }
+	U mult<U>(U x) where U: MiNum => (U) this.base * x;
 	// multiples bounds en metodo
-	U combo<U>(U x) where U: Numeric + Comparable { return (U) this.base + x; }
+	U combo<U>(U x) where U: Numeric + Comparable => (U) this.base + x;
 }
 
 i32 main() {

@@ -51,13 +51,9 @@ class IntArrayList {
 		return this.buf[i];
 	}
 
-	public i32 length() {
-		return this.len;
-	}
+	public i32 length() => this.len;
 
-	public i32 capacity() {
-		return this.cap;
-	}
+	public i32 capacity() => this.cap;
 
 	// Forzamos que el buffer raw no quede colgando (manual destroy):
 	public void destroy() {

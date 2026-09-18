@@ -10,8 +10,8 @@ struct Punto {
 	i64 y;
 }
 impl Punto {
-	i64 suma() { return this.x + this.y; }
-	i64 escala(i64 k) { return (this.x + this.y) * k; }
+	i64 suma() => this.x + this.             y;
+	i64 escala(i64 k) => (this.x + this.y) * k;
 }
 
 class Contador {
@@ -20,7 +20,7 @@ class Contador {
 	i64 get() { return this.n; }
 }
 impl Contador {
-	i64 doble() { return this.get() * 2; }
+	i64 doble() => this.get() * 2;
 }
 
 i64 main() {

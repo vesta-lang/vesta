@@ -30,7 +30,7 @@ interface IServicio {
 
 class Servicio : IServicio {
 	public Servicio() { }
-	public i32 metodo() { return 42; }
+	public i32 metodo() => 42;
 }
 
 i32 main() {

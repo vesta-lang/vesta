@@ -17,10 +17,10 @@ i32 main() {
 		x = x + 1;     // reasignacion mutable
 		static_assert(x == 6, "x == 6");
 
-		i32 op = (i32) Op.MOV; // valor desde un enum C-style
+		i32 op = (i32)Op.MOV; // valor desde un enum C-style
 		static_assert(op == 0x89, "MOV == 0x89");
 
-		i32 combo = (i32) Op.ADD + (i32) Op.SUB; // aritmetica con enums
+		i32 combo = (i32)Op.ADD + (i32)Op.SUB; // aritmetica con enums
 		static_assert(combo == 0x2A, "ADD + SUB == 0x2a");
 
 		i32 z = x + op; // uso de vars previas

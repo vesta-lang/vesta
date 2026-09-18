@@ -2,7 +2,7 @@
 class Counter {
 	public i32 value;
 	public Counter() { this.value = 0; }
-	public i32 inc() { return 1; }
+	public i32 inc() => 1;
 }
 
 void func() {

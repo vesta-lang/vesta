@@ -15,12 +15,12 @@ i64 fortytwo() {
 }
 
 // comptime fn que llama al helper @Naked -> ejecutado en el ComptimeVM.
-comptime i64 c_get() { return fortytwo(); }
+comptime i64 c_get() => fortytwo();
 
 // El valor se usa en una constante compile-time + static_assert.
 const i64 V = c_get();
 static_assert(V == 42, "fortytwo() debe ser 42");
 
 i32 main() {
-	return (i32) V; // 42
+	return (i32)V; // 42
 }

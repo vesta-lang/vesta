@@ -9,7 +9,7 @@ struct Par {
 	i64 b;
 }
 impl Sumable for Par {
-	i64 suma() { return this.a + this.b; }
+	i64 suma() => this.a + this.b;
 }
 
 i64 main() {

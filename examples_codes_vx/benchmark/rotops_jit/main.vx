@@ -13,7 +13,7 @@ class RotOps {
 		u64 acc = 0_u64;
 		i32 i   = 1_i32;
 		while (i < n) {
-			u64 v = (u64) i;
+			u64 v = (u64)i;
 			acc = acc + rotl(v, 7);
 			acc = acc + rotr(v, 3);
 			i   = i + 1;

@@ -22,7 +22,7 @@ class IntOps {
 		i64 acc = 0_i64;
 		i32 i   = 1_i32;
 		while (i < n) {
-			i64 a = (i64) i;
+			i64 a = (i64)i;
 			i64 b = (i64)(i + 7);
 			acc = acc + imin(a, b);
 			acc = acc + imax(a, b);

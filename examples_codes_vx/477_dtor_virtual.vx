@@ -29,7 +29,7 @@ class Base {
 // hereda el de Base.
 class Deriv : Base {
 	public Deriv(i32 i) { super(i); }
-	public i32 doble() { return this.id * 2; }
+	public i32 doble() => this.id * 2;
 }
 
 // A esta no la extiende nadie -> NO necesita tabla: llamada directa.

@@ -8,10 +8,6 @@ bytes jump_table {
 		dq 0xDEADBEEFCAFEBABE // literal, sin reloc
 }
 
-i32 helper() {
-	return 7;
-}
+i32 helper() => 7;
 
-i32 main() {
-	return 0x42;
-}
+i32 main() => 0x42;

@@ -21,7 +21,7 @@ struct NetHdr {
 }
 
 i32 main() {
-	u8* buf = (u8*) malloc(32);
+	u8* buf = (u8*)malloc(32);
 
 	// --- CONSTRUIR: escribir en orden nativo; la memoria queda big-endian ---
 	NetHdr h = NetHdr(buf);
@@ -44,9 +44,9 @@ i32 main() {
 	println("seq=${h.seq:hex} ack=${h.ack:hex} local=${h.local:hex}");
 
 	// suma verificable: src(43210) + dst(80) + window(8192) = 51482
-	i64 sum = (i64) h.src_port + (i64) h.dst_port + (i64) h.window;
+	i64 sum = (i64)h.src_port + (i64)h.dst_port + (i64)h.window;
 	println("sum=${sum}");
 
 	free(buf);
-	return (i32) sum; // 51482
+	return (i32)sum; // 51482
 }

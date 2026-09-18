@@ -4,9 +4,9 @@
 //
 //     vm --vx shift_variable.vx -o s && vm --run s.velb
 // @expect 42
-u64 shl(u64 x, u64 n) { return x << n; }
-u64 shr(u64 x, u64 n) { return x >> n; }
-i64 sar(i64 x, i64 n) { return x >> n; } // aritmetico (con signo)
+u64 shl(u64 x, u64 n) => x << n;
+u64 shr(u64 x, u64 n) => x >> n;
+i64 sar(i64 x, i64 n) => x >> n; // aritmetico (con signo)
 
 u64 main() {
 	u64                         ok = 1_u64;

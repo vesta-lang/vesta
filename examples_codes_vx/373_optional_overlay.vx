@@ -32,7 +32,7 @@ Optional<Vista> mirar(u8* base, bool hay) {
 }
 
 i32 main() {
-	u8* buf = (u8*) malloc(64);
+	u8* buf = (u8*)malloc(64);
 	*(i64*)(buf + 0x00) = 111;
 	*(i64*)(buf + 0x08) = 222;
 	*(i64*)(buf + 0x10) = 333;

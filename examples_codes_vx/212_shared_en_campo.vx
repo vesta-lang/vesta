@@ -22,6 +22,4 @@ i64 trabajo() {
 	return val + uc;        // 40 + 2 = 42
 }                           // ~Caja (dec c.s -> 1) ; ~a (dec -> 0 -> free)
 
-i32 main() {
-	return (i32) trabajo();
-}
+i32 main() => (i32)trabajo();

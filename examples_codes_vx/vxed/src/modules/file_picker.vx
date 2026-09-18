@@ -89,7 +89,7 @@ public class FilePicker {
 		}
 		i32 cont = 1_i32;
 		while (cont == 1 && this.count < FP_MAX_ENTRIES) {
-			i32 attrib = (i32) finddata[0];
+			i32 attrib = (i32)finddata[0];
 			i32 is_dir = 0_i32;
 			if ((attrib & 16) != 0) is_dir = 1;
 			u8* name_p = finddata + 40;
@@ -189,7 +189,7 @@ public class FilePicker {
 
 	// Inicializa la lista de ficheros enumerando desde cwd recursivo.
 	public void populate() {
-		i32 cwd_n = (i32) this.cwd.bytes();
+		i32 cwd_n = (i32)this.cwd.bytes();
 		u8* cwd_c = this.cwd.cstr();
 		u8* empty = malloc(1);
 		empty[0] = 0;
@@ -215,8 +215,8 @@ public class FilePicker {
 					i32 k  = 0_i32;
 					i32 ok = 1_i32;
 					while (k < this.query_len) {
-						i32 a = (i32) nm[j + k];
-						i32 b = (i32) this.query[k];
+						i32 a = (i32)nm[j + k];
+						i32 b = (i32)this.query[k];
 						// Lowercase ambos.
 						if (a >= 65 && a <= 90) a = a + 32;
 						if (b >= 65 && b <= 90) b = b + 32;
@@ -248,7 +248,7 @@ public class FilePicker {
 		i32 idx = this.filtered[this.sel];
 		i32 rn  = this.lens[idx];
 		u8* rp  = this.names + this.offsets[idx];
-		i32 cn  = (i32) this.cwd.bytes();
+		i32 cn  = (i32)this.cwd.bytes();
 		u8* cp  = this.cwd.cstr();
 		u8* buf = malloc(cn + rn + 2);
 		i32 k   = 0_i32;
@@ -303,7 +303,7 @@ public class FilePicker {
 		print(col_bord);
 		print("+");
 		string        title = " Abrir fichero (Ctrl-P) ";
-		i32           tlen  = (i32) title.bytes();
+		i32           tlen  = (i32)title.bytes();
 		i32           lpad  = (inner_w - tlen) / 2;
 		if (lpad < 0) lpad  = 0;
 		i32           z     = 0_i32;
@@ -339,7 +339,7 @@ public class FilePicker {
 		print(col_fg);
 		i32 q = 0_i32;
 		while (q < this.query_len) {
-			print_char((i32) this.query[q]);
+			print_char((i32)this.query[q]);
 			q = q + 1;
 		}
 		print(screen.ATTR_RESET);
@@ -391,7 +391,7 @@ public class FilePicker {
 				if (nlen > maxn) nlen = maxn;
 				i32              k    = 0_i32;
 				while (k < nlen) {
-					i32 ch = (i32) nm[k];
+					i32 ch = (i32)nm[k];
 					if (ch >= 32 && ch < 127) print_char(ch);
 					else print(".");
 					k = k + 1;
@@ -466,7 +466,7 @@ public class FilePicker {
 		}
 		// Caracteres imprimibles -> agregar a query.
 		if (k >= 32 && k < 127 && this.query_len < FP_QUERY_MAX - 1) {
-			this.query[this.query_len] = (u8) k;
+			this.query[this.query_len] = (u8)k;
 			this.query_len             = this.query_len + 1;
 			this.query[this.query_len] = 0;
 			this.sel                   = 0;

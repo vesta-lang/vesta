@@ -42,7 +42,7 @@ struct Base {
 		}
 		return 0;
 	}
-	public bool zero() { return (this.lo64 == 0) && (this.hi64 == 0); }
+	public bool zero() => (this.lo64 == 0) && (this.hi64 == 0);
 	public Self udm(Self divisor, Self* rem_out) {
 		Self q;
 		q.lo64 = 0;
@@ -64,7 +64,7 @@ struct Base {
 			rem.lo64 = rem.lo64 | bit;
 			if (rem.cmp(divisor) >= 0) {
 				rem = rem.sub(divisor);
-				if (i >= 64) { q.hi64 = q.hi64 | (((u64) 1) << (i - 64)); } else { q.lo64 = q.lo64 | (((u64) 1) << i); }
+				if (i >= 64) { q.hi64 = q.hi64 | (((u64)1) << (i - 64)); } else { q.lo64 = q.lo64 | (((u64)1) << i); }
 			}
 			i = i - 1;
 		}

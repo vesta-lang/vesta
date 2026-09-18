@@ -46,8 +46,8 @@ void usar() {
 
 i32 main() {
 	Trace.dtors = 0;
-	crea();                   // objeto escapado
-	usar();                   // objeto no-escape
-	gc_finalize_all();        // finaliza AMBOS (deterministico, sin polling)
-	return (i32) Trace.dtors; // 2
+	crea();                  // objeto escapado
+	usar();                  // objeto no-escape
+	gc_finalize_all();       // finaliza AMBOS (deterministico, sin polling)
+	return (i32)Trace.dtors; // 2
 }

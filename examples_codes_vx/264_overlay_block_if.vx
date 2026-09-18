@@ -45,9 +45,9 @@ u32 build(u8* buf, u8 tag, u32 hdr_len, u32 val) {
 }
 
 i32 main() {
-	u8* a = (u8*) malloc(128);
-	u8* b = (u8*) malloc(128);
-	u8* c = (u8*) malloc(128);
+	u8* a = (u8*)malloc(128);
+	u8* b = (u8*)malloc(128);
+	u8* c = (u8*)malloc(128);
 
 	u32 va = build(a, (u8)1, (u32)0, (u32)111);    // tag 1 -> a + 0x10
 	u32 vb = build(b, (u8)2, (u32)0x20, (u32)222); // tag 2 -> b + 0x20 (hdr_len)

@@ -44,9 +44,9 @@ struct Elf64_Shdr {
 	// Nombre de la seccion: cstring en (base + strtab + sh_name).  Alcanza la
 	// .shstrtab del Ehdr CONTENEDOR via parent<Elf64_Ehdr>() y su metodo strtab().
 	u8 name @offset {
-		return (u64) parent<Elf64_Ehdr>()
+		return (u64)parent<Elf64_Ehdr>()
 			+ parent<Elf64_Ehdr>().strtab()
-			+ (u64) this.sh_name;
+			+ (u64)this.sh_name;
 	};
 }
 
@@ -74,9 +74,7 @@ struct Elf64_Ehdr {
 
 	// Metodo: offset de fichero de la .shstrtab (el sh_offset de la seccion
 	// e_shstrndx).  Lo usan el resolver de nombre de Shdr y strtab_base.
-	public u64 strtab() {
-		return (u64) this.Shdrs[(i32) this.e_shstrndx].sh_offset;
-	}
+	public u64 strtab() => (u64)this.Shdrs[(i32)this.e_shstrndx].sh_offset;
 	// Campo-resolver: su DIRECCION es la base de la .shstrtab.
 	// `offsetof(eh.strtab_base)` da ese offset.
 	u8 strtab_base @offset { return base + this.strtab(); };
@@ -91,8 +89,8 @@ i32 main() {
 		println("uso: coloca un ELF64 en 'elf_target.bin' en el dir actual");
 		return 2;
 	}
-	u64 size = (u64) fsize;
-	u8* buf  = (u8*) malloc(fsize);
+	u64 size = (u64)fsize;
+	u8* buf  = (u8*)malloc(fsize);
 	i64 n    = fileio.file_read_into(path, buf, fsize);
 	if (n != fsize) {
 		println("error de lectura");

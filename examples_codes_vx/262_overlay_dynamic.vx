@@ -39,7 +39,7 @@ i32 main() {
 	println("sizeof<PePeek>() = ${fixed}"); // 64
 
 	// --- CREAR (no parsear): rellenamos un buffer propio via la vista ---
-	u8*    buf = (u8*) malloc(128);
+	u8*    buf = (u8*)malloc(128);
 	PePeek pe  = PePeek(buf);
 
 	// Orden topologico: primero el campo del que depende el offset dinamico.

@@ -15,7 +15,7 @@
 
 class Service {
 	public Service() { }
-	public i32 run(i32 x) { return x * 100; }
+	public i32 run(i32 x) => x * 100;
 }
 
 @Aspect

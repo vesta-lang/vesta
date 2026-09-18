@@ -36,5 +36,5 @@ i64 main() {
 	free(c);
 	free(a);
 	free(b);
-	return (i64) s; // (2+3) * sum(1..40) = 5 * 820 = 4100
+	return (i64)s; // (2+3) * sum(1..40) = 5 * 820 = 4100
 }

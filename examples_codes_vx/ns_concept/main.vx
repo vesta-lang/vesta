@@ -7,7 +7,7 @@ concept Numerico<T>  = is_numeric<T>();
 concept Ordenable<T> = Comparable<T>() && Sized<T>();
 
 // Genrico con bound INLINE al concepto cualificado del namespace.
-public T doble < T : mat.Numerico > (T x) { return x + x; }
+public T doble < T : mat.Numerico > (T x) => x + x;
 
 // Genrico con clausula WHERE al concepto cualificado.
 public T maxv<T>(T a, T b) where T: mat.Ordenable {

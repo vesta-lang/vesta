@@ -51,9 +51,7 @@ i64 compute_chunk(i64 a, i64 b) {
 
 // Validador: retorna true si el total es divisible por 4.
 @Async
-bool validate(i64 total) {
-	return total % 4 == 0;
-}
+bool validate(i64 total) => total % 4 == 0;
 
 // Generador de "decoracion" independiente, corre en paralelo.
 @Async

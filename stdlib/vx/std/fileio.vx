@@ -58,8 +58,8 @@ public i64 file_size(string path) {
 	}
 	// GENERIC_READ=0x80000000, FILE_SHARE_READ=1, OPEN_EXISTING=3,
 	// FILE_ATTRIBUTE_NORMAL=0x80.  INVALID_HANDLE_VALUE = -1 = 0xFFFF...FF.
-	u64 h = CreateFileA(pc, (u32) 0x80000000, (u32) 1, (u64) 0,
-		(u32) 3, (u32) 0x80, (u64) 0);
+	u64 h = CreateFileA(pc, (u32)0x80000000, (u32)1, (u64)0,
+		(u32)3, (u32)0x80, (u64)0);
 	if (h == 0xFFFFFFFFFFFFFFFF) {
 		return -1;
 	}
@@ -80,18 +80,18 @@ public i64 file_read_into(string path, u8* buf, i64 size) {
 	if (pc == null) {
 		return -1;
 	}
-	u64 h = CreateFileA(pc, (u32) 0x80000000, (u32) 1, (u64) 0,
-		(u32) 3, (u32) 0x80, (u64) 0);
+	u64 h = CreateFileA(pc, (u32)0x80000000, (u32)1, (u64)0,
+		(u32)3, (u32)0x80, (u64)0);
 	if (h == 0xFFFFFFFFFFFFFFFF) {
 		return -1;
 	}
 	u32 nread = 0_u32;
-	i32 ok    = ReadFile(h, buf, (u32) size, &nread, (u64) 0);
+	i32 ok    = ReadFile(h, buf, (u32)size, &nread, (u64)0);
 	CloseHandle(h);
 	if (ok == 0) {
 		return -1;
 	}
-	return (i64) nread;
+	return (i64)nread;
 }
 
 // Escribe `size` bytes desde el buffer host `buf` a `path`, creando o
@@ -109,18 +109,18 @@ public i64 file_write_from(string path, u8* buf, i64 size) {
 	}
 	// GENERIC_WRITE=0x40000000, share=0, CREATE_ALWAYS=2,
 	// FILE_ATTRIBUTE_NORMAL=0x80.
-	u64 h = CreateFileA(pc, (u32) 0x40000000, (u32) 0, (u64) 0,
-		(u32) 2, (u32) 0x80, (u64) 0);
+	u64 h = CreateFileA(pc, (u32)0x40000000, (u32)0, (u64)0,
+		(u32)2, (u32)0x80, (u64)0);
 	if (h == 0xFFFFFFFFFFFFFFFF) {
 		return -1;
 	}
 	u32 nwritten = 0_u32;
-	i32 ok       = WriteFile(h, buf, (u32) size, &nwritten, (u64) 0);
+	i32 ok       = WriteFile(h, buf, (u32)size, &nwritten, (u64)0);
 	CloseHandle(h);
 	if (ok == 0) {
 		return -1;
 	}
-	return (i64) nwritten;
+	return (i64)nwritten;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,11 +134,11 @@ public i64 file_size(string path) {
 	if (pc == null) {
 		return -1;
 	}
-	i32 fd = open(pc, (i32) 0, (i32) 0);
+	i32 fd = open(pc, (i32)0, (i32)0);
 	if (fd < 0) {
 		return -1;
 	}
-	i64 end = lseek(fd, (i64) 0, (i32) 2);
+	i64 end = lseek(fd, (i64)0, (i32)2);
 	close(fd);
 	if (end < 0) {
 		return -1;
@@ -152,11 +152,11 @@ public i64 file_read_into(string path, u8* buf, i64 size) {
 	if (pc == null) {
 		return -1;
 	}
-	i32 fd = open(pc, (i32) 0, (i32) 0);
+	i32 fd = open(pc, (i32)0, (i32)0);
 	if (fd < 0) {
 		return -1;
 	}
-	i64 got = read(fd, buf, (u64) size);
+	i64 got = read(fd, buf, (u64)size);
 	close(fd);
 	return got;
 }
@@ -173,11 +173,11 @@ public i64 file_write_from(string path, u8* buf, i64 size) {
 	if (pc == null) {
 		return -1;
 	}
-	i32 fd = open(pc, (i32) 0x0241, (i32) 0x01A4);
+	i32 fd = open(pc, (i32)0x0241, (i32)0x01A4);
 	if (fd < 0) {
 		return -1;
 	}
-	i64 put = write(fd, buf, (u64) size);
+	i64 put = write(fd, buf, (u64)size);
 	close(fd);
 	return put;
 }

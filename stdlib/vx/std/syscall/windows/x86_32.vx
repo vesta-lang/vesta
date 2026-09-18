@@ -15,9 +15,7 @@ import std.types only size_t, usize;
  * pila).  Stub passthrough por ahora -- este modulo solo se compila bajo
  * @Target("arch:x86 && os:windows"), que no es el target activo.
  */
-public size_t invoke(syscall_id id) {
-	return 0;
-}
+public size_t invoke(syscall_id id) => 0;
 
 /**
  * Resolutor perezoso del numero de servicio NT para x86-32.  Como en x86-64,
@@ -29,6 +27,4 @@ public size_t invoke(syscall_id id) {
  *
  * TODO: implementar el paseo real de ntdll de 32 bits (stub passthrough).
  */
-public usize resolve(usize ctx) {
-	return 0;
-}
+public usize resolve(usize ctx) => 0;

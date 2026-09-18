@@ -7,9 +7,9 @@ namespace ejemplos.auto_inference;
 // variables llamadas `auto`/`var` sigue funcionando salvo en posicion
 // de var-decl con un IDENT siguiente.
 
-i32 suma(i32 a, i32 b) { return a + b; }
-i64 large(i64 x) { return x * 100; }
-f64 half(f64 x) { return x / 2.0; }
+i32 suma(i32 a, i32 b) => a + b;
+i64 large(i64 x) => x * 100;
+f64 half(f64 x) => x / 2.0;
 
 i32 main() {
 	// Primitivos inferidos.

@@ -63,4 +63,4 @@ static_assert(comptime_streq(typename<V2>(), "Vec2"), "Vec2 name");
 comptime Type VDef = pick_vec(99);
 static_assert(comptime_streq(typename<VDef>(), "Vec3"), "fallback Vec3");
 
-i32 main() { return 42; }
+i32 main() => 42;

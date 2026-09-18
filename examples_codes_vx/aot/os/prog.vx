@@ -26,20 +26,18 @@ void k_putc(u64 c) {
 void k_dec(i64 v) {
 	term.tdec(v);
 }
-u64 k_getline(u8* buf, u64 max) {
-	return term.read_line(buf, max);
-}
+u64 k_getline(u8* buf, u64 max) => term.read_line(buf, max);
 
 // Construye la tabla de API en 0x70000 (RAM libre) y devuelve su direccion.
 // IMPORTANTE: NO usar 0xA0000-0xFFFFF (VGA + ROM del BIOS): ahi las
 // escrituras se ignoran y las lecturas devuelven la ROM.
 // Indices: [0]=puts [1]=putc [2]=dec [3]=getline.
 u64 api_build() {
-	u64* t = (u64*) 0x00070000;
-	t[0] = (u64) k_puts;
-	t[1] = (u64) k_putc;
-	t[2] = (u64) k_dec;
-	t[3] = (u64) k_getline;
+	u64* t = (u64*)0x00070000;
+	t[0] = (u64)k_puts;
+	t[1] = (u64)k_putc;
+	t[2] = (u64)k_dec;
+	t[3] = (u64)k_getline;
 	return 0x00070000;
 }
 
@@ -54,18 +52,16 @@ void mcopy(u8* dst, u8* src, u64 n) {
 
 // Busca un programa por nombre en la FAT.  Devuelve la direccion (en RAM) de
 // su entrada de root dir (32 bytes), o 0 si no existe.
-u64 prog_find(char* name) {
-	return fat.fat_find(name);
-}
+u64 prog_find(char* name) => fat.fat_find(name);
 
 // Carga y ejecuta el programa de la entrada `ent` con la cadena `args`.
 // Devuelve el codigo de retorno del programa, o -1 si falla.
 i64 prog_exec(u64 ent, char* args) {
-	u8* dst  = (u8*) 0x00100000;       // EXEC_ADDR
+	u8* dst  = (u8*)0x00100000;        // EXEC_ADDR
 	u64 size = fat.fat_load(ent, dst); // sigue la cadena de clusters
 	if (size == 0) { return -1; }
 	u64 api = api_build();
 	// Llamar al entry del programa: prog_main(api, args) en 0x100000.
-	i64 r = ((cfn(u64, u64) -> i64) 0x00100000)(api, (u64) args);
+	i64 r = ((cfn(u64, u64) -> i64) 0x00100000)(api, (u64)args);
 	return r;
 }

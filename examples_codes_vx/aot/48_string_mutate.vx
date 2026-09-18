@@ -16,5 +16,5 @@ i32 main() {
 	// Verificar el contenido via cstr: s[0]='a'(97), s[6]='x'(120).
 	char* p = s.cstr();
 	// Devolvemos la length (7) como exit-code principal.
-	return (i32) s.length(); // 7
+	return (i32)s.length(); // 7
 }

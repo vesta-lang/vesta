@@ -36,7 +36,7 @@ namespace ejemplos.concat_multichunk;
 //   200K     3500 ms                  ~80 ms                    ~45x
 //   400K     ~14000 ms                ~120 ms                   ~115x
 
-i32 doblar(i32 x) { return x * 2; }
+i32 doblar(i32 x) => x * 2;
 
 comptime u64 build_csv(i64 n) {
 	string s = "";

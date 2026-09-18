@@ -20,9 +20,7 @@ u64 cmos_read(u64 reg) {
 }
 
 // Convierte un valor BCD (p.ej. 0x59) a binario (59).
-u64 bcd2bin(u64 v) {
-	return (v & 0x0F) + ((v >> 4) * 10);
-}
+u64 bcd2bin(u64 v) => (v & 0x0F) + ((v >> 4) * 10);
 
 // Lee un registro de fecha/hora, esperando a que no haya actualizacion en
 // curso (status A bit 7) y convirtiendo de BCD a binario si procede.
@@ -36,17 +34,15 @@ u64 rtc_reg(u64 reg) {
 	return v;
 }
 
-u64 rtc_sec() { return rtc_reg(0x00); }
-u64 rtc_min() { return rtc_reg(0x02); }
-u64 rtc_hour() { return rtc_reg(0x04); }
-u64 rtc_day() { return rtc_reg(0x07); }
-u64 rtc_mon() { return rtc_reg(0x08); }
-u64 rtc_year() { return rtc_reg(0x09); } // 0..99 -> +2000
+u64 rtc_sec() => rtc_reg(0x00);
+u64 rtc_min() => rtc_reg(0x02);
+u64 rtc_hour() => rtc_reg(0x04);
+u64 rtc_day() => rtc_reg(0x07);
+u64 rtc_mon() => rtc_reg(0x08);
+u64 rtc_year() => rtc_reg(0x09); // 0..99 -> +2000
 
 // Segundos transcurridos del dia (para el calculo de uptime).
-u64 now_linear() {
-	return (rtc_hour() * 60 + rtc_min()) * 60 + rtc_sec();
-}
+u64 now_linear() => (rtc_hour() * 60 + rtc_min()) * 60 + rtc_sec();
 
 void clock_init() {
 	g_boot_secs = now_linear();

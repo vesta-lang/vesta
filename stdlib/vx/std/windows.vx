@@ -656,11 +656,11 @@ enum GET_FILEEX_INFO_LEVELS {
 
 
 /* GetStdHandle: */
-public const i32 STD_INPUT_HANDLE      = ((DWORD) - 10);
-public const i32 STD_OUTPUT_HANDLE     = ((DWORD) - 11);
-public const i32 STD_ERROR_HANDLE      = ((DWORD) - 12);
-public const i32 INVALID_HANDLE_VALUE  = ((HANDLE)(LONG_PTR) - 1);
-public const i32 ATTACH_PARENT_PROCESS = ((DWORD) - 1);
+public const i32 STD_INPUT_HANDLE      = ((DWORD)-10);
+public const i32 STD_OUTPUT_HANDLE     = ((DWORD)-11);
+public const i32 STD_ERROR_HANDLE      = ((DWORD)-12);
+public const i32 INVALID_HANDLE_VALUE  = ((HANDLE)(LONG_PTR)-1);
+public const i32 ATTACH_PARENT_PROCESS = ((DWORD)-1);
 
 public const i32 HANDLE_FLAG_INHERIT            = 0x00000001_i32;
 public const i32 HANDLE_FLAG_PROTECT_FROM_CLOSE = 0x00000002_i32;
@@ -811,15 +811,9 @@ public const u32 FORMAT_MESSAGE_FROM_HMODULE    = 0x00000800_u32;
 public const u32 FORMAT_MESSAGE_FROM_STRING     = 0x00000400_u32;
 
 /* Language ID: */
-comptime WORD MAKELANGID(u16 p, u16 s) {
-	return ((s << 10) | p);
-}
-comptime WORD PRIMARYLANGID(u16 lgid) {
-	return (lgid & 0x03FF);
-}
-comptime WORD SUBLANGID(u16 lgid) {
-	return (lgid >> 10);
-}
+comptime WORD MAKELANGID(u16 p, u16 s) => ((s << 10) | p);
+comptime WORD PRIMARYLANGID(u16 lgid) => (lgid & 0x03FF);
+comptime WORD SUBLANGID(u16 lgid) => (lgid >> 10);
 
 public const u32 LANG_NEUTRAL   = 0x00_u32;
 public const u32 LANG_INVARIANT = 0x7F_u32;
@@ -865,21 +859,21 @@ typedef struct _TIME_ZONE_INFORMATION {
 typedef PTIME_ZONE_INFORMATION LPTIME_ZONE_INFORMATION;
 
 comptime u32 _byteswap_ulong(u32 x) {
-	return (((u32)(x) << 24)           |
-		(((u32)(x) << 8) & 0x00FF0000) |
-		(((u32)(x) >> 8) & 0xFF00)     |
-		((u32)(x) >> 24));
+	return (((u32)(x)<< 24)           |
+		(((u32)(x)<< 8) & 0x00FF0000) |
+		(((u32)(x)>> 8) & 0xFF00)     |
+		((u32)(x)>> 24));
 }
 
 comptime u64 _byteswap_uint64(u64 x) {
-	return (((u64)(x) << 56)                    |
-		(((u64)(x) << 40) & 0x00FF000000000000) |
-		(((u64)(x) << 24) & 0x0000FF0000000000) |
-		(((u64)(x) << 8) & 0x000000FF00000000)  |
-		(((u64)(x) >> 8) & 0xFF000000)          |
-		(((u64)(x) >> 24) & 0x00FF0000)         |
-		(((u64)(x) >> 40) & 0xFF00)             |
-		((u64)(x) >> 56));
+	return (((u64)(x)<< 56)                    |
+		(((u64)(x)<< 40) & 0x00FF000000000000) |
+		(((u64)(x)<< 24) & 0x0000FF0000000000) |
+		(((u64)(x)<< 8) & 0x000000FF00000000)  |
+		(((u64)(x)>> 8) & 0xFF000000)          |
+		(((u64)(x)>> 24) & 0x00FF0000)         |
+		(((u64)(x)>> 40) & 0xFF00)             |
+		((u64)(x)>> 56));
 }
 
 
@@ -1511,9 +1505,7 @@ PVOID GetCurrentFiber() {
 	}
 }
 
-PVOID GetFiberData() {
-	return *(PVOID*)GetCurrentFiber();
-}
+PVOID GetFiberData() => *(PVOID*)GetCurrentFiber();
 
 public const u32 FLS_OUT_OF_INDEXES = ((DWORD)0xFFFFFFFF);
 

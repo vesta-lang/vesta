@@ -30,16 +30,16 @@ struct Punto2D {
 	}
 
 	// Metodo comun heredado.
-	public i64 norma1() { return this.x + this.y; }
+	public i64 norma1() => this.x + this.y;
 
 	// Fluent: `this` es del tipo del derivado, asi `return this` conserva el tipo.
-	public Self self_ref() { return this; }
+	public Self self_ref() => this;
 }
 
 // Derivado: hereda los campos (x, y) y los metodos (sumar/norma1/self_ref) con
 // `Self = Nombrado`, y anyade uno propio que usa un metodo heredado.
 struct Nombrado : Punto2D {
-	public i64 doble() { return this.norma1() * 2; }
+	public i64 doble() => this.norma1() * 2;
 }
 
 i32 main() {
@@ -51,5 +51,5 @@ i32 main() {
 	b.y = 7;
 	Nombrado c = a.sumar(b);   // Self = Nombrado -> c = (30, 12)
 	Nombrado d = c.self_ref(); // fluent, sigue siendo Nombrado
-	return (i32) d.doble();    // (30 + 12) * 2 = 84
+	return (i32)d.doble();     // (30 + 12) * 2 = 84
 }

@@ -27,29 +27,17 @@ namespace ejemplos.entero_estrecho_normalizado;
 // El valor OPACO (`n`, que vale cero pero el compilador no lo sabe) impide que
 // se plieguen al compilar: asi se comprueba la normalizacion de EJECUCION, que
 // es la que fallaba.
-i8 arriba_i8(i8 n) {
-	return (i8)(127_i8 + 1_i8 + n);
-}
+i8 arriba_i8(i8 n) => (i8)(127_i8 + 1_i8 + n);
 
-u8 arriba_u8(u8 n) {
-	return (u8)(255_u8 + 1_u8 + n);
-}
+u8 arriba_u8(u8 n) => (u8)(255_u8 + 1_u8 + n);
 
-i16 arriba_i16(i16 n) {
-	return (i16)(32_767_i16 + 1_i16 + n);
-}
+i16 arriba_i16(i16 n) => (i16)(32_767_i16 + 1_i16 + n);
 
-u16 arriba_u16(u16 n) {
-	return (u16)(65_535_u16 + 1_u16 + n);
-}
+u16 arriba_u16(u16 n) => (u16)(65_535_u16 + 1_u16 + n);
 
-i32 arriba_i32(i32 n) {
-	return (i32)(2_147_483_647_i32 + 1_i32 + n);
-}
+i32 arriba_i32(i32 n) => (i32)(2_147_483_647_i32 + 1_i32 + n);
 
-u32 arriba_u32(u32 n) {
-	return (u32)(4_294_967_295_u32 + 1_u32 + n);
-}
+u32 arriba_u32(u32 n) => (u32)(4_294_967_295_u32 + 1_u32 + n);
 
 i32 main() {
 	i64 z = 0_i64;

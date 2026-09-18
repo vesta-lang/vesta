@@ -23,14 +23,10 @@ struct Item {
 }
 
 // (3) Type-level fn: dimension de un vector dado su tipo.
-comptime<T> u32 vec_dim() {
-	return field_count<T>();
-}
+comptime<T> u32 vec_dim() => field_count<T>();
 
 // (3) Combinar type params y value args.
-comptime<T> u64 stride_of(i64 count) {
-	return sizeof<T>() * count;
-}
+comptime<T> u64 stride_of(i64 count) => sizeof<T>() * count;
 
 // (1)+(2) Generar tabla de fibs con comptime for-init + array.
 comptime i64[10] FIB = {0, 1, 1, 2, 3, 5, 8, 13, 21, 34};
