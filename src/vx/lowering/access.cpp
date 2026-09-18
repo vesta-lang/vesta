@@ -875,27 +875,41 @@ ir::IrValueId Lowering::lower_ident(ast::IdentExpr *e) {
     // son SSA-rvalues), por lo que lookup() es lo correcto: cualquier
     // uso posterior (subscript, decay-to-pointer al pasar a funcion,
     // arr + n) opera sobre la addr base.
+    /* El `string` nativo es value-type -- su valor ES la direccion del slot de
+     * 24 bytes, como un struct --, PERO a diferencia de un struct se REBINDEA:
+     * `r = otra` no copia dentro del mismo buffer, guarda OTRO puntero.  Asi
+     * que cuando la variable vive en una ranura -- reasignada en un bucle, o
+     * con la direccion tomada -- leerla es leer LA RANURA, y eso es justo lo
+     * que `read_local` hace.
+     *
+     * Devolver `lookup` a secas pasaba la ranura misma como si fuera el
+     * objeto: `length()` daba 0 en el binario nativo mientras el interprete y
+     * el JIT daban el valor bueno, y el `if` funcionaba porque ahi no hay
+     * ranura (el bajado emite un phi).  No lo cubria nadie: el unico ejemplo
+     * que concatena en bucle corre en COMPILACION y nunca pisa el nativo. */
+    if (native_poo_ && e->result_type.kind == PrimitiveKind::STRING) {
+        const ir::IrValueId v =
+            read_local(e->name, ir::IrType::PTR, e->loc.line);
+        if (v == ir::IR_NO_VALUE)
+            error_at(e->loc, vx::diag::format("VX3007", {e->name}));
+        return v;
+    }
     if (e->result_type.kind == PrimitiveKind::STRUCT ||
         e->result_type.kind == PrimitiveKind::ARRAY ||
         e->result_type.kind == PrimitiveKind::OPTIONAL ||
-        e->result_type.kind == PrimitiveKind::RESULT ||
-        // Vesta Embed Inc 0: en native_poo_ el `string` es value-type
-        // (struct {ptr,len,cap}); su "valor" es el PTR al slot de 24
-        // bytes, igual que un struct.  El path Full (sin native_poo_)
-        // mantiene `string` como handle GC (cae a read_local mas abajo).
-        (native_poo_ && e->result_type.kind == PrimitiveKind::STRING)) {
+        e->result_type.kind == PrimitiveKind::RESULT) {
         // Para STRUCT/ARRAY/OPTIONAL/RESULT la variable guarda
         // directamente la direccion del buffer (heap o stack); el
         // ident se resuelve via lookup, sin LOAD adicional.
         const ir::IrValueId v = lookup(e->name);
         if (v == ir::IR_NO_VALUE)
-            error_at(e->loc, "lowering: nombre no resuelto: '" + e->name + "'");
+            error_at(e->loc, vx::diag::format("VX3007", {e->name}));
         return v;
     }
     const ir::IrType ir_ty = ir_type_from_primitive(e->result_type.kind);
     const ir::IrValueId v = read_local(e->name, ir_ty, e->loc.line);
     if (v == ir::IR_NO_VALUE)
-        error_at(e->loc, "lowering: nombre no resuelto: '" + e->name + "'");
+        error_at(e->loc, vx::diag::format("VX3007", {e->name}));
     return v;
 }
 

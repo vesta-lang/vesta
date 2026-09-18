@@ -3294,7 +3294,10 @@ r0_case("a43_k", "A.43.13/14/15: aliases + ops + bloque comptime", "151_sugar_al
 r0_case("a43_l", "A.43.16: macros @Macro con auto-inyeccion (defmacro Lisp)", "152_macros_inject_at_macro.vx", 42, line=2268)
 r0_case("a43_m", "A.43.17: @Macro composicion + recursion + globales mutables", "153_macros_compose_recurse_global.vx", 42, line=2276)
 r0_case("a43_n", "A.43.18: @Macro anidados extremos -- cero overhead runtime", "154_macros_zero_runtime_overhead.vx", 42, line=2283)
-r0_case("a43_o", "A.43.19: string concat O(N) en loops comptime", "155_concat_loop_optimized.vx", 42, line=2290)
+# En los TRES modos, no en uno: la parte comptime corre al compilar y no pisa
+# ni el JIT ni el nativo, asi que concatenar en un bucle -- el patron mas comun
+# que hay con cadenas -- no lo comprobaba nadie ahi.  Estaba roto en nativo.
+modes3_case("a43_o", "concat en bucle: O(N) al compilar, y las tres formas (`+`, `.concat()`, `+=`) con el mismo contenido en los tres modos", "155_concat_loop_optimized.vx", 42, line=2290)
 r0_case("arnes_ct", "Arnes comptime: fn/block/buffer/println/introspeccion/tipos no-comptime", "293_comptime_arnes.vx", 23, line=2298)
 r0_case("a43_p", "A.43.20: @Pure memoizacion + move semantics", "156_macros_pure_memoization.vx", 42, line=2305)
 r0_case("a43_q", "A.43.21: multi-chunk concat O(N) (s = s + X + Y + ...)", "157_concat_multichunk.vx", 42, line=2312)

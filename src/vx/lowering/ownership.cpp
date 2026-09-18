@@ -45,7 +45,21 @@ void Lowering::emit_cleanups_range(size_t start, size_t end) {
         // refresh: sustituir operands[0] con el binding ACTUAL
         // del local (permite dispose(xs)+cleanup idempotente, etc.).
         if (!it->refresh_name.empty() && !opnds.empty()) {
-            const ir::IrValueId v_now = lookup(it->refresh_name);
+            /* El `string` nativo se REBINDEA -- `r = otra` no copia dentro del
+             * mismo hueco, guarda OTRO puntero --, asi que cuando la variable
+             * vive en una ranura el valor de ahora es el que hay DENTRO, y eso
+             * es lo que `read_local` sabe hacer.  Los demas llevan la direccion
+             * COMO valor (un struct es su buffer), y ahi cargar seria leer sus
+             * primeros ocho bytes en vez de su direccion.
+             *
+             * Sin esto el destructor recibia la ranura: la marca de "es mio" se
+             * leia 23 bytes mas alla de una ranura de 8, o sea basura, y con
+             * ella se liberaba un puntero que nadie habia reservado. */
+            const ir::IrValueId v_now =
+                it->kind == CleanupAction::Kind::STRING_FREE
+                    ? read_local(it->refresh_name, ir::IrType::PTR,
+                                 it->source_line)
+                    : lookup(it->refresh_name);
             if (v_now != ir::IR_NO_VALUE) {
                 opnds[0] = v_now;
             }

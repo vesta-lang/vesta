@@ -34,6 +34,84 @@ namespace {
 // x op= v (struct field, class field, p[i], *p y la ya existente para
 // identifier).  Devuelve BinOp::Add para Assign (no deberia llamarse
 // con ese caso; el caller filtra antes).
+/**
+ * @brief Si @p v es `name + X` o `name.concat(X)`, devuelve X; si no, nulo.
+ *
+ * Las dos son la misma operacion que `name += X` -- appendear a lo que la
+ * variable ya tiene --, solo que escritas de otra forma.  Reconocerlo aqui
+ * permite bajarlas por el mismo camino, y hay que hacerlo: construir uno nuevo
+ * y rebindear deja el hueco del resultado y el de la fuente en el MISMO sitio
+ * dentro de un bucle.
+ *
+ * @param name Nombre de la variable a la que se asigna.
+ * @param v    El lado derecho.
+ * @return Lo que hay que appendear, o @c nullptr si no es esa forma.
+ */
+static ast::Expr *self_append_rhs(const std::string &name, ast::Expr *v) {
+    if (v == nullptr) return nullptr;
+    if (v->kind == ast::NodeKind::BinaryExpr) {
+        auto *b = static_cast<ast::BinaryExpr *>(v);
+        if (b->op != ast::BinOp::Add || !b->lhs || !b->rhs) return nullptr;
+        if (b->lhs->kind != ast::NodeKind::IdentExpr) return nullptr;
+        if (static_cast<ast::IdentExpr *>(b->lhs.get())->name != name)
+            return nullptr;
+        return b->rhs.get();
+    }
+    if (v->kind == ast::NodeKind::CallExpr) {
+        auto *c = static_cast<ast::CallExpr *>(v);
+        if (c->args.size() != 1 || !c->callee) return nullptr;
+        if (c->callee->kind != ast::NodeKind::FieldAccessExpr) return nullptr;
+        auto *fa = static_cast<ast::FieldAccessExpr *>(c->callee.get());
+        if (fa->field_name != "concat" || !fa->base) return nullptr;
+        if (fa->base->kind != ast::NodeKind::IdentExpr) return nullptr;
+        if (static_cast<ast::IdentExpr *>(fa->base.get())->name != name)
+            return nullptr;
+        return c->args[0].get();
+    }
+    return nullptr;
+}
+
+/**
+ * @brief Dice si el nombre @p name aparece en algun sitio de @p v.
+ *
+ * Para poder DECIR que una forma no se sabe bajar, en vez de bajarla mal.  No
+ * hace falta que sea exacto hacia el lado seguro: un falso positivo pide
+ * reescribir algo que quiza iba a funcionar, y un falso negativo deja pasar un
+ * valor equivocado.
+ *
+ * @param v    La expresion.
+ * @param name El nombre que se busca.
+ */
+static bool mentions_ident(const ast::Expr *v, const std::string &name) {
+    if (v == nullptr) return false;
+    switch (v->kind) {
+    case ast::NodeKind::IdentExpr:
+        return static_cast<const ast::IdentExpr *>(v)->name == name;
+    case ast::NodeKind::BinaryExpr: {
+        auto *b = static_cast<const ast::BinaryExpr *>(v);
+        return mentions_ident(b->lhs.get(), name) ||
+               mentions_ident(b->rhs.get(), name);
+    }
+    case ast::NodeKind::UnaryExpr:
+        return mentions_ident(
+            static_cast<const ast::UnaryExpr *>(v)->operand.get(), name);
+    case ast::NodeKind::CastExpr:
+        return mentions_ident(
+            static_cast<const ast::CastExpr *>(v)->operand.get(), name);
+    case ast::NodeKind::FieldAccessExpr:
+        return mentions_ident(
+            static_cast<const ast::FieldAccessExpr *>(v)->base.get(), name);
+    case ast::NodeKind::CallExpr: {
+        auto *c = static_cast<const ast::CallExpr *>(v);
+        if (mentions_ident(c->callee.get(), name)) return true;
+        for (const auto &a : c->args)
+            if (mentions_ident(a.get(), name)) return true;
+        return false;
+    }
+    default: return false;
+    }
+}
+
 static ast::BinOp compound_assign_op_to_binop(ast::AssignOp op) {
     switch (op) {
     case ast::AssignOp::AddAssign: return ast::BinOp::Add;
@@ -190,18 +268,59 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
     // char.  El path Full (sin native_poo_) NO entra aqui: `string += x`
     // sobre StringObject cae al manejo generico de abajo (que para STRING
     // no es comun; el frontend Full usa STRCAT).
-    if (native_poo_ && id->result_type.kind == PrimitiveKind::STRING &&
-        e->op == ast::AssignOp::AddAssign && e->value) {
-        const ir::IrValueId v_slot = lookup(id->name);
+    /* `s = s + X` y `s = s.concat(X)` son un APPEND escrito de otra forma, y
+     * hay que bajarlos como tal.  Bajados como "construye uno nuevo y
+     * rebindea", el hueco del RESULTADO y el de la fuente acaban siendo EL
+     * MISMO dentro de un bucle -- el bajado reserva uno por vuelta y el marco
+     * reusa una sola ranura, asi que tras la primera vuelta la variable apunta
+     * justo ahi --, y la siguiente lee de donde acaba de escribir: en el
+     * binario nativo salia la longitud correcta y el contenido no ("    ab" en
+     * vez de "ababab").  Ademas asi no se copia.
+     *
+     * Cubre la forma que se escribe; NO cubre que la variable aparezca en OTRA
+     * posicion (`s = otra + s`, `s = f(s)`), donde el solape sigue.  Cerrar eso
+     * es que el resultado no comparta hueco con ningun operando, que es una
+     * decision del modelo de cadena nativo y no de aqui. */
+    ast::Expr *append_rhs = nullptr;
+    if (native_poo_ && id->result_type.kind == PrimitiveKind::STRING) {
+        if (e->op == ast::AssignOp::AddAssign)
+            append_rhs = e->value.get();
+        else if (e->op == ast::AssignOp::Assign) {
+            append_rhs = self_append_rhs(id->name, e->value.get());
+            /* Y si la variable esta en el lado derecho pero NO de primera, no
+             * hay camino que baje eso bien: se dice, en vez de dar un valor
+             * equivocado que parece bueno.
+             *
+             * Salvo dentro de un cuerpo que corre en la maquina de compilar
+             * (`comptime fn`, macro): eso lo ejecuta la VM con SUS cadenas y
+             * no acaba en el codigo maquina, asi que el hueco compartido no
+             * existe.  Uno del corpus lo hace (`s = "Y" + s` en un builder
+             * comptime) y es correcto. */
+            if (append_rhs == nullptr && !current_fn_is_macro_ &&
+                mentions_ident(e->value.get(), id->name)) {
+                error_at(e->loc, vx::diag::format("VX3008", {id->name}));
+                return ir::IR_NO_VALUE;
+            }
+        }
+    }
+    if (append_rhs != nullptr) {
+        /* Por `read_local` y no por `lookup`: cuando la variable vive en una
+         * ranura -- reasignada en un bucle, o con la direccion tomada --, lo
+         * que hay que mutar es el hueco de 24 bytes al que la ranura APUNTA,
+         * no la ranura, que mide ocho.  Leer y escribir tienen que estar de
+         * acuerdo en esto: mientras los dos cogian la ranura el resultado era
+         * consistentemente falso, y arreglar solo uno lo convertia en un
+         * cascazo. */
+        const ir::IrValueId v_slot =
+            read_local(id->name, ir::IrType::PTR, e->loc.line);
         if (v_slot == ir::IR_NO_VALUE) {
-            error_at(e->loc, "lowering: nombre no resuelto en '+=': '" +
-                                 id->name + "'");
+            error_at(e->loc, vx::diag::format("VX3007", {id->name}));
             return ir::IR_NO_VALUE;
         }
         const uint32_t ln = static_cast<uint32_t>(e->loc.line);
         // Caso RHS char: append de 1 byte.
-        if (e->value->result_type.kind == PrimitiveKind::CHAR) {
-            const ir::IrValueId v_ch = lower_expr(e->value.get());
+        if (append_rhs->result_type.kind == PrimitiveKind::CHAR) {
+            const ir::IrValueId v_ch = lower_expr(append_rhs);
             if (v_ch == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
             // Buffer scratch de 1 byte con el char.
             ir::IrValueId v_scr = stack_alloc_buf(1, ln, native_poo_);
@@ -220,19 +339,19 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // (concat) liberamos su buffer tras copiarlo.
         ir::IrValueId v_src = ir::IR_NO_VALUE;
         bool free_src_buf = false; // liberar el buffer fuente tras copiar
-        if (e->value->kind == ast::NodeKind::StringLitExpr &&
-            !static_cast<ast::StringLitExpr *>(e->value.get())
+        if (append_rhs->kind == ast::NodeKind::StringLitExpr &&
+            !static_cast<ast::StringLitExpr *>(append_rhs)
                  ->is_interpolated()) {
-            auto *slit = static_cast<ast::StringLitExpr *>(e->value.get());
+            auto *slit = static_cast<ast::StringLitExpr *>(append_rhs);
             v_src = build_native_string_from_literal(slit, ln);
             free_src_buf = true; // buffer temporal owned -> liberar
         } else {
-            v_src = lower_expr(e->value.get());
+            v_src = lower_expr(append_rhs);
             // Un concat `a + b` produce un slot owned con buffer fresco;
             // tras copiar sus bytes hay que liberarlo (no se registro
             // STRING_FREE porque no es un var-decl).  Una var simple
             // (IdentExpr) NO se libera (su buffer lo posee la var).
-            if (e->value->kind != ast::NodeKind::IdentExpr) free_src_buf = true;
+            if (append_rhs->kind != ast::NodeKind::IdentExpr) free_src_buf = true;
         }
         if (v_src == ir::IR_NO_VALUE) return ir::IR_NO_VALUE;
         // Inc 5 (SSO): (ptr, len) de la fuente via accesores flag-aware.
@@ -420,8 +539,7 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // Lectura previa respeta promocion address-taken.
         const ir::IrValueId cur = read_local(id->name, dst_ir, e->loc.line);
         if (cur == ir::IR_NO_VALUE) {
-            error_at(e->loc,
-                     "lowering: nombre no resuelto: '" + id->name + "'");
+            error_at(e->loc, vx::diag::format("VX3007", {id->name}));
             return ir::IR_NO_VALUE;
         }
         /* P1: `string += X` en el path Full/VM (no native_poo_).  El path arith

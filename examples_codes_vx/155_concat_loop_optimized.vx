@@ -58,10 +58,56 @@ comptime u64 builder_compound(i64 n) {
 	return strlen(s);
 }
 
+// Y LO MISMO EN EJECUCION, que es lo que aqui faltaba.
+//
+// Todo lo de arriba es `comptime`: corre AL COMPILAR, con las cadenas del
+// compilador, y no pisa ni el interprete ni el JIT ni el binario nativo.  Asi
+// que concatenar en un bucle -- el patron mas comun que hay con cadenas -- no
+// lo comprobaba nadie en los tres modos, y estaba roto en nativo: la variable
+// se quedaba con lo de ANTES del bucle (longitud 0), porque leerla, escribirla
+// y destruirla no estaban de acuerdo en si la variable ERA el hueco de la
+// cadena o una ranura que apunta a el.  Se veia solo en nativo porque ahi una
+// cadena es un valor de 24 bytes, no un identificador del recolector.
+//
+// Las tres formas, que NO bajan igual: `+` y `.concat()` construyen y
+// rebindean, `+=` muta en el sitio.
+string rt_op(i64 n) {
+	string r = "";
+	for (i64 i = 0_i64; i < n; i = i + 1) { r = r + "ab"; }
+	return r;
+}
+
+string rt_metodo(i64 n) {
+	string r = "";
+	for (i64 i = 0_i64; i < n; i = i + 1) { r = r.concat("ab"); }
+	return r;
+}
+
+string rt_compuesto(i64 n) {
+	string r = "";
+	for (i64 i = 0_i64; i < n; i = i + 1) { r += "ab"; }
+	return r;
+}
+
+// Y que el CONTENIDO sea el que es, no solo la longitud: cuando el hueco del
+// resultado y el de la fuente eran el mismo, la longitud salia bien y los
+// caracteres no ("    ab" en vez de "ababab").
+i64 comprueba(string s, i64 esperado) {
+	if ((i64)s.length() != esperado) { return 0_i64; }
+	if (!s.equals("ababab")) { return 0_i64; }
+	return 1_i64;
+}
+
 i32 main() {
 	// 10K iteraciones cada uno -- antes hubiese tomado 70+ ms cada loop.
 	static_assert(builder(10_000) == 10_000, "concat optimizado");
 	static_assert(builder_prepend(10_000) == 10_000, "prepend optimizado");
 	static_assert(builder_compound(10_000) == 10_000, "compound assign");
+
+	i64 ok = comprueba(rt_op(3), 6);
+	ok = ok + comprueba(rt_metodo(3), 6);
+	ok = ok + comprueba(rt_compuesto(3), 6);
+	println("ejecucion: ${ok}/3");
+	if (ok != 3) { return 1; }
 	return 42;
 }

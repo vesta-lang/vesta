@@ -84,6 +84,8 @@ const CatEntry kEntries[] = {
     {"VX3004", {"detected by region analysis: the extent comes from where the object is reserved ({0} bytes) and the access from its offset and width", "detectado por el analisis de regiones: la extension sale de donde se reserva el objeto ({0} bytes) y el acceso, de su desplazamiento y ancho"}},
     {"VX3005", {"either reserve at least {0} bytes for the object, or keep the access within [0, {1})", "o reserva al menos {0} bytes para el objeto, o manten el acceso dentro de [0, {1})"}},
     {"VX3006", {"in function '{0}' (the line refers to its own module, which may not be the one being compiled)", "en la funcion '{0}' (la linea es la de su propio modulo, que puede no ser el que se compila)"}},
+    {"VX3007", {"lowering: unresolved name '{0}'", "bajado: nombre no resuelto '{0}'"}},
+    {"VX3008", {"in the native binary '{0} = ...' cannot read '{0}' from any position other than the first: the result shares its buffer with the source.  Write it as '{0} += ...', or go through a temporary", "en el binario nativo '{0} = ...' no puede leer '{0}' desde otra posicion que no sea la primera: el resultado comparte hueco con la fuente.  Escribelo como '{0} += ...', o pasa por una variable intermedia"}},
     {"VX4001", {"'{0}' is declared with @Target(\"{1}\"), which does not hold for this target -- that declaration is not available here", "'{0}' esta declarado con @Target(\"{1}\"), que no se cumple en este objetivo -- esa declaracion no esta disponible aqui"}},
     {"VX4002", {"'{0}' is only declared for other targets ({1}) -- no variant matches the target being compiled", "'{0}' solo esta declarado para otros objetivos ({1}) -- ninguna variante encaja con el objetivo que se esta compilando"}},
     {"VX4003", {"the namespace '{0}' is offered by two different places; the one in '{1}' is used and the one in '{2}' is ignored ({3} namespaces in total)", "el namespace '{0}' lo ofrecen dos sitios distintos; se usa el de '{1}' y se ignora el de '{2}' ({3} namespaces en total)"}},
@@ -637,7 +639,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 616;
+const int kEntryCount = 618;
 
 } // namespace
 
