@@ -1945,21 +1945,6 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
         return ir::IR_NO_VALUE;
     }
     const ClassLayout &lay = it->second;
-    /* Dos metodos de la clase que solo se distinguen por el nombre de sus
-     * ranuras: aqui el camino nativo devirtualiza a una llamada DIRECTA y se
-     * queda con el primero, asi que el programa correria otro cuerpo sin una
-     * queja.  Se dice y se para.  El interprete y el JIT si los separan -- van
-     * por el descriptor del registro, que lleva los nombres --, y en un struct
-     * y en una funcion libre funciona en los tres modos. */
-    if (native_poo_) {
-        for (const auto &m : lay.methods)
-            if (!m.is_constructor && m.name == fa->field_name &&
-                m.overload_needs_names) {
-                error_at(e->loc, vx::diag::format(
-                                     "VX3009", {fa->field_name, lay.name}));
-                return ir::IR_NO_VALUE;
-            }
-    }
     const ClassMethodInfo *mtd = picked_method(lay, fa->resolved_method);
     if (!mtd) {
         for (const auto &m : lay.methods) {
@@ -2128,9 +2113,18 @@ ir::IrValueId Lowering::lower_class_method_call(ast::CallExpr *e) {
                  * llamada a `hace(f64)` ejecutaba el de `hace(i64)` con los
                  * bits del flotante como entero --. */
                 for (const auto &cm : conc_lay.methods) {
+                    /* Por nombre, tipos Y NOMBRES DE RANURA.  Comparando solo
+                     * los tipos, dos hermanas que se distinguen unicamente por
+                     * como se llaman sus ranuras empatan, y se devirtualizaba a
+                     * la PRIMERA: `m.mide(.largo = 10)` ejecutaba el cuerpo de
+                     * `mide(alto)` y devolvia 10 en vez de 20 -- bien
+                     * interpretado y mal compilado, que es la unica clase de
+                     * fallo que este proyecto no admite --. */
                     if (cm.name == mtd->name && !cm.is_constructor &&
-                        overload::same_params(cm.param_types,
-                                              mtd->param_types)) {
+                        overload::same_signature(cm.param_types,
+                                                 cm.param_names,
+                                                 mtd->param_types,
+                                                 mtd->param_names)) {
                         if (native_poo_) {
                             // AOT (HOST_LEAF no soporta CALLVIRT): el tipo
                             // concreto se conoce -> CALL DIRECTO a

@@ -282,6 +282,10 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
      * es que el resultado no comparta hueco con ningun operando, que es una
      * decision del modelo de cadena nativo y no de aqui. */
     ast::Expr *append_rhs = nullptr;
+    /* Cierto cuando lo que se appendea es el RESULTADO ENTERO y no un anadido:
+     * entonces el hueco de la variable se vacia primero, porque `s = ...` la
+     * sustituye, no le suma. */
+    bool reset_before_append = false;
     if (native_poo_ && id->result_type.kind == PrimitiveKind::STRING) {
         if (e->op == ast::AssignOp::AddAssign)
             append_rhs = e->value.get();
@@ -296,10 +300,25 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
              * no acaba en el codigo maquina, asi que el hueco compartido no
              * existe.  Uno del corpus lo hace (`s = "Y" + s` en un builder
              * comptime) y es correcto. */
+            /* Y si la variable esta en el lado derecho pero NO de primera
+             * (`s = otra + s`), el resultado se construye en SU PROPIO hueco
+             * y luego se COPIA al de la variable.
+             *
+             * Repuntar la variable al hueco recien construido es lo que daba
+             * un valor falso: el marco reusa una sola ranura por vuelta, asi
+             * que en la siguiente el concat empezaba escribiendo sobre el
+             * mismo sitio del que tenia que leer -- `"-" + s` dos veces sobre
+             * `"x"` daba `"---"` en vez de `"--x"` --.  Construyendo aparte y
+             * copiando, lo que se lee ya se leyo antes de tocar nada.
+             *
+             * Se marca aqui y se hace abajo, con la misma maquinaria que el
+             * `+=`: vaciar el hueco de la variable y appendear.  Asi hay UN
+             * solo camino que escribe una cadena nativa en su ranura. */
             if (append_rhs == nullptr && !current_fn_is_macro_ &&
+                e->value->kind != ast::NodeKind::IdentExpr &&
                 mentions_ident(e->value.get(), id->name)) {
-                error_at(e->loc, vx::diag::format("VX3008", {id->name}));
-                return ir::IR_NO_VALUE;
+                append_rhs = e->value.get();
+                reset_before_append = true;
             }
         }
     }
@@ -359,6 +378,20 @@ ir::IrValueId Lowering::lower_assign(ast::AssignExpr *e) {
         // branch SSO/HEAP).
         ir::IrValueId v_sptr = emit_native_str_data_ptr(v_src, ln);
         ir::IrValueId v_slen = emit_native_str_len(v_src, ln);
+        /* Si lo que se appendea es el resultado ENTERO (`s = otra + s`), el
+         * hueco de la variable se vacia AQUI -- ya leido lo que habia, que es
+         * de donde salio `v_src` -- para que la copia lo sustituya en vez de
+         * sumarse a el.  Antes de leer no se puede: lo que se lee ES esto. */
+        if (reset_before_append) {
+            /* El hueco de una cadena nativa vive en la pila del ANFITRION, y
+             * vaciarlo se baja como un borrado por lotes, que exige saberlo:
+             * sin la marca el selector no encuentra motivo para ese borrado y
+             * renuncia a la funcion entera. */
+            if (native_poo_) fn_->values[v_slot].is_host_ptr = true;
+            emit_native_str_free_if_heap(v_slot, ln);
+            emit_zero_native_str_slot(v_slot, ln);
+            emit_str_meta_sso(v_slot, emit_const(ir::IrType::I64, 0, ln), ln);
+        }
         build_native_string_append_inplace(v_slot, v_sptr, v_slen, ln);
         if (free_src_buf) {
             // Liberar el buffer fuente temporal SOLO si estaba en HEAP
