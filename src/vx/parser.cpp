@@ -2919,19 +2919,48 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
         fn->is_forward_decl = true;
         return fn;
     }
-    if (current_.kind != TokenKind::LBRACE) {
+    /* Cuerpo de EXPRESION, la misma forma que ya tienen los metodos, los
+     * getters y los constructores:
+     *
+     *     string rodea(string s, string w) => w.concat(s).concat(w);
+     *
+     * No es sintaxis nueva, es la misma sin la restriccion de donde vale.  Y
+     * con UFCS una funcion libre ES el metodo de alguien -- `x.rodea(w)` y
+     * `rodea(x, w)` son la misma llamada --, asi que negarle la forma corta
+     * justo a ella era quedarse con el ruido de `{ return ...; }` para decir lo
+     * que ya dice su firma. */
+    if (current_.kind != TokenKind::FAT_ARROW &&
+        current_.kind != TokenKind::LBRACE) {
         error_here("se esperaba '{' para abrir el cuerpo de la funcion");
         return fn;
     }
-    // Forwarding de expr-capture anidado: registrar los nombres de params
-    // `expr` de ESTA funcion mientras se parsea su cuerpo, para que una llamada
-    // interna `otra(code)` con `code` = param expr no re-capture el
-    // identificador como texto sino que lo forwardee (ver parse_postfix).
+    /* Forwarding de expr-capture anidado: registrar los nombres de params
+     * `expr` de ESTA funcion mientras se parsea su cuerpo, para que una llamada
+     * interna `otra(code)` con `code` = param expr no re-capture el
+     * identificador como texto sino que lo forwardee (ver parse_postfix).
+     *
+     * Vale para las DOS formas de cuerpo.  Estaba solo en la del bloque, y la
+     * de expresion se salia antes de llegar: un `@Macro` escrito con `=>`
+     * dejaba de forwardear -- `twice(a + b)` se expandia a `(e) + (e)`, con el
+     * NOMBRE del parametro en vez de lo que traia --, y el fallo salia dentro
+     * del codigo generado, lejos de la funcion que lo causaba. */
     auto saved_expr_params = std::move(current_expr_param_names_);
     current_expr_param_names_.clear();
     for (const auto &p : fn->params)
         if (p && p->is_expr_capture) current_expr_param_names_.insert(p->name);
-    fn->body = parse_block();
+    if (current_.kind == TokenKind::FAT_ARROW) {
+        /* Si no devuelve nada, la expresion se EJECUTA y se descarta; si
+         * devuelve, se envuelve en un `return`.  Lo decide el mismo sitio que
+         * para un metodo. */
+        const bool is_void =
+            fn->return_type != nullptr &&
+            fn->return_type->kind == ast::NodeKind::PrimitiveTypeNode &&
+            static_cast<const ast::PrimitiveTypeNode *>(fn->return_type.get())
+                    ->prim == PrimitiveKind::VOID;
+        fn->body = parse_method_body(is_void);
+    } else {
+        fn->body = parse_block();
+    }
     current_expr_param_names_ = std::move(saved_expr_params);
     return fn;
 }
