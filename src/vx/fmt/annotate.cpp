@@ -38,6 +38,7 @@
  */
 
 #include "vx/fmt/fmt_internal.h"
+#include <set>
 
 #include "vx/token.h"
 
@@ -246,8 +247,53 @@ size_t skip_decl_qualifiers(const std::vector<Piece> &pieces, size_t i) {
     return j;
 }
 
+/**
+ * @brief Los nombres que ESTE fichero declara como tipos.
+ *
+ * Hace falta para `R66`: con un tipo integrado, `(i32)n` se reconoce como cast
+ * porque `i32` no puede ser otra cosa; con un nombre del usuario no --
+ * `(v) - 1` es una resta corriente --, asi que hay que saber cuales de esos
+ * nombres son tipos.
+ *
+ * Un BARRIDO de tokens, no un parseo: se apunta el nombre que va detras de
+ * `struct`, `class`, `union`, `interface`, `enum` o `using`, y el que precede
+ * al `;` de un `typedef`.  Con eso basta para el caso normal -- un tipo se usa
+ * donde se declara --; uno IMPORTADO sigue sin reconocerse, y ahi el
+ * formateador deja lo que haya en vez de adivinar.
+ *
+ * @param pieces Piezas del fuente.
+ * @return Los nombres, para preguntar por ellos.
+ */
+static std::set<std::string_view>
+collect_declared_types(const std::vector<Piece> &pieces) {
+    std::set<std::string_view> names;
+    for (size_t i = 0; i + 1 < pieces.size(); ++i) {
+        const TokenKind k = kind_of(pieces[i]);
+        if (k == TokenKind::KW_STRUCT || k == TokenKind::KW_CLASS ||
+            k == TokenKind::KW_UNION || k == TokenKind::KW_INTERFACE ||
+            k == TokenKind::KW_ENUM || k == TokenKind::KW_USING) {
+            if (kind_of(pieces[i + 1]) == TokenKind::IDENTIFIER)
+                names.insert(pieces[i + 1].text);
+            continue;
+        }
+        /* `typedef u32 Edad new;` y `typedef u32 Edad;`: el nombre es el ultimo
+         * IDENTIFICADOR antes del `;`, porque el `new` va detras. */
+        if (k != TokenKind::KW_TYPEDEF) continue;
+        std::string_view last;
+        for (size_t t = i + 1; t < pieces.size(); ++t) {
+            const TokenKind tk = kind_of(pieces[t]);
+            if (tk == TokenKind::SEMICOLON) break;
+            if (tk == TokenKind::IDENTIFIER) last = pieces[t].text;
+        }
+        if (!last.empty()) names.insert(last);
+    }
+    return names;
+}
+
 std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
     std::vector<Role> roles(pieces.size(), Role::Plain);
+    // `R66`: que nombres de este fichero son TIPOS, para reconocer sus casts.
+    const std::set<std::string_view> tipos = collect_declared_types(pieces);
 
     /* `decl_until` marca hasta donde llega el TIPO de una declaracion que se
      * esta leyendo.  Mientras se esta dentro, un `*` es un puntero y un `<` una
@@ -391,7 +437,13 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                  * IDENTIFICADOR no se puede decir lo mismo -- `(v) - 1` es una
                  * resta corriente --, y por eso ahi se sigue exigiendo al
                  * menos un `*`. */
-                const bool tipo_nombrado = is_type_keyword(tipo);
+                /* Y un nombre que este fichero declara como tipo cuenta igual
+                 * que uno integrado: `(Edad)n` es un cast, `(v) - 1` no.  Sin
+                 * esto el formateador dejaba las dos formas del primero. */
+                const bool tipo_nombrado =
+                    is_type_keyword(tipo) ||
+                    (tipo == TokenKind::IDENTIFIER &&
+                     tipos.count(pieces[ini].text) != 0);
                 size_t t = ini + 1;
                 size_t estrellas = 0;
                 while (t < pieces.size()) {
@@ -419,7 +471,13 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                      * porque quien lo decide solo mira el token de al lado, y
                      * desde ahi un `)` de cast y uno de agrupacion se ven
                      * igual -- `(v) - 1` SI es una resta --. */
-                    if (t + 1 < pieces.size()) tras_cast[t + 1] = 1u;
+                    /* Salvo que lo que siga sea un `->`: entonces esos
+                     * parentesis son los PARAMETROS de un tipo funcion
+                     * (`fn(i32) -> i32`), que se escribe igual que un cast y no
+                     * lo es.  Sin esta salida el `->` se quedaba pegado. */
+                    if (t + 1 < pieces.size() &&
+                        kind_of(pieces[t + 1]) != TokenKind::ARROW)
+                        tras_cast[t + 1] = 1u;
                 }
             }
         }
@@ -738,6 +796,23 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
             ternary_open = 0;
             after_case = false;
             after_where = false;
+        }
+
+        /* `R66`: un cast va PEGADO a lo que convierte.  La marca de "esto va
+         * detras del `)` de un cast" ya estaba -- se usaba para no leer
+         * `(u64)&v` como un `y` logico --, pero solo para los tokens que se
+         * podian confundir con un operador.  Para un nombre o un numero no se
+         * decidia nada y el espaciador metia el espacio que pone tras cualquier
+         * `)`, asi que `(i32)largo` y `(i32) largo` convivian: dos formas para
+         * el mismo programa, que es lo que `P1` prohibe. */
+        if (tras_cast[i] && roles[i] == Role::Plain) {
+            /* Pegado DELANTE, que es lo que dice la regla.  Y si lo que sigue
+             * abre un grupo, pegado por los dos lados: detras de un `(` no va
+             * espacio de todas formas, y con `TightLeft` se colaba uno dentro
+             * -- `(i32)( largo + 1)` --. */
+            roles[i] = (k == TokenKind::LPAREN || k == TokenKind::LBRACKET)
+                           ? Role::TightBoth
+                           : Role::TightLeft;
         }
 
         // Una etiqueta es un NOMBRE al principio de sentencia, y nada mas.
