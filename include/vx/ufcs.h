@@ -124,6 +124,7 @@ struct Index {
      * puede tomar esto de PRIMERO" -- y la contesta @c find.
      */
     const Candidates *find_any(const Type &recv, const std::string &written,
+                               const std::string &site_prefix,
                                const std::string **matched = nullptr) const;
 
     /**
@@ -132,17 +133,28 @@ struct Index {
      * No dice CUAL: eso lo decide @c overload::select con los argumentos, que
      * es la misma regla que usa una llamada libre.
      *
-     * Prueba el nombre tal y como se escribio y, si no, el mismo con cada
-     * prefijo que el aplanado use en este modulo -- un `x.f()` lleva `f` a
-     * secas y la funcion se declaro `<ns>__f` --.  El bucle vive aqui y no en
-     * quien pregunta: es parte de con que nombre se declaro cada cosa.
+     * Prueba el nombre tal y como se escribio y, si no, el mismo con el
+     * prefijo del namespace DESDE EL QUE SE LLAMA -- un `x.f()` lleva `f` a
+     * secas y la funcion se declaro `<ns>__f` --.
      *
-     * @param recv    El tipo del receptor.
-     * @param written El nombre escrito tras el punto.
-     * @param matched Si no es nulo, recibe el nombre que acerto, INTERNADO --
-     *                que es el que hay que escribir al reescribir la llamada.
+     * Solo ESE prefijo, y no los demas que el fichero declare.  Probarlos
+     * todos hacia que el punto alcanzara un namespace que no esta en ambito:
+     * con dos `doble` en dos namespaces del mismo fichero, `6.doble()` se iba
+     * a la PRIMERA -- eligiendo por el orden de dos lineas que nadie mira --
+     * mientras que `doble(6)`, que es la misma llamada escrita del otro modo,
+     * decia que no estaba declarada.  Lo que el punto encuentra y lo que
+     * encuentra la llamada libre tienen que ser lo mismo.
+     *
+     * @param recv        El tipo del receptor.
+     * @param written     El nombre escrito tras el punto.
+     * @param site_prefix Prefijo del namespace donde esta la llamada (`app__`),
+     *                    o vacio en la raiz.
+     * @param matched     Si no es nulo, recibe el nombre que acerto, INTERNADO
+     *                    -- que es el que hay que escribir al reescribir la
+     *                    llamada.
      */
     const Candidates *find(const Type &recv, const std::string &written,
+                           const std::string &site_prefix,
                            const std::string **matched = nullptr) const;
 
     /**
@@ -160,9 +172,13 @@ struct Index {
      * stdlib dentro eso no es "solo cuando falla", es medio segundo.
      *
      * @param written El nombre escrito tras el punto.
+     * @param matched Si no es nulo, recibe el nombre con el que se declararon,
+     *                INTERNADO -- que es de donde sale a que namespace
+     *                pertenecen.
      * @return Las candidatas con ese nombre, o nulo si no hay ninguna.
      */
-    const Candidates *all_named(const std::string &written) const;
+    const Candidates *all_named(const std::string &written,
+                                const std::string **matched = nullptr) const;
 
     /**
      * @brief Apunta que @p mangled es como el aplanado escribio @p public_name.

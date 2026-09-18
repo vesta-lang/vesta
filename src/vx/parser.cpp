@@ -9333,8 +9333,42 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             fa->loc = loc;
             const SourceLoc ini_fa = expr ? expr->loc : loc;
             fa->base = std::move(expr);
-            const Token tk_campo = consume();
+            Token tk_campo = consume();
             fa->field_name = tk_campo.lexeme;
+            /* `x.f$geo.metrico(...)`: de QUE namespace es la funcion.
+             *
+             * Va detras del nombre y no delante porque lo que sigue al punto
+             * tiene que ser siempre la funcion: un campo puede llamarse igual
+             * que un namespace, y con la calificacion delante el mismo texto
+             * significaria una cosa u otra segun los campos del receptor, que
+             * se declaran en otro fichero. */
+            if (current_.kind == TokenKind::DOLLAR) {
+                (void)consume(); // '$'
+                if (!is_name_token(current_.kind)) {
+                    error_expected_name(
+                        "nombre de namespace tras '$'",
+                        "se esperaba el namespace de la funcion tras '$'");
+                    return expr;
+                }
+                tk_campo = consume();
+                fa->ns_qualifier = tk_campo.lexeme;
+                /* El resto de la ruta punteada.  No hace falta mirar mas
+                 * adelante para saber donde acaba: la calificacion llega
+                 * hasta el `(` de la llamada, asi que un `.` aqui solo puede
+                 * ser otro segmento. */
+                while (current_.kind == TokenKind::DOT) {
+                    (void)consume(); // '.'
+                    if (!is_name_token(current_.kind)) {
+                        error_expected_name(
+                            "segmento de namespace tras '.'",
+                            "se esperaba otro segmento del namespace tras '.'");
+                        return expr;
+                    }
+                    tk_campo = consume();
+                    fa->ns_qualifier += ".";
+                    fa->ns_qualifier += tk_campo.lexeme;
+                }
+            }
             /* El tramo de `a.b` es `a.b` entero, no el punto.  Guardar solo
              * el operador dejaba la expresion sin donde empieza ni cuanto
              * ocupa, y al recortar el fuente para nombrarla salia ".". */

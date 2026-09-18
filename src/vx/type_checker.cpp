@@ -7000,6 +7000,11 @@ void TypeChecker::check_free_function_bodies() {
         current_fn_is_macro_ = fn->is_macro || current_fn_is_vm_comptime_fn_;
         const bool saved_noexcept = current_fn_is_noexcept_;
         current_fn_is_noexcept_ = fn->is_noexcept || mod_.no_exceptions;
+        /* En que namespace esta este cuerpo: es lo que la llamada uniforme
+         * necesita para probar `<ns>__f` y NO los de los demas namespaces del
+         * fichero, que desde aqui no estan en ambito. */
+        const std::string saved_ns_prefix = current_ns_prefix_;
+        current_ns_prefix_ = ns_prefix_of(fn->name);
         // Tambien empujamos un scope comptime nuevo para los locals del
         // macro body (para que find_comptime_local_mut los encuentre).
         if (fn->is_macro) push_comptime_scope();
@@ -7018,6 +7023,7 @@ void TypeChecker::check_free_function_bodies() {
         current_fn_is_macro_ = saved_is_macro;
         current_fn_is_vm_comptime_fn_ = saved_is_vm_ct;
         current_fn_is_noexcept_ = saved_noexcept;
+        current_ns_prefix_ = saved_ns_prefix;
         current_fn_return_type_ = saved_ret;
         pop_scope();
     }
@@ -11759,7 +11765,7 @@ bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
      * nombre para esta cabeza de tipo, no cual de ellas ganaria.  Es una sonda
      * en una tabla, asi que el metodo cuyo nombre no comparte ninguna libre --
      * que son casi todos -- no paga por esta regla. */
-    if (ufcs_.find(recv, name) == nullptr) return false;
+    if (ufcs_.find(recv, name, current_ns_prefix_) == nullptr) return false;
     diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
     return true;
 }
@@ -11785,6 +11791,11 @@ bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
         if (sig.param_types.empty()) continue;
         const Type &p = sig.param_types[0];
         if (!is_numeric(p.kind)) continue;
+        /* Y que pida OTRO tipo.  Una que ya toma este receptor no se alcanza
+         * con un cast -- convertirlo a lo que ya es no dice nada --: si esta y
+         * no se encontro, el problema es que no esta en AMBITO, y de eso habla
+         * otro aviso. */
+        if (p == recv) continue;
         bool seen = false;
         for (uint32_t q : picked)
             if (function_sigs_[q].param_types[0] == p) {
@@ -11808,6 +11819,111 @@ bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
     diags_.diag(loc, DiagLevel::ERR, "VX2071",
                 {written_type_name(recv), name, list, first});
     return true;
+}
+
+bool TypeChecker::report_ufcs_ns_hint(const Type &recv, const ast::Expr *base,
+                                      const std::string &name,
+                                      const SourceLoc &loc) {
+    const std::string *declared = nullptr;
+    const ufcs::Candidates *slots = ufcs_.all_named(name, &declared);
+    if (slots == nullptr || declared == nullptr) return false;
+    /* Solo si se declaro con OTRO nombre del que se escribio: eso es que vive
+     * en un namespace, y que la busqueda no lo alcanzo es que no es el de
+     * aqui.  Si coincide, el nombre si estaba en ambito y lo que fallo fue el
+     * receptor, que es lo que cuenta el otro aviso. */
+    if (*declared == name) return false;
+    const auto it = declared_ns_symbols_.find(*declared);
+    if (it == declared_ns_symbols_.end()) return false;
+
+    for (uint32_t s : *slots) {
+        if (s >= function_sigs_.size()) continue;
+        const FunctionSig &sig = function_sigs_[s];
+        if (sig.param_types.empty()) continue;
+        const Type &p = sig.param_types[0];
+        const bool promoted = p.kind == PrimitiveKind::STRING &&
+                              ufcs_promotes_to_string(recv, base);
+        if (!(p == recv) && !promoted) continue;
+        diags_.diag(loc, DiagLevel::ERR, "VX2080",
+                    {written_type_name(promoted ? p : recv), name,
+                     it->second.first});
+        return true;
+    }
+    return false;
+}
+
+bool TypeChecker::ufcs_promotes_to_string(const Type &recv,
+                                          const ast::Expr *base) {
+    return recv.kind == PrimitiveKind::PTR && base != nullptr &&
+           base->kind == ast::NodeKind::StringLitExpr;
+}
+
+bool TypeChecker::report_ufcs_import_hint(const Type &recv,
+                                          const ast::Expr *base,
+                                          const std::string &name,
+                                          const SourceLoc &loc) {
+    /* Que namespaces traen este nombre se PREGUNTA, no se busca: lo apunto
+     * `register_namespace_symbol` al meterlos, que es donde el dato estaba en
+     * la mano.  Antes se recorrian todos preguntando uno por uno. */
+    const auto brought = ns_by_fn_name_.find(util::intern_name(name));
+    if (brought == ns_by_fn_name_.end()) return false;
+
+    for (uint32_t ni : brought->second) {
+        const ImportedNamespace &ns = imported_namespaces_[ni];
+        const auto it = ns.by_name.find(name);
+        if (it == ns.by_name.end()) continue;
+        /* Y que ALGUNA de las que traen ese nombre tome de verdad este
+         * receptor.  Sin comprobarlo, el mensaje mandaria a importar algo que
+         * tampoco sirve, que es peor que no decir nada.  La cadena son las
+         * sobrecargas de ESE nombre en ESE namespace: una, casi siempre. */
+        for (uint32_t s = it->second; s != ImportedNamespace::kNoHomonym;
+             s = ns.symbols[s].next_homonym) {
+            const ImportedNamespace::Sym &sym = ns.symbols[s];
+            if (sym.kind != 0 || sym.sig.param_types.empty()) continue;
+            const Type &p = sym.sig.param_types[0];
+            /* Con la MISMA promocion que hace la llamada de verdad: un literal
+             * de cadena es un `ptr` que solo se vuelve `string` donde hace
+             * falta, y sin contarla el aviso no saltaba justo con las que
+             * toman una cadena -- que son la mitad de las candidatas. */
+            const bool promoted = p.kind == PrimitiveKind::STRING &&
+                                  ufcs_promotes_to_string(recv, base);
+            if (!(p == recv) && !promoted) continue;
+            /* El receptor se NOMBRA como lo que el usuario escribio: si lo que
+             * encajo fue la cadena, decir `ptr` manda a mirar un tipo que el
+             * no puso en ningun sitio.  Y el namespace, tal como lo escribio
+             * en su `import` -- `std.fileio`, no `fileio` --, que es lo unico
+             * que al teclearlo resuelve. */
+            diags_.diag(loc, DiagLevel::ERR, "VX2079",
+                        {written_type_name(promoted ? p : recv), name,
+                         ns.local_name.empty() ? ns.module_name
+                                               : ns.local_name});
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string TypeChecker::ns_prefix_of(const std::string &mangled) const {
+    /* El prefijo sale del NAMESPACE al que el aplanado dijo que pertenece, no
+     * de restarle al nombre su parte publica.
+     *
+     * Restando no vale para `main`, que pertenece a su namespace pero NO se
+     * renombra -- el punto de entrada es unico --, asi que la resta daba vacio
+     * justo en la funcion donde se escriben casi todas las llamadas.  El
+     * namespace, en cambio, lo lleva igual. */
+    const auto it = declared_ns_symbols_.find(mangled);
+    if (it == declared_ns_symbols_.end()) return std::string();
+    const std::string &dotted = it->second.first;
+    if (dotted.empty()) return std::string();
+    std::string out;
+    out.reserve(dotted.size() + 4);
+    for (const char c : dotted) {
+        if (c == '.')
+            out += "__";
+        else
+            out.push_back(c);
+    }
+    out += "__";
+    return out;
 }
 
 std::string TypeChecker::written_name(const std::string &mangled) const {
@@ -11837,7 +11953,12 @@ void TypeChecker::report_overload_ambiguous(const std::string &name,
 }
 
 bool TypeChecker::normalize_named_args(ast::CallExpr *e, const ParamNames &pn,
-                                       const std::string &quien) {
+                                       const std::string &quien_mangled) {
+    /* El nombre tal y como se ESCRIBE.  El aplanado de namespaces renombra las
+     * declaraciones, asi que sin esto el mensaje citaba `prueba__tres` para
+     * una llamada donde el usuario escribio `tres` -- y mandaba a buscar un
+     * nombre que no esta en su fichero. */
+    const std::string quien = written_name(quien_mangled);
     const size_t np = pn.size();
     std::vector<std::unique_ptr<ast::Expr>> ord(np);
     /* La MISMA regla que uso la seleccion, y por eso esta escrita igual: lo
@@ -11901,6 +12022,79 @@ size_t TypeChecker::ufcs_receiver_hole(ast::CallExpr *e) {
     return found;
 }
 
+bool TypeChecker::try_ufcs_qualified(ast::CallExpr *e,
+                                     ast::FieldAccessExpr *fa) {
+    if (e == nullptr || fa == nullptr || !fa->base) return false;
+    /* Que lo escrito tras el `$` SEA un namespace se comprueba aqui y no al
+     * reescribir: el camino de la llamada cualificada no sabe que hubo un `$`,
+     * asi que dice "nombre no declarado: 'geo'" -- senyalando el primer
+     * segmento y sin nombrar la calificacion, que es lo unico que el usuario
+     * escribio de mas. */
+    if (ns_idx_by_local_name_.find(fa->ns_qualifier) ==
+        ns_idx_by_local_name_.end()) {
+        diags_.diag(fa->loc, DiagLevel::ERR, "VX2081",
+                    {fa->ns_qualifier, fa->field_name});
+        for (auto &a : e->args)
+            (void)check_expr(a.get());
+        e->result_type = Type{PrimitiveKind::COUNT};
+        return true;
+    }
+    const size_t hole = ufcs_receiver_hole(e);
+    if (hole == kUfcsHoleBad) {
+        // Ya se dijo por que; la llamada se da por contestada.
+        e->result_type = Type{PrimitiveKind::COUNT};
+        return true;
+    }
+
+    /* La calificacion se convierte en la llamada cualificada de SIEMPRE:
+     * `6.doble$geo.metrico()` pasa a ser `geo.metrico.doble(6)`, que es el
+     * nodo que el parser habria armado para esa otra grafia.
+     *
+     * Reescribir en vez de resolver aqui es lo que hace que las dos no puedan
+     * divergir: quien resuelve el namespace, elige entre sobrecargas y
+     * comprueba los argumentos es literalmente el mismo codigo, y al bajado no
+     * le llega nada nuevo. */
+    std::unique_ptr<ast::Expr> callee;
+    size_t start = 0;
+    while (start <= fa->ns_qualifier.size()) {
+        const size_t dot = fa->ns_qualifier.find('.', start);
+        const size_t end =
+            (dot == std::string::npos) ? fa->ns_qualifier.size() : dot;
+        std::string segment = fa->ns_qualifier.substr(start, end - start);
+        if (!callee) {
+            auto id = std::make_unique<ast::IdentExpr>();
+            id->loc = fa->loc;
+            id->name = std::move(segment);
+            callee = std::move(id);
+        } else {
+            auto step = std::make_unique<ast::FieldAccessExpr>();
+            step->loc = fa->loc;
+            step->base = std::move(callee);
+            step->field_name = std::move(segment);
+            callee = std::move(step);
+        }
+        if (dot == std::string::npos) break;
+        start = dot + 1;
+    }
+    auto target = std::make_unique<ast::FieldAccessExpr>();
+    target->loc = fa->loc;
+    target->base = std::move(callee);
+    target->field_name = fa->field_name;
+
+    std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
+    e->callee = std::move(target);
+    /* Y el receptor a su sitio, con la misma regla que sin calificar: delante
+     * por defecto, y en el hueco si se escribio uno. */
+    if (hole == kUfcsNoHole) {
+        e->args.insert(e->args.begin(), std::move(receiver));
+        if (!e->arg_names.empty()) e->arg_names.insert_at(0, PooledName());
+    } else {
+        e->args[hole] = std::move(receiver);
+    }
+    e->result_type = check_call(e);
+    return true;
+}
+
 bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                                 const Type &recv) {
     if (e == nullptr || fa == nullptr || !fa->base) return false;
@@ -11914,22 +12108,21 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
      * siendo "cual lo toma de primero", que es lo que la regla 2.2 mira. */
     const ufcs::Candidates *cand_slots =
         (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
-            ? ufcs_.find_any(recv, fa->field_name, &chosen)
-            : ufcs_.find(recv, fa->field_name, &chosen);
+            ? ufcs_.find_any(recv, fa->field_name, current_ns_prefix_, &chosen)
+            : ufcs_.find(recv, fa->field_name, current_ns_prefix_, &chosen);
     /* Un literal de cadena es un `ptr` a datos estaticos y solo se PROMUEVE a
      * `string` donde hace falta -- por eso `grita("hola")` compila --, asi que
      * si no hay nada para el puntero se pregunta tambien por la cadena.  Sin
      * esto `"hola".grita()` no encontraria lo que `grita("hola")` si encuentra.
      * Se prueba en este orden porque el puntero es lo que el literal ES y la
      * cadena lo que puede llegar a ser. */
-    if (cand_slots == nullptr && recv.kind == PrimitiveKind::PTR &&
-        fa->base->kind == ast::NodeKind::StringLitExpr)
+    if (cand_slots == nullptr && ufcs_promotes_to_string(recv, fa->base.get()))
         cand_slots =
             (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
                 ? ufcs_.find_any(Type{PrimitiveKind::STRING}, fa->field_name,
-                                 &chosen)
+                                 current_ns_prefix_, &chosen)
                 : ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name,
-                             &chosen);
+                             current_ns_prefix_, &chosen);
     if (cand_slots == nullptr || cand_slots->empty()) return false;
 
     /* DONDE cae el receptor.  Por defecto delante -- `x.f(a)` es `f(x, a)` --,
@@ -15316,6 +15509,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
     // -------------------------------------------------------------
     if (e->callee->kind == ast::NodeKind::FieldAccessExpr) {
         auto *fa = static_cast<ast::FieldAccessExpr *>(e->callee.get());
+        /* `x.f$geo.metrico(...)`: quien llama ya dijo CUAL, asi que se
+         * atiende antes que nada -- antes incluso de mirar si el receptor
+         * tiene un metodo `f`, que si no la calificacion no serviria de nada
+         * justo donde hace falta. */
+        if (!fa->ns_qualifier.empty() && try_ufcs_qualified(e, fa))
+            return e->result_type;
         // M.L7 ext: enum cross-module via namespace qualified.
         // `command.Command.InsertChar(65)` -- aqui `fa->base` es
         // FieldAccessExpr ("command.Command"), no IdentExpr.  Si su
@@ -15587,8 +15786,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             if (try_ufcs_call(e, fa, bt)) return e->result_type;
             /* Y si la hay pero pide otro escalar -- el caso de un tipo FUERTE,
              * que tiene identidad propia a proposito --, se dice cual y con
-             * que cast se llega, en vez de negar a secas. */
-            if (!report_ufcs_cast_hint(bt, fa->field_name, e->loc))
+             * que cast se llega, en vez de negar a secas.  Y si la que toma
+             * este receptor esta en un namespace importado solo por su nombre,
+             * se dice donde esta y como traerla. */
+            if (!report_ufcs_cast_hint(bt, fa->field_name, e->loc) &&
+                !report_ufcs_ns_hint(bt, fa->base.get(), fa->field_name,
+                                     e->loc) &&
+                !report_ufcs_import_hint(bt, fa->base.get(), fa->field_name,
+                                         e->loc))
                 diags_.diag(e->loc, DiagLevel::ERR, "VX2070",
                             {type_to_string(bt), fa->field_name});
             for (auto &a : e->args)

@@ -3177,17 +3177,6 @@ es = "'{0}' no es una clase ni un struct, y tampoco hay ninguna funcion libre '{
 en = "no '{1}' takes a '{0}' as its first parameter, but there are for: {2}.  Cast the receiver: `(({3})receiver).{1}(...)`"
 es = "ninguna '{1}' toma un '{0}' de primer parametro, pero si las hay para: {2}.  Convierte el receptor: `(({3})receptor).{1}(...)`"
 
-# En el binario nativo una cadena vive en un hueco de 24 bytes que el bajado
-# reserva por vuelta de bucle y el marco REUSA, asi que si el resultado lee la
-# variable que se le asigna, lee de donde acaba de escribir.  Cuando la variable
-# es el primer operando (`s = s + x`) se baja como un append en el sitio y no
-# hay problema; en cualquier otra posicion no hay forma de saberlo sin que el
-# resultado deje de compartir hueco con sus operandos, que es otra decision.
-# Antes daba un valor equivocado sin decir nada.  {0} el nombre de la variable.
-["VX3008"]
-en = "in the native binary '{0} = ...' cannot read '{0}' from any position other than the first: the result shares its buffer with the source.  Write it as '{0} += ...', or go through a temporary"
-es = "en el binario nativo '{0} = ...' no puede leer '{0}' desde otra posicion que no sea la primera: el resultado comparte hueco con la fuente.  Escribelo como '{0} += ...', o pasa por una variable intermedia"
-
 # Dos huecos son dos receptores, y solo hay uno.  No se elige en silencio cual
 # de los dos: se dice.
 ["VX2072"]
@@ -3233,12 +3222,34 @@ es = "la llamada a '{0}' no distingue entre dos: una toma ({1}) y la otra ({2}).
 en = "@Override: '{0}' does not replace anything.  There is one taking the same types, but its slots are called ({1}): keep those names to override it, or drop @Override and it is a new overload"
 es = "@Override: '{0}' no sustituye a ninguno.  Hay uno que toma lo mismo, pero sus ranuras se llaman ({1}): conserva esos nombres para sustituirlo, o quita @Override y es una sobrecarga nueva"
 
-# Dos metodos de una CLASE que solo se distinguen por como se llaman sus
-# ranuras.  El interprete y el JIT los despachan bien -- por el descriptor del
-# registro, que lleva los nombres --, pero el binario nativo devirtualiza a una
-# llamada directa y ahi se queda con el primero: un resultado falso que parece
-# bueno.  Se dice mientras no este cerrado; en un struct y en una funcion libre
-# si funciona.  {0} el metodo, {1} la clase.
-["VX3009"]
-en = "'{1}.{0}': two methods of a class that differ only in their slot names do not work in the native binary yet (it devirtualizes to the first).  It does work on a struct and on a free function"
-es = "'{1}.{0}': dos metodos de una clase que solo se distinguen por el nombre de sus ranuras todavia no funcionan en el binario nativo (devirtualiza al primero).  En un struct y en una funcion libre si funciona"
+# La libre que tomaria este receptor EXISTE, pero en un namespace que este
+# fichero solo importo por su nombre.  `import lib;` no mete `doble` en el
+# ambito -- la forma de llamarla es `lib.doble(x)` --, y por eso el punto no la
+# encuentra: UFCS es la misma llamada escrita del otro modo, asi que donde no
+# vale `doble(6)` tampoco vale `6.doble()`.  Correcto, pero negar a secas deja
+# buscando algo que esta importado dos lineas mas arriba.  {0} el tipo del
+# receptor, {1} el nombre escrito tras el punto, {2} el namespace que la trae.
+["VX2079"]
+en = "no free function '{1}' taking a '{0}' is in scope here, but '{2}' has one.  Either write `{2}.{1}(receiver, ...)`, or bring the name in with `import {2} only {1};` and the dot works"
+es = "aqui no hay en ambito ninguna funcion libre '{1}' que tome un '{0}', pero '{2}' trae una.  O la escribes `{2}.{1}(receptor, ...)`, o traes el nombre con `import {2} only {1};` y el punto funciona"
+
+# Igual que VX2079 pero sin cruzar de fichero: un fichero puede declarar varios
+# namespaces, y lo que uno declara no esta en ambito desde otro.  El punto no la
+# encuentra, y es correcto -- `doble(6)` tampoco vale ahi --, pero la candidata
+# esta unas lineas mas arriba en el MISMO fichero, asi que se dice de quien es.
+# Aqui no cabe sugerir un `import`: no hay nada que importar, es el mismo
+# fichero.  {0} el tipo del receptor, {1} el nombre tras el punto, {2} el
+# namespace que la declara.
+["VX2080"]
+en = "no free function '{1}' taking a '{0}' is in scope here: the one that exists belongs to namespace '{2}', declared in this same file.  Write `{2}.{1}(receiver, ...)`"
+es = "aqui no hay en ambito ninguna funcion libre '{1}' que tome un '{0}': la que hay es del namespace '{2}', declarado en este mismo fichero.  Escribela `{2}.{1}(receptor, ...)`"
+
+# Lo escrito tras el `$` de una llamada cualificada por el punto
+# (`x.f$geo.metrico(...)`) no nombra ningun namespace en ambito.  Se comprueba
+# aparte porque la reescritura a la forma cualificada ya no sabe que hubo un
+# `$`: dejarla seguir daba "nombre no declarado: 'geo'", senyalando el primer
+# segmento y sin mencionar lo unico que el usuario escribio de mas.
+# {0} lo que se escribio tras el `$`, {1} el nombre de la funcion.
+["VX2081"]
+en = "'{0}' after '$' is not a namespace in scope.  `x.{1}$<namespace>(...)` names which '{1}' to call, so what follows the '$' has to be a namespace this file declares or imports"
+es = "'{0}', tras el '$', no es un namespace en ambito.  `x.{1}$<namespace>(...)` dice a que '{1}' se llama, asi que lo que sigue al '$' tiene que ser un namespace que este fichero declare o importe"

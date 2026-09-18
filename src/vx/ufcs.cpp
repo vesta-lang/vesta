@@ -88,6 +88,7 @@ void Index::declare(const Type &first_param, const std::string &name,
 }
 
 const Candidates *Index::find(const Type &recv, const std::string &written,
+                              const std::string &site_prefix,
                               const std::string **matched) const {
     const std::string *head = head_of(recv);
     /* Tal y como se escribio: lo normal es que ahi acabe.  La cabeza se calcula
@@ -98,15 +99,13 @@ const Candidates *Index::find(const Type &recv, const std::string &written,
         if (matched != nullptr) *matched = name;
         return &it->second;
     }
-    // Y si no, con el prefijo que el aplanado le puso a lo de este modulo.
-    for (const std::string &p : prefixes_) {
-        name = util::intern_name(p + written);
-        it = by_head_.find(Key{head, name});
-        if (it == by_head_.end()) continue;
-        if (matched != nullptr) *matched = name;
-        return &it->second;
-    }
-    return nullptr;
+    // Y si no, con el prefijo del namespace DESDE EL QUE SE LLAMA.
+    if (site_prefix.empty()) return nullptr;
+    name = util::intern_name(site_prefix + written);
+    it = by_head_.find(Key{head, name});
+    if (it == by_head_.end()) return nullptr;
+    if (matched != nullptr) *matched = name;
+    return &it->second;
 }
 
 void Index::declare_any(const Type &param, const std::string &name,
@@ -118,6 +117,7 @@ void Index::declare_any(const Type &param, const std::string &name,
 }
 
 const Candidates *Index::find_any(const Type &recv, const std::string &written,
+                                  const std::string &site_prefix,
                                   const std::string **matched) const {
     const std::string *head = head_of(recv);
     const std::string *name = util::intern_name(written);
@@ -126,23 +126,33 @@ const Candidates *Index::find_any(const Type &recv, const std::string &written,
         if (matched != nullptr) *matched = name;
         return &it->second;
     }
-    for (const std::string &p : prefixes_) {
-        name = util::intern_name(p + written);
-        it = by_any_.find(Key{head, name});
-        if (it == by_any_.end()) continue;
+    if (site_prefix.empty()) return nullptr;
+    name = util::intern_name(site_prefix + written);
+    it = by_any_.find(Key{head, name});
+    if (it == by_any_.end()) return nullptr;
+    if (matched != nullptr) *matched = name;
+    return &it->second;
+}
+
+const Candidates *Index::all_named(const std::string &written,
+                                   const std::string **matched) const {
+    /* Aqui SI se prueban todos los prefijos del fichero, al reves que en
+     * `find`: esto no resuelve una llamada, busca que decir cuando no hay
+     * ninguna.  Justo lo que `find` no debe alcanzar -- una declarada en otro
+     * namespace del mismo fichero -- es lo que aqui hay que encontrar para
+     * poder senyalarla. */
+    const std::string *name = util::intern_name(written);
+    auto it = by_name_.find(name);
+    if (it != by_name_.end()) {
         if (matched != nullptr) *matched = name;
         return &it->second;
     }
-    return nullptr;
-}
-
-const Candidates *Index::all_named(const std::string &written) const {
-    // Las mismas grafias que prueba `find`, contra la tabla por NOMBRE.
-    auto it = by_name_.find(util::intern_name(written));
-    if (it != by_name_.end()) return &it->second;
     for (const std::string &p : prefixes_) {
-        it = by_name_.find(util::intern_name(p + written));
-        if (it != by_name_.end()) return &it->second;
+        name = util::intern_name(p + written);
+        it = by_name_.find(name);
+        if (it == by_name_.end()) continue;
+        if (matched != nullptr) *matched = name;
+        return &it->second;
     }
     return nullptr;
 }

@@ -2295,6 +2295,102 @@ class TypeChecker {
                                const SourceLoc &loc);
 
     /**
+     * @brief La candidata existe, pero en un namespace que este fichero solo
+     *        importo POR SU NOMBRE.
+     *
+     * `import lib;` no mete `doble` en el ambito: la forma de llamarla es
+     * `lib.doble(x)`, y por eso `6.doble()` no la encuentra -- ni tendria que,
+     * porque UFCS es la misma llamada escrita del otro modo y `doble(6)` a
+     * secas tampoco vale ahi.  Correcto, pero "no hay ninguna funcion libre
+     * visible" deja buscando algo que esta importado dos lineas mas arriba.
+     *
+     * Asi que se dice DoNDE esta y como traerla: es un import selectivo de
+     * distancia.
+     *
+     * @param recv El tipo del receptor.
+     * @param name El nombre escrito tras el punto.
+     * @param loc  Donde se escribio la llamada.
+     * @return true si se reporto; false si ese nombre no lo trae ningun
+     *         namespace importado.
+     */
+    bool report_ufcs_import_hint(const Type &recv, const ast::Expr *base,
+                                 const std::string &name, const SourceLoc &loc);
+
+    /**
+     * @brief `x.f$geo.metrico(...)`: la llamada por el punto, CUALIFICADA.
+     *
+     * El punto resuelve lo que esta en ambito, que es lo que hace que
+     * `x.f(a)` y `f(x, a)` sean la misma llamada.  Cuando hay dos `f` en
+     * namespaces distintos y no se quiere traer ninguna al ambito, esto dice
+     * cual -- y va DETRAS del nombre, no delante, para que lo que sigue al
+     * punto sea siempre la funcion y no se confunda con un campo homonimo.
+     *
+     * Se atiende ANTES de mirar si el receptor tiene un metodo asi: quien
+     * escribe la calificacion ya dijo cual quiere.
+     *
+     * @param e  La llamada.
+     * @param fa El acceso `x.f`, con su @c ns_qualifier.
+     * @return true si se reescribio (y entonces @c e->result_type ya vale).
+     */
+    bool try_ufcs_qualified(ast::CallExpr *e, ast::FieldAccessExpr *fa);
+
+    /**
+     * @brief La candidata esta en OTRO namespace del mismo fichero.
+     *
+     * Un fichero puede declarar varios namespaces, y lo que uno declara no
+     * esta en ambito desde otro: `doble(6)` no resuelve, asi que `6.doble()`
+     * tampoco -- son la misma llamada escrita del otro modo --.  Correcto,
+     * pero negarlo a secas deja buscando algo que esta unas lineas mas arriba
+     * en el MISMO fichero, asi que se dice de quien es y como llamarla.
+     *
+     * @param recv El tipo del receptor.
+     * @param base La expresion del receptor.
+     * @param name El nombre escrito tras el punto.
+     * @param loc  Donde se escribio la llamada.
+     * @return true si se reporto; false si ningun namespace del fichero la
+     *         declara para este receptor.
+     */
+    bool report_ufcs_ns_hint(const Type &recv, const ast::Expr *base,
+                             const std::string &name, const SourceLoc &loc);
+
+    /**
+     * @brief Indica si el receptor es un literal de cadena que aun es `ptr`.
+     *
+     * Un literal de cadena ES un puntero a datos estaticos y solo se PROMUEVE
+     * a `string` donde hace falta -- por eso `grita("hola")` compila --, asi
+     * que `"hola".grita()` tiene que encontrar lo mismo.  La regla vive aqui y
+     * no repetida en cada sitio que la necesita: la usan la llamada de verdad
+     * y el aviso que dice donde esta la candidata, y con dos copias una se
+     * queda atras sin que nadie lo note.
+     *
+     * @param recv El tipo del receptor.
+     * @param base La expresion del receptor.
+     * @return Cierto si hay que probar tambien con `string`.
+     */
+    static bool ufcs_promotes_to_string(const Type &recv,
+                                        const ast::Expr *base);
+
+  public:
+    /* Como se ESCRIBE un nombre que el aplanado renombro.  Es publico porque
+     * lo pregunta tambien el bajado: sus diagnosticos citan clases y metodos,
+     * y citarlos como `ejemplos__x__C` manda a buscar algo que no esta en el
+     * fuente.  Una sola consulta y un solo criterio para los dos. */
+    std::string written_name(const std::string &mangled) const;
+    std::string written_type_name(const Type &t) const;
+
+  private:
+    /**
+     * @brief El prefijo de namespace que el aplanado le puso a @p mangled.
+     *
+     * `geo__metrico__doble` -> `geo__metrico__`; vacio si la declaracion no
+     * pertenece a ningun namespace.
+     *
+     * @param mangled El nombre aplanado.
+     * @return El prefijo, o vacio.
+     */
+    std::string ns_prefix_of(const std::string &mangled) const;
+
+    /**
      * @brief El nombre de un tipo tal y como el usuario lo ESCRIBE.
      *
      * El aplanado de namespaces renombra las declaraciones (`probe__Edad`), y
@@ -2305,15 +2401,6 @@ class TypeChecker {
      * @param t El tipo.
      * @return Su nombre publico si el aplanado lo renombro; el que hay, si no.
      */
-    std::string written_type_name(const Type &t) const;
-
-    /**
-     * @brief El nombre tal y como se ESCRIBE, dado el que el aplanado le puso.
-     *
-     * La misma regla que  written_type_name, para lo que no es un tipo: una
-     * funcion, un metodo.  Una sola consulta y un solo criterio.
-     */
-    std::string written_name(const std::string &mangled) const;
 
     Type report_method_missing(
         ast::CallExpr *e, ast::FieldAccessExpr *fa,
@@ -3225,6 +3312,29 @@ class TypeChecker {
     std::unordered_map<std::string, uint32_t> ns_short_alias_;
     std::unordered_set<std::string> ns_short_ambiguous_;
 
+    /**
+     * @brief De un nombre de FUNCION importada, los namespaces que la traen.
+     *
+     * Es la pregunta al reves de @c ImportedNamespace::by_name, y hace falta
+     * para una sola cosa: cuando `x.f(...)` no encuentra ninguna libre, decir
+     * si `f` esta en un namespace importado solo por su nombre y como traerla.
+     * Sin esto habia que recorrer TODOS los namespaces preguntando por el
+     * nombre, y eso es barrer una estructura para sacar un dato que se tiene
+     * en la mano al meterlo.
+     *
+     * La clave es el nombre YA internado (@c util::intern_name), asi que
+     * comparar es comparar punteros.  El valor es una lista porque dos
+     * namespaces pueden traer el mismo nombre -- ahi el hint tiene que mirar
+     * cual de los dos toma este receptor, no quedarse con el primero --, y
+     * casi siempre tiene UN elemento, que es lo que cabe sin reservar.
+     */
+    std::unordered_map<const std::string *, util::SmallVector<uint32_t, 2>>
+        ns_by_fn_name_;
+
+    /// De que `import` viene lo que se esta inyectando.  Lo pone y lo quita
+    /// @ref ImportSite; vacio fuera de una inyeccion.
+    SourceLoc import_site_{};
+
     /// NS.2 round-trip: namespaces DECLARADOS por este modulo (via
     /// `namespace X;`), para que el export al .vxi sepa que la funcion
     /// mangled `mylib__helper` pertenece al namespace `mylib` con nombre
@@ -3296,6 +3406,16 @@ class TypeChecker {
         /// Nombre del modulo original (e.g. "lib_a"); util para
         /// emitir el label mangled al hacer CALL.
         std::string module_name;
+        /**
+         * @brief Como lo ESCRIBIO quien lo importo (`std.fileio`, o su alias).
+         *
+         * No es lo mismo que @c module_name, que es el fichero de origen
+         * (`fileio`), y la diferencia importa en cuanto un mensaje sugiere
+         * escribir un `import`: con el nombre del modulo sugeria
+         * `import fileio only ...`, que no resuelve.  Un diagnostico que manda
+         * teclear algo que no funciona es peor que no decir nada.
+         */
+        std::string local_name;
         /// Simbolos del namespace: nombre publico -> indice en
         /// @c symbols.  El lookup es O(1) en uso normal.
         std::unordered_map<std::string, uint32_t> by_name;
@@ -3898,6 +4018,34 @@ class TypeChecker {
     void mark_template_only_fn(const std::string &mangled) {
         template_only_fns_.insert(mangled);
     }
+    /**
+     * @brief Marca, mientras vive, de que `import` viene lo que se declare.
+     *
+     * Un choque de nombres entre dos imports hay que explicarlo EN el import
+     * que lo causa, y quien lo detecta -- @ref register_imported_function --
+     * esta varias capas por debajo de quien conoce esa posicion.  Pasarla como
+     * parametro obligaria a que la atravesaran todas las funciones de por
+     * medio, que no tienen nada que ver con ella.
+     *
+     * Se pone al entrar y se quita al salir, asi que no queda una posicion
+     * vieja apuntando a un import que ya termino -- que seria peor que no
+     * tener ninguna: senyalaria una linea que no es.
+     */
+    class ImportSite {
+      public:
+        ImportSite(TypeChecker &tc, const SourceLoc &at)
+            : tc_(tc), saved_(tc.import_site_) {
+            tc_.import_site_ = at;
+        }
+        ~ImportSite() { tc_.import_site_ = saved_; }
+        ImportSite(const ImportSite &) = delete;
+        ImportSite &operator=(const ImportSite &) = delete;
+
+      private:
+        TypeChecker &tc_;
+        SourceLoc saved_;
+    };
+
     void register_imported_function(const std::string &name, FunctionSig sig) {
         /* Dos imports que traen el MISMO nombre.
          *
@@ -3928,11 +4076,22 @@ class TypeChecker {
             if (!previous_label.empty() && !new_label.empty() &&
                 previous_label != new_label &&
                 !add_overload_candidate(name, prev->second, idx))
-                diags_.error({}, vx::diag::format(
-                                     "VXT003",
-                                     {name, previous_label, new_label}));
+                diags_.diag(import_site_, DiagLevel::ERR, "VXT003",
+                            {name, previous_label, new_label});
         }
         sig_by_name_.emplace(name, idx);
+        /* Y al indice de UFCS, igual que una declarada aqui.
+         *
+         * Una funcion importada es una funcion: `x.f(a)` y `f(x, a)` son la
+         * misma llamada venga de donde venga, y dejarla fuera del indice hacia
+         * que el punto funcionara o no segun en que fichero estuviera escrita
+         * la funcion -- que es exactamente lo que un import viene a que no
+         * pase --. */
+        const FunctionSig &reg = function_sigs_[idx];
+        if (!reg.param_types.empty())
+            ufcs_.declare(reg.param_types[0], name, idx);
+        for (const auto &pt : reg.param_types)
+            ufcs_.declare_any(pt, name, idx);
         // Encolar para que `run()` declare el Symbol en el scope global
         // tras el push_scope inicial.  Sin esto, el lookup en
         // `lookup_with_depth` no encuentra la funcion importada.
@@ -4108,6 +4267,17 @@ class TypeChecker {
     /// @NoExcept/@NoExceptions: la funcion actual no admite excepciones.
     /// check_stmt rechaza throw/try/catch cuando es true.
     bool current_fn_is_noexcept_ = false;
+
+    /**
+     * @brief Prefijo del namespace en el que esta lo que se comprueba ahora.
+     *
+     * `app__` dentro de `namespace app`, vacio en la raiz.  Lo necesita la
+     * llamada uniforme: el aplanado renombra la DECLARACION (`app__f`) pero no
+     * lo que va tras un punto, asi que `x.f()` tiene que probar tambien con el
+     * prefijo -- y con ESE, no con los de los demas namespaces del fichero,
+     * que no estan en ambito desde aqui.
+     */
+    std::string current_ns_prefix_;
 
     // Conteo de errores al inicio del run() para detectar exito.
     size_t initial_errors_ = 0;

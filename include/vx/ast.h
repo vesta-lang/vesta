@@ -735,6 +735,23 @@ struct IdentExpr : Expr {
 struct FieldAccessExpr : Expr {
     std::unique_ptr<Expr> base;
     std::string field_name;
+    /**
+     * @brief De que namespace es la funcion, en `x.f$geo.metrico(...)`.
+     *
+     * La llamada uniforme resuelve lo que esta EN AMBITO, que es lo que hace
+     * que `x.f(a)` y `f(x, a)` sean la misma llamada.  Cuando hay dos `f` en
+     * namespaces distintos y no se quiere traer ninguna, esto dice CUAL.
+     *
+     * La calificacion va DETRAS del nombre y no delante a proposito: lo que
+     * sigue al punto es siempre la funcion, nunca un segmento de namespace,
+     * asi que un campo homonimo de un namespace -- que el lenguaje permite --
+     * no puede confundirse con el.  Delante (`x.geo.metrico.f()`) el mismo
+     * texto significaria una cosa u otra segun los campos del receptor, que se
+     * declaran en otro fichero.
+     *
+     * Vacio -- lo normal -- quiere decir "lo que este en ambito".
+     */
+    std::string ns_qualifier;
     /// @brief Si !=0, el acceso resuelve a un accesor de
     /// propiedad y el lowering emite la llamada en vez de un
     /// getfield directo.  1 = getter (`obj.prop`), 2 = setter (lhs
