@@ -330,6 +330,25 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         return line;
     }
 
+    /* Una ranura NOMBRADA en su propia linea: `.nombre = valor,`.
+     *
+     *     funcion(
+     *         .arg1   = 1,
+     *         .argarg = 2
+     *     )
+     *
+     * Sale de dos sitios que son la MISMA grafia -- un init designado partido
+     * en lineas y una llamada con argumentos con nombre --, asi que es una
+     * forma sola: alinear una y no la otra seria tener dos criterios para lo
+     * mismo.  El ancla es el `=`, que es la columna que se lee. */
+    if (kind_of(pieces[i]) == TokenKind::DOT && i + 2 <= to &&
+        kind_of(pieces[i + 1]) == TokenKind::IDENTIFIER &&
+        kind_of(pieces[i + 2]) == TokenKind::ASSIGN) {
+        line.shape = Shape::Assign;
+        line.anchors = {i, i + 2};
+        return line;
+    }
+
     /* Buscar el `=` de la linea, que es el ancla principal.
      *
      * Tiene que ser el de la SENTENCIA: uno dentro de parentesis o corchetes

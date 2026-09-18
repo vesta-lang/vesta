@@ -58,6 +58,79 @@ inline bool closes_list(TokenKind k) {
 }
 
 /**
+ * @brief Hace cumplir `R95` tambien al JUNTAR: nunca dos eslabones arriba.
+ *
+ * `R95` dice "o toda la cadena en una linea, o todos sus eslabones repartidos",
+ * y el reparto solo aplicaba la primera mitad: una cadena partida a mano -- o
+ * por otra version -- con el corte en medio se quedaba asi, porque su primera
+ * linea CABE y nadie la volvia a mirar.  El mismo programa tenia entonces dos
+ * formas validas, que es lo que `P1` prohibe.
+ *
+ * Dos casos, y los dos convergen:
+ *
+ *   - si la cadena entera cabe en una linea, se juntan todos sus saltos;
+ *   - si no cabe y esta linea ya trae algun eslabon, se parten TAMBIEN los
+ *     suyos, que es lo que deja "ninguno arriba".
+ *
+ * @param pieces  Piezas del fuente.
+ * @param layout  Donde cayo cada pieza.
+ * @param options Ajustes del estandar.
+ * @param first   Primera pieza de la linea que se mira.
+ * @param last    Ultima pieza de esa linea.
+ * @param breaks  [in,out] donde se anotan los saltos.
+ */
+static void enforce_chain_all_or_none(const std::vector<Piece> &pieces,
+                                      const Layout &layout,
+                                      const FormatOptions &options,
+                                      size_t first, size_t last,
+                                      std::vector<Break> &breaks) {
+    // Que la linea de ABAJO empiece por un eslabon.
+    const size_t next = last + 1;
+    if (next + 2 >= pieces.size()) return;
+    if (kind_of(pieces[next]) != TokenKind::DOT) return;
+    if (layout.line[next] == layout.line[last]) return;
+    if (kind_of(pieces[next + 1]) != TokenKind::IDENTIFIER) return;
+    if (kind_of(pieces[next + 2]) != TokenKind::LPAREN) return;
+
+    // Los eslabones que esta linea ya trae arriba.
+    std::vector<size_t> up;
+    int depth = 0;
+    for (size_t k = first; k <= last; ++k) {
+        const TokenKind kind = kind_of(pieces[k]);
+        if (opens_list(kind)) ++depth;
+        else if (closes_list(kind)) --depth;
+        else if (depth == 0 && kind == TokenKind::DOT && k > first &&
+                 k + 2 <= last && kind_of(pieces[k + 1]) == TokenKind::IDENTIFIER &&
+                 kind_of(pieces[k + 2]) == TokenKind::LPAREN)
+            up.push_back(k);
+    }
+    if (up.empty()) return; // ninguno arriba: ya cumple
+
+    // Lo que ocuparia la cadena entera junta.
+    size_t end = next;
+    while (end + 1 < pieces.size() &&
+           (layout.line[end + 1] == layout.line[end] ||
+            kind_of(pieces[end + 1]) == TokenKind::DOT))
+        ++end;
+    uint32_t flat = layout.column[last] +
+                    display_width(pieces[last].text, options.tab_width);
+    for (size_t k = next; k <= end; ++k)
+        flat += display_width(pieces[k].text, options.tab_width);
+
+    if (flat <= options.width) {
+        // Cabe entera: se quitan todos sus saltos.
+        for (size_t k = next; k <= end; ++k)
+            if (layout.line[k] != layout.line[k - 1]) breaks[k].join = true;
+        return;
+    }
+    // No cabe: los de arriba bajan tambien.
+    for (const size_t k : up) {
+        breaks[k].before = true;
+        breaks[k].extra_indent = 1;
+    }
+}
+
+/**
  * @brief Junta una lista que se partio a mano pero que cabe entera (`R12`).
  *
  * Se mide lo que ocuparia aplanada -- desde donde empieza la linea de la
@@ -383,6 +456,8 @@ std::vector<Break> compute_breaks(const std::vector<Piece> &pieces,
              * `sumar(i32 a, i32 b)` repartido en cuatro lineas se quedaria
              * repartido, y el mismo programa tendria dos formas. */
             try_join(pieces, layout, options, i, last, breaks);
+            // Y `R95` en su otra mitad: nunca dos eslabones arriba.
+            enforce_chain_all_or_none(pieces, layout, options, i, last, breaks);
             i = last + 1;
             continue;
         }

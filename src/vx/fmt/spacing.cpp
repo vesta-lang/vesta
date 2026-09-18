@@ -235,6 +235,12 @@ Spacing space_between(const Piece *before, const Piece &prev, const Piece &cur,
     case TokenKind::RPAREN:
     case TokenKind::RBRACKET:
     case TokenKind::DOT:
+        /* Salvo cuando EMPIEZA algo: `f(.a = 1, .b = 2)` y `{.x = 1, .y = 2}`
+         * nombran una ranura, y ahi el punto no es el acceso a un miembro sino
+         * el principio del siguiente argumento.  Sin esto el formateador
+         * juntaba la coma con el punto -- `1,.b` --, que es la unica pega que
+         * la grafia nombrada le trajo. */
+        return (a == TokenKind::COMMA) ? Spacing::Space : Spacing::None;
     case TokenKind::LBRACKET: return Spacing::None;
     default: break;
     }
