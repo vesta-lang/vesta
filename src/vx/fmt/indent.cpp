@@ -618,10 +618,14 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
             p.trivia.find('\n') != std::string_view::npos;
         /* `R5`: en un bloque de varias lineas, la de apertura no arrastra el
          * primer enunciado y la de cierre empieza linea.  Dentro de un `asm`
-         * no se toca: ahi el reparto es del autor. */
+         * no se toca: ahi el reparto es del autor.
+         *
+         * La llave que `R39b` se llevo no cuenta: sigue en el vector -- lo que
+         * se quita es la marca `drop`, no la pieza --, y sin excluirla el `=>`
+         * que la sustituye heredaba su salto y se iba a la linea de abajo. */
         const bool parte_llave =
             !in_asm && ((idx > 0 && is(pieces[idx - 1], TokenKind::LBRACE) &&
-                         llave_partida[idx - 1]) ||
+                         !pieces[idx - 1].drop && llave_partida[idx - 1]) ||
                         (is(p, TokenKind::RBRACE) && llave_partida[idx]));
 
         const bool corta_aqui = parte_sentencia || parte_valor_enum ||

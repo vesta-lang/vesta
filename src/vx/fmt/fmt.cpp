@@ -232,6 +232,26 @@ bool same_program(std::string_view before, std::string_view after,
             ib += 1;
             break;
         }
+        case RewriteKind::ExpressionBody:
+            /* `R39b`: `{ return e; }` pasa a ser `=> e;`.
+             *
+             * Se declara DOS veces por cuerpo, una por cada llave, porque son
+             * dos sitios distintos del original y la comprobacion avanza por
+             * el.  La de apertura se lleva ademas el `return`, que es el token
+             * que pasa a ser el `=>`; la de cierre no deja nada detras. */
+            if (A[ia].kind == TokenKind::LBRACE) {
+                if (ia + 1 >= A.size() ||
+                    A[ia + 1].kind != TokenKind::KW_RETURN)
+                    return false;
+                if (B[ib].kind != TokenKind::FAT_ARROW) return false;
+                ia += 2;
+                ib += 1;
+            } else if (A[ia].kind == TokenKind::RBRACE) {
+                ia += 1; // en el formateado no hay nada que consumir
+            } else {
+                return false;
+            }
+            break;
         case RewriteKind::AddBraces:
             // `R6`: aparece una llave que en el original no estaba.
             if (B[ib].kind != TokenKind::LBRACE &&
@@ -282,6 +302,13 @@ FormatResult format(const std::string &source, const std::string &filename,
      * -- antes de medir -- porque cambian la anchura de la linea, y de eso
      * dependen el reparto y las columnas. */
     std::vector<Rewrite> rewrites = apply_token_rules(pieces);
+    /* `R39b`: y el cuerpo que es un solo `return` se junta en `=> e;`.
+     *
+     * Va DESPUES para que las tres de arriba vean la forma original -- el
+     * `return` que aqui se convierte en `=>` deja de ser una sentencia, y el
+     * anotador de papeles no tendria por que saberlo.  Cuales se QUEDAN se
+     * decide mas abajo, midiendo: hasta entonces se juntan todos. */
+    const std::vector<ExprBody> bodies = apply_expression_bodies(pieces);
     /* Las llaves que `R6` anade se apuntan en la emision FINAL: hasta que no
      * se reparte no se sabe si el cuerpo cupo en la linea de su cabecera, y de
      * eso depende si las necesita. */
@@ -320,6 +347,22 @@ FormatResult format(const std::string &source, const std::string &filename,
      * por si sola, y la segunda ya con el relleno.  Alinear es precisamente
      * decidir en funcion de las vecinas, asi que no hay forma de hacerlo en una
      * sola pasada. */
+    /* `R39b`: y ahora se mide cuales de esos cuerpos CABEN.
+     *
+     * Aqui, con los literales ya en su forma canonica -- que es lo que decide
+     * su anchura -- y antes de repartir: un cuerpo que no cabe se deshace, y
+     * entonces no hay nada que repartir en el. */
+    if (!bodies.empty()) {
+        Layout probe;
+        reindent(pieces, tail, options, nullptr, &probe, nullptr);
+        const std::vector<Role> probe_roles = annotate_roles(pieces);
+        for (const Rewrite &w : keep_fitting_expression_bodies(
+                 pieces, bodies, probe_roles, probe, options))
+            rewrites.push_back(w);
+    }
+
+    /* Los papeles se anotan DESPUES de eso: un cuerpo que se deshizo ha vuelto
+     * a ser un `return`, y el papel de un token es el de lo que ES ahora. */
     const std::vector<Role> roles = annotate_roles(pieces);
 
     /* 1-2) Medir y repartir, HASTA QUE NO CAMBIE.

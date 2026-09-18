@@ -315,14 +315,31 @@ void check_spacing() {
     check(una_pasada.find("\n}") != std::string::npos,
           "la llave de cierre empieza linea");
     check(fmt(una_pasada) == una_pasada, "y una segunda pasada no cambia nada");
-    // Un cuerpo que SI cabe entero se queda como esta: no todo se reparte.
-    const std::string cabe = fmt("i32 f() { return 0; }\n");
-    check(cabe.find("f() { return 0; }") != std::string::npos,
-          "un cuerpo de una sola sentencia se queda en su linea");
+    /* `R39b`: un cuerpo que es UN SOLO `return` con valor se escribe con `=>`.
+     *
+     * Cabe en la linea, asi que se junta; y se junta venga escrito como venga,
+     * que es lo que hace que solo haya una forma (`P1`). */
+    const std::string corto = fmt("i32 f() { return 0; }\n");
+    check(corto.find("i32 f() => 0;") != std::string::npos,
+          "un cuerpo de un solo return se escribe con =>");
+    check(fmt(corto) == corto, "y una segunda pasada no lo vuelve a tocar");
+    check(fmt("i32 f(){ return 0; }\n") == corto,
+          "sin el espacio de la llave sale lo mismo");
+    /* Lo que NO se junta, y por que: `return;` no tiene expresion que poner
+     * detras del `=>`, y un bloque de dos sentencias no es una expresion. */
+    check(fmt("void f() { return; }\n").find("=>") == std::string::npos,
+          "un return sin valor se queda como bloque");
+    check(fmt("i32 f() { g(); return 0; }\n").find("=>") == std::string::npos,
+          "un cuerpo de dos sentencias se queda como bloque");
+    /* Y un bloque de sentencias NO es un cuerpo por mucho que venga tras un
+     * `)`: `if (c) { return 1; }` sigue siendo un `if`. */
+    check(fmt("i32 f(i32 c) { if (c) { return 1; } return 0; }\n")
+                  .find("=>") == std::string::npos,
+          "el bloque de un if no se confunde con un cuerpo");
 
     // `R4`: la llave de apertura lleva un espacio delante.
-    const std::string llave = fmt("i32 f(){ return 0; }\n");
-    check(llave.find("f() {") != std::string::npos,
+    const std::string llave = fmt("i32 f(i32 a){ a += 1; return a; }\n");
+    check(llave.find("f(i32 a) {") != std::string::npos,
           "la llave de apertura va separada por un espacio");
 
     /* LO AMBIGUO SE RESUELVE, no se esquiva.  `Caja<i64>` y `a < b` son el

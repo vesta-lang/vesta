@@ -110,6 +110,7 @@ enum class RewriteKind : uint8_t {
     SwapModifiers,    ///< `R42`: dos modificadores cambian de orden
     AddBraces,        ///< `R6`: un cuerpo suelto recibe sus llaves
     AddTypeSuffix,    ///< `R108`: un literal recibe el sufijo de su tipo
+    ExpressionBody,   ///< `R39b`: `{ return e; }` pasa a ser `=> e;`
 };
 
 /// @brief Una reescritura, anclada al token del texto ORIGINAL donde ocurre.
