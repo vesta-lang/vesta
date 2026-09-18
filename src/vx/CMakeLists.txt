@@ -224,6 +224,13 @@ add_library(vx_lib STATIC
     # estructura, no un caso mas de la resolucion de metodos --, y repartirla
     # por el comprobador dejaria el criterio en varios sitios.
     ufcs.cpp
+    # Y su otra mitad: consultar ese indice, elegir con la MISMA regla de
+    # sobrecarga que una llamada libre y REESCRIBIR el nodo a la otra grafia.
+    # Las dos direcciones -- `x.f(a)` -> `f(x, a)` y `f(x, a)` -> `x.f(a)` --
+    # viven juntas porque comparten la regla de choque: escrita dos veces
+    # serian dos criterios, y el sintoma es que el mismo programa compila o no
+    # segun como se escriba la llamada.
+    ufcs_resolve.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

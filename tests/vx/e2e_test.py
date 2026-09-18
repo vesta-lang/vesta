@@ -3799,7 +3799,8 @@ modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llam
 modes3_case("ufcs551", "encadenar con UFCS: `2.add(4).mul(10).div(5)` sobre literales sin un solo cast, lo mismo con cadenas (incluido un literal de receptor, que es un `ptr` hasta que se promueve), cruzar de familia a mitad de cadena, y el hueco `_` que dice donde cae el receptor cuando no va primero", "551_ufcs_encadenado.vx", 42)
 modes3_case("nombrados552", "argumentos con nombre `.a = 3`, la grafia del init designado: en cualquier orden, mezclados con posicionales, con el receptor cayendo en el hueco nombrado o en la ranura que queda libre, y el nombre entrando en la seleccion entre hermanas", "552_argumentos_nombrados.vx", 42)
 modes3_case("ufcs_xmod556", "UFCS y argumentos nombrados CRUZANDO el modulo, con los dos pares de homonimas: `doble` (misma firma y misma ranura) que solo conviven con `as`, y `pesa` (misma firma, ranuras con otro nombre) que se importan las dos sin renombrar y forman una sobrecarga -- resuelta nombrando la ranura, tambien a traves del punto", "556_ufcs_xmodulo.vx", 42)
-modes3_case("ufcs_ns558", "namespaces del MISMO fichero: la cualificada de siempre y la misma por el punto con `$`, que llega a cada una de dos homonimas; lo del propio namespace se sigue llamando sin calificar, y `$` compone con las ranuras por nombre y con una interpolacion", "558_ufcs_ns_fichero.vx", 42)
+modes3_case("ufcs_ns558", "namespaces del MISMO fichero: la cualificada de siempre y la misma por el punto con `$`, que llega a cada una de dos homonimas; lo del propio namespace se sigue llamando sin calificar, `$` compone con las ranuras por nombre y con una interpolacion, y un SEGUNDO bloque del mismo namespace ve lo que declaro el primero aun habiendo dos homonimas", "558_ufcs_ns_fichero.vx", 42)
+modes3_case("ufcs_inverso566", "la OTRA direccion, al extremo: `f(x, a)` encuentra el metodo `x.f(a)` -- DOS metodos de la misma firma separados solo por el nombre de sus ranuras, el mismo nombre y las mismas ranuras en otro receptor, una libre homonima que no choca, struct generico, `impl` desde fuera, despacho VIRTUAL con `@Override`, receptor declarado como interfaz, receptores que son un campo o el retorno de otra inversa, variadico, `final`, un tipo de otro namespace y las dos grafias en la misma cadena", "566_ufcs_inverso.vx", 42)
 modes3_case("nativo560", "dos huecos del binario nativo, cerrados: una cadena leida desde la SEGUNDA posicion en un bucle (`s = otra + s`, que daba `---` en vez de `--x`) y dos metodos de clase que solo se distinguen por el NOMBRE de sus ranuras (que devirtualizaba al primero).  Los tres modos tienen que coincidir, que es de lo que iba", "560_nativo_cadena_y_ranuras.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
@@ -5943,6 +5944,36 @@ fails_case("ufcs_ns_fichero",
 fails_case("ufcs_sin_candidata",
            "un nombre que no declara nadie: no hay namespace al que apuntar",
            "559_ufcs_ns_fichero_err.vx", "VX2070")
+
+# La regla 2.2 desde la grafia LIBRE: miembro + libre para el mismo receptor.
+# Es el mismo choque que `x.f(a)` ya rechaza, y tiene que fallar igual escrito
+# del otro modo -- si no, el mismo programa compila o no segun como se escriba
+# la llamada, que es justo lo que UFCS promete que no pasa.  Mismo codigo, que
+# es la prueba de que es una regla y no dos.
+fails_case("ufcs_inverso_choque",
+           "miembro y libre para el MISMO receptor, escrito como llamada libre",
+           "567_ufcs_inverso_err.vx", "VX2068")
+
+# Ni funcion libre ni miembro: se buscaron las dos cosas, asi que se dicen las
+# dos.  Negar solo la libre deja buscando el metodo, que es lo que el
+# programador creia estar llamando.
+# Las dos hermanas de la MISMA firma -- que en `566` se eligen nombrando su
+# ranura -- llamadas posicionalmente.  Falla igual que fallaria la libre, y con
+# el mismo codigo: la prueba de que la seleccion es la misma y no una copia.
+fails_case("ufcs_inverso_ambigua",
+           "dos metodos de la misma firma que solo se distinguen por el nombre de sus ranuras, llamados sin nombrarlas",
+           "567_ufcs_inverso_err.vx", "VX2077")
+
+fails_case("ufcs_inverso_sin_nada",
+           "no hay funcion con ese nombre, y el tipo del primer argumento tampoco tiene ese miembro",
+           "567_ufcs_inverso_err.vx", "VX2086")
+
+# Y la visibilidad no se afloja por cambiar de grafia: la llamada se REESCRIBE
+# al punto y la comprueba el camino de siempre, asi que un `private` no tiene
+# una segunda puerta por la que colarse.
+fails_case("ufcs_inverso_privado",
+           "un metodo privado no se alcanza desde fuera, tampoco escrito como llamada libre",
+           "567_ufcs_inverso_err.vx", "VX2087")
 
 # Dos hermanas que solo se distinguen por como se llaman sus ranuras: DECLARARLAS
 # vale, y lo que no vale es una llamada posicional que no diga cual.  Se citan

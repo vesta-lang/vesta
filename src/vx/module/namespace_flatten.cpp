@@ -579,12 +579,54 @@ void mangle_concept_decl_(
     if (cd->predicate) rewrite_refs_in_expr_(cd->predicate.get(), rename_map);
 }
 
+/**
+ * @brief Recolecta que renombra este namespace, SIN aplicar nada.
+ *
+ * Esta separado de aplicarlo porque un fichero puede ABRIR EL MISMO NAMESPACE
+ * VARIAS VECES, y lo que declara un bloque tiene que estar en ambito desde los
+ * demas.  Recolectando por bloque, el segundo `namespace uno { }` no veia lo
+ * del primero: `doble(6)` se quedaba sin reescribir y salia "funcion no
+ * declarada" sobre algo declarado unas lineas mas arriba.
+ *
+ * Con un solo nombre el fallo no se notaba -- la resolucion por ultimo segmento
+ * lo rescataba --, y aparecia justo al haber DOS homonimas en namespaces
+ * distintos, que es cuando esa via ya no puede elegir.  Un fallo que solo
+ * asoma cuando hay ambiguedad es de los que viven mucho tiempo.
+ *
+ * @param decls      Las declaraciones del bloque.
+ * @param ns_path    Prefijo mangleado del namespace (`uno`, `std__io`).
+ * @param rename_map [in,out] Donde se acumulan los pares nombre -> mangleado.
+ */
+void collect_renames_(std::vector<std::unique_ptr<ast::Node>> &decls,
+                      const std::string &ns_path,
+                      std::unordered_map<std::string, std::string> &rename_map);
+
+void mangle_decls_apply_(
+    std::vector<std::unique_ptr<ast::Node>> &decls, const std::string &ns_path,
+    std::unordered_map<std::string, std::string> &rename_map);
+
 void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
                    const std::string &ns_path,
                    std::unordered_map<std::string, std::string> &rename_map) {
-    // Primera pasada: recolectar los nombres a renombrar (sin tocar bodies
-    // todavia).  Asi cuando la segunda pasada reescribe referencias,
-    // todos los nombres del namespace ya estan en el rename_map.
+    // Recolectar los nombres a renombrar (sin tocar bodies todavia).  Asi
+    // cuando se reescriben las referencias, todos los nombres del namespace
+    // ya estan en el rename_map -- incluidos los de los OTROS bloques que lo
+    // abren, que los metio la vuelta previa de `flatten_namespaces`.
+    collect_renames_(decls, ns_path, rename_map);
+    // Y los namespaces ANIDADOS se aplanan aparte, con su propio prefijo: sus
+    // nombres ya entraron al mapa en la recoleccion.
+    for (auto &d : decls) {
+        if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+        auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
+        mangle_decls_(nd->decls, ns_path + "__" + mangle_ns_path_(nd->name),
+                      rename_map);
+    }
+    mangle_decls_apply_(decls, ns_path, rename_map);
+}
+
+void collect_renames_(
+    std::vector<std::unique_ptr<ast::Node>> &decls, const std::string &ns_path,
+    std::unordered_map<std::string, std::string> &rename_map) {
     for (auto &d : decls) {
         if (!d) continue;
         switch (d->kind) {
@@ -631,12 +673,12 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
             break;
         }
         case ast::NodeKind::NamespaceDecl: {
-            // Pre-recolectar los nombres del namespace anidado con
-            // el prefix combinado.
+            // Los nombres del namespace ANIDADO, con el prefijo combinado:
+            // tambien entran al mapa, porque el padre puede nombrarlos.
             auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
             const std::string nested_path =
                 ns_path + "__" + mangle_ns_path_(nd->name);
-            mangle_decls_(nd->decls, nested_path, rename_map);
+            collect_renames_(nd->decls, nested_path, rename_map);
             // El namespace decl mismo no se renombra; se procesa al
             // aplanar en collect_and_flatten_.
             break;
@@ -644,7 +686,18 @@ void mangle_decls_(std::vector<std::unique_ptr<ast::Node>> &decls,
         default: break;
         }
     }
-    // Segunda pasada: aplicar el rename + reescribir referencias.
+}
+
+/**
+ * @brief Aplica los renombres ya recolectados y reescribe las referencias.
+ *
+ * @param decls      Las declaraciones del bloque.
+ * @param ns_path    Prefijo mangleado del namespace.
+ * @param rename_map Los pares nombre -> mangleado, ya completos.
+ */
+void mangle_decls_apply_(
+    std::vector<std::unique_ptr<ast::Node>> &decls, const std::string &ns_path,
+    std::unordered_map<std::string, std::string> &rename_map) {
     for (auto &d : decls) {
         if (!d) continue;
         switch (d->kind) {
@@ -826,6 +879,21 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
     std::vector<std::unique_ptr<ast::Node>> new_decls;
     new_decls.reserve(mod.decls.size() * 2);
 
+    /* Una vuelta previa que solo RECOLECTA, agrupando por la ruta del
+     * namespace.  Un fichero puede abrir el mismo namespace varias veces, y lo
+     * que declara un bloque tiene que estar en ambito desde los demas: con un
+     * mapa por bloque, el segundo `namespace uno { }` no veia lo del primero.
+     * Ver `collect_renames_`. */
+    std::unordered_map<std::string,
+                       std::unordered_map<std::string, std::string>>
+        renames_by_ns;
+    for (auto &d : mod.decls) {
+        if (!d || d->kind != ast::NodeKind::NamespaceDecl) continue;
+        auto *nd = static_cast<ast::NamespaceDecl *>(d.get());
+        const std::string prefix = mangle_ns_path_(nd->name);
+        collect_renames_(nd->decls, prefix, renames_by_ns[prefix]);
+    }
+
     for (auto &d : mod.decls) {
         if (!d) continue;
         if (d->kind == ast::NodeKind::NamespaceDecl) {
@@ -835,7 +903,10 @@ std::vector<FlattenedNamespace> flatten_namespaces(ast::ModuleNode &mod) {
             // std__collections); el nombre HUMANO (ns.name / local_ns_name)
             // conserva los puntos para la resolucion / acceso qualified.
             const std::string mangled_prefix = mangle_ns_path_(nd->name);
-            std::unordered_map<std::string, std::string> rename_map;
+            // El mapa es el de la RUTA, no el del bloque: ya trae lo que los
+            // demas bloques de este mismo namespace declararon.
+            std::unordered_map<std::string, std::string> &rename_map =
+                renames_by_ns[mangled_prefix];
             mangle_decls_(nd->decls, mangled_prefix, rename_map);
             // Recolectar simbolos publicos + subir decls al top-level.
             FlattenedNamespace ns;

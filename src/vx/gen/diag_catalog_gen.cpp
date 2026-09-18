@@ -92,6 +92,8 @@ const CatEntry kEntries[] = {
     {"VX2083", {"parameter {0}", "el parametro {0}"}},
     {"VX2084", {"the return value", "el valor de retorno"}},
     {"VX2085", {"'find_type' resolves the type at compile time, so its argument has to be a string literal: looking one up by a name computed at run time would need a resolver that walks the table, and there is none", "'find_type' resuelve el tipo al compilar, asi que su argumento tiene que ser un literal de cadena: buscarlo por un nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no lo hay"}},
+    {"VX2086", {"no function '{0}' is declared, and the {1} '{2}' -- the type of the first argument -- has no member '{0}' either: `{0}(x, ...)` is `x.{0}(...)` written the other way", "no hay ninguna funcion '{0}' declarada, y el {1} '{2}' -- el tipo del primer argumento -- tampoco tiene un miembro '{0}': `{0}(x, ...)` es `x.{0}(...)` escrita del otro modo"}},
+    {"VX2087", {"method '{0}' of class '{1}' is private: it is not reachable from outside the class", "el metodo '{0}' de la clase '{1}' es privado: no se alcanza desde fuera de la clase"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -653,7 +655,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 632;
+const int kEntryCount = 634;
 
 } // namespace
 

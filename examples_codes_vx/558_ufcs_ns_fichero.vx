@@ -18,6 +18,8 @@
 //   3. Que las dos homonimas son DOS: con `$` se llega a cada una.
 //   4. Lo del PROPIO namespace se sigue llamando por el punto sin calificar.
 //   5. Y compone con las ranuras por nombre.
+//   6. Y que un SEGUNDO bloque del mismo namespace ve lo que declaro el
+//      primero, sin calificar, aun habiendo dos homonimas en el fichero.
 //
 // Aqui no cabe un `import`: es el mismo fichero, no hay nada que importar.
 // Por eso `$` es la unica forma corta, y es el caso que lo justifica.
@@ -38,6 +40,19 @@ namespace unidades.imperial {
 	public i64 doble(i64 x) => x * 3;
 
 	public i64 pesa(i64 libras, i64 onzas) => libras * 454 + onzas;
+}
+
+// Un SEGUNDO bloque del mismo namespace.  Lo que declaro el primero tiene que
+// estar en ambito desde aqui sin calificar nada -- es el mismo namespace, solo
+// que abierto dos veces --, y con DOS homonimas la suya sigue siendo la suya.
+//
+// No es un adorno: el aplanado recolectaba los nombres POR BLOQUE, asi que el
+// segundo no veia los del primero y `doble(6)` salia como "funcion no
+// declarada" sobre algo escrito unas lineas mas arriba.  Con un solo `doble` no
+// se notaba -- la resolucion por ultimo segmento lo rescataba --, y el fallo
+// solo asomaba al haber dos, que es cuando esa via ya no puede elegir.
+namespace unidades.metrico {
+	public i64 cuadruple(i64 x) => doble(doble(x));
 }
 
 namespace app_ns {
@@ -78,13 +93,18 @@ namespace app_ns {
 		// Y dentro de una interpolacion, que es otra posicion de expresion.
 		println("interp=${6.doble$unidades.imperial()}");
 
+		// El segundo bloque de `unidades.metrico` llamando a lo del primero
+		// sin calificar, con DOS homonimas en el fichero: 6 * 2 * 2 = 24.
+		i64 g = unidades.metrico.cuadruple(6);
+
 		i64 r = 0_i64;
-		if (a == 12) { r = r + 7; }   // la cualificada llega
-		if (b == a) { r = r + 7; }    // y `$` es la misma llamada
-		if (c == 18) { r = r + 7; }   // la homonima es OTRA
-		if (d == 6) { r = r + 7; }    // lo del propio namespace no se califica
-		if (e == 2005) { r = r + 7; } // `$` compone con las ranuras por nombre
-		if (f == 913) { r = r + 7; }  // y llega a la hermana correcta
+		if (a == 12) { r = r + 6; }   // la cualificada llega
+		if (b == a) { r = r + 6; }    // y `$` es la misma llamada
+		if (c == 18) { r = r + 6; }   // la homonima es OTRA
+		if (d == 6) { r = r + 6; }    // lo del propio namespace no se califica
+		if (e == 2005) { r = r + 6; } // `$` compone con las ranuras por nombre
+		if (f == 913) { r = r + 6; }  // y llega a la hermana correcta
+		if (g == 24) { r = r + 6; }   // y el segundo bloque ve lo del primero
 		return (i32)r;                // 42
 	}
 }

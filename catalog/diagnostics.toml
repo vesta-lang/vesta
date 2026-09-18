@@ -3278,6 +3278,25 @@ es = "'{0}', tras el '$', no es un namespace en ambito.  `x.{1}$<namespace>(...)
 en = "'find_type' resolves the type at compile time, so its argument has to be a string literal: looking one up by a name computed at run time would need a resolver that walks the table, and there is none"
 es = "'find_type' resuelve el tipo al compilar, asi que su argumento tiene que ser un literal de cadena: buscarlo por un nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no lo hay"
 
+# El espejo de VX2069 desde la grafia libre: `f(x, a)` es `x.f(a)` escrita del
+# otro modo, asi que cuando no hay ni funcion ni miembro se dicen las dos cosas
+# que se buscaron.  "funcion no declarada" a secas deja fuera justo la mitad que
+# el programador esperaba encontrar.  {0} el nombre escrito, {1} la palabra
+# clave con la que se declaro el tipo -- `struct` o `class`, que NO se traduce:
+# entra como dato --, {2} el tipo del primer argumento.
+["VX2086"]
+en = "no function '{0}' is declared, and the {1} '{2}' -- the type of the first argument -- has no member '{0}' either: `{0}(x, ...)` is `x.{0}(...)` written the other way"
+es = "no hay ninguna funcion '{0}' declarada, y el {1} '{2}' -- el tipo del primer argumento -- tampoco tiene un miembro '{0}': `{0}(x, ...)` es `x.{0}(...)` escrita del otro modo"
+
+# Un metodo `private` no se alcanza desde fuera de su clase, y da igual la
+# grafia: `c.oculto()` y `oculto(c)` son la misma llamada, asi que la segunda
+# se reescribe a la primera y pasa por esta misma comprobacion.  {0} el nombre
+# del metodo, {1} la clase, ESCRITA como se escribe y no como la dejo el
+# aplanado.
+["VX2087"]
+en = "method '{0}' of class '{1}' is private: it is not reachable from outside the class"
+es = "el metodo '{0}' de la clase '{1}' es privado: no se alcanza desde fuera de la clase"
+
 ["VX2083"]
 en = "parameter {0}"
 es = "el parametro {0}"

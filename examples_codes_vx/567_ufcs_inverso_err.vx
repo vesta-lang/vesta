@@ -1,0 +1,64 @@
+namespace ejemplos.ufcs_inverso_err;
+
+// NEGATIVO, la otra mitad de `566_ufcs_inverso.vx`: lo que la direccion
+// inversa NO hace.
+//
+// 1. El CHOQUE de la regla 2.2, visto desde la grafia libre.  El tipo declara
+//    un miembro `suma` y ademas hay una libre `suma(Punto, ...)`: dos
+//    candidatas para la misma llamada.  Ya es un error escrito por el punto
+//    (`550_ufcs_choque.vx`), y tiene que serlo IGUAL escrito del otro modo --
+//    si no, el mismo programa compilaria o no segun como se escriba la
+//    llamada, que es exactamente lo que UFCS promete que no pasa --.
+//
+//    Es el MISMO diagnostico, no uno paralelo: una regla, no dos.
+//
+// 2. Las dos hermanas de la MISMA firma -- que en `566` se eligen nombrando su
+//    ranura -- llamadas POSICIONALMENTE.  Ahi la llamada no dice cual, y falla
+//    igual que fallaria la libre: lo que las separa es el nombre, asi que hay
+//    que usarlo.  Mismo codigo que en una llamada libre, que es la prueba de
+//    que la seleccion es la misma y no una copia.
+//
+// 3. Ni funcion libre ni miembro.  Aqui se buscaron las dos cosas, asi que se
+//    dicen las dos: negar solo la libre deja buscando el metodo, que es lo que
+//    el programador creia estar llamando.
+//
+// 4. Y la VISIBILIDAD, que no se afloja.  Un metodo `private` no se alcanza
+//    desde fuera de su clase, y da igual la grafia: la llamada se REESCRIBE al
+//    punto y la comprueba el camino de siempre, asi que no hay una segunda
+//    puerta por la que colarse.
+//
+// Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
+// el del ejemplo que acompanya, que es su vecino de directorio.
+//
+// Se espera que NO compile: VX2068, VX2077, VX2086 y VX2087.
+
+struct Punto {
+	i64 x;
+	i64 y;
+
+	i64 suma() => this.x + this.y;
+
+	// Las dos de la misma firma, separadas solo por el nombre de sus ranuras.
+	i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
+	i64 pesa(i64 libras, i64 onzas) => libras + onzas * 1000;
+}
+
+class Caja {
+	private i64 v;
+
+	public Caja(i64 v) { this.v = v; }
+
+	private i64 oculto() => this.v;
+}
+
+// 1: la libre que choca con el miembro.  MISMO receptor, asi que no es
+// sobrecarga: son dos candidatas para la misma llamada.
+i64 suma(Punto p) => p.x * 100;
+
+i64 choque(Punto p) => suma(p);
+
+i64 sin_nombrar_la_ranura(Punto p) => pesa(p, 1, 2);
+
+i64 ni_libre_ni_miembro(Punto p) => noexiste(p);
+
+i64 privado(Caja c) => oculto(c);

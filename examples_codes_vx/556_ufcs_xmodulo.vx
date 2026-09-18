@@ -42,6 +42,14 @@ i32 main() {
 	i64 a = 6.doble();   // geo.metrico:  6 * 2 = 12
 	i64 b = 6.doble_i(); // geo.imperial: 6 * 3 = 18
 
+	/**
+	 *                     6.doble$unidades.metrico()
+	 *                     │ │     │
+	 *                     │ │     └─ origen
+	 *                     │ └─────── selector
+	 *                     └───────── receptor
+	 */
+
 	/* Y sin depender del `as`: `$` dice de que namespace es la funcion, en la
 	 * llamada misma.  Va DETRAS del nombre para que lo que sigue al punto sea
 	 * siempre la funcion -- un campo puede llamarse igual que un namespace, y

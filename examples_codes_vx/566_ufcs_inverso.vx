@@ -1,0 +1,246 @@
+namespace ejemplos.ufcs_inverso;
+
+// LA OTRA DIRECCION: `f(x, a)` encuentra el METODO `x.f(a)`.
+//
+// UFCS es bidireccional, y esta es la mitad que faltaba.  `549` demuestra que
+// el punto alcanza una funcion libre; aqui se demuestra lo contrario: escribir
+// la llamada libre alcanza el miembro.  Es la misma regla leida del otro lado,
+// no una segunda -- y por eso lo que se prueba aqui es, una por una, que TODO
+// lo que el punto sabe hacer se sabe hacer tambien escrito asi.
+//
+// La unica asimetria del diseno es el AMBITO, y no esta aqui: en el sentido
+// metodo -> libre hay que decidir que funciones estan en ambito (lo que ESTE
+// fichero importa), mientras que en este sentido no hay nada que decidir --
+// con el valor viene su tipo, y con el tipo vienen sus miembros --.  Por eso
+// un metodo de un tipo de otro namespace se alcanza sin calificar nada: si
+// puedes nombrar el tipo, tienes sus miembros.
+//
+// Lo que se prueba aqui:
+//
+//   1. DOS METODOS DE LA MISMA FIRMA, separados solo por como se llaman sus
+//      ranuras.  Es el caso que mas aprieta: ni la aridad ni los tipos los
+//      distinguen, asi que la llamada tiene que elegir por el NOMBRE -- y
+//      tiene que elegir igual escrita de las dos formas.
+//   2. Y el mismo nombre, la misma firma y las MISMAS ranuras en otro
+//      receptor: eso no choca, porque lo que separa a las candidatas es el
+//      tipo del receptor.
+//   3. Una funcion LIBRE homonima para otro receptor, conviviendo con el
+//      metodo.  Tampoco choca: es sobrecarga por tipo de receptor, que es lo
+//      que permite extender un tipo ajeno sin tocarlo.
+//   4. Struct GENERICO, con y sin argumentos.
+//   5. Metodos anyadidos desde fuera con `impl Tipo { }`.
+//   6. Herencia con `@Override`: el despacho es VIRTUAL, no se congela en el
+//      tipo declarado.
+//   7. Un receptor declarado como INTERFAZ.
+//   8. Receptores que no son una variable: un campo de otro struct, y lo que
+//      devolvio otra llamada inversa.
+//   9. Un metodo VARIADICO y uno `final`.
+//  10. Un tipo de OTRO namespace, cuyos miembros vienen con el.
+//  11. Las dos grafias mezcladas en la misma cadena.
+//  12. DOS TIPOS HOMONIMOS en namespaces distintos, cada uno con un metodo
+//      EXACTAMENTE igual -- mismo nombre, misma firma, mismas ranuras --.  Es
+//      el caso limite: lo unico que los separa es el receptor, y no hay donde
+//      calificar la llamada, porque un metodo no vive en un namespace sino en
+//      su tipo.
+//  13. Y una funcion LIBRE que se llama igual que ese metodo, en el MISMO
+//      namespace: tampoco choca, porque no toma ese receptor.
+//
+// La VISIBILIDAD y la AMBIGUEDAD no se prueban aqui porque son errores: viven
+// en `567_ufcs_inverso_err.vx`, que es su negativo.
+//
+// Compilar y ejecutar:
+//   vm --vesta examples_codes_vx/566_ufcs_inverso.vx -o u
+//   vm --run u.velb --stats
+//
+// Resultado esperado: 42.
+
+// El variadico se recorre como en `481`: la direccion y cuantos son.
+i64 suma_raw(i64* xs, i64 n) {
+	i64 a = 0_i64;
+	for (i64 i = 0_i64; i < n; i = i + 1) {
+		a = a + xs[i];
+	}
+	return a;
+}
+
+namespace medidas {
+	public struct Rect {
+		i64 ancho;
+		i64 alto;
+
+		public i64 area() => this.ancho * this.alto;
+
+		// 1. MISMA firma de tipos, misma aridad.  Lo unico que las separa es
+		// como se llaman sus ranuras, y eso basta: son DOS.
+		public i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
+		public i64 pesa(i64 libras, i64 onzas) => libras + onzas * 1000;
+
+		// 9. variadico
+		public i64 junta(i64... xs) => this.ancho + suma_raw(xs, vacount());
+	}
+}
+
+// 12. DOS TIPOS HOMONIMOS en namespaces distintos, con un metodo EXACTAMENTE
+// igual -- mismo nombre, misma firma, mismas ranuras --.  Lo unico que los
+// separa es de quien son, y con eso basta: el receptor dice a cual se llama.
+//
+// Es el caso limite de la regla: si el tipo del receptor no bastara para
+// elegir, habria que calificar la llamada, y no hay donde -- un metodo no vive
+// en un namespace, vive en su tipo --.
+namespace izq {
+	public struct Caja {
+		i64 v;
+
+		public i64 pesa(i64 k, i64 g) => this.v + k * 1000 + g;
+	}
+
+	// 13. Y una LIBRE que se llama igual que ese metodo, en el MISMO namespace.
+	// No choca, porque no toma un `Caja` de primer parametro: lo que decide si
+	// hay dos candidatas es el receptor, no el nombre.
+	public i64 pesa(i64 kilos, i64 gramos) => kilos + gramos;
+}
+
+namespace der {
+	public struct Caja {
+		i64 v;
+
+		public i64 pesa(i64 k, i64 g) => this.v + k + g * 1000;
+	}
+}
+
+// 2. Mismo nombre, misma firma y las MISMAS ranuras que una de las de `Rect`.
+// No hay nada que resolver: son de receptores distintos.
+struct Bolsa {
+	i64 asa;
+
+	i64 pesa(i64 kilos, i64 gramos) => kilos + gramos;
+}
+
+struct Punto {
+	i64 x;
+	i64 y;
+}
+
+// 5. Metodos anyadidos DESDE FUERA del tipo.
+impl Punto {
+	i64 norma() => this.x + this.y;
+
+	Punto movido(i64 d) {
+		Punto q = {.x = this.x + d, .y = this.y + d};
+		return q;
+	}
+}
+
+// 8. Un receptor que es un campo de otro struct.
+struct Caja {
+	Punto dentro;
+
+	Punto saca() => this.dentro;
+}
+
+// 4. Struct generico.
+struct Celda<T> {
+	T v;
+
+	T saca() => this.v;
+
+	i64 escala(i64 k) => k * 2;
+}
+
+interface Habla {
+	i64 di();
+}
+
+class Animal : Habla {
+	public i64 v;
+
+	public Animal(i64 v) { this.v = v; }
+
+	@Override
+	public i64 di() => this.v;
+
+	// 9. `final`: no se puede sustituir, y el bajado se fia de eso.
+	public final i64 fijo() => this.v + 1;
+}
+
+class Perro : Animal {
+	public Perro(i64 v) { super(v); }
+
+	@Override
+	public i64 di() => this.v * 10;
+}
+
+// 3. Una LIBRE que se llama igual que un metodo pero toma otro receptor.
+i64 di(i64 x) => x + 1;
+
+// 7. El receptor llega declarado como la INTERFAZ, no como la clase.
+i64 por_interfaz(Habla h) => di(h);
+
+i32 main() {
+	medidas.Rect r = {.ancho = 3, .alto = 4};
+	Bolsa      b  = {.asa = 1};
+	Punto      p  = {.x = 1, .y = 2};
+	Caja       k  = {.dentro = {.x = 2, .y = 3}};
+	Celda<i64> c  = {.v = 7};
+	Animal     an = new Perro(4);
+
+	// 10. El tipo es de otro namespace y su metodo se alcanza sin calificar.
+	i64 sup = area(r); // 3 * 4       = 12
+
+	// 1. Las dos hermanas de la misma firma, elegidas por el NOMBRE de la
+	// ranura -- y en cualquier orden, como en una llamada libre.
+	i64 kg = pesa(r, .gramos = 5, .kilos = 1); // 1000 + 5    = 1005
+	i64 lb = pesa(r, .onzas = 5, .libras = 1); // 1 + 5000    = 5001
+
+	// 2. Y la homonima de otro receptor, que no choca con ninguna de las dos.
+	i64 bolsa = pesa(b, .kilos = 2, .gramos = 3); // 2 + 3       = 5
+
+	// 12 + 13. Dos tipos HOMONIMOS de namespaces distintos, con un metodo
+	// exactamente igual: elige el receptor, que es lo unico que los separa.
+	// Y en `izq` hay ademas una libre que se llama igual, que no estorba.
+	izq.Caja ci = {.v = 1};
+	der.Caja cd = {.v = 2};
+	i64 hi = pesa(ci, .k = 1, .g = 2); // 1 + 1000 + 2 = 1003
+	i64 hd = pesa(cd, .k = 1, .g = 2); // 2 + 1 + 2000 = 2003
+	i64 hl = izq.pesa(3, 4);           // 3 + 4        = 7
+
+	// 4. Generico, con y sin argumentos.
+	i64 gen = saca(c) + escala(c, 3); // 7 + 6       = 13
+
+	// 5 + 8. Un `impl`, y encadenado sobre lo que devolvio otra inversa.
+	i64 impl1 = norma(p);             // 1 + 2       = 3
+	i64 impl2 = norma(movido(p, 10)); // 11 + 12     = 23
+
+	// 8. Receptor que es un campo, y receptor que es un retorno.
+	i64 campo   = norma(k.dentro); // 2 + 3       = 5
+	i64 retorno = norma(saca(k));  // 2 + 3       = 5
+
+	// 6. Despacho VIRTUAL: `an` se declaro `Animal` y vale 4, pero es un
+	// `Perro`, asi que gana el `@Override`.  La grafia no congela el tipo.
+	i64 virtual = di(an); // 4 * 10      = 40
+
+	// 3. La misma escritura con un receptor escalar va a la LIBRE.
+	i64 libre = di(1); // 1 + 1       = 2
+
+	// 7. Y por la interfaz, que sigue despachando al `Perro`.
+	i64 iface = por_interfaz(an); // 4 * 10      = 40
+
+	// 9. Variadico y `final`.
+	i64 varia  = junta(r, 1, 2, 3); // 3 + 6       = 9
+	i64 final1 = fijo(an);          // 4 + 1       = 5
+
+	// 11. Las dos grafias en la misma cadena: `norma(p)` es `p.norma()`, y lo
+	// que devuelve sigue por el punto.
+	i64 mixta = movido(p, 1).norma(); // 2 + 3       = 5
+
+	println("sup=${sup} kg=${kg} lb=${lb} bolsa=${bolsa} gen=${gen}");
+	println("impl=${impl1}/${impl2} campo=${campo} retorno=${retorno}");
+	println("virtual=${virtual} libre=${libre} iface=${iface}");
+	println("varia=${varia} final=${final1} mixta=${mixta}");
+	println("homonimos=${hi}/${hd} libre_ns=${hl}");
+
+	i64 total = sup + kg + lb + bolsa + hi + hd + hl + gen + impl1 + impl2 +
+		campo + retorno + virtual + libre + iface + varia + final1 + mixta;
+	// 12+1005+5001+5+1003+2003+7+13+3+23+5+5+40+2+40+9+5+5 = 9186
+	return (i32)(total - 9144);
+}

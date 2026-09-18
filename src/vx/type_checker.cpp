@@ -11755,151 +11755,6 @@ bool TypeChecker::arg_fits_param(ast::Expr *arg, const Type &tp, Type &ta) {
            struct_ptr_upcast_ok(tp, ta);
 }
 
-bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
-                                    const std::string &owner,
-                                    const SourceLoc &loc) {
-    /* Solo el INDICE: la pregunta es si ALGUIEN declaro una libre con ese
-     * nombre para esta cabeza de tipo, no cual de ellas ganaria.  Es una sonda
-     * en una tabla, asi que el metodo cuyo nombre no comparte ninguna libre --
-     * que son casi todos -- no paga por esta regla. */
-    if (ufcs_.find(recv, name, current_ns_prefix_) == nullptr) return false;
-    diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
-    return true;
-}
-
-bool TypeChecker::report_ufcs_cast_hint(const Type &recv,
-                                        const std::string &name,
-                                        const SourceLoc &loc) {
-    // Solo entre escalares: es donde un cast arregla algo de verdad.
-    if (!is_numeric(recv.kind)) return false;
-
-    const ufcs::Candidates *slots = ufcs_.all_named(name);
-    if (slots == nullptr) return false;
-
-    /* De las que se llaman asi, las que piden un escalar DISTINTO: esas son
-     * las que un cast alcanza, y las que hay que nombrar.  Se quedan las
-     * CANDIDATAS, no sus nombres: el nombre se compone una vez al final, y
-     * repetido se descarta comparando el TIPO -- que es su identidad -- y no
-     * como se escribe, que es solo como se ve. */
-    ufcs::Candidates picked;
-    for (uint32_t s : *slots) {
-        if (s >= function_sigs_.size()) continue;
-        const FunctionSig &sig = function_sigs_[s];
-        if (sig.param_types.empty()) continue;
-        const Type &p = sig.param_types[0];
-        if (!is_numeric(p.kind)) continue;
-        /* Y que pida OTRO tipo.  Una que ya toma este receptor no se alcanza
-         * con un cast -- convertirlo a lo que ya es no dice nada --: si esta y
-         * no se encontro, el problema es que no esta en AMBITO, y de eso habla
-         * otro aviso. */
-        if (p == recv) continue;
-        bool seen = false;
-        for (uint32_t q : picked)
-            if (function_sigs_[q].param_types[0] == p) {
-                seen = true;
-                break;
-            }
-        if (!seen) picked.push_back(s);
-    }
-    if (picked.empty()) return false;
-
-    /* Por orden de DECLARACION, que es el de la ranura: el indice es una tabla
-     * hash, asi que sin esto el mismo programa daria el mismo error con los
-     * tipos en otro orden segun donde se compile. */
-    std::sort(picked.begin(), picked.end());
-
-    std::string list =
-        written_type_name(function_sigs_[picked[0]].param_types[0]);
-    const std::string first = list;
-    for (size_t i = 1; i < picked.size(); ++i)
-        list +=
-            ", " + written_type_name(function_sigs_[picked[i]].param_types[0]);
-    diags_.diag(loc, DiagLevel::ERR, "VX2071",
-                {written_type_name(recv), name, list, first});
-    return true;
-}
-
-bool TypeChecker::report_ufcs_ns_hint(const Type &recv, const ast::Expr *base,
-                                      const std::string &name,
-                                      const SourceLoc &loc) {
-    const std::string *declared = nullptr;
-    const ufcs::Candidates *slots = ufcs_.all_named(name, &declared);
-    if (slots == nullptr || declared == nullptr) return false;
-    /* Solo si se declaro con OTRO nombre del que se escribio: eso es que vive
-     * en un namespace, y que la busqueda no lo alcanzo es que no es el de
-     * aqui.  Si coincide, el nombre si estaba en ambito y lo que fallo fue el
-     * receptor, que es lo que cuenta el otro aviso. */
-    if (*declared == name) return false;
-    const auto it = declared_ns_symbols_.find(*declared);
-    if (it == declared_ns_symbols_.end()) return false;
-
-    for (uint32_t s : *slots) {
-        if (s >= function_sigs_.size()) continue;
-        const FunctionSig &sig = function_sigs_[s];
-        if (sig.param_types.empty()) continue;
-        const Type &p = sig.param_types[0];
-        const bool promoted = p.kind == PrimitiveKind::STRING &&
-                              ufcs_promotes_to_string(recv, base);
-        if (!(p == recv) && !promoted) continue;
-        diags_.diag(
-            loc, DiagLevel::ERR, "VX2080",
-            {written_type_name(promoted ? p : recv), name, it->second.first});
-        return true;
-    }
-    return false;
-}
-
-bool TypeChecker::ufcs_promotes_to_string(const Type &recv,
-                                          const ast::Expr *base) {
-    return recv.kind == PrimitiveKind::PTR && base != nullptr &&
-           base->kind == ast::NodeKind::StringLitExpr;
-}
-
-bool TypeChecker::report_ufcs_import_hint(const Type &recv,
-                                          const ast::Expr *base,
-                                          const std::string &name,
-                                          const SourceLoc &loc) {
-    /* Que namespaces traen este nombre se PREGUNTA, no se busca: lo apunto
-     * `register_namespace_symbol` al meterlos, que es donde el dato estaba en
-     * la mano.  Antes se recorrian todos preguntando uno por uno. */
-    const auto brought = ns_by_fn_name_.find(util::intern_name(name));
-    if (brought == ns_by_fn_name_.end()) return false;
-
-    for (uint32_t ni : brought->second) {
-        const ImportedNamespace &ns = imported_namespaces_[ni];
-        const auto it = ns.by_name.find(name);
-        if (it == ns.by_name.end()) continue;
-        /* Y que ALGUNA de las que traen ese nombre tome de verdad este
-         * receptor.  Sin comprobarlo, el mensaje mandaria a importar algo que
-         * tampoco sirve, que es peor que no decir nada.  La cadena son las
-         * sobrecargas de ESE nombre en ESE namespace: una, casi siempre. */
-        for (uint32_t s = it->second; s != ImportedNamespace::kNoHomonym;
-             s = ns.symbols[s].next_homonym) {
-            const ImportedNamespace::Sym &sym = ns.symbols[s];
-            if (sym.kind != 0 || sym.sig.param_types.empty()) continue;
-            const Type &p = sym.sig.param_types[0];
-            /* Con la MISMA promocion que hace la llamada de verdad: un literal
-             * de cadena es un `ptr` que solo se vuelve `string` donde hace
-             * falta, y sin contarla el aviso no saltaba justo con las que
-             * toman una cadena -- que son la mitad de las candidatas. */
-            const bool promoted = p.kind == PrimitiveKind::STRING &&
-                                  ufcs_promotes_to_string(recv, base);
-            if (!(p == recv) && !promoted) continue;
-            /* El receptor se NOMBRA como lo que el usuario escribio: si lo que
-             * encajo fue la cadena, decir `ptr` manda a mirar un tipo que el
-             * no puso en ningun sitio.  Y el namespace, tal como lo escribio
-             * en su `import` -- `std.fileio`, no `fileio` --, que es lo unico
-             * que al teclearlo resuelve. */
-            diags_.diag(
-                loc, DiagLevel::ERR, "VX2079",
-                {written_type_name(promoted ? p : recv), name,
-                 ns.local_name.empty() ? ns.module_name : ns.local_name});
-            return true;
-        }
-    }
-    return false;
-}
-
 std::string TypeChecker::ns_prefix_of(const std::string &mangled) const {
     /* El prefijo sale del NAMESPACE al que el aplanado dijo que pertenece, no
      * de restarle al nombre su parte publica.
@@ -12006,211 +11861,6 @@ bool TypeChecker::normalize_named_args(ast::CallExpr *e, const ParamNames &pn,
     return true;
 }
 
-size_t TypeChecker::ufcs_receiver_hole(ast::CallExpr *e) {
-    size_t found = kUfcsNoHole;
-    for (size_t i = 0; i < e->args.size(); ++i) {
-        const ast::Expr *a = e->args[i].get();
-        if (a == nullptr || a->kind != ast::NodeKind::IdentExpr) continue;
-        if (static_cast<const ast::IdentExpr *>(a)->name != "_") continue;
-        if (found != kUfcsNoHole) {
-            diags_.diag(a->loc, DiagLevel::ERR, "VX2072", {});
-            return kUfcsHoleBad;
-        }
-        found = i;
-    }
-    return found;
-}
-
-bool TypeChecker::try_ufcs_qualified(ast::CallExpr *e,
-                                     ast::FieldAccessExpr *fa) {
-    if (e == nullptr || fa == nullptr || !fa->base) return false;
-    /* Que lo escrito tras el `$` SEA un namespace se comprueba aqui y no al
-     * reescribir: el camino de la llamada cualificada no sabe que hubo un `$`,
-     * asi que dice "nombre no declarado: 'geo'" -- senyalando el primer
-     * segmento y sin nombrar la calificacion, que es lo unico que el usuario
-     * escribio de mas. */
-    if (ns_idx_by_local_name_.find(fa->ns_qualifier) ==
-        ns_idx_by_local_name_.end()) {
-        diags_.diag(fa->loc, DiagLevel::ERR, "VX2081",
-                    {fa->ns_qualifier, fa->field_name});
-        for (auto &a : e->args)
-            (void)check_expr(a.get());
-        e->result_type = Type{PrimitiveKind::COUNT};
-        return true;
-    }
-    const size_t hole = ufcs_receiver_hole(e);
-    if (hole == kUfcsHoleBad) {
-        // Ya se dijo por que; la llamada se da por contestada.
-        e->result_type = Type{PrimitiveKind::COUNT};
-        return true;
-    }
-
-    /* La calificacion se convierte en la llamada cualificada de SIEMPRE:
-     * `6.doble$geo.metrico()` pasa a ser `geo.metrico.doble(6)`, que es el
-     * nodo que el parser habria armado para esa otra grafia.
-     *
-     * Reescribir en vez de resolver aqui es lo que hace que las dos no puedan
-     * divergir: quien resuelve el namespace, elige entre sobrecargas y
-     * comprueba los argumentos es literalmente el mismo codigo, y al bajado no
-     * le llega nada nuevo. */
-    std::unique_ptr<ast::Expr> callee;
-    size_t start = 0;
-    while (start <= fa->ns_qualifier.size()) {
-        const size_t dot = fa->ns_qualifier.find('.', start);
-        const size_t end =
-            (dot == std::string::npos) ? fa->ns_qualifier.size() : dot;
-        std::string segment = fa->ns_qualifier.substr(start, end - start);
-        if (!callee) {
-            auto id = std::make_unique<ast::IdentExpr>();
-            id->loc = fa->loc;
-            id->name = std::move(segment);
-            callee = std::move(id);
-        } else {
-            auto step = std::make_unique<ast::FieldAccessExpr>();
-            step->loc = fa->loc;
-            step->base = std::move(callee);
-            step->field_name = std::move(segment);
-            callee = std::move(step);
-        }
-        if (dot == std::string::npos) break;
-        start = dot + 1;
-    }
-    auto target = std::make_unique<ast::FieldAccessExpr>();
-    target->loc = fa->loc;
-    target->base = std::move(callee);
-    target->field_name = fa->field_name;
-
-    std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
-    e->callee = std::move(target);
-    /* Y el receptor a su sitio, con la misma regla que sin calificar: delante
-     * por defecto, y en el hueco si se escribio uno. */
-    if (hole == kUfcsNoHole) {
-        e->args.insert(e->args.begin(), std::move(receiver));
-        if (!e->arg_names.empty()) e->arg_names.insert_at(0, PooledName());
-    } else {
-        e->args[hole] = std::move(receiver);
-    }
-    e->result_type = check_call(e);
-    return true;
-}
-
-bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
-                                const Type &recv) {
-    if (e == nullptr || fa == nullptr || !fa->base) return false;
-    /* QUE candidatas hay lo dice el indice de UFCS, que las correlaciono al
-     * DECLARARLAS por la cabeza del tipo de su primer parametro.  Aqui no se
-     * recorre nada: dos punteros ya internados y una sonda. */
-    const size_t hole_pre = ufcs_receiver_hole(e);
-    const std::string *chosen = nullptr; // con QUE nombre se declaro
-    /* Con hueco el receptor no cae en el primer parametro, asi que la pregunta
-     * es otra: "cual tiene ALGUN parametro que lo admita".  Sin hueco sigue
-     * siendo "cual lo toma de primero", que es lo que la regla 2.2 mira. */
-    const ufcs::Candidates *cand_slots =
-        (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
-            ? ufcs_.find_any(recv, fa->field_name, current_ns_prefix_, &chosen)
-            : ufcs_.find(recv, fa->field_name, current_ns_prefix_, &chosen);
-    /* Un literal de cadena es un `ptr` a datos estaticos y solo se PROMUEVE a
-     * `string` donde hace falta -- por eso `grita("hola")` compila --, asi que
-     * si no hay nada para el puntero se pregunta tambien por la cadena.  Sin
-     * esto `"hola".grita()` no encontraria lo que `grita("hola")` si encuentra.
-     * Se prueba en este orden porque el puntero es lo que el literal ES y la
-     * cadena lo que puede llegar a ser. */
-    if (cand_slots == nullptr && ufcs_promotes_to_string(recv, fa->base.get()))
-        cand_slots =
-            (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
-                ? ufcs_.find_any(Type{PrimitiveKind::STRING}, fa->field_name,
-                                 current_ns_prefix_, &chosen)
-                : ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name,
-                             current_ns_prefix_, &chosen);
-    if (cand_slots == nullptr || cand_slots->empty()) return false;
-
-    /* DONDE cae el receptor.  Por defecto delante -- `x.f(a)` es `f(x, a)` --,
-     * y en el hueco si se escribio uno: `x.f(a, _)` es `f(a, x)`.  Eso es lo
-     * que permite llamar por el punto a una firma cuyo primer parametro no es
-     * el sujeto (`memcpy(dst, src, n)`) sin retorcer la firma, que era el
-     * precio que la seccion 5 del plan daba por inevitable.
-     *
-     * Es una REORDENACION, y ahi acaba: a partir de aqui todo es posicional
-     * como siempre, asi que la seleccion de sobrecarga no se entera.  Tocarla
-     * puede cambiar en silencio a que cuerpo va un programa ya escrito. */
-    const size_t hole = hole_pre;
-    if (hole == kUfcsHoleBad) {
-        /* Ya se dijo por que, asi que la llamada se da por CONTESTADA: dejarla
-         * seguir la manda al camino de "no existe tal metodo", que sugiere un
-         * cast para un problema que no es ese. */
-        e->result_type = Type{PrimitiveKind::COUNT};
-        return true;
-    }
-    const size_t at = (hole == kUfcsNoHole) ? 0 : hole;
-
-    std::vector<Type> arg_types;
-    arg_types.reserve(e->args.size() + 1);
-    for (size_t i = 0; i < e->args.size(); ++i) {
-        if (i == at) arg_types.push_back(recv);
-        if (i == hole) continue; // el hueco NO es un argumento suyo
-        arg_types.push_back(check_expr(e->args[i].get()));
-    }
-    if (at >= e->args.size()) arg_types.push_back(recv);
-
-    /* Los nombres, alineados con esa lista.  Con hueco ya lo estan -- el
-     * receptor ocupa el sitio del `_`, y `.b = _` dice que va a `b` --; sin
-     * hueco el receptor se mete DELANTE, asi que delante va tambien su nombre
-     * vacio.  Descuadrar los dos vectores manda cada nombre a la ranura de al
-     * lado, que es un error silencioso de los caros. */
-    ParamNames names_for_select;
-    if (!e->arg_names.empty()) {
-        if (hole == kUfcsNoHole) names_for_select.push_back(PooledName());
-        for (const PooledName &nm : e->arg_names)
-            names_for_select.push_back(nm);
-    }
-
-    /* Y CUAL de ellas se elige con la MISMA regla que una llamada libre --
-     * exacta antes que compatible --, no con una propia: si aqui se decidiera
-     * de otra manera, `x.f(a)` y `f(x, a)` dejarian de ser la misma llamada,
-     * que es toda la propuesta. */
-    util::SmallVector<overload::Candidate, 4> cands;
-    for (uint32_t idx : *cand_slots) {
-        if (idx >= function_sigs_.size()) continue;
-        const FunctionSig &sig = function_sigs_[idx];
-        overload::Candidate c;
-        c.params = &sig.param_types;
-        c.param_names = &sig.param_names;
-        c.needs_names = sig.overload_needs_names;
-        c.slot = idx;
-        c.by_ref_mask = sig.param_by_ref_mask;
-        if (sig.is_raw_variadic)
-            c.raw_variadic = true;
-        else if (sig.is_variadic)
-            c.variadic_elem = &sig.variadic_elem;
-        cands.push_back(c);
-    }
-    const uint32_t pick =
-        overload::select(cands.data(), cands.size(), arg_types,
-                         &overload_accepts, this, &names_for_select);
-    if (pick == overload::kNoPick) return false;
-
-    /* Encontrada: el nodo se convierte en la OTRA grafia y lo comprueba el
-     * camino de siempre.  Reescribir en vez de resolver aqui es lo que hace que
-     * las dos formas no puedan divergir -- comprobacion de argumentos,
-     * prestamos y la firma elegida son literalmente el mismo codigo -- y que al
-     * bajado, al JIT y al nativo no les llegue nada nuevo.  Es la operacion
-     * inversa de la que ya hace `__call__`, unas lineas mas abajo. */
-    auto id = std::make_unique<ast::IdentExpr>();
-    id->loc = fa->loc;
-    id->name = *chosen;
-    std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
-    e->callee = std::move(id);
-    if (hole == kUfcsNoHole) {
-        e->args.insert(e->args.begin(), std::move(receiver));
-        // Y su nombre vacio con el, para que los dos sigan cuadrando.
-        if (!e->arg_names.empty()) e->arg_names.insert_at(0, PooledName());
-    } else {
-        e->args[hole] = std::move(receiver); // el hueco ERA su sitio
-    }
-    e->result_type = check_call(e);
-    return true;
-}
-
 /**
  * @brief Dice por que no hay tal metodo, y comprueba los argumentos igual.
  *
@@ -12272,29 +11922,6 @@ Type TypeChecker::report_method_missing(
     for (auto &a : e->args)
         (void)check_expr(a.get());
     return Type{};
-}
-
-/**
- * @brief Busca un metodo de INSTANCIA por nombre.
- *
- * Se salta los constructores, y no es un detalle: viven en la misma lista que
- * los metodos, asi que buscar solo por nombre deja llamar al constructor como
- * si fuera un metodo -- `s.S(5)` --, que no es lo que nadie quiere decir.  La
- * copia de las clases ya lo hacia y la de los structs no, con lo que la misma
- * escritura se rechazaba en una y se colaba en la otra.
- *
- * @param metodos La lista del layout.
- * @param nombre  El que se busca.
- * @return El metodo, o nulo.
- */
-static const ClassMethodInfo *
-find_instance_method(const std::vector<ClassMethodInfo> &metodos,
-                     const std::string &nombre) {
-    for (const auto &m : metodos) {
-        if (m.is_constructor) continue;
-        if (m.name == nombre) return &m;
-    }
-    return nullptr;
 }
 
 bool TypeChecker::overload_accepts(void *ctx, const Type &param,
@@ -15774,7 +15401,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             }
             /* Tenerlo no cierra la pregunta: si ademas hay una libre que toma
              * este receptor, hay dos candidatos y no se elige en silencio. */
-            if (report_ufcs_clash(bt, fa->field_name, bt.struct_name, e->loc))
+            if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt),
+                                  e->loc))
                 return Type{PrimitiveKind::COUNT}; // ya se dijo que fallaba
             /* Que el nombre este sobrecargado lo dice el propio candidato: una
              * rama sobre un bit que ya se tiene en la mano, sin tabla. */
@@ -15830,7 +15458,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                          "class", funcptr_field_call);
         }
         // Y como en el struct: tenerlo no cierra la pregunta.
-        if (report_ufcs_clash(bt, fa->field_name, bt.struct_name, e->loc))
+        if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt),
+                              e->loc))
             return Type{PrimitiveKind::COUNT}; // ya se dijo que fallaba
         // Igual que en el struct: la marca viaja en el candidato.
         if (mtd->is_overloaded)
@@ -15852,11 +15481,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 if (mm && !mm->is_constructor && mm->name == fa->field_name) {
                     if (mm->access == 1 /*private*/
                         && current_class_ != bt.struct_name) {
-                        diags_.error(
-                            e->loc,
-                            "metodo privado '" + fa->field_name +
-                                "' de la clase '" + bt.struct_name +
-                                "' no es accesible desde fuera de la clase");
+                        diags_.diag(e->loc, DiagLevel::ERR, "VX2087",
+                                    {fa->field_name, written_type_name(bt)});
                     }
                     break;
                 }
@@ -18633,6 +18259,14 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 }
             }
         }
+        /* Antes de negarlo: UFCS es BIDIRECCIONAL, asi que `f(x, a)` puede ser
+         * `x.f(a)` escrita del otro modo.  Si el tipo del primer argumento
+         * declara un miembro con este nombre, esa ES la llamada. */
+        if (try_ufcs_reverse(e, id)) return e->result_type;
+        /* Y si tampoco lo declara, se dicen las DOS cosas que se buscaron, no
+         * solo la libre: es el espejo de VX2069 desde esta grafia. */
+        if (report_ufcs_reverse_missing(e, id))
+            return Type{PrimitiveKind::COUNT};
         diags_.error(e->loc, "funcion no declarada: '" + id->name + "'");
         for (auto &a : e->args)
             (void)check_expr(a.get());
@@ -18767,6 +18401,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
             (void)check_expr(a.get());
         return Type{};
     }
+    /* La regla 2.2 desde ESTA grafia: que la libre exista no cierra la
+     * pregunta si el tipo del primer argumento declara un miembro con el mismo
+     * nombre.  Es el choque que `x.f(a)` ya rechaza, y tiene que fallar igual
+     * escrito del otro modo -- si no, el mismo programa compila o no segun
+     * como se escriba la llamada. */
+    if (report_ufcs_reverse_clash(e, id, s)) return Type{PrimitiveKind::COUNT};
     /* SOBRECARGA: con varias funciones del mismo nombre, quien decide son los
      * argumentos.
      *
@@ -18832,6 +18472,16 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         }
     }
     const FunctionSig &sig = function_sigs_[chosen_sig];
+
+    /* La libre esta declarada, pero puede que no sea de lo que habla esta
+     * llamada: `f(x, a)` es tambien `x.f(a)`, y un miembro con ese nombre en el
+     * tipo de `x` es otra candidata.
+     *
+     * Va ANTES de colocar los argumentos por nombre, y no despues: con un
+     * receptor de mas, las ranuras de la libre no dan para todos y lo que
+     * salia era "dos argumentos caen en la ranura 'gramos'" -- una queja sobre
+     * la firma equivocada, que manda a mirar donde no es. */
+    if (try_ufcs_reverse_over_free(e, id, sig)) return e->result_type;
 
     /* Los nombres ya cumplieron: sirvieron para elegir, y a partir de aqui la
      * llamada es POSICIONAL como cualquier otra.  Se hace en el UNICO sitio

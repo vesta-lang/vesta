@@ -656,6 +656,35 @@ inline const ClassMethodInfo *find_method(const Layout &lay,
 }
 
 /**
+ * @brief Busca un metodo de INSTANCIA por nombre.
+ *
+ * Se salta los constructores, y no es un detalle: viven en la misma lista que
+ * los metodos, asi que buscar solo por nombre deja llamar al constructor como
+ * si fuera un metodo -- `s.S(5)` --, que no es lo que nadie quiere decir.  La
+ * copia de las clases ya lo hacia y la de los structs no, con lo que la misma
+ * escritura se rechazaba en una y se colaba en la otra.
+ *
+ * Vive en la cabecera porque lo necesitan DOS unidades de traduccion -- el
+ * despacho de metodos y la resolucion de la llamada uniforme --, y las dos
+ * tienen que buscar EXACTAMENTE lo mismo: si una de ellas encontrara un
+ * metodo que la otra no, `x.f(a)` y `f(x, a)` dejarian de ser la misma
+ * llamada.
+ *
+ * @param metodos La lista del layout.
+ * @param nombre  El que se busca.
+ * @return El metodo, o nulo.
+ */
+inline const ClassMethodInfo *
+find_instance_method(const std::vector<ClassMethodInfo> &metodos,
+                     const std::string &nombre) noexcept {
+    for (const ClassMethodInfo &m : metodos) {
+        if (m.is_constructor) continue;
+        if (m.name == nombre) return &m;
+    }
+    return nullptr;
+}
+
+/**
  * @enum NewHelperKind
  * @brief De donde sale la memoria del objeto que construye un ayudante
  * `__new_`.
@@ -2209,6 +2238,109 @@ class TypeChecker {
      */
     bool try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                        const Type &recv);
+
+    /**
+     * @brief La otra direccion: `f(x, a)` encuentra el miembro `x.f(a)`.
+     *
+     * UFCS es BIDIRECCIONAL, asi que antes de decir que no hay ninguna funcion
+     * con ese nombre se mira el tipo del PRIMER argumento: si declara un
+     * miembro que se llama asi, esa es la llamada.
+     *
+     * Aqui no hay pregunta de AMBITO -- la que si existe en el sentido
+     * contrario --: con el valor viene su tipo, y con el tipo vienen sus
+     * miembros.  Y como en el otro sentido, el nodo se REESCRIBE a la grafia
+     * del punto y lo comprueba el camino de siempre, asi que la eleccion entre
+     * sobrecargas, los argumentos por nombre y la visibilidad son literalmente
+     * el mismo codigo que atiende a `x.f(a)`.
+     *
+     * @param e  La llamada.
+     * @param id El nombre que se escribio delante del parentesis.
+     * @return true si la reescribio y la comprobo; false si no habia miembro.
+     */
+    bool try_ufcs_reverse(ast::CallExpr *e, const ast::IdentExpr *id);
+
+    /**
+     * @brief Ni funcion libre ni miembro: se dice que se busco lo uno y lo
+     * otro.
+     *
+     * El espejo de @c VX2069 desde la grafia libre.  "funcion no declarada" a
+     * secas deja fuera la mitad de la respuesta cuando el primer argumento es
+     * un struct o una clase, que es justo cuando el programador esperaba que
+     * el miembro apareciera.
+     *
+     * @param e  La llamada.
+     * @param id El nombre que se escribio.
+     * @return true si se reporto; false si no habia receptor que mirar.
+     */
+    bool report_ufcs_reverse_missing(ast::CallExpr *e,
+                                     const ast::IdentExpr *id);
+
+    /**
+     * @brief La regla 2.2 vista desde la grafia libre.
+     *
+     * `f(x, a)` con miembro `f` en el tipo de `x` Y una libre que lo toma de
+     * primer parametro es el MISMO choque que `x.f(a)` ya rechaza.  Dejarlo
+     * pasar por aqui seria tener dos reglas para una sola cosa, y que el
+     * programa compilara o no segun como se escriba la llamada.
+     *
+     * Cuelga de una rama sobre la firma que ya se tenia -- solo mira el
+     * receptor si el primer parametro de la libre es un struct o una clase --,
+     * asi que una llamada corriente no paga nada.
+     *
+     * @param e  La llamada.
+     * @param id El nombre que se escribio.
+     * @param s  El simbolo al que resolvio.
+     * @return true si se reporto el choque.
+     */
+    bool report_ufcs_reverse_clash(ast::CallExpr *e, const ast::IdentExpr *id,
+                                   const Symbol *s);
+
+    /**
+     * @brief La libre que se encontro no sirve: mirar si se pedia el miembro.
+     *
+     * Hay un nombre libre declarado, pero su firma no admite esta llamada --
+     * otra aridad, o un primer parametro que un receptor con miembros no puede
+     * ocupar --.  Eso no es un error todavia: `f(x, a)` puede ser `x.f(a)`, y
+     * una libre `f` que habla de otra cosa no tapa al miembro.  Es la misma
+     * sobrecarga por tipo de receptor que la regla 2.2 permite cuando los
+     * receptores son distintos, vista desde esta grafia.
+     *
+     * @par Por que aqui y no antes de comprobar los argumentos
+     * Contestarlo exige el tipo del primer argumento, y comprobarlo es recorrer
+     * su subexpresion entera.  Preguntado antes, TODAS las llamadas libres del
+     * programa lo pagarian para contestar que no en casi todas; preguntado
+     * aqui, solo lo pagan las que iban a dar un error de todas formas.
+     *
+     * Las dos guardas que deciden si se pregunta -- la aridad y la FAMILIA del
+     * primer parametro -- son comparaciones sobre datos que ya estan en la
+     * mano: no se comprueba ni un argumento para descartarlo.
+     *
+     * @param e   La llamada.
+     * @param id  El nombre que se escribio.
+     * @param sig La firma que se eligio y que no sirve.
+     * @return true si la reescribio al miembro y la comprobo.
+     */
+    bool try_ufcs_reverse_over_free(ast::CallExpr *e, const ast::IdentExpr *id,
+                                    const FunctionSig &sig);
+
+    /**
+     * @brief Los metodos que declara el tipo de un receptor, si declara alguno.
+     *
+     * Un solo sitio decide que cuenta como receptor con miembros -- struct,
+     * clase, y el puntero a struct que el punto ya auto-desreferencia --, para
+     * que las dos grafias no discrepen en algo tan basico como sobre QUE se
+     * busca.
+     *
+     * @param recv    El tipo tal cual llego.
+     * @param norm    [out] El tipo ya normalizado (sin el puntero).
+     * @param owner   [out] Como nombrar al duenyo en un diagnostico.
+     * @param keyword [out] `struct` o `class`, para el mensaje.
+     * @return Sus metodos, o nullptr si no es un receptor con miembros.
+     */
+    const std::vector<ClassMethodInfo> *receiver_methods(const Type &recv,
+                                                         Type *norm,
+                                                         std::string *owner,
+                                                         const char **keyword);
 
     /// No se escribio ningun `_`: el receptor va delante, como siempre.
     static constexpr size_t kUfcsNoHole = static_cast<size_t>(-1);
