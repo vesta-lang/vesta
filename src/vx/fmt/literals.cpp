@@ -434,7 +434,7 @@ std::string canonical_literal(std::string_view text) {
  */
 std::vector<Rewrite> add_type_suffixes(std::vector<Piece> &pieces,
                                        std::vector<std::string> &textos) {
-    std::vector<Rewrite> hechas;
+    std::vector<Rewrite> done;
     /* Dentro de un bloque `asm` no se toca NADA.
      *
      * Ahi los numeros son operandos de instrucciones de la maquina, no valores
@@ -505,9 +505,9 @@ std::vector<Rewrite> add_type_suffixes(std::vector<Piece> &pieces,
         nuevo += pieces[i - 2].text;
         textos.push_back(std::move(nuevo));
         lit.text = textos.back();
-        hechas.push_back({RewriteKind::AddTypeSuffix, lit.offset});
+        done.push_back({RewriteKind::AddTypeSuffix, lit.offset});
     }
-    return hechas;
+    return done;
 }
 
 } // namespace fmt

@@ -175,7 +175,7 @@ size_t single_return_close(const std::vector<Piece> &pieces, size_t lbrace) {
 } // namespace
 
 std::vector<ExprBody> apply_expression_bodies(std::vector<Piece> &pieces) {
-    std::vector<ExprBody> hechas;
+    std::vector<ExprBody> done;
     for (size_t i = 0; i + 3 < pieces.size(); ++i) {
         const Piece &brace = pieces[i];
         if (brace.drop || brace.in_string || brace.verbatim) continue;
@@ -212,18 +212,18 @@ std::vector<ExprBody> apply_expression_bodies(std::vector<Piece> &pieces) {
         pieces[i + 1].text = "=>";
         pieces[i + 1].glued = "=>";
         pieces[i + 1].trivia = std::string_view();
-        hechas.push_back(body);
+        done.push_back(body);
         i = close;
     }
-    return hechas;
+    return done;
 }
 
 std::vector<Rewrite> keep_fitting_expression_bodies(
     std::vector<Piece> &pieces, const std::vector<ExprBody> &bodies,
     const std::vector<Role> &roles, const Layout &measured,
     const FormatOptions &options) {
-    std::vector<Rewrite> hechas;
-    hechas.reserve(bodies.size() * 2);
+    std::vector<Rewrite> done;
+    done.reserve(bodies.size() * 2);
     /* Las llaves de los cuerpos que se quedan NO basta con marcarlas: hay que
      * QUITARLAS del vector.
      *
@@ -277,9 +277,9 @@ std::vector<Rewrite> keep_fitting_expression_bodies(
             end += display_width(pieces[k].text, options.tab_width);
         }
         if (end <= options.width) {
-            hechas.push_back(
+            done.push_back(
                 {RewriteKind::ExpressionBody, pieces[b.open].offset});
-            hechas.push_back(
+            done.push_back(
                 {RewriteKind::ExpressionBody, pieces[b.close].offset});
             gone[b.open] = true;
             gone[b.close] = true;
@@ -301,11 +301,11 @@ std::vector<Rewrite> keep_fitting_expression_bodies(
             if (!gone[k]) kept.push_back(pieces[k]);
         pieces = std::move(kept);
     }
-    return hechas;
+    return done;
 }
 
 std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
-    std::vector<Rewrite> hechas;
+    std::vector<Rewrite> done;
     /* Los papeles dicen cual de los dos `>` cierra un generico y cual compara.
      * Sin ellos habria que fiarse de que no hubiera un espacio por medio, que
      * es justo el caso que `R29` viene a arreglar. */
@@ -326,7 +326,7 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
             kind_of(pieces[i - 2]) == TokenKind::AT) {
             pieces[i].drop = true;
             pieces[i + 1].drop = true;
-            hechas.push_back({RewriteKind::DropEmptyParens, pieces[i].offset});
+            done.push_back({RewriteKind::DropEmptyParens, pieces[i].offset});
             ++i;
             continue;
         }
@@ -342,7 +342,7 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
             roles[i] == Role::TightLeft && roles[i + 1] == Role::TightLeft) {
             pieces[i].glued = ">>";
             pieces[i + 1].drop = true;
-            hechas.push_back({RewriteKind::GlueGenericClose, pieces[i].offset});
+            done.push_back({RewriteKind::GlueGenericClose, pieces[i].offset});
             ++i;
             continue;
         }
@@ -361,12 +361,12 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces) {
                 // que las precede pertenece a la linea, no a la palabra.
                 std::swap(pieces[i].kind, pieces[i + 1].kind);
                 std::swap(pieces[i].text, pieces[i + 1].text);
-                hechas.push_back(
+                done.push_back(
                     {RewriteKind::SwapModifiers, pieces[i].offset});
             }
         }
     }
-    return hechas;
+    return done;
 }
 
 } // namespace fmt
