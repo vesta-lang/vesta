@@ -134,13 +134,48 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
         return false;
 
     int depth = 0;
+    /* Una COTA (`<T: Numerico>`, `<T: A + B>`) tambien va dentro de los
+     * angulos, y sus dos tokens -- el `:` y el `+` -- no caben en un tipo.  Sin
+     * tratarlos aqui, una cabeza con cota no se reconocia y salia formateada
+     * `struct Caja < T : Num >`, con los angulos separados como si compararan.
+     *
+     * No basta con admitirlos en @c fits_in_type: eso haria que
+     * `a < b ? c : d > e` se leyera como un generico.  Lo que distingue a una
+     * cota es DONDE esta: justo detras del primer y unico identificador de su
+     * grupo, que es lo que aqui se cuenta.  Tras ella solo caben nombres de
+     * concepto, sus puntos y los `+` que los suman. */
+    unsigned in_group = 0; // tokens vistos desde el ultimo `<` o `,`
+    bool after_colon = false;
     // Un tope corto: una lista de tipos larguisima no existe, y sin el una
     // comparacion haria recorrer el fichero entero por cada `<`.
     const size_t limit = open + 64 < pieces.size() ? open + 64 : pieces.size();
     for (size_t i = open; i < limit; ++i) {
         const TokenKind k = kind_of(pieces[i]);
+        if (depth == 1 && i > open) {
+            if (k == TokenKind::COMMA) {
+                in_group = 0;
+                after_colon = false;
+                continue;
+            }
+            if (k == TokenKind::COLON && in_group == 1 &&
+                kind_of(pieces[i - 1]) == TokenKind::IDENTIFIER) {
+                after_colon = true;
+                ++in_group;
+                continue;
+            }
+            if (after_colon && (k == TokenKind::PLUS || k == TokenKind::DOT ||
+                                k == TokenKind::IDENTIFIER)) {
+                ++in_group;
+                continue;
+            }
+            ++in_group;
+        }
         if (k == TokenKind::LT) {
             ++depth;
+            if (depth == 1) {
+                in_group = 0;
+                after_colon = false;
+            }
             continue;
         }
         if (k == TokenKind::GT) {
@@ -339,7 +374,12 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
     int paren_depth = 0;      // parentesis abiertos
     bool after_case = false;  // se vio un `case` sin cerrar
     bool after_where = false; // se vio un `where` sin cerrar
-    bool in_for = false;      // dentro de los parentesis de un `for`
+    /* Hasta donde llegan unos angulos que son de TIPO.  Lo que hay dentro no
+     * son operadores: el `:` de `<T: Numerico>` es el mismo de `where T:
+     * Numerico` -- una cota -- y va pegado al nombre, no separado como el de
+     * la herencia. */
+    size_t type_angle_until = 0;
+    bool in_for = false;          // dentro de los parentesis de un `for`
     bool stmt_start_prev = false; // el token anterior abria sentencia
     int for_paren = -1;           // profundidad a la que abrio ese `for`
 
@@ -648,6 +688,7 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                 roles[close] = Role::TightLeft;
                 // Lo de dentro es un tipo: sus `*` van pegados.
                 if (close > decl_until) decl_until = close;
+                if (close > type_angle_until) type_angle_until = close;
             } else if (roles[i] == Role::Plain) {
                 roles[i] = Role::Binary; // `a < b`
             }
@@ -696,6 +737,11 @@ std::vector<Role> annotate_roles(const std::vector<Piece> &pieces) {
                  * unico que hace falta: la cuenta se reinicia en cada coma. */
                 roles[i] = label_seen ? Role::TightBoth : Role::TightLeft;
                 label_seen = true;
+            } else if (i < type_angle_until) {
+                /* Dentro de unos angulos de tipo solo puede ser una COTA
+                 * (`<T: Numerico>`), que es la misma que la clausula `where` y
+                 * se escribe igual: pegada al nombre. */
+                roles[i] = Role::TightLeft;
             } else if (ternary_open > 0) {
                 roles[i] = Role::Binary; // cierra un ternario
                 --ternary_open;

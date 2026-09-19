@@ -9,7 +9,7 @@ struct Par {
 	i64 suma() => this.a + this.b;
 }
 
-i64 aplica < T : Sumable > (T v) => v.suma();
+i64 aplica<T: Sumable>(T v) => v.suma();
 
 i64 main() {
 	Par p = {.a = 40, .b = 2 };

@@ -13,7 +13,7 @@ class Mala {
 	bool area() => true; // nombre OK, retorno bool != i64
 }
 
-i64 medir < T : Figura > (T f) => 0;
+i64 medir<T: Figura>(T f) => 0;
 
 i32 main() {
 	Mala m = new Mala(1);

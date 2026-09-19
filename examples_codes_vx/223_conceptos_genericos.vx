@@ -34,7 +34,7 @@ concept CabeEnReg<T> {
 concept Dibujable { i64 area(); }
 
 // ---- 1 + 6: bound inline con concepto built-in en funcion libre ----------
-T maximo < T : Comparable > (T a, T b) {
+T maximo<T: Comparable>(T a, T b) {
 	if (a > b) { return a; }
 	return b;
 }
@@ -49,7 +49,7 @@ T elegir<T>(T a, T b) where T: Ordenable {
 }
 
 // ---- 7: bound inline en STRUCT generico ----------------------------------
-struct Caja < T : CabeEnReg > {
+struct Caja<T: CabeEnReg> {
 	T                v;
 	T leer() => this.v;
 }
@@ -61,12 +61,12 @@ class Cuadrado {
 	i64 area() => this.lado * this.lado;
 }
 
-i64 pintar < T : Dibujable > (T fig) => fig.area();
+i64 pintar<T: Dibujable>(T fig) => fig.area();
 
 // ---- 7: bound en METODO generico -----------------------------------------
 struct Acumulador {
-	i64                                                 base;
-	U combinar < U : Numeric > (U x) => (U) this.base + x;
+	i64                                            base;
+	U combinar<U: Numeric>(U x) => (U) this.base + x;
 }
 
 i32 main() {

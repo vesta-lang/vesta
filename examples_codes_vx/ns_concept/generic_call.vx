@@ -2,9 +2,9 @@
 // y con type-args (explicitos o inferidos) + bound a un concepto del namespace.
 namespace mat;
 concept Numerico<T> = is_numeric<T>();
-public T doble < T : mat.Numerico > (T x) => x + x;
-public T id<T>(T x) =>                           x;
-public K primero<K, V>(K a, V b) =>              a;
+public T doble<T: mat.Numerico>(T x) => x + x;
+public T id<T>(T x) =>                      x;
+public K primero<K, V>(K a, V b) =>         a;
 i64 main() {
 	i64 a = mat.doble<i64>(20);          // 40 (explicito + bound)
 	i64 b = mat.id(1);                   // 1  (inferido)

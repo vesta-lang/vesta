@@ -25,12 +25,12 @@ class Cuadrado {
 }
 
 // Bound estructural (firma) en funcion.
-i64 medir < T : Figura > (T f) => f.area();
+i64 medir<T: Figura>(T f) => f.area();
 
 struct Calc {
 	i64 base;
 	// bound inline en metodo generico
-	U sumar < U : Numeric > (U x) => (U) this.base + x;
+	U sumar<U: Numeric>(U x) => (U) this.base + x;
 	// where con concepto de usuario
 	U mult<U>(U x) where U: MiNum => (U) this.base * x;
 	// multiples bounds en metodo

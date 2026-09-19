@@ -576,7 +576,7 @@ comptime string VX_ATOMIC_ANCHO =
 	"La hay para tipos de 1, 2, 4 u 8 bytes. "                 +
 	"Para 16 bytes usa dos celdas o protege el valor con 'synchronized'.";
 
-struct atomic < T : Scalar > {
+struct atomic<T: Scalar> {
 	T cell;
 
 	// Los valores cruzan a la primitiva con `bitcast`, no con el cast `(i64) v`:
