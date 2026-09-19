@@ -1,0 +1,89 @@
+namespace ejemplos.ufcs_vista_y_comptime;
+
+// Lo que le faltaba al RECEPTOR para estar completo: una VISTA de overlay y un
+// valor de COMPTIME.  Con esto, `x.f(a)` alcanza lo mismo que `f(x, a)` sea lo
+// que sea `x`.
+//
+// Una vista no es un struct que posees: es una vista tipada sobre memoria
+// AJENA, y por dentro es un puntero de ocho bytes.  Eso hace que pasarla a una
+// libre no copie los datos ni deje de verlos -- se pasa la vista, no lo mirado
+// --, asi que escribir a traves de ella modifica el buffer de verdad.  Se
+// comprueba aqui, porque es la diferencia entre una vista y una copia.
+//
+// Y una sub-vista se lleva consigo a su CONTENEDOR: el campo `apodo` de abajo
+// resuelve su direccion con `parent<Padre>()`, y da lo mismo calcularla dentro
+// del contenedor que en una funcion libre que recibe la sub-vista suelta.  Es
+// lo que hace posible el parser de ELF -- el nombre de una seccion vive en una
+// tabla del ENCABEZADO, no en la seccion --, y hasta ahora `parent<T>()` no se
+// podia usar dentro de un `namespace`: las referencias del resolver no pasaban
+// por el aplanado, asi que nombraba un tipo con el nombre que ya no tenia y el
+// compilador contestaba que no era un overlay -- senyalando justo al que si lo
+// era, dos lineas mas arriba --.
+//
+// De comptime: una `const` evaluada al compilar y una `comptime fn` llamada por
+// el punto.  La funcion conserva su regla, UFCS solo la alcanza; y sus ranuras
+// se pueden nombrar, que no se podia NI en la grafia libre porque a su firma le
+// faltaban los nombres.
+
+@overlay
+struct Hijo {
+	u32 v @0x00;
+
+	// Su direccion sale del PADRE: el caso del nombre de seccion del ELF.
+	u8 apodo @offset {
+		return (u64)parent<Padre>() + parent<Padre>().tabla() + (u64)this.v;
+	};
+}
+
+@overlay
+struct Padre {
+	u32 n @0x00;
+	Hijo hijos[2] @offset(4) stride(4);
+
+	public u64 tabla() => 16_u64;
+}
+
+// La vista por VALOR: ocho bytes, y con ellos todo lo mirado.
+i64 lee(Padre p) => (i64)p.n;
+
+// Escribir A TRAVES de la vista toca el buffer real, no una copia.
+i64 sube(Padre p) {
+	p.n = p.n + 1;
+	return (i64)p.n;
+}
+
+// Una SUB-vista suelta, que sigue alcanzando a su contenedor.
+i64 sitio(Hijo h) => (i64)offsetof(h.apodo);
+
+const i64 K = 5_i64;
+
+comptime i64 mitad(i64 v) => v / 2;
+
+comptime i64 resta(i64 a, i64 b) => a - b;
+
+i32 main() {
+	u8* buf = (u8*)malloc(64);
+	*(u32*)(buf + 0) = 6;
+	*(u32*)(buf + 4) = 1;
+	Padre pa = Padre(buf);
+
+	i64 a = pa.lee();  // la vista por el punto             6
+	i64 b = lee(pa);   // la otra grafia, lo mismo          6
+	i64 c = pa.sube(); // escribe a traves de la vista      7
+	i64 d = lee(pa);   // y lo ve quien tiene la vista      7
+
+	// La sub-vista, dentro del contenedor y suelta en una libre: lo mismo.
+	i64 e = (i64)offsetof(pa.hijos[0].apodo);
+	i64 f = pa.hijos[0].sitio();
+
+	i64 g = K.mitad();       // const comptime de receptor    2
+	i64 h = 10.mitad();      // comptime fn por el punto      5
+	i64 i = 9.resta(.b = 4); // y nombrando su ranura        5
+
+	println("a=${a} b=${b} c=${c} d=${d}");
+	println("e=${e} f=${f} g=${g} h=${h} i=${i}");
+
+	free(buf);
+	// 6+6+7+7 = 26, e==f asi que su resta es 0, y 2+5+5 = 12
+	return (i32)(a + b + c + d + (e - f) + g + h + i + 4);
+}

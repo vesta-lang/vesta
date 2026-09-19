@@ -6126,11 +6126,36 @@ void TypeChecker::collect_globals() {
                 sig_ct.param_types.reserve(fn->params.size());
                 for (auto &p : fn->params) {
                     sig_ct.param_types.push_back(type_from_node(p->type.get()));
+                    /* Y COMO SE LLAMAN.  El nombre de una ranura es parte del
+                     * contrato, asi que sin esto `resta(.a = 9, .b = 4)` decia
+                     * que la funcion no tiene ningun parametro llamado `a`
+                     * -- de una firma que el usuario tiene escrita delante --,
+                     * y eso pasaba tambien en la llamada LIBRE: no es un hueco
+                     * de la llamada uniforme, es que a esta firma le faltaba
+                     * la mitad. */
+                    sig_ct.param_names.push_back(p->name);
+                    sig_ct.param_dirs.push_back(p->dir);
                 }
                 Symbol s;
                 s.kind = SymbolKind::Function;
                 s.sig_index = (uint32_t)function_sigs_.size();
                 sig_by_name_[fn->name] = s.sig_index;
+                /* Y al indice de UFCS, como cualquier otra: una `comptime fn`
+                 * se llama por el punto igual que una de runtime, con la regla
+                 * que ya tiene (solo desde contexto comptime; UFCS no la
+                 * afloja, solo alcanza la funcion).
+                 *
+                 * Esta rama se salia antes del registro, asi que `mitad(10)`
+                 * compilaba y `10.mitad()` decia que no habia ninguna funcion
+                 * que tomara un `i64` -- las dos grafias dejaban de ser la
+                 * misma llamada solo por ser comptime la de al otro lado. */
+                if (!sig_ct.param_types.empty()) {
+                    ufcs_.declare(ufcs_receiver_key(sig_ct, 0), fn->name,
+                                  s.sig_index);
+                    for (size_t pi = 0; pi < sig_ct.param_types.size(); ++pi)
+                        ufcs_.declare_any(ufcs_receiver_key(sig_ct, pi),
+                                          fn->name, s.sig_index);
+                }
                 function_sigs_.push_back(std::move(sig_ct));
                 if (!declare(fn->name, s)) {
                     diags_.error(fn->loc, "comptime fn: redefinicion de '" +

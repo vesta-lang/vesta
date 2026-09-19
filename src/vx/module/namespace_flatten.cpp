@@ -461,6 +461,22 @@ void mangle_struct_decl_(
     }
     for (auto &f : sd->fields) {
         rewrite_refs_in_type_(f.type.get(), rename_map);
+        /* Y lo que un campo de OVERLAY lleva dentro: la expresion de su offset,
+         * el resolver de su direccion, el tamanyo y el paso de un array y el
+         * resolver por elemento.  Son CoDIGO, y ahi se nombran tipos igual que
+         * en el cuerpo de un metodo -- `parent<Elf64_Ehdr>()` es el caso --.
+         *
+         * Sin esto, ese `parent<T>` seguia diciendo `Ehdr` cuando la
+         * declaracion ya se llamaba `bin__Ehdr`, y el comprobador contestaba
+         * que T no era un tipo @overlay... senyalando al tipo que el usuario
+         * SI habia declarado @overlay dos lineas mas arriba.  O sea que los
+         * overlays con `parent` no se podian usar dentro de un namespace, que
+         * es donde vive casi todo el codigo. */
+        rewrite_refs_in_expr_(f.offset_expr.get(), rename_map);
+        rewrite_refs_in_stmt_(f.offset_block.get(), rename_map);
+        rewrite_refs_in_expr_(f.array_count.get(), rename_map);
+        rewrite_refs_in_expr_(f.array_stride.get(), rename_map);
+        rewrite_refs_in_stmt_(f.element_block.get(), rename_map);
     }
     // NS.1 fix: los STRUCTS tambien tienen metodos (dispatch estatico) + dtor.
     // Sus cuerpos deben reescribirse igual que los de clase, si no las refs a
