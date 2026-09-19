@@ -351,6 +351,10 @@ TypeChecker::TypeChecker(ast::ModuleNode &mod, Diagnostics &diags)
     // tipicos.
     scopes_.reserve(8);
     function_sigs_.reserve(16);
+    /* Nadie ha registrado todavia ningun builtin, asi que ninguno tiene firma.
+     * El centinela no puede ser 0: es un indice de firma perfectamente valido.
+     */
+    builtin_sig_.fill(kNoBuiltinSig);
     /* marcar este TypeChecker como el activo + registrar
      * los virtual fns una vez por proceso (registration idempotent).
      * NOTA: la ranura se mantiene apuntando aqui hasta el destructor.
@@ -3819,6 +3823,12 @@ void TypeChecker::collect_globals() {
         const bool had_previous = (previous != sig_by_name_.end() &&
                                    previous->second < function_sigs_.size());
         const uint32_t previous_idx = had_previous ? previous->second : 0u;
+        /* Y por su VALOR, que es como lo pregunta `@Provides`: ahi hace falta
+         * la firma DEL BUILTIN, y la entrada por nombre la puede pisar una
+         * funcion del usuario que se llame igual. */
+        const Builtin which = builtin_from_name(name);
+        if (which != Builtin::Unknown)
+            builtin_sig_[static_cast<size_t>(which)] = s.sig_index;
         sig_by_name_[name] = s.sig_index;
         function_sigs_.push_back(std::move(sig));
         /* Declararlo puede FALLAR, y el resultado se estaba tirando.
@@ -6277,15 +6287,53 @@ void TypeChecker::collect_globals() {
                 if (head != nullptr)
                     ufcs_.declare_head(head, fn->name, s.sig_index);
                 else
-                    ufcs_.declare(ufcs_key_type(sig.param_types[0]), fn->name,
+                    ufcs_.declare(ufcs_receiver_key(sig, 0), fn->name,
                                   s.sig_index);
             }
             /* Y bajo la cabeza de CADA parametro, para la llamada con hueco:
              * `"x".f(.a = 1, .b = _)` manda el receptor a `b`, asi que
              * buscarla solo por el primero no la encontraria. */
-            for (const auto &pt : sig.param_types)
-                ufcs_.declare_any(ufcs_key_type(pt), fn->name, s.sig_index);
+            for (size_t pi = 0; pi < sig.param_types.size(); ++pi)
+                ufcs_.declare_any(ufcs_receiver_key(sig, pi), fn->name,
+                                  s.sig_index);
             function_sigs_.push_back(std::move(sig));
+            /* `@Provides(<builtin>)`: quien dice implementar un builtin tiene
+             * que cumplir SU CONTRATO.
+             *
+             * La anotacion nombra el builtin, pero lo que la funcion
+             * implementa es el primitivo que hay debajo -- y son la misma
+             * firma: `write` es `(ptr, len) -> void` y su primitivo tambien --,
+             * asi que se compara contra la que el builtin declaro.
+             *
+             * Sin esto, proveerlo con otra firma no daria un error: daria una
+             * llamada que pasa el tipado y salta a algo que espera otra cosa,
+             * que es la clase de fallo que este mecanismo viene a quitar. */
+            if (fn->provides_builtin != Builtin::Unknown) {
+                const size_t bi = static_cast<size_t>(fn->provides_builtin);
+                const uint32_t bsig =
+                    bi < builtin_sig_.size() ? builtin_sig_[bi] : kNoBuiltinSig;
+                const std::string bname(builtin_name(fn->provides_builtin));
+                if (bsig == kNoBuiltinSig) {
+                    /* Hay builtins cuyo tipado es a medida y no declaran una
+                     * firma fija -- `Some(x)` devuelve segun el contexto --.
+                     * Esos no se pueden proveer todavia, y se dice. */
+                    diags_.diag(fn->loc, DiagLevel::ERR, "VX2096", {bname});
+                } else {
+                    const FunctionSig &want = function_sigs_[bsig];
+                    const FunctionSig &got = function_sigs_[s.sig_index];
+                    if (!(want.param_types == got.param_types &&
+                          want.return_type == got.return_type)) {
+                        std::string params;
+                        for (const Type &pt : want.param_types) {
+                            if (!params.empty()) params += ", ";
+                            params += written_type_name(pt);
+                        }
+                        diags_.diag(fn->loc, DiagLevel::ERR, "VX2097",
+                                    {fn->name, bname, params,
+                                     written_type_name(want.return_type)});
+                    }
+                }
+            }
             if (!declare(fn->name, s)) {
                 // Bug fix 2026-05-23: forward declaration -- si el simbolo
                 // ya existe Y este es un forward decl (sin body), OK.
@@ -15581,8 +15629,27 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         if (bt.kind == PrimitiveKind::STRUCT) {
             auto it_s = struct_layouts_.find(bt.struct_name);
             if (it_s == struct_layouts_.end()) {
-                diags_.error(e->loc,
-                             "struct desconocido: '" + bt.struct_name + "'");
+                /* Un ENUM se tipa con la misma forma que un struct -- nombre y
+                 * `kind` --, asi que llega aqui y no esta en este mapa.  Es un
+                 * receptor como cualquier otro: una libre que lo tome de
+                 * primer parametro se llama por el punto igual.
+                 *
+                 * Antes ni se intentaba, y encima el mensaje decia "struct
+                 * desconocido" de algo que el usuario declaro `enum` -- con el
+                 * nombre aplanado, ademas --, o sea que negaba una entidad que
+                 * esta escrita delante y encima la llamaba por otro nombre. */
+                auto it_en = enum_layouts_.find(bt.struct_name);
+                if (it_en != enum_layouts_.end()) {
+                    if (try_ufcs_call(e, fa, bt)) return e->result_type;
+                    // Un enum no tiene campos donde buscar una llamada
+                    // indirecta; la lista vacia dice justo eso.
+                    static const std::vector<StructFieldInfo> sin_campos;
+                    return report_method_missing(e, fa, sin_campos,
+                                                 bt.struct_name, "enum",
+                                                 funcptr_field_call);
+                }
+                diags_.error(e->loc, "struct desconocido: '" +
+                                         written_name(bt.struct_name) + "'");
                 for (auto &a : e->args)
                     (void)check_expr(a.get());
                 return Type{};

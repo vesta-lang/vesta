@@ -1,0 +1,43 @@
+namespace ejemplos.ufcs_receptores_err;
+
+// NEGATIVO, la otra mitad de `576_ufcs_receptores.vx`: los receptores que NO
+// valen, y por que se DICE en vez de contestar "no existe ese metodo".
+//
+// 1. `out` NO es receptor.  Un `out` dice "esto es un hueco donde escribo", y
+//    el receptor de un punto se lee como el SUJETO de la llamada: `s.f()`
+//    dejaria `s` modificada sin que nada en la escritura lo aparente.
+//
+//    La linea no es "por referencia si o no" -- `inout` va igual de por
+//    referencia y SI vale, y el ejemplo que acompanya lo ejercita --, es de
+//    donde sale el valor: `inout` lee el receptor y lo devuelve modificado, o
+//    sea que el receptor es el sujeto; `out` ni siquiera lo lee.
+//
+//    Y se dice POR QUE.  El nombre existe y la funcion tambien -- se puede
+//    llamar `f(s)` sin problema --, asi que negarla a secas manda a buscar una
+//    funcion que esta escrita ahi mismo.
+//
+// 2. Un `inout` con un receptor que no es un sitio.  `inout` exige donde
+//    escribir, y un valor calculado no lo es.  Sale el mismo diagnostico que
+//    daria la llamada libre `f(3, 2)`, que es lo que se busca: por el punto no
+//    se afloja ninguna comprobacion.
+//
+// Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
+// el del ejemplo que acompanya, que es su vecino de directorio.
+//
+// Se espera que NO compile: VX2098.
+
+i64 escribe(out i64 r) {
+	r = 5;
+	return 1_i64;
+}
+
+i64 acumula(inout i64 r, i64 k) {
+	r = r + k;
+	return r;
+}
+
+// 1: `out` por el punto.
+i64 salida_por_el_punto(i64 s) => s.escribe();
+
+// 2: `inout` sobre algo que no es un sitio donde escribir.
+i64 inout_sobre_un_calculo() => (1 + 2).acumula(2);

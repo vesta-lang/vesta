@@ -1,0 +1,109 @@
+namespace ejemplos.ufcs_receptores;
+
+// El RECEPTOR de una llamada por el punto, en todas las formas en que se puede
+// declarar el parametro que lo recibe.
+//
+// La premisa es que `x.f(a)` y `f(x, a)` son la MISMA llamada, asi que el
+// receptor tiene que valer alli donde una llamada libre aceptaria el argumento.
+// Si `f(r)` compila y `r.f()` no, las dos grafias dejan de ser lo mismo -- y la
+// que se queda corta no avisa, simplemente dice que no existe ese metodo.
+//
+// Lo que cubre, una por forma:
+//
+//   1. enum por VALOR.  Ni se intentaba: el enum se tipa con la misma forma que
+//      un struct, asi que se buscaba en el mapa de structs y no estaba.  El
+//      mensaje encima decia "struct desconocido" de algo declarado `enum`, y
+//      con el nombre aplanado, o sea que negaba una entidad escrita delante y
+//      la llamaba por otro nombre.
+//
+//   2. PUNTERO, en sus cuatro combinaciones.  El punto auto-desreferencia para
+//      despachar -- por eso `r.x` funciona --, y al hacerlo se perdia la forma
+//      de puntero: ninguna libre que pidiera `P*` se encontraba nunca.  `->` es
+//      el azucar de siempre y deshace un nivel antes de aplicar la regla.
+//
+//   3. Tomar la DIRECCION de un valor.  `q.f()` con `f(P* q)` pasa `&q`, y no
+//      es una comodidad que se anyade: es lo que el MIEMBRO ya hace -- un
+//      metodo de struct recibe `P*` y modifica el receptor --, asi que exigir
+//      sintaxis solo cuando la funcion esta declarada fuera haria que el mismo
+//      programa se escriba distinto segun donde este.  Se comprueba que el
+//      receptor sale MODIFICADO, que es la prueba de que viaja su direccion y
+//      no una copia.
+//
+//   4. `inout`: viaja por referencia, pero quien llama escribe el VALOR.
+//      Indexado por como viaja caia en el cubo de los punteros, donde ningun
+//      receptor escalar lo busca.
+//
+//   5. array nativo, prestamo y no-nulo, que ya valian y siguen valiendo.
+//
+// `out` es el unico que NO vale por el punto, y a proposito: ver
+// `577_ufcs_receptores_err.vx`.
+
+enum Color {
+	Rojo,
+	Verde,
+	Azul
+}
+
+struct P {
+	i64 x;
+}
+
+// 1: enum por valor.
+i64 tono(Color c, i64 k) => 1_i64 + k;
+
+// 2 y 3: la misma funcion alcanzada desde un puntero y desde un valor.
+i64 lee(P* q) => q.x;
+
+// El receptor sale MODIFICADO: es lo que distingue pasar la direccion de
+// pasar una copia.
+i64 sube(P* q) {
+	q.x = q.x + 1;
+	return q.x;
+}
+
+// 2-bis: la que pide el struct por VALOR, alcanzada con `->`.
+i64 copia(P q) => q.x;
+
+// 4: por referencia, pero se llama con el valor.
+i64 acumula(inout i64 r, i64 k) {
+	r = r + k;
+	return r;
+}
+
+// 5: las tres que ya valian.
+i64 primero(i64[] a) => a[0];
+i64 presta(borrow<i64> b) => read_borrow(b);
+i64 seguro(P !!q) => q.x;
+
+i32 main() {
+	Color c = Color.Azul;
+	P     q;
+	q.x = 7;
+	P*          r   = &q;
+	i64[4]      arr = {4, 0, 0, 0};
+	unique<i64> u   = unique_box(2);
+
+	i64 a = c.tono(1);    //  enum por valor                     2
+	i64 b = r -> lee();   //  puntero -> pide P*                 7
+	i64 d = r.lee();      //  el punto equivale a `->`           7
+	i64 e = r -> copia(); // puntero -> pide P por valor        7
+	i64 f = q.lee();      //  valor   -> pide P*: toma `&q`      7
+
+	// El receptor MODIFICADO: q.x pasa de 7 a 8, y lo ve el de fuera.
+	i64 g = q.sube(); //                                      8
+	i64 h = q.x;      //  lo mismo, leido desde aqui          8
+
+	// `inout` exige un sitio donde escribir, asi que el receptor tiene que ser
+	// un nombre y no un valor calculado: un literal no vale, y lo dice.
+	i64 n = 3_i64;
+	i64 i = n.acumula(2);     // inout: lee y devuelve modificado 5
+	i64 j = arr.primero();    //                                 4
+	i64 k = lend(u).presta(); //                              2
+	i64 l = q.seguro();       // q.x ya vale 8                8
+
+	println("a=${a} b=${b} d=${d} e=${e} f=${f}");
+	println("g=${g} h=${h} i=${i} j=${j} k=${k} l=${l}");
+
+	// 2+7+7+7+7 = 30, 8+8+5+4+2+8 = 35, y 30+35 = 65
+	return (i32)(a + b + d + e + f + g + h + i + j + k + l - 23);
+}

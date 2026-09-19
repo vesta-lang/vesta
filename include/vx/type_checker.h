@@ -2372,6 +2372,31 @@ class TypeChecker {
     Type ufcs_key_type(const Type &t) const;
 
     /**
+     * @brief La clave con la que un PARAMETRO entra en el indice de UFCS.
+     *
+     * Lo que el receptor tiene que parecerse no es al tipo con el que el
+     * parametro VIAJA, sino a lo que quien llama ESCRIBE.  Y en un parametro de
+     * salida no son lo mismo: `inout i64 r` viaja como `i64*` -- el llamante
+     * cede el hueco, no su direccion -- pero se llama con un `i64`.
+     *
+     * Indexandolo por como viaja caia en el cubo de los punteros, donde ningun
+     * receptor escalar lo busca: `f(s)` compilaba y `s.f()` decia que no habia
+     * ninguna funcion que tomara un `i64`, o sea que las dos grafias dejaban de
+     * ser la misma llamada justo por el lado que el plan mas cuida (6-bis.5).
+     *
+     * @param sig La firma.
+     * @param i   Que parametro.
+     * @return Su clave: lo apuntado si viaja por referencia, el tipo si no.
+     */
+    Type ufcs_receiver_key(const FunctionSig &sig, size_t i) const {
+        const Type &t = sig.param_types[i];
+        const bool by_ref = i < 64 && (sig.param_by_ref_mask & (1ull << i));
+        if (by_ref && t.kind == PrimitiveKind::PTR && t.pointee)
+            return ufcs_key_type(*t.pointee);
+        return ufcs_key_type(t);
+    }
+
+    /**
      * @brief Cual de las plantillas homonimas quiere esta llamada.
      *
      * Un nombre puede tener varias -- `f<T>(T)` y `f<T>(Caja<T>)`, o dos que
@@ -3360,6 +3385,25 @@ class TypeChecker {
     size_t generic_module_index_ = 0;
 
     OverloadTable overloads_;
+
+    /// La firma de cada builtin, indexada por su VALOR.
+    ///
+    /// Es lo que `@Provides(<builtin>)` mira para comprobar que quien dice
+    /// implementarlo cumple su contrato.  Va aparte de @c sig_by_name_ porque
+    /// aquel lo puede pisar una funcion del usuario que se llame igual -- y
+    /// entonces se estaria comprobando el contrato contra la firma
+    /// equivocada --; aqui el builtin siempre es el builtin.
+    ///
+    /// Un ARRAY y no un vector: el indice es un enum denso cuyo tamano se
+    /// conoce al compilar, asi que no hay nada que reservar ni que hacer
+    /// crecer.  Un `std::vector<uint32_t>` seria ademas una reserva mas de las
+    /// que el perfil no sabe atribuir -- hay decenas de estructuras auxiliares
+    /// que son, byte a byte, ese mismo tipo --.
+    ///
+    /// @c kNoBuiltinSig = ese builtin no declara firma (lo atiende la cadena
+    /// de comprobaciones a medida), asi que todavia no se puede proveer.
+    static constexpr uint32_t kNoBuiltinSig = 0xFFFFFFFFu;
+    std::array<uint32_t, static_cast<size_t>(Builtin::Count)> builtin_sig_;
 
     /**
      * @brief Apunta @p fn como sobrecarga y le da su simbolo propio.
@@ -4367,9 +4411,9 @@ class TypeChecker {
              * ejecutaba la otra.  Un builtin es una candidata como cualquier
              * otra; lo que las separa son los parametros, que es lo que mira
              * `add_overload_candidate`. */
-            const bool previo_es_builtin =
+            const bool previous_is_builtin =
                 function_sigs_[prev->second].is_builtin;
-            if (previo_es_builtin) {
+            if (previous_is_builtin) {
                 if (!add_overload_candidate(name, prev->second, idx))
                     diags_.diag(import_site_, DiagLevel::ERR, "VXT003",
                                 {name, previous_label, new_label});

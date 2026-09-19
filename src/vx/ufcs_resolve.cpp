@@ -327,6 +327,46 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
                                  current_ns_prefix_, &chosen)
                 : ufcs_.find(Type{PrimitiveKind::STRING}, fa->field_name,
                              current_ns_prefix_, &chosen);
+
+    /* Y si tampoco, por el PUNTERO.  Un primer parametro se puede declarar por
+     * valor o por puntero, y el receptor tiene que valer donde una llamada
+     * libre valdria (6-bis.5): `f(r)` con `r : P*` compila, asi que `r.f()`
+     * tiene que compilar tambien, o las dos grafias dejan de ser la misma
+     * llamada.
+     *
+     * Aqui llega ya deshecho un nivel -- el punto auto-desreferencia para
+     * despachar sobre lo apuntado, que es lo que hace que `r.x` funcione --,
+     * asi que buscar solo por lo apuntado no encontraba NINGUNA libre que
+     * pidiera puntero.
+     *
+     * Las dos situaciones se resuelven con la misma sonda y se distinguen por
+     * lo que hay que hacerle a la base:
+     *
+     *   r : P*  ->  la base YA es el puntero: se pasa tal cual.
+     *   q : P   ->  hay que tomarle la direccion, `&q`.
+     *
+     * Y tomarla sola no es una comodidad que se anyade: es lo que el MIEMBRO ya
+     * hace -- `q.metodo()` de un struct recibe `P*` y modifica `q` --, asi que
+     * exigir sintaxis solo cuando la funcion esta declarada fuera haria que el
+     * mismo programa se escriba distinto segun donde este. */
+    Type recv_efectivo = recv;
+    bool tomar_direccion = false;
+    if (cand_slots == nullptr || cand_slots->empty()) {
+        const Type &real = fa->base->result_type;
+        const bool base_es_ptr = real.kind == PrimitiveKind::PTR;
+        Type como_ptr = base_es_ptr ? real : Type::make_ptr(recv);
+        const ufcs::Candidates *por_ptr =
+            (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
+                ? ufcs_.find_any(ufcs_key_type(como_ptr), fa->field_name,
+                                 current_ns_prefix_, &chosen)
+                : ufcs_.find(ufcs_key_type(como_ptr), fa->field_name,
+                             current_ns_prefix_, &chosen);
+        if (por_ptr != nullptr && !por_ptr->empty()) {
+            cand_slots = por_ptr;
+            recv_efectivo = std::move(como_ptr);
+            tomar_direccion = !base_es_ptr;
+        }
+    }
     if (cand_slots == nullptr || cand_slots->empty()) return false;
 
     /* DONDE cae el receptor.  Por defecto delante -- `x.f(a)` es `f(x, a)` --,
@@ -351,11 +391,11 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     std::vector<Type> arg_types;
     arg_types.reserve(e->args.size() + 1);
     for (size_t i = 0; i < e->args.size(); ++i) {
-        if (i == at) arg_types.push_back(recv);
+        if (i == at) arg_types.push_back(recv_efectivo);
         if (i == hole) continue; // el hueco NO es un argumento suyo
         arg_types.push_back(check_expr(e->args[i].get()));
     }
-    if (at >= e->args.size()) arg_types.push_back(recv);
+    if (at >= e->args.size()) arg_types.push_back(recv_efectivo);
 
     /* Los nombres, alineados con esa lista.  Con hueco ya lo estan -- el
      * receptor ocupa el sitio del `_`, y `.b = _` dice que va a `b` --; sin
@@ -401,6 +441,32 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
         (chosen == nullptr || !is_generic_fn_template(*chosen)))
         return false;
 
+    /* Elegida, pero por el punto NO se llama si la ranura del receptor es de
+     * SALIDA.  Un `out` dice "esto es un hueco donde escribo", y el receptor de
+     * un punto se lee como el SUJETO de la llamada: `s.f()` dejaria `s`
+     * modificada sin que nada en la escritura lo aparente.
+     *
+     * La linea no es "por referencia si o no" -- `inout` va igual de por
+     * referencia y SI vale --, es de donde sale el valor: `inout` lee el
+     * receptor y lo devuelve modificado, o sea que el receptor es el sujeto;
+     * `out` no lo lee siquiera.
+     *
+     * Se dice POR QUE, no "no existe `s.f`": el nombre existe y la funcion
+     * tambien, y mandar a buscarla es mandar donde no es. */
+    if (pick != overload::kNoPick && pick < function_sigs_.size()) {
+        const FunctionSig &elegida = function_sigs_[pick];
+        if (at < elegida.param_dirs.size() &&
+            elegida.param_dirs[at] == ParamDir::Out) {
+            diags_.diag(
+                e->loc, DiagLevel::ERR, "VX2098",
+                {written_name(*chosen), at < elegida.param_names.size()
+                                            ? elegida.param_names[at].str()
+                                            : std::string()});
+            e->result_type = Type{PrimitiveKind::COUNT};
+            return true; // contestada: ya se dijo por que no
+        }
+    }
+
     /* Encontrada: el nodo se convierte en la OTRA grafia y lo comprueba el
      * camino de siempre.  Reescribir en vez de resolver aqui es lo que hace que
      * las dos formas no puedan divergir -- comprobacion de argumentos,
@@ -411,6 +477,17 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     id->loc = fa->loc;
     id->name = *chosen;
     std::unique_ptr<ast::Expr> receiver = std::move(fa->base);
+    /* La candidata pide un puntero y la base es un valor: se le toma la
+     * direccion AQUI, en el nodo, para que a partir de este punto la llamada
+     * sea una libre corriente y la comprobacion de argumentos, los prestamos y
+     * la bajada sean literalmente el mismo codigo de siempre. */
+    if (tomar_direccion) {
+        auto addr = std::make_unique<ast::UnaryExpr>();
+        addr->loc = receiver->loc;
+        addr->op = ast::UnOp::AddrOf;
+        addr->operand = std::move(receiver);
+        receiver = std::move(addr);
+    }
     e->callee = std::move(id);
     if (hole == kUfcsNoHole) {
         e->args.insert(e->args.begin(), std::move(receiver));

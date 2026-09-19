@@ -102,6 +102,9 @@ const CatEntry kEntries[] = {
     {"VX2093", {"'{0}' takes {1} type argument(s), but {2} were written", "'{0}' toma {1} argumento(s) de tipo, y se escribieron {2}"}},
     {"VX2094", {"'{0}' specializes a generic that is not declared: '{1}' between <> is a type, so those are type ARGUMENTS and not a declaration.  Declare the primary '{0}<...>' first, or use a name that is not a type", "'{0}' especializa a una generica que no existe: '{1}' entre <> es un tipo, asi que eso son ARGUMENTOS de tipo y no una declaracion.  Declara antes la primaria '{0}<...>', o usa un nombre que no sea un tipo"}},
     {"VX2095", {"the type variable '{0}' is named like an existing type: pick another name, or the type is hidden wherever the template uses it", "la variable de tipo '{0}' se llama como un tipo que ya existe: ponle otro nombre, o el tipo queda tapado alli donde la plantilla lo use"}},
+    {"VX2096", {"@Provides: the builtin '{0}' does not declare a fixed signature, so it cannot be provided yet.  Its typing is bespoke -- what it returns depends on the call site -- and there is nothing to check a provider against.", "@Provides: el builtin '{0}' no declara una firma fija, asi que todavia no se puede proveer.  Su tipado es a medida -- lo que devuelve depende del sitio de llamada -- y no hay contra que comprobar a quien lo provea."}},
+    {"VX2097", {"@Provides: '{0}' does not meet the contract of the builtin '{1}', which takes ({2}) and returns {3}.  The annotation names the builtin, but what the function implements is the primitive underneath, and its signature is the one to match.", "@Provides: '{0}' no cumple el contrato del builtin '{1}', que toma ({2}) y devuelve {3}.  La anotacion nombra el builtin, pero lo que la funcion implementa es el primitivo de debajo, y su firma es la que hay que cumplir."}},
+    {"VX2098", {"'{0}' cannot be called through the dot: its '{1}' parameter is 'out', a slot it only writes -- the receiver of a dot is the SUBJECT of the call, not an output slot.  Write it as a free call, f(x, ...), or declare the parameter 'inout' if it also reads it", "'{0}' no se llama por el punto: su parametro '{1}' es 'out', una ranura que solo escribe -- y el receptor de un punto es el SUJETO de la llamada, no un hueco de salida.  Escribela como llamada libre, f(x, ...), o declara el parametro 'inout' si tambien lo lee"}},
     {"VX3001", {"{0} of {1} bytes is outside {2}: the object reserves [0, {3}) and the access is [{4}, {5})", "{0} de {1} bytes fuera de {2}: el objeto reserva [0, {3}) y el acceso es [{4}, {5})"}},
     {"VX3002", {"write", "escritura"}},
     {"VX3003", {"read", "lectura"}},
@@ -404,6 +407,8 @@ const CatEntry kEntries[] = {
     {"VXE931", {"unknown instrumentation point in @Hook: '{0}'.  Available: {1}", "punto de instrumentacion desconocido en @Hook: '{0}'.  Disponibles: {1}"}},
     {"VXE932", {"the selector of @Hook(<point>, ...) must be a string (e.g. \"std.*\")", "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"}},
     {"VXE933", {"@Hook({0}): the parameter '{1}' is not a field available at that point.  Available: {2}", "@Hook({0}): el parametro '{1}' no es un campo disponible en ese punto.  Disponibles: {2}"}},
+    {"VXE934", {"@Provides(<builtin>) needs the name of a language builtin, the one this function implements (e.g. print_int).", "@Provides(<builtin>) necesita el nombre de un builtin del lenguaje, el que esta funcion implementa (p.ej. print_int)."}},
+    {"VXE935", {"@Provides: '{0}' is not a language builtin.  What can be provided is exactly what the language already knows how to do by itself, so there is no second list to keep in step -- and a name that is not on it is a typo, not a provider nobody will find.", "@Provides: '{0}' no es un builtin del lenguaje.  Lo que se puede proveer es justo lo que el lenguaje ya sabe hacer por su cuenta, asi que no hay una segunda lista que mantener a la par -- y un nombre que no esta en ella es una errata, no un proveedor que nadie va a encontrar."}},
     {"VXF001", {"formatter: the lexer moved backwards through the source", "formateador: el lexer retrocedio en el fuente"}},
     {"VXF002", {"formatter: a token falls outside the source buffer", "formateador: un token cae fuera del fuente"}},
     {"VXF003", {"formatter: the source could not be tokenized, left untouched", "formateador: el fuente no se pudo tokenizar; se deja intacto"}},
@@ -664,7 +669,7 @@ const CatEntry kEntries[] = {
     {"use_def.unused", {"'{2}' is never used", "'{2}' no se usa en ningun sitio"}},
     {"value_shape.none", {"it has no values with components", "no tiene valores con componentes"}},
 };
-const int kEntryCount = 643;
+const int kEntryCount = 648;
 
 } // namespace
 

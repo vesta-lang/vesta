@@ -2490,6 +2490,14 @@ es = "el selector de @Hook(<punto>, ...) debe ser una cadena (p.ej. \"std.*\")"
 en = "@Hook({0}): the parameter '{1}' is not a field available at that point.  Available: {2}"
 es = "@Hook({0}): el parametro '{1}' no es un campo disponible en ese punto.  Disponibles: {2}"
 
+[VXE934]
+en = "@Provides(<builtin>) needs the name of a language builtin, the one this function implements (e.g. print_int)."
+es = "@Provides(<builtin>) necesita el nombre de un builtin del lenguaje, el que esta funcion implementa (p.ej. print_int)."
+
+[VXE935]
+en = "@Provides: '{0}' is not a language builtin.  What can be provided is exactly what the language already knows how to do by itself, so there is no second list to keep in step -- and a name that is not on it is a typo, not a provider nobody will find."
+es = "@Provides: '{0}' no es un builtin del lenguaje.  Lo que se puede proveer es justo lo que el lenguaje ya sabe hacer por su cuenta, asi que no hay una segunda lista que mantener a la par -- y un nombre que no esta en ella es una errata, no un proveedor que nadie va a encontrar."
+
 # Un cero que parece un dato es peor que no medir: el gancho mediria y el
 # resultado seria mentira.  Por eso se dice, una sola vez, al recogerlo.
 [VXW930]
@@ -3374,3 +3382,22 @@ es = "'{0}' especializa a una generica que no existe: '{1}' entre <> es un tipo,
 ["VX2095"]
 en = "the type variable '{0}' is named like an existing type: pick another name, or the type is hidden wherever the template uses it"
 es = "la variable de tipo '{0}' se llama como un tipo que ya existe: ponle otro nombre, o el tipo queda tapado alli donde la plantilla lo use"
+
+["VX2096"]
+en = "@Provides: the builtin '{0}' does not declare a fixed signature, so it cannot be provided yet.  Its typing is bespoke -- what it returns depends on the call site -- and there is nothing to check a provider against."
+es = "@Provides: el builtin '{0}' no declara una firma fija, asi que todavia no se puede proveer.  Su tipado es a medida -- lo que devuelve depende del sitio de llamada -- y no hay contra que comprobar a quien lo provea."
+
+["VX2097"]
+en = "@Provides: '{0}' does not meet the contract of the builtin '{1}', which takes ({2}) and returns {3}.  The annotation names the builtin, but what the function implements is the primitive underneath, and its signature is the one to match."
+es = "@Provides: '{0}' no cumple el contrato del builtin '{1}', que toma ({2}) y devuelve {3}.  La anotacion nombra el builtin, pero lo que la funcion implementa es el primitivo de debajo, y su firma es la que hay que cumplir."
+
+# Un `out` dice "esto es un hueco donde escribo", y el receptor de un punto se
+# lee como el SUJETO de la operacion: `s.f()` dejaria `s` modificada sin que
+# nada en la llamada lo aparente.  Ademas `out` exige un lvalue con
+# almacenamiento y por el punto el receptor puede ser un temporal, donde ese
+# hueco no existe.  La linea no es "por referencia si o no", es de donde sale el
+# valor: `inout` lee el receptor y lo devuelve modificado, y ahi SI es el
+# sujeto.  {0} el nombre, {1} el parametro.
+["VX2098"]
+en = "'{0}' cannot be called through the dot: its '{1}' parameter is 'out', a slot it only writes -- the receiver of a dot is the SUBJECT of the call, not an output slot.  Write it as a free call, f(x, ...), or declare the parameter 'inout' if it also reads it"
+es = "'{0}' no se llama por el punto: su parametro '{1}' es 'out', una ranura que solo escribe -- y el receptor de un punto es el SUJETO de la llamada, no un hueco de salida.  Escribela como llamada libre, f(x, ...), o declara el parametro 'inout' si tambien lo lee"
