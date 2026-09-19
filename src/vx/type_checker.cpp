@@ -777,11 +777,11 @@ bool TypeChecker::register_overload(ast::FunctionDecl *fn, uint32_t sig_index) {
             if (s.param_types.size() != other->params.size()) continue;
             /* Los nombres de las ranuras son lo que separa a dos que toman lo
              * mismo, asi que son tambien lo que las identifica aqui. */
-            bool igual = s.param_names.size() == other->params.size();
-            for (size_t i = 0; igual && i < other->params.size(); ++i)
-                igual = (std::string(s.param_names[i].c_str()) ==
-                         other->params[i]->name);
-            if (!igual) continue;
+            bool same = s.param_names.size() == other->params.size();
+            for (size_t i = 0; same && i < other->params.size(); ++i)
+                same = (std::string(s.param_names[i].c_str()) ==
+                        other->params[i]->name);
+            if (!same) continue;
             other->mangled_label = s.mangled_label;
             break;
         }
@@ -3815,10 +3815,10 @@ void TypeChecker::collect_globals() {
         s.sig_index = (uint32_t)function_sigs_.size();
         /* Quien tuviera el nombre ANTES, si lo habia.  Se mira antes de pisar
          * la entrada, que es justo lo que se pierde al escribirla. */
-        const auto anterior = sig_by_name_.find(name);
-        const bool habia_otra = (anterior != sig_by_name_.end() &&
-                                 anterior->second < function_sigs_.size());
-        const uint32_t idx_anterior = habia_otra ? anterior->second : 0u;
+        const auto previous = sig_by_name_.find(name);
+        const bool had_previous = (previous != sig_by_name_.end() &&
+                                   previous->second < function_sigs_.size());
+        const uint32_t previous_idx = had_previous ? previous->second : 0u;
         sig_by_name_[name] = s.sig_index;
         function_sigs_.push_back(std::move(sig));
         /* Declararlo puede FALLAR, y el resultado se estaba tirando.
@@ -3829,9 +3829,15 @@ void TypeChecker::collect_globals() {
          * perdia sin que nadie dijera nada: quedaba inalcanzable, y una
          * llamada con SU firma se comprobaba contra la importada.  Son dos
          * candidatas; lo que las separa son los parametros, y de eso ya sabe
-         * `add_overload_candidate`. */
-        if (!declare(name, s) && habia_otra)
-            (void)add_overload_candidate(name, idx_anterior, s.sig_index);
+         * `add_overload_candidate`.
+         *
+         * Solo cuando lo anterior NO es otro builtin: varios comparten cuerpo
+         * y se registran dos veces a proposito (los alias), y emparejar un
+         * builtin consigo mismo lo marcaba como sobrecargado -- y eso cambiaba
+         * la resolucion y los mensajes de medio compilador. */
+        if (!declare(name, s) && had_previous &&
+            !function_sigs_[previous_idx].is_builtin)
+            (void)add_overload_candidate(name, previous_idx, s.sig_index);
     };
     // Salida de texto (aceptan ANY tipo via dispatch en lowering).
     // El check_call hace bypass especial para estos nombres y permite
@@ -6360,11 +6366,30 @@ void TypeChecker::collect_globals() {
             Symbol s;
             s.kind = SymbolKind::Function;
             s.sig_index = (uint32_t)function_sigs_.size();
+            /* Quien tuviera el nombre ANTES, antes de pisar la entrada. */
+            const auto previous = sig_by_name_.find(efd->name);
+            const bool had_previous =
+                (previous != sig_by_name_.end() &&
+                 previous->second < function_sigs_.size());
+            const uint32_t previous_idx = had_previous ? previous->second : 0u;
             sig_by_name_[efd->name] = s.sig_index;
             function_sigs_.push_back(std::move(sig));
             if (!declare(efd->name, s)) {
-                diags_.error(efd->loc, "redefinicion de simbolo extern: '" +
-                                           efd->name + "'");
+                /* Un `extern` es una declaracion como cualquier otra, asi que
+                 * tambien puede SOBRECARGAR: si lo que ya estaba toma otros
+                 * parametros, son dos y cada llamada va a la suya.
+                 *
+                 * Hacia falta en cuanto el sumidero de bytes paso a ser el
+                 * builtin `write`: `std.fileio` declara `extern fn write(fd,
+                 * buf, count)`, de tres ranuras, y esto lo contaba como una
+                 * redefinicion -- con lo que el modulo entero dejaba de
+                 * compilar y se llevaba por delante a todo el que lo importa.
+                 * Solo es un choque de verdad cuando ni los parametros las
+                 * separan, que es lo que decide `add_overload_candidate`. */
+                if (!had_previous || !add_overload_candidate(
+                                         efd->name, previous_idx, s.sig_index))
+                    diags_.error(efd->loc, "redefinicion de simbolo extern: '" +
+                                               efd->name + "'");
             }
         }
     }
@@ -11910,6 +11935,28 @@ std::string TypeChecker::ns_prefix_of(const std::string &mangled) const {
 std::string TypeChecker::written_name(const std::string &mangled) const {
     auto it = declared_ns_symbols_.find(mangled);
     if (it != declared_ns_symbols_.end()) return it->second.second;
+    /* Y deshacer tambien el aplanado de los GENERICOS.  Una instanciacion vive
+     * con el nombre que se le dio al crearla -- `Caja_i64` --, y ese nombre no
+     * esta escrito en ningun sitio: el usuario escribio `Caja<i64>`.  Citarlo
+     * como esta guardado manda a buscar un tipo que no existe en su fichero, y
+     * ademas esconde que lo que tiene delante es un generico.
+     *
+     * Los argumentos pasan por aqui otra vez, que es lo que hace que
+     * `Caja_Caja_i64` salga como `Caja<Caja<i64>>` y no a medio deshacer.  La
+     * recursion la acota la propia construccion: un argumento es siempre una
+     * instanciacion mas corta que la que lo contiene. */
+    if (const MonomorphInfo *mi = monomorph_info(mangled)) {
+        if (!mi->template_name.empty()) {
+            std::string s = written_name(mi->template_name);
+            s += '<';
+            for (size_t i = 0; i < mi->type_args.size(); ++i) {
+                if (i != 0) s += ", ";
+                s += written_name(mi->type_args[i]);
+            }
+            s += '>';
+            return s;
+        }
+    }
     return mangled;
 }
 
