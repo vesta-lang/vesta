@@ -2022,6 +2022,10 @@ es = "`--unwind table` no se puede cumplir aqui: `.pdata`/`.xdata` en un objeto 
 en = "the frame of '{0}' cannot be described in `.xdata`: its prologue does not fit what `UNWIND_INFO` can express.  Build with `--unwind none` to leave the table out."
 es = "el marco de '{0}' no se puede describir en `.xdata`: su prologo no cabe en lo que `UNWIND_INFO` sabe expresar.  Compila con `--unwind none` para dejar la tabla fuera."
 
+[VX9258]
+en = "symbols with no provider: {0}.  They are not defined in the image, and no `extern` block or plugin declares which library they come from, so there is no import to emit -- and none is invented, because a made-up one only moves the failure to load time on someone else's machine.  Every runtime service is a hook: it is provided by the stdlib module that covers it by default, by an override of your own (`@AllocatorOverride`, `@PanicHandler`, ...), by an `extern` naming the library, or by you under `--freestanding`."
+es = "simbolos sin proveedor: {0}.  No estan definidos en la imagen, y ningun bloque `extern` ni plugin declara de que biblioteca salen, asi que no hay ningun import que emitir -- y no se inventa uno, porque inventarlo solo mueve el fallo al momento de CARGAR en la maquina de otro.  Cada servicio de runtime es un gancho: lo provee el modulo de la stdlib que lo cubre por defecto, un override tuyo (`@AllocatorOverride`, `@PanicHandler`, ...), un `extern` que diga la biblioteca, o tu mismo con `--freestanding`."
+
 # --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
 #
 # El NOMBRE de una familia no se traduce nunca: es lo que se escribe en
@@ -3297,6 +3301,21 @@ es = "no hay ninguna funcion '{0}' declarada, y el {1} '{2}' -- el tipo del prim
 en = "method '{0}' of class '{1}' is private: it is not reachable from outside the class"
 es = "el metodo '{0}' de la clase '{1}' es privado: no se alcanza desde fuera de la clase"
 
+# La variable de tipo no aparece en NINGUN parametro, asi que no hay de donde
+# deducirla -- solo del retorno, o de ningun sitio --.  Es un rasgo de la FIRMA,
+# no de esta llamada: quien la escriba tendra que decir sus type-args siempre.
+# {0} el nombre de la generica, {1} la variable que no sale de ninguna parte.
+["VX2088"]
+en = "'{1}' cannot be deduced in '{0}': it appears in no parameter, so there is nothing to read it from.  Write it: {0}<...>(...)"
+es = "'{1}' no se puede deducir en '{0}': no aparece en ningun parametro, asi que no hay de donde leerlo.  Escribelo: {0}<...>(...)"
+
+# La variable SI aparece en algun parametro, pero con estos argumentos no sale:
+# el tipo que se paso no encaja con la forma declarada.  A diferencia de VX2088
+# esto depende de la llamada, no de la firma.  {0} la generica, {1} la variable.
+["VX2089"]
+en = "'{1}' could not be deduced in '{0}' from these arguments: the type passed does not match the declared shape.  Write it: {0}<...>(...)"
+es = "'{1}' no se dedujo en '{0}' con estos argumentos: el tipo que se paso no encaja con la forma declarada.  Escribelo: {0}<...>(...)"
+
 ["VX2083"]
 en = "parameter {0}"
 es = "el parametro {0}"
@@ -3308,3 +3327,50 @@ es = "el valor de retorno"
 ["VX2082"]
 en = "'{0}' cannot be used as a native callback: {1} is a float, and the thunk only carries the integer register bank -- the native convention passes floats in vector registers, so the callback would read garbage instead of a number.  Take the bits as 'u64' and bitcast inside"
 es = "'{0}' no puede ser un callback nativo: {1} es flotante, y el trampolin solo lleva el banco de registros enteros -- la convencion nativa pasa los flotantes por los vectoriales, asi que el callback leeria basura en vez de un numero.  Recibe los bits como 'u64' y conviertelos dentro"
+
+# Varias plantillas genericas con el mismo nombre son sobrecargas como
+# cualquier otra, y lo que las separa -- la forma de sus parametros, o como se
+# llaman sus ranuras -- solo se ve intentando deducirlas.  Si ninguna liga sus
+# variables con estos argumentos, no hay a cual llamar.  {0} el nombre escrito.
+["VX2090"]
+en = "no generic '{0}' fits these arguments: several are declared with that name, and none of them binds its type variables to what was passed.  Write the type arguments to say which one: {0}<...>(...)"
+es = "ninguna generica '{0}' encaja con estos argumentos: hay varias declaradas con ese nombre y ninguna liga sus variables de tipo con lo que se le paso.  Escribe los argumentos de tipo para decir cual: {0}<...>(...)"
+
+# Y si encajan VARIAS, la llamada no dice cual.  Quedarse con una seria decidir
+# por el programador, y ademas por un criterio que no esta escrito en ningun
+# sitio: el orden en que se declararon.  {0} el nombre escrito.
+["VX2091"]
+en = "the call to '{0}' does not tell which generic: more than one of that name fits these arguments.  Write the type arguments to separate them: {0}<...>(...)"
+es = "la llamada a '{0}' no dice a que generica: mas de una de ese nombre encaja con estos argumentos.  Escribe los argumentos de tipo para separarlas: {0}<...>(...)"
+
+# No hay ninguna plantilla generica con ese nombre.  Sale de dentro de la
+# monomorfizacion, asi que quien llega aqui ya creia tenerla: el mensaje lo dice
+# tal cual en vez de inventar una explicacion.  {0} el nombre escrito.
+["VX2092"]
+en = "no generic function '{0}' is declared"
+es = "no hay ninguna funcion generica '{0}' declarada"
+
+# Los argumentos de tipo escritos no son los que la plantilla declara.  Se dicen
+# los dos numeros porque con varios parametros de tipo la diferencia no se ve a
+# simple vista.  {0} el nombre, {1} cuantos pide, {2} cuantos se escribieron.
+["VX2093"]
+en = "'{0}' takes {1} type argument(s), but {2} were written"
+es = "'{0}' toma {1} argumento(s) de tipo, y se escribieron {2}"
+
+# Los `<...>` de una declaracion DECLARAN variables de tipo, salvo que lo
+# escrito nombre tipos: entonces son argumentos y la declaracion especializa a
+# una plantilla del mismo nombre.  Si esa plantilla no existe, no hay nada que
+# especializar -- y este es el mensaje que salta cuando alguien llama a una
+# variable de tipo como se llama un tipo ya declarado, en vez de que la
+# declaracion cambie de significado en silencio.  {0} el nombre, {1} el tipo que
+# lo delata.
+["VX2094"]
+en = "'{0}' specializes a generic that is not declared: '{1}' between <> is a type, so those are type ARGUMENTS and not a declaration.  Declare the primary '{0}<...>' first, or use a name that is not a type"
+es = "'{0}' especializa a una generica que no existe: '{1}' entre <> es un tipo, asi que eso son ARGUMENTOS de tipo y no una declaracion.  Declara antes la primaria '{0}<...>', o usa un nombre que no sea un tipo"
+
+# Una cota solo se escribe DECLARANDO, asi que ahi no hay duda de que se
+# pretendia una variable -- y el choque con un tipo ya declarado se dice tal
+# cual.  {0} la variable, que es tambien el nombre del tipo.
+["VX2095"]
+en = "the type variable '{0}' is named like an existing type: pick another name, or the type is hidden wherever the template uses it"
+es = "la variable de tipo '{0}' se llama como un tipo que ya existe: ponle otro nombre, o el tipo queda tapado alli donde la plantilla lo use"

@@ -1,0 +1,42 @@
+namespace ejemplos.genericas_homonimas_err;
+
+// NEGATIVO, la otra mitad de `574_genericas_homonimas.vx`: donde la regla que
+// reparte los `<...>` no deja pasar lo escrito, y por que se DICE en vez de
+// elegir un significado en silencio.
+//
+// La regla: los `<...>` de una declaracion DECLARAN variables de tipo, salvo
+// que lo escrito nombre tipos; entonces son ARGUMENTOS y la declaracion
+// especializa a una plantilla de ese nombre.
+//
+// De ahi salen los dos casos de abajo, y ninguno es un capricho: los dos son el
+// mismo error del programador -- llamar a una variable de tipo como se llama un
+// tipo que ya existe --, visto desde los dos lados.
+//
+// Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
+// el del ejemplo que acompanya, que es su vecino de directorio.
+//
+// Se espera que NO compile: VX2094 y VX2095.
+
+concept Numerico<T> = true;
+
+struct Punto {
+	i64 x;
+}
+
+// 1: `Punto` es un tipo, asi que esto NO declara una variable llamada `Punto`
+// -- eso taparia al tipo dentro de la plantilla --, especializa a una `Caja`
+// que no esta declarada en ningun sitio.  VX2094.
+//
+// Es lo que salta cuando alguien elige para su variable de tipo un nombre que
+// ya se usa: en vez de que la declaracion cambie de significado sin avisar, no
+// compila y el mensaje dice cual de los nombres lo delata.
+struct Caja<Punto> {
+	i64 v;
+}
+
+// 2: aqui no hay duda ninguna de que se pretendia declarar -- una COTA solo se
+// escribe declarando, nadie le pone una cota a un argumento --, asi que el
+// choque con el tipo se dice tal cual.  VX2095.
+struct Bolsa<Punto: Numerico> {
+	i64 v;
+}

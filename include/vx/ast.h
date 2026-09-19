@@ -1902,6 +1902,13 @@ struct FunctionDecl : Node {
     /// son los type-args del patron y @c type_params los params frescos.
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
+    /// @brief Lo escrito entre `<...>` esta SIN CLASIFICAR todavia.
+    ///
+    /// Ver @c StructDecl::generic_head_unresolved: el parser no puede decidir
+    /// si un identificador declara una variable o pasa un argumento, asi que
+    /// guarda lo escrito en @c spec_pattern y lo reparte quien conoce los
+    /// tipos.
+    bool generic_head_unresolved = false;
     ///  M6.a L.3: visibilidad cross-module.  @c true (default) =
     /// publica, exportada al `.vxi` y accesible desde otros modulos.
     /// @c false = privada al modulo (no se exporta).  El parser setea
@@ -2698,6 +2705,27 @@ struct StructDecl : Node {
     /// que matchee (exacto > patron > primario).  Compile-time puro.
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
+    /**
+     * @brief Lo escrito entre `<...>` esta SIN CLASIFICAR todavia.
+     *
+     * Cuando esta a @c true, @c spec_pattern lleva los type-nodes TAL Y COMO
+     * SE ESCRIBIERON y ni @c type_params ni @c is_specialization significan
+     * nada aun.  Al clasificar, esto vuelve a @c false y los tres campos
+     * quedan como el resto del compilador espera.
+     *
+     * @par Por que el parser no lo decide
+     * Los `<...>` de una declaracion DECLARAN variables de tipo.  Pero un
+     * nombre que ya ES un tipo no puede ser una variable -- seria taparlo --,
+     * asi que ahi lo que hay son ARGUMENTOS y la declaracion es una
+     * especializacion.  Es la unica diferencia entre las dos, y depende de
+     * algo que el parser no sabe: si ese nombre esta declarado en algun sitio.
+     *
+     * Antes se decidia por orden de aparicion -- la primera con un nombre era
+     * la plantilla, las siguientes especializaciones --, y eso hacia imposible
+     * declarar DOS plantillas con el mismo nombre: la segunda se leia como una
+     * especializacion de la primera.
+     */
+    bool generic_head_unresolved = false;
     /// Contratos de layout/recurso comprobables (modo --analyze): @pod,
     /// @no_heap, @size(N).  Metadata compile-time; el codegen los ignora.
     /// -1 en @c contract_size = no declarado.
@@ -2989,6 +3017,9 @@ struct ClassDecl : Node {
     /// y @c type_params los params frescos (mismo modelo que StructDecl).
     bool is_specialization = false;
     std::vector<std::unique_ptr<TypeNode>> spec_pattern;
+    /// @brief Lo escrito entre `<...>` esta SIN CLASIFICAR todavia.  Ver
+    /// @c StructDecl::generic_head_unresolved.
+    bool generic_head_unresolved = false;
     /// @brief Marca de aspecto AOP.  Si es @c true, los metodos con
     /// @Before/@After/@Around dentro de esta clase se registran como
     /// advices en __module_init (ademas de definirse como metodos

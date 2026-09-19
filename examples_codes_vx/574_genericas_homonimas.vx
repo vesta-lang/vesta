@@ -1,0 +1,110 @@
+namespace ejemplos.genericas_homonimas;
+
+// Varias GENERICAS con el mismo nombre son sobrecargas como cualquier otra.
+//
+// Que eso no se pudiera es lo que arrastraba una regla vieja: la primera
+// declaracion con `<...>` era la plantilla y las siguientes con ese nombre se
+// leian como ESPECIALIZACIONES suyas.  Asi no habia forma de escribir dos
+// plantillas homonimas -- la segunda nunca era una plantilla --, y encima la
+// regla dependia del orden en que estuvieran escritas.
+//
+// La regla de ahora mira lo ESCRITO, no el orden:
+//
+//   los `<...>` de una declaracion DECLARAN variables de tipo.  Un nombre que
+//   ya ES un tipo no puede ser una variable -- seria taparlo --, asi que ahi
+//   son ARGUMENTOS y la declaracion especializa.
+//
+// De donde sale que `Caja<T>` declara, `Caja<i64>` y `Caja<T*>` especializan
+// por su notacion, y `Caja<Punto>` especializa porque `Punto` es un tipo.  Lo
+// que no depende de cuantas haya escritas antes ni de en que orden.
+//
+// Y con varias que encajan, gana la que mas FORMA pide: la que pide menos las
+// habria cogido todas, asi que quedarse con ella volveria inutil a la otra.  Es
+// el mismo orden que el lenguaje ya usa al especializar: exacta, luego patron,
+// luego la primaria.
+
+struct Caja<T> {
+	T v;
+}
+
+struct Punto {
+	i64 x;
+	i64 y;
+}
+
+// 1. Dos plantillas separadas por la FORMA de su parametro.  `saca(2)` solo
+// encaja con la primera; `saca(k)` encaja con las dos y gana la segunda, que
+// es la que pide una `Caja`.
+T saca<T>(T x) =>         x;
+T saca<T>(Caja<T> c) => c.v;
+
+// 2. Y aqui tres, con la de dentro-de-dentro.  `Caja<Caja<T>>` pide mas que
+// `Caja<T>`, asi que con una caja de cajas gana ella.
+i64 hondo<T>(T x) => 1_i64;
+i64 hondo<T>(Caja<T> c) => 2_i64;
+i64 hondo<T>(Caja<Caja<T>> c) => 3_i64;
+
+// 3. Dos plantillas que toman LO MISMO y solo se distinguen por como se llaman
+// sus ranuras.  Es la misma regla que ya separa dos funciones normales: el
+// nombre de la ranura es parte del contrato, asi que dos firmas iguales con
+// ranuras distintas son dos funciones, y lo que las elige es nombrarlas al
+// llamar.
+T q<T>(T a, T b) => b;
+T q<T>(T c, T b) => c;
+
+// 4. Y por ARIDAD, que las separa sin mirar un solo argumento.
+i64 cuenta<T>(T x) => 1_i64;
+i64 cuenta<T>(T x, T y) => 2_i64;
+
+// 5-bis. Y todo lo de arriba se llama tambien POR EL PUNTO: una generica no
+// deja de ser una funcion, y elegir entre homonimas es el mismo selector.  Con
+// el receptor de por medio la colocacion tampoco cambia: lo nombrado va a su
+// ranura y el receptor cae en la que queda libre, que es lo que hace que
+// `4.q(.a = 30)` llame a la primera con el 4 en `b`.
+
+// 6. La especializacion sigue siendo otra cosa, y convive con todo lo de
+// arriba: `Caja<Punto>` no declara una variable llamada `Punto`, especializa.
+struct Bolsa<T> {
+	T v;
+}
+
+struct Bolsa<Punto> {
+	i64 x;
+	i64 y;
+}
+
+i32 main() {
+	Caja<i64>       k  = {.v = 6};
+	Caja<Caja<i64>> kk = {.v = k};
+
+	i64 a = saca(2);   // solo la primera encaja                      2
+	i64 b = saca(k);   // las dos encajan; gana la que pide la Caja   6
+	i64 c = hondo(1);  //                                             1
+	i64 d = hondo(k);  //                                             2
+	i64 e = hondo(kk); //                                            3
+
+	// Las ranuras eligen: la primera devuelve `b`, la segunda devuelve `c`.
+	i64 f = q(.a = 1, .b = 5); //                                   5
+	i64 g = q(.c = 4, .b = 9); //                                   4
+
+	i64 h = cuenta(0);    //                                         1
+	i64 i = cuenta(0, 0); //                                         2
+
+	// Las mismas homonimas, por el punto.
+	i64 pa = k.saca();     // gana la que pide la Caja               6
+	i64 pb = 2.saca();     // solo encaja la otra                    2
+	i64 pc = 4.q(.a = 30); // el receptor cae en `b`, que es lo que devuelve  4
+	i64 pd = 5.q(.c = 30); // idem, y esta devuelve `c`             30
+
+	// La especializacion elegida por el tipo, no por el orden.
+	Bolsa<Punto> bp = {.x = 3, .y = 4};
+	Bolsa<i64>   bi = {.v = 7};
+
+	println("a=${a} b=${b} c=${c} d=${d} e=${e}");
+	println("f=${f} g=${g} h=${h} i=${i}");
+	println("pa=${pa} pb=${pb} pc=${pc} pd=${pd}");
+	println("bp=${bp.x},${bp.y} bi=${bi.v}");
+
+	// 2+6+1+2+3+5+4+1+2 = 26, por el punto 6+2+4+30 = 42, y 3+4+7 = 14
+	return (i32)(a + b + c + d + e + f + g + h + i + pa + pb + pc + pd + bp.x + bp.y + bi.v - 40);
+}

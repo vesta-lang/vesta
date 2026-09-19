@@ -448,12 +448,29 @@ class Parser {
         std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
         std::vector<std::string> &fresh_params);
 
-    /// #7: nombres de struct/clase/funcion genericos ya vistos como template
-    /// PRIMARIO.  La PRIMERA decl `Caja<...>` es el primario; las siguientes
-    /// con el mismo nombre son especializaciones (total/parcial).
-    std::unordered_set<std::string> generic_struct_names_seen_;
-    std::unordered_set<std::string> generic_class_names_seen_;
-    std::unordered_set<std::string> generic_fn_names_seen_;
+    /**
+     * @brief Parsea los `<...>` de una declaracion SIN decidir que son.
+     *
+     * Precondicion: @c current_ es '<'.  Deja en @p pattern los type-nodes tal
+     * y como se escribieron y en @p bounds las cotas (`<T: Concepto>`), que
+     * solo caben tras un identificador simple.
+     *
+     * @par Por que aqui no se clasifica
+     * `<T>` declara una variable y `<Punto>` pasa un argumento, y lo unico que
+     * los separa es si ese nombre ya es un tipo -- algo que el parser no puede
+     * saber, porque el tipo puede declararse despues, en otro fichero o venir
+     * importado.  Decidirlo aqui obligaba a inventar una regla que no mira los
+     * tipos, y la que habia -- "la primera que veo es la plantilla" -- impedia
+     * declarar dos plantillas con el mismo nombre.
+     *
+     * @param pattern [out] Los type-nodes escritos, en orden.
+     * @param bounds  [out] Las cotas inline, si las hubo.
+     * @return Si alguna cota se escribio: entonces son variables SEGURO, que
+     *         es lo unico que el parser si puede afirmar.
+     */
+    bool
+    parse_generic_head(std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
+                       std::vector<ast::TypeBound> &bounds);
 
     /// @brief Parsea una declaracion de concepto (#6).  Tres formas:
     ///   - `concept N<T> = <bool-expr>;`        (predicado)

@@ -60,13 +60,14 @@ const std::string *head_of(const Type &t) {
     case PrimitiveKind::FUNCTION: return util::intern_name("fn");
     case PrimitiveKind::STRUCT:
     case PrimitiveKind::CLASS: {
-        /* Un tipo con nombre entra por el suyo, y uno generico por el del
-         * TEMPLATE: `Caja<i64>` y `Caja<f64>` caen en el mismo cubo, que es
-         * donde vive lo declarado contra `Caja<T>`.  El nombre mangleado lleva
-         * los argumentos detras de un `_`, y cortar por ahi seria adivinar:
-         * mientras la instanciacion no diga de que plantilla sale, un generico
-         * se indexa por su nombre completo -- correcto, aunque mas estrecho de
-         * lo que la fase 4 necesitara. */
+        /* Por su nombre, tal cual.  Que una INSTANCIACION entre por el de su
+         * plantilla -- para que `Caja<i64>` y `Caja<f64>` caigan donde vive lo
+         * declarado contra `Caja<T>` -- se resuelve ANTES de llegar aqui, con
+         * la ficha que dejo la instanciacion.
+         *
+         * Y se resuelve ahi y no aqui porque sacarlo del nombre seria adivinar:
+         * el aplanado pone los argumentos detras de un `_`, y un tipo del
+         * usuario puede llamarse exactamente igual. */
         const std::string &n = t.struct_name.str();
         return util::intern_name(n);
     }
@@ -75,6 +76,45 @@ const std::string *head_of(const Type &t) {
     /* Los primitivos por su nombre de tipo, que es lo que el usuario escribe:
      * `u64`, `i32`, `bool`. */
     return util::intern_name(primitive_name(t.kind));
+}
+
+const std::string *head_of_decl(const ast::TypeNode *t,
+                                const std::vector<std::string> &vars) {
+    if (t == nullptr || vars.empty()) return nullptr;
+    switch (t->kind) {
+    case ast::NodeKind::NamedTypeNode: {
+        const auto *n = static_cast<const ast::NamedTypeNode *>(t);
+        /* Con argumentos es una instanciacion, y su cubo es el del TEMPLATE:
+         * `Caja<T>` cae donde cae un receptor `Caja<i64>`, que es lo que hace
+         * que lo declarado contra la plantilla lo encuentre la instancia. */
+        if (!n->type_args.empty()) return util::intern_name(n->name);
+        /* Sin argumentos, o es una variable -- y entonces vale para cualquier
+         * receptor -- o es un tipo con nombre, y ahi no hay variable ninguna:
+         * que lo indexe la via normal, que resuelve el tipo de verdad. */
+        for (const std::string &v : vars)
+            if (v == n->name) return util::intern_name("any");
+        return nullptr;
+    }
+    case ast::NodeKind::PointerTypeNode: return util::intern_name("ptr");
+    case ast::NodeKind::ArrayTypeNode: return util::intern_name("array");
+    case ast::NodeKind::FunctionTypeNode: return util::intern_name("fn");
+    /* Un primitivo CON argumentos (`unique<T>`) tiene cubo propio por su clase,
+     * y saber cual exige resolverlo.  Se deja fuera antes que meterlo en uno
+     * equivocado: no estar es que el punto no lo alcanza, y estar mal es que
+     * alcanza lo que no debe. */
+    default: return nullptr;
+    }
+}
+
+void Index::declare_head(const std::string *head, const std::string &name,
+                         uint32_t slot) {
+    if (head == nullptr) return;
+    const std::string *n = util::intern_name(name);
+    Candidates &c = by_head_[Key{head, n}];
+    for (uint32_t s : c)
+        if (s == slot) return;
+    c.push_back(slot);
+    by_name_[n].push_back(slot);
 }
 
 void Index::declare(const Type &first_param, const std::string &name,
@@ -100,9 +140,32 @@ const Candidates *Index::find(const Type &recv, const std::string &written,
         return &it->second;
     }
     // Y si no, con el prefijo del namespace DESDE EL QUE SE LLAMA.
+    if (!site_prefix.empty()) {
+        const std::string *pref = util::intern_name(site_prefix + written);
+        it = by_head_.find(Key{head, pref});
+        if (it != by_head_.end()) {
+            if (matched != nullptr) *matched = pref;
+            return &it->second;
+        }
+    }
+    /* Y por ultimo el cubo de las que valen para CUALQUIER receptor: una
+     * generica cuyo primer parametro es la variable a secas (`T id<T>(T x)`)
+     * no puede estar bajo ninguna cabeza concreta -- no la tiene hasta que se
+     * instancia --, asi que vive aparte.
+     *
+     * Se mira DESPUES de la cabeza exacta, y ese orden es la regla: lo
+     * declarado para ESTE tipo gana a lo declarado para todos.  Al reves, una
+     * generica cualquiera taparia la funcion escrita a proposito para el
+     * receptor que se tiene delante. */
+    const std::string *any = util::intern_name("any");
+    it = by_head_.find(Key{any, name});
+    if (it != by_head_.end()) {
+        if (matched != nullptr) *matched = name;
+        return &it->second;
+    }
     if (site_prefix.empty()) return nullptr;
     name = util::intern_name(site_prefix + written);
-    it = by_head_.find(Key{head, name});
+    it = by_head_.find(Key{any, name});
     if (it == by_head_.end()) return nullptr;
     if (matched != nullptr) *matched = name;
     return &it->second;

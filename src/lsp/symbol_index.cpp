@@ -44,6 +44,7 @@
 #include "lsp/document_store.h"
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
+#include "vx/generics/generic_head.h" // repartir los `<...>` de una decl
 #include "vx/lexer.h"
 #include "vx/parser.h"
 #include "vx/source_text.h" // un solo fin de linea para todo el pipeline
@@ -405,6 +406,10 @@ DocSymbols build_doc_symbols(const std::string &text,
         vx::Lexer lex(text, filename, diags);
         vx::Parser parser(lex, diags);
         std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
+        /* Los `<...>` los reparte quien conoce los tipos; aqui, con los del
+         * fichero.  Sin esto la firma de una generica salia sin sus
+         * parametros de tipo, que es justo lo que la distingue. */
+        if (mod) vx::generics::classify_generic_heads(*mod);
         if (mod) collect_decl_names(*mod, names);
     } catch (...) {
         // AST parcial: seguimos solo con lo recolectado (posiblemente nada).

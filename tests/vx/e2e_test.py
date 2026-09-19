@@ -3800,8 +3800,63 @@ modes3_case("ufcs551", "encadenar con UFCS: `2.add(4).mul(10).div(5)` sobre lite
 modes3_case("nombrados552", "argumentos con nombre `.a = 3`, la grafia del init designado: en cualquier orden, mezclados con posicionales, con el receptor cayendo en el hueco nombrado o en la ranura que queda libre, y el nombre entrando en la seleccion entre hermanas", "552_argumentos_nombrados.vx", 42)
 modes3_case("ufcs_xmod556", "UFCS y argumentos nombrados CRUZANDO el modulo, con los dos pares de homonimas: `doble` (misma firma y misma ranura) que solo conviven con `as`, y `pesa` (misma firma, ranuras con otro nombre) que se importan las dos sin renombrar y forman una sobrecarga -- resuelta nombrando la ranura, tambien a traves del punto", "556_ufcs_xmodulo.vx", 42)
 modes3_case("ufcs_ns558", "namespaces del MISMO fichero: la cualificada de siempre y la misma por el punto con `$`, que llega a cada una de dos homonimas; lo del propio namespace se sigue llamando sin calificar, `$` compone con las ranuras por nombre y con una interpolacion, y un SEGUNDO bloque del mismo namespace ve lo que declaro el primero aun habiendo dos homonimas", "558_ufcs_ns_fichero.vx", 42)
+modes3_case("generica_infer570", "deducir los type-args ESTRUCTURALMENTE, y las genericas por las DOS grafias: la variable desnuda, dentro de un generico y de un generico dentro de otro, dentro de un puntero, dos variables en un solo parametro, la misma en dos, y la que SOLO aparece en el retorno de una funcion parametro (`cfn(T) -> R`) -- esa con el nombre de la funcion a secas y con `&` --; los type-args escritos a mano que dan lo mismo, la generica libre llamada POR EL PUNTO y el metodo generico llamado como una libre", "570_generica_inferencia.vx", 42)
+modes3_case("genericas_homonimas574", "varias GENERICAS con el mismo nombre, que es sobrecarga como cualquier otra: separadas por la FORMA de su parametro (`saca<T>(T)` vs `saca<T>(Caja<T>)`), por lo HONDO de esa forma (tres, y con una caja de cajas gana la que pide caja de cajas), por el NOMBRE de sus ranuras (dos que toman lo mismo, elegidas al nombrarlas) y por aridad; las mismas llamadas POR EL PUNTO, con el receptor cayendo en la ranura que queda libre; mas una especializacion `Bolsa<Punto>` conviviendo con todo, que es lo que separa declarar una variable de pasar un argumento", "574_genericas_homonimas.vx", 42)
 modes3_case("ufcs_inverso566", "la OTRA direccion, al extremo: `f(x, a)` encuentra el metodo `x.f(a)` -- DOS metodos de la misma firma separados solo por el nombre de sus ranuras, el mismo nombre y las mismas ranuras en otro receptor, una libre homonima que no choca, struct generico, `impl` desde fuera, despacho VIRTUAL con `@Override`, receptor declarado como interfaz, receptores que son un campo o el retorno de otra inversa, variadico, `final`, un tipo de otro namespace y las dos grafias en la misma cadena", "566_ufcs_inverso.vx", 42)
 modes3_case("nativo560", "dos huecos del binario nativo, cerrados: una cadena leida desde la SEGUNDA posicion en un bucle (`s = otra + s`, que daba `---` en vez de `--x`) y dos metodos de clase que solo se distinguen por el NOMBRE de sus ranuras (que devirtualizaba al primero).  Los tres modos tienen que coincidir, que es de lo que iba", "560_nativo_cadena_y_ranuras.vx", 42)
+modes3_case("casts_puntero569", "las formas de cast de puntero que el desambiguador tiene que reconocer, y las que NO.  Reconocer: nombre de STRUCT seguido de `*` -- que no parseaba, `(Punto*)malloc(...)` se leia como la multiplicacion `Punto * )` y el error hablaba de una expresion primaria que falta, sin mencionar el cast --, typedef del puntero, doble indireccion, primitivos, `void*`/`char*` y entero<->puntero.  Y en la otra direccion, que un parentesis que no es un cast se siga leyendo como agrupacion: `(a * b)`, `(a + b) * 2`, `(a) - b` y una llamada, porque ensanchar el desambiguador se paga robandole parentesis a la aritmetica", "569_casts_puntero.vx", 42)
+# Sin anclas `^...$`: el log puede traer CRLF y el `$` no casaria.
+EXPECT571 = [
+    r"f64 interp=3\.5 builtin=3\.5",
+    r"f64 interp=1\.25 builtin=1\.25",
+    r"f32 interp=0\.75 builtin=0\.75",
+    r"desde entero=2",
+    r"pad=\[\.\.\.\.\]",
+    r"col=\[ab {6}\]",
+    r"cero=\[\]",
+]
+
+
+@case("print_float_pad571")
+def _(ctx):
+    """`print_float` y `print_pad` dicen lo MISMO que la interpolacion, y lo
+    mismo en los tres modos.
+
+    No basta con comparar los modos entre si: `print_float` imprimia
+    `1.4822e-323` en los TRES -- convertia el argumento a entero antes de
+    pasarlo, asi que 3.5 llegaba como 3 y el formateador leia ese 3 como bits
+    IEEE --, y una red diferencial habria visto tres modos de acuerdo.  Por eso
+    aqui se fija el TEXTO ademas del valor de retorno.
+
+    `print_pad` es el otro: era el unico de los que escriben sin camino `bare`,
+    y en AOT llamaba al plugin de la VM -- dependencia de `vesta_io.dll` y
+    escritura en OTRO buffer -- hasta reventar con un acceso invalido.
+    """
+    src = "571_print_float_pad.vx"
+    ctx.compile_vx(ctx.src(src), "pf571")
+    ctx.ok("compilacion %s -> .velb" % src)
+
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("pf571", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 42:
+            ctx.fail("print_float/print_pad (-m %s): R00 == %s, se esperaba 42"
+                     % (modo, got), log)
+        expect_lines(ctx, log, "print_float/print_pad (-m %s)" % modo, EXPECT571)
+        ctx.ok("print_float/print_pad (-m %s): texto y R0 correctos" % modo)
+
+    exe = aot_build(ctx, ctx.src(src), "pf571_aot", "print_float/print_pad (-m aot)")
+    rc, log = ctx.run([exe])
+    if exit_code(rc) != 42:
+        ctx.fail("print_float/print_pad (-m aot): exit == %d, se esperaba 42"
+                 % exit_code(rc), log)
+    expect_lines(ctx, log, "print_float/print_pad (-m aot)", EXPECT571)
+    ctx.ok("print_float/print_pad (-m aot): texto y exit correctos")
+
+
+modes3_case("sobrecarga_builtin572", "sobrecargar un BUILTIN: una funcion del usuario con los mismos tipos que `print_pad` y las ranuras con otro nombre.  Cada llamada va a la suya nombrando la ranura, tambien con los argumentos en otro orden.  Antes ganaba el builtin en silencio -- y eran tres fallos encadenados: el builtin no tenia nombres de ranura (y una lista vacia `no separa`), el bajado re-decidia por el NOMBRE ignorando la candidata que el comprobador ya habia elegido, y las etiquetas se emparejaban por POSICION dando por hecho que toda candidata tiene declaracion, que un builtin no tiene", "572_sobrecarga_builtin.vx", 42)
+fails_case("sobrecarga_builtin_err573", "y la llamada posicional que no dice de cual de las dos habla: error que cita las dos, no un ganador a escondidas", "573_sobrecarga_builtin_err.vx", "VX2077")
+modes3_case("write_sumidero574", "`write(ptr, len)`, el sumidero de bytes: de QUE memoria es el puntero lo dice el IR y no el modo de ejecucion -- una direccion de la maquina virtual y una del anfitrion van por caminos distintos alli, y en nativo son la misma --, asi que los tres modos tienen que escribir lo mismo.  Y convive con `std.os.write`, que toma (stream, buf, count): misma palabra, otra firma, cada llamada a la suya.  Antes el `import only` SUSTITUIA al builtin y lo dejaba inalcanzable, que era el caso que motivaba poder sobrecargarlos", "574_write_sumidero.vx", 42)
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)
@@ -5945,13 +6000,37 @@ fails_case("ufcs_sin_candidata",
            "un nombre que no declara nadie: no hay namespace al que apuntar",
            "559_ufcs_ns_fichero_err.vx", "VX2070")
 
+# Lo que la deduccion NO puede sacar, y de quien es el problema.  Una variable
+# que no aparece en ningun parametro es un rasgo de la FIRMA -- le pasara a todo
+# el que la use --; una que aparece pero no encaja con el argumento es de esta
+# llamada.  Mandan a sitios distintos, asi que son dos codigos.
+fails_case("generica_infer_firma",
+           "una variable de tipo que no sale de ningun parametro: no hay de donde leerla",
+           "571_generica_inferencia_err.vx", "VX2088")
+
+fails_case("generica_infer_llamada",
+           "la variable aparece, pero el argumento no tiene la forma declarada",
+           "571_generica_inferencia_err.vx", "VX2089")
+
+# Llamar a una variable de tipo como se llama un tipo que ya existe, visto desde
+# los dos lados.  Sin cota, la declaracion se lee como una especializacion de
+# algo que no existe; con cota no hay duda de que se pretendia declarar, y el
+# choque se dice tal cual.  Los dos son el MISMO error, y por eso van juntos.
+fails_case("generica_homonima_sin_primaria",
+           "un nombre de tipo entre <>: son argumentos, y no hay plantilla que especializar",
+           "575_genericas_homonimas_err.vx", "VX2094")
+
+fails_case("generica_homonima_choque",
+           "una variable de tipo CON COTA que se llama como un tipo existente",
+           "575_genericas_homonimas_err.vx", "VX2095")
+
 # La regla 2.2 desde la grafia LIBRE: miembro + libre para el mismo receptor.
 # Es el mismo choque que `x.f(a)` ya rechaza, y tiene que fallar igual escrito
 # del otro modo -- si no, el mismo programa compila o no segun como se escriba
 # la llamada, que es justo lo que UFCS promete que no pasa.  Mismo codigo, que
 # es la prueba de que es una regla y no dos.
 fails_case("ufcs_inverso_choque",
-           "miembro y libre para el MISMO receptor, escrito como llamada libre",
+           "miembro y libre para el MISMO receptor, escrito como llamada libre -- y tambien cuando el miembro es GENERICO, que no esta en el layout con su nombre y por eso se colaba: la regla dependia de si el metodo era generico",
            "567_ufcs_inverso_err.vx", "VX2068")
 
 # Ni funcion libre ni miembro: se buscaron las dos cosas, asi que se dicen las

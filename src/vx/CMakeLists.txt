@@ -214,6 +214,7 @@ add_library(vx_lib STATIC
     # nombre contra doscientos literales.  La necesitan el bajador y el
     # comprobador de tipos, que antes tenian cada uno la suya.
     builtin_names.cpp
+    builtin_params.cpp
     # Varias declaraciones con un nombre: cual quiere una llamada, y como se
     # separan sus simbolos.  Aparte porque la misma regla la usan las funciones
     # libres, los metodos y los constructores -- tenerla escrita tres veces es
@@ -247,6 +248,15 @@ add_library(vx_lib STATIC
     generics/concepts.cpp
     # Especializacion total + parcial de structs genericos (#7).
     generics/specialization.cpp
+    # Deducir los type-args de una generica a partir de sus argumentos, para
+    # que `id(5)` valga por `id<i64>(5)`.  Aparte porque lo necesitan las
+    # funciones libres, los metodos y la eleccion de especializacion: escrito
+    # en cada sitio serian tres criterios de deduccion esperando a divergir.
+    generics/generic_infer.cpp
+    # Repartir los `<...>` de una declaracion: que DECLARA variables y que PASA
+    # argumentos.  Solo se puede decidir sabiendo que nombres son tipos, asi
+    # que no lo hace el parser.
+    generics/generic_head.cpp
     # Fase 0 interop C / ownership: clasificador is_c_representable / is_managed.
     type_classify.cpp
     # Fase 4 interop C: generador de header C publico (vx --emit-header).

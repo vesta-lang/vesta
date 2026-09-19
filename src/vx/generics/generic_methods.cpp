@@ -75,11 +75,10 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
                                              const std::vector<Type> &targs,
                                              const SourceLoc &loc) {
     if (tmpl->method_type_params.size() != targs.size()) {
-        diags_.error(loc, "numero incorrecto de args de tipo para el metodo "
-                          "generico '" +
-                              tmpl->name + "': esperados " +
-                              std::to_string(tmpl->method_type_params.size()) +
-                              ", recibidos " + std::to_string(targs.size()));
+        diags_.diag(loc, DiagLevel::ERR, "VX2093",
+                    {tmpl->name,
+                     std::to_string(tmpl->method_type_params.size()),
+                     std::to_string(targs.size())});
         return std::string();
     }
 
@@ -179,17 +178,27 @@ std::string TypeChecker::monomorphize_method(const std::string &container,
     return mangled;
 }
 
-bool TypeChecker::try_monomorphize_method_call(ast::CallExpr *e,
-                                               ast::FieldAccessExpr *fa,
-                                               const Type &bt) {
+TypeChecker::GenericMethodCall TypeChecker::try_monomorphize_method_call(
+    ast::CallExpr *e, ast::FieldAccessExpr *fa, const Type &bt) {
     if (bt.kind != PrimitiveKind::STRUCT && bt.kind != PrimitiveKind::CLASS)
-        return false;
+        return GenericMethodCall::NotGeneric;
     const bool is_struct = (bt.kind == PrimitiveKind::STRUCT);
     const std::string &container = bt.struct_name;
 
     const ast::ClassMethodDecl *tmpl =
         find_generic_method_template(container, fa->field_name);
-    if (!tmpl) return false; // no es un metodo generico: resolucion normal
+    if (!tmpl) return GenericMethodCall::NotGeneric; // resolucion normal
+
+    /* Tenerlo no cierra la pregunta, igual que con uno corriente: si ademas
+     * hay una libre que toma este receptor, hay dos candidatos y no se elige
+     * en silencio.  Es la regla 2.2, y se declara con la MISMA funcion que la
+     * declara desde las otras dos grafias.
+     *
+     * Faltaba justo aqui, y por eso el choque dependia de si el metodo era
+     * GENERICO: con uno normal la llamada no compilaba, y con uno generico
+     * ganaba el metodo callando y la libre se quedaba sin llamar nunca. */
+    if (report_ufcs_clash(bt, fa->field_name, written_type_name(bt), e->loc))
+        return GenericMethodCall::Failed; // ya se dijo; no se instancia nada
 
     // Resolver los type-args: explicitos (`obj.m<U>()`) o inferidos del
     // tipo de los argumentos (`obj.m(x)` con U == tipo del param x).
@@ -201,44 +210,31 @@ bool TypeChecker::try_monomorphize_method_call(ast::CallExpr *e,
         for (auto &ta : e->type_args)
             targs.push_back(resolve_type_node(ta.get()));
     } else {
-        // INFERIDOS: por cada type-param, buscar el primer parametro cuyo
-        // tipo declarado sea exactamente ese nombre (`U x`) y tomar el tipo
-        // del argumento correspondiente.
-        for (const auto &tp : tmpl->method_type_params) {
-            Type deduced{PrimitiveKind::COUNT};
-            for (size_t pi = 0; pi < tmpl->params.size() && pi < e->args.size();
-                 ++pi) {
-                auto *pt = tmpl->params[pi]->type.get();
-                if (pt && pt->kind == ast::NodeKind::NamedTypeNode &&
-                    static_cast<ast::NamedTypeNode *>(pt)->name == tp) {
-                    deduced = check_expr(e->args[pi].get());
-                    break;
-                }
-            }
-            targs.push_back(deduced);
-        }
-        bool ok = targs.size() == tmpl->method_type_params.size();
-        for (const auto &t : targs)
-            if (t.kind == PrimitiveKind::COUNT) ok = false;
+        /* INFERIDOS, con la MISMA deduccion que una funcion libre generica: es
+         * la misma pregunta, y tenerla escrita dos veces acabaria deduciendo
+         * distinto para la misma firma segun se llame por el punto o por su
+         * nombre -- con lo que dejarian de ser la misma llamada.
+         *
+         * La clave lleva el duenyo delante porque dos tipos pueden declarar un
+         * metodo generico con el mismo nombre y otra firma. */
+        const bool ok = deduce_call_type_args(e, tmpl, tmpl->method_type_params,
+                                              tmpl->params, targs);
         if (!ok) {
-            diags_.error(e->loc,
-                         "no se pudieron inferir los argumentos de tipo del "
-                         "metodo generico '" +
-                             fa->field_name + "'; especificalos: obj." +
-                             fa->field_name + "<...>(...)");
-            return false;
+            report_type_args_not_deduced(e->loc, fa->field_name, tmpl,
+                                         tmpl->method_type_params, targs);
+            return GenericMethodCall::Failed;
         }
     }
 
     const std::string mangled =
         monomorphize_method(container, is_struct, tmpl, targs, e->loc);
-    if (mangled.empty()) return false;
+    if (mangled.empty()) return GenericMethodCall::Failed;
 
     // Reescribir la llamada al metodo concreto; la resolucion normal de
     // check_call (mas abajo) lo encuentra ya en el layout.
     fa->field_name = mangled;
     e->type_args.clear();
-    return true;
+    return GenericMethodCall::Rewritten;
 }
 
 void TypeChecker::drain_pending_method_monos() {

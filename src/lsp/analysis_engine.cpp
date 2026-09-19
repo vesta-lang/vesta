@@ -43,6 +43,7 @@ VESTA_ALLOC_MODULE_HERE("lsp");
 #include "vx/ast.h"
 #include "vx/compiler.h" // compile_vx_project (multi-modulo)
 #include "vx/diagnostic.h"
+#include "vx/generics/generic_head.h" // repartir los `<...>` de una decl
 #include "vx/lexer.h"
 #include "vx/parser.h"
 
@@ -179,6 +180,12 @@ void extract_declared_names(const std::string &text, const std::string &uri,
     vx::Parser parser(lex, local_diags);
     std::unique_ptr<vx::ast::ModuleNode> mod = parser.parse_program();
     if (!mod) return;
+    /* Repartir los `<...>`: el parser deja sin decidir cuales DECLARAN
+     * variables de tipo y cuales pasan argumentos, porque eso depende de que
+     * nombres son tipos.  Aqui solo se ha parseado, asi que se reparte con los
+     * del fichero -- de sobra para resaltar --, con la MISMA regla que usa el
+     * compilador y no una escrita aparte. */
+    vx::generics::classify_generic_heads(*mod);
     // Recorrer SOLO las declaraciones top-level: nombres de tipos y funciones
     // visibles para el resaltado.  Los miembros (campos/metodos) se refinaran
     // en una fase futura (parametros/propiedades por posicion).
@@ -395,6 +402,7 @@ AnalysisEngine::analyze_document(const std::string &uri,
             vx::Lexer slx(text, uri, sidiag);
             vx::Parser sp(slx, sidiag);
             auto smod = sp.parse_program();
+            if (smod) vx::generics::classify_generic_heads(*smod);
             if (smod)
                 analysis->sem_index =
                     vx::build_semantic_index(*smod, text, uri);

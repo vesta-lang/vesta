@@ -40,6 +40,7 @@
 
 #include "util/alloc/small_vector.h" // un grupo de sobrecargas, sin reservar
 #include "util/env_flags.h"
+#include "vx/generics/generic_infer.h"     // de donde sale cada type-param
 #include "vx/generics/instance_registry.h" // el reparto de instanciaciones
 #include <algorithm>
 #include <cstdint>
@@ -118,6 +119,17 @@ enum class SymbolKind : uint8_t {
  */
 struct FunctionSig {
     Type return_type;
+    /// Es uno de los nombres que el lenguaje reconoce sin que nadie los
+    /// declare.
+    ///
+    /// Lo pregunta el BAJADO.  Un builtin se puede sobrecargar -- misma
+    /// aridad, ranuras con otro nombre --, y entonces el comprobador elige y
+    /// apunta cual gano en @c CallExpr::resolved_sig.  Sin esta marca el
+    /// bajado volvia a decidir por su cuenta, mirando solo el NOMBRE: la
+    /// llamada type-chequeaba contra la del usuario y ejecutaba la del
+    /// lenguaje, sin error y sin aviso.  Un hecho, un productor: aqui solo se
+    /// consulta lo que el comprobador ya decidio.
+    bool is_builtin = false;
     std::vector<Type> param_types;
     /// Como se llama cada parametro, alineado con @c param_types.
     ///
@@ -1474,6 +1486,7 @@ class TypeChecker {
      * el nombre mangled (e.g. "id_i64").  Idempotente.
      */
     std::string monomorphize_function(const std::string &template_name,
+                                      const ast::FunctionDecl *tmpl,
                                       const std::vector<Type> &args,
                                       const SourceLoc &loc);
 
@@ -1517,17 +1530,32 @@ class TypeChecker {
                                  const std::string &method_name) const;
 
     /**
+     * @brief Que paso al intentar resolver la llamada como metodo GENERICO.
+     *
+     * Son TRES respuestas, no dos: un `false` que significaba a la vez "no es
+     * generico" y "lo es, pero no se pudo" hacia que tras decir el error de
+     * verdad -- que la variable no se deduce -- la resolucion siguiera y
+     * acusara al tipo de no tener ese metodo.  Que es FALSO: lo tiene, es una
+     * plantilla, y el mensaje mandaba a buscar un metodo escrito delante.
+     */
+    enum class GenericMethodCall : uint8_t {
+        NotGeneric, ///< no hay plantilla asi: la resolucion sigue su curso
+        Rewritten,  ///< instanciada; la llamada apunta ya al metodo concreto
+        Failed,     ///< la hay y no se pudo usar; el porque ya esta dicho
+    };
+
+    /**
      * @brief Hook de @c check_call para metodos genericos (#4).  Si
      * @p fa->field_name es un metodo generico de @p bt (struct/clase),
      * resuelve los type-args (explicitos en @c e->type_args o inferidos
      * de los argumentos), monomorphiza via @c monomorphize_method y
      * reescribe @c fa->field_name al nombre concreto (`metodo_<U>`),
      * dejando que la resolucion normal de la llamada lo encuentre.
-     * Devuelve true si reescribio (era generico).  Si no es generico,
-     * false (la resolucion sigue su curso).  En generic_methods.cpp.
+     * En generic_methods.cpp.
      */
-    bool try_monomorphize_method_call(ast::CallExpr *e,
-                                      ast::FieldAccessExpr *fa, const Type &bt);
+    GenericMethodCall try_monomorphize_method_call(ast::CallExpr *e,
+                                                   ast::FieldAccessExpr *fa,
+                                                   const Type &bt);
 
     /// L2.3: el nombre es un enum template generico?  Acepta el nombre CRUDO,
     /// el cualificado por namespace (`col.Maybe` -> `col__Maybe`) y el simple
@@ -2257,6 +2285,113 @@ class TypeChecker {
      * @param id El nombre que se escribio delante del parentesis.
      * @return true si la reescribio y la comprobo; false si no habia miembro.
      */
+    /**
+     * @brief De donde sale cada type-param de esta plantilla, calculado una
+     * vez.
+     *
+     * La firma de una plantilla no cambia, asi que averiguar en que parametros
+     * aparece cada variable es una cuenta que solo hay que hacer UNA vez; en
+     * cada llamada seria repetirla.
+     *
+     * Se calcula al usarla y no al declararla a proposito: asi lo pagan las
+     * plantillas que de verdad se llaman, y no las que el fichero declara y
+     * nadie usa -- que en una libreria son casi todas.
+     *
+     * @param key         Nombre con el que se reconoce la plantilla.
+     * @param type_params Sus variables de tipo, en orden.
+     * @param params      Sus parametros, en orden.
+     * @return El plan, ya cacheado.
+     */
+    const generics::DeductionPlan &
+    deduction_plan(const void *key, const std::vector<std::string> &type_params,
+                   const std::vector<std::unique_ptr<ast::ParamDecl>> &params);
+
+    /**
+     * @brief Deduce los type-args de una llamada a partir de sus argumentos.
+     *
+     * La MISMA para una funcion libre y para un metodo: las dos preguntan lo
+     * mismo, y escrita dos veces acabarian deduciendo distinto para la misma
+     * firma -- con lo que `f(x)` y `x.f()` dejarian de ser la misma llamada.
+     *
+     * Solo comprueba los argumentos que el plan pide.  Comprobar uno de mas no
+     * es gratis: es recorrer su expresion entera, y ademas el camino normal de
+     * la llamada la va a comprobar otra vez, asi que se paga doble y anidado se
+     * multiplica.
+     *
+     * @param e           La llamada.
+     * @param key         Nombre con el que se reconoce la plantilla.
+     * @param type_params Sus variables de tipo, en orden.
+     * @param params      Sus parametros, en orden.
+     * @param out         [out] Un tipo por variable, en el mismo orden.  Una
+     *                    que no se dedujo sale como @c COUNT.
+     * @return @c true si se dedujeron TODAS.
+     */
+    bool deduce_call_type_args(
+        ast::CallExpr *e, const void *key,
+        const std::vector<std::string> &type_params,
+        const std::vector<std::unique_ptr<ast::ParamDecl>> &params,
+        std::vector<Type> &out);
+
+    /**
+     * @brief Dice QUE variable de tipo falto, y de quien es el problema.
+     *
+     * Nombrar la que falta es la diferencia entre poder mirar la firma y tener
+     * que adivinarla.  Y se distingue si no aparece en ningun parametro -- un
+     * rasgo de la FIRMA, que le toca a quien la escribio -- de si aparece pero
+     * con estos argumentos no sale, que es de esta llamada.
+     *
+     * @param loc         Donde se escribio la llamada.
+     * @param what        Como nombrarla en el mensaje.
+     * @param key         La clave con la que se cacheo su plan.
+     * @param type_params Sus variables de tipo, en orden.
+     * @param deduced     Lo que salio; @c COUNT donde no se dedujo.
+     */
+    void
+    report_type_args_not_deduced(const SourceLoc &loc, const std::string &what,
+                                 const void *key,
+                                 const std::vector<std::string> &type_params,
+                                 const std::vector<Type> &deduced);
+
+    /**
+     * @brief El tipo con el que un receptor entra al indice de llamada
+     * uniforme.
+     *
+     * Una INSTANCIACION entra por su plantilla: `Caja<i64>` y `Caja<f64>` caen
+     * donde cae lo declarado contra `Caja<T>`, que es lo que permite escribir
+     * una generica una vez y llamarla por el punto sobre cualquiera de sus
+     * instancias.
+     *
+     * Hay que traducirlo aqui porque el nombre de una instancia ya viene
+     * aplanado (`Caja_i64`) y de ahi no se puede sacar la plantilla sin
+     * adivinar -- un tipo del usuario puede llamarse asi --.  Quien lo sabe es
+     * la ficha que dejo la instanciacion.
+     *
+     * @param t El tipo del receptor, o el declarado de un primer parametro.
+     * @return El mismo, con el nombre de su plantilla si sale de una.
+     */
+    Type ufcs_key_type(const Type &t) const;
+
+    /**
+     * @brief Cual de las plantillas homonimas quiere esta llamada.
+     *
+     * Un nombre puede tener varias -- `f<T>(T)` y `f<T>(Caja<T>)`, o dos que
+     * solo se distinguen por como se llaman sus ranuras --, y son sobrecargas
+     * como cualquier otra.  Lo que las separa no se ve comparando tipos,
+     * porque los suyos no existen hasta instanciarlas: se ve INTENTANDO
+     * deducirlas.  Solo liga sus variables la que de verdad encaja.
+     *
+     * Con una sola no se prueba nada: no hay nada que decidir, y hacerlo
+     * costaria comprobar argumentos en toda llamada a una generica.
+     *
+     * @param e    La llamada.
+     * @param name El nombre con el que se declararon.
+     * @param out  [out] El indice en @c mod_.decls de la elegida.
+     * @return @c false si se dijo por que no se puede elegir (ninguna encaja,
+     *         o encajan varias).
+     */
+    bool pick_generic_fn_template(ast::CallExpr *e, const std::string &name,
+                                  size_t &out);
+
     bool try_ufcs_reverse(ast::CallExpr *e, const ast::IdentExpr *id);
 
     /**
@@ -3880,7 +4015,19 @@ class TypeChecker {
     /// Templates de FUNCIONES genericas (`T id<T>(T x)`).  Mapea template_name
     /// -> indice en mod_.decls.  Cada llamada `id<i64>(...)` (o con args
     /// inferidos) se monomorphiza via monomorphize_function().
-    std::unordered_map<std::string, size_t> generic_fn_templates_;
+    /// Las plantillas genericas por nombre.  Una LISTA y no una sola, porque
+    /// un nombre puede tener varias que solo se distinguen por la FORMA de sus
+    /// parametros (`f<T>(T)` y `f<T>(Caja<T>)`) o por como se llaman sus
+    /// ranuras: son sobrecargas como cualquier otra, y cual quiere una llamada
+    /// lo dice la deduccion.  Con un solo hueco, la segunda pisaba a la
+    /// primera y la llamada acababa en la que no era.
+    std::unordered_map<std::string, util::SmallVector<size_t, 2>>
+        generic_fn_templates_;
+
+    /// De donde sale cada type-param de una plantilla, por su nombre.  Crece
+    /// con las plantillas que de verdad se LLAMAN, y cada entrada son una a
+    /// tres listas de un punyado de indices.  Ver @c deduction_plan.
+    std::unordered_map<const void *, generics::DeductionPlan> deduction_plans_;
     /// Nombre publico de una plantilla importada -> label con el que quedo
     /// registrada.  Ver @ref register_generic_fn_alias.
     std::unordered_map<std::string, std::string> generic_fn_public_names_;
@@ -4208,9 +4355,27 @@ class TypeChecker {
              * dentro de un modulo cruzando la frontera.  Lo que las separa son
              * los PARaMETROS, y eso lo decide el mismo sitio que decide la
              * sobrecarga local. */
-            if (!previous_label.empty() && !new_label.empty() &&
-                previous_label != new_label &&
-                !add_overload_candidate(name, prev->second, idx))
+            /* Y el caso que la etiqueta no puede contestar: que lo previo sea
+             * un BUILTIN.
+             *
+             * Un builtin no lleva etiqueta manglada -- nadie la necesita, su
+             * nombre no lo comparte con nada --, asi que la comprobacion de
+             * arriba se cortaba en el primer `empty()` y el simbolo importado
+             * lo SUSTITUIA sin mas.  El resultado era que traerse
+             * `std.os.write` dejaba inalcanzable el `write` del lenguaje, y al
+             * reves: una llamada type-chequeaba contra una firma y se
+             * ejecutaba la otra.  Un builtin es una candidata como cualquier
+             * otra; lo que las separa son los parametros, que es lo que mira
+             * `add_overload_candidate`. */
+            const bool previo_es_builtin =
+                function_sigs_[prev->second].is_builtin;
+            if (previo_es_builtin) {
+                if (!add_overload_candidate(name, prev->second, idx))
+                    diags_.diag(import_site_, DiagLevel::ERR, "VXT003",
+                                {name, previous_label, new_label});
+            } else if (!previous_label.empty() && !new_label.empty() &&
+                       previous_label != new_label &&
+                       !add_overload_candidate(name, prev->second, idx))
                 diags_.diag(import_site_, DiagLevel::ERR, "VXT003",
                             {name, previous_label, new_label});
         }

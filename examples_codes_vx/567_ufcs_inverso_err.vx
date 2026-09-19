@@ -27,6 +27,14 @@ namespace ejemplos.ufcs_inverso_err;
 //    punto y la comprueba el camino de siempre, asi que no hay una segunda
 //    puerta por la que colarse.
 //
+// 5. Y el choque tambien cuando el miembro es GENERICO.  Un metodo generico no
+//    esta en el layout con su nombre -- ahi solo hay instancias ya concretas,
+//    porque la plantilla se clona al llamarla --, asi que preguntando solo por
+//    el layout el tipo parecia no tener ese miembro.  El resultado era que la
+//    regla dependia de si el metodo era generico: con uno normal la llamada no
+//    compilaba y con uno generico ganaba el metodo callando, dejando la libre
+//    sin llamar nunca.
+//
 // Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
 // el del ejemplo que acompanya, que es su vecino de directorio.
 //
@@ -37,6 +45,9 @@ struct Punto {
 	i64 y;
 
 	i64 suma() => this.x + this.y;
+
+	// El miembro GENERICO del punto 5.
+	U guarda<U>(U x) => x;
 
 	// Las dos de la misma firma, separadas solo por el nombre de sus ranuras.
 	i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
@@ -62,3 +73,8 @@ i64 sin_nombrar_la_ranura(Punto p) => pesa(p, 1, 2);
 i64 ni_libre_ni_miembro(Punto p) => noexiste(p);
 
 i64 privado(Caja c) => oculto(c);
+
+// 5: la libre que choca con el miembro GENERICO.  Misma regla, mismo codigo.
+i64 guarda(Punto p, i64 x) => x + 1;
+
+i64 choque_generico(Punto p) => guarda(p, 3);

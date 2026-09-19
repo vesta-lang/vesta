@@ -53,6 +53,16 @@
 
 namespace vx {
 
+Type TypeChecker::ufcs_key_type(const Type &t) const {
+    if (t.kind != PrimitiveKind::STRUCT && t.kind != PrimitiveKind::CLASS)
+        return t;
+    const auto *mi = monomorph_info(t.struct_name);
+    if (mi == nullptr || mi->template_name.empty()) return t;
+    Type key = t;
+    key.struct_name = mi->template_name;
+    return key;
+}
+
 bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
                                     const std::string &owner,
                                     const SourceLoc &loc) {
@@ -60,7 +70,8 @@ bool TypeChecker::report_ufcs_clash(const Type &recv, const std::string &name,
      * nombre para esta cabeza de tipo, no cual de ellas ganaria.  Es una sonda
      * en una tabla, asi que el metodo cuyo nombre no comparte ninguna libre --
      * que son casi todos -- no paga por esta regla. */
-    if (ufcs_.find(recv, name, current_ns_prefix_) == nullptr) return false;
+    if (ufcs_.find(ufcs_key_type(recv), name, current_ns_prefix_) == nullptr)
+        return false;
     diags_.diag(loc, DiagLevel::ERR, "VX2068", {name, owner});
     return true;
 }
@@ -299,8 +310,10 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
      * siendo "cual lo toma de primero", que es lo que la regla 2.2 mira. */
     const ufcs::Candidates *cand_slots =
         (hole_pre != kUfcsNoHole && hole_pre != kUfcsHoleBad)
-            ? ufcs_.find_any(recv, fa->field_name, current_ns_prefix_, &chosen)
-            : ufcs_.find(recv, fa->field_name, current_ns_prefix_, &chosen);
+            ? ufcs_.find_any(ufcs_key_type(recv), fa->field_name,
+                             current_ns_prefix_, &chosen)
+            : ufcs_.find(ufcs_key_type(recv), fa->field_name,
+                         current_ns_prefix_, &chosen);
     /* Un literal de cadena es un `ptr` a datos estaticos y solo se PROMUEVE a
      * `string` donde hace falta -- por eso `grita("hola")` compila --, asi que
      * si no hay nada para el puntero se pregunta tambien por la cadena.  Sin
@@ -379,7 +392,14 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
     const uint32_t pick =
         overload::select(cands.data(), cands.size(), arg_types,
                          &overload_accepts, this, &names_for_select);
-    if (pick == overload::kNoPick) return false;
+    /* Una PLANTILLA no se elige comparando tipos: sus parametros no resuelven a
+     * nada hasta que se instancia, asi que aqui figuran vacios y ninguna
+     * comparacion encaja.  Quien decide si la llamada vale es la DEDUCCION, y
+     * esa corre al comprobar la llamada ya reescrita -- que es exactamente el
+     * reparto de siempre: aqui se dice cual es la candidata, no si sirve. */
+    if (pick == overload::kNoPick &&
+        (chosen == nullptr || !is_generic_fn_template(*chosen)))
+        return false;
 
     /* Encontrada: el nodo se convierte en la OTRA grafia y lo comprueba el
      * camino de siempre.  Reescribir en vez de resolver aqui es lo que hace que
@@ -486,8 +506,9 @@ bool TypeChecker::try_ufcs_reverse(ast::CallExpr *e, const ast::IdentExpr *id) {
         recv = check_expr(recv_expr);
     }
     if (recv.kind == PrimitiveKind::COUNT) return false;
+    Type norm;
     const std::vector<ClassMethodInfo> *ms =
-        receiver_methods(recv, nullptr, nullptr, nullptr);
+        receiver_methods(recv, &norm, nullptr, nullptr);
     if (ms == nullptr) return false;
     /* El nombre tal y como se ESCRIBIO.  El aplanado renombra las llamadas al
      * namespace desde el que se hacen -- `crece(r, 2)` llega aqui como
@@ -498,8 +519,15 @@ bool TypeChecker::try_ufcs_reverse(ast::CallExpr *e, const ast::IdentExpr *id) {
     /* Por NOMBRE y ahi acaba la pregunta.  Cual de sus sobrecargas, si son
      * varias, lo decide el camino del punto -- que es el mismo selector que
      * usa una llamada libre --; adelantarlo aqui seria un segundo criterio
-     * esperando a divergir. */
-    if (find_instance_method(*ms, member) == nullptr) return false;
+     * esperando a divergir.
+     *
+     * Y un metodo GENERICO no esta en el layout con ese nombre: ahi solo hay
+     * instancias ya concretas (`mete_i64`), porque la plantilla se clona al
+     * llamarla.  Preguntar solo por el layout hacia decir que el tipo no tiene
+     * ese miembro, que es FALSO: lo tiene, es una plantilla. */
+    if (find_instance_method(*ms, member) == nullptr &&
+        find_generic_method_template(norm.struct_name, member) == nullptr)
+        return false;
 
     /* Encontrado: el nodo se convierte en la OTRA grafia.  A partir de aqui no
      * hay nada propio de esta direccion: los argumentos por nombre, la
@@ -574,7 +602,17 @@ bool TypeChecker::report_ufcs_reverse_clash(ast::CallExpr *e,
     if (ms == nullptr) return false;
     // Por el nombre ESCRITO, igual que la reescritura: ver `try_ufcs_reverse`.
     const std::string member = written_name(id->name);
-    if (find_instance_method(*ms, member) == nullptr) return false;
+    /* Y por la MISMA pareja de preguntas que hace la reescritura: un metodo
+     * GENERICO no esta en el layout con su nombre -- ahi solo hay instancias ya
+     * concretas --, asi que preguntar solo por el layout decia que no hay
+     * miembro cuando lo hay.
+     *
+     * Sin esto, el choque dependia de si el metodo era generico: con uno
+     * normal la llamada no compilaba, y con uno generico se elegia en silencio
+     * -- que es justo lo que esta regla existe para no hacer --. */
+    if (find_instance_method(*ms, member) == nullptr &&
+        find_generic_method_template(norm.struct_name, member) == nullptr)
+        return false;
     /* Y el choque lo declara la MISMA funcion que lo declara desde el punto,
      * con el mismo mensaje: es una regla, no dos. */
     return report_ufcs_clash(norm, member, owner, e->loc);

@@ -1,0 +1,118 @@
+namespace ejemplos.generica_inferencia;
+
+// DEDUCIR los argumentos de tipo: escribir `id(5)` y no `id<i64>(5)`.
+//
+// La forma barata de deducir es buscar un parametro cuyo tipo declarado SEA la
+// letra `T`.  Funciona mientras la variable aparezca DESNUDA, y deja de ver
+// nada en cuanto algo la envuelve -- que es casi siempre, porque las firmas
+// que hacen comodo el codigo generico envuelven todas:
+//
+//     T id<T>(T x)                          <- desnuda: la ve
+//     T saca<T>(Caja<T> c)                  <- dentro de un generico: no
+//     T lee<T>(T* p)                        <- dentro de un puntero: no
+//     R aplica<T, R>(T x, cfn(T) -> R f)    <- `R` solo esta en el retorno
+//
+// Asi que la deduccion es ESTRUCTURAL: recorre a la vez el tipo declarado y el
+// tipo real del argumento, y liga cada variable a lo que haya enfrente.
+//
+// Lo que se prueba aqui:
+//
+//   1. La variable DESNUDA, que es la que ya se deducia: no se rompe.
+//   2. Dentro de un generico: `Caja<T>`.
+//   3. Y de un generico DENTRO de otro: `Caja<Caja<T>>`.
+//   4. Dentro de un puntero: `T*`.
+//   5. Dos variables en un solo parametro: `Par<A, B>`.
+//   6. La MISMA variable en dos parametros.
+//   7. Una variable que solo aparece en el RETORNO de una funcion parametro:
+//      `cfn(T) -> R`.  Es el caso que decide, porque es la forma de las
+//      funciones de orden superior.
+//   8. Y ahi, el NOMBRE de una funcion a secas -- sin `&` --, que es como se
+//      escribe cuando se lee bien.
+//   9. Escribir los type-args a mano sigue valiendo, y da lo mismo: son dos
+//      formas de decir lo mismo y la elige quien escribe.
+//  10. Y las dos grafias: una generica libre se llama POR EL PUNTO, y un metodo
+//      generico se llama como una libre.  Que una funcion sea generica no la
+//      saca de la llamada uniforme -- seria una excepcion sin razon --, asi que
+//      `5.id()` y `mete(b, 7)` valen igual que `id(5)` y `b.mete(7)`.
+//
+// Lo que NO se puede deducir vive en `571_generica_inferencia_err.vx`.
+//
+// Compilar y ejecutar:
+//   vm --vesta examples_codes_vx/570_generica_inferencia.vx -o g
+//   vm --run g.velb --stats
+//
+// Resultado esperado: 42.
+
+struct Caja<T> {
+	T v;
+}
+
+struct Par<A, B> {
+	A a;
+	B b;
+}
+
+// 1. desnuda
+T id<T>(T x) => x;
+
+// 2. dentro de un generico
+T saca<T>(Caja<T> c) => c.v;
+
+// 3. dos niveles
+T saca2<T>(Caja<Caja<T>> c) => c.v.v;
+
+// 4. dentro de un puntero
+T lee<T>(T* p) => *p;
+
+// 5. dos variables de un solo parametro
+A primero<A, B>(Par<A, B> p) => p.a;
+
+// 6. la misma variable en dos parametros
+T mayor<T>(T a, T b) => a;
+
+// 7 + 8. `R` SOLO aparece en el retorno de la funcion parametro
+R aplica<T, R>(T x, cfn(T) -> R f) => f(x);
+
+i64 mas_uno(i64 x) => x + 1;
+
+// 10. Un METODO generico, para llamarlo como una funcion libre.
+struct Bolsa {
+	i64 n;
+
+	U mete<U>(U x) => x;
+}
+
+i32 main() {
+	Caja<i64>       k   = {.v = 6};
+	Caja<Caja<i64>> kk  = {.v = k};
+	Par<i64, u8>    par = {.a = 7, .b = 2};
+	i64             n   = 8_i64;
+
+	i64 a = id(1);               //                           1
+	i64 b = saca(k);             //                           6
+	i64 c = saca2(kk);           //                           6
+	i64 d = lee(&n);             //                           8
+	i64 e = primero(par);        //                           7
+	i64 f = mayor(3, 4);         //                           3
+	i64 g = aplica(5, mas_uno);  //  el NOMBRE a secas        6
+	i64 h = aplica(4, &mas_uno); // y con `&`, la misma       5
+
+	// 9. Con los type-args escritos: la misma llamada, y da lo mismo.
+	i64 i = saca<i64>(k); //                                  6
+	i64 j = id<i64>(1);   //                                  1
+
+	// 10. Y las DOS grafias.  Una generica no deja de ser una funcion: se llama
+	// por el punto como cualquier otra, y un metodo generico se llama por su
+	// nombre.  Lo contrario seria una excepcion sin razon que la explique.
+	Bolsa bo = {.n = 0};
+	i64   pa = 4.id();      // la libre generica, POR EL PUNTO      4
+	i64   pb = k.saca();    // idem, con receptor `Caja<i64>`       6
+	i64   pc = mete(bo, 3); // el METODO generico, como una libre   3
+
+	println("a=${a} b=${b} c=${c} d=${d} e=${e}");
+	println("f=${f} g=${g} h=${h} i=${i} j=${j}");
+	println("pa=${pa} pb=${pb} pc=${pc}");
+
+	// 1+6+6+8+7+3+6+5+6+1+4+6+3 = 62
+	return (i32)(a + b + c + d + e + f + g + h + i + j + pa + pb + pc - 20);
+}

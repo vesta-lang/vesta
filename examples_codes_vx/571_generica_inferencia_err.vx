@@ -1,0 +1,75 @@
+namespace ejemplos.generica_inferencia_err;
+
+// NEGATIVO, la otra mitad de `570_generica_inferencia.vx`: lo que NO se puede
+// deducir, y de quien es el problema en cada caso.
+//
+// La deduccion lee los ARGUMENTOS.  Hay dos formas de que no salga, y no son la
+// misma cosa:
+//
+// 1. La variable NO APARECE en ningun parametro -- solo en el retorno --, asi
+//    que no hay de donde leerla.  Eso no depende de esta llamada: es un rasgo
+//    de la FIRMA, y le pasara a todo el que la use.  El mensaje nombra la
+//    variable, para no dejar buscando cual de las dos falta.
+//
+// 2. La variable SI aparece, pero el argumento que se paso no tiene la forma
+//    declarada.  Eso si es de esta llamada.
+//
+// Distinguirlos importa porque mandan a sitios distintos: el primero lo arregla
+// quien escribio la generica; el segundo, quien la llama.
+//
+// Y vale IGUAL para un metodo generico, que es la misma pregunta escrita por
+// el punto.  Ahi ademas se acusaba al tipo de no tener ese metodo despues de
+// haber dicho el error de verdad -- lo tiene, es una plantilla --, con lo que
+// el segundo mensaje mandaba a buscar un metodo escrito delante.
+//
+// En los tres casos la salida es la misma y esta dicha: escribir los type-args.
+// Deducir es una comodidad, no el unico camino.
+//
+// Sin `main` a proposito: un negativo no se ejecuta, y su `main` chocaria con
+// el del ejemplo que acompanya, que es su vecino de directorio.
+//
+// Se espera que NO compile: VX2088 y VX2089.
+
+struct Caja<T> {
+	T v;
+}
+
+struct Vacio<R> {
+	R r;
+}
+
+// 1: `R` no sale de ningun parametro.
+Vacio<R> saca_como<T, R>(Caja<T> c) {
+	Vacio<R> v;
+	return v;
+}
+
+// 2: `T` si aparece, envuelto en un `Caja<T>`.
+T exige_caja<T>(Caja<T> c) => c.v;
+
+// 3: lo mismo que 1, pero en un METODO.  La deduccion es la misma, y el
+// mensaje tambien.
+struct Bolsa {
+	i64 n;
+
+	U saca_como<U>(i64 x) {
+		U u;
+		return u;
+	}
+}
+
+Vacio<u8> falta_del_retorno() {
+	Caja<i64> k = {.v = 1};
+	return saca_como(k);
+}
+
+i64 forma_que_no_encaja() {
+	i64 suelto = 3_i64;
+	// No es una `Caja` de nada: no hay nada que ligar con `T`.
+	return exige_caja(suelto);
+}
+
+i64 metodo_sin_deducir(Bolsa b) {
+	b.saca_como(3);
+	return 0_i64;
+}

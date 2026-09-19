@@ -247,6 +247,21 @@ enum class PrimitiveKind : uint8_t {
     /// usar `T` en posicion de tipo, `type_from_node` lo resuelve via
     /// @c comptime_const_values_.
     TYPE_META,
+    /// Una VARIABLE de tipo de una plantilla, todavia sin resolver: la `T` de
+    /// `T id<T>(T x)`, o el `Caja<T>` de su primer parametro.  En
+    /// @c struct_name va el tipo TAL Y COMO SE ESCRIBIO, que es lo unico que
+    /// se sabe de el mientras nadie instancie la plantilla.
+    ///
+    /// Existe porque lo contrario -- dejarlo en @c VOID, que es lo que sale de
+    /// resolver un nombre que no nombra ningun tipo -- MIENTE por partida
+    /// doble.  El mensaje decia "incompatible con (void)" de un parametro que
+    /// el usuario habia escrito `Caja<T>`, y la seleccion entre sobrecargas lo
+    /// comparaba como si fuera el tipo vacio, con lo que ninguna plantilla
+    /// podia elegirse jamas.
+    ///
+    /// No llega al bajado: una plantilla no se emite, se emiten sus instancias,
+    /// y para entonces ya es un tipo concreto.
+    TYPE_PARAM,
     // Sentinela para construir tablas planas.
     COUNT
 };
@@ -1339,6 +1354,13 @@ inline std::string type_to_string(const Type &t) {
     if (t.nominal_id != 0 && !t.nominal_name.empty()) {
         return t.nominal_name;
     }
+    /* Una variable de tipo se ensenya TAL Y COMO SE ESCRIBIO.  Es lo unico que
+     * se sabe de ella, y es lo que el usuario tiene delante: decirle que su
+     * parametro `Caja<T>` es incompatible "con (void)" le manda a buscar un
+     * void que no escribio en ninguna parte. */
+    if (t.kind == PrimitiveKind::TYPE_PARAM)
+        return t.struct_name.empty() ? std::string("<tipo>")
+                                     : t.struct_name.str();
     /* Un puntero inteligente ENSENA quien libera, porque forma parte de su
      * identidad: sin esto, decir que `unique<i64>` no es compatible con
      * `unique<i64>` era un mensaje que no decia nada -- los dos lados se

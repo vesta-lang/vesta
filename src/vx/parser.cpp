@@ -906,7 +906,11 @@ void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
     switch (decl->kind) {
     case ast::NodeKind::StructDecl: {
         auto *sd = static_cast<ast::StructDecl *>(decl);
-        if (!sd->type_params.empty() || sd->is_specialization) {
+        // La cabeza `<...>` todavia no esta clasificada aqui (corre en el
+        // parser), asi que lo que la delata es haberla ESCRITO -- da igual que
+        // acabe siendo plantilla o especializacion, las dos se exportan.
+        if (!sd->type_params.empty() || sd->is_specialization ||
+            !sd->spec_pattern.empty()) {
             tex.name = sd->name;
             tex.is_public = sd->is_public;
             is_template = true;
@@ -915,7 +919,8 @@ void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
     }
     case ast::NodeKind::ClassDecl: {
         auto *cd = static_cast<ast::ClassDecl *>(decl);
-        if (!cd->type_params.empty() || cd->is_specialization) {
+        if (!cd->type_params.empty() || cd->is_specialization ||
+            !cd->spec_pattern.empty()) {
             tex.name = cd->name;
             tex.is_public = cd->is_public;
             is_template = true;
@@ -924,7 +929,8 @@ void Parser::collect_template_export_(ast::ModuleNode *mod, ast::Node *decl,
     }
     case ast::NodeKind::FunctionDecl: {
         auto *fd = static_cast<ast::FunctionDecl *>(decl);
-        if ((!fd->type_params.empty() || fd->is_specialization) &&
+        if ((!fd->type_params.empty() || fd->is_specialization ||
+             !fd->spec_pattern.empty()) &&
             !fd->is_comptime && !fd->is_macro) {
             tex.name = fd->name;
             tex.is_public = fd->is_public;
@@ -2860,16 +2866,12 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
     // Parametros de tipo opcionales (funcion generica `T id<T>(T x)`).  Mismo
     // patron que struct/clase/enum: `<T1, T2>` tras el nombre, antes de '('.
     // #6: cada param puede llevar un bound inline `<T: Concepto>`.
-    // #7: la PRIMERA `id<...>` es el primario; las siguientes con el mismo
-    // nombre son especializaciones (total/parcial).
+    // #7: plantilla o especializacion se deciden DESPUES, cuando se sabe que
+    // nombres son tipos (ver ast::StructDecl::generic_head_unresolved).  Aqui
+    // solo se guarda lo escrito.
     if (current_.kind == TokenKind::LT) {
-        if (generic_fn_names_seen_.count(fn->name)) {
-            fn->is_specialization = true;
-            parse_specialization_pattern(fn->spec_pattern, fn->type_params);
-        } else {
-            parse_type_params_with_bounds(fn->type_params, fn->type_bounds);
-            generic_fn_names_seen_.insert(fn->name);
-        }
+        (void)parse_generic_head(fn->spec_pattern, fn->type_bounds);
+        fn->generic_head_unresolved = true;
     }
 
     (void)expect(TokenKind::LPAREN,
@@ -3162,7 +3164,19 @@ bool Parser::looks_like_cast() const noexcept {
         // Single-pass: el alias debe estar declarado antes
         // del cast en el archivo.
         || (first_kind == TokenKind::IDENTIFIER &&
-            declared_aliases_.count(first.lexeme) > 0) ||
+            declared_aliases_.count(first.lexeme) > 0)
+        // Un nombre de STRUCT ya declarado tambien inicia un tipo, pero
+        // SOLO con al menos un `*` detras (`(Punto*) p`).  Ese `*` es
+        // justo la desambiguacion que la documentacion ya pedia para los
+        // tipos nombrados por identifier, y sin el no se aceptaba nunca:
+        // el nombre no llegaba a ser type-starter, asi que `(Punto*)` se
+        // parseaba como la multiplicacion `Punto * )` y el error hablaba
+        // de una expresion primaria que falta -- sin mencionar el cast.
+        // Con el `*` no queda ambiguedad posible: una multiplicacion
+        // exige operando derecho y aqui lo que sigue es `)`.
+        || (first_kind == TokenKind::IDENTIFIER &&
+            declared_structs_.count(first.lexeme) > 0 &&
+            mut_lex.peek_at(off + 1).kind == TokenKind::STAR) ||
         is_qualified_ns;
     if (!is_type_starter) return false;
     ++off;
@@ -6419,16 +6433,11 @@ std::unique_ptr<ast::StructDecl> Parser::parse_struct_decl(bool is_overlay) {
     // el struct se trata como plantilla y se monomorphiza en cada uso
     // `Box<i32>` en el type checker.
     if (current_.kind == TokenKind::LT) {
-        // #7: la PRIMERA `struct Caja<...>` es el template primario; las
-        // siguientes con el mismo nombre son ESPECIALIZACIONES (total/parcial).
-        if (generic_struct_names_seen_.count(s->name)) {
-            s->is_specialization = true;
-            parse_specialization_pattern(s->spec_pattern, s->type_params);
-        } else {
-            // #6: cada param puede llevar un bound inline `<T: Concepto>`.
-            parse_type_params_with_bounds(s->type_params, s->type_bounds);
-            generic_struct_names_seen_.insert(s->name);
-        }
+        // #7: plantilla o especializacion lo decide quien conoce los tipos
+        // (ver ast::StructDecl::generic_head_unresolved).  Las cotas inline
+        // `<T: Concepto>` entran aqui igual.
+        (void)parse_generic_head(s->spec_pattern, s->type_bounds);
+        s->generic_head_unresolved = true;
     }
     // #6: clausula `where T: A + B` opcional tras los params.
     if (current_.kind == TokenKind::IDENTIFIER && current_.lexeme == "where") {
@@ -6675,18 +6684,12 @@ std::unique_ptr<ast::ClassDecl> Parser::parse_class_decl() {
     // como plantilla y no se procesa como clase concreta hasta que
     // se instancie via `Box<i32>`.
     if (current_.kind == TokenKind::LT) {
-        // #7: la PRIMERA `class Caja<...>` es el primario; las siguientes con
-        // el mismo nombre son especializaciones (total/parcial).
-        if (generic_class_names_seen_.count(c->name)) {
-            c->is_specialization = true;
-            parse_specialization_pattern(c->spec_pattern, c->type_params);
-        } else {
-            // #6: cada param puede llevar un bound inline `<T: Concepto>`.  El
-            // `:` de la superclase (`class C : Base`) queda FUERA de `<>` y no
-            // colisiona con el `:` del bound (que va dentro de los angulos).
-            parse_type_params_with_bounds(c->type_params, c->type_bounds);
-            generic_class_names_seen_.insert(c->name);
-        }
+        // #7: plantilla o especializacion lo decide quien conoce los tipos
+        // (ver ast::StructDecl::generic_head_unresolved).  El `:` de la
+        // superclase (`class C : Base`) queda FUERA de `<>` y no colisiona con
+        // el de una cota, que va dentro de los angulos.
+        (void)parse_generic_head(c->spec_pattern, c->type_bounds);
+        c->generic_head_unresolved = true;
     }
 
     // Superclase opcional via ':'.
@@ -7267,57 +7270,49 @@ void Parser::parse_type_params_with_bounds(
     (void)expect_close_angle("se esperaba '>' al cerrar parametros de tipo");
 }
 
-// Recoge los identificadores que son params FRESCOS de un patron de
-// especializacion: los que aparecen DENTRO de un puntero/array (`T*`, `T[]`).
-// Un NamedTypeNode al nivel TOP (no anidado) es un tipo CONCRETO (total spec),
-// no un param fresco.  Los primitivos nunca son frescos.
-static void collect_fresh_spec_params(const ast::TypeNode *t,
-                                      bool inside_compound,
-                                      std::vector<std::string> &out) {
-    if (!t) return;
-    switch (t->kind) {
-    case ast::NodeKind::NamedTypeNode: {
-        auto *n = static_cast<const ast::NamedTypeNode *>(t);
-        if (inside_compound) {
-            // Param fresco (e.g. T en `T*`).  Evitar duplicados.
-            for (const auto &e : out)
-                if (e == n->name) return;
-            out.push_back(n->name);
-        }
-        // Recorrer type-args anidados (`Inner<T>`): tambien compuesto.
-        for (const auto &ta : n->type_args)
-            collect_fresh_spec_params(ta.get(), true, out);
-        return;
-    }
-    case ast::NodeKind::PointerTypeNode: {
-        auto *p = static_cast<const ast::PointerTypeNode *>(t);
-        collect_fresh_spec_params(p->pointee.get(), true, out);
-        return;
-    }
-    case ast::NodeKind::ArrayTypeNode: {
-        auto *a = static_cast<const ast::ArrayTypeNode *>(t);
-        collect_fresh_spec_params(a->element_type.get(), true, out);
-        return;
-    }
-    default: return; // primitivos, fn, etc.: sin params frescos
-    }
-}
-
-void Parser::parse_specialization_pattern(
+bool Parser::parse_generic_head(
     std::vector<std::unique_ptr<ast::TypeNode>> &pattern,
-    std::vector<std::string> &fresh_params) {
+    std::vector<ast::TypeBound> &bounds) {
     (void)consume(); // '<'
+    bool saw_bound = false;
     while (current_.kind != TokenKind::GT && current_.kind != TokenKind::SHR &&
            current_.kind != TokenKind::END_OF_FILE) {
+        const SourceLoc bl = current_.loc;
         auto tn = parse_type_node();
         if (!tn) break;
-        collect_fresh_spec_params(tn.get(), /*inside_compound=*/false,
-                                  fresh_params);
+        // Una cota (`T: Concepto`) solo cabe tras un identificador desnudo, y
+        // solo se escribe DECLARANDO -- nadie le pone una cota a un argumento
+        // --, asi que es lo unico de la cabeza que el parser si puede afirmar.
+        if (current_.kind == TokenKind::COLON &&
+            tn->kind == ast::NodeKind::NamedTypeNode &&
+            static_cast<ast::NamedTypeNode *>(tn.get())->type_args.empty()) {
+            (void)consume(); // ':'
+            ast::TypeBound tb;
+            tb.type_param = static_cast<ast::NamedTypeNode *>(tn.get())->name;
+            tb.loc = bl;
+            while (current_.kind == TokenKind::IDENTIFIER) {
+                // NS.2: concepto opcionalmente cualificado (`mat.Numerico`).
+                std::string cname = consume().lexeme;
+                while (current_.kind == TokenKind::DOT) {
+                    (void)consume(); // '.'
+                    if (current_.kind != TokenKind::IDENTIFIER) break;
+                    cname += "." + consume().lexeme;
+                }
+                tb.concepts.push_back(std::move(cname));
+                if (current_.kind == TokenKind::PLUS) {
+                    (void)consume(); // '+' : otro concepto exigido
+                    continue;
+                }
+                break;
+            }
+            bounds.push_back(std::move(tb));
+            saw_bound = true;
+        }
         pattern.push_back(std::move(tn));
         if (!match(TokenKind::COMMA)) break;
     }
-    (void)expect_close_angle(
-        "se esperaba '>' al cerrar el patron de especializacion");
+    (void)expect_close_angle("se esperaba '>' al cerrar parametros de tipo");
+    return saw_bound;
 }
 
 void Parser::parse_where_clause(std::vector<ast::TypeBound> &bounds) {

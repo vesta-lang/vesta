@@ -40,6 +40,7 @@
 #define VX_UFCS_H
 
 #include "util/alloc/small_vector.h"
+#include "vx/ast.h"
 #include "vx/types.h"
 
 #include <cstdint>
@@ -83,6 +84,35 @@ using Candidates = util::SmallVector<uint32_t, 4>;
 const std::string *head_of(const Type &t);
 
 /**
+ * @brief La cabeza de un tipo DECLARADO que contiene variables de tipo.
+ *
+ * Una plantilla no se puede indexar por @c head_of: sus parametros no resuelven
+ * a nada -- `T` no es un tipo hasta que se instancia --, asi que preguntarle al
+ * tipo ya resuelto devuelve el vacio y la metria en un cubo que no es el suyo.
+ * La cabeza hay que leerla de lo ESCRITO.
+ *
+ * | primer parametro | cubo |
+ * | :-- | :-- |
+ * | `T x` (variable desnuda) | `any` |
+ * | `Caja<T> c` | `Caja` |
+ * | `T* p` | `ptr` |
+ * | `T[] xs` | `array` |
+ * | `fn(T) -> R f` | `fn` |
+ *
+ * El cubo `any` es uno solo para todo el programa y no engorda: dentro caen las
+ * genericas cuyo primer parametro es la variable a secas, que son las que valen
+ * para CUALQUIER receptor -- justo lo que ese cubo significa --.
+ *
+ * @param t    El tipo declarado del primer parametro.
+ * @param vars Los nombres que son variables de tipo.
+ * @return Su cabeza INTERNADA, o @c nullptr si el nodo no lleva ninguna
+ *         variable (entonces vale la via normal) o si su cabeza no se puede
+ *         saber sin resolverlo.
+ */
+const std::string *head_of_decl(const ast::TypeNode *t,
+                                const std::vector<std::string> &vars);
+
+/**
  * @struct Index
  * @brief Lo declarado en este modulo, listo para preguntarle por un receptor.
  */
@@ -99,6 +129,20 @@ struct Index {
      */
     void declare(const Type &first_param, const std::string &name,
                  uint32_t slot);
+
+    /**
+     * @brief Apunta una funcion cuya cabeza ya se sabe.
+     *
+     * Para lo que no se puede indexar por su tipo resuelto: una PLANTILLA, cuyo
+     * primer parametro no resuelve a nada hasta que se instancia.  La cabeza la
+     * da @c head_of_decl leyendo lo escrito.
+     *
+     * @param head  La cabeza, ya internada.  Un nulo no apunta nada.
+     * @param name  Nombre con el que se declaro.
+     * @param slot  Como la reconoce quien pregunta.
+     */
+    void declare_head(const std::string *head, const std::string &name,
+                      uint32_t slot);
 
     /**
      * @brief Apunta que @p param tambien puede recibir el receptor, por hueco.

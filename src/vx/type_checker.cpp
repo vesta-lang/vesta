@@ -38,12 +38,14 @@
 #include "ir/ssa_ir.h" // kAsmBodyPendingMark, la marca vive en UN sitio
 #include "vx/diag/diag_catalog.h"
 #include "vx/ansi_names.h"      // los nombres de color que el lenguaje conoce
+#include "vx/builtin_params.h"  // como se llaman las ranuras de cada builtin
 #include "vx/asm/asm_effects.h" // asm_canonical_reg ( AS inc.4)
 #include "vx/type_classify.h"   // is_c_representable / is_managed (Fase 1)
 #include "vx/collection_intrinsics.h"        // tabla de tipos coleccion
 #include "vx/comptime/comptime_introspect.h" // comptime_field_type
-#include "vx/generics/concepts.h" // conceptos como predicado comptime
-#include "vx/lexer.h"             // parse de fragments en comptime_emit_expr
+#include "vx/generics/concepts.h"     // conceptos como predicado comptime
+#include "vx/generics/generic_head.h" // repartir los `<...>` de una decl
+#include "vx/lexer.h" // parse de fragments en comptime_emit_expr
 #include "vx/contract_when.h"
 #include "vx/parser.h" // parse_one_expr para macros con splice
 #include "loader/oop_types.h" // para sizeof(loader::ObjectHeader) en el layout de clases
@@ -754,16 +756,35 @@ bool TypeChecker::register_overload(ast::FunctionDecl *fn, uint32_t sig_index) {
     }
 
     /* Y la etiqueta tambien al AST, que es de donde el bajado saca el nombre
-     * del simbolo que emite.  Se emparejan por ORDEN: las candidatas estan en
-     * el orden en que se declararon, igual que las declaraciones del modulo. */
-    size_t k = 0;
+     * del simbolo que emite.
+     *
+     * Se emparejan por FIRMA, no por ORDEN.  Contar posiciones daba por hecho
+     * que toda candidata tiene declaracion, y no es cierto: un BUILTIN es una
+     * firma sin AST, asi que al sobrecargar uno la primera candidata no
+     * correspondia a ninguna declaracion y la funcion del usuario se llevaba
+     * la etiqueta del builtin.  El desenlace era un simbolo sin resolver al
+     * enlazar -- la llamada iba a `..._relleno_ancho` y el cuerpo se emitia
+     * como `..._fill_cp_width` --, que al menos es ruidoso, pero el pareo
+     * correcto no cuesta mas. */
+    fn->mangled_label = function_sigs_[sig_index].mangled_label;
     for (auto &d : mod_.decls) {
         if (!d || d->kind != ast::NodeKind::FunctionDecl) continue;
         auto *other = static_cast<ast::FunctionDecl *>(d.get());
-        if (other->name != fn->name) continue;
-        if (k < candidates.size())
-            other->mangled_label = function_sigs_[candidates[k]].mangled_label;
-        ++k;
+        if (other == fn || other->name != fn->name) continue;
+        if (!other->mangled_label.empty()) continue;
+        for (uint32_t idx : candidates) {
+            const FunctionSig &s = function_sigs_[idx];
+            if (s.param_types.size() != other->params.size()) continue;
+            /* Los nombres de las ranuras son lo que separa a dos que toman lo
+             * mismo, asi que son tambien lo que las identifica aqui. */
+            bool igual = s.param_names.size() == other->params.size();
+            for (size_t i = 0; igual && i < other->params.size(); ++i)
+                igual = (std::string(s.param_names[i].c_str()) ==
+                         other->params[i]->name);
+            if (!igual) continue;
+            other->mangled_label = s.mangled_label;
+            break;
+        }
     }
     return true;
 }
@@ -1610,31 +1631,63 @@ void TypeChecker::flatten_struct_inheritance() {
 // sustituyendo los type_params en return_type, params y body; la anyade a
 // mod_.decls para que collect_globals registre su firma y el lowering la baje.
 std::string TypeChecker::monomorphize_function(const std::string &template_name,
+                                               const ast::FunctionDecl *tmpl,
                                                const std::vector<Type> &args,
                                                const SourceLoc &loc) {
     referenced_names_.insert(template_name);          // #cross-module-generics
     if (template_name.find('.') != std::string::npos) // marca el namespace
         referenced_names_.insert(
             template_name.substr(0, template_name.find('.')));
-    const std::string mangled =
-        mangle_sanitize(template_name) + "_" + mangle_args(args);
-    if (monomorphized_.count(mangled)) return mangled;
-
-    auto it = generic_fn_templates_.find(template_name);
-    if (it == generic_fn_templates_.end()) {
-        diags_.error(loc,
-                     "funcion generica desconocida: '" + template_name + "'");
-        return std::string();
+    /* CUAL de las homonimas la elige quien llama, y aqui ya viene decidida.
+     * Buscarla por nombre solo vale cuando hay una sola, y dar eso por hecho
+     * era lo que hacia que la segunda con el mismo nombre no existiera. */
+    if (tmpl == nullptr) {
+        auto it = generic_fn_templates_.find(template_name);
+        if (it == generic_fn_templates_.end() || it->second.empty()) {
+            diags_.diag(loc, DiagLevel::ERR, "VX2092",
+                        {written_name(template_name)});
+            return std::string();
+        }
+        tmpl = static_cast<const ast::FunctionDecl *>(
+            mod_.decls[it->second[0]].get());
     }
-    auto *tmpl =
-        static_cast<const ast::FunctionDecl *>(mod_.decls[it->second].get());
     if (tmpl->type_params.size() != args.size()) {
-        diags_.error(loc, "numero incorrecto de args de tipo para funcion '" +
-                              template_name + "': esperados " +
-                              std::to_string(tmpl->type_params.size()) +
-                              ", recibidos " + std::to_string(args.size()));
+        diags_.diag(loc, DiagLevel::ERR, "VX2093",
+                    {written_name(template_name),
+                     std::to_string(tmpl->type_params.size()),
+                     std::to_string(args.size())});
         return std::string();
     }
+
+    /* El nombre de la instancia lleva sus type-args, y eso basta MIENTRAS el
+     * nombre sea de una sola plantilla.  Con varias homonimas no: `pick<i64>`
+     * de `pick<T>(T)` y de `pick<T>(T, T)` salian con la MISMA etiqueta, asi
+     * que la segunda instancia se daba por ya generada y las llamadas acababan
+     * en la primera -- con su aridad, no con la que se pidio --.
+     *
+     * Lo que las separa se pregunta donde ya estaba escrito: el mismo
+     * discriminante que usan las sobrecargas, sobre los parametros YA
+     * sustituidos, y con los nombres de sus ranuras, que es lo unico que
+     * distingue a dos de la misma firma. */
+    std::string mangled =
+        mangle_sanitize(template_name) + "_" + mangle_args(args);
+    {
+        auto it_all = generic_fn_templates_.find(template_name);
+        if (it_all != generic_fn_templates_.end() &&
+            it_all->second.size() > 1) {
+            GenSubst g{&tmpl->type_params, &args};
+            std::vector<Type> ps;
+            ParamNames pn;
+            ps.reserve(tmpl->params.size());
+            for (const auto &p : tmpl->params) {
+                auto ct = clone_type_with_subst(p->type.get(), g);
+                ps.push_back(type_from_node(ct.get()));
+                pn.push_back(p->name);
+            }
+            mangled += "_" + overload::discriminator(ps, &pn);
+        }
+    }
+    if (monomorphized_.count(mangled)) return mangled;
 
     // #6: verificar las constraints `<T: Concepto>` / `where` sobre los
     // type-args concretos (compile-time; cero codigo emitido).
@@ -2011,7 +2064,8 @@ static void pre_mono_collect_in_expr(TypeChecker &tc, const ast::Expr *e) {
                 targs.reserve(c->type_args.size());
                 for (auto &ta : c->type_args)
                     targs.push_back(tc.resolve_type_node(ta.get()));
-                (void)tc.monomorphize_function(tpl_name, targs, c->loc);
+                (void)tc.monomorphize_function(tpl_name, nullptr, targs,
+                                               c->loc);
             }
         }
         for (auto &a : c->args)
@@ -2479,6 +2533,13 @@ bool TypeChecker::run() {
     // instanciaciones al clonar los cuerpos).
     apply_class_field_defaults_to_ctors();
 
+    // Repartir los `<...>` que el parser dejo sin clasificar: cuales DECLARAN
+    // variables de tipo y cuales PASAN argumentos.  Va justo aqui porque a
+    // partir de la siguiente linea ya se consulta el reparto, y necesita saber
+    // que nombres son tipos -- lo que solo se sabe teniendo el modulo entero,
+    // mas lo que llegue importado.  Ver vx/generics/generic_head.h.
+    generics::classify_generic_heads(*this, mod_);
+
     // -------- registrar templates + monomorphizar.
     // Primero localizamos todas las clases con type_params y las
     // marcamos como templates (no se procesaran como concretas).
@@ -2521,7 +2582,7 @@ bool TypeChecker::run() {
                 // rutea a la ComptimeVM: su introspeccion `sizeof<Vec3>` se
                 // pliega a constante al bajarla).  Los @Macro conservan su
                 // propio path de invocacion.
-                generic_fn_templates_[fd->name] = i;
+                generic_fn_templates_[fd->name].push_back(i);
             }
         } else if (d && d->kind == ast::NodeKind::ConceptDecl) {
             // #6: registrar conceptos de usuario para la evaluacion de
@@ -3727,19 +3788,50 @@ void TypeChecker::collect_globals() {
     // necesitamos la longitud en compile-time.  El type checker NO
     // exige esto (le basta con el tipo PTR); el lowering lo verifica
     // por su lado y reporta error claro si el arg no es literal.
+    /* Los NOMBRES de las ranuras son opcionales aqui y no son cosmetica: una
+     * lista vacia "no separa" (ver overload.h), asi que un builtin sin nombres
+     * colisiona con cualquier funcion del usuario que tome los mismos tipos,
+     * aunque llame distinto a sus parametros.  Dandoselos, entra en la
+     * resolucion de sobrecargas como una mas -- y de paso el editor puede
+     * mostrarlos. */
     auto reg_builtin = [&](const std::string &name, Type ret,
                            std::initializer_list<PrimitiveKind> params) {
         FunctionSig sig;
         sig.return_type = ret;
+        sig.is_builtin = true; // lo consulta el bajado: ver FunctionSig
         sig.param_types.reserve(params.size());
         for (auto p : params)
             sig.param_types.push_back(Type{p});
+        /* Y como se llaman sus ranuras, de la tabla compartida -- la misma que
+         * lee el servidor de lenguaje para ensenarlas en el editor --, no
+         * escritas aqui.  Sin nombres la firma "no separa" (ver overload.h) y
+         * el builtin colisiona con cualquier funcion del usuario de sus mismos
+         * tipos en vez de sobrecargarse con ella. */
+        const BuiltinParams bp = builtin_params_of(name);
+        for (uint8_t i = 0; i < bp.count && i < sig.param_types.size(); ++i)
+            sig.param_names.push_back(bp.names[i]);
         Symbol s;
         s.kind = SymbolKind::Function;
         s.sig_index = (uint32_t)function_sigs_.size();
+        /* Quien tuviera el nombre ANTES, si lo habia.  Se mira antes de pisar
+         * la entrada, que es justo lo que se pierde al escribirla. */
+        const auto anterior = sig_by_name_.find(name);
+        const bool habia_otra = (anterior != sig_by_name_.end() &&
+                                 anterior->second < function_sigs_.size());
+        const uint32_t idx_anterior = habia_otra ? anterior->second : 0u;
         sig_by_name_[name] = s.sig_index;
         function_sigs_.push_back(std::move(sig));
-        (void)declare(name, s);
+        /* Declararlo puede FALLAR, y el resultado se estaba tirando.
+         *
+         * Falla cuando el nombre ya esta tomado -- tipicamente por un
+         * `import ... only write` que trajo la de otro modulo, porque los
+         * imports se registran antes que esto --.  Y entonces el builtin se
+         * perdia sin que nadie dijera nada: quedaba inalcanzable, y una
+         * llamada con SU firma se comprobaba contra la importada.  Son dos
+         * candidatas; lo que las separa son los parametros, y de eso ya sabe
+         * `add_overload_candidate`. */
+        if (!declare(name, s) && habia_otra)
+            (void)add_overload_candidate(name, idx_anterior, s.sig_index);
     };
     // Salida de texto (aceptan ANY tipo via dispatch en lowering).
     // El check_call hace bypass especial para estos nombres y permite
@@ -3791,6 +3883,16 @@ void TypeChecker::collect_globals() {
     // Para alineacion manual de columnas en TUIs.
     reg_builtin("print_pad", Type{PrimitiveKind::VOID},
                 {PrimitiveKind::U32, PrimitiveKind::U64});
+    /* El SUMIDERO de bytes: escribe `len` bytes desde `ptr`, sin formatear
+     * nada.  Es el primitivo del que cuelga todo lo que imprime -- `print`,
+     * `println` y la interpolacion se descomponen en los `print_*` de arriba
+     * mas esto --, y por eso es el unico que necesitaba nombre propio: el
+     * resto ya lo tenian, porque cada uno ES un builtin.
+     *
+     * Tenerlo como builtin sirve ademas por si mismo: en un binario sin
+     * runtime no habia forma de escribir bytes sin pasar por `print`. */
+    reg_builtin("write", Type{PrimitiveKind::VOID},
+                {PrimitiveKind::PTR, PrimitiveKind::U64});
     // I/O de fichero.  fopen recibe path y modo como literales de
     // string; devuelve un FILE* (uint64_t).  fwrite recibe el FILE*
     // y un buffer literal; devuelve el numero de bytes escritos.
@@ -6069,6 +6171,18 @@ void TypeChecker::collect_globals() {
                     continue; // no anñade param_type.
                 }
                 Type pt = type_from_node(p->type.get());
+                /* En una PLANTILLA, un parametro escrito con variables no
+                 * resuelve a nada -- `T` no es un tipo hasta que se instancia
+                 * --, y lo que salia era el tipo VACIO.  Eso mentia dos veces:
+                 * el mensaje decia "incompatible con (void)" de algo escrito
+                 * `Caja<T>`, y la seleccion entre sobrecargas lo comparaba como
+                 * si fuera el vacio, con lo que ninguna plantilla podia
+                 * elegirse jamas. */
+                if (!fn->type_params.empty()) {
+                    const Type u = generics::unresolved_param_type(
+                        p->type.get(), fn->type_params);
+                    if (u.kind == PrimitiveKind::TYPE_PARAM) pt = u;
+                }
                 // La FIRMA es lo que ve quien llama, asi que aqui un `out T x`
                 // por referencia se convierte en `T*`: es la direccion lo que
                 // viaja.  El cuerpo lo sigue viendo como una `T`
@@ -6144,13 +6258,27 @@ void TypeChecker::collect_globals() {
              * parametro.  La correlacion se hace AQUI, al declarar, y no al
              * llamar: es una vez por funcion del programa en vez de una por
              * sitio de llamada. */
-            if (!sig.param_types.empty())
-                ufcs_.declare(sig.param_types[0], fn->name, s.sig_index);
+            if (!sig.param_types.empty()) {
+                /* Una PLANTILLA no se puede indexar por su tipo resuelto: `T`
+                 * no es un tipo hasta que se instancia, asi que el primer
+                 * parametro resuelve al vacio y la metria en un cubo que no es
+                 * el suyo.  Su cabeza se lee de lo ESCRITO. */
+                const std::string *head =
+                    fn->type_params.empty() || fn->params.empty()
+                        ? nullptr
+                        : ufcs::head_of_decl(fn->params[0]->type.get(),
+                                             fn->type_params);
+                if (head != nullptr)
+                    ufcs_.declare_head(head, fn->name, s.sig_index);
+                else
+                    ufcs_.declare(ufcs_key_type(sig.param_types[0]), fn->name,
+                                  s.sig_index);
+            }
             /* Y bajo la cabeza de CADA parametro, para la llamada con hueco:
              * `"x".f(.a = 1, .b = _)` manda el receptor a `b`, asi que
              * buscarla solo por el primero no la encontraria. */
             for (const auto &pt : sig.param_types)
-                ufcs_.declare_any(pt, fn->name, s.sig_index);
+                ufcs_.declare_any(ufcs_key_type(pt), fn->name, s.sig_index);
             function_sigs_.push_back(std::move(sig));
             if (!declare(fn->name, s)) {
                 // Bug fix 2026-05-23: forward declaration -- si el simbolo
@@ -11907,9 +12035,14 @@ Type TypeChecker::report_method_missing(
                 break;
             }
 
+    /* El nombre tal y como se ESCRIBIO.  El aplanado de namespaces renombra
+     * las declaraciones, asi que sin esto el mensaje citaba `app__Bolsa` para
+     * un tipo que en el fichero del usuario se llama `Bolsa` -- y le mandaba a
+     * buscar un nombre que no esta escrito en ningun sitio. */
+    const std::string tipo_escrito = written_name(tipo);
     if (!requiere.empty())
         diags_.error(e->loc, "el metodo '" + fa->field_name +
-                                 "' no esta disponible para '" + tipo +
+                                 "' no esta disponible para '" + tipo_escrito +
                                  "' (requiere " + requiere + ")");
     else
         /* Se buscaron DOS cosas -- el metodo del tipo y la libre que lo tome
@@ -11917,7 +12050,7 @@ Type TypeChecker::report_method_missing(
          * manda a mirar la declaracion del tipo cuando el arreglo puede estar
          * en un `import` que falta. */
         diags_.diag(e->loc, DiagLevel::ERR, "VX2069",
-                    {clase_o_struct, tipo, fa->field_name});
+                    {clase_o_struct, tipo_escrito, fa->field_name});
 
     for (auto &a : e->args)
         (void)check_expr(a.get());
@@ -11926,6 +12059,12 @@ Type TypeChecker::report_method_missing(
 
 bool TypeChecker::overload_accepts(void *ctx, const Type &param,
                                    const Type &arg) {
+    /* Una VARIABLE de tipo admite cualquier cosa, porque todavia no ES ningun
+     * tipo: lo que decide si la llamada vale es la DEDUCCION, que corre despues
+     * y sobre la firma ya instanciada.  Comparar aqui seria preguntar si el
+     * argumento encaja con algo que aun no existe, y la respuesta -- siempre
+     * que no -- dejaba fuera a TODAS las plantillas. */
+    if (param.kind == PrimitiveKind::TYPE_PARAM) return true;
     /* El puente por el que la regla de seleccion -- que no sabe de este
      * comprobador -- pregunta lo unico que necesita saber de el. */
     TypeChecker *self = static_cast<TypeChecker *>(ctx);
@@ -14598,39 +14737,40 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                 cid->name = tn;
         }
         if (is_generic_fn_template(cid->name)) {
-            auto it_t = generic_fn_templates_.find(cid->name);
+            /* CUAL de las plantillas homonimas, si hay varias.  Lo decide la
+             * DEDUCCION: son sobrecargas como cualquier otra, y lo que las
+             * separa -- la forma de sus parametros, o como se llaman sus
+             * ranuras -- solo se ve intentando ligar sus variables con los
+             * argumentos de verdad.  Con una sola, no hay nada que decidir. */
+            size_t tmpl_index = 0;
+            if (!pick_generic_fn_template(e, cid->name, tmpl_index))
+                return Type{PrimitiveKind::COUNT}; // ya se dijo por que
             auto *tmpl = static_cast<const ast::FunctionDecl *>(
-                mod_.decls[it_t->second].get());
+                mod_.decls[tmpl_index].get());
             std::vector<Type> targs;
             if (!e->type_args.empty()) {
                 // Explicitos.
                 for (auto &ta : e->type_args)
                     targs.push_back(resolve_type_node(ta.get()));
             } else {
-                // Inferencia: por cada type_param, buscar el primer parametro
-                // cuyo tipo declarado sea exactamente ese nombre (`T x`) y
-                // tomar el tipo del argumento correspondiente.
-                for (const auto &tp : tmpl->type_params) {
-                    Type deduced{PrimitiveKind::COUNT};
-                    for (size_t pi = 0;
-                         pi < tmpl->params.size() && pi < e->args.size();
-                         ++pi) {
-                        auto *pt = tmpl->params[pi]->type.get();
-                        if (pt && pt->kind == ast::NodeKind::NamedTypeNode &&
-                            static_cast<ast::NamedTypeNode *>(pt)->name == tp) {
-                            deduced = check_expr(e->args[pi].get());
-                            break;
-                        }
-                    }
-                    targs.push_back(deduced);
-                }
+                /* Inferidos.  La deduccion es ESTRUCTURAL -- mira dentro del
+                 * tipo declarado, no solo si es la letra a secas --, porque lo
+                 * contrario deja fuera justo las firmas que hacen comodo el
+                 * codigo generico: en `map<T,R>(Lista<T>, fn(T) -> R)` ningun
+                 * type-param aparece desnudo.
+                 *
+                 * Y es la MISMA que usa un metodo generico: escrita dos veces,
+                 * `f(x)` y `x.f()` acabarian deduciendo distinto para la misma
+                 * firma. */
+                (void)deduce_call_type_args(e, tmpl, tmpl->type_params,
+                                            tmpl->params, targs);
             }
             bool ok = targs.size() == tmpl->type_params.size();
             for (const auto &t : targs)
                 if (t.kind == PrimitiveKind::COUNT) ok = false;
             if (ok) {
                 const std::string mangled =
-                    monomorphize_function(cid->name, targs, e->loc);
+                    monomorphize_function(cid->name, tmpl, targs, e->loc);
                 if (!mangled.empty()) {
                     // Si la monomorphizacion ocurrio AQUI (caso inferencia,
                     // tras collect_globals) su firma aun no esta registrada; la
@@ -14650,9 +14790,19 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                                 mfn->return_type
                                     ? type_from_node(mfn->return_type.get())
                                     : Type{PrimitiveKind::VOID};
-                            for (auto &p : mfn->params)
+                            for (auto &p : mfn->params) {
                                 sig.param_types.push_back(
                                     type_from_node(p->type.get()));
+                                /* Y COMO SE LLAMAN.  Sin esto, una llamada con
+                                 * las ranuras nombradas a una generica moria
+                                 * diciendo que la instancia no tiene ningun
+                                 * parametro con ese nombre -- justo la que la
+                                 * habia elegido por ese nombre --, y por ahi
+                                 * se caian las dos plantillas que solo se
+                                 * distinguen por como llaman a sus ranuras. */
+                                sig.param_names.push_back(p->name);
+                                sig.param_dirs.push_back(p->dir);
+                            }
                             Symbol s;
                             s.kind = SymbolKind::Function;
                             s.sig_index = (uint32_t)function_sigs_.size();
@@ -14678,12 +14828,8 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
                     e->type_args.clear(); // ya consumidos
                 }
             } else {
-                diags_.error(
-                    e->loc,
-                    "no se pudieron inferir los argumentos de tipo de la "
-                    "funcion generica '" +
-                        cid->name + "'; especificalos explicitamente: " +
-                        cid->name + "<...>(...)");
+                report_type_args_not_deduced(e->loc, written_name(cid->name),
+                                             tmpl, tmpl->type_params, targs);
             }
         }
     }
@@ -15376,7 +15522,12 @@ Type TypeChecker::check_call(ast::CallExpr *e) {
         // `obj.metodo(args)` con U inferido.  Si lo es, monomorphiza +
         // reescribe fa->field_name al concreto (`metodo_<U>`) y deja que
         // la resolucion normal de abajo lo encuentre ya en el layout.
-        (void)try_monomorphize_method_call(e, fa, bt);
+        /* Si LA HAY y no se pudo usar, el porque ya esta dicho: seguir solo
+         * sirve para anyadir que el tipo no tiene ese metodo, que es falso --
+         * lo tiene, es una plantilla -- y manda a buscar donde no es. */
+        if (try_monomorphize_method_call(e, fa, bt) ==
+            GenericMethodCall::Failed)
+            return Type{PrimitiveKind::COUNT};
 
         // STRUCT: resolver el metodo en el layout del struct (dispatch
         // estatico).  Si no es un metodo del struct, error claro.
