@@ -79,7 +79,9 @@ struct FrameGeom {
      * @return El operando de memoria.
      */
     MOperand slot_mem(uint32_t slot) const noexcept {
-        return mem(slot_off(slot));
+        /* Marcada: una ranura guarda el valor ENTERO, no el ancho de la
+         * instruccion que lo produjo.  Ver @c MOperand::kFlagFullSlot. */
+        return mem(slot_off(slot)).as_full_slot();
     }
 
     /**

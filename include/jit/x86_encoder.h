@@ -84,6 +84,19 @@ class X86Encoder {
     /// valores de 32-bit (i32/u32/ptr32); i64 NO cabe en un reg de 32-bit.
     void set_mode32(bool m) noexcept { mode32_ = m; }
     bool mode32() const noexcept { return mode32_; }
+
+    /**
+     * @brief Lo que mide una RANURA DE DERRAME en este objetivo, en bytes.
+     *
+     * Una palabra: ocho en x86-64 y CUATRO en x86-32, donde no hay registros de
+     * sesenta y cuatro y forzar ese ancho pide un prefijo que no existe.
+     *
+     * Se pregunta al escribir la ranura, porque ahi el ancho no puede salir del
+     * registro fuente -- que lleva el de la instruccion que produjo el valor --
+     * sino del hueco, que es del tamanyo de la palabra.  Ver
+     * @c MOperand::kFlagFullSlot.
+     */
+    uint8_t slot_word() const noexcept { return mode32_ ? 4 : 8; }
     /// avx+: emitir los MOVES escalares float (MOVSD/MOVSS/MOVQ GP<->XMM) en VX
     /// en vez de legacy SSE, para no mezclar legacy con las ops VX (arith/cvt/
     /// etc.) y evitar la penalizacion de transicion.  Switch global de funcion

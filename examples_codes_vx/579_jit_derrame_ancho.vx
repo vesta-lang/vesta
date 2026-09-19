@@ -1,0 +1,168 @@
+namespace ejemplos.jit_derrame_ancho;
+
+// REGRESION: un valor de menos de 64 bits DERRAMADO a la pila.
+//
+// El JIT escribia la ranura con el ancho del REGISTRO fuente -- que es el de la
+// instruccion que produjo el valor, no el del valor -- y la releia entera:
+//
+//     mov dword ptr [rbp - 0x??], edx     <- guarda 32 bits
+//     mov rcx, qword ptr [rbp - 0x??]     <- lee 64
+//
+// Los treinta y dos bits altos eran lo que hubiera antes en esa ranura, casi
+// siempre un resto de puntero.  Asi que un `i64` que vale 6 se leia como un
+// numero de trece cifras: el programa no fallaba, daba OTRO RESULTADO.
+//
+// Por que no lo cogio nadie durante tanto tiempo: solo aparece cuando hay
+// DERRAME, o sea con bastantes valores vivos a la vez, asi que no sale donde se
+// escribe el codigo sino cuando crece.  Y solo en el JIT: el interprete no
+// derrama a ranuras y el binario nativo emitia el store entero.
+//
+// Lo que hace falta para reproducirlo, y no es mucho: leer campos de menos de
+// 64 bits y tenerlos VIVOS a traves de llamadas.  Un `println` con varias
+// interpolaciones vale, porque cada `${x}` es una llamada y los demas valores
+// tienen que sobrevivir a ella.
+//
+// El ejemplo lo ejecuta en los TRES modos y compara, que es exactamente la red
+// que este fallo se saltaba: interprete y nativo daban 300 y el JIT otra cosa.
+
+@overlay
+struct V {
+	u32 c0  @0x0000;
+	u32 c1  @0x0004;
+	u32 c2  @0x0008;
+	u32 c3  @0x000C;
+	u32 c4  @0x0010;
+	u32 c5  @0x0014;
+	u32 c6  @0x0018;
+	u32 c7  @0x001C;
+	u32 c8  @0x0020;
+	u32 c9  @0x0024;
+	u32 c10 @0x0028;
+	u32 c11 @0x002C;
+	u32 c12 @0x0030;
+	u32 c13 @0x0034;
+	u32 c14 @0x0038;
+	u32 c15 @0x003C;
+	u32 c16 @0x0040;
+	u32 c17 @0x0044;
+	u32 c18 @0x0048;
+	u32 c19 @0x004C;
+	u32 c20 @0x0050;
+	u32 c21 @0x0054;
+	u32 c22 @0x0058;
+	u32 c23 @0x005C;
+}
+
+i64 lee0(V v) => (i64)v. c0;
+i64 lee1(V v) => (i64)v. c1;
+i64 lee2(V v) => (i64)v. c2;
+i64 lee3(V v) => (i64)v. c3;
+i64 lee4(V v) => (i64)v. c4;
+i64 lee5(V v) => (i64)v. c5;
+i64 lee6(V v) => (i64)v. c6;
+i64 lee7(V v) => (i64)v. c7;
+i64 lee8(V v) => (i64)v. c8;
+i64 lee9(V v) => (i64)v. c9;
+i64 lee10(V v) => (i64)v.c10;
+i64 lee11(V v) => (i64)v.c11;
+i64 lee12(V v) => (i64)v.c12;
+i64 lee13(V v) => (i64)v.c13;
+i64 lee14(V v) => (i64)v.c14;
+i64 lee15(V v) => (i64)v.c15;
+i64 lee16(V v) => (i64)v.c16;
+i64 lee17(V v) => (i64)v.c17;
+i64 lee18(V v) => (i64)v.c18;
+i64 lee19(V v) => (i64)v.c19;
+i64 lee20(V v) => (i64)v.c20;
+i64 lee21(V v) => (i64)v.c21;
+i64 lee22(V v) => (i64)v.c22;
+i64 lee23(V v) => (i64)v.c23;
+
+i32 main() {
+	u8* b = (u8*)malloc(1024);
+	*(u32*)(b + 0)  = 1;
+	*(u32*)(b + 4)  = 2;
+	*(u32*)(b + 8)  = 3;
+	*(u32*)(b + 12) = 4;
+	*(u32*)(b + 16) = 5;
+	*(u32*)(b + 20) = 6;
+	*(u32*)(b + 24) = 7;
+	*(u32*)(b + 28) = 8;
+	*(u32*)(b + 32) = 9;
+	*(u32*)(b + 36) = 10;
+	*(u32*)(b + 40) = 11;
+	*(u32*)(b + 44) = 12;
+	*(u32*)(b + 48) = 13;
+	*(u32*)(b + 52) = 14;
+	*(u32*)(b + 56) = 15;
+	*(u32*)(b + 60) = 16;
+	*(u32*)(b + 64) = 17;
+	*(u32*)(b + 68) = 18;
+	*(u32*)(b + 72) = 19;
+	*(u32*)(b + 76) = 20;
+	*(u32*)(b + 80) = 21;
+	*(u32*)(b + 84) = 22;
+	*(u32*)(b + 88) = 23;
+	*(u32*)(b + 92) = 24;
+	V v = V(b);
+
+	// Veinticuatro valores de 32 bits, todos vivos a la vez.
+	i64 x0  = lee0(v);
+	i64 x1  = lee1(v);
+	i64 x2  = lee2(v);
+	i64 x3  = lee3(v);
+	i64 x4  = lee4(v);
+	i64 x5  = lee5(v);
+	i64 x6  = lee6(v);
+	i64 x7  = lee7(v);
+	i64 x8  = lee8(v);
+	i64 x9  = lee9(v);
+	i64 x10 = lee10(v);
+	i64 x11 = lee11(v);
+	i64 x12 = lee12(v);
+	i64 x13 = lee13(v);
+	i64 x14 = lee14(v);
+	i64 x15 = lee15(v);
+	i64 x16 = lee16(v);
+	i64 x17 = lee17(v);
+	i64 x18 = lee18(v);
+	i64 x19 = lee19(v);
+	i64 x20 = lee20(v);
+	i64 x21 = lee21(v);
+	i64 x22 = lee22(v);
+	i64 x23 = lee23(v);
+
+	// Y vivos a traves de VEINTICUATRO llamadas: aqui es donde derraman.
+	println("${x0} ${x1} ${x2} ${x3} ${x4} ${x5} ${x6} ${x7} ${x8} ${x9} ${x10} ${x11} ${x12} ${x13} ${x14} ${x15} ${x16} ${x17} ${x18} ${x19} ${x20} ${x21} ${x22} ${x23}");
+
+	i64 s = 0_i64;
+	s = s + x0;
+	s = s + x1;
+	s = s + x2;
+	s = s + x3;
+	s = s + x4;
+	s = s + x5;
+	s = s + x6;
+	s = s + x7;
+	s = s + x8;
+	s = s + x9;
+	s = s + x10;
+	s = s + x11;
+	s = s + x12;
+	s = s + x13;
+	s = s + x14;
+	s = s + x15;
+	s = s + x16;
+	s = s + x17;
+	s = s + x18;
+	s = s + x19;
+	s = s + x20;
+	s = s + x21;
+	s = s + x22;
+	s = s + x23;
+	println("s=${s}");
+	free(b);
+
+	// 1+2+...+24 = 300, y el programa devuelve 42.
+	return (i32)(s - 258);
+}

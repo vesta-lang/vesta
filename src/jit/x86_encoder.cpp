@@ -1887,7 +1887,20 @@ void X86Encoder::emit_mov(MFunction &fn, const MInstr &mi,
         const uint8_t base = dst.reg;
         const uint8_t index = static_cast<uint8_t>(dst.mem_index());
         const bool has_index = (index != static_cast<uint8_t>(MReg::NONE));
-        const uint8_t w = src.width;
+        /* Una RANURA DE DERRAME se escribe entera: el valor que vive ahi es
+         * el del vreg, y se relee de ocho bytes.  Tomar el ancho del registro
+         * -- que es el de la instruccion que produjo el valor, no el del valor
+         * -- escribia media ranura, y la relectura se traia los bits altos de
+         * lo que hubiera antes: un `i64` que vale 6 se leia como un numero de
+         * trece cifras, y solo con presion suficiente para que hubiera derrame.
+         *
+         * Escribirla entera es correcto porque los bits altos ya estan
+         * definidos al llegar aqui: en x86-64 escribir un registro de 32 pone
+         * a cero la mitad alta, y por debajo de eso el IR trae su zext/sext.
+         *
+         * Un store a un CAMPO de cuatro bytes no lleva la marca y sigue siendo
+         * de cuatro. */
+        const uint8_t w = dst.is_full_slot() ? slot_word() : src.width;
         if (w == 2) put8(out, 0x66);
         const bool need_rex_w = (w == 8);
         uint8_t rex =

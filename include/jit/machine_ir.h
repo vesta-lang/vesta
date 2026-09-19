@@ -328,6 +328,36 @@ struct MOperand {
         return o;
     }
 
+    /**
+     * @brief Marca de @c flags: este operando de memoria es una RANURA DE
+     *        DERRAME, y guarda el valor entero (ocho bytes).
+     *
+     * Existe porque el ancho de un store a memoria se toma del registro
+     * fuente, y ese ancho es el de la instruccion que PRODUJO el valor, no el
+     * del valor: un `load.u32` deja un operando de cuatro bytes, asi que
+     * derramarlo escribia media ranura y la relectura -- que si es de ocho,
+     * porque el valor es un `i64` -- se traia los treinta y dos bits altos de
+     * lo que hubiera antes en la pila.
+     *
+     * No vale con usar el ancho del DESTINO sin mas: un store a un campo de
+     * cuatro bytes debe seguir siendo de cuatro.  Lo que distingue a una
+     * ranura es que es SUYA del valor y mide ocho, y eso lo sabe quien la
+     * construye.
+     *
+     * Bit 1 porque el 0 ya dice el tamanyo de la direccion.
+     */
+    static constexpr uint8_t kFlagFullSlot = 0x2;
+
+    /// @brief El mismo operando de memoria, marcado como ranura de derrame.
+    MOperand as_full_slot() const noexcept {
+        MOperand o = *this;
+        o.flags = static_cast<uint8_t>(o.flags | kFlagFullSlot);
+        return o;
+    }
+
+    /// @brief Si es una ranura de derrame, que se escribe entera.
+    bool is_full_slot() const noexcept { return (flags & kFlagFullSlot) != 0; }
+
     static MOperand make_label(uint32_t label_id) noexcept {
         MOperand o;
         o.kind = MOperandKind::LABEL;
