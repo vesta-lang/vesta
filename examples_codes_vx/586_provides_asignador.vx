@@ -1,0 +1,112 @@
+// -----------------------------------------------------------------------------
+// `@Provides(malloc)` / `@Provides(free)`: poner TU asignador
+// -----------------------------------------------------------------------------
+// De todo lo que se puede proveer, este es el caso que manda: un programa que
+// reserva memoria no escribe `import` de nadie, y aun asi alguien tiene que
+// reservarla.  Quien lo hace por defecto es el asignador de la stdlib, escrito
+// en Vesta y declarado auto-importable en su manifiesto; aqui lo sustituye el
+// del propio programa.
+//
+// Lo que este ejemplo fija, porque cada una de las tres se rompio de verdad:
+//
+//   1. El contrato de `malloc` es `T* malloc<T>(u64 count)` -- GENERICO y con
+//      el tipo en el retorno --.  Tomarlo por `void* malloc(u64 bytes)` hacia
+//      que `malloc<Punto>(4)` reservara CUATRO BYTES en vez de cuatro Puntos, y
+//      eso no da un error: da memoria de menos y un estropicio mas tarde.
+//   2. Un proveedor puede ser una PLANTILLA, y una plantilla no emite simbolo
+//      -- lo emiten sus instancias --.  Asi que a un proveedor generico hay que
+//      INSTANCIARLO, no cablear su nombre: cablearlo pedia al enlazador algo
+//      que nadie habia emitido.
+//   3. Lo que el lenguaje reserva por su cuenta (el bloque de un `new`) pasa
+//      por el MISMO proveedor -- en NATIVO, que es donde no hay nadie mas que
+//      pueda reservarlo --.  Sobre la maquina virtual no: ahi el bloque de un
+//      `new` lo da la maquina (`newobj`, su monton recolectado), asi que el
+//      proveedor solo ve lo que el programa pide a mano.  De ahi que lo que
+//      este ejemplo COMPRUEBA sea "se nos pidio", que vale en los tres modos, y
+//      no "cuantas veces", que es distinto por una razon de fondo y no por un
+//      fallo.
+
+/// La memoria que reparte nuestro asignador.  Un bloque estatico, para que el
+/// proveedor no tenga que reservar para poder reservar.
+u8[4096] g_pool;
+
+/// Por donde va el reparto.  Avanza y no retrocede: soltar aqui no recupera
+/// nada, que para un ejemplo es justo lo que interesa -- lo que se comprueba es
+/// QUIEN reparte, no como de bien --.
+u64 g_next = 0_u64;
+
+/// Cuantas veces se nos pidio memoria.  Si el asignador de siempre hubiera
+/// ganado, esto se quedaria en cero.
+i64 g_pedidas = 0_i64;
+
+/// Y cuantas se solto.
+i64 g_sueltas = 0_i64;
+
+/**
+ * @brief Nuestro `malloc`.
+ *
+ * La firma es la del builtin, y el comprobador lo exige: `T*` de retorno y una
+ * CUENTA de elementos, no un numero de bytes.  El tamano de uno lo sabe
+ * `type.size<T>()`, que se resuelve al compilar.
+ *
+ * @tparam T Que se reserva.
+ * @param count Cuantos.
+ * @return La direccion del primero.
+ */
+@Provides(malloc)
+public T * mi_malloc<T>(u64 count) {
+	g_pedidas = g_pedidas + 1;
+	u64 bytes = count * (u64)type.size<T>();
+	// Alineado a 8: un `new` guarda campos de 8 bytes en el bloque, y darselo
+	// a medias no falla al reservar sino mucho despues.
+	bytes   = (bytes + 7_u64) & ~7_u64;
+	u64 off = g_next;
+	g_next  = g_next + bytes;
+	return (T*)(&g_pool[off]);
+}
+
+/**
+ * @brief Y nuestro `free`.
+ * @tparam T Que se suelta.
+ * @param p El bloque.
+ */
+@Provides(free)
+public void mi_free<T>(T * p) {
+	g_sueltas = g_sueltas + 1;
+}
+
+/// Una clase, para que el bloque del `new` pase tambien por lo de arriba.
+class Punto {
+	public i64 x;
+	public i64 y;
+	public Punto(i64 x, i64 y) {
+		this.x = x;
+		this.y = y;
+	}
+}
+
+i32 main() {
+	// 1. Reserva escrita a mano, con el tipo puesto.  Son CUATRO i64, o sea 32
+	//    bytes: si la cuenta se tomara por bytes, el cuarto caeria fuera.
+	i64* xs   = malloc<i64>(4);
+	xs[0]     = 10_i64;
+	xs[3]     = 11_i64;
+	i64  suma = xs[0] + xs[3];
+
+	// 2. Y la que el lenguaje hace por su cuenta: el bloque de este `new`.
+	Punto p = new Punto(20_i64, 1_i64);
+	suma    = suma + p.x + p.y;
+
+	xs.free();
+
+	// El CONTADOR no se imprime a proposito: vale distinto por modo (ver
+	// arriba), y una salida que cambia con el modo taparia el dia que cambie
+	// por un fallo.  Lo que se imprime es lo que tiene que dar igual.
+	"suma=${suma}". println();
+
+	// Que se le pidio a NUESTRO asignador es la mitad que importa: sin esto el
+	// programa daria 42 igual reservando con el de siempre.
+	if (g_pedidas < 1_i64) return 1;
+	if (g_sueltas < 1_i64) return 2;
+	return (i32)suma;
+}

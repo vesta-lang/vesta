@@ -3523,6 +3523,45 @@ class Lowering {
     ir::IrModule *out_mod_ =
         nullptr; ///< Modulo IR de salida (para static_data e imports).
     ir::IrFunction *fn_ = nullptr; ///< Funcion en construccion.
+
+    /**
+     * @brief El prefijo de namespace del sitio que se esta bajando.
+     *
+     * Lo que se pregunta "desde aqui" -- que se puede llamar sobre un tipo --
+     * depende del namespace donde esta el codigo, y aqui eso se sabe por la
+     * FUNCION en curso: el aplanado la renombro a `<ns>__nombre`, asi que su
+     * prefijo es el del sitio.  Es la misma deduccion que ya hace el bajado
+     * del asm para resolver un hermano por su nombre corto.
+     *
+     * @return El prefijo con su `__` final, o vacio en la raiz.
+     */
+    [[nodiscard]] std::string site_ns_prefix() const;
+
+    /**
+     * @brief Carga el qword que hay en @p base + @p off.
+     *
+     * El patron de leer la segunda mitad de un valor-funcion (el entorno de la
+     * closure) y cualquier otro campo a desplazamiento fijo.
+     *
+     * @param base La direccion.
+     * @param off  El desplazamiento en bytes.
+     * @param line Linea del fuente para el diagnostico.
+     * @return El valor leido.
+     */
+    ir::IrValueId emit_load_at_offset(ir::IrValueId base, int64_t off,
+                                      uint32_t line);
+
+    /**
+     * @brief Construye una cadena del lenguaje con @p text ya conocido.
+     *
+     * Interna los bytes en los datos estaticos y arma el StringObject.  Lo usa
+     * la introspeccion, que produce nombres sabidos al compilar.
+     *
+     * @param text El contenido.
+     * @param line Linea del fuente para el diagnostico.
+     * @return El valor de la cadena.
+     */
+    ir::IrValueId emit_string_value(const std::string &text, uint32_t line);
     ir::IrBlockId current_block_ =
         ir::IR_NO_BLOCK; ///< Bloque actual donde insertar.
     bool block_terminated_ =
@@ -4081,6 +4120,35 @@ class Lowering {
     ir::IrValueId emit_strconv(ir::IrValueId v_str, uint64_t enc_imm,
                                uint32_t source_line);
     ir::IrValueId emit_strgetbytes(ir::IrValueId v_str, uint32_t source_line);
+
+    /**
+     * @brief Los bytes de una cadena ya bajada: su direccion y su tamanyo.
+     *
+     * Una cadena ES eso por debajo, y como llegar hasta ello depende del modo
+     * -- en nativo es un valor {ptr,len,cap} y en la maquina virtual un
+     * identificador del recolector --, que es justo la eleccion que no se puede
+     * dejar repetida en cada sitio que la necesita.
+     *
+     * @param v_str       Valor de la cadena, ya bajado.
+     * @param source_line Linea del fuente, para el diagnostico.
+     * @param out_ptr     [salida] Direccion de los bytes.
+     * @param out_len     [salida] Cuantos bytes son.
+     */
+    void emit_str_ptr_len(ir::IrValueId v_str, uint32_t source_line,
+                          ir::IrValueId &out_ptr, ir::IrValueId &out_len);
+
+    /**
+     * @brief Baja @p ex y devuelve un `string` de verdad.
+     *
+     * Para cuando el destino pide una cadena y lo que hay escrito no se tipa
+     * como tal: un literal, donde el builtin declaraba una direccion, baja como
+     * direccion cruda.  Pasarla a pelo a quien espera un `string` compila y no
+     * avisa -- lee campos donde no los hay y sale una cadena vacia --.
+     *
+     * @param ex Expresion a bajar.
+     * @return El valor `string`, o @c ir::IR_NO_VALUE si no se pudo.
+     */
+    ir::IrValueId lower_expr_as_string(ast::Expr *ex);
 
     // --- Vesta Embed Inc 0: string value-type (solo native_poo_) ---
     /// Construye el repr value-string {ptr,len,cap} (24 bytes) en stack

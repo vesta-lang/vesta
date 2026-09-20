@@ -886,6 +886,9 @@ int Arm64Target::encode(MFunction &pf, std::vector<uint8_t> &out) const {
                 os << "    bl 0\n";
                 break;
             case MOp::RET: os << "    ret\n"; break;
+            /* La trampa de `unreachable`.  En x86 es INT3 (0xCC); aqui el
+             * equivalente es `brk`, que para igual de fuerte. */
+            case MOp::INT3: os << "    brk #0\n"; break;
             default:
                 if (util::flag_on(util::FlagId::Arm64Dump))
                     std::fprintf(stderr, "[arm64-vreg] ENCODE MOp no sop: %d\n",

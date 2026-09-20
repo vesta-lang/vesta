@@ -476,6 +476,19 @@ static void emit_payload_for_function(std::vector<uint8_t> &payload,
         write_u32(payload, a_off);
         write_u32(payload, static_cast<uint32_t>(ab.size()));
     }
+    /* Y QUE BUILTIN CUBRE, si cubre alguno (`@Provides(<builtin>)`).
+     *
+     * Por NOMBRE y no por el numero del enum: el orden del enum es interno y
+     * puede cambiar, mientras que el nombre es lo que el usuario escribe y lo
+     * que ya resuelve `builtin_from_name`.  Ademas un volcado del `.vxi` se lee
+     * solo.  Vacio = no cubre ninguno.
+     *
+     * Va al final y sin guarda de version porque el `.vxi` lleva el hash del
+     * compilador y se rechaza entero si no coincide: uno escrito por la version
+     * anterior no llega nunca a leerse con este lector. */
+    const uint32_t pb_off = pool.intern(sym.provides_builtin);
+    write_u32(payload, pb_off);
+    write_u32(payload, static_cast<uint32_t>(sym.provides_builtin.size()));
 }
 
 static void emit_payload_for_struct_or_class(std::vector<uint8_t> &payload,
@@ -1219,6 +1232,17 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
                        out.extern_lib))
             return false;
     }
+    /* La cuenta de parametros, CONTRA lo que queda de carga util.
+     *
+     * Se leia del fichero y se reservaba a ciegas.  Cada ranura ocupa 24 bytes
+     * ahi dentro, asi que una cuenta mayor que lo que queda es imposible -- y
+     * si sale basura, reservar tres vectores de hasta cuatro mil millones de
+     * cadenas son mas de CIEN GIGAS pedidos antes de mirar nada.  No es
+     * hipotetico: paso con un `.vxi` leido a medio escribir, con dos
+     * compilaciones a la vez sobre la misma cache, y se comio 68 GB.
+     *
+     * Mismo criterio que el `symbol_count` de la cabecera, que ya se rechaza
+     * por "posible corrupcion": lo que no cabe no se intenta. */
     out.param_types.reserve(pc);
     out.param_names.reserve(pc);
     out.param_abi_regs.reserve(pc);
@@ -1240,6 +1264,16 @@ static bool parse_payload_function(const uint8_t *data, size_t size,
         out.param_types.push_back(std::move(tnm));
         out.param_names.push_back(std::move(nnm));
         out.param_abi_regs.push_back(std::move(anm));
+    }
+    // Y que builtin cubre (ver el emisor).  Vacio = ninguno.
+    {
+        uint32_t pb_off = 0, pb_len = 0;
+        if (!read_u32(data, size, off, pb_off)) return false;
+        if (!read_u32(data, size, off, pb_len)) return false;
+        if (pb_len > 0 &&
+            !read_name(data, size, pb_off, pb_len, pool_start,
+                       out.provides_builtin))
+            return false;
     }
     return true;
 }

@@ -3690,6 +3690,28 @@ bool vreg_select(const ir::IrFunction &fn_in, MFunction &out, AbiKind abi,
                 break;
             }
 
+            case ir::IrOp::UNREACHABLE: {
+                /* Un terminador que dice "por aqui no se pasa".  Lo emite el
+                 * bajado tras una llamada que no retorna -- un `panic`, propio
+                 * o PROVISTO por el usuario --, y no tiene sucesor: el bloque
+                 * acaba aqui.
+                 *
+                 * Baja a una trampa (INT3 en x86, `brk` en arm64), no a nada.
+                 * Dejar el bloque vacio hace que el codigo CAIGA en lo que
+                 * venga detras -- la funcion siguiente, o el relleno -- y eso
+                 * no da un error, da OTRO comportamiento: el mismo programa
+                 * sigue corriendo con la suposicion ya rota.  Una trampa para
+                 * en el sitio y lo dice.
+                 *
+                 * `@c mb.succ_a` se queda sin poner a proposito: no hay
+                 * siguiente, y el analisis de vivacidad tiene que verlo asi. */
+                flush_pending();
+                MInstr trap;
+                trap.op = MOp::INT3;
+                O.push_back(trap);
+                break;
+            }
+
             case ir::IrOp::BR: {
                 flush_pending();
                 const ir::IrBlockId t = in.target_block;

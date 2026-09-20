@@ -1,0 +1,46 @@
+namespace ejemplos.provides_panic;
+
+// 590_provides_panic.vx
+//
+// `@Provides(panic)`: poner TU forma de morir.  Es el tercer servicio que pasa
+// al mecanismo unico de ganchos, despues de reservar y soltar memoria, y el
+// que cierra la retirada de `@PanicHandler`.
+//
+// QUE FIJA, Y POR QUE HACE FALTA FIJARLO:
+//
+//   1. Que el gancho SE USA.  Lo unico que distingue un proveedor que entra de
+//      uno que se ignora es el TEXTO: si la anotacion no hiciera nada, los
+//      tres modos imprimirian el panico del lenguaje y estarian DE ACUERDO
+//      entre ellos, asi que una red que solo compare modos no lo veria.  La
+//      marca `[mio]` solo puede salir de la funcion de aqui abajo.
+//
+//   2. Que `panic` SIGUE SIN RETORNAR por tener duenno.  El gancho aporta el
+//      MECANISMO -- que se escribe y como se muere --, no la politica de que
+//      el programa acaba.  Con proveedor, `panic("x")` volvia y el programa
+//      seguia: por eso esta el `println` de despues, que NO debe salir.
+//
+//   3. Que el codigo de salida es el que pone el proveedor (70), y el mismo en
+//      los tres modos.
+//
+// El cuerpo recibe la cadena ENTERA, no `(ptr, len)`: un `string` ya lleva
+// dentro direccion y longitud, asi que el contrato con el builtin es uno a uno.
+//
+//   vm --vesta 590_provides_panic.vx -o p && vm -m vm  --run p.velb
+//   vm --vesta 590_provides_panic.vx -o p && vm -m jit --run p.velb
+//   vm -m aot --vesta 590_provides_panic.vx --format pe -o p.exe && ./p.exe
+
+import std.os only exit;
+
+@Provides(panic)
+void mi_panico(string msg) {
+	println("[mio] ${msg}");
+	flush(); // el mensaje sale ANTES de morir, tambien en nativo
+	exit(70);
+}
+
+i32 main() {
+	println("antes");
+	panic("se acabo");
+	println("despues"); // inalcanzable: `panic` no retorna
+	return 0;
+}

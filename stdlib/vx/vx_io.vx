@@ -10,7 +10,7 @@
 // estan en  puro sobre __vx_write -> portables a cualquier target.
 //
 // El usuario puede REDEFINIR cualquier `__vx_*` en su propio modulo (igual que
-// @AllocatorOverride): si lo define, el lowering llama a SU version y este
+// con @Provides): si lo define, el lowering llama a SU version y este
 // runtime no se bundle-a (o su simbolo queda sin usar y el dead-elim lo quita).
 
 // Del lado de Linux nada se escribe a mano: las llamadas vienen de
@@ -88,7 +88,7 @@ void __vio_raw(u8* buf, u64 len) {
 	if (__vio_is_console == 0) {
 		// STD_OUTPUT_HANDLE = (DWORD)-11 = 0xFFFFFFF5 = 4294967285.
 		__vio_handle = GetStdHandle(4_294_967_285);
-		u32 mode = 0_u32;
+		u32 mode     = 0_u32;
 		// GetConsoleMode != 0 <=> el handle es una consola (no pipe/fichero).
 		if (GetConsoleMode(__vio_handle, &mode) != 0) {
 			__vio_is_console = 1;
@@ -213,7 +213,7 @@ i32 __vio_trazado() => 0;
  * fallo y con el mensaje ya escrito: un `panic` tambien es informacion de
  * diagnostico, no solo una forma de morir.
  *
- * Un `@PanicHandler` del usuario sustituye a esta funcion por completo.
+ * Un `@Provides(panic)` del usuario sustituye a esta funcion por completo.
  *
  * @param msg Bytes del mensaje.  No termina en nul: viene con su longitud.
  * @param len Cuantos bytes tiene el mensaje.
@@ -318,7 +318,7 @@ void __vio_base_u64(u64 v, u64 radix) {
 	i32 i = 68_i32;
 	while (v > 0) {
 		u64 d = v % radix;
-		i = i - 1;
+		i     = i - 1;
 		if (d < 10) {
 			buf[i] = (u8)(48 + d); // '0'+d
 		} else {
@@ -436,12 +436,12 @@ void __vx_print_float(f64 v) {
 		u8[8] fb;
 		i32   n = 0_i32;
 		while (n < 6) {
-			frac = frac * 10.0;
+			frac         = frac * 10.0;
 			u64        d = (u64)frac;
 			if (d > 9) d = 9;
-			fb[n] = (u8)(48 + d); // '0' + digito
-			frac  = frac - (f64)d;
-			n     = n + 1;
+			fb[n]        = (u8)(48 + d); // '0' + digito
+			frac         = frac - (f64)d;
+			n            = n + 1;
 		}
 		// Recortar ceros finales (estilo %g).
 		while (n > 0 && fb[n - 1] == 48) n = n - 1;

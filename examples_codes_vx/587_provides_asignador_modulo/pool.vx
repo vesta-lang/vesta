@@ -1,0 +1,105 @@
+// -----------------------------------------------------------------------------
+// El asignador, en SU modulo
+// -----------------------------------------------------------------------------
+// La version de un solo fichero (`579_provides_asignador.vx`) fija el contrato.
+// Esta fija el camino por el que pasa de verdad: el asignador de la stdlib vive
+// en otro modulo, y un proveedor GENERICO no se puede traer ya compilado --
+// una plantilla no emite simbolo, lo emiten sus instancias, que nacen donde se
+// conoce el tipo --.  O sea que tiene que viajar como FUENTE en el `.vxi` y
+// instanciarse en quien reserva.
+//
+// Y eso arrastra todo lo que su cuerpo nombra: aqui, a proposito, el estado es
+// PRIVADO del modulo y uno de los nombres empieza por `__`, que son las dos
+// categorias que el `.vxi` dejaba fuera -- el cuerpo llegaba al consumidor
+// hablando de cosas que alli no existian, y el error senyalaba a un fichero que
+// el usuario no ha escrito --.
+
+namespace pool;
+
+/// La memoria que se reparte.  PRIVADA: nadie fuera de este modulo la nombra, y
+/// aun asi tiene que viajar, porque el cuerpo de la plantilla la toca.
+u8[4096] g_pool;
+
+/// Por donde va el reparto.  Con `__` delante, que es la otra categoria que se
+/// quedaba fuera.
+u64 __pool_next = 0_u64;
+
+/// Cuantas veces se nos pidio memoria.  Publica: el programa la mira para
+/// comprobar que fue a NUESTRO asignador y no al de siempre.
+public i64 g_pedidas = 0_i64;
+
+/// Y cuantas se solto.
+public i64 g_sueltas = 0_i64;
+
+/**
+ * @brief Redondea hacia arriba al multiplo de 8.
+ *
+ * Privada y sin cualificar, que es como se escribe un ayudante: su nombre ES su
+ * label.  Viaja porque la plantilla la llama.
+ *
+ * @param n Los bytes pedidos.
+ * @return Los bytes a repartir.
+ */
+u64 align8(u64 n) => (n + 7_u64) & ~7_u64;
+
+/**
+ * @brief El `malloc` del programa.
+ *
+ * La firma es la del builtin: `T*` de retorno y una CUENTA de elementos.  El
+ * tamano de uno lo resuelve `type.size<T>()` al compilar, que es lo que hace
+ * que `malloc<Punto>(4)` reserve cuatro Puntos y no cuatro bytes.
+ *
+ * @tparam T Que se reserva.
+ * @param count Cuantos.
+ * @return La direccion del primero.
+ */
+@Provides(malloc)
+public T * pool_alloc<T>(u64 count) {
+	g_pedidas   = g_pedidas + 1;
+	u64 bytes   = align8(count * (u64)type.size<T>());
+	u64 off     = __pool_next;
+	__pool_next = __pool_next + bytes;
+	return (T*)(&g_pool[off]);
+}
+
+/**
+ * @brief Y el `free`.
+ *
+ * Suelta un BLOQUE, no un valor tipado -- por eso su `T` no se usa --.  Aqui el
+ * reparto solo avanza, que para el ejemplo basta: lo que se comprueba es QUIEN
+ * reparte.
+ *
+ * @tparam T Que se suelta.
+ * @param p El bloque.
+ */
+@Provides(free)
+public void pool_free<T>(T * p) {
+	g_sueltas = g_sueltas + 1;
+}
+
+/// Cuantas veces se imprimio un entero por el nuestro.
+public i64 g_enteros = 0_i64;
+
+/**
+ * @brief Un proveedor NO generico, para fijar que el papel viaja igual.
+ *
+ * Es el caso que se ignoraba EN SILENCIO: la anotacion vivia solo en el fuente
+ * del modulo que la declara, asi que al consumidor le llegaba la funcion pero
+ * no que fuera `print_int` -- el programa compilaba, corria y usaba el del
+ * lenguaje --.  Sobrevivia de rebote si el proveedor era una PLANTILLA, porque
+ * entonces viaja su texto y la anotacion va dentro; uno normal, no.
+ *
+ * Por eso se prueba junto al generico: lo que cruza la frontera es el PAPEL, y
+ * no puede depender de como este escrita la funcion que lo cumple.
+ *
+ * @param n El entero.
+ */
+@Provides(print_int)
+public void pool_print_int(i64 n) {
+	g_enteros = g_enteros + 1;
+	// A proposito NO imprime como el del lenguaje: asi la salida delata cual
+	// de los dos corrio.
+	print("<");
+	print_hex(n);
+	print(">");
+}

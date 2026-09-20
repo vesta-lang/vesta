@@ -469,7 +469,7 @@ static bool recompilar_con_maquina_de_compilacion(
      * corre, y las funciones de compilacion no llegan a poder ejecutarse. */
     copts_vm.emit_ir_preopt = false;
     vx::CompileResult cr_vm =
-        vx::vx_source_has_imports(vx_source)
+        vx::vx_source_needs_project(vx_source)
             ? vx::compile_vx_project(vx_path, copts_vm)
             : vx::compile_vx_source(vx_source, vx_path, copts_vm);
 
@@ -500,7 +500,7 @@ static bool recompilar_con_maquina_de_compilacion(
         copts2.comptime_artifact = &machine_bytes;
     }
     vx::CompileResult cr2 =
-        vx::vx_source_has_imports(vx_source)
+        vx::vx_source_needs_project(vx_source)
             ? vx::compile_vx_project(vx_path, copts2)
             : vx::compile_vx_source(vx_source, vx_path, copts2);
     /* La segunda manda, incluso si trae errores: puede ser un `static_assert`
@@ -2517,8 +2517,7 @@ int main(int argc, char *argv[]) {
         copts.asa_stages = {analysis::asa::kStagePreOpt,
                             analysis::asa::kStageDuringOpt,
                             analysis::asa::kStagePostOpt};
-        const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
-                                   vx::vx_source_declara_namespace(vx_source);
+        const bool como_proyecto = vx::vx_source_needs_project(vx_source);
         vx::CompileResult cr =
             como_proyecto ? vx::compile_vx_project(vx_path, copts)
                           : vx::compile_vx_source(vx_source, vx_path, copts);
@@ -2696,8 +2695,7 @@ int main(int argc, char *argv[]) {
         // hermanos.  Con el criterio antiguo, analizar `std/types.vx` -- la
         // base de tipos de la que depende media stdlib -- moria en "tipo no
         // resuelto en alias".
-        const bool como_proyecto = vx::vx_source_has_imports(vx_source) ||
-                                   vx::vx_source_declara_namespace(vx_source);
+        const bool como_proyecto = vx::vx_source_needs_project(vx_source);
         /* Cuanto cuesta analizar, por partes.  Hacia falta: la pregunta de por
          * que tarda solo se podia responder midiendo por fuera y suponiendo, y
          * suponer fallo -- la sospecha era la emision del `.vel` y no era.
@@ -4420,7 +4418,16 @@ int main(int argc, char *argv[]) {
             !util::flag_on(util::FlagId::NoProjectCache);
         const bool project_cache_verbose =
             util::flag_on(util::FlagId::VerboseProjectCache);
-        const bool has_imports = vx::vx_source_has_imports(vx_source);
+        /* Un fuente sin `import` ni `namespace` PUEDE tener dependencias: las
+         * que el manifiesto de la stdlib declara auto-importables.  Reservar
+         * memoria se escribe `new`, no `import`, y quien lo atiende es una
+         * plantilla que hay que VER para instanciar.
+         *
+         * Decidirlo solo por lo escrito mandaba ese programa al camino de
+         * fichero suelto, donde no hay grafo de modulos y por tanto no entra
+         * nada: el binario acababa pidiendo `calloc` y `free` a la libc, que es
+         * justo de lo que se trata de no depender. */
+        const bool has_imports = vx::vx_source_needs_project(vx_source);
 
         vx::ProjectCacheKey pck;
         pck.opt_level = copts.opt_level;

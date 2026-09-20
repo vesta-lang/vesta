@@ -1499,6 +1499,41 @@ ir::IrValueId Lowering::emit_strgetbytes(ir::IrValueId v_str,
     return v_n;
 }
 
+void Lowering::emit_str_ptr_len(ir::IrValueId v_str, uint32_t source_line,
+                                ir::IrValueId &out_ptr,
+                                ir::IrValueId &out_len) {
+    /* En nativo una cadena es un valor {ptr,len,cap} con cadena corta en el
+     * sitio, asi que los dos salen de leerlo; en la maquina virtual es un
+     * identificador del recolector y hay que preguntarle al objeto. */
+    if (native_poo_) {
+        out_ptr = emit_native_str_data_ptr(v_str, source_line);
+        out_len = emit_native_str_len(v_str, source_line);
+        return;
+    }
+    out_ptr = emit_strraw(v_str, source_line);
+    out_len = emit_strgetbytes(v_str, source_line);
+}
+
+ir::IrValueId Lowering::lower_expr_as_string(ast::Expr *ex) {
+    if (ex == nullptr) return ir::IR_NO_VALUE;
+    /* Un literal se conoce entero al compilar: sus bytes ya estan en los datos
+     * estaticos y el tamanyo tambien, asi que la cadena se construye desde ahi
+     * sin pasar por ninguna medida en ejecucion. */
+    if (ex->kind == ast::NodeKind::StringLitExpr) {
+        auto *slit = static_cast<ast::StringLitExpr *>(ex);
+        if (!slit->is_interpolated()) {
+            auto [v_addr, v_len] = emit_string_lit(slit);
+            if (v_addr == ir::IR_NO_VALUE || v_len == ir::IR_NO_VALUE)
+                return ir::IR_NO_VALUE;
+            return emit_string_literal_repr(
+                v_addr, v_len, static_cast<int64_t>(slit->value.size()),
+                ex->loc.line);
+        }
+    }
+    /* Lo demas ya sabe bajarse solo: si su tipo es cadena, el valor lo es. */
+    return lower_expr(ex);
+}
+
 std::string Lowering::ensure_ctoa_helper() {
     // BUG-3: helper codepoint -> UTF-8 nativo (una vez por modulo).
     //   i64 __vx_ctoa(u8* buf, i64 cp)

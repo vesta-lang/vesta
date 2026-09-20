@@ -1,0 +1,53 @@
+// -----------------------------------------------------------------------------
+// `write`: el sumidero de bytes del lenguaje
+// -----------------------------------------------------------------------------
+// Escribe `len` bytes desde `ptr` y no formatea nada.  Es el primitivo del que
+// cuelga todo lo que imprime -- `print`, `println` y la interpolacion se
+// descomponen en los `print_*` mas esto --, y hasta ahora era el unico sin
+// nombre propio en el lenguaje: se llegaba a el solo a traves de `print`.
+//
+// Dos cosas que prueba este ejemplo:
+//
+//   1. De QUE MEMORIA es el puntero no lo decide el modo de ejecucion, lo dice
+//      el IR -- es lo mismo que separa un `mov` de un `movh` --.  En la maquina
+//      virtual una direccion suya y una del anfitrion van por caminos
+//      distintos; en nativo no hay dos memorias y las dos son la misma.  El
+//      resultado tiene que ser identico en los tres modos, porque si no el
+//      mismo programa escribiria OTROS BYTES segun como se ejecute.
+//
+//   2. Que convive con `std.os.write`, que toma (stream, buf, count).  Misma
+//      palabra, otra firma: son dos candidatas y cada llamada va a la suya.
+//      Antes no se podia -- el `import only` sustituia al builtin y lo dejaba
+//      inalcanzable --, y era el caso que motivaba poder sobrecargar builtins.
+
+import std.os only write, Stream;
+
+i32 main() {
+	// --- (a) buffer del ANFITRION: `malloc` lo marca como tal ---------------
+	u8* h = (u8*)malloc(8);
+	h[0]  = 65_u8; // 'A'
+	h[1]  = 66_u8; // 'B'
+	print("host=");
+	write(h, 2_u64);
+	println("");
+
+	// --- (b) buffer de la MAQUINA VIRTUAL: un array local vive en vm_mem ----
+	u8[2] v;
+	v[0] = 67_u8; // 'C'
+	v[1] = 68_u8; // 'D'
+	print("vm=");
+	write(&v[0], 2_u64);
+	println("");
+
+	// --- (c) la de std.os, con TRES ranuras --------------------------------
+	// Escribe sin pasar por el buffer de `print`, asi que sus bytes pueden
+	// salir antes; lo que se comprueba aqui es CUANTOS escribio, que es
+	// determinista.  Que la llamada resuelva a esta y no al builtin es todo
+	// el asunto.
+	auto n = write(Stream.stdout, (char*)h, 2);
+	println("");
+
+	free(h);
+	// 40 + 2 solo si la de std.os escribio sus dos bytes.
+	return (i32)(40 + n);
+}

@@ -566,6 +566,14 @@ std::string arm64_emit_asm(const ir::IrFunction &fn, bool &out_unsupported,
                 os << "    add sp, sp, #" << frame << "\n";
                 os << "    ret\n";
                 break;
+            case ir::IrOp::UNREACHABLE:
+                /* Por aqui no se pasa: lo emite el bajado tras una llamada que
+                 * no retorna (un `panic`, propio o provisto).  Se pone una
+                 * trampa en vez de nada, porque un bloque vacio CAE en lo que
+                 * venga detras y eso no da un error, da otro comportamiento.
+                 * Sin epilogo: no se retorna de aqui. */
+                os << "    brk #0\n";
+                break;
             default:
                 // Op no soportada aun (float, memoria, dispatch dinamico):
                 // H.3+.

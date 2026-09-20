@@ -1,0 +1,24 @@
+// -----------------------------------------------------------------------------
+// NEGATIVO: proveer un builtin con OTRA firma no compila
+// -----------------------------------------------------------------------------
+// El companero positivo es `575_provides_builtin.vx`.
+//
+// `@Provides(print_int)` dice "yo cubro esto", y a partir de ahi toda llamada a
+// `print_int` salta aqui.  Si la firma no fuera la del builtin, eso no daria un
+// error: daria una llamada que PASA EL TIPADO -- porque quien llama sigue
+// viendo el builtin, con su firma -- y aterriza en algo que espera otra cosa.
+// Un entero llegando donde se lee una cadena, y el fallo apareciendo lejos del
+// sitio que lo causo.
+//
+// Justo la clase de fallo que este mecanismo viene a quitar, asi que el
+// contrato se comprueba al declararlo: aqui, no en la llamada.
+
+@Provides(print_int)
+void mal_firmado(string s) {
+	print(s);
+}
+
+i32 main() {
+	print_int(7);
+	return 0;
+}

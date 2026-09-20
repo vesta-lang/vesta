@@ -355,6 +355,101 @@ static ir::OptLevel opt_level_from_int(int n) noexcept {
     }
 }
 
+/**
+ * @brief Dice si @p name acaba en @p suffix como nombre COMPLETO de funcion.
+ *
+ * El rol de un `@SyncImpl` se elige por el nombre convenido (`monitor_enter` /
+ * `monitor_exit`), y ese nombre puede venir aplanado si la funcion vive en un
+ * namespace.  Por eso vale el nombre exacto o cualquier cola tras un separador:
+ * el punto del fuente, o el `__` que pone el aplanador.
+ *
+ * @param name   Nombre de la funcion, ya aplanado o no.
+ * @param suffix Nombre convenido que se busca.
+ * @return true si @p name ES @p suffix o termina en `<algo><sep><suffix>`.
+ */
+static bool name_tail_is(const std::string &name,
+                         const std::string &suffix) noexcept {
+    if (name.size() < suffix.size()) return false;
+    if (name.compare(name.size() - suffix.size(), suffix.size(), suffix) != 0)
+        return false;
+    if (name.size() == suffix.size()) return true;
+    const size_t sep = name.size() - suffix.size() - 1;
+    if (name[sep] == '.') return true; // separador del fuente
+    // Tras el aplanado de namespaces el nombre es 'ns__..__monitor_enter'.
+    return name[sep] == '_' && sep >= 1 && name[sep - 1] == '_';
+}
+
+/**
+ * @brief Apunta a @p fn_name como el sustituto de @p annotation, si el sitio
+ *        esta libre.
+ *
+ * Dos candidatos no son una sobrecarga: son una pregunta sin respuesta, porque
+ * cual gana lo decidiria el orden en que estan escritos.  Por eso el segundo es
+ * un error, y el mensaje nombra LOS DOS -- lo primero que hace falta al leerlo
+ * es saber donde esta el otro.
+ *
+ * @param res        Recibe el diagnostico y se marca no-ok si ya estaba dado.
+ * @param loc        Donde situar el error: el modulo, no una declaracion.
+ * @param annotation Nombre de la anotacion, para el mensaje.
+ * @param fn_name    La funcion que dice ser el sustituto.
+ * @param slot       Donde se guarda; vacio = todavia libre.
+ * @return true si el sitio era suyo y quedo apuntado; false si ya estaba dado.
+ */
+static bool claim_override_slot(CompileResult &res, const SourceLoc &loc,
+                                const char *annotation,
+                                const std::string &fn_name,
+                                std::string &slot) {
+    if (slot.empty()) {
+        slot = fn_name;
+        return true;
+    }
+    res.ok = false;
+    res.diagnostics.diag(loc, DiagLevel::ERR, "VX2118",
+                         {annotation, slot, fn_name});
+    return false;
+}
+
+bool collect_string_sync_overrides(const ast::ModuleNode &mod,
+                                   const std::string &module_name,
+                                   CompileResult &res) {
+    const SourceLoc mod_loc{util::intern_name(module_name), 0, 0};
+    for (const auto &decl : mod.decls) {
+        if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
+        const auto *fd = static_cast<const ast::FunctionDecl *>(decl.get());
+        if (fd->is_string_concat_override &&
+            !claim_override_slot(res, mod_loc, "StringConcat", fd->name,
+                                 res.string_concat_override))
+            return false;
+        if (fd->is_string_eq_override &&
+            !claim_override_slot(res, mod_loc, "StringEq", fd->name,
+                                 res.string_eq_override))
+            return false;
+        if (!fd->is_sync_impl) continue;
+        if (name_tail_is(fd->name, "monitor_enter")) {
+            if (!claim_override_slot(res, mod_loc, "SyncImpl monitor_enter",
+                                     fd->name, res.sync_enter_override))
+                return false;
+        } else if (name_tail_is(fd->name, "monitor_exit")) {
+            if (!claim_override_slot(res, mod_loc, "SyncImpl monitor_exit",
+                                     fd->name, res.sync_exit_override))
+                return false;
+        } else {
+            res.diagnostics.diag(fd->loc, DiagLevel::WARN, "VXW935",
+                                 {fd->name});
+        }
+    }
+    /* El par de `@SyncImpl` se exige COMPLETO: a medias, el cerrojo se toma de
+     * una forma y se suelta de otra. */
+    if (res.sync_enter_override.empty() != res.sync_exit_override.empty()) {
+        res.ok = false;
+        res.diagnostics.diag(mod_loc, DiagLevel::ERR, "VX2119",
+                             {res.sync_enter_override.empty() ? "monitor_enter"
+                                                              : "monitor_exit"});
+        return false;
+    }
+    return true;
+}
+
 CompileResult compile_vx_source(const std::string &source,
                                 const std::string &filename,
                                 const CompileOptions &opts) {
@@ -630,7 +725,7 @@ CompileResult compile_vx_source(const std::string &source,
             snap.type_kind = h.type_kind;
             snap.value_str = h.value_str;
             snap.loc = h.loc;
-            // builtin_kind = el nombre antes del '<' (p.ej. "sizeof").
+            // builtin_kind = el nombre antes del '<' (p.ej. "type.size").
             const size_t lt = h.name.find('<');
             snap.builtin_kind =
                 (lt != std::string::npos) ? h.name.substr(0, lt) : h.name;
@@ -692,87 +787,19 @@ CompileResult compile_vx_source(const std::string &source,
         opts.aot_vec_width); // ancho SIMD del target (--float-isa)
     lo.set_aot_auto_vec(opts.aot_auto_vec); // --float-isa auto: chunk dual
     lo.set_emit_comptime_fns(opts.emit_comptime_fns); // solo-LSP: inspeccion
-    // C-3: detectar @StringConcat / @StringEq ANTES del lowering.  A
-    // diferencia de @AllocatorOverride (que reescribe IR post-lowering),
-    // el override del string built-in debe afectar el lowering MISMO del
-    // operador `+`/`==` (y de los builtins str_concat/str_equals), por lo
-    // que se resuelve aqui y se pasa al Lowering via setter.
+    /* Los overrides del `string` built-in y de la primitiva de monitor se
+     * resuelven ANTES del lowering, porque afectan al lowering MISMO del
+     * operador `+`/`==` y del bloque `synchronized`.
+     *
+     * El barrido vive en UN solo sitio a proposito: lo necesitan los DOS
+     * caminos, el de fichero suelto y el de proyecto, y mientras estuvo
+     * copiado aqui el de proyecto se quedo sin el.  Eso no daba un error --
+     * daba un `@StringConcat` que compilaba y no ruteaba nada --, y saltaba
+     * en cuanto un fichero cambiaba de camino por cualquier otro motivo. */
+    if (!collect_string_sync_overrides(*mod, opts.module_name, res)) return res;
     for (auto &decl : mod->decls) {
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
         auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-        if (fd->is_string_concat_override) {
-            if (!res.string_concat_override.empty()) {
-                res.ok = false;
-                res.diagnostics.error(
-                    SourceLoc{util::intern_name(opts.module_name), 0, 0},
-                    "multiples @StringConcat: '" + res.string_concat_override +
-                        "' y '" + fd->name + "'");
-                return res;
-            }
-            res.string_concat_override = fd->name;
-        }
-        if (fd->is_string_eq_override) {
-            if (!res.string_eq_override.empty()) {
-                res.ok = false;
-                res.diagnostics.error(
-                    SourceLoc{util::intern_name(opts.module_name), 0, 0},
-                    "multiples @StringEq: '" + res.string_eq_override +
-                        "' y '" + fd->name + "'");
-                return res;
-            }
-            res.string_eq_override = fd->name;
-        }
-        // @SyncImpl: override de la primitiva de monitor de `synchronized`.
-        // Debe resolverse ANTES del lowering (afecta al lowering MISMO del
-        // bloque synchronized).  El ROL se selecciona por el nombre convenido
-        // de la fn (ABI fijo): monitor_enter (adquiere) / monitor_exit
-        // (libera).  Aceptamos el nombre exacto o cualquier sufijo tras un
-        // separador de namespace '.' para permitir declararlas en un
-        // namespace.  Firma esperada: void(<ptr> obj).
-        if (fd->is_sync_impl) {
-            const std::string &nm = fd->name;
-            auto tail_is = [&](const std::string &suf) -> bool {
-                if (nm.size() < suf.size()) return false;
-                if (nm.compare(nm.size() - suf.size(), suf.size(), suf) != 0)
-                    return false;
-                if (nm.size() == suf.size()) return true;
-                const size_t sep = nm.size() - suf.size() - 1;
-                // Separador de namespace: '.' (fuente) o el mangling '__' que
-                // aplica el aplanador de namespaces (namespace_flatten).  Tras
-                // el flatten el nombre es 'ns__..__monitor_enter'.
-                if (nm[sep] == '.') return true;
-                if (nm[sep] == '_' && sep >= 1 && nm[sep - 1] == '_')
-                    return true;
-                return false;
-            };
-            if (tail_is("monitor_enter")) {
-                if (!res.sync_enter_override.empty()) {
-                    res.ok = false;
-                    res.diagnostics.error(
-                        SourceLoc{util::intern_name(opts.module_name), 0, 0},
-                        "multiples @SyncImpl monitor_enter: '" +
-                            res.sync_enter_override + "' y '" + fd->name + "'");
-                    return res;
-                }
-                res.sync_enter_override = fd->name;
-            } else if (tail_is("monitor_exit")) {
-                if (!res.sync_exit_override.empty()) {
-                    res.ok = false;
-                    res.diagnostics.error(
-                        SourceLoc{util::intern_name(opts.module_name), 0, 0},
-                        "multiples @SyncImpl monitor_exit: '" +
-                            res.sync_exit_override + "' y '" + fd->name + "'");
-                    return res;
-                }
-                res.sync_exit_override = fd->name;
-            } else {
-                res.diagnostics.warning(
-                    fd->loc,
-                    "@SyncImpl en fn '" + fd->name +
-                        "' cuyo nombre no termina en 'monitor_enter' ni "
-                        "'monitor_exit'; la anotacion se ignora");
-            }
-        }
         // CPU dispatch Inc 4: @HelperOverride(<helper>).  Debe resolverse
         // ANTES del lowering porque afecta a la construccion de
         // __vx_memcpy_init (apunta el fp a la fn del usuario, saltando el
@@ -836,19 +863,6 @@ CompileResult compile_vx_source(const std::string &source,
     }
     lo.set_string_op_overrides(res.string_concat_override,
                                res.string_eq_override);
-    // @SyncImpl: exigir el PAR completo (enter + exit) o ninguno.  Un
-    // override a medias dejaria el monitor sin liberar (o sin adquirir).
-    if (res.sync_enter_override.empty() != res.sync_exit_override.empty()) {
-        res.ok = false;
-        res.diagnostics.error(
-            SourceLoc{util::intern_name(opts.module_name), 0, 0},
-            std::string("@SyncImpl incompleto: se requiere el par "
-                        "monitor_enter + monitor_exit (falta '") +
-                (res.sync_enter_override.empty() ? "monitor_enter"
-                                                 : "monitor_exit") +
-                "')");
-        return res;
-    }
     lo.set_sync_impl_overrides(res.sync_enter_override, res.sync_exit_override);
     // CPU dispatch Inc 4: pasar el override de "memcpy" (si lo hay) al
     // lowering para que __vx_memcpy_init apunte el fp a la fn del usuario.
@@ -1037,25 +1051,52 @@ CompileResult compile_vx_source(const std::string &source,
     for (auto &decl : mod->decls) {
         if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
         auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-        if (fd->is_panic_handler) res.aot_panic_sym = fd->name;
-        if (fd->is_alloc_override) {
-            bool ret_ptr = false;
-            if (fd->return_type &&
-                fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                const auto pk =
-                    static_cast<ast::PrimitiveTypeNode *>(fd->return_type.get())
-                        ->prim;
-                ret_ptr = (pk == PrimitiveKind::PTR);
-            } else if (fd->return_type && fd->return_type->kind ==
-                                              ast::NodeKind::PointerTypeNode) {
-                ret_ptr = true;
-            }
-            if (ret_ptr)
+        /* `@Provides(<builtin>)`: quien cubre que.  El comprobador de tipos ya
+         * verifico que cumple el contrato del builtin, asi que aqui solo se
+         * apunta -- y se apunta el VALOR del builtin, no su nombre: quien lo
+         * consulta compara enteros. */
+        if (fd->provides_builtin != Builtin::Unknown) {
+            res.builtin_providers.push_back({fd->provides_builtin, fd->name});
+            /* Y lo que el compilador emite POR SU CUENTA va al mismo sitio.
+             *
+             * `malloc` no es la funcion `malloc`: es el builtin de PEDIR
+             * MEMORIA, y un `new` pide memoria.  Quien lo provee se lleva todo
+             * -- el `new`, la liberacion de RAII --, aunque el programa no
+             * escriba `malloc` en ninguna linea.  Partirlo en dos dejaria un
+             * programa reservando con el proveedor y con la libc a la vez.
+             *
+             * El rol sale del NOMBRE.  Antes se deducia del tipo de retorno
+             * -- devuelve puntero luego reserva, devuelve void luego libera --,
+             * que ademas de adivinar obligaba a que las dos se llamaran igual. */
+            switch (fd->provides_builtin) {
+            case Builtin::Malloc:
                 res.aot_alloc_sym = fd->name;
-            else
+                break;
+            case Builtin::Free:
                 res.aot_free_sym = fd->name;
+                break;
+            case Builtin::Panic:
+                res.aot_panic_sym = fd->name;
+                break;
+            default:
+                break;
+            }
         }
     }
+    /* Y si quien lo provee es una PLANTILLA -- el caso del asignador, que
+     * ademas viene de otro modulo --, lo que hay que nombrar no es ella sino su
+     * instancia para BYTES: una plantilla no emite simbolo, lo emiten sus
+     * instancias.  El comprobador ya la creo, porque reservar sin escribir
+     * `malloc` es lo normal: un `new` lo hace.
+     *
+     * La instancia MANDA sobre lo que el bucle de arriba apunto: ese toma el
+     * nombre de la declaracion, que para una plantilla es el que NO existe como
+     * simbolo -- y ponerlo solo cuando el otro estuviera vacio dejaba ganar
+     * justo al que no vale, asi que el enlazado pedia `...__vx_free` a secas. */
+    if (!tc.raw_alloc_symbol().empty())
+        res.aot_alloc_sym = tc.raw_alloc_symbol();
+    if (!tc.raw_free_symbol().empty())
+        res.aot_free_sym = tc.raw_free_symbol();
 
     /* : set @c has_lowerable_macros si el lowering emitio
      * al menos una IrFunction marcada @c is_macro_compiled.  Esto

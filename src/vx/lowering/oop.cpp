@@ -962,16 +962,34 @@ void Lowering::generate_new_helpers(ir::IrModule &out) {
                 c.source_line = cd->loc.line;
                 nf.append(e, std::move(c));
             }
-            // %obj = call calloc(%n, %sz) -> host_ptr zero-init
+            /* El bloque del objeto: %obj = <quien reserva>(...) -> host_ptr
+             * ZERIFICADO, que es lo que preserva el cero de los campos que el
+             * constructor no escribe.
+             *
+             * `new` es AZUCAR de reservar: si alguien provee `malloc` va por
+             * ahi, con la instancia que cuenta bytes -- un `new` pide un
+             * tamanyo, no elementos de ningun tipo --.  Asi el que sustituye el
+             * asignador se lo lleva TODO, y no un programa reservando con el
+             * suyo cuando dice `malloc` y con otro cuando dice `new`.
+             *
+             * Sin proveedor queda el `calloc` de la convencion C, que es lo que
+             * resuelve el enlazador contra la libc. */
             const ir::IrValueId v_obj = nf.new_value(ir::IrType::PTR);
             nf.values[v_obj].is_host_ptr = true;
             {
+                const std::string &alloc_sym = tc_.raw_alloc_symbol();
                 ir::IrInstr ca{};
                 ca.op = ir::IrOp::CALL;
                 ca.type = ir::IrType::PTR;
                 ca.dst = v_obj;
-                ca.func_name = "calloc";
-                ca.operands = {v_n, v_sz};
+                ca.is_call_site = true;
+                if (!alloc_sym.empty()) {
+                    ca.func_name = alloc_sym;
+                    ca.operands = {v_sz}; // bytes; el `1` de calloc sobra
+                } else {
+                    ca.func_name = "calloc";
+                    ca.operands = {v_n, v_sz};
+                }
                 ca.source_line = cd->loc.line;
                 nf.append(e, std::move(ca));
             }

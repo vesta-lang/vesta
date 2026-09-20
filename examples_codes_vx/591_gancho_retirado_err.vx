@@ -1,0 +1,23 @@
+namespace ejemplos.gancho_retirado_err;
+
+// 591_gancho_retirado_err.vx  --  NEGATIVO: no debe compilar (VXP091).
+//
+// `@AllocatorOverride` y `@PanicHandler` fueron el primer mecanismo de
+// ganchos, de cuando cada servicio del runtime tenia el suyo.  Hoy el gancho se
+// nombra por el BUILTIN que cubre -- `@Provides(malloc)`, `@Provides(free)`,
+// `@Provides(panic)` --, que es UNA sola forma para todos y ademas se
+// comprueba: el builtin tiene que existir y la firma tiene que encajar.
+//
+// POR QUE ES UN ERROR Y NO UN AVISO.  El parser descarta en silencio cualquier
+// anotacion que no conoce, asi que cuando los consumidores pasaron a leer
+// `@Provides` estas dejaron de leerse y nadie lo dijo: el fichero compilaba,
+// salia con codigo cero, y el binario reservaba con el asignador de la
+// biblioteca -- que en freestanding es justo el que no hay --.  Un gancho que
+// no engancha es peor que uno que falta, porque parece que funciona.
+//
+// Ver 586 (asignador) y 590 (panic) para la forma vigente.
+
+@AllocatorOverride
+i64* mi_reserva(u64 n) => malloc<i64>(n);
+
+i32 main() => 42;

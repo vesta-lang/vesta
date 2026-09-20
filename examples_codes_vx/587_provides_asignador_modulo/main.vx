@@ -1,0 +1,79 @@
+// -----------------------------------------------------------------------------
+// Reservar con el asignador de OTRO modulo
+// -----------------------------------------------------------------------------
+// Lo unico que este fichero hace distinto de cualquier otro programa es
+// importar el modulo.  No escribe el nombre del proveedor en ningun sitio: lo
+// que liga `malloc` con `pool_alloc` es la anotacion que aquel lleva, y la
+// llamada de aqui es la de siempre.
+//
+// Asi es como se sustituye un servicio del lenguaje sin que el codigo que lo
+// usa se entere -- que es el punto de todo el mecanismo --.
+
+import pool;
+
+/// Una clase, para que tambien entre el bloque que el lenguaje reserva solo.
+class Punto {
+	public i64 x;
+	public i64 y;
+	public Punto(i64 x, i64 y) {
+		this.x = x;
+		this.y = y;
+	}
+}
+
+/**
+ * @brief Toma una cadena, para que el compilador emita su limpieza.
+ *
+ * En nativo, un parametro `string` hace que el compilador emita por su cuenta
+ * la liberacion del bloque al salir -- una que el programa no escribe --, y esa
+ * es la que pedia el asignador cuando no habia ninguno cableado.  Con el
+ * proveedor puesto, sale por el del pool como todo lo demas.
+ *
+ * @param texto Lo que se etiqueta.
+ */
+void etiqueta(string texto) {
+	print("[");
+	print(texto);
+	print("] ");
+}
+
+i32 main() {
+	// CUATRO i64, o sea 32 bytes: si la cuenta se tomara por bytes, el cuarto
+	// caeria fuera del bloque y lo escrito se perderia sin un aviso.
+	i64* xs   = malloc<i64>(4);
+	xs[0]     = 10_i64;
+	xs[3]     = 11_i64;
+	i64  suma = xs[0] + xs[3];
+
+	// En nativo, el bloque de este `new` sale tambien del pool; sobre la
+	// maquina virtual lo da la maquina.  Ver la cabecera de
+	// `579_provides_asignador.vx`.
+	Punto p = new Punto(20_i64, 1_i64);
+	suma    = suma + p.x + p.y;
+
+	// Con el PUNTO, y el proveedor en OTRO modulo: `xs.free()` y `free(xs)`
+	// son la misma llamada, asi que tienen que acabar en la misma instancia de
+	// `pool_free` -- la que viajo como plantilla y se instancio aqui --.
+	xs.free();
+
+	// Y el proveedor NO generico del mismo modulo: `print_int` es el del pool,
+	// asi que esto sale como `<0x2a>` y no como `42`.  Si el papel no cruzara
+	// la frontera -- que es lo que pasaba, y en silencio -- saldria el del
+	// lenguaje y nadie se enteraria.
+	print_int(suma);
+	println("");
+
+	// Un parametro `string`, que en NATIVO arrastra la limpieza que el
+	// compilador emite por su cuenta: es la que pedia el asignador sin que el
+	// programa escriba ninguna liberacion.
+	etiqueta("fin");
+
+	"suma=${suma}". println();
+
+	// Que se le pidio al asignador del OTRO modulo, que es lo que distingue
+	// esto de un programa que reserva con el de siempre y da 42 igual.
+	if (pool.g_pedidas < 1_i64) return 1;
+	if (pool.g_sueltas < 1_i64) return 2;
+	if (pool.g_enteros < 1_i64) return 3;
+	return (i32)suma;
+}

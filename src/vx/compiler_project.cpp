@@ -1554,9 +1554,18 @@ void mangle_top_level_(ast::ModuleNode &mod, const std::string &module_name) {
     }
 }
 
+/// Los namespaces que el manifiesto declara auto-importables.
+///
+/// Es @ref NamespaceList: punteros al pozo de nombres, asi que comparar dos es
+/// comparar punteros y copiar la lista no copia texto.
+using AutoImportNs = NamespaceList;
+
 std::vector<ImportRequest>
 collect_imports_(const ast::ModuleNode &mod,
-                 const NsToModname *ns_to_modname = nullptr) {
+                 const NsToModname *ns_to_modname = nullptr,
+                 const AutoImportNs *auto_imports = nullptr,
+                 const std::string &owner_dir = std::string(),
+                 const std::string &self_path = std::string()) {
     std::vector<ImportRequest> out;
     // NS.1 fix: en la forma statement `namespace a.b.c;` los imports quedan
     // ANIDADOS dentro del NamespaceDecl -> recolectarlos recursivamente (si no,
@@ -1611,6 +1620,91 @@ collect_imports_(const ast::ModuleNode &mod,
         req.is_public_reexport = im->is_public_reexport;
         req.loc = im->loc;
         out.push_back(std::move(req));
+    }
+    /* Y lo que el manifiesto declare auto-importable.
+     *
+     * Reservar memoria no se pide con un `import`: se escribe `new` o
+     * `malloc<T>(n)`.  Pero quien lo atiende es una PLANTILLA, y una plantilla
+     * hay que verla para instanciarla, asi que tiene que estar en el ambito de
+     * quien reserva aunque su autor no escriba nada.
+     *
+     * Que modulos son sale de un DATO -- la lista del manifiesto --, no de
+     * aqui: en el compilador no hay ningun nombre de modulo, y cualquier
+     * libreria puede declarar los suyos.
+     *
+     * Un modulo de la propia lista no se importa a si mismo: los dos nombres se
+     * comparan, asi que el asignador no se trae a si mismo y no hace falta
+     * ninguna marca aparte. */
+    /* El paquete que DECLARA la auto-importacion no se la aplica a si mismo.
+     *
+     * Y no es solo que el asignador no se importe: los modulos de los que EL
+     * depende -- los tipos, los atomicos -- tampoco pueden, porque entonces se
+     * piden unos a otros y el grafo se cierra en ciclo.  El criterio es la
+     * frontera del paquete, que es la que ya separa "quien ofrece el servicio"
+     * de "quien lo consume": dentro se escribe el `import` a mano, como
+     * cualquier otra dependencia. */
+    const bool inside_owner =
+        !owner_dir.empty() && self_path.size() > owner_dir.size() &&
+        self_path.compare(0, owner_dir.size(), owner_dir) == 0;
+    if (auto_imports != nullptr && !auto_imports->empty() && !inside_owner) {
+      for (const std::string *nsp : *auto_imports) {
+        if (nsp == nullptr || nsp->empty()) continue;
+        const std::string &ns = *nsp;
+        bool already = false;
+        for (const auto &r : out)
+            if (r.ns_path == ns || r.module_name == ns) already = true;
+        if (already) continue;
+        ImportRequest req;
+        req.by_namespace = true;
+        req.ns_path = ns;
+        req.module_name = ns;
+        req.local_name = ns;
+        /* `only *`, no llano.
+         *
+         * Hacen falta las DOS cosas y cada forma traia una sola: el llano
+         * inyecta las plantillas pero no declara sus simbolos -- el proveedor
+         * quedaba invisible --, y `only *` declara lo publico, que es lo que
+         * hace que se le encuentre.  Lo que al principio faltaba con `only *`
+         * -- que el cuerpo de la plantilla resolviera sus ayudantes -- ya no
+         * depende del modo: viajan porque una plantilla los nombra. */
+        /* EXACTAMENTE como un `import std.alloc;` escrito a mano.
+         *
+         * Nada de `only *` ademas: en un import escrito las dos cosas son
+         * EXCLUYENTES (`is_plain = sin only Y sin glob`), asi que ponerlas
+         * juntas creaba un estado que no ocurre nunca -- y el consumidor lo
+         * trataba por una rama u otra segun donde se mirara.  Lo que hace falta
+         * es el llano, que es el que registra el namespace y con el las
+         * plantillas del modulo. */
+        req.only_all = false;
+        /* Y LLANA ademas, que es la que trae las PLANTILLAS.
+         *
+         * `only *` se expande sobre la lista de SIMBOLOS del modulo, y una
+         * plantilla no esta ahi -- no emite simbolo, lo emiten sus instancias
+         * --, asi que por esa via el proveedor generico no llegaba.  Con el
+         * `import` escrito a mano si llegaba, y esa es toda la diferencia: el
+         * mismo programa compilaba o no segun si alguien habia escrito una
+         * linea que no hace falta.
+         *
+         * Se veia solo con la cache FRIA, que es lo que lo hacia tan raro: en
+         * caliente el modulo llega por otro camino y el proveedor aparece. */
+        req.is_plain = true;
+        if (ns_to_modname != nullptr) {
+            auto it = ns_to_modname->find(ns);
+            if (it != ns_to_modname->end() && !it->second.empty())
+                /* El nombre ENTERO.  Esto decia `.front()`, y el mapa devuelve
+                 * una cadena, no una lista: eso es su primer CARACTER, y
+                 * asignar un `char` a un `std::string` compila sin rechistar.
+                 * O sea que el modulo `alloc` se registraba con el nombre `a`,
+                 * y una funcion del usuario llamada asi chocaba con el -- solo
+                 * ese nombre, lo que hacia el fallo desconcertante --. */
+                req.module_name = it->second;
+        }
+        /* Y el nombre local es el del MoDULO ya resuelto, como en el escrito.
+         * Dejarlo en el namespace puntuado lo registraba bajo un nombre que
+         * despues nadie busca. */
+        req.local_name = req.module_name;
+        out.push_back(std::move(req));
+      }
     }
     return out;
 }
@@ -1895,7 +1989,9 @@ std::vector<int>
 compute_module_levels_(const std::vector<ProjectModuleWork> &work,
                        const std::unordered_map<std::string, size_t> &by_name,
                        const std::unordered_map<std::string, size_t> &by_ns,
-                       const NsToModname &ns_to_modname) {
+                       const NsToModname &ns_to_modname,
+                       const AutoImportNs &auto_imports,
+                       const std::string &auto_import_owner_dir) {
     std::vector<int> levels(work.size(), 0);
     // Procesamos en orden topologico (work ya esta en topo).  Para cada
     // modulo, recogemos los imports de su AST + calculamos su nivel
@@ -1904,7 +2000,8 @@ compute_module_levels_(const std::vector<ProjectModuleWork> &work,
         const auto &pm = work[i];
         if (!pm.ast) continue;
         int max_dep_level = -1;
-        auto imports = collect_imports_(*pm.ast, &ns_to_modname);
+        auto imports = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                       auto_import_owner_dir, pm.canonical_path);
         for (const auto &req : imports) {
             // Resolver el dep por NAMESPACE COMPLETO (by_ns) cuando el import
             // es por-namespace: `by_name` colisiona cuando dos modulos
@@ -2191,6 +2288,15 @@ CompileResult compile_vx_project(
             }
         }
     }
+    /* Los namespaces que el manifiesto declare auto-importables.  Se llena
+     * justo debajo, al localizar la stdlib, y se pasa a quien recoge los
+     * imports: un dato, no estado escondido. */
+    AutoImportNs auto_imports;
+    /* El arbol del paquete que las declara.  Sus propios modulos NO reciben la
+     * auto-importacion: ahi el servicio se ofrece, no se consume, y aplicarsela
+     * cerraria el grafo en ciclo -- el asignador depende de los tipos, que
+     * pedirian el asignador --. */
+    std::string auto_import_owner_dir;
     // Cablear el directorio de la stdlib Vesta (stdlib/vx).  Permite que
     // `import "simd_string"` (y futuras libs Vesta de la stdlib) resuelva sin
     // que el usuario tenga que copiar la lib a su proyecto.  Autodetect por
@@ -2201,6 +2307,40 @@ CompileResult compile_vx_project(
         // LSP.
         std::string sd = detect_stdlib_vx_dir();
         if (!sd.empty()) graph.set_stdlib_dir(sd);
+        /* Y lo que la stdlib declare AUTO-IMPORTABLE en su manifiesto.
+         *
+         * Aqui, porque es el sitio donde ya se sabe donde vive: leerlo en otro
+         * lado obligaria a volver a buscarla.  Lo que se trae es una lista de
+         * nombres, asi que el compilador no conoce ninguno.
+         *
+         * Se lee UNA vez y viaja por la firma de quien la necesita.  Nada de
+         * estado por hilo: ni hace falta -- el dato no cambia en toda la
+         * compilacion -- ni seria gratis, porque en Windows una variable de
+         * hilo es una LLAMADA (ver `util::ThreadSlot`, que es lo que se usa
+         * cuando de verdad hay estado por hilo).
+         *
+         * Solo en el camino NATIVO: en la maquina virtual reservar memoria es
+         * una instruccion suya y no hay a quien ver.  Y nunca al compilar la
+         * propia stdlib, que se traeria a si misma. */
+        if (!sd.empty() && opts.native_poo && !opts.sin_asignador_vesta) {
+            const std::string manifest_path = stdlib_manifest_path();
+            if (!manifest_path.empty()) {
+                auto_imports = auto_import_modules(manifest_path);
+                /* El arbol del paquete es el del manifiesto que lo declaro: el
+                 * que dice que algo se auto-importa es quien delimita a quien
+                 * NO se le aplica. */
+                const size_t slash = manifest_path.find_last_of("/\\");
+                if (slash != std::string::npos)
+                    auto_import_owner_dir = manifest_path.substr(0, slash);
+                for (char &c : auto_import_owner_dir)
+                    if (c == '\\') c = '/';
+            }
+        }
+        /* Al GRAFO tambien, y antes de recorrerlo: que el modulo este en el
+         * ambito de quien reserva no sirve de nada si no esta en el CONJUNTO.
+         * Son las dos mitades de lo mismo, y con una sola el import resolvia a
+         * un modulo que nadie habia cargado. */
+        graph.set_auto_import_ns(auto_imports);
     }
     // añadir como search path implicito la carpeta del modulo root.  Asi
     // los modulos hermanos pueden importarse con paths relativos al root
@@ -2594,7 +2734,8 @@ CompileResult compile_vx_project(
     // safety review del TypeChecker compartido + file lock cache que
     // M5.A ya cubre via atomic write.
     const std::vector<int> module_levels =
-        compute_module_levels_(work, by_name, by_ns, ns_to_modname);
+        compute_module_levels_(work, by_name, by_ns, ns_to_modname,
+                               auto_imports, auto_import_owner_dir);
     int max_level = 0;
     for (int L : module_levels) {
         if (L > max_level) max_level = L;
@@ -3032,7 +3173,8 @@ CompileResult compile_vx_project(
          * nadie aunque los modulos se compilen en paralelo. */
         if (is_root && pm.ast) {
             std::vector<uint64_t> dep_hashes;
-            auto imps = collect_imports_(*pm.ast, &ns_to_modname);
+            auto imps = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                       auto_import_owner_dir, pm.canonical_path);
             for (const auto &req : imps) {
                 auto itd = by_name.find(req.module_name);
                 if (itd != by_name.end())
@@ -3045,7 +3187,8 @@ CompileResult compile_vx_project(
         bool cas_key_ok = false;
         if (cas && !is_root && pm.ast) {
             std::vector<uint64_t> dep_hashes;
-            auto imps = collect_imports_(*pm.ast, &ns_to_modname);
+            auto imps = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                       auto_import_owner_dir, pm.canonical_path);
             for (const auto &req : imps) {
                 auto itd = by_name.find(req.module_name);
                 if (itd != by_name.end())
@@ -3190,7 +3333,8 @@ CompileResult compile_vx_project(
                         como_importa;
                     std::vector<ImportRequest> imps_val;
                     if (pm.ast) {
-                        imps_val = collect_imports_(*pm.ast, &ns_to_modname);
+                        imps_val = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                       auto_import_owner_dir, pm.canonical_path);
                         for (const auto &r : imps_val)
                             como_importa.emplace(r.module_name, &r);
                     }
@@ -3490,7 +3634,8 @@ CompileResult compile_vx_project(
         //   - `import "x" only A, B;`   -> inyecta A, B directos en scope.
         //   - `import "x" [as alias];`  -> registra namespace para `x.A` o
         //                                   `alias.A` ( M.7).
-        auto imports = collect_imports_(*pm.ast, &ns_to_modname);
+        auto imports = collect_imports_(*pm.ast, &ns_to_modname, &auto_imports,
+                                       auto_import_owner_dir, pm.canonical_path);
 
         // LANG.fix-3: pre-importar las .vxi de los deps TRANSITIVOS
         // antes de procesar los imports explicitos.  Si main tiene
@@ -3980,6 +4125,24 @@ CompileResult compile_vx_project(
             auto itsl = aot_helper_override_syms.find("strlen");
             if (itsl != aot_helper_override_syms.end())
                 lo.set_strlen_override(itsl->second);
+            /* Y los sustitutos del `string` built-in y del monitor, por el
+             * MISMO barrido que usa el camino de fichero suelto.
+             *
+             * Este camino no los tenia, y eso no daba un error: un
+             * `@StringConcat` compilaba y el `+` seguia yendo al concat del
+             * lenguaje, con el override emitido al lado sin que lo llamara
+             * nadie.  Saltaba en cuanto un fichero pasaba a compilarse como
+             * proyecto por cualquier otro motivo -- por ejemplo por traer el
+             * asignador de la stdlib --, o sea lejos de donde se escribio. */
+            /* El valor de vuelta no se mira aqui porque de este sitio no se
+             * puede abandonar: la funcion no devuelve el resultado.  No hace
+             * falta -- al fallar, el barrido ya marco `res.ok` y dejo su
+             * diagnostico, que es lo que corta mas arriba --. */
+            (void)collect_string_sync_overrides(*pm.ast, opts.module_name, res);
+            lo.set_string_op_overrides(res.string_concat_override,
+                                       res.string_eq_override);
+            lo.set_sync_impl_overrides(res.sync_enter_override,
+                                       res.sync_exit_override);
         }
         if (!opts.instrument_mode.empty() && opts.instrument_mode != "none") {
             lo.set_instrument_mode(opts.instrument_mode);
@@ -4547,7 +4710,9 @@ CompileResult compile_vx_project(
         const auto &root_pm = work.back();
         const auto &root_refs = root_pm.tc ? root_pm.tc->referenced_names()
                                            : std::unordered_set<std::string>{};
-        auto root_imports = collect_imports_(*root_pm.ast, &ns_to_modname);
+        auto root_imports = collect_imports_(*root_pm.ast, &ns_to_modname, &auto_imports,
+                                            auto_import_owner_dir,
+                                            root_pm.canonical_path);
         for (const auto &req : root_imports) {
             if (req.is_plain) continue;           // namespace -> nunca shake
             if (req.is_public_reexport) continue; // re-export consume el dep
@@ -4598,6 +4763,23 @@ CompileResult compile_vx_project(
      * Y pesa porque el root IMPORTA TODO: sus `imported_namespaces_` guardan
      * los simbolos publicos de los veinticuatro modulos.  Medido en el corte
      * del pico, 21,6 MiB en `register_namespace_symbol`. */
+    /* Antes de soltarlo, LO QUE SOLO EL SABE: que instancia del proveedor
+     * reserva y cual suelta.
+     *
+     * Mas abajo se decide con que simbolo se cablea el asignador, y alli se
+     * preguntaba por el comprobador -- que para entonces ya no existe --, asi
+     * que la pregunta se saltaba en silencio y quedaba el nombre de la
+     * DECLARACION, que para una plantilla no es ningun simbolo.  No se notaba
+     * mientras todas las liberaciones estuvieran ESCRITAS (esas se reescriben a
+     * la instancia al comprobar); asomaba en cuanto el compilador emitia una
+     * por su cuenta -- la limpieza de un parametro `string` --, y entonces el
+     * enlazado pedia `...__vx_free` y nadie lo habia emitido. */
+    std::string root_alloc_sym;
+    std::string root_free_sym;
+    if (!work.empty() && work.back().tc) {
+        root_alloc_sym = work.back().tc->raw_alloc_symbol();
+        root_free_sym = work.back().tc->raw_free_symbol();
+    }
     work.back().tc.reset();
 
     // #cross-module-generics: dedup de funciones por nombre al mergear.  Una
@@ -5740,26 +5922,34 @@ CompileResult compile_vx_project(
         for (auto &decl : work.back().ast->decls) {
             if (!decl || decl->kind != ast::NodeKind::FunctionDecl) continue;
             auto *fd = static_cast<ast::FunctionDecl *>(decl.get());
-            if (fd->is_panic_handler) res.aot_panic_sym = fd->name;
-            if (!fd->is_alloc_override) continue;
-            // El que devuelve puntero es el alloc; el que devuelve void, el
-            // free.
-            bool ret_ptr = false;
-            if (fd->return_type &&
-                fd->return_type->kind == ast::NodeKind::PrimitiveTypeNode) {
-                ret_ptr = (static_cast<ast::PrimitiveTypeNode *>(
-                               fd->return_type.get())
-                               ->prim == PrimitiveKind::PTR);
-            } else if (fd->return_type && fd->return_type->kind ==
-                                              ast::NodeKind::PointerTypeNode) {
-                ret_ptr = true;
-            }
-            if (ret_ptr)
+            /* `@Provides`: el rol sale del NOMBRE del builtin, y quien cubre
+             * `malloc` se lleva tambien lo que el compilador emite por su
+             * cuenta -- el `new`, la liberacion de RAII --.  Ver la nota en
+             * `compiler.cpp`, que hace lo mismo para el fichero suelto. */
+            switch (fd->provides_builtin) {
+            case Builtin::Malloc:
                 res.aot_alloc_sym = fd->name;
-            else
+                break;
+            case Builtin::Free:
                 res.aot_free_sym = fd->name;
+                break;
+            case Builtin::Panic:
+                res.aot_panic_sym = fd->name;
+                break;
+            default:
+                break;
+            }
         }
     }
+    /* Y si quien provee es una PLANTILLA, manda su INSTANCIA.
+     *
+     * El bucle de arriba apunta el nombre de la declaracion, que para una
+     * plantilla es el que NO existe como simbolo -- lo emiten sus instancias --,
+     * asi que el enlazado acababa pidiendo `...__vx_free` a secas.  El
+     * comprobador ya creo la instancia que trabaja en BYTES, porque reservar sin
+     * escribir `malloc` es lo normal: un `new` lo hace. */
+    if (!root_alloc_sym.empty()) res.aot_alloc_sym = root_alloc_sym;
+    if (!root_free_sym.empty()) res.aot_free_sym = root_free_sym;
     /* El del PROGRAMA manda sobre el de la biblioteca, tambien para la maquina:
      * si alguien declara el suyo, se usa entero -- usarlo a medias, con el JIT
      * llamando a otro, seria peor que no usarlo. */
@@ -6650,6 +6840,17 @@ bool vx_source_has_imports(const std::string &source) {
 
 bool vx_source_declara_namespace(const std::string &source) {
     return contiene_palabra(source, "namespace");
+}
+
+bool vx_source_needs_project(const std::string &source) {
+    if (contiene_palabra(source, "import")) return true;
+    if (contiene_palabra(source, "namespace")) return true;
+    /* Y lo que el manifiesto declare auto-importable, aunque el fuente no lo
+     * escriba: esa es justamente la razon de que exista la auto-importacion --
+     * reservar memoria se escribe `new`, no `import` --.  Decidirlo por lo
+     * ESCRITO mandaba al camino de fichero suelto a un programa que SI tiene
+     * dependencias, y alli no hay grafo de modulos donde traerlas. */
+    return !auto_import_modules(stdlib_manifest_path()).empty();
 }
 
 } // namespace vx

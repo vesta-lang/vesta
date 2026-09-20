@@ -164,6 +164,57 @@ std::string derive_package_id(const std::string &root_path,
     return std::string(buf);
 }
 
+std::string stdlib_manifest_path() {
+    const std::string dir = detect_stdlib_vx_dir();
+    if (dir.empty()) return {};
+    /* Cual es el fichero lo sabe @ref derive_package_id, que ya lo busca por
+     * las dos grafias de la convencion y dice cual uso.  Escribirlo aqui seria
+     * una segunda lista que se queda atras en cuanto se anyada una. */
+    std::string manifest;
+    (void)derive_package_id(dir + "/.", &manifest);
+    return manifest;
+}
+
+NamespaceList auto_import_modules(const std::string &manifest_path) {
+    NamespaceList out;
+    if (manifest_path.empty()) return out;
+    std::ifstream f(manifest_path, std::ios::binary);
+    if (!f) return out;
+    std::stringstream ss;
+    ss << f.rdbuf();
+    const std::string manifest = ss.str();
+
+    /* Barrido minimo, del mismo estilo que el de @ref derive_package_id: se
+     * busca la clave y se leen las cadenas entre comillas de su lista.  Sirve
+     * igual para TOML (`modules = ["a", "b"]`) y para JSON (`"modules": [...]`),
+     * que es lo que ya hace el otro lector -- dos gramaticas completas aqui
+     * serian pagar un analizador para leer una lista de nombres. */
+    size_t pos = manifest.find("modules");
+    while (pos != std::string::npos) {
+        const bool lok = (pos == 0) ||
+                         (!std::isalnum((unsigned char)manifest[pos - 1]) &&
+                          manifest[pos - 1] != '_');
+        if (lok) break;
+        pos = manifest.find("modules", pos + 1);
+    }
+    if (pos == std::string::npos) return out;
+    const size_t open = manifest.find('[', pos);
+    if (open == std::string::npos) return out;
+    const size_t close = manifest.find(']', open);
+    if (close == std::string::npos) return out;
+    for (size_t i = open; i < close;) {
+        const size_t q1 = manifest.find('"', i);
+        if (q1 == std::string::npos || q1 >= close) break;
+        const size_t q2 = manifest.find('"', q1 + 1);
+        if (q2 == std::string::npos || q2 > close) break;
+        if (q2 > q1 + 1)
+            out.push_back(
+                util::intern_name(manifest.substr(q1 + 1, q2 - q1 - 1)));
+        i = q2 + 1;
+    }
+    return out;
+}
+
 std::string override_de_paquete(const std::string &nombre) {
     /* Se lee UNA vez: es un fichero por maquina que no cambia a mitad de una
      * compilacion, y consultarlo por cada dependencia seria abrirlo N veces. */
@@ -349,7 +400,7 @@ namespace {
 /// Se usa SOLO para decidir si dos rutas son el mismo fichero; los mensajes
 /// siguen mostrando la ruta tal y como se escribio, que es la que el usuario
 /// reconoce.
-std::string identidad_fichero_(const std::string &ruta) {
+std::string file_identity_(const std::string &ruta) {
     namespace fs = std::filesystem;
     /* Camino rapido: una ruta que ya es absoluta y no arrastra `.` ni `..` no
      * necesita ni consultar el directorio actual ni normalizarse otra vez.  Es
@@ -715,7 +766,7 @@ scan_import_paths_(const std::string &source) {
 uint32_t ModuleGraph::load_and_parse_(const std::string &canonical_path) {
     // La clave es DONDE esta el fichero, no como se escribio la ruta: la misma
     // unidad alcanzada por dos rutas distintas tiene que ser un solo modulo.
-    const uint64_t path_hash = fnv1a_(identidad_fichero_(canonical_path));
+    const uint64_t path_hash = fnv1a_(file_identity_(canonical_path));
 
     // Hit del cache: ya cargado antes (cada modulo se parsea una sola vez).
     auto it = by_path_hash_.find(path_hash);
@@ -1066,7 +1117,7 @@ void ModuleGraph::build_namespace_index_() {
     for (const auto &kv : ns_index_) {
         auto &s = vistos[kv.first];
         for (const auto &f : kv.second)
-            s.insert(identidad_fichero_(f));
+            s.insert(file_identity_(f));
     }
 
     // Recolectar las raices a escanear (sin duplicados).
@@ -1171,7 +1222,7 @@ void ModuleGraph::build_namespace_index_() {
                         dst.push_back(nt);
                 }
             }
-            const std::string ident = identidad_fichero_(canonical);
+            const std::string ident = file_identity_(canonical);
             for (const auto &ns : namespaces) {
                 auto itr = raiz_del_ns.find(ns);
                 if (itr == raiz_del_ns.end()) {
@@ -1423,26 +1474,67 @@ uint32_t ModuleGraph::build_from_root(const std::string &root_file) {
      * arquitectura, y el resultado era "tipo no resuelto en alias" -- o sea que
      * la base de tipos de la que depende media stdlib no se podia ni analizar,
      * y con ella todo lo que arrastra. */
-    if (ResolvedModule *raiz = modules_[id].get()) {
-        std::vector<std::string> mis_ns;
-        std::string texto;
-        if (read_file_(canonical, texto)) extract_namespaces_(texto, mis_ns);
-        if (!mis_ns.empty()) {
+    if (ResolvedModule *root = modules_[id].get()) {
+        std::vector<std::string> own_ns;
+        std::string text;
+        if (read_file_(canonical, text)) extract_namespaces_(text, own_ns);
+        if (!own_ns.empty()) {
             build_namespace_index_();
-            for (const auto &ns : mis_ns) {
+            /* Fuera del bucle: la identidad de la raiz es la misma mire el
+             * namespace que mire, y dentro era una reserva de cadena por vuelta
+             * para obtener siempre lo mismo. */
+            const std::string self = file_identity_(canonical);
+            for (const auto &ns : own_ns) {
                 auto itns = ns_index_.find(ns);
                 if (itns == ns_index_.end()) continue;
-                const std::string yo = identidad_fichero_(canonical);
                 for (const auto &file : itns->second) {
                     // Comparar por identidad: el indice puede tener la misma
                     // unidad escrita de otra forma que el root.
-                    if (identidad_fichero_(file) == yo) continue;
+                    if (file_identity_(file) == self) continue;
                     const uint32_t mid = load_and_parse_(file);
                     if (mid == UINT32_MAX) continue;
-                    raiz->dependencies.push_back(mid);
-                    ResolvedModule *herm = modules_[mid].get();
-                    if (herm && herm->dependencies.empty() && herm->parsed_ast)
-                        process_dependencies_(*herm);
+                    root->dependencies.push_back(mid);
+                    ResolvedModule *sibling = modules_[mid].get();
+                    if (sibling && sibling->dependencies.empty() &&
+                        sibling->parsed_ast)
+                        process_dependencies_(*sibling);
+                }
+            }
+        }
+    }
+
+    /* Y los modulos que el manifiesto declara auto-importables.
+     *
+     * Entran como dependencia de la raiz aunque nadie los escriba: son
+     * servicios que no se piden por su nombre -- reservar memoria se escribe
+     * `new`, no `import` -- y su plantilla hay que VERLA para instanciarla,
+     * porque una plantilla no emite simbolo.
+     *
+     * Aqui y no en quien recoge los imports: eso ocurre DESPUES de recorrer el
+     * grafo, asi que el modulo se pedia y no estaba cargado -- "no se encuentra
+     * el modulo", senyalando a un import que el usuario no ha escrito --. */
+    if (!auto_import_ns_.empty()) {
+        if (ResolvedModule *root = modules_[id].get()) {
+            build_namespace_index_();
+            /* La identidad de la raiz NO depende del namespace que se mire, asi
+             * que se calcula UNA vez: dentro del bucle era una reserva de
+             * cadena por vuelta para obtener siempre lo mismo. */
+            const std::string self = file_identity_(canonical);
+            for (const std::string *nsp : auto_import_ns_) {
+                if (nsp == nullptr || nsp->empty()) continue;
+                auto itns = ns_index_.find(*nsp);
+                if (itns == ns_index_.end()) continue;
+                for (const auto &file : itns->second) {
+                    /* La raiz puede SER el modulo auto-importable -- la propia
+                     * stdlib se compila como proyecto --, y traerse a si misma
+                     * seria una dependencia circular. */
+                    if (file_identity_(file) == self) continue;
+                    const uint32_t mid = load_and_parse_(file);
+                    if (mid == UINT32_MAX) continue;
+                    root->dependencies.push_back(mid);
+                    ResolvedModule *dep = modules_[mid].get();
+                    if (dep && dep->dependencies.empty() && dep->parsed_ast)
+                        process_dependencies_(*dep);
                 }
             }
         }

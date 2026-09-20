@@ -281,6 +281,26 @@ enum class TokenKind : uint16_t {
 };
 
 /**
+ * @brief Si el token es una palabra clave de TIPO (`i64`, `bool`, `string`...).
+ *
+ * Un RANGO y no una lista: las palabras de tipo van seguidas en el enum a
+ * proposito, asi que anyadir un tipo al lenguaje no obliga a acordarse de
+ * tocar esto -- una lista escrita a mano se queda corta EN SILENCIO, que es el
+ * modo de fallar peor.
+ *
+ * Vive junto al enum porque es una propiedad del TOKEN, y la preguntan cosas
+ * que no se conocen entre si: el formateador, para saber si unos angulos son de
+ * tipo, y el parser, para admitir un tipo primitivo como base de un acceso
+ * (`u64.sizeof()`).
+ *
+ * @param k Tipo de token.
+ * @return Cierto si nombra un tipo.
+ */
+inline bool is_type_keyword(TokenKind k) noexcept {
+    return k >= TokenKind::KW_VOID && k <= TokenKind::KW_BORROW_MUT;
+}
+
+/**
  * @brief Devuelve la representacion textual de un TokenKind para diagnosticos.
  *
  * Usa un switch interno que el compilador convierte en jump table; no

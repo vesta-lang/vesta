@@ -37,6 +37,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "util/name_pool.h"
+#include "util/named_alloc.h"
 #include "vx/diagnostic.h"
 
 namespace vx {
@@ -45,6 +47,27 @@ namespace ast {
 struct ModuleNode;
 struct ImportDecl;
 } // namespace ast
+
+/// Etiqueta de @ref NamespaceList para el perfil de reservas.
+struct AutoImportNsTag {};
+
+/**
+ * @brief Una lista de namespaces, INTERNADOS y con nombre propio.
+ *
+ * Punteros al pozo de nombres (@ref util::intern_name) y no cadenas: cada
+ * namespace se reparte una vez, copiar la lista son ocho bytes por entrada y
+ * comparar dos es comparar PUNTEROS -- que es lo que se hace aqui, una vez por
+ * modulo compilado --.  Con `std::string` cada comparacion recorreria el texto
+ * y cada copia reservaria.
+ *
+ * Y va con ETIQUETA, no con un `using` a secas: un alias es transparente al
+ * mangling, asi que en el perfil de reservas esto seria un
+ * `std::vector<const std::string*>` mas entre decenas -- que es por lo que el
+ * 60% de los 116 millones de reservas de compilar no se podia atribuir a nadie
+ * --.  Ver @ref util::NamedAlloc.
+ */
+using NamespaceList =
+    util::NamedVector<const std::string *, AutoImportNsTag>;
 
 /**
  * @brief Estado de un nodo del dep graph durante DFS.  WHITE = no visitado,
@@ -145,6 +168,23 @@ class ModuleGraph {
      * disponible" -- los imports `std/*` fallaran con NOT_FOUND).
      */
     void set_stdlib_dir(const std::string &dir);
+
+    /**
+     * @brief Namespaces que entran en el grafo aunque nadie los importe.
+     *
+     * Son los que un manifiesto declara auto-importables: servicios que no se
+     * piden por su nombre -- reservar memoria se escribe `new`, no `import` --
+     * pero cuyo modulo tiene que estar en el conjunto para que su plantilla se
+     * pueda instanciar.
+     *
+     * Se fija ANTES de @ref build_from_root; despues no sirve de nada, porque
+     * el grafo ya se recorrio.
+     *
+     * @param ns Los namespaces.  Vacio = ninguno, que es lo normal.
+     */
+    void set_auto_import_ns(NamespaceList ns) {
+        auto_import_ns_ = std::move(ns);
+    }
 
     /**
      * @brief Inyecta el texto de un fichero en memoria (overlay), en vez de
@@ -278,6 +318,9 @@ class ModuleGraph {
     /// declaran.  Varios ficheros pueden contribuir al mismo namespace
     /// (namespaces parciales).  Lazy: se construye en el primer import
     /// por-namespace.
+    /// Ver @ref set_auto_import_ns.  Vacio = ninguno.
+    NamespaceList auto_import_ns_;
+
     std::unordered_map<std::string, std::vector<std::string>> ns_index_;
     /// Indice namespace -> nombres de TIPO que declaran sus ficheros.  Se
     /// llena en la misma pasada que @c ns_index_ y sirve para sembrar el
@@ -331,6 +374,36 @@ std::string override_de_paquete(const std::string &nombre);
 ///        el id no las separa, el fichero que lo declara si.
 std::string derive_package_id(const std::string &root_path,
                               std::string *manifiesto_usado = nullptr);
+
+/**
+ * @brief Los modulos que @p manifest_path declara AUTO-IMPORTABLES.
+ *
+ * Hay servicios del lenguaje que nadie pide por su nombre: reservar memoria se
+ * escribe `new` o `malloc<T>(n)`, no `import`.  Pero quien los atiende es una
+ * PLANTILLA, y una plantilla hay que verla para instanciarla -- no emite
+ * simbolo, lo emiten sus instancias --, asi que tiene que estar en el ambito de
+ * quien reserva aunque nadie haya escrito nada.
+ *
+ * La lista vive en el MANIFIESTO y no en el compilador: asi no hay ningun
+ * nombre reservado dentro, cualquier libreria puede declarar los suyos, y lo
+ * que la stdlib ofrezca se cambia sin tocar una linea de C++.
+ *
+ * @param manifest_path Ruta del manifiesto.  Vacia = ninguno.
+ * @return Los namespaces declarados, internados, o vacio.
+ */
+NamespaceList auto_import_modules(const std::string &manifest_path);
+
+/**
+ * @brief La ruta del manifiesto de la stdlib, o vacia si no se encuentra.
+ *
+ * Existe para que quien necesite su lista de auto-importables no tenga que
+ * repetir los dos pasos -- localizar la stdlib y buscar su manifiesto por las
+ * grafias de la convencion --, que es donde se cuelan las copias que luego se
+ * quedan atras.
+ *
+ * @return Ruta del `vx.toml` / `vx.json` de la stdlib, o vacia.
+ */
+std::string stdlib_manifest_path();
 
 } // namespace vx
 

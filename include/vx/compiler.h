@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 
+#include "vx/builtin_names.h" // que builtin cubre un `@Provides`
 #include "vx/diagnostic.h"
 #include "port/port_options.h"
 #include "analyze/fingerprint.h"     // FunctionContracts
@@ -57,6 +58,12 @@ class VelSink;
 } // namespace ir
 
 namespace vx {
+
+namespace ast {
+/// La raiz del arbol de un modulo ya parseado.  Adelantada: quien incluya esto
+/// solo necesita pasarla por referencia.
+struct ModuleNode;
+} // namespace ast
 
 /**
  * @struct CompileOptions
@@ -470,6 +477,28 @@ struct CompileResult {
     std::string aot_alloc_sym; ///< @AllocatorOverride que devuelve ptr.
     std::string aot_free_sym;  ///< @AllocatorOverride que devuelve void.
     std::string aot_panic_sym; ///< @PanicHandler.
+
+    /**
+     * @struct BuiltinProvider
+     * @brief Un builtin que este modulo IMPLEMENTA, y con que funcion.
+     *
+     * Los campos van con nombre y no en un par: de un par nadie sabe cual de
+     * los dos lados es cual, y aqui uno es QUE se provee y el otro QUIEN.
+     */
+    struct BuiltinProvider {
+        Builtin which = Builtin::Unknown; ///< que builtin cubre
+        std::string symbol;               ///< la funcion que lo implementa
+    };
+    /**
+     * Lo que este modulo declara con `@Provides(<builtin>)`.
+     *
+     * Una lista y no una tabla por valor de @c Builtin: proveer un builtin es
+     * raro -- lo normal es ninguno, y un modulo que lo haga cubrira unos
+     * pocos --, asi que una tabla de 229 ranuras seria memoria vacia y un
+     * recorrido mas largo que la busqueda.  Se consulta al construir la
+     * imagen, no en un camino caliente.
+     */
+    std::vector<BuiltinProvider> builtin_providers;
     /// C-3: @StringConcat / @StringEq -- nombres de las funciones libres
     /// que reemplazan el `+` (concat) y `==` (eq) del string built-in.
     /// Vacios => comportamiento por defecto (STRCAT/STRCMP o value-string).
@@ -819,8 +848,8 @@ struct CompileResult {
         std::string value_str;    ///< Representacion legible del valor.
         SourceLoc loc;            ///< Ubicacion de la expresion (para hover);
                                   ///< line==0 si no aplica (consts top-level).
-        std::string builtin_kind; ///< "sizeof"/"alignof"/"kind"/"type_id"/
-                                  ///< "typename" si proviene de un builtin; ""
+        std::string builtin_kind; ///< "type.size"/"type.align"/"type.kind"/"type.id"/
+                                  ///< "type.name" si proviene de un builtin; ""
                                   ///< para constantes comptime normales.
     };
     std::vector<ComptimeValueSnapshot> comptime_values;
@@ -846,6 +875,32 @@ struct CompileResult {
  * @param opts     Opciones de compilacion.
  * @return CompileResult con el .vel y el set de diagnosticos.
  */
+/**
+ * @brief Apunta quien sustituye al `string` built-in y a la primitiva de
+ *        monitor: `@StringConcat`, `@StringEq` y el par de `@SyncImpl`.
+ *
+ * Se resuelve ANTES del lowering porque no reescribe el IR despues: cambia el
+ * lowering MISMO del operador `+`/`==` y del bloque `synchronized`.
+ *
+ * Vive aqui, y no dentro de un camino, porque lo necesitan los DOS -- el de
+ * fichero suelto y el de proyecto --.  Mientras estuvo copiado en uno solo, el
+ * otro se quedo sin el, y eso no daba un error: daba un `@StringConcat` que
+ * compilaba y no ruteaba nada.  El dia que un fichero cambio de camino por un
+ * motivo que no tenia que ver, su override dejo de aplicarse en silencio.
+ *
+ * @param mod         Modulo ya parseado cuyas declaraciones se barren.
+ * @param module_name Nombre del modulo, para situar los errores que no cuelgan
+ *                    de una declaracion concreta.
+ * @param res         Recibe los nombres.  Se marca @c ok a false y se emite el
+ *                    diagnostico si algo esta declarado dos veces, o si el par
+ *                    de `@SyncImpl` viene a medias -- un monitor que se
+ *                    adquiere y no se libera es peor que ninguno --.
+ * @return false si hubo un error fatal; el llamante debe abandonar.
+ */
+bool collect_string_sync_overrides(const ast::ModuleNode &mod,
+                                   const std::string &module_name,
+                                   CompileResult &res);
+
 CompileResult compile_vx_source(const std::string &source,
                                 const std::string &filename,
                                 const CompileOptions &opts = {});
@@ -911,6 +966,23 @@ bool vx_source_has_imports(const std::string &source);
  * cadenas.
  */
 bool vx_source_declara_namespace(const std::string &source);
+
+/**
+ * @brief ¿Este fuente hay que compilarlo como PROYECTO?
+ *
+ * Un solo criterio para una sola pregunta.  Estaba escrito cuatro veces en
+ * `main.cpp` -- una por cada sitio que decide entre el camino de proyecto y el
+ * de fichero suelto -- y solo UNA de las cuatro contaba con lo que el
+ * manifiesto declara auto-importable.  Las otras tres mandaban al camino sin
+ * grafo de modulos a un programa que si tiene dependencias, y alli no hay de
+ * donde traer al proveedor: el binario salia pidiendo `malloc` y `free` de la
+ * libc y no enlazaba.
+ *
+ * @param source Texto Vesta.
+ * @return true si escribe `import`, declara `namespace`, o el manifiesto
+ *         declara modulos auto-importables.
+ */
+bool vx_source_needs_project(const std::string &source);
 
 /**
  * @brief Convierte en diagnosticos los accesos que se salen DEMOSTRABLEMENTE

@@ -445,7 +445,7 @@ bool aot_op_allowed(IrOp op, const AotTarget &target) noexcept {
     if (cls == AotOpClass::LIBC_MAPPED) {
         if (!target.freestanding) return true; // libc disponible.
         // freestanding: admitir SOLO si el usuario aporta el rol via
-        // @AllocatorOverride / @PanicHandler (el simbolo lo da el, no la libc).
+        // @Provides(<builtin>) (el simbolo lo da el, no la libc).
         switch (op) {
         case IrOp::RAW_ALLOC: return target.alloc_provided;
         case IrOp::RAW_FREE:
@@ -470,12 +470,12 @@ const char *aot_op_requirement(IrOp op, const AotTarget &target) noexcept {
         // Solo cae aqui en freestanding: libc no disponible.
         switch (op) {
         case IrOp::RAW_ALLOC:
-            return "libc malloc (usa @AllocatorOverride en --freestanding)";
+            return "libc malloc (usa @Provides(malloc) en --freestanding)";
         case IrOp::RAW_FREE:
         case IrOp::SMARTPTR_FREE:
-            return "libc free (usa @AllocatorOverride en --freestanding)";
+            return "libc free (usa @Provides(free) en --freestanding)";
         case IrOp::PANIC:
-            return "libc fputs/exit (usa @PanicHandler en --freestanding)";
+            return "libc fputs/exit (usa @Provides(panic) en --freestanding)";
         default: return "libc (no disponible en --freestanding)";
         }
     }

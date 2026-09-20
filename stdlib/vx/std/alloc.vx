@@ -15,15 +15,26 @@
  *      PERMISOS (@ref MemProt: RW para heap, RX/RWX para codigo JIT).
  *
  *   3. Allocator slab (@ref __vx_malloc / @ref __vx_free, expuestos via
- *      @c @AllocatorOverride): piden arenas grandes RW y sub-alocan con
+ *      @c @Provides(malloc) / @c @Provides(free)): piden arenas grandes RW y
+ *      sub-alocan con
  *      size-classes + free-lists intrusivas LIFO -> hipereficiente (amortiza
  *      syscalls, sin lock, sin el heap-manager del SO; ~66x vs malloc/free).
  *
  * Auto-bundle: el driver `-m aot` lo fusiona como allocator por DEFECTO cuando
- * el modulo usa el heap y no hay un @c @AllocatorOverride del usuario.  El
- * usuario lo sustituye aplicando su propio @c @AllocatorOverride, o lo desactiva
- * con `--no-mem`.
+ * el modulo usa el heap y no hay un proveedor del usuario.  El usuario lo
+ * sustituye poniendo @c @Provides(malloc) / @c @Provides(free) sobre los suyos,
+ * o lo desactiva con `--no-mem`.
  */
+
+/* Se puede IMPORTAR, y por eso esta aqui y no en la raiz de la stdlib: quien
+ * pide memoria es una plantilla (`T* malloc<T>(u64 count)`), y una plantilla no
+ * emite simbolo -- lo emiten sus instancias, que nacen donde se conoce `T` --,
+ * asi que no se puede traer ya compilada y cablear por nombre.  Se instancia en
+ * el modulo que reserva, y para eso tiene que verla.
+ *
+ * Que llegue alli sin que nadie escriba el `import` lo dice el manifiesto de la
+ * stdlib, no el compilador: ver `auto-import` en `vx.toml`. */
+namespace std.alloc;
 
 import std.atomic only atomic, vx_cpu_relax;
 import std.memory only memset, memcpy, memmove;
@@ -309,21 +320,30 @@ void __vmem_new_chunk(u64 min_need) {
 	u64                sz = VMEM_CHUNK_BYTES;
 	if (min_need > sz) sz = min_need;
 	u64                p  = vmem_reserve(sz, MemProt.ReadWrite);
-	__vmem_bump = p;
-	__vmem_end  = p + sz;
+	__vmem_bump           = p;
+	__vmem_end            = p + sz;
 }
 
 /**
- * @brief Slab interno: reserva @p size bytes ZERIFICADOS (kzalloc).
+ * @brief Quien pide memoria: el `new`, RAW_ALLOC y `malloc<T>`.
  *
- * Los bloques frescos de la arena ya vienen a cero del SO; los reciclados de la
- * free-list se zerifican con @ref vx_memset.  Asi el cero-init de campos no
- * escritos por un constructor queda garantizado (convencion de @AllocatorOverride).
+ * Es el asignador slab, y es EL MISMO que provee el builtin -- no hay una capa
+ * que cuente y otra que reserve --: el tipo esta aqui dentro, asi que
+ * `type.size<T>()` se pliega a una constante al compilar y la cuenta sale gratis.
  *
- * @param size Bytes solicitados.
- * @return Direccion del payload (header + 16), o de base+64 si es large.
+ * Devuelve memoria ZERIFICADA (convencion kzalloc): los bloques frescos de la
+ * arena ya vienen a cero del SO y los reciclados de la free-list se zerifican
+ * con @ref vx_memset.  Es lo que preserva el cero de los campos que un
+ * constructor no escribe.
+ *
+ * @tparam T Tipo del elemento.
+ * @param count Cuantos elementos de T -- ELEMENTOS, no bytes, igual que el
+ *              builtin `T* malloc<T>(u64 count)` que cubre.
+ * @return Puntero al payload (header + 16), o a base+64 si es large.
  */
-u64 __vmem_alloc(u64 size) {
+@Provides(malloc)
+public T * __vx_malloc<T>(u64 count) {
+	u64            size = count * (u64)type.size<T>();
 	if (size == 0) size = 1;
 	i32            cls  = __vmem_class_of(size);
 	if (cls < 0) {
@@ -348,7 +368,7 @@ u64 __vmem_alloc(u64 size) {
 		i32 c = 0_i32;
 		while (c < VMEM_LARGE_CACHE) {
 			if (__vmem_large_addr[c] != 0 && __vmem_large_size[c] == total) {
-				u64 reut = __vmem_large_addr[c];
+				u64 reut             = __vmem_large_addr[c];
 				__vmem_large_addr[c] = 0;
 				__vmem_large_bytes   = __vmem_large_bytes - total;
 				__vmem_slab_unlock();
@@ -358,9 +378,9 @@ u64 __vmem_alloc(u64 size) {
 				u64 pay = reut + 64;
 				vx_memset(pay, 0, size);
 				u64* hr = (u64*)(pay - 16);
-				hr[0] = 255;   // marker large en payload-16
-				hr[1] = total; // total en payload-8
-				return pay;
+				hr[0]   = 255;   // marker large en payload-16
+				hr[1]   = total; // total en payload-8
+				return (T*)pay;
 			}
 			c = c + 1;
 		}
@@ -368,9 +388,9 @@ u64 __vmem_alloc(u64 size) {
 		u64  base = vmem_reserve(total, MemProt.ReadWrite);
 		u64  pay  = base + 64;
 		u64* h    = (u64*)(pay - 16);
-		h[0] = 255;   // marker large en payload-16
-		h[1] = total; // total en payload-8
-		return pay;
+		h[0]      = 255;   // marker large en payload-16
+		h[1]      = total; // total en payload-8
+		return (T*)pay;
 	}
 	u64 csz = __vmem_size_of(cls);
 	// Seccion critica del SLAB (free-list + bump): protegida en modo multihilo.
@@ -379,12 +399,12 @@ u64 __vmem_alloc(u64 size) {
 	if (head != 0) {
 		// Pop: head es el block (header); el next cabe YA en la cabecera
 		// (head+8), sin invadir el payload como cuando media 8.
-		u64* hp = (u64*)head;
+		u64* hp          = (u64*)head;
 		__vmem_free[cls] = hp[1];
 		__vmem_slab_unlock();
 		hp[0] = (u64)cls; // re-set header (fuera del lock: el bloque ya es nuestro)
 		vx_memset(head + 16, 0, csz); // reciclado -> sucio: kzalloc
-		return head + 16;
+		return (T*)(head + 16);
 	}
 	// Bump del chunk actual (memoria fresca del SO = ya a cero).
 	// Redondeado a 16: la cabecera sola no basta.  Los bloques salen de un
@@ -395,12 +415,12 @@ u64 __vmem_alloc(u64 size) {
 	u64 need = (csz + 16 + 15) & 18_446_744_073_709_551_600;
 	if (__vmem_bump == 0) __vmem_new_chunk(need);
 	if (__vmem_bump + need > __vmem_end) __vmem_new_chunk(need);
-	u64 block = __vmem_bump;
+	u64 block   = __vmem_bump;
 	__vmem_bump = __vmem_bump + need;
 	__vmem_slab_unlock();
 	u64* bp = (u64*)block;
-	bp[0] = (u64)cls;
-	return block + 16;
+	bp[0]   = (u64)cls;
+	return (T*)(block + 16);
 }
 
 /**
@@ -446,29 +466,24 @@ void __vmem_free_impl(u64 payload) {
 	// ensuciar la memoria del usuario.
 	// Seccion critica del SLAB: protegida en modo multihilo.
 	__vmem_slab_lock();
-	u64* pp = (u64*)block;
+	u64* pp        = (u64*)block;
 	pp[1]          = __vmem_free[h];
 	__vmem_free[h] = block;
 	__vmem_slab_unlock();
 }
 
 /**
- * @brief Allocator por defecto del `new` y RAW_ALLOC (via @c @AllocatorOverride).
+ * @brief Y quien la suelta.
  *
- * El driver `-m aot` detecta este simbolo igual que un override del usuario
- * (retorno puntero -> alloc).  Devuelve memoria zerificada (kzalloc).
+ * Generico como @ref __vx_malloc, y por la misma razon de fondo: un proveedor
+ * viaja a quien lo usa como PLANTILLA -- con su fuente y su anotacion --, y una
+ * funcion corriente viaja solo como firma, sin decir que builtin cubre.  El
+ * tipo no se usa para nada mas: soltar un bloque es soltar una direccion.
  *
- * @param size Bytes solicitados.
- * @return Puntero al bloque.
- */
-@AllocatorOverride
-i64* __vx_malloc(u64 size) => (i64*)__vmem_alloc(size);
-
-/**
- * @brief Liberador por defecto (via @c @AllocatorOverride; retorno void -> free).
+ * @tparam T Tipo del elemento, por simetria con quien lo reservo.
  * @param p Puntero devuelto por @ref __vx_malloc.
  */
-@AllocatorOverride
-void __vx_free(i64* p) {
+@Provides(free)
+public void __vx_free<T>(T * p) {
 	__vmem_free_impl((u64)p);
 }

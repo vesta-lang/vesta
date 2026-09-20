@@ -9,8 +9,8 @@
  * plana (sin @c proc), implementados sobre libc.
  *
  * El usuario puede ELEGIR como se hace el stdout y como se formatean los args:
- *   - stdout: redefinir @c __vx_write (igual que @AllocatorOverride redefine
- *     malloc) -> el linker toma su version.  En freestanding (kernel) DEBE
+ *   - stdout: redefinir @c __vx_write (igual que @Provides(malloc) redefine
+ *     la reserva) -> el linker toma su version.  En freestanding (kernel) DEBE
  *     proveerlo (a MMIO/UART); aqui solo damos el default libc.
  *   - formato runtime: redefinir cualquier @c __vx_print_* con su propia
  *     version.

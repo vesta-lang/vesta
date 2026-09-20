@@ -329,6 +329,22 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
         size_t lb = type_str.find_last_of('[');
         if (lb != std::string::npos) {
             std::string inner = type_str.substr(0, lb);
+            /* De QUE memoria es, que @ref type_to_string escribe delante.
+             *
+             * Sin deshacerlo aqui el viaje de ida y vuelta no cerraba: `host
+             * u64[16]` entraba entero como nombre de elemento, no resolvia, y
+             * el array salia de VACIO -- indexarlo daba "`[]` no puede indexar
+             * void*", hablando de un `void*` que nadie escribio.  Un escritor y
+             * un lector que no se entienden es lo mismo que no serializar. */
+            bool is_host = false;
+            {
+                static constexpr char kHost[] = "host ";
+                constexpr size_t kHostLen = sizeof(kHost) - 1;
+                if (inner.compare(0, kHostLen, kHost) == 0) {
+                    is_host = true;
+                    inner.erase(0, kHostLen);
+                }
+            }
             std::string size_str =
                 type_str.substr(lb + 1, type_str.size() - lb - 2);
             Type elt = resolve_type_string(inner);
@@ -340,7 +356,7 @@ Type TypeChecker::resolve_type_string(const std::string &type_str) const {
                     sz = 0;
                 }
             }
-            return Type::make_array(std::move(elt), sz, /*virt=*/true);
+            return Type::make_array(std::move(elt), sz, /*virt=*/!is_host);
         }
     }
 
@@ -764,8 +780,75 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     // exportaria a la vez como FUNCTION symbol Y como template -> el importador
     // declararia el nombre dos veces ("redefinicion a nivel global").
     std::unordered_set<std::string> template_names;
-    for (const auto &tex : tc.ast_module().generic_template_exports)
+    /* Y los AYUDANTES que el cuerpo de una plantilla nombra.
+     *
+     * Una plantilla viaja como FUENTE y se instancia en quien la usa, asi que
+     * lo que su cuerpo llama tiene que poder resolverse alli -- aunque sea
+     * privado de su modulo, que es lo normal: el asignador son sus propios
+     * ayudantes --.  Se sacan del texto: cualquier palabra seguida de `(` es un
+     * candidato, y luego se cruza con lo que el modulo declara de verdad.
+     *
+     * Barrer de mas no hace daño -- un nombre que el modulo no declara no
+     * llega a exportarse --, y barrer de menos si: el cuerpo no resolveria. */
+    std::unordered_set<std::string> template_helpers;
+    for (const auto &tex : tc.ast_module().generic_template_exports) {
         template_names.insert(tex.name);
+        const std::string &src = tex.source;
+        for (size_t i = 0; i < src.size();) {
+            if (!(std::isalpha((unsigned char)src[i]) || src[i] == '_')) {
+                ++i;
+                continue;
+            }
+            const size_t start = i;
+            while (i < src.size() &&
+                   (std::isalnum((unsigned char)src[i]) || src[i] == '_'))
+                ++i;
+            /* TODO identificador, no solo los seguidos de `(`: el cuerpo
+             * tambien nombra globales, y los indexa (`tabla[i]`) en vez de
+             * llamarlos. */
+            std::string word = src.substr(start, i - start);
+            /* Salvo un BUILTIN, que no es un ayudante de nadie.
+             *
+             * El consumidor ya lo tiene, y exportarlo lo REGISTRA alli como
+             * funcion importada, PISANDO al builtin del mismo nombre con una
+             * firma que viene del `.vxi` -- y de vuelta el tipo `ptr` no se
+             * reconoce y degrada a `void` --.  El sintoma era un `free(p)`
+             * escrito en el cuerpo de la plantilla que de pronto no aceptaba un
+             * puntero: "argumento 1: tipo (u8*) incompatible con parametro
+             * (void)", señalando a `<vxi-templates:>`. */
+            if (builtin_from_name(word) != Builtin::Unknown) continue;
+            template_helpers.insert(std::move(word));
+        }
+    }
+    /* La UNICA pregunta: ¿lo necesita alguna plantilla para instanciarse fuera?
+     *
+     * Existe porque la respuesta se consulta desde SEIS filtros distintos --
+     * privadas, publicas, globales privados, globales `__`, y los dos de
+     * nombre --, y cada uno tiene a mano el nombre en una forma: unos el corto
+     * que la plantilla escribio, otros el manglado con su namespace.
+     * Preguntando cada uno a su manera, cinco aciertan y el sexto no, y el
+     * sintoma es siempre el mismo: `nombre no declarado` en
+     * `<vxi-templates:>`, un fichero que el usuario no ha escrito.
+     *
+     * Aqui se normaliza UNA vez: se prueba tal cual y, si no, por el ultimo
+     * segmento -- lo que queda tras el `__` del aplanado --, que es lo que hay
+     * escrito en el cuerpo. */
+    auto needed_by_template = [&template_helpers](const std::string &name) {
+        if (template_helpers.count(name) != 0) return true;
+        /* Se prueban TODOS los cortes por `__`, de izquierda a derecha.
+         *
+         * Cortar por el ULTIMO no vale: los nombres internos empiezan ellos
+         * mismos por `__`, asi que `std__alloc____vmem_class_of` daba
+         * `vmem_class_of` -- sin los dos de delante --, no encontraba nada y el
+         * ayudante se quedaba fuera.  El sintoma: `funcion no declarada` en
+         * `<vxi-templates:>`. */
+        for (size_t sep = name.find("__"); sep != std::string::npos;
+             sep = name.find("__", sep + 1)) {
+            if (sep + 2 >= name.size()) break;
+            if (template_helpers.count(name.substr(sep + 2)) != 0) return true;
+        }
+        return false;
+    };
 
     // --- Type aliases + newtypes ---
     for (const auto &kv : tc.type_aliases()) {
@@ -1042,8 +1125,11 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &kv : tc.enum_layouts()) {
         const auto &name = kv.first;
         const auto &layout = kv.second;
-        //  M6.a L.3: solo exportar publicos.
-        if (!layout.is_public) continue;
+        /*  M6.a L.3: solo exportar publicos, SALVO que el cuerpo de una
+         * plantilla los nombre.  Un enum privado usado ahi -- los permisos de
+         * una arena, en el asignador -- llegaba al consumidor sin tipo, y
+         * pasarlo a su propia funcion fallaba con "incompatible con (void)". */
+        if (!layout.is_public && !needed_by_template(name)) continue;
         //  M.L23: filtrar imports NO re-exportados.
         if (tc.is_imported(name) && !tc.is_reexported(name)) continue;
         VxiSymbol s;
@@ -1145,6 +1231,16 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
                 // Lo re-exportado pertenece al namespace de quien re-exporta:
                 // es parte de su superficie igual que lo que declara.
                 ns_path_for_sym = module_ns;
+            } else if (needed_by_template(fname)) {
+                /* Sin el prefijo del modulo, pero la NOMBRA una plantilla suya.
+                 *
+                 * Una privada no se cualifica -- el modulo la emite con su
+                 * nombre --, asi que el filtro de arriba la tomaba por ajena y
+                 * la descartaba.  Y lo que su plantilla necesita tiene que
+                 * viajar, o el cuerpo no resuelve donde se instancie: `funcion
+                 * no declarada` en `<vxi-templates:>`, un fichero que el
+                 * usuario no ha escrito. */
+                public_name = fname;
             } else {
                 continue;
             }
@@ -1160,7 +1256,20 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         // otro caso (entrada con true o no registrada) se exporta.  Esto
         // arregla la fallback al public_name que daba false-positive porque
         // el unmangled name nunca esta en el mapa (default true).
-        if (!tc.is_function_public(fname)) {
+        /* Privada, SALVO que el cuerpo de una plantilla la llame.
+         *
+         * Una plantilla viaja como FUENTE y se instancia en quien la usa, asi
+         * que lo que su cuerpo nombra tiene que poder resolverse alli -- y el
+         * asignador es justo eso: su cuerpo son sus propios ayudantes --.  Sin
+         * esto el error salia en `<vxi-templates:>`, un fichero que el usuario
+         * no ha escrito, diciendo que no conoce una funcion que el tampoco
+         * escribio.
+         *
+         * No la hace visible: viaja bajo su label manglado y el consumidor la
+         * marca como de-plantilla (@c mark_template_only_fn), asi que sigue sin
+         * poder escribirse su nombre corto.  Lo que cambia es que ENLAZA. */
+        if (!tc.is_function_public(fname) && !needed_by_template(fname) &&
+            !needed_by_template(public_name)) {
             continue;
         }
         // #cross-module-generics: las plantillas se exportan como fuente, no
@@ -1209,6 +1318,12 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
             // cross-modulo en interp/JIT enrute al dispatcher naked (y no
             // ejecute el asm como bytecode).
             s.is_naked = cand->is_naked;
+            /* Y el builtin que cubre, que es parte de su firma igual que lo
+             * anterior: sin esto un `@Provides` de otro modulo se ignoraba en
+             * silencio. */
+            if (cand->provides_builtin != Builtin::Unknown)
+                s.provides_builtin = std::string(
+                    builtin_name(cand->provides_builtin));
             s.is_internal =
                 tc.function_is_internal(fname); // NS.3: package-scoped
             s.param_types.reserve(cand->param_types.size());
@@ -1247,7 +1362,12 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
     for (const auto &decl : tc.ast_module().decls) {
         if (!decl || decl->kind != ast::NodeKind::GlobalVarDecl) continue;
         const auto *gv = static_cast<const ast::GlobalVarDecl *>(decl.get());
-        if (!gv->is_public) continue;
+        /* Privado, SALVO que el cuerpo de una plantilla lo nombre.
+         *
+         * La decision se APLAZA hasta tener el nombre corto: aqui `gv->name`
+         * todavia puede venir manglado con su namespace, y lo que la plantilla
+         * escribio es el corto -- comparar el largo no acierta nunca --. */
+        const bool is_private = !gv->is_public;
         // El name post-pre-pase puede estar mangled (`lib__MAX_USERS`).
         // Aplicar strip_prefix para obtener el nombre publico tal como
         // el consumidor lo importa.  Igual que funciones.
@@ -1278,8 +1398,20 @@ void export_typechecker_to_vxi(const TypeChecker &tc, uint64_t source_hash,
         // builtins, etc.  El doble subrayado queda RESERVADO al compilador;
         // los simbolos publicos del usuario usan a lo sumo UN subrayado inicial
         // (p.ej. `_NR_write`), que SI se exporta.
+        //
+        // SALVO que el cuerpo de una plantilla lo nombre: viaja como fuente y
+        // se instancia en quien la usa, asi que su estado tiene que poder
+        // resolverse alli.  No lo hace visible -- se reescribe al label
+        // manglado, que nadie escribe --, pero ENLAZA contra el mismo.
+        //
+        // Se mira por los DOS nombres: el publico puede venir ya despojado del
+        // prefijo del namespace, y lo que el cuerpo de la plantilla escribio es
+        // el corto.
+        const bool used_by_template =
+            needed_by_template(public_name) || needed_by_template(gv->name);
+        if (is_private && !used_by_template) continue;
         if (public_name.size() >= 2 && public_name[0] == '_' &&
-            public_name[1] == '_') {
+            public_name[1] == '_' && !used_by_template) {
             continue;
         }
         VxiSymbol s;
@@ -1670,6 +1802,13 @@ static void register_vxi_typedef_(TypeChecker &tc, const VxiSymbol &s,
 // ---------------------------------------------------------------------------
 // #cross-module-generics: inyectar plantillas genericas + conceptos.
 // ---------------------------------------------------------------------------
+/* Definida mas abajo.  Se declara aqui porque la inyeccion de plantillas la
+ * necesita -- un enum privado del modulo llega solo porque una plantilla suya
+ * lo usa --, y mover la definicion arrastraria con ella todo lo que usa. */
+static EnumLayout enum_layout_from_vxi_(TypeChecker &tc, const VxiSymbol &s,
+                                        const std::string &name,
+                                        bool with_payloads);
+
 void inject_generic_templates_from_vxi(
     TypeChecker &tc, const VxiModule &mod,
     const std::unordered_set<std::string> &wanted, const std::string &ns_prefix,
@@ -1712,6 +1851,28 @@ void inject_generic_templates_from_vxi(
             sym.kind == VxiSymbolKind::CLASS ||
             sym.kind == VxiSymbolKind::ENUM) {
             parser.add_known_alias(sym.name);
+        }
+        /* Y un ENUM se REGISTRA ademas como tipo, no solo como nombre.
+         *
+         * Que el parser sepa que es un tipo no basta: la firma de un ayudante
+         * del modulo lo nombra (`vmem_reserve(u64, MemProt)`), y si el
+         * comprobador no lo tiene resuelve el parametro a vacio -- y entonces
+         * pasarle el propio enum falla con "incompatible con (void)", que es un
+         * mensaje sobre un `void` que nadie escribio --.
+         *
+         * Aqui y no en el camino de import normal porque ahi se filtra por
+         * publico: este puede ser privado del modulo y llegar solo porque una
+         * plantilla suya lo usa. */
+        if (sym.kind == VxiSymbolKind::ENUM) {
+            /* Bajo las DOS formas del nombre, como hace el import normal: el
+             * cuerpo de la plantilla escribe el corto, y las firmas
+             * serializadas de sus ayudantes lo referencian por el canonico.
+             * Con una sola, la que falta resuelve a vacio. */
+            const std::string canon = qualify_once_(sym.ns_path, sym.name);
+            EnumLayout L =
+                enum_layout_from_vxi_(tc, sym, canon, /*with_payloads=*/true);
+            if (canon != sym.name) tc.register_imported_enum(sym.name, L);
+            tc.register_imported_enum(canon, std::move(L));
         }
     }
     // Y los de los modulos de los que ESTE importa: la firma de una plantilla
@@ -1790,32 +1951,59 @@ void inject_generic_templates_from_vxi(
         std::unordered_map<std::string, std::string> fn_renames;
         for (const auto &sym : mod.symbols) {
             if (sym.kind != VxiSymbolKind::FUNCTION) continue;
-            if (sym.mangled_label.empty() || sym.mangled_label == sym.name)
-                continue;
-            fn_renames.emplace(sym.name, sym.mangled_label);
+            /* Sin label apuntado se arma con el namespace, que es de donde
+             * sale: saltarla dejaba al cuerpo de la plantilla sin resolver la
+             * llamada, y el error senyalaba a `<vxi-templates:>` -- un fichero
+             * que el usuario no ha escrito. */
+            const std::string label =
+                !sym.mangled_label.empty()
+                    ? sym.mangled_label
+                    : qualify_once_(sym.ns_path, sym.name);
+            if (label.empty()) continue;
+            /* Se apunta SIEMPRE, aunque el label sea el mismo nombre.
+             *
+             * Una privada sin cualificar tiene label == nombre, y saltarla
+             * dejaba al cuerpo de la plantilla sin resolver la llamada.
+             * Reescribirla por si misma no hace nada; lo que importa es que
+             * quede en la lista, porque es la que se recorre para DECLARARLAS.
+             */
+            fn_renames.emplace(sym.name, label);
         }
-        if (!fn_renames.empty()) {
+        if (!fn_renames.empty())
             for (auto &decl : parsed->decls)
                 if (decl) vxgen::rename_idents(decl.get(), fn_renames);
-            // Registrar la firma de cada helper bajo su label.  Idempotente: si
-            // ya estaba (otro import), `register_imported_function` lo repite
-            // sin dano.
+        {
+            /* Registrar la firma de CADA ayudante bajo su label, se haya
+             * reescrito o no: una privada sin cualificar no entra en el mapa de
+             * reescrituras -- su label ES su nombre -- y recorrer solo ese mapa
+             * la dejaba sin declarar.  Idempotente: si ya estaba, se repite sin
+             * daño. */
             for (const auto &sym : mod.symbols) {
                 if (sym.kind != VxiSymbolKind::FUNCTION) continue;
+                const std::string label =
+                    !sym.mangled_label.empty()
+                        ? sym.mangled_label
+                        : qualify_once_(sym.ns_path, sym.name);
+                if (label.empty()) continue;
                 auto it = fn_renames.find(sym.name);
-                if (it == fn_renames.end()) continue;
-                if (tc.function_sigs_by_name().count(it->second)) continue;
+                const std::string &target =
+                    (it != fn_renames.end()) ? it->second : label;
+                if (tc.function_sigs_by_name().count(target)) continue;
                 FunctionSig sig;
                 sig.return_type = tc.resolve_type_string(sym.return_type);
                 sig.param_types.reserve(sym.param_types.size());
                 for (const auto &pt : sym.param_types)
                     sig.param_types.push_back(tc.resolve_type_string(pt));
                 sig.extern_lib = sym.is_extern ? sym.extern_lib : std::string();
-                sig.mangled_label = sym.mangled_label;
+                /* El label es el que se acaba de decidir arriba, no el que el
+                 * `.vxi` trajera: si venia vacio se armo con el namespace, y
+                 * dejar aqui el vacio haria que la firma apuntara a otro sitio
+                 * que el nombre reescrito. */
+                sig.mangled_label = target;
                 sig.is_naked = sym.is_naked;
                 sig.param_abi_regs = sym.param_abi_regs; // ABI custom
-                tc.register_imported_function(it->second, std::move(sig));
-                tc.mark_template_only_fn(it->second);
+                tc.register_imported_function(target, std::move(sig));
+                tc.mark_template_only_fn(target);
             }
         }
     }
@@ -1859,6 +2047,56 @@ void inject_generic_templates_from_vxi(
         if (!const_renames.empty())
             for (auto &decl : parsed->decls)
                 if (decl) vxgen::rename_idents(decl.get(), const_renames);
+    }
+
+    /* Y con el estado MUTABLE del modulo, que es lo que faltaba.
+     *
+     * Lo de arriba cubre sus funciones y sus constantes; un global que se
+     * ESCRIBE no, y ahi es donde se rompia: el cuerpo de una plantilla que toca
+     * lo suyo -- un contador, la cabeza de una lista libre, un cerrojo -- se
+     * re-parsea aqui, donde ese nombre no existe, y salia `nombre no declarado`
+     * señalando a `<vxi-templates:>`, un fichero que el usuario no ha escrito.
+     *
+     * Poner el global `public` NO lo arreglaba: no era visibilidad, era AMBITO.
+     * Y era justo lo que impedia que el asignador de la stdlib -- cuyo cuerpo
+     * ES estado del modulo -- pudiera ser un proveedor generico.
+     *
+     * Misma jugada y misma higiene que con las funciones: se reescribe al label
+     * REAL, asi que enlaza contra el global de verdad -- uno solo, compartido,
+     * que es lo que un asignador necesita -- y el consumidor sigue sin ver el
+     * nombre corto, porque un label manglado no lo escribe nadie. */
+    {
+        std::unordered_map<std::string, std::string> global_renames;
+        for (const auto &sym : mod.symbols) {
+            if (sym.kind != VxiSymbolKind::GLOBAL_VAR) continue;
+            if (sym.is_const) continue; // ya lo cubre el bloque de arriba
+            /* Sin label propio se usa el NOMBRE, y se registra igual.
+             *
+             * Un global privado viaja sin etiqueta manglada porque nadie lo
+             * cualifica: su modulo lo emite con su nombre.  Descartarlo por eso
+             * dejaba al cuerpo de la plantilla sin resolverlo -- el sintoma de
+             * siempre, `nombre no declarado` en un fichero que el usuario no ha
+             * escrito --.  Lo que sobra cuando label y nombre coinciden es la
+             * REESCRITURA, no la declaracion.
+             *
+             * Registrarlo no lo hace escribible: los que llegan por aqui son
+             * privados o empiezan por `__`, que esta reservado al compilador. */
+            const std::string label =
+                !sym.mangled_label.empty()
+                    ? sym.mangled_label
+                    : qualify_once_(sym.ns_path, sym.name);
+            if (label.empty()) continue;
+            Type t = tc.resolve_type_string(sym.underlying_type);
+            tc.register_imported_global(label, std::move(t), /*is_const=*/false,
+                                        /*has_init_value=*/false,
+                                        /*init_value=*/0, label);
+            /* Reescribir solo si el label es OTRO: si coincide con el nombre,
+             * cambiarlo por si mismo no hace nada y solo engorda el mapa. */
+            if (label != sym.name) global_renames.emplace(sym.name, label);
+        }
+        if (!global_renames.empty())
+            for (auto &decl : parsed->decls)
+                if (decl) vxgen::rename_idents(decl.get(), global_renames);
     }
 
     // Helper: nombre del decl (para el filtro `only` + rename namespace).
@@ -1981,9 +2219,24 @@ void inject_generic_templates_from_vxi(
                 ifd->is_imported_comptime = true;
         }
         const std::string nm = decl_name(decl.get());
-        // Filtro `only` (si wanted no esta vacio).  Las specs comparten el
-        // nombre del primario, asi que el filtro por nombre las incluye.
-        if (!wanted.empty() && wanted.find(nm) == wanted.end()) continue;
+        /* Filtro `only` (si wanted no esta vacio).  Las specs comparten el
+         * nombre del primario, asi que el filtro por nombre las incluye.
+         *
+         * Se compara por las DOS formas del nombre: el AST re-parseado puede
+         * traerlo MANGLADO con su namespace y la lista del `only` lleva los
+         * cortos, asi que preguntar solo por uno dejaba fuera la plantilla --
+         * y sin ella el proveedor no existia, aunque su modulo estuviera
+         * compilado y su `.vxi` al lado --. */
+        if (!wanted.empty() && wanted.find(nm) == wanted.end()) {
+            bool found = false;
+            for (size_t sep = nm.find("__");
+                 sep != std::string::npos && !found;
+                 sep = nm.find("__", sep + 1)) {
+                if (sep + 2 >= nm.size()) break;
+                found = wanted.find(nm.substr(sep + 2)) != wanted.end();
+            }
+            if (!found) continue;
+        }
         // NS.2: si la plantilla/concepto declaraba un namespace en el dep,
         // registrarla bajo el nombre ns-mangled (`mat__X`) para que el acceso
         // cualificado `mat.X` resuelva (misma convencion `.`->`__`).  Si no,
@@ -2457,6 +2710,9 @@ void import_vxi_into_typechecker(
             // LIM-A: preservar @Naked para enrutar la llamada al dispatcher.
             sig.is_naked = s.is_naked;
             sig.param_abi_regs = s.param_abi_regs; // ABI custom por-param
+            // Y el builtin que cubre: sin esto el proveedor llegaba pero no su
+            // papel, y quien preguntaba "quien cubre X" no lo encontraba.
+            sig.provides_builtin = builtin_from_name(s.provides_builtin);
             tc.register_imported_function(local_name, std::move(sig));
             break;
         }
@@ -2718,6 +2974,36 @@ void register_namespace_for_import(TypeChecker &tc,
                 sfi.bit_width = fi.bit_width;
                 L.fields.push_back(std::move(sfi));
             }
+            L.super_name = s.super_class;
+            /* Y sus METODOS, igual que la otra ruta de registro.
+             *
+             * Sin esto el struct llegaba a medias -- con campos y sin metodos
+             * --, asi que `q.x` funcionaba y `q.doble()` decia que el tipo no
+             * tiene ese metodo.  Y dependia de POR DONDE entrara el import:
+             * con `import geo only Punto` se registra por la ruta que si los
+             * trae y todo funciona, con `import geo;` y el tipo escrito
+             * cualificado (`geo.Punto`) entra por aqui y se pierden.
+             *
+             * O sea que el mismo tipo tenia metodos o no segun como se
+             * escribiera el import, que es justo lo que no puede pasar.  Nadie
+             * lo habia visto porque la stdlib expone estos tipos con funciones
+             * libres (`mutex_lock(m)`) o se importa con `only`. */
+            L.methods.reserve(s.methods.size());
+            for (const auto &mi : s.methods) {
+                ClassMethodInfo cmi;
+                cmi.name = mi.name;
+                cmi.return_type = resolve_with_mangled_fallback(mi.return_type);
+                cmi.vtable_index = mi.vtable_index;
+                cmi.is_static = (mi.flags & 0x01) != 0;
+                cmi.is_constructor = (mi.flags & 0x02) != 0;
+                cmi.is_comptime = (mi.flags & 0x08) != 0;
+                cmi.defining_class = mangled;
+                cmi.link_name = mi.mangled_label;
+                cmi.param_types.reserve(mi.param_types.size());
+                for (const auto &pt : mi.param_types)
+                    cmi.param_types.push_back(resolve_with_mangled_fallback(pt));
+                L.methods.push_back(std::move(cmi));
+            }
             tc.register_imported_struct(mangled, std::move(L));
             break;
         }
@@ -2873,6 +3159,23 @@ void register_namespace_for_import(TypeChecker &tc,
             // LIM-A: preservar @Naked para enrutar la llamada cross-modulo
             // via namespace (`lib.fn(...)`) al dispatcher naked en interp/JIT.
             sym.sig.is_naked = s.is_naked;
+            sym.sig.provides_builtin = builtin_from_name(s.provides_builtin);
+            /* Y si CUBRE un builtin, ademas bajo su etiqueta.
+             *
+             * Un `import a.b;` llano solo deja escribir `a.b.f()`, pero a un
+             * proveedor no lo llama el usuario: lo llama el compilador al
+             * reescribir `free(x)`, y para eso el nombre que cablea tiene que
+             * poder resolverse.  Se registra igual que los ayudantes de una
+             * plantilla -- bajo la etiqueta y marcado para que no se pueda
+             * escribir --, asi que no añade nada a lo que el usuario ve. */
+            if (sym.sig.provides_builtin != Builtin::Unknown &&
+                !sym.mangled_label.empty() &&
+                !tc.function_sigs_by_name().count(sym.mangled_label)) {
+                FunctionSig psig = sym.sig;
+                tc.register_imported_function(sym.mangled_label,
+                                              std::move(psig));
+                tc.mark_template_only_fn(sym.mangled_label);
+            }
             // NS.2: si la funcion pertenece a un namespace DECLARADO por el dep
             // (`namespace mylib;`), la registramos bajo ESE namespace (mylib)
             // para que el consumidor la vea como `mylib.helper()` (desacoplado

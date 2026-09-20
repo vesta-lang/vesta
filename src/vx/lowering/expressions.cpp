@@ -678,10 +678,10 @@ ir::IrValueId Lowering::lower_binary(ast::BinaryExpr *e) {
             "substr",           "concat",
             "repeat",           "replace",
             "str_concat",       "str_intern",
-            "gensym",           "comptime_to_str",
-            "comptime_concat",  "comptime_chr",
-            "comptime_substr",  "comptime_repeat",
-            "comptime_replace",
+            "gensym",           "comptime.to_str",
+            "comptime.str.concat",  "comptime.chr",
+            "comptime.str.substr",  "comptime.str.repeat",
+            "comptime.str.replace",
         };
         return STR_RET_BUILTINS.count(n) != 0;
     };

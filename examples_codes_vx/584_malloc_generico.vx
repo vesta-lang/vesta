@@ -1,0 +1,62 @@
+// -----------------------------------------------------------------------------
+// `malloc<T>(n)`: n ELEMENTOS de T, y devuelve `T*`
+// -----------------------------------------------------------------------------
+// El tipo entre los angulos hace dos cosas, y hasta ahora no hacia ninguna:
+//
+//  1. Dice CUANTO mide cada elemento.  `malloc<i64>(4)` son cuatro i64, o sea
+//     treinta y dos bytes.  Antes se consumia sin efecto ninguno y reservaba
+//     CUATRO -- y eso no daba un error, daba memoria de otro pisada al escribir
+//     el segundo elemento, apareciendo lejos de aqui y sin relacion aparente.
+//
+//  2. Da el tipo del resultado.  Antes devolvia `void*` y habia que escribir
+//     `(i64*)` delante, que es pedirle al programador que repita lo que acaba
+//     de decir entre los angulos.
+//
+// Sin `<T>` sigue siendo `malloc(bytes) -> void*`, como en C, que es como estan
+// escritas las llamadas que ya existen.
+
+namespace ejemplos.memoria;
+
+/// Cuantos elementos caben de verdad: se escriben todos y se leen todos.
+///
+/// Con la reserva corta esto no fallaba SIEMPRE -- por eso duro tanto --: el
+/// asignador redondea, asi que escribir de mas a veces cae en relleno y a
+/// veces encima del bloque siguiente.
+i64 suma_de_cuatro() {
+	// Sin cast: `malloc<i64>` ya es `i64*`.
+	i64* p     = malloc<i64>(4);
+	p[0]       = 11;
+	p[1]       = 22;
+	p[2]       = 33;
+	p[3]       = 44;
+	i64  total = p[0] + p[1] + p[2] + p[3];
+	free(p);
+	return total;
+}
+
+/// Y con un tipo mas ancho que un registro, donde la cuenta se nota mas.
+struct Par {
+	i64 a;
+	i64 b;
+}
+
+i64 suma_de_pares() {
+	Par* v     = malloc<Par>(3);
+	i64  total = 0_i64;
+	for (i64 i = 0_i64; i < 3; i++) {
+		v[i].a = i + 1;
+		v[i].b = (i + 1) * 10;
+		total  = total + v[i].a + v[i].b;
+	}
+	free(v);
+	return total; // (1+10) + (2+20) + (3+30) = 66
+}
+
+i32 main() {
+	i64 a = suma_de_cuatro();
+	i64 b = suma_de_pares();
+	println("cuatro=${a}");
+	println("pares=${b}");
+	// 110 + 66 = 176; 176 - 134 = 42
+	return (i32)(a + b - 134);
+}

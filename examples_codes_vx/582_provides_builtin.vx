@@ -1,0 +1,78 @@
+// -----------------------------------------------------------------------------
+// `@Provides(<builtin>)`: sustituir lo que el lenguaje hace por su cuenta
+// -----------------------------------------------------------------------------
+// Un binario nativo no tiene detras la maquina virtual, asi que todo lo que el
+// interprete da por hecho -- imprimir, reservar memoria, cambiar de fibra --
+// tiene que aportarlo alguien.  Normalmente lo aporta la stdlib; con esto lo
+// aporta quien quiera.
+//
+// Lo que se anota es el NOMBRE DEL BUILTIN, no una taxonomia aparte: lo que se
+// puede proveer es justo lo que el lenguaje ya sabe hacer, asi que no hay una
+// segunda lista que mantener y un nombre mal escrito es un error en vez de un
+// proveedor que nadie encuentra.
+//
+// Y lo que quita de en medio: antes la unica forma de sustituir a `print_int`
+// era llamar a la funcion propia `__vx_print_i64` -- un nombre interno que
+// nadie tenia por que conocer, y que ataba el override a una convencion --.
+// Aqui la funcion se llama `mi_entero` y lo unico que la liga al builtin es la
+// anotacion.
+//
+// El contrato SE COMPROBA: la firma tiene que ser la del builtin.  Sin eso,
+// proveerlo con otra no daria un error, daria una llamada que pasa el tipado y
+// salta a algo que espera otra cosa -- y ese es justo el fallo silencioso que
+// el mecanismo viene a quitar.  Lo ejercita `576_provides_builtin_err.vx`.
+
+/// Cuantas veces se llamo a la nuestra.  Si el builtin del lenguaje hubiera
+/// ganado, esto se quedaria en cero y el programa no devolveria 42.
+i64 g_veces = 0_i64;
+
+@Provides(print_int)
+void mi_entero(i64 n) {
+	g_veces = g_veces + 1;
+	// A proposito NO imprime como el del lenguaje: asi la salida delata cual
+	// de los dos corrio.
+	print("<");
+	print_hex(n);
+	print(">");
+}
+
+// Y un proveedor que toma `string`.
+//
+// Es lo natural de escribir: ese valor ya lleva dentro direccion, tamanyo y
+// capacidad, asi que no hay por que recibirlo en piezas.  Y es el caso que
+// fallaba CALLANDO: un literal baja como direccion cruda, y pasarla tal cual a
+// quien espera un `string` compila sin una queja -- el proveedor lee campos
+// donde no los hay y lo que sale es una cadena VACIA --.  Ahora cada argumento
+// se lleva al tipo que el proveedor declaro, no al que el builtin usaba por
+// dentro.
+@Provides(echo)
+void mi_echo(string msg) {
+	print("!");
+	print(msg);
+	print("!");
+}
+
+i32 main() {
+	print("a=");
+	print_int(7);
+	println("");
+
+	print("b=");
+	print_int(255);
+	println("");
+
+	// `print_hex` NO esta provisto, asi que sigue siendo el del lenguaje:
+	// proveer uno no se lleva por delante a sus hermanos.
+	print("hex=");
+	print_hex(16);
+	println("");
+
+	// El literal llega como CADENA, no como la direccion cruda con la que
+	// bajaba.  Si no llegara, esto imprimiria `msg=!!`.
+	print("msg=");
+	echo("roto");
+	println("");
+
+	println("veces=${g_veces}");
+	return (i32)(40 + g_veces);
+}

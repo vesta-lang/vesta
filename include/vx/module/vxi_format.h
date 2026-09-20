@@ -63,7 +63,16 @@ inline constexpr uint32_t VXI_MAGIC = 0x49584556u;
 /// contenido.  Y va en la cabecera, que ya se lee entera, para no anadir ni una
 /// apertura por modulo -- con seis mil modulos eso serian seis mil.
 /// v20: banderas del modulo en el header (@ref VxiHeader::module_flags).
-inline constexpr uint16_t VXI_FORMAT_VERSION = 20;
+/* v21: la ficha de una FUNCION dice que builtin CUBRE (`@Provides`).
+ *
+ * Subirlo no es un detalle: un `.vxi` de la version anterior no tiene ese
+ * campo, y leerlo con el lector nuevo se sale ocho bytes del payload y devuelve
+ * una cadena cualquiera del pozo -- o sea que una funcion cualquiera pasaba a
+ * decir que cubre un builtin al azar, y su llamada acababa en un simbolo que no
+ * existe ("simbolo no resuelto: code.bg_rgb" en un ejemplo que no nombra
+ * `bg_rgb` en ninguna linea).  Con la version subida, lo viejo se rechaza y se
+ * regenera, que es justo para lo que esta. */
+inline constexpr uint16_t VXI_FORMAT_VERSION = 21;
 
 /// \brief Bit 0 de @ref VxiHeader::module_flags: el modulo declara clases.
 inline constexpr uint16_t VXI_MODULE_DECLARES_CLASSES = 1u << 0;
@@ -367,6 +376,19 @@ struct VxiSymbol {
     ///  NS.3: @c "internal" (package-scoped).  Bit 0x10 del byte de flags.
     /// El simbolo se exporta pero el consumidor de OTRO package_id lo filtra.
     bool is_internal = false;
+    /**
+     * (FUNCTION) El builtin que esta funcion CUBRE (`@Provides(<builtin>)`),
+     * escrito como el usuario lo escribe.  Vacio = no cubre ninguno.
+     *
+     * Es parte de su firma, igual que sus tipos o el ABI de sus parametros: no
+     * dice como esta escrita la funcion, dice QUE PAPEL cumple.  Sin esto la
+     * marca solo existia en el fuente del modulo que la declara, asi que un
+     * proveedor de otro modulo se ignoraba en SILENCIO -- el programa compilaba
+     * y reservaba con el asignador de siempre --, y solo cruzaba la frontera si
+     * era una PLANTILLA, porque entonces viaja su texto y la anotacion va
+     * dentro.
+     */
+    std::string provides_builtin;
 };
 
 /**

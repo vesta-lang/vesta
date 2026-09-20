@@ -1208,7 +1208,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // que vx_async: el context-switch es puro Vesta (inline-asm), sin
     // runtime.
     // ----------------------------------------------------------------
-    {
+    /* Se DEFINE aqui y se invoca desde el punto fijo, mas abajo, igual que el
+     * gancho de I/O: lo que decide si entra es una demanda del IR, y esa
+     * demanda puede aparecer despues de fusionar otro proveedor. */
+    auto resolve_fiber_hook = [&](bool *changed) -> int {
         bool uses_fiber = false, defines_fiber = false;
         for (const auto &af : aot_mod.functions) {
             if (af.name == "__vx_swapctx") defines_fiber = true;
@@ -1275,8 +1278,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             std::cout << "[aot] primitivo de fibras "
                          "(stdlib/vx/vx_fiber.vx) incluido en el "
                          "objeto.\n";
+            *changed = true; // entro codigo: puede traer demanda nueva
         }
-    }
+        return 0;
+    };
 
     // ----------------------------------------------------------------
     // Auto-bundle del runtime de I/O (stdlib/vx/vx_io.vx).
@@ -1292,7 +1297,25 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
     // CALLN -> no se bundle-a.  Removible con --freestanding (el
     // usuario aporta los __vx_*) o --no-io.
     // ----------------------------------------------------------------
-    if (!aot_no_io && !aot_freestanding) {
+    /* Se DEFINE aqui y se INVOCA mas abajo, cuando ya estan hechos todos los
+     * merges de IR.  Que sea una unidad con nombre y no un bloque suelto es el
+     * arreglo de fondo: el momento en que se decide el gancho deja de depender
+     * de donde cayo el bloque y pasa a estar escrito en su invocacion.
+     *
+     * Lo que fallaba era exactamente eso.  La deteccion recorre el IR buscando
+     * quien llama al I/O, y corria ANTES de fusionar `vx_fault` -- que imprime
+     * --, asi que para un programa que no imprimiera por su cuenta la respuesta
+     * era "nadie usa I/O" y `vx_io` no entraba.  Sus `__vx_write`/`__vx_flush`
+     * se quedaban sin cuerpo y acababan como imports inventados: el ejecutable
+     * se generaba y moria al CARGAR, sin una linea, y ni siquiera hacia falta
+     * que el programa fallara para verlo.
+     *
+     * La respuesta NO es fusionar el I/O siempre -- eso seria una dependencia
+     * obligatoria, y un binario que no imprime no debe cargar con ella --, sino
+     * preguntarlo cuando la imagen ya esta completa.  Asi la dependencia se
+     * DERIVA de que hay codigo que la usa, en vez de asertarse desde un flag. */
+    auto resolve_io_hook = [&](bool *changed) -> int {
+        if (aot_no_io || aot_freestanding) return 0;
         const std::string io_pfx = "vx_bare_io:";
         bool uses_io = false, defines_io = false;
         // Un `unwrap` necesita el hook __vx_panic_null, que vive en el
@@ -1482,8 +1505,10 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             }
             std::cout << "[aot] runtime de I/O (stdlib/vx/vx_io.vx) "
                          "incluido en el objeto.\n";
+            *changed = true; // entro codigo: puede traer demanda nueva
         }
-    }
+        return 0;
+    };
 
     /* Info de depuracion del LENGUAJE nivel 2: el binario se explica
      * solo al fallar.  Se enlaza el manejador (stdlib/vx/vx_fault.vx) y
@@ -1557,24 +1582,16 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             if (ni.lib == "vx_bare_io") continue;
             aot_mod.register_native_import(ni.lib, ni.name);
         }
-        /* Sus llamadas al I/O tienen que resolverse DENTRO de la
-         * imagen, igual que las del resto: el modulo usa `print` y al
-         * compilarse suelto eso queda como una importacion externa.
-         * La reescritura del bundle de I/O ya paso cuando este modulo
-         * aun no estaba, asi que hay que repetirla aqui -- si no, el
-         * ejecutable arranca pidiendo una DLL que no existe. */
-        {
-            const std::string io_pfx2 = "vx_bare_io:";
-            for (auto &af : aot_mod.functions)
-                for (auto &b : af.blocks)
-                    for (auto &ins : b.instrs)
-                        if (ins.op == ir::IrOp::CALLN &&
-                            ins.func_name.rfind(io_pfx2, 0) == 0) {
-                            ins.op = ir::IrOp::CALL;
-                            ins.func_name =
-                                ins.func_name.substr(io_pfx2.size());
-                        }
-        }
+        /* Sus llamadas al I/O las resuelve el gancho de I/O, que ahora corre
+         * DESPUES de este merge y recorre todas las funciones de la imagen.
+         *
+         * Aqui habia una segunda reescritura `CALLN vx_bare_io:*` -> `CALL`,
+         * copiada de la del gancho porque "ya paso cuando este modulo aun no
+         * estaba".  Era el parche del sintoma: renombraba los simbolos aunque
+         * `vx_io` no se hubiera fusionado, y al quitarles el prefijo borraba lo
+         * unico que decia de donde salian -- convertia un problema de ORDEN en
+         * tres simbolos anonimos sin cuerpo.  Con el orden arreglado sobra, y
+         * quitarla evita que las dos copias puedan divergir. */
 
         // Y que `main` lo instale antes que nada.
         for (auto &af : aot_mod.functions) {
@@ -1592,6 +1609,29 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                      "(stdlib/vx/vx_fault.vx incluido; YA NO es "
                      "identico al de no pedir depuracion)."
                   << "\n";
+    }
+
+    /* Los proveedores del runtime se resuelven a PUNTO FIJO.
+     *
+     * Cada uno cubre una capacidad que el lenguaje da por su cuenta cuando se
+     * interpreta -- imprimir, reservar memoria, cambiar de fibra -- y que en
+     * un binario nativo alguien tiene que aportar.  Lo que decide si entra es
+     * la DEMANDA: unas veces del IR (el programa llama al builtin) y otras de
+     * una opcion (`--debug-info x.2` pide el manejador que se explica solo).
+     *
+     * Y la clave: **fusionar un proveedor crea demanda nueva**.  El manejador
+     * de fallos imprime, asi que al entrar demanda el I/O; si el I/O ya se
+     * decidio antes, se decidio sobre un programa que todavia no existia.  Eso
+     * es exactamente lo que fallaba, y por que no se arregla colocando los
+     * bloques en el orden bueno: el orden bueno cambia con lo que se anada.
+     *
+     * Con el bucle deja de importar donde caiga cada uno.  Cada gancho se
+     * guarda con "si ya esta, no hagas nada", asi que repetirlo no cuesta ni
+     * duplica; se repite hasta que una vuelta entera no anade nada. */
+    for (bool changed = true; changed;) {
+        changed = false;
+        if (const int rc = resolve_fiber_hook(&changed); rc != 0) return rc;
+        if (const int rc = resolve_io_hook(&changed); rc != 0) return rc;
     }
 
     // AOT: eliminar funciones MUERTAS (no alcanzables) antes de
@@ -1679,6 +1719,16 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         // llegar a ejecutar nada.
         if (io_default_panic) add_live("__panic");
         if (!cr.aot_panic_sym.empty()) add_live(cr.aot_panic_sym);
+        // Y el ASIGNADOR, por lo mismo: `RAW_ALLOC`/`RAW_FREE` se reescriben a
+        // los simbolos del modulo en el bajado nativo, o sea DESPUES de esta
+        // poda, asi que aqui no hay ninguna llamada que los alcance.  Y quien
+        // los referencia no suele ser el programa: la copia de una cadena o la
+        // limpieza de un `string` las emite el compilador.  Sin sembrarlos, un
+        // `.vx` que solo declara un parametro `string` salia con "symbols with
+        // no provider: <instancia>" -- el nombre correcto, y su codigo tirado
+        // por no alcanzable --.
+        if (!cr.aot_alloc_sym.empty()) add_live(cr.aot_alloc_sym);
+        if (!cr.aot_free_sym.empty()) add_live(cr.aot_free_sym);
         // Raices por vtablas/datos: nombres referenciados en sym_refs.
         for (size_t si = 0; si < aot_mod.static_data.size(); ++si)
             for (const auto &sr : aot_mod.static_data.meta_at(si).sym_refs)
@@ -1786,60 +1836,18 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
         // @AllocatorOverride del usuario: respetarlo (no bundle).
         lcfg.alloc_sym = cr.aot_alloc_sym;
         lcfg.has_alloc_override = true; // __new calloc -> alloc_sym(size)
-    } else if (aot_uses_alloc && !aot_no_mem && !aot_freestanding) {
-        // Sin @AllocatorOverride del usuario -> el slab Vesta
-        // (stdlib/vx/vx_mem.vx) es el allocator por DEFECTO, via el
-        // MISMO mecanismo @AllocatorOverride (reciclamos la sintaxis):
-        // compilamos vx_mem y leemos sus simbolos override
-        // (__vx_malloc / __vx_free) genericamente, no hardcoded.  Sin
-        // libc malloc/free.  El usuario sustituye con su propio
-        // @AllocatorOverride, o lo desactiva con --no-mem.
-        const std::string exe_dir =
-            std::filesystem::path(fs::get_executable_path())
-                .parent_path()
-                .string();
-        const std::vector<std::string> cands = {
-            exe_dir + "/stdlib/vx/vx_mem.vx",
-            exe_dir + "/../stdlib/vx/vx_mem.vx", "stdlib/vx/vx_mem.vx"};
-        std::string mem_path;
-        for (const auto &c : cands)
-            if (std::filesystem::exists(c)) {
-                mem_path = c;
-                break;
-            }
-        if (mem_path.empty()) {
-            std::cerr << "[aot] usa el allocator pero no encuentro "
-                         "stdlib/vx/vx_mem.vx (enlazalo a mano, usa "
-                         "@AllocatorOverride o compila con --no-mem).\n";
-            return EXIT_FAILURE;
-        }
-        std::ifstream mf(mem_path);
-        std::string mem_src((std::istreambuf_iterator<char>(mf)),
-                            std::istreambuf_iterator<char>());
-        vx::CompileOptions mem_opts;
-        mem_opts.module_name = "vx_mem";
-        mem_opts.opt_level = copts.opt_level;
-        mem_opts.native_poo = true;
-        mem_opts.asm_target_bits = copts.asm_target_bits;
-        // Como PROYECTO, no como fichero suelto: la stdlib es codigo
-        // Vesta normal y sus modulos se importan entre si (vx_mem usa
-        // los atomicos de atomic en vez de reimplementarlos).
-        std::string mem_alloc_sym, mem_free_sym;
-        if (!traer_modulo_stdlib_(mem_path, mem_src, mem_opts,
-                                  /*proyecto=*/true, tel, mem_mod,
-                                  &mem_alloc_sym, &mem_free_sym) ||
-            mem_alloc_sym.empty() || mem_free_sym.empty()) {
-            std::cerr << "[aot] no pude compilar el slab allocator "
-                         "vx_mem.vx (o no expone @AllocatorOverride).\n";
-            return EXIT_FAILURE;
-        }
-        // Override por defecto = los simbolos que vx_mem declaro con
-        // @AllocatorOverride (mismo trato que un override del usuario).
-        lcfg.alloc_sym = mem_alloc_sym;
-        lcfg.free_sym = mem_free_sym;
-        lcfg.has_alloc_override = true; // __new calloc -> alloc_sym(size)
-        bundle_mem = true;
     }
+    /* El asignador por defecto ya NO se trae aqui.
+     *
+     * Antes se compilaba aparte y se fusionaba, y su simbolo se cableaba por
+     * NOMBRE.  Con un proveedor generico eso no puede funcionar: una plantilla
+     * no emite simbolo -- lo emiten sus instancias, que nacen donde se conoce
+     * el tipo --, asi que el enlazador buscaba algo que nadie habia escrito.
+     *
+     * Ahora entra por la AUTO-IMPORTACION que declara el manifiesto de la
+     * stdlib, o sea por la misma puerta que cualquier dependencia: el modulo se
+     * compila con el proyecto y la instancia nace en quien reserva.  Aqui no
+     * queda ningun nombre de modulo ni de simbolo. */
     if (!cr.aot_free_sym.empty()) lcfg.free_sym = cr.aot_free_sym;
     if (!cr.aot_panic_sym.empty()) {
         lcfg.panic_sym = cr.aot_panic_sym;
@@ -3158,20 +3166,14 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                     ext_seen.insert(r.symbol);
                     ext_syms.push_back(r.symbol);
                 }
-        // Mapa simbolo -> DLL.  PE: libc (MinGW/Windows) = msvcrt.dll;
-        // los FFI extern de DLL del usuario llegan como "sym" (el lib
-        // se perdio en el selector) -> default msvcrt.dll (follow-up:
-        // cablear el DLL real desde el CompileResult).  ELF: el campo
-        // se ignora (todo va a libc.so.6 via DT_NEEDED).
-        const bool is_pe = (fmt == aot::ObjFormat::PE);
-        // DLL real de cada simbolo externo via el mecanismo FFI del
-        // lenguaje: `extern "kernel32.dll" { fn WriteFile(...); }`
-        // registra ("kernel32.dll", "WriteFile") en native_imports (ver
-        // lower_call FFI declarativo).  Construimos symbol -> DLL desde
-        // ahi, en vez de una tabla hardcodeada en el compilador.  PE: si
-        // un simbolo no esta declarado en ningun extern (libc implicito:
-        // malloc/free/abort de msvcrt) -> msvcrt.dll.  ELF: todo va a
-        // libc.so.6 via DT_NEEDED (el SONAME no se usa para resolver).
+        // Biblioteca de cada simbolo externo, por el mecanismo FFI del
+        // lenguaje: `extern "kernel32.dll" { fn WriteFile(...); }` registra
+        // ("kernel32.dll", "WriteFile") en native_imports (ver lower_call FFI
+        // declarativo), y un plugin de la stdlib llega por su ruta.  De ahi
+        // sale el mapa simbolo -> biblioteca, en vez de una tabla escrita a
+        // mano en el compilador.  Vale para los dos formatos: en PE nombra la
+        // DLL de la IAT y en ELF la entrada DT_NEEDED.  Lo que no aparezca
+        // aqui no tiene origen declarado -- ver `dll_for`.
         std::unordered_map<std::string, std::string> sym2dll;
         for (const auto &ni : aot_mod.native_imports) {
             // (a) FFI extern a sistema: lib ya es un nombre de DLL real
@@ -3195,14 +3197,34 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
                                          : ni.lib.substr(slash + 1);
             if (!base.empty()) sym2dll[ni.name] = base + ".dll";
         }
-        auto dll_for = [is_pe,
-                        &sym2dll](const std::string &sym) -> std::string {
-            if (!is_pe) return "libc.so.6";
+        /* La UNICA fuente del origen de un simbolo externo es lo que alguien
+         * DECLARO: un `extern "x.dll"` o un plugin de la stdlib.  Misma regla
+         * en los dos formatos y sin respaldo, porque un respaldo aqui fabrica
+         * una dependencia que nadie pidio.
+         *
+         * Antes habia uno por formato y los dos mentian.  En PE, lo que no
+         * estuviera declarado se atribuia a `msvcrt.dll`: un simbolo que el
+         * programa no define y nadie declara -- un modulo de la stdlib que no
+         * se fusiono, o un nombre mal escrito -- salia como import de una DLL
+         * que no lo exporta, y el ejecutable se generaba tan tranquilo para
+         * morir al CARGAR, en otra maquina, con un codigo del sistema y cero
+         * contexto.  En ELF era peor todavia: se devolvia `libc.so.6` SIN
+         * mirar siquiera lo declarado, asi que un `extern "libfoo.so"` se
+         * perdia y la dependencia que se anotaba era la equivocada.
+         *
+         * Vacio = nadie lo declara.  Eso no es un import: es un error, y se
+         * dice antes de emitir nada. */
+        auto dll_for = [&sym2dll](const std::string &sym) -> std::string {
             auto it = sym2dll.find(sym);
-            if (it != sym2dll.end()) return it->second;
-            return "msvcrt.dll";
+            return it != sym2dll.end() ? it->second : std::string();
         };
+        std::vector<std::string> unresolved;
         for (const std::string &sym : ext_syms) {
+            const std::string lib = dll_for(sym);
+            if (lib.empty()) {
+                unresolved.push_back(sym);
+                continue;
+            }
             const uint32_t toff =
                 static_cast<uint32_t>(secs[text_sec].bytes.size());
             // FF 25 00 00 00 00 -> jmp [rip+disp32]; disp32 a parchear.
@@ -3210,7 +3232,16 @@ int compile_aot(const vx::CompileResult &cr, const vx::CompileOptions &copts,
             secs[text_sec].bytes.insert(secs[text_sec].bytes.end(), thunk,
                                         thunk + 6);
             fn_loc[sym] = {text_sec, toff}; // el call <sym> -> el thunk
-            pe_thunk_imports.push_back({dll_for(sym), sym, toff});
+            pe_thunk_imports.push_back({lib, sym, toff});
+        }
+        if (!unresolved.empty()) {
+            std::string sym_list;
+            for (const std::string &u : unresolved) {
+                if (!sym_list.empty()) sym_list += ", ";
+                sym_list += u;
+            }
+            std::cerr << vx::diag::format("VX9258", {sym_list}) << "\n";
+            return EXIT_FAILURE;
         }
     }
 
