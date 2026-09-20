@@ -49,7 +49,7 @@ i32 main() {
 	// Funcion: primario / total / parcial.
 	i64  r1 = rango<i32>(5); // primario -> 10
 	i64  r2 = rango<i64>(6); // total    -> 20
-	i64* p  = (i64*)malloc(8);
+	i64* p  = malloc<i64>(1);
 	i64  r3 = rango<i64*>(p); // parcial  -> 30
 	free(p);
 

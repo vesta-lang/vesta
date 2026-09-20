@@ -27,8 +27,8 @@ i32 main() {
 	co.contenido.v = 20;
 
 	// 3. Generico con un puntero (`T*`) como argumento.
-	i64*       hp = (i64*)malloc(8);
-	*          hp = 7;
+	i64* hp = malloc<i64>(1);
+	*hp          = 7;
 	Caja<i64*> ch;
 	ch.contenido = hp;
 

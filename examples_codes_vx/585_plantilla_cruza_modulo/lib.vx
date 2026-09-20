@@ -1,0 +1,53 @@
+// -----------------------------------------------------------------------------
+// La mitad que OFRECE: una plantilla cuyo cuerpo usa lo suyo
+// -----------------------------------------------------------------------------
+// Una plantilla generica no emite simbolo -- lo emiten sus instancias, que
+// nacen donde se conoce el tipo --, asi que cruzar un modulo significa que su
+// FUENTE viaja y se instancia en el consumidor.  Y para que eso compile, todo
+// lo que su cuerpo nombra tiene que poder resolverse alli.
+//
+// Este modulo nombra a proposito las cuatro categorias que se dejaban fuera:
+// un global MUTABLE, un global `__` (reservado del compilador), una funcion
+// PRIVADA y una publica.  Cada una fallaba con `nombre no declarado` apuntando
+// a `<vxi-templates:>`, un fichero que nadie ha escrito.
+
+namespace prueba.plantilla;
+
+/// Estado MUTABLE del modulo.  Es el que mas costaba: solo viajaban los
+/// `const`, y ponerlo `public` no arreglaba nada -- no era visibilidad, era
+/// AMBITO: el cuerpo se re-parsea en el consumidor, donde ese nombre no
+/// existe --.
+i64 g_llamadas = 0_i64;
+
+/// Y uno con doble subrayado, que el `.vxi` filtraba por reservado.
+i64 __g_bytes = 0_i64;
+
+/// Una funcion PRIVADA del modulo.  No se exporta y no debe verse desde fuera;
+/// lo unico que hace falta es que ENLACE cuando la llama una instancia.
+i64 escala_privada(i64 n) => n * 2;
+
+/// Y una publica, para que el caso no dependa solo de la privada.
+public i64 escala_publica(i64 n) => n + 1;
+
+/// La plantilla.  Toma `T*`, que es el otro medio arreglo: un puntero a un
+/// parametro de tipo ES un puntero -- ocho bytes, en un registro,
+/// desreferenciable -- aunque no se sepa a que apunta.  Antes el parametro
+/// entero se colapsaba a "parametro de tipo" y se perdia la forma, asi que
+/// todo el que pregunta si algo es una direccion respondia que no.
+///
+/// @tparam T Tipo del elemento.
+/// @param p Direccion de un T.
+/// @return Lo leido, escalado por las dos funciones del modulo.
+public i64 mide<T>(T * p) {
+	g_llamadas = g_llamadas + 1;
+	__g_bytes  = __g_bytes + 10;
+	// El cast a `T*` dentro de la propia plantilla: `T` tiene que nombrar un
+	// tipo AQUI, cosa que no pasaba en una funcion libre (si en un metodo).
+	T*  q = (T*)p;
+	i64 v = (i64)(*q);
+	return escala_publica(escala_privada(v));
+}
+
+public i64 llamadas() => g_llamadas;
+
+public i64 bytes_vistos() => __g_bytes;

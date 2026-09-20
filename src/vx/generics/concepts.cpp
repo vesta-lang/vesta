@@ -287,15 +287,53 @@ ConceptEval comptime_eval_concept(const TypeChecker &tc,
 // Verificacion de bounds al monomorphizar (TypeChecker method).
 // ------------------------------------------------------------------
 
-void TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
+/**
+ * @brief Dice que un tipo no cumple el concepto que su ranura exige.
+ *
+ * Lo dicen DOS sitios -- la comprobacion inmediata y el drenaje de las
+ * aplazadas -- y tienen que decir lo mismo, asi que el texto vive una sola vez,
+ * y en el catalogo: escribirlo en el sitio lo congelaria en un idioma.
+ *
+ * @param diags Sumidero de diagnosticos.
+ * @param loc   Donde se escribio la llamada.
+ * @param arg   El tipo que llego.
+ * @param cname El concepto que no cumple.
+ * @param param La ranura de tipo que lo exige.
+ */
+static void report_unsatisfied_bound(Diagnostics &diags, const SourceLoc &loc,
+                                     const Type &arg, const std::string &cname,
+                                     const std::string &param) {
+    diags.diag(loc, DiagLevel::ERR, "VX2108",
+               {type_to_string(arg), cname, param});
+}
+
+void TypeChecker::note_instance_requirement(const Type &target,
+                                            const Type &value,
+                                            const SourceLoc &loc) {
+    const ast::FunctionDecl *inst = checking_instance_;
+    if (inst == nullptr || inst->instance_template == nullptr) return;
+    for (const auto &b : inst->instance_bindings) {
+        /* Solo si lo que fallo ES lo que tomo una ranura.  Si no, el desajuste
+         * no habla de `T` y atribuirselo seria adivinar. */
+        if (!(b.second == value)) continue;
+        diags_.diag(loc, DiagLevel::NOTE, "VX2113",
+                    {*inst->instance_template, *b.first,
+                     type_to_string(target), type_to_string(value)});
+        return;
+    }
+}
+
+bool TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
                                     const std::vector<std::string> &params,
                                     const std::vector<Type> &args,
                                     const SourceLoc &loc) {
-    if (bounds.empty()) return;
-    // NO se evalua aqui: se ENCOLA.  La evaluacion se difiere hasta que los
-    // layouts de clases/structs existen (los conceptos estructurales y
-    // has_method/sizeof de tipos de usuario los necesitan); la monomorphizacion
-    // de structs/clases/funciones corre en pre_mono, ANTES de collect_globals.
+    bool all_ok = true;
+    if (bounds.empty()) return all_ok;
+    // Se ENCOLA lo que no se pueda contestar todavia.  La evaluacion se difiere
+    // hasta que los layouts de clases/structs existen (los conceptos
+    // estructurales y has_method/sizeof de tipos de usuario los necesitan); la
+    // monomorphizacion de structs/clases/funciones corre en pre_mono, ANTES de
+    // collect_globals.
     for (const auto &b : bounds) {
         size_t idx = params.size();
         for (size_t i = 0; i < params.size(); ++i) {
@@ -305,7 +343,39 @@ void TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
             }
         }
         if (idx >= args.size()) continue; // param no encontrado: ignorar
+        /* Lo que obliga a aplazar es mirar el LAYOUT de un tipo del usuario, y
+         * eso depende del ARGUMENTO: sobre un primitivo, un puntero o una
+         * funcion no hay layout que esperar, asi que se contesta ya.
+         *
+         * Aplazarlo todo tenia un precio que se vio con
+         * `apply<T, F: Callable>`: el retorno de la instancia
+         * (`type.result<F>()`) se resuelve al monomorfizar, o sea ANTES de que
+         * la cola se drene, asi que `apply(5, 7)` fallaba diciendo que `i64` no
+         * es invocable -- senyalando la linea de la PLANTILLA -- en vez de
+         * decir que el argumento no cumple `Callable` en la linea de la
+         * llamada.  El primer mensaje describe la CONSECUENCIA; el que hace
+         * falta es el que nombra la causa. */
+        const PrimitiveKind ak = args[idx].kind;
+        /* Lleva nombre de tipo del usuario -> puede haber un layout o una ficha
+         * de enum que todavia no exista.  Un enum con valor es por dentro un
+         * entero, asi que el kind no basta para reconocerlo: lo delatan la
+         * marca y el nombre. */
+        const bool needs_layout =
+            ak == PrimitiveKind::STRUCT || ak == PrimitiveKind::CLASS ||
+            args[idx].is_valued_enum || !args[idx].struct_name.empty();
         for (const auto &cname : b.concepts) {
+            if (!needs_layout) {
+                const ConceptEval ev =
+                    comptime_eval_concept(*this, cname, args[idx]);
+                if (ev.found) {
+                    if (!ev.satisfied) {
+                        report_unsatisfied_bound(diags_, loc, args[idx], cname,
+                                                 b.type_param);
+                        all_ok = false;
+                    }
+                    continue; // contestado: no hace falta encolarlo
+                }
+            }
             PendingBoundCheck pc;
             pc.concept_name = cname;
             pc.arg = args[idx];
@@ -314,6 +384,7 @@ void TypeChecker::check_type_bounds(const std::vector<ast::TypeBound> &bounds,
             pending_bound_checks_.push_back(std::move(pc));
         }
     }
+    return all_ok;
 }
 
 bool TypeChecker::method_available_for_subst(
@@ -387,18 +458,13 @@ void TypeChecker::verify_pending_type_bounds() {
             const ConceptEval ev =
                 comptime_eval_concept(*this, pc.concept_name, pc.arg);
             if (!ev.found) {
-                diags_.error(pc.loc,
-                             "concepto desconocido '" + pc.concept_name +
-                                 "' en el bound de '" + pc.type_param + "'");
+                diags_.diag(pc.loc, DiagLevel::ERR, "VX2109",
+                            {pc.concept_name, pc.type_param});
                 continue;
             }
-            if (!ev.satisfied) {
-                diags_.error(pc.loc, "el tipo '" + type_to_string(pc.arg) +
-                                         "' no satisface el concepto '" +
-                                         pc.concept_name +
-                                         "' exigido por el parametro '" +
-                                         pc.type_param + "'");
-            }
+            if (!ev.satisfied)
+                report_unsatisfied_bound(diags_, pc.loc, pc.arg,
+                                         pc.concept_name, pc.type_param);
         }
     }
 }

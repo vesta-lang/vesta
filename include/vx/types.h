@@ -1575,6 +1575,30 @@ inline PrimitiveKind numeric_primitive_from_name(const std::string &name) {
 }
 
 /**
+ * @brief Inverso COMPLETO de @c primitive_name: cualquier primitivo por su
+ *        nombre, no solo los numericos.
+ *
+ * Recorre el propio @c primitive_name en vez de repetir la tabla, igual que
+ * @c numeric_primitive_from_name y por la misma razon: un tipo nuevo se
+ * reconoce en cuanto se anyade a un sitio, y las dos direcciones no pueden
+ * discrepar.
+ *
+ * Existe porque el receptor de TIPO necesita el primitivo a partir del nombre
+ * que el parser dejo escrito (`u64.sizeof()` llega como el identificador
+ * "u64"), y ahi valen tambien `bool`, `char` y `string`.
+ *
+ * @param name Nombre canonico del tipo.
+ * @return La categoria, o @c PrimitiveKind::COUNT si no es ninguna.
+ */
+inline PrimitiveKind primitive_from_name(const std::string &name) {
+    for (int i = 0; i < static_cast<int>(PrimitiveKind::COUNT); ++i) {
+        const PrimitiveKind k = static_cast<PrimitiveKind>(i);
+        if (name == primitive_name(k)) return k;
+    }
+    return PrimitiveKind::COUNT;
+}
+
+/**
  * @struct NumericRange
  * @brief Valores que caben en un tipo entero.
  *
@@ -1852,12 +1876,24 @@ inline bool types_assignable(const Type &target, const Type &value) noexcept {
             !value.pointee || value.pointee->kind == PrimitiveKind::VOID;
         if (v_void) return true;
     }
-    // string -> i64: extraer el GcHandle como entero opaco para FFI o
-    // comparaciones manuales.  La direccion es valida solo durante el
-    // lifetime del proceso (no exportar a otros procesos).
-    if (is_numeric(target.kind) && value.kind == PrimitiveKind::STRING) {
-        return primitive_size_bytes(target.kind) >= 8;
-    }
+    /* `i64 n = s;` con `s` una cadena NO vale, y hay que pedirlo: `(i64)s`.
+     *
+     * Estuvo permitido como conversion implicita para sacar el GcHandle
+     * "como entero opaco".  Tenia dos problemas, y el segundo es el que la
+     * retira:
+     *
+     *  - Es exactamente lo que la regla de mas arriba prohibe para
+     *    entero<->puntero, que ahi si exige el cast: un handle es lo mismo,
+     *    una referencia opaca.  Dos reglas para la misma cosa.
+     *  - Y sobre todo: lo que se leia dependia del MODO.  En la maquina
+     *    virtual una cadena es un GcHandle, asi que salia el handle; en
+     *    nativo es un valor de 24 bytes en la pila, asi que no hay handle que
+     *    sacar.  El mismo programa daba un numero distinto segun como se
+     *    ejecutara, sin avisar -- y `i64 n = s;` no se lee como "dame la
+     *    referencia interna", se lee como un error que nadie senyalo.
+     *
+     * Quien quiera la referencia la sigue teniendo, escribiendola: el cast
+     * explicito dice la intencion y se ve al leer. */
     // los handles de las colecciones primitivas son i64
     // opacos a runtime; la informacion del tipo de elemento solo vive
     // en el frontend para decidir el dispatch *_gc.  Una asignacion

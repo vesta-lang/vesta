@@ -1,0 +1,28 @@
+// -----------------------------------------------------------------------------
+// La mitad que USA: instancia la plantilla del otro modulo, dos veces
+// -----------------------------------------------------------------------------
+// Dos tipos distintos para que se creen DOS instancias y se vea que las dos
+// enlazan contra el MISMO estado del modulo que las ofrece -- que es lo que
+// separa "compila" de "funciona": si cada instancia se llevara su copia del
+// global, la cuenta saldria a uno.
+
+import prueba.plantilla only mide, llamadas, bytes_vistos;
+
+i32 main() {
+	i64 a = 20_i64;
+	i32 b = 5_i32;
+
+	// (20 * 2) + 1 = 41
+	i64 ra = mide<i64>(&a);
+	// (5 * 2) + 1 = 11
+	i64 rb = mide<i32>(&b);
+
+	println("ra=${ra} rb=${rb}");
+	// Dos instancias, UN solo estado: si cada una tuviera el suyo, esto seria 1.
+	println("llamadas=${llamadas()}");
+	// Diez por llamada, o sea veinte: prueba que el global `__` es UNO solo.
+	println("bytes=${bytes_vistos()}");
+
+	// 41 + 11 = 52; 52 - 10 = 42
+	return (i32)(ra + rb - 10);
+}

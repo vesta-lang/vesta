@@ -117,8 +117,17 @@ def main():
     lines.append("} // namespace vx")
     lines.append("")
 
+    # El fichero generado se escribe en UTF-8 SIN BOM, y no se restringe que
+    # caracteres puede llevar.  Lo que sale de aqui no son comentarios nuestros
+    # -- a los que si se les pide ASCII + enye -- sino los DATOS de las
+    # traducciones, y el catalogo es multi-idioma por diseno: limitarlo a un
+    # repertorio cierra la puerta a anadir chino, ruso o griego.  Antes se
+    # escribia con encoding="ascii", asi que ni siquiera un mensaje en espanol
+    # podia llevar la enye y el catalogo acababa con digrafos ("Anyade") que el
+    # usuario ve en pantalla.  Sin BOM porque el compilador de C++ lee la
+    # fuente como UTF-8 y una marca al principio le sobra.
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    with open(out, "w", encoding="ascii", newline="\n") as fh:
+    with open(out, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("\n".join(lines))
     print("generado %s (%d entradas, %d idiomas: %s)" %
           (out, len(entries), n, ", ".join(langs)))

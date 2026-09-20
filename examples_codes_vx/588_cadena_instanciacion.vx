@@ -1,0 +1,62 @@
+namespace ejemplos.cadena;
+
+// CUANDO FALLA EL CUERPO DE UNA GENERICA, ¿DONDE SE DICE?
+//
+// Una generica es una PLANTILLA.  Al llamarla, el compilador hace una copia de
+// su cuerpo con `T` ya sustituido -- eso es la monomorfizacion -- y es esa
+// copia la que se comprueba y la que se ejecuta.
+//
+// Si la copia falla, el error cae en una linea de la PLANTILLA: codigo que
+// quien llamo no escribio y probablemente no ha leido.  Ese es el muro de
+// errores de C++, y no es cuestion de que el mensaje sea largo: es que esta
+// escrito en el vocabulario del llamado cuando quien tiene que arreglarlo es
+// el que llama.
+//
+// Lo que falta es el CAMINO DE VUELTA, y es lo que se prueba aqui.  El error
+// sigue saliendo donde esta -- ahi es donde esta --, pero detras va la cadena
+// entera hasta la linea que el programador escribio de verdad.
+//
+// Con trece niveles se ve ademas lo que pasa al pasarse del tope: la cadena se
+// PLIEGA POR EL MEDIO, nunca por el final.  Los dos extremos son los que
+// valen -- donde fallo y la linea del usuario --; lo de en medio son pasos que
+// no escribio nadie.  Y el pliegue se DICE, con cuantos niveles se saltaron:
+// cortar sin avisar dejaria creyendo que lo que se ve es todo el camino.
+//
+// Compilar (DEBE fallar, y esa es la prueba):
+//   vm --vesta examples_codes_vx/588_cadena_instanciacion.vx -o n
+//
+// Sale, por este orden:
+//   error: funcion no declarada: 'no_declarada_a_proposito'   <- el fallo
+//   note: al comprobar 'fondo<string>', instanciada aqui       \
+//   ... siete niveles                                           > el camino
+//   note: ... 6 niveles mas por medio, omitidos                / (plegado)
+//   note: al comprobar 'n12<string>', instanciada aqui         <- TU linea
+
+// El fondo del pozo: aqui esta el fallo de verdad.
+i64 fondo<T>(T x) {
+	no_declarada_a_proposito();
+	return 0;
+}
+
+// Y trece escalones por encima, cada uno reenviando al de abajo.  Ninguno los
+// escribio quien llama, y por eso ninguno sirve como sitio donde mirar.
+i64 n00<T>(T x) => fondo(x);
+i64 n01<T>(T x) => n00(x);
+i64 n02<T>(T x) => n01(x);
+i64 n03<T>(T x) => n02(x);
+i64 n04<T>(T x) => n03(x);
+i64 n05<T>(T x) => n04(x);
+i64 n06<T>(T x) => n05(x);
+i64 n07<T>(T x) => n06(x);
+i64 n08<T>(T x) => n07(x);
+i64 n09<T>(T x) => n08(x);
+i64 n10<T>(T x) => n09(x);
+i64 n11<T>(T x) => n10(x);
+i64 n12<T>(T x) => n11(x);
+
+i32 main() {
+	// Esta es la unica linea sobre la que el programador puede actuar, y es la
+	// que la cadena conserva aunque se pliegue.
+	i64 r = n12("eco");
+	return (i32)r;
+}

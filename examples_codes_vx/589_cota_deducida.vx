@@ -1,0 +1,55 @@
+namespace ejemplos.cota;
+
+// LA COTA QUE EL CUERPO EXIGE, DICHA AUNQUE NADIE LA HAYA DECLARADO
+//
+// Cuando el cuerpo de una generica falla para un `T` concreto, hay dos formas
+// de contarlo y solo una sirve.
+//
+// La mala es el SINTOMA: "no se puede asignar 'string' a 'i64'", dicho de un
+// tipo ya sustituido y en una linea de la plantilla.  Quien llamo no escribio
+// esa linea y probablemente no la ha leido: el mensaje esta en el vocabulario
+// del llamado cuando el que tiene que arreglarlo es el que llama.  Eso es el
+// muro de errores de C++, y no se cura haciendolo mas corto.
+//
+// La buena es la CAUSA, en su vocabulario: "`suma_uno` exige que su `T` se
+// pueda asignar a un `i64`".  Eso es una cota -- la que habria que haber
+// declarado --, y el compilador la sabe: lo que el cuerpo intentaba hacer con
+// `T` ES la exigencia, y la tiene delante justo en el momento en que se viola.
+//
+// Por eso aqui se puede decir mas que en Rust.  Rust solo puede nombrar la
+// cota que ALGUIEN ESCRIBIO -- de hecho te obliga a escribirla antes de
+// dejarte compilar --.  Esta se DEDUCE, este declarada o no.
+//
+// Compilar (DEBE fallar, y esa es la prueba):
+//   vm --vesta examples_codes_vx/589_cota_deducida.vx -o n
+//
+// Sale, para cada uno de los dos:
+//   error: ... incompatible ...                         <- el sintoma, donde esta
+//   note:  'suma_uno' exige que su 'T' se pueda asignar
+//          a un 'i64', y 'string' no.  Nadie declaro
+//          esa cota: sale de lo que el cuerpo hace con 'T'   <- la CAUSA
+//   note:  al comprobar 'suma_uno<string>', instanciada aqui <- TU linea
+
+void solo_enteros(i64 v) { println("v=${v}"); }
+
+// (1) La exigencia sale de una ASIGNACION: el cuerpo mete la `T` en un `i64`.
+// Nadie escribio `<T: Integer>`, y aun asi la cota existe -- el cuerpo la
+// impone -- y es la que se nombra.
+i64 suma_uno<T>(T x) {
+	i64 n = x;
+	return n + 1;
+}
+
+// (2) Y aqui de una LLAMADA: la `T` se le pasa a algo que pide un `i64`.  La
+// exigencia es la misma y se deduce igual, por otro camino.
+void registrar<T>(T x) {
+	solo_enteros(x);
+}
+
+i32 main() {
+	// Las dos unicas lineas sobre las que el programador puede actuar, y las
+	// dos que las cadenas conservan.
+	i64 a = suma_uno("eco");
+	registrar("eco");
+	return (i32)a;
+}

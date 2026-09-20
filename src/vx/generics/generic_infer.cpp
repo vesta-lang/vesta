@@ -207,6 +207,27 @@ Type unresolved_param_type(const ast::TypeNode *t,
     uint32_t mask = 0;
     collect_vars(t, vars, mask);
     if (mask == 0) return Type{}; // no lleva variables: es un tipo de verdad
+    /* Lo que la variable no sepa NO se lleva por delante lo que si se sabe.
+     *
+     * `T*` es un PUNTERO apunte a lo que apunte: mide ocho bytes, viaja en un
+     * registro y se desreferencia.  Colapsarlo entero a "parametro de tipo"
+     * perdia eso, y con ello todo el que pregunta si algo es una direccion.
+     *
+     * La IDENTIDAD no se pierde: lo de dentro sigue siendo el parametro con su
+     * nombre, asi que `T*` y `U*` siguen siendo distintos para quien discrimina
+     * entre plantillas homonimas -- que es lo que hay que conservar --.
+     *
+     * Lo mismo con un array: `T[]` es un array de algo. */
+    if (t->kind == ast::NodeKind::PointerTypeNode) {
+        const auto *pn = static_cast<const ast::PointerTypeNode *>(t);
+        return Type::make_ptr(unresolved_param_type(pn->pointee.get(), vars),
+                              pn->is_virtual);
+    }
+    if (t->kind == ast::NodeKind::ArrayTypeNode) {
+        const auto *an = static_cast<const ast::ArrayTypeNode *>(t);
+        return Type::make_array(
+            unresolved_param_type(an->element_type.get(), vars), 0);
+    }
     Type u;
     u.kind = PrimitiveKind::TYPE_PARAM;
     u.struct_name = type_node_text(t);
@@ -308,6 +329,25 @@ bool match_type_pattern(TypeChecker &tc, const ast::TypeNode *pattern,
     }
 }
 
+/**
+ * @brief Si el patron de un parametro es una VARIABLE de tipo a secas (`T`).
+ *
+ * Es la forma de preguntar si el parametro PIDE algo del argumento.  `T*`,
+ * `Caja<T>` o `fn(T) -> R` piden una forma -- puntero, instanciacion, funcion
+ * --; `T` a secas no pide nada y se queda con lo que el argumento sea.
+ *
+ * @param pattern El tipo declarado del parametro.
+ * @param vars    Los nombres que son variables.
+ * @return true si es exactamente una variable, sin nada alrededor.
+ */
+inline bool pattern_is_bare_var(const ast::TypeNode *pattern,
+                                const std::vector<std::string> &vars) noexcept {
+    if (pattern == nullptr || pattern->kind != ast::NodeKind::NamedTypeNode)
+        return false;
+    const auto *n = static_cast<const ast::NamedTypeNode *>(pattern);
+    return n->type_args.empty() && var_index(vars, n->name) >= 0;
+}
+
 } // namespace generics
 
 const generics::DeductionPlan &TypeChecker::deduction_plan(
@@ -368,6 +408,27 @@ bool TypeChecker::deduce_call_type_args(
             if (const FunctionSig *fs = function_sig_by_name(aid->name))
                 at = Type::make_function(fs->param_types, fs->return_type);
         }
+        /* Y lo mismo con un LITERAL de cadena, por la misma razon.  Se MODELA
+         * como puntero a los bytes de la seccion estatica -- es lo que pide la
+         * frontera FFI -- y el CONTEXTO lo refina donde se pide otra cosa
+         * (`string s = "hola"`, un parametro declarado `string`, `println`).
+         *
+         * Aqui el patron es la variable a secas, o sea que NADIE esta pidiendo
+         * un puntero, y el tipo de una cadena es `string`: su tipo, no su
+         * representacion.  A `char*` se baja pidiendolo (`.cstr()`), igual que
+         * desde cualquier otra cadena.  Es la MISMA regla que ya aplica `auto a
+         * = "hola"` (ver la inferencia local en @c check_var_decl), que hasta
+         * ahora la deduccion generica no compartia: `f("hola")` ligaba
+         * `T = void*` y `f(s)` con `string s` ligaba `string`, o sea dos tipos
+         * para el mismo argumento segun como se hubiera escrito -- y con
+         * llamada uniforme eso parte en dos `"hola".f()` y `f("hola")`.
+         *
+         * Donde el patron SI pide una forma (`T*`, `T[]`, `Caja<T>`) no se
+         * toca: ahi hay contexto, y el contexto manda. */
+        if (at.kind == PrimitiveKind::PTR &&
+            e->args[pi]->kind == ast::NodeKind::StringLitExpr &&
+            generics::pattern_is_bare_var(params[pi]->type.get(), type_params))
+            at = Type{PrimitiveKind::STRING};
         /* Que un parametro no encaje NO es un fallo aqui: puede haber otro que
          * ligue la misma variable, y quien dice si la llamada vale es la
          * comprobacion de argumentos de siempre.  Aqui solo se recoge lo que se
@@ -492,7 +553,13 @@ bool TypeChecker::pick_generic_fn_template(ast::CallExpr *e,
     /* Ninguna o varias: en los dos casos se DICE, porque elegir en silencio
      * entre dos plantillas es decidir por el programador y ademas por un
      * criterio que no esta escrito en ningun sitio -- el orden en que se
-     * declararon --. */
+     * declararon --.
+     *
+     * Salvo que de ese nombre ya se dijera que esta definido dos veces: las dos
+     * plantillas SON esa colision, la llamada es ambigua por ella y no por otra
+     * cosa, y repetirlo en cada sitio de llamada entierra el error de verdad --
+     * el que senyala las dos definiciones -- bajo decenas de lineas iguales. */
+    if (fits > 1 && already_redefined(name)) return false;
     diags_.diag(e->loc, DiagLevel::ERR, fits == 0 ? "VX2090" : "VX2091",
                 {written_name(name)});
     return false;

@@ -106,7 +106,7 @@ es = "instruccion especifica de {0}: nunca sera IR, y esta bien -- lo que deberi
 
 [VXA021]
 en = "the instruction database does not know it, so not even what it does is known: add it to the database"
-es = "la base de instrucciones no la conoce, asi que no se sabe ni lo que hace: anadela a la base"
+es = "la base de instrucciones no la conoce, asi que no se sabe ni lo que hace: añadela a la base"
 
 # Por que se atasco el intento de pasar un bloque asm a IR.  Van dentro de
 # VXA018 como {2}: son el final de la frase, no oraciones completas.
@@ -690,7 +690,7 @@ es = "El enum ocupa {0} bytes."
 
 [VX9120]
 en = "Offset: **+{0}** (`{1}`)  Size: **{2}** byte(s)"
-es = "Desplazamiento: **+{0}** (`{1}`)  Tamano: **{2}** byte(s)"
+es = "Desplazamiento: **+{0}** (`{1}`)  Tamaño: **{2}** byte(s)"
 
 [VX9121]
 en = "Bit field: bits {0}..{1} of the word at +{2}"
@@ -857,8 +857,8 @@ en = "formatter: the source could not be tokenized, left untouched"
 es = "formateador: el fuente no se pudo tokenizar; se deja intacto"
 
 [VXF004]
-en = "formatter: formatting would have changed the program; file left untouched"
-es = "formateador: dar formato habria cambiado el programa; el fichero se deja intacto"
+en = "formatter: formatting would have changed the program at line {0}, column {1}; file left untouched"
+es = "formateador: dar formato habria cambiado el programa en la linea {0}, columna {1}; el fichero se deja intacto"
 
 # --- lexer (VXLxxx) ---
 
@@ -912,7 +912,7 @@ es = "nada que decir: '{0}' -- no es ignorancia, es conocimiento, y no hay nada 
 
 [VXA062]
 en = "depends on execution: '{0}' is only known at run time; add a precondition, a check, or speculate with a guard"
-es = "depende de la ejecucion: '{0}' solo se sabe al ejecutar; anade una precondicion, una comprobacion, o especula con guarda"
+es = "depende de la ejecucion: '{0}' solo se sabe al ejecutar; añade una precondicion, una comprobacion, o especula con guarda"
 
 [VXA063]
 en = "shape not recognized: the analysis does not cover '{0}'; write it as '{1}' and it becomes provable"
@@ -1980,7 +1980,7 @@ es = "no produjo ninguna instruccion (el ensamblador no dio error)"
 
 [VX9246]
 en = "note: `--asm-file` expects MASM/Intel syntax, where the size operator carries `ptr` (`add byte ptr [rcx+8], 2`).  The inline asm block of the language uses NASM syntax, without it."
-es = "nota: `--asm-file` espera sintaxis MASM/Intel, donde el operador de tamano lleva `ptr` (`add byte ptr [rcx+8], 2`).  El bloque de ensamblador en linea del lenguaje usa sintaxis NASM, sin el."
+es = "nota: `--asm-file` espera sintaxis MASM/Intel, donde el operador de tamaño lleva `ptr` (`add byte ptr [rcx+8], 2`).  El bloque de ensamblador en linea del lenguaje usa sintaxis NASM, sin el."
 
 [VX9248]
 en = "`--unwind`: unrecognised value '{0}'.  Use auto|none|table|cfi|both."
@@ -1996,7 +1996,7 @@ es = "no se pueden mezclar objetos {1} y {3}: '{0}' es {1} y '{2}' es {3}.  Son 
 
 [VX9252]
 en = "the size of `.pdata` is not a multiple of 12: a RUNTIME_FUNCTION is three RVAs, so a half entry would be left at the end and the system would read it anyway."
-es = "el tamano de `.pdata` no es multiplo de 12: un RUNTIME_FUNCTION son tres RVA, asi que quedaria una entrada a medias al final y el sistema la leeria igual."
+es = "el tamaño de `.pdata` no es multiplo de 12: un RUNTIME_FUNCTION son tres RVA, asi que quedaria una entrada a medias al final y el sistema la leeria igual."
 
 [VX9253]
 en = "`.pdata` is larger than 4 GiB, which does not fit the field that announces it."
@@ -2023,8 +2023,8 @@ en = "the frame of '{0}' cannot be described in `.xdata`: its prologue does not 
 es = "el marco de '{0}' no se puede describir en `.xdata`: su prologo no cabe en lo que `UNWIND_INFO` sabe expresar.  Compila con `--unwind none` para dejar la tabla fuera."
 
 [VX9258]
-en = "symbols with no provider: {0}.  They are not defined in the image, and no `extern` block or plugin declares which library they come from, so there is no import to emit -- and none is invented, because a made-up one only moves the failure to load time on someone else's machine.  Every runtime service is a hook: it is provided by the stdlib module that covers it by default, by an override of your own (`@AllocatorOverride`, `@PanicHandler`, ...), by an `extern` naming the library, or by you under `--freestanding`."
-es = "simbolos sin proveedor: {0}.  No estan definidos en la imagen, y ningun bloque `extern` ni plugin declara de que biblioteca salen, asi que no hay ningun import que emitir -- y no se inventa uno, porque inventarlo solo mueve el fallo al momento de CARGAR en la maquina de otro.  Cada servicio de runtime es un gancho: lo provee el modulo de la stdlib que lo cubre por defecto, un override tuyo (`@AllocatorOverride`, `@PanicHandler`, ...), un `extern` que diga la biblioteca, o tu mismo con `--freestanding`."
+en = "symbols with no provider: {0}.  They are not defined in the image, and no `extern` block or plugin declares which library they come from, so there is no import to emit -- and none is invented, because a made-up one only moves the failure to load time on someone else's machine.  Every runtime service is a hook: it is provided by the stdlib module that covers it by default, by a function of your own marked `@Provides(<builtin>)`, by an `extern` naming the library, or by you under `--freestanding`."
+es = "simbolos sin proveedor: {0}.  No estan definidos en la imagen, y ningun bloque `extern` ni plugin declara de que biblioteca salen, asi que no hay ningun import que emitir -- y no se inventa uno, porque inventarlo solo mueve el fallo al momento de CARGAR en la maquina de otro.  Cada servicio de runtime es un gancho: lo provee el modulo de la stdlib que lo cubre por defecto, una funcion tuya marcada `@Provides(<builtin>)`, un `extern` que diga la biblioteca, o tu mismo con `--freestanding`."
 
 # --- la ayuda del propio subcomando y las familias (VXW903-VXW911) ---
 #
@@ -2447,6 +2447,82 @@ es = "el argumento {0}"
 en = "'{0}' is not something a @Target can ask about: no target satisfies it, so everything under this mark would be silently dropped.  The keys are os, arch, cpu, mode, tier, and compiler/vm with a version comparison"
 es = "'{0}' no es algo por lo que un @Target pueda preguntar: ningun objetivo lo cumple, asi que todo lo que lleve esta marca se caeria sin decir nada.  Las claves son os, arch, cpu, mode, tier, y compiler/vm con comparacion de version"
 
+# --- sustituto del built-in declarado DOS VECES (VX2118) ---
+#
+# `@StringConcat`, `@StringEq` y `@SyncImpl` dicen quien sustituye a algo que el
+# lenguaje ya trae.  Dos candidatos no es una sobrecarga: es una pregunta sin
+# respuesta, porque el que gana lo decidiria el orden de las declaraciones.  Se
+# nombran LAS DOS para no tener que buscar la otra.
+
+[VX2118]
+en = "'@{0}' is declared twice: '{1}' and '{2}'.  It says who replaces something the language already provides, so there can be only one -- with two, which one wins would depend on the order they are written in"
+es = "'@{0}' esta declarada dos veces: '{1}' y '{2}'.  Dice quien sustituye a algo que el lenguaje ya trae, asi que solo puede haber una -- con dos, cual gana dependeria del orden en que estan escritas"
+
+# --- @SyncImpl con un nombre que no dice su papel (VXW935) ---
+#
+# El papel de un `@SyncImpl` no se declara: se lee del NOMBRE, que es un ABI
+# fijo.  Un nombre que no es ninguno de los dos deja la anotacion sin efecto, y
+# eso callado parece que funciona hasta que el monitor no se adquiere.
+#
+# Es un AVISO porque el programa sigue siendo valido: usa el monitor del
+# lenguaje.
+
+[VXW935]
+en = "@SyncImpl on '{0}': its name ends in neither 'monitor_enter' nor 'monitor_exit', which is how the role is chosen, so the annotation does nothing.  A namespace prefix is fine: what counts is the last segment"
+es = "@SyncImpl en '{0}': su nombre no acaba ni en 'monitor_enter' ni en 'monitor_exit', que es de donde sale el papel, asi que la anotacion no hace nada.  El prefijo de namespace no estorba: lo que cuenta es el ultimo segmento"
+
+# --- @SyncImpl a medias (VX2119) ---
+#
+# Adquirir y liberar son UNA decision.  Sustituir solo uno de los dos deja el
+# monitor del lenguaje emparejado con el del usuario, o sea un cerrojo que se
+# toma de una forma y se suelta de otra -- que es peor que no sustituir nada --.
+
+[VX2119]
+en = "@SyncImpl is incomplete: '{0}' is missing.  Acquiring and releasing are one decision; replacing only one of them pairs the language's monitor with yours, so the lock would be taken one way and released another"
+es = "@SyncImpl esta a medias: falta '{0}'.  Adquirir y liberar son UNA decision; sustituir solo uno empareja el monitor del lenguaje con el tuyo, asi que el cerrojo se tomaria de una forma y se soltaria de otra"
+
+# --- anotacion que no existe (VXP092 / VXP093) ---
+#
+# El parser leia el nombre tras el `@`, lo comparaba con los que sabe manejar, y
+# LO QUE NO RECONOCIA LO DESCARTABA SIN DECIR NADA.  Una errata compilaba, salia
+# con codigo cero, y la anotacion no hacia nada -- que con un `@Override` es lo
+# que separa redefinir un metodo de anyadir una sobrecarga, y con un
+# `@Provides` es que el binario use el asignador de la biblioteca en vez del
+# tuyo --.  El fallo aparecia lejos, o no aparecia.
+#
+# Dos mensajes porque hay dos situaciones y la ayuda util es distinta: si hay un
+# nombre parecido, lo mas probable es una errata y se dice CUAL; si no lo hay,
+# lo que hace falta es saber que ese nombre no existe en el lenguaje.
+
+[VXP092]
+en = "'@{0}' is not an annotation of the language.  Did you mean '@{1}'?"
+es = "'@{0}' no es una anotacion del lenguaje.  Querias decir '@{1}'?"
+
+[VXP093]
+en = "'@{0}' is not an annotation of the language.  What is written after the '@' has to be one of the ones it knows: an unknown name used to be dropped without a word, and the annotation simply did nothing"
+es = "'@{0}' no es una anotacion del lenguaje.  Lo que va tras el '@' tiene que ser una de las que conoce: un nombre desconocido se descartaba sin una palabra, y la anotacion no hacia nada"
+
+# --- anotacion de gancho RETIRADA (VXP091) ---
+#
+# `@AllocatorOverride` y `@PanicHandler` fueron el primer mecanismo de ganchos,
+# de cuando cada servicio del runtime tenia el suyo.  Hoy el gancho se nombra
+# por el BUILTIN que cubre -- `@Provides(malloc)`, `@Provides(free)`,
+# `@Provides(panic)` --, que es UNA sola forma para todos y ademas se comprueba:
+# el nombre del builtin tiene que existir y la firma tiene que encajar.
+#
+# Lo que obliga a que esto sea un ERROR y no un aviso: cuando los consumidores
+# pasaron a leer `@Provides`, las viejas dejaron de leerse y el parser las
+# descartaba sin decir nada.  Un `@AllocatorOverride` seguia compilando, salia
+# con codigo cero, y el binario usaba el asignador de la biblioteca en vez del
+# del programador -- que en freestanding es justo lo que no hay --.  Nadie se
+# enteraba hasta enlazar, o hasta ejecutar.
+#
+# El mensaje dice el reemplazo EXACTO para no obligar a buscarlo.
+
+[VXP091]
+en = "'@{0}' was retired: a hook is now named after the BUILTIN it covers.  Write {1} instead -- one single form for every runtime service, and one that is checked (the builtin has to exist and the signature has to match)"
+es = "'@{0}' esta retirada: un gancho se nombra ahora por el BUILTIN que cubre.  Escribe {1} en su lugar -- una sola forma para todos los servicios del runtime, y ademas comprobada (el builtin tiene que existir y la firma tiene que encajar)"
+
 # --- lo que no cabe en el modo nativo (VXW924) ---
 #
 # El analisis existia y lo consumia UN solo sitio, el editor: el mismo codigo
@@ -2521,7 +2597,7 @@ es = "@Hook: el gancho '{0}' no se instalo en ningun sitio: no hay ninguna funci
 # tres funciones anidadas: 3 entradas, 1 sola salida.
 [VXW932]
 en = "@Hook(exit): this module throws, and an exception does NOT leave through the epilogue: the functions it crosses will not call '{0}'.  Add a @Hook(unwind) if the hook keeps a count of the entries"
-es = "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Anade un @Hook(unwind) si el gancho lleva cuenta de las entradas"
+es = "@Hook(exit): este modulo lanza excepciones, y una excepcion NO sale por el epilogo: las funciones que atraviesa no llamaran a '{0}'.  Añade un @Hook(unwind) si el gancho lleva cuenta de las entradas"
 
 # --- @Hook: un asm que mueve la pila invalida `call_site` (VXW934) ---
 #
@@ -2760,7 +2836,7 @@ es = "'{0}' ya declara un constructor con esos mismos parametros"
 # igual y toma lo mismo.  {0} el metodo, {1} el tipo.
 ["VX2063"]
 en = "'{1}' already has a method '{0}' with those parameters; an 'impl' adds methods, it cannot redefine one"
-es = "'{1}' ya tiene un metodo '{0}' con esos parametros; un 'impl' anyade metodos, no puede redefinir uno"
+es = "'{1}' ya tiene un metodo '{0}' con esos parametros; un 'impl' añade metodos, no puede redefinir uno"
 # Y al construir: se escribio una llamada que ningun constructor acepta.  El
 # nombre del tipo entra como dato; la lista de los que hay la da el editor.
 ["VX2064"]
@@ -3387,9 +3463,118 @@ es = "la variable de tipo '{0}' se llama como un tipo que ya existe: ponle otro 
 en = "@Provides: the builtin '{0}' does not declare a fixed signature, so it cannot be provided yet.  Its typing is bespoke -- what it returns depends on the call site -- and there is nothing to check a provider against."
 es = "@Provides: el builtin '{0}' no declara una firma fija, asi que todavia no se puede proveer.  Su tipado es a medida -- lo que devuelve depende del sitio de llamada -- y no hay contra que comprobar a quien lo provea."
 
+# Un proveedor que no se puede alcanzar es PEOR que no tenerlo: el programa se
+# enlaza contra lo que haya -- la libc -- o contra un nombre que nadie emitio, y
+# en los dos casos sin una palabra.  {0} el builtin, {1} lo que se encontro.
+# Las cinco de abajo son la misma situacion: una de las que devuelven un TIPO,
+# preguntada sobre uno que no lo tiene.  Se DICEN en vez de devolver un tipo
+# vacio -- un vacio de respuesta convierte "este caso no se trata" en un dato, y
+# quien lo recibe sigue como si nada: el vacio se lee como `void` mas abajo y el
+# fallo sale lejos del sitio, hablando de otra cosa.
+#
+# Cada una nombra su PREGUNTA, que es lo que permite escribir codigo correcto
+# sobre un tipo que no se conoce de antemano -- la misma pareja que forman
+# `method.has` y `method.name`.  {0} es el tipo por el que se pregunto.
+["VX2103"]
+en = "'type.result<{0}>' has no answer: '{0}' is not callable, so it returns nothing.  Ask first with 'type.is_callable<{0}>()'"
+es = "'type.result<{0}>' no tiene respuesta: '{0}' no es invocable, asi que no devuelve nada.  Preguntalo antes con 'type.is_callable<{0}>()'"
+
+["VX2104"]
+en = "'type.inner<{0}>' has no answer: '{0}' wraps no other type.  It is the pointee of 'T*', the element of 'T[N]' and what is inside 'Optional<T>', 'Future<T>', 'borrow<T>', 'unique<T>' or 'shared<T>'.  Ask first with 'type.has_inner<{0}>()'"
+es = "'type.inner<{0}>' no tiene respuesta: '{0}' no envuelve a ningun otro tipo.  Es lo apuntado de un 'T*', el elemento de un 'T[N]' y lo que hay dentro de 'Optional<T>', 'Future<T>', 'borrow<T>', 'unique<T>' o 'shared<T>'.  Preguntalo antes con 'type.has_inner<{0}>()'"
+
+["VX2105"]
+en = "'type.error<{0}>' has no answer: '{0}' is not a 'Result<V, E>', and E is what this reads.  Ask first with 'type.is_result<{0}>()'"
+es = "'type.error<{0}>' no tiene respuesta: '{0}' no es un 'Result<V, E>', y lo que esto lee es la E.  Preguntalo antes con 'type.is_result<{0}>()'"
+
+["VX2106"]
+en = "'type.base<{0}>' has no answer: '{0}' is not a class, so there is no base to read.  Ask first with 'type.has_base<{0}>()'"
+es = "'type.base<{0}>' no tiene respuesta: '{0}' no es una clase, asi que no hay base que leer.  Preguntalo antes con 'type.has_base<{0}>()'"
+
+["VX2107"]
+en = "'type.base<{0}>' has no answer: '{0}' extends no class.  Ask first with 'type.has_base<{0}>()' -- a class with no base is a normal case, not an empty type"
+es = "'type.base<{0}>' no tiene respuesta: '{0}' no extiende ninguna clase.  Preguntalo antes con 'type.has_base<{0}>()' -- una clase sin base es un caso normal, no un tipo vacio"
+
+# Un `<T: Concepto>` o un `where T: Concepto` que no se cumple.  {0} el tipo
+# que llego, {1} el concepto, {2} la ranura de tipo que lo exige.
+["VX2108"]
+en = "type '{0}' does not satisfy the concept '{1}' required by the type parameter '{2}'"
+es = "el tipo '{0}' no satisface el concepto '{1}' exigido por el parametro '{2}'"
+
+# El bound nombra un concepto que no existe.  {0} el concepto, {1} la ranura.
+["VX2109"]
+en = "unknown concept '{0}' in the bound of '{1}'"
+es = "concepto desconocido '{0}' en el bound de '{1}'"
+
+# La nota que acompana a un error dentro del cuerpo de una INSTANCIA.  Sin
+# ella el error senyala la linea de la PLANTILLA -- codigo que quien llamo no
+# escribio y probablemente no ha leido --, que es el muro de errores de C++: el
+# mensaje habla el vocabulario del llamado y quien tiene que arreglarlo es el
+# que llama.  {0} como se escribe la instancia (`apply<string, cfn(i64) ->
+# void>`), nunca su etiqueta interna.
+["VX2110"]
+en = "while checking '{0}', instantiated here"
+es = "al comprobar '{0}', instanciada aqui"
+
+# La cadena de instanciacion era mas larga que el tope y se ha plegado.  Se
+# DICE cuantos niveles se saltaron: cortar sin avisar deja al que lee creyendo
+# que lo que ve es todo, y lo que se omitio esta justo en medio de lo que
+# necesita.  {0} cuantos niveles no se muestran.
+["VX2111"]
+en = "... {0} more levels in between, omitted"
+es = "... {0} niveles mas por medio, omitidos"
+
+# Se asigno una cadena donde se esperaba un numero.  Estuvo permitido de forma
+# implicita para sacar el GcHandle, y se retiro: en la maquina virtual una
+# cadena ES un handle, pero en nativo es un valor de 24 bytes en la pila, asi
+# que lo que salia dependia del MODO.  Quien quiera la referencia la pide.
+# {0} el tipo al que se asignaba.
+["VX2112"]
+en = "a string is not a number.  What it holds depends on the mode -- a GC handle on the virtual machine, 24 bytes on the stack in native -- so it is not implicit: write `({0})s` to ask for the reference, or `s.length()` / `s.bytes()` if what you wanted was a count"
+es = "una cadena no es un numero.  Lo que guarda depende del MODO -- un handle del recolector en la maquina virtual, 24 bytes en la pila en nativo --, asi que no es implicito: escribe `({0})s` si quieres la referencia, o `s.length()` / `s.bytes()` si lo que querias era una cuenta"
+
+# La COTA que el cuerpo de una generica exige, deducida en el momento en que
+# se viola, la haya declarado alguien o no.  Es lo que separa el sintoma -- "no
+# se puede asignar 'string' a 'i64'", dicho de un tipo ya sustituido, dentro de
+# un cuerpo que quien llama no escribio -- de la causa, dicha en su vocabulario.
+# {0} la plantilla, {1} la ranura de tipo, {2} lo que se le exige, {3} lo que
+# llego.
+["VX2113"]
+en = "'{0}' requires its '{1}' to be assignable to '{2}', and '{3}' is not.  Nobody declared that constraint; it comes from what the body does with '{1}'"
+es = "'{0}' exige que su '{1}' se pueda asignar a un '{2}', y '{3}' no.  Nadie declaro esa cota: sale de lo que el cuerpo hace con '{1}'"
+
+# Dos definiciones del mismo simbolo.  {0} el nombre tal y como se escribe --
+# `unidades.metrico.doble`, no la etiqueta aplanada, que es interna.
+["VX2114"]
+en = "'{0}' is already defined"
+es = "'{0}' ya esta definida"
+
+# La nota que ensenya la OTRA.  Sin ella el error senyala un solo sitio, y
+# cuando las dos estan en ficheros distintos eso es un fichero que la declara
+# UNA vez al que se le dice que la redefine.
+["VX2115"]
+en = "the other one is here"
+es = "la otra, aqui"
+
+# Y por que aparece un segundo fichero: reparar un namespace entre varios
+# ficheros es la funcion -- la stdlib lo hace --, asi que no es el problema; el
+# problema es tener el mismo simbolo dos veces dentro.  Solo se dice cuando las
+# dos posiciones son de ficheros DISTINTOS.  {0} el namespace.
+["VX2116"]
+en = "a namespace can be split across files -- the stdlib does it -- and then it is ONE: both definitions land in '{0}'"
+es = "un namespace puede repartirse en varios ficheros -- la stdlib lo hace -- y entonces es UNO: las dos definiciones caen en '{0}'"
+
+["VX2102"]
+en = "@Provides: '{1}' says it covers the builtin '{0}', but it cannot be reached: it looks like a template and no instance of it could be made.  A template emits no symbol -- its instances do -- so wiring its name would ask the linker for something nobody emitted."
+es = "@Provides: '{1}' dice cubrir el builtin '{0}', pero no se le puede alcanzar: parece una plantilla y no se pudo crear ninguna instancia suya.  Una plantilla no emite simbolo -- lo emiten sus instancias --, asi que cablear su nombre seria pedirle al enlazador algo que nadie emitio."
+
+["VX2117"]
+en = "'{0}.{1}(...)': the type '{0}' does declare '{1}', but not as `static`, so it needs a receiver and cannot be called through the type.  Add `static` to its declaration -- that is how the stdlib declares its own ({0}'s neighbours: `public static ... max()`) -- or call it on an instance."
+es = "'{0}.{1}(...)': el tipo '{0}' SI declara '{1}', pero no como `static`, asi que necesita un receptor y no se le puede llamar por el tipo.  Añade `static` a su declaracion -- es como la stdlib declara los suyos (`public static ... max()`) -- o llamalo sobre una instancia."
+
 ["VX2097"]
-en = "@Provides: '{0}' does not meet the contract of the builtin '{1}', which takes ({2}) and returns {3}.  The annotation names the builtin, but what the function implements is the primitive underneath, and its signature is the one to match."
-es = "@Provides: '{0}' no cumple el contrato del builtin '{1}', que toma ({2}) y devuelve {3}.  La anotacion nombra el builtin, pero lo que la funcion implementa es el primitivo de debajo, y su firma es la que hay que cumplir."
+en = "@Provides: '{0}' does not meet the contract of the builtin '{1}': it takes ({4}) and returns {5}, where the builtin takes ({2}) and returns {3}.  The annotation names the builtin, but what the function implements is the primitive underneath, and its signature is the one to match."
+es = "@Provides: '{0}' no cumple el contrato del builtin '{1}': toma ({4}) y devuelve {5}, donde el builtin toma ({2}) y devuelve {3}.  La anotacion nombra el builtin, pero lo que la funcion implementa es el primitivo de debajo, y su firma es la que hay que cumplir."
 
 # Un `out` dice "esto es un hueco donde escribo", y el receptor de un punto se
 # lee como el SUJETO de la operacion: `s.f()` dejaria `s` modificada sin que
@@ -3401,3 +3586,29 @@ es = "@Provides: '{0}' no cumple el contrato del builtin '{1}', que toma ({2}) y
 ["VX2098"]
 en = "'{0}' cannot be called through the dot: its '{1}' parameter is 'out', a slot it only writes -- the receiver of a dot is the SUBJECT of the call, not an output slot.  Write it as a free call, f(x, ...), or declare the parameter 'inout' if it also reads it"
 es = "'{0}' no se llama por el punto: su parametro '{1}' es 'out', una ranura que solo escribe -- y el receptor de un punto es el SUJETO de la llamada, no un hueco de salida.  Escribela como llamada libre, f(x, ...), o declara el parametro 'inout' si tambien lo lee"
+
+# `sizeof<t>()` con `t` un PARAMETRO de tipo `Type`.  El mensaje de antes decia
+# "tipo no reconocido", que es falso y manda a buscar un tipo que no existe: `t`
+# esta ahi, declarado dos lineas arriba, y lo que pasa es otra cosa -- su valor
+# depende de la llamada, y en posicion de tipo hace falta saberlo al comprobar.
+# Un `comptime Type X = ...` si vale, porque ahi el valor es uno solo.
+# {0} el builtin, {1} el parametro.
+["VX2099"]
+en = "'{0}<{1}>' cannot be resolved: '{1}' is a 'Type' PARAMETER, and its value depends on the call, so it is not known where the type is needed.  A 'comptime Type' constant does work, or declare the function generic: f<T>(...)"
+es = "'{0}<{1}>' no se puede resolver: '{1}' es un PARAMETRO de tipo 'Type', y su valor depende de la llamada, asi que no se conoce donde hace falta el tipo.  Una constante 'comptime Type' si vale, o declara la funcion generica: f<T>(...)"
+
+# Un indice fuera de lo que `scoped.method.count<T>()` dijo.  Se DICE en vez de
+# devolver el vacio: el indice sale de un contador que el propio programa acaba
+# de consultar, asi que descuadrarlos es un error de quien lo escribe -- y una
+# cadena vacia se veria como "ese metodo no tiene nombre".  Se dan los tres
+# datos para que se vea la resta: {0} el indice, {1} el tipo, {2} cuantos hay.
+# Donde va un tipo se escribio una llamada que no dio ninguno.  Se dice en vez
+# de dejar el tipo vacio: callando, el error salia despues y hablaba de otra
+# cosa -- de un `void` que el usuario no escribio en ninguna parte.
+["VX2101"]
+en = "this does not produce a type: where a type is expected, the call has to be resolvable at compile time and return a 'Type' (as 'field.type_at<T>(i)' or 'scoped.method.result<T>(i)' do)"
+es = "esto no produce un tipo: donde va un tipo, la llamada tiene que resolverse al compilar y devolver un 'Type' (como hacen 'field.type_at<T>(i)' o 'scoped.method.result<T>(i)')"
+
+["VX2100"]
+en = "scoped method {0} of '{1}' does not exist: only {2} are reachable from here.  The index comes from 'scoped.method.count<{1}>()', and what it counts depends on what THIS file imports"
+es = "el metodo alcanzable {0} de '{1}' no existe: desde aqui solo se alcanzan {2}.  El indice sale de 'scoped.method.count<{1}>()', y lo que ese cuenta depende de lo que importa ESTE fichero"

@@ -64,6 +64,24 @@ std::string mangle_type(const Type &t) {
     case PrimitiveKind::CLASS:
     case PrimitiveKind::STRUCT: return t.struct_name;
     case PrimitiveKind::STRING: return "str";
+    case PrimitiveKind::VOID: return "void";
+    case PrimitiveKind::FUNCTION: {
+        /* La FIRMA entera y si lleva entorno, por la misma razon que el
+         * puntero incluye a que apunta: si no, TODAS las funciones mangleaban
+         * igual -- caian en el caso general, que da `x` -- y dos
+         * instanciaciones que solo se diferencian en la funcion que reciben
+         * salian con la MISMA etiqueta.  La segunda se daba por ya generada y
+         * las llamadas acababan en la primera, o sea ejecutando otra funcion
+         * que la escrita. */
+        std::string s = t.fn_is_raw ? "cfn" : "fn";
+        for (const Type &p : t.fn_params()) {
+            s += "_";
+            s += mangle_type(p);
+        }
+        s += "_to_";
+        s += t.pointee ? mangle_type(*t.pointee) : "void";
+        return s;
+    }
     default: return "x";
     }
 }
@@ -115,6 +133,28 @@ std::unique_ptr<ast::TypeNode> type_node_from_type(const Type &a,
         n->loc = loc;
         n->name = a.struct_name;
         return n;
+    }
+    case PrimitiveKind::FUNCTION: {
+        /* Una funcion se reconstruye ENTERA: sus parametros, su retorno y si
+         * es `cfn` o `fn`.  Cayendo en el caso general salia un primitivo
+         * pelado -- `fn() -> ?`, sin parametros y sin retorno --, asi que
+         * pasar una funcion a un parametro de tipo suelto (`f<T, F>(T x, F
+         * f)`) fallaba al comprobar el argumento contra un tipo que no era el
+         * que se habia deducido.  Es lo que obligaba a escribir la generica
+         * fijando `cfn(T) -> R` -- y entonces una lambda ya no valia. */
+        auto fnode = std::make_unique<ast::FunctionTypeNode>();
+        fnode->loc = loc;
+        fnode->is_raw = a.fn_is_raw;
+        fnode->is_variadic = a.fn_is_variadic;
+        fnode->param_types.reserve(a.fn_params().size());
+        for (const Type &pt : a.fn_params())
+            fnode->param_types.push_back(type_node_from_type(pt, loc));
+        /* El retorno NUNCA es nulo: el parser mete `void` cuando se omite la
+         * flecha, y quien lee el nodo cuenta con eso. */
+        fnode->return_type =
+            a.pointee ? type_node_from_type(*a.pointee, loc)
+                      : type_node_from_type(Type{PrimitiveKind::VOID}, loc);
+        return fnode;
     }
     default: {
         auto p = std::make_unique<ast::PrimitiveTypeNode>();
@@ -194,6 +234,22 @@ std::unique_ptr<ast::TypeNode> clone_type_with_subst(const ast::TypeNode *t,
             f->param_types.push_back(clone_type_with_subst(pt.get(), g));
         f->return_type = clone_type_with_subst(src->return_type.get(), g);
         return f;
+    }
+    /* Y un tipo CALCULADO, que es una llamada y por tanto tambien puede
+     * mencionar los type-params: `type.result<F>()` como retorno es lo que
+     * permite escribir una generica de orden superior sin fijar de antemano si
+     * recibe un `fn` o un `cfn`.
+     *
+     * Cayendo en el caso general se devolvia NULO -- el tipo desaparecia --, y
+     * un retorno que no esta se lee como `void`: todas las instancias
+     * devolvian void, y el cuerpo de la plantilla fallaba con "return con
+     * valor en funcion declarada void" sobre una funcion que no lo es. */
+    case ast::NodeKind::ComputedTypeNode: {
+        auto *src = static_cast<const ast::ComputedTypeNode *>(t);
+        auto c = std::make_unique<ast::ComputedTypeNode>();
+        c->loc = src->loc;
+        c->expr = clone_expr(src->expr.get(), g);
+        return c;
     }
     default: return nullptr;
     }

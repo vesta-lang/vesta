@@ -2158,8 +2158,66 @@ def modulo_case(tag, carpeta, expected, line=None):
 # Los ejemplos de VARIOS ficheros.  Todos llegan a 42 por caminos distintos --
 # es la convencion del corpus -- asi que el numero no es una casualidad que se
 # congela: es la respuesta que el ejemplo dice que va a dar.
+modulo_case("plantilla_cruza_modulo585", "585_plantilla_cruza_modulo", 42)
+EXPECT587 = [
+    r"<0x2a>",
+    r"\[fin\] suma=42",
+]
+
+
+@case("provides_asignador_modulo587")
+def _(ctx):
+    """El proveedor en OTRO modulo, generico y no generico, y en los TRES modos.
+
+    No basta con `modulo_case`, que mira el valor de retorno en la maquina
+    virtual y el JIT: lo que aqui se prueba solo se ve en el TEXTO y solo falla
+    en NATIVO.
+
+    El texto, porque un `@Provides` que no cruzara la frontera no daria un
+    error: daria `42` en vez de `<0x2a>`, con los tres modos de acuerdo y el
+    programa usando el del lenguaje sin que nadie se entere.  Eso es justo lo
+    que pasaba con un proveedor NO generico -- el papel vivia solo en el fuente
+    del modulo que lo declara, y solo viajaba de rebote si era una plantilla,
+    metido dentro de su texto --.
+
+    Y nativo, porque es el unico modo donde el asignador del programa tiene que
+    existir de verdad: `etiqueta(string)` hace que el compilador emita por su
+    cuenta una liberacion que el programa no escribe, y sin proveedor el
+    binario acababa pidiendo `malloc` y `free` a la libc y no enlazaba.  En
+    FRIO ademas, que es cuando el modulo del asignador no esta ya compilado.
+    """
+    carpeta = "587_provides_asignador_modulo"
+    src = carpeta + "/main.vx"
+    if not ctx.compile_vx(ctx.src(src), "pam587"):
+        return
+    ctx.ok("compilacion %s -> .velb" % src)
+
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("pam587", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 42:
+            ctx.fail("%s (-m %s): R00 == %s, se esperaba 42" % (carpeta, modo, got),
+                     log)
+            return
+        expect_lines(ctx, log, "%s (-m %s)" % (carpeta, modo), EXPECT587)
+        ctx.ok("%s (-m %s): los proveedores del otro modulo corrieron" % (carpeta, modo))
+
+    exe = aot_build(ctx, ctx.src(src), "pam587_aot", "%s (-m aot)" % carpeta)
+    rc, log = ctx.run([exe])
+    if exit_code(rc) != 42:
+        ctx.fail("%s (-m aot): exit == %d, se esperaba 42" % (carpeta, exit_code(rc)),
+                 log)
+        return
+    expect_lines(ctx, log, "%s (-m aot)" % carpeta, EXPECT587)
+    ctx.ok("%s (-m aot): el asignador del otro modulo enlaza y corre" % carpeta)
 modulo_case("mod_import_selectivo", "ns_import_selectivo", 42)
 modulo_case("mod_import_by_namespace", "ns_import_by_namespace", 42)
+# El tipo escrito CUALIFICADO cruzando el modulo, que es como se escribe en cuanto hay
+# namespaces.  De las tres rutas que registran un struct importado solo UNA traia sus
+# metodos, asi que el mismo tipo los tenia o no segun como se escribiera el import:
+# con `only` si, con el nombre cualificado no.  No lo pisaba nadie porque la stdlib
+# expone sus structs con funciones libres o se importa con `only`.
+modulo_case("mod_tipo_cualificado", "ns_tipo_cualificado", 42)
 modulo_case("mod_sobrecarga_cruzando", "sobrecarga_cruzando_modulos", 42)
 modulo_case("mod_ns_internal", "ns_internal", 42)
 modulo_case("mod_ns_stdlib", "ns_stdlib", 42)
@@ -3445,11 +3503,13 @@ r0_case("gen220", "funciones libres genericas (id<T>, primero<K,V>, inferencia, 
 r0_case("gen221", "inferencia generica (CTAD Caja c = ...; auto c = ...)", "221_inferencia_generica.vx", 42, line=3670)
 r0_case("gen222", "metodos genericos (obj.m<U>() en struct/clase, explicito+inferido, multi-param, U!=T)", "222_metodos_genericos.vx", 42, line=3671)
 r0_case("gen223", "conceptos/constraints (built-in + predicado + bloque + estructural + composicion + where)", "223_conceptos_genericos.vx", 42, line=3672)
-fails_case("gen224", "constraint violada (Punto no es Numeric)", "224_conceptos_error.vx", "no satisface el concepto 'Numeric'", line=3673)
+fails_case("cota589", "cuando el cuerpo de una generica falla, se dice la COTA que exige -- 'suma_uno exige que su T se pueda asignar a un i64' -- y no el sintoma con el tipo ya sustituido.  Se DEDUCE de lo que el cuerpo hace, este declarada o no: Rust solo puede nombrar la que alguien escribio", "589_cota_deducida.vx", "VX2113")
+fails_case("cadena588", "un fallo en el cuerpo de una instancia lleva su CAMINO DE VUELTA: la cadena entera hasta la linea que el programador escribio, y cuando no cabe se pliega POR EL MEDIO -- nunca por el final, que es donde esta esa linea -- diciendo cuantos niveles se saltaron", "588_cadena_instanciacion.vx", "VX2111")
+fails_case("gen224", "constraint violada (Punto no es Numeric)", "224_conceptos_error.vx", "VX2108", line=3673)
 r0_case("gen225", "especializacion total + parcial (Caja<T> / Caja<i64> / Caja<Punto> / Caja<T*>)", "225_especializacion.vx", 42, line=3676)
 r0_case("gen226", "especializacion avanzada (clase + funcion + patron anidado Caja<Inner<T>>)", "226_especializacion_avanzada.vx", 42, line=3677)
 r0_case("gen227", "concepts avanzado (firma estructural completa + where en metodos genericos)", "227_concepts_avanzado.vx", 42, line=3678)
-fails_case("gen228", "concepto estructural rechaza firma incorrecta (bool area() != i64 area())", "228_concept_firma_error.vx", "no satisface el concepto 'Figura'", line=3679)
+fails_case("gen228", "concepto estructural rechaza firma incorrecta (bool area() != i64 area())", "228_concept_firma_error.vx", "VX2108", line=3679)
 r0_case("gen229", "typedef/using como type-arg de genericos (#4 metodo, #6 bound, #7 spec)", "229_typedef_genericos.vx", 42, line=3682)
 r0_case("def170", "defaults de campo + ={} + default() (struct + templates)", "258_struct_defaults.vx", 155, line=3691)
 r0_case("cl171", "compound literals (Tipo){...} en args/returns + templates", "259_compound_literals.vx", 119, line=3692)
@@ -3690,7 +3750,7 @@ modes3_agree_case("bench_vec_axpy", "banco vec_axpy: los tres modos coinciden", 
 const_reject_case("cneg_incdec", "++ sobre variable const", "const i32 x = 5; x++;", line=3753)
 const_reject_case("cneg_discard", "descartar const: i32* = const i32*", "const i32* cp; i32 c = 1; cp = &c; i32* m = cp;", line=3755)
 modes3_case("en284", "concepts+enums (is_enum, Enum, ValuedEnum, backing, concepto usuario)", "284_enum_concepts.vx", 42, line=3817)
-fails_case("en285", "constraint ValuedEnum rechaza un enum ADT (Shape sin valor)", "285_enum_concept_error.vx", "no satisface el concepto 'ValuedEnum'", line=3819)
+fails_case("en285", "constraint ValuedEnum rechaza un enum ADT (Shape sin valor)", "285_enum_concept_error.vx", "VX2108", line=3819)
 modes3_case("en286", "concepto como predicado (Enum/ValuedEnum/Numeric<T>() + usuario + composicion)", "286_concept_predicate.vx", 42, line=3824)
 modes3_case("en287", "comptime block: vars normales sin anotar + enums + control de flujo", "287_comptime_vars.vx", 42, line=3826)
 modes3_case("ca288", "inline asm en comptime fn (ComptimeVM: interp/JIT/AOT)", "288_comptime_asm.vx", 42, line=3832)
@@ -3795,7 +3855,7 @@ modes3_case("overlay_extent", "extension de una vista calculada de sus propios c
 modes3_case("overlay_campos_anchos", "campos contiguos de una vista tratados de una vez", "543_overlay_campos_anchos.vx", 136)
 modes3_case("params_alias", "dos punteros parametro pueden ser la misma memoria", "544_params_alias.vx", 111)
 modes3_case("sobrecarga545", "sobrecarga por aridad y por tipo en los SEIS caminos de llamada (funcion libre, constructor de struct, metodo de struct, metodo de clase, static, super) mas la interfaz: gana la exacta, el retorno sale de la elegida en los dos ordenes de declaracion, y un override sigue siendo un override", "545_sobrecarga_funciones.vx", 42)
-modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada -- receptor struct, primitivo, puntero y clase, con sobrecarga entre las libres candidatas, encadenado, y el mismo nombre para receptores de tipo distinto", "549_ufcs_llamada_uniforme.vx", 42)
+modes3_case("ufcs549", "llamada uniforme: `x.f(a)` y `f(x, a)` son la misma llamada -- receptor struct, primitivo, puntero y clase, con sobrecarga entre las libres candidatas, encadenado, y el mismo nombre para receptores de tipo distinto; y una generica de OTRO modulo (`std.func.apply`/`tap`) con la funcion elegida por un ternario, sobre un literal de cadena como receptor", "549_ufcs_llamada_uniforme.vx", 42)
 modes3_case("ufcs551", "encadenar con UFCS: `2.add(4).mul(10).div(5)` sobre literales sin un solo cast, lo mismo con cadenas (incluido un literal de receptor, que es un `ptr` hasta que se promueve), cruzar de familia a mitad de cadena, y el hueco `_` que dice donde cae el receptor cuando no va primero", "551_ufcs_encadenado.vx", 42)
 modes3_case("nombrados552", "argumentos con nombre `.a = 3`, la grafia del init designado: en cualquier orden, mezclados con posicionales, con el receptor cayendo en el hueco nombrado o en la ranura que queda libre, y el nombre entrando en la seleccion entre hermanas", "552_argumentos_nombrados.vx", 42)
 modes3_case("ufcs_xmod556", "UFCS y argumentos nombrados CRUZANDO el modulo, con los dos pares de homonimas: `doble` (misma firma y misma ranura) que solo conviven con `as`, y `pesa` (misma firma, ranuras con otro nombre) que se importan las dos sin renombrar y forman una sobrecarga -- resuelta nombrando la ranura, tambien a traves del punto", "556_ufcs_xmodulo.vx", 42)
@@ -3804,6 +3864,8 @@ modes3_case("generica_infer570", "deducir los type-args ESTRUCTURALMENTE, y las 
 modes3_case("ufcs_receptores576", "el RECEPTOR en todas las formas en que se puede declarar el parametro que lo recibe: enum por valor (que ni se intentaba, y el mensaje decia \"struct desconocido\" de algo declarado enum), las cuatro combinaciones del PUNTERO -- `r->f()` y `r.f()` contra una libre que pide `P*` y contra una que pide `P` --, tomarle la DIRECCION a un valor con la prueba de que el receptor sale MODIFICADO y no es una copia, `inout` (que viaja por referencia pero se llama con el valor, y caia en el cubo de los punteros donde ningun escalar lo busca), y array, prestamo y no-nulo que ya valian", "576_ufcs_receptores.vx", 42)
 modes3_case("ufcs_vista_comptime578", "lo que le faltaba al receptor: una VISTA de overlay -- que por dentro es un puntero, asi que pasarla no copia y escribir a traves de ella toca el buffer de verdad --, una SUB-vista que se lleva consigo a su contenedor (`parent<T>()`, que no se podia usar dentro de un namespace porque las referencias del resolver no pasaban por el aplanado), una `const` comptime y una `comptime fn` por el punto, con sus ranuras por nombre -- que no funcionaban NI en la grafia libre, porque a su firma le faltaban los nombres", "578_ufcs_vista_y_comptime.vx", 42)
 modes3_case("jit_derrame_ancho579", "REGRESION del JIT: un valor de menos de 64 bits derramado a la pila se guardaba con el ancho del registro y se releia entero, asi que los 32 bits altos eran lo que hubiera antes en la ranura -- un `i64` que vale 6 se leia como un numero de trece cifras --.  No fallaba, daba OTRO RESULTADO, y solo con presion suficiente para que hubiera derrame.  Veinticuatro valores de 32 bits vivos a traves de veinticuatro llamadas; los tres modos tienen que coincidir, que es la red que este fallo se saltaba", "579_jit_derrame_ancho.vx", 42)
+modes3_case("receptor_de_tipo580", "el receptor puede ser un TIPO: `T.f()` es `f<T>()` -- la otra clase de base de la llamada uniforme --.  Un tipo de usuario, un PRIMITIVO (que ni llegaba al comprobador: `u64` es palabra clave y el parser cortaba), un enum, la introspeccion que sale de regalo (`u64.sizeof()`, `Punto.field_count()`), el caso con un CAST delante -- que necesita que el desambiguador sepa que un tipo primitivo puede empezar una expresion, y solo si le sigue un punto --, la convivencia con el metodo estatico y la REFERENCIA `&T.f`, que resuelve igual que la llamada porque el lenguaje ya lo hacia para `&obj.f`", "580_receptor_de_tipo.vx", 42)
+modes3_case("alcanzable581", "QUE SE PUEDE LLAMAR sobre un tipo desde aqui, que no es lo mismo que que TIENE: `scoped.method.count<T>()` cuenta sus metodos MAS las libres que este fichero alcanza por llamada uniforme, y por eso el nombre lleva `scoped` -- la respuesta depende del ambito y tiene que confesarlo --.  Se comprueban el total frente a `method.count`, la consulta por nombre, la entrada i-esima con su ORIGEN (vacio si el metodo es del tipo, el namespace si se alcanza), la regla de que el receptor es SIEMPRE el parametro 0 -- tambien donde `this` es implicito, que es lo que hace que las dos clases de entrada se lean igual -- que lo enumerado es de verdad llamable por las dos grafias, las MISMAS consultas escritas con el tipo de receptor (`Punto.scoped.method.count()`, que sale gratis de la regla y tiene que dar lo mismo), la firma devuelta como TIPO y vuelta a meter en `type.size<...>()` -- que es la razon de devolver `Type` y no una cadena -- y las mismas afirmaciones dentro de un `comptime`", "581_alcanzable_introspeccion.vx", 127)
 modes3_case("genericas_homonimas574", "varias GENERICAS con el mismo nombre, que es sobrecarga como cualquier otra: separadas por la FORMA de su parametro (`saca<T>(T)` vs `saca<T>(Caja<T>)`), por lo HONDO de esa forma (tres, y con una caja de cajas gana la que pide caja de cajas), por el NOMBRE de sus ranuras (dos que toman lo mismo, elegidas al nombrarlas) y por aridad; las mismas llamadas POR EL PUNTO, con el receptor cayendo en la ranura que queda libre; mas una especializacion `Bolsa<Punto>` conviviendo con todo, que es lo que separa declarar una variable de pasar un argumento", "574_genericas_homonimas.vx", 42)
 modes3_case("ufcs_inverso566", "la OTRA direccion, al extremo: `f(x, a)` encuentra el metodo `x.f(a)` -- DOS metodos de la misma firma separados solo por el nombre de sus ranuras, el mismo nombre y las mismas ranuras en otro receptor, una libre homonima que no choca, struct generico, `impl` desde fuera, despacho VIRTUAL con `@Override`, receptor declarado como interfaz, receptores que son un campo o el retorno de otra inversa, variadico, `final`, un tipo de otro namespace y las dos grafias en la misma cadena", "566_ufcs_inverso.vx", 42)
 modes3_case("nativo560", "dos huecos del binario nativo, cerrados: una cadena leida desde la SEGUNDA posicion en un bucle (`s = otra + s`, que daba `---` en vez de `--x`) y dos metodos de clase que solo se distinguen por el NOMBRE de sus ranuras (que devirtualizaba al primero).  Los tres modos tienen que coincidir, que es de lo que iba", "560_nativo_cadena_y_ranuras.vx", 42)
@@ -3861,6 +3923,114 @@ modes3_case("sobrecarga_builtin572", "sobrecargar un BUILTIN: una funcion del us
 fails_case("sobrecarga_builtin_err573", "y la llamada posicional que no dice de cual de las dos habla: error que cita las dos, no un ganador a escondidas", "573_sobrecarga_builtin_err.vx", "VX2077")
 modes3_case("write_sumidero574", "`write(ptr, len)`, el sumidero de bytes: de QUE memoria es el puntero lo dice el IR y no el modo de ejecucion -- una direccion de la maquina virtual y una del anfitrion van por caminos distintos alli, y en nativo son la misma --, asi que los tres modos tienen que escribir lo mismo.  Y convive con `std.os.write`, que toma (stream, buf, count): misma palabra, otra firma, cada llamada a la suya.  Antes el `import only` SUSTITUIA al builtin y lo dejaba inalcanzable, que era el caso que motivaba poder sobrecargarlos", "574_write_sumidero.vx", 42)
 modes3_case("ssn_map568", "el mapa de numeros de servicio de Windows, derivado del ORDEN de los stubs: recorre los exports de ntdll y win32u con `std.binary.pe`, filtra los `Nt*` (menos los `Ntdll*`, que no son syscalls), los ordena por direccion y el puesto que ocupa cada uno ES su numero.  Lo que se comprueba es que los tres modos lleguen al final -- la tabla depende de la version de Windows de la maquina, asi que fijar sus valores seria fijar los de ESTE equipo", "568_syscall_ssn_map.vx", 42)
+# Sin anclas `^...$`: el log puede traer CRLF y el `$` no casaria.
+EXPECT582 = [
+    r"a=<0x7>",
+    r"b=<0xff>",
+    r"hex=0x10",
+    r"msg=!roto!",
+    r"veces=2",
+]
+
+
+@case("provides_builtin582")
+def _(ctx):
+    """`@Provides(<builtin>)`: quien cubre un builtin lo DICE, y deja de tener
+    que llamarse como el primitivo de debajo.
+
+    Comparar los tres modos entre si no bastaria: si la anotacion no hiciera
+    nada, los tres imprimirian lo del lenguaje -- `7` en vez de `<0x7>` -- y
+    estarian de acuerdo.  Por eso se fija el TEXTO: `<0x7>` solo puede salir de
+    la funcion del usuario.
+
+    `veces=2` es la otra mitad: la del usuario corrio las DOS veces, no una.  Y
+    `hex=0x10` comprueba lo de al lado -- proveer `print_int` no se lleva por
+    delante a `print_hex`, que sigue siendo el del lenguaje --.
+    """
+    src = "582_provides_builtin.vx"
+    ctx.compile_vx(ctx.src(src), "prov582")
+    ctx.ok("compilacion %s -> .velb" % src)
+
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("prov582", schedulers=1, mode=modo)
+        got = get_r00(log)
+        if got != 42:
+            ctx.fail("@Provides (-m %s): R00 == %s, se esperaba 42" % (modo, got),
+                     log)
+        expect_lines(ctx, log, "@Provides (-m %s)" % modo, EXPECT582)
+        ctx.ok("@Provides (-m %s): el proveedor corrio, no el builtin" % modo)
+
+    exe = aot_build(ctx, ctx.src(src), "prov582_aot", "@Provides (-m aot)")
+    rc, log = ctx.run([exe])
+    if exit_code(rc) != 42:
+        ctx.fail("@Provides (-m aot): exit == %d, se esperaba 42" % exit_code(rc),
+                 log)
+    expect_lines(ctx, log, "@Provides (-m aot)", EXPECT582)
+    ctx.ok("@Provides (-m aot): el proveedor corrio, no el builtin")
+
+
+modes3_case("provides_asignador586", "poner TU asignador con `@Provides(malloc)`/`@Provides(free)`, que es el caso que manda: un programa que reserva no escribe `import` de nadie y aun asi alguien tiene que reservarle.  Fija tres cosas que se rompieron: que la cuenta de `malloc<T>` son ELEMENTOS y no bytes; que un proveedor puede ser una PLANTILLA -- y entonces hay que llamar a su INSTANCIA, porque una plantilla no emite simbolo --; y que la grafia con punto (`xs.free()`) acaba en el mismo proveedor que la libre, que es lo que fallaba: el bajado de `free` cableaba el nombre de la ficha en vez de la instancia y salia `simbolo no resuelto`", "586_provides_asignador.vx", 42)
+EXPECT590 = [
+    r"antes",
+    r"\[mio\] se acabo",
+]
+
+
+@case("provides_panic590")
+def _(ctx):
+    """`@Provides(panic)`: tu forma de morir, y que SIGUE sin retornar.
+
+    No vale `modes3_case`, que compara el valor de retorno: este programa no
+    retorna de `main` en ningun modo -- termina dentro del proveedor --, asi
+    que lo que hay que mirar es el TEXTO y lo que NO sale.
+
+    El texto, porque es lo unico que distingue un proveedor que entra de uno
+    que se ignora: sin la anotacion los tres modos imprimirian el panico del
+    lenguaje y estarian DE ACUERDO entre ellos, o sea que una red que solo
+    compare modos no lo veria.  La marca `[mio]` solo puede salir del
+    proveedor.
+
+    Y lo que no sale, porque el gancho aporta el MECANISMO -- que se escribe y
+    como se muere --, no la politica de que el programa acaba: con proveedor,
+    `panic("x")` volvia y el programa seguia.  Si `despues` aparece, el
+    terminador no se emitio.
+
+    En nativo ademas se comprueba el codigo de salida, que es el unico modo
+    donde el `exit` del proveedor llega al sistema.
+    """
+    src = "590_provides_panic.vx"
+    if not ctx.compile_vx(ctx.src(src), "pp590"):
+        return
+    ctx.ok("compilacion %s -> .velb" % src)
+
+    for modo in ("vm", "jit"):
+        _, log = ctx.run_velb("pp590", schedulers=1, mode=modo)
+        expect_lines(ctx, log, "%s (-m %s)" % (src, modo), EXPECT590)
+        if grep_q(log, r"despues"):
+            ctx.fail("%s (-m %s): `panic` provisto RETORNO -- salio 'despues'"
+                     % (src, modo), log)
+            return
+        ctx.ok("%s (-m %s): el proveedor corrio y no volvio" % (src, modo))
+
+    exe = aot_build(ctx, ctx.src(src), "pp590_aot", "%s (-m aot)" % src)
+    rc, log = ctx.run([exe])
+    expect_lines(ctx, log, "%s (-m aot)" % src, EXPECT590)
+    if grep_q(log, r"despues"):
+        ctx.fail("%s (-m aot): `panic` provisto RETORNO -- salio 'despues'" % src,
+                 log)
+        return
+    if exit_code(rc) != 70:
+        ctx.fail("%s (-m aot): exit == %d, se esperaba 70 (el que pone el "
+                 "proveedor)" % (src, exit_code(rc)), log)
+        return
+    ctx.ok("%s (-m aot): el proveedor corrio, no volvio y puso el codigo de "
+           "salida" % src)
+
+
+modes3_case("comptime_struct_return336","una funcion `comptime` que devuelve un `struct` por valor, plano y anidado, materializado en el binario.  Llevaba mes y medio SIN COMPILAR y nadie se entero: el ejemplo no estaba registrado aqui.  Declaraba sus metodos `comptime` sin `static` y los llamaba por el tipo (`Punto.punto(...)`), que es lo que hace un estatico; el compilador contestaba `nombre no declarado: 'Punto'` -- sobre un struct escrito dos lineas mas arriba -- porque al fallar esa via el receptor se evalua como un VALOR.  Ahora eso lo dice VX2117 por su nombre", "336_comptime_struct_return.vx", 42)
+modes3_case("malloc_generico584","`malloc<T>(n)` son n ELEMENTOS de T y devuelve `T*`.  El tipo entre los angulos no hacia NINGUNA de las dos cosas: se consumia sin efecto, asi que `malloc<i64>(4)` reservaba cuatro bytes para treinta y dos -- y eso no daba un error, daba memoria ajena pisada al escribir el segundo elemento, apareciendo lejos y sin relacion aparente --, y ademas devolvia `void*`, obligando a repetir con un cast lo que ya se habia dicho entre los angulos.  Cero usos en todo el corpus, que es por lo que duro: la forma estaba documentada y no la ejercitaba nadie", "584_malloc_generico.vx", 42)
+fails_case("provides_builtin_err583","y proveerlo con OTRA firma no compila: quien llama sigue viendo la del builtin, asi que sin comprobar el contrato al declararlo la llamada PASA EL TIPADO y aterriza en algo que espera otra cosa", "583_provides_builtin_err.vx", "VX2097")
+fails_case("gancho_retirado591","las dos anotaciones de gancho VIEJAS ya no valen, y decirlo es el punto: el parser descarta en silencio lo que no conoce, asi que cuando los consumidores pasaron a leer `@Provides` estas dejaron de leerse y nadie lo dijo -- el fichero compilaba, salia con codigo cero, y el binario reservaba con el asignador de la biblioteca, que en freestanding es justo el que no hay", "591_gancho_retirado_err.vx", "VXP091")
 modes3_case("bounds_check_elim", "el optimizador quita comprobaciones de limites que ya sabe ciertas", "315_bounds_check_elim.vx", 55)
 modes3_case("sync_tiny", "sincronizacion en su forma minima", "35b_sync_tiny.vx", 1)
 modes3_case("lambda_simple", "lambda sin mas", "50_lambda_simple.vx", 42)

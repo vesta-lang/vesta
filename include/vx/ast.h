@@ -52,6 +52,7 @@
 #include <utility>
 #include <vector>
 
+#include "vx/builtin_names.h" // `@Provides(<builtin>)` guarda el VALOR
 #include "vx/diagnostic.h"
 #include "vx/types.h"
 
@@ -172,6 +173,8 @@ enum class NodeKind : uint8_t {
     ArrayTypeNode,
     FunctionTypeNode, ///< fn(T1, T2) -> R: tipo de variable / parametro /
                       ///< retorno closure
+    ComputedTypeNode, ///< Un tipo que sale de EJECUTAR algo al compilar:
+                      ///< `sizeof<field_type_at<Punto>(0)>()`
 
     // Sentinela.
     COUNT
@@ -450,6 +453,29 @@ struct PrimitiveTypeNode : TypeNode {
  * resuelve consultando la tabla de aliases / structs registrada
  * a nivel de modulo.
  */
+/**
+ * @struct ComputedTypeNode
+ * @brief Un tipo que sale de EJECUTAR algo al compilar.
+ *
+ * `sizeof<field_type_at<Punto>(0)>()` o
+ * `typename<scoped_method_return<Punto>(1)>()`: donde va un tipo se escribe
+ * una llamada que DEVUELVE un tipo, y el comprobador la resuelve antes de
+ * usarla.
+ *
+ * Es lo que hace util que la introspeccion devuelva `Type` en vez de una
+ * cadena: un `Type` se vuelve a meter donde se pide un tipo, mientras que una
+ * cadena es un callejon sin salida.  Sin este nodo la familia devolvia algo
+ * que no se podia usar en ninguna parte.
+ *
+ * La llamada tiene que resolverse al COMPILAR, que es la unica condicion: un
+ * valor que dependa de la ejecucion no nombra ningun tipo.
+ */
+struct ComputedTypeNode : TypeNode {
+    /// La llamada que produce el tipo.
+    std::unique_ptr<Expr> expr;
+    ComputedTypeNode() : TypeNode(NodeKind::ComputedTypeNode) {}
+};
+
 struct NamedTypeNode : TypeNode {
     std::string name;
     /// Argumentos de tipo de un instanciado generico (ej. `Box<i32>`
@@ -1897,6 +1923,55 @@ struct FunctionDecl : Node {
     /// #6: constraints de los type-params (`<T: C>` inline o `where T: A+B`).
     /// Vacio = sin bounds.  Verificados al monomorphizar; cero runtime.
     std::vector<TypeBound> type_bounds;
+    /**
+     * @brief Si esta funcion es una INSTANCIA, como se escribe y quien la pidio.
+     *
+     * Un error en el cuerpo de una instancia cae en una linea que quien llamo
+     * no escribio y probablemente no ha leido: es el muro de errores de C++,
+     * el mensaje hablando el vocabulario del llamado cuando quien tiene que
+     * arreglarlo es el que llama.  Con esto el diagnostico puede decir de
+     * DONDE salio.
+     *
+     * @c instance_of es como se ESCRIBE (`apply<string, cfn(i64) -> void>`),
+     * internado, nunca la etiqueta manglada -- esa es interna y no le dice
+     * nada a nadie --.  Nulo en una funcion normal, que es el caso comun: una
+     * funcion no genrica no paga nada por esto, ni un puntero que seguir.
+     *
+     * Gana la PRIMERA instanciacion: las instancias estan deduplicadas, asi
+     * que una usada en cincuenta sitios se comprueba -- y falla -- una vez, y
+     * citar los cincuenta seria el muro otra vez con otra forma.
+     */
+    const std::string *instance_of = nullptr;
+    /// El nombre de la PLANTILLA, a secas y como se escribe (`apply`).
+    /// Internado.  Es el sujeto de la frase cuando se dice que exige.
+    const std::string *instance_template = nullptr;
+    /// La llamada que pidio la instancia.  Solo vale con @c instance_of.
+    SourceLoc instance_site{};
+    /**
+     * @brief Que tipo tomo cada parametro de tipo en esta instancia.
+     *
+     * Sin esto, un fallo dentro del cuerpo solo puede contar el SINTOMA, ya
+     * con el tipo sustituido: "no se puede asignar 'string' a 'i64'".  Con
+     * ello se puede decir la causa en el vocabulario de quien llama -- "`mal`
+     * exige que su `T` se pueda asignar a un `i64`" --, que es la cota que el
+     * cuerpo exige aunque nadie la haya declarado.
+     *
+     * Los nombres estan internados; son uno o dos por instancia.
+     */
+    std::vector<std::pair<const std::string *, Type>> instance_bindings;
+    /**
+     * @brief La instancia DENTRO de la cual se pidio esta, si fue asi.
+     *
+     * Con `a<T>` que llama a `b<T>` que llama a `c<T>`, el fallo esta en `c` y
+     * la linea que el programador escribio esta en `main`.  Un solo salto deja
+     * a medio camino: apunta al cuerpo de `b`, que tampoco escribio el.
+     * Siguiendo este enlace se cuenta el camino entero de una vez.
+     *
+     * Es un puntero a otra declaracion del modulo, y eso es seguro: los
+     * `unique_ptr` cambian de sitio al crecer el vector, pero el objeto
+     * apuntado no se mueve.
+     */
+    const FunctionDecl *instance_parent = nullptr;
     /// #7: especializacion de FUNCION generica (`R id<i64>(...)` total /
     /// `R id<T*>(...)` parcial).  Si @c is_specialization, @c spec_pattern
     /// son los type-args del patron y @c type_params los params frescos.
@@ -2002,8 +2077,19 @@ struct FunctionDecl : Node {
     int64_t attr_at = -1; ///< @at(N): offset/VA fijo (AOT .bin); -1 = auto
     int32_t attr_order =
         0x7fffffff; ///< @order(N): orden de seccion; max = creacion
-    bool is_alloc_override = false; ///< @AllocatorOverride (AOT freestanding)
-    bool is_panic_handler = false;  ///< @PanicHandler (AOT freestanding)
+    /// `@Provides(<builtin>)`: que builtin del lenguaje implementa esta
+    /// funcion.  @c Builtin::Unknown = ninguno, que es el caso normal.
+    ///
+    /// El nombre es el del BUILTIN y no una taxonomia aparte: el registro de
+    /// builtins ES la tabla de lo que se puede proveer, asi que no hay una
+    /// segunda lista que mantener y un nombre mal escrito es un error en vez
+    /// de un proveedor que nadie encuentra.
+    ///
+    /// Se guarda el VALOR, no el nombre: resolverlo es lo que hace el lexema
+    /// al parsear, una vez, y a partir de ahi todo el mundo compara enteros.
+    /// Llevar la cadena seria una reserva por anotacion y una comparacion de
+    /// cadena en cada consulta del driver.
+    Builtin provides_builtin = Builtin::Unknown;
     ///  NR: `@Naked` -- funcion sin prologo/epilogo NI ret implicito.
     /// El cuerpo (tipicamente inline `asm { ... }`) se emite verbatim; el
     /// programador provee la salida (`ret`/`iretq`/`iret`).  Para ISRs,

@@ -51,13 +51,16 @@
 #include <vector>
 
 #include <memory>
+#include "util/name_pool.h"   // los nombres se internan, no se copian
+#include "util/named_alloc.h" // y los contenedores dicen que son
 #include "vx/ast.h"
 #include "vx/borrow/borrow_checker.h"
 #include "vx/comptime/comptime_vm.h"
 #include "vx/diag/diag_catalog.h"
 #include "vx/diagnostic.h"
 #include "vx/overload.h" // varias declaraciones con un nombre, y cual se elige
-#include "vx/ufcs.h"     // `x.f(a)` y `f(x, a)` son la misma llamada
+#include "vx/ufcs.h"        // `x.f(a)` y `f(x, a)` son la misma llamada
+#include "vx/ufcs_scoped.h" // y que se puede llamar sobre un tipo DESDE AQUI
 
 namespace vx {
 
@@ -228,6 +231,26 @@ struct FunctionSig {
     /// CALLVM a bytecode VM que no existe.  Solo se activa en interp/JIT; en
     /// AOT todo es nativo y la llamada normal ya funciona.
     bool is_naked = false;
+    /**
+     * Que builtin del lenguaje CUBRE esta funcion (`@Provides(<builtin>)`),
+     * o @c Builtin::Unknown si no cubre ninguno.
+     *
+     * Va en la FIRMA, al lado de @c is_naked y de @c param_abi_regs, porque es
+     * lo mismo que ellos: una propiedad de que ES la funcion, no de que tipos
+     * tiene.  Y por estar aqui viaja a quien la importa por el camino que esos
+     * ya usan, en vez de por uno propio.
+     *
+     * Antes esto solo existia en la DECLARACION, y de ahi salian dos fallos
+     * mudos.  Uno: un proveedor de otro modulo se ignoraba sin decir nada --
+     * el programa compilaba, corria y reservaba con el asignador de siempre --,
+     * porque al consumidor le llegaba la funcion pero no su papel.  Sobrevivia
+     * de rebote si era una PLANTILLA, porque entonces viaja su texto fuente y
+     * la anotacion va dentro.  Dos: la pregunta "quien cubre X" se contestaba
+     * recorriendo las declaraciones, asi que dependia de CUANDO llegaba cada
+     * una -- y con la cache fria llegaban tarde --.  Sobre las firmas no
+     * depende del orden: la tabla esta completa cuando se pregunta.
+     */
+    Builtin provides_builtin = Builtin::Unknown;
 };
 
 /**
@@ -1161,6 +1184,20 @@ struct Symbol {
     Type type{};
     uint32_t sig_index =
         0; ///< Indice en TypeChecker::function_sigs_, si kind==Function.
+    /**
+     * @brief Donde se declaro.  Para poder CITARLO cuando otro choca con el.
+     *
+     * Un namespace repartido en varios ficheros es UNO -- la stdlib lo hace
+     * con `std.types`, un fichero por arquitectura --, asi que dos
+     * definiciones del mismo simbolo chocan aunque esten en ficheros
+     * distintos.  Y ahi el mensaje tiene que ensenyar LAS DOS: sin esto
+     * senyalaba una sola, o sea un fichero que declara la funcion una vez, y
+     * decia que la redefine.
+     *
+     * Vacia en los simbolos que no la necesitan; un @c SourceLoc lleva el
+     * fichero internado, asi que son punteros y un par de enteros.
+     */
+    SourceLoc decl_loc{};
     bool is_const = false;
     /// Parametro de SALIDA por referencia (`out T x` / `inout T x` con T un
     /// valor).  El cuerpo lo ve como una `T` corriente -- @c type es T --,
@@ -1597,6 +1634,31 @@ class TypeChecker {
                                    const std::string &mangled) {
         if (public_name.empty() || public_name == mangled) return;
         generic_fn_public_names_[public_name] = mangled;
+        generic_fn_label_to_written_.emplace(util::intern_name(mangled),
+                                             util::intern_name(public_name));
+    }
+
+    /**
+     * @brief El camino de vuelta: con que nombre se ESCRIBE esta plantilla.
+     *
+     * Lo necesita el indice de la llamada uniforme.  El resto del comprobador
+     * pregunta en la direccion contraria -- ve `apply` y quiere el label --,
+     * pero el indice se construye recorriendo las DECLARACIONES, y ahi lo que
+     * hay es el label: sin esta vuelta, una plantilla importada quedaba
+     * indexada bajo `std__func__apply` mientras que tras el punto se escribe
+     * `apply`, asi que `apply(s, f)` compilaba y `s.apply(f)` decia que no
+     * habia ninguna -- las dos grafias dejaban de ser la misma llamada por
+     * estar la funcion en otro modulo --.
+     *
+     * @param label El label internado con el que la plantilla quedo
+     *              registrada.
+     * @return El nombre publico, internado, o nulo si no es una plantilla
+     *         importada.
+     */
+    const std::string *
+    generic_fn_written_name(const std::string *label) const noexcept {
+        auto it = generic_fn_label_to_written_.find(label);
+        return it == generic_fn_label_to_written_.end() ? nullptr : it->second;
     }
 
     /**
@@ -1633,8 +1695,15 @@ class TypeChecker {
      * Si alguno no se satisface, emite un error claro citando el tipo, el
      * type-param y el concepto.  Cero codigo emitido: las constraints
      * desaparecen tras el check.  Implementado en src/vx/concepts.cpp.
+     *
+     * @return false si una cota se pudo contestar AQUI y no se cumple.  Quien
+     *         monomorfiza para entonces: construir la instancia que se acaba de
+     *         rechazar solo anyade errores de consecuencia -- sobre la linea de
+     *         la plantilla, no la de la llamada -- que tapan la causa que ya se
+     *         dijo.  Las que se aplazan no cuentan aqui: su respuesta no se
+     *         sabe todavia, y esas las cierra @ref verify_pending_type_bounds.
      */
-    void check_type_bounds(const std::vector<ast::TypeBound> &bounds,
+    bool check_type_bounds(const std::vector<ast::TypeBound> &bounds,
                            const std::vector<std::string> &params,
                            const std::vector<Type> &args, const SourceLoc &loc);
 
@@ -1873,6 +1942,49 @@ class TypeChecker {
 
     /// Cuerpos de funcion ya chequeados, para que la pasada sea idempotente.
     std::unordered_set<const ast::FunctionDecl *> checked_fn_bodies_;
+
+  public:
+    /**
+     * @brief Dice la COTA que el cuerpo exige, si el fallo es de una instancia.
+     *
+     * Un desajuste dentro de una instancia se puede contar de dos maneras.  La
+     * mala es el sintoma, con el tipo ya sustituido y en una linea de la
+     * plantilla: "no se puede asignar 'string' a 'i64'", sobre codigo que
+     * quien llamo no escribio.  La buena es la causa, en su vocabulario:
+     * "`mal` exige que su `T` se pueda asignar a un `i64`".
+     *
+     * Y esa cota se DEDUCE: el compilador la tiene delante en el momento en
+     * que se viola -- lo que el cuerpo intentaba hacer con `T` ES la
+     * exigencia --, la haya declarado alguien o no.  Rust solo puede decir la
+     * que esta escrita; aqui no hace falta que lo este.
+     *
+     * No dice nada si el fallo no viene de una instancia, o si el tipo que
+     * fallo no es el de ninguna de sus ranuras: entonces la causa es otra y
+     * inventarla seria peor que callar.
+     *
+     * @param target Lo que se esperaba.
+     * @param value  Lo que llego.
+     * @param loc    Donde.
+     */
+    void note_instance_requirement(const Type &target, const Type &value,
+                                   const SourceLoc &loc);
+
+  private:
+    /// La instancia cuyo cuerpo se esta comprobando ahora, o nulo.  Lo que se
+    /// monomorfice desde aqui cuelga de ella, y asi la cadena de
+    /// instanciacion llega hasta la linea que el programador escribio.
+    const ast::FunctionDecl *checking_instance_ = nullptr;
+
+    /// Cuantos saltos de esa cadena se ENSENYAN.  Sin tope, una cadena
+    /// larguisima vuelve a ser el muro de C++, solo que escrito en notas.
+    /// Pasado el tope se pliega por el medio -- nunca por el final, que es
+    /// donde esta la linea del programador -- y se dice cuantos faltan.
+    static constexpr size_t kMaxInstanceChain = 8;
+
+    /// Cuantos se RECORREN como mucho.  Es una guarda, no una politica: si
+    /// algun dia una cadena se cerrara sobre si misma, esto la corta en vez
+    /// de colgar el compilador.
+    static constexpr size_t kMaxInstanceDepth = 256;
 
     // -----------------------------------------------------------------
     // Visit de statements.
@@ -2369,6 +2481,47 @@ class TypeChecker {
      * @param t El tipo del receptor, o el declarado de un primer parametro.
      * @return El mismo, con el nombre de su plantilla si sale de una.
      */
+    /**
+     * @brief `T.f(args)` -- el receptor es un TIPO, no un valor.
+     *
+     * La otra clase de base de la regla 1.2: si lo que hay delante del punto es
+     * un valor, `x.f(a)` es `f(x, a)`; si es un TIPO, `T.f(args)` es
+     * `f<T>(args)`.  No son dos mecanismos -- la clase de la base hay que
+     * distinguirla de todas formas --, es una regla por clase.
+     *
+     * De regalo, toda la introspeccion gana sintaxis de metodo sin escribir
+     * nada: `u64.sizeof()`, `Punto.field_count()`.
+     *
+     * Convive con el metodo ESTATICO aplicando la regla 2.2 tal cual:
+     * `Counter.crear()` puede ser su estatico Y una libre generica `crear<T>()`
+     * importada, y entonces son dos candidatos para el mismo receptor.  Quien
+     * llama prueba primero el estatico, que es lo que ya existia.
+     *
+     * @param e         La llamada.
+     * @param fa        Su callee, el acceso por punto.
+     * @param type_name El nombre del tipo que hace de receptor, ya aplanado.
+     * @return true si era esto y el nodo quedo reescrito (o se dijo por que
+     *         no); false si no hay ninguna generica con ese nombre.
+     */
+    bool try_ufcs_type_receiver(ast::CallExpr *e, ast::FieldAccessExpr *fa,
+                                const std::string &type_name);
+
+    /**
+     * @brief Si lo que hay delante del punto DENOTA un tipo, no un valor.
+     *
+     * Las dos formas que puede tener: un nombre a secas (`Punto.f()`) y uno
+     * cualificado por namespace (`geo.Punto.f()`), que es como llegara casi
+     * siempre -- la mayoria del codigo declara namespace --.
+     *
+     * Se pregunta por la FORMA del nodo y no por su tipo resuelto, porque el
+     * tipo resuelto de `Punto` y el de una variable `Punto` es el mismo y lo
+     * que los separa es justo esto: si hay una variable con ese nombre, gana
+     * la variable.
+     *
+     * @param base El nodo que hace de base.
+     */
+    bool base_denotes_type(const ast::Expr *base) const;
+
     Type ufcs_key_type(const Type &t) const;
 
     /**
@@ -2673,20 +2826,72 @@ class TypeChecker {
      * y citarlos como `ejemplos__x__C` manda a buscar algo que no esta en el
      * fuente.  Una sola consulta y un solo criterio para los dos. */
     std::string written_name(const std::string &mangled) const;
+
+    /**
+     * @brief Dice que un simbolo esta definido dos veces, ensenyando LAS DOS.
+     *
+     * El mensaje de antes daba una sola cosa: la etiqueta aplanada y la linea
+     * de la segunda.  Faltaba lo que hace falta -- donde esta la primera --, y
+     * sobraba lo que no dice nada: `unidades__metrico__doble` manda a buscar un
+     * nombre que en el fichero del usuario no aparece.
+     *
+     * Cuando las dos viven en ficheros DISTINTOS anyade por que estan juntas:
+     * comparten namespace, y un namespace repartido es uno solo.  Repartirlo no
+     * es el problema -- es la funcion, y la stdlib lo hace con `std.types`, un
+     * fichero por arquitectura --; el problema es el simbolo repetido dentro.
+     *
+     * @param mangled El nombre tal y como quedo tras el aplanado.
+     * @param at      Donde esta la definicion que acaba de chocar.
+     */
+    void report_redefinition(const std::string &mangled, const SourceLoc &at);
+
+    /**
+     * @brief Si de ese nombre ya se dijo que esta definido dos veces.
+     *
+     * Lo pregunta quien esta a punto de quejarse de algo que SE DERIVA de la
+     * colision -- que una llamada no sepa a cual de las dos va, por ejemplo --.
+     * Callar ahi no esconde nada: el error ya esta dicho, con las dos
+     * definiciones senyaladas, y es el unico que el programador puede arreglar.
+     *
+     * @param mangled El nombre tal y como quedo tras el aplanado.
+     * @return `true` si ya se denuncio.
+     */
+    bool already_redefined(const std::string &mangled) const {
+        return redefined_.count(util::intern_name(mangled)) != 0;
+    }
     std::string written_type_name(const Type &t) const;
 
-  private:
     /**
      * @brief El prefijo de namespace que el aplanado le puso a @p mangled.
      *
      * `geo__metrico__doble` -> `geo__metrico__`; vacio si la declaracion no
      * pertenece a ningun namespace.
      *
+     * Publico por lo mismo que @c written_name: lo pregunta tambien el bajado,
+     * que necesita saber DESDE DONDE se pregunta para resolver lo alcanzable
+     * (`scoped_method_*`).  Deducirlo alli restandole al nombre su parte
+     * publica es justo lo que no vale para `main` -- pertenece a su namespace
+     * y no se renombra --, y ahi es donde se escriben casi todas las llamadas.
+     *
      * @param mangled El nombre aplanado.
      * @return El prefijo, o vacio.
      */
     std::string ns_prefix_of(const std::string &mangled) const;
 
+    /**
+     * @brief El prefijo del namespace que se esta comprobando AHORA.
+     *
+     * Lo necesita quien resuelve al compilar algo que depende del ambito --
+     * la introspeccion de lo alcanzable --, y ahi el sitio es el que el
+     * comprobador tiene entre manos.
+     *
+     * @return El prefijo con su `__` final, o vacio en la raiz.
+     */
+    const std::string &current_ns_prefix() const noexcept {
+        return current_ns_prefix_;
+    }
+
+  private:
     /**
      * @brief El nombre de un tipo tal y como el usuario lo ESCRIBE.
      *
@@ -3405,6 +3610,209 @@ class TypeChecker {
     static constexpr uint32_t kNoBuiltinSig = 0xFFFFFFFFu;
     std::array<uint32_t, static_cast<size_t>(Builtin::Count)> builtin_sig_;
 
+public:
+    /**
+     * @struct BuiltinProviderEntry
+     * @brief Un builtin que este modulo IMPLEMENTA, y con que funcion.
+     *
+     * Los campos van con nombre: de un par nadie sabe cual lado es cual, y
+     * aqui uno es QUE se provee y el otro QUIEN.
+     */
+    struct BuiltinProviderEntry {
+        std::string symbol;               ///< la funcion que lo implementa
+        Builtin which = Builtin::Unknown; ///< que builtin cubre
+        /// Su firma, para que el bajado sepa QUE declaro cada parametro.
+        ///
+        /// No basta el nombre: lo que se pasa hay que llevarlo al tipo que el
+        /// proveedor escribio.  Donde el builtin declara una direccion, el
+        /// proveedor puede haber escrito `string` -- que es lo natural, porque
+        /// ese valor ya lleva dentro direccion, tamanyo y capacidad -- y
+        /// entonces la cadena hay que construirla, no pasar la direccion a
+        /// pelo.
+        uint32_t sig = 0;
+    };
+
+private:
+    /// La ficha que @ref provider_for devuelve cuando el proveedor llego
+    /// IMPORTADO: alli no hay lista donde apuntarlo, asi que se arma al
+    /// contestar.  `mutable` porque la consulta es const y no cambia nada
+    /// observable: lo que devuelve depende solo de las firmas.
+    mutable BuiltinProviderEntry imported_provider_;
+
+public:
+
+    /**
+     * @brief Quien implementa @p b en este modulo, si alguien lo hace.
+     *
+     * Lo pregunta el BAJADO: cuando va a emitir el primitivo de un builtin,
+     * mira antes si alguien lo declaro suyo con `@Provides`.  Asi el nombre
+     * `__vx_*` deja de ser el contrato -- para sustituir a `print_int` ya no
+     * hay que llamar a la funcion propia `__vx_print_i64`, basta con decir a
+     * que builtin cubre.
+     *
+     * @param b El builtin.
+     * @return Su ficha, o @c nullptr si nadie lo provee.  Lleva la aridad
+     *         ademas del nombre porque el bajado necesita las dos para saber
+     *         si tiene que descomponer un argumento.
+     */
+    const BuiltinProviderEntry *provider_for(Builtin b) const noexcept {
+        /* `Unknown` NO ES un builtin: es la respuesta de "ese nombre no es
+         * ninguno", y se pregunta por el constantemente -- cualquier llamada
+         * cuyo nombre no este en la tabla --.
+         *
+         * Sin esta linea, el barrido de mas abajo lo compara con el
+         * `provides_builtin` de cada firma, que vale `Unknown` por defecto: o
+         * sea que casaba con TODAS y devolvia la primera de la tabla.  El
+         * sintoma fue de los peores posibles: un `Enum<Shape>()` -- que se
+         * pliega al compilar y no llama a nadie -- salia como una llamada a
+         * `main`, o sea recursion infinita, y el proceso se comia la memoria de
+         * la maquina entera hasta que alguien lo mataba. */
+        if (b == Builtin::Unknown) return nullptr;
+        for (const BuiltinProviderEntry &e : builtin_providers_)
+            if (e.which == b) return &e;
+        /* Y si no lo declara ESTE modulo, quien lo declare de los que importa.
+         *
+         * La lista de arriba se llena recorriendo las declaraciones propias, y
+         * lo IMPORTADO no esta ahi: llega como una firma.  Por eso un proveedor
+         * de otro modulo se ignoraba en silencio -- el programa compilaba y
+         * reservaba con el de siempre --.  Preguntando por las firmas la
+         * respuesta no depende de cuando llego cada declaracion, que es lo que
+         * ademas hacia que el mismo programa compilara o no segun si la cache
+         * estaba fria. */
+        for (const auto &kv : sig_by_name_) {
+            if (kv.second >= function_sigs_.size()) continue;
+            /* Un BUILTIN no provee nada, y menos a si mismo: su entrada existe
+             * para tipar la llamada, no para implementarla.  Tomarlo por
+             * proveedor emitia una llamada a un simbolo con su propio nombre
+             * -- "simbolo no resuelto: code.bg_rgb" --. */
+            if (function_sigs_[kv.second].is_builtin) continue;
+            if (function_sigs_[kv.second].provides_builtin != b) continue;
+            /* Se devuelve el NOMBRE con el que esta declarada aqui, no su
+             * etiqueta: quien pregunta lo usa para reescribir una llamada, y el
+             * comprobador resuelve nombres.  Poner la etiqueta daba "funcion no
+             * declarada" con un nombre que el usuario no ha escrito. */
+            imported_provider_.symbol = kv.first;
+            imported_provider_.which = b;
+            imported_provider_.sig = kv.second;
+            return &imported_provider_;
+        }
+        /* Y por ultimo dentro de los NAMESPACES importados.
+         *
+         * Un `import a.b;` llano no mete sus funciones en la tabla por nombre
+         * -- se escriben `a.b.f()` --, asi que un proveedor traido asi no
+         * aparecia en el barrido de arriba.  Aqui lo que se cablea es su
+         * ETIQUETA, porque es lo unico que lo nombra sin cualificar. */
+        for (const ImportedNamespace &ns : imported_namespaces_)
+            for (const auto &kv : ns.by_name) {
+                if (kv.second >= ns.symbols.size()) continue;
+                const auto &sy = ns.symbols[kv.second];
+                if (sy.kind != 0) continue; // 0 = funcion
+                if (sy.sig.provides_builtin != b) continue;
+                imported_provider_.symbol =
+                    sy.mangled_label.empty() ? kv.first : sy.mangled_label;
+                imported_provider_.which = b;
+                imported_provider_.sig = 0;
+                return &imported_provider_;
+            }
+        return nullptr;
+    }
+
+    /**
+     * @brief La instancia del proveedor de `malloc` que reserva BYTES.
+     *
+     * Lo que el compilador emite por su cuenta -- el bloque de un `new`, la
+     * copia de una cadena -- pide bytes, no elementos de ningun tipo, asi que
+     * todo eso usa la instancia para `u8`: un byte mide uno, o sea que la
+     * cuenta es la misma y no hay dos caminos que mantener de acuerdo.
+     *
+     * Se crea al mirar las declaraciones, porque para entonces aun se puede
+     * instanciar; pedirla al bajar seria tarde.
+     *
+     * @return El simbolo, o vacio si nadie provee `malloc`.
+     */
+    const std::string &raw_alloc_symbol() const noexcept {
+        return raw_alloc_symbol_;
+    }
+
+    /// @brief El companyero de @ref raw_alloc_symbol que suelta el bloque.
+    /// @return El simbolo, o vacio si nadie provee `free`.
+    const std::string &raw_free_symbol() const noexcept {
+        return raw_free_symbol_;
+    }
+
+    /// @brief Todo lo que el modulo declara con `@Provides`.
+    const std::vector<BuiltinProviderEntry> &builtin_providers() const noexcept {
+        return builtin_providers_;
+    }
+
+private:
+    /**
+     * Lo que el modulo declara con `@Provides(<builtin>)`.
+     *
+     * Una lista y no una tabla por valor de @c Builtin: proveer uno es raro
+     * -- lo normal es ninguno --, asi que 229 ranuras serian memoria vacia y
+     * un recorrido mas largo que la busqueda.  Se consulta al bajar, no en un
+     * camino caliente.
+     */
+    std::vector<BuiltinProviderEntry> builtin_providers_;
+
+    /// @brief Una instancia de un proveedor que ya se creo.
+    struct ProviderInstance {
+        Builtin which;           ///< Que builtin cubre.
+        const std::string *elem; ///< Con que tipo, internado.
+        const std::string *sym;  ///< El simbolo que salio, internado.
+    };
+    /// @brief Etiqueta: que se ve en el perfil de reservas.
+    struct ProviderInstanceTag {};
+    /**
+     * Lo que ya se instancio de cada proveedor.
+     *
+     * Instanciar CREA una declaracion, asi que preguntar dos veces por lo mismo
+     * no sale gratis: salen dos copias que aplanan al mismo nombre, y eso es una
+     * redefinicion a nivel global senyalando a un fichero que el usuario no ha
+     * escrito.  Y preguntar dos veces es lo normal -- la llamada escrita y la
+     * instancia forzada preguntan por su cuenta, y el pase que las contiene
+     * puede correr mas de una vez --, asi que quien contesta es quien recuerda.
+     *
+     * Vector y no tabla, por lo mismo que @ref builtin_providers_: son un
+     * puñado de entradas, y recorrerlas cuesta menos que resumir una clave.
+     * Los nombres van INTERNADOS, que es lo que evita guardar la misma cadena
+     * una vez por pregunta.
+     */
+    util::NamedVector<ProviderInstance, ProviderInstanceTag> provider_instances_;
+
+    /// @brief Crea la instancia del proveedor de reserva que trabaja en BYTES.
+    void force_raw_alloc_instances();
+
+public:
+    /**
+     * @brief El simbolo al que hay que llamar para cubrir @p b con @p elem.
+     *
+     * UNA puerta para alcanzar a un proveedor, porque hay dos sitios que lo
+     * necesitan -- la reescritura de una llamada escrita y la instancia que el
+     * compilador fuerza para lo que emite solo -- y con dos criterios uno se
+     * queda atras sin que nadie lo note.
+     *
+     * Busca en las DECLARACIONES, no en un registro: el registro se rellena en
+     * un pase anterior y puede no reflejar todavia lo que una inyeccion de
+     * plantillas acaba de anyadir.  Y si el proveedor es una plantilla le pasa
+     * su declaracion al monomorfizador, en vez de volver a buscarla por nombre
+     * -- que es donde se perdia, porque la forma del nombre con que quedo
+     * registrada no siempre es la del proveedor --.
+     *
+     * @param b    El builtin a cubrir.
+     * @param elem Con que tipo instanciarlo, si es una plantilla.
+     * @return El simbolo, o vacio si nadie lo provee.
+     */
+    std::string instantiate_provider(Builtin b, const Type &elem);
+
+private:
+
+    /// Ver @ref raw_alloc_symbol.  Vacio = nadie provee `malloc`.
+    std::string raw_alloc_symbol_;
+    /// Ver @ref raw_free_symbol.  Vacio = nadie provee `free`.
+    std::string raw_free_symbol_;
+
     /**
      * @brief Apunta @p fn como sobrecarga y le da su simbolo propio.
      *
@@ -3449,6 +3857,32 @@ class TypeChecker {
         if (index >= function_sigs_.size()) return nullptr;
         return &function_sigs_[index];
     }
+
+    /**
+     * @brief Que se puede llamar sobre @p recv DESDE AQUI.
+     *
+     * Los metodos reales del tipo mas las funciones libres que este fichero
+     * alcanza por llamada uniforme.  Es la pregunta del `.`, y es distinta de
+     * la identidad del tipo (@c comptime_method_count), que no depende de
+     * quien mire.
+     *
+     * Lo consumen la introspeccion comptime (`scoped_method_*`) y el editor;
+     * se produce UNA vez aqui para que el segundo no lo redescubra.
+     *
+     * El prefijo entra por PARAMETRO y no se lee del estado del comprobador:
+     * quien pregunta no siempre esta comprobando -- el bajado deduce el suyo
+     * del nombre de la funcion que baja, y el editor del sitio del cursor --,
+     * asi que tomarlo de una variable de recorrido daria la respuesta del
+     * ultimo namespace visitado.
+     *
+     * @param recv        El tipo del receptor.
+     * @param site_prefix Prefijo del namespace desde el que se pregunta
+     *                    (`app__`), o vacio en la raiz.
+     * @param out         Recibe las entradas, en orden estable (ver el .cpp).
+     */
+    void collect_scoped_methods(const Type &recv,
+                                const std::string &site_prefix,
+                                std::vector<ScopedMethod> &out) const;
 
   private:
   public:
@@ -3661,6 +4095,20 @@ class TypeChecker {
     /// receptor puede ser `f` un `x.f(...)`.  La regla y la estructura viven en
     /// @c vx/ufcs.h; aqui solo se alimenta al declarar y se pregunta al llamar.
     ufcs::Index ufcs_;
+
+    /**
+     * @brief Los nombres ya denunciados como redefinidos.
+     *
+     * Una colision se dice UNA vez, donde esta.  Lo que viene despues -- que la
+     * llamada no sepa a cual de las dos va -- es la CONSECUENCIA, no un
+     * problema aparte: repetirla en cada sitio de llamada entierra el error de
+     * verdad bajo decenas de lineas que dicen lo mismo.
+     *
+     * La clave es el nombre aplanado YA internado (@c util::intern_name), asi
+     * que preguntar es comparar punteros y no cuesta nada en el camino normal
+     * -- el conjunto esta vacio mientras no haya colisiones --.
+     */
+    std::unordered_set<const std::string *> redefined_;
 
   public:
     const std::unordered_map<std::string, uint32_t> &
@@ -4075,6 +4523,19 @@ class TypeChecker {
     /// Nombre publico de una plantilla importada -> label con el que quedo
     /// registrada.  Ver @ref register_generic_fn_alias.
     std::unordered_map<std::string, std::string> generic_fn_public_names_;
+
+    /**
+     * El mismo puente al REVES, para quien recorre las declaraciones y tiene
+     * el label en la mano.  Ver @ref generic_fn_written_name.
+     *
+     * La direccion va en el NOMBRE y en el TIPO, no en un comentario: las dos
+     * cadenas son del pozo, asi que la clave es un puntero y no un texto que
+     * haya que volver a hashear -- y de paso no se puede confundir con el mapa
+     * de arriba, que es de cadena a cadena y podria escribirse al reves sin
+     * que nada se quejara.
+     */
+    std::unordered_map<const std::string *, const std::string *>
+        generic_fn_label_to_written_;
 
     /// Idempotencia de monomorphize_method: clave = "Container#metodo_i32"
     /// (separador '#' interno; el lenguaje no usa sintaxis '::').
