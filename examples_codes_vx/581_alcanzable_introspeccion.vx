@@ -1,0 +1,123 @@
+namespace ejemplos.alcanzable;
+
+// Que se puede LLAMAR sobre un tipo, que no es lo mismo que que TIENE.
+//
+// La identidad de un tipo no cambia con quien la mire: `Punto` tiene los
+// metodos que tiene, y eso lo contesta `method.count<Punto>()`.  Lo que si
+// cambia es lo que se le puede llamar por el punto, porque con llamada
+// uniforme eso incluye las funciones libres que ESTE fichero alcanza.
+//
+// Son dos preguntas distintas y se responden por separado.  La familia de
+// aqui lleva `scoped` en el nombre para que la respuesta CONFIESE que depende
+// del ambito, en vez de dejar que se descubra leyendo la documentacion.
+//
+// Lo que cubre:
+//
+//   1. `scoped.method.count<T>()` -- el TOTAL: los metodos reales del tipo
+//      mas las libres alcanzables, que es justo lo que ofreceria el `.`.
+//   2. `scoped.method.has<T>("n")` -- si se puede llamar algo con ese nombre.
+//   3. `scoped.method.name<T>(i)`, `scoped.method.origin<T>(i)` y
+//      `scoped.method.arity<T>(i)` -- la entrada i-esima.
+//   4. La regla del PARAMETRO 0: el receptor cuenta como parametro tanto en
+//      un metodo real -- donde `this` es implicito -- como en una libre, donde
+//      es su primer parametro de verdad.  Es lo que hace que los dos se lean
+//      igual; sin ella, quien consume tendria que preguntar de que clase es
+//      cada entrada antes de poder leer su firma.
+//   5. Y el ORIGEN: vacio si el metodo es del tipo, y el namespace del que
+//      viene si se alcanza por llamada uniforme.  Eso es lo que hace
+//      DEPURABLE una ambiguedad: dos namespaces que ofrecen el mismo nombre
+//      salen los dos, con su origen distinto, aunque llamar sea un error.
+//
+// El orden de la enumeracion es estable entre compilaciones -- por nombre, y
+// a igualdad por origen --: el indice que se le pasa a `scoped.method.name`
+// tiene que significar lo mismo en dos compilaciones del mismo programa, o un
+// recorrido desenrollado en tiempo de compilacion daria codigo distinto cada
+// vez.
+
+struct Punto {
+	i64 x;
+	i64 y;
+
+	i64 doble() => this.x * 2;
+}
+
+// Libres: no pertenecen a Punto, pero hablan de el, asi que el punto las
+// alcanza -- `q.area()` y `area(q)` son la misma llamada.
+i64 area(Punto p) => p.x * p.y;
+i64 perimetro(Punto p) => (p.x + p.y) * 2;
+
+i32 main() {
+	// Lo que el tipo TIENE: solo `doble`.
+	u32 suyos = method.count<Punto>();
+
+	// Lo que se puede llamar DESDE AQUI: `doble` + `area` + `perimetro`.
+	u32 aqui = scoped.method.count<Punto>();
+	println("suyos=${suyos} alcanzables=${aqui}");
+
+	// Por nombre, sin recorrer nada.
+	bool hay_area = scoped.method.has<Punto>("area");
+	bool hay_nada = scoped.method.has<Punto>("noExiste");
+	println("area=${hay_area} noExiste=${hay_nada}");
+
+	// La entrada i-esima.  Orden estable: area, doble, perimetro.
+	string n0 = scoped.method.name<Punto>(0);
+	string o0 = scoped.method.origin<Punto>(0);
+	u32    a0 = scoped.method.arity<Punto>(0);
+	println("0: ${n0} origen=[${o0}] aridad=${a0}");
+
+	string n1 = scoped.method.name<Punto>(1);
+	string o1 = scoped.method.origin<Punto>(1);
+	u32    a1 = scoped.method.arity<Punto>(1);
+	println("1: ${n1} origen=[${o1}] aridad=${a1}");
+
+	string n2 = scoped.method.name<Punto>(2);
+	string o2 = scoped.method.origin<Punto>(2);
+	u32    a2 = scoped.method.arity<Punto>(2);
+	println("2: ${n2} origen=[${o2}] aridad=${a2}");
+
+	// 6. Y LAS MISMAS, escritas con el tipo de receptor.  No hace falta nada
+	// para esto: `T.f()` es `f<T>()`, asi que la familia gana sintaxis de
+	// metodo por la regla de la llamada uniforme y no por una linea escrita
+	// para ella.  Tienen que dar exactamente lo mismo.
+	u32    por_punto = Punto.scoped.method.count();
+	bool   hay_dot   = Punto.scoped.method.has("area");
+	string nd        = Punto.scoped.method.name(1);
+	string od        = Punto.scoped.method.origin(1);
+	u32    ad        = Punto.scoped.method.arity(1);
+	println("por el punto: n=${por_punto} area=${hay_dot} 1=${nd} origen=[${od}] aridad=${ad}");
+
+	// 7. La FIRMA, como TIPO y no como cadena.  Esa es la razon de devolver
+	// `Type`: se vuelve a meter donde se pide un tipo.  Una cadena no.
+	u64 tam_ret  = type.size<scoped.method.result<Punto>(0)>();   // i64  -> 8
+	u64 tam_recv = type.size<scoped.method.param<Punto>(0, 0)>(); // Punto -> 16
+	println("retorno=${tam_ret} receptor=${tam_recv}");
+
+	// 8. Recorrerlas todas, con el cuerpo repetido una vez por entrada: no hay
+	// bucle en el programa, lo desenrolla el compilador.  Recibe el nombre y
+	// el origen, que es lo que hace DEPURABLE un choque entre dos namespaces.
+	scoped.method.each<Punto>((string nombre, string origen) => {
+			println("  cada: ${nombre} <- [${origen}]");
+		});
+
+	// 9. Y todo esto se sabe al COMPILAR, asi que se puede afirmar entonces.
+	comptime {
+		static_assert(scoped.method.count<Punto>() == 3, "tres alcanzables");
+		static_assert(
+			scoped.method.has<Punto>("perimetro"),
+			"y perimetro entre ellas"
+		);
+	}
+
+	// Y que lo enumerado es lo que de verdad se puede llamar.
+	Punto q;
+	q.x              = 6;
+	q.y              = 7;
+	i64 por_el_punto = q.area();  // la libre, por el punto
+	i64 como_libre   = area(q);   // la misma, escrita del otro modo
+	i64 suyo         = q.doble(); // y el metodo del tipo
+	println("area=${por_el_punto} libre=${como_libre} doble=${suyo}");
+
+	// 1 + 3 = 4; 42 + 42 + 12 = 96; 3 + 8 + 16 = 27.  4 + 96 + 27 = 127
+	return (i32)((i64)suyos + (i64)aqui + por_el_punto + como_libre + suyo +
+		(i64)por_punto + (i64)tam_ret + (i64)tam_recv);
+}

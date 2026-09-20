@@ -32,6 +32,8 @@
 
 #include "lsp/semantic_tokens.h"
 
+#include "vx/builtin_names.h" // los builtins y sus raices de familia
+
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -331,6 +333,67 @@ bool is_contextual_keyword(const std::string &name) {
  * lowering (@c src/vx/lowering.cpp: reflexion + introspeccion).  Los
  * clasificamos como @c Function para que tengan el color de funcion.
  */
+/**
+ * @brief Si @p i es parte de un nombre de builtin escrito en ARBOL.
+ *
+ * Los builtins se llaman `type.size`, `field.count`,
+ * `scoped.method.arity`, y eso son VARIOS tokens.  Preguntando por uno
+ * suelto no se reconoce ninguno -- ni `type` ni `size` son builtins por su
+ * cuenta --, asi que la familia entera perdia su color y salia pintada como
+ * una variable cualquiera.
+ *
+ * Se reconstruye la cadena punteada desde su raiz y se para en cuanto forma
+ * un builtin, igual que hace el parser.  Asi el punto de `Punto.field.count()`
+ * que separa el receptor no entra: `Punto` no es raiz.
+ *
+ * @param toks Todos los tokens del documento.
+ * @param i    El identificador que se esta clasificando.
+ * @return Cierto si cae dentro de un nombre de builtin.
+ */
+bool part_of_builtin_tree(const std::vector<vx::Token> &toks, size_t i) {
+    using TK = vx::TokenKind;
+    if (i >= toks.size() || toks[i].kind != TK::IDENTIFIER) return false;
+    /* Hacia atras hasta el primer segmento de la cadena. */
+    size_t start = i;
+    while (start >= 2 && toks[start - 1].kind == TK::DOT &&
+           toks[start - 2].kind == TK::IDENTIFIER)
+        start -= 2;
+    if (!vx::is_builtin_tree_root(toks[start].lexeme)) return false;
+    /* Y hacia delante hasta que lo acumulado ES un builtin. */
+    std::string name = toks[start].lexeme;
+    size_t last = start;
+    while (vx::builtin_from_name(name) == vx::Builtin::Unknown &&
+           last + 2 < toks.size() && toks[last + 1].kind == TK::DOT &&
+           toks[last + 2].kind == TK::IDENTIFIER) {
+        name += ".";
+        name += toks[last + 2].lexeme;
+        last += 2;
+    }
+    return vx::builtin_from_name(name) != vx::Builtin::Unknown && i <= last;
+}
+
+/**
+ * @brief Si @p i cae dentro de la calificacion que sigue a un `$`.
+ *
+ * `x.f$geo.metrico(...)` dice de QUE namespace es la funcion, y eso son
+ * varios identificadores con puntos: `geo`, `metrico`.  Todos son parte del
+ * namespace, no nombres sueltos, asi que se recorre hacia atras por los
+ * puntos hasta ver si el tramo empieza en un `$`.
+ *
+ * @param toks Todos los tokens.
+ * @param i    El identificador que se esta clasificando.
+ * @return Cierto si el tramo arranca en un `$`.
+ */
+bool after_dollar(const std::vector<vx::Token> &toks, size_t i) {
+    using TK = vx::TokenKind;
+    if (i >= toks.size() || toks[i].kind != TK::IDENTIFIER) return false;
+    size_t at = i;
+    while (at >= 2 && toks[at - 1].kind == TK::DOT &&
+           toks[at - 2].kind == TK::IDENTIFIER)
+        at -= 2;
+    return at >= 1 && toks[at - 1].kind == TK::DOLLAR;
+}
+
 bool is_builtin_name(const std::string &name) {
     static const std::unordered_set<std::string> kBuiltins = {
         // --- I/O (vesta_io) ---
@@ -421,52 +484,53 @@ bool is_builtin_name(const std::string &name) {
         "invoke",
         // --- Introspeccion comptime ---
         "static_assert",
-        "sizeof",
-        "alignof",
-        "typename",
-        "type_id",
-        "kind",
-        "field_count",
-        "method_count",
-        "is_class",
-        "is_struct",
-        "is_primitive",
-        "is_newtype",
-        "offsetof",
-        "has_field",
-        "has_method",
-        "is_subtype",
-        "is_same",
-        "comptime_type",
-        "parent_class",
-        "element_type",
-        "error_type",
-        "method_name",
-        "method_return_type",
-        "field_name",
-        "field_type",
-        "field_type_at",
-        "is_enum",
-        "is_opaque",
+        "type.size",
+        "type.align",
+        "type.name",
+        "type.id",
+        "type.kind",
+        "field.count",
+        "method.count",
+        "type.is_class",
+        "type.is_struct",
+        "type.is_primitive",
+        "type.is_newtype",
+        "field.offset",
+        "field.has",
+        "method.has",
+        "type.is_subtype",
+        "type.is_same",
+        "type.of",
+        "type.base",
+        "type.inner",
+        "type.error",
+        "type.result",
+        "method.name",
+        "method.result",
+        "field.name",
+        "field.type",
+        "field.type_at",
+        "type.is_enum",
+        "type.is_opaque",
         "is_shared",
-        "underlying_of",
+        "type.underlying",
         // --- Overlay (vistas tipadas sobre memoria) ---
-        "in_bounds",
-        "extent",
+        "overlay.in_bounds",
+        "overlay.extent",
         // --- Builtins comptime de string + utilidades ---
-        "comptime_concat",
-        "comptime_streq",
-        "comptime_strlen",
-        "comptime_chr",
-        "comptime_ord",
-        "comptime_substr",
-        "comptime_repeat",
-        "comptime_replace",
-        "comptime_contains",
+        "comptime.str.concat",
+        "comptime.str.eq",
+        "comptime.str.len",
+        "comptime.chr",
+        "comptime.ord",
+        "comptime.str.substr",
+        "comptime.str.repeat",
+        "comptime.str.replace",
+        "comptime.str.contains",
         "gensym",
         "comptime_compile",
-        "comptime_to_str",
-        "comptime_print",
+        "comptime.to_str",
+        "comptime.print",
         // --- Smart pointers / borrow ---
         "unique_box",
         "shared_box",
@@ -1205,7 +1269,8 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
 
         // 2) Clasificar cada token.
         using TK = vx::TokenKind;
-        for (const vx::Token &tok : toks) {
+        for (size_t ti = 0; ti < toks.size(); ++ti) {
+            const vx::Token &tok = toks[ti];
             const bool in_asm = !asm_ranges.empty() &&
                                 offset_in_asm(tok.loc.offset, asm_ranges);
 
@@ -1251,6 +1316,39 @@ std::vector<uint32_t> compute_semantic_tokens(const std::string &text,
                 case TK::FALSE_KW:
                 case TK::NULL_KW: type = SemTokenType::Keyword; break;
                 case TK::IDENTIFIER:
+                    /* El HUECO del receptor: en `10.restar(40, _)` el `_` dice
+                     * DoNDE cae el receptor.  No es una variable -- no nombra
+                     * nada --, y pintarlo como tal es justo lo contrario de lo
+                     * que hace: es sintaxis de la llamada. */
+                    if (tok.lexeme == "_") {
+                        type = SemTokenType::Operator;
+                        break;
+                    }
+                    /* Lo que sigue a `$` es de QUE NAMESPACE es la funcion
+                     * (`x.f$geo.metrico(...)`), asi que se pinta como tal y no
+                     * como un nombre cualquiera. */
+                    if (after_dollar(toks, ti)) {
+                        type = SemTokenType::Namespace;
+                        break;
+                    }
+                    /* Un builtin en arbol son varios tokens; se pregunta por
+                     * la cadena entera antes de mirarlo como nombre suelto. */
+                    if (part_of_builtin_tree(toks, ti)) {
+                        type = SemTokenType::Function;
+                        break;
+                    }
+                    /* Lo que va TRAS UN PUNTO y lleva `(` detras es una
+                     * llamada, no un campo.  Con llamada uniforme puede ser un
+                     * metodo del tipo o una funcion LIBRE alcanzable -- `q.f()`
+                     * y `f(q)` son la misma --, y desde aqui no se distingue ni
+                     * hace falta: las dos son llamadas.  Sin esto, la mitad de
+                     * las llamadas del lenguaje se pintaban como variables. */
+                    if (ti > 0 && toks[ti - 1].kind == TK::DOT &&
+                        ti + 1 < toks.size() &&
+                        toks[ti + 1].kind == TK::LPAREN) {
+                        type = SemTokenType::Method;
+                        break;
+                    }
                     type = classify_identifier(tok.lexeme, analysis);
                     break;
                 default:

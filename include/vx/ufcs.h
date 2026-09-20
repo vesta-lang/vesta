@@ -224,6 +224,49 @@ struct Index {
                                 const std::string **matched = nullptr) const;
 
     /**
+     * @brief Una entrada alcanzable: como se escribe y de donde sale.
+     *
+     * Todo son punteros del pozo: enumerar no construye ninguna cadena ni
+     * vuelve a hashear texto, igual que no lo hace resolver.
+     */
+    struct Reachable {
+        /// Como se escribe tras el punto, sin el prefijo del aplanado.
+        const std::string *name;
+        /// El namespace de donde viene, con puntos (`geo.sub`), o nulo si no
+        /// lleva prefijo.
+        const std::string *origin;
+        /// Su firma en la tabla del comprobador.
+        uint32_t slot;
+    };
+
+    /**
+     * @brief Que se puede llamar sobre @p recv desde @p site_prefix.
+     *
+     * Lo que resuelve una llamada es @c find, que va del nombre a las
+     * candidatas.  Esta es la pregunta al REVES -- "que se puede llamar sobre
+     * esto" --, la que hacen la introspeccion de lo alcanzable
+     * (`scoped.method.*`) y el `.` del editor.
+     *
+     * Vive aqui, al lado de @c find, y no en quien pregunta: las dos
+     * direcciones aplican el MISMO criterio de alcance -- sin prefijo, o el
+     * del sitio --, y separarlas de fichero es dejar que divergan.  El modo de
+     * fallar es que el editor ofrezca por el punto lo que la llamada rechaza.
+     *
+     * Recorre solo los dos cubos que mira @c find, y las entradas vienen ya
+     * partidas del momento de DECLARAR, asi que aqui no se arma ninguna cadena
+     * ni se hashea texto: es el recorrido de un vector y una comparacion de
+     * punteros por entrada.
+     *
+     * @param recv        El tipo del receptor.
+     * @param site_prefix Prefijo del namespace donde se pregunta (`app__`), o
+     *                    vacio en la raiz.
+     * @param out         Recibe las entradas.  NO se limpia: se anyade, para
+     *                    poder juntar varios receptores sin copiar.
+     */
+    void reachable_for(const Type &recv, const std::string &site_prefix,
+                       std::vector<Reachable> &out) const;
+
+    /**
      * @brief Apunta que @p mangled es como el aplanado escribio @p public_name.
      *
      * Un `x.f()` lleva `f` tal cual -- el aplanado renombra declaraciones y
@@ -238,6 +281,27 @@ struct Index {
                         const std::string &public_name);
 
   private:
+    /**
+     * @brief Un nombre de un cubo, ya PARTIDO.
+     *
+     * El aplanado declara `f` del namespace `geo` como `geo__f`, y tras el
+     * punto se escribe `f`.  Deshacerlo cuesta buscar un separador, cortar dos
+     * cadenas y cambiar `__` por `.` en el origen -- y hacerlo al enumerar es
+     * pagarlo por cada pregunta, cuando el nombre no cambia nunca.
+     *
+     * Asi que se parte al DECLARAR, una vez por (cabeza, nombre) distinto, y
+     * lo que queda son tres punteros del pozo.
+     */
+    struct HeadEntry {
+        const std::string *declared;    ///< `geo__f`
+        const std::string *public_name; ///< `f`
+        const std::string *ns_prefix;   ///< `geo__`, o nulo si no lleva
+        const std::string *origin;      ///< `geo`, con puntos; nulo si raiz
+    };
+
+    /// Apunta que @p n se declaro bajo @p head, si no estaba ya.
+    void note_name_in_head(const std::string *head, const std::string *n);
+
     /// (cabeza, nombre) -> candidatas.  Crece con las DECLARACIONES del
     /// programa, no con el uso: no es el producto cruzado tipo x funcion, que
     /// es lo que impediria que esto se dispare.
@@ -271,6 +335,11 @@ struct Index {
         }
     };
     std::unordered_map<const std::string *, Candidates, NameHash> by_name_;
+    /// Que nombres hay en cada cubo, para la pregunta al reves: "que se puede
+    /// llamar sobre esto".  Ver @c reachable_for.  Crece con las
+    /// DECLARACIONES, igual que @c by_head_.
+    std::unordered_map<const std::string *, std::vector<HeadEntry>, NameHash>
+        names_by_head_;
     std::vector<std::string> prefixes_;
 };
 

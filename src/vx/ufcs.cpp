@@ -106,25 +106,124 @@ const std::string *head_of_decl(const ast::TypeNode *t,
     }
 }
 
+namespace {
+
+/**
+ * @brief La cabeza bajo la que se indexa un tipo sabiendo que es un PARaMETRO.
+ *
+ * Igual que @ref head_of salvo en un caso, y el caso importa: un parametro que
+ * resolvio a `void` no es un parametro de tipo `void` -- eso no existe, no hay
+ * nada que pasarle --, es un parametro que NO SE PUDO RESOLVER, y lo unico que
+ * no resuelve en una firma es una variable de tipo.  O sea una plantilla, y su
+ * cubo es `any`: vale para cualquier receptor.
+ *
+ * Donde se nota es al cruzar el modulo.  Una plantilla declarada AQUI se indexa
+ * por lo ESCRITO (@ref head_of_decl, que ve el `T`), pero una que llega por un
+ * `import` llega ya resuelta -- de su interfaz binaria sale una firma, no un
+ * arbol --, y ahi `T` se habia vuelto `void`: todas las plantillas importadas
+ * del programa acababan en un cubo llamado `void`, que ningun receptor
+ * pregunta.  El efecto era que el punto alcanzaba o no la MISMA funcion segun
+ * si estaba escrita en este fichero o en otro, que es justo lo que un import
+ * viene a que no pase.
+ *
+ * @param t El tipo del parametro.
+ * @return Su cabeza, internada.
+ */
+const std::string *head_of_param(const Type &t) {
+    if (t.kind == PrimitiveKind::VOID) return util::intern_name("any");
+    return head_of(t);
+}
+
+} // namespace
+
 void Index::declare_head(const std::string *head, const std::string &name,
                          uint32_t slot) {
     if (head == nullptr) return;
     const std::string *n = util::intern_name(name);
     Candidates &c = by_head_[Key{head, n}];
+    /* Si no habia ninguna, este nombre es NUEVO en el cubo.  Preguntarselo a
+     * la tabla que ya se consulto sale gratis; buscarlo en la lista del cubo
+     * seria recorrerla entera por declaracion, y los cubos `any` y `num` son
+     * uno solo para todo el programa -- o sea, cuadratico en el numero de
+     * funciones que compilas. */
+    const bool first_here = c.empty();
     for (uint32_t s : c)
         if (s == slot) return;
     c.push_back(slot);
     by_name_[n].push_back(slot);
+    if (first_here) note_name_in_head(head, n);
 }
 
 void Index::declare(const Type &first_param, const std::string &name,
                     uint32_t slot) {
     const std::string *n = util::intern_name(name);
-    Candidates &c = by_head_[Key{head_of(first_param), n}];
+    const std::string *head = head_of_param(first_param);
+    Candidates &c = by_head_[Key{head, n}];
+    const bool first_here = c.empty(); // ver declare_head
     for (uint32_t s : c)
         if (s == slot) return; // ya estaba: declarar dos veces no duplica
     c.push_back(slot);
     by_name_[n].push_back(slot);
+    if (first_here) note_name_in_head(head, n);
+}
+
+void Index::note_name_in_head(const std::string *head, const std::string *n) {
+    /* Sin buscar si ya estaba: quien llama solo lo hace la PRIMERA vez que ese
+     * nombre cae en ese cubo, y eso lo sabe en O(1) (ver declare_head).  Con
+     * la busqueda aqui, declarar era cuadratico en las funciones del cubo. */
+    HeadEntry e;
+    e.declared = n;
+    /* Partirlo AQUI y no al enumerar: el nombre no cambia nunca, asi que el
+     * corte se paga una vez por declaracion en vez de una vez por pregunta. */
+    const size_t sep = n->rfind("__");
+    if (sep == std::string::npos || sep == 0) {
+        e.public_name = n;
+        e.ns_prefix = nullptr;
+        e.origin = nullptr;
+    } else {
+        e.public_name = util::intern_name(n->substr(sep + 2));
+        e.ns_prefix = util::intern_name(n->substr(0, sep + 2));
+        /* El origen se guarda como el usuario lo ESCRIBE -- con puntos --,
+         * porque es lo que sale por `scoped_method_origin` y por el editor: un
+         * namespace anidado devuelto como `geo__sub` no se podria ni teclear. */
+        std::string dotted = n->substr(0, sep);
+        size_t at = 0;
+        while ((at = dotted.find("__", at)) != std::string::npos) {
+            dotted.replace(at, 2, ".");
+            at += 1;
+        }
+        e.origin = util::intern_name(dotted);
+    }
+    names_by_head_[head].push_back(e);
+}
+
+void Index::reachable_for(const Type &recv, const std::string &site_prefix,
+                          std::vector<Reachable> &out) const {
+    /* Los mismos dos cubos que mira `find`, y en el mismo orden: el del tipo y
+     * el de las que valen para cualquier receptor. */
+    const std::string *heads[2] = {head_of(recv), util::intern_name("any")};
+    /* El prefijo del sitio se interna UNA vez, no por entrada: a partir de
+     * aqui el alcance es comparar dos punteros. */
+    const std::string *site =
+        site_prefix.empty() ? nullptr : util::intern_name(site_prefix);
+
+    for (const std::string *head : heads) {
+        if (head == nullptr) continue;
+        auto it = names_by_head_.find(head);
+        if (it == names_by_head_.end()) continue;
+        for (const HeadEntry &e : it->second) {
+            /* El MISMO criterio que `find`, visto del otro lado: alli se
+             * prueba el nombre tal cual y luego con el prefijo del sitio, asi
+             * que alcanza lo que no lleva prefijo y lo que lleva el de aqui.
+             * Lo de otro namespace no se alcanza escribiendo el nombre corto,
+             * y por eso tampoco se enumera. */
+            if (e.ns_prefix != nullptr && e.ns_prefix != site) continue;
+            auto cands = by_head_.find(Key{head, e.declared});
+            if (cands == by_head_.end()) continue;
+            for (uint32_t slot : cands->second)
+                out.push_back(Reachable{e.public_name, e.origin, slot});
+        }
+    }
 }
 
 const Candidates *Index::find(const Type &recv, const std::string &written,
@@ -173,7 +272,7 @@ const Candidates *Index::find(const Type &recv, const std::string &written,
 
 void Index::declare_any(const Type &param, const std::string &name,
                         uint32_t slot) {
-    Candidates &c = by_any_[Key{head_of(param), util::intern_name(name)}];
+    Candidates &c = by_any_[Key{head_of_param(param), util::intern_name(name)}];
     for (uint32_t s : c)
         if (s == slot) return; // dos parametros de la misma cabeza no duplican
     c.push_back(slot);

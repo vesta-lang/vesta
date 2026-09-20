@@ -25,6 +25,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "vx/ast.h"
@@ -43,7 +44,35 @@ struct SymbolEntry {
     uint32_t src_offset = 0;       ///< offset del span en la fuente original.
     uint32_t src_length = 0;       ///< longitud del span en bytes.
     bool is_public = true; ///< @c true si la decl es @c public (importable).
+    /**
+     * @brief La CABEZA del tipo de su primer parametro, como indice al pozo.
+     *
+     * @c kNoRecv si no es una funcion, no tiene parametros o su tipo no da una
+     * cabeza.
+     *
+     * Esta aqui porque es la clave de una pregunta que el indice tiene que
+     * saber contestar: **que se puede llamar sobre un tipo**.  Con llamada
+     * uniforme, `area(Punto p)` se llama tambien `q.area()`, asi que el primer
+     * parametro de una funcion libre ES su receptor -- y sin este dato, el
+     * editor no puede ofrecerla al escribir el punto aunque el compilador si
+     * la encuentre.
+     *
+     * Es un ENTERO y no una cadena: hay una entrada por declaracion del
+     * programa, y con la stdlib dentro eso son miles.  Guardar el texto seria
+     * repetir `Punto` en cada funcion que lo tome y pagar 32 bytes por
+     * simbolo; asi son cuatro, y las cadenas distintas -- que son pocas --
+     * viven una sola vez en @c SemanticIndex::recv_pool.
+     *
+     * Se guarda la CABEZA escrita y no el tipo resuelto, con el mismo criterio
+     * que @c vx::ufcs::head_of: el indice se construye antes de comprobar
+     * tipos, y asi lo declarado contra `Caja<T>` lo encuentra un receptor
+     * `Caja<i64>`.
+     */
+    uint32_t recv_head = 0xFFFFFFFFu;
 };
+
+/// Que un simbolo no puede recibir a nadie por el punto.
+inline constexpr uint32_t kNoRecv = 0xFFFFFFFFu;
 
 /**
  * @struct SemanticIndex
@@ -54,8 +83,43 @@ struct SemanticIndex {
     uint64_t module_hash = 0; ///< FNV-1a del fuente completo (compat cache).
     std::vector<SymbolEntry> symbols;
 
+    /**
+     * @brief Las cabezas de receptor distintas, una sola vez.
+     *
+     * @c SymbolEntry::recv_head indexa aqui.  Son pocas -- los tipos que el
+     * modulo usa como primer parametro --, frente a una entrada por
+     * declaracion.
+     */
+    std::vector<std::string> recv_pool;
+
     /// @brief Busca un simbolo por nombre cualificado (nullptr si no existe).
     const SymbolEntry *find(const std::string &qualified_name) const;
+
+    /**
+     * @brief Los simbolos que pueden RECIBIR a @p head por el punto.
+     *
+     * La pregunta del editor al escribir `q.`: que funciones libres toman un
+     * `Punto` de primer parametro.  Se contesta con un acceso al mapa y una
+     * lista, no recorriendo los miles de simbolos del indice en cada
+     * pulsacion.
+     *
+     * @param head La cabeza del tipo del receptor (`Punto`, `i64`, `Caja`).
+     * @return Los indices en @c symbols, o nulo si ninguno.
+     */
+    const std::vector<uint32_t> *by_recv(const std::string &head) const;
+
+    /**
+     * @brief Rehace el mapa de receptores desde @c symbols.
+     *
+     * No se serializa: se deriva.  Un mapa en disco seria un segundo sitio
+     * donde lo mismo puede quedar desfasado, y construirlo cuesta un recorrido
+     * de lo que se acaba de leer.
+     */
+    void rebuild_recv_lookup();
+
+  private:
+    /// cabeza -> indices en @c symbols.  Derivado; ver @c rebuild_recv_lookup.
+    std::unordered_map<std::string, std::vector<uint32_t>> recv_index_;
 };
 
 /**

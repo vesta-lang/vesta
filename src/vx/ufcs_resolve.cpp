@@ -44,6 +44,7 @@
 #include "vx/type_checker.h"
 
 #include "vx/diag/diag_catalog.h"
+#include "vx/parser.h" // la lista de builtins que llevan type-args
 #include "vx/ufcs.h"
 
 #include <memory>
@@ -52,6 +53,99 @@
 #include <vector>
 
 namespace vx {
+
+bool TypeChecker::base_denotes_type(const ast::Expr *base) const {
+    if (base == nullptr) return false;
+    /* Un nombre a secas: `Punto.f()`.  Que no sea ademas una VARIABLE es lo
+     * que separa el tipo del valor -- `Punto` puede ser las dos cosas si
+     * alguien llamo asi a una local, y entonces gana la variable. */
+    if (base->kind == ast::NodeKind::IdentExpr) {
+        const auto *id = static_cast<const ast::IdentExpr *>(base);
+        return lookup(id->name) == nullptr;
+    }
+    /* O cualificado: `geo.Punto.f()`.  La base de la base tiene que ser un
+     * NAMESPACE, no un valor con un campo que se llame como un tipo -- si
+     * `obj.Punto` es un campo, `obj.Punto.f()` habla del campo. */
+    if (base->kind == ast::NodeKind::FieldAccessExpr) {
+        const auto *fa = static_cast<const ast::FieldAccessExpr *>(base);
+        if (!fa->base || fa->base->kind != ast::NodeKind::IdentExpr)
+            return false;
+        const auto *ns = static_cast<const ast::IdentExpr *>(fa->base.get());
+        const Symbol *s = lookup(ns->name);
+        if (s != nullptr) return s->kind == SymbolKind::Namespace;
+        // NS short-form: el ultimo segmento de un namespace importado.
+        return ns_idx_by_local_name_.find(ns->name) !=
+               ns_idx_by_local_name_.end();
+    }
+    return false;
+}
+
+bool TypeChecker::try_ufcs_type_receiver(ast::CallExpr *e,
+                                         ast::FieldAccessExpr *fa,
+                                         const std::string &type_name) {
+    if (e == nullptr || fa == nullptr) return false;
+
+    /* CUAL es la plantilla.  El nombre se escribe corto (`medida`) y la
+     * declaracion vive aplanada (`app__medida`), asi que hay que probar las dos
+     * formas -- la del fichero primero, que es la que gana si hay homonimas en
+     * otro namespace importado --.  Es el mismo desdoble que hace la resolucion
+     * de una llamada libre; sin el, una generica del propio namespace no se
+     * encontraba y `Punto.medida()` seguia de largo hasta morir tipando
+     * `Punto` como si fuera un valor. */
+    std::string plantilla;
+    if (!current_ns_prefix_.empty() &&
+        is_generic_fn_template(current_ns_prefix_ + fa->field_name)) {
+        plantilla = current_ns_prefix_ + fa->field_name;
+    } else if (is_generic_fn_template(fa->field_name)) {
+        plantilla = fa->field_name;
+    } else if (is_comptime_builtin_name(fa->field_name)) {
+        /* Y los BUILTIN que llevan argumentos de tipo: es de donde sale que
+         * `u64.sizeof()` y `Punto.field_count()` funcionen sin escribir nada
+         * para ellos -- son `sizeof<T>()` y `field_count<T>()` con el receptor
+         * de argumento --.  La lista es la del parser, no una copia. */
+        plantilla = fa->field_name;
+    } else {
+        const std::string &resuelto = resolve_generic_fn_name(fa->field_name);
+        if (!is_generic_fn_template(resuelto)) return false;
+        plantilla = resuelto;
+    }
+
+    /* El tipo receptor ES el argumento de tipo, asi que no hay nada que
+     * deducir: `Punto.medida()` es `medida<Punto>()`.  Si la plantilla declara
+     * mas variables queda alguna sin fijar, y de eso ya habla la deduccion con
+     * su propio diagnostico -- que dice CUAL falta --, no este. */
+    /* El nodo del tipo receptor.  Un PRIMITIVO no es un nombre que resolver:
+     * si se pasa como tal, no resuelve a nada y `sizeof<u64>()` contesta CERO
+     * en vez de ocho -- un resultado equivocado, no un error. */
+    std::unique_ptr<ast::TypeNode> tn;
+    const PrimitiveKind prim = primitive_from_name(type_name);
+    if (prim != PrimitiveKind::COUNT) {
+        auto pn = std::make_unique<ast::PrimitiveTypeNode>();
+        pn->loc = fa->loc;
+        pn->prim = prim;
+        tn = std::move(pn);
+    } else {
+        auto nn = std::make_unique<ast::NamedTypeNode>();
+        nn->loc = fa->loc;
+        nn->name = type_name;
+        tn = std::move(nn);
+    }
+
+    auto id = std::make_unique<ast::IdentExpr>();
+    id->loc = fa->loc;
+    id->name = plantilla;
+
+    /* Se REESCRIBE, no se resuelve aqui: a partir de este punto es una llamada
+     * generica corriente, asi que la eleccion entre homonimas, los argumentos
+     * por nombre y el bajado son literalmente el mismo codigo.  Es lo mismo que
+     * hace el receptor de valor, y por eso las dos clases de base no pueden
+     * divergir. */
+    e->callee = std::move(id);
+    e->type_args.clear();
+    e->type_args.push_back(std::move(tn));
+    e->result_type = check_call(e);
+    return true;
+}
 
 Type TypeChecker::ufcs_key_type(const Type &t) const {
     if (t.kind != PrimitiveKind::STRUCT && t.kind != PrimitiveKind::CLASS)
@@ -366,6 +460,38 @@ bool TypeChecker::try_ufcs_call(ast::CallExpr *e, ast::FieldAccessExpr *fa,
             recv_efectivo = std::move(como_ptr);
             tomar_direccion = !base_es_ptr;
         }
+    }
+    /* Un BUILTIN del lenguaje tras el punto tambien es una llamada uniforme.
+     *
+     * La mayoria estan en el indice porque se registran con una firma
+     * (`free`, `sqrt`, `malloc`...), pero los POLIMORFICOS no: `unwrap` vale
+     * sobre cualquier `Optional<T>` y `ptr_of` sobre cualquier `unique<T>`,
+     * asi que no tienen un primer parametro de tipo concreto que indexar y el
+     * comprobador los resuelve por su cuenta.  Sin esto, `o.unwrap()` decia
+     * que no hay ninguna funcion que tome un `Optional<i64>` -- cuando
+     * `unwrap(o)`, que es la MISMA llamada, compila --.
+     *
+     * No hace falta enumerarlos: si el nombre ES un builtin, se reescribe a la
+     * grafia libre y decide la comprobacion de siempre.  Si el receptor no le
+     * vale, el error habla de tipos, que es lo que pasa de verdad, en vez de
+     * negar que el nombre exista. */
+    if ((cand_slots == nullptr || cand_slots->empty()) &&
+        builtin_from_name(fa->field_name) != Builtin::Unknown) {
+        auto callee = std::make_unique<ast::IdentExpr>();
+        callee->loc = fa->loc;
+        callee->name = fa->field_name;
+        std::vector<std::unique_ptr<ast::Expr>> args;
+        args.reserve(e->args.size() + 1);
+        args.push_back(std::move(fa->base));
+        for (auto &a : e->args)
+            args.push_back(std::move(a));
+        e->callee = std::move(callee);
+        e->args = std::move(args);
+        /* Y se comprueba como la llamada libre que ahora ES: sin esto el nodo
+         * quedaba reescrito pero sin tipo, y el error pasaba a hablar de un
+         * `void` que nadie escribio. */
+        e->result_type = check_call(e);
+        return true;
     }
     if (cand_slots == nullptr || cand_slots->empty()) return false;
 

@@ -232,6 +232,11 @@ add_library(vx_lib STATIC
     # serian dos criterios, y el sintoma es que el mismo programa compila o no
     # segun como se escriba la llamada.
     ufcs_resolve.cpp
+    # Y la pregunta al REVES: no "que funcion es esta llamada", sino "que se
+    # puede llamar sobre este tipo desde aqui".  La usan la introspeccion
+    # comptime (`scoped_method_*`) y el `.` del editor -- un productor, dos
+    # consumidores --, y por eso no vive dentro de ninguno de los dos.
+    ufcs_scoped.cpp
     type_checker.cpp
     # El `when:` de un contrato: gramatica, atomos y la regla de prioridad
     # entre varios que casan a la vez.  Aparte porque lo necesitan DOS TUs

@@ -89,8 +89,43 @@ struct FlatDecl {
     std::string qname; ///< nombre cualificado con el namespace.
     uint8_t kind;
     uint32_t offset;
-    bool is_public; ///< @c public (importable desde otro modulo).
+    bool is_public;         ///< @c public (importable desde otro modulo).
+    std::string recv_head;  ///< cabeza del 1er parametro; vacia si no aplica.
 };
+
+/**
+ * @brief La CABEZA del tipo tal y como se escribio.
+ *
+ * El mismo criterio que @c vx::ufcs::head_of, pero leyendo el nodo ESCRITO:
+ * aqui no hay tipos resueltos todavia.  Por eso un generico da el nombre del
+ * constructor (`Caja<i64>` -> `Caja`), que es lo que permite que lo declarado
+ * contra `Caja<T>` lo encuentre un receptor concreto.
+ *
+ * @param t El nodo de tipo del primer parametro.
+ * @return Su cabeza, o vacio si el nodo no da ninguna.
+ */
+std::string written_head(const ast::TypeNode *t) {
+    if (t == nullptr) return {};
+    switch (t->kind) {
+    case ast::NodeKind::NamedTypeNode:
+        return static_cast<const ast::NamedTypeNode *>(t)->name;
+    case ast::NodeKind::PrimitiveTypeNode:
+        return std::string(
+            primitive_name(static_cast<const ast::PrimitiveTypeNode *>(t)->prim));
+    case ast::NodeKind::PointerTypeNode: return "ptr";
+    case ast::NodeKind::ArrayTypeNode: return "array";
+    case ast::NodeKind::FunctionTypeNode: return "fn";
+    default: return {};
+    }
+}
+
+/// La cabeza del receptor de @p d, si es una funcion con parametros.
+std::string decl_recv_head(const ast::Node *d) {
+    if (d == nullptr || d->kind != ast::NodeKind::FunctionDecl) return {};
+    const auto *fd = static_cast<const ast::FunctionDecl *>(d);
+    if (fd->params.empty() || !fd->params[0]) return {};
+    return written_head(fd->params[0]->type.get());
+}
 
 void flatten_decls(const std::vector<std::unique_ptr<ast::Node>> &decls,
                    const std::string &ns_prefix, std::vector<FlatDecl> &out) {
@@ -107,7 +142,7 @@ void flatten_decls(const std::vector<std::unique_ptr<ast::Node>> &decls,
         if (nm.empty()) continue; // ImportDecl u otros no-simbolo.
         const std::string q = ns_prefix.empty() ? nm : ns_prefix + "." + nm;
         out.push_back({q, static_cast<uint8_t>(d->kind), d->loc.offset,
-                       decl_is_public(d.get())});
+                       decl_is_public(d.get()), decl_recv_head(d.get())});
     }
 }
 
@@ -147,6 +182,21 @@ void scan_identifiers(const char *data, size_t n,
 }
 
 } // namespace
+
+void SemanticIndex::rebuild_recv_lookup() {
+    recv_index_.clear();
+    for (uint32_t i = 0; i < symbols.size(); ++i) {
+        const uint32_t h = symbols[i].recv_head;
+        if (h == kNoRecv || h >= recv_pool.size()) continue;
+        recv_index_[recv_pool[h]].push_back(i);
+    }
+}
+
+const std::vector<uint32_t> *
+SemanticIndex::by_recv(const std::string &head) const {
+    const auto it = recv_index_.find(head);
+    return it == recv_index_.end() ? nullptr : &it->second;
+}
 
 const SymbolEntry *
 SemanticIndex::find(const std::string &qualified_name) const {
@@ -195,6 +245,17 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
         se.src_length = len;
         se.is_public = flat[k].is_public;
         se.content_hash = fnv1a64(source.data() + b, len);
+        /* La cabeza va al pozo: una cadena por tipo distinto, no por
+         * simbolo.  Lineal porque son pocas -- los tipos que el modulo usa
+         * como primer parametro --, y esto corre una vez por declaracion. */
+        if (!flat[k].recv_head.empty()) {
+            uint32_t at = 0;
+            for (; at < idx.recv_pool.size(); ++at)
+                if (idx.recv_pool[at] == flat[k].recv_head) break;
+            if (at == idx.recv_pool.size())
+                idx.recv_pool.push_back(flat[k].recv_head);
+            se.recv_head = at;
+        }
 
         // Deps: identificadores del span que sean nombre de OTRO simbolo del
         // modulo (excluyendo el propio nombre simple).
@@ -208,6 +269,10 @@ SemanticIndex build_semantic_index(const ast::ModuleNode &mod,
         std::sort(se.deps.begin(), se.deps.end());
         idx.symbols.push_back(std::move(se));
     }
+    /* El mapa por receptor se deriva aqui, no se guarda: es lo que hace que
+     * el editor conteste "que se puede llamar sobre esto" con un acceso en vez
+     * de recorriendo los miles de simbolos en cada pulsacion. */
+    idx.rebuild_recv_lookup();
     return idx;
 }
 
@@ -223,7 +288,7 @@ namespace {
 constexpr uint32_t VXIDX_MAGIC = 0x58495856u; // 'VXIX' little-endian
 // Ecosistema alpha: SIN compat de versiones.  Un sidecar con version distinta
 // se rechaza y se regenera; no hay ramas de parseo legacy.
-constexpr uint16_t VXIDX_VERSION = 2;
+constexpr uint16_t VXIDX_VERSION = 3; // v3: la cabeza del receptor
 
 void put_u16(std::vector<uint8_t> &b, uint16_t v) {
     b.push_back(v & 0xFF);
@@ -300,6 +365,11 @@ std::vector<uint8_t> serialize_semantic_index(const SemanticIndex &idx) {
     put_u16(b, 0);
     put_u64(b, idx.module_hash);
     put_str(b, idx.module_path);
+    /* El pozo de cabezas va antes que los simbolos: al leer hace falta para
+     * poder resolver el indice de cada uno. */
+    put_u32(b, static_cast<uint32_t>(idx.recv_pool.size()));
+    for (const auto &h : idx.recv_pool)
+        put_str(b, h);
     put_u32(b, static_cast<uint32_t>(idx.symbols.size()));
     for (const auto &s : idx.symbols) {
         put_str(b, s.name);
@@ -308,6 +378,7 @@ std::vector<uint8_t> serialize_semantic_index(const SemanticIndex &idx) {
         put_u32(b, s.src_offset);
         put_u32(b, s.src_length);
         b.push_back(s.is_public ? 1 : 0); // v2
+        put_u32(b, s.recv_head);          // v3
         put_u32(b, static_cast<uint32_t>(s.deps.size()));
         for (const auto &d : s.deps)
             put_str(b, d);
@@ -324,6 +395,11 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
     out = SemanticIndex{};
     out.module_hash = r.u64();
     out.module_path = r.str();
+    const uint32_t pool_n = r.u32();
+    if (!r.ok || pool_n > 1'000'000u) return false;
+    out.recv_pool.reserve(pool_n);
+    for (uint32_t i = 0; i < pool_n && r.ok; ++i)
+        out.recv_pool.push_back(r.str());
     const uint32_t count = r.u32();
     if (!r.ok || count > 10'000'000u) return false; // cota defensiva.
     out.symbols.reserve(count);
@@ -343,6 +419,7 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
             break;
         }
         s.is_public = (*r.p++ != 0);
+        s.recv_head = r.u32(); // v3
         const uint32_t dc = r.u32();
         if (!r.ok || dc > 1'000'000u) return false;
         s.deps.reserve(dc);
@@ -350,6 +427,9 @@ bool parse_semantic_index(const std::vector<uint8_t> &bytes,
             s.deps.push_back(r.str());
         out.symbols.push_back(std::move(s));
     }
+    /* Derivado tambien al LEER: no viaja en el fichero (ver
+     * @c rebuild_recv_lookup). */
+    if (r.ok) out.rebuild_recv_lookup();
     return r.ok;
 }
 
@@ -437,7 +517,14 @@ std::string semantic_index_to_json(const SemanticIndex &idx) {
             if (k) j += ",";
             j += "\"" + esc(s.deps[k]) + "\"";
         }
-        j += "]}";
+        j += "]";
+        /* Sobre QUE se puede llamar por el punto.  Se vuelca resuelto contra
+         * el pozo y no como el indice crudo: un numero no dice nada a quien
+         * mira, y lo que no se puede mirar acaba siendo lo que nadie
+         * comprueba. */
+        if (s.recv_head != kNoRecv && s.recv_head < idx.recv_pool.size())
+            j += ",\"recv\":\"" + esc(idx.recv_pool[s.recv_head]) + "\"";
+        j += "}";
     }
     j += "]}";
     return j;

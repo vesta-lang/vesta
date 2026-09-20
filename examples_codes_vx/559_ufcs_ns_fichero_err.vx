@@ -15,14 +15,14 @@
 //
 // Se espera que NO compile: VX2080 y VX2070.
 
-namespace unidades.metrico {
+namespace unidades_err.metrico {
 	public i64 doble(i64 x) => x * 2;
 
 	// Ranuras con OTRO nombre que las de su hermana de abajo.
 	public i64 pesa(i64 kilos, i64 gramos) => kilos * 1000 + gramos;
 }
 
-namespace unidades.imperial {
+namespace unidades_err.imperial {
 	public i64 doble(i64 x) => x * 3;
 
 	public i64 pesa(i64 libras, i64 onzas) => libras * 454 + onzas;

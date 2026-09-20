@@ -1,0 +1,18 @@
+namespace geo;
+
+// Un struct PUBLICO con METODOS, importado desde otro modulo.  Esa
+// combinacion es la que nadie pisaba: la stdlib expone sus structs con
+// funciones libres (`mutex_lock(m)`) o se importa con `only`, asi que los
+// metodos de un struct alcanzado por su nombre CUALIFICADO no los ejercitaba
+// nadie -- y no llegaban.
+public struct Punto {
+	i64 x;
+	i64 y;
+
+	public i64 doble() => this.x * 2;
+
+	public i64 suma() => this.x + this.y;
+}
+
+// Y una generica libre, para el receptor de TIPO cualificado.
+public i64 medida<T>() => (i64)type.size<T>();

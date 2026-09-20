@@ -35,8 +35,15 @@ namespace ejemplos.ufcs;
 //      caso normal: el aplanado renombra la DECLARACION (`ejemplos__ufcs__f`)
 //      pero lo que va tras un punto se escribe corto, asi que buscar `f` a
 //      secas no encontraria nada si el indice no supiera el prefijo.
+//   11. Una generica de OTRO MODULO, y la funcion ELEGIDA por una expresion.
+//      Lo que sigue al punto tiene que ser un nombre -- un ternario no lo es
+//      --, asi que la eleccion no cabe ahi; cabe donde caben todas, en el
+//      argumento, porque una funcion ya es un valor.  `std.func.apply` es
+//      quien lo recibe.
 //
 // Resultado esperado: 42.
+
+import std.func only apply, tap;
 
 struct Punto {
 	i64 x;
@@ -75,6 +82,12 @@ class Caja {
 
 i64 contenido(Caja c) => c.v;
 
+// 11. las dos que la eleccion escoge, y una que se hace por su EFECTO
+u64 largo(string s) => s.length();
+u64 largo_x2(string s) => s.length() * 2_u64;
+void nota(i64 v) { println("nota=${v}"); }
+i64 mas_uno(i64 v) => v + 1;
+
 i32 main() {
 	Punto q;
 	q.x = 4;
@@ -112,11 +125,43 @@ i32 main() {
 	Edad ed = (Edad)41_u32;
 	u64  ea = ed.anyos(); // 42
 
+	// 10. y los BUILTIN del lenguaje, que son funciones como cualquier otra:
+	// `o.unwrap()` es `unwrap(o)`.  Los que llevan una firma registrada ya
+	// entraban por el indice; los POLIMORFICOS no, porque valen sobre
+	// cualquier `Optional<T>` o `unique<T>` y no tienen un primer parametro
+	// concreto que indexar.  Se resuelven igual: si el nombre ES un builtin,
+	// se reescribe a la grafia libre y decide la comprobacion de siempre --
+	// sin una lista de excepciones que se quede corta al anyadir el
+	// siguiente.
+	Optional<i64> op = Some(30);
+	i64           bu = op.unwrap(); // unwrap(op)      = 30
+	shared<i64>   sh = shared_box(7);
+	u64           uc = sh.use_count(); // use_count(sh)   = 1
+	f64           ra = 81.0_f64;
+	f64           rz = ra.sqrt(); // sqrt(ra)        = 9
+
+	// 11. una generica de OTRO MODULO, con la funcion elegida por un ternario.
+	// El receptor de la primera es un LITERAL: su tipo es `string`, igual que
+	// el de la variable, porque el tipo de una cadena es su tipo y no su
+	// representacion -- a `char*` se baja pidiendolo (`.cstr()`).  Antes aqui
+	// se deducia `void*` y la misma llamada ligaba un tipo distinto segun se
+	// escribiera con un literal o con una variable.
+	bool corto = true;
+	u64  el    = "hola".apply(corto ? &largo : &largo_x2); // 4
+	// Y `tap` deja pasar el valor para poder intercalar el efecto sin partir
+	// la cadena en dos.  `mas_uno` no devuelve nada nuevo que explicar; lo que
+	// prueba es que el receptor que sigue es el de ANTES del efecto.
+	i64 tp = 5.tap(&nota).apply(&mas_uno); // 6
+
 	i64 prim = (i64)(c + d + e + f);           // 12 + 9 + 10 + 13 = 44
 	i64 lax  = (i64)(sc + ch + ea);            // 18 + 12 + 42     = 72
+	i64 blt  = bu + (i64)uc + (i64)rz;         // 30 + 1 + 9       = 40
+	i64 ext  = (i64)el + tp;                   // 4 + 6            = 10
 	i64 tot  = a + b + prim + n + h + m + lax; // 207 + 72 = 279
 	println("struct=${a},${b} prim=${c},${d},${e} cadena=${f}");
 	println("otra_cabeza=${n} puntero=${h} clase=${m} total=${tot}");
 	println("sin_cast=${sc} i32=${ch} fuerte=${ea}");
-	return (i32)(tot - 237); // 42
+	println("builtins=${bu},${uc},${rz}");
+	println("otro_modulo=${el},${tp}");
+	return (i32)(tot + blt + ext - 287); // 279 + 40 + 10 - 287 = 42
 }

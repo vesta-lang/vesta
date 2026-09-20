@@ -26,6 +26,7 @@
 #include "vx/module/namespace_flatten.h" // demangle_symbol: el nombre escrito
 
 #include "lsp/builtin_docs.h"
+#include "vx/builtin_names.h" // los builtins y sus raices de familia
 #include "toolchain/toolchain.h" // vesta::tc::compile (compilar embebido)
 #include "util/fs_utils.h"       // fs::get_executable_path (localizar stdlib)
 
@@ -573,6 +574,8 @@ enum class CompletionKind : int {
     Method = 2,
     Function = 3,
     Field = 5,
+    /// Una RAMA del arbol de builtins (`scoped.method.`): agrupa, no se llama.
+    Module = 9,
     Variable = 6,
     Class = 7,
     Interface = 8,
@@ -986,8 +989,8 @@ const std::vector<std::string> &vx_builtins() {
         // Memoria.
         "malloc",
         "free",
-        "sizeof",
-        "alignof",
+        "type.size",
+        "type.align",
         // Strings.
         "str_length",
         "str_bytes",
@@ -1123,6 +1126,132 @@ deduce_receiver_type(const std::string &text, const std::string &receiver,
     return std::string();
 }
 
+/// El nombre SIMPLE de un simbolo: lo que se escribe tras el punto.
+std::string symbol_leaf(const vx::SymbolEntry &s) {
+    const size_t dot = s.name.rfind('.');
+    return dot == std::string::npos ? s.name : s.name.substr(dot + 1);
+}
+
+/**
+ * @brief Su firma, leida del fuente: la cabecera hasta el cuerpo.
+ *
+ * Son DATOS del propio codigo, asi que valen igual en cualquier idioma --
+ * nada que traducir --.  Es lo mismo que ya se ensenya para un miembro de
+ * namespace, sacado del span que el indice guarda.
+ *
+ * @param s   La entrada del indice.
+ * @param src El fuente del modulo al que pertenece.
+ * @return La cabecera, o vacio si el span no cuadra.
+ */
+std::string symbol_signature(const vx::SymbolEntry &s, const std::string &src) {
+    if (s.src_offset >= src.size()) return {};
+    const size_t len = std::min<size_t>(s.src_length, 200);
+    std::string span = src.substr(s.src_offset, len);
+    const size_t cut = span.find_first_of("{;\n");
+    if (cut != std::string::npos) span.resize(cut);
+    /* Sin el `=>` de un cuerpo-expresion: la firma acaba ahi. */
+    const size_t arrow = span.find("=>");
+    if (arrow != std::string::npos) span.resize(arrow);
+    while (!span.empty() && (span.back() == ' ' || span.back() == '\t'))
+        span.pop_back();
+    return span;
+}
+
+/**
+ * @brief Los simbolos de @p idx que se pueden llamar sobre @p type_name.
+ *
+ * Con llamada uniforme, `q.area()` y `area(q)` son la MISMA llamada, asi que
+ * una funcion libre cuyo primer parametro sea del tipo del receptor tambien se
+ * ofrece tras el punto.  Sin esto el editor ensenyaba la mitad de lo llamable.
+ *
+ * Devuelve INDICES y no items ya montados: el llamador ya tiene la fuente para
+ * sacar la firma, y asi esto no construye ninguna cadena.  La busqueda es un
+ * acceso al mapa del indice, no un recorrido de sus simbolos.
+ *
+ * @param idx         El indice del modulo.
+ * @param type_name   Tipo del receptor (su cabeza).
+ * @param prefix      Lo que el usuario lleva escrito.
+ * @param public_only Cierto para un modulo importado: solo lo exportable.
+ * @param out         Recibe los indices en @c idx.symbols.
+ */
+void collect_ufcs_reachable(const vx::SemanticIndex &idx,
+                            const std::string &type_name,
+                            const std::string &prefix, bool public_only,
+                            std::vector<uint32_t> &out) {
+    const std::vector<uint32_t> *cand = idx.by_recv(type_name);
+    if (cand == nullptr) return;
+    for (const uint32_t i : *cand) {
+        if (i >= idx.symbols.size()) continue;
+        const vx::SymbolEntry &s = idx.symbols[i];
+        if (public_only && !s.is_public) continue;
+        /* Lo que se escribe tras el punto es el nombre SIMPLE. */
+        const size_t dot = s.name.rfind('.');
+        const char *leaf = s.name.c_str() + (dot == std::string::npos ? 0
+                                                                      : dot + 1);
+        if (!prefix.empty() &&
+            std::strncmp(leaf, prefix.c_str(), prefix.size()) != 0)
+            continue;
+        out.push_back(i);
+    }
+}
+
+/// Cierto si @p c puede formar parte de un identificador.
+bool ident_char(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
+ * @brief Expande @p word al nombre de builtin en ARBOL que lo contiene.
+ *
+ * Los builtins se llaman `type.size`, `scoped.method.arity`: varios
+ * identificadores separados por puntos.  El indice del documento devuelve solo
+ * el que toca el cursor, asi que preguntar por `size` no encuentra nada y toda
+ * la familia se quedaba sin hover.
+ *
+ * Se recorre hacia atras hasta la raiz de la familia y hacia delante hasta que
+ * lo acumulado ES un builtin -- la misma regla que usan el parser y el
+ * formateador --.  Si no lo forma, @p word se deja como estaba.
+ *
+ * @param text   El documento.
+ * @param offset Donde empieza el identificador que toca el cursor.
+ * @param word   Entra el identificador, sale el nombre completo si lo hay.
+ */
+void expand_builtin_tree_word(const std::string &text, size_t offset,
+                              std::string &word) {
+    if (offset > text.size()) return;
+    /* Hacia atras: mientras lo de delante sea `<ident>.`. */
+    size_t start = offset;
+    for (;;) {
+        if (start == 0 || text[start - 1] != '.') break;
+        size_t j = start - 1;
+        while (j > 0 && ident_char(text[j - 1]))
+            --j;
+        if (j == start - 1) break; // el punto no venia de un identificador
+        start = j;
+    }
+    if (start >= text.size()) return;
+    size_t root_end = start;
+    while (root_end < text.size() && ident_char(text[root_end]))
+        ++root_end;
+    if (!vx::is_builtin_tree_root(text.substr(start, root_end - start))) return;
+    /* Hacia delante hasta formar un builtin. */
+    std::string name = text.substr(start, root_end - start);
+    size_t at = root_end;
+    while (vx::builtin_from_name(name) == vx::Builtin::Unknown &&
+           at < text.size() && text[at] == '.') {
+        size_t k = at + 1;
+        while (k < text.size() && ident_char(text[k]))
+            ++k;
+        if (k == at + 1) break;
+        name += text.substr(at, k - at);
+        at = k;
+    }
+    /* Solo si el cursor cae DENTRO de lo que se junto. */
+    if (vx::builtin_from_name(name) != vx::Builtin::Unknown && offset < at)
+        word = name;
+}
+
 } // namespace
 
 bool LspServer::word_under_cursor(const nlohmann::json &params,
@@ -1154,6 +1283,12 @@ bool LspServer::word_under_cursor(const nlohmann::json &params,
     }
     if (ref == nullptr) return false;
     out_word = ref->name;
+    /* Un builtin se llama `type.size` o `scoped.method.arity`, y eso son
+     * varios identificadores con puntos en medio.  El indice devuelve solo el
+     * que toca el cursor, asi que preguntar por `size` no encuentra nada: el
+     * hover de TODA la familia se quedaba mudo.  Se expande la cadena y, si
+     * forma un builtin, es ese el nombre que sale. */
+    expand_builtin_tree_word(text, ref->byte_offset, out_word);
     return true;
 }
 
@@ -1221,7 +1356,7 @@ void LspServer::handle_hover(const nlohmann::json &msg) {
 
     // (0) ¿El cursor esta sobre un builtin de introspeccion comptime
     // (sizeof<T>, alignof<T>, kind<T>, type_id<T>, typename<T>)?  Mostramos el
-    // VALOR que el compilador resolvio, aunque "sizeof" no sea un simbolo
+    // VALOR que el compilador resolvio, aunque "type.size" no sea un simbolo
     // declarado.  Va antes del flujo normal porque esos builtins no estan en el
     // indice de simbolos.
     try {
@@ -1992,9 +2127,79 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
     const auto an_ref = engine_.analyze_document(uri, text);
     const DocAnalysis &an = *an_ref;
 
+    /* -- COMPLETADO TRAS '$': de QUE namespace es la funcion ----------------
+     *
+     * `x.f$geo.metrico(...)` califica la llamada sin traer el nombre al
+     * ambito.  Lo que va tras el `$` es SIEMPRE un namespace, asi que ahi no
+     * se ofrece otra cosa: ni tipos, ni variables, ni los miembros del
+     * receptor. */
+    {
+        size_t at = prefix_start;
+        /* Retroceder por los tramos ya escritos (`geo.`) hasta el `$`. */
+        for (;;) {
+            if (at == 0 || text[at - 1] != '.') break;
+            size_t j = at - 1;
+            while (j > 0 && (ident_char(text[j - 1])))
+                --j;
+            if (j == at - 1) break;
+            at = j;
+        }
+        if (at > 0 && text[at - 1] == '$') {
+            /* Los namespaces salen del indice semantico: es la parte que
+             * precede al ultimo punto de un nombre cualificado. */
+            for (const auto &s : an.sem_index.symbols) {
+                const size_t dot = s.name.rfind('.');
+                if (dot == std::string::npos) continue;
+                const std::string ns = s.name.substr(0, dot);
+                if (!has_prefix(ns, prefix)) continue;
+                /* Sin detalle: el label ES el namespace y el kind ya dice que
+                 * lo es.  Poner la palabra seria prosa que habria que
+                 * traducir para no decir nada nuevo. */
+                add_item(ns, CompletionKind::Module, std::string());
+            }
+            if (!items.empty()) {
+                send_result(msg.at("id"), items);
+                return;
+            }
+        }
+    }
+
     // -- COMPLETADO DE MIEMBRO tras '.' --------------------------------------
     std::string receiver;
     if (member_receiver_before(text, prefix_start, receiver)) {
+        /* Una RAMA del arbol de builtins: `type.` ofrece `size`, `align`...,
+         * y `scoped.method.` ofrece `count`, `has`...  Es lo que el arbol
+         * permite y una lista plana no: recorrer la familia por partes en vez
+         * de buscar entre medio centenar de nombres sin relacion aparente.
+         *
+         * Se ofrece el SIGUIENTE SEGMENTO, no el nombre entero: el editor
+         * sustituye lo que se esta escribiendo, no el receptor. */
+        {
+            const std::string pre = receiver + ".";
+            for (const auto &full : all_builtin_names()) {
+                if (full.size() <= pre.size() ||
+                    full.compare(0, pre.size(), pre) != 0)
+                    continue;
+                const std::string rest = full.substr(pre.size());
+                const size_t dot = rest.find('.');
+                const std::string seg =
+                    (dot == std::string::npos) ? rest : rest.substr(0, dot);
+                if (!has_prefix(seg, prefix)) continue;
+                if (dot == std::string::npos) {
+                    const BuiltinDoc *d = lookup_builtin(full);
+                    add_item(seg, CompletionKind::Function,
+                             d != nullptr ? d->signature : full);
+                } else {
+                    /* Rama intermedia (`scoped.method`): no es llamable por si
+                     * sola, asi que se ofrece como grupo. */
+                    add_item(seg, CompletionKind::Module, pre + seg + ".*");
+                }
+            }
+            if (!items.empty()) {
+                send_result(msg.at("id"), items);
+                return;
+            }
+        }
         // Resolver el tipo del receptor:
         //  (a) si el receptor ES directamente un nombre de clase/struct
         //      conocido (acceso estilo Tipo.miembro), usar ese tipo;
@@ -2021,6 +2226,36 @@ void LspServer::handle_completion(const nlohmann::json &msg) {
                 } else if (d.kind == SymbolKind::Field) {
                     add_item(d.name, CompletionKind::Field, type_name);
                 }
+            }
+            /* Y lo que se ALCANZA por llamada uniforme: `q.area()` es
+             * `area(q)`, asi que una funcion libre cuyo primer parametro sea
+             * del tipo del receptor tambien se puede llamar por el punto.
+             *
+             * Sin esto el editor ofrecia la mitad de lo llamable y el usuario
+             * no tenia forma de saber que lo otro existia -- el compilador lo
+             * aceptaba, pero el `.` no lo enseñaba --.
+             *
+             * El indice contesta por su mapa de receptores, no recorriendo los
+             * miles de simbolos del modulo. */
+            /* El detalle es su FIRMA, como en cualquier otro item -- datos, no
+             * prosa: no hay nada que traducir --.  Que sea alcanzable y no un
+             * metodo suyo lo dice el KIND: los del tipo van como Method y
+             * estas como Function, que el editor pinta distinto. */
+            std::vector<uint32_t> reachable;
+            collect_ufcs_reachable(an.sem_index, type_name, prefix,
+                                   /*public_only=*/false, reachable);
+            for (const uint32_t i : reachable)
+                add_item(symbol_leaf(an.sem_index.symbols[i]),
+                         CompletionKind::Function,
+                         symbol_signature(an.sem_index.symbols[i], text));
+            for (const auto &im : an.imported_sem_indexes) {
+                reachable.clear();
+                collect_ufcs_reachable(im.index, type_name, prefix,
+                                       /*public_only=*/true, reachable);
+                for (const uint32_t i : reachable)
+                    add_item(symbol_leaf(im.index.symbols[i]),
+                             CompletionKind::Function,
+                             symbol_signature(im.index.symbols[i], im.source));
             }
         }
         // NS.4: completado de miembro de NAMESPACE (`ns.simbolo`).  Si el

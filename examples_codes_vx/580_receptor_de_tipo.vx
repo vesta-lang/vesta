@@ -1,0 +1,97 @@
+namespace ejemplos.receptor_de_tipo;
+
+// El receptor puede ser un TIPO, no solo un valor.
+//
+// Es la segunda clase de base de la llamada uniforme: si delante del punto hay
+// un VALOR, `x.f(a)` es `f(x, a)`; si hay un TIPO, `T.f(args)` es
+// `f<T>(args)`.  No son dos mecanismos -- la clase de la base hay que
+// distinguirla igualmente --, es una regla por clase.
+//
+// De regalo, toda la familia de introspeccion gana sintaxis de metodo sin
+// escribir una linea para ella: `u64.type.size()`, `Punto.field.count()`.
+//
+// Lo que cubre:
+//
+//   1. Un tipo de USUARIO como receptor de una generica libre.
+//   2. Un PRIMITIVO, que ni llegaba al comprobador: `u64` es palabra clave y
+//      el parser cortaba con "se esperaba una expresion primaria", que no dice
+//      nada de lo que pasa.
+//   3. La introspeccion por el punto, que sale de lo mismo.
+//   4. Con un CAST delante (`(i64)u64.type.size()`), que es un caso aparte porque
+//      el desambiguador de casts tiene que saber que un tipo primitivo puede
+//      empezar una expresion -- pero solo si le sigue un punto, que es lo que
+//      hace que no le robe el token a nadie.
+//   5. Un ENUM, una CLASE, un ALIAS (`typedef`/`using`) y un tipo FUERTE
+//      (`typedef u64 X new`), que son todas las clases de tipo que hay.  Los
+//      alias faltaban porque la comprobacion miraba structs, clases, enums y
+//      primitivos pero no la tabla de alias -- y ahi caen tambien los
+//      newtypes, que es donde la pregunta es mas util: un tipo fuerte existe
+//      justo para poder hablar de el por separado.
+//   6. Y la convivencia con el metodo ESTATICO, que ya existia y no cambia de
+//      significado: se prueba primero el estatico.
+//
+// La REFERENCIA sigue la misma resolucion que la llamada -- `&T.f` es `&f<T>`
+// --, y eso no fue una decision nueva: el lenguaje ya lo hacia para `&obj.f`,
+// que aplica la regla de choque igual que `obj.f()`.  Dejarlo fuera habria
+// sido lo incoherente.
+
+struct Punto {
+	i64 x;
+	i64 y;
+
+	i64 doble() => this.x * 2;
+}
+
+enum Color {
+	Rojo,
+	Verde
+}
+
+class Caja {
+	i64 v;
+
+	public Caja(i64 v) { this.v = v; }
+}
+
+typedef i64 Edad;      // alias transparente
+using Peso = i32;      // el mismo, con la otra grafia
+typedef u64 Ident new; // tipo FUERTE: identidad propia
+
+struct Cont {
+	static i64 crear() => 7_i64;
+}
+
+// Una libre GENERICA: no pertenece a nadie, pero habla de un tipo.
+i64 medida<T>() => (i64)type.size<T>();
+
+i32 main() {
+	Punto q;
+	q.x = 21;
+
+	i64 a = Punto.medida(); // el tipo de usuario           16
+	i64 b = u64.medida();   // un primitivo                  8
+	i64 c = i32.medida();   //                               4
+	i64 d = Color.medida(); //                               8
+	i64 i = Caja.medida();  // una clase                     8
+	i64 j = Edad.medida();  // un alias                      8
+	i64 k = Peso.medida();  // el mismo, con `using`         4
+	i64 l = Ident.medida(); // un tipo FUERTE                8
+
+	// La introspeccion, por el punto y sin escribir nada para ella.
+	i64 e = (i64)Punto.field.count(); //                     2
+	i64 f = (i64)u64.type.size();     // con un CAST delante 8
+
+	// El estatico sigue siendo el estatico.
+	i64 g = Cont.crear(); //                                 7
+
+	// Y la referencia, con la MISMA resolucion que la llamada.
+	cfn(Punto*) -> i64 m = &Punto.doble;
+	i64                h = m(&q); //                        42
+
+	println("a=${a} b=${b} c=${c} d=${d}");
+	println("e=${e} f=${f} g=${g} h=${h}");
+	println("i=${i} j=${j} k=${k} l=${l}");
+
+	// 16+8+4+8 = 36, 2+8+7 = 17, 42, y 8+8+4+8 = 28.  36+17+42+28 = 123
+	return (i32)(a + b + c + d + e + f + g + h + i + j + k + l - 81);
+}

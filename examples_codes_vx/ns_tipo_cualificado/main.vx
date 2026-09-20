@@ -1,0 +1,42 @@
+namespace app;
+
+import geo;
+
+// El tipo escrito CUALIFICADO (`geo.Punto`), que es como se escribe en cuanto
+// hay namespaces de por medio -- o sea, casi siempre.
+//
+// Tres cosas que dependian de por donde entrara el import:
+//
+//   1. Un METODO del struct.  Con `import geo only Punto` funcionaba y con el
+//      nombre cualificado no: de las tres rutas que registran un struct
+//      importado, solo una traia los metodos.  El mismo tipo los tenia o no
+//      segun como se escribiera el import, y el sintoma era que `q.x` valia y
+//      `q.doble()` decia que el tipo no tiene ese metodo.
+//
+//   2. El receptor de TIPO cualificado: `geo.Punto.medida()` es
+//      `medida<geo.Punto>()`.
+//
+//   3. La REFERENCIA no ligada `&geo.Punto.doble`.  Se tomaba por una lambda
+//      LIGADA -- la base no era un nombre simple, asi que parecia una
+//      expresion --, y el comprobador la aceptaba como `fn() -> i64` mientras
+//      el bajado moria con "unresolved name 'geo'": un error que llegaba hasta
+//      el final en vez de saltar donde se escribe.
+
+i32 main() {
+	geo.Punto q;
+	q.x = 21;
+	q.y = 4;
+
+	i64 a = q.doble(); // metodo, con el tipo cualificado    42
+	i64 b = q.suma();  // otro, para que no sea uno suelto   25
+
+	i64 c = geo.Punto.medida(); // receptor de TIPO          16
+
+	cfn(geo.Punto *) -> i64 m = &geo.Punto.doble;
+	i64                     d = m(&q); // la referencia       42
+
+	println("a=${a} b=${b} c=${c} d=${d}");
+
+	// 42+25+16+42 = 125
+	return (i32)(a + b + c + d - 83);
+}
