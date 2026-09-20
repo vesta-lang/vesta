@@ -133,25 +133,25 @@ u8* bmp_create(i32 width, i32 height, i32 bit_pixel,
 
 	// CREAR = escribir los campos de las vistas overlay sobre el buffer.
 	BmpFileHeader fh = BmpFileHeader(buf);
-	fh.magic  = (i16)0x4D42; // 'BM'
-	fh.size   = (i32)total;
-	fh.rsv1   = (i16)0;
-	fh.rsv2   = (i16)0;
-	fh.offset = (i32)offset;
+	fh.magic         = (i16)0x4D42; // 'BM'
+	fh.size          = (i32)total;
+	fh.rsv1          = (i16)0;
+	fh.rsv2          = (i16)0;
+	fh.offset        = (i32)offset;
 
 	u8*           info_base = buf + BMP_FILE_HDR_SIZE;
 	BmpInfoHeader ih        = BmpInfoHeader(info_base);
-	ih.hdr_size    = (i32)BMP_INFO_HDR_SIZE;
-	ih.width       = width;
-	ih.height      = height;
-	ih.planes      = (i16)planes;
-	ih.bpp         = (i16)bit_pixel;
-	ih.compression = compression;
-	ih.image_size  = (i32)pixel_bytes;
-	ih.res_h       = res_h;
-	ih.res_v       = res_v;
-	ih.palette     = palette;
-	ih.important   = important;
+	ih.hdr_size             = (i32)BMP_INFO_HDR_SIZE;
+	ih.width                = width;
+	ih.height               = height;
+	ih.planes               = (i16)planes;
+	ih.bpp                  = (i16)bit_pixel;
+	ih.compression          = compression;
+	ih.image_size           = (i32)pixel_bytes;
+	ih.res_h                = res_h;
+	ih.res_v                = res_v;
+	ih.palette              = palette;
+	ih.important            = important;
 
 	return buf;
 }
@@ -241,9 +241,9 @@ void bmp_set_pixel(u8* buf, i32 x, i32 y, i32 r, i32 g, i32 b) {
 	if (index < 0) {
 		return;
 	}
-	buf[index]     = (u8)b;
-	buf[index + 1] = (u8)g;
-	buf[index + 2] = (u8)r;
+	buf[index]              = (u8)b;
+	buf[index + 1]          = (u8)g;
+	buf[index + 2]          = (u8)r;
 	u8*           info_base = buf + BMP_FILE_HDR_SIZE;
 	BmpInfoHeader ih        = BmpInfoHeader(info_base);
 	if ((i32)ih.bpp == 32) {

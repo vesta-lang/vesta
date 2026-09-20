@@ -17,13 +17,13 @@ class Counter {
 
 i32 helper_local() {
 	Counter c = new Counter();
-	c.v = 1;
+	c.v       = 1;
 	return c.v;
 }
 
 i32 helper_shared() {
 	shared Counter c = new Counter();
-	c.v = 1;
+	c.v              = 1;
 	return c.v;
 }
 

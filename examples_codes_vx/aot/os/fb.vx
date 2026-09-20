@@ -21,7 +21,7 @@ u64 g_bg    = 0x00101830_u64; // color de fondo (azul muy oscuro)
 
 void fb_putpix(u64 x, u64 y, u64 color) {
 	u32* p = (u32*)(g_lfb + y * g_pitch + x * 4);
-	p[0] = (u32)color;
+	p[0]   = (u32)color;
 }
 
 // Pinta toda la pantalla con el color de fondo.
@@ -36,8 +36,8 @@ void fb_clear() {
 		u64 x    = 0_u64;
 		while (x < g_w) {
 			u32* q = (u32*)(g_lfb + base + x * 4);
-			q[0] = (u32)g_bg;
-			x    = x + 1;
+			q[0]   = (u32)g_bg;
+			x      = x + 1;
 		}
 		y = y + 1;
 	}
@@ -50,12 +50,12 @@ void fb_init() {
 	u16* w_p     = (u16*)(0x5000 + 0x12);
 	u16* h_p     = (u16*)(0x5000 + 0x14);
 	u32* lfb_p   = (u32*)(0x5000 + 0x28);
-	g_pitch = (u64)pitch_p[0];
-	g_w     = (u64)w_p[0];
-	g_h     = (u64)h_p[0];
-	g_lfb   = (u64)lfb_p[0];
-	g_cols  = g_w / 8;
-	g_rows  = g_h / 16;
+	g_pitch      = (u64)pitch_p[0];
+	g_w          = (u64)w_p[0];
+	g_h          = (u64)h_p[0];
+	g_lfb        = (u64)lfb_p[0];
+	g_cols       = g_w / 8;
+	g_rows       = g_h / 16;
 	fb_clear();
 }
 
@@ -94,8 +94,8 @@ void fb_scroll() {
 	while (i + 8 <= lim) {
 		u64* d = (u64*)(g_lfb + i);
 		u64* s = (u64*)(g_lfb + i + row_bytes);
-		d[0] = s[0];
-		i    = i + 8;
+		d[0]   = s[0];
+		i      = i + 8;
 	}
 	// limpiar la ultima fila de texto.
 	while (i < total) {

@@ -20,9 +20,9 @@ struct Movido {
 i32 main() {
 	u8*    buf = (u8*)malloc(16);
 	Movido m   = Movido(buf);
-	m.antes   = 40_u32;
-	m.despues = 2_u32;
-	i32 r = (i32)(m.antes + m.despues);
+	m.antes    = 40_u32;
+	m.despues  = 2_u32;
+	i32    r   = (i32)(m.antes + m.despues);
 	free(buf);
 	return r; // 42
 }

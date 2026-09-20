@@ -27,9 +27,9 @@ i64 main() {
 	i64                 r1 = f(10, 11); // 21
 
 	// 2. asignacion global + reasignacion.
-	g_op = add;
+	g_op   = add;
 	i64 r2 = g_op(3, 4); // 7
-	g_op = mul;
+	g_op   = mul;
 	i64 r3 = g_op(2, 3); // 6
 
 	// 3. pasar la funcion por nombre a un HOF.

@@ -29,7 +29,7 @@ struct Doc {
 }
 
 i32 main() {
-	u8* buf = (u8*)malloc(128);
+	u8* buf          = (u8*)malloc(128);
 	*(u32*)(buf + 0) = 4; // count = 4
 
 	// 4 records de longitudes distintas, empaquetados desde base+8:

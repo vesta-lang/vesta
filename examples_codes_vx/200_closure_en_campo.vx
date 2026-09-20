@@ -14,7 +14,7 @@ class Boton {
 // escapa por return; su env vive en heap (RAW_ALLOC) y lo libera el dtor del
 // local que la recibe (transferencia de ownership), sin GC.
 Boton crear(i64 id) {
-	Boton b = new Boton();
+	Boton b   = new Boton();
 	b.onClick = () => id * 2; // captura `id` por valor
 	return b;
 }

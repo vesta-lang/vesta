@@ -133,39 +133,39 @@ i32 main() {
 	// CASO 1: 1 dtor.
 	reset_cnt();
 	i32 r1 = caso_1();
-	ok = ok + expect("C1 ret", r1, 100);
-	ok = ok + expect("C1 dtor", read_cnt(), 1);
+	ok     = ok + expect("C1 ret", r1, 100);
+	ok     = ok + expect("C1 dtor", read_cnt(), 1);
 
 	// CASO 4: dtor en early return.
 	reset_cnt();
 	i32 r4 = caso_4(1);
-	ok = ok + expect("C4 ret", r4, 7);
-	ok = ok + expect("C4 dtor", read_cnt(), 1);
+	ok     = ok + expect("C4 ret", r4, 7);
+	ok     = ok + expect("C4 dtor", read_cnt(), 1);
 
 	// CASO 5: 3 dtors LIFO.
 	reset_cnt();
 	i32 r5 = caso_5();
-	ok = ok + expect("C5 ret", r5, 6);
-	ok = ok + expect("C5 dtor", read_cnt(), 3);
+	ok     = ok + expect("C5 ret", r5, 6);
+	ok     = ok + expect("C5 dtor", read_cnt(), 3);
 
 	// CASO 6: dtor POR ITERACION (scope-local cleanup A.34.fix5).
 	reset_cnt();
 	i32 r6 = caso_6_loop_dtor(50);
-	ok = ok + expect("C6 ret", r6, 1225);
-	ok = ok + expect("C6 dtor", read_cnt(), 50);
+	ok     = ok + expect("C6 ret", r6, 1225);
+	ok     = ok + expect("C6 dtor", read_cnt(), 50);
 
 	// CASO 7: escape via return.  El dtor NO corre en el helper.
 	reset_cnt();
 	R owned = caso_7_escape();
-	ok = ok + expect("C7 dtor en helper", read_cnt(), 0);
+	ok      = ok + expect("C7 dtor en helper", read_cnt(), 0);
 
 	// CASO 8: outer GC vivo a traves de loop (NEWOBJ save_live_regs).
 	i32 r8 = caso_8_outer_alive(100);
-	ok = ok + expect("C8 holder", r8, 99);
+	ok     = ok + expect("C8 holder", r8, 99);
 
 	// CASO 9: try/catch funcional aunque cleanup automatico no aplica.
 	i32 r9 = caso_9_try_catch();
-	ok = ok + expect("C9 try/catch", r9, 99);
+	ok     = ok + expect("C9 try/catch", r9, 99);
 
 	println("--- ${ok}/11 checks passed ---");
 	if (ok == 11) {

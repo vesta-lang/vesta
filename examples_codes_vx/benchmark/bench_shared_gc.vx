@@ -32,7 +32,7 @@ i32 main() {
 		i32 i = 0_i32;
 		while (i < N) {
 			shared Node n = new Node();
-			n.a = i;
+			n.a           = i;
 			// n queda en slot stack del while body; se sobreescribe en
 			// la proxima iter.  GC stack scan no encontrara ref tras exit.
 			i = i + 1;
@@ -40,7 +40,7 @@ i32 main() {
 		// Trigger GC.
 		u32 before = shared_heap_live_count();
 		shared_gc_collect();
-		u32 after = shared_heap_live_count();
+		u32 after   = shared_heap_live_count();
 		total_swept = total_swept + (i32)(before - after);
 		cycle       = cycle + 1;
 	}

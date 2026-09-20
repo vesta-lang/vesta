@@ -62,15 +62,15 @@ public class Launcher {
 		}
 		i32                           cwd_len = 0_i32;
 		while (cwd_buf[cwd_len] != 0) cwd_len = cwd_len + 1;
-		this.cwd = str_make(cwd_buf, cwd_len);
+		this.cwd                              = str_make(cwd_buf, cwd_len);
 		free(cwd_buf);
-		this.names         = malloc(LC_MAX_ENTRIES * LC_NAME_MAX);
+		this.names         = malloc<u8>((u64)(LC_MAX_ENTRIES * LC_NAME_MAX));
 		this.names_used    = 0;
 		this.names_cap     = LC_MAX_ENTRIES * LC_NAME_MAX;
-		this.offsets       = malloc(LC_MAX_ENTRIES * 4);
-		this.lens          = malloc(LC_MAX_ENTRIES * 4);
-		this.is_dirs       = malloc(LC_MAX_ENTRIES * 4);
-		this.visible_idx   = malloc(LC_MAX_ENTRIES * 4);
+		this.offsets       = malloc<i32>((u64)LC_MAX_ENTRIES);
+		this.lens          = malloc<i32>((u64)LC_MAX_ENTRIES);
+		this.is_dirs       = malloc<i32>((u64)LC_MAX_ENTRIES);
+		this.visible_idx   = malloc<i32>((u64)LC_MAX_ENTRIES);
 		this.count         = 0;
 		this.visible_count = 0;
 		this.sel           = 0;
@@ -93,7 +93,7 @@ public class Launcher {
 		i32 cwd_n = (i32)this.cwd.bytes();
 		if (cwd_n > 3) {
 			if (this.names_used + 3 <= this.names_cap) {
-				i32 dst = this.names_used;
+				i32 dst                  = this.names_used;
 				this.names[dst]          = (u8)46;
 				this.names[dst + 1]      = (u8)46;
 				this.names[dst + 2]      = 0;
@@ -114,8 +114,8 @@ public class Launcher {
 		spec[cwd_n]     = (u8)92; // '\'
 		spec[cwd_n + 1] = (u8)42; // '*'
 		spec[cwd_n + 2] = 0;
-		u8* finddata = malloc(LC_FINDDATA);
-		i64 h        = file_io.dir_open(spec, finddata);
+		u8* finddata    = malloc(LC_FINDDATA);
+		i64 h           = file_io.dir_open(spec, finddata);
 		free(spec);
 		if (h == -1) {
 			free(finddata);
@@ -188,7 +188,7 @@ public class Launcher {
 	// Repuebla visible_idx segun search_query.  Si query vacia, todas.
 	public void apply_filter() {
 		this.visible_count = 0;
-		i32 qn = (i32)this.search_query.bytes();
+		i32 qn             = (i32)this.search_query.bytes();
 		if (qn == 0) {
 			i32 i = 0_i32;
 			while (i < this.count) {
@@ -210,7 +210,7 @@ public class Launcher {
 			}
 		}
 		if (this.sel >= this.visible_count) this.sel = this.visible_count - 1;
-		if (this.sel < 0) this.sel                   = 0;
+		if (this.sel < 0)                   this.sel = 0;
 	}
 
 	// Substring case-insensitive sobre bytes ASCII.
@@ -260,14 +260,14 @@ public class Launcher {
 			k      = k + 1;
 		}
 		buf[cwd_n] = (u8)92;
-		u8* nm = this.names + this.offsets[idx];
-		k = 0;
+		u8* nm     = this.names + this.offsets[idx];
+		k          = 0;
 		while (k < en) {
 			buf[cwd_n + 1 + k] = nm[k];
 			k                  = k + 1;
 		}
 		buf[cwd_n + 1 + en] = 0;
-		string s = str_make(buf, cwd_n + 1 + en);
+		string s            = str_make(buf, cwd_n + 1 + en);
 		free(buf);
 		return s;
 	}
@@ -310,10 +310,10 @@ public class Launcher {
 		sc.clear_eol();
 
 		// lista en filas 4..rows-3
-		i32             body_top = 4_i32;
-		i32             body_bot = sc.rows - 3;
-		i32             list_h   = body_bot - body_top + 1;
-		if (list_h < 5) list_h   = 5;
+		i32 body_top = 4_i32;
+		i32 body_bot = sc.rows - 3;
+		i32 list_h = body_bot - body_top + 1;
+		if (list_h < 5) list_h = 5;
 		if (this.sel < this.scroll) this.scroll = this.sel;
 		if (this.sel >= this.scroll + list_h) this.scroll = this.sel - list_h + 1;
 		if (this.scroll < 0) this.scroll = 0;
@@ -323,7 +323,7 @@ public class Launcher {
 			sc.move_cursor(body_top + r, 1);
 			i32 idx = this.scroll + r;
 			if (idx < this.visible_count) {
-				i32 is_sel = 0_i32;
+				i32                  is_sel = 0_i32;
 				if (idx == this.sel) is_sel = 1;
 				this.draw_entry(idx, is_sel, sc.cols);
 			}
@@ -396,7 +396,7 @@ public class Launcher {
 		while (1) {
 			i32 k = input.read_key_blocking();
 			if (k == keys.KEY_ENTER || k == keys.KEY_LF) {
-				buf[n] = 0;
+				buf[n]   = 0;
 				string s = str_make(buf, n);
 				free(buf);
 				sc.hide_cursor();
@@ -456,7 +456,7 @@ public class Launcher {
 				if (k == keys.KEY_BACKSPACE || k == keys.KEY_BACKSPACE_WIN) {
 					i32 qn = (i32)this.search_query.bytes();
 					if (qn > 0) {
-						u8* qc = this.search_query.cstr();
+						u8* qc            = this.search_query.cstr();
 						this.search_query = str_make(qc, qn - 1);
 						this.apply_filter();
 					}

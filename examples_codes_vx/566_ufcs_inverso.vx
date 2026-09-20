@@ -177,12 +177,12 @@ i64 di(i64 x) => x + 1;
 i64 por_interfaz(Habla h) => di(h);
 
 i32 main() {
-	medidas.Rect r = {.ancho = 3, .alto = 4};
-	Bolsa      b  = {.asa = 1};
-	Punto      p  = {.x = 1, .y = 2};
-	Caja       k  = {.dentro = {.x = 2, .y = 3}};
-	Celda<i64> c  = {.v = 7};
-	Animal     an = new Perro(4);
+	medidas.Rect r  = {.ancho = 3, .alto = 4};
+	Bolsa        b  = {.asa = 1};
+	Punto        p  = {.x = 1, .y = 2};
+	Caja         k  = {.dentro = {.x = 2, .y = 3}};
+	Celda<i64>   c  = {.v = 7};
+	Animal       an = new Perro(4);
 
 	// 10. El tipo es de otro namespace y su metodo se alcanza sin calificar.
 	i64 sup = area(r); // 3 * 4       = 12
@@ -200,9 +200,9 @@ i32 main() {
 	// Y en `izq` hay ademas una libre que se llama igual, que no estorba.
 	izq.Caja ci = {.v = 1};
 	der.Caja cd = {.v = 2};
-	i64 hi = pesa(ci, .k = 1, .g = 2); // 1 + 1000 + 2 = 1003
-	i64 hd = pesa(cd, .k = 1, .g = 2); // 2 + 1 + 2000 = 2003
-	i64 hl = izq.pesa(3, 4);           // 3 + 4        = 7
+	i64      hi = pesa(ci, .k = 1, .g = 2); // 1 + 1000 + 2 = 1003
+	i64      hd = pesa(cd, .k = 1, .g = 2); // 2 + 1 + 2000 = 2003
+	i64      hl = izq.pesa(3, 4);           // 3 + 4        = 7
 
 	// 4. Generico, con y sin argumentos.
 	i64 gen = saca(c) + escala(c, 3); // 7 + 6       = 13

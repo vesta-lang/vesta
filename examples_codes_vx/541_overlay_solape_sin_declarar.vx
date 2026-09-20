@@ -23,9 +23,9 @@ struct Cabecera {
 i32 main() {
 	u8*      buf = (u8*)malloc(16);
 	Cabecera c   = Cabecera(buf);
-	c.count = 2_u16;
-	c.flags = 5_u16;
-	i32 r = (i32)(c.count + c.flags);
+	c.count      = 2_u16;
+	c.flags      = 5_u16;
+	i32      r   = (i32)(c.count + c.flags);
 	free(buf);
 	return r;
 }

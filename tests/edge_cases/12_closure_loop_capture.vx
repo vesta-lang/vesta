@@ -7,8 +7,8 @@ i32 main() {
 	fn() -> i32 last  = first;
 	while (i < 5) {
 		i32 captured = i;
-		last = () => captured;
-		i    = i + 1;
+		last         = () => captured;
+		i            = i + 1;
 	}
 	// last() devuelve el ultimo captured = 4.
 	if (last() == 4) return 42;

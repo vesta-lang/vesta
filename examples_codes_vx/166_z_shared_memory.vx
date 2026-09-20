@@ -44,7 +44,7 @@ i32 main() {
 
 	// ===== 3) share() promueve local a shared =====
 	Counter to_share = new Counter();
-	to_share.value = 200;
+	to_share.value   = 200;
 	Counter promoted = share(to_share);
 	if (!is_shared(promoted)) return 6; // promoted ahora es shared
 	if (promoted.value != 200) return 7;

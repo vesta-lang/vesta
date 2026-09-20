@@ -152,12 +152,12 @@ i64 __vx_spawn_argv(i64 body, i64 argc, i64* argv) {
 	if (__vasync_q_count >= VASYNC_QCAP) {
 		return 0; // cola llena
 	}
-	i64 t   = __vasync_q_tail;
-	i64 pid = __vasync_next_pid;
+	i64 t             = __vasync_q_tail;
+	i64 pid           = __vasync_next_pid;
 	__vasync_q[t]     = body;
 	__vasync_q_pid[t] = pid;
-	i64 base = t * VASYNC_MAXARG;
-	i64 n    = argc;
+	i64 base          = t * VASYNC_MAXARG;
+	i64 n             = argc;
 	if (n > VASYNC_MAXARG) {
 		n = VASYNC_MAXARG;
 	}
@@ -237,22 +237,22 @@ i64 __vasync_pump_one() {
 	if (__vasync_q_count <= 0) {
 		return 0;
 	}
-	i64 h         = __vasync_q_head;
-	i64 body      = __vasync_q[h];
-	i64 base      = h * VASYNC_MAXARG;
-	i64 a0        = __vasync_q_args[base + 0];
-	i64 a1        = __vasync_q_args[base + 1];
-	i64 a2        = __vasync_q_args[base + 2];
-	i64 a3        = __vasync_q_args[base + 3];
-	i64 a4        = __vasync_q_args[base + 4];
-	i64 a5        = __vasync_q_args[base + 5];
-	i64 a6        = __vasync_q_args[base + 6];
-	i64 a7        = __vasync_q_args[base + 7];
-	i64 a8        = __vasync_q_args[base + 8];
-	i64 a9        = __vasync_q_args[base + 9];
-	i64 a10       = __vasync_q_args[base + 10];
-	i64 a11       = __vasync_q_args[base + 11];
-	i64 saved_pid = __vasync_current_pid;
+	i64 h                = __vasync_q_head;
+	i64 body             = __vasync_q[h];
+	i64 base             = h * VASYNC_MAXARG;
+	i64 a0               = __vasync_q_args[base + 0];
+	i64 a1               = __vasync_q_args[base + 1];
+	i64 a2               = __vasync_q_args[base + 2];
+	i64 a3               = __vasync_q_args[base + 3];
+	i64 a4               = __vasync_q_args[base + 4];
+	i64 a5               = __vasync_q_args[base + 5];
+	i64 a6               = __vasync_q_args[base + 6];
+	i64 a7               = __vasync_q_args[base + 7];
+	i64 a8               = __vasync_q_args[base + 8];
+	i64 a9               = __vasync_q_args[base + 9];
+	i64 a10              = __vasync_q_args[base + 10];
+	i64 a11              = __vasync_q_args[base + 11];
+	i64 saved_pid        = __vasync_current_pid;
 	__vasync_current_pid = __vasync_q_pid[h]; // contexto de la tarea
 	__vasync_q_head      = (h + 1) & VASYNC_QMASK;
 	__vasync_q_count     = __vasync_q_count - 1;
@@ -322,7 +322,7 @@ i64 __vx_msgrecv() {
 	if (pid >= VASYNC_MAXPID) {
 		return 0;
 	}
-	i64 v = __vasync_mbox_val[pid];
+	i64 v                  = __vasync_mbox_val[pid];
 	__vasync_mbox_has[pid] = 0; // consumido
 	return v;
 }
@@ -422,33 +422,33 @@ void __vasync_fiber_exit() {
 void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 8 * 8; // 6 saved + 2 retaddr
 	u64* s    = (u64*)base;
-	s[0] = 0;     // r15
-	s[1] = 0;     // r14
-	s[2] = 0;     // r13
-	s[3] = entry; // r12 = entry
-	s[4] = arg;   // rbx = arg
-	s[5] = 0;     // rbp
-	s[6] = (u64)(cfn() -> void) __vasync_fiber_trampoline;
-	s[7] = (u64)(cfn() -> void) __vasync_fiber_exit;
-	u64* c = (u64*)ctx;
-	c[0] = base;
+	s[0]      = 0;     // r15
+	s[1]      = 0;     // r14
+	s[2]      = 0;     // r13
+	s[3]      = entry; // r12 = entry
+	s[4]      = arg;   // rbx = arg
+	s[5]      = 0;     // rbp
+	s[6]      = (u64)(cfn() -> void) __vasync_fiber_trampoline;
+	s[7]      = (u64)(cfn() -> void) __vasync_fiber_exit;
+	u64* c    = (u64*)ctx;
+	c[0]      = base;
 }
 @Target("os:windows")
 void __vasync_fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 10 * 8; // 8 saved + 2 retaddr
 	u64* s    = (u64*)base;
-	s[0] = 0;     // r15
-	s[1] = 0;     // r14
-	s[2] = 0;     // r13
-	s[3] = entry; // r12 = entry
-	s[4] = 0;     // rsi
-	s[5] = 0;     // rdi
-	s[6] = arg;   // rbx = arg
-	s[7] = 0;     // rbp
-	s[8] = (u64)(cfn() -> void) __vasync_fiber_trampoline;
-	s[9] = (u64)(cfn() -> void) __vasync_fiber_exit;
-	u64* c = (u64*)ctx;
-	c[0] = base;
+	s[0]      = 0;     // r15
+	s[1]      = 0;     // r14
+	s[2]      = 0;     // r13
+	s[3]      = entry; // r12 = entry
+	s[4]      = 0;     // rsi
+	s[5]      = 0;     // rdi
+	s[6]      = arg;   // rbx = arg
+	s[7]      = 0;     // rbp
+	s[8]      = (u64)(cfn() -> void) __vasync_fiber_trampoline;
+	s[9]      = (u64)(cfn() -> void) __vasync_fiber_exit;
+	u64* c    = (u64*)ctx;
+	c[0]      = base;
 }
 
 // Pila de fibra en memoria host (malloc): valida en los 3 modos.  Devuelve cima.

@@ -28,10 +28,10 @@ i32 main() {
 	//
 	//     // ANTES (verbose):
 	//     comptime string t = "doblar({x})";
-	//     comptime string r = comptime_replace(t, "{x}", "10");
-	//     comptime string o = comptime_concat("mas_uno(",
-	//                                  comptime_concat(r, ")"));
-	//     static_assert(comptime_streq(o, "mas_uno(doblar(10))"), "...");
+	//     comptime string r = comptime.str.replace(t, "{x}", "10");
+	//     comptime string o = comptime.str.concat("mas_uno(",
+	//                                  comptime.str.concat(r, ")"));
+	//     static_assert(comptime.str.eq(o, "mas_uno(doblar(10))"), "...");
 	//
 	//     // AHORA (sugar):
 	//     comptime {

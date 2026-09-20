@@ -26,7 +26,7 @@ class LinkedList {
 	}
 
 	public void prepend(i32 v) {
-		Node n = new Node(v);
+		Node n    = new Node(v);
 		n.next    = this.head;
 		this.head = n;
 	}
@@ -37,7 +37,7 @@ class LinkedList {
 		Node cur = this.head;
 		while (cur != null) {
 			i32 ignored = f(cur.value);
-			cur = cur.next;
+			cur         = cur.next;
 		}
 	}
 }

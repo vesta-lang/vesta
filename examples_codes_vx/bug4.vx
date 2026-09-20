@@ -24,7 +24,7 @@ class JsonArray {
 		if (this.count == this.capacity) {
 			JsonValue[] nuevo = new JsonValue[this.capacity * 2];
 			for (i32 i = 0_i32; i < this.count; i++) nuevo[i] = this.items[i];
-			this.items                                        = nuevo;
+			this.items = nuevo;
 			this.capacity *= 2;
 		}
 		this.items[this.count] = v;

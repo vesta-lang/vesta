@@ -12,13 +12,15 @@ u64 main() {
 		register("rax") u64 a = 0xFFFFFFFFFFFFFFFF_u64;
 		register("rbx") u64 b = 5_u64;
 		register("rcx") u64 r = 0_u64;
-		asm { add rax, rbx
+		asm {
+			add rax, rbx
 			  jc .ov
 			  mov rcx, 0
 			  jmp .e
 			.ov:
 			  mov rcx, 40
-			.e: };
+			.e:
+		};
 		acc = acc + r; // +40
 	}
 
@@ -27,13 +29,15 @@ u64 main() {
 		register("rax") u64 a = 10_u64;
 		register("rbx") u64 b = 20_u64;
 		register("rcx") u64 r = 0_u64;
-		asm { add rax, rbx
+		asm {
+			add rax, rbx
 			  jnc .ok
 			  mov rcx, 0
 			  jmp .e2
 			.ok:
 			  mov rcx, 2
-			.e2: };
+			.e2:
+		};
 		acc = acc + r; // +2
 	}
 

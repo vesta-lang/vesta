@@ -64,26 +64,26 @@ i32 main() {
 	// Cada uno se expande independientemente.
 	// ============================================
 	i32 acc = 0_i32;
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
-	acc = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
+	acc     = acc + M_chain(10);
 	// 20 * 10 = 200
 
 	if (r1 != 100) return 91;

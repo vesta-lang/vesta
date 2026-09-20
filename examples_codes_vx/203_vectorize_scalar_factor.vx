@@ -18,7 +18,8 @@ namespace ejemplos.vectorize_scalar_factor;
 // =============================================================================
 
 i64 main() {
-	f64* a = malloc(400);
+	// 50 f64, los que recorre el bucle: la cuenta va en ELEMENTOS.
+	f64* a = malloc<f64>(50);
 	f64  c = 3.0_f64;
 	for (i32 i = 0_i32; i < 50; i++) { a[i] = (f64)(i + 1); }
 	f64 acc = 0.0_f64;

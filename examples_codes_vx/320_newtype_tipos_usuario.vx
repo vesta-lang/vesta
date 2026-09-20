@@ -46,8 +46,8 @@ typedef Color Tinta new;
 i32 main() {
 	// El newtype conserva los campos y los metodos del struct.
 	Coord c;
-	c.x = 20;
-	c.y = 20;
+	c.x   = 20;
+	c.y   = 20;
 	i64 d = distancia_manhattan(c); // 40
 	println("coord.suma() = ${d}");
 
@@ -59,9 +59,9 @@ i32 main() {
 
 	// Sobre una clase: `new Sesion()` construye la Caja de debajo, con sus
 	// metodos.
-	Sesion s = new Sesion();
-	s.v = 1;
-	i64 sv = s.leer(); // 1
+	Sesion s  = new Sesion();
+	s.v       = 1;
+	i64    sv = s.leer(); // 1
 	println("sesion.leer() = ${sv}");
 
 	// Sobre un enum: las variantes son las del enum de debajo.

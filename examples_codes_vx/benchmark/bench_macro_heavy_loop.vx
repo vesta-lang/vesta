@@ -4,7 +4,7 @@
 //   - Loop con muchas iteraciones (100K)
 //   - Aritmetica simple (sum += i)
 //   - Cero alocaciones de strings durante el loop
-//   - Solo al final, comptime_to_str() del resultado
+//   - Solo al final, comptime.to_str() del resultado
 //
 // Medicion previa (post MC.22):
 //   interp: ~15 ms total compile
@@ -23,7 +23,7 @@ comptime string heavy_loop(i64 n) {
 		sum = sum + i;
 		i   = i + 1;
 	}
-	return comptime_to_str(sum);
+	return comptime.to_str(sum);
 }
 
 i32 main() {

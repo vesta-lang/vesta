@@ -36,8 +36,8 @@ i32 main() {
 	if (has_b == 0) {
 		res = res + 1000;
 	}
-	Box ua = unwrap(a); // ua = a (no null), no excepcion
-	res = res + ua.val; // 50
+	Box ua = unwrap(a);    // ua = a (no null), no excepcion
+	res    = res + ua.val; // 50
 
 	return res; // 1050
 }

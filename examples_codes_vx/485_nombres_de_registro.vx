@@ -34,7 +34,7 @@ i64 ymm7(i64 r15) {
 	return rbp;
 }
 i32 main() {
-	rax  k = new rax(10);
+	rax k = new rax(10);
 	zmm1 s;
 	s.rsp  = 5;
 	s.cur0 = 6;

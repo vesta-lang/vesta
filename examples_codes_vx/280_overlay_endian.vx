@@ -24,7 +24,7 @@ i32 main() {
 	u8* buf = (u8*)malloc(32);
 
 	// --- CONSTRUIR: escribir en orden nativo; la memoria queda big-endian ---
-	NetHdr h = NetHdr(buf);
+	NetHdr h   = NetHdr(buf);
 	h.src_port = 43_210; // 0xA8CA
 	h.dst_port = 80;     // 0x0050  (http)
 	h.seq      = 0x11223344;

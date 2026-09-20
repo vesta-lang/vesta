@@ -21,9 +21,10 @@ namespace ejemplos.vectorize_two_scaled;
 // =============================================================================
 
 i64 main() {
-	f64* c  = malloc(400);
-	f64* a  = malloc(400);
-	f64* b  = malloc(400);
+	// 50 f64 cada uno: la cuenta va en ELEMENTOS.
+	f64* c  = malloc<f64>(50);
+	f64* a  = malloc<f64>(50);
+	f64* b  = malloc<f64>(50);
 	f64  k1 = 2.0_f64;
 	f64  k2 = 3.0_f64;
 	for (i32 i = 0_i32; i < 40; i++) {

@@ -10,7 +10,7 @@
 // Sin este campo el gancho solo recibia `fn_id`, un numero opaco: para saber a
 // que funcion correspondia habia que mirar el fichero de depuracion desde
 // fuera, y desde DENTRO del programa no habia forma.  La introspeccion que hay
-// hoy -- `field_count`, `field_name`, y la reflexion de clases y metodos -- no
+// hoy -- `field.count`, `field.name`, y la reflexion de clases y metodos -- no
 // alcanza a las funciones libres.
 //
 // Salida esperada (identica en interprete, JIT y binario nativo):

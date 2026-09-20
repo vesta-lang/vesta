@@ -48,7 +48,7 @@ public class Workspace {
 			t.prev      = t;
 			this.active = t;
 		} else {
-			EditorTab after = this.active.next;
+			EditorTab after  = this.active.next;
 			t.prev           = this.active;
 			t.next           = after;
 			this.active.next = t;
@@ -68,10 +68,10 @@ public class Workspace {
 		EditorTab dead = this.active;
 		EditorTab nxt  = dead.next;
 		EditorTab prv  = dead.prev;
-		prv.next    = nxt;
-		nxt.prev    = prv;
-		this.active = nxt;
-		this.count  = this.count - 1;
+		prv.next       = nxt;
+		nxt.prev       = prv;
+		this.active    = nxt;
+		this.count     = this.count - 1;
 		return 1;
 	}
 

@@ -24,8 +24,9 @@ class IntArrayList {
 	public IntArrayList(i32 initial_cap) {
 		this.cap = initial_cap;
 		this.len = 0;
-		// 4 bytes por i32; malloc devuelve void* asignable a i32*.
-		this.buf = malloc(4 * initial_cap);
+		// La cuenta va en ELEMENTOS y el tamano lo pone el tipo: `malloc<i32>`
+		// devuelve `i32*` directamente, sin cast ni multiplicar por cuatro.
+		this.buf = malloc<i32>((u64)initial_cap);
 	}
 
 	public void push(i32 v) {
@@ -33,7 +34,7 @@ class IntArrayList {
 			// Grow: nueva capacidad = cap * 2; copiar elementos viejos
 			// al nuevo buffer; liberar el viejo.
 			i32  new_cap = this.cap * 2;
-			i32* new_buf = malloc(4 * new_cap);
+			i32* new_buf = malloc<i32>((u64)new_cap);
 			i32  i       = 0_i32;
 			while (i < this.len) {
 				new_buf[i] = this.buf[i];
@@ -86,7 +87,7 @@ i32 main() {
 
 	// Validacion 3: suma == 0+1+...+15 == 120.
 	i32 sum = 0_i32;
-	i = 0;
+	i       = 0;
 	while (i < 16) {
 		sum = sum + list.get(i);
 		i   = i + 1;

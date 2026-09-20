@@ -194,7 +194,7 @@ public struct Wide128 {
 	 */
 	public Self __add__(Self o) {
 		Self r;
-		r.lo64 = this.lo64 + o.lo64;
+		r.lo64    = this.lo64 + o.lo64;
 		u64 carry = 0_u64;
 		if (r.lo64 < this.lo64) {
 			carry = 1;
@@ -211,7 +211,7 @@ public struct Wide128 {
 	 */
 	public Self __sub__(Self o) {
 		Self r;
-		r.lo64 = this.lo64 - o.lo64;
+		r.lo64         = this.lo64 - o.lo64;
 		u64 borrow_out = 0_u64;
 		if (this.lo64 < o.lo64) {
 			borrow_out = 1;
@@ -390,12 +390,12 @@ public struct Wide128 {
 	 * @param o Puntero al valor con el que intercambiar.
 	 */
 	public void swap(Self* o) {
-		u64 tmp_lo = this.lo64;
-		u64 tmp_hi = this.hi64;
-		this.lo64 = o -> lo64;
-		this.hi64 = o -> hi64;
-		o -> lo64 = tmp_lo;
-		o -> hi64 = tmp_hi;
+		u64  tmp_lo = this.lo64;
+		u64  tmp_hi = this.hi64;
+		this.lo64   = o -> lo64;
+		this.hi64   = o -> hi64;
+		o -> lo64   = tmp_lo;
+		o -> hi64   = tmp_hi;
 	}
 
 	/**
@@ -450,7 +450,7 @@ public struct Wide128 {
 		if (divisor.is_zero()) {
 			// Sin politica propia: se delega en la division entera nativa,
 			// que con divisor cero es el fallo del hardware.
-			u64 boom = 1 / divisor.lo64;
+			u64 boom       = 1 / divisor.lo64;
 			g_wideint_sink = boom; // impide que el optimizador la elimine
 		}
 		Self q;
@@ -459,7 +459,7 @@ public struct Wide128 {
 		Self rem;
 		rem.lo64 = 0;
 		rem.hi64 = 0;
-		i64 i = 127_i64;
+		i64 i    = 127_i64;
 		while (i >= 0) {
 			// rem = (rem << 1) | bit_i(this)
 			rem.hi64 = (rem.hi64 << 1) | (rem.lo64 >> 63);
@@ -513,7 +513,7 @@ public struct u128 : Wide128 {
 	 * @param e Los digitos, tal cual se escribieron.
 	 */
 	public comptime u128(expr e) {
-		IntLit v = parse_int_lit(e);
+		IntLit v  = parse_int_lit(e);
 		this.lo64 = v.word(0);
 		this.hi64 = v.word(1);
 	}
@@ -628,7 +628,7 @@ public struct u128 : Wide128 {
 		u64 t10 = a1 * b0;
 		u64 t11 = a1 * b1;
 		// `mid` acumula tres sumandos de 32 bits: cabe de sobra en 64.
-		u64  mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
+		u64 mid = (t00 >> 32) + (t01 & 0xFFFFFFFF) + (t10 & 0xFFFFFFFF);
 		u128 r;
 		r.lo64 = (t00 & 0xFFFFFFFF) | (mid << 32);
 		r.hi64 = t11 + (t01 >> 32) + (t10 >> 32) + (mid >> 32);
@@ -706,9 +706,9 @@ public struct i128 : Wide128 {
 		// negativo se niega aqui: invertir todos los limbs y sumar uno,
 		// propagando el acarreo mientras un limb desborde a cero.
 		if (v.is_negative()) {
-			w0 = ~w0;
-			w1 = ~w1;
-			w0 = w0 + 1;
+			w0                = ~w0;
+			w1                = ~w1;
+			w0                = w0 + 1;
 			if (w0 == 0) { w1 = w1 + 1; }
 		}
 		this.lo64 = w0;
@@ -760,8 +760,8 @@ public struct i128 : Wide128 {
 	 */
 	public i128 __neg__() {
 		i128 r;
-		r.lo64 = ~this.lo64;
-		r.hi64 = ~this.hi64;
+		r.lo64        = ~this.lo64;
+		r.hi64        = ~this.hi64;
 		u64 lo_plus_1 = r.lo64 + 1;
 		u64 carry     = 0_u64;
 		if (lo_plus_1 < r.lo64) {
@@ -798,12 +798,12 @@ public struct i128 : Wide128 {
 			r.hi64 = sign_fill;
 		} else if (n >= 64) {
 			i64 hi_signed = (i64)this.hi64;
-			r.lo64 = (u64)(hi_signed >> (n - 64));
-			r.hi64 = sign_fill;
+			r.lo64        = (u64)(hi_signed >> (n - 64));
+			r.hi64        = sign_fill;
 		} else {
 			i64 hi_signed = (i64)this.hi64;
-			r.lo64 = (this.lo64 >> n) | (this.hi64 << (64 - n));
-			r.hi64 = (u64)(hi_signed >> n);
+			r.lo64        = (this.lo64 >> n) | (this.hi64 << (64 - n));
+			r.hi64        = (u64)(hi_signed >> n);
 		}
 		return r;
 	}
@@ -1047,8 +1047,8 @@ public struct Wide256 {
 		// El acarreo lo devuelve la mitad baja: este nivel no lo deduce
 		// comparando resultados, solo lo recibe y lo propaga.
 		bool carry = false;
-		r.lo128 = this.lo128.add_with_carry(o.lo128, &carry);
-		r.hi128 = this.hi128 + o.hi128;
+		r.lo128    = this.lo128.add_with_carry(o.lo128, &carry);
+		r.hi128    = this.hi128 + o.hi128;
 		if (carry) {
 			r.hi128 = r.hi128 + u128.one();
 		}
@@ -1066,8 +1066,8 @@ public struct Wide256 {
 		// Igual que en la suma: el prestamo lo produce y lo devuelve la mitad
 		// baja.
 		bool borrowed = false;
-		r.lo128 = this.lo128.sub_with_borrow(o.lo128, &borrowed);
-		r.hi128 = this.hi128 - o.hi128;
+		r.lo128       = this.lo128.sub_with_borrow(o.lo128, &borrowed);
+		r.hi128       = this.hi128 - o.hi128;
 		if (borrowed) {
 			r.hi128 = r.hi128 - u128.one();
 		}
@@ -1085,7 +1085,7 @@ public struct Wide256 {
 	 * @return `this + rhs` truncado a 256 bits.
 	 */
 	public Self add_with_carry(Self rhs, bool* carry_out) {
-		Self r = this + rhs;
+		Self r       = this + rhs;
 		(*carry_out) = (r.ucmp(this) == Ordering.Less);
 		return r;
 	}
@@ -1186,7 +1186,7 @@ public struct Wide256 {
 		m2.lo128 = u128.mul64_full(this.lo128.hi64, o.lo128.lo64);
 		m2.hi128 = u128.zero();
 
-		Self full = r + (m1 << 64) + (m2 << 64);
+		Self full  = r + (m1 << 64) + (m2 << 64);
 		full.hi128 = full.hi128 + this.lo128 * o.hi128 + this.hi128 * o.lo128;
 		return full;
 	}
@@ -1224,7 +1224,7 @@ public struct Wide256 {
 	 * @param o Puntero al valor con el que intercambiar.
 	 */
 	public void swap(Self* o) {
-		Self tmp = this;
+		Self tmp   = this;
 		this.lo128 = o -> lo128;
 		this.hi128 = o -> hi128;
 		o -> lo128 = tmp.lo128;
@@ -1251,7 +1251,7 @@ public struct Wide256 {
 	public Self udivmod(Self divisor, Self* rem_out) {
 		if (divisor.is_zero()) {
 			// Sin politica propia: se delega en la division entera nativa.
-			u64 boom = 1 / divisor.lo128.lo64;
+			u64 boom       = 1 / divisor.lo128.lo64;
 			g_wideint_sink = boom;
 		}
 		Self q;
@@ -1264,7 +1264,7 @@ public struct Wide256 {
 		i64 i = 255_i64;
 		while (i >= 0) {
 			// Baja un bit del dividendo al resto.
-			rem = rem << 1;
+			rem     = rem << 1;
 			u64 bit = 0_u64;
 			if (i >= 128) {
 				bit = (this.hi128 >> ((u64)(i - 128))).lo64 & 1;
@@ -1336,7 +1336,7 @@ public struct u256 : Wide256 {
 	 * @param e Los digitos, tal cual se escribieron.
 	 */
 	public comptime u256(expr e) {
-		IntLit v = parse_int_lit(e);
+		IntLit v        = parse_int_lit(e);
 		this.lo128.lo64 = v.word(0);
 		this.lo128.hi64 = v.word(1);
 		this.hi128.lo64 = v.word(2);
@@ -1606,13 +1606,13 @@ public struct i256 : Wide256 {
 			r.lo128 = fill;
 			r.hi128 = fill;
 		} else if (n >= 128) {
-			i128 sh = hi_s >> (n - 128);
+			i128 sh      = hi_s >> (n - 128);
 			r.lo128.lo64 = sh.lo64;
 			r.lo128.hi64 = sh.hi64;
 			r.hi128      = fill;
 		} else {
-			r.lo128 = (this.lo128 >> n) | (this.hi128 << (128 - n));
-			i128 sh = hi_s >> n;
+			r.lo128      = (this.lo128 >> n) | (this.hi128 << (128 - n));
+			i128 sh      = hi_s >> n;
 			r.hi128.lo64 = sh.lo64;
 			r.hi128.hi64 = sh.hi64;
 		}
@@ -1983,7 +1983,7 @@ public struct Wide512 {
 	 * @param o Puntero al valor con el que intercambiar.
 	 */
 	public void swap(Self* o) {
-		Self tmp = this;
+		Self tmp   = this;
 		this.lo256 = o -> lo256;
 		this.hi256 = o -> hi256;
 		o -> lo256 = tmp.lo256;
@@ -2023,7 +2023,7 @@ public struct Wide512 {
 	 */
 	public Self udivmod(Self divisor, Self* rem_out) {
 		if (divisor.is_zero()) {
-			u64 boom = 1 / divisor.lo256.lo128.lo64;
+			u64 boom       = 1 / divisor.lo256.lo128.lo64;
 			g_wideint_sink = boom;
 		}
 		Self q;
@@ -2035,7 +2035,7 @@ public struct Wide512 {
 
 		i64 i = 511_i64;
 		while (i >= 0) {
-			rem = rem << 1;
+			rem     = rem << 1;
 			u64 bit = 0_u64;
 			if (i >= 256) {
 				bit = (this.hi256 >> ((u64)(i - 256))).lo128.lo64 & 1;
@@ -2082,7 +2082,7 @@ public struct u512 : Wide512 {
 	 * @param e Los digitos, tal cual se escribieron.
 	 */
 	public comptime u512(expr e) {
-		IntLit v = parse_int_lit(e);
+		IntLit v              = parse_int_lit(e);
 		this.lo256.lo128.lo64 = v.word(0);
 		this.lo256.lo128.hi64 = v.word(1);
 		this.lo256.hi128.lo64 = v.word(2);
@@ -2349,13 +2349,13 @@ public struct i512 : Wide512 {
 			r.lo256 = fill;
 			r.hi256 = fill;
 		} else if (n >= 256) {
-			i256 sh = hi_s >> (n - 256);
+			i256 sh       = hi_s >> (n - 256);
 			r.lo256.lo128 = sh.lo128;
 			r.lo256.hi128 = sh.hi128;
 			r.hi256       = fill;
 		} else {
-			r.lo256 = (this.lo256 >> n) | (this.hi256 << (256 - n));
-			i256 sh = hi_s >> n;
+			r.lo256       = (this.lo256 >> n) | (this.hi256 << (256 - n));
+			i256 sh       = hi_s >> n;
 			r.hi256.lo128 = sh.lo128;
 			r.hi256.hi128 = sh.hi128;
 		}

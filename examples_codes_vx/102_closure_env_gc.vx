@@ -40,8 +40,8 @@ i32 main() {
 	// acotada.
 	while (i <= 5000) {
 		fn(i32) -> i32 add_i = make_adder(i);
-		total = total + add_i(0); // add_i(0) = 0 + i = i
-		i     = i + 1;
+		total                = total + add_i(0); // add_i(0) = 0 + i = i
+		i                    = i + 1;
 	}
 	// total = 1 + 2 + ... + 5000 = 5000 * 5001 / 2 = 12502500
 	if (total != 12_502_500) return 100;

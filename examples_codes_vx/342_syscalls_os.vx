@@ -107,7 +107,7 @@ i32 corre() {
 	// La conversion direccion -> puntero es EXPLICITA a proposito: a partir de
 	// aqui se va a dereferenciar, y eso merece verse en el codigo.
 	u64* celda = base;
-	*    celda = PATRON;
+	*celda     = PATRON;
 
 	if (*celda == PATRON) {
 		puntos++;
@@ -188,7 +188,7 @@ i32 corre() {
 
 	// Escribir y releer, igual que en la rama de Windows.
 	u64* celda = pag;
-	*    celda = PATRON;
+	*celda     = PATRON;
 
 	if (*celda == PATRON) {
 		puntos++;

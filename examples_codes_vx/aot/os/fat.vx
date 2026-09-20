@@ -197,7 +197,7 @@ u64 fat_delete(char* name) {
 		c = nx;
 	}
 	u8* e = (u8*)ent;
-	e[0] = 0xE5; // entrada borrada
+	e[0]  = 0xE5; // entrada borrada
 	return 1;
 }
 
@@ -214,9 +214,9 @@ u64 fat_write(char* name, u8* src, u64 size) {
 	while (z < 32) {
 		e[z] = 0;
 		z    = z + 1;
-	}                  // limpiar la entrada
-	fat_mk83(name, e); // nombre 8.3
-	e[0x0B] = 0x20;    // attr = ARCHIVE
+	}                      // limpiar la entrada
+	fat_mk83(name, e);     // nombre 8.3
+	e[0x0B]        = 0x20; // attr = ARCHIVE
 	u64 spc        = bpb_u8(0x0D);
 	u64 csize      = spc * 512;
 	u64 data_start = fat_data_start();
@@ -239,9 +239,9 @@ u64 fat_write(char* name, u8* src, u64 size) {
 		prev = c;
 	}
 	u16* fp = (u16*)(ent + 0x1A);
-	fp[0] = (u16)first; // primer cluster
+	fp[0]   = (u16)first; // primer cluster
 	u32* sp = (u32*)(ent + 0x1C);
-	sp[0] = (u32)size; // tamano
+	sp[0]   = (u32)size; // tamano
 	return written;
 }
 
@@ -265,12 +265,12 @@ u64 fat_mkdir(char* name) {
 	fat_mk83(name, e);
 	e[0x0B] = 0x10; // attr = DIRECTORY
 	u16* fp = (u16*)(ent + 0x1A);
-	fp[0] = (u16)c;
+	fp[0]   = (u16)c;
 	// Inicializar el cluster del dir: "." y ".." + resto a cero.
 	u64 spc  = bpb_u8(0x0D);
 	u64 sect = fat_data_start() + (c - 2) * spc;
 	u8* d    = (u8*)(RAMDISK + sect * 512);
-	z = 0;
+	z        = 0;
 	while (z < spc * 512) {
 		d[z] = 0;
 		z    = z + 1;
@@ -281,15 +281,15 @@ u64 fat_mkdir(char* name) {
 		d[32 + j] = 32;
 		j         = j + 1;
 	}
-	d[0]    = 46; // "."
-	d[0x0B] = 0x10;
-	u16* dotc = (u16*)(d + 0x1A);
+	d[0]         = 46; // "."
+	d[0x0B]      = 0x10;
+	u16* dotc    = (u16*)(d + 0x1A);
 	dotc[0]      = (u16)c; // "." -> este dir
 	d[32]        = 46;
 	d[33]        = 46; // ".."
 	d[32 + 0x0B] = 0x10;
-	u16* ddotc = (u16*)(d + 32 + 0x1A);
-	ddotc[0] = 0; // ".." -> root
+	u16* ddotc   = (u16*)(d + 32 + 0x1A);
+	ddotc[0]     = 0; // ".." -> root
 	return 1;
 }
 

@@ -14,8 +14,10 @@ u64 main() {
 	{
 		register("rbx") u64 alo = 43_u64;
 		register("rdx") u64 ahi = 0_u64;
-		asm { add rax, rbx
-			adc rcx, rdx };
+		asm {
+			add rax, rbx
+			adc rcx, rdx
+		};
 	}
 	// lo = 42, hi = 1.
 
@@ -24,8 +26,10 @@ u64 main() {
 	{
 		register("rbx") u64 blo = 0_u64;
 		register("rdx") u64 bhi = 1_u64;
-		asm { sub rax, rbx
-			sbb rcx, rdx };
+		asm {
+			sub rax, rbx
+			sbb rcx, rdx
+		};
 	}
 	// lo = 42, hi = 0.
 

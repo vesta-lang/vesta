@@ -41,7 +41,7 @@ i32 main() {
 	i64            s1 = 0_i64;
 	if (isPresent(o1) != 0) {
 		i64* p = unwrap(o1);
-		s1 = *p;
+		s1     = *p;
 		println("primero: ${s1}");
 	}
 
@@ -56,12 +56,12 @@ i32 main() {
 	// Puntero a un campo de un struct, para que no sea siempre un escalar
 	// suelto en la pila.
 	Celda c;
-	c.valor = 1;
+	c.valor           = 1;
 	Optional<i64*> o3 = Some(&c.valor);
 	i64            s4 = 0_i64;
 	if (isPresent(o3) != 0) {
 		i64* p = unwrap(o3);
-		s4 = *p;
+		s4     = *p;
 		println("campo: ${s4}");
 	}
 

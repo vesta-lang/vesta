@@ -26,10 +26,14 @@ f64 run(f64* c, f64* a, f64* b, f64* d, i32 n) {
 }
 
 i64 main() {
-	f64* c = malloc(200);
-	f64* a = malloc(200);
-	f64* b = malloc(200);
-	f64* d = malloc(200);
+	// 25 f64, que es lo que recorre el bucle de abajo.  La cuenta va en
+	// ELEMENTOS y el tamano lo pone el tipo: escribir 200 bytes a mano obliga a
+	// rehacer la multiplicacion cada vez que cambie el tipo, y equivocarse ahi
+	// no da un error, da memoria de menos.
+	f64* c = malloc<f64>(25);
+	f64* a = malloc<f64>(25);
+	f64* b = malloc<f64>(25);
+	f64* d = malloc<f64>(25);
 	// a[i]=i+1, b[i]=3, d[i]=i -> c[i] = (i+1)*3 - i = 2i+3 (exacto en f64).
 	for (i32 i = 0_i32; i < 25; i++) {
 		a[i] = (f64)(i + 1);

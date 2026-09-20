@@ -52,7 +52,7 @@ i32 main() {
 	i64 leido = *c; // __deref__  -> 5
 	println("*c        = ${leido}");
 
-	c = 10;        // __assign__ -> v = 20 (no es una copia)
+	c        = 10; // __assign__ -> v = 20 (no es una copia)
 	i64 tras = *c; // 20
 	println("tras c=10 = ${tras}");
 
@@ -66,7 +66,7 @@ i32 main() {
 
 	// Un struct que no declara __assign__ conserva la copia de siempre.
 	Caja d;
-	d.v = 99;
+	d.v    = 99;
 	i64 dv = *d; // 99
 
 	// 5 + 20 + 15 + 18 = 58;  58 - 99 = -41;  -41 + 83 = 42

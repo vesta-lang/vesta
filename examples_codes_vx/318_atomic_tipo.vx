@@ -33,7 +33,7 @@ i32 main() {
 	// buffer: cada hilo se lleva una casilla DISTINTA porque cada uno recibe el
 	// valor que habia antes de su suma.  Con el valor nuevo no se puede hacer.
 	atomic<i64> tail;
-	tail = 0;
+	tail          = 0;
 	i64 casilla_a = tail.fetch_add(1); // 0
 	i64 casilla_b = tail.fetch_add(1); // 1
 	println("casillas: ${casilla_a} y ${casilla_b}");

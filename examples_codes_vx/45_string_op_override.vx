@@ -4,7 +4,7 @@ namespace ejemplos.string_op_override;
 //
 // Demuestra que el usuario puede SOBRESCRIBIR las operaciones del tipo
 // `string` built-in con su propia implementacion (mecanismo, no
-// politica -- igual que @AllocatorOverride para malloc/free).
+// politica -- igual que @Provides(malloc) / @Provides(free)).
 //
 //   @StringConcat fn -> reemplaza el operador `+` y el builtin str_concat.
 //   @StringEq      fn -> reemplaza el operador `==` (y `!=` via negacion)

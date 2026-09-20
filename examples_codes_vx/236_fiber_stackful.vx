@@ -51,7 +51,7 @@ i64 __done_c = 0_i64;
 // conservar su valor a traves de los dos yields intermedios.
 void fiber_a() {
 	i64 acc = 0_i64;
-	acc = acc * 10 + 1;
+	acc     = acc * 10 + 1;
 	fiber_swapctx(__h_a, __h_sched); // cede (acc = 1)
 	acc = acc * 10 + 1;
 	fiber_swapctx(__h_a, __h_sched); // cede (acc = 11)
@@ -63,7 +63,7 @@ void fiber_a() {
 
 void fiber_b() {
 	i64 acc = 0_i64;
-	acc = acc * 10 + 2;
+	acc     = acc * 10 + 2;
 	fiber_swapctx(__h_b, __h_sched);
 	acc = acc * 10 + 2;
 	fiber_swapctx(__h_b, __h_sched);
@@ -75,7 +75,7 @@ void fiber_b() {
 
 void fiber_c() {
 	i64 acc = 0_i64;
-	acc = acc * 10 + 3;
+	acc     = acc * 10 + 3;
 	fiber_swapctx(__h_c, __h_sched);
 	acc = acc * 10 + 3;
 	fiber_swapctx(__h_c, __h_sched);

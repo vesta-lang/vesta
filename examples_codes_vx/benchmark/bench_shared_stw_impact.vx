@@ -44,8 +44,8 @@ i32 main() {
 		i32 i = 0_i32;
 		while (i < 500) {
 			shared C c = new C();
-			c.v = i;
-			i   = i + 1;
+			c.v        = i;
+			i          = i + 1;
 		}
 		shared_gc_collect();
 		cycle = cycle + 1;

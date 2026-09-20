@@ -14,9 +14,9 @@ class Resource {
 }
 
 i32 main() {
-	i64*     slot = malloc(8);
+	i64*     slot = malloc<i64>(1);
 	Resource r    = new Resource(7);
-	*        slot = r; // <-- ERROR: Resource tiene destructor; un deref
+	*slot         = r; // <-- ERROR: Resource tiene destructor; un deref
 	// a memoria raw no participa del cleanup_stack_.
 	free(slot);
 	return r.value;

@@ -59,10 +59,10 @@ i64 via_gfp(i64 a, i64 b) {
 }
 
 i32 main() {
-	i64 r1 = via_call(3, 4);                //  7
-	i64 r2 = via_mov(5, 6);                 // 11
-	i64 r3 = via_lea(1, 7);                 //  8
-	g_fp = (i64)(cfn(i64, i64) -> i64) add; // guarda la direccion de add
+	i64 r1 = via_call(3, 4);                  //  7
+	i64 r2 = via_mov(5, 6);                   // 11
+	i64 r3 = via_lea(1, 7);                   //  8
+	g_fp   = (i64)(cfn(i64, i64) -> i64) add; // guarda la direccion de add
 	// (cfn = puntero a funcion crudo de 8 bytes; un lambda fn(...) son 16 bytes
 	//  y NO se puede castear a i64 -- usa cfn o &funcion para la direccion)
 	i64 r4 = via_gfp(8, 8);          // 16

@@ -29,13 +29,13 @@ i32 partition(i32[] arr, i32 lo, i32 hi) {
 			i = i + 1;
 			// swap arr[i] y arr[j]
 			i32 tmp = arr[i];
-			arr[i] = arr[j];
-			arr[j] = tmp;
+			arr[i]  = arr[j];
+			arr[j]  = tmp;
 		}
 		j = j + 1;
 	}
 	// swap arr[i+1] y arr[hi] (pivote a su posicion final)
-	i32 tmp2 = arr[i + 1];
+	i32 tmp2   = arr[i + 1];
 	arr[i + 1] = arr[hi];
 	arr[hi]    = tmp2;
 	return i + 1;

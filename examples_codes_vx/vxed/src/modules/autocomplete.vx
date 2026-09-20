@@ -38,15 +38,15 @@ public class AutoComplete {
 	public i32 prefix_len;
 
 	public AutoComplete() {
-		this.names        = malloc(64 * 1024);
+		this.names        = malloc<u8>(64 * 1024);
 		this.names_used   = 0;
 		this.names_cap    = 64 * 1024;
-		this.offsets      = malloc(AC_MAX_TOKENS * 4);
-		this.lens         = malloc(AC_MAX_TOKENS * 4);
+		this.offsets      = malloc<i32>((u64)AC_MAX_TOKENS);
+		this.lens         = malloc<i32>((u64)AC_MAX_TOKENS);
 		this.count        = 0;
 		this.popup_active = 0;
 		this.popup_sel    = 0;
-		this.filtered     = malloc(AC_MAX_TOKENS * 4);
+		this.filtered     = malloc<i32>((u64)AC_MAX_TOKENS);
 		this.filt_count   = 0;
 		this.prefix       = malloc(AC_MAX_NAME);
 		this.prefix_len   = 0;
@@ -107,7 +107,7 @@ public class AutoComplete {
 	public void rebuild(buffer.Buffer b) {
 		this.count      = 0;
 		this.names_used = 0;
-		i32 i = 0_i32;
+		i32 i           = 0_i32;
 		while (i < b.length) {
 			i32 c = (i32)b.data[i];
 			if (this.is_id_start(c) == 1) {
@@ -127,8 +127,8 @@ public class AutoComplete {
 	// contigua hacia atras desde cursor-1).  Devuelve longitud (puede ser 0).
 	public i32 prefix_before_cursor(buffer.Buffer b) {
 		this.prefix_len = 0;
-		i32 i          = b.cursor - 1;
-		i32 chars_back = 0_i32;
+		i32 i           = b.cursor - 1;
+		i32 chars_back  = 0_i32;
 		while (i >= 0 && chars_back < AC_MAX_NAME - 1) {
 			i32 c = (i32)b.data[i];
 			if (this.is_id_char(c) == 0) break;
@@ -191,8 +191,8 @@ public class AutoComplete {
 		if (n > 10) n = 10;
 		i32         r = 0_i32;
 		while (r < n) {
-			i32 row = anchor_row + 1 + r;
-			if (row > sc.rows - 1) r = n;
+			i32                    row = anchor_row + 1 + r;
+			if (row > sc.rows - 1) r   = n;
 			else {
 				print("\x1b[${row};${anchor_col}H");
 				i32 idx  = this.filtered[r];

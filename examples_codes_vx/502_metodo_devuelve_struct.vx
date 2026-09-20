@@ -59,7 +59,7 @@ i32 main() {
 	const i64 sa = a.x + a.y + a.z + a.w;
 
 	GeneradorS s;
-	s.base = 20;
+	s.base         = 20;
 	const Punto3 b = s.desplazado(1, 2);
 	// 21 + 22 + 2 + 20 = 65
 	const i64 sb = b.x + b.y + b.z + b.w;

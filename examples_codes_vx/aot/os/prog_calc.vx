@@ -21,7 +21,7 @@ u64 g_cp = 0_u64;
 i64 parse_expr();
 
 void skip_sp() {
-	char*                   s    = (char*)g_cs;
+	char*                 s      = (char*)g_cs;
 	while (s[g_cp] == 32) { g_cp = g_cp + 1; }
 }
 
@@ -39,7 +39,7 @@ i64 parse_factor() {
 	char* s = (char*)g_cs;
 	skip_sp();
 	if (s[g_cp] == 40) { // '('
-		g_cp = g_cp + 1;
+		g_cp  = g_cp + 1;
 		i64 v = parse_expr();
 		skip_sp();
 		if (s[g_cp] == 41) { g_cp = g_cp + 1; }
@@ -58,8 +58,8 @@ i64 parse_term() {
 	skip_sp();
 	while (s[g_cp] == 42 || s[g_cp] == 47 || s[g_cp] == 37) {
 		u64 op = (u64)s[g_cp];
-		g_cp = g_cp + 1;
-		i64 r = parse_factor();
+		g_cp   = g_cp + 1;
+		i64 r  = parse_factor();
 		if (op == 42) { v = v * r; } else { if (r == 0) { v = 0; } else { if (op == 47) { v = v / r; } else { v = v % r; } } }
 		skip_sp();
 	}
@@ -72,8 +72,8 @@ i64 parse_expr() {
 	skip_sp();
 	while (s[g_cp] == 43 || s[g_cp] == 45) {
 		u64 op = (u64)s[g_cp];
-		g_cp = g_cp + 1;
-		i64 r = parse_term();
+		g_cp   = g_cp + 1;
+		i64 r  = parse_term();
 		if (op == 43) { v = v + r; } else { v = v - r; }
 		skip_sp();
 	}
@@ -90,8 +90,8 @@ i64 prog_main(u64 api, u64 args) {
 	u64 a_dec  = tbl[2]; // void dec(i64)
 
 	((cfn(u64) -> void) a_puts)((u64)"= ");
-	g_cs = args;
-	g_cp = 0;
+	g_cs  = args;
+	g_cp  = 0;
 	i64 r = parse_expr();
 	((cfn(i64) -> void) a_dec)(r);
 	((cfn(u64) -> void) a_puts)((u64)"\n");

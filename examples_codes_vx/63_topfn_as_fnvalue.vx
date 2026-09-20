@@ -61,10 +61,10 @@ i32 main() {
 
 	// 2) reduce(ys, 4, 1, mul2): PROD 1..4 = 24  (otra top-level)
 	i32[4] ys;
-	ys[0] = 1;
-	ys[1] = 2;
-	ys[2] = 3;
-	ys[3] = 4;
+	ys[0]    = 1;
+	ys[1]    = 2;
+	ys[2]    = 3;
+	ys[3]    = 4;
 	i32 prod = reduce(ys, 4, 1, mul2);
 	if (prod != 24) return 12;
 

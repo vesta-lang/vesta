@@ -10,15 +10,15 @@ class Holder {
 }
 i32 main() {
 	// Alocar 6 shared objects.
-	shared Holder a = new Holder();
-	shared Holder b = new Holder();
-	shared Holder c = new Holder();
-	shared Holder d = new Holder();
-	shared Holder e = new Holder();
-	shared Holder f = new Holder();
-	a.v = 10;
-	b.v = 20;
-	u32 before = shared_heap_live_count();
+	shared Holder a      = new Holder();
+	shared Holder b      = new Holder();
+	shared Holder c      = new Holder();
+	shared Holder d      = new Holder();
+	shared Holder e      = new Holder();
+	shared Holder f      = new Holder();
+	a.v                  = 10;
+	b.v                  = 20;
+	u32           before = shared_heap_live_count();
 
 	// Soltar refs a c, d, e, f (reasignar a a/b).  Solo a y b siguen rooted.
 	c = a;

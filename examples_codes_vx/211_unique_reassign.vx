@@ -21,9 +21,9 @@ class Conexion {
 
 void trabajar() {
 	Conexion c = new Conexion();
-	c.handle = unique_with(10, cerrar); // primer recurso
-	c.handle = unique_with(20, cerrar); // reasigna: libera el primero
-}                                       // al salir de scope: ~Conexion() libera el segundo
+	c.handle   = unique_with(10, cerrar); // primer recurso
+	c.handle   = unique_with(20, cerrar); // reasigna: libera el primero
+}                                         // al salir de scope: ~Conexion() libera el segundo
 
 i32 main() {
 	Counter.liberados = 0;

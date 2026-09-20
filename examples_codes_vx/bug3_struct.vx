@@ -14,8 +14,8 @@ i32 sumar(borrow<Punto> p) {
 
 void escalar(borrow_mut<Punto> p, i32 k) {
 	Punto v = read_borrow(p);
-	v.x = v.x * k;
-	v.y = v.y * k;
+	v.x     = v.x * k;
+	v.y     = v.y * k;
 	write_borrow(p, v);
 }
 

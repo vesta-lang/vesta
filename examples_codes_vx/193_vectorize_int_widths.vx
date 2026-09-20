@@ -8,9 +8,11 @@ i64 main() {
 	i64 n = 40_i64;
 
 	// --- i16: add + mul element-wise ---
-	i16* a16 = (i16*)malloc(n * 2);
-	i16* b16 = (i16*)malloc(n * 2);
-	i16* c16 = (i16*)malloc(n * 2);
+	// n elementos de cada ancho: el tamano lo pone el tipo, que es justo lo que
+	// este ejemplo prueba -- i16, i32 e i64 con la MISMA cuenta.
+	i16* a16 = malloc<i16>(n);
+	i16* b16 = malloc<i16>(n);
+	i16* c16 = malloc<i16>(n);
 	i64  i   = 0_i64;
 	while (i < n) {
 		a16[i] = (i16)i;
@@ -20,7 +22,7 @@ i64 main() {
 	// c = a + b = 2i+1.  sum(2i+1, i=0..39) = 2*780 + 40 = 1600.
 	for (i64 j = 0_i64; j < n; j = j + 1) { c16[j] = a16[j] + b16[j]; }
 	i64 sum16 = 0_i64;
-	i = 0;
+	i         = 0;
 	while (i < n) {
 		sum16 = sum16 + (i64)c16[i];
 		i     = i + 1;
@@ -29,17 +31,17 @@ i64 main() {
 	// c = a * b = i*(i+1).  sum(i*(i+1), i=0..39) = 41 + ... = 21320.
 	for (i64 j = 0_i64; j < n; j = j + 1) { c16[j] = a16[j] * b16[j]; }
 	i64 sumMul = 0_i64;
-	i = 0;
+	i          = 0;
 	while (i < n) {
 		sumMul = sumMul + (i64)c16[i];
 		i      = i + 1;
 	} // 21320
 
 	// --- i8: add element-wise (sin mul byte packed) ---
-	i8* a8 = (i8*)malloc(n);
-	i8* b8 = (i8*)malloc(n);
-	i8* c8 = (i8*)malloc(n);
-	i = 0;
+	i8* a8 = malloc<i8>(n);
+	i8* b8 = malloc<i8>(n);
+	i8* c8 = malloc<i8>(n);
+	i      = 0;
 	while (i < n) {
 		a8[i] = (i8)2;
 		b8[i] = (i8)3;
@@ -47,17 +49,17 @@ i64 main() {
 	}
 	for (i64 j = 0_i64; j < n; j = j + 1) { c8[j] = a8[j] + b8[j]; } // =5
 	i64 sum8 = 0_i64;
-	i = 0;
+	i        = 0;
 	while (i < n) {
 		sum8 = sum8 + (i64)c8[i];
 		i    = i + 1;
 	} // 40*5=200
 
 	// --- i32: mul element-wise (PMULLD) ---
-	i32* a32 = (i32*)malloc(n * 4);
-	i32* b32 = (i32*)malloc(n * 4);
-	i32* c32 = (i32*)malloc(n * 4);
-	i = 0;
+	i32* a32 = malloc<i32>(n);
+	i32* b32 = malloc<i32>(n);
+	i32* c32 = malloc<i32>(n);
+	i        = 0;
 	while (i < n) {
 		a32[i] = (i32)i;
 		b32[i] = (i32)3;
@@ -65,7 +67,7 @@ i64 main() {
 	}
 	for (i64 j = 0_i64; j < n; j = j + 1) { c32[j] = a32[j] * b32[j]; } // 3i
 	i64 sum32 = 0_i64;
-	i = 0;
+	i         = 0;
 	while (i < n) {
 		sum32 = sum32 + (i64)c32[i];
 		i     = i + 1;

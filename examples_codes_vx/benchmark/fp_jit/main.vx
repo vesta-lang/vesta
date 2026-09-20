@@ -12,8 +12,8 @@ i32 main() {
 		f64 M = fmax(s, 1.0);
 		f64 f = floor(M);
 		f64 c = ceil(f);
-		acc = acc + m + c;
-		i   = i + 1;
+		acc   = acc + m + c;
+		i     = i + 1;
 	}
 	return (i32)((i64)acc & 0xFF);
 }

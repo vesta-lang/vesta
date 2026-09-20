@@ -47,7 +47,7 @@ i32 main() {
 	Result<Grande, i64> r    = hacer(10);
 	if (isOk(r) != 0) {
 		Grande g = value(r);
-		suma = g.a + g.b + g.c + g.d; // 10+11+12+13 = 46
+		suma     = g.a + g.b + g.c + g.d; // 10+11+12+13 = 46
 	}
 
 	// La rama de error tiene que seguir distinguiendose, y su payload vive

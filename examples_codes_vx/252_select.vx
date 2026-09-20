@@ -28,8 +28,8 @@ void producer_b(i64 arg) {
 }
 void consumer(i64 arg) {
 	Chan[2] chans;
-	chans[0] = g_ch_a;
-	chans[1] = g_ch_b;
+	chans[0]  = g_ch_a;
+	chans[1]  = g_ch_b;
 	i64 v     = 0_i64;
 	i64 total = A_N + B_N; // 5 mensajes en total
 	for (i64 got = 0_i64; got < total; got++) {

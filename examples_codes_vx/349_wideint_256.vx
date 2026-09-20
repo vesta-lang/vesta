@@ -27,8 +27,8 @@ i32 main() {
 	u256 casi;
 	casi.lo128 = u128.max();
 	casi.hi128 = u128.zero();
-	u256 uno  = u256.one();
-	u256 desb = casi + uno;
+	u256 uno   = u256.one();
+	u256 desb  = casi + uno;
 	if (!desb.lo128.is_zero()) { return 7; }
 	if (desb.hi128 != u128.one()) { return 8; }
 

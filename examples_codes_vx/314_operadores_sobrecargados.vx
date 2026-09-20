@@ -117,8 +117,8 @@ i32 main() {
 	a.x = 3;
 	a.y = 4;
 	Vec2 b;
-	b.x = 1;
-	b.y = 2;
+	b.x    = 1;
+	b.y    = 2;
 	Vec2 c = a + b; // (4, 6)  -- __add__
 	Vec2 d = c - b; // (3, 4)  -- __sub__
 	Vec2 e = d * 2; // (6, 8)  -- __mul__
@@ -132,9 +132,9 @@ i32 main() {
 	f -= b; // (6, 8)  -- via __sub__
 
 	// 3. Indexado y unario.
-	i64  sum =  f[0] + f[1]; // 14      -- __index__
-	Vec2 neg = -a;           // (-3,-4) -- __neg__
-	sum = sum + (-neg[0]);   // 14 + 3 = 17
+	i64  sum =  f[0] + f[1];     // 14      -- __index__
+	Vec2 neg = -a;               // (-3,-4) -- __neg__
+	sum      =  sum + (-neg[0]); // 14 + 3 = 17
 
 	// 4. Igualdad: `!=` se deriva negando `__eq__`.
 	if (a == d) { sum = sum + 10; } // (3,4) == (3,4) -> 27

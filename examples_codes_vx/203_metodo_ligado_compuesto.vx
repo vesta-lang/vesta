@@ -19,7 +19,7 @@ class Contador {
 // Factoria: devuelve un Contador nuevo (base COMPUESTA del metodo ligado).
 Contador hacer(i64 base) {
 	Contador c = new Contador();
-	c.n = base;
+	c.n        = base;
 	return c;
 }
 
@@ -51,8 +51,8 @@ i32 main() {
 
 	// Base compuesta almacenada en un CAMPO: env owned, liberado por el dtor.
 	Widget w = new Widget();
-	w.cb = &hacer(10).inc;
-	i64 d = w.cb(); // 11
+	w.cb     = &hacer(10).inc;
+	i64    d = w.cb(); // 11
 
 	return (i32)(a + b + c + d); // 11 + 12 + 8 + 11 = 42
 }

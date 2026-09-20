@@ -28,10 +28,10 @@ class Tab {
 }
 
 public i32 run() {
-	Tab t1 = new Tab(1);
-	Tab t2 = new Tab(2);
-	t1.next = t2;
-	t2.next = t1;
+	Tab t1    = new Tab(1);
+	Tab t2    = new Tab(2);
+	t1.next   = t2;
+	t2.next   = t1;
 	i32 frame = 0_i32;
 	i32 total = 0_i32;
 	while (frame < 3) {

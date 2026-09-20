@@ -32,8 +32,8 @@ struct U128 {
 	 */
 	public comptime U128(expr e) {
 		IntLit v = parse_int_lit(e);
-		this.lo = v.word(0);
-		this.hi = v.word(1);
+		this.lo  = v.word(0);
+		this.hi  = v.word(1);
 	}
 }
 

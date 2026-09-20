@@ -31,19 +31,19 @@ i32 stringify_count(Tab t) {
 }
 
 public i32 run() {
-	Tab t1 = new Tab(1, "alpha");
-	Tab t2 = new Tab(2, "beta");
-	t1.next = t2;
-	t2.next = t1;
+	Tab t1    = new Tab(1, "alpha");
+	Tab t2    = new Tab(2, "beta");
+	t1.next   = t2;
+	t2.next   = t1;
 	i32 frame = 0_i32;
 	while (frame < 3) {
 		Tab cur = t1;
 		i32 i   = 0_i32;
 		i32 acc = 0_i32;
 		while (i < 2) {
-			string mark = "";
-			if (cur.buf.dirty == 1) mark = "*";
-			string label = " ${cur.id} ${cur.title}${mark} ";
+			string                  mark  = "";
+			if (cur.buf.dirty == 1) mark  = "*";
+			string                  label = " ${cur.id} ${cur.title}${mark} ";
 			print(label);
 			print("\x1b[0m");
 			acc = acc + cur.id;

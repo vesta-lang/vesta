@@ -34,21 +34,21 @@ struct TaggedRec {
 // Crea un registro con kind!=0 (rama hdr+extra) y devuelve payload.
 u32 make_extra(u8* buf) {
 	TaggedRec r = TaggedRec(buf);
-	r.kind    = (u32)1;    // rama con extra
-	r.hdr_len = (u32)16;   // cabecera de 16 bytes
-	r.extra   = (u32)8;    // +8 mas
-	r.payload = (u32)1000; // STORE en base + 16 + 8 = base + 24
-	return r.payload;      // relee via el resolver -> 1000
+	r.kind      = (u32)1;    // rama con extra
+	r.hdr_len   = (u32)16;   // cabecera de 16 bytes
+	r.extra     = (u32)8;    // +8 mas
+	r.payload   = (u32)1000; // STORE en base + 16 + 8 = base + 24
+	return r.payload;        // relee via el resolver -> 1000
 }
 
 // Crea un registro con kind==0 (rama sin extra) y devuelve payload.
 u32 make_inline(u8* buf) {
 	TaggedRec r = TaggedRec(buf);
-	r.kind    = (u32)0;   // rama inline
-	r.hdr_len = (u32)12;  // cabecera de 12 bytes
-	r.extra   = (u32)999; // ignorado (kind==0)
-	r.payload = (u32)337; // STORE en base + 12
-	return r.payload;     // relee via el resolver -> 337
+	r.kind      = (u32)0;   // rama inline
+	r.hdr_len   = (u32)12;  // cabecera de 12 bytes
+	r.extra     = (u32)999; // ignorado (kind==0)
+	r.payload   = (u32)337; // STORE en base + 12
+	return r.payload;       // relee via el resolver -> 337
 }
 
 i32 main() {

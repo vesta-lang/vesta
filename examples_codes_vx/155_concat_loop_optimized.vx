@@ -105,8 +105,8 @@ i32 main() {
 	static_assert(builder_compound(10_000) == 10_000, "compound assign");
 
 	i64 ok = comprueba(rt_op(3), 6);
-	ok = ok + comprueba(rt_metodo(3), 6);
-	ok = ok + comprueba(rt_compuesto(3), 6);
+	ok     = ok + comprueba(rt_metodo(3), 6);
+	ok     = ok + comprueba(rt_compuesto(3), 6);
 	println("ejecucion: ${ok}/3");
 	if (ok != 3) { return 1; }
 	return 42;

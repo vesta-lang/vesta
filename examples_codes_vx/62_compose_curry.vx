@@ -63,11 +63,11 @@ i32 main() {
 
 	// 2) reduce con max top-level: max([1,9,3,7,5]) = 9.
 	i32[5] ys;
-	ys[0] = 1;
-	ys[1] = 9;
-	ys[2] = 3;
-	ys[3] = 7;
-	ys[4] = 5;
+	ys[0]       = 1;
+	ys[1]       = 9;
+	ys[2]       = 3;
+	ys[3]       = 7;
+	ys[4]       = 5;
 	i32 max_val = reduce(ys, 5, 0, max2); // top-level promocionada
 	if (max_val != 9) return 12;
 

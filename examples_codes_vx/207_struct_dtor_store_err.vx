@@ -33,7 +33,7 @@ i32 usar(i64 v) {
 	tmp.p  = (i64*)malloc(8);
 	*tmp.p = v;
 	Caja c = new Caja();
-	c.r = tmp;            // move-on-store: tmp invalidado, la Caja posee el recurso
+	c.r    = tmp;         // move-on-store: tmp invalidado, la Caja posee el recurso
 	return (i32)(*c.r.p); // c destruida al exit -> ~Recurso -> free + freed++
 }
 

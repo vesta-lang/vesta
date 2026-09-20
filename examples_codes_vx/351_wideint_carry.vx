@@ -46,7 +46,7 @@ i32 main() {
 	u256 casi;
 	casi.lo128 = u128.max();
 	casi.hi128 = u128.zero();
-	u256 sum = casi + u256.one();
+	u256 sum   = casi + u256.one();
 	if (!sum.lo128.is_zero()) { return 9; }
 	if (sum.hi128 != u128.one()) { return 10; }
 	return 42;

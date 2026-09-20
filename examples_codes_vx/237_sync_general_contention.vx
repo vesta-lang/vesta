@@ -118,35 +118,35 @@ i32 main() {
 	}
 
 	// Objeto compartido cuyo monitor (celda obj+16) se contiende.
-	u64  lock_obj = (u64)malloc(4 * 8);
+	u64  lock_obj = (u64)malloc<u64>(4);
 	u64* lo       = (u64*)lock_obj;
-	lo[0] = 0;
-	lo[1] = 0;
-	lo[2] = 0;
-	lo[3] = 0;
+	lo[0]         = 0;
+	lo[1]         = 0;
+	lo[2]         = 0;
+	lo[3]         = 0;
 
 	// Contador compartido.
 	u64  cnt_cell = (u64)malloc(8);
 	u64* cc       = (u64*)cnt_cell;
-	cc[0] = 0;
+	cc[0]         = 0;
 
 	// 3 state blocks de 3 qwords: [iters, lock_obj, counter_ptr].
-	u64  blk = (u64)malloc(3 * 3 * 8);
+	u64  blk = (u64)malloc<u64>(3 * 3);
 	u64  s1  = blk + 0 * 24;
 	u64  s2  = blk + 1 * 24;
 	u64  s3  = blk + 2 * 24;
 	u64* p1  = (u64*)s1;
-	p1[0] = 7;
-	p1[1] = lock_obj;
-	p1[2] = cnt_cell;
-	u64* p2 = (u64*)s2;
-	p2[0] = 7;
-	p2[1] = lock_obj;
-	p2[2] = cnt_cell;
-	u64* p3 = (u64*)s3;
-	p3[0] = 7;
-	p3[1] = lock_obj;
-	p3[2] = cnt_cell;
+	p1[0]    = 7;
+	p1[1]    = lock_obj;
+	p1[2]    = cnt_cell;
+	u64* p2  = (u64*)s2;
+	p2[0]    = 7;
+	p2[1]    = lock_obj;
+	p2[2]    = cnt_cell;
+	u64* p3  = (u64*)s3;
+	p3[0]    = 7;
+	p3[1]    = lock_obj;
+	p3[2]    = cnt_cell;
 
 	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s1);
 	vasync_spawn_fiber((i64)(cfn() -> void) race_task, (i64)s2);

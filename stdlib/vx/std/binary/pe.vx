@@ -1,0 +1,238 @@
+/**
+ * @file pe.vx
+ * @brief Vista tipada del formato PE sobre una imagen YA MAPEADA en memoria.
+ *
+ * El caso que cubre es el del PE que el CARGADOR ya coloco en el espacio del
+ * proceso -- lo que devuelve `LoadLibraryA`, o lo que cuelga de la lista de
+ * modulos del PEB --, no el de un fichero leido de disco.
+ *
+ * La diferencia entre los dos casos cabe en una linea, `rva_to_va`, y NO es un
+ * detalle: en la imagen mapeada el cargador ya puso cada seccion en su
+ * direccion virtual, asi que un RVA es el desplazamiento desde la base y la
+ * traduccion es una suma.  En el fichero en disco hay que traducirlo
+ * recorriendo la tabla de secciones, porque el relleno en disco y en memoria no
+ * coinciden.  Confundirlos no da un error: da OTRA direccion, y lo que se lee
+ * alli parece un dato valido.  Por eso este modulo dice en su nombre de que
+ * caso habla, y el parser de disco (`examples_codes_vx/273_overlay_pe_parser.vx`)
+ * lleva su propio `translate`.
+ *
+ * @par Por que los overlays NO se exportan
+ * Las vistas son privadas del modulo y lo publico son FUNCIONES sobre
+ * direcciones.  Hoy es obligatorio: un campo ARRAY de overlay pierde su
+ * condicion de array al cruzar la frontera del modulo -- el `FieldSlot` del
+ * `.vxi` solo lleva nombre, tipo, offset, tamano y bits, sin `is_array` ni
+ * `stride` ni los resolvers de `@offset` --, de modo que un `T tabla[]`
+ * importado llega como un escalar y `tabla[i]` no compila.  Pero ademas es
+ * mejor frontera: quien recorre los exports no tiene por que conocer el layout
+ * del PE, y el dia que el `.vxi` lo soporte esta API no cambia.
+ *
+ * @par Recorrer la tabla de exports
+ * @code
+ * ExportTable t = export_table(handle);
+ * for (u32 i = 0_u32; i < t.count; i++) {
+ *     char* name = (char*) export_name_at(t, i);
+ *     u64   addr = export_addr_at(t, i);
+ * }
+ * @endcode
+ */
+
+namespace std.binary.pe;
+
+// ===========================================================================
+//  Firmas y constantes del formato
+// ===========================================================================
+
+/// 'MZ': lo primero de la cabecera DOS, que todo PE sigue arrastrando.
+public const u16 DOS_SIGNATURE = 0x5A4D_u16;
+
+/// 'PE\0\0': lo primero de la cabecera NT, en `base + e_lfanew`.
+public const u32 NT_SIGNATURE = 0x00004550_u32;
+
+/// IMAGE_NT_OPTIONAL_HDR32_MAGIC: cabecera opcional de 32 bits.
+public const u16 OPT_MAGIC_PE32 = 0x010B_u16;
+
+/// IMAGE_NT_OPTIONAL_HDR64_MAGIC: cabecera opcional de 64 bits (PE32+).
+public const u16 OPT_MAGIC_PE32PLUS = 0x020B_u16;
+
+// ===========================================================================
+//  Las vistas (privadas: ver la cabecera del fichero)
+// ===========================================================================
+
+/// IMAGE_DATA_DIRECTORY (8 bytes): a donde apunta un directorio y cuanto ocupa.
+@overlay
+struct DataDirectory {
+	u32 rva  @0x00;
+	u32 size @0x04;
+}
+
+/**
+ * IMAGE_EXPORT_DIRECTORY (40 bytes).
+ *
+ * Todos los campos que apuntan a algo son RVAs, no direcciones: hay que
+ * pasarlos por `Image.rva_to_va` antes de leer nada en ellos.
+ */
+@overlay
+struct ExportDirectory {
+	u32 name_rva          @0x0C; ///< nombre del propio modulo
+	u32 ordinal_base      @0x10; ///< ordinal de la PRIMERA entrada de `functions`
+	u32 function_count    @0x14; ///< entradas de la tabla de direcciones
+	u32 name_count        @0x18; ///< entradas de las DOS tablas de nombres
+	u32 functions_rva     @0x1C; ///< u32[function_count]: RVA de cada export
+	u32 names_rva         @0x20; ///< u32[name_count]: RVA del nombre, en orden alfabetico
+	u32 name_ordinals_rva @0x24; ///< u16[name_count]: indice dentro de `functions`
+}
+
+/// Tabla de u32 anclada en su propia base (dos de las tres del directorio).
+@overlay
+struct U32Table {
+	u32 at[] @offset(0) stride(4);
+}
+
+/// Tabla de u16 anclada en su propia base (los indices de `name_ordinals`).
+@overlay
+struct U16Table {
+	u16 at[] @offset(0) stride(2);
+}
+
+/**
+ * La imagen mapeada entera, desde su base.
+ *
+ * Solo se declaran los campos que hacen falta para llegar a los directorios;
+ * los huecos son relleno implicito.
+ */
+@overlay
+struct Image {
+	u16 dos_magic @0x00;
+	u32 e_lfanew  @0x3C; ///< desplazamiento a la cabecera NT
+
+	// --- IMAGE_NT_HEADERS, en base + e_lfanew -----------------------------
+	u32 nt_signature  @offset(e_lfanew);
+	u16 machine       @offset(e_lfanew + 4);
+	u16 section_count @offset(e_lfanew + 6);
+	u16 opt_size      @offset(e_lfanew + 20); ///< SizeOfOptionalHeader
+	// La cabecera opcional empieza tras la firma (4) y el IMAGE_FILE_HEADER (20).
+	u16 opt_magic @offset(e_lfanew + 24);
+
+	/**
+	 * Los 16 IMAGE_DATA_DIRECTORY.
+	 *
+	 * Su posicion depende de la VARIANTE: en PE32+ el `ImageBase` ocupa 8 bytes
+	 * donde PE32 tiene `BaseOfData` + `ImageBase` de 4+4, y eso corre el array
+	 * 16 bytes.  La discriminacion vive dentro de la vista, que es donde sabe
+	 * leerse `opt_magic`; quien la usa no se entera.
+	 */
+	DataDirectory Directories[16] @offset {
+		u64 opt = base + (u64)this.e_lfanew + 24;
+		if (this.opt_magic == 0x020B) { // PE32+
+			return opt + 112;
+		}
+		return opt + 96; // PE32
+	} stride(8);
+
+	/**
+	 * Traduce un RVA a direccion.
+	 *
+	 * En una imagen MAPEADA es una suma, porque el cargador ya puso cada
+	 * seccion en su sitio.  Es toda la diferencia con el mismo PE leido de
+	 * disco -- ver la cabecera del fichero.
+	 */
+	public u64 rva_to_va(u32 rva) => (u64)this + (u64)rva;
+
+	/// Comprueba las dos firmas antes de fiarse de ningun desplazamiento.
+	public bool is_valid() {
+		if (this.dos_magic != 0x5A4D) { // 'MZ'
+			return false;
+		}
+		return this.nt_signature == 0x00004550; // 'PE\0\0'
+	}
+
+	/// Direccion del IMAGE_EXPORT_DIRECTORY, o 0 si el modulo no exporta nada.
+	public u64 export_directory_va() {
+		u32 rva = this.Directories[0].rva;
+		if (rva == 0) {
+			return 0;
+		}
+		return this.rva_to_va(rva);
+	}
+}
+
+// ===========================================================================
+//  API publica
+// ===========================================================================
+
+/**
+ * Las tres tablas paralelas del directorio de exports, ya traducidas.
+ *
+ * Se resuelven UNA vez y se llevan juntas, en vez de re-derivarlas en cada
+ * consulta: un recorrido completo son dos accesos por export, y volver a
+ * caminar las cabeceras en cada uno seria pagar el doble por nada.
+ */
+public struct ExportTable {
+	u64 base;  ///< base de la imagen mapeada
+	u64 names; ///< u32[count]: RVA del nombre de cada export
+	u64 funcs; ///< u32[]: RVA de cada funcion
+	u64 ords;  ///< u16[count]: indice dentro de `funcs`
+	u32 count; ///< 0 = el modulo no exporta nada, o no es un PE valido
+}
+
+/// Comprueba las firmas DOS y NT de una imagen mapeada en @p base.
+public bool image_is_valid(u64 base) {
+	Image img = Image(base);
+	return img.is_valid();
+}
+
+/**
+ * Resuelve las tablas de exports de la imagen mapeada en @p base.
+ *
+ * @return La tabla; `count == 0` si no es un PE valido o no exporta nada.  No
+ *         se distingue entre ambos porque para quien recorre exports es el
+ *         mismo hecho: no hay nada que recorrer.
+ */
+public ExportTable export_table(u64 base) {
+	ExportTable t;
+	t.base  = base;
+	t.names = 0;
+	t.funcs = 0;
+	t.ords  = 0;
+	t.count = 0_u32;
+
+	Image img = Image(base);
+	if (!img.is_valid()) {
+		return t;
+	}
+	u64 dir_va = img.export_directory_va();
+	if (dir_va == 0) {
+		return t;
+	}
+
+	ExportDirectory ed = ExportDirectory(dir_va);
+	t.names            = img.rva_to_va(ed.names_rva);
+	t.funcs            = img.rva_to_va(ed.functions_rva);
+	t.ords             = img.rva_to_va(ed.name_ordinals_rva);
+	t.count            = ed.name_count;
+	return t;
+}
+
+/**
+ * Direccion del nombre del export @p i (una cadena C dentro de la imagen).
+ *
+ * El caller comprueba `i < t.count`: la politica ante un indice fuera de rango
+ * la pone quien llama, no este modulo.
+ */
+public u64 export_name_at(ExportTable t, u32 i) {
+	U32Table names = U32Table(t.names);
+	return t.base + (u64)names.at[i];
+}
+
+/**
+ * Direccion de la funcion exportada con el nombre @p i.
+ *
+ * `name_ordinals` ya es el INDICE dentro de `functions`, no un ordinal: no hay
+ * que restarle `ordinal_base`.
+ */
+public u64 export_addr_at(ExportTable t, u32 i) {
+	U16Table ords  = U16Table(t.ords);
+	U32Table funcs = U32Table(t.funcs);
+	u32      slot  = (u32)ords.at[i];
+	return t.base + (u64)funcs.at[slot];
+}

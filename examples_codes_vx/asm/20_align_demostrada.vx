@@ -23,7 +23,7 @@ i32 main() {
 	// Reserva grande: la entrega la arena del sistema tras una cabecera de 64,
 	// asi que su alineacion se conoce y es de sobra para lo que se le pide.
 	u8* base = (u8*)malloc(8192);
-	base[0] = 7;
+	base[0]  = 7;
 	limpia_16(base);
 	// Los 16 primeros bytes quedaron a cero.
 	i32 r = 42_i32;

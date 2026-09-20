@@ -31,8 +31,8 @@ class Caja {
 }
 
 i32 main() {
-	Caja c = new Caja(10);
-	c.valor = c.valor + 5;    // setter + getter
-	i64 d = c.dobla(c.valor); // @Inline expande a (c.valor + c.valor) = 30
-	return d;                 // 30
+	Caja c  = new Caja(10);
+	c.valor = c.valor + 5;      // setter + getter
+	i64  d  = c.dobla(c.valor); // @Inline expande a (c.valor + c.valor) = 30
+	return d;                   // 30
 }

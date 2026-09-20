@@ -27,7 +27,7 @@ class Conexion {
 
 void abrir_y_cerrar(i64 fd) {
 	Conexion c = new Conexion();
-	c.handle = unique_with(fd, mi_deleter);
+	c.handle   = unique_with(fd, mi_deleter);
 } // c sale de scope -> ~Conexion() -> mi_deleter(fd): un solo cierre
 
 i32 main() {

@@ -24,10 +24,10 @@ void ensure_loaded() {
 	// STD_INPUT_HANDLE = -10 (DWORD) = 0xFFFFFFF6.  Pasamos como i64
 	// con sign-extend; el FFI marshalling toma los bits bajos.
 	i64 std_input = -10_i64;
-	g_stdin_h = ffi_call(g_get_std, std_input);
+	g_stdin_h     =  ffi_call(g_get_std, std_input);
 	// Reservar buffers en host memory.  INPUT_RECORD son 20 bytes en x64.
-	u8* irec  = malloc(32);
-	u8* nread = malloc(8);
+	u8* irec    = malloc(32);
+	u8* nread   = malloc(8);
 	g_irec_buf  = (i64)irec;
 	g_nread_buf = (i64)nread;
 	g_init      = 1;

@@ -34,10 +34,10 @@ u64 k_getline(u8* buf, u64 max) => term.read_line(buf, max);
 // Indices: [0]=puts [1]=putc [2]=dec [3]=getline.
 u64 api_build() {
 	u64* t = (u64*)0x00070000;
-	t[0] = (u64)k_puts;
-	t[1] = (u64)k_putc;
-	t[2] = (u64)k_dec;
-	t[3] = (u64)k_getline;
+	t[0]   = (u64)k_puts;
+	t[1]   = (u64)k_putc;
+	t[2]   = (u64)k_dec;
+	t[3]   = (u64)k_getline;
 	return 0x00070000;
 }
 

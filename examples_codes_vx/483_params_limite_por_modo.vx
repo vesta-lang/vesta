@@ -88,10 +88,10 @@ i64 doce_huecos(i64[] xs, string s, Punto pt, Caja k, fn(i64) -> i64 lam) {
 i32 main() {
 	i64[2] arr = {3, 4};
 	string s = "hola";
-	Punto  pt;
+	Punto pt;
 	pt.x = 3;
 	pt.y = 4;
-	Caja           k   = new Caja(7);
+	Caja k = new Caja(7);
 	fn(i64) -> i64 lam = (i64 v) => { return v + 1; };
 
 	// 1 + 5 + 2 + 6 + 8 + 6 + 3 + 4 + 3 + 7 + 9 + 8 = 62

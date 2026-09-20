@@ -77,11 +77,11 @@ i64 seguro(P !!q) => q.x;
 
 i32 main() {
 	Color c = Color.Azul;
-	P     q;
+	P q;
 	q.x = 7;
-	P*          r   = &q;
-	i64[4]      arr = {4, 0, 0, 0};
-	unique<i64> u   = unique_box(2);
+	P* r = &q;
+	i64[4] arr = {4, 0, 0, 0};
+	unique<i64> u = unique_box(2);
 
 	i64 a = c.tono(1);    //  enum por valor                     2
 	i64 b = r -> lee();   //  puntero -> pide P*                 7

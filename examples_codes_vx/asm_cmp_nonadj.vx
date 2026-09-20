@@ -14,17 +14,21 @@ u64 main() {
 	register("rbx") u64 t  = 0_u64;
 
 	// cmp seguido de un mov (flag-neutral) ANTES del setcc: no-adyacente.
-	asm { cmp rsi, rdi
+	asm {
+		cmp rsi, rdi
 		mov rbx, 99
-		setl al }; // 5 < 10 con signo -> 1 (el mov no toca flags)
+		setl al
+	}; // 5 < 10 con signo -> 1 (el mov no toca flags)
 	if ((r & 0xFF) != 1) ok = 0;
 	if (t != 99)         ok = 0; // el mov intermedio se ejecuto
 
 	// Dos flag-neutral (lea + mov) entre el cmp y el setcc.
-	asm { cmp rsi, rdi
+	asm {
+		cmp rsi, rdi
 		lea rbx, [rsi + rdi]
 		mov rax, 0
-		setg al }; // 5 > 10 -> 0
+		setg al
+	}; // 5 > 10 -> 0
 	if ((r & 0xFF) != 0) ok = 0;
 	if (t != 15)         ok = 0; // lea rbx = 5 + 10
 

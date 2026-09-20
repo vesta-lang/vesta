@@ -36,7 +36,7 @@ i32 main() {
 	i64                   s1 = 0_i64;
 	if (isPresent(o1) != 0) {
 		borrow<i64> sacado = unwrap(o1);
-		s1 = read_borrow(sacado); // 30
+		s1                 = read_borrow(sacado); // 30
 	}
 
 	borrow<i64> rb = lend(b);

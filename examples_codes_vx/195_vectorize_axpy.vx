@@ -17,11 +17,12 @@ namespace ejemplos.vectorize_axpy;
 // =============================================================================
 
 i64 main() {
-	i64  N = 100_i64;
-	f64* a = malloc(N * 8);
-	f64* b = malloc(N * 8);
-	f64* c = malloc(N * 8);
-	f64* d = malloc(N * 8);
+	i64 N = 100_i64;
+	// N elementos, no N*8 bytes: el tamano lo pone el tipo.
+	f64* a = malloc<f64>((u64)N);
+	f64* b = malloc<f64>((u64)N);
+	f64* c = malloc<f64>((u64)N);
+	f64* d = malloc<f64>((u64)N);
 
 	// Init (no vectorizable: depende de i).
 	for (i64 i = 0_i64; i < N; i = i + 1) {

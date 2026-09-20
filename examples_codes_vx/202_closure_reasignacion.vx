@@ -22,7 +22,7 @@ class Widget {
 i32 main() {
 	Contador c1 = new Contador();
 	Contador c2 = new Contador();
-	c2.n = 40;
+	c2.n        = 40;
 
 	Widget w = new Widget();
 

@@ -53,7 +53,7 @@ comptime string fib_at(i64 idx) {
 comptime string rect_area() {
 	// dims[0] = width, dims[1] = height.  Patron de struct-via-array.
 	i64 dims[2] = {80, 24};
-	i64 area = dims[0] * dims[1];
+	i64 area    = dims[0] * dims[1];
 	return to_str(area);
 }
 
@@ -63,7 +63,7 @@ comptime string rect_area() {
 comptime string lookup(i64 key) {
 	i64 keys[5] = {1, 2, 5, 10, 42};
 	i64 vals[5] = {100, 200, 555, 1000, 9999};
-	i64 i = 0_i64;
+	i64 i       = 0_i64;
 	while (i < 5) {
 		if (keys[i] == key) {
 			return to_str(vals[i]);
@@ -123,8 +123,8 @@ comptime string switch_gen(i64 x_unused) {
 	// Tablas que se "compilan" en una cadena de ternarios.
 	i64 cases[3]   = {1, 2, 3};
 	i64 results[3] = {10, 20, 30};
-	string code = "0";
-	i64    i    = 2_i64; // iterar inverso para anidar correctamente
+	string code    = "0";
+	i64    i       = 2_i64; // iterar inverso para anidar correctamente
 	while (i >= 0) {
 		code = "((x == " + to_str(cases[i]) + ") ? " + to_str(results[i]) + " : " + code + ")";
 		i = i - 1;

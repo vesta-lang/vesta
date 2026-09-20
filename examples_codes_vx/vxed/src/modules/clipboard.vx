@@ -23,8 +23,8 @@ public void clip_set(u8* src, i32 n) {
 			free(old);
 		}
 		u8* nbuf = malloc(new_cap);
-		g_buf = (i64)nbuf;
-		g_cap = new_cap;
+		g_buf    = (i64)nbuf;
+		g_cap    = new_cap;
 	}
 	u8* dst = (u8*)g_buf;
 	i32 i   = 0_i32;

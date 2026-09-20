@@ -6,7 +6,7 @@
 //     vm --vx asm_mem_disp.vx -o c && vm --run c.velb
 // @expect 42
 u64 main() {
-	i64*                 p    = malloc(64);
+	i64*                 p    = malloc<i64>(8);
 	register("rbx") i64* base = p;
 
 	// store con desplazamiento: [base + 8] = 0x1000 + 42 (byte bajo = 42).

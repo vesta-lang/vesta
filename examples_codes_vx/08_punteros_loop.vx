@@ -19,7 +19,7 @@ i32 main() {
 	i32  sum = 0_i32;
 	i32* pi  = &i;
 	while (*pi < 10) {
-		*       pi = *pi + 1;
+		*pi = *pi + 1;
 		sum += *pi;
 	}
 	return sum;

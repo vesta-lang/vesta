@@ -3,7 +3,7 @@ import "modules/buffer";
 
 i32 main() {
 	file_io.FileReader fr = new file_io.FileReader();
-	Result<i64, i32> r = fr.read_all("nonexistent_file.xyz");
+	Result<i64, i32>   r  = fr.read_all("nonexistent_file.xyz");
 	if (isOk(r)) {
 		return 42;
 	}

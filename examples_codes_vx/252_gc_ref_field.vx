@@ -36,9 +36,9 @@ gc<Node> build(i64 n) {
 	i64      i    = 0_i64;
 	while (i < n) {
 		gc<Node> m = new Node(i);
-		m.next = head;
-		head   = m;
-		i      = i + 1;
+		m.next     = head;
+		head       = m;
+		i          = i + 1;
 	}
 	return head;
 }

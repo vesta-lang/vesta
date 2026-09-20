@@ -330,7 +330,7 @@ void cmd_echo(char* args) {
 	}
 	while (tn > 0 && text[tn - 1] == 32) { tn = tn - 1; }
 	text[tn] = 0;
-	char* f = args + (u64)gt + 1;
+	char* f  = args + (u64)gt + 1;
 	while (f[0] == 32) { f = f + 1; }
 	u8 fname[16];
 	u64 fk = 0_u64;
@@ -368,7 +368,7 @@ void shell_run() {
 			word[i] = (u8)cmd[i];
 			i       = i + 1;
 		}
-		word[i] = 0;
+		word[i]    = 0;
 		char* w    = (char*)word;
 		char* args = cmd + i;
 		if (args[0] == 32) { args = args + 1; } // saltar el espacio

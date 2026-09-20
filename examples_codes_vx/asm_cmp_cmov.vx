@@ -11,19 +11,25 @@ u64 main() {
 	register("rsi") u64 s  = 5_u64;
 	register("rdi") u64 d  = 10_u64;
 	// max(s,d): rax=s; si s<d, rax=d
-	asm { mov rax, rsi
+	asm {
+		mov rax, rsi
 		cmp rsi, rdi
-		cmovl rax, rdi };
+		cmovl rax, rdi
+	};
 	if (a != 10)        ok = 0; // max(5,10)=10 (taken)
 	register("rcx") u64 c  = 20_u64;
-	asm { mov rax, rsi
+	asm {
+		mov rax, rsi
 		cmp rsi, rcx
-		cmovg rax, rcx }; // 5>20 falso -> rax=s=5
+		cmovg rax, rcx
+	}; // 5>20 falso -> rax=s=5
 	if (a != 5) ok = 0;
 	// not-taken preserva TODO el registro (aunque el mov previo es un imm)
-	asm { mov rax, 0x1122
+	asm {
+		mov rax, 0x1122
 		cmp rsi, rdi
-		cmovg rax, rcx }; // 5>10 falso -> rax preserva 0x1122
+		cmovg rax, rcx
+	}; // 5>10 falso -> rax preserva 0x1122
 	if (a != 0x1122) ok = 0;
 	return (ok == 1) ? 42 : 0;
 }

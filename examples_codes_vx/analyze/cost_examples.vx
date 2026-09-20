@@ -95,7 +95,7 @@ i64 anotada_mal(i64 n) {
 
 i32 main() {
 	i64 r = constante(3) + lineal(10) + cuadratico(4);
-	r = r + factorial(5) + suma_binaria(0, 8);
-	r = r + anotada_ok(10) + anotada_mal(5);
+	r     = r + factorial(5) + suma_binaria(0, 8);
+	r     = r + anotada_ok(10) + anotada_mal(5);
 	return 0;
 }

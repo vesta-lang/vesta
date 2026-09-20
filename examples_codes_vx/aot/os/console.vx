@@ -49,8 +49,8 @@ void putc(u64 c) {
 	u16* vga = (u16*)0x000B8000;
 	if (c == 8) { // backspace: borra el caracter previo
 		if (g_col > 0) {
-			g_col = g_col - 1;
-			u64 pos = g_row * 80 + g_col;
+			g_col    = g_col - 1;
+			u64 pos  = g_row * 80 + g_col;
 			vga[pos] = (u16)((g_attr << 8) | 0x20);
 		}
 		return;
@@ -59,7 +59,7 @@ void putc(u64 c) {
 		g_col = 0;
 		g_row = g_row + 1;
 	} else {
-		u64 pos = g_row * 80 + g_col;
+		u64 pos  = g_row * 80 + g_col;
 		vga[pos] = (u16)((g_attr << 8) | c);
 		g_col    = g_col + 1;
 		if (g_col >= 80) {

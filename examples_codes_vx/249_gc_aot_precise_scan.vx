@@ -36,8 +36,8 @@ i64 make_dead(i64 n) {
 	i64 acc = 0_i64;
 	while (i < n) {
 		gc<Box> d = new Box(7);
-		acc = acc + d.v;
-		i   = i + 1;
+		acc       = acc + d.v;
+		i         = i + 1;
 	}
 	return acc;
 }
@@ -48,8 +48,8 @@ i64 fill(i64 n) {
 	i64 acc = 0_i64;
 	while (i < n) {
 		gc<Box> f = new Box(99);
-		acc = acc + f.v;
-		i   = i + 1;
+		acc       = acc + f.v;
+		i         = i + 1;
 	}
 	return acc;
 }

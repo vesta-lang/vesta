@@ -48,8 +48,8 @@ i32 main() {
 
 	// Operador `==` sobrecargado (verdadero): a == a2 -> 1.
 	Vec2 a2;
-	a2.x = 10;
-	a2.y = 20;
+	a2.x        = 10;
+	a2.y        = 20;
 	i32 eq_true = (i32)(a == a2); // a.__eq__(a2) -> true -> 1
 
 	// Operador `!=` (derivado de __eq__ negado): a != b -> verdadero.

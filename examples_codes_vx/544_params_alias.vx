@@ -35,7 +35,7 @@ void mueve_declarado(out i64* d, in i64* s) {
 i64 suma4(i64* m) => m[0] * 1000 + m[1] * 100 + m[2] * 10 + m[3];
 
 i64 main() {
-	i64* m = (i64*)malloc(128);
+	i64* m = malloc<i64>(16);
 
 	// Destino UNA POSICION por delante del origen: se pisan.
 	m[0] = 1_i64;

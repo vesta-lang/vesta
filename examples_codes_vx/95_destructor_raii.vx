@@ -57,8 +57,8 @@ i32 main() {
 	// Caso 2: la instancia escapa.  Despues de make_escaping, el handle
 	// sigue vivo en `kept`; sin destructor en make_escaping.
 	DtorCounter.count = 0;
-	Resource kept = make_escaping();
-	i32      c2   = DtorCounter.count; // esperado: 0 (no escape, no dtor todavia)
+	Resource kept     = make_escaping();
+	i32      c2       = DtorCounter.count; // esperado: 0 (no escape, no dtor todavia)
 
 	// Validaciones sumandas hacia 42:
 	//   c1 == 3        -> +20

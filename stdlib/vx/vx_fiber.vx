@@ -393,7 +393,7 @@ public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
 	s[7] = (u64)(cfn() -> void) __fiber_exit;
 	// Guardar el RSP inicial en el ctx.
 	u64* c = (u64*)ctx;
-	c[0] = base;
+	c[0]   = base;
 }
 
 /**
@@ -409,18 +409,18 @@ public void fiber_init(u64 ctx, u64 stack_top, u64 entry, u64 arg) {
 	u64  base   = top - nslots * 8;
 	u64* s      = (u64*)base;
 	// Orden de POP en Win64: r15,r14,r13,r12,rsi,rdi,rbx,rbp.
-	s[0] = 0;                                       // r15
-	s[1] = 0;                                       // r14
-	s[2] = 0;                                       // r13
-	s[3] = entry;                                   // r12 = entry
-	s[4] = 0;                                       // rsi
-	s[5] = 0;                                       // rdi
-	s[6] = arg;                                     // rbx = arg  (trampolin: rbx -> rcx)
-	s[7] = 0;                                       // rbp
-	s[8] = (u64)(cfn() -> void) __fiber_trampoline; // retaddr del `ret`
-	s[9] = (u64)(cfn() -> void) __fiber_exit;       // retaddr de reserva
+	s[0]   = 0;                                       // r15
+	s[1]   = 0;                                       // r14
+	s[2]   = 0;                                       // r13
+	s[3]   = entry;                                   // r12 = entry
+	s[4]   = 0;                                       // rsi
+	s[5]   = 0;                                       // rdi
+	s[6]   = arg;                                     // rbx = arg  (trampolin: rbx -> rcx)
+	s[7]   = 0;                                       // rbp
+	s[8]   = (u64)(cfn() -> void) __fiber_trampoline; // retaddr del `ret`
+	s[9]   = (u64)(cfn() -> void) __fiber_exit;       // retaddr de reserva
 	u64* c = (u64*)ctx;
-	c[0] = base;
+	c[0]   = base;
 }
 
 // ===========================================================================

@@ -90,22 +90,22 @@ void coop_task() {
 
 i32 main() {
 	// Bloque host: trace(1 qword) + 3 state blocks de 2 qwords.
-	u64  blk   = (u64)malloc(7 * 8);
+	u64  blk   = (u64)malloc<u64>(7);
 	u64  trace = blk + 0 * 8;
 	u64* pt    = (u64*)trace;
-	pt[0] = 0;
-	u64  st1 = blk + 1 * 8; // [1]=id  [2]=trace_ptr
-	u64  st2 = blk + 3 * 8; // [3]=id  [4]=trace_ptr
-	u64  st3 = blk + 5 * 8; // [5]=id  [6]=trace_ptr
-	u64* p1  = (u64*)st1;
-	p1[0] = 1;
-	p1[1] = trace;
-	u64* p2 = (u64*)st2;
-	p2[0] = 2;
-	p2[1] = trace;
-	u64* p3 = (u64*)st3;
-	p3[0] = 3;
-	p3[1] = trace;
+	pt[0]      = 0;
+	u64  st1   = blk + 1 * 8; // [1]=id  [2]=trace_ptr
+	u64  st2   = blk + 3 * 8; // [3]=id  [4]=trace_ptr
+	u64  st3   = blk + 5 * 8; // [5]=id  [6]=trace_ptr
+	u64* p1    = (u64*)st1;
+	p1[0]      = 1;
+	p1[1]      = trace;
+	u64* p2    = (u64*)st2;
+	p2[0]      = 2;
+	p2[1]      = trace;
+	u64* p3    = (u64*)st3;
+	p3[0]      = 3;
+	p3[1]      = trace;
 
 	// Crear las 3 tareas suspendibles (cada una con su fibra) en orden.
 	vasync_spawn_fiber((i64)(cfn() -> void) coop_task, (i64)st1);

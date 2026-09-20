@@ -32,7 +32,7 @@ i32 main() {
 	// solo dice si hay.  Esta es la sustituta del `try/catch` de antes.
 	if (isPresent(b) != 0) {
 		Box ok = unwrap(b); // no se llega: no hay nada
-		res = 111;
+		res    = 111;
 	} else {
 		res = 999; // la rama de "no hay", sin morirse
 	}
@@ -41,7 +41,7 @@ i32 main() {
 	Box c = new Box(7);
 	if (isPresent(c) != 0) {
 		Box ok = unwrap(c);
-		res = res + ok.v - 7; // suma cero; solo comprueba que salio bien
+		res    = res + ok.v - 7; // suma cero; solo comprueba que salio bien
 	}
 
 	return res;

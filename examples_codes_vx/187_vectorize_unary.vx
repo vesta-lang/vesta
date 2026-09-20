@@ -16,8 +16,8 @@ namespace ejemplos.vectorize_unary;
 // =============================================================================
 
 i64 main() {
-	f64* a = malloc(80); // 10 x f64: valores -4..5
-	f64* b = malloc(80);
+	f64* a = malloc<f64>(10); // valores -4..5
+	f64* b = malloc<f64>(10);
 	for (i32 i = 0_i32; i < 10; i++) { a[i] = (f64)(i - 4); }
 
 	// --- fneg: b[i] = -a[i] ;  sum(b) = -sum(a) = -(-4-3-2-1+0+1+2+3+4+5) = -5
@@ -31,8 +31,8 @@ i64 main() {
 	for (i32 i = 0_i32; i < 10; i++) { sabs = sabs + b[i]; }
 
 	// --- fsqrt: c[i] = sqrt(d[i]) con d[i] = i*i -> c[i] = i ; N impar (cola) ---
-	f64* d = malloc(56); // 7 x f64
-	f64* c = malloc(56);
+	f64* d = malloc<f64>(7);
+	f64* c = malloc<f64>(7);
 	for (i32 i = 0_i32; i < 7; i++) { d[i] = (f64)(i * i); }
 	for (i32 i = 0_i32; i < 7; i++) { c[i] = sqrt(d[i]); } // 7%2=1 -> ejercita cola
 	f64 ssq = 0.0_f64;

@@ -79,7 +79,7 @@ i64 lee22(V v) => (i64)v.c22;
 i64 lee23(V v) => (i64)v.c23;
 
 i32 main() {
-	u8* b = (u8*)malloc(1024);
+	u8* b           = (u8*)malloc(1024);
 	*(u32*)(b + 0)  = 1;
 	*(u32*)(b + 4)  = 2;
 	*(u32*)(b + 8)  = 3;
@@ -104,7 +104,7 @@ i32 main() {
 	*(u32*)(b + 84) = 22;
 	*(u32*)(b + 88) = 23;
 	*(u32*)(b + 92) = 24;
-	V v = V(b);
+	V   v           = V(b);
 
 	// Veinticuatro valores de 32 bits, todos vivos a la vez.
 	i64 x0  = lee0(v);
@@ -136,30 +136,30 @@ i32 main() {
 	println("${x0} ${x1} ${x2} ${x3} ${x4} ${x5} ${x6} ${x7} ${x8} ${x9} ${x10} ${x11} ${x12} ${x13} ${x14} ${x15} ${x16} ${x17} ${x18} ${x19} ${x20} ${x21} ${x22} ${x23}");
 
 	i64 s = 0_i64;
-	s = s + x0;
-	s = s + x1;
-	s = s + x2;
-	s = s + x3;
-	s = s + x4;
-	s = s + x5;
-	s = s + x6;
-	s = s + x7;
-	s = s + x8;
-	s = s + x9;
-	s = s + x10;
-	s = s + x11;
-	s = s + x12;
-	s = s + x13;
-	s = s + x14;
-	s = s + x15;
-	s = s + x16;
-	s = s + x17;
-	s = s + x18;
-	s = s + x19;
-	s = s + x20;
-	s = s + x21;
-	s = s + x22;
-	s = s + x23;
+	s     = s + x0;
+	s     = s + x1;
+	s     = s + x2;
+	s     = s + x3;
+	s     = s + x4;
+	s     = s + x5;
+	s     = s + x6;
+	s     = s + x7;
+	s     = s + x8;
+	s     = s + x9;
+	s     = s + x10;
+	s     = s + x11;
+	s     = s + x12;
+	s     = s + x13;
+	s     = s + x14;
+	s     = s + x15;
+	s     = s + x16;
+	s     = s + x17;
+	s     = s + x18;
+	s     = s + x19;
+	s     = s + x20;
+	s     = s + x21;
+	s     = s + x22;
+	s     = s + x23;
 	println("s=${s}");
 	free(b);
 

@@ -8,8 +8,8 @@
 //
 // @expect 110
 i32 main() {
-	i32* a = malloc(16); // 4 x i32 (host)
-	i32* b = malloc(16);
+	i32* a = malloc<i32>(4); // host
+	i32* b = malloc<i32>(4);
 
 	a[0] = 1;
 	a[1] = 2;

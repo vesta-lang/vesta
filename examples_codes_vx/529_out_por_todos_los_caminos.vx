@@ -86,7 +86,7 @@ i64 main() {
 
 	// --- 2. Metodo de struct ----------------------------------------------
 	Caja c;
-	c.v = 2_i64;
+	c.v   = 2_i64;
 	i64 b = 0_i64;
 	c.poner(b);
 	println("metodo struct:   ${b}");

@@ -14,6 +14,6 @@ i32 main() {
 i32 reasignar() {
 	unique<i32> owner = unique_box(42);
 	borrow<i32> r     = lend(owner);
-	owner = unique_box(7); // ERROR esperado: VX2031 (mutar)
+	owner             = unique_box(7); // ERROR esperado: VX2031 (mutar)
 	return read_borrow(r);
 }

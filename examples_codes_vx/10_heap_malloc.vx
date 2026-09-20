@@ -22,7 +22,7 @@ namespace ejemplos.heap_malloc;
 
 i32 main() {
 	// 10 i32 contiguos en heap host.
-	i32* arr = malloc(40);
+	i32* arr = malloc<i32>(10);
 
 	i32 i = 0_i32;
 	while (i < 10) {
@@ -31,7 +31,7 @@ i32 main() {
 	}
 
 	i32 sum = 0_i32;
-	i = 0;
+	i       = 0;
 	while (i < 10) {
 		sum = sum + arr[i];
 		i   = i + 1;

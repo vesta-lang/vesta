@@ -39,15 +39,17 @@ i64 solo_generales(i64 x) {
 // mismo por los dos caminos igualmente, que es justo lo que hay que vigilar
 // cuando el elevado aprenda a hacerlo.
 i64 con_memoria() {
-	asm { mov rdx, rsp
-		movdqu xmm0, [rdx + 16] }
+	asm {
+		mov rdx, rsp
+		movdqu xmm0, [rdx + 16]
+	}
 	return g_semilla;
 }
 
 i32 main() {
 	i64 t = 0_i64;
-	t = t + solo_vectorial(10); // 11
-	t = t + solo_generales(20); // 23
-	t = t + con_memoria();      // 5
-	return (i32)t;              // 39
+	t     = t + solo_vectorial(10); // 11
+	t     = t + solo_generales(20); // 23
+	t     = t + con_memoria();      // 5
+	return (i32)t;                  // 39
 }

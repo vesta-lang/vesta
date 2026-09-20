@@ -39,13 +39,13 @@ class LinkedListStack : IStack {
 
 	public void push(i32 v) {
 		LinkedNode n = new LinkedNode(v);
-		n.next     = this.top;
-		this.top   = n;
-		this.count = this.count + 1;
+		n.next       = this.top;
+		this.top     = n;
+		this.count   = this.count + 1;
 	}
 
 	public i32 pop() {
-		i32 v = this.top.value;
+		i32 v      = this.top.value;
 		this.top   = this.top.next;
 		this.count = this.count - 1;
 		return v;

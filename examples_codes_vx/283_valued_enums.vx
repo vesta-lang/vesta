@@ -77,11 +77,11 @@ i32 main() {
 
 	// Struct: acceso a campos del valor de la variante.
 	Rgb g = Color.GREEN;
-	acc = acc + (i64)g.g; // 141 + 255 = 396
+	acc   = acc + (i64)g.g; // 141 + 255 = 396
 
 	// Clase: instancia de la variante.
 	Point c = Anchor.CORNER;
-	acc = acc + (i64)(c.x + c.y); // 396 + 30 = 426
+	acc     = acc + (i64)(c.x + c.y); // 396 + 30 = 426
 
 	// Comptime.
 	acc = acc + (i64)MOV_OPCODE; // 426 + 137 = 563

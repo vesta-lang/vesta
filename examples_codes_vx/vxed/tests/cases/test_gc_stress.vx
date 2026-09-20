@@ -25,7 +25,7 @@ public i32 run() {
 	Node cur  = head;
 	i32  i    = 1_i32;
 	while (i < 100) {
-		Node n = new Node(i);
+		Node n   = new Node(i);
 		cur.next = n;
 		cur      = n;
 		// Forzar interpolacion + str_bytes (creates StringObjects que pueden

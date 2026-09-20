@@ -28,10 +28,11 @@ i64 sum_f64(f64* p, i32 n) {
 }
 
 i32 main() {
-	i32  N = 64_i32;
-	f64* a = malloc(N * 8); // f64 = 8 bytes
-	f64* b = malloc(N * 8);
-	f64* c = malloc(N * 8);
+	i32 N = 64_i32;
+	// N elementos, no N*8 bytes: el tamano lo pone el tipo.
+	f64* a = malloc<f64>((u64)N);
+	f64* b = malloc<f64>((u64)N);
+	f64* c = malloc<f64>((u64)N);
 
 	// Inicializacion (no es patron vectorizable: el valor depende de i).
 	for (i32 i = 0_i32; i < N; i++) {

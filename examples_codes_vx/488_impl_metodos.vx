@@ -60,8 +60,8 @@ impl Sumable for Punto {
 
 i32 main() {
 	Punto p;
-	p.x = 10;
-	p.y = 20;
+	p.x    = 10;
+	p.y    = 20;
 	Caja k = new Caja(1);
 
 	i64 a = p.cero();        // 20

@@ -7,8 +7,8 @@ class Foo {
 
 void main() {
 	i64  n = 42_i64;
-	i64* p = malloc(8);
-	*    p = 99;
+	i64* p = malloc<i64>(1);
+	*p     = 99;
 	Foo  f = new Foo(123);
 
 	println("=== Kinds ===");

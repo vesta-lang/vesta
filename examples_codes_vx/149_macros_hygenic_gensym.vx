@@ -27,10 +27,13 @@ i32 main() {
 	static_assert(val_simple == 42, "sugar comptime + eval");
 
 	// Cadena tipica de metaprogramacion ahora limpia:
-	comptime n        = 7;
-	comptime n_str    = comptime_to_str(n);
-	comptime expr_str = comptime_concat("doblar(", comptime_concat(n_str, ")"));
-	i32      r1       = comptime_emit_expr(expr_str); // doblar(7) = 14
+	comptime n     = 7;
+	comptime n_str = comptime.to_str(n);
+	comptime expr_str = comptime.str.concat(
+		"doblar(",
+		comptime.str.concat(n_str, ")")
+	);
+	i32 r1 = comptime_emit_expr(expr_str); // doblar(7) = 14
 	if (r1 != 14) return 91;
 
 	// ============================================
@@ -40,9 +43,9 @@ i32 main() {
 	comptime f2 = gensym("var");
 	comptime f3 = gensym("var");
 	// Cada llamada genera un nombre distinto.
-	static_assert(!comptime_streq(f1, f2), "gensym: distinct 1-2");
-	static_assert(!comptime_streq(f2, f3), "gensym: distinct 2-3");
-	static_assert(!comptime_streq(f1, f3), "gensym: distinct 1-3");
+	static_assert(!comptime.str.eq(f1, f2), "gensym: distinct 1-2");
+	static_assert(!comptime.str.eq(f2, f3), "gensym: distinct 2-3");
+	static_assert(!comptime.str.eq(f1, f3), "gensym: distinct 1-3");
 
 	// ============================================
 	// (3) Hygenic macro: emit codigo que SI accede al
@@ -64,9 +67,9 @@ i32 main() {
 	comptime base     = "sumar(";
 	comptime arg_a    = "5";
 	comptime arg_b    = "8";
-	comptime composed = comptime_concat(base,
-		comptime_concat(arg_a,
-			comptime_concat(", ", comptime_concat(arg_b, ")"))));
+	comptime composed = comptime.str.concat(base,
+		comptime.str.concat(arg_a,
+			comptime.str.concat(", ", comptime.str.concat(arg_b, ")"))));
 	i32 r4 = comptime_emit_expr(composed); // sumar(5, 8) = 13
 	if (r4 != 13) return 93;
 

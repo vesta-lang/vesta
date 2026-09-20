@@ -18,7 +18,7 @@ public class Box<T> {
 }
 
 // Concepto + funcion con bound.
-public concept Num<T> = is_numeric<T>();
+public concept Num<T> = type.is_numeric<T>();
 public i64 doblar<T: Num>(T x) => (i64)x + (i64)x;
 
 // Especializacion: primario + total i64 (con campo extra).

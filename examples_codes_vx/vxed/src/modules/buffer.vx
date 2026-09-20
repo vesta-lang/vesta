@@ -148,7 +148,7 @@ public class Buffer {
 		if (prev_len < 0)    prev_len   = 0;
 		i32                  want       = col;
 		if (want > prev_len) want       = prev_len;
-		this.cursor = prev_start + want;
+		this.cursor                     = prev_start + want;
 	}
 
 	public void move_down() {
@@ -167,11 +167,11 @@ public class Buffer {
 		if (next_len < 0)    next_len = 0;
 		i32                  want     = col;
 		if (want > next_len) want     = next_len;
-		this.cursor = next_start + want;
+		this.cursor                   = next_start + want;
 	}
 
 	public void move_home() {
-		i32 row = this.cursor_row();
+		i32 row     = this.cursor_row();
 		this.cursor = this.line_offset(row);
 	}
 
@@ -217,8 +217,8 @@ public class Buffer {
 	// Borra el rango [from, to) y posiciona el cursor en `from`.  Devuelve
 	// la cantidad de bytes borrados.
 	public i32 delete_range(i32 from, i32 to) {
-		if (from < 0) from = 0;
-		if (to > this.length) to = this.length;
+		if (from < 0)         from = 0;
+		if (to > this.length) to   = this.length;
 		if (from >= to) return 0;
 		i32 n = to - from;
 		i32 i = to;
@@ -239,9 +239,9 @@ public class Buffer {
 			this.sel_anchor = -1;
 			return 0;
 		}
-		i32 s = this.sel_start();
-		i32 e = this.sel_end();
-		i32 n = this.delete_range(s, e);
+		i32 s           =  this.sel_start();
+		i32 e           =  this.sel_end();
+		i32 n           =  this.delete_range(s, e);
 		this.sel_anchor = -1;
 		return n;
 	}
@@ -290,7 +290,7 @@ public class Buffer {
 		i32                      total      = this.line_count();
 		if (target_row < 0)      target_row = 0;
 		if (target_row >= total) target_row = total - 1;
-		this.cursor = this.line_offset(target_row);
+		this.cursor                         = this.line_offset(target_row);
 	}
 
 	// Inserta `n` bytes desde `src` en la posicion del cursor.

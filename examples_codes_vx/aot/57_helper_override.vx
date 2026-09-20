@@ -35,7 +35,7 @@ void my_memcpy(u8* dst, u8* src, u64 n) {
 	}
 	// Registrar la invocacion en el contador global.
 	u64* ctr = (u64*)section_start(".ovrctr");
-	*    ctr = *ctr + 1;
+	*ctr     = *ctr + 1;
 }
 
 i32 main() {

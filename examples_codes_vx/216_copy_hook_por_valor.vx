@@ -46,6 +46,6 @@ i64 trabajo() {
 
 i32 main() {
 	Counter.vivos = 0;
-	i64 r = trabajo(); // r = 4 ; al volver, vivos=0 (todo liberado, un solo free)
+	i64 r         = trabajo(); // r = 4 ; al volver, vivos=0 (todo liberado, un solo free)
 	return (i32)(38 + r - Counter.vivos); // 38 + 4 - 0 = 42
 }

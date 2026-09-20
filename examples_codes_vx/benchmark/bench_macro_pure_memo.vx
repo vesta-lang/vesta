@@ -20,16 +20,16 @@ i32 main() {
 	// y retornan al instante.  N=100 -> string de "X" * 100 -> strlen=100.
 	// El macro retorna "(100)" que parsea como literal int = 100.
 	i32 r = 0_i32;
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
-	r = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
+	r     = r + heavy_macro(100);
 	// 100 * 10 = 1000
 	if (r != 1000) return 91;
 	return 42;

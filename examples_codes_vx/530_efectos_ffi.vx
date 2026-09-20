@@ -367,19 +367,19 @@ i64 main() {
 	// Aun asi se EJECUTAN todas las de la capa 1, porque una declaracion que
 	// no se puede llamar no describe nada.
 	u64 t = 0_u64;
-	t = t + con_io(21_u64);    // 21
-	t = t + con_throws(0_u64); // 0
-	t = t + con_panics(1_u64); // 0
-	t = t + con_alloc(0_u64);  // 0
-	t = t + con_nondet(0_u64) - con_nondet(0_u64);
-	t = t + con_keeps_state(0_u64) - con_keeps_state(0_u64);
-	t = t + con_reads_env(0_u64) - con_reads_env(0_u64);
-	t = t + con_reloj(0_u64) - con_reloj(0_u64);
-	t = t + con_writes_env(0_u64); // 0
-	t = t + con_blocks(21_u64) - con_blocks(21_u64);
-	t = t + con_traps(21_u64);     // 21
-	t = t + sin_nada(0_u64);       // 0
-	t = t + segun_objetivo(0_u64); // 0
+	t     = t + con_io(21_u64);    // 21
+	t     = t + con_throws(0_u64); // 0
+	t     = t + con_panics(1_u64); // 0
+	t     = t + con_alloc(0_u64);  // 0
+	t     = t + con_nondet(0_u64) - con_nondet(0_u64);
+	t     = t + con_keeps_state(0_u64) - con_keeps_state(0_u64);
+	t     = t + con_reads_env(0_u64) - con_reads_env(0_u64);
+	t     = t + con_reloj(0_u64) - con_reloj(0_u64);
+	t     = t + con_writes_env(0_u64); // 0
+	t     = t + con_blocks(21_u64) - con_blocks(21_u64);
+	t     = t + con_traps(21_u64);     // 21
+	t     = t + sin_nada(0_u64);       // 0
+	t     = t + segun_objetivo(0_u64); // 0
 	println("total = ${t}");
 	return (i64)t; // 21 + 21 = 42
 }

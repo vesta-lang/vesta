@@ -108,8 +108,8 @@ i32 main() {
 	// --- GETSTATIC / SETSTATIC con el valor derramado --------------------
 	{
 		Contador.total = 41;
-		i64 p = presion(300);
-		i64 t = Contador.total;
+		i64 p          = presion(300);
+		i64 t          = Contador.total;
 		Contador.total = t + 1;
 		println("static=${Contador.total} presion=${p}");
 		if (Contador.total != 42) { fallos = fallos + 1; }

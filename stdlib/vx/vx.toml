@@ -14,3 +14,22 @@
 name = "std"
 version = "0.1.0"
 description = "Biblioteca estandar de Vesta"
+
+# Lo que entra en el ambito de quien compila SIN escribir el `import`.
+#
+# Hay servicios del lenguaje que no se piden por su nombre: reservar memoria se
+# escribe `new` o `malloc<T>(n)`, no `import`.  Pero quien los atiende es una
+# PLANTILLA -- `T* malloc<T>(u64 count)` --, y una plantilla hay que VERLA para
+# instanciarla: no emite simbolo, lo emiten sus instancias, que nacen donde se
+# conoce el tipo.  Asi que el modulo que reserva tiene que tenerla en su ambito
+# aunque su autor no haya escrito nada.
+#
+# Va AQUI y no dentro del compilador a proposito: es una lista de datos, no un
+# nombre reservado.  El compilador no conoce ningun modulo en particular; lee lo
+# que el manifiesto declare, y cualquier libreria puede decir lo mismo de los
+# suyos.
+#
+# No cuesta a quien no lo usa: una plantilla que nadie llama no emite ni una
+# instruccion, y lo demas del modulo lo descarta el barrido de codigo muerto.
+[auto-import]
+modules = ["std.alloc"]

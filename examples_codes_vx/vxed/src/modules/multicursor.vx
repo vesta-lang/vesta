@@ -23,7 +23,7 @@ public class MultiCursor {
 	public i32  count;
 
 	public MultiCursor() {
-		this.offsets = malloc(MC_MAX * 4);
+		this.offsets = malloc<i32>((u64)MC_MAX);
 		this.count   = 0;
 	}
 
@@ -65,7 +65,7 @@ public class MultiCursor {
 
 	// Encuentra el offset de fin de la linea que contiene `pos` (sin contar \n).
 	public i32 line_end_of(buffer.Buffer b, i32 pos) {
-		i32 i = pos;
+		i32                                     i = pos;
 		while (i < b.length && b.data[i] != 10) i = i + 1;
 		return i;
 	}
@@ -123,7 +123,7 @@ public class MultiCursor {
 			i32 j = i + 1;
 			while (j < this.count) {
 				if (this.offsets[j] > this.offsets[i]) {
-					i32 tmp = this.offsets[i];
+					i32 tmp         = this.offsets[i];
 					this.offsets[i] = this.offsets[j];
 					this.offsets[j] = tmp;
 				}
@@ -141,11 +141,11 @@ public class MultiCursor {
 			return 1;
 		}
 		// Construir lista combinada: primary + extras, sort desc.
-		i32* all = malloc((MC_MAX + 1) * 4);
+		i32* all = malloc<i32>((u64)(MC_MAX + 1));
 		i32  n   = 0_i32;
-		all[n] = b.cursor;
-		n      = n + 1;
-		i32 j = 0_i32;
+		all[n]   = b.cursor;
+		n        = n + 1;
+		i32  j   = 0_i32;
 		while (j < this.count) {
 			all[n] = this.offsets[j];
 			n      = n + 1;
@@ -157,7 +157,7 @@ public class MultiCursor {
 			i32 bb = a + 1;
 			while (bb < n) {
 				if (all[bb] > all[a]) {
-					i32 t = all[a];
+					i32 t   = all[a];
 					all[a]  = all[bb];
 					all[bb] = t;
 				}
@@ -200,11 +200,11 @@ public class MultiCursor {
 			b.backspace();
 			return 1;
 		}
-		i32* all = malloc((MC_MAX + 1) * 4);
+		i32* all = malloc<i32>((u64)(MC_MAX + 1));
 		i32  n   = 0_i32;
-		all[n] = b.cursor;
-		n      = n + 1;
-		i32 j = 0_i32;
+		all[n]   = b.cursor;
+		n        = n + 1;
+		i32  j   = 0_i32;
 		while (j < this.count) {
 			all[n] = this.offsets[j];
 			n      = n + 1;
@@ -215,7 +215,7 @@ public class MultiCursor {
 			i32 bb = a + 1;
 			while (bb < n) {
 				if (all[bb] > all[a]) {
-					i32 t = all[a];
+					i32 t   = all[a];
 					all[a]  = all[bb];
 					all[bb] = t;
 				}

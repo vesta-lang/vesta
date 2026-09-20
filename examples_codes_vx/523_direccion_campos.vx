@@ -40,7 +40,7 @@ struct Cabecera {
 }
 
 i32 main() {
-	i64  a = 7_i64;
+	i64 a = 7_i64;
 	Caja c;
 	c.vista = &a;
 	c.n     = 1_i64;

@@ -21,8 +21,8 @@ struct _CTX {
 
 i32 main() {
 	_CTX ctx;
-	ctx.a = 40;
-	ctx.b = 2;
+	ctx.a     = 40;
+	ctx.b     = 2;
 	PCTX  p   = &ctx;            // puntero al struct (ahora completo)
 	LPCTX q   = p;               // segundo alias del mismo tipo puntero
 	i32   sum = (*q).a + (*q).b; // deref del completo: 40 + 2 = 42

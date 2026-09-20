@@ -36,8 +36,8 @@ struct Puerto {
 // Sacar el recurso de un campo lo deja vacio, asi que el destructor del
 // contenedor no vuelve a soltarlo: se cierra una vez, al salir de aqui.
 void vaciar() {
-	Conexion d = new Conexion();
-	d.asa = unique_with(3, cerrar);
+	Conexion            d      = new Conexion();
+	d.asa                      = unique_with(3, cerrar);
 	unique<i64, cerrar> sacado = move(d.asa);
 }
 
@@ -47,12 +47,12 @@ i32 main() {
 
 	// En una clase, reasignando: al reasignar se cierra el anterior.
 	Conexion c = new Conexion();
-	c.asa = unique_with(5, cerrar);
-	c.asa = unique_with(9, cerrar); // cierra el 5
+	c.asa      = unique_with(5, cerrar);
+	c.asa      = unique_with(9, cerrar); // cierra el 5
 
 	// En un struct, que vive en otra memoria: exactamente igual.
 	Puerto p = Puerto { };
-	p.asa = unique_with(7, cerrar);
+	p.asa    = unique_with(7, cerrar);
 
 	// Y sacar el recurso de un campo: se cierra una vez, no dos.
 	vaciar(); // cierra el 3

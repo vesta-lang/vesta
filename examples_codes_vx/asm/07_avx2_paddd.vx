@@ -5,8 +5,8 @@
 //
 // @expect 396
 i32 main() {
-	i32* a = malloc(32); // 8 x i32
-	i32* b = malloc(32);
+	i32* a = malloc<i32>(8);
+	i32* b = malloc<i32>(8);
 
 	for (i32 i = 0_i32; i < 8; i = i + 1) {
 		a[i] = i + 1;

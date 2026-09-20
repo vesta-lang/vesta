@@ -264,8 +264,8 @@ enum FiberState : i64 {
 // TRAMPOLIN DE SALIDA como direccion de retorno (cuando body retorna, cae ahi).
 @Target("!os:windows")
 void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
-	u64  base = (top & ~((u64)15)) - 8 * 8; // 6 saved + 2 retaddr
-	u64* s    = (u64*)base;
+	u64  base           = (top & ~((u64)15)) - 8 * 8; // 6 saved + 2 retaddr
+	u64* s              = (u64*)base;
 	s[0]                = 0;    // r15
 	s[1]                = 0;    // r14
 	s[2]                = 0;    // r13
@@ -278,8 +278,8 @@ void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
 }
 @Target("os:windows")
 void __vxp_fiber_init(u64 fib, u64 top, u64 body, u64 arg) {
-	u64  base = (top & ~((u64)15)) - 10 * 8; // 8 saved + 2 retaddr
-	u64* s    = (u64*)base;
+	u64  base           = (top & ~((u64)15)) - 10 * 8; // 8 saved + 2 retaddr
+	u64* s              = (u64*)base;
 	s[0]                = 0;    // r15
 	s[1]                = 0;    // r14
 	s[2]                = 0;    // r13
@@ -433,7 +433,7 @@ fiber __vxp_gq_pop() {
 		__vxp_store64(&__vxp_gq_lock, 0);
 		return (fiber)0;
 	}
-	fiber fib = __vxp_gq[hd & VXP_GQMASK];
+	fiber fib     = __vxp_gq[hd & VXP_GQMASK];
 	__vxp_gq_head = hd + 1;
 	__vxp_store64(&__vxp_gq_lock, 0);
 	return fib;
@@ -441,7 +441,7 @@ fiber __vxp_gq_pop() {
 
 // PRNG xorshift64 por-hilo para elegir victima.
 i64 __vxp_rand_victim(i64 n) {
-	u64 x = __vxp_tls_rng;
+	u64 x         = __vxp_tls_rng;
 	x             = x ^ (x << 13);
 	x             = x ^ (x >> 7);
 	x             = x ^ (x << 17);
@@ -456,7 +456,7 @@ i64 __vxp_rand_victim(i64 n) {
 // ---------------------------------------------------------------------------
 void __vxp_sched_enqueue(fiber fib) {
 	Fiber(fib).state = FiberState.VXP_READY;
-	i64 s = __vxp_tls_wid1;
+	i64 s            = __vxp_tls_wid1;
 	if (s > 0) {
 		if (__vxp_push(s - 1, fib) == 0) {
 			__vxp_gq_push(fib); // deque llena: fallback global
@@ -577,7 +577,7 @@ public void vx_park(i64 parkfn, i64 parkarg) {
 /// retornar (fiber_init lo puso como direccion de retorno).  Marca TERMINATED y
 /// switchea al scheduler; NUNCA retorna.
 void __vxp_fiber_exit() {
-	fiber f = __vxp_cur_fiber;
+	fiber f        = __vxp_cur_fiber;
 	Fiber(f).state = FiberState.VXP_TERMINATED;
 	__vxp_fiber_switch((u64)&Fiber(f).ctx, (u64)__vxp_my_sched());
 // inalcanzable (el scheduler no reanuda una fibra TERMINATED).
@@ -595,10 +595,10 @@ void __vxp_fiber_destroy(fiber fib) {
 // Cuerpo del worker: coge un Fiber*, lo resume, actua segun su estado.
 // ---------------------------------------------------------------------------
 void __vxp_worker(u64 wid) {
-	i64 w = (i64)wid;
+	i64 w          = (i64)wid;
 	__vxp_tls_wid1 = w + 1;
 	__vxp_tls_rng  = ((u64)w + 1) * 0x9E3779B97F4A7C15;
-	i64 idle = 0_i64;
+	i64 idle       = 0_i64;
 	while (true) {
 		// 1. deque local.
 		fiber fib = __vxp_pop(w);
@@ -642,7 +642,7 @@ void __vxp_worker(u64 wid) {
 				i64 pf = Fiber(fib).parkfn;
 				if (pf != 0) {
 					Fiber(fib).parkfn = 0; // una vez
-					i64 pa = Fiber(fib).parkarg;
+					i64 pa            = Fiber(fib).parkarg;
 					((cfn(i64, i64) -> void) pf)(pa, (i64)fib);
 				}
 			}

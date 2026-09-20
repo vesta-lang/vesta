@@ -52,8 +52,8 @@ struct Cuadrado : Dibujable {
 i32 main() {
 	// Rect usa la implementacion HEREDADA del @Abstract.
 	Rect r;
-	r.w = 6;
-	r.h = 7;
+	r.w    = 6;
+	r.h    = 7;
 	i64 a1 = r.area(); // 42, codigo heredado de FormaBase
 
 	// Cuadrado escribe su propia `area` para cumplir el contrato Dibujable.

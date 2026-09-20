@@ -5,7 +5,7 @@ public struct U {
 	u64 hi;
 	public comptime U(expr e) {
 		IntLit v = parse_int_lit(e);
-		this.lo = v.word(0);
-		this.hi = v.word(1);
+		this.lo  = v.word(0);
+		this.hi  = v.word(1);
 	}
 }

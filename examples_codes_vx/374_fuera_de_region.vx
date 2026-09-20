@@ -15,7 +15,7 @@ i64 dentro_del_hueco() {
 	u8*    base = &buf[0];
 	// Ultimo qword que cabe: [8,16) sobre un objeto de 16.
 	i64* q = (i64*)(base + 8);
-	*    q = 40;
+	*q     = 40;
 	return *q;
 }
 
@@ -30,9 +30,9 @@ struct Tres {
 
 i64 agregado_pequeno() {
 	Tres t;
-	t.a = 1;
-	t.b = 1;
-	t.c = 0;
+	t.a        = 1;
+	t.b        = 1;
+	t.c        = 0;
 	Tres copia = t;
 	return (i64)(copia.a + copia.b);
 }

@@ -208,7 +208,7 @@ class Implementa : Contrato {
 // ---------------------------------------------------------------------------
 comptime i64 c_plano(i64 x) =>    x;
 comptime i64 c_nonulo(i64 !!x) => x;
-comptime i64 c_cadena(string s) => comptime_strlen(s);
+comptime i64 c_cadena(string s) => comptime.str.len(s);
 comptime i64 c_registro(register("rax") i64 x) => x;
 comptime i64 c_compartido(shared i64 x) =>        x;
 comptime i64 c_cstyle(i64 (*cb)(i64), i64 v) =>   v;
@@ -355,10 +355,10 @@ i64 fila_comptime() {
 i32 main() {
 	i64[2] arr = {3, 4};
 	string s = "hola";
-	Punto  pt;
+	Punto pt;
 	pt.x = 3;
 	pt.y = 4;
-	Caja           k   = new Caja(7);
+	Caja k = new Caja(7);
 	fn(i64) -> i64 lam = (i64 v) => { return v + 1; };
 
 	Clase o = new Clase(1, &g_valor, 2, &doblar, &doblar, lam);

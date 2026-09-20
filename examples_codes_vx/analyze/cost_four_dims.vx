@@ -129,6 +129,6 @@ i64 solo_total_post(i64 n) {
 
 i32 main() {
 	i64 r = suma_lineal(10) + usa_helper(4) + solo_total_post(5);
-	r = r + dim_incorrecta(3);
+	r     = r + dim_incorrecta(3);
 	return 0;
 }

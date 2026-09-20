@@ -19,8 +19,8 @@ i32 main() {
 			o    = o + 4096;
 		}
 		p[16_777_215] = v;
-		i32 k     = i & 3;
-		u8* viejo = anillo[k]; // el mas viejo sale de la ventana
+		i32 k         = i & 3;
+		u8* viejo     = anillo[k]; // el mas viejo sale de la ventana
 		if (viejo != null) {
 			acc = acc + (i32)viejo[0];
 			free(viejo);

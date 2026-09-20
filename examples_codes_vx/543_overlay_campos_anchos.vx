@@ -232,10 +232,10 @@ i32 main() {
 	// El registro corto: se ensucia, se limpia entero y se comprueba.
 	u8*  mem_s = (u8*)malloc(32);
 	Slot s     = Slot(mem_s);
-	s.key   = 7_u64;
-	s.value = 8_u64;
-	s.next  = 9_u64;
-	s.flags = 10_u64;
+	s.key      = 7_u64;
+	s.value    = 8_u64;
+	s.next     = 9_u64;
+	s.flags    = 10_u64;
 	slot_clear(s);
 	s.value = 3_u64;
 	println("corto: suma=${s.key + s.value + s.next + s.flags}");

@@ -6,7 +6,7 @@ i64 main() {
 	b.set(32); // clase namespaced: new + metodos
 
 	geo.Shape sq = geo.Shape.Square(3); // enum namespaced: constructor
-	i64 a = geo.area_hint(sq);          // 9
+	i64       a  = geo.area_hint(sq);   // 9
 
 	geo.Vec2 v; // struct namespaced: campos
 	v.x = 1;

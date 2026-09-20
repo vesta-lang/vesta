@@ -1,6 +1,10 @@
-// AOT.2.d -- @AllocatorOverride: el `new` nativo usa el allocator del usuario
-// (no la libc).  Imprescindible para dev-OS / freestanding, donde no hay
-// calloc/free del sistema.
+// @Provides(malloc) / @Provides(free): el `new` nativo usa el allocator del
+// usuario (no la libc).  Imprescindible para dev-OS / freestanding, donde no
+// hay calloc/free del sistema.
+//
+// `malloc` no es la funcion `malloc`: es el BUILTIN de pedir memoria, y por el
+// pasan tambien el `new` y la liberacion de RAII, que nadie escribe.  Quien lo
+// provee se lo lleva todo.
 //
 // Compilar a objeto nativo (sin _start; main GLOBAL):
 //   vm -m aot --vx examples_codes_vx/aot/25_alloc_override.vx \
@@ -10,8 +14,9 @@
 //   gcc -no-pie ovr.o harness.c -o ovr && ./ovr ; echo $?   # -> 99
 //
 // El .o resultante NO referencia calloc/free de libc: solo rt_alloc / rt_free
-// (los simbolos externos que aporta el usuario).  El @AllocatorOverride que
-// devuelve puntero -> allocator del `new`; el que devuelve void -> free del RAII.
+// (los simbolos externos que aporta el usuario).  El rol de cada uno sale del
+// NOMBRE del builtin, no de su tipo de retorno: `malloc` es el del `new` y
+// `free` el del RAII, y se dicen en vez de adivinarse.
 //
 // harness.c de ejemplo:
 //   #include <stdlib.h>
@@ -26,17 +31,17 @@ extern "vmrt" {
 
 // El allocator debe ZERIFICAR (convencion kzalloc) para preservar el cero-init
 // de los campos no escritos por el constructor.
-@AllocatorOverride
+@Provides(malloc)
 i64* my_alloc(u64 n) => rt_alloc(n);
 
-@AllocatorOverride
+@Provides(free)
 void my_free(i64* p) { rt_free(p); }
 
 class Box { i64 v; }
 
 i64 main() {
 	Box b = new Box(); // -> my_alloc(size); RAII -> my_free(b) al salir de scope
-	b.v = 99;
+	b.v   = 99;
 	i64 r = b.v;
 	return r; // 99
 }

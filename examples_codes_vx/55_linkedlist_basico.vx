@@ -32,7 +32,7 @@ class LinkedList {
 	}
 
 	public void prepend(i32 v) {
-		Node n = new Node(v);
+		Node n      = new Node(v);
 		n.next      = this.head;
 		this.head   = n;
 		this.length = this.length + 1;

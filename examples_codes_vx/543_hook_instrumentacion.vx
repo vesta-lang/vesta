@@ -2,7 +2,7 @@
 //
 // Un `@Hook(<punto>)` marca una funcion como PROVEEDORA del gancho que se
 // llama al entrar o al salir de las demas.  Su sola presencia lo activa, igual
-// que @AllocatorOverride o @PanicHandler; sin ningun @Hook no se teje nada y
+// que @Provides(<builtin>); sin ningun @Hook no se teje nada y
 // el binario sale exactamente igual.
 //
 // Es el equivalente de `-finstrument-functions` de GCC/Clang, pero como

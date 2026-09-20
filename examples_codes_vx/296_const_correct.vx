@@ -42,7 +42,7 @@ i32 main() {
 	// campo const: leerlo.
 	Cfg c;
 	c.flags = 0;
-	i32 v = (i32)base; // 2
+	i32 v   = (i32)base; // 2
 
 	// 40 + 0 + 2 = 42
 	return got + z + v;

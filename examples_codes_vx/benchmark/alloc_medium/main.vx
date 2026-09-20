@@ -11,10 +11,10 @@ i32 main() {
 	i32     acc = 0_i32;
 	i32     i = 0_i32;
 	while (i < 4_000_000) {
-		u8* p = (u8*)malloc(1024);
-		u8  v = (u8)(i & 255);
-		p[0]    = v; // 1 KB cabe en una pagina: un solo toque
-		p[1023] = v;
+		u8* p     = (u8*)malloc(1024);
+		u8  v     = (u8)(i & 255);
+		p[0]      = v; // 1 KB cabe en una pagina: un solo toque
+		p[1023]   = v;
 		i32 k     = i & 63;
 		u8* viejo = anillo[k]; // el mas viejo sale de la ventana
 		if (viejo != null) {

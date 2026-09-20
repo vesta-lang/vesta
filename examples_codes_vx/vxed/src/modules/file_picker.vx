@@ -46,14 +46,14 @@ public class FilePicker {
 		this.names      = malloc(65_536);
 		this.names_used = 0;
 		this.names_cap  = 65_536;
-		this.offsets    = malloc(FP_MAX_ENTRIES * 4);
-		this.lens       = malloc(FP_MAX_ENTRIES * 4);
+		this.offsets    = malloc<i32>((u64)FP_MAX_ENTRIES);
+		this.lens       = malloc<i32>((u64)FP_MAX_ENTRIES);
 		this.count      = 0;
 		this.cwd        = base_cwd;
 		this.query      = malloc(FP_QUERY_MAX);
 		this.query_len  = 0;
 		this.query[0]   = 0;
-		this.filtered   = malloc(FP_MAX_ENTRIES * 4);
+		this.filtered   = malloc<i32>((u64)FP_MAX_ENTRIES);
 		this.filt_count = 0;
 		this.sel        = 0;
 		this.scroll     = 0;
@@ -80,8 +80,8 @@ public class FilePicker {
 		spec[dir_len]     = 92; // '\\'
 		spec[dir_len + 1] = 42; // '*'
 		spec[dir_len + 2] = 0;
-		u8* finddata = malloc(FP_FINDDATA);
-		i64 h        = file_io.dir_open(spec, finddata);
+		u8* finddata      = malloc(FP_FINDDATA);
+		i64 h             = file_io.dir_open(spec, finddata);
 		free(spec);
 		if (h == -1) {
 			free(finddata);
@@ -115,8 +115,8 @@ public class FilePicker {
 						z                        = z + 1;
 					}
 					sub_dir[dir_len + 1 + nlen] = 0;
-					u8* sub_pre = malloc(pre_len + nlen + 2);
-					z = 0;
+					u8* sub_pre                 = malloc(pre_len + nlen + 2);
+					z                           = 0;
 					while (z < pre_len) {
 						sub_pre[z] = prefix[z];
 						z          = z + 1;
@@ -192,7 +192,7 @@ public class FilePicker {
 		i32 cwd_n = (i32)this.cwd.bytes();
 		u8* cwd_c = this.cwd.cstr();
 		u8* empty = malloc(1);
-		empty[0] = 0;
+		empty[0]  = 0;
 		this.enumerate_dir(cwd_c, cwd_n, empty, 0, 0);
 		free(empty);
 		this.recompute_filter();
@@ -201,7 +201,7 @@ public class FilePicker {
 	// Re-compute filtered indices basado en query.  Substring case-insens.
 	public void recompute_filter() {
 		this.filt_count = 0;
-		i32 i = 0_i32;
+		i32 i           = 0_i32;
 		while (i < this.count) {
 			i32 nlen    = this.lens[i];
 			u8* nm      = this.names + this.offsets[i];
@@ -237,9 +237,9 @@ public class FilePicker {
 			}
 			i = i + 1;
 		}
-		if (this.sel >= this.filt_count) this.sel = this.filt_count - 1;
-		if (this.sel < 0) this.sel                = 0;
-		if (this.scroll > this.sel) this.scroll   = this.sel;
+		if (this.sel >= this.filt_count) this.sel    = this.filt_count - 1;
+		if (this.sel < 0)                this.sel    = 0;
+		if (this.scroll > this.sel)      this.scroll = this.sel;
 	}
 
 	// Construye el path absoluto del item seleccionado (cwd + "\\" + relpath).
@@ -259,13 +259,13 @@ public class FilePicker {
 		buf[cn] = 92; // '\\'
 		k       = 0;
 		while (k < rn) {
-			u8           c = rp[k];
-			if (c == 47) c = 92; // normalizar `/` a `\\` para Windows
+			u8           c  = rp[k];
+			if (c == 47) c  = 92; // normalizar `/` a `\\` para Windows
 			buf[cn + 1 + k] = c;
 			k               = k + 1;
 		}
 		buf[cn + 1 + rn] = 0;
-		string s = str_make(buf, cn + 1 + rn);
+		string s         = str_make(buf, cn + 1 + rn);
 		free(buf);
 		return s;
 	}
@@ -283,15 +283,15 @@ public class FilePicker {
 
 	// Renderiza el modal centrado.
 	public void render(screen.Screen sc) {
-		i32 box_w = 70_i32;
-		if (box_w > sc.cols - 4) box_w = sc.cols - 4;
-		if (box_w < 40) box_w = 40;
-		i32             box_h = 22_i32;
-		if (box_h > sc.rows - 4) box_h = sc.rows - 4;
-		i32 top     = (sc.rows - box_h) / 2 + 1;
-		i32 left    = (sc.cols - box_w) / 2 + 1;
-		i32 inner_w = box_w - 2;
-		i32 list_h  = box_h - 4;
+		i32                      box_w   = 70_i32;
+		if (box_w > sc.cols - 4) box_w   = sc.cols - 4;
+		if (box_w < 40)          box_w   = 40;
+		i32                      box_h   = 22_i32;
+		if (box_h > sc.rows - 4) box_h   = sc.rows - 4;
+		i32                      top     = (sc.rows - box_h) / 2 + 1;
+		i32                      left    = (sc.cols - box_w) / 2 + 1;
+		i32                      inner_w = box_w - 2;
+		i32                      list_h  = box_h - 4;
 
 		string col_bord = "\x1b[38;2;189;147;249m"; // purple
 		string col_sec  = "\x1b[38;2;139;233;253m"; // cyan
@@ -318,7 +318,7 @@ public class FilePicker {
 		print(screen.ATTR_RESET);
 		print(col_bord);
 		i32 rpad = inner_w - lpad - tlen;
-		z = 0;
+		z        = 0;
 		while (z < rpad) {
 			print("-");
 			z = z + 1;
@@ -371,7 +371,7 @@ public class FilePicker {
 		if (this.sel >= this.scroll + list_h) this.scroll = this.sel - list_h + 1;
 		if (this.scroll < 0) this.scroll = 0;
 
-		row = row + 1;
+		row   = row + 1;
 		i32 r = 0_i32;
 		while (r < list_h) {
 			print("\x1b[${row};${left}H");
@@ -380,10 +380,10 @@ public class FilePicker {
 			print(screen.ATTR_RESET);
 			i32 idx = this.scroll + r;
 			if (idx < this.filt_count) {
-				i32 fidx   = this.filtered[idx];
-				i32 nlen   = this.lens[fidx];
-				u8* nm     = this.names + this.offsets[fidx];
-				i32 is_sel = 0_i32;
+				i32                  fidx   = this.filtered[idx];
+				i32                  nlen   = this.lens[fidx];
+				u8*                  nm     = this.names + this.offsets[fidx];
+				i32                  is_sel = 0_i32;
 				if (idx == this.sel) is_sel = 1;
 				if (is_sel == 1) print(screen.ATTR_INVERT);
 				print(" ");

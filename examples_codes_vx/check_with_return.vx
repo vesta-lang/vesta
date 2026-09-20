@@ -19,7 +19,7 @@ unique<i64, track_release> make_tracked(i64 v) {
 }
 
 i32 main() {
-	C.releases = 0;
+	C.releases    = 0;
 	unique<i64> a = make_tracked(111);
 	return 42;
 }

@@ -61,16 +61,16 @@ u64 c_terna() {
 // --- D: se pasa entero Y ademas se lee una parte por separado ---
 u64 d_par() {
 	Par p;
-	p.a = 1;
-	p.b = 2;
+	p.a   = 1;
+	p.b   = 2;
 	u64 r = op_par_lee(p);
 	return r + p.b;
 }
 u64 d_terna() {
 	Terna t;
-	t.x = 1;
-	t.y = 2;
-	t.z = 3;
+	t.x   = 1;
+	t.y   = 2;
+	t.z   = 3;
 	u64 r = op_terna_lee(t);
 	return r + t.z;
 }

@@ -5,8 +5,8 @@ namespace ejemplos.host_ptr_null_branch;
 u8* make_buf(i32 bad) {
 	if (bad != 0) { return null; } // rama null: no-host
 	u8* p = malloc(8);
-	p[0] = 66; // 'B'
-	return p;  // rama host
+	p[0]  = 66; // 'B'
+	return p;   // rama host
 }
 i32 main() {
 	u8* buf = make_buf(0);

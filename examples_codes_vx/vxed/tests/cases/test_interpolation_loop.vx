@@ -30,7 +30,7 @@ public class Container {
 		} else {
 			Item h = this.head;
 			// Buscar el ultimo (head.next.next...prev).  Para 1 elem head.next=head.
-			Item last = h;
+			Item                   last = h;
 			while (last.next != h) last = last.next;
 			last.next                   = it;
 			it.next                     = h;

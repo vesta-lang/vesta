@@ -26,8 +26,8 @@ f64 dot(f64* a, f64* b, i32 n) {
 }
 
 i64 main() {
-	f64* a = malloc(80); // 10 x f64
-	f64* b = malloc(80);
+	f64* a = malloc<f64>(10);
+	f64* b = malloc<f64>(10);
 	for (i32 i = 0_i32; i < 10; i++) {
 		a[i] = (f64)(i + 1);
 		b[i] = (f64)(i + 1);
@@ -35,8 +35,8 @@ i64 main() {
 	f64 r = dot(a, b, 10); // sum (i+1)^2 = 1+4+9+...+100 = 385
 
 	// N impar: ejercita la cola escalar (7 % W != 0)
-	f64* c = malloc(56); // 7 x f64
-	f64* d = malloc(56);
+	f64* c = malloc<f64>(7);
+	f64* d = malloc<f64>(7);
 	for (i32 i = 0_i32; i < 7; i++) {
 		c[i] = 2.0;
 		d[i] = (f64)(i + 1);

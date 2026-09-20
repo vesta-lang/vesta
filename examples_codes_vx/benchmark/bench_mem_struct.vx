@@ -43,9 +43,9 @@ i32 unique_struct(i32 base) {
 // Ruta 3: malloc + free manuales.
 i32 malloc_struct(i32 base) {
 	Punto* p = malloc(8);
-	(*p).x = base;
-	(*p).y = base + 1;
-	i32 r = (*p).x + (*p).y;
+	(*p).x   = base;
+	(*p).y   = base + 1;
+	i32    r = (*p).x + (*p).y;
 	free(p);
 	return r;
 }

@@ -41,7 +41,7 @@ i32 main() {
 	// Miembro estatico: se declara y se usa igual en las dos.
 	Vesta.cuantos = 3;
 	Ce.cuantos    = 4;
-	const i64 s = Vesta.cuantos + Ce.cuantos; // 7
+	const i64 s   = Vesta.cuantos + Ce.cuantos; // 7
 
 	println("metodos=${m} estaticos=${s}");
 

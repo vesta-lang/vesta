@@ -33,21 +33,21 @@ void suelta(i64* p) {
 i32 main() {
 	// 1. Un bloque interno: al cerrarlo, no al salir de main.
 	{
-		unique<i64*> a = unique_with((i64*)malloc(8), suelta);
+		unique<i64*> a = unique_with(malloc<i64>(1), suelta);
 	}
 	i64 tras_bloque = Contador.sueltas; // 1
 
 	// 2. Un bucle: UNA por vuelta, no cinco al final.
 	Contador.sueltas = 0;
 	for (i64 i = 0_i64; i < 5; i = i + 1) {
-		unique<i64*> b = unique_with((i64*)malloc(8), suelta);
+		unique<i64*> b = unique_with(malloc<i64>(1), suelta);
 	}
 	i64 por_vuelta = Contador.sueltas; // 5
 
 	// 3. Salir por `break` y por `continue` tampoco se salta la liberacion.
 	Contador.sueltas = 0;
 	for (i64 i = 0_i64; i < 9; i = i + 1) {
-		unique<i64*> c = unique_with((i64*)malloc(8), suelta);
+		unique<i64*> c = unique_with(malloc<i64>(1), suelta);
 		if (i == 0) {
 			continue;
 		}
@@ -60,7 +60,7 @@ i32 main() {
 	// 4. El cuerpo de un `try` que termina bien.
 	Contador.sueltas = 0;
 	try {
-		unique<i64*> d = unique_with((i64*)malloc(8), suelta);
+		unique<i64*> d = unique_with(malloc<i64>(1), suelta);
 	} catch (FatalError e) {
 		println("no deberia entrar aqui");
 	}
@@ -69,7 +69,7 @@ i32 main() {
 	// 5. Y el que sale por una excepcion, que no pasa por el final del bloque.
 	Contador.sueltas = 0;
 	try {
-		unique<i64*> e = unique_with((i64*)malloc(8), suelta);
+		unique<i64*> e = unique_with(malloc<i64>(1), suelta);
 		throw new Salta(1);
 	} catch (Salta ex) {
 	// El manejador suelta lo que el cuerpo habia reservado.

@@ -68,10 +68,10 @@ i64 main() {
 	// de la lambda lo lleva, asi que casa con el declarado.
 	cfn(in i64*) -> i64 solo_lee = &lee;
 	i64                 d        = 11_i64;
-	total = total + solo_lee(&d); // 11
+	total                        = total + solo_lee(&d); // 11
 
 	fn(in i64*) -> i64 anonima = (in i64* p) => (*p);
-	total = total + anonima(&d); // 11
+	total                      = total + anonima(&d); // 11
 
 	println("in por puntero a funcion:       ${solo_lee(&d)}");
 	println("total = ${total}");

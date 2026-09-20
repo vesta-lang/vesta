@@ -72,20 +72,20 @@ i32 main() {
 
 	// Acumular usando getters.
 	i64 acc = 0_i64;
-	acc = acc + (i64)b_i32.get();   // +10
-	acc = acc + b_i64.get();        // +20
-	acc = acc + (i64)b_inner.get(); // +5
+	acc     = acc + (i64)b_i32.get();   // +10
+	acc     = acc + b_i64.get();        // +20
+	acc     = acc + (i64)b_inner.get(); // +5
 
-	i32 pf = p.get_first();   // 3
-	i64 ps = p.get_second();  // 4
-	acc = acc + (i64)pf + ps; // +7
+	i32 pf = p.get_first();      // 3
+	i64 ps = p.get_second();     // 4
+	acc    = acc + (i64)pf + ps; // +7
 
 	i32      pbf = p_box.get_first(); // 7
 	Box<i64> pbs = p_box.get_second();
-	acc = acc - (i64)pbf - pbs.get(); // -107
+	acc          = acc - (i64)pbf - pbs.get(); // -107
 
-	i32 tx = t.get_x();  // 1
-	acc = acc + (i64)tx; // +1
+	i32 tx = t.get_x();     // 1
+	acc    = acc + (i64)tx; // +1
 
 	Pair<i32, i64> inner_pair = b_p.get();
 	acc = acc + (i64)inner_pair.get_first() + inner_pair.get_second(); // +110

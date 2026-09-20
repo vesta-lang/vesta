@@ -34,8 +34,8 @@ i32 read_only(i32 i) {
 //     c.x = v; c.x = c.x * 2 + 1  ->  2*v + 1.
 i32 mutable(i32 v) {
 	Counter c = new Counter(v);
-	c.x = c.x * 2;
-	c.x = c.x + 1;
+	c.x       = c.x * 2;
+	c.x       = c.x + 1;
 	return c.x;
 }
 

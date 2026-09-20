@@ -35,13 +35,13 @@ i32 main() {
 
 	// Registro A: 2 ranuras -> tail en 0x10 + 2*8 = 0x20.
 	SlotRec ra = SlotRec(a);
-	ra.count = (u32)2;
-	ra.tail  = (u32)100; // STORE en la direccion que halla el bucle (a+0x20)
+	ra.count   = (u32)2;
+	ra.tail    = (u32)100; // STORE en la direccion que halla el bucle (a+0x20)
 
 	// Registro B: 4 ranuras -> tail en 0x10 + 4*8 = 0x30.
 	SlotRec rb = SlotRec(b);
-	rb.count = (u32)4;
-	rb.tail  = (u32)40; // STORE en b+0x30
+	rb.count   = (u32)4;
+	rb.tail    = (u32)40; // STORE en b+0x30
 
 	u32 ta = ra.tail; // relee recorriendo las ranuras (bucle)
 	u32 tb = rb.tail;

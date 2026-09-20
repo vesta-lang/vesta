@@ -38,7 +38,7 @@ f64 combine(f64* p, i32 n, f64 k0, f64 k1, f64 k2, f64 k3) {
 }
 
 i64 main() {
-	f64* p = malloc(80);
+	f64* p = malloc<f64>(10);
 	for (i32 i = 0_i32; i < 10; i++) { p[i] = (f64)(i + 1); } // sum = 55
 
 	// sum_plus: 55 + (40 + 1) = 96

@@ -7,7 +7,7 @@
 // El objeto se LIBERA al exit del scope (RAII via RAW_FREE -> free): cero
 // leaks, cero dangling (valgrind-clean).  Sin runtime: el .o solo referencia
 // los simbolos externos calloc/free (los resuelve el linker -- o el allocator
-// del usuario en freestanding via @AllocatorOverride).  El programador decide
+// del usuario en freestanding via @Provides(malloc)).  El programador decide
 // la reserva; el GC seria opt-in enlazando el runtime de la VM.
 
 class Rect {

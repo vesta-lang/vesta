@@ -44,9 +44,9 @@ gc<Node> build(i64 n) {
 	i64      i    = 1_i64;
 	while (i < n) {
 		gc<Node> m = new Node(i);
-		tail.next = m; // <-- store de campo-CLASS: emite gcwb (barrier)
-		tail      = m;
-		i         = i + 1;
+		tail.next  = m; // <-- store de campo-CLASS: emite gcwb (barrier)
+		tail       = m;
+		i          = i + 1;
 	}
 	return head;
 }

@@ -38,8 +38,8 @@ void escribe_seccion(PeImage pe, i32 i) {
 }
 
 i32 main() {
-	u8*     buf = (u8*)malloc(512);
-	PeImage pe  = PeImage(buf);
+	u8*     buf     = (u8*)malloc(512);
+	PeImage pe      = PeImage(buf);
 	pe.magic        = (u16)0x5A4D; // 'MZ'
 	pe.num_sections = (u32)3;
 	pe.sec_off      = (u32)0x40; // tabla en 0x40 (secciones en 0x40, 0x68, 0x90)
@@ -53,7 +53,7 @@ i32 main() {
 
 	// Recorrer la tabla tipada con un bucle: sumar VirtualAddress + SizeOfRawData.
 	u32 total = 0_u32;
-	i = 0;
+	i         = 0;
 	while ((u32)i < pe.num_sections) {
 		u32 va = pe.Sections[i].VirtualAddress;
 		u32 rd = pe.Sections[i].SizeOfRawData;

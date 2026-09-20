@@ -68,8 +68,8 @@ i32 main() {
 
 	// Ruta sin funcion de por medio: `Some` sobre una variable local.
 	Par local;
-	local.a = 3;
-	local.b = 4;
+	local.a         = 3;
+	local.b         = 4;
 	Optional<Par> o = Some(local);
 	Par           q = unwrap(o);
 	if (q.a == 3 && q.b == 4) { acc = acc + 12; }

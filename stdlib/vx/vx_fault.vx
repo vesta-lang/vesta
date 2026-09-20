@@ -204,10 +204,10 @@ Tramo __vxf_texto(uintptr tabla, u32 idx) {
 	uintptr e = tabla + 4; // tras la cuenta de entradas
 	for (u32 k = 0_u32; k < idx; k++) {
 		DbgTexto t = DbgTexto((u8*)e);
-		e = __vxf_alinea4(e + 4 + t.len);
+		e          = __vxf_alinea4(e + 4 + t.len);
 	}
 	DbgTexto cab = DbgTexto((u8*)e);
-	Tramo    t;
+	Tramo t;
 	t.dir = (char*)(e + 4);
 	t.len = cab.len;
 	return t;
@@ -225,14 +225,16 @@ void __vxf_num(u64 v) {
 		__vxf_num(v / 10);
 	}
 	char* digitos = "0123456789";
-	print("${digitos[v % 10]}");
+	// `:char` pide el GLIFO.  Sin el, `${c}` de un char imprime su CODIGO, y la
+	// linea 427 salia como "525055" -- los codigos de '4', '2' y '7' pegados.
+	print("${digitos[v % 10]:char}");
 }
 
 /// Escribe un tramo de bytes de la seccion, caracter a caracter con el `print`
 /// de siempre.
 void __vxf_escribe(Tramo t) {
 	for (u32 i = 0_u32; i < t.len; i++) {
-		print("${t.dir[i]}");
+		print("${t.dir[i]:char}");
 	}
 }
 
@@ -416,7 +418,7 @@ i32 __vx_fault_handler(uintptr info) {
 	if (info == 0 || __vxf_dentro != 0) {
 		return SEGUIR_BUSCANDO;
 	}
-	__vxf_dentro = 1;
+	__vxf_dentro  = 1;
 	ExcPointers p = ExcPointers((u8*)info);
 	if (p.record == 0) {
 		return SEGUIR_BUSCANDO;

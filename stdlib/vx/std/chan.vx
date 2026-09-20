@@ -160,7 +160,7 @@ void __vxch_sel_unlock_all(i64 selctx_addr, i64 fib) {
 // ---------------------------------------------------------------------------
 void __vxch_wq_push(i64 head_addr, i64 tail_addr, i64 w) {
 	Waiter(w).next = 0;
-	i64 tl = *(i64*)tail_addr;
+	i64 tl         = *(i64*)tail_addr;
 	if (tl == 0) {
 		*(i64*)head_addr = w;
 	} else {
@@ -175,7 +175,7 @@ Optional<Waiter> __vxch_wq_pop(i64 head_addr, i64 tail_addr) {
 	if (hd == 0) {
 		return None();
 	}
-	i64    nx        = Waiter(hd).next;
+	i64 nx           = Waiter(hd).next;
 	*(i64*)head_addr = nx;
 	if (nx == 0) {
 		*(i64*)tail_addr = 0;
@@ -286,7 +286,7 @@ bool __vxch_recv_locked(Chan c, i64* pval, fiber* pwake) {
 	if (c.count > 0) {
 		i64* rs  = (i64*)__vxch_slot(c, c.head, c.mask);
 		i64  val = *rs;
-		c.head = c.head + 1;
+		c.head   = c.head + 1;
 		// Mueve un emisor en espera al hueco liberado (saltando los Waiter de un
 		// select que otro canal ya reclamo).
 		while (true) {
@@ -295,17 +295,17 @@ bool __vxch_recv_locked(Chan c, i64* pval, fiber* pwake) {
 				case Some(s) => {
 					if (__vxch_claim(s)) {
 						i64* ws = (i64*)__vxch_slot(c, c.tail, c.mask);
-						*    ws = s.elem;    // valor del emisor -> hueco liberado
-						c.tail = c.tail + 1; // count: -1 (lei) +1 (meti) = igual
-						*pwake = s.fib;
-						*pval  = val;
+						*ws     = s.elem;     // valor del emisor -> hueco liberado
+						c.tail  = c.tail + 1; // count: -1 (lei) +1 (meti) = igual
+						*pwake  = s.fib;
+						*pval   = val;
 						return true;
 					}
 				}
 			}
 		}
 		c.count = c.count - 1;
-		*pval = val;
+		*pval   = val;
 		return true;
 	}
 	// (2) Buffer vacio + emisor en espera (rendezvous cap 0) -> entrega directa.
@@ -345,9 +345,9 @@ bool __vxch_send_locked(Chan c, i64 v, fiber* pwake) {
 	// (2) Hueco en el buffer.
 	if (c.count < c.cap) {
 		i64* slot = (i64*)__vxch_slot(c, c.tail, c.mask);
-		*    slot = v;
-		c.tail  = c.tail + 1;
-		c.count = c.count + 1;
+		*slot     = v;
+		c.tail    = c.tail + 1;
+		c.count   = c.count + 1;
 		return true;
 	}
 	return false;
@@ -550,7 +550,7 @@ public i64 chan_select_recv(Chan* chans, i64 n, i64* out) {
 	if (n <= 0) {
 		return -1;
 	}
-	i64 start = __vxch_sel_rot;
+	i64 start      = __vxch_sel_rot;
 	__vxch_sel_rot = start + 1;
 	for (i64 k = 0_i64; k < n; k++) {
 		i64  i  = (start + k) % n; // barrido rotado -> justo
@@ -653,11 +653,11 @@ i64 __vxch_sel_recv_parked(fiber self, Chan* chans, i64 n, i64* out) {
 	}
 
 	// Pass-1: alguno listo YA (bajo todos los locks)?  Barrido rotado (justo).
-	i64 rot = __vxch_sel_rot;
-	__vxch_sel_rot = rot + 1;
-	i64   found = -1_i64;
-	i64   fval  =  0_i64;
-	fiber fwake =  0;
+	i64   rot      =  __vxch_sel_rot;
+	__vxch_sel_rot =  rot + 1;
+	i64   found    = -1_i64;
+	i64   fval     =  0_i64;
+	fiber fwake    =  0;
 	for (i64 kk = 0_i64; kk < n; kk++) {
 		i64   i   = (rot + kk) % n;
 		Chan  c   = chans[i];
@@ -689,14 +689,14 @@ i64 __vxch_sel_recv_parked(fiber self, Chan* chans, i64 n, i64* out) {
 	// Nada listo: registrar un Waiter por canal (bajo los locks) + parkear.  Los
 	// Waiter comparten sel_word/win_slot; cada uno lleva su indice `idx`.
 	for (i64 i = 0_i64; i < n; i++) {
-		i64 w = (i64)&wbufs[i * WAITER_QW];
+		i64  w         = (i64)&wbufs[i * WAITER_QW];
 		Waiter(w).fib  = self;
 		Waiter(w).elem = 0;
 		Waiter(w).sel  = (i64)&sel_word;
 		Waiter(w).win  = (i64)&win_slot;
 		Waiter(w).idx  = i;
 		Waiter(w).next = 0;
-		Chan c = chans[i];
+		Chan c         = chans[i];
 		__vxch_wq_push((i64)&c.rwq_h, (i64)&c.rwq_t, w);
 	}
 	selctx[0] = nu;
@@ -740,7 +740,7 @@ public i64 chan_select_send(Chan* chans, i64* vals, i64 n) {
 	if (n <= 0) {
 		return -1;
 	}
-	i64 start = __vxch_sel_rot;
+	i64 start      = __vxch_sel_rot;
 	__vxch_sel_rot = start + 1;
 	for (i64 k = 0_i64; k < n; k++) {
 		i64  i  = (start + k) % n;
@@ -834,10 +834,10 @@ i64 __vxch_sel_send_parked(fiber self, Chan* chans, i64* vals, i64 n) {
 	}
 
 	// Pass-1: algun canal acepta el envio (o esta cerrado)?  Barrido rotado.
-	i64 rot = __vxch_sel_rot;
-	__vxch_sel_rot = rot + 1;
-	i64   found = -1_i64;
-	fiber fwake =  0;
+	i64   rot      =  __vxch_sel_rot;
+	__vxch_sel_rot =  rot + 1;
+	i64   found    = -1_i64;
+	fiber fwake    =  0;
 	for (i64 kk = 0_i64; kk < n; kk++) {
 		i64  i = (rot + kk) % n;
 		Chan c = chans[i];
@@ -864,14 +864,14 @@ i64 __vxch_sel_send_parked(fiber self, Chan* chans, i64* vals, i64 n) {
 
 	// Nada acepta: registrar un nodo de espera con su valor en cada cola de envio.
 	for (i64 i = 0_i64; i < n; i++) {
-		i64 w = (i64)&wbufs[i * WAITER_QW];
+		i64  w         = (i64)&wbufs[i * WAITER_QW];
 		Waiter(w).fib  = self;
 		Waiter(w).elem = vals[i]; // valor a enviar por este canal
 		Waiter(w).sel  = (i64)&sel_word;
 		Waiter(w).win  = (i64)&win_slot;
 		Waiter(w).idx  = i;
 		Waiter(w).next = 0;
-		Chan c = chans[i];
+		Chan c         = chans[i];
 		__vxch_wq_push((i64)&c.swq_h, (i64)&c.swq_t, w);
 	}
 	selctx[0] = nu;
@@ -941,7 +941,7 @@ public i64 chan_select_try(i64 cases, i64 n) {
 	if (n <= 0) {
 		return -1;
 	}
-	i64 start = __vxch_sel_rot;
+	i64 start      = __vxch_sel_rot;
 	__vxch_sel_rot = start + 1;
 	for (i64 k = 0_i64; k < n; k++) {
 		i64  i  = (start + k) % n;
@@ -1049,11 +1049,11 @@ i64 __vxch_select_parked(fiber self, i64 cases, i64 n) {
 	}
 
 	// Pass-1: algun caso listo YA (bajo todos los locks)?  Barrido rotado.
-	i64 rot = __vxch_sel_rot;
-	__vxch_sel_rot = rot + 1;
-	i64   found = -1_i64;
-	i64   fval  =  0_i64;
-	fiber fwake =  0;
+	i64   rot      =  __vxch_sel_rot;
+	__vxch_sel_rot =  rot + 1;
+	i64   found    = -1_i64;
+	i64   fval     =  0_i64;
+	fiber fwake    =  0;
 	for (i64 kk = 0_i64; kk < n; kk++) {
 		i64  i  = (rot + kk) % n;
 		i64  cs = cases + i * SELCASE_QW * 8;
@@ -1105,14 +1105,14 @@ i64 __vxch_select_parked(fiber self, i64 cases, i64 n) {
 	// Nada listo: registrar un nodo de espera por caso en la cola que corresponda
 	// a su direccion (recepcion -> rwq, envio -> swq); todos comparten sel_word.
 	for (i64 i = 0_i64; i < n; i++) {
-		i64 cs = cases + i * SELCASE_QW * 8;
-		i64 w  = (i64)&wbufs[i * WAITER_QW];
+		i64  cs        = cases + i * SELCASE_QW * 8;
+		i64  w         = (i64)&wbufs[i * WAITER_QW];
 		Waiter(w).fib  = self;
 		Waiter(w).sel  = (i64)&sel_word;
 		Waiter(w).win  = (i64)&win_slot;
 		Waiter(w).idx  = i;
 		Waiter(w).next = 0;
-		Chan c = Chan(SelCase(cs).chan);
+		Chan c         = Chan(SelCase(cs).chan);
 		if (SelCase(cs).dir == VXCH_RECV) {
 			Waiter(w).elem = 0;
 			__vxch_wq_push((i64)&c.rwq_h, (i64)&c.rwq_t, w);

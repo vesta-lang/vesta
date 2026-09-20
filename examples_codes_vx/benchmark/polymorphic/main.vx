@@ -46,7 +46,7 @@ i32 main() {
 		if (mod == 0)      sum = sum + c.area();
 		else if (mod == 1) sum = sum + r.area();
 		else               sum = sum + t.area();
-		i = i + 1;
+		i                      = i + 1;
 	}
 	return sum;
 }

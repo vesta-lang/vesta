@@ -24,10 +24,10 @@ class IntOps {
 		while (i < n) {
 			i64 a = (i64)i;
 			i64 b = (i64)(i + 7);
-			acc = acc + imin(a, b);
-			acc = acc + imax(a, b);
-			acc = acc + abs(a - 5000);
-			i   = i + 1;
+			acc   = acc + imin(a, b);
+			acc   = acc + imax(a, b);
+			acc   = acc + abs(a - 5000);
+			i     = i + 1;
 		}
 		return acc;
 	}

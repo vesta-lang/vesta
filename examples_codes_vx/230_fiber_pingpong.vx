@@ -185,33 +185,33 @@ void fiber_body() {
 void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 10 * 8; // 8 saved + 2 retaddr
 	u64* s    = (u64*)base;
-	s[0] = 0;     // r15
-	s[1] = 0;     // r14
-	s[2] = 0;     // r13
-	s[3] = entry; // r12
-	s[4] = 0;     // rsi
-	s[5] = 0;     // rdi
-	s[6] = arg;   // rbx
-	s[7] = 0;     // rbp
-	s[8] = (u64)(cfn() -> void) __fiber_trampoline;
-	s[9] = (u64)(cfn() -> void) __fiber_exit;
-	u64* c = (u64*)ctx;
-	c[0] = base;
+	s[0]      = 0;     // r15
+	s[1]      = 0;     // r14
+	s[2]      = 0;     // r13
+	s[3]      = entry; // r12
+	s[4]      = 0;     // rsi
+	s[5]      = 0;     // rdi
+	s[6]      = arg;   // rbx
+	s[7]      = 0;     // rbp
+	s[8]      = (u64)(cfn() -> void) __fiber_trampoline;
+	s[9]      = (u64)(cfn() -> void) __fiber_exit;
+	u64* c    = (u64*)ctx;
+	c[0]      = base;
 }
 @Target("!os:windows")
 void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 	u64  base = (top & ~((u64)15)) - 8 * 8; // 6 saved + 2 retaddr
 	u64* s    = (u64*)base;
-	s[0] = 0;     // r15
-	s[1] = 0;     // r14
-	s[2] = 0;     // r13
-	s[3] = entry; // r12
-	s[4] = arg;   // rbx
-	s[5] = 0;     // rbp
-	s[6] = (u64)(cfn() -> void) __fiber_trampoline;
-	s[7] = (u64)(cfn() -> void) __fiber_exit;
-	u64* c = (u64*)ctx;
-	c[0] = base;
+	s[0]      = 0;     // r15
+	s[1]      = 0;     // r14
+	s[2]      = 0;     // r13
+	s[3]      = entry; // r12
+	s[4]      = arg;   // rbx
+	s[5]      = 0;     // rbp
+	s[6]      = (u64)(cfn() -> void) __fiber_trampoline;
+	s[7]      = (u64)(cfn() -> void) __fiber_exit;
+	u64* c    = (u64*)ctx;
+	c[0]      = base;
 }
 
 // ===========================================================================
@@ -219,7 +219,7 @@ void fiber_init(u64 ctx, u64 top, u64 entry, u64 arg) {
 // ===========================================================================
 u64 run() {
 	// Bloque HOST: 3 celdas de contexto + 2 estados de 5 qwords.
-	u64 blk      = (u64)malloc(13 * 8);
+	u64 blk      = (u64)malloc<u64>(13);
 	u64 main_ctx = blk + 0 * 8;
 	u64 ctx_a    = blk + 1 * 8;
 	u64 ctx_b    = blk + 2 * 8;
@@ -227,20 +227,20 @@ u64 run() {
 	// Estado de la fibra A (5 qwords desde el offset 3).
 	u64  sa = blk + 3 * 8;
 	u64* pa = (u64*)sa;
-	pa[0] = 0;        // counter
-	pa[1] = 5;        // rounds
-	pa[2] = ctx_a;    // self
-	pa[3] = ctx_b;    // other
-	pa[4] = main_ctx; // main
+	pa[0]   = 0;        // counter
+	pa[1]   = 5;        // rounds
+	pa[2]   = ctx_a;    // self
+	pa[3]   = ctx_b;    // other
+	pa[4]   = main_ctx; // main
 
 	// Estado de la fibra B (5 qwords desde el offset 8).
 	u64  sb = blk + 8 * 8;
 	u64* pb = (u64*)sb;
-	pb[0] = 0;        // counter
-	pb[1] = 5;        // rounds
-	pb[2] = ctx_b;    // self
-	pb[3] = ctx_a;    // other
-	pb[4] = main_ctx; // main
+	pb[0]   = 0;        // counter
+	pb[1]   = 5;        // rounds
+	pb[2]   = ctx_b;    // self
+	pb[3]   = ctx_a;    // other
+	pb[4]   = main_ctx; // main
 
 	// Pilas de fibra (64 KiB cada una) en memoria host (malloc funciona en los
 	// 3 modos: RawAllocator en interp/JIT, slab de vx_mem en AOT).

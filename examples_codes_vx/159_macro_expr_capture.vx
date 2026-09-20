@@ -15,7 +15,7 @@ comptime string M_identity(expr code) {
 // Macro 2: longitud del codigo capturado.  Devuelve un literal numerico
 // que parsea como entero en el call site.
 @Macro
-comptime string M_codelen(expr code) => comptime_to_str(comptime_strlen(code));
+comptime string M_codelen(expr code) => comptime.to_str(comptime.str.len(code));
 
 // Macro 3: walk(ptr -> 0x90 -> 0x10) - emite un literal entero que
 // "evalua" el DSL (en este MVP devolvemos la suma de los offsets).
@@ -24,7 +24,7 @@ comptime string M_codelen(expr code) => comptime_to_str(comptime_strlen(code));
 comptime string M_walk(expr code) {
 	// Suma de los offsets es un toy; lo importante es demostrar que
 	// recibimos el texto verbatim.  Devolvemos un literal calculable.
-	if (comptime_strlen(code) > 0) {
+	if (comptime.str.len(code) > 0) {
 		return "42";
 	}
 	return "0";

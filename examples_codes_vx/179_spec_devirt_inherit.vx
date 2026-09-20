@@ -51,9 +51,9 @@ class Bench {
 	public Bench() { }
 	public i32 run() {
 		Shape[3] s;
-		s[0] = new Circle(5);
-		s[1] = new Rect(4, 6);
-		s[2] = new ColoredCircle(7, 1);
+		s[0]    = new Circle(5);
+		s[1]    = new Rect(4, 6);
+		s[2]    = new ColoredCircle(7, 1);
 		i32 acc = 0_i32;
 		i32 i   = 0_i32;
 		while (i < 3) {

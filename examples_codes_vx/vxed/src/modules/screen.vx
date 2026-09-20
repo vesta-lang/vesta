@@ -68,12 +68,12 @@ public class Screen {
 			free(info);
 			return;
 		}
-		i32 left   = this.read_i16_le(info, 10);
-		i32 top    = this.read_i16_le(info, 12);
-		i32 right  = this.read_i16_le(info, 14);
-		i32 bottom = this.read_i16_le(info, 16);
-		i32 nc     = right - left + 1;
-		i32 nr     = bottom - top + 1;
+		i32                      left      = this.read_i16_le(info, 10);
+		i32                      top       = this.read_i16_le(info, 12);
+		i32                      right     = this.read_i16_le(info, 14);
+		i32                      bottom    = this.read_i16_le(info, 16);
+		i32                      nc        = right - left + 1;
+		i32                      nr        = bottom - top + 1;
 		if (nc > 0 && nc < 1024) this.cols = nc;
 		if (nr > 0 && nr < 1024) this.rows = nr;
 		free(info);
@@ -101,11 +101,11 @@ public class Screen {
 	public void render_status(buffer.Buffer b, string title) {
 		this.move_cursor(this.rows, 1);
 		print(ATTR_INVERT);
-		i32    line  = b.cursor_row() + 1;
-		i32    col   = b.cursor_col() + 1;
-		i32    total = b.line_count();
-		string mark  = " ";
-		if (b.dirty == 1) mark = "*";
+		i32               line  = b.cursor_row() + 1;
+		i32               col   = b.cursor_col() + 1;
+		i32               total = b.line_count();
+		string            mark  = " ";
+		if (b.dirty == 1) mark  = "*";
 		print(" ${mark} ${title}  L${line}:C${col}/${total} ");
 		print(ATTR_RESET);
 		this.clear_eol();
@@ -218,7 +218,7 @@ public class Screen {
 		while (z < line_end) {
 			u8                       cz          = b.data[z];
 			if (cz != 32 && cz != 9) last_non_ws = z;
-			z = z + 1;
+			z                                    = z + 1;
 		}
 
 		// Color para markers de whitespace (Dracula comment-gray + dim).

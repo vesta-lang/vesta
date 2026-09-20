@@ -38,10 +38,10 @@ struct MultiRec {
 // resolver.  Devuelve el valor releido para verificar.
 u32 build(u8* buf, u8 tag, u32 hdr_len, u32 val) {
 	MultiRec r = MultiRec(buf);
-	r.tag     = tag;
-	r.hdr_len = hdr_len;
-	r.value   = val; // STORE en la direccion que decide el resolver
-	return r.value;  // relee por el mismo camino
+	r.tag      = tag;
+	r.hdr_len  = hdr_len;
+	r.value    = val; // STORE en la direccion que decide el resolver
+	return r.value;   // relee por el mismo camino
 }
 
 i32 main() {

@@ -34,8 +34,8 @@ void fork_task(i64 depth) {
 }
 
 i32 main() {
-	g_lock = (i64)malloc(4 * 8);
-	i64* lo = (i64*)g_lock;
+	g_lock    = (i64)malloc<u64>(4);
+	i64* lo   = (i64*)g_lock;
 	lo[0]     = 0;
 	lo[1]     = 0;
 	lo[2]     = 0;

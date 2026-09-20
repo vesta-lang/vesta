@@ -14,8 +14,8 @@ class Cont { unique<i64, del> h; }
 void run() {
 	unique<i64> local = unique_with(9, del);
 	Cont        c     = new Cont();
-	c.h = move(local); // move local -> field
-}                      // solo el field libera (1 free)
+	c.h               = move(local); // move local -> field
+}                                    // solo el field libera (1 free)
 i32 main() {
 	Counter.libs = 0;
 	run();

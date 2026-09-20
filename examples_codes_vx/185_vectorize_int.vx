@@ -28,9 +28,10 @@ i64 main() {
 	i64 total = 0_i64;
 
 	// --- element-wise i64: c[i] = a[i] + b[i]  (PADDQ, W=2) ---
-	i64* a = malloc(80); // 10 x i64
-	i64* b = malloc(80);
-	i64* c = malloc(80);
+	// El comentario "10 x i64" sobra: eso es justo lo que dice la llamada.
+	i64* a = malloc<i64>(10);
+	i64* b = malloc<i64>(10);
+	i64* c = malloc<i64>(10);
 	for (i32 i = 0_i32; i < 10; i++) {
 		a[i] = (i64)(i + 1);
 		b[i] = (i64)(i * 2);
@@ -39,9 +40,9 @@ i64 main() {
 	total = total + sum_i64(c, 10);                          // sum(3i+1) = 145
 
 	// --- element-wise i32: e[i] = x[i] - y[i]  (PSUBD, W=4, con cola 7%4=3) ---
-	i32* x = malloc(28); // 7 x i32
-	i32* y = malloc(28);
-	i32* e = malloc(28);
+	i32* x = malloc<i32>(7);
+	i32* y = malloc<i32>(7);
+	i32* e = malloc<i32>(7);
 	for (i32 i = 0_i32; i < 7; i++) {
 		x[i] = (i + 10) * 3;
 		y[i] = i;
@@ -52,7 +53,7 @@ i64 main() {
 	total = total + (i64)se;
 
 	// --- reduccion i64 con N impar (ejercita la cola escalar) ---
-	i64* d = malloc(56); // 7 x i64
+	i64* d = malloc<i64>(7);
 	for (i32 i = 0_i32; i < 7; i++) { d[i] = (i64)(2 * i + 1); }
 	total = total + sum_i64(d, 7); // 1+3+5+7+9+11+13 = 49
 

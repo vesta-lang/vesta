@@ -5,9 +5,10 @@ namespace ejemplos.vectorize_scalar;
 // f64 HOST -> VEC_BINOP_S (escalar difundido a todos los lanes).
 
 i64 main() {
-	i64  n = 100_i64;
-	f64* a = (f64*)malloc(n * 8);
-	f64* c = (f64*)malloc(n * 8);
+	i64 n = 100_i64;
+	// n elementos: sin cuenta de bytes y sin cast, que el tipo ya lo dice.
+	f64* a = malloc<f64>(n);
+	f64* c = malloc<f64>(n);
 
 	i64 i = 0_i64;
 	while (i < n) {
@@ -33,7 +34,7 @@ i64 main() {
 
 	// c[i] = i*2 + 10 - 5 = 2i + 5.  Suma de c[0..99] = 2*4950 + 500 = 10400.
 	f64 sum = 0.0_f64;
-	i = 0;
+	i       = 0;
 	while (i < n) {
 		sum = sum + c[i];
 		i   = i + 1;

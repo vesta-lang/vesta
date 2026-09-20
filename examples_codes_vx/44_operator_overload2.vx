@@ -103,8 +103,8 @@ i32 main() {
 	i32 int_sub = i - j;        // 5
 	i32 int_mul = i * j;        // 36
 	i32 int_lt  = (i32)(j < i); // 1
-	i32 arr[3] = {100, 200, 300};
-	i32 arr_v = arr[1]; // 200 (subscript de array clasico)
+	i32 arr[3]  = {100, 200, 300};
+	i32 arr_v   = arr[1]; // 200 (subscript de array clasico)
 
 	// Validacion de las comparaciones overloaded: lt=0, gt=1, le=1, ge=0.
 	// gate1 = gt * le = 1*1 = 1 ; verifica que lt y ge son 0.

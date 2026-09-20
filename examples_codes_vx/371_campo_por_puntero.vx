@@ -51,18 +51,18 @@ i32 main() {
 	Punto p;
 	p.x        = 5;
 	p.dentro.v = 3;
-	Punto* q = &p;
+	Punto* q   = &p;
 
 	i32 acc = 0_i32;
-	acc = acc + q.x;        // leer                      5
-	q.x = q.x + 1;          // escribir
-	acc = acc + q.x;        //                          11
-	q.x++;                  // incrementar
-	acc = acc + q.x;        //                          18
-	acc = acc + q.doble();  // metodo por puntero       32
-	acc = acc + q.dentro.v; // campo encadenado         35
-	i32* dir = &q.x;        // direccion de un campo
-	acc = acc + *dir;       //                          42
+	acc     = acc + q.x;         // leer                      5
+	q.x     = q.x + 1;           // escribir
+	acc     = acc + q.x;         //                          11
+	q.x++;                       // incrementar
+	acc      = acc + q.x;        //                          18
+	acc      = acc + q.doble();  // metodo por puntero       32
+	acc      = acc + q.dentro.v; // campo encadenado         35
+	i32* dir = &q.x;             // direccion de un campo
+	acc      = acc + *dir;       //                          42
 
 	Nodo a;
 	Nodo b;

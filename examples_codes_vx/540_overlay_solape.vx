@@ -55,10 +55,10 @@ i32 main() {
 
 	// La vista sin union: cuatro campos, cuatro tramos, ninguno pisa a otro.
 	Cabecera c = Cabecera(buf + 16);
-	c.magic  = 0xCAFE_u32;
-	c.count  = 2_u16;
-	c.flags  = 5_u16;
-	c.offset = 24_u64;
+	c.magic    = 0xCAFE_u32;
+	c.count    = 2_u16;
+	c.flags    = 5_u16;
+	c.offset   = 24_u64;
 	println("magic=${c.magic:hex} count=${c.count} flags=${c.flags}");
 
 	i32 r = (i32)(orden + (u64)t.hint + (u64)c.count + (u64)c.flags); // 7+3+2+5

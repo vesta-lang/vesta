@@ -19,7 +19,7 @@ i32 main() {
 	i64 i   = 0_i64;
 	while (i < 1_000_000) {
 		// RAW_ALLOC de 32 bytes en host heap.
-		i32* p = malloc(32);
+		i32* p = malloc<i32>(8);
 		// Write minimal: 1 STORE para que el optimizer no elimine el alloc.
 		*p = 1;
 		// Acumula el valor para evitar dead-store-elimination tambien.

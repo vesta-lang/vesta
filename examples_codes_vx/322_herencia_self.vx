@@ -47,8 +47,8 @@ i32 main() {
 	a.x = 10;
 	a.y = 5;
 	Nombrado b;
-	b.x = 20;
-	b.y = 7;
+	b.x        = 20;
+	b.y        = 7;
 	Nombrado c = a.sumar(b);   // Self = Nombrado -> c = (30, 12)
 	Nombrado d = c.self_ref(); // fluent, sigue siendo Nombrado
 	return (i32)d.doble();     // (30 + 12) * 2 = 84

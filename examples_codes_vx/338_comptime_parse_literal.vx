@@ -51,7 +51,7 @@ struct IntLit {
  */
 comptime IntLit parse_int_lit(string src) {
 	IntLit r;
-	r.w0 = 0;
+	r.w0     = 0;
 	i64 n    = src.length();
 	i64 base = 10_i64;
 	i64 i    = 0_i64;
@@ -91,7 +91,7 @@ struct MyInt {
 	 */
 	comptime MyInt(expr t) {
 		IntLit lit = parse_int_lit(t);
-		this.v = lit.word(0);
+		this.v     = lit.word(0);
 	}
 }
 

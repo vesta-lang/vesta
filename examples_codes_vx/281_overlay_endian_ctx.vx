@@ -20,7 +20,7 @@ struct BiHdr {
 // Rellena una cabecera en el orden pedido (be=true -> big-endian) y devuelve la
 // suma de version+entry releidos (deben coincidir sea cual sea el orden).
 i64 build_and_read(u8* buf, bool be) {
-	BiHdr h = BiHdr(buf);
+	BiHdr h          = BiHdr(buf);
 	*(u32*)(buf + 0) = 0x7F454C46; // "\x7FELF"
 	h.ei_data        = be ? 2 : 1;
 	h.version        = 0x0102; // se escribe en el orden que dicte ei_data

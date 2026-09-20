@@ -41,7 +41,7 @@ i32 main() {
 	// recuperacion tiene que valer igual.
 	try {
 		i64* p = (i64*)0;
-		*    p = 1;
+		*p     = 1;
 		println("no deberia llegar");
 	} catch (FatalError e) {
 		if (e.kind == 7) hechas = hechas + 1;

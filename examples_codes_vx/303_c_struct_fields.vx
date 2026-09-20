@@ -49,8 +49,8 @@ i32 main() {
 	s.value        = 100;
 	s.index        = 0;
 	s.length       = 0;
-	PSETUP ps = &s;
-	(*ps).length = 6; // via alias de puntero
+	PSETUP ps      = &s;
+	(*ps).length   = 6; // via alias de puntero
 
 	// 10 + 11 + 15 + 6 = 42
 	i32 sum = rc.x0 + rc.y0 + rc.x1 + rc.y1

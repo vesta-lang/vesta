@@ -65,8 +65,8 @@ i32 main() {
 
 	// En un campo, y reasignado: al reasignar se libera el anterior.
 	Recurso r = new Recurso();
-	r.asa = unique_with(30, cerrar);
-	r.asa = unique_with(40, cerrar); // libera el 30
+	r.asa     = unique_with(30, cerrar);
+	r.asa     = unique_with(40, cerrar); // libera el 30
 
 	println("leido=${leido} propios=${Cuenta.propios} centinela=${centinela}");
 
