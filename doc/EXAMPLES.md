@@ -789,7 +789,7 @@ comptime string build_id() {
 @Macro
 comptime string size_of_u64() {
     // Virtual lib `vesta_comptime` registrada in-process; sin extern explicito.
-    return to_str(comptime_type_sizeof("u64"));  // siempre 8
+    return to_str(type.by_name.size("u64"));  // siempre 8
 }
 
 i32 main() {
@@ -858,7 +858,7 @@ builtins cortos (`strlen`, `substr`, `to_str`, `chr`, `ord`, `repeat`,
 
 ```vx
 // Verbose (legacy):
-return comptime_concat("(", comptime_concat(comptime_to_str(n), ")"));
+return comptime.str.concat("(", comptime.str.concat(comptime.to_str(n), ")"));
 
 // Preferido:
 return "(" + to_str(n) + ")";

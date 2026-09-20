@@ -470,7 +470,7 @@ class Perro : Animal {
 ### Predicados OOP
 
 ```vsh
-is_class(Punto)          // true
+type.is_class(Punto)          // true
 is_instance(p)           // true
 isinstance(p, Punto)     // true
 classname(p)             // "Punto"
@@ -626,7 +626,7 @@ import "ruta/al/modulo.vsh"
 | `contains(s, sub)`             | True si sub esta en s                                     |
 | `char_code(s)`                 | Codigo ASCII/byte del primer caracter                     |
 | `from_char(n)`                 | Caracter con codigo n                                     |
-| `is_numeric(s)`                | True si s se puede parsear como numero                    |
+| `type.is_numeric(s)`                | True si s se puede parsear como numero                    |
 | `hex(n)`                       | Representacion hex del entero (`"0x1f"`)                  |
 | `bin_str(n)`                   | Representacion binaria del entero (`"0b1010"`)            |
 
@@ -682,9 +682,9 @@ println(index_of([10,20,30], 20))            // 1
 ### Predicados de tipo
 
 ```vsh
-is_null(v)      is_bool(v)      is_int(v)       is_float(v)
+is_null(v)      type.is_bool(v)      is_int(v)       type.is_float(v)
 is_str(v)       is_list(v)      is_map(v)        is_fn(v)
-is_class(v)     is_instance(v)
+type.is_class(v)     is_instance(v)
 ```
 
 `type(v)` devuelve el tipo como string: `"null"`, `"bool"`, `"int"`, `"float"`,
@@ -696,7 +696,7 @@ is_class(v)     is_instance(v)
 |-------------------------------|------------------------------------------------------|
 | `isinstance(obj, clase)`      | True si obj es instancia de clase o subclase         |
 | `classname(obj)`              | Nombre de la clase de obj (o de la clase misma)      |
-| `is_class(v)`                 | True si v es un descriptor de clase                  |
+| `type.is_class(v)`                 | True si v es un descriptor de clase                  |
 | `is_instance(v)`              | True si v es una instancia                           |
 
 ### Matematicas

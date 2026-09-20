@@ -507,7 +507,7 @@ comptime string walk(expr code) {
 i32 main() {
     i64 f10 = fib_at(10);                // se compila como `i64 f10 = 55;`
     u64 v = walk(root -> 0x100 -> 0);    // pointer chase generado
-    u64 sz = sizeof<i64>();              // literal 8 embebido
+    u64 sz = type.size<i64>();              // literal 8 embebido
     static_assert(sz == 8, "u64 size");
     return 42;
 }
@@ -519,8 +519,8 @@ i32 main() {
 - `expr` param -- captura raw del call site para construir DSLs.
 - Builtins cortos: `strlen`, `substr`, `concat` (via `+`), `to_str`,
   `chr`, `ord`, `repeat`, `replace`, `contains`, `gensym`.
-- Introspeccion: `sizeof<T>`, `typename<T>`, `kind<T>`, `field_count<T>`,
-  `has_field<T>`, `is_subtype<A,B>`, `for_each_field<T>`, etc.
+- Introspeccion: `type.size<T>`, `type.name<T>`, `type.kind<T>`, `field.count<T>`,
+  `field.has<T>`, `type.is_subtype<A,B>`, `field.each<T>`, etc.
 - FFI compile-time: invoca `kernel32.dll` u otras DLLs durante la
   compilacion; el resultado se "fosiliza" como literal en el `.velb`.
 - `static_assert(cond, "msg")` -- verifica invariantes en compile-time.

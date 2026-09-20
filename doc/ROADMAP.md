@@ -128,7 +128,7 @@ analysis).
   deref/handle_for_ptr, monitors, exceptions, FFI, safepoint).
 - **C.2 (CERRADO)**: `include/vesta_rt/abi.h` (~150 LOC) — constantes ABI
   explicitas para `ObjectHeader`, `StringObject`, codigos FatalError, conteo
-  de regs VM. `static_assert(offsetof(...) == VESTA_*_OFFSET)` en
+  de regs VM. `static_assert(field.offset(...) == VESTA_*_OFFSET)` en
   `abi_checks.cpp` previene drift silencioso entre runtime y JIT/AOT.
 - **C.3 (PENDIENTE)**: romper dependencias circulares `loader.h <-> runtime.h`
   para que `vesta_rt.lib` sea linkable contra consumers externos sin pull-in
