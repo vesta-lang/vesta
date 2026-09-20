@@ -1,6 +1,6 @@
 namespace ejemplos.typename_completo;
 
-// `typename<T>()` nombra CUALQUIER tipo del lenguaje.
+// `type.name<T>()` nombra CUALQUIER tipo del lenguaje.
 //
 // El compilador sabe como se llama cada uno -- lo escribe en cualquier mensaje
 // de error --, pero la introspeccion tenia su propia tabla y las ocho
@@ -25,29 +25,29 @@ i32 main() {
 	i64 ok = 0_i64;
 
 	// 1. Nombre a secas.
-	ok = ok + cuenta(typename<i64>(), "i64");
-	ok = ok + cuenta(typename<bool>(), "bool");
-	ok = ok + cuenta(typename<string>(), "string");
+	ok = ok + cuenta(type.name<i64>(), "i64");
+	ok = ok + cuenta(type.name<bool>(), "bool");
+	ok = ok + cuenta(type.name<string>(), "string");
 
 	// 2. Construido con el del tipo interior.
-	ok = ok + cuenta(typename<i64*>(), "i64*");
-	ok = ok + cuenta(typename<Optional<i64>>(), "Optional<i64>");
-	ok = ok + cuenta(typename<unique<i64>>(), "unique<i64>");
-	ok = ok + cuenta(typename<i64[4]>(), "i64[4]");
+	ok = ok + cuenta(type.name<i64*>(), "i64*");
+	ok = ok + cuenta(type.name<Optional<i64>>(), "Optional<i64>");
+	ok = ok + cuenta(type.name<unique<i64>>(), "unique<i64>");
+	ok = ok + cuenta(type.name<i64[4]>(), "i64[4]");
 
 	// 3. El nombre que le puso el usuario.
-	ok = ok + cuenta(typename<Punto>(), "Punto");
-	ok = ok + cuenta(typename<Animal>(), "Animal");
+	ok = ok + cuenta(type.name<Punto>(), "Punto");
+	ok = ok + cuenta(type.name<Animal>(), "Animal");
 
 	// 4. Las colecciones: las que devolvian "?".
-	ok = ok + cuenta(typename<ArrayList>(), "ArrayList");
-	ok = ok + cuenta(typename<HashMap>(), "HashMap");
-	ok = ok + cuenta(typename<HashSet>(), "HashSet");
-	ok = ok + cuenta(typename<Queue>(), "Queue");
-	ok = ok + cuenta(typename<Deque>(), "Deque");
-	ok = ok + cuenta(typename<Stack>(), "Stack");
-	ok = ok + cuenta(typename<TreeMap>(), "TreeMap");
-	ok = ok + cuenta(typename<TreeSet>(), "TreeSet");
+	ok = ok + cuenta(type.name<ArrayList>(), "ArrayList");
+	ok = ok + cuenta(type.name<HashMap>(), "HashMap");
+	ok = ok + cuenta(type.name<HashSet>(), "HashSet");
+	ok = ok + cuenta(type.name<Queue>(), "Queue");
+	ok = ok + cuenta(type.name<Deque>(), "Deque");
+	ok = ok + cuenta(type.name<Stack>(), "Stack");
+	ok = ok + cuenta(type.name<TreeMap>(), "TreeMap");
+	ok = ok + cuenta(type.name<TreeSet>(), "TreeSet");
 
 	println("nombres correctos: ${ok} de 17");
 

@@ -5,7 +5,7 @@
 // Configuracion:
 //   - 4 workers spawn'd, cada uno 100K increments synchronized.
 //   - Total: 400K ops bajo lock.
-//   - Join via msgsend a parent (msgrecv en main bloqueante, sin busy-wait).
+//   - Join via msgsend a type.parent (msgrecv en main bloqueante, sin busy-wait).
 //
 // Esperado:
 //   - Single-scheduler: workers serializan (cooperativo); ~100K ops/sec.

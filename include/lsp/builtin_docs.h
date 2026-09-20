@@ -15,9 +15,17 @@
  *   - @c compute_param_hints (ghost args): nombres de los parametros para
  *     mostrarlos inline en el call site.
  *
- * Los builtins (print, sizeof, str_concat, ...) no se declaran en el codigo
+ * Los builtins (print, type.size, str_concat, ...) no se declaran en el codigo
  * del usuario, por lo que el indexador de simbolos NO los ve; esta tabla
  * suple su documentacion.
+ *
+ * @par De donde sale el texto
+ * De @c catalog/builtin_docs.toml, que lo tiene en TODOS los idiomas, igual
+ * que los diagnosticos.  Es texto que lee una persona, y una persona lee en
+ * el suyo; escrito a mano aqui solo podia estar en uno.  El idioma activo lo
+ * decide @c vx::diag::current_language, que es el mismo criterio para todo el
+ * proyecto -- y se busca por CoDIGO ISO, no por indice, para que los dos
+ * catalogos puedan tener idiomas distintos sin cruzarse --.
  */
 
 #ifndef VESTA_LSP_BUILTIN_DOCS_H
@@ -55,6 +63,37 @@ const BuiltinDoc *lookup_builtin(const std::string &name);
  * @return Referencia estable al vector de nombres.
  */
 const std::vector<std::string> &all_builtin_names();
+
+// --- La tabla GENERADA (catalog/builtin_docs.toml) ---------------------------
+//
+// Es lo que hay debajo de las dos funciones de arriba.  Se expone porque la
+// construccion de la tabla por idioma vive en el .cpp, no en el generador: lo
+// generado son DATOS, y elegir idioma es una decision.
+
+/**
+ * @struct BuiltinDocView
+ * @brief Una entrada de la tabla generada, sin copiar nada.
+ *
+ * Todo son punteros a `.rodata`: la tabla no reserva memoria al arrancar.
+ */
+struct BuiltinDocView {
+    const char *name = nullptr;      ///< Nombre del builtin.
+    const char *sig = nullptr;       ///< Firma; igual en todos los idiomas.
+    const char *const *doc = nullptr; ///< La explicacion, una por idioma.
+    int doc_count = 0;                ///< Cuantos idiomas trae @c doc.
+};
+
+/// Los idiomas de la tabla generada (codigos ISO).  @p out_n recibe el conteo.
+const char *const *builtin_doc_languages(int *out_n);
+
+/// Cuantas entradas tiene la tabla generada.
+int builtin_doc_count();
+
+/// La entrada @p idx de la tabla generada.  Falso si el indice no vale.
+bool builtin_doc_at(int idx, BuiltinDocView *out);
+
+/// Busca por nombre exacto en la tabla generada (busqueda binaria).
+bool builtin_doc_find(const char *name, BuiltinDocView *out);
 
 } // namespace lsp
 

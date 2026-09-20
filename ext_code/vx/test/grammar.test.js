@@ -117,8 +117,28 @@ const CASOS = [
     // Comptime y builtins.
     ['comptime i64 k = 2;', 'comptime', 'keyword.other.comptime'],
     ['static_assert(k == 2, "mal");', 'static_assert', 'keyword.other.comptime'],
-    ['i64 t = sizeof<i64>();', 'sizeof', 'support.function.builtin.memory'],
+    // Los builtins van en ARBOL, y cada rama tiene su propio ambito: es lo
+    // que permite que el editor los coloree por familia en vez de como una
+    // lista plana.  Se comprueba una hoja de cada rama, y la de tres tramos,
+    // que es la que se rompe si el patron no escapa los puntos.
+    ['i64 t = type.size<i64>();', 'type.size', 'support.function.builtin.type'],
+    ['u32 n = field.count<Punto>();', 'field.count',
+     'support.function.builtin.field'],
+    ['u32 m = method.count<Punto>();', 'method.count',
+     'support.function.builtin.method'],
+    ['u32 a = scoped.method.arity<Punto>(0);', 'scoped.method.arity',
+     'support.function.builtin.scoped'],
+    ['u64 e = overlay.extent<V>();', 'overlay.extent',
+     'support.function.builtin.overlay'],
+    ['u32 l = comptime.str.len("hola");', 'comptime.str.len',
+     'support.function.builtin.comptime'],
     ['println("hola");', 'println', 'support.function.builtin.io'],
+
+    // Las dos grafias de la llamada uniforme.  Sin esto solo las coloreaba el
+    // servidor de lenguaje, asi que un fichero suelto las veia como un nombre
+    // cualquiera.
+    ['i64 v = x.f$geo.metrico(3);', 'geo.metrico', 'entity.name.namespace'],
+    ['i64 r = 10.restar(40, _);', '_', 'keyword.operator.receiver-hole'],
     ['i64 s = sqrt(x);', 'sqrt', 'support.function.builtin.math'],
     ['unique<i64> p = unique_box(1);', 'unique_box', 'support.function.builtin.ownership'],
 

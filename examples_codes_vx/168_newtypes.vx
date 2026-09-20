@@ -58,21 +58,21 @@ i32 main() {
 	if ((u32)web_port != 8080) return 300;
 
 	// Introspeccion compile-time.
-	if (!is_newtype<user_id>()) return 400;
-	if (is_newtype<u64>()) return 500;
-	if (!is_opaque<secret_token>()) return 600;
-	if (is_opaque<user_id>()) return 700;
+	if (!type.is_newtype<user_id>()) return 400;
+	if (type.is_newtype<u64>()) return 500;
+	if (!type.is_opaque<secret_token>()) return 600;
+	if (type.is_opaque<user_id>()) return 700;
 
-	// underlying_of<T>() devuelve el typename del underlying.
-	string un_user = underlying_of<user_id>();
-	string un_u64  = underlying_of<u64>();
+	// type.underlying<T>() devuelve el type.name del underlying.
+	string un_user = type.underlying<user_id>();
+	string un_u64  = type.underlying<u64>();
 	if (un_user.length() != 3) return 800; // "u64" -> 3 bytes
 	if (un_u64.length() != 3) return 900;
 
 	// Verificacion rapida: dos newtypes con el MISMO underlying son
 	// tipos DIFERENTES (porque tienen nominal_id distinto).
-	if (is_same<user_id, group_id>()) return 1000;
-	if (!is_same<user_id, user_id>()) return 1100;
+	if (type.is_same<user_id, group_id>()) return 1000;
+	if (!type.is_same<user_id, user_id>()) return 1100;
 
 	return 42;
 }

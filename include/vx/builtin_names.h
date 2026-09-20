@@ -114,6 +114,7 @@ enum class Builtin : uint16_t {
     Stack,
     Trunc,
     Value,
+    Write,
 
     /* --- 6 caracteres --- */
     BgRgb,
@@ -237,6 +238,7 @@ enum class Builtin : uint16_t {
 
     /* --- 11 caracteres --- */
     AtomicLoad,
+    MethodNameAt,
     FiberEntry,
     FieldCount,
     GetMethodAt,
@@ -263,8 +265,27 @@ enum class Builtin : uint16_t {
     Unloadmodule,
     WriteBorrow,
 
+    /* Type-as-first-class-value: los cinco devuelven un `Type`, no un valor.
+     * `type.result` es el que permite escribir una generica de orden superior
+     * sin fijar si recibe un `fn` o un `cfn`. */
+    TypeOf,
+    TypeBase,
+    TypeInner,
+    TypeError,
+    TypeResult,
+
+    /* Y sus PREGUNTAS.  Los cuatro de arriba que pueden no tener respuesta la
+     * DICEN en vez de devolver un tipo vacio, asi que hace falta poder mirarlo
+     * antes -- la misma pareja que `method.has` y `method.name`. */
+    HasInner,
+    HasBase,
+    IsResult,
+    IsCallable,
+
     /* --- 13 caracteres --- */
+    FieldTypeAt,
     FiberSwapctx,
+    MethodResult,
     SectionStart,
     SharedMalloc,
     StaticAssert,
@@ -303,18 +324,26 @@ enum class Builtin : uint16_t {
 
     /* --- 17 caracteres --- */
     ComptimeContains,
+    HasScopedMethod,
     SharedGcCollect,
     SharedHeapBytes,
 
     /* --- 18 caracteres --- */
     AsNativeCallback,
     ComptimeTypeKind,
+    ScopedMethodEach,
+    ScopedMethodName,
 
     /* --- 19 caracteres --- */
+    ScopedMethodArity,
+    ScopedMethodCount,
+    ScopedMethodParam,
     TermRestoreCursor,
 
     /* --- 20 caracteres --- */
     ComptimeTypeSizeof,
+    ScopedMethodOrigin,
+    ScopedMethodReturn,
     TypeInfoFieldName,
     TypeInfoFieldSize,
 
@@ -339,6 +368,27 @@ enum class Builtin : uint16_t {
  * @return El builtin, o Builtin::Unknown.
  */
 Builtin builtin_from_name(std::string_view name) noexcept;
+
+/**
+ * @brief Si @p head es la RAIZ de una familia de builtins (`type`, `field`...).
+ *
+ * Los builtins se nombran en ARBOL -- `type.size`, `field.count`,
+ * `scoped.method.arity` --, que es como se agrupa una familia de verdad en vez
+ * de imitarlo con guiones bajos: se lee mejor, el editor puede ofrecerla por
+ * ramas y la documentacion sale con la misma forma.
+ *
+ * Lo pregunta el parser: al ver un identificador tiene que saber si lo que
+ * viene es el principio de un nombre de builtin -- y entonces los puntos que
+ * siguen son PARTE DEL NOMBRE -- o un acceso a un campo.
+ *
+ * Por eso esas raices quedan RESERVADAS: un namespace del usuario no puede
+ * llamarse igual, o `field.count` seria ambiguo.  Ninguna es palabra clave, asi
+ * que el lexer no cambia.
+ *
+ * @param head El primer segmento.
+ * @return Si algun builtin empieza por @p head seguido de un punto.
+ */
+[[nodiscard]] bool is_builtin_tree_root(std::string_view head) noexcept;
 
 /**
  * @brief A que familia del bajador pertenece un builtin.
@@ -373,6 +423,20 @@ enum class BuiltinFamily : uint8_t {
  * @return Su familia.
  */
 BuiltinFamily builtin_family(Builtin b) noexcept;
+
+/**
+ * @brief Si lo que devuelve @p b es un TIPO, no un valor.
+ *
+ * Son los que se pueden escribir donde va un tipo (`type.result<F>() f(..)`).
+ * Hace falta distinguirlos para decidir si una declaracion EMPIEZA por un
+ * tipo: `field.set<Punto>(p, "y", 200);` es una sentencia, no el comienzo de
+ * una declaracion, y tomarla por tal hace que el parser pida un nombre detras
+ * de algo que no es un tipo.
+ *
+ * @param b El builtin.
+ * @return Cierto si su resultado es un `Type`.
+ */
+bool builtin_yields_type(Builtin b) noexcept;
 
 /**
  * @brief El texto de un builtin, para diagnosticos.

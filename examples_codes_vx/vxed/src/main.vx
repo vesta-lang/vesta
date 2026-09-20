@@ -92,9 +92,9 @@ void settings_save(EditorSettings s) {
 // F7: carga settings desde .vxed.json si existe.  Si no, retorna defaults.
 EditorSettings settings_load() {
 	diag_log("settings_load ENTRY");
-	EditorSettings s = new EditorSettings();
-	file_io.FileReader fr = new file_io.FileReader();
-	Result<i64, i32> rload = fr.read_all(".vxed.json");
+	EditorSettings     s     = new EditorSettings();
+	file_io.FileReader fr    = new file_io.FileReader();
+	Result<i64, i32>   rload = fr.read_all(".vxed.json");
 	if (!isOk(rload)) {
 		diag_log("settings_load no se encontro .vxed.json, usando defaults");
 		return s;
@@ -110,14 +110,14 @@ EditorSettings settings_load() {
 			fr.data[i + 3] == 101 && fr.data[i + 4] == 95 && fr.data[i + 12] == 61) {
 			// ASCII '0'=48, '1'=49.
 			if (fr.data[i + 13] == 48) s.show_line_numbers = 0;
-			else s.show_line_numbers                       = 1;
+			else                       s.show_line_numbers = 1;
 		}
 		// "whitespace="
 		if (i < (i32)n - 11 &&
 			fr.data[i] == 119 && fr.data[i + 1] == 104 && fr.data[i + 2] == 105 &&
 			fr.data[i + 3] == 116 && fr.data[i + 10] == 61) {
 			if (fr.data[i + 11] == 48) s.show_whitespace = 0;
-			else s.show_whitespace                       = 1;
+			else                       s.show_whitespace = 1;
 		}
 		// "sidebar="
 		if (i < (i32)n - 8 &&
@@ -125,7 +125,7 @@ EditorSettings settings_load() {
 			fr.data[i + 3] == 101 && fr.data[i + 4] == 98 && fr.data[i + 5] == 97 &&
 			fr.data[i + 6] == 114 && fr.data[i + 7] == 61) {
 			if (fr.data[i + 8] == 48) s.show_sidebar = 0;
-			else s.show_sidebar                      = 1;
+			else                      s.show_sidebar = 1;
 		}
 		i = i + 1;
 	}
@@ -159,16 +159,19 @@ class Sidebar {
 		}
 		i32                           cwd_len = 0_i32;
 		while (cwd_buf[cwd_len] != 0) cwd_len = cwd_len + 1;
-		this.cwd = str_make(cwd_buf, cwd_len);
+		this.cwd                              = str_make(cwd_buf, cwd_len);
 		free(cwd_buf);
-		this.names       = malloc(SB_MAX_ENTRIES * SB_NAME_MAX);
+		// `names` son BYTES -- es un buffer de texto concatenado --, asi que ahi
+		// la cuenta ya esta en elementos.  Los cuatro de abajo son `i32*`: la
+		// cuenta va en ELEMENTOS y el tamano lo pone el tipo, sin el `* 4`.
+		this.names       = malloc<u8>((u64)(SB_MAX_ENTRIES * SB_NAME_MAX));
 		this.names_used  = 0;
 		this.names_cap   = SB_MAX_ENTRIES * SB_NAME_MAX;
-		this.offsets     = malloc(SB_MAX_ENTRIES * 4);
-		this.lens        = malloc(SB_MAX_ENTRIES * 4);
-		this.is_dirs     = malloc(SB_MAX_ENTRIES * 4);
-		this.depths      = malloc(SB_MAX_ENTRIES * 4);
-		this.is_expanded = malloc(SB_MAX_ENTRIES * 4);
+		this.offsets     = malloc<i32>((u64)SB_MAX_ENTRIES);
+		this.lens        = malloc<i32>((u64)SB_MAX_ENTRIES);
+		this.is_dirs     = malloc<i32>((u64)SB_MAX_ENTRIES);
+		this.depths      = malloc<i32>((u64)SB_MAX_ENTRIES);
+		this.is_expanded = malloc<i32>((u64)SB_MAX_ENTRIES);
 		this.count       = 0;
 		this.sel         = 0;
 		this.scroll      = 0;
@@ -198,27 +201,27 @@ class Sidebar {
 		spec[cwd_n] = 92;
 		z           = 0;
 		while (z < rel_n) {
-			u8           c = rel_c[z];
-			if (c == 47) c = 92;
+			u8           c      = rel_c[z];
+			if (c == 47) c      = 92;
 			spec[cwd_n + 1 + z] = c;
 			z                   = z + 1;
 		}
 		spec[cwd_n + 1 + rel_n]     = 92;
 		spec[cwd_n + 1 + rel_n + 1] = 42;
 		spec[cwd_n + 1 + rel_n + 2] = 0;
-		u8* finddata = malloc(FINDDATA_BYTES);
-		i64 h        = file_io.dir_open(spec, finddata);
+		u8* finddata                = malloc(FINDDATA_BYTES);
+		i64 h                       = file_io.dir_open(spec, finddata);
 		free(spec);
 		if (h == -1) {
 			free(finddata);
 			return;
 		}
 		// Coleccionar hijos en arrays locales (insertaremos despues).
-		u8*  child_buf   = malloc(64 * SB_NAME_MAX);
+		u8*  child_buf   = malloc<u8>((u64)(64 * SB_NAME_MAX));
 		i32  child_used  = 0_i32;
-		i32* c_off       = malloc(64 * 4);
-		i32* c_len       = malloc(64 * 4);
-		i32* c_dir       = malloc(64 * 4);
+		i32* c_off       = malloc<i32>(64);
+		i32* c_len       = malloc<i32>(64);
+		i32* c_dir       = malloc<i32>(64);
 		i32  child_count = 0_i32;
 		i32  cont        = 1_i32;
 		while (cont == 1 && child_count < 64) {
@@ -281,7 +284,7 @@ class Sidebar {
 		}
 		// añadir hijos al names buffer y registrar.
 		i32 child_depth = this.depths[idx] + 1;
-		i = 0;
+		i               = 0;
 		while (i < child_count) {
 			i32 cn  = c_len[i];
 			i32 src = c_off[i];
@@ -339,7 +342,7 @@ class Sidebar {
 		this.count                           = this.count - n_remove;
 		this.is_expanded[idx]                = 0;
 		if (this.sel >= this.count) this.sel = this.count - 1;
-		if (this.sel < 0) this.sel           = 0;
+		if (this.sel < 0)           this.sel = 0;
 	}
 
 	// Recarga las entradas leyendo `this.cwd`.
@@ -401,7 +404,7 @@ class Sidebar {
 		file_io.dir_close(h);
 		free(finddata);
 		if (this.sel >= this.count) this.sel = this.count - 1;
-		if (this.sel < 0) this.sel           = 0;
+		if (this.sel < 0)           this.sel = 0;
 		this.scroll                          = 0;
 	}
 
@@ -431,14 +434,14 @@ class Sidebar {
 			k      = k + 1;
 		}
 		buf[cwd_n] = (u8)92; // '\'
-		u8* nm = this.names + this.offsets[i];
-		k = 0;
+		u8* nm     = this.names + this.offsets[i];
+		k          = 0;
 		while (k < en) {
 			buf[cwd_n + 1 + k] = nm[k];
 			k                  = k + 1;
 		}
 		buf[cwd_n + 1 + en] = 0;
-		string s = str_make(buf, (u64)(cwd_n + 1 + en));
+		string s            = str_make(buf, (u64)(cwd_n + 1 + en));
 		free(buf);
 		return s;
 	}
@@ -471,19 +474,19 @@ void render_tab_bar(tabs.Workspace ws, screen.Screen sc) {
 	diag_log("RTB:3 active_id=${active_id}");
 	// Busca el head (count-1 retrocesos desde la activa).
 	tabs.EditorTab head = active;
-	i32 back = 0_i32;
+	i32            back = 0_i32;
 	while (back < ws.count - 1) {
 		head = head.prev;
 		back = back + 1;
 	}
 	diag_log("RTB:4 head-found");
-	tabs.EditorTab cur = head;
-	i32 idx      = 1_i32;
-	i32 max_col  = sc.cols;
-	i32 col_used = 0_i32;
+	tabs.EditorTab cur      = head;
+	i32            idx      = 1_i32;
+	i32            max_col  = sc.cols;
+	i32            col_used = 0_i32;
 	while (idx <= ws.count) {
 		diag_log("RTB:5 iter idx=${idx}");
-		string mark = "";
+		string                  mark = "";
 		if (cur.buf.dirty == 1) mark = "*";
 		diag_log("RTB:6 pre-label cur_id=${cur.id}");
 		string label = " ${idx} ${cur.title}${mark} ";
@@ -517,9 +520,9 @@ void render_sidebar(Sidebar sb, screen.Screen sc) {
 	i32 body_bot = sc.rows - 1;
 	i32 list_h   = body_bot - body_top + 1;
 	// Auto-scroll para mantener sel visible.
-	if (sb.sel < sb.scroll) sb.scroll           = sb.sel;
+	if (sb.sel < sb.scroll)           sb.scroll = sb.sel;
 	if (sb.sel >= sb.scroll + list_h) sb.scroll = sb.sel - list_h + 1;
-	if (sb.scroll < 0) sb.scroll                = 0;
+	if (sb.scroll < 0)                sb.scroll = 0;
 
 	// Paleta Dracula para entries del sidebar:
 	//   dir         -> pink "+" + cyan nombre (resalta carpetas)
@@ -546,7 +549,7 @@ void render_sidebar(Sidebar sb, screen.Screen sc) {
 			i32 is_sel = 0_i32;
 			if (idx == sb.sel) {
 				if (sb.focused == 1) is_sel = 2;
-				else is_sel = 1;
+				else                 is_sel = 1;
 			}
 			// Cursor SIEMPRE con prefijo ASCII inequivoco:
 			//   is_sel == 2 (sel + focused) -> ">" + ATTR_INVERT (resaltado fuerte)
@@ -566,7 +569,7 @@ void render_sidebar(Sidebar sb, screen.Screen sc) {
 				print(" ");
 			}
 			indent_used = indent_used + 1;
-			i32 ii = 0_i32;
+			i32 ii      = 0_i32;
 			while (ii < depth) {
 				print("  ");
 				indent_used = indent_used + 2;
@@ -676,17 +679,17 @@ void draw_full(tabs.Workspace ws, Sidebar sb, screen.Screen sc, i32 view_rows,
 	string status_msg, syntax.SyntaxHighlighter hl,
 	EditorSettings settings) {
 	if (ws.active == null) return;
-	tabs.EditorTab t = ws.active;
-	buffer.Buffer b  = t.buf;
-	i32 row_top = t.row_top;
+	tabs.EditorTab t       = ws.active;
+	buffer.Buffer  b       = t.buf;
+	i32            row_top = t.row_top;
 
-	i32 base_left = 1_i32;
+	i32                  base_left = 1_i32;
 	if (sb.visible == 1) base_left = sb.width + 1;
 	// F8: gutter de line numbers ocupa 6 cols ("NNNN | ").  Ajusta dinamico
 	// si el archivo es muy grande (>9999 lineas).
 	i32 gutter_w = 0_i32;
 	if (settings.show_line_numbers == 1) {
-		gutter_w = 6;
+		gutter_w                                    = 6;
 		i32                             total_lines = b.line_count();
 		if (total_lines >= 100_000)     gutter_w    = 8;
 		else if (total_lines >= 10_000) gutter_w    = 7;
@@ -806,15 +809,15 @@ void draw_full(tabs.Workspace ws, Sidebar sb, screen.Screen sc, i32 view_rows,
 	// 4. Status bar (ultima fila).
 	sc.move_cursor(sc.rows, 1);
 	print(screen.ATTR_INVERT);
-	i32    line  = b.cursor_row() + 1;
-	i32    col   = b.cursor_col() + 1;
-	i32    total = b.line_count();
-	string mark  = " ";
-	if (b.dirty == 1) mark = "*";
+	i32               line  = b.cursor_row() + 1;
+	i32               col   = b.cursor_col() + 1;
+	i32               total = b.line_count();
+	string            mark  = " ";
+	if (b.dirty == 1) mark  = "*";
 	// Selection info: si hay seleccion activa, mostrar el conteo.
 	string sel_info = "";
 	if (b.sel_active() == 1) {
-		i32 sn = b.sel_end() - b.sel_start();
+		i32 sn   = b.sel_end() - b.sel_start();
 		sel_info = "  Sel:${sn}B";
 	}
 	print(" ${mark} ${t.title}  L${line}:C${col}/${total}${sel_info}  ${status_msg} ");
@@ -839,7 +842,7 @@ void snapshot(
 string prompt(screen.Screen sc, string label) {
 	u8* buf = malloc(256);
 	i32 n   = 0_i32;
-	buf[0] = 0;
+	buf[0]  = 0;
 	sc.show_cursor();
 	while (1) {
 		sc.move_cursor(sc.rows, 1);
@@ -858,7 +861,7 @@ string prompt(screen.Screen sc, string label) {
 
 		i32 k = input.read_key_blocking();
 		if (k == keys.KEY_ENTER || k == keys.KEY_LF) {
-			buf[n] = 0;
+			buf[n]        = 0;
 			string result = str_make(buf, n);
 			free(buf);
 			sc.hide_cursor();
@@ -896,9 +899,9 @@ class HelpEntry {
 
 HelpEntry he_make(i32 kind, string label, string desc) {
 	HelpEntry e = new HelpEntry();
-	e.kind  = kind;
-	e.label = label;
-	e.desc  = desc;
+	e.kind      = kind;
+	e.label     = label;
+	e.desc      = desc;
 	return e;
 }
 
@@ -988,16 +991,16 @@ void show_help_render_entry(i32 row, i32 left, i32 inner_w, HelpEntry e,
 }
 
 void show_help_overlay(screen.Screen sc) {
-	i32 box_w = 70_i32;
-	if (box_w > sc.cols - 4) box_w = sc.cols - 4;
-	if (box_w < 40) box_w = 40;
-	i32             box_h = 26_i32;
-	if (box_h > sc.rows - 4) box_h = sc.rows - 4;
-	i32           top     = (sc.rows - box_h) / 2 + 1;
-	i32           left    = (sc.cols - box_w) / 2 + 1;
-	if (top < 1)  top     = 1;
-	if (left < 1) left    = 1;
-	i32           inner_w = box_w - 2;
+	i32                      box_w   = 70_i32;
+	if (box_w > sc.cols - 4) box_w   = sc.cols - 4;
+	if (box_w < 40)          box_w   = 40;
+	i32                      box_h   = 26_i32;
+	if (box_h > sc.rows - 4) box_h   = sc.rows - 4;
+	i32                      top     = (sc.rows - box_h) / 2 + 1;
+	i32                      left    = (sc.cols - box_w) / 2 + 1;
+	if (top < 1)             top     = 1;
+	if (left < 1)            left    = 1;
+	i32                      inner_w = box_w - 2;
 
 	string col_kw   = "\x1b[38;2;255;121;198m"; // pink labels
 	string col_sec  = "\x1b[38;2;139;233;253m"; // cyan section
@@ -1032,77 +1035,77 @@ void show_help_overlay(screen.Screen sc) {
 		"Backspace / Delete",
 		"borrar caracter / seleccion"
 	);
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-X / Ctrl-C / V", "cortar / copiar / pegar");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-U", "pegar (alias Ctrl-V)");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-K", "cortar linea actual");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-D", "duplicar linea actual");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "F4", "toggle comentario //");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-Z / Ctrl-Y", "undo / redo");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(2, "", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(1, "Archivo y busqueda", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-S", "guardar fichero actual");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-O", "guardar como (prompt)");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-F", "buscar texto (prompt)");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "F3", "buscar siguiente");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-G", "ir a linea N");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(2, "", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(1, "Vista y toggles", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-B", "toggle sidebar");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-E", "toggle line numbers");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-T", "toggle whitespace");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "F6", "ciclar pestanas activa");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Sidebar: Enter", "expand / collapse dir");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(2, "", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(1, "Navegacion y edicion avanzada", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-P", "fuzzy file picker");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-Up / Ctrl-Down", "agregar multicursor");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "F5", "autocomplete popup");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Tab (en popup)", "aceptar sugerencia");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(2, "", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(1, "Pestanas", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-N", "nueva pestana");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-W", "cerrar pestana actual");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-PgUp / PgDn", "pestana prev / sig");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(2, "", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(1, "Salir", "");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Ctrl-Q", "salir del editor");
-	n          = n + 1;
+	n = n + 1;
 	entries[n] = he_make(0, "Esc", "cancelar seleccion / prompt");
-	n          = n + 1;
+	n = n + 1;
 	i32 entry_count = n;
 
 	// Reservar 1 row para titulo, 1 borde superior, 1 borde inferior y
@@ -1134,7 +1137,7 @@ void show_help_overlay(screen.Screen sc) {
 		print(screen.ATTR_RESET);
 		print(col_bord);
 		i32 rpad = inner_w - lpad - tlen;
-		i2 = 0;
+		i2       = 0;
 		while (i2 < rpad) {
 			print("-");
 			i2 = i2 + 1;
@@ -1212,7 +1215,7 @@ void show_help_overlay(screen.Screen sc) {
 			scroll_off = scroll_off + content_h - 2;
 			if (scroll_off > max_scroll) scroll_off = max_scroll;
 		} else if (k == keys.VK_PGUP) {
-			scroll_off = scroll_off - (content_h - 2);
+			scroll_off                     = scroll_off - (content_h - 2);
 			if (scroll_off < 0) scroll_off = 0;
 		} else if (k == keys.VK_HOME) {
 			scroll_off = 0;
@@ -1255,13 +1258,13 @@ i32 g_diag_sink = 0_i32;
 void diag_log(string msg) {
 	// DIAGNOSTICO FORZADO (bug C): siempre escribe + flush para que el log
 	// tenga el ultimo entry antes del crash.  Sin el gate DEBUG_LOG.
-	g_diag_sink = (i32)msg.bytes();
+	g_diag_sink          = (i32)msg.bytes();
 	Result<i64, i32> rfp = file_io.open_file("vxed_diag.log", "ab");
 	if (!isOk(rfp)) return;
 	i64 fp = value(rfp);
 	file_io.write_bytes(fp, msg.cstr(), (i32)msg.bytes());
 	u8* nl = malloc(1);
-	nl[0] = 10;
+	nl[0]  = 10;
 	file_io.write_bytes(fp, nl, 1);
 	free(nl);
 	file_io.close_file(fp);
@@ -1276,10 +1279,10 @@ tabs.EditorTab make_tab(string path, string display_title) {
 		diag_log("make_tab EARLY_RETURN path vacio");
 		return t;
 	}
-	file_io.FileReader fr = new file_io.FileReader();
-	Result<i64, i32> rload = fr.read_all(path);
+	file_io.FileReader fr    = new file_io.FileReader();
+	Result<i64, i32>   rload = fr.read_all(path);
 	if (isOk(rload)) {
-		i64 n = value(rload);
+		i64 n                = value(rload);
 		make_tab_last_status = n;
 		make_tab_last_err    = 0;
 		diag_log("make_tab leidos ${n} bytes de '${display_title}'");
@@ -1311,9 +1314,9 @@ void duplicate_line(buffer.Buffer b) {
 	i32 start = b.line_offset(row);
 	// line_offset(row+1) apunta al primer byte DESPUES del \n; si no hay
 	// siguiente linea, usar length.
-	i32                next   = b.line_offset(row + 1);
-	if (next <= start) next   = b.length;
-	i32                has_lf = 0_i32;
+	i32                                         next   = b.line_offset(row + 1);
+	if (next <= start)                          next   = b.length;
+	i32                                         has_lf = 0_i32;
 	if (next > start && b.data[next - 1] == 10) has_lf = 1;
 	// Construir el buffer a insertar: la linea + \n garantizado.
 	i32 line_len = next - start;
@@ -1333,9 +1336,9 @@ void duplicate_line(buffer.Buffer b) {
 		b.cursor = next;
 	} else {
 		// sin LF: primero hay que añadir LF entre original y duplicado.
-		b.cursor = next;
+		b.cursor   = next;
 		u8* lf_buf = malloc(1);
-		lf_buf[0] = 10;
+		lf_buf[0]  = 10;
 		b.insert_bytes(lf_buf, 1);
 		free(lf_buf);
 		ins_len = line_len; // ya no añadimos LF en el duplicado
@@ -1355,30 +1358,30 @@ void toggle_comment_line(buffer.Buffer b) {
 	i32 row   = b.cursor_row();
 	i32 start = b.line_offset(row);
 	// Saltar espacios iniciales para detectar "//".
-	i32 i = start;
+	i32 i                                                         = start;
 	while (i < b.length && (b.data[i] == 32 || b.data[i] == 9)) i = i + 1;
-	i32 has_slashes = 0_i32;
+	i32 has_slashes                                               = 0_i32;
 	if (i + 1 < b.length && b.data[i] == 47 && b.data[i + 1] == 47) {
 		has_slashes = 1;
 	}
 	if (has_slashes == 1) {
 		// Quitar "//" (y un espacio adicional si existe).
-		i32 rm = 2_i32;
+		i32                                          rm = 2_i32;
 		if (i + 2 < b.length && b.data[i + 2] == 32) rm = 3;
 		b.delete_range(i, i + rm);
 	} else {
 		// Insertar "// " en la primera columna no-blanco (col i).
-		u8* tag = malloc(3);
-		tag[0] = 47;
-		tag[1] = 47;
-		tag[2] = 32; // "// "
+		u8* tag   = malloc(3);
+		tag[0]    = 47;
+		tag[1]    = 47;
+		tag[2]    = 32; // "// "
 		i32 saved = b.cursor;
-		b.cursor = i;
+		b.cursor  = i;
 		b.insert_bytes(tag, 3);
 		free(tag);
 		// Ajustar cursor saved si estaba despues del punto de insercion.
 		if (saved >= i) saved = saved + 3;
-		b.cursor = saved;
+		b.cursor              = saved;
 	}
 	b.sel_clear();
 	b.dirty = 1;
@@ -1388,7 +1391,7 @@ i32 main() {
 	screen.Screen sc = new screen.Screen();
 
 	// ---------- F2: Launcher TUI inicial ----------
-	launcher.Launcher lc       = new launcher.Launcher();
+	launcher.Launcher       lc = new launcher.Launcher();
 	launcher.LauncherResult lr = lc.run(sc);
 	if (lr.mode == launcher.LR_CANCEL) {
 		sc.show_cursor();
@@ -1436,8 +1439,8 @@ i32 main() {
 	// F4: multicursor state.
 	multicursor.MultiCursor mc = new multicursor.MultiCursor();
 	// F5: autocomplete.  Index se reconstruye al abrir/saltar tab.
-	autocomplete.AutoComplete ac = new autocomplete.AutoComplete();
-	i32 ac_dirty = 1_i32; // flag: hay que reindex en el siguiente uso.
+	autocomplete.AutoComplete ac       = new autocomplete.AutoComplete();
+	i32                       ac_dirty = 1_i32; // flag: hay que reindex en el siguiente uso.
 	// F7: cargar settings persistentes desde .vxed.json (cwd-local).  Si
 	// el fichero no existe, usa defaults (show_line_numbers=1, show_ws=0).
 	EditorSettings settings = settings_load();
@@ -1464,30 +1467,30 @@ i32 main() {
 	i32 loop_iter = 0_i32;
 	while (quit == 0) {
 		tabs.EditorTab tab = ws.active;
-		buffer.Buffer b    = tab.buf;
+		buffer.Buffer  b   = tab.buf;
 		loop_iter          = loop_iter + 1;
 		diag_log("LOOP iter=${loop_iter} title='${tab.title}' length=${b.length} lines=${b.line_count()}");
-		history.SnapshotStack st = tab.undo;
-		history.SnapshotStack rd = tab.redo;
-		i32 row_top = tab.row_top;
+		history.SnapshotStack st      = tab.undo;
+		history.SnapshotStack rd      = tab.redo;
+		i32                   row_top = tab.row_top;
 
 		// Refrescar viewport.
 		i32                                 cur_row = b.cursor_row();
 		if (cur_row < row_top)              row_top = cur_row;
 		if (cur_row >= row_top + view_rows) row_top = cur_row - view_rows + 1;
-		tab.row_top = row_top;
+		tab.row_top                                 = row_top;
 
 		draw_full(ws, sb, sc, view_rows, status_msg, hl, settings);
 
-		i32 editor_left = 1_i32;
+		i32                  editor_left = 1_i32;
 		if (sb.visible == 1) editor_left = sb.width + 1;
 		// F8: descontar el ancho del gutter para que el cursor caiga sobre el
 		// caracter correcto del editor body.
 		if (settings.show_line_numbers == 1) {
-			i32                             gutter_w    = 6_i32;
+			i32                             gutter_w = 6_i32;
 			i32                             total_lines = b.line_count();
-			if (total_lines >= 100_000)     gutter_w    = 8;
-			else if (total_lines >= 10_000) gutter_w    = 7;
+			if (total_lines >= 100_000)     gutter_w = 8;
+			else if (total_lines >= 10_000) gutter_w = 7;
 			editor_left = editor_left + gutter_w;
 		}
 		if (sb.focused == 1) {
@@ -1533,8 +1536,8 @@ i32 main() {
 							while (cut > 0 && c[cut - 1] != (u8)92) cut = cut - 1;
 							if (cut > 0) cut = cut - 1;
 							if (cut > 0) sb.cwd = str_make(c, cut);
-							sb.sel              = 0;
-							sb.scroll           = 0;
+							sb.sel = 0;
+							sb.scroll = 0;
 							sb.reload();
 						} else {
 							// F3: toggle expand.
@@ -1545,9 +1548,9 @@ i32 main() {
 							}
 						}
 					} else {
-						string p    = sb.entry_path(sb.sel);
-						string nm   = sb.entry_name(sb.sel);
-						i32    plen = (i32)p.bytes();
+						string         p     = sb.entry_path(sb.sel);
+						string         nm    = sb.entry_name(sb.sel);
+						i32            plen  = (i32)p.bytes();
 						tabs.EditorTab new_t = make_tab(p, nm);
 						ws.open_tab(new_t);
 						tabs.EditorTab chk = ws.active;
@@ -1672,14 +1675,14 @@ i32 main() {
 			} else {
 				// Mostrar popup + loop interno hasta Tab/Esc.
 				ac.popup_active = 1;
-				i32 cur_row    = b.cursor_row();
-				i32 cur_col    = b.cursor_col();
+				i32 cur_row = b.cursor_row();
+				i32 cur_col = b.cursor_col();
 				i32 anchor_row = (cur_row - tab.row_top) + 2;
-				i32 sb_off     = 1_i32;
-				if (sb.visible == 1) sb_off                 = sb.width + 1;
+				i32 sb_off = 1_i32;
+				if (sb.visible == 1) sb_off = sb.width + 1;
 				if (settings.show_line_numbers == 1) sb_off = sb_off + 6;
 				i32 anchor_col = cur_col + sb_off;
-				i32 ac_done    = 0_i32;
+				i32 ac_done = 0_i32;
 				while (ac_done == 0) {
 					ac.render_popup(sc, anchor_row, anchor_col);
 					flush();
@@ -1740,7 +1743,7 @@ i32 main() {
 			}
 			// Indent_end no debe exceder el cursor (no sangra mas alla).
 			if (indent_end > b.cursor) indent_end = b.cursor;
-			i32 indent_n = indent_end - ls;
+			i32                        indent_n   = indent_end - ls;
 			// Smart-indent: si el ultimo char no-blanco de la linea anterior
 			// es `{`, añade 4 spaces extra.  Soporta estilo C/Java/Rust/.
 			i32 extra_indent = 0_i32;
@@ -1751,8 +1754,8 @@ i32 main() {
 				if (ch == 32 || ch == 9) {
 					j = j - 1;
 				} else {
-					if (ch == 123) extra_indent = 4; // '{'
-					j = ls - 1;                      // exit
+					if (ch == 123) extra_indent = 4;      // '{'
+					j                           = ls - 1; // exit
 				}
 			}
 			b.newline();
@@ -1791,7 +1794,7 @@ i32 main() {
 				i32 se = b.sel_end();
 				u8* p  = b.data + ss;
 				clipboard.clip_set(p, se - ss);
-				i32 n = b.delete_selection();
+				i32 n      = b.delete_selection();
 				status_msg = "cortados ${n} bytes";
 			} else {
 				status_msg = "sin seleccion para cortar";
@@ -1810,13 +1813,13 @@ i32 main() {
 		} else if (key == keys.KEY_CTRL_K) {
 			// Cortar linea actual (incluye el \n si no es la ultima).
 			snapshot(b, st, rd);
-			i32 row = b.cursor_row();
-			i32 ls  = b.line_offset(row);
-			i32 le  = b.length;
-			if (row + 1 < b.line_count()) le = b.line_offset(row + 1);
-			u8* p = b.data + ls;
+			i32                           row = b.cursor_row();
+			i32                           ls  = b.line_offset(row);
+			i32                           le  = b.length;
+			if (row + 1 < b.line_count()) le  = b.line_offset(row + 1);
+			u8*                           p   = b.data + ls;
 			clipboard.clip_set(p, le - ls);
-			i32 n = b.delete_range(ls, le);
+			i32 n      = b.delete_range(ls, le);
 			status_msg = "linea cortada (${n} bytes)";
 		} else if (key == keys.KEY_CTRL_S) {
 			Result<i64, i32> rsave = file_io.save_buffer(tab.title, b);
@@ -1842,7 +1845,7 @@ i32 main() {
 		} else if (key == keys.KEY_CTRL_F) {
 			string needle = prompt(sc, "Buscar");
 			if (needle.bytes() > 0) {
-				tab.last_needle = needle;
+				tab.last_needle  = needle;
 				i64          idx = search.find_from(b, needle, b.cursor + 1);
 				if (idx < 0) idx = search.find(b, needle); // wrap
 				if (idx < 0) {

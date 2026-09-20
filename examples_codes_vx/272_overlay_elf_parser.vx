@@ -10,7 +10,7 @@
 // Todo con offset/stride RUNTIME.  `main` solo abre el fichero, itera y lee.
 //
 // SEGURIDAD: cada acceso a un array se COMPRUEBA en el lenguaje con
-// `in_bounds(campo, size)` contra el tamano real del fichero.
+// `overlay.in_bounds(campo, size)` contra el tamano real del fichero.
 //
 // La salida es legible por maquina; el harness tests/vx/elf_parser_test.py la
 // valida contra un parseo INDEPENDIENTE (no circular).  interp/JIT/AOT.
@@ -42,10 +42,10 @@ struct Elf64_Shdr {
 	u64 sh_addralign @0x30;
 	u64 sh_entsize   @0x38;
 	// Nombre de la seccion: cstring en (base + strtab + sh_name).  Alcanza la
-	// .shstrtab del Ehdr CONTENEDOR via parent<Elf64_Ehdr>() y su metodo strtab().
+	// .shstrtab del Ehdr CONTENEDOR via type.parent<Elf64_Ehdr>() y su metodo strtab().
 	u8 name @offset {
-		return (u64)parent<Elf64_Ehdr>()
-			+ parent<Elf64_Ehdr>().strtab()
+		return (u64)type.parent<Elf64_Ehdr>()
+			+ type.parent<Elf64_Ehdr>().strtab()
 			+ (u64)this.sh_name;
 	};
 }
@@ -76,7 +76,7 @@ struct Elf64_Ehdr {
 	// e_shstrndx).  Lo usan el resolver de nombre de Shdr y strtab_base.
 	public u64 strtab() => (u64)this.Shdrs[(i32)this.e_shstrndx].sh_offset;
 	// Campo-resolver: su DIRECCION es la base de la .shstrtab.
-	// `offsetof(eh.strtab_base)` da ese offset.
+	// `field.offset(eh.strtab_base)` da ese offset.
 	u8 strtab_base @offset { return base + this.strtab(); };
 }
 
@@ -123,12 +123,12 @@ i32 main() {
 	println("E_SHSTRNDX=${eh.e_shstrndx}");
 
 	// offset de la .shstrtab, resuelto declarativamente por el resolver.
-	println("STRTAB_OFF=${offsetof(eh.strtab_base)}");
+	println("STRTAB_OFF=${field.offset(eh.strtab_base)}");
 
 	// --- program headers (cada acceso comprobado) ---
 	i32 i = 0_i32;
 	while ((u32)i < (u32)eh.e_phnum) {
-		if (!in_bounds(eh.Phdrs[i].p_align, size)) {
+		if (!overlay.in_bounds(eh.Phdrs[i].p_align, size)) {
 			g_faults = g_faults + 1;
 			println("PHDR ${i} FUERA-DE-RANGO");
 		} else {
@@ -140,7 +140,7 @@ i32 main() {
 	// --- section headers (con NAMEOFF; comprobados) ---
 	i = 0;
 	while ((u32)i < (u32)eh.e_shnum) {
-		if (!in_bounds(eh.Shdrs[i].sh_entsize, size)) {
+		if (!overlay.in_bounds(eh.Shdrs[i].sh_entsize, size)) {
 			g_faults = g_faults + 1;
 			println("SHDR ${i} FUERA-DE-RANGO");
 		} else {
@@ -150,7 +150,7 @@ i32 main() {
 	}
 
 	// --- nombres de seccion: el nombre es un campo-resolver de Shdr (alcanza la
-	//     .shstrtab del Ehdr via parent), simetrico con el dll_name del PE ---
+	//     .shstrtab del Ehdr via type.parent), simetrico con el dll_name del PE ---
 	print("secciones:");
 	i = 0;
 	while ((u32)i < (u32)eh.e_shnum) {

@@ -5,7 +5,7 @@ namespace ejemplos.metaprog_completa;
 // (1) `comptime NAME = expr;` local (dentro de funciones)
 // (2) `comptime { ... }` bloque scope para constantes / asserts compile-time
 // (3) `comptime for (i in lo..hi) { body }` loop unrolled, i const por iter
-// (4) Operadores string compile-time: comptime_concat / comptime_streq / comptime_strlen
+// (4) Operadores string compile-time: comptime.str.concat / comptime.str.eq / comptime.str.len
 // (5) `comptime T NAME(params) { body }` funciones compile-time recursivas
 
 @Introspect
@@ -32,24 +32,24 @@ comptime i64 pow_int(i64 base, i64 e) {
 }
 
 // --- (1) comptime global con builtins comptime.
-const string TYPE_NAME = typename<Vec3>();
-const u64    TYPE_SZ   = sizeof<Vec3>();
+const string TYPE_NAME = type.name<Vec3>();
+const u64    TYPE_SZ   = type.size<Vec3>();
 const u64    F10       = fact(10); // 3628800
 const u64    F15       = fib(15);  // 610
 
 // --- (4) Operadores string.
 const string PREFIX       = "vec_";
-const string COMBINED     = comptime_concat(PREFIX, TYPE_NAME); // "vec_Vec3"
-const u64    COMBINED_LEN = comptime_strlen(COMBINED);          // 8
+const string COMBINED     = comptime.str.concat(PREFIX, TYPE_NAME); // "vec_Vec3"
+const u64    COMBINED_LEN = comptime.str.len(COMBINED);             // 8
 
 // --- static_assert sobre todos los anteriores.
 static_assert(F10 == 3_628_800, "fact(10)");
 static_assert(F15 == 610, "fib(15)");
 static_assert(pow_int(2, 12) == 4096, "2^12");
-static_assert(comptime_streq(TYPE_NAME, "Vec3"), "typename");
-static_assert(comptime_streq(COMBINED, "vec_Vec3"), "concat");
+static_assert(comptime.str.eq(TYPE_NAME, "Vec3"), "type.name");
+static_assert(comptime.str.eq(COMBINED, "vec_Vec3"), "concat");
 static_assert(COMBINED_LEN == 8, "strlen");
-static_assert(TYPE_SZ == 24, "sizeof Vec3");
+static_assert(TYPE_SZ == 24, "type.size Vec3");
 
 i32 main() {
 	// --- (1) comptime local con builtins + fns recursivas.
@@ -73,8 +73,8 @@ i32 main() {
 	// comptime for + comptime dentro del body (cada iter es scope nuevo).
 	i64 product = 1_i64;
 	comptime for (j in 2..=5) {
-		comptime i64 SQ = j * j; // j const en cada iter
-		product = product + SQ;  // 4+9+16+25 = 54
+		comptime i64 SQ = j * j;        // j const en cada iter
+		product         = product + SQ; // 4+9+16+25 = 54
 	}
 
 	// Validar todo.

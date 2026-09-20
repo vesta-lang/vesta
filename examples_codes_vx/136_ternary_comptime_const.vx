@@ -20,9 +20,9 @@ struct Token {
 }
 
 // comptime con introspeccion.
-const u64 TOKEN_SZ    = sizeof<Token>();            // 16 (4+pad+8)
-const u64 TOKEN_K_OFF = offsetof<Token>("kind");    // 0
-const u64 TOKEN_P_OFF = offsetof<Token>("payload"); // 8
+const u64 TOKEN_SZ    = type.size<Token>();             // 16 (4+pad+8)
+const u64 TOKEN_K_OFF = field.offset<Token>("kind");    // 0
+const u64 TOKEN_P_OFF = field.offset<Token>("payload"); // 8
 
 // comptime compuestas (usan otras comptime).
 const u64 BUFFER_CAP   = 256_u64;
@@ -33,10 +33,10 @@ const i32 HALF_DEPTH   = MAX_DEPTH / 2; // 16
 // Static asserts: invariantes verificadas al compilar.  Si alguno
 // fallara, el .velb no se generaria.
 static_assert(TOKEN_SZ == 16, "Token debe ocupar 16 bytes");
-static_assert(TOKEN_K_OFF == 0, "Token.kind debe estar en offset 0");
+static_assert(TOKEN_K_OFF == 0, "Token.type.kind debe estar en offset 0");
 static_assert(BUFFER_BYTES <= 8192, "BUFFER_BYTES dentro del limite");
 static_assert(MAX_DEPTH > 0 && MAX_DEPTH <= 64, "MAX_DEPTH en rango valido");
-static_assert(sizeof<i32>() == 4, "i32 portable");
+static_assert(type.size<i32>() == 4, "i32 portable");
 
 i32 main() {
 	// Ternario en var-decl.

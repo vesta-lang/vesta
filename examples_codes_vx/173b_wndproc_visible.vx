@@ -22,7 +22,7 @@ extern "user32.dll" {
 	fn RegisterClassExW(u64 wc_ptr) -> u16;
 	fn CreateWindowExW(u32 ex_style, u64 class_name, u64 win_name,
 		u32 style, i32 x, i32 y, i32 w, i32 h,
-		u64 parent, u64 menu, u64 hinst, u64 lparam) -> u64;
+		u64 type_parent, u64 menu, u64 hinst, u64 lparam) -> u64;
 	fn ShowWindow(u64 hwnd, i32 cmd) -> i32;
 	fn UpdateWindow(u64 hwnd) -> i32;
 	fn SetTimer(u64 hwnd, u64 id, u32 elapse, u64 timer_proc) -> u64;
@@ -84,7 +84,7 @@ i64 my_wnd_proc(u64 hwnd, u32 msg, u64 wparam, i64 lparam) {
 		u64 hdc = BeginPaint(hwnd, (u64)(&ps[0]));
 		// Layout RECT: left/top/right/bottom (16 bytes).
 		u8* rc = (u8*)malloc(16);
-		i = 0;
+		i      = 0;
 		while (i < 16) {
 			rc[i] = 0;
 			i     = i + 1;
@@ -118,7 +118,7 @@ i32 main() {
 
 	// Class name "VxVisible\0" en UTF-16LE (22 bytes incl. NUL).
 	u8* cn = (u8*)malloc(24);
-	i = 0;
+	i      = 0;
 	while (i < 24) {
 		cn[i] = 0;
 		i     = i + 1;
@@ -139,7 +139,7 @@ i32 main() {
 
 	// Window title " - WndProc demo (cierra en 3s)" en UTF-16LE.
 	u8* title = (u8*)malloc(80);
-	i = 0;
+	i         = 0;
 	while (i < 80) {
 		title[i] = 0;
 		i        = i + 1;

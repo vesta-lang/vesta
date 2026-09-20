@@ -19,14 +19,14 @@ namespace ejemplos.conceptos_genericos;
 //   7. Bounds en funcion libre, struct, clase y metodo generico.
 
 // ---- 2: concepto PREDICADO (sobre la introspeccion comptime) -------------
-concept MiNumero<T> = is_numeric<T>();
+concept MiNumero<T> = type.is_numeric<T>();
 
 // ---- 5: COMPOSICION de conceptos (built-in + usuario) --------------------
 concept Ordenable<T> = Comparable<T>() && Sized<T>();
 
 // ---- 3: concepto BLOQUE (logica comptime arbitraria) ---------------------
 concept CabeEnReg<T> {
-	if (is_primitive<T>()) { return sizeof<T>() <= 8; }
+	if (type.is_primitive<T>()) { return type.size<T>() <= 8; }
 	return false;
 }
 

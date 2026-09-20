@@ -10,7 +10,7 @@
 //   * count  = numero de entradas (para bounds; puede ser un hermano).
 //
 // `v.Name[i]` resuelve a `base + pos + i*stride` (escala por el STRIDE, no por
-// sizeof).  Sirve para leer Y escribir.  El stride RUNTIME (leido de un campo)
+// type.size).  Sirve para leer Y escribir.  El stride RUNTIME (leido de un campo)
 // es justo lo que necesitan las tablas de formatos binarios: la tabla de
 // secciones de un PE, los program headers de un ELF (stride = e_phentsize).
 //
@@ -34,25 +34,25 @@ struct ELFish {
 
 i32 main() {
 	// --- stride constante ---
-	u8*  a = (u8*)malloc(128);
-	Fija f = Fija(a);
+	u8*  a    = (u8*)malloc(128);
+	Fija f    = Fija(a);
 	f.count   = (u32)3;
 	f.vals[0] = (u32)10; // 0x10
 	f.vals[1] = (u32)20; // 0x18
 	f.vals[2] = (u32)30; // 0x20
-	u32 sf = f.vals[0] + f.vals[1] + f.vals[2];
+	u32  sf   = f.vals[0] + f.vals[1] + f.vals[2];
 	println("fija: ${f.vals[0]} ${f.vals[1]} ${f.vals[2]}  raw@0x18=${*(u32*)(a + 0x18)}");
 
 	// --- stride runtime (leido de ent_size) ---
-	u8*    b = (u8*)malloc(256);
-	ELFish e = ELFish(b);
+	u8*    b   = (u8*)malloc(256);
+	ELFish e   = ELFish(b);
 	e.tab_off  = (u32)0x20;
 	e.ent_size = (u32)12; // stride runtime
 	e.n        = (u32)3;
 	e.entry[0] = (u32)100; // 0x20
 	e.entry[1] = (u32)200; // 0x2C
 	e.entry[2] = (u32)300; // 0x38
-	u32 se = e.entry[0] + e.entry[1] + e.entry[2];
+	u32    se  = e.entry[0] + e.entry[1] + e.entry[2];
 	println("elf : ${e.entry[0]} ${e.entry[1]} ${e.entry[2]}  raw@0x2C=${*(u32*)(b + 0x2C)}");
 
 	free(a);

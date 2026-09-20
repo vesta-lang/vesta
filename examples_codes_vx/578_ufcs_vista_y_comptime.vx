@@ -11,10 +11,10 @@ namespace ejemplos.ufcs_vista_y_comptime;
 // comprueba aqui, porque es la diferencia entre una vista y una copia.
 //
 // Y una sub-vista se lleva consigo a su CONTENEDOR: el campo `apodo` de abajo
-// resuelve su direccion con `parent<Padre>()`, y da lo mismo calcularla dentro
+// resuelve su direccion con `type.parent<Padre>()`, y da lo mismo calcularla dentro
 // del contenedor que en una funcion libre que recibe la sub-vista suelta.  Es
 // lo que hace posible el parser de ELF -- el nombre de una seccion vive en una
-// tabla del ENCABEZADO, no en la seccion --, y hasta ahora `parent<T>()` no se
+// tabla del ENCABEZADO, no en la seccion --, y hasta ahora `type.parent<T>()` no se
 // podia usar dentro de un `namespace`: las referencias del resolver no pasaban
 // por el aplanado, asi que nombraba un tipo con el nombre que ya no tenia y el
 // compilador contestaba que no era un overlay -- senyalando justo al que si lo
@@ -31,7 +31,7 @@ struct Hijo {
 
 	// Su direccion sale del PADRE: el caso del nombre de seccion del ELF.
 	u8 apodo @offset {
-		return (u64)parent<Padre>() + parent<Padre>().tabla() + (u64)this.v;
+		return (u64)type.parent<Padre>() + type.parent<Padre>().tabla() + (u64)this.v;
 	};
 }
 
@@ -53,7 +53,7 @@ i64 sube(Padre p) {
 }
 
 // Una SUB-vista suelta, que sigue alcanzando a su contenedor.
-i64 sitio(Hijo h) => (i64)offsetof(h.apodo);
+i64 sitio(Hijo h) => (i64)field.offset(h.apodo);
 
 const i64 K = 5_i64;
 
@@ -62,10 +62,10 @@ comptime i64 mitad(i64 v) => v / 2;
 comptime i64 resta(i64 a, i64 b) => a - b;
 
 i32 main() {
-	u8* buf = (u8*)malloc(64);
+	u8*   buf        = (u8*)malloc(64);
 	*(u32*)(buf + 0) = 6;
 	*(u32*)(buf + 4) = 1;
-	Padre pa = Padre(buf);
+	Padre pa         = Padre(buf);
 
 	i64 a = pa.lee();  // la vista por el punto             6
 	i64 b = lee(pa);   // la otra grafia, lo mismo          6
@@ -73,7 +73,7 @@ i32 main() {
 	i64 d = lee(pa);   // y lo ve quien tiene la vista      7
 
 	// La sub-vista, dentro del contenedor y suelta en una libre: lo mismo.
-	i64 e = (i64)offsetof(pa.hijos[0].apodo);
+	i64 e = (i64)field.offset(pa.hijos[0].apodo);
 	i64 f = pa.hijos[0].sitio();
 
 	i64 g = K.mitad();       // const comptime de receptor    2

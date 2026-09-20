@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// Concepts + enums: introspeccion `is_enum<T>()`, conceptos built-in `Enum` y
+// Concepts + enums: introspeccion `type.is_enum<T>()`, conceptos built-in `Enum` y
 // `ValuedEnum`, concepto de usuario apoyado en la introspeccion, y un enum con
 // backing entero satisfaciendo su concepto de backing (`Numeric`).
 // -----------------------------------------------------------------------------
@@ -20,8 +20,8 @@ enum Shape {
 	Square(i32, i32)
 } // ADT (tagged union)
 
-// Concepto de USUARIO apoyado en el builtin comptime `is_enum`.
-concept AnyEnum<T> = is_enum<T>();
+// Concepto de USUARIO apoyado en el builtin comptime `type.is_enum`.
+concept AnyEnum<T> = type.is_enum<T>();
 
 // Generica restringida por el concepto de usuario.
 i32 mark<T: AnyEnum>(T x) => 1;
@@ -38,11 +38,11 @@ i32 as_num<T: Numeric>(T x) => (i32)x;
 i32 main() {
 	i32 acc = 0_i32;
 
-	// is_enum<T>() en compile-time sobre cada categoria de enum + un no-enum.
-	if (is_enum<Dir>()) { acc++; }           // valued int  -> 1
-	if (is_enum<Verb>()) { acc = acc + 2; }  // valued str  -> 3
-	if (is_enum<Shape>()) { acc = acc + 4; } // ADT         -> 7
-	if (is_enum<i32>()) { acc = acc + 99; }  // no-enum     -> no suma
+	// type.is_enum<T>() en compile-time sobre cada categoria de enum + un no-enum.
+	if (type.is_enum<Dir>()) { acc++; }           // valued int  -> 1
+	if (type.is_enum<Verb>()) { acc = acc + 2; }  // valued str  -> 3
+	if (type.is_enum<Shape>()) { acc = acc + 4; } // ADT         -> 7
+	if (type.is_enum<i32>()) { acc = acc + 99; }  // no-enum     -> no suma
 
 	// Concepto de usuario AnyEnum como bound (ADT y valued-string).
 	acc = acc + mark(Shape.Circle(5)); // 8

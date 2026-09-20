@@ -201,8 +201,8 @@ public void __vx_longjmp(i64 buf, i64 val) {
 
 // push: frame.prev = top; frame.type = type; top = frame.
 public void __vx_push_frame(i64 frame, i64 type) {
-	i64 base = (i64)section_start(".vxexc");
-	i64 top  = *((i64*)(base));
+	i64 base                       = (i64)section_start(".vxexc");
+	i64 top                        = *((i64*)(base));
 	*((i64*)(frame + VX_PREV_OFF)) = top;
 	*((i64*)(frame + VX_TYPE_OFF)) = type;
 	*((i64*)(base))                = frame;
@@ -255,10 +255,10 @@ public void __uncaught() {
 // con el mismo (value, type) tras popear su frame -> longjmp al frame externo
 // (propagacion).  Sin frame, la lanzo alguien y no la recogio nadie.
 public void __vx_throw(i64 value, i64 type_id) {
-	i64 base = (i64)section_start(".vxexc");
+	i64 base                     = (i64)section_start(".vxexc");
 	*((i64*)(base + VX_PTR))     = value;
 	*((i64*)(base + 2 * VX_PTR)) = type_id;
-	i64 top = *((i64*)(base));
+	i64 top                      = *((i64*)(base));
 	if (top != 0) {
 		__vx_longjmp(top, 1);
 	}

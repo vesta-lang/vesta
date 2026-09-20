@@ -2,7 +2,7 @@ namespace ejemplos.comptime_introspect3;
 
 // introspeccion comptime: 3 caracteristicas avanzadas.
 //
-// (A) field_get<T>(obj, "f") / field_set<T>(obj, "f", v)
+// (A) field.get<T>(obj, "f") / field.set<T>(obj, "f", v)
 //     Acceso directo a campos via offset compile-time, bypass de
 //     getfield/setfield (sin propiedades, sin RMW bit fields).
 //
@@ -10,7 +10,7 @@ namespace ejemplos.comptime_introspect3;
 //     Si cond es comptime-evaluable, el lowering descarta la rama
 //     no tomada completamente -- 0 branches y 0 phi nodes en el IR.
 //
-// (C) for_each_field<T>(callback) / for_each_method<T>(callback)
+// (C) field.each<T>(callback) / method.each<T>(callback)
 //     Loop completamente unrolled en compile-time: el callback se
 //     invoca UNA VEZ por cada field/method del tipo.
 
@@ -27,37 +27,37 @@ class Caja {
 }
 
 i32 main() {
-	// Bloque A: field_get / field_set.
+	// Bloque A: field.get / field.set.
 	Punto p  = {10, 20, 30};
-	i32   a1 = field_get<Punto>(p, "x"); // 10
-	field_set<Punto>(p, "y", 200);
-	i32                        a2      = field_get<Punto>(p, "y"); // 200
+	i32   a1 = field.get<Punto>(p, "x"); // 10
+	field.set<Punto>(p, "y", 200);
+	i32                        a2      = field.get<Punto>(p, "y"); // 200
 	i32                        score_a = 0_i32;
 	if (a1 == 10 && a2 == 200) score_a = 14;
 
 	// Bloque B: comptime if.
 	i32 score_b = 0_i32;
-	comptime if (sizeof<Punto>() >= 12 && is_struct<Punto>()) {
+	comptime if (type.size<Punto>() >= 12 && type.is_struct<Punto>()) {
 		score_b = 14; // rama tomada en compile-time
 	} else {
 		score_b = 0; // descartada
 	}
 	// Anidado.
-	comptime if (kind<i32>() == 0) {
-		comptime if (alignof<i32>() == 4) {
+	comptime if (type.kind<i32>() == 0) {
+		comptime if (type.align<i32>() == 4) {
 			score_b = score_b + 0;
 		} else {
 			score_b = score_b - 100; // descartada
 		}
 	}
 
-	// Bloque C: for_each_field + for_each_method.
+	// Bloque C: field.each + method.each.
 	i32 nf = 0_i32;
-	for_each_field<Punto>((string fname) => {
+	field.each<Punto>((string fname) => {
 			nf = nf + 1; // 3 iteraciones (x, y, z)
 		});
 	i32 nm = 0_i32;
-	for_each_method<Caja>((string mname) => {
+	method.each<Caja>((string mname) => {
 			nm = nm + 1; // 2 iteraciones (op, op2)
 		});
 	i32                     score_c = 0_i32;

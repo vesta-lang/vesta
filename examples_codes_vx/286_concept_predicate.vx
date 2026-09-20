@@ -14,9 +14,9 @@ enum Op : u8 {
 } // C-style con valor
 
 // Concepto de usuario apoyado en la introspeccion.
-concept AnyEnum<T> = is_enum<T>();
+concept AnyEnum<T> = type.is_enum<T>();
 // Concepto de usuario que COMPONE otros conceptos.
-concept IntEnum<T> = is_enum<T>() && Numeric<T>();
+concept IntEnum<T> = type.is_enum<T>() && Numeric<T>();
 
 i32 main() {
 	i32 acc = 0_i32;
@@ -33,7 +33,7 @@ i32 main() {
 	// Concepto de usuario como predicado.
 	if (AnyEnum<Shape>()) { acc = acc + 8; } // 16
 
-	// Concepto de usuario que compone (is_enum && Numeric): Op cumple, Shape no.
+	// Concepto de usuario que compone (type.is_enum && Numeric): Op cumple, Shape no.
 	if (IntEnum<Op>()) { acc = acc + 8; }     // 24
 	if (IntEnum<Shape>()) { acc = acc + 99; } // NO (Shape ADT no es Numeric)
 

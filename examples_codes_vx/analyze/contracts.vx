@@ -131,8 +131,8 @@ struct Contador {
 //
 //  `when:` toma la expresion de @Target (os:/arch:/cpu:/mode:/compiler/vm, con
 //  &&, || , ! y parentesis) Y los predicados sobre los type params
-//  (is_float<T>(), is_integer<T>(), is_pointer<T>(), is_signed<T>(),
-//  sizeof<T>() OP N).  Va SIN comillas: asi el IDE lo ve como una expresion y
+//  (type.is_float<T>(), type.is_integer<T>(), type.is_pointer<T>(), type.is_signed<T>(),
+//  type.size<T>() OP N).  Va SIN comillas: asi el IDE lo ve como una expresion y
 //  no como una cadena.  Sin `when:`, el contrato aplica siempre.
 //
 //  Cada atomo se resuelve donde tiene respuesta: los del target al compilar,
@@ -148,10 +148,10 @@ struct Caja<T> {
 	@nothrow
 	@nopanic
 	@alloc(0)
-	@complexity(total_post: O(1), when: is_integer<T>())
-	@complexity(total_post: O(n), when: is_float<T>())
+	@complexity(total_post: O(1), when: type.is_integer<T>())
+	@complexity(total_post: O(n), when: type.is_float<T>())
 	public T sumar(T d) {
-		if (is_float<T>()) {
+		if (type.is_float<T>()) {
 			T   acc = this.v;
 			i64 i   = 0_i64;
 			while (i < 3) {
@@ -169,7 +169,7 @@ struct Caja<T> {
 //
 //     @complexity(total_post: O(n), when: arch:x86_64)
 //     @complexity(total_post: O(1), when: arch:arm64)
-//     @complexity(total_post: O(n), when: arch:x86_64 && is_float<T>())
+//     @complexity(total_post: O(n), when: arch:x86_64 && type.is_float<T>())
 //
 // Ejemplo real: `atomic<T>::swap` de la stdlib.  En x86-64 no hay instruccion
 // de exchange y se hace con un bucle CAS -> O(n) sobre los reintentos; en

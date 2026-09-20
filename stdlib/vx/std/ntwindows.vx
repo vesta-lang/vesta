@@ -127,7 +127,7 @@ public typedef UNICODE_STRING* PUNICODE_STRING;
 
 /**
  * Descriptor del objeto sobre el que actua una syscall que abre o crea
- * (OBJECT_ATTRIBUTES de ntdef.h).  `Length` debe valer sizeof(OBJECT_ATTRIBUTES)
+ * (OBJECT_ATTRIBUTES de ntdef.h).  `Length` debe valer type.size(OBJECT_ATTRIBUTES)
  * -- lo rellena InitializeObjectAttributes.
  */
 public struct OBJECT_ATTRIBUTES {

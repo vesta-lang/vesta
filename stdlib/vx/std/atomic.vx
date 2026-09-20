@@ -523,7 +523,7 @@ namespace std.atomic;
 // @par Que anchos se admiten: lo decide la INTROSPECCION, en comptime
 // Una operacion atomica existe para los anchos que la CPU sabe hacer
 // indivisibles, no para cualquier tipo.  En vez de fijar un ancho y castear
-// (que gastaria memoria y mentiria), cada metodo pregunta por `sizeof<T>()` y
+// (que gastaria memoria y mentiria), cada metodo pregunta por `type.size<T>()` y
 // elige.  Si no hay operacion para ese ancho, `static_assert` para la
 // compilacion con un mensaje que dice por que -- nunca se emite un atomico que
 // no lo sea.
@@ -581,7 +581,7 @@ struct atomic<T: Scalar> {
 
 	// Los valores cruzan a la primitiva con `bitcast`, no con el cast `(i64) v`:
 	// el cast convierte el VALOR (un f64 1.5 se volveria el entero 1) y aqui hay
-	// que mover los BITS tal cual.  Como `sizeof<T>() == 8` esta garantizado por
+	// que mover los BITS tal cual.  Como `type.size<T>() == 8` esta garantizado por
 	// el guard, el bitcast es siempre legal -- y entre tipos del mismo ancho es
 	// un `mov`: coste cero.  Asi un `atomic<f64>` funciona igual que un
 	// `atomic<i64>` sin una sola linea de caso especial.
@@ -598,8 +598,8 @@ struct atomic<T: Scalar> {
 		total_post:   O(1)
 	)
 		public T __deref__() {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		return atomic_load(&this.cell);
 	}
@@ -616,8 +616,8 @@ struct atomic<T: Scalar> {
 		total_post:   O(1)
 	)
 		public T __assign__(T v) {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		atomic_store(&this.cell, v);
 		return v;
@@ -649,27 +649,27 @@ struct atomic<T: Scalar> {
 	@nopanic
 	@alloc(partial: 0, total: 0)
 	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+	@stack(partial: 0, total: 24, when: arch:arm64 && type.is_integer<T>())
+	@stack(partial: 0, total: 32, when: arch:arm64 && type.is_float<T>())
 	@complexity(
 		partial_pre:  O(1),
 		partial_post: O(1),
 		total_pre:    O(1),
 		total_post:   O(1),
-		when:         is_integer<T>()
+		when:         type.is_integer<T>()
 	)
 	@complexity(
 		partial_pre:  O(n),
 		partial_post: O(n),
 		total_pre:    O(n),
 		total_post:   O(n),
-		when:         is_float<T>()
+		when:         type.is_float<T>()
 	)
 		public T fetch_add(T d) where T: Numeric {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
-		if (is_float<T>()) {
+		if (type.is_float<T>()) {
 			while (true) {
 				T viejo = this.load();
 				if (this.compare_exchange(viejo, viejo + d)) { return viejo; }
@@ -684,27 +684,27 @@ struct atomic<T: Scalar> {
 	@nopanic
 	@alloc(partial: 0, total: 0)
 	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+	@stack(partial: 0, total: 24, when: arch:arm64 && type.is_integer<T>())
+	@stack(partial: 0, total: 32, when: arch:arm64 && type.is_float<T>())
 	@complexity(
 		partial_pre:  O(1),
 		partial_post: O(1),
 		total_pre:    O(1),
 		total_post:   O(1),
-		when:         is_integer<T>()
+		when:         type.is_integer<T>()
 	)
 	@complexity(
 		partial_pre:  O(n),
 		partial_post: O(n),
 		total_pre:    O(n),
 		total_post:   O(n),
-		when:         is_float<T>()
+		when:         type.is_float<T>()
 	)
 		public T fetch_sub(T d) where T: Numeric {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
-		if (is_float<T>()) {
+		if (type.is_float<T>()) {
 			while (true) {
 				T viejo = this.load();
 				if (this.compare_exchange(viejo, viejo - d)) { return viejo; }
@@ -733,8 +733,8 @@ struct atomic<T: Scalar> {
 		total_post:   O(n)
 	)
 		public T fetch_or(T mask) where T: Integer {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		while (true) {
 			T viejo = this.load();
@@ -756,8 +756,8 @@ struct atomic<T: Scalar> {
 		total_post:   O(n)
 	)
 		public T fetch_and(T mask) where T: Integer {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		while (true) {
 			T viejo = this.load();
@@ -780,8 +780,8 @@ struct atomic<T: Scalar> {
 		total_post:   O(n)
 	)
 		public T fetch_xor(T mask) where T: Integer {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		while (true) {
 			T viejo = this.load();
@@ -804,21 +804,21 @@ struct atomic<T: Scalar> {
 	@nopanic
 	@alloc(partial: 0, total: 0)
 	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+	@stack(partial: 0, total: 24, when: arch:arm64 && type.is_integer<T>())
+	@stack(partial: 0, total: 32, when: arch:arm64 && type.is_float<T>())
 	@complexity(
 		partial_pre:  O(1),
 		partial_post: O(1),
 		total_pre:    O(1),
 		total_post:   O(1),
-		when:         is_integer<T>()
+		when:         type.is_integer<T>()
 	)
 	@complexity(
 		partial_pre:  O(1),
 		partial_post: O(1),
 		total_pre:    O(n),
 		total_post:   O(n),
-		when:         is_float<T>()
+		when:         type.is_float<T>()
 	)
 		public T __iadd__(T d) where T: Numeric => this.fetch_add(d) + d;
 
@@ -827,21 +827,21 @@ struct atomic<T: Scalar> {
 	@nopanic
 	@alloc(partial: 0, total: 0)
 	@stack(0, when: arch:x86_64)
-	@stack(partial: 0, total: 24, when: arch:arm64 && is_integer<T>())
-	@stack(partial: 0, total: 32, when: arch:arm64 && is_float<T>())
+	@stack(partial: 0, total: 24, when: arch:arm64 && type.is_integer<T>())
+	@stack(partial: 0, total: 32, when: arch:arm64 && type.is_float<T>())
 	@complexity(
 		partial_pre:  O(1),
 		partial_post: O(1),
 		total_pre:    O(1),
 		total_post:   O(1),
-		when:         is_integer<T>()
+		when:         type.is_integer<T>()
 	)
 	@complexity(
 		partial_pre:  O(1),
 		partial_post: O(1),
 		total_pre:    O(n),
 		total_post:   O(n),
-		when:         is_float<T>()
+		when:         type.is_float<T>()
 	)
 		public T __isub__(T d) where T: Numeric => this.fetch_sub(d) - d;
 
@@ -908,8 +908,8 @@ struct atomic<T: Scalar> {
 		total_post:   O(1)
 	)
 		public T compare_swap(T expected, T desired) {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		return atomic_cas(&this.cell, expected, desired);
 	}
@@ -939,8 +939,8 @@ struct atomic<T: Scalar> {
 		when:         arch:arm64
 	)
 		public T swap(T v) {
-		static_assert(sizeof<T>() == 1 || sizeof<T>() == 2 ||
-			sizeof<T>() == 4 || sizeof<T>() == 8,
+		static_assert(type.size<T>() == 1 || type.size<T>() == 2 ||
+			type.size<T>() == 4 || type.size<T>() == 8,
 			VX_ATOMIC_ANCHO);
 		// Sin builtin de swap generico: bucle CAS width-aware.
 		while (true) {

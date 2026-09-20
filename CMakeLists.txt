@@ -1171,6 +1171,10 @@ add_executable(vesta_lsp
         src/lsp/symbol_index.cpp
         src/lsp/inspector.cpp
         src/lsp/builtin_docs.cpp
+        # GENERADO desde catalog/builtin_docs.toml: la documentacion de los
+        # builtins en todos los idiomas.  Se regenera con
+        # tools/import/gen_builtin_docs.py, igual que el de diagnosticos.
+        src/lsp/gen/builtin_docs_gen.cpp
         src/lsp/lsp_server.cpp
         src/lsp/lsp_main.cpp
 )

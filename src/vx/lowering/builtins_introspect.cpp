@@ -85,8 +85,14 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
           b == Builtin::IsSame || b == Builtin::IsSigned ||
           b == Builtin::IsString || b == Builtin::IsStruct ||
           b == Builtin::IsSubtype || b == Builtin::IsUnsigned ||
+          b == Builtin::IsCallable || b == Builtin::IsResult ||
+          b == Builtin::HasInner || b == Builtin::HasBase ||
           b == Builtin::Kind || b == Builtin::MethodCount ||
           b == Builtin::Offsetof || b == Builtin::Parent ||
+          b == Builtin::HasScopedMethod || b == Builtin::ScopedMethodArity ||
+          b == Builtin::ScopedMethodCount || b == Builtin::ScopedMethodEach ||
+          b == Builtin::ScopedMethodName ||
+          b == Builtin::ScopedMethodOrigin ||
           b == Builtin::Sizeof || b == Builtin::StaticAssert ||
           b == Builtin::TypeId || b == Builtin::TypeInfoAlign ||
           b == Builtin::TypeInfoFieldCount || b == Builtin::TypeInfoFieldName ||
@@ -232,7 +238,7 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
         return true;
     }
 
-    /* Type-metadata con arg LITERAL string: comptime_type_sizeof/alignof/kind
+    /* Type-metadata con arg LITERAL string: type.by_name.size/align/kind
      * ("u64").  Son CONSTANTES compile-time -- se pliegan a un CONST para que
      * un @Macro que las use se baje a IR y corra por VM/JIT (no AST-eval).
      * El nombre del tipo se resuelve via resolve_type_string (misma ruta que
@@ -294,7 +300,11 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
          b == Builtin::IsChar || b == Builtin::IsPointer ||
          b == Builtin::IsString || b == Builtin::IsClass ||
          b == Builtin::IsStruct || b == Builtin::IsPrimitive ||
-         b == Builtin::IsEnum)) {
+         b == Builtin::IsEnum ||
+         /* Las cuatro PREGUNTAS de las que devuelven un tipo: se pliegan
+          * igual, y quedan en el binario como la constante que son. */
+         b == Builtin::IsCallable || b == Builtin::IsResult ||
+         b == Builtin::HasInner || b == Builtin::HasBase)) {
         int64_t v = 0;
         if (!const_cast<TypeChecker &>(tc_).lsp_eval_builtin_scalar(e, &v)) {
             error_at(e->loc, "lowering: '" + std::string(name) +
@@ -573,11 +583,15 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             b == Builtin::IsClass || b == Builtin::IsStruct ||
             b == Builtin::IsPrimitive || b == Builtin::IsEnum ||
             b == Builtin::IsNewtype || b == Builtin::IsOpaque ||
-            b == Builtin::UnderlyingOf;
+            b == Builtin::UnderlyingOf || b == Builtin::ScopedMethodCount;
         const bool one_targ_str_arg =
             b == Builtin::Offsetof || b == Builtin::HasField ||
-            b == Builtin::HasMethod || b == Builtin::FieldType;
-        const bool one_targ_int_arg = (b == Builtin::FieldName);
+            b == Builtin::HasMethod || b == Builtin::FieldType ||
+            b == Builtin::HasScopedMethod;
+        const bool one_targ_int_arg =
+            (b == Builtin::FieldName || b == Builtin::ScopedMethodName ||
+             b == Builtin::ScopedMethodOrigin ||
+             b == Builtin::ScopedMethodArity);
         const bool two_targ_no_args =
             b == Builtin::IsSubtype || b == Builtin::IsSame;
 
@@ -622,6 +636,65 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
             if (b == Builtin::MethodCount) {
                 const uint32_t v = comptime_method_count(tc_, t1);
                 out_value = emit_const(ir::IrType::U32, v, src_line);
+                return true;
+            }
+            /* La familia `scoped.method.*`: no que metodos TIENE el tipo, sino que se
+             * le puede llamar DESDE AQUI.  La lista la produce el comprobador
+             * una vez; aqui solo se lee la entrada que se pidio. */
+            if (b == Builtin::ScopedMethodCount ||
+                b == Builtin::HasScopedMethod ||
+                b == Builtin::ScopedMethodName ||
+                b == Builtin::ScopedMethodOrigin ||
+                b == Builtin::ScopedMethodArity) {
+                std::vector<ScopedMethod> reach;
+                tc_.collect_scoped_methods(t1, site_ns_prefix(), reach);
+                if (b == Builtin::ScopedMethodCount) {
+                    out_value =
+                        emit_const(ir::IrType::U32,
+                                   static_cast<uint64_t>(reach.size()),
+                                   src_line);
+                    return true;
+                }
+                if (b == Builtin::HasScopedMethod) {
+                    bool found = false;
+                    for (const ScopedMethod &sm : reach) {
+                        if (sm.name != nullptr && *sm.name == slit_arg) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    out_value = emit_const(ir::IrType::BOOL,
+                                           found ? 1ULL : 0ULL, src_line);
+                    return true;
+                }
+                /* Los de indice.  Pasarse no es un fallo silencioso: se dice,
+                 * porque el indice sale de un contador que el propio programa
+                 * consulto y descuadrarlos es un error del que lo escribe. */
+                if (ilit_arg >= reach.size()) {
+                    diags_.diag(e->loc, DiagLevel::ERR, "VX2100",
+                                {std::to_string(ilit_arg),
+                                 comptime_type_name(tc_, t1),
+                                 std::to_string(reach.size())});
+                    out_value = (b == Builtin::ScopedMethodArity)
+                                    ? emit_const(ir::IrType::U32, 0, src_line)
+                                    : emit_strmake_for(std::string());
+                    return true;
+                }
+                const ScopedMethod &sm =
+                    reach[static_cast<size_t>(ilit_arg)];
+                if (b == Builtin::ScopedMethodArity) {
+                    out_value = emit_const(ir::IrType::U32,
+                                           scoped_arity(tc_, sm), src_line);
+                    return true;
+                }
+                if (b == Builtin::ScopedMethodName) {
+                    out_value = emit_strmake_for(*sm.name);
+                    return true;
+                }
+                /* El origen: vacio si es un metodo real del tipo, que es
+                 * justo lo que distingue lo suyo de lo alcanzable. */
+                out_value = emit_strmake_for(
+                    sm.origin == nullptr ? std::string() : *sm.origin);
                 return true;
             }
             if (b == Builtin::IsClass) {
@@ -749,6 +822,16 @@ bool Lowering::try_lower_introspect_builtins(ast::CallExpr *e, Builtin b,
  * @param out_value Donde dejar lo leido; sin valor al escribir.
  * @return @c true si era uno de los dos y quedo bajado.
  */
+std::string Lowering::site_ns_prefix() const {
+    if (fn_ == nullptr) return std::string();
+    /* Se PREGUNTA a quien lo sabe en vez de restarle al nombre su parte
+     * publica: `main` pertenece a su namespace y NO se renombra -- el punto de
+     * entrada es unico --, asi que la resta daba vacio justo en la funcion
+     * donde se escriben casi todas las llamadas, y lo alcanzable salia como
+     * cero sin que nada lo dijera. */
+    return tc_.ns_prefix_of(fn_->name);
+}
+
 bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
                                               ir::IrValueId &out_value) {
     if (e->type_args.empty() ||
@@ -895,11 +978,86 @@ bool Lowering::try_lower_field_access_by_name(ast::CallExpr *e, Builtin b,
  * @param out_value Donde dejar el resultado, si lo hay.
  * @return @c true si era uno de los dos y quedo bajado.
  */
+ir::IrValueId Lowering::emit_load_at_offset(ir::IrValueId base, int64_t off,
+                                            uint32_t line) {
+    ir::IrValueId addr = fn_->new_value(ir::IrType::PTR);
+    ir::IrValueId v_off =
+        emit_const(ir::IrType::I64, static_cast<uint64_t>(off), line);
+    {
+        ir::IrInstr ad{};
+        ad.op = ir::IrOp::ADD;
+        ad.type = ir::IrType::I64;
+        ad.dst = addr;
+        ad.operands = {base, v_off};
+        ad.source_line = line;
+        emit(current_block_, std::move(ad));
+    }
+    ir::IrValueId dst = fn_->new_value(ir::IrType::I64);
+    ir::IrInstr ld{};
+    ld.op = ir::IrOp::LOAD;
+    ld.type = ir::IrType::I64;
+    ld.dst = dst;
+    ld.operands = {addr};
+    ld.source_line = line;
+    emit(current_block_, std::move(ld));
+    return dst;
+}
+
+ir::IrValueId Lowering::emit_string_value(const std::string &text,
+                                          uint32_t line) {
+    std::vector<uint8_t> bytes(text.begin(), text.end());
+    const uint64_t idx = out_mod_->intern_static_data(std::move(bytes));
+    ir::IrValueId v_addr = emit_str_lit_addr(idx, line);
+    ir::IrValueId v_len =
+        emit_const(ir::IrType::I64, static_cast<uint64_t>(text.size()), line);
+    return emit_string_literal_repr(v_addr, v_len, -1, line);
+}
+
 bool Lowering::try_lower_for_each_member(ast::CallExpr *e, Builtin b,
                                          ir::IrValueId &out_value) {
     if (e->type_args.empty() ||
-        (b != Builtin::ForEachField && b != Builtin::ForEachMethod))
+        (b != Builtin::ForEachField && b != Builtin::ForEachMethod &&
+         b != Builtin::ScopedMethodEach))
         return false;
+    /* Lo ALCANZABLE se recorre igual que lo demas -- una copia del cuerpo por
+     * entrada, sin contador ni condicion --, pero pasa DOS cosas: el nombre y
+     * de donde sale.  El origen es lo que distingue un metodo del tipo de una
+     * libre que solo se alcanza desde aqui, y sin el la enumeracion no serviria
+     * para lo que se pidio: ver las ambiguedades en vez de esconderlas. */
+    if (b == Builtin::ScopedMethodEach) {
+        if (e->args.empty()) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        const Type t = tc_.resolve_type_node(e->type_args[0].get());
+        std::vector<ScopedMethod> reach;
+        tc_.collect_scoped_methods(t, site_ns_prefix(), reach);
+        const ir::IrValueId fv_addr = lower_expr(e->args[0].get());
+        if (fv_addr == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        ir::IrValueId fn_addr =
+            emit_load_typed(fv_addr, ir::IrType::I64, e->loc.line);
+        ir::IrValueId env_addr = emit_load_at_offset(fv_addr, 8, e->loc.line);
+        for (const ScopedMethod &sm : reach) {
+            ir::IrValueId v_name = emit_string_value(
+                sm.name == nullptr ? std::string() : *sm.name, e->loc.line);
+            ir::IrValueId v_origin = emit_string_value(
+                sm.origin == nullptr ? std::string() : *sm.origin,
+                e->loc.line);
+            ir::IrInstr cl{};
+            cl.op = ir::IrOp::CALLCLOSURE;
+            cl.type = ir::IrType::VOID;
+            cl.dst = ir::IR_NO_VALUE;
+            cl.func_ptr = fn_addr;
+            cl.operands = {env_addr, v_name, v_origin};
+            cl.source_line = e->loc.line;
+            emit(current_block_, std::move(cl));
+        }
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
     {
         const bool is_fields = (b == Builtin::ForEachField);
         const Type t = tc_.resolve_type_node(e->type_args[0].get());

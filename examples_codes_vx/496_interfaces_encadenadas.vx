@@ -52,9 +52,9 @@ i32 main() {
 
 	// Lo que el compilador responde al preguntarle por la misma jerarquia:
 	// tiene que decir lo mismo que acaba de aceptar arriba.
-	const bool alta_es_media = is_subtype<Alta, Media>();
-	const bool alta_es_base  = is_subtype<Alta, Base>();
-	const bool todo_es_base  = is_subtype<Todo, Base>();
+	const bool alta_es_media = type.is_subtype<Alta, Media>();
+	const bool alta_es_base  = type.is_subtype<Alta, Base>();
+	const bool todo_es_base  = type.is_subtype<Todo, Base>();
 	const i64 comp = (alta_es_media ? 1 : 0) + (alta_es_base ? 1 : 0) +
 		(todo_es_base ? 1 : 0); // 3
 

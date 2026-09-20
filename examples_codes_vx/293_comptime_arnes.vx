@@ -53,22 +53,22 @@ static_assert(SUMA10 == 55, "comptime fn imperativa");
 
 // const que consume otro const + introspeccion en su init (comptime fn)
 comptime i64 layout() {
-	i64 sz  = sizeof<Punto>();         // struct no-comptime -> 8
-	i64 off = offsetof<Punto>("y");    // 4
-	i64 nf  = field_count<Contador>(); // clase no-comptime -> 1
-	return sz + off + nf + BASE;       // 8 + 4 + 1 + 10 = 23
+	i64 sz  = type.size<Punto>();       // struct no-comptime -> 8
+	i64 off = field.offset<Punto>("y"); // 4
+	i64 nf  = field.count<Contador>();  // clase no-comptime -> 1
+	return sz + off + nf + BASE;        // 8 + 4 + 1 + 10 = 23
 }
 const i64 LAYOUT = layout();
 static_assert(LAYOUT == 23, "introspeccion en comptime fn + const chain");
 
 // ---- (3) comptime block con introspeccion SIN cualificar -------------------
 comptime {
-	i64 pf = field_count<Punto>();    // 2  (resuelve Punto via namespace)
-	i64 cf = field_count<Cabecera>(); // 2  (overlay)
-	i64 cs = sizeof<Cabecera>();      // huella de la vista
-	static_assert(pf == 2, "field_count struct en comptime block");
-	static_assert(cf == 2, "field_count overlay en comptime block");
-	static_assert(cs >= 10, "sizeof overlay en comptime block");
+	i64 pf = field.count<Punto>();    // 2  (resuelve Punto via namespace)
+	i64 cf = field.count<Cabecera>(); // 2  (overlay)
+	i64 cs = type.size<Cabecera>();   // huella de la vista
+	static_assert(pf == 2, "field.count struct en comptime block");
+	static_assert(cf == 2, "field.count overlay en comptime block");
+	static_assert(cs >= 10, "type.size overlay en comptime block");
 }
 
 // ---- (4) @Macro que muta un global comptime y emite codigo -----------------
@@ -107,15 +107,15 @@ i32 main() {
 	Punto p = {.x = 3, .y = 4};
 
 	// clase + metodo
-	Contador c = new Contador();
-	c.n = 0;
-	i32 dos = c.inc() + c.inc(); // 1 + 2 = 3
+	Contador c   = new Contador();
+	c.n          = 0;
+	i32      dos = c.inc() + c.inc(); // 1 + 2 = 3
 
 	// overlay sobre un buffer
-	u8* buf = (u8*)malloc(16);
+	u8*      buf        = (u8*)malloc(16);
 	*(u32*)(buf + 0x00) = 0xCAFE;
-	Cabecera h  = Cabecera(buf);
-	i32      ov = (h.magic == 0xCAFE) ? 1 : 0; // 1
+	Cabecera h          = Cabecera(buf);
+	i32      ov         = (h.magic == 0xCAFE) ? 1 : 0; // 1
 
 	// (4) macros: se expanden a literales 1, 2, 3 en compile-time
 	i32 a       = next_id(); // 1

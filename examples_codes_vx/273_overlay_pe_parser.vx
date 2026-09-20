@@ -12,13 +12,13 @@
 //   * el offset de fichero del directorio de imports, TRADUCIDO por un resolver
 //     que recorre `this.Sections` (RVA -> file offset, declarativo).
 //
-// SEGURIDAD: cada acceso se COMPRUEBA en el lenguaje con `in_bounds(campo, size)`
+// SEGURIDAD: cada acceso se COMPRUEBA en el lenguaje con `overlay.in_bounds(campo, size)`
 // contra el tamano real del fichero -- sin maquinaria impuesta; la politica
 // (avisar + contar) la pone este programa.
 //
 // El walk de descriptores de imports/exports (cada nombre en SU propio RVA)
 // llegara cuando los sub-overlays puedan alcanzar las secciones del contenedor
-// (`parent<T>()`).  interp/JIT/AOT.  Harness tests/vx/pe_parser_test.py.
+// (`type.parent<T>()`).  interp/JIT/AOT.  Harness tests/vx/pe_parser_test.py.
 
 import std.fileio;
 
@@ -43,19 +43,19 @@ struct DataDir {
 // Entrada de la ILT (8 bytes, PE32+).  bit63=1 -> import por ordinal; si no, los
 // 31 bits bajos son un RVA a IMAGE_IMPORT_BY_NAME (hint u16 + nombre).  El nombre
 // de la funcion se resuelve alcanzando el PeImage RAIZ (a DOS niveles) via
-// parent<PeImage>().
+// type.parent<PeImage>().
 @overlay
 struct Thunk {
 	u64 raw @0x00;
 	// Nombre de la funcion = cstring en translate((raw & 0x7FFFFFFF) + 2).
 	u8 fname @offset {
 		u32 rva = (u32)(this.raw & 0x7FFFFFFF) + 2; // +2 salta el hint u16
-		return parent<PeImage>().translate(rva);
+		return type.parent<PeImage>().translate(rva);
 	};
 }
 
 // IMAGE_IMPORT_DESCRIPTOR (20 bytes).  El nombre de la DLL vive en SU PROPIO RVA;
-// se resuelve alcanzando las secciones del PeImage CONTENEDOR via parent<PeImage>()
+// se resuelve alcanzando las secciones del PeImage CONTENEDOR via type.parent<PeImage>()
 // -- toda la traduccion, declarativa, dentro del overlay.
 @overlay
 struct ImportDesc {
@@ -63,15 +63,15 @@ struct ImportDesc {
 	u32 name_rva @0x0C; // RVA al nombre de la DLL
 	u32 ft_rva   @0x10; // FirstThunk (RVA a la IAT)
 	// ILT: tabla de thunks anclada en translate(oft_rva, o ft_rva si oft==0), sin
-	// count (fin en entrada nula).  El base lo traduce parent<PeImage>().Sections.
+	// count (fin en entrada nula).  El base lo traduce type.parent<PeImage>().Sections.
 	Thunk thunks[] @offset {
 		u32 rva = this.oft_rva;
 		if (rva == 0) { rva = this.ft_rva; }
-		return parent<PeImage>().translate(rva);
+		return type.parent<PeImage>().translate(rva);
 	} stride(8);
 	// Nombre de la DLL = cstring en translate(name_rva) por las secciones del PADRE.
 	u8 dll_name @offset {
-		return parent<PeImage>().translate(this.name_rva);
+		return type.parent<PeImage>().translate(this.name_rva);
 	};
 }
 
@@ -112,7 +112,7 @@ struct PeImage {
 
 	// LA abstraccion: traducir un RVA a direccion de fichero recorriendo la tabla
 	// de secciones.  Un METODO del overlay (navega this.Sections); lo usan todos
-	// los resolvers via `this.translate(...)` / `parent<PeImage>().translate(...)`
+	// los resolvers via `this.translate(...)` / `type.parent<PeImage>().translate(...)`
 	// -- una sola copia del algoritmo, no cinco.
 	public u64 translate(u32 rva) {
 		u64 rb = (u64)this;
@@ -130,7 +130,7 @@ struct PeImage {
 		return rb + (u64)rva; // fallback: dentro de las cabeceras
 	}
 
-	// Offset de fichero del directorio de imports (`offsetof(pe.import_dir)`).
+	// Offset de fichero del directorio de imports (`field.offset(pe.import_dir)`).
 	u8 import_dir @offset { return this.translate(this.Dirs[1].rva); };
 	// Tabla de descriptores de import, anclada en translate(Dirs[1].rva), sin
 	// count (el usuario termina al leer el descriptor nulo).
@@ -165,7 +165,7 @@ i32 main() {
 		return 4;
 	}
 	// La cabecera (hasta num_dirs) debe caber -- comprobado en el lenguaje.
-	if (!in_bounds(pe.num_dirs, size)) {
+	if (!overlay.in_bounds(pe.num_dirs, size)) {
 		println("PE truncado: la cabecera no cabe en ${size} bytes");
 		free(buf);
 		return 5;
@@ -198,14 +198,14 @@ i32 main() {
 	println("NUM_DIRS=${pe.num_dirs}");
 
 	// offset de la tabla de secciones y del directorio de imports, ambos via el
-	// azucar offsetof (el segundo TRADUCIDO por el resolver que recorre secciones).
-	println("SECT_TABLE_OFF=${offsetof(pe.Sections[0].name0)}");
-	println("IMPORT_DIR_OFF=${offsetof(pe.import_dir)}");
+	// azucar field.offset (el segundo TRADUCIDO por el resolver que recorre secciones).
+	println("SECT_TABLE_OFF=${field.offset(pe.Sections[0].name0)}");
+	println("IMPORT_DIR_OFF=${field.offset(pe.import_dir)}");
 
 	// --- data directories (cada acceso comprobado) ---
 	i32 i = 0_i32;
 	while (i < 16) {
-		if (in_bounds(pe.Dirs[i].size, size)) {
+		if (overlay.in_bounds(pe.Dirs[i].size, size)) {
 			println("DIR ${i} RVA=${pe.Dirs[i].rva} SIZE=${pe.Dirs[i].size}");
 		} else {
 			g_faults = g_faults + 1;
@@ -217,7 +217,7 @@ i32 main() {
 	// --- section headers (+ nombre via print_cstr sobre &sec.name0) ---
 	i = 0;
 	while ((u32)i < (u32)pe.num_sections) {
-		if (!in_bounds(pe.Sections[i].chars, size)) {
+		if (!overlay.in_bounds(pe.Sections[i].chars, size)) {
 			g_faults = g_faults + 1;
 			println("SEC ${i} FUERA-DE-RANGO");
 		} else {
@@ -232,7 +232,7 @@ i32 main() {
 	println("directorios:");
 	i = 0;
 	while (i < 16) {
-		if (in_bounds(pe.Dirs[i].size, size) && pe.Dirs[i].rva != 0) {
+		if (overlay.in_bounds(pe.Dirs[i].size, size) && pe.Dirs[i].rva != 0) {
 			print("  ");
 			match (i) {
 				case 0  => print("Export");
@@ -254,7 +254,7 @@ i32 main() {
 	}
 
 	// --- tabla de imports: DLLs, recorrida declarativamente (sub-overlays +
-	//     parent<PeImage>() para traducir cada name_rva).  El usuario termina al
+	//     type.parent<PeImage>() para traducir cada name_rva).  El usuario termina al
 	//     leer el descriptor nulo. ---
 	println("imports:");
 	i = 0;

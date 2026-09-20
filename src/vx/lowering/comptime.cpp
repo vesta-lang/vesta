@@ -810,7 +810,7 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
              * resuelve via @c lookup_virtual_fn al cargar el
              * .velb. */
             static const std::unordered_set<std::string> COMPTIME_ONLY = {
-                "comptime_compile", "comptime_emit_expr", "comptime_type",
+                "comptime_compile", "comptime_emit_expr", "type.of",
                 "compile",          "emit_expr",
             };
             if (COMPTIME_ONLY.count(id->name)) {
@@ -831,8 +831,8 @@ std::string macro_body_unsupported_reason_expr(const TypeChecker &tc,
              * El resto de virtual fns (static_assert, comptime_compile) sin
              * simbolo bytecode siguen forzando AST/VM-eval del call site. */
             static const std::unordered_set<std::string> FOLDABLE_TYPE_META = {
-                "comptime_type_sizeof", "comptime_type_alignof",
-                "comptime_type_kind"};
+                "type.by_name.size", "type.by_name.align",
+                "type.by_name.kind"};
             if (ffi::lookup_virtual_fn("vesta_comptime", id->name) &&
                 !(FOLDABLE_TYPE_META.count(id->name) && ce->args.size() == 1 &&
                   ce->args[0] &&

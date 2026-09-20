@@ -8,8 +8,8 @@ namespace ejemplos.structs_genericos;
 // (tamano, offsets) y baja sus metodos.  Cero overhead en runtime -- es como
 // haber escrito el struct concreto a mano.  Funciona con multiples parametros
 // (`Par<K, V>`), genericos anidados (`Caja<Caja<i64>>`), metodos, RAII (`~T()`)
-// y el sistema de introspeccion comptime (`sizeof<T>`, `field_count<T>`,
-// `field_name<T>`, `offsetof<T>`).
+// y el sistema de introspeccion comptime (`type.size<T>`, `field.count<T>`,
+// `field.name<T>`, `field.offset<T>`).
 
 struct Caja<T> {
 	T                dato;
@@ -32,9 +32,9 @@ i32 main() {
 	p.valor = 7;
 
 	// Introspeccion comptime sobre los structs monomorfizados.
-	i64 sz  = sizeof<Caja<i64>>();              // 8 (un i64)
-	i64 nf  = field_count<Par<i32, i64>>();     // 2 campos
-	i64 off = offsetof<Par<i32, i64>>("valor"); // offset del 2o campo
+	i64 sz  = type.size<Caja<i64>>();               // 8 (un i64)
+	i64 nf  = field.count<Par<i32, i64>>();         // 2 campos
+	i64 off = field.offset<Par<i32, i64>>("valor"); // offset del 2o campo
 
 	// 20 + 8 + 7 = 35 ; + (sz==8 -> 1) + (nf==2 -> 1) + (off==8 -> 1) ... ajustado:
 	i64 ok = 0_i64;

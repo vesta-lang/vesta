@@ -1,15 +1,18 @@
 // NS.2: un `concept` declarado en un namespace y exigido en un bound de
 // generico por su nombre cualificado (`<T: mat.Numerico>` / `where T: ...`).
 // Las constraints siguen siendo 100% compile-time (desaparecen del binario).
+//
+// El namespace `mat` es PARCIAL: se reparte entre este fichero y
+// `generic_call.vx`, y lo que uno declara lo ve el otro sin importar nada.
 namespace mat;
 
-concept Numerico<T>  = is_numeric<T>();
+concept Numerico<T>  = type.is_numeric<T>();
 concept Ordenable<T> = Comparable<T>() && Sized<T>();
 
-// Genrico con bound INLINE al concepto cualificado del namespace.
+// Generico con bound INLINE al concepto cualificado del namespace.
 public T doble<T: mat.Numerico>(T x) => x + x;
 
-// Genrico con clausula WHERE al concepto cualificado.
+// Generico con clausula WHERE al concepto cualificado.
 public T maxv<T>(T a, T b) where T: mat.Ordenable {
 	if (a < b) { return b; }
 	return a;
@@ -19,6 +22,13 @@ i64 main() {
 	i64 d = doble<i64>(20);   // 40  (i64 satisface mat.Numerico)
 	i64 m = maxv<i64>(2, 41); // 41  (i64 satisface mat.Ordenable)
 	i64 r = d - m + 42;       // 40 - 41 + 42 = 41... +1
-	println("d=${d} m=${m} r=${r + 1}");
+
+	// Las del otro fichero del mismo namespace, llamadas CUALIFICADAS.
+	i64 qa = mat.triple<i64>(10);         // 30 (explicito + bound cualificado)
+	i64 qb = mat.id(2);                   // 2  (inferido, sin cota)
+	i64 qc = mat.primero<i64, i64>(9, 1); // 9  (multi-param explicito)
+
+	println("d=${d} m=${m} r=${r + 1} qa=${qa} qb=${qb} qc=${qc}");
+	if (qa + qb + qc != 41) { return 1; }
 	return r + 1; // 42
 }

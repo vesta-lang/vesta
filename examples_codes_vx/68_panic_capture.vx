@@ -17,7 +17,7 @@ i32 main() {
 		return 99;
 	} catch (FatalError e) {
 		println("=== diagnostico ===");
-		print("kind: ");
+		print("type.kind: ");
 		print_int(e.kind);
 		print("\n");
 		print("message: ");

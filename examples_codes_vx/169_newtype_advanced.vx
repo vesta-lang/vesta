@@ -55,9 +55,9 @@ typedef u64 session_handle new @opaque {
 i32 main() {
 	// --- alineacion -------------------------------------------------
 	// El compilador verifica los offsets en compile time.
-	if (offsetof<AlignedPacket>("magic") != 0) return 100;
-	if (offsetof<AlignedPacket>("payload") != 16) return 200;
-	if (sizeof<AlignedPacket>() % 16 != 0) return 300;
+	if (field.offset<AlignedPacket>("magic") != 0) return 100;
+	if (field.offset<AlignedPacket>("payload") != 16) return 200;
+	if (type.size<AlignedPacket>() % 16 != 0) return 300;
 
 	// --- explicit from/to T sobre file_id (no-opaco) ---------------
 	// OK: u32 -> file_id (declarado en explicit from u32).
@@ -81,12 +81,12 @@ i32 main() {
 	if (raw != 0xDEADBEEF) return 500;
 
 	// Introspeccion: confirmar que sigue siendo newtype + opaque.
-	if (!is_newtype<session_handle>()) return 600;
-	if (!is_opaque<session_handle>()) return 700;
-	if (!is_newtype<file_id>()) return 800;
-	if (is_opaque<file_id>()) return 900;
+	if (!type.is_newtype<session_handle>()) return 600;
+	if (!type.is_opaque<session_handle>()) return 700;
+	if (!type.is_newtype<file_id>()) return 800;
+	if (type.is_opaque<file_id>()) return 900;
 
-	// is_same chequea identidad nominal, no underlying.
-	if (is_same<file_id, session_handle>()) return 1000;
+	// type.is_same chequea identidad nominal, no underlying.
+	if (type.is_same<file_id, session_handle>()) return 1000;
 	return 42;
 }

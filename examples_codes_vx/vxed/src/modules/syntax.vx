@@ -284,7 +284,7 @@ i32 is_builtin(u8* word, i32 wlen) {
 	}
 	if (c0 == (u8)'s') {
 		if (wlen == 6 && word[1] == (u8)'i' && word[2] == (u8)'z'
-			&& word[3] == (u8)'e' && word[4] == (u8)'o' && word[5] == (u8)'f') return 1; // sizeof
+			&& word[3] == (u8)'e' && word[4] == (u8)'o' && word[5] == (u8)'f') return 1; // type.size
 		if (wlen == 4 && word[1] == (u8)'o' && word[2] == (u8)'m' && word[3] == (u8)'e') return 1; // Some/some
 		if (wlen == 9 && word[1] == (u8)'t' && word[2] == (u8)'r'
 			&& word[3] == (u8)'_' && word[4] == (u8)'l' && word[5] == (u8)'e'
@@ -640,7 +640,7 @@ public class SyntaxHighlighter {
 				while (j < length && is_alnum_or_us(data[j]) == 1) {
 					j = j + 1;
 				}
-				i = j;
+				i            = j;
 				i32 wlen     = j - word_start;
 				u8* word_ptr = data + word_start;
 

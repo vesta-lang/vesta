@@ -50,6 +50,8 @@
 #include <unordered_set>
 #include <vector>
 
+#include "util/name_pool.h"
+#include "util/named_alloc.h"
 #include "vx/ast.h"
 #include "vx/diagnostic.h"
 #include "vx/lexer.h"
@@ -117,6 +119,16 @@ void get_aot_condcomp_tier(std::string &tier, bool &sin_libc) noexcept;
 /// (`arch:x86_64 && is_float<T>()`) se evalua alli, apoyandose en esta para sus
 /// atomos de target -- un solo evaluador de target para todo el compilador.
 bool target_expr_matches(const std::string &spec) noexcept;
+
+/// @brief Si @p name es un builtin comptime que lleva argumentos de TIPO
+///        (`sizeof<T>()`, `field_count<T>()`, `is_subtype<A,B>()`...).
+///
+/// La lista vive en el parser porque es el que necesita saberlo para no leer
+/// el `<` como una comparacion.  Se expone porque el receptor de TIPO
+/// (`Punto.field_count()`) pregunta lo mismo: son los que se pueden alcanzar
+/// asi, y tener la lista escrita dos veces las dejaria divergir -- un builtin
+/// nuevo funcionaria escrito de una forma y no de la otra.
+bool is_comptime_builtin_name(const std::string &name);
 
 /// El primer atomo de @p spec por el que un @c @Target no puede preguntar, o
 /// vacio si la expresion entera se entiende -- que NO es lo mismo que "se
@@ -497,6 +509,14 @@ class Parser {
     /// para retirarlos despues con @c unregister_temp_type_aliases.
     std::vector<std::string>
     register_temp_type_aliases(const std::vector<std::string> &names);
+
+    /**
+     * @brief Cierto si @p name es un parametro de tipo de la funcion en curso.
+     * @param name Identificador a comprobar.
+     * @return Cierto si nombra un tipo AQUI.
+     */
+    [[nodiscard]] bool is_active_type_param(const std::string &name) const
+        noexcept;
     /// @brief Retira los aliases temporales insertados por el helper
     /// anterior (restaura @c declared_aliases_ al estado previo).
     void unregister_temp_type_aliases(const std::vector<std::string> &inserted);
@@ -611,6 +631,45 @@ class Parser {
      */
     [[nodiscard]] bool
     starts_type(bool allow_reserved_name = false) const noexcept;
+
+    /**
+     * @brief Decide si aqui empieza un tipo CALCULADO.
+     *
+     * Donde va un tipo se puede escribir una llamada que devuelva uno
+     * (`type.result<F>()`).  Se reconoce por la FORMA -- un builtin comptime
+     * seguido de `<` o `(`, o la raiz de un builtin en arbol seguida de `.` --,
+     * que es lo unico que puede ser: un tipo con nombre no lleva parentesis
+     * detras, y uno generico lleva `<` pero no un `(` al final.
+     *
+     * Lo preguntan DOS sitios -- quien parsea el tipo y quien decide si una
+     * declaracion empieza por uno --, y tienen que contestar lo mismo: con dos
+     * copias, `type.result<F>() f(...)` se parseaba bien como tipo de un
+     * parametro y no se reconocia como inicio de declaracion.
+     *
+     * @return Cierto si el token actual abre un tipo calculado.
+     */
+    [[nodiscard]] bool starts_computed_type() const noexcept;
+
+    /**
+     * @brief Como @ref starts_computed_type, pero solo si DA un tipo.
+     *
+     * Donde ya se sabe que viene un tipo basta con reconocer la forma.  Para
+     * decidir si una DECLARACION empieza hace falta mas: la mayoria de los
+     * builtins en arbol devuelven un valor, no un tipo, y
+     * `field.set<Punto>(p, "y", 200);` es una sentencia -- tomarla por el
+     * comienzo de una declaracion hacia que el parser pidiera un nombre detras
+     * de algo que no es un tipo.
+     *
+     * El nombre entero se arma mirando adelante, sin consumir: la raiz sola no
+     * separa `field.type_at` de `field.set`.
+     *
+     * @return Cierto si aqui empieza un builtin cuyo resultado es un `Type`.
+     */
+    [[nodiscard]] bool starts_type_yielding_builtin() const noexcept;
+
+    /// Cuantos tokens se miran adelante al armar un nombre en arbol.  Los hay
+    /// de tres segmentos (`scoped.method.result`), o sea cinco tokens.
+    static constexpr size_t kMaxTreeNameLookahead = 8;
 
     /**
      * @brief  AS inc.2: decide si el statement actual es un var-decl
@@ -837,6 +896,34 @@ class Parser {
     /// referencia por su nombre sintetico), asi que se drenan ANTES del decl
     /// actual en parse_program / parse_namespace_decl.
     std::vector<std::unique_ptr<ast::Node>> pending_before_decls_;
+
+    /**
+     * @brief Namespaces de forma BLOQUE encontrados dentro de uno statement.
+     *
+     * `namespace geo;` rige hasta el siguiente namespace STATEMENT o el final
+     * del fichero, asi que un bloque de por medio no lo termina: lo que va
+     * DESPUES del bloque sigue siendo de `geo`.  El bloque, en cambio, no es
+     * suyo -- es un hermano --, asi que se encola aqui y @c parse_program lo
+     * emite al nivel del modulo.
+     *
+     * Sin esto, el bucle de la forma statement paraba al ver la palabra y todo
+     * lo que seguia caia en la RAIZ.  No lo decia nadie: el sintoma era que un
+     * tipo del propio fichero dejaba de existir dentro de `main`, que es
+     * justo donde casi siempre esta al final.
+     */
+    std::vector<std::unique_ptr<ast::Node>> pending_sibling_ns_;
+
+    /**
+     * @brief Si el `namespace` que viene se escribio con llaves.
+     *
+     * Precondicion: @c current_ es @c KW_NAMESPACE.  Mira hacia delante el
+     * path punteado y el `@id(...)` opcional para ver si lo que cierra es `{`
+     * o `;`.  No consume nada.
+     *
+     * @return true si es la forma bloque.
+     */
+    [[nodiscard]] bool namespace_ahead_is_block() const;
+
     /// Contador para nombres sinteticos de agregados anonimos.
     int anon_aggr_counter_ = 0;
 
@@ -897,6 +984,20 @@ class Parser {
     /// `match (val) {` -- solo se trata como compound literal si el nombre es
     /// un struct conocido.
     std::unordered_set<std::string> declared_structs_;
+
+    /// Los parametros de tipo de la funcion que se esta parseando, o nulo.
+    ///
+    /// Dentro de `R f<T>(...)`, `T` NOMBRA UN TIPO, asi que `(T*)x` es un cast
+    /// como `(Punto*)x`.  Va APARTE de @c declared_aliases_ a proposito: ese es
+    /// el que consulta la decision plantilla-vs-especializacion, y meterlos
+    /// alli hacia que `f<T>(T)` pasara por una especializacion de si misma.
+    ///
+    /// Es un PUNTERO a la lista que la propia declaracion ya guarda: copiarla
+    /// seria duplicar uno o dos nombres cortos para consultarlos un punyado de
+    /// veces.  La busqueda es lineal porque con dos entradas eso ES lo rapido.
+    const std::vector<std::unique_ptr<ast::TypeNode>> *active_type_params_ =
+        nullptr;
+
 
     ///  M.L24: flag indicando si la ultima invocacion de
     /// @c parse_top_level_decl skipeo la decl por @c @Target no

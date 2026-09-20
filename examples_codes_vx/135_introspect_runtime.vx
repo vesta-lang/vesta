@@ -4,11 +4,11 @@ namespace ejemplos.introspect_runtime;
 //
 // Cuando un tipo se marca con @Introspect, el compilador emite una
 // estructura IntrospectInfo POD en static_data + registra el nombre del
-// tipo en una tabla global.  En runtime, `find_type("Name")` devuelve un
+// tipo en una tabla global.  En runtime, `type.find("Name")` devuelve un
 // puntero al IntrospectInfo (i64) o 0 si no existe.  Los builtins
 // `type_info_*` consultan la informacion mediante ese puntero.
 //
-// `find_type` resuelve el tipo AL COMPILAR, a un `mov @Absolute(...)` directo,
+// `type.find` resuelve el tipo AL COMPILAR, a un `mov @Absolute(...)` directo,
 // asi que su argumento tiene que ser un literal de cadena.  Buscarlo por un
 // nombre calculado en ejecucion pediria un resolutor que recorra la tabla, y no
 // lo hay: ver `562_find_type_runtime_err.vx`.
@@ -32,15 +32,15 @@ struct NoMarcada {
 
 i32 main() {
 	// Buscar Vec3 (registrado con @Introspect).
-	i64             vinfo = find_type("Vec3");
+	i64             vinfo = type.find("Vec3");
 	i32             ok    = 0_i32;
 	if (vinfo != 0) ok    = ok + 4;
 
 	// Metadata basica.
-	i32 kind  = type_info_kind(vinfo);        // 2 = Struct
-	u32 size  = type_info_size(vinfo);        // 24 (3 f64)
-	u32 align = type_info_align(vinfo);       // 8
-	u32 nf    = type_info_field_count(vinfo); // 3
+	i32 kind  = type.info.kind(vinfo);        // 2 = Struct
+	u32 size  = type.info.size(vinfo);        // 24 (3 f64)
+	u32 align = type.info.align(vinfo);       // 8
+	u32 nf    = type.info.field_count(vinfo); // 3
 
 	if (kind == 2)  ok = ok + 4;
 	if (size == 24) ok = ok + 4;
@@ -48,23 +48,23 @@ i32 main() {
 	if (nf == 3)    ok = ok + 4;
 
 	// Offsets de fields individuales.
-	u32             off0 = type_info_field_offset(vinfo, 0); // 0
-	u32             off2 = type_info_field_offset(vinfo, 2); // 16
+	u32             off0 = type.info.field_offset(vinfo, 0); // 0
+	u32             off2 = type.info.field_offset(vinfo, 2); // 16
 	if (off0 == 0)  ok   = ok + 4;
 	if (off2 == 16) ok   = ok + 4;
 
 	// Nombre del tipo y del primer field.
-	string tname = type_info_name(vinfo);
-	string fn0   = type_info_field_name(vinfo, 0);
-	if (tname.length() == 4) ok = ok + 4; // "Vec3"
-	if (fn0.length() == 1) ok   = ok + 4; // "x"
+	string                   tname = type.info.name(vinfo);
+	string                   fn0   = type.info.field_name(vinfo, 0);
+	if (tname.length() == 4) ok    = ok + 4; // "Vec3"
+	if (fn0.length() == 1)   ok    = ok + 4; // "x"
 
 	// Class introspect.
-	i64                                    pinfo = find_type("Persona");
-	if (type_info_kind(pinfo) == 1)        ok    = ok + 1; // 1 = Class
-	if (type_info_field_count(pinfo) == 2) ok    = ok + 1;
+	i64                                    pinfo = type.find("Persona");
+	if (type.info.kind(pinfo) == 1)        ok    = ok + 1; // 1 = Class
+	if (type.info.field_count(pinfo) == 2) ok    = ok + 1;
 
 	// Tipo sin @Introspect -> 0.
-	if (find_type("NoMarcada") == 0) ok = ok + 4;
+	if (type.find("NoMarcada") == 0) ok = ok + 4;
 	return ok; // esperado: 42 (4*9 + 1*2 + 4 = 42)
 }

@@ -66,6 +66,120 @@ bool Lowering::try_lower_builtin_call(ast::CallExpr *e,
     const Builtin b = builtin_from_name(name);
     if (!looks_like_concept && b == Builtin::Unknown) return false;
 
+    /* Y antes de ir a su familia: ¿de quien habla esta llamada?
+     *
+     * Un builtin se puede SOBRECARGAR -- misma aridad y tipos, ranuras con
+     * otro nombre --, asi que compartir el nombre ya no significa ser el
+     * builtin.  Quien lo decide es el comprobador, que compara candidatas y
+     * apunta la ganadora; aqui solo se consulta.
+     *
+     * Decidirlo otra vez por el NOMBRE, como se hacia, es re-derivar un hecho
+     * que ya estaba tomado, y con el peor desenlace posible: la llamada
+     * type-chequeaba contra la funcion del usuario y se ejecutaba la del
+     * lenguaje -- sin error, sin aviso y sin que el cuerpo del usuario llegara
+     * a correr --. */
+    if (e->resolved_sig != ast::CallExpr::kNoSig) {
+        const FunctionSig *rs = tc_.function_sig_at(e->resolved_sig);
+        if (rs != nullptr && !rs->is_builtin) return false; // es del usuario
+    }
+
+    /* Y si es el builtin: ¿lo IMPLEMENTA alguien?
+     *
+     * `@Provides(<builtin>)` dice "esta funcion es la de ese builtin", y a
+     * partir de ahi la llamada va a la suya.  El comprobador ya verifico que
+     * cumple su contrato.
+     *
+     * Esto es lo que quita la convencion de nombre: para sustituir a
+     * `print_int` ya no hay que llamar a la funcion propia `__vx_print_i64`
+     * -- un nombre interno que nadie tenia por que conocer --, basta con
+     * decir a que builtin cubre.
+     *
+     * Cada argumento se baja AL TIPO QUE EL PROVEEDOR DECLARO, no al que el
+     * builtin usaba por dentro.  Importa en un sitio: donde el builtin declara
+     * una direccion -- `panic` lo hace --, un literal baja como direccion
+     * cruda, y si el proveedor pidio `string` hay que CONSTRUIRLA.  Pasarle la
+     * direccion a pelo compila y no avisa: el proveedor lee un `string` donde
+     * no hay ninguno, y lo que sale es una cadena vacia. */
+    /* Pedir y soltar memoria no se desvian AQUI, y no es un olvido: lo hace su
+     * propio bajado, que es el unico que sabe lo que significan.
+     *
+     * `malloc<T>(n)` son n ELEMENTOS, y lo que el proveedor recibe son BYTES:
+     * la cuenta la hace ese bajado.  Desviar la llamada desde aqui se la
+     * saltaria y el proveedor reservaria de menos, callando. */
+    const bool lowered_by_its_own = (b == Builtin::Malloc || b == Builtin::Free);
+    const TypeChecker::BuiltinProviderEntry *provider =
+        lowered_by_its_own ? nullptr : tc_.provider_for(b);
+    if (provider != nullptr) {
+        const FunctionSig *psig = tc_.function_sig_at(provider->sig);
+        std::vector<ir::IrValueId> args;
+        args.reserve(e->args.size());
+        for (size_t ai = 0; ai < e->args.size(); ++ai) {
+            auto &a = e->args[ai];
+            const bool want_string =
+                psig != nullptr && ai < psig->param_types.size() &&
+                psig->param_types[ai].kind == PrimitiveKind::STRING;
+            if (want_string && a &&
+                a->result_type.kind != PrimitiveKind::STRING) {
+                const ir::IrValueId v_str = lower_expr_as_string(a.get());
+                if (v_str == ir::IR_NO_VALUE) {
+                    out_value = ir::IR_NO_VALUE;
+                    return true;
+                }
+                args.push_back(v_str);
+                continue;
+            }
+            const ir::IrValueId v = lower_expr(a.get());
+            if (v == ir::IR_NO_VALUE) {
+                out_value = ir::IR_NO_VALUE;
+                return true;
+            }
+            args.push_back(v);
+        }
+        const ir::IrType ret =
+            (e->result_type.kind == PrimitiveKind::VOID ||
+             e->result_type.kind == PrimitiveKind::COUNT)
+                ? ir::IrType::VOID
+                : ir_type_from_primitive(e->result_type.kind);
+        ir::IrInstr ins{};
+        ins.op = ir::IrOp::CALL;
+        ins.type = ret;
+        ins.dst = (ret == ir::IrType::VOID) ? ir::IR_NO_VALUE
+                                            : fn_->new_value(ret);
+        ins.func_name = provider->symbol;
+        ins.operands = std::move(args);
+        ins.is_call_site = true;
+        ins.source_line = e->loc.line;
+        /* Un builtin que NO RETORNA sigue sin retornar por tener duenno.  El
+         * gancho aporta el MECANISMO -- que se escribe y como se muere -- no la
+         * politica de que el programa acaba: la convencion de la stdlib es esa
+         * (`__panic` escribe y hace `exit(134)`; por defecto es `abort`).
+         *
+         * Sin esto el mismo fuente hacia una cosa u otra segun si alguien lo
+         * proveia: con proveedor, `panic("x")` volvia y el programa seguia. */
+        const bool no_return = (b == Builtin::Panic);
+        out_value = ins.dst;
+        emit(current_block_, std::move(ins));
+        if (no_return) {
+            /* Y el bloque se cierra DE VERDAD, con su terminador.
+             *
+             * Marcarlo como terminado sin emitir ninguno deja un bloque que se
+             * acaba sin decir a donde va: el interprete paraba de casualidad,
+             * pero el JIT y el nativo se caian por el final -- "invalid memory
+             * access at 0x0" y un segfault --, o sea que el mismo programa
+             * hacia tres cosas distintas.  `unreachable` es lo que ES: si el
+             * proveedor cumple su convencion no se llega aqui, y si no la
+             * cumple se para en vez de saltar a cero. */
+            ir::IrInstr end{};
+            end.op = ir::IrOp::UNREACHABLE;
+            end.type = ir::IrType::VOID;
+            end.dst = ir::IR_NO_VALUE;
+            end.source_line = e->loc.line;
+            emit(current_block_, std::move(end));
+            block_terminated_ = true;
+        }
+        return true;
+    }
+
     /* Cada familia atiende un grupo de builtins y son DISJUNTAS, asi que no
      * hace falta preguntarles por turno: la tabla dice cual es la suya y se va
      * derecho.  Antes se les preguntaba a las siete, y como cada una empieza

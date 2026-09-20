@@ -328,6 +328,71 @@ ComptimeKind comptime_type_kind(const Type &t) {
 // -------------------------------------------------------------------
 
 /**
+ * @brief Dice que una de las que devuelven un TIPO no tiene respuesta.
+ *
+ * `type.base`, `type.inner`, `type.error` y `type.result` devolvian un tipo
+ * vacio cuando la pregunta no aplicaba.  Eso no es una respuesta: es un caso
+ * sin tratar convertido en dato.  Y el vacio no se queda quieto -- mas abajo se
+ * lee como `void` --, asi que el fallo salia lejos del sitio y hablando de otra
+ * cosa.
+ *
+ * El motivo NO viaja como texto: cada situacion tiene su codigo, y la frase
+ * entera vive en el catalogo en los dos idiomas.  Pasarlo como dato dejaria la
+ * mitad del mensaje escrita aqui, o sea en un solo idioma.
+ *
+ * @param tc   El comprobador, de donde sale el sumidero de diagnosticos.
+ * @param loc  Donde se escribio la llamada.
+ * @param code El codigo del catalogo que describe ESTA situacion.
+ * @param t    El tipo por el que se pregunto.
+ */
+static void no_type_answer(const TypeChecker &tc, const SourceLoc &loc,
+                           const char *code, const Type &t) {
+    tc.diagnostics().diag(loc, DiagLevel::ERR, code,
+                          {comptime_type_name(tc, t)});
+}
+
+/**
+ * @brief Si por lo que se pregunta es un nombre que TODAVIA no es un tipo.
+ *
+ * Es la diferencia entre "esto no tiene respuesta" y "aun no se sabe".  En el
+ * cuerpo de una plantilla, `type.result<F>()` se encuentra con que `F` es un
+ * parametro de tipo: un nombre escrito que no resuelve a nada.  Eso no es un
+ * error de quien lo escribio -- lo resolvera cada instancia --, asi que aqui no
+ * se dice nada y se deja para entonces.
+ *
+ * Se mira la FORMA de lo escrito, no solo el tipo al que resolvio: un `void`
+ * escrito a mano es un @c PrimitiveTypeNode y ese SI es un error, mientras que
+ * un nombre sin resolver es un @c NamedTypeNode que se quedo en vacio.
+ *
+ * @param node El nodo de tipo tal y como se escribio.
+ * @param t    A lo que resolvio.
+ * @return Cierto si es un nombre pendiente de instanciar.
+ */
+static bool type_arg_not_yet_known(const ast::TypeNode *node, const Type &t) {
+    return t.kind == PrimitiveKind::VOID && node != nullptr &&
+           node->kind == ast::NodeKind::NamedTypeNode;
+}
+
+/**
+ * @brief Cierra una de las cuatro sin respuesta: la dice, o la aplaza.
+ *
+ * @param tc   El comprobador.
+ * @param ce   La llamada, de donde salen la posicion y el tipo preguntado.
+ * @param t    A lo que resolvio el argumento.
+ * @param code El codigo del catalogo si resulta que no hay respuesta.
+ * @param r    [out] El resultado, marcado como aplazado cuando toca.
+ */
+static void answer_missing(const TypeChecker &tc, const ast::CallExpr *ce,
+                           const Type &t, const char *code,
+                           ComptimeEvalResult &r) {
+    if (type_arg_not_yet_known(ce->type_args[0].get(), t)) {
+        r.not_yet = true; // lo resolvera la instancia
+        return;
+    }
+    no_type_answer(tc, ce->loc, code, t);
+}
+
+/**
  * @brief Devuelve un puntero a los fields de @c t (struct o class).
  *
  * Para STRUCT real busca en `struct_layouts`; para CLASS busca en
@@ -355,6 +420,13 @@ static const std::vector<ClassMethodInfo> *methods_of(const TypeChecker &tc,
     if (t.kind == PrimitiveKind::STRUCT || t.kind == PrimitiveKind::CLASS) {
         auto cl = tc.class_layouts().find(t.struct_name);
         if (cl != tc.class_layouts().end()) return &cl->second.methods;
+        /* Y la tabla de los STRUCTS, que es otra: un struct tiene sus metodos
+         * en `struct_layouts()`, asi que mirando solo la de clases
+         * `method_count<Punto>()` devolvia CERO para un struct con metodos --
+         * y eso no se lee como un fallo, se lee como un tipo que no tiene
+         * ninguno. */
+        auto st = tc.struct_layouts().find(t.struct_name);
+        if (st != tc.struct_layouts().end()) return &st->second.methods;
     }
     return nullptr;
 }
@@ -617,7 +689,7 @@ static bool expr_is_io_call_ci(const ast::Expr *e) {
                 static_cast<const ast::IdentExpr *>(ce->callee.get())->name;
             // builtins de I/O que solo tienen efecto ejecutandose de verdad.
             if (nm == "println" || nm == "print" || nm == "ct_print" ||
-                nm == "comptime_print" || nm == "flush")
+                nm == "comptime.print" || nm == "flush")
                 return true;
         }
         for (const auto &a : ce->args)
@@ -1377,52 +1449,52 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
     if (ce->type_args.empty()) return r;
     const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
 
-    if (nm == "sizeof") {
+    if (nm == "type.size") {
         r.ok = true;
         r.value = (int64_t)comptime_type_size(tc, t1);
         return r;
     }
-    if (nm == "alignof") {
+    if (nm == "type.align") {
         r.ok = true;
         r.value = (int64_t)comptime_type_align(tc, t1);
         return r;
     }
-    if (nm == "type_id") {
+    if (nm == "type.id") {
         r.ok = true;
         r.value = (int64_t)comptime_type_id(tc, t1);
         return r;
     }
-    if (nm == "kind") {
+    if (nm == "type.kind") {
         r.ok = true;
         r.value = (int64_t)static_cast<int32_t>(comptime_type_kind(t1));
         return r;
     }
-    if (nm == "field_count") {
+    if (nm == "field.count") {
         r.ok = true;
         r.value = (int64_t)comptime_field_count(tc, t1);
         return r;
     }
-    if (nm == "method_count") {
+    if (nm == "method.count") {
         r.ok = true;
         r.value = (int64_t)comptime_method_count(tc, t1);
         return r;
     }
-    if (nm == "is_class") {
+    if (nm == "type.is_class") {
         r.ok = true;
         r.value = comptime_is_class(t1) ? 1 : 0;
         return r;
     }
-    if (nm == "is_struct") {
+    if (nm == "type.is_struct") {
         r.ok = true;
         r.value = comptime_is_struct(tc, t1) ? 1 : 0;
         return r;
     }
-    if (nm == "is_primitive") {
+    if (nm == "type.is_primitive") {
         r.ok = true;
         r.value = comptime_is_primitive(t1) ? 1 : 0;
         return r;
     }
-    if (nm == "is_enum") {
+    if (nm == "type.is_enum") {
         r.ok = true;
         r.value = comptime_is_enum(tc, t1) ? 1 : 0;
         return r;
@@ -1440,73 +1512,107 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
         const bool is_int = is_integral(k);
         const bool is_signed = is_signed_integral(k);
         const bool is_flt = is_floating(k);
-        if (nm == "is_integer") {
+        if (nm == "type.is_integer") {
             r.ok = true;
             r.value = is_int ? 1 : 0;
             return r;
         }
-        if (nm == "is_signed") {
+        if (nm == "type.is_signed") {
             r.ok = true;
             r.value = is_signed ? 1 : 0;
             return r;
         }
-        if (nm == "is_unsigned") {
+        if (nm == "type.is_unsigned") {
             r.ok = true;
             r.value = (is_int && !is_signed) ? 1 : 0;
             return r;
         }
-        if (nm == "is_float") {
+        if (nm == "type.is_float") {
             r.ok = true;
             r.value = is_flt ? 1 : 0;
             return r;
         }
-        if (nm == "is_numeric") {
+        if (nm == "type.is_numeric") {
             r.ok = true;
             r.value = (is_int || is_flt) ? 1 : 0;
             return r;
         }
-        if (nm == "is_bool") {
+        if (nm == "type.is_bool") {
             r.ok = true;
             r.value = (k == PrimitiveKind::BOOL) ? 1 : 0;
             return r;
         }
-        if (nm == "is_char") {
+        if (nm == "type.is_char") {
             r.ok = true;
             r.value = (k == PrimitiveKind::CHAR) ? 1 : 0;
             return r;
         }
-        if (nm == "is_pointer") {
+        if (nm == "type.is_pointer") {
             r.ok = true;
             r.value = (k == PrimitiveKind::PTR) ? 1 : 0;
             return r;
         }
-        if (nm == "is_string") {
+        if (nm == "type.is_string") {
             r.ok = true;
             r.value = (k == PrimitiveKind::STRING) ? 1 : 0;
+            return r;
+        }
+        /* Las PREGUNTAS de las cuatro que devuelven un tipo.
+         *
+         * Existen porque esas cuatro GRITAN cuando no hay respuesta, en vez de
+         * devolver un tipo vacio: un vacio de respuesta convierte "este caso no
+         * se trata" en un dato, y quien lo recibe sigue como si nada.  Pero si
+         * el accesor grita, hace falta poder preguntar antes -- si no, no se
+         * puede escribir codigo correcto sobre un tipo que no se conoce --, y
+         * esa es la pareja que ya usan `method.has` y `method.name`. */
+        if (nm == "type.is_callable") {
+            r.ok = true;
+            r.value = (k == PrimitiveKind::FUNCTION) ? 1 : 0;
+            return r;
+        }
+        if (nm == "type.is_result") {
+            r.ok = true;
+            r.value = (k == PrimitiveKind::RESULT) ? 1 : 0;
+            return r;
+        }
+        if (nm == "type.has_inner") {
+            r.ok = true;
+            r.value = t1.pointee ? 1 : 0;
+            return r;
+        }
+        if (nm == "type.has_base") {
+            r.ok = true;
+            r.value = 0;
+            if (k == PrimitiveKind::CLASS) {
+                auto it = tc.class_layouts().find(t1.struct_name);
+                if (it != tc.class_layouts().end() &&
+                    !it->second.super_name.empty())
+                    r.value = 1;
+            }
             return r;
         }
     }
 
     /* Builtins con 1 string literal arg. */
-    if (nm == "offsetof" || nm == "has_field" || nm == "has_method") {
+    if (nm == "field.offset" || nm == "field.has" || nm == "method.has") {
         if (ce->args.size() < 1) return r;
         auto *slit =
             dynamic_cast<const ast::StringLitExpr *>(ce->args[0].get());
         if (!slit || slit->is_interpolated()) return r;
         const std::string &fname = slit->value;
-        if (nm == "offsetof") {
+        if (nm == "field.offset") {
             const int64_t off = comptime_field_offset(tc, t1, fname);
             if (off < 0) return r;
             r.ok = true;
             r.value = off;
             return r;
         }
-        if (nm == "has_field") {
+        if (nm == "field.has") {
             r.ok = true;
             r.value = comptime_has_field(tc, t1, fname) ? 1 : 0;
             return r;
         }
-        if (nm == "has_method") {
+        if (nm == "method.has") {
             r.ok = true;
             r.value = comptime_has_method(tc, t1, fname) ? 1 : 0;
             return r;
@@ -1514,15 +1620,15 @@ static ComptimeEvalResult eval_builtin_call(const TypeChecker &tc,
     }
 
     /* Builtins con 2 type args. */
-    if (nm == "is_subtype" || nm == "is_same") {
+    if (nm == "type.is_subtype" || nm == "type.is_same") {
         if (ce->type_args.size() < 2) return r;
         const Type t2 = tc.resolve_type_node(ce->type_args[1].get());
-        if (nm == "is_subtype") {
+        if (nm == "type.is_subtype") {
             r.ok = true;
             r.value = comptime_is_subtype(tc, t1, t2) ? 1 : 0;
             return r;
         }
-        if (nm == "is_same") {
+        if (nm == "type.is_same") {
             r.ok = true;
             r.value = comptime_is_same(tc, t1, t2) ? 1 : 0;
             return r;
@@ -1854,19 +1960,19 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
          * sin necesidad de comprobar el alias en cada branch. */
         if (cid) {
             static const std::pair<const char *, const char *> ALIASES[] = {
-                {"concat", "comptime_concat"},
-                {"streq", "comptime_streq"},
-                {"strlen", "comptime_strlen"},
-                {"chr", "comptime_chr"},
-                {"ord", "comptime_ord"},
-                {"substr", "comptime_substr"},
-                {"repeat", "comptime_repeat"},
-                {"to_str", "comptime_to_str"},
-                {"replace", "comptime_replace"},
-                {"contains", "comptime_contains"},
+                {"concat", "comptime.str.concat"},
+                {"streq", "comptime.str.eq"},
+                {"strlen", "comptime.str.len"},
+                {"chr", "comptime.chr"},
+                {"ord", "comptime.ord"},
+                {"substr", "comptime.str.substr"},
+                {"repeat", "comptime.str.repeat"},
+                {"to_str", "comptime.to_str"},
+                {"replace", "comptime.str.replace"},
+                {"contains", "comptime.str.contains"},
                 {"emit_expr", "comptime_emit_expr"},
                 {"compile", "comptime_compile"},
-                {"ct_print", "comptime_print"},
+                {"ct_print", "comptime.print"},
             };
             for (const auto &a : ALIASES) {
                 if (cid->name == a.first) {
@@ -1876,7 +1982,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             }
         }
         if (cid) {
-            if (cid->name == "comptime_concat" && ce->args.size() == 2) {
+            if (cid->name == "comptime.str.concat" && ce->args.size() == 2) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult b =
@@ -1898,7 +2004,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 }
                 return r;
             }
-            if (cid->name == "comptime_streq" && ce->args.size() == 2) {
+            if (cid->name == "comptime.str.eq" && ce->args.size() == 2) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult b =
@@ -1915,7 +2021,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 }
                 return r;
             }
-            if (cid->name == "comptime_strlen" && ce->args.size() == 1) {
+            if (cid->name == "comptime.str.len" && ce->args.size() == 1) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 if (a.ok && a.deferred) {
@@ -1932,7 +2038,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             }
             /* A.42: comptime_chr(cp) -> string de 1 char (ASCII;
              * codepoints >127 se encodean como UTF-8 1-4 bytes). */
-            if (cid->name == "comptime_chr" && ce->args.size() == 1) {
+            if (cid->name == "comptime.chr" && ce->args.size() == 1) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 if (!a.ok || a.is_str || a.is_array || a.is_struct) return r;
@@ -1959,7 +2065,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 return r;
             }
             /* A.42: comptime_ord(s) -> primer byte (u64). */
-            if (cid->name == "comptime_ord" && ce->args.size() == 1) {
+            if (cid->name == "comptime.ord" && ce->args.size() == 1) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 if (!a.ok || !a.is_str || a.str.empty()) return r;
@@ -1968,7 +2074,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 return r;
             }
             /* A.42: comptime_substr(s, start, len) -> string. */
-            if (cid->name == "comptime_substr" && ce->args.size() == 3) {
+            if (cid->name == "comptime.str.substr" && ce->args.size() == 3) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult b =
@@ -1988,7 +2094,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 return r;
             }
             /* A.42: comptime_repeat(s, n) -> s repetido n veces. */
-            if (cid->name == "comptime_repeat" && ce->args.size() == 2) {
+            if (cid->name == "comptime.str.repeat" && ce->args.size() == 2) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult b =
@@ -2013,7 +2119,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
              * `replacement`.  Base para macros con patrones declarativos
              * (templates con placeholders `{x}`, `{name}`, etc.).
              * Combinable con `comptime_emit_expr` para code-gen real. */
-            if (cid->name == "comptime_replace" && ce->args.size() == 3) {
+            if (cid->name == "comptime.str.replace" && ce->args.size() == 3) {
                 ComptimeEvalResult s =
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult n =
@@ -2043,7 +2149,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             }
             /* A.43.12: comptime_contains(s, needle) -> bool.
              * Util para validar templates antes de aplicar replace. */
-            if (cid->name == "comptime_contains" && ce->args.size() == 2) {
+            if (cid->name == "comptime.str.contains" && ce->args.size() == 2) {
                 ComptimeEvalResult s =
                     comptime_eval_expr(tc, ce->args[0].get());
                 ComptimeEvalResult n =
@@ -2102,7 +2208,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 return comptime_eval_expr(tc, parsed.get());
             }
             /* A.42: comptime_to_str(int) -> "<decimal>". */
-            if (cid->name == "comptime_to_str" && ce->args.size() == 1) {
+            if (cid->name == "comptime.to_str" && ce->args.size() == 1) {
                 ComptimeEvalResult a =
                     comptime_eval_expr(tc, ce->args[0].get());
                 if (!a.ok || a.is_str || a.is_array || a.is_struct) return r;
@@ -2115,7 +2221,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
              * ComptimeValue.  Permite type-as-first-class-value:
              * el resultado se guarda en un `comptime const Type T`
              * y puede usarse en cualquier posicion de tipo. */
-            if (cid->name == "comptime_type" && !ce->type_args.empty()) {
+            if (cid->name == "type.of" && !ce->type_args.empty()) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 if (t1.kind == PrimitiveKind::VOID ||
                     t1.kind == PrimitiveKind::COUNT) {
@@ -2129,54 +2235,93 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             /* A.43: parent_class<T>() -> Type.  Devuelve el tipo del
              * super de una CLASS; si no tiene super (o T no es CLASS),
              * devuelve TYPE_META vacio (sentinela "no parent"). */
-            if (cid->name == "parent_class" && !ce->type_args.empty()) {
+            if (cid->name == "type.base" && !ce->type_args.empty()) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
-                Type parent{PrimitiveKind::TYPE_META};
+                const ClassLayout *cl = nullptr;
                 if (t1.kind == PrimitiveKind::CLASS) {
                     auto it = tc.class_layouts().find(t1.struct_name);
                     if (it != tc.class_layouts().end() &&
-                        !it->second.super_name.empty()) {
-                        parent = Type{PrimitiveKind::CLASS};
-                        parent.struct_name = it->second.super_name;
-                    }
+                        !it->second.super_name.empty())
+                        cl = &it->second;
                 }
+                if (cl == nullptr) {
+                    /* Dos situaciones distintas y dos mensajes: no ser una
+                     * clase es un error de quien escribe, y una clase sin base
+                     * es un caso normal que habia que preguntar antes. */
+                    answer_missing(tc, ce, t1,
+                                   t1.kind == PrimitiveKind::CLASS ? "VX2107"
+                                                                   : "VX2106",
+                                   r);
+                    return r; /* ok=false: no hay tipo que dar */
+                }
+                Type parent{PrimitiveKind::CLASS};
+                parent.struct_name = cl->super_name;
                 r.ok = true;
                 r.is_type = true;
                 r.type_val = parent;
                 return r;
             }
-            /* A.43: element_type<T>() -> Type.  Extrae el tipo
+            /* A.43: type.inner<T>() -> Type.  Extrae el tipo
              * "interior" de wrappers: T* -> T, T[N] -> T, Optional<T> -> T,
              * Future<T> -> T, borrow<T> -> T, unique<T> -> T, shared<T> -> T.
              * Para tipos sin pointee, devuelve TYPE_META vacio. */
-            if (cid->name == "element_type" && !ce->type_args.empty()) {
+            if (cid->name == "type.inner" && !ce->type_args.empty()) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
-                Type inner{PrimitiveKind::TYPE_META};
-                if (t1.pointee) {
-                    inner = *t1.pointee;
+                if (!t1.pointee) {
+                    answer_missing(tc, ce, t1, "VX2104", r);
+                    return r;
                 }
                 r.ok = true;
                 r.is_type = true;
-                r.type_val = inner;
+                r.type_val = *t1.pointee;
+                return r;
+            }
+            /* type.result<F>() -> Type: lo que devuelve un INVOCABLE.
+             *
+             * Es lo que permite escribir una generica de orden superior sin
+             * fijar de antemano si recibe un `fn` o un `cfn`: se toma el
+             * invocable como parametro de tipo y el retorno se LEE de el.
+             * Sin esto la ranura del retorno no se puede deducir -- no
+             * aparece en ningun parametro -- y habia que escribir la funcion
+             * dos veces, una por cada forma de invocable, que es partir en dos
+             * todo lo que cuelgue de ella.
+             *
+             * `fn` y `cfn` son el mismo kind con distinta representacion (uno
+             * lleva su entorno, el otro no), asi que los dos contestan aqui y
+             * el concepto `Callable` acepta los dos.
+             *
+             * Va aparte de @c type.inner aunque hoy lean el mismo sitio: el
+             * interior de un envoltorio y lo que devuelve una funcion son dos
+             * preguntas distintas, y juntarlas obligaria a quien lee el codigo
+             * a saber que el retorno se guarda en el "apuntado". */
+            if (cid->name == "type.result" && !ce->type_args.empty()) {
+                const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
+                if (t1.kind != PrimitiveKind::FUNCTION || !t1.pointee) {
+                    answer_missing(tc, ce, t1, "VX2103", r);
+                    return r;
+                }
+                r.ok = true;
+                r.is_type = true;
+                r.type_val = *t1.pointee;
                 return r;
             }
             /* A.43: error_type<T>() -> Type.  Para Result<V,E> devuelve E.
              * Para no-Result devuelve TYPE_META vacio. */
-            if (cid->name == "error_type" && !ce->type_args.empty()) {
+            if (cid->name == "type.error" && !ce->type_args.empty()) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
-                Type inner{PrimitiveKind::TYPE_META};
-                if (t1.kind == PrimitiveKind::RESULT && t1.pointee2) {
-                    inner = *t1.pointee2;
+                if (t1.kind != PrimitiveKind::RESULT || !t1.pointee2) {
+                    answer_missing(tc, ce, t1, "VX2105", r);
+                    return r;
                 }
                 r.ok = true;
                 r.is_type = true;
-                r.type_val = inner;
+                r.type_val = *t1.pointee2;
                 return r;
             }
             /* A.43: method_name<T>(idx) -> string.  Sister de
              * field_name pero para metodos de una CLASS.  Incluye
              * heredados.  Cadena vacia si idx out-of-range. */
-            if (cid->name == "method_name" && !ce->type_args.empty() &&
+            if (cid->name == "method.name" && !ce->type_args.empty() &&
                 ce->args.size() == 1) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 ComptimeEvalResult idx =
@@ -2195,7 +2340,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             /* A.43: method_return_type<T>(idx) -> Type.  Tipo de
              * retorno del metodo idx-esimo.  TYPE_META vacio si
              * out-of-range o T no es CLASS. */
-            if (cid->name == "method_return_type" && !ce->type_args.empty() &&
+            if (cid->name == "method.result" && !ce->type_args.empty() &&
                 ce->args.size() == 1) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 ComptimeEvalResult idx =
@@ -2216,7 +2361,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
              * debug de metaprogramas.  Acepta int, string, o type.
              * Retorna 0 (u64) para componer con static_assert
              * (`static_assert(comptime_print("hi") == 0, "ok")`). */
-            if (cid->name == "comptime_print" && ce->args.size() == 1) {
+            if (cid->name == "comptime.print" && ce->args.size() == 1) {
                 ComptimeEvalResult arg =
                     comptime_eval_expr(tc, ce->args[0].get());
                 if (!arg.ok) return r;
@@ -2242,7 +2387,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
             /* A.43: field_type_at<T>(idx) -> Type.  Hermana de
              * field_type pero devuelve el Type del campo idx-esimo
              * en orden de declaracion (struct/class). */
-            if (cid->name == "field_type_at" && !ce->type_args.empty() &&
+            if (cid->name == "field.type_at" && !ce->type_args.empty() &&
                 ce->args.size() == 1) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 ComptimeEvalResult idx =
@@ -2262,9 +2407,92 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 r.type_val = ft;
                 return r;
             }
+            /* Lo ALCANZABLE desde aqui: no que metodos TIENE el tipo, sino
+             * que se le puede llamar -- con llamada uniforme eso incluye las
+             * libres que este fichero alcanza --.  Se resuelve aqui, y no
+             * solo en el bajado, para que la familia valga tambien DENTRO de
+             * un `comptime`, que es donde mas sentido tiene: es lo que
+             * permite generar codigo a partir de lo que se puede llamar. */
+            if (!ce->type_args.empty() &&
+                (cid->name == "scoped.method.count" ||
+                 cid->name == "scoped.method.has" ||
+                 cid->name == "scoped.method.name" ||
+                 cid->name == "scoped.method.origin" ||
+                 cid->name == "scoped.method.arity" ||
+                 cid->name == "scoped.method.result" ||
+                 cid->name == "scoped.method.param")) {
+                const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
+                std::vector<ScopedMethod> reach;
+                tc.collect_scoped_methods(t1, tc.current_ns_prefix(), reach);
+                if (cid->name == "scoped.method.count") {
+                    r.ok = true;
+                    r.value = static_cast<int64_t>(reach.size());
+                    return r;
+                }
+                if (ce->args.empty()) return r;
+                if (cid->name == "scoped.method.has") {
+                    ComptimeEvalResult nm =
+                        comptime_eval_expr(tc, ce->args[0].get());
+                    if (!nm.ok || !nm.is_str) return r;
+                    int64_t found = 0;
+                    for (const ScopedMethod &sm : reach) {
+                        if (sm.name != nullptr && *sm.name == nm.str) {
+                            found = 1;
+                            break;
+                        }
+                    }
+                    r.ok = true;
+                    r.value = found;
+                    return r;
+                }
+                ComptimeEvalResult idx =
+                    comptime_eval_expr(tc, ce->args[0].get());
+                if (!idx.ok || idx.is_str || idx.value < 0 ||
+                    static_cast<size_t>(idx.value) >= reach.size())
+                    return r;
+                const ScopedMethod &sm =
+                    reach[static_cast<size_t>(idx.value)];
+                if (cid->name == "scoped.method.name") {
+                    r.ok = true;
+                    r.is_str = true;
+                    r.str = *sm.name;
+                    return r;
+                }
+                if (cid->name == "scoped.method.origin") {
+                    r.ok = true;
+                    r.is_str = true;
+                    /* Vacio = metodo real del tipo, que es justo lo que lo
+                     * distingue de lo que se alcanza desde aqui. */
+                    r.str = sm.origin == nullptr ? std::string() : *sm.origin;
+                    return r;
+                }
+                if (cid->name == "scoped.method.arity") {
+                    r.ok = true;
+                    r.value = static_cast<int64_t>(scoped_arity(tc, sm));
+                    return r;
+                }
+                if (cid->name == "scoped.method.result") {
+                    r.ok = true;
+                    r.is_type = true;
+                    r.type_val = scoped_return_type(tc, sm);
+                    return r;
+                }
+                /* scoped_method_param<T>(i, j): el 0 es SIEMPRE el receptor,
+                 * tambien donde `this` es implicito.  Es lo que hace que un
+                 * metodo real y una libre se lean igual. */
+                if (ce->args.size() < 2) return r;
+                ComptimeEvalResult which =
+                    comptime_eval_expr(tc, ce->args[1].get());
+                if (!which.ok || which.is_str || which.value < 0) return r;
+                r.ok = true;
+                r.is_type = true;
+                r.type_val = scoped_param_type(
+                    tc, sm, static_cast<uint32_t>(which.value));
+                return r;
+            }
             /* typename<T>() devuelve un string comptime-evaluable.
              * Lo redirigimos via comptime_type_name. */
-            if (cid->name == "typename" && !ce->type_args.empty()) {
+            if (cid->name == "type.name" && !ce->type_args.empty()) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 r.ok = true;
                 r.is_str = true;
@@ -2272,7 +2500,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 return r;
             }
             /* field_name<T>(idx) tambien devuelve string. */
-            if (cid->name == "field_name" && !ce->type_args.empty() &&
+            if (cid->name == "field.name" && !ce->type_args.empty() &&
                 ce->args.size() == 1) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 ComptimeEvalResult idx =
@@ -2286,7 +2514,7 @@ ComptimeEvalResult comptime_eval_expr(const TypeChecker &tc,
                 return r;
             }
             /* field_type<T>("f") tambien. */
-            if (cid->name == "field_type" && !ce->type_args.empty() &&
+            if (cid->name == "field.type" && !ce->type_args.empty() &&
                 ce->args.size() == 1) {
                 const Type t1 = tc.resolve_type_node(ce->type_args[0].get());
                 auto *slit =

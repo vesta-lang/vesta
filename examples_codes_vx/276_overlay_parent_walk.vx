@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// parent<T>() + array anclado por RVA: walk de sub-overlays, todo declarativo
+// type.parent<T>() + array anclado por RVA: walk de sub-overlays, todo declarativo
 // -----------------------------------------------------------------------------
 // La forma del recorrido de una tabla de imports PE, en miniatura y verificable.
 // Piezas de F4:
@@ -7,8 +7,8 @@
 //     anclado en una direccion RESUELTA por un resolver de bloque (traduce un
 //     RVA por la tabla de secciones de la vista),
 //   * cada sub-overlay resuelve SU nombre (en su propio RVA) alcanzando las
-//     secciones del contenedor via `parent<Root>()` (dependencia circular:
-//     Root.Descs usa Desc; Desc.name usa parent<Root>()).
+//     secciones del contenedor via `type.parent<Root>()` (dependencia circular:
+//     Root.Descs usa Desc; Desc.name usa type.parent<Root>()).
 // Cero helpers, cero `*(T*)`.  interp = JIT = AOT.
 
 @overlay
@@ -24,14 +24,14 @@ struct Desc {
 	u32 val      @0x04; // payload verificable
 	// nombre en translate(name_rva) por las secciones del ROOT.
 	u8 name @offset {
-		u64 rb  = (u64)parent<Root>();
+		u64 rb  = (u64)type.parent<Root>();
 		u32 rva = this.name_rva;
 		i32 i   = 0_i32;
-		while ((u32)i < (u32)parent<Root>().count) {
-			u32 va = parent<Root>().secs[i].va;
-			u32 vs = parent<Root>().secs[i].vsz;
+		while ((u32)i < (u32)type.parent<Root>().count) {
+			u32 va = type.parent<Root>().secs[i].va;
+			u32 vs = type.parent<Root>().secs[i].vsz;
 			if (rva >= va && rva < va + vs) {
-				return rb + (u64)parent<Root>().secs[i].rptr + (u64)(rva - va);
+				return rb + (u64)type.parent<Root>().secs[i].rptr + (u64)(rva - va);
 			}
 			i = i + 1;
 		}
@@ -62,7 +62,7 @@ struct Root {
 }
 
 i32 main() {
-	u8* buf = (u8*)malloc(512);
+	u8* buf          = (u8*)malloc(512);
 	*(u32*)(buf + 0) = 1;      // count=1
 	*(u32*)(buf + 4) = 0x1000; // desc_rva
 	// secs[0]: cubre todo el rango, va=0x1000 vsz=0x1000 rptr=0x40

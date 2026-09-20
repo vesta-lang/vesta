@@ -2,6 +2,6 @@
 // desde OTRO modulo por su nombre cualificado (geo.Numerico / geo.doble).
 namespace geo;
 
-public concept Numerico<T> = is_numeric<T>();
+public concept Numerico<T> = type.is_numeric<T>();
 
 public T doble<T: geo.Numerico>(T x) => x + x;

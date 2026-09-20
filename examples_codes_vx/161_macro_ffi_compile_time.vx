@@ -72,14 +72,14 @@ comptime string lcg_sum(i64 count) {
 }
 
 // Macro 4: combina FFI + introspeccion via virtual lib `vesta_comptime`.
-// `comptime_type_sizeof` esta registrada in-process como virtual fn
+// `type.by_name.size` esta registrada in-process como virtual fn
 // (MC.23) -- el AST evaluator la invoca sin necesidad de DLL externa.
 @Macro
 comptime string size_of_u64() {
 	// Llamada implicit a la virtual fn registrada bajo "vesta_comptime"
 	// -- no se requiere `extern "vesta_comptime"` porque MC.20 detecta
 	// automaticamente los nombres registrados.
-	u64 sz = comptime_type_sizeof("u64");
+	u64 sz = type.by_name.size("u64");
 	return to_str(sz);
 }
 

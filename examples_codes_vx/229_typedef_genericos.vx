@@ -17,7 +17,7 @@ struct Caja {
 }
 
 // #6: concepto + bound.
-concept Num<T> = is_numeric<T>();
+concept Num<T> = type.is_numeric<T>();
 i64 sumar<T: Num>(T a, T b) => (i64)a + (i64)b;
 
 // #7: especializacion total i64.

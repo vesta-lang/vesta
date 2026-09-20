@@ -109,6 +109,15 @@ void rewrite_refs_in_type_(
         for (auto &pt : ft->param_types)
             rewrite_refs_in_type_(pt.get(), rename_map);
         rewrite_refs_in_type_(ft->return_type.get(), rename_map);
+    } else if (t->kind == ast::NodeKind::ComputedTypeNode) {
+        /* Un tipo CALCULADO lleva una LLAMADA dentro, y ahi se nombran tipos
+         * igual que en el cuerpo de un metodo: `type.size<field.type_at<Punto>
+         * (0)>()`.  Sin esto, ese `Punto` seguia diciendose corto cuando la
+         * declaracion ya se llamaba `ns__Punto`, la llamada no resolvia y el
+         * error hablaba de que aquello "no produce un tipo" -- apuntando a una
+         * expresion que es correcta. */
+        auto *ct = static_cast<ast::ComputedTypeNode *>(t);
+        rewrite_refs_in_expr_(ct->expr.get(), rename_map);
     } else if (t->kind == ast::NodeKind::PrimitiveTypeNode) {
         // NS.1 fix: los smart pointers (gc<T>/unique<T>/shared<T>/borrow<T>) y
         // las colecciones (ArrayList<T>/HashMap<K,V>/...) se parsean como
@@ -159,7 +168,7 @@ void rewrite_refs_in_expr_(
                     : std::string();
             // Builtins de reflexion que reciben un nombre de tipo/clase como
             // STRING literal: forName (clase), find_type (@Introspect).
-            if (fname == "forName" || fname == "find_type") {
+            if (fname == "forName" || fname == "type.find") {
                 for (auto &a : c->args) {
                     if (a && a->kind == ast::NodeKind::StringLitExpr) {
                         auto *sl = static_cast<ast::StringLitExpr *>(a.get());
@@ -491,6 +500,41 @@ void mangle_struct_decl_(
     }
 }
 
+/**
+ * @brief Reescribe un `impl Tipo { }` / `impl Concepto for Tipo { }`.
+ *
+ * Un `impl` no DECLARA ningun nombre -- por eso no esta en
+ * @c collect_renames_ --, pero REFERENCIA dos (el tipo y el concepto) y sus
+ * metodos nombran tipos igual que los de un struct.  Sin esto, dentro de un
+ * namespace el `impl` seguia hablando de `Punto` cuando la declaracion ya se
+ * llamaba `ns__Punto`: el tipo de retorno no resolvia, la funcion salia
+ * `void` y el error que se leia era "return con valor en funcion declarada
+ * void" -- en una funcion donde el usuario escribio el tipo.
+ *
+ * @param im         El impl.
+ * @param rename_map Los pares nombre -> mangleado, ya completos.
+ */
+void mangle_impl_decl_(
+    ast::ImplDecl *im,
+    const std::unordered_map<std::string, std::string> &rename_map) {
+    {
+        auto it = rename_map.find(im->target_type);
+        if (it != rename_map.end()) im->target_type = it->second;
+    }
+    {
+        auto it = rename_map.find(im->concept_name);
+        if (it != rename_map.end()) im->concept_name = it->second;
+    }
+    for (auto &m : im->methods) {
+        if (!m) continue;
+        rewrite_refs_in_type_(m->return_type.get(), rename_map);
+        for (auto &p : m->params)
+            rewrite_refs_in_type_(p->type.get(), rename_map);
+        rewrite_bounds_(m->type_bounds, rename_map);
+        rewrite_refs_in_stmt_(m->body.get(), rename_map);
+    }
+}
+
 void mangle_class_decl_(
     ast::ClassDecl *cd, const std::string &ns_path,
     std::unordered_map<std::string, std::string> &rename_map) {
@@ -744,6 +788,10 @@ void mangle_decls_apply_(
         case ast::NodeKind::ConceptDecl:
             mangle_concept_decl_(static_cast<ast::ConceptDecl *>(d.get()),
                                  ns_path, rename_map);
+            break;
+        case ast::NodeKind::ImplDecl:
+            mangle_impl_decl_(static_cast<ast::ImplDecl *>(d.get()),
+                              rename_map);
             break;
         /* Bloques `comptime { }` / `comptime for` / `comptime if` a nivel
          * modulo: reescribir las referencias de su cuerpo (tipos, funciones,

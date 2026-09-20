@@ -226,6 +226,13 @@ struct ComptimeEvalResult {
     /// PRIMERO, que es el de mas adentro y por tanto la causa.
     std::string deferred_code;
     std::string deferred_arg;
+    /// La pregunta no tiene respuesta TODAVIA: se hizo sobre un parametro de
+    /// tipo sin ligar, o sea dentro de una plantilla.  No es un fallo -- lo
+    /// resolvera cada instancia --, y es lo que distingue "aun no se sabe" de
+    /// "no hay respuesta", que si se dice.  Quien pide un tipo mira esto antes
+    /// de gritar: sin ello, una plantilla con un retorno calculado fallaba
+    /// sola, antes de que nadie la instanciara.
+    bool not_yet = false;
     int64_t value = 0;
     std::string str;
     std::vector<std::shared_ptr<ComptimeValue>> array_vals;

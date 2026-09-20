@@ -2,8 +2,8 @@
 //
 // `comptime_compile(s)` toma un string compile-time, lo parsea como
 // una EXPRESION la evalua recursivamente al compile-time.
-// Permite construir codigo a partir de datos (typename<T>,
-// comptime_to_str, concat) y ejecutarlo sin runtime.
+// Permite construir codigo a partir de datos (type.name<T>,
+// comptime.to_str, concat) y ejecutarlo sin runtime.
 //
 // Diferencias vs Lisp puro:
 //   - El input es texto, no un AST literal (no hay `'foo` literal).
@@ -22,8 +22,8 @@ static_assert(R == 23, "macro: 2 + 3*7 = 23");
 
 // (2) Composicion: construir el codigo a partir de datos comptime.
 const i64    N = 5_i64;
-const string E = comptime_concat("(",
-	comptime_concat(comptime_to_str(N), ") * 8"));
+const string E = comptime.str.concat("(",
+	comptime.str.concat(comptime.to_str(N), ") * 8"));
 const i64 R2 = comptime_compile(E);
 static_assert(R2 == 40, "macro composicion: 5 * 8 = 40");
 
@@ -34,24 +34,27 @@ struct Vec3 {
 	f32 z;
 }
 const string code_size =
-	comptime_concat("sizeof<", comptime_concat(typename<Vec3>(), ">()"));
+	comptime.str.concat(
+	"type.size<",
+	comptime.str.concat(type.name<Vec3>(), ">()")
+);
 const i64 sz3 = comptime_compile(code_size);
-static_assert(sz3 == 12, "macro typename: sizeof Vec3 = 12");
+static_assert(sz3 == 12, "macro type.name: type.size Vec3 = 12");
 
 // (4) Lookup table generada via macro: produce el campo idx-esimo
 // como expresion de offset.
 const string code_off =
-	comptime_concat("offsetof<Vec3>(\"",
-	comptime_concat(field_name<Vec3>(2), "\")"));
+	comptime.str.concat("field.offset<Vec3>(\"",
+	comptime.str.concat(field.name<Vec3>(2), "\")"));
 const u64 off_z = comptime_compile(code_off);
 static_assert(off_z == 8, "macro offset: Vec3.z @ 8");
 
 // (5) Macros encadenados (output de un macro como input del siguiente).
-const string e1 = comptime_concat(
+const string e1 = comptime.str.concat(
 	"(",
-	comptime_concat(comptime_to_str(3), " * 4)")
+	comptime.str.concat(comptime.to_str(3), " * 4)")
 );
-const string e2 = comptime_concat(e1, " + 10");
+const string e2 = comptime.str.concat(e1, " + 10");
 const i64    r3 = comptime_compile(e2); // (3 * 4) + 10 = 22
 static_assert(r3 == 22, "macro encadenado: (3*4)+10");
 

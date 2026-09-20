@@ -7,7 +7,7 @@ void main() {
 	try {
 		panic("manual panic");
 	} catch (FatalError e) {
-		println("panic caught kind=${e.kind}");
+		println("panic caught type.kind=${e.kind}");
 		print_cstr(e.message);
 		println("");
 	}
@@ -19,13 +19,13 @@ void main() {
 			i64  v   = *bad;
 			println("nunca: ${v}");
 		} catch (FatalError inner) {
-			println("inner caught: kind=${inner.kind}");
+			println("inner caught: type.kind=${inner.kind}");
 			// re-throw via panic
 			panic("rethrow desde inner");
 		}
 		println("nunca: tras inner");
 	} catch (FatalError outer) {
-		println("outer caught: kind=${outer.kind}");
+		println("outer caught: type.kind=${outer.kind}");
 		print_cstr(outer.message);
 		println("");
 	}
@@ -35,10 +35,10 @@ void main() {
 		i64 ok = 100_i64;
 		println("antes del AV: ${ok}");
 		i64* bad = (i64*)0;
-		*    bad = 99; // write AV
+		*bad     = 99; // write AV
 		println("nunca");
 	} catch (FatalError e) {
-		println("write AV caught: kind=${e.kind}");
+		println("write AV caught: type.kind=${e.kind}");
 	}
 
 	println("=== fin ===");

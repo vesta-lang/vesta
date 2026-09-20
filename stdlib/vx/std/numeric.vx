@@ -91,7 +91,7 @@ import std.types only usize;
 // ---------------------------------------------------------------------------
 
 /// Existe suma y resta empaquetadas.  Para todo tipo numerico.
-public concept PackedAdd<T> = is_numeric<T>();
+public concept PackedAdd<T> = type.is_numeric<T>();
 
 /// Existe producto empaquetado.
 ///
@@ -100,11 +100,11 @@ public concept PackedAdd<T> = is_numeric<T>();
 /// NEON.  Para multiplicar enteros de 64 bits hay que hacerlo de uno en uno, y
 /// entonces esta libreria no es lo que se busca.
 public concept PackedMul<T> =
-	is_float<T>() || (is_integer<T>() && (sizeof<T>() == 2 || sizeof<T>() == 4));
+	type.is_float<T>() || (type.is_integer<T>() && (type.size<T>() == 2 || type.size<T>() == 4));
 
 /// Existe division empaquetada.  Solo flotantes: la division entera no la
 /// tiene ninguna de las dos maquinas.
-public concept PackedDiv<T> = is_float<T>();
+public concept PackedDiv<T> = type.is_float<T>();
 
 /// Se puede repartir un mismo sumando a todos los carriles.  Cualquier numero.
 ///
@@ -112,7 +112,7 @@ public concept PackedDiv<T> = is_float<T>();
 /// un f32 se sabe hacer desde el baseline -- sino que la tabla de tipos del
 /// compilador estaba escrita tres veces y la copia del reparto de escalar se
 /// habia quedado sin f32.  Al dejar una sola, el hueco desaparecio.
-public concept PackedScalarAdd<T> = is_numeric<T>();
+public concept PackedScalarAdd<T> = type.is_numeric<T>();
 
 /// Se puede repartir un mismo factor a todos los carriles.
 ///
@@ -127,7 +127,7 @@ public concept PackedScalarMul<T> = PackedMul<T>();
 /// una instruccion dedicada, se resta de cero.  Estuvo cerrado a f64 -- ni la
 /// maquina ni el generador de codigo lo impedian: era el reconocedor, que
 /// exigia ese tipo y nada mas.
-public concept PackedNegate<T> = is_numeric<T>();
+public concept PackedNegate<T> = type.is_numeric<T>();
 
 /// Se puede acumular en una sola variable.
 ///
@@ -135,7 +135,7 @@ public concept PackedNegate<T> = is_numeric<T>();
 /// no es que la maquina no pueda, es que el acumulador tendria el ancho del
 /// elemento y una suma de unos pocos cientos de valores ya se sale.  Para
 /// sumar bytes, conviertelos antes al ancho en el que quieras el total.
-public concept PackedSum<T> = is_numeric<T>() && sizeof<T>() >= 4;
+public concept PackedSum<T> = type.is_numeric<T>() && type.size<T>() >= 4;
 
 // ---------------------------------------------------------------------------
 // Dos rangos de entrada, uno de salida.

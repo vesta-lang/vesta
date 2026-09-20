@@ -80,7 +80,10 @@ constexpr ScalarPrinter kScalarPrinters[] = {
     {Builtin::PrintChar, "vio_print_char", "__vx_print_char", true},
     {Builtin::PrintPtr, "vio_print_ptr", "__vx_print_ptr", true},
     {Builtin::PrintCstr, "vio_print_cstr", "__vx_print_cstr", true},
-    {Builtin::PrintFloat, "vio_print_float", nullptr, true},
+    // El bare existe desde que se escribio `__vx_print_float` (vx_io.vx): la
+    // tabla decia nulo porque no se actualizo, y por eso un `print_float` en
+    // nativo avisaba de "aun no soportado" y NO IMPRIMIA nada.
+    {Builtin::PrintFloat, "vio_print_float", "__vx_print_float", true},
     {Builtin::PrintColor, "vio_print_color", nullptr, true},
     {Builtin::PrintGchandle, "vio_print_gchandle", nullptr, true},
 };
@@ -230,6 +233,9 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
      * como se llama la primitiva en cada camino.  Nulo es "no es de esos". */
     const ScalarPrinter *const scalar = scalar_printer_for(b);
     const bool is_print_pad = (b == Builtin::PrintPad);
+    /* El sumidero de bytes: no formatea nada, pero sale por el mismo sitio que
+     * todo lo de arriba, asi que vive con ellos. */
+    const bool is_write = (b == Builtin::Write);
     // Secuencias de control del terminal (escapes VT100 fijos): sin valor que
     // formatear, pero salen por la misma primitiva que todo lo de arriba.
     const bool is_term_clear = (b == Builtin::TermClear);
@@ -245,7 +251,8 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
      * Antes esto no hacia falta porque todo vivia en la misma funcion; ahora
      * evita construir los ayudantes para una llamada que no va a usarlos. */
     if (!(is_print || is_println || is_echo || is_flush || is_gc_collect ||
-          is_gc_finalize_all || scalar || is_print_pad || is_term_clear ||
+          is_gc_finalize_all || scalar || is_print_pad || is_write ||
+          is_term_clear ||
           is_term_clear_line || is_term_move || is_term_save_cursor ||
           is_term_restore_cursor || is_term_hide_cursor ||
           is_term_show_cursor || is_term_reset))
@@ -423,6 +430,42 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
             e->args[0]->result_type.kind == PrimitiveKind::CLASS) {
             v = emit_gc_handle_for_ptr(v, e->loc.line);
         }
+        /* Caso especial: `print_float` recibe un FLOTANTE, y los dos caminos lo
+         * quieren de forma distinta.
+         *
+         * El generico de abajo convierte el VALOR a entero, que para un
+         * flotante es justo lo que no hay que hacer: 3.5 llegaba como 3, y el
+         * formateador leia ese 3 como bits IEEE -- salia `1.4822e-323`, un
+         * denormal, en vez de `3.5`, y en TODOS los modos, no solo en nativo.
+         *
+         * El helper bare toma un `f64` tal cual; el de la VM toma los BITS, que
+         * es un bitcast y no una conversion.  Es lo que ya hacia la
+         * interpolacion `${f}` -- por eso esa si imprimia bien y el builtin
+         * suelto no --. */
+        if (b == Builtin::PrintFloat) {
+            const PrimitiveKind ak = e->args[0]->result_type.kind;
+            ir::IrValueId vf = v;
+            if (ak == PrimitiveKind::F32) {
+                // F32 se re-codifica a F64: el formateador solo habla f64.
+                vf = emit_ir_unop(ir::IrOp::F32TOF64, v, ir::IrType::F64,
+                                  e->loc.line);
+            } else if (ak != PrimitiveKind::F64) {
+                // Un entero donde se espera un flotante: aqui SI se convierte
+                // el valor (2 -> 2.0), que es lo que quiso decir quien llamo.
+                vf = cast_if_needed(v, fn_->values[v].type, ir::IrType::F64,
+                                    e->loc.line, /*is_explicit=*/true);
+            }
+            if (native_poo_) {
+                emit_io_prim(scalar->bare, {vf}, e->loc.line);
+            } else {
+                ir::IrValueId bits = emit_ir_unop(
+                    ir::IrOp::BITCAST, vf, ir::IrType::I64, e->loc.line);
+                emit_native_call(kVestaIoLib, scalar->vm, {bits},
+                                 ir::IrType::VOID, e->loc.line);
+            }
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         v = cast_if_needed(v, fn_->values[v].type, ir::IrType::I64, e->loc.line,
                            /*is_explicit=*/scalar->silent_on_lossy);
         if (native_poo_) {
@@ -464,8 +507,66 @@ bool Lowering::try_lower_print_builtins(ast::CallExpr *e, Builtin b,
                                 ir::IrType::I64, e->loc.line, true);
         v_w = cast_if_needed(v_w, fn_->values[v_w].type, ir::IrType::I64,
                              e->loc.line, true);
+        /* En nativo va al helper del runtime fusionado, no al plugin de la VM.
+         *
+         * Le faltaba esta rama -- la unica de los que escriben, que el resto de
+         * `print_*` si la tiene --, asi que un `print_pad` en un binario AOT
+         * llamaba a `vio_print_pad` de `vesta_io.dll`: el ejecutable dejaba de
+         * ser autocontenido y ademas escribia en el buffer DEL PLUGIN, distinto
+         * del que usa `print`, con lo que la salida se descolocaba.  En la
+         * practica reventaba con un acceso invalido.  `__vx_pad` existe en
+         * vx_io.vx y es el que ya usa la alineacion de `${x:>10}`. */
+        if (native_poo_) {
+            emit_io_prim("__vx_pad", {v_fill, v_w}, e->loc.line);
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
         emit_native_call(kVestaIoLib, "vio_print_pad", {v_fill, v_w},
                          ir::IrType::VOID, e->loc.line);
+        out_value = ir::IR_NO_VALUE;
+        return true;
+    }
+
+    /* ----- write(ptr, len): el SUMIDERO de bytes -----
+     *
+     * Escribe `len` bytes desde `ptr` sin formatear nada.  Es el primitivo del
+     * que cuelga todo lo que imprime, y el unico que no tenia nombre propio en
+     * el lenguaje: `print` no es mas que decidir QUE bytes y mandarselos aqui.
+     *
+     * De QUE memoria es `ptr` no lo decide este codigo, lo dice el IR -- que
+     * ya lo sabe, es lo mismo que separa un `mov` de un `movh` --, y cada
+     * backend lo baja como le toca: en la maquina virtual una direccion suya
+     * se lee con `vio_print` y una del anfitrion con `vio_print_buf`; en
+     * nativo no hay dos memorias, asi que las dos son la misma y van al
+     * sumidero fusionado.
+     *
+     * Tratarlo de otro modo -- elegir por el modo de ejecucion en vez de por
+     * el tipo -- haria que el mismo programa escribiera OTROS BYTES segun como
+     * se ejecute, que es justo lo que no puede pasar. */
+    if (is_write) {
+        if (e->args.size() != 2) {
+            return builtin_error(
+                e->loc, "'write' requiere (ptr, len)", out_value);
+        }
+        ir::IrValueId v_ptr = lower_expr(e->args[0].get());
+        ir::IrValueId v_len = lower_expr(e->args[1].get());
+        if (v_ptr == ir::IR_NO_VALUE || v_len == ir::IR_NO_VALUE) {
+            out_value = ir::IR_NO_VALUE;
+            return true;
+        }
+        v_len = cast_if_needed(v_len, fn_->values[v_len].type, ir::IrType::I64,
+                               e->loc.line, /*is_explicit=*/true);
+        const bool is_host_mem = fn_->values[v_ptr].is_host_ptr;
+        if (native_poo_) {
+            emit_io_prim("__vx_write", {v_ptr, v_len}, e->loc.line);
+        } else if (is_host_mem) {
+            emit_native_call(kVestaIoLib, "vio_print_buf", {v_ptr, v_len},
+                             ir::IrType::VOID, e->loc.line);
+        } else {
+            const ir::IrValueId v_proc = emit_getproc(e->loc.line);
+            emit_native_call(kVestaIoLib, "vio_print", {v_proc, v_ptr, v_len},
+                             ir::IrType::VOID, e->loc.line);
+        }
         out_value = ir::IR_NO_VALUE;
         return true;
     }
@@ -871,15 +972,11 @@ void Lowering::emit_print_typed_value(ast::Expr *ex,
     // longitud en bytes, y usar vio_print_buf para emitir el bloque
     // sin cortar en NUL (binary-safe; preserva multi-byte UTF-8).
     if (t.kind == PrimitiveKind::STRING) {
-        // native_poo (AOT): `string` es value-string {ptr,len,cap} con SSO;
-        // (ptr,len) via accesores flag-aware + escritura por __vx_write
-        // (PURE_NATIVE).  Full/JIT/interp: GcHandle via strraw/strgetbytes
-        // + vio_print_buf (VM).
-        ir::IrValueId v_ptr = native_poo_
-                                  ? emit_native_str_data_ptr(v, ex->loc.line)
-                                  : emit_strraw(v, ex->loc.line);
-        ir::IrValueId v_len = native_poo_ ? emit_native_str_len(v, ex->loc.line)
-                                          : emit_strgetbytes(v, ex->loc.line);
+        // Como se llega a (ptr,len) depende del modo, y esa eleccion vive en
+        // un solo sitio: @ref emit_str_ptr_len.
+        ir::IrValueId v_ptr = ir::IR_NO_VALUE;
+        ir::IrValueId v_len = ir::IR_NO_VALUE;
+        emit_str_ptr_len(v, ex->loc.line, v_ptr, v_len);
         // Item 17: format spec en STRING.  Si align != NONE Y
         // width > 0, calcular padding = max(0, width - len) y
         // emitirlo antes (RIGHT) o despues (LEFT) del print_buf.

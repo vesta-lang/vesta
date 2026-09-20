@@ -1,0 +1,64 @@
+// -----------------------------------------------------------------------------
+// print_float y print_pad: los dos builtins que iban por su cuenta
+// -----------------------------------------------------------------------------
+// Los builtins que escriben tienen DOS caminos -- el de la maquina virtual, que
+// llama al plugin nativo, y el `bare` del binario AOT, que llama al runtime de
+// I/O fusionado -- y estos dos los tenian mal puestos:
+//
+//   * `print_float(3.5)` imprimia `1.4822e-323` en los TRES modos.  El camino
+//     comun convierte el argumento a entero antes de pasarlo, que para un
+//     flotante es justo lo que no hay que hacer: 3.5 llegaba como 3 y el
+//     formateador leia ese 3 como bits IEEE.  La interpolacion `${f}` si estaba
+//     bien, asi que las dos formas de imprimir el mismo numero no coincidian.
+//
+//   * `print_pad` no tenia camino `bare` -- el unico de los que escriben que no
+//     lo tenia --, asi que en AOT llamaba al plugin de la VM: el ejecutable
+//     dejaba de ser autocontenido y escribia en OTRO buffer, distinto del que
+//     usa `print`.  En la practica reventaba con un acceso invalido.
+//
+// Por eso este ejemplo imprime cada valor por las DOS vias: si vuelven a
+// separarse, las lineas dejan de casar.
+
+i32 main() {
+	f64 medio  = 3.5_f64;
+	f64 cuarto = 1.25_f64;
+	f32 corto  = 0.75_f32;
+
+	// Cada numero por las dos vias.  Tienen que decir lo mismo.
+	print("f64 interp=${medio} builtin=");
+	print_float(medio);
+	println("");
+
+	print("f64 interp=${cuarto} builtin=");
+	print_float(cuarto);
+	println("");
+
+	print("f32 interp=${corto} builtin=");
+	print_float(corto);
+	println("");
+
+	// Un entero donde se espera un flotante: se convierte el VALOR (2 -> 2.0),
+	// que es lo que quiso decir quien llamo, y no sus bits.
+	print("desde entero=");
+	print_float(2);
+	println("");
+
+	// Relleno manual de columnas.  El de la izquierda con puntos y el de la
+	// derecha con espacios, para ver el ancho exacto entre corchetes.
+	print("pad=[");
+	print_pad(46_u32, 4_u64); // '.'
+	println("]");
+
+	print("col=[");
+	print("ab");
+	print_pad(32_u32, 6_u64); // ' '
+	println("]");
+
+	// Ancho cero: no escribe nada, y no es un caso raro -- sale solo en cuanto
+	// el texto ya llena la columna.
+	print("cero=[");
+	print_pad(46_u32, 0_u64);
+	println("]");
+
+	return 42;
+}

@@ -3,7 +3,7 @@ namespace ejemplos.punteros_arith;
 // examples_codes_vx/09_punteros_arith.vx
 //
 // Demuestra aritmetica de punteros:
-//   - p + n / p - n: el offset n se escala por sizeof(*p) automaticamente.
+//   - p + n / p - n: el offset n se escala por type.size(*p) automaticamente.
 //   - p[i] como expresion: equivale a *(p + i).
 //   - p[i] = v como lvalue: STORE a *(p + i).
 //   - p - q: numero de elementos entre dos punteros (no usado aqui).
@@ -34,6 +34,6 @@ i32 main() {
 	// Al tomar la direccion de un campo del struct local, este se reserva en
 	// memoria host -> `&buf.a` es `i32*`.
 	i32* p = &buf.a;
-	p[3] = 6;
+	p[3]   = 6;
 	return p[0] + p[1] + p[2] + *(p + 3);
 }

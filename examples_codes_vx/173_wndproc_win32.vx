@@ -26,7 +26,7 @@ extern "user32.dll" {
 	fn RegisterClassExW(u64 wc_ptr) -> u16;
 	fn CreateWindowExW(u32 ex_style, u64 class_name, u64 win_name,
 		u32 style, i32 x, i32 y, i32 w, i32 h,
-		u64 parent, u64 menu, u64 hinst, u64 lparam) -> u64;
+		u64 type_parent, u64 menu, u64 hinst, u64 lparam) -> u64;
 	fn PostMessageW(u64 hwnd, u32 msg, u64 wparam, i64 lparam) -> i32;
 	fn GetMessageW(
 		u64 msg_ptr,
@@ -96,23 +96,23 @@ i32 main() {
 		i     = i + 1;
 	}
 
-	// wc.cbSize = 80 (sizeof WNDCLASSEXW).  Escribimos via puntero u32.
+	// wc.cbSize = 80 (type.size WNDCLASSEXW).  Escribimos via puntero u32.
 	u32* p_cbsize = (u32*)(&wc[0]);
-	*    p_cbsize = 80;
+	*p_cbsize     = 80;
 
 	// wc.lpfnWndProc = thunk del WndProc .
 	i64  thunk     = as_native_callback(my_wnd_proc);
 	i64* p_wndproc = (i64*)(&wc[8]);
-	*    p_wndproc = thunk;
+	*p_wndproc     = thunk;
 
 	// wc.hInstance = hinst.
 	u64* p_hinst = (u64*)(&wc[24]);
-	*    p_hinst = hinst;
+	*p_hinst     = hinst;
 
 	// wc.lpszClassName.  Necesitamos un literal UTF-16LE "VxTest\0".
 	// Bytes: V=0x56,e=0x65,x=0x78,T=0x54,e=0x65,s=0x73,t=0x74, terminador.
 	u8* class_name = (u8*)malloc(20);
-	i = 0;
+	i              = 0;
 	while (i < 20) {
 		class_name[i] = 0;
 		i             = i + 1;
@@ -134,7 +134,7 @@ i32 main() {
 	// [14..15] = 0 (NUL terminator UTF-16)
 
 	u64* p_classname = (u64*)(&wc[64]);
-	*    p_classname = (u64)(&class_name[0]);
+	*p_classname     = (u64)(&class_name[0]);
 
 	u16 atom = RegisterClassExW((u64)(&wc[0]));
 	if (atom == 0) {

@@ -3,7 +3,7 @@ namespace ejemplos.arrays_nativos;
 // examples_codes_vx/11_arrays_nativos.vx
 //
 // Demuestra arrays nativos:
-//   - T[N] reserva un bloque contiguo de N*sizeof(T) bytes en stack via
+//   - T[N] reserva un bloque contiguo de N*type.size(T) bytes en stack via
 //     ALLOCA del IR; el lowering trata el nombre del array como su
 //     direccion base (igual que para structs).
 //   - T[] (sin tamano) solo se admite como tipo de parametro de funcion;

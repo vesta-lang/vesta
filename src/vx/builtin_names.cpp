@@ -70,7 +70,6 @@ struct BuiltinEntry {
 
 /// @brief La tabla, ordenada por longitud y luego por bytes.
 constexpr BuiltinEntry kTable[] = {
-
     /* --- 2 caracteres --- */
     {"Ok", Builtin::Ok},
 
@@ -100,7 +99,6 @@ constexpr BuiltinEntry kTable[] = {
     {"imax", Builtin::Imax},
     {"imin", Builtin::Imin},
     {"isOk", Builtin::IsOk},
-    {"kind", Builtin::Kind},
     {"lend", Builtin::Lend},
     {"log2", Builtin::Log2},
     {"move", Builtin::Move},
@@ -129,11 +127,11 @@ constexpr BuiltinEntry kTable[] = {
     {"stack", Builtin::Stack},
     {"trunc", Builtin::Trunc},
     {"value", Builtin::Value},
+    {"write", Builtin::Write},
 
     /* --- 6 caracteres --- */
     {"bg_rgb", Builtin::BgRgb},
     {"expect", Builtin::Expect},
-    {"extent", Builtin::Extent},
     {"fclose", Builtin::Fclose},
     {"fg_rgb", Builtin::FgRgb},
     {"fwrite", Builtin::Fwrite},
@@ -142,16 +140,13 @@ constexpr BuiltinEntry kTable[] = {
     {"invoke", Builtin::Invoke},
     {"malloc", Builtin::Malloc},
     {"notify", Builtin::Notify},
-    {"parent", Builtin::Parent},
     {"ptr_of", Builtin::PtrOf},
     {"repeat", Builtin::Repeat},
-    {"sizeof", Builtin::Sizeof},
     {"substr", Builtin::Substr},
     {"to_str", Builtin::ToStr},
     {"unwrap", Builtin::Unwrap},
 
     /* --- 7 caracteres --- */
-    {"alignof", Builtin::Alignof},
     {"bitcast", Builtin::Bitcast},
     {"dispose", Builtin::Dispose},
     {"ffi_sym", Builtin::FfiSym},
@@ -159,10 +154,6 @@ constexpr BuiltinEntry kTable[] = {
     {"fulfill", Builtin::Fulfill},
     {"hashmap", Builtin::Hashmap},
     {"hashset", Builtin::Hashset},
-    {"is_bool", Builtin::IsBool},
-    {"is_char", Builtin::IsChar},
-    {"is_enum", Builtin::IsEnum},
-    {"is_same", Builtin::IsSame},
     {"msgrecv", Builtin::Msgrecv},
     {"msgsend", Builtin::Msgsend},
     {"println", Builtin::Println},
@@ -170,7 +161,8 @@ constexpr BuiltinEntry kTable[] = {
     {"replace", Builtin::Replace},
     {"treemap", Builtin::Treemap},
     {"treeset", Builtin::Treeset},
-    {"type_id", Builtin::TypeId},
+    {"type.id", Builtin::TypeId},
+    {"type.of", Builtin::TypeOf},
     {"unshare", Builtin::Unshare},
     {"vacount", Builtin::Vacount},
 
@@ -182,32 +174,22 @@ constexpr BuiltinEntry kTable[] = {
     {"ffi_open", Builtin::FfiOpen},
     {"getClass", Builtin::GetClass},
     {"getField", Builtin::GetField},
-    {"is_class", Builtin::IsClass},
-    {"is_float", Builtin::IsFloat},
     {"lend_mut", Builtin::LendMut},
-    {"offsetof", Builtin::Offsetof},
     {"popcount", Builtin::Popcount},
     {"str_cstr", Builtin::StrCstr},
     {"str_hash", Builtin::StrHash},
     {"str_make", Builtin::StrMake},
     {"str_wstr", Builtin::StrWstr},
-    {"typename", Builtin::Typename},
 
     /* --- 9 caracteres --- */
     {"arraylist", Builtin::Arraylist},
-    {"field_get", Builtin::FieldGet},
-    {"field_set", Builtin::FieldSet},
-    {"find_type", Builtin::FindType},
+    {"field.get", Builtin::FieldGet},
+    {"field.has", Builtin::HasField},
+    {"field.set", Builtin::FieldSet},
     {"getFields", Builtin::GetFields},
     {"getMethod", Builtin::GetMethod},
-    {"has_field", Builtin::HasField},
-    {"in_bounds", Builtin::InBounds},
     {"isPresent", Builtin::IsPresent},
-    {"is_opaque", Builtin::IsOpaque},
     {"is_shared", Builtin::IsShared},
-    {"is_signed", Builtin::IsSigned},
-    {"is_string", Builtin::IsString},
-    {"is_struct", Builtin::IsStruct},
     {"notifyAll", Builtin::NotifyAll},
     {"print_bin", Builtin::PrintBin},
     {"print_hex", Builtin::PrintHex},
@@ -218,6 +200,11 @@ constexpr BuiltinEntry kTable[] = {
     {"str_bytes", Builtin::StrBytes},
     {"term_move", Builtin::TermMove},
     {"to_string", Builtin::ToString},
+    {"type.base", Builtin::TypeBase},
+    {"type.find", Builtin::FindType},
+    {"type.kind", Builtin::Kind},
+    {"type.name", Builtin::Typename},
+    {"type.size", Builtin::Sizeof},
     {"unwrap_or", Builtin::UnwrapOr},
     {"use_count", Builtin::UseCount},
 
@@ -225,18 +212,14 @@ constexpr BuiltinEntry kTable[] = {
     {"args_count", Builtin::ArgsCount},
     {"atomic_add", Builtin::AtomicAdd},
     {"atomic_cas", Builtin::AtomicCas},
-    {"field_name", Builtin::FieldName},
-    {"field_type", Builtin::FieldType},
+    {"field.each", Builtin::ForEachField},
+    {"field.name", Builtin::FieldName},
+    {"field.type", Builtin::FieldType},
     {"gc_collect", Builtin::GcCollect},
     {"getFieldAt", Builtin::GetFieldAt},
     {"getMethods", Builtin::GetMethods},
-    {"has_method", Builtin::HasMethod},
-    {"is_integer", Builtin::IsInteger},
-    {"is_newtype", Builtin::IsNewtype},
-    {"is_numeric", Builtin::IsNumeric},
-    {"is_pointer", Builtin::IsPointer},
-    {"is_subtype", Builtin::IsSubtype},
     {"loadmodule", Builtin::Loadmodule},
+    {"method.has", Builtin::HasMethod},
     {"print_bool", Builtin::PrintBool},
     {"print_char", Builtin::PrintChar},
     {"print_cstr", Builtin::PrintCstr},
@@ -248,14 +231,18 @@ constexpr BuiltinEntry kTable[] = {
     {"str_length", Builtin::StrLength},
     {"term_clear", Builtin::TermClear},
     {"term_reset", Builtin::TermReset},
+    {"type.align", Builtin::Alignof},
+    {"type.error", Builtin::TypeError},
+    {"type.inner", Builtin::TypeInner},
     {"unique_box", Builtin::UniqueBox},
 
     /* --- 11 caracteres --- */
     {"atomic_load", Builtin::AtomicLoad},
     {"fiber_entry", Builtin::FiberEntry},
-    {"field_count", Builtin::FieldCount},
+    {"field.count", Builtin::FieldCount},
     {"getMethodAt", Builtin::GetMethodAt},
-    {"is_unsigned", Builtin::IsUnsigned},
+    {"method.each", Builtin::ForEachMethod},
+    {"method.name", Builtin::MethodNameAt},
     {"newInstance", Builtin::NewInstance},
     {"print_color", Builtin::PrintColor},
     {"print_float", Builtin::PrintFloat},
@@ -264,82 +251,115 @@ constexpr BuiltinEntry kTable[] = {
     {"shared_free", Builtin::SharedFree},
     {"shared_with", Builtin::SharedWith},
     {"str_convert", Builtin::StrConvert},
+    {"type.parent", Builtin::Parent},
+    {"type.result", Builtin::TypeResult},
     {"unique_with", Builtin::UniqueWith},
 
     /* --- 12 caracteres --- */
     {"atomic_store", Builtin::AtomicStore},
-    {"comptime_chr", Builtin::ComptimeChr},
-    {"comptime_ord", Builtin::ComptimeOrd},
+    {"comptime.chr", Builtin::ComptimeChr},
+    {"comptime.ord", Builtin::ComptimeOrd},
     {"cpu_features", Builtin::CpuFeatures},
+    {"field.offset", Builtin::Offsetof},
     {"future_alloc", Builtin::FutureAlloc},
-    {"is_primitive", Builtin::IsPrimitive},
-    {"method_count", Builtin::MethodCount},
+    {"method.count", Builtin::MethodCount},
     {"section_size", Builtin::SectionSize},
+    {"type.is_bool", Builtin::IsBool},
+    {"type.is_char", Builtin::IsChar},
+    {"type.is_enum", Builtin::IsEnum},
+    {"type.is_same", Builtin::IsSame},
     {"unloadmodule", Builtin::Unloadmodule},
     {"write_borrow", Builtin::WriteBorrow},
 
     /* --- 13 caracteres --- */
     {"fiber_swapctx", Builtin::FiberSwapctx},
+    {"field.type_at", Builtin::FieldTypeAt},
+    {"method.result", Builtin::MethodResult},
     {"section_start", Builtin::SectionStart},
     {"shared_malloc", Builtin::SharedMalloc},
     {"static_assert", Builtin::StaticAssert},
-    {"underlying_of", Builtin::UnderlyingOf},
+    {"type.has_base", Builtin::HasBase},
+    {"type.is_class", Builtin::IsClass},
+    {"type.is_float", Builtin::IsFloat},
 
     /* --- 14 caracteres --- */
     {"atomic_add_i64", Builtin::AtomicAddI64},
     {"atomic_cas_i64", Builtin::AtomicCasI64},
-    {"comptime_print", Builtin::ComptimePrint},
-    {"comptime_streq", Builtin::ComptimeStreq},
-    {"for_each_field", Builtin::ForEachField},
+    {"comptime.print", Builtin::ComptimePrint},
+    {"overlay.extent", Builtin::Extent},
     {"print_gchandle", Builtin::PrintGchandle},
-    {"type_info_kind", Builtin::TypeInfoKind},
-    {"type_info_name", Builtin::TypeInfoName},
-    {"type_info_size", Builtin::TypeInfoSize},
+    {"type.has_inner", Builtin::HasInner},
+    {"type.info.kind", Builtin::TypeInfoKind},
+    {"type.info.name", Builtin::TypeInfoName},
+    {"type.info.size", Builtin::TypeInfoSize},
+    {"type.is_opaque", Builtin::IsOpaque},
+    {"type.is_result", Builtin::IsResult},
+    {"type.is_signed", Builtin::IsSigned},
+    {"type.is_string", Builtin::IsString},
+    {"type.is_struct", Builtin::IsStruct},
 
     /* --- 15 caracteres --- */
     {"atomic_load_i64", Builtin::AtomicLoadI64},
-    {"comptime_concat", Builtin::ComptimeConcat},
-    {"comptime_repeat", Builtin::ComptimeRepeat},
-    {"comptime_strlen", Builtin::ComptimeStrlen},
-    {"comptime_substr", Builtin::ComptimeSubstr},
-    {"comptime_to_str", Builtin::ComptimeToStr},
-    {"for_each_method", Builtin::ForEachMethod},
+    {"comptime.str.eq", Builtin::ComptimeStreq},
+    {"comptime.to_str", Builtin::ComptimeToStr},
     {"gc_finalize_all", Builtin::GcFinalizeAll},
     {"term_clear_line", Builtin::TermClearLine},
-    {"type_info_align", Builtin::TypeInfoAlign},
+    {"type.info.align", Builtin::TypeInfoAlign},
+    {"type.is_integer", Builtin::IsInteger},
+    {"type.is_newtype", Builtin::IsNewtype},
+    {"type.is_numeric", Builtin::IsNumeric},
+    {"type.is_pointer", Builtin::IsPointer},
+    {"type.is_subtype", Builtin::IsSubtype},
+    {"type.underlying", Builtin::UnderlyingOf},
 
     /* --- 16 caracteres --- */
     {"atomic_store_i64", Builtin::AtomicStoreI64},
-    {"comptime_replace", Builtin::ComptimeReplace},
+    {"comptime.str.len", Builtin::ComptimeStrlen},
     {"term_hide_cursor", Builtin::TermHideCursor},
     {"term_save_cursor", Builtin::TermSaveCursor},
     {"term_show_cursor", Builtin::TermShowCursor},
+    {"type.is_callable", Builtin::IsCallable},
+    {"type.is_unsigned", Builtin::IsUnsigned},
     {"unwrap_unchecked", Builtin::UnwrapUnchecked},
 
     /* --- 17 caracteres --- */
-    {"comptime_contains", Builtin::ComptimeContains},
+    {"overlay.in_bounds", Builtin::InBounds},
+    {"scoped.method.has", Builtin::HasScopedMethod},
     {"shared_gc_collect", Builtin::SharedGcCollect},
     {"shared_heap_bytes", Builtin::SharedHeapBytes},
+    {"type.by_name.kind", Builtin::ComptimeTypeKind},
+    {"type.by_name.size", Builtin::ComptimeTypeSizeof},
+    {"type.is_primitive", Builtin::IsPrimitive},
 
     /* --- 18 caracteres --- */
     {"as_native_callback", Builtin::AsNativeCallback},
-    {"comptime_type_kind", Builtin::ComptimeTypeKind},
+    {"scoped.method.each", Builtin::ScopedMethodEach},
+    {"scoped.method.name", Builtin::ScopedMethodName},
+    {"type.by_name.align", Builtin::ComptimeTypeAlignof},
 
     /* --- 19 caracteres --- */
+    {"comptime.str.concat", Builtin::ComptimeConcat},
+    {"comptime.str.repeat", Builtin::ComptimeRepeat},
+    {"comptime.str.substr", Builtin::ComptimeSubstr},
+    {"scoped.method.arity", Builtin::ScopedMethodArity},
+    {"scoped.method.count", Builtin::ScopedMethodCount},
+    {"scoped.method.param", Builtin::ScopedMethodParam},
     {"term_restore_cursor", Builtin::TermRestoreCursor},
 
     /* --- 20 caracteres --- */
-    {"comptime_type_sizeof", Builtin::ComptimeTypeSizeof},
-    {"type_info_field_name", Builtin::TypeInfoFieldName},
-    {"type_info_field_size", Builtin::TypeInfoFieldSize},
+    {"comptime.str.replace", Builtin::ComptimeReplace},
+    {"scoped.method.origin", Builtin::ScopedMethodOrigin},
+    {"scoped.method.result", Builtin::ScopedMethodReturn},
+    {"type.info.field_name", Builtin::TypeInfoFieldName},
+    {"type.info.field_size", Builtin::TypeInfoFieldSize},
 
     /* --- 21 caracteres --- */
-    {"comptime_type_alignof", Builtin::ComptimeTypeAlignof},
-    {"type_info_field_count", Builtin::TypeInfoFieldCount},
+    {"comptime.str.contains", Builtin::ComptimeContains},
+    {"type.info.field_count", Builtin::TypeInfoFieldCount},
 
     /* --- 22 caracteres --- */
     {"shared_heap_live_count", Builtin::SharedHeapLiveCount},
-    {"type_info_field_offset", Builtin::TypeInfoFieldOffset},
+    {"type.info.field_offset", Builtin::TypeInfoFieldOffset},
 };
 
 /// @brief Cuantas entradas tiene la tabla.
@@ -426,6 +446,19 @@ Builtin builtin_from_name(std::string_view name) noexcept {
     return Builtin::Unknown;
 }
 
+bool is_builtin_tree_root(std::string_view head) noexcept {
+    /* Las raices son CINCO y no cambian con el uso, asi que se comparan tal
+     * cual: recorrer la tabla buscando el prefijo seria O(entradas) en un
+     * sitio que el parser toca por cada identificador que lee.
+     *
+     * Estan aqui y no en el parser porque la tabla es la fuente: anadir una
+     * familia nueva es anadir su raiz a esta linea, al lado de sus entradas.
+     * Ninguna es palabra clave -- se comprobo al elegirlas --, asi que el
+     * lexer las entrega como identificadores normales. */
+    return head == "type" || head == "field" || head == "method" ||
+           head == "scoped" || head == "overlay" || head == "comptime";
+}
+
 /**
  * @copydoc vx::builtin_name
  */
@@ -468,6 +501,10 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::GcCollect:
     case Builtin::GcFinalizeAll:
     case Builtin::Print:
+    /* El sumidero de bytes.  Es de la familia que imprime porque baja a la
+     * misma primitiva que `print` -- `print` no es mas que decidir QUE bytes y
+     * mandarselos --, y asi quien lo sobrecargue cubre las dos de una vez. */
+    case Builtin::Write:
     case Builtin::PrintBin:
     case Builtin::PrintBool:
     case Builtin::PrintChar:
@@ -665,6 +702,16 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::MethodCount:
     case Builtin::Offsetof:
     case Builtin::Parent:
+    /* Lo ALCANZABLE es introspeccion igual que lo demas, solo que la pregunta
+     * depende de lo que este fichero importa: ver `vx/ufcs_scoped.h`. */
+    case Builtin::HasScopedMethod:
+    case Builtin::ScopedMethodArity:
+    case Builtin::ScopedMethodCount:
+    case Builtin::ScopedMethodEach:
+    case Builtin::ScopedMethodName:
+    case Builtin::ScopedMethodOrigin:
+    case Builtin::ScopedMethodParam:
+    case Builtin::ScopedMethodReturn:
     case Builtin::Sizeof:
     case Builtin::StaticAssert:
     case Builtin::TypeId:
@@ -676,6 +723,17 @@ constexpr BuiltinFamily family_of(Builtin b) {
     case Builtin::TypeInfoKind:
     case Builtin::TypeInfoName:
     case Builtin::TypeInfoSize:
+    /* Los que devuelven un `Type` en vez de un valor: tambien es preguntarle
+     * al tipo, solo que la respuesta es otro tipo. */
+    case Builtin::TypeOf:
+    case Builtin::TypeBase:
+    case Builtin::TypeInner:
+    case Builtin::TypeError:
+    case Builtin::TypeResult:
+    case Builtin::HasInner:
+    case Builtin::HasBase:
+    case Builtin::IsResult:
+    case Builtin::IsCallable:
     case Builtin::Typename:
     case Builtin::UnderlyingOf: return BuiltinFamily::Introspect;
 
@@ -699,6 +757,23 @@ constexpr std::array<BuiltinFamily, kFamilyCount> kFamilyTable = [] {
 /**
  * @copydoc vx::builtin_family
  */
+/**
+ * @copydoc vx::builtin_yields_type
+ */
+bool builtin_yields_type(Builtin b) noexcept {
+    switch (b) {
+    case Builtin::TypeOf:
+    case Builtin::TypeBase:
+    case Builtin::TypeInner:
+    case Builtin::TypeError:
+    case Builtin::TypeResult:
+    case Builtin::FieldTypeAt:
+    case Builtin::MethodResult:
+    case Builtin::ScopedMethodReturn: return true;
+    default: return false;
+    }
+}
+
 BuiltinFamily builtin_family(Builtin b) noexcept {
     const size_t i = static_cast<size_t>(b);
     if (i >= kFamilyCount) return BuiltinFamily::Other;

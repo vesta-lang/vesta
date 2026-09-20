@@ -1,0 +1,739 @@
+# Catalogo de DOCUMENTACION de los builtins del lenguaje.
+#
+# Es lo que el editor ensenya al pasar el raton por encima de `type.size` o
+# `println`, y lo que acompanya a cada nombre en el autocompletado.
+#
+# Vive aqui y no escrito a mano en el servidor de lenguaje por la misma razon
+# que los diagnosticos: **es texto que LEE una persona**, y una persona lee en
+# su idioma.  Con la doc dentro del `.cpp` solo habia una version -- la
+# espanyola -- y anyadir ingles habria sido duplicar la tabla entera.
+#
+# Cada entrada es el NOMBRE del builtin, que es lo permanente: la redaccion
+# puede cambiar sin que nada mas se entere.
+#
+#   sig     la firma, IGUAL en todos los idiomas -- es codigo, no prosa --.
+#   en/es   la explicacion, una por idioma.
+#
+# Los NOMBRES DE LAS RANURAS no estan aqui: salen de `vx/builtin_params.h`,
+# que es la misma tabla que lee el comprobador al registrar el builtin.  Y no
+# es por ahorrar: desde que una llamada puede nombrarlas (`f(.a = 3)`) el
+# nombre de una ranura es parte del CONTRATO, asi que tenerlo en dos sitios
+# significa que un dia el editor sugiere algo que no compila.
+#
+# ANADIR UN IDIOMA: se anyade su codigo ISO a `languages` y su clave a cada
+# entrada, y se regenera con tools/import/gen_builtin_docs.py.  NO se traducen
+# NUNCA los nombres de builtin, los tipos ni los identificadores del usuario.
+
+[meta]
+# El ORDEN fija el indice interno de idioma (0 = primero = fallback).
+languages = ["en", "es"]
+
+# --- E/S (vesta_io) ---
+
+["print"]
+sig = "print(value) -> void"
+en = "Prints the value with no trailing newline.  Takes any type (string, integers, bool, char, pointers) and interpolated strings ${expr}."
+es = "Imprime el valor sin salto de linea.  Acepta cualquier tipo (string, enteros, bool, char, punteros) y strings interpolados ${expr}."
+
+["println"]
+sig = "println(value) -> void"
+en = "Prints the value followed by a newline.  Takes any type and interpolated strings ${expr}."
+es = "Imprime el valor seguido de un salto de linea.  Acepta cualquier tipo y strings interpolados ${expr}."
+
+["echo"]
+sig = "echo(value) -> void"
+en = "Alias of print: prints the value with no trailing newline."
+es = "Alias de print: imprime el valor sin salto de linea."
+
+["flush"]
+sig = "flush() -> void"
+en = "Flushes the vesta_io output buffer to the terminal."
+es = "Vacia el buffer de salida de vesta_io al terminal."
+
+["print_int"]
+sig = "print_int(n: i64) -> void"
+en = "Prints a signed integer in decimal."
+es = "Imprime un entero con signo en decimal."
+
+["print_uint"]
+sig = "print_uint(n: u64) -> void"
+en = "Prints an unsigned integer in decimal."
+es = "Imprime un entero sin signo en decimal."
+
+["print_hex"]
+sig = "print_hex(n: u64) -> void"
+en = "Prints an integer in hexadecimal with a 0x prefix."
+es = "Imprime un entero en hexadecimal con prefijo 0x."
+
+["print_bin"]
+sig = "print_bin(n: u64) -> void"
+en = "Prints an integer in binary with a 0b prefix."
+es = "Imprime un entero en binario con prefijo 0b."
+
+["print_oct"]
+sig = "print_oct(n: u64) -> void"
+en = "Prints an integer in octal with a 0o prefix."
+es = "Imprime un entero en octal con prefijo 0o."
+
+["print_float"]
+sig = "print_float(x: f64) -> void"
+en = "Prints a floating-point number."
+es = "Imprime un numero en coma flotante."
+
+["print_bool"]
+sig = "print_bool(b: bool) -> void"
+en = "Prints 'true' or 'false'."
+es = "Imprime 'true' o 'false'."
+
+["print_char"]
+sig = "print_char(cp: u32) -> void"
+en = "Prints the character for the given Unicode code point (UTF-8)."
+es = "Imprime el caracter del codepoint Unicode dado (UTF-8)."
+
+["print_color"]
+sig = "print_color(code: u32) -> void"
+en = "Emits an ANSI colour code to the terminal."
+es = "Emite un codigo de color ANSI al terminal."
+
+["print_ptr"]
+sig = "print_ptr(addr) -> void"
+en = "Prints an address as a compact 0x<hex>."
+es = "Imprime una direccion como 0x<hex> compacto."
+
+["print_gchandle"]
+sig = "print_gchandle(handle) -> void"
+en = "Prints a GcHandle as <gc:N>."
+es = "Imprime un GcHandle como <gc:N>."
+
+["print_cstr"]
+sig = "print_cstr(ptr) -> void"
+en = "Prints a C string (NUL-terminated) from host memory."
+es = "Imprime una cadena C (NUL-terminada) desde memoria host."
+
+["print_pad"]
+sig = "print_pad(fill_cp: u32, width: u64) -> void"
+en = "Emits @p width copies of code point @p fill_cp (padding)."
+es = "Emite @p width copias del codepoint @p fill_cp (alineacion)."
+
+# --- El tipo en si (type.*) ---
+
+["type.size"]
+sig = "type.size<T>() -> u64"
+en = "Size of type T in bytes (compile time)."
+es = "Tamano en bytes del tipo T (comptime)."
+
+["type.align"]
+sig = "type.align<T>() -> u64"
+en = "Alignment of type T in bytes (compile time)."
+es = "Alineacion en bytes del tipo T (comptime)."
+
+["type.name"]
+sig = "type.name<T>() -> string"
+en = "Name of type T as a string (compile time)."
+es = "Nombre del tipo T como string (comptime)."
+
+["type.id"]
+sig = "type.id<T>() -> u32"
+en = "Stable ID (FNV-1a of the canonical name) of type T (compile time).  Same ID means same logical type; handy to compare types with one cmp."
+es = "ID estable (FNV-1a del nombre canonico) del tipo T (comptime).  Igual ID = mismo tipo logico; util para comparar tipos con 1 cmp."
+
+["type.kind"]
+sig = "type.kind<T>() -> i32"
+en = "Category of type T (compile time): Primitive/Class/Struct/Enum/Optional/Result/Array/Ptr/Function/String/Borrow/Future/Unique/Shared/Collection (see ComptimeKind)."
+es = "Categoria del tipo T (comptime): Primitive/Class/Struct/Enum/Optional/Result/Array/Ptr/Function/String/Borrow/Future/Unique/Shared/Collection (ver ComptimeKind)."
+
+["type.is_class"]
+sig = "type.is_class<T>() -> bool"
+en = "True if T is a CLASS type (reference type, GcHandle)."
+es = "true si T es un tipo CLASS (reference type, GcHandle)."
+
+["type.is_struct"]
+sig = "type.is_struct<T>() -> bool"
+en = "True if T is a value-type STRUCT (neither enum nor class)."
+es = "true si T es un STRUCT value-type (no enum ni class)."
+
+["type.is_enum"]
+sig = "type.is_enum<T>() -> bool"
+en = "True if T is an enum (tagged-union ADT, or C-style with an integer/float/string backing).  A struct or class backing IS its base type, so that returns false."
+es = "true si T es un enum (ADT tagged-union o C-style con valor de backing entero/float/string).  Los backing struct/clase son su tipo base -> false."
+
+["type.is_primitive"]
+sig = "type.is_primitive<T>() -> bool"
+en = "True if T is a scalar primitive (i8..u64, f32/f64, bool, char, void)."
+es = "true si T es un primitivo escalar (i8..u64, f32/f64, bool, char, void)."
+
+["type.is_newtype"]
+sig = "type.is_newtype<T>() -> bool"
+en = "True if T is a newtype (typedef T name new)."
+es = "true si T es un newtype (typedef T name new)."
+
+["type.is_opaque"]
+sig = "type.is_opaque<T>() -> bool"
+en = "True if T is an opaque type (@opaque)."
+es = "true si T es un tipo opaco (@opaque)."
+
+["is_shared"]
+sig = "is_shared<T>() -> bool"
+en = "True if T is a shared<T> type (cross-process shared memory)."
+es = "true si T es un tipo shared<T> (memoria compartida cross-process)."
+
+["type.is_same"]
+sig = "type.is_same<A, B>() -> bool"
+en = "True if A and B are the same logical type (same canonical name)."
+es = "true si A y B son el mismo tipo logico (mismo nombre canonico)."
+
+["type.is_subtype"]
+sig = "type.is_subtype<A, B>() -> bool"
+en = "True if A is a subtype of B (class inheritance / interfaces)."
+es = "true si A es subtipo de B (herencia de clases / interfaces)."
+
+["type.underlying"]
+sig = "type.underlying<T>() -> string"
+en = "Name of the underlying type of a typedef/newtype (compile time)."
+es = "Nombre del tipo subyacente de un typedef/newtype (comptime)."
+
+# --- Los campos de un tipo (field.*) ---
+
+["field.count"]
+sig = "field.count<T>() -> u32"
+en = "Number of fields of T (struct/class, inherited ones included; for an enum, the number of variants)."
+es = "Numero de campos de T (struct/class, incluye heredados; enum = numero de variantes)."
+
+["field.offset"]
+sig = "field.offset<T>(field: string) -> u64"
+en = "Byte offset of field @p field within T (struct/class, and overlays too)."
+es = "Offset en bytes del campo @p field dentro de T (struct/class; tambien overlay)."
+
+["field.has"]
+sig = "field.has<T>(name: string) -> bool"
+en = "True if T has a field called @p name."
+es = "true si T tiene un campo llamado @p name."
+
+["field.name"]
+sig = "field.name<T>(idx: int) -> string"
+en = "Name of the idx-th field of T (declaration order)."
+es = "Nombre del campo idx-esimo de T (orden de declaracion)."
+
+["field.type"]
+sig = "field.type<T>(field: string) -> string"
+en = "Canonical type name of field @p field of T."
+es = "Nombre canonico del tipo del campo @p field de T."
+
+["field.type_at"]
+sig = "field.type_at<T>(idx: int) -> Type"
+en = "Type of the idx-th field of T as a first-class value (compile time)."
+es = "Tipo del campo idx-esimo de T como valor de primera clase (comptime)."
+
+# --- Los metodos que el tipo TIENE (method.*) ---
+
+["method.count"]
+sig = "method.count<T>() -> u32"
+en = "Number of methods of T (CLASS only; inherited ones included)."
+es = "Numero de metodos de T (solo CLASS; incluye heredados)."
+
+["method.has"]
+sig = "method.has<T>(name: string) -> bool"
+en = "True if T has a method called @p name (CLASS only)."
+es = "true si T tiene un metodo llamado @p name (solo CLASS)."
+
+["method.name"]
+sig = "method.name<T>(idx: int) -> string"
+en = "Name of the idx-th method of T (CLASS only)."
+es = "Nombre del metodo idx-esimo de T (solo CLASS)."
+
+["method.result"]
+sig = "method.result<T>(idx: int) -> Type"
+en = "Return type of the idx-th method of T (compile time)."
+es = "Tipo de retorno del metodo idx-esimo de T (comptime)."
+
+# --- Lo que se puede LLAMAR desde aqui (scoped.method.*) ---
+#
+# Distinto de `method.*`: con llamada uniforme, sobre un tipo tambien se puede
+# llamar una funcion LIBRE que este fichero alcance, y eso depende de lo que
+# importe.  De ahi el `scoped` del nombre -- la respuesta confiesa que depende
+# del ambito en vez de dejar que se descubra --.
+
+["scoped.method.count"]
+sig = "scoped.method.count<T>() -> u32"
+en = "How many things can be CALLED on T from here: its own methods plus the free functions reachable through uniform call syntax."
+es = "Cuantas cosas se pueden LLAMAR sobre T desde aqui: sus metodos mas las funciones libres alcanzables por llamada uniforme."
+
+["scoped.method.has"]
+sig = "scoped.method.has<T>(name: string) -> bool"
+en = "Whether something with that name can be called on T, be it a method of its own or a reachable free function."
+es = "Si sobre T se puede llamar algo con ese nombre, sea metodo suyo o funcion libre alcanzable."
+
+["scoped.method.name"]
+sig = "scoped.method.name<T>(idx: int) -> string"
+en = "Name of the idx-th reachable entry.  The order is stable across compilations (by name, then by origin)."
+es = "Nombre de la entrada idx-esima de lo alcanzable.  El orden es estable entre compilaciones (por nombre, y a igualdad por origen)."
+
+["scoped.method.origin"]
+sig = "scoped.method.origin<T>(idx: int) -> string"
+en = "Which namespace the idx-th entry comes from.  EMPTY if it is a method of the type itself.  This is what makes a clash between two namespaces debuggable."
+es = "De que namespace viene la entrada idx-esima.  VACIO si es un metodo del propio tipo.  Es lo que hace depurable un choque entre dos namespaces que ofrecen el mismo nombre."
+
+["scoped.method.arity"]
+sig = "scoped.method.arity<T>(idx: int) -> u32"
+en = "How many parameters it takes, RECEIVER INCLUDED: also where `this` is implicit, so a method and a free function read the same."
+es = "Cuantos parametros tiene, RECEPTOR INCLUIDO: tambien donde `this` es implicito, para que un metodo y una libre se lean igual."
+
+["scoped.method.result"]
+sig = "scoped.method.result<T>(idx: int) -> Type"
+en = "What it returns, as a TYPE rather than a string: it goes straight back where a type is expected (`type.size<...>()`)."
+es = "Lo que devuelve, como TIPO y no como cadena: se vuelve a meter donde se pide un tipo (`type.size<...>()`)."
+
+["scoped.method.param"]
+sig = "scoped.method.param<T>(idx: int, j: int) -> Type"
+en = "The j-th parameter of entry idx.  Parameter 0 is ALWAYS the receiver."
+es = "El parametro j-esimo de la entrada idx.  El 0 es SIEMPRE el receptor."
+
+["scoped.method.each"]
+sig = "scoped.method.each<T>(cb: fn(string, string)) -> void"
+en = "Walks everything reachable, passing name and origin.  It builds no loop: the body is repeated once per entry."
+es = "Recorre lo alcanzable pasando nombre y origen.  No monta ningun bucle: el cuerpo se repite una vez por entrada."
+
+# --- Vistas de memoria (overlay.*) ---
+
+["overlay.in_bounds"]
+sig = "overlay.in_bounds(field_addr, buf_size: u64) -> bool"
+en = "True if an overlay field falls within @p buf_size bytes of the base buffer (bounds check for a binary format)."
+es = "true si el campo de un overlay cae dentro de @p buf_size bytes del buffer base (chequeo de limites de un formato binario)."
+
+["overlay.extent"]
+sig = "overlay.extent<T>() -> u64"
+en = "Total size in bytes that an overlay T spans from its base, including fields with a dynamic @offset and arrays with a stride."
+es = "Tamano total (en bytes) que un overlay T cubre desde su base, incluyendo campos con @offset dinamico y arrays con stride."
+
+# --- Afirmaciones al compilar ---
+
+["static_assert"]
+sig = "static_assert(cond: bool, msg: string) -> void"
+en = "Fails the compilation with @p msg if @p cond is false (compile time)."
+es = "Falla la compilacion con @p msg si @p cond es falsa (comptime)."
+
+# --- Cadenas ---
+
+["str_length"]
+sig = "str_length(s: string) -> u64"
+en = "Number of code points (logical length) of the string."
+es = "Numero de code points (longitud logica) de la cadena."
+
+["str_bytes"]
+sig = "str_bytes(s: string) -> u64"
+en = "Number of bytes the string takes up."
+es = "Numero de bytes que ocupa la cadena."
+
+["str_concat"]
+sig = "str_concat(a: string, b: string) -> string"
+en = "Concatenates two strings and returns a new one."
+es = "Concatena dos cadenas y devuelve una nueva."
+
+["str_equals"]
+sig = "str_equals(a: string, b: string) -> bool"
+en = "True if the two strings are equal byte for byte."
+es = "true si las dos cadenas son iguales byte a byte."
+
+["str_intern"]
+sig = "str_intern(s: string) -> string"
+en = "Returns the canonical interned version of the string."
+es = "Devuelve la version canonica internada de la cadena."
+
+["str_cstr"]
+sig = "str_cstr(s: string) -> char*"
+en = "NUL-terminated host pointer to the bytes (for *A FFI calls)."
+es = "Puntero host NUL-terminado a los bytes (para FFI *A)."
+
+["str_wstr"]
+sig = "str_wstr(s: string) -> u16*"
+en = "NUL-terminated UTF-16LE host pointer (for Win32 *W FFI calls)."
+es = "Puntero host UTF-16LE NUL-terminado (FFI *W de Win32)."
+
+["str_make"]
+sig = "str_make(ptr, len: u64, enc: u32) -> string"
+en = "Builds a StringObject from a buffer."
+es = "Construye un StringObject desde un buffer."
+
+["str_hash"]
+sig = "str_hash(s: string) -> u64"
+en = "FNV-1a hash of the string (cached)."
+es = "Hash FNV-1a de la cadena (cacheado)."
+
+["str_convert"]
+sig = "str_convert(s: string, enc: u32) -> string"
+en = "Converts the string to another encoding."
+es = "Convierte la cadena a otra codificacion."
+
+["to_str"]
+sig = "to_str(value) -> string"
+en = "Converts an integer or value to its string representation."
+es = "Convierte un entero/valor a su representacion en cadena."
+
+["chr"]
+sig = "chr(cp: u32) -> string"
+en = "One-character string from the Unicode code point."
+es = "Cadena de un caracter desde el codepoint Unicode."
+
+["ord"]
+sig = "ord(s: string) -> u32"
+en = "Code point of the first character of the string."
+es = "Codepoint del primer caracter de la cadena."
+
+["substr"]
+sig = "substr(s: string, start: u64, len: u64) -> string"
+en = "Substring of @p len code points starting at @p start."
+es = "Subcadena de @p len code points desde @p start."
+
+["repeat"]
+sig = "repeat(s: string, n: u64) -> string"
+en = "Repeats the string @p n times."
+es = "Repite la cadena @p n veces."
+
+["replace"]
+sig = "replace(s: string, from: string, to: string) -> string"
+en = "Replaces every occurrence of @p from with @p to."
+es = "Reemplaza todas las ocurrencias de @p from por @p to."
+
+["contains"]
+sig = "contains(s: string, needle: string) -> bool"
+en = "True if @p needle occurs in @p s."
+es = "true si @p needle aparece en @p s."
+
+# --- Memoria ---
+
+["malloc"]
+sig = "malloc(bytes: u64) -> T*"
+en = "Reserves @p bytes of raw host memory and returns the pointer."
+es = "Reserva @p bytes de memoria host cruda; devuelve el puntero."
+
+["free"]
+sig = "free(ptr) -> void"
+en = "Releases memory previously reserved with malloc."
+es = "Libera memoria previamente reservada con malloc."
+
+["dispose"]
+sig = "dispose(x) -> void"
+en = "Explicitly releases a resource (unique/collection) right now."
+es = "Libera explicitamente un recurso (unique/coleccion) ahora."
+
+["unique_box"]
+sig = "unique_box(value) -> unique<T>"
+en = "Creates a unique pointer with automatic cleanup (free as the deleter)."
+es = "Crea un puntero unique con cleanup automatico (deleter free)."
+
+["shared_box"]
+sig = "shared_box(value) -> shared<T>"
+en = "Creates a shared pointer with a reference count."
+es = "Crea un puntero shared con refcount."
+
+["move"]
+sig = "move(p) -> unique<T>"
+en = "Transfers ownership; invalidates the source (mvtake)."
+es = "Transfiere la propiedad; invalida el origen (mvtake)."
+
+["ptr_of"]
+sig = "ptr_of(p) -> T*"
+en = "Extracts the raw pointer without consuming the smart pointer."
+es = "Extrae el puntero crudo sin consumir el smart pointer."
+
+["use_count"]
+sig = "use_count(s) -> u64"
+en = "Number of live references to a shared<T>."
+es = "Numero de referencias vivas de un shared<T>."
+
+["lend"]
+sig = "lend(owner) -> borrow<T>"
+en = "Shared (read-only) borrow of the owner."
+es = "Prestamo compartido (solo lectura) del owner."
+
+["lend_mut"]
+sig = "lend_mut(owner) -> borrow_mut<T>"
+en = "Exclusive (read/write) borrow of the owner."
+es = "Prestamo exclusivo (lectura/escritura) del owner."
+
+["read_borrow"]
+sig = "read_borrow(b) -> T"
+en = "Reads the value through a borrow."
+es = "Lee el valor a traves de un borrow."
+
+["write_borrow"]
+sig = "write_borrow(m, v) -> void"
+en = "Writes through a borrow_mut."
+es = "Escribe a traves de un borrow_mut."
+
+# --- Procesos, mensajes y modulos ---
+
+["panic"]
+sig = "panic(msg: string) -> never"
+en = "Aborts the process with FatalError(USER_ABORT) and the given message."
+es = "Aborta el proceso con FatalError(USER_ABORT) y el mensaje dado."
+
+["pid"]
+sig = "pid() -> i64"
+en = "Encoded PID of the current process."
+es = "PID codificado del proceso actual."
+
+["spawn"]
+sig = "spawn { ... }"
+en = "Creates a lightweight process on the same scheduler."
+es = "Crea un proceso ligero en el mismo scheduler."
+
+["await"]
+sig = "await(fut) -> T"
+en = "Blocks until the Future resolves and returns its value."
+es = "Bloquea hasta que el Future se resuelve y devuelve su valor."
+
+["msgsend"]
+sig = "msgsend(pid, payload) -> bool"
+en = "Sends a message to the mailbox of process @p pid."
+es = "Envia un mensaje al buzon del proceso @p pid."
+
+["msgrecv"]
+sig = "msgrecv() -> Bytes"
+en = "Receives a message from your own mailbox (blocks if it is empty)."
+es = "Recibe un mensaje del buzon propio (bloquea si esta vacio)."
+
+["loadmodule"]
+sig = "loadmodule(path: string) -> i64"
+en = "Dynamically loads an extra .velb from the filesystem."
+es = "Carga dinamicamente un .velb adicional desde el filesystem."
+
+# --- Matematicas ---
+
+["sqrt"]
+sig = "sqrt(x: f64) -> f64"
+en = "Square root."
+es = "Raiz cuadrada."
+
+["pow"]
+sig = "pow(base: f64, exp: f64) -> f64"
+en = "Power base^exp."
+es = "Potencia base^exp."
+
+["abs"]
+sig = "abs(x: f64) -> f64"
+en = "Absolute value (f64)."
+es = "Valor absoluto (f64)."
+
+["fabs"]
+sig = "fabs(x: f64) -> f64"
+en = "Absolute value (f64)."
+es = "Valor absoluto (f64)."
+
+["floor"]
+sig = "floor(x: f64) -> f64"
+en = "Rounds down."
+es = "Redondeo hacia abajo."
+
+["ceil"]
+sig = "ceil(x: f64) -> f64"
+en = "Rounds up."
+es = "Redondeo hacia arriba."
+
+["round"]
+sig = "round(x: f64) -> f64"
+en = "Rounds to the nearest integer."
+es = "Redondeo al entero mas cercano."
+
+["trunc"]
+sig = "trunc(x: f64) -> f64"
+en = "Drops the fractional part."
+es = "Trunca la parte fraccionaria."
+
+["log"]
+sig = "log(x: f64) -> f64"
+en = "Natural logarithm (base e)."
+es = "Logaritmo natural (base e)."
+
+["log2"]
+sig = "log2(x: f64) -> f64"
+en = "Base 2 logarithm."
+es = "Logaritmo base 2."
+
+["log10"]
+sig = "log10(x: f64) -> f64"
+en = "Base 10 logarithm."
+es = "Logaritmo base 10."
+
+["sin"]
+sig = "sin(x: f64) -> f64"
+en = "Sine (radians)."
+es = "Seno (radianes)."
+
+["cos"]
+sig = "cos(x: f64) -> f64"
+en = "Cosine (radians)."
+es = "Coseno (radianes)."
+
+["tan"]
+sig = "tan(x: f64) -> f64"
+en = "Tangent (radians)."
+es = "Tangente (radianes)."
+
+["fmin"]
+sig = "fmin(a: f64, b: f64) -> f64"
+en = "Minimum of two f64."
+es = "Minimo de dos f64."
+
+["fmax"]
+sig = "fmax(a: f64, b: f64) -> f64"
+en = "Maximum of two f64."
+es = "Maximo de dos f64."
+
+["clamp"]
+sig = "clamp(x: f64, lo: f64, hi: f64) -> f64"
+en = "Clamps x to the range [lo, hi]."
+es = "Acota x al rango [lo, hi]."
+
+["imin"]
+sig = "imin(a: i64, b: i64) -> i64"
+en = "Minimum of two signed integers."
+es = "Minimo de dos enteros con signo."
+
+["imax"]
+sig = "imax(a: i64, b: i64) -> i64"
+en = "Maximum of two signed integers."
+es = "Maximo de dos enteros con signo."
+
+["iminu"]
+sig = "iminu(a: u64, b: u64) -> u64"
+en = "Minimum of two unsigned integers."
+es = "Minimo de dos enteros sin signo."
+
+["imaxu"]
+sig = "imaxu(a: u64, b: u64) -> u64"
+en = "Maximum of two unsigned integers."
+es = "Maximo de dos enteros sin signo."
+
+["ilog2"]
+sig = "ilog2(x: u64) -> u64"
+en = "Integer base 2 logarithm (position of the highest set bit)."
+es = "Logaritmo entero base 2 (posicion del bit mas alto)."
+
+["popcount"]
+sig = "popcount(x: u64) -> u64"
+en = "Number of bits set to 1 (population count)."
+es = "Numero de bits a 1 (population count)."
+
+["clz"]
+sig = "clz(x: u64) -> u64"
+en = "Count of leading zeros."
+es = "Ceros a la izquierda (count leading zeros)."
+
+["ctz"]
+sig = "ctz(x: u64) -> u64"
+en = "Count of trailing zeros."
+es = "Ceros a la derecha (count trailing zeros)."
+
+["bswap"]
+sig = "bswap(x: u64) -> u64"
+en = "Reverses the byte order (byte swap)."
+es = "Invierte el orden de bytes (byte swap)."
+
+["rotl"]
+sig = "rotl(x: u64, n: u64) -> u64"
+en = "Rotates the bits left."
+es = "Rotacion de bits a la izquierda."
+
+["rotr"]
+sig = "rotr(x: u64, n: u64) -> u64"
+en = "Rotates the bits right."
+es = "Rotacion de bits a la derecha."
+
+# --- Ficheros y FFI ---
+
+["fopen"]
+sig = "fopen(path: string, mode: string) -> u64"
+en = "Opens a file; returns the FILE* (0 on failure)."
+es = "Abre un fichero; devuelve el FILE* (0 si falla)."
+
+["fclose"]
+sig = "fclose(fp: u64) -> i32"
+en = "Closes a file opened with fopen."
+es = "Cierra un fichero abierto con fopen."
+
+["fwrite"]
+sig = "fwrite(fp: u64, ptr, len: u64) -> u64"
+en = "Writes @p len bytes to the file."
+es = "Escribe @p len bytes al fichero."
+
+["ffi_open"]
+sig = "ffi_open(lib: string) -> u64"
+en = "Loads a DLL/.so at run time (LoadLibrary/dlopen)."
+es = "Carga una DLL/.so en runtime (LoadLibrary/dlopen)."
+
+["ffi_sym"]
+sig = "ffi_sym(handle: u64, name: string) -> u64"
+en = "Resolves the address of a native symbol."
+es = "Resuelve la direccion de un simbolo nativo."
+
+["ffi_call"]
+sig = "ffi_call(fn: u64, args...) -> i64"
+en = "Invokes a native function resolved with ffi_sym."
+es = "Invoca una funcion nativa resuelta con ffi_sym."
+
+["as_native_callback"]
+sig = "as_native_callback(fn) -> u64"
+en = "Adapts a Vesta function into a native C callback pointer."
+es = "Adapta una funcion Vesta a un puntero de callback C nativo."
+
+["cpu_features"]
+sig = "cpu_features() -> u64"
+en = "Bitmask of the CPU features detected through cpuid."
+es = "Bitmask de features del CPU detectadas via cpuid."
+
+# --- Secciones del binario ---
+
+["section_start"]
+sig = "section_start(name: string) -> u64"
+en = "Start address of a linked section."
+es = "Direccion de inicio de una seccion enlazada."
+
+["section_end"]
+sig = "section_end(name: string) -> u64"
+en = "End address of a linked section."
+es = "Direccion de fin de una seccion enlazada."
+
+["section_size"]
+sig = "section_size(name: string) -> u64"
+en = "Size in bytes of a linked section."
+es = "Tamano en bytes de una seccion enlazada."
+
+# --- Reflexion en ejecucion ---
+
+["forName"]
+sig = "forName(name: string) -> Class"
+en = "Looks a class up by name in the ClassRegistry."
+es = "Busca una clase por nombre en el ClassRegistry."
+
+["getClass"]
+sig = "getClass(obj) -> Class"
+en = "Class of the object at run time."
+es = "Clase del objeto en runtime."
+
+["newInstance"]
+sig = "newInstance(cls: Class) -> Object"
+en = "Creates an instance using the default constructor."
+es = "Crea una instancia con el constructor por defecto."
+
+# --- Atomicos ---
+
+["atomic_load_i64"]
+sig = "atomic_load_i64(addr) -> i64"
+en = "Atomic load (acquire) of an i64 from a host_ptr."
+es = "Carga atomica (acquire) de un i64 desde host_ptr."
+
+["atomic_store_i64"]
+sig = "atomic_store_i64(addr, val: i64) -> void"
+en = "Atomic store (release) of an i64."
+es = "Almacenamiento atomico (release) de un i64."
+
+["atomic_cas_i64"]
+sig = "atomic_cas_i64(addr, expected: i64, desired: i64) -> i64"
+en = "Atomic compare-and-swap; returns the previous value."
+es = "Compare-and-swap atomico; devuelve el valor previo."
+
+["atomic_add_i64"]
+sig = "atomic_add_i64(addr, delta: i64) -> i64"
+en = "Atomic fetch-add; returns the previous value."
+es = "Fetch-add atomico; devuelve el valor previo."

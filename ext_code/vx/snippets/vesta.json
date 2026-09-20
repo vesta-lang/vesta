@@ -299,7 +299,7 @@
     },
     "Concepto": {
         "prefix": "concept",
-        "body": ["concept ${1:Nombre}<${2:T}> = ${0:is_integer<${2:T}>()};"],
+        "body": ["concept ${1:Nombre}<${2:T}> = ${0:type.is_integer<${2:T}>()};"],
         "description": "Predicado de tiempo de compilacion que restringe un parametro generico."
     },
     "Concepto con bloque": {

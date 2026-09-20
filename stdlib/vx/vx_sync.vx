@@ -10,7 +10,7 @@
  * @par Modelo
  * Monitor reentrante por-objeto, sin GC ni tabla de handles.  La palabra de
  * monitor vive INLINE en el objeto, en el offset 16 del ObjectHeader
- * (`sizeof(ObjectHeader)`=24; offset 0 = vtable_ptr en native_poo, offset 16
+ * (`type.size(ObjectHeader)`=24; offset 0 = vtable_ptr en native_poo, offset 16
  * libre y zero-inicializado por `calloc`).  Layout de la palabra (64 bits):
  *
  *   - bits 63..16 : owner_tid (id de hilo duenño; 0 = libre)

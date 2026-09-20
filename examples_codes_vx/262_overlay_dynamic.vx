@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// Overlay structs (F2): offsets DINAMICOS + sizeof + CREAR (no solo parsear)
+// Overlay structs (F2): offsets DINAMICOS + type.size + CREAR (no solo parsear)
 // -----------------------------------------------------------------------------
 // F1 daba offsets constantes (`@0x3C`).  F2 permite que el offset de un campo
 // dependa de OTROS campos de la vista: `@offset(hermano + N)`.  El resolvedor
@@ -11,7 +11,7 @@
 //   * El compilador exige que la expresion evalue a un entero.
 //
 // Ademas:
-//   * `sizeof(Overlay)` = HUELLA ESTATICA de la vista (max offset+size de los
+//   * `type.size(Overlay)` = HUELLA ESTATICA de la vista (max offset+size de los
 //     campos de offset CONSTANTE), una CONSTANTE de compilacion.  Sirve para
 //     reservar el buffer de respaldo exacto al CREAR la estructura -- sin
 //     adivinar tamanos.  (Los campos de offset dinamico no cuentan: son
@@ -32,11 +32,11 @@ struct PePeek {
 }
 
 i32 main() {
-	// sizeof de la vista = huella ESTATICA = max(0x00+2, 0x3C+4)=0x40=64.
+	// type.size de la vista = huella ESTATICA = max(0x00+2, 0x3C+4)=0x40=64.
 	// El campo dinamico nt_sig NO cuenta (su posicion depende de los datos).
 	// Reservamos la parte fija + hueco para el NT header que vamos a crear.
-	u64 fixed = sizeof<PePeek>();           // 64 (constante de compilacion)
-	println("sizeof<PePeek>() = ${fixed}"); // 64
+	u64 fixed = type.size<PePeek>();           // 64 (constante de compilacion)
+	println("type.size<PePeek>() = ${fixed}"); // 64
 
 	// --- CREAR (no parsear): rellenamos un buffer propio via la vista ---
 	u8*    buf = (u8*)malloc(128);
@@ -56,7 +56,7 @@ i32 main() {
 
 	// Retorno determinista (harness):
 	//   (nt_sig - 0x4550) verifica la lectura dinamica (0 si correcta)
-	//   + sizeof<PePeek>() (64) + nt_off (64) = 128.
+	//   + type.size<PePeek>() (64) + nt_off (64) = 128.
 	i32 result = (i32)(pe.nt_sig - 0x4550) + (i32)fixed + pe.nt_off;
 	free(buf);
 	return result; // 0 + 64 + 64 = 128

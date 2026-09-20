@@ -1,0 +1,25 @@
+// -----------------------------------------------------------------------------
+// La otra mitad: una llamada que no dice de cual de las dos habla
+// -----------------------------------------------------------------------------
+// Sobrecargar un builtin es legitimo (ver `572_sobrecarga_builtin.vx`), pero
+// entonces una llamada POSICIONAL con los mismos tipos no distingue: las dos
+// encajan igual de bien y lo unico que las separa es como se llaman sus
+// ranuras, que aqui no se han escrito.
+//
+// Eso tiene que ser un ERROR que cite las dos formas, no un ganador elegido a
+// escondidas.  Antes ganaba el builtin en silencio, y el cuerpo del usuario no
+// se ejecutaba nunca.
+
+void print_pad(u32 relleno, u64 ancho) {
+	// Da igual lo que haga: lo que se prueba es que la llamada de abajo no
+	// compila sin decir a cual llama.
+	g_visto = g_visto + (i64)ancho;
+}
+
+i64 g_visto = 0_i64;
+
+i32 main() {
+	// Los dos argumentos encajan con las dos, y nada dice cual.  VX2077.
+	print_pad(46_u32, 3_u64);
+	return 42;
+}

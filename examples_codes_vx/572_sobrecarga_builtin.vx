@@ -1,0 +1,50 @@
+// -----------------------------------------------------------------------------
+// Sobrecargar un builtin del lenguaje
+// -----------------------------------------------------------------------------
+// Un builtin es una funcion mas: se le puede poner al lado otra con su mismo
+// nombre, y cada llamada va a la suya.  Lo que las separa aqui no son los tipos
+// -- son identicos -- sino COMO SE LLAMAN SUS RANURAS, que desde que una
+// llamada puede nombrarlas (`f(.a = 3)`) es parte del contrato.
+//
+// Antes no se podia, y el modo de fallar era el peor: el builtin ganaba EN
+// SILENCIO.  Un `import ... only flush` se ignoraba y las llamadas iban al del
+// lenguaje; con otra firma, el builtin quedaba inalcanzable.  Y no era una sola
+// cosa mal, eran tres:
+//
+//   * `reg_builtin` no daba nombre a las ranuras del builtin, y una lista de
+//     nombres vacia "no separa" -- asi que colisionaba con cualquier funcion de
+//     sus mismos tipos en vez de sobrecargarse con ella.
+//   * el bajado volvia a decidir por el NOMBRE, ignorando la candidata que el
+//     comprobador ya habia elegido: la llamada type-chequeaba contra la funcion
+//     del usuario y se ejecutaba la del lenguaje, sin error ni aviso.
+//   * y las etiquetas se emparejaban por POSICION, dando por hecho que toda
+//     candidata tiene declaracion.  Un builtin es una firma sin AST, asi que la
+//     funcion del usuario se llevaba la etiqueta del builtin y su cuerpo se
+//     emitia con un nombre al que no llamaba nadie.
+//
+// El caso ambiguo -- la llamada posicional, que no dice cual de las dos -- es
+// un error de compilacion, y lo ejercita `573_sobrecarga_builtin_err.vx`.
+
+// Cuantas veces se llamo a la NUESTRA, y con que ancho.
+i64 g_ancho_total = 0_i64;
+
+// Mismos tipos que el builtin `print_pad(fill_cp, width)`, ranuras distintas:
+// son dos, y cada una se pide por su nombre.
+void print_pad(u32 relleno, u64 ancho) {
+	g_ancho_total = g_ancho_total + (i64)ancho;
+}
+
+i32 main() {
+	// Nombrando las ranuras del BUILTIN: escribe de verdad.
+	print("[");
+	print_pad(.fill_cp = 46_u32, .width = 3_u64); // '.' tres veces
+	println("]");
+
+	// Nombrando las NUESTRAS: no escribe nada, solo acumula.
+	print_pad(.relleno = 46_u32, .ancho = 30_u64);
+	print_pad(.ancho = 9_u64, .relleno = 32_u32); // y en otro orden
+
+	// 30 + 9 = 39, mas los 3 del builtin que si salieron por pantalla.
+	println("ancho acumulado = ${g_ancho_total}");
+	return (i32)(g_ancho_total + 3);
+}

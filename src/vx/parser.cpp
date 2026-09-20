@@ -83,56 +83,76 @@ static PrimitiveKind suffix_primitive(const Token &t) {
  * (un name no listado se trata como llamada normal sin type args, lo
  * cual no rompe codigo existente -- LT pasa al binary expr parser).
  */
-static bool is_comptime_builtin_name(const std::string &name) {
+bool is_comptime_builtin_name(const std::string &name) {
     static const std::unordered_set<std::string> set = {
         /* queries atomicas */
-        "sizeof",
-        "alignof",
-        "typename",
-        "type_id",
-        "kind",
+        "type.size",
+        "type.align",
+        "type.name",
+        "type.id",
+        "type.kind",
         /* `bitcast<T>(v)`: RUNTIME (no comptime), pero lleva type-arg y el
          * parser necesita saberlo para no tratar el `<` como comparacion. */
         "bitcast",
+        /* `malloc<T>(n)`: igual que el anterior -- de ejecucion, pero con
+         * type-arg --.  El tipo dice CUANTO mide cada elemento, asi que
+         * perderlo no da un error: da una reserva mas pequenya de lo pedido. */
+        "malloc",
         /* queries de fields/methods */
-        "offsetof",
-        "has_field",
-        "has_method",
-        "field_count",
-        "method_count",
-        "field_name",
-        "field_type",
-        "is_subtype",
-        "is_same",
-        "is_class",
-        "is_struct",
-        "is_primitive",
-        "is_newtype",
-        "is_opaque",
-        "underlying_of",
+        "field.offset",
+        "field.has",
+        "method.has",
+        "field.count",
+        "method.count",
+        "field.name",
+        "field.type",
+        "type.is_subtype",
+        "type.is_same",
+        "type.is_class",
+        "type.is_struct",
+        "type.is_primitive",
+        "type.is_newtype",
+        "type.is_opaque",
+        "type.underlying",
         /* #6: predicados de tipo, base de los conceptos built-in */
-        "is_integer",
-        "is_signed",
-        "is_unsigned",
-        "is_float",
-        "is_numeric",
-        "is_bool",
-        "is_char",
-        "is_pointer",
-        "is_string",
+        "type.is_integer",
+        "type.is_signed",
+        "type.is_unsigned",
+        "type.is_float",
+        "type.is_numeric",
+        "type.is_bool",
+        "type.is_char",
+        "type.is_pointer",
+        "type.is_string",
+        "type.is_callable",
+        "type.is_result",
+        "type.has_inner",
+        "type.has_base",
         /* iteracion + acceso directo */
-        "field_get",
-        "field_set",
-        "for_each_field",
-        "for_each_method",
+        "field.get",
+        "field.set",
+        "field.each",
+        "method.each",
         /* Type-as-first-class-value + builtins composables */
-        "comptime_type",
-        "parent_class",
-        "element_type",
-        "error_type",
-        "field_type_at",
-        "method_name",
-        "method_return_type",
+        "type.of",
+        "type.base",
+        "type.inner",
+        "type.error",
+        "type.result",
+        "field.type_at",
+        "method.name",
+        "method.result",
+        /* Y lo ALCANZABLE, que es la otra pregunta: no que metodos tiene el
+         * tipo, sino que se le puede llamar DESDE AQUI -- eso depende de las
+         * libres que este fichero alcance por llamada uniforme --. */
+        "scoped.method.count",
+        "scoped.method.has",
+        "scoped.method.name",
+        "scoped.method.origin",
+        "scoped.method.result",
+        "scoped.method.arity",
+        "scoped.method.param",
+        "scoped.method.each",
         /* string ops comptime (sin <T>) */
         /* Estos NO toman type_args, pero los meto aqui solo para
          * documentar que son builtins reconocidos.  El parser no los
@@ -1043,6 +1063,11 @@ std::unique_ptr<ast::ModuleNode> Parser::parse_program() {
                 mod->decls.push_back(std::move(e));
             }
             pending_extra_decls_.clear();
+            /* Y los namespaces de BLOQUE que aparecieron dentro de uno de
+             * forma statement: son hermanos suyos, no decls suyas. */
+            for (auto &s : pending_sibling_ns_)
+                mod->decls.push_back(std::move(s));
+            pending_sibling_ns_.clear();
         } else if (last_decl_was_target_skip_) {
             // L.24: skip intencional via @Target no matcheado.
             // El skip_target_skipped_decl ya consumio la decl
@@ -1730,8 +1755,9 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
     bool top_is_async = false;
     bool top_fp_contract =
         true; /* @fp(strict|fast): default fast (contrae FMA) */
-    bool top_is_alloc_override = false; /* AOT.2.d: @AllocatorOverride */
-    bool top_is_panic_handler = false;  /* AOT.2.d: @PanicHandler */
+    /* `@Provides(<builtin>)`: que builtin implementa la funcion de debajo.  Se
+     * resuelve aqui, al leer el lexema, y viaja como VALOR. */
+    Builtin top_provides_builtin = Builtin::Unknown;
     bool top_is_naked = false;          /*  NR: @Naked (ISRs/stubs) */
     bool top_is_no_idiom = false; /* @NoIdiom: sin reconocimiento de idiomas */
     bool top_is_noexcept = false; /* @NoExcept: fn sin excepciones */
@@ -1825,10 +1851,6 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 top_is_macro = true;
             else if (current_.lexeme == "Pure")
                 top_is_pure = true;
-            else if (current_.lexeme == "AllocatorOverride")
-                top_is_alloc_override = true;
-            else if (current_.lexeme == "PanicHandler")
-                top_is_panic_handler = true;
             else if (current_.lexeme == "Naked")
                 top_is_naked = true;
             else if (current_.lexeme == "NoIdiom")
@@ -1902,7 +1924,51 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 (current_.lexeme == "HelperOverride");
             // Instrumentacion en compilacion: @Hook(<punto>[, "<selector>"]).
             const bool is_hook = (current_.lexeme == "Hook");
+            // @Provides(<builtin>): esta funcion IMPLEMENTA ese builtin.
+            const bool is_provides = (current_.lexeme == "Provides");
+            /* Las dos anotaciones de gancho RETIRADAS, con la posicion guardada
+             * antes de consumir el nombre: el error tiene que apuntar a la
+             * marca, no a la declaracion de debajo.
+             *
+             * Se reconocen APOSTA en vez de dejarlas caer en el descarte
+             * generico del final del bucle.  Cuando los consumidores pasaron a
+             * leer `@Provides`, estas dejaron de leerse y el parser se las
+             * tragaba: compilaba, salia con codigo cero, y el binario usaba el
+             * asignador de la biblioteca en vez del del programador. */
+            const bool es_gancho_retirado =
+                (current_.lexeme == "AllocatorOverride" ||
+                 current_.lexeme == "PanicHandler");
+            const std::string gancho_viejo =
+                es_gancho_retirado ? current_.lexeme : std::string();
+            const SourceLoc loc_gancho = current_.loc;
             (void)consume();
+            if (es_gancho_retirado) {
+                /* El reemplazo se nombra entero.  Para el del asignador son
+                 * DOS, porque el rol ya no se adivina por el tipo de retorno
+                 * -- reservar y liberar son builtins distintos y se dicen --. */
+                /* El separador es una BARRA y no una conjuncion: este texto lo
+                 * comparten los dos idiomas, asi que una "o" saldria tambien
+                 * en el mensaje en ingles.  Lo que depende del idioma vive en
+                 * el catalogo; aqui solo van los nombres. */
+                const char *reemplazo =
+                    (gancho_viejo == "PanicHandler")
+                        ? "`@Provides(panic)`"
+                        : "`@Provides(malloc)` / `@Provides(free)`";
+                diags_.diag(loc_gancho, DiagLevel::ERR, "VXP091",
+                            {gancho_viejo, reemplazo});
+                /* Y se consume su lista de argumentos si la lleva, para que el
+                 * error sea UNO y no arrastre otro de sintaxis detras. */
+                if (current_.kind == TokenKind::LPAREN) {
+                    int prof = 0;
+                    do {
+                        if (current_.kind == TokenKind::LPAREN) ++prof;
+                        else if (current_.kind == TokenKind::RPAREN) --prof;
+                        (void)consume();
+                    } while (prof > 0 &&
+                             current_.kind != TokenKind::END_OF_FILE);
+                }
+                continue;
+            }
             // @complexity(O(...)[, n = <expr>]): contrato de coste para el
             // modo --analyze.  Se captura el texto RAW entre los parens y se
             // parte por la primera coma (la sub-expr de coste va antes; los
@@ -2155,6 +2221,39 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
                 }
                 (void)expect(TokenKind::RPAREN,
                              "se esperaba ')' al cerrar @Hook(...)");
+                continue;
+            }
+            if (is_provides) {
+                /* @Provides(<builtin>): la funcion de debajo implementa ese
+                 * builtin del lenguaje.
+                 *
+                 * El argumento es el NOMBRE DEL BUILTIN, no una taxonomia
+                 * aparte: el registro de builtins es ya la tabla de lo que se
+                 * puede proveer, asi que no hay una segunda lista que
+                 * mantener.  Se resuelve aqui mismo, que es donde el lexema
+                 * esta a mano, y de aqui en adelante viaja como VALOR.
+                 *
+                 * No se exige que sea IDENTIFIER: varios builtins son palabra
+                 * del lenguaje (`print`, `write`, `wait`), asi que lo que se
+                 * mira es el lexema.  Y si no nombra a ninguno es un error
+                 * AQUI, con el nombre delante, en vez de un proveedor que
+                 * nadie encuentra despues. */
+                (void)expect(TokenKind::LPAREN,
+                             "se esperaba '(' tras @Provides");
+                if (current_.lexeme.empty()) {
+                    diags_.diag(current_.loc, DiagLevel::ERR, "VXE934", {});
+                } else {
+                    const Builtin which = builtin_from_name(current_.lexeme);
+                    if (which == Builtin::Unknown)
+                        diags_.diag(current_.loc, DiagLevel::ERR, "VXE935",
+                                    {current_.lexeme});
+                    else
+                        top_provides_builtin = which;
+                    (void)consume();
+                }
+                (void)expect(TokenKind::RPAREN,
+                             "se esperaba ')' tras el builtin en "
+                             "@Provides(...)");
                 continue;
             }
             if (is_helper_override) {
@@ -2755,8 +2854,8 @@ std::unique_ptr<ast::Node> Parser::parse_top_level_decl() {
         if (fd && is_comptime_fn) fd->is_comptime = true;
         if (fd && top_is_macro) fd->is_macro = true;
         if (fd && top_is_pure) fd->is_pure = true;
-        if (fd && top_is_alloc_override) fd->is_alloc_override = true;
-        if (fd && top_is_panic_handler) fd->is_panic_handler = true;
+        if (fd && top_provides_builtin != Builtin::Unknown)
+            fd->provides_builtin = top_provides_builtin;
         if (fd && top_is_naked) fd->is_naked = true;
         if (fd && top_is_no_idiom) fd->is_no_idiom = true;
         // Variante por modo: la del interprete conserva el nombre para que los
@@ -2869,10 +2968,34 @@ Parser::parse_function_decl(std::unique_ptr<ast::TypeNode> ret_type,
     // #7: plantilla o especializacion se deciden DESPUES, cuando se sabe que
     // nombres son tipos (ver ast::StructDecl::generic_head_unresolved).  Aqui
     // solo se guarda lo escrito.
+    /* Los nombres del `<...>` NO se registran aqui como tipos, y es a
+     * proposito: si una funcion libre lo hiciera, la decision de mas abajo --
+     * plantilla o ESPECIALIZACION, que se toma despues justamente mirando si
+     * esos nombres son tipos -- se contestaria siempre que si, y `f<T>(T)`
+     * pasaria por una especializacion de si misma.  Reproducido: "redefinicion
+     * de simbolo a nivel global" y llamadas que ya no sabian cual de las dos
+     * querian.
+     *
+     * Quien necesita saber que `T*` es una direccion lo pregunta donde eso no
+     * cuesta identidad: ver @c same_call_shape en el comprobador. */
     if (current_.kind == TokenKind::LT) {
         (void)parse_generic_head(fn->spec_pattern, fn->type_bounds);
         fn->generic_head_unresolved = true;
+        /* Para LEER `(T*)x` hace falta saber que `T` nombra un tipo, y eso se
+         * apunta APARTE -- no en @c declared_aliases_ --: ese conjunto es el
+         * que consulta la decision de mas abajo, y meterlos alli la contestaba
+         * siempre que si, con lo que `f<T>(T)` pasaba por una especializacion
+         * de si misma.
+         *
+         * Apuntar a la lista que la declaracion ya tiene no reserva nada. */
+        active_type_params_ = &fn->spec_pattern;
     }
+    /* Valen hasta el final de ESTA funcion, salga por donde salga.  Anidadas no
+     * hay, asi que soltar el puntero basta. */
+    struct TypeParamScope {
+        const std::vector<std::unique_ptr<ast::TypeNode>> *&slot;
+        ~TypeParamScope() { slot = nullptr; }
+    } tp_scope{active_type_params_};
 
     (void)expect(TokenKind::LPAREN,
                  "se esperaba '(' tras el nombre de la funcion");
@@ -3129,6 +3252,18 @@ Parser::parse_global_var_decl(std::unique_ptr<ast::TypeNode> type,
 // no matche cae al case por defecto, que reporta error claro.
 // ---------------------------------------------------------------------
 
+bool Parser::is_active_type_param(const std::string &name) const noexcept {
+    if (active_type_params_ == nullptr) return false;
+    /* Lineal: son uno o dos, y con dos entradas comparar dos cadenas cortas es
+     * mas rapido que calcular un hash. */
+    for (const auto &tp : *active_type_params_) {
+        if (tp && tp->kind == ast::NodeKind::NamedTypeNode &&
+            static_cast<const ast::NamedTypeNode *>(tp.get())->name == name)
+            return true;
+    }
+    return false;
+}
+
 bool Parser::looks_like_cast() const noexcept {
     // Precondition: current_ es LPAREN.  Comprobamos si la
     // secuencia tras `(` forma un type-node valido seguido de `)`.
@@ -3176,6 +3311,12 @@ bool Parser::looks_like_cast() const noexcept {
         // exige operando derecho y aqui lo que sigue es `)`.
         || (first_kind == TokenKind::IDENTIFIER &&
             declared_structs_.count(first.lexeme) > 0 &&
+            mut_lex.peek_at(off + 1).kind == TokenKind::STAR)
+        // Y un PARAMETRO DE TIPO de la funcion en curso, con la misma regla del
+        // `*`: dentro de `R f<T>(...)`, `T` nombra un tipo tanto como un
+        // struct, asi que `(T*)x` es un cast.
+        || (first_kind == TokenKind::IDENTIFIER &&
+            is_active_type_param(first.lexeme) &&
             mut_lex.peek_at(off + 1).kind == TokenKind::STAR) ||
         is_qualified_ns;
     if (!is_type_starter) return false;
@@ -3291,7 +3432,17 @@ bool Parser::looks_like_cast() const noexcept {
     case TokenKind::TILDE:
     case TokenKind::PLUS_PLUS:
     case TokenKind::MINUS_MINUS: return true;
-    default: return false;
+    default:
+        /* Un tipo PRIMITIVO puede iniciar una expresion cuando le sigue un
+         * punto: `(i64)u64.sizeof()` es el cast de `u64.sizeof()`.  Con el
+         * punto no hay ambiguedad -- un tipo suelto en posicion de expresion
+         * no vale --, asi que esto no le roba nada a nadie.
+         *
+         * Sin la condicion del punto, `(i64) u64` seria un "cast" de un tipo,
+         * que no significa nada; con ella, lo unico que se admite es la forma
+         * que si lo significa. */
+        return is_type_keyword(after) &&
+               mut_lex.peek_at(off + 1).kind == TokenKind::DOT;
     }
 }
 
@@ -3711,7 +3862,48 @@ bool Parser::looks_like_register_storage() const noexcept {
     return false;
 }
 
+bool Parser::starts_type_yielding_builtin() const noexcept {
+    if (current_.kind != TokenKind::IDENTIFIER) return false;
+    if (!is_builtin_tree_root(current_.lexeme)) return false;
+    /* El nombre entero se arma mirando adelante, sin consumir: la raiz sola no
+     * dice nada -- `field.type_at` da un tipo y `field.set` no --. */
+    Lexer &ml = const_cast<Lexer &>(lex_);
+    std::string name = current_.lexeme;
+    for (size_t i = 0; i + 1 < kMaxTreeNameLookahead; i += 2) {
+        if (ml.peek_at(i).kind != TokenKind::DOT) break;
+        const Token &seg = ml.peek_at(i + 1);
+        if (!is_name_token(seg.kind)) break;
+        name += '.';
+        name += seg.lexeme;
+    }
+    return builtin_yields_type(builtin_from_name(name));
+}
+
+bool Parser::starts_computed_type() const noexcept {
+    if (current_.kind != TokenKind::IDENTIFIER) return false;
+    Lexer &ml = const_cast<Lexer &>(lex_);
+    const TokenKind nx = ml.peek_at(0).kind;
+    if (is_comptime_builtin_name(current_.lexeme))
+        return nx == TokenKind::LPAREN || nx == TokenKind::LT;
+    /* Un builtin en ARBOL empieza por su raiz, asi que aqui el lexema es solo
+     * el primer segmento (`type`, `scoped`) y el nombre entero lo junta
+     * `parse_primary`. */
+    return is_builtin_tree_root(current_.lexeme) && nx == TokenKind::DOT;
+}
+
 bool Parser::starts_type(bool allow_reserved_name) const noexcept {
+    /* Un tipo CALCULADO tambien abre una declaracion: `type.result<F>() f(..)`
+     * declara una funcion igual que `u64 f(..)`.  Sin esto el tipo se parseaba
+     * bien donde ya se sabia que habia uno -- un parametro, un campo -- y en
+     * cabeza de declaracion el error era "se esperaba un tipo", sobre algo que
+     * es un tipo.
+     *
+     * Pero aqui hay que hilar mas fino que donde YA se sabe que viene un tipo:
+     * esto decide si una declaracion EMPIEZA, y la mayoria de los builtins en
+     * arbol devuelven un valor, no un tipo.  `field.set<Punto>(p, "y", 200);`
+     * es una sentencia, y tomarla por el principio de una declaracion hacia
+     * que el parser pidiera un nombre detras de algo que no es un tipo. */
+    if (starts_type_yielding_builtin()) return true;
     // Cualquier keyword que sea tipo primitivo, o un identificador
     // seguido de uno o mas '*' (cero permitidos) y luego otro
     // identificador (caso "Edad x = ..." o "Punto* p = ...").  Si el
@@ -3873,6 +4065,22 @@ std::unique_ptr<ast::TypeNode> Parser::parse_type_node() {
     if (current_.kind == TokenKind::KW_NONNULL) {
         nonnull = true;
         (void)consume();
+    }
+    /* Un tipo CALCULADO: donde va un tipo se escribe una llamada que devuelve
+     * un tipo -- `sizeof<field_type_at<Punto>(0)>()` --.  Es lo que hace util
+     * que la introspeccion devuelva `Type` en vez de una cadena: un `Type` se
+     * vuelve a meter donde se pide un tipo.  Sin esto devolvia algo que no se
+     * podia usar en ninguna parte.
+     *
+     * La FORMA que lo reconoce la decide @c starts_computed_type, que es a
+     * quien pregunta tambien el que decide si una declaracion empieza por un
+     * tipo: las dos preguntas tienen que contestar lo mismo. */
+    if (starts_computed_type()) {
+        auto ct = std::make_unique<ast::ComputedTypeNode>();
+        ct->loc = current_.loc;
+        ct->expr = parse_unary();
+        if (!ct->expr) return nullptr;
+        return ct;
     }
     // Especificador de tipo ELABORADO estilo C: `struct Tag`, `union Tag`,
     // `enum Tag` como REFERENCIA a un tipo (no definicion inline).  Vesta usa
@@ -5032,6 +5240,23 @@ Parser::parse_import_decl(bool is_public_reexport) {
 // pre-pass de mangling (compiler_project.cpp::mangle_top_level_)
 // recorrera el AST añadiendo el prefijo `foo__` a todos los nombres.
 // -----------------------------------------------------------------
+bool Parser::namespace_ahead_is_block() const {
+    Lexer &mut_lex = const_cast<Lexer &>(lex_);
+    /* `namespace` IDENT (`.` IDENT)* [`@` id `(` str `)`] (`{` | `;`) */
+    size_t off = 0;
+    if (mut_lex.peek_at(off).kind != TokenKind::IDENTIFIER) return false;
+    ++off;
+    while (mut_lex.peek_at(off).kind == TokenKind::DOT &&
+           mut_lex.peek_at(off + 1).kind == TokenKind::IDENTIFIER)
+        off += 2;
+    /* El `@id("...")` opcional son cinco tokens: `@ id ( cadena )`. */
+    if (mut_lex.peek_at(off).kind == TokenKind::AT &&
+        mut_lex.peek_at(off + 1).kind == TokenKind::IDENTIFIER &&
+        mut_lex.peek_at(off + 1).lexeme == "id")
+        off += 5;
+    return mut_lex.peek_at(off).kind == TokenKind::LBRACE;
+}
+
 std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     auto ns = std::make_unique<ast::NamespaceDecl>();
     ns->loc = current_.loc;
@@ -5083,8 +5308,25 @@ std::unique_ptr<ast::NamespaceDecl> Parser::parse_namespace_decl() {
     if (current_.kind == TokenKind::SEMICOLON) {
         (void)consume(); // ';'
         ns->is_statement_form = true;
-        while (current_.kind != TokenKind::END_OF_FILE &&
-               current_.kind != TokenKind::KW_NAMESPACE) {
+        while (current_.kind != TokenKind::END_OF_FILE) {
+            // Solo otro STATEMENT termina este.  Un namespace de BLOQUE no:
+            // `namespace geo;` rige hasta el siguiente statement o el final
+            // del fichero, asi que lo que va DESPUES del bloque vuelve a ser
+            // de `geo`.  El bloque es un HERMANO -- no se anida, para que sus
+            // simbolos sigan llamandose igual -- y se emite al nivel del
+            // modulo (ver @c pending_sibling_ns_).
+            //
+            // Cortando aqui, como se hacia, todo lo posterior -- empezando por
+            // `main`, que casi siempre esta al final -- caia en la RAIZ y
+            // dejaba de ver los tipos de su propio fichero.  Y no lo decia
+            // nadie: el sintoma era un tipo que "no existe".
+            if (current_.kind == TokenKind::KW_NAMESPACE) {
+                if (!namespace_ahead_is_block()) break;
+                auto sibling = parse_namespace_decl();
+                if (sibling)
+                    pending_sibling_ns_.push_back(std::move(sibling));
+                continue;
+            }
             // extern "lib" { fn ...; } produce N decls (una por fn);
             // parse_program lo maneja como caso especial y parse_top_level_decl
             // NO -> replicarlo aqui para que un `extern` dentro de un namespace
@@ -7475,6 +7717,7 @@ Parser::register_temp_type_aliases(const std::vector<std::string> &names) {
     return inserted;
 }
 
+
 void Parser::unregister_temp_type_aliases(
     const std::vector<std::string> &inserted) {
     for (const auto &n : inserted)
@@ -9332,6 +9575,22 @@ std::unique_ptr<ast::Expr> Parser::parse_postfix() {
             fa->base = std::move(expr);
             Token tk_campo = consume();
             fa->field_name = tk_campo.lexeme;
+            /* Un builtin en ARBOL tras el punto es UN nombre, no una cadena de
+             * accesos: en `Punto.scoped.method.count()` lo que se llama se
+             * llama `scoped.method.count` y el receptor es `Punto`.  Se junta
+             * con la misma regla que en cabeza -- parar en cuanto lo acumulado
+             * ES un builtin --, para que las dos grafias de la llamada
+             * uniforme sigan siendo la misma llamada. */
+            if (is_builtin_tree_root(fa->field_name)) {
+                while (current_.kind == TokenKind::DOT &&
+                       is_name_token(lex_.peek_at(0).kind) &&
+                       builtin_from_name(fa->field_name) == Builtin::Unknown) {
+                    (void)consume(); // '.'
+                    fa->field_name += ".";
+                    tk_campo = consume();
+                    fa->field_name += tk_campo.lexeme;
+                }
+            }
             /* `x.f$geo.metrico(...)`: de QUE namespace es la funcion.
              *
              * Va detras del nombre y no delante porque lo que sigue al punto
@@ -9651,6 +9910,29 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         auto e = std::make_unique<ast::IdentExpr>();
         e->loc = loc;
         e->name = consume().lexeme;
+        /* Los builtins se nombran en ARBOL (`type.size`, `scoped.method.arity`)
+         * y eso son varios tokens, asi que aqui se juntan en UN nombre: los
+         * puntos que siguen a una raiz reservada son parte del nombre, no un
+         * acceso a un campo.
+         *
+         * Se para en cuanto lo acumulado ES un builtin -- ninguno es prefijo de
+         * otro, se comprueba al elegir los nombres --, para no comerse el punto
+         * de lo que venga detras: en `type.size<T>()` el nombre acaba en
+         * `size`, y en `Punto.field.count()` lo que se junta aqui es
+         * `field.count`, que es lo que el receptor de tipo espera encontrar. */
+        if (is_builtin_tree_root(e->name)) {
+            /* Cualquier token que valga como NOMBRE, no solo un identificador:
+             * `field.get` y `field.set` llevan detras palabras que el lenguaje
+             * usa para las propiedades, y exigir IDENTIFIER dejaba el nombre a
+             * medias -- el error hablaba de que `field` no existe --. */
+            while (current_.kind == TokenKind::DOT &&
+                   is_name_token(lex_.peek_at(0).kind) &&
+                   builtin_from_name(e->name) == Builtin::Unknown) {
+                (void)consume(); // '.'
+                e->name += ".";
+                e->name += consume().lexeme;
+            }
+        }
         return e;
     }
     case TokenKind::KW_THIS: {
@@ -9876,6 +10158,28 @@ std::unique_ptr<ast::Expr> Parser::parse_primary() {
         return inner;
     }
     default:
+        /* Un tipo PRIMITIVO como base de un acceso: `u64.sizeof()`,
+         * `i32.medida()`.  Es la otra clase de base de la regla del receptor
+         * -- si delante del punto hay un TIPO, `T.f()` es `f<T>()` --, y sin
+         * esto ni siquiera llegaba al comprobador: `u64` es palabra clave, caia
+         * aqui y el parser cortaba con "se esperaba una expresion primaria",
+         * que no dice nada de lo que pasa.
+         *
+         * Se pide el punto detras para no robarle el token a nadie: un tipo
+         * suelto en posicion de expresion sigue siendo un error, y lo unico que
+         * se admite es justo la forma que tiene sentido.
+         *
+         * Sale un IDENTIFICADOR con el nombre escrito, no un nodo propio: a
+         * partir de ahi es el mismo acceso que `Punto.f()`, asi que las dos
+         * clases de tipo -- el primitivo y el del usuario -- las resuelve el
+         * mismo codigo y no pueden divergir. */
+        if (is_type_keyword(current_.kind) &&
+            lex_.peek_at(0).kind == TokenKind::DOT) {
+            auto id = std::make_unique<ast::IdentExpr>();
+            id->loc = current_.loc;
+            id->name = consume().lexeme;
+            return id;
+        }
         error_here("se esperaba una expresion primaria");
         (void)consume();
         return nullptr;

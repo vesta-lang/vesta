@@ -9,7 +9,7 @@ namespace ejemplos.future_basico;
 // 3. Hijo recibe el handle, hace trabajo, fulfill(fut, value).
 // 4. Parent await fut -> bloquea hasta resuelto -> obtiene value.
 //
-// Esperado: parent obtiene 42 (constante computada por el hijo).
+// Esperado: type.parent obtiene 42 (constante computada por el hijo).
 
 i32 main() {
 	i64 fut = future_alloc(); // crear Future en estado PENDING

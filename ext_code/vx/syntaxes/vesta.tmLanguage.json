@@ -52,6 +52,9 @@
             "include": "#constants"
         },
         {
+            "include": "#ufcs"
+        },
+        {
             "include": "#builtins"
         },
         {
@@ -721,9 +724,9 @@
                     "match": "\\b(await|spawn|rspawn|synchronized|monitor|here|on)\\b"
                 },
                 {
-                    "comment": "Metaprogramacion en tiempo de compilacion",
+                    "comment": "Metaprogramacion en tiempo de compilacion.  `comptime` seguido de un punto NO es la palabra clave: es la raiz de una familia de builtins (`comptime.str.len`), y sin excluirla aqui se comia el primer tramo del nombre.",
                     "name": "keyword.other.comptime.vesta",
-                    "match": "\\b(comptime|concept|where|impl|extension|static_assert)\\b"
+                    "match": "\\b(comptime(?!\\s*\\.)|concept|where|impl|extension|static_assert)\\b"
                 },
                 {
                     "name": "keyword.other.vesta",
@@ -795,9 +798,61 @@
                 }
             ]
         },
+        "ufcs": {
+            "comment": "Las dos grafias propias de la llamada uniforme.  Las colorea tambien el servidor de lenguaje; aqui estan para que se vean igual cuando no hay servidor -- un fichero suelto, o el servidor caido --.",
+            "patterns": [
+                {
+                    "comment": "`x.f$geo.metrico(...)`: de QUE namespace es la funcion.  Lo que sigue al `$` solo puede ser un namespace, asi que se colorea como tal y no como un nombre cualquiera.",
+                    "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)",
+                    "captures": {
+                        "1": {
+                            "name": "punctuation.accessor.qualifier.vesta"
+                        },
+                        "2": {
+                            "name": "entity.name.namespace.vesta"
+                        }
+                    }
+                },
+                {
+                    "comment": "El HUECO del receptor: en `10.restar(40, _)` el `_` dice donde cae.  No nombra nada -- es sintaxis de la llamada --, asi que no se pinta como una variable.",
+                    "match": "\\b_\\b(?=\\s*[,)])",
+                    "name": "keyword.operator.receiver-hole.vesta"
+                }
+            ]
+        },
         "builtins": {
             "comment": "Funciones que el lenguaje reconoce sin que nadie las declare.  La lista sale de la tabla de builtins del compilador.",
             "patterns": [
+                {
+                    "comment": "El tipo en si: medida, identidad y predicados de categoria",
+                    "name": "support.function.builtin.type.vesta",
+                    "match": "\\b(type\\.info\\.field_offset|type\\.info\\.field_count|type\\.info\\.field_name|type\\.info\\.field_size|type\\.by_name\\.align|type\\.by_name\\.kind|type\\.by_name\\.size|type\\.is_primitive|type\\.is_unsigned|type\\.info\\.align|type\\.is_integer|type\\.is_newtype|type\\.is_numeric|type\\.is_pointer|type\\.is_subtype|type\\.underlying|type\\.info\\.kind|type\\.info\\.name|type\\.info\\.size|type\\.is_opaque|type\\.is_signed|type\\.is_string|type\\.is_struct|type\\.is_class|type\\.is_float|type\\.is_bool|type\\.is_char|type\\.is_enum|type\\.is_same|type\\.parent|type\\.align|type\\.find|type\\.kind|type\\.name|type\\.size|type\\.id)\\b"
+                },
+                {
+                    "comment": "Los campos de un tipo",
+                    "name": "support.function.builtin.field.vesta",
+                    "match": "\\b(field\\.type_at|field\\.offset|field\\.count|field\\.each|field\\.name|field\\.type|field\\.get|field\\.has|field\\.set)\\b"
+                },
+                {
+                    "comment": "Los metodos que el tipo TIENE",
+                    "name": "support.function.builtin.method.vesta",
+                    "match": "\\b(method\\.result|method\\.count|method\\.each|method\\.name|method\\.has)\\b"
+                },
+                {
+                    "comment": "Lo que se puede LLAMAR sobre un tipo desde aqui (llamada uniforme)",
+                    "name": "support.function.builtin.scoped.vesta",
+                    "match": "\\b(scoped\\.method\\.origin|scoped\\.method\\.result|scoped\\.method\\.arity|scoped\\.method\\.count|scoped\\.method\\.param|scoped\\.method\\.each|scoped\\.method\\.name|scoped\\.method\\.has)\\b"
+                },
+                {
+                    "comment": "Vistas de memoria",
+                    "name": "support.function.builtin.overlay.vesta",
+                    "match": "\\b(overlay\\.in_bounds|overlay\\.extent)\\b"
+                },
+                {
+                    "comment": "Lo que se ejecuta al compilar",
+                    "name": "support.function.builtin.comptime.vesta",
+                    "match": "\\b(comptime\\.str\\.contains|comptime\\.str\\.replace|comptime\\.str\\.concat|comptime\\.str\\.repeat|comptime\\.str\\.substr|comptime\\.str\\.len|comptime\\.str\\.eq|comptime\\.to_str|comptime\\.print|comptime\\.chr|comptime\\.ord)\\b"
+                },
                 {
                     "comment": "Entrada y salida, y control del terminal",
                     "name": "support.function.builtin.io.vesta",
@@ -811,7 +866,7 @@
                 {
                     "comment": "Memoria cruda, tamanos y conversiones de representacion",
                     "name": "support.function.builtin.memory.vesta",
-                    "match": "\\b(malloc|free|sizeof|alignof|offsetof|bitcast|extent|in_bounds|section_start|section_end|section_size)\\b"
+                    "match": "\\b(malloc|free|bitcast|section_start|section_end|section_size)\\b"
                 },
                 {
                     "comment": "Propiedad, prestamo y recoleccion",
@@ -826,17 +881,17 @@
                 {
                     "comment": "Cadenas y conversion a texto",
                     "name": "support.function.builtin.string.vesta",
-                    "match": "\\b(str_make|str_length|str_bytes|str_concat|str_equals|str_hash|str_intern|str_cstr|str_wstr|str_convert|to_str|to_string|substr|contains|replace|repeat|chr|ord|typename)\\b(?=\\s*\\()"
+                    "match": "\\b(str_make|str_length|str_bytes|str_concat|str_equals|str_hash|str_intern|str_cstr|str_wstr|str_convert|to_str|to_string|substr|contains|replace|repeat|chr|ord)\\b(?=\\s*\\()"
                 },
                 {
                     "comment": "Valores opcionales y resultados",
                     "name": "support.function.builtin.option.vesta",
-                    "match": "\\b(Ok|Err|Some|None|isOk|isPresent|unwrap|unwrap_unchecked|value|kind)\\b"
+                    "match": "\\b(Ok|Err|Some|None|isOk|isPresent|unwrap|unwrap_unchecked|value)\\b"
                 },
                 {
                     "comment": "Reflexion e introspeccion de tipos",
                     "name": "support.function.builtin.reflection.vesta",
-                    "match": "\\b(forName|getClass|getField|getFields|getFieldAt|getMethod|getMethods|getMethodAt|newInstance|invoke|has_field|has_method|field_count|field_get|field_set|field_name|field_type|method_count|for_each_field|for_each_method|parent|type_id|type_info_name|type_info_kind|type_info_size|type_info_align|type_info_field_count|type_info_field_name|type_info_field_offset|type_info_field_size|find_type|underlying_of|is_bool|is_char|is_class|is_enum|is_float|is_integer|is_newtype|is_numeric|is_opaque|is_pointer|is_primitive|is_same|is_shared|is_signed|is_string|is_struct|is_subtype|is_unsigned)\\b(?=\\s*[\\(<])"
+                    "match": "\\b(forName|getClass|getField|getFields|getFieldAt|getMethod|getMethods|getMethodAt|newInstance|invoke|is_shared)\\b(?=\\s*[\\(<])"
                 },
                 {
                     "comment": "Concurrencia, procesos y sincronizacion",
@@ -851,7 +906,7 @@
                 {
                     "comment": "Ejecucion en tiempo de compilacion",
                     "name": "support.function.builtin.comptime.vesta",
-                    "match": "\\b(comptime_chr|comptime_concat|comptime_contains|comptime_ord|comptime_print|comptime_repeat|comptime_replace|comptime_streq|comptime_strlen|comptime_substr|comptime_to_str|comptime_type_alignof|comptime_type_kind|comptime_type_sizeof|ct_print|gensym|vacount)\\b(?=\\s*[\\(<])"
+                    "match": "\\b(ct_print|gensym|vacount)\\b(?=\\s*[\\(<])"
                 }
             ]
         },

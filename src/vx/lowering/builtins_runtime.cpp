@@ -170,12 +170,34 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e, Builtin b,
         }
         v_size = cast_if_needed(v_size, fn_->values[v_size].type,
                                 ir::IrType::I64, e->loc.line);
+        /* `malloc<T>(n)` son n ELEMENTOS, no n bytes: el tamanyo lo pone el
+         * tipo, que es lo que la forma generica promete.  Sin esto `<T>` se
+         * consumia sin efecto ninguno y `malloc<i64>(4)` devolvia CUATRO bytes
+         * para algo donde se van a escribir treinta y dos -- y no daba error,
+         * daba memoria pisada lejos de aqui --.
+         *
+         * Sin `<T>` el argumento son bytes, como en C, que es como estan
+         * escritas las llamadas que ya existen. */
+        if (!e->type_args.empty()) {
+            const Type elem = tc_.resolve_type_node(e->type_args[0].get());
+            const size_t esz = size_of_type(elem);
+            if (esz > 1) {
+                const ir::IrValueId v_esz = emit_const(
+                    ir::IrType::I64, static_cast<uint64_t>(esz), e->loc.line);
+                v_size = emit_ir_binop(ir::IrOp::MUL, v_size, v_esz,
+                                       ir::IrType::I64, e->loc.line);
+            }
+        }
         const ir::IrValueId dst = fn_->new_value(ir::IrType::PTR);
         // Marcar el resultado como puntero a memoria host: cualquier
         // LOAD/STORE posterior cuyo puntero descienda de este value
         // emitira movh en el ir_emitter.
         fn_->values[dst].is_host_ptr = true;
         ir::IrInstr ins{};
+        /* Si alguien lo provee, la llamada NO llega hasta aqui: se reescribio a
+         * su instancia en `pre_mono`.  Y tiene que ser una instancia, no el
+         * proveedor: es una plantilla, y una plantilla no emite simbolo --
+         * nombrarla da un enlazado que busca algo que nadie emitio. */
         ins.op = ir::IrOp::RAW_ALLOC;
         ins.type = ir::IrType::PTR;
         ins.dst = dst;
@@ -198,7 +220,28 @@ bool Lowering::try_lower_runtime_builtins(ast::CallExpr *e, Builtin b,
             return true;
         }
         ir::IrInstr ins{};
-        ins.op = ir::IrOp::RAW_FREE;
+        /* Con `@Provides(free)`, aqui.  Misma razon que en `malloc`: la op
+         * `RAW_FREE` baja al opcode `free` de la maquina virtual, que suelta a
+         * SU arena y no pregunta por ningun gancho. */
+        /* Y se llama a la INSTANCIA, no al nombre de la ficha.
+         *
+         * Un proveedor puede ser una plantilla, y una plantilla no emite
+         * simbolo -- lo emiten sus instancias --, asi que cablear lo que la
+         * ficha apunto (`mi_free`) pide al enlazador algo que nadie escribio:
+         * "simbolo no resuelto: code.mi_free".  Con la grafia libre no se veia
+         * porque la llamada ya llegaba aqui reescrita a la instancia; con el
+         * punto llega como el builtin y este es el unico que la engancha.
+         *
+         * El compañero de al lado ya lo hacia asi -- el bloque de un `new` usa
+         * @c raw_alloc_symbol --, que es el mismo criterio: lo que se llama es
+         * la instancia que trabaja en BYTES. */
+        const std::string &free_sym = tc_.raw_free_symbol();
+        if (!free_sym.empty()) {
+            ins.op = ir::IrOp::CALL;
+            ins.func_name = free_sym;
+            ins.is_call_site = true;
+        } else
+            ins.op = ir::IrOp::RAW_FREE;
         ins.type = ir::IrType::VOID;
         ins.dst = ir::IR_NO_VALUE;
         ins.operands = {v_ptr};

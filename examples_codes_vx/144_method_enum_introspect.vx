@@ -1,11 +1,11 @@
 namespace ejemplos.method_enum_introspect;
 
-// introspeccion de metodos + enums + comptime_print.
-//   method_name<T>(idx)        -> string del metodo idx-esimo
-//   method_return_type<T>(idx) -> Type del return del metodo idx
-//   field_name<EnumT>(idx)     -> nombre de variante (ya soportado)
-//   field_count<EnumT>()       -> num de variantes (ya soportado)
-//   comptime_print(val)        -> emite a stderr en compile-time
+// introspeccion de metodos + enums + comptime.print.
+//   method.name<T>(idx)        -> string del metodo idx-esimo
+//   method.result<T>(idx) -> Type del return del metodo idx
+//   field.name<EnumT>(idx)     -> nombre de variante (ya soportado)
+//   field.count<EnumT>()       -> num de variantes (ya soportado)
+//   comptime.print(val)        -> emite a stderr en compile-time
 
 class Calc {
 	public i32 v;
@@ -15,36 +15,36 @@ class Calc {
 	public string mark() => "ok";
 }
 
-// (1) method_count + method_name iterando por indice.
-static_assert(method_count<Calc>() >= 4, "Calc tiene >=4 metodos");
-static_assert(comptime_streq(method_name<Calc>(0), "Calc"), "m0 = ctor");
-static_assert(comptime_streq(method_name<Calc>(1), "get"), "m1 = get");
-static_assert(comptime_streq(method_name<Calc>(2), "doble"), "m2 = doble");
-static_assert(comptime_streq(method_name<Calc>(3), "mark"), "m3 = mark");
+// (1) method.count + method.name iterando por indice.
+static_assert(method.count<Calc>() >= 4, "Calc tiene >=4 metodos");
+static_assert(comptime.str.eq(method.name<Calc>(0), "Calc"), "m0 = ctor");
+static_assert(comptime.str.eq(method.name<Calc>(1), "get"), "m1 = get");
+static_assert(comptime.str.eq(method.name<Calc>(2), "doble"), "m2 = doble");
+static_assert(comptime.str.eq(method.name<Calc>(3), "mark"), "m3 = mark");
 
-// (2) method_return_type devuelve Type.
-comptime Type RGet  = method_return_type<Calc>(1);
-comptime Type RDob  = method_return_type<Calc>(2);
-comptime Type RMark = method_return_type<Calc>(3);
-static_assert(sizeof<RGet>() == 4, "get -> i32");
-static_assert(sizeof<RDob>() == 8, "doble -> i64");
-static_assert(comptime_streq(typename<RMark>(), "string"), "mark -> string");
+// (2) method.result devuelve Type.
+comptime Type RGet  = method.result<Calc>(1);
+comptime Type RDob  = method.result<Calc>(2);
+comptime Type RMark = method.result<Calc>(3);
+static_assert(type.size<RGet>() == 4, "get -> i32");
+static_assert(type.size<RDob>() == 8, "doble -> i64");
+static_assert(comptime.str.eq(type.name<RMark>(), "string"), "mark -> string");
 
-// (3) Enum introspection: field_count = num variantes, field_name = variante.
+// (3) Enum introspection: field.count = num variantes, field.name = variante.
 enum Direccion {
 	Norte,
 	Sur,
 	Este,
 	Oeste
 }
-static_assert(field_count<Direccion>() == 4, "4 variantes");
-static_assert(comptime_streq(field_name<Direccion>(0), "Norte"), "v0");
-static_assert(comptime_streq(field_name<Direccion>(2), "Este"), "v2");
+static_assert(field.count<Direccion>() == 4, "4 variantes");
+static_assert(comptime.str.eq(field.name<Direccion>(0), "Norte"), "v0");
+static_assert(comptime.str.eq(field.name<Direccion>(2), "Este"), "v2");
 
-// (4) comptime_print: debug en compile-time (a stderr al compilar).
+// (4) comptime.print: debug en compile-time (a stderr al compilar).
 // El retorno es u64=0 y se compone con static_assert para mantenerlo en el AST.
-static_assert(comptime_print("=== a43.6 init ===") == 0, "print str");
-static_assert(comptime_print(method_count<Calc>()) == 0, "print int");
-static_assert(comptime_print(typename<RGet>()) == 0, "print typename");
+static_assert(comptime.print("=== a43.6 init ===") == 0, "print str");
+static_assert(comptime.print(method.count<Calc>()) == 0, "print int");
+static_assert(comptime.print(type.name<RGet>()) == 0, "print type.name");
 
 i32 main() => 42;

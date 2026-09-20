@@ -1,10 +1,22 @@
 namespace ejemplos.type_composable;
 
-//  Type-returning builtins composables.
-//   parent_class<T>()    -> Type del super de una CLASS (vacio si no tiene)
-//   element_type<T>()    -> Type interior de T*/T[N]/Optional<T>/Future<T>/borrow<T>
-//   error_type<T>()      -> E de Result<V,E>
-//   field_type_at<T>(i)  -> Type del campo i-esimo (vs field_type<T>("name") que da string)
+//  Builtins componibles que devuelven un TIPO.
+//   type.of<T>()         -> el propio T como valor `Type`
+//   type.base<T>()       -> la clase de la que hereda una CLASS
+//   type.inner<T>()      -> lo interior de T*/T[N]/Optional<T>/Future<T>/borrow<T>
+//   type.error<T>()      -> la E de un Result<V, E>
+//   type.result<F>()     -> lo que devuelve un invocable (`fn` o `cfn`)
+//   field.type_at<T>(i)  -> el tipo del campo i-esimo (field.type<T>("n") da su NOMBRE)
+//
+// Ninguno devuelve un tipo vacio cuando la pregunta no aplica: lo DICEN.  Un
+// vacio de respuesta no es una respuesta -- es un caso sin tratar convertido en
+// dato --, y ademas no se queda quieto: mas abajo se lee como `void` y el fallo
+// sale lejos del sitio, hablando de otra cosa.  Por eso cada uno tiene su
+// PREGUNTA al lado, que es lo que permite escribir codigo correcto sobre un
+// tipo que no se conoce de antemano:
+//
+//   type.has_base<T>()   type.has_inner<T>()
+//   type.is_result<T>()  type.is_callable<T>()
 
 struct Vec3 {
 	f64 x;
@@ -25,58 +37,79 @@ class Perro : Animal {
 	}
 }
 
-// (1) parent_class<T>: Perro -> Animal.
-comptime Type Padre = parent_class<Perro>();
+// (1) type.base<T>: Perro -> Animal.
+comptime Type Padre = type.base<Perro>();
 static_assert(
-	comptime_streq(typename<Padre>(), "Animal"),
+	comptime.str.eq(type.name<Padre>(), "Animal"),
 	"padre Perro = Animal"
 );
-static_assert(field_count<Padre>() == 1, "Animal tiene 1 campo");
+static_assert(field.count<Padre>() == 1, "Animal tiene 1 campo");
 
-// Animal no tiene padre explicito -> sentinela TYPE_META vacio.
-// (No podemos usar typename sobre TYPE_META vacio, asi que solo verificamos
-// que parent_class<Perro>() == Animal por sustitucion).
+// Y `Animal` no hereda de nadie.  Eso se PREGUNTA; `type.base<Animal>()` no
+// devuelve un tipo vacio, dice que no tiene respuesta.  Que una clase no tenga
+// base es un caso normal -- por eso hay una pregunta para el --, no un hueco
+// que el que llama tenga que adivinar mirando lo que le devolvieron.
+static_assert(type.has_base<Perro>(), "Perro si tiene base");
+static_assert(!type.has_base<Animal>(), "Animal no tiene base");
+static_assert(!type.has_base<i32>(), "un primitivo tampoco es una clase");
 
-// (2) element_type sobre punteros y arrays.
-comptime Type Inner = element_type<i32*>();
-static_assert(sizeof<Inner>() == 4, "i32* -> i32");
+// (2) type.inner sobre punteros y arrays.
+comptime Type Inner = type.inner<i32*>();
+static_assert(type.size<Inner>() == 4, "i32* -> i32");
 static_assert(
-	comptime_streq(typename<Inner>(), "i32"),
-	"element_type i32* = i32"
+	comptime.str.eq(type.name<Inner>(), "i32"),
+	"type.inner i32* = i32"
 );
 
-comptime Type ArrElem = element_type<Vec3[8]>();
-static_assert(sizeof<ArrElem>() == 24, "Vec3[8] -> Vec3");
-static_assert(comptime_streq(typename<ArrElem>(), "Vec3"), "Vec3[N] elem");
+comptime Type ArrElem = type.inner<Vec3[8]>();
+static_assert(type.size<ArrElem>() == 24, "Vec3[8] -> Vec3");
+static_assert(comptime.str.eq(type.name<ArrElem>(), "Vec3"), "Vec3[N] elem");
 
-// (3) element_type sobre Optional<T>, Future<T>.
-comptime Type OptInner = element_type<Optional<i64>>();
-static_assert(sizeof<OptInner>() == 8, "Optional<i64> -> i64");
-static_assert(comptime_streq(typename<OptInner>(), "i64"), "Opt elem i64");
+// (3) type.inner sobre Optional<T>, Future<T>.
+comptime Type OptInner = type.inner<Optional<i64>>();
+static_assert(type.size<OptInner>() == 8, "Optional<i64> -> i64");
+static_assert(comptime.str.eq(type.name<OptInner>(), "i64"), "Opt elem i64");
 
-comptime Type FutInner = element_type<Future<f32>>();
-static_assert(sizeof<FutInner>() == 4, "Future<f32> -> f32");
+comptime Type FutInner = type.inner<Future<f32>>();
+static_assert(type.size<FutInner>() == 4, "Future<f32> -> f32");
 
-// (4) error_type sobre Result<V,E>.
-comptime Type ErrT = error_type<Result<i32, i64>>();
-static_assert(sizeof<ErrT>() == 8, "Result<i32,i64> err = i64");
-static_assert(comptime_streq(typename<ErrT>(), "i64"), "err = i64");
+// Y un `i64` no envuelve a nadie, que tambien se pregunta.
+static_assert(type.has_inner<i32*>(), "un puntero si envuelve");
+static_assert(!type.has_inner<i64>(), "un entero no envuelve nada");
 
-// (5) field_type_at<T>(i): el tipo del campo i-esimo como Type.
-comptime Type F0 = field_type_at<Vec3>(0);
-static_assert(sizeof<F0>() == 8, "Vec3.0 = f64");
-static_assert(comptime_streq(typename<F0>(), "f64"), "f0 = f64");
+// (4) type.error sobre Result<V,E>.
+comptime Type ErrT = type.error<Result<i32, i64>>();
+static_assert(type.size<ErrT>() == 8, "Result<i32,i64> err = i64");
+static_assert(comptime.str.eq(type.name<ErrT>(), "i64"), "err = i64");
+static_assert(type.is_result<Result<i32, i64>>(), "eso si es un Result");
+static_assert(!type.is_result<i64>(), "y un entero no");
+
+// (4-bis) type.result sobre un invocable, que es lo que permite escribir una
+// generica de orden superior sin fijar de antemano si recibe un `fn` o un
+// `cfn`: los dos contestan aqui.
+comptime Type RetC = type.result<cfn(string) -> u64>();
+static_assert(comptime.str.eq(type.name<RetC>(), "u64"), "cfn -> u64");
+comptime Type RetF = type.result<fn(string) -> u64>();
+static_assert(comptime.str.eq(type.name<RetF>(), "u64"), "fn -> u64");
+static_assert(type.is_callable<cfn(i64) -> i64>(), "un cfn es invocable");
+static_assert(type.is_callable<fn(i64) -> i64>(), "y un fn tambien");
+static_assert(!type.is_callable<i64>(), "un entero no");
+
+// (5) field.type_at<T>(i): el tipo del campo i-esimo como Type.
+comptime Type F0 = field.type_at<Vec3>(0);
+static_assert(type.size<F0>() == 8, "Vec3.0 = f64");
+static_assert(comptime.str.eq(type.name<F0>(), "f64"), "f0 = f64");
 
 // (6) Composicion: pick + size del field 0 = pick(2).field0_size.
 comptime Type pick(i64 k) {
-	if (k == 0) return comptime_type<i32>();
-	if (k == 1) return comptime_type<i64>();
-	if (k == 2) return comptime_type<Vec3>();
-	return comptime_type<bool>();
+	if (k == 0) return type.of<i32>();
+	if (k == 1) return type.of<i64>();
+	if (k == 2) return type.of<Vec3>();
+	return type.of<bool>();
 }
 
 comptime Type Pk2      = pick(2);
-comptime Type Pk2Field = field_type_at<Pk2>(0); // f64 (Vec3.x)
-static_assert(sizeof<Pk2Field>() == 8, "pick(2).f0 = f64");
+comptime Type Pk2Field = field.type_at<Pk2>(0); // f64 (Vec3.x)
+static_assert(type.size<Pk2Field>() == 8, "pick(2).f0 = f64");
 
 i32 main() => 42;

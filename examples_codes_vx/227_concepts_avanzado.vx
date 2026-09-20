@@ -15,7 +15,7 @@ concept Figura {
 	bool igual(i64 x);
 }
 
-concept MiNum<T> = is_numeric<T>();
+concept MiNum<T> = type.is_numeric<T>();
 
 class Cuadrado {
 	i64 lado;
