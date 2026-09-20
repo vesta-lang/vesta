@@ -112,7 +112,10 @@ void append_trimming_eol(std::string_view chunk, std::string &out,
  * @return Cierto si los dos dan la misma tira de tokens.
  */
 bool same_program(std::string_view before, std::string_view after,
-                  const std::vector<Rewrite> &rewrites) {
+                  const std::vector<Rewrite> &rewrites, uint32_t *at_line,
+                  uint32_t *at_col) {
+    if (at_line != nullptr) *at_line = 0;
+    if (at_col != nullptr) *at_col = 0;
     /* Se leen las DOS tiras de tokens enteras y luego se recorren en paralelo.
      * Leerlas antes cuesta un poco de memoria y ahorra mucho lio: al comparar
      * hace falta mirar hacia adelante -- un `>>` que sustituye a dos `>`, unos
@@ -173,6 +176,15 @@ bool same_program(std::string_view before, std::string_view after,
 
     size_t ia = 0, ib = 0;
     while (ia < A.size() && ib < B.size()) {
+        /* DONDE vamos, por si esta vuelta acaba en un no.
+         *
+         * Se apunta aqui, una vez, en vez de en cada una de las siete salidas
+         * de abajo: asi ninguna se queda sin decirlo el dia que se anyada la
+         * octava.  Y decirlo importa -- sin la posicion, el diagnostico avisa
+         * de que formatear cambiaria el programa y no de que, lo que obliga a
+         * partir el fichero a la mitad una y otra vez para averiguarlo. */
+        if (at_line != nullptr) *at_line = A[ia].loc.line;
+        if (at_col != nullptr) *at_col = A[ia].loc.column;
         /* Una reescritura declarada manda sobre la igualdad.
          *
          * Hace falta porque dos tokens IGUALES pueden ser distintos: la `}`
@@ -455,9 +467,15 @@ FormatResult format(const std::string &source, const std::string &filename,
     std::sort(rewrites.begin(), rewrites.end(),
               [](const Rewrite &a, const Rewrite &b) { return a.at < b.at; });
     r.rewrites = rewrites; // el test comprueba contra lo declarado, como aqui
-    if (!same_program(text, out, rewrites)) {
+    uint32_t d_line = 0;
+    uint32_t d_col = 0;
+    if (!same_program(text, out, rewrites, &d_line, &d_col)) {
         r.ok = false;
         r.code = "VXF004";
+        /* Con la POSICION.  Decir solo que cambiaria el programa deja a quien
+         * lo lee partiendo el fichero a la mitad para averiguar donde, que es
+         * lo que hubo que hacer la primera vez que salto. */
+        r.args = {std::to_string(d_line), std::to_string(d_col)};
         r.text = source; // intacto: mejor sin formatear que mal formateado
         return r;
     }

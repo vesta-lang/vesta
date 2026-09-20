@@ -462,7 +462,24 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
              * RELATIVA (`R77`): que una linea vaya mas adentro que otra.  Eso
              * se conserva midiendo cada una contra la primera del cuerpo. */
             const size_t nl_pos = p.trivia.rfind('\n');
-            if (nl_pos != std::string_view::npos) {
+            /* `R5` vale tambien para las llaves de un `asm`: son de la
+             * SENTENCIA, no del ensamblador.  Lo que es del autor es lo que hay
+             * ENTRE ellas, y una instruccion pegada a la llave de apertura
+             * -- `asm { mov rax, 100` -- deja la primera de las tres en otra
+             * columna que sus hermanas, que es justo lo que `R77` quiere
+             * conservar.  Un `asm { nop };` de una sola linea no se toca: la
+             * regla es para los bloques repartidos. */
+            const bool first_of_body =
+                idx > 0 && asm_depth == 1 && !pieces[idx - 1].drop &&
+                is(pieces[idx - 1], TokenKind::LBRACE) &&
+                llave_partida[idx - 1];
+            if (nl_pos == std::string_view::npos && first_of_body) {
+                text.push_back('\n');
+                ++cur_line;
+                put_indent(level);
+                const size_t nl2 = text.rfind('\n');
+                line_start = (nl2 == std::string::npos) ? 0 : nl2 + 1;
+            } else if (nl_pos != std::string_view::npos) {
                 const std::string_view sangria = p.trivia.substr(nl_pos + 1);
                 const uint32_t col = display_width(sangria, options.tab_width);
                 if (asm_base == UINT32_MAX) asm_base = col;
@@ -623,10 +640,17 @@ std::string reindent(const std::vector<Piece> &pieces, std::string_view tail,
          * La llave que `R39b` se llevo no cuenta: sigue en el vector -- lo que
          * se quita es la marca `drop`, no la pieza --, y sin excluirla el `=>`
          * que la sustituye heredaba su salto y se iba a la linea de abajo. */
+        /* Dentro de un `asm` no se reparte nada... salvo su PROPIA llave de
+         * cierre: es de la sentencia, no del ensamblador, y pegada a la ultima
+         * instruccion (`div rsi };`) se lee como parte de ella.  Una llave
+         * anidada dentro del cuerpo si es del autor, y esa se distingue por la
+         * profundidad. */
+        const bool closes_asm = in_asm && asm_depth == 1 && closes;
         const bool parte_llave =
-            !in_asm && ((idx > 0 && is(pieces[idx - 1], TokenKind::LBRACE) &&
-                         !pieces[idx - 1].drop && llave_partida[idx - 1]) ||
-                        (is(p, TokenKind::RBRACE) && llave_partida[idx]));
+            (!in_asm || closes_asm) &&
+            ((idx > 0 && is(pieces[idx - 1], TokenKind::LBRACE) &&
+              !pieces[idx - 1].drop && llave_partida[idx - 1]) ||
+             (is(p, TokenKind::RBRACE) && llave_partida[idx]));
 
         const bool corta_aqui = parte_sentencia || parte_valor_enum ||
                                 parte_llave ||

@@ -82,6 +82,15 @@ struct Line {
     /// Ultima pieza de la linea, para saber cuanto mide entera.
     size_t last = 0;
     /**
+     * Cierto si su ultimo campo es un `=`.
+     *
+     * Es lo que permite aplicar `R88`: dos formas DISTINTAS que comparten ese
+     * anclaje se alinean por el y solo por el.  Sin saberlo, una declaracion
+     * sin valor inicial -- cuyo ultimo campo es el NOMBRE -- se colaria en ese
+     * grupo y su nombre acabaria en la columna de los `=` de las demas.
+     */
+    bool ends_in_assign = false;
+    /**
      * Cierto si los campos se alinean por su FINAL y no por su principio.
      *
      * Es como se leen los numeros: con las unidades en la misma columna.  Una
@@ -122,6 +131,68 @@ bool is_value(TokenKind k) {
     case TokenKind::MINUS: return true;
     default: return false;
     }
+}
+
+/**
+ * @brief Clasifica una asignacion CON GUARDA: `if (cond) algo = valor;`.
+ *
+ * Se alinea EN LA MISMA TABLA que las declaraciones y asignaciones de al lado,
+ * campo por campo: la condicion donde va el tipo, el lvalue interior donde va
+ * el nombre y el `=` con los demas `=`.  El cuerpo entero se lee entonces como
+ * lo que es -- que condicion pone que valor --:
+ *
+ *     u64                      ok =  1_u64;
+ *     if ((i64)floor(a) != 3)  ok =  0;
+ *     if (fmin(a, b) != b)     ok =  0;
+ *
+ * Por eso lleva la forma @c Shape::Decl y sus mismas CUATRO anclas, y no una
+ * forma propia: dos formas distintas solo comparten el `=` (`R88`), que aqui
+ * dejaria el `ok` de cada linea en una columna diferente.
+ *
+ * Lo que si hace falta es saber donde empieza la sentencia interior -- tras el
+ * `)` de la condicion, o tras el `else` --, porque es ella la que ocupa la
+ * columna del nombre.
+ *
+ * @param pieces Piezas del fuente.
+ * @param i      Primera pieza de la linea.
+ * @param to     Ultima pieza de la linea (inclusive).
+ * @param assign Pieza del `=` de la sentencia interior.
+ * @param line   La linea a medio clasificar.
+ * @return La linea, ya clasificada si es una guarda y sin tocar si no.
+ */
+Line guarded_assign(const std::vector<Piece> &pieces, size_t i, size_t to,
+                    size_t assign, Line line) {
+    size_t p = i;
+    // Un `else` delante, con o sin `if` detras (`else x = 1;`).
+    if (kind_of(pieces[p]) == TokenKind::KW_ELSE) ++p;
+    if (p <= to && (kind_of(pieces[p]) == TokenKind::KW_IF ||
+                    kind_of(pieces[p]) == TokenKind::KW_WHILE ||
+                    kind_of(pieces[p]) == TokenKind::KW_FOR)) {
+        // Saltar la condicion entera: la sentencia empieza tras su `)`.
+        ++p;
+        if (p > to || kind_of(pieces[p]) != TokenKind::LPAREN) return line;
+        int depth = 0;
+        for (; p <= to; ++p) {
+            const TokenKind k = kind_of(pieces[p]);
+            if (k == TokenKind::LPAREN) {
+                ++depth;
+            } else if (k == TokenKind::RPAREN && --depth == 0) {
+                ++p;
+                break;
+            }
+        }
+    } else if (p == i) {
+        return line; // ni `if`, ni `while`, ni `for`, ni `else`: no es guarda
+    }
+    // Sin sentencia entre la guarda y el `=` no hay nada que alinear.
+    if (p <= i || p >= assign) return line;
+    line.shape = Shape::Decl;
+    line.ends_in_assign = true;
+    /* Las mismas cuatro anclas que una declaracion.  Una guarda no tiene
+     * calificadores, asi que las dos primeras caen en la misma pieza: el campo
+     * del calificador sale vacio, igual que en un `i64 x = 0;`. */
+    line.anchors = {i, i, p, assign};
+    return line;
 }
 
 Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
@@ -345,6 +416,7 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
         kind_of(pieces[i + 1]) == TokenKind::IDENTIFIER &&
         kind_of(pieces[i + 2]) == TokenKind::ASSIGN) {
         line.shape = Shape::Assign;
+        line.ends_in_assign = true;
         line.anchors = {i, i + 2};
         return line;
     }
@@ -358,6 +430,15 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
     bool found = false;
     int prof = 0;
     for (size_t k = i; k <= to; ++k) {
+        /* Lo que hay DENTRO de una cadena interpolada no es codigo: es el
+         * contenido de la cadena.  `"suma=${suma}"` llega como una tira de
+         * piezas, y el `=` de ahi dentro no es una asignacion -- alinearse por
+         * el mete espacios dentro de la cadena, que pasa a decir otra cosa.
+         *
+         * El indentador ya lo respetaba (`R69`); el alineador no lo miraba ni
+         * una vez, y por eso `"suma=${suma}".println()` hacia que el
+         * formateador se negara a escribir el fichero. */
+        if (pieces[k].in_string) continue;
         const TokenKind kk = kind_of(pieces[k]);
         if (kk == TokenKind::LPAREN || kk == TokenKind::LBRACKET)
             ++prof;
@@ -417,6 +498,7 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
      * columna -- no se alineaba nunca. */
     if (kind_of(pieces[name]) != TokenKind::IDENTIFIER) {
         line.shape = Shape::Assign;
+        line.ends_in_assign = true;
         line.anchors = {i, assign};
         return line;
     }
@@ -428,16 +510,58 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
      * dos columnas PARTIA el acceso: `c.          handle      = ...`, que ya no
      * se lee como el campo de nada.  Comprobado formateando el corpus: salia en
      * 147 sitios. */
-    bool qualified = false;
-    for (size_t k = i; k < assign; ++k) {
-        if (kind_of(pieces[k]) == TokenKind::DOT) {
-            qualified = true;
-            break;
-        }
+    /* El punto que importa es el que va JUSTO delante del nombre, no uno
+     * cualquiera de la izquierda: ahi es donde se ve si el nombre cuelga de
+     * algo (`c.handle`, y entonces es un acceso) o va detras de un tipo
+     * (`file_io.FileReader fr`, y entonces es una declaracion cuyo TIPO lleva
+     * el namespace delante).
+     *
+     * Mirando toda la izquierda, esa declaracion pasaba por asignacion y se
+     * quedaba fuera de las columnas de tipo y nombre -- dos lineas de al lado
+     * cuadraban y ella no --, que es justo lo que se ve en cuanto un modulo
+     * declara sus tipos en un namespace. */
+    const bool qualified =
+        name > i && kind_of(pieces[name - 1]) == TokenKind::DOT;
+
+    /* Y lo de delante tiene que poder ser un TIPO.  Una declaracion empieza
+     * por uno; `*p = v;` empieza por la estrella de una DESREFERENCIA, y sin
+     * mirarlo pasaba por declaracion: la estrella se alineaba en la columna
+     * del tipo y salia `*    p_wndproc = thunk;`, que se lee como un puntero
+     * sin tipo.  Es la misma guarda que la rama de abajo, la que no lleva
+     * `=`, ya tenia por la misma razon.
+     *
+     * Sigue alineandose, pero como lo que es: una asignacion, por su `=`. */
+    const TokenKind primero_decl = kind_of(pieces[i]);
+    bool classified = false;
+    if (primero_decl == TokenKind::STAR ||
+        primero_decl == TokenKind::LPAREN ||
+        primero_decl == TokenKind::KW_THIS ||
+        primero_decl == TokenKind::KW_SUPER) {
+        /* Un lvalue que no empieza por un nombre: `*p = v`, `*(u32*)(p) = v`,
+         * `this.campo = v`.  Toda la izquierda es UN campo.
+         *
+         * Sin mirarlo, la estrella de una desreferencia se alineaba en la
+         * columna del tipo y salia `*    p_wndproc = thunk;`, que se lee como
+         * un puntero sin tipo. */
+        line.shape = Shape::Assign;
+        line.ends_in_assign = true;
+        line.anchors = {i, assign};
+        classified = true;
+    } else if (primero_decl != TokenKind::IDENTIFIER &&
+               !is_type_keyword(primero_decl)) {
+        /* Puede ser una sentencia con otra dentro -- `if (c) x = v;` --, que
+         * tiene sus propias columnas.  Si no lo es, sigue el camino normal: la
+         * mayoria de las declaraciones empiezan por una palabra que NO es un
+         * tipo primitivo (`const`, `static`, `fn(i64) -> i64`, `cfn(...)`,
+         * `register("rax")`), y darlas por perdidas aqui las dejaba fuera del
+         * reparto sin decir nada. */
+        line = guarded_assign(pieces, i, to, assign, line);
+        classified = line.shape != Shape::None;
     }
 
-    if (name > i && !qualified) {
+    if (!classified && name > i && !qualified) {
         line.shape = Shape::Decl;
+        line.ends_in_assign = true;
         /* CUATRO columnas: calificadores, tipo, nombre y `=`.
          *
          * Con tres -- los calificadores DENTRO de la columna del tipo -- el
@@ -458,8 +582,9 @@ Line classify(const std::vector<Piece> &pieces, size_t from, size_t to,
          * pregunta por cada campo y no solo por el primero. */
         const size_t tipo = skip_decl_qualifiers(pieces, i);
         line.anchors = {i, tipo, name, assign};
-    } else {
+    } else if (!classified) {
         line.shape = Shape::Assign;
+        line.ends_in_assign = true;
         // Toda la izquierda cuenta como UN campo: `c.handle` no se parte.
         line.anchors = {i, assign};
     }
@@ -567,13 +692,25 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
         }
         size_t end = start;
         while (end + 1 < lines.size() &&
-               lines[end + 1].shape == lines[start].shape &&
+               /* `R88`: dos formas DISTINTAS que comparten el anclaje `=` van
+                * al mismo grupo -- y se alinean solo por el, que es lo que la
+                * regla dice.  Sin esto, `*p = v;` al lado de un bloque de
+                * declaraciones quedaba con su `=` en otra columna: la misma
+                * linea que hace un momento se alineaba MAL (la estrella en la
+                * columna del tipo) pasaba a no alinearse en absoluto. */
+               (lines[end + 1].shape == lines[start].shape ||
+                (lines[end + 1].ends_in_assign && lines[start].ends_in_assign)) &&
                lines[end + 1].level == lines[start].level &&
                /* Mismo numero de columnas... salvo entre declaraciones, donde
                 * la que no tiene valor inicial trae una menos y se alinea
                 * igual por las que comparten (`T val;` con `u8 tag = 0;`). */
                (lines[end + 1].anchors.size() == lines[start].anchors.size() ||
-                lines[start].shape == Shape::Decl) &&
+                lines[start].shape == Shape::Decl ||
+                /* O comparten el `=` y solo eso: entonces el numero de
+                 * columnas no tiene por que coincidir, porque de todas ellas
+                 * se va a usar UNA. */
+                (lines[end + 1].ends_in_assign &&
+                 lines[start].ends_in_assign)) &&
                /* Consecutivas de verdad: si el emisor dejo una linea en blanco
                 * o un comentario entre medias, el bloque se rompe (`R83`).
                 * Eso es lo que le da el control a quien escribe. */
@@ -588,11 +725,86 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
              * sobre columnas que ya no son las que van a salir. */
             std::vector<uint32_t> shift(end - start + 1, 0);
 
-            // Solo se alinean las columnas que TODAS tienen.
+            /* Las columnas se cuentan desde el FINAL cuando todas las lineas
+             * acaban en `=`; desde el principio si no.
+             *
+             * Contarlas desde el principio hace que la columna k sea la misma
+             * para todas, y eso solo vale si todas tienen la misma forma.  Con
+             * formas mezcladas -- una declaracion y una asignacion -- la
+             * primera columna de una es el tipo y la de la otra el lvalue
+             * entero, y alinearlas pondria el tipo en la columna del `=`.
+             *
+             * Contandolas desde el final, la columna 0 es el `=` de TODAS, y
+             * las de mas atras -- nombre, tipo, calificadores -- solo existen
+             * en las declaraciones, asi que se alinean entre ellas y no con la
+             * asignacion: `R84` dentro de cada forma, `R88` entre formas.
+             *
+             * Y hace falta que todas acaben en `=`: una declaracion sin valor
+             * inicial acaba en el NOMBRE, y contando desde el final su nombre
+             * caeria en la columna de los iguales de las demas. */
+            bool from_the_end = true;
+            for (size_t l = start; l <= end && from_the_end; ++l)
+                from_the_end = lines[l].ends_in_assign;
+
             size_t n = lines[start].anchors.size();
-            for (size_t l = start; l <= end; ++l)
-                if (lines[l].anchors.size() < n) n = lines[l].anchors.size();
-            for (size_t k = 0; k < n; ++k) {
+            for (size_t l = start; l <= end; ++l) {
+                const size_t sz = lines[l].anchors.size();
+                // Desde el final caben TODAS; desde el principio, las comunes.
+                if (from_the_end ? (sz > n) : (sz < n)) n = sz;
+            }
+            // Las formas presentes en el bloque, en orden de aparicion.
+            std::vector<Shape> shapes;
+            for (size_t l = start; l <= end; ++l) {
+                bool seen = false;
+                for (size_t f = 0; f < shapes.size() && !seen; ++f)
+                    seen = shapes[f] == lines[l].shape;
+                if (!seen) shapes.push_back(lines[l].shape);
+            }
+
+            // El ancla de cada linea en el campo que se esta tratando, o
+            // `no_field` si esa linea no llega a tenerlo o no le toca.
+            const size_t no_field = static_cast<size_t>(-1);
+            std::vector<size_t> col_idx(end - start + 1, no_field);
+
+            /* Una pasada por campo y forma: cada una iguala la columna de UN
+             * campo entre las lineas de UNA forma.  Van en un solo bucle, y no
+             * en dos anidados, porque el cuerpo es largo. */
+            for (size_t pass = 0; pass < n * shapes.size(); ++pass) {
+                /* Los campos se tratan de IZQUIERDA a derecha porque rellenar
+                 * uno corre los siguientes; contando desde el final, eso es
+                 * recorrerlos al reves. */
+                const size_t step = pass / shapes.size();
+                const size_t shape_at = pass % shapes.size();
+                const size_t k = from_the_end ? (n - 1 - step) : step;
+
+                /* El anclaje COMUN -- el `=` cuando se cuenta desde el final --
+                 * se alinea entre TODAS las lineas del bloque: es lo que dice
+                 * `R88` para formas mezcladas.
+                 *
+                 * Los demas campos, no: el nombre de una declaracion y el
+                 * lvalue de una asignacion caen en la misma posicion contada
+                 * desde el final, pero no son lo mismo, y meterlos en la misma
+                 * columna deja de alinear los nombres entre si -- que es lo que
+                 * `R84` pide DENTRO de cada forma --.  Asi que esos campos se
+                 * alinean por separado en cada forma. */
+                const bool shared_field = from_the_end && k == 0;
+                // El comun se hace UNA vez, no una por forma.
+                if (shared_field && shape_at != 0) continue;
+
+                size_t participants = 0;
+                for (size_t l = start; l <= end; ++l) {
+                    const size_t sz = lines[l].anchors.size();
+                    size_t idx = no_field;
+                    if (sz > k &&
+                        (shared_field || lines[l].shape == shapes[shape_at]))
+                        idx = from_the_end ? lines[l].anchors[sz - 1 - k]
+                                           : lines[l].anchors[k];
+                    col_idx[l - start] = idx;
+                    if (idx != no_field) ++participants;
+                }
+                // Con una sola linea en el campo no hay nada que igualar.
+                if (participants < 2) continue;
+
                 /* Un campo NO se estira si alguna linea del bloque lo tiene
                  * pegado al margen.
                  *
@@ -621,8 +833,8 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
                 {
                     bool alguna_al_margen = false;
                     for (size_t l = start; l <= end && !alguna_al_margen; ++l)
-                        alguna_al_margen =
-                            lines[l].anchors[k] == spans[l].first;
+                        alguna_al_margen = col_idx[l - start] != no_field &&
+                                           col_idx[l - start] == spans[l].first;
                     if (alguna_al_margen) continue;
                 }
 
@@ -633,7 +845,8 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
                 const bool right = lines[start].right;
                 uint32_t target = 0;
                 for (size_t l = start; l <= end; ++l) {
-                    const size_t idx = lines[l].anchors[k];
+                    const size_t idx = col_idx[l - start];
+                    if (idx == no_field) continue;
                     uint32_t col = layout.column[idx] + shift[l - start];
                     if (right)
                         col +=
@@ -646,7 +859,8 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
                  * puede empujar a sus vecinos fuera del limite. */
                 bool fits = true;
                 for (size_t l = start; l <= end && fits; ++l) {
-                    const size_t ai = lines[l].anchors[k];
+                    const size_t ai = col_idx[l - start];
+                    if (ai == no_field) continue;
                     uint32_t col = layout.column[ai] + shift[l - start];
                     if (right)
                         col +=
@@ -660,7 +874,8 @@ std::vector<uint32_t> compute_alignment(const std::vector<Piece> &pieces,
                 if (!fits) continue;
 
                 for (size_t l = start; l <= end; ++l) {
-                    const size_t idx = lines[l].anchors[k];
+                    const size_t idx = col_idx[l - start];
+                    if (idx == no_field) continue;
                     uint32_t col = layout.column[idx] + shift[l - start];
                     if (right)
                         col +=

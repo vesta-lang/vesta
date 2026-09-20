@@ -161,7 +161,15 @@ bool is_sign(char c) {
     case '^':
     case '!':
     case '~':
-    case ':': return true;
+    case ':':
+    /* El `?` del ternario, que faltaba mientras sus dos companeros -- el `:`
+     * de aqui arriba y el `=` -- si estaban.  Se nota cuando lo que sigue es un
+     * operador PREFIJO, porque ese decide si lleva espacio por delante mirando
+     * si lo de atras es un signo: `c ? &f : &g` salia `c ?&f : &g`, con la
+     * segunda rama bien y la primera pegada.  Es la tercera vez que aparece la
+     * misma forma -- ya paso con `p =&x` y con `f(a,&b)` --, y las tres eran el
+     * mismo juego quedandose corto. */
+    case '?': return true;
     default: return false;
     }
 }

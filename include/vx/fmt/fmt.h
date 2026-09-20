@@ -153,8 +153,25 @@ struct FormatResult {
     std::vector<Rewrite> rewrites;
 };
 
+/**
+ * @brief Si las dos tiras de tokens son la misma, y DONDE dejan de serlo.
+ *
+ * @param before   Texto original.
+ * @param after    Texto formateado.
+ * @param rewrites Lo que el formateador declara haber cambiado.
+ * @param at_line  [out] Si difieren, la linea del token donde se separan; 0
+ *                 si no se pudo situar.  Opcional.
+ * @param at_col   [out] Y su columna.  Opcional.
+ * @return Cierto si los dos dan la misma tira.
+ *
+ * La posicion no es un adorno: sin ella el diagnostico dice que formatear
+ * cambiaria el programa y se queda ahi, y averiguar QUE cambiaria obliga a
+ * partir el fichero a la mitad una y otra vez.  Un aviso que no dice donde es
+ * medio aviso.
+ */
 bool same_program(std::string_view before, std::string_view after,
-                  const std::vector<Rewrite> &rewrites = {});
+                  const std::vector<Rewrite> &rewrites = {},
+                  uint32_t *at_line = nullptr, uint32_t *at_col = nullptr);
 
 /**
  * @brief Un token con la trivia que lo precede.

@@ -480,7 +480,23 @@ std::vector<Break> compute_breaks(const std::vector<Piece> &pieces,
             std::vector<size_t> eslabones;
             int d = 0;
             bool hay_llaves = false;
-            for (size_t k = i; k <= last; ++k) {
+            /* Una cadena interpolada llega como una TIRA de piezas -- texto,
+             * apertura, la expresion, cierre, texto --, y lo que hay entre
+             * ellas es el contenido de la cadena, no formato.  Una linea que
+             * lleve una no se reparte: mover sus piezas cambia lo que la
+             * cadena dice.
+             *
+             * `"suma=${suma}".println()` lo destapo -- con un comentario largo
+             * al lado la linea pasaba del ancho y el reparto la partia por el
+             * punto --, y el formateador acababa negandose a escribir el
+             * fichero entero.  El indentador ya respetaba esto (`R69`); el
+             * reparto no lo miraba. */
+            for (size_t k = i; k <= last; ++k)
+                if (pieces[k].in_string) {
+                    hay_llaves = true; // reutiliza el "esta linea no se parte"
+                    break;
+                }
+            for (size_t k = i; k <= last && !hay_llaves; ++k) {
                 const TokenKind kind = kind_of(pieces[k]);
                 /* Una cadena es una EXPRESION.  Si en la linea hay llaves, lo
                  * que hay son sentencias -- varias, incluso -- y el punto que

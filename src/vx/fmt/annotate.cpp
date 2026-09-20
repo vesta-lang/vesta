@@ -40,6 +40,7 @@
 #include "vx/fmt/fmt_internal.h"
 #include <set>
 
+#include "vx/parser.h" // la lista de builtins con argumentos de tipo
 #include "vx/token.h"
 
 namespace vx {
@@ -101,6 +102,14 @@ bool fits_in_type(TokenKind k) {
     case TokenKind::LT:
     case TokenKind::GT:
     case TokenKind::SHR: // `>>` cerrando dos genericos anidados
+    /* Un tipo FUNCION tambien es un tipo, y puede ir de argumento:
+     * `type.result<cfn(string) -> u64>()`.  Sin sus tres piezas -- la palabra,
+     * la flecha y los parentesis de mas abajo -- los angulos se leian como una
+     * comparacion y el formateador escribia `type.result < ... > ()`, que ya no
+     * es la llamada que habia. */
+    case TokenKind::KW_FN:
+    case TokenKind::KW_CFN:
+    case TokenKind::ARROW:
     case TokenKind::INT_LIT: return true; // `u8[16]`
     default: return false;
     }
@@ -124,14 +133,65 @@ bool starts_statement(TokenKind k) {
  * @param close  [out] indice del `>` que cierra, si lo hay.
  * @return Cierto si el `<` abre una lista de argumentos de tipo.
  */
+/**
+ * @brief Si lo que precede al `<` es un builtin con nombre en ARBOL.
+ *
+ * Los builtins se llaman `type.size`, `field.count`, `scoped.method.result`, y
+ * un argumento de tipo suyo puede ser OTRA LLAMADA -- un tipo calculado, como
+ * `type.size<field.type_at<Punto>(0)>()` --.  Ahi dentro hay parentesis, que
+ * en un tipo corriente no caben.
+ *
+ * Preguntarlo es lo que permite aceptarlos SOLO aqui: admitirlos siempre haria
+ * que `a < f(x) > b` se leyera como un generico.  Y el modo de fallar de no
+ * preguntarlo era de los peores: el formateador partia
+ * `type.size<...>()` en `type.size < ... > ()`, o sea que `vm fmt` ROMPIA un
+ * programa correcto.
+ *
+ * @param pieces Las piezas del fichero.
+ * @param open   Indice del `<`.
+ * @return Cierto si el nombre de delante es un builtin conocido.
+ */
+/**
+ * @brief Si el token puede ser un SEGMENTO de un nombre en arbol.
+ *
+ * `get` y `set` son palabras clave del lenguaje -- la forma property de una
+ * clase --, pero tras un punto son nombres corrientes: `field.get`,
+ * `field.set`.  El parser ya lo sabe (@c Parser::is_name_token) y el
+ * formateador no, asi que `field.get<Punto>(p, "x")` no se reconocia como
+ * argumentos de tipo y salia `field.get < Punto > (p, "x")`, que ya no parsea:
+ * `vm fmt` ROMPIA un programa correcto.
+ *
+ * @param k Categoria del token.
+ * @return Cierto si puede ser el nombre, o un trozo de el.
+ */
+bool is_name_piece(TokenKind k) {
+    return k == TokenKind::IDENTIFIER || k == TokenKind::KW_GET ||
+           k == TokenKind::KW_SET;
+}
+
+bool preceded_by_builtin(const std::vector<Piece> &pieces, size_t open) {
+    if (open == 0) return false;
+    std::string name;
+    size_t i = open; // pieces[i - 1] es el ultimo segmento del nombre
+    while (i > 0 && is_name_piece(kind_of(pieces[i - 1]))) {
+        name = name.empty() ? std::string(pieces[i - 1].text)
+                            : std::string(pieces[i - 1].text) + "." + name;
+        if (i >= 2 && kind_of(pieces[i - 2]) == TokenKind::DOT) {
+            i -= 2;
+            continue;
+        }
+        break;
+    }
+    return !name.empty() && is_comptime_builtin_name(name);
+}
+
 bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
                          size_t &close) {
     /* Antes de un `<` de generico va SIEMPRE un nombre de tipo.  Tras un
      * literal o un `)` solo puede ser una comparacion. */
     if (open == 0) return false;
     const TokenKind before = kind_of(pieces[open - 1]);
-    if (before != TokenKind::IDENTIFIER && !is_type_keyword(before))
-        return false;
+    if (!is_name_piece(before) && !is_type_keyword(before)) return false;
 
     int depth = 0;
     /* Una COTA (`<T: Numerico>`, `<T: A + B>`) tambien va dentro de los
@@ -146,6 +206,15 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
      * concepto, sus puntos y los `+` que los suman. */
     unsigned in_group = 0; // tokens vistos desde el ultimo `<` o `,`
     bool after_colon = false;
+    /* Un argumento de tipo CALCULADO es una llamada, asi que lleva parentesis
+     * y literales dentro.  Solo se admiten cuando quien abre es un builtin
+     * (ver @c preceded_by_builtin): en cualquier otro sitio, un parentesis
+     * entre angulos es una comparacion. */
+    const bool computed_ok = preceded_by_builtin(pieces, open);
+    /* Y los parentesis de un tipo FUNCION, que van tras su palabra: `fn(...)`
+     * / `cfn(...)`.  Ahi no hay ambiguedad -- `a < fn` no es nada --, asi que
+     * se admiten vengan de donde vengan, no solo bajo un builtin. */
+    bool fn_type_seen = false;
     // Un tope corto: una lista de tipos larguisima no existe, y sin el una
     // comparacion haria recorrer el fichero entero por cada `<`.
     const size_t limit = open + 64 < pieces.size() ? open + 64 : pieces.size();
@@ -193,7 +262,15 @@ bool closes_as_type_args(const std::vector<Piece> &pieces, size_t open,
             }
             continue;
         }
-        if (i > open && !fits_in_type(k)) return false;
+        if (k == TokenKind::KW_FN || k == TokenKind::KW_CFN)
+            fn_type_seen = true;
+        if (i > open && !fits_in_type(k)) {
+            if ((computed_ok || fn_type_seen) &&
+                (k == TokenKind::LPAREN || k == TokenKind::RPAREN))
+                continue;
+            if (computed_ok && k == TokenKind::STRING_LIT) continue;
+            return false;
+        }
     }
     return false;
 }
@@ -243,9 +320,6 @@ bool precedes_type(TokenKind k) {
     }
 }
 
-bool is_type_keyword(TokenKind k) {
-    return k >= TokenKind::KW_VOID && k <= TokenKind::KW_BORROW_MUT;
-}
 
 size_t skip_decl_qualifiers(const std::vector<Piece> &pieces, size_t i) {
     size_t j = i;

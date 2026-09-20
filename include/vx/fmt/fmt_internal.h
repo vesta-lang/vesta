@@ -101,11 +101,6 @@ std::vector<Rewrite> apply_token_rules(std::vector<Piece> &pieces);
 std::vector<Role> annotate_roles(const std::vector<Piece> &pieces);
 
 /**
- * @brief Indica si la categoria de token nombra un tipo del lenguaje.
- * @param k Categoria del token.
- * @return Cierto si es una palabra clave de tipo (`i64`, `bool`, `string`...).
- */
-/**
  * @brief Convierte el campo @c kind de una pieza a su enum.
  *
  * La pieza guarda un `int` para no arrastrar `token.h` por todo el
@@ -118,7 +113,9 @@ inline TokenKind kind_of(const Piece &p) {
     return static_cast<TokenKind>(p.kind);
 }
 
-bool is_type_keyword(TokenKind k);
+/* `is_type_keyword` ya no vive aqui: es una propiedad del TOKEN y esta en
+ * `vx/token.h`, junto al enum.  La tenian el formateador y el parser por
+ * separado, que es una lista de tipos del lenguaje escrita dos veces. */
 
 /**
  * @brief Indica si el token es un modificador de declaracion (`R42`).
