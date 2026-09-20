@@ -1,0 +1,71 @@
+namespace std.func;
+
+/**
+ * @file func.vx
+ * @brief Applying a function to a value, in dot notation.
+ *
+ * With uniform call syntax `x.f(a)` and `f(x, a)` are the same call, so a type
+ * is extended with free functions and what follows the dot is always a NAME.
+ * What cannot go there is a CHOICE: there is no way to write "one of these two,
+ * depending on the condition" after a dot, because what follows it has to be
+ * something callable and a ternary is not.
+ *
+ *     s.(loud ? shout : whisper)()     // does not exist, and should not
+ *
+ * And it should not, because the gap is not in the dot but in the ARGUMENT: a
+ * function is already a value in Vesta (`&shout` is a `cfn`, `&obj.method` a
+ * bound `fn`), so the choice is made where every choice is made -- in an
+ * expression -- and all that is missing is something to receive it.  That is
+ * @ref apply, and with it the choice needs no new syntax:
+ *
+ *     s.apply(loud ? &shout : &whisper);
+ *
+ * The callable is taken as a TYPE PARAMETER, not as a written `cfn(T) -> R`.
+ * Both forms of callable are valid -- a raw function pointer and a lambda that
+ * carries its environment -- and pinning one in the signature would leave the
+ * other out; the `Callable` bound accepts either, and `type.result<F>()` reads
+ * the return type off whichever one arrives.
+ *
+ * Cost: nothing over writing the call by hand.  These are generic, so each use
+ * monomorphizes into a concrete function whose whole body is the call, and the
+ * inliner removes it.  When the chosen function is known at compile time -- a
+ * constant rather than a ternary -- function-pointer devirtualization turns the
+ * indirect call into a direct one as well.
+ */
+
+/**
+ * @brief Calls @p f with @p x and returns whatever @p f returns.
+ *
+ * The return slot is read from the callable itself, `void` included, so
+ * `s.apply(&print_it)` works just like `u64 n = s.apply(&length)` without a
+ * second function for the case of returning nothing.
+ *
+ * @tparam T Type of the value.
+ * @tparam F Type of the callable; either a `cfn` or a `fn`.
+ * @param  x The value, which is what goes before the dot.
+ * @param  f The function to apply.
+ * @return Whatever @p f returns.
+ */
+public type.result<F>() apply<T, F: Callable>(T x, F f) => f(x);
+
+/**
+ * @brief Calls @p f with @p x and returns @p x, not what @p f returned.
+ *
+ * This is @ref apply for what is done FOR ITS EFFECT -- logging, checking,
+ * printing -- and it exists for one concrete reason: to slot that effect into a
+ * chain without breaking it.  With @ref apply the chain would have to be cut in
+ * two, the intermediate value named, and the fact that it is a single chain
+ * lost from view.
+ *
+ *     s.tap(&log).apply(&convert)
+ *
+ * @tparam T Type of the value.
+ * @tparam F Type of the callable; either a `cfn` or a `fn`.
+ * @param  x The value.
+ * @param  f What is done with it.
+ * @return @p x itself, so the chain continues.
+ */
+public T tap<T, F: Callable>(T x, F f) {
+	f(x);
+	return x;
+}
