@@ -1,0 +1,101 @@
+// -----------------------------------------------------------------------------
+// Casts de puntero: todas las formas que el desambiguador tiene que reconocer
+// -----------------------------------------------------------------------------
+// Al abrir un parentesis el parser tiene que decidir una cosa que no es obvia:
+// si `(X)` empieza un CAST o es una expresion agrupada.  La pista es lo que va
+// dentro, y cada familia de tipo entra por un camino distinto -- primitivo,
+// `typedef`, nombre de struct, `VirtualPtr`, puntero a funcion, cualificado por
+// namespace --.
+//
+// Esto lo ejercita entero, y la mitad de abajo comprueba lo CONTRARIO: que un
+// parentesis que NO es un cast se siga leyendo como agrupacion.  Las dos
+// direcciones importan igual, porque ensanchar el desambiguador se paga
+// robandole parentesis a la aritmetica.
+//
+// El caso que faltaba era `(Tipo*) expr` con un nombre de STRUCT: un nombre de
+// tipo suelto no inicia un cast (seria ambiguo con `(a) - b`), y la forma de
+// desambiguarlo es justo el `*`.  Sin el, `(Punto*)malloc(...)` se leia como la
+// multiplicacion `Punto * )` y el error hablaba de una expresion primaria que
+// falta, sin mencionar el cast.
+
+struct Punto {
+	i64 x;
+	i64 y;
+}
+
+// Un typedef del puntero: la via que ya funcionaba y que habia que usar como
+// rodeo mientras el nombre del struct no valia.
+typedef Punto* PuntoPtr;
+
+i32 main() {
+	i64 acc = 0_i64;
+
+	// --- (1) nombre de STRUCT + '*' -----------------------------------------
+	Punto* p = malloc<Punto>(2);
+	p[0].x = 10;
+	p[0].y = 6;
+	p[1].x = 3;
+	p[1].y = 1;
+	acc += p[0].x + p[0].y + p[1].x + p[1].y; // 20
+
+	// --- (2) el mismo puntero via typedef -----------------------------------
+	PuntoPtr    q = (PuntoPtr)p;
+	acc += q[1].x; // 23
+
+	// --- (3) doble indireccion sobre un nombre de struct --------------------
+	Punto** pp = (Punto**)malloc(8);
+	*pp = p;
+	acc += (*pp)[0].x; // 33
+
+	// --- (4) primitivos, que siempre entraron por otro camino ---------------
+	u8* bytes = (u8*)p;
+	acc += (i64)bytes[0]; // 43: el byte bajo del 10 en little-endian
+
+	i64* raw = (i64*)p;
+	acc -= raw[0]; // 33
+
+	// --- (5) void* y char*, los dos comodines de la frontera nativa ---------
+	void* opaco = (void*)p;
+	char* texto = (char*)opaco;
+	acc += (i64)texto[0]; // 43
+
+	// --- (6) entero <-> puntero ---------------------------------------------
+	u64              dir = (u64)p;
+	Punto*           vuelta = (Punto*)dir;
+	acc += vuelta[1].y; // 44
+
+	free(pp);
+	free(p);
+
+	// =======================================================================
+	//  Y AL REVES: un parentesis que NO es un cast sigue siendo agrupacion
+	// =======================================================================
+	i64 a = 6_i64;
+	i64 b = 7_i64;
+
+	// Multiplicacion agrupada: si el desambiguador se pasara de listo, aqui
+	// leeria un cast al tipo `a` y se comeria el `b`.
+	i64    mul = (a * b); // 42
+	acc -= mul;           // 2
+
+	// Agrupacion normal, con el parentesis mandando sobre la precedencia.
+	i64    suma = (a + b) * 2; // 26
+	acc += suma;               // 28
+
+	// Un parentesis seguido de un unario: `(a) - b` es una resta, no un cast
+	// de `-b` al tipo `a`.
+	i64    resta = (a) - b; // -1
+	acc += resta;           // 27
+
+	// Y una llamada entre parentesis, que empieza igual que un cast.
+	i64    val = (cero() + 15); // 15
+	acc += val;                 // 42
+
+	println("acc = ${acc}");
+	return (i32)acc;
+}
+
+/// Un cero con nombre: hace que `(cero() + 15)` empiece por identificador, que
+/// es justo el arranque que el desambiguador tiene que NO confundir con un
+/// cast.
+i64 cero() => 0_i64;

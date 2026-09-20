@@ -1,0 +1,339 @@
+// -----------------------------------------------------------------------------
+// Mapa de numeros de servicio (SSN) de Windows, derivado del ORDEN de los stubs
+// -----------------------------------------------------------------------------
+// Port del FreshyCalls_Nt.c.  Recorre la tabla de exports de ntdll.dll y de
+// win32u.dll, se queda con los stubs `Nt*`, los ordena POR DIRECCION y usa el
+// indice resultante como numero de servicio.
+//
+// Por que funciona: el enlazador emite los stubs de syscall en el mismo orden en
+// que estan numerados, asi que el puesto que ocupa un stub al ordenar por
+// direccion ES su numero de servicio.  Es una DEDUCCION, no un dato leido: vale
+// mientras esa propiedad se cumpla, y por eso el mapa se construye en ejecucion
+// contra la ntdll de la maquina en vez de llevar una tabla escrita a mano, que
+// caducaria con cada version de Windows.
+//
+// El recorrido del formato PE no esta aqui: vive en `std.binary.pe`, porque no
+// tiene nada de especifico de syscalls.  De alli solo llegan FUNCIONES sobre
+// direcciones -- las vistas tipadas del formato se quedan dentro del modulo --,
+// asi que esto no sabe nada del layout de un PE.  Lo que queda en este fichero
+// es exactamente lo que hacia el .c: el filtro, el orden y el volcado.
+//
+// Solo Windows (kernel32 + el formato de la imagen mapeada).  El subsistema
+// grafico sale de win32u.dll, que una aplicacion de consola no suele tener
+// mapeada: por eso se carga explicitamente.
+
+import std.binary.pe only ExportTable, export_table, export_name_at,
+export_addr_at;
+
+// El cargador es quien mapea la DLL; a partir de ahi la imagen se lee con las
+// vistas de std.binary.pe.
+extern "kernel32.dll" {
+	fn LoadLibraryA(u8* path) -> u64;
+}
+
+/// Espacio suficiente para albergar ambas tablas juntas.
+const i64 MAX_SYSCALLS = 2500_i64;
+
+/// De que tabla sale una entrada.  El .c guardaba aqui la cadena "ntdll" o
+/// "win32u" en un `char[12]` por entrada; una marca de un byte dice lo mismo y
+/// ademas es lo que se compara al asignar el numero.
+const u8 ORIGIN_NTDLL  = 0_u8;
+const u8 ORIGIN_WIN32U = 1_u8;
+
+/// Relleno de columnas.  `print_pad` toma el PUNTO DE CODIGO como u32, asi que
+/// se nombran aqui en vez de castear un literal de caracter en cada llamada.
+const u32 FILL_SPACE = 32_u32; // ' '
+const u32 FILL_ZERO  = 48_u32; // '0'
+
+/**
+ * Una entrada del mapa.
+ *
+ * `name` apunta al nombre DENTRO de la imagen mapeada y no lo copia, al
+ * contrario que el `char[64]` del original: la DLL sigue cargada durante toda
+ * la vida del proceso, asi que el puntero vale lo mismo que la copia y ahorra
+ * 64 bytes por entrada mas el copiado de dos mil cadenas.
+ */
+struct SyscallEntry {
+	char* name;    ///< nombre exportado, dentro de la imagen
+	u64   address; ///< direccion del stub
+	u16   ssn;     ///< numero de servicio, deducido del orden por direccion
+	u8    origin;  ///< ORIGIN_NTDLL u ORIGIN_WIN32U
+}
+
+// ===========================================================================
+//  Utilidades de salida
+// ===========================================================================
+
+/**
+ * Longitud de una cadena C, sin contar el terminador.
+ *
+ * No la da el lenguaje: `s.length()` es de `string`, el objeto gestionado, y
+ * estos nombres son punteros crudos a la imagen que a proposito no se copian.
+ */
+i64 cstr_len(char* s) {
+	i64 n = 0_i64;
+	while (s[n] != 0) {
+		n++;
+	}
+	return n;
+}
+
+/// Rellena hasta @p width con espacios lo que ya ocupa @p used.  Es el `%-Ns`
+/// del printf: si no cabe, no recorta -- solo deja de rellenar.
+void pad_to(i64 used, i64 width) {
+	if (used < width) {
+		print_pad(FILL_SPACE, (u64)(width - used));
+	}
+}
+
+/// Escribe @p v en decimal con al menos @p width digitos, rellenando con ceros
+/// por la izquierda: el `%04d` del original.
+void print_zero_padded(i64 v, i64 width) {
+	i64 digits = 1_i64;
+	i64 rest   = v;
+	while (rest >= 10) {
+		rest /= 10;
+		digits++;
+	}
+	if (digits < width) {
+		print_pad(FILL_ZERO, (u64)(width - digits));
+	}
+	print("${v}");
+}
+
+/// Escribe @p v como `0x` y cuatro digitos hexadecimales en mayusculas, que es
+/// el `0x%04X` del original.  Se saca a mano para no depender de si el formato
+/// del lenguaje pone prefijo o cuantos digitos deja.
+void print_hex4(u64 v) {
+	char* digits = "0123456789ABCDEF";
+	print("0x");
+	// Del nibble mas significativo al menos.  El desplazamiento se calcula sin
+	// signo para no mezclar anchos en el `>>`.
+	for (i64 nibble = 3_i64; nibble >= 0; nibble--) {
+		u64 shift = (u64)(nibble * 4);
+		// `:char` no es opcional: `${c}` de un char imprime su CODIGO.
+		print("${digits[(v >> shift) & 0xF]:char}");
+	}
+}
+
+/// Nombre legible de la tabla de la que salio una entrada.
+string origin_name(u8 origin) {
+	if (origin == ORIGIN_WIN32U) {
+		return "win32u";
+	}
+	return "ntdll";
+}
+
+// ===========================================================================
+//  Orden por direccion
+// ===========================================================================
+
+/**
+ * Intercambia dos entradas, campo a campo.
+ *
+ * Campo a campo y no asignando el struct entero para no meter por medio el
+ * gancho de copia: aqui no se esta copiando nada, solo reordenando lo que ya
+ * existe.
+ */
+void swap_entries(SyscallEntry* table, i64 a, i64 b) {
+	char* name    = table[a].name;
+	u64   address = table[a].address;
+	u16   ssn     = table[a].ssn;
+	u8    origin  = table[a].origin;
+
+	table[a].name    = table[b].name;
+	table[a].address = table[b].address;
+	table[a].ssn     = table[b].ssn;
+	table[a].origin  = table[b].origin;
+
+	table[b].name    = name;
+	table[b].address = address;
+	table[b].ssn     = ssn;
+	table[b].origin  = origin;
+}
+
+/// Criba hacia abajo la raiz @p root de un monticulo de @p n elementos que
+/// empieza en @p start.  Iterativa: la recursion aqui no aporta nada y el
+/// bucle deja la profundidad en cero.
+void sift_down(SyscallEntry* table, i64 start, i64 root, i64 n) {
+	while (true) {
+		i64 child = 2 * root + 1;
+		if (child >= n) {
+			return;
+		}
+		// De los dos hijos, el mayor es el candidato a subir.
+		if (child + 1 < n
+			&& table[start + child + 1].address > table[start + child].address) {
+			child++;
+		}
+		if (table[start + root].address >= table[start + child].address) {
+			return;
+		}
+		swap_entries(table, start + root, start + child);
+		root = child;
+	}
+}
+
+/**
+ * Ordena `table[start..end)` de menor a mayor direccion.
+ *
+ * Heapsort y no el `qsort` de la libreria C: es in-situ, no necesita
+ * comparador por puntero y su coste es O(n log n) SIEMPRE.  Lo ultimo importa
+ * aqui mas de lo normal -- las entradas llegan en orden alfabetico de nombre,
+ * que es justo el tipo de entrada casi-ordenada con la que un quicksort
+ * ingenuo se va al caso cuadratico.
+ */
+void sort_by_address(SyscallEntry* table, i64 start, i64 end) {
+	i64 n = end - start;
+	if (n < 2) {
+		return;
+	}
+	// Monticulo: se criba desde el ultimo padre hacia la raiz.
+	for (i64 i = n / 2 - 1; i >= 0; i--) {
+		sift_down(table, start, i, n);
+	}
+	// Se saca el mayor a la cola y se vuelve a cribar sobre lo que queda.
+	for (i64 i = n - 1; i > 0; i--) {
+		swap_entries(table, start, start + i);
+		sift_down(table, start, 0, i);
+	}
+}
+
+// ===========================================================================
+//  Extraccion de una DLL
+// ===========================================================================
+
+/**
+ * Anade al mapa los stubs de syscall de una DLL y les asigna su numero.
+ *
+ * @param table  Mapa en construccion.
+ * @param count  Entradas que ya tiene.
+ * @param dll    Nombre de la DLL a cargar.
+ * @param origin ORIGIN_NTDLL u ORIGIN_WIN32U.
+ * @return La nueva cuenta de entradas, o -1 si la DLL no se pudo procesar.
+ */
+i64 collect_dll_syscalls(
+	SyscallEntry* table,
+	i64 count,
+	string dll,
+	u8 origin
+) {
+	// Cargarla formalmente: win32u no esta mapeada en una aplicacion de consola.
+	u64 handle = LoadLibraryA(dll.cstr());
+	if (handle == 0) {
+		return -1;
+	}
+
+	// Las tablas del directorio de exports, resueltas de una vez.  `count == 0`
+	// cubre los dos casos en que no hay nada que recorrer -- no es un PE valido,
+	// o no exporta --, que para lo que hacemos aqui es el mismo hecho.
+	ExportTable exports = export_table(handle);
+	if (exports.count == 0) {
+		return -1;
+	}
+
+	// Donde empieza ESTA DLL: se ordena aislada, porque cada tabla del kernel
+	// tiene su propia numeracion y mezclarlas corromperia las dos.
+	i64 start = count;
+
+	for (u32 i = 0_u32; i < exports.count; i++) {
+		char* name = (char*)export_name_at(exports, i);
+
+		// El filtro del original: un stub de syscall empieza por "Nt", pero los
+		// `Ntdll*` NO lo son -- NtdllDefWindowProc_A y companeros son funciones
+		// normales que ntdll exporta, y colarlas correria todos los numeros a
+		// partir de ahi.
+		if (name[0] != 'N') {
+			continue;
+		}
+		if (name[1] != 't') {
+			continue;
+		}
+		if (name[2] == 'd') {
+			continue;
+		}
+
+		if (count >= MAX_SYSCALLS) {
+			break;
+		}
+		table[count].name    = name;
+		table[count].address = export_addr_at(exports, i);
+		table[count].ssn     = 0_u16;
+		table[count].origin  = origin;
+		count++;
+	}
+
+	sort_by_address(table, start, count);
+
+	for (i64 i = start; i < count; i++) {
+		u16 local = (u16)(i - start);
+		if (origin == ORIGIN_WIN32U) {
+			// El subsistema grafico vive en la SHADOW SSDT, cuya numeracion
+			// arranca en 0x1000: ese bit es lo que mira el kernel para saber a
+			// que tabla de servicios ir.
+			table[i].ssn = (u16)(local + 0x1000_u16);
+		} else {
+			table[i].ssn = local;
+		}
+	}
+	return count;
+}
+
+// ===========================================================================
+//  Volcado
+// ===========================================================================
+
+i32 main() {
+	println("[*] Extrayendo el mapa completo de syscalls de Windows...");
+	println("");
+
+	SyscallEntry* table =
+		malloc<SyscallEntry>((u64)MAX_SYSCALLS);
+	i64 count = 0_i64;
+
+	// 1. El nucleo base.
+	count = collect_dll_syscalls(table, count, "ntdll.dll", ORIGIN_NTDLL);
+	if (count < 0) {
+		println("[-] Fallo al procesar ntdll.dll");
+		free(table);
+		return 1;
+	}
+
+	// 2. El subsistema grafico.
+	count = collect_dll_syscalls(table, count, "win32u.dll", ORIGIN_WIN32U);
+	if (count < 0) {
+		println("[-] Fallo al procesar win32u.dll (puede requerir un entorno con GUI)");
+		free(table);
+		return 1;
+	}
+
+	// Cabecera de la tabla.  "FUNCION" sin tilde: el arbol es ASCII salvo la
+	// enye, y esto se imprime tal cual.
+	println("INDEX | ORIGEN     | NOMBRE DE LA FUNCION                          | SSN (EAX)");
+	println("---------------------------------------------------------------------------------------------");
+
+	for (i64 i = 0_i64; i < count; i++) {
+		print("[");
+		print_zero_padded(i, 4);
+		print("] | ");
+
+		string origin = origin_name(table[i].origin);
+		print(origin);
+		pad_to((i64)origin.length(), 10);
+		print(" | ");
+
+		print_cstr(table[i].name);
+		pad_to(cstr_len(table[i].name), 45);
+		print(" | ");
+
+		print_hex4((u64)table[i].ssn);
+		println("");
+	}
+
+	println("");
+	println("[+] Mapeo completado.");
+	println("[+] Total de syscalls en tu sistema: ${count} (nucleo + graficas)");
+
+	free(table);
+	return 42;
+}
